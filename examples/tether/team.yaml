@@ -1,0 +1,4 @@
+name: tether
+description: "Team dedicated to exploring and learning from open-source codebases with strict peer-review auditing to prevent AI hallucinations."
+max-rounds: 10
+timeout: 600
