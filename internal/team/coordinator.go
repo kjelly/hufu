@@ -14,6 +14,7 @@ import (
 
 	"github.com/anomalyco/agent-team-cli/internal/agent"
 	"github.com/anomalyco/agent-team-cli/internal/mcp"
+	"github.com/anomalyco/agent-team-cli/internal/skill"
 )
 
 type TaskDef struct {
@@ -40,6 +41,7 @@ type Coordinator struct {
 	reportStatus StatusReporter
 	sessionData  *SessionData
 	taskTracker  *TaskTracker
+	skills       []*skill.SkillDef
 }
 
 func NewCoordinator(session *TeamSession, ollama *agent.OllamaProvider, mcpManager *mcp.MCPToolManager, verbose bool) *Coordinator {
@@ -53,6 +55,7 @@ func NewCoordinator(session *TeamSession, ollama *agent.OllamaProvider, mcpManag
 		verbose:      verbose,
 		reportStatus: func(event StatusEvent) {},
 		taskTracker:  NewTaskTracker(),
+		skills:       session.Skills,
 	}
 }
 
@@ -151,6 +154,53 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
 	}
 	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", args.Response)), nil
+}
+
+type loadSkillTool struct {
+	coordinator *Coordinator
+	pOpts       fantasy.ProviderOptions
+}
+
+func (t *loadSkillTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "load_skill",
+		Description: "Load the full content of a skill by name. Use this when you need detailed instructions from a skill before planning delegation. The skill content will help you understand how to instruct workers properly.",
+		Parameters: map[string]any{
+			"name": map[string]any{
+				"type":        "string",
+				"description": "The skill name to load (e.g. 'git-commit')",
+			},
+		},
+		Required:  []string{"name"},
+	}
+}
+
+func (t *loadSkillTool) ProviderOptions() fantasy.ProviderOptions      { return t.pOpts }
+func (t *loadSkillTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
+
+func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+	if args.Name == "" {
+		return fantasy.NewTextErrorResponse("skill name is required"), nil
+	}
+
+	nameLower := strings.ToLower(args.Name)
+	for _, s := range t.coordinator.skills {
+		if strings.ToLower(s.Name) == nameLower {
+			return fantasy.NewTextResponse(fmt.Sprintf("Skill: %s\n\n%s", s.Name, s.Content)), nil
+		}
+	}
+
+	available := make([]string, len(t.coordinator.skills))
+	for i, s := range t.coordinator.skills {
+		available[i] = s.Name
+	}
+	return fantasy.NewTextErrorResponse(fmt.Sprintf("skill %q not found (available: %v)", args.Name, available)), nil
 }
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
@@ -252,6 +302,21 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef) (stri
 	}
 
 	prompt := task.Task
+
+	agentSkillNames := skill.ParseSkillList(agentDef.Skills)
+	if len(agentSkillNames) > 0 {
+		var skillPrefix strings.Builder
+		skillPrefix.WriteString("## Relevant Skills\n\n")
+		matched := skill.SkillsByName(c.skills, agentSkillNames)
+		for _, s := range matched {
+			fmt.Fprintf(&skillPrefix, "**%s**: %s\n", s.Name, s.Summary)
+			skillPath := skill.SkillWorkspacePath(c.session.Workspace, s.Name)
+			fmt.Fprintf(&skillPrefix, "Full instructions: %s\n\n", skillPath)
+		}
+		skillPrefix.WriteString("Use the `read` tool to load the full skill instructions if you need detailed steps.\n\n---\n\n")
+		prompt = skillPrefix.String() + prompt
+	}
+
 	if len(task.ContextFiles) > 0 {
 		var contextBuilder strings.Builder
 		contextBuilder.WriteString("Context files:\n\n")
@@ -423,51 +488,67 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 	workerNames := c.workerNameList()
 	workerDescs := c.workerDescriptions()
 
-	return fmt.Sprintf(`You are the coordinator of team %q with %d members: %s.
+	var b strings.Builder
+	fmt.Fprintf(&b, "You are the coordinator of team %q with %d members: %s.\n\n", c.session.Config.Name, len(workerNames), strings.Join(workerNames, ", "))
 
-You MUST delegate ALL work to your team members. You do NOT have tools to do work yourself.
+	b.WriteString("You MUST delegate ALL work to your team members. You do NOT have tools to do work yourself.\n\n")
 
-## How to Coordinate
+	b.WriteString("## How to Coordinate\n\n")
+	b.WriteString("1. **Analyze** the user's request to identify which team members are needed\n")
+	b.WriteString("2. **Check skills** — if any available skills are relevant to the user's task, call `load_skill` to get the full instructions\n")
+	b.WriteString("3. **Plan** your approach before delegating — think step by step\n")
+	b.WriteString("4. **Delegate** tasks using run_agents — this is the ONLY way to get work done\n")
+	b.WriteString("5. Run independent tasks in parallel by passing multiple tasks in one run_agents call\n")
+	b.WriteString("6. When delegating to a worker that needs skill knowledge, include the skill summary in the task description and mention the skill file path so the worker can read it if needed\n")
+	b.WriteString("7. **Evaluate** results after each run_agents call — decide if more work is needed or if you can provide a final answer\n")
+	b.WriteString("8. **Synthesize** results into a coherent answer for the user\n")
+	b.WriteString("9. When satisfied, call the finish tool with your final response\n\n")
 
-1. **Analyze** the user's request to identify which team members are needed
-2. **Plan** your approach before delegating — think step by step
-3. **Delegate** tasks using run_agents — this is the ONLY way to get work done
-4. Run independent tasks in parallel by passing multiple tasks in one run_agents call
-5. **Evaluate** results after each run_agents call — decide if more work is needed or if you can provide a final answer
-6. **Synthesize** results into a coherent answer for the user
-7. When satisfied, call the finish tool with your final response
+	b.WriteString("## Available Agents\n\n")
+	for _, desc := range workerDescs {
+		fmt.Fprintf(&b, "- %s\n", desc)
+	}
+	b.WriteString("\n")
 
-## Available Agents
+	b.WriteString("## Available Skills\n\n")
+	if len(c.skills) == 0 {
+		b.WriteString("No skills are available for this team.\n\n")
+	} else {
+		b.WriteString("| Skill | Description |\n")
+		b.WriteString("|-------|-------------|\n")
+		for _, s := range c.skills {
+			desc := s.Description
+			if len(desc) > 80 {
+				desc = desc[:80] + "..."
+			}
+			fmt.Fprintf(&b, "| %s | %s |\n", s.Name, desc)
+		}
+		b.WriteString("\n")
+		b.WriteString("To get the full instructions for any skill, call the `load_skill` tool with the skill name.\n")
+		b.WriteString("Before delegating tasks, consider loading relevant skills so you can include their key instructions in the task description.\n\n")
+	}
 
-%s
+	b.WriteString("## Tools\n\n")
+	b.WriteString("### run_agents\n")
+	b.WriteString("Delegate tasks to team workers. All tasks in one call run in parallel.\n")
+	b.WriteString("```json\n")
+	b.WriteString("{\n")
+	b.WriteString("  \"tasks\": [\n")
+	b.WriteString("    {\"agent\": \"agent-name\", \"task\": \"task description\", \"context_files\": [\"optional_file.txt\"]}\n")
+	b.WriteString("  ]\n")
+	b.WriteString("}\n```\n\n")
+	b.WriteString("### load_skill\n")
+	b.WriteString("Load the full content of a skill by name. Returns detailed instructions you can include in worker task descriptions.\n")
+	b.WriteString("```json\n{\"name\": \"skill-name\"}\n```\n\n")
+	b.WriteString("### finish\n")
+	b.WriteString("Signal completion and provide your final answer to the user. ALWAYS call this when you are done.\n")
+	b.WriteString("```json\n{\"response\": \"Your final synthesized answer to the user\"}\n```\n\n")
+	b.WriteString("### ask_user\n")
+	b.WriteString("Ask the user a question when you need clarification before proceeding.\n\n")
 
-## Tools
+	fmt.Fprintf(&b, "Team workspace: %s\n", c.session.Workspace)
 
-### run_agents
-Delegate tasks to team workers. All tasks in one call run in parallel.
-{
-  "tasks": [
-    {"agent": "agent-name", "task": "task description", "context_files": ["optional_file.txt"]}
-  ]
-}
-
-### finish
-Signal completion and provide your final answer to the user. ALWAYS call this when you are done.
-{
-  "response": "Your final synthesized answer to the user"
-}
-
-### ask_user
-Ask the user a question when you need clarification before proceeding.
-
-Team workspace: %s
-`,
-		c.session.Config.Name,
-		len(workerNames),
-		strings.Join(workerNames, ", "),
-		strings.Join(workerDescs, "\n"),
-		c.session.Workspace,
-	)
+	return b.String()
 }
 
 func (c *Coordinator) GetOrchestratorDef() *agent.AgentDef {
@@ -534,7 +615,22 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	writeInbox(c.session.Workspace, agentName, task)
 	writeStatus(c.session.Workspace, agentName, "working", task)
 
-	output, err := c.runAgentWithStatus(taskCtx, ag, agentName, task)
+	prompt := task
+	agentSkillNames := skill.ParseSkillList(agentDef.Skills)
+	if len(agentSkillNames) > 0 {
+		var skillPrefix strings.Builder
+		skillPrefix.WriteString("## Relevant Skills\n\n")
+		matched := skill.SkillsByName(c.skills, agentSkillNames)
+		for _, s := range matched {
+			fmt.Fprintf(&skillPrefix, "**%s**: %s\n", s.Name, s.Summary)
+			skillPath := skill.SkillWorkspacePath(c.session.Workspace, s.Name)
+			fmt.Fprintf(&skillPrefix, "Full instructions: %s\n\n", skillPath)
+		}
+		skillPrefix.WriteString("Use the `read` tool to load the full skill instructions if you need detailed steps.\n\n---\n\n")
+		prompt = skillPrefix.String() + prompt
+	}
+
+	output, err := c.runAgentWithStatus(taskCtx, ag, agentName, prompt)
 	if err != nil {
 		writeStatus(c.session.Workspace, agentName, "error", task)
 		c.taskTracker.Error(agentName, err.Error())
@@ -556,6 +652,12 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	EnsureWorkspaceDirs(c.session.Workspace)
 
+	if len(c.skills) > 0 {
+		if err := skill.CopySkillsToWorkspace(c.skills, c.session.Workspace); err != nil {
+			c.report(StatusEvent{Type: "error", Message: fmt.Sprintf("failed to copy skills to workspace: %v", err)})
+		}
+	}
+
 	if c.sessionData != nil {
 		c.sessionData.AddEntry("user", userPrompt)
 	}
@@ -573,7 +675,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		}
 	}
 
-	orchTools := []fantasy.AgentTool{c.RunAgentsTool(), &finishTool{}}
+	orchTools := []fantasy.AgentTool{c.RunAgentsTool(), &finishTool{}, &loadSkillTool{coordinator: c}}
 	for _, t := range c.coreTools {
 		if t.Info().Name == "ask_user" {
 			orchTools = append(orchTools, t)
@@ -636,4 +738,6 @@ Rules:
 - Use ask_user when you need clarification from the user before proceeding
 - When you have completed all coordination and have a final answer, call the finish tool with your response
 - ALWAYS call finish when done — do not just output text as your final answer
+- If the user's task relates to a skill, use load_skill to get the detailed instructions first, then include relevant parts in worker task descriptions
+- Workers have limited context — include only the essential skill instructions in the task description, not the entire skill content. Mention the skill file path so workers can read it if they need more detail
 `

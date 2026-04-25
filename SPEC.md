@@ -2,7 +2,7 @@
 
 ## 1. 專案概述
 
-**agent-team-cli** 是一個 CLI 工具，用於協調多個 LLM Agent 團隊來共同完成任務。團隊由一個協調者（Coordinator/Orchestrator）和多個工作者（Worker）組成。協調者接收使用者任務，利用 `run_agents` 工具將工作委派給各 Agent，Agent 間可平行執行任務，最終由協調者整合結果回傳給使用者。
+**agent-team-cli** 是一個 CLI 工具，用於協調多個 LLM Agent 團隊來共同完成任務。團隊由一個協調者（Coordinator）和多個工作者（Worker）組成。協調者接收使用者任務，利用 `run_agents` 工具將工作委派給各 Agent，Agent 間可平行執行任務，最終由協調者整合結果回傳給使用者。
 
 ## 2. 技術棧
 
@@ -39,6 +39,18 @@ agent-team-cli <team-dir> [prompt]
 | `-w, --workspace string` | `<cwd>/workspace` | 工作區目錄 |
 | `-n, --new` | `false` | 歸檔舊 session 並開始新 session |
 
+### 4.3 互動式提示詞輸入
+
+當未提供 prompt 且 stdin 無輸入時，程式會以互動式方式向使用者詢問：
+
+```
+─── Enter Prompt ───
+Please describe the task you want the team to perform:
+> 
+```
+
+若直接按 Enter 提交空白 prompt，程式會顯示錯誤並退出。
+
 ## 5. 團隊設定格式
 
 ### 5.1 team.yml
@@ -55,8 +67,10 @@ model: ollama/qwen3:8b # 預設模型（所有 Agent）
 workspace: workspace   # 工作區目錄，可為絕對路徑
 temperature: 0.3      # 生成溫度
 max-tokens: 8192      # 最大 token 數
-top-p: 0.9            # Top-p 采样
-top-k: 40             # Top-k 采样
+top-p: 0.9            # Top-p 採樣
+top-k: 40             # Top-k 採樣
+skills: code-review,git-commit    # 包含的技能列表（可選）
+skills-exclude: debug              # 排除的技能列表（可選）
 ```
 
 ### 5.2 Agent 定義檔案
@@ -74,14 +88,16 @@ top-p: 0.9
 top-k: 40
 role: worker
 tools: read,write,edit,bash,grep,find,ls
+skills: code-review    # 此 Agent 適用的技能（可選）
 timeout: 300
 max-retries: 3
 ---
 你的系統提示詞在這裡。
 ```
 
-- **role**：Agent 角色，`worker`（預設）或 `coordinator`/`orchestrator`
+- **role**：Agent 角色，`worker`（預設）或 `coordinator`
 - **tools**：可用工具列表（逗號分隔），`all` 表示全部工具，`glob` 別名為 `find`
+- **skills**：此 Agent 適用的技能名稱列表，會在任務執行時自動注入技能摘要至 prompt
 - **系統提示詞**：第二個 `---` 之後的所有內容
 
 ### 5.3 MCP 伺服器設定
@@ -99,6 +115,15 @@ mcp-servers:
 
 - `type: local`：執行 stdio MCP 伺服器
 - `type: remote`：連接 HTTP MCP 伺服器（需 `url` 欄位）
+
+### 5.4 技能設定
+
+技能從以下位置自動探索：
+
+1. `team-dir/.agents/skills/{skill-name}/SKILL.md`
+2. `~/.agents/skills/{skill-name}/SKILL.md`
+
+技能透過 `team.yml` 中的 `skills` 和 `skills-exclude` 欄位進行包含或排除過濾。
 
 ## 6. 內建工具
 
@@ -209,16 +234,41 @@ mcp-servers:
 - `allow_any`：單/多選時是否允許自由輸入
 - 回應格式：`{"answers": ["value"], "free_text": "text"}`
 
+### 6.9 load_skill
+
+載入技能完整內容（僅協調者可用）。
+
+```json
+{"name": "code-review"}
+```
+
+- 根據技能名稱載入對應的技能內容
+- 回應格式：`Skill: {name}\n\n{content}`
+- 找不到時返回錯誤，並列出可用技能
+
+### 6.10 finish
+
+標記協調完成並提供最終答案（僅協調者可用）。
+
+```json
+{"response": "這是給使用者的最終答案"}
+```
+
+- 協調者必須調用此工具作為最終回應
+- 回應前綴 `FINISHED:` 用於識別完成訊息
+
 ## 7. 協調流程
 
 ### 7.1 啟動序列
 
-1. 解析命令列參數和 stdin 輸入
+1. 解析命令列參數和 stdin 輸入；若無則以互動式詢問
 2. 載入團隊設定（`team.yml` 和 Agent 定義）
-3. 建立或恢復 session
-4. 連接 Ollama provider
-5. 載入 MCP 伺服器（如有）
-6. 執行協調流程
+3. 探索並過濾技能（從 `team-dir/.agents/skills` 和 `~/.agents/skills`）
+4. 建立或恢復 session
+5. 連接 Ollama provider
+6. 載入 MCP 伺服器（如有）
+7. 將技能複製到工作區（`workspace/shared/skills/`）
+8. 執行協調流程
 
 ### 7.2 Session 管理
 
@@ -231,18 +281,28 @@ mcp-servers:
 ### 7.3 委派流程
 
 1. 協調者接收使用者任務
-2. 分析任務並決定需要的 Agent
-3. 使用 `run_agents` 工具委派任務（可平行委派多個獨立任務）
-4. Agent 接收任務、執行工具、返回結果
-5. 協調者整合結果並回應使用者
+2. 評估是否需要使用技能，呼叫 `load_skill` 取得詳細指示
+3. 分析任務並決定需要的 Agent
+4. 使用 `run_agents` 工具委派任務（可平行委派多個獨立任務）
+5. 對於具有技能標記的 Worker Agent，自動將技能摘要注入任務 prompt
+6. Agent 接收任務、執行工具、返回結果
+7. 協調者整合結果並回應使用者，呼叫 `finish` 工具
 
-### 7.4 重試機制
+### 7.4 技能注入機制
+
+當 Worker Agent 被賦予技能時（如 `skills: code-review`）：
+
+1. 在任務執行前，自動將對應技能的摘要和工作區路徑注入 prompt 前綴
+2. 技能內容被複製至 `workspace/shared/skills/{skill-name}.md`
+3. Worker 可透過 `read` 工具讀取完整技能指示
+
+### 7.5 重試機制
 
 - 任務失敗時自動重試（最多 `max-retries` 次）
 - 重試時會傳遞對話歷史，讓 LLM 從上次進度繼續
 - 達到最大重試次數後返回錯誤
 
-### 7.5 回合限制
+### 7.6 回合限制
 
 - `max-rounds` 限制委派回合數（每次 `run_agents` 呼叫為一回合）
 - 超過限制時停止執行
@@ -256,14 +316,15 @@ workspace/
 │       └── task-{timestamp}.md     # Agent 收到的任務
 ├── outbox/
 │   └── {agent}/
-│       └── result-{timestamp}.md  # Agent 產出的結果
+│       └── result-{timestamp}.md   # Agent 產出的結果
 ├── shared/
-│   └── {filename}                 # Agent 間共享的檔案
+│   └── skills/
+│       └── {skill-name}.md        # 技能檔案（自動複製至此）
 ├── status/
-│   └── {agent}.yml               # Agent 狀態檔案
+│   └── {agent}.yml                # Agent 狀態檔案
 ├── history/
-│   └── {date}-{slug}.md          # 歸檔的 session
-├── session.json                   # Session 資料
+│   └── {date}-{slug}.md           # 歸檔的 session
+├── session.json                    # Session 資料
 └── session.md                     # Session 日誌
 ```
 
@@ -271,7 +332,7 @@ workspace/
 
 | 角色 | 可用工具 | 說明 |
 |------|----------|------|
-| `coordinator`/`orchestrator` | `run_agents`, `ask_user` | 只能協調，不能自行執行任務 |
+| `coordinator` | `run_agents`, `finish`, `load_skill`, `ask_user` | 只能協調，不能自行執行任務 |
 | `worker`（預設） | 指定的工具集 | 執行實際工作 |
 
 - `role` 欄位用於識別協調者；任何名稱含 "coordinat" 或 "orchestr" 的 Agent 也會被視為協調者
@@ -323,3 +384,4 @@ go build ./cmd/agent-team-cli
 - **YAML 限制**：`team.yml` 僅支援扁平結構，不支援巢狀 YAML
 - **MCP 工具命名**：MCP 工具名稱前綴為 `{server}__` 以避免衝突
 - **Session 大小**：單一 session 最多保留 40 筆交換記錄用於日誌顯示
+- **技能探索**：`skill.DiscoverSkills` 僅探索目錄層級（不遞迴深入），每個技能需有 `SKILL.md` 檔案

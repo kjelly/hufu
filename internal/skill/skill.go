@@ -1,0 +1,201 @@
+package skill
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+type SkillDef struct {
+	Name        string
+	Description string
+	AllowedTools string
+	Content     string
+	Path        string
+	Summary     string
+}
+
+func parseSkillFile(path string) *SkillDef {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	text := string(raw)
+	if !strings.HasPrefix(text, "---\n") {
+		return nil
+	}
+	rest := text[4:]
+	idx := strings.Index(rest, "\n---\n")
+	if idx < 0 {
+		return nil
+	}
+	fm := parseSkillYAML(rest[:idx])
+	body := strings.TrimSpace(rest[idx+5:])
+
+	if fm["name"] == "" {
+		return nil
+	}
+
+	def := &SkillDef{
+		Name:         fm["name"],
+		Description:  fm["description"],
+		AllowedTools: fm["allowed-tools"],
+		Content:      body,
+		Path:         path,
+	}
+
+	def.Summary = buildSummary(def)
+
+	return def
+}
+
+func buildSummary(def *SkillDef) string {
+	if def.Description != "" {
+		desc := def.Description
+		if len(desc) > 200 {
+			desc = desc[:200] + "..."
+		}
+		return desc
+	}
+	firstLine := ""
+	lines := strings.Split(def.Content, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			firstLine = line
+			break
+		}
+	}
+	if len(firstLine) > 200 {
+		firstLine = firstLine[:200] + "..."
+	}
+	return firstLine
+}
+
+func parseSkillYAML(data string) map[string]string {
+	result := map[string]string{}
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		i := strings.Index(line, ":")
+		if i <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:i])
+		val := strings.TrimSpace(line[i+1:])
+		if len(val) >= 2 &&
+			((val[0] == '"' && val[len(val)-1] == '"') ||
+				(val[0] == '\'' && val[len(val)-1] == '\'')) {
+			val = val[1 : len(val)-1]
+		}
+		result[key] = val
+	}
+	return result
+}
+
+func DiscoverSkills(dirs []string) []*SkillDef {
+	seen := map[string]bool{}
+	var skills []*SkillDef
+
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			skillPath := filepath.Join(dir, entry.Name(), "SKILL.md")
+			def := parseSkillFile(skillPath)
+			if def == nil {
+				continue
+			}
+			nameLower := strings.ToLower(def.Name)
+			if seen[nameLower] {
+				continue
+			}
+			seen[nameLower] = true
+			skills = append(skills, def)
+		}
+	}
+
+	return skills
+}
+
+func FilterSkills(skills []*SkillDef, include, exclude []string) []*SkillDef {
+	includeMap := map[string]bool{}
+	for _, s := range include {
+		includeMap[strings.ToLower(strings.TrimSpace(s))] = true
+	}
+	excludeMap := map[string]bool{}
+	for _, s := range exclude {
+		excludeMap[strings.ToLower(strings.TrimSpace(s))] = true
+	}
+
+	if len(includeMap) == 0 && len(excludeMap) == 0 {
+		return skills
+	}
+
+	var filtered []*SkillDef
+	for _, s := range skills {
+		nameLower := strings.ToLower(s.Name)
+		if excludeMap[nameLower] {
+			continue
+		}
+		if len(includeMap) > 0 && !includeMap[nameLower] {
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+	return filtered
+}
+
+func SkillsByName(skills []*SkillDef, names []string) []*SkillDef {
+	nameMap := map[string]bool{}
+	for _, n := range names {
+		nameMap[strings.ToLower(strings.TrimSpace(n))] = true
+	}
+	var result []*SkillDef
+	for _, s := range skills {
+		if nameMap[strings.ToLower(s.Name)] {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+func CopySkillsToWorkspace(skills []*SkillDef, workspace string) error {
+	dir := filepath.Join(workspace, "shared", "skills")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for _, s := range skills {
+		name := strings.ToLower(s.Name)
+		target := filepath.Join(dir, name+".md")
+		if err := os.WriteFile(target, []byte(s.Content), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func SkillWorkspacePath(workspace, skillName string) string {
+	return filepath.Join(workspace, "shared", "skills", strings.ToLower(skillName)+".md")
+}
+
+func ParseSkillList(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var result []string
+	for _, item := range strings.Split(s, ",") {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
+}

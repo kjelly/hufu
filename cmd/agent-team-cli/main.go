@@ -276,6 +276,14 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	coordinator := team.NewCoordinator(session, ollama, mcpManager, verbose)
 	coordinator.SetSessionData(sessionData)
 
+	if len(session.Skills) > 0 {
+		var skillNames []string
+		for _, s := range session.Skills {
+			skillNames = append(skillNames, s.Name)
+		}
+		fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Skills:"), strings.Join(skillNames, ", "))
+	}
+
 	taskDisp := newTaskDisplay(w, coordinator.TaskTracker())
 
 	coordinator.SetStatusReporter(func(event team.StatusEvent) {

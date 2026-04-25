@@ -26,19 +26,22 @@ type AgentDef struct {
 	Tools       string
 	Role        string
 	System      string
+	Skills      string
 	Timeout     int64
 	MaxRetries  int
 	Generation  GenerationParams
 }
 
 type TeamConfig struct {
-	Name         string
-	Description  string
-	MaxRounds    int
-	WorkspaceDir string
-	Timeout      int64
-	MaxRetries   int
-	Generation   GenerationParams
+	Name           string
+	Description    string
+	MaxRounds      int
+	WorkspaceDir   string
+	Timeout        int64
+	MaxRetries     int
+	Generation     GenerationParams
+	Skills         string
+	SkillsExclude  string
 }
 
 type OllamaProvider struct {

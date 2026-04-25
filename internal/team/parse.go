@@ -8,6 +8,7 @@ import (
 
 	"github.com/anomalyco/agent-team-cli/internal/agent"
 	"github.com/anomalyco/agent-team-cli/internal/mcp"
+	"github.com/anomalyco/agent-team-cli/internal/skill"
 )
 
 type TeamSession struct {
@@ -16,6 +17,7 @@ type TeamSession struct {
 	Workspace  string
 	Agents     map[string]*agent.AgentDef
 	MCPServers map[string]mcp.MCPServerConfig
+	Skills     []*skill.SkillDef
 }
 
 func parseSimpleYAML(data string) map[string]string {
@@ -73,6 +75,7 @@ func parseAgentFile(path string) *agent.AgentDef {
 		Tools:       fm["tools"],
 		Role:        role,
 		System:      body,
+		Skills:      fm["skills"],
 		MaxRetries:  -1,
 		Generation: agent.GenerationParams{
 			Model:       fm["model"],
@@ -148,6 +151,12 @@ func parseTeamYML(teamDir string) (agent.TeamConfig, error) {
 		TopP:        fm["top-p"],
 		TopK:        fm["top-k"],
 	}
+	if v := fm["skills"]; v != "" {
+		cfg.Skills = v
+	}
+	if v := fm["skills-exclude"]; v != "" {
+		cfg.SkillsExclude = v
+	}
 
 	return cfg, nil
 }
@@ -208,6 +217,17 @@ func LoadTeam(teamDir string) (*TeamSession, error) {
 	if len(session.Agents) == 0 {
 		return nil, fmt.Errorf("no valid agent .md files found in %s", absDir)
 	}
+
+	skillDirs := []string{
+		filepath.Join(absDir, ".agents", "skills"),
+		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
+	}
+
+	allSkills := skill.DiscoverSkills(skillDirs)
+
+	includeSkills := skill.ParseSkillList(session.Config.Skills)
+	excludeSkills := skill.ParseSkillList(session.Config.SkillsExclude)
+	session.Skills = skill.FilterSkills(allSkills, includeSkills, excludeSkills)
 
 	return session, nil
 }
