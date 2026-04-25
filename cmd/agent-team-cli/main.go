@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
@@ -20,10 +22,10 @@ import (
 )
 
 var (
-	ollamaURL string
-	verbose   bool
-	workspace string
-	newSession bool
+	ollamaURL   string
+	verbose     bool
+	workspace   string
+	newSession  bool
 )
 
 var (
@@ -37,6 +39,10 @@ var (
 	doneStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2"))
 	textStyle   = lipgloss.NewStyle().Faint(true)
 	headerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
+	pendingIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	progressIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	doneIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	errorIcon   = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 )
 
 type lineWriter struct {
@@ -47,6 +53,75 @@ func (w *lineWriter) write(s string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	fmt.Fprint(os.Stderr, s)
+}
+
+type taskDisplay struct {
+	mu     sync.Mutex
+	w      *lineWriter
+	tracker *team.TaskTracker
+	lines  int
+}
+
+func newTaskDisplay(w *lineWriter, tracker *team.TaskTracker) *taskDisplay {
+	return &taskDisplay{w: w, tracker: tracker}
+}
+
+func (d *taskDisplay) render() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	tasks := d.tracker.Tasks()
+	if len(tasks) == 0 {
+		return
+	}
+
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("─── Tasks ───"))
+	b.WriteString("\n")
+
+	for _, t := range tasks {
+		var icon string
+		var desc string
+		switch t.Status {
+		case team.TaskPending:
+			icon = pendingIcon.Render("○")
+			desc = dimStyle.Render(t.Task)
+		case team.TaskInProgress:
+			icon = progressIcon.Render("◑")
+			taskPreview := t.Task
+			if len(taskPreview) > 60 {
+				taskPreview = taskPreview[:60] + "..."
+			}
+			desc = taskPreview
+		case team.TaskDone:
+			icon = doneIcon.Render("●")
+			desc = dimStyle.Render(t.Task)
+		case team.TaskError:
+			icon = errorIcon.Render("✗")
+			if t.Detail != "" {
+				desc = errStyle.Render(t.Detail)
+			} else {
+				desc = dimStyle.Render(t.Task)
+			}
+		}
+		b.WriteString(fmt.Sprintf("  %s %s %s\n", icon, agentStyle.Render(t.Agent), desc))
+	}
+
+	d.w.write(b.String())
+	d.lines = len(tasks) + 2
+}
+
+func (d *taskDisplay) clear() {
+	if d.lines > 0 {
+		d.w.write(fmt.Sprintf("\033[%dA\033[J", d.lines))
+		d.lines = 0
+	}
+}
+
+func (d *taskDisplay) update() {
+	d.clear()
+	d.render()
 }
 
 func main() {
@@ -196,9 +271,16 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	currentAgent := ""
 	textBuf := ""
 
+	idleTimer := newIdleWarningTimer(w, 30*time.Second)
+
 	coordinator := team.NewCoordinator(session, ollama, mcpManager, verbose)
 	coordinator.SetSessionData(sessionData)
+
+	taskDisp := newTaskDisplay(w, coordinator.TaskTracker())
+
 	coordinator.SetStatusReporter(func(event team.StatusEvent) {
+		idleTimer.reset()
+
 		switch event.Type {
 		case "start":
 			if currentAgent != "" && textBuf != "" {
@@ -215,6 +297,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 				agentStyle.Render(event.Agent),
 				dimStyle.Render("— "+desc),
 			))
+			taskDisp.update()
 
 		case "step":
 			label := event.Message
@@ -279,6 +362,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 				doneStyle.Render("done"),
 			))
 			currentAgent = ""
+			taskDisp.update()
 
 		case "error":
 			if textBuf != "" {
@@ -290,33 +374,97 @@ func runTeam(cmd *cobra.Command, args []string) error {
 				agentStyle.Render(event.Agent),
 				errStyle.Render(event.Message),
 			))
+			taskDisp.update()
 		}
 	})
 
-	fmt.Fprintf(os.Stderr, "\n%s Starting team coordination...\n\n", boldStyle.Render("→"))
+	var result string
 
-	result, err := coordinator.Run(ctx, prompt)
-	if err != nil {
-		if ctx.Err() == context.Canceled {
+	directAgent, directTask, isDirect := team.ParseDirectAgent(prompt)
+	if isDirect {
+		fmt.Fprintf(os.Stderr, "\n%s Direct invocation: @%s\n\n", boldStyle.Render("→"), directAgent)
+
+		directResult, err := coordinator.RunDirectAgent(ctx, directAgent, directTask)
+		if err != nil {
+			if ctx.Err() == context.Canceled {
+				if sessionData != nil {
+					team.SaveSession(session.Workspace, sessionData)
+				}
+				fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
+				if mcpManager != nil {
+					mcpManager.Close()
+				}
+				os.Exit(130)
+			}
+			return fmt.Errorf("direct agent execution failed: %w", err)
+		}
+
+		if directResult.Error != nil {
+			fmt.Fprintf(os.Stderr, "\n%s %s failed: %s\n", errStyle.Render("✗"), directResult.AgentName, errStyle.Render(directResult.Error.Error()))
 			if sessionData != nil {
 				team.SaveSession(session.Workspace, sessionData)
 			}
-			fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-			if mcpManager != nil {
-				mcpManager.Close()
+			return fmt.Errorf("direct agent %s failed: %w", directResult.AgentName, directResult.Error)
+		}
+
+		fmt.Fprintf(os.Stderr, "\n%s %s completed, synthesizing...\n\n", doneStyle.Render("✓"), agentStyle.Render(directResult.AgentName))
+
+		orchDef := coordinator.GetOrchestratorDef()
+		if orchDef == nil {
+			result = directResult.Output
+		} else {
+			synthesisPrompt := fmt.Sprintf("A user directly asked @%s to do the following task:\n\n%s\n\nHere is what %s produced:\n\n---\n%s\n---\n\nPlease synthesize this into a final, well-organized answer for the user. If the output is already complete, you can present it as-is. If there are any issues or follow-up needed, address them.",
+				directAgent, directTask, directAgent, directResult.Output)
+
+			result, err = coordinator.Run(ctx, synthesisPrompt)
+			if err != nil {
+				if ctx.Err() == context.Canceled {
+					if sessionData != nil {
+						team.SaveSession(session.Workspace, sessionData)
+					}
+					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
+					if mcpManager != nil {
+						mcpManager.Close()
+					}
+					os.Exit(130)
+				}
+				if sessionData != nil {
+					team.SaveSession(session.Workspace, sessionData)
+					team.SaveSessionMD(session.Workspace, team.GenerateSessionMD(sessionData, session.Config.Name))
+				}
+				return fmt.Errorf("coordinator synthesis failed: %w", err)
 			}
-			os.Exit(130)
 		}
-		if sessionData != nil {
-			team.SaveSession(session.Workspace, sessionData)
-			team.SaveSessionMD(session.Workspace, team.GenerateSessionMD(sessionData, session.Config.Name))
+	} else {
+		fmt.Fprintf(os.Stderr, "\n%s Starting team coordination...\n\n", boldStyle.Render("→"))
+
+		result, err = coordinator.Run(ctx, prompt)
+		if err != nil {
+			if ctx.Err() == context.Canceled {
+				if sessionData != nil {
+					team.SaveSession(session.Workspace, sessionData)
+				}
+				fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
+				if mcpManager != nil {
+					mcpManager.Close()
+				}
+				os.Exit(130)
+			}
+			if sessionData != nil {
+				team.SaveSession(session.Workspace, sessionData)
+				team.SaveSessionMD(session.Workspace, team.GenerateSessionMD(sessionData, session.Config.Name))
+			}
+			return fmt.Errorf("team execution failed: %w", err)
 		}
-		return fmt.Errorf("team execution failed: %w", err)
 	}
 
 	if sessionData != nil {
 		team.SaveSessionMD(session.Workspace, team.GenerateSessionMD(sessionData, session.Config.Name))
 	}
+
+	taskDisp.update()
+
+	idleTimer.stop()
 
 	fmt.Fprintf(os.Stderr, "\n%s Coordination complete.\n\n", doneStyle.Render("✓"))
 
@@ -358,6 +506,9 @@ func formatToolArgs(toolName, args string) string {
 	if toolName == "run_agents" {
 		maxLen = 200
 	}
+	if toolName == "finish" {
+		maxLen = 120
+	}
 	if len(args) > maxLen {
 		return args[:maxLen] + "..."
 	}
@@ -369,6 +520,9 @@ func sortedAgents(agents map[string]*agent.AgentDef) []*agent.AgentDef {
 	for _, def := range agents {
 		result = append(result, def)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
 	return result
 }
 
@@ -384,7 +538,7 @@ func readStdin() string {
 func askUserForPrompt() string {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Enter Prompt ───"))
-	fmt.Fprintf(os.Stderr, "Please describe the task you want the team to perform:\n")
+	fmt.Fprintf(os.Stderr, "Describe the task (use @agent-name for direct agent invocation):\n")
 	fmt.Fprintf(os.Stderr, "%s ", boldStyle.Render(">"))
 	input, _ := reader.ReadString('\n')
 	prompt := strings.TrimRight(input, "\r\n")
@@ -393,4 +547,63 @@ func askUserForPrompt() string {
 		os.Exit(1)
 	}
 	return prompt
+}
+
+type idleWarningTimer struct {
+	w        *lineWriter
+	interval time.Duration
+	timer    *time.Timer
+	mu       sync.Mutex
+	warned   bool
+	deadline time.Time
+}
+
+func newIdleWarningTimer(w *lineWriter, interval time.Duration) *idleWarningTimer {
+	t := &idleWarningTimer{
+		w:        w,
+		interval: interval,
+	}
+	t.timer = time.AfterFunc(interval, t.warn)
+	t.deadline = time.Now().Add(interval)
+	return t
+}
+
+func (t *idleWarningTimer) warn() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.timer == nil {
+		return
+	}
+	elapsed := time.Since(t.deadline.Add(-t.interval))
+	t.w.write(fmt.Sprintf("\n%s Waiting for LLM response... (%v elapsed)\n",
+		stepStyle.Render("⏳"),
+		elapsed.Truncate(time.Second),
+	))
+	t.warned = true
+	t.timer = time.AfterFunc(t.interval, t.warn)
+	t.deadline = time.Now().Add(t.interval)
+}
+
+func (t *idleWarningTimer) reset() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.timer == nil {
+		return
+	}
+	t.timer.Stop()
+	if t.warned {
+		t.w.write(fmt.Sprintf("\n%s Activity resumed\n", doneStyle.Render("↻")))
+		t.warned = false
+	}
+	t.timer = time.AfterFunc(t.interval, t.warn)
+	t.deadline = time.Now().Add(t.interval)
+}
+
+func (t *idleWarningTimer) stop() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.timer != nil {
+		t.timer.Stop()
+		t.timer = nil
+	}
 }

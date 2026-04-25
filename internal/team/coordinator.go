@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -20,17 +22,24 @@ type TaskDef struct {
 	ContextFiles []string `json:"context_files,omitempty"`
 }
 
+type DirectAgentResult struct {
+	AgentName string
+	Output    string
+	Error     error
+}
+
 type Coordinator struct {
-	session       *TeamSession
-	ollama        *agent.OllamaProvider
-	mcpManager    *mcp.MCPToolManager
-	coreTools     []fantasy.AgentTool
-	agentCache    map[string]fantasy.Agent
-	agentCacheMu  sync.RWMutex
-	round         int
-	verbose       bool
-	reportStatus  StatusReporter
-	sessionData   *SessionData
+	session      *TeamSession
+	ollama       *agent.OllamaProvider
+	mcpManager   *mcp.MCPToolManager
+	coreTools    []fantasy.AgentTool
+	agentCache   map[string]fantasy.Agent
+	agentCacheMu sync.RWMutex
+	round        int
+	verbose      bool
+	reportStatus StatusReporter
+	sessionData  *SessionData
+	taskTracker  *TaskTracker
 }
 
 func NewCoordinator(session *TeamSession, ollama *agent.OllamaProvider, mcpManager *mcp.MCPToolManager, verbose bool) *Coordinator {
@@ -43,6 +52,7 @@ func NewCoordinator(session *TeamSession, ollama *agent.OllamaProvider, mcpManag
 		agentCache:   make(map[string]fantasy.Agent),
 		verbose:      verbose,
 		reportStatus: func(event StatusEvent) {},
+		taskTracker:  NewTaskTracker(),
 	}
 }
 
@@ -54,6 +64,10 @@ func (c *Coordinator) SetStatusReporter(fn StatusReporter) {
 
 func (c *Coordinator) report(event StatusEvent) {
 	c.reportStatus(event)
+}
+
+func (c *Coordinator) TaskTracker() *TaskTracker {
+	return c.taskTracker
 }
 
 func (c *Coordinator) RunAgentsTool() fantasy.AgentTool {
@@ -68,7 +82,7 @@ type runAgentsTool struct {
 func (t *runAgentsTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
 		Name:        "run_agents",
-		Description: "Delegate tasks to team workers. Runs tasks in parallel when possible.",
+		Description: "Delegate tasks to team workers. Runs all tasks in parallel. Returns structured results from each agent.",
 		Parameters: map[string]any{
 			"tasks": map[string]any{
 				"type": "array",
@@ -77,7 +91,7 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 					"properties": map[string]any{
 						"agent":         map[string]any{"type": "string", "description": "Agent name to delegate to"},
 						"task":          map[string]any{"type": "string", "description": "Task description for the agent"},
-						"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional files to share as context"},
+						"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional files from the workspace shared/ directory to provide as context"},
 					},
 					"required": []string{"agent", "task"},
 				},
@@ -108,6 +122,37 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	return fantasy.NewTextResponse(result), nil
 }
 
+type finishTool struct {
+	pOpts fantasy.ProviderOptions
+}
+
+func (t *finishTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "finish",
+		Description: "Signal that you have completed the user's request and provide your final answer. Call this when you are done coordinating and have a complete response for the user. You MUST call this instead of just outputting text — your final answer goes in the response field.",
+		Parameters: map[string]any{
+			"response": map[string]any{
+				"type":        "string",
+				"description": "Your final answer to the user",
+			},
+		},
+		Required: []string{"response"},
+	}
+}
+
+func (t *finishTool) ProviderOptions() fantasy.ProviderOptions      { return t.pOpts }
+func (t *finishTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
+
+func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		Response string `json:"response"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", args.Response)), nil
+}
+
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
 	c.round++
 	if c.session.Config.MaxRounds > 0 && c.round > c.session.Config.MaxRounds {
@@ -116,35 +161,57 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 
 	c.report(StatusEvent{Type: "step", Message: fmt.Sprintf("Round %d: delegating %d task(s)", c.round, len(tasks))})
 
-	var wg sync.WaitGroup
 	type taskResult struct {
 		agentName string
+		task      string
 		output    string
 		err       error
 	}
 	resultsCh := make(chan taskResult, len(tasks))
 
+	var wg sync.WaitGroup
 	for _, task := range tasks {
 		wg.Add(1)
 		go func(td TaskDef) {
 			defer wg.Done()
 			output, err := c.executeTask(ctx, td)
-			resultsCh <- taskResult{agentName: td.Agent, output: output, err: err}
+			resultsCh <- taskResult{agentName: td.Agent, task: td.Task, output: output, err: err}
 		}(task)
 	}
 	wg.Wait()
 	close(resultsCh)
 
-	var results []string
+	var results []taskResult
 	for r := range resultsCh {
+		results = append(results, r)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].agentName < results[j].agentName
+	})
+
+	var b strings.Builder
+	successCount := 0
+	errorCount := 0
+	for i, r := range results {
+		if i > 0 {
+			b.WriteString("\n\n---\n\n")
+		}
 		if r.err != nil {
-			results = append(results, fmt.Sprintf("## Agent: %s\n**ERROR**: %s", r.agentName, r.err))
+			errorCount++
+			b.WriteString(fmt.Sprintf("## Agent: %s\n**Status**: ERROR\n**Error**: %s", r.agentName, r.err))
 		} else {
-			results = append(results, fmt.Sprintf("## Agent: %s\n%s", r.agentName, r.output))
+			successCount++
+			b.WriteString(fmt.Sprintf("## Agent: %s\n**Status**: Success\n\n%s", r.agentName, r.output))
 		}
 	}
 
-	return strings.Join(results, "\n\n---\n\n"), nil
+	summary := fmt.Sprintf("\n\n---\nSummary: %d/%d tasks completed successfully", successCount, len(tasks))
+	if errorCount > 0 {
+		summary += fmt.Sprintf(", %d failed", errorCount)
+	}
+	b.WriteString(summary)
+
+	return b.String(), nil
 }
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef) (string, error) {
@@ -171,6 +238,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef) (stri
 		maxRetries = 1
 	}
 
+	c.taskTracker.Start(agentName, task.Task)
 	c.report(StatusEvent{Type: "start", Agent: agentName, Message: task.Task})
 	writeStatus(c.session.Workspace, agentName, "working", task.Task)
 	writeInbox(c.session.Workspace, agentName, task.Task)
@@ -178,6 +246,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef) (stri
 	ag, err := c.getOrCreateAgent(parentCtx, agentDef)
 	if err != nil {
 		c.report(StatusEvent{Type: "error", Agent: agentName, Message: err.Error()})
+		c.taskTracker.Error(agentName, err.Error())
 		writeStatus(c.session.Workspace, agentName, "error", task.Task)
 		return "", err
 	}
@@ -211,6 +280,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef) (stri
 		if err == nil {
 			writeOutbox(c.session.Workspace, agentName, output)
 			writeStatus(c.session.Workspace, agentName, "done", task.Task)
+			c.taskTracker.Done(agentName)
 			c.report(StatusEvent{Type: "done", Agent: agentName, Message: "completed"})
 			return output, nil
 		}
@@ -221,6 +291,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef) (stri
 
 		lastErr = err
 		c.report(StatusEvent{Type: "error", Agent: agentName, Message: fmt.Sprintf("attempt %d failed: %v", attempt, err)})
+		c.taskTracker.Error(agentName, fmt.Sprintf("attempt %d failed: %v", attempt, err))
 
 		if parentCtx.Err() != nil {
 			break
@@ -320,14 +391,12 @@ func (c *Coordinator) agentNames() []string {
 	return names
 }
 
-func (c *Coordinator) BuildOrchestratorPrompt() string {
-	var workerNames []string
-	var workerDescs []string
+func (c *Coordinator) workerDescriptions() []string {
+	var descs []string
 	for _, def := range c.session.Agents {
 		if def.Role == "orchestrator" || def.Role == "coordinator" {
 			continue
 		}
-		workerNames = append(workerNames, def.Name)
 		desc := def.Name
 		if def.Description != "" {
 			desc += ": " + def.Description
@@ -335,8 +404,24 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 		if def.Tools != "" {
 			desc += fmt.Sprintf(" (tools: %s)", def.Tools)
 		}
-		workerDescs = append(workerDescs, desc)
+		descs = append(descs, desc)
 	}
+	return descs
+}
+
+func (c *Coordinator) workerNameList() []string {
+	var names []string
+	for _, def := range c.session.Agents {
+		if def.Role != "orchestrator" && def.Role != "coordinator" {
+			names = append(names, def.Name)
+		}
+	}
+	return names
+}
+
+func (c *Coordinator) BuildOrchestratorPrompt() string {
+	workerNames := c.workerNameList()
+	workerDescs := c.workerDescriptions()
 
 	return fmt.Sprintf(`You are the coordinator of team %q with %d members: %s.
 
@@ -345,22 +430,35 @@ You MUST delegate ALL work to your team members. You do NOT have tools to do wor
 ## How to Coordinate
 
 1. **Analyze** the user's request to identify which team members are needed
-2. **Delegate** tasks using run_agents — this is the ONLY way to get work done
-3. Run independent tasks in parallel by passing multiple tasks in one call
-4. **Synthesize** results into a coherent answer for the user
+2. **Plan** your approach before delegating — think step by step
+3. **Delegate** tasks using run_agents — this is the ONLY way to get work done
+4. Run independent tasks in parallel by passing multiple tasks in one run_agents call
+5. **Evaluate** results after each run_agents call — decide if more work is needed or if you can provide a final answer
+6. **Synthesize** results into a coherent answer for the user
+7. When satisfied, call the finish tool with your final response
 
 ## Available Agents
 
 %s
 
-## run_agents Tool
+## Tools
 
-Use the run_agents tool to delegate tasks. Format:
+### run_agents
+Delegate tasks to team workers. All tasks in one call run in parallel.
 {
   "tasks": [
     {"agent": "agent-name", "task": "task description", "context_files": ["optional_file.txt"]}
   ]
 }
+
+### finish
+Signal completion and provide your final answer to the user. ALWAYS call this when you are done.
+{
+  "response": "Your final synthesized answer to the user"
+}
+
+### ask_user
+Ask the user a question when you need clarification before proceeding.
 
 Team workspace: %s
 `,
@@ -397,6 +495,59 @@ func (c *Coordinator) SessionData() *SessionData {
 	return c.sessionData
 }
 
+var directAgentPattern = regexp.MustCompile(`^@(\w[\w-]*)\s+(.+)$`)
+
+func ParseDirectAgent(prompt string) (agentName string, task string, ok bool) {
+	m := directAgentPattern.FindStringSubmatch(prompt)
+	if m == nil {
+		return "", "", false
+	}
+	return strings.ToLower(m[1]), m[2], true
+}
+
+func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (*DirectAgentResult, error) {
+	agentDef, ok := c.session.Agents[agentName]
+	if !ok {
+		return nil, fmt.Errorf("unknown agent: %q (available: %v)", agentName, c.agentNames())
+	}
+
+	if agentDef.Role == "orchestrator" || agentDef.Role == "coordinator" {
+		return nil, fmt.Errorf("cannot directly invoke coordinator agent %q", agentName)
+	}
+
+	c.taskTracker.Start(agentName, task)
+
+	ag, err := c.getOrCreateAgent(ctx, agentDef)
+	if err != nil {
+		c.taskTracker.Error(agentName, err.Error())
+		return nil, fmt.Errorf("failed to create agent %q: %w", agentName, err)
+	}
+
+	agentTimeout := time.Duration(c.session.Config.Timeout) * time.Second
+	if agentDef.Timeout > 0 {
+		agentTimeout = time.Duration(agentDef.Timeout) * time.Second
+	}
+
+	taskCtx, cancel := context.WithTimeout(context.Background(), agentTimeout)
+	defer cancel()
+
+	writeInbox(c.session.Workspace, agentName, task)
+	writeStatus(c.session.Workspace, agentName, "working", task)
+
+	output, err := c.runAgentWithStatus(taskCtx, ag, agentName, task)
+	if err != nil {
+		writeStatus(c.session.Workspace, agentName, "error", task)
+		c.taskTracker.Error(agentName, err.Error())
+		return &DirectAgentResult{AgentName: agentName, Error: err}, nil
+	}
+
+	writeOutbox(c.session.Workspace, agentName, output)
+	writeStatus(c.session.Workspace, agentName, "done", task)
+	c.taskTracker.Done(agentName)
+
+	return &DirectAgentResult{AgentName: agentName, Output: output}, nil
+}
+
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
 	orchDef := c.GetOrchestratorDef()
 	if orchDef == nil {
@@ -422,7 +573,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		}
 	}
 
-	orchTools := []fantasy.AgentTool{c.RunAgentsTool()}
+	orchTools := []fantasy.AgentTool{c.RunAgentsTool(), &finishTool{}}
 	for _, t := range c.coreTools {
 		if t.Info().Name == "ask_user" {
 			orchTools = append(orchTools, t)
@@ -457,14 +608,19 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		return "", fmt.Errorf("coordinator failed: %w", err)
 	}
 
+	finalResult := result
+	if strings.HasPrefix(result, "FINISHED:") {
+		finalResult = strings.TrimPrefix(result, "FINISHED:")
+	}
+
 	if c.sessionData != nil {
-		c.sessionData.AddEntry("assistant", result)
+		c.sessionData.AddEntry("assistant", finalResult)
 		c.sessionData.Rounds = c.round
 		SaveSession(c.session.Workspace, c.sessionData)
 	}
 
 	c.report(StatusEvent{Type: "done", Agent: orchDef.Name, Message: "coordinator finished"})
-	return result, nil
+	return finalResult, nil
 }
 
 const defaultOrchestratorSystem = `You are a team coordinator. You ONLY coordinate — you do NOT do implementation work yourself.
@@ -472,9 +628,12 @@ const defaultOrchestratorSystem = `You are a team coordinator. You ONLY coordina
 Rules:
 - You MUST use run_agents to delegate ALL work to team members
 - Running independent tasks in parallel is preferred
+- After receiving results from run_agents, evaluate whether more work is needed or if you can provide a final answer
 - Synthesize results from workers into a coherent answer for the user
 - NEVER attempt to do the work yourself — you do not have tools for that
 - If a task fails, retry once with clearer instructions before giving up
 - Break complex requests into smaller subtasks for appropriate workers
-- Use ask_user when you need clarification from the user before proceeding (type: single_choice for picking one option, multiple_choice for picking several, free_text for open-ended answers, or mixed for a combination)
+- Use ask_user when you need clarification from the user before proceeding
+- When you have completed all coordination and have a final answer, call the finish tool with your response
+- ALWAYS call finish when done — do not just output text as your final answer
 `
