@@ -27,6 +27,7 @@ hufu [prompt]
   -v, --verbose                   Show full agent text output in real-time
   -w, --workspace                 Workspace directory (default: <cwd>/workspace)
   -n, --new                       Archive old session and start fresh
+  -t, --temp                      Use a temporary directory as workspace
   --agent-team                     Directly specify team name (no @ needed in prompt)
   --agent-team-search-path         Comma-separated search paths (default: .agent-teams/,~/.agent-teams/)
 ```

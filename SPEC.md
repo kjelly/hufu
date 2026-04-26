@@ -38,6 +38,7 @@ hufu "@<team-a> do A @<team-b> do B" # 多團隊切換
 | `-v, --verbose` | `false` | 即時顯示 Agent 完整輸出 |
 | `-w, --workspace string` | `<cwd>/workspace` | 工作區目錄 |
 | `-n, --new` | `false` | 歸檔舊 session 並開始新 session |
+| `-t, --temp` | `false` | 使用系統暫時目錄作為 workspace（執行後顯示路徑供重複使用） |
 | `--agent-team string` | `""` | 直接指定團隊名稱（不需在 prompt 中指定） |
 | `--agent-team-search-path string` | `""` | 團隊搜尋路徑（逗號分隔，預設：`./.agent-teams/`、`~/.agent-teams/`）|
 

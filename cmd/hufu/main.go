@@ -30,6 +30,7 @@ var (
 	verbose             bool
 	workspace           string
 	newSession          bool
+	tempWorkspace       bool
 	agentTeamName       string
 	agentTeamSearchPath string
 	globalPromptReader  *readline.PromptReader
@@ -159,6 +160,7 @@ func main() {
 	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show full agent text output in real-time")
 	rootCmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
 	rootCmd.Flags().BoolVarP(&newSession, "new", "n", false, "Archive old session and start fresh")
+	rootCmd.Flags().BoolVarP(&tempWorkspace, "temp", "t", false, "Use a temporary directory for workspace")
 	rootCmd.Flags().StringVar(&agentTeamName, "agent-team", "", "Agent team name to load")
 	rootCmd.Flags().StringVar(&agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams (default: .agent-teams/,~/.agent-teams/)")
 
@@ -185,6 +187,15 @@ func runTeam(cmd *cobra.Command, args []string) error {
 			pr.Close()
 		}
 	}()
+
+	if tempWorkspace {
+		tmpDir, err := os.MkdirTemp("", "hufu-*")
+		if err != nil {
+			return fmt.Errorf("failed to create temp directory: %w", err)
+		}
+		workspace = filepath.Join(tmpDir, "workspace")
+		fmt.Fprintf(os.Stderr, "%s Temp workspace: %s\n", stepStyle.Render("⟳"), workspace)
+	}
 
 	prompt := ""
 	if len(args) > 0 {
@@ -322,6 +333,14 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Println(result)
+
+	if tempWorkspace {
+		absWS, _ := filepath.Abs(workspace)
+		fmt.Fprintf(os.Stderr, "\n%s\n  Path: %s\n  Reuse: hufu -w %s [prompt]\n",
+			boldStyle.Render("─── Temporary Workspace ───"),
+			absWS, absWS)
+	}
+
 	return nil
 }
 
