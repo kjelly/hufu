@@ -37,6 +37,7 @@ func ParsePrompt(prompt string, registry *TeamRegistry, currentTeam string, curr
 
 	var segments []PromptSegment
 	prevEnd := 0
+	foundTeamOrAgent := false
 
 	for _, loc := range locs {
 		fullStart := loc[0]
@@ -52,6 +53,7 @@ func ParsePrompt(prompt string, registry *TeamRegistry, currentTeam string, curr
 		consumedLen := len(taskContent)
 
 		if registry != nil && registry.HasTeam(nameLower) {
+			foundTeamOrAgent = true
 			if textBefore != "" && currentTeam != "" {
 				segments = append(segments, PromptSegment{Type: SegmentText, Content: textBefore})
 			} else if textBefore != "" && currentTeam == "" {
@@ -65,6 +67,7 @@ func ParsePrompt(prompt string, registry *TeamRegistry, currentTeam string, curr
 			currentTeam = nameLower
 			currentAgents = nil
 		} else if currentTeam != "" && isAgentInList(nameLower, currentAgents) {
+			foundTeamOrAgent = true
 			if textBefore != "" {
 				segments = append(segments, PromptSegment{Type: SegmentText, Content: textBefore})
 			}
@@ -73,12 +76,10 @@ func ParsePrompt(prompt string, registry *TeamRegistry, currentTeam string, curr
 				Name:    nameLower,
 				Content: strings.TrimSpace(taskContent),
 			})
-		} else if currentTeam == "" {
-			return nil, fmt.Errorf("@%s — no active team. Specify a team with --agent-team or @team-name first (teams: %s)", name, strings.Join(registry.ListTeams(), ", "))
 		} else {
-			availableTeams := strings.Join(registry.ListTeams(), ", ")
-			agentList := strings.Join(currentAgents, ", ")
-			return nil, fmt.Errorf("@%s not found as team or agent (teams: [%s], current team %q agents: [%s])", name, availableTeams, currentTeam, agentList)
+			segments = append(segments, PromptSegment{Type: SegmentText, Content: "@" + name + extractUntilNextAt(prompt[loc[1]:])})
+			prevEnd = loc[1] + consumedLen
+			continue
 		}
 
 		prevEnd = loc[1] + consumedLen
@@ -86,10 +87,14 @@ func ParsePrompt(prompt string, registry *TeamRegistry, currentTeam string, curr
 
 	textAfter := strings.TrimSpace(prompt[prevEnd:])
 	if textAfter != "" {
-		if currentTeam == "" {
+		if currentTeam == "" && foundTeamOrAgent {
 			return nil, fmt.Errorf("text with no active team — specify a team first")
 		}
-		segments = append(segments, PromptSegment{Type: SegmentText, Content: textAfter})
+		if currentTeam != "" {
+			segments = append(segments, PromptSegment{Type: SegmentText, Content: textAfter})
+		} else if len(locs) == 0 {
+			return []PromptSegment{{Type: SegmentText, Content: strings.TrimSpace(prompt)}}, nil
+		}
 	}
 
 	return segments, nil
@@ -178,7 +183,9 @@ func SplitSegmentByAgents(segment PromptSegment, registry *TeamRegistry, current
 				Content: strings.TrimSpace(taskContent),
 			})
 		} else {
-			return nil, fmt.Errorf("@%s not found as team or agent in current context (agents: [%s])", name, strings.Join(currentAgents, ", "))
+			segments = append(segments, PromptSegment{Type: SegmentText, Content: "@" + name + extractUntilNextAt(content[loc[1]:])})
+			prevEnd = loc[1] + consumedLen
+			continue
 		}
 
 		prevEnd = loc[1] + consumedLen

@@ -32,9 +32,10 @@ type DirectAgentResult struct {
 }
 
 type Coordinator struct {
-	session             *TeamSession
-	ollama              *agent.OllamaProvider
-	mcpManager          *mcp.MCPToolManager
+	mu       sync.RWMutex
+	session  *TeamSession
+	provider *agent.OllamaProvider
+	mcpManager *mcp.MCPToolManager
 	coreTools           []fantasy.AgentTool
 	agentCache          map[string]fantasy.Agent
 	agentCacheMu        sync.RWMutex
@@ -50,12 +51,17 @@ type Coordinator struct {
 	wrapUp              atomic.Int32
 }
 
-func NewCoordinator(session *TeamSession, ollama *agent.OllamaProvider, mcpManager *mcp.MCPToolManager, verbose bool) *Coordinator {
+func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, verbose bool) *Coordinator {
 	projectDir, _ := os.Getwd()
 	coreTools := agent.BuildAllAgentTools(projectDir)
+	prov, err := agent.NewOllamaProvider(defaultProviderURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠ Failed to create Ollama provider: %v\n", err)
+		os.Exit(1)
+	}
 	return &Coordinator{
+		provider:     prov,
 		session:      session,
-		ollama:       ollama,
 		mcpManager:   mcpManager,
 		coreTools:    coreTools,
 		agentCache:   make(map[string]fantasy.Agent),
@@ -495,7 +501,7 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef)
 		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
 	}
 
-	ag, err := agent.CreateAgent(ctx, c.ollama, agent.AgentConfig{
+	ag, err := agent.CreateAgent(ctx, c.provider, agent.AgentConfig{
 		Def:        def,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
@@ -764,7 +770,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("coordinator starting"))
 
-	orch, err := agent.CreateAgent(orchCtx, c.ollama, agent.AgentConfig{
+	orch, err := agent.CreateAgent(orchCtx, c.provider, agent.AgentConfig{
 		Def:        orchDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
@@ -846,7 +852,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 
 	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("continuing with additional input"))
 
-	orch, err := agent.CreateAgent(orchCtx, c.ollama, agent.AgentConfig{
+	orch, err := agent.CreateAgent(orchCtx, c.provider, agent.AgentConfig{
 		Def:        orchDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,

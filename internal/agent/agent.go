@@ -12,6 +12,8 @@ import (
 	"github.com/anomalyco/hufu/internal/tools"
 )
 
+const DefaultProviderURL = "http://localhost:11434/v1"
+
 type GenerationParams struct {
 	Model       string
 	Temperature string
@@ -21,15 +23,16 @@ type GenerationParams struct {
 }
 
 type AgentDef struct {
-	Name        string
-	Description string
-	Tools       string
-	Role        string
-	System      string
-	Skills      string
-	Timeout     int64
-	MaxRetries  int
-	Generation  GenerationParams
+	Name         string
+	Description  string
+	Tools        string
+	Role         string
+	System       string
+	Skills       string
+	Timeout      int64
+	MaxRetries   int
+	Generation   GenerationParams
+	ProviderURL  string
 }
 
 type TeamConfig struct {
@@ -42,6 +45,7 @@ type TeamConfig struct {
 	Generation     GenerationParams
 	Skills         string
 	SkillsExclude  string
+	ProviderURL    string
 }
 
 type OllamaProvider struct {
@@ -51,7 +55,7 @@ type OllamaProvider struct {
 
 func NewOllamaProvider(baseURL string) (*OllamaProvider, error) {
 	if baseURL == "" {
-		baseURL = "http://localhost:11434/v1"
+		baseURL = DefaultProviderURL
 	}
 	provider, err := openaicompat.New(
 		openaicompat.WithBaseURL(baseURL),

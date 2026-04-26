@@ -87,6 +87,7 @@ func parseAgentFile(path string) *agent.AgentDef {
 			TopP:        fm["top-p"],
 			TopK:        fm["top-k"],
 		},
+		ProviderURL: fm["provider-url"],
 	}
 	if v := fm["timeout"]; v != "" {
 		var seconds int64
@@ -159,6 +160,9 @@ func parseTeamYML(teamDir string) (agent.TeamConfig, error) {
 	}
 	if v := fm["skills-exclude"]; v != "" {
 		cfg.SkillsExclude = v
+	}
+	if v := fm["provider-url"]; v != "" {
+		cfg.ProviderURL = v
 	}
 
 	return cfg, nil

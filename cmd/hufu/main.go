@@ -26,7 +26,7 @@ import (
 )
 
 var (
-	ollamaURL           string
+	providerURL         string
 	verbose             bool
 	workspace           string
 	newSession          bool
@@ -58,14 +58,14 @@ func exitInterrupt() {
 	if globalPromptReader != nil {
 		globalPromptReader.Close()
 	}
-	exitInterrupt()
+	os.Exit(130)
 }
 
 func exitError() {
 	if globalPromptReader != nil {
 		globalPromptReader.Close()
 	}
-	exitError()
+	os.Exit(1)
 }
 
 type lineWriter struct {
@@ -156,7 +156,7 @@ func main() {
 		RunE:  runTeam,
 	}
 
-	rootCmd.Flags().StringVar(&ollamaURL, "ollama-url", "http://localhost:11434/v1", "Ollama API base URL")
+	rootCmd.Flags().StringVar(&providerURL, "provider-url", "http://localhost:11434/v1", "Ollama API base URL")
 	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show full agent text output in real-time")
 	rootCmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
 	rootCmd.Flags().BoolVarP(&newSession, "new", "n", false, "Archive old session and start fresh")
@@ -256,11 +256,6 @@ func runTeam(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(os.Stderr, "%s Available teams: %s\n", boldStyle.Render("Teams:"), strings.Join(registry.ListTeams(), ", "))
 
-	ollama, err := agent.NewOllamaProvider(ollamaURL)
-	if err != nil {
-		return fmt.Errorf("failed to connect to Ollama: %w", err)
-	}
-
 	initialTeam := strings.ToLower(agentTeamName)
 
 	initialSegments, err := team.ParsePromptWithLazyAgents(prompt, registry, initialTeam)
@@ -301,7 +296,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	for _, seg := range initialSegments {
 		if seg.Type == team.SegmentSwitchTeam {
 			if _, ok := loadedTeams[seg.Name]; !ok {
-				tc, err := loadTeamByName(ctx, seg.Name, registry, ollama)
+				tc, err := loadTeamByName(ctx, seg.Name, registry, providerURL)
 				if err != nil {
 					return fmt.Errorf("failed to load team %q: %w", seg.Name, err)
 				}
@@ -328,7 +323,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	result, err := executeSegments(ctx, segments, registry, ollama, loadedTeams, injector, activeCoord)
+	result, err := executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord)
 	if err != nil {
 		return err
 	}
@@ -344,7 +339,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, ollama *agent.OllamaProvider) (*teamContext, error) {
+func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL string) (*teamContext, error) {
 	teamDir, err := registry.Resolve(teamName)
 	if err != nil {
 		return nil, err
@@ -457,7 +452,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		}
 	}
 
-	coordinator := team.NewCoordinator(session, ollama, mcpManager, verbose)
+	coordinator := team.NewCoordinator(session, defaultProviderURL, mcpManager, verbose)
 	coordinator.SetSessionData(sessionData)
 
 	if len(session.Skills) > 0 {
@@ -507,7 +502,7 @@ func runWithInjection(ctx context.Context, tc *teamContext, initialResult string
 	}
 }
 
-func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, ollama *agent.OllamaProvider, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator) (string, error) {
+func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, defaultProviderURL string, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator) (string, error) {
 	var results []string
 	currentTeamName := ""
 
@@ -517,7 +512,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			teamName := seg.Name
 			tc, ok := loadedTeams[teamName]
 			if !ok {
-				loaded, err := loadTeamByName(ctx, teamName, registry, ollama)
+				loaded, err := loadTeamByName(ctx, teamName, registry, providerURL)
 				if err != nil {
 					return strings.Join(results, "\n\n"), fmt.Errorf("failed to load team %q: %w", teamName, err)
 				}
