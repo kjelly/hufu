@@ -318,6 +318,68 @@ workspace/
 - On interrupt (Ctrl+C): current team's session is saved
 - `--new` archives and starts a fresh session per active team
 
+## Prompt Injection via Signals
+
+While a coordinator is running, users can inject additional prompts without interrupting running agents:
+
+**Supported signals:** `SIGTSTP` (Ctrl+Z) and `SIGUSR1`
+
+**Architecture:**
+```go
+type promptInjector struct {
+    ch           chan string
+    mu           sync.Mutex
+    promptReader *readline.PromptReader  // optional; nil means fallback mode
+}
+```
+
+- `enqueue()` — non-blocking write to channel; drops if full
+- `poll()` — non-blocking read using `select default`
+- `promptAndEnqueue()` — locks `StdinMu` before reading stdin; uses `readline.PromptReader` when available
+
+**StdinMutex:** `tools.StdinMu` is a shared `sync.Mutex` that serializes stdin reads between `ask_user` tool and signal handlers.
+
+**Flow:**
+```
+Signal (Ctrl+Z / SIGUSR1)
+    │
+    ▼
+injector.promptAndEnqueue() — reads one line from stdin via readline
+    │
+    ▼
+Buffered in channel (size 16)
+    │
+    ▼
+After each coordinator round: runWithInjection() polls the channel
+    │
+    ▼
+Coordinator.ContinueWithPrompt() processes pending prompts
+```
+
+**`ContinueWithPrompt()`** — preserves `conversationHistory` (accumulated `fantasy.Message`) so the coordinator has full context. Different from `Run()` which does not preserve history.
+
+**`projectDir` change:** `Coordinator` now stores `projectDir` (from `os.Getwd()`) separately from `session.Workspace`. `WorkDir` for agents is set to `projectDir`, while `session.Workspace` is only used for session persistence.
+
+## Readline Integration
+
+`internal/readline` wraps `github.com/ergochat/readline` for interactive CLI input:
+
+```go
+type PromptReader struct {
+    instance *ergoreadline.Instance
+}
+
+func NewPromptReader(historyFile string) (*PromptReader, error)
+func (r *PromptReader) ReadLine(prompt string) (string, error)
+func (r *PromptReader) Close() error
+```
+
+- **Prompt history**: enabled automatically, stored at `~/.agent-team-cli/prompt_history` (limit 1000 lines)
+- **Signal prompts**: prompts injected via Ctrl+Z/SIGUSR1 also use readline, providing history navigation
+- **Ctrl+C / Ctrl+D**: trigger `ErrInterrupt` and `io.EOF` respectively, causing `os.Exit(130)` or graceful exit
+- **Fallback**: if readline init fails (e.g., non-terminal), degrades to `fmt.Scanln` with no history or readline features
+- **History file**: `defaultHistoryPath()` returns `~/.agent-team-cli/prompt_history`; created on demand with `0o755`
+
 ## Tools Reference
 
 ### Coordinator Tools
@@ -371,3 +433,7 @@ workspace/
 18. **promptInjector** — Buffered channel (size 16) that receives prompts from SIGTSTP/SIGUSR1 signal handlers. `poll()` is non-blocking; `runWithInjection()` checks after each coordinator round.
 
 15. **`TaskInfo` vs `TodoItem`** — `TaskTracker` maintains both the old `TaskInfo` (used by `Start`/`Done`/`Error`) and the new `TodoList`. Both are used in parallel. `TodoItem` fields are `ID`/`Agent`/`Desc` (lowercase), while the old `TaskInfo` uses `Agent`/`Task`. The TODO display uses `t.ID` prefix (e.g., `1.`) to identify each item.
+
+16. **readline fallback is silent** — When `NewPromptReader` returns an error, `pr` is set to `nil` and a warning is printed to stderr. All prompt functions check `pr != nil` and fall back to `fmt.Scanln`. No readline features (history, completion) are available in fallback mode.
+
+17. **promptInjector carries PromptReader** — The `promptInjector` struct now embeds `*readline.PromptReader`. When nil, `promptAndEnqueue` returns immediately without reading. This ensures graceful degradation when readline is unavailable.

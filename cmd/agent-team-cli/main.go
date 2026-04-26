@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -15,10 +14,12 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	ergoreadline "github.com/ergochat/readline"
 	"github.com/spf13/cobra"
 
 	"github.com/anomalyco/agent-team-cli/internal/agent"
 	"github.com/anomalyco/agent-team-cli/internal/mcp"
+	"github.com/anomalyco/agent-team-cli/internal/readline"
 	"github.com/anomalyco/agent-team-cli/internal/team"
 	"github.com/anomalyco/agent-team-cli/internal/tools"
 )
@@ -157,6 +158,17 @@ type teamContext struct {
 }
 
 func runTeam(cmd *cobra.Command, args []string) error {
+	pr, err := readline.NewPromptReader(defaultHistoryPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s Readline initialization failed, falling back to basic input: %v\n", errStyle.Render("⚠"), err)
+		pr = nil
+	}
+	defer func() {
+		if pr != nil {
+			pr.Close()
+		}
+	}()
+
 	prompt := ""
 	if len(args) > 0 {
 		prompt = args[0]
@@ -165,13 +177,17 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		prompt = readStdin()
 	}
 	if prompt == "" {
-		prompt = askUserForPrompt()
+		if pr != nil {
+			prompt = askUserForPrompt(pr)
+		} else {
+			prompt = askUserForPromptFallback()
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	injector := newPromptInjector()
+	injector := newPromptInjector(pr)
 	setupPromptSignals(injector)
 
 	var searchPaths []string
@@ -213,7 +229,12 @@ func runTeam(cmd *cobra.Command, args []string) error {
 			}
 		}
 		if teamNotFound {
-			chosen := askUserForTeam(registry.ListTeams())
+			var chosen string
+			if pr != nil {
+				chosen = askUserForTeam(registry.ListTeams(), pr)
+			} else {
+				chosen = askUserForTeamFallback(registry.ListTeams())
+			}
 			if chosen == "" {
 				fmt.Fprintf(os.Stderr, "%s No team selected.\n", errStyle.Render("✗"))
 				os.Exit(1)
@@ -779,6 +800,62 @@ func sortedAgents(agents map[string]*agent.AgentDef) []*agent.AgentDef {
 	return result
 }
 
+func defaultHistoryPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(home, ".agent-team-cli")
+	os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, "prompt_history")
+}
+
+func askUserForPromptFallback() string {
+	var input string
+	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Enter Prompt ───"))
+	fmt.Fprintf(os.Stderr, "Describe the task (use @team-name or @agent-name in the prompt):\n")
+	fmt.Fprintf(os.Stderr, "%s ", boldStyle.Render(">"))
+	fmt.Scanln(&input)
+	prompt := strings.TrimSpace(input)
+	if prompt == "" {
+		fmt.Fprintf(os.Stderr, "%s No prompt provided.\n", errStyle.Render("✗"))
+		os.Exit(1)
+	}
+	return prompt
+}
+
+func askUserForTeamFallback(teams []string) string {
+	if len(teams) == 0 {
+		return ""
+	}
+	sort.Strings(teams)
+	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Select Team ───"))
+	for i, t := range teams {
+		fmt.Fprintf(os.Stderr, "  %s %s\n", dimStyle.Render(fmt.Sprintf("%d.", i+1)), teamStyle.Render(t))
+	}
+	fmt.Fprintf(os.Stderr, "\n%s ", boldStyle.Render("Team name or number:>"))
+	var input string
+	fmt.Scanln(&input)
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return ""
+	}
+	if idx, err := fmt.Sscanf(input, "%d", new(int)); err == nil && idx == 1 {
+		var num int
+		fmt.Sscanf(input, "%d", &num)
+		if num >= 1 && num <= len(teams) {
+			return teams[num-1]
+		}
+	}
+	lower := strings.ToLower(input)
+	for _, t := range teams {
+		if strings.ToLower(t) == lower {
+			return t
+		}
+	}
+	return input
+}
+
 func readStdin() string {
 	stat, _ := os.Stdin.Stat()
 	if (stat.Mode() & os.ModeCharDevice) != 0 {
@@ -788,13 +865,19 @@ func readStdin() string {
 	return strings.TrimSpace(string(data))
 }
 
-func askUserForPrompt() string {
-	reader := bufio.NewReader(os.Stdin)
+func askUserForPrompt(pr *readline.PromptReader) string {
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Enter Prompt ───"))
 	fmt.Fprintf(os.Stderr, "Describe the task (use @team-name or @agent-name in the prompt):\n")
-	fmt.Fprintf(os.Stderr, "%s ", boldStyle.Render(">"))
-	input, _ := reader.ReadString('\n')
-	prompt := strings.TrimRight(input, "\r\n")
+	prompt, err := pr.ReadLine(boldStyle.Render("> "))
+	if err != nil {
+		if err == ergoreadline.ErrInterrupt || err == io.EOF {
+			fmt.Fprintf(os.Stderr, "\n")
+			os.Exit(130)
+		}
+		fmt.Fprintf(os.Stderr, "%s Input error: %v\n", errStyle.Render("✗"), err)
+		os.Exit(1)
+	}
+	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		fmt.Fprintf(os.Stderr, "%s No prompt provided.\n", errStyle.Render("✗"))
 		os.Exit(1)
@@ -802,19 +885,24 @@ func askUserForPrompt() string {
 	return prompt
 }
 
-func askUserForTeam(teams []string) string {
+func askUserForTeam(teams []string, pr *readline.PromptReader) string {
 	if len(teams) == 0 {
 		return ""
 	}
 	sort.Strings(teams)
-	reader := bufio.NewReader(os.Stdin)
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Select Team ───"))
 	for i, t := range teams {
 		fmt.Fprintf(os.Stderr, "  %s %s\n", dimStyle.Render(fmt.Sprintf("%d.", i+1)), teamStyle.Render(t))
 	}
-	fmt.Fprintf(os.Stderr, "\n%s ", boldStyle.Render("Team name or number:>"))
-	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(strings.TrimRight(input, "\r\n"))
+	input, err := pr.ReadLine(boldStyle.Render("Team name or number:>"))
+	if err != nil {
+		if err == ergoreadline.ErrInterrupt || err == io.EOF {
+			fmt.Fprintf(os.Stderr, "\n")
+			os.Exit(130)
+		}
+		return ""
+	}
+	input = strings.TrimSpace(input)
 	if input == "" {
 		return ""
 	}
@@ -894,13 +982,15 @@ func (t *idleWarningTimer) stop() {
 }
 
 type promptInjector struct {
-	ch chan string
-	mu sync.Mutex
+	ch           chan string
+	mu           sync.Mutex
+	promptReader *readline.PromptReader
 }
 
-func newPromptInjector() *promptInjector {
+func newPromptInjector(pr *readline.PromptReader) *promptInjector {
 	return &promptInjector{
-		ch: make(chan string, 16),
+		ch:           make(chan string, 16),
+		promptReader: pr,
 	}
 }
 
@@ -924,20 +1014,16 @@ func (p *promptInjector) promptAndEnqueue() {
 	tools.StdinMu.Lock()
 	defer tools.StdinMu.Unlock()
 
-	stat, err := os.Stdin.Stat()
-	if err != nil {
+	if p.promptReader == nil {
 		return
 	}
-	isTerminal := (stat.Mode() & os.ModeCharDevice) != 0
 
-	if isTerminal {
-		fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Additional Prompt ───"))
-		fmt.Fprintf(os.Stderr, "%s ", boldStyle.Render(">"))
-	}
-
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
+	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Additional Prompt ───"))
+	line, err := p.promptReader.ReadLine(boldStyle.Render("> "))
 	if err != nil {
+		if err == ergoreadline.ErrInterrupt || err == io.EOF {
+			return
+		}
 		return
 	}
 	prompt := strings.TrimSpace(line)
@@ -945,10 +1031,7 @@ func (p *promptInjector) promptAndEnqueue() {
 		return
 	}
 	p.enqueue(prompt)
-
-	if isTerminal {
-		fmt.Fprintf(os.Stderr, "%s Prompt enqueued, will be processed after current task completes.\n", doneStyle.Render("✓"))
-	}
+	fmt.Fprintf(os.Stderr, "%s Prompt enqueued, will be processed after current task completes.\n", doneStyle.Render("✓"))
 }
 
 func setupPromptSignals(injector *promptInjector) {

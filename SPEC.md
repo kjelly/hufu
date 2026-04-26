@@ -47,9 +47,29 @@ agent-team-cli "@<team-a> do A @<team-b> do B" # 多團隊切換
 - `@<agent-name>` — 在當前團隊中直接呼叫指定 Agent
 - 純文字 — 由當前團隊的協調者處理
 
-### 4.4 互動式提示詞輸入
+### 4.5 Readline 整合
 
-當未提供 prompt 且 stdin 無輸入時，程式會以互動式方式向使用者詢問團隊和任務：
+CLI 使用 `github.com/ergochat/readline` 封裝的 `internal/readline` 提供互動式輸入體驗：
+
+**`PromptReader`：**
+
+```go
+type PromptReader struct {
+    instance *ergoreadline.Instance
+}
+
+func NewPromptReader(historyFile string) (*PromptReader, error)
+func (r *PromptReader) ReadLine(prompt string) (string, error)
+func (r *PromptReader) Close() error
+```
+
+- **歷史記錄**：自動啟用，儲存於 `~/.agent-team-cli/prompt_history`（最多 1000 筆）
+- **Ctrl+C / Ctrl+D**：分別觸發 `ErrInterrupt` 和 `io.EOF`
+- **Fallback 機制**：若 readline 初始化失敗，自動降級至 `fmt.Scanln` 基礎輸入
+
+### 4.6 互動式提示詞輸入
+
+當未提供 prompt 且 stdin 無輸入時，程式會以互動式方式向使用者詢問團隊和任務（使用 readline）：
 
 ```
 ─── Select Team ───
@@ -375,10 +395,61 @@ mcp-servers:
 1. 探索團隊（`TeamRegistry.Discover`）
 2. 解析 prompt（`ParsePromptWithLazyAgents`）
 3. 載入所有涉及的團隊（並行）
-4. 執行 segments（`executeSegments`）
-5. 輸出結果
+4. 設定信號處理（Ctrl+Z / SIGUSR1）
+5. 執行 segments（`executeSegments`）
+6. 輸出結果
 
-### 10.2 TODO 任務追蹤系統
+### 10.2 Prompt 注入（Signal 機制）
+
+在協調者執行期間，使用者可透過信號注入額外 prompt：
+
+**支援的信號：**
+- `SIGTSTP`（Ctrl+Z）
+- `SIGUSR1`
+
+**實作架構：**
+
+```go
+type promptInjector struct {
+    ch chan string  // buffered, capacity 16
+    mu sync.Mutex
+}
+```
+
+- `enqueue(prompt)` — 非阻塞寫入 channel，channel 滿時丟棄
+- `poll()` — 非阻塞讀取（`select default`），有 prompt 返回，否則立即回傳
+- `promptAndEnqueue()` — 鎖住 `StdinMu` 後從 stdin 讀取一行並加入佇列
+
+**StdinMutex：** `tools.StdinMu` 是共用的 `sync.Mutex`，確保 `ask_user` 工具和信號處理器不會同時讀取 stdin。
+
+**處理流程：**
+
+```
+使用者按下 Ctrl+Z 或收到 SIGUSR1
+    │
+    ▼
+signal handler 觸發 injector.promptAndEnqueue()
+    │
+    ├─► 鎖住 StdinMu
+    ├─► 檢查是否為終端機模式
+    ├─► 顯示 "─── Additional Prompt ───" 提示
+    ├─► 從 stdin 讀取一行
+    └─► 加入 injector channel（緩衝大小 16）
+              │
+              ▼
+每個 Segment 執行完後呼叫 runWithInjection()
+    │
+    ▼
+injector.poll() ──► 有 prompt？ ──► Coordinator.ContinueWithPrompt()
+                              │
+                              └─► 無 prompt ──► 繼續執行
+```
+
+**`ContinueWithPrompt()`：** 與 `Run()` 不同，會保留並傳遞 `conversationHistory`，確保協調者有完整對話上下文。
+
+**`projectDir` 變更：** `Coordinator` 新增 `projectDir` 欄位（`os.Getwd()`），用於設定 Agent 的 `WorkDir`。工作區路徑（`session.Workspace`）現在僅用於 session 儲存，不再作為 Agent 的工作目錄。
+
+### 10.3 TODO 任務追蹤系統
 
 `TaskTracker` 內建 `TodoList`，提供結構化的任務追蹤：
 
