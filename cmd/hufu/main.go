@@ -836,6 +836,17 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 			currentAgent = ""
 			taskDisp.update()
 
+		case "wrap_up":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			w.write(fmt.Sprintf("\n%s\n  %s\n  %s\n",
+				boldStyle.Render("─── WRAP UP ───"),
+				dimStyle.Render("No new tasks will be started."),
+				dimStyle.Render("Running agents will finish their current work..."),
+			))
+
 		case "error":
 			if textBuf != "" {
 				w.write(flushText(currentAgent, textBuf))

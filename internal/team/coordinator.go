@@ -83,6 +83,7 @@ func (c *Coordinator) newEvent(eventType string) StatusEvent {
 
 func (c *Coordinator) SetWrapUp() {
 	c.wrapUp.Store(1)
+	c.report(c.newEvent("wrap_up"))
 }
 
 func (c *Coordinator) IsWrapUp() bool {
@@ -227,6 +228,11 @@ const maxConcurrentTasks = 8
 const maxConversationHistory = 100
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
+	if c.IsWrapUp() {
+		c.report(c.newEvent("step").withMessage("Wrap-up: refusing to start new tasks"))
+		return "", fmt.Errorf("wrap-up in progress: refusing to delegate new tasks. Call finish immediately with your best summary of work completed so far")
+	}
+
 	c.round++
 	if c.session.Config.MaxRounds > 0 && c.round > c.session.Config.MaxRounds {
 		return "", fmt.Errorf("max rounds (%d) exceeded", c.session.Config.MaxRounds)

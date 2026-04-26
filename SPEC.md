@@ -551,7 +551,7 @@ AddBatch() → TaskPending → UpdateStatus(TaskInProgress) → TaskDone
 
 支援 Ctrl+C 兩階段終止：
 
-**第一次 Ctrl+C：** 發送 `SIGINT` → 通知當前協調者「優雅終止」（使用 `activeCoordinator` 指標傳遞）→ 協調者收到 `wrapUp` 標記後，下次呼叫 `ContinueWithPrompt("")` 時使用 `wrapUpPromptTemplate`，指示協調者立即總結進度並呼叫 `finish`，不再委派新任務 → 程式正常結束
+****第一次 Ctrl+C：** 發送 `SIGINT` → 呼叫 `SetWrapUp()` 設定 `wrapUp=1` 並回報 `StatusEvent{Type: "wrap_up"}` → CLI 顯示 `─── WRAP UP ───` 提示 → `ExecuteTasks` 偵測 `IsWrapUp()` 後拒絕委派新任務並回傳錯誤 → 協調者收到錯誤後呼叫 `ContinueWithPrompt("")` 使用 `wrapUpPromptTemplate` 指示立即總結並 finish
 
 **第二次 Ctrl+C：** 強制取消 context (`cancel()`) → 立即退出
 
@@ -567,7 +567,7 @@ wrapUpPromptTemplate = "The user has requested that you wrap up immediately. IMP
 
 ```go
 type StatusEvent struct {
-    Type       string     // "start","step","tool_call","tool_result","done","error","text","todos_updated"
+    Type       string     // "start","step","tool_call","tool_result","done","error","text","todos_updated","wrap_up"
     TeamName   string     // 團隊名稱（新增）
     Agent      string
     Message    string
