@@ -63,6 +63,19 @@ func (r *PromptReader) ReadLine(prompt string) (string, error)
 func (r *PromptReader) Close() error
 ```
 
+**全局讀取器管理：** `globalPromptReader` 指標儲存當前 `PromptReader` 實例。
+
+**離開鉤子：**
+
+```go
+func exitInterrupt() { globalPromptReader.Close(); interruptExit() }
+func exitError()    { globalPromptReader.Close(); errorExit() }
+```
+
+- 所有 `os.Exit(130)` 改為 `exitInterrupt()`，確保 readline 先行關閉
+- 所有 `os.Exit(1)` 改為 `exitError()`
+- `PromptReader` 需在程序退出前關閉以清除終端狀態
+
 - **歷史記錄**：自動啟用，儲存於 `~/.hufu/prompt_history`（最多 1000 筆）
 - **Ctrl+C / Ctrl+D**：分別觸發 `ErrInterrupt` 和 `io.EOF`
 - **Fallback 機制**：若 readline 初始化失敗，自動降級至 `fmt.Scanln` 基礎輸入
