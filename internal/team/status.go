@@ -1,13 +1,19 @@
 package team
 
+import (
+	"fmt"
+	"sync"
+)
+
 type StatusEvent struct {
-	Type       string // "start", "step", "tool_call", "tool_result", "done", "error", "text"
+	Type       string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated"
 	Agent     string
 	Message   string
 	ToolName  string
 	ToolArgs  string
 	ToolResult string
 	Step      int
+	Todos     []*TodoItem
 }
 
 type StatusReporter func(event StatusEvent)
@@ -30,10 +36,13 @@ type TaskInfo struct {
 
 type TaskTracker struct {
 	tasks []*TaskInfo
+	todo  *TodoList
 }
 
 func NewTaskTracker() *TaskTracker {
-	return &TaskTracker{}
+	return &TaskTracker{
+		todo: &TodoList{},
+	}
 }
 
 func (t *TaskTracker) Start(agent, task string) {
@@ -74,4 +83,72 @@ func (t *TaskTracker) Tasks() []*TaskInfo {
 	result := make([]*TaskInfo, len(t.tasks))
 	copy(result, t.tasks)
 	return result
+}
+
+func (t *TaskTracker) TodoList() *TodoList {
+	return t.todo
+}
+
+type TodoItem struct {
+	ID     string
+	Agent  string
+	Desc   string
+	Status TaskStatus
+	Detail string
+}
+
+type TodoList struct {
+	mu    sync.Mutex
+	items []*TodoItem
+	next  int
+}
+
+func (tl *TodoList) AddBatch(items []struct {
+	Agent string
+	Desc  string
+}) []*TodoItem {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	var added []*TodoItem
+	for _, item := range items {
+		tl.next++
+		ti := &TodoItem{
+			ID:     fmt.Sprintf("%d", tl.next),
+			Agent:  item.Agent,
+			Desc:   item.Desc,
+			Status: TaskPending,
+		}
+		tl.items = append(tl.items, ti)
+		added = append(added, ti)
+	}
+	return added
+}
+
+func (tl *TodoList) UpdateStatus(id string, status TaskStatus, detail string) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			ti.Status = status
+			if detail != "" {
+				ti.Detail = detail
+			}
+			return
+		}
+	}
+}
+
+func (tl *TodoList) Items() []*TodoItem {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	result := make([]*TodoItem, len(tl.items))
+	copy(result, tl.items)
+	return result
+}
+
+func (tl *TodoList) Clear() {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	tl.items = nil
+	tl.next = 0
 }

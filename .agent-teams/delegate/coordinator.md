@@ -3,7 +3,6 @@ name: coordinator
 description: Team coordinator — decides who to delegate to and synthesizes results
 role: coordinator
 tools: ask_user
-model: ollama/qwen3:8b
 max-tokens: 2048
 temperature: 0.3
 ---

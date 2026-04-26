@@ -211,8 +211,27 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 
 	c.report(StatusEvent{Type: "step", Message: fmt.Sprintf("Round %d: delegating %d task(s)", c.round, len(tasks))})
 
+	todoItems := c.taskTracker.TodoList().AddBatch(func() []struct {
+		Agent string
+		Desc  string
+	} {
+		batch := make([]struct {
+			Agent string
+			Desc  string
+		}, len(tasks))
+		for i, t := range tasks {
+			batch[i] = struct {
+				Agent string
+				Desc  string
+			}{Agent: strings.ToLower(t.Agent), Desc: t.Task}
+		}
+		return batch
+	}())
+	c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
+
 	type taskResult struct {
 		agentName string
+		todoID    string
 		task      string
 		output    string
 		err       error
@@ -220,13 +239,13 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	resultsCh := make(chan taskResult, len(tasks))
 
 	var wg sync.WaitGroup
-	for _, task := range tasks {
+	for i, task := range tasks {
 		wg.Add(1)
-		go func(td TaskDef) {
+		go func(td TaskDef, tid string) {
 			defer wg.Done()
-			output, err := c.executeTask(ctx, td)
-			resultsCh <- taskResult{agentName: td.Agent, task: td.Task, output: output, err: err}
-		}(task)
+			output, err := c.executeTask(ctx, td, tid)
+			resultsCh <- taskResult{agentName: td.Agent, todoID: tid, task: td.Task, output: output, err: err}
+		}(task, todoItems[i].ID)
 	}
 	wg.Wait()
 	close(resultsCh)
@@ -264,14 +283,18 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	return b.String(), nil
 }
 
-func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef) (string, error) {
+func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (string, error) {
 	agentName := strings.ToLower(task.Agent)
 	agentDef, ok := c.session.Agents[agentName]
 	if !ok {
+		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, fmt.Sprintf("unknown agent: %q", task.Agent))
+		c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
 		return "", fmt.Errorf("unknown agent: %q (available: %v)", task.Agent, c.agentNames())
 	}
 
 	if agentDef.Role == "orchestrator" || agentDef.Role == "coordinator" {
+		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, fmt.Sprintf("cannot delegate to coordinator %q", agentName))
+		c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
 		return "", fmt.Errorf("cannot delegate to coordinator agent %q", agentName)
 	}
 
@@ -289,6 +312,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef) (stri
 	}
 
 	c.taskTracker.Start(agentName, task.Task)
+	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
+	c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
 	c.report(StatusEvent{Type: "start", Agent: agentName, Message: task.Task})
 	writeStatus(c.session.Workspace, agentName, "working", task.Task)
 	writeInbox(c.session.Workspace, agentName, task.Task)
@@ -297,6 +322,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef) (stri
 	if err != nil {
 		c.report(StatusEvent{Type: "error", Agent: agentName, Message: err.Error()})
 		c.taskTracker.Error(agentName, err.Error())
+		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
+		c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
 		writeStatus(c.session.Workspace, agentName, "error", task.Task)
 		return "", err
 	}
@@ -346,6 +373,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef) (stri
 			writeOutbox(c.session.Workspace, agentName, output)
 			writeStatus(c.session.Workspace, agentName, "done", task.Task)
 			c.taskTracker.Done(agentName)
+			c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
+			c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
 			c.report(StatusEvent{Type: "done", Agent: agentName, Message: "completed"})
 			return output, nil
 		}
@@ -357,6 +386,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef) (stri
 		lastErr = err
 		c.report(StatusEvent{Type: "error", Agent: agentName, Message: fmt.Sprintf("attempt %d failed: %v", attempt, err)})
 		c.taskTracker.Error(agentName, fmt.Sprintf("attempt %d failed: %v", attempt, err))
+		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, fmt.Sprintf("attempt %d failed: %v", attempt, err))
+		c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
 
 		if parentCtx.Err() != nil {
 			break
@@ -596,11 +627,21 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return nil, fmt.Errorf("cannot directly invoke coordinator agent %q", agentName)
 	}
 
+	todoItems := c.taskTracker.TodoList().AddBatch([]struct {
+		Agent string
+		Desc  string
+	}{{Agent: agentName, Desc: task}})
+	todoID := todoItems[0].ID
+	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
+	c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
+
 	c.taskTracker.Start(agentName, task)
 
 	ag, err := c.getOrCreateAgent(ctx, agentDef)
 	if err != nil {
 		c.taskTracker.Error(agentName, err.Error())
+		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
+		c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
 		return nil, fmt.Errorf("failed to create agent %q: %w", agentName, err)
 	}
 
@@ -634,12 +675,16 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if err != nil {
 		writeStatus(c.session.Workspace, agentName, "error", task)
 		c.taskTracker.Error(agentName, err.Error())
+		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
+		c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
 		return &DirectAgentResult{AgentName: agentName, Error: err}, nil
 	}
 
 	writeOutbox(c.session.Workspace, agentName, output)
 	writeStatus(c.session.Workspace, agentName, "done", task)
 	c.taskTracker.Done(agentName)
+	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
+	c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
 
 	return &DirectAgentResult{AgentName: agentName, Output: output}, nil
 }

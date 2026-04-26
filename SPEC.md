@@ -378,7 +378,59 @@ mcp-servers:
 4. 執行 segments（`executeSegments`）
 5. 輸出結果
 
-### 10.2 Session 管理
+### 10.2 TODO 任務追蹤系統
+
+`TaskTracker` 內建 `TodoList`，提供結構化的任務追蹤：
+
+```go
+type TodoItem struct {
+    ID     string      // 自動遞增 ID（如 "1", "2", "3"）
+    Agent  string      // 負責的 Agent 名稱
+    Desc   string      // 任務描述
+    Status TaskStatus  // TaskPending / TaskInProgress / TaskDone / TaskError
+    Detail string      // 錯誤詳情（當 Status == TaskError 時）
+}
+
+type TodoList struct {
+    mu    sync.Mutex
+    items []*TodoItem
+    next  int  // 下一個 ID 計數器
+}
+```
+
+**核心方法：**
+
+| 方法 | 說明 |
+|------|------|
+| `AddBatch([]{Agent, Desc})` | 批次新增任務，返回 `[]*TodoItem`（含自動 ID） |
+| `UpdateStatus(id, status, detail)` | 更新指定 ID 的任務狀態 |
+| `Items()` | 返回所有任務的副本（thread-safe） |
+| `Clear()` | 清空所有任務並重置 ID 計數器 |
+
+**狀態流程：**
+```
+AddBatch() → TaskPending → UpdateStatus(TaskInProgress) → TaskDone
+                                          ↓
+                                     TaskError
+```
+
+**Coordinator 整合：**
+
+- `ExecuteTasks()` 呼叫 `TodoList.AddBatch()` 為每個委派任務建立 TODO 項目
+- `executeTask()` 和 `RunDirectAgent()` 在生命週期的每個階段呼叫 `UpdateStatus()`
+- 每當 TODO 狀態變更時，回報 `StatusEvent{Type: "todos_updated", Todos: ...}` 事件
+- CLI 接收 `todos_updated` 事件後重新渲染 TODO 顯示
+
+**CLI 顯示格式：**
+```
+─── TODO ───
+  ◑ 1. researcher find bugs
+  ○ 2. writer write docs
+  ● 3. checker verify tests
+  ✗ 4. researcher attempt 1 failed: ...
+```
+
+### 10.3 Session 管理
 
 - 每個團隊有獨立的工作區，各自維護獨立的 session
 - 團隊切換時自動儲存舊 session

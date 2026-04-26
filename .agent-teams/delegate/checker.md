@@ -4,7 +4,6 @@ description: Quality checker — verifies output for completeness and correctnes
 role: worker
 tools: read,bash,grep,find,ls
 skills: code-review
-model: ollama/qwen3:8b
 max-tokens: 1024
 temperature: 0.1
 ---

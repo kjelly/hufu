@@ -206,6 +206,55 @@ When a segment's `@name` matches an agent in the current team (not a team name):
 
 30-second idle timer resets on each status event. After 30s of no activity, prints an idle warning to stderr.
 
+## Task Tracking (TodoList)
+
+`TaskTracker` contains a `TodoList` for structured task progress tracking:
+
+```go
+type TodoItem struct {
+    ID     string      // Auto-incrementing: "1", "2", ...
+    Agent  string      // Agent name
+    Desc   string      // Task description
+    Status TaskStatus  // TaskPending / TaskInProgress / TaskDone / TaskError
+    Detail string      // Error detail (when Status == TaskError)
+}
+
+type TodoList struct {
+    mu   sync.Mutex
+    items []*TodoItem
+    next  int  // Next ID counter
+}
+```
+
+| Method | Description |
+|--------|-------------|
+| `AddBatch([]{Agent, Desc})` | Batch-add tasks; returns `[]*TodoItem` with auto-assigned IDs |
+| `UpdateStatus(id, status, detail)` | Update status of a specific task by ID |
+| `Items()` | Returns a thread-safe copy of all items |
+| `Clear()` | Clears all items and resets the ID counter |
+
+**Status flow:**
+```
+AddBatch() → TaskPending → UpdateStatus(TaskInProgress) → TaskDone
+                                          ↓
+                                     TaskError
+```
+
+**Coordinator integration:**
+- `ExecuteTasks()` calls `TodoList.AddBatch()` to create TODO items for each delegated task
+- `executeTask()` and `RunDirectAgent()` call `UpdateStatus()` at each lifecycle stage
+- Every TODO update fires `StatusEvent{Type: "todos_updated", Todos: ...}`
+- CLI renders the TODO panel on each `todos_updated` event
+
+**CLI display format:**
+```
+─── TODO ───
+  ◑ 1. researcher find bugs
+  ○ 2. writer write docs
+  ● 3. checker verify tests
+  ✗ 4. researcher attempt 1 failed: ...
+```
+
 ## Team Configuration Format
 
 ### team.yml
@@ -312,3 +361,5 @@ workspace/
 13. **`teamStyle`** — New lipgloss style (color 13/magenta) added for displaying team names in CLI output, distinct from `agentStyle` (cyan).
 
 14. **go.mod indirect deps** — `charm.land/fantasy`, `github.com/charmbracelet/lipgloss`, `github.com/spf13/cobra`, `github.com/mark3labs/mcp-go` are marked `// indirect` but directly imported. `go mod tidy` would fix this.
+
+15. **`TaskInfo` vs `TodoItem`** — `TaskTracker` maintains both the old `TaskInfo` (used by `Start`/`Done`/`Error`) and the new `TodoList`. Both are used in parallel. `TodoItem` fields are `ID`/`Agent`/`Desc` (lowercase), while the old `TaskInfo` uses `Agent`/`Task`. The TODO display uses `t.ID` prefix (e.g., `1.`) to identify each item.

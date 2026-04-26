@@ -73,46 +73,46 @@ func (d *taskDisplay) render() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	tasks := d.tracker.Tasks()
-	if len(tasks) == 0 {
+	todoItems := d.tracker.TodoList().Items()
+	if len(todoItems) == 0 {
 		return
 	}
 
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(headerStyle.Render("─── Tasks ───"))
+	b.WriteString(headerStyle.Render("─── TODO ───"))
 	b.WriteString("\n")
 
-	for _, t := range tasks {
+	for _, t := range todoItems {
 		var icon string
 		var desc string
 		switch t.Status {
 		case team.TaskPending:
 			icon = pendingIcon.Render("○")
-			desc = dimStyle.Render(t.Task)
+			desc = dimStyle.Render(t.Desc)
 		case team.TaskInProgress:
 			icon = progressIcon.Render("◑")
-			taskPreview := t.Task
+			taskPreview := t.Desc
 			if len(taskPreview) > 60 {
 				taskPreview = taskPreview[:60] + "..."
 			}
 			desc = taskPreview
 		case team.TaskDone:
 			icon = doneIcon.Render("●")
-			desc = dimStyle.Render(t.Task)
+			desc = dimStyle.Render(t.Desc)
 		case team.TaskError:
 			icon = errorIcon.Render("✗")
 			if t.Detail != "" {
 				desc = errStyle.Render(t.Detail)
 			} else {
-				desc = dimStyle.Render(t.Task)
+				desc = dimStyle.Render(t.Desc)
 			}
 		}
-		b.WriteString(fmt.Sprintf("  %s %s %s\n", icon, agentStyle.Render(t.Agent), desc))
+		b.WriteString(fmt.Sprintf("  %s %s %s %s\n", icon, dimStyle.Render(t.ID+"."), agentStyle.Render(t.Agent), desc))
 	}
 
 	d.w.write(b.String())
-	d.lines = len(tasks) + 2
+	d.lines = len(todoItems) + 2
 }
 
 func (d *taskDisplay) clear() {
@@ -652,6 +652,9 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				agentStyle.Render(event.Agent),
 				errStyle.Render(event.Message),
 			))
+			taskDisp.update()
+
+		case "todos_updated":
 			taskDisp.update()
 		}
 	})
