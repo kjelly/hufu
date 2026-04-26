@@ -2,4 +2,4 @@ name: delegate
 description: "Demo team that demonstrates multi-level agent delegation — coordinator delegates to planner, who delegates to researcher and writer"
 max-rounds: 5
 timeout: 120
-model: ollama/gemma3:27b-cloud
+model: ollama/qwen3.5:cloud

@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"charm.land/fantasy"
 )
+
+var StdinMu sync.Mutex
 
 type ToolOption func(*ToolConfig)
 

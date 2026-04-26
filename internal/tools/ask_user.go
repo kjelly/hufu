@@ -95,6 +95,9 @@ func executeAskUser(call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 		}
 	}
 
+	StdinMu.Lock()
+	defer StdinMu.Unlock()
+
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldFmt("─── Ask User ───"))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -30,22 +31,25 @@ type DirectAgentResult struct {
 }
 
 type Coordinator struct {
-	session      *TeamSession
-	ollama       *agent.OllamaProvider
-	mcpManager   *mcp.MCPToolManager
-	coreTools    []fantasy.AgentTool
-	agentCache   map[string]fantasy.Agent
-	agentCacheMu sync.RWMutex
-	round        int
-	verbose      bool
-	reportStatus StatusReporter
-	sessionData  *SessionData
-	taskTracker  *TaskTracker
-	skills       []*skill.SkillDef
+	session             *TeamSession
+	ollama              *agent.OllamaProvider
+	mcpManager          *mcp.MCPToolManager
+	coreTools           []fantasy.AgentTool
+	agentCache          map[string]fantasy.Agent
+	agentCacheMu        sync.RWMutex
+	round               int
+	verbose             bool
+	reportStatus        StatusReporter
+	sessionData         *SessionData
+	taskTracker         *TaskTracker
+	skills              []*skill.SkillDef
+	conversationHistory []fantasy.Message
+	projectDir          string
 }
 
 func NewCoordinator(session *TeamSession, ollama *agent.OllamaProvider, mcpManager *mcp.MCPToolManager, verbose bool) *Coordinator {
-	coreTools := agent.BuildAllAgentTools(session.Workspace)
+	projectDir, _ := os.Getwd()
+	coreTools := agent.BuildAllAgentTools(projectDir)
 	return &Coordinator{
 		session:      session,
 		ollama:       ollama,
@@ -56,6 +60,7 @@ func NewCoordinator(session *TeamSession, ollama *agent.OllamaProvider, mcpManag
 		reportStatus: func(event StatusEvent) {},
 		taskTracker:  NewTaskTracker(),
 		skills:       session.Skills,
+		projectDir:   projectDir,
 	}
 }
 
@@ -467,7 +472,7 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef)
 	ag, err := agent.CreateAgent(ctx, c.ollama, agent.AgentConfig{
 		Def:        def,
 		TeamConfig: &c.session.Config,
-		WorkDir:    c.session.Workspace,
+		WorkDir:    c.projectDir,
 	}, agentTools)
 	if err != nil {
 		return nil, err
@@ -741,18 +746,22 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	orch, err := agent.CreateAgent(orchCtx, c.ollama, agent.AgentConfig{
 		Def:        orchDef,
 		TeamConfig: &c.session.Config,
-		WorkDir:    c.session.Workspace,
+		WorkDir:    c.projectDir,
 	}, orchTools)
 	if err != nil {
 		return "", fmt.Errorf("failed to create coordinator: %w", err)
 	}
 
-	result, err := c.runAgentWithStatus(orchCtx, orch, orchDef.Name, userPrompt)
+	result, steps, err := c.runAgentWithStatusAndHistory(orchCtx, orch, orchDef.Name, userPrompt, c.conversationHistory)
 	if err != nil {
 		if c.sessionData != nil {
 			SaveSession(c.session.Workspace, c.sessionData)
 		}
 		return "", fmt.Errorf("coordinator failed: %w", err)
+	}
+
+	for _, step := range steps {
+		c.conversationHistory = append(c.conversationHistory, step.Messages...)
 	}
 
 	finalResult := result
@@ -767,6 +776,72 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	}
 
 	c.report(StatusEvent{Type: "done", Agent: orchDef.Name, Message: "coordinator finished"})
+	return finalResult, nil
+}
+
+func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt string) (string, error) {
+	orchDef := c.GetOrchestratorDef()
+	if orchDef == nil {
+		return "", fmt.Errorf("no coordinator agent found in team")
+	}
+
+	continuationPrompt := fmt.Sprintf(continuationPromptTemplate, additionalPrompt)
+
+	if c.sessionData != nil {
+		c.sessionData.AddEntry("user", additionalPrompt)
+	}
+
+	orchTools := []fantasy.AgentTool{c.RunAgentsTool(), &finishTool{}, &loadSkillTool{coordinator: c}}
+	for _, t := range c.coreTools {
+		if t.Info().Name == "ask_user" {
+			orchTools = append(orchTools, t)
+			break
+		}
+	}
+
+	coordinatorTimeout := time.Duration(c.session.Config.Timeout) * time.Second * time.Duration(c.session.Config.MaxRounds+1)
+	if orchDef.Timeout > 0 {
+		coordinatorTimeout = time.Duration(orchDef.Timeout) * time.Second
+	}
+
+	orchCtx, cancel := context.WithTimeout(ctx, coordinatorTimeout)
+	defer cancel()
+
+	c.report(StatusEvent{Type: "start", Agent: orchDef.Name, Message: "continuing with additional input"})
+
+	orch, err := agent.CreateAgent(orchCtx, c.ollama, agent.AgentConfig{
+		Def:        orchDef,
+		TeamConfig: &c.session.Config,
+		WorkDir:    c.projectDir,
+	}, orchTools)
+	if err != nil {
+		return "", fmt.Errorf("failed to create coordinator: %w", err)
+	}
+
+	result, steps, err := c.runAgentWithStatusAndHistory(orchCtx, orch, orchDef.Name, continuationPrompt, c.conversationHistory)
+	if err != nil {
+		if c.sessionData != nil {
+			SaveSession(c.session.Workspace, c.sessionData)
+		}
+		return "", fmt.Errorf("coordinator continuation failed: %w", err)
+	}
+
+	for _, step := range steps {
+		c.conversationHistory = append(c.conversationHistory, step.Messages...)
+	}
+
+	finalResult := result
+	if strings.HasPrefix(result, "FINISHED:") {
+		finalResult = strings.TrimPrefix(result, "FINISHED:")
+	}
+
+	if c.sessionData != nil {
+		c.sessionData.AddEntry("assistant", finalResult)
+		c.sessionData.Rounds = c.round
+		SaveSession(c.session.Workspace, c.sessionData)
+	}
+
+	c.report(StatusEvent{Type: "done", Agent: orchDef.Name, Message: "continuation finished"})
 	return finalResult, nil
 }
 
@@ -786,3 +861,16 @@ Rules:
 - If the user's task relates to a skill, use load_skill to get the detailed instructions first, then include relevant parts in worker task descriptions
 - Workers have limited context — include only the essential skill instructions in the task description, not the entire skill content. Mention the skill file path so workers can read it if they need more detail
 `
+
+const continuationPromptTemplate = `The user has sent an additional message while you were working:
+
+"""
+%s
+"""
+
+Please take this into account. You may need to:
+- Add new tasks for your workers
+- Modify tasks that haven't started yet
+- Cancel tasks that are no longer needed
+
+Continue coordinating. Call finish when you have a complete response that addresses both the original request and the new input.`

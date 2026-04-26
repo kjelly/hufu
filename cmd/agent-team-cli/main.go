@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -19,6 +20,7 @@ import (
 	"github.com/anomalyco/agent-team-cli/internal/agent"
 	"github.com/anomalyco/agent-team-cli/internal/mcp"
 	"github.com/anomalyco/agent-team-cli/internal/team"
+	"github.com/anomalyco/agent-team-cli/internal/tools"
 )
 
 var (
@@ -169,6 +171,9 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	injector := newPromptInjector()
+	setupPromptSignals(injector)
+
 	var searchPaths []string
 	if agentTeamSearchPath != "" {
 		searchPaths = strings.Split(agentTeamSearchPath, ",")
@@ -254,7 +259,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	result, err := executeSegments(ctx, segments, registry, ollama, loadedTeams)
+	result, err := executeSegments(ctx, segments, registry, ollama, loadedTeams, injector)
 	if err != nil {
 		return err
 	}
@@ -388,7 +393,25 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	}, nil
 }
 
-func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, ollama *agent.OllamaProvider, loadedTeams map[string]*teamContext) (string, error) {
+func runWithInjection(ctx context.Context, tc *teamContext, initialResult string, injector *promptInjector) (string, error) {
+	result := initialResult
+	for {
+		additionalPrompt, ok := injector.poll()
+		if !ok {
+			break
+		}
+		fmt.Fprintf(os.Stderr, "\n%s Injecting additional prompt...\n\n", boldStyle.Render("↩"))
+
+		contResult, err := tc.coordinator.ContinueWithPrompt(ctx, additionalPrompt)
+		if err != nil {
+			return result, err
+		}
+		result += "\n\n---\n\n" + contResult
+	}
+	return result, nil
+}
+
+func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, ollama *agent.OllamaProvider, loadedTeams map[string]*teamContext, injector *promptInjector) (string, error) {
 	var results []string
 	currentTeamName := ""
 
@@ -439,6 +462,18 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				team.SaveSession(tc.session.Workspace, tc.sessionData)
 				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
 				return strings.Join(results, "\n\n"), fmt.Errorf("team %q failed: %w", teamName, err)
+			}
+
+			result, err = runWithInjection(ctx, tc, result, injector)
+			if err != nil {
+				if ctx.Err() == context.Canceled {
+					team.SaveSession(tc.session.Workspace, tc.sessionData)
+					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
+					os.Exit(130)
+				}
+				team.SaveSession(tc.session.Workspace, tc.sessionData)
+				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
+				return strings.Join(results, "\n\n"), fmt.Errorf("team %q continuation failed: %w", teamName, err)
 			}
 
 			taskDisp.update()
@@ -500,6 +535,19 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 					team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
 					return strings.Join(results, "\n\n"), fmt.Errorf("synthesis for @%s failed: %w", seg.Name, err)
 				}
+
+				synthResult, err = runWithInjection(ctx, tc, synthResult, injector)
+				if err != nil {
+					if ctx.Err() == context.Canceled {
+						team.SaveSession(tc.session.Workspace, tc.sessionData)
+						fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
+						os.Exit(130)
+					}
+					team.SaveSession(tc.session.Workspace, tc.sessionData)
+					team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
+					return strings.Join(results, "\n\n"), fmt.Errorf("synthesis continuation for @%s failed: %w", seg.Name, err)
+				}
+
 				taskDisp.update()
 				results = append(results, fmt.Sprintf("## Agent: @%s (team: %s)\n%s", seg.Name, currentTeamName, synthResult))
 			}
@@ -530,6 +578,18 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				team.SaveSession(tc.session.Workspace, tc.sessionData)
 				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
 				return strings.Join(results, "\n\n"), fmt.Errorf("team %q failed: %w", currentTeamName, err)
+			}
+
+			result, err = runWithInjection(ctx, tc, result, injector)
+			if err != nil {
+				if ctx.Err() == context.Canceled {
+					team.SaveSession(tc.session.Workspace, tc.sessionData)
+					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
+					os.Exit(130)
+				}
+				team.SaveSession(tc.session.Workspace, tc.sessionData)
+				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
+				return strings.Join(results, "\n\n"), fmt.Errorf("team %q continuation failed: %w", currentTeamName, err)
 			}
 
 			taskDisp.update()
@@ -831,4 +891,80 @@ func (t *idleWarningTimer) stop() {
 		t.timer.Stop()
 		t.timer = nil
 	}
+}
+
+type promptInjector struct {
+	ch chan string
+	mu sync.Mutex
+}
+
+func newPromptInjector() *promptInjector {
+	return &promptInjector{
+		ch: make(chan string, 16),
+	}
+}
+
+func (p *promptInjector) enqueue(prompt string) {
+	select {
+	case p.ch <- prompt:
+	default:
+	}
+}
+
+func (p *promptInjector) poll() (string, bool) {
+	select {
+	case prompt := <-p.ch:
+		return prompt, true
+	default:
+		return "", false
+	}
+}
+
+func (p *promptInjector) promptAndEnqueue() {
+	tools.StdinMu.Lock()
+	defer tools.StdinMu.Unlock()
+
+	stat, err := os.Stdin.Stat()
+	if err != nil {
+		return
+	}
+	isTerminal := (stat.Mode() & os.ModeCharDevice) != 0
+
+	if isTerminal {
+		fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Additional Prompt ───"))
+		fmt.Fprintf(os.Stderr, "%s ", boldStyle.Render(">"))
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return
+	}
+	prompt := strings.TrimSpace(line)
+	if prompt == "" {
+		return
+	}
+	p.enqueue(prompt)
+
+	if isTerminal {
+		fmt.Fprintf(os.Stderr, "%s Prompt enqueued, will be processed after current task completes.\n", doneStyle.Render("✓"))
+	}
+}
+
+func setupPromptSignals(injector *promptInjector) {
+	sigTstp := make(chan os.Signal, 1)
+	signal.Notify(sigTstp, syscall.SIGTSTP)
+	go func() {
+		for range sigTstp {
+			injector.promptAndEnqueue()
+		}
+	}()
+
+	sigUsr1 := make(chan os.Signal, 1)
+	signal.Notify(sigUsr1, syscall.SIGUSR1)
+	go func() {
+		for range sigUsr1 {
+			injector.promptAndEnqueue()
+		}
+	}()
 }

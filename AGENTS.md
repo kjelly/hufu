@@ -362,4 +362,12 @@ workspace/
 
 14. **go.mod indirect deps** — `charm.land/fantasy`, `github.com/charmbracelet/lipgloss`, `github.com/spf13/cobra`, `github.com/mark3labs/mcp-go` are marked `// indirect` but directly imported. `go mod tidy` would fix this.
 
+15. **Prompt injection via Ctrl+Z / SIGUSR1** — While a coordinator is running, users can press Ctrl+Z (SIGTSTP) or send SIGUSR1 to inject an additional prompt. The prompt is enqueued and processed after the current coordinator round completes. The coordinator receives a continuation message instructing it to adjust tasks. New prompts do NOT interrupt or cancel running agents.
+
+16. **ContinueWithPrompt preserves conversation history** — `Coordinator.ContinueWithPrompt()` reuses the `conversationHistory` field (accumulated `fantasy.Message` from previous rounds) so the coordinator has full context when processing an injected prompt. This is different from `Run()` which starts fresh.
+
+17. **Stdin mutex** — `tools.StdinMu` is a shared `sync.Mutex` that serializes reads from stdin. Both `ask_user` (agent tool) and `promptInjector.promptAndEnqueue()` (Ctrl+Z handler) lock this mutex before reading, preventing garbled input.
+
+18. **promptInjector** — Buffered channel (size 16) that receives prompts from SIGTSTP/SIGUSR1 signal handlers. `poll()` is non-blocking; `runWithInjection()` checks after each coordinator round.
+
 15. **`TaskInfo` vs `TodoItem`** — `TaskTracker` maintains both the old `TaskInfo` (used by `Start`/`Done`/`Error`) and the new `TodoList`. Both are used in parallel. `TodoItem` fields are `ID`/`Agent`/`Desc` (lowercase), while the old `TaskInfo` uses `Agent`/`Task`. The TODO display uses `t.ID` prefix (e.g., `1.`) to identify each item.
