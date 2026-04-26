@@ -1,4 +1,4 @@
-module github.com/anomalyco/agent-team-cli
+module github.com/anomalyco/hufu
 
 go 1.26.2
 

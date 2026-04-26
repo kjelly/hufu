@@ -9,7 +9,7 @@ import (
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openaicompat"
 
-	"github.com/anomalyco/agent-team-cli/internal/tools"
+	"github.com/anomalyco/hufu/internal/tools"
 )
 
 type GenerationParams struct {

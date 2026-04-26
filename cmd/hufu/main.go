@@ -17,11 +17,11 @@ import (
 	ergoreadline "github.com/ergochat/readline"
 	"github.com/spf13/cobra"
 
-	"github.com/anomalyco/agent-team-cli/internal/agent"
-	"github.com/anomalyco/agent-team-cli/internal/mcp"
-	"github.com/anomalyco/agent-team-cli/internal/readline"
-	"github.com/anomalyco/agent-team-cli/internal/team"
-	"github.com/anomalyco/agent-team-cli/internal/tools"
+	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/anomalyco/hufu/internal/mcp"
+	"github.com/anomalyco/hufu/internal/readline"
+	"github.com/anomalyco/hufu/internal/team"
+	"github.com/anomalyco/hufu/internal/tools"
 )
 
 var (
@@ -132,9 +132,9 @@ func (d *taskDisplay) update() {
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "agent-team-cli [prompt]",
+		Use:   "hufu [prompt]",
 		Short: "Run an agent team to accomplish a task",
-		Long:  "agent-team-cli discovers and runs agent teams by name. Use --agent-team or @team-name in the prompt to select a team.",
+		Long:  "hufu discovers and runs agent teams by name. Use --agent-team or @team-name in the prompt to select a team.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runTeam,
 	}
@@ -805,7 +805,7 @@ func defaultHistoryPath() string {
 	if err != nil {
 		return ""
 	}
-	dir := filepath.Join(home, ".agent-team-cli")
+	dir := filepath.Join(home, ".hufu")
 	os.MkdirAll(dir, 0o755)
 	return filepath.Join(dir, "prompt_history")
 }

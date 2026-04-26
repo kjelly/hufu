@@ -1,9 +1,9 @@
 version: 2
 
 builds:
-  - id: agent-team-cli
-    main: ./cmd/agent-team-cli
-    binary: agent-team-cli
+  - id: hufu
+    main: ./cmd/hufu
+    binary: hufu
     ldflags:
       - -s -w
     env:
@@ -47,4 +47,4 @@ changelog:
 release:
   github:
     owner: anomalyco
-    name: agent-team-cli
+    name: hufu

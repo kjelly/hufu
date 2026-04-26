@@ -105,7 +105,7 @@ func (m *MCPToolManager) loadLocalServer(ctx context.Context, name string, cfg M
 		Params: mcp.InitializeParams{
 			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
 			ClientInfo: mcp.Implementation{
-				Name:    "agent-team-cli",
+				Name:    "hufu",
 				Version: "0.1.0",
 			},
 		},
@@ -159,7 +159,7 @@ func (m *MCPToolManager) loadRemoteServer(ctx context.Context, name string, cfg 
 		Params: mcp.InitializeParams{
 			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
 			ClientInfo: mcp.Implementation{
-				Name:    "agent-team-cli",
+				Name:    "hufu",
 				Version: "0.1.0",
 			},
 		},

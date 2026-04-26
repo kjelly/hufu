@@ -2,9 +2,9 @@
 
 ## Project Overview
 
-**agent-team-cli** is a Go CLI tool that orchestrates teams of LLM agents (via Ollama) to collaboratively accomplish tasks. Teams are discovered by name from configured search paths, and a single prompt can switch between multiple teams or invoke specific agents directly.
+**hufu** is a Go CLI tool that orchestrates teams of LLM agents (via Ollama) to collaboratively accomplish tasks. Teams are discovered by name from configured search paths, and a single prompt can switch between multiple teams or invoke specific agents directly.
 
-- **Module**: `github.com/anomalyco/agent-team-cli`
+- **Module**: `github.com/anomalyco/hufu`
 - **Go version**: 1.26.2
 - **CLI framework**: cobra
 - **LLM framework**: `charm.land/fantasy` (Charm's agent/LLM abstraction)
@@ -13,8 +13,8 @@
 ## Build & Run
 
 ```bash
-go build ./cmd/agent-team-cli          # Build binary
-go run ./cmd/agent-team-cli [prompt]  # Run directly
+go build ./cmd/hufu          # Build binary
+go run ./cmd/hufu [prompt]  # Run directly
 go vet ./...                            # Lint
 go test ./...                           # Run tests
 ```
@@ -22,7 +22,7 @@ go test ./...                           # Run tests
 ### CLI Usage
 
 ```
-agent-team-cli [prompt]
+hufu [prompt]
   --ollama-url string              Ollama API URL (default "http://localhost:11434/v1")
   -v, --verbose                   Show full agent text output in real-time
   -w, --workspace                 Workspace directory (default: <cwd>/workspace)
@@ -84,7 +84,7 @@ Results joined and printed to stdout
 
 | Package | Path | Purpose |
 |---------|------|---------|
-| `main` | `cmd/agent-team-cli/` | CLI entry, cobra flags, segment execution, status display |
+| `main` | `cmd/hufu/` | CLI entry, cobra flags, segment execution, status display |
 | `agent` | `internal/agent/` | Agent definitions, Ollama provider, agent creation, tool selection |
 | `tools` | `internal/tools/` | Built-in agent tools: bash, read, write, edit, grep, find, ls, ask_user |
 | `team` | `internal/team/` | Team loading/parsing, coordinator, session persistence, workspace I/O, discovery, prompt parsing |
@@ -374,11 +374,11 @@ func (r *PromptReader) ReadLine(prompt string) (string, error)
 func (r *PromptReader) Close() error
 ```
 
-- **Prompt history**: enabled automatically, stored at `~/.agent-team-cli/prompt_history` (limit 1000 lines)
+- **Prompt history**: enabled automatically, stored at `~/.hufu/prompt_history` (limit 1000 lines)
 - **Signal prompts**: prompts injected via Ctrl+Z/SIGUSR1 also use readline, providing history navigation
 - **Ctrl+C / Ctrl+D**: trigger `ErrInterrupt` and `io.EOF` respectively, causing `os.Exit(130)` or graceful exit
 - **Fallback**: if readline init fails (e.g., non-terminal), degrades to `fmt.Scanln` with no history or readline features
-- **History file**: `defaultHistoryPath()` returns `~/.agent-team-cli/prompt_history`; created on demand with `0o755`
+- **History file**: `defaultHistoryPath()` returns `~/.hufu/prompt_history`; created on demand with `0o755`
 
 ## Tools Reference
 
@@ -396,7 +396,7 @@ func (r *PromptReader) Close() error
 
 ## Key Gotchas & Non-Obvious Patterns
 
-1. **CLI no longer takes team directory as positional arg** — Usage changed from `agent-team-cli <team-dir> [prompt]` to `agent-team-cli [prompt]`. Teams are discovered by name from search paths.
+1. **CLI no longer takes team directory as positional arg** — Usage changed from `hufu <team-dir> [prompt]` to `hufu [prompt]`. Teams are discovered by name from search paths.
 
 2. **Team vs agent disambiguation** — `@name` is first checked against known teams (via `registry.HasTeam()`), then against the current team's agent list. Unknown names produce specific error messages listing available options.
 

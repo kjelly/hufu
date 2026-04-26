@@ -1,8 +1,8 @@
-# agent-team-cli 規格書
+# hufu 規格書
 
 ## 1. 專案概述
 
-**agent-team-cli** 是一個 CLI 工具，用於協調多個 LLM Agent 團隊來共同完成任務。透過團隊名稱（而非路徑）來載入團隊，支援在同一 prompt 中跨多個團隊切換、對特定 Agent 進行直接呼叫，以及互動式團隊選擇。
+**hufu** 是一個 CLI 工具，用於協調多個 LLM Agent 團隊來共同完成任務。透過團隊名稱（而非路徑）來載入團隊，支援在同一 prompt 中跨多個團隊切換、對特定 Agent 進行直接呼叫，以及互動式團隊選擇。
 
 ## 2. 技術棧
 
@@ -24,10 +24,10 @@
 ### 4.1 基本用法
 
 ```bash
-agent-team-cli [prompt]           # prompt 可選（無 prompt 時互動式詢問）
-agent-team-cli --agent-team <name> [prompt]
-agent-team-cli "@<team-name> <task>"           # prompt 中指定團隊
-agent-team-cli "@<team-a> do A @<team-b> do B" # 多團隊切換
+hufu [prompt]           # prompt 可選（無 prompt 時互動式詢問）
+hufu --agent-team <name> [prompt]
+hufu "@<team-name> <task>"           # prompt 中指定團隊
+hufu "@<team-a> do A @<team-b> do B" # 多團隊切換
 ```
 
 ### 4.2 指令旗標
@@ -63,7 +63,7 @@ func (r *PromptReader) ReadLine(prompt string) (string, error)
 func (r *PromptReader) Close() error
 ```
 
-- **歷史記錄**：自動啟用，儲存於 `~/.agent-team-cli/prompt_history`（最多 1000 筆）
+- **歷史記錄**：自動啟用，儲存於 `~/.hufu/prompt_history`（最多 1000 筆）
 - **Ctrl+C / Ctrl+D**：分別觸發 `ErrInterrupt` 和 `io.EOF`
 - **Fallback 機制**：若 readline 初始化失敗，自動降級至 `fmt.Scanln` 基礎輸入
 
@@ -536,7 +536,7 @@ workspace-{team-name}/
 ### 13.1 建構
 
 ```bash
-go build ./cmd/agent-team-cli
+go build ./cmd/hufu
 ```
 
 ### 13.2 CI 工作流

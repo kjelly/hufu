@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/anomalyco/agent-team-cli/internal/agent"
-	"github.com/anomalyco/agent-team-cli/internal/mcp"
-	"github.com/anomalyco/agent-team-cli/internal/skill"
+	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/anomalyco/hufu/internal/mcp"
+	"github.com/anomalyco/hufu/internal/skill"
 )
 
 type TeamSession struct {

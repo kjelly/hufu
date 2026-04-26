@@ -20,7 +20,7 @@ jobs:
         run: go vet ./...
 
       - name: Build
-        run: go build ./cmd/agent-team-cli
+        run: go build ./cmd/hufu
 
       - name: Test
         run: go test ./...
