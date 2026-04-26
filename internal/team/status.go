@@ -7,13 +7,46 @@ import (
 
 type StatusEvent struct {
 	Type       string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated"
-	Agent     string
-	Message   string
-	ToolName  string
-	ToolArgs  string
+	TeamName   string
+	Agent      string
+	Message    string
+	ToolName   string
+	ToolArgs   string
 	ToolResult string
-	Step      int
-	Todos     []*TodoItem
+	Step       int
+	Todos      []*TodoItem
+}
+
+func (e StatusEvent) withAgent(agent string) StatusEvent {
+	e.Agent = agent
+	return e
+}
+
+func (e StatusEvent) withMessage(msg string) StatusEvent {
+	e.Message = msg
+	return e
+}
+
+func (e StatusEvent) withStep(step int) StatusEvent {
+	e.Step = step
+	return e
+}
+
+func (e StatusEvent) withTool(name, args string) StatusEvent {
+	e.ToolName = name
+	e.ToolArgs = args
+	return e
+}
+
+func (e StatusEvent) withToolResult(name, result string) StatusEvent {
+	e.ToolName = name
+	e.ToolResult = result
+	return e
+}
+
+func (e StatusEvent) withTodos(todos []*TodoItem) StatusEvent {
+	e.Todos = todos
+	return e
 }
 
 type StatusReporter func(event StatusEvent)

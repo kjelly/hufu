@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -184,11 +185,31 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	injector := newPromptInjector(pr)
+	activeCoord := &activeCoordinator{}
 	defer setupPromptSignals(injector)()
+
+	sigIntCount := 0
+	sigIntCh := make(chan os.Signal, 1)
+	signal.Notify(sigIntCh, os.Interrupt)
+	go func() {
+		for range sigIntCh {
+			sigIntCount++
+			if sigIntCount == 1 {
+				fmt.Fprintf(os.Stderr, "\n%s Wrapping up... (press Ctrl+C again to force quit)\n", boldStyle.Render("⏹"))
+				if c := activeCoord.Get(); c != nil {
+					c.SetWrapUp()
+				}
+				injector.injectWrapUp()
+			} else {
+				fmt.Fprintf(os.Stderr, "\n%s Force quit\n", errStyle.Render("✗"))
+				cancel()
+			}
+		}
+	}()
 
 	var searchPaths []string
 	if agentTeamSearchPath != "" {
@@ -280,7 +301,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	result, err := executeSegments(ctx, segments, registry, ollama, loadedTeams, injector)
+	result, err := executeSegments(ctx, segments, registry, ollama, loadedTeams, injector, activeCoord)
 	if err != nil {
 		return err
 	}
@@ -422,22 +443,36 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 func runWithInjection(ctx context.Context, tc *teamContext, initialResult string, injector *promptInjector) (string, error) {
 	result := initialResult
 	for {
-		additionalPrompt, ok := injector.poll()
-		if !ok {
-			break
-		}
-		fmt.Fprintf(os.Stderr, "\n%s Injecting additional prompt...\n\n", boldStyle.Render("↩"))
+		select {
+		case <-injector.wrapUpCh:
+			fmt.Fprintf(os.Stderr, "\n%s Wrapping up — coordinator will summarize and finish.\n\n", boldStyle.Render("⏹"))
+			contResult, err := tc.coordinator.ContinueWithPrompt(ctx, "")
+			if err != nil {
+				if ctx.Err() == context.Canceled {
+					return result, nil
+				}
+				return result, err
+			}
+			result += "\n\n---\n\n" + contResult
+			return result, nil
+		case prompt, ok := <-injector.ch:
+			if !ok {
+				return result, nil
+			}
+			fmt.Fprintf(os.Stderr, "\n%s Injecting additional prompt...\n\n", boldStyle.Render("↩"))
 
-		contResult, err := tc.coordinator.ContinueWithPrompt(ctx, additionalPrompt)
-		if err != nil {
-			return result, err
+			contResult, err := tc.coordinator.ContinueWithPrompt(ctx, prompt)
+			if err != nil {
+				return result, err
+			}
+			result += "\n\n---\n\n" + contResult
+		default:
+			return result, nil
 		}
-		result += "\n\n---\n\n" + contResult
 	}
-	return result, nil
 }
 
-func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, ollama *agent.OllamaProvider, loadedTeams map[string]*teamContext, injector *promptInjector) (string, error) {
+func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, ollama *agent.OllamaProvider, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator) (string, error) {
 	var results []string
 	currentTeamName := ""
 
@@ -476,7 +511,12 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			fmt.Fprintf(os.Stderr, "\n%s Starting team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(teamName))
 
+			activeCoord.Set(tc.coordinator)
+			if injector.IsWrapUpRequested() {
+				tc.coordinator.SetWrapUp()
+			}
 			result, err := tc.coordinator.Run(ctx, seg.Content)
+			activeCoord.Clear()
 			idleTimer.stop()
 
 			if err != nil {
@@ -523,7 +563,12 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			fmt.Fprintf(os.Stderr, "\n%s Direct invocation: @%s (team: %s)\n\n", boldStyle.Render("→"), agentStyle.Render(seg.Name), teamStyle.Render(currentTeamName))
 
+			activeCoord.Set(tc.coordinator)
+			if injector.IsWrapUpRequested() {
+				tc.coordinator.SetWrapUp()
+			}
 			directResult, err := tc.coordinator.RunDirectAgent(ctx, seg.Name, seg.Content)
+			activeCoord.Clear()
 			idleTimer.stop()
 
 			if err != nil {
@@ -550,7 +595,12 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			} else {
 				synthesisPrompt := fmt.Sprintf("A user directly asked @%s to do the following task:\n\n%s\n\nHere is what %s produced:\n\n---\n%s\n---\n\nPlease synthesize this into a final, well-organized answer for the user.",
 					seg.Name, seg.Content, seg.Name, directResult.Output)
+				activeCoord.Set(tc.coordinator)
+				if injector.IsWrapUpRequested() {
+					tc.coordinator.SetWrapUp()
+				}
 				synthResult, err := tc.coordinator.Run(ctx, synthesisPrompt)
+				activeCoord.Clear()
 				if err != nil {
 					if ctx.Err() == context.Canceled {
 						team.SaveSession(tc.session.Workspace, tc.sessionData)
@@ -592,7 +642,12 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			fmt.Fprintf(os.Stderr, "\n%s Team %s processing...\n\n", boldStyle.Render("→"), teamStyle.Render(currentTeamName))
 
+			activeCoord.Set(tc.coordinator)
+			if injector.IsWrapUpRequested() {
+				tc.coordinator.SetWrapUp()
+			}
 			result, err := tc.coordinator.Run(ctx, seg.Content)
+			activeCoord.Clear()
 			idleTimer.stop()
 
 			if err != nil {
@@ -638,6 +693,16 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 	return strings.Join(results, "\n\n---\n\n"), nil
 }
 
+func formatAgentLabel(event team.StatusEvent) string {
+	if event.TeamName != "" && event.Agent != "" {
+		return fmt.Sprintf("%s/%s", teamStyle.Render(event.TeamName), agentStyle.Render(event.Agent))
+	}
+	if event.Agent != "" {
+		return agentStyle.Render(event.Agent)
+	}
+	return ""
+}
+
 func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp *taskDisplay, idleTimer *idleWarningTimer) {
 	currentAgent := ""
 	textBuf := ""
@@ -658,7 +723,7 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 			}
 			w.write(fmt.Sprintf("\n%s %s %s\n",
 				headerStyle.Render("▶"),
-				agentStyle.Render(event.Agent),
+				formatAgentLabel(event),
 				dimStyle.Render("— "+desc),
 			))
 			taskDisp.update()
@@ -680,11 +745,15 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 			}
 			argsPreview := formatToolArgs(event.ToolName, event.ToolArgs)
 			icon := "⟹"
-			w.write(fmt.Sprintf("  %s %s %s\n",
+			w.write(fmt.Sprintf("  %s %s %s %s\n",
 				toolStyle.Render(icon),
+				formatAgentLabel(event),
+				toolStyle.Render("›"),
 				toolStyle.Render(event.ToolName),
-				dimStyle.Render(argsPreview),
 			))
+			if argsPreview != "" {
+				w.write(fmt.Sprintf("    %s\n", dimStyle.Render(argsPreview)))
+			}
 
 		case "tool_result":
 			resultLine := ""
@@ -700,14 +769,18 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				if len(resultLine) > maxChars {
 					resultLine = resultLine[:maxChars] + "..."
 				}
-				w.write(fmt.Sprintf("  %s %s\n    %s\n",
+				w.write(fmt.Sprintf("  %s %s %s %s\n    %s\n",
 					doneStyle.Render("✓"),
+					formatAgentLabel(event),
+					toolStyle.Render("›"),
 					toolStyle.Render(event.ToolName),
 					resultStyle.Render(resultLine),
 				))
 			} else {
-				w.write(fmt.Sprintf("  %s %s\n",
+				w.write(fmt.Sprintf("  %s %s %s %s\n",
 					doneStyle.Render("✓"),
+					formatAgentLabel(event),
+					toolStyle.Render("›"),
 					toolStyle.Render(event.ToolName),
 				))
 			}
@@ -722,7 +795,7 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 			}
 			w.write(fmt.Sprintf("%s %s %s\n",
 				doneStyle.Render("✓"),
-				agentStyle.Render(event.Agent),
+				formatAgentLabel(event),
 				doneStyle.Render("done"),
 			))
 			currentAgent = ""
@@ -735,7 +808,7 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 			}
 			w.write(fmt.Sprintf("%s %s: %s\n",
 				errStyle.Render("✗"),
-				agentStyle.Render(event.Agent),
+				formatAgentLabel(event),
 				errStyle.Render(event.Message),
 			))
 			taskDisp.update()
@@ -986,15 +1059,41 @@ func (t *idleWarningTimer) stop() {
 	}
 }
 
+type activeCoordinator struct {
+	mu          sync.Mutex
+	coordinator *team.Coordinator
+}
+
+func (a *activeCoordinator) Set(c *team.Coordinator) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.coordinator = c
+}
+
+func (a *activeCoordinator) Get() *team.Coordinator {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.coordinator
+}
+
+func (a *activeCoordinator) Clear() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.coordinator = nil
+}
+
 type promptInjector struct {
-	ch           chan string
-	mu           sync.Mutex
-	promptReader *readline.PromptReader
+	ch              chan string
+	wrapUpCh        chan struct{}
+	wrapUpRequested atomic.Bool
+	mu              sync.Mutex
+	promptReader    *readline.PromptReader
 }
 
 func newPromptInjector(pr *readline.PromptReader) *promptInjector {
 	return &promptInjector{
 		ch:           make(chan string, 16),
+		wrapUpCh:    make(chan struct{}, 1),
 		promptReader: pr,
 	}
 }
@@ -1004,6 +1103,18 @@ func (p *promptInjector) enqueue(prompt string) {
 	case p.ch <- prompt:
 	default:
 	}
+}
+
+func (p *promptInjector) injectWrapUp() {
+	p.wrapUpRequested.Store(true)
+	select {
+	case p.wrapUpCh <- struct{}{}:
+	default:
+	}
+}
+
+func (p *promptInjector) IsWrapUpRequested() bool {
+	return p.wrapUpRequested.Load()
 }
 
 func (p *promptInjector) poll() (string, bool) {

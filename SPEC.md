@@ -411,13 +411,18 @@ mcp-servers:
 
 ```go
 type promptInjector struct {
-    ch chan string  // buffered, capacity 16
-    mu sync.Mutex
+    ch              chan string          // buffered, capacity 16
+    wrapUpCh        chan struct{}        // buffered, capacity 1
+    wrapUpRequested atomic.Bool           // atomic flag
+    mu              sync.Mutex
+    promptReader    *readline.PromptReader
 }
 ```
 
-- `enqueue(prompt)` — 非阻塞寫入 channel，channel 滿時丟棄
-- `poll()` — 非阻塞讀取（`select default`），有 prompt 返回，否則立即回傳
+- `enqueue(prompt)` — 非阻塞寫入 `ch` channel，channel 滿時丟棄
+- `poll()` — 從 `ch` 和 `wrapUpCh` 讀取，支援 `select`
+- `injectWrapUp()` — 設定 `wrapUpRequested` 並寫入 `wrapUpCh`
+- `IsWrapUpRequested()` — 原子讀取標記
 - `promptAndEnqueue()` — 鎖住 `StdinMu` 後從 stdin 讀取一行並加入佇列
 
 **StdinMutex：** `tools.StdinMu` 是共用的 `sync.Mutex`，確保 `ask_user` 工具和信號處理器不會同時讀取 stdin。
@@ -441,6 +446,7 @@ signal handler 觸發 injector.promptAndEnqueue()
     │
     ▼
 injector.poll() ──► 有 prompt？ ──► Coordinator.ContinueWithPrompt()
+injector.wrapUpCh ──► 優雅終止？ ──► ContinueWithPrompt(wrapUp=true)
                               │
                               └─► 無 prompt ──► 繼續執行
 ```
@@ -527,6 +533,40 @@ AddBatch() → TaskPending → UpdateStatus(TaskInProgress) → TaskDone
 
 **`CleanRunDirs()`：** `--new` 時自動清理 `inbox/`、`outbox/`、`status/` 目錄，保留 `shared/`、`history/`、`session.json`、`session.md`。
 
+### 10.3 優雅關機（Graceful Shutdown）
+
+支援 Ctrl+C 兩階段終止：
+
+**第一次 Ctrl+C：** 發送 `SIGINT` → 通知當前協調者「優雅終止」（使用 `activeCoordinator` 指標傳遞）→ 協調者收到 `wrapUp` 標記後，下次呼叫 `ContinueWithPrompt("")` 時使用 `wrapUpPromptTemplate`，指示協調者立即總結進度並呼叫 `finish`，不再委派新任務 → 程式正常結束
+
+**第二次 Ctrl+C：** 強制取消 context (`cancel()`) → 立即退出
+
+**相關常數：**
+
+```go
+wrapUpPromptTemplate = "The user has requested that you wrap up immediately. IMPORTANT: Do NOT delegate any new tasks. Immediately summarize what has been accomplished so far based on all results you have received. Call the finish tool RIGHT NOW..."
+```
+
+**`activeCoordinator`**：儲存當前活躍的協調者指標，供 signal handler 呼叫 `SetWrapUp()`。
+
+## 11. StatusEvent 結構
+
+```go
+type StatusEvent struct {
+    Type       string     // "start","step","tool_call","tool_result","done","error","text","todos_updated"
+    TeamName   string     // 團隊名稱（新增）
+    Agent      string
+    Message    string
+    ToolName  string
+    ToolArgs  string
+    ToolResult string
+    Step      int
+    Todos     []*TodoItem
+}
+```
+
+使用 builder 模式鏈式呼叫：`c.newEvent("start").withAgent(name).withMessage(msg)`
+
 ## 12. Agent 角色與權限
 
 | 角色 | 可用工具 | 說明 |
@@ -552,7 +592,7 @@ go build ./cmd/hufu
 觸發條件：推送 `v*` 標籤。
 使用 GoReleaser 自動發布至 GitHub Releases。
 
-## 14. 限制與約束
+## 15. 限制與約束
 
 - **路徑解析**：相對路徑以工作區目錄為基準
 - **模型識別**：`ollama/` 前綴會被自動移除

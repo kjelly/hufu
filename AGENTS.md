@@ -437,3 +437,25 @@ func (r *PromptReader) Close() error
 16. **readline fallback is silent** — When `NewPromptReader` returns an error, `pr` is set to `nil` and a warning is printed to stderr. All prompt functions check `pr != nil` and fall back to `fmt.Scanln`. No readline features (history, completion) are available in fallback mode.
 
 17. **promptInjector carries PromptReader** — The `promptInjector` struct now embeds `*readline.PromptReader`. When nil, `promptAndEnqueue` returns immediately without reading. This ensures graceful degradation when readline is unavailable.
+
+18. **setupPromptSignals returns cleanup func** — `setupPromptSignals` now returns a `func()` that stops signal handlers and closes channels. Called via `defer setupPromptSignals(injector)()` to ensure cleanup on function exit.
+
+19. **Graceful shutdown with Ctrl+C** — First Ctrl+C sends SIGINT → `activeCoordinator.SetWrapUp()` flags the active coordinator → next `ContinueWithPrompt` uses `wrapUpPromptTemplate` instructing coordinator to summarize and call `finish` without delegating new tasks → Second Ctrl+C forces `cancel()` for immediate exit.
+
+20. **Wrap-up mechanism** — `promptInjector.wrapUpCh` (buffered channel, size 1) + `wrapUpRequested atomic.Bool` flag. `injectWrapUp()` sets the flag and sends to channel (non-blocking). `IsWrapUpRequested()` atomically checks. `runWithInjection()` uses `select` to handle both normal prompts and wrap-up in one select statement.
+
+21. **wrapUpPromptTemplate** — Hard-coded prompt that forces the coordinator to summarize immediately and call `finish`. No new tasks delegated, no `run_agents` calls.
+
+22. **activeCoordinator pointer** — Passed to `executeSegments`, stored/cleared on each coordinator run call. Allows signal handler to call `SetWrapUp()` on the right coordinator instance even after `executeSegments` returns.
+
+23. **StatusEvent builder pattern** — `c.newEvent(type)` returns a `StatusEvent` with `Type` and `TeamName` pre-filled. Chainable methods: `withAgent()`, `withMessage()`, `withStep()`, `withTool()`, `withToolResult()`, `withTodos()`. No more manual struct literal construction throughout coordinator code.
+
+24. **Tool call/result output includes agent label** — `formatAgentLabel(event)` renders `"team-name/agent-name"` for cross-team visibility. Tool call output now includes the agent label and `›` separator, with args on a separate indented line. Previous format was all on one line.
+
+25. **Context propagation for wrap-up** — `context.WithCancel(context.Background())` used instead of `signal.NotifyContext` directly, so `cancel()` can be called by the second Ctrl+C while SIGINT is handled separately via a dedicated channel.
+
+26. **Coordinator.wrapUp atomic flag** — `wrapUp atomic.Int32` stores wrap-up state. `SetWrapUp()` stores 1, `IsWrapUp()` checks if 1. Different from the channel-based notification — the atomic flag persists the state across coordinator calls.
+
+27. **runWithInjection uses select not polling** — `select { case <-injector.wrapUpCh: ... case prompt, ok := <-injector.ch: ... default: return }` instead of a polling loop. More efficient and responsive.
+
+28. **executeSegments passes activeCoord to all run paths** — Both coordinator `Run()` and `RunDirectAgent()` paths set/clear `activeCoordinator` so wrap-up signal can target the right instance regardless of which code path is active.

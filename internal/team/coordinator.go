@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"charm.land/fantasy"
@@ -46,6 +47,7 @@ type Coordinator struct {
 	conversationHistory   []fantasy.Message
 	conversationHistoryMu sync.Mutex
 	projectDir            string
+	wrapUp              atomic.Int32
 }
 
 func NewCoordinator(session *TeamSession, ollama *agent.OllamaProvider, mcpManager *mcp.MCPToolManager, verbose bool) *Coordinator {
@@ -73,6 +75,18 @@ func (c *Coordinator) SetStatusReporter(fn StatusReporter) {
 
 func (c *Coordinator) report(event StatusEvent) {
 	c.reportStatus(event)
+}
+
+func (c *Coordinator) newEvent(eventType string) StatusEvent {
+	return StatusEvent{Type: eventType, TeamName: c.session.Config.Name}
+}
+
+func (c *Coordinator) SetWrapUp() {
+	c.wrapUp.Store(1)
+}
+
+func (c *Coordinator) IsWrapUp() bool {
+	return c.wrapUp.Load() == 1
 }
 
 func (c *Coordinator) TaskTracker() *TaskTracker {
@@ -218,7 +232,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		return "", fmt.Errorf("max rounds (%d) exceeded", c.session.Config.MaxRounds)
 	}
 
-	c.report(StatusEvent{Type: "step", Message: fmt.Sprintf("Round %d: delegating %d task(s)", c.round, len(tasks))})
+	c.report(c.newEvent("step").withMessage(fmt.Sprintf("Round %d: delegating %d task(s)", c.round, len(tasks))))
 
 	todoItems := c.taskTracker.TodoList().AddBatch(func() []struct {
 		Agent string
@@ -236,7 +250,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		}
 		return batch
 	}())
-	c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
 	type taskResult struct {
 		agentName string
@@ -303,13 +317,13 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	agentDef, ok := c.session.Agents[agentName]
 	if !ok {
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, fmt.Sprintf("unknown agent: %q", task.Agent))
-		c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		return "", fmt.Errorf("unknown agent: %q (available: %v)", task.Agent, c.agentNames())
 	}
 
 	if agentDef.Role == "orchestrator" || agentDef.Role == "coordinator" {
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, fmt.Sprintf("cannot delegate to coordinator %q", agentName))
-		c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		return "", fmt.Errorf("cannot delegate to coordinator agent %q", agentName)
 	}
 
@@ -327,16 +341,16 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	}
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
-	c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
-	c.report(StatusEvent{Type: "start", Agent: agentName, Message: task.Task})
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	c.report(c.newEvent("start").withAgent(agentName).withMessage(task.Task))
 	writeStatus(c.session.Workspace, agentName, "working", task.Task)
 	writeInbox(c.session.Workspace, agentName, task.Task)
 
 	ag, err := c.getOrCreateAgent(parentCtx, agentDef)
 	if err != nil {
-		c.report(StatusEvent{Type: "error", Agent: agentName, Message: err.Error()})
+		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()))
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
-		c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		writeStatus(c.session.Workspace, agentName, "error", task.Task)
 		return "", err
 	}
@@ -375,7 +389,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
-			c.report(StatusEvent{Type: "step", Agent: agentName, Message: fmt.Sprintf("retry %d/%d — continuing from previous progress", attempt, maxRetries)})
+			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retry %d/%d — continuing from previous progress", attempt, maxRetries)))
 		}
 
 		taskCtx, cancel := context.WithTimeout(parentCtx, agentTimeout)
@@ -386,8 +400,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			writeOutbox(c.session.Workspace, agentName, output)
 			writeStatus(c.session.Workspace, agentName, "done", task.Task)
 			c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
-			c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
-			c.report(StatusEvent{Type: "done", Agent: agentName, Message: "completed"})
+			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			c.report(c.newEvent("done").withAgent(agentName).withMessage("completed"))
 			return output, nil
 		}
 
@@ -396,9 +410,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}
 
 		lastErr = err
-		c.report(StatusEvent{Type: "error", Agent: agentName, Message: fmt.Sprintf("attempt %d failed: %v", attempt, err)})
+		c.report(c.newEvent("error").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d failed: %v", attempt, err)))
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, fmt.Sprintf("attempt %d failed: %v", attempt, err))
-		c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
 		if parentCtx.Err() != nil {
 			break
@@ -421,7 +435,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		Prompt:   prompt,
 		Messages: history,
 		OnStepStart: func(stepNumber int) error {
-			reportFn(StatusEvent{Type: "step", Agent: agentName, Step: stepNumber, Message: fmt.Sprintf("step %d", stepNumber)})
+			reportFn(c.newEvent("step").withAgent(agentName).withStep(stepNumber).withMessage(fmt.Sprintf("step %d", stepNumber)))
 			return nil
 		},
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
@@ -429,7 +443,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			if len(argsPreview) > 200 {
 				argsPreview = argsPreview[:200] + "..."
 			}
-			reportFn(StatusEvent{Type: "tool_call", Agent: agentName, ToolName: tc.ToolName, ToolArgs: argsPreview})
+			reportFn(c.newEvent("tool_call").withAgent(agentName).withTool(tc.ToolName, argsPreview))
 			return nil
 		},
 		OnToolResult: func(tr fantasy.ToolResultContent) error {
@@ -439,11 +453,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					resultPreview = txt.Text
 				}
 			}
-			reportFn(StatusEvent{Type: "tool_result", Agent: agentName, ToolName: tr.ToolName, ToolResult: resultPreview})
+			reportFn(c.newEvent("tool_result").withAgent(agentName).withToolResult(tr.ToolName, resultPreview))
 			return nil
 		},
 		OnTextDelta: func(id, text string) error {
-			reportFn(StatusEvent{Type: "text", Agent: agentName, Message: text})
+			reportFn(c.newEvent("text").withAgent(agentName).withMessage(text))
 			return nil
 		},
 	}
@@ -644,12 +658,12 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}{{Agent: agentName, Desc: task}})
 	todoID := todoItems[0].ID
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
-	c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
 	ag, err := c.getOrCreateAgent(ctx, agentDef)
 	if err != nil {
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
-		c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		return nil, fmt.Errorf("failed to create agent %q: %w", agentName, err)
 	}
 
@@ -683,14 +697,14 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if err != nil {
 		writeStatus(c.session.Workspace, agentName, "error", task)
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
-		c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		return &DirectAgentResult{AgentName: agentName, Error: err}, nil
 	}
 
 	writeOutbox(c.session.Workspace, agentName, output)
 	writeStatus(c.session.Workspace, agentName, "done", task)
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
-	c.report(StatusEvent{Type: "todos_updated", Todos: c.taskTracker.TodoList().Items()})
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
 	return &DirectAgentResult{AgentName: agentName, Output: output}, nil
 }
@@ -742,7 +756,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	orchCtx, cancel := context.WithTimeout(ctx, coordinatorTimeout)
 	defer cancel()
 
-	c.report(StatusEvent{Type: "start", Agent: orchDef.Name, Message: "coordinator starting"})
+	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("coordinator starting"))
 
 	orch, err := agent.CreateAgent(orchCtx, c.ollama, agent.AgentConfig{
 		Def:        orchDef,
@@ -786,7 +800,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		SaveSession(c.session.Workspace, c.sessionData)
 	}
 
-	c.report(StatusEvent{Type: "done", Agent: orchDef.Name, Message: "coordinator finished"})
+	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator finished"))
 	return finalResult, nil
 }
 
@@ -796,7 +810,13 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		return "", fmt.Errorf("no coordinator agent found in team")
 	}
 
-	continuationPrompt := fmt.Sprintf(continuationPromptTemplate, additionalPrompt)
+	var continuationPrompt string
+	if c.IsWrapUp() {
+		continuationPrompt = wrapUpPromptTemplate
+		additionalPrompt = "wrap up now"
+	} else {
+		continuationPrompt = fmt.Sprintf(continuationPromptTemplate, additionalPrompt)
+	}
 
 	if c.sessionData != nil {
 		c.sessionData.AddEntry("user", additionalPrompt)
@@ -818,7 +838,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	orchCtx, cancel := context.WithTimeout(ctx, coordinatorTimeout)
 	defer cancel()
 
-	c.report(StatusEvent{Type: "start", Agent: orchDef.Name, Message: "continuing with additional input"})
+	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("continuing with additional input"))
 
 	orch, err := agent.CreateAgent(orchCtx, c.ollama, agent.AgentConfig{
 		Def:        orchDef,
@@ -862,7 +882,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		SaveSession(c.session.Workspace, c.sessionData)
 	}
 
-	c.report(StatusEvent{Type: "done", Agent: orchDef.Name, Message: "continuation finished"})
+	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("continuation finished"))
 	return finalResult, nil
 }
 
@@ -895,3 +915,13 @@ Please take this into account. You may need to:
 - Cancel tasks that are no longer needed
 
 Continue coordinating. Call finish when you have a complete response that addresses both the original request and the new input.`
+
+const wrapUpPromptTemplate = `The user has requested that you wrap up immediately.
+
+IMPORTANT INSTRUCTIONS:
+- Do NOT delegate any new tasks
+- Do NOT call run_agents again
+- Immediately summarize what has been accomplished so far based on all results you have received
+- Call the finish tool RIGHT NOW with your best summary of the work completed
+
+This is a wrap-up request. You MUST call finish immediately with whatever results are available.`
