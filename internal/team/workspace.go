@@ -17,8 +17,18 @@ const (
 )
 
 func EnsureWorkspaceDirs(workspace string) error {
-	for _, dir := range []string{inboxDir, outboxDir, sharedDir, statusDir, historyDir} {
+	dirs := []string{inboxDir, outboxDir, sharedDir, statusDir, historyDir, filepath.Join(sharedDir, "skills")}
+	for _, dir := range dirs {
 		if err := os.MkdirAll(filepath.Join(workspace, dir), 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func CleanRunDirs(workspace string) error {
+	for _, dir := range []string{inboxDir, outboxDir, statusDir} {
+		if err := os.RemoveAll(filepath.Join(workspace, dir)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}

@@ -188,7 +188,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	defer stop()
 
 	injector := newPromptInjector(pr)
-	setupPromptSignals(injector)
+	defer setupPromptSignals(injector)()
 
 	var searchPaths []string
 	if agentTeamSearchPath != "" {
@@ -304,11 +304,12 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		if err != nil {
 			return nil, fmt.Errorf("invalid workspace path: %w", err)
 		}
-		if err := os.MkdirAll(absWorkspace, 0o755); err != nil {
+		teamWorkspace := filepath.Join(absWorkspace, teamName)
+		if err := os.MkdirAll(teamWorkspace, 0o755); err != nil {
 			return nil, fmt.Errorf("failed to create workspace: %w", err)
 		}
-		session.Workspace = absWorkspace
-		session.Config.WorkspaceDir = absWorkspace
+		session.Workspace = teamWorkspace
+		session.Config.WorkspaceDir = teamWorkspace
 	}
 
 	team.EnsureWorkspaceDirs(session.Workspace)
@@ -339,6 +340,10 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 			}
 			os.Remove(filepath.Join(session.Workspace, "session.json"))
 		}
+		if err := team.CleanRunDirs(session.Workspace); err != nil {
+			fmt.Fprintf(os.Stderr, "%s Failed to clean workspace: %v\n", errStyle.Render("⚠"), err)
+		}
+		team.EnsureWorkspaceDirs(session.Workspace)
 		sessionData = team.NewSession()
 		team.SaveSession(session.Workspace, sessionData)
 		team.SaveSessionMD(session.Workspace, team.GenerateSessionMD(sessionData, session.Config.Name))
@@ -367,7 +372,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		}
 
 		if existingMD != "" {
-			lines := strings.SplitN(existingMD, "\n", 8)
+			lines := strings.SplitN(existingMD, "\n", 30)
 			preview := strings.Join(lines, "\n")
 			fmt.Fprintf(os.Stderr, "\n%s\n%s\n\n",
 				boldStyle.Render("─── Previous Session ───"),
@@ -1034,7 +1039,7 @@ func (p *promptInjector) promptAndEnqueue() {
 	fmt.Fprintf(os.Stderr, "%s Prompt enqueued, will be processed after current task completes.\n", doneStyle.Render("✓"))
 }
 
-func setupPromptSignals(injector *promptInjector) {
+func setupPromptSignals(injector *promptInjector) func() {
 	sigTstp := make(chan os.Signal, 1)
 	signal.Notify(sigTstp, syscall.SIGTSTP)
 	go func() {
@@ -1050,4 +1055,11 @@ func setupPromptSignals(injector *promptInjector) {
 			injector.promptAndEnqueue()
 		}
 	}()
+
+	return func() {
+		signal.Stop(sigTstp)
+		close(sigTstp)
+		signal.Stop(sigUsr1)
+		close(sigUsr1)
+	}
 }

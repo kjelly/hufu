@@ -331,7 +331,7 @@ func TestHasAtName(t *testing.T) {
 		{"hello @teamA", true},
 		{"@teamA@agent1", true},
 		{"hello world", false},
-		{"email@example.com", true},
+		{"email@example.com", false},
 		{"", false},
 		{"no at-refs here", false},
 		{"@-leading", false},

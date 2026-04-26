@@ -35,7 +35,7 @@ func GenerateSessionMD(sd *SessionData, teamName string) string {
 	b.WriteString(fmt.Sprintf("**Exchanges:** %d\n\n", len(sd.Entries)))
 	b.WriteString("---\n\n")
 	for i, entry := range sd.Entries {
-		if i >= 40 {
+		if i >= maxSessionEntries {
 			remaining := len(sd.Entries) - i
 			b.WriteString(fmt.Sprintf("*... %d earlier exchanges omitted*\n\n", remaining))
 			break

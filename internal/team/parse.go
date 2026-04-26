@@ -46,6 +46,7 @@ func parseSimpleYAML(data string) map[string]string {
 func parseAgentFile(path string) *agent.AgentDef {
 	raw, err := os.ReadFile(path)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to read agent file %s: %v\n", path, err)
 		return nil
 	}
 	text := string(raw)
@@ -55,12 +56,14 @@ func parseAgentFile(path string) *agent.AgentDef {
 	rest := text[4:]
 	idx := strings.Index(rest, "\n---\n")
 	if idx < 0 {
+		fmt.Fprintf(os.Stderr, "warning: malformed frontmatter in %s (missing closing ---)\n", path)
 		return nil
 	}
 	fm := parseSimpleYAML(rest[:idx])
 	body := strings.TrimSpace(rest[idx+5:])
 
 	if fm["name"] == "" {
+		fmt.Fprintf(os.Stderr, "warning: agent file %s has no 'name' in frontmatter\n", path)
 		return nil
 	}
 

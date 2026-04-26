@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"charm.land/fantasy"
 
@@ -224,7 +225,15 @@ func (m *MCPToolManager) GetTools() []MCPTool {
 	return m.tools
 }
 
+const mcpDefaultTimeout = 30 * time.Second
+
 func (m *MCPToolManager) ExecuteTool(ctx context.Context, toolName string, args string) (string, bool, error) {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, mcpDefaultTimeout)
+		defer cancel()
+	}
+
 	m.mu.RLock()
 	t, ok := m.toolMap[toolName]
 	if !ok {

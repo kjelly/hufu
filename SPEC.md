@@ -202,7 +202,7 @@ executeSegments() 逐一執行 segments
 
 - 切換團隊時自動儲存前一個團隊的 session（`SaveSessionMD`）
 - CLI 輸出顯示團隊切換（`⇒ currentTeam → newTeam`）
-- 工作區目錄各自獨立（每個團隊有獨立 workspace）
+- 工作區目錄各自獨立（每個團隊有獨立 workspace，如 `<workspace>/<team-name>/`）
 
 ### 7.3 直接 Agent 呼叫
 
@@ -510,19 +510,22 @@ AddBatch() → TaskPending → UpdateStatus(TaskInProgress) → TaskDone
 
 ## 11. 工作區結構
 
-每個團隊的工作區獨立：
+每個團隊的工作區位於 `<workspace>/<team-name>/`（由 `--workspace` 參數與團隊名稱組合）：
 
 ```
-workspace-{team-name}/
-├── inbox/
-├── outbox/
-├── shared/
-│   └── skills/
-├── status/
-├── history/
-├── session.json
-└── session.md
+<workspace>/
+└── {team-name}/
+    ├── inbox/
+    ├── outbox/
+    ├── shared/
+    │   └── skills/
+    ├── status/
+    ├── history/
+    ├── session.json
+    └── session.md
 ```
+
+**`CleanRunDirs()`：** `--new` 時自動清理 `inbox/`、`outbox/`、`status/` 目錄，保留 `shared/`、`history/`、`session.json`、`session.md`。
 
 ## 12. Agent 角色與權限
 
@@ -555,6 +558,13 @@ go build ./cmd/hufu
 - **模型識別**：`ollama/` 前綴會被自動移除
 - **YAML 限制**：`team.yml` 僅支援扁平結構
 - **MCP 工具命名**：MCP 工具名稱前綴為 `{server}__`
-- **Session 大小**：單一 session 最多保留 40 筆交換記錄
+- **Session 大小**：單一 session 最多保留 40 筆交換記錄（`maxSessionEntries`）
+- **對話歷史**：`conversationHistory` 最多保留 100 筆訊息（`maxConversationHistory`），由 `conversationHistoryMu` 保護
+- **並發限制**：`ExecuteTasks` 同時最多執行 8 個任務（`maxConcurrentTasks`）
+- **MCP 逾時**：`ExecuteTool` 預設 30 秒逾時（`mcpDefaultTimeout`），ctx 有 deadline 時優先使用
+- **所有任務失敗**：`ExecuteTasks` 若 `successCount == 0` 且有任務結果時，回傳錯誤而非空結果
+- **@名稱匹配**：`atNamePattern` 為 `\B@([\w][\w-]*)`，需 @ 前一個字元為非單詞邊界，避免匹配 email 位址
+- **Agent 檔案解析警告**：`parseAgentFile` 在失敗時輸出警告至 stderr（無效檔案不中斷載入）
 - **技能探索**：`skill.DiscoverSkills` 僅探索目錄層級（不遞迴深入）
 - **輸出截断**：bash 使用尾端截断；read 使用前端截断
+- **工作區隔離**：每個團隊的工作區為 `<workspace>/<team-name>/`，`CleanRunDirs` 僅清理 inbox/outbox/status

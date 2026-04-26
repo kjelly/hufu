@@ -20,7 +20,7 @@ type PromptSegment struct {
 	Content string
 }
 
-var atNamePattern = regexp.MustCompile(`@([\w][\w-]*)`)
+var atNamePattern = regexp.MustCompile(`\B@([\w][\w-]*)`)
 
 func HasAtName(s string) bool {
 	return atNamePattern.MatchString(s)

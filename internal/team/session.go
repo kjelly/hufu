@@ -11,6 +11,7 @@ import (
 
 const sessionFile = "session.json"
 const historyDirName = "history"
+const maxSessionEntries = 40
 
 type SessionEntry struct {
 	Role      string `json:"role"`
@@ -72,7 +73,7 @@ func (s *SessionData) ContextSummary() string {
 	b.WriteString(fmt.Sprintf("Previous session context (%d exchanges, %d rounds, since %s):\n\n",
 		len(s.Entries), s.Rounds, s.CreatedAt))
 	for i, entry := range s.Entries {
-		if i >= 20 {
+		if i >= maxSessionEntries {
 			remaining := len(s.Entries) - i
 			b.WriteString(fmt.Sprintf("... (%d earlier exchanges omitted)\n", remaining))
 			break
