@@ -32,6 +32,7 @@ var (
 	newSession          bool
 	agentTeamName       string
 	agentTeamSearchPath string
+	globalPromptReader  *readline.PromptReader
 )
 
 var (
@@ -51,6 +52,20 @@ var (
 	errorIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	teamStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
 )
+
+func exitInterrupt() {
+	if globalPromptReader != nil {
+		globalPromptReader.Close()
+	}
+	exitInterrupt()
+}
+
+func exitError() {
+	if globalPromptReader != nil {
+		globalPromptReader.Close()
+	}
+	exitError()
+}
 
 type lineWriter struct {
 	mu sync.Mutex
@@ -148,7 +163,7 @@ func main() {
 	rootCmd.Flags().StringVar(&agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams (default: .agent-teams/,~/.agent-teams/)")
 
 	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
+		exitError()
 	}
 }
 
@@ -164,6 +179,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "%s Readline initialization failed, falling back to basic input: %v\n", errStyle.Render("⚠"), err)
 		pr = nil
 	}
+	globalPromptReader = pr
 	defer func() {
 		if pr != nil {
 			pr.Close()
@@ -258,7 +274,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 			}
 			if chosen == "" {
 				fmt.Fprintf(os.Stderr, "%s No team selected.\n", errStyle.Render("✗"))
-				os.Exit(1)
+				exitError()
 			}
 			initialTeam = chosen
 			initialSegments, err = team.ParsePromptWithLazyAgents(prompt, registry, initialTeam)
@@ -523,7 +539,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
 					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-					os.Exit(130)
+					exitInterrupt()
 				}
 				team.SaveSession(tc.session.Workspace, tc.sessionData)
 				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
@@ -535,7 +551,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
 					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-					os.Exit(130)
+					exitInterrupt()
 				}
 				team.SaveSession(tc.session.Workspace, tc.sessionData)
 				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
@@ -575,7 +591,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
 					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-					os.Exit(130)
+					exitInterrupt()
 				}
 				return strings.Join(results, "\n\n"), fmt.Errorf("direct agent @%s failed: %w", seg.Name, err)
 			}
@@ -605,7 +621,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 					if ctx.Err() == context.Canceled {
 						team.SaveSession(tc.session.Workspace, tc.sessionData)
 						fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-						os.Exit(130)
+						exitInterrupt()
 					}
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
 					team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
@@ -617,7 +633,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 					if ctx.Err() == context.Canceled {
 						team.SaveSession(tc.session.Workspace, tc.sessionData)
 						fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-						os.Exit(130)
+						exitInterrupt()
 					}
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
 					team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
@@ -654,7 +670,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
 					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-					os.Exit(130)
+					exitInterrupt()
 				}
 				team.SaveSession(tc.session.Workspace, tc.sessionData)
 				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
@@ -666,7 +682,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
 					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-					os.Exit(130)
+					exitInterrupt()
 				}
 				team.SaveSession(tc.session.Workspace, tc.sessionData)
 				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
@@ -897,7 +913,7 @@ func askUserForPromptFallback() string {
 	prompt := strings.TrimSpace(input)
 	if prompt == "" {
 		fmt.Fprintf(os.Stderr, "%s No prompt provided.\n", errStyle.Render("✗"))
-		os.Exit(1)
+		exitError()
 	}
 	return prompt
 }
@@ -950,15 +966,15 @@ func askUserForPrompt(pr *readline.PromptReader) string {
 	if err != nil {
 		if err == ergoreadline.ErrInterrupt || err == io.EOF {
 			fmt.Fprintf(os.Stderr, "\n")
-			os.Exit(130)
+			exitInterrupt()
 		}
 		fmt.Fprintf(os.Stderr, "%s Input error: %v\n", errStyle.Render("✗"), err)
-		os.Exit(1)
+		exitError()
 	}
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		fmt.Fprintf(os.Stderr, "%s No prompt provided.\n", errStyle.Render("✗"))
-		os.Exit(1)
+		exitError()
 	}
 	return prompt
 }
@@ -976,7 +992,7 @@ func askUserForTeam(teams []string, pr *readline.PromptReader) string {
 	if err != nil {
 		if err == ergoreadline.ErrInterrupt || err == io.EOF {
 			fmt.Fprintf(os.Stderr, "\n")
-			os.Exit(130)
+			exitInterrupt()
 		}
 		return ""
 	}
