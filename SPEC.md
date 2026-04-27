@@ -711,6 +711,44 @@ type StatusEvent struct {
 
 使用 builder 模式鏈式呼叫：`c.newEvent("start").withAgent(name).withMessage(msg)`
 
+### Coordinator 預設提示詞
+
+當 Agent 定義中沒有指定 `system` 時，使用 `defaultOrchestratorSystem` 作為預設模板：
+
+```go
+const defaultOrchestratorSystem = `You are the orchestrator of "{{TEAM_NAME}}", a software development team with {{AGENT_COUNT}} members: {{AGENT_NAMES}}.
+
+Your role is to coordinate the team: break down user requests into concrete tasks, delegate them to the right members, and synthesize the results into a coherent response.
+...`
+```
+
+### 模板變數
+
+`expandDefaultOrchestratorTemplate()` 自動替換以下變數：
+
+| 變數 | 說明 |
+|------|------|
+| `{{TEAM_NAME}}` | 團隊名稱（`c.session.Config.Name`） |
+| `{{AGENT_COUNT}}` | Worker Agent 數量 |
+| `{{AGENT_NAMES}}` | Worker Agent 名稱列表（逗號分隔） |
+
+### GetOrchestratorDef() 預設行為
+
+當團隊中沒有明確的 coordinator Agent 定義時，`GetOrchestratorDef()` 返回預設定義：
+
+```go
+return &agent.AgentDef{
+    Name:        "coordinator",
+    Description: "Default team coordinator",
+    Role:        "coordinator",
+    Tools:       "ask_user",
+    System:      "",  // 使用 defaultOrchestratorSystem
+    MaxRetries:  -1,
+    Generation:  c.session.Config.Generation,
+    ProviderURL: c.session.Config.ProviderURL,
+}
+```
+
 ## 14. Agent 角色與權限
 
 | 角色 | 可用工具 | 說明 |
