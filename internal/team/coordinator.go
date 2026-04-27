@@ -650,7 +650,24 @@ func (c *Coordinator) GetOrchestratorDef() *agent.AgentDef {
 			return def
 		}
 	}
-	return nil
+	return &agent.AgentDef{
+		Name:        "coordinator",
+		Description: "Default team coordinator",
+		Role:        "coordinator",
+		Tools:       "ask_user",
+		System:      "",
+		MaxRetries:  -1,
+		Generation:  c.session.Config.Generation,
+		ProviderURL: c.session.Config.ProviderURL,
+	}
+}
+
+func (c *Coordinator) expandDefaultOrchestratorTemplate(tmpl string) string {
+	workerNames := c.workerNameList()
+	s := strings.ReplaceAll(tmpl, "{{TEAM_NAME}}", c.session.Config.Name)
+	s = strings.ReplaceAll(s, "{{AGENT_COUNT}}", fmt.Sprintf("%d", len(workerNames)))
+	s = strings.ReplaceAll(s, "{{AGENT_NAMES}}", strings.Join(workerNames, ", "))
+	return s
 }
 
 func (c *Coordinator) Round() int { return c.round }
@@ -760,7 +777,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	systemPrompt := orchDef.System
 	if systemPrompt == "" {
-		systemPrompt = defaultOrchestratorSystem
+		systemPrompt = c.expandDefaultOrchestratorTemplate(defaultOrchestratorSystem)
 	}
 	systemPrompt += "\n\n" + c.BuildOrchestratorPrompt()
 
@@ -917,7 +934,9 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	return finalResult, nil
 }
 
-const defaultOrchestratorSystem = `You are a team coordinator. You ONLY coordinate — you do NOT do implementation work yourself.
+const defaultOrchestratorSystem = `You are the orchestrator of "{{TEAM_NAME}}", a software development team with {{AGENT_COUNT}} members: {{AGENT_NAMES}}.
+
+Your role is to coordinate the team: break down user requests into concrete tasks, delegate them to the right members, and synthesize the results into a coherent response.
 
 Rules:
 - You MUST use run_agents to delegate ALL work to team members
