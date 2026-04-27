@@ -1,7 +1,6 @@
 ---
 name: reviewer
 description: Code reviewer — audits quality, security, correctness
-model: ollama/qwen3:8b
 max-tokens: 4096
 temperature: 0.2
 role: worker

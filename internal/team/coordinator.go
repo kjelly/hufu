@@ -119,7 +119,7 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"agent":         map[string]any{"type": "string", "description": "Agent name to delegate to"},
+						"agent":         map[string]any{"type": "string", "enum": t.coordinator.workerNameList(), "description": "Agent name to delegate to"},
 						"task":          map[string]any{"type": "string", "description": "Task description for the agent"},
 						"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional files from the workspace shared/ directory to provide as context"},
 					},
@@ -442,10 +442,17 @@ func (c *Coordinator) runAgentWithStatus(ctx context.Context, ag fantasy.Agent, 
 
 func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message) (string, []fantasy.StepResult, error) {
 	reportFn := c.reportStatus
+	workspace := c.session.Workspace
+	teamName := c.session.Config.Name
+	logWrite := func(entry string) { writeLLMLog(workspace, teamName, agentName, entry) }
 
 	streamCall := fantasy.AgentStreamCall{
 		Prompt:   prompt,
 		Messages: history,
+		PrepareStep: func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+			llmLogRequest(logWrite, opts)
+			return ctx, fantasy.PrepareStepResult{}, nil
+		},
 		OnStepStart: func(stepNumber int) error {
 			reportFn(c.newEvent("step").withAgent(agentName).withStep(stepNumber).withMessage(fmt.Sprintf("step %d", stepNumber)))
 			return nil
@@ -456,6 +463,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				argsPreview = argsPreview[:200] + "..."
 			}
 			reportFn(c.newEvent("tool_call").withAgent(agentName).withTool(tc.ToolName, argsPreview))
+			llmLogStreamEvent(logWrite, "tool_call", formatToolCallContent(tc))
 			return nil
 		},
 		OnToolResult: func(tr fantasy.ToolResultContent) error {
@@ -466,10 +474,20 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				}
 			}
 			reportFn(c.newEvent("tool_result").withAgent(agentName).withToolResult(tr.ToolName, resultPreview))
+			llmLogStreamEvent(logWrite, "tool_result", formatToolResultContent(tr))
 			return nil
 		},
 		OnTextDelta: func(id, text string) error {
 			reportFn(c.newEvent("text").withAgent(agentName).withMessage(text))
+			logWrite(text)
+			return nil
+		},
+		OnReasoningDelta: func(id, text string) error {
+			logWrite(text)
+			return nil
+		},
+		OnStreamFinish: func(usage fantasy.Usage, finishReason fantasy.FinishReason, providerMetadata fantasy.ProviderMetadata) error {
+			llmLogStreamFinish(logWrite, finishReason, usage)
 			return nil
 		},
 	}
@@ -573,6 +591,7 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 	b.WriteString("9. When satisfied, call the finish tool with your final response\n\n")
 
 	b.WriteString("## Available Agents\n\n")
+	fmt.Fprintf(&b, "IMPORTANT: You MUST use these exact agent names in run_agents: %s. Do NOT invent or modify agent names.\n\n", strings.Join(workerNames, ", "))
 	for _, desc := range workerDescs {
 		fmt.Fprintf(&b, "- %s\n", desc)
 	}

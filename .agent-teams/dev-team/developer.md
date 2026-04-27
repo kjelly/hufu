@@ -1,7 +1,6 @@
 ---
 name: developer
 description: Implementation specialist — writes production code
-model: ollama/qwen3:8b
 max-tokens: 8192
 temperature: 0.2
 role: worker

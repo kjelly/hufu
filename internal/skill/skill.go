@@ -7,12 +7,12 @@ import (
 )
 
 type SkillDef struct {
-	Name        string
-	Description string
+	Name         string
+	Description  string
 	AllowedTools string
-	Content     string
-	Path        string
-	Summary     string
+	Content      string
+	Path         string
+	Summary      string
 }
 
 func parseSkillFile(path string) *SkillDef {

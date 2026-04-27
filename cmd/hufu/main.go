@@ -36,6 +36,34 @@ var (
 	globalPromptReader  *readline.PromptReader
 )
 
+var activeStatusFlusher struct {
+	mu       sync.Mutex
+	w        *lineWriter
+	taskDisp *taskDisplay
+}
+
+func setStatusFlusher(w *lineWriter, taskDisp *taskDisplay) {
+	activeStatusFlusher.mu.Lock()
+	defer activeStatusFlusher.mu.Unlock()
+	activeStatusFlusher.w = w
+	activeStatusFlusher.taskDisp = taskDisp
+}
+
+func init() {
+	tools.SetOnAskUserDone(func() {
+		activeStatusFlusher.mu.Lock()
+		w := activeStatusFlusher.w
+		td := activeStatusFlusher.taskDisp
+		activeStatusFlusher.mu.Unlock()
+		if w != nil {
+			w.flush()
+		}
+		if td != nil {
+			td.refreshIfDirty()
+		}
+	})
+}
+
 var (
 	boldStyle    = lipgloss.NewStyle().Bold(true)
 	dimStyle     = lipgloss.NewStyle().Faint(true)
@@ -69,13 +97,33 @@ func exitError() {
 }
 
 type lineWriter struct {
-	mu sync.Mutex
+	mu  sync.Mutex
+	buf []string
 }
 
 func (w *lineWriter) write(s string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if tools.IsAskUserActive() {
+		w.buf = append(w.buf, s)
+		return
+	}
+	if len(w.buf) > 0 {
+		for _, b := range w.buf {
+			fmt.Fprint(os.Stderr, b)
+		}
+		w.buf = w.buf[:0]
+	}
 	fmt.Fprint(os.Stderr, s)
+}
+
+func (w *lineWriter) flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, b := range w.buf {
+		fmt.Fprint(os.Stderr, b)
+	}
+	w.buf = w.buf[:0]
 }
 
 type taskDisplay struct {
@@ -83,6 +131,7 @@ type taskDisplay struct {
 	w       *lineWriter
 	tracker *team.TaskTracker
 	lines   int
+	dirty   bool
 }
 
 func newTaskDisplay(w *lineWriter, tracker *team.TaskTracker) *taskDisplay {
@@ -143,8 +192,25 @@ func (d *taskDisplay) clear() {
 }
 
 func (d *taskDisplay) update() {
+	if tools.IsAskUserActive() {
+		d.mu.Lock()
+		d.dirty = true
+		d.mu.Unlock()
+		return
+	}
 	d.clear()
 	d.render()
+}
+
+func (d *taskDisplay) refreshIfDirty() {
+	d.mu.Lock()
+	dirty := d.dirty
+	d.dirty = false
+	d.mu.Unlock()
+	if dirty {
+		d.clear()
+		d.render()
+	}
 }
 
 func main() {
@@ -538,6 +604,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			idleTimer := newIdleWarningTimer(w, 30*time.Second)
 			taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
 			setupStatusReporter(w, tc.coordinator, taskDisp, idleTimer)
+			setStatusFlusher(w, taskDisp)
 
 			fmt.Fprintf(os.Stderr, "\n%s Starting team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(teamName))
 
@@ -590,6 +657,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			idleTimer := newIdleWarningTimer(w, 30*time.Second)
 			taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
 			setupStatusReporter(w, tc.coordinator, taskDisp, idleTimer)
+			setStatusFlusher(w, taskDisp)
 
 			fmt.Fprintf(os.Stderr, "\n%s Direct invocation: @%s (team: %s)\n\n", boldStyle.Render("→"), agentStyle.Render(seg.Name), teamStyle.Render(currentTeamName))
 
@@ -669,6 +737,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			idleTimer := newIdleWarningTimer(w, 30*time.Second)
 			taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
 			setupStatusReporter(w, tc.coordinator, taskDisp, idleTimer)
+			setStatusFlusher(w, taskDisp)
 
 			fmt.Fprintf(os.Stderr, "\n%s Team %s processing...\n\n", boldStyle.Render("→"), teamStyle.Render(currentTeamName))
 
@@ -1134,7 +1203,7 @@ type promptInjector struct {
 func newPromptInjector(pr *readline.PromptReader) *promptInjector {
 	return &promptInjector{
 		ch:           make(chan string, 16),
-		wrapUpCh:    make(chan struct{}, 1),
+		wrapUpCh:     make(chan struct{}, 1),
 		promptReader: pr,
 	}
 }

@@ -103,3 +103,17 @@ func readShared(workspace, filename string) (string, error) {
 	}
 	return string(data), nil
 }
+
+func writeLLMLog(workspace, teamName, agentName, entry string) {
+	dir := filepath.Join(workspace, teamName, agentName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	path := filepath.Join(dir, "llm.log")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(entry)
+}

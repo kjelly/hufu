@@ -29,12 +29,12 @@ func TestParsePromptWithLazyAgents(t *testing.T) {
 	registry := newTestRegistry(t)
 
 	tests := []struct {
-		name        string
-		prompt      string
-		defaultTeam string
-		agentNames  []string
-		expectError bool
-		checkSegs   func(t *testing.T, lazy []PromptSegment, expanded []PromptSegment)
+		name         string
+		prompt       string
+		defaultTeam  string
+		agentNames   []string
+		expectError  bool
+		checkSegs    func(t *testing.T, lazy []PromptSegment, expanded []PromptSegment)
 		expectExpErr bool
 	}{
 		{
@@ -222,58 +222,58 @@ func TestSplitSegmentByAgents(t *testing.T) {
 	registry := newTestRegistry(t)
 
 	tests := []struct {
-		name       string
+		name      string
 		segment   PromptSegment
 		agents    []string
 		expectLen int
 		expectErr bool
 	}{
 		{
-			name:     "single agent at start",
-			segment:  PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@researcher find bugs"},
-			agents:   []string{"researcher", "writer"},
+			name:      "single agent at start",
+			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@researcher find bugs"},
+			agents:    []string{"researcher", "writer"},
 			expectLen: 2,
 		},
 		{
-			name:     "text before agent",
-			segment:  PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "first do X @researcher find bugs"},
-			agents:   []string{"researcher", "writer"},
+			name:      "text before agent",
+			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "first do X @researcher find bugs"},
+			agents:    []string{"researcher", "writer"},
 			expectLen: 2,
 		},
 		{
-			name:     "multiple agents",
-			segment:  PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@researcher find bugs @writer write docs"},
-			agents:   []string{"researcher", "writer"},
+			name:      "multiple agents",
+			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@researcher find bugs @writer write docs"},
+			agents:    []string{"researcher", "writer"},
 			expectLen: 3,
 		},
 		{
-			name:     "no agents in content",
-			segment:  PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "just plain text"},
-			agents:   []string{"researcher"},
+			name:      "no agents in content",
+			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "just plain text"},
+			agents:    []string{"researcher"},
 			expectLen: 1,
 		},
 		{
-			name:     "unknown agent",
-			segment:  PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@unknown find bugs"},
-			agents:   []string{"researcher"},
+			name:      "unknown agent",
+			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@unknown find bugs"},
+			agents:    []string{"researcher"},
 			expectErr: true,
 		},
 		{
-			name:     "team name in content",
-			segment:  PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@tether do something"},
-			agents:   []string{"researcher"},
+			name:      "team name in content",
+			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@tether do something"},
+			agents:    []string{"researcher"},
 			expectLen: 2,
 		},
 		{
-			name:     "empty content",
-			segment:  PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: ""},
-			agents:   []string{"researcher"},
+			name:      "empty content",
+			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: ""},
+			agents:    []string{"researcher"},
 			expectLen: 1,
 		},
 		{
-			name:     "non-switch-team segment",
-			segment:  PromptSegment{Type: SegmentText, Content: "hello"},
-			agents:   []string{"researcher"},
+			name:      "non-switch-team segment",
+			segment:   PromptSegment{Type: SegmentText, Content: "hello"},
+			agents:    []string{"researcher"},
 			expectLen: 1,
 		},
 	}

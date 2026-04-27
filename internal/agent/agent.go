@@ -23,29 +23,29 @@ type GenerationParams struct {
 }
 
 type AgentDef struct {
-	Name         string
-	Description  string
-	Tools        string
-	Role         string
-	System       string
-	Skills       string
-	Timeout      int64
-	MaxRetries   int
-	Generation   GenerationParams
-	ProviderURL  string
+	Name        string
+	Description string
+	Tools       string
+	Role        string
+	System      string
+	Skills      string
+	Timeout     int64
+	MaxRetries  int
+	Generation  GenerationParams
+	ProviderURL string
 }
 
 type TeamConfig struct {
-	Name           string
-	Description    string
-	MaxRounds      int
-	WorkspaceDir   string
-	Timeout        int64
-	MaxRetries     int
-	Generation     GenerationParams
-	Skills         string
-	SkillsExclude  string
-	ProviderURL    string
+	Name          string
+	Description   string
+	MaxRounds     int
+	WorkspaceDir  string
+	Timeout       int64
+	MaxRetries    int
+	Generation    GenerationParams
+	Skills        string
+	SkillsExclude string
+	ProviderURL   string
 }
 
 type OllamaProvider struct {

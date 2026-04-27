@@ -13,10 +13,10 @@ import (
 )
 
 type askUserArgs struct {
-	Question string       `json:"question"`
-	Type     string       `json:"type"`
-	Options  []askOption  `json:"options,omitempty"`
-	AllowAny bool         `json:"allow_any,omitempty"`
+	Question string      `json:"question"`
+	Type     string      `json:"type"`
+	Options  []askOption `json:"options,omitempty"`
+	AllowAny bool        `json:"allow_any,omitempty"`
 }
 
 type askOption struct {
@@ -97,6 +97,9 @@ func executeAskUser(call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 
 	StdinMu.Lock()
 	defer StdinMu.Unlock()
+
+	SetAskUserActive(true)
+	defer SetAskUserActive(false)
 
 	reader := bufio.NewReader(os.Stdin)
 

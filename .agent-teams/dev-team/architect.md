@@ -1,7 +1,6 @@
 ---
 name: architect
 description: System architect — designs structure, APIs, data models
-model: ollama/qwen3:8b
 max-tokens: 4096
 temperature: 0.3
 role: worker

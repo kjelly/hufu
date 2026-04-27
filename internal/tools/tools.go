@@ -7,11 +7,35 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"charm.land/fantasy"
 )
 
 var StdinMu sync.Mutex
+
+var askUserActive atomic.Int32
+
+var onAskUserDone func()
+
+func SetOnAskUserDone(fn func()) {
+	onAskUserDone = fn
+}
+
+func SetAskUserActive(active bool) {
+	if active {
+		askUserActive.Store(1)
+	} else {
+		askUserActive.Store(0)
+		if onAskUserDone != nil {
+			onAskUserDone()
+		}
+	}
+}
+
+func IsAskUserActive() bool {
+	return askUserActive.Load() == 1
+}
 
 type ToolOption func(*ToolConfig)
 
@@ -39,8 +63,8 @@ type coreTool struct {
 	pOpts   fantasy.ProviderOptions
 }
 
-func (t *coreTool) Info() fantasy.ToolInfo            { return t.info }
-func (t *coreTool) ProviderOptions() fantasy.ProviderOptions { return t.pOpts }
+func (t *coreTool) Info() fantasy.ToolInfo                          { return t.info }
+func (t *coreTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
 func (t *coreTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
 
 func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {

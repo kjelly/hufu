@@ -324,7 +324,7 @@ func (t *mcpAgentTool) Info() fantasy.ToolInfo {
 	}
 }
 
-func (t *mcpAgentTool) ProviderOptions() fantasy.ProviderOptions      { return t.pOpts }
+func (t *mcpAgentTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
 func (t *mcpAgentTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
 
 func (t *mcpAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {

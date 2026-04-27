@@ -34,7 +34,7 @@ func NewTeamRegistry(searchPaths []string) *TeamRegistry {
 	}
 	return &TeamRegistry{
 		searchPaths: expanded,
-		teams:      make(map[string]string),
+		teams:       make(map[string]string),
 	}
 }
 
