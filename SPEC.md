@@ -385,6 +385,9 @@ mcp-servers:
 
 - **type**：`single_choice`、`multiple_choice`、`free_text`、`mixed`
 - 回應格式：`{"answers": ["value"], "free_text": "text"}`
+- **輸入鎖定**：使用 `tools.StdinMu` 序列化 stdin 讀取，避免與信號處理器衝突
+- **狀態管理**：執行期間設定 `askUserActive` 標誌，完成後觸發 `onAskUserDone` 回調
+- **CLI 整合**：ask_user 活躍時暫停 status 輸出和 TODO 顯示，完成後重新整理
 
 ### 9.9 load_skill
 
@@ -402,6 +405,19 @@ mcp-servers:
 {"response": "這是給使用者的最終答案"}
 ```
 
+### 9.11 run_agents
+
+委派任務給 worker agents（僅協調者可用）。
+
+```json
+{"tasks": [{"agent": "researcher", "task": "find bugs", "context_files": ["shared/spec.md"]}]}
+```
+
+- **agent**：必須是團隊中存在的 worker 名稱（使用 enum 限制）
+- **task**：任務描述
+- **context_files**：可選，從 workspace/shared/ 目錄提供上下文檔案
+- **批次委派**：支援同時委派多個任務（並發執行，最多 8 個）
+
 ## 10. 協調流程
 
 ### 10.1 啟動序列
@@ -413,7 +429,54 @@ mcp-servers:
 5. 執行 segments（`executeSegments`）
 6. 輸出結果
 
-### 10.2 Prompt 注入（Signal 機制）
+### 10.2 Status 輸出管理
+
+**`lineWriter`：** 自定義輸出緩衝器，支援 ask_user 期間暫停輸出。
+
+```go
+type lineWriter struct {
+    mu  sync.Mutex
+    buf []string  // 暫存輸出
+}
+
+func (w *lineWriter) write(s string)
+func (w *lineWriter) flush()  // 釋放暫存輸出
+```
+
+- 當 `tools.IsAskUserActive()` 為 true 時，輸出暫存至 `buf`
+- ask_user 完成後，`onAskUserDone` 回調觸發 `flush()` 釋放輸出
+
+**`taskDisplay`：** TODO 顯示管理器。
+
+```go
+type taskDisplay struct {
+    mu      sync.Mutex
+    w       *lineWriter
+    tracker *team.TaskTracker
+    lines   int
+    dirty   bool  // 標記是否需要重新整理
+}
+
+func (d *taskDisplay) update()
+func (d *taskDisplay) refreshIfDirty()  // 若 dirty 則重新渲染
+```
+
+- ask_user 活躍時設定 `dirty = true`，暫停渲染
+- ask_user 完成後，`refreshIfDirty()` 檢查並重新渲染 TODO 顯示
+
+**`activeStatusFlusher`：** 全域指標，供 `onAskUserDone` 回調存取。
+
+```go
+var activeStatusFlusher struct {
+    mu       sync.Mutex
+    w        *lineWriter
+    taskDisp *taskDisplay
+}
+
+func setStatusFlusher(w *lineWriter, taskDisp *taskDisplay)
+```
+
+### 10.3 Prompt 注入（Signal 機制）
 
 在協調者執行期間，使用者可透過信號注入額外 prompt：
 
@@ -469,7 +532,7 @@ injector.wrapUpCh ──► 優雅終止？ ──► ContinueWithPrompt(wrapUp=
 
 **`projectDir` 變更：** `Coordinator` 新增 `projectDir` 欄位（`os.Getwd()`），用於設定 Agent 的 `WorkDir`。工作區路徑（`session.Workspace`）現在僅用於 session 儲存，不再作為 Agent 的工作目錄。
 
-### 10.3 TODO 任務追蹤系統
+### 10.4 TODO 任務追蹤系統
 
 `TaskTracker` 內建 `TodoList`，提供結構化的任務追蹤：
 
@@ -521,14 +584,14 @@ AddBatch() → TaskPending → UpdateStatus(TaskInProgress) → TaskDone
   ✗ 4. researcher attempt 1 failed: ...
 ```
 
-### 10.3 Session 管理
+### 10.5 Session 管理
 
 - 每個團隊有獨立的工作區，各自維護獨立的 session
 - 團隊切換時自動儲存舊 session
 - `--new` 參數歸檔舊 session 並開始新 session
 - 中斷處理：Ctrl+C 時自動儲存當前團隊 session
 
-## 11. 工作區結構
+## 12. 工作區結構
 
 每個團隊的工作區位於 `<workspace>/<team-name>/`（由 `--workspace` 參數與團隊名稱組合）：
 
@@ -547,7 +610,7 @@ AddBatch() → TaskPending → UpdateStatus(TaskInProgress) → TaskDone
 
 **`CleanRunDirs()`：** `--new` 時自動清理 `inbox/`、`outbox/`、`status/` 目錄，保留 `shared/`、`history/`、`session.json`、`session.md`。
 
-### 10.3 優雅關機（Graceful Shutdown）
+### 12.1 優雅關機（Graceful Shutdown）
 
 支援 Ctrl+C 兩階段終止：
 
@@ -563,7 +626,7 @@ wrapUpPromptTemplate = "The user has requested that you wrap up immediately. IMP
 
 **`activeCoordinator`**：儲存當前活躍的協調者指標，供 signal handler 呼叫 `SetWrapUp()`。
 
-## 11. StatusEvent 結構
+## 13. StatusEvent 結構
 
 ```go
 type StatusEvent struct {
@@ -581,14 +644,14 @@ type StatusEvent struct {
 
 使用 builder 模式鏈式呼叫：`c.newEvent("start").withAgent(name).withMessage(msg)`
 
-## 12. Agent 角色與權限
+## 14. Agent 角色與權限
 
 | 角色 | 可用工具 | 說明 |
 |------|----------|------|
 | `coordinator` | `run_agents`, `finish`, `load_skill`, `ask_user` | 只能協調，不能自行執行任務 |
 | `worker`（預設） | 指定的工具集 | 執行實際工作 |
 
-## 13. 建構與發布
+## 15. 建構與發布
 
 ### 13.1 建構
 
@@ -606,7 +669,7 @@ go build ./cmd/hufu
 觸發條件：推送 `v*` 標籤。
 使用 GoReleaser 自動發布至 GitHub Releases。
 
-## 15. 限制與約束
+## 16. 限制與約束
 
 - **路徑解析**：相對路徑以工作區目錄為基準
 - **模型識別**：`ollama/` 前綴會被自動移除
@@ -622,3 +685,5 @@ go build ./cmd/hufu
 - **技能探索**：`skill.DiscoverSkills` 僅探索目錄層級（不遞迴深入）
 - **輸出截断**：bash 使用尾端截断；read 使用前端截断
 - **工作區隔離**：每個團隊的工作區為 `<workspace>/<team-name>/`，`CleanRunDirs` 僅清理 inbox/outbox/status
+- **ask_user 輸出管理**：ask_user 活躍時暫存 status 輸出和 TODO 顯示，完成後重新整理
+- **run_agents agent 名稱限制**：使用 JSON Schema enum 強制 coordinator 使用正確的 agent 名稱
