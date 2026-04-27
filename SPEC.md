@@ -626,6 +626,61 @@ wrapUpPromptTemplate = "The user has requested that you wrap up immediately. IMP
 
 **`activeCoordinator`**：儲存當前活躍的協調者指標，供 signal handler 呼叫 `SetWrapUp()`。
 
+## 12.2 LLM 日誌記錄
+
+`internal/team/llm_log.go` 提供 LLM 對話記錄功能，用於除錯和審計。
+
+### 資料流
+
+```
+Agent.Run() → AgentStreamCall callbacks → llm_log functions → workspace/{agent-name}/llm.log
+```
+
+### 主要函式
+
+| 函式 | 說明 |
+|------|------|
+| `llmLogRequest(workspace, agentName, opts)` | 記錄每個 step 的請求（messages、model、step number） |
+| `llmLogStreamEvent(workspace, agentName, eventType, content)` | 記錄 streaming 事件（tool_call、tool_result） |
+| `llmLogStreamFinish(workspace, agentName, finishReason, usage)` | 記錄完成原因和 token 用量 |
+| `writeLLMLog(workspace, agentName, entry)` | 寫入單一 log 項目到檔案 |
+
+### 輸出格式
+
+```
+[2024-01-15T10:30:00Z] === REQUEST step=1 model=qwen3:8b ===
+[2024-01-15T10:30:00Z] user
+<tool_call name="bash" id="abc123">{"command": "ls"}</tool_call>
+
+[2024-01-15T10:30:01Z] <tool_call>...</tool_call>
+[2024-01-15T10:30:02Z] <tool_result>...</tool_result>
+[2024-01-15T10:30:05Z] === RESPONSE finish_reason=stop tokens_in=1500 tokens_out=250 ===
+```
+
+### Stream Callbacks
+
+`runAgentWithStatusAndHistory()` 註冊以下 callbacks：
+
+```go
+AgentStreamCall{
+    PrepareStep:   llmLogRequest,           // 記錄請求
+    OnToolCall:    llmLogStreamEvent,        // 記錄工具呼叫
+    OnToolResult:  llmLogStreamEvent,        // 記錄工具結果
+    OnTextDelta:   writeLLMLog,              // 記錄文字輸出
+    OnReasoningDelta: writeLLMLog,           // 記錄思考過程
+    OnStreamFinish: llmLogStreamFinish,      // 記錄完成狀態
+}
+```
+
+### 訊息格式化
+
+`formatMessagePart()` 將 `fantasy.MessagePart` 轉換為 XML 標記：
+
+- `ContentTypeText` → 直接輸出文字
+- `ContentTypeReasoning` → `<reasoning>...</reasoning>`
+- `ContentTypeToolCall` → `<tool_call name="..." id="...">...</tool_call>`
+- `ContentTypeToolResult` → `<tool_result id="...">...</tool_result>`
+
 ## 13. StatusEvent 結構
 
 ```go
@@ -686,4 +741,5 @@ go build ./cmd/hufu
 - **輸出截断**：bash 使用尾端截断；read 使用前端截断
 - **工作區隔離**：每個團隊的工作區為 `<workspace>/<team-name>/`，`CleanRunDirs` 僅清理 inbox/outbox/status
 - **ask_user 輸出管理**：ask_user 活躍時暫存 status 輸出和 TODO 顯示，完成後重新整理
-- **run_agents agent 名稱限制**：使用 JSON Schema enum 強制 coordinator 使用正確的 agent 名稱
+- **LLM 日誌隔離**：每個 agent 的 log 位於 `workspace/{agent-name}/llm.log`，自動建立目錄
+- **LLM reasoning 記錄**：支援記錄模型的思考過程（`<reasoning>` 標籤）

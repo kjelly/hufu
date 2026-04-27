@@ -245,6 +245,60 @@ type Coordinator struct {
 - `ExecuteTasks()` — 偵測 wrap-up 後拒絕新任務
 - `ContinueWithPrompt(wrapUp=true)` — 使用 `wrapUpPromptTemplate` 強制總結
 
+## LLM 日誌記錄
+
+Coordinator 在執行 Agent 時記錄 LLM 對話，用於除錯和審計。
+
+### 日誌位置
+
+```
+{workspace}/{agent-name}/llm.log
+```
+
+每個 Agent 有独立的日誌檔案，例如：
+- `workspace/coordinator/llm.log`
+- `workspace/researcher/llm.log`
+
+### Stream Callbacks
+
+`runAgentWithStatusAndHistory()` 註冊以下 callbacks：
+
+```go
+AgentStreamCall{
+    PrepareStep:    llmLogRequest,         // 記錄每次 step 的請求
+    OnToolCall:     llmLogStreamEvent,      // 記錄工具呼叫
+    OnToolResult:   llmLogStreamEvent,      // 記錄工具結果
+    OnTextDelta:    writeLLMLog,            // 記錄文字輸出
+    OnReasoningDelta: writeLLMLog,          // 記錄思考過程
+    OnStreamFinish: llmLogStreamFinish,     // 記錄完成狀態
+}
+```
+
+### 訊息格式化
+
+`formatMessagePart()` 將 `fantasy.MessagePart` 轉換為 XML 標記：
+
+| Part Type | 輸出格式 |
+|-----------|----------|
+| `ContentTypeText` | 直接文字 |
+| `ContentTypeReasoning` | `<reasoning>...</reasoning>` |
+| `ContentTypeToolCall` | `<tool_call name="..." id="...">...</tool_call>` |
+| `ContentTypeToolResult` | `<tool_result id="...">...</tool_result>` |
+
+### 日誌內容範例
+
+```
+[2024-01-15T10:30:00Z] === REQUEST step=1 model=qwen3:8b ===
+[2024-01-15T10:30:00Z] system
+You are the coordinator...
+[2024-01-15T10:30:00Z] user
+Build a REST API...
+
+[2024-01-15T10:30:01Z] <tool_call name="run_agents" id="abc">...</tool_call>
+[2024-01-15T10:30:02Z] <tool_result>...</tool_result>
+[2024-01-15T10:30:05Z] === RESPONSE finish_reason=stop tokens_in=1500 tokens_out=250 ===
+```
+
 ## 重要提示
 
 **Agent 名稱強制匹配：**
