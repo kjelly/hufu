@@ -125,12 +125,22 @@ func TestParsePromptWithLazyAgents(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name:         "@bad-agent in team",
-			prompt:       "@nonexistent find bugs",
-			defaultTeam:  "delegate",
-			agentNames:   []string{"researcher", "writer", "checker"},
-			expectError:  false,
-			expectExpErr: true,
+			name:        "@bad-agent in team",
+			prompt:      "@nonexistent find bugs",
+			defaultTeam: "delegate",
+			agentNames:  []string{"researcher", "writer", "checker"},
+			expectError: false,
+			checkSegs: func(t *testing.T, lazy []PromptSegment, expanded []PromptSegment) {
+				hasUnknownText := false
+				for _, s := range expanded {
+					if s.Type == SegmentText && strings.Contains(s.Content, "@nonexistent") {
+						hasUnknownText = true
+					}
+				}
+				if !hasUnknownText {
+					t.Errorf("expanded: expected @nonexistent to be treated as text, got %v", expanded)
+				}
+			},
 		},
 		{
 			name:        "@teamA then @teamB",
@@ -256,7 +266,7 @@ func TestSplitSegmentByAgents(t *testing.T) {
 			name:      "unknown agent",
 			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@unknown find bugs"},
 			agents:    []string{"researcher"},
-			expectErr: true,
+			expectLen: 1,
 		},
 		{
 			name:      "team name in content",

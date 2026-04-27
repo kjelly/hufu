@@ -49,6 +49,8 @@ type Coordinator struct {
 	conversationHistoryMu sync.Mutex
 	projectDir            string
 	wrapUp              atomic.Int32
+	currentAgentName     string
+	currentAgentNameMu   sync.RWMutex
 }
 
 func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, verbose bool) *Coordinator {
@@ -59,7 +61,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		fmt.Fprintf(os.Stderr, "⚠ Failed to create Ollama provider: %v\n", err)
 		os.Exit(1)
 	}
-	return &Coordinator{
+	c := &Coordinator{
 		provider:     prov,
 		session:      session,
 		mcpManager:   mcpManager,
@@ -71,6 +73,8 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		skills:       session.Skills,
 		projectDir:   projectDir,
 	}
+	c.coreTools = append(c.coreTools, &workerAgentTool{coordinator: c}, &todoTool{coordinator: c})
+	return c
 }
 
 func (c *Coordinator) SetStatusReporter(fn StatusReporter) {
@@ -100,6 +104,18 @@ func (c *Coordinator) TaskTracker() *TaskTracker {
 	return c.taskTracker
 }
 
+func (c *Coordinator) SetCurrentAgent(name string) {
+	c.currentAgentNameMu.Lock()
+	c.currentAgentName = name
+	c.currentAgentNameMu.Unlock()
+}
+
+func (c *Coordinator) GetCurrentAgent() string {
+	c.currentAgentNameMu.RLock()
+	defer c.currentAgentNameMu.RUnlock()
+	return c.currentAgentName
+}
+
 func (c *Coordinator) RunAgentsTool() fantasy.AgentTool {
 	return &runAgentsTool{coordinator: c}
 }
@@ -111,7 +127,7 @@ type runAgentsTool struct {
 
 func (t *runAgentsTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
-		Name:        "run_agents",
+		Name:        "agent",
 		Description: "Delegate tasks to team workers. Runs all tasks in parallel. Returns structured results from each agent.",
 		Parameters: map[string]any{
 			"tasks": map[string]any{
@@ -228,6 +244,277 @@ func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 		available[i] = s.Name
 	}
 	return fantasy.NewTextErrorResponse(fmt.Sprintf("skill %q not found (available: %v)", args.Name, available)), nil
+}
+
+type workerAgentTool struct {
+	coordinator *Coordinator
+	pOpts        fantasy.ProviderOptions
+}
+
+func (t *workerAgentTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "agent",
+		Description: "Create a sub-agent to execute a specific task. The sub-agent inherits the same tool set as you. Returns the sub-agent's output.",
+		Parameters: map[string]any{
+			"name": map[string]any{
+				"type":        "string",
+				"description": "A descriptive name for this sub-agent invocation",
+			},
+			"task": map[string]any{
+				"type":        "string",
+				"description": "The task description for the sub-agent to execute",
+			},
+		},
+		Required: []string{"name", "task"},
+	}
+}
+
+func (t *workerAgentTool) ProviderOptions() fantasy.ProviderOptions      { return t.pOpts }
+func (t *workerAgentTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
+
+func (t *workerAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		Name string `json:"name"`
+		Task string `json:"task"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+	if args.Name == "" {
+		return fantasy.NewTextErrorResponse("name is required"), nil
+	}
+	if args.Task == "" {
+		return fantasy.NewTextErrorResponse("task is required"), nil
+	}
+
+	callerName := t.coordinator.GetCurrentAgent()
+	subAgentLabel := callerName + "/" + args.Name
+
+	result, err := t.coordinator.ExecuteSubAgent(ctx, subAgentLabel, args.Task)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+	return fantasy.NewTextResponse(result), nil
+}
+
+func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task string) (string, error) {
+	if c.IsWrapUp() {
+		return "", fmt.Errorf("wrap-up in progress: cannot create sub-agent")
+	}
+
+	todoItems := c.taskTracker.TodoList().AddBatch([]struct {
+		Agent string
+		Desc  string
+	}{{Agent: name, Desc: task}})
+	todoID := todoItems[0].ID
+
+	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	c.report(c.newEvent("start").withAgent(name).withMessage(task))
+
+	def := &agent.AgentDef{
+		Name:        name,
+		Description: "Sub-agent for task: " + task,
+		Role:        "worker",
+		Tools:       "",
+		System:      "You are a sub-agent. Complete the assigned task efficiently. Use the tools available to you.",
+		MaxRetries:  -1,
+		Generation:  c.session.Config.Generation,
+		ProviderURL: c.session.Config.ProviderURL,
+	}
+
+	agentTools := agent.SelectTools(c.coreTools, def.Tools)
+	if c.mcpManager != nil {
+		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
+	}
+
+	ag, err := agent.CreateAgent(ctx, c.provider, agent.AgentConfig{
+		Def:        def,
+		TeamConfig: &c.session.Config,
+		WorkDir:    c.projectDir,
+	}, agentTools)
+	if err != nil {
+		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		c.report(c.newEvent("error").withAgent(name).withMessage(err.Error()))
+		return "", fmt.Errorf("failed to create sub-agent: %w", err)
+	}
+
+	agentTimeout := time.Duration(c.session.Config.Timeout) * time.Second
+	taskCtx, cancel := context.WithTimeout(ctx, agentTimeout)
+	defer cancel()
+
+	currentAgent := c.GetCurrentAgent()
+	c.SetCurrentAgent(name)
+	output, _, err := c.runAgentWithStatusAndHistory(taskCtx, ag, name, task, nil)
+	c.SetCurrentAgent(currentAgent)
+	cancel()
+
+	if err != nil {
+		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		c.report(c.newEvent("error").withAgent(name).withMessage(err.Error()))
+		return "", fmt.Errorf("sub-agent failed: %w", err)
+	}
+
+	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	c.report(c.newEvent("done").withAgent(name).withMessage("completed"))
+	return output, nil
+}
+
+type todoTool struct {
+	coordinator *Coordinator
+	pOpts       fantasy.ProviderOptions
+}
+
+func (t *todoTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "todo",
+		Description: "Manage your task list to track progress. Create items to plan your work, update their status as you progress, and list your items to review.",
+		Parameters: map[string]any{
+			"action": map[string]any{
+				"type":        "string",
+				"description": "Action to perform: create, update, or list",
+			},
+			"items": map[string]any{
+				"type":        "array",
+				"items":        map[string]any{"type": "string"},
+				"description": "Task descriptions to create (used with action=create)",
+			},
+			"id": map[string]any{
+				"type":        "string",
+				"description": "The TODO item ID to update (used with action=update)",
+			},
+			"status": map[string]any{
+				"type":        "string",
+				"description": "New status: in_progress or done (used with action=update)",
+			},
+			"detail": map[string]any{
+				"type":        "string",
+				"description": "Optional detail or note (used with action=update)",
+			},
+		},
+		Required: []string{"action"},
+	}
+}
+
+func (t *todoTool) ProviderOptions() fantasy.ProviderOptions      { return t.pOpts }
+func (t *todoTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
+
+func (t *todoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		Action string   `json:"action"`
+		Items  []string `json:"items"`
+		ID     string   `json:"id"`
+		Status string   `json:"status"`
+		Detail string   `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+
+	callerName := t.coordinator.GetCurrentAgent()
+	if callerName == "" {
+		callerName = "agent"
+	}
+
+	switch args.Action {
+	case "create":
+		return t.handleCreate(callerName, args.Items)
+	case "update":
+		return t.handleUpdate(callerName, args.ID, args.Status, args.Detail)
+	case "list":
+		return t.handleList(callerName)
+	default:
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown action %q (valid: create, update, list)", args.Action)), nil
+	}
+}
+
+func (t *todoTool) handleCreate(callerName string, items []string) (fantasy.ToolResponse, error) {
+	if len(items) == 0 {
+		return fantasy.NewTextErrorResponse("items is required for create action"), nil
+	}
+
+	batch := make([]struct {
+		Agent string
+		Desc  string
+	}, len(items))
+	for i, desc := range items {
+		batch[i] = struct {
+			Agent string
+			Desc  string
+		}{Agent: callerName, Desc: desc}
+	}
+
+	added := t.coordinator.taskTracker.TodoList().AddBatch(batch)
+	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
+
+	var b strings.Builder
+	b.WriteString("Created TODO items:\n")
+	for _, item := range added {
+		fmt.Fprintf(&b, "- %s: %s [%s]\n", item.ID, item.Desc, item.Status)
+	}
+	return fantasy.NewTextResponse(b.String()), nil
+}
+
+func (t *todoTool) handleUpdate(callerName string, id string, status string, detail string) (fantasy.ToolResponse, error) {
+	if id == "" {
+		return fantasy.NewTextErrorResponse("id is required for update action"), nil
+	}
+
+	todoItems := t.coordinator.taskTracker.TodoList().Items()
+	var targetItem *TodoItem
+	for _, item := range todoItems {
+		if item.ID == id {
+			targetItem = item
+			break
+		}
+	}
+	if targetItem == nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("TODO item %q not found", id)), nil
+	}
+	if targetItem.Agent != callerName {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("cannot update TODO item %q: it belongs to agent %q", id, targetItem.Agent)), nil
+	}
+
+	var taskStatus TaskStatus
+	switch status {
+	case "in_progress":
+		taskStatus = TaskInProgress
+	case "done":
+		taskStatus = TaskDone
+	default:
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid status %q (valid: in_progress, done)", status)), nil
+	}
+
+	t.coordinator.taskTracker.TodoList().UpdateStatus(id, taskStatus, detail)
+	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
+
+	return fantasy.NewTextResponse(fmt.Sprintf("Updated TODO %s to %s", id, taskStatus)), nil
+}
+
+func (t *todoTool) handleList(callerName string) (fantasy.ToolResponse, error) {
+	todoItems := t.coordinator.taskTracker.TodoList().Items()
+	var myItems []*TodoItem
+	for _, item := range todoItems {
+		if item.Agent == callerName {
+			myItems = append(myItems, item)
+		}
+	}
+	if len(myItems) == 0 {
+		return fantasy.NewTextResponse("No TODO items."), nil
+	}
+
+	var b strings.Builder
+	for _, item := range myItems {
+		fmt.Fprintf(&b, "- %s: %s [%s]", item.ID, item.Desc, item.Status)
+		if item.Detail != "" {
+			fmt.Fprintf(&b, " (%s)", item.Detail)
+		}
+		b.WriteString("\n")
+	}
+	return fantasy.NewTextResponse(b.String()), nil
 }
 
 const maxConcurrentTasks = 8
@@ -355,6 +642,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("start").withAgent(agentName).withMessage(task.Task))
+	c.SetCurrentAgent(agentName)
 	writeStatus(c.session.Workspace, agentName, "working", task.Task)
 	writeInbox(c.session.Workspace, agentName, task.Task)
 
@@ -583,19 +871,24 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 	b.WriteString("1. **Analyze** the user's request to identify which team members are needed\n")
 	b.WriteString("2. **Check skills** — if any available skills are relevant to the user's task, call `load_skill` to get the full instructions\n")
 	b.WriteString("3. **Plan** your approach before delegating — think step by step\n")
-	b.WriteString("4. **Delegate** tasks using run_agents — this is the ONLY way to get work done\n")
-	b.WriteString("5. Run independent tasks in parallel by passing multiple tasks in one run_agents call\n")
+	b.WriteString("4. **Delegate** tasks using agent — this is the ONLY way to get work done\n")
+	b.WriteString("5. Run independent tasks in parallel by passing multiple tasks in one agent call\n")
 	b.WriteString("6. When delegating to a worker that needs skill knowledge, include the skill summary in the task description and mention the skill file path so the worker can read it if needed\n")
-	b.WriteString("7. **Evaluate** results after each run_agents call — decide if more work is needed or if you can provide a final answer\n")
+	b.WriteString("7. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
 	b.WriteString("8. **Synthesize** results into a coherent answer for the user\n")
 	b.WriteString("9. When satisfied, call the finish tool with your final response\n\n")
 
 	b.WriteString("## Available Agents\n\n")
-	fmt.Fprintf(&b, "IMPORTANT: You MUST use these exact agent names in run_agents: %s. Do NOT invent or modify agent names.\n\n", strings.Join(workerNames, ", "))
+	fmt.Fprintf(&b, "IMPORTANT: You MUST use these exact agent names in agent: %s. Do NOT invent or modify agent names.\n\n", strings.Join(workerNames, ", "))
 	for _, desc := range workerDescs {
 		fmt.Fprintf(&b, "- %s\n", desc)
 	}
 	b.WriteString("\n")
+
+	b.WriteString("## Worker Tools\n\n")
+	b.WriteString("Workers have access to the following special tools in addition to their configured toolset:\n\n")
+	b.WriteString("- **agent**: Create a sub-agent to handle a specific sub-task. The sub-agent inherits the same toolset.\n")
+	b.WriteString("- **todo**: Manage a task list to track progress. Workers can create, update, and list their own TODO items.\n\n")
 
 	b.WriteString("## Available Skills\n\n")
 	if len(c.skills) == 0 {
@@ -616,7 +909,7 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 	}
 
 	b.WriteString("## Tools\n\n")
-	b.WriteString("### run_agents\n")
+	b.WriteString("### agent\n")
 	b.WriteString("Delegate tasks to team workers. All tasks in one call run in parallel.\n")
 	b.WriteString("```json\n")
 	b.WriteString("{\n")
@@ -641,16 +934,18 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 func (c *Coordinator) GetOrchestratorDef() *agent.AgentDef {
 	for _, def := range c.session.Agents {
 		if def.Role == "coordinator" || def.Role == "orchestrator" {
+			c.ensureModelFallback(def)
 			return def
 		}
 	}
 	for _, def := range c.session.Agents {
 		n := strings.ToLower(def.Name)
 		if strings.Contains(n, "coordinat") || strings.Contains(n, "orchestr") {
+			c.ensureModelFallback(def)
 			return def
 		}
 	}
-	return &agent.AgentDef{
+	def := &agent.AgentDef{
 		Name:        "coordinator",
 		Description: "Default team coordinator",
 		Role:        "coordinator",
@@ -659,6 +954,17 @@ func (c *Coordinator) GetOrchestratorDef() *agent.AgentDef {
 		MaxRetries:  -1,
 		Generation:  c.session.Config.Generation,
 		ProviderURL: c.session.Config.ProviderURL,
+	}
+	c.ensureModelFallback(def)
+	return def
+}
+
+func (c *Coordinator) ensureModelFallback(def *agent.AgentDef) {
+	if def.Generation.Model == "" && c.session.Config.Generation.Model != "" {
+		def.Generation.Model = c.session.Config.Generation.Model
+	}
+	if def.ProviderURL == "" && c.session.Config.ProviderURL != "" {
+		def.ProviderURL = c.session.Config.ProviderURL
 	}
 }
 
@@ -707,6 +1013,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	todoID := todoItems[0].ID
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	c.SetCurrentAgent(agentName)
 
 	ag, err := c.getOrCreateAgent(ctx, agentDef)
 	if err != nil {
@@ -939,9 +1246,9 @@ const defaultOrchestratorSystem = `You are the orchestrator of "{{TEAM_NAME}}", 
 Your role is to coordinate the team: break down user requests into concrete tasks, delegate them to the right members, and synthesize the results into a coherent response.
 
 Rules:
-- You MUST use run_agents to delegate ALL work to team members
+- You MUST use agent to delegate ALL work to team members
 - Running independent tasks in parallel is preferred
-- After receiving results from run_agents, evaluate whether more work is needed or if you can provide a final answer
+- After receiving results from agent, evaluate whether more work is needed or if you can provide a final answer
 - Synthesize results from workers into a coherent answer for the user
 - NEVER attempt to do the work yourself — you do not have tools for that
 - If a task fails, retry once with clearer instructions before giving up
@@ -970,7 +1277,7 @@ const wrapUpPromptTemplate = `The user has requested that you wrap up immediatel
 
 IMPORTANT INSTRUCTIONS:
 - Do NOT delegate any new tasks
-- Do NOT call run_agents again
+- Do NOT call agent again
 - Immediately summarize what has been accomplished so far based on all results you have received
 - Call the finish tool RIGHT NOW with your best summary of the work completed
 

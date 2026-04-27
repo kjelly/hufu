@@ -85,7 +85,7 @@ AgentDef.ProviderURL > TeamConfig.ProviderURL > CLI --ollama-url > 全域預設
 ### Coordinator
 
 **可用工具：**
-- `run_agents` — 委派任務給 worker
+- `agent` — 委派任務給 worker
 - `finish` — 完成任務並返回最終答案
 - `load_skill` — 載入技能完整內容
 - `ask_user` — 向使用者提問
@@ -201,7 +201,7 @@ coordinator.Run()
     │
     ├─► fantasy.Agent.Run() — 執行對話
     │     │
-    │     ├─► 呼叫 run_agents — 委派任務
+    │     ├─► 呼叫 agent — 委派任務
     │     │     │
     │     │     ├─► TodoList.AddBatch() — 建立 TODO 項目
     │     │     ├─► ExecuteTasks() — 並發執行（最多 8 個）
@@ -296,7 +296,7 @@ You are the coordinator...
 [2024-01-15T10:30:00Z] user
 Build a REST API...
 
-[2024-01-15T10:30:01Z] <tool_call name="run_agents" id="abc">...</tool_call>
+[2024-01-15T10:30:01Z] <tool_call name="agent" id="abc">...</tool_call>
 [2024-01-15T10:30:02Z] <tool_result>...</tool_result>
 [2024-01-15T10:30:05Z] === RESPONSE finish_reason=stop tokens_in=1500 tokens_out=250 ===
 ```
@@ -308,7 +308,7 @@ Build a REST API...
 在 `BuildOrchestratorPrompt()` 中明確提示：
 
 ```
-IMPORTANT: You MUST use these exact agent names in run_agents: <names>. Do NOT invent or modify agent names.
+IMPORTANT: You MUST use these exact agent names in agent: <names>. Do NOT invent or modify agent names.
 ```
 
 確保 coordinator 使用正確的 agent 名稱進行委派。

@@ -52,7 +52,17 @@ func ParsePrompt(prompt string, registry *TeamRegistry, currentTeam string, curr
 		taskContent := extractUntilNextAt(restAfter)
 		consumedLen := len(taskContent)
 
-		if registry != nil && registry.HasTeam(nameLower) {
+		if currentTeam != "" && isAgentInList(nameLower, currentAgents) {
+			foundTeamOrAgent = true
+			if textBefore != "" {
+				segments = append(segments, PromptSegment{Type: SegmentText, Content: textBefore})
+			}
+			segments = append(segments, PromptSegment{
+				Type:    SegmentInvokeAgent,
+				Name:    nameLower,
+				Content: strings.TrimSpace(taskContent),
+			})
+		} else if registry != nil && registry.HasTeam(nameLower) {
 			foundTeamOrAgent = true
 			if textBefore != "" && currentTeam != "" {
 				segments = append(segments, PromptSegment{Type: SegmentText, Content: textBefore})
@@ -66,16 +76,6 @@ func ParsePrompt(prompt string, registry *TeamRegistry, currentTeam string, curr
 			})
 			currentTeam = nameLower
 			currentAgents = nil
-		} else if currentTeam != "" && isAgentInList(nameLower, currentAgents) {
-			foundTeamOrAgent = true
-			if textBefore != "" {
-				segments = append(segments, PromptSegment{Type: SegmentText, Content: textBefore})
-			}
-			segments = append(segments, PromptSegment{
-				Type:    SegmentInvokeAgent,
-				Name:    nameLower,
-				Content: strings.TrimSpace(taskContent),
-			})
 		} else {
 			segments = append(segments, PromptSegment{Type: SegmentText, Content: "@" + name + extractUntilNextAt(prompt[loc[1]:])})
 			prevEnd = loc[1] + consumedLen
@@ -156,20 +156,7 @@ func SplitSegmentByAgents(segment PromptSegment, registry *TeamRegistry, current
 		taskContent := extractUntilNextAt(restAfter)
 		consumedLen := len(taskContent)
 
-		if registry.HasTeam(name) {
-			if needsTeamHeader {
-				segments = append(segments, PromptSegment{Type: SegmentSwitchTeam, Name: teamName, Content: ""})
-				needsTeamHeader = false
-			}
-			if textBefore != "" {
-				segments = append(segments, PromptSegment{Type: SegmentText, Content: textBefore})
-			}
-			segments = append(segments, PromptSegment{
-				Type:    SegmentSwitchTeam,
-				Name:    name,
-				Content: strings.TrimSpace(taskContent),
-			})
-		} else if isAgentInList(name, currentAgents) {
+		if isAgentInList(name, currentAgents) {
 			if needsTeamHeader {
 				segments = append(segments, PromptSegment{Type: SegmentSwitchTeam, Name: teamName, Content: ""})
 				needsTeamHeader = false
@@ -179,6 +166,19 @@ func SplitSegmentByAgents(segment PromptSegment, registry *TeamRegistry, current
 			}
 			segments = append(segments, PromptSegment{
 				Type:    SegmentInvokeAgent,
+				Name:    name,
+				Content: strings.TrimSpace(taskContent),
+			})
+		} else if registry.HasTeam(name) {
+			if needsTeamHeader {
+				segments = append(segments, PromptSegment{Type: SegmentSwitchTeam, Name: teamName, Content: ""})
+				needsTeamHeader = false
+			}
+			if textBefore != "" {
+				segments = append(segments, PromptSegment{Type: SegmentText, Content: textBefore})
+			}
+			segments = append(segments, PromptSegment{
+				Type:    SegmentSwitchTeam,
 				Name:    name,
 				Content: strings.TrimSpace(taskContent),
 			})

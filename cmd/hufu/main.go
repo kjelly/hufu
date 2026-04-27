@@ -965,7 +965,7 @@ func formatToolArgs(toolName, args string) string {
 	args = strings.ReplaceAll(args, "\n", " ")
 	args = strings.TrimSpace(args)
 	maxLen := 80
-	if toolName == "run_agents" {
+	if toolName == "agent" {
 		maxLen = 200
 	}
 	if toolName == "finish" {

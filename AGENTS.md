@@ -97,7 +97,7 @@ Results joined and printed to stdout
 - **`TeamRegistry`** (`discovery.go`) — Discovers and resolves teams by name from search paths
 - **`PromptSegment`** (`prompt.go`) — One unit of execution: `switch_team`, `invoke_agent`, or `text`
 - **`team.TeamSession`** — Loaded team state: config, agents map, MCP servers, skills, workspace
-- **`team.Coordinator`** — Orchestrator: delegates via `run_agents`, provides `finish`/`load_skill`
+- **`team.Coordinator`** — Orchestrator: delegates via `agent`, provides `finish`/`load_skill`
 - **`team.TeamContext`** — Container holding session + coordinator + sessionData for one team
 - **`skill.SkillDef`** — Parsed from `SKILL.md`; name, description, content, summary
 
@@ -385,14 +385,16 @@ func (r *PromptReader) Close() error
 
 ### Coordinator Tools
 
-- **`run_agents`** — Delegate tasks to workers
+- **`agent`** — Delegate tasks to workers
 - **`load_skill`** — Load skill content by name
 - **`finish`** — Signal completion with final answer
 - **`ask_user`** — Request user input
 
 ### Worker Tools
 
-- `bash`, `read`, `write`, `edit`, `grep`, `find`, `ls`, `ask_user`
+- `bash`, `read`, `write`, `edit`, `grep`, `find`, `ls`, `lua`, `golang`, `ask_user`
+- **`agent`** — Create a sub-agent to execute a specific task (always available, even if not listed in `tools:`)
+- **`todo`** — Manage task list: create, update, and list TODO items (always available, even if not listed in `tools:`)
 - Skill summaries auto-injected into task prompts for workers with `skills` field
 
 ## Key Gotchas & Non-Obvious Patterns
@@ -445,7 +447,7 @@ func (r *PromptReader) Close() error
 
 20. **Wrap-up mechanism** — `promptInjector.wrapUpCh` (buffered channel, size 1) + `wrapUpRequested atomic.Bool` flag. `injectWrapUp()` sets the flag and sends to channel (non-blocking). `IsWrapUpRequested()` atomically checks. `runWithInjection()` uses `select` to handle both normal prompts and wrap-up in one select statement.
 
-21. **wrapUpPromptTemplate** — Hard-coded prompt that forces the coordinator to summarize immediately and call `finish`. No new tasks delegated, no `run_agents` calls.
+21. **wrapUpPromptTemplate** — Hard-coded prompt that forces the coordinator to summarize immediately and call `finish`. No new tasks delegated, no `agent` calls.
 
 22. **activeCoordinator pointer** — Passed to `executeSegments`, stored/cleared on each coordinator run call. Allows signal handler to call `SetWrapUp()` on the right coordinator instance even after `executeSegments` returns.
 

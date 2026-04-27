@@ -127,6 +127,11 @@ func RunAgent(ctx context.Context, agent fantasy.Agent, prompt string) (string, 
 	return result.Response.Content.Text(), nil
 }
 
+var alwaysIncludeTools = map[string]bool{
+	"agent": true,
+	"todo":  true,
+}
+
 func SelectTools(allTools []fantasy.AgentTool, toolNames string) []fantasy.AgentTool {
 	if toolNames == "" || toolNames == "all" {
 		return allTools
@@ -142,7 +147,7 @@ func SelectTools(allTools []fantasy.AgentTool, toolNames string) []fantasy.Agent
 
 	var selected []fantasy.AgentTool
 	for _, t := range allTools {
-		if requested[t.Info().Name] {
+		if requested[t.Info().Name] || alwaysIncludeTools[t.Info().Name] {
 			selected = append(selected, t)
 		}
 	}

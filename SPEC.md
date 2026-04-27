@@ -432,7 +432,7 @@ mcp-servers:
 {"response": "這是給使用者的最終答案"}
 ```
 
-### 9.13 run_agents
+### 9.13 agent
 
 委派任務給 worker agents（僅協調者可用）。
 
@@ -780,7 +780,7 @@ return &agent.AgentDef{
 
 | 角色 | 可用工具 | 說明 |
 |------|----------|------|
-| `coordinator` | `run_agents`, `finish`, `load_skill`, `ask_user` | 只能協調，不能自行執行任務 |
+| `coordinator` | `agent`, `finish`, `load_skill`, `ask_user` | 只能協調，不能自行執行任務 |
 | `worker`（預設） | 指定的工具集 | 執行實際工作 |
 
 ## 15. 建構與發布
