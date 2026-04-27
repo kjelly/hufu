@@ -301,6 +301,7 @@ mcp-servers:
 - 預設逾時 120 秒，最大 600 秒
 - 禁止執行的命令：shell 內建指令
 - 輸出截断至最後 2000 行或 50KB
+- 禁止存取專案目錄外的檔案
 
 ### 9.2 read
 
@@ -313,6 +314,7 @@ mcp-servers:
 - `offset`：起始行號（1-indexed）
 - `limit`：最大行數
 - 截断至 2000 行或 50KB
+- 支援 context 取消
 
 ### 9.3 write
 
@@ -323,6 +325,8 @@ mcp-servers:
 ```
 
 - 自動建立父目錄
+- 禁止寫入專案目錄外的檔案
+- 支援 context 取消
 
 ### 9.4 edit
 
@@ -341,6 +345,8 @@ mcp-servers:
 - 精確匹配 `old_text`；若無精確匹配，嘗試模糊匹配
 - 多重匹配會返回錯誤
 - CRLF 自動轉換為 LF
+- 禁止編輯專案目錄外的檔案
+- 支援 context 取消
 
 ### 9.5 grep
 
@@ -821,3 +827,8 @@ go build ./cmd/hufu
 - **LLM 日誌隔離**：每個 agent 的 log 位於 `workspace/{team-name}/{agent-name}/llm.log`，自動建立目錄
 - **LLM reasoning 記錄**：支援記錄模型的思考過程（`<reasoning>` 標籤）
 - **LLM 日誌結構**：使用三層目錄結構（workspace/team/agent）區分不同會話
+- **路徑驗證**：`resolveAndValidatePath()` 防止存取專案目錄外的檔案
+- **Lua 檔案限制**：`io.open` 和 `io.lines` 僅限專案目錄內
+- **Lua 封裝隔離**：使用 `runtime.LockOSThread()` 確保執行緒安全
+- **MCP 環境變數限制**：禁止 `LD_PRELOAD`、`LD_LIBRARY_PATH`、`DYLD_*` 等危險環境變數
+- **對話歷史記憶體安全**：`conversationHistory` 使用 `copy()` 建立新切片，防止切片共享
