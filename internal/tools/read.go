@@ -44,13 +44,17 @@ func NewReadTool(opts ...ToolOption) fantasy.AgentTool {
 	}
 }
 
-func executeRead(_ context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
+func executeRead(ctx context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
 	var args readArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("path parameter is required"), nil
 	}
 	if args.Path == "" {
 		return fantasy.NewTextErrorResponse("path parameter is required"), nil
+	}
+
+	if err := ctx.Err(); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
 	}
 
 	absPath, err := resolvePathWithWorkDir(args.Path, workDir)

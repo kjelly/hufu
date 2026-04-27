@@ -518,7 +518,10 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		}
 	}
 
-	coordinator := team.NewCoordinator(session, defaultProviderURL, mcpManager, verbose)
+	coordinator, err := team.NewCoordinator(session, defaultProviderURL, mcpManager, verbose)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create coordinator: %w", err)
+	}
 	coordinator.SetSessionData(sessionData)
 
 	if len(session.Skills) > 0 {

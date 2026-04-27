@@ -3,13 +3,14 @@ package tools
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"runtime"
 	"time"
 
 	"charm.land/fantasy"
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
-	"github.com/traefik/yaegi/stdlib/unrestricted"
 )
 
 const defaultGolangTimeout = 120 * time.Second
@@ -25,7 +26,7 @@ func NewGolangTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "golang",
-			Description: "Execute Go code using the yaegi interpreter. Returns stdout output. Supports the full Go standard library with explicit import statements. Code must include package declaration and import statements.",
+			Description: "Execute Go code using the yaegi interpreter. Returns stdout output. Supports the Go standard library (no os/exec). Code must include package declaration and import statements.",
 			Parameters: map[string]any{
 				"code": map[string]any{
 					"type":        "string",
@@ -42,6 +43,13 @@ func NewGolangTool(opts ...ToolOption) fantasy.AgentTool {
 			return executeGolang(ctx, call, cfg.WorkDir)
 		},
 	}
+}
+
+type golangResult struct {
+	stdout   string
+	stderr   string
+	err      error
+	timedOut bool
 }
 
 func executeGolang(ctx context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
@@ -64,42 +72,60 @@ func executeGolang(ctx context.Context, call fantasy.ToolCall, workDir string) (
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	var stdout, stderr bytes.Buffer
+	ch := make(chan golangResult, 1)
 
-	i := interp.New(interp.Options{
-		Stdout:      &stdout,
-		Stderr:      &stderr,
-		Unrestricted: true,
-	})
+	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
 
-	if err := i.Use(stdlib.Symbols); err != nil {
-		return fantasy.NewTextErrorResponse("failed to load stdlib symbols: " + err.Error()), nil
-	}
-	if err := i.Use(unrestricted.Symbols); err != nil {
-		return fantasy.NewTextErrorResponse("failed to load unrestricted symbols: " + err.Error()), nil
-	}
-	if err := i.Use(interp.Symbols); err != nil {
-		return fantasy.NewTextErrorResponse("failed to load interpreter symbols: " + err.Error()), nil
-	}
+		if workDir != "" {
+			origDir, _ := os.Getwd()
+			os.Chdir(workDir)
+			defer os.Chdir(origDir)
+		}
 
-	if workDir != "" {
-		origDir, _ := os.Getwd()
-		os.Chdir(workDir)
-		defer os.Chdir(origDir)
-	}
+		var stdout, stderr bytes.Buffer
 
-	_, err := i.EvalWithContext(cmdCtx, args.Code)
+		i := interp.New(interp.Options{
+			Stdout: &stdout,
+			Stderr: &stderr,
+		})
 
-	if cmdCtx.Err() == context.DeadlineExceeded {
+		if err := i.Use(stdlib.Symbols); err != nil {
+			ch <- golangResult{err: err}
+			return
+		}
+		if err := i.Use(interp.Symbols); err != nil {
+			ch <- golangResult{err: err}
+			return
+		}
+
+		_, evalErr := i.EvalWithContext(cmdCtx, args.Code)
+
+		ch <- golangResult{
+			stdout:   stdout.String(),
+			stderr:   stderr.String(),
+			err:      evalErr,
+			timedOut: cmdCtx.Err() == context.DeadlineExceeded,
+		}
+	}()
+
+	res := <-ch
+
+	if res.timedOut {
 		return fantasy.NewTextErrorResponse("go execution timed out"), nil
 	}
 
+	if res.err != nil && res.stderr == "" {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to run go code: %v", res.err)), nil
+	}
+
 	exitCode := 0
-	if err != nil {
+	if res.err != nil {
 		exitCode = 1
 	}
 
-	return buildBashResponse(stdout.String(), errToStderr(err, stderr.String()), exitCode), nil
+	return buildBashResponse(res.stdout, errToStderr(res.err, res.stderr), exitCode), nil
 }
 
 func errToStderr(err error, stderr string) string {

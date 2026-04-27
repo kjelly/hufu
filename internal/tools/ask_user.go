@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -141,7 +142,10 @@ func handleSingleChoice(reader *bufio.Reader, args askUserArgs) (fantasy.ToolRes
 	if err != nil || choice < 0 || choice > len(args.Options) {
 		if args.AllowAny {
 			resp := askResponseType{Free: strings.TrimSpace(input)}
-			data, _ := json.Marshal(resp)
+			data, err := json.Marshal(resp)
+			if err != nil {
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to marshal response: %v", err)), nil
+			}
 			return fantasy.NewTextResponse(string(data)), nil
 		}
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid choice: %q (please enter a number 1-%d)", input, len(args.Options))), nil
@@ -150,9 +154,12 @@ func handleSingleChoice(reader *bufio.Reader, args askUserArgs) (fantasy.ToolRes
 	if choice == 0 && args.AllowAny {
 		fmt.Fprintf(os.Stderr, "%s ", boldFmt("Your answer:"))
 		freeInput := readLine(reader)
-		resp := askResponseType{Free: strings.TrimSpace(freeInput)}
-		data, _ := json.Marshal(resp)
-		return fantasy.NewTextResponse(string(data)), nil
+			resp := askResponseType{Free: strings.TrimSpace(freeInput)}
+			data, err := json.Marshal(resp)
+			if err != nil {
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to marshal response: %v", err)), nil
+			}
+			return fantasy.NewTextResponse(string(data)), nil
 	}
 
 	if choice < 1 {
@@ -166,7 +173,10 @@ func handleSingleChoice(reader *bufio.Reader, args askUserArgs) (fantasy.ToolRes
 	}
 
 	resp := askResponseType{Answers: []string{value}}
-	data, _ := json.Marshal(resp)
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to marshal response: %v", err)), nil
+	}
 	return fantasy.NewTextResponse(string(data)), nil
 }
 
@@ -207,7 +217,10 @@ func handleMultipleChoice(reader *bufio.Reader, args askUserArgs) (fantasy.ToolR
 	}
 
 	resp := askResponseType{Answers: answers}
-	data, _ := json.Marshal(resp)
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to marshal response: %v", err)), nil
+	}
 	return fantasy.NewTextResponse(string(data)), nil
 }
 
@@ -215,7 +228,10 @@ func handleFreeText(reader *bufio.Reader, args askUserArgs) (fantasy.ToolRespons
 	fmt.Fprintf(os.Stderr, "%s ", boldFmt("Your answer:"))
 	input := readLine(reader)
 	resp := askResponseType{Free: strings.TrimSpace(input)}
-	data, _ := json.Marshal(resp)
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to marshal response: %v", err)), nil
+	}
 	return fantasy.NewTextResponse(string(data)), nil
 }
 
@@ -265,12 +281,18 @@ func handleMixed(reader *bufio.Reader, args askUserArgs) (fantasy.ToolResponse, 
 	}
 
 	resp := askResponseType{Answers: answers, Free: freeText}
-	data, _ := json.Marshal(resp)
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to marshal response: %v", err)), nil
+	}
 	return fantasy.NewTextResponse(string(data)), nil
 }
 
 func readLine(reader *bufio.Reader) string {
-	line, _ := reader.ReadString('\n')
+	line, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return ""
+	}
 	return strings.TrimRight(line, "\r\n")
 }
 

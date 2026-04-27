@@ -53,13 +53,12 @@ type Coordinator struct {
 	currentAgentNameMu   sync.RWMutex
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, verbose bool) *Coordinator {
+func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, verbose bool) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
 	coreTools := agent.BuildAllAgentTools(projectDir)
 	prov, err := agent.NewOllamaProvider(defaultProviderURL)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "⚠ Failed to create Ollama provider: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to create Ollama provider: %w", err)
 	}
 	c := &Coordinator{
 		provider:     prov,
@@ -74,7 +73,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		projectDir:   projectDir,
 	}
 	c.coreTools = append(c.coreTools, &workerAgentTool{coordinator: c}, &todoTool{coordinator: c})
-	return c
+	return c, nil
 }
 
 func (c *Coordinator) SetStatusReporter(fn StatusReporter) {
@@ -1140,7 +1139,9 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		c.conversationHistory = append(c.conversationHistory, step.Messages...)
 	}
 	if len(c.conversationHistory) > maxConversationHistory {
-		c.conversationHistory = c.conversationHistory[len(c.conversationHistory)-maxConversationHistory:]
+		trimmed := make([]fantasy.Message, maxConversationHistory)
+		copy(trimmed, c.conversationHistory[len(c.conversationHistory)-maxConversationHistory:])
+		c.conversationHistory = trimmed
 	}
 	c.conversationHistoryMu.Unlock()
 
@@ -1222,7 +1223,9 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		c.conversationHistory = append(c.conversationHistory, step.Messages...)
 	}
 	if len(c.conversationHistory) > maxConversationHistory {
-		c.conversationHistory = c.conversationHistory[len(c.conversationHistory)-maxConversationHistory:]
+		trimmed := make([]fantasy.Message, maxConversationHistory)
+		copy(trimmed, c.conversationHistory[len(c.conversationHistory)-maxConversationHistory:])
+		c.conversationHistory = trimmed
 	}
 	c.conversationHistoryMu.Unlock()
 

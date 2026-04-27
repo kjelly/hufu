@@ -87,7 +87,7 @@ func NewEditTool(opts ...ToolOption) fantasy.AgentTool {
 	}
 }
 
-func executeEdit(_ context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
+func executeEdit(ctx context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
 	var args editArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("failed to parse arguments: " + err.Error()), nil
@@ -96,7 +96,11 @@ func executeEdit(_ context.Context, call fantasy.ToolCall, workDir string) (fant
 		return fantasy.NewTextErrorResponse("path parameter is required"), nil
 	}
 
-	absPath, err := resolvePathWithWorkDir(args.Path, workDir)
+	if err := ctx.Err(); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
+	}
+
+	absPath, err := resolveAndValidatePath(args.Path, workDir)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 	}

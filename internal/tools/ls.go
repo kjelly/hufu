@@ -40,9 +40,15 @@ func NewLsTool(opts ...ToolOption) fantasy.AgentTool {
 	}
 }
 
-func executeLs(_ context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
+func executeLs(ctx context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
 	var args lsArgs
-	_ = parseArgs(call.Input, &args)
+	if err := parseArgs(call.Input, &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+
+	if err := ctx.Err(); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
+	}
 
 	limit := 500
 	if args.Limit > 0 {

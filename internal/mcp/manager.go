@@ -42,6 +42,13 @@ func (m *MCPToolManager) LoadTools(ctx context.Context, servers map[string]MCPSe
 	var mu sync.Mutex
 	var loadErrs []error
 
+	type serverResult struct {
+		name  string
+		tools []MCPTool
+		cli   *client.Client
+	}
+	var results []serverResult
+
 	for name, cfg := range servers {
 		wg.Add(1)
 		go func(name string, cfg MCPServerConfig) {
@@ -54,11 +61,7 @@ func (m *MCPToolManager) LoadTools(ctx context.Context, servers map[string]MCPSe
 				return
 			}
 			mu.Lock()
-			m.clients[name] = cli
-			for _, t := range tools {
-				m.tools = append(m.tools, t)
-				m.toolMap[t.Name] = t
-			}
+			results = append(results, serverResult{name: name, tools: tools, cli: cli})
 			mu.Unlock()
 		}(name, cfg)
 	}
@@ -66,8 +69,12 @@ func (m *MCPToolManager) LoadTools(ctx context.Context, servers map[string]MCPSe
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, t := range m.tools {
-		m.toolMap[t.Name] = t
+	for _, r := range results {
+		m.clients[r.name] = r.cli
+		for _, t := range r.tools {
+			m.tools = append(m.tools, t)
+			m.toolMap[t.Name] = t
+		}
 	}
 
 	if len(loadErrs) > 0 && len(m.tools) == 0 {
@@ -87,6 +94,14 @@ func (m *MCPToolManager) loadServer(ctx context.Context, name string, cfg MCPSer
 	}
 }
 
+var blockedEnvVars = map[string]bool{
+	"LD_PRELOAD":       true,
+	"LD_LIBRARY_PATH":  true,
+	"DYLD_INSERT_LIBRARIES": true,
+	"DYLD_LIBRARY_PATH":     true,
+	"__AFL_PRELOAD":         true,
+}
+
 func (m *MCPToolManager) loadLocalServer(ctx context.Context, name string, cfg MCPServerConfig) ([]MCPTool, *client.Client, error) {
 	if len(cfg.Command) == 0 {
 		return nil, nil, fmt.Errorf("local MCP server %q requires command", name)
@@ -94,6 +109,9 @@ func (m *MCPToolManager) loadLocalServer(ctx context.Context, name string, cfg M
 
 	env := []string{}
 	for k, v := range cfg.Environment {
+		if blockedEnvVars[strings.ToUpper(k)] {
+			continue
+		}
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 

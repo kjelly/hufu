@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -94,6 +95,25 @@ func resolvePathWithWorkDir(path, workDir string) (string, error) {
 		}
 	}
 	return filepath.Clean(filepath.Join(baseDir, path)), nil
+}
+
+func resolveAndValidatePath(path, workDir string) (string, error) {
+	absPath, err := resolvePathWithWorkDir(path, workDir)
+	if err != nil {
+		return "", err
+	}
+	projectDir := workDir
+	if projectDir == "" {
+		projectDir, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("failed to get working directory: %w", err)
+		}
+	}
+	projectDir = filepath.Clean(projectDir)
+	if !strings.HasPrefix(absPath, projectDir+string(filepath.Separator)) && absPath != projectDir {
+		return "", fmt.Errorf("path '%s' is outside the project directory", path)
+	}
+	return absPath, nil
 }
 
 func AllTools(opts ...ToolOption) []fantasy.AgentTool {

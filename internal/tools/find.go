@@ -113,7 +113,12 @@ func findWithCmd(ctx context.Context, pattern, searchPath string, limit int) (fa
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 
-	_ = cmd.Run()
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 0 {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("find command failed: %v", err)), nil
+		}
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("find command failed: %v", err)), nil
+	}
 
 	output := strings.TrimSpace(stdout.String())
 	if output == "" {

@@ -168,7 +168,12 @@ func grepFallback(ctx context.Context, args grepArgs, searchPath string, limit i
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 
-	_ = cmd.Run()
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return fantasy.NewTextResponse("No matches found."), nil
+		}
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("grep error: %v", err)), nil
+	}
 
 	output := stdout.String()
 	if output == "" {
