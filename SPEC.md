@@ -375,7 +375,21 @@ mcp-servers:
 
 - 目錄顯示 `/` 後綴，隱藏檔案包含在內
 
-### 9.8 ask_user
+### 9.8 lua
+
+在沙箱環境中執行 Lua 程式碼。
+
+```json
+{"code": "print('Hello, World!')", "timeout": 60}
+```
+
+- 支援 string、math、table、coroutine、io 標準庫
+- `os` 庫受限：僅允許 `os.clock`、`os.time`、`os.date`、`os.difftime`
+- `io.popen` 和 `debug` 庫已禁用
+- `dofile` 和 `loadfile` 已禁用
+- 預設逾時 120 秒，最大 600 秒
+
+### 9.9 ask_user
 
 向使用者提問並等待回應。
 
@@ -389,7 +403,7 @@ mcp-servers:
 - **狀態管理**：執行期間設定 `askUserActive` 標誌，完成後觸發 `onAskUserDone` 回調
 - **CLI 整合**：ask_user 活躍時暫停 status 輸出和 TODO 顯示，完成後重新整理
 
-### 9.9 load_skill
+### 9.10 load_skill
 
 載入技能完整內容（僅協調者可用）。
 
@@ -397,7 +411,7 @@ mcp-servers:
 {"name": "code-review"}
 ```
 
-### 9.10 finish
+### 9.11 finish
 
 標記協調完成並提供最終答案（僅協調者可用）。
 
@@ -405,7 +419,7 @@ mcp-servers:
 {"response": "這是給使用者的最終答案"}
 ```
 
-### 9.11 run_agents
+### 9.12 run_agents
 
 委派任務給 worker agents（僅協調者可用）。
 
