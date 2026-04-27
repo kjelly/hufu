@@ -252,12 +252,14 @@ Coordinator 在執行 Agent 時記錄 LLM 對話，用於除錯和審計。
 ### 日誌位置
 
 ```
-{workspace}/{agent-name}/llm.log
+{workspace}/{team-name}/{agent-name}/llm.log
 ```
 
-每個 Agent 有独立的日誌檔案，例如：
-- `workspace/coordinator/llm.log`
-- `workspace/researcher/llm.log`
+例如：
+- `workspace/delegate/coordinator/llm.log`
+- `workspace/delegate/researcher/llm.log`
+
+使用三層目錄結構區分不同團隊和 Agent。
 
 ### Stream Callbacks
 

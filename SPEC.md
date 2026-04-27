@@ -630,20 +630,32 @@ wrapUpPromptTemplate = "The user has requested that you wrap up immediately. IMP
 
 `internal/team/llm_log.go` 提供 LLM 對話記錄功能，用於除錯和審計。
 
-### 資料流
+### 日誌位置
 
 ```
-Agent.Run() → AgentStreamCall callbacks → llm_log functions → workspace/{agent-name}/llm.log
+{workspace}/{team-name}/{agent-name}/llm.log
 ```
+
+例如：`workspace/delegate/coordinator/llm.log`
 
 ### 主要函式
 
 | 函式 | 說明 |
 |------|------|
-| `llmLogRequest(workspace, agentName, opts)` | 記錄每個 step 的請求（messages、model、step number） |
-| `llmLogStreamEvent(workspace, agentName, eventType, content)` | 記錄 streaming 事件（tool_call、tool_result） |
-| `llmLogStreamFinish(workspace, agentName, finishReason, usage)` | 記錄完成原因和 token 用量 |
-| `writeLLMLog(workspace, agentName, entry)` | 寫入單一 log 項目到檔案 |
+| `llmLogRequest(logWrite, opts)` | 記錄每個 step 的請求（messages、model、step number） |
+| `llmLogStreamEvent(logWrite, eventType, content)` | 記錄 streaming 事件（tool_call、tool_result） |
+| `llmLogStreamFinish(logWrite, finishReason, usage)` | 記錄完成原因和 token 用量 |
+| `writeLLMLog(workspace, teamName, agentName, entry)` | 寫入單一 log 項目到檔案 |
+
+### 閉包寫入器
+
+`writeLLMLog` 接受一個閉包 `logWrite func(entry string)` 以支援不同作用域的日誌寫入：
+
+```go
+workspace := c.session.Workspace
+teamName := c.session.Config.Name
+logWrite := func(entry string) { writeLLMLog(workspace, teamName, agentName, entry) }
+```
 
 ### 輸出格式
 
@@ -741,5 +753,6 @@ go build ./cmd/hufu
 - **輸出截断**：bash 使用尾端截断；read 使用前端截断
 - **工作區隔離**：每個團隊的工作區為 `<workspace>/<team-name>/`，`CleanRunDirs` 僅清理 inbox/outbox/status
 - **ask_user 輸出管理**：ask_user 活躍時暫存 status 輸出和 TODO 顯示，完成後重新整理
-- **LLM 日誌隔離**：每個 agent 的 log 位於 `workspace/{agent-name}/llm.log`，自動建立目錄
+- **LLM 日誌隔離**：每個 agent 的 log 位於 `workspace/{team-name}/{agent-name}/llm.log`，自動建立目錄
 - **LLM reasoning 記錄**：支援記錄模型的思考過程（`<reasoning>` 標籤）
+- **LLM 日誌結構**：使用三層目錄結構（workspace/team/agent）區分不同會話
