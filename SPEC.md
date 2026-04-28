@@ -389,7 +389,20 @@ mcp-servers:
 - `dofile` 和 `loadfile` 已禁用
 - 預設逾時 120 秒，最大 600 秒
 
-### 9.9 ask_user
+### 9.9 golang
+
+使用 yaegi 直譯器執行 Go 程式碼。
+
+```json
+{"code": "package main\nimport \"fmt\"\nfunc main() { fmt.Println(\"Hello, World!\") }", "timeout": 60}
+```
+
+- 支援完整 Go 標準庫（需明確 import）
+- 使用 `yaegi` 直譯器（traefik/yaegi v0.16.1）
+- 程式碼必須包含 `package` 宣告
+- 預設逾時 120 秒，最大 600 秒
+
+### 9.10 ask_user
 
 向使用者提問並等待回應。
 
@@ -403,7 +416,7 @@ mcp-servers:
 - **狀態管理**：執行期間設定 `askUserActive` 標誌，完成後觸發 `onAskUserDone` 回調
 - **CLI 整合**：ask_user 活躍時暫停 status 輸出和 TODO 顯示，完成後重新整理
 
-### 9.10 load_skill
+### 9.11 load_skill
 
 載入技能完整內容（僅協調者可用）。
 
@@ -411,7 +424,7 @@ mcp-servers:
 {"name": "code-review"}
 ```
 
-### 9.11 finish
+### 9.12 finish
 
 標記協調完成並提供最終答案（僅協調者可用）。
 
@@ -419,7 +432,7 @@ mcp-servers:
 {"response": "這是給使用者的最終答案"}
 ```
 
-### 9.12 run_agents
+### 9.13 run_agents
 
 委派任務給 worker agents（僅協調者可用）。
 

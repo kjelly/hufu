@@ -106,6 +106,7 @@ func AllTools(opts ...ToolOption) []fantasy.AgentTool {
 		NewFindTool(opts...),
 		NewLsTool(opts...),
 		NewLuaTool(opts...),
+		NewGolangTool(opts...),
 		NewAskUserTool(opts...),
 	}
 }
