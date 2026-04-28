@@ -230,10 +230,24 @@ func validateLuaPath(path, projectDir string) (string, error) {
 		absPath = filepath.Join(projectDir, path)
 	}
 	absPath = filepath.Clean(absPath)
-	if !strings.HasPrefix(absPath, projectDir+string(filepath.Separator)) && absPath != projectDir {
+
+	evaluatedProjDir, err := filepath.EvalSymlinks(projectDir)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve project directory: %w", err)
+	}
+	evaluatedProjDir = filepath.Clean(evaluatedProjDir)
+
+	parentDir := filepath.Dir(absPath)
+	evaluatedDir, err := filepath.EvalSymlinks(parentDir)
+	if err != nil {
+		return "", fmt.Errorf("path '%s' is invalid or cannot be resolved: %w", path, err)
+	}
+	evaluatedPath := filepath.Join(evaluatedDir, filepath.Base(absPath))
+
+	if !strings.HasPrefix(evaluatedDir, evaluatedProjDir+string(filepath.Separator)) && evaluatedDir != evaluatedProjDir {
 		return "", fmt.Errorf("path '%s' is outside the project directory", path)
 	}
-	return absPath, nil
+	return evaluatedPath, nil
 }
 
 func overridePrint(L *lua.LState, buf *bytes.Buffer) {

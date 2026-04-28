@@ -15,6 +15,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/anomalyco/hufu/internal/audit"
 	"github.com/anomalyco/hufu/internal/mcp"
 	"github.com/anomalyco/hufu/internal/skill"
 )
@@ -51,6 +52,7 @@ type Coordinator struct {
 	wrapUp              atomic.Int32
 	currentAgentName     string
 	currentAgentNameMu   sync.RWMutex
+	auditLogger         *audit.AuditLogger
 }
 
 func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, verbose bool) (*Coordinator, error) {
@@ -72,6 +74,13 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		skills:       session.Skills,
 		projectDir:   projectDir,
 	}
+
+	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
+	if err == nil {
+		c.auditLogger = auditLogger
+		audit.SetDefault(auditLogger)
+	}
+
 	c.coreTools = append(c.coreTools, &workerAgentTool{coordinator: c}, &todoTool{coordinator: c})
 	return c, nil
 }
@@ -518,6 +527,7 @@ func (t *todoTool) handleList(callerName string) (fantasy.ToolResponse, error) {
 
 const maxConcurrentTasks = 8
 const maxConversationHistory = 100
+const maxMessageSize = 50000
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
 	if c.IsWrapUp() {
@@ -751,6 +761,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			}
 			reportFn(c.newEvent("tool_call").withAgent(agentName).withTool(tc.ToolName, argsPreview))
 			llmLogStreamEvent(logWrite, "tool_call", formatToolCallContent(tc))
+			audit.LogToolCall(agentName, tc.ToolName, tc.Input)
 			return nil
 		},
 		OnToolResult: func(tr fantasy.ToolResultContent) error {
@@ -762,6 +773,8 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			}
 			reportFn(c.newEvent("tool_result").withAgent(agentName).withToolResult(tr.ToolName, resultPreview))
 			llmLogStreamEvent(logWrite, "tool_result", formatToolResultContent(tr))
+			_, isErrResult := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Result)
+			audit.LogToolResult(agentName, tr.ToolName, resultPreview, isErrResult)
 			return nil
 		},
 		OnTextDelta: func(id, text string) error {
@@ -975,7 +988,31 @@ func (c *Coordinator) expandDefaultOrchestratorTemplate(tmpl string) string {
 	return s
 }
 
-func (c *Coordinator) Round() int { return c.round }
+func (c *Coordinator) appendHistory(steps []fantasy.StepResult) {
+	for _, step := range steps {
+		for _, msg := range step.Messages {
+			if estimateMessageSize(msg) > maxMessageSize {
+				continue
+			}
+			c.conversationHistory = append(c.conversationHistory, msg)
+		}
+	}
+	if len(c.conversationHistory) > maxConversationHistory {
+		trimmed := make([]fantasy.Message, maxConversationHistory)
+		copy(trimmed, c.conversationHistory[len(c.conversationHistory)-maxConversationHistory:])
+		c.conversationHistory = trimmed
+	}
+}
+
+func estimateMessageSize(msg fantasy.Message) int {
+	total := 0
+	for _, part := range msg.Content {
+		if txt, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok {
+			total += len(txt.Text)
+		}
+	}
+	return total
+}
 
 func (c *Coordinator) SetSessionData(sd *SessionData) {
 	c.sessionData = sd
@@ -1135,14 +1172,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	}
 
 	c.conversationHistoryMu.Lock()
-	for _, step := range steps {
-		c.conversationHistory = append(c.conversationHistory, step.Messages...)
-	}
-	if len(c.conversationHistory) > maxConversationHistory {
-		trimmed := make([]fantasy.Message, maxConversationHistory)
-		copy(trimmed, c.conversationHistory[len(c.conversationHistory)-maxConversationHistory:])
-		c.conversationHistory = trimmed
-	}
+	c.appendHistory(steps)
 	c.conversationHistoryMu.Unlock()
 
 	finalResult := result
@@ -1219,14 +1249,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	}
 
 	c.conversationHistoryMu.Lock()
-	for _, step := range steps {
-		c.conversationHistory = append(c.conversationHistory, step.Messages...)
-	}
-	if len(c.conversationHistory) > maxConversationHistory {
-		trimmed := make([]fantasy.Message, maxConversationHistory)
-		copy(trimmed, c.conversationHistory[len(c.conversationHistory)-maxConversationHistory:])
-		c.conversationHistory = trimmed
-	}
+	c.appendHistory(steps)
 	c.conversationHistoryMu.Unlock()
 
 	finalResult := result

@@ -1,0 +1,351 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"strings"
+	"sync"
+
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/anomalyco/hufu/internal/team"
+	"github.com/anomalyco/hufu/internal/tools"
+)
+
+var (
+	boldStyle    = lipgloss.NewStyle().Bold(true)
+	dimStyle     = lipgloss.NewStyle().Faint(true)
+	agentStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	toolStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	resultStyle  = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("7"))
+	errStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+	stepStyle    = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("8"))
+	doneStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2"))
+	textStyle    = lipgloss.NewStyle().Faint(true)
+	headerStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
+	pendingIcon  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	progressIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	doneIcon     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	errorIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	teamStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
+)
+
+var activeStatusFlusher struct {
+	mu       sync.Mutex
+	w        *lineWriter
+	taskDisp *taskDisplay
+}
+
+func setStatusFlusher(w *lineWriter, taskDisp *taskDisplay) {
+	activeStatusFlusher.mu.Lock()
+	defer activeStatusFlusher.mu.Unlock()
+	activeStatusFlusher.w = w
+	activeStatusFlusher.taskDisp = taskDisp
+}
+
+func init() {
+	tools.SetOnAskUserDone(func() {
+		activeStatusFlusher.mu.Lock()
+		w := activeStatusFlusher.w
+		td := activeStatusFlusher.taskDisp
+		activeStatusFlusher.mu.Unlock()
+		if w != nil {
+			w.flush()
+		}
+		if td != nil {
+			td.refreshIfDirty()
+		}
+	})
+}
+
+type lineWriter struct {
+	mu  sync.Mutex
+	buf []string
+}
+
+func (w *lineWriter) write(s string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if tools.IsAskUserActive() {
+		w.buf = append(w.buf, s)
+		return
+	}
+	if len(w.buf) > 0 {
+		for _, b := range w.buf {
+			fmt.Fprint(os.Stderr, b)
+		}
+		w.buf = w.buf[:0]
+	}
+	fmt.Fprint(os.Stderr, s)
+}
+
+func (w *lineWriter) flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, b := range w.buf {
+		fmt.Fprint(os.Stderr, b)
+	}
+	w.buf = w.buf[:0]
+}
+
+type taskDisplay struct {
+	mu      sync.Mutex
+	w       *lineWriter
+	tracker *team.TaskTracker
+	lines   int
+	dirty   bool
+}
+
+func newTaskDisplay(w *lineWriter, tracker *team.TaskTracker) *taskDisplay {
+	return &taskDisplay{w: w, tracker: tracker}
+}
+
+func (d *taskDisplay) render() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	todoItems := d.tracker.TodoList().Items()
+	if len(todoItems) == 0 {
+		return
+	}
+
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("─── TODO ───"))
+	b.WriteString("\n")
+
+	for _, t := range todoItems {
+		var icon string
+		var desc string
+		switch t.Status {
+		case team.TaskPending:
+			icon = pendingIcon.Render("○")
+			desc = dimStyle.Render(t.Desc)
+		case team.TaskInProgress:
+			icon = progressIcon.Render("◑")
+			taskPreview := t.Desc
+			if len(taskPreview) > 60 {
+				taskPreview = taskPreview[:60] + "..."
+			}
+			desc = taskPreview
+		case team.TaskDone:
+			icon = doneIcon.Render("●")
+			desc = dimStyle.Render(t.Desc)
+		case team.TaskError:
+			icon = errorIcon.Render("✗")
+			if t.Detail != "" {
+				desc = errStyle.Render(t.Detail)
+			} else {
+				desc = dimStyle.Render(t.Desc)
+			}
+		}
+		b.WriteString(fmt.Sprintf("  %s %s %s %s\n", icon, dimStyle.Render(t.ID+"."), agentStyle.Render(t.Agent), desc))
+	}
+
+	d.w.write(b.String())
+	d.lines = len(todoItems) + 2
+}
+
+func (d *taskDisplay) clear() {
+	if d.lines > 0 {
+		d.w.write(fmt.Sprintf("\033[%dA\033[J", d.lines))
+		d.lines = 0
+	}
+}
+
+func (d *taskDisplay) update() {
+	if tools.IsAskUserActive() {
+		d.mu.Lock()
+		d.dirty = true
+		d.mu.Unlock()
+		return
+	}
+	d.clear()
+	d.render()
+}
+
+func (d *taskDisplay) refreshIfDirty() {
+	d.mu.Lock()
+	dirty := d.dirty
+	d.dirty = false
+	d.mu.Unlock()
+	if dirty {
+		d.clear()
+		d.render()
+	}
+}
+
+func formatAgentLabel(event team.StatusEvent) string {
+	if event.TeamName != "" && event.Agent != "" {
+		return fmt.Sprintf("%s/%s", teamStyle.Render(event.TeamName), agentStyle.Render(event.Agent))
+	}
+	if event.Agent != "" {
+		return agentStyle.Render(event.Agent)
+	}
+	return ""
+}
+
+func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp *taskDisplay, idleTimer *idleWarningTimer) {
+	currentAgent := ""
+	textBuf := ""
+
+	coordinator.SetStatusReporter(func(event team.StatusEvent) {
+		idleTimer.reset()
+
+		switch event.Type {
+		case "start":
+			if currentAgent != "" && textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			currentAgent = event.Agent
+			desc := event.Message
+			if len(desc) > 120 {
+				desc = desc[:120] + "..."
+			}
+			w.write(fmt.Sprintf("\n%s %s %s\n",
+				headerStyle.Render("▶"),
+				formatAgentLabel(event),
+				dimStyle.Render("— "+desc),
+			))
+			taskDisp.update()
+
+		case "step":
+			label := event.Message
+			if event.Step > 0 {
+				label = fmt.Sprintf("step %d", event.Step)
+			}
+			w.write(fmt.Sprintf("  %s %s\n",
+				stepStyle.Render("│"),
+				stepStyle.Render(label),
+			))
+
+		case "tool_call":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			argsPreview := formatToolArgs(event.ToolName, event.ToolArgs)
+			icon := "⟹"
+			w.write(fmt.Sprintf("  %s %s %s %s\n",
+				toolStyle.Render(icon),
+				formatAgentLabel(event),
+				toolStyle.Render("›"),
+				toolStyle.Render(event.ToolName),
+			))
+			if argsPreview != "" {
+				w.write(fmt.Sprintf("    %s\n", dimStyle.Render(argsPreview)))
+			}
+
+		case "tool_result":
+			resultLine := ""
+			if event.ToolResult != "" {
+				lines := strings.Split(event.ToolResult, "\n")
+				maxLines := 3
+				if len(lines) > maxLines {
+					resultLine = strings.Join(lines[:maxLines], "\n    ") + fmt.Sprintf("  ... (%d more lines)", len(lines)-maxLines)
+				} else {
+					resultLine = strings.Join(lines, "\n    ")
+				}
+				maxChars := 200
+				if len(resultLine) > maxChars {
+					resultLine = resultLine[:maxChars] + "..."
+				}
+				w.write(fmt.Sprintf("  %s %s %s %s\n    %s\n",
+					doneStyle.Render("✓"),
+					formatAgentLabel(event),
+					toolStyle.Render("›"),
+					toolStyle.Render(event.ToolName),
+					resultStyle.Render(resultLine),
+				))
+			} else {
+				w.write(fmt.Sprintf("  %s %s %s %s\n",
+					doneStyle.Render("✓"),
+					formatAgentLabel(event),
+					toolStyle.Render("›"),
+					toolStyle.Render(event.ToolName),
+				))
+			}
+
+		case "text":
+			textBuf += event.Message
+
+		case "done":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			w.write(fmt.Sprintf("%s %s %s\n",
+				doneStyle.Render("✓"),
+				formatAgentLabel(event),
+				doneStyle.Render("done"),
+			))
+			currentAgent = ""
+			taskDisp.update()
+
+		case "wrap_up":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			w.write(fmt.Sprintf("\n%s\n  %s\n  %s\n",
+				boldStyle.Render("─── WRAP UP ───"),
+				dimStyle.Render("No new tasks will be started."),
+				dimStyle.Render("Running agents will finish their current work..."),
+			))
+
+		case "error":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			w.write(fmt.Sprintf("%s %s: %s\n",
+				errStyle.Render("✗"),
+				formatAgentLabel(event),
+				errStyle.Render(event.Message),
+			))
+			taskDisp.update()
+
+		case "todos_updated":
+			taskDisp.update()
+		}
+	})
+}
+
+func flushText(agentName, text string) string {
+	if text == "" {
+		return ""
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	maxLen := 300
+	display := text
+	if len(display) > maxLen {
+		display = display[:maxLen] + "..."
+	}
+	return fmt.Sprintf("  %s %s\n",
+		textStyle.Render("💬"),
+		textStyle.Render(display),
+	)
+}
+
+func formatToolArgs(toolName, args string) string {
+	if args == "" || args == "{}" {
+		return ""
+	}
+	args = strings.ReplaceAll(args, "\n", " ")
+	args = strings.TrimSpace(args)
+	maxLen := 80
+	if toolName == "agent" {
+		maxLen = 200
+	}
+	if toolName == "finish" {
+		maxLen = 120
+	}
+	if len(args) > maxLen {
+		return args[:maxLen] + "..."
+	}
+	return args
+}

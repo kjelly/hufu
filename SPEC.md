@@ -637,13 +637,107 @@ AddBatch() → TaskPending → UpdateStatus(TaskInProgress) → TaskDone
     │   └── skills/
     ├── status/
     ├── history/
+    ├── audit/
+    │   └── audit-{date}.jsonl
+    ├── {agent-name}/
+    │   └── llm.log
     ├── session.json
     └── session.md
 ```
 
 **`CleanRunDirs()`：** `--new` 時自動清理 `inbox/`、`outbox/`、`status/` 目錄，保留 `shared/`、`history/`、`session.json`、`session.md`。
 
-### 12.1 優雅關機（Graceful Shutdown）
+## 12.2 審計日誌
+
+`internal/audit/audit.go` 提供工具執行審計功能。
+
+### 資料結構
+
+```go
+type ToolAction struct {
+    Timestamp string `json:"timestamp"`
+    Team      string `json:"team"`
+    Agent     string `json:"agent"`
+    Tool      string `json:"tool"`
+    Action    string `json:"action"`    // "call" or "result"
+    Input     string `json:"input,omitempty"`
+    Result    string `json:"result,omitempty"`
+    Error     string `json:"error,omitempty"`
+}
+```
+
+### 日誌位置
+
+```
+{workspace}/{team-name}/audit/audit-{date}.jsonl
+```
+
+每日一個 JSONL 檔案，例如：`workspace/delegate/audit/audit-2026-04-27.jsonl`
+
+### 主要函式
+
+| 函式 | 說明 |
+|------|------|
+| `NewAuditLogger(workspace, teamName)` | 建立審計日誌器 |
+| `LogToolCall(agent, tool, input)` | 記錄工具呼叫 |
+| `LogToolResult(agent, tool, result, isError)` | 記錄工具結果 |
+| `SetDefault(logger)` | 設定全域預設日誌器 |
+
+### Coordinator 整合
+
+```go
+// coordinator.go
+auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
+if err == nil {
+    c.auditLogger = auditLogger
+    audit.SetDefault(auditLogger)
+}
+
+// 在 runAgentWithStatusAndHistory 中
+OnToolCall: func(...) {
+    audit.LogToolCall(agentName, tc.ToolName, tc.Input)
+}
+OnToolResult: func(...) {
+    audit.LogToolResult(agentName, tr.ToolName, resultPreview, isErrResult)
+}
+```
+
+## 12.3 工具輸入驗證
+
+`internal/tools/tools.go` 提供工具參數驗證功能。
+
+### 驗證函式
+
+| 函式 | 說明 |
+|------|------|
+| `validateRequired(input, required)` | 驗證必填參數 |
+| `validateParamType(input, name, type)` | 驗證參數類型（string/number/boolean/array） |
+| `validateToolInput(input, info)` | 完整驗證（必填 + 類型） |
+
+### 驗證時機
+
+在 `coreTool.Run()` 中，呼叫 `t.handler()` 前先驗證：
+
+```go
+func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+    if err := validateToolInput(call.Input, t.info); err != nil {
+        return fantasy.NewTextErrorResponse(err.Error()), nil
+    }
+    return t.handler(ctx, call)
+}
+```
+
+### 訊息大小限制
+
+```go
+const maxMessageSize = 50000
+
+func estimateMessageSize(msg fantasy.Message) int {
+    // 計算訊息大小，過大的訊息會被跳過
+}
+```
+
+### 12.4 優雅關機（Graceful Shutdown）
 
 支援 Ctrl+C 兩階段終止：
 
@@ -726,7 +820,7 @@ AgentStreamCall{
 - `ContentTypeToolCall` → `<tool_call name="..." id="...">...</tool_call>`
 - `ContentTypeToolResult` → `<tool_result id="...">...</tool_result>`
 
-## 13. StatusEvent 結構
+### 12.5 StatusEvent 結構
 
 ```go
 type StatusEvent struct {
@@ -782,27 +876,83 @@ return &agent.AgentDef{
 }
 ```
 
-## 14. Agent 角色與權限
+### 12.6 訊息大小限制
+
+`appendHistory()` 函式限制單一訊息的大小，防止過大的訊息佔用過多記憶體：
+
+```go
+const maxMessageSize = 50000
+
+func estimateMessageSize(msg fantasy.Message) int {
+    total := 0
+    for _, part := range msg.Content {
+        if txt, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok {
+            total += len(txt.Text)
+        }
+    }
+    return total
+}
+
+func (c *Coordinator) appendHistory(steps []fantasy.StepResult) {
+    for _, step := range steps {
+        for _, msg := range step.Messages {
+            if estimateMessageSize(msg) > maxMessageSize {
+                continue  // 跳過過大的訊息
+            }
+            c.conversationHistory = append(c.conversationHistory, msg)
+        }
+    }
+    // ... trim to maxConversationHistory
+}
+```
+
+## 13. Agent 角色與權限
 
 | 角色 | 可用工具 | 說明 |
 |------|----------|------|
-| `coordinator` | `agent`, `finish`, `load_skill`, `ask_user` | 只能協調，不能自行執行任務 |
+| `coordinator` | `run_agents`, `finish`, `load_skill`, `ask_user` | 只能協調，不能自行執行任務 |
 | `worker`（預設） | 指定的工具集 | 執行實際工作 |
 
-## 15. 建構與發布
+## 14. CLI 重構
 
-### 13.1 建構
+main.go 已被重構為多個檔案：
+
+### cmd/hufu/display.go
+
+UI 顯示相關元件：
+
+| 類型/函式 | 說明 |
+|-----------|------|
+| `lineWriter` | 輸出緩衝器，支援 ask_user 期間暫停 |
+| `taskDisplay` | TODO 顯示管理器 |
+| `formatAgentLabel()` | 格式化 Agent 標籤 |
+| `setupStatusReporter()` | 設定狀態回報 |
+| `flushText()` | 格式化文字輸出 |
+| `formatToolArgs()` | 格式化工具參數 |
+
+### cmd/hufu/signal.go
+
+信號處理相關元件：
+
+| 類型/函式 | 說明 |
+|-----------|------|
+| `idleWarningTimer` | 閒置警告計時器 |
+| `activeCoordinator` | 活躍協調者指標 |
+| `promptInjector` | Prompt 注入器 |
+| `setupPromptSignals()` | 設定 Ctrl+Z / SIGUSR1 信號 |
+
+## 15. 建構與發布
 
 ```bash
 go build ./cmd/hufu
 ```
 
-### 13.2 CI 工作流
+### 15.1 CI 工作流
 
 觸發條件：`push` 或 `pull_request` 到 `main` 分支。
 執行：`go vet` → `go build` → `go test`
 
-### 13.3 發布工作流
+### 15.2 發布工作流
 
 觸發條件：推送 `v*` 標籤。
 使用 GoReleaser 自動發布至 GitHub Releases。
