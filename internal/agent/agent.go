@@ -139,15 +139,16 @@ func SelectTools(allTools []fantasy.AgentTool, toolNames string) []fantasy.Agent
 	requested := map[string]bool{}
 	for _, name := range strings.Split(toolNames, ",") {
 		n := strings.TrimSpace(name)
-		if n == "glob" {
-			n = "find"
-		}
 		requested[n] = true
 	}
 
 	var selected []fantasy.AgentTool
 	for _, t := range allTools {
 		if requested[t.Info().Name] || alwaysIncludeTools[t.Info().Name] {
+			selected = append(selected, t)
+		} else if t.Info().Name == "view" && requested["read"] {
+			selected = append(selected, t)
+		} else if t.Info().Name == "glob" && requested["find"] {
 			selected = append(selected, t)
 		}
 	}

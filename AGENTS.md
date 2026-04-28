@@ -87,7 +87,7 @@ Results joined and printed to stdout
 |---------|------|---------|
 | `main` | `cmd/hufu/` | CLI entry, cobra flags, segment execution, status display |
 | `agent` | `internal/agent/` | Agent definitions, Ollama provider, agent creation, tool selection |
-| `tools` | `internal/tools/` | Built-in agent tools: bash, read, write, edit, grep, find, ls, ask_user |
+| `tools` | `internal/tools/` | Built-in agent tools: bash, view, write, edit, multiedit, grep, glob, ls, download, fetch, agentic_fetch, lua, golang, ask_user |
 | `team` | `internal/team/` | Team loading/parsing, coordinator, session persistence, workspace I/O, discovery, prompt parsing |
 | `skill` | `internal/skill/` | Skill discovery, parsing, filtering, workspace copying |
 | `mcp` | `internal/mcp/` | MCP server management, local & remote transports |
@@ -283,7 +283,7 @@ Markdown with YAML frontmatter (`---` delimited):
 name: developer
 description: Implementation specialist
 role: worker
-tools: read,write,edit,bash,grep,find,ls
+tools: view,write,edit,multiedit,bash,grep,glob,ls
 skills: code-review
 ---
 Your system prompt here.
@@ -392,7 +392,7 @@ func (r *PromptReader) Close() error
 
 ### Worker Tools
 
-- `bash`, `read`, `write`, `edit`, `grep`, `find`, `ls`, `lua`, `golang`, `ask_user`
+- `bash`, `view`, `write`, `edit`, `multiedit`, `grep`, `glob`, `ls`, `download`, `fetch`, `agentic_fetch`, `lua`, `golang`, `ask_user`
 - **`agent`** — Create a sub-agent to execute a specific task (always available, even if not listed in `tools:`)
 - **`todo`** — Manage task list: create, update, and list TODO items (always available, even if not listed in `tools:`)
 - Skill summaries auto-injected into task prompts for workers with `skills` field

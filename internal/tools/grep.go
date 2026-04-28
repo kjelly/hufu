@@ -11,14 +11,18 @@ import (
 	"charm.land/fantasy"
 )
 
+const defaultGrepLimit = 100
+
 type grepArgs struct {
 	Pattern    string `json:"pattern"`
 	Path       string `json:"path,omitempty"`
-	Glob       string `json:"glob,omitempty"`
+	Include    string `json:"include,omitempty"`
 	IgnoreCase bool   `json:"ignore_case,omitempty"`
-	Literal    bool   `json:"literal,omitempty"`
+	Literal    bool   `json:"literal_text,omitempty"`
 	Context    int    `json:"context,omitempty"`
 	Limit      int    `json:"limit,omitempty"`
+
+	Glob string `json:"glob,omitempty"`
 }
 
 func NewGrepTool(opts ...ToolOption) fantasy.AgentTool {
@@ -30,23 +34,27 @@ func NewGrepTool(opts ...ToolOption) fantasy.AgentTool {
 			Parameters: map[string]any{
 				"pattern": map[string]any{
 					"type":        "string",
-					"description": "Search pattern (regex or literal string)",
+					"description": "The regex pattern to search for in file contents",
 				},
 				"path": map[string]any{
 					"type":        "string",
-					"description": "Directory or file to search (default: current directory)",
+					"description": "Directory or file to search in (default: current directory)",
+				},
+				"include": map[string]any{
+					"type":        "string",
+					"description": "File pattern to include (e.g. '*.go', '*.{ts,tsx}')",
 				},
 				"glob": map[string]any{
 					"type":        "string",
-					"description": "Filter files by glob pattern, e.g. '*.ts'",
+					"description": "File pattern to include (alias for include)",
 				},
 				"ignore_case": map[string]any{
 					"type":        "boolean",
 					"description": "Case-insensitive search (default: false)",
 				},
-				"literal": map[string]any{
+				"literal_text": map[string]any{
 					"type":        "boolean",
-					"description": "Treat pattern as literal string instead of regex (default: false)",
+					"description": "Treat pattern as literal text instead of regex (default: false)",
 				},
 				"context": map[string]any{
 					"type":        "number",
@@ -75,7 +83,7 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string) (fa
 		return fantasy.NewTextErrorResponse("pattern parameter is required"), nil
 	}
 
-	limit := 100
+	limit := defaultGrepLimit
 	if args.Limit > 0 {
 		limit = args.Limit
 	}
@@ -91,6 +99,20 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string) (fa
 		searchPath = workDir
 	}
 
+	globPattern := args.Include
+	if globPattern == "" {
+		globPattern = args.Glob
+	}
+
+	result, err := grepWithRg(ctx, args, searchPath, globPattern, limit)
+	if err == nil {
+		return result, nil
+	}
+
+	return grepFallback(ctx, args, searchPath, limit)
+}
+
+func grepWithRg(ctx context.Context, args grepArgs, searchPath, globPattern string, limit int) (fantasy.ToolResponse, error) {
 	rgArgs := []string{
 		"--line-number",
 		"--no-heading",
@@ -107,8 +129,8 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string) (fa
 	if args.Context > 0 {
 		rgArgs = append(rgArgs, fmt.Sprintf("--context=%d", args.Context))
 	}
-	if args.Glob != "" {
-		rgArgs = append(rgArgs, "--glob="+args.Glob)
+	if globPattern != "" {
+		rgArgs = append(rgArgs, "--glob="+globPattern)
 	}
 
 	rgArgs = append(rgArgs, args.Pattern, searchPath)
@@ -125,10 +147,10 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string) (fa
 				return fantasy.NewTextResponse("No matches found."), nil
 			}
 			if exitErr.ExitCode() == 2 {
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("grep error: %s", stderr.String())), nil
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("rg error: %s", stderr.String())), nil
 			}
 		}
-		return grepFallback(ctx, args, searchPath, limit)
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("rg failed: %v", err)), nil
 	}
 
 	output := stdout.String()
@@ -158,8 +180,13 @@ func grepFallback(ctx context.Context, args grepArgs, searchPath string, limit i
 	if args.Context > 0 {
 		grepArgs = append(grepArgs, fmt.Sprintf("-C%d", args.Context))
 	}
-	if args.Glob != "" {
-		grepArgs = append(grepArgs, "--include="+args.Glob)
+
+	globPattern := args.Include
+	if globPattern == "" {
+		globPattern = args.Glob
+	}
+	if globPattern != "" {
+		grepArgs = append(grepArgs, "--include="+globPattern)
 	}
 
 	grepArgs = append(grepArgs, args.Pattern, searchPath)

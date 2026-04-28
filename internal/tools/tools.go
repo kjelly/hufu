@@ -221,15 +221,19 @@ func resolveAndValidatePath(path, workDir string) (string, error) {
 func AllTools(opts ...ToolOption) []fantasy.AgentTool {
 	return []fantasy.AgentTool{
 		NewBashTool(opts...),
-		NewReadTool(opts...),
+		NewViewTool(opts...),
 		NewWriteTool(opts...),
 		NewEditTool(opts...),
+		NewMultiEditTool(opts...),
 		NewGrepTool(opts...),
-		NewFindTool(opts...),
+		NewGlobTool(opts...),
 		NewLsTool(opts...),
 		NewLuaTool(opts...),
 		NewGolangTool(opts...),
 		NewAskUserTool(opts...),
+		NewDownloadTool(opts...),
+		NewFetchTool(opts...),
+		NewAgenticFetchTool(opts...),
 	}
 }
 

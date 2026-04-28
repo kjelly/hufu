@@ -4,15 +4,19 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"charm.land/fantasy"
 )
 
+const maxLSFiles = 1000
+
 type lsArgs struct {
-	Path  string `json:"path,omitempty"`
-	Limit int    `json:"limit,omitempty"`
+	Path   string   `json:"path,omitempty"`
+	Ignore []string `json:"ignore,omitempty"`
+	Depth  int      `json:"depth,omitempty"`
 }
 
 func NewLsTool(opts ...ToolOption) fantasy.AgentTool {
@@ -20,15 +24,22 @@ func NewLsTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "ls",
-			Description: "List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output truncated to 500 entries or 50KB.",
+			Description: "List directory contents as an indented tree. Shows file and directory names with proper nesting. Includes dotfiles. Limited to 1000 entries.",
 			Parameters: map[string]any{
 				"path": map[string]any{
 					"type":        "string",
-					"description": "Directory to list (default: current directory)",
+					"description": "The path to the directory to list (default: current directory)",
 				},
-				"limit": map[string]any{
+				"ignore": map[string]any{
+					"type":        "array",
+					"description": "List of glob patterns to ignore (e.g. ['node_modules', '*.log'])",
+					"items": map[string]any{
+						"type": "string",
+					},
+				},
+				"depth": map[string]any{
 					"type":        "number",
-					"description": "Maximum number of entries to return (default: 500)",
+					"description": "Maximum depth to traverse (default: unlimited)",
 				},
 			},
 			Required: []string{},
@@ -50,11 +61,6 @@ func executeLs(ctx context.Context, call fantasy.ToolCall, workDir string) (fant
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
 	}
 
-	limit := 500
-	if args.Limit > 0 {
-		limit = args.Limit
-	}
-
 	dirPath := "."
 	if args.Path != "" {
 		resolved, err := resolvePathWithWorkDir(args.Path, workDir)
@@ -74,34 +80,118 @@ func executeLs(ctx context.Context, call fantasy.ToolCall, workDir string) (fant
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("'%s' is not a directory", args.Path)), nil
 	}
 
-	entries, err := os.ReadDir(dirPath)
+	ignorePatterns := args.Ignore
+	if len(ignorePatterns) == 0 {
+		ignorePatterns = []string{}
+	}
+
+	maxDepth := args.Depth
+	if maxDepth <= 0 {
+		maxDepth = -1
+	}
+
+	entries, truncated, err := listDirectoryTree(dirPath, ignorePatterns, maxDepth, maxLSFiles)
 	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to read directory: %v", err)), nil
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to list directory: %v", err)), nil
 	}
 
-	sort.Slice(entries, func(i, j int) bool {
-		return strings.ToLower(entries[i].Name()) < strings.ToLower(entries[j].Name())
-	})
-
-	var result strings.Builder
-	count := 0
-	for _, entry := range entries {
-		if count >= limit {
-			fmt.Fprintf(&result, "\n[truncated: showing %d of %d entries]", limit, len(entries))
-			break
-		}
-		name := entry.Name()
-		if entry.IsDir() {
-			name += "/"
-		}
-		result.WriteString(name + "\n")
-		count++
-	}
-
-	output := result.String()
-	if output == "" {
+	if len(entries) == 0 {
 		return fantasy.NewTextResponse("(empty directory)"), nil
 	}
 
-	return fantasy.NewTextResponse(strings.TrimRight(output, "\n")), nil
+	output := formatTree(dirPath, entries)
+	if truncated {
+		output += fmt.Sprintf("\n\n[truncated: showing %d of more entries]", maxLSFiles)
+	}
+
+	return fantasy.NewTextResponse(output), nil
+}
+
+type fileEntry struct {
+	relPath  string
+	name     string
+	isDir    bool
+	depth    int
+}
+
+func listDirectoryTree(root string, ignore []string, maxDepth, maxFiles int) ([]fileEntry, bool, error) {
+	ignoreMap := make(map[string]bool)
+	for _, p := range ignore {
+		ignoreMap[p] = true
+	}
+
+	var entries []fileEntry
+	truncated := false
+
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+		if rel == "." {
+			return nil
+		}
+
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		for _, part := range parts {
+			if ignoreMap[part] {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
+		depth := len(parts) - 1
+		if maxDepth >= 0 && depth > maxDepth {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if len(entries) >= maxFiles {
+			truncated = true
+			return fmt.Errorf("limit reached")
+		}
+
+		entries = append(entries, fileEntry{
+			relPath: rel,
+			name:    info.Name(),
+			isDir:   info.IsDir(),
+			depth:   depth,
+		})
+
+		return nil
+	})
+
+	if err != nil && truncated {
+		err = nil
+	}
+
+	return entries, truncated, err
+}
+
+func formatTree(root string, entries []fileEntry) string {
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].relPath < entries[j].relPath
+	})
+
+	var b strings.Builder
+	b.WriteString("- " + filepath.Base(root) + "/\n")
+
+	for _, e := range entries {
+		indent := strings.Repeat("  ", e.depth+1)
+		name := e.name
+		if e.isDir {
+			name += "/"
+		}
+		b.WriteString(fmt.Sprintf("%s- %s\n", indent, name))
+	}
+
+	return strings.TrimRight(b.String(), "\n")
 }

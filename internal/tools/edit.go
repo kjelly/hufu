@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"charm.land/fantasy"
@@ -14,31 +12,21 @@ import (
 	udiff "github.com/aymanbagabas/go-udiff"
 )
 
-type Edit struct {
-	OldText string `json:"old_text"`
-	NewText string `json:"new_text"`
-}
-
 type editArgs struct {
+	FilePath   string `json:"file_path"`
+	OldString  string `json:"old_string"`
+	NewString  string `json:"new_string"`
+	ReplaceAll bool   `json:"replace_all,omitempty"`
+
 	Path    string `json:"path"`
 	OldText string `json:"old_text"`
 	NewText string `json:"new_text"`
 	Edits   []Edit `json:"edits"`
 }
 
-type replacement struct {
-	oldText     string
-	newText     string
-	originalOld string
-	originalNew string
-	index       int
-}
-
-type matchedReplacement struct {
-	replacement
-	start          int
-	end            int
-	usedFuzzyMatch bool
+type Edit struct {
+	OldText string `json:"old_text"`
+	NewText string `json:"new_text"`
 }
 
 func NewEditTool(opts ...ToolOption) fantasy.AgentTool {
@@ -46,29 +34,45 @@ func NewEditTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "edit",
-			Description: "Edit a file by replacing exact text. Supports single edit via old_text/new_text, or multiple edits via the edits array. All edits are matched against the original file content and must be non-overlapping.",
+			Description: "Edit a file by replacing exact text. Supports single edit via old_string/new_text, or multiple edits via the edits array. All edits are matched against the original file content and must be non-overlapping. Use replace_all to replace all occurrences of old_string.",
 			Parameters: map[string]any{
+				"file_path": map[string]any{
+					"type":        "string",
+					"description": "The path to the file to edit (relative or absolute)",
+				},
+				"old_string": map[string]any{
+					"type":        "string",
+					"description": "The text to replace (empty for new file creation)",
+				},
+				"new_string": map[string]any{
+					"type":        "string",
+					"description": "The text to replace it with (empty for deletion)",
+				},
+				"replace_all": map[string]any{
+					"type":        "boolean",
+					"description": "Replace all occurrences of old_string (default false)",
+				},
 				"path": map[string]any{
 					"type":        "string",
-					"description": "Path to the file to edit (relative or absolute)",
+					"description": "Path to the file (deprecated: use file_path instead)",
 				},
 				"old_text": map[string]any{
 					"type":        "string",
-					"description": "Exact text to find and replace (single-edit mode)",
+					"description": "Text to find (deprecated: use old_string instead)",
 				},
 				"new_text": map[string]any{
 					"type":        "string",
-					"description": "New text to replace the old text with (single-edit mode)",
+					"description": "Replacement text (deprecated: use new_string instead)",
 				},
 				"edits": map[string]any{
 					"type":        "array",
-					"description": "Array of edits for multi-region replacement",
+					"description": "Array of edits for multi-region replacement (deprecated: use multiedit tool instead)",
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
 							"old_text": map[string]any{
 								"type":        "string",
-								"description": "Exact text to find and replace for this edit",
+								"description": "Exact text to find and replace",
 							},
 							"new_text": map[string]any{
 								"type":        "string",
@@ -79,7 +83,7 @@ func NewEditTool(opts ...ToolOption) fantasy.AgentTool {
 					},
 				},
 			},
-			Required: []string{"path"},
+			Required: []string{"file_path"},
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			return executeEdit(ctx, call, cfg.WorkDir)
@@ -92,94 +96,80 @@ func executeEdit(ctx context.Context, call fantasy.ToolCall, workDir string) (fa
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("failed to parse arguments: " + err.Error()), nil
 	}
-	if args.Path == "" {
-		return fantasy.NewTextErrorResponse("path parameter is required"), nil
+
+	filePath := args.FilePath
+	if filePath == "" {
+		filePath = args.Path
+	}
+	if filePath == "" {
+		return fantasy.NewTextErrorResponse("file_path parameter is required"), nil
 	}
 
 	if err := ctx.Err(); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
 	}
 
-	absPath, err := resolveAndValidatePath(args.Path, workDir)
+	absPath, err := resolveAndValidatePath(filePath, workDir)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 	}
 
-	contentBytes, err := os.ReadFile(absPath)
-	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to read file: %v", err)), nil
+	oldString := args.OldString
+	if oldString == "" {
+		oldString = args.OldText
+	}
+	newString := args.NewString
+	if newString == "" && args.NewText != "" {
+		newString = args.NewText
 	}
 
-	content := string(contentBytes)
-
-	replacements, err := normalizeEditInput(args)
-	if err != nil {
-		return fantasy.NewTextErrorResponse(err.Error()), nil
-	}
-
-	newContent, applied, err := applyEdits(content, replacements)
-	if err != nil {
-		return fantasy.NewTextErrorResponse(err.Error()), nil
-	}
-
-	if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write file: %v", err)), nil
-	}
-
-	normalizedContent := strings.ReplaceAll(content, "\r\n", "\n")
-	diff := udiff.Unified(absPath, absPath, normalizedContent, newContent)
-
-	fuzzyCount := 0
-	for _, m := range applied {
-		if m.usedFuzzyMatch {
-			fuzzyCount++
+	if len(args.Edits) > 0 {
+		replacements, err := normalizeEditInput(args)
+		if err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
 		}
+		return applyEditsAndWrite(absPath, filePath, replacements)
 	}
 
-	var msg string
-	if len(applied) == 1 {
-		if fuzzyCount > 0 {
-			msg = fmt.Sprintf("Applied edit (fuzzy match) to %s\n%s", args.Path, diff)
-		} else {
-			msg = fmt.Sprintf("Applied edit to %s\n%s", args.Path, diff)
+	if oldString == "" && newString != "" {
+		if _, err := os.Stat(absPath); err == nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("file %s already exists", filePath)), nil
 		}
-	} else {
-		if fuzzyCount > 0 {
-			msg = fmt.Sprintf("Applied %d edits (%d fuzzy) to %s\n%s", len(applied), fuzzyCount, args.Path, diff)
-		} else {
-			msg = fmt.Sprintf("Applied %d edits to %s\n%s", len(applied), args.Path, diff)
+		dir := absPath[:strings.LastIndex(absPath, "/")]
+		if dir == "" {
+			dir = "."
 		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to create directories: %v", err)), nil
+		}
+		if err := os.WriteFile(absPath, []byte(newString), 0o644); err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write file: %v", err)), nil
+		}
+		return fantasy.NewTextResponse(fmt.Sprintf("Created %s", filePath)), nil
 	}
 
-	return fantasy.NewTextResponse(msg), nil
+	if oldString == "" && newString == "" {
+		return fantasy.NewTextErrorResponse("must provide old_string/new_string, or edits array"), nil
+	}
+
+	replacements := []replacement{
+		{
+			oldText:     strings.ReplaceAll(oldString, "\r\n", "\n"),
+			newText:     strings.ReplaceAll(newString, "\r\n", "\n"),
+			originalOld: oldString,
+			originalNew: newString,
+			index:       0,
+			replaceAll:  args.ReplaceAll,
+		},
+	}
+
+	return applyEditsAndWrite(absPath, filePath, replacements)
 }
 
 func normalizeEditInput(args editArgs) ([]replacement, error) {
-	singleMode := args.OldText != "" || args.NewText != ""
-	multiMode := len(args.Edits) > 0
-
-	if singleMode && multiMode {
-		return nil, fmt.Errorf("cannot use old_text/new_text together with edits array")
+	if len(args.Edits) == 0 {
+		return nil, fmt.Errorf("edits array is empty")
 	}
-	if !singleMode && !multiMode {
-		return nil, fmt.Errorf("must provide either old_text/new_text or edits array")
-	}
-	if singleMode {
-		if args.OldText == "" {
-			return nil, fmt.Errorf("old_text is required when using single-edit mode")
-		}
-		if args.NewText == "" {
-			return nil, fmt.Errorf("new_text is required when using single-edit mode")
-		}
-		return []replacement{{
-			oldText:     strings.ReplaceAll(args.OldText, "\r\n", "\n"),
-			newText:     strings.ReplaceAll(args.NewText, "\r\n", "\n"),
-			originalOld: args.OldText,
-			originalNew: args.NewText,
-			index:       0,
-		}}, nil
-	}
-
 	var reps []replacement
 	for i, edit := range args.Edits {
 		if edit.OldText == "" {
@@ -196,44 +186,126 @@ func normalizeEditInput(args editArgs) ([]replacement, error) {
 	return reps, nil
 }
 
-func applyEdits(content string, edits []replacement) (string, []matchedReplacement, error) {
+func applyEditsAndWrite(absPath, displayPath string, replacements []replacement) (fantasy.ToolResponse, error) {
+	contentBytes, err := os.ReadFile(absPath)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to read file: %v", err)), nil
+	}
+
+	content := string(contentBytes)
 	normalizedContent := strings.ReplaceAll(content, "\r\n", "\n")
 
 	var matched []matchedReplacement
-	for _, edit := range edits {
+	for _, edit := range replacements {
 		m, err := findMatch(normalizedContent, edit)
 		if err != nil {
-			return "", nil, err
+			return fantasy.NewTextErrorResponse(err.Error()), nil
 		}
 		matched = append(matched, *m)
 	}
 
-	sort.Slice(matched, func(i, j int) bool {
-		return matched[i].start < matched[j].start
-	})
-
-	for i := 1; i < len(matched); i++ {
-		if matched[i-1].end > matched[i].start {
-			return "", nil, fmt.Errorf("edits[%d] and edits[%d] overlap", matched[i-1].index, matched[i].index)
+	newContent := normalizedContent
+	for i := len(matched) - 1; i >= 0; i-- {
+		m := matched[i]
+		if m.replaceAll {
+			newContent = strings.ReplaceAll(newContent, m.oldText, m.newText)
+		} else {
+			newContent = newContent[:m.start] + m.newText + newContent[m.end:]
 		}
 	}
 
-	result := normalizedContent
-	for i := len(matched) - 1; i >= 0; i-- {
-		m := matched[i]
-		result = result[:m.start] + m.newText + result[m.end:]
+	if err := os.WriteFile(absPath, []byte(newContent), 0o644); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write file: %v", err)), nil
 	}
 
-	return result, matched, nil
+	diff := udiff.Unified(absPath, absPath, normalizedContent, newContent)
+
+	fuzzyCount := 0
+	for _, m := range matched {
+		if m.usedFuzzyMatch {
+			fuzzyCount++
+		}
+	}
+
+	var msg string
+	if len(matched) == 1 {
+		if fuzzyCount > 0 {
+			msg = fmt.Sprintf("Applied edit (fuzzy match) to %s\n%s", displayPath, diff)
+		} else {
+			msg = fmt.Sprintf("Applied edit to %s\n%s", displayPath, diff)
+		}
+	} else {
+		if fuzzyCount > 0 {
+			msg = fmt.Sprintf("Applied %d edits (%d fuzzy) to %s\n%s", len(matched), fuzzyCount, displayPath, diff)
+		} else {
+			msg = fmt.Sprintf("Applied %d edits to %s\n%s", len(matched), displayPath, diff)
+		}
+	}
+
+	return fantasy.NewTextResponse(msg), nil
+}
+
+type replacement struct {
+	oldText     string
+	newText     string
+	originalOld string
+	originalNew string
+	index       int
+	replaceAll  bool
+}
+
+type matchedReplacement struct {
+	replacement
+	start          int
+	end            int
+	usedFuzzyMatch bool
 }
 
 func findMatch(content string, edit replacement) (*matchedReplacement, error) {
+	if edit.replaceAll {
+		count := strings.Count(content, edit.oldText)
+		if count == 0 {
+			idx, matchLen := fuzzyMatch(content, edit.oldText)
+			if idx < 0 {
+				return nil, fmt.Errorf("old_string not found in file")
+			}
+			matchedText := content[idx : idx+matchLen]
+			return &matchedReplacement{
+				replacement: replacement{
+					oldText:     matchedText,
+					newText:     edit.newText,
+					originalOld: edit.originalOld,
+					originalNew: edit.originalNew,
+					index:       edit.index,
+					replaceAll:  true,
+				},
+				start:          idx,
+				end:            idx + matchLen,
+				usedFuzzyMatch: true,
+			}, nil
+		}
+		idx := strings.Index(content, edit.oldText)
+		return &matchedReplacement{
+			replacement: replacement{
+				oldText:     edit.oldText,
+				newText:     edit.newText,
+				originalOld: edit.originalOld,
+				originalNew: edit.originalNew,
+				index:       edit.index,
+				replaceAll:  true,
+			},
+			start:          idx,
+			end:            idx + len(edit.oldText),
+			usedFuzzyMatch: false,
+		}, nil
+	}
+
 	count := strings.Count(content, edit.oldText)
 
 	if count == 0 {
 		idx, matchLen := fuzzyMatch(content, edit.oldText)
 		if idx < 0 {
-			return nil, fmt.Errorf("edits[%d]: could not find old_text in file", edit.index)
+			return nil, fmt.Errorf("edits[%d]: could not find old_string in file", edit.index)
 		}
 		matchedText := content[idx : idx+matchLen]
 		return &matchedReplacement{
@@ -250,8 +322,8 @@ func findMatch(content string, edit replacement) (*matchedReplacement, error) {
 		}, nil
 	}
 
-	if count > 1 {
-		return nil, fmt.Errorf("found %d matches for edits[%d].old_text; provide more context", count, edit.index)
+	if count > 1 && !edit.replaceAll {
+		return nil, fmt.Errorf("found %d matches for old_string; provide more context or use replace_all", count)
 	}
 
 	idx := strings.Index(content, edit.oldText)
@@ -304,7 +376,7 @@ func normalizeWithMap(s string) (string, []int) {
 			origPos++
 		}
 
-		trimmed := strings.TrimRightFunc(line, unicode.IsSpace)
+		trimmed := strings.TrimRightFunc(line, isSpace)
 		for j := 0; j < len(trimmed); {
 			r, size := utf8.DecodeRuneInString(trimmed[j:])
 			repl := normalizeRune(r)
@@ -319,6 +391,10 @@ func normalizeWithMap(s string) (string, []int) {
 	}
 
 	return string(result), mapping
+}
+
+func isSpace(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\r'
 }
 
 func normalizeRune(r rune) string {
