@@ -333,3 +333,72 @@ In `internal/agent/agent.go`, `SelectTools()` no longer maps `glob` to `find`:
 // Before: if n == "glob" { n = "find" }
 // After: Direct mapping, glob uses NewGlobTool directly
 ```
+
+## 10. Skill Usage Tracking (New)
+
+### Overview
+
+Tracks which skills are loaded/used during a session, including which agents accessed them.
+
+### Components
+
+#### StatusEvent Extension
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Type` | string | New value: `"skill_used"` |
+| `SkillName` | string | Name of the skill being used |
+
+#### Coordinator (`internal/team/coordinator.go`)
+
+| Field/Method | Type | Description |
+|--------------|------|-------------|
+| `skillUsage` | `map[string]*SkillUsageEntry` | Tracks skill usage per session |
+| `SkillUsageEntry` | struct | `{Name, Count, Agents map[string]bool}` |
+| `recordSkillUsage(name, agent string)` | method | Records skill usage and emits event |
+| `SkillUsage()` | method | Returns copy of all skill usage entries |
+| `extractSkillFromToolCall(toolName, input string)` | method | Detects skill file access via view/read tools |
+
+**Detection Logic:**
+- Monitors `view` and `read` tool calls
+- Extracts file path from JSON arguments (`file_path` or `path` field)
+- Identifies skill files: paths containing `shared/skills/` with `.md` extension
+- Matches against known skills by name (case-insensitive)
+- Also records when coordinator uses `load_skill` tool
+
+#### CLI Display (`cmd/hufu/display.go`)
+
+| Struct | Description |
+|--------|-------------|
+| `skillDisplay` | Displays skills panel in CLI |
+| `skillEntry` | `{name, count, agents []string}` |
+
+**Display Format:**
+```
+─── SKILLS ───
+  ✓ code-reviewer     ×2  researcher, writer
+  ✓ git-commit        ×1  developer
+```
+
+### Integration Points
+
+1. **setupStatusReporter**: Handles `"skill_used"` events via `skillDisp.record()`
+2. **setStatusFlusher**: Passes `skillDisp` for dirty-refresh on idle
+3. **executeSegments**: Creates `skillDisplay` for all three execution paths:
+   - SegmentSwitchTeam (full coordinator run)
+   - SegmentInvokeAgent (direct agent invocation)
+   - SegmentText (text-only coordinator run)
+
+## 11. Untracked Files
+
+| Path | Description |
+|------|-------------|
+| `.agents/skills/code-reviewer/SKILL.md` | Code review skill definition |
+
+### code-reviewer Skill
+
+A skill for conducting professional code reviews:
+
+- **Supports**: Local changes (staged/working tree) and remote Pull Requests
+- **Review Pillars**: Correctness, Maintainability, Readability, Efficiency, Security, Edge Cases, Testability
+- **Output**: Summary with Critical/Improvements/Nitpicks findings + recommendation

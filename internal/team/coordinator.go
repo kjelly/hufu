@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -53,6 +54,14 @@ type Coordinator struct {
 	currentAgentName     string
 	currentAgentNameMu   sync.RWMutex
 	auditLogger         *audit.AuditLogger
+	skillUsage          map[string]*SkillUsageEntry
+	skillUsageMu        sync.Mutex
+}
+
+type SkillUsageEntry struct {
+	Name   string
+	Count  int
+	Agents map[string]bool
 }
 
 func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, verbose bool) (*Coordinator, error) {
@@ -73,6 +82,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		taskTracker:  NewTaskTracker(),
 		skills:       session.Skills,
 		projectDir:   projectDir,
+		skillUsage:   make(map[string]*SkillUsageEntry),
 	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -98,6 +108,72 @@ func (c *Coordinator) SetStatusReporter(fn StatusReporter) {
 
 func (c *Coordinator) report(event StatusEvent) {
 	c.reportStatus(event)
+}
+
+func (c *Coordinator) recordSkillUsage(name, agent string) {
+	key := strings.ToLower(name)
+	c.skillUsageMu.Lock()
+	entry, ok := c.skillUsage[key]
+	if !ok {
+		entry = &SkillUsageEntry{
+			Name:   name,
+			Agents: make(map[string]bool),
+		}
+		c.skillUsage[key] = entry
+	}
+	entry.Count++
+	entry.Agents[agent] = true
+	c.skillUsageMu.Unlock()
+	c.report(c.newEvent("skill_used").withSkillName(name).withAgent(agent))
+}
+
+func (c *Coordinator) SkillUsage() []SkillUsageEntry {
+	c.skillUsageMu.Lock()
+	defer c.skillUsageMu.Unlock()
+	result := make([]SkillUsageEntry, 0, len(c.skillUsage))
+	for _, entry := range c.skillUsage {
+		e := SkillUsageEntry{
+			Name:   entry.Name,
+			Count:  entry.Count,
+			Agents: make(map[string]bool, len(entry.Agents)),
+		}
+		for k := range entry.Agents {
+			e.Agents[k] = true
+		}
+		result = append(result, e)
+	}
+	return result
+}
+
+func (c *Coordinator) extractSkillFromToolCall(toolName, input string) string {
+	if toolName != "view" && toolName != "read" {
+		return ""
+	}
+	var args struct {
+		FilePath string `json:"file_path"`
+		Path     string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return ""
+	}
+	path := args.FilePath
+	if path == "" {
+		path = args.Path
+	}
+	if !strings.Contains(strings.ToLower(path), "shared/skills/") {
+		return ""
+	}
+	base := filepath.Base(path)
+	if !strings.HasSuffix(strings.ToLower(base), ".md") {
+		return ""
+	}
+	skillName := base[:len(base)-3]
+	for _, s := range c.skills {
+		if strings.ToLower(s.Name) == strings.ToLower(skillName) {
+			return s.Name
+		}
+	}
+	return skillName
 }
 
 func (c *Coordinator) newEvent(eventType string) StatusEvent {
@@ -248,6 +324,7 @@ func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	nameLower := strings.ToLower(args.Name)
 	for _, s := range t.coordinator.skills {
 		if strings.ToLower(s.Name) == nameLower {
+			t.coordinator.recordSkillUsage(s.Name, "coordinator")
 			return fantasy.NewTextResponse(fmt.Sprintf("Skill: %s\n\n%s", s.Name, s.Content)), nil
 		}
 	}
@@ -767,6 +844,9 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			reportFn(c.newEvent("tool_call").withAgent(agentName).withTool(tc.ToolName, argsPreview))
 			llmLogStreamEvent(logWrite, "tool_call", formatToolCallContent(tc))
 			audit.LogToolCall(agentName, tc.ToolName, tc.Input)
+			if skillName := c.extractSkillFromToolCall(tc.ToolName, tc.Input); skillName != "" {
+				c.recordSkillUsage(skillName, agentName)
+			}
 			return nil
 		},
 		OnToolResult: func(tr fantasy.ToolResultContent) error {

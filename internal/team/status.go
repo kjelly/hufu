@@ -6,7 +6,7 @@ import (
 )
 
 type StatusEvent struct {
-	Type       string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated"
+	Type       string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used"
 	TeamName   string
 	Agent      string
 	Message    string
@@ -15,6 +15,7 @@ type StatusEvent struct {
 	ToolResult string
 	Step       int
 	Todos      []*TodoItem
+	SkillName  string
 }
 
 func (e StatusEvent) withAgent(agent string) StatusEvent {
@@ -46,6 +47,11 @@ func (e StatusEvent) withToolResult(name, result string) StatusEvent {
 
 func (e StatusEvent) withTodos(todos []*TodoItem) StatusEvent {
 	e.Todos = todos
+	return e
+}
+
+func (e StatusEvent) withSkillName(name string) StatusEvent {
+	e.SkillName = name
 	return e
 }
 

@@ -460,8 +460,9 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			w := &lineWriter{}
 			idleTimer := newIdleWarningTimer(w, 30*time.Second)
 			taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
-			setupStatusReporter(w, tc.coordinator, taskDisp, idleTimer)
-			setStatusFlusher(w, taskDisp)
+			skillDisp := newSkillDisplay(w)
+			setupStatusReporter(w, tc.coordinator, taskDisp, skillDisp, idleTimer)
+			setStatusFlusher(w, taskDisp, skillDisp)
 
 			fmt.Fprintf(os.Stderr, "\n%s Starting team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(teamName))
 
@@ -513,8 +514,9 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			w := &lineWriter{}
 			idleTimer := newIdleWarningTimer(w, 30*time.Second)
 			taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
-			setupStatusReporter(w, tc.coordinator, taskDisp, idleTimer)
-			setStatusFlusher(w, taskDisp)
+			skillDisp := newSkillDisplay(w)
+			setupStatusReporter(w, tc.coordinator, taskDisp, skillDisp, idleTimer)
+			setStatusFlusher(w, taskDisp, skillDisp)
 
 			fmt.Fprintf(os.Stderr, "\n%s Direct invocation: @%s (team: %s)\n\n", boldStyle.Render("→"), agentStyle.Render(seg.Name), teamStyle.Render(currentTeamName))
 
@@ -593,8 +595,9 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			w := &lineWriter{}
 			idleTimer := newIdleWarningTimer(w, 30*time.Second)
 			taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
-			setupStatusReporter(w, tc.coordinator, taskDisp, idleTimer)
-			setStatusFlusher(w, taskDisp)
+			skillDisp := newSkillDisplay(w)
+			setupStatusReporter(w, tc.coordinator, taskDisp, skillDisp, idleTimer)
+			setStatusFlusher(w, taskDisp, skillDisp)
 
 			fmt.Fprintf(os.Stderr, "\n%s Team %s processing...\n\n", boldStyle.Render("→"), teamStyle.Render(currentTeamName))
 

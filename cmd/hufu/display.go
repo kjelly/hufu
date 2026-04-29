@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
@@ -34,13 +35,15 @@ var activeStatusFlusher struct {
 	mu       sync.Mutex
 	w        *lineWriter
 	taskDisp *taskDisplay
+	skillDisp *skillDisplay
 }
 
-func setStatusFlusher(w *lineWriter, taskDisp *taskDisplay) {
+func setStatusFlusher(w *lineWriter, taskDisp *taskDisplay, skillDisp *skillDisplay) {
 	activeStatusFlusher.mu.Lock()
 	defer activeStatusFlusher.mu.Unlock()
 	activeStatusFlusher.w = w
 	activeStatusFlusher.taskDisp = taskDisp
+	activeStatusFlusher.skillDisp = skillDisp
 }
 
 func init() {
@@ -48,12 +51,16 @@ func init() {
 		activeStatusFlusher.mu.Lock()
 		w := activeStatusFlusher.w
 		td := activeStatusFlusher.taskDisp
+		sd := activeStatusFlusher.skillDisp
 		activeStatusFlusher.mu.Unlock()
 		if w != nil {
 			w.flush()
 		}
 		if td != nil {
 			td.refreshIfDirty()
+		}
+		if sd != nil {
+			sd.refreshIfDirty()
 		}
 	})
 }
@@ -185,7 +192,7 @@ func formatAgentLabel(event team.StatusEvent) string {
 	return ""
 }
 
-func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp *taskDisplay, idleTimer *idleWarningTimer) {
+func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp *taskDisplay, skillDisp *skillDisplay, idleTimer *idleWarningTimer) {
 	currentAgent := ""
 	textBuf := ""
 
@@ -308,6 +315,12 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 
 		case "todos_updated":
 			taskDisp.update()
+
+		case "skill_used":
+			if skillDisp != nil {
+				skillDisp.record(event.SkillName, event.Agent)
+				skillDisp.update()
+			}
 		}
 	})
 }
@@ -348,4 +361,109 @@ func formatToolArgs(toolName, args string) string {
 		return args[:maxLen] + "..."
 	}
 	return args
+}
+
+type skillEntry struct {
+	name   string
+	count  int
+	agents []string
+}
+
+type skillDisplay struct {
+	mu     sync.Mutex
+	w      *lineWriter
+	skills map[string]*skillEntry
+	lines  int
+	dirty  bool
+}
+
+func newSkillDisplay(w *lineWriter) *skillDisplay {
+	return &skillDisplay{
+		w:      w,
+		skills: make(map[string]*skillEntry),
+	}
+}
+
+func (d *skillDisplay) record(name, agent string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	key := strings.ToLower(name)
+	entry, ok := d.skills[key]
+	if !ok {
+		entry = &skillEntry{name: name}
+		d.skills[key] = entry
+	}
+	entry.count++
+	seen := false
+	for _, a := range entry.agents {
+		if a == agent {
+			seen = true
+			break
+		}
+	}
+	if !seen {
+		entry.agents = append(entry.agents, agent)
+	}
+	d.dirty = true
+}
+
+func (d *skillDisplay) render() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if len(d.skills) == 0 {
+		return
+	}
+
+	ordered := make([]*skillEntry, 0, len(d.skills))
+	for _, entry := range d.skills {
+		ordered = append(ordered, entry)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		return ordered[i].name < ordered[j].name
+	})
+
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("─── SKILLS ───"))
+	b.WriteString("\n")
+
+	for _, entry := range ordered {
+		agentList := strings.Join(entry.agents, ", ")
+		b.WriteString(fmt.Sprintf("  %s %-20s ×%-2d %s\n",
+			doneStyle.Render("✓"),
+			entry.name,
+			entry.count,
+			dimStyle.Render(agentList),
+		))
+	}
+
+	d.w.write(b.String())
+	d.lines = len(ordered) + 2
+}
+
+func (d *skillDisplay) clear() {
+	if d.lines > 0 {
+		d.w.write(fmt.Sprintf("\033[%dA\033[J", d.lines))
+		d.lines = 0
+	}
+}
+
+func (d *skillDisplay) update() {
+	if tools.IsAskUserActive() {
+		return
+	}
+	d.clear()
+	d.render()
+}
+
+func (d *skillDisplay) refreshIfDirty() {
+	d.mu.Lock()
+	dirty := d.dirty
+	d.dirty = false
+	d.mu.Unlock()
+	if dirty {
+		d.clear()
+		d.render()
+	}
 }

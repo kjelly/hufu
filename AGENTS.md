@@ -462,3 +462,38 @@ func (r *PromptReader) Close() error
 27. **runWithInjection uses select not polling** — `select { case <-injector.wrapUpCh: ... case prompt, ok := <-injector.ch: ... default: return }` instead of a polling loop. More efficient and responsive.
 
 28. **executeSegments passes activeCoord to all run paths** — Both coordinator `Run()` and `RunDirectAgent()` paths set/clear `activeCoordinator` so wrap-up signal can target the right instance regardless of which code path is active.
+
+## Skill Usage Tracking
+
+The system tracks which skills are loaded/used during a session:
+
+### Detection Methods
+
+1. **Via `load_skill` tool** — Coordinator explicitly loads a skill
+2. **Via `view`/`read` tool calls** — Detects when agents view files in `shared/skills/` directory
+
+### Data Structures
+
+| Component | Type | Purpose |
+|-----------|------|---------|
+| `SkillUsageEntry` | struct | `{Name, Count, Agents map[string]bool}` |
+| `skillUsage` | `map[string]*SkillUsageEntry` | Per-coordinator usage tracking |
+| `StatusEvent.SkillName` | string | Event field for `"skill_used"` events |
+
+### CLI Display
+
+The CLI renders skill usage in a panel:
+
+```
+─── SKILLS ───
+  ✓ code-reviewer     ×2  researcher, writer
+  ✓ git-commit        ×1  developer
+```
+
+Displayed via `skillDisplay` struct in `cmd/hufu/display.go`, updated on each `skill_used` event.
+
+### Untracked Skill
+
+| Path | Description |
+|------|-------------|
+| `.agents/skills/code-reviewer/SKILL.md` | Code review skill (supports local changes and remote PRs) |
