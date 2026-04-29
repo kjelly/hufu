@@ -31,7 +31,10 @@ func extractSummaryContent(entries []SessionSummaryEntry) (content, timestamp st
 		return "", ""
 	}
 	if len(content) > maxSummaryLength {
-		content = content[:maxSummaryLength]
+		runes := []rune(content)
+		if len(runes) > maxSummaryLength {
+			content = string(runes[:maxSummaryLength])
+		}
 	}
 	return content, timestamp
 }

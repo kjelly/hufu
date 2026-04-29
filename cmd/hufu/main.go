@@ -723,7 +723,9 @@ func defaultHistoryPath() string {
 		return ""
 	}
 	dir := filepath.Join(home, ".hufu")
-	os.MkdirAll(dir, 0o755)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return ""
+	}
 	return filepath.Join(dir, "prompt_history")
 }
 
@@ -763,12 +765,9 @@ func askUserForTeamFallback(teams []string) string {
 	if input == "" {
 		return ""
 	}
-	if idx, err := fmt.Sscanf(input, "%d", new(int)); err == nil && idx == 1 {
-		var num int
-		fmt.Sscanf(input, "%d", &num)
-		if num >= 1 && num <= len(teams) {
-			return teams[num-1]
-		}
+	var num int
+	if n, err := fmt.Sscanf(input, "%d", &num); err == nil && n == 1 && num >= 1 && num <= len(teams) {
+		return teams[num-1]
 	}
 	lower := strings.ToLower(input)
 	for _, t := range teams {
@@ -829,12 +828,9 @@ func askUserForTeam(teams []string, pr *readline.PromptReader) (string, error) {
 	if input == "" {
 		return "", nil
 	}
-	if idx, err := fmt.Sscanf(input, "%d", new(int)); err == nil && idx == 1 {
-		var num int
-		fmt.Sscanf(input, "%d", &num)
-		if num >= 1 && num <= len(teams) {
-			return teams[num-1], nil
-		}
+	var num int
+	if n, err := fmt.Sscanf(input, "%d", &num); err == nil && n == 1 && num >= 1 && num <= len(teams) {
+		return teams[num-1], nil
 	}
 	lower := strings.ToLower(input)
 	for _, t := range teams {

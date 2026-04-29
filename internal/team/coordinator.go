@@ -55,17 +55,25 @@ type Coordinator struct {
 	currentAgentName      string
 	currentAgentNameMu    sync.RWMutex
 	auditLogger           *audit.AuditLogger
-	skillUsage            map[string]*SkillUsageEntry
+	skillUsage            map[string]*skillUsageState
 	skillUsageMu        sync.Mutex
 	delegatedTasks      map[string]int
 	delegatedTasksMu    sync.Mutex
 	memoryStore         *memory.MemoryStore
 }
 
-type SkillUsageEntry struct {
+// skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
+type skillUsageState struct {
 	Name   string
 	Count  int
 	Agents map[string]bool
+}
+
+// SkillUsageEntry is the read-only snapshot returned by SkillUsage().
+type SkillUsageEntry struct {
+	Name   string
+	Count  int
+	Agents []string // sorted list of agent names
 }
 
 func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, verbose bool) (*Coordinator, error) {
@@ -86,7 +94,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		taskTracker:    NewTaskTracker(),
 		skills:         session.Skills,
 		projectDir:     projectDir,
-		skillUsage:     make(map[string]*SkillUsageEntry),
+		skillUsage:     make(map[string]*skillUsageState),
 		delegatedTasks: make(map[string]int),
 		memoryStore:    memoryStore,
 	}
@@ -123,21 +131,23 @@ func (c *Coordinator) report(event StatusEvent) {
 	c.reportStatus(event)
 }
 
-func (c *Coordinator) recordSkillUsage(name, agent string) {
+func (c *Coordinator) recordSkillUsage(name, agentName string) {
 	key := strings.ToLower(name)
-	c.skillUsageMu.Lock()
-	entry, ok := c.skillUsage[key]
-	if !ok {
-		entry = &SkillUsageEntry{
-			Name:   name,
-			Agents: make(map[string]bool),
+	func() {
+		c.skillUsageMu.Lock()
+		defer c.skillUsageMu.Unlock()
+		entry, ok := c.skillUsage[key]
+		if !ok {
+			entry = &skillUsageState{
+				Name:   name,
+				Agents: make(map[string]bool),
+			}
+			c.skillUsage[key] = entry
 		}
-		c.skillUsage[key] = entry
-	}
-	entry.Count++
-	entry.Agents[agent] = true
-	c.skillUsageMu.Unlock()
-	c.report(c.newEvent("skill_used").withSkillName(name).withAgent(agent))
+		entry.Count++
+		entry.Agents[agentName] = true
+	}()
+	c.report(c.newEvent("skill_used").withSkillName(name).withAgent(agentName))
 }
 
 func (c *Coordinator) SkillUsage() []SkillUsageEntry {
@@ -145,15 +155,16 @@ func (c *Coordinator) SkillUsage() []SkillUsageEntry {
 	defer c.skillUsageMu.Unlock()
 	result := make([]SkillUsageEntry, 0, len(c.skillUsage))
 	for _, entry := range c.skillUsage {
-		e := SkillUsageEntry{
+		agents := make([]string, 0, len(entry.Agents))
+		for k := range entry.Agents {
+			agents = append(agents, k)
+		}
+		sort.Strings(agents)
+		result = append(result, SkillUsageEntry{
 			Name:   entry.Name,
 			Count:  entry.Count,
-			Agents: make(map[string]bool, len(entry.Agents)),
-		}
-		for k := range entry.Agents {
-			e.Agents[k] = true
-		}
-		result = append(result, e)
+			Agents: agents,
+		})
 	}
 	return result
 }
@@ -210,8 +221,8 @@ func (c *Coordinator) TaskTracker() *TaskTracker {
 
 func (c *Coordinator) SetCurrentAgent(name string) {
 	c.currentAgentNameMu.Lock()
+	defer c.currentAgentNameMu.Unlock()
 	c.currentAgentName = name
-	c.currentAgentNameMu.Unlock()
 }
 
 func (c *Coordinator) GetCurrentAgent() string {
@@ -454,7 +465,6 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	c.SetCurrentAgent(name)
 	output, _, err := c.runAgentWithStatusAndHistory(taskCtx, ag, name, task, nil)
 	c.SetCurrentAgent(currentAgent)
-	cancel()
 
 	if err != nil {
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
@@ -627,6 +637,61 @@ const maxConcurrentTasks = 8
 const maxConversationHistory = 100
 const maxMessageSize = 50000
 
+type agentTaskResult struct {
+	agentName string
+	todoID    string
+	task      string
+	output    string
+	err       error
+}
+
+func (c *Coordinator) checkDuplicateTasks(tasks []TaskDef) []string {
+	var warnings []string
+	c.delegatedTasksMu.Lock()
+	defer c.delegatedTasksMu.Unlock()
+	for _, t := range tasks {
+		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(t.Task)
+		c.delegatedTasks[key]++
+		if c.delegatedTasks[key] > 1 {
+			warnings = append(warnings, fmt.Sprintf("%s (agent=%s, count=%d)", truncateTaskDesc(t.Task), t.Agent, c.delegatedTasks[key]))
+		}
+	}
+	return warnings
+}
+
+func formatTaskResults(results []agentTaskResult, totalTasks int, duplicateWarnings []string) (string, error) {
+	var b strings.Builder
+	successCount := 0
+	errorCount := 0
+	for i, r := range results {
+		if i > 0 {
+			b.WriteString("\n\n---\n\n")
+		}
+		if r.err != nil {
+			errorCount++
+			b.WriteString(fmt.Sprintf("## Agent: %s\n**Status**: ERROR\n**Error**: %s", r.agentName, r.err))
+		} else {
+			successCount++
+			b.WriteString(fmt.Sprintf("## Agent: %s\n**Status**: Success\n\n%s", r.agentName, r.output))
+		}
+	}
+	summary := fmt.Sprintf("\n\n---\nSummary: %d/%d tasks completed successfully", successCount, totalTasks)
+	if errorCount > 0 {
+		summary += fmt.Sprintf(", %d failed", errorCount)
+	}
+	b.WriteString(summary)
+	if len(duplicateWarnings) > 0 {
+		b.WriteString("\n\n**Warning**: You have delegated the same task to the same agent multiple times. This suggests you may be stuck in a loop. Consider using a different approach, agent, or calling `finish` with your best answer so far:\n")
+		for _, w := range duplicateWarnings {
+			b.WriteString(fmt.Sprintf("- %s\n", w))
+		}
+	}
+	if successCount == 0 && len(results) > 0 {
+		return b.String(), fmt.Errorf("all %d tasks failed", len(results))
+	}
+	return b.String(), nil
+}
+
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
 	if c.IsWrapUp() {
 		c.report(c.newEvent("step").withMessage("Wrap-up: refusing to start new tasks"))
@@ -653,30 +718,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
-	var duplicateWarnings []string
-	c.delegatedTasksMu.Lock()
-	for _, t := range tasks {
-		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(t.Task)
-		c.delegatedTasks[key]++
-		if c.delegatedTasks[key] > 1 {
-			duplicateWarnings = append(duplicateWarnings, fmt.Sprintf("%s (agent=%s, count=%d)", truncateTaskDesc(t.Task), t.Agent, c.delegatedTasks[key]))
-		}
-	}
-	c.delegatedTasksMu.Unlock()
-
+	duplicateWarnings := c.checkDuplicateTasks(tasks)
 	if len(duplicateWarnings) > 0 {
 		c.report(c.newEvent("loop_warning").withMessage(fmt.Sprintf("Duplicate task delegation detected: %v", duplicateWarnings)))
 	}
 
-	type taskResult struct {
-		agentName string
-		todoID    string
-		task      string
-		output    string
-		err       error
-	}
-	resultsCh := make(chan taskResult, len(tasks))
-
+	resultsCh := make(chan agentTaskResult, len(tasks))
 	sem := make(chan struct{}, maxConcurrentTasks)
 	var wg sync.WaitGroup
 	for i, task := range tasks {
@@ -686,13 +733,13 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			output, err := c.executeTask(ctx, td, tid)
-			resultsCh <- taskResult{agentName: td.Agent, todoID: tid, task: td.Task, output: output, err: err}
+			resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: td.Task, output: output, err: err}
 		}(task, todoItems[i].ID)
 	}
 	wg.Wait()
 	close(resultsCh)
 
-	var results []taskResult
+	var results []agentTaskResult
 	for r := range resultsCh {
 		results = append(results, r)
 	}
@@ -700,39 +747,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		return results[i].agentName < results[j].agentName
 	})
 
-	var b strings.Builder
-	successCount := 0
-	errorCount := 0
-	for i, r := range results {
-		if i > 0 {
-			b.WriteString("\n\n---\n\n")
-		}
-		if r.err != nil {
-			errorCount++
-			b.WriteString(fmt.Sprintf("## Agent: %s\n**Status**: ERROR\n**Error**: %s", r.agentName, r.err))
-		} else {
-			successCount++
-			b.WriteString(fmt.Sprintf("## Agent: %s\n**Status**: Success\n\n%s", r.agentName, r.output))
-		}
-	}
-
-	summary := fmt.Sprintf("\n\n---\nSummary: %d/%d tasks completed successfully", successCount, len(tasks))
-	if errorCount > 0 {
-		summary += fmt.Sprintf(", %d failed", errorCount)
-	}
-	b.WriteString(summary)
-
-	if len(duplicateWarnings) > 0 {
-		b.WriteString("\n\n**Warning**: You have delegated the same task to the same agent multiple times. This suggests you may be stuck in a loop. Consider using a different approach, agent, or calling `finish` with your best answer so far:\n")
-		for _, w := range duplicateWarnings {
-			b.WriteString(fmt.Sprintf("- %s\n", w))
-		}
-	}
-
-	if successCount == 0 && len(results) > 0 {
-		return b.String(), fmt.Errorf("all %d tasks failed", len(results))
-	}
-	return b.String(), nil
+	return formatTaskResults(results, len(tasks), duplicateWarnings)
 }
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (string, error) {
@@ -767,8 +782,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("start").withAgent(agentName).withMessage(task.Task))
 	c.SetCurrentAgent(agentName)
-	writeStatus(c.session.Workspace, agentName, "working", task.Task)
-	writeInbox(c.session.Workspace, agentName, task.Task)
+	_ = writeStatus(c.session.Workspace, agentName, "working", task.Task)
+	_ = writeInbox(c.session.Workspace, agentName, task.Task)
 
 	ag, err := c.getOrCreateAgent(parentCtx, agentDef)
 	if err != nil {
@@ -806,13 +821,18 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retry %d/%d — continuing from previous progress", attempt, maxRetries)))
 		}
 
-		taskCtx, cancel := context.WithTimeout(parentCtx, agentTimeout)
-		output, steps, err := c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, prompt, conversationHistory)
-		cancel()
+		var output string
+		var steps []fantasy.StepResult
+		var err error
+		func() {
+			taskCtx, cancel := context.WithTimeout(parentCtx, agentTimeout)
+			defer cancel()
+			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, prompt, conversationHistory)
+		}()
 
 		if err == nil {
-			writeOutbox(c.session.Workspace, agentName, output)
-			writeStatus(c.session.Workspace, agentName, "done", task.Task)
+			_ = writeOutbox(c.session.Workspace, agentName, output)
+			_ = writeStatus(c.session.Workspace, agentName, "done", task.Task)
 			c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.report(c.newEvent("done").withAgent(agentName).withMessage("completed"))
@@ -833,7 +853,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}
 	}
 
-	writeStatus(c.session.Workspace, agentName, "error", task.Task)
+	_ = writeStatus(c.session.Workspace, agentName, "error", task.Task)
 	return "", fmt.Errorf("agent %q failed after %d attempts: %w", agentName, maxRetries, lastErr)
 }
 
@@ -951,12 +971,12 @@ func (c *Coordinator) agentNames() []string {
 	return names
 }
 
-func (c *Coordinator) workerDescriptions() []string {
-	var descs []string
+func (c *Coordinator) buildWorkerNamesAndDescs() (names []string, descs []string) {
 	for _, def := range c.session.Agents {
 		if def.Role == "orchestrator" || def.Role == "coordinator" {
 			continue
 		}
+		names = append(names, def.Name)
 		desc := def.Name
 		if def.Description != "" {
 			desc += ": " + def.Description
@@ -966,16 +986,11 @@ func (c *Coordinator) workerDescriptions() []string {
 		}
 		descs = append(descs, desc)
 	}
-	return descs
+	return names, descs
 }
 
 func (c *Coordinator) workerNameList() []string {
-	var names []string
-	for _, def := range c.session.Agents {
-		if def.Role != "orchestrator" && def.Role != "coordinator" {
-			names = append(names, def.Name)
-		}
-	}
+	names, _ := c.buildWorkerNamesAndDescs()
 	return names
 }
 
@@ -994,8 +1009,7 @@ func (c *Coordinator) loadProjectContext() string {
 }
 
 func (c *Coordinator) BuildOrchestratorPrompt() string {
-	workerNames := c.workerNameList()
-	workerDescs := c.workerDescriptions()
+	workerNames, workerDescs := c.buildWorkerNamesAndDescs()
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the coordinator of team %q with %d members: %s.\n\n", c.session.Config.Name, len(workerNames), strings.Join(workerNames, ", "))
@@ -1189,8 +1203,8 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	taskCtx, cancel := context.WithTimeout(ctx, agentTimeout)
 	defer cancel()
 
-	writeInbox(c.session.Workspace, agentName, task)
-	writeStatus(c.session.Workspace, agentName, "working", task)
+	_ = writeInbox(c.session.Workspace, agentName, task)
+	_ = writeStatus(c.session.Workspace, agentName, "working", task)
 
 	prompt := task
 	if prefix := c.buildSkillPromptPrefix(agentDef); prefix != "" {
@@ -1199,18 +1213,66 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 
 	output, err := c.runAgentWithStatus(taskCtx, ag, agentName, prompt)
 	if err != nil {
-		writeStatus(c.session.Workspace, agentName, "error", task)
+		_ = writeStatus(c.session.Workspace, agentName, "error", task)
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		return &DirectAgentResult{AgentName: agentName, Error: err}, nil
 	}
 
-	writeOutbox(c.session.Workspace, agentName, output)
-	writeStatus(c.session.Workspace, agentName, "done", task)
+	_ = writeOutbox(c.session.Workspace, agentName, output)
+	_ = writeStatus(c.session.Workspace, agentName, "done", task)
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
 	return &DirectAgentResult{AgentName: agentName, Output: output}, nil
+}
+
+func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
+	orchTools := []fantasy.AgentTool{c.RunAgentsTool(), &finishTool{}, &loadSkillTool{coordinator: c}}
+	for _, t := range c.coreTools {
+		if t.Info().Name == "ask_user" {
+			orchTools = append(orchTools, t)
+			break
+		}
+	}
+	return orchTools
+}
+
+func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentDef, prompt string) (string, []fantasy.StepResult, error) {
+	coordinatorTimeout := time.Duration(c.session.Config.Timeout) * time.Second * time.Duration(c.session.Config.MaxRounds+1)
+	if orchDef.Timeout > 0 {
+		coordinatorTimeout = time.Duration(orchDef.Timeout) * time.Second
+	}
+
+	orchCtx, cancel := context.WithTimeout(ctx, coordinatorTimeout)
+	defer cancel()
+
+	orch, err := agent.CreateAgent(orchCtx, c.provider, agent.AgentConfig{
+		Def:        orchDef,
+		TeamConfig: &c.session.Config,
+		WorkDir:    c.projectDir,
+		MaxSteps:   agent.DefaultCoordinatorMaxSteps,
+	}, c.buildOrchestratorTools())
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create coordinator: %w", err)
+	}
+
+	c.conversationHistoryMu.Lock()
+	historySnapshot := make([]fantasy.Message, len(c.conversationHistory))
+	copy(historySnapshot, c.conversationHistory)
+	c.conversationHistoryMu.Unlock()
+
+	return c.runAgentWithStatusAndHistory(orchCtx, orch, orchDef.Name, prompt, historySnapshot)
+}
+
+func (c *Coordinator) saveHistoryAndSession(steps []fantasy.StepResult) {
+	c.conversationHistoryMu.Lock()
+	c.appendHistory(steps)
+	SaveConversationHistory(c.session.Workspace, c.conversationHistory)
+	c.conversationHistoryMu.Unlock()
+	if c.sessionData != nil {
+		SaveSession(c.session.Workspace, c.sessionData)
+	}
 }
 
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
@@ -1249,60 +1311,21 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		}
 	}
 
-	orchTools := []fantasy.AgentTool{c.RunAgentsTool(), &finishTool{}, &loadSkillTool{coordinator: c}}
-	for _, t := range c.coreTools {
-		if t.Info().Name == "ask_user" {
-			orchTools = append(orchTools, t)
-			break
-		}
-	}
-
-	coordinatorTimeout := time.Duration(c.session.Config.Timeout) * time.Second * time.Duration(c.session.Config.MaxRounds+1)
-	if orchDef.Timeout > 0 {
-		coordinatorTimeout = time.Duration(orchDef.Timeout) * time.Second
-	}
-
-	orchCtx, cancel := context.WithTimeout(ctx, coordinatorTimeout)
-	defer cancel()
+	// Apply the computed system prompt to a copy so shared state is not mutated.
+	orchDefCopy := *orchDef
+	orchDefCopy.System = systemPrompt
 
 	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("coordinator starting"))
 
-	orch, err := agent.CreateAgent(orchCtx, c.provider, agent.AgentConfig{
-		Def:        orchDef,
-		TeamConfig: &c.session.Config,
-		WorkDir:    c.projectDir,
-		MaxSteps:   agent.DefaultCoordinatorMaxSteps,
-	}, orchTools)
+	result, steps, err := c.runOrchestrator(ctx, &orchDefCopy, userPrompt)
 	if err != nil {
-		return "", fmt.Errorf("failed to create coordinator: %w", err)
-	}
-
-	c.conversationHistoryMu.Lock()
-	historySnapshot := make([]fantasy.Message, len(c.conversationHistory))
-	copy(historySnapshot, c.conversationHistory)
-	c.conversationHistoryMu.Unlock()
-
-	result, steps, err := c.runAgentWithStatusAndHistory(orchCtx, orch, orchDef.Name, userPrompt, historySnapshot)
-	if err != nil {
-		c.conversationHistoryMu.Lock()
-		c.appendHistory(steps)
-		SaveConversationHistory(c.session.Workspace, c.conversationHistory)
-		c.conversationHistoryMu.Unlock()
-		if c.sessionData != nil {
-			SaveSession(c.session.Workspace, c.sessionData)
-		}
+		c.saveHistoryAndSession(steps)
 		return "", fmt.Errorf("coordinator failed: %w", err)
 	}
 
-	c.conversationHistoryMu.Lock()
-	c.appendHistory(steps)
-	SaveConversationHistory(c.session.Workspace, c.conversationHistory)
-	c.conversationHistoryMu.Unlock()
+	c.saveHistoryAndSession(steps)
 
-	finalResult := result
-	if strings.HasPrefix(result, "FINISHED:") {
-		finalResult = strings.TrimPrefix(result, "FINISHED:")
-	}
+	finalResult := strings.TrimPrefix(result, "FINISHED:")
 
 	if c.sessionData != nil {
 		c.sessionData.AddEntry("assistant", finalResult)
@@ -1332,60 +1355,17 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		c.sessionData.AddEntry("user", additionalPrompt)
 	}
 
-	orchTools := []fantasy.AgentTool{c.RunAgentsTool(), &finishTool{}, &loadSkillTool{coordinator: c}}
-	for _, t := range c.coreTools {
-		if t.Info().Name == "ask_user" {
-			orchTools = append(orchTools, t)
-			break
-		}
-	}
-
-	coordinatorTimeout := time.Duration(c.session.Config.Timeout) * time.Second * time.Duration(c.session.Config.MaxRounds+1)
-	if orchDef.Timeout > 0 {
-		coordinatorTimeout = time.Duration(orchDef.Timeout) * time.Second
-	}
-
-	orchCtx, cancel := context.WithTimeout(ctx, coordinatorTimeout)
-	defer cancel()
-
 	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("continuing with additional input"))
 
-	orch, err := agent.CreateAgent(orchCtx, c.provider, agent.AgentConfig{
-		Def:        orchDef,
-		TeamConfig: &c.session.Config,
-		WorkDir:    c.projectDir,
-		MaxSteps:   agent.DefaultCoordinatorMaxSteps,
-	}, orchTools)
+	result, steps, err := c.runOrchestrator(ctx, orchDef, continuationPrompt)
 	if err != nil {
-		return "", fmt.Errorf("failed to create coordinator: %w", err)
-	}
-
-	c.conversationHistoryMu.Lock()
-	historySnapshot := make([]fantasy.Message, len(c.conversationHistory))
-	copy(historySnapshot, c.conversationHistory)
-	c.conversationHistoryMu.Unlock()
-
-	result, steps, err := c.runAgentWithStatusAndHistory(orchCtx, orch, orchDef.Name, continuationPrompt, historySnapshot)
-	if err != nil {
-		c.conversationHistoryMu.Lock()
-		c.appendHistory(steps)
-		SaveConversationHistory(c.session.Workspace, c.conversationHistory)
-		c.conversationHistoryMu.Unlock()
-		if c.sessionData != nil {
-			SaveSession(c.session.Workspace, c.sessionData)
-		}
+		c.saveHistoryAndSession(steps)
 		return "", fmt.Errorf("coordinator continuation failed: %w", err)
 	}
 
-	c.conversationHistoryMu.Lock()
-	c.appendHistory(steps)
-	SaveConversationHistory(c.session.Workspace, c.conversationHistory)
-	c.conversationHistoryMu.Unlock()
+	c.saveHistoryAndSession(steps)
 
-	finalResult := result
-	if strings.HasPrefix(result, "FINISHED:") {
-		finalResult = strings.TrimPrefix(result, "FINISHED:")
-	}
+	finalResult := strings.TrimPrefix(result, "FINISHED:")
 
 	if c.sessionData != nil {
 		c.sessionData.AddEntry("assistant", finalResult)
