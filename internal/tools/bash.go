@@ -21,9 +21,64 @@ const maxBashTimeout = 600 * time.Second
 
 var bannedCmdRe = regexp.MustCompile(`^(alias|bg|bind|builtin|caller|command|compgen|complete|compopt|coproc|dirs|disown|enable|fc|fg|hash|help|history|jobs|kill|logout|mapfile|popd|pushd|readonly|select|set|shopt|source|suspend|times|trap|type|typeset|ulimit|umask|unalias|wait)\s`)
 
+// bashPrivEscRe matches sudo or ssh used as commands at any point in a pipeline or
+// subshell, so the plain bash tool cannot escalate privileges or open remote sessions.
+// Recognised command-start positions: beginning of string, pipe (|), logical ops (&, ;),
+// subshell open (, backtick (`), $( substitution, and newline.
+var bashPrivEscRe = regexp.MustCompile("(?:^|[|;&(\n\x60]|\\$\\()\\s*(?:sudo|ssh)(?:\\s|$)")
+
 type bashArgs struct {
 	Command string  `json:"command"`
 	Timeout float64 `json:"timeout,omitempty"`
+}
+
+// runShellCommand runs name+args under a derived context with the given timeout,
+// sets Dir and the SHELL env var, then collects stdout/stderr and builds a response.
+// It is used by the bash and sudo tools.
+func runShellCommand(ctx context.Context, timeout time.Duration, workDir string, name string, args ...string) (fantasy.ToolResponse, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, name, args...)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	bashPath, err := exec.LookPath("bash")
+	if err != nil {
+		bashPath = "/bin/bash"
+	}
+	cmd.Env = append(os.Environ(), "SHELL="+bashPath)
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return fantasy.NewTextErrorResponse("failed to create stdout pipe"), nil
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return fantasy.NewTextErrorResponse("failed to create stderr pipe"), nil
+	}
+	if err := cmd.Start(); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to start command: %v", err)), nil
+	}
+
+	var wg sync.WaitGroup
+	var stdout, stderr bytes.Buffer
+	wg.Add(2)
+	go func() { defer wg.Done(); io.Copy(&stdout, stdoutPipe) }()
+	go func() { defer wg.Done(); io.Copy(&stderr, stderrPipe) }()
+
+	waitErr := cmd.Wait()
+	wg.Wait()
+
+	exitCode := 0
+	if waitErr != nil {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else if cmdCtx.Err() == context.DeadlineExceeded {
+			return fantasy.NewTextErrorResponse("command timed out"), nil
+		}
+	}
+	return buildBashResponse(stdout.String(), stderr.String(), exitCode), nil
 }
 
 func NewBashTool(opts ...ToolOption) fantasy.AgentTool {
@@ -58,9 +113,11 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, workDir string) (fa
 	if args.Command == "" {
 		return fantasy.NewTextErrorResponse("command parameter is required"), nil
 	}
-
 	if bannedCmdRe.MatchString(args.Command) {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("command '%s' is not allowed", args.Command)), nil
+	}
+	if bashPrivEscRe.MatchString(args.Command) {
+		return fantasy.NewTextErrorResponse("sudo and ssh are not available in the bash tool — use the sudo or ssh tool instead"), nil
 	}
 
 	timeout := defaultBashTimeout
@@ -71,58 +128,7 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, workDir string) (fa
 		}
 	}
 
-	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(cmdCtx, "bash", "-c", args.Command)
-	if workDir != "" {
-		cmd.Dir = workDir
-	}
-
-	bashPath, err := exec.LookPath("bash")
-	if err != nil {
-		bashPath = "/bin/bash"
-	}
-	cmd.Env = append(os.Environ(), "SHELL="+bashPath)
-
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return fantasy.NewTextErrorResponse("failed to create stdout pipe"), nil
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return fantasy.NewTextErrorResponse("failed to create stderr pipe"), nil
-	}
-
-	if err := cmd.Start(); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to start command: %v", err)), nil
-	}
-
-	var wg sync.WaitGroup
-	var stdout, stderr bytes.Buffer
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		io.Copy(&stdout, stdoutPipe)
-	}()
-	go func() {
-		defer wg.Done()
-		io.Copy(&stderr, stderrPipe)
-	}()
-
-	waitErr := cmd.Wait()
-	wg.Wait()
-
-	exitCode := 0
-	if waitErr != nil {
-		if exitErr, ok := waitErr.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else if cmdCtx.Err() == context.DeadlineExceeded {
-			return fantasy.NewTextErrorResponse("command timed out"), nil
-		}
-	}
-
-	return buildBashResponse(stdout.String(), stderr.String(), exitCode), nil
+	return runShellCommand(ctx, timeout, workDir, "bash", "-c", args.Command)
 }
 
 func buildBashResponse(stdout, stderr string, exitCode int) fantasy.ToolResponse {

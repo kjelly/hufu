@@ -229,6 +229,8 @@ func resolveAndValidatePath(path, workDir string) (string, error) {
 func AllTools(opts ...ToolOption) []fantasy.AgentTool {
 	return []fantasy.AgentTool{
 		NewBashTool(opts...),
+		NewSudoTool(opts...),
+		NewSshTool(opts...),
 		NewViewTool(opts...),
 		NewWriteTool(opts...),
 		NewEditTool(opts...),
