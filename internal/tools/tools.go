@@ -207,6 +207,14 @@ func resolveAndValidatePath(path, workDir string) (string, error) {
 	}
 	evaluatedProjDir = filepath.Clean(evaluatedProjDir)
 
+	evaluatedPath, err := filepath.EvalSymlinks(absPath)
+	if err == nil {
+		if !strings.HasPrefix(evaluatedPath, evaluatedProjDir+string(filepath.Separator)) && evaluatedPath != evaluatedProjDir {
+			return "", fmt.Errorf("path '%s' is outside the project directory", path)
+		}
+		return evaluatedPath, nil
+	}
+
 	evaluatedDir, err := filepath.EvalSymlinks(filepath.Dir(absPath))
 	if err != nil {
 		return "", fmt.Errorf("path '%s' is invalid or cannot be resolved: %w", path, err)
@@ -215,7 +223,7 @@ func resolveAndValidatePath(path, workDir string) (string, error) {
 	if !strings.HasPrefix(evaluatedDir, evaluatedProjDir+string(filepath.Separator)) && evaluatedDir != evaluatedProjDir {
 		return "", fmt.Errorf("path '%s' is outside the project directory", path)
 	}
-	return absPath, nil
+	return filepath.Join(evaluatedDir, filepath.Base(absPath)), nil
 }
 
 func AllTools(opts ...ToolOption) []fantasy.AgentTool {

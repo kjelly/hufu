@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/mcp"
 	"github.com/anomalyco/hufu/internal/skill"
@@ -18,6 +20,39 @@ type TeamSession struct {
 	Agents     map[string]*agent.AgentDef
 	MCPServers map[string]mcp.MCPServerConfig
 	Skills     []*skill.SkillDef
+}
+
+type agentFrontmatter struct {
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	Role        string `yaml:"role"`
+	Tools       string `yaml:"tools"`
+	Skills      string `yaml:"skills"`
+	Model       string `yaml:"model"`
+	Temperature string `yaml:"temperature"`
+	MaxTokens   string `yaml:"max-tokens"`
+	TopP        string `yaml:"top-p"`
+	TopK        string `yaml:"top-k"`
+	Timeout     int64  `yaml:"timeout"`
+	MaxRetries  int    `yaml:"max-retries"`
+	ProviderURL string `yaml:"provider-url"`
+}
+
+type teamConfigYAML struct {
+	Name          string `yaml:"name"`
+	Description   string `yaml:"description"`
+	MaxRounds     int    `yaml:"max-rounds"`
+	Workspace     string `yaml:"workspace"`
+	Timeout       int64  `yaml:"timeout"`
+	MaxRetries    int    `yaml:"max-retries"`
+	Model         string `yaml:"model"`
+	Temperature   string `yaml:"temperature"`
+	MaxTokens     string `yaml:"max-tokens"`
+	TopP          string `yaml:"top-p"`
+	TopK          string `yaml:"top-k"`
+	Skills        string `yaml:"skills"`
+	SkillsExclude string `yaml:"skills-exclude"`
+	ProviderURL   string `yaml:"provider-url"`
 }
 
 func parseSimpleYAML(data string) map[string]string {
@@ -43,6 +78,34 @@ func parseSimpleYAML(data string) map[string]string {
 	return result
 }
 
+func agentFrontmatterFromSimple(m map[string]string) agentFrontmatter {
+	var fm agentFrontmatter
+	fm.Name = m["name"]
+	fm.Description = m["description"]
+	fm.Role = m["role"]
+	fm.Tools = m["tools"]
+	fm.Skills = m["skills"]
+	fm.Model = m["model"]
+	fm.Temperature = m["temperature"]
+	fm.MaxTokens = m["max-tokens"]
+	fm.TopP = m["top-p"]
+	fm.TopK = m["top-k"]
+	fm.ProviderURL = m["provider-url"]
+	if v := m["timeout"]; v != "" {
+		var n int64
+		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n > 0 {
+			fm.Timeout = n
+		}
+	}
+	if v := m["max-retries"]; v != "" {
+		var n int
+		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n >= 0 {
+			fm.MaxRetries = n
+		}
+	}
+	return fm
+}
+
 func parseAgentFile(path string) *agent.AgentDef {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -59,47 +122,45 @@ func parseAgentFile(path string) *agent.AgentDef {
 		fmt.Fprintf(os.Stderr, "warning: malformed frontmatter in %s (missing closing ---)\n", path)
 		return nil
 	}
-	fm := parseSimpleYAML(rest[:idx])
+
+	var fm agentFrontmatter
+	if err := yaml.Unmarshal([]byte(rest[:idx]), &fm); err != nil {
+		fm = agentFrontmatterFromSimple(parseSimpleYAML(rest[:idx]))
+	}
 	body := strings.TrimSpace(rest[idx+5:])
 
-	if fm["name"] == "" {
+	if fm.Name == "" {
 		fmt.Fprintf(os.Stderr, "warning: agent file %s has no 'name' in frontmatter\n", path)
 		return nil
 	}
 
-	role := fm["role"]
+	role := fm.Role
 	if role == "" {
 		role = "worker"
 	}
 
 	def := &agent.AgentDef{
-		Name:        fm["name"],
-		Description: fm["description"],
-		Tools:       fm["tools"],
+		Name:        fm.Name,
+		Description: fm.Description,
+		Tools:       fm.Tools,
 		Role:        role,
 		System:      body,
-		Skills:      fm["skills"],
+		Skills:      fm.Skills,
 		MaxRetries:  -1,
 		Generation: agent.GenerationParams{
-			Model:       fm["model"],
-			Temperature: fm["temperature"],
-			MaxTokens:   fm["max-tokens"],
-			TopP:        fm["top-p"],
-			TopK:        fm["top-k"],
+			Model:       fm.Model,
+			Temperature: fm.Temperature,
+			MaxTokens:   fm.MaxTokens,
+			TopP:        fm.TopP,
+			TopK:        fm.TopK,
 		},
-		ProviderURL: fm["provider-url"],
+		ProviderURL: fm.ProviderURL,
 	}
-	if v := fm["timeout"]; v != "" {
-		var seconds int64
-		if _, err := fmt.Sscanf(v, "%d", &seconds); err == nil && seconds > 0 {
-			def.Timeout = seconds
-		}
+	if fm.Timeout > 0 {
+		def.Timeout = fm.Timeout
 	}
-	if v := fm["max-retries"]; v != "" {
-		var n int
-		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n >= 0 {
-			def.MaxRetries = n
-		}
+	if fm.MaxRetries >= 0 {
+		def.MaxRetries = fm.MaxRetries
 	}
 	return def
 }
@@ -126,43 +187,44 @@ func parseTeamYML(teamDir string) (agent.TeamConfig, error) {
 		return cfg, fmt.Errorf("team.yml or team.yaml not found in %s", teamDir)
 	}
 
-	fm := parseSimpleYAML(string(data))
-	if v := fm["name"]; v != "" {
-		cfg.Name = v
+	var yc teamConfigYAML
+	if err := yaml.Unmarshal(data, &yc); err != nil {
+		return cfg, fmt.Errorf("failed to parse team config: %w", err)
 	}
-	if v := fm["description"]; v != "" {
-		cfg.Description = v
+
+	if yc.Name != "" {
+		cfg.Name = yc.Name
 	}
-	if v := fm["max-rounds"]; v != "" {
-		fmt.Sscanf(v, "%d", &cfg.MaxRounds)
+	if yc.Description != "" {
+		cfg.Description = yc.Description
 	}
-	if v := fm["workspace"]; v != "" {
-		cfg.WorkspaceDir = v
+	if yc.MaxRounds > 0 {
+		cfg.MaxRounds = yc.MaxRounds
 	}
-	if v := fm["timeout"]; v != "" {
-		var seconds int64
-		if _, err := fmt.Sscanf(v, "%d", &seconds); err == nil && seconds > 0 {
-			cfg.Timeout = seconds
-		}
+	if yc.Workspace != "" {
+		cfg.WorkspaceDir = yc.Workspace
 	}
-	if v := fm["max-retries"]; v != "" {
-		fmt.Sscanf(v, "%d", &cfg.MaxRetries)
+	if yc.Timeout > 0 {
+		cfg.Timeout = yc.Timeout
+	}
+	if yc.MaxRetries >= 0 {
+		cfg.MaxRetries = yc.MaxRetries
 	}
 	cfg.Generation = agent.GenerationParams{
-		Model:       fm["model"],
-		Temperature: fm["temperature"],
-		MaxTokens:   fm["max-tokens"],
-		TopP:        fm["top-p"],
-		TopK:        fm["top-k"],
+		Model:       yc.Model,
+		Temperature: yc.Temperature,
+		MaxTokens:   yc.MaxTokens,
+		TopP:        yc.TopP,
+		TopK:        yc.TopK,
 	}
-	if v := fm["skills"]; v != "" {
-		cfg.Skills = v
+	if yc.Skills != "" {
+		cfg.Skills = yc.Skills
 	}
-	if v := fm["skills-exclude"]; v != "" {
-		cfg.SkillsExclude = v
+	if yc.SkillsExclude != "" {
+		cfg.SkillsExclude = yc.SkillsExclude
 	}
-	if v := fm["provider-url"]; v != "" {
-		cfg.ProviderURL = v
+	if yc.ProviderURL != "" {
+		cfg.ProviderURL = yc.ProviderURL
 	}
 
 	return cfg, nil

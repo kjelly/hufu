@@ -237,12 +237,20 @@ func validateLuaPath(path, projectDir string) (string, error) {
 	}
 	evaluatedProjDir = filepath.Clean(evaluatedProjDir)
 
+	evaluatedPath, err := filepath.EvalSymlinks(absPath)
+	if err == nil {
+		if !strings.HasPrefix(evaluatedPath, evaluatedProjDir+string(filepath.Separator)) && evaluatedPath != evaluatedProjDir {
+			return "", fmt.Errorf("path '%s' is outside the project directory", path)
+		}
+		return evaluatedPath, nil
+	}
+
 	parentDir := filepath.Dir(absPath)
 	evaluatedDir, err := filepath.EvalSymlinks(parentDir)
 	if err != nil {
 		return "", fmt.Errorf("path '%s' is invalid or cannot be resolved: %w", path, err)
 	}
-	evaluatedPath := filepath.Join(evaluatedDir, filepath.Base(absPath))
+	evaluatedPath = filepath.Join(evaluatedDir, filepath.Base(absPath))
 
 	if !strings.HasPrefix(evaluatedDir, evaluatedProjDir+string(filepath.Separator)) && evaluatedDir != evaluatedProjDir {
 		return "", fmt.Errorf("path '%s' is outside the project directory", path)

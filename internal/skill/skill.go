@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 type SkillDef struct {
@@ -72,7 +74,31 @@ func buildSummary(def *SkillDef) string {
 	return firstLine
 }
 
+type skillFrontmatter struct {
+	Name         string `yaml:"name"`
+	Description  string `yaml:"description"`
+	AllowedTools string `yaml:"allowed-tools"`
+}
+
 func parseSkillYAML(data string) map[string]string {
+	var fm skillFrontmatter
+	if err := yaml.Unmarshal([]byte(data), &fm); err == nil {
+		result := map[string]string{}
+		if fm.Name != "" {
+			result["name"] = fm.Name
+		}
+		if fm.Description != "" {
+			result["description"] = fm.Description
+		}
+		if fm.AllowedTools != "" {
+			result["allowed-tools"] = fm.AllowedTools
+		}
+		return result
+	}
+	return parseSimpleYAML(data)
+}
+
+func parseSimpleYAML(data string) map[string]string {
 	result := map[string]string{}
 	for _, line := range strings.Split(data, "\n") {
 		line = strings.TrimSpace(line)

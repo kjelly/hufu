@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	ergoreadline "github.com/ergochat/readline"
@@ -28,24 +30,19 @@ var (
 	tempWorkspace       bool
 	agentTeamName       string
 	agentTeamSearchPath string
-	globalPromptReader  *readline.PromptReader
+	globalPromptReader  atomic.Pointer[readline.PromptReader]
 )
 
-func exitInterrupt() {
-	if globalPromptReader != nil {
-		globalPromptReader.Close()
-	}
-	os.Exit(130)
-}
+type errInterrupted struct{}
 
-func exitError() {
-	if globalPromptReader != nil {
-		globalPromptReader.Close()
-	}
-	os.Exit(1)
-}
+func (errInterrupted) Error() string { return "interrupted" }
+
+type errForced struct{}
+
+func (errForced) Error() string { return "force quit" }
 
 func main() {
+	exitCode := 0
 	rootCmd := &cobra.Command{
 		Use:   "hufu [prompt]",
 		Short: "Run an agent team to accomplish a task",
@@ -63,8 +60,17 @@ func main() {
 	rootCmd.Flags().StringVar(&agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams (default: .agent-teams/,~/.agent-teams/)")
 
 	if err := rootCmd.Execute(); err != nil {
-		exitError()
+		var interrupted errInterrupted
+		if errors.Is(err, interrupted) {
+			exitCode = 130
+		} else {
+			exitCode = 1
+		}
 	}
+	if pr := globalPromptReader.Load(); pr != nil {
+		pr.Close()
+	}
+	os.Exit(exitCode)
 }
 
 type teamContext struct {
@@ -79,18 +85,13 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "%s Readline initialization failed, falling back to basic input: %v\n", errStyle.Render("⚠"), err)
 		pr = nil
 	}
-	globalPromptReader = pr
-	defer func() {
-		if pr != nil {
-			pr.Close()
-		}
-	}()
-
+	globalPromptReader.Store(pr)
 	if tempWorkspace {
 		tmpDir, err := os.MkdirTemp("", "hufu-*")
 		if err != nil {
 			return fmt.Errorf("failed to create temp directory: %w", err)
 		}
+		defer os.RemoveAll(tmpDir)
 		workspace = filepath.Join(tmpDir, "workspace")
 		fmt.Fprintf(os.Stderr, "%s Temp workspace: %s\n", stepStyle.Render("⟳"), workspace)
 	}
@@ -104,9 +105,17 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	}
 	if prompt == "" {
 		if pr != nil {
-			prompt = askUserForPrompt(pr)
+			p, err := askUserForPrompt(pr)
+			if err != nil {
+				return err
+			}
+			prompt = p
 		} else {
-			prompt = askUserForPromptFallback()
+			p, err := askUserForPromptFallback()
+			if err != nil {
+				return err
+			}
+			prompt = p
 		}
 	}
 
@@ -117,23 +126,31 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	activeCoord := &activeCoordinator{}
 	defer setupPromptSignals(injector)()
 
-	sigIntCount := 0
 	sigIntCh := make(chan os.Signal, 1)
 	signal.Notify(sigIntCh, os.Interrupt)
+	sigIntDone := make(chan struct{})
 	go func() {
+		defer close(sigIntDone)
+		first := true
 		for range sigIntCh {
-			sigIntCount++
-			if sigIntCount == 1 {
+			if first {
 				fmt.Fprintf(os.Stderr, "\n%s Wrapping up... (press Ctrl+C again to force quit)\n", boldStyle.Render("⏹"))
 				if c := activeCoord.Get(); c != nil {
 					c.SetWrapUp()
 				}
 				injector.injectWrapUp()
+				first = false
 			} else {
 				fmt.Fprintf(os.Stderr, "\n%s Force quit\n", errStyle.Render("✗"))
 				cancel()
 			}
 		}
+	}()
+
+	defer func() {
+		signal.Stop(sigIntCh)
+		close(sigIntCh)
+		<-sigIntDone
 	}()
 
 	var searchPaths []string
@@ -172,13 +189,17 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		if teamNotFound {
 			var chosen string
 			if pr != nil {
-				chosen = askUserForTeam(registry.ListTeams(), pr)
+				c, err := askUserForTeam(registry.ListTeams(), pr)
+				if err != nil {
+					return err
+				}
+				chosen = c
 			} else {
 				chosen = askUserForTeamFallback(registry.ListTeams())
 			}
 			if chosen == "" {
 				fmt.Fprintf(os.Stderr, "%s No team selected.\n", errStyle.Render("✗"))
-				exitError()
+				return fmt.Errorf("no team selected")
 			}
 			initialTeam = chosen
 			initialSegments, err = team.ParsePromptWithLazyAgents(prompt, registry, initialTeam)
@@ -456,7 +477,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
 					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-					exitInterrupt()
+					return "", errInterrupted{}
 				}
 				team.SaveSession(tc.session.Workspace, tc.sessionData)
 				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
@@ -468,7 +489,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
 					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-					exitInterrupt()
+					return "", errInterrupted{}
 				}
 				team.SaveSession(tc.session.Workspace, tc.sessionData)
 				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
@@ -509,7 +530,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
 					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-					exitInterrupt()
+					return "", errInterrupted{}
 				}
 				return strings.Join(results, "\n\n"), fmt.Errorf("direct agent @%s failed: %w", seg.Name, err)
 			}
@@ -539,7 +560,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 					if ctx.Err() == context.Canceled {
 						team.SaveSession(tc.session.Workspace, tc.sessionData)
 						fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-						exitInterrupt()
+						return "", errInterrupted{}
 					}
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
 					team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
@@ -551,7 +572,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 					if ctx.Err() == context.Canceled {
 						team.SaveSession(tc.session.Workspace, tc.sessionData)
 						fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-						exitInterrupt()
+						return "", errInterrupted{}
 					}
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
 					team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
@@ -589,7 +610,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
 					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-					exitInterrupt()
+					return "", errInterrupted{}
 				}
 				team.SaveSession(tc.session.Workspace, tc.sessionData)
 				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
@@ -601,7 +622,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
 					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
-					exitInterrupt()
+					return "", errInterrupted{}
 				}
 				team.SaveSession(tc.session.Workspace, tc.sessionData)
 				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
@@ -659,7 +680,7 @@ func defaultHistoryPath() string {
 	return filepath.Join(dir, "prompt_history")
 }
 
-func askUserForPromptFallback() string {
+func askUserForPromptFallback() (string, error) {
 	var input string
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Enter Prompt ───"))
 	fmt.Fprintf(os.Stderr, "Describe the task (use @team-name or @agent-name in the prompt):\n")
@@ -668,9 +689,9 @@ func askUserForPromptFallback() string {
 	prompt := strings.TrimSpace(input)
 	if prompt == "" {
 		fmt.Fprintf(os.Stderr, "%s No prompt provided.\n", errStyle.Render("✗"))
-		exitError()
+		return "", fmt.Errorf("no prompt provided")
 	}
-	return prompt
+	return prompt, nil
 }
 
 func askUserForTeamFallback(teams []string) string {
@@ -714,29 +735,29 @@ func readStdin() string {
 	return strings.TrimSpace(string(data))
 }
 
-func askUserForPrompt(pr *readline.PromptReader) string {
+func askUserForPrompt(pr *readline.PromptReader) (string, error) {
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Enter Prompt ───"))
 	fmt.Fprintf(os.Stderr, "Describe the task (use @team-name or @agent-name in the prompt):\n")
 	prompt, err := pr.ReadLine(boldStyle.Render("> "))
 	if err != nil {
 		if err == ergoreadline.ErrInterrupt || err == io.EOF {
 			fmt.Fprintf(os.Stderr, "\n")
-			exitInterrupt()
+			return "", errInterrupted{}
 		}
 		fmt.Fprintf(os.Stderr, "%s Input error: %v\n", errStyle.Render("✗"), err)
-		exitError()
+		return "", fmt.Errorf("input error: %w", err)
 	}
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		fmt.Fprintf(os.Stderr, "%s No prompt provided.\n", errStyle.Render("✗"))
-		exitError()
+		return "", fmt.Errorf("no prompt provided")
 	}
-	return prompt
+	return prompt, nil
 }
 
-func askUserForTeam(teams []string, pr *readline.PromptReader) string {
+func askUserForTeam(teams []string, pr *readline.PromptReader) (string, error) {
 	if len(teams) == 0 {
-		return ""
+		return "", nil
 	}
 	sort.Strings(teams)
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Select Team ───"))
@@ -747,26 +768,26 @@ func askUserForTeam(teams []string, pr *readline.PromptReader) string {
 	if err != nil {
 		if err == ergoreadline.ErrInterrupt || err == io.EOF {
 			fmt.Fprintf(os.Stderr, "\n")
-			exitInterrupt()
+			return "", errInterrupted{}
 		}
-		return ""
+		return "", fmt.Errorf("input error: %w", err)
 	}
 	input = strings.TrimSpace(input)
 	if input == "" {
-		return ""
+		return "", nil
 	}
 	if idx, err := fmt.Sscanf(input, "%d", new(int)); err == nil && idx == 1 {
 		var num int
 		fmt.Sscanf(input, "%d", &num)
 		if num >= 1 && num <= len(teams) {
-			return teams[num-1]
+			return teams[num-1], nil
 		}
 	}
 	lower := strings.ToLower(input)
 	for _, t := range teams {
 		if strings.ToLower(t) == lower {
-			return t
+			return t, nil
 		}
 	}
-	return input
+	return input, nil
 }
