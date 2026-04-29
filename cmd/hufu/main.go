@@ -17,7 +17,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/anomalyco/hufu/internal/config"
 	"github.com/anomalyco/hufu/internal/mcp"
+	"github.com/anomalyco/hufu/internal/memory"
 	"github.com/anomalyco/hufu/internal/readline"
 	"github.com/anomalyco/hufu/internal/team"
 )
@@ -30,6 +32,8 @@ var (
 	tempWorkspace       bool
 	agentTeamName       string
 	agentTeamSearchPath string
+	memoryEnabled       bool
+	memoryModel         string
 	globalPromptReader  atomic.Pointer[readline.PromptReader]
 )
 
@@ -58,6 +62,8 @@ func main() {
 	rootCmd.Flags().BoolVarP(&tempWorkspace, "temp", "t", false, "Use a temporary directory for workspace")
 	rootCmd.Flags().StringVar(&agentTeamName, "agent-team", "", "Agent team name to load")
 	rootCmd.Flags().StringVar(&agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams (default: .agent-teams/,~/.agent-teams/)")
+	rootCmd.Flags().BoolVar(&memoryEnabled, "memory", true, "Enable long-term memory (RAG with vector search)")
+	rootCmd.Flags().StringVar(&memoryModel, "memory-model", "", "Embedding model for memory (default: nomic-embed-text, overrides hufu.yaml)")
 
 	if err := rootCmd.Execute(); err != nil {
 		var interrupted errInterrupted
@@ -372,7 +378,23 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		}
 	}
 
-	coordinator, err := team.NewCoordinator(session, defaultProviderURL, mcpManager, verbose)
+	var memStore *memory.MemoryStore
+	if memoryEnabled && !tempWorkspace {
+		ollamaAPIURL := providerURLToOllamaAPI(defaultProviderURL)
+		embedModel := config.ResolveEmbeddingModel(memoryModel)
+		projectDir, _ := os.Getwd()
+		ms, err := memory.NewMemoryStore(projectDir, ollamaAPIURL, embedModel)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s Memory unavailable: %v\n", errStyle.Render("⚠"), err)
+		} else {
+			memStore = ms
+			fmt.Fprintf(os.Stderr, "%s Memory: enabled (model: %s)\n", doneStyle.Render("✓"), embedModel)
+		}
+	} else if !memoryEnabled {
+		fmt.Fprintf(os.Stderr, "%s Memory: disabled\n", dimStyle.Render("○"))
+	}
+
+	coordinator, err := team.NewCoordinator(session, defaultProviderURL, mcpManager, memStore, verbose)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
@@ -681,6 +703,12 @@ func defaultHistoryPath() string {
 	dir := filepath.Join(home, ".hufu")
 	os.MkdirAll(dir, 0o755)
 	return filepath.Join(dir, "prompt_history")
+}
+
+func providerURLToOllamaAPI(providerURL string) string {
+	u := strings.TrimRight(providerURL, "/")
+	u = strings.TrimSuffix(u, "/v1")
+	return u + "/api"
 }
 
 func askUserForPromptFallback() (string, error) {

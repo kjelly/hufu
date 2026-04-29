@@ -9,9 +9,11 @@ import (
 )
 
 const DefaultProviderURL = "http://localhost:11434/v1"
+const DefaultEmbeddingModel = "nomic-embed-text"
 
 type Config struct {
-	ProviderURL string `yaml:"provider-url"`
+	ProviderURL    string `yaml:"provider-url"`
+	EmbeddingModel string `yaml:"embedding-model"`
 }
 
 func LoadConfig() *Config {
@@ -38,6 +40,9 @@ func (c *Config) mergeFromFile(path string) {
 	if fileCfg.ProviderURL != "" {
 		c.ProviderURL = fileCfg.ProviderURL
 	}
+	if fileCfg.EmbeddingModel != "" {
+		c.EmbeddingModel = fileCfg.EmbeddingModel
+	}
 }
 
 // ResolveProviderURL resolves provider URL following priority order:
@@ -62,4 +67,15 @@ func ResolveProviderURL(cliFlag string, teamCfgProviderURL string, agentProvider
 		return cfg.ProviderURL
 	}
 	return DefaultProviderURL
+}
+
+func ResolveEmbeddingModel(cliFlag string) string {
+	if cliFlag != "" {
+		return cliFlag
+	}
+	cfg := LoadConfig()
+	if cfg.EmbeddingModel != "" {
+		return cfg.EmbeddingModel
+	}
+	return DefaultEmbeddingModel
 }

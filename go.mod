@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/ergochat/readline v0.1.3
 	github.com/mark3labs/mcp-go v0.48.0
+	github.com/philippgille/chromem-go v0.7.0
 	github.com/spf13/cobra v1.10.2
 	github.com/traefik/yaegi v0.16.1
 	github.com/yuin/gopher-lua v1.1.2

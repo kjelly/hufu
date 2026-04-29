@@ -18,6 +18,7 @@ import (
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/audit"
 	"github.com/anomalyco/hufu/internal/mcp"
+	"github.com/anomalyco/hufu/internal/memory"
 	"github.com/anomalyco/hufu/internal/skill"
 )
 
@@ -55,9 +56,10 @@ type Coordinator struct {
 	currentAgentNameMu    sync.RWMutex
 	auditLogger           *audit.AuditLogger
 	skillUsage            map[string]*SkillUsageEntry
-	skillUsageMu          sync.Mutex
-	delegatedTasks        map[string]int
-	delegatedTasksMu      sync.Mutex
+	skillUsageMu        sync.Mutex
+	delegatedTasks      map[string]int
+	delegatedTasksMu    sync.Mutex
+	memoryStore         *memory.MemoryStore
 }
 
 type SkillUsageEntry struct {
@@ -66,7 +68,7 @@ type SkillUsageEntry struct {
 	Agents map[string]bool
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, verbose bool) (*Coordinator, error) {
+func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, verbose bool) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
 	coreTools := agent.BuildAllAgentTools(projectDir)
 	prov, err := agent.NewOllamaProvider(defaultProviderURL)
@@ -86,6 +88,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		projectDir:     projectDir,
 		skillUsage:     make(map[string]*SkillUsageEntry),
 		delegatedTasks: make(map[string]int),
+		memoryStore:    memoryStore,
 	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -95,6 +98,13 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 	}
 
 	c.coreTools = append(c.coreTools, &workerAgentTool{coordinator: c}, &todoTool{coordinator: c})
+
+	if c.memoryStore != nil {
+		c.coreTools = append(c.coreTools,
+			memory.NewMemorySaveTool(c.memoryStore),
+			memory.NewMemoryQueryTool(c.memoryStore),
+		)
+	}
 
 	if history := LoadConversationHistory(session.Workspace); len(history) > 0 {
 		c.conversationHistory = history
@@ -1252,6 +1262,13 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	if agentsMD := c.loadProjectContext(); agentsMD != "" {
 		systemPrompt += "\n\n---\n## Project Context (AGENTS.md)\n\n" + agentsMD
+	}
+
+	if c.memoryStore != nil {
+		memCtx, err := memory.AutoQuery(ctx, c.memoryStore, userPrompt)
+		if err == nil && memCtx != "" {
+			systemPrompt += "\n\n---\n" + memCtx
+		}
 	}
 
 	if c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
