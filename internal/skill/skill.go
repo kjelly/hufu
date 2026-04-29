@@ -193,25 +193,6 @@ func SkillsByName(skills []*SkillDef, names []string) []*SkillDef {
 	return result
 }
 
-func CopySkillsToWorkspace(skills []*SkillDef, workspace string) error {
-	dir := filepath.Join(workspace, "shared", "skills")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	for _, s := range skills {
-		name := strings.ToLower(s.Name)
-		target := filepath.Join(dir, name+".md")
-		if err := os.WriteFile(target, []byte(s.Content), 0o644); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func SkillWorkspacePath(workspace, skillName string) string {
-	return filepath.Join(workspace, "shared", "skills", strings.ToLower(skillName)+".md")
-}
-
 func ParseSkillList(s string) []string {
 	if s == "" {
 		return nil

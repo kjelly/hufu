@@ -373,7 +373,7 @@ func TestEnsureWorkspaceDirs(t *testing.T) {
 
 			if !tt.wantErr {
 				// Verify directories were created
-				expectedDirs := []string{"inbox", "outbox", "shared", "status", "history", "shared/skills"}
+				expectedDirs := []string{"inbox", "outbox", "shared", "status", "history"}
 				for _, dir := range expectedDirs {
 					dirPath := filepath.Join(tt.workspace, dir)
 					if _, err := os.Stat(dirPath); os.IsNotExist(err) {

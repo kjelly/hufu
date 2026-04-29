@@ -291,7 +291,19 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	team.EnsureWorkspaceDirs(session.Workspace)
 
 	var sessionData *team.SessionData
+	var oldSessionEntries []memory.SessionSummaryEntry
 	if newSession {
+		oldSession := team.LoadSession(session.Workspace)
+		if oldSession != nil {
+			for _, e := range oldSession.Entries {
+				oldSessionEntries = append(oldSessionEntries, memory.SessionSummaryEntry{
+					Role:      e.Role,
+					Content:   e.Content,
+					Timestamp: e.Timestamp,
+				})
+			}
+		}
+
 		existingMD := team.LoadSessionMD(session.Workspace)
 		if existingMD != "" {
 			fmt.Fprintf(os.Stderr, "%s Archiving previous session...\n", stepStyle.Render("⟳"))
@@ -399,6 +411,12 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
 	coordinator.SetSessionData(sessionData)
+
+	if memStore != nil && len(oldSessionEntries) > 0 {
+		if err := memory.ArchiveSessionSummary(ctx, memStore, oldSessionEntries, session.Config.Name); err != nil {
+			fmt.Fprintf(os.Stderr, "%s Failed to archive session to memory: %v\n", errStyle.Render("⚠"), err)
+		}
+	}
 
 	if len(session.Skills) > 0 {
 		var skillNames []string

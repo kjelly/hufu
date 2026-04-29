@@ -17,7 +17,7 @@ const (
 )
 
 func EnsureWorkspaceDirs(workspace string) error {
-	dirs := []string{inboxDir, outboxDir, sharedDir, statusDir, historyDir, filepath.Join(sharedDir, "skills")}
+	dirs := []string{inboxDir, outboxDir, sharedDir, statusDir, historyDir}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(filepath.Join(workspace, dir), 0o755); err != nil {
 			return err

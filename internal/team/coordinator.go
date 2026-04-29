@@ -159,34 +159,22 @@ func (c *Coordinator) SkillUsage() []SkillUsageEntry {
 }
 
 func (c *Coordinator) extractSkillFromToolCall(toolName, input string) string {
-	if toolName != "view" && toolName != "read" {
+	if toolName != "load_skill" {
 		return ""
 	}
 	var args struct {
-		FilePath string `json:"file_path"`
-		Path     string `json:"path"`
+		Name string `json:"name"`
 	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
+	if err := json.Unmarshal([]byte(input), &args); err != nil || args.Name == "" {
 		return ""
 	}
-	path := args.FilePath
-	if path == "" {
-		path = args.Path
-	}
-	if !strings.Contains(strings.ToLower(path), "shared/skills/") {
-		return ""
-	}
-	base := filepath.Base(path)
-	if !strings.HasSuffix(strings.ToLower(base), ".md") {
-		return ""
-	}
-	skillName := base[:len(base)-3]
+	nameLower := strings.ToLower(args.Name)
 	for _, s := range c.skills {
-		if strings.ToLower(s.Name) == strings.ToLower(skillName) {
+		if strings.ToLower(s.Name) == nameLower {
 			return s.Name
 		}
 	}
-	return skillName
+	return args.Name
 }
 
 func (c *Coordinator) newEvent(eventType string) StatusEvent {
@@ -790,11 +778,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		skillPrefix.WriteString("## Relevant Skills\n\n")
 		matched := skill.SkillsByName(c.skills, agentSkillNames)
 		for _, s := range matched {
-			fmt.Fprintf(&skillPrefix, "**%s**: %s\n", s.Name, s.Summary)
-			skillPath := skill.SkillWorkspacePath(c.session.Workspace, s.Name)
-			fmt.Fprintf(&skillPrefix, "Full instructions: %s\n\n", skillPath)
+			fmt.Fprintf(&skillPrefix, "### %s\n%s\n\n", s.Name, s.Content)
 		}
-		skillPrefix.WriteString("Use the `read` tool to load the full skill instructions if you need detailed steps.\n\n---\n\n")
+		skillPrefix.WriteString("---\n\n")
 		prompt = skillPrefix.String() + prompt
 	}
 
@@ -1212,11 +1198,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		skillPrefix.WriteString("## Relevant Skills\n\n")
 		matched := skill.SkillsByName(c.skills, agentSkillNames)
 		for _, s := range matched {
-			fmt.Fprintf(&skillPrefix, "**%s**: %s\n", s.Name, s.Summary)
-			skillPath := skill.SkillWorkspacePath(c.session.Workspace, s.Name)
-			fmt.Fprintf(&skillPrefix, "Full instructions: %s\n\n", skillPath)
+			fmt.Fprintf(&skillPrefix, "### %s\n%s\n\n", s.Name, s.Content)
 		}
-		skillPrefix.WriteString("Use the `read` tool to load the full skill instructions if you need detailed steps.\n\n---\n\n")
+		skillPrefix.WriteString("---\n\n")
 		prompt = skillPrefix.String() + prompt
 	}
 
@@ -1243,12 +1227,6 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	}
 
 	EnsureWorkspaceDirs(c.session.Workspace)
-
-	if len(c.skills) > 0 {
-		if err := skill.CopySkillsToWorkspace(c.skills, c.session.Workspace); err != nil {
-			return "", fmt.Errorf("failed to copy skills to workspace: %w", err)
-		}
-	}
 
 	if c.sessionData != nil {
 		c.sessionData.AddEntry("user", userPrompt)
