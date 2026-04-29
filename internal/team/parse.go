@@ -35,6 +35,7 @@ type agentFrontmatter struct {
 	TopK        string `yaml:"top-k"`
 	Timeout     int64  `yaml:"timeout"`
 	MaxRetries  int    `yaml:"max-retries"`
+	MaxSteps    int    `yaml:"max-steps"`
 	ProviderURL string `yaml:"provider-url"`
 }
 
@@ -42,6 +43,7 @@ type teamConfigYAML struct {
 	Name          string `yaml:"name"`
 	Description   string `yaml:"description"`
 	MaxRounds     int    `yaml:"max-rounds"`
+	MaxSteps      int    `yaml:"max-steps"`
 	Workspace     string `yaml:"workspace"`
 	Timeout       int64  `yaml:"timeout"`
 	MaxRetries    int    `yaml:"max-retries"`
@@ -103,6 +105,12 @@ func agentFrontmatterFromSimple(m map[string]string) agentFrontmatter {
 			fm.MaxRetries = n
 		}
 	}
+	if v := m["max-steps"]; v != "" {
+		var n int
+		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n > 0 {
+			fm.MaxSteps = n
+		}
+	}
 	return fm
 }
 
@@ -147,6 +155,7 @@ func parseAgentFile(path string) *agent.AgentDef {
 		System:      body,
 		Skills:      fm.Skills,
 		MaxRetries:  -1,
+		MaxSteps:    fm.MaxSteps,
 		Generation: agent.GenerationParams{
 			Model:       fm.Model,
 			Temperature: fm.Temperature,
@@ -209,6 +218,9 @@ func parseTeamYML(teamDir string) (agent.TeamConfig, error) {
 	}
 	if yc.MaxRetries >= 0 {
 		cfg.MaxRetries = yc.MaxRetries
+	}
+	if yc.MaxSteps > 0 {
+		cfg.MaxSteps = yc.MaxSteps
 	}
 	cfg.Generation = agent.GenerationParams{
 		Model:       yc.Model,

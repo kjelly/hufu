@@ -6,7 +6,7 @@ import (
 )
 
 type StatusEvent struct {
-	Type       string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used"
+	Type       string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning"
 	TeamName   string
 	Agent      string
 	Message    string

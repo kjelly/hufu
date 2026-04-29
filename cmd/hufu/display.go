@@ -321,6 +321,16 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				skillDisp.record(event.SkillName, event.Agent)
 				skillDisp.update()
 			}
+
+		case "loop_warning":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			w.write(fmt.Sprintf("%s %s\n",
+				errStyle.Render("⚠ LOOP"),
+				errStyle.Render(event.Message),
+			))
 		}
 	})
 }

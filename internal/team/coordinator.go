@@ -56,6 +56,8 @@ type Coordinator struct {
 	auditLogger         *audit.AuditLogger
 	skillUsage          map[string]*SkillUsageEntry
 	skillUsageMu        sync.Mutex
+	delegatedTasks      map[string]int
+	delegatedTasksMu    sync.Mutex
 }
 
 type SkillUsageEntry struct {
@@ -83,6 +85,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		skills:       session.Skills,
 		projectDir:   projectDir,
 		skillUsage:   make(map[string]*SkillUsageEntry),
+		delegatedTasks: make(map[string]int),
 	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -422,6 +425,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		Def:        def,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
+		MaxSteps:   agent.DefaultMaxSteps,
 	}, agentTools)
 	if err != nil {
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
@@ -642,6 +646,21 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	}())
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
+	var duplicateWarnings []string
+	c.delegatedTasksMu.Lock()
+	for _, t := range tasks {
+		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(t.Task)
+		c.delegatedTasks[key]++
+		if c.delegatedTasks[key] > 1 {
+			duplicateWarnings = append(duplicateWarnings, fmt.Sprintf("%s (agent=%s, count=%d)", truncateTaskDesc(t.Task), t.Agent, c.delegatedTasks[key]))
+		}
+	}
+	c.delegatedTasksMu.Unlock()
+
+	if len(duplicateWarnings) > 0 {
+		c.report(c.newEvent("loop_warning").withMessage(fmt.Sprintf("Duplicate task delegation detected: %v", duplicateWarnings)))
+	}
+
 	type taskResult struct {
 		agentName string
 		todoID    string
@@ -695,6 +714,13 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		summary += fmt.Sprintf(", %d failed", errorCount)
 	}
 	b.WriteString(summary)
+
+	if len(duplicateWarnings) > 0 {
+		b.WriteString("\n\n**Warning**: You have delegated the same task to the same agent multiple times. This suggests you may be stuck in a loop. Consider using a different approach, agent, or calling `finish` with your best answer so far:\n")
+		for _, w := range duplicateWarnings {
+			b.WriteString(fmt.Sprintf("- %s\n", w))
+		}
+	}
 
 	if successCount == 0 && len(results) > 0 {
 		return b.String(), fmt.Errorf("all %d tasks failed", len(results))
@@ -908,6 +934,7 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef)
 		Def:        def,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
+		MaxSteps:   agent.DefaultMaxSteps,
 	}, agentTools)
 	if err != nil {
 		return nil, err
@@ -953,6 +980,20 @@ func (c *Coordinator) workerNameList() []string {
 		}
 	}
 	return names
+}
+
+const maxAgentsMDSize = 50000
+
+func (c *Coordinator) loadProjectContext() string {
+	path := filepath.Join(c.projectDir, "AGENTS.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if len(data) > maxAgentsMDSize {
+		data = append(data[:maxAgentsMDSize], []byte("\n\n... [AGENTS.md truncated]")...)
+	}
+	return string(data)
 }
 
 func (c *Coordinator) BuildOrchestratorPrompt() string {
@@ -1209,6 +1250,10 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	}
 	systemPrompt += "\n\n" + c.BuildOrchestratorPrompt()
 
+	if agentsMD := c.loadProjectContext(); agentsMD != "" {
+		systemPrompt += "\n\n---\n## Project Context (AGENTS.md)\n\n" + agentsMD
+	}
+
 	if c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
 		contextSummary := c.sessionData.ContextSummary()
 		if contextSummary != "" {
@@ -1238,6 +1283,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		Def:        orchDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
+		MaxSteps:   agent.DefaultCoordinatorMaxSteps,
 	}, orchTools)
 	if err != nil {
 		return "", fmt.Errorf("failed to create coordinator: %w", err)
@@ -1320,6 +1366,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		Def:        orchDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
+		MaxSteps:   agent.DefaultCoordinatorMaxSteps,
 	}, orchTools)
 	if err != nil {
 		return "", fmt.Errorf("failed to create coordinator: %w", err)
@@ -1403,3 +1450,11 @@ IMPORTANT INSTRUCTIONS:
 - Call the finish tool RIGHT NOW with your best summary of the work completed
 
 This is a wrap-up request. You MUST call finish immediately with whatever results are available.`
+
+func truncateTaskDesc(task string) string {
+	const maxLen = 80
+	if len(task) > maxLen {
+		return task[:maxLen]
+	}
+	return task
+}

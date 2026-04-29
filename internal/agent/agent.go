@@ -14,6 +14,9 @@ import (
 
 const DefaultProviderURL = "http://localhost:11434/v1"
 
+const DefaultMaxSteps = 30
+const DefaultCoordinatorMaxSteps = 20
+
 type GenerationParams struct {
 	Model       string
 	Temperature string
@@ -31,6 +34,7 @@ type AgentDef struct {
 	Skills      string
 	Timeout     int64
 	MaxRetries  int
+	MaxSteps    int
 	Generation  GenerationParams
 	ProviderURL string
 }
@@ -39,6 +43,7 @@ type TeamConfig struct {
 	Name          string
 	Description   string
 	MaxRounds     int
+	MaxSteps      int
 	WorkspaceDir  string
 	Timeout       int64
 	MaxRetries    int
@@ -80,6 +85,17 @@ type AgentConfig struct {
 	Def        *AgentDef
 	TeamConfig *TeamConfig
 	WorkDir    string
+	MaxSteps   int
+}
+
+func resolveMaxSteps(agentSteps, teamSteps int) int {
+	if agentSteps > 0 {
+		return agentSteps
+	}
+	if teamSteps > 0 {
+		return teamSteps
+	}
+	return DefaultMaxSteps
 }
 
 func CreateAgent(ctx context.Context, ollama *OllamaProvider, cfg AgentConfig, agentTools []fantasy.AgentTool) (fantasy.Agent, error) {
@@ -112,6 +128,14 @@ func CreateAgent(ctx context.Context, ollama *OllamaProvider, cfg AgentConfig, a
 	}
 	if topK := parseModelInt(cfg.Def.Generation.TopK, cfg.TeamConfig.Generation.TopK); topK > 0 {
 		opts = append(opts, fantasy.WithTopK(int64(topK)))
+	}
+
+	maxSteps := cfg.MaxSteps
+	if maxSteps <= 0 {
+		maxSteps = resolveMaxSteps(cfg.Def.MaxSteps, cfg.TeamConfig.MaxSteps)
+	}
+	if maxSteps > 0 {
+		opts = append(opts, fantasy.WithStopConditions(fantasy.StepCountIs(maxSteps)))
 	}
 
 	return fantasy.NewAgent(lm, opts...), nil
