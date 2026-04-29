@@ -9,6 +9,24 @@ import (
 	"time"
 )
 
+// truncateString truncates s to at most maxRunes Unicode code points, appending
+// "..." when truncation occurs. Safe for multi-byte characters such as CJK text.
+func truncateString(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "..."
+}
+
+// removeFileIfExists removes path and returns nil when the file does not exist.
+func removeFileIfExists(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 const sessionFile = "session.json"
 const historyDirName = "history"
 const maxSessionEntries = 40
@@ -33,6 +51,7 @@ func LoadSession(workspace string) *SessionData {
 	}
 	var session SessionData
 	if err := json.Unmarshal(data, &session); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: corrupt session file in %s: %v\n", workspace, err)
 		return nil
 	}
 	return &session
@@ -78,10 +97,7 @@ func (s *SessionData) ContextSummary() string {
 			b.WriteString(fmt.Sprintf("... (%d earlier exchanges omitted)\n", remaining))
 			break
 		}
-		content := entry.Content
-		if len(content) > 500 {
-			content = content[:500] + "..."
-		}
+		content := truncateString(entry.Content, 500)
 		b.WriteString(fmt.Sprintf("[%s] %s\n", entry.Role, content))
 		b.WriteString("\n")
 	}
@@ -120,8 +136,7 @@ func ArchiveSession(workspace string, summary string) error {
 		return fmt.Errorf("failed to write history file: %w", err)
 	}
 
-	oldSession := filepath.Join(workspace, sessionFile)
-	if err := os.Remove(oldSession); err != nil && !os.IsNotExist(err) {
+	if err := removeFileIfExists(filepath.Join(workspace, sessionFile)); err != nil {
 		return fmt.Errorf("failed to remove old session: %w", err)
 	}
 

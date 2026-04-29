@@ -47,10 +47,7 @@ func GenerateSessionMD(sd *SessionData, teamName string) string {
 		if entry.Role == "assistant" {
 			role = "🤖 Coordinator"
 		}
-		content := entry.Content
-		if len(content) > 1000 {
-			content = content[:1000] + "..."
-		}
+		content := truncateString(entry.Content, 1000)
 		b.WriteString(fmt.Sprintf("### %s", role))
 		if entry.Timestamp != "" {
 			b.WriteString(fmt.Sprintf(" (%s)", entry.Timestamp))
@@ -102,8 +99,11 @@ func ArchiveSessionMD(workspace string) (string, error) {
 		return "", fmt.Errorf("failed to write history file: %w", err)
 	}
 
-	os.Remove(SessionMDPath(workspace))
-	os.Remove(filepath.Join(workspace, sessionFile))
-
+	if err := removeFileIfExists(SessionMDPath(workspace)); err != nil {
+		return path, fmt.Errorf("failed to remove session md: %w", err)
+	}
+	if err := removeFileIfExists(filepath.Join(workspace, sessionFile)); err != nil {
+		return path, fmt.Errorf("failed to remove session json: %w", err)
+	}
 	return path, nil
 }

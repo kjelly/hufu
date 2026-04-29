@@ -2,6 +2,7 @@ package team
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,6 +62,7 @@ func readOutbox(workspace, agentName string) ([]string, error) {
 		}
 		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
+			log.Printf("readOutbox: skipping unreadable file %s: %v", e.Name(), err)
 			continue
 		}
 		results = append(results, string(data))
@@ -115,5 +117,5 @@ func writeLLMLog(workspace, teamName, agentName, entry string) {
 		return
 	}
 	defer f.Close()
-	f.WriteString(entry)
+	_, _ = f.WriteString(entry)
 }

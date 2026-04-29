@@ -158,6 +158,20 @@ func (c *Coordinator) SkillUsage() []SkillUsageEntry {
 	return result
 }
 
+func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
+	agentSkillNames := skill.ParseSkillList(agentDef.Skills)
+	if len(agentSkillNames) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Relevant Skills\n\n")
+	for _, s := range skill.SkillsByName(c.skills, agentSkillNames) {
+		fmt.Fprintf(&b, "### %s\n%s\n\n", s.Name, s.Content)
+	}
+	b.WriteString("---\n\n")
+	return b.String()
+}
+
 func (c *Coordinator) extractSkillFromToolCall(toolName, input string) string {
 	if toolName != "load_skill" {
 		return ""
@@ -626,22 +640,17 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 
 	c.report(c.newEvent("step").withMessage(fmt.Sprintf("Round %d: delegating %d task(s)", c.round, len(tasks))))
 
-	todoItems := c.taskTracker.TodoList().AddBatch(func() []struct {
+	todoBatch := make([]struct {
 		Agent string
 		Desc  string
-	} {
-		batch := make([]struct {
+	}, len(tasks))
+	for i, t := range tasks {
+		todoBatch[i] = struct {
 			Agent string
 			Desc  string
-		}, len(tasks))
-		for i, t := range tasks {
-			batch[i] = struct {
-				Agent string
-				Desc  string
-			}{Agent: strings.ToLower(t.Agent), Desc: t.Task}
-		}
-		return batch
-	}())
+		}{Agent: strings.ToLower(t.Agent), Desc: t.Task}
+	}
+	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
 	var duplicateWarnings []string
@@ -772,16 +781,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	prompt := task.Task
 
-	agentSkillNames := skill.ParseSkillList(agentDef.Skills)
-	if len(agentSkillNames) > 0 {
-		var skillPrefix strings.Builder
-		skillPrefix.WriteString("## Relevant Skills\n\n")
-		matched := skill.SkillsByName(c.skills, agentSkillNames)
-		for _, s := range matched {
-			fmt.Fprintf(&skillPrefix, "### %s\n%s\n\n", s.Name, s.Content)
-		}
-		skillPrefix.WriteString("---\n\n")
-		prompt = skillPrefix.String() + prompt
+	if prefix := c.buildSkillPromptPrefix(agentDef); prefix != "" {
+		prompt = prefix + prompt
 	}
 
 	if len(task.ContextFiles) > 0 {
@@ -1192,16 +1193,8 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	writeStatus(c.session.Workspace, agentName, "working", task)
 
 	prompt := task
-	agentSkillNames := skill.ParseSkillList(agentDef.Skills)
-	if len(agentSkillNames) > 0 {
-		var skillPrefix strings.Builder
-		skillPrefix.WriteString("## Relevant Skills\n\n")
-		matched := skill.SkillsByName(c.skills, agentSkillNames)
-		for _, s := range matched {
-			fmt.Fprintf(&skillPrefix, "### %s\n%s\n\n", s.Name, s.Content)
-		}
-		skillPrefix.WriteString("---\n\n")
-		prompt = skillPrefix.String() + prompt
+	if prefix := c.buildSkillPromptPrefix(agentDef); prefix != "" {
+		prompt = prefix + prompt
 	}
 
 	output, err := c.runAgentWithStatus(taskCtx, ag, agentName, prompt)

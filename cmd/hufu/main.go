@@ -325,8 +325,12 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 				} else {
 					fmt.Fprintf(os.Stderr, "%s Previous session archived to %s\n", doneStyle.Render("✓"), filepath.Base(archivedPath))
 				}
+				// ArchiveSessionMD already removed session.json; no further cleanup needed.
+			} else {
+				if err := os.Remove(filepath.Join(session.Workspace, "session.json")); err != nil && !os.IsNotExist(err) {
+					fmt.Fprintf(os.Stderr, "%s Failed to remove session file: %v\n", errStyle.Render("⚠"), err)
+				}
 			}
-			os.Remove(filepath.Join(session.Workspace, "session.json"))
 			team.DeleteConversationHistory(session.Workspace)
 		}
 		if err := team.CleanRunDirs(session.Workspace); err != nil {

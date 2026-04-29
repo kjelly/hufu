@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -42,90 +43,61 @@ func TestArchiveSessionSummaryShortContent(t *testing.T) {
 	}
 }
 
-func TestArchiveSessionSummaryPicksLastAssistant(t *testing.T) {
+func TestExtractSummaryPicksLastAssistant(t *testing.T) {
 	entries := []SessionSummaryEntry{
 		{Role: "assistant", Content: "This is the first response from the coordinator about the initial research."},
 		{Role: "user", Content: "continue"},
 		{Role: "assistant", Content: "This is the final conclusion: the root cause was a misconfigured JWT token lifecycle. The fix requires updating the token refresh logic in auth middleware."},
 	}
-
-	lastAssistant := findLastAssistant(entries)
-	if lastAssistant == nil {
-		t.Fatal("expected to find last assistant entry")
+	content, _ := extractSummaryContent(entries)
+	if content == "" {
+		t.Fatal("expected non-empty content from last assistant entry")
 	}
-	if !contains(lastAssistant.Content, "final conclusion") {
-		t.Errorf("expected last assistant entry with 'final conclusion', got: %s", lastAssistant.Content)
+	if !strings.Contains(content, "final conclusion") {
+		t.Errorf("expected content with 'final conclusion', got: %s", content)
 	}
 }
 
-func TestArchiveSessionSummaryTruncation(t *testing.T) {
-	longContent := ""
-	for i := 0; i < 3000; i++ {
-		longContent += "x"
-	}
-
+func TestExtractSummaryTruncation(t *testing.T) {
 	entries := []SessionSummaryEntry{
-		{Role: "assistant", Content: longContent},
+		{Role: "assistant", Content: strings.Repeat("x", 3000)},
 	}
-
-	truncated := truncateSummary(entries[0].Content)
-	if len(truncated) != maxSummaryLength {
-		t.Errorf("expected truncated length %d, got %d", maxSummaryLength, len(truncated))
-	}
-}
-
-func TestArchiveSessionSummaryMinLength(t *testing.T) {
-	tiny := "ok"
-	if !isTooShort(tiny) {
-		t.Error("2-char content should be too short")
-	}
-
-	medium := ""
-	for i := 0; i < 60; i++ {
-		medium += "x"
-	}
-	if isTooShort(medium) {
-		t.Error("60-char content should not be too short")
-	}
-
-	long := ""
-	for i := 0; i < 200; i++ {
-		long += "x"
-	}
-	if isTooShort(long) {
-		t.Error("200-char content should not be too short")
+	content, _ := extractSummaryContent(entries)
+	if len(content) != maxSummaryLength {
+		t.Errorf("expected truncated length %d, got %d", maxSummaryLength, len(content))
 	}
 }
 
-func findLastAssistant(entries []SessionSummaryEntry) *SessionSummaryEntry {
-	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Role == "assistant" {
-			return &entries[i]
-		}
+func TestExtractSummaryMinLength(t *testing.T) {
+	tiny := []SessionSummaryEntry{{Role: "assistant", Content: "ok"}}
+	content, _ := extractSummaryContent(tiny)
+	if content != "" {
+		t.Error("2-char content should be filtered out as too short")
 	}
-	return nil
-}
 
-func truncateSummary(content string) string {
-	if len(content) > maxSummaryLength {
-		return content[:maxSummaryLength]
+	medium := []SessionSummaryEntry{{Role: "assistant", Content: strings.Repeat("x", 60)}}
+	content, _ = extractSummaryContent(medium)
+	if content == "" {
+		t.Error("60-char content should not be filtered out")
 	}
-	return content
 }
 
-func isTooShort(content string) bool {
-	return len(content) < minSummaryLength
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstr(s, substr))
-}
-
-func containsSubstr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+func TestExtractSummaryTimestamp(t *testing.T) {
+	entries := []SessionSummaryEntry{
+		{Role: "assistant", Content: strings.Repeat("x", 100), Timestamp: "2024-01-01T00:00:00Z"},
 	}
-	return false
+	_, ts := extractSummaryContent(entries)
+	if ts != "2024-01-01T00:00:00Z" {
+		t.Errorf("expected timestamp '2024-01-01T00:00:00Z', got %q", ts)
+	}
+}
+
+func TestExtractSummaryNoTimestamp(t *testing.T) {
+	entries := []SessionSummaryEntry{
+		{Role: "assistant", Content: strings.Repeat("x", 100)},
+	}
+	_, ts := extractSummaryContent(entries)
+	if ts != "" {
+		t.Errorf("expected empty timestamp, got %q", ts)
+	}
 }
