@@ -98,6 +98,9 @@ func (l *AuditLogger) Close() error {
 }
 
 func truncate(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return "...[truncated]"
+	}
 	if len(s) <= maxLen {
 		return s
 	}

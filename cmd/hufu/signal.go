@@ -59,7 +59,8 @@ func (t *idleWarningTimer) reset() {
 	}
 	t.timer.Stop()
 	if t.warned {
-		t.w.write(fmt.Sprintf("\n%s Activity resumed\n", doneStyle.Render("↻")))
+		idleDuration := time.Since(t.deadline.Add(-t.interval))
+		t.w.write(fmt.Sprintf("\n%s Activity resumed (idle %v)\n", doneStyle.Render("↻"), idleDuration.Truncate(time.Second)))
 		t.warned = false
 	}
 	t.timer = time.AfterFunc(t.interval, t.warn)

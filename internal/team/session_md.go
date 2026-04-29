@@ -27,6 +27,9 @@ func SaveSessionMD(workspace string, content string) error {
 }
 
 func GenerateSessionMD(sd *SessionData, teamName string) string {
+	if sd == nil {
+		return ""
+	}
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("# Session — %s\n\n", teamName))
 	b.WriteString(fmt.Sprintf("**Started:** %s  \n", sd.CreatedAt))

@@ -288,6 +288,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 				}
 			}
 			os.Remove(filepath.Join(session.Workspace, "session.json"))
+		team.DeleteConversationHistory(session.Workspace)
 		}
 		if err := team.CleanRunDirs(session.Workspace); err != nil {
 			fmt.Fprintf(os.Stderr, "%s Failed to clean workspace: %v\n", errStyle.Render("⚠"), err)

@@ -240,6 +240,9 @@ func isToolAllowed(toolName string, allowed, excluded []string) bool {
 func (m *MCPToolManager) GetTools() []MCPTool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.tools == nil {
+		return []MCPTool{}
+	}
 	return m.tools
 }
 
@@ -323,6 +326,9 @@ func (m *MCPToolManager) AsAgentTools() []fantasy.AgentTool {
 			tool:    t,
 			manager: m,
 		})
+	}
+	if tools == nil {
+		return []fantasy.AgentTool{}
 	}
 	return tools
 }

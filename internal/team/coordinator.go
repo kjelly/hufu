@@ -82,6 +82,11 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 	}
 
 	c.coreTools = append(c.coreTools, &workerAgentTool{coordinator: c}, &todoTool{coordinator: c})
+
+	if history := LoadConversationHistory(session.Workspace); len(history) > 0 {
+		c.conversationHistory = history
+	}
+
 	return c, nil
 }
 
@@ -1124,7 +1129,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	}
 	systemPrompt += "\n\n" + c.BuildOrchestratorPrompt()
 
-	if c.sessionData != nil && len(c.sessionData.Entries) > 1 {
+	if c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
 		contextSummary := c.sessionData.ContextSummary()
 		if contextSummary != "" {
 			systemPrompt += "\n\n---\n## Session Context\n\n" + contextSummary
@@ -1165,6 +1170,10 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	result, steps, err := c.runAgentWithStatusAndHistory(orchCtx, orch, orchDef.Name, userPrompt, historySnapshot)
 	if err != nil {
+		c.conversationHistoryMu.Lock()
+		c.appendHistory(steps)
+		SaveConversationHistory(c.session.Workspace, c.conversationHistory)
+		c.conversationHistoryMu.Unlock()
 		if c.sessionData != nil {
 			SaveSession(c.session.Workspace, c.sessionData)
 		}
@@ -1173,6 +1182,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	c.conversationHistoryMu.Lock()
 	c.appendHistory(steps)
+	SaveConversationHistory(c.session.Workspace, c.conversationHistory)
 	c.conversationHistoryMu.Unlock()
 
 	finalResult := result
@@ -1242,6 +1252,10 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 
 	result, steps, err := c.runAgentWithStatusAndHistory(orchCtx, orch, orchDef.Name, continuationPrompt, historySnapshot)
 	if err != nil {
+		c.conversationHistoryMu.Lock()
+		c.appendHistory(steps)
+		SaveConversationHistory(c.session.Workspace, c.conversationHistory)
+		c.conversationHistoryMu.Unlock()
 		if c.sessionData != nil {
 			SaveSession(c.session.Workspace, c.sessionData)
 		}
@@ -1250,6 +1264,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 
 	c.conversationHistoryMu.Lock()
 	c.appendHistory(steps)
+	SaveConversationHistory(c.session.Workspace, c.conversationHistory)
 	c.conversationHistoryMu.Unlock()
 
 	finalResult := result
