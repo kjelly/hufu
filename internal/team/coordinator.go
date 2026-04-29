@@ -22,6 +22,8 @@ import (
 	"github.com/anomalyco/hufu/internal/skill"
 )
 
+var skillSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
 type TaskDef struct {
 	Agent        string   `json:"agent"`
 	Task         string   `json:"task"`
@@ -60,6 +62,7 @@ type Coordinator struct {
 	delegatedTasks      map[string]int
 	delegatedTasksMu    sync.Mutex
 	memoryStore         *memory.MemoryStore
+	skillsMu            sync.RWMutex
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
@@ -105,7 +108,12 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		audit.SetDefault(auditLogger)
 	}
 
-	c.coreTools = append(c.coreTools, &workerAgentTool{coordinator: c}, &todoTool{coordinator: c})
+	c.coreTools = append(c.coreTools,
+		&workerAgentTool{coordinator: c},
+		&todoTool{coordinator: c},
+		&loadSkillTool{coordinator: c},
+		&saveSkillTool{coordinator: c},
+	)
 
 	if c.memoryStore != nil {
 		c.coreTools = append(c.coreTools,
@@ -169,6 +177,68 @@ func (c *Coordinator) SkillUsage() []SkillUsageEntry {
 	return result
 }
 
+// getSkills returns a snapshot of the current skill list, safe for concurrent use.
+func (c *Coordinator) getSkills() []*skill.SkillDef {
+	c.skillsMu.RLock()
+	defer c.skillsMu.RUnlock()
+	return c.skills
+}
+
+func (c *Coordinator) skillDirs() []string {
+	return []string{
+		filepath.Join(c.session.Dir, ".agents", "skills"),
+		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
+	}
+}
+
+// saveAndReloadSkill writes a SKILL.md to the team's local skill directory and
+// immediately hot-reloads c.skills so the new skill is available in the same session.
+func (c *Coordinator) saveAndReloadSkill(name, description, content string) (string, error) {
+	slug := strings.Trim(skillSlugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
+	if slug == "" {
+		return "", fmt.Errorf("invalid skill name %q", name)
+	}
+
+	skillDir := filepath.Join(c.session.Dir, ".agents", "skills", slug)
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create skill directory: %w", err)
+	}
+
+	// Build YAML-safe description block.
+	descLines := strings.Split(strings.TrimSpace(description), "\n")
+	var descYAML string
+	if len(descLines) == 1 {
+		descYAML = "description: " + descLines[0]
+	} else {
+		var db strings.Builder
+		db.WriteString("description: |\n")
+		for _, l := range descLines {
+			db.WriteString("  ")
+			db.WriteString(l)
+			db.WriteString("\n")
+		}
+		descYAML = strings.TrimRight(db.String(), "\n")
+	}
+
+	fileContent := fmt.Sprintf("---\nname: %s\n%s\n---\n\n%s\n", name, descYAML, strings.TrimSpace(content))
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte(fileContent), 0o644); err != nil {
+		return "", fmt.Errorf("failed to write skill file: %w", err)
+	}
+
+	// Hot-reload: rediscover and re-filter skills from all directories.
+	allSkills := skill.DiscoverSkills(c.skillDirs())
+	includeSkills := skill.ParseSkillList(c.session.Config.Skills)
+	excludeSkills := skill.ParseSkillList(c.session.Config.SkillsExclude)
+	newSkills := skill.FilterSkills(allSkills, includeSkills, excludeSkills)
+
+	c.skillsMu.Lock()
+	c.skills = newSkills
+	c.skillsMu.Unlock()
+
+	return skillPath, nil
+}
+
 func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
 	agentSkillNames := skill.ParseSkillList(agentDef.Skills)
 	if len(agentSkillNames) == 0 {
@@ -176,7 +246,7 @@ func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
 	}
 	var b strings.Builder
 	b.WriteString("## Relevant Skills\n\n")
-	for _, s := range skill.SkillsByName(c.skills, agentSkillNames) {
+	for _, s := range skill.SkillsByName(c.getSkills(), agentSkillNames) {
 		fmt.Fprintf(&b, "### %s\n%s\n\n", s.Name, s.Content)
 	}
 	b.WriteString("---\n\n")
@@ -194,7 +264,7 @@ func (c *Coordinator) extractSkillFromToolCall(toolName, input string) string {
 		return ""
 	}
 	nameLower := strings.ToLower(args.Name)
-	for _, s := range c.skills {
+	for _, s := range c.getSkills() {
 		if strings.ToLower(s.Name) == nameLower {
 			return s.Name
 		}
@@ -348,15 +418,16 @@ func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	}
 
 	nameLower := strings.ToLower(args.Name)
-	for _, s := range t.coordinator.skills {
+	skills := t.coordinator.getSkills()
+	for _, s := range skills {
 		if strings.ToLower(s.Name) == nameLower {
 			t.coordinator.recordSkillUsage(s.Name, "coordinator")
 			return fantasy.NewTextResponse(fmt.Sprintf("Skill: %s\n\n%s", s.Name, s.Content)), nil
 		}
 	}
 
-	available := make([]string, len(t.coordinator.skills))
-	for i, s := range t.coordinator.skills {
+	available := make([]string, len(skills))
+	for i, s := range skills {
 		available[i] = s.Name
 	}
 	return fantasy.NewTextErrorResponse(fmt.Sprintf("skill %q not found (available: %v)", args.Name, available)), nil
@@ -1040,12 +1111,13 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 	b.WriteString("- **todo**: Manage a task list to track progress. Workers can create, update, and list their own TODO items.\n\n")
 
 	b.WriteString("## Available Skills\n\n")
-	if len(c.skills) == 0 {
+	currentSkills := c.getSkills()
+	if len(currentSkills) == 0 {
 		b.WriteString("No skills are available for this team.\n\n")
 	} else {
 		b.WriteString("| Skill | Description |\n")
 		b.WriteString("|-------|-------------|\n")
-		for _, s := range c.skills {
+		for _, s := range currentSkills {
 			desc := s.Description
 			if len(desc) > 80 {
 				desc = desc[:80] + "..."
@@ -1069,6 +1141,9 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 	b.WriteString("### load_skill\n")
 	b.WriteString("Load the full content of a skill by name. Returns detailed instructions you can include in worker task descriptions.\n")
 	b.WriteString("```json\n{\"name\": \"skill-name\"}\n```\n\n")
+	b.WriteString("### save_skill\n")
+	b.WriteString("Save a reusable skill to disk and reload it immediately. Use this when you or a worker has solved a non-trivial problem and you want to encode the solution for future reuse.\n")
+	b.WriteString("```json\n{\"name\": \"skill-name\", \"description\": \"what it does\", \"content\": \"# Skill\\n\\nStep-by-step workflow...\"}\n```\n\n")
 	b.WriteString("### finish\n")
 	b.WriteString("Signal completion and provide your final answer to the user. ALWAYS call this when you are done.\n")
 	b.WriteString("```json\n{\"response\": \"Your final synthesized answer to the user\"}\n```\n\n")
@@ -1228,7 +1303,12 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 }
 
 func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
-	orchTools := []fantasy.AgentTool{c.RunAgentsTool(), &finishTool{}, &loadSkillTool{coordinator: c}}
+	orchTools := []fantasy.AgentTool{
+		c.RunAgentsTool(),
+		&finishTool{},
+		&loadSkillTool{coordinator: c},
+		&saveSkillTool{coordinator: c},
+	}
 	for _, t := range c.coreTools {
 		if t.Info().Name == "ask_user" {
 			orchTools = append(orchTools, t)
