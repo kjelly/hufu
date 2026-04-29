@@ -53,7 +53,7 @@ Minimal skill content.
 			wantErr: true,
 		},
 		{
-			name:    "missing name field",
+			name: "missing name field",
 			content: `---
 description: No name here
 ---
@@ -63,7 +63,7 @@ Content.
 			wantErr: true,
 		},
 		{
-			name:    "malformed frontmatter",
+			name: "malformed frontmatter",
 			content: `---
 name: test
 description
@@ -78,7 +78,7 @@ Content.
 			wantErr: false, // Parser continues gracefully, skipping malformed lines
 		},
 		{
-			name:    "quoted values",
+			name: "quoted values",
 			content: `---
 name: "quoted-name"
 description: 'single quoted'
@@ -367,59 +367,59 @@ func TestFilterSkills(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		skills   []*SkillDef
-		include  []string
-		exclude  []string
-		wantLen  int
+		name      string
+		skills    []*SkillDef
+		include   []string
+		exclude   []string
+		wantLen   int
 		wantNames []string
 	}{
 		{
-			name:     "no filtering returns all skills",
-			skills:   skills,
-			include:  nil,
-			exclude:  nil,
-			wantLen:  4,
+			name:      "no filtering returns all skills",
+			skills:    skills,
+			include:   nil,
+			exclude:   nil,
+			wantLen:   4,
 			wantNames: []string{"skill-a", "skill-b", "skill-c", "skill-d"},
 		},
 		{
-			name:     "filter by include",
-			skills:   skills,
-			include:  []string{"skill-a", "skill-c"},
-			exclude:  nil,
-			wantLen:  2,
+			name:      "filter by include",
+			skills:    skills,
+			include:   []string{"skill-a", "skill-c"},
+			exclude:   nil,
+			wantLen:   2,
 			wantNames: []string{"skill-a", "skill-c"},
 		},
 		{
-			name:     "filter by exclude",
-			skills:   skills,
-			include:  nil,
-			exclude:  []string{"skill-b", "skill-d"},
-			wantLen:  2,
+			name:      "filter by exclude",
+			skills:    skills,
+			include:   nil,
+			exclude:   []string{"skill-b", "skill-d"},
+			wantLen:   2,
 			wantNames: []string{"skill-a", "skill-c"},
 		},
 		{
-			name:     "filter by both include and exclude",
-			skills:   skills,
-			include:  []string{"skill-a", "skill-b", "skill-c"},
-			exclude:  []string{"skill-b"},
-			wantLen:  2,
+			name:      "filter by both include and exclude",
+			skills:    skills,
+			include:   []string{"skill-a", "skill-b", "skill-c"},
+			exclude:   []string{"skill-b"},
+			wantLen:   2,
 			wantNames: []string{"skill-a", "skill-c"},
 		},
 		{
-			name:     "case-insensitive filtering",
-			skills:   skills,
-			include:  []string{"SKILL-A"},
-			exclude:  nil,
-			wantLen:  1,
+			name:      "case-insensitive filtering",
+			skills:    skills,
+			include:   []string{"SKILL-A"},
+			exclude:   nil,
+			wantLen:   1,
 			wantNames: []string{"skill-a"},
 		},
 		{
-			name:     "filter with whitespace",
-			skills:   skills,
-			include:  []string{" skill-a "},
-			exclude:  nil,
-			wantLen:  1,
+			name:      "filter with whitespace",
+			skills:    skills,
+			include:   []string{" skill-a "},
+			exclude:   nil,
+			wantLen:   1,
 			wantNames: []string{"skill-a"},
 		},
 	}
@@ -459,38 +459,38 @@ func TestSkillsByName(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		skills   []*SkillDef
-		names    []string
-		wantLen  int
+		name      string
+		skills    []*SkillDef
+		names     []string
+		wantLen   int
 		wantNames []string
 	}{
 		{
-			name:     "select by name",
-			skills:   skills,
-			names:    []string{"skill-a", "skill-c"},
-			wantLen:  2,
+			name:      "select by name",
+			skills:    skills,
+			names:     []string{"skill-a", "skill-c"},
+			wantLen:   2,
 			wantNames: []string{"skill-a", "skill-c"},
 		},
 		{
-			name:     "select with case-insensitive names",
-			skills:   skills,
-			names:    []string{"SKILL-B"},
-			wantLen:  1,
+			name:      "select with case-insensitive names",
+			skills:    skills,
+			names:     []string{"SKILL-B"},
+			wantLen:   1,
 			wantNames: []string{"skill-b"},
 		},
 		{
-			name:     "select with whitespace",
-			skills:   skills,
-			names:    []string{" skill-a "},
-			wantLen:  1,
+			name:      "select with whitespace",
+			skills:    skills,
+			names:     []string{" skill-a "},
+			wantLen:   1,
 			wantNames: []string{"skill-a"},
 		},
 		{
-			name:     "select nonexistent name returns empty",
-			skills:   skills,
-			names:    []string{"nonexistent"},
-			wantLen:  0,
+			name:      "select nonexistent name returns empty",
+			skills:    skills,
+			names:     []string{"nonexistent"},
+			wantLen:   0,
 			wantNames: []string{},
 		},
 	}
@@ -575,28 +575,28 @@ func TestCopySkillsToWorkspace(t *testing.T) {
 // TestSkillWorkspacePath tests the SkillWorkspacePath function
 func TestSkillWorkspacePath(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		workspace string
 		skillName string
-		expected string
+		expected  string
 	}{
 		{
-			name:     "basic path",
+			name:      "basic path",
 			workspace: "/tmp/workspace",
 			skillName: "TestSkill",
-			expected: "/tmp/workspace/shared/skills/testskill.md",
+			expected:  "/tmp/workspace/shared/skills/testskill.md",
 		},
 		{
-			name:     "lowercase skill name",
+			name:      "lowercase skill name",
 			workspace: "/tmp/workspace",
 			skillName: "testskill",
-			expected: "/tmp/workspace/shared/skills/testskill.md",
+			expected:  "/tmp/workspace/shared/skills/testskill.md",
 		},
 		{
-			name:     "skill name with spaces",
+			name:      "skill name with spaces",
 			workspace: "/tmp/workspace",
 			skillName: "My Skill",
-			expected: "/tmp/workspace/shared/skills/my skill.md",
+			expected:  "/tmp/workspace/shared/skills/my skill.md",
 		},
 	}
 

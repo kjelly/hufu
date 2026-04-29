@@ -133,7 +133,16 @@ func (tl *TodoList) Items() []*TodoItem {
 	tl.mu.Lock()
 	defer tl.mu.Unlock()
 	result := make([]*TodoItem, len(tl.items))
-	copy(result, tl.items)
+	for i, item := range tl.items {
+		// Deep copy each TodoItem to prevent external modifications
+		result[i] = &TodoItem{
+			ID:     item.ID,
+			Agent:  item.Agent,
+			Desc:   item.Desc,
+			Status: item.Status,
+			Detail: item.Detail,
+		}
+	}
 	return result
 }
 

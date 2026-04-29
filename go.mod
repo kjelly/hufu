@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	charm.land/fantasy v0.17.2
+	github.com/JohannesKaufmann/html-to-markdown v1.6.0
 	github.com/aymanbagabas/go-udiff v0.4.1
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/ergochat/readline v0.1.3
@@ -15,7 +16,6 @@ require (
 )
 
 require (
-	github.com/JohannesKaufmann/html-to-markdown v1.6.0 // indirect
 	github.com/PuerkitoBio/goquery v1.9.2 // indirect
 	github.com/andybalholm/cascadia v1.3.2 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect

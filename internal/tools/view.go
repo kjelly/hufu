@@ -124,9 +124,9 @@ func newLineScanner(r io.Reader) *lineScanner {
 	return &lineScanner{scanner: s}
 }
 
-func (s *lineScanner) scan() bool  { return s.scanner.Scan() }
+func (s *lineScanner) scan() bool   { return s.scanner.Scan() }
 func (s *lineScanner) text() string { return s.scanner.Text() }
-func (s *lineScanner) err() error  { return s.scanner.Err() }
+func (s *lineScanner) err() error   { return s.scanner.Err() }
 
 func readTextFile(f *os.File, offset, limit int) (string, int, bool, error) {
 	scanner := newLineScanner(f)

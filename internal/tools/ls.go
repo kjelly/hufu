@@ -108,10 +108,10 @@ func executeLs(ctx context.Context, call fantasy.ToolCall, workDir string) (fant
 }
 
 type fileEntry struct {
-	relPath  string
-	name     string
-	isDir    bool
-	depth    int
+	relPath string
+	name    string
+	isDir   bool
+	depth   int
 }
 
 func listDirectoryTree(root string, ignore []string, maxDepth, maxFiles int) ([]fileEntry, bool, error) {

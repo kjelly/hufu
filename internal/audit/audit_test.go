@@ -228,7 +228,7 @@ func TestTruncate(t *testing.T) {
 			name:     "string longer than maxLen",
 			input:    "hello world this is a long string",
 			maxLen:   10,
-			expected:   "hello worl...[truncated]",
+			expected: "hello worl...[truncated]",
 		},
 		{
 			name:     "empty string",
@@ -240,13 +240,13 @@ func TestTruncate(t *testing.T) {
 			name:     "maxLen zero",
 			input:    "hello",
 			maxLen:   0,
-			expected:   "...[truncated]",
+			expected: "...[truncated]",
 		},
 		{
 			name:     "maxLen negative",
 			input:    "hello",
 			maxLen:   -1,
-			expected:   "...[truncated]",
+			expected: "...[truncated]",
 		},
 	}
 

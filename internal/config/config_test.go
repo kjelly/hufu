@@ -95,52 +95,52 @@ func TestConfigMergeFromFile(t *testing.T) {
 // TestResolveProviderURL tests the ResolveProviderURL function
 func TestResolveProviderURL(t *testing.T) {
 	tests := []struct {
-		name              string
-		cliFlag           string
+		name               string
+		cliFlag            string
 		teamCfgProviderURL string
-		agentProviderURL  string
-		configProviderURL string
-		want              string
+		agentProviderURL   string
+		configProviderURL  string
+		want               string
 	}{
 		{
-			name:              "CLI flag takes precedence",
-			cliFlag:           "http://cli:11434/v1",
+			name:               "CLI flag takes precedence",
+			cliFlag:            "http://cli:11434/v1",
 			teamCfgProviderURL: "http://team:11434/v1",
-			agentProviderURL:  "http://agent:11434/v1",
-			configProviderURL: "http://config:11434/v1",
-			want:              "http://cli:11434/v1",
+			agentProviderURL:   "http://agent:11434/v1",
+			configProviderURL:  "http://config:11434/v1",
+			want:               "http://cli:11434/v1",
 		},
 		{
-			name:              "team config takes precedence over agent",
-			cliFlag:           "",
+			name:               "team config takes precedence over agent",
+			cliFlag:            "",
 			teamCfgProviderURL: "http://team:11434/v1",
-			agentProviderURL:  "http://agent:11434/v1",
-			configProviderURL: "http://config:11434/v1",
-			want:              "http://team:11434/v1",
+			agentProviderURL:   "http://agent:11434/v1",
+			configProviderURL:  "http://config:11434/v1",
+			want:               "http://team:11434/v1",
 		},
 		{
-			name:              "agent provider URL takes precedence over config",
-			cliFlag:           "",
+			name:               "agent provider URL takes precedence over config",
+			cliFlag:            "",
 			teamCfgProviderURL: "",
-			agentProviderURL:  "http://agent:11434/v1",
-			configProviderURL: "http://config:11434/v1",
-			want:              "http://agent:11434/v1",
+			agentProviderURL:   "http://agent:11434/v1",
+			configProviderURL:  "http://config:11434/v1",
+			want:               "http://agent:11434/v1",
 		},
 		{
-			name:              "config file takes precedence over default",
-			cliFlag:           "",
+			name:               "config file takes precedence over default",
+			cliFlag:            "",
 			teamCfgProviderURL: "",
-			agentProviderURL:  "",
-			configProviderURL: "http://config:11434/v1",
-			want:              "http://config:11434/v1",
+			agentProviderURL:   "",
+			configProviderURL:  "http://config:11434/v1",
+			want:               "http://config:11434/v1",
 		},
 		{
-			name:              "default provider URL when all empty",
-			cliFlag:           "",
+			name:               "default provider URL when all empty",
+			cliFlag:            "",
 			teamCfgProviderURL: "",
-			agentProviderURL:  "",
-			configProviderURL: "",
-			want:              DefaultProviderURL,
+			agentProviderURL:   "",
+			configProviderURL:  "",
+			want:               DefaultProviderURL,
 		},
 	}
 

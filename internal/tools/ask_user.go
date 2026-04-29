@@ -154,12 +154,12 @@ func handleSingleChoice(reader *bufio.Reader, args askUserArgs) (fantasy.ToolRes
 	if choice == 0 && args.AllowAny {
 		fmt.Fprintf(os.Stderr, "%s ", boldFmt("Your answer:"))
 		freeInput := readLine(reader)
-			resp := askResponseType{Free: strings.TrimSpace(freeInput)}
-			data, err := json.Marshal(resp)
-			if err != nil {
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to marshal response: %v", err)), nil
-			}
-			return fantasy.NewTextResponse(string(data)), nil
+		resp := askResponseType{Free: strings.TrimSpace(freeInput)}
+		data, err := json.Marshal(resp)
+		if err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to marshal response: %v", err)), nil
+		}
+		return fantasy.NewTextResponse(string(data)), nil
 	}
 
 	if choice < 1 {

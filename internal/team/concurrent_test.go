@@ -140,9 +140,9 @@ func TestTodoListConcurrentClearAndRead(t *testing.T) {
 
 func TestCoordinatorConversationHistoryConcurrent(t *testing.T) {
 	c := &Coordinator{
-		session:    &TeamSession{Config: agent.TeamConfig{Name: "test"}},
-		agentCache: make(map[string]fantasy.Agent),
-		taskTracker: NewTaskTracker(),
+		session:      &TeamSession{Config: agent.TeamConfig{Name: "test"}},
+		agentCache:   make(map[string]fantasy.Agent),
+		taskTracker:  NewTaskTracker(),
 		reportStatus: func(event StatusEvent) {},
 	}
 	c.conversationHistory = make([]fantasy.Message, 0)
@@ -174,9 +174,9 @@ func TestCoordinatorConversationHistoryConcurrent(t *testing.T) {
 
 func TestCoordinatorWrapUpConcurrent(t *testing.T) {
 	c := &Coordinator{
-		session:    &TeamSession{Config: agent.TeamConfig{Name: "test"}},
-		agentCache: make(map[string]fantasy.Agent),
-		taskTracker: NewTaskTracker(),
+		session:      &TeamSession{Config: agent.TeamConfig{Name: "test"}},
+		agentCache:   make(map[string]fantasy.Agent),
+		taskTracker:  NewTaskTracker(),
 		reportStatus: func(event StatusEvent) {},
 	}
 

@@ -90,24 +90,24 @@ func TestLoadSession(t *testing.T) {
 // TestSessionMDPath tests the SessionMDPath function
 func TestSessionMDPath(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		workspace string
-		expected string
+		expected  string
 	}{
 		{
-			name:     "basic path",
+			name:      "basic path",
 			workspace: "/tmp/workspace",
-			expected: "/tmp/workspace/session.md",
+			expected:  "/tmp/workspace/session.md",
 		},
 		{
-			name:     "path with trailing slash",
+			name:      "path with trailing slash",
 			workspace: "/tmp/workspace/",
-			expected: "/tmp/workspace/session.md",
+			expected:  "/tmp/workspace/session.md",
 		},
 		{
-			name:     "relative path",
+			name:      "relative path",
 			workspace: "workspace",
-			expected: "workspace/session.md",
+			expected:  "workspace/session.md",
 		},
 	}
 
@@ -346,19 +346,19 @@ func TestSessionDataFields(t *testing.T) {
 // TestEnsureWorkspaceDirs tests the EnsureWorkspaceDirs function
 func TestEnsureWorkspaceDirs(t *testing.T) {
 	tests := []struct {
-		name    string
+		name      string
 		workspace string
-		wantErr bool
+		wantErr   bool
 	}{
 		{
-			name:    "create workspace dirs successfully",
+			name:      "create workspace dirs successfully",
 			workspace: t.TempDir(),
-			wantErr: false,
+			wantErr:   false,
 		},
 		{
-			name:    "create workspace dirs in nonexistent parent",
+			name:      "create workspace dirs in nonexistent parent",
 			workspace: "/nonexistent/directory/workspace",
-			wantErr: true,
+			wantErr:   true,
 		},
 	}
 

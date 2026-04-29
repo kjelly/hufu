@@ -154,54 +154,54 @@ func TestSelectTools(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
+		name      string
 		toolNames string
-		expected []string
+		expected  []string
 	}{
 		{
-			name:     "empty tool names returns all tools",
+			name:      "empty tool names returns all tools",
 			toolNames: "",
-			expected: []string{"bash", "grep", "view", "glob", "edit", "agent", "todo"},
+			expected:  []string{"bash", "grep", "view", "glob", "edit", "agent", "todo"},
 		},
 		{
-			name:     "all returns all tools",
+			name:      "all returns all tools",
 			toolNames: "all",
-			expected: []string{"bash", "grep", "view", "glob", "edit", "agent", "todo"},
+			expected:  []string{"bash", "grep", "view", "glob", "edit", "agent", "todo"},
 		},
 		{
-			name:     "select specific tools",
+			name:      "select specific tools",
 			toolNames: "bash,grep",
-			expected: []string{"bash", "grep"},
+			expected:  []string{"bash", "grep"},
 		},
 		{
-			name:     "select with whitespace",
+			name:      "select with whitespace",
 			toolNames: " bash , grep ",
-			expected: []string{"bash", "grep"},
+			expected:  []string{"bash", "grep"},
 		},
 		{
-			name:     "select view when read requested",
+			name:      "select view when read requested",
 			toolNames: "read",
-			expected: []string{"view"},
+			expected:  []string{"view"},
 		},
 		{
-			name:     "select glob when find requested",
+			name:      "select glob when find requested",
 			toolNames: "find",
-			expected: []string{"glob"},
+			expected:  []string{"glob"},
 		},
 		{
-			name:     "always include agent tool",
+			name:      "always include agent tool",
 			toolNames: "bash",
-			expected: []string{"bash", "agent"},
+			expected:  []string{"bash", "agent"},
 		},
 		{
-			name:     "always include todo tool",
+			name:      "always include todo tool",
 			toolNames: "bash",
-			expected: []string{"bash", "todo"},
+			expected:  []string{"bash", "todo"},
 		},
 		{
-			name:     "select nonexistent tool returns empty",
+			name:      "select nonexistent tool returns empty",
 			toolNames: "nonexistent",
-			expected: []string{},
+			expected:  []string{},
 		},
 	}
 
@@ -297,11 +297,11 @@ func TestAgentDefFields(t *testing.T) {
 		Timeout:     300,
 		MaxRetries:  3,
 		Generation: GenerationParams{
-			Model:     "llama2",
+			Model:       "llama2",
 			Temperature: "0.7",
-			MaxTokens: "2000",
-			TopP:      "0.9",
-			TopK:      "40",
+			MaxTokens:   "2000",
+			TopP:        "0.9",
+			TopK:        "40",
 		},
 		ProviderURL: "http://localhost:11434/v1",
 	}
@@ -341,18 +341,18 @@ func TestAgentDefFields(t *testing.T) {
 // TestTeamConfigFields tests that TeamConfig has all expected fields
 func TestTeamConfigFields(t *testing.T) {
 	teamConfig := &TeamConfig{
-		Name:          "test-team",
-		Description:   "A test team",
-		MaxRounds:     10,
-		WorkspaceDir:  "/tmp/workspace",
-		Timeout:       300,
-		MaxRetries:    3,
+		Name:         "test-team",
+		Description:  "A test team",
+		MaxRounds:    10,
+		WorkspaceDir: "/tmp/workspace",
+		Timeout:      300,
+		MaxRetries:   3,
 		Generation: GenerationParams{
-			Model:     "llama2",
+			Model:       "llama2",
 			Temperature: "0.7",
-			MaxTokens: "2000",
-			TopP:      "0.9",
-			TopK:      "40",
+			MaxTokens:   "2000",
+			TopP:        "0.9",
+			TopK:        "40",
 		},
 		Skills:        "skill-a",
 		SkillsExclude: "skill-b",
@@ -468,5 +468,119 @@ func TestAlwaysIncludeTools(t *testing.T) {
 		if alwaysIncludeTools[tool] {
 			t.Errorf("alwaysIncludeTools contains unexpected tool: %s", tool)
 		}
+	}
+}
+
+// TestResolveMaxSteps tests the resolveMaxSteps function with all priority scenarios
+func TestResolveMaxSteps(t *testing.T) {
+	tests := []struct {
+		name       string
+		agentSteps int
+		teamSteps  int
+		expected   int
+	}{
+		{
+			name:       "agentSteps greater than zero returns agentSteps",
+			agentSteps: 50,
+			teamSteps:  20,
+			expected:   50,
+		},
+		{
+			name:       "agentSteps zero with positive teamSteps returns teamSteps",
+			agentSteps: 0,
+			teamSteps:  20,
+			expected:   20,
+		},
+		{
+			name:       "both zero returns DefaultMaxSteps",
+			agentSteps: 0,
+			teamSteps:  0,
+			expected:   DefaultMaxSteps,
+		},
+		{
+			name:       "agentSteps negative falls back to teamSteps",
+			agentSteps: -5,
+			teamSteps:  20,
+			expected:   20,
+		},
+		{
+			name:       "agentSteps negative with zero teamSteps returns DefaultMaxSteps",
+			agentSteps: -10,
+			teamSteps:  0,
+			expected:   DefaultMaxSteps,
+		},
+		{
+			name:       "agentSteps one returns one",
+			agentSteps: 1,
+			teamSteps:  20,
+			expected:   1,
+		},
+		{
+			name:       "teamSteps one with zero agentSteps returns one",
+			agentSteps: 0,
+			teamSteps:  1,
+			expected:   1,
+		},
+		{
+			name:       "large agentSteps value",
+			agentSteps: 1000,
+			teamSteps:  20,
+			expected:   1000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveMaxSteps(tt.agentSteps, tt.teamSteps)
+			if got != tt.expected {
+				t.Errorf("resolveMaxSteps(%d, %d) = %d, want %d", tt.agentSteps, tt.teamSteps, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestMaxStepsConfiguration tests that MaxSteps field exists in all config types
+func TestMaxStepsConfiguration(t *testing.T) {
+	// Test AgentDef.MaxSteps field exists
+	agentDef := &AgentDef{
+		Name:     "test-agent",
+		MaxSteps: 50,
+	}
+	if agentDef.MaxSteps != 50 {
+		t.Errorf("AgentDef.MaxSteps = %d, want %d", agentDef.MaxSteps, 50)
+	}
+
+	// Test TeamConfig.MaxSteps field exists
+	teamConfig := &TeamConfig{
+		Name:     "test-team",
+		MaxSteps: 20,
+	}
+	if teamConfig.MaxSteps != 20 {
+		t.Errorf("TeamConfig.MaxSteps = %d, want %d", teamConfig.MaxSteps, 20)
+	}
+
+	// Test AgentConfig.MaxSteps field exists
+	agentConfig := &AgentConfig{
+		Def:      agentDef,
+		MaxSteps: 30,
+	}
+	if agentConfig.MaxSteps != 30 {
+		t.Errorf("AgentConfig.MaxSteps = %d, want %d", agentConfig.MaxSteps, 30)
+	}
+
+	// Test that MaxSteps field can be read and written
+	agentDef.MaxSteps = 100
+	if agentDef.MaxSteps != 100 {
+		t.Errorf("AgentDef.MaxSteps = %d, want %d after write", agentDef.MaxSteps, 100)
+	}
+
+	teamConfig.MaxSteps = 150
+	if teamConfig.MaxSteps != 150 {
+		t.Errorf("TeamConfig.MaxSteps = %d, want %d after write", teamConfig.MaxSteps, 150)
+	}
+
+	agentConfig.MaxSteps = 200
+	if agentConfig.MaxSteps != 200 {
+		t.Errorf("AgentConfig.MaxSteps = %d, want %d after write", agentConfig.MaxSteps, 200)
 	}
 }

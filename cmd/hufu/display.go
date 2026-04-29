@@ -32,9 +32,9 @@ var (
 )
 
 var activeStatusFlusher struct {
-	mu       sync.Mutex
-	w        *lineWriter
-	taskDisp *taskDisplay
+	mu        sync.Mutex
+	w         *lineWriter
+	taskDisp  *taskDisplay
 	skillDisp *skillDisplay
 }
 

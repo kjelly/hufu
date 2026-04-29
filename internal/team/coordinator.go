@@ -34,30 +34,30 @@ type DirectAgentResult struct {
 }
 
 type Coordinator struct {
-	mu       sync.RWMutex
-	session  *TeamSession
-	provider *agent.OllamaProvider
-	mcpManager *mcp.MCPToolManager
-	coreTools           []fantasy.AgentTool
-	agentCache          map[string]fantasy.Agent
-	agentCacheMu        sync.RWMutex
-	round               int
-	verbose             bool
-	reportStatus        StatusReporter
-	sessionData         *SessionData
-	taskTracker         *TaskTracker
-	skills              []*skill.SkillDef
+	mu                    sync.RWMutex
+	session               *TeamSession
+	provider              *agent.OllamaProvider
+	mcpManager            *mcp.MCPToolManager
+	coreTools             []fantasy.AgentTool
+	agentCache            map[string]fantasy.Agent
+	agentCacheMu          sync.RWMutex
+	round                 int
+	verbose               bool
+	reportStatus          StatusReporter
+	sessionData           *SessionData
+	taskTracker           *TaskTracker
+	skills                []*skill.SkillDef
 	conversationHistory   []fantasy.Message
 	conversationHistoryMu sync.Mutex
 	projectDir            string
-	wrapUp              atomic.Int32
-	currentAgentName     string
-	currentAgentNameMu   sync.RWMutex
-	auditLogger         *audit.AuditLogger
-	skillUsage          map[string]*SkillUsageEntry
-	skillUsageMu        sync.Mutex
-	delegatedTasks      map[string]int
-	delegatedTasksMu    sync.Mutex
+	wrapUp                atomic.Int32
+	currentAgentName      string
+	currentAgentNameMu    sync.RWMutex
+	auditLogger           *audit.AuditLogger
+	skillUsage            map[string]*SkillUsageEntry
+	skillUsageMu          sync.Mutex
+	delegatedTasks        map[string]int
+	delegatedTasksMu      sync.Mutex
 }
 
 type SkillUsageEntry struct {
@@ -74,17 +74,17 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		return nil, fmt.Errorf("failed to create Ollama provider: %w", err)
 	}
 	c := &Coordinator{
-		provider:     prov,
-		session:      session,
-		mcpManager:   mcpManager,
-		coreTools:    coreTools,
-		agentCache:   make(map[string]fantasy.Agent),
-		verbose:      verbose,
-		reportStatus: func(event StatusEvent) {},
-		taskTracker:  NewTaskTracker(),
-		skills:       session.Skills,
-		projectDir:   projectDir,
-		skillUsage:   make(map[string]*SkillUsageEntry),
+		provider:       prov,
+		session:        session,
+		mcpManager:     mcpManager,
+		coreTools:      coreTools,
+		agentCache:     make(map[string]fantasy.Agent),
+		verbose:        verbose,
+		reportStatus:   func(event StatusEvent) {},
+		taskTracker:    NewTaskTracker(),
+		skills:         session.Skills,
+		projectDir:     projectDir,
+		skillUsage:     make(map[string]*SkillUsageEntry),
 		delegatedTasks: make(map[string]int),
 	}
 
@@ -239,7 +239,7 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 	}
 }
 
-func (t *runAgentsTool) ProviderOptions() fantasy.ProviderOptions      { return t.pOpts }
+func (t *runAgentsTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
 func (t *runAgentsTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
 
 func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
@@ -278,7 +278,7 @@ func (t *finishTool) Info() fantasy.ToolInfo {
 	}
 }
 
-func (t *finishTool) ProviderOptions() fantasy.ProviderOptions      { return t.pOpts }
+func (t *finishTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
 func (t *finishTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
 
 func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
@@ -306,11 +306,11 @@ func (t *loadSkillTool) Info() fantasy.ToolInfo {
 				"description": "The skill name to load (e.g. 'git-commit')",
 			},
 		},
-		Required:  []string{"name"},
+		Required: []string{"name"},
 	}
 }
 
-func (t *loadSkillTool) ProviderOptions() fantasy.ProviderOptions      { return t.pOpts }
+func (t *loadSkillTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
 func (t *loadSkillTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
 
 func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
@@ -341,7 +341,7 @@ func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 
 type workerAgentTool struct {
 	coordinator *Coordinator
-	pOpts        fantasy.ProviderOptions
+	pOpts       fantasy.ProviderOptions
 }
 
 func (t *workerAgentTool) Info() fantasy.ToolInfo {
@@ -362,7 +362,7 @@ func (t *workerAgentTool) Info() fantasy.ToolInfo {
 	}
 }
 
-func (t *workerAgentTool) ProviderOptions() fantasy.ProviderOptions      { return t.pOpts }
+func (t *workerAgentTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
 func (t *workerAgentTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
 
 func (t *workerAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
@@ -473,7 +473,7 @@ func (t *todoTool) Info() fantasy.ToolInfo {
 			},
 			"items": map[string]any{
 				"type":        "array",
-				"items":        map[string]any{"type": "string"},
+				"items":       map[string]any{"type": "string"},
 				"description": "Task descriptions to create (used with action=create)",
 			},
 			"id": map[string]any{
@@ -493,7 +493,7 @@ func (t *todoTool) Info() fantasy.ToolInfo {
 	}
 }
 
-func (t *todoTool) ProviderOptions() fantasy.ProviderOptions      { return t.pOpts }
+func (t *todoTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
 func (t *todoTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
 
 func (t *todoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {

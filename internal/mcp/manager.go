@@ -95,8 +95,8 @@ func (m *MCPToolManager) loadServer(ctx context.Context, name string, cfg MCPSer
 }
 
 var blockedEnvVars = map[string]bool{
-	"LD_PRELOAD":       true,
-	"LD_LIBRARY_PATH":  true,
+	"LD_PRELOAD":            true,
+	"LD_LIBRARY_PATH":       true,
 	"DYLD_INSERT_LIBRARIES": true,
 	"DYLD_LIBRARY_PATH":     true,
 	"__AFL_PRELOAD":         true,
