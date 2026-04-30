@@ -4,3 +4,5 @@ bin/
 workspace
 reports
 ignores/
+dist/
+coverage.out

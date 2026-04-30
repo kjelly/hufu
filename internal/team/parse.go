@@ -288,6 +288,12 @@ func LoadTeam(teamDir string) (*TeamSession, error) {
 			continue
 		}
 		path := filepath.Join(absDir, entry.Name())
+		if entry.Type()&os.ModeSymlink != 0 {
+			resolved, err := filepath.EvalSymlinks(path)
+			if err != nil || resolved == path {
+				continue
+			}
+		}
 		def := parseAgentFile(path)
 		if def == nil {
 			continue

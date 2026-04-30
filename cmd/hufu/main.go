@@ -34,6 +34,7 @@ var (
 	agentTeamSearchPath string
 	memoryEnabled       bool
 	memoryModel         string
+	archiveMemory       bool
 	globalPromptReader  atomic.Pointer[readline.PromptReader]
 )
 
@@ -64,6 +65,7 @@ func main() {
 	rootCmd.Flags().StringVar(&agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams (default: .agent-teams/,~/.agent-teams/)")
 	rootCmd.Flags().BoolVar(&memoryEnabled, "memory", true, "Enable long-term memory (RAG with vector search)")
 	rootCmd.Flags().StringVar(&memoryModel, "memory-model", "", "Embedding model for memory (default: nomic-embed-text, overrides hufu.yaml)")
+	rootCmd.Flags().BoolVar(&archiveMemory, "archive-memory", false, "Archive session summary to memory and exit")
 
 	if err := rootCmd.Execute(); err != nil {
 		var interrupted errInterrupted
@@ -109,6 +111,21 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	if prompt == "" {
 		prompt = readStdin()
 	}
+
+	if archiveMemory && prompt == "" {
+		var searchPaths []string
+		if agentTeamSearchPath != "" {
+			searchPaths = strings.Split(agentTeamSearchPath, ",")
+		} else {
+			searchPaths = team.DefaultSearchPaths()
+		}
+		registry := team.NewTeamRegistry(searchPaths)
+		if err := registry.Discover(); err != nil {
+			return fmt.Errorf("failed to discover teams: %w", err)
+		}
+		return runArchiveMemory(context.Background(), registry)
+	}
+
 	if prompt == "" {
 		if pr != nil {
 			p, err := askUserForPrompt(pr)
@@ -176,6 +193,10 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "%s Available teams: %s\n", boldStyle.Render("Teams:"), strings.Join(registry.ListTeams(), ", "))
+
+	if archiveMemory && prompt == "" && !newSession {
+		return runArchiveMemory(context.Background(), registry)
+	}
 
 	initialTeam := strings.ToLower(agentTeamName)
 
@@ -253,6 +274,12 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Println(result)
+
+	if archiveMemory && !newSession {
+		for _, tc := range loadedTeams {
+			archiveCurrentSessionToMemory(ctx, tc)
+		}
+	}
 
 	if tempWorkspace {
 		absWS, _ := filepath.Abs(workspace)
@@ -733,6 +760,73 @@ func providerURLToOllamaAPI(providerURL string) string {
 	u := strings.TrimRight(providerURL, "/")
 	u = strings.TrimSuffix(u, "/v1")
 	return u + "/api"
+}
+
+func archiveCurrentSessionToMemory(ctx context.Context, tc *teamContext) {
+	if tc == nil || tc.sessionData == nil || len(tc.sessionData.Entries) == 0 {
+		fmt.Fprintf(os.Stderr, "%s No session data to archive.\n", dimStyle.Render("○"))
+		return
+	}
+
+	ollamaAPIURL := providerURLToOllamaAPI(providerURL)
+	embedModel := config.ResolveEmbeddingModel(memoryModel)
+	projectDir, _ := os.Getwd()
+
+	memStore, err := memory.NewMemoryStore(projectDir, ollamaAPIURL, embedModel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s Memory unavailable for archive: %v\n", errStyle.Render("⚠"), err)
+		return
+	}
+	defer memStore.Close()
+
+	var entries []memory.SessionSummaryEntry
+	for _, e := range tc.sessionData.Entries {
+		entries = append(entries, memory.SessionSummaryEntry{
+			Role:      e.Role,
+			Content:   e.Content,
+			Timestamp: e.Timestamp,
+		})
+	}
+
+	if err := memory.ArchiveSessionSummary(ctx, memStore, entries, tc.session.Config.Name); err != nil {
+		fmt.Fprintf(os.Stderr, "%s Failed to archive session to memory: %v\n", errStyle.Render("⚠"), err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "%s Session archived to memory.\n", doneStyle.Render("✓"))
+}
+
+func runArchiveMemory(ctx context.Context, registry *team.TeamRegistry) error {
+	teams := registry.ListTeams()
+	if len(teams) == 0 {
+		return fmt.Errorf("no teams available")
+	}
+
+	var teamNames []string
+	if agentTeamName != "" {
+		teamNames = []string{strings.ToLower(agentTeamName)}
+	} else {
+		teamNames = teams
+	}
+
+	archived := 0
+	for _, name := range teamNames {
+		tc, err := loadTeamByName(ctx, name, registry, providerURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s Failed to load team %q: %v\n", errStyle.Render("⚠"), name, err)
+			continue
+		}
+		if tc.sessionData != nil && len(tc.sessionData.Entries) > 0 {
+			archiveCurrentSessionToMemory(ctx, tc)
+			archived++
+		} else {
+			fmt.Fprintf(os.Stderr, "%s No session data for team %q\n", dimStyle.Render("○"), name)
+		}
+	}
+
+	if archived == 0 {
+		fmt.Fprintf(os.Stderr, "%s No session data found to archive.\n", dimStyle.Render("○"))
+	}
+	return nil
 }
 
 func askUserForPromptFallback() (string, error) {
