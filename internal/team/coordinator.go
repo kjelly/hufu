@@ -60,12 +60,12 @@ type Coordinator struct {
 	currentAgentNameMu    sync.RWMutex
 	auditLogger           *audit.AuditLogger
 	skillUsage            map[string]*skillUsageState
-	skillUsageMu        sync.Mutex
-	delegatedTasks      map[string]int
-	delegatedTasksMu    sync.Mutex
-	memoryStore         *memory.MemoryStore
-	skillsMu            sync.RWMutex
-	modelList           []config.ModelEntry
+	skillUsageMu          sync.Mutex
+	delegatedTasks        map[string]int
+	delegatedTasksMu      sync.Mutex
+	memoryStore           *memory.MemoryStore
+	skillsMu              sync.RWMutex
+	modelList             []config.ModelEntry
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
@@ -80,6 +80,54 @@ type SkillUsageEntry struct {
 	Name   string
 	Count  int
 	Agents []string // sorted list of agent names
+}
+
+type taskTiming struct {
+	mu        sync.Mutex
+	taskStart time.Time
+	toolTime  time.Duration
+	toolStart time.Time
+	counting  bool
+}
+
+func (t *taskTiming) reset() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.taskStart = time.Now()
+	t.toolTime = 0
+	t.counting = true
+}
+
+func (t *taskTiming) beginTool() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.counting {
+		t.toolStart = time.Now()
+	}
+}
+
+func (t *taskTiming) endTool() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.counting && !t.toolStart.IsZero() {
+		t.toolTime += time.Since(t.toolStart)
+		t.toolStart = time.Time{}
+	}
+}
+
+func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.taskStart.IsZero() {
+		return 0, 0, 0
+	}
+	duration = time.Since(t.taskStart)
+	toolTime = t.toolTime
+	modelTime = duration - toolTime
+	if modelTime < 0 {
+		modelTime = 0
+	}
+	return
 }
 
 func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, verbose bool) (*Coordinator, error) {
@@ -278,6 +326,16 @@ func (c *Coordinator) extractSkillFromToolCall(toolName, input string) string {
 
 func (c *Coordinator) newEvent(eventType string) StatusEvent {
 	return StatusEvent{Type: eventType, TeamName: c.session.Config.Name}
+}
+
+func (c *Coordinator) updateTodoTiming(todoID string, modelTime, toolTime time.Duration) {
+	items := c.taskTracker.TodoList().Items()
+	for _, item := range items {
+		if item.ID == todoID {
+			c.taskTracker.TodoList().UpdateTodoTiming(todoID, modelTime, toolTime)
+			return
+		}
+	}
 }
 
 func (c *Coordinator) SetWrapUp() {
@@ -494,15 +552,21 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		return "", fmt.Errorf("wrap-up in progress: cannot create sub-agent")
 	}
 
+	subModel := c.resolveAgentModel(&agent.AgentDef{
+		Generation:  c.session.Config.Generation,
+		ProviderURL: c.session.Config.ProviderURL,
+	}, "")
+
 	todoItems := c.taskTracker.TodoList().AddBatch([]struct {
 		Agent string
 		Desc  string
-	}{{Agent: name, Desc: task}})
+		Model string
+	}{{Agent: name, Desc: task, Model: subModel}})
 	todoID := todoItems[0].ID
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("start").withAgent(name).withMessage(task))
+	c.report(c.newEvent("start").withAgent(name).withMessage(task).withModel(subModel))
 
 	def := &agent.AgentDef{
 		Name:        name,
@@ -537,21 +601,27 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	taskCtx, cancel := context.WithTimeout(ctx, agentTimeout)
 	defer cancel()
 
+	timing := &taskTiming{}
+	timing.reset()
+
 	currentAgent := c.GetCurrentAgent()
 	c.SetCurrentAgent(name)
-	output, _, err := c.runAgentWithStatusAndHistory(taskCtx, ag, name, task, nil)
+	output, _, err := c.runAgentWithStatusAndHistory(taskCtx, ag, name, task, nil, timing)
 	c.SetCurrentAgent(currentAgent)
 
+	duration, modelTime, toolTime := timing.snapshot()
 	if err != nil {
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
+		c.updateTodoTiming(todoID, modelTime, toolTime)
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		c.report(c.newEvent("error").withAgent(name).withMessage(err.Error()))
+		c.report(c.newEvent("error").withAgent(name).withMessage(err.Error()).withModel(subModel).withTiming(duration, modelTime, toolTime))
 		return "", fmt.Errorf("sub-agent failed: %w", err)
 	}
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
+	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("done").withAgent(name).withMessage("completed"))
+	c.report(c.newEvent("done").withAgent(name).withMessage("completed").withModel(subModel).withTiming(duration, modelTime, toolTime))
 	return output, nil
 }
 
@@ -628,15 +698,19 @@ func (t *todoTool) handleCreate(callerName string, items []string) (fantasy.Tool
 		return fantasy.NewTextErrorResponse("items is required for create action"), nil
 	}
 
+	resolvedModel := t.coordinator.resolveCurrentAgentModel(callerName)
+
 	batch := make([]struct {
 		Agent string
 		Desc  string
+		Model string
 	}, len(items))
 	for i, desc := range items {
 		batch[i] = struct {
 			Agent string
 			Desc  string
-		}{Agent: callerName, Desc: desc}
+			Model string
+		}{Agent: callerName, Desc: desc, Model: resolvedModel}
 	}
 
 	added := t.coordinator.taskTracker.TodoList().AddBatch(batch)
@@ -784,12 +858,19 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	todoBatch := make([]struct {
 		Agent string
 		Desc  string
+		Model string
 	}, len(tasks))
 	for i, t := range tasks {
+		agentDef := c.session.Agents[strings.ToLower(t.Agent)]
+		var resolvedModel string
+		if agentDef != nil {
+			resolvedModel = c.resolveAgentModel(agentDef, t.Model)
+		}
 		todoBatch[i] = struct {
 			Agent string
 			Desc  string
-		}{Agent: strings.ToLower(t.Agent), Desc: t.Task}
+			Model string
+		}{Agent: strings.ToLower(t.Agent), Desc: t.Task, Model: resolvedModel}
 	}
 	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
@@ -873,10 +954,16 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("start").withAgent(agentName).withMessage(task.Task))
+
+	resolvedModel := c.resolveAgentModel(agentDef, task.Model)
+
+	c.report(c.newEvent("start").withAgent(agentName).withMessage(task.Task).withModel(resolvedModel))
 	c.SetCurrentAgent(agentName)
 	_ = writeStatus(c.session.Workspace, agentName, "working", task.Task)
 	_ = writeInbox(c.session.Workspace, agentName, task.Task)
+
+	timing := &taskTiming{}
+	timing.reset()
 
 	ag, err := c.getOrCreateAgent(parentCtx, agentDef, task.Model)
 	if err != nil {
@@ -920,15 +1007,17 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		func() {
 			taskCtx, cancel := context.WithTimeout(parentCtx, agentTimeout)
 			defer cancel()
-			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, prompt, conversationHistory)
+			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, prompt, conversationHistory, timing)
 		}()
 
 		if err == nil {
 			_ = writeOutbox(c.session.Workspace, agentName, output)
 			_ = writeStatus(c.session.Workspace, agentName, "done", task.Task)
+			duration, modelTime, toolTime := timing.snapshot()
 			c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
+			c.updateTodoTiming(todoID, modelTime, toolTime)
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-			c.report(c.newEvent("done").withAgent(agentName).withMessage("completed"))
+			c.report(c.newEvent("done").withAgent(agentName).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime))
 			return output, nil
 		}
 
@@ -937,7 +1026,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}
 
 		lastErr = err
-		c.report(c.newEvent("error").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d failed: %v", attempt, err)))
+		c.report(c.newEvent("error").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d failed: %v", attempt, err)).withModel(resolvedModel))
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, fmt.Sprintf("attempt %d failed: %v", attempt, err))
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
@@ -946,16 +1035,18 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}
 	}
 
+	_, modelTime, toolTime := timing.snapshot()
+	c.updateTodoTiming(todoID, modelTime, toolTime)
 	_ = writeStatus(c.session.Workspace, agentName, "error", task.Task)
 	return "", fmt.Errorf("agent %q failed after %d attempts: %w", agentName, maxRetries, lastErr)
 }
 
-func (c *Coordinator) runAgentWithStatus(ctx context.Context, ag fantasy.Agent, agentName, prompt string) (string, error) {
-	output, _, err := c.runAgentWithStatusAndHistory(ctx, ag, agentName, prompt, nil)
+func (c *Coordinator) runAgentWithStatus(ctx context.Context, ag fantasy.Agent, agentName, prompt string, timing *taskTiming) (string, error) {
+	output, _, err := c.runAgentWithStatusAndHistory(ctx, ag, agentName, prompt, nil, timing)
 	return output, err
 }
 
-func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message) (string, []fantasy.StepResult, error) {
+func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message, timing *taskTiming) (string, []fantasy.StepResult, error) {
 	reportFn := c.reportStatus
 	workspace := c.session.Workspace
 	teamName := c.session.Config.Name
@@ -973,6 +1064,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			return nil
 		},
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
+			timing.beginTool()
 			argsPreview := tc.Input
 			if len(argsPreview) > 200 {
 				argsPreview = argsPreview[:200] + "..."
@@ -986,6 +1078,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			return nil
 		},
 		OnToolResult: func(tr fantasy.ToolResultContent) error {
+			timing.endTool()
 			resultPreview := ""
 			if tr.Result != nil {
 				if txt, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentText](tr.Result); ok {
@@ -1242,6 +1335,24 @@ func (c *Coordinator) ensureModelFallback(def *agent.AgentDef) {
 	}
 }
 
+func (c *Coordinator) resolveCurrentAgentModel(agentName string) string {
+	agentDef, ok := c.session.Agents[agentName]
+	if ok {
+		return c.resolveAgentModel(agentDef, "")
+	}
+	return c.session.Config.Generation.Model
+}
+
+func (c *Coordinator) resolveAgentModel(def *agent.AgentDef, overrideModel string) string {
+	if def.Generation.Model != "" {
+		return def.Generation.Model
+	}
+	if overrideModel != "" {
+		return overrideModel
+	}
+	return c.session.Config.Generation.Model
+}
+
 func (c *Coordinator) expandDefaultOrchestratorTemplate(tmpl string) string {
 	workerNames := c.workerNameList()
 	s := strings.ReplaceAll(tmpl, "{{TEAM_NAME}}", c.session.Config.Name)
@@ -1304,10 +1415,13 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return nil, fmt.Errorf("cannot directly invoke coordinator agent %q", agentName)
 	}
 
+	directModel := c.resolveAgentModel(agentDef, "")
+
 	todoItems := c.taskTracker.TodoList().AddBatch([]struct {
 		Agent string
 		Desc  string
-	}{{Agent: agentName, Desc: task}})
+		Model string
+	}{{Agent: agentName, Desc: task, Model: directModel}})
 	todoID := todoItems[0].ID
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
@@ -1328,6 +1442,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	taskCtx, cancel := context.WithTimeout(ctx, agentTimeout)
 	defer cancel()
 
+	timing := &taskTiming{}
+	timing.reset()
+
 	_ = writeInbox(c.session.Workspace, agentName, task)
 	_ = writeStatus(c.session.Workspace, agentName, "working", task)
 
@@ -1336,18 +1453,23 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		prompt = prefix + prompt
 	}
 
-	output, err := c.runAgentWithStatus(taskCtx, ag, agentName, prompt)
+	output, err := c.runAgentWithStatus(taskCtx, ag, agentName, prompt, timing)
+	duration, modelTime, toolTime := timing.snapshot()
 	if err != nil {
 		_ = writeStatus(c.session.Workspace, agentName, "error", task)
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
+		c.updateTodoTiming(todoID, modelTime, toolTime)
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withModel(directModel).withTiming(duration, modelTime, toolTime))
 		return &DirectAgentResult{AgentName: agentName, Error: err}, nil
 	}
 
 	_ = writeOutbox(c.session.Workspace, agentName, output)
 	_ = writeStatus(c.session.Workspace, agentName, "done", task)
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
+	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	c.report(c.newEvent("done").withAgent(agentName).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime))
 
 	return &DirectAgentResult{AgentName: agentName, Output: output}, nil
 }
@@ -1392,7 +1514,7 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	copy(historySnapshot, c.conversationHistory)
 	c.conversationHistoryMu.Unlock()
 
-	return c.runAgentWithStatusAndHistory(orchCtx, orch, orchDef.Name, prompt, historySnapshot)
+	return c.runAgentWithStatusAndHistory(orchCtx, orch, orchDef.Name, prompt, historySnapshot, &taskTiming{})
 }
 
 func (c *Coordinator) saveHistoryAndSession(steps []fantasy.StepResult) {

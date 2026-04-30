@@ -2,9 +2,9 @@ package team
 
 import (
 	"testing"
+	"time"
 )
 
-// TestStatusEventWithAgent tests the withAgent method
 func TestStatusEventWithAgent(t *testing.T) {
 	event := StatusEvent{Type: "start", TeamName: "test-team"}
 	event = event.withAgent("test-agent")
@@ -17,7 +17,6 @@ func TestStatusEventWithAgent(t *testing.T) {
 	}
 }
 
-// TestStatusEventWithMessage tests the withMessage method
 func TestStatusEventWithMessage(t *testing.T) {
 	event := StatusEvent{Type: "error", TeamName: "test-team", Message: "initial"}
 	event = event.withMessage("new message")
@@ -27,7 +26,6 @@ func TestStatusEventWithMessage(t *testing.T) {
 	}
 }
 
-// TestStatusEventWithStep tests the withStep method
 func TestStatusEventWithStep(t *testing.T) {
 	event := StatusEvent{Type: "step", TeamName: "test-team"}
 	event = event.withStep(5)
@@ -37,7 +35,6 @@ func TestStatusEventWithStep(t *testing.T) {
 	}
 }
 
-// TestStatusEventWithTool tests the withTool method
 func TestStatusEventWithTool(t *testing.T) {
 	event := StatusEvent{Type: "tool_call", TeamName: "test-team"}
 	event = event.withTool("bash", "ls -la")
@@ -50,7 +47,6 @@ func TestStatusEventWithTool(t *testing.T) {
 	}
 }
 
-// TestStatusEventWithToolResult tests the withToolResult method
 func TestStatusEventWithToolResult(t *testing.T) {
 	event := StatusEvent{Type: "tool_result", TeamName: "test-team"}
 	event = event.withToolResult("bash", "output")
@@ -63,7 +59,6 @@ func TestStatusEventWithToolResult(t *testing.T) {
 	}
 }
 
-// TestStatusEventWithTodos tests the withTodos method
 func TestStatusEventWithTodos(t *testing.T) {
 	todos := []*TodoItem{
 		{ID: "1", Agent: "agent1", Desc: "task1", Status: TaskPending},
@@ -80,7 +75,6 @@ func TestStatusEventWithTodos(t *testing.T) {
 	}
 }
 
-// TestStatusEventWithSkillName tests the withSkillName method
 func TestStatusEventWithSkillName(t *testing.T) {
 	event := StatusEvent{Type: "skill_used", TeamName: "test-team"}
 	event = event.withSkillName("test-skill")
@@ -90,7 +84,30 @@ func TestStatusEventWithSkillName(t *testing.T) {
 	}
 }
 
-// TestStatusEventLoopWarning tests the loop_warning event type
+func TestStatusEventWithModel(t *testing.T) {
+	event := StatusEvent{Type: "start", TeamName: "test-team"}
+	event = event.withModel("ollama/qwen3:8b")
+
+	if event.Model != "ollama/qwen3:8b" {
+		t.Errorf("Model = %q, want %q", event.Model, "ollama/qwen3:8b")
+	}
+}
+
+func TestStatusEventWithTiming(t *testing.T) {
+	event := StatusEvent{Type: "done", TeamName: "test-team"}
+	event = event.withTiming(2*time.Minute+30*time.Second, 1*time.Minute+45*time.Second, 45*time.Second)
+
+	if event.Duration != 150*time.Second {
+		t.Errorf("Duration = %v, want %v", event.Duration, 150*time.Second)
+	}
+	if event.ModelTime != 105*time.Second {
+		t.Errorf("ModelTime = %v, want %v", event.ModelTime, 105*time.Second)
+	}
+	if event.ToolTime != 45*time.Second {
+		t.Errorf("ToolTime = %v, want %v", event.ToolTime, 45*time.Second)
+	}
+}
+
 func TestStatusEventLoopWarning(t *testing.T) {
 	event := StatusEvent{
 		Type:     "loop_warning",
@@ -106,7 +123,6 @@ func TestStatusEventLoopWarning(t *testing.T) {
 	}
 }
 
-// TestStatusEventLoopWarningWithMessage tests loop_warning with custom message
 func TestStatusEventLoopWarningWithMessage(t *testing.T) {
 	event := StatusEvent{
 		Type:     "loop_warning",
@@ -119,7 +135,6 @@ func TestStatusEventLoopWarningWithMessage(t *testing.T) {
 	}
 }
 
-// TestTaskTrackerNewTaskTracker tests NewTaskTracker
 func TestTaskTrackerNewTaskTracker(t *testing.T) {
 	tracker := NewTaskTracker()
 
@@ -133,13 +148,13 @@ func TestTaskTrackerNewTaskTracker(t *testing.T) {
 	}
 }
 
-// TestTodoListAddBatchStatus tests TodoList.AddBatch with status tracking
 func TestTodoListAddBatchStatus(t *testing.T) {
 	tl := &TodoList{}
 
 	items := []struct {
 		Agent string
 		Desc  string
+		Model string
 	}{
 		{Agent: "agent1", Desc: "task1"},
 		{Agent: "agent2", Desc: "task2"},
@@ -168,13 +183,13 @@ func TestTodoListAddBatchStatus(t *testing.T) {
 	}
 }
 
-// TestTodoListUpdateStatusStatus tests TodoList.UpdateStatus with status tracking
 func TestTodoListUpdateStatusStatus(t *testing.T) {
 	tl := &TodoList{}
 
 	items := []struct {
 		Agent string
 		Desc  string
+		Model string
 	}{
 		{Agent: "agent1", Desc: "task1"},
 		{Agent: "agent2", Desc: "task2"},
@@ -182,13 +197,9 @@ func TestTodoListUpdateStatusStatus(t *testing.T) {
 
 	tl.AddBatch(items)
 
-	// Update first item
 	tl.UpdateStatus("1", TaskInProgress, "working on it")
-
-	// Update second item with error
 	tl.UpdateStatus("2", TaskError, "failed")
 
-	// Verify updates
 	todos := tl.Items()
 	if len(todos) != 2 {
 		t.Errorf("len(todos) = %d, want %d", len(todos), 2)
@@ -209,20 +220,19 @@ func TestTodoListUpdateStatusStatus(t *testing.T) {
 	}
 }
 
-// TestTodoListUpdateStatusNonExistent tests UpdateStatus with non-existent ID
 func TestTodoListUpdateStatusNonExistent(t *testing.T) {
 	tl := &TodoList{}
 
 	items := []struct {
 		Agent string
 		Desc  string
+		Model string
 	}{
 		{Agent: "agent1", Desc: "task1"},
 	}
 
 	tl.AddBatch(items)
 
-	// Try to update non-existent ID
 	tl.UpdateStatus("999", TaskDone, "should not update")
 
 	todos := tl.Items()
@@ -234,13 +244,13 @@ func TestTodoListUpdateStatusNonExistent(t *testing.T) {
 	}
 }
 
-// TestTodoListItems tests TodoList.Items
 func TestTodoListItems(t *testing.T) {
 	tl := &TodoList{}
 
 	items := []struct {
 		Agent string
 		Desc  string
+		Model string
 	}{
 		{Agent: "agent1", Desc: "task1"},
 	}
@@ -252,7 +262,6 @@ func TestTodoListItems(t *testing.T) {
 		t.Errorf("len(todos) = %d, want %d", len(todos), 1)
 	}
 
-	// Modify returned slice should not affect internal state
 	todos[0].Status = TaskDone
 	todos = tl.Items()
 	if todos[0].Status != TaskPending {
@@ -260,13 +269,13 @@ func TestTodoListItems(t *testing.T) {
 	}
 }
 
-// TestTodoListClearStatus tests TodoList.Clear with status tracking
 func TestTodoListClearStatus(t *testing.T) {
 	tl := &TodoList{}
 
 	items := []struct {
 		Agent string
 		Desc  string
+		Model string
 	}{
 		{Agent: "agent1", Desc: "task1"},
 		{Agent: "agent2", Desc: "task2"},
@@ -285,29 +294,27 @@ func TestTodoListClearStatus(t *testing.T) {
 	}
 }
 
-// TestTodoListNextCounter tests that next counter resets correctly after Clear
 func TestTodoListNextCounter(t *testing.T) {
 	tl := &TodoList{}
 
-	// Add some items
 	tl.AddBatch([]struct {
 		Agent string
 		Desc  string
+		Model string
 	}{
 		{Agent: "agent1", Desc: "task1"},
 		{Agent: "agent2", Desc: "task2"},
 	})
 
-	// Clear and add more
 	tl.Clear()
 	tl.AddBatch([]struct {
 		Agent string
 		Desc  string
+		Model string
 	}{
 		{Agent: "agent3", Desc: "task3"},
 	})
 
-	// The next ID should be 1 (reset after clear)
 	todos := tl.Items()
 	if len(todos) != 1 {
 		t.Errorf("len(todos) = %d, want %d", len(todos), 1)
@@ -317,7 +324,6 @@ func TestTodoListNextCounter(t *testing.T) {
 	}
 }
 
-// TestTaskStatusConstants tests that all TaskStatus constants are defined
 func TestTaskStatusConstants(t *testing.T) {
 	if TaskPending != "pending" {
 		t.Errorf("TaskPending = %q, want %q", TaskPending, "pending")
@@ -333,14 +339,19 @@ func TestTaskStatusConstants(t *testing.T) {
 	}
 }
 
-// TestTodoItemFields tests TodoItem structure
 func TestTodoItemFields(t *testing.T) {
+	now := time.Now()
 	item := &TodoItem{
-		ID:     "1",
-		Agent:  "test-agent",
-		Desc:   "test task",
-		Status: TaskPending,
-		Detail: "test detail",
+		ID:        "1",
+		Agent:     "test-agent",
+		Desc:      "test task",
+		Status:    TaskPending,
+		Detail:    "test detail",
+		Model:     "ollama/qwen3:8b",
+		StartedAt: now,
+		EndedAt:   now.Add(5 * time.Minute),
+		ModelTime: 3 * time.Minute,
+		ToolTime:  2 * time.Minute,
 	}
 
 	if item.ID != "1" {
@@ -349,13 +360,60 @@ func TestTodoItemFields(t *testing.T) {
 	if item.Agent != "test-agent" {
 		t.Errorf("Agent = %q, want %q", item.Agent, "test-agent")
 	}
-	if item.Desc != "test task" {
-		t.Errorf("Desc = %q, want %q", item.Desc, "test task")
+	if item.Model != "ollama/qwen3:8b" {
+		t.Errorf("Model = %q, want %q", item.Model, "ollama/qwen3:8b")
 	}
-	if item.Status != TaskPending {
-		t.Errorf("Status = %q, want %q", item.Status, TaskPending)
+	if item.ModelTime != 3*time.Minute {
+		t.Errorf("ModelTime = %v, want %v", item.ModelTime, 3*time.Minute)
 	}
-	if item.Detail != "test detail" {
-		t.Errorf("Detail = %q, want %q", item.Detail, "test detail")
+	if item.ToolTime != 2*time.Minute {
+		t.Errorf("ToolTime = %v, want %v", item.ToolTime, 2*time.Minute)
+	}
+}
+
+func TestTodoItemStartedAtEndedAt(t *testing.T) {
+	tl := &TodoList{}
+	tl.AddBatch([]struct {
+		Agent string
+		Desc  string
+		Model string
+	}{{Agent: "agent", Desc: "task", Model: "ollama/qwen3:8b"}})
+
+	items := tl.Items()
+	if !items[0].StartedAt.IsZero() {
+		t.Errorf("StartedAt should be zero before TaskInProgress, got %v", items[0].StartedAt)
+	}
+
+	tl.UpdateStatus("1", TaskInProgress, "")
+	items = tl.Items()
+	if items[0].StartedAt.IsZero() {
+		t.Error("StartedAt should be set after TaskInProgress")
+	}
+	if !items[0].EndedAt.IsZero() {
+		t.Error("EndedAt should still be zero")
+	}
+
+	tl.UpdateStatus("1", TaskDone, "")
+	items = tl.Items()
+	if items[0].EndedAt.IsZero() {
+		t.Error("EndedAt should be set after TaskDone")
+	}
+}
+
+func TestTodoListUpdateTodoTiming(t *testing.T) {
+	tl := &TodoList{}
+	tl.AddBatch([]struct {
+		Agent string
+		Desc  string
+		Model string
+	}{{Agent: "agent", Desc: "task"}})
+
+	tl.UpdateTodoTiming("1", 3*time.Minute, 1*time.Minute)
+	items := tl.Items()
+	if items[0].ModelTime != 3*time.Minute {
+		t.Errorf("ModelTime = %v, want %v", items[0].ModelTime, 3*time.Minute)
+	}
+	if items[0].ToolTime != 1*time.Minute {
+		t.Errorf("ToolTime = %v, want %v", items[0].ToolTime, 1*time.Minute)
 	}
 }

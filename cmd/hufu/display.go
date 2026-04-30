@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -146,7 +147,12 @@ func (d *taskDisplay) render() {
 				desc = dimStyle.Render(t.Desc)
 			}
 		}
-		b.WriteString(fmt.Sprintf("  %s %s %s %s\n", icon, dimStyle.Render(t.ID+"."), agentStyle.Render(t.Agent), desc))
+		agentLabel := agentStyle.Render(t.Agent)
+		if t.Model != "" {
+			agentLabel = fmt.Sprintf("%s %s", agentStyle.Render(t.Agent), dimStyle.Render("["+t.Model+"]"))
+		}
+		timeStr := formatTodoItemTime(t)
+		b.WriteString(fmt.Sprintf("  %s %s %s %s %s\n", icon, dimStyle.Render(t.ID+"."), agentLabel, desc, dimStyle.Render(timeStr)))
 	}
 
 	d.w.write(b.String())
@@ -183,13 +189,16 @@ func (d *taskDisplay) refreshIfDirty() {
 }
 
 func formatAgentLabel(event team.StatusEvent) string {
+	agent := ""
 	if event.TeamName != "" && event.Agent != "" {
-		return fmt.Sprintf("%s/%s", teamStyle.Render(event.TeamName), agentStyle.Render(event.Agent))
+		agent = fmt.Sprintf("%s/%s", teamStyle.Render(event.TeamName), agentStyle.Render(event.Agent))
+	} else if event.Agent != "" {
+		agent = agentStyle.Render(event.Agent)
 	}
-	if event.Agent != "" {
-		return agentStyle.Render(event.Agent)
+	if event.Model != "" && agent != "" {
+		return fmt.Sprintf("%s %s", agent, dimStyle.Render("["+event.Model+"]"))
 	}
-	return ""
+	return agent
 }
 
 func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp *taskDisplay, skillDisp *skillDisplay, idleTimer *idleWarningTimer) {
@@ -282,11 +291,24 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				w.write(flushText(currentAgent, textBuf))
 				textBuf = ""
 			}
-			w.write(fmt.Sprintf("%s %s %s\n",
-				doneStyle.Render("✓"),
-				formatAgentLabel(event),
-				doneStyle.Render("done"),
-			))
+			timingStr := ""
+			if event.Duration > 0 {
+				timingStr = formatTimingBreakdown(event.Duration, event.ModelTime, event.ToolTime)
+			}
+			if timingStr != "" {
+				w.write(fmt.Sprintf("%s %s %s %s\n",
+					doneStyle.Render("✓"),
+					formatAgentLabel(event),
+					doneStyle.Render("done"),
+					dimStyle.Render(timingStr),
+				))
+			} else {
+				w.write(fmt.Sprintf("%s %s %s\n",
+					doneStyle.Render("✓"),
+					formatAgentLabel(event),
+					doneStyle.Render("done"),
+				))
+			}
 			currentAgent = ""
 			taskDisp.update()
 
@@ -306,11 +328,24 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				w.write(flushText(currentAgent, textBuf))
 				textBuf = ""
 			}
-			w.write(fmt.Sprintf("%s %s: %s\n",
-				errStyle.Render("✗"),
-				formatAgentLabel(event),
-				errStyle.Render(event.Message),
-			))
+			timingStr := ""
+			if event.Duration > 0 {
+				timingStr = formatTimingBreakdown(event.Duration, event.ModelTime, event.ToolTime)
+			}
+			if timingStr != "" {
+				w.write(fmt.Sprintf("%s %s: %s %s\n",
+					errStyle.Render("✗"),
+					formatAgentLabel(event),
+					errStyle.Render(event.Message),
+					dimStyle.Render(timingStr),
+				))
+			} else {
+				w.write(fmt.Sprintf("%s %s: %s\n",
+					errStyle.Render("✗"),
+					formatAgentLabel(event),
+					errStyle.Render(event.Message),
+				))
+			}
 			taskDisp.update()
 
 		case "todos_updated":
@@ -352,6 +387,40 @@ func flushText(agentName, text string) string {
 		textStyle.Render("💬"),
 		textStyle.Render(display),
 	)
+}
+
+func formatTimingBreakdown(total, modelTime, toolTime time.Duration) string {
+	if total == 0 {
+		return ""
+	}
+	totalStr := formatDuration(total)
+	if toolTime > 0 && modelTime > 0 {
+		return fmt.Sprintf("(%s: %s model + %s tools)", totalStr, formatDuration(modelTime), formatDuration(toolTime))
+	}
+	return fmt.Sprintf("(%s)", totalStr)
+}
+
+func formatTodoItemTime(t *team.TodoItem) string {
+	if t.EndedAt.IsZero() {
+		if t.StartedAt.IsZero() {
+			return ""
+		}
+		return fmt.Sprintf("(%s)", formatDuration(time.Since(t.StartedAt)))
+	}
+	if t.ModelTime > 0 || t.ToolTime > 0 {
+		return formatTimingBreakdown(t.EndedAt.Sub(t.StartedAt), t.ModelTime, t.ToolTime)
+	}
+	return fmt.Sprintf("(%s)", formatDuration(t.EndedAt.Sub(t.StartedAt)))
+}
+
+func formatDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	m := int(d.Minutes())
+	s := int(d.Seconds()) % 60
+	return fmt.Sprintf("%dm%ds", m, s)
 }
 
 func formatToolArgs(toolName, args string) string {

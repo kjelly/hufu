@@ -3,10 +3,11 @@ package team
 import (
 	"fmt"
 	"sync"
+	"time"
 )
 
 type StatusEvent struct {
-	Type       string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning"
+	Type       string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning", "timing"
 	TeamName   string
 	Agent      string
 	Message    string
@@ -16,6 +17,10 @@ type StatusEvent struct {
 	Step       int
 	Todos      []*TodoItem
 	SkillName  string
+	Model      string
+	Duration   time.Duration
+	ModelTime  time.Duration
+	ToolTime   time.Duration
 }
 
 func (e StatusEvent) withAgent(agent string) StatusEvent {
@@ -55,6 +60,18 @@ func (e StatusEvent) withSkillName(name string) StatusEvent {
 	return e
 }
 
+func (e StatusEvent) withModel(model string) StatusEvent {
+	e.Model = model
+	return e
+}
+
+func (e StatusEvent) withTiming(duration, modelTime, toolTime time.Duration) StatusEvent {
+	e.Duration = duration
+	e.ModelTime = modelTime
+	e.ToolTime = toolTime
+	return e
+}
+
 type StatusReporter func(event StatusEvent)
 
 type TaskStatus string
@@ -81,11 +98,16 @@ func (t *TaskTracker) TodoList() *TodoList {
 }
 
 type TodoItem struct {
-	ID     string
-	Agent  string
-	Desc   string
-	Status TaskStatus
-	Detail string
+	ID        string
+	Agent     string
+	Desc      string
+	Status    TaskStatus
+	Detail    string
+	Model     string
+	StartedAt time.Time
+	EndedAt   time.Time
+	ModelTime time.Duration
+	ToolTime  time.Duration
 }
 
 type TodoList struct {
@@ -97,6 +119,7 @@ type TodoList struct {
 func (tl *TodoList) AddBatch(items []struct {
 	Agent string
 	Desc  string
+	Model string
 }) []*TodoItem {
 	tl.mu.Lock()
 	defer tl.mu.Unlock()
@@ -107,6 +130,7 @@ func (tl *TodoList) AddBatch(items []struct {
 			ID:     fmt.Sprintf("%d", tl.next),
 			Agent:  item.Agent,
 			Desc:   item.Desc,
+			Model:  item.Model,
 			Status: TaskPending,
 		}
 		tl.items = append(tl.items, ti)
@@ -124,6 +148,16 @@ func (tl *TodoList) UpdateStatus(id string, status TaskStatus, detail string) {
 			if detail != "" {
 				ti.Detail = detail
 			}
+			switch status {
+			case TaskInProgress:
+				if ti.StartedAt.IsZero() {
+					ti.StartedAt = time.Now()
+				}
+			case TaskDone, TaskError:
+				if ti.EndedAt.IsZero() {
+					ti.EndedAt = time.Now()
+				}
+			}
 			return
 		}
 	}
@@ -134,13 +168,17 @@ func (tl *TodoList) Items() []*TodoItem {
 	defer tl.mu.Unlock()
 	result := make([]*TodoItem, len(tl.items))
 	for i, item := range tl.items {
-		// Deep copy each TodoItem to prevent external modifications
 		result[i] = &TodoItem{
-			ID:     item.ID,
-			Agent:  item.Agent,
-			Desc:   item.Desc,
-			Status: item.Status,
-			Detail: item.Detail,
+			ID:        item.ID,
+			Agent:     item.Agent,
+			Desc:      item.Desc,
+			Status:    item.Status,
+			Detail:    item.Detail,
+			Model:     item.Model,
+			StartedAt: item.StartedAt,
+			EndedAt:   item.EndedAt,
+			ModelTime: item.ModelTime,
+			ToolTime:  item.ToolTime,
 		}
 	}
 	return result
@@ -151,4 +189,16 @@ func (tl *TodoList) Clear() {
 	defer tl.mu.Unlock()
 	tl.items = nil
 	tl.next = 0
+}
+
+func (tl *TodoList) UpdateTodoTiming(id string, modelTime, toolTime time.Duration) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			ti.ModelTime = modelTime
+			ti.ToolTime = toolTime
+			return
+		}
+	}
 }

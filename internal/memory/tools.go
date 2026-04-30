@@ -102,7 +102,7 @@ func (t *memoryQueryTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.p
 func (t *memoryQueryTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
 		Query    string `json:"query"`
-		N        int     `json:"n"`
+		N        int    `json:"n"`
 		Category string `json:"category"`
 	}
 	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
