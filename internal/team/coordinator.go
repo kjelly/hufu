@@ -329,13 +329,7 @@ func (c *Coordinator) newEvent(eventType string) StatusEvent {
 }
 
 func (c *Coordinator) updateTodoTiming(todoID string, modelTime, toolTime time.Duration) {
-	items := c.taskTracker.TodoList().Items()
-	for _, item := range items {
-		if item.ID == todoID {
-			c.taskTracker.TodoList().UpdateTodoTiming(todoID, modelTime, toolTime)
-			return
-		}
-	}
+	c.taskTracker.TodoList().UpdateTodoTiming(todoID, modelTime, toolTime)
 }
 
 func (c *Coordinator) SetWrapUp() {
@@ -1344,11 +1338,11 @@ func (c *Coordinator) resolveCurrentAgentModel(agentName string) string {
 }
 
 func (c *Coordinator) resolveAgentModel(def *agent.AgentDef, overrideModel string) string {
-	if def.Generation.Model != "" {
-		return def.Generation.Model
-	}
 	if overrideModel != "" {
 		return overrideModel
+	}
+	if def.Generation.Model != "" {
+		return def.Generation.Model
 	}
 	return c.session.Config.Generation.Model
 }
