@@ -9,6 +9,7 @@ import (
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openaicompat"
 
+	"github.com/anomalyco/hufu/internal/config"
 	"github.com/anomalyco/hufu/internal/tools"
 )
 
@@ -51,6 +52,7 @@ type TeamConfig struct {
 	Skills        string
 	SkillsExclude string
 	ProviderURL   string
+	ModelList     []config.ModelEntry
 }
 
 type OllamaProvider struct {

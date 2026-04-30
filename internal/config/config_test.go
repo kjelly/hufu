@@ -317,3 +317,86 @@ func TestConfigMergeFromFileWhitespaceYAML(t *testing.T) {
 		t.Errorf("mergeFromFile() changed ProviderURL to %q, want %q", cfg.ProviderURL, "http://original:11434/v1")
 	}
 }
+
+func TestResolveModelList(t *testing.T) {
+	tests := []struct {
+		name      string
+		cfgList   []ModelEntry
+		teamList  []ModelEntry
+		wantLen   int
+		wantFirst string
+	}{
+		{
+			name:      "team list takes precedence",
+			cfgList:   []ModelEntry{{ID: "cfg-model", Details: "config"}},
+			teamList:  []ModelEntry{{ID: "team-model", Details: "team"}},
+			wantLen:   1,
+			wantFirst: "team-model",
+		},
+		{
+			name:      "cfg list used when team list empty",
+			cfgList:   []ModelEntry{{ID: "cfg-model", Details: "config"}},
+			teamList:  nil,
+			wantLen:   1,
+			wantFirst: "cfg-model",
+		},
+		{
+			name:      "both empty returns nil",
+			cfgList:   nil,
+			teamList:  nil,
+			wantLen:   0,
+			wantFirst: "",
+		},
+		{
+			name:      "empty team list falls back to cfg",
+			cfgList:   []ModelEntry{{ID: "a", Details: "A"}, {ID: "b", Details: "B"}},
+			teamList:  []ModelEntry{},
+			wantLen:   2,
+			wantFirst: "a",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{ModelList: tt.cfgList}
+			got := cfg.ResolveModelList(tt.teamList)
+			if len(got) != tt.wantLen {
+				t.Errorf("ResolveModelList() returned %d entries, want %d", len(got), tt.wantLen)
+			}
+			if tt.wantLen > 0 && got[0].ID != tt.wantFirst {
+				t.Errorf("ResolveModelList() first entry ID = %q, want %q", got[0].ID, tt.wantFirst)
+			}
+		})
+	}
+}
+
+func TestModelListMergeFromFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	configContent := `provider-url: http://test:11434/v1
+model-list:
+  - id: ollama/model-a
+    details: Model A details
+  - id: ollama/model-b
+    details: Model B details
+`
+	configPath := filepath.Join(tmpDir, "hufu.yaml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	cfg := &Config{}
+	cfg.mergeFromFile(configPath)
+
+	if cfg.ProviderURL != "http://test:11434/v1" {
+		t.Errorf("ProviderURL = %q, want %q", cfg.ProviderURL, "http://test:11434/v1")
+	}
+	if len(cfg.ModelList) != 2 {
+		t.Fatalf("ModelList has %d entries, want 2", len(cfg.ModelList))
+	}
+	if cfg.ModelList[0].ID != "ollama/model-a" {
+		t.Errorf("ModelList[0].ID = %q, want %q", cfg.ModelList[0].ID, "ollama/model-a")
+	}
+	if cfg.ModelList[1].ID != "ollama/model-b" {
+		t.Errorf("ModelList[1].ID = %q, want %q", cfg.ModelList[1].ID, "ollama/model-b")
+	}
+}

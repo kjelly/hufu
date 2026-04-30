@@ -437,7 +437,10 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		fmt.Fprintf(os.Stderr, "%s Memory: disabled\n", dimStyle.Render("○"))
 	}
 
-	coordinator, err := team.NewCoordinator(session, defaultProviderURL, mcpManager, memStore, verbose)
+	cfg := config.LoadConfig()
+	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
+
+	coordinator, err := team.NewCoordinator(session, defaultProviderURL, mcpManager, memStore, resolvedModelList, verbose)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
@@ -455,6 +458,14 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 			skillNames = append(skillNames, s.Name)
 		}
 		fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Skills:"), strings.Join(skillNames, ", "))
+	}
+
+	if len(resolvedModelList) > 0 {
+		var modelIDs []string
+		for _, m := range resolvedModelList {
+			modelIDs = append(modelIDs, m.ID)
+		}
+		fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Models:"), strings.Join(modelIDs, ", "))
 	}
 
 	return &teamContext{

@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/anomalyco/hufu/internal/config"
 	"github.com/anomalyco/hufu/internal/mcp"
 	"github.com/anomalyco/hufu/internal/skill"
 )
@@ -40,21 +41,22 @@ type agentFrontmatter struct {
 }
 
 type teamConfigYAML struct {
-	Name          string `yaml:"name"`
-	Description   string `yaml:"description"`
-	MaxRounds     int    `yaml:"max-rounds"`
-	MaxSteps      int    `yaml:"max-steps"`
-	Workspace     string `yaml:"workspace"`
-	Timeout       int64  `yaml:"timeout"`
-	MaxRetries    int    `yaml:"max-retries"`
-	Model         string `yaml:"model"`
-	Temperature   string `yaml:"temperature"`
-	MaxTokens     string `yaml:"max-tokens"`
-	TopP          string `yaml:"top-p"`
-	TopK          string `yaml:"top-k"`
-	Skills        string `yaml:"skills"`
-	SkillsExclude string `yaml:"skills-exclude"`
-	ProviderURL   string `yaml:"provider-url"`
+	Name          string             `yaml:"name"`
+	Description   string             `yaml:"description"`
+	MaxRounds     int                `yaml:"max-rounds"`
+	MaxSteps      int                `yaml:"max-steps"`
+	Workspace     string             `yaml:"workspace"`
+	Timeout       int64              `yaml:"timeout"`
+	MaxRetries    int                `yaml:"max-retries"`
+	Model         string             `yaml:"model"`
+	Temperature   string             `yaml:"temperature"`
+	MaxTokens     string             `yaml:"max-tokens"`
+	TopP          string             `yaml:"top-p"`
+	TopK          string             `yaml:"top-k"`
+	Skills        string             `yaml:"skills"`
+	SkillsExclude string             `yaml:"skills-exclude"`
+	ProviderURL   string             `yaml:"provider-url"`
+	ModelList     []config.ModelEntry `yaml:"model-list"`
 }
 
 func parseSimpleYAML(data string) map[string]string {
@@ -237,6 +239,9 @@ func parseTeamYML(teamDir string) (agent.TeamConfig, error) {
 	}
 	if yc.ProviderURL != "" {
 		cfg.ProviderURL = yc.ProviderURL
+	}
+	if len(yc.ModelList) > 0 {
+		cfg.ModelList = yc.ModelList
 	}
 
 	return cfg, nil

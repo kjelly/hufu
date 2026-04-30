@@ -11,9 +11,15 @@ import (
 const DefaultProviderURL = "http://localhost:11434/v1"
 const DefaultEmbeddingModel = "nomic-embed-text"
 
+type ModelEntry struct {
+	ID      string `yaml:"id"`
+	Details string `yaml:"details"`
+}
+
 type Config struct {
-	ProviderURL    string `yaml:"provider-url"`
-	EmbeddingModel string `yaml:"embedding-model"`
+	ProviderURL    string       `yaml:"provider-url"`
+	EmbeddingModel string       `yaml:"embedding-model"`
+	ModelList      []ModelEntry `yaml:"model-list"`
 }
 
 func LoadConfig() *Config {
@@ -42,6 +48,9 @@ func (c *Config) mergeFromFile(path string) {
 	}
 	if fileCfg.EmbeddingModel != "" {
 		c.EmbeddingModel = fileCfg.EmbeddingModel
+	}
+	if len(fileCfg.ModelList) > 0 {
+		c.ModelList = fileCfg.ModelList
 	}
 }
 
@@ -78,4 +87,11 @@ func ResolveEmbeddingModel(cliFlag string) string {
 		return cfg.EmbeddingModel
 	}
 	return DefaultEmbeddingModel
+}
+
+func (c *Config) ResolveModelList(teamList []ModelEntry) []ModelEntry {
+	if len(teamList) > 0 {
+		return teamList
+	}
+	return c.ModelList
 }

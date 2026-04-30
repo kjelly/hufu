@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/anomalyco/hufu/internal/config"
 )
 
 func TestMaxStepsParsing(t *testing.T) {
@@ -218,6 +220,89 @@ func TestMaxStepsMissingUsesDefault(t *testing.T) {
 		// Default MaxRounds is 10, but MaxSteps should remain 0 (unset)
 		if cfg.MaxSteps != 0 {
 			t.Errorf("parseTeamYML MaxSteps = %d, want 0 for missing", cfg.MaxSteps)
+		}
+	})
+}
+
+func TestParseTeamYMLModelList(t *testing.T) {
+	t.Run("team with model-list", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		yamlContent := `name: test-team
+model: ollama/qwen3:8b
+model-list:
+  - id: ollama/deepseek-v4:flash
+    details: |-
+      Fast model
+      Good for tools
+  - id: ollama/deepseek-v4:pro
+    details: Powerful model
+`
+		teamPath := filepath.Join(tmpDir, "team.yml")
+		if err := os.WriteFile(teamPath, []byte(yamlContent), 0644); err != nil {
+			t.Fatalf("Failed to write team file: %v", err)
+		}
+
+		cfg, err := parseTeamYML(tmpDir)
+		if err != nil {
+			t.Fatalf("parseTeamYML returned error: %v", err)
+		}
+		if len(cfg.ModelList) != 2 {
+			t.Fatalf("ModelList has %d entries, want 2", len(cfg.ModelList))
+		}
+		if cfg.ModelList[0].ID != "ollama/deepseek-v4:flash" {
+			t.Errorf("ModelList[0].ID = %q, want %q", cfg.ModelList[0].ID, "ollama/deepseek-v4:flash")
+		}
+		if cfg.ModelList[1].ID != "ollama/deepseek-v4:pro" {
+			t.Errorf("ModelList[1].ID = %q, want %q", cfg.ModelList[1].ID, "ollama/deepseek-v4:pro")
+		}
+		if cfg.ModelList[1].Details != "Powerful model" {
+			t.Errorf("ModelList[1].Details = %q, want %q", cfg.ModelList[1].Details, "Powerful model")
+		}
+	})
+
+	t.Run("team without model-list", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		yamlContent := "name: test-team\nmodel: ollama/qwen3:8b\n"
+		teamPath := filepath.Join(tmpDir, "team.yml")
+		if err := os.WriteFile(teamPath, []byte(yamlContent), 0644); err != nil {
+			t.Fatalf("Failed to write team file: %v", err)
+		}
+
+		cfg, err := parseTeamYML(tmpDir)
+		if err != nil {
+			t.Fatalf("parseTeamYML returned error: %v", err)
+		}
+		if len(cfg.ModelList) != 0 {
+			t.Errorf("ModelList has %d entries, want 0", len(cfg.ModelList))
+		}
+	})
+}
+
+func TestResolveModelListFromConfig(t *testing.T) {
+	t.Run("team model-list overrides config", func(t *testing.T) {
+		cfg := &config.Config{
+			ModelList: []config.ModelEntry{
+				{ID: "config-model", Details: "from config"},
+			},
+		}
+		teamList := []config.ModelEntry{
+			{ID: "team-model", Details: "from team"},
+		}
+		result := cfg.ResolveModelList(teamList)
+		if len(result) != 1 || result[0].ID != "team-model" {
+			t.Errorf("ResolveModelList(teamList) = %v, want team-model", result)
+		}
+	})
+
+	t.Run("config model-list as fallback", func(t *testing.T) {
+		cfg := &config.Config{
+			ModelList: []config.ModelEntry{
+				{ID: "config-model", Details: "from config"},
+			},
+		}
+		result := cfg.ResolveModelList(nil)
+		if len(result) != 1 || result[0].ID != "config-model" {
+			t.Errorf("ResolveModelList(nil) = %v, want config-model", result)
 		}
 	})
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/audit"
+	"github.com/anomalyco/hufu/internal/config"
 	"github.com/anomalyco/hufu/internal/mcp"
 	"github.com/anomalyco/hufu/internal/memory"
 	"github.com/anomalyco/hufu/internal/skill"
@@ -27,6 +28,7 @@ var skillSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
 type TaskDef struct {
 	Agent        string   `json:"agent"`
 	Task         string   `json:"task"`
+	Model        string   `json:"model,omitempty"`
 	ContextFiles []string `json:"context_files,omitempty"`
 }
 
@@ -63,6 +65,7 @@ type Coordinator struct {
 	delegatedTasksMu    sync.Mutex
 	memoryStore         *memory.MemoryStore
 	skillsMu            sync.RWMutex
+	modelList           []config.ModelEntry
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
@@ -79,7 +82,7 @@ type SkillUsageEntry struct {
 	Agents []string // sorted list of agent names
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, verbose bool) (*Coordinator, error) {
+func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, verbose bool) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
 	coreTools := agent.BuildAllAgentTools(projectDir)
 	prov, err := agent.NewOllamaProvider(defaultProviderURL)
@@ -100,6 +103,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		skillUsage:     make(map[string]*skillUsageState),
 		delegatedTasks: make(map[string]int),
 		memoryStore:    memoryStore,
+		modelList:      modelList,
 	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -322,6 +326,7 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 					"properties": map[string]any{
 						"agent":         map[string]any{"type": "string", "enum": t.coordinator.workerNameList(), "description": "Agent name to delegate to"},
 						"task":          map[string]any{"type": "string", "description": "Task description for the agent"},
+						"model":         map[string]any{"type": "string", "description": "Optional model ID from Available Models to use for this task. Only specify if you want to override the agent's default model."},
 						"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional files from the workspace shared/ directory to provide as context"},
 					},
 					"required": []string{"agent", "task"},
@@ -836,6 +841,23 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		return "", fmt.Errorf("cannot delegate to coordinator agent %q", agentName)
 	}
 
+	if task.Model != "" && len(c.modelList) > 0 {
+		found := false
+		for _, m := range c.modelList {
+			if m.ID == task.Model {
+				found = true
+				break
+			}
+		}
+		if !found {
+			var validIDs []string
+			for _, m := range c.modelList {
+				validIDs = append(validIDs, m.ID)
+			}
+			return "", fmt.Errorf("unknown model %q for agent %q (valid models: %v)", task.Model, task.Agent, validIDs)
+		}
+	}
+
 	agentTimeout := time.Duration(c.session.Config.Timeout) * time.Second
 	if agentDef.Timeout > 0 {
 		agentTimeout = time.Duration(agentDef.Timeout) * time.Second
@@ -856,7 +878,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	_ = writeStatus(c.session.Workspace, agentName, "working", task.Task)
 	_ = writeInbox(c.session.Workspace, agentName, task.Task)
 
-	ag, err := c.getOrCreateAgent(parentCtx, agentDef)
+	ag, err := c.getOrCreateAgent(parentCtx, agentDef, task.Model)
 	if err != nil {
 		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()))
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
@@ -998,9 +1020,17 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	return result.Response.Content.Text(), result.Steps, nil
 }
 
-func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef) (fantasy.Agent, error) {
+func agentCacheKey(def *agent.AgentDef, overrideModel string) string {
+	if overrideModel != "" {
+		return def.Name + "|" + overrideModel
+	}
+	return def.Name
+}
+
+func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef, overrideModel string) (fantasy.Agent, error) {
+	cacheKey := agentCacheKey(def, overrideModel)
 	c.agentCacheMu.RLock()
-	if ag, ok := c.agentCache[def.Name]; ok {
+	if ag, ok := c.agentCache[cacheKey]; ok {
 		c.agentCacheMu.RUnlock()
 		return ag, nil
 	}
@@ -1009,8 +1039,15 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef)
 	c.agentCacheMu.Lock()
 	defer c.agentCacheMu.Unlock()
 
-	if ag, ok := c.agentCache[def.Name]; ok {
+	if ag, ok := c.agentCache[cacheKey]; ok {
 		return ag, nil
+	}
+
+	agentDef := def
+	if overrideModel != "" {
+		overriddenDef := *def
+		overriddenDef.Generation.Model = overrideModel
+		agentDef = &overriddenDef
 	}
 
 	agentTools := agent.SelectTools(c.coreTools, def.Tools)
@@ -1019,7 +1056,7 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef)
 	}
 
 	ag, err := agent.CreateAgent(ctx, c.provider, agent.AgentConfig{
-		Def:        def,
+		Def:        agentDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
 		MaxSteps:   agent.DefaultMaxSteps,
@@ -1028,7 +1065,7 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef)
 		return nil, err
 	}
 
-	c.agentCache[def.Name] = ag
+	c.agentCache[cacheKey] = ag
 	return ag, nil
 }
 
@@ -1129,13 +1166,26 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 		b.WriteString("Before delegating tasks, consider loading relevant skills so you can include their key instructions in the task description.\n\n")
 	}
 
+	b.WriteString("## Available Models\n\n")
+	if len(c.modelList) == 0 {
+		b.WriteString("No model list configured. The default team model will be used for all tasks.\n\n")
+	} else {
+		b.WriteString("When delegating tasks via the `agent` tool, you can optionally specify a `model` field to select the most suitable model for each task based on its requirements:\n\n")
+		for _, m := range c.modelList {
+			detail := strings.TrimSpace(m.Details)
+			detail = strings.Join(strings.Split(detail, "\n"), " ")
+			fmt.Fprintf(&b, "- **%s** — %s\n", m.ID, detail)
+		}
+		b.WriteString("\nIf no model is specified, the default team model will be used.\n\n")
+	}
+
 	b.WriteString("## Tools\n\n")
 	b.WriteString("### agent\n")
 	b.WriteString("Delegate tasks to team workers. All tasks in one call run in parallel.\n")
 	b.WriteString("```json\n")
 	b.WriteString("{\n")
 	b.WriteString("  \"tasks\": [\n")
-	b.WriteString("    {\"agent\": \"agent-name\", \"task\": \"task description\", \"context_files\": [\"optional_file.txt\"]}\n")
+	b.WriteString("    {\"agent\": \"agent-name\", \"task\": \"task description\", \"model\": \"optional-model-id\", \"context_files\": [\"optional_file.txt\"]}\n")
 	b.WriteString("  ]\n")
 	b.WriteString("}\n```\n\n")
 	b.WriteString("### load_skill\n")
@@ -1263,7 +1313,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.SetCurrentAgent(agentName)
 
-	ag, err := c.getOrCreateAgent(ctx, agentDef)
+	ag, err := c.getOrCreateAgent(ctx, agentDef, "")
 	if err != nil {
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
