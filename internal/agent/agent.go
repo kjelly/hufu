@@ -53,6 +53,7 @@ type TeamConfig struct {
 	SkillsExclude string
 	ProviderURL   string
 	ModelList     []config.ModelEntry
+	SidecarModel  string
 }
 
 type OllamaProvider struct {

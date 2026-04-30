@@ -8,7 +8,7 @@ import (
 
 const defaultAutoQueryResults = 5
 
-func AutoQuery(ctx context.Context, store *MemoryStore, prompt string) (string, error) {
+func AutoQuery(ctx context.Context, store *MemoryStore, prompt string, compact CompactFunc) (string, error) {
 	if store == nil {
 		return "", nil
 	}
@@ -38,5 +38,13 @@ func AutoQuery(ctx context.Context, store *MemoryStore, prompt string) (string, 
 	}
 	b.WriteString("\nUse `memory_query` to search for more memories if needed.\n")
 
-	return b.String(), nil
+	output := b.String()
+	if compact != nil && len(output) > 1500 {
+		compacted, err := compact(ctx, output, "Condense these memory results while preserving all key facts, decisions, and results.")
+		if err == nil && compacted != "" {
+			output = compacted
+		}
+	}
+
+	return output, nil
 }

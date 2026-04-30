@@ -439,15 +439,20 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 
 	cfg := config.LoadConfig()
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
+	resolvedSidecarModel := cfg.ResolveSidecarModel(session.Config.SidecarModel)
 
-	coordinator, err := team.NewCoordinator(session, defaultProviderURL, mcpManager, memStore, resolvedModelList, verbose)
+	coordinator, err := team.NewCoordinator(session, defaultProviderURL, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, verbose)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
 	coordinator.SetSessionData(sessionData)
 
 	if memStore != nil && len(oldSessionEntries) > 0 {
-		if err := memory.ArchiveSessionSummary(ctx, memStore, oldSessionEntries, session.Config.Name); err != nil {
+		var summarizeFn memory.SummarizeFunc
+		if s := coordinator.Sidecar(); s != nil {
+			summarizeFn = s.Summarize
+		}
+		if err := memory.ArchiveSessionSummary(ctx, memStore, oldSessionEntries, session.Config.Name, summarizeFn); err != nil {
 			fmt.Fprintf(os.Stderr, "%s Failed to archive session to memory: %v\n", errStyle.Render("⚠"), err)
 		}
 	}
@@ -466,6 +471,10 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 			modelIDs = append(modelIDs, m.ID)
 		}
 		fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Models:"), strings.Join(modelIDs, ", "))
+	}
+
+	if resolvedSidecarModel != "" {
+		fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Sidecar:"), resolvedSidecarModel)
 	}
 
 	return &teamContext{
@@ -799,7 +808,11 @@ func archiveCurrentSessionToMemory(ctx context.Context, tc *teamContext) {
 		})
 	}
 
-	if err := memory.ArchiveSessionSummary(ctx, memStore, entries, tc.session.Config.Name); err != nil {
+	var summarizeFn memory.SummarizeFunc
+	if s := tc.coordinator.Sidecar(); s != nil {
+		summarizeFn = s.Summarize
+	}
+	if err := memory.ArchiveSessionSummary(ctx, memStore, entries, tc.session.Config.Name, summarizeFn); err != nil {
 		fmt.Fprintf(os.Stderr, "%s Failed to archive session to memory: %v\n", errStyle.Render("⚠"), err)
 		return
 	}

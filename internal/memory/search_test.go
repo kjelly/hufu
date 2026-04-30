@@ -7,7 +7,7 @@ import (
 )
 
 func TestAutoQueryNilStore(t *testing.T) {
-	result, err := AutoQuery(context.Background(), nil, "test query")
+	result, err := AutoQuery(context.Background(), nil, "test query", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -17,7 +17,7 @@ func TestAutoQueryNilStore(t *testing.T) {
 }
 
 func TestAutoQueryEmptyPrompt(t *testing.T) {
-	result, err := AutoQuery(context.Background(), nil, "")
+	result, err := AutoQuery(context.Background(), nil, "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

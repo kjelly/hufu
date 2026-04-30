@@ -57,6 +57,7 @@ type teamConfigYAML struct {
 	SkillsExclude string              `yaml:"skills-exclude"`
 	ProviderURL   string              `yaml:"provider-url"`
 	ModelList     []config.ModelEntry `yaml:"model-list"`
+	SidecarModel  string              `yaml:"sidecar-model"`
 }
 
 func parseSimpleYAML(data string) map[string]string {
@@ -242,6 +243,9 @@ func parseTeamYML(teamDir string) (agent.TeamConfig, error) {
 	}
 	if len(yc.ModelList) > 0 {
 		cfg.ModelList = yc.ModelList
+	}
+	if yc.SidecarModel != "" {
+		cfg.SidecarModel = yc.SidecarModel
 	}
 
 	return cfg, nil

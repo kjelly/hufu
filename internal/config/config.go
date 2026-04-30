@@ -20,6 +20,7 @@ type Config struct {
 	ProviderURL    string       `yaml:"provider-url"`
 	EmbeddingModel string       `yaml:"embedding-model"`
 	ModelList      []ModelEntry `yaml:"model-list"`
+	SidecarModel   string       `yaml:"sidecar-model"`
 }
 
 func LoadConfig() *Config {
@@ -51,6 +52,9 @@ func (c *Config) mergeFromFile(path string) {
 	}
 	if len(fileCfg.ModelList) > 0 {
 		c.ModelList = fileCfg.ModelList
+	}
+	if fileCfg.SidecarModel != "" {
+		c.SidecarModel = fileCfg.SidecarModel
 	}
 }
 
@@ -94,4 +98,11 @@ func (c *Config) ResolveModelList(teamList []ModelEntry) []ModelEntry {
 		return teamList
 	}
 	return c.ModelList
+}
+
+func (c *Config) ResolveSidecarModel(teamSidecar string) string {
+	if teamSidecar != "" {
+		return teamSidecar
+	}
+	return c.SidecarModel
 }

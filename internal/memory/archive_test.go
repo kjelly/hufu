@@ -10,14 +10,14 @@ func TestArchiveSessionSummaryNilStore(t *testing.T) {
 		{Role: "user", Content: "fix the bug"},
 		{Role: "assistant", Content: "The bug was in auth.go, line 42. The JWT secret was rotated but the old secret was still cached."},
 	}
-	err := ArchiveSessionSummary(nil, nil, entries, "test-team")
+	err := ArchiveSessionSummary(nil, nil, entries, "test-team", nil)
 	if err != nil {
 		t.Errorf("expected nil error for nil store, got: %v", err)
 	}
 }
 
 func TestArchiveSessionSummaryEmptyEntries(t *testing.T) {
-	err := ArchiveSessionSummary(nil, nil, []SessionSummaryEntry{}, "test-team")
+	err := ArchiveSessionSummary(nil, nil, []SessionSummaryEntry{}, "test-team", nil)
 	if err != nil {
 		t.Errorf("expected nil error for empty entries, got: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestArchiveSessionSummaryNoAssistant(t *testing.T) {
 	entries := []SessionSummaryEntry{
 		{Role: "user", Content: "hello"},
 	}
-	err := ArchiveSessionSummary(nil, nil, entries, "test-team")
+	err := ArchiveSessionSummary(nil, nil, entries, "test-team", nil)
 	if err != nil {
 		t.Errorf("expected nil error for no assistant entries, got: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestArchiveSessionSummaryShortContent(t *testing.T) {
 	entries := []SessionSummaryEntry{
 		{Role: "assistant", Content: "done"},
 	}
-	err := ArchiveSessionSummary(nil, nil, entries, "test-team")
+	err := ArchiveSessionSummary(nil, nil, entries, "test-team", nil)
 	if err != nil {
 		t.Errorf("expected nil error for short content, got: %v", err)
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/anomalyco/hufu/internal/config"
 	"github.com/anomalyco/hufu/internal/mcp"
 	"github.com/anomalyco/hufu/internal/memory"
+	"github.com/anomalyco/hufu/internal/sidecar"
 	"github.com/anomalyco/hufu/internal/skill"
 )
 
@@ -29,6 +30,8 @@ type TaskDef struct {
 	Agent        string   `json:"agent"`
 	Task         string   `json:"task"`
 	Model        string   `json:"model,omitempty"`
+	Sidecar      bool     `json:"sidecar,omitempty"`
+	Summarize    bool     `json:"summarize,omitempty"`
 	ContextFiles []string `json:"context_files,omitempty"`
 }
 
@@ -66,6 +69,10 @@ type Coordinator struct {
 	memoryStore           *memory.MemoryStore
 	skillsMu              sync.RWMutex
 	modelList             []config.ModelEntry
+	sidecarModel          string
+	sidecarInst           *sidecar.Sidecar
+	sidecarInitMu         sync.Mutex
+	sidecarInit           bool
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
@@ -130,7 +137,7 @@ func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
 	return
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, verbose bool) (*Coordinator, error) {
+func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, verbose bool) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
 	coreTools := agent.BuildAllAgentTools(projectDir)
 	prov, err := agent.NewOllamaProvider(defaultProviderURL)
@@ -152,6 +159,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		delegatedTasks: make(map[string]int),
 		memoryStore:    memoryStore,
 		modelList:      modelList,
+		sidecarModel:   sidecarModel,
 	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -326,6 +334,26 @@ func (c *Coordinator) extractSkillFromToolCall(toolName, input string) string {
 	return args.Name
 }
 
+func (c *Coordinator) Sidecar() *sidecar.Sidecar {
+	if c.sidecarModel == "" {
+		return nil
+	}
+	c.sidecarInitMu.Lock()
+	defer c.sidecarInitMu.Unlock()
+	if c.sidecarInit {
+		return c.sidecarInst
+	}
+	ctx := context.Background()
+	s, err := sidecar.NewSidecar(ctx, c.provider, c.sidecarModel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to initialize sidecar model %q: %v\n", c.sidecarModel, err)
+		return nil
+	}
+	c.sidecarInst = s
+	c.sidecarInit = true
+	return c.sidecarInst
+}
+
 func (c *Coordinator) newEvent(eventType string) StatusEvent {
 	return StatusEvent{Type: eventType, TeamName: c.session.Config.Name}
 }
@@ -381,6 +409,8 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 						"agent":         map[string]any{"type": "string", "enum": t.coordinator.workerNameList(), "description": "Agent name to delegate to"},
 						"task":          map[string]any{"type": "string", "description": "Task description for the agent"},
 						"model":         map[string]any{"type": "string", "description": "Optional model ID from Available Models to use for this task. Only specify if you want to override the agent's default model."},
+						"summarize":     map[string]any{"type": "boolean", "description": "If true, summarize the agent's output before returning. Use for tasks that produce verbose output where only key points matter."},
+						"sidecar":       map[string]any{"type": "boolean", "description": "If true, execute this task directly via the sidecar model instead of an agent. Use for simple, tool-free tasks that need a quick response."},
 						"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional files from the workspace shared/ directory to provide as context"},
 					},
 					"required": []string{"agent", "task"},
@@ -781,6 +811,7 @@ func (t *todoTool) handleList(callerName string) (fantasy.ToolResponse, error) {
 
 const maxConcurrentTasks = 8
 const maxConversationHistory = 100
+const compactHistoryThreshold = 80
 const maxMessageSize = 50000
 
 type agentTaskResult struct {
@@ -885,7 +916,13 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			output, err := c.executeTask(ctx, td, tid)
+			var output string
+			var err error
+			if td.Sidecar {
+				output, err = c.executeSidecarTask(ctx, td, tid)
+			} else {
+				output, err = c.executeTask(ctx, td, tid)
+			}
 			resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: td.Task, output: output, err: err}
 		}(task, todoItems[i].ID)
 	}
@@ -1014,6 +1051,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			c.updateTodoTiming(todoID, modelTime, toolTime)
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.report(c.newEvent("done").withAgent(agentName).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime))
+			if task.Summarize {
+				output = c.summarizeOutput(parentCtx, output)
+			}
 			return output, nil
 		}
 
@@ -1040,6 +1080,39 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 func (c *Coordinator) runAgentWithStatus(ctx context.Context, ag fantasy.Agent, agentName, prompt string, timing *taskTiming) (string, error) {
 	output, _, err := c.runAgentWithStatusAndHistory(ctx, ag, agentName, prompt, nil, timing)
 	return output, err
+}
+
+func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todoID string) (string, error) {
+	s := c.Sidecar()
+	if s == nil {
+		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, "sidecar not configured")
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		return "", fmt.Errorf("sidecar not configured: set sidecar-model in team.yaml or hufu.yaml")
+	}
+
+	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	c.report(c.newEvent("sidecar_call").withAgent(task.Agent).withMessage(task.Task))
+
+	sidecarTimeout := time.Duration(c.session.Config.Timeout) * time.Second
+	if sidecarTimeout <= 0 {
+		sidecarTimeout = 120 * time.Second
+	}
+	sidecarCtx, cancel := context.WithTimeout(ctx, sidecarTimeout)
+	defer cancel()
+
+	result, err := s.Execute(sidecarCtx, task.Task)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: sidecar execute failed for agent %q: %v\n", task.Agent, err)
+		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		return "", fmt.Errorf("sidecar execution failed: %w", err)
+	}
+
+	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	c.report(c.newEvent("done").withAgent(task.Agent).withMessage("sidecar completed"))
+	return result, nil
 }
 
 func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message, timing *taskTiming) (string, []fantasy.StepResult, error) {
@@ -1270,11 +1343,12 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 
 	b.WriteString("## Tools\n\n")
 	b.WriteString("### agent\n")
-	b.WriteString("Delegate tasks to team workers. All tasks in one call run in parallel.\n")
+	b.WriteString("Delegate tasks to team workers. All tasks in one call run in parallel.\n\n")
+	b.WriteString("- **summarize**: Set to `true` to condense the agent's output before returning. Use for tasks that may produce verbose output where only key points matter.\n")
 	b.WriteString("```json\n")
 	b.WriteString("{\n")
 	b.WriteString("  \"tasks\": [\n")
-	b.WriteString("    {\"agent\": \"agent-name\", \"task\": \"task description\", \"model\": \"optional-model-id\", \"context_files\": [\"optional_file.txt\"]}\n")
+	b.WriteString("    {\"agent\": \"agent-name\", \"task\": \"task description\", \"model\": \"optional-model-id\", \"summarize\": false, \"context_files\": [\"optional_file.txt\"]}\n")
 	b.WriteString("  ]\n")
 	b.WriteString("}\n```\n\n")
 	b.WriteString("### load_skill\n")
@@ -1351,6 +1425,20 @@ func (c *Coordinator) resolveAgentModel(def *agent.AgentDef, overrideModel strin
 	return c.session.Config.Generation.Model
 }
 
+func (c *Coordinator) summarizeOutput(ctx context.Context, text string) string {
+	s := c.Sidecar()
+	if s == nil {
+		return text
+	}
+	c.report(c.newEvent("sidecar_call").withMessage("summarize"))
+	summarized, err := s.Summarize(ctx, text, 2000)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: sidecar summarize failed: %v\n", err)
+		return text
+	}
+	return summarized
+}
+
 func (c *Coordinator) expandDefaultOrchestratorTemplate(tmpl string) string {
 	workerNames := c.workerNameList()
 	s := strings.ReplaceAll(tmpl, "{{TEAM_NAME}}", c.session.Config.Name)
@@ -1359,7 +1447,7 @@ func (c *Coordinator) expandDefaultOrchestratorTemplate(tmpl string) string {
 	return s
 }
 
-func (c *Coordinator) appendHistory(steps []fantasy.StepResult) {
+func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepResult) {
 	for _, step := range steps {
 		for _, msg := range step.Messages {
 			if estimateMessageSize(msg) > maxMessageSize {
@@ -1368,10 +1456,51 @@ func (c *Coordinator) appendHistory(steps []fantasy.StepResult) {
 			c.conversationHistory = append(c.conversationHistory, msg)
 		}
 	}
+	if len(c.conversationHistory) <= maxConversationHistory {
+		return
+	}
+	compactCount := len(c.conversationHistory) - compactHistoryThreshold
+	if compactCount <= 0 {
+		compactCount = len(c.conversationHistory) / 3
+	}
+	if compactCount <= 0 {
+		trimmed := make([]fantasy.Message, maxConversationHistory)
+		copy(trimmed, c.conversationHistory[len(c.conversationHistory)-maxConversationHistory:])
+		c.conversationHistory = trimmed
+		return
+	}
+	compacted := c.compactMessages(ctx, c.conversationHistory[:compactCount])
+	c.conversationHistory = append(compacted, c.conversationHistory[compactCount:]...)
 	if len(c.conversationHistory) > maxConversationHistory {
 		trimmed := make([]fantasy.Message, maxConversationHistory)
 		copy(trimmed, c.conversationHistory[len(c.conversationHistory)-maxConversationHistory:])
 		c.conversationHistory = trimmed
+	}
+}
+
+func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Message) []fantasy.Message {
+	s := c.Sidecar()
+	if s == nil || len(messages) < 2 {
+		return messages
+	}
+	var b strings.Builder
+	for _, msg := range messages {
+		for _, part := range msg.Content {
+			if txt, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok {
+				b.WriteString(txt.Text)
+				b.WriteString("\n")
+			}
+		}
+	}
+	if b.Len() == 0 {
+		return messages
+	}
+	result, err := s.Compact(ctx, b.String(), "Compress the following conversation into a concise summary while preserving key facts, decisions, and results.")
+	if err != nil || result == "" {
+		return messages
+	}
+	return []fantasy.Message{
+		fantasy.NewUserMessage("[Compacted history]\n" + result),
 	}
 }
 
@@ -1515,9 +1644,9 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	return c.runAgentWithStatusAndHistory(orchCtx, orch, orchDef.Name, prompt, historySnapshot, &taskTiming{})
 }
 
-func (c *Coordinator) saveHistoryAndSession(steps []fantasy.StepResult) {
+func (c *Coordinator) saveHistoryAndSession(ctx context.Context, steps []fantasy.StepResult) {
 	c.conversationHistoryMu.Lock()
-	c.appendHistory(steps)
+	c.appendHistory(ctx, steps)
 	SaveConversationHistory(c.session.Workspace, c.conversationHistory)
 	c.conversationHistoryMu.Unlock()
 	if c.sessionData != nil {
@@ -1544,11 +1673,21 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	systemPrompt += "\n\n" + c.BuildOrchestratorPrompt()
 
 	if agentsMD := c.loadProjectContext(); agentsMD != "" {
+		if s := c.Sidecar(); s != nil && len(agentsMD) > 4000 {
+			compacted, err := s.Compact(ctx, agentsMD, "Compress this project context while preserving all key facts, patterns, conventions, and instructions.")
+			if err == nil && compacted != "" {
+				agentsMD = compacted
+			}
+		}
 		systemPrompt += "\n\n---\n## Project Context (AGENTS.md)\n\n" + agentsMD
 	}
 
 	if c.memoryStore != nil {
-		memCtx, err := memory.AutoQuery(ctx, c.memoryStore, userPrompt)
+		var compactFn memory.CompactFunc
+		if s := c.Sidecar(); s != nil {
+			compactFn = s.Compact
+		}
+		memCtx, err := memory.AutoQuery(ctx, c.memoryStore, userPrompt, compactFn)
 		if err == nil && memCtx != "" {
 			systemPrompt += "\n\n---\n" + memCtx
 		}
@@ -1569,11 +1708,11 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	result, steps, err := c.runOrchestrator(ctx, &orchDefCopy, userPrompt)
 	if err != nil {
-		c.saveHistoryAndSession(steps)
+		c.saveHistoryAndSession(ctx, steps)
 		return "", fmt.Errorf("coordinator failed: %w", err)
 	}
 
-	c.saveHistoryAndSession(steps)
+	c.saveHistoryAndSession(ctx, steps)
 
 	finalResult := strings.TrimPrefix(result, "FINISHED:")
 
@@ -1609,11 +1748,11 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 
 	result, steps, err := c.runOrchestrator(ctx, orchDef, continuationPrompt)
 	if err != nil {
-		c.saveHistoryAndSession(steps)
+		c.saveHistoryAndSession(ctx, steps)
 		return "", fmt.Errorf("coordinator continuation failed: %w", err)
 	}
 
-	c.saveHistoryAndSession(steps)
+	c.saveHistoryAndSession(ctx, steps)
 
 	finalResult := strings.TrimPrefix(result, "FINISHED:")
 

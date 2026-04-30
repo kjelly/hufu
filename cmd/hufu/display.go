@@ -366,6 +366,25 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				errStyle.Render("⚠ LOOP"),
 				errStyle.Render(event.Message),
 			))
+
+		case "sidecar_call":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			label := "sidecar"
+			if event.Agent != "" {
+				label = fmt.Sprintf("sidecar/%s", event.Agent)
+			}
+			msg := event.Message
+			if msg == "summarize" {
+				msg = "summarizing output"
+			}
+			w.write(fmt.Sprintf("%s %s %s\n",
+				dimStyle.Render("⟐"),
+				dimStyle.Render(label),
+				dimStyle.Render(msg),
+			))
 		}
 	})
 }
