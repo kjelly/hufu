@@ -284,9 +284,11 @@ func (c *Coordinator) saveAndReloadSkill(name, description, content string) (str
 	excludeSkills := skill.ParseSkillList(c.session.Config.SkillsExclude)
 	newSkills := skill.FilterSkills(allSkills, includeSkills, excludeSkills)
 
-	c.skillsMu.Lock()
-	c.skills = newSkills
-	c.skillsMu.Unlock()
+	func() {
+		c.skillsMu.Lock()
+		defer c.skillsMu.Unlock()
+		c.skills = newSkills
+	}()
 
 	return skillPath, nil
 }
@@ -1295,15 +1297,17 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 func (c *Coordinator) GetOrchestratorDef() *agent.AgentDef {
 	for _, def := range c.session.Agents {
 		if def.Role == "coordinator" || def.Role == "orchestrator" {
-			c.ensureModelFallback(def)
-			return def
+			defCopy := *def
+			c.ensureModelFallback(&defCopy)
+			return &defCopy
 		}
 	}
 	for _, def := range c.session.Agents {
 		n := strings.ToLower(def.Name)
 		if strings.Contains(n, "coordinat") || strings.Contains(n, "orchestr") {
-			c.ensureModelFallback(def)
-			return def
+			defCopy := *def
+			c.ensureModelFallback(&defCopy)
+			return &defCopy
 		}
 	}
 	def := &agent.AgentDef{
