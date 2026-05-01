@@ -195,6 +195,8 @@ func skillNames(skills []*skill.SkillDef) []string {
 
 func TestBuildAutoSkillPrefixNoOverlap(t *testing.T) {
 	c := &Coordinator{
+		reportStatus: func(event StatusEvent) {},
+		session:      &TeamSession{Config: agent.TeamConfig{Name: "test-team"}},
 		autoLoadedSkills: []*skill.SkillDef{
 			{
 				Name:        "code-reviewer",
@@ -214,7 +216,7 @@ func TestBuildAutoSkillPrefixNoOverlap(t *testing.T) {
 		Skills: "",
 	}
 
-	result := c.buildAutoSkillPrefix(agentDef, "review the code changes")
+	result := c.buildAutoSkillPrefix(agentDef, "reviewer", "review the code changes")
 	if result == "" {
 		t.Fatal("expected non-empty prefix, got empty")
 	}
@@ -228,6 +230,8 @@ func TestBuildAutoSkillPrefixNoOverlap(t *testing.T) {
 
 func TestBuildAutoSkillPrefixWithOverlap(t *testing.T) {
 	c := &Coordinator{
+		reportStatus: func(event StatusEvent) {},
+		session:      &TeamSession{Config: agent.TeamConfig{Name: "test-team"}},
 		autoLoadedSkills: []*skill.SkillDef{
 			{
 				Name:    "code-reviewer",
@@ -245,7 +249,7 @@ func TestBuildAutoSkillPrefixWithOverlap(t *testing.T) {
 		Skills: "code-reviewer",
 	}
 
-	result := c.buildAutoSkillPrefix(agentDef, "review the code changes")
+	result := c.buildAutoSkillPrefix(agentDef, "reviewer", "review the code changes")
 	if strings.Contains(result, "### code-reviewer") {
 		t.Error("code-reviewer should be skipped since it's already in agentDef.Skills")
 	}
@@ -259,6 +263,8 @@ func TestBuildAutoSkillPrefixWithOverlap(t *testing.T) {
 
 func TestBuildAutoSkillPrefixEmpty(t *testing.T) {
 	c := &Coordinator{
+		reportStatus:     func(event StatusEvent) {},
+		session:          &TeamSession{Config: agent.TeamConfig{Name: "test-team"}},
 		autoLoadedSkills: nil,
 	}
 
@@ -266,7 +272,7 @@ func TestBuildAutoSkillPrefixEmpty(t *testing.T) {
 		Name: "reviewer",
 	}
 
-	result := c.buildAutoSkillPrefix(agentDef, "review code")
+	result := c.buildAutoSkillPrefix(agentDef, "reviewer", "review code")
 	if result != "" {
 		t.Errorf("expected empty prefix for no auto-loaded skills, got: %s", result)
 	}
@@ -326,10 +332,12 @@ func TestBuildAutoSkillPrefixRelevance(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Coordinator{
+				reportStatus:     func(event StatusEvent) {},
+				session:          &TeamSession{Config: agent.TeamConfig{Name: "test-team"}},
 				autoLoadedSkills: []*skill.SkillDef{codeReviewer, gitCommit},
 			}
 
-			result := c.buildAutoSkillPrefix(tt.agentDef, tt.taskDesc)
+			result := c.buildAutoSkillPrefix(tt.agentDef, tt.agentDef.Name, tt.taskDesc)
 
 			if tt.wantSkill == "" {
 				if result != "" {

@@ -319,7 +319,7 @@ func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
 	return b.String()
 }
 
-func (c *Coordinator) buildAutoSkillPrefix(agentDef *agent.AgentDef, taskDesc string) string {
+func (c *Coordinator) buildAutoSkillPrefix(agentDef *agent.AgentDef, agentName string, taskDesc string) string {
 	if len(c.autoLoadedSkills) == 0 {
 		return ""
 	}
@@ -347,6 +347,10 @@ func (c *Coordinator) buildAutoSkillPrefix(agentDef *agent.AgentDef, taskDesc st
 
 	if len(relevant) == 0 {
 		return ""
+	}
+
+	for _, s := range relevant {
+		c.report(c.newEvent("skill_auto_loaded").withAgent(agentName).withSkillName(s.Name))
 	}
 
 	var b strings.Builder
@@ -463,7 +467,6 @@ func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string)
 				Description: sk.Description,
 			}
 		}
-		c.report(c.newEvent("sidecar_call").withMessage("match_skills"))
 		names, err := s.MatchSkills(ctx, prompt, summaries)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: sidecar skill matching failed, using keyword fallback: %v\n", err)
@@ -478,11 +481,25 @@ func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string)
 					matched = append(matched, sk)
 				}
 			}
+			matchedNames := make([]string, len(matched))
+			for i, sk := range matched {
+				matchedNames[i] = sk.Name
+			}
+			c.report(c.newEvent("sidecar_call").withMessage("match_skills → " + strings.Join(matchedNames, ", ")))
 			return matched
 		}
+		c.report(c.newEvent("sidecar_call").withMessage("match_skills → (no matches)"))
 	}
 
-	return c.matchSkillsForPrompt(prompt)
+	fallback := c.matchSkillsForPrompt(prompt)
+	if len(fallback) > 0 {
+		names := make([]string, len(fallback))
+		for i, sk := range fallback {
+			names[i] = sk.Name
+		}
+		c.report(c.newEvent("sidecar_call").withMessage("match_skills (keyword) → " + strings.Join(names, ", ")))
+	}
+	return fallback
 }
 
 func (c *Coordinator) newEvent(eventType string) StatusEvent {
@@ -761,7 +778,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	defer cancel()
 
 	taskPrompt := task
-	if prefix := c.buildAutoSkillPrefix(def, task); prefix != "" {
+	if prefix := c.buildAutoSkillPrefix(def, name, task); prefix != "" {
 		taskPrompt = prefix + taskPrompt
 	}
 
@@ -1145,7 +1162,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		prompt = prefix + prompt
 	}
 
-	if prefix := c.buildAutoSkillPrefix(agentDef, task.Task); prefix != "" {
+	if prefix := c.buildAutoSkillPrefix(agentDef, agentName, task.Task); prefix != "" {
 		prompt = prefix + prompt
 	}
 
@@ -1894,7 +1911,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		prompt = prefix + prompt
 	}
 
-	if prefix := c.buildAutoSkillPrefix(agentDef, task); prefix != "" {
+	if prefix := c.buildAutoSkillPrefix(agentDef, resolvedName, task); prefix != "" {
 		prompt = prefix + prompt
 	}
 

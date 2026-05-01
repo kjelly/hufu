@@ -385,6 +385,17 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				dimStyle.Render(label),
 				dimStyle.Render(msg),
 			))
+
+		case "skill_auto_loaded":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			w.write(fmt.Sprintf("%s %s auto-loaded: %s\n",
+				dimStyle.Render("⟐"),
+				agentStyle.Render(event.Agent),
+				doneStyle.Render(event.SkillName),
+			))
 		}
 	})
 }
