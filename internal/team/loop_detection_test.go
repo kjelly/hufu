@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 )
 
 // mockCoordinator provides a minimal Coordinator for testing loop detection
@@ -336,8 +337,8 @@ func TestLongTaskDescriptionTruncation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := truncateTaskDesc(tt.task)
-			if len(result) > tt.maxLen {
-				t.Errorf("result length %d exceeds maxLen %d", len(result), tt.maxLen)
+			if utf8.RuneCountInString(result) > tt.maxLen {
+				t.Errorf("result rune count %d exceeds maxLen %d", utf8.RuneCountInString(result), tt.maxLen)
 			}
 			if !strings.HasPrefix(result, tt.expected[:min(len(result), len(tt.expected))]) && len(result) > 10 {
 				// Allow some flexibility for multi-byte characters

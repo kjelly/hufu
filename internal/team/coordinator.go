@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/fantasy"
 
@@ -607,7 +608,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		ProviderURL: c.session.Config.ProviderURL,
 	}
 
-	def = c.injectWorkerContext(def, ctx)
+	def = c.injectWorkerContext(ctx, def)
 
 	agentTools := agent.SelectTools(c.coreTools, def.Tools)
 	if c.mcpManager != nil {
@@ -1210,7 +1211,7 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 		agentDef = &overriddenDef
 	}
 
-	agentDef = c.injectWorkerContext(agentDef, ctx)
+	agentDef = c.injectWorkerContext(ctx, agentDef)
 
 	agentTools := agent.SelectTools(c.coreTools, agentDef.Tools)
 	if c.mcpManager != nil {
@@ -1384,8 +1385,9 @@ func (c *Coordinator) loadProjectContext() string {
 	if err != nil {
 		return ""
 	}
-	if len(data) > maxAgentsMDSize {
-		data = append(data[:maxAgentsMDSize], []byte("\n\n... [AGENTS.md truncated]")...)
+	if utf8.RuneCountInString(string(data)) > maxAgentsMDSize {
+		runes := []rune(string(data))
+		data = []byte(string(runes[:maxAgentsMDSize]) + "\n\n... [AGENTS.md truncated]")
 	}
 	return string(data)
 }
@@ -1396,14 +1398,14 @@ func (c *Coordinator) getWorkerContext(ctx context.Context) string {
 		if raw == "" {
 			return
 		}
-		if s := c.Sidecar(); s != nil && len(raw) > maxWorkerContextSize/2 {
+		if s := c.Sidecar(); s != nil && utf8.RuneCountInString(raw) > maxWorkerContextSize/2 {
 			compacted, err := s.Compact(ctx, raw, "Extract the essential project context: tech stack, language, framework, key conventions, and directory structure. Preserve all factual details but remove verbose descriptions.")
 			if err == nil && compacted != "" {
 				raw = compacted
 			}
 		}
-		if len(raw) > maxWorkerContextSize {
-			raw = raw[:maxWorkerContextSize] + "\n\n... [truncated]"
+		if utf8.RuneCountInString(raw) > maxWorkerContextSize {
+			raw = string([]rune(raw)[:maxWorkerContextSize]) + "\n\n... [truncated]"
 		}
 		c.cachedWorkerContext = raw
 	})
@@ -1414,7 +1416,7 @@ func (c *Coordinator) getWorkerContext(ctx context.Context) string {
 // if the agent is not an orchestrator/coordinator and a worker context is available.
 // It returns a new AgentDef pointer (either the original unchanged or a copy with
 // the modified System field) to avoid mutating shared state.
-func (c *Coordinator) injectWorkerContext(def *agent.AgentDef, ctx context.Context) *agent.AgentDef {
+func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentDef) *agent.AgentDef {
 	if def.Role == "orchestrator" || def.Role == "coordinator" {
 		return def
 	}
@@ -1443,10 +1445,10 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 	b.WriteString("5. **Delegate** tasks using agent — this is the ONLY way to get work done\n")
 	b.WriteString("6. Run independent tasks in parallel by passing multiple tasks in one agent call\n")
 	b.WriteString("7. When delegating to a worker that needs skill knowledge, include the skill summary in the task description and mention the skill file path so the worker can read it if needed\n")
-	b.WriteString("7.5. **Include relevant details** — Workers already know the project context (tech stack, conventions, directory structure), but you should still specify file paths, function names, and specific constraints in your task descriptions to minimize exploration steps\n")
-	b.WriteString("8. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
-	b.WriteString("9. **Synthesize** results into a coherent answer for the user\n")
-	b.WriteString("10. When satisfied, call the finish tool with your final response\n\n")
+	b.WriteString("8. **Include relevant details** — Workers already know the project context (tech stack, conventions, directory structure), but you should still specify file paths, function names, and specific constraints in your task descriptions to minimize exploration steps\n")
+	b.WriteString("9. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
+	b.WriteString("10. **Synthesize** results into a coherent answer for the user\n")
+	b.WriteString("11. When satisfied, call the finish tool with your final response\n\n")
 
 	b.WriteString("## Available Agents\n\n")
 	fmt.Fprintf(&b, "IMPORTANT: You MUST use these agent names in the agent tool: %s. You can also use listed aliases. Do NOT invent agent names that are not listed.\n\n", strings.Join(workerNames, ", "))
@@ -1975,8 +1977,9 @@ This is a wrap-up request. You MUST call finish immediately with whatever result
 
 func truncateTaskDesc(task string) string {
 	const maxLen = 80
-	if len(task) > maxLen {
-		return task[:maxLen]
+	if utf8.RuneCountInString(task) > maxLen {
+		runes := []rune(task)
+		return string(runes[:maxLen])
 	}
 	return task
 }
