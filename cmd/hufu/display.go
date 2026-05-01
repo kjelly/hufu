@@ -565,3 +565,26 @@ func (d *skillDisplay) refreshIfDirty() {
 		d.render()
 	}
 }
+
+func renderSkillSummary(entries []team.SkillUsageEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name < entries[j].Name
+	})
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("─── SKILLS ───"))
+	b.WriteString("\n")
+	for _, entry := range entries {
+		agentList := strings.Join(entry.Agents, ", ")
+		b.WriteString(fmt.Sprintf("  %s %-20s ×%-2d %s\n",
+			doneStyle.Render("✓"),
+			entry.Name,
+			entry.Count,
+			dimStyle.Render(agentList),
+		))
+	}
+	fmt.Fprint(os.Stderr, b.String())
+}

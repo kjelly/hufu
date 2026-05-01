@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -274,6 +275,35 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Println(result)
+
+	var allSkillUsage []team.SkillUsageEntry
+	seenSkill := map[string]int{}
+	for teamName, tc := range loadedTeams {
+		for _, entry := range tc.coordinator.SkillUsage() {
+			key := strings.ToLower(entry.Name)
+			if idx, ok := seenSkill[key]; ok {
+				allSkillUsage[idx].Count += entry.Count
+				for _, a := range entry.Agents {
+					prefixed := teamName + "/" + a
+					if !slices.Contains(allSkillUsage[idx].Agents, prefixed) {
+						allSkillUsage[idx].Agents = append(allSkillUsage[idx].Agents, prefixed)
+					}
+				}
+			} else {
+				seenSkill[key] = len(allSkillUsage)
+				prefixed := make([]string, len(entry.Agents))
+				for i, a := range entry.Agents {
+					prefixed[i] = teamName + "/" + a
+				}
+				allSkillUsage = append(allSkillUsage, team.SkillUsageEntry{
+					Name:   entry.Name,
+					Count:  entry.Count,
+					Agents: prefixed,
+				})
+			}
+		}
+	}
+	renderSkillSummary(allSkillUsage)
 
 	if archiveMemory && !newSession {
 		for _, tc := range loadedTeams {
