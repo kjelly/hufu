@@ -156,23 +156,66 @@ Regex: `@([\w][\w-]*)` — matches `@team`, `@team-name`, `@agent1`, but NOT `@-
 
 **Important**: `@example.com` (email-like) also matches due to the broad regex. The parser disambiguates by checking if the name is a known team or agent.
 
+### @-name Priority Rules
+
+When `@name` matches both a team name and an agent name (via fuzzy match):
+
+1. **No active team** (`currentTeam == ""`): Team name wins. `@reviewer` → switch to "reviewer" team.
+2. **Inside a team** (`currentTeam != ""`): Agent name wins. `@reviewer` → invoke "Code Reviewer" agent.
+3. **When `@name` is used as a team switch**, the same `@name` reference is stripped from the content and not re-interpreted as an agent name. `@reviewer check code` → team switch only (no agent invocation).
+
+In `SplitSegmentByAgents`, team names are checked before agent names: if `@name` matches a known team, it becomes a team switch regardless of agent name matches.
+
 ### Parse Flow
 
 ```
 "@delegate research this @tether also check that"
     │
     ▼
-ParsePromptWithLazyAgents() — sees @delegate is a team
+ParsePromptWithLazyAgents() — sees @delegate is a team, strips @delegate from content
     │
     ▼
 [SegmentSwitchTeam{name="delegate", content="research this @tether also check that"}]
     │
     ▼
-SplitSegmentByAgents() — sees @tether is another team
+SplitSegmentByAgents() — sees @tether is another team (team name takes priority)
     │
     ▼
 [SegmentSwitchTeam{name="delegate", content="research this "},
  SegmentSwitchTeam{name="tether", content="also check that"}]
+```
+
+```
+"@reviewer check code"
+    │
+    ▼
+ParsePromptWithLazyAgents() — sees @reviewer is a team, strips @reviewer from content
+    │
+    ▼
+[SegmentSwitchTeam{name="reviewer", content="check code"}]
+    │
+    ▼
+SplitSegmentByAgents() — no @name references in "check code"
+    │
+    ▼
+[SegmentSwitchTeam{name="reviewer", content="check code"}]
+```
+
+```
+"@reviewer @reviewer check code"
+    │
+    ▼
+ParsePromptWithLazyAgents() — sees @reviewer is a team, strips first @reviewer
+    │
+    ▼
+[SegmentSwitchTeam{name="reviewer", content="@reviewer check code"}]
+    │
+    ▼
+SplitSegmentByAgents() — sees @reviewer in content, matches "Code Reviewer" agent (inside team, agent priority)
+    │
+    ▼
+[SegmentSwitchTeam{name="reviewer", content=""},
+ SegmentInvokeAgent{name="reviewer", content="check code"}]
 ```
 
 ## Multi-Team Execution
@@ -200,8 +243,9 @@ Processes segments sequentially. On team switch:
 
 When a segment's `@name` matches an agent in the current team (not a team name):
 1. `coordinator.RunDirectAgent(agentName, task)` is called directly
-2. If the team has a coordinator, the result is passed to the coordinator for synthesis
-3. If no coordinator, the result is output directly
+2. Skill matching via sidecar is performed before the agent runs (`matchSkillsWithSidecar`)
+3. If the team has a coordinator, the result is passed to the coordinator for synthesis
+4. If no coordinator, the result is output directly
 
 ### Idle Warning
 

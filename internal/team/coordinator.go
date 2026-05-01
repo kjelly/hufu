@@ -1873,6 +1873,8 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return nil, err
 	}
 
+	c.autoLoadedSkills = c.matchSkillsWithSidecar(ctx, task)
+
 	resolvedName := strings.ToLower(agentDef.Name)
 	directModel := c.resolveAgentModel(agentDef, "")
 
