@@ -36,6 +36,7 @@ var (
 	memoryEnabled       bool
 	memoryModel         string
 	archiveMemory       bool
+	showHistory         bool
 	globalPromptReader  atomic.Pointer[readline.PromptReader]
 )
 
@@ -67,6 +68,7 @@ func main() {
 	rootCmd.Flags().BoolVar(&memoryEnabled, "memory", true, "Enable long-term memory (RAG with vector search)")
 	rootCmd.Flags().StringVar(&memoryModel, "memory-model", "", "Embedding model for memory (default: nomic-embed-text, overrides hufu.yaml)")
 	rootCmd.Flags().BoolVar(&archiveMemory, "archive-memory", false, "Archive session summary to memory and exit")
+	rootCmd.Flags().BoolVar(&showHistory, "show-history", false, "Show previous session history on resume")
 
 	if err := rootCmd.Execute(); err != nil {
 		var interrupted errInterrupted
@@ -421,7 +423,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 			fmt.Fprintf(os.Stderr, "%s Starting new session\n", boldStyle.Render("→"))
 		}
 
-		if existingMD != "" {
+		if showHistory && existingMD != "" {
 			lines := strings.SplitN(existingMD, "\n", 30)
 			preview := strings.Join(lines, "\n")
 			fmt.Fprintf(os.Stderr, "\n%s\n%s\n\n",
