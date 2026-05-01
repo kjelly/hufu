@@ -760,8 +760,13 @@ func agentNamesFromSession(session *team.TeamSession) []*agent.AgentDef {
 }
 
 func sortedAgents(agents map[string]*agent.AgentDef) []*agent.AgentDef {
+	seen := make(map[string]bool)
 	var result []*agent.AgentDef
 	for _, def := range agents {
+		if seen[def.Name] {
+			continue
+		}
+		seen[def.Name] = true
 		result = append(result, def)
 	}
 	sort.Slice(result, func(i, j int) bool {
