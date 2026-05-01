@@ -743,14 +743,20 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 	return strings.Join(results, "\n\n---\n\n"), nil
 }
 
-func agentNamesFromSession(session *team.TeamSession) []string {
-	var names []string
-	for name, def := range session.Agents {
-		if def.Role != "orchestrator" && def.Role != "coordinator" {
-			names = append(names, name)
+func agentNamesFromSession(session *team.TeamSession) []*agent.AgentDef {
+	seen := make(map[string]bool)
+	var agents []*agent.AgentDef
+	for _, def := range session.Agents {
+		if def.Role == "orchestrator" || def.Role == "coordinator" {
+			continue
 		}
+		if seen[def.Name] {
+			continue
+		}
+		seen[def.Name] = true
+		agents = append(agents, def)
 	}
-	return names
+	return agents
 }
 
 func sortedAgents(agents map[string]*agent.AgentDef) []*agent.AgentDef {

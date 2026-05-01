@@ -28,6 +28,7 @@ type GenerationParams struct {
 
 type AgentDef struct {
 	Name        string
+	FileAlias   string
 	Description string
 	Tools       string
 	Role        string

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/anomalyco/hufu/internal/agent"
 )
 
 type PromptSegmentType string
@@ -26,7 +28,7 @@ func HasAtName(s string) bool {
 	return atNamePattern.MatchString(s)
 }
 
-func ParsePrompt(prompt string, registry *TeamRegistry, currentTeam string, currentAgents []string) ([]PromptSegment, error) {
+func ParsePrompt(prompt string, registry *TeamRegistry, currentTeam string, currentAgents []*agent.AgentDef) ([]PromptSegment, error) {
 	locs := atNamePattern.FindAllStringSubmatchIndex(prompt, -1)
 	if len(locs) == 0 {
 		if currentTeam == "" {
@@ -122,7 +124,7 @@ func ParsePromptWithLazyAgents(rawPrompt string, registry *TeamRegistry, default
 	return nil, fmt.Errorf("no team found in prompt. Available teams: %s", strings.Join(registry.ListTeams(), ", "))
 }
 
-func SplitSegmentByAgents(segment PromptSegment, registry *TeamRegistry, currentAgents []string) ([]PromptSegment, error) {
+func SplitSegmentByAgents(segment PromptSegment, registry *TeamRegistry, currentAgents []*agent.AgentDef) ([]PromptSegment, error) {
 	if segment.Type != SegmentSwitchTeam || segment.Content == "" {
 		return []PromptSegment{segment}, nil
 	}
@@ -207,10 +209,33 @@ func SplitSegmentByAgents(segment PromptSegment, registry *TeamRegistry, current
 	return segments, nil
 }
 
-func isAgentInList(name string, agents []string) bool {
-	for _, a := range agents {
-		if strings.ToLower(a) == name {
+func isAgentInList(name string, agents []*agent.AgentDef) bool {
+	nameLower := strings.ToLower(name)
+	for _, def := range agents {
+		if def.Role == "orchestrator" || def.Role == "coordinator" {
+			continue
+		}
+		// Exact case-insensitive match against Name
+		if strings.ToLower(def.Name) == nameLower {
 			return true
+		}
+		// Word-level match on Name
+		for _, word := range strings.Fields(def.Name) {
+			if strings.ToLower(word) == nameLower {
+				return true
+			}
+		}
+		// Segment-level match on FileAlias
+		if def.FileAlias != "" {
+			// Exact case-insensitive match on full FileAlias
+			if strings.ToLower(def.FileAlias) == nameLower {
+				return true
+			}
+			for _, seg := range strings.Split(strings.ToLower(def.FileAlias), "-") {
+				if seg != "" && seg == nameLower {
+					return true
+				}
+			}
 		}
 	}
 	return false

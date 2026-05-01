@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/anomalyco/hufu/internal/agent"
 )
 
 func newTestRegistry(t *testing.T) *TeamRegistry {
@@ -32,7 +34,7 @@ func TestParsePromptWithLazyAgents(t *testing.T) {
 		name         string
 		prompt       string
 		defaultTeam  string
-		agentNames   []string
+		agentDefs    []*agent.AgentDef
 		expectError  bool
 		checkSegs    func(t *testing.T, lazy []PromptSegment, expanded []PromptSegment)
 		expectExpErr bool
@@ -52,7 +54,7 @@ func TestParsePromptWithLazyAgents(t *testing.T) {
 			name:        "@team @agent",
 			prompt:      "@delegate @researcher find bugs",
 			defaultTeam: "",
-			agentNames:  []string{"researcher", "writer", "checker"},
+			agentDefs:   []*agent.AgentDef{{Name: "researcher", Role: "worker"}, {Name: "writer", Role: "worker"}, {Name: "checker", Role: "worker"}},
 			expectError: false,
 			checkSegs: func(t *testing.T, lazy []PromptSegment, expanded []PromptSegment) {
 				hasTeamSwitch := false
@@ -91,7 +93,7 @@ func TestParsePromptWithLazyAgents(t *testing.T) {
 			name:        "default-team + @agent",
 			prompt:      "@researcher find bugs",
 			defaultTeam: "delegate",
-			agentNames:  []string{"researcher", "writer", "checker"},
+			agentDefs:   []*agent.AgentDef{{Name: "researcher", Role: "worker"}, {Name: "writer", Role: "worker"}, {Name: "checker", Role: "worker"}},
 			expectError: false,
 			checkSegs: func(t *testing.T, lazy []PromptSegment, expanded []PromptSegment) {
 				hasTeamSwitch := false
@@ -128,7 +130,7 @@ func TestParsePromptWithLazyAgents(t *testing.T) {
 			name:        "@bad-agent in team",
 			prompt:      "@nonexistent find bugs",
 			defaultTeam: "delegate",
-			agentNames:  []string{"researcher", "writer", "checker"},
+			agentDefs:   []*agent.AgentDef{{Name: "researcher", Role: "worker"}, {Name: "writer", Role: "worker"}, {Name: "checker", Role: "worker"}},
 			expectError: false,
 			checkSegs: func(t *testing.T, lazy []PromptSegment, expanded []PromptSegment) {
 				hasUnknownText := false
@@ -194,7 +196,7 @@ func TestParsePromptWithLazyAgents(t *testing.T) {
 			var expErr error
 			for _, seg := range lazy {
 				if seg.Type == SegmentSwitchTeam && seg.Content != "" {
-					subSegs, err := SplitSegmentByAgents(seg, registry, tc.agentNames)
+					subSegs, err := SplitSegmentByAgents(seg, registry, tc.agentDefs)
 					if err != nil {
 						expErr = err
 						break
@@ -234,63 +236,63 @@ func TestSplitSegmentByAgents(t *testing.T) {
 	tests := []struct {
 		name      string
 		segment   PromptSegment
-		agents    []string
+		agentDefs []*agent.AgentDef
 		expectLen int
 		expectErr bool
 	}{
 		{
 			name:      "single agent at start",
 			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@researcher find bugs"},
-			agents:    []string{"researcher", "writer"},
+			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}, {Name: "writer", Role: "worker"}},
 			expectLen: 2,
 		},
 		{
 			name:      "text before agent",
 			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "first do X @researcher find bugs"},
-			agents:    []string{"researcher", "writer"},
+			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}, {Name: "writer", Role: "worker"}},
 			expectLen: 2,
 		},
 		{
 			name:      "multiple agents",
 			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@researcher find bugs @writer write docs"},
-			agents:    []string{"researcher", "writer"},
+			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}, {Name: "writer", Role: "worker"}},
 			expectLen: 3,
 		},
 		{
 			name:      "no agents in content",
 			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "just plain text"},
-			agents:    []string{"researcher"},
+			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}},
 			expectLen: 1,
 		},
 		{
 			name:      "unknown agent",
 			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@unknown find bugs"},
-			agents:    []string{"researcher"},
+			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}},
 			expectLen: 1,
 		},
 		{
 			name:      "team name in content",
 			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@tether do something"},
-			agents:    []string{"researcher"},
+			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}},
 			expectLen: 2,
 		},
 		{
 			name:      "empty content",
 			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: ""},
-			agents:    []string{"researcher"},
+			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}},
 			expectLen: 1,
 		},
 		{
 			name:      "non-switch-team segment",
 			segment:   PromptSegment{Type: SegmentText, Content: "hello"},
-			agents:    []string{"researcher"},
+			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}},
 			expectLen: 1,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			segs, err := SplitSegmentByAgents(tc.segment, registry, tc.agents)
+			segs, err := SplitSegmentByAgents(tc.segment, registry, tc.agentDefs)
 			if err != nil {
 				if tc.expectErr {
 					t.Logf("OK (expected error): %v", err)
@@ -352,5 +354,37 @@ func TestHasAtName(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("HasAtName(%q) = %v, want %v", tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestIsAgentInListFuzzyMatch(t *testing.T) {
+	agents := []*agent.AgentDef{
+		{Name: "Senior Developer", FileAlias: "engineering-senior-developer", Role: "worker"},
+		{Name: "Code Reviewer", FileAlias: "engineering-code-reviewer", Role: "worker"},
+		{Name: "Software Architect", FileAlias: "engineering-software-architect", Role: "worker"},
+	}
+
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"exact match", "Senior Developer", true},
+		{"exact match case insensitive", "senior developer", true},
+		{"word match", "developer", true},
+		{"word match reviewer", "reviewer", true},
+		{"segment match architect", "architect", true},
+		{"file alias exact match", "engineering-software-architect", true},
+		{"partial word no match", "devel", false},
+		{"no match", "designer", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isAgentInList(tc.input, agents)
+			if got != tc.want {
+				t.Errorf("isAgentInList(%q, ...) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
 	}
 }

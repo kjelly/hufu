@@ -888,7 +888,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		Model string
 	}, len(tasks))
 	for i, t := range tasks {
-		agentDef := c.session.Agents[strings.ToLower(t.Agent)]
+		agentDef, _, _ := c.resolveAgentName(t.Agent)
 		var resolvedModel string
 		if agentDef != nil {
 			resolvedModel = c.resolveAgentModel(agentDef, t.Model)
@@ -941,19 +941,13 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 }
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (string, error) {
-	agentName := strings.ToLower(task.Agent)
-	agentDef, ok := c.session.Agents[agentName]
-	if !ok {
-		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, fmt.Sprintf("unknown agent: %q", task.Agent))
+	agentDef, _, err := c.resolveAgentName(task.Agent)
+	if err != nil {
+		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		return "", fmt.Errorf("unknown agent: %q (available: %v)", task.Agent, c.agentNames())
+		return "", err
 	}
-
-	if agentDef.Role == "orchestrator" || agentDef.Role == "coordinator" {
-		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, fmt.Sprintf("cannot delegate to coordinator %q", agentName))
-		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		return "", fmt.Errorf("cannot delegate to coordinator agent %q", agentName)
-	}
+	agentName := strings.ToLower(agentDef.Name)
 
 	if task.Model != "" && len(c.modelList) > 0 {
 		found := false
@@ -1231,32 +1225,143 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 	return ag, nil
 }
 
-func (c *Coordinator) agentNames() []string {
-	var names []string
-	for name, def := range c.session.Agents {
-		if def.Role != "orchestrator" && def.Role != "coordinator" {
-			names = append(names, name)
+func (c *Coordinator) resolveAgentName(input string) (*agent.AgentDef, string, error) {
+	key := strings.ToLower(input)
+	if def, ok := c.session.Agents[key]; ok {
+		if def.Role == "orchestrator" || def.Role == "coordinator" {
+			return nil, "", fmt.Errorf("cannot delegate to coordinator agent %q", input)
 		}
+		return def, key, nil
+	}
+
+	inputLower := strings.ToLower(input)
+	var matches []*agent.AgentDef
+	seenNames := make(map[string]bool)
+	for _, def := range c.session.Agents {
+		if def.Role == "orchestrator" || def.Role == "coordinator" {
+			continue
+		}
+		if seenNames[def.Name] {
+			continue
+		}
+		for _, word := range strings.Fields(def.Name) {
+			if strings.ToLower(word) == inputLower {
+				matches = append(matches, def)
+				seenNames[def.Name] = true
+				break
+			}
+		}
+		if seenNames[def.Name] {
+			continue
+		}
+		if def.FileAlias != "" {
+			for _, seg := range strings.Split(strings.ToLower(def.FileAlias), "-") {
+				if seg != "" && seg == inputLower {
+					matches = append(matches, def)
+					seenNames[def.Name] = true
+					break
+				}
+			}
+		}
+	}
+
+	if len(matches) == 1 {
+		def := matches[0]
+		return def, strings.ToLower(def.Name), nil
+	}
+	if len(matches) > 1 {
+		var names []string
+		for _, m := range matches {
+			names = append(names, m.Name)
+		}
+		sort.Strings(names)
+		return nil, "", fmt.Errorf("ambiguous agent name %q matches multiple agents: %v", input, names)
+	}
+
+	var available []string
+	seenAvail := make(map[string]bool)
+	for _, def := range c.session.Agents {
+		if def.Role != "orchestrator" && def.Role != "coordinator" && !seenAvail[def.Name] {
+			seenAvail[def.Name] = true
+			available = append(available, def.Name)
+		}
+	}
+	return nil, "", fmt.Errorf("unknown agent %q (available: %v)", input, available)
+}
+
+func (c *Coordinator) uniqueWorkerDefs() []*agent.AgentDef {
+	seen := make(map[string]bool)
+	var defs []*agent.AgentDef
+	for _, def := range c.session.Agents {
+		if def.Role == "orchestrator" || def.Role == "coordinator" {
+			continue
+		}
+		if seen[def.Name] {
+			continue
+		}
+		seen[def.Name] = true
+		defs = append(defs, def)
+	}
+	return defs
+}
+
+func (c *Coordinator) agentNames() []string {
+	defs := c.uniqueWorkerDefs()
+	names := make([]string, len(defs))
+	for i, def := range defs {
+		names[i] = def.Name
 	}
 	return names
 }
 
 func (c *Coordinator) buildWorkerNamesAndDescs() (names []string, descs []string) {
-	for _, def := range c.session.Agents {
-		if def.Role == "orchestrator" || def.Role == "coordinator" {
-			continue
-		}
-		names = append(names, def.Name)
+	for _, def := range c.uniqueWorkerDefs() {
 		desc := def.Name
+		aliases := c.agentAliasesFor(def)
+		if aliases != "" {
+			desc += " (aliases: " + aliases + ")"
+		}
 		if def.Description != "" {
 			desc += ": " + def.Description
 		}
 		if def.Tools != "" {
 			desc += fmt.Sprintf(" (tools: %s)", def.Tools)
 		}
+		names = append(names, def.Name)
 		descs = append(descs, desc)
 	}
 	return names, descs
+}
+
+func (c *Coordinator) agentAliasesFor(def *agent.AgentDef) string {
+	nameLower := strings.ToLower(def.Name)
+	var parts []string
+	if def.FileAlias != "" && strings.ToLower(def.FileAlias) != nameLower {
+		parts = append(parts, def.FileAlias)
+	}
+	for _, word := range strings.Fields(def.Name) {
+		w := strings.ToLower(word)
+		if w != nameLower && !containsPart(parts, w) {
+			parts = append(parts, w)
+		}
+	}
+	if def.FileAlias != "" {
+		for _, seg := range strings.Split(strings.ToLower(def.FileAlias), "-") {
+			if seg != nameLower && seg != "" && !containsPart(parts, seg) {
+				parts = append(parts, seg)
+			}
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func containsPart(parts []string, s string) bool {
+	for _, p := range parts {
+		if p == s {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Coordinator) workerNameList() []string {
@@ -1299,7 +1404,7 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 	b.WriteString("10. When satisfied, call the finish tool with your final response\n\n")
 
 	b.WriteString("## Available Agents\n\n")
-	fmt.Fprintf(&b, "IMPORTANT: You MUST use these exact agent names in agent: %s. Do NOT invent or modify agent names.\n\n", strings.Join(workerNames, ", "))
+	fmt.Fprintf(&b, "IMPORTANT: You MUST use these agent names in the agent tool: %s. You can also use listed aliases. Do NOT invent agent names that are not listed.\n\n", strings.Join(workerNames, ", "))
 	for _, desc := range workerDescs {
 		fmt.Fprintf(&b, "- %s\n", desc)
 	}
@@ -1426,8 +1531,8 @@ func (c *Coordinator) ensureModelFallback(def *agent.AgentDef) {
 }
 
 func (c *Coordinator) resolveCurrentAgentModel(agentName string) string {
-	agentDef, ok := c.session.Agents[agentName]
-	if ok {
+	agentDef, _, err := c.resolveAgentName(agentName)
+	if err == nil && agentDef != nil {
 		return c.resolveAgentModel(agentDef, "")
 	}
 	return c.session.Config.Generation.Model
@@ -1551,32 +1656,32 @@ func ParseDirectAgent(prompt string) (agentName string, task string, ok bool) {
 }
 
 func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (*DirectAgentResult, error) {
-	agentDef, ok := c.session.Agents[agentName]
-	if !ok {
-		return nil, fmt.Errorf("unknown agent: %q (available: %v)", agentName, c.agentNames())
+	agentDef, _, err := c.resolveAgentName(agentName)
+	if err != nil {
+		return nil, err
 	}
-
 	if agentDef.Role == "orchestrator" || agentDef.Role == "coordinator" {
-		return nil, fmt.Errorf("cannot directly invoke coordinator agent %q", agentName)
+		return nil, fmt.Errorf("cannot directly invoke coordinator agent %q", agentDef.Name)
 	}
 
+	resolvedName := strings.ToLower(agentDef.Name)
 	directModel := c.resolveAgentModel(agentDef, "")
 
 	todoItems := c.taskTracker.TodoList().AddBatch([]struct {
 		Agent string
 		Desc  string
 		Model string
-	}{{Agent: agentName, Desc: task, Model: directModel}})
+	}{{Agent: resolvedName, Desc: task, Model: directModel}})
 	todoID := todoItems[0].ID
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.SetCurrentAgent(agentName)
+	c.SetCurrentAgent(resolvedName)
 
 	ag, err := c.getOrCreateAgent(ctx, agentDef, "")
 	if err != nil {
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		return nil, fmt.Errorf("failed to create agent %q: %w", agentName, err)
+		return nil, fmt.Errorf("failed to create agent %q: %w", resolvedName, err)
 	}
 
 	agentTimeout := time.Duration(c.session.Config.Timeout) * time.Second
@@ -1590,33 +1695,33 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	timing := &taskTiming{}
 	timing.reset()
 
-	_ = writeInbox(c.session.Workspace, agentName, task)
-	_ = writeStatus(c.session.Workspace, agentName, "working", task)
+	_ = writeInbox(c.session.Workspace, resolvedName, task)
+	_ = writeStatus(c.session.Workspace, resolvedName, "working", task)
 
 	prompt := task
 	if prefix := c.buildSkillPromptPrefix(agentDef); prefix != "" {
 		prompt = prefix + prompt
 	}
 
-	output, err := c.runAgentWithStatus(taskCtx, ag, agentName, prompt, timing)
+	output, err := c.runAgentWithStatus(taskCtx, ag, resolvedName, prompt, timing)
 	duration, modelTime, toolTime := timing.snapshot()
 	if err != nil {
-		_ = writeStatus(c.session.Workspace, agentName, "error", task)
+		_ = writeStatus(c.session.Workspace, resolvedName, "error", task)
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.updateTodoTiming(todoID, modelTime, toolTime)
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withModel(directModel).withTiming(duration, modelTime, toolTime))
-		return &DirectAgentResult{AgentName: agentName, Error: err}, nil
+		c.report(c.newEvent("error").withAgent(resolvedName).withMessage(err.Error()).withModel(directModel).withTiming(duration, modelTime, toolTime))
+		return &DirectAgentResult{AgentName: resolvedName, Error: err}, nil
 	}
 
-	_ = writeOutbox(c.session.Workspace, agentName, output)
-	_ = writeStatus(c.session.Workspace, agentName, "done", task)
+	_ = writeOutbox(c.session.Workspace, resolvedName, output)
+	_ = writeStatus(c.session.Workspace, resolvedName, "done", task)
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
 	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("done").withAgent(agentName).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime))
+	c.report(c.newEvent("done").withAgent(resolvedName).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime))
 
-	return &DirectAgentResult{AgentName: agentName, Output: output}, nil
+	return &DirectAgentResult{AgentName: resolvedName, Output: output}, nil
 }
 
 func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {

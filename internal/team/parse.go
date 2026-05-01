@@ -307,7 +307,18 @@ func LoadTeam(teamDir string) (*TeamSession, error) {
 		if def == nil {
 			continue
 		}
-		session.Agents[strings.ToLower(def.Name)] = def
+		fileAlias := strings.TrimSuffix(entry.Name(), ".md")
+		def.FileAlias = fileAlias
+		fileKey := strings.ToLower(fileAlias)
+		nameKey := strings.ToLower(def.Name)
+		if _, exists := session.Agents[fileKey]; !exists {
+			session.Agents[fileKey] = def
+		}
+		if nameKey != fileKey {
+			if _, exists := session.Agents[nameKey]; !exists {
+				session.Agents[nameKey] = def
+			}
+		}
 	}
 
 	if len(session.Agents) == 0 {
