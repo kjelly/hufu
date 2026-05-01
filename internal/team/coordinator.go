@@ -351,6 +351,7 @@ func (c *Coordinator) buildAutoSkillPrefix(agentDef *agent.AgentDef, agentName s
 
 	for _, s := range relevant {
 		c.report(c.newEvent("skill_auto_loaded").withAgent(agentName).withSkillName(s.Name))
+		c.recordSkillUsage(s.Name, agentName)
 	}
 
 	var b strings.Builder
