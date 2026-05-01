@@ -74,9 +74,9 @@ type Coordinator struct {
 	sidecarInst           *sidecar.Sidecar
 	sidecarInitMu         sync.Mutex
 	cachedWorkerContext   string
-	workerCtxOnce        sync.Once
-	autoLoadedSkills     []*skill.SkillDef
-	sidecarInit          bool
+	workerCtxOnce         sync.Once
+	autoLoadedSkills      []*skill.SkillDef
+	sidecarInit           bool
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.

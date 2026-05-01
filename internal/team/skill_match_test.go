@@ -195,9 +195,9 @@ func skillNames(skills []*skill.SkillDef) []string {
 
 func TestBuildAutoSkillPrefixNoOverlap(t *testing.T) {
 	c := &Coordinator{
-		reportStatus:     func(event StatusEvent) {},
-		session:          &TeamSession{Config: agent.TeamConfig{Name: "test-team"}},
-		skillUsage:       make(map[string]*skillUsageState),
+		reportStatus: func(event StatusEvent) {},
+		session:      &TeamSession{Config: agent.TeamConfig{Name: "test-team"}},
+		skillUsage:   make(map[string]*skillUsageState),
 		autoLoadedSkills: []*skill.SkillDef{
 			{
 				Name:        "code-reviewer",
@@ -231,9 +231,9 @@ func TestBuildAutoSkillPrefixNoOverlap(t *testing.T) {
 
 func TestBuildAutoSkillPrefixWithOverlap(t *testing.T) {
 	c := &Coordinator{
-		reportStatus:     func(event StatusEvent) {},
-		session:          &TeamSession{Config: agent.TeamConfig{Name: "test-team"}},
-		skillUsage:       make(map[string]*skillUsageState),
+		reportStatus: func(event StatusEvent) {},
+		session:      &TeamSession{Config: agent.TeamConfig{Name: "test-team"}},
+		skillUsage:   make(map[string]*skillUsageState),
 		autoLoadedSkills: []*skill.SkillDef{
 			{
 				Name:    "code-reviewer",
@@ -294,11 +294,11 @@ func TestBuildAutoSkillPrefixRelevance(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
+		name      string
 		agentDef  *agent.AgentDef
-		taskDesc   string
-		wantSkill  string
-		skipSkill  string
+		taskDesc  string
+		wantSkill string
+		skipSkill string
 	}{
 		{
 			name: "reviewer agent with review task gets code-reviewer",
