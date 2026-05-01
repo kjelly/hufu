@@ -119,7 +119,7 @@ func executeFetch(ctx context.Context, call fantasy.ToolCall, workDir string) (f
 	result = cleanupContent(result)
 
 	if len(result) > maxFetchSize {
-		result = result[:maxFetchSize] + fmt.Sprintf("\n\n[Content truncated to %d bytes]", maxFetchSize)
+		result = safeTruncateHeadBytes(result, maxFetchSize) + fmt.Sprintf("\n\n[Content truncated to %d bytes]", maxFetchSize)
 	}
 
 	return fantasy.NewTextResponse(fmt.Sprintf("Fetched content from %s:\n\n%s", args.URL, result)), nil

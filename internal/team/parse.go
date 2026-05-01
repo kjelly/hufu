@@ -136,6 +136,7 @@ func parseAgentFile(path string) *agent.AgentDef {
 
 	var fm agentFrontmatter
 	if err := yaml.Unmarshal([]byte(rest[:idx]), &fm); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: YAML parse failed in %s, using fallback: %v\n", path, err)
 		fm = agentFrontmatterFromSimple(parseSimpleYAML(rest[:idx]))
 	}
 	body := strings.TrimSpace(rest[idx+5:])

@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -32,8 +33,8 @@ func TruncateTail(content string, maxLines, maxBytes int) TruncationResult {
 	total := len(lines)
 
 	for i, line := range lines {
-		if len(line) > defaultMaxLineLen {
-			lines[i] = line[:defaultMaxLineLen] + "..."
+		if utf8.RuneCountInString(line) > defaultMaxLineLen {
+			lines[i] = safeTruncateString(line, defaultMaxLineLen) + "..."
 		}
 	}
 
@@ -43,7 +44,7 @@ func TruncateTail(content string, maxLines, maxBytes int) TruncationResult {
 
 	result := strings.Join(lines, "\n")
 	if len(result) > maxBytes {
-		result = result[len(result)-maxBytes:]
+		result = safeTruncateTailBytes(result, maxBytes)
 	}
 
 	kept := len(lines)
@@ -68,8 +69,8 @@ func truncateHead(content string, maxLines, maxBytes int) TruncationResult {
 	total := len(lines)
 
 	for i, line := range lines {
-		if len(line) > defaultMaxLineLen {
-			lines[i] = line[:defaultMaxLineLen] + "..."
+		if utf8.RuneCountInString(line) > defaultMaxLineLen {
+			lines[i] = safeTruncateString(line, defaultMaxLineLen) + "..."
 		}
 	}
 
@@ -79,7 +80,7 @@ func truncateHead(content string, maxLines, maxBytes int) TruncationResult {
 
 	result := strings.Join(lines, "\n")
 	if len(result) > maxBytes {
-		result = result[:maxBytes]
+		result = safeTruncateHeadBytes(result, maxBytes)
 	}
 
 	kept := len(lines)
@@ -93,10 +94,10 @@ func truncateHead(content string, maxLines, maxBytes int) TruncationResult {
 }
 
 func truncateLine(line string, maxLen int) string {
-	if len(line) <= maxLen {
+	if utf8.RuneCountInString(line) <= maxLen {
 		return line
 	}
-	return line[:maxLen] + "..."
+	return safeTruncateString(line, maxLen) + "..."
 }
 
 func truncBy(totalLines, maxLines, totalBytes, maxBytes int) string {
@@ -117,4 +118,53 @@ func formatTruncationNotice(tr TruncationResult) string {
 		return ""
 	}
 	return fmt.Sprintf("\n[output truncated: showing %d of %d lines]", tr.Kept, tr.Total)
+}
+
+func safeTruncateString(s string, maxChars int) string {
+	if utf8.RuneCountInString(s) <= maxChars {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:maxChars])
+}
+
+func safeTruncateHeadBytes(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	if maxBytes <= 0 {
+		return ""
+	}
+	for maxBytes > 0 {
+		if utf8.RuneStart(s[maxBytes]) {
+			break
+		}
+		maxBytes--
+	}
+	return s[:maxBytes]
+}
+
+func safeTruncateTailBytes(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	if maxBytes <= 0 {
+		return ""
+	}
+	start := len(s) - maxBytes
+	for start < len(s) {
+		if utf8.RuneStart(s[start]) {
+			break
+		}
+		start++
+	}
+	if start >= len(s) {
+		// No rune start found in the window; backtrack to include
+		// the last complete rune before the window.
+		start = len(s) - maxBytes
+		for start > 0 && !utf8.RuneStart(s[start]) {
+			start--
+		}
+	}
+	return s[start:]
 }

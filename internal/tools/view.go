@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"charm.land/fantasy"
 )
@@ -148,8 +149,8 @@ func readTextFile(f *os.File, offset, limit int) (string, int, bool, error) {
 			return formatLines(lines, offset), totalLines, hasMore, nil
 		}
 		line := scanner.text()
-		if len(line) > maxLineLength {
-			line = line[:maxLineLength] + "..."
+		if utf8.RuneCountInString(line) > maxLineLength {
+			line = safeTruncateString(line, maxLineLength) + "..."
 		}
 		lines = append(lines, line)
 		lineNum++
