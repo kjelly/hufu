@@ -72,6 +72,8 @@ type Coordinator struct {
 	sidecarModel          string
 	sidecarInst           *sidecar.Sidecar
 	sidecarInitMu         sync.Mutex
+	cachedWorkerContext   string
+	workerCtxOnce         sync.Once
 	sidecarInit           bool
 }
 
@@ -604,6 +606,8 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		Generation:  c.session.Config.Generation,
 		ProviderURL: c.session.Config.ProviderURL,
 	}
+
+	def = c.injectWorkerContext(def, ctx)
 
 	agentTools := agent.SelectTools(c.coreTools, def.Tools)
 	if c.mcpManager != nil {
@@ -1206,7 +1210,9 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 		agentDef = &overriddenDef
 	}
 
-	agentTools := agent.SelectTools(c.coreTools, def.Tools)
+	agentDef = c.injectWorkerContext(agentDef, ctx)
+
+	agentTools := agent.SelectTools(c.coreTools, agentDef.Tools)
 	if c.mcpManager != nil {
 		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
 	}
@@ -1370,6 +1376,7 @@ func (c *Coordinator) workerNameList() []string {
 }
 
 const maxAgentsMDSize = 50000
+const maxWorkerContextSize = 4000
 
 func (c *Coordinator) loadProjectContext() string {
 	path := filepath.Join(c.projectDir, "AGENTS.md")
@@ -1381,6 +1388,43 @@ func (c *Coordinator) loadProjectContext() string {
 		data = append(data[:maxAgentsMDSize], []byte("\n\n... [AGENTS.md truncated]")...)
 	}
 	return string(data)
+}
+
+func (c *Coordinator) getWorkerContext(ctx context.Context) string {
+	c.workerCtxOnce.Do(func() {
+		raw := c.loadProjectContext()
+		if raw == "" {
+			return
+		}
+		if s := c.Sidecar(); s != nil && len(raw) > maxWorkerContextSize/2 {
+			compacted, err := s.Compact(ctx, raw, "Extract the essential project context: tech stack, language, framework, key conventions, and directory structure. Preserve all factual details but remove verbose descriptions.")
+			if err == nil && compacted != "" {
+				raw = compacted
+			}
+		}
+		if len(raw) > maxWorkerContextSize {
+			raw = raw[:maxWorkerContextSize] + "\n\n... [truncated]"
+		}
+		c.cachedWorkerContext = raw
+	})
+	return c.cachedWorkerContext
+}
+
+// injectWorkerContext prepends the project context to the agent's system prompt
+// if the agent is not an orchestrator/coordinator and a worker context is available.
+// It returns a new AgentDef pointer (either the original unchanged or a copy with
+// the modified System field) to avoid mutating shared state.
+func (c *Coordinator) injectWorkerContext(def *agent.AgentDef, ctx context.Context) *agent.AgentDef {
+	if def.Role == "orchestrator" || def.Role == "coordinator" {
+		return def
+	}
+	wc := c.getWorkerContext(ctx)
+	if wc == "" {
+		return def
+	}
+	injectedDef := *def
+	injectedDef.System = "## Project Context\n\n" + wc + "\n\n---\n\n" + injectedDef.System
+	return &injectedDef
 }
 
 func (c *Coordinator) BuildOrchestratorPrompt() string {
@@ -1399,6 +1443,7 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 	b.WriteString("5. **Delegate** tasks using agent — this is the ONLY way to get work done\n")
 	b.WriteString("6. Run independent tasks in parallel by passing multiple tasks in one agent call\n")
 	b.WriteString("7. When delegating to a worker that needs skill knowledge, include the skill summary in the task description and mention the skill file path so the worker can read it if needed\n")
+	b.WriteString("7.5. **Include relevant details** — Workers already know the project context (tech stack, conventions, directory structure), but you should still specify file paths, function names, and specific constraints in your task descriptions to minimize exploration steps\n")
 	b.WriteString("8. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
 	b.WriteString("9. **Synthesize** results into a coherent answer for the user\n")
 	b.WriteString("10. When satisfied, call the finish tool with your final response\n\n")
