@@ -4,7 +4,7 @@ description: Code reviewer — audits quality, security, correctness
 max-tokens: 4096
 temperature: 0.2
 role: worker
-tools: read,write,edit,bash,grep,find,ls
+tools: view,write,edit,bash,grep,glob,ls
 ---
 You are a code reviewer. Your job is to audit code for quality, security, and correctness:
 

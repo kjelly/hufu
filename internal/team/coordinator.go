@@ -337,6 +337,57 @@ func (c *Coordinator) extractSkillFromToolCall(toolName, input string) string {
 	return args.Name
 }
 
+func (c *Coordinator) matchSkillsForPrompt(prompt string) []*skill.SkillDef {
+	skills := c.getSkills()
+	if len(skills) == 0 {
+		return nil
+	}
+	promptLower := strings.ToLower(prompt)
+	var matched []*skill.SkillDef
+	for _, s := range skills {
+		for _, kw := range extractSkillKeywords(s) {
+			if strings.Contains(promptLower, kw) {
+				matched = append(matched, s)
+				break
+			}
+		}
+	}
+	return matched
+}
+
+func extractSkillKeywords(s *skill.SkillDef) []string {
+	stopWords := map[string]bool{
+		"this": true, "that": true, "with": true, "from": true,
+		"for": true, "the": true, "and": true, "its": true,
+		"use": true, "like": true, "into": true, "over": true,
+		"when": true, "also": true, "just": true, "than": true,
+		"then": true, "will": true, "your": true, "both": true,
+	}
+	seen := map[string]bool{}
+	var result []string
+	add := func(s string) {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s != "" && !seen[s] && !stopWords[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+	for _, part := range strings.Split(s.Name, "-") {
+		if len(part) >= 3 {
+			add(part)
+		}
+	}
+	add(s.Name)
+	add(strings.ReplaceAll(s.Name, "-", " "))
+	for _, word := range strings.Fields(s.Description) {
+		word = strings.Trim(word, ".,;:!?\"'()")
+		if len(word) >= 4 {
+			add(word)
+		}
+	}
+	return result
+}
+
 func (c *Coordinator) Sidecar() *sidecar.Sidecar {
 	if c.sidecarModel == "" {
 		return nil
@@ -646,7 +697,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		c.updateTodoTiming(todoID, modelTime, toolTime)
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		c.report(c.newEvent("error").withAgent(name).withMessage(err.Error()).withModel(subModel).withTiming(duration, modelTime, toolTime))
-		return "", fmt.Errorf("sub-agent failed: %w", err)
+		return "", fmt.Errorf("sub-agent failed (model: %s): %w", subModel, err)
 	}
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
@@ -1073,7 +1124,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	_, modelTime, toolTime := timing.snapshot()
 	c.updateTodoTiming(todoID, modelTime, toolTime)
 	_ = writeStatus(c.session.Workspace, agentName, "error", task.Task)
-	return "", fmt.Errorf("agent %q failed after %d attempts: %w", agentName, maxRetries, lastErr)
+	return "", fmt.Errorf("agent %q failed after %d attempts (model: %s): %w", agentName, maxRetries, resolvedModel, lastErr)
 }
 
 func (c *Coordinator) runAgentWithStatus(ctx context.Context, ag fantasy.Agent, agentName, prompt string, timing *taskTiming) (string, error) {
@@ -1105,7 +1156,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		fmt.Fprintf(os.Stderr, "warning: sidecar execute failed for agent %q: %v\n", task.Agent, err)
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		return "", fmt.Errorf("sidecar execution failed: %w", err)
+		return "", fmt.Errorf("sidecar execution failed (model: %s): %w", c.sidecarModel, err)
 	}
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
@@ -1429,7 +1480,7 @@ func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentD
 	return &injectedDef
 }
 
-func (c *Coordinator) BuildOrchestratorPrompt() string {
+func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) string {
 	workerNames, workerDescs := c.buildWorkerNamesAndDescs()
 
 	var b strings.Builder
@@ -1471,14 +1522,24 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 		b.WriteString("|-------|-------------|\n")
 		for _, s := range currentSkills {
 			desc := s.Description
-			if len(desc) > 80 {
-				desc = desc[:80] + "..."
+			if utf8.RuneCountInString(desc) > 80 {
+				runes := []rune(desc)
+				desc = string(runes[:80]) + "..."
 			}
 			fmt.Fprintf(&b, "| %s | %s |\n", s.Name, desc)
 		}
 		b.WriteString("\n")
 		b.WriteString("To get the full instructions for any skill, call the `load_skill` tool with the skill name.\n")
 		b.WriteString("Before delegating tasks, consider loading relevant skills so you can include their key instructions in the task description.\n\n")
+	}
+
+	if len(autoSkills) > 0 {
+		b.WriteString("## Auto-Loaded Skills\n\n")
+		b.WriteString("The following skills were automatically loaded because they match the user's task. You already have their full instructions — include the relevant parts in worker task descriptions.\n\n")
+		for _, s := range autoSkills {
+			fmt.Fprintf(&b, "### %s\n%s\n\n", s.Name, s.Content)
+		}
+		b.WriteString("---\n\n")
 	}
 
 	b.WriteString("## Available Models\n\n")
@@ -1837,7 +1898,8 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	if systemPrompt == "" {
 		systemPrompt = c.expandDefaultOrchestratorTemplate(defaultOrchestratorSystem)
 	}
-	systemPrompt += "\n\n" + c.BuildOrchestratorPrompt()
+	matchedSkills := c.matchSkillsForPrompt(userPrompt)
+	systemPrompt += "\n\n" + c.BuildOrchestratorPrompt(matchedSkills...)
 
 	if agentsMD := c.loadProjectContext(); agentsMD != "" {
 		if s := c.Sidecar(); s != nil && len(agentsMD) > 4000 {
@@ -1876,7 +1938,8 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	result, steps, err := c.runOrchestrator(ctx, &orchDefCopy, userPrompt)
 	if err != nil {
 		c.saveHistoryAndSession(ctx, steps)
-		return "", fmt.Errorf("coordinator failed: %w", err)
+		orchModel := c.resolveAgentModel(orchDef, "")
+		return "", fmt.Errorf("coordinator failed (model: %s): %w", orchModel, err)
 	}
 
 	c.saveHistoryAndSession(ctx, steps)
@@ -1916,7 +1979,8 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	result, steps, err := c.runOrchestrator(ctx, orchDef, continuationPrompt)
 	if err != nil {
 		c.saveHistoryAndSession(ctx, steps)
-		return "", fmt.Errorf("coordinator continuation failed: %w", err)
+		orchModel := c.resolveAgentModel(orchDef, "")
+		return "", fmt.Errorf("coordinator continuation failed (model: %s): %w", orchModel, err)
 	}
 
 	c.saveHistoryAndSession(ctx, steps)

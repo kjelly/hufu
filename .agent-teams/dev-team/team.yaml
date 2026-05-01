@@ -11,7 +11,7 @@ model-list:
     輕量化，首字節延遲極低
     結合 Talon Voice 語音轉文字，在終端機內極速產生並執行 Nushell 指令
     作為 MCP 伺服器的快速介接節點，實現毫秒級的基礎工具呼叫
-- id: ollama/deepseek-v4:pro
+- id: ollama/deepseek-v4-pro:cloud
   details: |-
     頂尖程式碼生成與深度系統架構推演
     核心開發工程師
@@ -26,7 +26,7 @@ model-list:
     極度適合在本地高階硬體或叢集上進行高精度量化部署
     在本地 40 節點超級電腦叢集中進行高隱私的底層網路 (如 100G Switch MTU) 問題推演
     針對編譯失敗或複雜的系統錯誤進行多步驟的自我反思與修復
-- id: ollama/kimi:k2.6
+- id: ollama/kimi-k2.6:cloud
   details: |-
     無損超長上下文推理與跨文件邏輯追蹤
     全域架構師 / 技術手冊稽核
