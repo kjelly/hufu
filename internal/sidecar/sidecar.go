@@ -168,7 +168,9 @@ func (s *Sidecar) MatchSkills(ctx context.Context, prompt string, skills []Skill
 		fmt.Fprintf(&skillList, "%d. %s: %s\n", i+1, sk.Name, desc)
 	}
 
-	matchPrompt := fmt.Sprintf(`Given the user's task below, select ALL skills from the list that are relevant to the task. Return ONLY a JSON array of skill names. If none are relevant, return [].
+	matchPrompt := fmt.Sprintf(`Given the user's task below, identify ALL skills from the list that are relevant or potentially helpful for completing the task. A task can require multiple skills — return every skill name that could assist with any part of the task.
+
+Return ONLY a JSON array of skill name strings (e.g., ["skill-a", "skill-b"]). Return multiple names when multiple skills are relevant. If none are relevant, return [].
 
 Available skills:
 %s

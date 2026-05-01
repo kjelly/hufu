@@ -107,7 +107,7 @@ Results joined and printed to stdout
 
 Default: `./.agent-teams/` and `~/.agent-teams/`
 
-Custom paths via `--agent-teams-search-path` (comma-separated). Paths starting with `~` are expanded to the user's home directory.
+Custom paths via `--agent-team-search-path` (comma-separated). Paths starting with `~` are expanded to the user's home directory.
 
 ### Team Directory Structure
 
