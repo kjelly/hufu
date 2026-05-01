@@ -1,8 +1,10 @@
 package team
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/skill"
 )
 
@@ -189,4 +191,160 @@ func skillNames(skills []*skill.SkillDef) []string {
 		names[i] = s.Name
 	}
 	return names
+}
+
+func TestBuildAutoSkillPrefixNoOverlap(t *testing.T) {
+	c := &Coordinator{
+		autoLoadedSkills: []*skill.SkillDef{
+			{
+				Name:        "code-reviewer",
+				Description: "Review code quality",
+				Content:     "Review code for bugs, security, and style.",
+			},
+			{
+				Name:        "git-commit",
+				Description: "Commit changes with git",
+				Content:     "Execute git commit with conventional messages.",
+			},
+		},
+	}
+
+	agentDef := &agent.AgentDef{
+		Name:   "reviewer",
+		Skills: "",
+	}
+
+	result := c.buildAutoSkillPrefix(agentDef, "review the code changes")
+	if result == "" {
+		t.Fatal("expected non-empty prefix, got empty")
+	}
+	if !strings.Contains(result, "code-reviewer") {
+		t.Error("expected code-reviewer in prefix — 'reviewer' matches 'reviewer' keyword and task mentions 'review'")
+	}
+	if !strings.Contains(result, "auto-loaded") {
+		t.Error("expected 'auto-loaded' header in prefix")
+	}
+}
+
+func TestBuildAutoSkillPrefixWithOverlap(t *testing.T) {
+	c := &Coordinator{
+		autoLoadedSkills: []*skill.SkillDef{
+			{
+				Name:    "code-reviewer",
+				Content: "Review code for bugs, security, and style.",
+			},
+			{
+				Name:    "git-commit",
+				Content: "Execute git commit with conventional messages.",
+			},
+		},
+	}
+
+	agentDef := &agent.AgentDef{
+		Name:   "reviewer",
+		Skills: "code-reviewer",
+	}
+
+	result := c.buildAutoSkillPrefix(agentDef, "review the code changes")
+	if strings.Contains(result, "### code-reviewer") {
+		t.Error("code-reviewer should be skipped since it's already in agentDef.Skills")
+	}
+	if strings.Contains(result, "### git-commit") {
+		t.Error("git-commit should NOT be included since 'reviewer' + 'review the code changes' doesn't match git-commit keywords (git, commit, etc.)")
+	}
+	if result != "" {
+		t.Errorf("expected empty prefix since all skills are either already included or not relevant, got: %s", result)
+	}
+}
+
+func TestBuildAutoSkillPrefixEmpty(t *testing.T) {
+	c := &Coordinator{
+		autoLoadedSkills: nil,
+	}
+
+	agentDef := &agent.AgentDef{
+		Name: "reviewer",
+	}
+
+	result := c.buildAutoSkillPrefix(agentDef, "review code")
+	if result != "" {
+		t.Errorf("expected empty prefix for no auto-loaded skills, got: %s", result)
+	}
+}
+
+func TestBuildAutoSkillPrefixRelevance(t *testing.T) {
+	codeReviewer := &skill.SkillDef{
+		Name:        "code-reviewer",
+		Description: "Review code quality",
+		Content:     "Review code for bugs, security, and style.",
+	}
+	gitCommit := &skill.SkillDef{
+		Name:        "git-commit",
+		Description: "Commit changes with git",
+		Content:     "Execute git commit with conventional messages.",
+	}
+
+	tests := []struct {
+		name       string
+		agentDef  *agent.AgentDef
+		taskDesc   string
+		wantSkill  string
+		skipSkill  string
+	}{
+		{
+			name: "reviewer agent with review task gets code-reviewer",
+			agentDef: &agent.AgentDef{
+				Name:        "reviewer",
+				Description: "Code reviewer — audits quality",
+			},
+			taskDesc:  "review the latest commits for quality",
+			wantSkill: "code-reviewer",
+			skipSkill: "",
+		},
+		{
+			name: "developer agent with commit task gets git-commit",
+			agentDef: &agent.AgentDef{
+				Name:        "developer",
+				Description: "Implementation specialist",
+			},
+			taskDesc:  "commit the changes",
+			wantSkill: "git-commit",
+			skipSkill: "code-reviewer",
+		},
+		{
+			name: "unrelated agent and task gets nothing",
+			agentDef: &agent.AgentDef{
+				Name:        "designer",
+				Description: "UI/UX designer",
+			},
+			taskDesc:  "create a new color palette",
+			wantSkill: "",
+			skipSkill: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Coordinator{
+				autoLoadedSkills: []*skill.SkillDef{codeReviewer, gitCommit},
+			}
+
+			result := c.buildAutoSkillPrefix(tt.agentDef, tt.taskDesc)
+
+			if tt.wantSkill == "" {
+				if result != "" {
+					t.Errorf("expected empty prefix for irrelevant agent+task, got: %s", result)
+				}
+				return
+			}
+
+			if !strings.Contains(result, tt.wantSkill) {
+				t.Errorf("expected %q in prefix, but it was not found", tt.wantSkill)
+			}
+
+			if tt.skipSkill != "" && strings.Contains(result, "### "+tt.skipSkill) {
+				t.Errorf("did not expect %q in prefix, but it was found", tt.skipSkill)
+			}
+		})
+	}
 }

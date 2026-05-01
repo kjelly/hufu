@@ -74,8 +74,9 @@ type Coordinator struct {
 	sidecarInst           *sidecar.Sidecar
 	sidecarInitMu         sync.Mutex
 	cachedWorkerContext   string
-	workerCtxOnce         sync.Once
-	sidecarInit           bool
+	workerCtxOnce        sync.Once
+	autoLoadedSkills     []*skill.SkillDef
+	sidecarInit          bool
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
@@ -318,6 +319,45 @@ func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
 	return b.String()
 }
 
+func (c *Coordinator) buildAutoSkillPrefix(agentDef *agent.AgentDef, taskDesc string) string {
+	if len(c.autoLoadedSkills) == 0 {
+		return ""
+	}
+
+	existingSkills := skill.ParseSkillList(agentDef.Skills)
+	existingSet := map[string]bool{}
+	for _, name := range existingSkills {
+		existingSet[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+
+	agentText := strings.ToLower(agentDef.Name + " " + agentDef.Description + " " + taskDesc)
+
+	var relevant []*skill.SkillDef
+	for _, s := range c.autoLoadedSkills {
+		if existingSet[strings.ToLower(s.Name)] {
+			continue
+		}
+		for _, kw := range extractSkillKeywords(s) {
+			if strings.Contains(agentText, kw) {
+				relevant = append(relevant, s)
+				break
+			}
+		}
+	}
+
+	if len(relevant) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("## Relevant Skills (auto-loaded)\n\n")
+	for _, s := range relevant {
+		fmt.Fprintf(&b, "### %s\n%s\n\n", s.Name, s.Content)
+	}
+	b.WriteString("---\n\n")
+	return b.String()
+}
+
 func (c *Coordinator) extractSkillFromToolCall(toolName, input string) string {
 	if toolName != "load_skill" {
 		return ""
@@ -406,6 +446,43 @@ func (c *Coordinator) Sidecar() *sidecar.Sidecar {
 	c.sidecarInst = s
 	c.sidecarInit = true
 	return c.sidecarInst
+}
+
+func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string) []*skill.SkillDef {
+	allSkills := c.getSkills()
+	if len(allSkills) == 0 {
+		return nil
+	}
+
+	s := c.Sidecar()
+	if s != nil {
+		summaries := make([]sidecar.SkillSummary, len(allSkills))
+		for i, sk := range allSkills {
+			summaries[i] = sidecar.SkillSummary{
+				Name:        sk.Name,
+				Description: sk.Description,
+			}
+		}
+		c.report(c.newEvent("sidecar_call").withMessage("match_skills"))
+		names, err := s.MatchSkills(ctx, prompt, summaries)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: sidecar skill matching failed, using keyword fallback: %v\n", err)
+		} else if len(names) > 0 {
+			nameSet := map[string]bool{}
+			for _, n := range names {
+				nameSet[strings.ToLower(strings.TrimSpace(n))] = true
+			}
+			var matched []*skill.SkillDef
+			for _, sk := range allSkills {
+				if nameSet[strings.ToLower(sk.Name)] {
+					matched = append(matched, sk)
+				}
+			}
+			return matched
+		}
+	}
+
+	return c.matchSkillsForPrompt(prompt)
 }
 
 func (c *Coordinator) newEvent(eventType string) StatusEvent {
@@ -683,12 +760,17 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	taskCtx, cancel := context.WithTimeout(ctx, agentTimeout)
 	defer cancel()
 
+	taskPrompt := task
+	if prefix := c.buildAutoSkillPrefix(def, task); prefix != "" {
+		taskPrompt = prefix + taskPrompt
+	}
+
 	timing := &taskTiming{}
 	timing.reset()
 
 	currentAgent := c.GetCurrentAgent()
 	c.SetCurrentAgent(name)
-	output, _, err := c.runAgentWithStatusAndHistory(taskCtx, ag, name, task, nil, timing)
+	output, _, err := c.runAgentWithStatusAndHistory(taskCtx, ag, name, taskPrompt, nil, timing)
 	c.SetCurrentAgent(currentAgent)
 
 	duration, modelTime, toolTime := timing.snapshot()
@@ -1060,6 +1142,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	prompt := task.Task
 
 	if prefix := c.buildSkillPromptPrefix(agentDef); prefix != "" {
+		prompt = prefix + prompt
+	}
+
+	if prefix := c.buildAutoSkillPrefix(agentDef, task.Task); prefix != "" {
 		prompt = prefix + prompt
 	}
 
@@ -1808,6 +1894,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		prompt = prefix + prompt
 	}
 
+	if prefix := c.buildAutoSkillPrefix(agentDef, task); prefix != "" {
+		prompt = prefix + prompt
+	}
+
 	output, err := c.runAgentWithStatus(taskCtx, ag, resolvedName, prompt, timing)
 	duration, modelTime, toolTime := timing.snapshot()
 	if err != nil {
@@ -1898,7 +1988,8 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	if systemPrompt == "" {
 		systemPrompt = c.expandDefaultOrchestratorTemplate(defaultOrchestratorSystem)
 	}
-	matchedSkills := c.matchSkillsForPrompt(userPrompt)
+	matchedSkills := c.matchSkillsWithSidecar(ctx, userPrompt)
+	c.autoLoadedSkills = matchedSkills
 	systemPrompt += "\n\n" + c.BuildOrchestratorPrompt(matchedSkills...)
 
 	if agentsMD := c.loadProjectContext(); agentsMD != "" {

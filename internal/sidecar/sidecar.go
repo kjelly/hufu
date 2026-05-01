@@ -2,8 +2,10 @@ package sidecar
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -139,4 +141,66 @@ func (s *Sidecar) Execute(ctx context.Context, task string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(result), nil
+}
+
+type SkillSummary struct {
+	Name        string
+	Description string
+}
+
+var jsonCodeBlockRe = regexp.MustCompile("(?s)```(?:json)?\\s*\\n?(.*?)\\n?```")
+
+func (s *Sidecar) MatchSkills(ctx context.Context, prompt string, skills []SkillSummary) ([]string, error) {
+	if s == nil || s.agent == nil {
+		return nil, fmt.Errorf("sidecar not initialized")
+	}
+	if len(skills) == 0 {
+		return nil, nil
+	}
+
+	var skillList strings.Builder
+	for i, sk := range skills {
+		desc := sk.Description
+		if utf8.RuneCountInString(desc) > 200 {
+			runes := []rune(desc)
+			desc = string(runes[:200]) + "..."
+		}
+		fmt.Fprintf(&skillList, "%d. %s: %s\n", i+1, sk.Name, desc)
+	}
+
+	matchPrompt := fmt.Sprintf(`Given the user's task below, select ALL skills from the list that are relevant to the task. Return ONLY a JSON array of skill names. If none are relevant, return [].
+
+Available skills:
+%s
+
+User task: %s`, skillList.String(), prompt)
+
+	result, err := s.generate(ctx, matchPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("sidecar match skills generate failed: %w", err)
+	}
+
+	result = strings.TrimSpace(result)
+
+	extracted := jsonCodeBlockRe.FindStringSubmatch(result)
+	if len(extracted) >= 2 {
+		result = strings.TrimSpace(extracted[1])
+	}
+
+	var names []string
+	if err := json.Unmarshal([]byte(result), &names); err != nil {
+		return nil, fmt.Errorf("sidecar match skills: failed to parse JSON response %q: %w", result, err)
+	}
+
+	validMap := map[string]bool{}
+	for _, sk := range skills {
+		validMap[strings.ToLower(sk.Name)] = true
+	}
+	var filtered []string
+	for _, name := range names {
+		if validMap[strings.ToLower(strings.TrimSpace(name))] {
+			filtered = append(filtered, strings.TrimSpace(name))
+		}
+	}
+	return filtered, nil
 }
