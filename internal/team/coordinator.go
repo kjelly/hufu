@@ -408,7 +408,7 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 					"properties": map[string]any{
 						"agent":         map[string]any{"type": "string", "enum": t.coordinator.workerNameList(), "description": "Agent name to delegate to"},
 						"task":          map[string]any{"type": "string", "description": "Task description for the agent"},
-						"model":         map[string]any{"type": "string", "description": "Optional model ID from Available Models to use for this task. Only specify if you want to override the agent's default model."},
+						"model":         map[string]any{"type": "string", "description": "Model ID from Available Models to use for this task. Select the model whose strengths best match this task. If empty, the default team model will be used."},
 						"summarize":     map[string]any{"type": "boolean", "description": "If true, summarize the agent's output before returning. Use for tasks that produce verbose output where only key points matter."},
 						"sidecar":       map[string]any{"type": "boolean", "description": "If true, execute this task directly via the sidecar model instead of an agent. Use for simple, tool-free tasks that need a quick response."},
 						"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional files from the workspace shared/ directory to provide as context"},
@@ -1290,12 +1290,13 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 	b.WriteString("1. **Analyze** the user's request to identify which team members are needed\n")
 	b.WriteString("2. **Check skills** — if any available skills are relevant to the user's task, call `load_skill` to get the full instructions\n")
 	b.WriteString("3. **Plan** your approach before delegating — think step by step\n")
-	b.WriteString("4. **Delegate** tasks using agent — this is the ONLY way to get work done\n")
-	b.WriteString("5. Run independent tasks in parallel by passing multiple tasks in one agent call\n")
-	b.WriteString("6. When delegating to a worker that needs skill knowledge, include the skill summary in the task description and mention the skill file path so the worker can read it if needed\n")
-	b.WriteString("7. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
-	b.WriteString("8. **Synthesize** results into a coherent answer for the user\n")
-	b.WriteString("9. When satisfied, call the finish tool with your final response\n\n")
+	b.WriteString("4. **Select model** — for each task, pick the model from Available Models whose strengths best match the task requirements. Using the right model improves quality and speed.\n")
+	b.WriteString("5. **Delegate** tasks using agent — this is the ONLY way to get work done\n")
+	b.WriteString("6. Run independent tasks in parallel by passing multiple tasks in one agent call\n")
+	b.WriteString("7. When delegating to a worker that needs skill knowledge, include the skill summary in the task description and mention the skill file path so the worker can read it if needed\n")
+	b.WriteString("8. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
+	b.WriteString("9. **Synthesize** results into a coherent answer for the user\n")
+	b.WriteString("10. When satisfied, call the finish tool with your final response\n\n")
 
 	b.WriteString("## Available Agents\n\n")
 	fmt.Fprintf(&b, "IMPORTANT: You MUST use these exact agent names in agent: %s. Do NOT invent or modify agent names.\n\n", strings.Join(workerNames, ", "))
@@ -1332,25 +1333,42 @@ func (c *Coordinator) BuildOrchestratorPrompt() string {
 	if len(c.modelList) == 0 {
 		b.WriteString("No model list configured. The default team model will be used for all tasks.\n\n")
 	} else {
-		b.WriteString("When delegating tasks via the `agent` tool, you can optionally specify a `model` field to select the most suitable model for each task based on its requirements:\n\n")
+		b.WriteString("IMPORTANT: Select the most appropriate model for each task based on its requirements. Each model has different strengths — match the task to the model best suited for it.\n\n")
 		for _, m := range c.modelList {
 			detail := strings.TrimSpace(m.Details)
 			detail = strings.Join(strings.Split(detail, "\n"), " ")
 			fmt.Fprintf(&b, "- **%s** — %s\n", m.ID, detail)
 		}
-		b.WriteString("\nIf no model is specified, the default team model will be used.\n\n")
+		b.WriteString("\nIf no model is specified, the default team model will be used — but this is often suboptimal.\n\n")
 	}
 
 	b.WriteString("## Tools\n\n")
 	b.WriteString("### agent\n")
 	b.WriteString("Delegate tasks to team workers. All tasks in one call run in parallel.\n\n")
+	b.WriteString("- **model**: Choose the model whose strengths best match each task — see Available Models above.\n")
 	b.WriteString("- **summarize**: Set to `true` to condense the agent's output before returning. Use for tasks that may produce verbose output where only key points matter.\n")
 	b.WriteString("```json\n")
 	b.WriteString("{\n")
 	b.WriteString("  \"tasks\": [\n")
-	b.WriteString("    {\"agent\": \"agent-name\", \"task\": \"task description\", \"model\": \"optional-model-id\", \"summarize\": false, \"context_files\": [\"optional_file.txt\"]}\n")
+	b.WriteString("    {\"agent\": \"agent-name\", \"task\": \"task description\", \"model\": \"model-id-from-available-models\", \"summarize\": false, \"context_files\": [\"optional_file.txt\"]}\n")
 	b.WriteString("  ]\n")
 	b.WriteString("}\n```\n\n")
+	if len(c.modelList) >= 2 {
+		b.WriteString("Example — if Available Models includes a fast model for simple tasks and a powerful model for complex reasoning, assign accordingly:\n```json\n")
+		b.WriteString("{\n")
+		b.WriteString("  \"tasks\": [\n")
+		var fastModel, complexModel string
+		for _, m := range c.modelList {
+			if fastModel == "" {
+				fastModel = m.ID
+			}
+			complexModel = m.ID
+		}
+		fmt.Fprintf(&b, "    {\"agent\": \"worker-name\", \"task\": \"fix a typo in README\", \"model\": \"%s\"},\n", fastModel)
+		fmt.Fprintf(&b, "    {\"agent\": \"worker-name\", \"task\": \"design distributed consensus algorithm\", \"model\": \"%s\"}\n", complexModel)
+		b.WriteString("  ]\n")
+		b.WriteString("}\n```\n\n")
+	}
 	b.WriteString("### load_skill\n")
 	b.WriteString("Load the full content of a skill by name. Returns detailed instructions you can include in worker task descriptions.\n")
 	b.WriteString("```json\n{\"name\": \"skill-name\"}\n```\n\n")
