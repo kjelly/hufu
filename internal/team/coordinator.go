@@ -76,6 +76,7 @@ type Coordinator struct {
 	cachedWorkerContext   string
 	workerCtxOnce         sync.Once
 	autoLoadedSkills      []*skill.SkillDef
+	autoLoadedSkillsMu    sync.RWMutex
 	sidecarInit           bool
 }
 
@@ -255,6 +256,18 @@ func (c *Coordinator) skillDirs() []string {
 	}
 }
 
+func (c *Coordinator) setAutoLoadedSkills(skills []*skill.SkillDef) {
+	c.autoLoadedSkillsMu.Lock()
+	defer c.autoLoadedSkillsMu.Unlock()
+	c.autoLoadedSkills = skills
+}
+
+func (c *Coordinator) getAutoLoadedSkills() []*skill.SkillDef {
+	c.autoLoadedSkillsMu.RLock()
+	defer c.autoLoadedSkillsMu.RUnlock()
+	return c.autoLoadedSkills
+}
+
 // saveAndReloadSkill writes a SKILL.md to the team's local skill directory and
 // immediately hot-reloads c.skills so the new skill is available in the same session.
 func (c *Coordinator) saveAndReloadSkill(name, description, content string) (string, error) {
@@ -319,9 +332,10 @@ func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
 	return b.String()
 }
 
-func (c *Coordinator) buildAutoSkillPrefix(agentDef *agent.AgentDef, agentName string, taskDesc string) string {
-	if len(c.autoLoadedSkills) == 0 {
-		return ""
+func (c *Coordinator) computeRelevantSkills(agentDef *agent.AgentDef, taskDesc string) []*skill.SkillDef {
+	autoSkills := c.getAutoLoadedSkills()
+	if len(autoSkills) == 0 {
+		return nil
 	}
 
 	existingSkills := skill.ParseSkillList(agentDef.Skills)
@@ -333,7 +347,7 @@ func (c *Coordinator) buildAutoSkillPrefix(agentDef *agent.AgentDef, agentName s
 	agentText := strings.ToLower(agentDef.Name + " " + agentDef.Description + " " + taskDesc)
 
 	var relevant []*skill.SkillDef
-	for _, s := range c.autoLoadedSkills {
+	for _, s := range autoSkills {
 		if existingSet[strings.ToLower(s.Name)] {
 			continue
 		}
@@ -345,6 +359,25 @@ func (c *Coordinator) buildAutoSkillPrefix(agentDef *agent.AgentDef, agentName s
 		}
 	}
 
+	return relevant
+}
+
+func formatSkillPrefix(skills []*skill.SkillDef) string {
+	if len(skills) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("## Relevant Skills (auto-loaded)\n\n")
+	for _, s := range skills {
+		fmt.Fprintf(&b, "### %s\n%s\n\n", s.Name, s.Content)
+	}
+	b.WriteString("---\n\n")
+	return b.String()
+}
+
+func (c *Coordinator) injectAutoSkills(agentDef *agent.AgentDef, agentName string, taskDesc string) string {
+	relevant := c.computeRelevantSkills(agentDef, taskDesc)
 	if len(relevant) == 0 {
 		return ""
 	}
@@ -354,13 +387,7 @@ func (c *Coordinator) buildAutoSkillPrefix(agentDef *agent.AgentDef, agentName s
 		c.recordSkillUsage(s.Name, agentName)
 	}
 
-	var b strings.Builder
-	b.WriteString("## Relevant Skills (auto-loaded)\n\n")
-	for _, s := range relevant {
-		fmt.Fprintf(&b, "### %s\n%s\n\n", s.Name, s.Content)
-	}
-	b.WriteString("---\n\n")
-	return b.String()
+	return formatSkillPrefix(relevant)
 }
 
 func (c *Coordinator) extractSkillFromToolCall(toolName, input string) string {
@@ -779,7 +806,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	defer cancel()
 
 	taskPrompt := task
-	if prefix := c.buildAutoSkillPrefix(def, name, task); prefix != "" {
+	if prefix := c.injectAutoSkills(def, name, task); prefix != "" {
 		taskPrompt = prefix + taskPrompt
 	}
 
@@ -1163,7 +1190,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		prompt = prefix + prompt
 	}
 
-	if prefix := c.buildAutoSkillPrefix(agentDef, agentName, task.Task); prefix != "" {
+	if prefix := c.injectAutoSkills(agentDef, agentName, task.Task); prefix != "" {
 		prompt = prefix + prompt
 	}
 
@@ -1873,7 +1900,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return nil, err
 	}
 
-	c.autoLoadedSkills = c.matchSkillsWithSidecar(ctx, task)
+	c.setAutoLoadedSkills(c.matchSkillsWithSidecar(ctx, task))
 
 	resolvedName := strings.ToLower(agentDef.Name)
 	directModel := c.resolveAgentModel(agentDef, "")
@@ -1914,7 +1941,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		prompt = prefix + prompt
 	}
 
-	if prefix := c.buildAutoSkillPrefix(agentDef, resolvedName, task); prefix != "" {
+	if prefix := c.injectAutoSkills(agentDef, resolvedName, task); prefix != "" {
 		prompt = prefix + prompt
 	}
 
@@ -2009,7 +2036,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		systemPrompt = c.expandDefaultOrchestratorTemplate(defaultOrchestratorSystem)
 	}
 	matchedSkills := c.matchSkillsWithSidecar(ctx, userPrompt)
-	c.autoLoadedSkills = matchedSkills
+	c.setAutoLoadedSkills(matchedSkills)
 	systemPrompt += "\n\n" + c.BuildOrchestratorPrompt(matchedSkills...)
 
 	if agentsMD := c.loadProjectContext(); agentsMD != "" {

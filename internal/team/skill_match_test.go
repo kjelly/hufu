@@ -217,7 +217,7 @@ func TestBuildAutoSkillPrefixNoOverlap(t *testing.T) {
 		Skills: "",
 	}
 
-	result := c.buildAutoSkillPrefix(agentDef, "reviewer", "review the code changes")
+	result := c.injectAutoSkills(agentDef, "reviewer", "review the code changes")
 	if result == "" {
 		t.Fatal("expected non-empty prefix, got empty")
 	}
@@ -251,7 +251,7 @@ func TestBuildAutoSkillPrefixWithOverlap(t *testing.T) {
 		Skills: "code-reviewer",
 	}
 
-	result := c.buildAutoSkillPrefix(agentDef, "reviewer", "review the code changes")
+	result := c.injectAutoSkills(agentDef, "reviewer", "review the code changes")
 	if strings.Contains(result, "### code-reviewer") {
 		t.Error("code-reviewer should be skipped since it's already in agentDef.Skills")
 	}
@@ -275,7 +275,7 @@ func TestBuildAutoSkillPrefixEmpty(t *testing.T) {
 		Name: "reviewer",
 	}
 
-	result := c.buildAutoSkillPrefix(agentDef, "reviewer", "review code")
+	result := c.injectAutoSkills(agentDef, "reviewer", "review code")
 	if result != "" {
 		t.Errorf("expected empty prefix for no auto-loaded skills, got: %s", result)
 	}
@@ -341,7 +341,7 @@ func TestBuildAutoSkillPrefixRelevance(t *testing.T) {
 				autoLoadedSkills: []*skill.SkillDef{codeReviewer, gitCommit},
 			}
 
-			result := c.buildAutoSkillPrefix(tt.agentDef, tt.agentDef.Name, tt.taskDesc)
+			result := c.injectAutoSkills(tt.agentDef, tt.agentDef.Name, tt.taskDesc)
 
 			if tt.wantSkill == "" {
 				if result != "" {
