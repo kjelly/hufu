@@ -1234,7 +1234,6 @@ func (c *Coordinator) resolveAgentName(input string) (*agent.AgentDef, string, e
 		return def, key, nil
 	}
 
-	inputLower := strings.ToLower(input)
 	var matches []*agent.AgentDef
 	seenNames := make(map[string]bool)
 	for _, def := range c.session.Agents {
@@ -1245,7 +1244,7 @@ func (c *Coordinator) resolveAgentName(input string) (*agent.AgentDef, string, e
 			continue
 		}
 		for _, word := range strings.Fields(def.Name) {
-			if strings.ToLower(word) == inputLower {
+			if strings.ToLower(word) == key {
 				matches = append(matches, def)
 				seenNames[def.Name] = true
 				break
@@ -1256,7 +1255,7 @@ func (c *Coordinator) resolveAgentName(input string) (*agent.AgentDef, string, e
 		}
 		if def.FileAlias != "" {
 			for _, seg := range strings.Split(strings.ToLower(def.FileAlias), "-") {
-				if seg != "" && seg == inputLower {
+				if seg != "" && seg == key {
 					matches = append(matches, def)
 					seenNames[def.Name] = true
 					break
@@ -1286,6 +1285,7 @@ func (c *Coordinator) resolveAgentName(input string) (*agent.AgentDef, string, e
 			available = append(available, def.Name)
 		}
 	}
+	sort.Strings(available)
 	return nil, "", fmt.Errorf("unknown agent %q (available: %v)", input, available)
 }
 
@@ -1659,9 +1659,6 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	agentDef, _, err := c.resolveAgentName(agentName)
 	if err != nil {
 		return nil, err
-	}
-	if agentDef.Role == "orchestrator" || agentDef.Role == "coordinator" {
-		return nil, fmt.Errorf("cannot directly invoke coordinator agent %q", agentDef.Name)
 	}
 
 	resolvedName := strings.ToLower(agentDef.Name)
