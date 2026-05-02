@@ -13,8 +13,6 @@ import (
 	"github.com/anomalyco/hufu/internal/tools"
 )
 
-const DefaultProviderURL = "http://localhost:11434/v1"
-
 const DefaultMaxSteps = 30
 const DefaultCoordinatorMaxSteps = 20
 
@@ -64,7 +62,7 @@ type OllamaProvider struct {
 
 func NewOllamaProvider(baseURL string) (*OllamaProvider, error) {
 	if baseURL == "" {
-		baseURL = DefaultProviderURL
+		baseURL = config.DefaultProviderURL
 	}
 	provider, err := openaicompat.New(
 		openaicompat.WithBaseURL(baseURL),

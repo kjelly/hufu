@@ -66,7 +66,7 @@ func main() {
 	rootCmd.Flags().StringVar(&agentTeamName, "agent-team", "", "Agent team name to load")
 	rootCmd.Flags().StringVar(&agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams (default: .agent-teams/,~/.agent-teams/)")
 	rootCmd.Flags().BoolVar(&memoryEnabled, "memory", true, "Enable long-term memory (RAG with vector search)")
-	rootCmd.Flags().StringVar(&memoryModel, "memory-model", "", "Embedding model for memory (default: nomic-embed-text, overrides hufu.yaml)")
+	rootCmd.Flags().StringVar(&memoryModel, "memory-model", "", "Embedding model for memory (default: qwen3-embedding:4b, overrides hufu.yaml)")
 	rootCmd.Flags().BoolVar(&archiveMemory, "archive-memory", false, "Archive session summary to memory and exit")
 	rootCmd.Flags().BoolVar(&showHistory, "show-history", false, "Show previous session history on resume")
 
@@ -455,7 +455,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 
 	var memStore *memory.MemoryStore
 	if memoryEnabled && !tempWorkspace {
-		ollamaAPIURL := providerURLToOllamaAPI(defaultProviderURL)
+		ollamaAPIURL := config.ProviderURLToOllamaAPI(defaultProviderURL)
 		embedModel := config.ResolveEmbeddingModel(memoryModel)
 		projectDir, _ := os.Getwd()
 		ms, err := memory.NewMemoryStore(projectDir, ollamaAPIURL, embedModel)
@@ -819,19 +819,13 @@ func defaultHistoryPath() string {
 	return filepath.Join(dir, "prompt_history")
 }
 
-func providerURLToOllamaAPI(providerURL string) string {
-	u := strings.TrimRight(providerURL, "/")
-	u = strings.TrimSuffix(u, "/v1")
-	return u + "/api"
-}
-
 func archiveCurrentSessionToMemory(ctx context.Context, tc *teamContext) {
 	if tc == nil || tc.sessionData == nil || len(tc.sessionData.Entries) == 0 {
 		fmt.Fprintf(os.Stderr, "%s No session data to archive.\n", dimStyle.Render("○"))
 		return
 	}
 
-	ollamaAPIURL := providerURLToOllamaAPI(providerURL)
+	ollamaAPIURL := config.ProviderURLToOllamaAPI(providerURL)
 	embedModel := config.ResolveEmbeddingModel(memoryModel)
 	projectDir, _ := os.Getwd()
 

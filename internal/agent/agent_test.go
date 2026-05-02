@@ -2,6 +2,8 @@ package agent
 
 import (
 	"testing"
+
+	"github.com/anomalyco/hufu/internal/config"
 )
 
 // TestParseModelInt tests the parseModelInt function
@@ -444,11 +446,11 @@ func TestAgentConfigFields(t *testing.T) {
 	}
 }
 
-// TestDefaultProviderURL tests that DefaultProviderURL is correctly defined
+// TestDefaultProviderURL tests that config.DefaultProviderURL is correctly defined
 func TestDefaultProviderURL(t *testing.T) {
 	expected := "http://localhost:11434/v1"
-	if DefaultProviderURL != expected {
-		t.Errorf("DefaultProviderURL = %q, want %q", DefaultProviderURL, expected)
+	if config.DefaultProviderURL != expected {
+		t.Errorf("config.DefaultProviderURL = %q, want %q", config.DefaultProviderURL, expected)
 	}
 }
 

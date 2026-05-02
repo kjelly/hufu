@@ -145,7 +145,7 @@ go run ./cmd/hufu
 | `--agent-team` | — | `string` | `""` | 要載入的 Agent 團隊名稱 |
 | `--agent-team-search-path` | — | `string` | `""` | 團隊搜尋路徑（逗號分隔），預設為 `.agent-teams/,~/.agent-teams/` |
 | `--memory` | — | `bool` | `true` | 啟用長期記憶（RAG 向量搜尋） |
-| `--memory-model` | — | `string` | `""` | Memory 使用的 embedding model（預設：`nomic-embed-text`，覆蓋 hufu.yaml） |
+| `--memory-model` | — | `string` | `""` | Memory 使用的 embedding model（預設：`qwen3-embedding:4b`，覆蓋 hufu.yaml） |
 | `--archive-memory` | — | `bool` | `false` | 將 session 摘要封存至 memory 後退出 |
 
 ### 使用範例
@@ -460,7 +460,7 @@ workspace/
 | **Vector Store** | ChromaDB（持久化、檔案型） |
 | **Embedding** | Ollama embeddings |
 | **儲存位置** | `~/.local/share/hufu/memory/<projectHash>/` |
-| **預設 Embedding Model** | `nomic-embed-text` |
+| **預設 Embedding Model** | `qwen3-embedding:4b` |
 
 ### 運作機制
 
@@ -731,7 +731,7 @@ kill -USR1 <hufu-pid>
 
 ```yaml
 provider-url: http://localhost:11434/v1
-embedding-model: nomic-embed-text
+embedding-model: qwen3-embedding:4b
 ```
 
 ### 配置優先順序
@@ -753,7 +753,7 @@ CLI flag > hufu.yaml > 預設值
 | 設定 | 預設值 | 來源 |
 |------|--------|------|
 | Provider URL | `http://localhost:11434/v1` | `agent.go` |
-| Embedding Model | `nomic-embed-text` | `config.go` |
+| Embedding Model | `qwen3-embedding:4b` | `config.go` |
 
 ### Agent 設定
 

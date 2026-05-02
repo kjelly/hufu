@@ -3,17 +3,21 @@ package memory
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
 
+	"github.com/anomalyco/hufu/internal/config"
 	"github.com/philippgille/chromem-go"
 )
 
 const collectionName = "memory"
+const metaFileName = "embedding_meta.json"
 
 type Result struct {
 	ID         string
@@ -30,6 +34,11 @@ type MemoryStore struct {
 	basePath   string
 }
 
+type embeddingMeta struct {
+	EmbeddingModel string `json:"embedding_model"`
+	CreatedAt      string `json:"created_at"`
+}
+
 func projectDirHash(projectDir string) string {
 	h := sha256.Sum256([]byte(projectDir))
 	return fmt.Sprintf("%x", h)[:16]
@@ -44,11 +53,19 @@ func dataDir() (string, error) {
 }
 
 func NewMemoryStore(projectDir, ollamaURL, embedModel string) (*MemoryStore, error) {
+	return newMemoryStore(projectDir, ollamaURL, embedModel, false)
+}
+
+func NewGlobalMemoryStore(ollamaURL, embedModel string) (*MemoryStore, error) {
+	return newMemoryStore("", ollamaURL, embedModel, true)
+}
+
+func newMemoryStore(projectDir, ollamaURL, embedModel string, isGlobal bool) (*MemoryStore, error) {
 	if ollamaURL == "" {
-		ollamaURL = "http://localhost:11434/api"
+		ollamaURL = config.DefaultOllamaAPIURL
 	}
 	if embedModel == "" {
-		embedModel = "nomic-embed-text"
+		embedModel = config.DefaultEmbeddingModel
 	}
 
 	embedFunc := chromem.NewEmbeddingFuncOllama(embedModel, ollamaURL)
@@ -58,11 +75,23 @@ func NewMemoryStore(projectDir, ollamaURL, embedModel string) (*MemoryStore, err
 		return nil, fmt.Errorf("failed to determine memory data directory: %w", err)
 	}
 
-	hash := projectDirHash(projectDir)
-	storePath := filepath.Join(basePath, hash)
+	var storePath string
+	if isGlobal {
+		storePath = filepath.Join(basePath, "_global")
+	} else {
+		hash := projectDirHash(projectDir)
+		storePath = filepath.Join(basePath, hash)
+	}
 
 	if err := os.MkdirAll(storePath, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create memory store directory %s: %w", storePath, err)
+	}
+
+	// Probe the embedding model to verify it is available.
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer probeCancel()
+	if err := probeEmbeddingModel(probeCtx, embedFunc); err != nil {
+		return nil, fmt.Errorf("embedding model %q is not available: %w", embedModel, err)
 	}
 
 	db, err := chromem.NewPersistentDB(storePath, true)
@@ -70,48 +99,18 @@ func NewMemoryStore(projectDir, ollamaURL, embedModel string) (*MemoryStore, err
 		return nil, fmt.Errorf("failed to create persistent memory database: %w", err)
 	}
 
-	collection, err := db.GetOrCreateCollection(collectionName, nil, embedFunc)
+	// Check for embedding model mismatch and clean up if needed.
+	mismatch, err := checkEmbeddingModelMismatch(db, storePath, embedModel)
+	if err != nil {
+		log.Printf("warning: failed to check embedding model mismatch: %v", err)
+	}
+	if mismatch {
+		log.Printf("embedding model changed; previous collection was deleted and will be recreated")
+	}
+
+	collection, err := db.GetOrCreateCollection(collectionName, map[string]string{"embedding_model": embedModel}, embedFunc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create memory collection: %w", err)
-	}
-
-	return &MemoryStore{
-		db:         db,
-		collection: collection,
-		embedFunc:  embedFunc,
-		basePath:   basePath,
-	}, nil
-}
-
-func NewGlobalMemoryStore(ollamaURL, embedModel string) (*MemoryStore, error) {
-	if ollamaURL == "" {
-		ollamaURL = "http://localhost:11434/api"
-	}
-	if embedModel == "" {
-		embedModel = "nomic-embed-text"
-	}
-
-	embedFunc := chromem.NewEmbeddingFuncOllama(embedModel, ollamaURL)
-
-	basePath, err := dataDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to determine memory data directory: %w", err)
-	}
-
-	storePath := filepath.Join(basePath, "_global")
-
-	if err := os.MkdirAll(storePath, 0o755); err != nil {
-		return nil, fmt.Errorf("failed to create global memory store directory %s: %w", storePath, err)
-	}
-
-	db, err := chromem.NewPersistentDB(storePath, true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create persistent global memory database: %w", err)
-	}
-
-	collection, err := db.GetOrCreateCollection(collectionName, nil, embedFunc)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create global memory collection: %w", err)
 	}
 
 	return &MemoryStore{
@@ -170,4 +169,92 @@ func (s *MemoryStore) Delete(ctx context.Context, id string) error {
 
 func (s *MemoryStore) Close() error {
 	return nil
+}
+
+// readEmbeddingMeta reads the embedding metadata sidecar file.
+// Returns nil, nil if the file does not exist.
+func readEmbeddingMeta(storePath string) (*embeddingMeta, error) {
+	metaPath := filepath.Join(storePath, metaFileName)
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read embedding meta: %w", err)
+	}
+	var meta embeddingMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("failed to parse embedding meta: %w", err)
+	}
+	return &meta, nil
+}
+
+// writeEmbeddingMeta writes the embedding metadata sidecar file.
+func writeEmbeddingMeta(storePath string, meta *embeddingMeta) error {
+	if err := os.MkdirAll(storePath, 0o755); err != nil {
+		return fmt.Errorf("failed to create metadata directory: %w", err)
+	}
+	metaPath := filepath.Join(storePath, metaFileName)
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal embedding meta: %w", err)
+	}
+	if err := os.WriteFile(metaPath, data, 0o644); err != nil {
+		return fmt.Errorf("failed to write embedding meta: %w", err)
+	}
+	return nil
+}
+
+// probeEmbeddingModel verifies the embedding model is available by embedding a probe string.
+func probeEmbeddingModel(ctx context.Context, embedFunc chromem.EmbeddingFunc) error {
+	_, err := embedFunc(ctx, "probe")
+	if err != nil {
+		return fmt.Errorf("embedding probe failed: %w", err)
+	}
+	return nil
+}
+
+// checkEmbeddingModelMismatch checks if the stored embedding model differs from the
+// current one. If so, it deletes the collection and writes new metadata.
+// Returns true if a mismatch was detected and the collection was deleted.
+func checkEmbeddingModelMismatch(db *chromem.DB, storePath, embedModel string) (bool, error) {
+	meta, err := readEmbeddingMeta(storePath)
+	if err != nil {
+		return false, err
+	}
+
+	// If no metadata exists, write it and return.
+	if meta == nil {
+		log.Printf("Warning: existing memory store has no embedding model metadata; assuming %q matches. If results seem wrong, re-index with: rm -rf %s", embedModel, storePath)
+		newMeta := &embeddingMeta{
+			EmbeddingModel: embedModel,
+			CreatedAt:      time.Now().Format(time.RFC3339),
+		}
+		if err := writeEmbeddingMeta(storePath, newMeta); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	// Models match — nothing to do.
+	if meta.EmbeddingModel == embedModel {
+		return false, nil
+	}
+
+	// Models differ — delete the old collection.
+	log.Printf("embedding model mismatch: stored=%q, current=%q; deleting old collection", meta.EmbeddingModel, embedModel)
+	if err := db.DeleteCollection(collectionName); err != nil {
+		return false, fmt.Errorf("failed to delete collection during model mismatch cleanup: %w", err)
+	}
+
+	// Write new metadata.
+	newMeta := &embeddingMeta{
+		EmbeddingModel: embedModel,
+		CreatedAt:      time.Now().Format(time.RFC3339),
+	}
+	if err := writeEmbeddingMeta(storePath, newMeta); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }

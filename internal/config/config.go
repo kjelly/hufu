@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 const DefaultProviderURL = "http://localhost:11434/v1"
-const DefaultEmbeddingModel = "nomic-embed-text"
+const DefaultEmbeddingModel = "qwen3-embedding:4b"
+const DefaultOllamaAPIURL = "http://localhost:11434/api"
 
 type ModelEntry struct {
 	ID      string `yaml:"id"`
@@ -105,4 +107,12 @@ func (c *Config) ResolveSidecarModel(teamSidecar string) string {
 		return teamSidecar
 	}
 	return c.SidecarModel
+}
+
+// ProviderURLToOllamaAPI converts a provider URL (e.g. http://localhost:11434/v1)
+// to the Ollama API URL (e.g. http://localhost:11434/api).
+func ProviderURLToOllamaAPI(providerURL string) string {
+	u := strings.TrimRight(providerURL, "/")
+	u = strings.TrimSuffix(u, "/v1")
+	return u + "/api"
 }

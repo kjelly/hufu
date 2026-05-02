@@ -2,6 +2,8 @@ package main
 
 import (
 	"testing"
+
+	"github.com/anomalyco/hufu/internal/config"
 )
 
 func TestProviderURLToOllamaAPI(t *testing.T) {
@@ -16,9 +18,9 @@ func TestProviderURLToOllamaAPI(t *testing.T) {
 		{"http://192.168.1.100:11434/v1", "http://192.168.1.100:11434/api"},
 	}
 	for _, tt := range tests {
-		result := providerURLToOllamaAPI(tt.input)
+		result := config.ProviderURLToOllamaAPI(tt.input)
 		if result != tt.expected {
-			t.Errorf("providerURLToOllamaAPI(%q) = %q, want %q", tt.input, result, tt.expected)
+			t.Errorf("config.ProviderURLToOllamaAPI(%q) = %q, want %q", tt.input, result, tt.expected)
 		}
 	}
 }
