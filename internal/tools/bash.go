@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -26,6 +27,12 @@ var bannedCmdRe = regexp.MustCompile(`^(alias|bg|bind|builtin|caller|command|com
 // Recognised command-start positions: beginning of string, pipe (|), logical ops (&, ;),
 // subshell open (, backtick (`), $( substitution, and newline.
 var bashPrivEscRe = regexp.MustCompile("(?:^|[|;&(\n\x60]|\\$\\()\\s*(?:sudo|ssh)(?:\\s|$)")
+
+var absPathInCmdRe = regexp.MustCompile(`(?:^|\s|=|>|<|")(/(?:[a-zA-Z0-9_.-]+/)+[a-zA-Z0-9_.-]*)(?:\s|"|$|;|&|\|)`)
+
+var cdPathRe = regexp.MustCompile(`(?:^|\s|;|&|\||\n)cd\s+(?:'([^']+)'|"([^"]+)"|([^ \t\n;&|'"` + "`" + `]+))`)
+
+var systemPathPrefixes = []string{"/usr/", "/bin/", "/sbin/", "/lib/", "/lib32/", "/lib64/", "/proc/", "/sys/", "/dev/", "/etc/alternatives/"}
 
 type bashArgs struct {
 	Command string  `json:"command"`
@@ -100,12 +107,12 @@ func NewBashTool(opts ...ToolOption) fantasy.AgentTool {
 			Required: []string{"command"},
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return executeBash(ctx, call, cfg.WorkDir)
+			return executeBash(ctx, call, cfg)
 		},
 	}
 }
 
-func executeBash(ctx context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
+func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fantasy.ToolResponse, error) {
 	var args bashArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("command parameter is required"), nil
@@ -120,6 +127,10 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, workDir string) (fa
 		return fantasy.NewTextErrorResponse("sudo and ssh are not available in the bash tool — use the sudo or ssh tool instead"), nil
 	}
 
+	if err := checkBashPathConsent(args.Command, cfg); err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+
 	timeout := defaultBashTimeout
 	if args.Timeout > 0 {
 		timeout = time.Duration(args.Timeout) * time.Second
@@ -128,7 +139,76 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, workDir string) (fa
 		}
 	}
 
-	return runShellCommand(ctx, timeout, workDir, "bash", "-c", args.Command)
+	return runShellCommand(ctx, timeout, cfg.WorkDir, "bash", "-c", args.Command)
+}
+
+func checkBashPathConsent(command string, cfg ToolConfig) error {
+	pathsToCheck := extractPathsFromCommand(command, cfg.WorkDir)
+	seen := make(map[string]bool)
+	for _, p := range pathsToCheck {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+
+		if isSystemPath(p) {
+			continue
+		}
+
+		absPath, err := filepath.Abs(p)
+		if err != nil {
+			continue
+		}
+		absPath = filepath.Clean(absPath)
+
+		if isPathAllowed(absPath, cfg.AllowedPaths) {
+			continue
+		}
+
+		if cfg.PathConsent != nil {
+			result, err := cfg.PathConsent.AskConsent(absPath, "access")
+			if err != nil {
+				return fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", absPath, err)
+			}
+			switch result {
+			case ConsentDenied:
+				return fmt.Errorf("path '%s' is outside allowed paths — access denied by user", absPath)
+			}
+		} else {
+			return fmt.Errorf("path '%s' is outside allowed paths", absPath)
+		}
+	}
+	return nil
+}
+
+func extractPathsFromCommand(command, workDir string) []string {
+	var paths []string
+
+	for _, match := range cdPathRe.FindAllStringSubmatch(command, -1) {
+		for i := 1; i < len(match); i++ {
+			if match[i] != "" {
+				paths = append(paths, match[i])
+			}
+		}
+	}
+
+	for _, match := range absPathInCmdRe.FindAllStringSubmatch(command, -1) {
+		if len(match) > 1 && match[1] != "" {
+			paths = append(paths, match[1])
+		}
+	}
+
+	return paths
+}
+
+func isSystemPath(path string) bool {
+	clean := filepath.Clean(path)
+	for _, prefix := range systemPathPrefixes {
+		if strings.HasPrefix(clean, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildBashResponse(stdout, stderr string, exitCode int) fantasy.ToolResponse {

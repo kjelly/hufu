@@ -46,12 +46,12 @@ func NewLsTool(opts ...ToolOption) fantasy.AgentTool {
 			Parallel: true,
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return executeLs(ctx, call, cfg.WorkDir)
+			return executeLs(ctx, call, cfg.WorkDir, cfg)
 		},
 	}
 }
 
-func executeLs(ctx context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
+func executeLs(ctx context.Context, call fantasy.ToolCall, workDir string, cfg ToolConfig) (fantasy.ToolResponse, error) {
 	var args lsArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -63,7 +63,7 @@ func executeLs(ctx context.Context, call fantasy.ToolCall, workDir string) (fant
 
 	dirPath := "."
 	if args.Path != "" {
-		resolved, err := resolvePathWithWorkDir(args.Path, workDir)
+		resolved, err := checkPathOrConsent(args.Path, workDir, "list", cfg)
 		if err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 		}

@@ -40,7 +40,7 @@ func NewGolangTool(opts ...ToolOption) fantasy.AgentTool {
 			Required: []string{"code"},
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return executeGolang(ctx, call, cfg.WorkDir)
+			return executeGolang(ctx, call, cfg)
 		},
 	}
 }
@@ -52,7 +52,7 @@ type golangResult struct {
 	timedOut bool
 }
 
-func executeGolang(ctx context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
+func executeGolang(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fantasy.ToolResponse, error) {
 	var args golangArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("code parameter is required"), nil
@@ -78,9 +78,9 @@ func executeGolang(ctx context.Context, call fantasy.ToolCall, workDir string) (
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 
-		if workDir != "" {
+		if cfg.WorkDir != "" {
 			origDir, _ := os.Getwd()
-			os.Chdir(workDir)
+			os.Chdir(cfg.WorkDir)
 			defer os.Chdir(origDir)
 		}
 

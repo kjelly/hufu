@@ -27,7 +27,7 @@ func NewLuaTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "lua",
-			Description: "Execute Lua code in a sandboxed environment. Returns stdout output. Supports string, math, table, coroutine, and restricted io/os libraries. The debug library is disabled. File I/O is restricted to the project directory.",
+			Description: "Execute Lua code in a sandboxed environment. Returns stdout output. Supports string, math, table, coroutine, and restricted io/os libraries. The debug library is disabled. File I/O requires path consent for paths outside allowed directories.",
 			Parameters: map[string]any{
 				"code": map[string]any{
 					"type":        "string",
@@ -41,7 +41,7 @@ func NewLuaTool(opts ...ToolOption) fantasy.AgentTool {
 			Required: []string{"code"},
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return executeLua(ctx, call, cfg.WorkDir)
+			return executeLua(ctx, call, cfg)
 		},
 	}
 }
@@ -52,7 +52,7 @@ type luaResult struct {
 	timedOut bool
 }
 
-func executeLua(ctx context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
+func executeLua(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fantasy.ToolResponse, error) {
 	var args luaArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("code parameter is required"), nil
@@ -72,7 +72,7 @@ func executeLua(ctx context.Context, call fantasy.ToolCall, workDir string) (fan
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	projectDir := workDir
+	projectDir := cfg.WorkDir
 	if projectDir == "" {
 		projectDir, _ = os.Getwd()
 	}
@@ -80,13 +80,16 @@ func executeLua(ctx context.Context, call fantasy.ToolCall, workDir string) (fan
 
 	ch := make(chan luaResult, 1)
 
+	luaAllowedPaths := cfg.AllowedPaths
+	luaPathConsent := cfg.PathConsent
+
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 
-		if workDir != "" {
+		if cfg.WorkDir != "" {
 			origDir, _ := os.Getwd()
-			os.Chdir(workDir)
+			os.Chdir(cfg.WorkDir)
 			defer os.Chdir(origDir)
 		}
 
@@ -106,7 +109,7 @@ func executeLua(ctx context.Context, call fantasy.ToolCall, workDir string) (fan
 		lua.OpenIo(L)
 		lua.OpenOs(L)
 
-		sandboxLua(L, projectDir)
+		sandboxLua(L, projectDir, luaAllowedPaths, luaPathConsent)
 
 		var buf bytes.Buffer
 		overridePrint(L, &buf)
@@ -139,7 +142,7 @@ func executeLua(ctx context.Context, call fantasy.ToolCall, workDir string) (fan
 	return fantasy.NewTextResponse(tr.Content), nil
 }
 
-func sandboxLua(L *lua.LState, projectDir string) {
+func sandboxLua(L *lua.LState, projectDir string, allowedPaths []string, consent *PathConsent) {
 	global := L.Get(lua.EnvironIndex).(*lua.LTable)
 
 	L.SetGlobal(lua.DebugLibName, lua.LNil)
@@ -173,7 +176,7 @@ func sandboxLua(L *lua.LState, projectDir string) {
 		tbl.RawSetString("open", L.NewFunction(func(L *lua.LState) int {
 			path := L.CheckString(1)
 			top := L.GetTop()
-			absPath, err := validateLuaPath(path, projectDir)
+			absPath, err := validateLuaPathWithConsent(path, projectDir, allowedPaths, consent)
 			if err != nil {
 				L.Push(lua.LNil)
 				L.Push(lua.LString(err.Error()))
@@ -196,7 +199,7 @@ func sandboxLua(L *lua.LState, projectDir string) {
 		tbl.RawSetString("lines", L.NewFunction(func(L *lua.LState) int {
 			path := L.CheckString(1)
 			top := L.GetTop()
-			absPath, err := validateLuaPath(path, projectDir)
+			absPath, err := validateLuaPathWithConsent(path, projectDir, allowedPaths, consent)
 			if err != nil {
 				L.RaiseError("path outside project directory: %s", path)
 			}
@@ -256,6 +259,41 @@ func validateLuaPath(path, projectDir string) (string, error) {
 		return "", fmt.Errorf("path '%s' is outside the project directory", path)
 	}
 	return evaluatedPath, nil
+}
+
+func validateLuaPathWithConsent(path, projectDir string, allowedPaths []string, consent *PathConsent) (string, error) {
+	absPath := path
+	if !filepath.IsAbs(path) {
+		absPath = filepath.Join(projectDir, path)
+	}
+	absPath = filepath.Clean(absPath)
+
+	if isPathAllowed(absPath, allowedPaths) {
+		return validateLuaPath(path, projectDir)
+	}
+
+	if consent != nil {
+		result, err := consent.AskConsent(absPath, "read")
+		if err != nil {
+			return "", fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", path, err)
+		}
+		switch result {
+		case ConsentOnce, ConsentAlways:
+			evalPath, evalErr := filepath.EvalSymlinks(absPath)
+			if evalErr == nil {
+				evalPath = filepath.Clean(evalPath)
+				if evalPath != absPath && !isPathAllowed(evalPath, allowedPaths) {
+					return "", fmt.Errorf("path '%s' resolves to '%s' which is outside allowed paths", path, evalPath)
+				}
+				return evalPath, nil
+			}
+			return absPath, nil
+		default:
+			return "", fmt.Errorf("path '%s' is outside allowed paths — access denied by user", path)
+		}
+	}
+
+	return "", fmt.Errorf("path %q is outside allowed directories and no consent handler available", path)
 }
 
 func overridePrint(L *lua.LState, buf *bytes.Buffer) {

@@ -29,12 +29,12 @@ func NewSudoTool(opts ...ToolOption) fantasy.AgentTool {
 			Required: []string{"command"},
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return executeSudo(ctx, call, cfg.WorkDir)
+			return executeSudo(ctx, call, cfg)
 		},
 	}
 }
 
-func executeSudo(ctx context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
+func executeSudo(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fantasy.ToolResponse, error) {
 	var args bashArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("command parameter is required"), nil
@@ -46,6 +46,10 @@ func executeSudo(ctx context.Context, call fantasy.ToolCall, workDir string) (fa
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("command '%s' is not allowed", args.Command)), nil
 	}
 
+	if err := checkBashPathConsent(args.Command, cfg); err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+
 	timeout := defaultSudoTimeout
 	if args.Timeout > 0 {
 		timeout = time.Duration(args.Timeout) * time.Second
@@ -54,5 +58,5 @@ func executeSudo(ctx context.Context, call fantasy.ToolCall, workDir string) (fa
 		}
 	}
 
-	return runShellCommand(ctx, timeout, workDir, "sudo", "bash", "-c", args.Command)
+	return runShellCommand(ctx, timeout, cfg.WorkDir, "sudo", "bash", "-c", args.Command)
 }

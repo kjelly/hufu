@@ -41,12 +41,26 @@ func IsAskUserActive() bool {
 type ToolOption func(*ToolConfig)
 
 type ToolConfig struct {
-	WorkDir string
+	WorkDir      string
+	AllowedPaths []string
+	PathConsent  *PathConsent
 }
 
 func WithWorkDir(dir string) ToolOption {
 	return func(c *ToolConfig) {
 		c.WorkDir = dir
+	}
+}
+
+func WithAllowedPaths(paths []string) ToolOption {
+	return func(c *ToolConfig) {
+		c.AllowedPaths = paths
+	}
+}
+
+func WithPathConsent(consent *PathConsent) ToolOption {
+	return func(c *ToolConfig) {
+		c.PathConsent = consent
 	}
 }
 
@@ -224,6 +238,136 @@ func resolveAndValidatePath(path, workDir string) (string, error) {
 		return "", fmt.Errorf("path '%s' is outside the project directory", path)
 	}
 	return filepath.Join(evaluatedDir, filepath.Base(absPath)), nil
+}
+
+func isPathAllowed(absPath string, allowedPaths []string) bool {
+	evalPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		evalPath = absPath
+	}
+	evalPath = filepath.Clean(evalPath)
+
+	checkPath := evalPath
+
+	for _, allowed := range allowedPaths {
+		evalAllowed, err := filepath.EvalSymlinks(allowed)
+		if err != nil {
+			evalAllowed = allowed
+		}
+		evalAllowed = filepath.Clean(evalAllowed)
+
+		if checkPath == evalAllowed || strings.HasPrefix(checkPath, evalAllowed+string(filepath.Separator)) {
+			return true
+		}
+
+		parentDir := filepath.Dir(absPath)
+		evalParent, err := filepath.EvalSymlinks(parentDir)
+		if err == nil {
+			evalParent = filepath.Clean(evalParent)
+			if evalParent == evalAllowed || strings.HasPrefix(evalParent, evalAllowed+string(filepath.Separator)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func checkPathOrConsent(path, workDir, operation string, cfg ToolConfig) (string, error) {
+	absPath, err := resolvePathWithWorkDir(path, workDir)
+	if err != nil {
+		return "", err
+	}
+
+	if isPathAllowed(absPath, cfg.AllowedPaths) {
+		return absPath, nil
+	}
+
+	if cfg.PathConsent != nil {
+		result, err := cfg.PathConsent.AskConsent(absPath, operation)
+		if err != nil {
+			return "", fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", path, err)
+		}
+		switch result {
+		case ConsentOnce, ConsentAlways:
+			evalPath, evalErr := filepath.EvalSymlinks(absPath)
+			if evalErr == nil {
+				evalPath = filepath.Clean(evalPath)
+				if evalPath != absPath && !isPathAllowed(evalPath, cfg.AllowedPaths) {
+					return "", fmt.Errorf("path '%s' resolves to '%s' which is outside allowed paths", path, evalPath)
+				}
+			}
+			return absPath, nil
+		default:
+			return "", fmt.Errorf("path '%s' is outside allowed paths — access denied by user", path)
+		}
+	}
+
+	return "", fmt.Errorf("path '%s' is outside allowed paths", path)
+}
+
+func resolveAndValidatePathWithConsent(path string, cfg ToolConfig) (string, error) {
+	absPath, err := resolvePathWithWorkDir(path, cfg.WorkDir)
+	if err != nil {
+		return "", err
+	}
+
+	if isPathAllowed(absPath, cfg.AllowedPaths) {
+		return resolveAndValidatePath(path, cfg.WorkDir)
+	}
+
+	if cfg.PathConsent != nil {
+		result, err := cfg.PathConsent.AskConsent(absPath, "edit")
+		if err != nil {
+			return "", fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", path, err)
+		}
+		switch result {
+		case ConsentOnce, ConsentAlways:
+			projectDir := cfg.WorkDir
+			if projectDir == "" {
+				projectDir, _ = os.Getwd()
+			}
+			return resolveAndValidatePathForAllowedPath(absPath, projectDir, cfg.AllowedPaths)
+		default:
+			return "", fmt.Errorf("path '%s' is outside allowed paths — access denied by user", path)
+		}
+	}
+
+	return "", fmt.Errorf("path '%s' is outside allowed paths", path)
+}
+
+func resolveAndValidatePathForAllowedPath(absPath, projectDir string, allowedPaths []string) (string, error) {
+	evaluatedAbsPath, err := filepath.EvalSymlinks(absPath)
+	if err == nil {
+		return validatedPathInAllowedDirs(evaluatedAbsPath, allowedPaths)
+	}
+
+	parentDir := filepath.Dir(absPath)
+	evaluatedParent, err := filepath.EvalSymlinks(parentDir)
+	if err != nil {
+		return "", fmt.Errorf("path '%s' is invalid or cannot be resolved: %w", absPath, err)
+	}
+
+	result, err := validatedPathInAllowedDirs(evaluatedParent, allowedPaths)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(result, filepath.Base(absPath)), nil
+}
+
+func validatedPathInAllowedDirs(evaluatedPath string, allowedPaths []string) (string, error) {
+	evaluatedPath = filepath.Clean(evaluatedPath)
+	for _, allowed := range allowedPaths {
+		evalAllowed, err := filepath.EvalSymlinks(allowed)
+		if err != nil {
+			evalAllowed = allowed
+		}
+		evalAllowed = filepath.Clean(evalAllowed)
+
+		if evaluatedPath == evalAllowed || strings.HasPrefix(evaluatedPath, evalAllowed+string(filepath.Separator)) {
+			return evaluatedPath, nil
+		}
+	}
+	return "", fmt.Errorf("path is outside allowed directories")
 }
 
 func AllTools(opts ...ToolOption) []fantasy.AgentTool {

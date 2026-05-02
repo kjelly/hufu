@@ -42,12 +42,12 @@ func NewWriteTool(opts ...ToolOption) fantasy.AgentTool {
 			Required: []string{"file_path", "content"},
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return executeWrite(ctx, call, cfg.WorkDir)
+			return executeWrite(ctx, call, cfg)
 		},
 	}
 }
 
-func executeWrite(ctx context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
+func executeWrite(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fantasy.ToolResponse, error) {
 	var args writeArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("file_path and content parameters are required"), nil
@@ -68,7 +68,7 @@ func executeWrite(ctx context.Context, call fantasy.ToolCall, workDir string) (f
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
 	}
 
-	absPath, err := resolveAndValidatePath(filePath, workDir)
+	absPath, err := resolveAndValidatePathWithConsent(filePath, cfg)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 	}

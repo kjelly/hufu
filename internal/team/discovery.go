@@ -109,3 +109,15 @@ func (r *TeamRegistry) ListTeams() []string {
 func (r *TeamRegistry) TeamCount() int {
 	return len(r.teams)
 }
+
+func (r *TeamRegistry) SearchPaths() []string {
+	return r.searchPaths
+}
+
+func (r *TeamRegistry) TeamDirs() []string {
+	dirs := make([]string, 0, len(r.teams))
+	for _, dir := range r.teams {
+		dirs = append(dirs, dir)
+	}
+	return dirs
+}

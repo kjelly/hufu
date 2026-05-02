@@ -46,12 +46,12 @@ func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
 			Parallel: true,
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return executeView(ctx, call, cfg.WorkDir)
+			return executeView(ctx, call, cfg.WorkDir, cfg)
 		},
 	}
 }
 
-func executeView(ctx context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
+func executeView(ctx context.Context, call fantasy.ToolCall, workDir string, cfg ToolConfig) (fantasy.ToolResponse, error) {
 	var args viewArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -64,7 +64,7 @@ func executeView(ctx context.Context, call fantasy.ToolCall, workDir string) (fa
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
 	}
 
-	absPath, err := resolvePathWithWorkDir(args.FilePath, workDir)
+	absPath, err := checkPathOrConsent(args.FilePath, workDir, "read", cfg)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 	}

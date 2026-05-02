@@ -23,6 +23,7 @@ import (
 	"github.com/anomalyco/hufu/internal/memory"
 	"github.com/anomalyco/hufu/internal/sidecar"
 	"github.com/anomalyco/hufu/internal/skill"
+	"github.com/anomalyco/hufu/internal/tools"
 )
 
 var skillSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -142,9 +143,9 @@ func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
 	return
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, verbose bool) (*Coordinator, error) {
+func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, verbose bool, allowedPaths []string, pathConsent *tools.PathConsent) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
-	coreTools := agent.BuildAllAgentTools(projectDir)
+	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent))
 	prov, err := agent.NewOllamaProvider(defaultProviderURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Ollama provider: %w", err)

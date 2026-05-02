@@ -183,8 +183,9 @@ func SelectTools(allTools []fantasy.AgentTool, toolNames string) []fantasy.Agent
 	return selected
 }
 
-func BuildAllAgentTools(workDir string) []fantasy.AgentTool {
-	return tools.AllTools(tools.WithWorkDir(workDir))
+func BuildAllAgentTools(workDir string, opts ...tools.ToolOption) []fantasy.AgentTool {
+	allOpts := append([]tools.ToolOption{tools.WithWorkDir(workDir)}, opts...)
+	return tools.AllTools(allOpts...)
 }
 
 func parseModelInt(primary, fallback string) int {

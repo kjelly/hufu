@@ -23,6 +23,7 @@ type Config struct {
 	EmbeddingModel string       `yaml:"embedding-model"`
 	ModelList      []ModelEntry `yaml:"model-list"`
 	SidecarModel   string       `yaml:"sidecar-model"`
+	AllowedPaths   []string     `yaml:"allowed-paths"`
 }
 
 func LoadConfig() *Config {
@@ -57,6 +58,9 @@ func (c *Config) mergeFromFile(path string) {
 	}
 	if fileCfg.SidecarModel != "" {
 		c.SidecarModel = fileCfg.SidecarModel
+	}
+	if len(fileCfg.AllowedPaths) > 0 {
+		c.AllowedPaths = fileCfg.AllowedPaths
 	}
 }
 

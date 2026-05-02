@@ -64,12 +64,12 @@ func NewMultiEditTool(opts ...ToolOption) fantasy.AgentTool {
 			Required: []string{"file_path", "edits"},
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return executeMultiEdit(ctx, call, cfg.WorkDir)
+			return executeMultiEdit(ctx, call, cfg)
 		},
 	}
 }
 
-func executeMultiEdit(ctx context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
+func executeMultiEdit(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fantasy.ToolResponse, error) {
 	var args multiEditArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("failed to parse arguments: " + err.Error()), nil
@@ -85,7 +85,7 @@ func executeMultiEdit(ctx context.Context, call fantasy.ToolCall, workDir string
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
 	}
 
-	absPath, err := resolveAndValidatePath(args.FilePath, workDir)
+	absPath, err := resolveAndValidatePathWithConsent(args.FilePath, cfg)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 	}

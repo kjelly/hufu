@@ -45,12 +45,12 @@ func NewDownloadTool(opts ...ToolOption) fantasy.AgentTool {
 			Required: []string{"url", "file_path"},
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return executeDownload(ctx, call, cfg.WorkDir)
+			return executeDownload(ctx, call, cfg)
 		},
 	}
 }
 
-func executeDownload(ctx context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
+func executeDownload(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fantasy.ToolResponse, error) {
 	var args downloadArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("url and file_path parameters are required"), nil
@@ -65,7 +65,7 @@ func executeDownload(ctx context.Context, call fantasy.ToolCall, workDir string)
 		return fantasy.NewTextErrorResponse("url must start with http:// or https://"), nil
 	}
 
-	absPath, err := resolveAndValidatePath(args.FilePath, workDir)
+	absPath, err := resolveAndValidatePathWithConsent(args.FilePath, cfg)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid file_path: %v", err)), nil
 	}

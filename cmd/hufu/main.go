@@ -23,6 +23,7 @@ import (
 	"github.com/anomalyco/hufu/internal/memory"
 	"github.com/anomalyco/hufu/internal/readline"
 	"github.com/anomalyco/hufu/internal/team"
+	"github.com/anomalyco/hufu/internal/tools"
 )
 
 var (
@@ -241,11 +242,13 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	pathConsent := newPathConsent()
+
 	loadedTeams := map[string]*teamContext{}
 	for _, seg := range initialSegments {
 		if seg.Type == team.SegmentSwitchTeam {
 			if _, ok := loadedTeams[seg.Name]; !ok {
-				tc, err := loadTeamByName(ctx, seg.Name, registry, providerURL)
+				tc, err := loadTeamByName(ctx, seg.Name, registry, providerURL, pathConsent)
 				if err != nil {
 					return fmt.Errorf("failed to load team %q: %w", seg.Name, err)
 				}
@@ -272,7 +275,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	result, err := executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord)
+	result, err := executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord, pathConsent)
 	if err != nil {
 		return err
 	}
@@ -323,7 +326,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL string) (*teamContext, error) {
+func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL string, pathConsent *tools.PathConsent) (*teamContext, error) {
 	teamDir, err := registry.Resolve(teamName)
 	if err != nil {
 		return nil, err
@@ -473,7 +476,9 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
 	resolvedSidecarModel := cfg.ResolveSidecarModel(session.Config.SidecarModel)
 
-	coordinator, err := team.NewCoordinator(session, defaultProviderURL, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, verbose)
+	allowedPaths := buildAllowedPaths(session, registry, cfg)
+
+	coordinator, err := team.NewCoordinator(session, defaultProviderURL, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, verbose, allowedPaths, pathConsent)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
@@ -516,6 +521,73 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	}, nil
 }
 
+func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, cfg *config.Config) []string {
+	seen := make(map[string]bool)
+	var paths []string
+
+	projectDir, _ := os.Getwd()
+	if projectDir != "" && !seen[projectDir] {
+		seen[projectDir] = true
+		paths = append(paths, projectDir)
+	}
+
+	if session.Dir != "" && !seen[session.Dir] {
+		seen[session.Dir] = true
+		paths = append(paths, session.Dir)
+	}
+
+	if session.Workspace != "" && !seen[session.Workspace] {
+		seen[session.Workspace] = true
+		paths = append(paths, session.Workspace)
+	}
+
+	for _, searchPath := range registry.SearchPaths() {
+		if !seen[searchPath] {
+			seen[searchPath] = true
+			paths = append(paths, searchPath)
+		}
+	}
+
+	for _, teamDir := range registry.TeamDirs() {
+		if !seen[teamDir] {
+			seen[teamDir] = true
+			paths = append(paths, teamDir)
+		}
+	}
+
+	skillDirs := []string{
+		filepath.Join(session.Dir, ".agents", "skills"),
+		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
+	}
+	for _, dir := range skillDirs {
+		abs, err := filepath.Abs(dir)
+		if err == nil && !seen[abs] {
+			seen[abs] = true
+			paths = append(paths, abs)
+		}
+	}
+
+	for _, p := range cfg.AllowedPaths {
+		expanded := os.ExpandEnv(p)
+		if strings.HasPrefix(expanded, "~") {
+			if home, err := os.UserHomeDir(); err == nil {
+				expanded = filepath.Join(home, expanded[1:])
+			}
+		}
+		abs, err := filepath.Abs(expanded)
+		if err == nil && !seen[abs] {
+			seen[abs] = true
+			paths = append(paths, abs)
+		}
+	}
+
+	return paths
+}
+
+func newPathConsent() *tools.PathConsent {
+	return tools.NewPathConsent()
+}
+
 func runWithInjection(ctx context.Context, tc *teamContext, initialResult string, injector *promptInjector) (string, error) {
 	result := initialResult
 	for {
@@ -548,7 +620,7 @@ func runWithInjection(ctx context.Context, tc *teamContext, initialResult string
 	}
 }
 
-func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, defaultProviderURL string, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator) (string, error) {
+func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, defaultProviderURL string, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent) (string, error) {
 	var results []string
 	currentTeamName := ""
 
@@ -558,7 +630,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			teamName := seg.Name
 			tc, ok := loadedTeams[teamName]
 			if !ok {
-				loaded, err := loadTeamByName(ctx, teamName, registry, providerURL)
+				loaded, err := loadTeamByName(ctx, teamName, registry, providerURL, pathConsent)
 				if err != nil {
 					return strings.Join(results, "\n\n"), fmt.Errorf("failed to load team %q: %w", teamName, err)
 				}
@@ -871,7 +943,7 @@ func runArchiveMemory(ctx context.Context, registry *team.TeamRegistry) error {
 
 	archived := 0
 	for _, name := range teamNames {
-		tc, err := loadTeamByName(ctx, name, registry, providerURL)
+		tc, err := loadTeamByName(ctx, name, registry, providerURL, newPathConsent())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s Failed to load team %q: %v\n", errStyle.Render("⚠"), name, err)
 			continue

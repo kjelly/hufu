@@ -40,12 +40,12 @@ func NewGlobTool(opts ...ToolOption) fantasy.AgentTool {
 			Parallel: true,
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return executeGlob(ctx, call, cfg.WorkDir)
+			return executeGlob(ctx, call, cfg.WorkDir, cfg)
 		},
 	}
 }
 
-func executeGlob(ctx context.Context, call fantasy.ToolCall, workDir string) (fantasy.ToolResponse, error) {
+func executeGlob(ctx context.Context, call fantasy.ToolCall, workDir string, cfg ToolConfig) (fantasy.ToolResponse, error) {
 	var args globArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("pattern parameter is required"), nil
@@ -56,7 +56,7 @@ func executeGlob(ctx context.Context, call fantasy.ToolCall, workDir string) (fa
 
 	searchPath := "."
 	if args.Path != "" {
-		resolved, err := resolvePathWithWorkDir(args.Path, workDir)
+		resolved, err := checkPathOrConsent(args.Path, workDir, "search", cfg)
 		if err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 		}
