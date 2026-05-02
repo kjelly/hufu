@@ -241,13 +241,16 @@ func checkEmbeddingModelMismatch(db *chromem.DB, storePath, embedModel string) (
 		return false, nil
 	}
 
-	// Models differ — delete the old collection.
+	// Models differ — delete the old collection first. If the process crashes
+	// after deletion but before writing the new metadata, the next startup will
+	// see no metadata (meta == nil) and write new metadata — a safe recovery path.
+	// The reverse order (write-then-delete) would leave stale collection data
+	// with matching metadata that would never be cleaned up.
 	log.Printf("embedding model mismatch: stored=%q, current=%q; deleting old collection", meta.EmbeddingModel, embedModel)
 	if err := db.DeleteCollection(collectionName); err != nil {
 		return false, fmt.Errorf("failed to delete collection during model mismatch cleanup: %w", err)
 	}
 
-	// Write new metadata.
 	newMeta := &embeddingMeta{
 		EmbeddingModel: embedModel,
 		CreatedAt:      time.Now().Format(time.RFC3339),

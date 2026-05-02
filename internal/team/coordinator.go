@@ -843,13 +843,15 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	timing := &taskTiming{}
 	timing.reset()
 
-	currentAgent := c.GetCurrentAgent()
-	currentTask := c.GetCurrentTask()
+	prevAgent := c.GetCurrentAgent()
+	prevTask := c.GetCurrentTask()
 	c.SetCurrentAgent(name)
 	c.SetCurrentTask(task)
+	defer func() {
+		c.SetCurrentAgent(prevAgent)
+		c.SetCurrentTask(prevTask)
+	}()
 	output, _, err := c.runAgentWithStatusAndHistory(taskCtx, ag, name, taskPrompt, nil, timing)
-	c.SetCurrentAgent(currentAgent)
-	c.SetCurrentTask(currentTask)
 
 	duration, modelTime, toolTime := timing.snapshot()
 	if err != nil {
@@ -1201,8 +1203,14 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	resolvedModel := c.resolveAgentModel(agentDef, task.Model)
 
 	c.report(c.newEvent("start").withAgent(agentName).withMessage(task.Task).withModel(resolvedModel))
+	prevAgent := c.GetCurrentAgent()
+	prevTask := c.GetCurrentTask()
 	c.SetCurrentAgent(agentName)
 	c.SetCurrentTask(task.Task)
+	defer func() {
+		c.SetCurrentAgent(prevAgent)
+		c.SetCurrentTask(prevTask)
+	}()
 	taskTS := time.Now().Format("20060102-150405")
 	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "working", task.Task, ""); err != nil {
 		log.Printf("warning: failed to write task file: %v", err)
@@ -1977,8 +1985,14 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	todoID := todoItems[0].ID
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	prevAgent := c.GetCurrentAgent()
+	prevTask := c.GetCurrentTask()
 	c.SetCurrentAgent(resolvedName)
 	c.SetCurrentTask(task)
+	defer func() {
+		c.SetCurrentAgent(prevAgent)
+		c.SetCurrentTask(prevTask)
+	}()
 
 	ag, err := c.getOrCreateAgent(ctx, agentDef, "")
 	if err != nil {

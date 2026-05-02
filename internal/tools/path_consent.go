@@ -36,12 +36,18 @@ func NewPathConsent() *PathConsent {
 }
 
 func (pc *PathConsent) SetAgentInfoSource(fn func() AgentInfo) {
+	if fn == nil {
+		return
+	}
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 	pc.currentAgent = fn
 }
 
 func NewPathConsentWithAgentInfo(fn func() AgentInfo) *PathConsent {
+	if fn == nil {
+		return NewPathConsent()
+	}
 	return &PathConsent{
 		currentAgent: fn,
 	}
@@ -117,6 +123,21 @@ func (pc *PathConsent) AskConsent(path, operation string, toolName, toolArgs str
 
 	StdinMu.Lock()
 	defer StdinMu.Unlock()
+
+	// Double-check: another goroutine may have updated remembered/denied while
+	// we were waiting for StdinMu.
+	pc.mu.Lock()
+	for _, prefix := range pc.remembered {
+		if strings.HasPrefix(normalized, prefix) {
+			pc.mu.Unlock()
+			return ConsentAlways, nil
+		}
+	}
+	if pc.isDeniedLocked(path) {
+		pc.mu.Unlock()
+		return ConsentDenied, nil
+	}
+	pc.mu.Unlock()
 
 	reader := bufio.NewReader(os.Stdin)
 	input := readConsentLine(reader)
