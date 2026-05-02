@@ -25,6 +25,7 @@ type idleWarningTimer struct {
 	mu       sync.Mutex
 	warned   bool
 	deadline time.Time
+	model    string
 }
 
 func newIdleWarningTimer(w *lineWriter, interval time.Duration) *idleWarningTimer {
@@ -33,8 +34,14 @@ func newIdleWarningTimer(w *lineWriter, interval time.Duration) *idleWarningTime
 		interval: interval,
 	}
 	t.timer = time.AfterFunc(interval, t.warn)
-	t.deadline = time.Now().Add(interval)
+	t.deadline = time.Now().Add(t.interval)
 	return t
+}
+
+func (t *idleWarningTimer) SetModel(model string) {
+	t.mu.Lock()
+	t.model = model
+	t.mu.Unlock()
 }
 
 func (t *idleWarningTimer) warn() {
@@ -44,8 +51,13 @@ func (t *idleWarningTimer) warn() {
 		return
 	}
 	elapsed := time.Since(t.deadline.Add(-t.interval))
-	t.w.write(fmt.Sprintf("\n%s Waiting for LLM response... (%v elapsed)\n",
+	modelStr := ""
+	if t.model != "" {
+		modelStr = " [" + t.model + "]"
+	}
+	t.w.write(fmt.Sprintf("\n%s Waiting for LLM response%s... (%v elapsed)\n",
 		stepStyle.Render("⏳"),
+		modelStr,
 		elapsed.Truncate(time.Second),
 	))
 	t.warned = true

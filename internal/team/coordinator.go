@@ -44,6 +44,31 @@ type DirectAgentResult struct {
 	Error     error
 }
 
+type DryRunAgentInfo struct {
+	Name   string
+	Role   string
+	Model  string
+	Tools  []string
+	Skills []string
+}
+
+type DryRunSkillInfo struct {
+	Name        string
+	Description string
+}
+
+type DryRunResult struct {
+	TeamName           string
+	Model              string
+	SidecarModel       string
+	Agents             []DryRunAgentInfo
+	AllSkills          []DryRunSkillInfo
+	MatchedSkillNames  []string
+	OrchestratorPrompt string
+	FirstRoundTasks    []TaskDef
+	Error              string
+}
+
 type Coordinator struct {
 	mu                    sync.RWMutex
 	session               *TeamSession
@@ -2188,7 +2213,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	orchDefCopy := *orchDef
 	orchDefCopy.System = systemPrompt
 
-	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("coordinator starting"))
+	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("coordinator starting").withModel(c.resolveAgentModel(orchDef, "")))
 
 	result, steps, err := c.runOrchestrator(ctx, &orchDefCopy, userPrompt)
 	if err != nil {
@@ -2229,7 +2254,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		c.sessionData.AddEntry("user", additionalPrompt)
 	}
 
-	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("continuing with additional input"))
+	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("continuing with additional input").withModel(c.resolveAgentModel(orchDef, "")))
 
 	result, steps, err := c.runOrchestrator(ctx, orchDef, continuationPrompt)
 	if err != nil {
@@ -2301,4 +2326,240 @@ func truncateTaskDesc(task string) string {
 		return string(runes[:maxLen])
 	}
 	return task
+}
+
+type dryRunAgentsTool struct {
+	coordinator *Coordinator
+	captured    *[]TaskDef
+	pOpts       fantasy.ProviderOptions
+}
+
+func (t *dryRunAgentsTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "agent",
+		Description: "Delegate tasks to team workers. Runs all tasks in parallel. Returns structured results from each agent.",
+		Parameters: map[string]any{
+			"tasks": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"agent":         map[string]any{"type": "string", "enum": t.coordinator.workerNameList(), "description": "Agent name to delegate to"},
+						"task":          map[string]any{"type": "string", "description": "Task description for the agent"},
+						"model":         map[string]any{"type": "string", "description": "Model ID from Available Models to use for this task. Select the model whose strengths best match this task. If empty, the default team model will be used."},
+						"summarize":     map[string]any{"type": "boolean", "description": "If true, summarize the agent's output before returning. Use for tasks that produce verbose output where only key points matter."},
+						"sidecar":       map[string]any{"type": "boolean", "description": "If true, execute this task directly via the sidecar model instead of an agent. Use for simple, tool-free tasks that need a quick response."},
+						"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional files from the workspace shared/ directory to provide as context"},
+					},
+					"required": []string{"agent", "task"},
+				},
+			},
+		},
+		Required: []string{"tasks"},
+	}
+}
+
+func (t *dryRunAgentsTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
+func (t *dryRunAgentsTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
+
+func (t *dryRunAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		Tasks []TaskDef `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+	if len(args.Tasks) == 0 {
+		return fantasy.NewTextErrorResponse("no tasks provided"), nil
+	}
+
+	*t.captured = append(*t.captured, args.Tasks...)
+
+	var descs []string
+	for _, td := range args.Tasks {
+		descs = append(descs, fmt.Sprintf("  - %s → %s", td.Agent, td.Task))
+	}
+	return fantasy.NewTextResponse(fmt.Sprintf("[DRY RUN] Tasks recorded (not executed):\n%s\n\nDry run complete. Call finish immediately.", strings.Join(descs, "\n"))), nil
+}
+
+type dryRunFinishTool struct {
+	pOpts fantasy.ProviderOptions
+}
+
+func (t *dryRunFinishTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "finish",
+		Description: "Signal that you have completed the user's request and provide your final answer. Call this when you are done coordinating and have a complete response for the user. You MUST call this instead of just outputting text — your final answer goes in the response field.",
+		Parameters: map[string]any{
+			"response": map[string]any{
+				"type":        "string",
+				"description": "Your final answer to the user",
+			},
+		},
+		Required: []string{"response"},
+	}
+}
+
+func (t *dryRunFinishTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
+func (t *dryRunFinishTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
+
+func (t *dryRunFinishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		Response string `json:"response"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", args.Response)), nil
+}
+
+func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunResult, error) {
+	orchDef := c.GetOrchestratorDef()
+	if orchDef == nil {
+		return nil, fmt.Errorf("no coordinator agent found in team")
+	}
+
+	EnsureWorkspaceDirs(c.session.Workspace)
+
+	matchedSkills := c.matchSkillsWithSidecar(ctx, userPrompt)
+	c.setAutoLoadedSkills(matchedSkills)
+
+	systemPrompt := orchDef.System
+	if systemPrompt == "" {
+		systemPrompt = c.expandDefaultOrchestratorTemplate(defaultOrchestratorSystem)
+	}
+	orchestratorPrompt := c.BuildOrchestratorPrompt(matchedSkills...)
+	systemPrompt += "\n\n" + orchestratorPrompt
+
+	if agentsMD := c.loadProjectContext(); agentsMD != "" {
+		if s := c.Sidecar(); s != nil && len(agentsMD) > 4000 {
+			compacted, err := s.Compact(ctx, agentsMD, "Compress this project context while preserving all key facts, patterns, conventions, and instructions.")
+			if err == nil && compacted != "" {
+				agentsMD = compacted
+			}
+		}
+		systemPrompt += "\n\n---\n## Project Context (AGENTS.md)\n\n" + agentsMD
+	}
+
+	if c.memoryStore != nil {
+		var compactFn memory.CompactFunc
+		if s := c.Sidecar(); s != nil {
+			compactFn = s.Compact
+		}
+		memCtx, err := memory.AutoQuery(ctx, c.memoryStore, userPrompt, compactFn)
+		if err == nil && memCtx != "" {
+			systemPrompt += "\n\n---\n" + memCtx
+		}
+	}
+
+	orchDefCopy := *orchDef
+	orchDefCopy.System = systemPrompt
+
+	var capturedTasks []TaskDef
+
+	dryRunAgentTool := &dryRunAgentsTool{
+		coordinator: c,
+		captured:    &capturedTasks,
+	}
+
+	orchTools := []fantasy.AgentTool{
+		dryRunAgentTool,
+		&dryRunFinishTool{},
+		&loadSkillTool{coordinator: c},
+		&saveSkillTool{coordinator: c},
+	}
+	for _, t := range c.coreTools {
+		if t.Info().Name == "ask_user" {
+			orchTools = append(orchTools, t)
+			break
+		}
+	}
+
+	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("dry-run coordinator starting").withModel(c.resolveAgentModel(orchDef, "")))
+
+	orch, err := agent.CreateAgent(ctx, c.provider, agent.AgentConfig{
+		Def:        &orchDefCopy,
+		TeamConfig: &c.session.Config,
+		WorkDir:    c.projectDir,
+		MaxSteps:   agent.DefaultCoordinatorMaxSteps,
+	}, orchTools)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create coordinator for dry-run: %w", err)
+	}
+
+	coordinatorTimeout := time.Duration(c.session.Config.Timeout) * time.Second * time.Duration(c.session.Config.MaxRounds+1)
+	if orchDef.Timeout > 0 {
+		coordinatorTimeout = time.Duration(orchDef.Timeout) * time.Second
+	}
+	dryRunCtx, cancel := context.WithTimeout(ctx, coordinatorTimeout)
+	defer cancel()
+
+	_, _, err = c.runAgentWithStatusAndHistory(dryRunCtx, orch, orchDef.Name, userPrompt, nil, &taskTiming{})
+
+	result := &DryRunResult{
+		TeamName:           c.session.Config.Name,
+		Model:              c.resolveAgentModel(orchDef, ""),
+		SidecarModel:       c.sidecarModel,
+		OrchestratorPrompt: orchestratorPrompt,
+		FirstRoundTasks:    capturedTasks,
+	}
+	if err != nil {
+		result.Error = err.Error()
+	}
+
+	for _, sk := range matchedSkills {
+		result.MatchedSkillNames = append(result.MatchedSkillNames, sk.Name)
+	}
+
+	allSkills := c.getSkills()
+	for _, sk := range allSkills {
+		result.AllSkills = append(result.AllSkills, DryRunSkillInfo{
+			Name:        sk.Name,
+			Description: sk.Description,
+		})
+	}
+
+	for _, def := range c.session.Agents {
+		role := def.Role
+		if role == "" {
+			role = "worker"
+		}
+		model := c.resolveAgentModel(def, "")
+		var tools []string
+		if def.Tools != "" {
+			tools = strings.Split(def.Tools, ",")
+			for i, t := range tools {
+				tools[i] = strings.TrimSpace(t)
+			}
+		}
+		var skills []string
+		if def.Skills != "" {
+			skills = strings.Split(def.Skills, ",")
+			for i, s := range skills {
+				skills[i] = strings.TrimSpace(s)
+			}
+		}
+		if role == "coordinator" || role == "orchestrator" {
+			tools = []string{"agent", "finish", "load_skill", "save_skill", "ask_user"}
+		}
+		result.Agents = append(result.Agents, DryRunAgentInfo{
+			Name:   def.Name,
+			Role:   role,
+			Model:  model,
+			Tools:  tools,
+			Skills: skills,
+		})
+	}
+
+	// sidecarModel is already resolved at coordinator creation time
+	// (via config.ResolveSidecarModel in main.go). If it's still empty,
+	// resolve it here as a fallback using the same resolution path.
+	if result.SidecarModel == "" {
+		resolvedConfig := config.LoadConfig()
+		result.SidecarModel = resolvedConfig.ResolveSidecarModel(c.session.Config.SidecarModel)
+	}
+
+	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("dry-run coordinator finished"))
+
+	return result, nil
 }

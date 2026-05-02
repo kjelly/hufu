@@ -39,6 +39,7 @@ var (
 	archiveMemory       bool
 	showHistory         bool
 	stepsMode           bool
+	dryRun              bool
 	globalPromptReader  atomic.Pointer[readline.PromptReader]
 )
 
@@ -72,6 +73,7 @@ func main() {
 	rootCmd.Flags().BoolVar(&archiveMemory, "archive-memory", false, "Archive session summary to memory and exit")
 	rootCmd.Flags().BoolVar(&showHistory, "show-history", false, "Show previous session history on resume")
 	rootCmd.Flags().BoolVarP(&stepsMode, "steps", "s", false, "Pause for user confirmation before executing each batch of worker tasks")
+	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview skill matching and task delegation without executing agents")
 
 	if err := rootCmd.Execute(); err != nil {
 		var interrupted errInterrupted
@@ -278,6 +280,57 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		} else {
 			segments = append(segments, seg)
 		}
+	}
+
+	if dryRun {
+		var dryRunTeamName string
+		for _, seg := range segments {
+			if seg.Type == team.SegmentSwitchTeam {
+				dryRunTeamName = seg.Name
+				break
+			}
+		}
+		if dryRunTeamName == "" {
+			dryRunTeamName = strings.ToLower(agentTeamName)
+		}
+		if dryRunTeamName == "" {
+			return fmt.Errorf("--dry-run requires a team (use --agent-team or @team-name in the prompt)")
+		}
+		tc, ok := loadedTeams[dryRunTeamName]
+		if !ok {
+			return fmt.Errorf("failed to load team %q for dry-run", dryRunTeamName)
+		}
+		dryRunPrompt := ""
+		for _, seg := range segments {
+			if seg.Type == team.SegmentSwitchTeam && seg.Name == dryRunTeamName {
+				dryRunPrompt = seg.Content
+			} else if seg.Type == team.SegmentText && dryRunPrompt == "" && dryRunTeamName != "" {
+				dryRunPrompt = seg.Content
+			}
+		}
+		if dryRunPrompt == "" {
+			dryRunPrompt = prompt
+		}
+		if dryRunPrompt == "" {
+			return fmt.Errorf("--dry-run requires a prompt")
+		}
+
+		fmt.Fprintf(os.Stderr, "\n%s Running dry-run for team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(dryRunTeamName))
+
+		w := &lineWriter{}
+		idleTimer := newIdleWarningTimer(w, 30*time.Second)
+		taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
+		skillDisp := newSkillDisplay(w)
+		setupStatusReporter(w, tc.coordinator, taskDisp, skillDisp, idleTimer)
+
+		result, err := tc.coordinator.DryRun(ctx, dryRunPrompt)
+		idleTimer.stop()
+
+		if err != nil {
+			return fmt.Errorf("dry-run failed: %w", err)
+		}
+		renderDryRun(result)
+		return nil
 	}
 
 	result, err := executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord, pathConsent)

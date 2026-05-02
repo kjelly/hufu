@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -207,6 +208,10 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 
 	coordinator.SetStatusReporter(func(event team.StatusEvent) {
 		idleTimer.reset()
+
+		if event.Model != "" {
+			idleTimer.SetModel(event.Model)
+		}
 
 		switch event.Type {
 		case "start":
@@ -597,5 +602,108 @@ func renderSkillSummary(entries []team.SkillUsageEntry) {
 			dimStyle.Render(agentList),
 		))
 	}
+	fmt.Fprint(os.Stderr, b.String())
+}
+
+func padRight(str string, width int) string {
+	visibleWidth := lipgloss.Width(str)
+	if visibleWidth >= width {
+		return str
+	}
+	return str + strings.Repeat(" ", width-visibleWidth)
+}
+
+func renderDryRun(result *team.DryRunResult) {
+	var b strings.Builder
+
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("─── DRY RUN ───"))
+	b.WriteString("\n\n")
+
+	b.WriteString(fmt.Sprintf("  %s %s\n", boldStyle.Render("Team:"), teamStyle.Render(result.TeamName)))
+	b.WriteString(fmt.Sprintf("  %s %s\n", boldStyle.Render("Model:"), result.Model))
+	if result.SidecarModel != "" {
+		b.WriteString(fmt.Sprintf("  %s %s\n", boldStyle.Render("Sidecar:"), result.SidecarModel))
+	}
+
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("─── Agents ───"))
+	b.WriteString("\n")
+	for _, a := range result.Agents {
+		roleLabel := dimStyle.Render("(" + a.Role + ")")
+		modelLabel := ""
+		if a.Model != "" {
+			modelLabel = dimStyle.Render("[" + a.Model + "]")
+		}
+		nameStr := agentStyle.Render(a.Name)
+		b.WriteString(fmt.Sprintf("  %s %s %s", padRight(nameStr, 20), padRight(roleLabel, 14), modelLabel))
+		if len(a.Tools) > 0 {
+			toolStr := strings.Join(a.Tools, ",")
+			b.WriteString(fmt.Sprintf("  %s", dimStyle.Render("tools: "+toolStr)))
+		}
+		if len(a.Skills) > 0 {
+			skillStr := strings.Join(a.Skills, ",")
+			b.WriteString(fmt.Sprintf("  %s", dimStyle.Render("skills: "+skillStr)))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("─── Skills ───"))
+	b.WriteString("\n")
+	if len(result.AllSkills) == 0 {
+		b.WriteString("  " + dimStyle.Render("No skills available") + "\n")
+	} else {
+		for _, s := range result.AllSkills {
+			desc := s.Description
+			if utf8.RuneCountInString(desc) > 60 {
+				runes := []rune(desc)
+				desc = string(runes[:60]) + "..."
+			}
+			b.WriteString(fmt.Sprintf("  %s %s\n", padRight(doneStyle.Render(s.Name), 20), dimStyle.Render(desc)))
+		}
+	}
+
+	if len(result.MatchedSkillNames) > 0 {
+		b.WriteString("\n")
+		b.WriteString(headerStyle.Render("─── Sidecar Skill Matching ───"))
+		b.WriteString("\n")
+		matchedDisplay := make([]string, len(result.MatchedSkillNames))
+		for i, n := range result.MatchedSkillNames {
+			matchedDisplay[i] = doneStyle.Render(n)
+		}
+		b.WriteString(fmt.Sprintf("  Matched: %s\n", strings.Join(matchedDisplay, ", ")))
+	}
+
+	if len(result.FirstRoundTasks) > 0 {
+		b.WriteString("\n")
+		b.WriteString(headerStyle.Render("─── Coordinator Plan ───"))
+		b.WriteString("\n")
+		b.WriteString("  " + boldStyle.Render("Round 1:") + "\n")
+		for _, t := range result.FirstRoundTasks {
+			modelLabel := ""
+			if t.Model != "" {
+				modelLabel = " " + dimStyle.Render("["+t.Model+"]")
+			}
+			b.WriteString(fmt.Sprintf("    %s → %s%s\n", agentStyle.Render(t.Agent), t.Task, modelLabel))
+		}
+	} else {
+		b.WriteString("\n")
+		b.WriteString(headerStyle.Render("─── Coordinator Plan ───"))
+		b.WriteString("\n")
+		b.WriteString("  " + dimStyle.Render("No tasks delegated (coordinator did not call the agent tool)") + "\n")
+	}
+
+	if result.Error != "" {
+		b.WriteString("\n")
+		b.WriteString(headerStyle.Render("─── Warning ───"))
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("  %s\n", errStyle.Render(result.Error)))
+	}
+
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("─── DRY RUN COMPLETE (no tasks were executed) ───"))
+	b.WriteString("\n")
+
 	fmt.Fprint(os.Stderr, b.String())
 }
