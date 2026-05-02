@@ -1,0 +1,16 @@
+hufu
+Copyright 2026 Kuo-tung Kao
+
+This product includes software developed by third parties
+under licenses listed below.
+
+---
+
+chromem-go
+Copyright (c) Philipp Gille
+Licensed under the Mozilla Public License Version 2.0 (MPL-2.0)
+https://github.com/philippgille/chromem-go
+
+MPL-2.0 Notice: The source code for this library is available
+in the Go module cache or at the URL above. The MPL-2.0 applies
+only to the chromem-go source files, not to this project as a whole.
