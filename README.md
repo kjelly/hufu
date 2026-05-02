@@ -425,8 +425,10 @@ skills: code-review               # Agent 層級的 skill
 
 ```
 workspace/
-├── inbox/               # 各 Agent 的任務分配
-├── outbox/              # 各 Agent 的執行結果
+├── tasks/               # 統一的任務檔案（合併 inbox + outbox）
+│   └── {team-name}/
+│       └── {agent-name}/
+│           └── {timestamp}.md
 ├── shared/
 │   └── skills/          # 複製的 SKILL.md 檔案
 ├── status/              # Agent 狀態檔案
@@ -439,8 +441,7 @@ workspace/
 
 | 目錄/檔案 | 說明 |
 |-----------|------|
-| `inbox/` | 每個 Agent 的任務分配檔案 |
-| `outbox/` | 每個 Agent 的執行結果檔案 |
+| `tasks/{team-name}/{agent-name}/` | 每個 Agent 的任務檔案（含任務描述、狀態、結果） |
 | `shared/skills/` | 從 skill 定義複製過來的 SKILL.md |
 | `status/` | Agent 狀態追蹤檔案 |
 | `history/` | 封存的歷史 session 檔案 |

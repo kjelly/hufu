@@ -346,11 +346,13 @@ Each team gets its own workspace directory (named `workspace` relative to the te
 
 ```
 workspace/
-├── inbox/           # Per-agent task assignments
-├── outbox/          # Per-agent results
+├── tasks/                    # Per-task files (merged inbox+outbox)
+│   └── {team-name}/
+│       └── {agent-name}/
+│           └── {timestamp}.md
 ├── shared/
 │   └── skills/     # Copied SKILL.md files
-├── status/          # Agent status files
+├── status/          # Agent status files (working/done/error)
 ├── history/         # Archived session files
 ├── session.json     # Structured session data
 └── session.md      # Human-readable session log

@@ -2,24 +2,20 @@ package team
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
 const (
-	inboxDir   = "inbox"
-	outboxDir  = "outbox"
+	tasksDir   = "tasks"
 	sharedDir  = "shared"
 	statusDir  = "status"
 	historyDir = "history"
 )
 
 func EnsureWorkspaceDirs(workspace string) error {
-	dirs := []string{inboxDir, outboxDir, sharedDir, statusDir, historyDir}
-	for _, dir := range dirs {
+	for _, dir := range []string{tasksDir, sharedDir, statusDir, historyDir} {
 		if err := os.MkdirAll(filepath.Join(workspace, dir), 0o755); err != nil {
 			return err
 		}
@@ -28,7 +24,7 @@ func EnsureWorkspaceDirs(workspace string) error {
 }
 
 func CleanRunDirs(workspace string) error {
-	for _, dir := range []string{inboxDir, outboxDir, statusDir} {
+	for _, dir := range []string{tasksDir, statusDir} {
 		if err := os.RemoveAll(filepath.Join(workspace, dir)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -36,47 +32,33 @@ func CleanRunDirs(workspace string) error {
 	return nil
 }
 
-func writeInbox(workspace, agentName, content string) error {
-	dir := filepath.Join(workspace, inboxDir, agentName)
+func writeTaskFile(workspace, teamName, agentName, timestamp, status, task, result string) error {
+	validStatuses := map[string]bool{"working": true, "done": true, "error": true}
+	if !validStatuses[status] {
+		return fmt.Errorf("invalid task status %q: must be working, done, or error", status)
+	}
+
+	dir := filepath.Join(workspace, tasksDir, teamName, agentName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	ts := time.Now().Format("20060102-150405")
-	path := filepath.Join(dir, fmt.Sprintf("task-%s.md", ts))
-	return os.WriteFile(path, []byte(content), 0o644)
-}
 
-func readOutbox(workspace, agentName string) ([]string, error) {
-	dir := filepath.Join(workspace, outboxDir, agentName)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var results []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			log.Printf("readOutbox: skipping unreadable file %s: %v", e.Name(), err)
-			continue
-		}
-		results = append(results, string(data))
-	}
-	return results, nil
-}
+	now := time.Now().Format(time.RFC3339)
 
-func writeOutbox(workspace, agentName, content string) error {
-	dir := filepath.Join(workspace, outboxDir, agentName)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+	resultSection := "(pending)"
+	if result != "" {
+		resultSection = result
 	}
-	ts := time.Now().Format("20060102-150405")
-	path := filepath.Join(dir, fmt.Sprintf("result-%s.md", ts))
+
+	completedLine := ""
+	if status != "working" {
+		completedLine = fmt.Sprintf("**Completed:** %s\n", now)
+	}
+
+	content := fmt.Sprintf("# Agent Task: %s\n\n**Status:** %s\n**Updated:** %s\n%s\n---\n\n## Task Description\n\n%s\n\n---\n\n## Result\n\n%s\n",
+		agentName, status, now, completedLine, task, resultSection)
+
+	path := filepath.Join(dir, timestamp+".md")
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 

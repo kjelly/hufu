@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1202,8 +1203,11 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	c.report(c.newEvent("start").withAgent(agentName).withMessage(task.Task).withModel(resolvedModel))
 	c.SetCurrentAgent(agentName)
 	c.SetCurrentTask(task.Task)
+	taskTS := time.Now().Format("20060102-150405")
+	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "working", task.Task, ""); err != nil {
+		log.Printf("warning: failed to write task file: %v", err)
+	}
 	_ = writeStatus(c.session.Workspace, agentName, "working", task.Task)
-	_ = writeInbox(c.session.Workspace, agentName, task.Task)
 
 	timing := &taskTiming{}
 	timing.reset()
@@ -1213,6 +1217,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()))
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", task.Task, ""); err != nil {
+			log.Printf("warning: failed to write task file: %v", err)
+		}
 		writeStatus(c.session.Workspace, agentName, "error", task.Task)
 		return "", err
 	}
@@ -1258,7 +1265,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}()
 
 		if err == nil {
-			_ = writeOutbox(c.session.Workspace, agentName, output)
+			if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "done", task.Task, output); err != nil {
+				log.Printf("warning: failed to write task file: %v", err)
+			}
 			_ = writeStatus(c.session.Workspace, agentName, "done", task.Task)
 			duration, modelTime, toolTime := timing.snapshot()
 			c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
@@ -1287,6 +1296,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	_, modelTime, toolTime := timing.snapshot()
 	c.updateTodoTiming(todoID, modelTime, toolTime)
+	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", task.Task, ""); err != nil {
+		log.Printf("warning: failed to write task file: %v", err)
+	}
 	_ = writeStatus(c.session.Workspace, agentName, "error", task.Task)
 	return "", fmt.Errorf("agent %q failed after %d attempts (model: %s): %w", agentName, maxRetries, resolvedModel, lastErr)
 }
@@ -1986,7 +1998,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	timing := &taskTiming{}
 	timing.reset()
 
-	_ = writeInbox(c.session.Workspace, resolvedName, task)
+	taskTS := time.Now().Format("20060102-150405")
+	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, resolvedName, taskTS, "working", task, ""); err != nil {
+		log.Printf("warning: failed to write task file: %v", err)
+	}
 	_ = writeStatus(c.session.Workspace, resolvedName, "working", task)
 
 	prompt := task
@@ -2001,6 +2016,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	output, err := c.runAgentWithStatus(taskCtx, ag, resolvedName, prompt, timing)
 	duration, modelTime, toolTime := timing.snapshot()
 	if err != nil {
+		if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, resolvedName, taskTS, "error", task, ""); err != nil {
+			log.Printf("warning: failed to write task file: %v", err)
+		}
 		_ = writeStatus(c.session.Workspace, resolvedName, "error", task)
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.updateTodoTiming(todoID, modelTime, toolTime)
@@ -2009,7 +2027,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return &DirectAgentResult{AgentName: resolvedName, Error: err}, nil
 	}
 
-	_ = writeOutbox(c.session.Workspace, resolvedName, output)
+	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, resolvedName, taskTS, "done", task, output); err != nil {
+		log.Printf("warning: failed to write task file: %v", err)
+	}
 	_ = writeStatus(c.session.Workspace, resolvedName, "done", task)
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
 	c.updateTodoTiming(todoID, modelTime, toolTime)

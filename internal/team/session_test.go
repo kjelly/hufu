@@ -373,7 +373,7 @@ func TestEnsureWorkspaceDirs(t *testing.T) {
 
 			if !tt.wantErr {
 				// Verify directories were created
-				expectedDirs := []string{"inbox", "outbox", "shared", "status", "history"}
+				expectedDirs := []string{"tasks", "shared", "status", "history"}
 				for _, dir := range expectedDirs {
 					dirPath := filepath.Join(tt.workspace, dir)
 					if _, err := os.Stat(dirPath); os.IsNotExist(err) {
@@ -395,11 +395,10 @@ func TestCleanRunDirs(t *testing.T) {
 	}
 
 	// Create some files in the run directories
-	inboxFile := filepath.Join(tmpDir, "inbox", "test.txt")
-	outboxFile := filepath.Join(tmpDir, "outbox", "test.txt")
+	tasksFile := filepath.Join(tmpDir, "tasks", "test.txt")
 	statusFile := filepath.Join(tmpDir, "status", "test.txt")
 
-	for _, file := range []string{inboxFile, outboxFile, statusFile} {
+	for _, file := range []string{tasksFile, statusFile} {
 		if err := os.WriteFile(file, []byte("test"), 0o644); err != nil {
 			t.Fatalf("failed to create test file: %v", err)
 		}
@@ -411,7 +410,7 @@ func TestCleanRunDirs(t *testing.T) {
 	}
 
 	// Verify run directories were cleaned (directories may be removed or empty)
-	for _, dir := range []string{"inbox", "outbox", "status"} {
+	for _, dir := range []string{"tasks", "status"} {
 		dirPath := filepath.Join(tmpDir, dir)
 		entries, err := os.ReadDir(dirPath)
 		if err != nil && !os.IsNotExist(err) {
@@ -434,8 +433,7 @@ func TestCleanRunDirs(t *testing.T) {
 // TestWorkspaceDirConstants tests that workspace directory constants are defined
 func TestWorkspaceDirConstants(t *testing.T) {
 	expectedDirs := []string{
-		"inbox",
-		"outbox",
+		"tasks",
 		"shared",
 		"status",
 		"history",
@@ -443,6 +441,140 @@ func TestWorkspaceDirConstants(t *testing.T) {
 
 	// Verify expected directory names exist (used in EnsureWorkspaceDirs)
 	_ = expectedDirs
+}
+
+func TestWriteTaskFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name      string
+		teamName  string
+		agentName string
+		timestamp string
+		status    string
+		task      string
+		result    string
+		wantErr   bool
+		checkFunc func(t *testing.T, workspace, teamName, agentName, timestamp string)
+	}{
+		{
+			name:      "write working task file",
+			teamName:  "delegate",
+			agentName: "researcher",
+			timestamp: "20260502-143005",
+			status:    "working",
+			task:      "Find security bugs",
+			result:    "",
+			wantErr:   false,
+			checkFunc: func(t *testing.T, workspace, teamName, agentName, timestamp string) {
+				path := filepath.Join(workspace, "tasks", teamName, agentName, timestamp+".md")
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("failed to read task file: %v", err)
+				}
+				content := string(data)
+				if !strings.Contains(content, "**Status:** working") {
+					t.Errorf("task file missing 'working' status")
+				}
+				if !strings.Contains(content, "Find security bugs") {
+					t.Errorf("task file missing task description")
+				}
+				if !strings.Contains(content, "(pending)") {
+					t.Errorf("task file should have '(pending)' result for working status")
+				}
+				if strings.Contains(content, "**Completed:**") {
+					t.Errorf("working task file should not have Completed line")
+				}
+			},
+		},
+		{
+			name:      "write done task file with result",
+			teamName:  "delegate",
+			agentName: "writer",
+			timestamp: "20260502-143100",
+			status:    "done",
+			task:      "Write docs",
+			result:    "Here are the docs...",
+			wantErr:   false,
+			checkFunc: func(t *testing.T, workspace, teamName, agentName, timestamp string) {
+				path := filepath.Join(workspace, "tasks", teamName, agentName, timestamp+".md")
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("failed to read task file: %v", err)
+				}
+				content := string(data)
+				if !strings.Contains(content, "**Status:** done") {
+					t.Errorf("task file missing 'done' status")
+				}
+				if !strings.Contains(content, "Here are the docs...") {
+					t.Errorf("task file missing result content")
+				}
+				if !strings.Contains(content, "**Completed:**") {
+					t.Errorf("done task file should have Completed line")
+				}
+			},
+		},
+		{
+			name:      "write error task file",
+			teamName:  "delegate",
+			agentName: "checker",
+			timestamp: "20260502-143200",
+			status:    "error",
+			task:      "Run tests",
+			result:    "",
+			wantErr:   false,
+			checkFunc: func(t *testing.T, workspace, teamName, agentName, timestamp string) {
+				path := filepath.Join(workspace, "tasks", teamName, agentName, timestamp+".md")
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("failed to read task file: %v", err)
+				}
+				content := string(data)
+				if !strings.Contains(content, "**Status:** error") {
+					t.Errorf("task file missing 'error' status")
+				}
+				if !strings.Contains(content, "**Completed:**") {
+					t.Errorf("error task file should have Completed line")
+				}
+			},
+		},
+		{
+			name:      "overwrite same file on update",
+			teamName:  "delegate",
+			agentName: "researcher",
+			timestamp: "20260502-143005",
+			status:    "done",
+			task:      "Find security bugs",
+			result:    "Found 3 bugs",
+			wantErr:   false,
+			checkFunc: func(t *testing.T, workspace, teamName, agentName, timestamp string) {
+				path := filepath.Join(workspace, "tasks", teamName, agentName, timestamp+".md")
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("failed to read task file: %v", err)
+				}
+				content := string(data)
+				if !strings.Contains(content, "**Status:** done") {
+					t.Errorf("task file should be updated to 'done' status")
+				}
+				if !strings.Contains(content, "Found 3 bugs") {
+					t.Errorf("task file should contain the updated result")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := writeTaskFile(tmpDir, tt.teamName, tt.agentName, tt.timestamp, tt.status, tt.task, tt.result)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("writeTaskFile() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.checkFunc != nil {
+				tt.checkFunc(t, tmpDir, tt.teamName, tt.agentName, tt.timestamp)
+			}
+		})
+	}
 }
 
 // TestSessionDataRoundCount tests that rounds count is tracked correctly
