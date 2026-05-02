@@ -82,6 +82,7 @@ type Coordinator struct {
 	autoLoadedSkills      []*skill.SkillDef
 	autoLoadedSkillsMu    sync.RWMutex
 	sidecarInit           bool
+	sessionTime           time.Time
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
@@ -169,6 +170,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		memoryStore:    memoryStore,
 		modelList:      modelList,
 		sidecarModel:   sidecarModel,
+		sessionTime:    time.Now(),
 	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -1666,7 +1668,7 @@ func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentD
 	b.WriteString("## Environment\n\n")
 	fmt.Fprintf(&b, "- Current directory: %s\n", c.projectDir)
 	fmt.Fprintf(&b, "- Workspace: %s\n", c.session.Workspace)
-	fmt.Fprintf(&b, "- Current time: %s\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(&b, "- Current time: %s\n", c.sessionTime.Format(time.RFC3339))
 	b.WriteString("\n## Important Rules\n\n")
 	b.WriteString("- All intermediate files (drafts, temporary outputs, logs, scratch data, etc.) MUST be placed under the workspace directory. Do not write intermediate files to the project directory.\n\n")
 	b.WriteString("---\n\n")
@@ -1795,7 +1797,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("\n## Environment\n\n")
 	fmt.Fprintf(&b, "- Current directory: %s\n", c.projectDir)
 	fmt.Fprintf(&b, "- Workspace: %s\n", c.session.Workspace)
-	fmt.Fprintf(&b, "- Current time: %s\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(&b, "- Current time: %s\n", c.sessionTime.Format(time.RFC3339))
 	b.WriteString("\n## Important Rules\n\n")
 	b.WriteString("- All intermediate files (drafts, temporary outputs, logs, scratch data, etc.) MUST be placed under the workspace directory. Do not write intermediate files to the project directory.\n\n")
 
