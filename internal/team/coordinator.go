@@ -1636,11 +1636,23 @@ func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentD
 		return def
 	}
 	wc := c.getWorkerContext(ctx)
-	if wc == "" {
-		return def
+
+	var b strings.Builder
+	b.WriteString("## Project Context\n\n")
+	if wc != "" {
+		b.WriteString(wc)
+		b.WriteString("\n\n---\n\n")
 	}
+	b.WriteString("## Environment\n\n")
+	fmt.Fprintf(&b, "- Current directory: %s\n", c.projectDir)
+	fmt.Fprintf(&b, "- Workspace: %s\n", c.session.Workspace)
+	fmt.Fprintf(&b, "- Current time: %s\n", time.Now().Format(time.RFC3339))
+	b.WriteString("\n## Important Rules\n\n")
+	b.WriteString("- All intermediate files (drafts, temporary outputs, logs, scratch data, etc.) MUST be placed under the workspace directory. Do not write intermediate files to the project directory.\n\n")
+	b.WriteString("---\n\n")
+
 	injectedDef := *def
-	injectedDef.System = "## Project Context\n\n" + wc + "\n\n---\n\n" + injectedDef.System
+	injectedDef.System = b.String() + injectedDef.System
 	return &injectedDef
 }
 
@@ -1759,6 +1771,13 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("Ask the user a question when you need clarification before proceeding.\n\n")
 
 	fmt.Fprintf(&b, "Team workspace: %s\n", c.session.Workspace)
+
+	b.WriteString("\n## Environment\n\n")
+	fmt.Fprintf(&b, "- Current directory: %s\n", c.projectDir)
+	fmt.Fprintf(&b, "- Workspace: %s\n", c.session.Workspace)
+	fmt.Fprintf(&b, "- Current time: %s\n", time.Now().Format(time.RFC3339))
+	b.WriteString("\n## Important Rules\n\n")
+	b.WriteString("- All intermediate files (drafts, temporary outputs, logs, scratch data, etc.) MUST be placed under the workspace directory. Do not write intermediate files to the project directory.\n\n")
 
 	return b.String()
 }
