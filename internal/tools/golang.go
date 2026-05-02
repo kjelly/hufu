@@ -23,6 +23,7 @@ type golangArgs struct {
 
 func NewGolangTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
+	cfg.ToolName = "golang"
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "golang",

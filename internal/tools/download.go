@@ -24,6 +24,7 @@ type downloadArgs struct {
 
 func NewDownloadTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
+	cfg.ToolName = "download"
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "download",

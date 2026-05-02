@@ -12,6 +12,7 @@ const defaultSudoTimeout = 120 * time.Second
 
 func NewSudoTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
+	cfg.ToolName = "sudo"
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "sudo",

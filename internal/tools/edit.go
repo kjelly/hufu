@@ -31,6 +31,7 @@ type Edit struct {
 
 func NewEditTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
+	cfg.ToolName = "edit"
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "edit",

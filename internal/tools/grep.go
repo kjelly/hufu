@@ -27,6 +27,7 @@ type grepArgs struct {
 
 func NewGrepTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
+	cfg.ToolName = "grep"
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "grep",

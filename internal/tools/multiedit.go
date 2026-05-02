@@ -29,6 +29,7 @@ type failedEdit struct {
 
 func NewMultiEditTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
+	cfg.ToolName = "multiedit"
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "multiedit",

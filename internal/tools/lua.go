@@ -24,6 +24,7 @@ type luaArgs struct {
 
 func NewLuaTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
+	cfg.ToolName = "lua"
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "lua",
@@ -273,7 +274,7 @@ func validateLuaPathWithConsent(path, projectDir string, allowedPaths []string, 
 	}
 
 	if consent != nil {
-		result, err := consent.AskConsent(absPath, "read")
+		result, err := consent.AskConsent(absPath, "read", "lua", path)
 		if err != nil {
 			return "", fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", path, err)
 		}

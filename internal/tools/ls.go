@@ -21,6 +21,7 @@ type lsArgs struct {
 
 func NewLsTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
+	cfg.ToolName = "ls"
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "ls",

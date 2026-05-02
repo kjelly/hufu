@@ -44,6 +44,7 @@ type ToolConfig struct {
 	WorkDir      string
 	AllowedPaths []string
 	PathConsent  *PathConsent
+	ToolName     string
 }
 
 func WithWorkDir(dir string) ToolOption {
@@ -61,6 +62,12 @@ func WithAllowedPaths(paths []string) ToolOption {
 func WithPathConsent(consent *PathConsent) ToolOption {
 	return func(c *ToolConfig) {
 		c.PathConsent = consent
+	}
+}
+
+func WithToolName(name string) ToolOption {
+	return func(c *ToolConfig) {
+		c.ToolName = name
 	}
 }
 
@@ -283,7 +290,7 @@ func checkPathOrConsent(path, workDir, operation string, cfg ToolConfig) (string
 	}
 
 	if cfg.PathConsent != nil {
-		result, err := cfg.PathConsent.AskConsent(absPath, operation)
+		result, err := cfg.PathConsent.AskConsent(absPath, operation, cfg.ToolName, path)
 		if err != nil {
 			return "", fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", path, err)
 		}
@@ -316,7 +323,7 @@ func resolveAndValidatePathWithConsent(path string, cfg ToolConfig) (string, err
 	}
 
 	if cfg.PathConsent != nil {
-		result, err := cfg.PathConsent.AskConsent(absPath, "edit")
+		result, err := cfg.PathConsent.AskConsent(absPath, "edit", cfg.ToolName, path)
 		if err != nil {
 			return "", fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", path, err)
 		}

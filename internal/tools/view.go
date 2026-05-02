@@ -24,6 +24,7 @@ type viewArgs struct {
 
 func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
+	cfg.ToolName = "view"
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "view",

@@ -22,6 +22,7 @@ type globArgs struct {
 
 func NewGlobTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
+	cfg.ToolName = "glob"
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "glob",

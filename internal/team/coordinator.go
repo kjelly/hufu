@@ -63,6 +63,8 @@ type Coordinator struct {
 	wrapUp                atomic.Int32
 	currentAgentName      string
 	currentAgentNameMu    sync.RWMutex
+	currentTask           string
+	currentTaskMu         sync.RWMutex
 	auditLogger           *audit.AuditLogger
 	skillUsage            map[string]*skillUsageState
 	skillUsageMu          sync.Mutex
@@ -190,6 +192,13 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 
 	if history := LoadConversationHistory(session.Workspace); len(history) > 0 {
 		c.conversationHistory = history
+	}
+
+	if pathConsent != nil {
+		coordinator := c
+		pathConsent.SetAgentInfoSource(func() tools.AgentInfo {
+			return coordinator.GetCurrentAgentInfo()
+		})
 	}
 
 	return c, nil
@@ -564,6 +573,25 @@ func (c *Coordinator) GetCurrentAgent() string {
 	return c.currentAgentName
 }
 
+func (c *Coordinator) SetCurrentTask(task string) {
+	c.currentTaskMu.Lock()
+	defer c.currentTaskMu.Unlock()
+	c.currentTask = task
+}
+
+func (c *Coordinator) GetCurrentTask() string {
+	c.currentTaskMu.RLock()
+	defer c.currentTaskMu.RUnlock()
+	return c.currentTask
+}
+
+func (c *Coordinator) GetCurrentAgentInfo() tools.AgentInfo {
+	return tools.AgentInfo{
+		Name: c.GetCurrentAgent(),
+		Task: c.GetCurrentTask(),
+	}
+}
+
 func (c *Coordinator) RunAgentsTool() fantasy.AgentTool {
 	return &runAgentsTool{coordinator: c}
 }
@@ -815,9 +843,12 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	timing.reset()
 
 	currentAgent := c.GetCurrentAgent()
+	currentTask := c.GetCurrentTask()
 	c.SetCurrentAgent(name)
+	c.SetCurrentTask(task)
 	output, _, err := c.runAgentWithStatusAndHistory(taskCtx, ag, name, taskPrompt, nil, timing)
 	c.SetCurrentAgent(currentAgent)
+	c.SetCurrentTask(currentTask)
 
 	duration, modelTime, toolTime := timing.snapshot()
 	if err != nil {
@@ -1170,6 +1201,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	c.report(c.newEvent("start").withAgent(agentName).withMessage(task.Task).withModel(resolvedModel))
 	c.SetCurrentAgent(agentName)
+	c.SetCurrentTask(task.Task)
 	_ = writeStatus(c.session.Workspace, agentName, "working", task.Task)
 	_ = writeInbox(c.session.Workspace, agentName, task.Task)
 
@@ -1915,6 +1947,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.SetCurrentAgent(resolvedName)
+	c.SetCurrentTask(task)
 
 	ag, err := c.getOrCreateAgent(ctx, agentDef, "")
 	if err != nil {

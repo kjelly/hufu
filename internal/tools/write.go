@@ -21,6 +21,7 @@ type writeArgs struct {
 
 func NewWriteTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
+	cfg.ToolName = "write"
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "write",

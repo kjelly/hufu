@@ -90,6 +90,7 @@ func runShellCommand(ctx context.Context, timeout time.Duration, workDir string,
 
 func NewBashTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
+	cfg.ToolName = "bash"
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "bash",
@@ -166,7 +167,7 @@ func checkBashPathConsent(command string, cfg ToolConfig) error {
 		}
 
 		if cfg.PathConsent != nil {
-			result, err := cfg.PathConsent.AskConsent(absPath, "access")
+			result, err := cfg.PathConsent.AskConsent(absPath, "access", cfg.ToolName, p)
 			if err != nil {
 				return fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", absPath, err)
 			}

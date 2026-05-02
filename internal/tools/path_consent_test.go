@@ -58,25 +58,97 @@ func TestIsPathAllowedMultiple(t *testing.T) {
 func TestPathConsentRemembered(t *testing.T) {
 	pc := NewPathConsent()
 
-	if pc.IsRemembered("/some/path") {
+	if pc.IsRemembered("/some/path/file.txt") {
 		t.Error("empty consent should not remember anything")
 	}
 
 	pc.mu.Lock()
-	pc.remembered = append(pc.remembered, "/some/path"+string(os.PathSeparator))
+	pc.remembered = append(pc.remembered, "/some/path/")
 	pc.mu.Unlock()
 
 	if !pc.IsRemembered("/some/path/file.txt") {
-		t.Error("child of remembered path should be remembered")
+		t.Error("file in remembered dir should be remembered")
 	}
-	if !pc.IsRemembered("/some/path") {
-		t.Error("exact remembered path should be remembered")
+	if !pc.IsRemembered("/some/path/subdir/file.txt") {
+		t.Error("file in subdirectory of remembered dir should be remembered")
 	}
-	if pc.IsRemembered("/other/path") {
+	if pc.IsRemembered("/some/other/file.txt") {
 		t.Error("unrelated path should not be remembered")
 	}
-	if pc.IsRemembered("/some/path-other") {
+	if pc.IsRemembered("/some/path-other/file.txt") {
 		t.Error("path with common prefix but different directory should not be remembered")
+	}
+}
+
+func TestPathConsentDenied(t *testing.T) {
+	pc := NewPathConsent()
+
+	if pc.IsDenied("/secrets/key.pem") {
+		t.Error("empty consent should not deny anything")
+	}
+
+	pc.mu.Lock()
+	pc.denied = append(pc.denied, "/secrets/")
+	pc.mu.Unlock()
+
+	if !pc.IsDenied("/secrets/key.pem") {
+		t.Error("file in denied dir should be denied")
+	}
+	if !pc.IsDenied("/secrets/other.pem") {
+		t.Error("other file in denied dir should be denied")
+	}
+	if !pc.IsDenied("/secrets/subproject/file.txt") {
+		t.Error("file in subdirectory of denied dir should be denied (prefix matching)")
+	}
+	if pc.IsDenied("/other/path/file.txt") {
+		t.Error("unrelated path should not be denied")
+	}
+}
+
+func TestPathConsentAllowedOverridesDenied(t *testing.T) {
+	pc := NewPathConsent()
+
+	pc.mu.Lock()
+	pc.denied = append(pc.denied, "/secrets/")
+	pc.remembered = append(pc.remembered, "/secrets/subproject/")
+	pc.mu.Unlock()
+
+	if !pc.IsDenied("/secrets/key.pem") {
+		t.Error("file in denied dir should still be denied")
+	}
+	if !pc.IsDenied("/secrets/subproject/file.txt") {
+		t.Error("file in subdirectory of denied dir should be denied (prefix matching)")
+	}
+	if !pc.IsRemembered("/secrets/subproject/file.txt") {
+		t.Error("file in remembered subdirectory should be remembered")
+	}
+}
+
+func TestDirOfPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "mydir")
+	os.MkdirAll(subDir, 0o755)
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"existing directory", subDir, subDir},
+		{"file in directory", filepath.Join(subDir, "file.txt"), subDir},
+		{"non-existent file with extension", filepath.Join(tmpDir, "noexist", "file.txt"), filepath.Join(tmpDir, "noexist")},
+		{"non-existent directory without extension", filepath.Join(tmpDir, "noexist", "subdir"), filepath.Join(tmpDir, "noexist", "subdir")},
+		{"non-existent dotfile", filepath.Join(tmpDir, "noexist", ".gitignore"), filepath.Join(tmpDir, "noexist")},
+		{"non-existent Makefile treated as dir", filepath.Join(tmpDir, "noexist", "Makefile"), filepath.Join(tmpDir, "noexist", "Makefile")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := dirOfPath(tt.path)
+			if got != tt.want {
+				t.Errorf("dirOfPath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
 	}
 }
 
