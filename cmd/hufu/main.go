@@ -38,6 +38,7 @@ var (
 	memoryModel         string
 	archiveMemory       bool
 	showHistory         bool
+	stepsMode           bool
 	globalPromptReader  atomic.Pointer[readline.PromptReader]
 )
 
@@ -70,6 +71,7 @@ func main() {
 	rootCmd.Flags().StringVar(&memoryModel, "memory-model", "", "Embedding model for memory (default: qwen3-embedding:4b, overrides hufu.yaml)")
 	rootCmd.Flags().BoolVar(&archiveMemory, "archive-memory", false, "Archive session summary to memory and exit")
 	rootCmd.Flags().BoolVar(&showHistory, "show-history", false, "Show previous session history on resume")
+	rootCmd.Flags().BoolVarP(&stepsMode, "steps", "s", false, "Pause for user confirmation before executing each batch of worker tasks")
 
 	if err := rootCmd.Execute(); err != nil {
 		var interrupted errInterrupted
@@ -251,6 +253,9 @@ func runTeam(cmd *cobra.Command, args []string) error {
 				tc, err := loadTeamByName(ctx, seg.Name, registry, providerURL, pathConsent)
 				if err != nil {
 					return fmt.Errorf("failed to load team %q: %w", seg.Name, err)
+				}
+				if stepsMode {
+					tc.coordinator.SetStepConfirmFn(makeStepConfirmFn())
 				}
 				loadedTeams[seg.Name] = tc
 			}
@@ -588,6 +593,50 @@ func newPathConsent() *tools.PathConsent {
 	return tools.NewPathConsent()
 }
 
+func makeStepConfirmFn() func(context.Context, []team.TaskDef) (bool, error) {
+	return func(ctx context.Context, tasks []team.TaskDef) (bool, error) {
+		tools.StdinMu.Lock()
+		defer tools.StdinMu.Unlock()
+
+		tools.SetAskUserActive(true)
+		defer tools.SetAskUserActive(false)
+
+		fmt.Fprintf(os.Stderr, "\n%s %d worker task(s) ready to execute:\n",
+			boldStyle.Render("─── STEPS ───"), len(tasks))
+		for i, t := range tasks {
+			fmt.Fprintf(os.Stderr, "  %s %s: %s\n",
+				dimStyle.Render(fmt.Sprintf("%d.", i+1)),
+				agentStyle.Render(strings.ToLower(t.Agent)),
+				t.Task)
+		}
+		fmt.Fprintf(os.Stderr, "\n")
+
+		pr := globalPromptReader.Load()
+		var answer string
+		if pr != nil {
+			line, err := pr.ReadLine(boldStyle.Render("Execute? [Y/n]: "))
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					return false, nil
+				}
+				return false, err
+			}
+			answer = strings.TrimSpace(line)
+		} else {
+			fmt.Fprintf(os.Stderr, "%s", boldStyle.Render("Execute? [Y/n]: "))
+			if _, err := fmt.Scanln(&answer); err != nil {
+				if err == io.EOF {
+					return false, nil
+				}
+				return false, err
+			}
+		}
+
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		return answer == "" || answer == "y" || answer == "yes", nil
+	}
+}
+
 func runWithInjection(ctx context.Context, tc *teamContext, initialResult string, injector *promptInjector) (string, error) {
 	result := initialResult
 	for {
@@ -633,6 +682,9 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				loaded, err := loadTeamByName(ctx, teamName, registry, providerURL, pathConsent)
 				if err != nil {
 					return strings.Join(results, "\n\n"), fmt.Errorf("failed to load team %q: %w", teamName, err)
+				}
+				if stepsMode {
+					loaded.coordinator.SetStepConfirmFn(makeStepConfirmFn())
 				}
 				tc = loaded
 				loadedTeams[teamName] = tc

@@ -83,6 +83,9 @@ type Coordinator struct {
 	autoLoadedSkillsMu    sync.RWMutex
 	sidecarInit           bool
 	sessionTime           time.Time
+	// stepConfirmFn must be set before Run() or protected by stepConfirmFnMu.
+	stepConfirmFn   func(context.Context, []TaskDef) (bool, error)
+	stepConfirmFnMu sync.RWMutex
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
@@ -562,6 +565,12 @@ func (c *Coordinator) IsWrapUp() bool {
 
 func (c *Coordinator) TaskTracker() *TaskTracker {
 	return c.taskTracker
+}
+
+func (c *Coordinator) SetStepConfirmFn(fn func(context.Context, []TaskDef) (bool, error)) {
+	c.stepConfirmFnMu.Lock()
+	defer c.stepConfirmFnMu.Unlock()
+	c.stepConfirmFn = fn
 }
 
 func (c *Coordinator) SetCurrentAgent(name string) {
@@ -1121,6 +1130,25 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	}
 	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+
+	c.stepConfirmFnMu.RLock()
+	stepFn := c.stepConfirmFn
+	c.stepConfirmFnMu.RUnlock()
+	if stepFn != nil {
+		approved, err := stepFn(ctx, tasks)
+		if err != nil {
+			return "", err
+		}
+		if !approved {
+			for _, item := range todoItems {
+				c.taskTracker.TodoList().UpdateStatus(item.ID, TaskError, "cancelled by user")
+			}
+			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			c.report(c.newEvent("step").withMessage("Steps: user declined task execution"))
+			c.wrapUp.Store(1)
+			return "", fmt.Errorf("user declined task execution: call finish immediately with your best summary of work completed so far")
+		}
+	}
 
 	duplicateWarnings := c.checkDuplicateTasks(tasks)
 	if len(duplicateWarnings) > 0 {
