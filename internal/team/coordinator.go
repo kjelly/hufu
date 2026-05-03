@@ -111,6 +111,11 @@ type Coordinator struct {
 	// stepConfirmFn must be set before Run() or protected by stepConfirmFnMu.
 	stepConfirmFn   func(context.Context, []TaskDef) (bool, error)
 	stepConfirmFnMu sync.RWMutex
+	// dryRun is a forward-looking feature for short-circuiting ExecuteTasks
+	// when dry-run mode is active. Currently, the CLI's --dry-run flag calls
+	// DryRun() directly and returns early before reaching ExecuteTasks, so
+	// this field is not yet exercised in the main CLI flow.
+	dryRun atomic.Bool
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
@@ -596,6 +601,15 @@ func (c *Coordinator) SetStepConfirmFn(fn func(context.Context, []TaskDef) (bool
 	c.stepConfirmFnMu.Lock()
 	defer c.stepConfirmFnMu.Unlock()
 	c.stepConfirmFn = fn
+}
+
+// SetDryRun enables or disables dry-run mode on the coordinator.
+// When enabled, ExecuteTasks will short-circuit and return a plan
+// without actually executing any agent tasks. This is a forward-looking
+// feature; the current CLI --dry-run flag calls DryRun() directly and
+// returns early, so SetDryRun is not yet exercised in the main CLI flow.
+func (c *Coordinator) SetDryRun(v bool) {
+	c.dryRun.Store(v)
 }
 
 func (c *Coordinator) SetCurrentAgent(name string) {
@@ -1156,6 +1170,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
+	if c.dryRun.Load() {
+		c.report(c.newEvent("step").withMessage("Dry run: task plan shown, agents not executed"))
+		c.wrapUp.Store(1)
+		return "Dry run: the above tasks have been planned but will not be executed. Call finish immediately.", nil
+	}
+
 	c.stepConfirmFnMu.RLock()
 	stepFn := c.stepConfirmFn
 	c.stepConfirmFnMu.RUnlock()
@@ -1404,7 +1424,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	return result, nil
 }
 
-func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message, timing *taskTiming) (string, []fantasy.StepResult, error) {
+func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message, timing *taskTiming, extraStop ...fantasy.StopCondition) (string, []fantasy.StepResult, error) {
 	reportFn := c.reportStatus
 	workspace := c.session.Workspace
 	teamName := c.session.Config.Name
@@ -1413,6 +1433,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	streamCall := fantasy.AgentStreamCall{
 		Prompt:   prompt,
 		Messages: history,
+		StopWhen: extraStop,
 		PrepareStep: func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
 			llmLogRequest(logWrite, opts)
 			return ctx, fantasy.PrepareStepResult{}, nil
@@ -2494,7 +2515,10 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 	dryRunCtx, cancel := context.WithTimeout(ctx, coordinatorTimeout)
 	defer cancel()
 
-	_, _, err = c.runAgentWithStatusAndHistory(dryRunCtx, orch, orchDef.Name, userPrompt, nil, &taskTiming{})
+	_, _, err = c.runAgentWithStatusAndHistory(dryRunCtx, orch, orchDef.Name, userPrompt, nil, &taskTiming{},
+		fantasy.HasToolCall("agent"),
+		fantasy.StepCountIs(agent.DefaultCoordinatorMaxSteps),
+	)
 
 	result := &DryRunResult{
 		TeamName:           c.session.Config.Name,

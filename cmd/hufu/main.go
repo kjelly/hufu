@@ -259,6 +259,9 @@ func runTeam(cmd *cobra.Command, args []string) error {
 				if stepsMode {
 					tc.coordinator.SetStepConfirmFn(makeStepConfirmFn())
 				}
+				if dryRun {
+					tc.coordinator.SetDryRun(true)
+				}
 				loadedTeams[seg.Name] = tc
 			}
 		}
