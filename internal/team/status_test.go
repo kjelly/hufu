@@ -337,6 +337,9 @@ func TestTaskStatusConstants(t *testing.T) {
 	if TaskError != "error" {
 		t.Errorf("TaskError = %q, want %q", TaskError, "error")
 	}
+	if TaskSkipped != "skipped" {
+		t.Errorf("TaskSkipped = %q, want %q", TaskSkipped, "skipped")
+	}
 }
 
 func TestTodoItemFields(t *testing.T) {
@@ -415,5 +418,26 @@ func TestTodoListUpdateTodoTiming(t *testing.T) {
 	}
 	if items[0].ToolTime != 1*time.Minute {
 		t.Errorf("ToolTime = %v, want %v", items[0].ToolTime, 1*time.Minute)
+	}
+}
+
+func TestTaskSkippedEndedAt(t *testing.T) {
+	tl := &TodoList{}
+	tl.AddBatch([]struct {
+		Agent string
+		Desc  string
+		Model string
+	}{{Agent: "test-agent", Desc: "test task"}})
+	item := tl.Items()[0]
+	tl.UpdateStatus(item.ID, TaskSkipped, "not executed")
+	updated := tl.Items()[0]
+	if updated.EndedAt.IsZero() {
+		t.Error("TaskSkipped should set EndedAt")
+	}
+	if updated.Status != TaskSkipped {
+		t.Errorf("expected TaskSkipped, got %s", updated.Status)
+	}
+	if updated.Detail != "not executed" {
+		t.Errorf("expected 'not executed', got %q", updated.Detail)
 	}
 }

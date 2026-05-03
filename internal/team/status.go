@@ -93,6 +93,7 @@ const (
 	TaskInProgress TaskStatus = "in_progress"
 	TaskDone       TaskStatus = "done"
 	TaskError      TaskStatus = "error"
+	TaskSkipped    TaskStatus = "skipped" // created but never executed
 )
 
 type TaskTracker struct {
@@ -166,7 +167,7 @@ func (tl *TodoList) UpdateStatus(id string, status TaskStatus, detail string) {
 				if ti.StartedAt.IsZero() {
 					ti.StartedAt = time.Now()
 				}
-			case TaskDone, TaskError:
+			case TaskDone, TaskError, TaskSkipped:
 				if ti.EndedAt.IsZero() {
 					ti.EndedAt = time.Now()
 				}

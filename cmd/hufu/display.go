@@ -188,6 +188,9 @@ func (d *taskDisplay) render() {
 			} else {
 				desc = dimStyle.Render(t.Desc)
 			}
+		case team.TaskSkipped:
+			icon = dimStyle.Render("—")
+			desc = dimStyle.Render(t.Desc)
 		}
 		agentLabel := agentStyle.Render(t.Agent)
 		if t.Model != "" {

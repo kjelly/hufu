@@ -2307,8 +2307,34 @@ func (c *Coordinator) finalizeRemainingTasks() {
 	items := c.taskTracker.TodoList().Items()
 	changed := false
 	for _, item := range items {
-		if item.Status == TaskInProgress || item.Status == TaskPending {
+		switch item.Status {
+		case TaskInProgress:
 			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskError, "coordinator ended unexpectedly")
+			changed = true
+		case TaskPending:
+			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "")
+			changed = true
+		}
+	}
+	if changed {
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	}
+}
+
+// finalizeNormalCompletion marks tasks that are still pending as skipped when
+// the coordinator finishes successfully. Tasks in progress should not exist at
+// this point since ExecuteTasks waits for all goroutines, but we handle them as
+// done out of caution.
+func (c *Coordinator) finalizeNormalCompletion() {
+	items := c.taskTracker.TodoList().Items()
+	changed := false
+	for _, item := range items {
+		switch item.Status {
+		case TaskPending:
+			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "")
+			changed = true
+		case TaskInProgress:
+			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "still in progress at completion")
 			changed = true
 		}
 	}
@@ -2390,6 +2416,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		SaveSession(c.session.Workspace, c.sessionData)
 	}
 
+	c.finalizeNormalCompletion()
 	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator finished").withTodoID(CoordTodoID))
 	return finalResult, nil
 }
@@ -2433,6 +2460,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		SaveSession(c.session.Workspace, c.sessionData)
 	}
 
+	c.finalizeNormalCompletion()
 	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("continuation finished").withTodoID(CoordTodoID))
 	return finalResult, nil
 }

@@ -53,6 +53,7 @@ var (
 	progressIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	doneIcon     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	errorIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	skippedIcon  = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("8"))
 
 	toolCallStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	toolResStyle  = lipgloss.NewStyle().Faint(true)
@@ -187,17 +188,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FinishedMsg:
 		m.finished = true
 		m.statusText = doneIcon.Render("✓") + dimStyle.Render("  All tasks completed")
-		// Mark all non-terminal tasks as done.
+		// The coordinator already called finalizeNormalCompletion() which marks
+		// TaskPending → TaskSkipped and TaskInProgress → TaskDone via a
+		// todos_updated event. This is a safety net for any stragglers.
 		for i, t := range m.tasks {
-			if t.Status == team.TaskInProgress || t.Status == team.TaskPending {
+			switch t.Status {
+			case team.TaskInProgress:
 				m.tasks[i].Status = team.TaskDone
+			case team.TaskPending:
+				m.tasks[i].Status = team.TaskSkipped
 			}
 		}
-		if m.coordItem != nil && (m.coordItem.Status == team.TaskInProgress || m.coordItem.Status == team.TaskPending) {
-			m.coordItem.Status = team.TaskDone
+		if m.coordItem != nil {
+			switch m.coordItem.Status {
+			case team.TaskInProgress:
+				m.coordItem.Status = team.TaskDone
+			case team.TaskPending:
+				m.coordItem.Status = team.TaskSkipped
+			}
 			for i, t := range m.tasks {
 				if t.ID == team.CoordTodoID {
-					m.tasks[i].Status = team.TaskDone
+					m.tasks[i].Status = m.coordItem.Status
 					break
 				}
 			}
@@ -625,6 +636,8 @@ func taskIconStyle(s team.TaskStatus) (string, lipgloss.Style) {
 		return "●", doneIcon
 	case team.TaskError:
 		return "✗", errorIcon
+	case team.TaskSkipped:
+		return "—", skippedIcon
 	}
 	return "○", pendingIcon
 }
@@ -699,6 +712,10 @@ func (m Model) vpHeight() int {
 func (m Model) buildDetailContent() string {
 	lines := m.logs[m.detailID]
 	if len(lines) == 0 {
+		item := m.findTask(m.detailID)
+		if item != nil && item.Status == team.TaskSkipped {
+			return dimStyle.Render("  (task was not executed)")
+		}
 		return dimStyle.Render("  (no output yet)")
 	}
 	return strings.Join(lines, "\n")
@@ -714,7 +731,7 @@ func (m Model) colItems(col int) []*team.TodoItem {
 			out = append(out, t)
 		case col == 1 && t.Status == team.TaskInProgress:
 			out = append(out, t)
-		case col == 2 && (t.Status == team.TaskDone || t.Status == team.TaskError):
+		case col == 2 && (t.Status == team.TaskDone || t.Status == team.TaskError || t.Status == team.TaskSkipped):
 			out = append(out, t)
 		}
 	}
