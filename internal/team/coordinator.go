@@ -2206,6 +2206,20 @@ func (c *Coordinator) saveHistoryAndSession(ctx context.Context, steps []fantasy
 	}
 }
 
+func (c *Coordinator) finalizeRemainingTasks() {
+	items := c.taskTracker.TodoList().Items()
+	changed := false
+	for _, item := range items {
+		if item.Status == TaskInProgress {
+			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskError, "coordinator ended unexpectedly")
+			changed = true
+		}
+	}
+	if changed {
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	}
+}
+
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
 	orchDef := c.GetOrchestratorDef()
 	if orchDef == nil {
@@ -2262,8 +2276,10 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	result, steps, err := c.runOrchestrator(ctx, &orchDefCopy, userPrompt)
 	if err != nil {
+		c.finalizeRemainingTasks()
 		c.saveHistoryAndSession(ctx, steps)
 		orchModel := c.resolveAgentModel(orchDef, "")
+		c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator failed").withTodoID(CoordTodoID))
 		return "", fmt.Errorf("coordinator failed (model: %s): %w", orchModel, err)
 	}
 
@@ -2303,8 +2319,10 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 
 	result, steps, err := c.runOrchestrator(ctx, orchDef, continuationPrompt)
 	if err != nil {
+		c.finalizeRemainingTasks()
 		c.saveHistoryAndSession(ctx, steps)
 		orchModel := c.resolveAgentModel(orchDef, "")
+		c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator continuation failed").withTodoID(CoordTodoID))
 		return "", fmt.Errorf("coordinator continuation failed (model: %s): %w", orchModel, err)
 	}
 

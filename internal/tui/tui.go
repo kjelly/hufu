@@ -52,6 +52,13 @@ var (
 	toolResStyle  = lipgloss.NewStyle().Faint(true)
 	stepHdrStyle  = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("8"))
 	textLogStyle  = lipgloss.NewStyle().Faint(true)
+
+	confirmBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("9")).
+			Padding(1, 3)
+	confirmHighlightStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("237"))
+	confirmNormalStyle    = lipgloss.NewStyle().Faint(true)
 )
 
 // ── Model ─────────────────────────────────────────────────────────────────────
@@ -71,6 +78,9 @@ type Model struct {
 	detailID string
 	vp       viewport.Model
 	vpReady  bool
+
+	inConfirm     bool // showing quit confirmation dialog
+	confirmChoice int  // 0=no 1=yes
 
 	width    int
 	height   int
@@ -144,6 +154,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case FinishedMsg:
 		m.finished = true
+		// Only mark TaskInProgress items as TaskDone. TaskError items are
+		// already in a terminal state (set by finalizeRemainingTasks before
+		// FinishedMsg is sent), so they are safely skipped here.
+		for i, t := range m.tasks {
+			if t.Status == team.TaskInProgress {
+				m.tasks[i].Status = team.TaskDone
+			}
+		}
+		if m.coordItem != nil && m.coordItem.Status == team.TaskInProgress {
+			m.coordItem.Status = team.TaskDone
+			for i, t := range m.tasks {
+				if t.ID == team.CoordTodoID {
+					m.tasks[i].Status = team.TaskDone
+					break
+				}
+			}
+		}
 
 	case tea.MouseMsg:
 		if m.inDetail {
@@ -166,6 +193,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if m.inConfirm {
+			return m.updateConfirm(msg)
+		}
 		if m.inDetail {
 			return m.updateDetail(msg)
 		}
@@ -197,6 +227,10 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
+	case "esc":
+		m.inConfirm = true
+		m.confirmChoice = 0
+		return m, nil
 	case "q":
 		if m.finished {
 			return m, tea.Quit
@@ -236,11 +270,42 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "left", "h":
+		if m.confirmChoice > 0 {
+			m.confirmChoice--
+		}
+	case "right", "l":
+		if m.confirmChoice < 1 {
+			m.confirmChoice++
+		}
+	case "enter":
+		if m.confirmChoice == 1 {
+			return m, tea.Quit
+		}
+		m.inConfirm = false
+		return m, nil
+	case "esc":
+		m.inConfirm = false
+		return m, nil
+	case "n":
+		m.inConfirm = false
+		return m, nil
+	case "y":
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
 // ── View ──────────────────────────────────────────────────────────────────────
 
 func (m Model) View() string {
 	if m.width == 0 {
 		return "Initialising…"
+	}
+	if m.inConfirm {
+		return m.confirmView()
 	}
 	if m.inDetail {
 		return m.detailView()
@@ -465,7 +530,22 @@ func (m Model) footer() string {
 	if m.finished {
 		return footerStyle.Render("↑↓ navigate  ←→ columns  ↕ scroll  enter detail  q quit")
 	}
-	return footerStyle.Render("↑↓ navigate  ←→ columns  ↕ scroll  enter detail  ctrl+c cancel")
+	return footerStyle.Render("↑↓ navigate  ←→ columns  ↕ scroll  enter detail  esc quit")
+}
+
+func (m Model) confirmView() string {
+	noLabel := " No "
+	yesLabel := " Yes "
+	noStyled := confirmNormalStyle.Render(noLabel)
+	yesStyled := confirmNormalStyle.Render(yesLabel)
+	if m.confirmChoice == 0 {
+		noStyled = confirmHighlightStyle.Render(noLabel)
+	} else {
+		yesStyled = confirmHighlightStyle.Render(yesLabel)
+	}
+	buttons := noStyled + "  " + yesStyled
+	dialog := confirmBoxStyle.Render("  Quit hufu?" + "\n\n" + buttons + "\n")
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }
 
 // ── Detail view ───────────────────────────────────────────────────────────────
