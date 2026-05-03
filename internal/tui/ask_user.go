@@ -7,6 +7,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -118,10 +120,13 @@ func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inAskUser = false
 		return m, tea.Quit
 	case "up", "k":
+		// Bounds check: ensure cursor doesn't go below 0
 		if st.cursor > 0 {
 			st.cursor--
 		}
 	case "down", "j":
+		// Bounds check: ensure cursor doesn't go below len(opts) - 1 for single_choice
+		// total includes the custom option if hasCustom is true
 		if st.cursor < total-1 {
 			st.cursor++
 		}
@@ -143,6 +148,8 @@ func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			req.ReplyCh <- marshalAskResp(answers, "")
 		} else {
+			// Bounds check: ensure cursor is within valid option range before sending response
+			// For single_choice, cursor may point to custom option (index >= len(opts))
 			if st.cursor < len(opts) {
 				req.ReplyCh <- marshalAskResp([]string{optValue(opts[st.cursor])}, "")
 			} else {
@@ -164,6 +171,10 @@ func (m Model) askUserView() string {
 		return ""
 	}
 
+	// Note: m.inAskUser must be set to false before tea.Quit to ensure
+	// ReplyCh is sent before termination. This prevents the agent goroutine
+	// from deadlocking on the ReplyCh send, as the TUI must clean up the
+	// ask_user state before the model exits.
 	dialogW := m.width - 8
 	if dialogW < 44 {
 		dialogW = 44
@@ -182,7 +193,7 @@ func (m Model) askUserView() string {
 		sb.WriteString(askActiveStyle.Render("> "))
 		sb.WriteString(st.ti.View())
 		sb.WriteString("\n\n")
-		sb.WriteString(askHintStyle.Render("enter  submit"))
+		sb.WriteString(askHintStyle.Render("enter  submit  ctrl+c cancel"))
 	} else {
 		opts := req.Options
 		hasCustom := req.AllowAny || req.Type == "mixed"
@@ -194,7 +205,7 @@ func (m Model) askUserView() string {
 		sb.WriteString("\n")
 		for i, opt := range opts {
 			sel := st.cursor == i
-			label := truncRaw(opt.Label, innerW-8)
+			label := utils.TruncatePreview(opt.Label, innerW-8)
 			var line string
 			if req.Type == "multiple_choice" {
 				check := askCheckOff
@@ -216,7 +227,7 @@ func (m Model) askUserView() string {
 			sb.WriteString(line + "\n")
 		}
 		if hasCustom {
-			custom := truncRaw("Type your own answer…", innerW-4)
+			custom := utils.TruncatePreview("Type your own answer…", innerW-4)
 			if st.cursor == total-1 {
 				sb.WriteString(askCursorStr + " " + askActiveStyle.Render(custom) + "\n")
 			} else {
@@ -225,9 +236,9 @@ func (m Model) askUserView() string {
 		}
 
 		sb.WriteString("\n")
-		hint := "↑↓ navigate  enter select"
+		hint := "↑↓ navigate  enter select  ctrl+c cancel"
 		if req.Type == "multiple_choice" {
-			hint = "↑↓ navigate  space toggle  enter confirm"
+			hint = "↑↓ navigate  space toggle  enter confirm  ctrl+c cancel"
 		}
 		sb.WriteString(askHintStyle.Render(hint))
 	}

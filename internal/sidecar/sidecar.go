@@ -240,6 +240,11 @@ NEW TASK: %s`, list.String(), newTask)
 		return -1, fmt.Errorf("sidecar similar task generate failed: %w", err)
 	}
 	result = strings.TrimSpace(result)
+	if result == "" {
+		// Log empty response cases for debugging LLM response issues
+		fmt.Fprintf(os.Stderr, "warning: sidecar similar task: empty response from LLM\n")
+		return -1, nil
+	}
 
 	extracted := jsonCodeBlockRe.FindStringSubmatch(result)
 	if len(extracted) >= 2 {
@@ -250,9 +255,13 @@ NEW TASK: %s`, list.String(), newTask)
 		Match int `json:"match"`
 	}
 	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		// Log JSON parse failures for debugging LLM response issues
+		fmt.Fprintf(os.Stderr, "warning: sidecar similar task: failed to parse JSON response %q: %v\n", result, err)
 		return -1, fmt.Errorf("sidecar similar task: failed to parse JSON response %q: %w", result, err)
 	}
 	if resp.Match < 1 || resp.Match > len(pastTasks) {
+		// Log out-of-bounds match values for debugging LLM response issues
+		fmt.Fprintf(os.Stderr, "warning: sidecar similar task: match value %d out of bounds (expected 1-%d)\n", resp.Match, len(pastTasks))
 		return -1, nil
 	}
 	return resp.Match - 1, nil
