@@ -206,3 +206,54 @@ User task: %s`, skillList.String(), prompt)
 	}
 	return filtered, nil
 }
+
+// SimilarTask checks whether newTask is semantically equivalent to any task in
+// pastTasks. Returns the 0-based index of the matching past task, or -1 if none
+// match. The caller is responsible for truncating long task strings if needed.
+func (s *Sidecar) SimilarTask(ctx context.Context, newTask string, pastTasks []string) (int, error) {
+	if s == nil || s.agent == nil {
+		return -1, fmt.Errorf("sidecar not initialized")
+	}
+	if len(pastTasks) == 0 {
+		return -1, nil
+	}
+
+	var list strings.Builder
+	for i, t := range pastTasks {
+		preview := t
+		if utf8.RuneCountInString(preview) > 120 {
+			preview = string([]rune(preview)[:120]) + "..."
+		}
+		fmt.Fprintf(&list, "%d. %s\n", i+1, preview)
+	}
+
+	prompt := fmt.Sprintf(`You are a task deduplication classifier. Determine whether the NEW TASK is semantically equivalent to any task in PAST TASKS — meaning it asks for essentially the same work and would produce the same result.
+
+Return ONLY a JSON object: {"match": <1-based index of matching past task, or 0 if none>}
+
+PAST TASKS:
+%s
+NEW TASK: %s`, list.String(), newTask)
+
+	result, err := s.generate(ctx, prompt)
+	if err != nil {
+		return -1, fmt.Errorf("sidecar similar task generate failed: %w", err)
+	}
+	result = strings.TrimSpace(result)
+
+	extracted := jsonCodeBlockRe.FindStringSubmatch(result)
+	if len(extracted) >= 2 {
+		result = strings.TrimSpace(extracted[1])
+	}
+
+	var resp struct {
+		Match int `json:"match"`
+	}
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		return -1, fmt.Errorf("sidecar similar task: failed to parse JSON response %q: %w", result, err)
+	}
+	if resp.Match < 1 || resp.Match > len(pastTasks) {
+		return -1, nil
+	}
+	return resp.Match - 1, nil
+}

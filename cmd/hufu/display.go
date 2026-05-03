@@ -432,6 +432,29 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				dimStyle.Render(msg),
 			))
 
+		case "cache_hit":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			taskPreview := event.Message
+			if utf8.RuneCountInString(taskPreview) > 60 {
+				taskPreview = string([]rune(taskPreview)[:57]) + "..."
+			}
+			w.write(fmt.Sprintf("%s %s %s %s\n",
+				dimStyle.Render("⟐"),
+				agentStyle.Render(event.Agent),
+				doneStyle.Render("✓ cached"),
+				dimStyle.Render(taskPreview),
+			))
+
+		case "cache_check":
+			w.write(fmt.Sprintf("%s %s %s\n",
+				dimStyle.Render("⟐"),
+				agentStyle.Render(event.Agent),
+				dimStyle.Render("checking cache..."),
+			))
+
 		case "skill_auto_loaded":
 			if textBuf != "" {
 				w.write(flushText(currentAgent, textBuf))
@@ -661,15 +684,19 @@ func padRight(str string, width int) string {
 var activeTUIProgram atomic.Pointer[tea.Program]
 
 // coordDisplay holds display handles for one coordinator run. In TUI mode both
-// fields are nil and all methods are no-ops.
+// idleTimer and taskDisp are nil; stopThinking stops background ticker goroutines.
 type coordDisplay struct {
-	idleTimer *idleWarningTimer
-	taskDisp  *taskDisplay
+	idleTimer    *idleWarningTimer
+	taskDisp     *taskDisplay
+	stopThinking func()
 }
 
 func (d *coordDisplay) stopTimer() {
 	if d.idleTimer != nil {
 		d.idleTimer.stop()
+	}
+	if d.stopThinking != nil {
+		d.stopThinking()
 	}
 }
 
@@ -683,8 +710,9 @@ func (d *coordDisplay) finalizeTasks() {
 // attaches the TUI reporter; otherwise it creates the normal line-writer chain.
 func newCoordDisplay(tc *teamContext) *coordDisplay {
 	if p := activeTUIProgram.Load(); p != nil {
-		tc.coordinator.SetStatusReporter(makeTUIReporter(p))
-		return &coordDisplay{}
+		reporter, stopAll := makeTUIReporter(p)
+		tc.coordinator.SetStatusReporter(reporter)
+		return &coordDisplay{stopThinking: stopAll}
 	}
 	w := &lineWriter{}
 	idleTimer := newIdleWarningTimer(w, 30*time.Second)
@@ -695,12 +723,104 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 	return &coordDisplay{idleTimer: idleTimer, taskDisp: taskDisp}
 }
 
-// makeTUIReporter returns a StatusReporter that forwards relevant events to p.
-// Text deltas are accumulated per task and flushed as one block on task completion,
-// matching the CLI's buffered behaviour and avoiding noisy per-delta lines.
-func makeTUIReporter(p *tea.Program) team.StatusReporter {
+// thinkingEntry tracks one agent's LLM wait so the TUI status bar keeps
+// updating even when the model is silent for >30 s.
+type thinkingEntry struct {
+	label     string // pre-rendered "agent [model]" string
+	startTime time.Time
+	cancel    context.CancelFunc
+}
+
+// thinkingTracker maintains one active ticker per agent-task. Each ticker fires
+// every tickInterval and sends an updated "waiting …Xs" StatusBarMsg to p.
+// The most recently started thinking entry is tracked as "latest" so the status
+// bar always reflects the freshest activity.
+type thinkingTracker struct {
+	mu      sync.Mutex
+	entries map[string]*thinkingEntry // todoID → entry
+	latest  string                    // todoID of the most-recently started entry
+	p       *tea.Program
+}
+
+const thinkingTickInterval = 5 * time.Second
+
+func newThinkingTracker(p *tea.Program) *thinkingTracker {
+	return &thinkingTracker{
+		entries: make(map[string]*thinkingEntry),
+		p:       p,
+	}
+}
+
+func (tt *thinkingTracker) start(todoID, agentLabel string) {
+	tt.mu.Lock()
+	// Cancel any previous ticker for this todoID (e.g. retry).
+	if old, ok := tt.entries[todoID]; ok {
+		old.cancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	e := &thinkingEntry{label: agentLabel, startTime: time.Now(), cancel: cancel}
+	tt.entries[todoID] = e
+	tt.latest = todoID
+	tt.mu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(thinkingTickInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				tt.mu.Lock()
+				cur, ok := tt.entries[todoID]
+				isLatest := tt.latest == todoID
+				tt.mu.Unlock()
+				if !ok {
+					return
+				}
+				elapsed := time.Since(cur.startTime).Truncate(time.Second)
+				waitStr := dimStyle.Render(fmt.Sprintf("  waiting for LLM… %v", elapsed))
+				if isLatest {
+					tt.p.Send(tuipkg.StatusBarMsg{Text: cur.label + waitStr})
+				}
+			}
+		}
+	}()
+}
+
+func (tt *thinkingTracker) stop(todoID string) {
+	tt.mu.Lock()
+	defer tt.mu.Unlock()
+	if e, ok := tt.entries[todoID]; ok {
+		e.cancel()
+		delete(tt.entries, todoID)
+	}
+	// If this was the latest, promote the next remaining entry (if any).
+	if tt.latest == todoID {
+		tt.latest = ""
+		for id := range tt.entries {
+			tt.latest = id
+			break
+		}
+	}
+}
+
+func (tt *thinkingTracker) stopAll() {
+	tt.mu.Lock()
+	defer tt.mu.Unlock()
+	for _, e := range tt.entries {
+		e.cancel()
+	}
+	tt.entries = make(map[string]*thinkingEntry)
+	tt.latest = ""
+}
+
+// makeTUIReporter returns a StatusReporter that forwards relevant events to p,
+// and a cleanup func that stops any background thinking-ticker goroutines.
+func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 	textBufs := make(map[string]string)
 	coordAdded := false
+	tt := newThinkingTracker(p)
 
 	flushText := func(todoID string) {
 		if text := strings.TrimSpace(textBufs[todoID]); text != "" {
@@ -749,13 +869,16 @@ func makeTUIReporter(p *tea.Program) team.StatusReporter {
 				line = label
 			}
 			p.Send(tuipkg.TaskLogMsg{TodoID: todoID, Line: line})
-			// Status bar: show which agent is now thinking
+			// Status bar: show which agent is now thinking, and start the
+			// background ticker so elapsed time keeps updating every 5 s.
 			p.Send(tuipkg.StatusBarMsg{Text: label + dimStyle.Render("  thinking…")})
+			tt.start(todoID, label)
 
 		case "step":
 			if event.TodoID == "" {
 				return
 			}
+			tt.stop(event.TodoID)
 			if event.Step > 0 {
 				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderStep(event.Step)})
 				label := agentStyle.Render(event.Agent)
@@ -766,6 +889,7 @@ func makeTUIReporter(p *tea.Program) team.StatusReporter {
 			if event.TodoID == "" {
 				return
 			}
+			tt.stop(event.TodoID)
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolCall(event.ToolName, event.ToolArgs)})
 			argsPreview := event.ToolArgs
 			if len(argsPreview) > 60 {
@@ -782,6 +906,30 @@ func makeTUIReporter(p *tea.Program) team.StatusReporter {
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolResult(event.ToolName, event.ToolResult)})
 			agentLabel := agentStyle.Render(event.Agent)
 			p.Send(tuipkg.StatusBarMsg{Text: agentLabel + "  " + doneStyle.Render("✓ "+event.ToolName)})
+			// Agent will call LLM again after tool result; restart thinking ticker.
+			label := agentStyle.Render(event.Agent)
+			if event.Model != "" {
+				label += " " + dimStyle.Render("["+event.Model+"]")
+			}
+			tt.start(event.TodoID, label)
+
+		case "cache_hit":
+			if event.TodoID == "" {
+				return
+			}
+			tt.stop(event.TodoID)
+			taskPreview := event.Message
+			if utf8.RuneCountInString(taskPreview) > 50 {
+				taskPreview = string([]rune(taskPreview)[:47]) + "..."
+			}
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: doneStyle.Render("✓ cached")})
+			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + doneStyle.Render("✓ cached") + "  " + dimStyle.Render(taskPreview)})
+
+		case "cache_check":
+			if event.TodoID == "" {
+				return
+			}
+			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + dimStyle.Render("checking cache...")})
 
 		case "text":
 			if event.TodoID == "" {
@@ -793,6 +941,7 @@ func makeTUIReporter(p *tea.Program) team.StatusReporter {
 			if event.TodoID == "" {
 				return
 			}
+			tt.stop(event.TodoID)
 			hadText := strings.TrimSpace(textBufs[event.TodoID]) != ""
 			flushText(event.TodoID)
 			if !hadText {
@@ -810,6 +959,7 @@ func makeTUIReporter(p *tea.Program) team.StatusReporter {
 			if event.TodoID == "" {
 				return
 			}
+			tt.stop(event.TodoID)
 			flushText(event.TodoID)
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("✗ " + event.Message)})
 			errPreview := event.Message
@@ -818,7 +968,7 @@ func makeTUIReporter(p *tea.Program) team.StatusReporter {
 			}
 			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + errStyle.Render("✗ "+errPreview)})
 		}
-	}
+	}, tt.stopAll
 }
 
 // stderrLog writes to stderr only when the TUI is not active (avoids garbling

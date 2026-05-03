@@ -38,6 +38,11 @@ var skillSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
 // StatusEvents can be attributed to a specific task for the TUI.
 type todoIDKey struct{}
 
+// modelKey is a context key used to pass the resolved model name down
+// through executeTask → runAgentWithStatusAndHistory so that tool_result
+// events can include the model for TUI display.
+type modelKey struct{}
+
 type TaskDef struct {
 	Agent        string   `json:"agent"`
 	Task         string   `json:"task"`
@@ -105,6 +110,8 @@ type Coordinator struct {
 	skillUsageMu          sync.Mutex
 	delegatedTasks        map[string]int
 	delegatedTasksMu      sync.Mutex
+	taskResultCache       map[string][]cachedTaskEntry // agent → ordered list of past results
+	taskResultCacheMu     sync.RWMutex
 	memoryStore           *memory.MemoryStore
 	skillsMu              sync.RWMutex
 	modelList             []config.ModelEntry
@@ -197,22 +204,23 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		return nil, fmt.Errorf("failed to create Ollama provider: %w", err)
 	}
 	c := &Coordinator{
-		provider:       prov,
-		session:        session,
-		mcpManager:     mcpManager,
-		coreTools:      coreTools,
-		agentCache:     make(map[string]fantasy.Agent),
-		verbose:        verbose,
-		reportStatus:   func(event StatusEvent) {},
-		taskTracker:    NewTaskTracker(),
-		skills:         session.Skills,
-		projectDir:     projectDir,
-		skillUsage:     make(map[string]*skillUsageState),
-		delegatedTasks: make(map[string]int),
-		memoryStore:    memoryStore,
-		modelList:      modelList,
-		sidecarModel:   sidecarModel,
-		sessionTime:    time.Now(),
+		provider:        prov,
+		session:         session,
+		mcpManager:      mcpManager,
+		coreTools:       coreTools,
+		agentCache:      make(map[string]fantasy.Agent),
+		verbose:         verbose,
+		reportStatus:    func(event StatusEvent) {},
+		taskTracker:     NewTaskTracker(),
+		skills:          session.Skills,
+		projectDir:      projectDir,
+		skillUsage:      make(map[string]*skillUsageState),
+		delegatedTasks:  make(map[string]int),
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		memoryStore:     memoryStore,
+		modelList:       modelList,
+		sidecarModel:    sidecarModel,
+		sessionTime:     time.Now(),
 	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -910,6 +918,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		c.SetCurrentAgent(prevAgent)
 		c.SetCurrentTask(prevTask)
 	}()
+	taskCtx = context.WithValue(taskCtx, modelKey{}, subModel)
 	output, _, err := c.runAgentWithStatusAndHistory(taskCtx, ag, name, taskPrompt, nil, timing)
 
 	duration, modelTime, toolTime := timing.snapshot()
@@ -1099,6 +1108,73 @@ type agentTaskResult struct {
 	err       error
 }
 
+// cachedTaskEntry stores a previously completed task and its output for dedup.
+type cachedTaskEntry struct {
+	taskDesc string
+	output   string
+}
+
+// lookupTaskCache checks whether newTask has a semantically equivalent prior
+// result for agentKey (lowercase agent name). It first does a fast exact-match
+// check; if that misses and a sidecar is configured, it uses the sidecar to
+// judge semantic similarity. Returns (cachedOutput, true) on a hit.
+func (c *Coordinator) lookupTaskCache(ctx context.Context, agentKey, newTask string) (string, bool) {
+	c.taskResultCacheMu.RLock()
+	entries := make([]cachedTaskEntry, len(c.taskResultCache[agentKey]))
+	copy(entries, c.taskResultCache[agentKey])
+	c.taskResultCacheMu.RUnlock()
+
+	if len(entries) == 0 {
+		return "", false
+	}
+
+	normalizedNew := strings.ToLower(strings.Join(strings.Fields(newTask), " "))
+	for _, e := range entries {
+		norm := strings.ToLower(strings.Join(strings.Fields(e.taskDesc), " "))
+		if norm == normalizedNew {
+			return e.output, true
+		}
+	}
+
+	s := c.Sidecar()
+	if s == nil {
+		return "", false
+	}
+
+	pastDescs := make([]string, len(entries))
+	for i, e := range entries {
+		pastDescs[i] = e.taskDesc
+	}
+
+	sidecarCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	idx, err := s.SimilarTask(sidecarCtx, newTask, pastDescs)
+	if err != nil {
+		return "", false
+	}
+	if idx >= 0 && idx < len(entries) {
+		return entries[idx].output, true
+	}
+	return "", false
+}
+
+const maxTaskCacheEntries = 50
+
+// storeTaskCache saves a completed task result so future similar tasks can
+// skip re-execution.
+func (c *Coordinator) storeTaskCache(agentKey, taskDesc, output string) {
+	c.taskResultCacheMu.Lock()
+	defer c.taskResultCacheMu.Unlock()
+	c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
+		taskDesc: taskDesc,
+		output:   output,
+	})
+	if len(c.taskResultCache[agentKey]) > maxTaskCacheEntries {
+		c.taskResultCache[agentKey] = c.taskResultCache[agentKey][1:]
+	}
+}
+
 func (c *Coordinator) checkDuplicateTasks(tasks []TaskDef) []string {
 	var warnings []string
 	c.delegatedTasksMu.Lock()
@@ -1218,12 +1294,30 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+
+			// Check task result cache before running. Sidecar tasks and tasks
+			// that explicitly request summarize always run fresh.
+			agentKey := strings.ToLower(td.Agent)
+			if !td.Sidecar && !td.Summarize {
+				c.report(c.newEvent("cache_check").withAgent(td.Agent).withTodoID(tid).withMessage("checking cache similarity..."))
+				if cached, ok := c.lookupTaskCache(ctx, agentKey, td.Task); ok {
+					c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(td.Task).withTodoID(tid))
+					c.taskTracker.TodoList().UpdateStatus(tid, TaskDone, "")
+					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+					resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: td.Task, output: cached}
+					return
+				}
+			}
+
 			var output string
 			var err error
 			if td.Sidecar {
 				output, err = c.executeSidecarTask(ctx, td, tid)
 			} else {
 				output, err = c.executeTask(ctx, td, tid)
+			}
+			if err == nil && !td.Sidecar {
+				c.storeTaskCache(agentKey, td.Task, output)
 			}
 			resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: td.Task, output: output, err: err}
 		}(task, todoItems[i].ID)
@@ -1361,6 +1455,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			taskCtx, cancel := context.WithTimeout(parentCtx, agentTimeout)
 			defer cancel()
 			taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
+			taskCtx = context.WithValue(taskCtx, modelKey{}, resolvedModel)
 			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, prompt, conversationHistory, timing)
 		}()
 
@@ -1484,7 +1579,8 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					resultPreview = txt.Text
 				}
 			}
-			reportFn(c.newEvent("tool_result").withAgent(agentName).withTodoID(todoID).withToolResult(tr.ToolName, resultPreview))
+			resolvedModel, _ := ctx.Value(modelKey{}).(string)
+			reportFn(c.newEvent("tool_result").withAgent(agentName).withTodoID(todoID).withToolResult(tr.ToolName, resultPreview).withModel(resolvedModel))
 			llmLogStreamEvent(logWrite, "tool_result", formatToolResultContent(tr))
 			_, isErrResult := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Result)
 			audit.LogToolResult(agentName, tr.ToolName, resultPreview, isErrResult)
@@ -2107,6 +2203,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	defer cancel()
 
 	taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
+	taskCtx = context.WithValue(taskCtx, modelKey{}, directModel)
 
 	timing := &taskTiming{}
 	timing.reset()
