@@ -27,6 +27,10 @@ import (
 	"github.com/anomalyco/hufu/internal/tools"
 )
 
+// CoordTodoID is the special TodoItem ID used for the coordinator/orchestrator
+// pseudo-task that appears in the TUI and status reporting.
+const CoordTodoID = "__coord__"
+
 var skillSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
 // todoIDKey is a context key used to pass the current task's TodoItem ID
@@ -920,7 +924,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
 	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("done").withAgent(name).withMessage("completed").withModel(subModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
+	c.report(c.newEvent("done").withAgent(name).withOutput(output).withMessage("completed").withModel(subModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 	return output, nil
 }
 
@@ -1369,7 +1373,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
 			c.updateTodoTiming(todoID, modelTime, toolTime)
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-			c.report(c.newEvent("done").withAgent(agentName).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
+			c.report(c.newEvent("done").withAgent(agentName).withOutput(output).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 			if task.Summarize {
 				output = c.summarizeOutput(parentCtx, output)
 			}
@@ -1433,7 +1437,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("done").withAgent(task.Agent).withMessage("sidecar completed").withTodoID(todoID))
+	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(result).withMessage("sidecar completed").withTodoID(todoID))
 	return result, nil
 }
 
@@ -2143,7 +2147,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
 	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("done").withAgent(resolvedName).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
+	c.report(c.newEvent("done").withAgent(resolvedName).withOutput(output).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 
 	return &DirectAgentResult{AgentName: resolvedName, Output: output}, nil
 }
@@ -2172,6 +2176,7 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 
 	orchCtx, cancel := context.WithTimeout(ctx, coordinatorTimeout)
 	defer cancel()
+	orchCtx = context.WithValue(orchCtx, todoIDKey{}, CoordTodoID)
 
 	orch, err := agent.CreateAgent(orchCtx, c.provider, agent.AgentConfig{
 		Def:        orchDef,
@@ -2253,7 +2258,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	orchDefCopy := *orchDef
 	orchDefCopy.System = systemPrompt
 
-	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("coordinator starting").withModel(c.resolveAgentModel(orchDef, "")))
+	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("coordinator starting").withModel(c.resolveAgentModel(orchDef, "")).withTodoID(CoordTodoID))
 
 	result, steps, err := c.runOrchestrator(ctx, &orchDefCopy, userPrompt)
 	if err != nil {
@@ -2272,7 +2277,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		SaveSession(c.session.Workspace, c.sessionData)
 	}
 
-	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator finished"))
+	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator finished").withTodoID(CoordTodoID))
 	return finalResult, nil
 }
 
@@ -2294,7 +2299,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		c.sessionData.AddEntry("user", additionalPrompt)
 	}
 
-	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("continuing with additional input").withModel(c.resolveAgentModel(orchDef, "")))
+	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("continuing with additional input").withModel(c.resolveAgentModel(orchDef, "")).withTodoID(CoordTodoID))
 
 	result, steps, err := c.runOrchestrator(ctx, orchDef, continuationPrompt)
 	if err != nil {
@@ -2313,7 +2318,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		SaveSession(c.session.Workspace, c.sessionData)
 	}
 
-	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("continuation finished"))
+	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("continuation finished").withTodoID(CoordTodoID))
 	return finalResult, nil
 }
 
@@ -2515,7 +2520,7 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 		}
 	}
 
-	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("dry-run coordinator starting").withModel(c.resolveAgentModel(orchDef, "")))
+	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("dry-run coordinator starting").withModel(c.resolveAgentModel(orchDef, "")).withTodoID(CoordTodoID))
 
 	orch, err := agent.CreateAgent(ctx, c.provider, agent.AgentConfig{
 		Def:        &orchDefCopy,
@@ -2533,6 +2538,7 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 	}
 	dryRunCtx, cancel := context.WithTimeout(ctx, coordinatorTimeout)
 	defer cancel()
+	dryRunCtx = context.WithValue(dryRunCtx, todoIDKey{}, CoordTodoID)
 
 	_, _, err = c.runAgentWithStatusAndHistory(dryRunCtx, orch, orchDef.Name, userPrompt, nil, &taskTiming{},
 		fantasy.HasToolCall("agent"),
@@ -2602,7 +2608,7 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 		result.SidecarModel = resolvedConfig.ResolveSidecarModel(c.session.Config.SidecarModel)
 	}
 
-	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("dry-run coordinator finished"))
+	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("dry-run coordinator finished").withTodoID(CoordTodoID))
 
 	return result, nil
 }

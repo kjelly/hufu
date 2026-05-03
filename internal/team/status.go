@@ -22,6 +22,12 @@ type StatusEvent struct {
 	ModelTime  time.Duration
 	ToolTime   time.Duration
 	TodoID     string // ID of the TodoItem this event belongs to (set for worker-task events)
+	Output     string // Final output text (set in done events for task-level events)
+}
+
+func (e StatusEvent) withOutput(output string) StatusEvent {
+	e.Output = output
+	return e
 }
 
 func (e StatusEvent) withAgent(agent string) StatusEvent {

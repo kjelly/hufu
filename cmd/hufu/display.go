@@ -659,41 +659,105 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 }
 
 // makeTUIReporter returns a StatusReporter that forwards relevant events to p.
+// Text deltas are accumulated per task and flushed as one block on task completion,
+// matching the CLI's buffered behaviour and avoiding noisy per-delta lines.
 func makeTUIReporter(p *tea.Program) team.StatusReporter {
+	textBufs := make(map[string]string)
+	coordAdded := false
+
+	flushText := func(todoID string) {
+		if text := strings.TrimSpace(textBufs[todoID]); text != "" {
+			p.Send(tuipkg.TaskLogMsg{TodoID: todoID, Line: tuipkg.RenderText(text)})
+		}
+		delete(textBufs, todoID)
+	}
+
 	return func(event team.StatusEvent) {
 		switch event.Type {
-		case "start":
-			if event.TodoID != "" {
-				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: headerStyle.Render("▶ " + event.Message)})
-			}
 		case "todos_updated":
 			if event.Todos != nil {
 				p.Send(tuipkg.TasksUpdatedMsg{Items: event.Todos})
 			}
+
+		case "start":
+			todoID := event.TodoID
+			if todoID == "" {
+				return
+			}
+			if todoID == team.CoordTodoID {
+				if !coordAdded {
+					coordAdded = true
+					p.Send(tuipkg.CoordItemMsg{Item: &team.TodoItem{
+						ID:     team.CoordTodoID,
+						Agent:  event.Agent,
+						Desc:   "coordinating",
+						Status: team.TaskInProgress,
+						Model:  event.Model,
+					}})
+				} else {
+					p.Send(tuipkg.CoordStatusMsg{Status: team.TaskInProgress})
+				}
+			}
+			label := agentStyle.Render(event.Agent)
+			if event.Model != "" {
+				label += " " + dimStyle.Render("["+event.Model+"]")
+			}
+			var line string
+			if event.Message != "" {
+				line = label + "\n" + dimStyle.Render("  Task: ") + event.Message
+			} else {
+				line = label
+			}
+			p.Send(tuipkg.TaskLogMsg{TodoID: todoID, Line: line})
+
 		case "step":
-			if event.TodoID != "" && event.Step > 0 {
+			if event.TodoID == "" {
+				return
+			}
+			if event.Step > 0 {
 				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderStep(event.Step)})
 			}
+
 		case "tool_call":
-			if event.TodoID != "" {
-				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolCall(event.ToolName, event.ToolArgs)})
+			if event.TodoID == "" {
+				return
 			}
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolCall(event.ToolName, event.ToolArgs)})
+
 		case "tool_result":
-			if event.TodoID != "" {
-				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolResult(event.ToolName, event.ToolResult)})
+			if event.TodoID == "" {
+				return
 			}
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolResult(event.ToolName, event.ToolResult)})
+
 		case "text":
-			if event.TodoID != "" && strings.TrimSpace(event.Message) != "" {
-				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderText(event.Message)})
+			if event.TodoID == "" {
+				return
 			}
+			textBufs[event.TodoID] += event.Message
+
 		case "done":
-			if event.TodoID != "" {
-				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: doneStyle.Render("✓ done")})
+			if event.TodoID == "" {
+				return
 			}
+			hadText := strings.TrimSpace(textBufs[event.TodoID]) != ""
+			flushText(event.TodoID)
+			if !hadText {
+				if out := strings.TrimSpace(event.Output); out != "" {
+					p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderText(out)})
+				}
+			}
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: doneStyle.Render("✓ done")})
+			if event.TodoID == team.CoordTodoID {
+				p.Send(tuipkg.CoordStatusMsg{Status: team.TaskDone})
+			}
+
 		case "error":
-			if event.TodoID != "" {
-				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("✗ " + event.Message)})
+			if event.TodoID == "" {
+				return
 			}
+			flushText(event.TodoID)
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("✗ " + event.Message)})
 		}
 	}
 }
@@ -710,7 +774,7 @@ func stderrLog(format string, args ...any) {
 // program in the main goroutine. Returns when the user quits or the work is done.
 func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent) (string, error) {
 	model := tuipkg.New(prompt)
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	activeTUIProgram.Store(p)
 	defer activeTUIProgram.Store(nil)
 

@@ -16,13 +16,15 @@ import (
 // TasksUpdatedMsg is sent whenever the coordinator's TODO list changes.
 type TasksUpdatedMsg struct{ Items []*team.TodoItem }
 
-// TaskLogMsg appends one rendered log line to a task's detail view.
 type TaskLogMsg struct {
 	TodoID string
 	Line   string
 }
 
-// FinishedMsg signals that all coordinator work is done.
+type CoordItemMsg struct{ Item *team.TodoItem }
+
+type CoordStatusMsg struct{ Status team.TaskStatus }
+
 type FinishedMsg struct{}
 
 // ── Styles ────────────────────────────────────────────────────────────────────
@@ -55,12 +57,15 @@ var (
 // ── Model ─────────────────────────────────────────────────────────────────────
 
 type Model struct {
-	prompt string
-	tasks  []*team.TodoItem
-	logs   map[string][]string // todoID → rendered log lines
+	prompt    string
+	tasks     []*team.TodoItem
+	logs      map[string][]string // todoID → rendered log lines
+	coordItem *team.TodoItem
 
 	col int // 0=pending 1=in_progress 2=done
 	row int // cursor within focused column
+
+	scrollOff [3]int // scroll offset per column (index of first visible item)
 
 	inDetail bool
 	detailID string
@@ -99,9 +104,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.inDetail {
 			m.vp.SetContent(m.buildDetailContent())
 		}
+		m.clampScroll()
 
 	case TasksUpdatedMsg:
 		m.tasks = msg.Items
+		if m.coordItem != nil {
+			m.tasks = append(m.tasks, m.coordItem)
+		}
 		col := m.colItems(m.col)
 		if len(col) > 0 && m.row >= len(col) {
 			m.row = len(col) - 1
@@ -109,6 +118,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.inDetail {
 			m.vp.SetContent(m.buildDetailContent())
 		}
+		m.clampScroll()
 
 	case TaskLogMsg:
 		m.logs[msg.TodoID] = append(m.logs[msg.TodoID], msg.Line)
@@ -117,8 +127,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vp.GotoBottom()
 		}
 
+	case CoordItemMsg:
+		m.coordItem = msg.Item
+		m.tasks = append(m.tasks, msg.Item)
+
+	case CoordStatusMsg:
+		if m.coordItem != nil {
+			m.coordItem.Status = msg.Status
+			for i, t := range m.tasks {
+				if t.ID == team.CoordTodoID {
+					m.tasks[i].Status = msg.Status
+					break
+				}
+			}
+		}
+
 	case FinishedMsg:
 		m.finished = true
+
+	case tea.MouseMsg:
+		if m.inDetail {
+			var cmd tea.Cmd
+			m.vp, cmd = m.vp.Update(msg)
+			return m, cmd
+		}
+		switch msg.Type {
+		case tea.MouseWheelUp:
+			if m.row > 0 {
+				m.row--
+				m.scrollCursorIntoView()
+			}
+		case tea.MouseWheelDown:
+			col := m.colItems(m.col)
+			if m.row < len(col)-1 {
+				m.row++
+				m.scrollCursorIntoView()
+			}
+		}
 
 	case tea.KeyMsg:
 		if m.inDetail {
@@ -159,20 +204,24 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.row > 0 {
 			m.row--
+			m.scrollCursorIntoView()
 		}
 	case "down", "j":
 		if m.row < len(col)-1 {
 			m.row++
+			m.scrollCursorIntoView()
 		}
 	case "left", "h":
 		if m.col > 0 {
 			m.col--
 			m.row = 0
+			m.scrollOff[m.col] = 0
 		}
 	case "right", "l", "tab":
 		if m.col < 2 {
 			m.col++
 			m.row = 0
+			m.scrollOff[m.col] = 0
 		}
 	case "enter":
 		if m.row < len(col) {
@@ -262,19 +311,26 @@ func (m Model) renderCol(col, width, height int) string {
 	sb.WriteString("\n")
 	usedLines := 2
 
-	for i, item := range items {
+	start := m.scrollOff[col]
+	if start < 0 {
+		start = 0
+	}
+	if start > len(items) {
+		start = len(items)
+	}
+
+	for i := start; i < len(items); i++ {
 		if usedLines >= height {
 			break
 		}
 		selected := focused && i == m.row
-		for _, l := range m.itemLines(item, selected, width) {
+		for _, l := range m.itemLines(items[i], selected, width) {
 			if usedLines >= height {
 				break
 			}
 			sb.WriteString(l + "\n")
 			usedLines++
 		}
-		// blank separator between items
 		if i < len(items)-1 && usedLines < height {
 			sb.WriteString("\n")
 			usedLines++
@@ -292,6 +348,31 @@ func (m Model) itemLines(item *team.TodoItem, selected bool, width int) []string
 	icon, iconSt := taskIconStyle(item.Status)
 	agentTrunc := truncRaw(item.Agent, width-3)
 	descTrunc := truncRaw(item.Desc, width-2)
+
+	if item.ID == team.CoordTodoID {
+		coordLabel := dimStyle.Render("(coordinator)")
+		agentTrunc = truncRaw(item.Agent, width-len("(coordinator)")-4)
+		descTrunc = truncRaw("coordinating", width-2)
+
+		var lines []string
+		if selected {
+			line1 := "▶ " + agentStyle.Render(agentTrunc) + " " + coordLabel
+			line2 := "  " + descTrunc
+			lines = []string{line1, line2}
+		} else {
+			line1 := iconSt.Render(icon+" ") + agentStyle.Render(agentTrunc) + " " + coordLabel
+			line2 := dimStyle.Render("  " + descTrunc)
+			lines = []string{line1, line2}
+		}
+		if selected {
+			styledLines := make([]string, len(lines))
+			for i, l := range lines {
+				styledLines[i] = selectedBg.Width(width).Render(selectedFg.Render(l))
+			}
+			return styledLines
+		}
+		return lines
+	}
 
 	var lines []string
 
@@ -325,6 +406,49 @@ func (m Model) itemLines(item *team.TodoItem, selected bool, width int) []string
 	return lines
 }
 
+func (m *Model) scrollCursorIntoView() {
+	off := &m.scrollOff[m.col]
+	if m.row < *off {
+		*off = m.row
+		return
+	}
+	items := m.colItems(m.col)
+	height := m.colBodyHeight()
+	lineCount := 2
+	for i := *off; i < len(items); i++ {
+		itemLines := len(m.itemLines(items[i], false, 0))
+		if itemLines == 0 {
+			itemLines = 2
+		}
+		prevLineCount := lineCount
+		lineCount += itemLines
+		if i < len(items)-1 {
+			lineCount++
+		}
+		if i == m.row && prevLineCount >= height {
+			*off++
+		}
+		if i >= m.row {
+			break
+		}
+	}
+}
+
+func (m *Model) clampScroll() {
+	for c := 0; c < 3; c++ {
+		items := m.colItems(c)
+		if len(items) == 0 {
+			m.scrollOff[c] = 0
+		} else if m.scrollOff[c] > len(items)-1 {
+			m.scrollOff[c] = len(items) - 1
+		}
+	}
+}
+
+func (m Model) colBodyHeight() int {
+	return m.height - 6 // widget(3) + blank(1) + blank(1) + footer(1)
+}
+
 func taskIconStyle(s team.TaskStatus) (string, lipgloss.Style) {
 	switch s {
 	case team.TaskInProgress:
@@ -339,9 +463,9 @@ func taskIconStyle(s team.TaskStatus) (string, lipgloss.Style) {
 
 func (m Model) footer() string {
 	if m.finished {
-		return footerStyle.Render("↑↓ navigate  ←→ columns  enter detail  q quit")
+		return footerStyle.Render("↑↓ navigate  ←→ columns  ↕ scroll  enter detail  q quit")
 	}
-	return footerStyle.Render("↑↓ navigate  ←→ columns  enter detail  ctrl+c cancel")
+	return footerStyle.Render("↑↓ navigate  ←→ columns  ↕ scroll  enter detail  ctrl+c cancel")
 }
 
 // ── Detail view ───────────────────────────────────────────────────────────────
@@ -353,9 +477,13 @@ func (m Model) detailView() string {
 	}
 
 	back := dimStyle.Render("← esc")
+	agentLabel := agentStyle.Render(item.Agent)
+	if item.ID == team.CoordTodoID {
+		agentLabel += " " + dimStyle.Render("(coordinator)")
+	}
 	heading := fmt.Sprintf("%s  %s / %s",
 		back,
-		agentStyle.Render(item.Agent),
+		agentLabel,
 		truncRaw(item.Desc, m.width-30))
 
 	status := string(item.Status)
