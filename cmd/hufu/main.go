@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
-	"time"
 
 	ergoreadline "github.com/ergochat/readline"
 	"github.com/spf13/cobra"
@@ -40,6 +39,7 @@ var (
 	showHistory         bool
 	stepsMode           bool
 	dryRun              bool
+	tuiMode             bool
 	globalPromptReader  atomic.Pointer[readline.PromptReader]
 )
 
@@ -74,6 +74,7 @@ func main() {
 	rootCmd.Flags().BoolVar(&showHistory, "show-history", false, "Show previous session history on resume")
 	rootCmd.Flags().BoolVarP(&stepsMode, "steps", "s", false, "Pause for user confirmation before executing each batch of worker tasks")
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview skill matching and task delegation without executing agents")
+	rootCmd.Flags().BoolVar(&tuiMode, "tui", false, "Show a Bubble Tea TUI for real-time task tracking")
 
 	if err := rootCmd.Execute(); err != nil {
 		var interrupted errInterrupted
@@ -320,14 +321,9 @@ func runTeam(cmd *cobra.Command, args []string) error {
 
 		fmt.Fprintf(os.Stderr, "\n%s Running dry-run for team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(dryRunTeamName))
 
-		w := &lineWriter{}
-		idleTimer := newIdleWarningTimer(w, 30*time.Second)
-		taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
-		skillDisp := newSkillDisplay(w)
-		setupStatusReporter(w, tc.coordinator, taskDisp, skillDisp, idleTimer)
-
+		dryDisp := newCoordDisplay(tc)
 		result, err := tc.coordinator.DryRun(ctx, dryRunPrompt)
-		idleTimer.stop()
+		dryDisp.stopTimer()
 
 		if err != nil {
 			return fmt.Errorf("dry-run failed: %w", err)
@@ -336,9 +332,15 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	result, err := executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord, pathConsent)
-	if err != nil {
-		return err
+	var result string
+	var runErr error
+	if tuiMode {
+		result, runErr = runWithTUI(ctx, cancel, prompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent)
+	} else {
+		result, runErr = executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord, pathConsent)
+	}
+	if runErr != nil {
+		return runErr
 	}
 	fmt.Println(result)
 
@@ -751,7 +753,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				if prevTC != nil {
 					team.SaveSessionMD(prevTC.session.Workspace, team.GenerateSessionMD(prevTC.sessionData, prevTC.session.Config.Name))
 				}
-				fmt.Fprintf(os.Stderr, "\n%s Switching team: %s → %s\n\n", boldStyle.Render("⇒"), teamStyle.Render(currentTeamName), teamStyle.Render(teamName))
+				stderrLog("\n%s Switching team: %s → %s\n\n", boldStyle.Render("⇒"), teamStyle.Render(currentTeamName), teamStyle.Render(teamName))
 			}
 
 			currentTeamName = teamName
@@ -760,14 +762,9 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				continue
 			}
 
-			w := &lineWriter{}
-			idleTimer := newIdleWarningTimer(w, 30*time.Second)
-			taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
-			skillDisp := newSkillDisplay(w)
-			setupStatusReporter(w, tc.coordinator, taskDisp, skillDisp, idleTimer)
-			setStatusFlusher(w, taskDisp, skillDisp)
+			disp := newCoordDisplay(tc)
 
-			fmt.Fprintf(os.Stderr, "\n%s Starting team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(teamName))
+			stderrLog("\n%s Starting team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(teamName))
 
 			activeCoord.Set(tc.coordinator)
 			if injector.IsWrapUpRequested() {
@@ -775,12 +772,12 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			}
 			result, err := tc.coordinator.Run(ctx, seg.Content)
 			activeCoord.Clear()
-			idleTimer.stop()
+			disp.stopTimer()
 
 			if err != nil {
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
-					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
+					stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 					return "", errInterrupted{}
 				}
 				team.SaveSession(tc.session.Workspace, tc.sessionData)
@@ -792,7 +789,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			if err != nil {
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
-					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
+					stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 					return "", errInterrupted{}
 				}
 				team.SaveSession(tc.session.Workspace, tc.sessionData)
@@ -800,8 +797,8 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				return strings.Join(results, "\n\n"), fmt.Errorf("team %q continuation failed: %w", teamName, err)
 			}
 
-			taskDisp.update()
-			fmt.Fprintf(os.Stderr, "\n%s Team %s coordination complete.\n", doneStyle.Render("✓"), teamStyle.Render(teamName))
+			disp.finalizeTasks()
+			stderrLog("\n%s Team %s coordination complete.\n", doneStyle.Render("✓"), teamStyle.Render(teamName))
 			results = append(results, fmt.Sprintf("## Team: %s\n%s", teamName, result))
 
 		case team.SegmentInvokeAgent:
@@ -814,14 +811,9 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				return strings.Join(results, "\n\n"), fmt.Errorf("@%s — team %q not loaded", seg.Name, currentTeamName)
 			}
 
-			w := &lineWriter{}
-			idleTimer := newIdleWarningTimer(w, 30*time.Second)
-			taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
-			skillDisp := newSkillDisplay(w)
-			setupStatusReporter(w, tc.coordinator, taskDisp, skillDisp, idleTimer)
-			setStatusFlusher(w, taskDisp, skillDisp)
+			disp2 := newCoordDisplay(tc)
 
-			fmt.Fprintf(os.Stderr, "\n%s Direct invocation: @%s (team: %s)\n\n", boldStyle.Render("→"), agentStyle.Render(seg.Name), teamStyle.Render(currentTeamName))
+			stderrLog("\n%s Direct invocation: @%s (team: %s)\n\n", boldStyle.Render("→"), agentStyle.Render(seg.Name), teamStyle.Render(currentTeamName))
 
 			activeCoord.Set(tc.coordinator)
 			if injector.IsWrapUpRequested() {
@@ -829,28 +821,28 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			}
 			directResult, err := tc.coordinator.RunDirectAgent(ctx, seg.Name, seg.Content)
 			activeCoord.Clear()
-			idleTimer.stop()
+			disp2.stopTimer()
 
 			if err != nil {
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
-					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
+					stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 					return "", errInterrupted{}
 				}
 				return strings.Join(results, "\n\n"), fmt.Errorf("direct agent @%s failed: %w", seg.Name, err)
 			}
 
 			if directResult.Error != nil {
-				fmt.Fprintf(os.Stderr, "\n%s %s failed: %s\n", errStyle.Render("✗"), agentStyle.Render(seg.Name), errStyle.Render(directResult.Error.Error()))
+				stderrLog("\n%s %s failed: %s\n", errStyle.Render("✗"), agentStyle.Render(seg.Name), errStyle.Render(directResult.Error.Error()))
 				results = append(results, fmt.Sprintf("## Agent: @%s\n**ERROR**: %s", seg.Name, directResult.Error))
 				continue
 			}
 
-			fmt.Fprintf(os.Stderr, "\n%s %s completed, synthesizing...\n\n", doneStyle.Render("✓"), agentStyle.Render(seg.Name))
+			stderrLog("\n%s %s completed, synthesizing...\n\n", doneStyle.Render("✓"), agentStyle.Render(seg.Name))
 
 			orchDef := tc.coordinator.GetOrchestratorDef()
 			if orchDef == nil {
-				taskDisp.update()
+				disp2.finalizeTasks()
 				results = append(results, fmt.Sprintf("## Agent: @%s (team: %s)\n%s", seg.Name, currentTeamName, directResult.Output))
 			} else {
 				synthesisPrompt := fmt.Sprintf("A user directly asked @%s to do the following task:\n\n%s\n\nHere is what %s produced:\n\n---\n%s\n---\n\nPlease synthesize this into a final, well-organized answer for the user.",
@@ -864,7 +856,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				if err != nil {
 					if ctx.Err() == context.Canceled {
 						team.SaveSession(tc.session.Workspace, tc.sessionData)
-						fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
+						stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 						return "", errInterrupted{}
 					}
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
@@ -876,7 +868,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				if err != nil {
 					if ctx.Err() == context.Canceled {
 						team.SaveSession(tc.session.Workspace, tc.sessionData)
-						fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
+						stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 						return "", errInterrupted{}
 					}
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
@@ -884,7 +876,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 					return strings.Join(results, "\n\n"), fmt.Errorf("synthesis continuation for @%s failed: %w", seg.Name, err)
 				}
 
-				taskDisp.update()
+				disp2.finalizeTasks()
 				results = append(results, fmt.Sprintf("## Agent: @%s (team: %s)\n%s", seg.Name, currentTeamName, synthResult))
 			}
 
@@ -895,14 +887,9 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			tc := loadedTeams[currentTeamName]
 
-			w := &lineWriter{}
-			idleTimer := newIdleWarningTimer(w, 30*time.Second)
-			taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
-			skillDisp := newSkillDisplay(w)
-			setupStatusReporter(w, tc.coordinator, taskDisp, skillDisp, idleTimer)
-			setStatusFlusher(w, taskDisp, skillDisp)
+			disp3 := newCoordDisplay(tc)
 
-			fmt.Fprintf(os.Stderr, "\n%s Team %s processing...\n\n", boldStyle.Render("→"), teamStyle.Render(currentTeamName))
+			stderrLog("\n%s Team %s processing...\n\n", boldStyle.Render("→"), teamStyle.Render(currentTeamName))
 
 			activeCoord.Set(tc.coordinator)
 			if injector.IsWrapUpRequested() {
@@ -910,12 +897,12 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			}
 			result, err := tc.coordinator.Run(ctx, seg.Content)
 			activeCoord.Clear()
-			idleTimer.stop()
+			disp3.stopTimer()
 
 			if err != nil {
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
-					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
+					stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 					return "", errInterrupted{}
 				}
 				team.SaveSession(tc.session.Workspace, tc.sessionData)
@@ -927,7 +914,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			if err != nil {
 				if ctx.Err() == context.Canceled {
 					team.SaveSession(tc.session.Workspace, tc.sessionData)
-					fmt.Fprintf(os.Stderr, "\n%s Interrupted\n", errStyle.Render("⚠"))
+					stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 					return "", errInterrupted{}
 				}
 				team.SaveSession(tc.session.Workspace, tc.sessionData)
@@ -935,7 +922,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				return strings.Join(results, "\n\n"), fmt.Errorf("team %q continuation failed: %w", currentTeamName, err)
 			}
 
-			taskDisp.update()
+			disp3.finalizeTasks()
 			results = append(results, fmt.Sprintf("## Team: %s\n%s", currentTeamName, result))
 		}
 

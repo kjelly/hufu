@@ -29,6 +29,11 @@ import (
 
 var skillSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
+// todoIDKey is a context key used to pass the current task's TodoItem ID
+// down through executeTask → runAgentWithStatusAndHistory so that emitted
+// StatusEvents can be attributed to a specific task for the TUI.
+type todoIDKey struct{}
+
 type TaskDef struct {
 	Agent        string   `json:"agent"`
 	Task         string   `json:"task"`
@@ -848,7 +853,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("start").withAgent(name).withMessage(task).withModel(subModel))
+	c.report(c.newEvent("start").withAgent(name).withMessage(task).withModel(subModel).withTodoID(todoID))
 
 	def := &agent.AgentDef{
 		Name:        name,
@@ -877,7 +882,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	if err != nil {
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		c.report(c.newEvent("error").withAgent(name).withMessage(err.Error()))
+		c.report(c.newEvent("error").withAgent(name).withMessage(err.Error()).withTodoID(todoID))
 		return "", fmt.Errorf("failed to create sub-agent: %w", err)
 	}
 
@@ -908,14 +913,14 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.updateTodoTiming(todoID, modelTime, toolTime)
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		c.report(c.newEvent("error").withAgent(name).withMessage(err.Error()).withModel(subModel).withTiming(duration, modelTime, toolTime))
+		c.report(c.newEvent("error").withAgent(name).withMessage(err.Error()).withModel(subModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 		return "", fmt.Errorf("sub-agent failed (model: %s): %w", subModel, err)
 	}
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
 	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("done").withAgent(name).withMessage("completed").withModel(subModel).withTiming(duration, modelTime, toolTime))
+	c.report(c.newEvent("done").withAgent(name).withMessage("completed").withModel(subModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 	return output, nil
 }
 
@@ -1273,11 +1278,18 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	}
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
+	if agentDef.Skills != "" {
+		skills := strings.Split(agentDef.Skills, ",")
+		for i, s := range skills {
+			skills[i] = strings.TrimSpace(s)
+		}
+		c.taskTracker.TodoList().SetSkills(todoID, skills)
+	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
 	resolvedModel := c.resolveAgentModel(agentDef, task.Model)
 
-	c.report(c.newEvent("start").withAgent(agentName).withMessage(task.Task).withModel(resolvedModel))
+	c.report(c.newEvent("start").withAgent(agentName).withMessage(task.Task).withModel(resolvedModel).withTodoID(todoID))
 	prevAgent := c.GetCurrentAgent()
 	prevTask := c.GetCurrentTask()
 	c.SetCurrentAgent(agentName)
@@ -1297,7 +1309,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	ag, err := c.getOrCreateAgent(parentCtx, agentDef, task.Model)
 	if err != nil {
-		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()))
+		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", task.Task, ""); err != nil {
@@ -1344,6 +1356,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		func() {
 			taskCtx, cancel := context.WithTimeout(parentCtx, agentTimeout)
 			defer cancel()
+			taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, prompt, conversationHistory, timing)
 		}()
 
@@ -1356,7 +1369,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
 			c.updateTodoTiming(todoID, modelTime, toolTime)
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-			c.report(c.newEvent("done").withAgent(agentName).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime))
+			c.report(c.newEvent("done").withAgent(agentName).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 			if task.Summarize {
 				output = c.summarizeOutput(parentCtx, output)
 			}
@@ -1368,7 +1381,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}
 
 		lastErr = err
-		c.report(c.newEvent("error").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d failed: %v", attempt, err)).withModel(resolvedModel))
+		c.report(c.newEvent("error").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d failed: %v", attempt, err)).withModel(resolvedModel).withTodoID(todoID))
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, fmt.Sprintf("attempt %d failed: %v", attempt, err))
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
@@ -1420,7 +1433,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("done").withAgent(task.Agent).withMessage("sidecar completed"))
+	c.report(c.newEvent("done").withAgent(task.Agent).withMessage("sidecar completed").withTodoID(todoID))
 	return result, nil
 }
 
@@ -1429,6 +1442,9 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	workspace := c.session.Workspace
 	teamName := c.session.Config.Name
 	logWrite := func(entry string) { writeLLMLog(workspace, teamName, agentName, entry) }
+
+	// Pick up the TodoItem ID injected by executeTask so events can be attributed to a task.
+	todoID, _ := ctx.Value(todoIDKey{}).(string)
 
 	streamCall := fantasy.AgentStreamCall{
 		Prompt:   prompt,
@@ -1439,7 +1455,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			return ctx, fantasy.PrepareStepResult{}, nil
 		},
 		OnStepStart: func(stepNumber int) error {
-			reportFn(c.newEvent("step").withAgent(agentName).withStep(stepNumber).withMessage(fmt.Sprintf("step %d", stepNumber)))
+			reportFn(c.newEvent("step").withAgent(agentName).withTodoID(todoID).withStep(stepNumber).withMessage(fmt.Sprintf("step %d", stepNumber)))
 			return nil
 		},
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
@@ -1448,7 +1464,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			if len(argsPreview) > 200 {
 				argsPreview = argsPreview[:200] + "..."
 			}
-			reportFn(c.newEvent("tool_call").withAgent(agentName).withTool(tc.ToolName, argsPreview))
+			reportFn(c.newEvent("tool_call").withAgent(agentName).withTodoID(todoID).withTool(tc.ToolName, argsPreview))
 			llmLogStreamEvent(logWrite, "tool_call", formatToolCallContent(tc))
 			audit.LogToolCall(agentName, tc.ToolName, tc.Input)
 			if skillName := c.extractSkillFromToolCall(tc.ToolName, tc.Input); skillName != "" {
@@ -1464,14 +1480,14 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					resultPreview = txt.Text
 				}
 			}
-			reportFn(c.newEvent("tool_result").withAgent(agentName).withToolResult(tr.ToolName, resultPreview))
+			reportFn(c.newEvent("tool_result").withAgent(agentName).withTodoID(todoID).withToolResult(tr.ToolName, resultPreview))
 			llmLogStreamEvent(logWrite, "tool_result", formatToolResultContent(tr))
 			_, isErrResult := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Result)
 			audit.LogToolResult(agentName, tr.ToolName, resultPreview, isErrResult)
 			return nil
 		},
 		OnTextDelta: func(id, text string) error {
-			reportFn(c.newEvent("text").withAgent(agentName).withMessage(text))
+			reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage(text))
 			logWrite(text)
 			return nil
 		},
@@ -2061,6 +2077,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	todoID := todoItems[0].ID
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	c.report(c.newEvent("start").withAgent(resolvedName).withMessage(task).withModel(directModel).withTodoID(todoID))
 	prevAgent := c.GetCurrentAgent()
 	prevTask := c.GetCurrentTask()
 	c.SetCurrentAgent(resolvedName)
@@ -2084,6 +2101,8 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 
 	taskCtx, cancel := context.WithTimeout(ctx, agentTimeout)
 	defer cancel()
+
+	taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 
 	timing := &taskTiming{}
 	timing.reset()
@@ -2113,7 +2132,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.updateTodoTiming(todoID, modelTime, toolTime)
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		c.report(c.newEvent("error").withAgent(resolvedName).withMessage(err.Error()).withModel(directModel).withTiming(duration, modelTime, toolTime))
+		c.report(c.newEvent("error").withAgent(resolvedName).withMessage(err.Error()).withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 		return &DirectAgentResult{AgentName: resolvedName, Error: err}, nil
 	}
 
@@ -2124,7 +2143,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
 	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("done").withAgent(resolvedName).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime))
+	c.report(c.newEvent("done").withAgent(resolvedName).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 
 	return &DirectAgentResult{AgentName: resolvedName, Output: output}, nil
 }

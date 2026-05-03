@@ -1,18 +1,22 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/anomalyco/hufu/internal/team"
 	"github.com/anomalyco/hufu/internal/tools"
+	tuipkg "github.com/anomalyco/hufu/internal/tui"
 )
 
 var (
@@ -611,6 +615,133 @@ func padRight(str string, width int) string {
 		return str
 	}
 	return str + strings.Repeat(" ", width-visibleWidth)
+}
+
+// ── TUI support ───────────────────────────────────────────────────────────────
+
+// activeTUIProgram is non-nil when --tui mode is active. Set by runWithTUI before
+// executeSegments goroutine starts; read by newCoordDisplay inside that goroutine.
+var activeTUIProgram atomic.Pointer[tea.Program]
+
+// coordDisplay holds display handles for one coordinator run. In TUI mode both
+// fields are nil and all methods are no-ops.
+type coordDisplay struct {
+	idleTimer *idleWarningTimer
+	taskDisp  *taskDisplay
+}
+
+func (d *coordDisplay) stopTimer() {
+	if d.idleTimer != nil {
+		d.idleTimer.stop()
+	}
+}
+
+func (d *coordDisplay) finalizeTasks() {
+	if d.taskDisp != nil {
+		d.taskDisp.update()
+	}
+}
+
+// newCoordDisplay wires up the coordinator's status reporter. In TUI mode it
+// attaches the TUI reporter; otherwise it creates the normal line-writer chain.
+func newCoordDisplay(tc *teamContext) *coordDisplay {
+	if p := activeTUIProgram.Load(); p != nil {
+		tc.coordinator.SetStatusReporter(makeTUIReporter(p))
+		return &coordDisplay{}
+	}
+	w := &lineWriter{}
+	idleTimer := newIdleWarningTimer(w, 30*time.Second)
+	taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
+	skillDisp := newSkillDisplay(w)
+	setupStatusReporter(w, tc.coordinator, taskDisp, skillDisp, idleTimer)
+	setStatusFlusher(w, taskDisp, skillDisp)
+	return &coordDisplay{idleTimer: idleTimer, taskDisp: taskDisp}
+}
+
+// makeTUIReporter returns a StatusReporter that forwards relevant events to p.
+func makeTUIReporter(p *tea.Program) team.StatusReporter {
+	return func(event team.StatusEvent) {
+		switch event.Type {
+		case "start":
+			if event.TodoID != "" {
+				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: headerStyle.Render("▶ " + event.Message)})
+			}
+		case "todos_updated":
+			if event.Todos != nil {
+				p.Send(tuipkg.TasksUpdatedMsg{Items: event.Todos})
+			}
+		case "step":
+			if event.TodoID != "" && event.Step > 0 {
+				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderStep(event.Step)})
+			}
+		case "tool_call":
+			if event.TodoID != "" {
+				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolCall(event.ToolName, event.ToolArgs)})
+			}
+		case "tool_result":
+			if event.TodoID != "" {
+				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolResult(event.ToolName, event.ToolResult)})
+			}
+		case "text":
+			if event.TodoID != "" && strings.TrimSpace(event.Message) != "" {
+				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderText(event.Message)})
+			}
+		case "done":
+			if event.TodoID != "" {
+				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: doneStyle.Render("✓ done")})
+			}
+		case "error":
+			if event.TodoID != "" {
+				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("✗ " + event.Message)})
+			}
+		}
+	}
+}
+
+// stderrLog writes to stderr only when the TUI is not active (avoids garbling
+// the altscreen with progress lines while the TUI is running).
+func stderrLog(format string, args ...any) {
+	if activeTUIProgram.Load() == nil {
+		fmt.Fprintf(os.Stderr, format, args...)
+	}
+}
+
+// runWithTUI starts executeSegments in a goroutine and blocks on the Bubble Tea
+// program in the main goroutine. Returns when the user quits or the work is done.
+func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent) (string, error) {
+	model := tuipkg.New(prompt)
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	activeTUIProgram.Store(p)
+	defer activeTUIProgram.Store(nil)
+
+	var execResult string
+	var execErr error
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		execResult, execErr = executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord, pathConsent)
+		p.Send(tuipkg.FinishedMsg{})
+	}()
+
+	if _, err := p.Run(); err != nil {
+		cancel()
+		<-finished
+		return "", fmt.Errorf("TUI error: %w", err)
+	}
+
+	// Only cancel if work hasn't finished yet (user quit early).
+	select {
+	case <-finished:
+		// Work completed naturally — don't cancel.
+	default:
+		cancel()
+		<-finished
+	}
+
+	if execErr != nil && ctx.Err() == context.Canceled {
+		return "", errInterrupted{}
+	}
+	return execResult, execErr
 }
 
 func renderDryRun(result *team.DryRunResult) {

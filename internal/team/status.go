@@ -21,6 +21,7 @@ type StatusEvent struct {
 	Duration   time.Duration
 	ModelTime  time.Duration
 	ToolTime   time.Duration
+	TodoID     string // ID of the TodoItem this event belongs to (set for worker-task events)
 }
 
 func (e StatusEvent) withAgent(agent string) StatusEvent {
@@ -72,6 +73,11 @@ func (e StatusEvent) withTiming(duration, modelTime, toolTime time.Duration) Sta
 	return e
 }
 
+func (e StatusEvent) withTodoID(id string) StatusEvent {
+	e.TodoID = id
+	return e
+}
+
 type StatusReporter func(event StatusEvent)
 
 type TaskStatus string
@@ -104,6 +110,7 @@ type TodoItem struct {
 	Status    TaskStatus
 	Detail    string
 	Model     string
+	Skills    []string
 	StartedAt time.Time
 	EndedAt   time.Time
 	ModelTime time.Duration
@@ -168,6 +175,11 @@ func (tl *TodoList) Items() []*TodoItem {
 	defer tl.mu.Unlock()
 	result := make([]*TodoItem, len(tl.items))
 	for i, item := range tl.items {
+		var skills []string
+		if len(item.Skills) > 0 {
+			skills = make([]string, len(item.Skills))
+			copy(skills, item.Skills)
+		}
 		result[i] = &TodoItem{
 			ID:        item.ID,
 			Agent:     item.Agent,
@@ -175,6 +187,7 @@ func (tl *TodoList) Items() []*TodoItem {
 			Status:    item.Status,
 			Detail:    item.Detail,
 			Model:     item.Model,
+			Skills:    skills,
 			StartedAt: item.StartedAt,
 			EndedAt:   item.EndedAt,
 			ModelTime: item.ModelTime,
@@ -182,6 +195,17 @@ func (tl *TodoList) Items() []*TodoItem {
 		}
 	}
 	return result
+}
+
+func (tl *TodoList) SetSkills(id string, skills []string) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			ti.Skills = skills
+			return
+		}
+	}
 }
 
 func (tl *TodoList) Clear() {
