@@ -153,7 +153,7 @@ func TestResolveProviderURL(t *testing.T) {
 			homeDir, _ := os.UserHomeDir()
 			systemConfigPath := filepath.Join(homeDir, ".config", "hufu", "hufu.yaml")
 			backupPath := systemConfigPath + ".backup"
-			
+
 			// Move system config file if it exists
 			if _, err := os.Stat(systemConfigPath); err == nil {
 				os.Rename(systemConfigPath, backupPath)
@@ -217,7 +217,7 @@ func TestLoadConfigNonExistentFile(t *testing.T) {
 	homeDir, _ := os.UserHomeDir()
 	systemConfigPath := filepath.Join(homeDir, ".config", "hufu", "hufu.yaml")
 	backupPath := systemConfigPath + ".backup"
-	
+
 	// Move system config file if it exists
 	if _, err := os.Stat(systemConfigPath); err == nil {
 		os.Rename(systemConfigPath, backupPath)
@@ -252,7 +252,7 @@ func TestResolveProviderURLWithEmptyStrings(t *testing.T) {
 	homeDir, _ := os.UserHomeDir()
 	systemConfigPath := filepath.Join(homeDir, ".config", "hufu", "hufu.yaml")
 	backupPath := systemConfigPath + ".backup"
-	
+
 	// Move system config file if it exists
 	if _, err := os.Stat(systemConfigPath); err == nil {
 		os.Rename(systemConfigPath, backupPath)

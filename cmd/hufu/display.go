@@ -924,7 +924,7 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			tt.stop(event.TodoID)
 			flushText(event.TodoID)
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("✗ " + event.Message)})
-			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + errStyle.Render("✗ " + utils.TruncatePreview(event.Message, 60))})
+			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + errStyle.Render("✗ "+utils.TruncatePreview(event.Message, 60))})
 		}
 	}, tt.stopAll
 }
