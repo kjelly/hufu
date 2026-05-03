@@ -8,6 +8,17 @@ import (
 
 // TestLoadConfig tests the LoadConfig function
 func TestLoadConfig(t *testing.T) {
+	// Temporarily rename system config file to simulate no config files
+	homeDir, _ := os.UserHomeDir()
+	systemConfigPath := filepath.Join(homeDir, ".config", "hufu", "hufu.yaml")
+	backupPath := systemConfigPath + ".backup"
+	
+	// Move system config file if it exists
+	if _, err := os.Stat(systemConfigPath); err == nil {
+		os.Rename(systemConfigPath, backupPath)
+		defer os.Rename(backupPath, systemConfigPath)
+	}
+
 	// Test with no config files - should return default config
 	cfg := LoadConfig()
 	if cfg == nil {
@@ -146,6 +157,17 @@ func TestResolveProviderURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Temporarily rename system config file to simulate no config files
+			homeDir, _ := os.UserHomeDir()
+			systemConfigPath := filepath.Join(homeDir, ".config", "hufu", "hufu.yaml")
+			backupPath := systemConfigPath + ".backup"
+			
+			// Move system config file if it exists
+			if _, err := os.Stat(systemConfigPath); err == nil {
+				os.Rename(systemConfigPath, backupPath)
+				defer os.Rename(backupPath, systemConfigPath)
+			}
+
 			// Create a temporary directory for testing
 			tmpDir := t.TempDir()
 
@@ -195,6 +217,17 @@ func TestConfigFields(t *testing.T) {
 
 // TestLoadConfigNonExistentFile tests LoadConfig with non-existent file
 func TestLoadConfigNonExistentFile(t *testing.T) {
+	// Temporarily rename system config file to simulate no config files
+	homeDir, _ := os.UserHomeDir()
+	systemConfigPath := filepath.Join(homeDir, ".config", "hufu", "hufu.yaml")
+	backupPath := systemConfigPath + ".backup"
+	
+	// Move system config file if it exists
+	if _, err := os.Stat(systemConfigPath); err == nil {
+		os.Rename(systemConfigPath, backupPath)
+		defer os.Rename(backupPath, systemConfigPath)
+	}
+
 	// Change to a directory where no config file exists
 	tmpDir := t.TempDir()
 	originalDir, _ := os.Getwd()
@@ -216,6 +249,17 @@ func TestLoadConfigNonExistentFile(t *testing.T) {
 
 // TestResolveProviderURLWithEmptyStrings tests ResolveProviderURL with all empty strings
 func TestResolveProviderURLWithEmptyStrings(t *testing.T) {
+	// Temporarily rename system config file to simulate no config files
+	homeDir, _ := os.UserHomeDir()
+	systemConfigPath := filepath.Join(homeDir, ".config", "hufu", "hufu.yaml")
+	backupPath := systemConfigPath + ".backup"
+	
+	// Move system config file if it exists
+	if _, err := os.Stat(systemConfigPath); err == nil {
+		os.Rename(systemConfigPath, backupPath)
+		defer os.Rename(backupPath, systemConfigPath)
+	}
+
 	// Create a temporary directory for testing
 	tmpDir := t.TempDir()
 

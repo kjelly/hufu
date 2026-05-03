@@ -9,7 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -17,6 +16,7 @@ import (
 	"github.com/anomalyco/hufu/internal/team"
 	"github.com/anomalyco/hufu/internal/tools"
 	tuipkg "github.com/anomalyco/hufu/internal/tui"
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 var (
@@ -173,11 +173,7 @@ func (d *taskDisplay) render() {
 			desc = dimStyle.Render(t.Desc)
 		case team.TaskInProgress:
 			icon = progressIcon.Render("◑")
-			taskPreview := t.Desc
-			if len(taskPreview) > 60 {
-				taskPreview = taskPreview[:60] + "..."
-			}
-			desc = taskPreview
+			desc = utils.TruncatePreview(t.Desc, 60)
 		case team.TaskDone:
 			icon = doneIcon.Render("●")
 			desc = dimStyle.Render(t.Desc)
@@ -264,14 +260,10 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				textBuf = ""
 			}
 			currentAgent = event.Agent
-			desc := event.Message
-			if len(desc) > 120 {
-				desc = desc[:120] + "..."
-			}
 			w.write(fmt.Sprintf("\n%s %s %s\n",
 				headerStyle.Render("▶"),
 				formatAgentLabel(event),
-				dimStyle.Render("— "+desc),
+				dimStyle.Render("— "+utils.TruncatePreview(event.Message, 120)),
 			))
 			taskDisp.update()
 
@@ -312,16 +304,12 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				} else {
 					resultLine = strings.Join(lines, "\n    ")
 				}
-				maxChars := 200
-				if len(resultLine) > maxChars {
-					resultLine = resultLine[:maxChars] + "..."
-				}
 				w.write(fmt.Sprintf("  %s %s %s %s\n    %s\n",
 					doneStyle.Render("✓"),
 					formatAgentLabel(event),
 					toolStyle.Render("›"),
 					toolStyle.Render(event.ToolName),
-					resultStyle.Render(resultLine),
+					resultStyle.Render(utils.TruncatePreview(resultLine, 200)),
 				))
 			} else {
 				w.write(fmt.Sprintf("  %s %s %s %s\n",
@@ -440,15 +428,11 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				w.write(flushText(currentAgent, textBuf))
 				textBuf = ""
 			}
-			taskPreview := event.Message
-			if utf8.RuneCountInString(taskPreview) > 60 {
-				taskPreview = string([]rune(taskPreview)[:57]) + "..."
-			}
 			w.write(fmt.Sprintf("%s %s %s %s\n",
 				dimStyle.Render("⟐"),
 				agentStyle.Render(event.Agent),
 				doneStyle.Render("✓ cached"),
-				dimStyle.Render(taskPreview),
+				dimStyle.Render(utils.TruncatePreview(event.Message, 60)),
 			))
 
 		case "cache_check":
@@ -480,14 +464,9 @@ func flushText(agentName, text string) string {
 	if text == "" {
 		return ""
 	}
-	maxLen := 300
-	display := text
-	if len(display) > maxLen {
-		display = display[:maxLen] + "..."
-	}
 	return fmt.Sprintf("  %s %s\n",
 		textStyle.Render("💬"),
-		textStyle.Render(display),
+		textStyle.Render(utils.TruncatePreview(text, 300)),
 	)
 }
 
@@ -538,10 +517,7 @@ func formatToolArgs(toolName, args string) string {
 	if toolName == "finish" {
 		maxLen = 120
 	}
-	if len(args) > maxLen {
-		return args[:maxLen] + "..."
-	}
-	return args
+	return utils.TruncatePreview(args, maxLen)
 }
 
 type skillEntry struct {
@@ -921,12 +897,8 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 				return
 			}
 			tt.stop(event.TodoID)
-			taskPreview := event.Message
-			if utf8.RuneCountInString(taskPreview) > 50 {
-				taskPreview = string([]rune(taskPreview)[:47]) + "..."
-			}
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: doneStyle.Render("✓ cached")})
-			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + doneStyle.Render("✓ cached") + "  " + dimStyle.Render(taskPreview)})
+			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + doneStyle.Render("✓ cached") + "  " + dimStyle.Render(utils.TruncatePreview(event.Message, 50))})
 
 		case "cache_check":
 			if event.TodoID == "" {
@@ -965,11 +937,7 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			tt.stop(event.TodoID)
 			flushText(event.TodoID)
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("✗ " + event.Message)})
-			errPreview := event.Message
-			if len(errPreview) > 60 {
-				errPreview = errPreview[:60] + "…"
-			}
-			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + errStyle.Render("✗ "+errPreview)})
+			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + errStyle.Render("✗ " + utils.TruncatePreview(event.Message, 60))})
 		}
 	}, tt.stopAll
 }
@@ -1065,11 +1033,7 @@ func renderDryRun(result *team.DryRunResult) {
 		b.WriteString("  " + dimStyle.Render("No skills available") + "\n")
 	} else {
 		for _, s := range result.AllSkills {
-			desc := s.Description
-			if utf8.RuneCountInString(desc) > 60 {
-				runes := []rune(desc)
-				desc = string(runes[:60]) + "..."
-			}
+			desc := utils.TruncatePreview(s.Description, 60)
 			b.WriteString(fmt.Sprintf("  %s %s\n", padRight(doneStyle.Render(s.Name), 20), dimStyle.Render(desc)))
 		}
 	}

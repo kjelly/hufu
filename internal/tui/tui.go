@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/anomalyco/hufu/internal/team"
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 // ── Public messages (sent from coordinator goroutine via p.Send) ──────────────
@@ -385,7 +386,7 @@ func (m Model) renderPromptWidget(w int) string {
 	if textW < 1 {
 		textW = 1
 	}
-	content := promptStyle.Render(labelPlain) + truncRaw(m.prompt, textW)
+	content := promptStyle.Render(labelPlain) + utils.TruncatePreview(m.prompt, textW)
 	return promptBoxStyle.Width(innerW).Render(content)
 }
 
@@ -423,10 +424,10 @@ func (m Model) renderStatusArea(w int) string {
 		sb.WriteString(resultLabelStyle.Render(labelPlain))
 		for i, l := range lines {
 			if i == 0 {
-				sb.WriteString(truncRaw(l, innerW-len([]rune(labelPlain))))
+				sb.WriteString(utils.TruncatePreview(l, innerW-len([]rune(labelPlain))))
 			} else {
 				sb.WriteString("\n")
-				sb.WriteString(truncRaw(l, innerW))
+				sb.WriteString(utils.TruncatePreview(l, innerW))
 			}
 		}
 		return resultBoxStyle.Width(innerW).Render(sb.String())
@@ -485,7 +486,7 @@ func (m Model) renderCol(col, width, height int) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(truncRaw(titleLine, width) + "\n")
+	sb.WriteString(utils.TruncatePreview(titleLine, width) + "\n")
 	sb.WriteString("\n")
 	usedLines := 2
 
@@ -524,13 +525,13 @@ func (m Model) renderCol(col, width, height int) string {
 
 func (m Model) itemLines(item *team.TodoItem, selected bool, width int) []string {
 	icon, iconSt := taskIconStyle(item.Status)
-	agentTrunc := truncRaw(item.Agent, width-3)
-	descTrunc := truncRaw(item.Desc, width-2)
+	agentTrunc := utils.TruncatePreview(item.Agent, width-3)
+	descTrunc := utils.TruncatePreview(item.Desc, width-2)
 
 	if item.ID == team.CoordTodoID {
 		coordLabel := dimStyle.Render("(coordinator)")
-		agentTrunc = truncRaw(item.Agent, width-len("(coordinator)")-4)
-		descTrunc = truncRaw("coordinating", width-2)
+		agentTrunc = utils.TruncatePreview(item.Agent, width-len("(coordinator)")-4)
+		descTrunc = utils.TruncatePreview("coordinating", width-2)
 
 		var lines []string
 		if selected {
@@ -565,12 +566,12 @@ func (m Model) itemLines(item *team.TodoItem, selected bool, width int) []string
 	}
 
 	if len(item.Skills) > 0 {
-		skillTrunc := truncRaw("["+strings.Join(item.Skills, " · ")+"]", width-2)
+		skillTrunc := utils.TruncatePreview("["+strings.Join(item.Skills, " · ")+"]", width-2)
 		lines = append(lines, skillStyle.Render("  "+skillTrunc))
 	}
 
 	if item.Status == team.TaskError && item.Detail != "" {
-		errTrunc := truncRaw("✗ "+item.Detail, width-2)
+		errTrunc := utils.TruncatePreview("✗ "+item.Detail, width-2)
 		lines = append(lines, errorIcon.Render("  "+errTrunc))
 	}
 
@@ -680,7 +681,7 @@ func (m Model) detailView() string {
 	heading := fmt.Sprintf("%s  %s / %s",
 		back,
 		agentLabel,
-		truncRaw(item.Desc, m.width-30))
+		utils.TruncatePreview(item.Desc, m.width-30))
 
 	status := string(item.Status)
 	meta := dimStyle.Render("status: " + status)
@@ -745,22 +746,6 @@ func (m Model) findTask(id string) *team.TodoItem {
 		}
 	}
 	return nil
-}
-
-// truncRaw truncates s to at most maxW runes (ANSI-unaware; use only on plain
-// strings before applying lipgloss styles).
-func truncRaw(s string, maxW int) string {
-	if maxW <= 0 {
-		return ""
-	}
-	runes := []rune(s)
-	if len(runes) <= maxW {
-		return s
-	}
-	if maxW <= 1 {
-		return "…"
-	}
-	return string(runes[:maxW-1]) + "…"
 }
 
 // ── Log-line renderers (called by the status reporter in cmd/hufu) ────────────
