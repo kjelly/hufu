@@ -2210,7 +2210,7 @@ func (c *Coordinator) finalizeRemainingTasks() {
 	items := c.taskTracker.TodoList().Items()
 	changed := false
 	for _, item := range items {
-		if item.Status == TaskInProgress {
+		if item.Status == TaskInProgress || item.Status == TaskPending {
 			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskError, "coordinator ended unexpectedly")
 			changed = true
 		}

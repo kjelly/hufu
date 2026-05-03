@@ -186,15 +186,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case FinishedMsg:
 		m.finished = true
-		// Only mark TaskInProgress items as TaskDone. TaskError items are
-		// already in a terminal state (set by finalizeRemainingTasks before
-		// FinishedMsg is sent), so they are safely skipped here.
+		m.statusText = doneIcon.Render("✓") + dimStyle.Render("  All tasks completed")
+		// Mark all non-terminal tasks as done.
 		for i, t := range m.tasks {
-			if t.Status == team.TaskInProgress {
+			if t.Status == team.TaskInProgress || t.Status == team.TaskPending {
 				m.tasks[i].Status = team.TaskDone
 			}
 		}
-		if m.coordItem != nil && m.coordItem.Status == team.TaskInProgress {
+		if m.coordItem != nil && (m.coordItem.Status == team.TaskInProgress || m.coordItem.Status == team.TaskPending) {
 			m.coordItem.Status = team.TaskDone
 			for i, t := range m.tasks {
 				if t.ID == team.CoordTodoID {
