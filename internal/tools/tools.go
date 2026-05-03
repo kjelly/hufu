@@ -82,10 +82,11 @@ func TryAskUserTUI(question, qtype string, opts []AskUserTUIOption, allowAny boo
 type ToolOption func(*ToolConfig)
 
 type ToolConfig struct {
-	WorkDir      string
-	AllowedPaths []string
-	PathConsent  *PathConsent
-	ToolName     string
+	WorkDir       string
+	AllowedPaths  []string
+	PathConsent   *PathConsent
+	ToolName      string
+	WorkspaceName string // base name of the workspace directory (e.g. "workspace")
 }
 
 func WithWorkDir(dir string) ToolOption {
@@ -110,6 +111,26 @@ func WithToolName(name string) ToolOption {
 	return func(c *ToolConfig) {
 		c.ToolName = name
 	}
+}
+
+func WithWorkspaceName(name string) ToolOption {
+	return func(c *ToolConfig) {
+		c.WorkspaceName = name
+	}
+}
+
+// normalizeWorkspacePath rewrites a path that uses the workspace directory name
+// as if it were at the filesystem root (e.g. /workspace/x) into a relative path
+// (./workspace/x) so it resolves correctly under the workDir.
+func normalizeWorkspacePath(path, workspaceName string) string {
+	if workspaceName == "" || path == "" {
+		return path
+	}
+	prefix := "/" + workspaceName
+	if path == prefix || strings.HasPrefix(path, prefix+"/") {
+		return "." + path
+	}
+	return path
 }
 
 func ApplyOptions(opts []ToolOption) ToolConfig {
@@ -321,6 +342,7 @@ func isPathAllowed(absPath string, allowedPaths []string) bool {
 }
 
 func checkPathOrConsent(path, workDir, operation string, cfg ToolConfig) (string, error) {
+	path = normalizeWorkspacePath(path, cfg.WorkspaceName)
 	absPath, err := resolvePathWithWorkDir(path, workDir)
 	if err != nil {
 		return "", err
@@ -354,6 +376,7 @@ func checkPathOrConsent(path, workDir, operation string, cfg ToolConfig) (string
 }
 
 func resolveAndValidatePathWithConsent(path string, cfg ToolConfig) (string, error) {
+	path = normalizeWorkspacePath(path, cfg.WorkspaceName)
 	absPath, err := resolvePathWithWorkDir(path, cfg.WorkDir)
 	if err != nil {
 		return "", err

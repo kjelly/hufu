@@ -8,6 +8,9 @@ import (
 
 // TestLoadConfig tests the LoadConfig function
 func TestLoadConfig(t *testing.T) {
+	// Temporarily set HOME to a temp dir so the home config file is not found.
+	t.Setenv("HOME", t.TempDir())
+
 	// Test with no config files - should return default config
 	cfg := LoadConfig()
 	if cfg == nil {
@@ -163,6 +166,10 @@ func TestResolveProviderURL(t *testing.T) {
 				defer func() {
 					os.Chdir(originalDir)
 				}()
+			} else {
+				// When no config file is provided, override HOME to prevent
+				// the real home config (~/.config/hufu/hufu.yaml) from being read.
+				t.Setenv("HOME", t.TempDir())
 			}
 
 			got := ResolveProviderURL(tt.cliFlag, tt.teamCfgProviderURL, tt.agentProviderURL)
@@ -203,6 +210,9 @@ func TestLoadConfigNonExistentFile(t *testing.T) {
 		os.Chdir(originalDir)
 	}()
 
+	// Also override HOME to prevent the real home config from being read.
+	t.Setenv("HOME", t.TempDir())
+
 	cfg := LoadConfig()
 	if cfg == nil {
 		t.Fatal("LoadConfig() returned nil")
@@ -225,6 +235,9 @@ func TestResolveProviderURLWithEmptyStrings(t *testing.T) {
 	defer func() {
 		os.Chdir(originalDir)
 	}()
+
+	// Override HOME to prevent the real home config from being read.
+	t.Setenv("HOME", t.TempDir())
 
 	got := ResolveProviderURL("", "", "")
 	if got != DefaultProviderURL {
@@ -398,5 +411,42 @@ model-list:
 	}
 	if cfg.ModelList[1].ID != "ollama/model-b" {
 		t.Errorf("ModelList[1].ID = %q, want %q", cfg.ModelList[1].ID, "ollama/model-b")
+	}
+}
+
+func TestResolveModel(t *testing.T) {
+	cases := []struct {
+		name      string
+		cfgModel  string
+		teamModel string
+		want      string
+	}{
+		{name: "team model takes precedence", cfgModel: "ollama/global", teamModel: "ollama/team", want: "ollama/team"},
+		{name: "falls back to cfg model when team empty", cfgModel: "ollama/global", teamModel: "", want: "ollama/global"},
+		{name: "both empty returns empty", cfgModel: "", teamModel: "", want: ""},
+		{name: "only team model set", cfgModel: "", teamModel: "ollama/team", want: "ollama/team"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{Model: tc.cfgModel}
+			got := cfg.ResolveModel(tc.teamModel)
+			if got != tc.want {
+				t.Errorf("ResolveModel(%q) with cfg.Model=%q = %q, want %q", tc.teamModel, tc.cfgModel, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestModelMergeFromFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	content := "model: ollama/qwen3:8b\n"
+	configPath := filepath.Join(tmpDir, "hufu.yaml")
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+	cfg := &Config{}
+	cfg.mergeFromFile(configPath)
+	if cfg.Model != "ollama/qwen3:8b" {
+		t.Errorf("Model = %q, want %q", cfg.Model, "ollama/qwen3:8b")
 	}
 }

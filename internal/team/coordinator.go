@@ -199,7 +199,7 @@ func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
 
 func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, verbose bool, allowedPaths []string, pathConsent *tools.PathConsent) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
-	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent))
+	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)))
 	prov, err := agent.NewOllamaProvider(defaultProviderURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Ollama provider: %w", err)
@@ -390,7 +390,7 @@ func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
 	var b strings.Builder
 	b.WriteString("## Relevant Skills\n\n")
 	for _, s := range skill.SkillsByName(c.getSkills(), agentSkillNames) {
-		fmt.Fprintf(&b, "### %s\n%s\n\n", s.Name, s.Content)
+		fmt.Fprintf(&b, "### %s\n*File: %s*\n\n%s\n\n", s.Name, s.Path, s.Content)
 	}
 	b.WriteString("---\n\n")
 	return b.String()
@@ -434,7 +434,7 @@ func formatSkillPrefix(skills []*skill.SkillDef) string {
 	var b strings.Builder
 	b.WriteString("## Relevant Skills (auto-loaded)\n\n")
 	for _, s := range skills {
-		fmt.Fprintf(&b, "### %s\n%s\n\n", s.Name, s.Content)
+		fmt.Fprintf(&b, "### %s\n*File: %s*\n\n%s\n\n", s.Name, s.Path, s.Content)
 	}
 	b.WriteString("---\n\n")
 	return b.String()
@@ -661,6 +661,29 @@ func (c *Coordinator) GetCurrentAgentInfo() tools.AgentInfo {
 	}
 }
 
+// buildAgentTaskProperties returns the JSON schema properties map for a task
+// item in the "agent" tool. When hasModelList is false the "model" field is
+// omitted so the coordinator cannot (and does not need to) specify a model;
+// each agent's model is determined by its own configuration instead.
+// sharedDir is the absolute path to the workspace shared/ directory.
+func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDirPath string) map[string]any {
+	contextFilesDesc := "Optional files from the shared directory to provide as context"
+	if sharedDirPath != "" {
+		contextFilesDesc = fmt.Sprintf("Optional files from the shared directory (%s) to provide as context", sharedDirPath)
+	}
+	props := map[string]any{
+		"agent":         map[string]any{"type": "string", "enum": workerNames, "description": "Agent name to delegate to"},
+		"task":          map[string]any{"type": "string", "description": "Task description for the agent"},
+		"summarize":     map[string]any{"type": "boolean", "description": "If true, summarize the agent's output before returning. Use for tasks that produce verbose output where only key points matter."},
+		"sidecar":       map[string]any{"type": "boolean", "description": "If true, execute this task directly via the sidecar model instead of an agent. Use for simple, tool-free tasks that need a quick response."},
+		"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": contextFilesDesc},
+	}
+	if hasModelList {
+		props["model"] = map[string]any{"type": "string", "description": "Model ID from Available Models to use for this task. Select the model whose strengths best match this task. If empty, the default team model will be used."}
+	}
+	return props
+}
+
 func (c *Coordinator) RunAgentsTool() fantasy.AgentTool {
 	return &runAgentsTool{coordinator: c}
 }
@@ -678,16 +701,9 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 			"tasks": map[string]any{
 				"type": "array",
 				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"agent":         map[string]any{"type": "string", "enum": t.coordinator.workerNameList(), "description": "Agent name to delegate to"},
-						"task":          map[string]any{"type": "string", "description": "Task description for the agent"},
-						"model":         map[string]any{"type": "string", "description": "Model ID from Available Models to use for this task. Select the model whose strengths best match this task. If empty, the default team model will be used."},
-						"summarize":     map[string]any{"type": "boolean", "description": "If true, summarize the agent's output before returning. Use for tasks that produce verbose output where only key points matter."},
-						"sidecar":       map[string]any{"type": "boolean", "description": "If true, execute this task directly via the sidecar model instead of an agent. Use for simple, tool-free tasks that need a quick response."},
-						"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional files from the workspace shared/ directory to provide as context"},
-					},
-					"required": []string{"agent", "task"},
+					"type":       "object",
+					"properties": buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir)),
+					"required":   []string{"agent", "task"},
 				},
 			},
 		},
@@ -785,7 +801,7 @@ func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	for _, s := range skills {
 		if strings.ToLower(s.Name) == nameLower {
 			t.coordinator.recordSkillUsage(s.Name, "coordinator")
-			return fantasy.NewTextResponse(fmt.Sprintf("Skill: %s\n\n%s", s.Name, s.Content)), nil
+			return fantasy.NewTextResponse(fmt.Sprintf("Skill: %s\nFile: %s\n\n%s", s.Name, s.Path, s.Content)), nil
 		}
 	}
 
@@ -1282,7 +1298,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		agentDef, _, _ := c.resolveAgentName(t.Agent)
 		var resolvedModel string
 		if agentDef != nil {
-			resolvedModel = c.resolveAgentModel(agentDef, t.Model)
+			overrideModel := t.Model
+			if len(c.modelList) == 0 {
+				overrideModel = ""
+			}
+			resolvedModel = c.resolveAgentModel(agentDef, overrideModel)
 		}
 		todoBatch[i] = struct {
 			Agent string
@@ -1382,7 +1402,12 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	}
 	agentName := strings.ToLower(agentDef.Name)
 
-	if task.Model != "" && len(c.modelList) > 0 {
+	// When a model-list is configured, validate the requested model is in it.
+	// When no model-list is configured, ignore task.Model entirely — the agent's
+	// own model (from agent.md > team.yaml) is used via resolveAgentModel below.
+	if len(c.modelList) == 0 {
+		task.Model = ""
+	} else if task.Model != "" {
 		found := false
 		for _, m := range c.modelList {
 			if m.ID == task.Model {
@@ -1892,12 +1917,17 @@ func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentD
 		b.WriteString(wc)
 		b.WriteString("\n\n---\n\n")
 	}
+	wsPath := c.session.Workspace
+	sharedPath := filepath.Join(wsPath, sharedDir)
 	b.WriteString("## Environment\n\n")
 	fmt.Fprintf(&b, "- Current directory: %s\n", c.projectDir)
-	fmt.Fprintf(&b, "- Workspace: %s\n", c.session.Workspace)
+	fmt.Fprintf(&b, "- Workspace: %s\n", wsPath)
+	fmt.Fprintf(&b, "- Shared directory: %s\n", sharedPath)
 	fmt.Fprintf(&b, "- Current time: %s\n", c.sessionTime.Format(time.RFC3339))
 	b.WriteString("\n## Important Rules\n\n")
-	b.WriteString("- All intermediate files (drafts, temporary outputs, logs, scratch data, etc.) MUST be placed under the workspace directory. Do not write intermediate files to the project directory.\n\n")
+	fmt.Fprintf(&b, "- ALL intermediate files (drafts, scratch data, temporary outputs, logs, notes, etc.) MUST be written under the workspace directory: %s\n", wsPath)
+	fmt.Fprintf(&b, "- Use %s to share files between agents.\n", sharedPath)
+	b.WriteString("- NEVER write intermediate files to the current directory or anywhere outside the workspace.\n\n")
 	b.WriteString("---\n\n")
 
 	injectedDef := *def
@@ -1943,15 +1973,15 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	if len(currentSkills) == 0 {
 		b.WriteString("No skills are available for this team.\n\n")
 	} else {
-		b.WriteString("| Skill | Description |\n")
-		b.WriteString("|-------|-------------|\n")
+		b.WriteString("| Skill | File | Description |\n")
+		b.WriteString("|-------|------|-------------|\n")
 		for _, s := range currentSkills {
 			desc := s.Description
 			if utf8.RuneCountInString(desc) > 80 {
 				runes := []rune(desc)
 				desc = string(runes[:80]) + "..."
 			}
-			fmt.Fprintf(&b, "| %s | %s |\n", s.Name, desc)
+			fmt.Fprintf(&b, "| %s | %s | %s |\n", s.Name, s.Path, desc)
 		}
 		b.WriteString("\n")
 		b.WriteString("To get the full instructions for any skill, call the `load_skill` tool with the skill name.\n")
@@ -1967,10 +1997,8 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 		b.WriteString("---\n\n")
 	}
 
-	b.WriteString("## Available Models\n\n")
-	if len(c.modelList) == 0 {
-		b.WriteString("No model list configured. The default team model will be used for all tasks.\n\n")
-	} else {
+	if len(c.modelList) > 0 {
+		b.WriteString("## Available Models\n\n")
 		b.WriteString("IMPORTANT: Select the most appropriate model for each task based on its requirements. Each model has different strengths — match the task to the model best suited for it.\n\n")
 		for _, m := range c.modelList {
 			detail := strings.TrimSpace(m.Details)
@@ -1983,12 +2011,18 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("## Tools\n\n")
 	b.WriteString("### agent\n")
 	b.WriteString("Delegate tasks to team workers. All tasks in one call run in parallel.\n\n")
-	b.WriteString("- **model**: Choose the model whose strengths best match each task — see Available Models above.\n")
+	if len(c.modelList) > 0 {
+		b.WriteString("- **model**: Choose the model whose strengths best match each task — see Available Models above.\n")
+	}
 	b.WriteString("- **summarize**: Set to `true` to condense the agent's output before returning. Use for tasks that may produce verbose output where only key points matter.\n")
 	b.WriteString("```json\n")
 	b.WriteString("{\n")
 	b.WriteString("  \"tasks\": [\n")
-	b.WriteString("    {\"agent\": \"agent-name\", \"task\": \"task description\", \"model\": \"model-id-from-available-models\", \"summarize\": false, \"context_files\": [\"optional_file.txt\"]}\n")
+	if len(c.modelList) > 0 {
+		b.WriteString("    {\"agent\": \"agent-name\", \"task\": \"task description\", \"model\": \"model-id-from-available-models\", \"summarize\": false, \"context_files\": [\"optional_file.txt\"]}\n")
+	} else {
+		b.WriteString("    {\"agent\": \"agent-name\", \"task\": \"task description\", \"summarize\": false, \"context_files\": [\"optional_file.txt\"]}\n")
+	}
 	b.WriteString("  ]\n")
 	b.WriteString("}\n```\n\n")
 	if len(c.modelList) >= 2 {
@@ -2019,14 +2053,17 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("### ask_user\n")
 	b.WriteString("Ask the user a question when you need clarification before proceeding.\n\n")
 
-	fmt.Fprintf(&b, "Team workspace: %s\n", c.session.Workspace)
-
+	wsPath := c.session.Workspace
+	sharedPath := filepath.Join(wsPath, sharedDir)
 	b.WriteString("\n## Environment\n\n")
 	fmt.Fprintf(&b, "- Current directory: %s\n", c.projectDir)
-	fmt.Fprintf(&b, "- Workspace: %s\n", c.session.Workspace)
+	fmt.Fprintf(&b, "- Workspace: %s\n", wsPath)
+	fmt.Fprintf(&b, "- Shared directory: %s\n", sharedPath)
 	fmt.Fprintf(&b, "- Current time: %s\n", c.sessionTime.Format(time.RFC3339))
 	b.WriteString("\n## Important Rules\n\n")
-	b.WriteString("- All intermediate files (drafts, temporary outputs, logs, scratch data, etc.) MUST be placed under the workspace directory. Do not write intermediate files to the project directory.\n\n")
+	fmt.Fprintf(&b, "- ALL intermediate files (drafts, scratch data, temporary outputs, logs, notes, etc.) MUST be written under the workspace directory: %s\n", wsPath)
+	fmt.Fprintf(&b, "- Instruct workers to use %s for files shared between agents.\n", sharedPath)
+	b.WriteString("- NEVER write intermediate files to the current directory or anywhere outside the workspace.\n\n")
 
 	return b.String()
 }
@@ -2567,16 +2604,9 @@ func (t *dryRunAgentsTool) Info() fantasy.ToolInfo {
 			"tasks": map[string]any{
 				"type": "array",
 				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"agent":         map[string]any{"type": "string", "enum": t.coordinator.workerNameList(), "description": "Agent name to delegate to"},
-						"task":          map[string]any{"type": "string", "description": "Task description for the agent"},
-						"model":         map[string]any{"type": "string", "description": "Model ID from Available Models to use for this task. Select the model whose strengths best match this task. If empty, the default team model will be used."},
-						"summarize":     map[string]any{"type": "boolean", "description": "If true, summarize the agent's output before returning. Use for tasks that produce verbose output where only key points matter."},
-						"sidecar":       map[string]any{"type": "boolean", "description": "If true, execute this task directly via the sidecar model instead of an agent. Use for simple, tool-free tasks that need a quick response."},
-						"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional files from the workspace shared/ directory to provide as context"},
-					},
-					"required": []string{"agent", "task"},
+					"type":       "object",
+					"properties": buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir)),
+					"required":   []string{"agent", "task"},
 				},
 			},
 		},

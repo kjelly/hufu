@@ -61,7 +61,7 @@ func main() {
 		RunE:  runTeam,
 	}
 
-	rootCmd.Flags().StringVar(&providerURL, "provider-url", "http://localhost:11434/v1", "Ollama API base URL")
+	rootCmd.Flags().StringVar(&providerURL, "provider-url", "", "Ollama API base URL (default: from hufu.yaml or http://localhost:11434/v1)")
 	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show full agent text output in real-time")
 	rootCmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
 	rootCmd.Flags().BoolVarP(&newSession, "new", "n", false, "Archive old session and start fresh")
@@ -400,6 +400,9 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		return nil, err
 	}
 
+	// Resolve effective provider URL: CLI flag > team.yaml > ./hufu.yaml > ~/.config/hufu/hufu.yaml > default
+	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, session.Config.ProviderURL, "")
+
 	if workspace != "" {
 		absWorkspace, err := filepath.Abs(workspace)
 		if err != nil {
@@ -521,7 +524,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 
 	var memStore *memory.MemoryStore
 	if memoryEnabled && !tempWorkspace {
-		ollamaAPIURL := config.ProviderURLToOllamaAPI(defaultProviderURL)
+		ollamaAPIURL := config.ProviderURLToOllamaAPI(resolvedProviderURL)
 		embedModel := config.ResolveEmbeddingModel(memoryModel)
 		projectDir, _ := os.Getwd()
 		ms, err := memory.NewMemoryStore(projectDir, ollamaAPIURL, embedModel)
@@ -538,10 +541,11 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	cfg := config.LoadConfig()
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
 	resolvedSidecarModel := cfg.ResolveSidecarModel(session.Config.SidecarModel)
+	session.Config.Generation.Model = cfg.ResolveModel(session.Config.Generation.Model)
 
 	allowedPaths := buildAllowedPaths(session, registry, cfg)
 
-	coordinator, err := team.NewCoordinator(session, defaultProviderURL, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, verbose, allowedPaths, pathConsent)
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, verbose, allowedPaths, pathConsent)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
@@ -992,7 +996,8 @@ func archiveCurrentSessionToMemory(ctx context.Context, tc *teamContext) {
 		return
 	}
 
-	ollamaAPIURL := config.ProviderURLToOllamaAPI(providerURL)
+	resolvedURL := config.ResolveProviderURL(providerURL, "", "")
+	ollamaAPIURL := config.ProviderURLToOllamaAPI(resolvedURL)
 	embedModel := config.ResolveEmbeddingModel(memoryModel)
 	projectDir, _ := os.Getwd()
 

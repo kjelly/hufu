@@ -113,6 +113,58 @@ func NewBashTool(opts ...ToolOption) fantasy.AgentTool {
 	}
 }
 
+// normalizeBashCommand rewrites occurrences of /{workspaceName}[/...] in a shell
+// command to ./{workspaceName}[/...] so they resolve correctly relative to workDir.
+// Only rewrites paths that are at a word boundary (preceded by a shell separator or
+// start of string) and followed by '/' or end-of-string or a shell separator, so
+// paths like /usr/workspace/... are left untouched.
+func normalizeBashCommand(command, workspaceName string) string {
+	if workspaceName == "" || command == "" {
+		return command
+	}
+	prefix := "/" + workspaceName
+	dotPrefix := "./" + workspaceName
+
+	var sb strings.Builder
+	sb.Grow(len(command) + 8)
+
+	i := 0
+	for i < len(command) {
+		idx := strings.Index(command[i:], prefix)
+		if idx == -1 {
+			sb.WriteString(command[i:])
+			break
+		}
+		absIdx := i + idx
+
+		validStart := absIdx == 0
+		if !validStart {
+			prev := command[absIdx-1]
+			validStart = prev == ' ' || prev == '\t' || prev == '"' || prev == '\'' ||
+				prev == '=' || prev == ';' || prev == '|' || prev == '&' ||
+				prev == '<' || prev == '>' || prev == '(' || prev == '`'
+		}
+
+		afterIdx := absIdx + len(prefix)
+		validEnd := afterIdx >= len(command)
+		if !validEnd {
+			next := command[afterIdx]
+			validEnd = next == '/' || next == ' ' || next == '\t' || next == '"' ||
+				next == '\'' || next == ';' || next == '|' || next == '&' ||
+				next == '<' || next == '>' || next == ')' || next == '`'
+		}
+
+		sb.WriteString(command[i:absIdx])
+		if validStart && validEnd {
+			sb.WriteString(dotPrefix)
+		} else {
+			sb.WriteString(prefix)
+		}
+		i = afterIdx
+	}
+	return sb.String()
+}
+
 func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fantasy.ToolResponse, error) {
 	var args bashArgs
 	if err := parseArgs(call.Input, &args); err != nil {
@@ -121,6 +173,7 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 	if args.Command == "" {
 		return fantasy.NewTextErrorResponse("command parameter is required"), nil
 	}
+	args.Command = normalizeBashCommand(args.Command, cfg.WorkspaceName)
 	if bannedCmdRe.MatchString(args.Command) {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("command '%s' is not allowed", args.Command)), nil
 	}

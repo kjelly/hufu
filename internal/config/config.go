@@ -20,6 +20,7 @@ type ModelEntry struct {
 
 type Config struct {
 	ProviderURL    string       `yaml:"provider-url"`
+	Model          string       `yaml:"model"`
 	EmbeddingModel string       `yaml:"embedding-model"`
 	ModelList      []ModelEntry `yaml:"model-list"`
 	SidecarModel   string       `yaml:"sidecar-model"`
@@ -49,6 +50,9 @@ func (c *Config) mergeFromFile(path string) {
 	}
 	if fileCfg.ProviderURL != "" {
 		c.ProviderURL = fileCfg.ProviderURL
+	}
+	if fileCfg.Model != "" {
+		c.Model = fileCfg.Model
 	}
 	if fileCfg.EmbeddingModel != "" {
 		c.EmbeddingModel = fileCfg.EmbeddingModel
@@ -111,6 +115,15 @@ func (c *Config) ResolveSidecarModel(teamSidecar string) string {
 		return teamSidecar
 	}
 	return c.SidecarModel
+}
+
+// ResolveModel returns the effective default model following priority:
+// team.yaml model > hufu.yaml model.
+func (c *Config) ResolveModel(teamModel string) string {
+	if teamModel != "" {
+		return teamModel
+	}
+	return c.Model
 }
 
 // ProviderURLToOllamaAPI converts a provider URL (e.g. http://localhost:11434/v1)
