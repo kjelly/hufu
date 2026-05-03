@@ -27,6 +27,12 @@ type CoordStatusMsg struct{ Status team.TaskStatus }
 
 type FinishedMsg struct{}
 
+// StatusBarMsg updates the status line shown between the prompt and the columns.
+type StatusBarMsg struct{ Text string }
+
+// ResultMsg carries the final coordinator answer shown when work completes.
+type ResultMsg struct{ Text string }
+
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 var (
@@ -59,6 +65,12 @@ var (
 			Padding(1, 3)
 	confirmHighlightStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("237"))
 	confirmNormalStyle    = lipgloss.NewStyle().Faint(true)
+
+	resultBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("2")).
+			Padding(0, 1)
+	resultLabelStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2"))
 )
 
 // ── Model ─────────────────────────────────────────────────────────────────────
@@ -82,9 +94,14 @@ type Model struct {
 	inConfirm     bool // showing quit confirmation dialog
 	confirmChoice int  // 0=no 1=yes
 
-	width    int
-	height   int
-	finished bool
+	width      int
+	height     int
+	finished   bool
+	statusText string // current status shown in the status bar
+	result     string // final coordinator answer shown when finished
+
+	inAskUser bool
+	ask       askState
 }
 
 // New creates a fresh model with the user's original prompt shown at the top.
@@ -101,9 +118,18 @@ func (m Model) Init() tea.Cmd { return nil }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case AskUserMsg:
+		var cmd tea.Cmd
+		m.ask, cmd = initAskUser(msg, m.width)
+		m.inAskUser = true
+		return m, cmd
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.inAskUser {
+			m.ask.ti.Width = askTIWidth(msg.Width)
+		}
 		if m.vpReady {
 			m.vp.Width = msg.Width
 			m.vp.Height = m.vpHeight()
@@ -152,6 +178,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case StatusBarMsg:
+		m.statusText = msg.Text
+
+	case ResultMsg:
+		m.result = msg.Text
+
 	case FinishedMsg:
 		m.finished = true
 		// Only mark TaskInProgress items as TaskDone. TaskError items are
@@ -193,6 +225,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if m.inAskUser {
+			return m.updateAskUser(msg)
+		}
 		if m.inConfirm {
 			return m.updateConfirm(msg)
 		}
@@ -200,6 +235,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateDetail(msg)
 		}
 		return m.updateColumns(msg)
+	}
+
+	// Forward non-key messages to the textinput (cursor blink, paste, etc.)
+	// when the ask_user free-text dialog is active.
+	if m.inAskUser && m.ask.isFreeText() {
+		var cmd tea.Cmd
+		m.ask.ti, cmd = m.ask.ti.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -304,6 +347,9 @@ func (m Model) View() string {
 	if m.width == 0 {
 		return "Initialising…"
 	}
+	if m.inAskUser {
+		return m.askUserView()
+	}
 	if m.inConfirm {
 		return m.confirmView()
 	}
@@ -333,6 +379,60 @@ func (m Model) renderPromptWidget(w int) string {
 	return promptBoxStyle.Width(innerW).Render(content)
 }
 
+const maxResultLines = 8
+
+// statusAreaHeight returns the number of terminal lines occupied by the status area.
+func (m Model) statusAreaHeight() int {
+	if m.finished && m.result != "" {
+		raw := strings.TrimSpace(m.result)
+		n := strings.Count(raw, "\n") + 1
+		if n > maxResultLines {
+			n = maxResultLines + 1 // +1 for the truncation indicator line
+		}
+		return n + 2 // top + bottom border
+	}
+	return 1
+}
+
+// renderStatusArea renders the status bar or result box.
+func (m Model) renderStatusArea(w int) string {
+	if m.finished && m.result != "" {
+		innerW := w - 4 // border(1) + padding(1) each side
+		if innerW < 4 {
+			innerW = 4
+		}
+		raw := strings.TrimSpace(m.result)
+		lines := strings.Split(raw, "\n")
+		if len(lines) > maxResultLines {
+			remaining := len(lines) - maxResultLines
+			lines = lines[:maxResultLines]
+			lines = append(lines, dimStyle.Render(fmt.Sprintf("... (%d more lines)", remaining)))
+		}
+		labelPlain := "Result  "
+		var sb strings.Builder
+		sb.WriteString(resultLabelStyle.Render(labelPlain))
+		for i, l := range lines {
+			if i == 0 {
+				sb.WriteString(truncRaw(l, innerW-len([]rune(labelPlain))))
+			} else {
+				sb.WriteString("\n")
+				sb.WriteString(truncRaw(l, innerW))
+			}
+		}
+		return resultBoxStyle.Width(innerW).Render(sb.String())
+	}
+
+	text := m.statusText
+	if text == "" {
+		if m.finished {
+			return dimStyle.Render("  ✓ Done")
+		}
+		return dimStyle.Render("  ⟳ Initialising…")
+	}
+	// Text already carries its own lipgloss styling from the reporter.
+	return "  " + text
+}
+
 func (m Model) columnsView() string {
 	w := m.width
 	if w < 9 {
@@ -340,8 +440,11 @@ func (m Model) columnsView() string {
 	}
 
 	widget := m.renderPromptWidget(w)
-	// widget = 3 lines (top-border + content + bottom-border)
-	bodyH := m.height - 3 - 1 - 1 - 1 // widget(3) + blank(1) + blank(1) + footer(1)
+	statusArea := m.renderStatusArea(w)
+	statusH := m.statusAreaHeight()
+
+	// widget(3) + blank(1) + statusArea(statusH) + blank(1) + blank(1) + footer(1)
+	bodyH := m.height - 3 - 1 - statusH - 1 - 1 - 1
 	if bodyH < 2 {
 		bodyH = 2
 	}
@@ -355,7 +458,7 @@ func (m Model) columnsView() string {
 	div := dimStyle.Render("│")
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, c0, div, c1, div, c2)
-	return widget + "\n" + body + "\n\n" + m.footer()
+	return widget + "\n" + statusArea + "\n" + body + "\n\n" + m.footer()
 }
 
 func (m Model) renderCol(col, width, height int) string {
@@ -511,7 +614,8 @@ func (m *Model) clampScroll() {
 }
 
 func (m Model) colBodyHeight() int {
-	return m.height - 6 // widget(3) + blank(1) + blank(1) + footer(1)
+	// widget(3) + blank(1) + statusArea + blank(1) + blank(1) + footer(1)
+	return m.height - 7 - m.statusAreaHeight()
 }
 
 func taskIconStyle(s team.TaskStatus) (string, lipgloss.Style) {

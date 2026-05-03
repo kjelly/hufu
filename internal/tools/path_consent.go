@@ -87,6 +87,33 @@ func (pc *PathConsent) AskConsent(path, operation string, toolName, toolArgs str
 	}
 	pc.mu.Unlock()
 
+	// Acquire stdin lock before any output so that we never write to the
+	// terminal while it is in raw mode (e.g. when the TUI is active).
+	// NotifyAskUserStart releases the altscreen / restores cooked mode in TUI
+	// mode; it is a no-op in non-TUI mode.
+	StdinMu.Lock()
+	defer StdinMu.Unlock()
+
+	SetAskUserActive(true)
+	defer SetAskUserActive(false)
+
+	NotifyAskUserStart()
+
+	// Re-check: another goroutine may have updated remembered/denied while
+	// we were waiting for StdinMu.
+	pc.mu.Lock()
+	for _, prefix := range pc.remembered {
+		if strings.HasPrefix(normalized, prefix) {
+			pc.mu.Unlock()
+			return ConsentAlways, nil
+		}
+	}
+	if pc.isDeniedLocked(path) {
+		pc.mu.Unlock()
+		return ConsentDenied, nil
+	}
+	pc.mu.Unlock()
+
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldFmt("─── Path Consent ───"))
 
 	agentInfo := pc.currentAgent()
@@ -120,24 +147,6 @@ func (pc *PathConsent) AskConsent(path, operation string, toolName, toolArgs str
 	fmt.Fprintf(os.Stderr, "  %s Always deny %s\n", cyanFmt("[d]"), dirToRemember+string(os.PathSeparator))
 	fmt.Fprintf(os.Stderr, "  %s Deny (default)\n", cyanFmt("[N]"))
 	fmt.Fprintf(os.Stderr, "%s ", boldFmt("Your choice:"))
-
-	StdinMu.Lock()
-	defer StdinMu.Unlock()
-
-	// Double-check: another goroutine may have updated remembered/denied while
-	// we were waiting for StdinMu.
-	pc.mu.Lock()
-	for _, prefix := range pc.remembered {
-		if strings.HasPrefix(normalized, prefix) {
-			pc.mu.Unlock()
-			return ConsentAlways, nil
-		}
-	}
-	if pc.isDeniedLocked(path) {
-		pc.mu.Unlock()
-		return ConsentDenied, nil
-	}
-	pc.mu.Unlock()
 
 	reader := bufio.NewReader(os.Stdin)
 	input := readConsentLine(reader)

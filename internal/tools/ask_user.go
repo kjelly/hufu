@@ -96,11 +96,23 @@ func executeAskUser(call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 		}
 	}
 
+	// TUI mode: use the native dialog — no terminal release or stdin needed.
+	tuiOpts := make([]AskUserTUIOption, len(args.Options))
+	for i, o := range args.Options {
+		tuiOpts[i] = AskUserTUIOption{Label: o.Label, Value: o.Value}
+	}
+	if jsonResp, ok := TryAskUserTUI(args.Question, questionType, tuiOpts, args.AllowAny); ok {
+		return fantasy.NewTextResponse(jsonResp), nil
+	}
+
+	// CLI mode: read from stdin.
 	StdinMu.Lock()
 	defer StdinMu.Unlock()
 
 	SetAskUserActive(true)
 	defer SetAskUserActive(false)
+
+	NotifyAskUserStart()
 
 	reader := bufio.NewReader(os.Stdin)
 

@@ -53,7 +53,44 @@ func setStatusFlusher(w *lineWriter, taskDisp *taskDisplay, skillDisp *skillDisp
 }
 
 func init() {
+	// TUI mode: use a native in-TUI dialog for ask_user — no terminal release needed.
+	tools.SetOnAskUserTUI(func(question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (string, bool) {
+		p := activeTUIProgram.Load()
+		if p == nil {
+			return "", false
+		}
+		replyCh := make(chan string, 1)
+		tuiOpts := make([]tuipkg.AskUserOption, len(opts))
+		for i, o := range opts {
+			tuiOpts[i] = tuipkg.AskUserOption{Label: o.Label, Value: o.Value}
+		}
+		p.Send(tuipkg.AskUserMsg{
+			Question: question,
+			Type:     qtype,
+			Options:  tuiOpts,
+			AllowAny: allowAny,
+			ReplyCh:  replyCh,
+		})
+		return <-replyCh, true
+	})
+
+	// path_consent still uses ReleaseTerminal/RestoreTerminal (no native TUI dialog).
+	tools.SetOnAskUserStart(func() {
+		if p := activeTUIProgram.Load(); p != nil {
+			if err := p.ReleaseTerminal(); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to release terminal: %v\n", err)
+			}
+		}
+	})
+
 	tools.SetOnAskUserDone(func() {
+		if p := activeTUIProgram.Load(); p != nil {
+			if err := p.RestoreTerminal(); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to restore terminal: %v\n", err)
+			}
+			return
+		}
+		// Non-TUI mode: flush any buffered display output.
 		activeStatusFlusher.mu.Lock()
 		w := activeStatusFlusher.w
 		td := activeStatusFlusher.taskDisp
@@ -679,6 +716,9 @@ func makeTUIReporter(p *tea.Program) team.StatusReporter {
 				p.Send(tuipkg.TasksUpdatedMsg{Items: event.Todos})
 			}
 
+		case "wrap_up":
+			p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render("Wrapping up — no new tasks will be delegated")})
+
 		case "start":
 			todoID := event.TodoID
 			if todoID == "" {
@@ -709,6 +749,8 @@ func makeTUIReporter(p *tea.Program) team.StatusReporter {
 				line = label
 			}
 			p.Send(tuipkg.TaskLogMsg{TodoID: todoID, Line: line})
+			// Status bar: show which agent is now thinking
+			p.Send(tuipkg.StatusBarMsg{Text: label + dimStyle.Render("  thinking…")})
 
 		case "step":
 			if event.TodoID == "" {
@@ -716,6 +758,8 @@ func makeTUIReporter(p *tea.Program) team.StatusReporter {
 			}
 			if event.Step > 0 {
 				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderStep(event.Step)})
+				label := agentStyle.Render(event.Agent)
+				p.Send(tuipkg.StatusBarMsg{Text: label + dimStyle.Render(fmt.Sprintf("  step %d", event.Step))})
 			}
 
 		case "tool_call":
@@ -723,12 +767,21 @@ func makeTUIReporter(p *tea.Program) team.StatusReporter {
 				return
 			}
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolCall(event.ToolName, event.ToolArgs)})
+			argsPreview := event.ToolArgs
+			if len(argsPreview) > 60 {
+				argsPreview = argsPreview[:60] + "…"
+			}
+			toolLabel := toolStyle.Render("⟹ " + event.ToolName)
+			agentLabel := agentStyle.Render(event.Agent)
+			p.Send(tuipkg.StatusBarMsg{Text: agentLabel + "  " + toolLabel + dimStyle.Render("  "+argsPreview)})
 
 		case "tool_result":
 			if event.TodoID == "" {
 				return
 			}
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolResult(event.ToolName, event.ToolResult)})
+			agentLabel := agentStyle.Render(event.Agent)
+			p.Send(tuipkg.StatusBarMsg{Text: agentLabel + "  " + doneStyle.Render("✓ "+event.ToolName)})
 
 		case "text":
 			if event.TodoID == "" {
@@ -748,6 +801,7 @@ func makeTUIReporter(p *tea.Program) team.StatusReporter {
 				}
 			}
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: doneStyle.Render("✓ done")})
+			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + doneStyle.Render("✓ done")})
 			if event.TodoID == team.CoordTodoID {
 				p.Send(tuipkg.CoordStatusMsg{Status: team.TaskDone})
 			}
@@ -758,6 +812,11 @@ func makeTUIReporter(p *tea.Program) team.StatusReporter {
 			}
 			flushText(event.TodoID)
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("✗ " + event.Message)})
+			errPreview := event.Message
+			if len(errPreview) > 60 {
+				errPreview = errPreview[:60] + "…"
+			}
+			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + errStyle.Render("✗ "+errPreview)})
 		}
 	}
 }
@@ -784,6 +843,9 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 	go func() {
 		defer close(finished)
 		execResult, execErr = executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord, pathConsent)
+		if execResult != "" {
+			p.Send(tuipkg.ResultMsg{Text: execResult})
+		}
 		p.Send(tuipkg.FinishedMsg{})
 	}()
 

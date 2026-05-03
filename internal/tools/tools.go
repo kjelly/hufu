@@ -17,10 +17,31 @@ var StdinMu sync.Mutex
 
 var askUserActive atomic.Int32
 
+var onAskUserStart func()
 var onAskUserDone func()
+
+func SetOnAskUserStart(fn func()) {
+	onAskUserStart = fn
+}
 
 func SetOnAskUserDone(fn func()) {
 	onAskUserDone = fn
+}
+
+// NotifyAskUserStart is called by the ask_user tool just before reading stdin.
+// It invokes the registered start hook (e.g. to release the terminal in TUI mode).
+func NotifyAskUserStart() {
+	if onAskUserStart != nil {
+		onAskUserStart()
+	}
+}
+
+// NotifyAskUserDone is called by the ask_user tool after reading stdin.
+// It invokes the registered done hook (e.g. to restore the terminal in TUI mode).
+func NotifyAskUserDone() {
+	if onAskUserDone != nil {
+		onAskUserDone()
+	}
 }
 
 func SetAskUserActive(active bool) {
@@ -28,14 +49,34 @@ func SetAskUserActive(active bool) {
 		askUserActive.Store(1)
 	} else {
 		askUserActive.Store(0)
-		if onAskUserDone != nil {
-			onAskUserDone()
-		}
+		NotifyAskUserDone()
 	}
 }
 
 func IsAskUserActive() bool {
 	return askUserActive.Load() == 1
+}
+
+// AskUserTUIOption is a choice for the ask_user TUI dialog.
+// Mirrors tui.AskUserOption without a cross-package dependency.
+type AskUserTUIOption struct {
+	Label string
+	Value string
+}
+
+var onAskUserTUI func(question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool)
+
+func SetOnAskUserTUI(fn func(question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool)) {
+	onAskUserTUI = fn
+}
+
+// TryAskUserTUI attempts to handle ask_user via a TUI-native dialog.
+// Returns (jsonResp, true) if handled; ("", false) if TUI is not active.
+func TryAskUserTUI(question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool) {
+	if onAskUserTUI == nil {
+		return "", false
+	}
+	return onAskUserTUI(question, qtype, opts, allowAny)
 }
 
 type ToolOption func(*ToolConfig)
