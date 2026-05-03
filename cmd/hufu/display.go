@@ -451,13 +451,6 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				dimStyle.Render(taskPreview),
 			))
 
-		case "cache_check":
-			w.write(fmt.Sprintf("%s %s %s\n",
-				dimStyle.Render("⟐"),
-				agentStyle.Render(event.Agent),
-				dimStyle.Render("checking cache..."),
-			))
-
 		case "skill_auto_loaded":
 			if textBuf != "" {
 				w.write(flushText(currentAgent, textBuf))
@@ -927,12 +920,6 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			}
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: doneStyle.Render("✓ cached")})
 			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + doneStyle.Render("✓ cached") + "  " + dimStyle.Render(taskPreview)})
-
-		case "cache_check":
-			if event.TodoID == "" {
-				return
-			}
-			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + dimStyle.Render("checking cache...")})
 
 		case "text":
 			if event.TodoID == "" {

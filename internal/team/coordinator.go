@@ -112,6 +112,7 @@ type Coordinator struct {
 	delegatedTasksMu      sync.Mutex
 	taskResultCache       map[string][]cachedTaskEntry // agent → ordered list of past results
 	taskResultCacheMu     sync.RWMutex
+	cacheGeneration       atomic.Int64 // bumped each time coordinator starts a new delegation round
 	memoryStore           *memory.MemoryStore
 	skillsMu              sync.RWMutex
 	modelList             []config.ModelEntry
@@ -1110,18 +1111,29 @@ type agentTaskResult struct {
 
 // cachedTaskEntry stores a previously completed task and its output for dedup.
 type cachedTaskEntry struct {
-	taskDesc string
-	output   string
+	taskDesc   string
+	output     string
+	generation int64 // cacheGeneration at time of storage
 }
 
 // lookupTaskCache checks whether newTask has a semantically equivalent prior
-// result for agentKey (lowercase agent name). It first does a fast exact-match
-// check; if that misses and a sidecar is configured, it uses the sidecar to
-// judge semantic similarity. Returns (cachedOutput, true) on a hit.
+// result for agentKey (lowercase agent name). Only entries from the current
+// cacheGeneration are considered — this ensures results from a previous
+// coordinator round (where workspace state may have changed) are never reused.
+// It first does a fast exact-match check; if that misses and a sidecar is
+// configured, it uses the sidecar to judge semantic similarity.
+// Returns (cachedOutput, true) on a hit.
 func (c *Coordinator) lookupTaskCache(ctx context.Context, agentKey, newTask string) (string, bool) {
+	gen := c.cacheGeneration.Load()
+
 	c.taskResultCacheMu.RLock()
-	entries := make([]cachedTaskEntry, len(c.taskResultCache[agentKey]))
-	copy(entries, c.taskResultCache[agentKey])
+	all := c.taskResultCache[agentKey]
+	var entries []cachedTaskEntry
+	for _, e := range all {
+		if e.generation == gen {
+			entries = append(entries, e)
+		}
+	}
 	c.taskResultCacheMu.RUnlock()
 
 	if len(entries) == 0 {
@@ -1161,14 +1173,16 @@ func (c *Coordinator) lookupTaskCache(ctx context.Context, agentKey, newTask str
 
 const maxTaskCacheEntries = 50
 
-// storeTaskCache saves a completed task result so future similar tasks can
-// skip re-execution.
+// storeTaskCache saves a completed task result so future similar tasks within
+// the same coordinator round (same cacheGeneration) can skip re-execution.
 func (c *Coordinator) storeTaskCache(agentKey, taskDesc, output string) {
+	gen := c.cacheGeneration.Load()
 	c.taskResultCacheMu.Lock()
 	defer c.taskResultCacheMu.Unlock()
 	c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
-		taskDesc: taskDesc,
-		output:   output,
+		taskDesc:   taskDesc,
+		output:     output,
+		generation: gen,
 	})
 	if len(c.taskResultCache[agentKey]) > maxTaskCacheEntries {
 		c.taskResultCache[agentKey] = c.taskResultCache[agentKey][1:]
@@ -1231,6 +1245,30 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	c.round++
 	if c.session.Config.MaxRounds > 0 && c.round > c.session.Config.MaxRounds {
 		return "", fmt.Errorf("max rounds (%d) exceeded", c.session.Config.MaxRounds)
+	}
+
+	// Bump the cache generation when the coordinator starts a new delegation
+	// round. Worker-level ExecuteTasks calls carry a worker todoID in context,
+	// not CoordTodoID, so they do NOT bump the generation. This means all
+	// sub-tasks spawned by workers within the same coordinator round share the
+	// same generation and can deduplicate against each other. When the
+	// coordinator starts a new round (new agent call), the generation bumps,
+	// making all previous cached results invalid — ensuring stale workspace
+	// state is never reused.
+	callerID, _ := ctx.Value(todoIDKey{}).(string)
+	if callerID == "" || callerID == CoordTodoID {
+		newGen := c.cacheGeneration.Add(1)
+		c.taskResultCacheMu.Lock()
+		for key, entries := range c.taskResultCache {
+			var fresh []cachedTaskEntry
+			for _, e := range entries {
+				if e.generation == newGen {
+					fresh = append(fresh, e)
+				}
+			}
+			c.taskResultCache[key] = fresh
+		}
+		c.taskResultCacheMu.Unlock()
 	}
 
 	c.report(c.newEvent("step").withMessage(fmt.Sprintf("Round %d: delegating %d task(s)", c.round, len(tasks))))
@@ -1299,7 +1337,6 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			// that explicitly request summarize always run fresh.
 			agentKey := strings.ToLower(td.Agent)
 			if !td.Sidecar && !td.Summarize {
-				c.report(c.newEvent("cache_check").withAgent(td.Agent).withTodoID(tid).withMessage("checking cache similarity..."))
 				if cached, ok := c.lookupTaskCache(ctx, agentKey, td.Task); ok {
 					c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(td.Task).withTodoID(tid))
 					c.taskTracker.TodoList().UpdateStatus(tid, TaskDone, "")
