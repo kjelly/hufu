@@ -566,6 +566,10 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
 	resolvedSidecarModel := cfg.ResolveSidecarModel(session.Config.SidecarModel)
 	resolvedGuardModel := cfg.ResolveGuardModel(session.Config.GuardModel, session.Config.SidecarModel)
+	resolvedMaxConcurrent := cfg.ResolveMaxConcurrent(session.Config.MaxConcurrent)
+	if resolvedMaxConcurrent <= 0 {
+		resolvedMaxConcurrent = 8
+	}
 	session.Config.Generation.Model = cfg.ResolveModel(session.Config.Generation.Model)
 
 	allowedPaths := buildAllowedPaths(session, registry, cfg)
@@ -581,7 +585,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		}
 	}
 
-	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, verbose, allowedPaths, pathConsent, hookRegistry)
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, allowedPaths, pathConsent, hookRegistry)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
@@ -618,6 +622,9 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	}
 	if resolvedGuardModel != "" {
 		fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Guard:"), resolvedGuardModel)
+	}
+	if resolvedMaxConcurrent != 8 {
+		fmt.Fprintf(os.Stderr, "%s %d\n", boldStyle.Render("Max concurrent:"), resolvedMaxConcurrent)
 	}
 
 	resolvedNotify := cfg.ResolveNotify(session.Config.Notify)

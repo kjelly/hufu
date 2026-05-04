@@ -27,6 +27,7 @@ type Config struct {
 	ModelList      []ModelEntry        `yaml:"model-list"`
 	SidecarModel   string              `yaml:"sidecar-model"`
 	GuardModel     string              `yaml:"guard-model"`
+	MaxConcurrent  int                 `yaml:"max-concurrent"`
 	AllowedPaths   []string            `yaml:"allowed-paths"`
 	RawVars        interface{}         `yaml:"vars"`
 	Hooks          map[string]string   `yaml:"hooks"`
@@ -96,6 +97,9 @@ func (c *Config) mergeFromFile(path string) {
 	}
 	if fileCfg.GuardModel != "" {
 		c.GuardModel = fileCfg.GuardModel
+	}
+	if fileCfg.MaxConcurrent > 0 {
+		c.MaxConcurrent = fileCfg.MaxConcurrent
 	}
 	if len(fileCfg.AllowedPaths) > 0 {
 		c.AllowedPaths = fileCfg.AllowedPaths
@@ -175,6 +179,16 @@ func (c *Config) ResolveSidecarModel(teamSidecar string) string {
 		return teamSidecar
 	}
 	return c.SidecarModel
+}
+
+func (c *Config) ResolveMaxConcurrent(teamMax int) int {
+	if teamMax > 0 {
+		return teamMax
+	}
+	if c.MaxConcurrent > 0 {
+		return c.MaxConcurrent
+	}
+	return 0
 }
 
 func (c *Config) ResolveGuardModel(teamGuard, teamSidecar string) string {

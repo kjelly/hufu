@@ -61,6 +61,7 @@ type teamConfigYAML struct {
 	ModelList     []config.ModelEntry `yaml:"model-list"`
 	SidecarModel  string              `yaml:"sidecar-model"`
 	GuardModel    string              `yaml:"guard-model"`
+	MaxConcurrent int                 `yaml:"max-concurrent"`
 	Notify        notify.NotifyConfig `yaml:"notify"`
 }
 
@@ -270,6 +271,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.GuardModel != "" {
 		cfg.GuardModel = yc.GuardModel
+	}
+	if yc.MaxConcurrent > 0 {
+		cfg.MaxConcurrent = yc.MaxConcurrent
 	}
 	if yc.Notify.Enabled() {
 		cfg.Notify = yc.Notify

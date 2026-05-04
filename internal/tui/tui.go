@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -104,13 +105,23 @@ type Model struct {
 
 	inAskUser bool
 	ask       askState
+
+	inPromptInput  bool
+	promptInput    textinput.Model
+	PromptInjectCh chan string
 }
 
 // New creates a fresh model with the user's original prompt shown at the top.
 func New(prompt string) Model {
+	ti := textinput.New()
+	ti.Prompt = "> "
+	ti.Placeholder = "Type additional prompt..."
+	ti.CharLimit = 500
 	return Model{
-		prompt: prompt,
-		logs:   make(map[string][]string),
+		prompt:         prompt,
+		logs:           make(map[string][]string),
+		promptInput:    ti,
+		PromptInjectCh: make(chan string, 16),
 	}
 }
 
@@ -239,6 +250,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.inAskUser {
 			return m.updateAskUser(msg)
 		}
+		if m.inPromptInput {
+			return m.updatePromptInput(msg)
+		}
 		if m.inConfirm {
 			return m.updateConfirm(msg)
 		}
@@ -253,6 +267,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.inAskUser && m.ask.isFreeText() {
 		var cmd tea.Cmd
 		m.ask.ti, cmd = m.ask.ti.Update(msg)
+		return m, cmd
+	}
+
+	// Forward non-key messages to the prompt input textinput when active.
+	if m.inPromptInput {
+		var cmd tea.Cmd
+		m.promptInput, cmd = m.promptInput.Update(msg)
 		return m, cmd
 	}
 
@@ -288,6 +309,13 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q":
 		if m.finished {
 			return m, tea.Quit
+		}
+	case "c":
+		if !m.finished {
+			m.inPromptInput = true
+			m.promptInput.SetValue("")
+			m.promptInput.Focus()
+			return m, textinput.Blink
 		}
 	case "up", "k":
 		if m.row > 0 {
@@ -352,6 +380,32 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updatePromptInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		prompt := strings.TrimSpace(m.promptInput.Value())
+		m.inPromptInput = false
+		m.promptInput.SetValue("")
+		m.promptInput.Blur()
+		if prompt != "" {
+			select {
+			case m.PromptInjectCh <- prompt:
+			default:
+			}
+		}
+		return m, nil
+	case "esc", "ctrl+c":
+		m.inPromptInput = false
+		m.promptInput.SetValue("")
+		m.promptInput.Blur()
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		m.promptInput, cmd = m.promptInput.Update(msg)
+		return m, cmd
+	}
+}
+
 // ── View ──────────────────────────────────────────────────────────────────────
 
 func (m Model) View() string {
@@ -360,6 +414,9 @@ func (m Model) View() string {
 	}
 	if m.inAskUser {
 		return m.askUserView()
+	}
+	if m.inPromptInput {
+		return m.promptInputView()
 	}
 	if m.inConfirm {
 		return m.confirmView()
@@ -647,7 +704,7 @@ func (m Model) footer() string {
 	if m.finished {
 		return footerStyle.Render("↑↓ navigate  ←→ columns  ↕ scroll  enter detail  q quit")
 	}
-	return footerStyle.Render("↑↓ navigate  ←→ columns  ↕ scroll  enter detail  esc quit")
+	return footerStyle.Render("↑↓ navigate  ←→ columns  ↕ scroll  enter detail  c inject prompt  esc quit")
 }
 
 func (m Model) confirmView() string {
@@ -662,6 +719,20 @@ func (m Model) confirmView() string {
 	}
 	buttons := noStyled + "  " + yesStyled
 	dialog := confirmBoxStyle.Render("  Quit hufu?" + "\n\n" + buttons + "\n")
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
+}
+
+var promptInputBoxStyle = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(lipgloss.Color("12")).
+	Padding(1, 2)
+
+func (m Model) promptInputView() string {
+	m.promptInput.Width = max(m.width-8, 20)
+	content := promptStyle.Render("─── Additional Prompt ───") + "\n\n" +
+		m.promptInput.View() + "\n\n" +
+		dimStyle.Render("enter submit · esc cancel")
+	dialog := promptInputBoxStyle.Render(content)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }
 

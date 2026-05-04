@@ -960,6 +960,18 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 	activeTUIProgram.Store(p)
 	defer activeTUIProgram.Store(nil)
 
+	if injector != nil {
+		promptCh := model.PromptInjectCh
+		go func() {
+			for prompt := range promptCh {
+				injector.enqueue(prompt)
+			}
+		}()
+		// Close the prompt injection channel so the forwarding goroutine exits cleanly,
+		// regardless of whether p.Run() succeeds or returns an error.
+		defer close(promptCh)
+	}
+
 	var execResult string
 	var execErr error
 	finished := make(chan struct{})

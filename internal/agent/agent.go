@@ -56,6 +56,7 @@ type TeamConfig struct {
 	ModelList     []config.ModelEntry
 	SidecarModel  string
 	GuardModel    string
+	MaxConcurrent int
 	Notify        notify.NotifyConfig
 }
 

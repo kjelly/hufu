@@ -129,6 +129,7 @@ type Coordinator struct {
 	workerCtxOnce         sync.Once
 	autoLoadedSkills      []*skill.SkillDef
 	autoLoadedSkillsMu    sync.RWMutex
+	maxConcurrent         int
 	sessionTime           time.Time
 	// stepConfirmFn must be set before Run() or protected by stepConfirmFnMu.
 	stepConfirmFn   func(context.Context, []TaskDef) (bool, error)
@@ -203,7 +204,7 @@ func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
 	return
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, verbose bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry) (*Coordinator, error) {
+func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
 	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry))
 	prov, err := agent.NewOllamaProvider(defaultProviderURL)
@@ -228,6 +229,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		modelList:       modelList,
 		sidecarModel:    sidecarModel,
 		guardModel:      guardModel,
+		maxConcurrent:   maxConcurrent,
 		sessionTime:     time.Now(),
 		hooks:           hookRegistry,
 	}
@@ -1334,7 +1336,6 @@ func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	return fantasy.NewTextResponse(fmt.Sprintf("%s long-term memory (ltm.md)", verb)), nil
 }
 
-const maxConcurrentTasks = 8
 const maxConversationHistory = 100
 const compactHistoryThreshold = 80
 const maxMessageSize = 50000
@@ -1566,7 +1567,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	}
 
 	resultsCh := make(chan agentTaskResult, len(tasks))
-	sem := make(chan struct{}, maxConcurrentTasks)
+	sem := make(chan struct{}, c.maxConcurrent)
 	var wg sync.WaitGroup
 	for i, task := range tasks {
 		wg.Add(1)
