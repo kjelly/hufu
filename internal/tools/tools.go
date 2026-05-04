@@ -459,6 +459,7 @@ func AllTools(opts ...ToolOption) []fantasy.AgentTool {
 		NewDownloadTool(opts...),
 		NewFetchTool(opts...),
 		NewAgenticFetchTool(opts...),
+		NewRandomTool(opts...),
 	}
 }
 

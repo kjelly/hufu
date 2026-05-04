@@ -456,7 +456,7 @@ func TestDefaultProviderURL(t *testing.T) {
 
 // TestAlwaysIncludeTools tests that alwaysIncludeTools contains expected tools
 func TestAlwaysIncludeTools(t *testing.T) {
-	expectedTools := []string{"agent", "todo"}
+	expectedTools := []string{"agent", "todo", "random"}
 
 	for _, tool := range expectedTools {
 		if !alwaysIncludeTools[tool] {

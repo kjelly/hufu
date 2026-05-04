@@ -156,6 +156,7 @@ func RunAgent(ctx context.Context, agent fantasy.Agent, prompt string) (string, 
 var alwaysIncludeTools = map[string]bool{
 	"agent":        true,
 	"todo":         true,
+	"random":       true,
 	"memory_save":  true,
 	"memory_query": true,
 }
