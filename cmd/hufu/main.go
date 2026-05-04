@@ -40,6 +40,8 @@ var (
 	stepsMode           bool
 	dryRun              bool
 	tuiMode             bool
+	varFlags            []string
+	varFiles            []string
 	globalPromptReader  atomic.Pointer[readline.PromptReader]
 )
 
@@ -75,6 +77,8 @@ func main() {
 	rootCmd.Flags().BoolVarP(&stepsMode, "steps", "s", false, "Pause for user confirmation before executing each batch of worker tasks")
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview skill matching and task delegation without executing agents")
 	rootCmd.Flags().BoolVar(&tuiMode, "tui", false, "Show a Bubble Tea TUI for real-time task tracking")
+	rootCmd.Flags().StringArrayVar(&varFlags, "var", nil, "Set template variable (key=value). Can be specified multiple times; later values override earlier ones")
+	rootCmd.Flags().StringArrayVar(&varFiles, "var-file", nil, "Read template variables from a file (.yaml/.yml or KEY=VALUE format). Can be specified multiple times; later files override earlier ones")
 
 	if err := rootCmd.Execute(); err != nil {
 		var interrupted errInterrupted
@@ -113,6 +117,11 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "%s Temp workspace: %s\n", stepStyle.Render("⟳"), workspace)
 	}
 
+	vars, err := team.ResolveVars(varFiles, varFlags)
+	if err != nil {
+		return fmt.Errorf("failed to resolve template variables: %w", err)
+	}
+
 	prompt := ""
 	if len(args) > 0 {
 		prompt = args[0]
@@ -132,7 +141,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		if err := registry.Discover(); err != nil {
 			return fmt.Errorf("failed to discover teams: %w", err)
 		}
-		return runArchiveMemory(context.Background(), registry)
+		return runArchiveMemory(context.Background(), registry, vars)
 	}
 
 	if prompt == "" {
@@ -204,7 +213,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "%s Available teams: %s\n", boldStyle.Render("Teams:"), strings.Join(registry.ListTeams(), ", "))
 
 	if archiveMemory && prompt == "" && !newSession {
-		return runArchiveMemory(context.Background(), registry)
+		return runArchiveMemory(context.Background(), registry, vars)
 	}
 
 	initialTeam := strings.ToLower(agentTeamName)
@@ -253,7 +262,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	for _, seg := range initialSegments {
 		if seg.Type == team.SegmentSwitchTeam {
 			if _, ok := loadedTeams[seg.Name]; !ok {
-				tc, err := loadTeamByName(ctx, seg.Name, registry, providerURL, pathConsent)
+				tc, err := loadTeamByName(ctx, seg.Name, registry, providerURL, pathConsent, vars)
 				if err != nil {
 					return fmt.Errorf("failed to load team %q: %w", seg.Name, err)
 				}
@@ -335,9 +344,9 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	var result string
 	var runErr error
 	if tuiMode {
-		result, runErr = runWithTUI(ctx, cancel, prompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent)
+		result, runErr = runWithTUI(ctx, cancel, prompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars)
 	} else {
-		result, runErr = executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord, pathConsent)
+		result, runErr = executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord, pathConsent, vars)
 	}
 	if runErr != nil {
 		return runErr
@@ -389,13 +398,13 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL string, pathConsent *tools.PathConsent) (*teamContext, error) {
+func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL string, pathConsent *tools.PathConsent, vars map[string]string) (*teamContext, error) {
 	teamDir, err := registry.Resolve(teamName)
 	if err != nil {
 		return nil, err
 	}
 
-	session, err := team.LoadTeam(teamDir)
+	session, err := team.LoadTeam(teamDir, vars)
 	if err != nil {
 		return nil, err
 	}
@@ -731,7 +740,7 @@ func runWithInjection(ctx context.Context, tc *teamContext, initialResult string
 	}
 }
 
-func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, defaultProviderURL string, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent) (string, error) {
+func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, defaultProviderURL string, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string) (string, error) {
 	var results []string
 	currentTeamName := ""
 
@@ -741,7 +750,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			teamName := seg.Name
 			tc, ok := loadedTeams[teamName]
 			if !ok {
-				loaded, err := loadTeamByName(ctx, teamName, registry, providerURL, pathConsent)
+				loaded, err := loadTeamByName(ctx, teamName, registry, providerURL, pathConsent, vars)
 				if err != nil {
 					return strings.Join(results, "\n\n"), fmt.Errorf("failed to load team %q: %w", teamName, err)
 				}
@@ -1028,7 +1037,7 @@ func archiveCurrentSessionToMemory(ctx context.Context, tc *teamContext) {
 	fmt.Fprintf(os.Stderr, "%s Session archived to memory.\n", doneStyle.Render("✓"))
 }
 
-func runArchiveMemory(ctx context.Context, registry *team.TeamRegistry) error {
+func runArchiveMemory(ctx context.Context, registry *team.TeamRegistry, vars map[string]string) error {
 	teams := registry.ListTeams()
 	if len(teams) == 0 {
 		return fmt.Errorf("no teams available")
@@ -1043,7 +1052,7 @@ func runArchiveMemory(ctx context.Context, registry *team.TeamRegistry) error {
 
 	archived := 0
 	for _, name := range teamNames {
-		tc, err := loadTeamByName(ctx, name, registry, providerURL, newPathConsent())
+		tc, err := loadTeamByName(ctx, name, registry, providerURL, newPathConsent(), vars)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s Failed to load team %q: %v\n", errStyle.Render("⚠"), name, err)
 			continue

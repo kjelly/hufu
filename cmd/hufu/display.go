@@ -939,7 +939,7 @@ func stderrLog(format string, args ...any) {
 
 // runWithTUI starts executeSegments in a goroutine and blocks on the Bubble Tea
 // program in the main goroutine. Returns when the user quits or the work is done.
-func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent) (string, error) {
+func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string) (string, error) {
 	model := tuipkg.New(prompt)
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	activeTUIProgram.Store(p)
@@ -950,7 +950,7 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		execResult, execErr = executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord, pathConsent)
+		execResult, execErr = executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord, pathConsent, vars)
 		if execResult != "" {
 			p.Send(tuipkg.ResultMsg{Text: execResult})
 		}

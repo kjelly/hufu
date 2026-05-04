@@ -9,7 +9,6 @@ import (
 )
 
 func TestMaxStepsParsing(t *testing.T) {
-	// Test cases for max-steps parsing behavior
 	tests := []struct {
 		name         string
 		yamlContent  string
@@ -27,14 +26,14 @@ func TestMaxStepsParsing(t *testing.T) {
 		{
 			name:         "agent with max-steps: 0 (should be unset)",
 			yamlContent:  "---\nname: test-agent\nrole: worker\nmodel: test-model\nmax-steps: 0\n---\n",
-			wantMaxSteps: 0, // 0 means unset
+			wantMaxSteps: 0,
 			isAgent:      true,
 			wantErr:      false,
 		},
 		{
 			name:         "agent without max-steps",
 			yamlContent:  "---\nname: test-agent\nrole: worker\nmodel: test-model\n---\n",
-			wantMaxSteps: 0, // unset
+			wantMaxSteps: 0,
 			isAgent:      true,
 			wantErr:      false,
 		},
@@ -48,14 +47,14 @@ func TestMaxStepsParsing(t *testing.T) {
 		{
 			name:         "team config with max-steps: 0 (should be unset)",
 			yamlContent:  "name: test-team\nmax-steps: 0\nmodel: test-model\n",
-			wantMaxSteps: 0, // 0 means unset
+			wantMaxSteps: 0,
 			isAgent:      false,
 			wantErr:      false,
 		},
 		{
 			name:         "team config without max-steps",
 			yamlContent:  "name: test-team\nmodel: test-model\n",
-			wantMaxSteps: 0, // unset
+			wantMaxSteps: 0,
 			isAgent:      false,
 			wantErr:      false,
 		},
@@ -64,16 +63,18 @@ func TestMaxStepsParsing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.isAgent {
-				// Test parseAgentFile
 				tmpDir := t.TempDir()
 				agentPath := filepath.Join(tmpDir, "test-agent.md")
 				if err := os.WriteFile(agentPath, []byte(tt.yamlContent), 0644); err != nil {
 					t.Fatalf("Failed to write test agent file: %v", err)
 				}
 
-				result := parseAgentFile(agentPath)
-				if tt.wantErr && result == nil {
-					return // expected error
+				result, err := parseAgentFile(agentPath, nil)
+				if tt.wantErr && err != nil {
+					return
+				}
+				if err != nil {
+					t.Fatalf("parseAgentFile returned error: %v", err)
 				}
 				if result == nil {
 					t.Fatalf("parseAgentFile returned nil for valid input")
@@ -82,16 +83,15 @@ func TestMaxStepsParsing(t *testing.T) {
 					t.Errorf("parseAgentFile MaxSteps = %d, want %d", result.MaxSteps, tt.wantMaxSteps)
 				}
 			} else {
-				// Test parseTeamYML
 				tmpDir := t.TempDir()
 				teamPath := filepath.Join(tmpDir, "team.yml")
 				if err := os.WriteFile(teamPath, []byte(tt.yamlContent), 0644); err != nil {
 					t.Fatalf("Failed to write test team file: %v", err)
 				}
 
-				cfg, err := parseTeamYML(tmpDir)
+				cfg, err := parseTeamYML(tmpDir, nil)
 				if tt.wantErr && err != nil {
-					return // expected error
+					return
 				}
 				if err != nil {
 					t.Fatalf("parseTeamYML returned error: %v", err)
@@ -105,10 +105,6 @@ func TestMaxStepsParsing(t *testing.T) {
 }
 
 func TestMaxStepsDefaultValue(t *testing.T) {
-	// Test that max-steps: 0 and missing max-steps both result in default (30)
-	// by verifying the resolution logic in agent package
-
-	// For agent parsing
 	t.Run("agent max-steps 0 resolved to default", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		agentPath := filepath.Join(tmpDir, "test-agent.md")
@@ -117,17 +113,18 @@ func TestMaxStepsDefaultValue(t *testing.T) {
 			t.Fatalf("Failed to write test agent file: %v", err)
 		}
 
-		result := parseAgentFile(agentPath)
+		result, err := parseAgentFile(agentPath, nil)
+		if err != nil {
+			t.Fatalf("parseAgentFile returned error: %v", err)
+		}
 		if result == nil {
 			t.Fatalf("parseAgentFile returned nil")
 		}
-		// MaxSteps should be 0 (unset)
 		if result.MaxSteps != 0 {
 			t.Errorf("parseAgentFile MaxSteps = %d, want 0 for unset", result.MaxSteps)
 		}
 	})
 
-	// For team config parsing
 	t.Run("team max-steps 0 resolved to default", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		teamPath := filepath.Join(tmpDir, "team.yml")
@@ -136,11 +133,10 @@ func TestMaxStepsDefaultValue(t *testing.T) {
 			t.Fatalf("Failed to write test team file: %v", err)
 		}
 
-		cfg, err := parseTeamYML(tmpDir)
+		cfg, err := parseTeamYML(tmpDir, nil)
 		if err != nil {
 			t.Fatalf("parseTeamYML returned error: %v", err)
 		}
-		// MaxSteps should be 0 (unset)
 		if cfg.MaxSteps != 0 {
 			t.Errorf("parseTeamYML MaxSteps = %d, want 0 for unset", cfg.MaxSteps)
 		}
@@ -148,8 +144,6 @@ func TestMaxStepsDefaultValue(t *testing.T) {
 }
 
 func TestMaxStepsWithValidValue(t *testing.T) {
-	// Test that valid max-steps values are correctly parsed
-
 	t.Run("agent with valid max-steps", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		agentPath := filepath.Join(tmpDir, "valid-agent.md")
@@ -158,7 +152,10 @@ func TestMaxStepsWithValidValue(t *testing.T) {
 			t.Fatalf("Failed to write test agent file: %v", err)
 		}
 
-		result := parseAgentFile(agentPath)
+		result, err := parseAgentFile(agentPath, nil)
+		if err != nil {
+			t.Fatalf("parseAgentFile returned error: %v", err)
+		}
 		if result == nil {
 			t.Fatalf("parseAgentFile returned nil")
 		}
@@ -175,7 +172,7 @@ func TestMaxStepsWithValidValue(t *testing.T) {
 			t.Fatalf("Failed to write test team file: %v", err)
 		}
 
-		cfg, err := parseTeamYML(tmpDir)
+		cfg, err := parseTeamYML(tmpDir, nil)
 		if err != nil {
 			t.Fatalf("parseTeamYML returned error: %v", err)
 		}
@@ -186,8 +183,6 @@ func TestMaxStepsWithValidValue(t *testing.T) {
 }
 
 func TestMaxStepsMissingUsesDefault(t *testing.T) {
-	// Test that missing max-steps results in 0 (to be resolved to default 30 later)
-
 	t.Run("agent without max-steps", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		agentPath := filepath.Join(tmpDir, "no-maxsteps-agent.md")
@@ -196,7 +191,10 @@ func TestMaxStepsMissingUsesDefault(t *testing.T) {
 			t.Fatalf("Failed to write test agent file: %v", err)
 		}
 
-		result := parseAgentFile(agentPath)
+		result, err := parseAgentFile(agentPath, nil)
+		if err != nil {
+			t.Fatalf("parseAgentFile returned error: %v", err)
+		}
 		if result == nil {
 			t.Fatalf("parseAgentFile returned nil")
 		}
@@ -213,11 +211,10 @@ func TestMaxStepsMissingUsesDefault(t *testing.T) {
 			t.Fatalf("Failed to write test team file: %v", err)
 		}
 
-		cfg, err := parseTeamYML(tmpDir)
+		cfg, err := parseTeamYML(tmpDir, nil)
 		if err != nil {
 			t.Fatalf("parseTeamYML returned error: %v", err)
 		}
-		// Default MaxRounds is 10, but MaxSteps should remain 0 (unset)
 		if cfg.MaxSteps != 0 {
 			t.Errorf("parseTeamYML MaxSteps = %d, want 0 for missing", cfg.MaxSteps)
 		}
@@ -242,7 +239,7 @@ model-list:
 			t.Fatalf("Failed to write team file: %v", err)
 		}
 
-		cfg, err := parseTeamYML(tmpDir)
+		cfg, err := parseTeamYML(tmpDir, nil)
 		if err != nil {
 			t.Fatalf("parseTeamYML returned error: %v", err)
 		}
@@ -268,7 +265,7 @@ model-list:
 			t.Fatalf("Failed to write team file: %v", err)
 		}
 
-		cfg, err := parseTeamYML(tmpDir)
+		cfg, err := parseTeamYML(tmpDir, nil)
 		if err != nil {
 			t.Fatalf("parseTeamYML returned error: %v", err)
 		}

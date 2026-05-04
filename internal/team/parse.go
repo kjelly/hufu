@@ -117,21 +117,27 @@ func agentFrontmatterFromSimple(m map[string]string) agentFrontmatter {
 	return fm
 }
 
-func parseAgentFile(path string) *agent.AgentDef {
+func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to read agent file %s: %v\n", path, err)
-		return nil
+		return nil, nil
 	}
 	text := string(raw)
+
+	text, err = applyTemplate(text, filepath.Base(path), vars)
+	if err != nil {
+		return nil, fmt.Errorf("template error in agent file %s: %w", path, err)
+	}
+
 	if !strings.HasPrefix(text, "---\n") {
-		return nil
+		return nil, nil
 	}
 	rest := text[4:]
 	idx := strings.Index(rest, "\n---\n")
 	if idx < 0 {
 		fmt.Fprintf(os.Stderr, "warning: malformed frontmatter in %s (missing closing ---)\n", path)
-		return nil
+		return nil, nil
 	}
 
 	var fm agentFrontmatter
@@ -143,7 +149,7 @@ func parseAgentFile(path string) *agent.AgentDef {
 
 	if fm.Name == "" {
 		fmt.Fprintf(os.Stderr, "warning: agent file %s has no 'name' in frontmatter\n", path)
-		return nil
+		return nil, nil
 	}
 
 	role := fm.Role
@@ -175,10 +181,10 @@ func parseAgentFile(path string) *agent.AgentDef {
 	if fm.MaxRetries >= 0 {
 		def.MaxRetries = fm.MaxRetries
 	}
-	return def
+	return def, nil
 }
 
-func parseTeamYML(teamDir string) (agent.TeamConfig, error) {
+func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, error) {
 	cfg := agent.TeamConfig{
 		MaxRounds:    10,
 		WorkspaceDir: "workspace",
@@ -187,11 +193,13 @@ func parseTeamYML(teamDir string) (agent.TeamConfig, error) {
 	}
 
 	var data []byte
+	var dataFilename string
 	var found bool
 	for _, name := range []string{"team.yml", "team.yaml"} {
 		d, err := os.ReadFile(filepath.Join(teamDir, name))
 		if err == nil {
 			data = d
+			dataFilename = name
 			found = true
 			break
 		}
@@ -199,6 +207,13 @@ func parseTeamYML(teamDir string) (agent.TeamConfig, error) {
 	if !found {
 		return cfg, fmt.Errorf("team.yml or team.yaml not found in %s", teamDir)
 	}
+
+	text := string(data)
+	templated, err := applyTemplate(text, dataFilename, vars)
+	if err != nil {
+		return cfg, fmt.Errorf("template error in team config: %w", err)
+	}
+	data = []byte(templated)
 
 	var yc teamConfigYAML
 	if err := yaml.Unmarshal(data, &yc); err != nil {
@@ -252,13 +267,13 @@ func parseTeamYML(teamDir string) (agent.TeamConfig, error) {
 	return cfg, nil
 }
 
-func LoadTeam(teamDir string) (*TeamSession, error) {
+func LoadTeam(teamDir string, vars map[string]string) (*TeamSession, error) {
 	absDir, err := filepath.Abs(teamDir)
 	if err != nil {
 		return nil, fmt.Errorf("invalid team directory: %w", err)
 	}
 
-	cfg, err := parseTeamYML(absDir)
+	cfg, err := parseTeamYML(absDir, vars)
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +319,10 @@ func LoadTeam(teamDir string) (*TeamSession, error) {
 				continue
 			}
 		}
-		def := parseAgentFile(path)
+		def, err := parseAgentFile(path, vars)
+		if err != nil {
+			return nil, err
+		}
 		if def == nil {
 			continue
 		}
