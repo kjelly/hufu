@@ -25,6 +25,7 @@ import (
 	"github.com/anomalyco/hufu/internal/readline"
 	"github.com/anomalyco/hufu/internal/team"
 	"github.com/anomalyco/hufu/internal/tools"
+	tuipkg "github.com/anomalyco/hufu/internal/tui"
 )
 
 var (
@@ -352,7 +353,34 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	var result string
 	var runErr error
 	if tuiMode {
-		result, runErr = runWithTUI(ctx, cancel, prompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars)
+		var teamInfo tuipkg.TeamInfo
+		teamInfo.AvailableTeams = registry.ListTeams()
+		for _, tc := range loadedTeams {
+			if tc != nil && tc.session != nil {
+				teamInfo.TeamName = tc.session.Config.Name
+				for _, ag := range sortedAgents(tc.session.Agents) {
+					teamInfo.Agents = append(teamInfo.Agents, tuipkg.AgentInfoEntry{
+						Name: ag.Name,
+						Role: ag.Role,
+					})
+				}
+				for _, s := range tc.session.Skills {
+					teamInfo.Skills = append(teamInfo.Skills, s.Name)
+				}
+				if sc := tc.session.Config.SidecarModel; sc != "" {
+					teamInfo.SidecarModel = sc
+				}
+				if gm := tc.session.Config.GuardModel; gm != "" {
+					teamInfo.GuardModel = gm
+				}
+				teamInfo.MemoryEnabled = memoryEnabled && !tempWorkspace
+				if teamInfo.MemoryEnabled {
+					teamInfo.MemoryModel = config.ResolveEmbeddingModel(memoryModel)
+				}
+				break
+			}
+		}
+		result, runErr = runWithTUI(ctx, cancel, prompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, teamInfo)
 	} else {
 		result, runErr = executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord, pathConsent, vars)
 	}
@@ -551,13 +579,12 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		ollamaAPIURL := config.ProviderURLToOllamaAPI(resolvedProviderURL)
 		embedModel := config.ResolveEmbeddingModel(memoryModel)
 		projectDir, _ := os.Getwd()
-		ms, err := memory.NewMemoryStore(projectDir, ollamaAPIURL, embedModel)
+		var err error
+		memStore, err = memory.NewMemoryStore(projectDir, ollamaAPIURL, embedModel)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s Memory unavailable: %v\n", errStyle.Render("⚠"), err)
-		} else {
-			memStore = ms
-			fmt.Fprintf(os.Stderr, "%s Memory: enabled (model: %s)\n", doneStyle.Render("✓"), embedModel)
+			fmt.Fprintf(os.Stderr, "%s Memory store directory creation failed: %v\n", errStyle.Render("⚠"), err)
 		}
+		fmt.Fprintf(os.Stderr, "%s Memory: enabled (model: %s)\n", doneStyle.Render("✓"), embedModel)
 	} else if !memoryEnabled {
 		fmt.Fprintf(os.Stderr, "%s Memory: disabled\n", dimStyle.Render("○"))
 	}

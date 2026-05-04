@@ -35,6 +35,24 @@ type StatusBarMsg struct{ Text string }
 // ResultMsg carries the final coordinator answer shown when work completes.
 type ResultMsg struct{ Text string }
 
+type AgentInfoEntry struct {
+	Name string
+	Role string
+}
+
+type TeamInfo struct {
+	AvailableTeams []string
+	TeamName       string
+	Agents         []AgentInfoEntry
+	MemoryEnabled  bool
+	MemoryModel    string
+	Skills         []string
+	SidecarModel   string
+	GuardModel     string
+}
+
+type TeamInfoMsg struct{ Info TeamInfo }
+
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 var (
@@ -56,6 +74,7 @@ var (
 	doneIcon     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	errorIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	skippedIcon  = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("8"))
+	matchStyle   = lipgloss.NewStyle().Background(lipgloss.Color("55")).Foreground(lipgloss.Color("15"))
 
 	toolCallStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	toolResStyle  = lipgloss.NewStyle().Faint(true)
@@ -74,6 +93,14 @@ var (
 			BorderForeground(lipgloss.Color("2")).
 			Padding(0, 1)
 	resultLabelStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2"))
+
+	boldStyle    = lipgloss.NewStyle().Bold(true)
+	doneStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2"))
+	teamStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
+	infoBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("14")).
+			Padding(1, 3)
 )
 
 // ── Model ─────────────────────────────────────────────────────────────────────
@@ -84,10 +111,10 @@ type Model struct {
 	logs      map[string][]string // todoID → rendered log lines
 	coordItem *team.TodoItem
 
-	col int // 0=pending 1=in_progress 2=done
+	col int // 0=pending 1=in_progress 2=done 3=skip 4=error
 	row int // cursor within focused column
 
-	scrollOff [3]int // scroll offset per column (index of first visible item)
+	scrollOff [5]int // scroll offset per column (index of first visible item)
 
 	inDetail bool
 	detailID string
@@ -109,6 +136,18 @@ type Model struct {
 	inPromptInput  bool
 	promptInput    textinput.Model
 	PromptInjectCh chan string
+
+	inSearch      bool
+	searchInput   textinput.Model
+	searchQuery   string
+	searchResults []*team.TodoItem
+	searchIdx     int
+
+	inInfo   bool
+	teamInfo TeamInfo
+
+	wrapUpRequested bool
+	WrapUpCh        chan struct{}
 }
 
 // New creates a fresh model with the user's original prompt shown at the top.
@@ -117,11 +156,19 @@ func New(prompt string) Model {
 	ti.Prompt = "> "
 	ti.Placeholder = "Type additional prompt..."
 	ti.CharLimit = 500
+
+	si := textinput.New()
+	si.Prompt = "/"
+	si.Placeholder = "Search tasks..."
+	si.CharLimit = 200
+
 	return Model{
 		prompt:         prompt,
 		logs:           make(map[string][]string),
 		promptInput:    ti,
+		searchInput:    si,
 		PromptInjectCh: make(chan string, 16),
+		WrapUpCh:       make(chan struct{}, 2),
 	}
 }
 
@@ -197,6 +244,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ResultMsg:
 		m.result = msg.Text
 
+	case TeamInfoMsg:
+		m.teamInfo = msg.Info
+
 	case FinishedMsg:
 		m.finished = true
 		m.statusText = doneIcon.Render("✓") + dimStyle.Render("  All tasks completed")
@@ -225,6 +275,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		if m.wrapUpRequested {
+			return m, tea.Quit
+		}
 
 	case tea.MouseMsg:
 		if m.inDetail {
@@ -250,6 +303,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.inAskUser {
 			return m.updateAskUser(msg)
 		}
+		if m.inInfo {
+			return m.updateInfo(msg)
+		}
+		if m.inSearch {
+			return m.updateSearch(msg)
+		}
 		if m.inPromptInput {
 			return m.updatePromptInput(msg)
 		}
@@ -270,6 +329,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Forward non-key messages to the search input textinput when active.
+	if m.inSearch {
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		return m, cmd
+	}
+
 	// Forward non-key messages to the prompt input textinput when active.
 	if m.inPromptInput {
 		var cmd tea.Cmd
@@ -286,11 +352,38 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inDetail = false
 		return m, nil
 	case "ctrl+c":
-		return m, tea.Quit
+		return m.handleCtrlC()
 	case "q":
 		if m.finished {
 			return m, tea.Quit
 		}
+	case "i":
+		m.inInfo = true
+		return m, nil
+	case "g":
+		if m.vpReady {
+			m.vp.GotoTop()
+		}
+		return m, nil
+	case "G":
+		if m.vpReady {
+			m.vp.GotoBottom()
+		}
+		return m, nil
+	case "n":
+		if len(m.searchResults) > 0 {
+			m.searchIdx = (m.searchIdx + 1) % len(m.searchResults)
+			m.jumpToSearchMatch()
+			m.inDetail = false
+		}
+		return m, nil
+	case "N":
+		if len(m.searchResults) > 0 {
+			m.searchIdx = (m.searchIdx - 1 + len(m.searchResults)) % len(m.searchResults)
+			m.jumpToSearchMatch()
+			m.inDetail = false
+		}
+		return m, nil
 	}
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)
@@ -301,8 +394,14 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	col := m.colItems(m.col)
 	switch msg.String() {
 	case "ctrl+c":
-		return m, tea.Quit
+		return m.handleCtrlC()
 	case "esc":
+		if m.searchQuery != "" {
+			m.searchQuery = ""
+			m.searchResults = nil
+			m.searchIdx = 0
+			return m, nil
+		}
 		m.inConfirm = true
 		m.confirmChoice = 0
 		return m, nil
@@ -317,6 +416,24 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.promptInput.Focus()
 			return m, textinput.Blink
 		}
+	case "i":
+		m.inInfo = true
+		return m, nil
+	case "/":
+		m.inSearch = true
+		m.searchInput.SetValue("")
+		m.searchInput.Focus()
+		return m, textinput.Blink
+	case "n":
+		if len(m.searchResults) > 0 {
+			m.searchIdx = (m.searchIdx + 1) % len(m.searchResults)
+			m.jumpToSearchMatch()
+		}
+	case "N":
+		if len(m.searchResults) > 0 {
+			m.searchIdx = (m.searchIdx - 1 + len(m.searchResults)) % len(m.searchResults)
+			m.jumpToSearchMatch()
+		}
 	case "up", "k":
 		if m.row > 0 {
 			m.row--
@@ -327,14 +444,46 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.row++
 			m.scrollCursorIntoView()
 		}
+	case "g":
+		if len(col) > 0 {
+			m.row = 0
+			m.scrollOff[m.col] = 0
+		}
+	case "G":
+		if len(col) > 0 {
+			m.row = len(col) - 1
+			m.scrollCursorIntoView()
+		}
+	case "ctrl+d":
+		halfPage := max(m.colBodyHeight()/2, 1)
+		newRow := m.row + halfPage
+		if newRow >= len(col) {
+			newRow = len(col) - 1
+		}
+		if len(col) > 0 {
+			m.row = newRow
+			m.scrollCursorIntoView()
+		}
+	case "ctrl+u":
+		halfPage := max(m.colBodyHeight()/2, 1)
+		newRow := m.row - halfPage
+		if newRow < 0 {
+			newRow = 0
+		}
+		m.row = newRow
+		m.scrollCursorIntoView()
 	case "left", "h":
 		if m.col > 0 {
 			m.col--
 			m.row = 0
 			m.scrollOff[m.col] = 0
 		}
-	case "right", "l", "tab":
-		if m.col < 2 {
+	case "tab":
+		m.col = (m.col + 1) % 5
+		m.row = 0
+		m.scrollOff[m.col] = 0
+	case "right", "l":
+		if m.col < 4 {
 			m.col++
 			m.row = 0
 			m.scrollOff[m.col] = 0
@@ -352,6 +501,19 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) handleCtrlC() (tea.Model, tea.Cmd) {
+	if m.wrapUpRequested {
+		return m, tea.Quit
+	}
+	m.wrapUpRequested = true
+	select {
+	case m.WrapUpCh <- struct{}{}:
+	default:
+	}
+	m.statusText = dimStyle.Render("Wrapping up — press Ctrl+C again to force quit")
+	return m, nil
+}
+
 func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "left", "h":
@@ -364,7 +526,8 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		if m.confirmChoice == 1 {
-			return m, tea.Quit
+			m.inConfirm = false
+			return m.handleCtrlC()
 		}
 		m.inConfirm = false
 		return m, nil
@@ -375,7 +538,8 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inConfirm = false
 		return m, nil
 	case "y":
-		return m, tea.Quit
+		m.inConfirm = false
+		return m.handleCtrlC()
 	}
 	return m, nil
 }
@@ -406,6 +570,85 @@ func (m Model) updatePromptInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		query := strings.TrimSpace(m.searchInput.Value())
+		m.inSearch = false
+		m.searchInput.Blur()
+		if query == "" {
+			return m, nil
+		}
+		m.searchQuery = query
+		m.searchResults = m.executeSearch(query)
+		if len(m.searchResults) > 0 {
+			m.searchIdx = 0
+			m.jumpToSearchMatch()
+		}
+		return m, nil
+	case "esc":
+		m.inSearch = false
+		m.searchInput.SetValue("")
+		m.searchInput.Blur()
+		return m, nil
+	case "ctrl+c":
+		m.inSearch = false
+		m.searchInput.SetValue("")
+		m.searchInput.Blur()
+		return m.handleCtrlC()
+	default:
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		return m, cmd
+	}
+}
+
+func (m Model) updateInfo(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q", "i", "enter":
+		m.inInfo = false
+		return m, nil
+	case "ctrl+c":
+		m.inInfo = false
+		return m.handleCtrlC()
+	}
+	return m, nil
+}
+
+func (m Model) executeSearch(query string) []*team.TodoItem {
+	q := strings.ToLower(query)
+	var results []*team.TodoItem
+	for col := 0; col < 5; col++ {
+		items := m.colItems(col)
+		for _, item := range items {
+			if strings.Contains(strings.ToLower(item.Agent), q) ||
+				strings.Contains(strings.ToLower(item.Desc), q) ||
+				strings.Contains(strings.ToLower(item.Detail), q) {
+				results = append(results, item)
+			}
+		}
+	}
+	return results
+}
+
+func (m *Model) jumpToSearchMatch() {
+	if len(m.searchResults) == 0 || m.searchIdx >= len(m.searchResults) {
+		return
+	}
+	target := m.searchResults[m.searchIdx]
+	for col := 0; col < 5; col++ {
+		items := m.colItems(col)
+		for i, item := range items {
+			if item.ID == target.ID {
+				m.col = col
+				m.row = i
+				m.scrollCursorIntoView()
+				return
+			}
+		}
+	}
+}
+
 // ── View ──────────────────────────────────────────────────────────────────────
 
 func (m Model) View() string {
@@ -414,6 +657,12 @@ func (m Model) View() string {
 	}
 	if m.inAskUser {
 		return m.askUserView()
+	}
+	if m.inInfo {
+		return m.infoPanelView()
+	}
+	if m.inSearch {
+		return m.searchView()
 	}
 	if m.inPromptInput {
 		return m.promptInputView()
@@ -429,7 +678,7 @@ func (m Model) View() string {
 
 // ── Column view ───────────────────────────────────────────────────────────────
 
-var colTitles = [3]string{"PENDING", "IN PROGRESS", "DONE"}
+var colTitles = [5]string{"PENDING", "IN PROGRESS", "DONE", "SKIP", "ERROR"}
 
 func (m Model) renderPromptWidget(w int) string {
 	// border(1) + padding(1) on each side = 4 overhead
@@ -517,15 +766,17 @@ func (m Model) columnsView() string {
 		bodyH = 2
 	}
 
-	// Two │ dividers, so each of three columns = (w-2)/3.
-	colW := (w - 2) / 3
+	// Four │ dividers, so each of five columns = (w-4)/5.
+	colW := (w - 4) / 5
 
 	c0 := m.renderCol(0, colW, bodyH)
 	c1 := m.renderCol(1, colW, bodyH)
 	c2 := m.renderCol(2, colW, bodyH)
+	c3 := m.renderCol(3, colW, bodyH)
+	c4 := m.renderCol(4, colW, bodyH)
 	div := dimStyle.Render("│")
 
-	body := lipgloss.JoinHorizontal(lipgloss.Top, c0, div, c1, div, c2)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, c0, div, c1, div, c2, div, c3, div, c4)
 	return widget + "\n" + statusArea + "\n" + body + "\n\n" + m.footer()
 }
 
@@ -560,7 +811,8 @@ func (m Model) renderCol(col, width, height int) string {
 			break
 		}
 		selected := focused && i == m.row
-		for _, l := range m.itemLines(items[i], selected, width) {
+		isMatch := m.isCurrentSearchMatch(items[i].ID)
+		for _, l := range m.itemLines(items[i], selected, isMatch, width) {
 			if usedLines >= height {
 				break
 			}
@@ -580,7 +832,17 @@ func (m Model) renderCol(col, width, height int) string {
 	return sb.String()
 }
 
-func (m Model) itemLines(item *team.TodoItem, selected bool, width int) []string {
+func (m Model) isCurrentSearchMatch(id string) bool {
+	if len(m.searchResults) == 0 {
+		return false
+	}
+	if m.searchIdx >= len(m.searchResults) {
+		return false
+	}
+	return m.searchResults[m.searchIdx].ID == id
+}
+
+func (m Model) itemLines(item *team.TodoItem, selected bool, isMatch bool, width int) []string {
 	icon, iconSt := taskIconStyle(item.Status)
 	agentTrunc := utils.TruncatePreview(item.Agent, width-3)
 	descTrunc := utils.TruncatePreview(item.Desc, width-2)
@@ -611,13 +873,17 @@ func (m Model) itemLines(item *team.TodoItem, selected bool, width int) []string
 	}
 
 	var lines []string
+	matchIndicator := ""
+	if isMatch && !selected {
+		matchIndicator = matchStyle.Render("▸")
+	}
 
 	if selected {
 		line1 := "▶ " + agentStyle.Render(agentTrunc)
 		line2 := "  " + descTrunc
 		lines = []string{line1, line2}
 	} else {
-		line1 := iconSt.Render(icon+" ") + agentStyle.Render(agentTrunc)
+		line1 := iconSt.Render(icon+" ") + agentStyle.Render(agentTrunc) + matchIndicator
 		line2 := dimStyle.Render("  " + descTrunc)
 		lines = []string{line1, line2}
 	}
@@ -652,7 +918,7 @@ func (m *Model) scrollCursorIntoView() {
 	height := m.colBodyHeight()
 	lineCount := 2
 	for i := *off; i < len(items); i++ {
-		itemLines := len(m.itemLines(items[i], false, 0))
+		itemLines := len(m.itemLines(items[i], false, false, 0))
 		if itemLines == 0 {
 			itemLines = 2
 		}
@@ -671,7 +937,7 @@ func (m *Model) scrollCursorIntoView() {
 }
 
 func (m *Model) clampScroll() {
-	for c := 0; c < 3; c++ {
+	for c := 0; c < 5; c++ {
 		items := m.colItems(c)
 		if len(items) == 0 {
 			m.scrollOff[c] = 0
@@ -701,10 +967,19 @@ func taskIconStyle(s team.TaskStatus) (string, lipgloss.Style) {
 }
 
 func (m Model) footer() string {
-	if m.finished {
-		return footerStyle.Render("↑↓ navigate  ←→ columns  ↕ scroll  enter detail  q quit")
+	if m.inInfo {
+		return footerStyle.Render("i/esc close · ↑↓ scroll")
 	}
-	return footerStyle.Render("↑↓ navigate  ←→ columns  ↕ scroll  enter detail  c inject prompt  esc quit")
+	if m.inSearch {
+		return footerStyle.Render("enter search · esc cancel")
+	}
+	if len(m.searchResults) > 0 {
+		return footerStyle.Render(fmt.Sprintf("n/N next/prev match (%d/%d) · / search · i info · esc clear · g/G top/bot · ctrl+d/u half-page · ↑↓ j/k · ←→ h/l · enter detail · q quit", m.searchIdx+1, len(m.searchResults)))
+	}
+	if m.finished {
+		return footerStyle.Render("g/G top/bot · ctrl+d/u half-page · / search · i info · ↑↓ j/k · ←→ h/l · enter detail · q quit")
+	}
+	return footerStyle.Render("g/G top/bot · ctrl+d/u half-page · / search · i info · c prompt · ↑↓ j/k · ←→ h/l · enter detail · esc quit")
 }
 
 func (m Model) confirmView() string {
@@ -733,6 +1008,82 @@ func (m Model) promptInputView() string {
 		m.promptInput.View() + "\n\n" +
 		dimStyle.Render("enter submit · esc cancel")
 	dialog := promptInputBoxStyle.Render(content)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
+}
+
+var searchBoxStyle = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(lipgloss.Color("6")).
+	Padding(1, 2)
+
+func (m Model) searchView() string {
+	m.searchInput.Width = max(m.width-8, 20)
+	content := promptStyle.Render("─── Search ───") + "\n\n" +
+		m.searchInput.View() + "\n\n" +
+		dimStyle.Render("enter search · esc cancel")
+	dialog := searchBoxStyle.Render(content)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
+}
+
+func (m Model) infoPanelView() string {
+	info := m.teamInfo
+	var b strings.Builder
+	b.WriteString(headerStyle.Render("─── Info ───"))
+	b.WriteString("\n\n")
+
+	if len(info.AvailableTeams) > 0 {
+		b.WriteString(boldStyle.Render("Teams: "))
+		b.WriteString(strings.Join(info.AvailableTeams, ", "))
+		b.WriteString("\n")
+	}
+
+	if info.TeamName != "" {
+		b.WriteString(boldStyle.Render("Team:  "))
+		b.WriteString(teamStyle.Render(info.TeamName))
+		b.WriteString("\n")
+	}
+
+	if len(info.Agents) > 0 {
+		b.WriteString(boldStyle.Render("Agents: "))
+		var agentDisplay []string
+		for _, a := range info.Agents {
+			agentDisplay = append(agentDisplay, fmt.Sprintf("%s (%s)", agentStyle.Render(a.Name), dimStyle.Render(a.Role)))
+		}
+		b.WriteString(strings.Join(agentDisplay, ", "))
+		b.WriteString("\n")
+	}
+
+	if info.MemoryEnabled {
+		b.WriteString(doneStyle.Render("✓") + " " + boldStyle.Render("Memory: "))
+		b.WriteString("enabled")
+		if info.MemoryModel != "" {
+			b.WriteString(fmt.Sprintf(" (model: %s)", info.MemoryModel))
+		}
+		b.WriteString("\n")
+	}
+
+	if len(info.Skills) > 0 {
+		b.WriteString(boldStyle.Render("Skills: "))
+		b.WriteString(strings.Join(info.Skills, ", "))
+		b.WriteString("\n")
+	}
+
+	if info.SidecarModel != "" {
+		b.WriteString(boldStyle.Render("Sidecar: "))
+		b.WriteString(info.SidecarModel)
+		b.WriteString("\n")
+	}
+
+	if info.GuardModel != "" {
+		b.WriteString(boldStyle.Render("Guard:   "))
+		b.WriteString(info.GuardModel)
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n" + dimStyle.Render("esc close"))
+
+	content := b.String()
+	dialog := infoBoxStyle.Render(content)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }
 
@@ -803,7 +1154,11 @@ func (m Model) colItems(col int) []*team.TodoItem {
 			out = append(out, t)
 		case col == 1 && t.Status == team.TaskInProgress:
 			out = append(out, t)
-		case col == 2 && (t.Status == team.TaskDone || t.Status == team.TaskError || t.Status == team.TaskSkipped):
+		case col == 2 && t.Status == team.TaskDone:
+			out = append(out, t)
+		case col == 3 && t.Status == team.TaskSkipped:
+			out = append(out, t)
+		case col == 4 && t.Status == team.TaskError:
 			out = append(out, t)
 		}
 	}

@@ -99,7 +99,7 @@ func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			st.req.ReplyCh <- marshalAskResp(nil, "")
 			m.inAskUser = false
-			return m, tea.Quit
+			return m.handleCtrlC()
 		}
 		var cmd tea.Cmd
 		m.ask.ti, cmd = st.ti.Update(msg)
@@ -118,7 +118,7 @@ func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		st.req.ReplyCh <- marshalAskResp(nil, "")
 		m.inAskUser = false
-		return m, tea.Quit
+		return m.handleCtrlC()
 	case "up", "k":
 		if st.cursor > 0 {
 			st.cursor--

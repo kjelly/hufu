@@ -231,3 +231,53 @@ func TestCheckEmbeddingModelMismatchDifferent(t *testing.T) {
 		t.Errorf("meta.EmbeddingModel = %q, want %q", meta.EmbeddingModel, newModel)
 	}
 }
+
+func TestLazyInitFieldsSetWithoutProbe(t *testing.T) {
+	tmpDir := t.TempDir()
+	projectDir := filepath.Join(tmpDir, "project")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := newLazyMemoryStore(projectDir, "http://localhost:9999/v1", "test-model", false)
+	if err != nil {
+		t.Fatalf("newLazyMemoryStore() error: %v", err)
+	}
+
+	if s.initialized {
+		t.Error("store should not be initialized after construction")
+	}
+	if s.storePath == "" {
+		t.Error("storePath should be set after construction")
+	}
+	if s.embedModel != "test-model" {
+		t.Errorf("embedModel = %q, want %q", s.embedModel, "test-model")
+	}
+	if s.collection != nil {
+		t.Error("collection should be nil before init")
+	}
+	if s.db != nil {
+		t.Error("db should be nil before init")
+	}
+}
+
+func TestLazyInitOnlyOnce(t *testing.T) {
+	tmpDir := t.TempDir()
+	projectDir := filepath.Join(tmpDir, "project")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := newLazyMemoryStore(projectDir, "http://localhost:9999/v1", "test-model", false)
+	if err != nil {
+		t.Fatalf("newLazyMemoryStore() error: %v", err)
+	}
+
+	err1 := s.init()
+	err2 := s.init()
+	err3 := s.init()
+
+	if err1 != err2 || err2 != err3 {
+		t.Errorf("init() should return same error each time: got %v, %v, %v", err1, err2, err3)
+	}
+}

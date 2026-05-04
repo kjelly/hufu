@@ -1552,7 +1552,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		}
 		if !approved {
 			for _, item := range todoItems {
-				c.taskTracker.TodoList().UpdateStatus(item.ID, TaskError, "cancelled by user")
+				c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "cancelled by user")
 			}
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.report(c.newEvent("step").withMessage("Steps: user declined task execution"))
@@ -2316,10 +2316,20 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("Save a reusable skill to disk and reload it immediately. Use this when you or a worker has solved a non-trivial problem and you want to encode the solution for future reuse.\n")
 	b.WriteString("```json\n{\"name\": \"skill-name\", \"description\": \"what it does\", \"content\": \"# Skill\\n\\nStep-by-step workflow...\"}\n```\n\n")
 	b.WriteString("### finish\n")
-	b.WriteString("Signal completion and provide your final answer to the user. ALWAYS call this when you are done.\n")
+	b.WriteString("Signal completion and provide your final answer to the user. ALWAYS call this when you are done.\n**Important: Call stm_write with a session summary BEFORE calling finish.**\n")
 	b.WriteString("```json\n{\"response\": \"Your final synthesized answer to the user\"}\n```\n\n")
 	b.WriteString("### ask_user\n")
 	b.WriteString("Ask the user a question when you need clarification before proceeding.\n\n")
+
+	b.WriteString("### stm_write\n")
+	b.WriteString("Write to short-term memory (stm.md), a shared workspace file visible to all agents in the current session. Use **append** mode to add new information, or **replace** mode to overwrite entirely.\n")
+	b.WriteString("**You MUST use stm_write before calling finish** to save a concise session summary (key decisions, findings, errors, and outcomes) so that future agents in this session can build on prior work.\n")
+	b.WriteString("```json\n{\"content\": \"concise summary of what happened\", \"mode\": \"append\"}\n```\n\n")
+
+	b.WriteString("### ltm_update\n")
+	b.WriteString("Update long-term memory (ltm.md), a persistent file shared across sessions for this team. Use **append** mode to add knowledge, or **replace** mode to overwrite.\n")
+	b.WriteString("Use ltm_update to save important cross-session knowledge: project conventions, discovered APIs, recurring patterns, architecture decisions, and lessons learned.\n")
+	b.WriteString("```json\n{\"content\": \"discovered API endpoint /api/v2/...\", \"mode\": \"append\"}\n```\n\n")
 
 	wsPath := c.session.Workspace
 	sharedPath := filepath.Join(wsPath, sharedDir)
@@ -2331,7 +2341,9 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("\n## Important Rules\n\n")
 	fmt.Fprintf(&b, "- ALL intermediate files (drafts, scratch data, temporary outputs, logs, notes, etc.) MUST be written under the workspace directory: %s\n", wsPath)
 	fmt.Fprintf(&b, "- Instruct workers to use %s for files shared between agents.\n", sharedPath)
-	b.WriteString("- NEVER write intermediate files to the current directory or anywhere outside the workspace.\n\n")
+	b.WriteString("- NEVER write intermediate files to the current directory or anywhere outside the workspace.\n")
+	b.WriteString("- Before calling finish, you MUST use stm_write to save a session summary to short-term memory.\n")
+	b.WriteString("- Use ltm_update to persist important cross-session knowledge (conventions, APIs, patterns, decisions) to long-term memory.\n\n")
 
 	return b.String()
 }
@@ -2719,6 +2731,8 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	EnsureWorkspaceDirs(c.session.Workspace)
 
+	c.report(c.newEvent("step").withMessage("coordinator preparing"))
+
 	if c.sessionData != nil {
 		c.sessionData.AddEntry("user", userPrompt)
 	}
@@ -2803,8 +2817,10 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	if c.IsWrapUp() {
 		continuationPrompt = wrapUpPromptTemplate
 		additionalPrompt = "wrap up now"
+		c.report(c.newEvent("step").withMessage("wrapping up").withTodoID(CoordTodoID))
 	} else {
 		continuationPrompt = fmt.Sprintf(continuationPromptTemplate, additionalPrompt)
+		c.report(c.newEvent("step").withMessage("coordinator preparing").withTodoID(CoordTodoID))
 	}
 
 	if c.sessionData != nil {

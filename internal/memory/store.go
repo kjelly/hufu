@@ -32,6 +32,14 @@ type MemoryStore struct {
 	embedFunc  chromem.EmbeddingFunc
 	mu         sync.RWMutex
 	basePath   string
+
+	// lazy init fields
+	initOnce    sync.Once
+	initErr     error
+	storePath   string
+	embedModel  string
+	ollamaURL   string
+	initialized bool
 }
 
 type embeddingMeta struct {
@@ -53,14 +61,14 @@ func dataDir() (string, error) {
 }
 
 func NewMemoryStore(projectDir, ollamaURL, embedModel string) (*MemoryStore, error) {
-	return newMemoryStore(projectDir, ollamaURL, embedModel, false)
+	return newLazyMemoryStore(projectDir, ollamaURL, embedModel, false)
 }
 
 func NewGlobalMemoryStore(ollamaURL, embedModel string) (*MemoryStore, error) {
-	return newMemoryStore("", ollamaURL, embedModel, true)
+	return newLazyMemoryStore("", ollamaURL, embedModel, true)
 }
 
-func newMemoryStore(projectDir, ollamaURL, embedModel string, isGlobal bool) (*MemoryStore, error) {
+func newLazyMemoryStore(projectDir, ollamaURL, embedModel string, isGlobal bool) (*MemoryStore, error) {
 	if ollamaURL == "" {
 		ollamaURL = config.DefaultOllamaAPIURL
 	}
@@ -87,20 +95,35 @@ func newMemoryStore(projectDir, ollamaURL, embedModel string, isGlobal bool) (*M
 		return nil, fmt.Errorf("failed to create memory store directory %s: %w", storePath, err)
 	}
 
-	// Probe the embedding model to verify it is available.
+	return &MemoryStore{
+		embedFunc:  embedFunc,
+		basePath:   basePath,
+		storePath:  storePath,
+		embedModel: embedModel,
+		ollamaURL:  ollamaURL,
+	}, nil
+}
+
+func (s *MemoryStore) init() error {
+	s.initOnce.Do(func() {
+		s.initErr = s.doInit()
+	})
+	return s.initErr
+}
+
+func (s *MemoryStore) doInit() error {
 	probeCtx, probeCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer probeCancel()
-	if err := probeEmbeddingModel(probeCtx, embedFunc); err != nil {
-		return nil, fmt.Errorf("embedding model %q is not available: %w", embedModel, err)
+	if err := probeEmbeddingModel(probeCtx, s.embedFunc); err != nil {
+		return fmt.Errorf("embedding model %q is not available: %w", s.embedModel, err)
 	}
 
-	db, err := chromem.NewPersistentDB(storePath, true)
+	db, err := chromem.NewPersistentDB(s.storePath, true)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create persistent memory database: %w", err)
+		return fmt.Errorf("failed to create persistent memory database: %w", err)
 	}
 
-	// Check for embedding model mismatch and clean up if needed.
-	mismatch, err := checkEmbeddingModelMismatch(db, storePath, embedModel)
+	mismatch, err := checkEmbeddingModelMismatch(db, s.storePath, s.embedModel)
 	if err != nil {
 		log.Printf("warning: failed to check embedding model mismatch: %v", err)
 	}
@@ -108,20 +131,21 @@ func newMemoryStore(projectDir, ollamaURL, embedModel string, isGlobal bool) (*M
 		log.Printf("embedding model changed; previous collection was deleted and will be recreated")
 	}
 
-	collection, err := db.GetOrCreateCollection(collectionName, map[string]string{"embedding_model": embedModel}, embedFunc)
+	collection, err := db.GetOrCreateCollection(collectionName, map[string]string{"embedding_model": s.embedModel}, s.embedFunc)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create memory collection: %w", err)
+		return fmt.Errorf("failed to create memory collection: %w", err)
 	}
 
-	return &MemoryStore{
-		db:         db,
-		collection: collection,
-		embedFunc:  embedFunc,
-		basePath:   basePath,
-	}, nil
+	s.db = db
+	s.collection = collection
+	s.initialized = true
+	return nil
 }
 
 func (s *MemoryStore) Save(ctx context.Context, id, content string, metadata map[string]string) error {
+	if err := s.init(); err != nil {
+		return err
+	}
 	if metadata == nil {
 		metadata = make(map[string]string)
 	}
@@ -140,6 +164,9 @@ func (s *MemoryStore) Save(ctx context.Context, id, content string, metadata map
 }
 
 func (s *MemoryStore) Query(ctx context.Context, query string, n int, filter map[string]string) ([]Result, error) {
+	if err := s.init(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -161,6 +188,9 @@ func (s *MemoryStore) Query(ctx context.Context, query string, n int, filter map
 }
 
 func (s *MemoryStore) Delete(ctx context.Context, id string) error {
+	if err := s.init(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

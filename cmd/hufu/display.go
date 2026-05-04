@@ -35,6 +35,9 @@ var (
 	progressIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	doneIcon     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	errorIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	skipTagStyle = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("3"))
+	doneTagStyle = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("2"))
+	errTagStyle  = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("9"))
 	teamStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
 )
 
@@ -168,6 +171,7 @@ func (d *taskDisplay) render() {
 	for _, t := range todoItems {
 		var icon string
 		var desc string
+		var tag string
 		switch t.Status {
 		case team.TaskPending:
 			icon = pendingIcon.Render("○")
@@ -178,6 +182,7 @@ func (d *taskDisplay) render() {
 		case team.TaskDone:
 			icon = doneIcon.Render("●")
 			desc = dimStyle.Render(t.Desc)
+			tag = doneTagStyle.Render(" [DONE]")
 		case team.TaskError:
 			icon = errorIcon.Render("✗")
 			if t.Detail != "" {
@@ -185,16 +190,18 @@ func (d *taskDisplay) render() {
 			} else {
 				desc = dimStyle.Render(t.Desc)
 			}
+			tag = errTagStyle.Render(" [ERROR]")
 		case team.TaskSkipped:
 			icon = dimStyle.Render("—")
 			desc = dimStyle.Render(t.Desc)
+			tag = skipTagStyle.Render(" [SKIP]")
 		}
 		agentLabel := agentStyle.Render(t.Agent)
 		if t.Model != "" {
 			agentLabel = fmt.Sprintf("%s %s", agentStyle.Render(t.Agent), dimStyle.Render("["+t.Model+"]"))
 		}
 		timeStr := formatTodoItemTime(t)
-		b.WriteString(fmt.Sprintf("  %s %s %s %s %s\n", icon, dimStyle.Render(t.ID+"."), agentLabel, desc, dimStyle.Render(timeStr)))
+		b.WriteString(fmt.Sprintf("  %s %s %s %s%s %s\n", icon, dimStyle.Render(t.ID+"."), agentLabel, desc, tag, dimStyle.Render(timeStr)))
 	}
 
 	d.w.write(b.String())
@@ -870,6 +877,8 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderStep(event.Step)})
 				label := agentStyle.Render(event.Agent)
 				p.Send(tuipkg.StatusBarMsg{Text: label + dimStyle.Render(fmt.Sprintf("  step %d", event.Step))})
+			} else if event.Message != "" {
+				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render(event.Message)})
 			}
 
 		case "tool_call":
@@ -954,9 +963,14 @@ func stderrLog(format string, args ...any) {
 
 // runWithTUI starts executeSegments in a goroutine and blocks on the Bubble Tea
 // program in the main goroutine. Returns when the user quits or the work is done.
-func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string) (string, error) {
+func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string, teamInfo tuipkg.TeamInfo) (string, error) {
 	model := tuipkg.New(prompt)
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	if teamInfo.TeamName != "" || len(teamInfo.AvailableTeams) > 0 {
+		p.Send(tuipkg.TeamInfoMsg{Info: teamInfo})
+	}
+
 	activeTUIProgram.Store(p)
 	defer activeTUIProgram.Store(nil)
 
@@ -967,10 +981,28 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 				injector.enqueue(prompt)
 			}
 		}()
-		// Close the prompt injection channel so the forwarding goroutine exits cleanly,
-		// regardless of whether p.Run() succeeds or returns an error.
 		defer close(promptCh)
 	}
+
+	var wrapUpCount int
+	wrapUpCh := model.WrapUpCh
+	go func() {
+		for range wrapUpCh {
+			wrapUpCount++
+			if wrapUpCount == 1 {
+				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render("Wrapping up — coordinator will summarize and finish")})
+				if c := activeCoord.Get(); c != nil {
+					c.SetWrapUp()
+				}
+				if injector != nil {
+					injector.injectWrapUp()
+				}
+			} else {
+				cancel()
+			}
+		}
+	}()
+	defer close(wrapUpCh)
 
 	var execResult string
 	var execErr error
@@ -986,23 +1018,29 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 
 	if _, err := p.Run(); err != nil {
 		cancel()
-		<-finished
+		waitWithTimeout(finished)
 		return "", fmt.Errorf("TUI error: %w", err)
 	}
 
-	// Only cancel if work hasn't finished yet (user quit early).
 	select {
 	case <-finished:
-		// Work completed naturally — don't cancel.
 	default:
 		cancel()
-		<-finished
+		waitWithTimeout(finished)
 	}
 
 	if execErr != nil && ctx.Err() == context.Canceled {
 		return "", errInterrupted{}
 	}
 	return execResult, execErr
+}
+
+func waitWithTimeout(finished chan struct{}) {
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		os.Exit(130)
+	}
 }
 
 func renderDryRun(result *team.DryRunResult) {
