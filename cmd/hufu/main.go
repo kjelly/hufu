@@ -121,6 +121,11 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to resolve template variables: %w", err)
 	}
+	cfgVars := config.LoadConfig().GetVars()
+	if len(cfgVars) > 0 || len(vars) > 0 {
+		merged := team.MergeVars(cfgVars, vars)
+		vars = merged
+	}
 
 	prompt := ""
 	if len(args) > 0 {
@@ -426,6 +431,13 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	}
 
 	team.EnsureWorkspaceDirs(session.Workspace)
+
+	if err := team.InitLTM(session.Dir); err != nil {
+		fmt.Fprintf(os.Stderr, "%s Failed to init ltm.md: %v\n", errStyle.Render("⚠"), err)
+	}
+	if err := team.InitSTM(session.Workspace); err != nil {
+		fmt.Fprintf(os.Stderr, "%s Failed to init stm.md: %v\n", errStyle.Render("⚠"), err)
+	}
 
 	var sessionData *team.SessionData
 	var oldSessionEntries []memory.SessionSummaryEntry

@@ -120,13 +120,10 @@ func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inAskUser = false
 		return m, tea.Quit
 	case "up", "k":
-		// Bounds check: ensure cursor doesn't go below 0
 		if st.cursor > 0 {
 			st.cursor--
 		}
-	case "down", "j":
-		// Bounds check: ensure cursor doesn't go below len(opts) - 1 for single_choice
-		// total includes the custom option if hasCustom is true
+	case "down", "j", "tab":
 		if st.cursor < total-1 {
 			st.cursor++
 		}
@@ -236,9 +233,9 @@ func (m Model) askUserView() string {
 		}
 
 		sb.WriteString("\n")
-		hint := "↑↓ navigate  enter select  ctrl+c cancel"
+		hint := "↑↓/tab navigate  enter select  ctrl+c cancel"
 		if req.Type == "multiple_choice" {
-			hint = "↑↓ navigate  space toggle  enter confirm  ctrl+c cancel"
+			hint = "↑↓/tab navigate  space toggle  enter confirm  ctrl+c cancel"
 		}
 		sb.WriteString(askHintStyle.Render(hint))
 	}

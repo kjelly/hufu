@@ -105,5 +105,8 @@ func ArchiveSessionMD(workspace string) (string, error) {
 	if err := removeFileIfExists(filepath.Join(workspace, sessionFile)); err != nil {
 		return path, fmt.Errorf("failed to remove session json: %w", err)
 	}
+	if _, err := ArchiveSTM(workspace); err != nil {
+		return path, fmt.Errorf("failed to archive stm.md: %w", err)
+	}
 	return path, nil
 }

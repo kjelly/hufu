@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/anomalyco/hufu/internal/yamlutil"
 )
 
 // ParseVarFlags parses --var key=value flags into a variable map.
@@ -48,44 +48,7 @@ func LoadVarsFile(path string) (map[string]string, error) {
 }
 
 func parseYAMLVars(data []byte, path string) (map[string]string, error) {
-	var raw map[string]interface{}
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("failed to parse YAML var file %s: %w", path, err)
-	}
-
-	result := make(map[string]string)
-	if err := flattenYAML(raw, "", result); err != nil {
-		return nil, fmt.Errorf("failed to process YAML var file %s: %w", path, err)
-	}
-	return result, nil
-}
-
-func flattenYAML(m map[string]interface{}, prefix string, result map[string]string) error {
-	for k, v := range m {
-		fullKey := k
-		if prefix != "" {
-			fullKey = prefix + "." + k
-		}
-		switch val := v.(type) {
-		case map[string]interface{}:
-			if err := flattenYAML(val, fullKey, result); err != nil {
-				return err
-			}
-		case map[interface{}]interface{}:
-			stringMap := make(map[string]interface{}, len(val))
-			for ik, iv := range val {
-				stringMap[fmt.Sprintf("%v", ik)] = iv
-			}
-			if err := flattenYAML(stringMap, fullKey, result); err != nil {
-				return err
-			}
-		case []interface{}:
-			return fmt.Errorf("yaml variable %q is a list; only scalar values are supported in var files", fullKey)
-		default:
-			result[fullKey] = fmt.Sprintf("%v", val)
-		}
-	}
-	return nil
+	return yamlutil.FlattenYAMLBytes(data, path)
 }
 
 func parseEnvVars(data []byte, path string) (map[string]string, error) {

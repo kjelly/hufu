@@ -159,6 +159,8 @@ var alwaysIncludeTools = map[string]bool{
 	"random":       true,
 	"memory_save":  true,
 	"memory_query": true,
+	"stm_write":    true,
+	"ltm_update":   true,
 }
 
 func SelectTools(allTools []fantasy.AgentTool, toolNames string) []fantasy.AgentTool {

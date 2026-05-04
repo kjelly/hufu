@@ -120,15 +120,15 @@ func agentFrontmatterFromSimple(m map[string]string) agentFrontmatter {
 func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to read agent file %s: %v\n", path, err)
-		return nil, nil
+		return nil, fmt.Errorf("failed to read agent file %s: %w", path, err)
 	}
 	text := string(raw)
 
-	text, err = applyTemplate(text, filepath.Base(path), vars)
+	templated, err := applyTemplate(text, filepath.Base(path), vars)
 	if err != nil {
 		return nil, fmt.Errorf("template error in agent file %s: %w", path, err)
 	}
+	text = templated
 
 	if !strings.HasPrefix(text, "---\n") {
 		return nil, nil

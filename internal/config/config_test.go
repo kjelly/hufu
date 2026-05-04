@@ -483,3 +483,99 @@ func TestModelMergeFromFile(t *testing.T) {
 		t.Errorf("Model = %q, want %q", cfg.Model, "ollama/qwen3:8b")
 	}
 }
+
+func TestGetVarsEmpty(t *testing.T) {
+	cfg := &Config{}
+	vars := cfg.GetVars()
+	if vars != nil {
+		t.Errorf("GetVars() = %v, want nil for empty config", vars)
+	}
+}
+
+func TestGetVarsFlat(t *testing.T) {
+	tmpDir := t.TempDir()
+	content := `provider-url: http://test:11434/v1
+vars:
+  model: qwen3:8b
+  temperature: "0.7"
+  debug: true
+`
+	configPath := filepath.Join(tmpDir, "hufu.yaml")
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+	cfg := &Config{}
+	cfg.mergeFromFile(configPath)
+	vars := cfg.GetVars()
+	if vars == nil {
+		t.Fatal("GetVars() returned nil")
+	}
+	if vars["model"] != "qwen3:8b" {
+		t.Errorf("vars[model] = %q, want %q", vars["model"], "qwen3:8b")
+	}
+	if vars["temperature"] != "0.7" {
+		t.Errorf("vars[temperature] = %q, want %q", vars["temperature"], "0.7")
+	}
+	if vars["debug"] != "true" {
+		t.Errorf("vars[debug] = %q, want %q", vars["debug"], "true")
+	}
+}
+
+func TestGetVarsNested(t *testing.T) {
+	tmpDir := t.TempDir()
+	content := `vars:
+  project:
+    name: myapp
+    env: staging
+`
+	configPath := filepath.Join(tmpDir, "hufu.yaml")
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+	cfg := &Config{}
+	cfg.mergeFromFile(configPath)
+	vars := cfg.GetVars()
+	if vars == nil {
+		t.Fatal("GetVars() returned nil")
+	}
+	if vars["project.name"] != "myapp" {
+		t.Errorf("vars[project.name] = %q, want %q", vars["project.name"], "myapp")
+	}
+	if vars["project.env"] != "staging" {
+		t.Errorf("vars[project.env] = %q, want %q", vars["project.env"], "staging")
+	}
+}
+
+func TestMergeFromFileVarsMerge(t *testing.T) {
+	tmpDir := t.TempDir()
+	baseContent := `vars:
+  model: qwen3:8b
+  region: us-east
+`
+	overrideContent := `vars:
+  model: deepseek:14b
+  timeout: "300"
+`
+	basePath := filepath.Join(tmpDir, "base.yaml")
+	overridePath := filepath.Join(tmpDir, "override.yaml")
+	if err := os.WriteFile(basePath, []byte(baseContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(overridePath, []byte(overrideContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{}
+	cfg.mergeFromFile(basePath)
+	cfg.mergeFromFile(overridePath)
+	vars := cfg.GetVars()
+	if vars["model"] != "deepseek:14b" {
+		t.Errorf("vars[model] = %q, want %q (overridden)", vars["model"], "deepseek:14b")
+	}
+	if vars["region"] != "us-east" {
+		t.Errorf("vars[region] = %q, want %q (preserved)", vars["region"], "us-east")
+	}
+	if vars["timeout"] != "300" {
+		t.Errorf("vars[timeout] = %q, want %q", vars["timeout"], "300")
+	}
+}

@@ -15,6 +15,12 @@ func NewPromptReader(historyFile string) (*PromptReader, error) {
 		HistoryLimit:    1000,
 		InterruptPrompt: "^C",
 		EOFPrompt:       "^D",
+		FuncFilterInputRune: func(r rune) (rune, bool) {
+			if r == ergoreadline.CharTab {
+				return ergoreadline.CharForward, true
+			}
+			return r, true
+		},
 	}
 
 	instance, err := ergoreadline.NewFromConfig(cfg)

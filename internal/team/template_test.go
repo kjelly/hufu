@@ -36,16 +36,16 @@ func TestApplyTemplateNoTemplateDelimiters(t *testing.T) {
 		t.Fatalf("applyTemplate() error: %v", err)
 	}
 	if result != content {
-		t.Errorf("applyTemplate() with no {{ delimiters should return content unchanged")
+		t.Errorf("applyTemplate() with no {@ delimiters should return content unchanged")
 	}
 }
 
-func TestApplyTemplateAgentFile(t *testing.T) {
+func TestApplyTemplateBasicSubstitution(t *testing.T) {
 	vars := map[string]string{
 		"model":   "qwen3:8b",
 		"project": "myapp",
 	}
-	content := "---\nname: developer\nmodel: {{.model}}\n---\nYou are working on project {{.project}}."
+	content := "---\nname: developer\nmodel: {@ .model @}\n---\nYou are working on project {@ .project @}."
 	expected := "---\nname: developer\nmodel: qwen3:8b\n---\nYou are working on project myapp."
 	result, err := applyTemplate(content, "developer.md", vars)
 	if err != nil {
@@ -56,14 +56,40 @@ func TestApplyTemplateAgentFile(t *testing.T) {
 	}
 }
 
-func TestApplyTemplateTeamConfig(t *testing.T) {
-	vars := map[string]string{
-		"model": "deepseek:14b",
-		"url":   "http://remote:11434/v1",
+func TestApplyTemplateSpacesVariants(t *testing.T) {
+	vars := map[string]string{"name": "test"}
+	tests := []struct {
+		name     string
+		content  string
+		expected string
+	}{
+		{"no spaces", "{@.name@}", "test"},
+		{"space after open", "{@ .name@}", "test"},
+		{"space before close", "{@.name @}", "test"},
+		{"spaces both sides", "{@ .name @}", "test"},
+		{"multiple spaces", "{@  .name  @}", "test"},
 	}
-	content := "name: my-team\nmodel: {{.model}}\nprovider-url: {{.url}}\n"
-	expected := "name: my-team\nmodel: deepseek:14b\nprovider-url: http://remote:11434/v1\n"
-	result, err := applyTemplate(content, "team.yml", vars)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := applyTemplate(tt.content, "test.md", vars)
+			if err != nil {
+				t.Fatalf("applyTemplate() error: %v", err)
+			}
+			if result != tt.expected {
+				t.Errorf("applyTemplate(%q) = %q, want %q", tt.content, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestApplyTemplateDottedKeys(t *testing.T) {
+	vars := map[string]string{
+		"project.name": "myapp",
+		"project.env":  "staging",
+	}
+	content := "name: {@ .project.name @}\nenvironment: {@ .project.env @}"
+	expected := "name: myapp\nenvironment: staging"
+	result, err := applyTemplate(content, "config.yml", vars)
 	if err != nil {
 		t.Fatalf("applyTemplate() error: %v", err)
 	}
@@ -74,22 +100,60 @@ func TestApplyTemplateTeamConfig(t *testing.T) {
 
 func TestApplyTemplateMissingVar(t *testing.T) {
 	vars := map[string]string{"model": "qwen3:8b"}
-	content := "---\nname: agent1\nmodel: {{.model}}\ntools: {{.missing_var}}\n---\nBody"
+	content := "model: {@ .model @}\ntools: {@ .missing_var @}"
 	_, err := applyTemplate(content, "test.md", vars)
 	if err == nil {
 		t.Error("applyTemplate() should return error for missing variable")
 	}
 }
 
-func TestApplyTemplateUnusedVars(t *testing.T) {
-	vars := map[string]string{
-		"model":   "qwen3:8b",
-		"unused1": "value1",
-		"unused2": "value2",
+func TestApplyTemplateGitHubActionsUnchanged(t *testing.T) {
+	vars := map[string]string{"model": "qwen3:8b"}
+	content := "deploy: ${{ secrets.GITHUB_TOKEN }}\nmodel: {@ .model @}"
+	expected := "deploy: ${{ secrets.GITHUB_TOKEN }}\nmodel: qwen3:8b"
+	result, err := applyTemplate(content, "ci.yml", vars)
+	if err != nil {
+		t.Fatalf("applyTemplate() error: %v", err)
 	}
-	content := "model: {{.model}}\n"
-	expected := "model: qwen3:8b\n"
-	result, err := applyTemplate(content, "team.yml", vars)
+	if result != expected {
+		t.Errorf("applyTemplate() = %q, want %q", result, expected)
+	}
+}
+
+func TestApplyTemplateHugoShortcodesUnchanged(t *testing.T) {
+	vars := map[string]string{"title": "My Page"}
+	content := "---\ntitle: {@ .title @}\n---\n{{< highlight go >}}code{{< /highlight >}}"
+	expected := "---\ntitle: My Page\n---\n{{< highlight go >}}code{{< /highlight >}}"
+	result, err := applyTemplate(content, "page.md", vars)
+	if err != nil {
+		t.Fatalf("applyTemplate() error: %v", err)
+	}
+	if result != expected {
+		t.Errorf("applyTemplate() = %q, want %q", result, expected)
+	}
+}
+
+func TestApplyTemplateGoTemplateLogicUnchanged(t *testing.T) {
+	vars := map[string]string{"name": "test"}
+	content := "---\nname: {@ .name @}\n---\n{{ if .verbose }}detailed{{ end }}"
+	expected := "---\nname: test\n---\n{{ if .verbose }}detailed{{ end }}"
+	result, err := applyTemplate(content, "test.md", vars)
+	if err != nil {
+		t.Fatalf("applyTemplate() error: %v", err)
+	}
+	if result != expected {
+		t.Errorf("applyTemplate() = %q, want %q", result, expected)
+	}
+}
+
+func TestApplyTemplateConditionals(t *testing.T) {
+	vars := map[string]string{
+		"env":     "production",
+		"verbose": "true",
+	}
+	content := "env: {@ .env @}\n{@ if eq .env \"production\" @}critical{@ end @}"
+	expected := "env: production\ncritical"
+	result, err := applyTemplate(content, "config.yml", vars)
 	if err != nil {
 		t.Fatalf("applyTemplate() error: %v", err)
 	}
@@ -100,7 +164,7 @@ func TestApplyTemplateUnusedVars(t *testing.T) {
 
 func TestApplyTemplateMultipleOccurrences(t *testing.T) {
 	vars := map[string]string{"name": "agent-x"}
-	content := "---\nname: {{.name}}\n---\nHello {{.name}}, welcome {{.name}}!"
+	content := "---\nname: {@ .name @}\n---\nHello {@ .name @}, welcome {@ .name @}!"
 	expected := "---\nname: agent-x\n---\nHello agent-x, welcome agent-x!"
 	result, err := applyTemplate(content, "test.md", vars)
 	if err != nil {
@@ -111,9 +175,25 @@ func TestApplyTemplateMultipleOccurrences(t *testing.T) {
 	}
 }
 
+func TestApplyTemplateRealWorldSidecarModel(t *testing.T) {
+	vars := map[string]string{
+		"big_model":   "ollama/glm-5.1:cloud",
+		"small_model": "ollama/gemma4:31b-cloud",
+	}
+	content := "sidecar-model: {@ .small_model @}\nmodel: {@ .big_model @}"
+	expected := "sidecar-model: ollama/gemma4:31b-cloud\nmodel: ollama/glm-5.1:cloud"
+	result, err := applyTemplate(content, "team.yml", vars)
+	if err != nil {
+		t.Fatalf("applyTemplate() error: %v", err)
+	}
+	if result != expected {
+		t.Errorf("applyTemplate() = %q, want %q", result, expected)
+	}
+}
+
 func TestParseAgentFileWithTemplate(t *testing.T) {
 	tmpDir := t.TempDir()
-	content := "---\nname: {{.agent_name}}\nmodel: {{.model}}\n---\nYou are {{.agent_name}} working on {{.project}}."
+	content := "---\nname: {@ .agent_name @}\nmodel: {@ .model @}\n---\nYou are {@ .agent_name @} working on {@ .project @}."
 	agentPath := filepath.Join(tmpDir, "dev.md")
 	if err := os.WriteFile(agentPath, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -146,16 +226,19 @@ func TestParseAgentFileWithTemplate(t *testing.T) {
 
 func TestParseAgentFileWithTemplateMissingVar(t *testing.T) {
 	tmpDir := t.TempDir()
-	content := "---\nname: {{.agent_name}}\ntools: {{.missing}}\n---\nBody"
+	content := "---\nname: {@ .agent_name @}\ntools: {@ .missing @}\n---\nBody"
 	agentPath := filepath.Join(tmpDir, "dev.md")
 	if err := os.WriteFile(agentPath, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	vars := map[string]string{"agent_name": "developer"}
-	_, err := parseAgentFile(agentPath, vars)
+	def, err := parseAgentFile(agentPath, vars)
 	if err == nil {
 		t.Error("parseAgentFile() should return error for missing template variable")
+	}
+	if def != nil {
+		t.Error("parseAgentFile() should return nil def for missing template variable")
 	}
 }
 
@@ -179,9 +262,31 @@ func TestParseAgentFileNoTemplateWithoutVars(t *testing.T) {
 	}
 }
 
+func TestParseAgentFileGitHubActionsUnchanged(t *testing.T) {
+	tmpDir := t.TempDir()
+	content := "---\nname: developer\n---\nDeploy: ${{ secrets.GITHUB_TOKEN }}\nModel: {@ .model @}"
+	agentPath := filepath.Join(tmpDir, "dev.md")
+	if err := os.WriteFile(agentPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	vars := map[string]string{"model": "qwen3:8b"}
+	def, err := parseAgentFile(agentPath, vars)
+	if err != nil {
+		t.Fatalf("parseAgentFile() error: %v", err)
+	}
+	if def == nil {
+		t.Fatal("parseAgentFile() returned nil")
+	}
+	expectedBody := "Deploy: ${{ secrets.GITHUB_TOKEN }}\nModel: qwen3:8b"
+	if def.System != expectedBody {
+		t.Errorf("System = %q, want %q", def.System, expectedBody)
+	}
+}
+
 func TestParseTeamYMLWithTemplate(t *testing.T) {
 	tmpDir := t.TempDir()
-	yamlContent := "name: {{.team_name}}\nmodel: {{.model}}\nmax-rounds: 5\n"
+	yamlContent := "name: {@ .team_name @}\nmodel: {@ .model @}\nmax-rounds: 5\n"
 	teamPath := filepath.Join(tmpDir, "team.yml")
 	if err := os.WriteFile(teamPath, []byte(yamlContent), 0644); err != nil {
 		t.Fatal(err)
@@ -207,9 +312,9 @@ func TestParseTeamYMLWithTemplate(t *testing.T) {
 	}
 }
 
-func TestParseTeamYMLTemplateError(t *testing.T) {
+func TestParseTeamYMLTemplateMissingVar(t *testing.T) {
 	tmpDir := t.TempDir()
-	yamlContent := "name: {{.team_name}}\nmodel: {{.undefined_var}}\n"
+	yamlContent := "name: {@ .team_name @}\nmodel: {@ .undefined_var @}\n"
 	teamPath := filepath.Join(tmpDir, "team.yml")
 	if err := os.WriteFile(teamPath, []byte(yamlContent), 0644); err != nil {
 		t.Fatal(err)
@@ -219,5 +324,62 @@ func TestParseTeamYMLTemplateError(t *testing.T) {
 	_, err := parseTeamYML(tmpDir, vars)
 	if err == nil {
 		t.Error("parseTeamYML() should return error for missing template variable")
+	}
+}
+
+func TestExpandToNestedMapConflictScalarThenNested(t *testing.T) {
+	// "project" as scalar and "project.name" as nested should conflict
+	vars := map[string]string{
+		"project":      "myapp",
+		"project.name": "myapp-nested",
+	}
+	_, err := expandToNestedMap(vars)
+	if err == nil {
+		t.Error("expandToNestedMap() should return error for conflicting scalar/nested keys")
+	}
+}
+
+func TestExpandToNestedMapConflictNestedThenScalar(t *testing.T) {
+	// "project.name" as nested and "project" as scalar should conflict
+	vars := map[string]string{
+		"project.name": "myapp-nested",
+		"project":      "myapp",
+	}
+	_, err := expandToNestedMap(vars)
+	if err == nil {
+		t.Error("expandToNestedMap() should return error for conflicting nested/scalar keys")
+	}
+}
+
+func TestExpandToNestedMapNoConflict(t *testing.T) {
+	vars := map[string]string{
+		"project.name": "myapp",
+		"project.env":  "staging",
+	}
+	result, err := expandToNestedMap(vars)
+	if err != nil {
+		t.Fatalf("expandToNestedMap() unexpected error: %v", err)
+	}
+	projectMap, ok := result["project"].(map[string]interface{})
+	if !ok {
+		t.Fatal("result[\"project\"] should be a map")
+	}
+	if projectMap["name"] != "myapp" {
+		t.Errorf("project.name = %q, want %q", projectMap["name"], "myapp")
+	}
+	if projectMap["env"] != "staging" {
+		t.Errorf("project.env = %q, want %q", projectMap["env"], "staging")
+	}
+}
+
+func TestApplyTemplateConflictingVars(t *testing.T) {
+	vars := map[string]string{
+		"project":      "myapp",
+		"project.name": "myapp-nested",
+	}
+	content := "name: {@ .project.name @}"
+	_, err := applyTemplate(content, "test.md", vars)
+	if err == nil {
+		t.Error("applyTemplate() should return error for conflicting variable keys")
 	}
 }

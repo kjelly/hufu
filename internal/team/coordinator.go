@@ -235,6 +235,8 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		&todoTool{coordinator: c},
 		&loadSkillTool{coordinator: c},
 		&saveSkillTool{coordinator: c},
+		&stmWriteTool{coordinator: c},
+		&ltmUpdateTool{coordinator: c},
 	)
 
 	if c.memoryStore != nil {
@@ -452,6 +454,38 @@ func (c *Coordinator) injectAutoSkills(agentDef *agent.AgentDef, agentName strin
 	}
 
 	return formatSkillPrefix(relevant)
+}
+
+const maxSTMAutoInject = 2000
+const maxLTMAutoInject = 3000
+
+func (c *Coordinator) buildMemorySuffix() string {
+	var b strings.Builder
+
+	if stm := LoadSTM(c.session.Workspace); stm != "" {
+		runes := []rune(stm)
+		if len(runes) > maxSTMAutoInject {
+			stm = string(runes[len(runes)-maxSTMAutoInject:])
+		}
+		b.WriteString("--- Short-term memory (stm.md) ---\n")
+		b.WriteString(stm)
+		b.WriteString("\n--- End stm.md ---")
+	}
+
+	if ltm := LoadLTM(c.session.Dir); ltm != "" {
+		runes := []rune(ltm)
+		if len(runes) > maxLTMAutoInject {
+			ltm = string(runes[len(runes)-maxLTMAutoInject:])
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("--- Long-term memory (ltm.md) ---\n")
+		b.WriteString(ltm)
+		b.WriteString("\n--- End ltm.md ---")
+	}
+
+	return b.String()
 }
 
 func (c *Coordinator) extractSkillFromToolCall(toolName, input string) string {
@@ -924,6 +958,10 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		taskPrompt = prefix + taskPrompt
 	}
 
+	if suffix := c.buildMemorySuffix(); suffix != "" {
+		taskPrompt = taskPrompt + "\n\n" + suffix
+	}
+
 	timing := &taskTiming{}
 	timing.reset()
 
@@ -1110,6 +1148,144 @@ func (t *todoTool) handleList(callerName string) (fantasy.ToolResponse, error) {
 		b.WriteString("\n")
 	}
 	return fantasy.NewTextResponse(b.String()), nil
+}
+
+type stmWriteTool struct {
+	coordinator *Coordinator
+	pOpts       fantasy.ProviderOptions
+}
+
+func (t *stmWriteTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "stm_write",
+		Description: "Write to short-term memory (stm.md), a shared workspace file visible to all agents in the current session. Use append mode to add new information, or replace mode to overwrite. This memory is session-scoped and will be archived when the session ends.",
+		Parameters: map[string]any{
+			"content": map[string]any{
+				"type":        "string",
+				"description": "The content to write to short-term memory",
+			},
+			"mode": map[string]any{
+				"type":        "string",
+				"description": "Write mode: \"append\" (add to end, default) or \"replace\" (overwrite entire file)",
+				"enum":        []string{"append", "replace"},
+			},
+		},
+		Required: []string{"content"},
+	}
+}
+
+func (t *stmWriteTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
+func (t *stmWriteTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
+
+func (t *stmWriteTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		Content string `json:"content"`
+		Mode    string `json:"mode"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+	if args.Content == "" {
+		return fantasy.NewTextErrorResponse("content is required"), nil
+	}
+
+	mode := args.Mode
+	if mode == "" {
+		mode = "append"
+	}
+
+	workspace := t.coordinator.session.Workspace
+	var newContent string
+	switch mode {
+	case "replace":
+		newContent = TruncateSTM(args.Content)
+	default:
+		existing := LoadSTM(workspace)
+		if existing == "" {
+			newContent = TruncateSTM(args.Content)
+		} else {
+			newContent = TruncateSTM(existing + "\n" + args.Content)
+		}
+	}
+
+	if err := SaveSTM(workspace, newContent); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write stm.md: %v", err)), nil
+	}
+
+	verb := "Appended to"
+	if mode == "replace" {
+		verb = "Replaced"
+	}
+	return fantasy.NewTextResponse(fmt.Sprintf("%s short-term memory (stm.md)", verb)), nil
+}
+
+type ltmUpdateTool struct {
+	coordinator *Coordinator
+	pOpts       fantasy.ProviderOptions
+}
+
+func (t *ltmUpdateTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "ltm_update",
+		Description: "Update long-term memory (ltm.md), a persistent file shared across sessions for this team. Use append mode to add new knowledge, or replace mode to overwrite. This memory persists between sessions and is available to future runs.",
+		Parameters: map[string]any{
+			"content": map[string]any{
+				"type":        "string",
+				"description": "The content to write to long-term memory",
+			},
+			"mode": map[string]any{
+				"type":        "string",
+				"description": "Write mode: \"append\" (add to end, default) or \"replace\" (overwrite entire file)",
+				"enum":        []string{"append", "replace"},
+			},
+		},
+		Required: []string{"content"},
+	}
+}
+
+func (t *ltmUpdateTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
+func (t *ltmUpdateTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
+
+func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		Content string `json:"content"`
+		Mode    string `json:"mode"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+	if args.Content == "" {
+		return fantasy.NewTextErrorResponse("content is required"), nil
+	}
+
+	mode := args.Mode
+	if mode == "" {
+		mode = "append"
+	}
+
+	teamDir := t.coordinator.session.Dir
+	var newContent string
+	switch mode {
+	case "replace":
+		newContent = TruncateLTM(args.Content)
+	default:
+		existing := LoadLTM(teamDir)
+		if existing == "" {
+			newContent = TruncateLTM(args.Content)
+		} else {
+			newContent = TruncateLTM(existing + "\n" + args.Content)
+		}
+	}
+
+	if err := SaveLTM(teamDir, newContent); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write ltm.md: %v", err)), nil
+	}
+
+	verb := "Appended to"
+	if mode == "replace" {
+		verb = "Replaced"
+	}
+	return fantasy.NewTextResponse(fmt.Sprintf("%s long-term memory (ltm.md)", verb)), nil
 }
 
 const maxConcurrentTasks = 8
@@ -1501,6 +1677,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			}
 		}
 		prompt = contextBuilder.String() + "\n---\n\n" + prompt
+	}
+
+	if suffix := c.buildMemorySuffix(); suffix != "" {
+		prompt = prompt + "\n\n" + suffix
 	}
 
 	var conversationHistory []fantasy.Message
@@ -2297,6 +2477,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		prompt = prefix + prompt
 	}
 
+	if suffix := c.buildMemorySuffix(); suffix != "" {
+		prompt = prompt + "\n\n" + suffix
+	}
+
 	output, err := c.runAgentWithStatus(taskCtx, ag, resolvedName, prompt, timing)
 	duration, modelTime, toolTime := timing.snapshot()
 	if err != nil {
@@ -2463,6 +2647,10 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		if contextSummary != "" {
 			systemPrompt += "\n\n---\n## Session Context\n\n" + contextSummary
 		}
+	}
+
+	if suffix := c.buildMemorySuffix(); suffix != "" {
+		systemPrompt += "\n\n" + suffix
 	}
 
 	// Apply the computed system prompt to a copy so shared state is not mutated.
@@ -2705,6 +2893,10 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 		if err == nil && memCtx != "" {
 			systemPrompt += "\n\n---\n" + memCtx
 		}
+	}
+
+	if suffix := c.buildMemorySuffix(); suffix != "" {
+		systemPrompt += "\n\n" + suffix
 	}
 
 	orchDefCopy := *orchDef

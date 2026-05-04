@@ -330,7 +330,7 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.confirmChoice > 0 {
 			m.confirmChoice--
 		}
-	case "right", "l":
+	case "right", "l", "tab":
 		if m.confirmChoice < 1 {
 			m.confirmChoice++
 		}

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/anomalyco/hufu/internal/yamlutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -25,6 +26,32 @@ type Config struct {
 	ModelList      []ModelEntry `yaml:"model-list"`
 	SidecarModel   string       `yaml:"sidecar-model"`
 	AllowedPaths   []string     `yaml:"allowed-paths"`
+	RawVars        interface{}  `yaml:"vars"`
+}
+
+func (c *Config) GetVars() map[string]string {
+	if c.RawVars == nil {
+		return nil
+	}
+	result := make(map[string]string)
+	switch vars := c.RawVars.(type) {
+	case map[string]interface{}:
+		if err := yamlutil.FlattenYAML(vars, "", result); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to flatten config vars: %v\n", err)
+		}
+	case map[interface{}]interface{}:
+		stringMap := make(map[string]interface{}, len(vars))
+		for k, v := range vars {
+			stringMap[fmt.Sprintf("%v", k)] = v
+		}
+		if err := yamlutil.FlattenYAML(stringMap, "", result); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to flatten config vars: %v\n", err)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func LoadConfig() *Config {
@@ -65,6 +92,21 @@ func (c *Config) mergeFromFile(path string) {
 	}
 	if len(fileCfg.AllowedPaths) > 0 {
 		c.AllowedPaths = fileCfg.AllowedPaths
+	}
+	fileVars := fileCfg.GetVars()
+	if len(fileVars) > 0 {
+		curVars := c.GetVars()
+		if curVars == nil {
+			curVars = make(map[string]string)
+		}
+		for k, v := range fileVars {
+			curVars[k] = v
+		}
+		merged := make(map[string]interface{}, len(curVars))
+		for k, v := range curVars {
+			merged[k] = v
+		}
+		c.RawVars = merged
 	}
 }
 
