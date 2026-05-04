@@ -207,6 +207,74 @@ User task: %s`, skillList.String(), prompt)
 	return filtered, nil
 }
 
+type GuardReviewResult struct {
+	Approved bool
+	Reason   string
+}
+
+func (s *Sidecar) ReviewToolCall(ctx context.Context, agentName, toolName, args string, rules []string) (GuardReviewResult, error) {
+	if s == nil || s.agent == nil {
+		return GuardReviewResult{Approved: true}, nil
+	}
+	if len(rules) == 0 {
+		return GuardReviewResult{Approved: true}, nil
+	}
+
+	var ruleList strings.Builder
+	for i, r := range rules {
+		fmt.Fprintf(&ruleList, "%d. %s\n", i+1, r)
+	}
+
+	truncArgs := args
+	if utf8.RuneCountInString(truncArgs) > 2000 {
+		truncArgs = string([]rune(truncArgs)[:2000]) + "\n...(truncated)"
+	}
+
+	prompt := fmt.Sprintf(`You are a tool call reviewer. Determine whether the following tool call complies with ALL of the guard rules.
+
+Guard Rules:
+%s
+Tool Call:
+- Tool: %s
+- Arguments: %s
+- Agent: %s
+
+Respond with JSON only:
+{"approved": true, "reason": ""}
+or
+{"approved": false, "reason": "explanation of which rules are violated"}`, ruleList.String(), toolName, truncArgs, agentName)
+
+	result, err := s.generate(ctx, prompt)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: sidecar guard review generate failed: %v\n", err)
+		return GuardReviewResult{Approved: true}, err
+	}
+
+	result = strings.TrimSpace(result)
+	reviewResult, err := parseReviewToolCallResponse(result)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: sidecar guard review: failed to parse JSON response %q: %v\n", result, err)
+		return GuardReviewResult{Approved: true}, err
+	}
+	return reviewResult, nil
+}
+
+func parseReviewToolCallResponse(response string) (GuardReviewResult, error) {
+	response = strings.TrimSpace(response)
+	extracted := jsonCodeBlockRe.FindStringSubmatch(response)
+	if len(extracted) >= 2 {
+		response = strings.TrimSpace(extracted[1])
+	}
+	var resp struct {
+		Approved bool   `json:"approved"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(response), &resp); err != nil {
+		return GuardReviewResult{Approved: true}, err
+	}
+	return GuardReviewResult{Approved: resp.Approved, Reason: resp.Reason}, nil
+}
+
 // SimilarTask checks whether newTask is semantically equivalent to any task in
 // pastTasks. Returns the 0-based index of the matching past task, or -1 if none
 // match. The caller is responsible for truncating long task strings if needed.

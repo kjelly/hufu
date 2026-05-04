@@ -219,6 +219,14 @@ func checkBashPathConsent(command string, cfg ToolConfig) error {
 			continue
 		}
 
+		// Skip paths that don't exist on the filesystem.
+		// Bash commands often reference non-filesystem paths (e.g. AWS SSM
+		// parameter paths like /visionai/env/dev3) that match the absolute
+		// path regex but aren't actual file access.
+		if _, err := os.Stat(absPath); err != nil {
+			continue
+		}
+
 		if cfg.PathConsent != nil {
 			result, err := cfg.PathConsent.AskConsent(absPath, "access", cfg.ToolName, p)
 			if err != nil {

@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/anomalyco/hufu/internal/notify"
 	"github.com/anomalyco/hufu/internal/team"
 	"github.com/anomalyco/hufu/internal/tools"
 	tuipkg "github.com/anomalyco/hufu/internal/tui"
@@ -242,12 +243,16 @@ func formatAgentLabel(event team.StatusEvent) string {
 	return agent
 }
 
-func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp *taskDisplay, skillDisp *skillDisplay, idleTimer *idleWarningTimer) {
+func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp *taskDisplay, skillDisp *skillDisplay, idleTimer *idleWarningTimer, notifier *notify.Notifier) {
 	currentAgent := ""
 	textBuf := ""
 
 	coordinator.SetStatusReporter(func(event team.StatusEvent) {
 		idleTimer.reset()
+
+		if notifier != nil {
+			notifier.Notify(event.Type, event.Agent, event.Message, event.Output)
+		}
 
 		if event.Model != "" {
 			idleTimer.SetModel(event.Model)
@@ -503,6 +508,9 @@ func formatToolArgs(toolName, args string) string {
 	}
 	args = strings.ReplaceAll(args, "\n", " ")
 	args = strings.TrimSpace(args)
+	if toolName == "bash" {
+		return args
+	}
 	maxLen := 80
 	if toolName == "agent" {
 		maxLen = 200
@@ -683,6 +691,13 @@ func (d *coordDisplay) finalizeTasks() {
 func newCoordDisplay(tc *teamContext) *coordDisplay {
 	if p := activeTUIProgram.Load(); p != nil {
 		reporter, stopAll := makeTUIReporter(p)
+		if tc.notifier != nil {
+			origReporter := reporter
+			reporter = func(event team.StatusEvent) {
+				origReporter(event)
+				tc.notifier.Notify(event.Type, event.Agent, event.Message, event.Output)
+			}
+		}
 		tc.coordinator.SetStatusReporter(reporter)
 		return &coordDisplay{stopThinking: stopAll}
 	}
@@ -690,7 +705,7 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 	idleTimer := newIdleWarningTimer(w, 30*time.Second)
 	taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
 	skillDisp := newSkillDisplay(w)
-	setupStatusReporter(w, tc.coordinator, taskDisp, skillDisp, idleTimer)
+	setupStatusReporter(w, tc.coordinator, taskDisp, skillDisp, idleTimer, tc.notifier)
 	setStatusFlusher(w, taskDisp, skillDisp)
 	return &coordDisplay{idleTimer: idleTimer, taskDisp: taskDisp}
 }
@@ -864,7 +879,7 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			tt.stop(event.TodoID)
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolCall(event.ToolName, event.ToolArgs)})
 			argsPreview := event.ToolArgs
-			if len(argsPreview) > 60 {
+			if event.ToolName != "bash" && len(argsPreview) > 60 {
 				argsPreview = argsPreview[:60] + "…"
 			}
 			toolLabel := toolStyle.Render("⟹ " + event.ToolName)

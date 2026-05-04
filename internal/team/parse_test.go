@@ -104,6 +104,61 @@ func TestMaxStepsParsing(t *testing.T) {
 	}
 }
 
+func TestParseAgentGuardRules(t *testing.T) {
+	tests := []struct {
+		name        string
+		yamlContent string
+		wantGuard   []string
+	}{
+		{
+			name:        "agent with guard rules",
+			yamlContent: "---\nname: test-agent\nrole: worker\nguard:\n  - Never rm -rf\n  - No sudo commands\n---\n",
+			wantGuard:   []string{"Never rm -rf", "No sudo commands"},
+		},
+		{
+			name:        "agent without guard rules",
+			yamlContent: "---\nname: test-agent\nrole: worker\n---\n",
+			wantGuard:   nil,
+		},
+		{
+			name:        "agent with empty guard list",
+			yamlContent: "---\nname: test-agent\nrole: worker\nguard: []\n---\n",
+			wantGuard:   []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			agentPath := filepath.Join(tmpDir, "test-agent.md")
+			if err := os.WriteFile(agentPath, []byte(tt.yamlContent), 0644); err != nil {
+				t.Fatalf("Failed to write test agent file: %v", err)
+			}
+
+			result, err := parseAgentFile(agentPath, nil)
+			if err != nil {
+				t.Fatalf("parseAgentFile returned error: %v", err)
+			}
+			if result == nil {
+				t.Fatalf("parseAgentFile returned nil for valid input")
+			}
+
+			if len(tt.wantGuard) == 0 && len(result.Guard) == 0 {
+				return
+			}
+			if len(result.Guard) != len(tt.wantGuard) {
+				t.Errorf("parseAgentFile Guard = %v, want %v", result.Guard, tt.wantGuard)
+				return
+			}
+			for i, g := range result.Guard {
+				if g != tt.wantGuard[i] {
+					t.Errorf("Guard[%d] = %q, want %q", i, g, tt.wantGuard[i])
+				}
+			}
+		})
+	}
+}
+
 func TestMaxStepsDefaultValue(t *testing.T) {
 	t.Run("agent max-steps 0 resolved to default", func(t *testing.T) {
 		tmpDir := t.TempDir()

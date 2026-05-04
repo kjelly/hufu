@@ -1,7 +1,9 @@
 package tools
 
 import (
+	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"charm.land/fantasy"
@@ -120,4 +122,101 @@ func TestResolveAndValidatePathSymlinks(t *testing.T) {
 		t.Errorf("expected valid path in symlinked workDir, got error: %v", err)
 	}
 	_ = resolved
+}
+
+func TestGuardReview(t *testing.T) {
+	tests := []struct {
+		name         string
+		guardRules   []string
+		reviewer     GuardReviewFn
+		wantApproved bool
+		wantErrStr   string
+	}{
+		{
+			name:       "no guard rules allows tool call",
+			guardRules: nil,
+			reviewer: func(ctx context.Context, toolName, args string, rules []string) (bool, string, error) {
+				return false, "blocked", nil
+			},
+			wantApproved: true,
+		},
+		{
+			name:         "nil reviewer allows tool call",
+			guardRules:   []string{"no sudo"},
+			reviewer:     nil,
+			wantApproved: true,
+		},
+		{
+			name:       "reviewer approves tool call",
+			guardRules: []string{"no sudo"},
+			reviewer: func(ctx context.Context, toolName, args string, rules []string) (bool, string, error) {
+				return true, "", nil
+			},
+			wantApproved: true,
+		},
+		{
+			name:       "reviewer rejects tool call",
+			guardRules: []string{"no sudo"},
+			reviewer: func(ctx context.Context, toolName, args string, rules []string) (bool, string, error) {
+				return false, "uses sudo", nil
+			},
+			wantApproved: false,
+			wantErrStr:   "Guard rule violation",
+		},
+		{
+			name:       "reviewer error fails open",
+			guardRules: []string{"no sudo"},
+			reviewer: func(ctx context.Context, toolName, args string, rules []string) (bool, string, error) {
+				return false, "", context.DeadlineExceeded
+			},
+			wantApproved: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ct := &coreTool{
+				info: fantasy.ToolInfo{
+					Name: "bash",
+					Parameters: map[string]any{
+						"command": map[string]any{
+							"type": "string",
+						},
+					},
+					Required: []string{"command"},
+				},
+				handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+					return fantasy.NewTextResponse("ok"), nil
+				},
+				guardReviewer: tt.reviewer,
+			}
+
+			ctx := context.Background()
+			if tt.guardRules != nil {
+				ctx = context.WithValue(ctx, GuardRulesKey, tt.guardRules)
+			}
+
+			resp, err := ct.Run(ctx, fantasy.ToolCall{
+				ID:    "1",
+				Name:  "bash",
+				Input: `{"command": "ls"}`,
+			})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+
+			if tt.wantApproved {
+				if resp.IsError {
+					t.Errorf("expected approval, got error: %s", resp.Content)
+				}
+			} else {
+				if !resp.IsError {
+					t.Errorf("expected rejection, got success: %s", resp.Content)
+				}
+				if tt.wantErrStr != "" && !strings.Contains(resp.Content, tt.wantErrStr) {
+					t.Errorf("error content %q should contain %q", resp.Content, tt.wantErrStr)
+				}
+			}
+		})
+	}
 }

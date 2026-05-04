@@ -11,6 +11,7 @@ import (
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/config"
 	"github.com/anomalyco/hufu/internal/mcp"
+	"github.com/anomalyco/hufu/internal/notify"
 	"github.com/anomalyco/hufu/internal/skill"
 )
 
@@ -24,20 +25,21 @@ type TeamSession struct {
 }
 
 type agentFrontmatter struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Role        string `yaml:"role"`
-	Tools       string `yaml:"tools"`
-	Skills      string `yaml:"skills"`
-	Model       string `yaml:"model"`
-	Temperature string `yaml:"temperature"`
-	MaxTokens   string `yaml:"max-tokens"`
-	TopP        string `yaml:"top-p"`
-	TopK        string `yaml:"top-k"`
-	Timeout     int64  `yaml:"timeout"`
-	MaxRetries  int    `yaml:"max-retries"`
-	MaxSteps    int    `yaml:"max-steps"`
-	ProviderURL string `yaml:"provider-url"`
+	Name        string   `yaml:"name"`
+	Description string   `yaml:"description"`
+	Role        string   `yaml:"role"`
+	Tools       string   `yaml:"tools"`
+	Skills      string   `yaml:"skills"`
+	Guard       []string `yaml:"guard"`
+	Model       string   `yaml:"model"`
+	Temperature string   `yaml:"temperature"`
+	MaxTokens   string   `yaml:"max-tokens"`
+	TopP        string   `yaml:"top-p"`
+	TopK        string   `yaml:"top-k"`
+	Timeout     int64    `yaml:"timeout"`
+	MaxRetries  int      `yaml:"max-retries"`
+	MaxSteps    int      `yaml:"max-steps"`
+	ProviderURL string   `yaml:"provider-url"`
 }
 
 type teamConfigYAML struct {
@@ -58,6 +60,8 @@ type teamConfigYAML struct {
 	ProviderURL   string              `yaml:"provider-url"`
 	ModelList     []config.ModelEntry `yaml:"model-list"`
 	SidecarModel  string              `yaml:"sidecar-model"`
+	GuardModel    string              `yaml:"guard-model"`
+	Notify        notify.NotifyConfig `yaml:"notify"`
 }
 
 func parseSimpleYAML(data string) map[string]string {
@@ -164,6 +168,7 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 		Role:        role,
 		System:      body,
 		Skills:      fm.Skills,
+		Guard:       fm.Guard,
 		MaxRetries:  -1,
 		MaxSteps:    fm.MaxSteps,
 		Generation: agent.GenerationParams{
@@ -262,6 +267,12 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.SidecarModel != "" {
 		cfg.SidecarModel = yc.SidecarModel
+	}
+	if yc.GuardModel != "" {
+		cfg.GuardModel = yc.GuardModel
+	}
+	if yc.Notify.Enabled() {
+		cfg.Notify = yc.Notify
 	}
 
 	return cfg, nil

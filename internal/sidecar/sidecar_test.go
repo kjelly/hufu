@@ -136,3 +136,59 @@ func parseMatchSkillsResponse(response string, skills []SkillSummary) ([]string,
 	}
 	return filtered, nil
 }
+
+func TestParseReviewToolCallResponse(t *testing.T) {
+	tests := []struct {
+		name         string
+		response     string
+		wantApproved bool
+		wantReason   string
+		wantErr      bool
+	}{
+		{
+			name:         "approved true",
+			response:     `{"approved": true, "reason": ""}`,
+			wantApproved: true,
+			wantReason:   "",
+			wantErr:      false,
+		},
+		{
+			name:         "approved false with reason",
+			response:     `{"approved": false, "reason": "violates rule: no sudo"}`,
+			wantApproved: false,
+			wantReason:   "violates rule: no sudo",
+			wantErr:      false,
+		},
+		{
+			name:         "JSON in code block",
+			response:     "```json\n{\"approved\": false, \"reason\": \"rm -rf\"}\n```",
+			wantApproved: false,
+			wantReason:   "rm -rf",
+			wantErr:      false,
+		},
+		{
+			name:     "invalid JSON",
+			response: "not json",
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseReviewToolCallResponse(tt.response)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseReviewToolCallResponse() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil {
+				return
+			}
+			if result.Approved != tt.wantApproved {
+				t.Errorf("Approved = %v, want %v", result.Approved, tt.wantApproved)
+			}
+			if result.Reason != tt.wantReason {
+				t.Errorf("Reason = %q, want %q", result.Reason, tt.wantReason)
+			}
+		})
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"charm.land/fantasy/providers/openaicompat"
 
 	"github.com/anomalyco/hufu/internal/config"
+	"github.com/anomalyco/hufu/internal/notify"
 	"github.com/anomalyco/hufu/internal/tools"
 )
 
@@ -32,6 +33,7 @@ type AgentDef struct {
 	Role        string
 	System      string
 	Skills      string
+	Guard       []string
 	Timeout     int64
 	MaxRetries  int
 	MaxSteps    int
@@ -53,6 +55,8 @@ type TeamConfig struct {
 	ProviderURL   string
 	ModelList     []config.ModelEntry
 	SidecarModel  string
+	GuardModel    string
+	Notify        notify.NotifyConfig
 }
 
 type OllamaProvider struct {

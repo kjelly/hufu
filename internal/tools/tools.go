@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 
 	"charm.land/fantasy"
+
+	"github.com/anomalyco/hufu/internal/hooks"
 )
 
 var StdinMu sync.Mutex
@@ -86,7 +88,8 @@ type ToolConfig struct {
 	AllowedPaths  []string
 	PathConsent   *PathConsent
 	ToolName      string
-	WorkspaceName string // base name of the workspace directory (e.g. "workspace")
+	WorkspaceName string
+	Hooks         *hooks.HookRegistry
 }
 
 func WithWorkDir(dir string) ToolOption {
@@ -119,6 +122,12 @@ func WithWorkspaceName(name string) ToolOption {
 	}
 }
 
+func WithHooks(h *hooks.HookRegistry) ToolOption {
+	return func(c *ToolConfig) {
+		c.Hooks = h
+	}
+}
+
 // normalizeWorkspacePath rewrites a path that uses the workspace directory name
 // as if it were at the filesystem root (e.g. /workspace/x) into a relative path
 // (./workspace/x) so it resolves correctly under the workDir.
@@ -141,21 +150,117 @@ func ApplyOptions(opts []ToolOption) ToolConfig {
 	return cfg
 }
 
+type GuardReviewFn func(ctx context.Context, toolName string, args string, rules []string) (approved bool, reason string, err error)
+
+type guardRulesKeyType struct{}
+
+var GuardRulesKey = guardRulesKeyType{}
+
+type agentNameKeyType struct{}
+
+var AgentNameKey = agentNameKeyType{}
+
 type coreTool struct {
-	info    fantasy.ToolInfo
-	handler func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error)
-	pOpts   fantasy.ProviderOptions
+	info          fantasy.ToolInfo
+	handler       func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error)
+	pOpts         fantasy.ProviderOptions
+	hooks         *hooks.HookRegistry
+	guardReviewer GuardReviewFn
 }
 
 func (t *coreTool) Info() fantasy.ToolInfo                          { return t.info }
 func (t *coreTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
 func (t *coreTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
 
+func SetGuardReviewer(tools []fantasy.AgentTool, fn GuardReviewFn) {
+	for _, t := range tools {
+		if ct, ok := t.(*coreTool); ok {
+			ct.guardReviewer = fn
+		}
+	}
+}
+
+func extractHookContext(ctx context.Context) hooks.HookContext {
+	teamName, _ := ctx.Value(hooks.TeamNameKey).(string)
+	agentName, _ := ctx.Value(hooks.AgentNameKey).(string)
+	if agentName == "" {
+		agentName, _ = ctx.Value(AgentNameKey).(string)
+	}
+	taskDesc, _ := ctx.Value(hooks.TaskDescKey).(string)
+	return hooks.MakeContext(teamName, agentName, "", taskDesc, "", "")
+}
+
 func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	if err := validateToolInput(call.Input, t.info); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
-	return t.handler(ctx, call)
+
+	if t.hooks != nil && t.hooks.HasHooks("before_tool_call") {
+		payload := hooks.HookPayload{
+			HookPoint: "before_tool_call",
+			Context:   extractHookContext(ctx),
+			ToolName:  t.info.Name,
+			Args:      json.RawMessage(call.Input),
+		}
+		resp := t.hooks.Dispatch(ctx, "before_tool_call", payload)
+		switch resp.Result {
+		case hooks.HookSkip:
+			return fantasy.NewTextResponse("tool call skipped by hook"), nil
+		case hooks.HookError:
+			return fantasy.NewTextErrorResponse(resp.ErrorMessage), nil
+		case hooks.HookReplace:
+			if resp.Replacement != nil {
+				call.Input = string(resp.Replacement)
+			}
+		}
+	}
+
+	if t.guardReviewer != nil {
+		if rules, _ := ctx.Value(GuardRulesKey).([]string); len(rules) > 0 {
+			approved, reason, reviewErr := t.guardReviewer(ctx, t.info.Name, call.Input, rules)
+			if reviewErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: guard review failed: %v\n", reviewErr)
+				// fail open: allow tool call on reviewer error
+			} else if !approved {
+				msg := fmt.Sprintf("Guard rule violation: %s", reason)
+				return fantasy.NewTextErrorResponse(msg), nil
+			}
+		}
+	}
+
+	toolResp, err := t.handler(ctx, call)
+
+	if t.hooks != nil && t.hooks.HasHooks("after_tool_call") {
+		resultText := toolResp.Content
+		isErr := toolResp.IsError
+		if err != nil {
+			resultText = err.Error()
+			isErr = true
+		}
+		payload := hooks.HookPayload{
+			HookPoint: "after_tool_call",
+			Context:   extractHookContext(ctx),
+			ToolName:  t.info.Name,
+			Args:      json.RawMessage(call.Input),
+			Result:    resultText,
+			IsError:   isErr,
+		}
+		resp := t.hooks.Dispatch(ctx, "after_tool_call", payload)
+		switch resp.Result {
+		case hooks.HookReplace:
+			if resp.Replacement != nil {
+				if toolResp.IsError {
+					toolResp = fantasy.NewTextErrorResponse(string(resp.Replacement))
+				} else {
+					toolResp = fantasy.NewTextResponse(string(resp.Replacement))
+				}
+			}
+		case hooks.HookError:
+			return fantasy.NewTextErrorResponse(resp.ErrorMessage), nil
+		}
+	}
+
+	return toolResp, err
 }
 
 func parseArgs(input string, target any) error {
@@ -442,7 +547,8 @@ func validatedPathInAllowedDirs(evaluatedPath string, allowedPaths []string) (st
 }
 
 func AllTools(opts ...ToolOption) []fantasy.AgentTool {
-	return []fantasy.AgentTool{
+	cfg := ApplyOptions(opts)
+	tools := []fantasy.AgentTool{
 		NewBashTool(opts...),
 		NewSudoTool(opts...),
 		NewSshTool(opts...),
@@ -461,6 +567,14 @@ func AllTools(opts ...ToolOption) []fantasy.AgentTool {
 		NewAgenticFetchTool(opts...),
 		NewRandomTool(opts...),
 	}
+	if cfg.Hooks != nil {
+		for _, t := range tools {
+			if ct, ok := t.(*coreTool); ok {
+				ct.hooks = cfg.Hooks
+			}
+		}
+	}
+	return tools
 }
 
 func FilterTools(all []fantasy.AgentTool, allowed map[string]bool) []fantasy.AgentTool {

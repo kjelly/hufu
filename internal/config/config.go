@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/anomalyco/hufu/internal/notify"
 	"github.com/anomalyco/hufu/internal/yamlutil"
 	"gopkg.in/yaml.v3"
 )
@@ -20,13 +21,16 @@ type ModelEntry struct {
 }
 
 type Config struct {
-	ProviderURL    string       `yaml:"provider-url"`
-	Model          string       `yaml:"model"`
-	EmbeddingModel string       `yaml:"embedding-model"`
-	ModelList      []ModelEntry `yaml:"model-list"`
-	SidecarModel   string       `yaml:"sidecar-model"`
-	AllowedPaths   []string     `yaml:"allowed-paths"`
-	RawVars        interface{}  `yaml:"vars"`
+	ProviderURL    string              `yaml:"provider-url"`
+	Model          string              `yaml:"model"`
+	EmbeddingModel string              `yaml:"embedding-model"`
+	ModelList      []ModelEntry        `yaml:"model-list"`
+	SidecarModel   string              `yaml:"sidecar-model"`
+	GuardModel     string              `yaml:"guard-model"`
+	AllowedPaths   []string            `yaml:"allowed-paths"`
+	RawVars        interface{}         `yaml:"vars"`
+	Hooks          map[string]string   `yaml:"hooks"`
+	Notify         notify.NotifyConfig `yaml:"notify"`
 }
 
 func (c *Config) GetVars() map[string]string {
@@ -90,8 +94,22 @@ func (c *Config) mergeFromFile(path string) {
 	if fileCfg.SidecarModel != "" {
 		c.SidecarModel = fileCfg.SidecarModel
 	}
+	if fileCfg.GuardModel != "" {
+		c.GuardModel = fileCfg.GuardModel
+	}
 	if len(fileCfg.AllowedPaths) > 0 {
 		c.AllowedPaths = fileCfg.AllowedPaths
+	}
+	if len(fileCfg.Hooks) > 0 {
+		if c.Hooks == nil {
+			c.Hooks = make(map[string]string)
+		}
+		for k, v := range fileCfg.Hooks {
+			c.Hooks[k] = v
+		}
+	}
+	if fileCfg.Notify.Enabled() {
+		c.mergeNotify(fileCfg.Notify)
 	}
 	fileVars := fileCfg.GetVars()
 	if len(fileVars) > 0 {
@@ -159,6 +177,19 @@ func (c *Config) ResolveSidecarModel(teamSidecar string) string {
 	return c.SidecarModel
 }
 
+func (c *Config) ResolveGuardModel(teamGuard, teamSidecar string) string {
+	if teamGuard != "" {
+		return teamGuard
+	}
+	if c.GuardModel != "" {
+		return c.GuardModel
+	}
+	if teamSidecar != "" {
+		return teamSidecar
+	}
+	return c.SidecarModel
+}
+
 // ResolveModel returns the effective default model following priority:
 // team.yaml model > hufu.yaml model.
 func (c *Config) ResolveModel(teamModel string) string {
@@ -166,6 +197,43 @@ func (c *Config) ResolveModel(teamModel string) string {
 		return teamModel
 	}
 	return c.Model
+}
+
+func (c *Config) GetHooks() map[string]string {
+	if c.Hooks == nil {
+		return nil
+	}
+	return c.Hooks
+}
+
+func (c *Config) mergeNotify(other notify.NotifyConfig) {
+	if other.OSC {
+		c.Notify.OSC = true
+	}
+	if other.Command != "" {
+		c.Notify.Command = other.Command
+	}
+	if len(other.Events) > 0 {
+		c.Notify.Events = other.Events
+	}
+}
+
+func (c *Config) ResolveNotify(teamNotify notify.NotifyConfig) notify.NotifyConfig {
+	result := notify.NotifyConfig{
+		OSC:     c.Notify.OSC,
+		Command: c.Notify.Command,
+		Events:  c.Notify.Events,
+	}
+	if teamNotify.OSC {
+		result.OSC = true
+	}
+	if teamNotify.Command != "" {
+		result.Command = teamNotify.Command
+	}
+	if len(teamNotify.Events) > 0 {
+		result.Events = teamNotify.Events
+	}
+	return result
 }
 
 // ProviderURLToOllamaAPI converts a provider URL (e.g. http://localhost:11434/v1)

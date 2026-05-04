@@ -20,6 +20,7 @@ import (
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/audit"
 	"github.com/anomalyco/hufu/internal/config"
+	"github.com/anomalyco/hufu/internal/hooks"
 	"github.com/anomalyco/hufu/internal/mcp"
 	"github.com/anomalyco/hufu/internal/memory"
 	"github.com/anomalyco/hufu/internal/sidecar"
@@ -119,11 +120,15 @@ type Coordinator struct {
 	sidecarModel          string
 	sidecarInst           *sidecar.Sidecar
 	sidecarInitMu         sync.Mutex
+	sidecarInit           bool
+	guardModel            string
+	guardInst             *sidecar.Sidecar
+	guardInitMu           sync.Mutex
+	guardInit             bool
 	cachedWorkerContext   string
 	workerCtxOnce         sync.Once
 	autoLoadedSkills      []*skill.SkillDef
 	autoLoadedSkillsMu    sync.RWMutex
-	sidecarInit           bool
 	sessionTime           time.Time
 	// stepConfirmFn must be set before Run() or protected by stepConfirmFnMu.
 	stepConfirmFn   func(context.Context, []TaskDef) (bool, error)
@@ -133,6 +138,7 @@ type Coordinator struct {
 	// DryRun() directly and returns early before reaching ExecuteTasks, so
 	// this field is not yet exercised in the main CLI flow.
 	dryRun atomic.Bool
+	hooks  *hooks.HookRegistry
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
@@ -197,9 +203,9 @@ func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
 	return
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, verbose bool, allowedPaths []string, pathConsent *tools.PathConsent) (*Coordinator, error) {
+func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, verbose bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
-	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)))
+	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry))
 	prov, err := agent.NewOllamaProvider(defaultProviderURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Ollama provider: %w", err)
@@ -221,7 +227,9 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		memoryStore:     memoryStore,
 		modelList:       modelList,
 		sidecarModel:    sidecarModel,
+		guardModel:      guardModel,
 		sessionTime:     time.Now(),
+		hooks:           hookRegistry,
 	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -246,6 +254,20 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		)
 	}
 
+	guardReviewer := func(ctx context.Context, toolName, args string, rules []string) (bool, string, error) {
+		s := c.GuardSidecar()
+		if s == nil {
+			return true, "", nil
+		}
+		agentName, _ := ctx.Value(tools.AgentNameKey).(string)
+		result, err := s.ReviewToolCall(ctx, agentName, toolName, args, rules)
+		if err != nil {
+			return true, "", err
+		}
+		return result.Approved, result.Reason, nil
+	}
+	tools.SetGuardReviewer(c.coreTools, guardReviewer)
+
 	if history := LoadConversationHistory(session.Workspace); len(history) > 0 {
 		c.conversationHistory = history
 	}
@@ -264,6 +286,10 @@ func (c *Coordinator) SetStatusReporter(fn StatusReporter) {
 	if fn != nil {
 		c.reportStatus = fn
 	}
+}
+
+func (c *Coordinator) Hooks() *hooks.HookRegistry {
+	return c.hooks
 }
 
 func (c *Coordinator) report(event StatusEvent) {
@@ -576,6 +602,26 @@ func (c *Coordinator) Sidecar() *sidecar.Sidecar {
 	c.sidecarInst = s
 	c.sidecarInit = true
 	return c.sidecarInst
+}
+
+func (c *Coordinator) GuardSidecar() *sidecar.Sidecar {
+	if c.guardModel == "" {
+		return nil
+	}
+	c.guardInitMu.Lock()
+	defer c.guardInitMu.Unlock()
+	if c.guardInit {
+		return c.guardInst
+	}
+	ctx := context.Background()
+	s, err := sidecar.NewSidecar(ctx, c.provider, c.guardModel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to initialize guard model %q: %v\n", c.guardModel, err)
+		return nil
+	}
+	c.guardInst = s
+	c.guardInit = true
+	return c.guardInst
 }
 
 func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string) []*skill.SkillDef {
@@ -1698,6 +1744,13 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			defer cancel()
 			taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 			taskCtx = context.WithValue(taskCtx, modelKey{}, resolvedModel)
+			taskCtx = context.WithValue(taskCtx, tools.AgentNameKey, agentName)
+			taskCtx = context.WithValue(taskCtx, hooks.AgentNameKey, agentName)
+			taskCtx = context.WithValue(taskCtx, hooks.TeamNameKey, c.session.Config.Name)
+			taskCtx = context.WithValue(taskCtx, hooks.TaskDescKey, task.Task)
+			if len(agentDef.Guard) > 0 {
+				taskCtx = context.WithValue(taskCtx, tools.GuardRulesKey, agentDef.Guard)
+			}
 			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, prompt, conversationHistory, timing)
 		}()
 
@@ -1839,8 +1892,42 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		},
 		OnStreamFinish: func(usage fantasy.Usage, finishReason fantasy.FinishReason, providerMetadata fantasy.ProviderMetadata) error {
 			llmLogStreamFinish(logWrite, finishReason, usage)
+
+			if c.hooks != nil && c.hooks.HasHooks("after_llm_step") {
+				resolvedModel, _ := ctx.Value(modelKey{}).(string)
+				hookCtx := hooks.MakeContext(teamName, agentName, todoID, "", resolvedModel, "")
+				hookPayload := hooks.HookPayload{
+					HookPoint: "after_llm_step",
+					Context:   hookCtx,
+					Model:     resolvedModel,
+					Usage: hooks.UsageSummary{
+						PromptTokens:     int(usage.InputTokens),
+						CompletionTokens: int(usage.OutputTokens),
+						TotalTokens:      int(usage.TotalTokens),
+					},
+				}
+				c.hooks.Dispatch(ctx, "after_llm_step", hookPayload)
+			}
+
 			return nil
 		},
+	}
+
+	if c.hooks != nil && c.hooks.HasHooks("before_llm_step") {
+		resolvedModel, _ := ctx.Value(modelKey{}).(string)
+		hookCtx := hooks.MakeContext(teamName, agentName, todoID, "", resolvedModel, "")
+		hookPayload := hooks.HookPayload{
+			HookPoint: "before_llm_step",
+			Context:   hookCtx,
+			Model:     resolvedModel,
+		}
+		resp := c.hooks.Dispatch(ctx, "before_llm_step", hookPayload)
+		if resp.Result == hooks.HookSkip {
+			return "", nil, nil
+		}
+		if resp.Result == hooks.HookError {
+			return "", nil, fmt.Errorf("hook error: %s", resp.ErrorMessage)
+		}
 	}
 
 	result, err := ag.Stream(ctx, streamCall)
@@ -2319,12 +2406,27 @@ func (c *Coordinator) summarizeOutput(ctx context.Context, text string) string {
 	return summarized
 }
 
-func (c *Coordinator) expandDefaultOrchestratorTemplate(tmpl string) string {
+func (c *Coordinator) expandOrchestratorTemplate(tmpl string) string {
 	workerNames := c.workerNameList()
-	s := strings.ReplaceAll(tmpl, "{{TEAM_NAME}}", c.session.Config.Name)
-	s = strings.ReplaceAll(s, "{{AGENT_COUNT}}", fmt.Sprintf("%d", len(workerNames)))
-	s = strings.ReplaceAll(s, "{{AGENT_NAMES}}", strings.Join(workerNames, ", "))
-	return s
+	vars := map[string]string{
+		"TEAM_NAME":   c.session.Config.Name,
+		"AGENT_COUNT": fmt.Sprintf("%d", len(workerNames)),
+		"AGENT_NAMES": strings.Join(workerNames, ", "),
+	}
+	result, err := applyTemplate(tmpl, "orchestrator-system", vars)
+	if err != nil {
+		s := strings.ReplaceAll(tmpl, "{@ .TEAM_NAME @}", c.session.Config.Name)
+		s = strings.ReplaceAll(s, "{@ .AGENT_COUNT @}", fmt.Sprintf("%d", len(workerNames)))
+		s = strings.ReplaceAll(s, "{@ .AGENT_NAMES @}", strings.Join(workerNames, ", "))
+		return s
+	}
+	return result
+}
+
+// expandDefaultOrchestratorTemplate expands the default orchestrator system prompt
+// using the team's runtime variables.
+func (c *Coordinator) expandDefaultOrchestratorTemplate(tmpl string) string {
+	return c.expandOrchestratorTemplate(tmpl)
 }
 
 func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepResult) {
@@ -2458,6 +2560,13 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 
 	taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 	taskCtx = context.WithValue(taskCtx, modelKey{}, directModel)
+	taskCtx = context.WithValue(taskCtx, tools.AgentNameKey, resolvedName)
+	taskCtx = context.WithValue(taskCtx, hooks.AgentNameKey, resolvedName)
+	taskCtx = context.WithValue(taskCtx, hooks.TeamNameKey, c.session.Config.Name)
+	taskCtx = context.WithValue(taskCtx, hooks.TaskDescKey, task)
+	if len(agentDef.Guard) > 0 {
+		taskCtx = context.WithValue(taskCtx, tools.GuardRulesKey, agentDef.Guard)
+	}
 
 	timing := &taskTiming{}
 	timing.reset()
@@ -2613,7 +2722,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		c.sessionData.AddEntry("user", userPrompt)
 	}
 
-	systemPrompt := orchDef.System
+	systemPrompt := c.expandOrchestratorTemplate(orchDef.System)
 	if systemPrompt == "" {
 		systemPrompt = c.expandDefaultOrchestratorTemplate(defaultOrchestratorSystem)
 	}
@@ -2727,7 +2836,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	return finalResult, nil
 }
 
-const defaultOrchestratorSystem = `You are the orchestrator of "{{TEAM_NAME}}", a software development team with {{AGENT_COUNT}} members: {{AGENT_NAMES}}.
+const defaultOrchestratorSystem = `You are the orchestrator of "{@ .TEAM_NAME @}", a software development team with {@ .AGENT_COUNT @} members: {@ .AGENT_NAMES @}.
 
 Your role is to coordinate the team: break down user requests into concrete tasks, delegate them to the right members, and synthesize the results into a coherent response.
 
@@ -2867,7 +2976,7 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 	matchedSkills := c.matchSkillsWithSidecar(ctx, userPrompt)
 	c.setAutoLoadedSkills(matchedSkills)
 
-	systemPrompt := orchDef.System
+	systemPrompt := c.expandOrchestratorTemplate(orchDef.System)
 	if systemPrompt == "" {
 		systemPrompt = c.expandDefaultOrchestratorTemplate(defaultOrchestratorSystem)
 	}

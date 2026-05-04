@@ -18,8 +18,10 @@ import (
 
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/config"
+	"github.com/anomalyco/hufu/internal/hooks"
 	"github.com/anomalyco/hufu/internal/mcp"
 	"github.com/anomalyco/hufu/internal/memory"
+	"github.com/anomalyco/hufu/internal/notify"
 	"github.com/anomalyco/hufu/internal/readline"
 	"github.com/anomalyco/hufu/internal/team"
 	"github.com/anomalyco/hufu/internal/tools"
@@ -98,6 +100,7 @@ type teamContext struct {
 	session     *team.TeamSession
 	coordinator *team.Coordinator
 	sessionData *team.SessionData
+	notifier    *notify.Notifier
 }
 
 func runTeam(cmd *cobra.Command, args []string) error {
@@ -562,11 +565,23 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	cfg := config.LoadConfig()
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
 	resolvedSidecarModel := cfg.ResolveSidecarModel(session.Config.SidecarModel)
+	resolvedGuardModel := cfg.ResolveGuardModel(session.Config.GuardModel, session.Config.SidecarModel)
 	session.Config.Generation.Model = cfg.ResolveModel(session.Config.Generation.Model)
 
 	allowedPaths := buildAllowedPaths(session, registry, cfg)
 
-	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, verbose, allowedPaths, pathConsent)
+	hookRegistry := hooks.NewHookRegistry()
+	if configHooks := cfg.GetHooks(); len(configHooks) > 0 {
+		if err := hooks.RegisterShellHooks(hookRegistry, configHooks); err != nil {
+			fmt.Fprintf(os.Stderr, "%s Invalid hooks config: %v\n", errStyle.Render("⚠"), err)
+		} else {
+			for k := range configHooks {
+				fmt.Fprintf(os.Stderr, "%s Hook: %s\n", dimStyle.Render("◆"), k)
+			}
+		}
+	}
+
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, verbose, allowedPaths, pathConsent, hookRegistry)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
@@ -601,11 +616,27 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	if resolvedSidecarModel != "" {
 		fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Sidecar:"), resolvedSidecarModel)
 	}
+	if resolvedGuardModel != "" {
+		fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Guard:"), resolvedGuardModel)
+	}
+
+	resolvedNotify := cfg.ResolveNotify(session.Config.Notify)
+	var notifierInst *notify.Notifier
+	if resolvedNotify.Enabled() {
+		notifierInst = notify.NewNotifier(resolvedNotify, os.Stderr)
+		if resolvedNotify.OSC {
+			fmt.Fprintf(os.Stderr, "%s %s\n", dimStyle.Render("◆"), "Notify: OSC enabled")
+		}
+		if resolvedNotify.Command != "" {
+			fmt.Fprintf(os.Stderr, "%s %s %s\n", dimStyle.Render("◆"), "Notify:", resolvedNotify.Command)
+		}
+	}
 
 	return &teamContext{
 		session:     session,
 		coordinator: coordinator,
 		sessionData: sessionData,
+		notifier:    notifierInst,
 	}, nil
 }
 
