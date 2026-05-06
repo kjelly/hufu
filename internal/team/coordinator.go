@@ -106,6 +106,8 @@ type Coordinator struct {
 	currentAgentNameMu    sync.RWMutex
 	currentTask           string
 	currentTaskMu         sync.RWMutex
+	currentTodoID         string
+	currentTodoIDMu       sync.RWMutex
 	auditLogger           *audit.AuditLogger
 	skillUsage            map[string]*skillUsageState
 	skillUsageMu          sync.Mutex
@@ -736,6 +738,18 @@ func (c *Coordinator) GetCurrentTask() string {
 	return c.currentTask
 }
 
+func (c *Coordinator) SetCurrentTodoID(id string) {
+	c.currentTodoIDMu.Lock()
+	defer c.currentTodoIDMu.Unlock()
+	c.currentTodoID = id
+}
+
+func (c *Coordinator) GetCurrentTodoID() string {
+	c.currentTodoIDMu.RLock()
+	defer c.currentTodoIDMu.RUnlock()
+	return c.currentTodoID
+}
+
 func (c *Coordinator) GetCurrentAgentInfo() tools.AgentInfo {
 	return tools.AgentInfo{
 		Name: c.GetCurrentAgent(),
@@ -955,11 +969,14 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		ProviderURL: c.session.Config.ProviderURL,
 	}, "")
 
+	parentID := c.GetCurrentTodoID()
 	todoItems := c.taskTracker.TodoList().AddBatch([]struct {
-		Agent string
-		Desc  string
-		Model string
-	}{{Agent: name, Desc: task, Model: subModel}})
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
+	}{{Agent: name, Desc: task, Model: subModel, Source: TaskSourceSubagent, ParentID: parentID}})
 	todoID := todoItems[0].ID
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
@@ -1015,11 +1032,14 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 
 	prevAgent := c.GetCurrentAgent()
 	prevTask := c.GetCurrentTask()
+	prevTodoID := c.GetCurrentTodoID()
 	c.SetCurrentAgent(name)
 	c.SetCurrentTask(task)
+	c.SetCurrentTodoID(todoID)
 	defer func() {
 		c.SetCurrentAgent(prevAgent)
 		c.SetCurrentTask(prevTask)
+		c.SetCurrentTodoID(prevTodoID)
 	}()
 	taskCtx = context.WithValue(taskCtx, modelKey{}, subModel)
 	output, _, err := c.runAgentWithStatusAndHistory(taskCtx, ag, name, taskPrompt, nil, timing)
@@ -1114,18 +1134,23 @@ func (t *todoTool) handleCreate(callerName string, items []string) (fantasy.Tool
 	}
 
 	resolvedModel := t.coordinator.resolveCurrentAgentModel(callerName)
+	parentID := t.coordinator.GetCurrentTodoID()
 
 	batch := make([]struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}, len(items))
 	for i, desc := range items {
 		batch[i] = struct {
-			Agent string
-			Desc  string
-			Model string
-		}{Agent: callerName, Desc: desc, Model: resolvedModel}
+			Agent    string
+			Desc     string
+			Model    string
+			Source   string
+			ParentID string
+		}{Agent: callerName, Desc: desc, Model: resolvedModel, Source: TaskSourceAgent, ParentID: parentID}
 	}
 
 	added := t.coordinator.taskTracker.TodoList().AddBatch(batch)
@@ -1513,9 +1538,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	c.report(c.newEvent("step").withMessage(fmt.Sprintf("Round %d: delegating %d task(s)", c.round, len(tasks))))
 
 	todoBatch := make([]struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}, len(tasks))
 	for i, t := range tasks {
 		agentDef, _, _ := c.resolveAgentName(t.Agent)
@@ -1528,10 +1555,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			resolvedModel = c.resolveAgentModel(agentDef, overrideModel)
 		}
 		todoBatch[i] = struct {
-			Agent string
-			Desc  string
-			Model string
-		}{Agent: strings.ToLower(t.Agent), Desc: t.Task, Model: resolvedModel}
+			Agent    string
+			Desc     string
+			Model    string
+			Source   string
+			ParentID string
+		}{Agent: strings.ToLower(t.Agent), Desc: t.Task, Model: resolvedModel, Source: TaskSourceCoordinator, ParentID: ""}
 	}
 	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
@@ -1675,11 +1704,14 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	c.report(c.newEvent("start").withAgent(agentName).withMessage(task.Task).withModel(resolvedModel).withTodoID(todoID))
 	prevAgent := c.GetCurrentAgent()
 	prevTask := c.GetCurrentTask()
+	prevTodoID := c.GetCurrentTodoID()
 	c.SetCurrentAgent(agentName)
 	c.SetCurrentTask(task.Task)
+	c.SetCurrentTodoID(todoID)
 	defer func() {
 		c.SetCurrentAgent(prevAgent)
 		c.SetCurrentTask(prevTask)
+		c.SetCurrentTodoID(prevTodoID)
 	}()
 	taskTS := time.Now().Format("20060102-150405")
 	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "working", task.Task, ""); err != nil {
@@ -2539,21 +2571,26 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	directModel := c.resolveAgentModel(agentDef, "")
 
 	todoItems := c.taskTracker.TodoList().AddBatch([]struct {
-		Agent string
-		Desc  string
-		Model string
-	}{{Agent: resolvedName, Desc: task, Model: directModel}})
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
+	}{{Agent: resolvedName, Desc: task, Model: directModel, Source: TaskSourceCoordinator, ParentID: ""}})
 	todoID := todoItems[0].ID
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("start").withAgent(resolvedName).withMessage(task).withModel(directModel).withTodoID(todoID))
 	prevAgent := c.GetCurrentAgent()
 	prevTask := c.GetCurrentTask()
+	prevTodoID := c.GetCurrentTodoID()
 	c.SetCurrentAgent(resolvedName)
 	c.SetCurrentTask(task)
+	c.SetCurrentTodoID(todoID)
 	defer func() {
 		c.SetCurrentAgent(prevAgent)
 		c.SetCurrentTask(prevTask)
+		c.SetCurrentTodoID(prevTodoID)
 	}()
 
 	ag, err := c.getOrCreateAgent(ctx, agentDef, "")

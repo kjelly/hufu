@@ -8,9 +8,11 @@ func TestTodoListAddBatch(t *testing.T) {
 	tl := &TodoList{}
 
 	items := tl.AddBatch([]struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{
 		{Agent: "researcher", Desc: "find bugs"},
 		{Agent: "writer", Desc: "write docs"},
@@ -41,9 +43,11 @@ func TestTodoListUpdateStatus(t *testing.T) {
 	tl := &TodoList{}
 
 	tl.AddBatch([]struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{
 		{Agent: "researcher", Desc: "find bugs"},
 		{Agent: "writer", Desc: "write docs"},
@@ -78,9 +82,11 @@ func TestTodoListClear(t *testing.T) {
 	tl := &TodoList{}
 
 	tl.AddBatch([]struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{
 		{Agent: "a", Desc: "task a"},
 		{Agent: "b", Desc: "task b"},
@@ -97,9 +103,11 @@ func TestTodoListClear(t *testing.T) {
 	}
 
 	items := tl.AddBatch([]struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{
 		{Agent: "c", Desc: "task c"},
 	})
@@ -113,16 +121,20 @@ func TestTodoListIDsAutoIncrement(t *testing.T) {
 	tl := &TodoList{}
 
 	batch1 := tl.AddBatch([]struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{
 		{Agent: "a", Desc: "first"},
 	})
 	batch2 := tl.AddBatch([]struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{
 		{Agent: "b", Desc: "second"},
 		{Agent: "c", Desc: "third"},
@@ -147,9 +159,11 @@ func TestTaskTrackerTodoList(t *testing.T) {
 	}
 
 	tr.TodoList().AddBatch([]struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{
 		{Agent: "researcher", Desc: "find bugs"},
 	})

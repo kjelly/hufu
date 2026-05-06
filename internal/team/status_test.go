@@ -152,9 +152,11 @@ func TestTodoListAddBatchStatus(t *testing.T) {
 	tl := &TodoList{}
 
 	items := []struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{
 		{Agent: "agent1", Desc: "task1"},
 		{Agent: "agent2", Desc: "task2"},
@@ -187,9 +189,11 @@ func TestTodoListUpdateStatusStatus(t *testing.T) {
 	tl := &TodoList{}
 
 	items := []struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{
 		{Agent: "agent1", Desc: "task1"},
 		{Agent: "agent2", Desc: "task2"},
@@ -224,9 +228,11 @@ func TestTodoListUpdateStatusNonExistent(t *testing.T) {
 	tl := &TodoList{}
 
 	items := []struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{
 		{Agent: "agent1", Desc: "task1"},
 	}
@@ -248,9 +254,11 @@ func TestTodoListItems(t *testing.T) {
 	tl := &TodoList{}
 
 	items := []struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{
 		{Agent: "agent1", Desc: "task1"},
 	}
@@ -273,9 +281,11 @@ func TestTodoListClearStatus(t *testing.T) {
 	tl := &TodoList{}
 
 	items := []struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{
 		{Agent: "agent1", Desc: "task1"},
 		{Agent: "agent2", Desc: "task2"},
@@ -298,9 +308,11 @@ func TestTodoListNextCounter(t *testing.T) {
 	tl := &TodoList{}
 
 	tl.AddBatch([]struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{
 		{Agent: "agent1", Desc: "task1"},
 		{Agent: "agent2", Desc: "task2"},
@@ -308,9 +320,11 @@ func TestTodoListNextCounter(t *testing.T) {
 
 	tl.Clear()
 	tl.AddBatch([]struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{
 		{Agent: "agent3", Desc: "task3"},
 	})
@@ -355,6 +369,8 @@ func TestTodoItemFields(t *testing.T) {
 		EndedAt:   now.Add(5 * time.Minute),
 		ModelTime: 3 * time.Minute,
 		ToolTime:  2 * time.Minute,
+		Source:    TaskSourceCoordinator,
+		ParentID:  "",
 	}
 
 	if item.ID != "1" {
@@ -377,9 +393,11 @@ func TestTodoItemFields(t *testing.T) {
 func TestTodoItemStartedAtEndedAt(t *testing.T) {
 	tl := &TodoList{}
 	tl.AddBatch([]struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{{Agent: "agent", Desc: "task", Model: "ollama/qwen3:8b"}})
 
 	items := tl.Items()
@@ -406,9 +424,11 @@ func TestTodoItemStartedAtEndedAt(t *testing.T) {
 func TestTodoListUpdateTodoTiming(t *testing.T) {
 	tl := &TodoList{}
 	tl.AddBatch([]struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{{Agent: "agent", Desc: "task"}})
 
 	tl.UpdateTodoTiming("1", 3*time.Minute, 1*time.Minute)
@@ -424,9 +444,11 @@ func TestTodoListUpdateTodoTiming(t *testing.T) {
 func TestTaskSkippedEndedAt(t *testing.T) {
 	tl := &TodoList{}
 	tl.AddBatch([]struct {
-		Agent string
-		Desc  string
-		Model string
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
 	}{{Agent: "test-agent", Desc: "test task"}})
 	item := tl.Items()[0]
 	tl.UpdateStatus(item.ID, TaskSkipped, "not executed")

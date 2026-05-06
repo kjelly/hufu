@@ -627,9 +627,10 @@ func (m Model) executeSearch(query string) []*team.TodoItem {
 	for col := 0; col < 5; col++ {
 		items := m.colItems(col)
 		for _, item := range items {
-			if strings.Contains(strings.ToLower(item.Agent), q) ||
-				strings.Contains(strings.ToLower(item.Desc), q) ||
-				strings.Contains(strings.ToLower(item.Detail), q) {
+		if strings.Contains(strings.ToLower(item.Agent), q) ||
+			strings.Contains(strings.ToLower(item.Desc), q) ||
+			strings.Contains(strings.ToLower(item.Detail), q) ||
+			strings.Contains(strings.ToLower(item.Source), q) {
 				results = append(results, item)
 			}
 		}
@@ -850,7 +851,8 @@ func (m Model) isCurrentSearchMatch(id string) bool {
 
 func (m Model) itemLines(item *team.TodoItem, selected bool, isMatch bool, width int) []string {
 	icon, iconSt := taskIconStyle(item.Status)
-	agentTrunc := utils.TruncatePreview(item.Agent, width-3)
+	sourceLabel := sourceTag(item.Source)
+	agentTrunc := utils.TruncatePreview(item.Agent, width-3-len(sourceLabel))
 	descTrunc := utils.TruncatePreview(item.Desc, width-2)
 
 	if item.ID == team.CoordTodoID {
@@ -885,11 +887,11 @@ func (m Model) itemLines(item *team.TodoItem, selected bool, isMatch bool, width
 	}
 
 	if selected {
-		line1 := "▶ " + agentStyle.Render(agentTrunc)
+		line1 := "▶ " + agentStyle.Render(agentTrunc) + sourceLabel
 		line2 := "  " + descTrunc
 		lines = []string{line1, line2}
 	} else {
-		line1 := iconSt.Render(icon+" ") + agentStyle.Render(agentTrunc) + matchIndicator
+		line1 := iconSt.Render(icon+" ") + agentStyle.Render(agentTrunc) + sourceLabel + matchIndicator
 		line2 := dimStyle.Render("  " + descTrunc)
 		lines = []string{line1, line2}
 	}
@@ -912,6 +914,17 @@ func (m Model) itemLines(item *team.TodoItem, selected bool, isMatch bool, width
 		return styledLines
 	}
 	return lines
+}
+
+func sourceTag(source string) string {
+	switch source {
+	case team.TaskSourceAgent:
+		return dimStyle.Render(" [A]")
+	case team.TaskSourceSubagent:
+		return dimStyle.Render(" [S]")
+	default:
+		return ""
+	}
 }
 
 func (m *Model) scrollCursorIntoView() {
@@ -1119,14 +1132,59 @@ func (m Model) detailView() string {
 	if len(item.Skills) > 0 {
 		meta += "  " + skillStyle.Render("skills: "+strings.Join(item.Skills, ", "))
 	}
+	if item.Source != "" && item.Source != team.TaskSourceCoordinator {
+		sourceLabel := sourceDetailTag(item.Source)
+		meta += "  " + sourceLabel
+	}
+	if item.ParentID != "" {
+		parent := m.findTask(item.ParentID)
+		if parent != nil {
+			parentDesc := utils.TruncatePreview(parent.Agent+": "+parent.Desc, m.width-20)
+			meta += "\n" + dimStyle.Render("parent: "+item.ParentID+". "+parentDesc)
+		} else {
+			meta += "\n" + dimStyle.Render("parent: #"+item.ParentID)
+		}
+	}
+
+	var subtaskLines string
+	for _, t := range m.tasks {
+		if t.ParentID == item.ID {
+			subtaskLines += renderSubtaskLine(t, m.width)
+		}
+	}
 
 	sep := dimStyle.Render(strings.Repeat("─", m.width))
 
-	header := heading + "\n" + meta + "\n" + sep
+	var header string
+	if subtaskLines != "" {
+		sep2 := dimStyle.Render("─── Subtasks ───")
+		header = heading + "\n" + meta + "\n" + sep + "\n" + sep2 + "\n" + subtaskLines + sep
+	} else {
+		header = heading + "\n" + meta + "\n" + sep
+	}
 	if !m.vpReady {
 		return header
 	}
 	return header + "\n" + m.vp.View()
+}
+
+func sourceDetailTag(source string) string {
+	switch source {
+	case team.TaskSourceAgent:
+		return agentStyle.Render("[agent]")
+	case team.TaskSourceSubagent:
+		return agentStyle.Render("[subagent]")
+	default:
+		return ""
+	}
+}
+
+func renderSubtaskLine(t *team.TodoItem, width int) string {
+	icon, _ := taskIconStyle(t.Status)
+	tag := sourceTag(t.Source)
+	agentTrunc := utils.TruncatePreview(t.Agent, width-8)
+	descTrunc := utils.TruncatePreview(t.Desc, width-8)
+	return fmt.Sprintf("  %s %s%s %s\n", icon, agentStyle.Render(agentTrunc), tag, dimStyle.Render(descTrunc))
 }
 
 // vpHeight is the number of lines available for the detail viewport.

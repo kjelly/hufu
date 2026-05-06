@@ -205,13 +205,15 @@ func (s *MemoryStore) Delete(ctx context.Context, id string) error {
 func (s *MemoryStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.db != nil {
-		if err := s.db.Close(); err != nil {
-			return fmt.Errorf("failed to close memory db: %w", err)
-		}
-		s.db = nil
-		s.collection = nil
+	if s.db == nil {
+		return nil
 	}
+	if err := s.init(); err != nil {
+		return fmt.Errorf("failed to initialize memory store for close: %w", err)
+	}
+	s.db = nil
+	s.collection = nil
+	s.initialized = false
 	return nil
 }
 

@@ -93,7 +93,13 @@ const (
 	TaskInProgress TaskStatus = "in_progress"
 	TaskDone       TaskStatus = "done"
 	TaskError      TaskStatus = "error"
-	TaskSkipped    TaskStatus = "skipped" // created but never executed
+	TaskSkipped    TaskStatus = "skipped"
+)
+
+const (
+	TaskSourceCoordinator = "coordinator"
+	TaskSourceAgent       = "agent"
+	TaskSourceSubagent    = "subagent"
 )
 
 type TaskTracker struct {
@@ -122,6 +128,8 @@ type TodoItem struct {
 	EndedAt   time.Time
 	ModelTime time.Duration
 	ToolTime  time.Duration
+	Source    string
+	ParentID  string
 }
 
 type TodoList struct {
@@ -131,9 +139,11 @@ type TodoList struct {
 }
 
 func (tl *TodoList) AddBatch(items []struct {
-	Agent string
-	Desc  string
-	Model string
+	Agent    string
+	Desc     string
+	Model    string
+	Source   string
+	ParentID string
 }) []*TodoItem {
 	tl.mu.Lock()
 	defer tl.mu.Unlock()
@@ -141,11 +151,13 @@ func (tl *TodoList) AddBatch(items []struct {
 	for _, item := range items {
 		tl.next++
 		ti := &TodoItem{
-			ID:     fmt.Sprintf("%d", tl.next),
-			Agent:  item.Agent,
-			Desc:   item.Desc,
-			Model:  item.Model,
-			Status: TaskPending,
+			ID:       fmt.Sprintf("%d", tl.next),
+			Agent:    item.Agent,
+			Desc:     item.Desc,
+			Model:    item.Model,
+			Status:   TaskPending,
+			Source:   item.Source,
+			ParentID: item.ParentID,
 		}
 		tl.items = append(tl.items, ti)
 		added = append(added, ti)
@@ -199,6 +211,8 @@ func (tl *TodoList) Items() []*TodoItem {
 			EndedAt:   item.EndedAt,
 			ModelTime: item.ModelTime,
 			ToolTime:  item.ToolTime,
+			Source:    item.Source,
+			ParentID:  item.ParentID,
 		}
 	}
 	return result
@@ -213,6 +227,37 @@ func (tl *TodoList) SetSkills(id string, skills []string) {
 			return
 		}
 	}
+}
+
+func (tl *TodoList) Children(parentID string) []*TodoItem {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	var result []*TodoItem
+	for _, item := range tl.items {
+		if item.ParentID == parentID {
+			var skills []string
+			if len(item.Skills) > 0 {
+				skills = make([]string, len(item.Skills))
+				copy(skills, item.Skills)
+			}
+			result = append(result, &TodoItem{
+				ID:        item.ID,
+				Agent:     item.Agent,
+				Desc:      item.Desc,
+				Status:    item.Status,
+				Detail:    item.Detail,
+				Model:     item.Model,
+				Skills:    skills,
+				StartedAt: item.StartedAt,
+				EndedAt:   item.EndedAt,
+				ModelTime: item.ModelTime,
+				ToolTime:  item.ToolTime,
+				Source:    item.Source,
+				ParentID:  item.ParentID,
+			})
+		}
+	}
+	return result
 }
 
 func (tl *TodoList) Clear() {
