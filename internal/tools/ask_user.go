@@ -72,12 +72,12 @@ func NewAskUserTool(opts ...ToolOption) fantasy.AgentTool {
 			Required: []string{"question"},
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return executeAskUser(call)
+			return executeAskUser(ctx, call)
 		},
 	}
 }
 
-func executeAskUser(call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args askUserArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -101,7 +101,7 @@ func executeAskUser(call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	for i, o := range args.Options {
 		tuiOpts[i] = AskUserTUIOption{Label: o.Label, Value: o.Value}
 	}
-	if jsonResp, ok := TryAskUserTUI(args.Question, questionType, tuiOpts, args.AllowAny); ok {
+	if jsonResp, ok := TryAskUserTUI(ctx, args.Question, questionType, tuiOpts, args.AllowAny); ok {
 		return fantasy.NewTextResponse(jsonResp), nil
 	}
 

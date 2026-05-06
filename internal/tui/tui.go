@@ -55,6 +55,8 @@ type TeamInfoMsg struct{ Info TeamInfo }
 
 type WrapUpMsg struct{}
 
+type AskUserCancelMsg struct{}
+
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 var (
@@ -278,12 +280,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		if m.wrapUpRequested {
+		if m.wrapUpRequested && !m.inAskUser {
 			return m, tea.Quit
 		}
 
 	case WrapUpMsg:
 		return m.handleCtrlC()
+
+	case AskUserCancelMsg:
+		if m.inAskUser && m.ask.req != nil {
+			select {
+			case m.ask.req.ReplyCh <- "":
+			default:
+			}
+			m.inAskUser = false
+		}
 
 	case tea.MouseMsg:
 		if m.inDetail {

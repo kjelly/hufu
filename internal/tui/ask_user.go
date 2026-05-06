@@ -95,6 +95,9 @@ func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			st.req.ReplyCh <- marshalAskResp(nil, strings.TrimSpace(st.ti.Value()))
 			m.inAskUser = false
+			if m.finished && m.wrapUpRequested {
+				return m, tea.Quit
+			}
 			return m, nil
 		case "ctrl+c":
 			st.req.ReplyCh <- marshalAskResp(nil, "")
@@ -154,6 +157,9 @@ func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.inAskUser = false
+		if m.finished && m.wrapUpRequested {
+			return m, tea.Quit
+		}
 		return m, nil
 	}
 	return m, nil

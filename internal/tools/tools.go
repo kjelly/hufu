@@ -66,19 +66,19 @@ type AskUserTUIOption struct {
 	Value string
 }
 
-var onAskUserTUI func(question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool)
+var onAskUserTUI func(ctx context.Context, question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool)
 
-func SetOnAskUserTUI(fn func(question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool)) {
+func SetOnAskUserTUI(fn func(ctx context.Context, question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool)) {
 	onAskUserTUI = fn
 }
 
 // TryAskUserTUI attempts to handle ask_user via a TUI-native dialog.
-// Returns (jsonResp, true) if handled; ("", false) if TUI is not active.
-func TryAskUserTUI(question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool) {
+// Returns (jsonResp, true) if handled; ("", false) if TUI is not active or ctx is cancelled.
+func TryAskUserTUI(ctx context.Context, question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool) {
 	if onAskUserTUI == nil {
 		return "", false
 	}
-	return onAskUserTUI(question, qtype, opts, allowAny)
+	return onAskUserTUI(ctx, question, qtype, opts, allowAny)
 }
 
 type ToolOption func(*ToolConfig)

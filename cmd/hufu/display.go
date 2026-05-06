@@ -58,7 +58,7 @@ func setStatusFlusher(w *lineWriter, taskDisp *taskDisplay, skillDisp *skillDisp
 
 func init() {
 	// TUI mode: use a native in-TUI dialog for ask_user — no terminal release needed.
-	tools.SetOnAskUserTUI(func(question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (string, bool) {
+	tools.SetOnAskUserTUI(func(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (string, bool) {
 		p := activeTUIProgram.Load()
 		if p == nil {
 			return "", false
@@ -75,7 +75,13 @@ func init() {
 			AllowAny: allowAny,
 			ReplyCh:  replyCh,
 		})
-		return <-replyCh, true
+		select {
+		case resp := <-replyCh:
+			return resp, true
+		case <-ctx.Done():
+			p.Send(tuipkg.AskUserCancelMsg{})
+			return "", false
+		}
 	})
 
 	// path_consent still uses ReleaseTerminal/RestoreTerminal (no native TUI dialog).
