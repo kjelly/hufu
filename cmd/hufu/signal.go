@@ -161,7 +161,7 @@ func (p *promptInjector) promptAndEnqueue() {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Additional Prompt ───"))
+	stderrLog("\n%s\n", boldStyle.Render("─── Additional Prompt ───"))
 	line, err := p.promptReader.ReadLine(boldStyle.Render("> "))
 	if err != nil {
 		if err == ergoreadline.ErrInterrupt || err == io.EOF {
@@ -174,5 +174,5 @@ func (p *promptInjector) promptAndEnqueue() {
 		return
 	}
 	p.enqueue(prompt)
-	fmt.Fprintf(os.Stderr, "%s Prompt enqueued, will be processed after current task completes.\n", doneStyle.Render("✓"))
+	stderrLog("%s Prompt enqueued, will be processed after current task completes.\n", doneStyle.Render("✓"))
 }

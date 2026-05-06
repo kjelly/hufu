@@ -149,12 +149,17 @@ func (s *MemoryStore) Save(ctx context.Context, id, content string, metadata map
 	if metadata == nil {
 		metadata = make(map[string]string)
 	}
-	metadata["saved_at"] = time.Now().Format(time.RFC3339)
+
+	cloned := make(map[string]string, len(metadata)+1)
+	for k, v := range metadata {
+		cloned[k] = v
+	}
+	cloned["saved_at"] = time.Now().Format(time.RFC3339)
 
 	doc := chromem.Document{
 		ID:       id,
 		Content:  content,
-		Metadata: metadata,
+		Metadata: cloned,
 	}
 
 	s.mu.Lock()
@@ -198,6 +203,15 @@ func (s *MemoryStore) Delete(ctx context.Context, id string) error {
 }
 
 func (s *MemoryStore) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db != nil {
+		if err := s.db.Close(); err != nil {
+			return fmt.Errorf("failed to close memory db: %w", err)
+		}
+		s.db = nil
+		s.collection = nil
+	}
 	return nil
 }
 

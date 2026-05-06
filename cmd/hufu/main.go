@@ -105,6 +105,12 @@ type teamContext struct {
 }
 
 func runTeam(cmd *cobra.Command, args []string) error {
+	// Refuse --steps + --tui combination: step confirmation requires terminal
+	// access that conflicts with the Bubble Tea altscreen.
+	if stepsMode && tuiMode {
+		return fmt.Errorf("cannot use --steps (step confirmation) with --tui (TUI mode); remove one flag")
+	}
+
 	pr, err := readline.NewPromptReader(defaultHistoryPath())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s Readline initialization failed, falling back to basic input: %v\n", errStyle.Render("⚠"), err)
@@ -185,14 +191,17 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		for range sigIntCh {
 			if first {
 				if p := activeTUIProgram.Load(); p != nil {
+					// TUI path: send WrapUpMsg and let the TUI handle SetWrapUp/injectWrapUp
+					// to avoid double-calling (the TUI's wrapUpCh goroutine calls them).
 					p.Send(tuipkg.WrapUpMsg{})
 				} else {
+					// Non-TUI path: need to call SetWrapUp and injectWrapUp here.
 					fmt.Fprintf(os.Stderr, "\n%s Wrapping up... (press Ctrl+C again to force quit)\n", boldStyle.Render("⏹"))
+					if c := activeCoord.Get(); c != nil {
+						c.SetWrapUp()
+					}
+					injector.injectWrapUp()
 				}
-				if c := activeCoord.Get(); c != nil {
-					c.SetWrapUp()
-				}
-				injector.injectWrapUp()
 				first = false
 			} else {
 				if activeTUIProgram.Load() == nil {
