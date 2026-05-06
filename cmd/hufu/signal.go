@@ -143,6 +143,11 @@ func (p *promptInjector) IsWrapUpRequested() bool {
 	return p.wrapUpRequested.Load()
 }
 
+// isTUIActive checks if TUI mode is currently active.
+func (p *promptInjector) isTUIActive() bool {
+	return activeTUIProgram.Load() != nil
+}
+
 func (p *promptInjector) poll() (string, bool) {
 	select {
 	case prompt := <-p.ch:
