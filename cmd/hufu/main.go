@@ -184,14 +184,20 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		first := true
 		for range sigIntCh {
 			if first {
-				fmt.Fprintf(os.Stderr, "\n%s Wrapping up... (press Ctrl+C again to force quit)\n", boldStyle.Render("⏹"))
+				if p := activeTUIProgram.Load(); p != nil {
+					p.Send(tuipkg.WrapUpMsg{})
+				} else {
+					fmt.Fprintf(os.Stderr, "\n%s Wrapping up... (press Ctrl+C again to force quit)\n", boldStyle.Render("⏹"))
+				}
 				if c := activeCoord.Get(); c != nil {
 					c.SetWrapUp()
 				}
 				injector.injectWrapUp()
 				first = false
 			} else {
-				fmt.Fprintf(os.Stderr, "\n%s Force quit\n", errStyle.Render("✗"))
+				if activeTUIProgram.Load() == nil {
+					fmt.Fprintf(os.Stderr, "\n%s Force quit\n", errStyle.Render("✗"))
+				}
 				cancel()
 			}
 		}
@@ -464,10 +470,10 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	team.EnsureWorkspaceDirs(session.Workspace)
 
 	if err := team.InitLTM(session.Dir); err != nil {
-		fmt.Fprintf(os.Stderr, "%s Failed to init ltm.md: %v\n", errStyle.Render("⚠"), err)
+		stderrLog("%s Failed to init ltm.md: %v\n", errStyle.Render("⚠"), err)
 	}
 	if err := team.InitSTM(session.Workspace); err != nil {
-		fmt.Fprintf(os.Stderr, "%s Failed to init stm.md: %v\n", errStyle.Render("⚠"), err)
+		stderrLog("%s Failed to init stm.md: %v\n", errStyle.Render("⚠"), err)
 	}
 
 	var sessionData *team.SessionData
@@ -486,51 +492,51 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 
 		existingMD := team.LoadSessionMD(session.Workspace)
 		if existingMD != "" {
-			fmt.Fprintf(os.Stderr, "%s Archiving previous session...\n", stepStyle.Render("⟳"))
+			stderrLog("%s Archiving previous session...\n", stepStyle.Render("⟳"))
 			archivedPath, err := team.ArchiveSessionMD(session.Workspace)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "%s Failed to archive session: %v\n", errStyle.Render("⚠"), err)
+				stderrLog("%s Failed to archive session: %v\n", errStyle.Render("⚠"), err)
 			} else {
-				fmt.Fprintf(os.Stderr, "%s Previous session archived to %s\n", doneStyle.Render("✓"), filepath.Base(archivedPath))
+				stderrLog("%s Previous session archived to %s\n", doneStyle.Render("✓"), filepath.Base(archivedPath))
 			}
 		} else if team.HasSession(session.Workspace) {
 			oldSession := team.LoadSession(session.Workspace)
 			if oldSession != nil && len(oldSession.Entries) > 0 {
-				fmt.Fprintf(os.Stderr, "%s Archiving previous session...\n", stepStyle.Render("⟳"))
+				stderrLog("%s Archiving previous session...\n", stepStyle.Render("⟳"))
 				md := team.GenerateSessionMD(oldSession, session.Config.Name)
 				team.SaveSessionMD(session.Workspace, md)
 				archivedPath, err := team.ArchiveSessionMD(session.Workspace)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "%s Failed to archive session: %v\n", errStyle.Render("⚠"), err)
+					stderrLog("%s Failed to archive session: %v\n", errStyle.Render("⚠"), err)
 				} else {
-					fmt.Fprintf(os.Stderr, "%s Previous session archived to %s\n", doneStyle.Render("✓"), filepath.Base(archivedPath))
+					stderrLog("%s Previous session archived to %s\n", doneStyle.Render("✓"), filepath.Base(archivedPath))
 				}
 				// ArchiveSessionMD already removed session.json; no further cleanup needed.
 			} else {
 				if err := os.Remove(filepath.Join(session.Workspace, "session.json")); err != nil && !os.IsNotExist(err) {
-					fmt.Fprintf(os.Stderr, "%s Failed to remove session file: %v\n", errStyle.Render("⚠"), err)
+					stderrLog("%s Failed to remove session file: %v\n", errStyle.Render("⚠"), err)
 				}
 			}
 			team.DeleteConversationHistory(session.Workspace)
 		}
 		if err := team.CleanRunDirs(session.Workspace); err != nil {
-			fmt.Fprintf(os.Stderr, "%s Failed to clean workspace: %v\n", errStyle.Render("⚠"), err)
+			stderrLog("%s Failed to clean workspace: %v\n", errStyle.Render("⚠"), err)
 		}
 		team.EnsureWorkspaceDirs(session.Workspace)
 		sessionData = team.NewSession()
 		team.SaveSession(session.Workspace, sessionData)
 		team.SaveSessionMD(session.Workspace, team.GenerateSessionMD(sessionData, session.Config.Name))
-		fmt.Fprintf(os.Stderr, "%s Started new session\n", boldStyle.Render("→"))
+		stderrLog("%s Started new session\n", boldStyle.Render("→"))
 	} else {
 		sessionData = team.LoadSession(session.Workspace)
 		existingMD := team.LoadSessionMD(session.Workspace)
 		if existingMD != "" {
-			fmt.Fprintf(os.Stderr, "%s Resuming session\n", boldStyle.Render("→"))
+			stderrLog("%s Resuming session\n", boldStyle.Render("→"))
 		} else if sessionData != nil && len(sessionData.Entries) > 0 {
 			md := team.GenerateSessionMD(sessionData, session.Config.Name)
 			team.SaveSessionMD(session.Workspace, md)
 			existingMD = md
-			fmt.Fprintf(os.Stderr, "%s Resuming session (%d exchanges, since %s)\n",
+			stderrLog("%s Resuming session (%d exchanges, since %s)\n",
 				boldStyle.Render("→"),
 				len(sessionData.Entries),
 				sessionData.CreatedAt,
@@ -541,36 +547,36 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 			}
 			team.SaveSession(session.Workspace, sessionData)
 			team.SaveSessionMD(session.Workspace, team.GenerateSessionMD(sessionData, session.Config.Name))
-			fmt.Fprintf(os.Stderr, "%s Starting new session\n", boldStyle.Render("→"))
+			stderrLog("%s Starting new session\n", boldStyle.Render("→"))
 		}
 
 		if showHistory && existingMD != "" {
 			lines := strings.SplitN(existingMD, "\n", 30)
 			preview := strings.Join(lines, "\n")
-			fmt.Fprintf(os.Stderr, "\n%s\n%s\n\n",
+			stderrLog("\n%s\n%s\n\n",
 				boldStyle.Render("─── Previous Session ───"),
 				dimStyle.Render(preview),
 			)
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Team:"), session.Config.Name)
-	fmt.Fprintf(os.Stderr, "%s ", boldStyle.Render("Agents:"))
+	stderrLog("%s %s\n", boldStyle.Render("Team:"), session.Config.Name)
+	stderrLog("%s ", boldStyle.Render("Agents:"))
 	var agentDisplayNames []string
 	for _, def := range sortedAgents(session.Agents) {
 		roleLabel := def.Role
 		agentDisplayNames = append(agentDisplayNames, fmt.Sprintf("%s (%s)", agentStyle.Render(def.Name), dimStyle.Render(roleLabel)))
 	}
-	fmt.Fprintf(os.Stderr, "%s\n", strings.Join(agentDisplayNames, ", "))
+	stderrLog("%s\n", strings.Join(agentDisplayNames, ", "))
 
 	var mcpManager *mcp.MCPToolManager
 	if len(session.MCPServers) > 0 {
 		mcpManager = mcp.NewMCPToolManager()
-		fmt.Fprintf(os.Stderr, "%s Loading MCP servers...\n", stepStyle.Render("⟳"))
+		stderrLog("%s Loading MCP servers...\n", stepStyle.Render("⟳"))
 		if err := mcpManager.LoadTools(ctx, session.MCPServers); err != nil {
-			fmt.Fprintf(os.Stderr, "%s MCP loading failed: %v\n", errStyle.Render("⚠"), err)
+			stderrLog("%s MCP loading failed: %v\n", errStyle.Render("⚠"), err)
 		} else {
-			fmt.Fprintf(os.Stderr, "%s MCP tools: %d loaded\n", doneStyle.Render("✓"), len(mcpManager.GetTools()))
+			stderrLog("%s MCP tools: %d loaded\n", doneStyle.Render("✓"), len(mcpManager.GetTools()))
 		}
 	}
 
@@ -582,11 +588,11 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		var err error
 		memStore, err = memory.NewMemoryStore(projectDir, ollamaAPIURL, embedModel)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s Memory store directory creation failed: %v\n", errStyle.Render("⚠"), err)
+			stderrLog("%s Memory store directory creation failed: %v\n", errStyle.Render("⚠"), err)
 		}
-		fmt.Fprintf(os.Stderr, "%s Memory: enabled (model: %s)\n", doneStyle.Render("✓"), embedModel)
+		stderrLog("%s Memory: enabled (model: %s)\n", doneStyle.Render("✓"), embedModel)
 	} else if !memoryEnabled {
-		fmt.Fprintf(os.Stderr, "%s Memory: disabled\n", dimStyle.Render("○"))
+		stderrLog("%s Memory: disabled\n", dimStyle.Render("○"))
 	}
 
 	cfg := config.LoadConfig()
@@ -604,10 +610,10 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	hookRegistry := hooks.NewHookRegistry()
 	if configHooks := cfg.GetHooks(); len(configHooks) > 0 {
 		if err := hooks.RegisterShellHooks(hookRegistry, configHooks); err != nil {
-			fmt.Fprintf(os.Stderr, "%s Invalid hooks config: %v\n", errStyle.Render("⚠"), err)
+			stderrLog("%s Invalid hooks config: %v\n", errStyle.Render("⚠"), err)
 		} else {
 			for k := range configHooks {
-				fmt.Fprintf(os.Stderr, "%s Hook: %s\n", dimStyle.Render("◆"), k)
+				stderrLog("%s Hook: %s\n", dimStyle.Render("◆"), k)
 			}
 		}
 	}
@@ -624,7 +630,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 			summarizeFn = s.Summarize
 		}
 		if err := memory.ArchiveSessionSummary(ctx, memStore, oldSessionEntries, session.Config.Name, summarizeFn); err != nil {
-			fmt.Fprintf(os.Stderr, "%s Failed to archive session to memory: %v\n", errStyle.Render("⚠"), err)
+			stderrLog("%s Failed to archive session to memory: %v\n", errStyle.Render("⚠"), err)
 		}
 	}
 
@@ -633,7 +639,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		for _, s := range session.Skills {
 			skillNames = append(skillNames, s.Name)
 		}
-		fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Skills:"), strings.Join(skillNames, ", "))
+		stderrLog("%s %s\n", boldStyle.Render("Skills:"), strings.Join(skillNames, ", "))
 	}
 
 	if len(resolvedModelList) > 0 {
@@ -641,17 +647,17 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		for _, m := range resolvedModelList {
 			modelIDs = append(modelIDs, m.ID)
 		}
-		fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Models:"), strings.Join(modelIDs, ", "))
+		stderrLog("%s %s\n", boldStyle.Render("Models:"), strings.Join(modelIDs, ", "))
 	}
 
 	if resolvedSidecarModel != "" {
-		fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Sidecar:"), resolvedSidecarModel)
+		stderrLog("%s %s\n", boldStyle.Render("Sidecar:"), resolvedSidecarModel)
 	}
 	if resolvedGuardModel != "" {
-		fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Guard:"), resolvedGuardModel)
+		stderrLog("%s %s\n", boldStyle.Render("Guard:"), resolvedGuardModel)
 	}
 	if resolvedMaxConcurrent != 8 {
-		fmt.Fprintf(os.Stderr, "%s %d\n", boldStyle.Render("Max concurrent:"), resolvedMaxConcurrent)
+		stderrLog("%s %d\n", boldStyle.Render("Max concurrent:"), resolvedMaxConcurrent)
 	}
 
 	resolvedNotify := cfg.ResolveNotify(session.Config.Notify)
@@ -659,10 +665,10 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	if resolvedNotify.Enabled() {
 		notifierInst = notify.NewNotifier(resolvedNotify, os.Stderr)
 		if resolvedNotify.OSC {
-			fmt.Fprintf(os.Stderr, "%s %s\n", dimStyle.Render("◆"), "Notify: OSC enabled")
+			stderrLog("%s %s\n", dimStyle.Render("◆"), "Notify: OSC enabled")
 		}
 		if resolvedNotify.Command != "" {
-			fmt.Fprintf(os.Stderr, "%s %s %s\n", dimStyle.Render("◆"), "Notify:", resolvedNotify.Command)
+			stderrLog("%s %s %s\n", dimStyle.Render("◆"), "Notify:", resolvedNotify.Command)
 		}
 	}
 
@@ -790,7 +796,7 @@ func runWithInjection(ctx context.Context, tc *teamContext, initialResult string
 	for {
 		select {
 		case <-injector.wrapUpCh:
-			fmt.Fprintf(os.Stderr, "\n%s Wrapping up — coordinator will summarize and finish.\n\n", boldStyle.Render("⏹"))
+			stderrLog("\n%s Wrapping up — coordinator will summarize and finish.\n\n", boldStyle.Render("⏹"))
 			contResult, err := tc.coordinator.ContinueWithPrompt(ctx, "")
 			if err != nil {
 				if ctx.Err() == context.Canceled {
@@ -804,7 +810,7 @@ func runWithInjection(ctx context.Context, tc *teamContext, initialResult string
 			if !ok {
 				return result, nil
 			}
-			fmt.Fprintf(os.Stderr, "\n%s Injecting additional prompt...\n\n", boldStyle.Render("↩"))
+			stderrLog("\n%s Injecting additional prompt...\n\n", boldStyle.Render("↩"))
 
 			contResult, err := tc.coordinator.ContinueWithPrompt(ctx, prompt)
 			if err != nil {

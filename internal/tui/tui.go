@@ -53,6 +53,8 @@ type TeamInfo struct {
 
 type TeamInfoMsg struct{ Info TeamInfo }
 
+type WrapUpMsg struct{}
+
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 var (
@@ -151,7 +153,7 @@ type Model struct {
 }
 
 // New creates a fresh model with the user's original prompt shown at the top.
-func New(prompt string) Model {
+func New(prompt string, teamInfo TeamInfo) Model {
 	ti := textinput.New()
 	ti.Prompt = "> "
 	ti.Placeholder = "Type additional prompt..."
@@ -169,6 +171,7 @@ func New(prompt string) Model {
 		searchInput:    si,
 		PromptInjectCh: make(chan string, 16),
 		WrapUpCh:       make(chan struct{}, 2),
+		teamInfo:       teamInfo,
 	}
 }
 
@@ -278,6 +281,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.wrapUpRequested {
 			return m, tea.Quit
 		}
+
+	case WrapUpMsg:
+		return m.handleCtrlC()
 
 	case tea.MouseMsg:
 		if m.inDetail {

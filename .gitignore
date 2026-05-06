@@ -7,3 +7,5 @@ reports
 ignores/
 dist/
 coverage.out
+ltm.md
+stm.md

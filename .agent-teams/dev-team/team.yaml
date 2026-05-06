@@ -4,7 +4,7 @@ max-rounds: 10
 timeout: 3300
 model: ollama/glm-5.1:cloud
 model-list:
-- id: ollama/deepseek-v4:flash
+- id: ollama/deepseek-v4-flash:cloud
   details: |-
     極低延遲與高頻工具調用 (MCP)
     第一線執行者 / 終端機助理
