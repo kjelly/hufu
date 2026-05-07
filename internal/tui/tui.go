@@ -231,6 +231,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vp.SetContent(m.buildDetailContent())
 		}
 		m.clampScroll()
+		m.scrollCursorIntoView()
 
 	case TaskLogMsg:
 		m.logs[msg.TodoID] = append(m.logs[msg.TodoID], msg.Line)
@@ -1092,29 +1093,76 @@ func sourceTag(source string) string {
 
 func (m *Model) scrollCursorIntoView() {
 	off := &m.scrollOff[m.col]
-	if m.row < *off {
+	items := m.colItems(m.col)
+	if len(items) == 0 {
+		*off = 0
+		return
+	}
+	if m.row >= len(items) {
+		m.row = len(items) - 1
+	}
+	if m.row < 0 {
+		m.row = 0
+	}
+
+	height := m.colBodyHeight()
+	if height <= 2 {
 		*off = m.row
 		return
 	}
-	items := m.colItems(m.col)
-	height := m.colBodyHeight()
-	lineCount := 2
-	for i := *off; i < len(items); i++ {
-		itemLines := len(m.itemLines(items[i], false, false, 0))
-		if itemLines == 0 {
-			itemLines = 2
+	availableLines := height - 2
+	if availableLines <= 0 {
+		availableLines = 1
+	}
+
+	itemHeights := make([]int, len(items))
+	for i, item := range items {
+		h := len(m.itemLines(item, false, false, 0))
+		if h == 0 {
+			h = 2
 		}
-		prevLineCount := lineCount
-		lineCount += itemLines
+		itemHeights[i] = h
+	}
+
+	itemStartLine := make([]int, len(items))
+	line := 0
+	for i := 0; i < len(items); i++ {
+		itemStartLine[i] = line
+		line += itemHeights[i]
 		if i < len(items)-1 {
-			lineCount++
+			line++
 		}
-		if i == m.row && prevLineCount >= height {
-			*off++
+	}
+
+	selectedStart := itemStartLine[m.row]
+	selectedEnd := selectedStart + itemHeights[m.row]
+
+	visibleStart := itemStartLine[*off]
+	visibleEnd := visibleStart + availableLines
+
+	if selectedStart < visibleStart {
+		targetOff := m.row
+		linesAbove := availableLines / 3
+		cumLines := 0
+		for targetOff > 0 && cumLines < linesAbove {
+			targetOff--
+			cumLines += itemHeights[targetOff]
+			cumLines++
 		}
-		if i >= m.row {
-			break
+		*off = targetOff
+		return
+	}
+
+	if selectedEnd > visibleEnd || selectedStart >= visibleEnd {
+		targetOff := m.row
+		linesAbove := availableLines / 3
+		cumLines := 0
+		for targetOff > 0 && cumLines < linesAbove {
+			targetOff--
+			cumLines += itemHeights[targetOff]
+			cumLines++
 		}
+		*off = targetOff
 	}
 }
 
