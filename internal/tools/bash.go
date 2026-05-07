@@ -181,7 +181,7 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		return fantasy.NewTextErrorResponse("sudo and ssh are not available in the bash tool — use the sudo or ssh tool instead"), nil
 	}
 
-	if err := checkBashPathConsent(args.Command, cfg); err != nil {
+	if err := checkBashPathConsent(args.Command, cfgWithMergedPaths(cfg, ctx)); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 

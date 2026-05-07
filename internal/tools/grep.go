@@ -91,7 +91,7 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 
 	searchPath := "."
 	if args.Path != "" {
-		resolved, err := checkPathOrConsent(args.Path, workDir, "search", cfg)
+		resolved, err := checkPathOrConsent(args.Path, workDir, "search", cfgWithMergedPaths(cfg, ctx))
 		if err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 		}

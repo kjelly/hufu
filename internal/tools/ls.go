@@ -64,7 +64,7 @@ func executeLs(ctx context.Context, call fantasy.ToolCall, workDir string, cfg T
 
 	dirPath := "."
 	if args.Path != "" {
-		resolved, err := checkPathOrConsent(args.Path, workDir, "list", cfg)
+		resolved, err := checkPathOrConsent(args.Path, workDir, "list", cfgWithMergedPaths(cfg, ctx))
 		if err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 		}

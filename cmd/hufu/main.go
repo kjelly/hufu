@@ -749,6 +749,13 @@ func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, c
 		}
 	}
 
+	for _, p := range session.Config.AllowedPaths {
+		if !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	}
+
 	return paths
 }
 

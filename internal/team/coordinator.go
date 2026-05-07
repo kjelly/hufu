@@ -1784,6 +1784,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			if len(agentDef.Guard) > 0 {
 				taskCtx = context.WithValue(taskCtx, tools.GuardRulesKey, agentDef.Guard)
 			}
+			if len(agentDef.AllowedPaths) > 0 {
+				taskCtx = context.WithValue(taskCtx, tools.AgentAllowedPathsKey, agentDef.AllowedPaths)
+			}
 			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, prompt, conversationHistory, timing)
 		}()
 
@@ -2616,6 +2619,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	taskCtx = context.WithValue(taskCtx, hooks.TaskDescKey, task)
 	if len(agentDef.Guard) > 0 {
 		taskCtx = context.WithValue(taskCtx, tools.GuardRulesKey, agentDef.Guard)
+	}
+	if len(agentDef.AllowedPaths) > 0 {
+		taskCtx = context.WithValue(taskCtx, tools.AgentAllowedPathsKey, agentDef.AllowedPaths)
 	}
 
 	timing := &taskTiming{}

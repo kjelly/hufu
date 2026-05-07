@@ -26,19 +26,20 @@ type GenerationParams struct {
 }
 
 type AgentDef struct {
-	Name        string
-	FileAlias   string
-	Description string
-	Tools       string
-	Role        string
-	System      string
-	Skills      string
-	Guard       []string
-	Timeout     int64
-	MaxRetries  int
-	MaxSteps    int
-	Generation  GenerationParams
-	ProviderURL string
+	Name         string
+	FileAlias    string
+	Description  string
+	Tools        string
+	Role         string
+	System       string
+	Skills       string
+	Guard        []string
+	Timeout      int64
+	MaxRetries   int
+	MaxSteps     int
+	AllowedPaths []string
+	Generation   GenerationParams
+	ProviderURL  string
 }
 
 type TeamConfig struct {
@@ -58,6 +59,7 @@ type TeamConfig struct {
 	GuardModel    string
 	MaxConcurrent int
 	Notify        notify.NotifyConfig
+	AllowedPaths  []string
 }
 
 type OllamaProvider struct {

@@ -86,7 +86,7 @@ func executeMultiEdit(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
 	}
 
-	absPath, err := resolveAndValidatePathWithConsent(args.FilePath, cfg)
+	absPath, err := resolveAndValidatePathWithConsent(args.FilePath, cfgWithMergedPaths(cfg, ctx))
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 	}

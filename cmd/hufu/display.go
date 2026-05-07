@@ -319,7 +319,13 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				toolStyle.Render(event.ToolName),
 			))
 			if argsPreview != "" {
-				w.write(fmt.Sprintf("    %s\n", dimStyle.Render(argsPreview)))
+				if strings.Contains(argsPreview, "\n") {
+					for _, line := range strings.Split(argsPreview, "\n") {
+						w.write(fmt.Sprintf("    %s\n", dimStyle.Render(line)))
+					}
+				} else {
+					w.write(fmt.Sprintf("    %s\n", dimStyle.Render(argsPreview)))
+				}
 			}
 
 		case "tool_result":
@@ -529,11 +535,11 @@ func formatToolArgs(toolName, args string) string {
 	if args == "" || args == "{}" {
 		return ""
 	}
-	args = strings.ReplaceAll(args, "\n", " ")
 	args = strings.TrimSpace(args)
 	if toolName == "bash" {
 		return args
 	}
+	args = strings.ReplaceAll(args, "\n", " ")
 	maxLen := 80
 	if toolName == "agent" {
 		maxLen = 200
@@ -981,7 +987,7 @@ func stderrLog(format string, args ...any) {
 // program in the main goroutine. Returns when the user quits or the work is done.
 func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string, teamInfo tuipkg.TeamInfo) (string, error) {
 	model := tuipkg.New(prompt, teamInfo)
-	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithoutSignalHandler())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithoutSignalHandler())
 
 	activeTUIProgram.Store(p)
 	defer activeTUIProgram.Store(nil)

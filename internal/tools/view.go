@@ -65,7 +65,7 @@ func executeView(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
 	}
 
-	absPath, err := checkPathOrConsent(args.FilePath, workDir, "read", cfg)
+	absPath, err := checkPathOrConsent(args.FilePath, workDir, "read", cfgWithMergedPaths(cfg, ctx))
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 	}

@@ -81,7 +81,7 @@ func executeLua(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fan
 
 	ch := make(chan luaResult, 1)
 
-	luaAllowedPaths := cfg.AllowedPaths
+	luaAllowedPaths := mergedAllowedPaths(cfg, ctx)
 	luaPathConsent := cfg.PathConsent
 
 	go func() {

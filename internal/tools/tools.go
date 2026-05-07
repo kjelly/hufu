@@ -160,6 +160,42 @@ type agentNameKeyType struct{}
 
 var AgentNameKey = agentNameKeyType{}
 
+type agentAllowedPathsKeyType struct{}
+
+var AgentAllowedPathsKey = agentAllowedPathsKeyType{}
+
+func mergedAllowedPaths(cfg ToolConfig, ctx context.Context) []string {
+	paths := cfg.AllowedPaths
+	if extra, _ := ctx.Value(AgentAllowedPathsKey).([]string); len(extra) > 0 {
+		seen := make(map[string]bool, len(paths))
+		for _, p := range paths {
+			seen[p] = true
+		}
+		for _, p := range extra {
+			if !seen[p] {
+				paths = append(paths, p)
+				seen[p] = true
+			}
+		}
+	}
+	return paths
+}
+
+func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
+	if _, ok := ctx.Value(AgentAllowedPathsKey).([]string); !ok {
+		return cfg
+	}
+	merged := ToolConfig{
+		WorkDir:       cfg.WorkDir,
+		AllowedPaths:  mergedAllowedPaths(cfg, ctx),
+		PathConsent:   cfg.PathConsent,
+		ToolName:      cfg.ToolName,
+		WorkspaceName: cfg.WorkspaceName,
+		Hooks:         cfg.Hooks,
+	}
+	return merged
+}
+
 type coreTool struct {
 	info          fantasy.ToolInfo
 	handler       func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error)

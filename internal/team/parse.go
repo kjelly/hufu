@@ -25,21 +25,22 @@ type TeamSession struct {
 }
 
 type agentFrontmatter struct {
-	Name        string   `yaml:"name"`
-	Description string   `yaml:"description"`
-	Role        string   `yaml:"role"`
-	Tools       string   `yaml:"tools"`
-	Skills      string   `yaml:"skills"`
-	Guard       []string `yaml:"guard"`
-	Model       string   `yaml:"model"`
-	Temperature string   `yaml:"temperature"`
-	MaxTokens   string   `yaml:"max-tokens"`
-	TopP        string   `yaml:"top-p"`
-	TopK        string   `yaml:"top-k"`
-	Timeout     int64    `yaml:"timeout"`
-	MaxRetries  int      `yaml:"max-retries"`
-	MaxSteps    int      `yaml:"max-steps"`
-	ProviderURL string   `yaml:"provider-url"`
+	Name         string   `yaml:"name"`
+	Description  string   `yaml:"description"`
+	Role         string   `yaml:"role"`
+	Tools        string   `yaml:"tools"`
+	Skills       string   `yaml:"skills"`
+	Guard        []string `yaml:"guard"`
+	Model        string   `yaml:"model"`
+	Temperature  string   `yaml:"temperature"`
+	MaxTokens    string   `yaml:"max-tokens"`
+	TopP         string   `yaml:"top-p"`
+	TopK         string   `yaml:"top-k"`
+	Timeout      int64    `yaml:"timeout"`
+	MaxRetries   int      `yaml:"max-retries"`
+	MaxSteps     int      `yaml:"max-steps"`
+	ProviderURL  string   `yaml:"provider-url"`
+	AllowedPaths string   `yaml:"allowed-paths"`
 }
 
 type teamConfigYAML struct {
@@ -63,6 +64,58 @@ type teamConfigYAML struct {
 	GuardModel    string              `yaml:"guard-model"`
 	MaxConcurrent int                 `yaml:"max-concurrent"`
 	Notify        notify.NotifyConfig `yaml:"notify"`
+	AllowedPaths  interface{}         `yaml:"allowed-paths"`
+}
+
+func parseAllowedPaths(raw interface{}) []string {
+	if raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case string:
+		return parseCommaList(v)
+	case []interface{}:
+		var result []string
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				result = append(result, s)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func parseCommaList(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var result []string
+	for _, item := range strings.Split(s, ",") {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func expandAllowedPaths(paths []string) []string {
+	var result []string
+	for _, p := range paths {
+		expanded := os.ExpandEnv(p)
+		if strings.HasPrefix(expanded, "~") {
+			if home, err := os.UserHomeDir(); err == nil {
+				expanded = filepath.Join(home, expanded[1:])
+			}
+		}
+		abs, err := filepath.Abs(expanded)
+		if err == nil {
+			result = append(result, abs)
+		}
+	}
+	return result
 }
 
 func parseSimpleYAML(data string) map[string]string {
@@ -101,6 +154,7 @@ func agentFrontmatterFromSimple(m map[string]string) agentFrontmatter {
 	fm.TopP = m["top-p"]
 	fm.TopK = m["top-k"]
 	fm.ProviderURL = m["provider-url"]
+	fm.AllowedPaths = m["allowed-paths"]
 	if v := m["timeout"]; v != "" {
 		var n int64
 		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n > 0 {
@@ -163,15 +217,16 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 	}
 
 	def := &agent.AgentDef{
-		Name:        fm.Name,
-		Description: fm.Description,
-		Tools:       fm.Tools,
-		Role:        role,
-		System:      body,
-		Skills:      fm.Skills,
-		Guard:       fm.Guard,
-		MaxRetries:  -1,
-		MaxSteps:    fm.MaxSteps,
+		Name:         fm.Name,
+		Description:  fm.Description,
+		Tools:        fm.Tools,
+		Role:         role,
+		System:       body,
+		Skills:       fm.Skills,
+		Guard:        fm.Guard,
+		MaxRetries:   -1,
+		MaxSteps:     fm.MaxSteps,
+		AllowedPaths: expandAllowedPaths(parseCommaList(fm.AllowedPaths)),
 		Generation: agent.GenerationParams{
 			Model:       fm.Model,
 			Temperature: fm.Temperature,
@@ -277,6 +332,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.Notify.Enabled() {
 		cfg.Notify = yc.Notify
+	}
+	if paths := parseAllowedPaths(yc.AllowedPaths); len(paths) > 0 {
+		cfg.AllowedPaths = expandAllowedPaths(paths)
 	}
 
 	return cfg, nil

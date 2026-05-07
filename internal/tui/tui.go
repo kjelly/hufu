@@ -152,6 +152,17 @@ type Model struct {
 
 	wrapUpRequested bool
 	WrapUpCh        chan struct{}
+
+	mouseEnabled         bool // mouse tracking is currently on
+	mouseManuallyEnabled bool // user explicitly toggled mouse on with 'm'
+}
+
+func enableMouseCmd() tea.Cmd {
+	return func() tea.Msg { return tea.EnableMouseCellMotion() }
+}
+
+func disableMouseCmd() tea.Cmd {
+	return func() tea.Msg { return tea.DisableMouse() }
 }
 
 // New creates a fresh model with the user's original prompt shown at the top.
@@ -305,13 +316,82 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vp, cmd = m.vp.Update(msg)
 			return m, cmd
 		}
-		switch msg.Type {
-		case tea.MouseWheelUp:
+		if !m.mouseEnabled {
+			return m, nil
+		}
+		// Click on a task to select it or enter detail view
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			statusH := m.statusAreaHeight()
+			promptH := m.promptWidgetHeight()
+			bodyH := m.height - promptH - 1 - statusH - 1 - 1 - 1
+			if bodyH < 2 {
+				bodyH = 2
+			}
+			colW := (m.width - 4) / 5
+
+			// Header takes 2 lines (title + blank)
+			clickY := msg.Y - promptH - 1 - statusH - 1  // subtract widget + blank + status + blank
+			clickX := msg.X
+			if clickY < 2 || clickY >= bodyH+2 {
+				return m, nil
+			}
+			clickY -= 2 // skip header
+
+			// Determine which column was clicked
+			clickedCol := -1
+			xOffset := 0
+			for c := 0; c < 5; c++ {
+				colEnd := xOffset + colW
+				if c == 4 {
+					colEnd = m.width // last column takes remaining width
+				}
+				if clickX >= xOffset && clickX < colEnd {
+					clickedCol = c
+					break
+				}
+				xOffset = colEnd + 1 // +1 for divider
+			}
+			if clickedCol < 0 || clickedCol != m.col {
+				return m, nil
+			}
+
+			// Determine which item was clicked
+			items := m.colItems(clickedCol)
+			start := m.scrollOff[clickedCol]
+			lineCount := 2
+			for i := start; i < len(items); i++ {
+				itemLines := len(m.itemLines(items[i], false, false, colW))
+				if itemLines == 0 {
+					itemLines = 2
+				}
+				if clickY >= lineCount && clickY < lineCount+itemLines+1 {
+					// Clicked on item i — enter detail view
+					m.detailID = items[i].ID
+					m.inDetail = true
+					if m.vpReady {
+						m.vp.SetContent(m.buildDetailContent())
+						m.vp.GotoTop()
+					}
+					if !m.mouseEnabled {
+						m.mouseEnabled = true
+						return m, enableMouseCmd()
+					}
+					return m, nil
+				}
+				lineCount += itemLines
+				if i < len(items)-1 {
+					lineCount++ // blank line between items
+				}
+			}
+			return m, nil
+		}
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
 			if m.row > 0 {
 				m.row--
 				m.scrollCursorIntoView()
 			}
-		case tea.MouseWheelDown:
+		case tea.MouseButtonWheelDown:
 			col := m.colItems(m.col)
 			if m.row < len(col)-1 {
 				m.row++
@@ -370,6 +450,10 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "backspace":
 		m.inDetail = false
+		if !m.mouseManuallyEnabled {
+			m.mouseEnabled = false
+			return m, disableMouseCmd()
+		}
 		return m, nil
 	case "ctrl+c":
 		return m.handleCtrlC()
@@ -404,6 +488,13 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.inDetail = false
 		}
 		return m, nil
+	case "m":
+		m.mouseManuallyEnabled = !m.mouseManuallyEnabled
+		m.mouseEnabled = m.mouseManuallyEnabled
+		if m.mouseEnabled {
+			return m, enableMouseCmd()
+		}
+		return m, disableMouseCmd()
 	}
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)
@@ -516,7 +607,18 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.vp.SetContent(m.buildDetailContent())
 				m.vp.GotoBottom()
 			}
+			if !m.mouseEnabled {
+				m.mouseEnabled = true
+				return m, enableMouseCmd()
+			}
 		}
+	case "m":
+		m.mouseManuallyEnabled = !m.mouseManuallyEnabled
+		m.mouseEnabled = m.mouseManuallyEnabled
+		if m.mouseEnabled {
+			return m, enableMouseCmd()
+		}
+		return m, disableMouseCmd()
 	}
 	return m, nil
 }
@@ -1047,19 +1149,26 @@ func taskIconStyle(s team.TaskStatus) (string, lipgloss.Style) {
 }
 
 func (m Model) footer() string {
+	mouseLabel := "m:mouse"
+	if m.mouseEnabled {
+		mouseLabel = "m:mouse✓"
+	}
+	if m.inDetail {
+		return footerStyle.Render(fmt.Sprintf("esc back · ↑↓/j/k scroll · / search · %s · q quit", mouseLabel))
+	}
 	if m.inInfo {
-		return footerStyle.Render("i/esc close · ↑↓ scroll")
+		return footerStyle.Render("i/esc close · ↑↓ scroll · " + mouseLabel)
 	}
 	if m.inSearch {
 		return footerStyle.Render("enter search · esc cancel")
 	}
 	if len(m.searchResults) > 0 {
-		return footerStyle.Render(fmt.Sprintf("n/N next/prev match (%d/%d) · / search · i info · esc clear · g/G top/bot · ctrl+d/u half-page · ↑↓ j/k · ←→ h/l · enter detail · q quit", m.searchIdx+1, len(m.searchResults)))
+		return footerStyle.Render(fmt.Sprintf("n/N next/prev match (%d/%d) · / search · i info · esc clear · g/G top/bot · ctrl+d/u half-page · ↑↓ j/k · ←→ h/l · enter detail · %s · q quit", m.searchIdx+1, len(m.searchResults), mouseLabel))
 	}
 	if m.finished {
-		return footerStyle.Render("g/G top/bot · ctrl+d/u half-page · / search · i info · ↑↓ j/k · ←→ h/l · enter detail · q quit")
+		return footerStyle.Render(fmt.Sprintf("g/G top/bot · ctrl+d/u half-page · / search · i info · ↑↓ j/k · ←→ h/l · enter detail · %s · q quit", mouseLabel))
 	}
-	return footerStyle.Render("g/G top/bot · ctrl+d/u half-page · / search · i info · c prompt · ↑↓ j/k · ←→ h/l · enter detail · esc quit")
+	return footerStyle.Render(fmt.Sprintf("g/G top/bot · ctrl+d/u half-page · / search · i info · c prompt · ↑↓ j/k · ←→ h/l · enter detail · %s · esc quit", mouseLabel))
 }
 
 func (m Model) confirmView() string {
@@ -1312,6 +1421,15 @@ func RenderStep(stepNumber int) string {
 
 // RenderToolCall returns a formatted tool-call log line.
 func RenderToolCall(toolName, args string) string {
+	if toolName == "bash" {
+		args = strings.TrimSpace(args)
+		lines := strings.Split(args, "\n")
+		indented := make([]string, len(lines))
+		for i, l := range lines {
+			indented[i] = dimStyle.Render("  " + l)
+		}
+		return toolCallStyle.Render("⟹ "+toolName) + "\n" + strings.Join(indented, "\n")
+	}
 	if len(args) > 300 {
 		args = args[:300] + "…"
 	}
