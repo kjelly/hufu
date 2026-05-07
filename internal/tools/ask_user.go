@@ -105,6 +105,11 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRes
 		return fantasy.NewTextResponse(jsonResp), nil
 	}
 
+	// TUI mode returned false — check if context was cancelled.
+	if err := ctx.Err(); err != nil {
+		return fantasy.NewTextErrorResponse("ask_user cancelled: " + err.Error()), nil
+	}
+
 	// CLI mode: read from stdin.
 	StdinMu.Lock()
 	defer StdinMu.Unlock()

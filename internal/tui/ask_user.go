@@ -85,6 +85,15 @@ func askTIWidth(screenW int) int {
 	return dialogW - 8 // innerW(dialogW-6) minus "> "(2)
 }
 
+// maybeQuitAfterAsk checks if we should quit after dismissing an ask_user dialog.
+// This handles the case where wrap-up was requested while the dialog was active.
+func (m Model) maybeQuitAfterAsk() (tea.Model, tea.Cmd) {
+	if m.finished && m.wrapUpRequested {
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
 // ── Update ────────────────────────────────────────────────────────────────────
 
 func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -95,10 +104,7 @@ func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			st.req.ReplyCh <- marshalAskResp(nil, strings.TrimSpace(st.ti.Value()))
 			m.inAskUser = false
-			if m.finished && m.wrapUpRequested {
-				return m, tea.Quit
-			}
-			return m, nil
+			return m.maybeQuitAfterAsk()
 		case "ctrl+c":
 			st.req.ReplyCh <- marshalAskResp(nil, "")
 			m.inAskUser = false
@@ -157,10 +163,7 @@ func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.inAskUser = false
-		if m.finished && m.wrapUpRequested {
-			return m, tea.Quit
-		}
-		return m, nil
+		return m.maybeQuitAfterAsk()
 	}
 	return m, nil
 }

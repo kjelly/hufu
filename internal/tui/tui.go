@@ -290,10 +290,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case AskUserCancelMsg:
 		if m.inAskUser && m.ask.req != nil {
 			select {
-			case m.ask.req.ReplyCh <- "":
+			case m.ask.req.ReplyCh <- marshalAskResp(nil, ""):
 			default:
 			}
 			m.inAskUser = false
+		}
+		if m.finished && m.wrapUpRequested {
+			return m, tea.Quit
 		}
 
 	case tea.MouseMsg:
