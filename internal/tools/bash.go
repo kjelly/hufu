@@ -67,7 +67,9 @@ func runShellCommand(ctx context.Context, timeout time.Duration, workDir string,
 		cmd.Dir = workDir
 	}
 	if networkBlock {
-		setNetNamespace(cmd)
+		if err := setNetNamespace(cmd); err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to set network namespace: %v", err)), nil
+		}
 	}
 	bashPath, err := exec.LookPath("bash")
 	if err != nil {
@@ -249,7 +251,9 @@ func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workD
 		cmd.Dir = workDir
 	}
 	if networkBlock {
-		setNetNamespace(cmd)
+		if err := setNetNamespace(cmd); err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to set network namespace: %v", err)), nil
+		}
 	}
 	bashPath, err := exec.LookPath("bash")
 	if err != nil {
