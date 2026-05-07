@@ -56,9 +56,19 @@ func setStatusFlusher(w *lineWriter, taskDisp *taskDisplay, skillDisp *skillDisp
 	activeStatusFlusher.skillDisp = skillDisp
 }
 
+var askUserMu sync.Mutex
+
 func init() {
-	// TUI mode: use a native in-TUI dialog for ask_user — no terminal release needed.
 	tools.SetOnAskUserTUI(func(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (string, bool) {
+		askUserMu.Lock()
+		defer askUserMu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return "", false
+		default:
+		}
+
 		p := activeTUIProgram.Load()
 		if p == nil {
 			return "", false
