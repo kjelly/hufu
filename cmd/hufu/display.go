@@ -194,7 +194,7 @@ func (d *taskDisplay) render() {
 			desc = dimStyle.Render(t.Desc)
 		case team.TaskInProgress:
 			icon = progressIcon.Render("◑")
-			desc = utils.TruncatePreview(t.Desc, 60)
+			desc = utils.TruncateLine(t.Desc, 60)
 		case team.TaskDone:
 			icon = doneIcon.Render("●")
 			desc = dimStyle.Render(t.Desc)
@@ -291,7 +291,7 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 			w.write(fmt.Sprintf("\n%s %s %s\n",
 				headerStyle.Render("▶"),
 				formatAgentLabel(event),
-				dimStyle.Render("— "+utils.TruncatePreview(event.Message, 120)),
+				dimStyle.Render("— "+utils.TruncateLine(event.Message, 120)),
 			))
 			taskDisp.update()
 
@@ -460,7 +460,7 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				dimStyle.Render("⟐"),
 				agentStyle.Render(event.Agent),
 				doneStyle.Render("✓ cached"),
-				dimStyle.Render(utils.TruncatePreview(event.Message, 60)),
+				dimStyle.Render(utils.TruncateLine(event.Message, 60)),
 			))
 
 		case "skill_auto_loaded":
@@ -487,7 +487,7 @@ func flushText(agentName, text string) string {
 	}
 	return fmt.Sprintf("  %s %s\n",
 		textStyle.Render("💬"),
-		textStyle.Render(utils.TruncatePreview(text, 300)),
+		textStyle.Render(utils.TruncateLine(text, 300)),
 	)
 }
 
@@ -541,7 +541,7 @@ func formatToolArgs(toolName, args string) string {
 	if toolName == "finish" {
 		maxLen = 120
 	}
-	return utils.TruncatePreview(args, maxLen)
+	return utils.TruncateLine(args, maxLen)
 }
 
 type skillEntry struct {
@@ -931,7 +931,7 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			}
 			tt.stop(event.TodoID)
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: doneStyle.Render("✓ cached")})
-			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + doneStyle.Render("✓ cached") + "  " + dimStyle.Render(utils.TruncatePreview(event.Message, 50))})
+			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + doneStyle.Render("✓ cached") + "  " + dimStyle.Render(utils.TruncateLine(event.Message, 50))})
 
 		case "text":
 			if event.TodoID == "" {
@@ -964,7 +964,7 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			tt.stop(event.TodoID)
 			flushText(event.TodoID)
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("✗ " + event.Message)})
-			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + errStyle.Render("✗ "+utils.TruncatePreview(event.Message, 60))})
+			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + errStyle.Render("✗ "+utils.TruncateLine(event.Message, 60))})
 		}
 	}, tt.stopAll
 }
@@ -1097,7 +1097,7 @@ func renderDryRun(result *team.DryRunResult) {
 		b.WriteString("  " + dimStyle.Render("No skills available") + "\n")
 	} else {
 		for _, s := range result.AllSkills {
-			desc := utils.TruncatePreview(s.Description, 60)
+			desc := utils.TruncateLine(s.Description, 60)
 			b.WriteString(fmt.Sprintf("  %s %s\n", padRight(doneStyle.Render(s.Name), 20), dimStyle.Render(desc)))
 		}
 	}

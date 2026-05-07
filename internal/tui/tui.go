@@ -702,7 +702,6 @@ func (m Model) View() string {
 var colTitles = [5]string{"PENDING", "IN PROGRESS", "DONE", "SKIP", "ERROR"}
 
 func (m Model) renderPromptWidget(w int) string {
-	// border(1) + padding(1) on each side = 4 overhead
 	innerW := w - 4
 	if innerW < 4 {
 		innerW = 4
@@ -713,8 +712,39 @@ func (m Model) renderPromptWidget(w int) string {
 	if textW < 1 {
 		textW = 1
 	}
-	content := promptStyle.Render(labelPlain) + utils.TruncatePreview(m.prompt, textW)
-	return promptBoxStyle.Width(innerW).Render(content)
+	wrapped := utils.WrapLine(m.prompt, textW, 5)
+	var content strings.Builder
+	content.WriteString(promptStyle.Render(labelPlain))
+	if len(wrapped.Lines) > 0 {
+		content.WriteString(wrapped.Lines[0])
+		for _, line := range wrapped.Lines[1:] {
+			content.WriteString("\n")
+			content.WriteString(strings.Repeat(" ", labelRunes))
+			content.WriteString(line)
+		}
+	}
+	return promptBoxStyle.Width(innerW).Render(content.String())
+}
+
+func (m Model) promptWidgetHeight() int {
+	if m.prompt == "" {
+		return 3
+	}
+	innerW := m.width - 4
+	if innerW < 4 {
+		innerW = 4
+	}
+	labelRunes := len([]rune("Task  "))
+	textW := innerW - labelRunes
+	if textW < 1 {
+		textW = 1
+	}
+	wrapped := utils.WrapLine(m.prompt, textW, 5)
+	lines := len(wrapped.Lines)
+	if lines == 0 {
+		return 3
+	}
+	return lines + 2 // +2 for border top+bottom
 }
 
 const maxResultLines = 8
@@ -780,9 +810,10 @@ func (m Model) columnsView() string {
 	widget := m.renderPromptWidget(w)
 	statusArea := m.renderStatusArea(w)
 	statusH := m.statusAreaHeight()
+	promptH := m.promptWidgetHeight()
 
-	// widget(3) + blank(1) + statusArea(statusH) + blank(1) + blank(1) + footer(1)
-	bodyH := m.height - 3 - 1 - statusH - 1 - 1 - 1
+	// promptH + blank(1) + statusArea(statusH) + blank(1) + blank(1) + footer(1)
+	bodyH := m.height - promptH - 1 - statusH - 1 - 1 - 1
 	if bodyH < 2 {
 		bodyH = 2
 	}
@@ -863,26 +894,26 @@ func (m Model) isCurrentSearchMatch(id string) bool {
 	return m.searchResults[m.searchIdx].ID == id
 }
 
+const maxDescLines = 3
+
 func (m Model) itemLines(item *team.TodoItem, selected bool, isMatch bool, width int) []string {
 	icon, iconSt := taskIconStyle(item.Status)
 	sourceLabel := sourceTag(item.Source)
-	agentTrunc := utils.TruncatePreview(item.Agent, width-3-len(sourceLabel))
-	descTrunc := utils.TruncatePreview(item.Desc, width-2)
+	agentLine := utils.TruncateLine(item.Agent, width-3-len(sourceLabel))
 
 	if item.ID == team.CoordTodoID {
 		coordLabel := dimStyle.Render("(coordinator)")
-		agentTrunc = utils.TruncatePreview(item.Agent, width-len("(coordinator)")-4)
-		descTrunc = utils.TruncatePreview("coordinating", width-2)
+		agentLine = utils.TruncateLine(item.Agent, width-len("(coordinator)")-4)
 
 		var lines []string
 		if selected {
-			line1 := "▶ " + agentStyle.Render(agentTrunc) + " " + coordLabel
-			line2 := "  " + descTrunc
-			lines = []string{line1, line2}
+			line1 := "▶ " + agentStyle.Render(agentLine) + " " + coordLabel
+			lines = []string{line1}
+			lines = append(lines, formatDescLines("coordinating", width, 1, selected)...)
 		} else {
-			line1 := iconSt.Render(icon+" ") + agentStyle.Render(agentTrunc) + " " + coordLabel
-			line2 := dimStyle.Render("  " + descTrunc)
-			lines = []string{line1, line2}
+			line1 := iconSt.Render(icon+" ") + agentStyle.Render(agentLine) + " " + coordLabel
+			lines = []string{line1}
+			lines = append(lines, formatDescLines("coordinating", width, 1, false)...)
 		}
 		if selected {
 			styledLines := make([]string, len(lines))
@@ -901,23 +932,23 @@ func (m Model) itemLines(item *team.TodoItem, selected bool, isMatch bool, width
 	}
 
 	if selected {
-		line1 := "▶ " + agentStyle.Render(agentTrunc) + sourceLabel
-		line2 := "  " + descTrunc
-		lines = []string{line1, line2}
+		line1 := "▶ " + agentStyle.Render(agentLine) + sourceLabel
+		lines = []string{line1}
+		lines = append(lines, formatDescLines(item.Desc, width, maxDescLines, true)...)
 	} else {
-		line1 := iconSt.Render(icon+" ") + agentStyle.Render(agentTrunc) + sourceLabel + matchIndicator
-		line2 := dimStyle.Render("  " + descTrunc)
-		lines = []string{line1, line2}
+		line1 := iconSt.Render(icon+" ") + agentStyle.Render(agentLine) + sourceLabel + matchIndicator
+		lines = []string{line1}
+		lines = append(lines, formatDescLines(item.Desc, width, maxDescLines, false)...)
 	}
 
 	if len(item.Skills) > 0 {
-		skillTrunc := utils.TruncatePreview("["+strings.Join(item.Skills, " · ")+"]", width-2)
-		lines = append(lines, skillStyle.Render("  "+skillTrunc))
+		skillLine := utils.TruncateLine("["+strings.Join(item.Skills, " · ")+"]", width-2)
+		lines = append(lines, skillStyle.Render("  "+skillLine))
 	}
 
 	if item.Status == team.TaskError && item.Detail != "" {
-		errTrunc := utils.TruncatePreview("✗ "+item.Detail, width-2)
-		lines = append(lines, errorIcon.Render("  "+errTrunc))
+		errLine := utils.TruncateLine(item.Detail, width-4)
+		lines = append(lines, errorIcon.Render("  ✗ "+errLine))
 	}
 
 	if selected {
@@ -928,6 +959,22 @@ func (m Model) itemLines(item *team.TodoItem, selected bool, isMatch bool, width
 		return styledLines
 	}
 	return lines
+}
+
+func formatDescLines(desc string, width, maxLines int, selected bool) []string {
+	wrapped := utils.WrapLine(desc, width-2, maxLines)
+	if len(wrapped.Lines) == 0 {
+		return nil
+	}
+	result := make([]string, len(wrapped.Lines))
+	for i, line := range wrapped.Lines {
+		if selected {
+			result[i] = "  " + line
+		} else {
+			result[i] = dimStyle.Render("  " + line)
+		}
+	}
+	return result
 }
 
 func sourceTag(source string) string {
@@ -1136,7 +1183,7 @@ func (m Model) detailView() string {
 	heading := fmt.Sprintf("%s  %s / %s",
 		back,
 		agentLabel,
-		utils.TruncatePreview(item.Desc, m.width-30))
+		utils.TruncateLine(item.Desc, m.width-30))
 
 	status := string(item.Status)
 	meta := dimStyle.Render("status: " + status)
@@ -1153,7 +1200,7 @@ func (m Model) detailView() string {
 	if item.ParentID != "" {
 		parent := m.findTask(item.ParentID)
 		if parent != nil {
-			parentDesc := utils.TruncatePreview(parent.Agent+": "+parent.Desc, m.width-20)
+			parentDesc := utils.TruncateLine(parent.Agent+": "+parent.Desc, m.width-20)
 			meta += "\n" + dimStyle.Render("parent: "+item.ParentID+". "+parentDesc)
 		} else {
 			meta += "\n" + dimStyle.Render("parent: #"+item.ParentID)
@@ -1196,9 +1243,13 @@ func sourceDetailTag(source string) string {
 func renderSubtaskLine(t *team.TodoItem, width int) string {
 	icon, _ := taskIconStyle(t.Status)
 	tag := sourceTag(t.Source)
-	agentTrunc := utils.TruncatePreview(t.Agent, width-8)
-	descTrunc := utils.TruncatePreview(t.Desc, width-8)
-	return fmt.Sprintf("  %s %s%s %s\n", icon, agentStyle.Render(agentTrunc), tag, dimStyle.Render(descTrunc))
+	agentLine := utils.TruncateLine(t.Agent, width-8)
+	descWrapped := utils.WrapLine(t.Desc, width-8, 2)
+	parts := []string{agentStyle.Render(agentLine) + tag}
+	for _, dl := range descWrapped.Lines {
+		parts = append(parts, dimStyle.Render(dl))
+	}
+	return fmt.Sprintf("  %s %s\n", icon, strings.Join(parts, " "))
 }
 
 // vpHeight is the number of lines available for the detail viewport.

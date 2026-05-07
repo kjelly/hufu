@@ -211,7 +211,7 @@ func (m Model) askUserView() string {
 		sb.WriteString("\n")
 		for i, opt := range opts {
 			sel := st.cursor == i
-			label := utils.TruncatePreview(opt.Label, innerW-8)
+			label := utils.TruncateLine(opt.Label, innerW-8)
 			var line string
 			if req.Type == "multiple_choice" {
 				check := askCheckOff
