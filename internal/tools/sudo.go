@@ -47,7 +47,9 @@ func executeSudo(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("command '%s' is not allowed", args.Command)), nil
 	}
 
-	if err := checkBashPathConsent(args.Command, cfgWithMergedPaths(cfg, ctx)); err != nil {
+	effCfg := cfgWithMergedPaths(cfg, ctx)
+
+	if err := checkBashPathConsent(args.Command, effCfg); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 
@@ -59,5 +61,5 @@ func executeSudo(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		}
 	}
 
-	return runShellCommand(ctx, timeout, cfg.WorkDir, "sudo", "bash", "-c", args.Command)
+	return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "sudo", "bash", "-c", args.Command)
 }

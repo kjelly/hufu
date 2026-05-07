@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"charm.land/fantasy"
@@ -39,16 +40,34 @@ type bashArgs struct {
 	Timeout float64 `json:"timeout,omitempty"`
 }
 
+func setNetNamespace(cmd *exec.Cmd) error {
+	uid := os.Getuid()
+	gid := os.Getgid()
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags:   syscall.CLONE_NEWNET | syscall.CLONE_NEWUSER,
+		UidMappings: []syscall.SysProcIDMap{
+			{ContainerID: 0, HostID: uid, Size: 1},
+		},
+		GidMappings: []syscall.SysProcIDMap{
+			{ContainerID: 0, HostID: gid, Size: 1},
+		},
+	}
+	return nil
+}
+
 // runShellCommand runs name+args under a derived context with the given timeout,
 // sets Dir and the SHELL env var, then collects stdout/stderr and builds a response.
 // It is used by the bash and sudo tools.
-func runShellCommand(ctx context.Context, timeout time.Duration, workDir string, name string, args ...string) (fantasy.ToolResponse, error) {
+func runShellCommand(ctx context.Context, timeout time.Duration, workDir string, networkBlock bool, name string, args ...string) (fantasy.ToolResponse, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, name, args...)
 	if workDir != "" {
 		cmd.Dir = workDir
+	}
+	if networkBlock {
+		setNetNamespace(cmd)
 	}
 	bashPath, err := exec.LookPath("bash")
 	if err != nil {
@@ -94,6 +113,12 @@ func NewBashTool(opts ...ToolOption) fantasy.AgentTool {
 	desc := "Execute a bash command. Returns stdout and stderr. Output is truncated to the last 2000 lines or 50KB. Optionally provide a timeout in seconds."
 	if cfg.RestrictedBash {
 		desc = "Execute a bash command in restricted mode (rbash). 'cd' and output redirection ('>', '>>') are blocked. Commands must be in PATH; absolute paths are not allowed. The working directory is fixed. Optionally provide a timeout in seconds."
+	}
+	if cfg.NetworkBlock {
+		desc = "Execute a bash command. Network access is blocked (--no-net). No network connections can be made. Returns stdout and stderr. Output is truncated to the last 2000 lines or 50KB. Optionally provide a timeout in seconds."
+		if cfg.RestrictedBash {
+			desc = "Execute a bash command in restricted mode (rbash). Network access is blocked (--no-net). 'cd' and output redirection ('>', '>>') are blocked. Commands must be in PATH; absolute paths are not allowed. The working directory is fixed. Optionally provide a timeout in seconds."
+		}
 	}
 	return &coreTool{
 		info: fantasy.ToolInfo{
@@ -209,19 +234,22 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		if rp, ok := ctx.Value(AgentRestrictedPathKey).(string); ok && rp != "" {
 			restrictedPath = rp
 		}
-		return runShellCommandRestricted(ctx, timeout, effCfg.WorkDir, restrictedPath, args.Command)
+		return runShellCommandRestricted(ctx, timeout, effCfg.WorkDir, restrictedPath, effCfg.NetworkBlock, args.Command)
 	}
 
-	return runShellCommand(ctx, timeout, effCfg.WorkDir, "bash", "-c", args.Command)
+	return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "bash", "-c", args.Command)
 }
 
-func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workDir string, restrictedPath string, command string) (fantasy.ToolResponse, error) {
+func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workDir string, restrictedPath string, networkBlock bool, command string) (fantasy.ToolResponse, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, "bash", "-r", "-c", command)
 	if workDir != "" {
 		cmd.Dir = workDir
+	}
+	if networkBlock {
+		setNetNamespace(cmd)
 	}
 	bashPath, err := exec.LookPath("bash")
 	if err != nil {

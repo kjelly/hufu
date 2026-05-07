@@ -30,6 +30,7 @@ type Config struct {
 	MaxConcurrent  int                 `yaml:"max-concurrent"`
 	AllowedPaths   []string            `yaml:"allowed-paths"`
 	RestrictedPath string              `yaml:"restricted-path"`
+	NoNet          bool                `yaml:"no-net"`
 	RawVars        interface{}         `yaml:"vars"`
 	Hooks          map[string]string   `yaml:"hooks"`
 	Notify         notify.NotifyConfig `yaml:"notify"`

@@ -42,6 +42,7 @@ type agentFrontmatter struct {
 	ProviderURL    string   `yaml:"provider-url"`
 	AllowedPaths   string   `yaml:"allowed-paths"`
 	RestrictedPath string   `yaml:"restricted-path"`
+	NoNet         bool     `yaml:"no-net"`
 }
 
 type teamConfigYAML struct {
@@ -65,8 +66,9 @@ type teamConfigYAML struct {
 	GuardModel    string              `yaml:"guard-model"`
 	MaxConcurrent int                 `yaml:"max-concurrent"`
 	Notify        notify.NotifyConfig `yaml:"notify"`
-	AllowedPaths  interface{}         `yaml:"allowed-paths"`
+	AllowedPaths    interface{}         `yaml:"allowed-paths"`
 	RestrictedPath string             `yaml:"restricted-path"`
+	NoNet          bool               `yaml:"no-net"`
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -158,6 +160,9 @@ func agentFrontmatterFromSimple(m map[string]string) agentFrontmatter {
 	fm.ProviderURL = m["provider-url"]
 	fm.AllowedPaths = m["allowed-paths"]
 	fm.RestrictedPath = m["restricted-path"]
+	if v := m["no-net"]; v == "true" || v == "yes" || v == "1" {
+		fm.NoNet = true
+	}
 	if v := m["timeout"]; v != "" {
 		var n int64
 		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n > 0 {
@@ -231,6 +236,7 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 		MaxSteps:       fm.MaxSteps,
 		AllowedPaths:   expandAllowedPaths(parseCommaList(fm.AllowedPaths)),
 		RestrictedPath: fm.RestrictedPath,
+		NoNet:         fm.NoNet,
 		Generation: agent.GenerationParams{
 			Model:       fm.Model,
 			Temperature: fm.Temperature,
@@ -347,6 +353,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 				cfg.RestrictedPath = filepath.Join(home, cfg.RestrictedPath[1:])
 			}
 		}
+	}
+	if yc.NoNet {
+		cfg.NoNet = true
 	}
 
 	return cfg, nil

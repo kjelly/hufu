@@ -84,14 +84,15 @@ func TryAskUserTUI(ctx context.Context, question, qtype string, opts []AskUserTU
 type ToolOption func(*ToolConfig)
 
 type ToolConfig struct {
-	WorkDir       string
-	AllowedPaths  []string
-	PathConsent   *PathConsent
-	ToolName      string
-	WorkspaceName string
-	Hooks         *hooks.HookRegistry
+	WorkDir         string
+	AllowedPaths    []string
+	PathConsent     *PathConsent
+	ToolName        string
+	WorkspaceName   string
+	Hooks           *hooks.HookRegistry
 	RestrictedBash  bool
 	RestrictedPath  string
+	NetworkBlock    bool
 }
 
 func WithWorkDir(dir string) ToolOption {
@@ -141,6 +142,16 @@ func WithRestrictedPath(path string) ToolOption {
 		c.RestrictedPath = path
 	}
 }
+
+func WithNetworkBlock(enabled bool) ToolOption {
+	return func(c *ToolConfig) {
+		c.NetworkBlock = enabled
+	}
+}
+
+type agentNetworkBlockKeyType struct{}
+
+var AgentNetworkBlockKey = agentNetworkBlockKeyType{}
 
 type agentRestrictedPathKeyType struct{}
 
@@ -207,6 +218,9 @@ func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
 	if rp, ok := ctx.Value(AgentRestrictedPathKey).(string); ok && rp != "" {
 		needMerge = true
 	}
+	if nb, ok := ctx.Value(AgentNetworkBlockKey).(bool); ok && nb {
+		needMerge = true
+	}
 	if !needMerge {
 		return cfg
 	}
@@ -219,6 +233,7 @@ func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
 		Hooks:           cfg.Hooks,
 		RestrictedBash:  cfg.RestrictedBash,
 		RestrictedPath:  mergedRestrictedPath(cfg, ctx),
+		NetworkBlock:    mergedNetworkBlock(cfg, ctx),
 	}
 	return merged
 }
@@ -228,6 +243,16 @@ func mergedRestrictedPath(cfg ToolConfig, ctx context.Context) string {
 		return rp
 	}
 	return cfg.RestrictedPath
+}
+
+func mergedNetworkBlock(cfg ToolConfig, ctx context.Context) bool {
+	if cfg.NetworkBlock {
+		return true
+	}
+	if nb, ok := ctx.Value(AgentNetworkBlockKey).(bool); ok && nb {
+		return true
+	}
+	return false
 }
 
 type coreTool struct {
@@ -636,6 +661,16 @@ func AllTools(opts ...ToolOption) []fantasy.AgentTool {
 		NewFetchTool(opts...),
 		NewAgenticFetchTool(opts...),
 		NewRandomTool(opts...),
+	}
+	if cfg.NetworkBlock {
+		netTools := map[string]bool{"fetch": true, "download": true, "agentic_fetch": true}
+		filtered := make([]fantasy.AgentTool, 0, len(tools))
+		for _, t := range tools {
+			if !netTools[t.Info().Name] {
+				filtered = append(filtered, t)
+			}
+		}
+		tools = filtered
 	}
 	if cfg.Hooks != nil {
 		for _, t := range tools {

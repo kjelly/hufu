@@ -39,8 +39,9 @@ type AgentDef struct {
 	MaxSteps       int
 	AllowedPaths   []string
 	RestrictedPath string
-	Generation     GenerationParams
+	NoNet          bool
 	ProviderURL    string
+	Generation     GenerationParams
 }
 
 type TeamConfig struct {
@@ -60,8 +61,9 @@ type TeamConfig struct {
 	GuardModel    string
 	MaxConcurrent int
 	Notify        notify.NotifyConfig
-	AllowedPaths  []string
+	AllowedPaths   []string
 	RestrictedPath string
+	NoNet          bool
 }
 
 type OllamaProvider struct {
