@@ -328,7 +328,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if bodyH < 2 {
 				bodyH = 2
 			}
-			colW := (m.width - 4) / 5
+			colW := 0
+			if m.width >= 9 {
+				colW = (m.width - 4) / 5
+			}
 
 			// Header takes 2 lines (title + blank)
 			clickY := msg.Y - promptH - 1 - statusH - 1  // subtract widget + blank + status + blank
@@ -1115,9 +1118,14 @@ func (m *Model) scrollCursorIntoView() {
 		availableLines = 1
 	}
 
+	colW := 0
+	if m.width >= 9 {
+		colW = (m.width - 4) / 5
+	}
+
 	itemHeights := make([]int, len(items))
 	for i, item := range items {
-		h := len(m.itemLines(item, false, false, 0))
+		h := len(m.itemLines(item, false, false, colW))
 		if h == 0 {
 			h = 2
 		}
@@ -1178,8 +1186,11 @@ func (m *Model) clampScroll() {
 }
 
 func (m Model) colBodyHeight() int {
-	// widget(3) + blank(1) + statusArea + blank(1) + blank(1) + footer(1)
-	return m.height - 7 - m.statusAreaHeight()
+	h := m.height - m.promptWidgetHeight() - 1 - m.statusAreaHeight() - 1 - 1 - 1
+	if h < 2 {
+		return 2
+	}
+	return h
 }
 
 func taskIconStyle(s team.TaskStatus) (string, lipgloss.Style) {

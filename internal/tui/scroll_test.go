@@ -113,10 +113,14 @@ func TestScrollCursorIntoView_JumpToBottom(t *testing.T) {
 	}
 
 	col := m.colItems(m.col)
+	colW := 0
+	if m.width >= 9 {
+		colW = (m.width - 4) / 5
+	}
 	lineCount := 2
 	found := false
 	for i := m.scrollOff[0]; i < len(col); i++ {
-		il := len(m.itemLines(col[i], false, false, 0))
+		il := len(m.itemLines(col[i], false, false, colW))
 		if il == 0 {
 			il = 2
 		}
@@ -161,5 +165,64 @@ func TestScrollCursorIntoView_SingleItem(t *testing.T) {
 
 	if m.scrollOff[0] != 0 {
 		t.Errorf("expected scroll offset 0 for single item, got %d", m.scrollOff[0])
+	}
+}
+
+func TestScrollCursorIntoView_SelectedItemRendered(t *testing.T) {
+	items := makeTasks(50, team.TaskPending)
+	m := testModel(items, 24)
+	m.col = 0
+	m.row = 49
+	m.scrollOff[0] = 0
+
+	m.scrollCursorIntoView()
+
+	bodyH := m.colBodyHeight()
+	if bodyH < 2 {
+		t.Fatalf("bodyH too small: %d", bodyH)
+	}
+	col := m.colItems(m.col)
+
+	selectedInRender := false
+	for i := m.scrollOff[0]; i < len(col); i++ {
+		if i == m.row {
+			selectedInRender = true
+			break
+		}
+	}
+	if !selectedInRender {
+		t.Errorf("selected row %d not in rendered range [%d, %d)", m.row, m.scrollOff[0], len(col))
+	}
+}
+
+func TestScrollCursorIntoView_MultiLinePromptMatchesColBodyHeight(t *testing.T) {
+	items := makeTasks(30, team.TaskPending)
+	m := testModel(items, 24)
+	m.prompt = "This is a very long prompt that will wrap to multiple lines because it exceeds the available width of the terminal rendering area and needs word wrapping"
+	m.col = 0
+	m.row = 29
+	m.scrollOff[0] = 0
+
+	m.scrollCursorIntoView()
+
+	bodyH := m.colBodyHeight()
+	renderBodyH := m.height - m.promptWidgetHeight() - 1 - m.statusAreaHeight() - 1 - 1 - 1
+	if renderBodyH < 2 {
+		renderBodyH = 2
+	}
+	if bodyH != renderBodyH {
+		t.Errorf("colBodyHeight()=%d but render bodyH=%d — they must match", bodyH, renderBodyH)
+	}
+
+	col := m.colItems(m.col)
+	selectedInRender := false
+	for i := m.scrollOff[0]; i < len(col); i++ {
+		if i == m.row {
+			selectedInRender = true
+			break
+		}
+	}
+	if !selectedInRender {
+		t.Errorf("selected row %d not in rendered range [%d, %d) with bodyH=%d", m.row, m.scrollOff[0], len(col), bodyH)
 	}
 }
