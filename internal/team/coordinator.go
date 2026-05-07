@@ -142,6 +142,8 @@ type Coordinator struct {
 	// this field is not yet exercised in the main CLI flow.
 	dryRun atomic.Bool
 	hooks  *hooks.HookRegistry
+	rbashMode      bool
+	restrictedPath string
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
@@ -206,9 +208,9 @@ func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
 	return
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry) (*Coordinator, error) {
+func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
-	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry))
+	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath))
 	prov, err := agent.NewOllamaProvider(defaultProviderURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Ollama provider: %w", err)
@@ -234,6 +236,8 @@ func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager 
 		maxConcurrent:   maxConcurrent,
 		sessionTime:     time.Now(),
 		hooks:           hookRegistry,
+		rbashMode:       rbashMode,
+		restrictedPath:  restrictedPath,
 	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -1787,6 +1791,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			if len(agentDef.AllowedPaths) > 0 {
 				taskCtx = context.WithValue(taskCtx, tools.AgentAllowedPathsKey, agentDef.AllowedPaths)
 			}
+			if agentDef.RestrictedPath != "" {
+				taskCtx = context.WithValue(taskCtx, tools.AgentRestrictedPathKey, agentDef.RestrictedPath)
+			}
 			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, prompt, conversationHistory, timing)
 		}()
 
@@ -2622,6 +2629,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	if len(agentDef.AllowedPaths) > 0 {
 		taskCtx = context.WithValue(taskCtx, tools.AgentAllowedPathsKey, agentDef.AllowedPaths)
+	}
+	if agentDef.RestrictedPath != "" {
+		taskCtx = context.WithValue(taskCtx, tools.AgentRestrictedPathKey, agentDef.RestrictedPath)
 	}
 
 	timing := &taskTiming{}

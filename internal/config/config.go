@@ -29,6 +29,7 @@ type Config struct {
 	GuardModel     string              `yaml:"guard-model"`
 	MaxConcurrent  int                 `yaml:"max-concurrent"`
 	AllowedPaths   []string            `yaml:"allowed-paths"`
+	RestrictedPath string              `yaml:"restricted-path"`
 	RawVars        interface{}         `yaml:"vars"`
 	Hooks          map[string]string   `yaml:"hooks"`
 	Notify         notify.NotifyConfig `yaml:"notify"`

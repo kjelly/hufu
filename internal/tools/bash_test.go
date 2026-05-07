@@ -1,154 +1,130 @@
 package tools
 
-import "testing"
+import (
+	"testing"
+)
 
-func TestNormalizeBashCommand(t *testing.T) {
-	cases := []struct {
-		name          string
-		command       string
-		workspaceName string
-		want          string
+func TestRewriteBashRedirects(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
 	}{
 		{
-			name:          "path after space",
-			command:       "cat /workspace/file.txt",
-			workspaceName: "workspace",
-			want:          "cat ./workspace/file.txt",
+			name:  "simple redirect",
+			input: "echo hello > file.txt",
+			want:  "echo hello | tee file.txt",
 		},
 		{
-			name:          "cd to workspace",
-			command:       "cd /workspace",
-			workspaceName: "workspace",
-			want:          "cd ./workspace",
+			name:  "append redirect",
+			input: "echo hello >> file.txt",
+			want:  "echo hello | tee -a file.txt",
 		},
 		{
-			name:          "path at start of string",
-			command:       "/workspace/run.sh",
-			workspaceName: "workspace",
-			want:          "./workspace/run.sh",
+			name:  "no redirect",
+			input: "ls -la",
+			want:  "ls -la",
 		},
 		{
-			name:          "redirection into workspace",
-			command:       "echo hello > /workspace/out.txt",
-			workspaceName: "workspace",
-			want:          "echo hello > ./workspace/out.txt",
+			name:  "redirect with path",
+			input: "cat input.txt > /tmp/output.txt",
+			want:  "cat input.txt | tee /tmp/output.txt",
 		},
 		{
-			name:          "system path with workspace component not rewritten",
-			command:       "cat /usr/workspace/file.txt",
-			workspaceName: "workspace",
-			want:          "cat /usr/workspace/file.txt",
+			name:  "append with path",
+			input: "echo log >> /var/log/app.log",
+			want:  "echo log | tee -a /var/log/app.log",
 		},
 		{
-			name:          "workspace name not a prefix of another name",
-			command:       "cat /workspacefoo/file.txt",
-			workspaceName: "workspace",
-			want:          "cat /workspacefoo/file.txt",
+			name:  "multiline with redirect",
+			input: "echo a\necho b > out.txt\necho c",
+			want:  "echo a\necho b | tee out.txt\necho c",
 		},
 		{
-			name:          "multiple occurrences",
-			command:       "cp /workspace/a.txt /workspace/b.txt",
-			workspaceName: "workspace",
-			want:          "cp ./workspace/a.txt ./workspace/b.txt",
+			name:  "complex command with pipe",
+			input: "grep pattern file | sort > output.txt",
+			want:  "grep pattern file | sort > output.txt",
 		},
 		{
-			name:          "custom workspace name",
-			command:       "cat /myworkspace/file.txt",
-			workspaceName: "myworkspace",
-			want:          "cat ./myworkspace/file.txt",
+			name:  "complex command with &&",
+			input: "cd dir && echo done > out.txt",
+			want:  "cd dir && echo done > out.txt",
 		},
 		{
-			name:          "empty workspace name is no-op",
-			command:       "cat /workspace/file.txt",
-			workspaceName: "",
-			want:          "cat /workspace/file.txt",
+			name:  "complex command with ||",
+			input: "cmd1 || echo fail > err.txt",
+			want:  "cmd1 || echo fail > err.txt",
 		},
 		{
-			name:          "already relative path unchanged",
-			command:       "cat ./workspace/file.txt",
-			workspaceName: "workspace",
-			want:          "cat ./workspace/file.txt",
+			name:  "empty string",
+			input: "",
+			want:  "",
 		},
 		{
-			name:          "pipe-separated commands",
-			command:       "cat /workspace/data.txt | grep foo",
-			workspaceName: "workspace",
-			want:          "cat ./workspace/data.txt | grep foo",
-		},
-		{
-			name:          "semicolon-separated commands",
-			command:       "cd /tmp; cat /workspace/file.txt",
-			workspaceName: "workspace",
-			want:          "cd /tmp; cat ./workspace/file.txt",
+			name:  "redirect with quoted filename containing spaces",
+			input: `echo data > "my file.txt"`,
+			want:  `echo data > "my file.txt"`,
 		},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := normalizeBashCommand(tc.command, tc.workspaceName)
-			if got != tc.want {
-				t.Errorf("normalizeBashCommand(%q, %q)\n  got  %q\n  want %q", tc.command, tc.workspaceName, got, tc.want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rewriteBashRedirects(tt.input)
+			if got != tt.want {
+				t.Errorf("rewriteBashRedirects(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestNormalizeWorkspacePath(t *testing.T) {
-	cases := []struct {
-		name          string
-		path          string
-		workspaceName string
-		want          string
+func TestRewriteLineRedirects(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
 	}{
 		{
-			name:          "root-style path rewritten",
-			path:          "/workspace/file.txt",
-			workspaceName: "workspace",
-			want:          "./workspace/file.txt",
+			name:  "simple redirect",
+			input: "echo hello > file.txt",
+			want:  "echo hello | tee file.txt",
 		},
 		{
-			name:          "bare workspace dir rewritten",
-			path:          "/workspace",
-			workspaceName: "workspace",
-			want:          "./workspace",
+			name:  "append redirect",
+			input: "echo hello >> file.txt",
+			want:  "echo hello | tee -a file.txt",
 		},
 		{
-			name:          "relative path unchanged",
-			path:          "./workspace/file.txt",
-			workspaceName: "workspace",
-			want:          "./workspace/file.txt",
+			name:  "no redirect",
+			input: "ls -la",
+			want:  "ls -la",
 		},
 		{
-			name:          "unrelated absolute path unchanged",
-			path:          "/tmp/file.txt",
-			workspaceName: "workspace",
-			want:          "/tmp/file.txt",
+			name:  "pipe command not rewritten",
+			input: "grep foo | sort > out.txt",
+			want:  "grep foo | sort > out.txt",
 		},
 		{
-			name:          "prefix match must be full component",
-			path:          "/workspacefoo/file.txt",
-			workspaceName: "workspace",
-			want:          "/workspacefoo/file.txt",
+			name:  "&& command not rewritten",
+			input: "cd /tmp && ls > out.txt",
+			want:  "cd /tmp && ls > out.txt",
 		},
 		{
-			name:          "empty workspace name is no-op",
-			path:          "/workspace/file.txt",
-			workspaceName: "",
-			want:          "/workspace/file.txt",
+			name:  "|| command not rewritten",
+			input: "cmd || echo fail > err.txt",
+			want:  "cmd || echo fail > err.txt",
 		},
 		{
-			name:          "custom workspace name",
-			path:          "/myws/file.txt",
-			workspaceName: "myws",
-			want:          "./myws/file.txt",
+			name:  "redirect with absolute path",
+			input: "echo data > /tmp/out.txt",
+			want:  "echo data | tee /tmp/out.txt",
 		},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := normalizeWorkspacePath(tc.path, tc.workspaceName)
-			if got != tc.want {
-				t.Errorf("normalizeWorkspacePath(%q, %q)\n  got  %q\n  want %q", tc.path, tc.workspaceName, got, tc.want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rewriteLineRedirects(tt.input)
+			if got != tt.want {
+				t.Errorf("rewriteLineRedirects(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

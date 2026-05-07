@@ -25,22 +25,23 @@ type TeamSession struct {
 }
 
 type agentFrontmatter struct {
-	Name         string   `yaml:"name"`
-	Description  string   `yaml:"description"`
-	Role         string   `yaml:"role"`
-	Tools        string   `yaml:"tools"`
-	Skills       string   `yaml:"skills"`
-	Guard        []string `yaml:"guard"`
-	Model        string   `yaml:"model"`
-	Temperature  string   `yaml:"temperature"`
-	MaxTokens    string   `yaml:"max-tokens"`
-	TopP         string   `yaml:"top-p"`
-	TopK         string   `yaml:"top-k"`
-	Timeout      int64    `yaml:"timeout"`
-	MaxRetries   int      `yaml:"max-retries"`
-	MaxSteps     int      `yaml:"max-steps"`
-	ProviderURL  string   `yaml:"provider-url"`
-	AllowedPaths string   `yaml:"allowed-paths"`
+	Name           string   `yaml:"name"`
+	Description    string   `yaml:"description"`
+	Role           string   `yaml:"role"`
+	Tools          string   `yaml:"tools"`
+	Skills         string   `yaml:"skills"`
+	Guard          []string `yaml:"guard"`
+	Model          string   `yaml:"model"`
+	Temperature    string   `yaml:"temperature"`
+	MaxTokens      string   `yaml:"max-tokens"`
+	TopP           string   `yaml:"top-p"`
+	TopK           string   `yaml:"top-k"`
+	Timeout        int64    `yaml:"timeout"`
+	MaxRetries     int      `yaml:"max-retries"`
+	MaxSteps       int      `yaml:"max-steps"`
+	ProviderURL    string   `yaml:"provider-url"`
+	AllowedPaths   string   `yaml:"allowed-paths"`
+	RestrictedPath string   `yaml:"restricted-path"`
 }
 
 type teamConfigYAML struct {
@@ -65,6 +66,7 @@ type teamConfigYAML struct {
 	MaxConcurrent int                 `yaml:"max-concurrent"`
 	Notify        notify.NotifyConfig `yaml:"notify"`
 	AllowedPaths  interface{}         `yaml:"allowed-paths"`
+	RestrictedPath string             `yaml:"restricted-path"`
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -155,6 +157,7 @@ func agentFrontmatterFromSimple(m map[string]string) agentFrontmatter {
 	fm.TopK = m["top-k"]
 	fm.ProviderURL = m["provider-url"]
 	fm.AllowedPaths = m["allowed-paths"]
+	fm.RestrictedPath = m["restricted-path"]
 	if v := m["timeout"]; v != "" {
 		var n int64
 		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n > 0 {
@@ -217,16 +220,17 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 	}
 
 	def := &agent.AgentDef{
-		Name:         fm.Name,
-		Description:  fm.Description,
-		Tools:        fm.Tools,
-		Role:         role,
-		System:       body,
-		Skills:       fm.Skills,
-		Guard:        fm.Guard,
-		MaxRetries:   -1,
-		MaxSteps:     fm.MaxSteps,
-		AllowedPaths: expandAllowedPaths(parseCommaList(fm.AllowedPaths)),
+		Name:           fm.Name,
+		Description:    fm.Description,
+		Tools:          fm.Tools,
+		Role:           role,
+		System:         body,
+		Skills:         fm.Skills,
+		Guard:          fm.Guard,
+		MaxRetries:     -1,
+		MaxSteps:       fm.MaxSteps,
+		AllowedPaths:   expandAllowedPaths(parseCommaList(fm.AllowedPaths)),
+		RestrictedPath: fm.RestrictedPath,
 		Generation: agent.GenerationParams{
 			Model:       fm.Model,
 			Temperature: fm.Temperature,
@@ -335,6 +339,14 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if paths := parseAllowedPaths(yc.AllowedPaths); len(paths) > 0 {
 		cfg.AllowedPaths = expandAllowedPaths(paths)
+	}
+	if yc.RestrictedPath != "" {
+		cfg.RestrictedPath = os.ExpandEnv(yc.RestrictedPath)
+		if strings.HasPrefix(cfg.RestrictedPath, "~") {
+			if home, err := os.UserHomeDir(); err == nil {
+				cfg.RestrictedPath = filepath.Join(home, cfg.RestrictedPath[1:])
+			}
+		}
 	}
 
 	return cfg, nil

@@ -91,10 +91,14 @@ func runShellCommand(ctx context.Context, timeout time.Duration, workDir string,
 func NewBashTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "bash"
+	desc := "Execute a bash command. Returns stdout and stderr. Output is truncated to the last 2000 lines or 50KB. Optionally provide a timeout in seconds."
+	if cfg.RestrictedBash {
+		desc = "Execute a bash command in restricted mode (rbash). 'cd' and output redirection ('>', '>>') are blocked. Commands must be in PATH; absolute paths are not allowed. The working directory is fixed. Optionally provide a timeout in seconds."
+	}
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "bash",
-			Description: "Execute a bash command. Returns stdout and stderr. Output is truncated to the last 2000 lines or 50KB. Optionally provide a timeout in seconds.",
+			Description: desc,
 			Parameters: map[string]any{
 				"command": map[string]any{
 					"type":        "string",
@@ -166,6 +170,8 @@ func normalizeBashCommand(command, workspaceName string) string {
 }
 
 func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fantasy.ToolResponse, error) {
+	effCfg := cfgWithMergedPaths(cfg, ctx)
+
 	var args bashArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("command parameter is required"), nil
@@ -173,7 +179,7 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 	if args.Command == "" {
 		return fantasy.NewTextErrorResponse("command parameter is required"), nil
 	}
-	args.Command = normalizeBashCommand(args.Command, cfg.WorkspaceName)
+	args.Command = normalizeBashCommand(args.Command, effCfg.WorkspaceName)
 	if bannedCmdRe.MatchString(args.Command) {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("command '%s' is not allowed", args.Command)), nil
 	}
@@ -181,8 +187,13 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		return fantasy.NewTextErrorResponse("sudo and ssh are not available in the bash tool — use the sudo or ssh tool instead"), nil
 	}
 
-	if err := checkBashPathConsent(args.Command, cfgWithMergedPaths(cfg, ctx)); err != nil {
+	if err := checkBashPathConsent(args.Command, effCfg); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+
+	restricted := effCfg.RestrictedBash
+	if restricted {
+		args.Command = rewriteBashRedirects(args.Command)
 	}
 
 	timeout := defaultBashTimeout
@@ -193,7 +204,101 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		}
 	}
 
-	return runShellCommand(ctx, timeout, cfg.WorkDir, "bash", "-c", args.Command)
+	if restricted {
+		restrictedPath := effCfg.RestrictedPath
+		if rp, ok := ctx.Value(AgentRestrictedPathKey).(string); ok && rp != "" {
+			restrictedPath = rp
+		}
+		return runShellCommandRestricted(ctx, timeout, effCfg.WorkDir, restrictedPath, args.Command)
+	}
+
+	return runShellCommand(ctx, timeout, effCfg.WorkDir, "bash", "-c", args.Command)
+}
+
+func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workDir string, restrictedPath string, command string) (fantasy.ToolResponse, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "bash", "-r", "-c", command)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	bashPath, err := exec.LookPath("bash")
+	if err != nil {
+		bashPath = "/bin/bash"
+	}
+	env := os.Environ()
+	filtered := make([]string, 0, len(env))
+	for _, e := range env {
+		if !strings.HasPrefix(e, "PATH=") {
+			filtered = append(filtered, e)
+		}
+	}
+	pathVal := restrictedPath
+	if pathVal == "" {
+		pathVal = os.Getenv("PATH")
+	}
+	filtered = append(filtered, "PATH="+pathVal)
+	filtered = append(filtered, "SHELL="+bashPath)
+	cmd.Env = filtered
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return fantasy.NewTextErrorResponse("failed to create stdout pipe"), nil
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return fantasy.NewTextErrorResponse("failed to create stderr pipe"), nil
+	}
+	if err := cmd.Start(); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to start command: %v", err)), nil
+	}
+
+	var wg sync.WaitGroup
+	var stdout, stderr bytes.Buffer
+	wg.Add(2)
+	go func() { defer wg.Done(); io.Copy(&stdout, stdoutPipe) }()
+	go func() { defer wg.Done(); io.Copy(&stderr, stderrPipe) }()
+
+	waitErr := cmd.Wait()
+	wg.Wait()
+
+	exitCode := 0
+	if waitErr != nil {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else if cmdCtx.Err() == context.DeadlineExceeded {
+			return fantasy.NewTextErrorResponse("command timed out"), nil
+		}
+	}
+	return buildBashResponse(stdout.String(), stderr.String(), exitCode), nil
+}
+
+var redirectRe = regexp.MustCompile(`(.+?)\s*(>|>>)\s*(\S+)\s*$`)
+
+func rewriteBashRedirects(command string) string {
+	lines := strings.Split(command, "\n")
+	for i, line := range lines {
+		lines[i] = rewriteLineRedirects(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func rewriteLineRedirects(line string) string {
+	m := redirectRe.FindStringSubmatch(line)
+	if m == nil {
+		return line
+	}
+	cmdPart := strings.TrimSpace(m[1])
+	redirect := m[2]
+	filePath := m[3]
+	if strings.Contains(cmdPart, "|") || strings.Contains(cmdPart, "&&") || strings.Contains(cmdPart, "||") {
+		return line
+	}
+	if redirect == ">>" {
+		return cmdPart + " | tee -a " + filePath
+	}
+	return cmdPart + " | tee " + filePath
 }
 
 func checkBashPathConsent(command string, cfg ToolConfig) error {

@@ -43,6 +43,7 @@ var (
 	stepsMode           bool
 	dryRun              bool
 	tuiMode             bool
+	rbashMode           bool
 	varFlags            []string
 	varFiles            []string
 	globalPromptReader  atomic.Pointer[readline.PromptReader]
@@ -80,6 +81,7 @@ func main() {
 	rootCmd.Flags().BoolVarP(&stepsMode, "steps", "s", false, "Pause for user confirmation before executing each batch of worker tasks")
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview skill matching and task delegation without executing agents")
 	rootCmd.Flags().BoolVar(&tuiMode, "tui", false, "Show a Bubble Tea TUI for real-time task tracking")
+	rootCmd.Flags().BoolVar(&rbashMode, "rbash", false, "Use restricted bash (rbash) for the bash tool")
 	rootCmd.Flags().StringArrayVar(&varFlags, "var", nil, "Set template variable (key=value). Can be specified multiple times; later values override earlier ones")
 	rootCmd.Flags().StringArrayVar(&varFiles, "var-file", nil, "Read template variables from a file (.yaml/.yml or KEY=VALUE format). Can be specified multiple times; later files override earlier ones")
 
@@ -627,7 +629,21 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		}
 	}
 
-	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, allowedPaths, pathConsent, hookRegistry)
+	resolvedRestrictedPath := cfg.RestrictedPath
+	if session.Config.RestrictedPath != "" {
+		resolvedRestrictedPath = session.Config.RestrictedPath
+	}
+	if rbashMode && resolvedRestrictedPath == "" {
+		home, _ := os.UserHomeDir()
+		if home != "" {
+			rbashBin := filepath.Join(home, ".rbash-bin")
+			if fi, err := os.Stat(rbashBin); err == nil && fi.IsDir() {
+				resolvedRestrictedPath = rbashBin
+			}
+		}
+	}
+
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}

@@ -90,6 +90,8 @@ type ToolConfig struct {
 	ToolName      string
 	WorkspaceName string
 	Hooks         *hooks.HookRegistry
+	RestrictedBash  bool
+	RestrictedPath  string
 }
 
 func WithWorkDir(dir string) ToolOption {
@@ -127,6 +129,22 @@ func WithHooks(h *hooks.HookRegistry) ToolOption {
 		c.Hooks = h
 	}
 }
+
+func WithRestrictedBash(enabled bool) ToolOption {
+	return func(c *ToolConfig) {
+		c.RestrictedBash = enabled
+	}
+}
+
+func WithRestrictedPath(path string) ToolOption {
+	return func(c *ToolConfig) {
+		c.RestrictedPath = path
+	}
+}
+
+type agentRestrictedPathKeyType struct{}
+
+var AgentRestrictedPathKey = agentRestrictedPathKeyType{}
 
 // normalizeWorkspacePath rewrites a path that uses the workspace directory name
 // as if it were at the filesystem root (e.g. /workspace/x) into a relative path
@@ -182,18 +200,34 @@ func mergedAllowedPaths(cfg ToolConfig, ctx context.Context) []string {
 }
 
 func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
-	if _, ok := ctx.Value(AgentAllowedPathsKey).([]string); !ok {
+	needMerge := false
+	if _, ok := ctx.Value(AgentAllowedPathsKey).([]string); ok {
+		needMerge = true
+	}
+	if rp, ok := ctx.Value(AgentRestrictedPathKey).(string); ok && rp != "" {
+		needMerge = true
+	}
+	if !needMerge {
 		return cfg
 	}
 	merged := ToolConfig{
-		WorkDir:       cfg.WorkDir,
-		AllowedPaths:  mergedAllowedPaths(cfg, ctx),
-		PathConsent:   cfg.PathConsent,
-		ToolName:      cfg.ToolName,
-		WorkspaceName: cfg.WorkspaceName,
-		Hooks:         cfg.Hooks,
+		WorkDir:         cfg.WorkDir,
+		AllowedPaths:   mergedAllowedPaths(cfg, ctx),
+		PathConsent:    cfg.PathConsent,
+		ToolName:        cfg.ToolName,
+		WorkspaceName:   cfg.WorkspaceName,
+		Hooks:           cfg.Hooks,
+		RestrictedBash:  cfg.RestrictedBash,
+		RestrictedPath:  mergedRestrictedPath(cfg, ctx),
 	}
 	return merged
+}
+
+func mergedRestrictedPath(cfg ToolConfig, ctx context.Context) string {
+	if rp, ok := ctx.Value(AgentRestrictedPathKey).(string); ok && rp != "" {
+		return rp
+	}
+	return cfg.RestrictedPath
 }
 
 type coreTool struct {
