@@ -46,7 +46,7 @@ type bashArgs struct {
 // runShellCommand runs name+args under a derived context with the given timeout,
 // sets Dir and the SHELL env var, then collects stdout/stderr and builds a response.
 // It is used by the bash and sudo tools.
-func runShellCommand(ctx context.Context, timeout time.Duration, workDir string, networkBlock bool, name string, args []string, envOverrides ...string) (fantasy.ToolResponse, error) {
+func runShellCommand(ctx context.Context, timeout time.Duration, workDir string, networkBlock bool, name string, args []string, envReplacer func(env []string) []string) (fantasy.ToolResponse, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -65,8 +65,8 @@ func runShellCommand(ctx context.Context, timeout time.Duration, workDir string,
 	}
 	env := os.Environ()
 	env = append(env, "SHELL="+bashPath)
-	for _, e := range envOverrides {
-		env = append(env, e)
+	if envReplacer != nil {
+		env = envReplacer(env)
 	}
 	cmd.Env = env
 
@@ -107,7 +107,7 @@ func NewBashTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg.ToolName = "bash"
 	var desc string
 	if cfg.Direnv {
-		desc = "Execute a bash command via direnv exec (--direnv). Loads .envrc/.env from the working directory before running. 'cd' is not allowed — use working_directory to change directories. The working directory is fixed and enforced by direnv. Returns stdout and stderr. Optionally provide a timeout in seconds."
+		desc = "Execute a bash command with .envrc/.env environment loaded from the working directory (--direnv). Loads environment from .env (key=value) or via direnv (full shell .envrc support). 'cd' is not allowed — use working_directory to change directories. Returns stdout and stderr. Optionally provide a timeout in seconds."
 	} else if cfg.RestrictedBash {
 		desc = "Execute a bash command in restricted mode (rbash). 'cd' and output redirection ('>', '>>') are blocked — use working_directory to change directories. Commands must be in PATH; absolute paths are not allowed. The working directory is fixed. Returns stdout and stderr. Optionally provide a timeout in seconds."
 	} else if cfg.NetworkBlock {
@@ -116,9 +116,9 @@ func NewBashTool(opts ...ToolOption) fantasy.AgentTool {
 		desc = "Execute a bash command. 'cd' is not allowed — use working_directory to change directories. Returns stdout and stderr. Output is truncated to the last 2000 lines or 50KB. Optionally provide a timeout in seconds."
 	}
 	if cfg.RestrictedBash && cfg.Direnv {
-		desc = "Execute a bash command via direnv exec (--direnv) in restricted mode (rbash). Loads .envrc/.env from the working directory. 'cd' and output redirection ('>', '>>') are blocked — use working_directory to change directories. Commands must be in PATH; absolute paths are not allowed. Returns stdout and stderr. Optionally provide a timeout in seconds."
+		desc = "Execute a bash command with .envrc/.env environment loaded in restricted mode (rbash). Loads environment from .env (key=value) or via direnv (full shell .envrc support). 'cd' and output redirection ('>', '>>') are blocked — use working_directory to change directories. Commands must be in PATH; absolute paths are not allowed. Returns stdout and stderr. Optionally provide a timeout in seconds."
 	} else if cfg.NetworkBlock && cfg.Direnv {
-		desc = "Execute a bash command via direnv exec (--direnv). Network access is blocked (--no-net). Loads .envrc/.env from the working directory. 'cd' is not allowed — use working_directory to change directories. The working directory is fixed and enforced by direnv. Returns stdout and stderr. Optionally provide a timeout in seconds."
+		desc = "Execute a bash command with .envrc/.env environment loaded (--direnv). Network access is blocked (--no-net). Loads environment from .env (key=value) or via direnv (full shell .envrc support). 'cd' is not allowed — use working_directory to change directories. Returns stdout and stderr. Optionally provide a timeout in seconds."
 	} else if cfg.NetworkBlock && cfg.RestrictedBash {
 		desc = "Execute a bash command in restricted mode (rbash). Network access is blocked (--no-net). 'cd' and output redirection ('>', '>>') are blocked — use working_directory to change directories. Commands must be in PATH; absolute paths are not allowed. The working directory is fixed. Returns stdout and stderr. Optionally provide a timeout in seconds."
 	}
@@ -272,7 +272,21 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		if effCfg.WorkDir == "" {
 			return fantasy.NewTextErrorResponse("working_directory is required in direnv mode"), nil
 		}
-		return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "direnv", []string{"exec", effCfg.WorkDir, "--", "bash", "-c", args.Command}, "PATH="+os.Getenv("PATH"))
+		projectEnv, err := LoadProjectEnv(effCfg.WorkDir, true)
+		if err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to load project env: %v", err)), nil
+		}
+		return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "bash", []string{"-c", args.Command}, func(env []string) []string {
+			bashPath, _ := exec.LookPath("bash")
+			if bashPath == "" {
+				bashPath = "/bin/bash"
+			}
+			base := []string{"HOME=" + os.Getenv("HOME"), "USER=" + os.Getenv("USER")}
+			base = append(base, projectEnv...)
+			base = append(base, "PATH="+os.Getenv("PATH"))
+			base = append(base, "SHELL="+bashPath)
+			return base
+		})
 	}
 
 	if restricted {
@@ -283,7 +297,7 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		return runShellCommandRestricted(ctx, timeout, effCfg.WorkDir, restrictedPath, effCfg.NetworkBlock, args.Command)
 	}
 
-	return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "bash", []string{"-c", args.Command})
+	return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "bash", []string{"-c", args.Command}, nil)
 }
 
 func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workDir string, restrictedPath string, networkBlock bool, command string) (fantasy.ToolResponse, error) {

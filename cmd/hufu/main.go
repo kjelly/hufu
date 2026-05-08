@@ -91,7 +91,7 @@ func main() {
 	rootCmd.Flags().BoolVar(&tuiMode, "tui", false, "Show a Bubble Tea TUI for real-time task tracking")
 	rootCmd.Flags().BoolVar(&rbashMode, "rbash", false, "Use restricted bash (rbash) for the bash tool")
 	rootCmd.Flags().BoolVar(&noNet, "no-net", false, "Block all network access for agent subprocesses")
-	rootCmd.Flags().BoolVar(&direnv, "direnv", false, "Use direnv exec for bash tool; loads .envrc/.env and blocks cd commands")
+	rootCmd.Flags().BoolVar(&direnv, "direnv", false, "Load .envrc/.env environment for bash tool; parses .env (key=value) and/or uses direnv for full shell support")
 	rootCmd.Flags().BoolVar(&think, "think", false, "Show coordinator decision reasoning (skills, agents, tasks, system prompt)")
 	rootCmd.Flags().StringArrayVar(&varFlags, "var", nil, "Set template variable (key=value). Can be specified multiple times; later values override earlier ones")
 	rootCmd.Flags().StringArrayVar(&varFiles, "var-file", nil, "Read template variables from a file (.yaml/.yml or KEY=VALUE format). Can be specified multiple times; later files override earlier ones")

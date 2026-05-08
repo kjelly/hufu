@@ -102,5 +102,5 @@ func executeSudo(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		}
 	}
 
-	return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "sudo", []string{"bash", "-c", args.Command})
+	return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "sudo", []string{"bash", "-c", args.Command}, nil)
 }
