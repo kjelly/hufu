@@ -247,6 +247,42 @@ func TestExtractPathsFromCommand(t *testing.T) {
 			wantMin: 0,
 			wantHas: []string{},
 		},
+		{
+			name:    "env -i with home and path",
+			cmd:     "env -i HOME=/home/kjelly PATH=/usr/bin GH_CONFIG_DIR=/home/kjelly/.config/gh gh workflow run deploy.yml",
+			wantMin: 0,
+			wantHas: []string{},
+		},
+		{
+			name:    "env var assignment mixed with real path",
+			cmd:     "HOME=/home/user cat /etc/passwd",
+			wantMin: 1,
+			wantHas: []string{"/etc/passwd"},
+		},
+		{
+			name:    "multiple env vars with real paths",
+			cmd:     "FOO=/tmp/bar BAZ=/tmp/baz ls /var/log",
+			wantMin: 1,
+			wantHas: []string{"/var/log"},
+		},
+		{
+			name:    "flag with path still detected",
+			cmd:     "curl --config=/etc/app.conf https://example.com",
+			wantMin: 1,
+			wantHas: []string{"/etc/app.conf"},
+		},
+		{
+			name:    "env assignment at start",
+			cmd:     "HOME=/home/test make",
+			wantMin: 0,
+			wantHas: []string{},
+		},
+		{
+			name:    "env assignment with semicolon separator",
+			cmd:     "HOME=/home/test; ls /tmp",
+			wantMin: 1,
+			wantHas: []string{"/tmp"},
+		},
 	}
 
 	for _, tt := range tests {

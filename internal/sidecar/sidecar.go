@@ -213,9 +213,6 @@ type GuardReviewResult struct {
 }
 
 func (s *Sidecar) ReviewToolCall(ctx context.Context, agentName, toolName, args string, rules []string) (GuardReviewResult, error) {
-	if s == nil || s.agent == nil {
-		return GuardReviewResult{Approved: true}, nil
-	}
 	if len(rules) == 0 {
 		return GuardReviewResult{Approved: true}, nil
 	}
@@ -333,4 +330,54 @@ NEW TASK: %s`, list.String(), newTask)
 		return -1, nil
 	}
 	return resp.Match - 1, nil
+}
+
+func (s *Sidecar) ReviewPathAccess(ctx context.Context, command string, path string) (bool, error) {
+	if s == nil || s.agent == nil {
+		return true, nil
+	}
+
+	truncCmd := command
+	if utf8.RuneCountInString(truncCmd) > 3000 {
+		truncCmd = string([]rune(truncCmd)[:3000]) + "\n...(truncated)"
+	}
+
+	prompt := fmt.Sprintf(`You are a path access classifier. Determine whether the path "%s" in the given command is a REAL filesystem access or just a pattern that LOOKS like a path but is NOT actually reading/writing a file.
+
+Rules:
+- Paths in sed/grep/awk replacements (e.g., s/foo/bar/, s|/a|/b|, sed 's/X/Y/') are NOT file accesses
+- Paths after "=" in variable assignments (e.g., FOO=/path, HOME=/home/user) are NOT file accesses
+- Paths in URL-like strings (e.g., https://example.com/path) are NOT file accesses
+- Actual file read/write/ls/cd operations ARE file accesses
+- Paths that are command names (e.g., /usr/bin/ls) ARE file accesses
+
+Command:
+%s
+
+Path: %s
+
+Return ONLY a JSON object: {"is_file_access": true/false, "reason": "brief explanation"}`, path, truncCmd, path)
+
+	result, err := s.generate(ctx, prompt)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: sidecar ReviewPathAccess generate failed: %v\n", err)
+		return true, err
+	}
+
+	result = strings.TrimSpace(result)
+	extracted := jsonCodeBlockRe.FindStringSubmatch(result)
+	if len(extracted) >= 2 {
+		result = strings.TrimSpace(extracted[1])
+	}
+
+	var parsed struct {
+		IsFileAccess bool   `json:"is_file_access"`
+		Reason       string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: sidecar ReviewPathAccess: failed to parse JSON response %q: %v\n", result, err)
+		return true, err
+	}
+
+	return parsed.IsFileAccess, nil
 }

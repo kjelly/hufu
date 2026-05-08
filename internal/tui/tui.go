@@ -120,10 +120,11 @@ type Model struct {
 
 	scrollOff [5]int // scroll offset per column (index of first visible item)
 
-	inDetail bool
-	detailID string
-	vp       viewport.Model
-	vpReady  bool
+	inDetail    bool
+	detailID    string
+	vp          viewport.Model
+	vpReady     bool
+	horizOffset int
 
 	inConfirm     bool // showing quit confirmation dialog
 	confirmChoice int  // 0=no 1=yes
@@ -372,6 +373,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Clicked on item i — enter detail view
 					m.detailID = items[i].ID
 					m.inDetail = true
+					m.horizOffset = 0
 					if m.vpReady {
 						m.vp.SetContent(m.buildDetailContent())
 						m.vp.GotoTop()
@@ -454,6 +456,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "backspace":
 		m.inDetail = false
+		m.horizOffset = 0
 		if !m.mouseManuallyEnabled {
 			m.mouseEnabled = false
 			return m, disableMouseCmd()
@@ -483,6 +486,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchIdx = (m.searchIdx + 1) % len(m.searchResults)
 			m.jumpToSearchMatch()
 			m.inDetail = false
+			m.horizOffset = 0
 		}
 		return m, nil
 	case "N":
@@ -490,7 +494,16 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchIdx = (m.searchIdx - 1 + len(m.searchResults)) % len(m.searchResults)
 			m.jumpToSearchMatch()
 			m.inDetail = false
+			m.horizOffset = 0
 		}
+		return m, nil
+	case "left", "h":
+		if m.horizOffset > 0 {
+			m.horizOffset--
+		}
+		return m, nil
+	case "right", "l":
+		m.horizOffset++
 		return m, nil
 	case "m":
 		m.mouseManuallyEnabled = !m.mouseManuallyEnabled
@@ -607,6 +620,7 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.row < len(col) {
 			m.detailID = col[m.row].ID
 			m.inDetail = true
+			m.horizOffset = 0
 			if m.vpReady {
 				m.vp.SetContent(m.buildDetailContent())
 				m.vp.GotoBottom()
@@ -1394,7 +1408,13 @@ func (m Model) detailView() string {
 	if !m.vpReady {
 		return header
 	}
-	return header + "\n" + m.vp.View()
+	if m.horizOffset > 0 {
+		m.vp.ScrollLeft(m.horizOffset)
+	}
+	hScrollPct := int(m.vp.HorizontalScrollPercent() * 100)
+	scrollIndicator := fmt.Sprintf(" %d%% ", hScrollPct)
+	footer := footerStyle.Render(fmt.Sprintf("esc back · ↑↓/j/k scroll · ←→/h/l shift %s· / search · q quit", scrollIndicator))
+	return header + "\n" + m.vp.View() + "\n" + footer
 }
 
 func sourceDetailTag(source string) string {

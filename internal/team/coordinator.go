@@ -283,6 +283,15 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	}
 	tools.SetGuardReviewer(c.coreTools, guardReviewer)
 
+	pathReviewer := func(ctx context.Context, command string, path string) (bool, error) {
+		s := c.Sidecar()
+		if s == nil {
+			return true, nil
+		}
+		return s.ReviewPathAccess(ctx, command, path)
+	}
+	tools.SetPathReviewer(c.coreTools, pathReviewer)
+
 	if history := LoadConversationHistory(session.Workspace); len(history) > 0 {
 		c.conversationHistory = history
 	}

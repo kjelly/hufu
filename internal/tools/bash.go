@@ -27,7 +27,9 @@ var bannedCmdRe = regexp.MustCompile(`^(alias|bg|bind|builtin|caller|command|com
 
 var bashPrivEscRe = regexp.MustCompile("(?:^|[|;&(\n\x60]|\\$\\()\\s*(?:sudo|ssh)(?:\\s|$)")
 
-var absPathInCmdRe = regexp.MustCompile(`(?:^|\s|=|>|<|")(/(?:[a-zA-Z0-9_.-]+/)+[a-zA-Z0-9_.-]*)(?:\s|"|$|;|&|\|)`)
+var absPathInCmdRe = regexp.MustCompile(`(?:^|\s|=|>|<|"|;)(/(?:[a-zA-Z0-9_.-]+/)*(?:[a-zA-Z0-9_.-]+))(?:\s|"|$|;|&|\|)`)
+
+var envVarPathRe = regexp.MustCompile(`\b[A-Z_][A-Z0-9_]*=(/[a-zA-Z0-9_./-]+)`)
 
 var cdPathRe = regexp.MustCompile(`(?:^|\s|;|&|\||\n)cd\s+(?:'([^']+)'|"([^"]+)"|([^ \t\n;&|'"` + "`" + `]+))`)
 
@@ -38,6 +40,7 @@ var systemPathPrefixes = []string{"/usr/", "/bin/", "/sbin/", "/lib/", "/lib32/"
 type bashArgs struct {
 	Command string  `json:"command"`
 	Timeout float64 `json:"timeout,omitempty"`
+	WorkDir string  `json:"working_directory,omitempty"`
 }
 
 // runShellCommand runs name+args under a derived context with the given timeout,
@@ -102,26 +105,24 @@ func runShellCommand(ctx context.Context, timeout time.Duration, workDir string,
 func NewBashTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "bash"
-	desc := "Execute a bash command. Returns stdout and stderr. Output is truncated to the last 2000 lines or 50KB. Optionally provide a timeout in seconds."
+	var desc string
 	if cfg.Direnv {
-		desc = "Execute a bash command via direnv exec (--direnv). Loads .envrc/.env from the working directory before running. 'cd' commands are blocked — the working directory is fixed and enforced by direnv. Returns stdout and stderr. Optionally provide a timeout in seconds."
+		desc = "Execute a bash command via direnv exec (--direnv). Loads .envrc/.env from the working directory before running. 'cd' is not allowed — use working_directory to change directories. The working directory is fixed and enforced by direnv. Returns stdout and stderr. Optionally provide a timeout in seconds."
+	} else if cfg.RestrictedBash {
+		desc = "Execute a bash command in restricted mode (rbash). 'cd' and output redirection ('>', '>>') are blocked — use working_directory to change directories. Commands must be in PATH; absolute paths are not allowed. The working directory is fixed. Returns stdout and stderr. Optionally provide a timeout in seconds."
+	} else if cfg.NetworkBlock {
+		desc = "Execute a bash command. Network access is blocked (--no-net). No network connections can be made. 'cd' is not allowed — use working_directory to change directories. Returns stdout and stderr. Output is truncated to the last 2000 lines or 50KB. Optionally provide a timeout in seconds."
+	} else {
+		desc = "Execute a bash command. 'cd' is not allowed — use working_directory to change directories. Returns stdout and stderr. Output is truncated to the last 2000 lines or 50KB. Optionally provide a timeout in seconds."
 	}
-	if cfg.RestrictedBash {
-		if cfg.Direnv {
-			desc = "Execute a bash command via direnv exec (--direnv) in restricted mode (rbash). Loads .envrc/.env from the working directory. 'cd' and output redirection ('>', '>>') are blocked. Commands must be in PATH; absolute paths are not allowed. Optionally provide a timeout in seconds."
-		} else {
-			desc = "Execute a bash command in restricted mode (rbash). 'cd' and output redirection ('>', '>>') are blocked. Commands must be in PATH; absolute paths are not allowed. The working directory is fixed. Optionally provide a timeout in seconds."
-		}
+	if cfg.RestrictedBash && cfg.Direnv {
+		desc = "Execute a bash command via direnv exec (--direnv) in restricted mode (rbash). Loads .envrc/.env from the working directory. 'cd' and output redirection ('>', '>>') are blocked — use working_directory to change directories. Commands must be in PATH; absolute paths are not allowed. Returns stdout and stderr. Optionally provide a timeout in seconds."
+	} else if cfg.NetworkBlock && cfg.Direnv {
+		desc = "Execute a bash command via direnv exec (--direnv). Network access is blocked (--no-net). Loads .envrc/.env from the working directory. 'cd' is not allowed — use working_directory to change directories. The working directory is fixed and enforced by direnv. Returns stdout and stderr. Optionally provide a timeout in seconds."
+	} else if cfg.NetworkBlock && cfg.RestrictedBash {
+		desc = "Execute a bash command in restricted mode (rbash). Network access is blocked (--no-net). 'cd' and output redirection ('>', '>>') are blocked — use working_directory to change directories. Commands must be in PATH; absolute paths are not allowed. The working directory is fixed. Returns stdout and stderr. Optionally provide a timeout in seconds."
 	}
-	if cfg.NetworkBlock {
-		desc = "Execute a bash command. Network access is blocked (--no-net). No network connections can be made. Returns stdout and stderr. Output is truncated to the last 2000 lines or 50KB. Optionally provide a timeout in seconds."
-		if cfg.RestrictedBash {
-			desc = "Execute a bash command in restricted mode (rbash). Network access is blocked (--no-net). 'cd' and output redirection ('>', '>>') are blocked. Commands must be in PATH; absolute paths are not allowed. The working directory is fixed. Optionally provide a timeout in seconds."
-		}
-		if cfg.Direnv {
-			desc = "Execute a bash command via direnv exec (--direnv). Network access is blocked (--no-net). Loads .envrc/.env from the working directory. 'cd' commands are blocked — the working directory is fixed and enforced by direnv. Returns stdout and stderr. Optionally provide a timeout in seconds."
-		}
-	}
+	desc += " Environment variables (HOME, PATH, etc.) are inherited from the parent process — do not use 'env -i' to reset them."
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "bash",
@@ -134,6 +135,10 @@ func NewBashTool(opts ...ToolOption) fantasy.AgentTool {
 				"timeout": map[string]any{
 					"type":        "number",
 					"description": "Timeout in seconds (optional, default 120s, max 600s)",
+				},
+				"working_directory": map[string]any{
+					"type":        "string",
+					"description": "Working directory for the command (optional, defaults to the project directory). Only set this if you need to run the command in a different directory. In direnv mode this parameter is required.",
 				},
 			},
 			Required: []string{"command"},
@@ -206,6 +211,34 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 	if args.Command == "" {
 		return fantasy.NewTextErrorResponse("command parameter is required"), nil
 	}
+
+	if args.WorkDir != "" {
+		abs, err := filepath.Abs(args.WorkDir)
+		if err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid working_directory: %v", err)), nil
+		}
+		abs = filepath.Clean(abs)
+		info, err := os.Stat(abs)
+		if err != nil || !info.IsDir() {
+			return fantasy.NewTextErrorResponse("working_directory does not exist or is not a directory"), nil
+		}
+		if !isPathAllowed(abs, effCfg.AllowedPaths) {
+			if effCfg.PathConsent != nil {
+				result, err := effCfg.PathConsent.AskConsent(abs, "workdir", cfg.ToolName, args.WorkDir)
+				if err != nil {
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("working_directory outside allowed paths and consent failed: %v", err)), nil
+				}
+				switch result {
+				case ConsentDenied:
+					return fantasy.NewTextErrorResponse("working_directory is outside allowed paths — access denied by user"), nil
+				}
+			} else {
+				return fantasy.NewTextErrorResponse("working_directory is outside allowed paths"), nil
+			}
+		}
+		effCfg.WorkDir = abs
+	}
+
 	args.Command = normalizeBashCommand(args.Command, effCfg.WorkspaceName)
 	if bannedCmdRe.MatchString(args.Command) {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("command '%s' is not allowed", args.Command)), nil
@@ -214,8 +247,12 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		return fantasy.NewTextErrorResponse("sudo and ssh are not available in the bash tool — use the sudo or ssh tool instead"), nil
 	}
 
-	if err := checkBashPathConsent(args.Command, effCfg); err != nil {
+	if err := checkBashPathConsent(ctx, args.Command, effCfg); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+
+	if cdBlockRe.MatchString(args.Command) {
+		return fantasy.NewTextErrorResponse("'cd' is not allowed — use the working_directory parameter to set the working directory instead"), nil
 	}
 
 	restricted := effCfg.RestrictedBash
@@ -232,13 +269,10 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 	}
 
 	if effCfg.Direnv {
-		if cdBlockRe.MatchString(args.Command) {
-			return fantasy.NewTextErrorResponse("cd is not allowed when direnv mode is enabled — the working directory is enforced by direnv"), nil
+		if effCfg.WorkDir == "" {
+			return fantasy.NewTextErrorResponse("working_directory is required in direnv mode"), nil
 		}
-		if effCfg.WorkDir != "" {
-			return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "direnv", []string{"exec", effCfg.WorkDir, "--", "bash", "-c", args.Command}, "PATH="+os.Getenv("PATH"))
-		}
-		return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "bash", []string{"-c", args.Command})
+		return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "direnv", []string{"exec", effCfg.WorkDir, "--", "bash", "-c", args.Command}, "PATH="+os.Getenv("PATH"))
 	}
 
 	if restricted {
@@ -343,9 +377,10 @@ func rewriteLineRedirects(line string) string {
 	return cmdPart + " | tee " + filePath
 }
 
-func checkBashPathConsent(command string, cfg ToolConfig) error {
+func checkBashPathConsent(ctx context.Context, command string, cfg ToolConfig) error {
 	pathsToCheck := extractPathsFromCommand(command, cfg.WorkDir)
 	seen := make(map[string]bool)
+	var candidatePaths []string
 	for _, p := range pathsToCheck {
 		if seen[p] {
 			continue
@@ -374,8 +409,30 @@ func checkBashPathConsent(command string, cfg ToolConfig) error {
 			continue
 		}
 
+		candidatePaths = append(candidatePaths, p)
+	}
+
+	// Sidecar path review: filter out non-filesystem paths (e.g. sed replacements, env var values)
+	if cfg.PathReviewer != nil && len(candidatePaths) > 0 {
+		var realPaths []string
+		for _, p := range candidatePaths {
+		isFileAccess, err := cfg.PathReviewer(ctx, command, p)
+			if err == nil && isFileAccess {
+				realPaths = append(realPaths, p)
+			}
+		}
+		candidatePaths = realPaths
+	}
+
+	for _, p := range candidatePaths {
+		absPath, err := filepath.Abs(p)
+		if err != nil {
+			continue
+		}
+		absPath = filepath.Clean(absPath)
+
 		if cfg.PathConsent != nil {
-			result, err := cfg.PathConsent.AskConsent(absPath, "access", cfg.ToolName, p)
+			result, err := cfg.PathConsent.AskConsent(absPath, "access", cfg.ToolName, command)
 			if err != nil {
 				return fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", absPath, err)
 			}
@@ -407,7 +464,20 @@ func extractPathsFromCommand(command, workDir string) []string {
 		}
 	}
 
-	return paths
+	envPaths := make(map[string]bool)
+	for _, match := range envVarPathRe.FindAllStringSubmatch(command, -1) {
+		if len(match) > 1 && match[1] != "" {
+			envPaths[match[1]] = true
+		}
+	}
+
+	filtered := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if !envPaths[p] {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered
 }
 
 func isSystemPath(path string) bool {

@@ -6,6 +6,8 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"charm.land/fantasy"
@@ -19,7 +21,7 @@ func NewSudoTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "sudo",
-			Description: "Execute a bash command with root privileges via sudo. Use only when elevated access is genuinely required. The command runs as: sudo bash -c \"<command>\".",
+			Description: "Execute a bash command with root privileges via sudo. Use only when elevated access is genuinely required. The command runs as: sudo bash -c \"<command>\". Environment variables (HOME, PATH, etc.) are inherited from the parent process — do not use 'env -i' to reset them.",
 			Parameters: map[string]any{
 				"command": map[string]any{
 					"type":        "string",
@@ -28,6 +30,10 @@ func NewSudoTool(opts ...ToolOption) fantasy.AgentTool {
 				"timeout": map[string]any{
 					"type":        "number",
 					"description": "Timeout in seconds (optional, default 120s, max 600s)",
+				},
+				"working_directory": map[string]any{
+					"type":        "string",
+					"description": "Working directory for the command (optional, defaults to the project directory). Only set this if you need to run the command in a different directory.",
 				},
 			},
 			Required: []string{"command"},
@@ -46,13 +52,45 @@ func executeSudo(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 	if args.Command == "" {
 		return fantasy.NewTextErrorResponse("command parameter is required"), nil
 	}
+
+	effCfg := cfgWithMergedPaths(cfg, ctx)
+
+	if args.WorkDir != "" {
+		abs, err := filepath.Abs(args.WorkDir)
+		if err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid working_directory: %v", err)), nil
+		}
+		abs = filepath.Clean(abs)
+		info, err := os.Stat(abs)
+		if err != nil || !info.IsDir() {
+			return fantasy.NewTextErrorResponse("working_directory does not exist or is not a directory"), nil
+		}
+		if !isPathAllowed(abs, effCfg.AllowedPaths) {
+			if effCfg.PathConsent != nil {
+				result, err := effCfg.PathConsent.AskConsent(abs, "workdir", cfg.ToolName, args.WorkDir)
+				if err != nil {
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("working_directory outside allowed paths and consent failed: %v", err)), nil
+				}
+				switch result {
+				case ConsentDenied:
+					return fantasy.NewTextErrorResponse("working_directory is outside allowed paths — access denied by user"), nil
+				}
+			} else {
+				return fantasy.NewTextErrorResponse("working_directory is outside allowed paths"), nil
+			}
+		}
+		effCfg.WorkDir = abs
+	}
+
+	if cdBlockRe.MatchString(args.Command) {
+		return fantasy.NewTextErrorResponse("'cd' is not allowed — use the working_directory parameter to set the working directory instead"), nil
+	}
+
 	if bannedCmdRe.MatchString(args.Command) {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("command '%s' is not allowed", args.Command)), nil
 	}
 
-	effCfg := cfgWithMergedPaths(cfg, ctx)
-
-	if err := checkBashPathConsent(args.Command, effCfg); err != nil {
+	if err := checkBashPathConsent(ctx, args.Command, effCfg); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 

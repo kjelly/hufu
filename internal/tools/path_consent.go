@@ -135,8 +135,8 @@ func (pc *PathConsent) AskConsent(path, operation string, toolName, toolArgs str
 	if toolName != "" {
 		if toolArgs != "" {
 			argsPreview := toolArgs
-			if len(argsPreview) > 120 {
-				argsPreview = argsPreview[:117] + "..."
+			if len(argsPreview) > 300 {
+				argsPreview = argsPreview[:297] + "..."
 			}
 			fmt.Fprintf(os.Stderr, "Tool:  %s → %s\n", toolName, argsPreview)
 		} else {

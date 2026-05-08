@@ -188,6 +188,7 @@ type coreTool struct {
 	pOpts         fantasy.ProviderOptions
 	hooks         *hooks.HookRegistry
 	guardReviewer GuardReviewFn
+	pathReviewer  PathReviewer
 }
 
 func (t *coreTool) Info() fantasy.ToolInfo                          { return t.info }
@@ -198,6 +199,14 @@ func SetGuardReviewer(tools []fantasy.AgentTool, fn GuardReviewFn) {
 	for _, t := range tools {
 		if ct, ok := t.(*coreTool); ok {
 			ct.guardReviewer = fn
+		}
+	}
+}
+
+func SetPathReviewer(tools []fantasy.AgentTool, pr PathReviewer) {
+	for _, t := range tools {
+		if ct, ok := t.(*coreTool); ok {
+			ct.pathReviewer = pr
 		}
 	}
 }

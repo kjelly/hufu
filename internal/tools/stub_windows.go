@@ -19,6 +19,7 @@ type ToolConfig struct {
 	WorkDir         string
 	AllowedPaths    []string
 	PathConsent     *PathConsent
+	PathReviewer    PathReviewer
 	ToolName        string
 	WorkspaceName   string
 	Hooks           *hooks.HookRegistry
@@ -72,6 +73,7 @@ type agentNetworkBlockKeyType struct{}
 func WithWorkDir(dir string) ToolOption { return func(c *ToolConfig) { c.WorkDir = dir } }
 func WithAllowedPaths(paths []string) ToolOption { return func(c *ToolConfig) { c.AllowedPaths = paths } }
 func WithPathConsent(consent *PathConsent) ToolOption { return func(c *ToolConfig) { c.PathConsent = consent } }
+func WithPathReviewer(reviewer PathReviewer) ToolOption { return func(c *ToolConfig) { c.PathReviewer = reviewer } }
 func WithToolName(name string) ToolOption { return func(c *ToolConfig) { c.ToolName = name } }
 func WithWorkspaceName(name string) ToolOption { return func(c *ToolConfig) { c.WorkspaceName = name } }
 func WithHooks(h *hooks.HookRegistry) ToolOption { return func(c *ToolConfig) { c.Hooks = h } }
