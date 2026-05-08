@@ -31,6 +31,8 @@ var absPathInCmdRe = regexp.MustCompile(`(?:^|\s|=|>|<|")(/(?:[a-zA-Z0-9_.-]+/)+
 
 var cdPathRe = regexp.MustCompile(`(?:^|\s|;|&|\||\n)cd\s+(?:'([^']+)'|"([^"]+)"|([^ \t\n;&|'"` + "`" + `]+))`)
 
+var cdBlockRe = regexp.MustCompile(`(?:^|[;&&|\|\||\(\s]+)\s*cd\s`)
+
 var systemPathPrefixes = []string{"/usr/", "/bin/", "/sbin/", "/lib/", "/lib32/", "/lib64/", "/proc/", "/sys/", "/dev/", "/etc/alternatives/"}
 
 type bashArgs struct {
@@ -41,7 +43,7 @@ type bashArgs struct {
 // runShellCommand runs name+args under a derived context with the given timeout,
 // sets Dir and the SHELL env var, then collects stdout/stderr and builds a response.
 // It is used by the bash and sudo tools.
-func runShellCommand(ctx context.Context, timeout time.Duration, workDir string, networkBlock bool, name string, args ...string) (fantasy.ToolResponse, error) {
+func runShellCommand(ctx context.Context, timeout time.Duration, workDir string, networkBlock bool, name string, args []string, envOverrides ...string) (fantasy.ToolResponse, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -58,7 +60,12 @@ func runShellCommand(ctx context.Context, timeout time.Duration, workDir string,
 	if err != nil {
 		bashPath = "/bin/bash"
 	}
-	cmd.Env = append(os.Environ(), "SHELL="+bashPath)
+	env := os.Environ()
+	env = append(env, "SHELL="+bashPath)
+	for _, e := range envOverrides {
+		env = append(env, e)
+	}
+	cmd.Env = env
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -96,13 +103,23 @@ func NewBashTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "bash"
 	desc := "Execute a bash command. Returns stdout and stderr. Output is truncated to the last 2000 lines or 50KB. Optionally provide a timeout in seconds."
+	if cfg.Direnv {
+		desc = "Execute a bash command via direnv exec (--direnv). Loads .envrc/.env from the working directory before running. 'cd' commands are blocked — the working directory is fixed and enforced by direnv. Returns stdout and stderr. Optionally provide a timeout in seconds."
+	}
 	if cfg.RestrictedBash {
-		desc = "Execute a bash command in restricted mode (rbash). 'cd' and output redirection ('>', '>>') are blocked. Commands must be in PATH; absolute paths are not allowed. The working directory is fixed. Optionally provide a timeout in seconds."
+		if cfg.Direnv {
+			desc = "Execute a bash command via direnv exec (--direnv) in restricted mode (rbash). Loads .envrc/.env from the working directory. 'cd' and output redirection ('>', '>>') are blocked. Commands must be in PATH; absolute paths are not allowed. Optionally provide a timeout in seconds."
+		} else {
+			desc = "Execute a bash command in restricted mode (rbash). 'cd' and output redirection ('>', '>>') are blocked. Commands must be in PATH; absolute paths are not allowed. The working directory is fixed. Optionally provide a timeout in seconds."
+		}
 	}
 	if cfg.NetworkBlock {
 		desc = "Execute a bash command. Network access is blocked (--no-net). No network connections can be made. Returns stdout and stderr. Output is truncated to the last 2000 lines or 50KB. Optionally provide a timeout in seconds."
 		if cfg.RestrictedBash {
 			desc = "Execute a bash command in restricted mode (rbash). Network access is blocked (--no-net). 'cd' and output redirection ('>', '>>') are blocked. Commands must be in PATH; absolute paths are not allowed. The working directory is fixed. Optionally provide a timeout in seconds."
+		}
+		if cfg.Direnv {
+			desc = "Execute a bash command via direnv exec (--direnv). Network access is blocked (--no-net). Loads .envrc/.env from the working directory. 'cd' commands are blocked — the working directory is fixed and enforced by direnv. Returns stdout and stderr. Optionally provide a timeout in seconds."
 		}
 	}
 	return &coreTool{
@@ -214,6 +231,16 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		}
 	}
 
+	if effCfg.Direnv {
+		if cdBlockRe.MatchString(args.Command) {
+			return fantasy.NewTextErrorResponse("cd is not allowed when direnv mode is enabled — the working directory is enforced by direnv"), nil
+		}
+		if effCfg.WorkDir != "" {
+			return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "direnv", []string{"exec", effCfg.WorkDir, "--", "bash", "-c", args.Command}, "PATH="+os.Getenv("PATH"))
+		}
+		return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "bash", []string{"-c", args.Command})
+	}
+
 	if restricted {
 		restrictedPath := effCfg.RestrictedPath
 		if rp, ok := ctx.Value(AgentRestrictedPathKey).(string); ok && rp != "" {
@@ -222,7 +249,7 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		return runShellCommandRestricted(ctx, timeout, effCfg.WorkDir, restrictedPath, effCfg.NetworkBlock, args.Command)
 	}
 
-	return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "bash", "-c", args.Command)
+	return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "bash", []string{"-c", args.Command})
 }
 
 func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workDir string, restrictedPath string, networkBlock bool, command string) (fantasy.ToolResponse, error) {

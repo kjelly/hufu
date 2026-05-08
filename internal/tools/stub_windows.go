@@ -25,6 +25,7 @@ type ToolConfig struct {
 	RestrictedBash  bool
 	RestrictedPath  string
 	NetworkBlock    bool
+	Direnv          bool
 }
 
 type PathConsent struct {
@@ -77,6 +78,7 @@ func WithHooks(h *hooks.HookRegistry) ToolOption { return func(c *ToolConfig) { 
 func WithRestrictedBash(enabled bool) ToolOption { return func(c *ToolConfig) { c.RestrictedBash = enabled } }
 func WithRestrictedPath(path string) ToolOption { return func(c *ToolConfig) { c.RestrictedPath = path } }
 func WithNetworkBlock(enabled bool) ToolOption { return func(c *ToolConfig) { c.NetworkBlock = enabled } }
+func WithDirenv(enabled bool) ToolOption { return func(c *ToolConfig) { c.Direnv = enabled } }
 
 func ApplyOptions(opts []ToolOption) ToolConfig { return ToolConfig{} }
 

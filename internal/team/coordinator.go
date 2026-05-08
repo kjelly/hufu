@@ -94,6 +94,7 @@ type Coordinator struct {
 	agentCacheMu          sync.RWMutex
 	round                 int
 	verbose               bool
+	think                 bool
 	reportStatus          StatusReporter
 	sessionData           *SessionData
 	taskTracker           *TaskTracker
@@ -212,9 +213,9 @@ func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
 	return
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool) (*Coordinator, error) {
+func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
-	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath), tools.WithNetworkBlock(noNet))
+	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath), tools.WithNetworkBlock(noNet), tools.WithDirenv(direnv))
 	prov, err := agent.NewOllamaProvider(defaultProviderURL, defaultProviderAPIKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Ollama provider: %w", err)
@@ -226,6 +227,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		coreTools:       coreTools,
 		agentCache:      make(map[string]fantasy.Agent),
 		verbose:         verbose,
+		think:           think,
 		reportStatus:    func(event StatusEvent) {},
 		taskTracker:     NewTaskTracker(),
 		skills:          session.Skills,
@@ -652,6 +654,9 @@ func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string)
 				Description: sk.Description,
 			}
 		}
+		if c.think {
+			c.emitThinkSidecar("MatchSkills", fmt.Sprintf("matching %d skills against prompt", len(allSkills)))
+		}
 		names, err := s.MatchSkills(ctx, prompt, summaries)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: sidecar skill matching failed, using keyword fallback: %v\n", err)
@@ -670,8 +675,14 @@ func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string)
 			for i, sk := range matched {
 				matchedNames[i] = sk.Name
 			}
+			if c.think {
+				c.emitThinkSidecar("MatchSkills", fmt.Sprintf("matched: %s", strings.Join(matchedNames, ", ")))
+			}
 			c.report(c.newEvent("sidecar_call").withMessage("match_skills → " + strings.Join(matchedNames, ", ")))
 			return matched
+		}
+		if c.think {
+			c.emitThinkSidecar("MatchSkills", "no matches")
 		}
 		c.report(c.newEvent("sidecar_call").withMessage("match_skills → (no matches)"))
 	}
@@ -681,6 +692,9 @@ func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string)
 		names := make([]string, len(fallback))
 		for i, sk := range fallback {
 			names[i] = sk.Name
+		}
+		if c.think {
+			c.emitThinkSidecar("MatchSkills(keyword)", fmt.Sprintf("fallback matched: %s", strings.Join(names, ", ")))
 		}
 		c.report(c.newEvent("sidecar_call").withMessage("match_skills (keyword) → " + strings.Join(names, ", ")))
 	}
@@ -1434,6 +1448,9 @@ func (c *Coordinator) lookupTaskCache(ctx context.Context, agentKey, newTask str
 	sidecarCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	if c.think {
+		c.emitThinkSidecar("SimilarTask", fmt.Sprintf("checking cache for semantically similar task: %.50s", newTask))
+	}
 	idx, err := s.SimilarTask(sidecarCtx, newTask, pastDescs)
 	if err != nil {
 		return "", false
@@ -1710,6 +1727,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	resolvedModel := c.resolveAgentModel(agentDef, task.Model)
 
+	if c.think {
+		c.emitThinkDelegation(agentName, task.Task, resolvedModel)
+	}
+
 	c.report(c.newEvent("start").withAgent(agentName).withMessage(task.Task).withModel(resolvedModel).withTodoID(todoID))
 	prevAgent := c.GetCurrentAgent()
 	prevTask := c.GetCurrentTask()
@@ -1861,6 +1882,11 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("sidecar_call").withAgent(task.Agent).withMessage(task.Task))
 
+	if c.think {
+		c.emitThinkDelegation(task.Agent, task.Task, c.sidecarModel)
+		c.emitThinkSidecar("Execute", fmt.Sprintf("running task via sidecar model: %s", c.sidecarModel))
+	}
+
 	sidecarTimeout := time.Duration(c.session.Config.Timeout) * time.Second
 	if sidecarTimeout <= 0 {
 		sidecarTimeout = 120 * time.Second
@@ -1906,8 +1932,8 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
 			timing.beginTool()
 			argsPreview := tc.Input
-			if len(argsPreview) > 200 {
-				argsPreview = argsPreview[:200] + "..."
+			if len(argsPreview) > 2000 {
+				argsPreview = argsPreview[:2000] + "..."
 			}
 			reportFn(c.newEvent("tool_call").withAgent(agentName).withTodoID(todoID).withTool(tc.ToolName, argsPreview))
 			llmLogStreamEvent(logWrite, "tool_call", formatToolCallContent(tc))
@@ -1933,7 +1959,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			return nil
 		},
 		OnTextDelta: func(id, text string) error {
-			reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage(text))
+			eventType := "text"
+			if c.think {
+				eventType = "think_text"
+			}
+			reportFn(c.newEvent(eventType).withAgent(agentName).withTodoID(todoID).withMessage(text))
 			logWrite(text)
 			return nil
 		},
@@ -2256,6 +2286,9 @@ func (c *Coordinator) getWorkerContext(ctx context.Context) string {
 		}
 		ctxSize := c.getWorkerContextSize()
 		if s := c.Sidecar(); s != nil && utf8.RuneCountInString(raw) > ctxSize/2 {
+			if c.think {
+				c.emitThinkSidecar("Compact", "compacting worker context (AGENTS.md)")
+			}
 			compacted, err := s.Compact(ctx, raw, "Extract the essential project context: tech stack, language, framework, key conventions, and directory structure. Preserve all factual details but remove verbose descriptions.")
 			if err == nil && compacted != "" {
 				raw = compacted
@@ -2302,6 +2335,9 @@ func (c *Coordinator) computeWorkerSummaries(ctx context.Context) {
 
 func (c *Coordinator) summarizeSystem(ctx context.Context, system string) string {
 	if s := c.Sidecar(); s != nil {
+		if c.think {
+			c.emitThinkSidecar("Compact", "summarizing worker system prompt for coordinator")
+		}
 		compacted, err := s.Compact(ctx, system, "Summarize this agent's role, key behavioral guidelines, and unique instructions in 2-3 concise sentences. Preserve what makes this agent distinct.")
 		if err == nil && compacted != "" {
 			return compacted
@@ -2597,6 +2633,9 @@ func (c *Coordinator) summarizeOutput(ctx context.Context, text string) string {
 		return text
 	}
 	c.report(c.newEvent("sidecar_call").withMessage("summarize"))
+	if c.think {
+		c.emitThinkSidecar("Summarize", "summarizing agent output")
+	}
 	summarized, err := s.Summarize(ctx, text, 2000)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: sidecar summarize failed: %v\n", err)
@@ -2690,6 +2729,9 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 	}
 	if b.Len() == 0 {
 		return messages
+	}
+	if c.think {
+		c.emitThinkSidecar("Compact", fmt.Sprintf("compacting %d messages", len(messages)))
 	}
 	result, err := s.Compact(ctx, b.String(), "Compress the following conversation into a concise summary while preserving key facts, decisions, and results.")
 	if err != nil || result == "" {
@@ -2938,6 +2980,56 @@ func (c *Coordinator) finalizeNormalCompletion() {
 	}
 }
 
+func (c *Coordinator) emitThinkSkills(matched []*skill.SkillDef) {
+	if len(matched) == 0 {
+		c.report(c.newEvent("think_skills").withMessage("no skills matched (keyword fallback used)"))
+		return
+	}
+	names := make([]string, len(matched))
+	for i, s := range matched {
+		names[i] = s.Name
+	}
+	c.report(c.newEvent("think_skills").withMessage(fmt.Sprintf("matched %d skills: %s", len(matched), strings.Join(names, ", "))))
+	for _, s := range matched {
+		c.report(c.newEvent("think_skill_detail").withAgent(s.Name).withMessage(s.Description))
+	}
+}
+
+func (c *Coordinator) emitThinkAgents() {
+	workers := c.uniqueWorkerDefs()
+	var b strings.Builder
+	fmt.Fprintf(&b, "available agents (%d): ", len(workers))
+	for _, def := range workers {
+		fmt.Fprintf(&b, "%s(%s), ", def.Name, def.Description)
+	}
+	msg := strings.TrimSuffix(b.String(), ", ")
+	c.report(c.newEvent("think_agents").withMessage(msg))
+}
+
+func (c *Coordinator) emitThinkPrompt(systemPrompt string) {
+	n := utf8.RuneCountInString(systemPrompt)
+	c.report(c.newEvent("think_prompt").withMessage(fmt.Sprintf("system prompt assembled (%d chars)", n)))
+
+	dumpPath := filepath.Join(c.session.Workspace, "think-prompt.md")
+	if err := os.WriteFile(dumpPath, []byte(systemPrompt), 0o644); err == nil {
+		c.report(c.newEvent("think_prompt_dump").withMessage("saved to " + dumpPath))
+	}
+}
+
+func (c *Coordinator) emitThinkDelegation(agent, task, model string) {
+	msg := fmt.Sprintf("delegating → %s ← %q [model: %s]", agent, task, model)
+	c.report(c.newEvent("think_delegation").withAgent(agent).withMessage(msg))
+}
+
+func (c *Coordinator) emitThinkSidecar(action, detail string) {
+	msg := fmt.Sprintf("%s: %s", action, detail)
+	c.report(c.newEvent("think_sidecar").withMessage(msg))
+}
+
+func (c *Coordinator) emitThinkText(text string) {
+	c.report(c.newEvent("think_text").withMessage(text))
+}
+
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
 	orchDef := c.GetOrchestratorDef()
 	if orchDef == nil {
@@ -2959,10 +3051,22 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	matchedSkills := c.matchSkillsWithSidecar(ctx, userPrompt)
 	c.setAutoLoadedSkills(matchedSkills)
 	c.computeWorkerSummaries(ctx)
+
+	if c.think {
+		c.emitThinkSkills(matchedSkills)
+	}
+
 	systemPrompt += "\n\n" + c.BuildOrchestratorPrompt(matchedSkills...)
+
+	if c.think {
+		c.emitThinkAgents()
+	}
 
 	if agentsMD := c.loadProjectContext(); agentsMD != "" {
 		if s := c.Sidecar(); s != nil && len(agentsMD) > 4000 {
+			if c.think {
+				c.emitThinkSidecar("Compact", "compacting AGENTS.md for coordinator prompt")
+			}
 			compacted, err := s.Compact(ctx, agentsMD, "Compress this project context while preserving all key facts, patterns, conventions, and instructions.")
 			if err == nil && compacted != "" {
 				agentsMD = compacted
@@ -2995,6 +3099,10 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	if reminder := c.buildCoreReminder(orchDef); reminder != "" {
 		systemPrompt += "\n\n" + reminder
+	}
+
+	if c.think {
+		c.emitThinkPrompt(systemPrompt)
 	}
 
 	// Apply the computed system prompt to a copy so shared state is not mutated.
@@ -3213,6 +3321,12 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 	matchedSkills := c.matchSkillsWithSidecar(ctx, userPrompt)
 	c.setAutoLoadedSkills(matchedSkills)
 
+	if c.think {
+		c.emitThinkSkills(matchedSkills)
+		c.computeWorkerSummaries(ctx)
+		c.emitThinkAgents()
+	}
+
 	systemPrompt := c.expandOrchestratorTemplate(orchDef.System)
 	if systemPrompt == "" {
 		systemPrompt = c.expandDefaultOrchestratorTemplate(defaultOrchestratorSystem)
@@ -3222,6 +3336,9 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 
 	if agentsMD := c.loadProjectContext(); agentsMD != "" {
 		if s := c.Sidecar(); s != nil && len(agentsMD) > 4000 {
+			if c.think {
+				c.emitThinkSidecar("Compact", "compacting AGENTS.md")
+			}
 			compacted, err := s.Compact(ctx, agentsMD, "Compress this project context while preserving all key facts, patterns, conventions, and instructions.")
 			if err == nil && compacted != "" {
 				agentsMD = compacted

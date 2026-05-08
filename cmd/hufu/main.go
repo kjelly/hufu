@@ -46,6 +46,8 @@ var (
 	tuiMode             bool
 	rbashMode           bool
 	noNet               bool
+	think               bool
+	direnv              bool
 	varFlags            []string
 	varFiles            []string
 	globalPromptReader  atomic.Pointer[readline.PromptReader]
@@ -59,6 +61,8 @@ type errForced struct{}
 
 func (errForced) Error() string { return "force quit" }
 
+var version = "dev"
+
 func main() {
 	exitCode := 0
 	rootCmd := &cobra.Command{
@@ -67,6 +71,7 @@ func main() {
 		Long:  "hufu discovers and runs agent teams by name. Use --agent-team or @team-name in the prompt to select a team.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runTeam,
+		Version: version,
 	}
 
 	rootCmd.Flags().StringVar(&providerURL, "provider-url", "", "Ollama API base URL (default: from hufu.yaml or http://localhost:11434/v1)")
@@ -86,6 +91,8 @@ func main() {
 	rootCmd.Flags().BoolVar(&tuiMode, "tui", false, "Show a Bubble Tea TUI for real-time task tracking")
 	rootCmd.Flags().BoolVar(&rbashMode, "rbash", false, "Use restricted bash (rbash) for the bash tool")
 	rootCmd.Flags().BoolVar(&noNet, "no-net", false, "Block all network access for agent subprocesses")
+	rootCmd.Flags().BoolVar(&direnv, "direnv", false, "Use direnv exec for bash tool; loads .envrc/.env and blocks cd commands")
+	rootCmd.Flags().BoolVar(&think, "think", false, "Show coordinator decision reasoning (skills, agents, tasks, system prompt)")
 	rootCmd.Flags().StringArrayVar(&varFlags, "var", nil, "Set template variable (key=value). Can be specified multiple times; later values override earlier ones")
 	rootCmd.Flags().StringArrayVar(&varFiles, "var-file", nil, "Read template variables from a file (.yaml/.yml or KEY=VALUE format). Can be specified multiple times; later files override earlier ones")
 
@@ -649,7 +656,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 
 	resolvedNoNet := noNet || cfg.NoNet || session.Config.NoNet
 
-	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet)
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, think, direnv, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}

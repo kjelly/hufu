@@ -19,6 +19,7 @@ type ToolConfig struct {
 	RestrictedBash  bool
 	RestrictedPath  string
 	NetworkBlock    bool
+	Direnv          bool
 }
 
 func WithWorkDir(dir string) ToolOption {
@@ -72,6 +73,12 @@ func WithRestrictedPath(path string) ToolOption {
 func WithNetworkBlock(enabled bool) ToolOption {
 	return func(c *ToolConfig) {
 		c.NetworkBlock = enabled
+	}
+}
+
+func WithDirenv(enabled bool) ToolOption {
+	return func(c *ToolConfig) {
+		c.Direnv = enabled
 	}
 }
 

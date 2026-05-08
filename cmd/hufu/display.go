@@ -30,6 +30,7 @@ var (
 	stepStyle    = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("8"))
 	doneStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2"))
 	textStyle    = lipgloss.NewStyle().Faint(true)
+	thinkStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
 	headerStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
 	pendingIcon  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	progressIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
@@ -478,6 +479,55 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 				dimStyle.Render("⟐"),
 				agentStyle.Render(event.Agent),
 				doneStyle.Render(event.SkillName),
+			))
+
+		case "think_skills":
+			w.write(fmt.Sprintf("%s %s\n",
+				thinkStyle.Render("💭 skills"),
+				dimStyle.Render(event.Message),
+			))
+
+		case "think_skill_detail":
+			w.write(fmt.Sprintf("%s   %s — %s\n",
+				thinkStyle.Render("💭"),
+				agentStyle.Render(event.Agent),
+				dimStyle.Render(utils.TruncateLine(event.Message, 80)),
+			))
+
+		case "think_agents":
+			w.write(fmt.Sprintf("%s %s\n",
+				thinkStyle.Render("💭 agents"),
+				dimStyle.Render(event.Message),
+			))
+
+		case "think_prompt":
+			w.write(fmt.Sprintf("%s %s\n",
+				thinkStyle.Render("💭 prompt"),
+				dimStyle.Render(event.Message),
+			))
+
+		case "think_prompt_dump":
+			w.write(fmt.Sprintf("%s %s\n",
+				thinkStyle.Render("💭 prompt"),
+				dimStyle.Render(event.Message),
+			))
+
+		case "think_delegation":
+			w.write(fmt.Sprintf("%s %s\n",
+				thinkStyle.Render("💭 delegate"),
+				dimStyle.Render(event.Message),
+			))
+
+		case "think_sidecar":
+			w.write(fmt.Sprintf("%s %s\n",
+				thinkStyle.Render("💭 sidecar"),
+				dimStyle.Render(event.Message),
+			))
+
+		case "think_text":
+			w.write(fmt.Sprintf("%s %s",
+				thinkStyle.Render("💭"),
+				thinkStyle.Render(utils.TruncateLine(event.Message, 200)),
 			))
 		}
 	})
@@ -971,6 +1021,36 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			flushText(event.TodoID)
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("✗ " + event.Message)})
 			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + errStyle.Render("✗ "+utils.TruncateLine(event.Message, 60))})
+
+		case "think_text":
+			if event.TodoID == "" {
+				return
+			}
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 " + event.Message)})
+
+		case "think_skills", "think_agents", "think_delegation", "think_sidecar":
+			if event.TodoID == "" {
+				return
+			}
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 "+event.Message)})
+
+		case "think_skill_detail":
+			if event.TodoID == "" {
+				return
+			}
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 "+event.Agent+": "+event.Message)})
+
+		case "think_prompt":
+			if event.TodoID == "" {
+				return
+			}
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 prompt: "+event.Message)})
+
+		case "think_prompt_dump":
+			if event.TodoID == "" {
+				return
+			}
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 prompt: "+event.Message)})
 		}
 	}, tt.stopAll
 }
