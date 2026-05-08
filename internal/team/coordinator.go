@@ -144,7 +144,10 @@ type Coordinator struct {
 	hooks  *hooks.HookRegistry
 	rbashMode      bool
 	restrictedPath string
-	noNet          bool
+	noNet                bool
+	workerSummariesOnce  sync.Once
+	workerSummaries      map[string]string
+	workerSummariesMu    sync.Mutex
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
@@ -209,10 +212,10 @@ func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
 	return
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool) (*Coordinator, error) {
+func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
 	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath), tools.WithNetworkBlock(noNet))
-	prov, err := agent.NewOllamaProvider(defaultProviderURL)
+	prov, err := agent.NewOllamaProvider(defaultProviderURL, defaultProviderAPIKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Ollama provider: %w", err)
 	}
@@ -1025,8 +1028,8 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	defer cancel()
 
 	taskPrompt := task
-	if prefix := c.injectAutoSkills(def, name, task); prefix != "" {
-		taskPrompt = prefix + taskPrompt
+	if suffix := c.injectAutoSkills(def, name, task); suffix != "" {
+		taskPrompt = taskPrompt + "\n\n" + suffix
 	}
 
 	if suffix := c.buildMemorySuffix(); suffix != "" {
@@ -1742,12 +1745,12 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	prompt := task.Task
 
-	if prefix := c.buildSkillPromptPrefix(agentDef); prefix != "" {
-		prompt = prefix + prompt
+	if suffix := c.buildSkillPromptPrefix(agentDef); suffix != "" {
+		prompt = prompt + "\n\n" + suffix
 	}
 
-	if prefix := c.injectAutoSkills(agentDef, agentName, task.Task); prefix != "" {
-		prompt = prefix + prompt
+	if suffix := c.injectAutoSkills(agentDef, agentName, task.Task); suffix != "" {
+		prompt = prompt + "\n\n" + suffix
 	}
 
 	if len(task.ContextFiles) > 0 {
@@ -2180,8 +2183,57 @@ func (c *Coordinator) workerNameList() []string {
 	return names
 }
 
+func extractCapabilities(system string) string {
+	if system == "" {
+		return ""
+	}
+	lines := strings.Split(system, "\n")
+	var caps []string
+	inList := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			inList = false
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
+			item := strings.TrimPrefix(strings.TrimPrefix(trimmed, "- "), "* ")
+			if len(item) > 3 {
+				caps = append(caps, item)
+				inList = true
+			}
+		} else if inList && len(caps) > 0 && len(trimmed) > 3 {
+			caps[len(caps)-1] += " " + trimmed
+		} else {
+			inList = false
+		}
+	}
+	for i := range caps {
+		caps[i] = strings.TrimSpace(caps[i])
+	}
+	if len(caps) == 0 {
+		sentences := strings.Split(system, ". ")
+		for _, s := range sentences {
+			s = strings.TrimSpace(s)
+			if len(s) > 10 && len(caps) < 5 {
+				caps = append(caps, s)
+			}
+		}
+	}
+	var result []string
+	seen := map[string]bool{}
+	for _, c := range caps {
+		lower := strings.ToLower(c)
+		if !seen[lower] && len(c) > 5 {
+			seen[lower] = true
+			result = append(result, c)
+		}
+	}
+	return strings.Join(result, "\n")
+}
+
 const maxAgentsMDSize = 50000
-const maxWorkerContextSize = 4000
+const defaultWorkerContextSize = 12000
 
 func (c *Coordinator) loadProjectContext() string {
 	path := filepath.Join(c.projectDir, "AGENTS.md")
@@ -2202,18 +2254,97 @@ func (c *Coordinator) getWorkerContext(ctx context.Context) string {
 		if raw == "" {
 			return
 		}
-		if s := c.Sidecar(); s != nil && utf8.RuneCountInString(raw) > maxWorkerContextSize/2 {
+		ctxSize := c.getWorkerContextSize()
+		if s := c.Sidecar(); s != nil && utf8.RuneCountInString(raw) > ctxSize/2 {
 			compacted, err := s.Compact(ctx, raw, "Extract the essential project context: tech stack, language, framework, key conventions, and directory structure. Preserve all factual details but remove verbose descriptions.")
 			if err == nil && compacted != "" {
 				raw = compacted
 			}
 		}
-		if utf8.RuneCountInString(raw) > maxWorkerContextSize {
-			raw = string([]rune(raw)[:maxWorkerContextSize]) + "\n\n... [truncated]"
+		if utf8.RuneCountInString(raw) > ctxSize {
+			raw = string([]rune(raw)[:ctxSize]) + "\n\n... [truncated]"
 		}
 		c.cachedWorkerContext = raw
 	})
 	return c.cachedWorkerContext
+}
+
+func (c *Coordinator) getWorkerContextSize() int {
+	if c.session != nil && c.session.Config.WorkerContextSize > 0 {
+		return c.session.Config.WorkerContextSize
+	}
+	return defaultWorkerContextSize
+}
+
+func (c *Coordinator) getWorkerSummary(name string) string {
+	c.workerSummariesMu.Lock()
+	defer c.workerSummariesMu.Unlock()
+	if c.workerSummaries == nil {
+		return ""
+	}
+	return c.workerSummaries[name]
+}
+
+func (c *Coordinator) computeWorkerSummaries(ctx context.Context) {
+	c.workerSummariesOnce.Do(func() {
+		c.workerSummaries = make(map[string]string)
+		for _, def := range c.uniqueWorkerDefs() {
+			if def.System == "" {
+				continue
+			}
+			c.workerSummariesMu.Lock()
+			summary := c.summarizeSystem(ctx, def.System)
+			c.workerSummaries[def.Name] = summary
+			c.workerSummariesMu.Unlock()
+		}
+	})
+}
+
+func (c *Coordinator) summarizeSystem(ctx context.Context, system string) string {
+	if s := c.Sidecar(); s != nil {
+		compacted, err := s.Compact(ctx, system, "Summarize this agent's role, key behavioral guidelines, and unique instructions in 2-3 concise sentences. Preserve what makes this agent distinct.")
+		if err == nil && compacted != "" {
+			return compacted
+		}
+	}
+	if utf8.RuneCountInString(system) > 500 {
+		runes := []rune(system)
+		return string(runes[:500]) + "..."
+	}
+	return system
+}
+
+func (c *Coordinator) buildCoreReminder(def *agent.AgentDef) string {
+	if def.System == "" {
+		return ""
+	}
+	lines := strings.Split(def.System, "\n")
+	var keyLines []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "---") {
+			continue
+		}
+		keyLines = append(keyLines, trimmed)
+		if len(keyLines) >= 5 {
+			break
+		}
+	}
+	if len(keyLines) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Core Instructions Reminder\n\n")
+	b.WriteString(fmt.Sprintf("You are **%s**", def.Name))
+	if def.Description != "" {
+		b.WriteString(fmt.Sprintf(": %s", def.Description))
+	}
+	b.WriteString(". Your core directives:\n")
+	for _, line := range keyLines {
+		b.WriteString(fmt.Sprintf("- %s\n", line))
+	}
+	b.WriteString("\nFollow these as your primary directive — they define your identity and priorities.\n")
+	return b.String()
 }
 
 // injectWorkerContext prepends the project context to the agent's system prompt
@@ -2234,24 +2365,24 @@ func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentD
 	}
 	wsPath := c.session.Workspace
 	sharedPath := filepath.Join(wsPath, sharedDir)
-	b.WriteString("## Environment\n\n")
-	fmt.Fprintf(&b, "- Current directory: %s\n", c.projectDir)
-	fmt.Fprintf(&b, "- Workspace: %s\n", wsPath)
-	fmt.Fprintf(&b, "- Shared directory: %s\n", sharedPath)
-	fmt.Fprintf(&b, "- Current time: %s\n", c.sessionTime.Format(time.RFC3339))
-	b.WriteString("\n## Important Rules\n\n")
-	fmt.Fprintf(&b, "- ALL intermediate files (drafts, scratch data, temporary outputs, logs, notes, etc.) MUST be written under the workspace directory: %s\n", wsPath)
-	fmt.Fprintf(&b, "- Use %s to share files between agents.\n", sharedPath)
-	b.WriteString("- NEVER write intermediate files to the current directory or anywhere outside the workspace.\n\n")
+	b.WriteString("## Environment & Rules\n\n")
+	fmt.Fprintf(&b, "- CWD: %s | Workspace: %s | Shared: %s | Time: %s\n", c.projectDir, wsPath, sharedPath, c.sessionTime.Format(time.RFC3339))
+	fmt.Fprintf(&b, "- ALL intermediate files (drafts, logs, notes, etc.) MUST be written to workspace: %s\n", wsPath)
+	fmt.Fprintf(&b, "- Use %s to share files between agents. NEVER write outside workspace.\n\n", sharedPath)
 	b.WriteString("---\n\n")
 
 	injectedDef := *def
-	injectedDef.System = b.String() + injectedDef.System
+	injectedDef.System = injectedDef.System + "\n\n---\n\n" + b.String()
+
+	if reminder := c.buildCoreReminder(def); reminder != "" {
+		injectedDef.System += "\n\n" + reminder
+	}
+
 	return &injectedDef
 }
 
 func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) string {
-	workerNames, workerDescs := c.buildWorkerNamesAndDescs()
+	workerNames, _ := c.buildWorkerNamesAndDescs()
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the coordinator of team %q with %d members: %s.\n\n", c.session.Config.Name, len(workerNames), strings.Join(workerNames, ", "))
@@ -2273,10 +2404,25 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 
 	b.WriteString("## Available Agents\n\n")
 	fmt.Fprintf(&b, "IMPORTANT: You MUST use these agent names in the agent tool: %s. You can also use listed aliases. Do NOT invent agent names that are not listed.\n\n", strings.Join(workerNames, ", "))
-	for _, desc := range workerDescs {
-		fmt.Fprintf(&b, "- %s\n", desc)
+	for _, def := range c.uniqueWorkerDefs() {
+		fmt.Fprintf(&b, "### %s\n", def.Name)
+		if def.Description != "" {
+			fmt.Fprintf(&b, "**Description:** %s\n", def.Description)
+		}
+		if instr := c.getWorkerSummary(def.Name); instr != "" {
+			fmt.Fprintf(&b, "**Instructions:** %s\n", instr)
+		}
+		if def.Tools != "" {
+			fmt.Fprintf(&b, "**Tools:** %s\n", def.Tools)
+		}
+		if caps := extractCapabilities(def.System); caps != "" {
+			fmt.Fprintf(&b, "**Capabilities:**\n")
+			for _, line := range strings.Split(caps, "\n") {
+				fmt.Fprintf(&b, "- %s\n", line)
+			}
+		}
+		b.WriteString("\n")
 	}
-	b.WriteString("\n")
 
 	b.WriteString("## Worker Tools\n\n")
 	b.WriteString("Workers have access to the following special tools in addition to their configured toolset:\n\n")
@@ -2380,17 +2526,10 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 
 	wsPath := c.session.Workspace
 	sharedPath := filepath.Join(wsPath, sharedDir)
-	b.WriteString("\n## Environment\n\n")
-	fmt.Fprintf(&b, "- Current directory: %s\n", c.projectDir)
-	fmt.Fprintf(&b, "- Workspace: %s\n", wsPath)
-	fmt.Fprintf(&b, "- Shared directory: %s\n", sharedPath)
-	fmt.Fprintf(&b, "- Current time: %s\n", c.sessionTime.Format(time.RFC3339))
-	b.WriteString("\n## Important Rules\n\n")
-	fmt.Fprintf(&b, "- ALL intermediate files (drafts, scratch data, temporary outputs, logs, notes, etc.) MUST be written under the workspace directory: %s\n", wsPath)
-	fmt.Fprintf(&b, "- Instruct workers to use %s for files shared between agents.\n", sharedPath)
-	b.WriteString("- NEVER write intermediate files to the current directory or anywhere outside the workspace.\n")
-	b.WriteString("- Before calling finish, you MUST use stm_write to save a session summary to short-term memory.\n")
-	b.WriteString("- Use ltm_update to persist important cross-session knowledge (conventions, APIs, patterns, decisions) to long-term memory.\n\n")
+	b.WriteString("\n## Environment & Rules\n\n")
+	fmt.Fprintf(&b, "- CWD: %s | Workspace: %s | Shared: %s | Time: %s\n", c.projectDir, wsPath, sharedPath, c.sessionTime.Format(time.RFC3339))
+	fmt.Fprintf(&b, "- ALL intermediate files go to workspace: %s. Use %s for inter-agent sharing. NEVER write outside workspace.\n", wsPath, sharedPath)
+	b.WriteString("- stm_write before finish. ltm_update for cross-session knowledge (conventions, APIs, patterns, decisions).\n\n")
 
 	return b.String()
 }
@@ -2468,11 +2607,26 @@ func (c *Coordinator) summarizeOutput(ctx context.Context, text string) string {
 
 func (c *Coordinator) expandOrchestratorTemplate(tmpl string) string {
 	workerNames := c.workerNameList()
-	vars := map[string]string{
-		"TEAM_NAME":   c.session.Config.Name,
-		"AGENT_COUNT": fmt.Sprintf("%d", len(workerNames)),
-		"AGENT_NAMES": strings.Join(workerNames, ", "),
+
+	// Use session.Config.Vars as base (contains team.yaml vars + CLI --var + built-in)
+	vars := make(map[string]string)
+	if c.session.Config.Vars != nil {
+		for k, v := range c.session.Config.Vars {
+			vars[k] = fmt.Sprintf("%v", v)
+		}
 	}
+
+	// Ensure built-in vars exist (fallback if not in config.Vars)
+	if _, ok := vars["TEAM_NAME"]; !ok {
+		vars["TEAM_NAME"] = c.session.Config.Name
+	}
+	if _, ok := vars["AGENT_COUNT"]; !ok {
+		vars["AGENT_COUNT"] = fmt.Sprintf("%d", len(workerNames))
+	}
+	if _, ok := vars["AGENT_NAMES"]; !ok {
+		vars["AGENT_NAMES"] = strings.Join(workerNames, ", ")
+	}
+
 	result, err := applyTemplate(tmpl, "orchestrator-system", vars)
 	if err != nil {
 		s := strings.ReplaceAll(tmpl, "{@ .TEAM_NAME @}", c.session.Config.Name)
@@ -2652,12 +2806,12 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	_ = writeStatus(c.session.Workspace, resolvedName, "working", task)
 
 	prompt := task
-	if prefix := c.buildSkillPromptPrefix(agentDef); prefix != "" {
-		prompt = prefix + prompt
+	if suffix := c.buildSkillPromptPrefix(agentDef); suffix != "" {
+		prompt = prompt + "\n\n" + suffix
 	}
 
-	if prefix := c.injectAutoSkills(agentDef, resolvedName, task); prefix != "" {
-		prompt = prefix + prompt
+	if suffix := c.injectAutoSkills(agentDef, resolvedName, task); suffix != "" {
+		prompt = prompt + "\n\n" + suffix
 	}
 
 	if suffix := c.buildMemorySuffix(); suffix != "" {
@@ -2804,6 +2958,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	}
 	matchedSkills := c.matchSkillsWithSidecar(ctx, userPrompt)
 	c.setAutoLoadedSkills(matchedSkills)
+	c.computeWorkerSummaries(ctx)
 	systemPrompt += "\n\n" + c.BuildOrchestratorPrompt(matchedSkills...)
 
 	if agentsMD := c.loadProjectContext(); agentsMD != "" {
@@ -2836,6 +2991,10 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	if suffix := c.buildMemorySuffix(); suffix != "" {
 		systemPrompt += "\n\n" + suffix
+	}
+
+	if reminder := c.buildCoreReminder(orchDef); reminder != "" {
+		systemPrompt += "\n\n" + reminder
 	}
 
 	// Apply the computed system prompt to a copy so shared state is not mutated.

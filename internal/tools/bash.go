@@ -1,3 +1,6 @@
+//go:build linux || darwin
+// +build linux darwin
+
 package tools
 
 import (
@@ -12,7 +15,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"charm.land/fantasy"
@@ -23,10 +25,6 @@ const maxBashTimeout = 600 * time.Second
 
 var bannedCmdRe = regexp.MustCompile(`^(alias|bg|bind|builtin|caller|command|compgen|complete|compopt|coproc|dirs|disown|enable|fc|fg|hash|help|history|jobs|kill|logout|mapfile|popd|pushd|readonly|select|set|shopt|source|suspend|times|trap|type|typeset|ulimit|umask|unalias|wait)\s`)
 
-// bashPrivEscRe matches sudo or ssh used as commands at any point in a pipeline or
-// subshell, so the plain bash tool cannot escalate privileges or open remote sessions.
-// Recognised command-start positions: beginning of string, pipe (|), logical ops (&, ;),
-// subshell open (, backtick (`), $( substitution, and newline.
 var bashPrivEscRe = regexp.MustCompile("(?:^|[|;&(\n\x60]|\\$\\()\\s*(?:sudo|ssh)(?:\\s|$)")
 
 var absPathInCmdRe = regexp.MustCompile(`(?:^|\s|=|>|<|")(/(?:[a-zA-Z0-9_.-]+/)+[a-zA-Z0-9_.-]*)(?:\s|"|$|;|&|\|)`)
@@ -38,21 +36,6 @@ var systemPathPrefixes = []string{"/usr/", "/bin/", "/sbin/", "/lib/", "/lib32/"
 type bashArgs struct {
 	Command string  `json:"command"`
 	Timeout float64 `json:"timeout,omitempty"`
-}
-
-func setNetNamespace(cmd *exec.Cmd) error {
-	uid := os.Getuid()
-	gid := os.Getgid()
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags:   syscall.CLONE_NEWNET | syscall.CLONE_NEWUSER,
-		UidMappings: []syscall.SysProcIDMap{
-			{ContainerID: 0, HostID: uid, Size: 1},
-		},
-		GidMappings: []syscall.SysProcIDMap{
-			{ContainerID: 0, HostID: gid, Size: 1},
-		},
-	}
-	return nil
 }
 
 // runShellCommand runs name+args under a derived context with the given timeout,

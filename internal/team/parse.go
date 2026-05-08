@@ -61,14 +61,17 @@ type teamConfigYAML struct {
 	Skills        string              `yaml:"skills"`
 	SkillsExclude string              `yaml:"skills-exclude"`
 	ProviderURL   string              `yaml:"provider-url"`
+	ProviderAPIKey string             `yaml:"provider-api-key"`
 	ModelList     []config.ModelEntry `yaml:"model-list"`
 	SidecarModel  string              `yaml:"sidecar-model"`
 	GuardModel    string              `yaml:"guard-model"`
 	MaxConcurrent int                 `yaml:"max-concurrent"`
 	Notify        notify.NotifyConfig `yaml:"notify"`
 	AllowedPaths    interface{}         `yaml:"allowed-paths"`
-	RestrictedPath string             `yaml:"restricted-path"`
+	RestrictedPath string              `yaml:"restricted-path"`
 	NoNet          bool               `yaml:"no-net"`
+	Vars           map[string]interface{} `yaml:"vars"`
+	WorkerContextSize int              `yaml:"worker-context-size"`
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -230,6 +233,7 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 		Tools:          fm.Tools,
 		Role:           role,
 		System:         body,
+		Capabilities:   extractCapabilitiesFromSystem(body),
 		Skills:         fm.Skills,
 		Guard:          fm.Guard,
 		MaxRetries:     -1,
@@ -253,6 +257,55 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 		def.MaxRetries = fm.MaxRetries
 	}
 	return def, nil
+}
+
+func extractCapabilitiesFromSystem(system string) string {
+	if system == "" {
+		return ""
+	}
+	lines := strings.Split(system, "\n")
+	var caps []string
+	inList := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			inList = false
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
+			item := strings.TrimPrefix(strings.TrimPrefix(trimmed, "- "), "* ")
+			if len(item) > 3 {
+				caps = append(caps, item)
+				inList = true
+			}
+		} else if inList && len(caps) > 0 && len(trimmed) > 3 {
+			caps[len(caps)-1] += " " + trimmed
+		} else {
+			inList = false
+		}
+	}
+	for i := range caps {
+		caps[i] = strings.TrimSpace(caps[i])
+	}
+	if len(caps) == 0 {
+		sentences := strings.Split(system, ". ")
+		for _, s := range sentences {
+			s = strings.TrimSpace(s)
+			if len(s) > 10 && len(caps) < 5 {
+				caps = append(caps, s)
+			}
+		}
+	}
+	var result []string
+	seen := map[string]bool{}
+	for _, c := range caps {
+		lower := strings.ToLower(c)
+		if !seen[lower] && len(c) > 5 {
+			seen[lower] = true
+			result = append(result, c)
+		}
+	}
+	return strings.Join(result, "\n")
 }
 
 func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, error) {
@@ -328,6 +381,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	if yc.ProviderURL != "" {
 		cfg.ProviderURL = yc.ProviderURL
 	}
+	if yc.ProviderAPIKey != "" {
+		cfg.ProviderAPIKey = yc.ProviderAPIKey
+	}
 	if len(yc.ModelList) > 0 {
 		cfg.ModelList = yc.ModelList
 	}
@@ -357,6 +413,12 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	if yc.NoNet {
 		cfg.NoNet = true
 	}
+	if len(yc.Vars) > 0 {
+		cfg.Vars = yc.Vars
+	}
+	if yc.WorkerContextSize > 0 {
+		cfg.WorkerContextSize = yc.WorkerContextSize
+	}
 
 	return cfg, nil
 }
@@ -373,6 +435,18 @@ func LoadTeam(teamDir string, vars map[string]string) (*TeamSession, error) {
 	}
 	if cfg.Name == "" {
 		cfg.Name = filepath.Base(absDir)
+	}
+
+	// Build template vars: CLI --var (string) + team.yaml vars (interface{}) + built-in
+	// CLI --var takes precedence over team.yaml vars for the same key
+	templateVars := make(map[string]string)
+	// Copy team.yaml vars first (lower priority)
+	for k, v := range cfg.Vars {
+		templateVars[k] = fmt.Sprintf("%v", v)
+	}
+	// Copy CLI --var (higher priority, can override)
+	for k, v := range vars {
+		templateVars[k] = v
 	}
 
 	var workspace string
@@ -397,6 +471,11 @@ func LoadTeam(teamDir string, vars map[string]string) (*TeamSession, error) {
 		MCPServers: make(map[string]mcp.MCPServerConfig),
 	}
 
+	// Inject built-in vars BEFORE loading agents
+	if _, ok := templateVars["TEAM_NAME"]; !ok && cfg.Name != "" {
+		templateVars["TEAM_NAME"] = cfg.Name
+	}
+
 	entries, err := os.ReadDir(absDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read team directory: %w", err)
@@ -413,7 +492,7 @@ func LoadTeam(teamDir string, vars map[string]string) (*TeamSession, error) {
 				continue
 			}
 		}
-		def, err := parseAgentFile(path, vars)
+		def, err := parseAgentFile(path, templateVars)
 		if err != nil {
 			return nil, err
 		}
@@ -437,6 +516,26 @@ func LoadTeam(teamDir string, vars map[string]string) (*TeamSession, error) {
 	if len(session.Agents) == 0 {
 		return nil, fmt.Errorf("no valid agent .md files found in %s", absDir)
 	}
+
+	// Inject built-in vars AFTER agents loaded (AGENT_COUNT, AGENT_NAMES)
+	workerNames := make([]string, 0)
+	for _, def := range session.Agents {
+		if def.Role != "orchestrator" && def.Role != "coordinator" {
+			workerNames = append(workerNames, def.Name)
+		}
+	}
+	if _, ok := templateVars["AGENT_COUNT"]; !ok {
+		templateVars["AGENT_COUNT"] = fmt.Sprintf("%d", len(workerNames))
+	}
+	if _, ok := templateVars["AGENT_NAMES"]; !ok {
+		templateVars["AGENT_NAMES"] = strings.Join(workerNames, ", ")
+	}
+	// Store template vars in session config for later use
+	interfaceVars := make(map[string]interface{})
+	for k, v := range templateVars {
+		interfaceVars[k] = v
+	}
+	cfg.Vars = interfaceVars
 
 	skillDirs := []string{
 		filepath.Join(absDir, ".agents", "skills"),

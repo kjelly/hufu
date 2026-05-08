@@ -30,6 +30,7 @@ import (
 
 var (
 	providerURL         string
+	providerAPIKey      string
 	verbose             bool
 	workspace           string
 	newSession          bool
@@ -69,6 +70,7 @@ func main() {
 	}
 
 	rootCmd.Flags().StringVar(&providerURL, "provider-url", "", "Ollama API base URL (default: from hufu.yaml or http://localhost:11434/v1)")
+	rootCmd.Flags().StringVar(&providerAPIKey, "provider-api-key", "", "Provider API key (default: from HUFU_PROVIDER_API_KEY env or team.yaml)")
 	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show full agent text output in real-time")
 	rootCmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
 	rootCmd.Flags().BoolVarP(&newSession, "new", "n", false, "Archive old session and start fresh")
@@ -290,7 +292,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	for _, seg := range initialSegments {
 		if seg.Type == team.SegmentSwitchTeam {
 			if _, ok := loadedTeams[seg.Name]; !ok {
-				tc, err := loadTeamByName(ctx, seg.Name, registry, providerURL, pathConsent, vars)
+				tc, err := loadTeamByName(ctx, seg.Name, registry, providerURL, providerAPIKey, pathConsent, vars)
 				if err != nil {
 					return fmt.Errorf("failed to load team %q: %w", seg.Name, err)
 				}
@@ -453,7 +455,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL string, pathConsent *tools.PathConsent, vars map[string]string) (*teamContext, error) {
+func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string) (*teamContext, error) {
 	teamDir, err := registry.Resolve(teamName)
 	if err != nil {
 		return nil, err
@@ -464,8 +466,8 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		return nil, err
 	}
 
-	// Resolve effective provider URL: CLI flag > team.yaml > ./hufu.yaml > ~/.config/hufu/hufu.yaml > default
 	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, session.Config.ProviderURL, "")
+	resolvedProviderAPIKey := config.ResolveProviderAPIKey(defaultProviderAPIKey, session.Config.ProviderAPIKey)
 
 	if workspace != "" {
 		absWorkspace, err := filepath.Abs(workspace)
@@ -647,7 +649,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 
 	resolvedNoNet := noNet || cfg.NoNet || session.Config.NoNet
 
-	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet)
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
@@ -869,7 +871,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			teamName := seg.Name
 			tc, ok := loadedTeams[teamName]
 			if !ok {
-				loaded, err := loadTeamByName(ctx, teamName, registry, providerURL, pathConsent, vars)
+				loaded, err := loadTeamByName(ctx, teamName, registry, providerURL, providerAPIKey, pathConsent, vars)
 				if err != nil {
 					return strings.Join(results, "\n\n"), fmt.Errorf("failed to load team %q: %w", teamName, err)
 				}
@@ -1171,7 +1173,7 @@ func runArchiveMemory(ctx context.Context, registry *team.TeamRegistry, vars map
 
 	archived := 0
 	for _, name := range teamNames {
-		tc, err := loadTeamByName(ctx, name, registry, providerURL, newPathConsent(), vars)
+		tc, err := loadTeamByName(ctx, name, registry, providerURL, providerAPIKey, newPathConsent(), vars)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s Failed to load team %q: %v\n", errStyle.Render("⚠"), name, err)
 			continue

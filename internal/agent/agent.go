@@ -32,6 +32,7 @@ type AgentDef struct {
 	Tools          string
 	Role           string
 	System         string
+	Capabilities   string
 	Skills         string
 	Guard          []string
 	Timeout        int64
@@ -55,7 +56,8 @@ type TeamConfig struct {
 	Generation    GenerationParams
 	Skills        string
 	SkillsExclude string
-	ProviderURL   string
+	ProviderURL    string
+	ProviderAPIKey string
 	ModelList     []config.ModelEntry
 	SidecarModel  string
 	GuardModel    string
@@ -63,27 +65,33 @@ type TeamConfig struct {
 	Notify        notify.NotifyConfig
 	AllowedPaths   []string
 	RestrictedPath string
-	NoNet          bool
+	NoNet            bool
+	Vars             map[string]interface{}
+	WorkerContextSize int
 }
 
 type OllamaProvider struct {
 	provider fantasy.Provider
 	baseURL  string
+	apiKey   string
 }
 
-func NewOllamaProvider(baseURL string) (*OllamaProvider, error) {
+func NewOllamaProvider(baseURL, apiKey string) (*OllamaProvider, error) {
 	if baseURL == "" {
 		baseURL = config.DefaultProviderURL
 	}
+	if apiKey == "" {
+		apiKey = "ollama"
+	}
 	provider, err := openaicompat.New(
 		openaicompat.WithBaseURL(baseURL),
-		openaicompat.WithAPIKey("ollama"),
+		openaicompat.WithAPIKey(apiKey),
 		openaicompat.WithName("ollama"),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Ollama provider: %w", err)
 	}
-	return &OllamaProvider{provider: provider, baseURL: baseURL}, nil
+	return &OllamaProvider{provider: provider, baseURL: baseURL, apiKey: apiKey}, nil
 }
 
 func (p *OllamaProvider) LanguageModel(ctx context.Context, modelID string) (fantasy.LanguageModel, error) {

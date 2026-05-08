@@ -1,3 +1,6 @@
+//go:build linux || darwin
+// +build linux darwin
+
 package tools
 
 import (
@@ -81,74 +84,6 @@ func TryAskUserTUI(ctx context.Context, question, qtype string, opts []AskUserTU
 	return onAskUserTUI(ctx, question, qtype, opts, allowAny)
 }
 
-type ToolOption func(*ToolConfig)
-
-type ToolConfig struct {
-	WorkDir         string
-	AllowedPaths    []string
-	PathConsent     *PathConsent
-	ToolName        string
-	WorkspaceName   string
-	Hooks           *hooks.HookRegistry
-	RestrictedBash  bool
-	RestrictedPath  string
-	NetworkBlock    bool
-}
-
-func WithWorkDir(dir string) ToolOption {
-	return func(c *ToolConfig) {
-		c.WorkDir = dir
-	}
-}
-
-func WithAllowedPaths(paths []string) ToolOption {
-	return func(c *ToolConfig) {
-		c.AllowedPaths = paths
-	}
-}
-
-func WithPathConsent(consent *PathConsent) ToolOption {
-	return func(c *ToolConfig) {
-		c.PathConsent = consent
-	}
-}
-
-func WithToolName(name string) ToolOption {
-	return func(c *ToolConfig) {
-		c.ToolName = name
-	}
-}
-
-func WithWorkspaceName(name string) ToolOption {
-	return func(c *ToolConfig) {
-		c.WorkspaceName = name
-	}
-}
-
-func WithHooks(h *hooks.HookRegistry) ToolOption {
-	return func(c *ToolConfig) {
-		c.Hooks = h
-	}
-}
-
-func WithRestrictedBash(enabled bool) ToolOption {
-	return func(c *ToolConfig) {
-		c.RestrictedBash = enabled
-	}
-}
-
-func WithRestrictedPath(path string) ToolOption {
-	return func(c *ToolConfig) {
-		c.RestrictedPath = path
-	}
-}
-
-func WithNetworkBlock(enabled bool) ToolOption {
-	return func(c *ToolConfig) {
-		c.NetworkBlock = enabled
-	}
-}
-
 type agentNetworkBlockKeyType struct{}
 
 var AgentNetworkBlockKey = agentNetworkBlockKeyType{}
@@ -169,14 +104,6 @@ func normalizeWorkspacePath(path, workspaceName string) string {
 		return "." + path
 	}
 	return path
-}
-
-func ApplyOptions(opts []ToolOption) ToolConfig {
-	var cfg ToolConfig
-	for _, o := range opts {
-		o(&cfg)
-	}
-	return cfg
 }
 
 type GuardReviewFn func(ctx context.Context, toolName string, args string, rules []string) (approved bool, reason string, err error)

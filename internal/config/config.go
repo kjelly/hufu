@@ -22,6 +22,7 @@ type ModelEntry struct {
 
 type Config struct {
 	ProviderURL    string              `yaml:"provider-url"`
+	ProviderAPIKey string              `yaml:"provider-api-key"`
 	Model          string              `yaml:"model"`
 	EmbeddingModel string              `yaml:"embedding-model"`
 	ModelList      []ModelEntry        `yaml:"model-list"`
@@ -156,6 +157,29 @@ func ResolveProviderURL(cliFlag string, teamCfgProviderURL string, agentProvider
 		return cfg.ProviderURL
 	}
 	return DefaultProviderURL
+}
+
+// ResolveProviderAPIKey resolves provider API key following priority order:
+// 1. CLI flag
+// 2. team config (passed as parameter)
+// 3. hufu.yaml in current directory or ~/.config/hufu/hufu.yaml
+// 4. HUFU_PROVIDER_API_KEY environment variable
+// 5. default (empty string, NewOllamaProvider will use "ollama" as fallback)
+func ResolveProviderAPIKey(cliFlag string, teamCfgAPIKey string) string {
+	if cliFlag != "" {
+		return cliFlag
+	}
+	if teamCfgAPIKey != "" {
+		return teamCfgAPIKey
+	}
+	cfg := LoadConfig()
+	if cfg.ProviderAPIKey != "" {
+		return cfg.ProviderAPIKey
+	}
+	if envKey := os.Getenv("HUFU_PROVIDER_API_KEY"); envKey != "" {
+		return envKey
+	}
+	return ""
 }
 
 func ResolveEmbeddingModel(cliFlag string) string {
