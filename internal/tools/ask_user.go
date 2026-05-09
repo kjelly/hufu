@@ -99,6 +99,10 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRes
 		}
 	}
 
+	if (questionType == "single_choice" || questionType == "multiple_choice" || questionType == "mixed") && len(args.Options) == 0 && !args.AllowAny {
+		questionType = "free_text"
+	}
+
 	// TUI mode: use the native dialog — no terminal release or stdin needed.
 	tuiOpts := make([]AskUserTUIOption, len(args.Options))
 	for i, o := range args.Options {

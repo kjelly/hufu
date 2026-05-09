@@ -200,6 +200,12 @@ func (m Model) askUserView() string {
 		sb.WriteString(st.ti.View())
 		sb.WriteString("\n\n")
 		sb.WriteString(askHintStyle.Render("enter  submit  ctrl+c cancel"))
+	} else if len(req.Options) == 0 && !req.AllowAny && req.Type != "mixed" {
+		sb.WriteString("\n")
+		sb.WriteString(askActiveStyle.Render("> "))
+		sb.WriteString(st.ti.View())
+		sb.WriteString("\n\n")
+		sb.WriteString(askHintStyle.Render("enter submit  ctrl+c cancel"))
 	} else {
 		opts := req.Options
 		hasCustom := req.AllowAny || req.Type == "mixed"
