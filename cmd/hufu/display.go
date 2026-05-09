@@ -1209,7 +1209,7 @@ func renderDryRun(result *team.DryRunResult) {
 			if t.Model != "" {
 				modelLabel = " " + dimStyle.Render("["+t.Model+"]")
 			}
-			b.WriteString(fmt.Sprintf("    %s → %s%s\n", agentStyle.Render(t.Agent), t.Task, modelLabel))
+			b.WriteString(fmt.Sprintf("    %s → %s%s\n", agentStyle.Render(t.Agent), t.Goal, modelLabel))
 		}
 	} else {
 		b.WriteString("\n")

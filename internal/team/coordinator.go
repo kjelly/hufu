@@ -46,13 +46,28 @@ type modelKey struct{}
 
 type TaskDef struct {
 	Agent        string   `json:"agent"`
-	Task         string   `json:"task"`                   // legacy: fallback when goal is empty
-	Goal         string   `json:"goal,omitempty"`         // WHAT to achieve (outcome)
-	Constraints  string   `json:"constraints,omitempty"` // non-obvious restrictions
+	Goal         string   `json:"goal"`
+	Constraints  string   `json:"constraints,omitempty"`
 	Model        string   `json:"model,omitempty"`
 	Sidecar      bool     `json:"sidecar,omitempty"`
 	Summarize    bool     `json:"summarize,omitempty"`
 	ContextFiles []string `json:"context_files,omitempty"`
+}
+
+// UnmarshalJSON handles legacy "task" field by mapping it to Goal.
+func (t *TaskDef) UnmarshalJSON(data []byte) error {
+	type Alias TaskDef
+	aux := &struct {
+		Task *string `json:"task"`
+		*Alias
+	}{Alias: (*Alias)(t)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if t.Goal == "" && aux.Task != nil {
+		t.Goal = *aux.Task
+	}
+	return nil
 }
 
 type DirectAgentResult struct {
@@ -813,7 +828,6 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 		"agent":         map[string]any{"type": "string", "enum": workerNames, "description": "Agent name to delegate to"},
 		"goal":          map[string]any{"type": "string", "description": "The desired OUTCOME — what should be achieved. Do NOT include implementation details (file paths, function names, step-by-step instructions). Workers are specialists who determine their own approach."},
 		"constraints":   map[string]any{"type": "string", "description": "Non-obvious constraints the worker MUST respect (e.g., 'must use Python 3.11', 'cannot modify the public API'). Do NOT include obvious project conventions."},
-		"task":          map[string]any{"type": "string", "description": "DEPRECATED: Use 'goal' instead. Task description for the agent."},
 		"summarize":     map[string]any{"type": "boolean", "description": "If true, summarize the agent's output before returning. Use for tasks that produce verbose output where only key points matter."},
 		"sidecar":       map[string]any{"type": "boolean", "description": "If true, execute this task directly via the sidecar model instead of an agent. Use for simple, tool-free tasks that need a quick response."},
 		"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": contextFilesDesc},
@@ -866,8 +880,8 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 		return fantasy.NewTextErrorResponse("no tasks provided"), nil
 	}
 	for _, t := range args.Tasks {
-		if t.Goal == "" && t.Task == "" {
-			return fantasy.NewTextErrorResponse("each task requires either 'goal' or 'task'"), nil
+		if t.Goal == "" {
+			return fantasy.NewTextErrorResponse("each task requires 'goal'"), nil
 		}
 	}
 
@@ -1511,10 +1525,7 @@ func (c *Coordinator) checkDuplicateTasks(tasks []TaskDef) []string {
 	c.delegatedTasksMu.Lock()
 	defer c.delegatedTasksMu.Unlock()
 	for _, t := range tasks {
-		desc := t.Task
-		if t.Goal != "" {
-			desc = t.Goal
-		}
+		desc := t.Goal
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
 		}
@@ -1614,10 +1625,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			}
 			resolvedModel = c.resolveAgentModel(agentDef, overrideModel)
 		}
-		desc := t.Task
-		if t.Goal != "" {
-			desc = t.Goal
-		}
+		desc := t.Goal
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
 		}
@@ -1665,6 +1673,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	resultsCh := make(chan agentTaskResult, len(tasks))
 	sem := make(chan struct{}, c.maxConcurrent)
 	var wg sync.WaitGroup
+
+	// in-flight dedup: prevents duplicate tasks in the same batch from running concurrently.
+	// First task to acquire a key runs; subsequent tasks wait for and share the result.
+	var inflightMu sync.Mutex
+	inflight := make(map[string]chan agentTaskResult)
+
 	for i, task := range tasks {
 		wg.Add(1)
 		go func(td TaskDef, tid string) {
@@ -1672,15 +1686,37 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
+			// Compute effective description (goal takes precedence over task)
+			desc := td.Goal
+			if td.Constraints != "" {
+				desc += "\nconstraints: " + td.Constraints
+			}
+			agentKey := strings.ToLower(td.Agent)
+			cacheKey := agentKey + ":" + truncateTaskDesc(desc)
+
+			// Check in-flight dedup map — wait for first task with same key to complete
+			inflightMu.Lock()
+			if ch, ok := inflight[cacheKey]; ok {
+				inflightMu.Unlock()
+				result := <-ch // wait for first task
+				resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: result.output, err: result.err}
+				return
+			}
+			inflight[cacheKey] = make(chan agentTaskResult, 1)
+			inflightMu.Unlock()
+
 			// Check task result cache before running. Sidecar tasks and tasks
 			// that explicitly request summarize always run fresh.
-			agentKey := strings.ToLower(td.Agent)
 			if !td.Sidecar && !td.Summarize {
-				if cached, ok := c.lookupTaskCache(ctx, agentKey, td.Task); ok {
-					c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(td.Task).withTodoID(tid))
+				if cached, ok := c.lookupTaskCache(ctx, agentKey, desc); ok {
+					c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(desc).withTodoID(tid))
 					c.taskTracker.TodoList().UpdateStatus(tid, TaskDone, "")
 					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-					resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: td.Task, output: cached}
+					result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: cached}
+					inflightMu.Lock()
+					inflight[cacheKey] <- result
+					inflightMu.Unlock()
+					resultsCh <- result
 					return
 				}
 			}
@@ -1693,9 +1729,13 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				output, err = c.executeTask(ctx, td, tid)
 			}
 			if err == nil && !td.Sidecar {
-				c.storeTaskCache(agentKey, td.Task, output)
+				c.storeTaskCache(agentKey, desc, output)
 			}
-			resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: td.Task, output: output, err: err}
+			result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: output, err: err}
+			inflightMu.Lock()
+			inflight[cacheKey] <- result
+			inflightMu.Unlock()
+			resultsCh <- result
 		}(task, todoItems[i].ID)
 	}
 	wg.Wait()
@@ -1713,10 +1753,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 }
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (string, error) {
-	taskDesc := task.Task
-	if task.Goal != "" {
-		taskDesc = task.Goal
-	}
+	taskDesc := task.Goal
 	if task.Constraints != "" {
 		taskDesc += "\nconstraints: " + task.Constraints
 	}
@@ -1813,15 +1850,11 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		return "", err
 	}
 
-	prompt := task.Task
-
-	if task.Goal != "" {
-		prompt = "## Goal\n\n" + task.Goal
-		if task.Constraints != "" {
-			prompt += "\n\n## Constraints\n\n" + task.Constraints
-		}
-		prompt += "\n\nYou are a domain expert. Determine your own implementation approach based on the goal above."
+	prompt := "## Goal\n\n" + task.Goal
+	if task.Constraints != "" {
+		prompt += "\n\n## Constraints\n\n" + task.Constraints
 	}
+	prompt += "\n\nYou are a domain expert. Determine your own implementation approach based on the goal above."
 
 	if suffix := c.buildSkillPromptPrefix(agentDef); suffix != "" {
 		prompt = prompt + "\n\n" + suffix
@@ -1935,10 +1968,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		return "", fmt.Errorf("sidecar not configured: set sidecar-model in team.yaml or hufu.yaml")
 	}
 
-	taskDesc := task.Task
-	if task.Goal != "" {
-		taskDesc = task.Goal
-	}
+	taskDesc := task.Goal
 	if task.Constraints != "" {
 		taskDesc += "\nconstraints: " + task.Constraints
 	}
@@ -2505,6 +2535,10 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("9. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
 	b.WriteString("10. **Synthesize** results into a coherent answer for the user\n")
 	b.WriteString("11. When satisfied, call the finish tool with your final response\n\n")
+	b.WriteString("12. **Deduplicate** — do not delegate conceptually identical tasks multiple times. If the user mentions the same action (e.g., \"dry-run\", \"deploy\", \"analyze\") in multiple parts of their request, delegate it ONCE and reuse the result for both mentions.\n\n")
+	b.WriteString("   Examples:\n")
+	b.WriteString("   - ❌ BAD: Delegating \"run dry-run\" to worker A, then \"compare diff\" where the worker ALSO runs dry-run internally\n")
+	b.WriteString("   - ✅ GOOD: Delegate \"run dry-run\" once and pass the result to the worker doing the comparison\n\n")
 
 	b.WriteString("## Available Agents\n\n")
 	fmt.Fprintf(&b, "IMPORTANT: You MUST use these agent names in the agent tool: %s. You can also use listed aliases. Do NOT invent agent names that are not listed.\n\n", strings.Join(workerNames, ", "))
@@ -3353,7 +3387,11 @@ func (t *dryRunAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 
 	var descs []string
 	for _, td := range args.Tasks {
-		descs = append(descs, fmt.Sprintf("  - %s → %s", td.Agent, td.Task))
+		desc := td.Goal
+		if td.Constraints != "" {
+			desc += "\nconstraints: " + td.Constraints
+		}
+		descs = append(descs, fmt.Sprintf("  - %s → %s", td.Agent, desc))
 	}
 	return fantasy.NewTextResponse(fmt.Sprintf("[DRY RUN] Tasks recorded (not executed):\n%s\n\nDry run complete. Call finish immediately.", strings.Join(descs, "\n"))), nil
 }

@@ -37,10 +37,10 @@ func (m *mockCoordinator) simulateDelegation(tasks []TaskDef) []string {
 	var duplicateWarnings []string
 	m.delegatedTasksMu.Lock()
 	for _, t := range tasks {
-		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(t.Task)
+		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(t.Goal)
 		m.delegatedTasks[key]++
 		if m.delegatedTasks[key] > 1 {
-			duplicateWarnings = append(duplicateWarnings, fmt.Sprintf("%s (agent=%s, count=%d)", truncateTaskDesc(t.Task), t.Agent, m.delegatedTasks[key]))
+			duplicateWarnings = append(duplicateWarnings, fmt.Sprintf("%s (agent=%s, count=%d)", truncateTaskDesc(t.Goal), t.Agent, m.delegatedTasks[key]))
 		}
 	}
 	m.delegatedTasksMu.Unlock()
@@ -117,7 +117,7 @@ func TestDelegatedTasksTracking(t *testing.T) {
 		{
 			name: "single task delegation sets count to 1",
 			tasks: []TaskDef{
-				{Agent: "agent1", Task: "task1"},
+				{Agent: "agent1", Goal: "task1"},
 			},
 			expectedKeys: map[string]int{
 				"agent1:task1": 1,
@@ -126,8 +126,8 @@ func TestDelegatedTasksTracking(t *testing.T) {
 		{
 			name: "same agent and task increments count",
 			tasks: []TaskDef{
-				{Agent: "agent1", Task: "task1"},
-				{Agent: "agent1", Task: "task1"},
+				{Agent: "agent1", Goal: "task1"},
+				{Agent: "agent1", Goal: "task1"},
 			},
 			expectedKeys: map[string]int{
 				"agent1:task1": 2,
@@ -136,8 +136,8 @@ func TestDelegatedTasksTracking(t *testing.T) {
 		{
 			name: "different agents for same task are tracked separately",
 			tasks: []TaskDef{
-				{Agent: "agent1", Task: "task1"},
-				{Agent: "agent2", Task: "task1"},
+				{Agent: "agent1", Goal: "task1"},
+				{Agent: "agent2", Goal: "task1"},
 			},
 			expectedKeys: map[string]int{
 				"agent1:task1": 1,
@@ -147,8 +147,8 @@ func TestDelegatedTasksTracking(t *testing.T) {
 		{
 			name: "different tasks for same agent are tracked separately",
 			tasks: []TaskDef{
-				{Agent: "agent1", Task: "task1"},
-				{Agent: "agent1", Task: "task2"},
+				{Agent: "agent1", Goal: "task1"},
+				{Agent: "agent1", Goal: "task2"},
 			},
 			expectedKeys: map[string]int{
 				"agent1:task1": 1,
@@ -158,9 +158,9 @@ func TestDelegatedTasksTracking(t *testing.T) {
 		{
 			name: "multiple delegations accumulate correctly",
 			tasks: []TaskDef{
-				{Agent: "agent1", Task: "task1"},
-				{Agent: "agent1", Task: "task1"},
-				{Agent: "agent1", Task: "task1"},
+				{Agent: "agent1", Goal: "task1"},
+				{Agent: "agent1", Goal: "task1"},
+				{Agent: "agent1", Goal: "task1"},
 			},
 			expectedKeys: map[string]int{
 				"agent1:task1": 3,
@@ -169,9 +169,9 @@ func TestDelegatedTasksTracking(t *testing.T) {
 		{
 			name: "agent name is case insensitive for key",
 			tasks: []TaskDef{
-				{Agent: "Agent1", Task: "task1"},
-				{Agent: "AGENT1", Task: "task1"},
-				{Agent: "agent1", Task: "task1"},
+				{Agent: "Agent1", Goal: "task1"},
+				{Agent: "AGENT1", Goal: "task1"},
+				{Agent: "agent1", Goal: "task1"},
 			},
 			expectedKeys: map[string]int{
 				"agent1:task1": 3,
@@ -206,7 +206,7 @@ func TestLoopWarningGeneration(t *testing.T) {
 		{
 			name: "single delegation does not trigger warning",
 			tasks: []TaskDef{
-				{Agent: "agent1", Task: "task1"},
+				{Agent: "agent1", Goal: "task1"},
 			},
 			expectWarnings:   false,
 			expectedWarnings: 0,
@@ -214,8 +214,8 @@ func TestLoopWarningGeneration(t *testing.T) {
 		{
 			name: "repeated delegation of same agent+task triggers warning",
 			tasks: []TaskDef{
-				{Agent: "agent1", Task: "task1"},
-				{Agent: "agent1", Task: "task1"},
+				{Agent: "agent1", Goal: "task1"},
+				{Agent: "agent1", Goal: "task1"},
 			},
 			expectWarnings:   true,
 			expectedWarnings: 1,
@@ -224,9 +224,9 @@ func TestLoopWarningGeneration(t *testing.T) {
 		{
 			name: "multiple repeats generate multiple warnings",
 			tasks: []TaskDef{
-				{Agent: "agent1", Task: "task1"},
-				{Agent: "agent1", Task: "task1"},
-				{Agent: "agent1", Task: "task1"},
+				{Agent: "agent1", Goal: "task1"},
+				{Agent: "agent1", Goal: "task1"},
+				{Agent: "agent1", Goal: "task1"},
 			},
 			expectWarnings:   true,
 			expectedWarnings: 2, // 2nd and 3rd delegation
@@ -235,8 +235,8 @@ func TestLoopWarningGeneration(t *testing.T) {
 		{
 			name: "different agents for same task do not trigger warning",
 			tasks: []TaskDef{
-				{Agent: "agent1", Task: "task1"},
-				{Agent: "agent2", Task: "task1"},
+				{Agent: "agent1", Goal: "task1"},
+				{Agent: "agent2", Goal: "task1"},
 			},
 			expectWarnings:   false,
 			expectedWarnings: 0,
@@ -244,8 +244,8 @@ func TestLoopWarningGeneration(t *testing.T) {
 		{
 			name: "different tasks for same agent do not trigger warning",
 			tasks: []TaskDef{
-				{Agent: "agent1", Task: "task1"},
-				{Agent: "agent1", Task: "task2"},
+				{Agent: "agent1", Goal: "task1"},
+				{Agent: "agent1", Goal: "task2"},
 			},
 			expectWarnings:   false,
 			expectedWarnings: 0,
@@ -253,10 +253,10 @@ func TestLoopWarningGeneration(t *testing.T) {
 		{
 			name: "mixed delegations with one loop",
 			tasks: []TaskDef{
-				{Agent: "agent1", Task: "task1"},
-				{Agent: "agent2", Task: "task2"},
-				{Agent: "agent1", Task: "task1"}, // loop!
-				{Agent: "agent3", Task: "task3"},
+				{Agent: "agent1", Goal: "task1"},
+				{Agent: "agent2", Goal: "task2"},
+				{Agent: "agent1", Goal: "task1"}, // loop!
+				{Agent: "agent3", Goal: "task3"},
 			},
 			expectWarnings:   true,
 			expectedWarnings: 1,
@@ -265,8 +265,8 @@ func TestLoopWarningGeneration(t *testing.T) {
 		{
 			name: "agent name case insensitivity triggers warning",
 			tasks: []TaskDef{
-				{Agent: "Agent1", Task: "task1"},
-				{Agent: "AGENT1", Task: "task1"},
+				{Agent: "Agent1", Goal: "task1"},
+				{Agent: "AGENT1", Goal: "task1"},
 			},
 			expectWarnings:   true,
 			expectedWarnings: 1,

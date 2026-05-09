@@ -806,7 +806,7 @@ func makeStepConfirmFn() func(context.Context, []team.TaskDef) (bool, error) {
 			fmt.Fprintf(os.Stderr, "  %s %s: %s\n",
 				dimStyle.Render(fmt.Sprintf("%d.", i+1)),
 				agentStyle.Render(strings.ToLower(t.Agent)),
-				t.Task)
+				t.Goal)
 		}
 		fmt.Fprintf(os.Stderr, "\n")
 
