@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -279,29 +280,65 @@ func optValue(o AskUserOption) string {
 }
 
 func wordWrap(text string, width int) string {
-	if width <= 0 || len([]rune(text)) <= width {
+	if width <= 0 || utf8.RuneCountInString(text) <= width {
 		return text
 	}
-	words := strings.Fields(text)
-	if len(words) == 0 {
-		return text
-	}
-	var sb strings.Builder
-	lineLen := 0
-	for i, w := range words {
-		wLen := len([]rune(w))
-		if i == 0 {
-			sb.WriteString(w)
-			lineLen = wLen
-		} else if lineLen+1+wLen > width {
-			sb.WriteString("\n")
-			sb.WriteString(w)
-			lineLen = wLen
-		} else {
-			sb.WriteString(" ")
-			sb.WriteString(w)
-			lineLen += 1 + wLen
+
+	paragraphs := strings.Split(text, "\n\n")
+	var result strings.Builder
+	for pi, para := range paragraphs {
+		if pi > 0 {
+			result.WriteString("\n\n")
+		}
+		words := strings.Fields(para)
+		if len(words) == 0 {
+			continue
+		}
+		lineLen := 0
+		for i, w := range words {
+			wLen := utf8.RuneCountInString(w)
+			// Handle long words that exceed width by truncating
+			if wLen > width {
+				if i == 0 {
+					result.WriteString(truncateWord(w, width))
+				} else if lineLen > 0 {
+					result.WriteString("\n")
+					result.WriteString(truncateWord(w, width))
+				} else {
+					result.WriteString(truncateWord(w, width))
+				}
+				lineLen = 0
+				continue
+			}
+			if i == 0 {
+				result.WriteString(w)
+				lineLen = wLen
+			} else if lineLen+1+wLen > width {
+				result.WriteString("\n")
+				result.WriteString(w)
+				lineLen = wLen
+			} else {
+				result.WriteString(" ")
+				result.WriteString(w)
+				lineLen += 1 + wLen
+			}
 		}
 	}
-	return sb.String()
+	return result.String()
+}
+
+// truncateWord truncates a word to fit within maxWidth runes, appending "…" if truncated.
+func truncateWord(w string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	if maxWidth == 1 {
+		return "…"
+	}
+	// Ensure we have room for the ellipsis
+	runes := []rune(w)
+	if len(runes) <= maxWidth {
+		return w
+	}
+	return string(runes[:maxWidth-1]) + "…"
 }
