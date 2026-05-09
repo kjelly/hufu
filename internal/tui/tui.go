@@ -1378,6 +1378,11 @@ func (m Model) renderDetailHeader(item *team.TodoItem) string {
 		skillsLine = skillStyle.Render("skills: " + strings.Join(item.Skills, " · "))
 	}
 
+	var injectedLine string
+	if len(item.InjectedSkills) > 0 {
+		injectedLine = dimStyle.Render("auto: ") + skillStyle.Render(strings.Join(item.InjectedSkills, " · "))
+	}
+
 	descWrapped := utils.WrapLine(item.Desc, m.width-4, 2)
 	var descLines []string
 	for _, l := range descWrapped.Lines {
@@ -1390,6 +1395,9 @@ func (m Model) renderDetailHeader(item *team.TodoItem) string {
 	parts = append(parts, agentLine+"  "+modelLine)
 	if skillsLine != "" {
 		parts = append(parts, skillsLine)
+	}
+	if injectedLine != "" {
+		parts = append(parts, injectedLine)
 	}
 	parts = append(parts, descBlock)
 
@@ -1451,6 +1459,11 @@ func (m Model) vpHeight() int {
 		descLines = 2
 	}
 	headerLines := 6 + descLines // title(1) + agent+model(1) + skills(1) + desc(N) + sep(1) + buffer(2)
+	if m.detailID != "" {
+		if item := m.findTask(m.detailID); item != nil && len(item.InjectedSkills) > 0 {
+			headerLines++
+		}
+	}
 	h := m.height - headerLines
 	if h < 1 {
 		h = 1

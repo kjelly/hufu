@@ -517,18 +517,20 @@ func formatSkillPrefix(skills []*skill.SkillDef) string {
 	return b.String()
 }
 
-func (c *Coordinator) injectAutoSkills(agentDef *agent.AgentDef, agentName string, taskDesc string) string {
+func (c *Coordinator) injectAutoSkills(agentDef *agent.AgentDef, agentName string, taskDesc string) (string, []string) {
 	relevant := c.computeRelevantSkills(agentDef, taskDesc)
 	if len(relevant) == 0 {
-		return ""
+		return "", nil
 	}
 
-	for _, s := range relevant {
+	names := make([]string, len(relevant))
+	for i, s := range relevant {
+		names[i] = s.Name
 		c.report(c.newEvent("skill_auto_loaded").withAgent(agentName).withSkillName(s.Name))
 		c.recordSkillUsage(s.Name, agentName)
 	}
 
-	return formatSkillPrefix(relevant)
+	return formatSkillPrefix(relevant), names
 }
 
 const maxSTMAutoInject = 2000
@@ -1083,8 +1085,10 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	defer cancel()
 
 	taskPrompt := task
-	if suffix := c.injectAutoSkills(def, name, task); suffix != "" {
-		taskPrompt = taskPrompt + "\n\n" + suffix
+	autoSuffix, autoNames := c.injectAutoSkills(def, name, task)
+	if autoSuffix != "" {
+		c.taskTracker.TodoList().SetInjectedSkills(todoID, autoNames)
+		taskPrompt = taskPrompt + "\n\n" + autoSuffix
 	}
 
 	if suffix := c.buildMemorySuffix(); suffix != "" {
@@ -1860,8 +1864,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		prompt = prompt + "\n\n" + suffix
 	}
 
-	if suffix := c.injectAutoSkills(agentDef, agentName, task.Goal); suffix != "" {
-		prompt = prompt + "\n\n" + suffix
+	autoSuffix, autoNames := c.injectAutoSkills(agentDef, agentName, task.Goal)
+	if autoSuffix != "" {
+		c.taskTracker.TodoList().SetInjectedSkills(todoID, autoNames)
+		prompt = prompt + "\n\n" + autoSuffix
 	}
 
 	if len(task.ContextFiles) > 0 {
@@ -2958,8 +2964,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		prompt = prompt + "\n\n" + suffix
 	}
 
-	if suffix := c.injectAutoSkills(agentDef, resolvedName, task); suffix != "" {
-		prompt = prompt + "\n\n" + suffix
+	autoSuffix, autoNames := c.injectAutoSkills(agentDef, resolvedName, task)
+	if autoSuffix != "" {
+		c.taskTracker.TodoList().SetInjectedSkills(todoID, autoNames)
+		prompt = prompt + "\n\n" + autoSuffix
 	}
 
 	if suffix := c.buildMemorySuffix(); suffix != "" {

@@ -117,19 +117,20 @@ func (t *TaskTracker) TodoList() *TodoList {
 }
 
 type TodoItem struct {
-	ID        string
-	Agent     string
-	Desc      string
-	Status    TaskStatus
-	Detail    string
-	Model     string
-	Skills    []string
-	StartedAt time.Time
-	EndedAt   time.Time
-	ModelTime time.Duration
-	ToolTime  time.Duration
-	Source    string
-	ParentID  string
+	ID             string
+	Agent          string
+	Desc           string
+	Status         TaskStatus
+	Detail         string
+	Model          string
+	Skills         []string
+	InjectedSkills []string
+	StartedAt      time.Time
+	EndedAt        time.Time
+	ModelTime      time.Duration
+	ToolTime       time.Duration
+	Source         string
+	ParentID       string
 }
 
 type TodoList struct {
@@ -227,6 +228,19 @@ func (tl *TodoList) SetSkills(id string, skills []string) {
 			return
 		}
 	}
+}
+
+func (tl *TodoList) SetInjectedSkills(id string, skills []string) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			ti.InjectedSkills = skills
+			return
+		}
+	}
+	// Debug log when ID is not found
+	fmt.Printf("[DEBUG] SetInjectedSkills: todo item %q not found\n", id)
 }
 
 func (tl *TodoList) Children(parentID string) []*TodoItem {
