@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -496,17 +497,6 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.inDetail = false
 			m.horizOffset = 0
 		}
-		return m, nil
-	case "left", "h":
-		if m.horizOffset > 0 {
-			m.horizOffset -= 10
-			if m.horizOffset < 0 {
-				m.horizOffset = 0
-			}
-		}
-		return m, nil
-	case "right", "l":
-		m.horizOffset += 10
 		return m, nil
 	case "m":
 		m.mouseManuallyEnabled = !m.mouseManuallyEnabled
@@ -1225,26 +1215,22 @@ func taskIconStyle(s team.TaskStatus) (string, lipgloss.Style) {
 }
 
 func (m Model) footer() string {
-	mouseLabel := "m:mouse"
-	if m.mouseEnabled {
-		mouseLabel = "m:mouse✓"
-	}
 	if m.inDetail {
-		return footerStyle.Render(fmt.Sprintf("esc back · ↑↓/j/k scroll · / search · %s · q quit", mouseLabel))
+		return footerStyle.Render("j/k ↑↓ scroll · esc back")
 	}
 	if m.inInfo {
-		return footerStyle.Render("i/esc close · ↑↓ scroll · " + mouseLabel)
+		return footerStyle.Render("i/esc close · ↑↓ scroll")
 	}
 	if m.inSearch {
 		return footerStyle.Render("enter search · esc cancel")
 	}
 	if len(m.searchResults) > 0 {
-		return footerStyle.Render(fmt.Sprintf("n/N next/prev match (%d/%d) · / search · i info · esc clear · g/G top/bot · ctrl+d/u half-page · ↑↓ j/k · ←→ h/l · enter detail · %s · q quit", m.searchIdx+1, len(m.searchResults), mouseLabel))
+		return footerStyle.Render(fmt.Sprintf("n/N next/prev match (%d/%d) · / search · i info · esc clear · g/G top/bot · ctrl+d/u half-page · ↑↓ j/k · enter detail · q quit", m.searchIdx+1, len(m.searchResults)))
 	}
 	if m.finished {
-		return footerStyle.Render(fmt.Sprintf("g/G top/bot · ctrl+d/u half-page · / search · i info · ↑↓ j/k · ←→ h/l · enter detail · %s · q quit", mouseLabel))
+		return footerStyle.Render("g/G top/bot · ctrl+d/u half-page · / search · i info · ↑↓ j/k · enter detail · q quit")
 	}
-	return footerStyle.Render(fmt.Sprintf("g/G top/bot · ctrl+d/u half-page · / search · i info · c prompt · ↑↓ j/k · ←→ h/l · enter detail · %s · esc quit", mouseLabel))
+	return footerStyle.Render("g/G top/bot · ctrl+d/u half-page · / search · i info · c prompt · ↑↓ j/k · enter detail · esc quit")
 }
 
 func (m Model) confirmView() string {
@@ -1364,10 +1350,7 @@ func (m Model) detailView() string {
 	if !m.vpReady {
 		return header
 	}
-	m.vp.SetXOffset(m.horizOffset)
-	hScrollPct := int(m.vp.HorizontalScrollPercent() * 100)
-	scrollIndicator := fmt.Sprintf(" %d%% ", hScrollPct)
-	footer := footerStyle.Render(fmt.Sprintf("j/k ↑↓ scroll · ←→/h/l shift %s· esc back", scrollIndicator))
+	footer := footerStyle.Render("j/k ↑↓ scroll · esc back")
 	return header + "\n" + m.vp.View() + "\n" + footer
 }
 
@@ -1490,7 +1473,129 @@ func (m Model) buildDetailContent() string {
 		}
 		return dimStyle.Render("  (no output yet)")
 	}
-	return strings.Join(lines, "\n")
+	width := m.width
+	if width < 20 {
+		width = 20
+	}
+	var result strings.Builder
+	for i, entry := range lines {
+		if i > 0 {
+			result.WriteString("\n")
+		}
+		wrapped := wrapText(entry, width)
+		result.WriteString(wrapped)
+	}
+	return result.String()
+}
+
+func visualLen(s string) int {
+	inEscape := false
+	count := 0
+	for _, r := range s {
+		if r == '\x1b' {
+			inEscape = true
+		} else if inEscape && r == 'm' {
+			inEscape = false
+		} else if !inEscape {
+			count++
+		}
+	}
+	return count
+}
+
+func wrapLine(s string, width int) string {
+	if visualLen(s) <= width {
+		return s
+	}
+	var result strings.Builder
+	line := strings.Builder{}
+	pendingANSI := strings.Builder{}
+	lineVisible := 0
+
+	flushLine := func() {
+		if line.Len() > 0 {
+			if pendingANSI.Len() > 0 {
+				line.WriteString(pendingANSI.String())
+				pendingANSI.Reset()
+			}
+			result.WriteString(line.String())
+			result.WriteByte('\n')
+			line.Reset()
+			lineVisible = 0
+		}
+	}
+
+	i := 0
+	for i < len(s) {
+		if s[i] == '\x1b' {
+			j := i
+			for j < len(s) && s[j] != 'm' {
+				j++
+			}
+			if j < len(s) {
+				j++
+			}
+			pendingANSI.WriteString(s[i:j])
+			i = j
+			continue
+		}
+
+		r, size := utf8.DecodeRuneInString(s[i:])
+		charVisible := len([]rune(s[i : i+size]))
+
+		if lineVisible > 0 && lineVisible+charVisible > width {
+			flushLine()
+		}
+
+		if charVisible > width {
+			for len([]rune(s[i:])) > 0 {
+				chunkRunes := []rune(s[i:])
+				chunkLen := len(chunkRunes)
+				if chunkLen > width {
+					chunkLen = width
+				}
+				if line.Len() > 0 {
+					flushLine()
+				}
+				if pendingANSI.Len() > 0 {
+					line.WriteString(pendingANSI.String())
+					pendingANSI.Reset()
+				}
+				line.WriteString(string(chunkRunes[:chunkLen]))
+				lineVisible = chunkLen
+				i += len(string(chunkRunes[:chunkLen]))
+				if i >= len(s) {
+					break
+				}
+			}
+			continue
+		}
+
+		line.WriteRune(r)
+		lineVisible += charVisible
+		i += size
+	}
+
+	if line.Len() > 0 {
+		result.WriteString(line.String())
+	}
+
+	return result.String()
+}
+
+func wrapText(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	parts := strings.Split(s, "\n")
+	var result strings.Builder
+	for pi, part := range parts {
+		if pi > 0 {
+			result.WriteString("\n")
+		}
+		result.WriteString(wrapLine(part, width))
+	}
+	return result.String()
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
