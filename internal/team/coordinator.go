@@ -1515,6 +1515,9 @@ func (c *Coordinator) checkDuplicateTasks(tasks []TaskDef) []string {
 		if t.Goal != "" {
 			desc = t.Goal
 		}
+		if t.Constraints != "" {
+			desc += "\nconstraints: " + t.Constraints
+		}
 		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(desc)
 		c.delegatedTasks[key]++
 		if c.delegatedTasks[key] > 1 {
@@ -1615,6 +1618,9 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		if t.Goal != "" {
 			desc = t.Goal
 		}
+		if t.Constraints != "" {
+			desc += "\nconstraints: " + t.Constraints
+		}
 		todoBatch[i] = struct {
 			Agent    string
 			Desc     string
@@ -1710,6 +1716,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	taskDesc := task.Task
 	if task.Goal != "" {
 		taskDesc = task.Goal
+	}
+	if task.Constraints != "" {
+		taskDesc += "\nconstraints: " + task.Constraints
 	}
 
 	agentDef, _, err := c.resolveAgentName(task.Agent)
@@ -1929,6 +1938,9 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	taskDesc := task.Task
 	if task.Goal != "" {
 		taskDesc = task.Goal
+	}
+	if task.Constraints != "" {
+		taskDesc += "\nconstraints: " + task.Constraints
 	}
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
