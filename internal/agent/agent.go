@@ -178,6 +178,7 @@ var alwaysIncludeTools = map[string]bool{
 	"random":       true,
 	"memory_save":  true,
 	"memory_query": true,
+	"load_skill":   true,
 	"stm_write":    true,
 	"ltm_update":   true,
 }

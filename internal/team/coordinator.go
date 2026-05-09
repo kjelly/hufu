@@ -958,11 +958,16 @@ func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 		return fantasy.NewTextErrorResponse("skill name is required"), nil
 	}
 
+	agentName := "coordinator"
+	if name, _ := ctx.Value(tools.AgentNameKey).(string); name != "" {
+		agentName = name
+	}
+
 	nameLower := strings.ToLower(args.Name)
 	skills := t.coordinator.getSkills()
 	for _, s := range skills {
 		if strings.ToLower(s.Name) == nameLower {
-			t.coordinator.recordSkillUsage(s.Name, "coordinator")
+			t.coordinator.recordSkillUsage(s.Name, agentName)
 			return fantasy.NewTextResponse(fmt.Sprintf("Skill: %s\nFile: %s\n\n%s", s.Name, s.Path, s.Content)), nil
 		}
 	}
