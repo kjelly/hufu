@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -19,8 +20,9 @@ import (
 type TasksUpdatedMsg struct{ Items []*team.TodoItem }
 
 type TaskLogMsg struct {
-	TodoID string
-	Line   string
+	TodoID  string
+	Line    string
+	RawText string
 }
 
 type CoordItemMsg struct{ Item *team.TodoItem }
@@ -84,6 +86,8 @@ var (
 	toolResStyle  = lipgloss.NewStyle().Faint(true)
 	stepHdrStyle  = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("8"))
 	textLogStyle  = lipgloss.NewStyle().Faint(true)
+	cursorStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("240"))
+	selectionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("55"))
 
 	confirmBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -125,6 +129,15 @@ type Model struct {
 	vp          viewport.Model
 	vpReady     bool
 	horizOffset int
+
+	cursorLine int
+	cursorCol  int
+
+	inVisual     bool
+	visStartLine int
+	visStartCol  int
+
+	rawLogs map[string][]string
 
 	inConfirm     bool // showing quit confirmation dialog
 	confirmChoice int  // 0=no 1=yes
@@ -181,6 +194,7 @@ func New(prompt string, teamInfo TeamInfo) Model {
 	return Model{
 		prompt:         prompt,
 		logs:           make(map[string][]string),
+		rawLogs:        make(map[string][]string),
 		promptInput:    ti,
 		searchInput:    si,
 		PromptInjectCh: make(chan string, 16),
@@ -236,6 +250,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TaskLogMsg:
 		m.logs[msg.TodoID] = append(m.logs[msg.TodoID], msg.Line)
+		if msg.RawText != "" {
+			m.rawLogs[msg.TodoID] = append(m.rawLogs[msg.TodoID], msg.RawText)
+		} else {
+			m.rawLogs[msg.TodoID] = append(m.rawLogs[msg.TodoID], msg.Line)
+		}
 		if m.inDetail && m.detailID == msg.TodoID && m.vpReady {
 			m.vp.SetContent(m.buildDetailContent())
 			m.vp.GotoBottom()
@@ -374,6 +393,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.detailID = items[i].ID
 					m.inDetail = true
 					m.horizOffset = 0
+					m.cursorLine = 0
+					m.cursorCol = 0
+					m.inVisual = false
 					if m.vpReady {
 						m.vp.SetContent(m.buildDetailContent())
 						m.vp.GotoTop()
@@ -455,6 +477,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "backspace":
+		if m.inVisual {
+			m.inVisual = false
+			m.vp.SetContent(m.buildDetailContent())
+			return m, nil
+		}
 		m.inDetail = false
 		m.horizOffset = 0
 		if !m.mouseManuallyEnabled {
@@ -472,13 +499,32 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inInfo = true
 		return m, nil
 	case "g":
-		if m.vpReady {
-			m.vp.GotoTop()
-		}
+		m.cursorLine = 0
+		m.cursorCol = 0
+		m.vp.GotoTop()
+		m.updateDetailViewport()
 		return m, nil
 	case "G":
-		if m.vpReady {
-			m.vp.GotoBottom()
+		logLines := m.rawLogs[m.detailID]
+		if len(logLines) > 0 {
+			m.cursorLine = len(logLines) - 1
+			m.cursorCol = len(logLines[m.cursorLine])
+		}
+		m.vp.GotoBottom()
+		m.updateDetailViewport()
+		return m, nil
+	case "v":
+		if !m.inVisual {
+			m.inVisual = true
+			m.visStartLine, m.visStartCol = m.cursorLine, m.cursorCol
+			m.updateDetailViewport()
+		}
+		return m, nil
+	case "y":
+		if m.inVisual {
+			m.copySelection()
+			m.inVisual = false
+			m.updateDetailViewport()
 		}
 		return m, nil
 	case "n":
@@ -498,12 +544,16 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "left", "h":
-		if m.horizOffset > 0 {
-			m.horizOffset--
-		}
+		m.moveCursorH(-1)
 		return m, nil
 	case "right", "l":
-		m.horizOffset++
+		m.moveCursorH(1)
+		return m, nil
+	case "up", "k":
+		m.moveCursorV(-1)
+		return m, nil
+	case "down", "j":
+		m.moveCursorV(1)
 		return m, nil
 	case "m":
 		m.mouseManuallyEnabled = !m.mouseManuallyEnabled
@@ -516,6 +566,115 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)
 	return m, cmd
+}
+
+func (m *Model) moveCursorH(delta int) {
+	logLines := m.rawLogs[m.detailID]
+	if len(logLines) == 0 {
+		return
+	}
+	maxCol := len(logLines[m.cursorLine])
+	if m.inVisual {
+		newCol := m.cursorCol + delta
+		if newCol < 0 {
+			newCol = 0
+		} else if newCol > maxCol {
+			newCol = maxCol
+		}
+		m.cursorCol = newCol
+	} else {
+		newCol := m.cursorCol + delta
+		if newCol < 0 {
+			newCol = 0
+		} else if newCol > maxCol {
+			newCol = maxCol
+		}
+		m.cursorCol = newCol
+	}
+	m.updateDetailViewport()
+}
+
+func (m *Model) moveCursorV(delta int) {
+	logLines := m.rawLogs[m.detailID]
+	if len(logLines) == 0 {
+		return
+	}
+	newLine := m.cursorLine + delta
+	if newLine < 0 {
+		newLine = 0
+	} else if newLine >= len(logLines) {
+		newLine = len(logLines) - 1
+	}
+	m.cursorLine = newLine
+	if m.cursorCol > len(logLines[newLine]) {
+		m.cursorCol = len(logLines[newLine])
+	}
+	m.followCursorInViewport()
+	m.updateDetailViewport()
+}
+
+func (m *Model) followCursorInViewport() {
+	if !m.vpReady {
+		return
+	}
+	logLines := m.rawLogs[m.detailID]
+	if len(logLines) == 0 {
+		return
+	}
+	visTop := m.vp.YOffset
+	visBot := m.vp.YOffset + m.vp.Height
+	if m.cursorLine < visTop {
+		m.vp.ScrollUp(visTop - m.cursorLine)
+	} else if m.cursorLine >= visBot {
+		m.vp.ScrollDown(m.cursorLine - visBot + 1)
+	}
+}
+
+func (m *Model) updateDetailViewport() {
+	if !m.vpReady {
+		return
+	}
+	if m.inVisual {
+		m.vp.SetContent(m.buildVisualContent())
+	} else {
+		m.vp.SetContent(m.buildCursorContent())
+	}
+}
+
+func (m *Model) copySelection() {
+	if !m.inVisual {
+		return
+	}
+	lines := m.rawLogs[m.detailID]
+	startLine, startCol, endLine, endCol := m.normalizeSelection()
+	if startLine == endLine && startCol >= endCol {
+		return
+	}
+	var text strings.Builder
+	if startLine == endLine {
+		text.WriteString(lines[startLine][startCol:endCol])
+	} else {
+		text.WriteString(lines[startLine][startCol:])
+		for i := startLine + 1; i < endLine; i++ {
+			text.WriteString("\n")
+			text.WriteString(lines[i])
+		}
+		text.WriteString("\n")
+		text.WriteString(lines[endLine][:endCol])
+	}
+	go func() {
+		encoded := base64.StdEncoding.EncodeToString([]byte(text.String()))
+		fmt.Printf("\x1b]52;c;%s\x07", encoded)
+	}()
+}
+
+func (m *Model) normalizeSelection() (int, int, int, int) {
+	sl, sc := m.visStartLine, m.visStartCol
+	el, ec := m.cursorLine, m.cursorCol
+	if sl < el || (sl == el && sc <= ec) {
+		return sl, sc, el, ec
+	}
+	return el, ec, sl, sc
 }
 
 func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -621,6 +780,9 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detailID = col[m.row].ID
 			m.inDetail = true
 			m.horizOffset = 0
+			m.cursorLine = 0
+			m.cursorCol = 0
+			m.inVisual = false
 			if m.vpReady {
 				m.vp.SetContent(m.buildDetailContent())
 				m.vp.GotoBottom()
@@ -1408,12 +1570,18 @@ func (m Model) detailView() string {
 	if !m.vpReady {
 		return header
 	}
-	if m.horizOffset > 0 {
-		m.vp.ScrollLeft(m.horizOffset)
+	var footerStr string
+	if m.inVisual {
+		footerStr = "esc cancel · hjkl extend · y copy   -- VISUAL --"
+	} else {
+		rawLines := m.rawLogs[m.detailID]
+		lineInfo := ""
+		if len(rawLines) > 0 {
+			lineInfo = fmt.Sprintf(" Ln %d/%d, Col %d", m.cursorLine+1, len(rawLines), m.cursorCol+1)
+		}
+		footerStr = fmt.Sprintf("esc back · hjkl cursor · v select · g/G jump · q quit%s", lineInfo)
 	}
-	hScrollPct := int(m.vp.HorizontalScrollPercent() * 100)
-	scrollIndicator := fmt.Sprintf(" %d%% ", hScrollPct)
-	footer := footerStyle.Render(fmt.Sprintf("esc back · ↑↓/j/k scroll · ←→/h/l shift %s· / search · q quit", scrollIndicator))
+	footer := footerStyle.Render(footerStr)
 	return header + "\n" + m.vp.View() + "\n" + footer
 }
 
@@ -1459,6 +1627,53 @@ func (m Model) buildDetailContent() string {
 		return dimStyle.Render("  (no output yet)")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m Model) buildCursorContent() string {
+	rawLines, styledLines := m.rawLogs[m.detailID], m.logs[m.detailID]
+	if len(rawLines) == 0 || len(styledLines) == 0 {
+		return m.buildDetailContent()
+	}
+	for i, line := range styledLines {
+		if i == m.cursorLine {
+			styledLines[i] = cursorStyle.Render("› ") + line
+		}
+	}
+	return strings.Join(styledLines, "\n")
+}
+
+func (m Model) buildVisualContent() string {
+	rawLines, styledLines := m.rawLogs[m.detailID], m.logs[m.detailID]
+	if len(rawLines) == 0 || len(styledLines) == 0 {
+		return m.buildDetailContent()
+	}
+	sl, sc, el, ec := m.normalizeSelection()
+	result := make([]string, len(styledLines))
+	for i := range styledLines {
+		if i < sl || i > el {
+			result[i] = styledLines[i]
+			continue
+		}
+		raw := rawLines[i]
+		if i == sl && i == el {
+			if sc > 0 {
+				result[i] = styledLines[i][:sc] + selectionStyle.Render(raw[sc:ec])
+			} else {
+				result[i] = selectionStyle.Render(raw[sc:ec])
+			}
+		} else if i == sl {
+			if sc > 0 {
+				result[i] = styledLines[i][:sc] + selectionStyle.Render(raw[sc:])
+			} else {
+				result[i] = selectionStyle.Render(raw[sc:])
+			}
+		} else if i == el {
+			result[i] = selectionStyle.Render(raw[:ec]) + styledLines[i][ec:]
+		} else {
+			result[i] = selectionStyle.Render(raw)
+		}
+	}
+	return strings.Join(result, "\n")
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
