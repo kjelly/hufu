@@ -46,7 +46,9 @@ type modelKey struct{}
 
 type TaskDef struct {
 	Agent        string   `json:"agent"`
-	Task         string   `json:"task"`
+	Task         string   `json:"task"`                   // legacy: fallback when goal is empty
+	Goal         string   `json:"goal,omitempty"`         // WHAT to achieve (outcome)
+	Constraints  string   `json:"constraints,omitempty"` // non-obvious restrictions
 	Model        string   `json:"model,omitempty"`
 	Sidecar      bool     `json:"sidecar,omitempty"`
 	Summarize    bool     `json:"summarize,omitempty"`
@@ -439,10 +441,18 @@ func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
 	if len(agentSkillNames) == 0 {
 		return ""
 	}
+	cachedSkills := c.getSkills()
+	foundMap := map[string]bool{}
 	var b strings.Builder
 	b.WriteString("## Relevant Skills\n\n")
-	for _, s := range skill.SkillsByName(c.getSkills(), agentSkillNames) {
+	for _, s := range skill.SkillsByName(cachedSkills, agentSkillNames) {
 		fmt.Fprintf(&b, "### %s\n*File: %s*\n\n%s\n\n", s.Name, s.Path, s.Content)
+		foundMap[strings.ToLower(s.Name)] = true
+	}
+	for _, name := range agentSkillNames {
+		if !foundMap[strings.ToLower(strings.TrimSpace(name))] {
+			fmt.Fprintf(os.Stderr, "warning: agent %q requests skill %q which is not available (check team skills-exclude config)\n", agentDef.Name, name)
+		}
 	}
 	b.WriteString("---\n\n")
 	return b.String()
@@ -801,7 +811,9 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 	}
 	props := map[string]any{
 		"agent":         map[string]any{"type": "string", "enum": workerNames, "description": "Agent name to delegate to"},
-		"task":          map[string]any{"type": "string", "description": "Task description for the agent"},
+		"goal":          map[string]any{"type": "string", "description": "The desired OUTCOME — what should be achieved. Do NOT include implementation details (file paths, function names, step-by-step instructions). Workers are specialists who determine their own approach."},
+		"constraints":   map[string]any{"type": "string", "description": "Non-obvious constraints the worker MUST respect (e.g., 'must use Python 3.11', 'cannot modify the public API'). Do NOT include obvious project conventions."},
+		"task":          map[string]any{"type": "string", "description": "DEPRECATED: Use 'goal' instead. Task description for the agent."},
 		"summarize":     map[string]any{"type": "boolean", "description": "If true, summarize the agent's output before returning. Use for tasks that produce verbose output where only key points matter."},
 		"sidecar":       map[string]any{"type": "boolean", "description": "If true, execute this task directly via the sidecar model instead of an agent. Use for simple, tool-free tasks that need a quick response."},
 		"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": contextFilesDesc},
@@ -829,9 +841,10 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 			"tasks": map[string]any{
 				"type": "array",
 				"items": map[string]any{
-					"type":       "object",
-					"properties": buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir)),
-					"required":   []string{"agent", "task"},
+					"type":                 "object",
+					"properties":          buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir)),
+					"required":            []string{"agent"},
+					"additionalProperties": false,
 				},
 			},
 		},
@@ -851,6 +864,11 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	}
 	if len(args.Tasks) == 0 {
 		return fantasy.NewTextErrorResponse("no tasks provided"), nil
+	}
+	for _, t := range args.Tasks {
+		if t.Goal == "" && t.Task == "" {
+			return fantasy.NewTextErrorResponse("each task requires either 'goal' or 'task'"), nil
+		}
 	}
 
 	result, err := t.coordinator.ExecuteTasks(ctx, args.Tasks)
@@ -1775,11 +1793,19 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	prompt := task.Task
 
+	if task.Goal != "" {
+		prompt = "## Goal\n\n" + task.Goal
+		if task.Constraints != "" {
+			prompt += "\n\n## Constraints\n\n" + task.Constraints
+		}
+		prompt += "\n\nYou are a domain expert. Determine your own implementation approach based on the goal above."
+	}
+
 	if suffix := c.buildSkillPromptPrefix(agentDef); suffix != "" {
 		prompt = prompt + "\n\n" + suffix
 	}
 
-	if suffix := c.injectAutoSkills(agentDef, agentName, task.Task); suffix != "" {
+	if suffix := c.injectAutoSkills(agentDef, agentName, task.Goal); suffix != "" {
 		prompt = prompt + "\n\n" + suffix
 	}
 
@@ -2439,10 +2465,13 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("2. **Check skills** — if any available skills are relevant to the user's task, call `load_skill` to get the full instructions\n")
 	b.WriteString("3. **Plan** your approach before delegating — think step by step\n")
 	b.WriteString("4. **Select model** — for each task, pick the model from Available Models whose strengths best match the task requirements. Using the right model improves quality and speed.\n")
-	b.WriteString("5. **Delegate** tasks using agent — this is the ONLY way to get work done\n")
+	b.WriteString("5. **Delegate goals** using agent — describe WHAT outcome each worker should achieve. Use the 'goal' field for the desired outcome and 'constraints' for non-obvious restrictions. Workers are domain experts who determine their own implementation approach.\n\n")
+	b.WriteString("   Examples:\n")
+	b.WriteString("   - ❌ BAD: \"search src/main.go line 42 for parseUser and fix the nil check\"\n")
+	b.WriteString("   - ✅ GOOD: goal=\"Fix nil pointer dereference in user parsing\", constraints=\"Must maintain backward compatibility with existing callers\"\n\n")
 	b.WriteString("6. Run independent tasks in parallel by passing multiple tasks in one agent call\n")
 	b.WriteString("7. When delegating to a worker that needs skill knowledge, include the skill summary in the task description and mention the skill file path so the worker can read it if needed\n")
-	b.WriteString("8. **Include relevant details** — Workers already know the project context (tech stack, conventions, directory structure), but you should still specify file paths, function names, and specific constraints in your task descriptions to minimize exploration steps\n")
+	b.WriteString("8. **Trust worker expertise** — Workers have access to the full project context (AGENTS.md, tech stack, conventions, directory structure). They will explore the codebase, identify relevant files, and determine the best implementation approach. Do NOT pre-specify file paths, function names, or implementation steps unless they are non-obvious constraints.\n")
 	b.WriteString("9. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
 	b.WriteString("10. **Synthesize** results into a coherent answer for the user\n")
 	b.WriteString("11. When satisfied, call the finish tool with your final response\n\n")
@@ -2517,17 +2546,21 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("## Tools\n\n")
 	b.WriteString("### agent\n")
 	b.WriteString("Delegate tasks to team workers. All tasks in one call run in parallel.\n\n")
+	b.WriteString("Use **goal** to describe what outcome the worker should achieve. Use **constraints** for non-obvious restrictions. Workers are domain experts who determine their own implementation approach.\n\n")
 	if len(c.modelList) > 0 {
 		b.WriteString("- **model**: Choose the model whose strengths best match each task — see Available Models above.\n")
 	}
+	b.WriteString("- **goal**: The desired outcome — what should be achieved (do NOT include file paths or implementation steps)\n")
+	b.WriteString("- **constraints**: Non-obvious restrictions the worker must respect (e.g., 'must maintain backward compatibility')\n")
+	b.WriteString("- **task**: DEPRECATED — use 'goal' instead. Legacy task description.\n")
 	b.WriteString("- **summarize**: Set to `true` to condense the agent's output before returning. Use for tasks that may produce verbose output where only key points matter.\n")
 	b.WriteString("```json\n")
 	b.WriteString("{\n")
 	b.WriteString("  \"tasks\": [\n")
 	if len(c.modelList) > 0 {
-		b.WriteString("    {\"agent\": \"agent-name\", \"task\": \"task description\", \"model\": \"model-id-from-available-models\", \"summarize\": false, \"context_files\": [\"optional_file.txt\"]}\n")
+		b.WriteString("    {\"agent\": \"agent-name\", \"goal\": \"fix the authentication bug\", \"constraints\": \"must not break existing user sessions\", \"model\": \"model-id\", \"summarize\": false}\n")
 	} else {
-		b.WriteString("    {\"agent\": \"agent-name\", \"task\": \"task description\", \"summarize\": false, \"context_files\": [\"optional_file.txt\"]}\n")
+		b.WriteString("    {\"agent\": \"agent-name\", \"goal\": \"fix the authentication bug\", \"constraints\": \"must not break existing user sessions\", \"summarize\": false}\n")
 	}
 	b.WriteString("  ]\n")
 	b.WriteString("}\n```\n\n")
@@ -2542,8 +2575,8 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 			}
 			complexModel = m.ID
 		}
-		fmt.Fprintf(&b, "    {\"agent\": \"worker-name\", \"task\": \"fix a typo in README\", \"model\": \"%s\"},\n", fastModel)
-		fmt.Fprintf(&b, "    {\"agent\": \"worker-name\", \"task\": \"design distributed consensus algorithm\", \"model\": \"%s\"}\n", complexModel)
+		fmt.Fprintf(&b, "    {\"agent\": \"worker-name\", \"goal\": \"fix typo in README\", \"model\": \"%s\"},\n", fastModel)
+		fmt.Fprintf(&b, "    {\"agent\": \"worker-name\", \"goal\": \"design distributed consensus algorithm\", \"model\": \"%s\"}\n", complexModel)
 		b.WriteString("  ]\n")
 		b.WriteString("}\n```\n\n")
 	}
@@ -3200,13 +3233,19 @@ Rules:
 - After receiving results from agent, evaluate whether more work is needed or if you can provide a final answer
 - Synthesize results from workers into a coherent answer for the user
 - NEVER attempt to do the work yourself — you do not have tools for that
-- If a task fails, retry once with clearer instructions before giving up
+- If a task fails, provide clearer GOALS or add missing CONSTRAINTS — do NOT add implementation details
 - Break complex requests into smaller subtasks for appropriate workers
 - Use ask_user when you need clarification from the user before proceeding
 - When you have completed all coordination and have a final answer, call the finish tool with your response
 - ALWAYS call finish when done — do not just output text as your final answer
 - If the user's task relates to a skill, use load_skill to get the detailed instructions first, then include relevant parts in worker task descriptions
 - Workers have limited context — include only the essential skill instructions in the task description, not the entire skill content. Mention the skill file path so workers can read it if they need more detail
+
+Delegation Guidelines:
+- Break down user requests into outcome-oriented goals for each worker
+- Describe WHAT to achieve (goal), not HOW to achieve it
+- Only specify constraints that are non-obvious or user-mandated (e.g., "must not break public API")
+- Workers will determine file paths, tool selection, and implementation approach based on the goal
 `
 
 const continuationPromptTemplate = `The user has sent an additional message while you were working:
@@ -3255,9 +3294,10 @@ func (t *dryRunAgentsTool) Info() fantasy.ToolInfo {
 			"tasks": map[string]any{
 				"type": "array",
 				"items": map[string]any{
-					"type":       "object",
-					"properties": buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir)),
-					"required":   []string{"agent", "task"},
+					"type":                 "object",
+					"properties":          buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir)),
+					"required":            []string{"agent"},
+					"additionalProperties": false,
 				},
 			},
 		},

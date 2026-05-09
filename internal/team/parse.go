@@ -28,8 +28,8 @@ type agentFrontmatter struct {
 	Name           string   `yaml:"name"`
 	Description    string   `yaml:"description"`
 	Role           string   `yaml:"role"`
-	Tools          string   `yaml:"tools"`
-	Skills         string   `yaml:"skills"`
+	Tools          any      `yaml:"tools"` // string or []string (YAML list)
+	Skills         any      `yaml:"skills"` // string or []string (YAML list)
 	Guard          []string `yaml:"guard"`
 	Model          string   `yaml:"model"`
 	Temperature    string   `yaml:"temperature"`
@@ -37,10 +37,10 @@ type agentFrontmatter struct {
 	TopP           string   `yaml:"top-p"`
 	TopK           string   `yaml:"top-k"`
 	Timeout        int64    `yaml:"timeout"`
-	MaxRetries     int      `yaml:"max-retries"`
+	MaxRetries     any      `yaml:"max-retries"` // int or string
 	MaxSteps       int      `yaml:"max-steps"`
 	ProviderURL    string   `yaml:"provider-url"`
-	AllowedPaths   string   `yaml:"allowed-paths"`
+	AllowedPaths   any      `yaml:"allowed-paths"` // string or []string
 	RestrictedPath string   `yaml:"restricted-path"`
 	NoNet         bool     `yaml:"no-net"`
 }
@@ -106,6 +106,51 @@ func parseCommaList(s string) []string {
 		}
 	}
 	return result
+}
+
+func anyToStrList(v any) []string {
+	if v == nil {
+		return nil
+	}
+	if s, ok := v.(string); ok {
+		return parseCommaList(s)
+	}
+	if slice, ok := v.([]any); ok {
+		var result []string
+		for _, item := range slice {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+func anyToStr(v any, fallback string) string {
+	if v == nil {
+		return fallback
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fallback
+}
+
+func anyToInt(v any, fallback int) int {
+	if v == nil {
+		return fallback
+	}
+	if n, ok := v.(int); ok {
+		return n
+	}
+	if s, ok := v.(string); ok {
+		var n int
+		if _, err := fmt.Sscanf(s, "%d", &n); err == nil {
+			return n
+		}
+	}
+	return fallback
 }
 
 func expandAllowedPaths(paths []string) []string {
@@ -227,18 +272,24 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 		role = "worker"
 	}
 
+	toolsList := anyToStrList(fm.Tools)
+	skillsList := anyToStrList(fm.Skills)
+	toolsStr := strings.Join(toolsList, ",")
+	skillsStr := strings.Join(skillsList, ",")
+	maxRetries := anyToInt(fm.MaxRetries, -1)
+
 	def := &agent.AgentDef{
 		Name:           fm.Name,
 		Description:    fm.Description,
-		Tools:          fm.Tools,
+		Tools:          toolsStr,
 		Role:           role,
 		System:         body,
 		Capabilities:   extractCapabilitiesFromSystem(body),
-		Skills:         fm.Skills,
+		Skills:         skillsStr,
 		Guard:          fm.Guard,
-		MaxRetries:     -1,
+		MaxRetries:     maxRetries,
 		MaxSteps:       fm.MaxSteps,
-		AllowedPaths:   expandAllowedPaths(parseCommaList(fm.AllowedPaths)),
+		AllowedPaths:   expandAllowedPaths(anyToStrList(fm.AllowedPaths)),
 		RestrictedPath: fm.RestrictedPath,
 		NoNet:         fm.NoNet,
 		Generation: agent.GenerationParams{
@@ -252,9 +303,6 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 	}
 	if fm.Timeout > 0 {
 		def.Timeout = fm.Timeout
-	}
-	if fm.MaxRetries >= 0 {
-		def.MaxRetries = fm.MaxRetries
 	}
 	return def, nil
 }
