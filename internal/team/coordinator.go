@@ -1511,10 +1511,14 @@ func (c *Coordinator) checkDuplicateTasks(tasks []TaskDef) []string {
 	c.delegatedTasksMu.Lock()
 	defer c.delegatedTasksMu.Unlock()
 	for _, t := range tasks {
-		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(t.Task)
+		desc := t.Task
+		if t.Goal != "" {
+			desc = t.Goal
+		}
+		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(desc)
 		c.delegatedTasks[key]++
 		if c.delegatedTasks[key] > 1 {
-			warnings = append(warnings, fmt.Sprintf("%s (agent=%s, count=%d)", truncateTaskDesc(t.Task), t.Agent, c.delegatedTasks[key]))
+			warnings = append(warnings, fmt.Sprintf("%s (agent=%s, count=%d)", truncateTaskDesc(desc), t.Agent, c.delegatedTasks[key]))
 		}
 	}
 	return warnings
@@ -1607,13 +1611,17 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			}
 			resolvedModel = c.resolveAgentModel(agentDef, overrideModel)
 		}
+		desc := t.Task
+		if t.Goal != "" {
+			desc = t.Goal
+		}
 		todoBatch[i] = struct {
 			Agent    string
 			Desc     string
 			Model    string
 			Source   string
 			ParentID string
-		}{Agent: strings.ToLower(t.Agent), Desc: t.Task, Model: resolvedModel, Source: TaskSourceCoordinator, ParentID: ""}
+		}{Agent: strings.ToLower(t.Agent), Desc: desc, Model: resolvedModel, Source: TaskSourceCoordinator, ParentID: ""}
 	}
 	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
@@ -1699,6 +1707,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 }
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (string, error) {
+	taskDesc := task.Task
+	if task.Goal != "" {
+		taskDesc = task.Goal
+	}
+
 	agentDef, _, err := c.resolveAgentName(task.Agent)
 	if err != nil {
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
@@ -1755,15 +1768,15 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	resolvedModel := c.resolveAgentModel(agentDef, task.Model)
 
 	if c.think {
-		c.emitThinkDelegation(agentName, task.Task, resolvedModel)
+		c.emitThinkDelegation(agentName, taskDesc, resolvedModel)
 	}
 
-	c.report(c.newEvent("start").withAgent(agentName).withMessage(task.Task).withModel(resolvedModel).withTodoID(todoID))
+	c.report(c.newEvent("start").withAgent(agentName).withMessage(taskDesc).withModel(resolvedModel).withTodoID(todoID))
 	prevAgent := c.GetCurrentAgent()
 	prevTask := c.GetCurrentTask()
 	prevTodoID := c.GetCurrentTodoID()
 	c.SetCurrentAgent(agentName)
-	c.SetCurrentTask(task.Task)
+	c.SetCurrentTask(taskDesc)
 	c.SetCurrentTodoID(todoID)
 	defer func() {
 		c.SetCurrentAgent(prevAgent)
@@ -1771,10 +1784,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		c.SetCurrentTodoID(prevTodoID)
 	}()
 	taskTS := time.Now().Format("20060102-150405")
-	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "working", task.Task, ""); err != nil {
+	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "working", taskDesc, ""); err != nil {
 		log.Printf("warning: failed to write task file: %v", err)
 	}
-	_ = writeStatus(c.session.Workspace, agentName, "working", task.Task)
+	_ = writeStatus(c.session.Workspace, agentName, "working", taskDesc)
 
 	timing := &taskTiming{}
 	timing.reset()
@@ -1784,10 +1797,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", task.Task, ""); err != nil {
+		if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", taskDesc, ""); err != nil {
 			log.Printf("warning: failed to write task file: %v", err)
 		}
-		writeStatus(c.session.Workspace, agentName, "error", task.Task)
+		writeStatus(c.session.Workspace, agentName, "error", taskDesc)
 		return "", err
 	}
 
@@ -1845,7 +1858,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			taskCtx = context.WithValue(taskCtx, tools.AgentNameKey, agentName)
 			taskCtx = context.WithValue(taskCtx, hooks.AgentNameKey, agentName)
 			taskCtx = context.WithValue(taskCtx, hooks.TeamNameKey, c.session.Config.Name)
-			taskCtx = context.WithValue(taskCtx, hooks.TaskDescKey, task.Task)
+			taskCtx = context.WithValue(taskCtx, hooks.TaskDescKey, taskDesc)
 			if len(agentDef.Guard) > 0 {
 				taskCtx = context.WithValue(taskCtx, tools.GuardRulesKey, agentDef.Guard)
 			}
@@ -1862,10 +1875,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}()
 
 		if err == nil {
-			if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "done", task.Task, output); err != nil {
+			if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "done", taskDesc, output); err != nil {
 				log.Printf("warning: failed to write task file: %v", err)
 			}
-			_ = writeStatus(c.session.Workspace, agentName, "done", task.Task)
+			_ = writeStatus(c.session.Workspace, agentName, "done", taskDesc)
 			duration, modelTime, toolTime := timing.snapshot()
 			c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
 			c.updateTodoTiming(todoID, modelTime, toolTime)
@@ -1893,10 +1906,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	_, modelTime, toolTime := timing.snapshot()
 	c.updateTodoTiming(todoID, modelTime, toolTime)
-	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", task.Task, ""); err != nil {
+	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", taskDesc, ""); err != nil {
 		log.Printf("warning: failed to write task file: %v", err)
 	}
-	_ = writeStatus(c.session.Workspace, agentName, "error", task.Task)
+	_ = writeStatus(c.session.Workspace, agentName, "error", taskDesc)
 	return "", fmt.Errorf("agent %q failed after %d attempts (model: %s): %w", agentName, maxRetries, resolvedModel, lastErr)
 }
 
@@ -1913,12 +1926,17 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		return "", fmt.Errorf("sidecar not configured: set sidecar-model in team.yaml or hufu.yaml")
 	}
 
+	taskDesc := task.Task
+	if task.Goal != "" {
+		taskDesc = task.Goal
+	}
+
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("sidecar_call").withAgent(task.Agent).withMessage(task.Task))
+	c.report(c.newEvent("sidecar_call").withAgent(task.Agent).withMessage(taskDesc))
 
 	if c.think {
-		c.emitThinkDelegation(task.Agent, task.Task, c.sidecarModel)
+		c.emitThinkDelegation(task.Agent, taskDesc, c.sidecarModel)
 		c.emitThinkSidecar("Execute", fmt.Sprintf("running task via sidecar model: %s", c.sidecarModel))
 	}
 
@@ -1929,7 +1947,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	sidecarCtx, cancel := context.WithTimeout(ctx, sidecarTimeout)
 	defer cancel()
 
-	result, err := s.Execute(sidecarCtx, task.Task)
+	result, err := s.Execute(sidecarCtx, taskDesc)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: sidecar execute failed for agent %q: %v\n", task.Agent, err)
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
