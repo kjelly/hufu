@@ -9,3 +9,4 @@ dist/
 coverage.out
 ltm.md
 stm.md
+.opencode/plans

@@ -499,11 +499,14 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "left", "h":
 		if m.horizOffset > 0 {
-			m.horizOffset--
+			m.horizOffset -= 10
+			if m.horizOffset < 0 {
+				m.horizOffset = 0
+			}
 		}
 		return m, nil
 	case "right", "l":
-		m.horizOffset++
+		m.horizOffset += 10
 		return m, nil
 	case "m":
 		m.mouseManuallyEnabled = !m.mouseManuallyEnabled
@@ -1357,35 +1360,72 @@ func (m Model) detailView() string {
 		return "task not found — press esc"
 	}
 
-	back := dimStyle.Render("← esc")
-	agentLabel := agentStyle.Render(item.Agent)
-	if item.ID == team.CoordTodoID {
-		agentLabel += " " + dimStyle.Render("(coordinator)")
+	header := m.renderDetailHeader(item)
+	if !m.vpReady {
+		return header
 	}
-	heading := fmt.Sprintf("%s  %s / %s",
-		back,
-		agentLabel,
-		utils.TruncateLine(item.Desc, m.width-30))
+	m.vp.SetXOffset(m.horizOffset)
+	hScrollPct := int(m.vp.HorizontalScrollPercent() * 100)
+	scrollIndicator := fmt.Sprintf(" %d%% ", hScrollPct)
+	footer := footerStyle.Render(fmt.Sprintf("j/k ↑↓ scroll · ←→/h/l shift %s· esc back", scrollIndicator))
+	return header + "\n" + m.vp.View() + "\n" + footer
+}
 
-	status := string(item.Status)
-	meta := dimStyle.Render("status: " + status)
+func (m Model) renderDetailHeader(item *team.TodoItem) string {
+	icon, iconSt := taskIconStyle(item.Status)
+
+	sep := dimStyle.Render(strings.Repeat("─", m.width))
+	taskNum := ""
+	for i, t := range m.tasks {
+		if t.ID == item.ID {
+			taskNum = fmt.Sprintf(" #%d ", i+1)
+			break
+		}
+	}
+	titleLine := headerStyle.Render("─── Task"+taskNum+"───")
+
+	agentLine := iconSt.Render(icon) + " " + agentStyle.Render(item.Agent)
+	if item.ID == team.CoordTodoID {
+		agentLine += " " + dimStyle.Render("(coordinator)")
+	}
+
+	modelLine := dimStyle.Render("model: ")
 	if item.Model != "" {
-		meta += "  " + dimStyle.Render("model: "+item.Model)
+		modelLine += dimStyle.Render(item.Model)
+	} else {
+		modelLine += dimStyle.Render("—")
 	}
+
+	var skillsLine string
 	if len(item.Skills) > 0 {
-		meta += "  " + skillStyle.Render("skills: "+strings.Join(item.Skills, ", "))
+		skillsLine = skillStyle.Render("skills: " + strings.Join(item.Skills, " · "))
 	}
+
+	descWrapped := utils.WrapLine(item.Desc, m.width-4, 2)
+	var descLines []string
+	for _, l := range descWrapped.Lines {
+		descLines = append(descLines, dimStyle.Render("  "+l))
+	}
+	descBlock := strings.Join(descLines, "\n")
+
+	var parts []string
+	parts = append(parts, titleLine)
+	parts = append(parts, agentLine+"  "+modelLine)
+	if skillsLine != "" {
+		parts = append(parts, skillsLine)
+	}
+	parts = append(parts, descBlock)
+
 	if item.Source != "" && item.Source != team.TaskSourceCoordinator {
-		sourceLabel := sourceDetailTag(item.Source)
-		meta += "  " + sourceLabel
+		parts = append(parts, sourceDetailTag(item.Source))
 	}
 	if item.ParentID != "" {
 		parent := m.findTask(item.ParentID)
 		if parent != nil {
 			parentDesc := utils.TruncateLine(parent.Agent+": "+parent.Desc, m.width-20)
-			meta += "\n" + dimStyle.Render("parent: "+item.ParentID+". "+parentDesc)
+			parts = append(parts, dimStyle.Render("parent: "+item.ParentID+". "+parentDesc))
 		} else {
-			meta += "\n" + dimStyle.Render("parent: #"+item.ParentID)
+			parts = append(parts, dimStyle.Render("parent: #"+item.ParentID))
 		}
 	}
 
@@ -1395,24 +1435,13 @@ func (m Model) detailView() string {
 			subtaskLines += renderSubtaskLine(t, m.width)
 		}
 	}
-
-	sep := dimStyle.Render(strings.Repeat("─", m.width))
-
-	var header string
 	if subtaskLines != "" {
-		sep2 := dimStyle.Render("─── Subtasks ───")
-		header = heading + "\n" + meta + "\n" + sep + "\n" + sep2 + "\n" + subtaskLines + sep
-	} else {
-		header = heading + "\n" + meta + "\n" + sep
+		parts = append(parts, dimStyle.Render("─── Subtasks ───"))
+		parts = append(parts, subtaskLines)
 	}
-	if !m.vpReady {
-		return header
-	}
-	m.vp.SetXOffset(m.horizOffset)
-	hScrollPct := int(m.vp.HorizontalScrollPercent() * 100)
-	scrollIndicator := fmt.Sprintf(" %d%% ", hScrollPct)
-	footer := footerStyle.Render(fmt.Sprintf("esc back · ↑↓/j/k scroll · ←→/h/l shift %s· / search · q quit", scrollIndicator))
-	return header + "\n" + m.vp.View() + "\n" + footer
+
+	parts = append(parts, sep)
+	return strings.Join(parts, "\n")
 }
 
 func sourceDetailTag(source string) string {
@@ -1440,7 +1469,12 @@ func renderSubtaskLine(t *team.TodoItem, width int) string {
 
 // vpHeight is the number of lines available for the detail viewport.
 func (m Model) vpHeight() int {
-	h := m.height - 3 // 3 header lines
+	descLines := (m.width - 4) / 80
+	if descLines < 2 {
+		descLines = 2
+	}
+	headerLines := 6 + descLines // title(1) + agent+model(1) + skills(1) + desc(N) + sep(1) + buffer(2)
+	h := m.height - headerLines
 	if h < 1 {
 		h = 1
 	}
