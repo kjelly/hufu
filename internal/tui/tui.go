@@ -1408,9 +1408,7 @@ func (m Model) detailView() string {
 	if !m.vpReady {
 		return header
 	}
-	if m.horizOffset > 0 {
-		m.vp.ScrollLeft(m.horizOffset)
-	}
+	m.vp.ScrollLeft(m.horizOffset)
 	hScrollPct := int(m.vp.HorizontalScrollPercent() * 100)
 	scrollIndicator := fmt.Sprintf(" %d%% ", hScrollPct)
 	footer := footerStyle.Render(fmt.Sprintf("esc back · ↑↓/j/k scroll · ←→/h/l shift %s· / search · q quit", scrollIndicator))
