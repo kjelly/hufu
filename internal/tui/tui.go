@@ -125,7 +125,6 @@ type Model struct {
 	detailID    string
 	vp          viewport.Model
 	vpReady     bool
-	horizOffset int
 
 	inConfirm     bool // showing quit confirmation dialog
 	confirmChoice int  // 0=no 1=yes
@@ -374,7 +373,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Clicked on item i — enter detail view
 					m.detailID = items[i].ID
 					m.inDetail = true
-					m.horizOffset = 0
 					if m.vpReady {
 						m.vp.SetContent(m.buildDetailContent())
 						m.vp.GotoTop()
@@ -457,7 +455,6 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "backspace":
 		m.inDetail = false
-		m.horizOffset = 0
 		if !m.mouseManuallyEnabled {
 			m.mouseEnabled = false
 			return m, disableMouseCmd()
@@ -487,7 +484,6 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchIdx = (m.searchIdx + 1) % len(m.searchResults)
 			m.jumpToSearchMatch()
 			m.inDetail = false
-			m.horizOffset = 0
 		}
 		return m, nil
 	case "N":
@@ -495,7 +491,6 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchIdx = (m.searchIdx - 1 + len(m.searchResults)) % len(m.searchResults)
 			m.jumpToSearchMatch()
 			m.inDetail = false
-			m.horizOffset = 0
 		}
 		return m, nil
 	case "m":
@@ -613,7 +608,6 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.row < len(col) {
 			m.detailID = col[m.row].ID
 			m.inDetail = true
-			m.horizOffset = 0
 			if m.vpReady {
 				m.vp.SetContent(m.buildDetailContent())
 				m.vp.GotoBottom()
@@ -1488,24 +1482,9 @@ func (m Model) buildDetailContent() string {
 	return result.String()
 }
 
-func visualLen(s string) int {
-	inEscape := false
-	count := 0
-	for _, r := range s {
-		if r == '\x1b' {
-			inEscape = true
-		} else if inEscape && r == 'm' {
-			inEscape = false
-		} else if !inEscape {
-			count++
-		}
-	}
-	return count
-}
-
 func wrapLine(s string, width int) string {
-	if visualLen(s) <= width {
-		return s
+	if width <= 0 {
+		return ""
 	}
 	var result strings.Builder
 	line := strings.Builder{}
@@ -1527,6 +1506,7 @@ func wrapLine(s string, width int) string {
 
 	i := 0
 	for i < len(s) {
+		// Capture any pending ANSI sequences
 		if s[i] == '\x1b' {
 			j := i
 			for j < len(s) && s[j] != 'm' {
@@ -1540,40 +1520,68 @@ func wrapLine(s string, width int) string {
 			continue
 		}
 
-		r, size := utf8.DecodeRuneInString(s[i:])
-		charVisible := len([]rune(s[i : i+size]))
+		// Collect the next word (non-whitespace sequence)
+		wordStart := i
+		wordLen := 0
+		for i < len(s) && s[i] != ' ' && s[i] != '\t' && s[i] != '\x1b' {
+			_, size := utf8.DecodeRuneInString(s[i:])
+			wordLen++
+			i += size
+		}
+		// Count visible characters (runes)
+		runeCount := 0
+		for j := wordStart; j < i; {
+			_, size := utf8.DecodeRuneInString(s[j:])
+			runeCount++
+			j += size
+		}
 
-		if lineVisible > 0 && lineVisible+charVisible > width {
+		// Check if word fits on current line
+		if lineVisible > 0 && lineVisible+1+wordLen > width {
 			flushLine()
 		}
 
-		if charVisible > width {
-			for len([]rune(s[i:])) > 0 {
-				chunkRunes := []rune(s[i:])
-				chunkLen := len(chunkRunes)
-				if chunkLen > width {
-					chunkLen = width
-				}
-				if line.Len() > 0 {
-					flushLine()
-				}
-				if pendingANSI.Len() > 0 {
-					line.WriteString(pendingANSI.String())
-					pendingANSI.Reset()
-				}
-				line.WriteString(string(chunkRunes[:chunkLen]))
-				lineVisible = chunkLen
-				i += len(string(chunkRunes[:chunkLen]))
-				if i >= len(s) {
-					break
-				}
+		// Emit word (possibly split if wider than width)
+		for runeCount > 0 {
+			chunkLen := width - lineVisible
+			if chunkLen <= 0 {
+				flushLine()
+				chunkLen = width
 			}
-			continue
+			if chunkLen > runeCount {
+				chunkLen = runeCount
+			}
+
+			// Extract chunk from current position in word
+			var chunkBuilder strings.Builder
+			pos := wordStart
+			for chunkLen > 0 {
+				r, size := utf8.DecodeRuneInString(s[pos:])
+				chunkBuilder.WriteRune(r)
+				pos += size
+				chunkLen--
+			}
+
+			// Flush pending ANSI before first content on line
+			if lineVisible == 0 && pendingANSI.Len() > 0 {
+				line.WriteString(pendingANSI.String())
+				pendingANSI.Reset()
+			}
+
+			line.WriteString(chunkBuilder.String())
+			lineVisible += chunkBuilder.Len()
+			runeCount -= chunkBuilder.Len()
+			wordStart = pos
 		}
 
-		line.WriteRune(r)
-		lineVisible += charVisible
-		i += size
+		// Add space after word (if we stopped at whitespace)
+		if i < len(s) && s[i] != '\x1b' && (s[i] == ' ' || s[i] == '\t') {
+			if line.Len() > 0 {
+				line.WriteByte(s[i])
+				lineVisible++
+			}
+			i++
+		}
 	}
 
 	if line.Len() > 0 {
