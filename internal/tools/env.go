@@ -47,6 +47,9 @@ func unquote(s string) string {
 }
 
 func loadDirenvEnv(workDir string) (map[string]string, error) {
+	if !filepath.IsAbs(workDir) {
+		return nil, fmt.Errorf("workDir must be an absolute path")
+	}
 	direnvBin, err := exec.LookPath("direnv")
 	if err != nil {
 		return nil, fmt.Errorf("direnv not found in PATH")
@@ -87,6 +90,9 @@ func envMapToSlice(env map[string]string) []string {
 }
 
 func LoadProjectEnv(workDir string, useDirenv bool) ([]string, error) {
+	if workDir == "" {
+		return nil, fmt.Errorf("workDir must not be empty")
+	}
 	vars := make(map[string]string)
 
 	dotEnvPath := filepath.Join(workDir, ".env")

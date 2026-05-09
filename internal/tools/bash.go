@@ -281,7 +281,15 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 			if bashPath == "" {
 				bashPath = "/bin/bash"
 			}
-			base := []string{"HOME=" + os.Getenv("HOME"), "USER=" + os.Getenv("USER")}
+			homeDir := os.Getenv("HOME")
+			if homeDir == "" {
+				homeDir = "/root"
+			}
+			usr := os.Getenv("USER")
+			if usr == "" {
+				usr = "unknown"
+			}
+			base := []string{"HOME=" + homeDir, "USER=" + usr}
 			base = append(base, projectEnv...)
 			base = append(base, "PATH="+os.Getenv("PATH"))
 			base = append(base, "SHELL="+bashPath)
