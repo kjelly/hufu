@@ -633,6 +633,9 @@ func (m Model) handleCtrlC() (tea.Model, tea.Cmd) {
 	if m.wrapUpRequested {
 		return m, tea.Quit
 	}
+	if m.finished {
+		return m, tea.Quit
+	}
 	m.wrapUpRequested = true
 	select {
 	case m.WrapUpCh <- struct{}{}:
