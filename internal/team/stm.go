@@ -117,29 +117,17 @@ func appendSTMEntry(content string, entry string, sectionTitle string) string {
 }
 
 func formatSTMDoneEntry(agentName, taskDesc, summary string) string {
-	shortDesc := taskDesc
-	if len([]rune(taskDesc)) > 80 {
-		shortDesc = string([]rune(taskDesc)[:80]) + "..."
-	}
+	shortDesc := truncateString(taskDesc, 80)
 	shortSummary := summary
 	if shortSummary != "" {
-		if len([]rune(shortSummary)) > 120 {
-			shortSummary = string([]rune(shortSummary)[:120]) + "..."
-		}
-		shortSummary = ": " + shortSummary
+		shortSummary = ": " + truncateString(shortSummary, 120)
 	}
 	return fmt.Sprintf("- %s %s%s", agentName, shortDesc, shortSummary)
 }
 
 func formatSTMErrorEntry(agentName, taskDesc, errMsg string) string {
-	shortDesc := taskDesc
-	if len([]rune(taskDesc)) > 80 {
-		shortDesc = string([]rune(taskDesc)[:80]) + "..."
-	}
-	shortErr := errMsg
-	if len([]rune(shortErr)) > 120 {
-		shortErr = string([]rune(shortErr)[:120]) + "..."
-	}
+	shortDesc := truncateString(taskDesc, 80)
+	shortErr := truncateString(errMsg, 120)
 	return fmt.Sprintf("- [FAILED] %s %s: %s", agentName, shortDesc, shortErr)
 }
 
@@ -198,7 +186,7 @@ func filterLTMSectionsByPrompt(sections []STMSection, prompt string) []STMSectio
 	for _, s := range sections {
 		var relevant []string
 		for _, e := range s.Entries {
-			if strings.Contains(promptLower, strings.ToLower(e[:min(len([]rune(e)), 80)])) {
+			if strings.Contains(promptLower, strings.ToLower(truncateString(e, 80))) {
 				relevant = append(relevant, e)
 			}
 		}

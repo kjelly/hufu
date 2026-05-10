@@ -154,6 +154,7 @@ type Coordinator struct {
 	sessionTime           time.Time
 	lastStmWrite          time.Time // tracks when stm_write was last called for finish enforcement
 	lastStmWriteMu        sync.Mutex
+	ltmWriteMu            sync.Mutex // Protect LTM file reads and writes
 
 	// stepConfirmFn must be set before Run() or protected by stepConfirmFnMu.
 	stepConfirmFn   func(context.Context, []TaskDef) (bool, error)
@@ -1614,6 +1615,9 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 		return resp, nil
 	}
 
+	t.coordinator.ltmWriteMu.Lock()
+	defer t.coordinator.ltmWriteMu.Unlock()
+
 	teamDir := t.coordinator.session.Dir
 	existingLTM := LoadLTM(teamDir)
 	entry := formatLTMEntry(args.Content)
@@ -1748,10 +1752,15 @@ func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	}
 
 	teamDir := t.coordinator.session.Dir
+	t.coordinator.ltmWriteMu.Lock()
 	var newContent string
 	switch mode {
 	case "replace":
+		existing := LoadLTM(teamDir)
 		newContent = TruncateLTM(args.Content)
+		if existing != "" {
+			newContent = TruncateLTM(existing + "\n" + newContent)
+		}
 	default:
 		existing := LoadLTM(teamDir)
 		if existing == "" {
@@ -1760,8 +1769,9 @@ func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 			newContent = TruncateLTM(existing + "\n" + args.Content)
 		}
 	}
-
-	if err := SaveLTM(teamDir, newContent); err != nil {
+	err := SaveLTM(teamDir, newContent)
+	t.coordinator.ltmWriteMu.Unlock()
+	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write ltm.md: %v", err)), nil
 	}
 
