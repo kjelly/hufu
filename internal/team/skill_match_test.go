@@ -193,7 +193,7 @@ func skillNames(skills []*skill.SkillDef) []string {
 	return names
 }
 
-func TestBuildAutoSkillPrefixNoOverlap(t *testing.T) {
+func TestBuildSuggestedSkillsTextNoOverlap(t *testing.T) {
 	c := &Coordinator{
 		reportStatus: func(event StatusEvent) {},
 		session:      &TeamSession{Config: agent.TeamConfig{Name: "test-team"}},
@@ -217,19 +217,32 @@ func TestBuildAutoSkillPrefixNoOverlap(t *testing.T) {
 		Skills: "",
 	}
 
-	result, _ := c.injectAutoSkills(agentDef, "reviewer", "review the code changes")
-	if result == "" {
-		t.Fatal("expected non-empty prefix, got empty")
+	text, names := c.buildSuggestedSkillsText(agentDef, "reviewer", "review the code changes")
+	if text == "" {
+		t.Fatal("expected non-empty suggestion text")
 	}
-	if !strings.Contains(result, "code-reviewer") {
-		t.Error("expected code-reviewer in prefix — 'reviewer' matches 'reviewer' keyword and task mentions 'review'")
+	if !strings.Contains(text, "code-reviewer") {
+		t.Error("expected code-reviewer in suggestion text")
 	}
-	if !strings.Contains(result, "auto-loaded") {
-		t.Error("expected 'auto-loaded' header in prefix")
+	if !strings.Contains(text, "load_skill") {
+		t.Error("expected 'load_skill' mention in suggestion text")
+	}
+	if len(names) == 0 {
+		t.Error("expected at least one skill name")
+	}
+	found := false
+	for _, n := range names {
+		if n == "code-reviewer" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected code-reviewer in names, got %v", names)
 	}
 }
 
-func TestBuildAutoSkillPrefixWithOverlap(t *testing.T) {
+func TestBuildSuggestedSkillsTextWithOverlap(t *testing.T) {
 	c := &Coordinator{
 		reportStatus: func(event StatusEvent) {},
 		session:      &TeamSession{Config: agent.TeamConfig{Name: "test-team"}},
@@ -251,19 +264,13 @@ func TestBuildAutoSkillPrefixWithOverlap(t *testing.T) {
 		Skills: "code-reviewer",
 	}
 
-	result, _ := c.injectAutoSkills(agentDef, "reviewer", "review the code changes")
-	if strings.Contains(result, "### code-reviewer") {
-		t.Error("code-reviewer should be skipped since it's already in agentDef.Skills")
-	}
-	if strings.Contains(result, "### git-commit") {
-		t.Error("git-commit should NOT be included since 'reviewer' + 'review the code changes' doesn't match git-commit keywords (git, commit, etc.)")
-	}
-	if result != "" {
-		t.Errorf("expected empty prefix since all skills are either already included or not relevant, got: %s", result)
+	text, _ := c.buildSuggestedSkillsText(agentDef, "reviewer", "review the code changes")
+	if text != "" {
+		t.Errorf("expected empty text since code-reviewer is already in agent skills, got: %s", text)
 	}
 }
 
-func TestBuildAutoSkillPrefixEmpty(t *testing.T) {
+func TestBuildSuggestedSkillsTextEmpty(t *testing.T) {
 	c := &Coordinator{
 		reportStatus:     func(event StatusEvent) {},
 		session:          &TeamSession{Config: agent.TeamConfig{Name: "test-team"}},
@@ -275,13 +282,16 @@ func TestBuildAutoSkillPrefixEmpty(t *testing.T) {
 		Name: "reviewer",
 	}
 
-	result, _ := c.injectAutoSkills(agentDef, "reviewer", "review code")
-	if result != "" {
-		t.Errorf("expected empty prefix for no auto-loaded skills, got: %s", result)
+	text, names := c.buildSuggestedSkillsText(agentDef, "reviewer", "review code")
+	if text != "" {
+		t.Errorf("expected empty text for no auto-loaded skills, got: %s", text)
+	}
+	if len(names) != 0 {
+		t.Errorf("expected empty names, got %v", names)
 	}
 }
 
-func TestBuildAutoSkillPrefixRelevance(t *testing.T) {
+func TestBuildSuggestedSkillsTextRelevance(t *testing.T) {
 	codeReviewer := &skill.SkillDef{
 		Name:        "code-reviewer",
 		Description: "Review code quality",
@@ -341,21 +351,32 @@ func TestBuildAutoSkillPrefixRelevance(t *testing.T) {
 				autoLoadedSkills: []*skill.SkillDef{codeReviewer, gitCommit},
 			}
 
-			result, _ := c.injectAutoSkills(tt.agentDef, tt.agentDef.Name, tt.taskDesc)
+			text, names := c.buildSuggestedSkillsText(tt.agentDef, tt.agentDef.Name, tt.taskDesc)
 
 			if tt.wantSkill == "" {
-				if result != "" {
-					t.Errorf("expected empty prefix for irrelevant agent+task, got: %s", result)
+				if text != "" {
+					t.Errorf("expected empty text for irrelevant agent+task, got: %s", text)
 				}
 				return
 			}
 
-			if !strings.Contains(result, tt.wantSkill) {
-				t.Errorf("expected %q in prefix, but it was not found", tt.wantSkill)
+			if !strings.Contains(text, tt.wantSkill) {
+				t.Errorf("expected %q in suggestion text, but it was not found", tt.wantSkill)
 			}
 
-			if tt.skipSkill != "" && strings.Contains(result, "### "+tt.skipSkill) {
-				t.Errorf("did not expect %q in prefix, but it was found", tt.skipSkill)
+			if tt.skipSkill != "" && strings.Contains(text, "**"+tt.skipSkill+"**") {
+				t.Errorf("did not expect %q in suggestion text, but it was found", tt.skipSkill)
+			}
+
+			found := false
+			for _, n := range names {
+				if n == tt.wantSkill {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected %q in names, got %v", tt.wantSkill, names)
 			}
 		})
 	}

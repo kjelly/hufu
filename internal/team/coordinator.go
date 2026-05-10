@@ -473,6 +473,34 @@ func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
 	return b.String()
 }
 
+func (c *Coordinator) buildSuggestedSkillsText(agentDef *agent.AgentDef, agentName string, taskDesc string) (string, []string) {
+	relevant := c.computeRelevantSkills(agentDef, taskDesc)
+	if len(relevant) == 0 {
+		return "", nil
+	}
+
+	names := make([]string, len(relevant))
+	for i, s := range relevant {
+		names[i] = s.Name
+		c.report(c.newEvent("skill_auto_loaded").withAgent(agentName).withSkillName(s.Name))
+		c.recordSkillUsage(s.Name, agentName)
+	}
+
+	var b strings.Builder
+	b.WriteString("## Suggested Skills\n\n")
+	b.WriteString("The following skills may be relevant to your task. Use `load_skill` to get full instructions:\n\n")
+	for _, s := range relevant {
+		desc := s.Description
+		if utf8.RuneCountInString(desc) > 80 {
+			runes := []rune(desc)
+			desc = string(runes[:80]) + "..."
+		}
+		fmt.Fprintf(&b, "- **%s**: %s\n", s.Name, desc)
+	}
+	b.WriteString("\n")
+	return b.String(), names
+}
+
 func (c *Coordinator) computeRelevantSkills(agentDef *agent.AgentDef, taskDesc string) []*skill.SkillDef {
 	autoSkills := c.getAutoLoadedSkills()
 	if len(autoSkills) == 0 {
@@ -501,36 +529,6 @@ func (c *Coordinator) computeRelevantSkills(agentDef *agent.AgentDef, taskDesc s
 	}
 
 	return relevant
-}
-
-func formatSkillPrefix(skills []*skill.SkillDef) string {
-	if len(skills) == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-	b.WriteString("## Relevant Skills (auto-loaded)\n\n")
-	for _, s := range skills {
-		fmt.Fprintf(&b, "### %s\n*File: %s*\n\n%s\n\n", s.Name, s.Path, s.Content)
-	}
-	b.WriteString("---\n\n")
-	return b.String()
-}
-
-func (c *Coordinator) injectAutoSkills(agentDef *agent.AgentDef, agentName string, taskDesc string) (string, []string) {
-	relevant := c.computeRelevantSkills(agentDef, taskDesc)
-	if len(relevant) == 0 {
-		return "", nil
-	}
-
-	names := make([]string, len(relevant))
-	for i, s := range relevant {
-		names[i] = s.Name
-		c.report(c.newEvent("skill_auto_loaded").withAgent(agentName).withSkillName(s.Name))
-		c.recordSkillUsage(s.Name, agentName)
-	}
-
-	return formatSkillPrefix(relevant), names
 }
 
 const maxSTMAutoInject = 2000
@@ -1090,10 +1088,10 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	defer cancel()
 
 	taskPrompt := task
-	autoSuffix, autoNames := c.injectAutoSkills(def, name, task)
-	if autoSuffix != "" {
-		c.taskTracker.TodoList().SetInjectedSkills(todoID, autoNames)
-		taskPrompt = taskPrompt + "\n\n" + autoSuffix
+	skillSuggestion, skillNames := c.buildSuggestedSkillsText(def, name, task)
+	if skillSuggestion != "" {
+		c.taskTracker.TodoList().SetInjectedSkills(todoID, skillNames)
+		taskPrompt = taskPrompt + "\n\n" + skillSuggestion
 	}
 
 	if suffix := c.buildMemorySuffix(); suffix != "" {
@@ -1869,10 +1867,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		prompt = prompt + "\n\n" + suffix
 	}
 
-	autoSuffix, autoNames := c.injectAutoSkills(agentDef, agentName, task.Goal)
-	if autoSuffix != "" {
-		c.taskTracker.TodoList().SetInjectedSkills(todoID, autoNames)
-		prompt = prompt + "\n\n" + autoSuffix
+	skillSuggestion, skillNames := c.buildSuggestedSkillsText(agentDef, agentName, task.Goal)
+	if skillSuggestion != "" {
+		c.taskTracker.TodoList().SetInjectedSkills(todoID, skillNames)
+		prompt = prompt + "\n\n" + skillSuggestion
 	}
 
 	if len(task.ContextFiles) > 0 {
@@ -2533,7 +2531,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 
 	b.WriteString("## How to Coordinate\n\n")
 	b.WriteString("1. **Analyze** the user's request to identify which team members are needed\n")
-	b.WriteString("2. **Check skills** — if any available skills are relevant to the user's task, call `load_skill` to get the full instructions\n")
+	b.WriteString("2. **Check skills** — if any available skills are relevant to the user's task, call `load_skill` to get the full instructions. Include the relevant skill summary in task descriptions so workers know which skills to load\n")
 	b.WriteString("3. **Plan** your approach before delegating — think step by step\n")
 	b.WriteString("4. **Select model** — for each task, pick the model from Available Models whose strengths best match the task requirements. Using the right model improves quality and speed.\n")
 	b.WriteString("5. **Delegate goals** using agent — describe WHAT outcome each worker should achieve. Use the 'goal' field for the desired outcome and 'constraints' for non-obvious restrictions. Workers are domain experts who determine their own implementation approach.\n\n")
@@ -2541,7 +2539,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("   - ❌ BAD: \"search src/main.go line 42 for parseUser and fix the nil check\"\n")
 	b.WriteString("   - ✅ GOOD: goal=\"Fix nil pointer dereference in user parsing\", constraints=\"Must maintain backward compatibility with existing callers\"\n\n")
 	b.WriteString("6. Run independent tasks in parallel by passing multiple tasks in one agent call\n")
-	b.WriteString("7. When delegating to a worker that needs skill knowledge, include the skill summary in the task description and mention the skill file path so the worker can read it if needed\n")
+	b.WriteString("7. When delegating to a worker that needs skill knowledge, include the skill summary (name, file path) in the task description so the worker can call `load_skill` if needed\n")
 	b.WriteString("8. **Trust worker expertise** — Workers have access to the full project context (AGENTS.md, tech stack, conventions, directory structure). They will explore the codebase, identify relevant files, and determine the best implementation approach. Do NOT pre-specify file paths, function names, or implementation steps unless they are non-obvious constraints.\n")
 	b.WriteString("9. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
 	b.WriteString("10. **Synthesize** results into a coherent answer for the user\n")
@@ -2593,18 +2591,16 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 			}
 			fmt.Fprintf(&b, "| %s | %s | %s |\n", s.Name, s.Path, desc)
 		}
-		b.WriteString("\n")
-		b.WriteString("To get the full instructions for any skill, call the `load_skill` tool with the skill name.\n")
-		b.WriteString("Before delegating tasks, consider loading relevant skills so you can include their key instructions in the task description.\n\n")
+		b.WriteString("\nTo get the full instructions for any skill, call the `load_skill` tool with the skill name.\n\n")
 	}
 
 	if len(autoSkills) > 0 {
 		b.WriteString("## Auto-Loaded Skills\n\n")
-		b.WriteString("The following skills were automatically loaded because they match the user's task. You already have their full instructions — include the relevant parts in worker task descriptions.\n\n")
+		b.WriteString("The following skills were automatically matched to your task. Include the skill name and file path in worker task descriptions so workers can load them if needed.\n\n")
 		for _, s := range autoSkills {
-			fmt.Fprintf(&b, "### %s\n%s\n\n", s.Name, s.Content)
+			fmt.Fprintf(&b, "- **%s** (`%s`)\n", s.Name, s.Path)
 		}
-		b.WriteString("---\n\n")
+		b.WriteString("\n")
 	}
 
 	if len(c.modelList) > 0 {
@@ -2656,7 +2652,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 		b.WriteString("}\n```\n\n")
 	}
 	b.WriteString("### load_skill\n")
-	b.WriteString("Load the full content of a skill by name. Returns detailed instructions you can include in worker task descriptions.\n")
+	b.WriteString("Load the full content of a skill by name. Use it yourself before delegating, and include the skill name/file path in worker task descriptions so workers can also load relevant skills.\n")
 	b.WriteString("```json\n{\"name\": \"skill-name\"}\n```\n\n")
 	b.WriteString("### save_skill\n")
 	b.WriteString("Save a reusable skill to disk and reload it immediately. Use this when you or a worker has solved a non-trivial problem and you want to encode the solution for future reuse.\n")
@@ -2969,10 +2965,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		prompt = prompt + "\n\n" + suffix
 	}
 
-	autoSuffix, autoNames := c.injectAutoSkills(agentDef, resolvedName, task)
-	if autoSuffix != "" {
-		c.taskTracker.TodoList().SetInjectedSkills(todoID, autoNames)
-		prompt = prompt + "\n\n" + autoSuffix
+	skillSuggestion, skillNames := c.buildSuggestedSkillsText(agentDef, resolvedName, task)
+	if skillSuggestion != "" {
+		c.taskTracker.TodoList().SetInjectedSkills(todoID, skillNames)
+		prompt = prompt + "\n\n" + skillSuggestion
 	}
 
 	if suffix := c.buildMemorySuffix(); suffix != "" {
@@ -3315,8 +3311,8 @@ Rules:
 - Use ask_user when you need clarification from the user before proceeding
 - When you have completed all coordination and have a final answer, call the finish tool with your response
 - ALWAYS call finish when done — do not just output text as your final answer
-- If the user's task relates to a skill, use load_skill to get the detailed instructions first, then include relevant parts in worker task descriptions
-- Workers have limited context — include only the essential skill instructions in the task description, not the entire skill content. Mention the skill file path so workers can read it if they need more detail
+- If the user's task relates to a skill, use load_skill to get the detailed instructions. Include the skill name and file path in worker task descriptions so workers can load it themselves if needed
+- Workers have access to load_skill — include the skill name and path in the task description rather than the full skill content
 
 Delegation Guidelines:
 - Break down user requests into outcome-oriented goals for each worker
