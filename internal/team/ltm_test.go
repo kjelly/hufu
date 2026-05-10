@@ -73,3 +73,121 @@ func TestLTMPath(t *testing.T) {
 		t.Errorf("LTMPath() = %q, want %q", got, want)
 	}
 }
+
+func TestFormatLTMEntry(t *testing.T) {
+	got := formatLTMEntry("Use bcrypt for password hashing")
+	if got == "" {
+		t.Fatal("formatLTMEntry returned empty")
+	}
+	if !stringContains(got, "[20") {
+		t.Errorf("formatLTMEntry missing timestamp: %s", got)
+	}
+	if !stringContains(got, "bcrypt") {
+		t.Errorf("formatLTMEntry missing content: %s", got)
+	}
+}
+
+func TestPruneLTM(t *testing.T) {
+	content := "# 專案慣例\n- entry1\n- entry2\n- entry3\n- entry4\n- entry5\n- entry6\n- entry7\n- entry8\n- entry9\n- entry10\n- entry11"
+	got := PruneLTM(content)
+	sections := ParseSTMSections(got)
+	if len(sections) == 0 {
+		t.Fatal("PruneLTM returned empty")
+	}
+	if len(sections[0].Entries) > maxEntriesPerLTMSection {
+		t.Errorf("PruneLTM entries = %d, want <= %d", len(sections[0].Entries), maxEntriesPerLTMSection)
+	}
+}
+
+func TestPruneLTMEmpty(t *testing.T) {
+	if got := PruneLTM(""); got != "" {
+		t.Errorf("PruneLTM(\"\") = %q, want empty", got)
+	}
+}
+
+func TestDeduplicateLTREntries(t *testing.T) {
+	entries := []string{"- [2026-05-10] use bcrypt", "- [2026-05-11] use bcrypt", "- [2026-05-12] migrate to postgres"}
+	got := deduplicateLTREntries(entries)
+	if len(got) != 2 {
+		t.Errorf("deduplicateLTREntries len = %d, want 2: %v", len(got), got)
+	}
+}
+
+func TestNormalizeLTREntry(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"- [2026-05-10] Use bcrypt for password", "bcrypt password"},
+		{"- [2026-05-10] login.go has SQL injection", "login.go injection"},
+	}
+	for _, tt := range tests {
+		got := normalizeLTREntry(tt.input)
+		if got != tt.want {
+			t.Errorf("normalizeLTREntry(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestClassifyLTMEntry(t *testing.T) {
+	tests := []struct {
+		entry  string
+		source string
+		want   string
+	}{
+		{"login.go has SQL injection", "finding", ltmSectionFiles},
+		{"always run go vet before committing", "finding", ltmSectionConventions},
+		{"use the factory pattern for new services", "finding", ltmSectionPatterns},
+		{"switch from SQLite to PostgreSQL", "decision", ltmSectionArchitecture},
+		{"fixed: timeout by adding retry logic", "error", ltmSectionIssues},
+		{"run go build before deploying", "finding", ltmSectionTools},
+	}
+	for _, tt := range tests {
+		got := classifyLTMEntry(tt.entry, tt.source)
+		if got != tt.want {
+			t.Errorf("classifyLTMEntry(%q, %q) = %q, want %q", tt.entry, tt.source, got, tt.want)
+		}
+	}
+}
+
+func TestStripSTMListItem(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"- [FAILED] writer failed: timeout", "writer failed: timeout"},
+		{"- researcher: found bug", "researcher: found bug"},
+		{"* reviewer: approved", "reviewer: approved"},
+		{"plain text", "plain text"},
+	}
+	for _, tt := range tests {
+		got := stripSTMListItem(tt.input)
+		if got != tt.want {
+			t.Errorf("stripSTMListItem(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestHasLTREntry(t *testing.T) {
+	sections := []STMSection{
+		{Title: "# 專案慣例", Entries: []string{"- [2026-05-10] use bcrypt"}},
+	}
+	if !hasLTREntry(sections, "# 專案慣例", "- [2026-05-10] use bcrypt") {
+		t.Error("hasLTREntry should return true for matching entry")
+	}
+	if hasLTREntry(sections, "# 專案慣例", "- [2026-05-10] use argon2") {
+		t.Error("hasLTREntry should return false for different entry")
+	}
+	if hasLTREntry(sections, "# 架構決策", "- [2026-05-10] use bcrypt") {
+		t.Error("hasLTREntry should return false for different section")
+	}
+}
+
+func stringContains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

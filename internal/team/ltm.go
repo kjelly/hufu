@@ -1,14 +1,107 @@
 package team
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const ltmFile = "ltm.md"
 
 const maxLTMChars = 6000
+
+const maxEntriesPerLTMSection = 10
+
+const (
+	ltmSectionConventions  = "# 專案慣例"
+	ltmSectionArchitecture = "# 架構決策"
+	ltmSectionPatterns     = "# 常見模式"
+	ltmSectionIssues       = "# 已知問題與解法"
+	ltmSectionFiles        = "# 關鍵檔案"
+	ltmSectionTools        = "# 工具與指令"
+)
+
+var ltmSectionOrder = []string{ltmSectionConventions, ltmSectionArchitecture, ltmSectionPatterns, ltmSectionIssues, ltmSectionFiles, ltmSectionTools}
+
+var ltmSectionDefaults = map[string]string{
+	ltmSectionConventions:  "Use this section to record project conventions (coding style, naming rules, workflows).",
+	ltmSectionArchitecture: "Use this section to record architecture decisions (component layout, technology choices, data flow).",
+	ltmSectionPatterns:     "Use this section to record recurring patterns (common request flows, error handling, integration points).",
+	ltmSectionIssues:       "Use this section to record known issues and their solutions or workarounds.",
+	ltmSectionFiles:        "Use this section to record key files and their purpose.",
+	ltmSectionTools:        "Use this section to record commonly used tools, commands, and scripts.",
+}
+
+func formatLTMEntry(content string) string {
+	ts := time.Now().Format("2006-01-02")
+	shortContent := content
+	if len([]rune(shortContent)) > 200 {
+		shortContent = string([]rune(shortContent)[:200]) + "..."
+	}
+	return fmt.Sprintf("- [%s] %s", ts, shortContent)
+}
+
+func appendLTMEntry(content string, entry string, sectionTitle string) string {
+	return appendSTMEntry(content, entry, sectionTitle)
+}
+
+func PruneLTM(content string) string {
+	sections := ParseSTMSections(content)
+	if len(sections) == 0 {
+		return content
+	}
+	var pruned []STMSection
+	for _, s := range sections {
+		if len(s.Entries) > maxEntriesPerLTMSection {
+			s.Entries = s.Entries[:maxEntriesPerLTMSection]
+		}
+		s.Entries = deduplicateLTREntries(s.Entries)
+		if len(s.Entries) > 0 {
+			pruned = append(pruned, s)
+		}
+	}
+	return FormatSTMSections(pruned)
+}
+
+func deduplicateLTREntries(entries []string) []string {
+	if len(entries) <= 1 {
+		return entries
+	}
+	seen := make(map[string]bool)
+	var result []string
+	for _, e := range entries {
+		key := normalizeLTREntry(e)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+func normalizeLTREntry(entry string) string {
+	s := strings.TrimSpace(entry)
+	if idx := strings.Index(s, "] "); idx >= 0 {
+		s = s[idx+2:]
+	}
+	s = strings.ToLower(s)
+	s = strings.Map(func(r rune) rune {
+		if r == ' ' || r == '-' || r == '_' {
+			return ' '
+		}
+		return r
+	}, s)
+	var b strings.Builder
+	for _, word := range strings.Fields(s) {
+		if len(word) > 3 {
+			b.WriteString(word)
+			b.WriteByte(' ')
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
 
 func LTMPath(teamDir string) string {
 	return filepath.Join(teamDir, ltmFile)

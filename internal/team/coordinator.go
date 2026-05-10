@@ -579,17 +579,26 @@ func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 		}
 	}
 
-	if ltm := LoadLTM(c.session.Dir); ltm != "" {
-		runes := []rune(ltm)
-		if len(runes) > maxLTMAutoInject {
-			ltm = string(runes[len(runes)-maxLTMAutoInject:])
+	if rawLTM := LoadLTM(c.session.Dir); rawLTM != "" {
+		sections := ParseSTMSections(rawLTM)
+		if len(sections) > 0 {
+			for i, s := range sections {
+				if len(s.Entries) > 3 {
+					sections[i].Entries = s.Entries[:3]
+				}
+			}
+			ltm := FormatSTMSections(sections)
+			runes := []rune(ltm)
+			if len(runes) > maxLTMAutoInject {
+				ltm = string(runes[len(runes)-maxLTMAutoInject:])
+			}
+			if b.Len() > 0 {
+				b.WriteString("\n\n")
+			}
+			b.WriteString("--- Long-term memory (ltm.md) ---\n")
+			b.WriteString(ltm)
+			b.WriteString("\n--- End ltm.md ---")
 		}
-		if b.Len() > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString("--- Long-term memory (ltm.md) ---\n")
-		b.WriteString(ltm)
-		b.WriteString("\n--- End ltm.md ---")
 	}
 
 	if b.Len() == 0 {
@@ -637,6 +646,156 @@ func extractSummary(output string, maxRunes int) string {
 		return string(runes)
 	}
 	return string(runes[:maxRunes]) + "..."
+}
+
+func (c *Coordinator) AutoExtractLTM() {
+	teamDir := c.session.Dir
+	workspace := c.session.Workspace
+	stmContent := LoadSTM(workspace)
+	if stmContent == "" {
+		return
+	}
+
+	existingLTM := LoadLTM(teamDir)
+	sections := ParseSTMSections(stmContent)
+	existingLTMSections := ParseSTMSections(existingLTM)
+
+	var newEntries []struct {
+		sectionTitle string
+		entry        string
+	}
+
+	for _, s := range sections {
+		switch s.Title {
+		case stmSectionDecisions:
+			for _, e := range s.Entries {
+				section := classifyLTMEntry(e, "decision")
+				if section != "" {
+					newEntries = append(newEntries, struct {
+						sectionTitle string
+						entry        string
+					}{section, formatLTMEntry(stripSTMListItem(e))})
+				}
+			}
+		case stmSectionFindings:
+			for _, e := range s.Entries {
+				section := classifyLTMEntry(e, "finding")
+				if section != "" {
+					newEntries = append(newEntries, struct {
+						sectionTitle string
+						entry        string
+					}{section, formatLTMEntry(stripSTMListItem(e))})
+				}
+			}
+		case stmSectionErrors:
+			for _, e := range s.Entries {
+				section := classifyLTMEntry(e, "error")
+				if section != "" {
+					newEntries = append(newEntries, struct {
+						sectionTitle string
+						entry        string
+					}{section, formatLTMEntry(stripSTMListItem(e))})
+				}
+			}
+		}
+	}
+
+	if len(newEntries) == 0 {
+		return
+	}
+
+	for _, ne := range newEntries {
+		if hasLTREntry(existingLTMSections, ne.sectionTitle, ne.entry) {
+			continue
+		}
+		existingLTM = appendSTMEntry(existingLTM, ne.entry, ne.sectionTitle)
+	}
+
+	pruned := PruneLTM(existingLTM)
+	if err := SaveLTM(teamDir, TruncateLTM(pruned)); err != nil {
+		log.Printf("warning: auto LTM extraction failed: %v", err)
+	}
+}
+
+func classifyLTMEntry(entry string, source string) string {
+	lower := strings.ToLower(entry)
+	hasFilePath := strings.Contains(lower, ".go") || strings.Contains(lower, ".yaml") ||
+		strings.Contains(lower, ".yml") || strings.Contains(lower, ".md") ||
+		strings.Contains(lower, ".json") || strings.Contains(lower, ".sh") ||
+		strings.Contains(lower, ".py") || strings.Contains(lower, ".js") ||
+		strings.Contains(lower, ".ts") || strings.Contains(lower, "/")
+
+	if source == "finding" && hasFilePath {
+		return ltmSectionFiles
+	}
+
+	if strings.Contains(lower, "always") || strings.Contains(lower, "never") ||
+		strings.Contains(lower, "must ") || strings.Contains(lower, "should ") ||
+		strings.Contains(lower, "convention") || strings.Contains(lower, "rule") ||
+		strings.Contains(lower, "standard") || strings.Contains(lower, "guideline") ||
+		strings.Contains(lower, "every time") {
+		return ltmSectionConventions
+	}
+
+	if strings.Contains(lower, "pattern") || strings.Contains(lower, "approach") ||
+		strings.Contains(lower, "strategy") || strings.Contains(lower, "workflow") ||
+		strings.Contains(lower, "pipeline") || strings.Contains(lower, "template") {
+		return ltmSectionPatterns
+	}
+
+	if source == "error" && strings.Contains(lower, "fix") ||
+		strings.Contains(lower, "solved") || strings.Contains(lower, "resolved") ||
+		strings.Contains(lower, "workaround") || strings.Contains(lower, "solution") {
+		return ltmSectionIssues
+	}
+
+	if source == "decision" {
+		if strings.Contains(lower, "use ") || strings.Contains(lower, "switch") ||
+			strings.Contains(lower, "migrate") || strings.Contains(lower, "replace") ||
+			strings.Contains(lower, "upgrade") || strings.Contains(lower, "choose") ||
+			strings.Contains(lower, "select") || strings.Contains(lower, "adopt") {
+			return ltmSectionArchitecture
+		}
+		return ltmSectionArchitecture
+	}
+
+	if strings.Contains(lower, "tool") || strings.Contains(lower, "command") ||
+		strings.Contains(lower, "script") || strings.Contains(lower, "cli ") ||
+		strings.Contains(lower, "run ") || strings.Contains(lower, "install ") ||
+		strings.Contains(lower, "build ") || strings.Contains(lower, "test ") {
+		return ltmSectionTools
+	}
+
+	if source == "finding" {
+		return ltmSectionIssues
+	}
+
+	return ""
+}
+
+func stripSTMListItem(entry string) string {
+	s := strings.TrimSpace(entry)
+	for _, prefix := range []string{"- [FAILED] ", "- ", "* "} {
+		if strings.HasPrefix(s, prefix) {
+			s = strings.TrimPrefix(s, prefix)
+			break
+		}
+	}
+	return s
+}
+
+func hasLTREntry(sections []STMSection, sectionTitle, entry string) bool {
+	for _, s := range sections {
+		if s.Title == sectionTitle {
+			normalized := normalizeLTREntry(entry)
+			for _, e := range s.Entries {
+				if normalizeLTREntry(e) == normalized {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (c *Coordinator) extractSkillFromToolCall(toolName, input string) string {
@@ -1018,6 +1177,8 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	_ = SaveSTM(workspace, TruncateSTM(newContent))
 	t.coordinator.lastStmWrite = time.Now()
 	t.coordinator.lastStmWriteMu.Unlock()
+
+	t.coordinator.AutoExtractLTM()
 
 	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", args.Response)), nil
 }
