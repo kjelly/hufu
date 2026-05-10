@@ -500,7 +500,7 @@ func (c *Coordinator) buildSuggestedSkillsText(agentDef *agent.AgentDef, agentNa
 
 	var b strings.Builder
 	b.WriteString("## Suggested Skills\n\n")
-	b.WriteString("The following skills may be relevant to your task. Use `load_skill` to get full instructions:\n\n")
+	b.WriteString("The following skills are relevant to your task. Call `load_skill` to load ALL of them before starting work:\n\n")
 	for _, s := range relevant {
 		desc := s.Description
 		if utf8.RuneCountInString(desc) > 80 {
@@ -2573,7 +2573,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("   - ❌ BAD: \"search src/main.go line 42 for parseUser and fix the nil check\"\n")
 	b.WriteString("   - ✅ GOOD: goal=\"Fix nil pointer dereference in user parsing\", constraints=\"Must maintain backward compatibility with existing callers\"\n\n")
 	b.WriteString("6. Run independent tasks in parallel by passing multiple tasks in one agent call\n")
-	b.WriteString("7. When delegating to a worker that needs skill knowledge, include the skill summary (name, file path) in the task description so the worker can call `load_skill` if needed\n")
+	b.WriteString("7. When delegating to a worker that needs skill knowledge, include ALL relevant skill summaries (name, file path) in the task description so the worker can call `load_skill` if needed\n")
 	b.WriteString("8. **Trust worker expertise** — Workers have access to the full project context (AGENTS.md, tech stack, conventions, directory structure). They will explore the codebase, identify relevant files, and determine the best implementation approach. Do NOT pre-specify file paths, function names, or implementation steps unless they are non-obvious constraints.\n")
 	b.WriteString("9. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
 	b.WriteString("10. **Synthesize** results into a coherent answer for the user\n")
@@ -2686,7 +2686,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 		b.WriteString("}\n```\n\n")
 	}
 	b.WriteString("### load_skill\n")
-	b.WriteString("Load the full content of a skill by name. Use it yourself before delegating, and include the skill name/file path in worker task descriptions so workers can also load relevant skills.\n")
+	b.WriteString("Load the full content of a skill by name. You and your workers can call `load_skill` multiple times to load all relevant skills — include ALL skill names and file paths in worker task descriptions so workers can load them if needed.\n")
 	b.WriteString("```json\n{\"name\": \"skill-name\"}\n```\n\n")
 	b.WriteString("### save_skill\n")
 	b.WriteString("Save a reusable skill to disk and reload it immediately. Use this when you or a worker has solved a non-trivial problem and you want to encode the solution for future reuse.\n")
