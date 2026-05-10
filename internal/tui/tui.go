@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -50,6 +52,8 @@ type TeamInfo struct {
 	Skills         []string
 	SidecarModel   string
 	GuardModel     string
+	Workspace      string
+	TeamDir        string
 }
 
 type TeamInfoMsg struct{ Info TeamInfo }
@@ -126,6 +130,10 @@ type Model struct {
 	detailID string
 	vp       viewport.Model
 	vpReady  bool
+
+	inMemory    bool
+	memoryVP    viewport.Model
+	memoryReady bool
 
 	inConfirm     bool // showing quit confirmation dialog
 	confirmChoice int  // 0=no 1=yes
@@ -424,6 +432,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.inDetail {
 			return m.updateDetail(msg)
 		}
+		if m.inMemory {
+			return m.updateMemory(msg)
+		}
 		return m.updateColumns(msg)
 	}
 
@@ -493,6 +504,11 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.jumpToSearchMatch()
 			m.inDetail = false
 		}
+		return m, nil
+	case "M":
+		m.inDetail = false
+		m.inMemory = true
+		m.loadMemoryContent()
 		return m, nil
 	case "m":
 		m.mouseManuallyEnabled = !m.mouseManuallyEnabled
@@ -625,6 +641,10 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, enableMouseCmd()
 		}
 		return m, disableMouseCmd()
+	case "M":
+		m.inMemory = true
+		m.loadMemoryContent()
+		return m, nil
 	}
 	return m, nil
 }
@@ -811,6 +831,9 @@ func (m Model) View() string {
 	}
 	if m.inDetail {
 		return m.detailView()
+	}
+	if m.inMemory {
+		return m.memoryView()
 	}
 	return m.columnsView()
 }
@@ -1345,6 +1368,132 @@ func (m Model) infoPanelView() string {
 	content := b.String()
 	dialog := infoBoxStyle.Render(content)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
+}
+
+func (m *Model) loadMemoryContent() {
+	var b strings.Builder
+	b.WriteString(headerStyle.Render("─── Memory ───"))
+	b.WriteString("\n\n")
+
+	ws := m.teamInfo.Workspace
+	td := m.teamInfo.TeamDir
+
+	if ws != "" {
+		data, err := os.ReadFile(filepath.Join(ws, "stm.md"))
+		if err == nil && len(data) > 0 {
+			content := strings.TrimSpace(string(data))
+			if content != "" {
+				b.WriteString(boldStyle.Render("Short-term Memory (stm.md)"))
+				b.WriteString("\n\n")
+				b.WriteString(renderMemory(content))
+				b.WriteString("\n\n")
+			} else {
+				b.WriteString(dimStyle.Render("Short-term memory is empty."))
+				b.WriteString("\n\n")
+			}
+		} else {
+			b.WriteString(dimStyle.Render("Short-term memory is empty."))
+			b.WriteString("\n\n")
+		}
+	}
+
+	if td != "" {
+		data, err := os.ReadFile(filepath.Join(td, "ltm.md"))
+		if err == nil && len(data) > 0 {
+			content := strings.TrimSpace(string(data))
+			if content != "" {
+				b.WriteString(boldStyle.Render("Long-term Memory (ltm.md)"))
+				b.WriteString("\n\n")
+				b.WriteString(renderMemory(content))
+				b.WriteString("\n\n")
+			} else {
+				b.WriteString(dimStyle.Render("Long-term memory is empty."))
+				b.WriteString("\n\n")
+			}
+		} else {
+			b.WriteString(dimStyle.Render("Long-term memory is empty."))
+			b.WriteString("\n\n")
+		}
+	}
+
+	b.WriteString(dimStyle.Render("esc back"))
+
+	w := m.width - 4
+	if w < 10 {
+		w = 10
+	}
+	h := m.height - 2
+	if h < 3 {
+		h = 3
+	}
+	m.memoryVP = viewport.New(w, h)
+	m.memoryVP.SetContent(b.String())
+	m.memoryVP.GotoTop()
+	m.memoryReady = true
+}
+
+func renderMemory(content string) string {
+	lines := strings.Split(content, "\n")
+	var b strings.Builder
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			b.WriteByte('\n')
+			continue
+		}
+		if strings.HasPrefix(trimmed, "# ") {
+			b.WriteString(boldStyle.Render(trimmed))
+		} else if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
+			b.WriteString("  " + dimStyle.Render(trimmed))
+		} else {
+			runes := []rune(trimmed)
+			if len(runes) > 80 {
+				trimmed = string(runes[:80]) + "..."
+			}
+			b.WriteString(dimStyle.Render(trimmed))
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func (m Model) memoryView() string {
+	if !m.memoryReady {
+		return ""
+	}
+	footer := footerStyle.Render("j/k ↑↓ scroll · esc back")
+	return m.memoryVP.View() + "\n" + footer
+}
+
+func (m Model) updateMemory(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "backspace":
+		m.inMemory = false
+		m.memoryReady = false
+		return m, nil
+	case "ctrl+c":
+		return m.handleCtrlC()
+	case "q":
+		if m.finished {
+			return m, tea.Quit
+		}
+	case "g":
+		if m.memoryReady {
+			m.memoryVP.GotoTop()
+		}
+		return m, nil
+	case "G":
+		if m.memoryReady {
+			m.memoryVP.GotoBottom()
+		}
+		return m, nil
+	}
+	if m.memoryReady {
+		var cmd tea.Cmd
+		m.memoryVP, cmd = m.memoryVP.Update(msg)
+		return m, cmd
+	}
+	return m, nil
 }
 
 // ── Detail view ───────────────────────────────────────────────────────────────

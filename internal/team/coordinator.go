@@ -295,7 +295,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 
 	if c.memoryStore != nil {
 		c.coreTools = append(c.coreTools,
-			memory.NewMemorySaveTool(c.memoryStore),
+			&memorySaveLTMWrapper{original: memory.NewMemorySaveTool(c.memoryStore), coordinator: c},
 			memory.NewMemoryQueryTool(c.memoryStore),
 		)
 	}
@@ -605,11 +605,11 @@ func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 		return ""
 	}
 
-	b.WriteString("## Session Context\n\n")
+	b.WriteString("## Memory & Context\n\n")
 	b.WriteString("Review the following memory to understand the current state and prior knowledge before proceeding.\n\n")
 	stmLtmContent := b.String()
 	b.Reset()
-	b.WriteString("## Session Context\n\n")
+	b.WriteString("## Memory & Context\n\n")
 	b.WriteString("Review the following memory to understand the current state and prior knowledge before proceeding.\n\n\n")
 	b.WriteString(stmLtmContent)
 	b.WriteString("\n")
@@ -714,6 +714,24 @@ func (c *Coordinator) AutoExtractLTM() {
 	pruned := PruneLTM(existingLTM)
 	if err := SaveLTM(teamDir, TruncateLTM(pruned)); err != nil {
 		log.Printf("warning: auto LTM extraction failed: %v", err)
+	}
+
+	if c.memoryStore != nil {
+		saveCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		for _, ne := range newEntries {
+			if hasLTREntry(existingLTMSections, ne.sectionTitle, ne.entry) {
+				continue
+			}
+			id := fmt.Sprintf("ltm-%d", time.Now().UnixNano())
+			metadata := map[string]string{
+				"category": ne.sectionTitle,
+				"source":   "auto-extract",
+			}
+			if err := c.memoryStore.Save(saveCtx, id, ne.entry, metadata); err != nil {
+				log.Printf("warning: memory store save failed for LTM entry: %v", err)
+			}
+		}
 	}
 }
 
@@ -1560,6 +1578,59 @@ func (t *todoTool) handleList(callerName string) (fantasy.ToolResponse, error) {
 	return fantasy.NewTextResponse(b.String()), nil
 }
 
+type memorySaveLTMWrapper struct {
+	original    fantasy.AgentTool
+	coordinator *Coordinator
+}
+
+func (t *memorySaveLTMWrapper) Info() fantasy.ToolInfo {
+	return t.original.Info()
+}
+
+func (t *memorySaveLTMWrapper) ProviderOptions() fantasy.ProviderOptions {
+	return t.original.ProviderOptions()
+}
+
+func (t *memorySaveLTMWrapper) SetProviderOptions(opts fantasy.ProviderOptions) {
+	t.original.SetProviderOptions(opts)
+}
+
+func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	resp, err := t.original.Run(ctx, call)
+	if err != nil || resp.IsError {
+		return resp, err
+	}
+
+	var args struct {
+		Content  string `json:"content"`
+		Category string `json:"category"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil || args.Content == "" {
+		return resp, nil
+	}
+
+	section := classifyLTMEntry(args.Content, "finding")
+	if section == "" {
+		return resp, nil
+	}
+
+	teamDir := t.coordinator.session.Dir
+	existingLTM := LoadLTM(teamDir)
+	entry := formatLTMEntry(args.Content)
+	existingLTMSections := ParseSTMSections(existingLTM)
+	if hasLTREntry(existingLTMSections, section, entry) {
+		return resp, nil
+	}
+
+	newLTM := appendSTMEntry(existingLTM, entry, section)
+	pruned := PruneLTM(newLTM)
+	if err := SaveLTM(teamDir, TruncateLTM(pruned)); err != nil {
+		log.Printf("warning: memory_save LTM write-back failed: %v", err)
+	}
+
+	return resp, nil
+}
+
 type stmWriteTool struct {
 	coordinator *Coordinator
 	pOpts       fantasy.ProviderOptions
@@ -1847,6 +1918,24 @@ func formatTaskResults(results []agentTaskResult, totalTasks int, duplicateWarni
 	return b.String(), nil
 }
 
+func (c *Coordinator) checkpointSTM() {
+	workspace := c.session.Workspace
+	content := LoadSTM(workspace)
+	if content == "" {
+		return
+	}
+	histDir := filepath.Join(workspace, "stm_history")
+	if err := os.MkdirAll(histDir, 0o755); err != nil {
+		log.Printf("warning: stm checkpoint dir creation failed: %v", err)
+		return
+	}
+	fname := fmt.Sprintf("stm_r%d.md", c.round)
+	path := filepath.Join(histDir, fname)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		log.Printf("warning: stm checkpoint write failed: %v", err)
+	}
+}
+
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
 	if c.IsWrapUp() {
 		c.report(c.newEvent("step").withMessage("Wrap-up: refusing to start new tasks"))
@@ -2024,6 +2113,8 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].agentName < results[j].agentName
 	})
+
+	c.checkpointSTM()
 
 	return formatTaskResults(results, len(tasks), duplicateWarnings)
 }
@@ -2806,7 +2897,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("You MUST delegate ALL work to your team members. You do NOT have tools to do work yourself.\n\n")
 
 	b.WriteString("## How to Coordinate\n\n")
-	b.WriteString("0. **Check memory first** — Before analyzing the user's request, review stm.md (short-term memory, current session) and ltm.md (long-term memory, prior knowledge). Use `load_skill` to load the memory reading skill if available, or read the files directly with the view tool. This helps you understand ongoing work and past decisions.\n")
+	b.WriteString("0. **Check memory first** — Review the Memory & Context section below. STM (# 進度, # 發現, # 決策, # 錯誤與修復, # 待解決) tracks current session state. LTM (# 專案慣例, # 架構決策, # 常見模式, # 已知問題與解法, # 關鍵檔案, # 工具與指令) records cross-session knowledge. This helps you understand ongoing work and past decisions.\n")
 	b.WriteString("1. **Analyze** the user's request to identify which team members are needed\n")
 	b.WriteString("2. **Check skills** — if any available skills are relevant to the user's task, call `load_skill` to get the full instructions. Include the relevant skill summary in task descriptions so workers know which skills to load\n")
 	b.WriteString("3. **Plan** your approach before delegating — think step by step\n")

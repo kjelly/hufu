@@ -385,9 +385,11 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	if tuiMode {
 		var teamInfo tuipkg.TeamInfo
 		teamInfo.AvailableTeams = registry.ListTeams()
-		for _, tc := range loadedTeams {
+			for _, tc := range loadedTeams {
 			if tc != nil && tc.session != nil {
 				teamInfo.TeamName = tc.session.Config.Name
+				teamInfo.Workspace = tc.session.Workspace
+				teamInfo.TeamDir = tc.session.Dir
 				for _, ag := range sortedAgents(tc.session.Agents) {
 					teamInfo.Agents = append(teamInfo.Agents, tuipkg.AgentInfoEntry{
 						Name: ag.Name,
