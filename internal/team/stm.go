@@ -12,6 +12,206 @@ const stmFile = "stm.md"
 
 const maxSTMChars = 4000
 
+const maxEntriesPerSTMSection = 10
+
+const (
+	stmSectionProgress  = "# 進度"
+	stmSectionFindings  = "# 發現"
+	stmSectionDecisions = "# 決策"
+	stmSectionErrors    = "# 錯誤與修復"
+	stmSectionQuestions = "# 待解決"
+)
+
+var stmSectionOrder = []string{stmSectionProgress, stmSectionFindings, stmSectionDecisions, stmSectionErrors, stmSectionQuestions}
+
+type STMSection struct {
+	Title   string
+	Entries []string
+}
+
+func ParseSTMSections(content string) []STMSection {
+	if content == "" {
+		return nil
+	}
+	var sections []STMSection
+	var current *STMSection
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "# ") {
+			if current != nil {
+				sections = append(sections, *current)
+			}
+			current = &STMSection{Title: trimmed, Entries: nil}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
+			if current != nil {
+				current.Entries = append(current.Entries, trimmed)
+			}
+		}
+	}
+	if current != nil {
+		sections = append(sections, *current)
+	}
+	return sections
+}
+
+func FormatSTMSections(sections []STMSection) string {
+	if len(sections) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, s := range sections {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(s.Title)
+		for _, e := range s.Entries {
+			b.WriteString("\n")
+			b.WriteString(e)
+		}
+	}
+	return b.String()
+}
+
+func appendSTMEntry(content string, entry string, sectionTitle string) string {
+	sections := ParseSTMSections(content)
+
+	targetIdx := -1
+	for i, s := range sections {
+		if s.Title == sectionTitle {
+			targetIdx = i
+			break
+		}
+	}
+
+	if targetIdx == -1 {
+		for i, s := range sections {
+			for _, known := range stmSectionOrder {
+				if s.Title == known {
+					if known == sectionTitle {
+						targetIdx = i
+						break
+					}
+				}
+			}
+			if targetIdx != -1 {
+				break
+			}
+		}
+	}
+
+	if targetIdx == -1 {
+		sections = append(sections, STMSection{Title: sectionTitle, Entries: []string{entry}})
+	} else {
+		sections[targetIdx].Entries = append([]string{entry}, sections[targetIdx].Entries...)
+		if len(sections[targetIdx].Entries) > maxEntriesPerSTMSection {
+			sections[targetIdx].Entries = sections[targetIdx].Entries[:maxEntriesPerSTMSection]
+		}
+	}
+
+	return FormatSTMSections(sections)
+}
+
+func formatSTMDoneEntry(agentName, taskDesc, summary string) string {
+	shortDesc := taskDesc
+	if len([]rune(taskDesc)) > 80 {
+		shortDesc = string([]rune(taskDesc)[:80]) + "..."
+	}
+	shortSummary := summary
+	if shortSummary != "" {
+		if len([]rune(shortSummary)) > 120 {
+			shortSummary = string([]rune(shortSummary)[:120]) + "..."
+		}
+		shortSummary = ": " + shortSummary
+	}
+	return fmt.Sprintf("- %s %s%s", agentName, shortDesc, shortSummary)
+}
+
+func formatSTMErrorEntry(agentName, taskDesc, errMsg string) string {
+	shortDesc := taskDesc
+	if len([]rune(taskDesc)) > 80 {
+		shortDesc = string([]rune(taskDesc)[:80]) + "..."
+	}
+	shortErr := errMsg
+	if len([]rune(shortErr)) > 120 {
+		shortErr = string([]rune(shortErr)[:120]) + "..."
+	}
+	return fmt.Sprintf("- [FAILED] %s %s: %s", agentName, shortDesc, shortErr)
+}
+
+func formatSTMFinding(agentName, finding string) string {
+	shortFinding := finding
+	if len([]rune(shortFinding)) > 120 {
+		shortFinding = string([]rune(shortFinding)[:120]) + "..."
+	}
+	return fmt.Sprintf("- %s: %s", agentName, shortFinding)
+}
+
+func formatSTMDecision(agentName, decision string) string {
+	shortDecision := decision
+	if len([]rune(shortDecision)) > 120 {
+		shortDecision = string([]rune(shortDecision)[:120]) + "..."
+	}
+	return fmt.Sprintf("- %s: %s", agentName, shortDecision)
+}
+
+func filterSTMSectionsByRole(sections []STMSection, role string) []STMSection {
+	if role == "" || role == "coordinator" || role == "orchestrator" {
+		return sections
+	}
+	visible := make(map[string]bool)
+	switch role {
+	case "researcher", "explorer", "investigator":
+		visible[stmSectionFindings] = true
+		visible[stmSectionErrors] = true
+		visible[stmSectionQuestions] = true
+	case "writer", "developer", "coder":
+		visible[stmSectionProgress] = true
+		visible[stmSectionDecisions] = true
+	case "reviewer", "tester", "qa":
+		visible[stmSectionProgress] = true
+		visible[stmSectionFindings] = true
+		visible[stmSectionErrors] = true
+	default:
+		visible[stmSectionProgress] = true
+		visible[stmSectionDecisions] = true
+	}
+	var filtered []STMSection
+	for _, s := range sections {
+		if visible[s.Title] {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered
+}
+
+func filterLTMSectionsByPrompt(sections []STMSection, prompt string) []STMSection {
+	if len(sections) == 0 || prompt == "" {
+		return sections
+	}
+	promptLower := strings.ToLower(prompt)
+	var filtered []STMSection
+	for _, s := range sections {
+		var relevant []string
+		for _, e := range s.Entries {
+			if strings.Contains(promptLower, strings.ToLower(e[:min(len([]rune(e)), 80)])) {
+				relevant = append(relevant, e)
+			}
+		}
+		if len(relevant) > 0 {
+			if len(relevant) > 3 {
+				relevant = relevant[:3]
+			}
+			filtered = append(filtered, STMSection{Title: s.Title, Entries: relevant})
+		}
+	}
+	return filtered
+}
+
 func STMPath(workspace string) string {
 	return filepath.Join(workspace, stmFile)
 }

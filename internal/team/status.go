@@ -333,3 +333,27 @@ func (tl *TodoList) UpdateTodoTiming(id string, modelTime, toolTime time.Duratio
 		}
 	}
 }
+
+func (tl *TodoList) CompletedCount() int {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	count := 0
+	for _, ti := range tl.items {
+		if ti.Status == TaskDone {
+			count++
+		}
+	}
+	return count
+}
+
+func (tl *TodoList) ErrorCount() int {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	count := 0
+	for _, ti := range tl.items {
+		if ti.Status == TaskError {
+			count++
+		}
+	}
+	return count
+}

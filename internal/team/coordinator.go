@@ -560,17 +560,23 @@ func (c *Coordinator) computeRelevantSkills(agentDef *agent.AgentDef, taskDesc s
 const maxSTMAutoInject = 2000
 const maxLTMAutoInject = 3000
 
-func (c *Coordinator) buildMemorySuffix() string {
+func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 	var b strings.Builder
 
-	if stm := LoadSTM(c.session.Workspace); stm != "" {
-		runes := []rune(stm)
-		if len(runes) > maxSTMAutoInject {
-			stm = string(runes[len(runes)-maxSTMAutoInject:])
+	rawSTM := LoadSTM(c.session.Workspace)
+	if rawSTM != "" {
+		sections := ParseSTMSections(rawSTM)
+		filtered := filterSTMSectionsByRole(sections, agentRole)
+		stm := FormatSTMSections(filtered)
+		if stm != "" {
+			runes := []rune(stm)
+			if len(runes) > maxSTMAutoInject {
+				stm = string(runes[len(runes)-maxSTMAutoInject:])
+			}
+			b.WriteString("--- Short-term memory (stm.md) ---\n")
+			b.WriteString(stm)
+			b.WriteString("\n--- End stm.md ---")
 		}
-		b.WriteString("--- Short-term memory (stm.md) ---\n")
-		b.WriteString(stm)
-		b.WriteString("\n--- End stm.md ---")
 	}
 
 	if ltm := LoadLTM(c.session.Dir); ltm != "" {
@@ -592,7 +598,6 @@ func (c *Coordinator) buildMemorySuffix() string {
 
 	b.WriteString("## Session Context\n\n")
 	b.WriteString("Review the following memory to understand the current state and prior knowledge before proceeding.\n\n")
-	// Move the accumulated stm/ltm content to the end by swapping
 	stmLtmContent := b.String()
 	b.Reset()
 	b.WriteString("## Session Context\n\n")
@@ -600,6 +605,38 @@ func (c *Coordinator) buildMemorySuffix() string {
 	b.WriteString(stmLtmContent)
 	b.WriteString("\n")
 	return b.String()
+}
+
+func (c *Coordinator) autoWriteSTM(agentName, taskDesc, output, errMsg string, success bool) {
+	workspace := c.session.Workspace
+	existing := LoadSTM(workspace)
+
+	var entry string
+	if success {
+		summary := extractSummary(output, 300)
+		entry = formatSTMDoneEntry(agentName, taskDesc, summary)
+	} else {
+		entry = formatSTMErrorEntry(agentName, taskDesc, errMsg)
+	}
+
+	newContent := appendSTMEntry(existing, entry, stmSectionProgress)
+	if err := SaveSTM(workspace, TruncateSTM(newContent)); err != nil {
+		log.Printf("warning: auto STM write failed: %v", err)
+	}
+	c.lastStmWriteMu.Lock()
+	c.lastStmWrite = time.Now()
+	c.lastStmWriteMu.Unlock()
+}
+
+func extractSummary(output string, maxRunes int) string {
+	runes := []rune(strings.TrimSpace(output))
+	if len(runes) == 0 {
+		return ""
+	}
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes]) + "..."
 }
 
 func (c *Coordinator) extractSkillFromToolCall(toolName, input string) string {
@@ -966,19 +1003,20 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	}
 
 	t.coordinator.lastStmWriteMu.Lock()
-	if t.coordinator.lastStmWrite.IsZero() {
-		workspace := t.coordinator.session.Workspace
-		existing := LoadSTM(workspace)
-		if existing == "" {
-			autoSummary := fmt.Sprintf("Session completed at %s. Coordinator finished without prior stm_write.", time.Now().Format(time.RFC3339))
-			autoSummary = TruncateSTM(autoSummary)
-			_ = SaveSTM(workspace, autoSummary)
-		} else {
-			autoSummary := TruncateSTM(existing)
-			_ = SaveSTM(workspace, autoSummary)
-		}
-		t.coordinator.lastStmWrite = time.Now()
+	workspace := t.coordinator.session.Workspace
+	todoList := t.coordinator.taskTracker.TodoList()
+	completed := todoList.CompletedCount()
+	failed := todoList.ErrorCount()
+	summary := fmt.Sprintf("[summary] %d/%d tasks done, %d rounds, %s elapsed",
+		completed, completed+failed, t.coordinator.round,
+		time.Since(t.coordinator.sessionTime).Round(time.Second))
+	existing := LoadSTM(workspace)
+	if existing == "" {
+		existing = fmt.Sprintf("Session started at %s.", t.coordinator.sessionTime.Format(time.RFC3339))
 	}
+	newContent := appendSTMEntry(existing, summary, stmSectionProgress)
+	_ = SaveSTM(workspace, TruncateSTM(newContent))
+	t.coordinator.lastStmWrite = time.Now()
 	t.coordinator.lastStmWriteMu.Unlock()
 
 	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", args.Response)), nil
@@ -1161,7 +1199,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		taskPrompt = taskPrompt + "\n\n" + skillSuggestion
 	}
 
-	if suffix := c.buildMemorySuffix(); suffix != "" {
+	if suffix := c.buildMemorySuffix("worker"); suffix != "" {
 		taskPrompt = taskPrompt + "\n\n" + suffix
 	}
 
@@ -1957,7 +1995,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		prompt = contextBuilder.String() + "\n---\n\n" + prompt
 	}
 
-	if suffix := c.buildMemorySuffix(); suffix != "" {
+	if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
 		prompt = prompt + "\n\n" + suffix
 	}
 
@@ -2008,6 +2046,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			if task.Summarize {
 				output = c.summarizeOutput(parentCtx, output)
 			}
+			c.autoWriteSTM(agentName, taskDesc, output, "", true)
 			return output, nil
 		}
 
@@ -2031,6 +2070,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		log.Printf("warning: failed to write task file: %v", err)
 	}
 	_ = writeStatus(c.session.Workspace, agentName, "error", taskDesc)
+	c.autoWriteSTM(agentName, taskDesc, "", lastErr.Error(), false)
 	return "", fmt.Errorf("agent %q failed after %d attempts (model: %s): %w", agentName, maxRetries, resolvedModel, lastErr)
 }
 
@@ -2581,7 +2621,7 @@ func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentD
 	fmt.Fprintf(&b, "- Use %s to share files between agents. NEVER write outside workspace.\n\n", sharedPath)
 	b.WriteString("---\n\n")
 
-	if memSuffix := c.buildMemorySuffix(); memSuffix != "" {
+	if memSuffix := c.buildMemorySuffix(def.Role); memSuffix != "" {
 		b.WriteString(memSuffix)
 		b.WriteString("\n")
 	}
@@ -3047,7 +3087,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		prompt = prompt + "\n\n" + skillSuggestion
 	}
 
-	if suffix := c.buildMemorySuffix(); suffix != "" {
+	if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
 		prompt = prompt + "\n\n" + suffix
 	}
 
@@ -3286,7 +3326,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		}
 	}
 
-	if suffix := c.buildMemorySuffix(); suffix != "" {
+	if suffix := c.buildMemorySuffix("coordinator"); suffix != "" {
 		systemPrompt += "\n\n" + suffix
 	}
 
@@ -3334,7 +3374,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		return "", fmt.Errorf("no coordinator agent found in team")
 	}
 
-	memorySuffix := c.buildMemorySuffix()
+	memorySuffix := c.buildMemorySuffix("coordinator")
 
 	var continuationPrompt string
 	if c.IsWrapUp() {
@@ -3564,7 +3604,7 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 		}
 	}
 
-	if suffix := c.buildMemorySuffix(); suffix != "" {
+	if suffix := c.buildMemorySuffix("coordinator"); suffix != "" {
 		systemPrompt += "\n\n" + suffix
 	}
 
