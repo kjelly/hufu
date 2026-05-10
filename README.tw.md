@@ -144,7 +144,7 @@ go run ./cmd/hufu
 | `--temp` | `-t` | `bool` | `false` | 使用臨時目錄作為 workspace |
 | `--agent-team` | — | `string` | `""` | 要載入的 Agent 團隊名稱 |
 | `--agent-team-search-path` | — | `string` | `""` | 團隊搜尋路徑（逗號分隔），預設為 `.agent-teams/,~/.agent-teams/` |
-| `--memory` | — | `bool` | `true` | 啟用長期記憶（RAG 向量搜尋） |
+| `--memory` | — | `bool` | `false` | 啟用長期記憶（RAG 向量搜尋） |
 | `--memory-model` | — | `string` | `""` | Memory 使用的 embedding model（預設：`qwen3-embedding:4b`，覆蓋 hufu.yaml） |
 | `--archive-memory` | — | `bool` | `false` | 將 session 摘要封存至 memory 後退出 |
 
@@ -169,8 +169,8 @@ go run ./cmd/hufu -t "快速測試"
 # 指定團隊與搜尋路徑
 go run ./cmd/hufu --agent-team dev-team --agent-team-search-path "./teams,~/teams" "開發功能"
 
-# 停用 memory
-go run ./cmd/hufu --memory=false "不需要記憶的任務"
+# 啟用 memory
+go run ./cmd/hufu --memory "需要記憶的任務"
 
 # 指定 embedding model
 go run ./cmd/hufu --memory-model mxbai-embed-large "分析文件"
@@ -506,7 +506,7 @@ CLI flag > hufu.yaml > 預設值
 ### 使用範例
 
 ```bash
-# 啟用 memory（預設已啟用）
+# 啟用 memory
 go run ./cmd/hufu --memory "分析程式碼架構"
 
 # 停用 memory

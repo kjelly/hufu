@@ -83,7 +83,7 @@ func main() {
 	rootCmd.Flags().BoolVarP(&tempWorkspace, "temp", "t", false, "Use a temporary directory for workspace")
 	rootCmd.Flags().StringVar(&agentTeamName, "agent-team", "", "Agent team name to load")
 	rootCmd.Flags().StringVar(&agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams (default: .agent-teams/,~/.agent-teams/)")
-	rootCmd.Flags().BoolVar(&memoryEnabled, "memory", true, "Enable long-term memory (RAG with vector search)")
+	rootCmd.Flags().BoolVar(&memoryEnabled, "memory", false, "Enable long-term memory (RAG with vector search)")
 	rootCmd.Flags().StringVar(&memoryModel, "memory-model", "", "Embedding model for memory (default: qwen3-embedding:4b, overrides hufu.yaml)")
 	rootCmd.Flags().BoolVar(&archiveMemory, "archive-memory", false, "Archive session summary to memory and exit")
 	rootCmd.Flags().BoolVar(&showHistory, "show-history", false, "Show previous session history on resume")

@@ -144,7 +144,7 @@ Complete reference for all 10 CLI flags:
 | `--temp` | `-t` | `bool` | `false` | Use a temporary directory as workspace |
 | `--agent-team` | — | `string` | `""` | Agent team name to load |
 | `--agent-team-search-path` | — | `string` | `""` | Team search paths (comma-separated), defaults to `.agent-teams/,~/.agent-teams/` |
-| `--memory` | — | `bool` | `true` | Enable long-term memory (RAG vector search) |
+| `--memory` | — | `bool` | `false` | Enable long-term memory (RAG vector search) |
 | `--memory-model` | — | `string` | `""` | Embedding model for memory (default: `qwen3-embedding:4b`, overrides hufu.yaml) |
 | `--archive-memory` | — | `bool` | `false` | Archive session summary to memory and exit |
 
@@ -169,8 +169,8 @@ go run ./cmd/hufu -t "Quick test"
 # Specify team and search paths
 go run ./cmd/hufu --agent-team dev-team --agent-team-search-path "./teams,~/teams" "Develop feature"
 
-# Disable memory
-go run ./cmd/hufu --memory=false "Task that doesn't need memory"
+# Enable memory
+go run ./cmd/hufu --memory "Task that needs memory"
 
 # Specify embedding model
 go run ./cmd/hufu --memory-model mxbai-embed-large "Analyze documents"
