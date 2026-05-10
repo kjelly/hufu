@@ -966,6 +966,12 @@ func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	for _, s := range skills {
 		if strings.ToLower(s.Name) == nameLower {
 			t.coordinator.recordSkillUsage(s.Name, agentName)
+
+			if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID != "" {
+				t.coordinator.taskTracker.TodoList().AddLoadedSkill(todoID, s.Name)
+				t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
+			}
+
 			return fantasy.NewTextResponse(fmt.Sprintf("Skill: %s\nFile: %s\n\n%s", s.Name, s.Path, s.Content)), nil
 		}
 	}

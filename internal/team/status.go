@@ -125,6 +125,7 @@ type TodoItem struct {
 	Model          string
 	Skills         []string
 	InjectedSkills []string
+	LoadedSkills   []string
 	StartedAt      time.Time
 	EndedAt        time.Time
 	ModelTime      time.Duration
@@ -200,20 +201,32 @@ func (tl *TodoList) Items() []*TodoItem {
 			skills = make([]string, len(item.Skills))
 			copy(skills, item.Skills)
 		}
+		var injectedSkills []string
+		if len(item.InjectedSkills) > 0 {
+			injectedSkills = make([]string, len(item.InjectedSkills))
+			copy(injectedSkills, item.InjectedSkills)
+		}
+		var loadedSkills []string
+		if len(item.LoadedSkills) > 0 {
+			loadedSkills = make([]string, len(item.LoadedSkills))
+			copy(loadedSkills, item.LoadedSkills)
+		}
 		result[i] = &TodoItem{
-			ID:        item.ID,
-			Agent:     item.Agent,
-			Desc:      item.Desc,
-			Status:    item.Status,
-			Detail:    item.Detail,
-			Model:     item.Model,
-			Skills:    skills,
-			StartedAt: item.StartedAt,
-			EndedAt:   item.EndedAt,
-			ModelTime: item.ModelTime,
-			ToolTime:  item.ToolTime,
-			Source:    item.Source,
-			ParentID:  item.ParentID,
+			ID:             item.ID,
+			Agent:          item.Agent,
+			Desc:           item.Desc,
+			Status:         item.Status,
+			Detail:         item.Detail,
+			Model:          item.Model,
+			Skills:         skills,
+			InjectedSkills: injectedSkills,
+			LoadedSkills:   loadedSkills,
+			StartedAt:      item.StartedAt,
+			EndedAt:        item.EndedAt,
+			ModelTime:      item.ModelTime,
+			ToolTime:       item.ToolTime,
+			Source:         item.Source,
+			ParentID:       item.ParentID,
 		}
 	}
 	return result
@@ -239,8 +252,24 @@ func (tl *TodoList) SetInjectedSkills(id string, skills []string) {
 			return
 		}
 	}
-	// Debug log when ID is not found
 	fmt.Printf("[DEBUG] SetInjectedSkills: todo item %q not found\n", id)
+}
+
+func (tl *TodoList) AddLoadedSkill(id string, skillName string) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			for _, s := range ti.LoadedSkills {
+				if s == skillName {
+					return
+				}
+			}
+			ti.LoadedSkills = append(ti.LoadedSkills, skillName)
+			return
+		}
+	}
+	fmt.Printf("[DEBUG] AddLoadedSkill: todo item %q not found\n", id)
 }
 
 func (tl *TodoList) Children(parentID string) []*TodoItem {
@@ -254,20 +283,32 @@ func (tl *TodoList) Children(parentID string) []*TodoItem {
 				skills = make([]string, len(item.Skills))
 				copy(skills, item.Skills)
 			}
+			var injectedSkills []string
+			if len(item.InjectedSkills) > 0 {
+				injectedSkills = make([]string, len(item.InjectedSkills))
+				copy(injectedSkills, item.InjectedSkills)
+			}
+			var loadedSkills []string
+			if len(item.LoadedSkills) > 0 {
+				loadedSkills = make([]string, len(item.LoadedSkills))
+				copy(loadedSkills, item.LoadedSkills)
+			}
 			result = append(result, &TodoItem{
-				ID:        item.ID,
-				Agent:     item.Agent,
-				Desc:      item.Desc,
-				Status:    item.Status,
-				Detail:    item.Detail,
-				Model:     item.Model,
-				Skills:    skills,
-				StartedAt: item.StartedAt,
-				EndedAt:   item.EndedAt,
-				ModelTime: item.ModelTime,
-				ToolTime:  item.ToolTime,
-				Source:    item.Source,
-				ParentID:  item.ParentID,
+				ID:             item.ID,
+				Agent:          item.Agent,
+				Desc:           item.Desc,
+				Status:         item.Status,
+				Detail:         item.Detail,
+				Model:          item.Model,
+				Skills:         skills,
+				InjectedSkills: injectedSkills,
+				LoadedSkills:   loadedSkills,
+				StartedAt:      item.StartedAt,
+				EndedAt:        item.EndedAt,
+				ModelTime:      item.ModelTime,
+				ToolTime:       item.ToolTime,
+				Source:         item.Source,
+				ParentID:       item.ParentID,
 			})
 		}
 	}
