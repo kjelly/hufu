@@ -788,7 +788,7 @@ func (c *Coordinator) updateTodoTiming(todoID string, modelTime, toolTime time.D
 
 func (c *Coordinator) SetWrapUp() {
 	c.wrapUp.Store(1)
-	c.report(c.newEvent("wrap_up"))
+	c.report(c.newEvent("wrap_up_phase").withMessage("finishing active tasks"))
 }
 
 func (c *Coordinator) IsWrapUp() bool {
@@ -3340,7 +3340,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	if c.IsWrapUp() {
 		continuationPrompt = wrapUpPromptTemplate + "\n\n" + memorySuffix
 		additionalPrompt = "wrap up now"
-		c.report(c.newEvent("step").withMessage("wrapping up").withTodoID(CoordTodoID))
+		c.report(c.newEvent("wrap_up_phase").withMessage("coordinator summarizing").withTodoID(CoordTodoID))
 	} else {
 		continuationPrompt = fmt.Sprintf(continuationPromptTemplate, additionalPrompt) + "\n\n" + memorySuffix
 		c.report(c.newEvent("step").withMessage("coordinator preparing").withTodoID(CoordTodoID))

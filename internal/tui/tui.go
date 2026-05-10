@@ -80,6 +80,7 @@ var (
 	errorIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	skippedIcon  = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("8"))
 	matchStyle   = lipgloss.NewStyle().Background(lipgloss.Color("55")).Foreground(lipgloss.Color("15"))
+	wrapUpStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
 
 	toolCallStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	toolResStyle  = lipgloss.NewStyle().Faint(true)
@@ -637,7 +638,7 @@ func (m Model) handleCtrlC() (tea.Model, tea.Cmd) {
 	case m.WrapUpCh <- struct{}{}:
 	default:
 	}
-	m.statusText = dimStyle.Render("Wrapping up — press Ctrl+C again to force quit")
+	m.statusText = wrapUpStyle.Render("⏹ Finishing active tasks — Ctrl+C to force quit")
 	return m, nil
 }
 

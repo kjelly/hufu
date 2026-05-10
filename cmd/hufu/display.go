@@ -40,6 +40,7 @@ var (
 	doneTagStyle = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("2"))
 	errTagStyle  = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("9"))
 	teamStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
+	wrapUpStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
 )
 
 var activeStatusFlusher struct {
@@ -384,15 +385,14 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 			currentAgent = ""
 			taskDisp.update()
 
-		case "wrap_up":
+		case "wrap_up_phase":
 			if textBuf != "" {
 				w.write(flushText(currentAgent, textBuf))
 				textBuf = ""
 			}
-			w.write(fmt.Sprintf("\n%s\n  %s\n  %s\n",
-				boldStyle.Render("─── WRAP UP ───"),
-				dimStyle.Render("No new tasks will be started."),
-				dimStyle.Render("Running agents will finish their current work..."),
+			w.write(fmt.Sprintf("\n%s %s\n\n",
+				wrapUpStyle.Render("⏹"),
+				boldStyle.Render(strings.ToUpper(event.Message+"...")),
 			))
 
 		case "error":
@@ -902,8 +902,13 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 				p.Send(tuipkg.TasksUpdatedMsg{Items: event.Todos})
 			}
 
-		case "wrap_up":
-			p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render("Wrapping up — no new tasks will be delegated")})
+		case "wrap_up_phase":
+			if event.Todos != nil {
+				p.Send(tuipkg.TasksUpdatedMsg{Items: event.Todos})
+			}
+			if event.Message != "" {
+				p.Send(tuipkg.StatusBarMsg{Text: wrapUpStyle.Render("⏹ " + event.Message + " — Ctrl+C to force quit")})
+			}
 
 		case "start":
 			todoID := event.TodoID
@@ -1088,7 +1093,6 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 		for range wrapUpCh {
 			wrapUpCount++
 			if wrapUpCount == 1 {
-				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render("Wrapping up — coordinator will summarize and finish")})
 				if c := activeCoord.Get(); c != nil {
 					c.SetWrapUp()
 				}
