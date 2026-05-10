@@ -122,10 +122,10 @@ type Model struct {
 
 	scrollOff [5]int // scroll offset per column (index of first visible item)
 
-	inDetail    bool
-	detailID    string
-	vp          viewport.Model
-	vpReady     bool
+	inDetail bool
+	detailID string
+	vp       viewport.Model
+	vpReady  bool
 
 	inConfirm     bool // showing quit confirmation dialog
 	confirmChoice int  // 0=no 1=yes
@@ -336,7 +336,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// Header takes 2 lines (title + blank)
-			clickY := msg.Y - promptH - 1 - statusH - 1  // subtract widget + blank + status + blank
+			clickY := msg.Y - promptH - 1 - statusH - 1 // subtract widget + blank + status + blank
 			clickX := msg.X
 			if clickY < 2 || clickY >= bodyH+2 {
 				return m, nil
@@ -759,10 +759,10 @@ func (m Model) executeSearch(query string) []*team.TodoItem {
 	for col := 0; col < 5; col++ {
 		items := m.colItems(col)
 		for _, item := range items {
-		if strings.Contains(strings.ToLower(item.Agent), q) ||
-			strings.Contains(strings.ToLower(item.Desc), q) ||
-			strings.Contains(strings.ToLower(item.Detail), q) ||
-			strings.Contains(strings.ToLower(item.Source), q) {
+			if strings.Contains(strings.ToLower(item.Agent), q) ||
+				strings.Contains(strings.ToLower(item.Desc), q) ||
+				strings.Contains(strings.ToLower(item.Detail), q) ||
+				strings.Contains(strings.ToLower(item.Source), q) {
 				results = append(results, item)
 			}
 		}
@@ -956,15 +956,14 @@ func (m Model) renderCol(col, width, height int) string {
 
 	titleLabel := colTitles[col]
 	count := fmt.Sprintf("(%d)", len(items))
-	var titleLine string
-	if focused {
-		titleLine = headerStyle.Render(titleLabel) + " " + dimStyle.Render(count)
-	} else {
-		titleLine = dimStyle.Render(titleLabel + " " + count)
-	}
-
+	plainTitle := titleLabel + " " + count
+	truncated := utils.TruncateLine(plainTitle, width)
 	var sb strings.Builder
-	sb.WriteString(utils.TruncatePreview(titleLine, width) + "\n")
+	if focused {
+		sb.WriteString(headerStyle.Render(truncated) + "\n")
+	} else {
+		sb.WriteString(dimStyle.Render(truncated) + "\n")
+	}
 	sb.WriteString("\n")
 	usedLines := 2
 
@@ -1375,7 +1374,7 @@ func (m Model) renderDetailHeader(item *team.TodoItem) string {
 			break
 		}
 	}
-	titleLine := headerStyle.Render("─── Task"+taskNum+"───")
+	titleLine := headerStyle.Render("─── Task" + taskNum + "───")
 
 	agentLine := iconSt.Render(icon) + " " + agentStyle.Render(item.Agent)
 	if item.ID == team.CoordTodoID {
