@@ -152,6 +152,8 @@ type Coordinator struct {
 	forcedSkillNames      map[string]bool // set of skill names specified via --skill
 	maxConcurrent         int
 	sessionTime           time.Time
+	lastStmWrite          time.Time // tracks when stm_write was last called for finish enforcement
+	lastStmWriteMu        sync.Mutex
 
 	// stepConfirmFn must be set before Run() or protected by stepConfirmFnMu.
 	stepConfirmFn   func(context.Context, []TaskDef) (bool, error)
@@ -584,6 +586,19 @@ func (c *Coordinator) buildMemorySuffix() string {
 		b.WriteString("\n--- End ltm.md ---")
 	}
 
+	if b.Len() == 0 {
+		return ""
+	}
+
+	b.WriteString("## Session Context\n\n")
+	b.WriteString("Review the following memory to understand the current state and prior knowledge before proceeding.\n\n")
+	// Move the accumulated stm/ltm content to the end by swapping
+	stmLtmContent := b.String()
+	b.Reset()
+	b.WriteString("## Session Context\n\n")
+	b.WriteString("Review the following memory to understand the current state and prior knowledge before proceeding.\n\n\n")
+	b.WriteString(stmLtmContent)
+	b.WriteString("\n")
 	return b.String()
 }
 
@@ -921,7 +936,8 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 }
 
 type finishTool struct {
-	pOpts fantasy.ProviderOptions
+	coordinator *Coordinator
+	pOpts       fantasy.ProviderOptions
 }
 
 func (t *finishTool) Info() fantasy.ToolInfo {
@@ -948,6 +964,23 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
 	}
+
+	t.coordinator.lastStmWriteMu.Lock()
+	if t.coordinator.lastStmWrite.IsZero() {
+		workspace := t.coordinator.session.Workspace
+		existing := LoadSTM(workspace)
+		if existing == "" {
+			autoSummary := fmt.Sprintf("Session completed at %s. Coordinator finished without prior stm_write.", time.Now().Format(time.RFC3339))
+			autoSummary = TruncateSTM(autoSummary)
+			_ = SaveSTM(workspace, autoSummary)
+		} else {
+			autoSummary := TruncateSTM(existing)
+			_ = SaveSTM(workspace, autoSummary)
+		}
+		t.coordinator.lastStmWrite = time.Now()
+	}
+	t.coordinator.lastStmWriteMu.Unlock()
+
 	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", args.Response)), nil
 }
 
@@ -1389,6 +1422,9 @@ func (t *stmWriteTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	if err := SaveSTM(workspace, newContent); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write stm.md: %v", err)), nil
 	}
+	t.coordinator.lastStmWriteMu.Lock()
+	t.coordinator.lastStmWrite = time.Now()
+	t.coordinator.lastStmWriteMu.Unlock()
 
 	verb := "Appended to"
 	if mode == "replace" {
@@ -2545,6 +2581,11 @@ func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentD
 	fmt.Fprintf(&b, "- Use %s to share files between agents. NEVER write outside workspace.\n\n", sharedPath)
 	b.WriteString("---\n\n")
 
+	if memSuffix := c.buildMemorySuffix(); memSuffix != "" {
+		b.WriteString(memSuffix)
+		b.WriteString("\n")
+	}
+
 	injectedDef := *def
 	injectedDef.System = injectedDef.System + "\n\n---\n\n" + b.String()
 
@@ -2564,6 +2605,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("You MUST delegate ALL work to your team members. You do NOT have tools to do work yourself.\n\n")
 
 	b.WriteString("## How to Coordinate\n\n")
+	b.WriteString("0. **Check memory first** — Before analyzing the user's request, review stm.md (short-term memory, current session) and ltm.md (long-term memory, prior knowledge). Use `load_skill` to load the memory reading skill if available, or read the files directly with the view tool. This helps you understand ongoing work and past decisions.\n")
 	b.WriteString("1. **Analyze** the user's request to identify which team members are needed\n")
 	b.WriteString("2. **Check skills** — if any available skills are relevant to the user's task, call `load_skill` to get the full instructions. Include the relevant skill summary in task descriptions so workers know which skills to load\n")
 	b.WriteString("3. **Plan** your approach before delegating — think step by step\n")
@@ -3038,14 +3080,14 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
 	orchTools := []fantasy.AgentTool{
 		c.RunAgentsTool(),
-		&finishTool{},
+		&finishTool{coordinator: c},
 		&loadSkillTool{coordinator: c},
 		&saveSkillTool{coordinator: c},
 	}
 	for _, t := range c.coreTools {
-		if t.Info().Name == "ask_user" {
+		name := t.Info().Name
+		if name == "ask_user" || name == "stm_write" || name == "ltm_update" {
 			orchTools = append(orchTools, t)
-			break
 		}
 	}
 	return orchTools
@@ -3180,6 +3222,8 @@ func (c *Coordinator) emitThinkText(text string) {
 }
 
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
+	c.lastStmWrite = time.Time{}
+
 	orchDef := c.GetOrchestratorDef()
 	if orchDef == nil {
 		return "", fmt.Errorf("no coordinator agent found in team")
@@ -3290,13 +3334,15 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		return "", fmt.Errorf("no coordinator agent found in team")
 	}
 
+	memorySuffix := c.buildMemorySuffix()
+
 	var continuationPrompt string
 	if c.IsWrapUp() {
-		continuationPrompt = wrapUpPromptTemplate
+		continuationPrompt = wrapUpPromptTemplate + "\n\n" + memorySuffix
 		additionalPrompt = "wrap up now"
 		c.report(c.newEvent("step").withMessage("wrapping up").withTodoID(CoordTodoID))
 	} else {
-		continuationPrompt = fmt.Sprintf(continuationPromptTemplate, additionalPrompt)
+		continuationPrompt = fmt.Sprintf(continuationPromptTemplate, additionalPrompt) + "\n\n" + memorySuffix
 		c.report(c.newEvent("step").withMessage("coordinator preparing").withTodoID(CoordTodoID))
 	}
 
