@@ -471,7 +471,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	return cfg, nil
 }
 
-func LoadTeam(teamDir string, vars map[string]string) (*TeamSession, error) {
+func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*TeamSession, error) {
 	absDir, err := filepath.Abs(teamDir)
 	if err != nil {
 		return nil, fmt.Errorf("invalid team directory: %w", err)
@@ -595,6 +595,36 @@ func LoadTeam(teamDir string, vars map[string]string) (*TeamSession, error) {
 	includeSkills := skill.ParseSkillList(session.Config.Skills)
 	excludeSkills := skill.ParseSkillList(session.Config.SkillsExclude)
 	session.Skills = skill.FilterSkills(allSkills, includeSkills, excludeSkills)
+
+	if len(forcedSkills) > 0 {
+		forcedSet := map[string]bool{}
+		for _, name := range forcedSkills {
+			forcedSet[strings.ToLower(strings.TrimSpace(name))] = true
+		}
+		// Build set of already-added skill names for O(1) duplicate check
+		existingSet := map[string]bool{}
+		for _, s := range session.Skills {
+			existingSet[strings.ToLower(s.Name)] = true
+		}
+		// Warn about unmatched forced skill names
+		knownSkills := map[string]bool{}
+		for _, sk := range allSkills {
+			knownSkills[strings.ToLower(sk.Name)] = true
+		}
+		for _, name := range forcedSkills {
+			trimmed := strings.TrimSpace(name)
+			if trimmed != "" && !knownSkills[strings.ToLower(trimmed)] {
+				fmt.Fprintf(os.Stderr, "warning: forced skill %q not found in discovered skills\n", trimmed)
+			}
+		}
+		for _, sk := range allSkills {
+			lowerName := strings.ToLower(sk.Name)
+			if forcedSet[lowerName] && !existingSet[lowerName] {
+				session.Skills = append(session.Skills, sk)
+				existingSet[lowerName] = true
+			}
+		}
+	}
 
 	return session, nil
 }

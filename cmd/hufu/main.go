@@ -50,6 +50,7 @@ var (
 	direnv              bool
 	varFlags            []string
 	varFiles            []string
+	forcedSkills         []string
 	globalPromptReader  atomic.Pointer[readline.PromptReader]
 )
 
@@ -95,6 +96,7 @@ func main() {
 	rootCmd.Flags().BoolVar(&think, "think", false, "Show coordinator decision reasoning (skills, agents, tasks, system prompt)")
 	rootCmd.Flags().StringArrayVar(&varFlags, "var", nil, "Set template variable (key=value). Can be specified multiple times; later values override earlier ones")
 	rootCmd.Flags().StringArrayVar(&varFiles, "var-file", nil, "Read template variables from a file (.yaml/.yml or KEY=VALUE format). Can be specified multiple times; later files override earlier ones")
+	rootCmd.Flags().StringArrayVar(&forcedSkills, "skill", nil, "Force-load specific skills (repeatable, e.g. --skill code-review --skill tdd)")
 
 	if err := rootCmd.Execute(); err != nil {
 		var interrupted errInterrupted
@@ -299,7 +301,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	for _, seg := range initialSegments {
 		if seg.Type == team.SegmentSwitchTeam {
 			if _, ok := loadedTeams[seg.Name]; !ok {
-				tc, err := loadTeamByName(ctx, seg.Name, registry, providerURL, providerAPIKey, pathConsent, vars)
+				tc, err := loadTeamByName(ctx, seg.Name, registry, providerURL, providerAPIKey, pathConsent, vars, forcedSkills)
 				if err != nil {
 					return fmt.Errorf("failed to load team %q: %w", seg.Name, err)
 				}
@@ -462,13 +464,13 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string) (*teamContext, error) {
+func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string) (*teamContext, error) {
 	teamDir, err := registry.Resolve(teamName)
 	if err != nil {
 		return nil, err
 	}
 
-	session, err := team.LoadTeam(teamDir, vars)
+	session, err := team.LoadTeam(teamDir, vars, forcedSkills)
 	if err != nil {
 		return nil, err
 	}
@@ -656,7 +658,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 
 	resolvedNoNet := noNet || cfg.NoNet || session.Config.NoNet
 
-	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, think, direnv, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet)
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, think, direnv, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet, forcedSkills)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
@@ -878,7 +880,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			teamName := seg.Name
 			tc, ok := loadedTeams[teamName]
 			if !ok {
-				loaded, err := loadTeamByName(ctx, teamName, registry, providerURL, providerAPIKey, pathConsent, vars)
+				loaded, err := loadTeamByName(ctx, teamName, registry, providerURL, providerAPIKey, pathConsent, vars, forcedSkills)
 				if err != nil {
 					return strings.Join(results, "\n\n"), fmt.Errorf("failed to load team %q: %w", teamName, err)
 				}
@@ -1180,7 +1182,7 @@ func runArchiveMemory(ctx context.Context, registry *team.TeamRegistry, vars map
 
 	archived := 0
 	for _, name := range teamNames {
-		tc, err := loadTeamByName(ctx, name, registry, providerURL, providerAPIKey, newPathConsent(), vars)
+		tc, err := loadTeamByName(ctx, name, registry, providerURL, providerAPIKey, newPathConsent(), vars, nil)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s Failed to load team %q: %v\n", errStyle.Render("⚠"), name, err)
 			continue

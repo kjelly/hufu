@@ -149,8 +149,10 @@ type Coordinator struct {
 	workerCtxOnce         sync.Once
 	autoLoadedSkills      []*skill.SkillDef
 	autoLoadedSkillsMu    sync.RWMutex
+	forcedSkillNames      map[string]bool // set of skill names specified via --skill
 	maxConcurrent         int
 	sessionTime           time.Time
+
 	// stepConfirmFn must be set before Run() or protected by stepConfirmFnMu.
 	stepConfirmFn   func(context.Context, []TaskDef) (bool, error)
 	stepConfirmFnMu sync.RWMutex
@@ -230,7 +232,7 @@ func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
 	return
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool) (*Coordinator, error) {
+func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forcedSkillNames []string) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
 	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath), tools.WithNetworkBlock(noNet), tools.WithDirenv(direnv))
 	prov, err := agent.NewOllamaProvider(defaultProviderURL, defaultProviderAPIKey)
@@ -262,6 +264,16 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		rbashMode:       rbashMode,
 		restrictedPath:  restrictedPath,
 		noNet:           noNet,
+		forcedSkillNames: func() map[string]bool {
+			m := make(map[string]bool)
+			for _, n := range forcedSkillNames {
+				trimmed := strings.TrimSpace(n)
+				if trimmed != "" {
+					m[strings.ToLower(trimmed)] = true
+				}
+			}
+			return m
+		}(),
 	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -503,7 +515,7 @@ func (c *Coordinator) buildSuggestedSkillsText(agentDef *agent.AgentDef, agentNa
 
 func (c *Coordinator) computeRelevantSkills(agentDef *agent.AgentDef, taskDesc string) []*skill.SkillDef {
 	autoSkills := c.getAutoLoadedSkills()
-	if len(autoSkills) == 0 {
+	if len(autoSkills) == 0 && len(c.forcedSkillNames) == 0 {
 		return nil
 	}
 
@@ -516,14 +528,26 @@ func (c *Coordinator) computeRelevantSkills(agentDef *agent.AgentDef, taskDesc s
 	agentText := strings.ToLower(agentDef.Name + " " + agentDef.Description + " " + taskDesc)
 
 	var relevant []*skill.SkillDef
+	addedSet := map[string]bool{}
 	for _, s := range autoSkills {
 		if existingSet[strings.ToLower(s.Name)] {
 			continue
 		}
+		addedSet[strings.ToLower(s.Name)] = true
 		for _, kw := range extractSkillKeywords(s) {
 			if strings.Contains(agentText, kw) {
 				relevant = append(relevant, s)
 				break
+			}
+		}
+	}
+
+	if len(c.forcedSkillNames) > 0 {
+		allSkills := c.getSkills()
+		for _, s := range allSkills {
+			if c.forcedSkillNames[strings.ToLower(s.Name)] && !existingSet[strings.ToLower(s.Name)] && !addedSet[strings.ToLower(s.Name)] {
+				relevant = append(relevant, s)
+				addedSet[strings.ToLower(s.Name)] = true
 			}
 		}
 	}
@@ -679,6 +703,8 @@ func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string)
 		return nil
 	}
 
+	var matched []*skill.SkillDef
+
 	s := c.Sidecar()
 	if s != nil {
 		summaries := make([]sidecar.SkillSummary, len(allSkills))
@@ -699,7 +725,6 @@ func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string)
 			for _, n := range names {
 				nameSet[strings.ToLower(strings.TrimSpace(n))] = true
 			}
-			var matched []*skill.SkillDef
 			for _, sk := range allSkills {
 				if nameSet[strings.ToLower(sk.Name)] {
 					matched = append(matched, sk)
@@ -713,26 +738,29 @@ func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string)
 				c.emitThinkSidecar("MatchSkills", fmt.Sprintf("matched: %s", strings.Join(matchedNames, ", ")))
 			}
 			c.report(c.newEvent("sidecar_call").withMessage("match_skills → " + strings.Join(matchedNames, ", ")))
-			return matched
 		}
-		if c.think {
-			c.emitThinkSidecar("MatchSkills", "no matches")
+		if len(matched) == 0 {
+			if c.think {
+				c.emitThinkSidecar("MatchSkills", "no matches")
+			}
+			c.report(c.newEvent("sidecar_call").withMessage("match_skills → (no matches)"))
 		}
-		c.report(c.newEvent("sidecar_call").withMessage("match_skills → (no matches)"))
+	} else {
+		fallback := c.matchSkillsForPrompt(prompt)
+		if len(fallback) > 0 {
+			names := make([]string, len(fallback))
+			for i, sk := range fallback {
+				names[i] = sk.Name
+			}
+			if c.think {
+				c.emitThinkSidecar("MatchSkills(keyword)", fmt.Sprintf("fallback matched: %s", strings.Join(names, ", ")))
+			}
+			c.report(c.newEvent("sidecar_call").withMessage("match_skills (keyword) → " + strings.Join(names, ", ")))
+		}
+		matched = fallback
 	}
 
-	fallback := c.matchSkillsForPrompt(prompt)
-	if len(fallback) > 0 {
-		names := make([]string, len(fallback))
-		for i, sk := range fallback {
-			names[i] = sk.Name
-		}
-		if c.think {
-			c.emitThinkSidecar("MatchSkills(keyword)", fmt.Sprintf("fallback matched: %s", strings.Join(names, ", ")))
-		}
-		c.report(c.newEvent("sidecar_call").withMessage("match_skills (keyword) → " + strings.Join(names, ", ")))
-	}
-	return fallback
+	return matched
 }
 
 func (c *Coordinator) newEvent(eventType string) StatusEvent {
