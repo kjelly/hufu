@@ -324,7 +324,7 @@ func TestBuildSuggestedSkillsTextRelevance(t *testing.T) {
 			name: "developer agent with commit task gets git-commit",
 			agentDef: &agent.AgentDef{
 				Name:        "developer",
-				Description: "Implementation specialist",
+				Description: "Implementation specialist — writes and commits code",
 			},
 			taskDesc:  "commit the changes",
 			wantSkill: "git-commit",

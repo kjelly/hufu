@@ -528,7 +528,8 @@ func (c *Coordinator) computeRelevantSkills(agentDef *agent.AgentDef, taskDesc s
 		existingSet[strings.ToLower(strings.TrimSpace(name))] = true
 	}
 
-	agentText := strings.ToLower(agentDef.Name + " " + agentDef.Description + " " + taskDesc)
+	agentText := strings.ToLower(agentDef.Name + " " + agentDef.Description + " " + agentDef.Role)
+	taskText := strings.ToLower(taskDesc)
 
 	var relevant []*skill.SkillDef
 	addedSet := map[string]bool{}
@@ -536,13 +537,15 @@ func (c *Coordinator) computeRelevantSkills(agentDef *agent.AgentDef, taskDesc s
 		if existingSet[strings.ToLower(s.Name)] {
 			continue
 		}
-		addedSet[strings.ToLower(s.Name)] = true
-		for _, kw := range extractSkillKeywords(s) {
-			if strings.Contains(agentText, kw) {
-				relevant = append(relevant, s)
-				break
-			}
+		keywords := extractSkillKeywords(s)
+		if !containsAny(keywords, agentText) {
+			continue
 		}
+		if !containsAny(keywords, taskText) {
+			continue
+		}
+		addedSet[strings.ToLower(s.Name)] = true
+		relevant = append(relevant, s)
 	}
 
 	if len(c.forcedSkillNames) > 0 {
@@ -556,6 +559,15 @@ func (c *Coordinator) computeRelevantSkills(agentDef *agent.AgentDef, taskDesc s
 	}
 
 	return relevant
+}
+
+func containsAny(keywords []string, text string) bool {
+	for _, kw := range keywords {
+		if strings.Contains(text, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 const maxSTMAutoInject = 2000

@@ -165,6 +165,8 @@ type Model struct {
 
 	mouseEnabled         bool // mouse tracking is currently on
 	mouseManuallyEnabled bool // user explicitly toggled mouse on with 'm'
+
+	recentLogs []string // last N activity log lines (circular buffer, max 3)
 }
 
 func enableMouseCmd() tea.Cmd {
@@ -249,6 +251,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vp.SetContent(m.buildDetailContent())
 			m.vp.GotoBottom()
 		}
+		m.recentLogs = append(m.recentLogs, msg.Line)
+		if len(m.recentLogs) > 3 {
+			m.recentLogs = m.recentLogs[len(m.recentLogs)-3:]
+		}
 
 	case CoordItemMsg:
 		m.coordItem = msg.Item
@@ -276,6 +282,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case FinishedMsg:
 		m.finished = true
+		m.recentLogs = nil
 		m.statusText = doneIcon.Render("✓") + dimStyle.Render("  All tasks completed")
 		// The coordinator already called finalizeNormalCompletion() which marks
 		// TaskPending → TaskSkipped and TaskInProgress → TaskDone via a
@@ -942,6 +949,24 @@ func (m Model) renderStatusArea(w int) string {
 	return "  " + text
 }
 
+func (m Model) renderActivityFeed(w int) string {
+	if len(m.recentLogs) == 0 {
+		return ""
+	}
+	feedW := w - 2
+	var b strings.Builder
+	for _, line := range m.recentLogs {
+		runes := []rune(line)
+		if len(runes) > feedW {
+			line = string(runes[:feedW-1]) + "…"
+		}
+		b.WriteString("  ")
+		b.WriteString(dimStyle.Render(line))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 func (m Model) columnsView() string {
 	w := m.width
 	if w < 9 {
@@ -950,11 +975,13 @@ func (m Model) columnsView() string {
 
 	widget := m.renderPromptWidget(w)
 	statusArea := m.renderStatusArea(w)
+	activityFeed := m.renderActivityFeed(w)
 	statusH := m.statusAreaHeight()
 	promptH := m.promptWidgetHeight()
+	feedH := len(m.recentLogs)
 
-	// promptH + blank(1) + statusArea(statusH) + blank(1) + blank(1) + footer(1)
-	bodyH := m.height - promptH - 1 - statusH - 1 - 1 - 1
+	// promptH + blank(1) + statusH + blank(1) + feedH + blank(1) + blank(1) + footer(1)
+	bodyH := m.height - promptH - 1 - statusH - 1 - feedH - 1 - 1 - 1
 	if bodyH < 2 {
 		bodyH = 2
 	}
@@ -970,6 +997,9 @@ func (m Model) columnsView() string {
 	div := dimStyle.Render("│")
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, c0, div, c1, div, c2, div, c3, div, c4)
+	if feedH > 0 {
+		return widget + "\n" + statusArea + "\n" + activityFeed + "\n" + body + "\n\n" + m.footer()
+	}
 	return widget + "\n" + statusArea + "\n" + body + "\n\n" + m.footer()
 }
 
