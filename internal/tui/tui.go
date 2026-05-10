@@ -648,13 +648,16 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.confirmChoice--
 		}
 	case "right", "l", "tab":
-		if m.confirmChoice < 1 {
+		if m.confirmChoice < 2 {
 			m.confirmChoice++
 		}
 	case "enter":
-		if m.confirmChoice == 1 {
+		switch m.confirmChoice {
+		case 1: // Yes
 			m.inConfirm = false
 			return m.handleCtrlC()
+		case 2: // Force
+			return m, tea.Quit
 		}
 		m.inConfirm = false
 		return m, nil
@@ -665,8 +668,12 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inConfirm = false
 		return m, nil
 	case "y":
+		m.confirmChoice = 1
 		m.inConfirm = false
 		return m.handleCtrlC()
+	case "f":
+		m.confirmChoice = 2
+		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -1230,14 +1237,19 @@ func (m Model) footer() string {
 func (m Model) confirmView() string {
 	noLabel := " No "
 	yesLabel := " Yes "
+	forceLabel := " Force "
 	noStyled := confirmNormalStyle.Render(noLabel)
 	yesStyled := confirmNormalStyle.Render(yesLabel)
-	if m.confirmChoice == 0 {
+	forceStyled := confirmNormalStyle.Render(forceLabel)
+	switch m.confirmChoice {
+	case 0:
 		noStyled = confirmHighlightStyle.Render(noLabel)
-	} else {
+	case 1:
 		yesStyled = confirmHighlightStyle.Render(yesLabel)
+	case 2:
+		forceStyled = confirmHighlightStyle.Render(forceLabel)
 	}
-	buttons := noStyled + "  " + yesStyled
+	buttons := noStyled + "  " + yesStyled + "  " + forceStyled
 	dialog := confirmBoxStyle.Render("  Quit hufu?" + "\n\n" + buttons + "\n")
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }
