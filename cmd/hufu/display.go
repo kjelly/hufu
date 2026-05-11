@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -196,7 +197,7 @@ func (d *taskDisplay) render() {
 			desc = dimStyle.Render(t.Desc)
 		case team.TaskInProgress:
 			icon = progressIcon.Render("◑")
-			desc = utils.TruncateLine(t.Desc, 60)
+			desc = t.Desc
 		case team.TaskDone:
 			icon = doneIcon.Render("●")
 			desc = dimStyle.Render(t.Desc)
@@ -293,7 +294,7 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 			w.write(fmt.Sprintf("\n%s %s %s\n",
 				headerStyle.Render("▶"),
 				formatAgentLabel(event),
-				dimStyle.Render("— "+utils.TruncateLine(event.Message, 120)),
+				dimStyle.Render("— "+event.Message),
 			))
 			taskDisp.update()
 
@@ -527,7 +528,7 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 		case "think_text":
 			w.write(fmt.Sprintf("%s %s",
 				thinkStyle.Render("💭"),
-				thinkStyle.Render(utils.TruncateLine(event.Message, 200)),
+				thinkStyle.Render(event.Message),
 			))
 		}
 	})
@@ -543,7 +544,7 @@ func flushText(agentName, text string) string {
 	}
 	return fmt.Sprintf("  %s %s\n",
 		textStyle.Render("💬"),
-		textStyle.Render(utils.TruncateLine(text, 300)),
+		textStyle.Render(text),
 	)
 }
 
@@ -590,14 +591,7 @@ func formatToolArgs(toolName, args string) string {
 		return args
 	}
 	args = strings.ReplaceAll(args, "\n", " ")
-	maxLen := 80
-	if toolName == "agent" {
-		maxLen = 200
-	}
-	if toolName == "finish" {
-		maxLen = 120
-	}
-	return utils.TruncateLine(args, maxLen)
+	return args
 }
 
 type skillEntry struct {
@@ -965,8 +959,8 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			tt.stop(event.TodoID)
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolCall(event.ToolName, event.ToolArgs)})
 			argsPreview := event.ToolArgs
-			if event.ToolName != "bash" && len(argsPreview) > 60 {
-				argsPreview = argsPreview[:60] + "…"
+			if event.ToolName != "bash" {
+				argsPreview = utils.TruncateLine(argsPreview, 120)
 			}
 			toolLabel := toolStyle.Render("⟹ " + event.ToolName)
 			agentLabel := agentStyle.Render(event.Agent)
@@ -1031,7 +1025,25 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			if event.TodoID == "" {
 				return
 			}
-			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 " + event.Message)})
+			textBufs[event.TodoID] += event.Message
+			if utf8.RuneCountInString(textBufs[event.TodoID]) > 10000 {
+				if trimmed := strings.TrimSpace(textBufs[event.TodoID]); trimmed != "" {
+					p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 " + trimmed)})
+				}
+				textBufs[event.TodoID] = ""
+				return
+			}
+			for {
+				idx := strings.Index(textBufs[event.TodoID], "\n")
+				if idx == -1 {
+					break
+				}
+				line := textBufs[event.TodoID][:idx]
+				textBufs[event.TodoID] = textBufs[event.TodoID][idx+1:]
+				if trimmed := strings.TrimSpace(line); trimmed != "" {
+					p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 " + trimmed)})
+				}
+			}
 
 		case "think_skills", "think_agents", "think_delegation", "think_sidecar":
 			if event.TodoID == "" {

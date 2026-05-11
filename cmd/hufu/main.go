@@ -51,6 +51,8 @@ var (
 	varFlags            []string
 	varFiles            []string
 	forcedSkills         []string
+	planMode             bool
+	autoSkills           bool
 	globalPromptReader  atomic.Pointer[readline.PromptReader]
 )
 
@@ -97,6 +99,8 @@ func main() {
 	rootCmd.Flags().StringArrayVar(&varFlags, "var", nil, "Set template variable (key=value). Can be specified multiple times; later values override earlier ones")
 	rootCmd.Flags().StringArrayVar(&varFiles, "var-file", nil, "Read template variables from a file (.yaml/.yml or KEY=VALUE format). Can be specified multiple times; later files override earlier ones")
 	rootCmd.Flags().StringArrayVar(&forcedSkills, "skill", nil, "Force-load specific skills (repeatable, e.g. --skill code-review --skill tdd)")
+	rootCmd.Flags().BoolVar(&planMode, "plan", false, "Force plan-first mode: agents must submit plans before executing")
+	rootCmd.Flags().BoolVar(&autoSkills, "auto-skills", false, "Enable automatic skill detection via sidecar/LLM matching")
 
 	if err := rootCmd.Execute(); err != nil {
 		var interrupted errInterrupted
@@ -301,7 +305,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	for _, seg := range initialSegments {
 		if seg.Type == team.SegmentSwitchTeam {
 			if _, ok := loadedTeams[seg.Name]; !ok {
-				tc, err := loadTeamByName(ctx, seg.Name, registry, providerURL, providerAPIKey, pathConsent, vars, forcedSkills)
+				tc, err := loadTeamByName(ctx, seg.Name, registry, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
 				if err != nil {
 					return fmt.Errorf("failed to load team %q: %w", seg.Name, err)
 				}
@@ -466,7 +470,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string) (*teamContext, error) {
+func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
 	teamDir, err := registry.Resolve(teamName)
 	if err != nil {
 		return nil, err
@@ -660,7 +664,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 
 	resolvedNoNet := noNet || cfg.NoNet || session.Config.NoNet
 
-	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, think, direnv, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet, forcedSkills)
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, think, direnv, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet, forcedSkills, planMode, autoSkillsMode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
@@ -882,7 +886,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			teamName := seg.Name
 			tc, ok := loadedTeams[teamName]
 			if !ok {
-				loaded, err := loadTeamByName(ctx, teamName, registry, providerURL, providerAPIKey, pathConsent, vars, forcedSkills)
+				loaded, err := loadTeamByName(ctx, teamName, registry, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
 				if err != nil {
 					return strings.Join(results, "\n\n"), fmt.Errorf("failed to load team %q: %w", teamName, err)
 				}
@@ -1184,7 +1188,7 @@ func runArchiveMemory(ctx context.Context, registry *team.TeamRegistry, vars map
 
 	archived := 0
 	for _, name := range teamNames {
-		tc, err := loadTeamByName(ctx, name, registry, providerURL, providerAPIKey, newPathConsent(), vars, nil)
+		tc, err := loadTeamByName(ctx, name, registry, providerURL, providerAPIKey, newPathConsent(), vars, nil, false, false)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s Failed to load team %q: %v\n", errStyle.Render("⚠"), name, err)
 			continue

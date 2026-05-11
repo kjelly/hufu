@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -61,6 +62,8 @@ type TeamInfoMsg struct{ Info TeamInfo }
 type WrapUpMsg struct{}
 
 type AskUserCancelMsg struct{}
+
+type detailRefreshMsg struct{}
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
@@ -121,10 +124,10 @@ type Model struct {
 	logs      map[string][]string // todoID → rendered log lines
 	coordItem *team.TodoItem
 
-	col int // 0=pending 1=in_progress 2=done 3=skip 4=error
+	col int // 0=pending 1=planned 2=in_progress 3=done 4=skip 5=error
 	row int // cursor within focused column
 
-	scrollOff [5]int // scroll offset per column (index of first visible item)
+	scrollOff [6]int // scroll offset per column (index of first visible item)
 
 	inDetail bool
 	detailID string
@@ -166,7 +169,8 @@ type Model struct {
 	mouseEnabled         bool // mouse tracking is currently on
 	mouseManuallyEnabled bool // user explicitly toggled mouse on with 'm'
 
-	recentLogs []string // last N activity log lines (circular buffer, max 3)
+	recentLogs              []string // last N activity log lines (circular buffer, max 3)
+	detailRefreshScheduled   bool
 }
 
 func enableMouseCmd() tea.Cmd {
@@ -247,13 +251,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TaskLogMsg:
 		m.logs[msg.TodoID] = append(m.logs[msg.TodoID], msg.Line)
-		if m.inDetail && m.detailID == msg.TodoID && m.vpReady {
-			m.vp.SetContent(m.buildDetailContent())
-			m.vp.GotoBottom()
+		if m.inDetail && m.detailID == msg.TodoID && m.vpReady && !m.detailRefreshScheduled {
+			m.detailRefreshScheduled = true
+			return m, func() tea.Msg {
+				time.Sleep(80 * time.Millisecond)
+				return detailRefreshMsg{}
+			}
 		}
 		m.recentLogs = append(m.recentLogs, msg.Line)
 		if len(m.recentLogs) > 3 {
 			m.recentLogs = m.recentLogs[len(m.recentLogs)-3:]
+		}
+
+	case detailRefreshMsg:
+		m.detailRefreshScheduled = false
+		if m.inDetail && m.vpReady {
+			m.vp.SetContent(m.buildDetailContent())
+			m.vp.GotoBottom()
 		}
 
 	case CoordItemMsg:
@@ -291,7 +305,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch t.Status {
 			case team.TaskInProgress:
 				m.tasks[i].Status = team.TaskDone
-			case team.TaskPending:
+			case team.TaskPending, team.TaskPlanned:
 				m.tasks[i].Status = team.TaskSkipped
 			}
 		}
@@ -347,7 +361,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			colW := 0
 			if m.width >= 9 {
-				colW = (m.width - 4) / 5
+				colW = (m.width - 5) / 6
 			}
 
 			// Header takes 2 lines (title + blank)
@@ -619,11 +633,11 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.scrollOff[m.col] = 0
 		}
 	case "tab":
-		m.col = (m.col + 1) % 5
+		m.col = (m.col + 1) % 6
 		m.row = 0
 		m.scrollOff[m.col] = 0
 	case "right", "l":
-		if m.col < 4 {
+		if m.col < 5 {
 			m.col++
 			m.row = 0
 			m.scrollOff[m.col] = 0
@@ -783,7 +797,7 @@ func (m Model) updateInfo(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) executeSearch(query string) []*team.TodoItem {
 	q := strings.ToLower(query)
 	var results []*team.TodoItem
-	for col := 0; col < 5; col++ {
+	for col := 0; col < 6; col++ {
 		items := m.colItems(col)
 		for _, item := range items {
 			if strings.Contains(strings.ToLower(item.Agent), q) ||
@@ -802,7 +816,7 @@ func (m *Model) jumpToSearchMatch() {
 		return
 	}
 	target := m.searchResults[m.searchIdx]
-	for col := 0; col < 5; col++ {
+	for col := 0; col < 6; col++ {
 		items := m.colItems(col)
 		for i, item := range items {
 			if item.ID == target.ID {
@@ -847,7 +861,7 @@ func (m Model) View() string {
 
 // ── Column view ───────────────────────────────────────────────────────────────
 
-var colTitles = [5]string{"PENDING", "IN PROGRESS", "DONE", "SKIP", "ERROR"}
+var colTitles = [6]string{"PENDING", "PLANNED", "IN PROGRESS", "DONE", "SKIP", "ERROR"}
 
 func (m Model) renderPromptWidget(w int) string {
 	innerW := w - 4
@@ -986,17 +1000,18 @@ func (m Model) columnsView() string {
 		bodyH = 2
 	}
 
-	// Four │ dividers, so each of five columns = (w-4)/5.
-	colW := (w - 4) / 5
+	// Five │ dividers, so each of six columns = (w-5)/6.
+	colW := (w - 5) / 6
 
 	c0 := m.renderCol(0, colW, bodyH)
 	c1 := m.renderCol(1, colW, bodyH)
 	c2 := m.renderCol(2, colW, bodyH)
 	c3 := m.renderCol(3, colW, bodyH)
 	c4 := m.renderCol(4, colW, bodyH)
+	c5 := m.renderCol(5, colW, bodyH)
 	div := dimStyle.Render("│")
 
-	body := lipgloss.JoinHorizontal(lipgloss.Top, c0, div, c1, div, c2, div, c3, div, c4)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, c0, div, c1, div, c2, div, c3, div, c4, div, c5)
 	if feedH > 0 {
 		return widget + "\n" + statusArea + "\n" + activityFeed + "\n" + body + "\n\n" + m.footer()
 	}
@@ -1064,7 +1079,7 @@ func (m Model) isCurrentSearchMatch(id string) bool {
 	return m.searchResults[m.searchIdx].ID == id
 }
 
-const maxDescLines = 3
+const maxDescLines = 5
 
 func (m Model) itemLines(item *team.TodoItem, selected bool, isMatch bool, width int) []string {
 	icon, iconSt := taskIconStyle(item.Status)
@@ -1267,6 +1282,8 @@ func taskIconStyle(s team.TaskStatus) (string, lipgloss.Style) {
 		return "✗", errorIcon
 	case team.TaskSkipped:
 		return "—", skippedIcon
+	case team.TaskPlanned:
+		return "◎", dimStyle
 	}
 	return "○", pendingIcon
 }
@@ -1582,7 +1599,7 @@ func (m Model) renderDetailHeader(item *team.TodoItem) string {
 		loadedLine = dimStyle.Render("used: ") + doneStyle.Render(strings.Join(item.LoadedSkills, " · "))
 	}
 
-	descWrapped := utils.WrapLine(item.Desc, m.width-4, 2)
+	descWrapped := utils.WrapLine(item.Desc, m.width-4, 4)
 	var descLines []string
 	for _, l := range descWrapped.Lines {
 		descLines = append(descLines, dimStyle.Render("  "+l))
@@ -1772,6 +1789,8 @@ func wrapLine(s string, width int) string {
 				chunkLen = runeCount
 			}
 
+			extracted := chunkLen
+
 			// Extract chunk from current position in word
 			var chunkBuilder strings.Builder
 			pos := wordStart
@@ -1789,8 +1808,8 @@ func wrapLine(s string, width int) string {
 			}
 
 			line.WriteString(chunkBuilder.String())
-			lineVisible += chunkBuilder.Len()
-			runeCount -= chunkBuilder.Len()
+			lineVisible += extracted
+			runeCount -= extracted
 			wordStart = pos
 		}
 
@@ -1834,13 +1853,15 @@ func (m Model) colItems(col int) []*team.TodoItem {
 		switch {
 		case col == 0 && t.Status == team.TaskPending:
 			out = append(out, t)
-		case col == 1 && t.Status == team.TaskInProgress:
+		case col == 1 && t.Status == team.TaskPlanned:
 			out = append(out, t)
-		case col == 2 && t.Status == team.TaskDone:
+		case col == 2 && t.Status == team.TaskInProgress:
 			out = append(out, t)
-		case col == 3 && t.Status == team.TaskSkipped:
+		case col == 3 && t.Status == team.TaskDone:
 			out = append(out, t)
-		case col == 4 && t.Status == team.TaskError:
+		case col == 4 && t.Status == team.TaskSkipped:
+			out = append(out, t)
+		case col == 5 && t.Status == team.TaskError:
 			out = append(out, t)
 		}
 	}
@@ -1874,16 +1895,21 @@ func RenderToolCall(toolName, args string) string {
 		}
 		return toolCallStyle.Render("⟹ "+toolName) + "\n" + strings.Join(indented, "\n")
 	}
-	if len(args) > 300 {
-		args = args[:300] + "…"
+	if len(args) > 4000 {
+		r := []rune(args)
+		if len(r) > 4000 {
+			args = string(r[:4000]) + "…"
+		}
 	}
 	return toolCallStyle.Render("⟹ "+toolName) + "\n" + dimStyle.Render("  "+args)
 }
 
-// RenderToolResult returns a formatted tool-result log line.
 func RenderToolResult(toolName, result string) string {
-	if len(result) > 300 {
-		result = result[:300] + "…"
+	if len(result) > 4000 {
+		r := []rune(result)
+		if len(r) > 4000 {
+			result = string(r[:4000]) + "…"
+		}
 	}
 	return toolResStyle.Render("✓ "+toolName) + "\n" + dimStyle.Render("  "+result)
 }

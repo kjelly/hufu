@@ -52,6 +52,8 @@ type TaskDef struct {
 	Sidecar      bool     `json:"sidecar,omitempty"`
 	Summarize    bool     `json:"summarize,omitempty"`
 	ContextFiles []string `json:"context_files,omitempty"`
+	PlanFirst    bool     `json:"plan_first,omitempty"`
+	PlanID       string   `json:"plan_id,omitempty"`
 }
 
 // UnmarshalJSON handles legacy "task" field by mapping it to Goal.
@@ -99,6 +101,213 @@ type DryRunResult struct {
 	OrchestratorPrompt string
 	FirstRoundTasks    []TaskDef
 	Error              string
+}
+
+type PlanEntry struct {
+	TodoID      string
+	Agent       string
+	Goal        string
+	PlanText    string
+	Status      string // "submitted", "approved", "modified", "rejected"
+	ReviewCount int
+}
+
+const planReviewerMaxReviews = 3
+
+const planReviewerSystemPrompt = `You are a Plan Reviewer. Review agent-submitted execution plans against the original user requirement.
+
+Input:
+- USER REQUIREMENT: The original task goal
+- COMPLETED TASKS: Previously completed tasks (to detect duplication)
+- PLAN: The agent's proposed execution plan
+
+Rules:
+1. APPROVE: The plan directly addresses the USER REQUIREMENT, does not duplicate completed work, and the steps are clear and actionable.
+2. REJECT: The plan duplicates completed work, is irrelevant to the requirement, omits key steps, or creates a redundant loop. Provide a SPECIFIC, actionable reason.
+
+You MUST call one of:
+- approve_plan(todo_id) → execute the plan immediately
+- reject_plan(todo_id, reason) → agent re-plans with your feedback
+
+No other response format. Do NOT do the work yourself — only approve or reject.`
+
+// planReviewer implements an autonomous plan review agent using a sidecar model.
+// It is NOT user-configurable — it only activates when forcePlanFirst is set.
+type planReviewer struct {
+	coordinator *Coordinator
+	modelID     string
+	agent       fantasy.Agent
+	mu          sync.Mutex
+	initialized bool
+	todoID      string
+}
+
+func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*planReviewer, error) {
+	pr := &planReviewer{coordinator: c, modelID: c.sidecarModel, todoID: todoID}
+	if c.sidecarModel == "" {
+		return nil, fmt.Errorf("plan review requires a sidecar-model in team.yaml")
+	}
+	ag, err := agent.CreateAgent(ctx, c.provider, agent.AgentConfig{
+		Def: &agent.AgentDef{
+			Name:    "plan-reviewer",
+			System:  planReviewerSystemPrompt,
+			Role:    "plan_reviewer",
+		},
+		TeamConfig: &c.session.Config,
+		WorkDir:    c.projectDir,
+		MaxSteps:   1,
+	}, []fantasy.AgentTool{
+		&reviewerApprovePlanTool{coordinator: c, todoID: todoID},
+		&reviewerRejectPlanTool{coordinator: c, todoID: todoID},
+	})
+	if err != nil {
+		return nil, err
+	}
+	pr.agent = ag
+	pr.initialized = true
+	return pr, nil
+}
+
+func (pr *planReviewer) review(ctx context.Context, planText string) (string, bool, error) {
+	c := pr.coordinator
+	c.pendingPlansMu.Lock()
+	entry := c.pendingPlans[pr.todoID]
+	if entry == nil {
+		c.pendingPlansMu.Unlock()
+		return "", false, fmt.Errorf("plan entry not found for %s", pr.todoID)
+	}
+	goal := entry.Goal
+	entry.ReviewCount++
+	forceApprove := entry.ReviewCount > planReviewerMaxReviews
+	c.pendingPlansMu.Unlock()
+
+	if forceApprove {
+		c.report(c.newEvent("step").withMessage(fmt.Sprintf("plan %s: auto-approving after %d reviews", pr.todoID, planReviewerMaxReviews)).withTodoID(pr.todoID))
+		approved := c.autoApprovePlan(ctx, pr.todoID)
+		return approved, true, nil
+	}
+
+	completedTasks := c.buildCompletedTasksSummary()
+	prompt := fmt.Sprintf("## USER REQUIREMENT\n\n%s\n\n## COMPLETED TASKS\n\n%s\n\n## PLAN\n\n%s", goal, completedTasks, planText)
+
+	c.report(c.newEvent("step").withMessage("plan reviewer evaluating plan").withTodoID(pr.todoID))
+	result, _, err := c.runAgentWithStatusAndHistory(ctx, pr.agent, "plan-reviewer", prompt, nil, &taskTiming{})
+	if err != nil {
+		return "", false, err
+	}
+	return result, false, nil
+}
+
+func (c *Coordinator) autoApprovePlan(ctx context.Context, todoID string) string {
+	c.pendingPlansMu.Lock()
+	entry := c.pendingPlans[todoID]
+	if entry == nil {
+		c.pendingPlansMu.Unlock()
+		return ""
+	}
+	entry.Status = "approved"
+	agentName := entry.Agent
+	goal := entry.Goal
+	c.pendingPlansMu.Unlock()
+
+	c.taskTracker.TodoList().UpdateStatus(todoID, TaskPlanned, "")
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+
+	output, err := c.executeTask(ctx, TaskDef{
+		Agent:     agentName,
+		Goal:      goal,
+		PlanFirst: true,
+		PlanID:    todoID,
+	}, todoID)
+	if err != nil {
+		return fmt.Sprintf("Plan execution failed: %v", err)
+	}
+	return output
+}
+
+func (c *Coordinator) buildCompletedTasksSummary() string {
+	items := c.taskTracker.TodoList().Items()
+	var parts []string
+	for _, item := range items {
+		if item.Status == TaskDone {
+			parts = append(parts, fmt.Sprintf("- [Done] %s: %s", item.Agent, item.Desc))
+		}
+	}
+	if len(parts) == 0 {
+		return "(none)"
+	}
+	return strings.Join(parts, "\n")
+}
+
+type reviewerApprovePlanTool struct {
+	coordinator *Coordinator
+	todoID      string
+}
+
+func (t *reviewerApprovePlanTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "approve_plan",
+		Description: "Approve the plan and execute it immediately.",
+		Parameters: map[string]any{
+			"todo_id": map[string]any{"type": "string", "description": "The todo ID of the plan to approve."},
+		},
+		Required: []string{"todo_id"},
+	}
+}
+func (t *reviewerApprovePlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
+func (t *reviewerApprovePlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
+func (t *reviewerApprovePlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	result := t.coordinator.autoApprovePlan(ctx, t.todoID)
+	return fantasy.NewTextResponse("Plan approved and executed.\n\n" + result), nil
+}
+
+type reviewerRejectPlanTool struct {
+	coordinator *Coordinator
+	todoID      string
+}
+
+func (t *reviewerRejectPlanTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "reject_plan",
+		Description: "Reject the plan with a reason. The agent will re-plan based on your feedback.",
+		Parameters: map[string]any{
+			"todo_id": map[string]any{"type": "string", "description": "The todo ID of the plan to reject."},
+			"reason":  map[string]any{"type": "string", "description": "Why the plan was rejected."},
+		},
+		Required: []string{"todo_id", "reason"},
+	}
+}
+func (t *reviewerRejectPlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
+func (t *reviewerRejectPlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
+func (t *reviewerRejectPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		TodoID string `json:"todo_id"`
+		Reason string `json:"reason"`
+	}
+	json.Unmarshal([]byte(call.Input), &args)
+
+	t.coordinator.pendingPlansMu.Lock()
+	entry := t.coordinator.pendingPlans[t.todoID]
+	if entry == nil {
+		t.coordinator.pendingPlansMu.Unlock()
+		return fantasy.NewTextErrorResponse("plan not found"), nil
+	}
+	entry.Status = "rejected"
+	agentName := entry.Agent
+	goal := entry.Goal
+	t.coordinator.pendingPlansMu.Unlock()
+
+	t.coordinator.report(t.coordinator.newEvent("step").withMessage(fmt.Sprintf("plan %s rejected: %s", t.todoID, args.Reason)).withTodoID(t.todoID))
+
+	output, err := t.coordinator.executeTask(ctx, TaskDef{
+		Agent:     agentName,
+		Goal:      fmt.Sprintf("%s\n\n## Plan Rejected\nReason: %s\n\nRevise your plan and submit a new one.", goal, args.Reason),
+		PlanFirst: true,
+	}, t.todoID)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+	return fantasy.NewTextResponse(output), nil
 }
 
 type Coordinator struct {
@@ -171,6 +380,10 @@ type Coordinator struct {
 	workerSummariesOnce  sync.Once
 	workerSummaries      map[string]string
 	workerSummariesMu    sync.Mutex
+	pendingPlans          map[string]*PlanEntry
+	pendingPlansMu        sync.Mutex
+	forcePlanFirst        bool
+	autoSkillsEnabled     bool
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
@@ -235,7 +448,7 @@ func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
 	return
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forcedSkillNames []string) (*Coordinator, error) {
+func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forcedSkillNames []string, planMode bool, autoSkillsMode bool) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
 	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath), tools.WithNetworkBlock(noNet), tools.WithDirenv(direnv))
 	prov, err := agent.NewOllamaProvider(defaultProviderURL, defaultProviderAPIKey)
@@ -256,6 +469,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		projectDir:      projectDir,
 		skillUsage:      make(map[string]*skillUsageState),
 		delegatedTasks:  make(map[string]int),
+		pendingPlans:    make(map[string]*PlanEntry),
 		taskResultCache: make(map[string][]cachedTaskEntry),
 		memoryStore:     memoryStore,
 		modelList:       modelList,
@@ -277,6 +491,8 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 			}
 			return m
 		}(),
+		forcePlanFirst: planMode,
+		autoSkillsEnabled: autoSkillsMode,
 	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -940,6 +1156,9 @@ func (c *Coordinator) GuardSidecar() *sidecar.Sidecar {
 }
 
 func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string) []*skill.SkillDef {
+	if !c.autoSkillsEnabled {
+		return nil
+	}
 	allSkills := c.getSkills()
 	if len(allSkills) == 0 {
 		return nil
@@ -1098,6 +1317,7 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 		"agent":         map[string]any{"type": "string", "enum": workerNames, "description": "Agent name to delegate to"},
 		"goal":          map[string]any{"type": "string", "description": "The desired OUTCOME — what should be achieved. Do NOT include implementation details (file paths, function names, step-by-step instructions). Workers are specialists who determine their own approach."},
 		"constraints":   map[string]any{"type": "string", "description": "Non-obvious constraints the worker MUST respect (e.g., 'must use Python 3.11', 'cannot modify the public API'). Do NOT include obvious project conventions."},
+		"plan_first":    map[string]any{"type": "boolean", "description": "If true, the agent must draft a task execution plan and call submit_plan before doing any work. Use this for complex tasks where you want to review the approach before execution. After receiving the plan, call approve_plan, modify_plan, or reject_plan."},
 		"summarize":     map[string]any{"type": "boolean", "description": "If true, summarize the agent's output before returning. Use for tasks that produce verbose output where only key points matter."},
 		"sidecar":       map[string]any{"type": "boolean", "description": "If true, execute this task directly via the sidecar model instead of an agent. Use for simple, tool-free tasks that need a quick response."},
 		"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": contextFilesDesc},
@@ -1647,6 +1867,53 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 	return resp, nil
 }
 
+type submitPlanTool struct {
+	coordinator *Coordinator
+	todoID      string
+}
+
+func (t *submitPlanTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "submit_plan",
+		Description: "Submit your task execution plan for coordinator review. The plan should be a numbered list of concrete steps with brief descriptions. Do NOT include any execution results — only the plan. After submitting, wait for the coordinator to approve, modify, or reject your plan before executing.",
+		Parameters: map[string]any{
+			"plan": map[string]any{
+				"type":        "string",
+				"description": "The task execution plan as a numbered list of steps with descriptions.",
+			},
+		},
+		Required: []string{"plan"},
+	}
+}
+
+func (t *submitPlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
+func (t *submitPlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
+
+func (t *submitPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		Plan string `json:"plan"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+	if args.Plan == "" {
+		return fantasy.NewTextErrorResponse("plan is required"), nil
+	}
+	t.coordinator.pendingPlansMu.Lock()
+	existing := t.coordinator.pendingPlans[t.todoID]
+	t.coordinator.pendingPlans[t.todoID] = &PlanEntry{
+		TodoID:      t.todoID,
+		PlanText:    args.Plan,
+		Status:      "submitted",
+		ReviewCount: func() int { if existing != nil { return existing.ReviewCount }; return 0 }(),
+	}
+	t.coordinator.pendingPlansMu.Unlock()
+	if t.coordinator.forcePlanFirst {
+		return fantasy.NewTextResponse("Plan submitted. Awaiting review."), nil
+	}
+	return fantasy.NewTextResponse("Plan submitted. Await coordinator review."), nil
+}
+
 type stmWriteTool struct {
 	coordinator *Coordinator
 	pOpts       fantasy.ProviderOptions
@@ -1794,6 +2061,194 @@ func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	return fantasy.NewTextResponse(fmt.Sprintf("%s long-term memory (ltm.md)", verb)), nil
 }
 
+type approvePlanTool struct {
+	coordinator *Coordinator
+}
+
+func (t *approvePlanTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "approve_plan",
+		Description: "Approve a submitted task plan and execute it immediately. The plan must have been submitted by an agent via submit_plan. The agent that submitted the plan will execute the approved plan.",
+		Parameters: map[string]any{
+			"todo_id": map[string]any{
+				"type":        "string",
+				"description": "The todo ID of the submitted plan to approve.",
+			},
+		},
+		Required: []string{"todo_id"},
+	}
+}
+
+func (t *approvePlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
+func (t *approvePlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
+
+func (t *approvePlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		TodoID string `json:"todo_id"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+	if args.TodoID == "" {
+		return fantasy.NewTextErrorResponse("todo_id is required"), nil
+	}
+	t.coordinator.pendingPlansMu.Lock()
+	entry, ok := t.coordinator.pendingPlans[args.TodoID]
+	if !ok {
+		t.coordinator.pendingPlansMu.Unlock()
+		return fantasy.NewTextErrorResponse("plan not found for todo_id: " + args.TodoID), nil
+	}
+	if entry.Status != "submitted" {
+		t.coordinator.pendingPlansMu.Unlock()
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("plan already %s", entry.Status)), nil
+	}
+	entry.Status = "approved"
+	agent := entry.Agent
+	goal := entry.Goal
+	todoID := entry.TodoID
+	t.coordinator.pendingPlansMu.Unlock()
+
+	t.coordinator.taskTracker.TodoList().UpdateStatus(todoID, TaskPlanned, "")
+	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
+
+	task := TaskDef{
+		Agent:  agent,
+		Goal:   goal,
+		PlanFirst: true,
+		PlanID: todoID,
+	}
+	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{task})
+	if err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+	return fantasy.NewTextResponse(fmt.Sprintf("Plan approved and executed.\n\n%s", result)), nil
+}
+
+type modifyPlanTool struct {
+	coordinator *Coordinator
+}
+
+func (t *modifyPlanTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "modify_plan",
+		Description: "Modify a submitted task plan and execute the modified version. Provide the corrected plan steps. The agent will execute the modified plan.",
+		Parameters: map[string]any{
+			"todo_id": map[string]any{
+				"type":        "string",
+				"description": "The todo ID of the submitted plan to modify.",
+			},
+			"plan": map[string]any{
+				"type":        "string",
+				"description": "The modified task execution plan as a numbered list of steps.",
+			},
+		},
+		Required: []string{"todo_id", "plan"},
+	}
+}
+
+func (t *modifyPlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
+func (t *modifyPlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
+
+func (t *modifyPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		TodoID string `json:"todo_id"`
+		Plan   string `json:"plan"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+	if args.TodoID == "" || args.Plan == "" {
+		return fantasy.NewTextErrorResponse("todo_id and plan are required"), nil
+	}
+	t.coordinator.pendingPlansMu.Lock()
+	entry, ok := t.coordinator.pendingPlans[args.TodoID]
+	if !ok {
+		t.coordinator.pendingPlansMu.Unlock()
+		return fantasy.NewTextErrorResponse("plan not found for todo_id: " + args.TodoID), nil
+	}
+	entry.Status = "modified"
+	entry.PlanText = args.Plan
+	agent := entry.Agent
+	goal := entry.Goal
+	todoID := entry.TodoID
+	t.coordinator.pendingPlansMu.Unlock()
+
+	t.coordinator.report(t.coordinator.newEvent("step").withMessage(fmt.Sprintf("plan %s modified by coordinator", todoID)))
+
+	task := TaskDef{
+		Agent:  agent,
+		Goal:   goal,
+		PlanFirst: true,
+		PlanID: todoID,
+	}
+	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{task})
+	if err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+	return fantasy.NewTextResponse(fmt.Sprintf("Plan modified and executed.\n\n%s", result)), nil
+}
+
+type rejectPlanTool struct {
+	coordinator *Coordinator
+}
+
+func (t *rejectPlanTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "reject_plan",
+		Description: "Reject a submitted task plan and ask the agent to re-plan. Include the reason for rejection so the agent can improve their plan.",
+		Parameters: map[string]any{
+			"todo_id": map[string]any{
+				"type":        "string",
+				"description": "The todo ID of the submitted plan to reject.",
+			},
+			"reason": map[string]any{
+				"type":        "string",
+				"description": "Why the plan was rejected. The agent will see this and re-plan accordingly.",
+			},
+		},
+		Required: []string{"todo_id", "reason"},
+	}
+}
+
+func (t *rejectPlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
+func (t *rejectPlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
+
+func (t *rejectPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		TodoID string `json:"todo_id"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+	if args.TodoID == "" || args.Reason == "" {
+		return fantasy.NewTextErrorResponse("todo_id and reason are required"), nil
+	}
+	t.coordinator.pendingPlansMu.Lock()
+	entry, ok := t.coordinator.pendingPlans[args.TodoID]
+	if !ok {
+		t.coordinator.pendingPlansMu.Unlock()
+		return fantasy.NewTextErrorResponse("plan not found for todo_id: " + args.TodoID), nil
+	}
+	entry.Status = "rejected"
+	agent := entry.Agent
+	goal := entry.Goal
+	t.coordinator.pendingPlansMu.Unlock()
+
+	t.coordinator.report(t.coordinator.newEvent("step").withMessage(fmt.Sprintf("plan %s rejected: %s", args.TodoID, args.Reason)))
+
+	task := TaskDef{
+		Agent:     agent,
+		Goal:      fmt.Sprintf("%s\n\n## Plan Rejected\nYour previous plan was rejected for the following reason:\n\n%s\n\nPlease re-plan and submit a new plan.", goal, args.Reason),
+		PlanFirst: true,
+	}
+	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{task})
+	if err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+	return fantasy.NewTextResponse(fmt.Sprintf("Plan rejected. Agent re-planned.\n\n%s", result)), nil
+}
+
 const maxConversationHistory = 100
 const compactHistoryThreshold = 80
 const maxMessageSize = 50000
@@ -1804,6 +2259,7 @@ type agentTaskResult struct {
 	task      string
 	output    string
 	err       error
+	planText  string
 }
 
 // cachedTaskEntry stores a previously completed task and its output for dedup.
@@ -1911,13 +2367,15 @@ func formatTaskResults(results []agentTaskResult, totalTasks int, duplicateWarni
 	var b strings.Builder
 	successCount := 0
 	errorCount := 0
-	for i, r := range results {
+		for i, r := range results {
 		if i > 0 {
 			b.WriteString("\n\n---\n\n")
 		}
 		if r.err != nil {
 			errorCount++
 			b.WriteString(fmt.Sprintf("## Agent: %s\n**Status**: ERROR\n**Error**: %s", r.agentName, r.err))
+		} else if r.planText != "" {
+			b.WriteString(fmt.Sprintf("## Agent: %s\n**Status**: PLAN SUBMITTED\n**Todo ID**: %s\n\n%s", r.agentName, r.todoID, r.planText))
 		} else {
 			successCount++
 			b.WriteString(fmt.Sprintf("## Agent: %s\n**Status**: Success\n\n%s", r.agentName, r.output))
@@ -1962,6 +2420,14 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	if c.IsWrapUp() {
 		c.report(c.newEvent("step").withMessage("Wrap-up: refusing to start new tasks"))
 		return "", fmt.Errorf("wrap-up in progress: refusing to delegate new tasks. Call finish immediately with your best summary of work completed so far")
+	}
+
+	if c.forcePlanFirst {
+		for i := range tasks {
+			if tasks[i].PlanID == "" {
+				tasks[i].PlanFirst = true
+			}
+		}
 	}
 
 	c.round++
@@ -2119,6 +2585,13 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				c.storeTaskCache(agentKey, desc, output)
 			}
 			result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: output, err: err}
+			if err == nil && td.PlanFirst && td.PlanID == "" {
+				c.pendingPlansMu.Lock()
+				if pe := c.pendingPlans[tid]; pe != nil && pe.Status == "submitted" {
+					result.planText = pe.PlanText
+				}
+				c.pendingPlansMu.Unlock()
+			}
 			inflightMu.Lock()
 			inflight[cacheKey] <- result
 			inflightMu.Unlock()
@@ -2135,6 +2608,46 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].agentName < results[j].agentName
 	})
+
+	if c.forcePlanFirst {
+		for i := range results {
+			r := &results[i]
+			if r.planText == "" {
+				continue
+			}
+			for reviewCycle := 0; reviewCycle <= planReviewerMaxReviews+1; reviewCycle++ {
+				pr, err := c.getPlanReviewer(ctx, r.todoID)
+				if err != nil {
+					r.planText = ""
+					r.err = fmt.Errorf("plan reviewer failed: %w", err)
+					break
+				}
+				output, approved, err := pr.review(ctx, r.planText)
+				if err != nil {
+					r.planText = ""
+					r.err = fmt.Errorf("plan review failed: %w", err)
+					break
+				}
+				if approved {
+					r.planText = ""
+					r.output = output
+					break
+				}
+				c.pendingPlansMu.Lock()
+				entry := c.pendingPlans[r.todoID]
+				if entry != nil {
+					r.planText = entry.PlanText
+				} else {
+					r.planText = ""
+				}
+				c.pendingPlansMu.Unlock()
+				if r.planText == "" {
+					r.err = fmt.Errorf("plan rejected but no new plan submitted")
+					break
+				}
+			}
+		}
+	}
 
 	c.checkpointSTM()
 
@@ -2227,23 +2740,79 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	timing := &taskTiming{}
 	timing.reset()
 
-	ag, err := c.getOrCreateAgent(parentCtx, agentDef, task.Model)
-	if err != nil {
-		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
-		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
-		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", taskDesc, ""); err != nil {
-			log.Printf("warning: failed to write task file: %v", err)
+	if task.PlanFirst && task.PlanID == "" {
+		c.pendingPlansMu.Lock()
+		existing := c.pendingPlans[todoID]
+		c.pendingPlans[todoID] = &PlanEntry{
+			TodoID:      todoID,
+			Agent:       agentName,
+			Goal:        task.Goal,
+			Status:      "",
+			ReviewCount: func() int { if existing != nil { return existing.ReviewCount }; return 0 }(),
 		}
-		writeStatus(c.session.Workspace, agentName, "error", taskDesc)
-		return "", err
+		c.pendingPlansMu.Unlock()
 	}
 
-	prompt := "## Goal\n\n" + task.Goal
-	if task.Constraints != "" {
-		prompt += "\n\n## Constraints\n\n" + task.Constraints
+	var ag fantasy.Agent
+	if task.PlanFirst && task.PlanID == "" {
+		planAg, planErr := agent.CreateAgent(parentCtx, c.provider, agent.AgentConfig{
+			Def:        agentDef,
+			TeamConfig: &c.session.Config,
+			WorkDir:    c.projectDir,
+			MaxSteps:   agent.DefaultMaxSteps,
+		}, append(agent.SelectTools(c.coreTools, agentDef.Tools), &submitPlanTool{coordinator: c, todoID: todoID}))
+		if planErr != nil {
+			c.report(c.newEvent("error").withAgent(agentName).withMessage(planErr.Error()).withTodoID(todoID))
+			c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, planErr.Error())
+			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", taskDesc, "")
+			writeStatus(c.session.Workspace, agentName, "error", taskDesc)
+			return "", planErr
+		}
+		ag = planAg
+	} else {
+		var err error
+		ag, err = c.getOrCreateAgent(parentCtx, agentDef, task.Model)
+		if err != nil {
+			c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
+			c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
+			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", taskDesc, "")
+			writeStatus(c.session.Workspace, agentName, "error", taskDesc)
+			return "", err
+		}
 	}
-	prompt += "\n\nYou are a domain expert. Determine your own implementation approach based on the goal above."
+
+	var prompt string
+	if task.PlanFirst && task.PlanID != "" {
+		c.pendingPlansMu.Lock()
+		entry := c.pendingPlans[task.PlanID]
+		if entry == nil {
+			c.pendingPlansMu.Unlock()
+			return "", fmt.Errorf("plan not found for id %s", task.PlanID)
+		}
+		planText := entry.PlanText
+		c.pendingPlansMu.Unlock()
+
+		prompt = "## Goal\n\n" + task.Goal
+		if task.Constraints != "" {
+			prompt += "\n\n## Constraints\n\n" + task.Constraints
+		}
+		prompt += "\n\n## Approved Plan\n\n" + planText
+		prompt += "\n\n## Instructions\n\nExecute the approved plan above. You have already planned — now implement each step. Call finish when done."
+	} else if task.PlanFirst {
+		prompt = "## Goal\n\n" + task.Goal
+		if task.Constraints != "" {
+			prompt += "\n\n## Constraints\n\n" + task.Constraints
+		}
+		prompt += "\n\n## Instructions\n\nDraft a detailed task execution plan before doing any work. Your plan should be a numbered list of concrete, actionable steps with brief descriptions. Consider your skills, available tools, and the project context. Call `submit_plan` with your complete plan when ready. Do NOT execute any steps yet — only plan."
+	} else {
+		prompt = "## Goal\n\n" + task.Goal
+		if task.Constraints != "" {
+			prompt += "\n\n## Constraints\n\n" + task.Constraints
+		}
+		prompt += "\n\nYou are a domain expert. Determine your own implementation approach based on the goal above."
+	}
 
 	if suffix := c.buildSkillPromptPrefix(agentDef); suffix != "" {
 		prompt = prompt + "\n\n" + suffix
@@ -2308,6 +2877,23 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}()
 
 		if err == nil {
+			c.pendingPlansMu.Lock()
+			planEntry := c.pendingPlans[todoID]
+			c.pendingPlansMu.Unlock()
+			if planEntry != nil && planEntry.Status == "submitted" {
+				c.pendingPlansMu.Lock()
+				planEntry.Agent = agentName
+				planEntry.Goal = task.Goal
+				c.pendingPlansMu.Unlock()
+				c.taskTracker.TodoList().UpdateStatus(todoID, TaskPlanned, "")
+				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+				c.report(c.newEvent("step").withAgent(agentName).withMessage("plan submitted").withTodoID(todoID))
+				c.report(c.newEvent("done").withAgent(agentName).withMessage("plan submitted").withTodoID(todoID))
+				if c.forcePlanFirst {
+					return "", nil
+				}
+				return planEntry.PlanText, nil
+			}
 			if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "done", taskDesc, output); err != nil {
 				log.Printf("warning: failed to write task file: %v", err)
 			}
@@ -2420,8 +3006,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
 			timing.beginTool()
 			argsPreview := tc.Input
-			if len(argsPreview) > 2000 {
-				argsPreview = argsPreview[:2000] + "..."
+			if len(argsPreview) > 10000 {
+				r := []rune(argsPreview)
+				if len(r) > 10000 {
+					argsPreview = string(r[:10000]) + "..."
+				}
 			}
 			reportFn(c.newEvent("tool_call").withAgent(agentName).withTodoID(todoID).withTool(tc.ToolName, argsPreview))
 			llmLogStreamEvent(logWrite, "tool_call", formatToolCallContent(tc))
@@ -3015,6 +3604,11 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("- **constraints**: Non-obvious restrictions the worker must respect (e.g., 'must maintain backward compatibility')\n")
 	b.WriteString("- **task**: DEPRECATED — use 'goal' instead. Legacy task description.\n")
 	b.WriteString("- **summarize**: Set to `true` to condense the agent's output before returning. Use for tasks that may produce verbose output where only key points matter.\n")
+	if c.forcePlanFirst {
+		b.WriteString("- **plan_first**: ALWAYS `true` — the system handles plan review automatically. Agents will submit plans, a Plan Reviewer will approve or reject them, and you will only receive the final executed results. You never need to call approve_plan, modify_plan, or reject_plan — these are handled by the system.\n")
+	} else {
+		b.WriteString("- **plan_first**: Set to `true` for complex tasks where you want the agent to draft a plan before executing. The agent will call submit_plan with their plan. You MUST then review it and call approve_plan, modify_plan, or reject_plan. The plan submission includes a todo ID — use this ID for your review call.\n")
+	}
 	b.WriteString("```json\n")
 	b.WriteString("{\n")
 	b.WriteString("  \"tasks\": [\n")
@@ -3050,6 +3644,18 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("### finish\n")
 	b.WriteString("Signal completion and provide your final answer to the user. ALWAYS call this when you are done.\n**Important: Call stm_write with a session summary BEFORE calling finish.**\n")
 	b.WriteString("```json\n{\"response\": \"Your final synthesized answer to the user\"}\n```\n\n")
+
+	b.WriteString("### approve_plan\n")
+	b.WriteString("Approve a submitted task plan and execute it. The plan must have been submitted by an agent via submit_plan. The agent will immediately execute the approved plan.\n")
+	b.WriteString("```json\n{\"todo_id\": \"the-plan-todo-id\"}\n```\n\n")
+
+	b.WriteString("### modify_plan\n")
+	b.WriteString("Modify a submitted plan (correct or improve it) and then execute the modified version. Provide the corrected plan as a numbered list.\n")
+	b.WriteString("```json\n{\"todo_id\": \"the-plan-todo-id\", \"plan\": \"1. First step\\n2. Second step\\n...\"}\n```\n\n")
+
+	b.WriteString("### reject_plan\n")
+	b.WriteString("Reject a submitted plan with a reason. The agent will see your reason and re-plan accordingly.\n")
+	b.WriteString("```json\n{\"todo_id\": \"the-plan-todo-id\", \"reason\": \"why the plan was rejected and what needs to change\"}\n```\n\n")
 	b.WriteString("### ask_user\n")
 	b.WriteString("Ask the user a question when you need clarification before proceeding.\n\n")
 
@@ -3392,9 +3998,27 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 }
 
 func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
+	if c.forcePlanFirst {
+		orchTools := []fantasy.AgentTool{
+			c.RunAgentsTool(),
+			&finishTool{coordinator: c},
+			&loadSkillTool{coordinator: c},
+			&saveSkillTool{coordinator: c},
+		}
+		for _, t := range c.coreTools {
+			name := t.Info().Name
+			if name == "ask_user" || name == "stm_write" || name == "ltm_update" {
+				orchTools = append(orchTools, t)
+			}
+		}
+		return orchTools
+	}
 	orchTools := []fantasy.AgentTool{
 		c.RunAgentsTool(),
 		&finishTool{coordinator: c},
+		&approvePlanTool{coordinator: c},
+		&modifyPlanTool{coordinator: c},
+		&rejectPlanTool{coordinator: c},
 		&loadSkillTool{coordinator: c},
 		&saveSkillTool{coordinator: c},
 	}

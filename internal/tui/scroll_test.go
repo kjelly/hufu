@@ -27,7 +27,7 @@ func testModel(items []*team.TodoItem, height int) Model {
 		width:   80,
 		col:     0,
 		row:     0,
-		scrollOff: [5]int{},
+		scrollOff: [6]int{},
 	}
 	return m
 }
