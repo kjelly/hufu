@@ -122,13 +122,13 @@ func formatSTMDoneEntry(agentName, taskDesc, summary string) string {
 	if shortSummary != "" {
 		shortSummary = ": " + truncateString(shortSummary, 120)
 	}
-	return fmt.Sprintf("- %s %s%s", agentName, shortDesc, shortSummary)
+	return strings.TrimSpace(fmt.Sprintf("- %s %s%s", agentName, shortDesc, shortSummary))
 }
 
 func formatSTMErrorEntry(agentName, taskDesc, errMsg string) string {
 	shortDesc := truncateString(taskDesc, 80)
 	shortErr := truncateString(errMsg, 120)
-	return fmt.Sprintf("- [FAILED] %s %s: %s", agentName, shortDesc, shortErr)
+	return strings.TrimSpace(fmt.Sprintf("- [FAILED] %s %s: %s", agentName, shortDesc, shortErr))
 }
 
 func formatSTMFinding(agentName, finding string) string {
@@ -136,7 +136,7 @@ func formatSTMFinding(agentName, finding string) string {
 	if len([]rune(shortFinding)) > 120 {
 		shortFinding = string([]rune(shortFinding)[:120]) + "..."
 	}
-	return fmt.Sprintf("- %s: %s", agentName, shortFinding)
+	return strings.TrimSpace(fmt.Sprintf("- %s: %s", agentName, shortFinding))
 }
 
 func formatSTMDecision(agentName, decision string) string {
@@ -144,7 +144,7 @@ func formatSTMDecision(agentName, decision string) string {
 	if len([]rune(shortDecision)) > 120 {
 		shortDecision = string([]rune(shortDecision)[:120]) + "..."
 	}
-	return fmt.Sprintf("- %s: %s", agentName, shortDecision)
+	return strings.TrimSpace(fmt.Sprintf("- %s: %s", agentName, shortDecision))
 }
 
 func filterSTMSectionsByRole(sections []STMSection, role string) []STMSection {

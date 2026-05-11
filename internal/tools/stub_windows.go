@@ -15,6 +15,8 @@ import (
 // ToolOption and ToolConfig stubs for Windows build
 type ToolOption func(*ToolConfig)
 
+type PathReviewer func(ctx context.Context, command string, path string) (bool, error)
+
 type ToolConfig struct {
 	WorkDir         string
 	AllowedPaths    []string
@@ -87,6 +89,7 @@ func ApplyOptions(opts []ToolOption) ToolConfig { return ToolConfig{} }
 func AllTools(opts ...ToolOption) []fantasy.AgentTool { return []fantasy.AgentTool{} }
 func FilterTools(all []fantasy.AgentTool, allowed map[string]bool) []fantasy.AgentTool { return all }
 func SetGuardReviewer(tools []fantasy.AgentTool, fn GuardReviewFn) {}
+func SetPathReviewer(tools []fantasy.AgentTool, fn PathReviewer)  {}
 
 type GuardReviewFn func(ctx context.Context, toolName string, args string, rules []string) (approved bool, reason string, err error)
 
@@ -104,10 +107,11 @@ type AskUserTUIOption struct {
 var StdinMu sync.Mutex
 
 type coreTool struct {
-	info    fantasy.ToolInfo
-	handler func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error)
-	pOpts   fantasy.ProviderOptions
-	hooks   *hooks.HookRegistry
+	info         fantasy.ToolInfo
+	handler      func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error)
+	pOpts        fantasy.ProviderOptions
+	hooks        *hooks.HookRegistry
+	pathReviewer PathReviewer
 }
 
 func (t *coreTool) Info() fantasy.ToolInfo                            { return t.info }

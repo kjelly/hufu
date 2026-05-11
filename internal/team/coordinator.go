@@ -232,7 +232,11 @@ func (c *Coordinator) buildCompletedTasksSummary() string {
 	var parts []string
 	for _, item := range items {
 		if item.Status == TaskDone {
-			parts = append(parts, fmt.Sprintf("- [Done] %s: %s", item.Agent, item.Desc))
+			res := ""
+			if item.Detail != "" {
+				res = ": " + item.Detail
+			}
+			parts = append(parts, fmt.Sprintf("- [Done] %s: %s%s", item.Agent, item.Desc, res))
 		}
 	}
 	if len(parts) == 0 {
@@ -886,6 +890,9 @@ func (c *Coordinator) AutoExtractLTM() {
 	if stmContent == "" {
 		return
 	}
+
+	c.ltmWriteMu.Lock()
+	defer c.ltmWriteMu.Unlock()
 
 	existingLTM := LoadLTM(teamDir)
 	sections := ParseSTMSections(stmContent)
@@ -1643,7 +1650,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		return "", fmt.Errorf("sub-agent failed (model: %s): %w", subModel, err)
 	}
 
-	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
+	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, extractSummary(output, 300))
 	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(name).withOutput(output).withMessage("completed").withModel(subModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
@@ -2565,7 +2572,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			if !td.Sidecar && !td.Summarize {
 				if cached, ok := c.lookupTaskCache(ctx, agentKey, desc); ok {
 					c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(desc).withTodoID(tid))
-					c.taskTracker.TodoList().UpdateStatus(tid, TaskDone, "")
+					c.taskTracker.TodoList().UpdateStatus(tid, TaskDone, extractSummary(cached, 300))
 					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 					result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: cached}
 					inflightMu.Lock()
@@ -2901,7 +2908,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			}
 			_ = writeStatus(c.session.Workspace, agentName, "done", taskDesc)
 			duration, modelTime, toolTime := timing.snapshot()
-			c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
+			c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, extractSummary(output, 300))
 			c.updateTodoTiming(todoID, modelTime, toolTime)
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.report(c.newEvent("done").withAgent(agentName).withOutput(output).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
@@ -2978,7 +2985,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		return "", fmt.Errorf("sidecar execution failed (model: %s): %w", c.sidecarModel, err)
 	}
 
-	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
+	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, extractSummary(result, 300))
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(result).withMessage("sidecar completed").withTodoID(todoID))
 	return result, nil
@@ -3991,7 +3998,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		log.Printf("warning: failed to write task file: %v", err)
 	}
 	_ = writeStatus(c.session.Workspace, resolvedName, "done", task)
-	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, "")
+	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, extractSummary(output, 300))
 	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(resolvedName).withOutput(output).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
