@@ -114,16 +114,18 @@ type PlanEntry struct {
 
 const planReviewerMaxReviews = 3
 
-const planReviewerSystemPrompt = `You are a Plan Reviewer. Review agent-submitted execution plans against the original user requirement.
+const planReviewerSystemPrompt = `You are a Plan Reviewer. Review agent-submitted execution plans against the original user requirement and the submitting agent's capabilities.
 
 Input:
+- SUBMITTING AGENT: The agent that submitted the plan (name, role, description, available tools, skills)
 - USER REQUIREMENT: The original task goal
 - COMPLETED TASKS: Previously completed tasks with their results (to detect actual duplication)
 - PLAN: The agent's proposed execution plan
 
 Rules:
-1. APPROVE: The plan is clear, addresses the USER REQUIREMENT, and is not a true duplicate of completed work. Approval is the DEFAULT — only reject when there is clear evidence of duplication.
-2. REJECT only when: the plan repeats the EXACT SAME work that was already completed (same deliverable, same file, same outcome). Do NOT reject because tasks share a category (e.g., "writing files" is normal — multiple files are different work). Provide a SPECIFIC reason referencing which completed task it duplicates.
+1. APPROVE: The plan is clear, addresses the USER REQUIREMENT, and is not a true duplicate of completed work. Approval is the DEFAULT — only reject when there is clear evidence of a problem.
+2. MATCH: Verify the plan is executable by the SUBMITTING AGENT. The agent can ONLY use the tools listed in its profile. Reject plans that require tools the agent does not have.
+3. REJECT only when: the plan repeats the EXACT SAME work that was already completed (same deliverable, same file, same outcome) OR requires tools the agent does not have. Do NOT reject because tasks share a category. Provide a SPECIFIC reason.
 
 Creating files, writing documents, generating code — these are legitimate execution plans. APPROVE them.
 
@@ -190,7 +192,16 @@ func (pr *planReviewer) review(ctx context.Context, planText string) (string, bo
 	}
 
 	completedTasks := c.buildCompletedTasksSummary()
-	prompt := fmt.Sprintf("## USER REQUIREMENT\n\n%s\n\n## COMPLETED TASKS\n\n%s\n\n## PLAN\n\n%s", goal, completedTasks, planText)
+	agentName := entry.Agent
+	agentDef, _, _ := c.resolveAgentName(agentName)
+	var agentInfo string
+	if agentDef != nil {
+		agentInfo = fmt.Sprintf("Name: %s\nRole: %s\nDescription: %s\nTools: %s\nSkills: %s",
+			agentDef.Name, agentDef.Role, agentDef.Description, agentDef.Tools, agentDef.Skills)
+	} else {
+		agentInfo = fmt.Sprintf("Name: %s\n(could not resolve agent definition)", agentName)
+	}
+	prompt := fmt.Sprintf("## SUBMITTING AGENT\n\n%s\n\n## USER REQUIREMENT\n\n%s\n\n## COMPLETED TASKS\n\n%s\n\n## PLAN\n\n%s", agentInfo, goal, completedTasks, planText)
 
 	c.report(c.newEvent("step").withMessage("plan reviewer evaluating plan").withTodoID(pr.todoID))
 	result, _, err := c.runAgentWithStatusAndHistory(ctx, pr.agent, "plan-reviewer", prompt, nil, &taskTiming{})

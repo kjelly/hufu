@@ -561,6 +561,20 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 		}
 	}
 
+	builtInGP := &agent.AgentDef{
+		Name:        "General-Purpose Agent",
+		FileAlias:   "general-purpose",
+		Description: "Versatile worker for text processing, string comparison, file I/O, calculations, and miscellaneous tasks",
+		Role:        "worker",
+		Tools:       "view,write,edit,multiedit,grep,glob,ls,lua,golang,random",
+		System:      "You are a general-purpose utility agent. You handle text processing, string comparisons, file reading/writing, mathematical calculations via Lua/Golang, and miscellaneous tasks that don't require specialized domain knowledge. Be thorough and precise.",
+		MaxRetries:  -1,
+		Generation:  cfg.Generation,
+		ProviderURL: cfg.ProviderURL,
+	}
+	session.Agents["general-purpose"] = builtInGP
+	session.Agents["general-purpose agent"] = builtInGP
+
 	if len(session.Agents) == 0 {
 		return nil, fmt.Errorf("no valid agent .md files found in %s", absDir)
 	}
