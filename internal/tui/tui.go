@@ -81,8 +81,9 @@ var (
 	selectedFg  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
 	selectedBg  = lipgloss.NewStyle().Background(lipgloss.Color("237"))
 
-	pendingIcon  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	progressIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	pendingIcon   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	progressIcon  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	pausedIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	doneIcon     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	errorIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	skippedIcon  = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("8"))
@@ -303,7 +304,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// todos_updated event. This is a safety net for any stragglers.
 		for i, t := range m.tasks {
 			switch t.Status {
-			case team.TaskInProgress:
+			case team.TaskInProgress, team.TaskPaused:
 				m.tasks[i].Status = team.TaskDone
 			case team.TaskPending, team.TaskPlanned:
 				m.tasks[i].Status = team.TaskSkipped
@@ -1284,6 +1285,8 @@ func taskIconStyle(s team.TaskStatus) (string, lipgloss.Style) {
 		return "—", skippedIcon
 	case team.TaskPlanned:
 		return "◎", dimStyle
+	case team.TaskPaused:
+		return "◐", pausedIcon
 	}
 	return "○", pendingIcon
 }
@@ -1855,7 +1858,7 @@ func (m Model) colItems(col int) []*team.TodoItem {
 			out = append(out, t)
 		case col == 1 && t.Status == team.TaskPlanned:
 			out = append(out, t)
-		case col == 2 && t.Status == team.TaskInProgress:
+		case col == 2 && (t.Status == team.TaskInProgress || t.Status == team.TaskPaused):
 			out = append(out, t)
 		case col == 3 && t.Status == team.TaskDone:
 			out = append(out, t)

@@ -173,14 +173,14 @@ func RunAgent(ctx context.Context, agent fantasy.Agent, prompt string) (string, 
 }
 
 var alwaysIncludeTools = map[string]bool{
-	"agent":        true,
-	"todo":         true,
-	"random":       true,
-	"memory_save":  true,
-	"memory_query": true,
-	"load_skill":   true,
-	"stm_write":    true,
-	"ltm_update":   true,
+	"request_agent": true,
+	"todo":          true,
+	"random":        true,
+	"memory_save":   true,
+	"memory_query":  true,
+	"load_skill":    true,
+	"stm_write":     true,
+	"ltm_update":    true,
 }
 
 func SelectTools(allTools []fantasy.AgentTool, toolNames string) []fantasy.AgentTool {

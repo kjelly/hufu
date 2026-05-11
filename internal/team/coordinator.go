@@ -519,7 +519,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	}
 
 	c.coreTools = append(c.coreTools,
-		&workerAgentTool{coordinator: c},
+		&requestAgentTool{coordinator: c},
 		&todoTool{coordinator: c},
 		&loadSkillTool{coordinator: c},
 		&saveSkillTool{coordinator: c},
@@ -1514,157 +1514,172 @@ func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	return fantasy.NewTextErrorResponse(fmt.Sprintf("skill %q not found (available: %v)", args.Name, available)), nil
 }
 
-type workerAgentTool struct {
+type requestAgentTool struct {
 	coordinator *Coordinator
 	pOpts       fantasy.ProviderOptions
 }
 
-func (t *workerAgentTool) Info() fantasy.ToolInfo {
+func (t *requestAgentTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
-		Name:        "agent",
-		Description: "Create a sub-agent to execute a specific task. The sub-agent inherits the same tool set as you. Returns the sub-agent's output.",
+		Name:        "request_agent",
+		Description: "Request the coordinator to delegate a task to another agent. Describe what needs to be done (goal) and any constraints. The coordinator will select the best agent and return the result. You are paused until the result is ready.",
 		Parameters: map[string]any{
-			"name": map[string]any{
+			"goal": map[string]any{
 				"type":        "string",
-				"description": "A descriptive name for this sub-agent invocation",
+				"description": "The goal of the task — what should be achieved",
 			},
-			"task": map[string]any{
+			"constraints": map[string]any{
 				"type":        "string",
-				"description": "The task description for the sub-agent to execute",
+				"description": "Non-obvious restrictions the sub-agent must respect",
 			},
 		},
-		Required: []string{"name", "task"},
+		Required: []string{"goal"},
 	}
 }
 
-func (t *workerAgentTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
-func (t *workerAgentTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
+func (t *requestAgentTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
+func (t *requestAgentTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
 
-func (t *workerAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
-		Name string `json:"name"`
-		Task string `json:"task"`
+		Goal        string `json:"goal"`
+		Constraints string `json:"constraints"`
 	}
 	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
 	}
-	if args.Name == "" {
-		return fantasy.NewTextErrorResponse("name is required"), nil
-	}
-	if args.Task == "" {
-		return fantasy.NewTextErrorResponse("task is required"), nil
+	if args.Goal == "" {
+		return fantasy.NewTextErrorResponse("goal is required"), nil
 	}
 
 	callerName := t.coordinator.GetCurrentAgent()
-	subAgentLabel := callerName + "/" + args.Name
+	parentID := t.coordinator.GetCurrentTodoID()
 
-	result, err := t.coordinator.ExecuteSubAgent(ctx, subAgentLabel, args.Task)
+	taskDesc := args.Goal
+	if args.Constraints != "" {
+		taskDesc += "\nconstraints: " + args.Constraints
+	}
+
+	c := t.coordinator
+	selected, err := c.selectAgentForGoal(ctx, args.Goal)
 	if err != nil {
-		return fantasy.NewTextErrorResponse(err.Error()), nil
-	}
-	return fantasy.NewTextResponse(result), nil
-}
-
-func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task string) (string, error) {
-	if c.IsWrapUp() {
-		return "", fmt.Errorf("wrap-up in progress: cannot create sub-agent")
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("could not select agent: %v", err)), nil
 	}
 
-	subModel := c.resolveAgentModel(&agent.AgentDef{
-		Generation:  c.session.Config.Generation,
-		ProviderURL: c.session.Config.ProviderURL,
-	}, "")
+	subLabel := callerName + "/" + selected
 
-	parentID := c.GetCurrentTodoID()
 	todoItems := c.taskTracker.TodoList().AddBatch([]struct {
 		Agent    string
 		Desc     string
 		Model    string
 		Source   string
 		ParentID string
-	}{{Agent: name, Desc: task, Model: subModel, Source: TaskSourceSubagent, ParentID: parentID}})
-	todoID := todoItems[0].ID
+	}{{Agent: subLabel, Desc: taskDesc, Model: "", Source: TaskSourceSubagent, ParentID: parentID}})
+	subTodoID := todoItems[0].ID
 
-	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
+	c.taskTracker.TodoList().UpdateStatus(subTodoID, TaskInProgress, "")
+	if parentID != "" {
+		c.taskTracker.TodoList().UpdateStatus(parentID, TaskPaused, "")
+	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("start").withAgent(name).withMessage(task).withModel(subModel).withTodoID(todoID))
+	c.report(c.newEvent("start").withAgent(subLabel).withMessage(taskDesc).withTodoID(subTodoID))
 
-	def := &agent.AgentDef{
-		Name:        name,
-		Description: "Sub-agent for task: " + task,
-		Role:        "worker",
-		Tools:       "",
-		System:      "You are a sub-agent. Complete the assigned task efficiently. Use the tools available to you.",
-		MaxRetries:  -1,
-		Generation:  c.session.Config.Generation,
-		ProviderURL: c.session.Config.ProviderURL,
+	output, err := c.ExecuteSubAgent(ctx, selected, args.Goal, args.Constraints)
+	if err != nil {
+		c.taskTracker.TodoList().UpdateStatus(subTodoID, TaskError, err.Error())
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 
-	def = c.injectWorkerContext(ctx, def)
+	if parentID != "" {
+		c.taskTracker.TodoList().UpdateStatus(parentID, TaskInProgress, "")
+	}
+	c.taskTracker.TodoList().UpdateStatus(subTodoID, TaskDone, "")
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
-	agentTools := agent.SelectTools(c.coreTools, def.Tools)
-	if c.mcpManager != nil {
-		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
+	return fantasy.NewTextResponse(output), nil
+}
+
+func (c *Coordinator) selectAgentForGoal(ctx context.Context, goal string) (string, error) {
+	s := c.Sidecar()
+	workers := c.uniqueWorkerDefs()
+	if len(workers) == 0 {
+		return "", fmt.Errorf("no workers available")
+	}
+	if len(workers) == 1 {
+		return workers[0].Name, nil
+	}
+
+	var workersList strings.Builder
+	for _, w := range workers {
+		fmt.Fprintf(&workersList, "- %s", w.Name)
+		if w.Description != "" {
+			fmt.Fprintf(&workersList, ": %s", w.Description)
+		}
+		if w.Tools != "" {
+			fmt.Fprintf(&workersList, " (tools: %s)", w.Tools)
+		}
+		workersList.WriteString("\n")
+	}
+
+	if s != nil {
+		prompt := fmt.Sprintf("Select the single best agent name for this task:\n\nGoal: %s\n\nAvailable agents:\n%s\nReturn ONLY the agent name.", goal, workersList.String())
+		selection, err := s.Execute(ctx, prompt)
+		if err == nil {
+			selection = strings.TrimSpace(selection)
+			for _, w := range workers {
+				if strings.EqualFold(w.Name, selection) {
+					return w.Name, nil
+				}
+			}
+		}
+	}
+
+	for _, w := range workers {
+		if strings.Contains(strings.ToLower(w.Description), "general") || strings.Contains(strings.ToLower(w.Name), "general-purpose") {
+			return w.Name, nil
+		}
+	}
+	return workers[0].Name, nil
+}
+
+func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task string, constraints string) (string, error) {
+	if c.IsWrapUp() {
+		return "", fmt.Errorf("wrap-up in progress: cannot create sub-agent")
+	}
+
+	taskDesc := task
+	if constraints != "" {
+		taskDesc += "\nconstraints: " + constraints
+	}
+	agentDef, _, err := c.resolveAgentName(name)
+	if err != nil {
+		agentDef = &agent.AgentDef{
+			Name:        name,
+			Description: "Sub-agent for: " + taskDesc,
+			Role:        "worker",
+			Tools:       "",
+			MaxRetries:  -1,
+		}
 	}
 
 	ag, err := agent.CreateAgent(ctx, c.provider, agent.AgentConfig{
-		Def:        def,
+		Def:        agentDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
 		MaxSteps:   agent.DefaultMaxSteps,
-	}, agentTools)
+	}, agent.SelectTools(c.coreTools, agentDef.Tools))
 	if err != nil {
-		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
-		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		c.report(c.newEvent("error").withAgent(name).withMessage(err.Error()).withTodoID(todoID))
-		return "", fmt.Errorf("failed to create sub-agent: %w", err)
-	}
-
-	agentTimeout := time.Duration(c.session.Config.Timeout) * time.Second
-	taskCtx, cancel := context.WithTimeout(ctx, agentTimeout)
-	defer cancel()
-
-	taskPrompt := task
-	skillSuggestion, skillNames := c.buildSuggestedSkillsText(def, name, task)
-	if skillSuggestion != "" {
-		c.taskTracker.TodoList().SetInjectedSkills(todoID, skillNames)
-		taskPrompt = taskPrompt + "\n\n" + skillSuggestion
-	}
-
-	if suffix := c.buildMemorySuffix("worker"); suffix != "" {
-		taskPrompt = taskPrompt + "\n\n" + suffix
+		return "", fmt.Errorf("failed to create sub-agent %q: %w", name, err)
 	}
 
 	timing := &taskTiming{}
 	timing.reset()
 
-	prevAgent := c.GetCurrentAgent()
-	prevTask := c.GetCurrentTask()
-	prevTodoID := c.GetCurrentTodoID()
-	c.SetCurrentAgent(name)
-	c.SetCurrentTask(task)
-	c.SetCurrentTodoID(todoID)
-	defer func() {
-		c.SetCurrentAgent(prevAgent)
-		c.SetCurrentTask(prevTask)
-		c.SetCurrentTodoID(prevTodoID)
-	}()
-	taskCtx = context.WithValue(taskCtx, modelKey{}, subModel)
-	output, _, err := c.runAgentWithStatusAndHistory(taskCtx, ag, name, taskPrompt, nil, timing)
-
-	duration, modelTime, toolTime := timing.snapshot()
+	output, _, err := c.runAgentWithStatusAndHistory(ctx, ag, name, taskDesc, nil, timing)
 	if err != nil {
-		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
-		c.updateTodoTiming(todoID, modelTime, toolTime)
-		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		c.report(c.newEvent("error").withAgent(name).withMessage(err.Error()).withModel(subModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
-		return "", fmt.Errorf("sub-agent failed (model: %s): %w", subModel, err)
+		return "", err
 	}
-
-	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, extractSummary(output, 300))
-	c.updateTodoTiming(todoID, modelTime, toolTime)
-	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("done").withAgent(name).withOutput(output).withMessage("completed").withModel(subModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 	return output, nil
 }
 
@@ -4094,7 +4109,7 @@ func (c *Coordinator) finalizeRemainingTasks() {
 	changed := false
 	for _, item := range items {
 		switch item.Status {
-		case TaskInProgress:
+		case TaskInProgress, TaskPaused:
 			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskError, "coordinator ended unexpectedly")
 			changed = true
 		case TaskPending:
@@ -4119,7 +4134,7 @@ func (c *Coordinator) finalizeNormalCompletion() {
 		case TaskPending:
 			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "")
 			changed = true
-		case TaskInProgress:
+		case TaskInProgress, TaskPaused:
 			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "still in progress at completion")
 			changed = true
 		}

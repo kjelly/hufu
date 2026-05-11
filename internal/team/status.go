@@ -95,6 +95,7 @@ const (
 	TaskError      TaskStatus = "error"
 	TaskSkipped    TaskStatus = "skipped"
 	TaskPlanned    TaskStatus = "planned"
+	TaskPaused     TaskStatus = "paused"
 )
 
 const (
