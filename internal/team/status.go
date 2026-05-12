@@ -174,9 +174,15 @@ func (tl *TodoList) UpdateStatus(id string, status TaskStatus, detail string) {
 	defer tl.mu.Unlock()
 	for _, ti := range tl.items {
 		if ti.ID == id {
-			// 防止已完成的任務被改回 IN_PROGRESS
-			// 已完成或錯誤的任務應該保持終態，新任務應該創建新的 TODO item
-			if (ti.Status == TaskDone || ti.Status == TaskError) && status == TaskInProgress {
+			// TaskDone and TaskSkipped are terminal states.
+			// TaskError can transition to TaskInProgress for retries.
+			if ti.Status == TaskDone || ti.Status == TaskSkipped {
+				if status != ti.Status {
+					return
+				}
+			}
+			// TaskError can only transition to TaskInProgress (for retries)
+			if ti.Status == TaskError && status != TaskInProgress && status != TaskError {
 				return
 			}
 			ti.Status = status

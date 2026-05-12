@@ -178,7 +178,7 @@ func (pr *planReviewer) review(ctx context.Context, planText string) (string, bo
 	entry := c.pendingPlans[pr.todoID]
 	if entry == nil {
 		c.pendingPlansMu.Unlock()
-		return "", false, fmt.Errorf("plan entry not found for %s", pr.todoID)
+		return "", true, nil
 	}
 	goal := entry.Goal
 	entry.ReviewCount++
@@ -208,6 +208,16 @@ func (pr *planReviewer) review(ctx context.Context, planText string) (string, bo
 	if err != nil {
 		return "", false, err
 	}
+
+	// Check if the plan was approved and executed during review
+	// (autoApprovePlan deletes the entry after successful execution)
+	c.pendingPlansMu.Lock()
+	entry = c.pendingPlans[pr.todoID]
+	c.pendingPlansMu.Unlock()
+	if entry == nil {
+		return result, true, nil
+	}
+
 	return result, false, nil
 }
 
@@ -235,6 +245,12 @@ func (c *Coordinator) autoApprovePlan(ctx context.Context, todoID string) string
 	if err != nil {
 		return fmt.Sprintf("Plan execution failed: %v", err)
 	}
+
+	// Clean up plan entry after successful execution to prevent re-review
+	c.pendingPlansMu.Lock()
+	delete(c.pendingPlans, todoID)
+	c.pendingPlansMu.Unlock()
+
 	return output
 }
 
@@ -244,7 +260,7 @@ func (c *Coordinator) buildTaskStatusContext() string {
 		return "No tasks have been delegated yet.\n"
 	}
 
-	var done, inProgress, pending, skipped, planned, errored []string
+	var done, inProgress, pending, skipped, planned, errored, paused []string
 
 	for _, item := range items {
 		extra := ""
@@ -257,6 +273,8 @@ func (c *Coordinator) buildTaskStatusContext() string {
 			done = append(done, entry)
 		case TaskInProgress:
 			inProgress = append(inProgress, entry)
+		case TaskPaused:
+			paused = append(paused, entry)
 		case TaskPending:
 			pending = append(pending, entry)
 		case TaskSkipped:
@@ -269,10 +287,15 @@ func (c *Coordinator) buildTaskStatusContext() string {
 	}
 
 	var b strings.Builder
+	// Completed tasks first with warning
 	if len(done) > 0 {
-		fmt.Fprintf(&b, "Completed (%d):\n%s\n", len(done), strings.Join(done, "\n"))
+		fmt.Fprintf(&b, "⚠️ COMPLETED - DO NOT RE-DELEGATE (%d):\n%s\n", len(done), strings.Join(done, "\n"))
 	} else {
-		b.WriteString("Completed (0)\n")
+		b.WriteString("⚠️ COMPLETED - DO NOT RE-DELEGATE (0)\n")
+	}
+	// Paused tasks (waiting for sub-agent)
+	if len(paused) > 0 {
+		fmt.Fprintf(&b, "⏸️ PAUSED - Waiting for sub-agent (%d):\n%s\n", len(paused), strings.Join(paused, "\n"))
 	}
 	if len(inProgress) > 0 {
 		fmt.Fprintf(&b, "In Progress (%d):\n%s\n", len(inProgress), strings.Join(inProgress, "\n"))
@@ -1608,6 +1631,15 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 
 	subLabel := callerName + "/" + selected
 
+	// Check for semantic duplicate before creating sub-agent
+	agentKey := strings.ToLower(selected)
+	if cachedOutput, cachedDesc, ok := c.lookupTaskCacheAllGenerations(ctx, agentKey, taskDesc); ok {
+		log.Printf("[WARN] request_agent duplicate detected: agent=%q, task=%q, similar to=%q", selected, taskDesc, cachedDesc)
+		return fantasy.NewTextErrorResponse(
+			fmt.Sprintf("duplicate task detected: '%s' is semantically similar to completed task '%s'. Reference existing result (ID: %s) instead.", truncateTaskDesc(taskDesc), truncateTaskDesc(cachedDesc), cachedOutput),
+		), nil
+	}
+
 	todoItems := c.taskTracker.TodoList().AddBatch([]struct {
 		Agent    string
 		Desc     string
@@ -1853,16 +1885,23 @@ func (t *todoTool) handleUpdate(callerName string, id string, status string, det
 	switch status {
 	case "in_progress":
 		taskStatus = TaskInProgress
-		// 防止將已完成的任務改回 IN_PROGRESS
-		if targetItem.Status == TaskDone || targetItem.Status == TaskError {
-			return fantasy.NewTextErrorResponse(
-				fmt.Sprintf("cannot update completed TODO %q (status: %s) back to in_progress: create a new task instead", id, targetItem.Status),
-			), nil
-		}
 	case "done":
 		taskStatus = TaskDone
 	default:
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid status %q (valid: in_progress, done)", status)), nil
+	}
+
+	// TaskDone and TaskSkipped are terminal states - cannot be updated.
+	// TaskError can only be updated to in_progress (for retries).
+	if targetItem.Status == TaskDone || targetItem.Status == TaskSkipped {
+		return fantasy.NewTextErrorResponse(
+			fmt.Sprintf("cannot update completed TODO %q (status: %s): create a new task instead", id, targetItem.Status),
+		), nil
+	}
+	if targetItem.Status == TaskError && status != "in_progress" {
+		return fantasy.NewTextErrorResponse(
+			fmt.Sprintf("cannot update error TODO %q to %s: only in_progress is allowed for retries", id, status),
+		), nil
 	}
 
 	t.coordinator.taskTracker.TodoList().UpdateStatus(id, taskStatus, detail)
@@ -2428,6 +2467,68 @@ func (c *Coordinator) lookupTaskCache(ctx context.Context, agentKey, newTask str
 	return "", false
 }
 
+// lookupTaskCacheAllGenerations checks for semantically similar tasks across ALL
+// generations (not just current). This is used for duplicate detection before
+// delegating tasks.
+//
+// Lookup order:
+//  1. Exact match across all generations (fast path)
+//  2. Sidecar semantic similarity across all generations (slower, requires LLM call)
+//
+// Returns (cachedOutput, cachedTaskDesc, true) on a hit.
+func (c *Coordinator) lookupTaskCacheAllGenerations(ctx context.Context, agentKey, newTask string) (string, string, bool) {
+	c.taskResultCacheMu.RLock()
+	all := c.taskResultCache[agentKey]
+	c.taskResultCacheMu.RUnlock()
+
+	if len(all) == 0 {
+		return "", "", false
+	}
+
+	normalizedNew := strings.ToLower(strings.Join(strings.Fields(newTask), " "))
+
+	// Step 1: exact match across all generations
+	for _, e := range all {
+		norm := strings.ToLower(strings.Join(strings.Fields(e.taskDesc), " "))
+		if norm == normalizedNew {
+			return e.output, e.taskDesc, true
+		}
+	}
+
+	// Step 2: sidecar semantic similarity across all generations
+	s := c.Sidecar()
+	if s == nil {
+		return "", "", false
+	}
+
+	// Limit to last 100 entries to avoid overwhelming the sidecar
+	startIdx := 0
+	if len(all) > 100 {
+		startIdx = len(all) - 100
+	}
+	recentEntries := all[startIdx:]
+
+	pastDescs := make([]string, len(recentEntries))
+	for i, e := range recentEntries {
+		pastDescs[i] = e.taskDesc
+	}
+
+	sidecarCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	if c.think {
+		c.emitThinkSidecar("SimilarTask", fmt.Sprintf("checking semantic similarity across all history: %.50s", newTask))
+	}
+	idx, err := s.SimilarTask(sidecarCtx, newTask, pastDescs)
+	if err != nil {
+		return "", "", false
+	}
+	if idx >= 0 && idx < len(recentEntries) {
+		return recentEntries[idx].output, recentEntries[idx].taskDesc, true
+	}
+	return "", "", false
+}
+
 const maxTaskCacheEntries = 50
 
 // storeTaskCache saves a completed task result so future similar tasks within
@@ -2451,16 +2552,30 @@ func (c *Coordinator) checkDuplicateTasks(tasks []TaskDef) ([]string, map[int]bo
 	duplicates := make(map[int]bool)
 	c.delegatedTasksMu.Lock()
 	defer c.delegatedTasksMu.Unlock()
+
 	for i, t := range tasks {
 		desc := t.Goal
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
 		}
+
+		// Check 1: exact duplicate (across all rounds)
 		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(desc)
 		c.delegatedTasks[key]++
 		if c.delegatedTasks[key] > 1 {
-			warnings = append(warnings, fmt.Sprintf("%s (agent=%s, count=%d)", truncateTaskDesc(desc), t.Agent, c.delegatedTasks[key]))
+			warnings = append(warnings, fmt.Sprintf("EXACT DUPLICATE: %s (agent=%s, count=%d)", truncateTaskDesc(desc), t.Agent, c.delegatedTasks[key]))
 			duplicates[i] = true
+			continue
+		}
+
+		// Check 2: semantic duplicate (across all generations)
+		agentKey := strings.ToLower(t.Agent)
+		if cachedOutput, cachedDesc, ok := c.lookupTaskCacheAllGenerations(context.Background(), agentKey, desc); ok {
+			warnings = append(warnings, fmt.Sprintf("SEMANTIC DUPLICATE: %s (similar to completed task: %q)", truncateTaskDesc(desc), truncateTaskDesc(cachedDesc)))
+			duplicates[i] = true
+			log.Printf("[WARN] duplicate task detected: agent=%q, task=%q, similar to=%q", t.Agent, desc, cachedDesc)
+		} else {
+			_ = cachedOutput
 		}
 	}
 	return warnings, duplicates
@@ -2640,10 +2755,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		go func(td TaskDef, tid string, dup bool) {
 			defer wg.Done()
 			if dup {
-				c.taskTracker.TodoList().UpdateStatus(tid, TaskSkipped, "same agent+goal already delegated in a previous round")
+				errMsg := fmt.Errorf("duplicate task: %s - reference existing completed task instead", truncateTaskDesc(td.Goal))
+				c.taskTracker.TodoList().UpdateStatus(tid, TaskError, "duplicate task detected")
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-				c.report(c.newEvent("step").withAgent(td.Agent).withMessage(fmt.Sprintf("skipping duplicate: %s", truncateTaskDesc(td.Goal))))
-				resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: td.Goal, output: "(skipped duplicate)", err: nil}
+				c.report(c.newEvent("step").withAgent(td.Agent).withMessage(fmt.Sprintf("duplicate detected: %s", truncateTaskDesc(td.Goal))))
+				log.Printf("[WARN] duplicate task rejected: agent=%q, task=%q", td.Agent, td.Goal)
+				resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: td.Goal, output: "", err: errMsg}
 				return
 			}
 			sem <- struct{}{}
@@ -3639,11 +3756,13 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("11. When satisfied, call the finish tool with your final response\n\n")
 
 	b.WriteString("## Deduplication Rules\n\n")
-	b.WriteString("BEFORE delegating any task, check the Task Status section below to avoid duplicating work.\n\n")
-	b.WriteString("- If a task appears in **Completed**, do NOT re-delegate it. Synthesize or reference the existing result.\n")
-	b.WriteString("- If a similar task (same goal, different phrasing) appears in **Completed**, compare the actual goal text before delegating — text variation is common but the intent may be identical.\n")
-	b.WriteString("- If a task appears in **Skipped**, it was flagged as a duplicate by the system. Do not re-delegate it.\n")
-	b.WriteString("- If a task appears in **In Progress**, wait for it to complete rather than delegating a duplicate.\n\n")
+	b.WriteString("CRITICAL: BEFORE delegating ANY task, you MUST check the Task Status section above.\n\n")
+	b.WriteString("- ⚠️ If a task appears in **COMPLETED**, you MUST NOT re-delegate it. Reference or synthesize the existing result.\n")
+	b.WriteString("- ⚠️ If a SEMANTICALLY SIMILAR task (same goal, different wording) appears in **COMPLETED**, compare the actual intent - do NOT delegate duplicates with rephrased descriptions.\n")
+	b.WriteString("- ⏸️ If a task appears in **PAUSED**, it is waiting for a sub-agent to complete. Wait for it to resume rather than delegating a duplicate.\n")
+	b.WriteString("- If a task appears in **SKIPPED**, it was flagged as a duplicate by the system. Do NOT re-delegate it.\n")
+	b.WriteString("- If a task appears in **IN PROGRESS**, wait for it to complete rather than delegating a duplicate.\n")
+	b.WriteString("- ❌ DUPLICATE DETECTION: The system will return ERROR if you delegate a duplicate task. You must reference existing results instead.\n\n")
 
 	b.WriteString("## Task Status\n\n")
 	b.WriteString(c.buildTaskStatusContext())
