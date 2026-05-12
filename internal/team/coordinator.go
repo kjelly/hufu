@@ -2382,11 +2382,12 @@ func (c *Coordinator) storeTaskCache(agentKey, taskDesc, output string) {
 	}
 }
 
-func (c *Coordinator) checkDuplicateTasks(tasks []TaskDef) []string {
+func (c *Coordinator) checkDuplicateTasks(tasks []TaskDef) ([]string, map[int]bool) {
 	var warnings []string
+	duplicates := make(map[int]bool)
 	c.delegatedTasksMu.Lock()
 	defer c.delegatedTasksMu.Unlock()
-	for _, t := range tasks {
+	for i, t := range tasks {
 		desc := t.Goal
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
@@ -2395,9 +2396,10 @@ func (c *Coordinator) checkDuplicateTasks(tasks []TaskDef) []string {
 		c.delegatedTasks[key]++
 		if c.delegatedTasks[key] > 1 {
 			warnings = append(warnings, fmt.Sprintf("%s (agent=%s, count=%d)", truncateTaskDesc(desc), t.Agent, c.delegatedTasks[key]))
+			duplicates[i] = true
 		}
 	}
-	return warnings
+	return warnings, duplicates
 }
 
 func formatTaskResults(results []agentTaskResult, totalTasks int, duplicateWarnings []string) (string, error) {
@@ -2555,7 +2557,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		}
 	}
 
-	duplicateWarnings := c.checkDuplicateTasks(tasks)
+	duplicateWarnings, duplicateIndices := c.checkDuplicateTasks(tasks)
 	if len(duplicateWarnings) > 0 {
 		c.report(c.newEvent("loop_warning").withMessage(fmt.Sprintf("Duplicate task delegation detected: %v", duplicateWarnings)))
 	}
@@ -2571,8 +2573,15 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 
 	for i, task := range tasks {
 		wg.Add(1)
-		go func(td TaskDef, tid string) {
+		go func(td TaskDef, tid string, dup bool) {
 			defer wg.Done()
+			if dup {
+				c.taskTracker.TodoList().UpdateStatus(tid, TaskSkipped, "same agent+goal already delegated in a previous round")
+				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+				c.report(c.newEvent("step").withAgent(td.Agent).withMessage(fmt.Sprintf("skipping duplicate: %s", truncateTaskDesc(td.Goal))))
+				resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: td.Goal, output: "(skipped duplicate)", err: nil}
+				return
+			}
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
@@ -2633,7 +2642,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			inflight[cacheKey] <- result
 			inflightMu.Unlock()
 			resultsCh <- result
-		}(task, todoItems[i].ID)
+		}(task, todoItems[i].ID, duplicateIndices[i])
 	}
 	wg.Wait()
 	close(resultsCh)
