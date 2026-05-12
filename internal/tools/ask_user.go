@@ -12,9 +12,20 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/fantasy"
 )
+
+type withoutDeadlineCtx struct {
+	context.Context
+}
+
+func (withoutDeadlineCtx) Deadline() (time.Time, bool) { return time.Time{}, false }
+
+func withoutDeadline(ctx context.Context) context.Context {
+	return &withoutDeadlineCtx{Context: ctx}
+}
 
 type askUserArgs struct {
 	Question string      `json:"question"`
@@ -81,6 +92,7 @@ func NewAskUserTool(opts ...ToolOption) fantasy.AgentTool {
 }
 
 func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	ctx = withoutDeadline(ctx)
 	var args askUserArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil

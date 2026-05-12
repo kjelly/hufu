@@ -557,8 +557,10 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	}
 	tools.SetPathReviewer(c.coreTools, pathReviewer)
 
-	if history := LoadConversationHistory(session.Workspace); len(history) > 0 {
-		c.conversationHistory = history
+	if !planMode {
+		if history := LoadConversationHistory(session.Workspace); len(history) > 0 {
+			c.conversationHistory = history
+		}
 	}
 
 	if pathConsent != nil {
@@ -2873,8 +2875,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		prompt = contextBuilder.String() + "\n---\n\n" + prompt
 	}
 
-	if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
-		prompt = prompt + "\n\n" + suffix
+	if !c.forcePlanFirst {
+		if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
+			prompt = prompt + "\n\n" + suffix
+		}
 	}
 
 	var conversationHistory []fantasy.Message
@@ -3519,9 +3523,11 @@ func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentD
 	fmt.Fprintf(&b, "- Use %s to share files between agents. NEVER write outside workspace.\n\n", sharedPath)
 	b.WriteString("---\n\n")
 
-	if memSuffix := c.buildMemorySuffix(def.Role); memSuffix != "" {
-		b.WriteString(memSuffix)
-		b.WriteString("\n")
+	if !c.forcePlanFirst {
+		if memSuffix := c.buildMemorySuffix(def.Role); memSuffix != "" {
+			b.WriteString(memSuffix)
+			b.WriteString("\n")
+		}
 	}
 
 	injectedDef := *def
@@ -4002,8 +4008,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		prompt = prompt + "\n\n" + skillSuggestion
 	}
 
-	if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
-		prompt = prompt + "\n\n" + suffix
+	if !c.forcePlanFirst {
+		if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
+			prompt = prompt + "\n\n" + suffix
+		}
 	}
 
 	output, err := c.runAgentWithStatus(taskCtx, ag, resolvedName, prompt, timing)
@@ -4252,15 +4260,17 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		}
 	}
 
-	if c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
-		contextSummary := c.sessionData.ContextSummary()
-		if contextSummary != "" {
-			systemPrompt += "\n\n---\n## Session Context\n\n" + contextSummary
+	if !c.forcePlanFirst {
+		if c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
+			contextSummary := c.sessionData.ContextSummary()
+			if contextSummary != "" {
+				systemPrompt += "\n\n---\n## Session Context\n\n" + contextSummary
+			}
 		}
-	}
 
-	if suffix := c.buildMemorySuffix("coordinator"); suffix != "" {
-		systemPrompt += "\n\n" + suffix
+		if suffix := c.buildMemorySuffix("coordinator"); suffix != "" {
+			systemPrompt += "\n\n" + suffix
+		}
 	}
 
 	if reminder := c.buildCoreReminder(orchDef); reminder != "" {
@@ -4307,7 +4317,10 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		return "", fmt.Errorf("no coordinator agent found in team")
 	}
 
-	memorySuffix := c.buildMemorySuffix("coordinator")
+	var memorySuffix string
+	if !c.forcePlanFirst {
+		memorySuffix = c.buildMemorySuffix("coordinator")
+	}
 
 	var continuationPrompt string
 	if c.IsWrapUp() {
@@ -4537,8 +4550,10 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 		}
 	}
 
-	if suffix := c.buildMemorySuffix("coordinator"); suffix != "" {
-		systemPrompt += "\n\n" + suffix
+	if !c.forcePlanFirst {
+		if suffix := c.buildMemorySuffix("coordinator"); suffix != "" {
+			systemPrompt += "\n\n" + suffix
+		}
 	}
 
 	orchDefCopy := *orchDef
