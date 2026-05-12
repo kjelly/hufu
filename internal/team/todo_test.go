@@ -176,3 +176,133 @@ func TestTaskTrackerTodoList(t *testing.T) {
 		t.Errorf("expected ID=1, got %s", items[0].ID)
 	}
 }
+
+func TestTodoListUpdateStatusPreventDoneToInProgress(t *testing.T) {
+	tl := &TodoList{}
+
+	tl.AddBatch([]struct {
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
+	}{
+		{Agent: "researcher", Desc: "find bugs"},
+	})
+
+	tl.UpdateStatus("1", TaskInProgress, "")
+	tl.UpdateStatus("1", TaskDone, "")
+
+	all := tl.Items()
+	if all[0].Status != TaskDone {
+		t.Errorf("expected item 1 done, got %s", all[0].Status)
+	}
+
+	tl.UpdateStatus("1", TaskInProgress, "")
+
+	all = tl.Items()
+	if all[0].Status != TaskDone {
+		t.Errorf("expected item 1 to remain done (not revert to in_progress), got %s", all[0].Status)
+	}
+}
+
+func TestTodoListUpdateStatusPreventErrorToInProgress(t *testing.T) {
+	tl := &TodoList{}
+
+	tl.AddBatch([]struct {
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
+	}{
+		{Agent: "researcher", Desc: "find bugs"},
+	})
+
+	tl.UpdateStatus("1", TaskInProgress, "")
+	tl.UpdateStatus("1", TaskError, "failed")
+
+	all := tl.Items()
+	if all[0].Status != TaskError {
+		t.Errorf("expected item 1 error, got %s", all[0].Status)
+	}
+
+	tl.UpdateStatus("1", TaskInProgress, "")
+
+	all = tl.Items()
+	if all[0].Status != TaskError {
+		t.Errorf("expected item 1 to remain error (not revert to in_progress), got %s", all[0].Status)
+	}
+}
+
+func TestTodoToolHandleUpdatePreventDoneToInProgress(t *testing.T) {
+	c := &Coordinator{
+		taskTracker: NewTaskTracker(),
+	}
+	c.taskTracker.TodoList().AddBatch([]struct {
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
+	}{
+		{Agent: "researcher", Desc: "find bugs"},
+	})
+
+	c.taskTracker.TodoList().UpdateStatus("1", TaskInProgress, "")
+	c.taskTracker.TodoList().UpdateStatus("1", TaskDone, "")
+
+	tool := &todoTool{coordinator: c}
+
+	c.SetCurrentAgent("researcher")
+	c.SetCurrentTodoID("1")
+
+	resp, err := tool.handleUpdate("researcher", "1", "in_progress", "")
+	if err != nil {
+		t.Fatalf("handleUpdate returned error: %v", err)
+	}
+	if resp.IsError != true {
+		t.Fatal("expected error response when updating done task to in_progress")
+	}
+
+	all := c.taskTracker.TodoList().Items()
+	if all[0].Status != TaskDone {
+		t.Errorf("expected item 1 to remain done, got %s", all[0].Status)
+	}
+}
+
+func TestTodoToolHandleUpdatePreventErrorToInProgress(t *testing.T) {
+	c := &Coordinator{
+		taskTracker: NewTaskTracker(),
+	}
+	c.taskTracker.TodoList().AddBatch([]struct {
+		Agent    string
+		Desc     string
+		Model    string
+		Source   string
+		ParentID string
+	}{
+		{Agent: "researcher", Desc: "find bugs"},
+	})
+
+	c.taskTracker.TodoList().UpdateStatus("1", TaskInProgress, "")
+	c.taskTracker.TodoList().UpdateStatus("1", TaskError, "failed")
+
+	tool := &todoTool{coordinator: c}
+
+	c.SetCurrentAgent("researcher")
+	c.SetCurrentTodoID("1")
+
+	resp, err := tool.handleUpdate("researcher", "1", "in_progress", "")
+	if err != nil {
+		t.Fatalf("handleUpdate returned error: %v", err)
+	}
+	if resp.IsError != true {
+		t.Fatal("expected error response when updating error task to in_progress")
+	}
+
+	all := c.taskTracker.TodoList().Items()
+	if all[0].Status != TaskError {
+		t.Errorf("expected item 1 to remain error, got %s", all[0].Status)
+	}
+}

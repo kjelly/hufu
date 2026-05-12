@@ -45,12 +45,15 @@ func TestCacheMissAfterGenerationBump(t *testing.T) {
 
 	c.storeTaskCache("researcher", "analyze code", "old result")
 
-	// Simulate coordinator starting a new round: bump generation.
 	c.cacheGeneration.Add(1) // now gen = 2
 
-	_, ok := c.lookupTaskCache(context.Background(), "researcher", "analyze code")
-	if ok {
-		t.Error("expected cache miss after generation bump, got hit (stale result would be returned)")
+	// Exact match across generations is a HIT — same goal text means same work.
+	out, ok := c.lookupTaskCache(context.Background(), "researcher", "analyze code")
+	if !ok {
+		t.Fatal("expected cache hit for exact match across generations")
+	}
+	if out != "old result" {
+		t.Errorf("output = %q, want %q", out, "old result")
 	}
 }
 
@@ -85,16 +88,20 @@ func TestCacheMultipleGenerationsCoexist(t *testing.T) {
 	c.cacheGeneration.Store(2)
 	c.storeTaskCache("writer", "write tests", "tests v2")
 
-	// In gen 2: task B hits, task A misses (stale).
-	if _, ok := c.lookupTaskCache(context.Background(), "writer", "write docs"); ok {
-		t.Error("gen-1 entry should not be visible in gen 2")
+	// In gen 2: both tasks hit via cross-generation exact match.
+	outA, okA := c.lookupTaskCache(context.Background(), "writer", "write docs")
+	if !okA {
+		t.Fatal("gen-1 entry should be visible in gen 2 (exact match across generations)")
 	}
-	out, ok := c.lookupTaskCache(context.Background(), "writer", "write tests")
-	if !ok {
+	if outA != "docs v1" {
+		t.Errorf("write docs output = %q, want %q", outA, "docs v1")
+	}
+	outB, okB := c.lookupTaskCache(context.Background(), "writer", "write tests")
+	if !okB {
 		t.Fatal("gen-2 entry should be visible in gen 2")
 	}
-	if out != "tests v2" {
-		t.Errorf("output = %q, want %q", out, "tests v2")
+	if outB != "tests v2" {
+		t.Errorf("write tests output = %q, want %q", outB, "tests v2")
 	}
 }
 
@@ -166,9 +173,10 @@ func TestCacheEmptyOnInit(t *testing.T) {
 	}
 }
 
-// TestCacheGenerationBumpInvalidatesStaleResult verifies that a cached result
-// from a previous generation is NOT returned after a generation bump, and that
-// fresh entries stored under the new generation are retrievable.
+// TestCacheGenerationBumpInvalidatesStaleResult verifies that an exact-match
+// lookup returns the cached result even after a generation bump, since the
+// same goal text means the same work. Fresh entries stored under the new
+// generation are also retrievable.
 func TestCacheGenerationBumpInvalidatesStaleResult(t *testing.T) {
 	c := newTestCacheCoordinator()
 	c.cacheGeneration.Store(1)
@@ -179,21 +187,24 @@ func TestCacheGenerationBumpInvalidatesStaleResult(t *testing.T) {
 	// Bump generation (coordinator starts new round).
 	c.cacheGeneration.Add(1)
 
-	// Verify the gen-2 lookup returns miss (stale gen-1 entry must not be returned).
-	_, ok := c.lookupTaskCache(context.Background(), "developer", "build binary")
-	if ok {
-		t.Error("gen-1 entry must not be returned in gen-2 (stale cache)")
+	// Exact match across generations → HIT (same goal = same work).
+	out, ok := c.lookupTaskCache(context.Background(), "developer", "build binary")
+	if !ok {
+		t.Fatal("exact match across generations should hit")
+	}
+	if out != "build succeeded" {
+		t.Errorf("output = %q, want %q", out, "build succeeded")
 	}
 
 	// Store fresh result under gen 2 to confirm new entries work.
 	c.storeTaskCache("developer", "build binary", "build succeeded v2")
 
-	out, ok := c.lookupTaskCache(context.Background(), "developer", "build binary")
-	if !ok {
+	out2, ok2 := c.lookupTaskCache(context.Background(), "developer", "build binary")
+	if !ok2 {
 		t.Fatal("fresh gen-2 entry should be retrievable")
 	}
-	if out != "build succeeded v2" {
-		t.Errorf("output = %q, want %q", out, "build succeeded v2")
+	if out2 != "build succeeded v2" {
+		t.Errorf("output = %q, want %q", out2, "build succeeded v2")
 	}
 }
 

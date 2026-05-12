@@ -35,6 +35,7 @@ var (
 	headerStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
 	pendingIcon  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	progressIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	pausedIcon   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	doneIcon     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	errorIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	skipTagStyle = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("3"))
@@ -214,6 +215,10 @@ func (d *taskDisplay) render() {
 			icon = dimStyle.Render("—")
 			desc = dimStyle.Render(t.Desc)
 			tag = skipTagStyle.Render(" [SKIP]")
+		case team.TaskPaused:
+			icon = pausedIcon.Render("◐")
+			desc = dimStyle.Render(t.Desc)
+			tag = skipTagStyle.Render(" [WAITING]")
 		}
 		agentLabel := agentStyle.Render(t.Agent)
 		if t.Model != "" {
