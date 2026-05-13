@@ -149,10 +149,7 @@ type planReviewer struct {
 }
 
 func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*planReviewer, error) {
-	pr := &planReviewer{coordinator: c, modelID: c.sidecarModel, todoID: todoID}
-	if c.sidecarModel == "" {
-		return nil, fmt.Errorf("plan review requires a sidecar-model in team.yaml")
-	}
+	pr := &planReviewer{coordinator: c, modelID: c.session.Config.Generation.Model, todoID: todoID}
 	ag, err := agent.CreateAgent(ctx, c.provider, agent.AgentConfig{
 		Def: &agent.AgentDef{
 			Name:    "plan-reviewer",
@@ -979,13 +976,11 @@ func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 		return ""
 	}
 
-	b.WriteString("## Memory & Context\n\n")
-	b.WriteString("Review the following memory to understand the current state and prior knowledge before proceeding.\n\n")
-	stmLtmContent := b.String()
+	memContent := b.String()
 	b.Reset()
 	b.WriteString("## Memory & Context\n\n")
-	b.WriteString("Review the following memory to understand the current state and prior knowledge before proceeding.\n\n\n")
-	b.WriteString(stmLtmContent)
+	b.WriteString("Review the following memory to understand the current state and prior knowledge before proceeding.\n\n")
+	b.WriteString(memContent)
 	b.WriteString("\n")
 	return b.String()
 }
@@ -3149,10 +3144,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		prompt = contextBuilder.String() + "\n---\n\n" + prompt
 	}
 
-	if !c.forcePlanFirst {
-		if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
-			prompt = prompt + "\n\n" + suffix
-		}
+	if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
+		prompt = prompt + "\n\n" + suffix
 	}
 
 	var conversationHistory []fantasy.Message
@@ -4047,11 +4040,9 @@ func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentD
 	fmt.Fprintf(&b, "- Use %s to share files between agents. NEVER write outside workspace.\n\n", sharedPath)
 	b.WriteString("---\n\n")
 
-	if !c.forcePlanFirst {
-		if memSuffix := c.buildMemorySuffix(def.Role); memSuffix != "" {
-			b.WriteString(memSuffix)
-			b.WriteString("\n")
-		}
+	if memSuffix := c.buildMemorySuffix(def.Role); memSuffix != "" {
+		b.WriteString(memSuffix)
+		b.WriteString("\n")
 	}
 
 	injectedDef := *def
@@ -4086,8 +4077,14 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("7. When delegating to a worker that needs skill knowledge, include ALL relevant skill summaries (name, file path) in the task description so the worker can call `load_skill` if needed\n")
 	b.WriteString("8. **Trust worker expertise** — Workers have access to the full project context (AGENTS.md, tech stack, conventions, directory structure). They will explore the codebase, identify relevant files, and determine the best implementation approach. Do NOT pre-specify file paths, function names, or implementation steps unless they are non-obvious constraints.\n")
 	b.WriteString("9. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
-	b.WriteString("10. **Synthesize** results into a coherent answer for the user\n")
-	b.WriteString("11. When satisfied, call the finish tool with your final response\n\n")
+	b.WriteString("10. **Record** key findings and decisions with `stm_write` (append mode) after each meaningful agent result — use the matching section:\n")
+	b.WriteString("    - `# 發現` — new facts discovered (API endpoints, file locations, test results, etc.)\n")
+	b.WriteString("    - `# 決策` — design or implementation choices made\n")
+	b.WriteString("    - `# 錯誤與修復` — errors encountered and how they were resolved\n")
+	b.WriteString("    - `# 待解決` — open questions or blockers for later agents\n")
+	b.WriteString("    Skip this step only if the agent result contains no new knowledge (e.g. pure \"done\" confirmations).\n")
+	b.WriteString("11. **Synthesize** results into a coherent answer for the user\n")
+	b.WriteString("12. When satisfied, call the finish tool with your final response\n\n")
 
 	b.WriteString("## Deduplication Rules\n\n")
 	b.WriteString("CRITICAL: BEFORE delegating ANY task, you MUST check the Task Status section above.\n\n")
@@ -4247,7 +4244,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("\n## Environment & Rules\n\n")
 	fmt.Fprintf(&b, "- CWD: %s | Workspace: %s | Shared: %s | Time: %s\n", c.projectDir, wsPath, sharedPath, c.sessionTime.Format(time.RFC3339))
 	fmt.Fprintf(&b, "- ALL intermediate files go to workspace: %s. Use %s for inter-agent sharing. NEVER write outside workspace.\n", wsPath, sharedPath)
-	b.WriteString("- stm_write before finish. ltm_update for cross-session knowledge (conventions, APIs, patterns, decisions).\n\n")
+	b.WriteString("- stm_write after each meaningful agent result (# 發現 / # 決策 / # 錯誤與修復 / # 待解決) AND before finish. ltm_update for cross-session knowledge.\n\n")
 
 	return b.String()
 }
@@ -4531,10 +4528,8 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 
 	prompt := c.appendSkillContext(task, agentDef, resolvedName, task, todoID)
 
-	if !c.forcePlanFirst {
-		if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
-			prompt = prompt + "\n\n" + suffix
-		}
+	if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
+		prompt = prompt + "\n\n" + suffix
 	}
 
 	output, err := c.runAgentWithStatus(taskCtx, ag, resolvedName, prompt, timing)
@@ -4838,10 +4833,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		return "", fmt.Errorf("no coordinator agent found in team")
 	}
 
-	var memorySuffix string
-	if !c.forcePlanFirst {
-		memorySuffix = c.buildMemorySuffix("coordinator")
-	}
+	memorySuffix := c.buildMemorySuffix("coordinator")
 
 	var continuationPrompt string
 	if c.IsWrapUp() {
