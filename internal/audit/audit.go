@@ -30,7 +30,7 @@ var defaultLogger *AuditLogger
 var defaultLoggerMu sync.Mutex
 
 func NewAuditLogger(workspace, teamName string) (*AuditLogger, error) {
-	auditDir := filepath.Join(workspace, "audit")
+	auditDir := filepath.Join(workspace, "logs", "audit")
 	if err := os.MkdirAll(auditDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create audit directory: %w", err)
 	}

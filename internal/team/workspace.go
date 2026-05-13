@@ -12,10 +12,13 @@ const (
 	sharedDir  = "shared"
 	statusDir  = "status"
 	historyDir = "history"
+	logsDir    = "logs"
+	llmLogsDir = "logs/llm"
+	stmLogsDir = "logs/stm"
 )
 
 func EnsureWorkspaceDirs(workspace string) error {
-	for _, dir := range []string{tasksDir, sharedDir, statusDir, historyDir} {
+	for _, dir := range []string{tasksDir, sharedDir, statusDir, historyDir, logsDir} {
 		if err := os.MkdirAll(filepath.Join(workspace, dir), 0o755); err != nil {
 			return err
 		}
@@ -89,7 +92,7 @@ func readShared(workspace, filename string) (string, error) {
 }
 
 func writeLLMLog(workspace, teamName, agentName, entry string) {
-	dir := filepath.Join(workspace, teamName, agentName)
+	dir := filepath.Join(workspace, llmLogsDir, teamName, agentName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}

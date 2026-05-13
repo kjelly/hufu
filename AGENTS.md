@@ -346,16 +346,25 @@ Each team gets its own workspace directory (named `workspace` relative to the te
 
 ```
 workspace/
-├── tasks/                    # Per-task files (merged inbox+outbox)
+├── session.json              # Structured session data
+├── session.md                # Human-readable session log
+├── session_history.json      # Raw conversation message history
+├── stm.md                    # Short-term memory (active session)
+├── tasks/                    # Per-task records
 │   └── {team-name}/
 │       └── {agent-name}/
 │           └── {timestamp}.md
-├── shared/
-│   └── skills/     # Copied SKILL.md files
-├── status/          # Agent status files (working/done/error)
-├── history/         # Archived session files
-├── session.json     # Structured session data
-└── session.md      # Human-readable session log
+├── shared/                   # Files shared between agents
+│   └── skills/               # Copied SKILL.md files
+├── status/                   # Agent status files (working/done/error)
+├── history/                  # Archived session files
+└── logs/                     # All system/debug logs
+    ├── audit/                # Tool audit log (audit-{date}.jsonl)
+    ├── llm/                  # LLM request/response logs
+    │   └── {team-name}/
+    │       └── {agent-name}/
+    │           └── llm.log
+    └── stm/                  # STM round checkpoints (stm_rN.md)
 ```
 
 ## Session Management

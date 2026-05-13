@@ -2666,7 +2666,7 @@ func (c *Coordinator) checkpointSTM() {
 	if content == "" {
 		return
 	}
-	histDir := filepath.Join(workspace, "stm_history")
+	histDir := filepath.Join(workspace, stmLogsDir)
 	if err := os.MkdirAll(histDir, 0o755); err != nil {
 		log.Printf("warning: stm checkpoint dir creation failed: %v", err)
 		return

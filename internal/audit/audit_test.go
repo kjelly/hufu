@@ -22,7 +22,7 @@ func TestNewAuditLogger(t *testing.T) {
 	defer logger.Close()
 
 	// Verify the audit directory was created
-	auditDir := filepath.Join(tmpDir, "audit")
+	auditDir := filepath.Join(tmpDir, "logs", "audit")
 	if _, err := os.Stat(auditDir); os.IsNotExist(err) {
 		t.Errorf("NewAuditLogger() did not create audit directory")
 	}
@@ -64,7 +64,7 @@ func TestAuditLoggerLogToolCall(t *testing.T) {
 	logger.LogToolCall(agent, tool, input)
 
 	// Verify the log file was created and contains the entry
-	auditDir := filepath.Join(tmpDir, "audit")
+	auditDir := filepath.Join(tmpDir, "logs", "audit")
 	files, err := os.ReadDir(auditDir)
 	if err != nil {
 		t.Fatalf("Failed to read audit directory: %v", err)
@@ -115,7 +115,7 @@ func TestAuditLoggerLogToolResult(t *testing.T) {
 	logger.LogToolResult(agent, tool, result, false)
 
 	// Verify the log file contains the result
-	auditDir := filepath.Join(tmpDir, "audit")
+	auditDir := filepath.Join(tmpDir, "logs", "audit")
 	files, err := os.ReadDir(auditDir)
 	if err != nil {
 		t.Fatalf("Failed to read audit directory: %v", err)
@@ -159,7 +159,7 @@ func TestAuditLoggerLogToolResultError(t *testing.T) {
 	logger.LogToolResult(agent, tool, result, true)
 
 	// Verify the log file contains the error
-	auditDir := filepath.Join(tmpDir, "audit")
+	auditDir := filepath.Join(tmpDir, "logs", "audit")
 	files, err := os.ReadDir(auditDir)
 	if err != nil {
 		t.Fatalf("Failed to read audit directory: %v", err)
@@ -319,7 +319,7 @@ func TestLogToolCallGlobal(t *testing.T) {
 	LogToolCall(agent, tool, input)
 
 	// Verify the log file was created
-	auditDir := filepath.Join(tmpDir, "audit")
+	auditDir := filepath.Join(tmpDir, "logs", "audit")
 	files, err := os.ReadDir(auditDir)
 	if err != nil {
 		t.Fatalf("Failed to read audit directory: %v", err)
@@ -363,7 +363,7 @@ func TestLogToolResultGlobal(t *testing.T) {
 	LogToolResult(agent, tool, result, false)
 
 	// Verify the log file was created
-	auditDir := filepath.Join(tmpDir, "audit")
+	auditDir := filepath.Join(tmpDir, "logs", "audit")
 	files, err := os.ReadDir(auditDir)
 	if err != nil {
 		t.Fatalf("Failed to read audit directory: %v", err)
@@ -473,7 +473,7 @@ func TestConcurrentLogToolCall(t *testing.T) {
 	}
 
 	// Verify all logs were written
-	auditDir := filepath.Join(tmpDir, "audit")
+	auditDir := filepath.Join(tmpDir, "logs", "audit")
 	files, err := os.ReadDir(auditDir)
 	if err != nil {
 		t.Fatalf("Failed to read audit directory: %v", err)
