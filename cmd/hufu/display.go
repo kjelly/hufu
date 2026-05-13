@@ -277,10 +277,13 @@ func formatAgentLabel(event team.StatusEvent) string {
 }
 
 func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp *taskDisplay, skillDisp *skillDisplay, idleTimer *idleWarningTimer, notifier *notify.Notifier) {
+	var mu sync.Mutex
 	currentAgent := ""
 	textBuf := ""
 
 	coordinator.SetStatusReporter(func(event team.StatusEvent) {
+		mu.Lock()
+		defer mu.Unlock()
 		idleTimer.reset()
 
 		if notifier != nil {
@@ -568,11 +571,14 @@ func newFileWriter(f *os.File) *fileWriter {
 // to the given file. It mirrors the output of setupStatusReporter but without
 // idle timer, task panel, or skill panel.
 func makeFileReporter(f *os.File) team.StatusReporter {
+	var mu sync.Mutex
 	w := newFileWriter(f)
 	currentAgent := ""
 	textBuf := ""
 
 	return func(event team.StatusEvent) {
+		mu.Lock()
+		defer mu.Unlock()
 		switch event.Type {
 		case "start":
 			if currentAgent != "" && textBuf != "" {

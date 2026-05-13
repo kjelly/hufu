@@ -34,6 +34,7 @@ import (
 const CoordTodoID = "__coord__"
 
 var skillSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
+var taskStatusRe = regexp.MustCompile(`\*\*Status:\*\*\s*(\S+)`)
 
 // todoIDKey is a context key used to pass the current task's TodoItem ID
 // down through executeTask → runAgentWithStatusAndHistory so that emitted
@@ -3349,6 +3350,14 @@ func (t *teamInfoTool) handleTaskHistory(workspace, teamName, agentName string, 
 		return entries[i].Name() > entries[j].Name()
 	})
 
+	// count only valid .md files for correct "remaining" display
+	totalMD := 0
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
+			totalMD++
+		}
+	}
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "Task history for %s:\n\n", agentName)
 	count := 0
@@ -3357,7 +3366,7 @@ func (t *teamInfoTool) handleTaskHistory(workspace, teamName, agentName string, 
 			continue
 		}
 		if count >= limit {
-			fmt.Fprintf(&b, "\n... (%d more tasks)", len(entries)-count)
+			fmt.Fprintf(&b, "\n... (%d more tasks)", totalMD-count)
 			break
 		}
 		path := filepath.Join(dir, entry.Name())
@@ -3371,7 +3380,7 @@ func (t *teamInfoTool) handleTaskHistory(workspace, teamName, agentName string, 
 
 		// Extract status
 		status := "unknown"
-		if m := regexp.MustCompile(`\*\*Status:\*\*\s*(\S+)`).FindStringSubmatch(content); len(m) > 1 {
+		if m := taskStatusRe.FindStringSubmatch(content); len(m) > 1 {
 			status = m[1]
 		}
 

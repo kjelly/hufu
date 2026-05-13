@@ -2,6 +2,7 @@ package team
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -265,7 +266,7 @@ func (tl *TodoList) SetInjectedSkills(id string, skills []string) {
 			return
 		}
 	}
-	fmt.Printf("[DEBUG] SetInjectedSkills: todo item %q not found\n", id)
+	log.Printf("[WARN] SetInjectedSkills: todo item %q not found", id)
 }
 
 func (tl *TodoList) AddLoadedSkill(id string, skillName string) {
@@ -282,7 +283,7 @@ func (tl *TodoList) AddLoadedSkill(id string, skillName string) {
 			return
 		}
 	}
-	fmt.Printf("[DEBUG] AddLoadedSkill: todo item %q not found\n", id)
+	log.Printf("[WARN] AddLoadedSkill: todo item %q not found", id)
 }
 
 func (tl *TodoList) Children(parentID string) []*TodoItem {

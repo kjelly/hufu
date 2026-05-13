@@ -53,6 +53,7 @@ var (
 	forcedSkills         []string
 	planMode             bool
 	autoSkills           bool
+	fixQuestion          string
 	globalPromptReader  atomic.Pointer[readline.PromptReader]
 )
 
@@ -101,6 +102,7 @@ func main() {
 	rootCmd.Flags().StringArrayVar(&forcedSkills, "skill", nil, "Force-load specific skills (repeatable, e.g. --skill code-review --skill tdd)")
 	rootCmd.Flags().BoolVar(&planMode, "plan", false, "Force plan-first mode: agents must submit plans before executing")
 	rootCmd.Flags().BoolVar(&autoSkills, "auto-skills", false, "Enable automatic skill detection via sidecar/LLM matching")
+	rootCmd.Flags().StringVar(&fixQuestion, "fix", "", "Analyze previous execution data and suggest improvements for the given question")
 
 	if err := rootCmd.Execute(); err != nil {
 		var interrupted errInterrupted
@@ -257,6 +259,11 @@ func runTeam(cmd *cobra.Command, args []string) error {
 
 	if archiveMemory && prompt == "" && !newSession {
 		return runArchiveMemory(context.Background(), registry, vars)
+	}
+
+	if fixQuestion != "" {
+		fixPC := newPathConsent()
+		return runFixMode(ctx, prompt, fixQuestion, registry, providerURL, providerAPIKey, fixPC, vars, forcedSkills, planMode, autoSkills)
 	}
 
 	initialTeam := strings.ToLower(agentTeamName)
