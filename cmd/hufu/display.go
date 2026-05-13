@@ -1425,7 +1425,16 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 	}()
 	defer close(wrapUpCh)
 
+	reportCh := model.ReportCh
 	var execResult string
+	go func() {
+		for range reportCh {
+			generateReport(loadedTeams, execResult)
+			p.Send(tuipkg.StatusBarMsg{Text: doneStyle.Render("✓ Report saved to workspace")})
+		}
+	}()
+	defer close(reportCh)
+
 	var execErr error
 	finished := make(chan struct{})
 	go func() {

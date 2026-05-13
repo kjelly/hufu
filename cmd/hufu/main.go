@@ -54,6 +54,7 @@ var (
 	planMode             bool
 	autoSkills           bool
 	fixQuestion          string
+	reportMode           bool
 	globalPromptReader  atomic.Pointer[readline.PromptReader]
 )
 
@@ -103,6 +104,7 @@ func main() {
 	rootCmd.Flags().BoolVar(&planMode, "plan", false, "Force plan-first mode: agents must submit plans before executing")
 	rootCmd.Flags().BoolVar(&autoSkills, "auto-skills", false, "Enable automatic skill detection via sidecar/LLM matching")
 	rootCmd.Flags().StringVar(&fixQuestion, "fix", "", "Analyze previous execution data and suggest improvements for the given question")
+	rootCmd.Flags().BoolVar(&reportMode, "report", false, "Generate a full execution report as a markdown file")
 
 	if err := rootCmd.Execute(); err != nil {
 		var interrupted errInterrupted
@@ -388,6 +390,9 @@ func runTeam(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("dry-run failed: %w", err)
 		}
 		renderDryRun(result)
+		if reportMode {
+			generateReport(loadedTeams, "(dry-run — no tasks executed)")
+		}
 		return nil
 	}
 
@@ -431,6 +436,10 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		return runErr
 	}
 	fmt.Println(result)
+
+	if reportMode {
+		generateReport(loadedTeams, result)
+	}
 
 	var allSkillUsage []team.SkillUsageEntry
 	seenSkill := map[string]int{}

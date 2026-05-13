@@ -269,8 +269,9 @@ func buildFixPrompt(question, taskDesc string, data *fixData) string {
 }
 
 func limitStr(s string, maxChars int) string {
-	if len(s) <= maxChars {
+	r := []rune(s)
+	if len(r) <= maxChars {
 		return s
 	}
-	return s[:maxChars] + "\n... [truncated]"
+	return string(r[:maxChars]) + "\n... [truncated]"
 }

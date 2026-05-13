@@ -167,6 +167,7 @@ type Model struct {
 
 	wrapUpRequested bool
 	WrapUpCh        chan struct{}
+	ReportCh        chan struct{}
 
 	mouseEnabled         bool // mouse tracking is currently on
 	mouseManuallyEnabled bool // user explicitly toggled mouse on with 'm'
@@ -202,6 +203,7 @@ func New(prompt string, teamInfo TeamInfo) Model {
 		searchInput:    si,
 		PromptInjectCh: make(chan string, 16),
 		WrapUpCh:       make(chan struct{}, 2),
+		ReportCh:       make(chan struct{}, 1),
 		teamInfo:       teamInfo,
 	}
 }
@@ -504,6 +506,8 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.finished {
 			return m, tea.Quit
 		}
+	case "r":
+		return m.handleReportKey()
 	case "i":
 		m.inInfo = true
 		return m, nil
@@ -568,6 +572,8 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.finished {
 			return m, tea.Quit
 		}
+	case "r":
+		return m.handleReportKey()
 	case "c":
 		if !m.finished {
 			m.inPromptInput = true
@@ -671,6 +677,17 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inMemory = true
 		m.loadMemoryContent()
 		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) handleReportKey() (tea.Model, tea.Cmd) {
+	if m.finished {
+		select {
+		case m.ReportCh <- struct{}{}:
+			m.statusText = dimStyle.Render("Generating report...")
+		default:
+		}
 	}
 	return m, nil
 }
@@ -1352,7 +1369,7 @@ func (m Model) footer() string {
 		return footerStyle.Render(fmt.Sprintf("n/N next/prev match (%d/%d) · / search · i info · esc clear · g/G top/bot · ctrl+d/u half-page · ↑↓ j/k · enter detail · q quit", m.searchIdx+1, len(m.searchResults)))
 	}
 	if m.finished {
-		return footerStyle.Render("g/G top/bot · ctrl+d/u half-page · / search · i info · ↑↓ j/k · enter detail · q quit")
+		return footerStyle.Render("g/G top/bot · ctrl+d/u half-page · / search · r report · i info · ↑↓ j/k · enter detail · q quit")
 	}
 	return footerStyle.Render("g/G top/bot · ctrl+d/u half-page · / search · i info · c prompt · ↑↓ j/k · enter detail · esc quit")
 }
