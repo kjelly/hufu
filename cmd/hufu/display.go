@@ -429,6 +429,12 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 		case "todos_updated":
 			taskDisp.update()
 
+		case "plan_approved":
+			w.write(fmt.Sprintf("%s %s\n",
+				doneStyle.Render("✓"),
+				dimStyle.Render(event.Message),
+			))
+
 		case "skill_used":
 			if skillDisp != nil {
 				skillDisp.record(event.SkillName, event.Agent)
@@ -899,6 +905,11 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 		case "todos_updated":
 			if event.Todos != nil {
 				p.Send(tuipkg.TasksUpdatedMsg{Items: event.Todos})
+			}
+
+		case "plan_approved":
+			if event.Message != "" {
+				p.Send(tuipkg.StatusBarMsg{Text: doneStyle.Render("✓ " + event.Message)})
 			}
 
 		case "wrap_up_phase":

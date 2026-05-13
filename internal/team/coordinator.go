@@ -235,6 +235,7 @@ func (c *Coordinator) autoApprovePlan(ctx context.Context, todoID string) string
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskPlanned, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	c.report(c.newEvent("plan_approved").withAgent(agentName).withMessage("plan approved, starting execution").withTodoID(todoID))
 
 	output, err := c.executeTask(ctx, TaskDef{
 		Agent:     agentName,
