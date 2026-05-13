@@ -218,7 +218,8 @@ func (pr *planReviewer) review(ctx context.Context, planText string) (string, bo
 		delete(c.pendingPlans, pr.todoID)
 		c.pendingPlansMu.Unlock()
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		return "", true, nil
+		msg := fmt.Sprintf("Task skipped: user manually rejected the plan for agent %q after %d review cycles. Do not retry this task.", agentName, entry.ReviewCount)
+		return msg, true, nil
 	}
 
 	taskStatus := c.buildTaskStatusContext()
@@ -2188,11 +2189,7 @@ func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	var newContent string
 	switch mode {
 	case "replace":
-		existing := LoadLTM(teamDir)
 		newContent = TruncateLTM(args.Content)
-		if existing != "" {
-			newContent = TruncateLTM(existing + "\n" + newContent)
-		}
 	default:
 		existing := LoadLTM(teamDir)
 		if existing == "" {
@@ -2795,7 +2792,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				return
 			}
 			sem <- struct{}{}
-			defer func() { <-sem }()
+			semReleased := false
+			defer func() {
+				if !semReleased {
+					<-sem
+				}
+			}()
 
 			// Compute effective description (goal takes precedence over task)
 			desc := td.Goal
@@ -2805,11 +2807,14 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			agentKey := strings.ToLower(td.Agent)
 			cacheKey := agentKey + ":" + truncateTaskDesc(desc)
 
-			// Check in-flight dedup map — wait for first task with same key to complete
+			// Check in-flight dedup map — wait for first task with same key to complete.
+			// Release the semaphore slot while waiting; we are not doing real work.
 			inflightMu.Lock()
 			if ch, ok := inflight[cacheKey]; ok {
 				inflightMu.Unlock()
-				result := <-ch // wait for first task
+				semReleased = true
+				<-sem
+				result := <-ch
 				resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: result.output, err: result.err}
 				return
 			}
