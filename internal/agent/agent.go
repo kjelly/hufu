@@ -181,6 +181,7 @@ var alwaysIncludeTools = map[string]bool{
 	"load_skill":    true,
 	"stm_write":     true,
 	"ltm_update":    true,
+	"team_info":     true,
 }
 
 func SelectTools(allTools []fantasy.AgentTool, toolNames string) []fantasy.AgentTool {

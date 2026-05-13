@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -545,6 +547,268 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 	})
 }
 
+type fileWriter struct {
+	mu   sync.Mutex
+	f    *os.File
+}
+
+func (w *fileWriter) write(s string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.f != nil {
+		fmt.Fprint(w.f, s)
+	}
+}
+
+func newFileWriter(f *os.File) *fileWriter {
+	return &fileWriter{f: f}
+}
+
+// makeFileReporter returns a StatusReporter that writes CLI-format log lines
+// to the given file. It mirrors the output of setupStatusReporter but without
+// idle timer, task panel, or skill panel.
+func makeFileReporter(f *os.File) team.StatusReporter {
+	w := newFileWriter(f)
+	currentAgent := ""
+	textBuf := ""
+
+	return func(event team.StatusEvent) {
+		switch event.Type {
+		case "start":
+			if currentAgent != "" && textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			currentAgent = event.Agent
+			w.write(fmt.Sprintf("\n%s %s %s\n",
+				headerStyle.Render("▶"),
+				formatAgentLabel(event),
+				dimStyle.Render("— "+event.Message),
+			))
+
+		case "step":
+			label := event.Message
+			if event.Step > 0 {
+				label = fmt.Sprintf("step %d", event.Step)
+			}
+			w.write(fmt.Sprintf("  %s %s\n",
+				stepStyle.Render("│"),
+				stepStyle.Render(label),
+			))
+
+		case "tool_call":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			argsPreview := formatToolArgs(event.ToolName, event.ToolArgs)
+			w.write(fmt.Sprintf("  %s %s %s %s\n",
+				toolStyle.Render("⟹"),
+				formatAgentLabel(event),
+				toolStyle.Render("›"),
+				toolStyle.Render(event.ToolName),
+			))
+			if argsPreview != "" {
+				if strings.Contains(argsPreview, "\n") {
+					for _, line := range strings.Split(argsPreview, "\n") {
+						w.write(fmt.Sprintf("    %s\n", dimStyle.Render(line)))
+					}
+				} else {
+					w.write(fmt.Sprintf("    %s\n", dimStyle.Render(argsPreview)))
+				}
+			}
+
+		case "tool_result":
+			resultLine := ""
+			if event.ToolResult != "" {
+				lines := strings.Split(event.ToolResult, "\n")
+				maxLines := 3
+				if len(lines) > maxLines {
+					resultLine = strings.Join(lines[:maxLines], "\n    ") + fmt.Sprintf("  ... (%d more lines)", len(lines)-maxLines)
+				} else {
+					resultLine = strings.Join(lines, "\n    ")
+				}
+				w.write(fmt.Sprintf("  %s %s %s %s\n    %s\n",
+					doneStyle.Render("✓"),
+					formatAgentLabel(event),
+					toolStyle.Render("›"),
+					toolStyle.Render(event.ToolName),
+					resultStyle.Render(utils.TruncatePreview(resultLine, 200)),
+				))
+			} else {
+				w.write(fmt.Sprintf("  %s %s %s %s\n",
+					doneStyle.Render("✓"),
+					formatAgentLabel(event),
+					toolStyle.Render("›"),
+					toolStyle.Render(event.ToolName),
+				))
+			}
+
+		case "text":
+			textBuf += event.Message
+
+		case "done":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			timingStr := ""
+			if event.Duration > 0 {
+				timingStr = formatTimingBreakdown(event.Duration, event.ModelTime, event.ToolTime)
+			}
+			if timingStr != "" {
+				w.write(fmt.Sprintf("%s %s %s %s\n",
+					doneStyle.Render("✓"),
+					formatAgentLabel(event),
+					doneStyle.Render("done"),
+					dimStyle.Render(timingStr),
+				))
+			} else {
+				w.write(fmt.Sprintf("%s %s %s\n",
+					doneStyle.Render("✓"),
+					formatAgentLabel(event),
+					doneStyle.Render("done"),
+				))
+			}
+			currentAgent = ""
+
+		case "wrap_up_phase":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			w.write(fmt.Sprintf("\n%s %s\n\n",
+				wrapUpStyle.Render("⏹"),
+				boldStyle.Render(strings.ToUpper(event.Message+"...")),
+			))
+
+		case "error":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			timingStr := ""
+			if event.Duration > 0 {
+				timingStr = formatTimingBreakdown(event.Duration, event.ModelTime, event.ToolTime)
+			}
+			if timingStr != "" {
+				w.write(fmt.Sprintf("%s %s: %s %s\n",
+					errStyle.Render("✗"),
+					formatAgentLabel(event),
+					errStyle.Render(event.Message),
+					dimStyle.Render(timingStr),
+				))
+			} else {
+				w.write(fmt.Sprintf("%s %s: %s\n",
+					errStyle.Render("✗"),
+					formatAgentLabel(event),
+					errStyle.Render(event.Message),
+				))
+			}
+
+		case "plan_approved":
+			w.write(fmt.Sprintf("%s %s\n",
+				doneStyle.Render("✓"),
+				dimStyle.Render(event.Message),
+			))
+
+		case "loop_warning":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			w.write(fmt.Sprintf("%s %s\n",
+				errStyle.Render("⚠ LOOP"),
+				errStyle.Render(event.Message),
+			))
+
+		case "sidecar_call":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			label := "sidecar"
+			if event.Agent != "" {
+				label = fmt.Sprintf("sidecar/%s", event.Agent)
+			}
+			msg := event.Message
+			if msg == "summarize" {
+				msg = "summarizing output"
+			}
+			w.write(fmt.Sprintf("%s %s %s\n",
+				dimStyle.Render("⟐"),
+				dimStyle.Render(label),
+				dimStyle.Render(msg),
+			))
+
+		case "cache_hit":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			w.write(fmt.Sprintf("%s %s %s %s\n",
+				dimStyle.Render("⟐"),
+				agentStyle.Render(event.Agent),
+				doneStyle.Render("✓ cached"),
+				dimStyle.Render(utils.TruncateLine(event.Message, 60)),
+			))
+
+		case "skill_auto_loaded":
+			if textBuf != "" {
+				w.write(flushText(currentAgent, textBuf))
+				textBuf = ""
+			}
+			w.write(fmt.Sprintf("%s %s auto-loaded: %s\n",
+				dimStyle.Render("⟐"),
+				agentStyle.Render(event.Agent),
+				doneStyle.Render(event.SkillName),
+			))
+
+		case "think_skills":
+			w.write(fmt.Sprintf("%s %s\n",
+				thinkStyle.Render("💭 skills"),
+				dimStyle.Render(event.Message),
+			))
+		case "think_skill_detail":
+			w.write(fmt.Sprintf("%s   %s — %s\n",
+				thinkStyle.Render("💭"),
+				agentStyle.Render(event.Agent),
+				dimStyle.Render(utils.TruncateLine(event.Message, 80)),
+			))
+		case "think_agents":
+			w.write(fmt.Sprintf("%s %s\n",
+				thinkStyle.Render("💭 agents"),
+				dimStyle.Render(event.Message),
+			))
+		case "think_prompt":
+			w.write(fmt.Sprintf("%s %s\n",
+				thinkStyle.Render("💭 prompt"),
+				dimStyle.Render(event.Message),
+			))
+		case "think_prompt_dump":
+			w.write(fmt.Sprintf("%s %s\n",
+				thinkStyle.Render("💭 prompt"),
+				dimStyle.Render(event.Message),
+			))
+		case "think_delegation":
+			w.write(fmt.Sprintf("%s %s\n",
+				thinkStyle.Render("💭 delegate"),
+				dimStyle.Render(event.Message),
+			))
+		case "think_sidecar":
+			w.write(fmt.Sprintf("%s %s\n",
+				thinkStyle.Render("💭 sidecar"),
+				dimStyle.Render(event.Message),
+			))
+		case "think_text":
+			w.write(fmt.Sprintf("%s %s",
+				thinkStyle.Render("💭"),
+				thinkStyle.Render(event.Message),
+			))
+		}
+	}
+}
+
 func flushText(agentName, text string) string {
 	if text == "" {
 		return ""
@@ -749,10 +1013,12 @@ var activeTUIProgram atomic.Pointer[tea.Program]
 
 // coordDisplay holds display handles for one coordinator run. In TUI mode both
 // idleTimer and taskDisp are nil; stopThinking stops background ticker goroutines.
+// logFile receives CLI-format event log when TUI is active.
 type coordDisplay struct {
 	idleTimer    *idleWarningTimer
 	taskDisp     *taskDisplay
 	stopThinking func()
+	logFile      *os.File
 }
 
 func (d *coordDisplay) stopTimer() {
@@ -761,6 +1027,10 @@ func (d *coordDisplay) stopTimer() {
 	}
 	if d.stopThinking != nil {
 		d.stopThinking()
+	}
+	if d.logFile != nil {
+		d.logFile.Close()
+		d.logFile = nil
 	}
 }
 
@@ -771,19 +1041,34 @@ func (d *coordDisplay) finalizeTasks() {
 }
 
 // newCoordDisplay wires up the coordinator's status reporter. In TUI mode it
-// attaches the TUI reporter; otherwise it creates the normal line-writer chain.
+// attaches the TUI reporter plus a file-based CLI-format log; otherwise it
+// creates the normal line-writer chain.
 func newCoordDisplay(tc *teamContext) *coordDisplay {
 	if p := activeTUIProgram.Load(); p != nil {
-		reporter, stopAll := makeTUIReporter(p)
+		tuiReporter, stopAll := makeTUIReporter(p)
+
+		// Open session log file for post-hoc traceability
+		logPath := filepath.Join(tc.session.Workspace, "session.log")
+		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		if err != nil {
+			log.Printf("warning: cannot create session log %q: %v", logPath, err)
+		}
+		fileRep := makeFileReporter(logFile)
+
+		compositeReporter := func(event team.StatusEvent) {
+			tuiReporter(event)
+			fileRep(event)
+		}
 		if tc.notifier != nil {
-			origReporter := reporter
-			reporter = func(event team.StatusEvent) {
-				origReporter(event)
+			orig := compositeReporter
+			compositeReporter = func(event team.StatusEvent) {
+				orig(event)
 				tc.notifier.Notify(event.Type, event.Agent, event.Message, event.Output)
 			}
 		}
-		tc.coordinator.SetStatusReporter(reporter)
-		return &coordDisplay{stopThinking: stopAll}
+
+		tc.coordinator.SetStatusReporter(compositeReporter)
+		return &coordDisplay{stopThinking: stopAll, logFile: logFile}
 	}
 	w := &lineWriter{}
 	idleTimer := newIdleWarningTimer(w, 30*time.Second)
