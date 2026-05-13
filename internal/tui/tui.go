@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/anomalyco/hufu/internal/team"
 	"github.com/anomalyco/hufu/internal/utils"
@@ -923,10 +924,7 @@ func (m Model) statusAreaHeight() int {
 		}
 		return n + 2 // top + bottom border
 	}
-	if m.statusText == "" {
-		return 1
-	}
-	return strings.Count(m.statusText, "\n") + 1
+	return 1
 }
 
 // countFeedLines returns the actual number of terminal lines used by the activity feed.
@@ -976,8 +974,16 @@ func (m Model) renderStatusArea(w int) string {
 		}
 		return dimStyle.Render("  ⟳ Initialising…")
 	}
-	// Text already carries its own lipgloss styling from the reporter.
-	return "  " + text
+	// Strip ANSI, collapse newlines, and truncate to terminal width so the
+	// status bar always occupies exactly 1 line and never causes overflow.
+	plain := ansi.Strip(text)
+	plain = strings.ReplaceAll(plain, "\n", " · ")
+	maxW := m.width - 3
+	if maxW < 1 {
+		maxW = 1
+	}
+	plain = utils.TruncateLine(plain, maxW)
+	return "  " + plain
 }
 
 func (m Model) renderActivityFeed(w int) string {
@@ -1021,12 +1027,13 @@ func (m Model) columnsView() string {
 	promptH := m.promptWidgetHeight()
 	feedH := m.countFeedLines()
 
-	// promptH + blank(1) + statusH + blank(1) + [feedH + blank(1) if >0] + blank(1) + footer(1)
+	// promptH + blank + statusH + blank + feedH + blank + blank + footer
+	// feedH already includes the separator: 0 when empty, feedH+1 when non-empty.
 	feedTotal := 0
 	if feedH > 0 {
 		feedTotal = feedH + 1
 	}
-	bodyH := m.height - promptH - 1 - statusH - 1 - feedTotal - 1 - 1
+	bodyH := m.height - promptH - 1 - statusH - 1 - feedTotal - 2
 	if bodyH < 2 {
 		bodyH = 2
 	}
@@ -1301,7 +1308,7 @@ func (m Model) colBodyHeight() int {
 	if feedH > 0 {
 		feedTotal = feedH + 1
 	}
-	h := m.height - m.promptWidgetHeight() - 1 - m.statusAreaHeight() - 1 - feedTotal - 1 - 1
+	h := m.height - m.promptWidgetHeight() - 1 - m.statusAreaHeight() - 1 - feedTotal - 2
 	if h < 2 {
 		return 2
 	}
