@@ -181,18 +181,45 @@ func (pr *planReviewer) review(ctx context.Context, planText string) (string, bo
 		return "", true, nil
 	}
 	goal := entry.Goal
+	agentName := entry.Agent
 	entry.ReviewCount++
 	forceApprove := entry.ReviewCount > planReviewerMaxReviews
 	c.pendingPlansMu.Unlock()
 
 	if forceApprove {
-		c.report(c.newEvent("step").withMessage(fmt.Sprintf("plan %s: auto-approving after %d reviews", pr.todoID, planReviewerMaxReviews)).withTodoID(pr.todoID))
-		approved := c.autoApprovePlan(ctx, pr.todoID)
-		return approved, true, nil
+		jsonResp, ok := tools.TryAskUserTUI(ctx,
+			fmt.Sprintf("Plan rejected %d times:\n\nAgent: %s\nGoal: %s\n\nPlan:\n%s\n\nManually approve and execute this plan?",
+				entry.ReviewCount, agentName, goal, planText),
+			"confirm",
+			[]tools.AskUserTUIOption{
+				{Label: "Approve and execute", Value: "approve"},
+				{Label: "Reject and cancel task", Value: "reject"},
+			}, false)
+
+		userApproved := false
+		if ok && jsonResp != "" {
+			var resp struct {
+				Answers []string `json:"answers"`
+			}
+			if json.Unmarshal([]byte(jsonResp), &resp) == nil && len(resp.Answers) > 0 {
+				userApproved = resp.Answers[0] == "approve"
+			}
+		}
+
+		if userApproved {
+			approved := c.autoApprovePlan(ctx, pr.todoID)
+			return approved, true, nil
+		}
+
+		c.taskTracker.TodoList().UpdateStatus(pr.todoID, TaskSkipped, "rejected by user after 3+ plan reviews")
+		c.pendingPlansMu.Lock()
+		delete(c.pendingPlans, pr.todoID)
+		c.pendingPlansMu.Unlock()
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		return "", true, nil
 	}
 
 	taskStatus := c.buildTaskStatusContext()
-	agentName := entry.Agent
 	agentDef, _, _ := c.resolveAgentName(agentName)
 	var agentInfo string
 	if agentDef != nil {
