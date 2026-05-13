@@ -239,12 +239,19 @@ func (pr *planReviewer) review(ctx context.Context, planText string) (string, bo
 		return "", false, err
 	}
 
-	// Check if the plan was approved and executed during review
-	// (autoApprovePlan deletes the entry after successful execution)
+	// Check if the plan was approved and executed during review.
+	// autoApprovePlan deletes the pendingPlans entry and stores the real task
+	// output in approvedOutputs. Return that output so the coordinator sees the
+	// actual result rather than just the plan-reviewer's summary text.
 	c.pendingPlansMu.Lock()
 	entry = c.pendingPlans[pr.todoID]
+	actualOutput := c.approvedOutputs[pr.todoID]
+	delete(c.approvedOutputs, pr.todoID)
 	c.pendingPlansMu.Unlock()
 	if entry == nil {
+		if actualOutput != "" {
+			return actualOutput, true, nil
+		}
 		return result, true, nil
 	}
 
@@ -277,10 +284,17 @@ func (c *Coordinator) autoApprovePlan(ctx context.Context, todoID string) string
 		return fmt.Sprintf("Plan execution failed: %v", err)
 	}
 
-	// Clean up plan entry after successful execution to prevent re-review
+	// Store the actual output so review() can return it to the coordinator,
+	// then clean up the plan entry. This ensures the coordinator receives the
+	// real task result rather than the plan-reviewer's summary text.
 	c.pendingPlansMu.Lock()
+	c.approvedOutputs[todoID] = output
 	delete(c.pendingPlans, todoID)
 	c.pendingPlansMu.Unlock()
+
+	// Populate the task cache so duplicate detection in subsequent rounds
+	// finds the completed result instead of treating it as a new task.
+	c.storeTaskCache(strings.ToLower(agentName), goal, output)
 
 	return output
 }
@@ -490,6 +504,7 @@ type Coordinator struct {
 	workerSummaries      map[string]string
 	workerSummariesMu    sync.Mutex
 	pendingPlans          map[string]*PlanEntry
+	approvedOutputs       map[string]string // actual task output after autoApprovePlan executes, keyed by todoID
 	pendingPlansMu        sync.Mutex
 	forcePlanFirst        bool
 	autoSkillsEnabled     bool
@@ -579,6 +594,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		skillUsage:      make(map[string]*skillUsageState),
 		delegatedTasks:  make(map[string]int),
 		pendingPlans:    make(map[string]*PlanEntry),
+		approvedOutputs: make(map[string]string),
 		taskResultCache: make(map[string][]cachedTaskEntry),
 		memoryStore:     memoryStore,
 		modelList:       modelList,
@@ -2678,7 +2694,8 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 
 	c.round++
 	if c.session.Config.MaxRounds > 0 && c.round > c.session.Config.MaxRounds {
-		return "", fmt.Errorf("max rounds (%d) exceeded", c.session.Config.MaxRounds)
+		c.wrapUp.Store(1)
+		return "", fmt.Errorf("max rounds (%d) exceeded: call finish immediately with your best summary of work completed so far", c.session.Config.MaxRounds)
 	}
 
 	// Bump the cache generation when the coordinator starts a new delegation
