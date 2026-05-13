@@ -504,8 +504,10 @@ type Coordinator struct {
 	workerSummaries      map[string]string
 	workerSummariesMu    sync.Mutex
 	pendingPlans          map[string]*PlanEntry
-	approvedOutputs       map[string]string // actual task output after autoApprovePlan executes, keyed by todoID
-	pendingPlansMu        sync.Mutex
+	// approvedOutputs stores actual task output once autoApprovePlan executes.
+	// It is always accessed under pendingPlansMu — do not read or write without holding that lock.
+	approvedOutputs map[string]string
+	pendingPlansMu  sync.Mutex
 	forcePlanFirst        bool
 	autoSkillsEnabled     bool
 }
@@ -2648,7 +2650,10 @@ func (c *Coordinator) checkDuplicateTasks(tasks []TaskDef) ([]string, map[int]bo
 
 		// Check 2: semantic duplicate (across all generations)
 		agentKey := strings.ToLower(t.Agent)
-		if cachedOutput, cachedDesc, ok := c.lookupTaskCacheAllGenerations(context.Background(), agentKey, desc); ok {
+		dupCtx, dupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cachedOutput, cachedDesc, cacheOK := c.lookupTaskCacheAllGenerations(dupCtx, agentKey, desc)
+		dupCancel()
+		if cacheOK {
 			warnings = append(warnings, fmt.Sprintf("SEMANTIC DUPLICATE: %s (similar to completed task: %q)", truncateTaskDesc(desc), truncateTaskDesc(cachedDesc)))
 			duplicates[i] = true
 			log.Printf("[WARN] duplicate task detected: agent=%q, task=%q, similar to=%q", t.Agent, desc, cachedDesc)

@@ -171,7 +171,7 @@ type Model struct {
 	mouseEnabled         bool // mouse tracking is currently on
 	mouseManuallyEnabled bool // user explicitly toggled mouse on with 'm'
 
-	recentLogs              []string // last N activity log lines (circular buffer, max 3)
+	recentLogs              []string // last N activity log entries (circular buffer, max 3 entries; each may be multi-line, capped at maxFeedLines rendered lines)
 	detailRefreshScheduled   bool
 }
 
@@ -357,29 +357,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 			statusH := m.statusAreaHeight()
 			promptH := m.promptWidgetHeight()
-			bodyH := m.height - promptH - 1 - statusH - 1 - 1 - 1
-			if bodyH < 2 {
-				bodyH = 2
+			feedH := m.countFeedLines()
+			feedTotal := 0
+			if feedH > 0 {
+				feedTotal = feedH + 1
 			}
+			bodyH := m.colBodyHeight()
 			colW := 0
 			if m.width >= 9 {
 				colW = (m.width - 5) / 6
 			}
 
 			// Header takes 2 lines (title + blank)
-			clickY := msg.Y - promptH - 1 - statusH - 1 // subtract widget + blank + status + blank
+			// Subtract: widget + blank + status + blank + [feed + blank if present]
+			clickY := msg.Y - promptH - 1 - statusH - 1 - feedTotal
 			clickX := msg.X
 			if clickY < 2 || clickY >= bodyH+2 {
 				return m, nil
 			}
 			clickY -= 2 // skip header
 
-			// Determine which column was clicked
+			// Determine which column was clicked (6 columns, 5 dividers)
 			clickedCol := -1
 			xOffset := 0
-			for c := 0; c < 5; c++ {
+			for c := 0; c < 6; c++ {
 				colEnd := xOffset + colW
-				if c == 4 {
+				if c == 5 {
 					colEnd = m.width // last column takes remaining width
 				}
 				if clickX >= xOffset && clickX < colEnd {
@@ -974,10 +977,12 @@ func (m Model) renderStatusArea(w int) string {
 		}
 		return dimStyle.Render("  ⟳ Initialising…")
 	}
-	// Strip ANSI, collapse newlines, and truncate to terminal width so the
-	// status bar always occupies exactly 1 line and never causes overflow.
+	// Strip ANSI, take the last (most recent) line, and truncate to terminal
+	// width so the status bar always occupies exactly 1 line.
 	plain := ansi.Strip(text)
-	plain = strings.ReplaceAll(plain, "\n", " · ")
+	if idx := strings.LastIndexByte(plain, '\n'); idx >= 0 {
+		plain = plain[idx+1:]
+	}
 	maxW := m.width - 3
 	if maxW < 1 {
 		maxW = 1
@@ -1237,7 +1242,7 @@ func (m *Model) scrollCursorIntoView() {
 
 	colW := 0
 	if m.width >= 9 {
-		colW = (m.width - 4) / 5
+		colW = (m.width - 5) / 6
 	}
 
 	itemHeights := make([]int, len(items))
@@ -1292,7 +1297,7 @@ func (m *Model) scrollCursorIntoView() {
 }
 
 func (m *Model) clampScroll() {
-	for c := 0; c < 5; c++ {
+	for c := 0; c < 6; c++ {
 		items := m.colItems(c)
 		if len(items) == 0 {
 			m.scrollOff[c] = 0
