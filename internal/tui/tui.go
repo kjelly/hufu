@@ -911,6 +911,7 @@ func (m Model) promptWidgetHeight() int {
 }
 
 const maxResultLines = 8
+const maxFeedLines = 6
 
 // statusAreaHeight returns the number of terminal lines occupied by the status area.
 func (m Model) statusAreaHeight() int {
@@ -922,7 +923,22 @@ func (m Model) statusAreaHeight() int {
 		}
 		return n + 2 // top + bottom border
 	}
-	return 1
+	if m.statusText == "" {
+		return 1
+	}
+	return strings.Count(m.statusText, "\n") + 1
+}
+
+// countFeedLines returns the actual number of terminal lines used by the activity feed.
+func (m Model) countFeedLines() int {
+	n := 0
+	for _, entry := range m.recentLogs {
+		n += strings.Count(entry, "\n") + 1
+	}
+	if n > maxFeedLines {
+		return maxFeedLines
+	}
+	return n
 }
 
 // renderStatusArea renders the status bar or result box.
@@ -970,14 +986,24 @@ func (m Model) renderActivityFeed(w int) string {
 	}
 	feedW := w - 2
 	var b strings.Builder
-	for _, line := range m.recentLogs {
-		runes := []rune(line)
-		if len(runes) > feedW {
-			line = string(runes[:feedW-1]) + "…"
+	lineCount := 0
+	for _, entry := range m.recentLogs {
+		for _, line := range strings.Split(entry, "\n") {
+			if lineCount >= maxFeedLines {
+				break
+			}
+			runes := []rune(line)
+			if len(runes) > feedW {
+				line = string(runes[:feedW-1]) + "…"
+			}
+			b.WriteString("  ")
+			b.WriteString(dimStyle.Render(line))
+			b.WriteString("\n")
+			lineCount++
 		}
-		b.WriteString("  ")
-		b.WriteString(dimStyle.Render(line))
-		b.WriteString("\n")
+		if lineCount >= maxFeedLines {
+			break
+		}
 	}
 	return b.String()
 }
@@ -993,10 +1019,14 @@ func (m Model) columnsView() string {
 	activityFeed := m.renderActivityFeed(w)
 	statusH := m.statusAreaHeight()
 	promptH := m.promptWidgetHeight()
-	feedH := len(m.recentLogs)
+	feedH := m.countFeedLines()
 
-	// promptH + blank(1) + statusH + blank(1) + feedH + blank(1) + blank(1) + footer(1)
-	bodyH := m.height - promptH - 1 - statusH - 1 - feedH - 1 - 1 - 1
+	// promptH + blank(1) + statusH + blank(1) + [feedH + blank(1) if >0] + blank(1) + footer(1)
+	feedTotal := 0
+	if feedH > 0 {
+		feedTotal = feedH + 1
+	}
+	bodyH := m.height - promptH - 1 - statusH - 1 - feedTotal - 1 - 1
 	if bodyH < 2 {
 		bodyH = 2
 	}
@@ -1266,7 +1296,12 @@ func (m *Model) clampScroll() {
 }
 
 func (m Model) colBodyHeight() int {
-	h := m.height - m.promptWidgetHeight() - 1 - m.statusAreaHeight() - 1 - 1 - 1
+	feedH := m.countFeedLines()
+	feedTotal := 0
+	if feedH > 0 {
+		feedTotal = feedH + 1
+	}
+	h := m.height - m.promptWidgetHeight() - 1 - m.statusAreaHeight() - 1 - feedTotal - 1 - 1
 	if h < 2 {
 		return 2
 	}
