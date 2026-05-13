@@ -810,6 +810,21 @@ func (c *Coordinator) saveAndReloadSkill(name, description, content string) (str
 	return skillPath, nil
 }
 
+// appendSkillContext appends skill prefix and auto-matched skill suggestions to
+// prompt. todoID may be empty; SetInjectedSkills is skipped when it is.
+func (c *Coordinator) appendSkillContext(prompt string, agentDef *agent.AgentDef, agentName, goal, todoID string) string {
+	if prefix := c.buildSkillPromptPrefix(agentDef); prefix != "" {
+		prompt += "\n\n" + prefix
+	}
+	if suggestion, names := c.buildSuggestedSkillsText(agentDef, agentName, goal); suggestion != "" {
+		if todoID != "" {
+			c.taskTracker.TodoList().SetInjectedSkills(todoID, names)
+		}
+		prompt += "\n\n" + suggestion
+	}
+	return prompt
+}
+
 func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
 	agentSkillNames := skill.ParseSkillList(agentDef.Skills)
 	if len(agentSkillNames) == 0 {
@@ -1643,6 +1658,10 @@ func (t *requestAgentTool) Info() fantasy.ToolInfo {
 				"type":        "string",
 				"description": "Non-obvious restrictions the sub-agent must respect",
 			},
+			"agent": map[string]any{
+				"type":        "string",
+				"description": "Name of the specific agent to assign this task to. If omitted, the best available agent is selected automatically.",
+			},
 		},
 		Required: []string{"goal"},
 	}
@@ -1655,6 +1674,7 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	var args struct {
 		Goal        string `json:"goal"`
 		Constraints string `json:"constraints"`
+		Agent       string `json:"agent"`
 	}
 	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -1672,20 +1692,27 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	}
 
 	c := t.coordinator
-	selected, err := c.selectAgentForGoal(ctx, args.Goal)
-	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("could not select agent: %v", err)), nil
+
+	var selected string
+	if args.Agent != "" {
+		def, _, err := c.resolveAgentName(args.Agent)
+		if err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown agent %q: %v", args.Agent, err)), nil
+		}
+		selected = def.Name
+	} else {
+		var err error
+		selected, err = c.selectAgentForGoal(ctx, args.Goal)
+		if err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("could not select agent: %v", err)), nil
+		}
 	}
 
 	subLabel := callerName + "/" + selected
-
-	// Check for semantic duplicate before creating sub-agent
 	agentKey := strings.ToLower(selected)
 	if cachedOutput, cachedDesc, ok := c.lookupTaskCacheAllGenerations(ctx, agentKey, taskDesc); ok {
-		log.Printf("[WARN] request_agent duplicate detected: agent=%q, task=%q, similar to=%q", selected, taskDesc, cachedDesc)
-		return fantasy.NewTextErrorResponse(
-			fmt.Sprintf("duplicate task detected: '%s' is semantically similar to completed task '%s'. Reference existing result (ID: %s) instead.", truncateTaskDesc(taskDesc), truncateTaskDesc(cachedDesc), cachedOutput),
-		), nil
+		log.Printf("[INFO] request_agent cache hit: agent=%q, task=%q, matched=%q", selected, taskDesc, cachedDesc)
+		return fantasy.NewTextResponse(fmt.Sprintf("[Cached result for similar task: '%s']\n\n%s", truncateTaskDesc(cachedDesc), cachedOutput)), nil
 	}
 
 	todoItems := c.taskTracker.TodoList().AddBatch([]struct {
@@ -1704,12 +1731,16 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("start").withAgent(subLabel).withMessage(taskDesc).withTodoID(subTodoID))
 
-	output, err := c.ExecuteSubAgent(ctx, selected, args.Goal, args.Constraints)
+	// Inject subTodoID so events from runAgentWithStatusAndHistory attribute to the right item.
+	execCtx := context.WithValue(ctx, todoIDKey{}, subTodoID)
+	output, err := c.ExecuteSubAgent(execCtx, selected, args.Goal, args.Constraints)
 	if err != nil {
 		c.taskTracker.TodoList().UpdateStatus(subTodoID, TaskError, err.Error())
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
+
+	c.storeTaskCache(agentKey, taskDesc, output)
 
 	if parentID != "" {
 		c.taskTracker.TodoList().UpdateStatus(parentID, TaskInProgress, "")
@@ -1768,15 +1799,11 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		return "", fmt.Errorf("wrap-up in progress: cannot create sub-agent")
 	}
 
-	taskDesc := task
-	if constraints != "" {
-		taskDesc += "\nconstraints: " + constraints
-	}
 	agentDef, _, err := c.resolveAgentName(name)
 	if err != nil {
 		agentDef = &agent.AgentDef{
 			Name:        name,
-			Description: "Sub-agent for: " + taskDesc,
+			Description: "Sub-agent for: " + task,
 			Role:        "worker",
 			Tools:       "",
 			MaxRetries:  -1,
@@ -1795,10 +1822,17 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		return "", fmt.Errorf("failed to create sub-agent %q: %w", name, err)
 	}
 
+	prompt := "## Goal\n\n" + task
+	if constraints != "" {
+		prompt += "\n\n## Constraints\n\n" + constraints
+	}
+	todoID, _ := ctx.Value(todoIDKey{}).(string)
+	prompt = c.appendSkillContext(prompt, agentDef, agentDef.Name, task, todoID)
+
 	timing := &taskTiming{}
 	timing.reset()
 
-	output, _, err := c.runAgentWithStatusAndHistory(ctx, ag, name, taskDesc, nil, timing)
+	output, _, err := c.runAgentWithStatusAndHistory(ctx, ag, name, prompt, nil, timing)
 	if err != nil {
 		return "", err
 	}
@@ -3094,15 +3128,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		prompt += "\n\nYou are a domain expert. Determine your own implementation approach based on the goal above."
 	}
 
-	if suffix := c.buildSkillPromptPrefix(agentDef); suffix != "" {
-		prompt = prompt + "\n\n" + suffix
-	}
-
-	skillSuggestion, skillNames := c.buildSuggestedSkillsText(agentDef, agentName, task.Goal)
-	if skillSuggestion != "" {
-		c.taskTracker.TodoList().SetInjectedSkills(todoID, skillNames)
-		prompt = prompt + "\n\n" + skillSuggestion
-	}
+	prompt = c.appendSkillContext(prompt, agentDef, agentName, task.Goal, todoID)
 
 	if len(task.ContextFiles) > 0 {
 		var contextBuilder strings.Builder
@@ -4498,16 +4524,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	_ = writeStatus(c.session.Workspace, resolvedName, "working", task)
 
-	prompt := task
-	if suffix := c.buildSkillPromptPrefix(agentDef); suffix != "" {
-		prompt = prompt + "\n\n" + suffix
-	}
-
-	skillSuggestion, skillNames := c.buildSuggestedSkillsText(agentDef, resolvedName, task)
-	if skillSuggestion != "" {
-		c.taskTracker.TodoList().SetInjectedSkills(todoID, skillNames)
-		prompt = prompt + "\n\n" + skillSuggestion
-	}
+	prompt := c.appendSkillContext(task, agentDef, resolvedName, task, todoID)
 
 	if !c.forcePlanFirst {
 		if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
