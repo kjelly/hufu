@@ -1119,40 +1119,52 @@ func classifyLTMEntry(entry string, source string) string {
 		return ltmSectionFiles
 	}
 
+	// Conventions: English and Chinese keywords
 	if strings.Contains(lower, "always") || strings.Contains(lower, "never") ||
 		strings.Contains(lower, "must ") || strings.Contains(lower, "should ") ||
 		strings.Contains(lower, "convention") || strings.Contains(lower, "rule") ||
 		strings.Contains(lower, "standard") || strings.Contains(lower, "guideline") ||
-		strings.Contains(lower, "every time") {
+		strings.Contains(lower, "every time") ||
+		strings.Contains(entry, "慣例") || strings.Contains(entry, "規範") ||
+		strings.Contains(entry, "必須") || strings.Contains(entry, "不可") ||
+		strings.Contains(entry, "應該") || strings.Contains(entry, "每次") {
 		return ltmSectionConventions
 	}
 
+	// Patterns: English and Chinese keywords
 	if strings.Contains(lower, "pattern") || strings.Contains(lower, "approach") ||
 		strings.Contains(lower, "strategy") || strings.Contains(lower, "workflow") ||
-		strings.Contains(lower, "pipeline") || strings.Contains(lower, "template") {
+		strings.Contains(lower, "pipeline") || strings.Contains(lower, "template") ||
+		strings.Contains(entry, "模式") || strings.Contains(entry, "做法") ||
+		strings.Contains(entry, "流程") || strings.Contains(entry, "步驟") {
 		return ltmSectionPatterns
 	}
 
-	if source == "error" && strings.Contains(lower, "fix") ||
+	// Issues: English and Chinese keywords
+	if (source == "error" && strings.Contains(lower, "fix")) ||
 		strings.Contains(lower, "solved") || strings.Contains(lower, "resolved") ||
-		strings.Contains(lower, "workaround") || strings.Contains(lower, "solution") {
+		strings.Contains(lower, "workaround") || strings.Contains(lower, "solution") ||
+		strings.Contains(entry, "修復") || strings.Contains(entry, "解決") ||
+		strings.Contains(entry, "問題") || strings.Contains(entry, "錯誤") ||
+		strings.Contains(entry, "失敗") || strings.Contains(entry, "繞過") {
 		return ltmSectionIssues
 	}
 
-	if source == "decision" {
-		if strings.Contains(lower, "use ") || strings.Contains(lower, "switch") ||
-			strings.Contains(lower, "migrate") || strings.Contains(lower, "replace") ||
-			strings.Contains(lower, "upgrade") || strings.Contains(lower, "choose") ||
-			strings.Contains(lower, "select") || strings.Contains(lower, "adopt") {
-			return ltmSectionArchitecture
-		}
+	// Architecture decisions: source=decision defaults here; also Chinese keywords
+	if source == "decision" ||
+		strings.Contains(entry, "決策") || strings.Contains(entry, "架構") ||
+		strings.Contains(entry, "選擇") || strings.Contains(entry, "採用") ||
+		strings.Contains(entry, "改用") || strings.Contains(entry, "遷移") {
 		return ltmSectionArchitecture
 	}
 
+	// Tools/commands: English and Chinese keywords
 	if strings.Contains(lower, "tool") || strings.Contains(lower, "command") ||
 		strings.Contains(lower, "script") || strings.Contains(lower, "cli ") ||
 		strings.Contains(lower, "run ") || strings.Contains(lower, "install ") ||
-		strings.Contains(lower, "build ") || strings.Contains(lower, "test ") {
+		strings.Contains(lower, "build ") || strings.Contains(lower, "test ") ||
+		strings.Contains(entry, "指令") || strings.Contains(entry, "命令") ||
+		strings.Contains(entry, "工具") || strings.Contains(entry, "腳本") {
 		return ltmSectionTools
 	}
 
@@ -2195,19 +2207,26 @@ type ltmUpdateTool struct {
 func (t *ltmUpdateTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
 		Name:        "ltm_update",
-		Description: "Update long-term memory (ltm.md), a persistent file shared across sessions for this team. Use append mode to add new knowledge, or replace mode to overwrite. This memory persists between sessions and is available to future runs.",
+		Description: "Update long-term memory (ltm.md), a persistent file shared across sessions for this team. Each entry is appended to the specified section so it can be retrieved in future sessions.",
 		Parameters: map[string]any{
 			"content": map[string]any{
 				"type":        "string",
-				"description": "The content to write to long-term memory",
+				"description": "The knowledge to record (one concise fact, decision, or pattern per call)",
 			},
-			"mode": map[string]any{
+			"section": map[string]any{
 				"type":        "string",
-				"description": "Write mode: \"append\" (add to end, default) or \"replace\" (overwrite entire file)",
-				"enum":        []string{"append", "replace"},
+				"description": "Which long-term memory section to append to",
+				"enum": []string{
+					ltmSectionConventions,
+					ltmSectionArchitecture,
+					ltmSectionPatterns,
+					ltmSectionIssues,
+					ltmSectionFiles,
+					ltmSectionTools,
+				},
 			},
 		},
-		Required: []string{"content"},
+		Required: []string{"content", "section"},
 	}
 }
 
@@ -2217,7 +2236,7 @@ func (t *ltmUpdateTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOp
 func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
 		Content string `json:"content"`
-		Mode    string `json:"mode"`
+		Section string `json:"section"`
 	}
 	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -2225,37 +2244,22 @@ func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	if args.Content == "" {
 		return fantasy.NewTextErrorResponse("content is required"), nil
 	}
-
-	mode := args.Mode
-	if mode == "" {
-		mode = "append"
+	if args.Section == "" {
+		return fantasy.NewTextErrorResponse("section is required"), nil
 	}
 
+	entry := formatLTMEntry(args.Content)
 	teamDir := t.coordinator.session.Dir
 	t.coordinator.ltmWriteMu.Lock()
-	var newContent string
-	switch mode {
-	case "replace":
-		newContent = TruncateLTM(args.Content)
-	default:
-		existing := LoadLTM(teamDir)
-		if existing == "" {
-			newContent = TruncateLTM(args.Content)
-		} else {
-			newContent = TruncateLTM(existing + "\n" + args.Content)
-		}
-	}
+	existing := LoadLTM(teamDir)
+	newContent := TruncateLTM(appendLTMEntry(existing, entry, args.Section))
 	err := SaveLTM(teamDir, newContent)
 	t.coordinator.ltmWriteMu.Unlock()
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write ltm.md: %v", err)), nil
 	}
 
-	verb := "Appended to"
-	if mode == "replace" {
-		verb = "Replaced"
-	}
-	return fantasy.NewTextResponse(fmt.Sprintf("%s long-term memory (ltm.md)", verb)), nil
+	return fantasy.NewTextResponse(fmt.Sprintf("Appended to long-term memory section %q", args.Section)), nil
 }
 
 type approvePlanTool struct {
@@ -4235,9 +4239,10 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("```json\n{\"content\": \"concise summary of what happened\", \"mode\": \"append\"}\n```\n\n")
 
 	b.WriteString("### ltm_update\n")
-	b.WriteString("Update long-term memory (ltm.md), a persistent file shared across sessions for this team. Use **append** mode to add knowledge, or **replace** mode to overwrite.\n")
+	b.WriteString("Append to a specific section of long-term memory (ltm.md), a persistent file shared across sessions for this team.\n")
 	b.WriteString("Use ltm_update to save important cross-session knowledge: project conventions, discovered APIs, recurring patterns, architecture decisions, and lessons learned.\n")
-	b.WriteString("```json\n{\"content\": \"discovered API endpoint /api/v2/...\", \"mode\": \"append\"}\n```\n\n")
+	b.WriteString("Available sections: `# 專案慣例`, `# 架構決策`, `# 常見模式`, `# 已知問題與解法`, `# 關鍵檔案`, `# 工具與指令`\n")
+	b.WriteString("```json\n{\"content\": \"API endpoint /api/v2/users requires JWT in Authorization header\", \"section\": \"# 專案慣例\"}\n```\n\n")
 
 	wsPath := c.session.Workspace
 	sharedPath := filepath.Join(wsPath, sharedDir)
