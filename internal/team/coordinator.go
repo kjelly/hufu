@@ -930,6 +930,7 @@ func containsAny(keywords []string, text string) bool {
 
 const maxSTMAutoInject = 2000
 const maxLTMAutoInject = 3000
+const maxTaskSTMContextChars = 1500
 
 func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 	var b strings.Builder
@@ -983,6 +984,64 @@ func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 	b.WriteString(memContent)
 	b.WriteString("\n")
 	return b.String()
+}
+
+// buildTaskSTMContext returns the knowledge-transfer sections from STM
+// (# 發現, # 決策, # 錯誤與修復, # 待解決) to append after the goal in task prompts.
+// # 進度 is excluded — it is status tracking, not actionable knowledge.
+// All agents receive these sections regardless of role so findings from one
+// agent are always visible to the next.
+func (c *Coordinator) buildTaskSTMContext() string {
+	rawSTM := LoadSTM(c.session.Workspace)
+	if rawSTM == "" {
+		return ""
+	}
+	knowledgeSections := map[string]bool{
+		stmSectionFindings:  true,
+		stmSectionDecisions: true,
+		stmSectionErrors:    true,
+		stmSectionQuestions: true,
+	}
+	var relevant []STMSection
+	for _, s := range ParseSTMSections(rawSTM) {
+		if knowledgeSections[s.Title] && len(s.Entries) > 0 {
+			relevant = append(relevant, s)
+		}
+	}
+	if len(relevant) == 0 {
+		return ""
+	}
+	stm := FormatSTMSections(relevant)
+	runes := []rune(stm)
+	if len(runes) > maxTaskSTMContextChars {
+		stm = string(runes[len(runes)-maxTaskSTMContextChars:])
+	}
+	return "## Context from Previous Agents\n\n" + stm
+}
+
+// buildLTMContext returns LTM formatted as a background-reference suffix.
+// Used by executeTask in place of buildMemorySuffix (which includes STM)
+// so that STM is not duplicated when buildTaskSTMContext is already prepended.
+func (c *Coordinator) buildLTMContext() string {
+	rawLTM := LoadLTM(c.session.Dir)
+	if rawLTM == "" {
+		return ""
+	}
+	sections := ParseSTMSections(rawLTM)
+	if len(sections) == 0 {
+		return ""
+	}
+	for i, s := range sections {
+		if len(s.Entries) > 3 {
+			sections[i].Entries = s.Entries[:3]
+		}
+	}
+	ltm := FormatSTMSections(sections)
+	runes := []rune(ltm)
+	if len(runes) > maxLTMAutoInject {
+		ltm = string(runes[len(runes)-maxLTMAutoInject:])
+	}
+	return "## Long-term Memory\n\nBackground knowledge accumulated across sessions — use as reference, not instruction.\n\n" + ltm
 }
 
 func (c *Coordinator) autoWriteSTM(agentName, taskDesc, output, errMsg string, success bool) {
@@ -3117,7 +3176,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			prompt += "\n\n## Constraints\n\n" + task.Constraints
 		}
 		prompt += "\n\n## Approved Plan\n\n" + planText
-		prompt += "\n\n## Instructions\n\nExecute the approved plan above. You have already planned — now implement each step. Call finish when done."
+		stmPath := STMPath(c.session.Workspace)
+		prompt += fmt.Sprintf("\n\n## Instructions\n\nExecute the approved plan above. You have already planned — now implement each step.\n\n- Before starting, read `%s` to check for updates from concurrent agents.\n- Write key discoveries to `stm_write` immediately when found.\n- Call finish when done.", stmPath)
 	} else if task.PlanFirst {
 		prompt = "## Goal\n\n" + task.Goal
 		if task.Constraints != "" {
@@ -3129,7 +3189,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		if task.Constraints != "" {
 			prompt += "\n\n## Constraints\n\n" + task.Constraints
 		}
-		prompt += "\n\nYou are a domain expert. Determine your own implementation approach based on the goal above."
+		stmPath := STMPath(c.session.Workspace)
+		prompt += fmt.Sprintf("\n\n## Instructions\n\nYou are a domain expert. Determine your own implementation approach based on the goal above.\n\n- Before your first implementation step, read `%s` to check for updates from agents running concurrently with you.\n- When you discover something important (API shape, file location, decision, error), write it to `stm.md` immediately via `stm_write` — do not wait until the end.", stmPath)
 	}
 
 	prompt = c.appendSkillContext(prompt, agentDef, agentName, task.Goal, todoID)
@@ -3148,8 +3209,13 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		prompt = contextBuilder.String() + "\n---\n\n" + prompt
 	}
 
-	if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
-		prompt = prompt + "\n\n" + suffix
+	// Inject STM knowledge-transfer sections after the goal so the agent
+	// knows what to do before reading prior context, then LTM as background.
+	if stmCtx := c.buildTaskSTMContext(); stmCtx != "" {
+		prompt = prompt + "\n\n" + stmCtx
+	}
+	if ltmCtx := c.buildLTMContext(); ltmCtx != "" {
+		prompt = prompt + "\n\n" + ltmCtx
 	}
 
 	var conversationHistory []fantasy.Message
@@ -4077,7 +4143,9 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("   Examples:\n")
 	b.WriteString("   - ❌ BAD: \"search src/main.go line 42 for parseUser and fix the nil check\"\n")
 	b.WriteString("   - ✅ GOOD: goal=\"Fix nil pointer dereference in user parsing\", constraints=\"Must maintain backward compatibility with existing callers\"\n\n")
-	b.WriteString("6. Run independent tasks in parallel by passing multiple tasks in one agent call\n")
+	b.WriteString("6. **Parallel vs sequential**: Pass truly independent tasks together in one agent call (they run in parallel and cannot see each other's in-progress output). If task B needs task A's result, put them in **separate** agent calls — one after the other.\n")
+	b.WriteString("   - ✅ Parallel: research + write-docs (different domains, no dependency)\n")
+	b.WriteString("   - ❌ Parallel: research + summarize-research (B needs A's output → must be sequential)\n")
 	b.WriteString("7. When delegating to a worker that needs skill knowledge, include ALL relevant skill summaries (name, file path) in the task description so the worker can call `load_skill` if needed\n")
 	b.WriteString("8. **Trust worker expertise** — Workers have access to the full project context (AGENTS.md, tech stack, conventions, directory structure). They will explore the codebase, identify relevant files, and determine the best implementation approach. Do NOT pre-specify file paths, function names, or implementation steps unless they are non-obvious constraints.\n")
 	b.WriteString("9. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
