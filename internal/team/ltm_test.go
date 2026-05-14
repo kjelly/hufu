@@ -183,6 +183,59 @@ func TestHasLTREntry(t *testing.T) {
 	}
 }
 
+func TestExtractLTMFromHistory(t *testing.T) {
+	workspace := t.TempDir()
+	teamDir := t.TempDir()
+
+	histDir := workspace + "/history"
+	if err := os.MkdirAll(histDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stm1 := "# 決策\n- use bcrypt for password hashing\n\n# 發現\n- login.go has SQL injection"
+	stm2 := "# 錯誤與修復\n- fixed: timeout by adding retry logic"
+	os.WriteFile(histDir+"/20260101T120000-stm.md", []byte(stm1), 0o644)
+	os.WriteFile(histDir+"/20260102T130000-stm.md", []byte(stm2), 0o644)
+	// non-stm file should be ignored
+	os.WriteFile(histDir+"/session.md", []byte("irrelevant"), 0o644)
+
+	ExtractLTMFromHistory(workspace, teamDir)
+
+	ltm := LoadLTM(teamDir)
+	if ltm == "" {
+		t.Fatal("ExtractLTMFromHistory: ltm.md is empty")
+	}
+	if !stringContains(ltm, "bcrypt") {
+		t.Errorf("missing bcrypt entry: %s", ltm)
+	}
+	if !stringContains(ltm, "SQL injection") && !stringContains(ltm, "injection") {
+		t.Errorf("missing SQL injection entry: %s", ltm)
+	}
+	if !stringContains(ltm, "retry") {
+		t.Errorf("missing retry entry: %s", ltm)
+	}
+
+	// History stm files should be deleted
+	entries, _ := os.ReadDir(histDir)
+	for _, e := range entries {
+		if stringContains(e.Name(), "-stm.md") {
+			t.Errorf("history file not deleted: %s", e.Name())
+		}
+	}
+}
+
+func TestExtractLTMFromHistoryEmpty(t *testing.T) {
+	workspace := t.TempDir()
+	teamDir := t.TempDir()
+
+	// No history directory at all — should not panic
+	ExtractLTMFromHistory(workspace, teamDir)
+
+	if ltm := LoadLTM(teamDir); ltm != "" {
+		t.Errorf("expected empty ltm, got %q", ltm)
+	}
+}
+
 func stringContains(s, substr string) bool {
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {

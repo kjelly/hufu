@@ -90,15 +90,15 @@ func TestInitSTMCreatesFile(t *testing.T) {
 	}
 }
 
-func TestInitSTMIdempotent(t *testing.T) {
+func TestInitSTMClearsExistingContent(t *testing.T) {
 	dir := t.TempDir()
-	SaveSTM(dir, "existing content")
+	SaveSTM(dir, "previous session content")
 	if err := InitSTM(dir); err != nil {
 		t.Fatalf("InitSTM() error: %v", err)
 	}
 	got := LoadSTM(dir)
-	if got != "existing content" {
-		t.Errorf("InitSTM() clobbered existing content: got %q", got)
+	if got != "" {
+		t.Errorf("InitSTM() should reset stm.md: got %q", got)
 	}
 }
 

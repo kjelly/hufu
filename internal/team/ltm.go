@@ -134,3 +134,66 @@ func InitLTM(teamDir string) error {
 	}
 	return os.WriteFile(path, []byte(""), 0o644)
 }
+
+// extractLTMFromContent merges knowledge from one STM snapshot (stmContent)
+// into existingLTM and returns the updated LTM string. Deduplication is
+// handled later by PruneLTM → deduplicateLTREntries.
+func extractLTMFromContent(stmContent, existingLTM string) string {
+	for _, s := range ParseSTMSections(stmContent) {
+		var source, defaultSection string
+		switch s.Title {
+		case stmSectionDecisions:
+			source, defaultSection = "decision", ltmSectionArchitecture
+		case stmSectionFindings:
+			source, defaultSection = "finding", ltmSectionPatterns
+		case stmSectionErrors:
+			source, defaultSection = "error", ltmSectionIssues
+		default:
+			continue
+		}
+		for _, e := range s.Entries {
+			sec := classifyLTMEntry(e, source)
+			if sec == "" {
+				sec = defaultSection
+			}
+			existingLTM = appendSTMEntry(existingLTM, formatLTMEntry(stripSTMListItem(e)), sec)
+		}
+	}
+	return existingLTM
+}
+
+// ExtractLTMFromHistory reads every history/*-stm.md file, extracts knowledge
+// into ltm.md, then deletes the history files. Called on --new startup so that
+// accumulated session snapshots are distilled into long-term memory.
+func ExtractLTMFromHistory(workspace, teamDir string) {
+	histDir := filepath.Join(workspace, historyDirName)
+	entries, err := os.ReadDir(histDir)
+	if err != nil {
+		return
+	}
+
+	ltm := LoadLTM(teamDir)
+	anyContent := false
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), "-stm.md") {
+			continue
+		}
+		path := filepath.Join(histDir, e.Name())
+		data, readErr := os.ReadFile(path)
+		content := strings.TrimSpace(string(data))
+		if readErr == nil && content != "" {
+			ltm = extractLTMFromContent(content, ltm)
+			anyContent = true
+		}
+		os.Remove(path)
+	}
+
+	if !anyContent {
+		return
+	}
+
+	if err := SaveLTM(teamDir, TruncateLTM(PruneLTM(ltm))); err != nil {
+		fmt.Printf("warning: LTM extraction from history failed: %v\n", err)
+	}
+}

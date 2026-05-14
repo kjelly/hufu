@@ -226,6 +226,9 @@ func (d *taskDisplay) render() {
 		if t.Model != "" {
 			agentLabel = fmt.Sprintf("%s %s", agentStyle.Render(t.Agent), dimStyle.Render("["+t.Model+"]"))
 		}
+		if len(t.DependsOn) > 0 && (t.Status == team.TaskPending || t.Status == team.TaskInProgress) {
+			tag = dimStyle.Render(" [after:"+strings.Join(t.DependsOn, ",")+"]") + tag
+		}
 		timeStr := formatTodoItemTime(t)
 		b.WriteString(fmt.Sprintf("  %s %s %s %s%s %s\n", icon, dimStyle.Render(t.ID+"."), agentLabel, desc, tag, dimStyle.Render(timeStr)))
 	}

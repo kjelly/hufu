@@ -135,6 +135,7 @@ type TodoItem struct {
 	ToolTime       time.Duration
 	Source         string
 	ParentID       string
+	DependsOn      []string  // IDs of tasks that must complete before this one starts
 }
 
 type TodoList struct {
@@ -225,6 +226,11 @@ func (tl *TodoList) Items() []*TodoItem {
 			loadedSkills = make([]string, len(item.LoadedSkills))
 			copy(loadedSkills, item.LoadedSkills)
 		}
+		var dependsOn []string
+		if len(item.DependsOn) > 0 {
+			dependsOn = make([]string, len(item.DependsOn))
+			copy(dependsOn, item.DependsOn)
+		}
 		result[i] = &TodoItem{
 			ID:             item.ID,
 			Agent:          item.Agent,
@@ -241,6 +247,7 @@ func (tl *TodoList) Items() []*TodoItem {
 			ToolTime:       item.ToolTime,
 			Source:         item.Source,
 			ParentID:       item.ParentID,
+			DependsOn:      dependsOn,
 		}
 	}
 	return result
@@ -307,6 +314,11 @@ func (tl *TodoList) Children(parentID string) []*TodoItem {
 				loadedSkills = make([]string, len(item.LoadedSkills))
 				copy(loadedSkills, item.LoadedSkills)
 			}
+			var dependsOn []string
+			if len(item.DependsOn) > 0 {
+				dependsOn = make([]string, len(item.DependsOn))
+				copy(dependsOn, item.DependsOn)
+			}
 			result = append(result, &TodoItem{
 				ID:             item.ID,
 				Agent:          item.Agent,
@@ -323,6 +335,7 @@ func (tl *TodoList) Children(parentID string) []*TodoItem {
 				ToolTime:       item.ToolTime,
 				Source:         item.Source,
 				ParentID:       item.ParentID,
+				DependsOn:      dependsOn,
 			})
 		}
 	}

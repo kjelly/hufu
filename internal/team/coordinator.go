@@ -56,6 +56,7 @@ type TaskDef struct {
 	ContextFiles []string `json:"context_files,omitempty"`
 	PlanFirst    bool     `json:"plan_first,omitempty"`
 	PlanID       string   `json:"plan_id,omitempty"`
+	DependsOn    []int    `json:"depends_on,omitempty"` // 0-based indices into the tasks array for this call
 }
 
 // UnmarshalJSON handles legacy "task" field by mapping it to Goal.
@@ -956,7 +957,7 @@ func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 		if len(sections) > 0 {
 			for i, s := range sections {
 				if len(s.Entries) > 3 {
-					sections[i].Entries = s.Entries[:3]
+					sections[i].Entries = s.Entries[len(s.Entries)-3:]
 				}
 			}
 			ltm := FormatSTMSections(sections)
@@ -1033,7 +1034,7 @@ func (c *Coordinator) buildLTMContext() string {
 	}
 	for i, s := range sections {
 		if len(s.Entries) > 3 {
-			sections[i].Entries = s.Entries[:3]
+			sections[i].Entries = s.Entries[len(s.Entries)-3:]
 		}
 	}
 	ltm := FormatSTMSections(sections)
@@ -1101,32 +1102,35 @@ func (c *Coordinator) AutoExtractLTM() {
 		case stmSectionDecisions:
 			for _, e := range s.Entries {
 				section := classifyLTMEntry(e, "decision")
-				if section != "" {
-					newEntries = append(newEntries, struct {
-						sectionTitle string
-						entry        string
-					}{section, formatLTMEntry(stripSTMListItem(e))})
+				if section == "" {
+					section = ltmSectionArchitecture // decisions default to architecture
 				}
+				newEntries = append(newEntries, struct {
+					sectionTitle string
+					entry        string
+				}{section, formatLTMEntry(stripSTMListItem(e))})
 			}
 		case stmSectionFindings:
 			for _, e := range s.Entries {
 				section := classifyLTMEntry(e, "finding")
-				if section != "" {
-					newEntries = append(newEntries, struct {
-						sectionTitle string
-						entry        string
-					}{section, formatLTMEntry(stripSTMListItem(e))})
+				if section == "" {
+					section = ltmSectionPatterns // findings default to patterns
 				}
+				newEntries = append(newEntries, struct {
+					sectionTitle string
+					entry        string
+				}{section, formatLTMEntry(stripSTMListItem(e))})
 			}
 		case stmSectionErrors:
 			for _, e := range s.Entries {
 				section := classifyLTMEntry(e, "error")
-				if section != "" {
-					newEntries = append(newEntries, struct {
-						sectionTitle string
-						entry        string
-					}{section, formatLTMEntry(stripSTMListItem(e))})
+				if section == "" {
+					section = ltmSectionIssues // errors default to known issues
 				}
+				newEntries = append(newEntries, struct {
+					sectionTitle string
+					entry        string
+				}{section, formatLTMEntry(stripSTMListItem(e))})
 			}
 		}
 	}
@@ -1535,6 +1539,11 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 		"summarize":     map[string]any{"type": "boolean", "description": "If true, summarize the agent's output before returning. Use for tasks that produce verbose output where only key points matter."},
 		"sidecar":       map[string]any{"type": "boolean", "description": "If true, execute this task directly via the sidecar model instead of an agent. Use for simple, tool-free tasks that need a quick response."},
 		"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": contextFilesDesc},
+		"depends_on": map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "integer"},
+			"description": "0-based indices of tasks in this call's tasks array that must complete before this task starts. Example: [{agent:\"researcher\",goal:\"find X\"},{agent:\"coder\",goal:\"implement X\",depends_on:[0]}] — the coder waits for the researcher to finish.",
+		},
 	}
 	if hasModelList {
 		props["model"] = map[string]any{"type": "string", "description": "Model ID from Available Models to use for this task. Select the model whose strengths best match this task. If empty, the default team model will be used."}
@@ -2116,7 +2125,7 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 
 	section := classifyLTMEntry(args.Content, "finding")
 	if section == "" {
-		return resp, nil
+		section = ltmSectionPatterns
 	}
 
 	t.coordinator.ltmWriteMu.Lock()
@@ -2685,6 +2694,35 @@ func (c *Coordinator) storeTaskCache(agentKey, taskDesc, output string) {
 	}
 }
 
+// detectTaskCycle returns true if the DependsOn indices form a cycle.
+func detectTaskCycle(tasks []TaskDef) bool {
+	n := len(tasks)
+	state := make([]int, n) // 0=unvisited, 1=visiting, 2=done
+	var dfs func(i int) bool
+	dfs = func(i int) bool {
+		if state[i] == 1 {
+			return true
+		}
+		if state[i] == 2 {
+			return false
+		}
+		state[i] = 1
+		for _, dep := range tasks[i].DependsOn {
+			if dep >= 0 && dep < n && dep != i && dfs(dep) {
+				return true
+			}
+		}
+		state[i] = 2
+		return false
+	}
+	for i := range tasks {
+		if state[i] == 0 && dfs(i) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Coordinator) checkDuplicateTasks(tasks []TaskDef) ([]string, map[int]bool) {
 	var warnings []string
 	duplicates := make(map[int]bool)
@@ -2781,6 +2819,10 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		return "", fmt.Errorf("wrap-up in progress: refusing to delegate new tasks. Call finish immediately with your best summary of work completed so far")
 	}
 
+	if detectTaskCycle(tasks) {
+		return "", fmt.Errorf("tasks contain a dependency cycle — check depends_on indices")
+	}
+
 	if c.forcePlanFirst {
 		for i := range tasks {
 			if tasks[i].PlanID == "" {
@@ -2851,6 +2893,22 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		}{Agent: strings.ToLower(t.Agent), Desc: desc, Model: resolvedModel, Source: TaskSourceCoordinator, ParentID: ""}
 	}
 	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)
+
+	// Fill in dependency IDs for display and dependency-wait logic.
+	for i, t := range tasks {
+		if len(t.DependsOn) > 0 {
+			var depIDs []string
+			for _, depIdx := range t.DependsOn {
+				if depIdx >= 0 && depIdx < len(todoItems) && depIdx != i {
+					depIDs = append(depIDs, todoItems[depIdx].ID)
+				}
+			}
+			if len(depIDs) > 0 {
+				todoItems[i].DependsOn = depIDs
+			}
+		}
+	}
+
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
 	if c.dryRun.Load() {
@@ -2883,6 +2941,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		c.report(c.newEvent("loop_warning").withMessage(fmt.Sprintf("Duplicate task delegation detected: %v", duplicateWarnings)))
 	}
 
+	// doneChs[i] is closed when task i completes (success, error, or dup).
+	doneChs := make([]chan struct{}, len(tasks))
+	for i := range tasks {
+		doneChs[i] = make(chan struct{})
+	}
+
 	resultsCh := make(chan agentTaskResult, len(tasks))
 	sem := make(chan struct{}, c.maxConcurrent)
 	var wg sync.WaitGroup
@@ -2894,8 +2958,9 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 
 	for i, task := range tasks {
 		wg.Add(1)
-		go func(td TaskDef, tid string, dup bool) {
+		go func(td TaskDef, tid string, idx int, dup bool) {
 			defer wg.Done()
+			defer close(doneChs[idx])
 			if dup {
 				errMsg := fmt.Errorf("duplicate task: %s - reference existing completed task instead", truncateTaskDesc(td.Goal))
 				c.taskTracker.TodoList().UpdateStatus(tid, TaskError, "duplicate task detected")
@@ -2905,6 +2970,23 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: td.Goal, output: "", err: errMsg}
 				return
 			}
+
+			// Wait for dependencies before acquiring the semaphore.
+			// Must be before sem<- to avoid deadlock when max_concurrent < len(tasks).
+			for _, depIdx := range td.DependsOn {
+				if depIdx < 0 || depIdx >= len(doneChs) || depIdx == idx {
+					continue
+				}
+				select {
+				case <-doneChs[depIdx]:
+				case <-ctx.Done():
+					c.taskTracker.TodoList().UpdateStatus(tid, TaskError, "dependency wait cancelled")
+					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+					resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: td.Goal, err: ctx.Err()}
+					return
+				}
+			}
+
 			sem <- struct{}{}
 			semReleased := false
 			defer func() {
@@ -2973,7 +3055,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			inflight[cacheKey] <- result
 			inflightMu.Unlock()
 			resultsCh <- result
-		}(task, todoItems[i].ID, duplicateIndices[i])
+		}(task, todoItems[i].ID, i, duplicateIndices[i])
 	}
 	wg.Wait()
 	close(resultsCh)
@@ -4143,9 +4225,10 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("   Examples:\n")
 	b.WriteString("   - ❌ BAD: \"search src/main.go line 42 for parseUser and fix the nil check\"\n")
 	b.WriteString("   - ✅ GOOD: goal=\"Fix nil pointer dereference in user parsing\", constraints=\"Must maintain backward compatibility with existing callers\"\n\n")
-	b.WriteString("6. **Parallel vs sequential**: Pass truly independent tasks together in one agent call (they run in parallel and cannot see each other's in-progress output). If task B needs task A's result, put them in **separate** agent calls — one after the other.\n")
-	b.WriteString("   - ✅ Parallel: research + write-docs (different domains, no dependency)\n")
-	b.WriteString("   - ❌ Parallel: research + summarize-research (B needs A's output → must be sequential)\n")
+	b.WriteString("6. **Parallel vs sequential**: All tasks in one agent call run in parallel by default. Use `depends_on` to express dependencies within the same call — a task with `depends_on: [0]` waits for the task at index 0 to finish before starting. Prefer one agent call with `depends_on` over multiple sequential calls when possible.\n")
+	b.WriteString("   - ✅ One call: [{agent:\"researcher\",goal:\"find X\"},{agent:\"coder\",goal:\"implement X\",depends_on:[0]}]\n")
+	b.WriteString("   - ✅ Parallel (no dependency): [{agent:\"writer\",goal:\"write A\"},{agent:\"writer\",goal:\"write B\"}]\n")
+	b.WriteString("   - ⚠️  Separate calls only when coordinator must process results before deciding next steps\n")
 	b.WriteString("7. When delegating to a worker that needs skill knowledge, include ALL relevant skill summaries (name, file path) in the task description so the worker can call `load_skill` if needed\n")
 	b.WriteString("8. **Trust worker expertise** — Workers have access to the full project context (AGENTS.md, tech stack, conventions, directory structure). They will explore the codebase, identify relevant files, and determine the best implementation approach. Do NOT pre-specify file paths, function names, or implementation steps unless they are non-obvious constraints.\n")
 	b.WriteString("9. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")

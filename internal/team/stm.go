@@ -235,7 +235,7 @@ func ArchiveSTM(workspace string) (string, error) {
 		return "", fmt.Errorf("failed to create history directory: %w", err)
 	}
 
-	ts := time.Now().Format("2006-01-02")
+	ts := time.Now().Format("20060102T150405")
 	filename := fmt.Sprintf("%s-stm.md", ts)
 	path := filepath.Join(histDir, filename)
 	if err := os.WriteFile(path, []byte(stmContent), 0o644); err != nil {
@@ -250,9 +250,11 @@ func ArchiveSTM(workspace string) (string, error) {
 }
 
 func InitSTM(workspace string) error {
-	path := STMPath(workspace)
-	if _, err := os.Stat(path); err == nil {
-		return nil
+	// Archive any existing stm.md to history/ before clearing. Workers only
+	// see entries written in the current invocation; cross-session knowledge
+	// accumulates in history/*-stm.md and is extracted to ltm.md on --new.
+	if _, err := ArchiveSTM(workspace); err != nil {
+		fmt.Printf("warning: failed to archive stm.md: %v\n", err)
 	}
-	return os.WriteFile(path, []byte(""), 0o644)
+	return os.WriteFile(STMPath(workspace), []byte(""), 0o644)
 }

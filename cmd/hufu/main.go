@@ -521,6 +521,11 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	if err := team.InitSTM(session.Workspace); err != nil {
 		stderrLog("%s Failed to init stm.md: %v\n", errStyle.Render("⚠"), err)
 	}
+	if newSession {
+		// Extract knowledge from all accumulated history/*-stm.md snapshots
+		// into ltm.md, then delete the history files.
+		team.ExtractLTMFromHistory(session.Workspace, session.Dir)
+	}
 
 	var sessionData *team.SessionData
 	var oldSessionEntries []memory.SessionSummaryEntry
