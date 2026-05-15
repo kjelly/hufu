@@ -58,6 +58,7 @@ type TeamConfig struct {
 	SkillsExclude string
 	ProviderURL    string
 	ProviderAPIKey string
+	Providers     map[string]config.ProviderConfig
 	ModelList     []config.ModelEntry
 	SidecarModel  string
 	GuardModel    string
@@ -74,32 +75,104 @@ type OllamaProvider struct {
 	provider fantasy.Provider
 	baseURL  string
 	apiKey   string
+	name     string
 }
 
-func NewOllamaProvider(baseURL, apiKey string) (*OllamaProvider, error) {
+func NewOllamaProvider(baseURL, apiKey, name string) (*OllamaProvider, error) {
 	if baseURL == "" {
 		baseURL = config.DefaultProviderURL
 	}
 	if apiKey == "" {
 		apiKey = "ollama"
 	}
+	if name == "" {
+		name = "ollama"
+	}
 	provider, err := openaicompat.New(
 		openaicompat.WithBaseURL(baseURL),
 		openaicompat.WithAPIKey(apiKey),
-		openaicompat.WithName("ollama"),
+		openaicompat.WithName(name),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Ollama provider: %w", err)
 	}
-	return &OllamaProvider{provider: provider, baseURL: baseURL, apiKey: apiKey}, nil
+	return &OllamaProvider{provider: provider, baseURL: baseURL, apiKey: apiKey, name: name}, nil
 }
 
 func (p *OllamaProvider) LanguageModel(ctx context.Context, modelID string) (fantasy.LanguageModel, error) {
-	model := modelID
-	if strings.HasPrefix(model, "ollama/") {
-		model = strings.TrimPrefix(model, "ollama/")
-	}
+	model := strings.TrimPrefix(modelID, p.name+"/")
 	return p.provider.LanguageModel(ctx, model)
+}
+
+// ParseModelProvider extracts the provider prefix and model name from a model ID.
+// "ollama/qwen3:8b" → ("ollama", "qwen3:8b")
+// "qwen3:8b" → ("", "qwen3:8b")
+func ParseModelProvider(modelID string) (provider, modelName string) {
+	if idx := strings.Index(modelID, "/"); idx >= 0 {
+		return modelID[:idx], modelID[idx+1:]
+	}
+	return "", modelID
+}
+
+// ProviderManager manages multiple OllamaProviders, one per provider prefix.
+// It lazy-initializes providers on first use based on the model ID prefix.
+type ProviderManager struct {
+	defaultProvider *OllamaProvider
+	providers       map[string]*OllamaProvider
+	configs         map[string]config.ProviderConfig
+}
+
+func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[string]config.ProviderConfig) (*ProviderManager, error) {
+	defaultProv, err := NewOllamaProvider(defaultURL, defaultKey, "ollama")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create default provider: %w", err)
+	}
+	if providerConfigs == nil {
+		providerConfigs = make(map[string]config.ProviderConfig)
+	}
+	return &ProviderManager{
+		defaultProvider: defaultProv,
+		providers:       make(map[string]*OllamaProvider),
+		configs:         providerConfigs,
+	}, nil
+}
+
+// GetProvider returns the OllamaProvider for the given modelID, and the
+// stripped model name (without the provider prefix). Unknown providers
+// fall back to the default (ollama) provider.
+func (pm *ProviderManager) GetProvider(modelID string) *OllamaProvider {
+	prefix, _ := ParseModelProvider(modelID)
+	name := prefix
+	if name == "" {
+		name = "ollama"
+	}
+	if p, ok := pm.providers[name]; ok {
+		return p
+	}
+	// Check for per-provider config
+	cfg, hasCfg := pm.configs[name]
+	if hasCfg {
+		url := cfg.ProviderURL
+		if url == "" {
+			url = pm.defaultProvider.baseURL
+		}
+		key := cfg.ProviderAPIKey
+		if key == "" {
+			key = pm.defaultProvider.apiKey
+		}
+		p, err := NewOllamaProvider(url, key, name)
+		if err == nil {
+			pm.providers[name] = p
+			return p
+		}
+	}
+	// Fall back to default provider
+	return pm.defaultProvider
+}
+
+// DefaultProvider returns the default (ollama) provider.
+func (pm *ProviderManager) DefaultProvider() *OllamaProvider {
+	return pm.defaultProvider
 }
 
 type AgentConfig struct {

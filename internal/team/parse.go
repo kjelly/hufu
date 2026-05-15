@@ -62,6 +62,7 @@ type teamConfigYAML struct {
 	SkillsExclude string              `yaml:"skills-exclude"`
 	ProviderURL   string              `yaml:"provider-url"`
 	ProviderAPIKey string             `yaml:"provider-api-key"`
+	Providers     map[string]config.ProviderConfig `yaml:"providers"`
 	ModelList     []config.ModelEntry `yaml:"model-list"`
 	SidecarModel  string              `yaml:"sidecar-model"`
 	GuardModel    string              `yaml:"guard-model"`
@@ -431,6 +432,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.ProviderAPIKey != "" {
 		cfg.ProviderAPIKey = yc.ProviderAPIKey
+	}
+	if len(yc.Providers) > 0 {
+		cfg.Providers = yc.Providers
 	}
 	if len(yc.ModelList) > 0 {
 		cfg.ModelList = yc.ModelList

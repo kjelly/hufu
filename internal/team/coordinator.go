@@ -151,7 +151,7 @@ type planReviewer struct {
 
 func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*planReviewer, error) {
 	pr := &planReviewer{coordinator: c, modelID: c.session.Config.Generation.Model, todoID: todoID}
-	ag, err := agent.CreateAgent(ctx, c.provider, agent.AgentConfig{
+	ag, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(c.session.Config.Generation.Model), agent.AgentConfig{
 		Def: &agent.AgentDef{
 			Name:    "plan-reviewer",
 			System:  planReviewerSystemPrompt,
@@ -434,7 +434,7 @@ func (t *reviewerRejectPlanTool) Run(ctx context.Context, call fantasy.ToolCall)
 type Coordinator struct {
 	mu                    sync.RWMutex
 	session               *TeamSession
-	provider              *agent.OllamaProvider
+	providerManager       *agent.ProviderManager
 	mcpManager            *mcp.MCPToolManager
 	coreTools             []fantasy.AgentTool
 	agentCache            map[string]fantasy.Agent
@@ -575,12 +575,12 @@ func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
 func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forcedSkillNames []string, planMode bool, autoSkillsMode bool) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
 	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath), tools.WithNetworkBlock(noNet), tools.WithDirenv(direnv))
-	prov, err := agent.NewOllamaProvider(defaultProviderURL, defaultProviderAPIKey)
+	pm, err := agent.NewProviderManager(defaultProviderURL, defaultProviderAPIKey, session.Config.Providers)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Ollama provider: %w", err)
+		return nil, fmt.Errorf("failed to create provider manager: %w", err)
 	}
 	c := &Coordinator{
-		provider:        prov,
+		providerManager: pm,
 		session:         session,
 		mcpManager:      mcpManager,
 		coreTools:       coreTools,
@@ -1343,7 +1343,7 @@ func (c *Coordinator) Sidecar() *sidecar.Sidecar {
 		return c.sidecarInst
 	}
 	ctx := context.Background()
-	s, err := sidecar.NewSidecar(ctx, c.provider, c.sidecarModel)
+	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.sidecarModel), c.sidecarModel)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to initialize sidecar model %q: %v\n", c.sidecarModel, err)
 		return nil
@@ -1363,7 +1363,7 @@ func (c *Coordinator) GuardSidecar() *sidecar.Sidecar {
 		return c.guardInst
 	}
 	ctx := context.Background()
-	s, err := sidecar.NewSidecar(ctx, c.provider, c.guardModel)
+	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.guardModel), c.guardModel)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to initialize guard model %q: %v\n", c.guardModel, err)
 		return nil
@@ -1889,7 +1889,8 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 
 	agentDef = c.injectWorkerContext(ctx, agentDef)
 
-	ag, err := agent.CreateAgent(ctx, c.provider, agent.AgentConfig{
+	subAgModelID := c.resolveAgentModel(agentDef, "")
+	ag, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(subAgModelID), agent.AgentConfig{
 		Def:        agentDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
@@ -3214,7 +3215,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	var ag fantasy.Agent
 	if task.PlanFirst && task.PlanID == "" {
-		planAg, planErr := agent.CreateAgent(parentCtx, c.provider, agent.AgentConfig{
+		planAg, planErr := agent.CreateAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
 			Def:        agentDef,
 			TeamConfig: &c.session.Config,
 			WorkDir:    c.projectDir,
@@ -3840,7 +3841,8 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
 	}
 
-	ag, err := agent.CreateAgent(ctx, c.provider, agent.AgentConfig{
+	getAgModelID := c.resolveAgentModel(agentDef, "")
+	ag, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(getAgModelID), agent.AgentConfig{
 		Def:        agentDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
@@ -4758,7 +4760,8 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	defer cancel()
 	orchCtx = context.WithValue(orchCtx, todoIDKey{}, CoordTodoID)
 
-	orch, err := agent.CreateAgent(orchCtx, c.provider, agent.AgentConfig{
+	orchModelID := c.resolveAgentModel(orchDef, "")
+	orch, err := agent.CreateAgent(orchCtx, c.providerManager.GetProvider(orchModelID), agent.AgentConfig{
 		Def:        orchDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
@@ -5250,7 +5253,8 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 
 	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("dry-run coordinator starting").withModel(c.resolveAgentModel(orchDef, "")).withTodoID(CoordTodoID))
 
-	orch, err := agent.CreateAgent(ctx, c.provider, agent.AgentConfig{
+	dryRunOrchModelID := c.resolveAgentModel(orchDef, "")
+	orch, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(dryRunOrchModelID), agent.AgentConfig{
 		Def:        &orchDefCopy,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,

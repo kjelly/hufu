@@ -20,21 +20,28 @@ type ModelEntry struct {
 	Details string `yaml:"details"`
 }
 
+type ProviderConfig struct {
+	ProviderURL    string `yaml:"provider-url"`
+	ProviderAPIKey string `yaml:"provider-api-key"`
+	Insecure       bool   `yaml:"insecure"`
+}
+
 type Config struct {
-	ProviderURL    string              `yaml:"provider-url"`
-	ProviderAPIKey string              `yaml:"provider-api-key"`
-	Model          string              `yaml:"model"`
-	EmbeddingModel string              `yaml:"embedding-model"`
-	ModelList      []ModelEntry        `yaml:"model-list"`
-	SidecarModel   string              `yaml:"sidecar-model"`
-	GuardModel     string              `yaml:"guard-model"`
-	MaxConcurrent  int                 `yaml:"max-concurrent"`
-	AllowedPaths   []string            `yaml:"allowed-paths"`
-	RestrictedPath string              `yaml:"restricted-path"`
-	NoNet          bool                `yaml:"no-net"`
-	RawVars        interface{}         `yaml:"vars"`
-	Hooks          map[string]string   `yaml:"hooks"`
-	Notify         notify.NotifyConfig `yaml:"notify"`
+	ProviderURL    string                    `yaml:"provider-url"`
+	ProviderAPIKey string                    `yaml:"provider-api-key"`
+	Providers      map[string]ProviderConfig `yaml:"providers"`
+	Model          string                    `yaml:"model"`
+	EmbeddingModel string                    `yaml:"embedding-model"`
+	ModelList      []ModelEntry              `yaml:"model-list"`
+	SidecarModel   string                    `yaml:"sidecar-model"`
+	GuardModel     string                    `yaml:"guard-model"`
+	MaxConcurrent  int                       `yaml:"max-concurrent"`
+	AllowedPaths   []string                  `yaml:"allowed-paths"`
+	RestrictedPath string                    `yaml:"restricted-path"`
+	NoNet          bool                      `yaml:"no-net"`
+	RawVars        interface{}               `yaml:"vars"`
+	Hooks          map[string]string         `yaml:"hooks"`
+	Notify         notify.NotifyConfig       `yaml:"notify"`
 }
 
 func (c *Config) GetVars() map[string]string {
@@ -117,6 +124,28 @@ func (c *Config) mergeFromFile(path string) {
 	}
 	if fileCfg.Notify.Enabled() {
 		c.mergeNotify(fileCfg.Notify)
+	}
+	if len(fileCfg.Providers) > 0 {
+		if c.Providers == nil {
+			c.Providers = make(map[string]ProviderConfig)
+		}
+		for k, v := range fileCfg.Providers {
+			if _, exists := c.Providers[k]; exists {
+				existing := c.Providers[k]
+				if v.ProviderURL != "" {
+					existing.ProviderURL = v.ProviderURL
+				}
+				if v.ProviderAPIKey != "" {
+					existing.ProviderAPIKey = v.ProviderAPIKey
+				}
+				if v.Insecure {
+					existing.Insecure = true
+				}
+				c.Providers[k] = existing
+			} else {
+				c.Providers[k] = v
+			}
+		}
 	}
 	fileVars := fileCfg.GetVars()
 	if len(fileVars) > 0 {
@@ -282,4 +311,31 @@ func ProviderURLToOllamaAPI(providerURL string) string {
 	u := strings.TrimRight(providerURL, "/")
 	u = strings.TrimSuffix(u, "/v1")
 	return u + "/api"
+}
+
+// MergeProviderConfigs merges team-level provider configs on top of hufu-level configs.
+// Team values take precedence for each field.
+func MergeProviderConfigs(hufuProviders, teamProviders map[string]ProviderConfig) map[string]ProviderConfig {
+	result := make(map[string]ProviderConfig)
+	for k, v := range hufuProviders {
+		result[k] = v
+	}
+	for k, v := range teamProviders {
+		existing, exists := result[k]
+		if !exists {
+			result[k] = v
+			continue
+		}
+		if v.ProviderURL != "" {
+			existing.ProviderURL = v.ProviderURL
+		}
+		if v.ProviderAPIKey != "" {
+			existing.ProviderAPIKey = v.ProviderAPIKey
+		}
+		if v.Insecure {
+			existing.Insecure = true
+		}
+		result[k] = existing
+	}
+	return result
 }
