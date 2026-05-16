@@ -304,6 +304,19 @@ func (c *Coordinator) buildTaskStatusContext() string {
 	}
 
 	var done, inProgress, pending, skipped, planned, errored, paused []string
+	// Pre-allocate with small capacity to reduce allocations during append.
+	// Actual size will grow naturally as needed.
+	cap := 1
+	if len(items) > 7 {
+		cap = len(items) / 7
+	}
+	done = make([]string, 0, cap)
+	inProgress = make([]string, 0, cap)
+	pending = make([]string, 0, cap)
+	skipped = make([]string, 0, cap)
+	planned = make([]string, 0, cap)
+	errored = make([]string, 0, cap)
+	paused = make([]string, 0, cap)
 
 	for _, item := range items {
 		extra := ""
@@ -1071,7 +1084,9 @@ func truncateAtSectionBoundaries(content string, maxChars int) string {
 		return string(runes[startIdx:])
 	}
 	var totalRunes int
-	keepFrom := len(sections) // Default: keep nothing if no section fits
+	// firstSectionIdx: index of first section to keep; starts at len(sections) (none selected).
+	// Updated in reverse loop when a section fits within maxChars.
+	firstSectionIdx := len(sections)
 	for i := len(sections) - 1; i >= 0; i-- {
 		sectionStr := sections[i].Title + "\n" + strings.Join(sections[i].Entries, "\n") + "\n"
 		sectionRunes := []rune(sectionStr)
@@ -1079,10 +1094,10 @@ func truncateAtSectionBoundaries(content string, maxChars int) string {
 			break
 		}
 		totalRunes += len(sectionRunes)
-		keepFrom = i
+		firstSectionIdx = i
 	}
-	// If no section fits, return the last section truncated to maxChars
-	if keepFrom == len(sections) {
+	// Edge case: no section fits within maxChars; truncate last section
+	if firstSectionIdx == len(sections) {
 		lastSection := sections[len(sections)-1]
 		sectionStr := lastSection.Title + "\n" + strings.Join(lastSection.Entries, "\n")
 		sectionRunes := []rune(sectionStr)
@@ -1092,7 +1107,7 @@ func truncateAtSectionBoundaries(content string, maxChars int) string {
 		return strings.TrimSpace(string(sectionRunes[:maxChars]))
 	}
 	var b strings.Builder
-	for i := keepFrom; i < len(sections); i++ {
+	for i := firstSectionIdx; i < len(sections); i++ {
 		b.WriteString(sections[i].Title)
 		b.WriteString("\n")
 		b.WriteString(strings.Join(sections[i].Entries, "\n"))
@@ -1133,7 +1148,7 @@ func extractSummary(output string, maxRunes int) string {
 	return string(runes[:maxRunes]) + "..."
 }
 
-func (c *Coordinator) AutoExtractLTM() {
+func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
 	teamDir := c.session.Dir
 	workspace := c.session.Workspace
 	stmContent := LoadSTM(workspace)
@@ -1157,7 +1172,7 @@ func (c *Coordinator) AutoExtractLTM() {
 		switch s.Title {
 		case stmSectionDecisions:
 			for _, e := range s.Entries {
-				section := classifyLTMEntry(e, "decision")
+				section := ClassifyLTMEntry(e, "decision")
 				if section == "" {
 					section = ltmSectionArchitecture // decisions default to architecture
 				}
@@ -1168,7 +1183,7 @@ func (c *Coordinator) AutoExtractLTM() {
 			}
 		case stmSectionFindings:
 			for _, e := range s.Entries {
-				section := classifyLTMEntry(e, "finding")
+				section := ClassifyLTMEntry(e, "finding")
 				if section == "" {
 					section = ltmSectionPatterns // findings default to patterns
 				}
@@ -1179,7 +1194,7 @@ func (c *Coordinator) AutoExtractLTM() {
 			}
 		case stmSectionErrors:
 			for _, e := range s.Entries {
-				section := classifyLTMEntry(e, "error")
+				section := ClassifyLTMEntry(e, "error")
 				if section == "" {
 					section = ltmSectionIssues // errors default to known issues
 				}
@@ -1226,91 +1241,7 @@ func (c *Coordinator) AutoExtractLTM() {
 	}
 }
 
-func classifyLTMEntry(entry string, source string) string {
-	lower := strings.ToLower(entry)
-	// More specific file path detection: requires file extension or path-like pattern
-	// Avoids false positives from "1/2", "user/admin", dates like "2024/01/15"
-	hasFileExtension := strings.Contains(lower, ".go") || strings.Contains(lower, ".yaml") ||
-		strings.Contains(lower, ".yml") || strings.Contains(lower, ".md") ||
-		strings.Contains(lower, ".json") || strings.Contains(lower, ".sh") ||
-		strings.Contains(lower, ".py") || strings.Contains(lower, ".js") ||
-		strings.Contains(lower, ".ts") || strings.Contains(lower, ".tsx") ||
-		strings.Contains(lower, ".css") || strings.Contains(lower, ".html") ||
-		strings.Contains(lower, ".sql") || strings.Contains(lower, ".toml") ||
-		strings.Contains(lower, ".lock") || strings.Contains(lower, ".sum")
-	// Path-like: has directory structure (e.g., "pkg/foo/bar" or "internal/team/")
-	// Requires at least 2 slashes or a slash with a known directory prefix
-	hasPathStructure := strings.Count(lower, "/") >= 2 ||
-		strings.Contains(lower, "internal/") || strings.Contains(lower, "pkg/") ||
-		strings.Contains(lower, "cmd/") || strings.Contains(lower, "src/") ||
-		strings.Contains(lower, "lib/") || strings.Contains(lower, "app/")
-	hasFilePath := hasFileExtension || hasPathStructure
-
-	if source == "finding" && hasFilePath {
-		return ltmSectionFiles
-	}
-
-	// Conventions: English and Chinese keywords
-	if strings.Contains(lower, "always") || strings.Contains(lower, "never") ||
-		strings.Contains(lower, "must ") || strings.Contains(lower, "should ") ||
-		strings.Contains(lower, "convention") || strings.Contains(lower, "rule") ||
-		strings.Contains(lower, "standard") || strings.Contains(lower, "guideline") ||
-		strings.Contains(lower, "every time") ||
-		strings.Contains(entry, "慣例") || strings.Contains(entry, "規範") ||
-		strings.Contains(entry, "必須") || strings.Contains(entry, "不可") ||
-		strings.Contains(entry, "應該") || strings.Contains(entry, "每次") {
-		return ltmSectionConventions
-	}
-
-	// Patterns: English and Chinese keywords
-	if strings.Contains(lower, "pattern") || strings.Contains(lower, "approach") ||
-		strings.Contains(lower, "strategy") || strings.Contains(lower, "workflow") ||
-		strings.Contains(lower, "pipeline") || strings.Contains(lower, "template") ||
-		strings.Contains(entry, "模式") || strings.Contains(entry, "做法") ||
-		strings.Contains(entry, "流程") || strings.Contains(entry, "步驟") {
-		return ltmSectionPatterns
-	}
-
-	// Issues: English and Chinese keywords
-	if (source == "error" && strings.Contains(lower, "fix")) ||
-		strings.Contains(lower, "solved") || strings.Contains(lower, "resolved") ||
-		strings.Contains(lower, "workaround") || strings.Contains(lower, "solution") ||
-		strings.Contains(entry, "修復") || strings.Contains(entry, "解決") ||
-		strings.Contains(entry, "問題") || strings.Contains(entry, "錯誤") ||
-		strings.Contains(entry, "失敗") || strings.Contains(entry, "繞過") {
-		return ltmSectionIssues
-	}
-
-	// Architecture decisions: source=decision defaults here; also Chinese keywords
-	if source == "decision" ||
-		strings.Contains(entry, "決策") || strings.Contains(entry, "架構") ||
-		strings.Contains(entry, "選擇") || strings.Contains(entry, "採用") ||
-		strings.Contains(entry, "改用") || strings.Contains(entry, "遷移") {
-		return ltmSectionArchitecture
-	}
-
-	// Tools/commands: English and Chinese keywords
-	if strings.Contains(lower, "tool") || strings.Contains(lower, "command") ||
-		strings.Contains(lower, "script") || strings.Contains(lower, "cli ") ||
-		strings.Contains(lower, "run ") || strings.Contains(lower, "install ") ||
-		strings.Contains(lower, "build ") || strings.Contains(lower, "test ") ||
-		strings.Contains(entry, "指令") || strings.Contains(entry, "命令") ||
-		strings.Contains(entry, "工具") || strings.Contains(entry, "腳本") {
-		return ltmSectionTools
-	}
-
-	// Default fallback: categorize based on source
-	switch source {
-	case "finding":
-		return ltmSectionPatterns
-	case "error":
-		return ltmSectionIssues
-	case "decision":
-		return ltmSectionArchitecture
-	default:
-		return ltmSectionPatterns
-	}
-}
+// This function has been moved to ltm.go as ClassifyLTMEntry
 
 func stripSTMListItem(entry string) string {
 	s := strings.TrimSpace(entry)
@@ -1726,7 +1657,7 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	t.coordinator.lastStmWrite = time.Now()
 	t.coordinator.lastStmWriteMu.Unlock()
 
-	t.coordinator.AutoExtractLTM()
+	t.coordinator.AutoExtractLTM(ctx)
 
 	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", args.Response)), nil
 }
@@ -2198,7 +2129,7 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 		return resp, nil
 	}
 
-	section := classifyLTMEntry(args.Content, "finding")
+	section := ClassifyLTMEntry(args.Content, "finding")
 	if section == "" {
 		section = ltmSectionPatterns
 	}
@@ -3156,8 +3087,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				inflightMu.Unlock()
 				semReleased = true
 				<-sem
-				result := <-ch
-				resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: result.output, err: result.err}
+				select {
+				case result := <-ch:
+					resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: result.output, err: result.err}
+				case <-ctx.Done():
+					resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: ctx.Err()}
+				}
 				return
 			}
 			inflight[cacheKey] = make(chan agentTaskResult, 1)

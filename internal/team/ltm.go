@@ -152,7 +152,7 @@ func extractLTMFromContent(stmContent, existingLTM string) string {
 			continue
 		}
 		for _, e := range s.Entries {
-			sec := classifyLTMEntry(e, source)
+			sec := ClassifyLTMEntry(e, source)
 			if sec == "" {
 				sec = defaultSection
 			}
@@ -195,5 +195,83 @@ func ExtractLTMFromHistory(workspace, teamDir string) {
 
 	if err := SaveLTM(teamDir, TruncateLTM(PruneLTM(ltm))); err != nil {
 		fmt.Printf("warning: LTM extraction from history failed: %v\n", err)
+	}
+}
+
+// ClassifyLTMEntry classifies an STM entry into an LTM section based on content and source.
+// This function is exported for use by both ltm.go and coordinator.go.
+func ClassifyLTMEntry(entry string, source string) string {
+	lower := strings.ToLower(entry)
+	hasFileExtension := strings.Contains(lower, ".go") || strings.Contains(lower, ".yaml") ||
+		strings.Contains(lower, ".yml") || strings.Contains(lower, ".md") ||
+		strings.Contains(lower, ".json") || strings.Contains(lower, ".sh") ||
+		strings.Contains(lower, ".py") || strings.Contains(lower, ".js") ||
+		strings.Contains(lower, ".ts") || strings.Contains(lower, ".tsx") ||
+		strings.Contains(lower, ".css") || strings.Contains(lower, ".html") ||
+		strings.Contains(lower, ".sql") || strings.Contains(lower, ".toml") ||
+		strings.Contains(lower, ".lock") || strings.Contains(lower, ".sum")
+	hasPathStructure := strings.Count(lower, "/") >= 2 ||
+		strings.Contains(lower, "internal/") || strings.Contains(lower, "pkg/") ||
+		strings.Contains(lower, "cmd/") || strings.Contains(lower, "src/") ||
+		strings.Contains(lower, "lib/") || strings.Contains(lower, "app/")
+	hasFilePath := hasFileExtension || hasPathStructure
+
+	if source == "finding" && hasFilePath {
+		return ltmSectionFiles
+	}
+
+	if strings.Contains(lower, "always") || strings.Contains(lower, "never") ||
+		strings.Contains(lower, "must ") || strings.Contains(lower, "should ") ||
+		strings.Contains(lower, "convention") || strings.Contains(lower, "rule") ||
+		strings.Contains(lower, "standard") || strings.Contains(lower, "guideline") ||
+		strings.Contains(lower, "every time") ||
+		strings.Contains(entry, "慣例") || strings.Contains(entry, "規範") ||
+		strings.Contains(entry, "必須") || strings.Contains(entry, "不可") ||
+		strings.Contains(entry, "應該") || strings.Contains(entry, "每次") {
+		return ltmSectionConventions
+	}
+
+	if strings.Contains(lower, "pattern") || strings.Contains(lower, "approach") ||
+		strings.Contains(lower, "strategy") || strings.Contains(lower, "workflow") ||
+		strings.Contains(lower, "pipeline") || strings.Contains(lower, "template") ||
+		strings.Contains(entry, "模式") || strings.Contains(entry, "做法") ||
+		strings.Contains(entry, "流程") || strings.Contains(entry, "步驟") {
+		return ltmSectionPatterns
+	}
+
+	if (source == "error" && strings.Contains(lower, "fix")) ||
+		strings.Contains(lower, "solved") || strings.Contains(lower, "resolved") ||
+		strings.Contains(lower, "workaround") || strings.Contains(lower, "solution") ||
+		strings.Contains(entry, "修復") || strings.Contains(entry, "解決") ||
+		strings.Contains(entry, "問題") || strings.Contains(entry, "錯誤") ||
+		strings.Contains(entry, "失敗") || strings.Contains(entry, "繞過") {
+		return ltmSectionIssues
+	}
+
+	if source == "decision" ||
+		strings.Contains(entry, "決策") || strings.Contains(entry, "架構") ||
+		strings.Contains(entry, "選擇") || strings.Contains(entry, "採用") ||
+		strings.Contains(entry, "改用") || strings.Contains(entry, "遷移") {
+		return ltmSectionArchitecture
+	}
+
+	if strings.Contains(lower, "tool") || strings.Contains(lower, "command") ||
+		strings.Contains(lower, "script") || strings.Contains(lower, "cli ") ||
+		strings.Contains(lower, "run ") || strings.Contains(lower, "install ") ||
+		strings.Contains(lower, "build ") || strings.Contains(lower, "test ") ||
+		strings.Contains(entry, "指令") || strings.Contains(entry, "命令") ||
+		strings.Contains(entry, "工具") || strings.Contains(entry, "腳本") {
+		return ltmSectionTools
+	}
+
+	switch source {
+	case "finding":
+		return ltmSectionPatterns
+	case "error":
+		return ltmSectionIssues
+	case "decision":
+		return ltmSectionArchitecture
+	default:
+		return ltmSectionPatterns
 	}
 }

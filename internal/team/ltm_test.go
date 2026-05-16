@@ -143,7 +143,7 @@ func TestClassifyLTMEntry(t *testing.T) {
 		{"run go build before deploying", "finding", ltmSectionTools},
 	}
 	for _, tt := range tests {
-		got := classifyLTMEntry(tt.entry, tt.source)
+		got := ClassifyLTMEntry(tt.entry, tt.source)
 		if got != tt.want {
 			t.Errorf("classifyLTMEntry(%q, %q) = %q, want %q", tt.entry, tt.source, got, tt.want)
 		}
