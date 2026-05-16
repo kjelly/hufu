@@ -90,11 +90,11 @@ func TestRemoveFileIfExists(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "remove from nonexistent directory returns error",
+			name: "remove from nonexistent directory returns nil (idempotent)",
 			setup: func(t *testing.T) string {
 				return "/nonexistent/directory/test.txt"
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 	}
 

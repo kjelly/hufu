@@ -2,6 +2,7 @@ package team
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,6 +59,9 @@ func LoadSession(workspace string) *SessionData {
 }
 
 func SaveSession(workspace string, session *SessionData) error {
+	if session == nil {
+		return errors.New("session is nil")
+	}
 	session.UpdatedAt = time.Now().Format(time.RFC3339)
 	data, err := json.MarshalIndent(session, "", "  ")
 	if err != nil {

@@ -704,8 +704,8 @@ func TestFormatTaskResults(t *testing.T) {
 		{
 			name: "failed tasks",
 			results: []agentTaskResult{
-				{agentName: "agent1", err: javaError("error1")},
-				{agentName: "agent2", err: javaError("error2")},
+				{agentName: "agent1", err: newTestError("error1")},
+				{agentName: "agent2", err: newTestError("error2")},
 			},
 			total:   2,
 			wantErr: true,
@@ -719,7 +719,7 @@ func TestFormatTaskResults(t *testing.T) {
 			name: "mixed results",
 			results: []agentTaskResult{
 				{agentName: "agent1", output: "result1"},
-				{agentName: "agent2", err: javaError("error2")},
+				{agentName: "agent2", err: newTestError("error2")},
 			},
 			total:   2,
 			wantErr: false,
@@ -801,6 +801,6 @@ func TestFormatTaskResultsSeparators(t *testing.T) {
 	}
 }
 
-func javaError(msg string) error {
+func newTestError(msg string) error {
 	return errors.New(msg)
 }
