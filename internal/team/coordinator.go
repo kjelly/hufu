@@ -3030,12 +3030,34 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		go func(td TaskDef, tid string, idx int, dup bool) {
 			defer wg.Done()
 			defer close(doneChs[idx])
+
+			// Compute effective description (goal takes precedence over task)
+			desc := td.Goal
+			if td.Constraints != "" {
+				desc += "\nconstraints: " + td.Constraints
+			}
+			agentKey := strings.ToLower(td.Agent)
+			cacheKey := agentKey + ":" + truncateTaskDesc(desc)
+			var isOwner bool
+
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("[PANIC] task goroutine %q/%q recovered: %v", td.Agent, tid, r)
 					c.taskTracker.TodoList().UpdateStatus(tid, TaskError, fmt.Sprintf("panic: %v", r))
 					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-					resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: td.Goal, err: fmt.Errorf("panic recovered: %v", r)}
+					res := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: fmt.Errorf("panic recovered: %v", r)}
+					if isOwner {
+						inflightMu.Lock()
+						if ch, ok := inflight[cacheKey]; ok {
+							select {
+							case ch <- res:
+							default:
+							}
+							delete(inflight, cacheKey)
+						}
+						inflightMu.Unlock()
+					}
+					resultsCh <- res
 				}
 			}()
 			if dup {
@@ -3072,14 +3094,6 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				}
 			}()
 
-			// Compute effective description (goal takes precedence over task)
-			desc := td.Goal
-			if td.Constraints != "" {
-				desc += "\nconstraints: " + td.Constraints
-			}
-			agentKey := strings.ToLower(td.Agent)
-			cacheKey := agentKey + ":" + truncateTaskDesc(desc)
-
 			// Check in-flight dedup map — wait for first task with same key to complete.
 			// Release the semaphore slot while waiting; we are not doing real work.
 			inflightMu.Lock()
@@ -3091,22 +3105,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				case result := <-ch:
 					resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: result.output, err: result.err}
 				case <-ctx.Done():
-					result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: ctx.Err()}
-					// CRITICAL: Must signal inflight channel even on cancel to prevent deadlock
-					inflightMu.Lock()
-					if ch, ok := inflight[cacheKey]; ok {
-						select {
-						case ch <- result:
-						default:
-							// Channel already has result from original goroutine, skip
-						}
-					}
-					inflightMu.Unlock()
-					resultsCh <- result
+					resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: ctx.Err()}
 				}
 				return
 			}
 			inflight[cacheKey] = make(chan agentTaskResult, 1)
+			isOwner = true
 			inflightMu.Unlock()
 
 			// Check task result cache before running. Sidecar tasks and tasks

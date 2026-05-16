@@ -229,13 +229,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.vpReady {
 			m.vp.Width = msg.Width
-			m.vp.Height = m.vpHeight()
+			if m.inActivityLog {
+				m.vp.Height = msg.Height - 4
+			} else {
+				m.vp.Height = m.vpHeight()
+			}
 		} else {
-			m.vp = viewport.New(msg.Width, m.vpHeight())
+			h := m.vpHeight()
+			if m.inActivityLog {
+				h = msg.Height - 4
+			}
+			m.vp = viewport.New(msg.Width, h)
 			m.vpReady = true
 		}
 		if m.inDetail {
 			m.vp.SetContent(m.buildDetailContent())
+		}
+		if m.inActivityLog {
+			m.vp.SetContent(m.formatActivityLogContent())
 		}
 		m.clampScroll()
 
@@ -826,7 +837,7 @@ func (m Model) updateInfo(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateActivityLog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "q", "enter":
+	case "esc", "q", "a", "enter":
 		m.inActivityLog = false
 		return m, nil
 	case "ctrl+c":
@@ -869,23 +880,22 @@ func (m Model) activityLogView() string {
 
 	// Header
 	header := headerStyle.Render("─── ACTIVITY LOG ──────────────────────────────") + " " +
-		dimStyle.Render("[j/k] scroll [esc/q/l] close")
+		dimStyle.Render("[j/k] scroll [esc/q/a] close")
 	b.WriteString(header)
 	b.WriteString("\n\n")
 
-	// Build content from recentLogs
-	var content strings.Builder
-	for _, entry := range m.recentLogs {
-		content.WriteString(entry)
-		content.WriteString("\n")
+	// Initialize viewport if needed (defensive: should already be init from Update)
+	if !m.vpReady {
+		// Viewport not ready - show placeholder
+		b.WriteString(dimStyle.Render("Activity log initializing..."))
+		b.WriteString("\n")
+		footer := dimStyle.Render("──────────────────────────────────────────────────────────────────────────────")
+		b.WriteString(footer)
+		return b.String()
 	}
 
-	// Initialize viewport if needed
-	if !m.vpReady {
-		m.initActivityVP()
-	} else {
-		m.vp.SetContent(m.formatActivityLogContent())
-	}
+	// Update viewport content
+	m.vp.SetContent(m.formatActivityLogContent())
 
 	// Viewport content
 	b.WriteString(m.vp.View())
