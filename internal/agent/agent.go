@@ -70,6 +70,7 @@ type TeamConfig struct {
 	NoNet            bool
 	Vars             map[string]interface{}
 	WorkerContextSize int
+	ToolsAllowed   []string // List of explicitly allowed tools
 }
 
 type OllamaProvider struct {

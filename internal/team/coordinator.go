@@ -3438,6 +3438,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			if c.noNet || agentDef.NoNet {
 				taskCtx = context.WithValue(taskCtx, tools.AgentNetworkBlockKey, true)
 			}
+			if len(c.session.Config.ToolsAllowed) > 0 {
+				taskCtx = context.WithValue(taskCtx, tools.AgentToolsAllowedKey, c.session.Config.ToolsAllowed)
+			}
 			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing)
 		}()
 

@@ -195,6 +195,8 @@ func TestGuardReview(t *testing.T) {
 			if tt.guardRules != nil {
 				ctx = context.WithValue(ctx, GuardRulesKey, tt.guardRules)
 			}
+			// Allow bash tool for tests (bash is high-risk and requires explicit allow)
+			ctx = context.WithValue(ctx, AgentToolsAllowedKey, []string{"bash", "view", "write"})
 
 			resp, err := ct.Run(ctx, fantasy.ToolCall{
 				ID:    "1",

@@ -73,6 +73,7 @@ type teamConfigYAML struct {
 	NoNet          bool               `yaml:"no-net"`
 	Vars           map[string]interface{} `yaml:"vars"`
 	WorkerContextSize int              `yaml:"worker-context-size"`
+	ToolsAllowed   interface{}        `yaml:"tools"` // tools.allowed in YAML - string or []string
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -126,6 +127,20 @@ func anyToStrList(v any) []string {
 		return result
 	}
 	return nil
+}
+
+func parseAllowedTools(raw interface{}) []string {
+	if raw == nil {
+		return nil
+	}
+	// Support nested structure: tools: allowed: [bash, view]
+	if m, ok := raw.(map[string]interface{}); ok {
+		if allowed, exists := m["allowed"]; exists {
+			return anyToStrList(allowed)
+		}
+	}
+	// Support direct list/string: tools: [bash, view]
+	return anyToStrList(raw)
 }
 
 func anyToStr(v any, fallback string) string {
@@ -470,6 +485,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.WorkerContextSize > 0 {
 		cfg.WorkerContextSize = yc.WorkerContextSize
+	}
+	if tools := parseAllowedTools(yc.ToolsAllowed); len(tools) > 0 {
+		cfg.ToolsAllowed = tools
 	}
 
 	return cfg, nil

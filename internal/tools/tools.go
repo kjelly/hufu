@@ -4,6 +4,7 @@
 package tools
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -119,6 +120,95 @@ var AgentNameKey = agentNameKeyType{}
 type agentAllowedPathsKeyType struct{}
 
 var AgentAllowedPathsKey = agentAllowedPathsKeyType{}
+
+type agentToolsAllowedKeyType struct{}
+
+var AgentToolsAllowedKey = agentToolsAllowedKeyType{}
+
+// SetToolsAllowed sets the allowed tools list in the context
+func SetToolsAllowed(ctx context.Context, allowed []string) context.Context {
+	return context.WithValue(ctx, AgentToolsAllowedKey, allowed)
+}
+
+// GetToolsAllowed extracts the allowed tools list from context
+func GetToolsAllowed(ctx context.Context) []string {
+	if v, ok := ctx.Value(AgentToolsAllowedKey).([]string); ok {
+		return v
+	}
+	return nil
+}
+
+// Tool risk levels for access control
+const (
+	ToolLevelLow    = "low"
+	ToolLevelMedium = "medium"
+	ToolLevelHigh   = "high"
+)
+
+// High-risk tools that require explicit allow in config
+var highRiskTools = map[string]bool{
+	"golang": true,
+	"lua":    true,
+	"bash":   true,
+	"mcp":    true,
+}
+
+// Medium-risk tools that require user confirmation
+var mediumRiskTools = map[string]bool{
+	"download":       true,
+	"fetch":          true,
+	"agentic_fetch":  true,
+}
+
+// GetToolLevel returns the risk level of a tool
+func GetToolLevel(toolName string) string {
+	if highRiskTools[toolName] {
+		return ToolLevelHigh
+	}
+	if mediumRiskTools[toolName] {
+		return ToolLevelMedium
+	}
+	return ToolLevelLow
+}
+
+// CheckToolPermission checks if a tool is allowed to be used.
+// Returns (allowed, askUser, error)
+func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, error) {
+	level := GetToolLevel(toolName)
+
+	// Get allowed tools list from context
+	val := ctx.Value(AgentToolsAllowedKey)
+	if val == nil {
+		// Not configured: allow all tools for backward compatibility
+		return true, false, nil
+	}
+
+	allowed, _ := val.([]string)
+	allowedMap := make(map[string]bool, len(allowed))
+	for _, t := range allowed {
+		allowedMap[t] = true
+	}
+
+	switch level {
+	case ToolLevelHigh:
+		// High-risk: deny unless explicitly allowed
+		if !allowedMap[toolName] {
+			return false, false, nil
+		}
+		return true, false, nil
+
+	case ToolLevelMedium:
+		// Medium-risk: ask user unless explicitly allowed or denied
+		if allowedMap[toolName] {
+			return true, false, nil
+		}
+		return false, true, nil
+
+	default:
+		// Low-risk: always allowed
+		return true, false, nil
+	}
+}
 
 func mergedAllowedPaths(cfg ToolConfig, ctx context.Context) []string {
 	paths := cfg.AllowedPaths
@@ -243,6 +333,46 @@ func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 			if resp.Replacement != nil {
 				call.Input = string(resp.Replacement)
 			}
+		}
+	}
+
+	// Check tool permission (after hooks, so hooks can influence tool name/args)
+	allowed, askUser, err := CheckToolPermission(ctx, t.info.Name)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("tool permission check failed: %v", err)), nil
+	}
+	if !allowed {
+		if askUser {
+			// Request user confirmation for medium-risk tools
+			agentName, _ := ctx.Value(AgentNameKey).(string)
+			question := fmt.Sprintf("Agent '%s' wants to use tool '%s'. Allow?", agentName, t.info.Name)
+
+			// Try TUI first
+			if jsonResp, ok := TryAskUserTUI(ctx, question, "single_choice", []AskUserTUIOption{
+				{Label: "Yes", Value: "y"},
+				{Label: "No", Value: "n"},
+			}, false); ok {
+				var askResp askResponseType
+				if err := json.Unmarshal([]byte(jsonResp), &askResp); err == nil && len(askResp.Answers) > 0 && askResp.Answers[0] == "y" {
+					allowed = true
+				}
+			} else {
+				// CLI fallback
+				StdinMu.Lock()
+				defer StdinMu.Unlock()
+				fmt.Fprintf(os.Stderr, "\n%s %s [y/N] ", boldFmt("PERMISSION:"), question)
+				reader := bufio.NewReader(os.Stdin)
+				input, _ := reader.ReadString('\n')
+				if strings.ToLower(strings.TrimSpace(input)) == "y" {
+					allowed = true
+				}
+			}
+
+			if !allowed {
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("user denied permission for tool '%s'", t.info.Name)), nil
+			}
+		} else {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("tool '%s' is not permitted. Add '%s' to tools.allowed in team.yaml to enable.", t.info.Name, t.info.Name)), nil
 		}
 	}
 
