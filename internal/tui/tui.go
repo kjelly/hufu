@@ -172,7 +172,8 @@ type Model struct {
 	mouseEnabled         bool // mouse tracking is currently on
 	mouseManuallyEnabled bool // user explicitly toggled mouse on with 'm'
 
-	recentLogs              []string // last N activity log entries (circular buffer, max 3 entries; each may be multi-line, capped at maxFeedLines rendered lines)
+	inActivityLog          bool // 全螢幕 activity log 模式
+	recentLogs              []string // last N activity log entries (circular buffer, max 500 entries; each may be multi-line, capped at maxFeedLines rendered lines)
 	detailRefreshScheduled   bool
 }
 
@@ -263,8 +264,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.recentLogs = append(m.recentLogs, msg.Line)
-		if len(m.recentLogs) > 3 {
-			m.recentLogs = m.recentLogs[len(m.recentLogs)-3:]
+		if len(m.recentLogs) > 500 {
+			m.recentLogs = m.recentLogs[len(m.recentLogs)-500:]
 		}
 
 	case detailRefreshMsg:
@@ -463,6 +464,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.inMemory {
 			return m.updateMemory(msg)
 		}
+		if m.inActivityLog {
+			return m.updateActivityLog(msg)
+		}
 		return m.updateColumns(msg)
 	}
 
@@ -584,6 +588,10 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "i":
 		m.inInfo = true
 		return m, nil
+	case "l":
+		m.inActivityLog = true
+		m.initActivityVP()
+		return m, nil
 	case "/":
 		m.inSearch = true
 		m.searchInput.SetValue("")
@@ -647,7 +655,7 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.col = (m.col + 1) % 6
 		m.row = 0
 		m.scrollOff[m.col] = 0
-	case "right", "l":
+	case "right":
 		if m.col < 5 {
 			m.col++
 			m.row = 0
@@ -816,6 +824,106 @@ func (m Model) updateInfo(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateActivityLog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q", "l", "enter":
+		m.inActivityLog = false
+		return m, nil
+	case "ctrl+c":
+		m.inActivityLog = false
+		return m.handleCtrlC()
+	case "g":
+		if m.vpReady {
+			m.vp.GotoTop()
+		}
+	case "G":
+		if m.vpReady {
+			m.vp.GotoBottom()
+		}
+	case "j", "down":
+		if m.vpReady {
+			m.vp, _ = m.vp.Update(tea.KeyMsg{Type: tea.KeyDown})
+		}
+	case "k", "up":
+		if m.vpReady {
+			m.vp, _ = m.vp.Update(tea.KeyMsg{Type: tea.KeyUp})
+		}
+	case " ":
+		if m.vpReady {
+			m.vp, _ = m.vp.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+		}
+	case "b":
+		if m.vpReady {
+			m.vp, _ = m.vp.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+		}
+	}
+	return m, nil
+}
+
+func (m Model) activityLogView() string {
+	if m.width == 0 {
+		return "Initialising..."
+	}
+
+	var b strings.Builder
+
+	// Header
+	header := headerStyle.Render("─── ACTIVITY LOG ──────────────────────────────") + " " +
+		dimStyle.Render("[j/k] scroll [esc/q/l] close")
+	b.WriteString(header)
+	b.WriteString("\n\n")
+
+	// Build content from recentLogs
+	var content strings.Builder
+	for _, entry := range m.recentLogs {
+		content.WriteString(entry)
+		content.WriteString("\n")
+	}
+
+	// Initialize viewport if needed
+	if !m.vpReady {
+		m.initActivityVP()
+	} else {
+		m.vp.SetContent(m.formatActivityLogContent())
+	}
+
+	// Viewport content
+	b.WriteString(m.vp.View())
+	b.WriteString("\n")
+
+	// Footer
+	footer := dimStyle.Render("──────────────────────────────────────────────────────────────────────────────")
+	b.WriteString(footer)
+
+	return b.String()
+}
+
+func (m *Model) initActivityVP() {
+	w := m.width
+	h := m.height - 4 // account for header and footer
+	if h < 3 {
+		h = 3
+	}
+	m.vp = viewport.New(w, h)
+	m.vp.SetContent(m.formatActivityLogContent())
+	m.vp.GotoBottom()
+	m.vpReady = true
+}
+
+func (m *Model) formatActivityLogContent() string {
+	if len(m.recentLogs) == 0 {
+		return dimStyle.Render("No activity log entries yet.")
+	}
+
+	var b strings.Builder
+	for _, entry := range m.recentLogs {
+		// Format each entry with styling similar to CLI output
+		b.WriteString(entry)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 func (m Model) executeSearch(query string) []*team.TodoItem {
 	q := strings.ToLower(query)
 	var results []*team.TodoItem
@@ -874,6 +982,9 @@ func (m Model) View() string {
 	}
 	if m.inDetail {
 		return m.detailView()
+	}
+	if m.inActivityLog {
+		return m.activityLogView()
 	}
 	if m.inMemory {
 		return m.memoryView()

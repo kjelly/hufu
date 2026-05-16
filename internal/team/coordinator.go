@@ -3091,7 +3091,14 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				case result := <-ch:
 					resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: result.output, err: result.err}
 				case <-ctx.Done():
-					resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: ctx.Err()}
+					result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: ctx.Err()}
+					// CRITICAL: Must signal inflight channel even on cancel to prevent deadlock
+					inflightMu.Lock()
+					if ch, ok := inflight[cacheKey]; ok {
+						ch <- result
+					}
+					inflightMu.Unlock()
+					resultsCh <- result
 				}
 				return
 			}
