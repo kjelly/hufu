@@ -3066,7 +3066,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("step").withAgent(td.Agent).withMessage(fmt.Sprintf("duplicate detected: %s", truncateTaskDesc(td.Goal))))
 				log.Printf("[WARN] duplicate task rejected: agent=%q, task=%q", td.Agent, td.Goal)
-				resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: td.Goal, output: "", err: errMsg}
+				resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: "", err: errMsg}
 				return
 			}
 
@@ -4602,7 +4602,14 @@ func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, las
 }
 
 func (c *Coordinator) autoWriteSTMASync(agentName, taskDesc, output, errMsg string, success bool) {
-	go c.autoWriteSTM(agentName, taskDesc, output, errMsg, success)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[PANIC] autoWriteSTMASync recovered: %v", r)
+			}
+		}()
+		c.autoWriteSTM(agentName, taskDesc, output, errMsg, success)
+	}()
 }
 
 func (c *Coordinator) summarizeOutput(ctx context.Context, text string) string {
