@@ -452,6 +452,64 @@ func (r *PromptReader) Close() error
 - **`todo`** — Manage task list: create, update, and list TODO items (always available, even if not listed in `tools:`)
 - Skill summaries auto-injected into task prompts for workers with `skills` field
 
+## Core Mandates for Agents
+
+1. **Always Write Unit Tests:** Whenever you modify existing code or implement a new feature, you **MUST** write or update the corresponding unit tests to verify your changes. A task is considered incomplete without passing tests.
+2. **Prioritize Readability:** Code should be idiomatic, clear, and well-documented.
+3. **Follow Workspace Standards:** Adhere strictly to the established architectural patterns and conventions defined in `AGENTS.md` and related documentation.
+
+## TUI Testing Guidelines
+
+The TUI is built using the Bubble Tea framework, which emphasizes a pure functional approach to state management. To maintain high code quality and prevent regressions, agents should follow these testing patterns:
+
+### 1. State Machine Testing (Pure Function)
+
+Since the `Update(msg)` function is a pure state transition `(Model, Msg) -> (Model, Cmd)`, we can test TUI logic without a terminal environment. 
+
+**Pattern:**
+1. Initialize a `Model` with `New()`.
+2. Call `m.Update(msg)` with a specific `tea.Msg` (e.g., `tea.KeyMsg`).
+3. Assert that the resulting `Model` state (fields like `row`, `col`, `inDetail`) matches expectations.
+
+**Example:**
+```go
+func TestUpdate_Navigation(t *testing.T) {
+    // 1. Setup
+    m := New("test prompt", TeamInfo{TeamName: "test-team"})
+    m.width = 100
+    m.height = 40
+    m.tasks = []*team.TodoItem{
+        {ID: "1", Status: team.TaskPending, Desc: "Task 1", Agent: "A1"},
+        {ID: "2", Status: team.TaskPending, Desc: "Task 2", Agent: "A1"},
+    }
+
+    // 2. Action: Simulate pressing 'j' (Down)
+    m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+    
+    // 3. Expectation: Row index should increment
+    if m2.(Model).row != 1 {
+        t.Errorf("Expected row 1 after 'j', got %d", m2.(Model).row)
+    }
+}
+```
+
+### 2. View Rendering Verification
+
+To ensure the UI displays critical information, test the output of the `View()` function.
+
+**Pattern:**
+1. Setup a `Model` with specific data.
+2. Call `m.View()`.
+3. Use `strings.Contains()` to verify that important labels, descriptions, or status indicators are present in the rendered string.
+4. Use `lipgloss.Width()` for visible width checks instead of `len()`, as `View()` output contains ANSI sequences.
+
+### 3. Specification-Driven Testing (Speckit)
+
+Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INTEGRATION.md`:
+1. Define behavior in `*_SPEC.md` (Behavioral Checklist).
+2. Create technical plans in `.opencode/plans/*.md`.
+3. Derive test cases directly from the Checklist to ensure 100% requirement coverage.
+
 ## Key Gotchas & Non-Obvious Patterns
 
 1. **CLI no longer takes team directory as positional arg** — Usage changed from `hufu <team-dir> [prompt]` to `hufu [prompt]`. Teams are discovered by name from search paths.
