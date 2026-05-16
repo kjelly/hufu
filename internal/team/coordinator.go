@@ -1057,12 +1057,21 @@ func truncateAtSectionBoundaries(content string, maxChars int) string {
 	if len(runes) <= maxChars {
 		return content
 	}
+	// Edge case: maxChars is 0 or negative
+	if maxChars <= 0 {
+		return ""
+	}
 	sections := ParseSTMSections(content)
 	if len(sections) == 0 {
-		return string(runes[len(runes)-maxChars:])
+		// Safe truncation: ensure index is non-negative
+		startIdx := len(runes) - maxChars
+		if startIdx < 0 {
+			startIdx = 0
+		}
+		return string(runes[startIdx:])
 	}
 	var totalRunes int
-	keepFrom := 0
+	keepFrom := len(sections) // Default: keep nothing if no section fits
 	for i := len(sections) - 1; i >= 0; i-- {
 		sectionStr := sections[i].Title + "\n" + strings.Join(sections[i].Entries, "\n") + "\n"
 		sectionRunes := []rune(sectionStr)
@@ -1071,6 +1080,16 @@ func truncateAtSectionBoundaries(content string, maxChars int) string {
 		}
 		totalRunes += len(sectionRunes)
 		keepFrom = i
+	}
+	// If no section fits, return the last section truncated to maxChars
+	if keepFrom == len(sections) {
+		lastSection := sections[len(sections)-1]
+		sectionStr := lastSection.Title + "\n" + strings.Join(lastSection.Entries, "\n")
+		sectionRunes := []rune(sectionStr)
+		if len(sectionRunes) <= maxChars {
+			return strings.TrimSpace(sectionStr)
+		}
+		return strings.TrimSpace(string(sectionRunes[:maxChars]))
 	}
 	var b strings.Builder
 	for i := keepFrom; i < len(sections); i++ {
@@ -1209,11 +1228,23 @@ func (c *Coordinator) AutoExtractLTM() {
 
 func classifyLTMEntry(entry string, source string) string {
 	lower := strings.ToLower(entry)
-	hasFilePath := strings.Contains(lower, ".go") || strings.Contains(lower, ".yaml") ||
+	// More specific file path detection: requires file extension or path-like pattern
+	// Avoids false positives from "1/2", "user/admin", dates like "2024/01/15"
+	hasFileExtension := strings.Contains(lower, ".go") || strings.Contains(lower, ".yaml") ||
 		strings.Contains(lower, ".yml") || strings.Contains(lower, ".md") ||
 		strings.Contains(lower, ".json") || strings.Contains(lower, ".sh") ||
 		strings.Contains(lower, ".py") || strings.Contains(lower, ".js") ||
-		strings.Contains(lower, ".ts") || strings.Contains(lower, "/")
+		strings.Contains(lower, ".ts") || strings.Contains(lower, ".tsx") ||
+		strings.Contains(lower, ".css") || strings.Contains(lower, ".html") ||
+		strings.Contains(lower, ".sql") || strings.Contains(lower, ".toml") ||
+		strings.Contains(lower, ".lock") || strings.Contains(lower, ".sum")
+	// Path-like: has directory structure (e.g., "pkg/foo/bar" or "internal/team/")
+	// Requires at least 2 slashes or a slash with a known directory prefix
+	hasPathStructure := strings.Count(lower, "/") >= 2 ||
+		strings.Contains(lower, "internal/") || strings.Contains(lower, "pkg/") ||
+		strings.Contains(lower, "cmd/") || strings.Contains(lower, "src/") ||
+		strings.Contains(lower, "lib/") || strings.Contains(lower, "app/")
+	hasFilePath := hasFileExtension || hasPathStructure
 
 	if source == "finding" && hasFilePath {
 		return ltmSectionFiles
@@ -1268,11 +1299,17 @@ func classifyLTMEntry(entry string, source string) string {
 		return ltmSectionTools
 	}
 
-	if source == "finding" {
+	// Default fallback: categorize based on source
+	switch source {
+	case "finding":
+		return ltmSectionPatterns
+	case "error":
 		return ltmSectionIssues
+	case "decision":
+		return ltmSectionArchitecture
+	default:
+		return ltmSectionPatterns
 	}
-
-	return ""
 }
 
 func stripSTMListItem(entry string) string {
@@ -2354,6 +2391,22 @@ func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 		return fantasy.NewTextErrorResponse("section is required"), nil
 	}
 
+	// Validate section against the enum defined in Info()
+	validSections := map[string]bool{
+		ltmSectionConventions:  true,
+		ltmSectionArchitecture: true,
+		ltmSectionPatterns:     true,
+		ltmSectionIssues:       true,
+		ltmSectionFiles:        true,
+		ltmSectionTools:        true,
+	}
+	if !validSections[args.Section] {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid section %q; must be one of: %s, %s, %s, %s, %s, %s",
+			args.Section,
+			ltmSectionConventions, ltmSectionArchitecture, ltmSectionPatterns,
+			ltmSectionIssues, ltmSectionFiles, ltmSectionTools)), nil
+	}
+
 	entry := formatLTMEntry(args.Content)
 	teamDir := t.coordinator.session.Dir
 	t.coordinator.ltmWriteMu.Lock()
@@ -2746,7 +2799,11 @@ func detectTaskCycle(tasks []TaskDef) bool {
 		}
 		state[i] = 1
 		for _, dep := range tasks[i].DependsOn {
-			if dep >= 0 && dep < n && dep != i && dfs(dep) {
+			// Check for self-loop (task depends on itself)
+			if dep == i {
+				return true
+			}
+			if dep >= 0 && dep < n && dfs(dep) {
 				return true
 			}
 		}
@@ -2828,8 +2885,8 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 		}
 		agentKey := strings.ToLower(t.Agent)
 		dupCtx, dupCancel := context.WithTimeout(ctx, 5*time.Second)
-		defer dupCancel()
 		cachedOutput, cachedDesc, cacheOK := c.lookupTaskCacheAllGenerations(dupCtx, agentKey, desc)
+		dupCancel()
 		if cacheOK {
 			warnings = append(warnings, fmt.Sprintf("SEMANTIC DUPLICATE: %s (similar to completed task: %q)", truncateTaskDesc(desc), truncateTaskDesc(cachedDesc)))
 			duplicates[i] = true
@@ -3042,6 +3099,14 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		go func(td TaskDef, tid string, idx int, dup bool) {
 			defer wg.Done()
 			defer close(doneChs[idx])
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[PANIC] task goroutine %q/%q recovered: %v", td.Agent, tid, r)
+					c.taskTracker.TodoList().UpdateStatus(tid, TaskError, fmt.Sprintf("panic: %v", r))
+					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+					resultsCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: td.Goal, err: fmt.Errorf("panic recovered: %v", r)}
+				}
+			}()
 			if dup {
 				errMsg := fmt.Errorf("duplicate task: %s - reference existing completed task instead", truncateTaskDesc(td.Goal))
 				c.taskTracker.TodoList().UpdateStatus(tid, TaskError, "duplicate task detected")
