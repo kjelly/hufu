@@ -623,21 +623,25 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.row--
 			m.scrollCursorIntoView()
 		}
+		return m, nil
 	case "down", "j":
 		if m.row < len(col)-1 {
 			m.row++
 			m.scrollCursorIntoView()
 		}
+		return m, nil
 	case "g":
 		if len(col) > 0 {
 			m.row = 0
 			m.scrollOff[m.col] = 0
 		}
+		return m, nil
 	case "G":
 		if len(col) > 0 {
 			m.row = len(col) - 1
 			m.scrollCursorIntoView()
 		}
+		return m, nil
 	case "ctrl+d":
 		halfPage := max(m.colBodyHeight()/2, 1)
 		newRow := m.row + halfPage
@@ -648,6 +652,7 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.row = newRow
 			m.scrollCursorIntoView()
 		}
+		return m, nil
 	case "ctrl+u":
 		halfPage := max(m.colBodyHeight()/2, 1)
 		newRow := m.row - halfPage
@@ -656,17 +661,20 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.row = newRow
 		m.scrollCursorIntoView()
+		return m, nil
 	case "left", "h":
 		if m.col > 0 {
 			m.col--
 			m.row = 0
 			m.scrollOff[m.col] = 0
 		}
+		return m, nil
 	case "tab":
 		m.col = (m.col + 1) % 6
 		m.row = 0
 		m.scrollOff[m.col] = 0
-	case "right":
+		return m, nil
+	case "right", "l":
 		if m.col < 5 {
 			m.col++
 			m.row = 0
