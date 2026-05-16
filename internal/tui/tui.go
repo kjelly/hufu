@@ -588,7 +588,7 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "i":
 		m.inInfo = true
 		return m, nil
-	case "l":
+	case "a":
 		m.inActivityLog = true
 		m.initActivityVP()
 		return m, nil
@@ -826,7 +826,7 @@ func (m Model) updateInfo(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateActivityLog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "q", "l", "enter":
+	case "esc", "q", "enter":
 		m.inActivityLog = false
 		return m, nil
 	case "ctrl+c":

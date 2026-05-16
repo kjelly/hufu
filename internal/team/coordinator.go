@@ -3095,7 +3095,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 					// CRITICAL: Must signal inflight channel even on cancel to prevent deadlock
 					inflightMu.Lock()
 					if ch, ok := inflight[cacheKey]; ok {
-						ch <- result
+						select {
+						case ch <- result:
+						default:
+							// Channel already has result from original goroutine, skip
+						}
 					}
 					inflightMu.Unlock()
 					resultsCh <- result
@@ -3115,6 +3119,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 					result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: cached}
 					inflightMu.Lock()
 					inflight[cacheKey] <- result
+					delete(inflight, cacheKey)
 					inflightMu.Unlock()
 					resultsCh <- result
 					return
@@ -3141,6 +3146,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			}
 			inflightMu.Lock()
 			inflight[cacheKey] <- result
+			delete(inflight, cacheKey)
 			inflightMu.Unlock()
 			resultsCh <- result
 		}(task, todoItems[i].ID, i, duplicateIndices[i])
