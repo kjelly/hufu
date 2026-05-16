@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -66,6 +67,8 @@ type AskUserCancelMsg struct{}
 
 type detailRefreshMsg struct{}
 
+type copySuccessMsg struct{ Lines int }
+
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 var (
@@ -90,6 +93,8 @@ var (
 	skippedIcon  = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("8"))
 	matchStyle   = lipgloss.NewStyle().Background(lipgloss.Color("55")).Foreground(lipgloss.Color("15"))
 	wrapUpStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
+	visualStyle  = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("15"))
+	visualLabel  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10"))
 
 	toolCallStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	toolResStyle  = lipgloss.NewStyle().Faint(true)
@@ -175,6 +180,10 @@ type Model struct {
 	inActivityLog          bool // 全螢幕 activity log 模式
 	recentLogs              []string // last N activity log entries (circular buffer, max 500 entries; each may be multi-line, capped at maxFeedLines rendered lines)
 	detailRefreshScheduled   bool
+
+	inVisual    bool // VISUAL mode active in detail view
+	visualStart int  // selection start line index (relative to content lines)
+	visualEnd   int  // selection end line index
 }
 
 func enableMouseCmd() tea.Cmd {
@@ -285,6 +294,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vp.SetContent(m.buildDetailContent())
 			m.vp.GotoBottom()
 		}
+
+	case copySuccessMsg:
+		m.statusText = doneStyle.Render(fmt.Sprintf("✓ Copied %d lines to clipboard", msg.Lines))
 
 	case CoordItemMsg:
 		m.coordItem = msg.Item
@@ -507,6 +519,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.inVisual {
+		return m.updateVisual(msg)
+	}
 	switch msg.String() {
 	case "esc", "backspace":
 		m.inDetail = false
@@ -526,6 +541,8 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "i":
 		m.inInfo = true
 		return m, nil
+	case "v":
+		return m.enterVisual()
 	case "g":
 		if m.vpReady {
 			m.vp.GotoTop()
@@ -566,6 +583,82 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)
 	return m, cmd
+}
+
+func (m Model) enterVisual() (tea.Model, tea.Cmd) {
+	m.inVisual = true
+	m.visualStart = m.vp.YOffset
+	m.visualEnd = m.vp.YOffset
+	if m.vpReady {
+		m.vp.SetContent(m.buildDetailContent())
+	}
+	return m, nil
+}
+
+func (m Model) updateVisual(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	contentLines := len(m.logs[m.detailID])
+	switch msg.String() {
+	case "esc":
+		m.inVisual = false
+		m.visualStart = 0
+		m.visualEnd = 0
+		if m.vpReady {
+			m.vp.SetContent(m.buildDetailContent())
+		}
+		return m, nil
+	case "v":
+		m.inVisual = false
+		m.visualStart = 0
+		m.visualEnd = 0
+		if m.vpReady {
+			m.vp.SetContent(m.buildDetailContent())
+		}
+		return m, nil
+	case "y":
+		text := m.getVisualSelection()
+		m.inVisual = false
+		m.visualStart = 0
+		m.visualEnd = 0
+		if m.vpReady {
+			m.vp.SetContent(m.buildDetailContent())
+		}
+		return m, copyToClipboard(text)
+	case "j", "down":
+		if contentLines > 0 && m.visualEnd < contentLines-1 {
+			m.visualEnd++
+			if m.vpReady {
+				m.vp.LineDown(1)
+				m.vp.SetContent(m.buildDetailContent())
+			}
+		}
+		return m, nil
+	case "k", "up":
+		if m.visualEnd > 0 {
+			m.visualEnd--
+			if m.vpReady {
+				m.vp.LineUp(1)
+				m.vp.SetContent(m.buildDetailContent())
+			}
+		}
+		return m, nil
+	case "G":
+		if contentLines > 0 {
+			m.visualEnd = contentLines - 1
+			if m.vpReady {
+				m.vp.GotoBottom()
+				m.vp.SetContent(m.buildDetailContent())
+			}
+		}
+		return m, nil
+	case "g":
+		m.visualEnd = 0
+		if m.vpReady {
+			m.vp.GotoTop()
+			m.vp.SetContent(m.buildDetailContent())
+		}
+		return m, nil
+	}
+	return m, nil
 }
 
 func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1487,7 +1580,17 @@ func taskIconStyle(s team.TaskStatus) (string, lipgloss.Style) {
 
 func (m Model) footer() string {
 	if m.inDetail {
-		return footerStyle.Render("j/k ↑↓ scroll · esc back")
+		if m.inVisual {
+			start := min(m.visualStart, m.visualEnd)
+			end := max(m.visualStart, m.visualEnd)
+			lineCount := end - start + 1
+			return visualLabel.Render("-- VISUAL --") + " " +
+				footerStyle.Render(fmt.Sprintf("%d line%s selected · ", lineCount, pluralS(lineCount))) +
+				boldStyle.Render("y") + footerStyle.Render(" copy · ") +
+				boldStyle.Render("v/esc") + footerStyle.Render(" cancel · ") +
+				boldStyle.Render("j/k") + footerStyle.Render(" extend")
+		}
+		return footerStyle.Render("j/k ↑↓ scroll · v visual · esc back")
 	}
 	if m.inInfo {
 		return footerStyle.Render("i/esc close · ↑↓ scroll")
@@ -1905,6 +2008,9 @@ func (m Model) buildDetailContent() string {
 	if width < 20 {
 		width = 20
 	}
+	if m.inVisual {
+		return m.buildVisualContent(lines, width)
+	}
 	var result strings.Builder
 	for i, entry := range lines {
 		if i > 0 {
@@ -1912,6 +2018,30 @@ func (m Model) buildDetailContent() string {
 		}
 		wrapped := wrapText(entry, width)
 		result.WriteString(wrapped)
+	}
+	return result.String()
+}
+
+func (m Model) buildVisualContent(lines []string, width int) string {
+	start := min(m.visualStart, m.visualEnd)
+	end := max(m.visualStart, m.visualEnd)
+	if start < 0 {
+		start = 0
+	}
+	if end >= len(lines) {
+		end = len(lines) - 1
+	}
+	var result strings.Builder
+	for i, entry := range lines {
+		if i > 0 {
+			result.WriteString("\n")
+		}
+		wrapped := wrapText(entry, width)
+		if i >= start && i <= end {
+			result.WriteString(visualStyle.Render(wrapped))
+		} else {
+			result.WriteString(wrapped)
+		}
 	}
 	return result.String()
 }
@@ -2043,6 +2173,49 @@ func wrapText(s string, width int) string {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+func (m Model) getVisualSelection() string {
+	lines := m.logs[m.detailID]
+	if len(lines) == 0 {
+		return ""
+	}
+	start := min(m.visualStart, m.visualEnd)
+	end := max(m.visualStart, m.visualEnd)
+	if start < 0 {
+		start = 0
+	}
+	if end >= len(lines) {
+		end = len(lines) - 1
+	}
+	if start > end {
+		start, end = end, start
+	}
+	selected := lines[start : end+1]
+	return strings.Join(selected, "\n")
+}
+
+func copyToClipboard(text string) tea.Cmd {
+	return func() tea.Msg {
+		if text == "" {
+			return copySuccessMsg{Lines: 0}
+		}
+		osc52 := "\x1b]52;c;" + encodeOSC52(text) + "\x1b\\"
+		fmt.Fprint(os.Stderr, osc52)
+		lines := strings.Count(text, "\n") + 1
+		return copySuccessMsg{Lines: lines}
+	}
+}
+
+func encodeOSC52(s string) string {
+	return base64.StdEncoding.EncodeToString([]byte(s))
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
 
 func (m Model) colItems(col int) []*team.TodoItem {
 	var out []*team.TodoItem

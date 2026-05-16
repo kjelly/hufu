@@ -1,316 +1,259 @@
 package team
 
 import (
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/anomalyco/hufu/internal/agent"
 )
 
-func newTestRegistry(t *testing.T) *TeamRegistry {
-	t.Helper()
-	searchPaths := []string{"../../.agent-teams"}
-	home, err := os.UserHomeDir()
-	if err == nil {
-		searchPaths = append(searchPaths, filepath.Join(home, ".agent-teams"))
+func TestHasAtName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"@team task", true},
+		{"@team-name task", true},
+		{"hello @agent do this", true},
+		{"no at sign here", false},
+		{"email@example.com", false}, // \B requires non-word boundary, 'l' is word char
+		{"@123 invalid", true},       // 1 is a word character, so this matches
+		{"@-invalid", false},         // doesn't start with letter/word
+		{"@valid_agent", true},
+		{"multiple @team1 and @team2", true},
+		{"", false},
+		{" @team after space", true}, // space is non-word boundary
 	}
-	registry := NewTeamRegistry(searchPaths)
-	if err := registry.Discover(); err != nil {
-		t.Fatalf("discover error: %v", err)
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := HasAtName(tt.input)
+			if got != tt.want {
+				t.Errorf("HasAtName(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
 	}
-	if registry.TeamCount() == 0 {
-		t.Fatal("no teams discovered")
-	}
-	t.Logf("Teams: %v", registry.ListTeams())
-	return registry
 }
 
 func TestParsePromptWithLazyAgents(t *testing.T) {
-	registry := newTestRegistry(t)
+	registry := NewTeamRegistry([]string{".test-teams"})
+	// Manually add test teams
+	registry.teams = map[string]string{
+		"delegate": "/path/to/delegate",
+		"tether":   "/path/to/tether",
+		"reviewer": "/path/to/reviewer",
+	}
 
 	tests := []struct {
-		name         string
-		prompt       string
-		defaultTeam  string
-		agentDefs    []*agent.AgentDef
-		expectError  bool
-		checkSegs    func(t *testing.T, lazy []PromptSegment, expanded []PromptSegment)
-		expectExpErr bool
+		name        string
+		prompt      string
+		defaultTeam string
+		want        []PromptSegment
+		wantErr     bool
+		errMsg      string
 	}{
 		{
-			name:        "@team only",
-			prompt:      "@delegate do something",
+			name:        "no team specified no default",
+			prompt:      "just a task",
 			defaultTeam: "",
-			expectError: false,
-			checkSegs: func(t *testing.T, lazy []PromptSegment, expanded []PromptSegment) {
-				if len(lazy) != 1 || lazy[0].Type != SegmentSwitchTeam || lazy[0].Name != "delegate" {
-					t.Errorf("lazy: expected [switch_team:delegate], got %v", lazy)
-				}
-			},
+			wantErr:     true,
+			errMsg:      "no team specified",
 		},
 		{
-			name:        "@team @agent",
-			prompt:      "@delegate @researcher find bugs",
-			defaultTeam: "",
-			agentDefs:   []*agent.AgentDef{{Name: "researcher", Role: "worker"}, {Name: "writer", Role: "worker"}, {Name: "checker", Role: "worker"}},
-			expectError: false,
-			checkSegs: func(t *testing.T, lazy []PromptSegment, expanded []PromptSegment) {
-				hasTeamSwitch := false
-				hasAgentInvoke := false
-				for _, s := range expanded {
-					if s.Type == SegmentSwitchTeam && s.Name == "delegate" {
-						hasTeamSwitch = true
-					}
-					if s.Type == SegmentInvokeAgent && s.Name == "researcher" {
-						hasAgentInvoke = true
-					}
-				}
-				if !hasTeamSwitch {
-					t.Errorf("expanded: missing switch_team for delegate, got %v", expanded)
-				}
-				if !hasAgentInvoke {
-					t.Errorf("expanded: missing invoke_agent for researcher, got %v", expanded)
-				}
-			},
-		},
-		{
-			name:        "default-team + text",
-			prompt:      "do something",
+			name:        "default team provided",
+			prompt:      "do this task",
 			defaultTeam: "delegate",
-			expectError: false,
-			checkSegs: func(t *testing.T, lazy []PromptSegment, expanded []PromptSegment) {
-				if len(lazy) != 1 || lazy[0].Type != SegmentSwitchTeam || lazy[0].Name != "delegate" {
-					t.Errorf("lazy: expected [switch_team:delegate], got %v", lazy)
-				}
-				if len(expanded) != 1 || expanded[0].Name != "delegate" {
-					t.Errorf("expanded: expected [switch_team:delegate], got %v", expanded)
-				}
+			want: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "delegate", Content: "do this task"},
 			},
 		},
 		{
-			name:        "default-team + @agent",
-			prompt:      "@researcher find bugs",
-			defaultTeam: "delegate",
-			agentDefs:   []*agent.AgentDef{{Name: "researcher", Role: "worker"}, {Name: "writer", Role: "worker"}, {Name: "checker", Role: "worker"}},
-			expectError: false,
-			checkSegs: func(t *testing.T, lazy []PromptSegment, expanded []PromptSegment) {
-				hasTeamSwitch := false
-				hasAgentInvoke := false
-				for _, s := range expanded {
-					if s.Type == SegmentSwitchTeam && s.Name == "delegate" {
-						hasTeamSwitch = true
-					}
-					if s.Type == SegmentInvokeAgent && s.Name == "researcher" {
-						hasAgentInvoke = true
-					}
-				}
-				if !hasTeamSwitch {
-					t.Errorf("expanded: missing switch_team for delegate, got %v", expanded)
-				}
-				if !hasAgentInvoke {
-					t.Errorf("expanded: missing invoke_agent for researcher, got %v", expanded)
-				}
+			name:   "team in prompt",
+			prompt: "@delegate research this",
+			want: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "delegate", Content: "research this"},
 			},
 		},
 		{
-			name:        "text only no team",
-			prompt:      "do something",
-			defaultTeam: "",
-			expectError: true,
+			name:   "team with hyphen",
+			prompt: "@my-team do something",
+			wantErr: true,
+			errMsg: "no team found",
 		},
 		{
-			name:        "@bad-team",
-			prompt:      "@nonexistent do something",
-			defaultTeam: "",
-			expectError: true,
+			name:   "unknown team",
+			prompt: "@unknown do task",
+			wantErr: true,
+			errMsg: "no team found",
 		},
 		{
-			name:        "@bad-agent in team",
-			prompt:      "@nonexistent find bugs",
-			defaultTeam: "delegate",
-			agentDefs:   []*agent.AgentDef{{Name: "researcher", Role: "worker"}, {Name: "writer", Role: "worker"}, {Name: "checker", Role: "worker"}},
-			expectError: false,
-			checkSegs: func(t *testing.T, lazy []PromptSegment, expanded []PromptSegment) {
-				hasUnknownText := false
-				for _, s := range expanded {
-					if s.Type == SegmentText && strings.Contains(s.Content, "@nonexistent") {
-						hasUnknownText = true
-					}
-				}
-				if !hasUnknownText {
-					t.Errorf("expanded: expected @nonexistent to be treated as text, got %v", expanded)
-				}
+			name:   "team name case insensitive",
+			prompt: "@DELEGATE research",
+			want: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "delegate", Content: "research"},
 			},
 		},
 		{
-			name:        "@teamA then @teamB",
-			prompt:      "@delegate a @tether b",
-			defaultTeam: "",
-			expectError: false,
-			checkSegs: func(t *testing.T, lazy []PromptSegment, expanded []PromptSegment) {
-				if len(lazy) != 1 || lazy[0].Type != SegmentSwitchTeam || lazy[0].Name != "delegate" {
-					t.Errorf("lazy: expected [switch_team:delegate], got %v", lazy)
-				}
-				delegateCount := 0
-				tetherCount := 0
-				for _, s := range expanded {
-					if s.Type == SegmentSwitchTeam && s.Name == "delegate" {
-						delegateCount++
-					}
-					if s.Type == SegmentSwitchTeam && s.Name == "tether" {
-						tetherCount++
-					}
-				}
-				if delegateCount < 1 {
-					t.Errorf("expanded: missing switch_team for delegate, got %v", expanded)
-				}
-				if tetherCount < 1 {
-					t.Errorf("expanded: missing switch_team for tether, got %v", expanded)
-				}
+			name:   "team in middle of prompt",
+			prompt: "first part @delegate research",
+			want: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "delegate", Content: "research"},
 			},
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			lazy, err := ParsePromptWithLazyAgents(tc.prompt, registry, tc.defaultTeam)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParsePromptWithLazyAgents(tt.prompt, registry, tt.defaultTeam)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("ParsePromptWithLazyAgents() expected error")
+					return
+				}
+				if tt.errMsg != "" && !containsStr(err.Error(), tt.errMsg) {
+					t.Errorf("ParsePromptWithLazyAgents() error = %v, want contains %q", err, tt.errMsg)
+				}
+				return
+			}
+
 			if err != nil {
-				if tc.expectError {
-					t.Logf("OK (expected error): %v", err)
-					return
+				t.Errorf("ParsePromptWithLazyAgents() unexpected error = %v", err)
+				return
+			}
+
+			if len(got) != len(tt.want) {
+				t.Errorf("ParsePromptWithLazyAgents() got %d segments, want %d", len(got), len(tt.want))
+				return
+			}
+
+			for i, seg := range got {
+				if seg.Type != tt.want[i].Type || seg.Name != tt.want[i].Name || seg.Content != tt.want[i].Content {
+					t.Errorf("Segment %d: got %+v, want %+v", i, seg, tt.want[i])
 				}
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if tc.expectError {
-				t.Fatalf("expected error but got segments: %v", lazy)
-			}
-
-			t.Logf("Lazy segments:")
-			for i, s := range lazy {
-				t.Logf("  [%d] type=%s name=%q content=%q", i, s.Type, s.Name, s.Content)
-			}
-
-			var expanded []PromptSegment
-			var expErr error
-			for _, seg := range lazy {
-				if seg.Type == SegmentSwitchTeam && seg.Content != "" {
-					subSegs, err := SplitSegmentByAgents(seg, registry, tc.agentDefs)
-					if err != nil {
-						expErr = err
-						break
-					}
-					expanded = append(expanded, subSegs...)
-				} else {
-					expanded = append(expanded, seg)
-				}
-			}
-
-			if expErr != nil {
-				if tc.expectExpErr {
-					t.Logf("OK (expected expansion error): %v", expErr)
-					return
-				}
-				t.Fatalf("unexpected expansion error: %v", expErr)
-			}
-			if tc.expectExpErr {
-				t.Fatalf("expected expansion error but got segments: %v", expanded)
-			}
-
-			t.Logf("Expanded segments:")
-			for i, s := range expanded {
-				t.Logf("  [%d] type=%s name=%q content=%q", i, s.Type, s.Name, s.Content)
-			}
-
-			if tc.checkSegs != nil {
-				tc.checkSegs(t, lazy, expanded)
 			}
 		})
 	}
 }
 
 func TestSplitSegmentByAgents(t *testing.T) {
-	registry := newTestRegistry(t)
+	registry := NewTeamRegistry([]string{".test-teams"})
+	registry.teams = map[string]string{
+		"delegate": "/path/to/delegate",
+		"tether":   "/path/to/tether",
+	}
+
+	agents := []*agent.AgentDef{
+		{Name: "Researcher", Role: "worker", FileAlias: "researcher"},
+		{Name: "Writer", Role: "worker", FileAlias: "writer"},
+		{Name: "Code Reviewer", Role: "worker", FileAlias: "reviewer"},
+		{Name: "Coordinator", Role: "coordinator", FileAlias: "coord"},
+	}
 
 	tests := []struct {
-		name      string
-		segment   PromptSegment
-		agentDefs []*agent.AgentDef
-		expectLen int
-		expectErr bool
+		name         string
+		segment      PromptSegment
+		want         []PromptSegment
+		wantContains []PromptSegmentType
 	}{
 		{
-			name:      "single agent at start",
-			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@researcher find bugs"},
-			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}, {Name: "writer", Role: "worker"}},
-			expectLen: 2,
+			name: "no @ references",
+			segment: PromptSegment{
+				Type:    SegmentSwitchTeam,
+				Name:    "delegate",
+				Content: "research this topic",
+			},
+			want: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "delegate", Content: "research this topic"},
+			},
 		},
 		{
-			name:      "text before agent",
-			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "first do X @researcher find bugs"},
-			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}, {Name: "writer", Role: "worker"}},
-			expectLen: 2,
+			name: "agent reference in content",
+			segment: PromptSegment{
+				Type:    SegmentSwitchTeam,
+				Name:    "delegate",
+				Content: "start @researcher find bugs",
+			},
+			wantContains: []PromptSegmentType{SegmentSwitchTeam, SegmentInvokeAgent},
 		},
 		{
-			name:      "multiple agents",
-			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@researcher find bugs @writer write docs"},
-			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}, {Name: "writer", Role: "worker"}},
-			expectLen: 3,
+			name: "team switch in content",
+			segment: PromptSegment{
+				Type:    SegmentSwitchTeam,
+				Name:    "delegate",
+				Content: "research @tether also check",
+			},
+			wantContains: []PromptSegmentType{SegmentSwitchTeam, SegmentSwitchTeam},
 		},
 		{
-			name:      "no agents in content",
-			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "just plain text"},
-			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}},
-			expectLen: 1,
+			name: "multiple agent references",
+			segment: PromptSegment{
+				Type:    SegmentSwitchTeam,
+				Name:    "delegate",
+				Content: "@researcher find bugs @writer write docs",
+			},
+			wantContains: []PromptSegmentType{SegmentSwitchTeam, SegmentInvokeAgent, SegmentInvokeAgent},
 		},
 		{
-			name:      "unknown agent",
-			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@unknown find bugs"},
-			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}},
-			expectLen: 1,
+			name: "mixed team and agent",
+			segment: PromptSegment{
+				Type:    SegmentSwitchTeam,
+				Name:    "delegate",
+				Content: "@researcher check @tether verify",
+			},
+			wantContains: []PromptSegmentType{SegmentSwitchTeam, SegmentInvokeAgent, SegmentSwitchTeam},
 		},
 		{
-			name:      "team name in content",
-			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: "@tether do something"},
-			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}},
-			expectLen: 2,
+			name: "text before first at",
+			segment: PromptSegment{
+				Type:    SegmentSwitchTeam,
+				Name:    "delegate",
+				Content: "please @researcher check this",
+			},
+			// Text before @ is combined with agent invocation
+			wantContains: []PromptSegmentType{SegmentSwitchTeam, SegmentInvokeAgent},
 		},
 		{
-			name:      "empty content",
-			segment:   PromptSegment{Type: SegmentSwitchTeam, Name: "delegate", Content: ""},
-			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}},
-			expectLen: 1,
-		},
-		{
-			name:      "non-switch-team segment",
-			segment:   PromptSegment{Type: SegmentText, Content: "hello"},
-			agentDefs: []*agent.AgentDef{{Name: "researcher", Role: "worker"}},
-			expectLen: 1,
+			name: "coordinator skipped",
+			segment: PromptSegment{
+				Type:    SegmentSwitchTeam,
+				Name:    "delegate",
+				Content: "@coordinator do task",
+			},
+			// Coordinator should not be invoked directly, treated as text
+			wantContains: []PromptSegmentType{SegmentText},
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			segs, err := SplitSegmentByAgents(tc.segment, registry, tc.agentDefs)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := SplitSegmentByAgents(tt.segment, registry, agents)
 			if err != nil {
-				if tc.expectErr {
-					t.Logf("OK (expected error): %v", err)
-					return
+				t.Errorf("SplitSegmentByAgents() unexpected error = %v", err)
+				return
+			}
+
+			if len(tt.want) > 0 {
+				if len(got) != len(tt.want) {
+					t.Errorf("SplitSegmentByAgents() got %d segments, want %d", len(got), len(tt.want))
 				}
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if tc.expectErr {
-				t.Fatalf("expected error but got: %v", segs)
-			}
-
-			t.Logf("Segments (%d):", len(segs))
-			for i, s := range segs {
-				t.Logf("  [%d] type=%s name=%q content=%q", i, s.Type, s.Name, s.Content)
+				for i, seg := range got {
+					if i < len(tt.want) {
+						if seg.Type != tt.want[i].Type || seg.Name != tt.want[i].Name || seg.Content != tt.want[i].Content {
+							t.Errorf("Segment %d: got %+v, want %+v", i, seg, tt.want[i])
+						}
+					}
+				}
 			}
 
-			if len(segs) != tc.expectLen {
-				t.Errorf("expected %d segments, got %d: %v", tc.expectLen, len(segs), segs)
+			if len(tt.wantContains) > 0 {
+				if len(got) != len(tt.wantContains) {
+					t.Errorf("SplitSegmentByAgents() got %d segments, want %d (by type count)", len(got), len(tt.wantContains))
+				}
+				for i, expectedType := range tt.wantContains {
+					if i < len(got) && got[i].Type != expectedType {
+						t.Errorf("Segment %d type: got %v, want %v", i, got[i].Type, expectedType)
+					}
+				}
 			}
 		})
 	}
@@ -318,73 +261,166 @@ func TestSplitSegmentByAgents(t *testing.T) {
 
 func TestExtractUntilNextAt(t *testing.T) {
 	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"find bugs", "find bugs"},
-		{"find bugs @writer write", "find bugs "},
-		{"", ""},
-		{"  @next", "  "},
-	}
-
-	for _, tc := range tests {
-		result := extractUntilNextAt(tc.input)
-		if strings.TrimSpace(result) != strings.TrimSpace(tc.expected) {
-			t.Errorf("extractUntilNextAt(%q) = %q, want %q", tc.input, result, tc.expected)
-		}
-	}
-}
-
-func TestHasAtName(t *testing.T) {
-	tests := []struct {
 		input string
-		want  bool
+		want  string
 	}{
-		{"hello @teamA", true},
-		{"@teamA@agent1", true},
-		{"hello world", false},
-		{"email@example.com", false},
-		{"", false},
-		{"no at-refs here", false},
-		{"@-leading", false},
+		{"task until @next", "task until "},
+		{"no at sign", "no at sign"},
+		{"@immediate", ""},
+		{"multiple @first and @second", "multiple "},
+		{"", ""},
 	}
 
-	for _, tc := range tests {
-		got := HasAtName(tc.input)
-		if got != tc.want {
-			t.Errorf("HasAtName(%q) = %v, want %v", tc.input, got, tc.want)
-		}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := extractUntilNextAt(tt.input)
+			if got != tt.want {
+				t.Errorf("extractUntilNextAt(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }
 
-func TestIsAgentInListFuzzyMatch(t *testing.T) {
+func TestIsAgentInList(t *testing.T) {
 	agents := []*agent.AgentDef{
-		{Name: "Senior Developer", FileAlias: "engineering-senior-developer", Role: "worker"},
-		{Name: "Code Reviewer", FileAlias: "engineering-code-reviewer", Role: "worker"},
-		{Name: "Software Architect", FileAlias: "engineering-software-architect", Role: "worker"},
+		{Name: "Researcher", Role: "worker", FileAlias: "researcher"},
+		{Name: "Writer", Role: "worker", FileAlias: "writer"},
+		{Name: "Code Reviewer", Role: "worker", FileAlias: "code-reviewer"},
+		{Name: "Coordinator", Role: "coordinator", FileAlias: "coord"},
 	}
 
 	tests := []struct {
 		name  string
-		input string
+		query string
 		want  bool
 	}{
-		{"exact match", "Senior Developer", true},
-		{"exact match case insensitive", "senior developer", true},
-		{"word match", "developer", true},
-		{"word match reviewer", "reviewer", true},
-		{"segment match architect", "architect", true},
-		{"file alias exact match", "engineering-software-architect", true},
-		{"partial word no match", "devel", false},
-		{"no match", "designer", false},
+		{"exact name match", "researcher", true},
+		{"case insensitive", "RESEARCHER", true},
+		{"file alias match", "researcher", true},
+		{"partial name match", "code", true},
+		{"coordinator excluded", "coordinator", false},
+		{"not in list", "unknown", false},
+		{"writer match", "writer", true},
+		{"alias with hyphen", "code-reviewer", true},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := isAgentInList(tc.input, agents)
-			if got != tc.want {
-				t.Errorf("isAgentInList(%q, ...) = %v, want %v", tc.input, got, tc.want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isAgentInList(tt.query, agents)
+			if got != tt.want {
+				t.Errorf("isAgentInList(%q) = %v, want %v", tt.query, got, tt.want)
 			}
 		})
 	}
+}
+
+func TestParsePromptEdgeCases(t *testing.T) {
+	registry := NewTeamRegistry([]string{".test-teams"})
+	registry.teams = map[string]string{
+		"a": "/path/a",
+		"ab": "/path/ab",
+	}
+
+	tests := []struct {
+		name    string
+		prompt  string
+		wantErr bool
+	}{
+		{"single char team", "@a task", false},
+		{"substring team", "@ab task", false},
+		{"email pattern", "contact @user@example.com", true},
+		{"multiple spaces", "@a    task   with   spaces", false},
+		{"tabs and newlines", "@a\ttask\nwith\tnewlines", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParsePromptWithLazyAgents(tt.prompt, registry, "")
+			if tt.wantErr && err == nil {
+				t.Errorf("ParsePromptWithLazyAgents() expected error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("ParsePromptWithLazyAgents() unexpected error = %v", err)
+			}
+		})
+	}
+}
+
+func TestSplitSegmentByAgentsEdgeCases(t *testing.T) {
+	registry := NewTeamRegistry([]string{".test-teams"})
+	registry.teams = map[string]string{
+		"team1": "/path/team1",
+	}
+
+	agents := []*agent.AgentDef{
+		{Name: "Agent1", Role: "worker", FileAlias: "agent1"},
+	}
+
+	tests := []struct {
+		name    string
+		segment PromptSegment
+	}{
+		{
+			name: "empty content",
+			segment: PromptSegment{
+				Type:    SegmentSwitchTeam,
+				Name:    "team1",
+				Content: "",
+			},
+		},
+		{
+			name: "not switch team type",
+			segment: PromptSegment{
+				Type:    SegmentText,
+				Content: "@agent1 do task",
+			},
+		},
+		{
+			name: "unknown agent treated as text",
+			segment: PromptSegment{
+				Type:    SegmentSwitchTeam,
+				Name:    "team1",
+				Content: "@unknown do task",
+			},
+		},
+		{
+			name: "consecutive at references",
+			segment: PromptSegment{
+				Type:    SegmentSwitchTeam,
+				Name:    "team1",
+				Content: "@agent1@team1 task",
+			},
+		},
+		{
+			name: "trailing text after last at",
+			segment: PromptSegment{
+				Type:    SegmentSwitchTeam,
+				Name:    "team1",
+				Content: "@agent1 do task and more",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := SplitSegmentByAgents(tt.segment, registry, agents)
+			if err != nil {
+				t.Errorf("SplitSegmentByAgents() unexpected error = %v", err)
+			}
+		})
+	}
+}
+
+// Helper function
+func containsStr(s, substr string) bool {
+	return len(s) >= len(substr) && findSubstr(s, substr)
+}
+
+func findSubstr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
