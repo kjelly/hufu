@@ -95,6 +95,7 @@ var (
 	wrapUpStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
 	visualStyle  = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("15"))
 	visualLabel  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10"))
+	cursorStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
 
 	toolCallStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	toolResStyle  = lipgloss.NewStyle().Faint(true)
@@ -182,7 +183,9 @@ type Model struct {
 	detailRefreshScheduled   bool
 
 	inVisual    bool // VISUAL mode active in detail view
-	visualStart int  // selection start line index (relative to content lines)
+	cursorLine  int  // current line index within detail logs
+	cursorCol   int  // current column index within line
+	visualStart int  // selection start line index
 	visualEnd   int  // selection end line index
 }
 
@@ -543,14 +546,42 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "v":
 		return m.enterVisual()
+	case "j", "down":
+		contentLines := len(m.logs[m.detailID])
+		if contentLines > 0 && m.cursorLine < contentLines-1 {
+			m.cursorLine++
+			m.followCursor()
+			if m.vpReady {
+				m.vp.SetContent(m.buildDetailContent())
+			}
+		}
+		return m, nil
+	case "k", "up":
+		if m.cursorLine > 0 {
+			m.cursorLine--
+			m.followCursor()
+			if m.vpReady {
+				m.vp.SetContent(m.buildDetailContent())
+			}
+		}
+		return m, nil
 	case "g":
+		m.cursorLine = 0
+		m.followCursor()
 		if m.vpReady {
 			m.vp.GotoTop()
+			m.vp.SetContent(m.buildDetailContent())
 		}
 		return m, nil
 	case "G":
-		if m.vpReady {
-			m.vp.GotoBottom()
+		contentLines := len(m.logs[m.detailID])
+		if contentLines > 0 {
+			m.cursorLine = contentLines - 1
+			m.followCursor()
+			if m.vpReady {
+				m.vp.GotoBottom()
+				m.vp.SetContent(m.buildDetailContent())
+			}
 		}
 		return m, nil
 	case "n":
@@ -585,10 +616,22 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *Model) followCursor() {
+	if !m.vpReady {
+		return
+	}
+	h := m.vp.Height
+	if m.cursorLine < m.vp.YOffset {
+		m.vp.YOffset = m.cursorLine
+	} else if m.cursorLine >= m.vp.YOffset+h {
+		m.vp.YOffset = m.cursorLine - h + 1
+	}
+}
+
 func (m Model) enterVisual() (tea.Model, tea.Cmd) {
 	m.inVisual = true
-	m.visualStart = m.vp.YOffset
-	m.visualEnd = m.vp.YOffset
+	m.visualStart = m.cursorLine
+	m.visualEnd = m.cursorLine
 	if m.vpReady {
 		m.vp.SetContent(m.buildDetailContent())
 	}
@@ -624,26 +667,30 @@ func (m Model) updateVisual(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, copyToClipboard(text)
 	case "j", "down":
-		if contentLines > 0 && m.visualEnd < contentLines-1 {
-			m.visualEnd++
+		if contentLines > 0 && m.cursorLine < contentLines-1 {
+			m.cursorLine++
+			m.visualEnd = m.cursorLine
+			m.followCursor()
 			if m.vpReady {
-				m.vp.LineDown(1)
 				m.vp.SetContent(m.buildDetailContent())
 			}
 		}
 		return m, nil
 	case "k", "up":
-		if m.visualEnd > 0 {
-			m.visualEnd--
+		if m.cursorLine > 0 {
+			m.cursorLine--
+			m.visualEnd = m.cursorLine
+			m.followCursor()
 			if m.vpReady {
-				m.vp.LineUp(1)
 				m.vp.SetContent(m.buildDetailContent())
 			}
 		}
 		return m, nil
 	case "G":
 		if contentLines > 0 {
-			m.visualEnd = contentLines - 1
+			m.cursorLine = contentLines - 1
+			m.visualEnd = m.cursorLine
+			m.followCursor()
 			if m.vpReady {
 				m.vp.GotoBottom()
 				m.vp.SetContent(m.buildDetailContent())
@@ -651,7 +698,9 @@ func (m Model) updateVisual(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "g":
-		m.visualEnd = 0
+		m.cursorLine = 0
+		m.visualEnd = m.cursorLine
+		m.followCursor()
 		if m.vpReady {
 			m.vp.GotoTop()
 			m.vp.SetContent(m.buildDetailContent())
@@ -778,9 +827,11 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.row < len(col) {
 			m.detailID = col[m.row].ID
 			m.inDetail = true
+			m.cursorLine = 0
+			m.cursorCol = 0
 			if m.vpReady {
 				m.vp.SetContent(m.buildDetailContent())
-				m.vp.GotoBottom()
+				m.vp.GotoTop()
 			}
 			if !m.mouseEnabled {
 				m.mouseEnabled = true
@@ -2016,8 +2067,12 @@ func (m Model) buildDetailContent() string {
 		if i > 0 {
 			result.WriteString("\n")
 		}
-		wrapped := wrapText(entry, width)
-		result.WriteString(wrapped)
+		wrapped := wrapText(entry, width-2) // leave space for indicator
+		if i == m.cursorLine {
+			result.WriteString(cursorStyle.Render("› ") + wrapped)
+		} else {
+			result.WriteString("  " + wrapped)
+		}
 	}
 	return result.String()
 }
@@ -2036,11 +2091,18 @@ func (m Model) buildVisualContent(lines []string, width int) string {
 		if i > 0 {
 			result.WriteString("\n")
 		}
-		wrapped := wrapText(entry, width)
-		if i >= start && i <= end {
-			result.WriteString(visualStyle.Render(wrapped))
+		wrapped := wrapText(entry, width-2)
+		var line string
+		if i == m.cursorLine {
+			line = cursorStyle.Render("› ") + wrapped
 		} else {
-			result.WriteString(wrapped)
+			line = "  " + wrapped
+		}
+
+		if i >= start && i <= end {
+			result.WriteString(visualStyle.Render(line))
+		} else {
+			result.WriteString(line)
 		}
 	}
 	return result.String()
