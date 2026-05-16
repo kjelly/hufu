@@ -672,6 +672,7 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.row = 0
 			m.scrollOff[m.col] = 0
 		}
+		return m, nil
 	case "enter":
 		if m.row < len(col) {
 			m.detailID = col[m.row].ID
