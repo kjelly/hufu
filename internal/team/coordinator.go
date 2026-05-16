@@ -3357,7 +3357,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}
 		prompt += "\n\n## Approved Plan\n\n" + planText
 		stmPath := STMPath(c.session.Workspace)
-		prompt += fmt.Sprintf("\n\n## Instructions\n\nExecute the approved plan above. You have already planned — now implement each step.\n\n- Before starting, read `%s` to check for updates from concurrent agents.\n- Write key discoveries to `stm_write` immediately when found.\n- Call finish when done.", stmPath)
+		prompt += fmt.Sprintf("\n\n## Instructions\n\nExecute the approved plan above. You have already planned — now implement each step.\n\n- Key knowledge from previous agents is provided below. You do NOT need to read `%s` at the start. Only read it later if you need to check for *new* updates from concurrent agents.\n- Write key discoveries to `stm_write` immediately when found.\n- Call finish when done.", stmPath)
 	} else if task.PlanFirst {
 		prompt = "## Goal\n\n" + task.Goal
 		if task.Constraints != "" {
@@ -3370,7 +3370,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			prompt += "\n\n## Constraints\n\n" + task.Constraints
 		}
 		stmPath := STMPath(c.session.Workspace)
-		prompt += fmt.Sprintf("\n\n## Instructions\n\nYou are a domain expert. Determine your own implementation approach based on the goal above.\n\n- Before your first implementation step, read `%s` to check for updates from agents running concurrently with you.\n- When you discover something important (API shape, file location, decision, error), write it to `stm.md` immediately via `stm_write` — do not wait until the end.", stmPath)
+		prompt += fmt.Sprintf("\n\n## Instructions\n\nYou are a domain expert. Determine your own implementation approach based on the goal above.\n\n- Key knowledge from previous agents is provided below. You do NOT need to read `%s` at the start. Only read it later if you need to check for *new* updates from concurrent agents.\n- When you discover something important (API shape, file location, decision, error), write it to `stm.md` immediately via `stm_write` — do not wait until the end.", stmPath)
 	}
 
 	prompt = c.appendSkillContext(prompt, agentDef, agentName, task.Goal, todoID)
@@ -3394,6 +3394,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if stmCtx := c.buildTaskSTMContext(); stmCtx != "" {
 		prompt = prompt + "\n\n" + stmCtx
 	}
+	if concurrentCtx := c.buildConcurrentTasksContext(todoID); concurrentCtx != "" {
+		prompt = prompt + "\n\n" + concurrentCtx
+	}
 	if ltmCtx := c.buildLTMContext(); ltmCtx != "" {
 		prompt = prompt + "\n\n" + ltmCtx
 	}
@@ -3401,8 +3404,14 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	var conversationHistory []fantasy.Message
 	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
+		currentPrompt := prompt
 		if attempt > 1 {
 			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retry %d/%d — continuing from previous progress", attempt, maxRetries)))
+			if lastErr != nil {
+				if hint := c.reflectOnFailure(parentCtx, agentName, task.Goal, lastErr.Error()); hint != "" {
+					currentPrompt += hint
+				}
+			}
 		}
 
 		var output string
@@ -3429,7 +3438,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			if c.noNet || agentDef.NoNet {
 				taskCtx = context.WithValue(taskCtx, tools.AgentNetworkBlockKey, true)
 			}
-			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, prompt, conversationHistory, timing)
+			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing)
 		}()
 
 		if err == nil {
@@ -3462,7 +3471,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			if task.Summarize {
 				output = c.summarizeOutput(parentCtx, output)
 			}
-			c.autoWriteSTM(agentName, taskDesc, output, "", true)
+			c.autoWriteSTMASync(agentName, taskDesc, output, "", true)
 			return output, nil
 		}
 
@@ -3486,7 +3495,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		log.Printf("warning: failed to write task file: %v", err)
 	}
 	_ = writeStatus(c.session.Workspace, agentName, "error", taskDesc)
-	c.autoWriteSTM(agentName, taskDesc, "", lastErr.Error(), false)
+	c.autoWriteSTMASync(agentName, taskDesc, "", lastErr.Error(), false)
 	return "", fmt.Errorf("agent %q failed after %d attempts (model: %s): %w", agentName, maxRetries, resolvedModel, lastErr)
 }
 
@@ -4559,6 +4568,41 @@ func (c *Coordinator) resolveAgentModel(def *agent.AgentDef, overrideModel strin
 		return def.Generation.Model
 	}
 	return c.session.Config.Generation.Model
+}
+
+func (c *Coordinator) buildConcurrentTasksContext(excludeID string) string {
+	items := c.taskTracker.TodoList().Items()
+	var running []string
+	for _, item := range items {
+		if item.ID != excludeID && item.Status == TaskInProgress {
+			running = append(running, fmt.Sprintf("- %s: %s", item.Agent, item.Desc))
+		}
+	}
+	if len(running) == 0 {
+		return ""
+	}
+	return "## Concurrent Tasks\n\nThe following agents are running in parallel with you. Avoid overlapping with their work:\n\n" + strings.Join(running, "\n")
+}
+
+func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, lastErr string) string {
+	s := c.Sidecar()
+	if s == nil {
+		return ""
+	}
+	// Use a shorter timeout for reflection to avoid holding up retries
+	reflectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	prompt := fmt.Sprintf("Agent %q failed to achieve goal: %q\nError: %s\n\nAnalyze the error and provide a concise hint (max 100 words) for the next attempt. Focus on what to change or avoid.", agentName, goal, lastErr)
+	reflection, err := s.Execute(reflectCtx, prompt)
+	if err != nil {
+		return ""
+	}
+	return "\n\n## Reflection on Previous Failure\n\n" + reflection
+}
+
+func (c *Coordinator) autoWriteSTMASync(agentName, taskDesc, output, errMsg string, success bool) {
+	go c.autoWriteSTM(agentName, taskDesc, output, errMsg, success)
 }
 
 func (c *Coordinator) summarizeOutput(ctx context.Context, text string) string {
