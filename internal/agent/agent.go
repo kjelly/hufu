@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openaicompat"
@@ -120,6 +121,7 @@ type ProviderManager struct {
 	defaultProvider *OllamaProvider
 	providers       map[string]*OllamaProvider
 	configs         map[string]config.ProviderConfig
+	mu              sync.RWMutex
 }
 
 func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[string]config.ProviderConfig) (*ProviderManager, error) {
@@ -146,9 +148,23 @@ func (pm *ProviderManager) GetProvider(modelID string) *OllamaProvider {
 	if name == "" {
 		name = "ollama"
 	}
+
+	// Fast path: check cache with read lock
+	pm.mu.RLock()
+	if p, ok := pm.providers[name]; ok {
+		pm.mu.RUnlock()
+		return p
+	}
+	pm.mu.RUnlock()
+
+	// Slow path: maybe initialize
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	// Double-check after acquiring write lock
 	if p, ok := pm.providers[name]; ok {
 		return p
 	}
+
 	// Check for per-provider config
 	cfg, hasCfg := pm.configs[name]
 	if hasCfg {

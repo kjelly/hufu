@@ -850,6 +850,9 @@ func formatTodoItemTime(t *team.TodoItem) string {
 		}
 		return fmt.Sprintf("(%s)", formatDuration(time.Since(t.StartedAt)))
 	}
+	if t.StartedAt.IsZero() {
+		return ""
+	}
 	if t.ModelTime > 0 || t.ToolTime > 0 {
 		return formatTimingBreakdown(t.EndedAt.Sub(t.StartedAt), t.ModelTime, t.ToolTime)
 	}

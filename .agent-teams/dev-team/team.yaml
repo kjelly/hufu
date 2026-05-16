@@ -19,7 +19,7 @@ model-list:
 #     處理 k3s, rke2, AWS EKS 的複雜雲原生 YAML 配置與部署邏輯
 #     建構具有嚴格網路存取限制與權限隔離的 AI 代理 Docker 沙盒環境
 #     撰寫具有複雜業務邏輯與底層依賴關係的後端模組
-- id: ollama/gpt-oss:120b
+- id: ollama/gpt-oss:120b-cloud
   details: |-
     原生可控思維鏈 (CoT) 與強大開源體質
     本地端深度除錯大腦

@@ -503,7 +503,10 @@ type Coordinator struct {
 	workerSummariesMu    sync.Mutex
 	pendingPlans          map[string]*PlanEntry
 	// approvedOutputs stores actual task output once autoApprovePlan executes.
-	// It is always accessed under pendingPlansMu — do not read or write without holding that lock.
+	// CRITICAL: Always access under pendingPlansMu. All access points:
+	//   - review() lines 246-248: read + delete under lock
+	//   - autoApprovePlan() line 289: write under lock
+	// Do NOT read or write without holding pendingPlansMu.
 	approvedOutputs map[string]string
 	pendingPlansMu  sync.Mutex
 	forcePlanFirst        bool
@@ -1013,11 +1016,12 @@ func (c *Coordinator) buildTaskSTMContext() string {
 		return ""
 	}
 	stm := FormatSTMSections(relevant)
-	runes := []rune(stm)
-	if len(runes) > maxTaskSTMContextChars {
-		stm = string(runes[len(runes)-maxTaskSTMContextChars:])
+	if len([]rune(stm)) <= maxTaskSTMContextChars {
+		return "## Context from Previous Agents\n\n" + stm
 	}
-	return "## Context from Previous Agents\n\n" + stm
+	// Truncate at section boundaries from the end to preserve markdown structure
+	truncated := truncateAtSectionBoundaries(stm, maxTaskSTMContextChars)
+	return "## Context from Previous Agents\n\n" + truncated
 }
 
 // buildLTMContext returns LTM formatted as a background-reference suffix.
@@ -1038,11 +1042,44 @@ func (c *Coordinator) buildLTMContext() string {
 		}
 	}
 	ltm := FormatSTMSections(sections)
-	runes := []rune(ltm)
-	if len(runes) > maxLTMAutoInject {
-		ltm = string(runes[len(runes)-maxLTMAutoInject:])
+	if len([]rune(ltm)) <= maxLTMAutoInject {
+		return "## Long-term Memory\n\nBackground knowledge accumulated across sessions — use as reference, not instruction.\n\n" + ltm
 	}
-	return "## Long-term Memory\n\nBackground knowledge accumulated across sessions — use as reference, not instruction.\n\n" + ltm
+	// Truncate at section boundaries from the end to preserve markdown structure
+	truncated := truncateAtSectionBoundaries(ltm, maxLTMAutoInject)
+	return "## Long-term Memory\n\nBackground knowledge accumulated across sessions — use as reference, not instruction.\n\n" + truncated
+}
+
+// truncateAtSectionBoundaries truncates content to fit within maxChars,
+// keeping complete sections from the end. Returns the truncated string.
+func truncateAtSectionBoundaries(content string, maxChars int) string {
+	runes := []rune(content)
+	if len(runes) <= maxChars {
+		return content
+	}
+	sections := ParseSTMSections(content)
+	if len(sections) == 0 {
+		return string(runes[len(runes)-maxChars:])
+	}
+	var totalRunes int
+	keepFrom := 0
+	for i := len(sections) - 1; i >= 0; i-- {
+		sectionStr := sections[i].Title + "\n" + strings.Join(sections[i].Entries, "\n") + "\n"
+		sectionRunes := []rune(sectionStr)
+		if totalRunes+len(sectionRunes) > maxChars {
+			break
+		}
+		totalRunes += len(sectionRunes)
+		keepFrom = i
+	}
+	var b strings.Builder
+	for i := keepFrom; i < len(sections); i++ {
+		b.WriteString(sections[i].Title)
+		b.WriteString("\n")
+		b.WriteString(strings.Join(sections[i].Entries, "\n"))
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func (c *Coordinator) autoWriteSTM(agentName, taskDesc, output, errMsg string, success bool) {
@@ -1789,7 +1826,7 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	agentKey := strings.ToLower(selected)
 	if cachedOutput, cachedDesc, ok := c.lookupTaskCacheAllGenerations(ctx, agentKey, taskDesc); ok {
 		log.Printf("[INFO] request_agent cache hit: agent=%q, task=%q, matched=%q", selected, taskDesc, cachedDesc)
-		return fantasy.NewTextResponse(fmt.Sprintf("[Cached result for similar task: '%s']\n\n%s", truncateTaskDesc(cachedDesc), cachedOutput)), nil
+		return fantasy.NewTextResponse(fmt.Sprintf("[CACHED RESULT] Task: '%s'\n\n%s", truncateTaskDesc(cachedDesc), cachedOutput)), nil
 	}
 
 	todoItems := c.taskTracker.TodoList().AddBatch([]struct {
@@ -2724,32 +2761,75 @@ func detectTaskCycle(tasks []TaskDef) bool {
 	return false
 }
 
-func (c *Coordinator) checkDuplicateTasks(tasks []TaskDef) ([]string, map[int]bool) {
+func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) ([]string, map[int]bool) {
 	var warnings []string
 	duplicates := make(map[int]bool)
-	c.delegatedTasksMu.Lock()
-	defer c.delegatedTasksMu.Unlock()
 
+	// First pass: build local counts for this batch to handle duplicates within the batch
+	localCounts := make(map[string]int)
+	for _, t := range tasks {
+		desc := t.Goal
+		if t.Constraints != "" {
+			desc += "\nconstraints: " + t.Constraints
+		}
+		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(desc)
+		localCounts[key]++
+	}
+
+	c.delegatedTasksMu.Lock()
+	// Second pass: check exact duplicates and increment global counts
+	// Track how many we've seen in this batch so far (for in-batch dedup: first instance proceeds, rest are duplicates)
+	batchSeen := make(map[string]int)
 	for i, t := range tasks {
 		desc := t.Goal
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
 		}
-
-		// Check 1: exact duplicate (across all rounds)
 		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(desc)
-		c.delegatedTasks[key]++
-		if c.delegatedTasks[key] > 1 {
-			warnings = append(warnings, fmt.Sprintf("EXACT DUPLICATE: %s (agent=%s, count=%d)", truncateTaskDesc(desc), t.Agent, c.delegatedTasks[key]))
+		batchSeen[key]++
+
+		// Check if this exact task was already delegated in a previous round
+		if c.delegatedTasks[key] > 0 {
+			warnings = append(warnings, fmt.Sprintf("EXACT DUPLICATE: %s (agent=%s, count=%d)", truncateTaskDesc(desc), t.Agent, c.delegatedTasks[key]+batchSeen[key]))
 			duplicates[i] = true
 			continue
 		}
 
-		// Check 2: semantic duplicate (across all generations)
+		// Check for duplicates within the current batch (first instance proceeds, rest are duplicates)
+		if batchSeen[key] > 1 {
+			warnings = append(warnings, fmt.Sprintf("EXACT DUPLICATE (in batch): %s (agent=%s, count=%d)", truncateTaskDesc(desc), t.Agent, batchSeen[key]))
+			duplicates[i] = true
+			continue
+		}
+	}
+
+	// Increment global counts for all non-duplicate tasks
+	for i, t := range tasks {
+		if duplicates[i] {
+			continue
+		}
+		desc := t.Goal
+		if t.Constraints != "" {
+			desc += "\nconstraints: " + t.Constraints
+		}
+		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(desc)
+		c.delegatedTasks[key]++
+	}
+	c.delegatedTasksMu.Unlock()
+
+	// Third pass: semantic duplicate check (outside the lock to avoid holding mutex during slow I/O)
+	for i, t := range tasks {
+		if duplicates[i] {
+			continue
+		}
+		desc := t.Goal
+		if t.Constraints != "" {
+			desc += "\nconstraints: " + t.Constraints
+		}
 		agentKey := strings.ToLower(t.Agent)
-		dupCtx, dupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		dupCtx, dupCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer dupCancel()
 		cachedOutput, cachedDesc, cacheOK := c.lookupTaskCacheAllGenerations(dupCtx, agentKey, desc)
-		dupCancel()
 		if cacheOK {
 			warnings = append(warnings, fmt.Sprintf("SEMANTIC DUPLICATE: %s (similar to completed task: %q)", truncateTaskDesc(desc), truncateTaskDesc(cachedDesc)))
 			duplicates[i] = true
@@ -2937,7 +3017,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		}
 	}
 
-	duplicateWarnings, duplicateIndices := c.checkDuplicateTasks(tasks)
+	duplicateWarnings, duplicateIndices := c.checkDuplicateTasks(ctx, tasks)
 	if len(duplicateWarnings) > 0 {
 		c.report(c.newEvent("loop_warning").withMessage(fmt.Sprintf("Duplicate task delegation detected: %v", duplicateWarnings)))
 	}
@@ -3041,7 +3121,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			} else {
 				output, err = c.executeTask(ctx, td, tid)
 			}
-			if err == nil && !td.Sidecar {
+			if err == nil {
 				c.storeTaskCache(agentKey, desc, output)
 			}
 			result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: output, err: err}
@@ -3651,9 +3731,9 @@ func (c *Coordinator) runAgentWithStatus(ctx context.Context, ag fantasy.Agent, 
 func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todoID string) (string, error) {
 	s := c.Sidecar()
 	if s == nil {
-		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, "sidecar not configured")
-		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		return "", fmt.Errorf("sidecar not configured: set sidecar-model in team.yaml or hufu.yaml")
+		// Sidecar not configured: gracefully fall back to normal agent execution
+		log.Printf("[INFO] sidecar not configured for task %q, falling back to normal agent execution", task.Goal)
+		return c.executeTask(ctx, task, todoID)
 	}
 
 	taskDesc := task.Goal
