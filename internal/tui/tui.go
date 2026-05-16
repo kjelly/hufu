@@ -1274,7 +1274,7 @@ const maxDescLines = 5
 func (m Model) itemLines(item *team.TodoItem, selected bool, isMatch bool, width int) []string {
 	icon, iconSt := taskIconStyle(item.Status)
 	sourceLabel := sourceTag(item.Source)
-	agentLine := utils.TruncateLine(item.Agent, width-3-len(sourceLabel))
+	agentLine := utils.TruncateLine(item.Agent, width-3-lipgloss.Width(sourceLabel))
 
 	if item.ID == team.CoordTodoID {
 		coordLabel := dimStyle.Render("(coordinator)")

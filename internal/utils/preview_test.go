@@ -27,7 +27,7 @@ func TestTruncatePreview(t *testing.T) {
 			name:     "string exactly maxLen",
 			text:     "Hello",
 			maxLen:   5,
-			expected: "He...",
+			expected: "Hello",
 		},
 		{
 			name:     "string longer than maxLen",
@@ -69,7 +69,7 @@ func TestTruncatePreview(t *testing.T) {
 			name:     "multi-byte characters",
 			text:     "你好世界",
 			maxLen:   5,
-			expected: "你好...",
+			expected: "你好世界",
 		},
 		{
 			name:     "multi-byte characters exact fit",
@@ -142,7 +142,7 @@ func TestTruncateLine(t *testing.T) {
 			name:     "multi-byte with newline",
 			text:     "你好世界\n第二行",
 			maxLen:   5,
-			expected: "你好...",
+			expected: "你好世界",
 		},
 		{
 			name:     "CR+LF newline",
@@ -232,7 +232,7 @@ func TestWrapLine(t *testing.T) {
 			text:      "First line\nSecond line\nThird line that is quite long",
 			maxLen:    20,
 			maxLines:  2,
-			wantLines: []string{"First line", "  - Second line"},
+			wantLines: []string{"First line", "  - Second line..."},
 			wantTrunc: true,
 		},
 		{

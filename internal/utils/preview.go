@@ -31,7 +31,7 @@ func TruncatePreview(text string, maxLen int) string {
 	}
 
 	runes := []rune(text)
-	if len(runes) <= maxLen-3 {
+	if len(runes) <= maxLen {
 		return text
 	}
 	return string(runes[:maxLen-3]) + "..."
@@ -179,13 +179,21 @@ done:
 	// (this covers the case where we hit maxLines via goto)
 	// If we have exactly maxLines lines and hit the limit, content was dropped.
 	if hitLimit {
-		// Truncate the last line if needed
+		// Truncate the last line and add "..." to indicate more content
 		lastLine := allLines[len(allLines)-1]
 		if strings.HasPrefix(lastLine, contPrefix) {
 			content := strings.TrimPrefix(lastLine, contPrefix)
-			allLines[len(allLines)-1] = contPrefix + TruncatePreview(content, contWidth)
+			runes := []rune(content)
+			if len(runes) > contWidth-3 {
+				content = string(runes[:contWidth-3])
+			}
+			allLines[len(allLines)-1] = contPrefix + content + "..."
 		} else {
-			allLines[len(allLines)-1] = TruncatePreview(lastLine, maxLen)
+			runes := []rune(lastLine)
+			if len(runes) > maxLen-3 {
+				lastLine = string(runes[:maxLen-3])
+			}
+			allLines[len(allLines)-1] = lastLine + "..."
 		}
 		return WrapLineResult{Lines: allLines, Truncated: true}
 	}
@@ -196,9 +204,17 @@ done:
 		lastLine := allLines[maxLines-1]
 		if strings.HasPrefix(lastLine, contPrefix) {
 			content := strings.TrimPrefix(lastLine, contPrefix)
-			allLines[maxLines-1] = contPrefix + TruncatePreview(content, contWidth)
+			runes := []rune(content)
+			if len(runes) > contWidth-3 {
+				content = string(runes[:contWidth-3])
+			}
+			allLines[maxLines-1] = contPrefix + content + "..."
 		} else {
-			allLines[maxLines-1] = TruncatePreview(lastLine, maxLen)
+			runes := []rune(lastLine)
+			if len(runes) > maxLen-3 {
+				lastLine = string(runes[:maxLen-3])
+			}
+			allLines[maxLines-1] = lastLine + "..."
 		}
 		truncated = true
 	}
