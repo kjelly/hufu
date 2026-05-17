@@ -267,8 +267,7 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 	rest := text[4:]
 	idx := strings.Index(rest, "\n---\n")
 	if idx < 0 {
-		fmt.Fprintf(os.Stderr, "warning: malformed frontmatter in %s (missing closing ---)\n", path)
-		return nil, nil
+		return nil, fmt.Errorf("agent file %s has malformed frontmatter (missing closing '---')", path)
 	}
 
 	var fm agentFrontmatter
@@ -279,8 +278,7 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 	body := strings.TrimSpace(rest[idx+5:])
 
 	if fm.Name == "" {
-		fmt.Fprintf(os.Stderr, "warning: agent file %s has no 'name' in frontmatter\n", path)
-		return nil, nil
+		return nil, fmt.Errorf("agent file %s is missing required 'name' field in frontmatter", path)
 	}
 
 	role := fm.Role

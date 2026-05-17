@@ -3,6 +3,7 @@ package team
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/anomalyco/hufu/internal/config"
@@ -326,6 +327,75 @@ model-list:
 		}
 		if len(cfg.ModelList) != 0 {
 			t.Errorf("ModelList has %d entries, want 0", len(cfg.ModelList))
+		}
+	})
+}
+
+func TestParseAgentFile_MissingName(t *testing.T) {
+	t.Run("no name field returns error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		agentPath := filepath.Join(tmpDir, "no-name.md")
+		content := "---\nrole: worker\ndescription: agent without name\n---\nSome content"
+		if err := os.WriteFile(agentPath, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write test agent file: %v", err)
+		}
+
+		_, err := parseAgentFile(agentPath, nil)
+		if err == nil {
+			t.Error("expected error for agent file without name, got nil")
+		}
+		if err != nil && !strings.Contains(err.Error(), "missing required 'name'") {
+			t.Errorf("expected error about missing 'name', got: %v", err)
+		}
+	})
+
+	t.Run("empty name field returns error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		agentPath := filepath.Join(tmpDir, "empty-name.md")
+		content := "---\nname: \"\"\nrole: worker\n---\nSome content"
+		if err := os.WriteFile(agentPath, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write test agent file: %v", err)
+		}
+
+		_, err := parseAgentFile(agentPath, nil)
+		if err == nil {
+			t.Error("expected error for agent file with empty name, got nil")
+		}
+	})
+}
+
+func TestParseAgentFile_PlainMarkdown(t *testing.T) {
+	t.Run("plain markdown without frontmatter returns nil", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		agentPath := filepath.Join(tmpDir, "readme.md")
+		content := "# Just a regular markdown file\n\nSome content here."
+		if err := os.WriteFile(agentPath, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write test file: %v", err)
+		}
+
+		def, err := parseAgentFile(agentPath, nil)
+		if err != nil {
+			t.Errorf("expected nil error for plain markdown, got: %v", err)
+		}
+		if def != nil {
+			t.Errorf("expected nil def for plain markdown, got: %v", def)
+		}
+	})
+
+	t.Run("malformed frontmatter returns error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		agentPath := filepath.Join(tmpDir, "bad.md")
+		content := "---\nname: test\nrole: worker\n"
+		if err := os.WriteFile(agentPath, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write test file: %v", err)
+		}
+
+		_, err := parseAgentFile(agentPath, nil)
+		if err == nil {
+			t.Error("expected error for malformed frontmatter, got nil")
+		}
+		if err != nil && !strings.Contains(err.Error(), "malformed frontmatter") {
+			t.Errorf("expected error about malformed frontmatter, got: %v", err)
 		}
 	})
 }
