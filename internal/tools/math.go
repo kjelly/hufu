@@ -81,7 +81,9 @@ func executeMath(call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 }
 
 func formatMathResult(value float64, precision int) string {
-	if math.Trunc(value) == value && !math.IsInf(value, 0) && math.Abs(value) < 1e15 {
+	// float64 can exactly represent integers up to 2^53 (9007199254740992)
+	const maxExactInt = float64(1<<53)
+	if math.Trunc(value) == value && !math.IsInf(value, 0) && math.Abs(value) <= maxExactInt {
 		return strconv.FormatFloat(value, 'f', 0, 64)
 	}
 	return strconv.FormatFloat(value, 'f', precision, 64)
@@ -153,6 +155,20 @@ func tokenize(expr string) ([]token, error) {
 						hasDot = true
 					}
 					i++
+				}
+				// Scientific notation: 1e-10, 2.5E+3, etc.
+				if i < len(expr) && (expr[i] == 'e' || expr[i] == 'E') {
+					eStart := i
+					i++
+					if i < len(expr) && (expr[i] == '+' || expr[i] == '-') {
+						i++
+					}
+					if i >= len(expr) || expr[i] < '0' || expr[i] > '9' {
+						return nil, fmt.Errorf("invalid scientific notation: exponent digit required in %q", expr[start:eStart+1])
+					}
+					for i < len(expr) && expr[i] >= '0' && expr[i] <= '9' {
+						i++
+					}
 				}
 				numStr := expr[start:i]
 				val, err := strconv.ParseFloat(numStr, 64)

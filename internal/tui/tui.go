@@ -619,6 +619,10 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// followCursor updates the viewport YOffset to keep the cursor visible.
+// Thread Safety: This method directly modifies m.vp.YOffset, which is safe
+// because Bubble Tea's Update loop is single-threaded. DO NOT call this from
+// goroutines or outside the Update loop.
 func (m *Model) followCursor() {
 	if !m.vpReady {
 		return
@@ -689,6 +693,37 @@ func (m Model) enterVisual() (tea.Model, tea.Cmd) {
 
 func (m Model) updateVisual(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	contentLines := len(m.logs[m.detailID])
+
+	// Clamp selection range to valid bounds
+	clampVisualRange := func() {
+		if contentLines == 0 {
+			m.visualStart = 0
+			m.visualEnd = 0
+			m.cursorLine = 0
+			return
+		}
+		maxIdx := contentLines - 1
+		if m.visualStart < 0 {
+			m.visualStart = 0
+		}
+		if m.visualStart > maxIdx {
+			m.visualStart = maxIdx
+		}
+		if m.visualEnd < 0 {
+			m.visualEnd = 0
+		}
+		if m.visualEnd > maxIdx {
+			m.visualEnd = maxIdx
+		}
+		if m.cursorLine < 0 {
+			m.cursorLine = 0
+		}
+		if m.cursorLine > maxIdx {
+			m.cursorLine = maxIdx
+		}
+	}
+	clampVisualRange()
+
 	switch msg.String() {
 	case "esc":
 		m.inVisual = false

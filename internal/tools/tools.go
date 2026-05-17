@@ -187,6 +187,19 @@ func GetToolLevel(toolName string) string {
 func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, error) {
 	level := GetToolLevel(toolName)
 
+	// 0. In CI/non-interactive environments, never ask the user — deny high-risk,
+	// allow low-risk, and deny medium-risk by default since no user can respond.
+	if os.Getenv("CI") == "true" || os.Getenv("GITHUB_ACTIONS") == "true" {
+		switch level {
+		case ToolLevelHigh:
+			return false, false, nil
+		case ToolLevelMedium:
+			return false, false, nil
+		default:
+			return true, false, nil
+		}
+	}
+
 	// 1. Check permanent session-level permissions first
 	if sessionPerms, ok := ctx.Value(AgentToolsSessionPermissionsKey).(map[string]bool); ok {
 		if allowed, decided := sessionPerms[toolName]; decided {

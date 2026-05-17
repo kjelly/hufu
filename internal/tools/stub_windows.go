@@ -121,5 +121,9 @@ func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 	return fantasy.NewTextErrorResponse("tool not available on this platform"), nil
 }
 
+func NewMathTool(opts ...ToolOption) fantasy.AgentTool {
+	return &coreTool{info: fantasy.ToolInfo{Name: "math"}}
+}
+
 func NewPathConsent() *PathConsent { return &PathConsent{} }
 func NewPathConsentWithAgentInfo(fn func() AgentInfo) *PathConsent { return &PathConsent{} }

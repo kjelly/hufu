@@ -316,3 +316,48 @@ func TestMath_CombinedSqrtAndPower(t *testing.T) {
 		t.Errorf("sqrt(2^2) = %v, want 2", mr.Result)
 	}
 }
+
+func TestMath_ScientificNotation(t *testing.T) {
+	tests := []struct {
+		expr string
+		want float64
+	}{
+		{"1e-10", 1e-10},
+		{"2.5e3", 2500},
+		{"1E+5", 100000},
+		{"3.14e-2", 0.0314},
+		{"1e0", 1},
+		{"5e+2", 500},
+	}
+	for _, tt := range tests {
+		mr := runMath(t, tt.expr)
+		delta := math.Abs(tt.want * 1e-10)
+		if delta < 1e-15 {
+			delta = 1e-15
+		}
+		if math.Abs(mr.Result-tt.want) > delta {
+			t.Errorf("%s = %v, want %v (delta=%v)", tt.expr, mr.Result, tt.want, math.Abs(mr.Result-tt.want))
+		}
+	}
+}
+
+func TestMath_ScientificNotationInExpression(t *testing.T) {
+	mr := runMath(t, "1e3 + 2e2")
+	if math.Abs(mr.Result-1200) > 1e-10 {
+		t.Errorf("1e3 + 2e2 = %v, want 1200", mr.Result)
+	}
+}
+
+func TestMath_InvalidScientificNotation(t *testing.T) {
+	errMsg := runMathErr(t, "1e")
+	if errMsg == "" {
+		t.Error("expected error for '1e' (missing exponent)")
+	}
+}
+
+func TestMath_LargeIntegerPrecision(t *testing.T) {
+	mr := runMath(t, "9007199254740992")
+	if mr.Output != "9007199254740992" {
+		t.Errorf("9007199254740992 output = %q, want exact integer", mr.Output)
+	}
+}

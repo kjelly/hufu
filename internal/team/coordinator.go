@@ -2896,21 +2896,21 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		return "", fmt.Errorf("tasks contain a dependency cycle — check depends_on indices")
 	}
 
-	// Validate all agents upfront to catch unknown agents early
-	if c.session != nil {
-		var invalidAgents []string
-		seenInvalid := make(map[string]bool)
-		for _, t := range tasks {
-			if _, _, err := c.resolveAgentName(t.Agent); err != nil {
-				if !seenInvalid[t.Agent] {
-					invalidAgents = append(invalidAgents, err.Error())
-					seenInvalid[t.Agent] = true
-				}
+	// Validate all agents upfront to catch unknown agents early.
+	// This must run regardless of whether session is nil — skipping
+	// validation would allow invalid agent names to pass silently.
+	var invalidAgents []string
+	seenInvalid := make(map[string]bool)
+	for _, t := range tasks {
+		if _, _, err := c.resolveAgentName(t.Agent); err != nil {
+			if !seenInvalid[t.Agent] {
+				invalidAgents = append(invalidAgents, err.Error())
+				seenInvalid[t.Agent] = true
 			}
 		}
-		if len(invalidAgents) > 0 {
-			return "", fmt.Errorf("agent validation failed:\n- %s", strings.Join(invalidAgents, "\n- "))
-		}
+	}
+	if len(invalidAgents) > 0 {
+		return "", fmt.Errorf("agent validation failed:\n- %s", strings.Join(invalidAgents, "\n- "))
 	}
 
 	if c.forcePlanFirst {

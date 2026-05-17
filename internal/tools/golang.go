@@ -98,10 +98,12 @@ func executeGolang(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (
 		// Filter stdlib symbols to remove dangerous packages
 		safeSymbols := make(interp.Exports)
 		dangerousPkgs := map[string]bool{
-			"os/exec": true,
-			"net":     true,
+			"os/exec":  true,
+			"os":       true,
+			"net":      true,
 			"net/http": true,
-			"syscall": true,
+			"syscall":  true,
+			"unsafe":   true,
 		}
 		for pkg, symbols := range stdlib.Symbols {
 			if !dangerousPkgs[pkg] {
