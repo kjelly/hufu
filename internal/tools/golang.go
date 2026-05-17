@@ -107,6 +107,7 @@ func executeGolang(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (
 		// - io/ioutil: file I/O utilities
 		safeSymbols := make(interp.Exports)
 		dangerousPkgs := map[string]bool{
+			"os":        true,
 			"os/exec":   true,
 			"net":       true,
 			"net/http":  true,

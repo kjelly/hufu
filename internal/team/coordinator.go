@@ -2965,14 +2965,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		var resolvedModel string
 		if resolveErr != nil {
 			c.report(c.newEvent("step").withMessage(fmt.Sprintf("warning: could not resolve agent %q: %v", t.Agent, resolveErr)))
-		} else if agentDef != nil {
+		} else {
 			overrideModel := t.Model
 			if len(c.modelList) == 0 {
 				overrideModel = ""
 			}
 			resolvedModel = c.resolveAgentModel(agentDef, overrideModel)
-		} else {
-			c.report(c.newEvent("step").withMessage(fmt.Sprintf("warning: unknown agent %q", t.Agent)))
 		}
 		desc := t.Goal
 		if t.Constraints != "" {

@@ -373,8 +373,8 @@ func TestMath_JSONEscaping(t *testing.T) {
 }
 
 func TestMath_NaNResult(t *testing.T) {
-	errMsg := runMathErr(t, "0/0")
+	errMsg := runMathErr(t, "sqrt(-1)")
 	if errMsg == "" {
-		t.Error("expected error for 0/0 (NaN)")
+		t.Error("expected error for sqrt(-1) (NaN)")
 	}
 }
