@@ -65,31 +65,31 @@ func TestGetToolLevel_Empty(t *testing.T) {
 func TestCheckToolPermission_NoConfig_Allowed(t *testing.T) {
 	ctx := context.Background()
 
-	// High-risk tool without config - should be allowed (backward compatibility)
+	// High-risk tool without config - should ASK (security first)
 	allowed, askUser, err := CheckToolPermission(ctx, "bash")
 	if err != nil {
 		t.Errorf("CheckToolPermission() unexpected error = %v", err)
 	}
-	if !allowed {
-		t.Errorf("CheckToolPermission(bash) = %v, want true (backward compatibility)", allowed)
+	if allowed {
+		t.Errorf("CheckToolPermission(bash) = %v, want false (security first)", allowed)
 	}
-	if askUser {
-		t.Errorf("CheckToolPermission(bash) askUser = %v, want false", askUser)
+	if !askUser {
+		t.Errorf("CheckToolPermission(bash) askUser = %v, want true", askUser)
 	}
 
-	// Medium-risk tool without config - should be allowed
+	// Medium-risk tool without config - should ASK
 	allowed, askUser, err = CheckToolPermission(ctx, "download")
 	if err != nil {
 		t.Errorf("CheckToolPermission() unexpected error = %v", err)
 	}
-	if !allowed {
-		t.Errorf("CheckToolPermission(download) = %v, want true (backward compatibility)", allowed)
+	if allowed {
+		t.Errorf("CheckToolPermission(download) = %v, want false (security first)", allowed)
 	}
-	if askUser {
-		t.Errorf("CheckToolPermission(download) askUser = %v, want false", askUser)
+	if !askUser {
+		t.Errorf("CheckToolPermission(download) askUser = %v, want true", askUser)
 	}
 
-	// Low-risk tool without config - should be allowed
+	// Low-risk tool without config - should be allowed automatically
 	allowed, askUser, err = CheckToolPermission(ctx, "view")
 	if err != nil {
 		t.Errorf("CheckToolPermission() unexpected error = %v", err)

@@ -179,8 +179,13 @@ func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, erro
 	// Get allowed tools list from context
 	val := ctx.Value(AgentToolsAllowedKey)
 	if val == nil {
-		// Not configured: allow all tools for backward compatibility
-		return true, false, nil
+		// Not configured: allow Low-risk tools, but ask for Medium/High
+		switch level {
+		case ToolLevelLow:
+			return true, false, nil
+		default:
+			return false, true, nil
+		}
 	}
 
 	allowed, _ := val.([]string)

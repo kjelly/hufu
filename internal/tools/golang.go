@@ -30,7 +30,7 @@ func NewGolangTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "golang",
-			Description: "Execute Go code using the yaegi interpreter. Returns stdout output. Supports the Go standard library (no os/exec). Code must include package declaration and import statements.",
+			Description: "Execute Go code using the yaegi interpreter. Returns stdout output. Dangerous packages (os/exec, net, net/http, syscall) are blocked. Code must include package declaration and import statements.",
 			Parameters: map[string]any{
 				"code": map[string]any{
 					"type":        "string",
@@ -95,7 +95,21 @@ func executeGolang(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (
 			Stderr: &stderr,
 		})
 
-		if err := i.Use(stdlib.Symbols); err != nil {
+		// Filter stdlib symbols to remove dangerous packages
+		safeSymbols := make(interp.Exports)
+		dangerousPkgs := map[string]bool{
+			"os/exec": true,
+			"net":     true,
+			"net/http": true,
+			"syscall": true,
+		}
+		for pkg, symbols := range stdlib.Symbols {
+			if !dangerousPkgs[pkg] {
+				safeSymbols[pkg] = symbols
+			}
+		}
+
+		if err := i.Use(safeSymbols); err != nil {
 			ch <- golangResult{err: err}
 			return
 		}
