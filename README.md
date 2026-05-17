@@ -20,7 +20,7 @@
 - [CLI Flags Reference](#cli-flags-reference)
 - [Prompt Syntax](#prompt-syntax)
 - [Interactive Mode](#interactive-mode)
-- [Team Configuration (team.yml)](#team-configuration-teamyml)
+- [Team Configuration](#team-configuration)
 - [Agent .md File Format](#agent-md-file-format)
 - [MaxSteps Priority](#maxsteps-priority)
 - [Team Directory Structure](#team-directory-structure)
@@ -28,10 +28,17 @@
 - [Workspace Layout](#workspace-layout)
 - [Memory System (RAG)](#memory-system-rag)
 - [MCP Configuration](#mcp-configuration)
+- [Multi-Provider Support](#multi-provider-support)
+- [Sidecar System](#sidecar-system)
+- [Guard System](#guard-system)
 - [Worker Tools Reference](#worker-tools-reference)
 - [Signal Handling](#signal-handling)
 - [Loop Detection](#loop-detection)
 - [Session Management](#session-management)
+- [TUI Mode](#tui-mode)
+- [Dry Run Mode](#dry-run-mode)
+- [Plan-First Mode](#plan-first-mode)
+- [Report Generation](#report-generation)
 - [Idle Warning](#idle-warning)
 - [Configuration File (hufu.yaml)](#configuration-file-hufuyaml)
 - [Defaults Reference](#defaults-reference)
@@ -42,11 +49,17 @@
 
 - 🤖 **Multi-Agent Collaboration** — Coordinator delegates tasks to workers, automatically orchestrating multi-round conversations
 - 🔄 **Multi-Team Switching** — Switch between different teams or invoke specific agents in a single prompt
-- 🧠 **Long-Term Memory (RAG)** — ChromaDB vector search automatically injects relevant memories into system prompts
-- 🛠️ **16 Worker Tools** — Covering bash, file operations, remote execution, code interpreters, and more
+- 🧠 **Long-Term Memory (RAG)** — Vector search via chromem-go automatically injects relevant memories into system prompts
+- 🛠️ **18 Worker Tools** — Covering bash, file operations, remote execution, code interpreters, random, math, and more
 - 🔌 **MCP Integration** — Supports local and remote MCP servers to extend agent capabilities
-- 📋 **Skills System** — Reusable skill definitions, shareable across teams
+- 📋 **Skills System** — Reusable skill definitions, shareable across teams, with automatic skill detection
+- 🎯 **Sidecar System** — Lightweight auxiliary LLM for skill matching and guard review
+- 🛡️ **Guard System** — Rule-based output review (e.g., require tests, no profanity)
 - ⚡ **Signal Control** — Ctrl+C for graceful shutdown, Ctrl+Z to inject additional prompts
+- 📺 **TUI Mode** — Real-time Bubble Tea terminal UI for task tracking
+- 🔍 **Dry Run Mode** — Preview execution plan without running agents
+- 📝 **Plan-First Mode** — Require agents to submit plans before execution
+- 📊 **Report Generation** — Full execution report as markdown
 
 ---
 
@@ -133,20 +146,34 @@ go run ./cmd/hufu
 
 ## CLI Flags Reference
 
-Complete reference for all 10 CLI flags:
-
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--provider-url` | — | `string` | `http://localhost:11434/v1` | Ollama API base URL |
+| `--provider-url` | — | `string` | "" (hufu.yaml or `http://localhost:11434/v1`) | Ollama or OpenAI-compatible API base URL |
+| `--provider-api-key` | — | `string` | "" | Provider API key |
 | `--verbose` | `-v` | `bool` | `false` | Show full agent text output in real-time |
-| `--workspace` | `-w` | `string` | `""` (cwd/workspace) | Workspace directory path |
+| `--workspace` | `-w` | `string` | `""` (`<cwd>/workspace`) | Workspace directory path |
 | `--new` | `-n` | `bool` | `false` | Archive old session and start fresh |
 | `--temp` | `-t` | `bool` | `false` | Use a temporary directory as workspace |
+| `--steps` | `-s` | `bool` | `false` | Pause for user confirmation before each batch of worker tasks |
 | `--agent-team` | — | `string` | `""` | Agent team name to load |
 | `--agent-team-search-path` | — | `string` | `""` | Team search paths (comma-separated), defaults to `.agent-teams/,~/.agent-teams/` |
 | `--memory` | — | `bool` | `false` | Enable long-term memory (RAG vector search) |
-| `--memory-model` | — | `string` | `""` | Embedding model for memory (default: `qwen3-embedding:4b`, overrides hufu.yaml) |
+| `--memory-model` | — | `string` | `""` | Embedding model for memory (default: `qwen3-embedding:4b`) |
 | `--archive-memory` | — | `bool` | `false` | Archive session summary to memory and exit |
+| `--show-history` | — | `bool` | `false` | Show previous session history on resume |
+| `--dry-run` | — | `bool` | `false` | Preview skill matching and task delegation without executing agents |
+| `--tui` | — | `bool` | `false` | Show a Bubble Tea TUI for real-time task tracking |
+| `--rbash` | — | `bool` | `false` | Use restricted bash (rbash) for the bash tool |
+| `--no-net` | — | `bool` | `false` | Block all network access for agent subprocesses |
+| `--direnv` | — | `bool` | `false` | Load `.envrc` / `.env` environment for the bash tool |
+| `--think` | — | `bool` | `false` | Show coordinator decision reasoning |
+| `--plan` | — | `bool` | `false` | Force plan-first mode: agents must submit plans before executing |
+| `--auto-skills` | — | `bool` | `false` | Enable automatic skill detection via sidecar / LLM matching |
+| `--report` | — | `bool` | `false` | Generate a full execution report as a markdown file |
+| `--fix` | — | `string` | `""` | Analyze previous execution data and suggest improvements |
+| `--skill` | — | `[]string` | `nil` | Force-load specific skills (repeatable) |
+| `--var` | — | `[]string` | `nil` | Set template variable `key=value` (repeatable) |
+| `--var-file` | — | `[]string` | `nil` | Read template variables from a file (repeatable) |
 
 ### Usage Examples
 
@@ -177,6 +204,21 @@ go run ./cmd/hufu --memory-model mxbai-embed-large "Analyze documents"
 
 # Archive session memory and exit
 go run ./cmd/hufu --archive-memory
+
+# TUI mode
+go run ./cmd/hufu --tui "Refactor the module"
+
+# Dry-run preview
+go run ./cmd/hufu --dry-run "Refactor the module"
+
+# Plan-first mode
+go run ./cmd/hufu --plan "Implement a feature"
+
+# Generate report
+go run ./cmd/hufu --report "Build something"
+
+# Step-by-step confirmation
+go run ./cmd/hufu -s "Refactor the module"
 ```
 
 ---
@@ -228,7 +270,7 @@ go run ./cmd/hufu
 
 ---
 
-## Team Configuration (team.yml)
+## Team Configuration
 
 The team configuration file defines the team's overall behavior and default parameters. Complete configuration reference:
 
@@ -244,6 +286,7 @@ max-rounds: 10                   # Maximum coordination rounds (default: 10)
 max-steps: 30                    # Agent default max steps (default: 30)
 timeout: 600                     # Timeout in seconds (default: 600)
 max-retries: 2                   # Maximum retries (default: 2)
+max-concurrent: 8                # Maximum concurrent worker tasks (default: 8)
 
 # === Workspace ===
 workspace: workspace             # Workspace directory (default: "workspace")
@@ -255,12 +298,49 @@ max-tokens: "4096"               # Maximum output tokens
 top-p: "0.9"                     # Top P value
 top-k: "40"                      # Top K value
 
-# === Skills ===
-skills: code-review,git-commit    # Skills to include
-skills-exclude: debug             # Skills to exclude
-
 # === Provider ===
 provider-url: http://localhost:11434/v1  # Provider URL override
+provider-api-key: ""                      # Provider API key override
+
+# === Multi-Provider Pool ===
+providers:
+  openai:
+    url: https://api.openai.com/v1
+    key: $OPENAI_API_KEY
+    models: [gpt-4o, gpt-4-turbo]
+    aliases:
+      gpt-4: gpt-4o
+
+# === Model List ===
+model-list:
+  - name: qwen3:8b
+    provider: ollama
+  - name: gpt-4o
+    provider: openai
+
+# === Sidecar / Guard Models ===
+sidecar-model: qwen3:1b          # Lightweight model for skill matching
+guard-model: qwen3:8b            # Model for guard / review tasks
+
+# === Skills ===
+skills: code-review,git-commit  # Skills to include
+skills-exclude: debug            # Skills to exclude
+auto-skills: false              # Enable automatic skill detection
+
+# === Security ===
+allowed-paths: ["/home/user/projects", "/tmp"]  # Allowed file system paths
+restricted-path: "/etc"                           # Restricted path
+no-net: false                                     # Block network access
+
+# === Template Variables ===
+vars:
+  project_name: "hufu"
+  author: "anomalyco"
+
+# === Notifications ===
+notify:
+  type: webhook
+  url: "https://hooks.example.com/agent"
 
 # === MCP Servers ===
 mcp-servers:
@@ -458,7 +538,7 @@ workspace/
 
 | Component | Description |
 |-----------|-------------|
-| **Vector Store** | ChromaDB (persistent, file-based) |
+| **Vector Store** | chromem-go (in-process, file-based) |
 | **Embedding** | Ollama embeddings |
 | **Storage Location** | `~/.local/share/hufu/memory/<projectHash>/` |
 | **Default Embedding Model** | `qwen3-embedding:4b` |
@@ -594,11 +674,75 @@ mcp-servers:
 
 ---
 
+## Multi-Provider Support
+
+`hufu` supports multiple LLM providers simultaneously via the `providers` field in `team.yml`:
+
+```yaml
+providers:
+  openai:
+    url: https://api.openai.com/v1
+    key: $OPENAI_API_KEY
+    models: [gpt-4o, gpt-4-turbo]
+    aliases:
+      gpt-4: gpt-4o
+  local:
+    url: http://localhost:11434/v1
+    key: ollama
+    models: [qwen3:8b]
+```
+
+Agents can specify `provider-url` and `provider-api-key` individually in their `.md` frontmatter, or use the team's default.
+
+---
+
+## Sidecar System
+
+The sidecar is a lightweight auxiliary LLM used for tasks that should not consume the main model's context window.
+
+### Use Cases
+
+- **Skill matching** — Match prompts to relevant skills
+- **Guard review** — Review agent outputs against guard rules
+- **Plan review** — Autonomous plan review before execution
+
+### Configuration
+
+```yaml
+sidecar-model: qwen3:1b   # Lightweight model for skill matching
+guard-model: qwen3:8b      # Model for guard / review tasks
+```
+
+---
+
+## Guard System
+
+The Guard system reviews agent outputs against configurable rules. Rules are defined per-agent via the `guard` field in `.md` frontmatter:
+
+```yaml
+guard:
+  - require-tests
+  - no-profanity
+```
+
+When a guard is triggered, the output is passed to the `guard-model` sidecar for review. If the review fails, the agent is asked to correct the output.
+
+### Supported Rules
+
+| Rule | Description |
+|------|-------------|
+| `require-tests` | Ensure test files are included in code changes |
+| `no-profanity` | Block profanity |
+
+You can implement custom rules by creating guard skill definitions in `.agents/skills/guard-<name>/SKILL.md`.
+
+---
+
 ## Worker Tools Reference
 
-`hufu` provides 16 worker tools, along with 4 always-included tools and 5 coordinator tools:
+`hufu` provides 18 worker tools, along with 4 always-included tools and 5 coordinator tools:
 
-### 16 Worker Tools
+### 18 Worker Tools
 
 | Tool | Description |
 |------|-------------|
@@ -618,6 +762,8 @@ mcp-servers:
 | `download` | Download a file from a URL |
 | `fetch` | Fetch URL content (text/markdown/html) |
 | `agentic_fetch` | Fetch and analyze URL content |
+| `random` | Generate random numbers / UUIDs |
+| `math` | Evaluate mathematical expressions |
 
 ### Always-included Tools (available to all agents)
 
@@ -706,6 +852,67 @@ kill -USR1 <hufu-pid>
 - `session.json` — Structured session data (machine-readable)
 - `session.md` — Human-readable session log
 - `history/` — Archived historical session files
+
+---
+
+## TUI Mode
+
+Enable a real-time Bubble Tea terminal UI:
+
+```bash
+# TUI mode with task tracking
+go run ./cmd/hufu --tui "Refactor the auth module"
+```
+
+The TUI displays:
+- **Task list** — Pending, in progress, done, and error states with visual indicators
+- **Tool calls / results** — Live agent tool execution logging
+- **Skill usage** — Track which skills are loaded during the session
+- **Wrap-up indicator** — Visual cue when the coordinator is finishing
+
+> **Note**: `--tui` and `--steps` cannot be used together.
+
+---
+
+## Dry Run Mode
+
+Preview execution plan without LLM calls:
+
+```bash
+# Preview skill matching and delegation
+go run ./cmd/hufu --dry-run "Refactor the module"
+```
+
+Outputs:
+- Matched skills
+- Agents that would be used
+- Planned task delegation
+
+---
+
+## Plan-First Mode
+
+Require agents to submit a plan before execution:
+
+```bash
+go run ./cmd/hufu --plan "Implement a feature"
+```
+
+---
+
+## Report Generation
+
+Generate a full markdown report after execution:
+
+```bash
+go run ./cmd/hufu --report "Refactor the module"
+```
+
+The report includes:
+- Task delegation summary
+- Agent execution logs
+- Tool and skill usage statistics
+- Performance metrics
 
 ---
 

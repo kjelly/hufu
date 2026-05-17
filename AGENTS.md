@@ -19,35 +19,38 @@ go vet ./...                            # Lint
 go test ./...                           # Run tests
 ```
 
-### CLI Usage
+## Package Structure
 
-```
-hufu [prompt]
-  --ollama-url string              Ollama API URL (default "http://localhost:11434/v1")
-  -v, --verbose                   Show full agent text output in real-time
-  -w, --workspace                 Workspace directory (default: <cwd>/workspace)
-  -n, --new                       Archive old session and start fresh
-  -t, --temp                      Use a temporary directory as workspace
-  --agent-team                     Directly specify team name (no @ needed in prompt)
-  --agent-team-search-path         Comma-separated search paths (default: .agent-teams/,~/.agent-teams/)
-```
+| Package | Path | Purpose |
+|---------|------|---------|
+| `main` | `cmd/hufu/` | CLI entry, cobra flags, segment execution, status display, TUI |
+| `agent` | `internal/agent/` | Agent definitions, provider manager (multi-provider), agent creation, tool selection |
+| `tools` | `internal/tools/` | Built-in agent tools: bash, sudo, ssh, view, write, edit, multiedit, grep, glob, ls, download, fetch, agentic_fetch, lua, golang, ask_user, random, math |
+| `team` | `internal/team/` | Team loading/parsing, coordinator, session persistence, workspace I/O, discovery, prompt parsing, todo tracking, sidecar integration |
+| `skill` | `internal/skill/` | Skill discovery, parsing, filtering, workspace copying |
+| `mcp` | `internal/mcp/` | MCP server management, local & remote transports |
+| `sidecar` | `internal/sidecar/` | Lightweight auxiliary LLM for skill matching, guard review, plan review |
+| `tui` | `internal/tui/` | Bubble Tea TUI: task tracking, detail views, search, clipboard, ask_user |
+| `readline` | `internal/readline/` | `github.com/ergochat/readline` wrapper for interactive prompts |
+| `config` | `internal/config/` | YAML config loader (`~/.config/hufu/hufu.yaml`, `./hufu.yaml`) |
+| `memory` | `internal/memory/` | Long-term memory (RAG) with chromem-go vector store |
+| `hooks` | `internal/hooks/` | Hook registry for tool lifecycle events |
+| `notify` | `internal/notify/` | External notification system (webhooks) |
+| `audit` | `internal/audit/` | Tool call audit logging |
+| `utils`      | `internal/utils/`      | Shared utility functions                                                            |
+| `yamlutil`   | `internal/yamlutil/`   | YAML flatten/parse utilities for config interpolation                               |
 
-### Prompt Syntax
+### Key Types
 
-- `@<team-name> <task>` — Switch to a team and delegate the task to its coordinator
-- `@<agent-name> <task>` — Invoke a specific agent directly in the current team
-- Plain text — Passed to the current team's coordinator
-
-Multiple teams can be used in one prompt:
-```
-@team-a do research @team-b write docs @team-a summarize
-```
-
-### Interactive Mode
-
-When no prompt is provided and stdin is empty:
-1. If no team can be inferred, shows team selection menu
-2. Then prompts for the task description
+- **`TeamRegistry`** (`discovery.go`) — Discovers and resolves teams by name from search paths
+- **`PromptSegment`** (`prompt.go`) — One unit of execution: `switch_team`, `invoke_agent`, or `text`
+- **`team.TeamSession`** — Loaded team state: config, agents map, MCP servers, skills, workspace
+- **`team.Coordinator`** — Orchestrator: delegates via `agent`; provides `finish`/`load_skill`; manages sidecar, guard, auto-skills, dry-run, plan-first
+- **`team.TeamContext`** — Container holding session + coordinator + sessionData for one team
+- **`skill.SkillDef`** — Parsed from `SKILL.md`; name, description, content, summary
+- **`sidecar.Sidecar`** — Auxiliary LLM agent for skill matching and guard review
+- **`tui.Model`** — Bubble Tea TUI state machine
+- **`agent.ProviderManager`** — Manages multiple LLM providers simultaneously
 
 ## Architecture
 
@@ -81,246 +84,385 @@ executeSegments() ── Processes PromptSegments in order
 Results joined and printed to stdout
 ```
 
-### Package Structure
+### Coordinator Features
 
-| Package | Path | Purpose |
-|---------|------|---------|
-| `main` | `cmd/hufu/` | CLI entry, cobra flags, segment execution, status display |
-| `agent` | `internal/agent/` | Agent definitions, Ollama provider, agent creation, tool selection |
-| `tools` | `internal/tools/` | Built-in agent tools: bash, view, write, edit, multiedit, grep, glob, ls, download, fetch, agentic_fetch, lua, golang, ask_user |
-| `team` | `internal/team/` | Team loading/parsing, coordinator, session persistence, workspace I/O, discovery, prompt parsing |
-| `skill` | `internal/skill/` | Skill discovery, parsing, filtering, workspace copying |
-| `mcp` | `internal/mcp/` | MCP server management, local & remote transports |
+| Feature | Description |
+|---------|-------------|
+| **Multi-Provider** | `ProviderManager` routes models across multiple providers (Ollama, OpenAI, etc.) |
+| **Sidecar** | Lightweight LLM for skill matching (`sidecarModel`) and guard review (`guardModel`) |
+| **Guard System** | Rule-based output review per agent (`guard` field in .md); triggers `guardModel` sidecar on violation |
+| **Auto-Skills** | Sidecar-driven skill matching via `--auto-skills` or `auto-skills: true` in team.yml |
+| **Plan-First** | Agents must submit plans before execution if `--plan` or `plan: true` |
+| **Dry Run** | Preview-only execution (`--dry-run`) — no LLM calls |
+| **TUI Mode** | Real-time Bubble Tea dashboard via `--tui` |
+| **Step Confirm** | Pause before each batch via `--steps` |
+| **Report Gen** | Markdown report after execution via `--report` |
+| **Template Vars** | `--var` / `--var-file` / `vars` in team.yml for agent prompts |
 
-### Key Types
+## CLI Flags
 
-- **`TeamRegistry`** (`discovery.go`) — Discovers and resolves teams by name from search paths
-- **`PromptSegment`** (`prompt.go`) — One unit of execution: `switch_team`, `invoke_agent`, or `text`
-- **`team.TeamSession`** — Loaded team state: config, agents map, MCP servers, skills, workspace
-- **`team.Coordinator`** — Orchestrator: delegates via `agent`, provides `finish`/`load_skill`
-- **`team.TeamContext`** — Container holding session + coordinator + sessionData for one team
-- **`skill.SkillDef`** — Parsed from `SKILL.md`; name, description, content, summary
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--provider-url` | — | "" (hufu.yaml or `http://localhost:11434/v1`) | Ollama or OpenAI-compatible API base URL |
+| `--provider-api-key` | — | "" | Provider API key |
+| `--verbose` | `-v` | `false` | Show full agent text output in real-time |
+| `--workspace` | `-w` | `""` (`<cwd>/workspace`) | Workspace directory path |
+| `--new` | `-n` | `false` | Archive old session and start fresh |
+| `--temp` | `-t` | `false` | Use a temporary directory as workspace |
+| `--steps` | `-s` | `false` | Pause for user confirmation before each batch of worker tasks |
+| `--agent-team` | — | `""` | Agent team name to load |
+| `--agent-team-search-path` | — | `""` | Team search paths (comma-separated), defaults to `.agent-teams/,~/.agent-teams/` |
+| `--memory` | — | `false` | Enable long-term memory (RAG vector search) |
+| `--memory-model` | — | `""` | Embedding model for memory (default: `qwen3-embedding:4b`) |
+| `--archive-memory` | — | `false` | Archive session summary to memory and exit |
+| `--show-history` | — | `false` | Show previous session history on resume |
+| `--dry-run` | — | `false` | Preview skill matching and task delegation without executing agents |
+| `--tui` | — | `false` | Show a Bubble Tea TUI for real-time task tracking |
+| `--rbash` | — | `false` | Use restricted bash (rbash) for the bash tool |
+| `--no-net` | — | `false` | Block all network access for agent subprocesses |
+| `--direnv` | — | `false` | Load `.envrc` / `.env` environment for the bash tool |
+| `--think` | — | `false` | Show coordinator decision reasoning |
+| `--plan` | — | `false` | Force plan-first mode: agents must submit plans before executing |
+| `--auto-skills` | — | `false` | Enable automatic skill detection via sidecar / LLM matching |
+| `--report` | — | `false` | Generate a full execution report as a markdown file |
+| `--fix` | — | `""` | Analyze previous execution data and suggest improvements |
+| `--skill` | — | `nil` | Force-load specific skills (repeatable) |
+| `--var` | — | `nil` | Set template variable `key=value` (repeatable) |
+| `--var-file` | — | `nil` | Read template variables from a file (repeatable) |
 
-## Team Discovery
+### Prompt Syntax
 
-### Search Paths
+- `@<team-name> <task>` — Switch to a team and delegate the task
+- `@<agent-name> <task>` — Invoke a specific agent directly in the current team
+- Plain text — Passed to the current team's coordinator
+- Multiple teams in one prompt: `@team-a research @team-b write @team-a summarize`
 
-Default: `./.agent-teams/` and `~/.agent-teams/`
+## TUI System
 
-Custom paths via `--agent-team-search-path` (comma-separated). Paths starting with `~` are expanded to the user's home directory.
+The TUI is built on the **Bubble Tea** framework. `Model.Update(msg)` is a **pure function** `(Model, Msg) -> (Model, Cmd)`. No I/O or global mutations in `Update()`.
 
-### Team Directory Structure
+### Model Fields (`internal/tui/tui.go`)
 
-```
-.agent-teams/
-├── delegate/
-│   ├── team.yaml
-│   ├── coordinator.md
-│   ├── researcher.md
-│   ├── writer.md
-│   └── .agents/
-│       └── skills/
-│           └── code-review/
-│               └── SKILL.md
-├── tether/
-│   └── ...
-```
+**Never remove or rename fields without updating `View()` and `Update()` together.**
 
-A directory is a valid team if it contains `team.yml` or `team.yaml`.
+| Field | Type | Purpose |
+|-------|------|---------|
+| `prompt` | `string` | User's original prompt displayed in top widget |
+| `tasks` | `[]*team.TodoItem` | All tasks from coordinator TODO list |
+| `logs` | `map[string][]string` | todoID → rendered log lines (task output buffer) |
+| `coordItem` | `*team.TodoItem` | Coordinator pseudo-task item |
+| `col` | `int` | Focused column: 0=pending, 1=planned, 2=in_progress, 3=done, 4=skipped, 5=error |
+| `row` | `int` | Cursor position within focused column |
+| `scrollOff` | `[6]int` | Scroll offset per column |
+| `inDetail` | `bool` | Detail log overlay active |
+| `detailID` | `string` | ID of task in detail view |
+| `vp` | `viewport.Model` | Bubble Tea viewport for scrollable views |
+| `vpReady` | `bool` | Viewport initialized |
+| `inMemory` | `bool` | Memory view overlay active |
+| `memoryVP` | `viewport.Model` | Separate viewport for memory content |
+| `memoryReady` | `bool` | Memory viewport initialized |
+| `inConfirm` | `bool` | Quit confirmation dialog |
+| `confirmChoice` | `int` | 0=No, 1=Yes, 2=Force |
+| `width` / `height` | `int` | Terminal dimensions |
+| `finished` | `bool` | Set when `FinishedMsg` received |
+| `statusText` | `string` | Current status line text |
+| `result` | `string` | Final coordinator answer |
+| `inAskUser` | `bool` | ask_user dialog active |
+| `ask` | `askState` | ask_user dialog state |
+| `inPromptInput` | `bool` | Prompt injection dialog active |
+| `promptInput` | `textinput.Model` | Text input for prompt injection |
+| `PromptInjectCh` | `chan string` | Forwards injected prompts to coordinator |
+| `inSearch` | `bool` | Search overlay active |
+| `searchInput` | `textinput.Model` | Search text input |
+| `searchQuery` | `string` | Last search query |
+| `searchResults` | `[]*team.TodoItem` | Matching tasks |
+| `searchIdx` | `int` | Current match index |
+| `inInfo` | `bool` | Team info panel active |
+| `teamInfo` | `TeamInfo` | Team metadata |
+| `wrapUpRequested` | `bool` | First Ctrl+C pressed |
+| `WrapUpCh` | `chan struct{}` | Ctrl+C → coordinator wrap-up |
+| `ReportCh` | `chan struct{}` | `r` key → report generation |
+| `mouseEnabled` | `bool` | Mouse tracking active |
+| `mouseManuallyEnabled` | `bool` | User explicitly toggled mouse |
+| `inActivityLog` | `bool` | Full-screen activity log |
+| `recentLogs` | `[]string` | Circular buffer (max 500 entries) |
+| `detailRefreshScheduled` | `bool` | Debounce flag for detail viewport |
+| `inVisual` | `bool` | VISUAL mode in detail view |
+| `cursorLine` | `int` | Current line in detail logs |
+| `visualStart` / `visualEnd` | `int` | Selection range |
 
-## Prompt Parsing
+### View Priority Order (CRITICAL)
 
-### Segment Types
+`Model.View()` checks overlays in this strict priority. Adding a new overlay bool MUST insert it in the correct position:
 
-```go
-const (
-    SegmentSwitchTeam  = "switch_team"   // Switch to a team
-    SegmentInvokeAgent = "invoke_agent"  // Invoke a specific agent
-    SegmentText        = "text"          // Pass to current team's coordinator
-)
-```
+1. `inAskUser` — Modal dialog, centered
+2. `inInfo` — Team info panel, centered
+3. `inSearch` — Search textinput, centered
+4. `inPromptInput` — Prompt injection textinput, centered
+5. `inConfirm` — Quit confirmation (No/Yes/Force), centered
+6. `inDetail` — Task log viewport + header + footer
+7. `inActivityLog` — Full-screen recent logs viewport
+8. `inMemory` — STM/LTM content viewport
+9. Default — 6-column Kanban dashboard
 
-### Parsing Functions
+### Key Bindings Reference
 
-| Function | Purpose |
-|----------|---------|
-| `HasAtName(s)` | Check if string contains `@name` references |
-| `ParsePromptWithLazyAgents(prompt, registry, defaultTeam)` | Initial parse: identifies `@team-name`; falls back to `--agent-team` flag |
-| `ParsePrompt(prompt, registry, currentTeam, currentAgents)` | Full parse: handles both team switches and agent invokes |
-| `SplitSegmentByAgents(segment, registry, currentAgents)` | Splits a switch_team segment containing `@agent-name` calls |
-| `extractUntilNextAt(rest)` | Extracts task content until the next `@name` |
+#### Global (Column Dashboard)
 
-### @-name Pattern
+| Key | Action |
+|-----|--------|
+| `j` / `k` / `↓` / `↑` | Move cursor in column |
+| `h` / `l` / `←` / `→` | Switch column |
+| `tab` | Cycle column (0→5→0) |
+| `g` | First item in column |
+| `G` | Last item in column |
+| `ctrl+d` | Half-page down |
+| `ctrl+u` | Half-page up |
+| `enter` | Open detail view |
+| `/` | Open search |
+| `n` / `N` | Next / previous search match |
+| `i` | Open team info |
+| `c` | Open prompt injection dialog |
+| `a` | Toggle activity log |
+| `m` | Toggle mouse |
+| `M` | Open memory view |
+| `q` | Quit (only when finished) |
+| `r` | Generate report (only when finished) |
+| `esc` | Quit confirmation (or clear search) |
+| `ctrl+c` | Request wrap-up (1st) / quit (2nd) |
 
-Regex: `@([\w][\w-]*)` — matches `@team`, `@team-name`, `@agent1`, but NOT `@-leading`.
+#### Detail View
 
-**Important**: `@example.com` (email-like) also matches due to the broad regex. The parser disambiguates by checking if the name is a known team or agent.
+| Key | Action |
+|-----|--------|
+| `esc` / `backspace` | Return to columns |
+| `j` / `k` / `↓` / `↑` | Scroll cursor line |
+| `g` / `G` | First / last log line |
+| `v` | Enter VISUAL mode |
+| `y` | Copy selection (VISUAL only) |
+| `n` / `N` | Next/prev search match |
+| `i` / `M` / `m` / `q` / `r` / `ctrl+c` | Same as global |
 
-### @-name Priority Rules
+#### VISUAL Mode (inside Detail)
 
-When `@name` matches both a team name and an agent name (via fuzzy match):
+| Key | Action |
+|-----|--------|
+| `j` / `k` / `↓` / `↑` | Extend selection |
+| `g` / `G` | Extend to top/bottom |
+| `y` | Yank to clipboard (OSC52), exit VISUAL |
+| `esc` / `v` | Cancel selection |
 
-1. **No active team** (`currentTeam == ""`): Team name wins. `@reviewer` → switch to "reviewer" team.
-2. **Inside a team** (`currentTeam != ""`): Agent name wins. `@reviewer` → invoke "Code Reviewer" agent.
-3. **When `@name` is used as a team switch**, the same `@name` reference is stripped from the content and not re-interpreted as an agent name. `@reviewer check code` → team switch only (no agent invocation).
+#### Activity Log
 
-In `SplitSegmentByAgents`, team names are checked before agent names: if `@name` matches a known team, it becomes a team switch regardless of agent name matches.
+| Key | Action |
+|-----|--------|
+| `esc` / `q` / `a` / `enter` | Close |
+| `j` / `k` / `↓` / `↑` | Scroll |
+| `g` / `G` | Top / bottom |
+| `space` | Page down |
+| `b` | Page up |
 
-### Parse Flow
+#### Memory View
 
-```
-"@delegate research this @tether also check that"
-    │
-    ▼
-ParsePromptWithLazyAgents() — sees @delegate is a team, strips @delegate from content
-    │
-    ▼
-[SegmentSwitchTeam{name="delegate", content="research this @tether also check that"}]
-    │
-    ▼
-SplitSegmentByAgents() — sees @tether is another team (team name takes priority)
-    │
-    ▼
-[SegmentSwitchTeam{name="delegate", content="research this "},
- SegmentSwitchTeam{name="tether", content="also check that"}]
-```
+| Key | Action |
+|-----|--------|
+| `esc` / `backspace` | Return |
+| `g` / `G` | Top / bottom |
+| `q` / `ctrl+c` | Handle quit/wrap-up |
+| *(others)* | Forwarded to memoryVP |
 
-```
-"@reviewer check code"
-    │
-    ▼
-ParsePromptWithLazyAgents() — sees @reviewer is a team, strips @reviewer from content
-    │
-    ▼
-[SegmentSwitchTeam{name="reviewer", content="check code"}]
-    │
-    ▼
-SplitSegmentByAgents() — no @name references in "check code"
-    │
-    ▼
-[SegmentSwitchTeam{name="reviewer", content="check code"}]
-```
+#### Team Info Panel
 
-```
-"@reviewer @reviewer check code"
-    │
-    ▼
-ParsePromptWithLazyAgents() — sees @reviewer is a team, strips first @reviewer
-    │
-    ▼
-[SegmentSwitchTeam{name="reviewer", content="@reviewer check code"}]
-    │
-    ▼
-SplitSegmentByAgents() — sees @reviewer in content, matches "Code Reviewer" agent (inside team, agent priority)
-    │
-    ▼
-[SegmentSwitchTeam{name="reviewer", content=""},
- SegmentInvokeAgent{name="reviewer", content="check code"}]
-```
+| Key | Action |
+|-----|--------|
+| `esc` / `q` / `i` / `enter` | Close |
+| `ctrl+c` | Handle wrap-up |
 
-## Multi-Team Execution
+#### Search Dialog
 
-### teamContext
+| Key | Action |
+|-----|--------|
+| `enter` | Execute search, jump to first match |
+| `esc` / `ctrl+c` | Cancel |
+| *(others)* | Forwarded to searchInput |
 
-```go
-type teamContext struct {
-    session     *team.TeamSession
-    coordinator *team.Coordinator
-    sessionData *team.SessionData
-}
-```
+#### Prompt Input Dialog
 
-Each team has its own `teamContext` with independent session, workspace, and coordinator instance.
+| Key | Action |
+|-----|--------|
+| `enter` | Submit injection |
+| `esc` / `ctrl+c` | Cancel |
 
-### executeSegments
+#### Quit Confirmation
 
-Processes segments sequentially. On team switch:
-1. Saves previous team's session (`SaveSessionMD`)
-2. Activates new team context
-3. Runs the task (either full `Run()` or `RunDirectAgent()`)
+| Key | Action |
+|-----|--------|
+| `←`/`h` / `→`/`l` / `tab` | Cycle choice |
+| `enter` | Submit choice |
+| `esc` / `n` | Cancel (No) |
+| `y` | Yes (wrap-up) |
+| `f` | Force quit |
 
-### Direct Agent Invocation
+#### ask_user Dialog (`internal/tui/ask_user.go`)
 
-When a segment's `@name` matches an agent in the current team (not a team name):
-1. `coordinator.RunDirectAgent(agentName, task)` is called directly
-2. Skill matching via sidecar is performed before the agent runs (`matchSkillsWithSidecar`)
-3. If the team has a coordinator, the result is passed to the coordinator for synthesis
-4. If no coordinator, the result is output directly
+| Key | Action |
+|-----|--------|
+| `enter` | Submit answer |
+| `ctrl+c` | Cancel |
+| `↑` / `k` | Move up |
+| `↓` / `j` / `tab` | Move down |
+| `space` | Toggle checkbox (multiple choice) |
 
-### Idle Warning
+### TUI Agent Safety Rules
 
-30-second idle timer resets on each status event. After 30s of no activity, prints an idle warning to stderr.
+1. **Never change `View()` priority order** without updating all bool checks consistently
+2. **Always handle new `tea.Msg` types** in both `Update()` and any reporter translation (`makeTUIReporter`)
+3. **Preserve `Update()` purity** — no I/O, no global state mutations
+4. **Test new key bindings** with `tea.KeyMsg` in tests before claiming completion
+5. **ANSI-aware wrapping** — use existing `wrapLine()` for any new text rendering
+6. **Viewport lifecycle** — always check `vpReady` before `vp.SetContent()`
+7. **Mouse state consistency** — `mouseEnabled` and `mouseManuallyEnabled` must stay in sync
+8. **Detail debounce** — any new log-sending code must respect `detailRefreshScheduled`
+9. **FinishedMsg transitions** — Pending→Skipped, InProgress→Done, Paused→Done (safety net)
+10. **Window resize** — new fields must be handled in `tea.WindowSizeMsg` branch
 
-## Task Tracking (TodoList)
+### tea.Msg Types
 
-`TaskTracker` contains a `TodoList` for structured task progress tracking:
+#### Public (sent from goroutines via p.Send)
 
-```go
-type TodoItem struct {
-    ID     string      // Auto-incrementing: "1", "2", ...
-    Agent  string      // Agent name
-    Desc   string      // Task description
-    Status TaskStatus  // TaskPending / TaskInProgress / TaskDone / TaskError
-    Detail string      // Error detail (when Status == TaskError)
-}
+| Message | Fields | Purpose |
+|---------|--------|---------|
+| `TasksUpdatedMsg` | `Items []*team.TodoItem` | Update task column data |
+| `TaskLogMsg` | `TodoID string, Line string` | Append log line to task detail |
+| `CoordItemMsg` | `Item *team.TodoItem` | Create/update coordinator pseudo-task |
+| `CoordStatusMsg` | `Status team.TaskStatus` | Update coordinator task status |
+| `FinishedMsg` | (none) | All work complete |
+| `StatusBarMsg` | `Text string` | Update 1-line status bar |
+| `ResultMsg` | `Text string` | Display final result |
+| `TeamInfoMsg` | `Info TeamInfo` | Load team metadata |
+| `WrapUpMsg` | (none) | Wrap-up request |
+| `AskUserCancelMsg` | (none) | Cancel ask_user dialog |
 
-type TodoList struct {
-    mu   sync.Mutex
-    items []*TodoItem
-    next  int  // Next ID counter
-}
-```
+#### Internal
 
-| Method | Description |
-|--------|-------------|
-| `AddBatch([]{Agent, Desc})` | Batch-add tasks; returns `[]*TodoItem` with auto-assigned IDs |
-| `UpdateStatus(id, status, detail)` | Update status of a specific task by ID |
-| `Items()` | Returns a thread-safe copy of all items |
-| `Clear()` | Clears all items and resets the ID counter |
+| Message | Fields | Purpose |
+|---------|--------|---------|
+| `AskUserMsg` | `Question, Type, Options, AllowAny, ReplyCh` | Trigger ask_user modal |
+| `detailRefreshMsg` | (none) | Debounced viewport re-render |
+| `copySuccessMsg` | `Lines int` | OSC52 clipboard copy confirmation |
 
-**Status flow:**
-```
-AddBatch() → TaskPending → UpdateStatus(TaskInProgress) → TaskDone
-                                          ↓
-                                     TaskError
-```
+### StatusEvent → tea.Msg Translation
 
-**Coordinator integration:**
-- `ExecuteTasks()` calls `TodoList.AddBatch()` to create TODO items for each delegated task
-- `executeTask()` and `RunDirectAgent()` call `UpdateStatus()` at each lifecycle stage
-- Every TODO update fires `StatusEvent{Type: "todos_updated", Todos: ...}`
-- CLI renders the TODO panel on each `todos_updated` event
+`makeTUIReporter` in `cmd/hufu/display.go` translates coordinator `StatusEvent` to TUI messages:
 
-**CLI display format:**
-```
-─── TODO ───
-  ◑ 1. researcher find bugs
-  ○ 2. writer write docs
-  ● 3. checker verify tests
-  ✗ 4. researcher attempt 1 failed: ...
-```
+| StatusEvent.Type | TUI Action |
+|------------------|-----------|
+| `todos_updated` | `TasksUpdatedMsg` |
+| `plan_approved` | `StatusBarMsg` with checkmark |
+| `wrap_up_phase` | `TasksUpdatedMsg` + wrap-up status |
+| `start` | `TaskLogMsg` + `CoordItemMsg`/`CoordStatusMsg`, starts thinking ticker |
+| `step` | Stop thinking ticker, `TaskLogMsg` |
+| `tool_call` | Stop ticker, `TaskLogMsg`, update status bar |
+| `tool_result` | `TaskLogMsg`, restart ticker |
+| `cache_hit` | Stop ticker, cached log line |
+| `text` | Buffered into `textBufs` map |
+| `done` | Stop ticker, flush buffered text, done line |
+| `error` | Stop ticker, flush text, error line |
+| `think_*` | Various `TaskLogMsg` lines |
+
+### Thinking Tracker
+
+- `thinkingTickInterval = 5s`
+- Per-todoID background goroutine
+- Started on `start`, stopped on `step`/`tool_call`/`tool_result`/`done`/`error`/`cache_hit`
+- Sends `StatusBarMsg` with elapsed LLM wait time
 
 ## Team Configuration Format
 
 ### team.yml
 
-Simple flat YAML (custom line-by-line parser):
+Complete configuration reference:
 
 ```yaml
+# === Required Fields ===
 name: my-team
-description: "Description"
+
+# === Optional Fields ===
+description: "My development team"
+
+# === Execution Control ===
 max-rounds: 10
-timeout: 300
+max-steps: 30
+timeout: 600
 max-retries: 2
-model: ollama/qwen3:8b
+max-concurrent: 8
+
+# === Workspace ===
 workspace: workspace
+
+# === Model Settings ===
+model: ollama/qwen3:8b
+temperature: "0.7"
+max-tokens: "4096"
+top-p: "0.9"
+top-k: "40"
+
+# === Provider ===
+provider-url: http://localhost:11434/v1
+provider-api-key: ""
+
+# === Multi-Provider Pool ===
+providers:
+  openai:
+    url: https://api.openai.com/v1
+    key: $OPENAI_API_KEY
+    models: [gpt-4o, gpt-4-turbo]
+    aliases:
+      gpt-4: gpt-4o
+
+# === Model List ===
+model-list:
+  - name: qwen3:8b
+    provider: ollama
+  - name: gpt-4o
+    provider: openai
+
+# === Sidecar / Guard Models ===
+sidecar-model: qwen3:1b
+guard-model: qwen3:8b
+
+# === Skills ===
 skills: code-review,git-commit
 skills-exclude: debug
+auto-skills: false
+
+# === Security ===
+allowed-paths: ["/home/user/projects", "/tmp"]
+restricted-path: "/etc"
+no-net: false
+
+# === Template Variables ===
+vars:
+  project_name: "hufu"
+  author: "anomalyco"
+
+# === Notifications ===
+notify:
+  type: webhook
+  url: "https://hooks.example.com/agent"
+
+# === MCP Servers ===
+mcp-servers:
+  filesystem:
+    type: local
+    command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/path"]
+  remote-api:
+    type: remote
+    url: "https://mcp-server.example.com/api"
+    allowedTools: ["search", "query"]
 ```
 
 ### Agent .md files
-
-Markdown with YAML frontmatter (`---` delimited):
 
 ```markdown
 ---
@@ -329,20 +471,84 @@ description: Implementation specialist
 role: worker
 tools: view,write,edit,multiedit,bash,grep,glob,ls
 skills: code-review
+guard:
+  - require-tests
+  - no-profanity
+model: ollama/qwen3:8b
+temperature: "0.7"
+max-tokens: "4096"
+top-p: "0.9"
+top-k: "40"
+timeout: 300
+max-retries: 2
+max-steps: 50
+provider-url: http://localhost:11434/v1
+provider-api-key: ""
+allowed-paths: ["src/", "tests/"]
+restricted-path: "/etc"
+no-net: false
 ---
 Your system prompt here.
 ```
 
-### Skills Directory Structure
+### Frontmatter Fields (Agent .md)
 
-```
-{team-dir}/.agents/skills/{skill-name}/SKILL.md
-~/.agents/skills/{skill-name}/SKILL.md
-```
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `name` | ✅ | — | Agent name, used for `@<name>` invocation |
+| `description` | ❌ | — | Agent description |
+| `role` | ❌ | `worker` | Role (`worker` or `coordinator`) |
+| `tools` | ❌ | — | Available tools (string or YAML list) |
+| `skills` | ❌ | — | Skills to load (string or YAML list) |
+| `guard` | ❌ | — | Guard rules (YAML list) |
+| `model` | ❌ | Team default | LLM model to use |
+| `temperature` | ❌ | Team default | Temperature value |
+| `max-tokens` | ❌ | Team default | Maximum output tokens |
+| `top-p` | ❌ | Team default | Top P value |
+| `top-k` | ❌ | Team default | Top K value |
+| `timeout` | ❌ | Team default | Timeout in seconds |
+| `max-retries` | ❌ | `-1` (use team default) | Maximum retries |
+| `max-steps` | ❌ | Team default | Maximum execution steps |
+| `provider-url` | ❌ | Team default | Provider URL override |
+| `provider-api-key` | ❌ | Team default | API key override |
+| `allowed-paths` | ❌ | Team default | Allowed file system paths |
+| `restricted-path` | ❌ | Team default | Restricted file system path |
+| `no-net` | ❌ | Team default | Block network access |
+
+### Team Frontmatter Fields (team.yml)
+
+| Field | Description |
+|-------|-------------|
+| `name` | Team name (required) |
+| `description` | Team description |
+| `max-rounds` | Maximum coordination rounds (default: 10) |
+| `max-steps` | Agent default max steps (default: 30) |
+| `timeout` | Timeout in seconds (default: 600) |
+| `max-retries` | Maximum retries (default: 2) |
+| `max-concurrent` | Maximum concurrent worker tasks (default: 8) |
+| `workspace` | Workspace directory (default: "workspace") |
+| `model` | Default model name |
+| `temperature` | Temperature value |
+| `max-tokens` | Maximum output tokens |
+| `top-p` | Top P value |
+| `top-k` | Top K value |
+| `provider-url` | Provider URL override |
+| `provider-api-key` | Provider API key override |
+| `providers` | Multi-provider pool map |
+| `model-list` | Custom model list |
+| `sidecar-model` | Lightweight model for skill matching |
+| `guard-model` | Model for guard / review tasks |
+| `skills` | Comma-separated skill names |
+| `skills-exclude` | Skills to exclude |
+| `auto-skills` | Enable automatic skill detection |
+| `mcp-servers` | MCP server configurations |
+| `allowed-paths` | Allowed file system paths |
+| `restricted-path` | Restricted file system path |
+| `no-net` | Block network access |
+| `vars` | Template variables map |
+| `notify` | Notification configuration |
 
 ## Workspace Layout
-
-Each team gets its own workspace directory (named `workspace` relative to the team directory, or as overridden by `--workspace`).
 
 ```
 workspace/
@@ -373,6 +579,44 @@ workspace/
 - On team switch: previous team's session is saved (`SaveSessionMD`)
 - On interrupt (Ctrl+C): current team's session is saved
 - `--new` archives and starts a fresh session per active team
+
+## Task Tracking (TodoList)
+
+```go
+type TodoItem struct {
+    ID     string      // Auto-incrementing: "1", "2", ...
+    Agent  string      // Agent name
+    Desc   string      // Task description
+    Status TaskStatus  // TaskPending / TaskInProgress / TaskDone / TaskError
+    Detail string      // Error detail (when Status == TaskError)
+}
+
+type TodoList struct {
+    mu    sync.Mutex
+    items []*TodoItem
+    next  int  // Next ID counter
+}
+```
+
+| Method | Description |
+|--------|-------------|
+| `AddBatch([]{Agent, Desc})` | Batch-add tasks; returns `[]*TodoItem` with auto-assigned IDs |
+| `UpdateStatus(id, status, detail)` | Update status of a specific task by ID |
+| `Items()` | Returns a thread-safe copy of all items |
+| `Clear()` | Clears all items and resets the ID counter |
+
+**Status flow:**
+```
+AddBatch() → TaskPending → UpdateStatus(TaskInProgress) → TaskDone
+                                          ↓
+                                     TaskError
+```
+
+**Coordinator integration:**
+- `ExecuteTasks()` calls `TodoList.AddBatch()` to create TODO items for each delegated task
+- `executeTask()` and `RunDirectAgent()` call `UpdateStatus()` at each lifecycle stage
+- Every TODO update fires `StatusEvent{Type: "todos_updated", Todos: ...}`
+- CLI renders the TODO panel on each `todos_updated` event
 
 ## Prompt Injection via Signals
 
@@ -414,11 +658,7 @@ Coordinator.ContinueWithPrompt() processes pending prompts
 
 **`ContinueWithPrompt()`** — preserves `conversationHistory` (accumulated `fantasy.Message`) so the coordinator has full context. Different from `Run()` which does not preserve history.
 
-**`projectDir` change:** `Coordinator` now stores `projectDir` (from `os.Getwd()`) separately from `session.Workspace`. `WorkDir` for agents is set to `projectDir`, while `session.Workspace` is only used for session persistence.
-
 ## Readline Integration
-
-`internal/readline` wraps `github.com/ergochat/readline` for interactive CLI input:
 
 ```go
 type PromptReader struct {
@@ -442,15 +682,37 @@ func (r *PromptReader) Close() error
 
 - **`agent`** — Delegate tasks to workers
 - **`load_skill`** — Load skill content by name
+- **`save_skill`** — Save skill definition
 - **`finish`** — Signal completion with final answer
 - **`ask_user`** — Request user input
 
-### Worker Tools
+### Worker Tools (18 total)
 
-- `bash`, `view`, `write`, `edit`, `multiedit`, `grep`, `glob`, `ls`, `download`, `fetch`, `agentic_fetch`, `lua`, `golang`, `ask_user`
-- **`agent`** — Create a sub-agent to execute a specific task (always available, even if not listed in `tools:`)
-- **`todo`** — Manage task list: create, update, and list TODO items (always available, even if not listed in `tools:`)
-- Skill summaries auto-injected into task prompts for workers with `skills` field
+- `bash` — Execute shell commands (timeout: 120s, max 600s)
+- `sudo` — Execute commands with root privileges
+- `ssh` — Execute commands on remote hosts via SSH
+- `view` — Read file contents (with line numbers)
+- `write` — Write file contents, auto-creates directories
+- `edit` — Edit files by replacing exact text
+- `multiedit` — Atomically apply multiple edit operations
+- `grep` — Search file contents using regular expressions
+- `glob` — Search files using glob patterns
+- `ls` — List directory contents in a tree structure
+- `lua` — Execute Lua code in a sandbox
+- `golang` — Execute Go code via the yaegi interpreter
+- `ask_user` — Ask the user a question (multiple choice / free text)
+- `download` — Download a file from a URL
+- `fetch` — Fetch URL content (text/markdown/html)
+- `agentic_fetch` — Fetch and analyze URL content
+- `random` — Generate random numbers / UUIDs
+- `math` — Evaluate mathematical expressions
+
+### Always-included Tools
+
+- **`agent`** — Create a sub-agent to execute a specific task (always available)
+- **`todo`** — Manage task list (always available)
+- **`memory_save`** — Save knowledge to long-term memory
+- **`memory_query`** — Search long-term memory
 
 ## Core Mandates for Agents
 
@@ -524,6 +786,13 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 - **Golang**: Dangerous packages like `os/exec`, `net`, `syscall`, and `unsafe` are blocked in the `yaegi` interpreter. Standard file I/O via `os` is permitted within the workspace.
 - **Lua**: Native `os.execute` and `io.popen` are restricted to prevent unauthorized shell command execution.
 
+### 3. Bash Tool Security
+
+- `--rbash` flag enables restricted bash mode
+- `--no-net` blocks network access for agent subprocesses
+- `--direnv` loads `.envrc`/`.env` environment files
+- Dangerous commands (curl, wget, sudo, apt, etc.) are blocked by default
+
 ## Key Gotchas & Non-Obvious Patterns
 
 1. **CLI no longer takes team directory as positional arg** — Usage changed from `hufu <team-dir> [prompt]` to `hufu [prompt]`. Teams are discovered by name from search paths.
@@ -546,7 +815,7 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 10. **`prompt_test.go` requires discovered teams** — Tests in `TestParsePromptWithLazyAgents` and `TestSplitSegmentByAgents` use `newTestRegistry()` which needs the `.agent-teams/` directory to exist with valid teams. Tests will skip/fail if no teams are found.
 
-11. **`idleWarningTimer`** — New struct in main.go, tracks idle time and prints a warning to stderr after 30s of no activity. Resets on every status event.
+11. **`idleWarningTimer`** — Tracks idle time and prints a warning to stderr after 30s of no activity. Resets on every status event.
 
 12. **Workspace flag is shared** — `--workspace` sets the workspace for all teams; each team's session uses this combined workspace path.
 
@@ -562,21 +831,13 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 18. **promptInjector** — Buffered channel (size 16) that receives prompts from SIGTSTP/SIGUSR1 signal handlers. `poll()` is non-blocking; `runWithInjection()` checks after each coordinator round.
 
-15. **`TaskInfo` vs `TodoItem`** — `TaskTracker` maintains both the old `TaskInfo` (used by `Start`/`Done`/`Error`) and the new `TodoList`. Both are used in parallel. `TodoItem` fields are `ID`/`Agent`/`Desc` (lowercase), while the old `TaskInfo` uses `Agent`/`Task`. The TODO display uses `t.ID` prefix (e.g., `1.`) to identify each item.
+19. **promptInjector carries PromptReader** — The `promptInjector` struct now embeds `*readline.PromptReader`. When nil, `promptAndEnqueue` returns immediately without reading. This ensures graceful degradation when readline is unavailable.
 
-16. **readline fallback is silent** — When `NewPromptReader` returns an error, `pr` is set to `nil` and a warning is printed to stderr. All prompt functions check `pr != nil` and fall back to `fmt.Scanln`. No readline features (history, completion) are available in fallback mode.
+20. **setupPromptSignals returns cleanup func** — `setupPromptSignals` now returns a `func()` that stops signal handlers and closes channels. Called via `defer setupPromptSignals(injector)()` to ensure cleanup on function exit.
 
-17. **promptInjector carries PromptReader** — The `promptInjector` struct now embeds `*readline.PromptReader`. When nil, `promptAndEnqueue` returns immediately without reading. This ensures graceful degradation when readline is unavailable.
+21. **Graceful shutdown with Ctrl+C** — First Ctrl+C sends SIGINT → `activeCoordinator.SetWrapUp()` → `SetWrapUp()` reports `StatusEvent{Type: "wrap_up"}` (CLI displays `─── WRAP UP ───`) → `ExecuteTasks` checks `IsWrapUp()` and refuses to delegate new tasks → Second Ctrl+C forces `cancel()` for immediate exit.
 
-18. **setupPromptSignals returns cleanup func** — `setupPromptSignals` now returns a `func()` that stops signal handlers and closes channels. Called via `defer setupPromptSignals(injector)()` to ensure cleanup on function exit.
-
-19. **Graceful shutdown with Ctrl+C** — First Ctrl+C sends SIGINT → `activeCoordinator.SetWrapUp()` → `SetWrapUp()` reports `StatusEvent{Type: "wrap_up"}` (CLI displays `─── WRAP UP ───`) → `ExecuteTasks` checks `IsWrapUp()` and refuses to delegate new tasks → Second Ctrl+C forces `cancel()` for immediate exit.
-
-20. **Wrap-up mechanism** — `promptInjector.wrapUpCh` (buffered channel, size 1) + `wrapUpRequested atomic.Bool` flag. `injectWrapUp()` sets the flag and sends to channel (non-blocking). `IsWrapUpRequested()` atomically checks. `runWithInjection()` uses `select` to handle both normal prompts and wrap-up in one select statement.
-
-21. **wrapUpPromptTemplate** — Hard-coded prompt that forces the coordinator to summarize immediately and call `finish`. No new tasks delegated, no `agent` calls.
-
-22. **activeCoordinator pointer** — Passed to `executeSegments`, stored/cleared on each coordinator run call. Allows signal handler to call `SetWrapUp()` on the right coordinator instance even after `executeSegments` returns.
+22. **Wrap-up mechanism** — `promptInjector.wrapUpCh` (buffered channel, size 1) + `wrapUpRequested atomic.Bool` flag. `injectWrapUp()` sets the flag and sends to channel (non-blocking). `IsWrapUpRequested()` atomically checks. `runWithInjection()` uses `select` to handle both normal prompts and wrap-up in one select statement.
 
 23. **StatusEvent builder pattern** — `c.newEvent(type)` returns a `StatusEvent` with `Type` and `TeamName` pre-filled. Chainable methods: `withAgent()`, `withMessage()`, `withStep()`, `withTool()`, `withToolResult()`, `withTodos()`. No more manual struct literal construction throughout coordinator code.
 
@@ -589,6 +850,30 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 27. **runWithInjection uses select not polling** — `select { case <-injector.wrapUpCh: ... case prompt, ok := <-injector.ch: ... default: return }` instead of a polling loop. More efficient and responsive.
 
 28. **executeSegments passes activeCoord to all run paths** — Both coordinator `Run()` and `RunDirectAgent()` paths set/clear `activeCoordinator` so wrap-up signal can target the right instance regardless of which code path is active.
+
+29. **`TodoItem` fields are lowercase** — `TodoItem` uses `ID`, `Agent`, `Desc` (exported), while the legacy `TaskInfo` uses `Agent`/`Task`. Be careful not to confuse them.
+
+30. **Sidecar model defaults to empty** — If `sidecarModel` is empty, sidecar features (skill matching, guard review) are silently disabled. No errors.
+
+31. **Auto-skills uses keyword fallback** — If sidecar skill matching fails (network error, model unavailable), it falls back to keyword matching against skill names and descriptions.
+
+32. **Guard rules are per-agent only** — There is no global guard configuration. Rules are defined in each agent's `.md` frontmatter under `guard:`.
+
+33. **Multi-provider aliases** — The `aliases` field in provider configs allows mapping short names (e.g., `gpt-4`) to full model names (e.g., `gpt-4o`).
+
+34. **TUI `--steps` flag combination** — `--tui` and `--steps` cannot be used together because step confirmation requires terminal access that conflicts with the Bubble Tea altscreen.
+
+35. **Dry run requires team** — `--dry-run` must be combined with `--agent-team` or an `@team-name` in the prompt. It preview-only and produces no LLM calls.
+
+36. **Plan-first agents** — When `--plan` is enabled, agents must submit a plan before executing. The coordinator reviews the plan before allowing task execution.
+
+37. **Report generation** — `--report` generates a markdown file with task delegation summary, tool usage statistics, skill usage tracking, and performance metrics (wall clock, token usage).
+
+38. **Template variables** — Variables set via `--var`, `--var-file`, or `vars` in team.yml are interpolated into agent system prompts using `text/template`. Later values override earlier ones.
+
+39. **Chromem-go replaces ChromaDB** — The memory system previously used an external ChromaDB dependency. It now uses `github.com/philippgille/chromem-go` (in-process, no external service required).
+
+40. **TUI `View()` priority is hardcoded** — The strict 9-layer overlay priority in `View()` is not derived from any data structure. Adding a new overlay mode requires manually inserting the bool check in the correct position.
 
 ## Skill Usage Tracking
 
@@ -608,8 +893,6 @@ The system tracks which skills are loaded/used during a session:
 | `StatusEvent.SkillName` | string | Event field for `"skill_used"` events |
 
 ### CLI Display
-
-The CLI renders skill usage in a panel:
 
 ```
 ─── SKILLS ───

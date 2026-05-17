@@ -20,7 +20,7 @@
 - [CLI Flags 參考](#cli-flags-參考)
 - [Prompt 語法](#prompt-語法)
 - [互動模式](#互動模式)
-- [團隊配置 (team.yml)](#團隊配置-teamyml)
+- [團隊配置](#團隊配置)
 - [Agent .md 檔案格式](#agent-md-檔案格式)
 - [MaxSteps 優先順序](#maxsteps-優先順序)
 - [團隊目錄結構](#團隊目錄結構)
@@ -28,10 +28,17 @@
 - [Workspace 佈局](#workspace-佈局)
 - [Memory 系統 (RAG)](#memory-系統-rag)
 - [MCP 配置](#mcp-配置)
+- [多 Provider 支援](#多-provider-支援)
+- [Sidecar 系統](#sidecar-系統)
+- [Guard 系統](#guard-系統)
 - [Worker Tools 參考](#worker-tools-參考)
 - [Signal 處理](#signal-處理)
 - [Loop 偵測](#loop-偵測)
 - [Session 管理](#session-管理)
+- [TUI 模式](#tui-模式)
+- [Dry Run 模式](#dry-run-模式)
+- [Plan-First 模式](#plan-first-模式)
+- [報表產生](#報表產生)
 - [Idle 警告](#idle-警告)
 - [配置檔 (hufu.yaml)](#配置檔-hufuyaml)
 - [預設值參考](#預設值參考)
@@ -42,11 +49,17 @@
 
 - 🤖 **多 Agent 協作** — Coordinator 分配任務給 Worker，自動協調多輪對話
 - 🔄 **多團隊切換** — 單一 prompt 中可切換不同團隊或直接呼叫特定 Agent
-- 🧠 **長期記憶 (RAG)** — 透過 ChromaDB 向量搜尋，自動注入相關記憶到系統提示
-- 🛠️ **16 種 Worker Tools** — 涵蓋 bash、檔案操作、遠端執行、程式碼直譯器等
+- 🧠 **長期記憶 (RAG)** — 透過 chromem-go 向量搜尋，自動注入相關記憶到系統提示
+- 🛠️ **18 種 Worker Tools** — 涵蓋 bash、檔案操作、遠端執行、程式碼直譯器、亂數、數學運算等
 - 🔌 **MCP 整合** — 支援 local 與 remote MCP server，擴充 Agent 能力
-- 📋 **Skills 系統** — 可重用的技能定義，跨團隊共享
+- 📋 **Skills 系統** — 可重用的技能定義，跨團隊共享，支援自動技能偵測
+- 🎯 **Sidecar 系統** — 輕量輔助 LLM，用於技能比對與 Guard 審核
+- 🛡️ **Guard 系統** — 規則導向的輸出審核（例如：要求測試、禁止不雅內容）
 - ⚡ **Signal 控制** — Ctrl+C 優雅結束、Ctrl+Z 注入額外 prompt
+- 📺 **TUI 模式** — 即時 Bubble Tea 終端 UI，追蹤任務執行狀態
+- 🔍 **Dry Run 模式** — 預覽執行計畫，不實際執行 Agent
+- 📝 **Plan-First 模式** — 強制要求 Agent 先提交計畫再執行
+- 📊 **報表產生** — 產生完整的 markdown 執行報表
 
 ---
 
@@ -133,20 +146,34 @@ go run ./cmd/hufu
 
 ## CLI Flags 參考
 
-以下是所有 10 個 CLI flags 的完整參考：
-
 | Flag | 短旗標 | 類型 | 預設值 | 說明 |
 |------|--------|------|--------|------|
-| `--provider-url` | — | `string` | `http://localhost:11434/v1` | Ollama API base URL |
+| `--provider-url` | — | `string` | "" (hufu.yaml 或 `http://localhost:11434/v1`) | Ollama 或 OpenAI-compatible API base URL |
+| `--provider-api-key` | — | `string` | "" | Provider API key |
 | `--verbose` | `-v` | `bool` | `false` | 即時顯示完整的 Agent 文字輸出 |
-| `--workspace` | `-w` | `string` | `""` (cwd/workspace) | Workspace 目錄路徑 |
+| `--workspace` | `-w` | `string` | `""` (`<cwd>/workspace`) | Workspace 目錄路徑 |
 | `--new` | `-n` | `bool` | `false` | 封存舊 session 並重新開始 |
 | `--temp` | `-t` | `bool` | `false` | 使用臨時目錄作為 workspace |
+| `--steps` | `-s` | `bool` | `false` | 在執行每批 Worker 任務前暫停並要求確認 |
 | `--agent-team` | — | `string` | `""` | 要載入的 Agent 團隊名稱 |
 | `--agent-team-search-path` | — | `string` | `""` | 團隊搜尋路徑（逗號分隔），預設為 `.agent-teams/,~/.agent-teams/` |
 | `--memory` | — | `bool` | `false` | 啟用長期記憶（RAG 向量搜尋） |
-| `--memory-model` | — | `string` | `""` | Memory 使用的 embedding model（預設：`qwen3-embedding:4b`，覆蓋 hufu.yaml） |
+| `--memory-model` | — | `string` | `""` | Memory 使用的 embedding model（預設：`qwen3-embedding:4b`） |
 | `--archive-memory` | — | `bool` | `false` | 將 session 摘要封存至 memory 後退出 |
+| `--show-history` | — | `bool` | `false` | 恢復時顯示先前的 session 歷史 |
+| `--dry-run` | — | `bool` | `false` | 預覽技能比對與任務委派，不執行 Agent |
+| `--tui` | — | `bool` | `false` | 顯示 Bubble Tea TUI 即時任務追蹤 |
+| `--rbash` | — | `bool` | `false` | 對 bash tool 使用 restricted bash (rbash) |
+| `--no-net` | — | `bool` | `false` | 封鎖 Agent 子程序的所有網路存取 |
+| `--direnv` | — | `bool` | `false` | 為 bash tool 載入 `.envrc` / `.env` 環境 |
+| `--think` | — | `bool` | `false` | 顯示 Coordinator 決策推理 |
+| `--plan` | — | `bool` | `false` | 強制 plan-first 模式：Agent 必須先提交計畫 |
+| `--auto-skills` | — | `bool` | `false` | 啟用 sidecar / LLM 自動技能偵測 |
+| `--report` | — | `bool` | `false` | 產生完整的 markdown 執行報表 |
+| `--fix` | — | `string` | `""` | 分析前次執行資料並提出改善建議 |
+| `--skill` | — | `[]string` | `nil` | 強制載入特定 skill（可重複） |
+| `--var` | — | `[]string` | `nil` | 設定模板變數 `key=value`（可重複） |
+| `--var-file` | — | `[]string` | `nil` | 從檔案讀取模板變數（可重複） |
 
 ### 使用範例
 
@@ -177,6 +204,21 @@ go run ./cmd/hufu --memory-model mxbai-embed-large "分析文件"
 
 # 封存 session 記憶後退出
 go run ./cmd/hufu --archive-memory
+
+# TUI 模式
+go run ./cmd/hufu --tui "重構 auth 模組"
+
+# Dry-run 預覽
+go run ./cmd/hufu --dry-run "重構模組"
+
+# Plan-first 模式
+go run ./cmd/hufu --plan "實作功能"
+
+# 產生報表
+go run ./cmd/hufu --report "建構功能"
+
+# 逐步確認
+go run ./cmd/hufu -s "重構模組"
 ```
 
 ---
@@ -228,7 +270,7 @@ go run ./cmd/hufu
 
 ---
 
-## 團隊配置 (team.yml)
+## 團隊配置
 
 團隊配置檔定義了團隊的整體行為和預設參數。以下是完整的配置參考：
 
@@ -244,6 +286,7 @@ max-rounds: 10                   # 最大協調輪數（預設：10）
 max-steps: 30                    # Agent 預設最大步數（預設：30）
 timeout: 600                     # 逾時秒數（預設：600）
 max-retries: 2                   # 最大重試次數（預設：2）
+max-concurrent: 8                # 最大並行 Worker 任務數（預設：8）
 
 # === Workspace ===
 workspace: workspace             # Workspace 目錄（預設："workspace"）
@@ -255,12 +298,49 @@ max-tokens: "4096"               # 最大 output tokens
 top-p: "0.9"                     # Top P 值
 top-k: "40"                      # Top K 值
 
-# === Skills ===
-skills: code-review,git-commit    # 要包含的 skills
-skills-exclude: debug             # 要排除的 skills
-
 # === Provider ===
 provider-url: http://localhost:11434/v1  # Provider URL 覆寫
+provider-api-key: ""                      # Provider API key 覆寫
+
+# === 多 Provider 池 ===
+providers:
+  openai:
+    url: https://api.openai.com/v1
+    key: $OPENAI_API_KEY
+    models: [gpt-4o, gpt-4-turbo]
+    aliases:
+      gpt-4: gpt-4o
+
+# === Model 清單 ===
+model-list:
+  - name: qwen3:8b
+    provider: ollama
+  - name: gpt-4o
+    provider: openai
+
+# === Sidecar / Guard 模型 ===
+sidecar-model: qwen3:1b          # 輕量模型，用於技能比對
+guard-model: qwen3:8b            # Guard / 審核用模型
+
+# === Skills ===
+skills: code-review,git-commit  # 要包含的 skills
+skills-exclude: debug            # 要排除的 skills
+auto-skills: false              # 啟用自動技能偵測
+
+# === 安全性 ===
+allowed-paths: ["/home/user/projects", "/tmp"]  # 允許的檔案路徑
+restricted-path: "/etc"                           # 限制的檔案路徑
+no-net: false                                     # 封鎖網路存取
+
+# === 模板變數 ===
+vars:
+  project_name: "hufu"
+  author: "anomalyco"
+
+# === 通知 ===
+notify:
+  type: webhook
+  url: "https://hooks.example.com/agent"
 
 # === MCP Servers ===
 mcp-servers:
@@ -458,7 +538,7 @@ workspace/
 
 | 元件 | 說明 |
 |------|------|
-| **Vector Store** | ChromaDB（持久化、檔案型） |
+| **Vector Store** | chromem-go（程序內、檔案型） |
 | **Embedding** | Ollama embeddings |
 | **儲存位置** | `~/.local/share/hufu/memory/<projectHash>/` |
 | **預設 Embedding Model** | `qwen3-embedding:4b` |
@@ -594,11 +674,75 @@ mcp-servers:
 
 ---
 
+## 多 Provider 支援
+
+`hufu` 可同時支援多個 LLM Provider，透過 `team.yml` 中的 `providers` 欄位設定：
+
+```yaml
+providers:
+  openai:
+    url: https://api.openai.com/v1
+    key: $OPENAI_API_KEY
+    models: [gpt-4o, gpt-4-turbo]
+    aliases:
+      gpt-4: gpt-4o
+  local:
+    url: http://localhost:11434/v1
+    key: ollama
+    models: [qwen3:8b]
+```
+
+Agent 可在 `.md` frontmatter 中個別指定 `provider-url` 與 `provider-api-key`，或使用團隊預設值。
+
+---
+
+## Sidecar 系統
+
+Sidecar 是輕量的輔助 LLM，用於不應消耗主 model context window 的任務。
+
+### 使用情境
+
+- **技能比對** — 將 prompt 配對到相關 skills
+- **Guard 審核** — 審核 Agent 輸出是否符合 guard 規則
+- **計畫審核** — 執行 multi-step 任務前的自主計畫審核
+
+### 配置
+
+```yaml
+sidecar-model: qwen3:1b   # 輕量模型，用於技能比對
+guard-model: qwen3:8b      # Guard / 審核用模型
+```
+
+---
+
+## Guard 系統
+
+Guard 系統審核 Agent 輸出是否符合可配置規則。規則透過 `.md` frontmatter 中的 `guard` 欄位定義：
+
+```yaml
+guard:
+  - require-tests
+  - no-profanity
+```
+
+當 guard 被觸發時，輸出會傳給 `guard-model` sidecar 進行審核。若審核失敗，Agent 會被要求修正輸出。
+
+### 支援的規則
+
+| 規則 | 說明 |
+|------|------|
+| `require-tests` | 確保程式碼變更包含測試檔案 |
+| `no-profanity` | 禁止不雅內容 |
+
+你可以透過在 `.agents/skills/guard-<name>/SKILL.md` 建立 guard skill 定義來實作自訂規則。
+
+---
+
 ## Worker Tools 參考
 
-`hufu` 提供 16 種 Worker Tools，以及 4 種 Always-included Tools 和 5 種 Coordinator Tools：
+`hufu` 提供 18 種 Worker Tools，以及 4 種 Always-included Tools 和 5 種 Coordinator Tools：
 
-### 16 種 Worker Tools
+### 18 種 Worker Tools
 
 | Tool | 說明 |
 |------|------|
@@ -618,6 +762,8 @@ mcp-servers:
 | `download` | 從 URL 下載檔案 |
 | `fetch` | 取得 URL 內容（text/markdown/html） |
 | `agentic_fetch` | 取得並分析 URL 內容 |
+| `random` | 產生亂數 / UUID |
+| `math` | 評估數學運算式 |
 
 ### Always-included Tools（所有 Agent 皆可使用）
 
@@ -706,6 +852,67 @@ kill -USR1 <hufu-pid>
 - `session.json` — 結構化的 session 資料（機器可讀）
 - `session.md` — 人類可讀的 session 日誌
 - `history/` — 封存的歷史 session 檔案
+
+---
+
+## TUI 模式
+
+啟用即時 Bubble Tea 終端 UI：
+
+```bash
+# TUI 模式，即時追蹤任務
+go run ./cmd/hufu --tui "重構 auth 模組"
+```
+
+TUI 顯示：
+- **任務清單** — Pending、進行中、完成、錯誤等狀態
+- **工具呼叫 / 結果** — 即時 Agent 工具執行日誌
+- **技能使用** — 追蹤本 session 載入的技能
+- **Wrap-up 指示器** — Coordinator 即將結束時的視覺提示
+
+> **注意**：`--tui` 與 `--steps` 不可同時使用。
+
+---
+
+## Dry Run 模式
+
+預覽執行計畫，不呼叫 LLM：
+
+```bash
+# 預覽技能比對與委派
+go run ./cmd/hufu --dry-run "重構模組"
+```
+
+輸出：
+- 配對到的 skills
+- 將會使用的 agents
+- 計畫的任務委派
+
+---
+
+## Plan-First 模式
+
+強制要求 Agent 先提交計畫再執行：
+
+```bash
+go run ./cmd/hufu --plan "實作功能"
+```
+
+---
+
+## 報表產生
+
+執行後產生完整的 markdown 報表：
+
+```bash
+go run ./cmd/hufu --report "重構模組"
+```
+
+報表包含：
+- 任務委派摘要
+- Agent 執行日誌
+- 工具與技能使用統計
+- 效能指標
 
 ---
 
@@ -869,5 +1076,4 @@ go run ./cmd/hufu --agent-team-search-path "./teams,~/projects/teams,/opt/teams"
 
 - **Ollama**: [https://ollama.com](https://ollama.com)
 - **Cobra**: [https://github.com/spf13/cobra](https://github.com/spf13/cobra)
-- **ChromaDB**: [https://www.trychroma.com](https://www.trychroma.com)
 - **MCP**: [https://modelcontextprotocol.io](https://modelcontextprotocol.io)

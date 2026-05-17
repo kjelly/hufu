@@ -147,7 +147,7 @@ type Model struct {
 	memoryReady bool
 
 	inConfirm     bool // showing quit confirmation dialog
-	confirmChoice int  // 0=no 1=yes
+	confirmChoice int  // 0=no 1=yes 2=force
 
 	width      int
 	height     int

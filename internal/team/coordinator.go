@@ -2965,12 +2965,14 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		var resolvedModel string
 		if resolveErr != nil {
 			c.report(c.newEvent("step").withMessage(fmt.Sprintf("warning: could not resolve agent %q: %v", t.Agent, resolveErr)))
-		} else {
+		} else if agentDef != nil {
 			overrideModel := t.Model
 			if len(c.modelList) == 0 {
 				overrideModel = ""
 			}
 			resolvedModel = c.resolveAgentModel(agentDef, overrideModel)
+		} else {
+			c.report(c.newEvent("step").withMessage(fmt.Sprintf("warning: unknown agent %q", t.Agent)))
 		}
 		desc := t.Goal
 		if t.Constraints != "" {
@@ -4021,8 +4023,12 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 }
 
 // resolveAgentName resolves an agent name (exact, case-insensitive, or fuzzy match)
-// to its AgentDef. Thread Safety: c.session is immutable after NewCoordinator
-// initializes it, so no mutex is needed for reading session fields.
+// to its AgentDef.
+//
+// Thread Safety: c.session is set once in NewCoordinator and never modified.
+// c.session.Agents is populated during team loading and remains read-only during
+// execution. Therefore, no mutex protection is needed for reading session fields.
+// If future changes require runtime mutation of session, add RWMutex protection.
 func (c *Coordinator) resolveAgentName(input string) (*agent.AgentDef, string, error) {
 	if c.session == nil {
 		return nil, "", fmt.Errorf("session not initialized")

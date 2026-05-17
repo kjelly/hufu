@@ -6,6 +6,7 @@ package tools
 import (
 	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 
 	"charm.land/fantasy"
@@ -373,8 +374,19 @@ func TestMath_JSONEscaping(t *testing.T) {
 }
 
 func TestMath_NaNResult(t *testing.T) {
+	// inf - inf = NaN (1e309 overflows to +Inf)
+	errMsg := runMathErr(t, "1e309 - 1e309")
+	if errMsg == "" {
+		t.Error("expected error for Inf - Inf (produces NaN)")
+	}
+}
+
+func TestMath_ParserRejectsNegativeSqrt(t *testing.T) {
 	errMsg := runMathErr(t, "sqrt(-1)")
 	if errMsg == "" {
-		t.Error("expected error for sqrt(-1) (NaN)")
+		t.Error("expected error for sqrt(-1)")
+	}
+	if !strings.Contains(errMsg, "negative") {
+		t.Errorf("expected 'negative' in error, got: %v", errMsg)
 	}
 }
