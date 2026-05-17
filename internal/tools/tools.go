@@ -125,6 +125,17 @@ type agentToolsAllowedKeyType struct{}
 
 var AgentToolsAllowedKey = agentToolsAllowedKeyType{}
 
+type agentToolsSessionPermissionsKeyType struct{}
+
+var AgentToolsSessionPermissionsKey = agentToolsSessionPermissionsKeyType{}
+
+type toolPermissionCallbackKeyType struct{}
+
+var ToolPermissionCallbackKey = toolPermissionCallbackKeyType{}
+
+// ToolPermissionCallback is called when a user makes a permanent session-level decision
+type ToolPermissionCallback func(toolName string, allowed bool)
+
 // SetToolsAllowed sets the allowed tools list in the context
 func SetToolsAllowed(ctx context.Context, allowed []string) context.Context {
 	return context.WithValue(ctx, AgentToolsAllowedKey, allowed)
@@ -176,7 +187,17 @@ func GetToolLevel(toolName string) string {
 func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, error) {
 	level := GetToolLevel(toolName)
 
-	// Get allowed tools list from context
+	// 1. Check permanent session-level permissions first
+	if sessionPerms, ok := ctx.Value(AgentToolsSessionPermissionsKey).(map[string]bool); ok {
+		if allowed, decided := sessionPerms[toolName]; decided {
+			if allowed {
+				return true, false, nil
+			}
+			return false, false, nil
+		}
+	}
+
+	// 2. Check explicitly allowed tools from team.yaml (context)
 	val := ctx.Value(AgentToolsAllowedKey)
 	if val == nil {
 		// Not configured: allow Low-risk tools, but ask for Medium/High
@@ -356,20 +377,46 @@ func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 			if jsonResp, ok := TryAskUserTUI(ctx, question, "single_choice", []AskUserTUIOption{
 				{Label: "Yes", Value: "y"},
 				{Label: "No", Value: "n"},
+				{Label: "Always Allow", Value: "ay"},
+				{Label: "Always Deny", Value: "an"},
 			}, false); ok {
 				var askResp askResponseType
-				if err := json.Unmarshal([]byte(jsonResp), &askResp); err == nil && len(askResp.Answers) > 0 && askResp.Answers[0] == "y" {
-					allowed = true
+				if err := json.Unmarshal([]byte(jsonResp), &askResp); err == nil && len(askResp.Answers) > 0 {
+					ans := askResp.Answers[0]
+					if ans == "y" || ans == "ay" {
+						allowed = true
+						if ans == "ay" {
+							if cb, ok := ctx.Value(ToolPermissionCallbackKey).(ToolPermissionCallback); ok {
+								cb(t.info.Name, true)
+							}
+						}
+					} else if ans == "an" {
+						if cb, ok := ctx.Value(ToolPermissionCallbackKey).(ToolPermissionCallback); ok {
+							cb(t.info.Name, false)
+						}
+					}
 				}
 			} else {
 				// CLI fallback
 				StdinMu.Lock()
 				defer StdinMu.Unlock()
-				fmt.Fprintf(os.Stderr, "\n%s %s [y/N] ", boldFmt("PERMISSION:"), question)
+				fmt.Fprintf(os.Stderr, "\n%s %s\n", boldFmt("PERMISSION:"), question)
+				fmt.Fprintf(os.Stderr, "  (y) Yes  (n) No  (ay) Always Yes  (an) Always No\n")
+				fmt.Fprintf(os.Stderr, "  Choice [n]: ")
 				reader := bufio.NewReader(os.Stdin)
 				input, _ := reader.ReadString('\n')
-				if strings.ToLower(strings.TrimSpace(input)) == "y" {
+				choice := strings.ToLower(strings.TrimSpace(input))
+				if choice == "y" || choice == "ay" {
 					allowed = true
+					if choice == "ay" {
+						if cb, ok := ctx.Value(ToolPermissionCallbackKey).(ToolPermissionCallback); ok {
+							cb(t.info.Name, true)
+						}
+					}
+				} else if choice == "an" {
+					if cb, ok := ctx.Value(ToolPermissionCallbackKey).(ToolPermissionCallback); ok {
+						cb(t.info.Name, false)
+					}
 				}
 			}
 

@@ -524,6 +524,9 @@ type Coordinator struct {
 	pendingPlansMu  sync.Mutex
 	forcePlanFirst        bool
 	autoSkillsEnabled     bool
+
+	sessionToolPermissions   map[string]bool // toolName -> allowed (permanent session decision)
+	sessionToolPermissionsMu sync.RWMutex
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
@@ -632,8 +635,9 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 			}
 			return m
 		}(),
-		forcePlanFirst: planMode,
+		forcePlanFirst:    planMode,
 		autoSkillsEnabled: autoSkillsMode,
+		sessionToolPermissions: make(map[string]bool),
 	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -2892,6 +2896,17 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		return "", fmt.Errorf("tasks contain a dependency cycle — check depends_on indices")
 	}
 
+	// Validate all agents upfront to catch unknown agents early
+	var invalidAgents []string
+	for _, t := range tasks {
+		if _, _, err := c.resolveAgentName(t.Agent); err != nil {
+			invalidAgents = append(invalidAgents, err.Error())
+		}
+	}
+	if len(invalidAgents) > 0 {
+		return "", fmt.Errorf("agent validation failed:\n- %s", strings.Join(invalidAgents, "\n- "))
+	}
+
 	if c.forcePlanFirst {
 		for i := range tasks {
 			if tasks[i].PlanID == "" {
@@ -3441,6 +3456,23 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			if len(c.session.Config.ToolsAllowed) > 0 {
 				taskCtx = context.WithValue(taskCtx, tools.AgentToolsAllowedKey, c.session.Config.ToolsAllowed)
 			}
+
+			// Inject permanent session-level permissions
+			c.sessionToolPermissionsMu.RLock()
+			sessionPerms := make(map[string]bool, len(c.sessionToolPermissions))
+			for k, v := range c.sessionToolPermissions {
+				sessionPerms[k] = v
+			}
+			c.sessionToolPermissionsMu.RUnlock()
+			taskCtx = context.WithValue(taskCtx, tools.AgentToolsSessionPermissionsKey, sessionPerms)
+
+			// Provide callback to update session-level permissions
+			taskCtx = context.WithValue(taskCtx, tools.ToolPermissionCallbackKey, tools.ToolPermissionCallback(func(name string, allowed bool) {
+				c.sessionToolPermissionsMu.Lock()
+				c.sessionToolPermissions[name] = allowed
+				c.sessionToolPermissionsMu.Unlock()
+			}))
+
 			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing)
 		}()
 
@@ -4365,7 +4397,8 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString(c.buildTaskStatusContext())
 
 	b.WriteString("## Available Agents\n\n")
-	fmt.Fprintf(&b, "IMPORTANT: You MUST use these agent names in the agent tool: %s. You can also use listed aliases. Do NOT invent agent names that are not listed.\n\n", strings.Join(workerNames, ", "))
+	fmt.Fprintf(&b, "CRITICAL: You MUST use EXACTLY these names in the 'agent' field of the agent tool. Do NOT invent new names or use generic roles. Using an unknown name will result in an IMMEDIATE ERROR.\n\n")
+	fmt.Fprintf(&b, "Valid names: %s\n\n", strings.Join(workerNames, ", "))
 	for _, def := range c.uniqueWorkerDefs() {
 		fmt.Fprintf(&b, "### %s\n", def.Name)
 		if def.Description != "" {

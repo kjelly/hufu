@@ -295,12 +295,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailRefreshScheduled = false
 		if m.inDetail && m.vpReady {
 			m.vp.SetContent(m.buildDetailContent())
-			// Move cursor to bottom to match viewport auto-scroll
 			contentLines := len(m.logs[m.detailID])
 			if contentLines > 0 {
 				m.cursorLine = contentLines - 1
+				m.followCursor()
 			}
-			m.vp.GotoBottom()
 		}
 		return m, nil
 	case copySuccessMsg:
