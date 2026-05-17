@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"charm.land/fantasy"
@@ -210,27 +209,17 @@ var ciEnvVars = []string{
 	"DRONE",
 }
 
-var (
-	interactiveOnce  sync.Once
-	interactiveValue bool
-)
-
 func isInteractiveEnvironment() bool {
-	interactiveOnce.Do(func() {
-		for _, v := range ciEnvVars {
-			if os.Getenv(v) != "" {
-				interactiveValue = false
-				return
-			}
+	for _, v := range ciEnvVars {
+		if os.Getenv(v) != "" {
+			return false
 		}
-		fi, err := os.Stdin.Stat()
-		if err != nil {
-			interactiveValue = false
-			return
-		}
-		interactiveValue = fi.Mode()&os.ModeCharDevice != 0
-	})
-	return interactiveValue
+	}
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 func mergedAllowedPaths(cfg ToolConfig, ctx context.Context) []string {

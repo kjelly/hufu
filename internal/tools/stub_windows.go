@@ -63,9 +63,9 @@ func WithPathReviewer(reviewer PathReviewer) ToolOption    { return func(c *Tool
 func WithToolName(name string) ToolOption                   { return func(c *ToolConfig) { c.ToolName = name } }
 func WithWorkspaceName(name string) ToolOption             { return func(c *ToolConfig) { c.WorkspaceName = name } }
 func WithHooks(h *hooks.HookRegistry) ToolOption            { return func(c *ToolConfig) { c.Hooks = h } }
-func WithRestrictedBash(enabled bool) ToolOption            { return func(c *ToolConfig) { c.RestrictedBash = enabled } }
+func WithRestrictedBash(enabled bool) ToolOption               { return func(c *ToolConfig) { c.RestrictedBash = enabled } }
 func WithRestrictedPath(path string) ToolOption             { return func(c *ToolConfig) { c.RestrictedPath = path } }
-func WithNetworkBlock(enabled bool) ToolOption               { return func(c *ToolConfig) { c.NetworkBlock = enabled } }
+func WithNetworkBlock(enabled bool) ToolOption                    { return func(c *ToolConfig) { c.NetworkBlock = enabled } }
 func WithDirenv(enabled bool) ToolOption                    { return func(c *ToolConfig) { c.Direnv = enabled } }
 
 func ApplyOptions(opts []ToolOption) ToolConfig { return ToolConfig{} }
@@ -105,3 +105,4 @@ func TryAskUserTUI(ctx context.Context, question, qtype string, opts []AskUserTU
 
 func NewPathConsent() *PathConsent                                  { return &PathConsent{} }
 func NewPathConsentWithAgentInfo(fn func() AgentInfo) *PathConsent { return &PathConsent{} }
+

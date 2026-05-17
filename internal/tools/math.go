@@ -70,6 +70,12 @@ func executeMath(call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
+	if math.IsNaN(result) {
+		return fantasy.NewTextErrorResponse("result is not a number (NaN)"), nil
+	}
+	if math.IsInf(result, 0) {
+		return fantasy.NewTextErrorResponse("result is infinity"), nil
+	}
 
 	output := formatMathResult(result, args.Precision)
 	res := mathResult{Result: result, Output: output}

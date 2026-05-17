@@ -510,6 +510,20 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 2. Create technical plans in `.opencode/plans/*.md`.
 3. Derive test cases directly from the Checklist to ensure 100% requirement coverage.
 
+## Security & Tooling Standards
+
+### 1. Agent Tool Trust (Implicit Allowlist)
+
+**Specification:** The `tools` field in an agent's `.md` definition file is considered a **trusted configuration**. 
+- Any tool listed in the agent's Markdown file is automatically added to that agent's **explicit allowlist**.
+- Tools in this implicit allowlist **bypass** the global `team.yaml` restrictions and will not prompt the user for permission.
+- This allows for fine-grained, agent-specific capabilities while maintaining global safety defaults.
+
+### 2. Sandbox Hardening (Golang & Lua)
+
+- **Golang**: Dangerous packages like `os/exec`, `net`, `syscall`, and `unsafe` are blocked in the `yaegi` interpreter. Standard file I/O via `os` is permitted within the workspace.
+- **Lua**: Native `os.execute` and `io.popen` are restricted to prevent unauthorized shell command execution.
+
 ## Key Gotchas & Non-Obvious Patterns
 
 1. **CLI no longer takes team directory as positional arg** — Usage changed from `hufu <team-dir> [prompt]` to `hufu [prompt]`. Teams are discovered by name from search paths.

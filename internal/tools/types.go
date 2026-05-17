@@ -58,3 +58,4 @@ type AskUserTUIOption struct {
 }
 
 type GuardReviewFn func(ctx context.Context, toolName string, args string, rules []string) (approved bool, reason string, err error)
+

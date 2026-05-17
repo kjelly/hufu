@@ -650,7 +650,7 @@ func (m *Model) followCursor() {
 	for i, entry := range lines {
 		// Only wrap until we find the cursor to save time (O(n) but fast n)
 		lineCount := 1
-		if strings.Contains(entry, "\n") || len([]rune(entry)) > wrapW {
+		if strings.Contains(entry, "\n") || utf8.RuneCountInString(entry) > wrapW {
 			wrapped := wrapText(entry, wrapW)
 			lineCount = strings.Count(wrapped, "\n") + 1
 		}

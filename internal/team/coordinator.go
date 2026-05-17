@@ -2971,6 +2971,8 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				overrideModel = ""
 			}
 			resolvedModel = c.resolveAgentModel(agentDef, overrideModel)
+		} else {
+			c.report(c.newEvent("step").withMessage(fmt.Sprintf("warning: unknown agent %q", t.Agent)))
 		}
 		desc := t.Goal
 		if t.Constraints != "" {
@@ -3461,8 +3463,23 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			if c.noNet || agentDef.NoNet {
 				taskCtx = context.WithValue(taskCtx, tools.AgentNetworkBlockKey, true)
 			}
-			if len(c.session.Config.ToolsAllowed) > 0 {
-				taskCtx = context.WithValue(taskCtx, tools.AgentToolsAllowedKey, c.session.Config.ToolsAllowed)
+
+			// Merge team-level and agent-level tool allowlists.
+			// Agent .md "tools" field is treated as an explicit allowlist:
+			// if an agent has "bash" in its tools, it should be able to use
+			// bash without prompting the user for permission.
+			allowedTools := make([]string, len(c.session.Config.ToolsAllowed))
+			copy(allowedTools, c.session.Config.ToolsAllowed)
+			if agentDef.Tools != "" {
+				for _, t := range strings.Split(agentDef.Tools, ",") {
+					t = strings.TrimSpace(t)
+					if t != "" {
+						allowedTools = append(allowedTools, t)
+					}
+				}
+			}
+			if len(allowedTools) > 0 {
+				taskCtx = context.WithValue(taskCtx, tools.AgentToolsAllowedKey, allowedTools)
 			}
 
 			// Inject permanent session-level permissions
@@ -4005,10 +4022,10 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 	return ag, nil
 }
 
+// resolveAgentName resolves an agent name (exact, case-insensitive, or fuzzy match)
+// to its AgentDef. Thread Safety: c.session is immutable after NewCoordinator
+// initializes it, so no mutex is needed for reading session fields.
 func (c *Coordinator) resolveAgentName(input string) (*agent.AgentDef, string, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	if c.session == nil {
 		return nil, "", fmt.Errorf("session not initialized")
 	}

@@ -136,6 +136,48 @@ func TestCheckToolPermission_HighRisk_Allowed(t *testing.T) {
 	}
 }
 
+// TestCheckToolPermission_AgentToolsInAllowlist verifies that when an agent's
+// .md "tools" field is merged into the allowlist (as done by the coordinator),
+// high-risk tools listed there are permitted without prompting the user.
+func TestCheckToolPermission_AgentToolsInAllowlist(t *testing.T) {
+	ctx := context.Background()
+
+	// Simulate the merge of team-level + agent-level tools:
+	// team.yaml has no tools.allowed, but agent.md has "bash,view,write"
+	agentTools := []string{"bash", "view", "write"}
+	ctx = SetToolsAllowed(ctx, agentTools)
+
+	// bash (high-risk) in agent allowlist → should be allowed
+	allowed, askUser, err := CheckToolPermission(ctx, "bash")
+	if err != nil {
+		t.Errorf("CheckToolPermission() unexpected error = %v", err)
+	}
+	if !allowed {
+		t.Errorf("CheckToolPermission(bash) = %v, want true (agent has bash in tools)", allowed)
+	}
+	if askUser {
+		t.Errorf("CheckToolPermission(bash) askUser = %v, want false", askUser)
+	}
+
+	// view (low-risk) → should be allowed
+	allowed, askUser, err = CheckToolPermission(ctx, "view")
+	if err != nil {
+		t.Errorf("CheckToolPermission() unexpected error = %v", err)
+	}
+	if !allowed {
+		t.Errorf("CheckToolPermission(view) = %v, want true", allowed)
+	}
+
+	// golang (high-risk) not in agent allowlist → should be denied
+	allowed, askUser, err = CheckToolPermission(ctx, "golang")
+	if err != nil {
+		t.Errorf("CheckToolPermission() unexpected error = %v", err)
+	}
+	if allowed {
+		t.Errorf("CheckToolPermission(golang) = %v, want false (not in agent tools)", allowed)
+	}
+}
+
 func TestCheckToolPermission_MediumRisk_NotInList_AskUser(t *testing.T) {
 	ctx := context.Background()
 	ctx = SetToolsAllowed(ctx, []string{"view", "write"})

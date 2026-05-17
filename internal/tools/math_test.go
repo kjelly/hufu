@@ -14,8 +14,8 @@ import (
 func runMath(t *testing.T, expression string) mathResult {
 	t.Helper()
 	tool := NewMathTool()
-	input := `{"expression":"` + expression + `"}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	inputBytes, _ := json.Marshal(map[string]string{"expression": expression})
+	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: string(inputBytes)})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -32,8 +32,8 @@ func runMath(t *testing.T, expression string) mathResult {
 func runMathErr(t *testing.T, expression string) string {
 	t.Helper()
 	tool := NewMathTool()
-	input := `{"expression":"` + expression + `"}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	inputBytes, _ := json.Marshal(map[string]string{"expression": expression})
+	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: string(inputBytes)})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -203,8 +203,8 @@ func TestMath_ComplexExpression(t *testing.T) {
 
 func TestMath_Precision(t *testing.T) {
 	tool := NewMathTool()
-	input := `{"expression":"10/3","precision":2}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	inputBytes, _ := json.Marshal(map[string]any{"expression": "10/3", "precision": 2})
+	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: string(inputBytes)})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -222,8 +222,8 @@ func TestMath_Precision(t *testing.T) {
 
 func TestMath_PrecisionZero(t *testing.T) {
 	tool := NewMathTool()
-	input := `{"expression":"10/3","precision":0}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	inputBytes, _ := json.Marshal(map[string]any{"expression": "10/3", "precision": 0})
+	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: string(inputBytes)})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -362,5 +362,19 @@ func TestMath_LargeIntegerPrecision(t *testing.T) {
 	mr := runMath(t, "9007199254740992")
 	if mr.Output != "9007199254740992" {
 		t.Errorf("9007199254740992 output = %q, want exact integer", mr.Output)
+	}
+}
+
+func TestMath_JSONEscaping(t *testing.T) {
+	mr := runMath(t, "1 + 2")
+	if math.Abs(mr.Result-3) > 1e-10 {
+		t.Errorf("1 + 2 = %v, want 3", mr.Result)
+	}
+}
+
+func TestMath_NaNResult(t *testing.T) {
+	errMsg := runMathErr(t, "0/0")
+	if errMsg == "" {
+		t.Error("expected error for 0/0 (NaN)")
 	}
 }

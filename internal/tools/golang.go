@@ -30,7 +30,7 @@ func NewGolangTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "golang",
-			Description: "Execute Go code using the yaegi interpreter. Returns stdout output. Dangerous packages (os/exec, net, net/http, syscall) are blocked. Standard file I/O via 'os' is available within the working directory. Code must include package declaration and import statements.",
+			Description: "Execute Go code using the yaegi interpreter. Returns stdout output. Dangerous packages (os, os/exec, net, net/http, syscall, unsafe, plugin, reflect, runtime, debug) are blocked. Code must include package declaration and import statements.",
 			Parameters: map[string]any{
 				"code": map[string]any{
 					"type":        "string",
@@ -96,25 +96,27 @@ func executeGolang(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (
 		})
 
 		// Filter stdlib symbols to remove dangerous packages.
-		// reflect and runtime are fully blocked to prevent:
-		// - Type confusion attacks via reflect (e.g., reflect.Value.Interface on unexported fields)
-		// - Memory manipulation via runtime (e.g., runtime.SetFinalizer abuse)
-		// - Plugin loading bypasses via plugin package
-		// - Unsafe pointer arithmetic via unsafe package
-		// Even "safe-looking" functions in these packages can be chained for exploits,
-		// so the entire package is blocked rather than trying to allowlist individual functions.
+		// - os/exec: subprocess execution
+		// - net, net/http: network access
+		// - syscall: low-level system calls
+		// - unsafe: pointer arithmetic and memory access
+		// - plugin: dynamic code loading
+		// - reflect: access to unexported fields via Interface()
+		// - runtime: memory stats, SetFinalizer abuse
+		// - debug/*: arbitrary memory reading (elf, macho, pe)
+		// - io/ioutil: file I/O utilities
 		safeSymbols := make(interp.Exports)
 		dangerousPkgs := map[string]bool{
-			"os/exec":  true,
-			"os":       true,
-			"net":      true,
-			"net/http": true,
-			"syscall":  true,
-			"unsafe":   true,
-			"plugin":   true,
-			"reflect":  true,
-			"runtime":  true,
-			"debug":    true,
+			"os/exec":   true,
+			"net":       true,
+			"net/http":  true,
+			"syscall":   true,
+			"unsafe":    true,
+			"plugin":    true,
+			"reflect":   true,
+			"runtime":   true,
+			"debug":     true,
+			"io/ioutil": true,
 		}
 		for pkg, symbols := range stdlib.Symbols {
 			if !dangerousPkgs[pkg] {
