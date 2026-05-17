@@ -295,9 +295,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailRefreshScheduled = false
 		if m.inDetail && m.vpReady {
 			m.vp.SetContent(m.buildDetailContent())
+			// Move cursor to bottom to match viewport auto-scroll
+			contentLines := len(m.logs[m.detailID])
+			if contentLines > 0 {
+				m.cursorLine = contentLines - 1
+			}
 			m.vp.GotoBottom()
 		}
-
+		return m, nil
 	case copySuccessMsg:
 		m.statusText = doneStyle.Render(fmt.Sprintf("✓ Copied %d lines to clipboard", msg.Lines))
 
@@ -621,10 +626,52 @@ func (m *Model) followCursor() {
 		return
 	}
 	h := m.vp.Height
-	if m.cursorLine < m.vp.YOffset {
-		m.vp.YOffset = m.cursorLine
-	} else if m.cursorLine >= m.vp.YOffset+h {
-		m.vp.YOffset = m.cursorLine - h + 1
+	if h <= 0 {
+		return
+	}
+
+	lines := m.logs[m.detailID]
+	width := m.width
+	if width < 20 {
+		width = 20
+	}
+	wrapW := width - 2
+
+	currentY := 0
+	cursorYStart := -1
+	cursorYEnd := -1
+	var cursorLineHeight int
+
+	for i, entry := range lines {
+		wrapped := wrapText(entry, wrapW)
+		lineCount := strings.Count(wrapped, "\n") + 1
+
+		if i == m.cursorLine {
+			cursorYStart = currentY
+			cursorYEnd = currentY + lineCount - 1
+			cursorLineHeight = lineCount
+			break
+		}
+		currentY += lineCount
+	}
+
+	if cursorYStart == -1 {
+		return
+	}
+
+	// Adjust YOffset
+	if cursorYStart < m.vp.YOffset {
+		// Moving up: ensure start of entry is visible
+		m.vp.YOffset = cursorYStart
+	} else if cursorYEnd >= m.vp.YOffset+h {
+		// Moving down: ensure end of entry is visible
+		if cursorLineHeight <= h {
+			// Entire entry can fit, scroll to show its end
+			m.vp.YOffset = cursorYEnd - h + 1
+		} else {
+			// Entry is taller than screen, scroll to show its start (indicator)
+			m.vp.YOffset = cursorYStart
+		}
 	}
 }
 
