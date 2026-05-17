@@ -125,5 +125,23 @@ func NewMathTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{info: fantasy.ToolInfo{Name: "math"}}
 }
 
+func TryAskUserTUI(ctx context.Context, question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool) {
+	return "", false
+}
+
+type agentToolsAllowedKeyType struct{}
+
+var AgentToolsAllowedKey = agentToolsAllowedKeyType{}
+
+type agentToolsSessionPermissionsKeyType struct{}
+
+var AgentToolsSessionPermissionsKey = agentToolsSessionPermissionsKeyType{}
+
+type toolPermissionCallbackKeyType struct{}
+
+var ToolPermissionCallbackKey = toolPermissionCallbackKeyType{}
+
+type ToolPermissionCallback func(toolName string, allowed bool)
+
 func NewPathConsent() *PathConsent { return &PathConsent{} }
 func NewPathConsentWithAgentInfo(fn func() AgentInfo) *PathConsent { return &PathConsent{} }

@@ -4004,6 +4004,9 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 }
 
 func (c *Coordinator) resolveAgentName(input string) (*agent.AgentDef, string, error) {
+	if c.session == nil {
+		return nil, "", fmt.Errorf("session not initialized")
+	}
 	key := strings.ToLower(input)
 	if def, ok := c.session.Agents[key]; ok {
 		if def.Role == "orchestrator" || def.Role == "coordinator" {

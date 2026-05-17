@@ -187,9 +187,9 @@ func GetToolLevel(toolName string) string {
 func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, error) {
 	level := GetToolLevel(toolName)
 
-	// 0. In CI/non-interactive environments, never ask the user — deny high-risk,
-	// allow low-risk, and deny medium-risk by default since no user can respond.
-	if os.Getenv("CI") == "true" || os.Getenv("GITHUB_ACTIONS") == "true" {
+	// 0. In CI/non-interactive environments, never ask the user — deny
+	// high/medium-risk tools by default since no user can respond.
+	if !isInteractiveEnvironment() {
 		switch level {
 		case ToolLevelHigh:
 			return false, false, nil
@@ -213,12 +213,16 @@ func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, erro
 	// 2. Check explicitly allowed tools from team.yaml (context)
 	val := ctx.Value(AgentToolsAllowedKey)
 	if val == nil {
-		// Not configured: allow Low-risk tools, but ask for Medium/High
+		// Not configured: allow Low-risk, deny Medium/High in non-interactive,
+		// ask user in interactive environments.
 		switch level {
 		case ToolLevelLow:
 			return true, false, nil
 		default:
-			return false, true, nil
+			if isInteractiveEnvironment() {
+				return false, true, nil
+			}
+			return false, false, nil
 		}
 	}
 
@@ -247,6 +251,35 @@ func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, erro
 		// Low-risk: always allowed
 		return true, false, nil
 	}
+}
+
+var ciEnvVars = []string{
+	"CI",
+	"CI_SERVER",
+	"GITHUB_ACTIONS",
+	"GITLAB_CI",
+	"CIRCLECI",
+	"TRAVIS",
+	"JENKINS_URL",
+	"TF_BUILD",
+	"APPVEYOR",
+	"BUILDKITE",
+	"DRONE",
+}
+
+// isInteractiveEnvironment returns true when a human user can respond to prompts.
+// Returns false in CI environments or when stdin is not a terminal.
+func isInteractiveEnvironment() bool {
+	for _, v := range ciEnvVars {
+		if os.Getenv(v) != "" {
+			return false
+		}
+	}
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 func mergedAllowedPaths(cfg ToolConfig, ctx context.Context) []string {

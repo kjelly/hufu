@@ -228,6 +228,8 @@ func sandboxLua(L *lua.LState, projectDir string, allowedPaths []string, consent
 		tbl.RawSetString("cpath", lua.LString(""))
 		tbl.RawSetString("searchers", lua.LNil)
 		tbl.RawSetString("loaders", lua.LNil)
+		tbl.RawSetString("loadlib", lua.LNil)
+		tbl.RawSetString("seeall", lua.LNil)
 	}
 }
 

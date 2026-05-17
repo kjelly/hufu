@@ -104,6 +104,10 @@ func executeGolang(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (
 			"net/http": true,
 			"syscall":  true,
 			"unsafe":   true,
+			"plugin":   true,
+			"reflect":  true,
+			"runtime":  true,
+			"debug":    true,
 		}
 		for pkg, symbols := range stdlib.Symbols {
 			if !dangerousPkgs[pkg] {
@@ -115,7 +119,15 @@ func executeGolang(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (
 			ch <- golangResult{err: err}
 			return
 		}
-		if err := i.Use(interp.Symbols); err != nil {
+		// Filter interp.Symbols the same way — yaegi's built-in exports
+		// may still expose dangerous packages like unsafe or reflect.
+		safeInterpSymbols := make(interp.Exports)
+		for pkg, symbols := range interp.Symbols {
+			if !dangerousPkgs[pkg] {
+				safeInterpSymbols[pkg] = symbols
+			}
+		}
+		if err := i.Use(safeInterpSymbols); err != nil {
 			ch <- golangResult{err: err}
 			return
 		}
