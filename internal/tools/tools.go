@@ -19,8 +19,6 @@ import (
 	"github.com/anomalyco/hufu/internal/hooks"
 )
 
-var StdinMu sync.Mutex
-
 var askUserActive atomic.Int32
 
 var onAskUserStart func()
@@ -65,11 +63,6 @@ func IsAskUserActive() bool {
 
 // AskUserTUIOption is a choice for the ask_user TUI dialog.
 // Mirrors tui.AskUserOption without a cross-package dependency.
-type AskUserTUIOption struct {
-	Label string
-	Value string
-}
-
 var onAskUserTUI func(ctx context.Context, question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool)
 
 func SetOnAskUserTUI(fn func(ctx context.Context, question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool)) {
@@ -85,14 +78,6 @@ func TryAskUserTUI(ctx context.Context, question, qtype string, opts []AskUserTU
 	return onAskUserTUI(ctx, question, qtype, opts, allowAny)
 }
 
-type agentNetworkBlockKeyType struct{}
-
-var AgentNetworkBlockKey = agentNetworkBlockKeyType{}
-
-type agentRestrictedPathKeyType struct{}
-
-var AgentRestrictedPathKey = agentRestrictedPathKeyType{}
-
 // normalizeWorkspacePath rewrites a path that uses the workspace directory name
 // as if it were at the filesystem root (e.g. /workspace/x) into a relative path
 // (./workspace/x) so it resolves correctly under the workDir.
@@ -105,48 +90,6 @@ func normalizeWorkspacePath(path, workspaceName string) string {
 		return "." + path
 	}
 	return path
-}
-
-type GuardReviewFn func(ctx context.Context, toolName string, args string, rules []string) (approved bool, reason string, err error)
-
-type guardRulesKeyType struct{}
-
-var GuardRulesKey = guardRulesKeyType{}
-
-type agentNameKeyType struct{}
-
-var AgentNameKey = agentNameKeyType{}
-
-type agentAllowedPathsKeyType struct{}
-
-var AgentAllowedPathsKey = agentAllowedPathsKeyType{}
-
-type agentToolsAllowedKeyType struct{}
-
-var AgentToolsAllowedKey = agentToolsAllowedKeyType{}
-
-type agentToolsSessionPermissionsKeyType struct{}
-
-var AgentToolsSessionPermissionsKey = agentToolsSessionPermissionsKeyType{}
-
-type toolPermissionCallbackKeyType struct{}
-
-var ToolPermissionCallbackKey = toolPermissionCallbackKeyType{}
-
-// ToolPermissionCallback is called when a user makes a permanent session-level decision
-type ToolPermissionCallback func(toolName string, allowed bool)
-
-// SetToolsAllowed sets the allowed tools list in the context
-func SetToolsAllowed(ctx context.Context, allowed []string) context.Context {
-	return context.WithValue(ctx, AgentToolsAllowedKey, allowed)
-}
-
-// GetToolsAllowed extracts the allowed tools list from context
-func GetToolsAllowed(ctx context.Context) []string {
-	if v, ok := ctx.Value(AgentToolsAllowedKey).([]string); ok {
-		return v
-	}
-	return nil
 }
 
 // Tool risk levels for access control
@@ -267,19 +210,27 @@ var ciEnvVars = []string{
 	"DRONE",
 }
 
-// isInteractiveEnvironment returns true when a human user can respond to prompts.
-// Returns false in CI environments or when stdin is not a terminal.
+var (
+	interactiveOnce  sync.Once
+	interactiveValue bool
+)
+
 func isInteractiveEnvironment() bool {
-	for _, v := range ciEnvVars {
-		if os.Getenv(v) != "" {
-			return false
+	interactiveOnce.Do(func() {
+		for _, v := range ciEnvVars {
+			if os.Getenv(v) != "" {
+				interactiveValue = false
+				return
+			}
 		}
-	}
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
+		fi, err := os.Stdin.Stat()
+		if err != nil {
+			interactiveValue = false
+			return
+		}
+		interactiveValue = fi.Mode()&os.ModeCharDevice != 0
+	})
+	return interactiveValue
 }
 
 func mergedAllowedPaths(cfg ToolConfig, ctx context.Context) []string {

@@ -221,13 +221,13 @@ func (pr *planReviewer) review(ctx context.Context, planText string) (string, bo
 	}
 
 	taskStatus := c.buildTaskStatusContext()
-	agentDef, _, _ := c.resolveAgentName(agentName)
+	agentDef, _, agentResolveErr := c.resolveAgentName(agentName)
 	var agentInfo string
-	if agentDef != nil {
+	if agentResolveErr != nil || agentDef == nil {
+		agentInfo = fmt.Sprintf("Name: %s\n(could not resolve agent definition: %v)", agentName, agentResolveErr)
+	} else {
 		agentInfo = fmt.Sprintf("Name: %s\nRole: %s\nDescription: %s\nTools: %s\nSkills: %s",
 			agentDef.Name, agentDef.Role, agentDef.Description, agentDef.Tools, agentDef.Skills)
-	} else {
-		agentInfo = fmt.Sprintf("Name: %s\n(could not resolve agent definition)", agentName)
 	}
 	prompt := fmt.Sprintf("## SUBMITTING AGENT\n\n%s\n\n## USER REQUIREMENT\n\n%s\n\n## TASK STATUS\n\n%s\n\n## PLAN\n\n%s", agentInfo, goal, taskStatus, planText)
 
@@ -2961,9 +2961,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		ParentID string
 	}, len(tasks))
 	for i, t := range tasks {
-		agentDef, _, _ := c.resolveAgentName(t.Agent)
+		agentDef, _, resolveErr := c.resolveAgentName(t.Agent)
 		var resolvedModel string
-		if agentDef != nil {
+		if resolveErr != nil {
+			c.report(c.newEvent("step").withMessage(fmt.Sprintf("warning: could not resolve agent %q: %v", t.Agent, resolveErr)))
+		} else if agentDef != nil {
 			overrideModel := t.Model
 			if len(c.modelList) == 0 {
 				overrideModel = ""
@@ -4004,6 +4006,9 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 }
 
 func (c *Coordinator) resolveAgentName(input string) (*agent.AgentDef, string, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	if c.session == nil {
 		return nil, "", fmt.Errorf("session not initialized")
 	}

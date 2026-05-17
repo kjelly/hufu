@@ -95,7 +95,14 @@ func executeGolang(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (
 			Stderr: &stderr,
 		})
 
-		// Filter stdlib symbols to remove dangerous packages
+		// Filter stdlib symbols to remove dangerous packages.
+		// reflect and runtime are fully blocked to prevent:
+		// - Type confusion attacks via reflect (e.g., reflect.Value.Interface on unexported fields)
+		// - Memory manipulation via runtime (e.g., runtime.SetFinalizer abuse)
+		// - Plugin loading bypasses via plugin package
+		// - Unsafe pointer arithmetic via unsafe package
+		// Even "safe-looking" functions in these packages can be chained for exploits,
+		// so the entire package is blocked rather than trying to allowlist individual functions.
 		safeSymbols := make(interp.Exports)
 		dangerousPkgs := map[string]bool{
 			"os/exec":  true,

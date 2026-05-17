@@ -632,7 +632,10 @@ func (m *Model) followCursor() {
 		return
 	}
 
-	lines := m.logs[m.detailID]
+	lines, ok := m.logs[m.detailID]
+	if !ok || len(lines) == 0 {
+		return
+	}
 	width := m.width
 	if width < 20 {
 		width = 20
@@ -691,38 +694,42 @@ func (m Model) enterVisual() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) clampVisualRange(contentLines int) {
+	if contentLines == 0 {
+		m.visualStart = 0
+		m.visualEnd = 0
+		m.cursorLine = 0
+		return
+	}
+	maxIdx := contentLines - 1
+	if m.visualStart < 0 {
+		m.visualStart = 0
+	}
+	if m.visualStart > maxIdx {
+		m.visualStart = maxIdx
+	}
+	if m.visualEnd < 0 {
+		m.visualEnd = 0
+	}
+	if m.visualEnd > maxIdx {
+		m.visualEnd = maxIdx
+	}
+	if m.cursorLine < 0 {
+		m.cursorLine = 0
+	}
+	if m.cursorLine > maxIdx {
+		m.cursorLine = maxIdx
+	}
+}
+
 func (m Model) updateVisual(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	contentLines := len(m.logs[m.detailID])
+	var contentLines int
+	if lines, ok := m.logs[m.detailID]; ok {
+		contentLines = len(lines)
+	}
 
 	// Clamp selection range to valid bounds
-	clampVisualRange := func() {
-		if contentLines == 0 {
-			m.visualStart = 0
-			m.visualEnd = 0
-			m.cursorLine = 0
-			return
-		}
-		maxIdx := contentLines - 1
-		if m.visualStart < 0 {
-			m.visualStart = 0
-		}
-		if m.visualStart > maxIdx {
-			m.visualStart = maxIdx
-		}
-		if m.visualEnd < 0 {
-			m.visualEnd = 0
-		}
-		if m.visualEnd > maxIdx {
-			m.visualEnd = maxIdx
-		}
-		if m.cursorLine < 0 {
-			m.cursorLine = 0
-		}
-		if m.cursorLine > maxIdx {
-			m.cursorLine = maxIdx
-		}
-	}
-	clampVisualRange()
+	m.clampVisualRange(contentLines)
 
 	switch msg.String() {
 	case "esc":

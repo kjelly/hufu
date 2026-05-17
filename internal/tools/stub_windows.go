@@ -12,7 +12,6 @@ import (
 	"github.com/anomalyco/hufu/internal/hooks"
 )
 
-// ToolOption and ToolConfig stubs for Windows build
 type ToolOption func(*ToolConfig)
 
 type PathReviewer func(ctx context.Context, command string, path string) (bool, error)
@@ -52,71 +51,40 @@ type AgentInfo struct {
 }
 
 type ConsentResult struct {
-	Allowed     bool
-	Remember    bool
-	Reason      string
+	Allowed  bool
+	Remember bool
+	Reason   string
 }
 
-var AgentNameKey = agentNameKeyType{}
-type agentNameKeyType struct{}
-
-var GuardRulesKey = guardRulesKeyType{}
-type guardRulesKeyType struct{}
-
-var AgentAllowedPathsKey = agentAllowedPathsKeyType{}
-type agentAllowedPathsKeyType struct{}
-
-var AgentRestrictedPathKey = agentRestrictedPathKeyType{}
-type agentRestrictedPathKeyType struct{}
-
-var AgentNetworkBlockKey = agentNetworkBlockKeyType{}
-type agentNetworkBlockKeyType struct{}
-
-func WithWorkDir(dir string) ToolOption { return func(c *ToolConfig) { c.WorkDir = dir } }
-func WithAllowedPaths(paths []string) ToolOption { return func(c *ToolConfig) { c.AllowedPaths = paths } }
-func WithPathConsent(consent *PathConsent) ToolOption { return func(c *ToolConfig) { c.PathConsent = consent } }
-func WithPathReviewer(reviewer PathReviewer) ToolOption { return func(c *ToolConfig) { c.PathReviewer = reviewer } }
-func WithToolName(name string) ToolOption { return func(c *ToolConfig) { c.ToolName = name } }
-func WithWorkspaceName(name string) ToolOption { return func(c *ToolConfig) { c.WorkspaceName = name } }
-func WithHooks(h *hooks.HookRegistry) ToolOption { return func(c *ToolConfig) { c.Hooks = h } }
-func WithRestrictedBash(enabled bool) ToolOption { return func(c *ToolConfig) { c.RestrictedBash = enabled } }
-func WithRestrictedPath(path string) ToolOption { return func(c *ToolConfig) { c.RestrictedPath = path } }
-func WithNetworkBlock(enabled bool) ToolOption { return func(c *ToolConfig) { c.NetworkBlock = enabled } }
-func WithDirenv(enabled bool) ToolOption { return func(c *ToolConfig) { c.Direnv = enabled } }
+func WithWorkDir(dir string) ToolOption                     { return func(c *ToolConfig) { c.WorkDir = dir } }
+func WithAllowedPaths(paths []string) ToolOption            { return func(c *ToolConfig) { c.AllowedPaths = paths } }
+func WithPathConsent(consent *PathConsent) ToolOption       { return func(c *ToolConfig) { c.PathConsent = consent } }
+func WithPathReviewer(reviewer PathReviewer) ToolOption    { return func(c *ToolConfig) { c.PathReviewer = reviewer } }
+func WithToolName(name string) ToolOption                   { return func(c *ToolConfig) { c.ToolName = name } }
+func WithWorkspaceName(name string) ToolOption             { return func(c *ToolConfig) { c.WorkspaceName = name } }
+func WithHooks(h *hooks.HookRegistry) ToolOption            { return func(c *ToolConfig) { c.Hooks = h } }
+func WithRestrictedBash(enabled bool) ToolOption            { return func(c *ToolConfig) { c.RestrictedBash = enabled } }
+func WithRestrictedPath(path string) ToolOption             { return func(c *ToolConfig) { c.RestrictedPath = path } }
+func WithNetworkBlock(enabled bool) ToolOption               { return func(c *ToolConfig) { c.NetworkBlock = enabled } }
+func WithDirenv(enabled bool) ToolOption                    { return func(c *ToolConfig) { c.Direnv = enabled } }
 
 func ApplyOptions(opts []ToolOption) ToolConfig { return ToolConfig{} }
 
-func AllTools(opts ...ToolOption) []fantasy.AgentTool { return []fantasy.AgentTool{} }
+func AllTools(opts ...ToolOption) []fantasy.AgentTool       { return []fantasy.AgentTool{} }
 func FilterTools(all []fantasy.AgentTool, allowed map[string]bool) []fantasy.AgentTool { return all }
 func SetGuardReviewer(tools []fantasy.AgentTool, fn GuardReviewFn) {}
-func SetPathReviewer(tools []fantasy.AgentTool, fn PathReviewer)  {}
-
-type GuardReviewFn func(ctx context.Context, toolName string, args string, rules []string) (approved bool, reason string, err error)
-
-func SetOnAskUserTUI(fn func(ctx context.Context, question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool)) {}
-func SetOnAskUserStart(fn func()) {}
-func SetOnAskUserDone(fn func()) {}
-func SetAskUserActive(active bool) {}
-func IsAskUserActive() bool { return false }
-
-type AskUserTUIOption struct {
-	Label string
-	Value string
-}
-
-var StdinMu sync.Mutex
+func SetPathReviewer(tools []fantasy.AgentTool, fn PathReviewer)    {}
 
 type coreTool struct {
-	info         fantasy.ToolInfo
-	handler      func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error)
-	pOpts        fantasy.ProviderOptions
-	hooks        *hooks.HookRegistry
-	pathReviewer PathReviewer
+	info    fantasy.ToolInfo
+	handler func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error)
+	pOpts   fantasy.ProviderOptions
+	hooks   *hooks.HookRegistry
 }
 
-func (t *coreTool) Info() fantasy.ToolInfo                            { return t.info }
-func (t *coreTool) ProviderOptions() fantasy.ProviderOptions          { return t.pOpts }
-func (t *coreTool) SetProviderOptions(opts fantasy.ProviderOptions)   {}
+func (t *coreTool) Info() fantasy.ToolInfo                          { return t.info }
+func (t *coreTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
+func (t *coreTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
 func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	return fantasy.NewTextErrorResponse("tool not available on this platform"), nil
 }
@@ -125,23 +93,15 @@ func NewMathTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{info: fantasy.ToolInfo{Name: "math"}}
 }
 
+func SetOnAskUserTUI(fn func(ctx context.Context, question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool)) {}
+func SetOnAskUserStart(fn func()) {}
+func SetOnAskUserDone(fn func()) {}
+func SetAskUserActive(active bool) {}
+func IsAskUserActive() bool { return false }
+
 func TryAskUserTUI(ctx context.Context, question, qtype string, opts []AskUserTUIOption, allowAny bool) (string, bool) {
 	return "", false
 }
 
-type agentToolsAllowedKeyType struct{}
-
-var AgentToolsAllowedKey = agentToolsAllowedKeyType{}
-
-type agentToolsSessionPermissionsKeyType struct{}
-
-var AgentToolsSessionPermissionsKey = agentToolsSessionPermissionsKeyType{}
-
-type toolPermissionCallbackKeyType struct{}
-
-var ToolPermissionCallbackKey = toolPermissionCallbackKeyType{}
-
-type ToolPermissionCallback func(toolName string, allowed bool)
-
-func NewPathConsent() *PathConsent { return &PathConsent{} }
+func NewPathConsent() *PathConsent                                  { return &PathConsent{} }
 func NewPathConsentWithAgentInfo(fn func() AgentInfo) *PathConsent { return &PathConsent{} }
