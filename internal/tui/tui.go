@@ -184,7 +184,6 @@ type Model struct {
 
 	inVisual    bool // VISUAL mode active in detail view
 	cursorLine  int  // current line index within detail logs
-	cursorCol   int  // current column index within line
 	visualStart int  // selection start line index
 	visualEnd   int  // selection end line index
 }
@@ -642,8 +641,12 @@ func (m *Model) followCursor() {
 	var cursorLineHeight int
 
 	for i, entry := range lines {
-		wrapped := wrapText(entry, wrapW)
-		lineCount := strings.Count(wrapped, "\n") + 1
+		// Only wrap until we find the cursor to save time (O(n) but fast n)
+		lineCount := 1
+		if strings.Contains(entry, "\n") || len([]rune(entry)) > wrapW {
+			wrapped := wrapText(entry, wrapW)
+			lineCount = strings.Count(wrapped, "\n") + 1
+		}
 
 		if i == m.cursorLine {
 			cursorYStart = currentY
@@ -873,11 +876,16 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.row < len(col) {
 			m.detailID = col[m.row].ID
 			m.inDetail = true
-			m.cursorLine = 0
-			m.cursorCol = 0
+			contentLines := len(m.logs[m.detailID])
+			if contentLines > 0 {
+				m.cursorLine = contentLines - 1
+			} else {
+				m.cursorLine = 0
+			}
 			if m.vpReady {
 				m.vp.SetContent(m.buildDetailContent())
-				m.vp.GotoTop()
+				m.vp.GotoBottom()
+				m.followCursor() // Ensure indicator is visible for multi-line entries
 			}
 			if !m.mouseEnabled {
 				m.mouseEnabled = true

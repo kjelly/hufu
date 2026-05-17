@@ -2897,14 +2897,20 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	}
 
 	// Validate all agents upfront to catch unknown agents early
-	var invalidAgents []string
-	for _, t := range tasks {
-		if _, _, err := c.resolveAgentName(t.Agent); err != nil {
-			invalidAgents = append(invalidAgents, err.Error())
+	if c.session != nil {
+		var invalidAgents []string
+		seenInvalid := make(map[string]bool)
+		for _, t := range tasks {
+			if _, _, err := c.resolveAgentName(t.Agent); err != nil {
+				if !seenInvalid[t.Agent] {
+					invalidAgents = append(invalidAgents, err.Error())
+					seenInvalid[t.Agent] = true
+				}
+			}
 		}
-	}
-	if len(invalidAgents) > 0 {
-		return "", fmt.Errorf("agent validation failed:\n- %s", strings.Join(invalidAgents, "\n- "))
+		if len(invalidAgents) > 0 {
+			return "", fmt.Errorf("agent validation failed:\n- %s", strings.Join(invalidAgents, "\n- "))
+		}
 	}
 
 	if c.forcePlanFirst {

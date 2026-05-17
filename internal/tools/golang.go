@@ -30,7 +30,7 @@ func NewGolangTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "golang",
-			Description: "Execute Go code using the yaegi interpreter. Returns stdout output. Dangerous packages (os/exec, net, net/http, syscall) are blocked. Code must include package declaration and import statements.",
+			Description: "Execute Go code using the yaegi interpreter. Returns stdout output. Dangerous packages (os/exec, net, net/http, syscall) are blocked. Standard file I/O via 'os' is available within the working directory. Code must include package declaration and import statements.",
 			Parameters: map[string]any{
 				"code": map[string]any{
 					"type":        "string",
