@@ -214,13 +214,20 @@ func (s *AgentMCPServer) executeTool(ctx context.Context, toolName string, cfg a
 			continue
 		}
 
+		// Convert to string and validate
+		sVal := fmt.Sprint(val)
+		if strings.ContainsAny(sVal, "\x00\n") {
+			return mcp.NewToolResultError(
+				fmt.Sprintf("invalid characters in input '%s': contains null or newline", input.Name)), nil
+		}
+
 		// Set environment variable: INPUT_NAME=value
 		envKey := strings.ToUpper(strings.ReplaceAll(input.Name, "-", "_"))
-		env = append(env, fmt.Sprintf("%s=%v", envKey, val))
+		env = append(env, fmt.Sprintf("%s=%s", envKey, sVal))
 
 		// Set positional parameter: V1, V2...
 		posKey := fmt.Sprintf("V%d", i+1)
-		env = append(env, fmt.Sprintf("%s=%v", posKey, val))
+		env = append(env, fmt.Sprintf("%s=%s", posKey, sVal))
 	}
 
 	// 3. Build command

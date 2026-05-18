@@ -624,7 +624,18 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 
 	var mcpManager *mcp.MCPToolManager
 	cfg := config.LoadConfig()
-	if len(session.MCPServers) > 0 {
+
+	// Check if any agent has mcp-tools defined
+	hasMCPTools := false
+	for _, def := range session.Agents {
+		if len(def.MCPTools) > 0 {
+			hasMCPTools = true
+			break
+		}
+	}
+
+	// Create manager if there are external MCP servers or agent mcp-tools
+	if len(session.MCPServers) > 0 || hasMCPTools {
 		globalShell := cfg.Shell
 		if globalShell == "" {
 			globalShell = "bash"
@@ -634,11 +645,14 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 			teamShell = globalShell
 		}
 		mcpManager = mcp.NewMCPToolManager(globalShell, teamShell)
-		stderrLog("%s Loading MCP servers...\n", stepStyle.Render("⟳"))
-		if err := mcpManager.LoadTools(ctx, session.MCPServers); err != nil {
-			stderrLog("%s MCP loading failed: %v\n", errStyle.Render("⚠"), err)
-		} else {
-			stderrLog("%s MCP tools: %d loaded\n", doneStyle.Render("✓"), len(mcpManager.GetTools()))
+
+		if len(session.MCPServers) > 0 {
+			stderrLog("%s Loading MCP servers...\n", stepStyle.Render("⟳"))
+			if err := mcpManager.LoadTools(ctx, session.MCPServers); err != nil {
+				stderrLog("%s MCP loading failed: %v\n", errStyle.Render("⚠"), err)
+			} else {
+				stderrLog("%s MCP tools: %d loaded\n", doneStyle.Render("✓"), len(mcpManager.GetTools()))
+			}
 		}
 	}
 

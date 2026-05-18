@@ -332,6 +332,12 @@ auto-skills: false              # Enable automatic skill detection
 allowed-paths: ["/home/user/projects", "/tmp"]  # Allowed file system paths
 restricted-path: "/etc"                           # Restricted path
 no-net: false                                     # Block network access
+force-mcp: false                                  # Force MCP mode
+shell: bash                                       # Default shell for MCP tools (searched from PATH)
+
+# === MCP Tools (Agent-level) ===
+# Defined in agent .md files, not team.yml
+# See Agent Configuration section below
 
 # === Template Variables ===
 vars:
@@ -401,8 +407,39 @@ Please follow best practices and ensure proper error handling.
 | `max-retries` | ❌ | `-1` (use team default) | Maximum retries |
 | `max-steps` | ❌ | Team default | Maximum execution steps |
 | `provider-url` | ❌ | Team default | Provider URL override |
+| `shell` | ❌ | Team default | Default shell for agent's MCP tools (e.g., `bash`, `zsh`, `nu`, or full path) |
+| `mcp-tools` | ❌ | — | Custom MCP tools (dict format: `{tool-name: {cmd, desc, inputs, shell, dir}}`) |
 
 > **Important**: The default value for `max-retries` is `-1`, meaning the team default is used; if explicitly set, it overrides the team default.
+
+### MCP Tools (`mcp-tools`)
+
+Define custom MCP tools for an agent. Each tool executes shell commands with parameter substitution:
+
+```yaml
+mcp-tools:
+  run-tests:
+    cmd: go test ./...
+    desc: Run Go tests
+    inputs: [package]
+  
+  build:
+    cmd: go build -o /tmp/app ./...
+    desc: Build the application
+  
+  calc:
+    cmd: print ($env.V1 + $env.V2)
+    desc: Calculate sum using nushell
+    inputs: [a, b]
+    shell: nu
+```
+
+**Parameter Mapping:**
+- **Named parameters**: `url` → `$URL` environment variable
+- **Positional parameters**: 1st input → `$V1`, 2nd → `$V2`, etc.
+- **Shell priority**: `tool.shell` > `agent.shell` > `team.shell` > `hufu.yaml shell` > `bash` (default)
+
+**Supported shells:** `bash`, `sh`, `zsh`, `fish`, `nu` (nushell), or any shell in PATH.
 
 ---
 
@@ -486,6 +523,7 @@ Skills are searched in the following order:
 # team.yml
 skills: code-review,git-commit    # Include skills
 skills-exclude: debug             # Exclude skills
+shell: bash                       # Default shell for MCP tools
 ```
 
 ```markdown
@@ -493,6 +531,19 @@ skills-exclude: debug             # Exclude skills
 name: developer
 tools: view,write,edit,bash
 skills: code-review               # Agent-level skill
+shell: bash                       # Agent-level shell
+mcp-tools:
+  run-tests:
+    cmd: go test ./...
+    desc: Run Go tests
+    inputs: [package]
+  build:
+    cmd: go build -o /tmp/app ./...
+    desc: Build the application
+  lint:
+    cmd: golangci-lint run
+    desc: Run linter
+    shell: bash
 ---
 ```
 

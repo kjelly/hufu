@@ -332,6 +332,8 @@ auto-skills: false              # 啟用自動技能偵測
 allowed-paths: ["/home/user/projects", "/tmp"]  # 允許的檔案路徑
 restricted-path: "/etc"                           # 限制的檔案路徑
 no-net: false                                     # 封鎖網路存取
+force-mcp: false                                  # 強制 MCP 模式
+shell: bash                                       # MCP tools 預設 shell（從 PATH 搜尋）
 
 # === 模板變數 ===
 vars:
@@ -401,8 +403,39 @@ provider-url: http://localhost:11434/v1
 | `max-retries` | ❌ | `-1`（使用團隊預設） | 最大重試次數 |
 | `max-steps` | ❌ | 團隊預設 | 最大執行步數 |
 | `provider-url` | ❌ | 團隊預設 | Provider URL 覆寫 |
+| `shell` | ❌ | 團隊預設 | Agent 的 MCP tools 預設 shell（例如 `bash`、`zsh`、`nu` 或完整路徑） |
+| `mcp-tools` | ❌ | — | 自訂 MCP tools（dict 格式：`{tool-name: {cmd, desc, inputs, shell, dir}}`） |
 
 > **重要**：`max-retries` 的預設值為 `-1`，表示使用團隊預設值；若明確設定則覆寫團隊預設。
+
+### MCP Tools (`mcp-tools`)
+
+為 Agent 定義自訂 MCP tools。每個 tool 執行 shell 命令並支援參數替換：
+
+```yaml
+mcp-tools:
+  run-tests:
+    cmd: go test ./...
+    desc: 執行 Go 測試
+    inputs: [package]
+  
+  build:
+    cmd: go build -o /tmp/app ./...
+    desc: 構建應用程式
+  
+  calc:
+    cmd: print ($env.V1 + $env.V2)
+    desc: 使用 nushell 計算總和
+    inputs: [a, b]
+    shell: nu
+```
+
+**參數映射：**
+- **命名參數**：`url` → `$URL` 環境變數
+- **位置參數**：第 1 個輸入 → `$V1`，第 2 個 → `$V2`，依此類推
+- **Shell 優先順序**：`tool.shell` > `agent.shell` > `team.shell` > `hufu.yaml shell` > `bash`（預設）
+
+**支援的 shells：** `bash`、`sh`、`zsh`、`fish`、`nu`（nushell），或 PATH 中的任何 shell。
 
 ---
 

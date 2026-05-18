@@ -444,6 +444,19 @@ provider-api-key: ""       # API key override
 allowed-paths: ["src/", "tests/"]
 restricted-path: "/etc"
 no-net: false
+shell: bash                # Default shell for MCP tools
+mcp-tools:
+  run-tests:
+    cmd: go test ./...
+    desc: Run Go tests
+    inputs: [package]
+  build:
+    cmd: go build -o /tmp/app ./...
+    desc: Build the application
+  lint:
+    cmd: golangci-lint run
+    desc: Run linter
+    shell: bash
 ```
 
 | Field | Required | Default | Description |
@@ -467,6 +480,45 @@ no-net: false
 | `allowed-paths` | no | Team default | Allowed file system paths |
 | `restricted-path` | no | Team default | Restricted file system path |
 | `no-net` | no | Team default | Block network access |
+| `shell` | no | Team default | Default shell for agent's MCP tools (searched from PATH, e.g., `bash`, `zsh`, `nu`) |
+| `mcp-tools` | no | — | Custom MCP tools (dict format: `{tool-name: {cmd, desc, inputs, shell, dir}}`) |
+
+### MCP Tools Parameter Mapping
+
+| Parameter Type | Environment Variable | Example |
+|----------------|---------------------|---------|
+| Named | `$INPUT_NAME` (uppercase) | `url` → `$URL` |
+| Positional | `$V1`, `$V2`, ... | 1st input → `$V1` |
+
+### Shell Priority (highest to lowest)
+
+1. `tool.shell` (per-tool override)
+2. `agent.shell` (agent-level default)
+3. `team.shell` (team.yml default)
+4. `hufu.yaml shell` (global default)
+5. `bash` (system default)
+
+### Supported Shells
+
+- `bash`, `sh`, `zsh`, `fish`, `nu` (nushell), `nushell` (alias for nu)
+- Custom paths: `/usr/bin/nu`, `/opt/homebrew/bin/zsh`, etc.
+- Shell is resolved via `exec.LookPath()` (searches PATH)
+
+### MCP Tools Execution
+
+```go
+// 1. Parse input JSON from agent
+args := {"package": "./pkg/auth", "pattern": "TestLogin"}
+
+// 2. Build environment variables
+env = append(env, "PACKAGE=./pkg/auth")  // Named: $PACKAGE
+env = append(env, "PATTERN=TestLogin")   // Named: $PATTERN
+env = append(env, "V1=./pkg/auth")       // Positional: $V1
+env = append(env, "V2=TestLogin")        // Positional: $V2
+
+// 3. Execute command
+cmd = exec.CommandContext(ctx, shell, "-c", "go test $PACKAGE -run $V2")
+```
 
 ## 8. Key Types
 
