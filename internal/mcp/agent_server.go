@@ -176,11 +176,15 @@ func extractTextFromResult(result *mcp.CallToolResult) string {
 	if result == nil || len(result.Content) == 0 {
 		return ""
 	}
-	// Try to extract text from first content item
-	if textContent, ok := result.Content[0].(mcp.TextContent); ok {
-		return textContent.Text
+	
+	var texts []string
+	for _, content := range result.Content {
+		if textContent, ok := content.(mcp.TextContent); ok {
+			texts = append(texts, textContent.Text)
+		}
 	}
-	return ""
+	
+	return strings.Join(texts, "\n")
 }
 
 // executeTool executes a tool with the given arguments
