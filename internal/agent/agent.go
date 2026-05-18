@@ -26,12 +26,40 @@ type GenerationParams struct {
 	TopK        string
 }
 
+type MCPInputConfig struct {
+	Name        string `yaml:"name"`
+	Description string `yaml:"desc"`
+	Type        string `yaml:"type"` // string, number, boolean
+	Required    bool   `yaml:"required"`
+}
+
+// UnmarshalYAML allows MCPInputConfig to be defined as a simple string or an object
+func (i *MCPInputConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var s string
+	if err := unmarshal(&s); err == nil {
+		i.Name = s
+		i.Required = true
+		i.Type = "string"
+		return nil
+	}
+	type plain MCPInputConfig
+	var p plain
+	if err := unmarshal(&p); err != nil {
+		return err
+	}
+	*i = MCPInputConfig(p)
+	if i.Type == "" {
+		i.Type = "string"
+	}
+	return nil
+}
+
 type MCPToolConfig struct {
-	Cmd    string   `yaml:"cmd"`
-	Desc   string   `yaml:"desc"`
-	Inputs []string `yaml:"inputs"`
-	Shell  string   `yaml:"shell"`
-	Dir    string   `yaml:"dir"`
+	Cmd    string           `yaml:"cmd"`
+	Desc   string           `yaml:"desc"`
+	Inputs []MCPInputConfig `yaml:"inputs"`
+	Shell  string           `yaml:"shell"`
+	Dir    string           `yaml:"dir"`
 }
 
 type AgentDef struct {

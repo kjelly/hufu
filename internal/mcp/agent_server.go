@@ -130,9 +130,27 @@ type agentMCPServerTool struct {
 }
 
 func (t *agentMCPServerTool) Info() fantasy.ToolInfo {
+	params := make(map[string]any)
+	var required []string
+
+	for _, input := range t.cfg.Inputs {
+		inputSchema := map[string]any{
+			"type": input.Type,
+		}
+		if input.Description != "" {
+			inputSchema["description"] = input.Description
+		}
+		params[input.Name] = inputSchema
+		if input.Required {
+			required = append(required, input.Name)
+		}
+	}
+
 	return fantasy.ToolInfo{
 		Name:        t.name,
 		Description: t.description,
+		Parameters:  params,
+		Required:    required,
 	}
 }
 
@@ -190,14 +208,14 @@ func (s *AgentMCPServer) executeTool(ctx context.Context, toolName string, cfg a
 		}
 	}
 
-	for i, inputName := range cfg.Inputs {
-		val, exists := args[inputName]
+	for i, input := range cfg.Inputs {
+		val, exists := args[input.Name]
 		if !exists {
 			continue
 		}
 
 		// Set environment variable: INPUT_NAME=value
-		envKey := strings.ToUpper(strings.ReplaceAll(inputName, "-", "_"))
+		envKey := strings.ToUpper(strings.ReplaceAll(input.Name, "-", "_"))
 		env = append(env, fmt.Sprintf("%s=%v", envKey, val))
 
 		// Set positional parameter: V1, V2...
