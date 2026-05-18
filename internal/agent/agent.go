@@ -42,6 +42,7 @@ type AgentDef struct {
 	AllowedPaths   []string
 	RestrictedPath string
 	NoNet          bool
+	ForceMCP       bool
 	ProviderURL    string
 	Generation     GenerationParams
 }
@@ -68,6 +69,7 @@ type TeamConfig struct {
 	AllowedPaths   []string
 	RestrictedPath string
 	NoNet            bool
+	ForceMCP         bool
 	Vars             map[string]interface{}
 	WorkerContextSize int
 	ToolsAllowed   []string // List of explicitly allowed tools

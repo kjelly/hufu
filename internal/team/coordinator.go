@@ -511,6 +511,7 @@ type Coordinator struct {
 	rbashMode      bool
 	restrictedPath string
 	noNet                bool
+	forceMCP             bool
 	workerSummariesOnce  sync.Once
 	workerSummaries      map[string]string
 	workerSummariesMu    sync.Mutex
@@ -591,9 +592,9 @@ func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
 	return
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forcedSkillNames []string, planMode bool, autoSkillsMode bool) (*Coordinator, error) {
+func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forceMCP bool, forcedSkillNames []string, planMode bool, autoSkillsMode bool) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
-	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath), tools.WithNetworkBlock(noNet), tools.WithDirenv(direnv))
+	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath), tools.WithNetworkBlock(noNet), tools.WithForceMCP(forceMCP), tools.WithDirenv(direnv))
 	pm, err := agent.NewProviderManager(defaultProviderURL, defaultProviderAPIKey, session.Config.Providers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create provider manager: %w", err)
@@ -625,6 +626,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		rbashMode:       rbashMode,
 		restrictedPath:  restrictedPath,
 		noNet:           noNet,
+		forceMCP:        forceMCP,
 		forcedSkillNames: func() map[string]bool {
 			m := make(map[string]bool)
 			for _, n := range forcedSkillNames {
@@ -3463,6 +3465,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			if c.noNet || agentDef.NoNet {
 				taskCtx = context.WithValue(taskCtx, tools.AgentNetworkBlockKey, true)
 			}
+			if c.forceMCP || agentDef.ForceMCP {
+				taskCtx = context.WithValue(taskCtx, tools.AgentForceMCPKey, true)
+			}
 
 			// Merge team-level and agent-level tool allowlists.
 			// Agent .md "tools" field is treated as an explicit allowlist:
@@ -4892,6 +4897,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	if c.noNet || agentDef.NoNet {
 		taskCtx = context.WithValue(taskCtx, tools.AgentNetworkBlockKey, true)
+	}
+	if c.forceMCP || agentDef.ForceMCP {
+		taskCtx = context.WithValue(taskCtx, tools.AgentForceMCPKey, true)
 	}
 
 	timing := &taskTiming{}

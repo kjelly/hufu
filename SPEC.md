@@ -68,6 +68,7 @@ hufu [prompt]
   --tui                                Show a Bubble Tea TUI for real-time task tracking
   --rbash                              Use restricted bash (rbash) for the bash tool
   --no-net                             Block all network access for agent subprocesses
+  --force-mcp                          Force MCP mode: disable built-in execution/network tools, require MCP servers
   --direnv                             Load .envrc/.env environment for the bash tool
   --think                              Show coordinator decision reasoning
   --plan                               Force plan-first mode: agents must submit plans before executing

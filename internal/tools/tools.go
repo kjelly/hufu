@@ -113,6 +113,18 @@ var mediumRiskTools = map[string]bool{
 	"agentic_fetch":  true,
 }
 
+// ForceMCPBlockedTools are disabled when --force-mcp is enabled, forcing use of MCP servers
+var ForceMCPBlockedTools = map[string]bool{
+	"bash":          true,
+	"sudo":          true,
+	"ssh":           true,
+	"golang":        true,
+	"lua":           true,
+	"download":      true,
+	"fetch":         true,
+	"agentic_fetch": true,
+}
+
 // GetToolLevel returns the risk level of a tool
 func GetToolLevel(toolName string) string {
 	if highRiskTools[toolName] {
@@ -129,7 +141,14 @@ func GetToolLevel(toolName string) string {
 func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, error) {
 	level := GetToolLevel(toolName)
 
-	// 0. In CI/non-interactive environments, never ask the user — deny
+	// 0. ForceMCP mode: deny blocked tools immediately (defense in depth)
+	if fm, ok := ctx.Value(AgentForceMCPKey).(bool); ok && fm {
+		if ForceMCPBlockedTools[toolName] {
+			return false, false, nil
+		}
+	}
+
+	// 1. In CI/non-interactive environments, never ask the user — deny
 	// high/medium-risk tools by default since no user can respond.
 	if !isInteractiveEnvironment() {
 		switch level {
@@ -250,6 +269,9 @@ func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
 	if nb, ok := ctx.Value(AgentNetworkBlockKey).(bool); ok && nb {
 		needMerge = true
 	}
+	if fm, ok := ctx.Value(AgentForceMCPKey).(bool); ok && fm {
+		needMerge = true
+	}
 	if !needMerge {
 		return cfg
 	}
@@ -263,6 +285,7 @@ func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
 		RestrictedBash:  cfg.RestrictedBash,
 		RestrictedPath:  mergedRestrictedPath(cfg, ctx),
 		NetworkBlock:    mergedNetworkBlock(cfg, ctx),
+		ForceMCP:        mergedForceMCP(cfg, ctx),
 	}
 	return merged
 }
@@ -279,6 +302,16 @@ func mergedNetworkBlock(cfg ToolConfig, ctx context.Context) bool {
 		return true
 	}
 	if nb, ok := ctx.Value(AgentNetworkBlockKey).(bool); ok && nb {
+		return true
+	}
+	return false
+}
+
+func mergedForceMCP(cfg ToolConfig, ctx context.Context) bool {
+	if cfg.ForceMCP {
+		return true
+	}
+	if fm, ok := ctx.Value(AgentForceMCPKey).(bool); ok && fm {
 		return true
 	}
 	return false
@@ -772,6 +805,15 @@ func AllTools(opts ...ToolOption) []fantasy.AgentTool {
 		filtered := make([]fantasy.AgentTool, 0, len(tools))
 		for _, t := range tools {
 			if !netTools[t.Info().Name] {
+				filtered = append(filtered, t)
+			}
+		}
+		tools = filtered
+	}
+	if cfg.ForceMCP {
+		filtered := make([]fantasy.AgentTool, 0, len(tools))
+		for _, t := range tools {
+			if !ForceMCPBlockedTools[t.Info().Name] {
 				filtered = append(filtered, t)
 			}
 		}

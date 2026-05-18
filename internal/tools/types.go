@@ -52,6 +52,10 @@ type agentNetworkBlockKeyType struct{}
 
 var AgentNetworkBlockKey = agentNetworkBlockKeyType{}
 
+type agentForceMCPKeyType struct{}
+
+var AgentForceMCPKey = agentForceMCPKeyType{}
+
 type AskUserTUIOption struct {
 	Label string
 	Value string

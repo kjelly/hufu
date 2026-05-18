@@ -46,6 +46,7 @@ var (
 	tuiMode             bool
 	rbashMode           bool
 	noNet               bool
+	forceMCP            bool
 	think               bool
 	direnv              bool
 	varFlags            []string
@@ -96,6 +97,7 @@ func main() {
 	rootCmd.Flags().BoolVar(&tuiMode, "tui", false, "Show a Bubble Tea TUI for real-time task tracking")
 	rootCmd.Flags().BoolVar(&rbashMode, "rbash", false, "Use restricted bash (rbash) for the bash tool")
 	rootCmd.Flags().BoolVar(&noNet, "no-net", false, "Block all network access for agent subprocesses")
+	rootCmd.Flags().BoolVar(&forceMCP, "force-mcp", false, "Force MCP mode: disable built-in execution/network tools, require MCP servers")
 	rootCmd.Flags().BoolVar(&direnv, "direnv", false, "Load .envrc/.env environment for bash tool; parses .env (key=value) and/or uses direnv for full shell support")
 	rootCmd.Flags().BoolVar(&think, "think", false, "Show coordinator decision reasoning (skills, agents, tasks, system prompt)")
 	rootCmd.Flags().StringArrayVar(&varFlags, "var", nil, "Set template variable (key=value). Can be specified multiple times; later values override earlier ones")
@@ -684,8 +686,9 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	}
 
 	resolvedNoNet := noNet || cfg.NoNet || session.Config.NoNet
+	resolvedForceMCP := forceMCP || cfg.ForceMCP || session.Config.ForceMCP
 
-	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, think, direnv, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet, forcedSkills, planMode, autoSkillsMode)
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, think, direnv, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}

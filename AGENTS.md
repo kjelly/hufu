@@ -120,6 +120,7 @@ Results joined and printed to stdout
 | `--tui` | — | `false` | Show a Bubble Tea TUI for real-time task tracking |
 | `--rbash` | — | `false` | Use restricted bash (rbash) for the bash tool |
 | `--no-net` | — | `false` | Block all network access for agent subprocesses |
+| `--force-mcp` | — | `false` | Force MCP mode: disable built-in execution/network tools (bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch), require MCP servers |
 | `--direnv` | — | `false` | Load `.envrc` / `.env` environment for the bash tool |
 | `--think` | — | `false` | Show coordinator decision reasoning |
 | `--plan` | — | `false` | Force plan-first mode: agents must submit plans before executing |
@@ -440,6 +441,7 @@ auto-skills: false
 allowed-paths: ["/home/user/projects", "/tmp"]
 restricted-path: "/etc"
 no-net: false
+force-mcp: false
 
 # === Template Variables ===
 vars:
@@ -514,6 +516,7 @@ Your system prompt here.
 | `allowed-paths` | ❌ | Team default | Allowed file system paths |
 | `restricted-path` | ❌ | Team default | Restricted file system path |
 | `no-net` | ❌ | Team default | Block network access |
+| `force-mcp` | ❌ | Team default | Force MCP mode (disable execution/network tools) |
 
 ### Team Frontmatter Fields (team.yml)
 
@@ -545,6 +548,7 @@ Your system prompt here.
 | `allowed-paths` | Allowed file system paths |
 | `restricted-path` | Restricted file system path |
 | `no-net` | Block network access |
+| `force-mcp` | Force MCP mode: disable built-in execution/network tools |
 | `vars` | Template variables map |
 | `notify` | Notification configuration |
 
@@ -790,6 +794,7 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 - `--rbash` flag enables restricted bash mode
 - `--no-net` blocks network access for agent subprocesses
+- `--force-mcp` disables built-in execution/network tools (bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch), forcing use of MCP servers
 - `--direnv` loads `.envrc`/`.env` environment files
 - Dangerous commands (curl, wget, sudo, apt, etc.) are blocked by default
 
@@ -874,6 +879,8 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 39. **Chromem-go replaces ChromaDB** — The memory system previously used an external ChromaDB dependency. It now uses `github.com/philippgille/chromem-go` (in-process, no external service required).
 
 40. **TUI `View()` priority is hardcoded** — The strict 9-layer overlay priority in `View()` is not derived from any data structure. Adding a new overlay mode requires manually inserting the bool check in the correct position.
+
+41. **`--force-mcp` disables 8 built-in tools** — When enabled, blocks bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch. Agents must use MCP servers for these operations. Supports 3-level resolution: CLI flag OR global config OR team config, plus per-agent override via `force-mcp: true` in agent .md frontmatter.
 
 ## Skill Usage Tracking
 

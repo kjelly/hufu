@@ -25,6 +25,7 @@ type ToolConfig struct {
 	RestrictedPath  string
 	NetworkBlock    bool
 	Direnv          bool
+	ForceMCP        bool
 }
 
 func WithWorkDir(dir string) ToolOption {
@@ -90,6 +91,12 @@ func WithNetworkBlock(enabled bool) ToolOption {
 func WithDirenv(enabled bool) ToolOption {
 	return func(c *ToolConfig) {
 		c.Direnv = enabled
+	}
+}
+
+func WithForceMCP(enabled bool) ToolOption {
+	return func(c *ToolConfig) {
+		c.ForceMCP = enabled
 	}
 }
 

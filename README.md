@@ -165,6 +165,7 @@ go run ./cmd/hufu
 | `--tui` | — | `bool` | `false` | Show a Bubble Tea TUI for real-time task tracking |
 | `--rbash` | — | `bool` | `false` | Use restricted bash (rbash) for the bash tool |
 | `--no-net` | — | `bool` | `false` | Block all network access for agent subprocesses |
+| `--force-mcp` | — | `bool` | `false` | Force MCP mode: disable built-in execution/network tools (bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch), require MCP servers |
 | `--direnv` | — | `bool` | `false` | Load `.envrc` / `.env` environment for the bash tool |
 | `--think` | — | `bool` | `false` | Show coordinator decision reasoning |
 | `--plan` | — | `bool` | `false` | Force plan-first mode: agents must submit plans before executing |

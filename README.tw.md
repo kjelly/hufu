@@ -165,6 +165,7 @@ go run ./cmd/hufu
 | `--tui` | — | `bool` | `false` | 顯示 Bubble Tea TUI 即時任務追蹤 |
 | `--rbash` | — | `bool` | `false` | 對 bash tool 使用 restricted bash (rbash) |
 | `--no-net` | — | `bool` | `false` | 封鎖 Agent 子程序的所有網路存取 |
+| `--force-mcp` | — | `bool` | `false` | 強制 MCP 模式：停用內建執行/網路工具（bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch），需使用 MCP servers |
 | `--direnv` | — | `bool` | `false` | 為 bash tool 載入 `.envrc` / `.env` 環境 |
 | `--think` | — | `bool` | `false` | 顯示 Coordinator 決策推理 |
 | `--plan` | — | `bool` | `false` | 強制 plan-first 模式：Agent 必須先提交計畫 |

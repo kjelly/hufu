@@ -43,6 +43,7 @@ type agentFrontmatter struct {
 	AllowedPaths   any      `yaml:"allowed-paths"` // string or []string
 	RestrictedPath string   `yaml:"restricted-path"`
 	NoNet         bool     `yaml:"no-net"`
+	ForceMCP      bool     `yaml:"force-mcp"`
 }
 
 type teamConfigYAML struct {
@@ -71,6 +72,7 @@ type teamConfigYAML struct {
 	AllowedPaths    interface{}         `yaml:"allowed-paths"`
 	RestrictedPath string              `yaml:"restricted-path"`
 	NoNet          bool               `yaml:"no-net"`
+	ForceMCP       bool               `yaml:"force-mcp"`
 	Vars           map[string]interface{} `yaml:"vars"`
 	WorkerContextSize int              `yaml:"worker-context-size"`
 	ToolsAllowed   interface{}        `yaml:"tools"` // tools.allowed in YAML - string or []string
@@ -227,6 +229,9 @@ func agentFrontmatterFromSimple(m map[string]string) agentFrontmatter {
 	if v := m["no-net"]; v == "true" || v == "yes" || v == "1" {
 		fm.NoNet = true
 	}
+	if v := m["force-mcp"]; v == "true" || v == "yes" || v == "1" {
+		fm.ForceMCP = true
+	}
 	if v := m["timeout"]; v != "" {
 		var n int64
 		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n > 0 {
@@ -305,7 +310,8 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 		MaxSteps:       fm.MaxSteps,
 		AllowedPaths:   expandAllowedPaths(anyToStrList(fm.AllowedPaths)),
 		RestrictedPath: fm.RestrictedPath,
-		NoNet:         fm.NoNet,
+		NoNet:          fm.NoNet,
+		ForceMCP:       fm.ForceMCP,
 		Generation: agent.GenerationParams{
 			Model:       fm.Model,
 			Temperature: fm.Temperature,
@@ -477,6 +483,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.NoNet {
 		cfg.NoNet = true
+	}
+	if yc.ForceMCP {
+		cfg.ForceMCP = true
 	}
 	if len(yc.Vars) > 0 {
 		cfg.Vars = yc.Vars
