@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
-
+	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -24,16 +24,22 @@ type MCPTool struct {
 }
 
 type MCPToolManager struct {
-	mu      sync.RWMutex
-	tools   []MCPTool
-	clients map[string]*client.Client
-	toolMap map[string]MCPTool
+	mu            sync.RWMutex
+	tools         []MCPTool
+	clients       map[string]*client.Client
+	toolMap       map[string]MCPTool
+	agentServers  map[string]*AgentMCPServer
+	globalShell   string
+	teamShell     string
 }
 
-func NewMCPToolManager() *MCPToolManager {
+func NewMCPToolManager(globalShell, teamShell string) *MCPToolManager {
 	return &MCPToolManager{
-		clients: make(map[string]*client.Client),
-		toolMap: make(map[string]MCPTool),
+		clients:      make(map[string]*client.Client),
+		toolMap:      make(map[string]MCPTool),
+		agentServers: make(map[string]*AgentMCPServer),
+		globalShell:  globalShell,
+		teamShell:    teamShell,
 	}
 }
 
@@ -331,6 +337,41 @@ func (m *MCPToolManager) AsAgentTools() []fantasy.AgentTool {
 		return []fantasy.AgentTool{}
 	}
 	return tools
+}
+
+// LoadAgentMCPServer loads and starts an agent's MCP server
+func (m *MCPToolManager) LoadAgentMCPServer(agentName string, tools map[string]agent.MCPToolConfig, agentShell string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	server := NewAgentMCPServer(agentName, tools, m.globalShell)
+	m.agentServers[agentName] = server
+	return nil
+}
+
+// GetAgentMCPServer gets an agent's MCP server
+func (m *MCPToolManager) GetAgentMCPServer(agentName string) *AgentMCPServer {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.agentServers[agentName]
+}
+
+// UnloadAgentMCPServer unloads an agent's MCP server
+func (m *MCPToolManager) UnloadAgentMCPServer(agentName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.agentServers, agentName)
+	return nil
+}
+
+// GetAgentMCPTools gets an agent's MCP tools list
+func (m *MCPToolManager) GetAgentMCPTools(agentName string, agentShell string) []fantasy.AgentTool {
+	server := m.GetAgentMCPServer(agentName)
+	if server == nil {
+		return nil
+	}
+	return server.RegisterTools(agentShell, m.teamShell, m.globalShell)
 }
 
 type mcpAgentTool struct {

@@ -442,6 +442,7 @@ allowed-paths: ["/home/user/projects", "/tmp"]
 restricted-path: "/etc"
 no-net: false
 force-mcp: false
+shell: bash
 
 # === Template Variables ===
 vars:
@@ -489,6 +490,19 @@ provider-api-key: ""
 allowed-paths: ["src/", "tests/"]
 restricted-path: "/etc"
 no-net: false
+shell: bash
+mcp-tools:
+  run-tests:
+    cmd: go test ./...
+    desc: Run Go tests
+    inputs: [package]
+  build:
+    cmd: go build -o /tmp/app ./...
+    desc: Build the application
+  lint:
+    cmd: golangci-lint run
+    desc: Run linter
+    shell: bash
 ---
 Your system prompt here.
 ```
@@ -517,6 +531,8 @@ Your system prompt here.
 | `restricted-path` | ❌ | Team default | Restricted file system path |
 | `no-net` | ❌ | Team default | Block network access |
 | `force-mcp` | ❌ | Team default | Force MCP mode (disable execution/network tools) |
+| `shell` | ❌ | Team default | Default shell for agent's MCP tools (e.g., `bash`, `zsh`, `nu`, or full path like `/usr/bin/nu`) |
+| `mcp-tools` | ❌ | — | Custom MCP tools (dict format: `{tool-name: {cmd, desc, inputs, shell, dir}}`) |
 
 ### Team Frontmatter Fields (team.yml)
 
@@ -549,6 +565,7 @@ Your system prompt here.
 | `restricted-path` | Restricted file system path |
 | `no-net` | Block network access |
 | `force-mcp` | Force MCP mode: disable built-in execution/network tools |
+| `shell` | Default shell for all agents in this team (searched from PATH, e.g., `bash`, `zsh`, `nu`) |
 | `vars` | Template variables map |
 | `notify` | Notification configuration |
 

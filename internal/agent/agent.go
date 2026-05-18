@@ -26,6 +26,14 @@ type GenerationParams struct {
 	TopK        string
 }
 
+type MCPToolConfig struct {
+	Cmd    string   `yaml:"cmd"`
+	Desc   string   `yaml:"desc"`
+	Inputs []string `yaml:"inputs"`
+	Shell  string   `yaml:"shell"`
+	Dir    string   `yaml:"dir"`
+}
+
 type AgentDef struct {
 	Name           string
 	FileAlias      string
@@ -43,6 +51,8 @@ type AgentDef struct {
 	RestrictedPath string
 	NoNet          bool
 	ForceMCP       bool
+	Shell          string
+	MCPTools       map[string]MCPToolConfig
 	ProviderURL    string
 	Generation     GenerationParams
 }
@@ -70,6 +80,7 @@ type TeamConfig struct {
 	RestrictedPath string
 	NoNet            bool
 	ForceMCP         bool
+	Shell            string
 	Vars             map[string]interface{}
 	WorkerContextSize int
 	ToolsAllowed   []string // List of explicitly allowed tools

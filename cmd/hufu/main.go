@@ -623,8 +623,17 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	stderrLog("%s\n", strings.Join(agentDisplayNames, ", "))
 
 	var mcpManager *mcp.MCPToolManager
+	cfg := config.LoadConfig()
 	if len(session.MCPServers) > 0 {
-		mcpManager = mcp.NewMCPToolManager()
+		globalShell := cfg.Shell
+		if globalShell == "" {
+			globalShell = "bash"
+		}
+		teamShell := session.Config.Shell
+		if teamShell == "" {
+			teamShell = globalShell
+		}
+		mcpManager = mcp.NewMCPToolManager(globalShell, teamShell)
 		stderrLog("%s Loading MCP servers...\n", stepStyle.Render("⟳"))
 		if err := mcpManager.LoadTools(ctx, session.MCPServers); err != nil {
 			stderrLog("%s MCP loading failed: %v\n", errStyle.Render("⚠"), err)
@@ -648,7 +657,6 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		stderrLog("%s Memory: disabled\n", dimStyle.Render("○"))
 	}
 
-	cfg := config.LoadConfig()
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
 	resolvedSidecarModel := cfg.ResolveSidecarModel(session.Config.SidecarModel)
 	resolvedGuardModel := cfg.ResolveGuardModel(session.Config.GuardModel, session.Config.SidecarModel)

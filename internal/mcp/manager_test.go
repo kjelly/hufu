@@ -6,7 +6,7 @@ import (
 
 // TestNewMCPToolManager tests the NewMCPToolManager function
 func TestNewMCPToolManager(t *testing.T) {
-	manager := NewMCPToolManager()
+	manager := NewMCPToolManager("bash", "bash")
 
 	if manager == nil {
 		t.Fatal("NewMCPToolManager() returned nil")
@@ -27,7 +27,7 @@ func TestNewMCPToolManager(t *testing.T) {
 
 // TestMCPToolManagerGetTools tests the GetTools method
 func TestMCPToolManagerGetTools(t *testing.T) {
-	manager := NewMCPToolManager()
+	manager := NewMCPToolManager("bash", "bash")
 
 	// Initially should return empty slice
 	tools := manager.GetTools()
@@ -41,7 +41,7 @@ func TestMCPToolManagerGetTools(t *testing.T) {
 
 // TestMCPToolManagerAsAgentTools tests the AsAgentTools method
 func TestMCPToolManagerAsAgentTools(t *testing.T) {
-	manager := NewMCPToolManager()
+	manager := NewMCPToolManager("bash", "bash")
 
 	// Initially should return empty slice
 	tools := manager.AsAgentTools()
@@ -159,7 +159,7 @@ func TestIsToolAllowed(t *testing.T) {
 
 // TestMCPToolManagerGetToolsWithTools tests GetTools after adding tools
 func TestMCPToolManagerGetToolsWithTools(t *testing.T) {
-	manager := NewMCPToolManager()
+	manager := NewMCPToolManager("bash", "bash")
 
 	// Manually add a tool for testing
 	manager.mu.Lock()
@@ -185,7 +185,7 @@ func TestMCPToolManagerGetToolsWithTools(t *testing.T) {
 
 // TestMCPToolManagerAsAgentToolsWithTools tests AsAgentTools after adding tools
 func TestMCPToolManagerAsAgentToolsWithTools(t *testing.T) {
-	manager := NewMCPToolManager()
+	manager := NewMCPToolManager("bash", "bash")
 
 	// Manually add a tool for testing
 	manager.mu.Lock()
@@ -208,7 +208,7 @@ func TestMCPToolManagerAsAgentToolsWithTools(t *testing.T) {
 
 // TestMCPToolManagerConcurrentAccess tests concurrent access to MCPToolManager
 func TestMCPToolManagerConcurrentAccess(t *testing.T) {
-	manager := NewMCPToolManager()
+	manager := NewMCPToolManager("bash", "bash")
 
 	done := make(chan bool)
 
@@ -249,7 +249,7 @@ func TestMCPToolManagerConcurrentAccess(t *testing.T) {
 
 // TestMCPToolManagerClose tests the Close method
 func TestMCPToolManagerClose(t *testing.T) {
-	manager := NewMCPToolManager()
+	manager := NewMCPToolManager("bash", "bash")
 
 	err := manager.Close()
 	if err != nil {
@@ -265,7 +265,7 @@ func TestMCPToolManagerClose(t *testing.T) {
 
 // TestMCPToolManagerCloseMultipleTimes tests calling Close multiple times
 func TestMCPToolManagerCloseMultipleTimes(t *testing.T) {
-	manager := NewMCPToolManager()
+	manager := NewMCPToolManager("bash", "bash")
 
 	err1 := manager.Close()
 	err2 := manager.Close()
@@ -281,7 +281,7 @@ func TestMCPToolManagerCloseMultipleTimes(t *testing.T) {
 
 // TestMCPToolInfo tests the Info method of mcpAgentTool
 func TestMCPToolInfo(t *testing.T) {
-	manager := NewMCPToolManager()
+	manager := NewMCPToolManager("bash", "bash")
 
 	// Add a tool
 	manager.mu.Lock()
@@ -320,7 +320,7 @@ func TestMCPToolInfo(t *testing.T) {
 
 // TestMCPToolProviderOptions tests the ProviderOptions methods of mcpAgentTool
 func TestMCPToolProviderOptions(t *testing.T) {
-	manager := NewMCPToolManager()
+	manager := NewMCPToolManager("bash", "bash")
 
 	// Add a tool
 	manager.mu.Lock()
@@ -400,7 +400,7 @@ func TestBlockedEnvVars(t *testing.T) {
 
 // TestMCPToolManagerGetToolsThreadSafety tests thread safety of GetTools
 func TestMCPToolManagerGetToolsThreadSafety(t *testing.T) {
-	manager := NewMCPToolManager()
+	manager := NewMCPToolManager("bash", "bash")
 
 	done := make(chan bool)
 
@@ -422,7 +422,7 @@ func TestMCPToolManagerGetToolsThreadSafety(t *testing.T) {
 
 // TestMCPToolManagerAsAgentToolsThreadSafety tests thread safety of AsAgentTools
 func TestMCPToolManagerAsAgentToolsThreadSafety(t *testing.T) {
-	manager := NewMCPToolManager()
+	manager := NewMCPToolManager("bash", "bash")
 
 	done := make(chan bool)
 
@@ -444,7 +444,7 @@ func TestMCPToolManagerAsAgentToolsThreadSafety(t *testing.T) {
 
 // TestMCPToolManagerEmptyTools tests GetTools with empty tools
 func TestMCPToolManagerEmptyTools(t *testing.T) {
-	manager := NewMCPToolManager()
+	manager := NewMCPToolManager("bash", "bash")
 
 	tools := manager.GetTools()
 
@@ -459,7 +459,7 @@ func TestMCPToolManagerEmptyTools(t *testing.T) {
 
 // TestMCPToolManagerEmptyToolMap tests GetTools with empty toolMap
 func TestMCPToolManagerEmptyToolMap(t *testing.T) {
-	manager := NewMCPToolManager()
+	manager := NewMCPToolManager("bash", "bash")
 
 	// Manually set toolMap to empty
 	manager.mu.Lock()

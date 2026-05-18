@@ -42,8 +42,10 @@ type agentFrontmatter struct {
 	ProviderURL    string   `yaml:"provider-url"`
 	AllowedPaths   any      `yaml:"allowed-paths"` // string or []string
 	RestrictedPath string   `yaml:"restricted-path"`
-	NoNet         bool     `yaml:"no-net"`
-	ForceMCP      bool     `yaml:"force-mcp"`
+	NoNet          bool     `yaml:"no-net"`
+	ForceMCP       bool     `yaml:"force-mcp"`
+	Shell          string   `yaml:"shell"`
+	MCPTools       map[string]agent.MCPToolConfig `yaml:"mcp-tools"`
 }
 
 type teamConfigYAML struct {
@@ -73,6 +75,7 @@ type teamConfigYAML struct {
 	RestrictedPath string              `yaml:"restricted-path"`
 	NoNet          bool               `yaml:"no-net"`
 	ForceMCP       bool               `yaml:"force-mcp"`
+	Shell          string             `yaml:"shell"`
 	Vars           map[string]interface{} `yaml:"vars"`
 	WorkerContextSize int              `yaml:"worker-context-size"`
 	ToolsAllowed   interface{}        `yaml:"tools"` // tools.allowed in YAML - string or []string
@@ -312,6 +315,8 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 		RestrictedPath: fm.RestrictedPath,
 		NoNet:          fm.NoNet,
 		ForceMCP:       fm.ForceMCP,
+		Shell:          fm.Shell,
+		MCPTools:       fm.MCPTools,
 		Generation: agent.GenerationParams{
 			Model:       fm.Model,
 			Temperature: fm.Temperature,
@@ -486,6 +491,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.ForceMCP {
 		cfg.ForceMCP = true
+	}
+	if yc.Shell != "" {
+		cfg.Shell = yc.Shell
 	}
 	if len(yc.Vars) > 0 {
 		cfg.Vars = yc.Vars

@@ -40,6 +40,7 @@ type Config struct {
 	RestrictedPath string                    `yaml:"restricted-path"`
 	NoNet          bool                      `yaml:"no-net"`
 	ForceMCP       bool                      `yaml:"force-mcp"`
+	Shell          string                    `yaml:"shell"`
 	RawVars        interface{}               `yaml:"vars"`
 	Hooks          map[string]string         `yaml:"hooks"`
 	Notify         notify.NotifyConfig       `yaml:"notify"`

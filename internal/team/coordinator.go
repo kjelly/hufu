@@ -3506,6 +3506,13 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing)
 		}()
 
+		// Cleanup agent-specific MCP server after execution
+		if len(agentDef.MCPTools) > 0 {
+			defer func() {
+				_ = c.mcpManager.UnloadAgentMCPServer(agentName)
+			}()
+		}
+
 		if err == nil {
 			c.pendingPlansMu.Lock()
 			planEntry := c.pendingPlans[todoID]
@@ -4010,6 +4017,18 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 	agentTools := agent.SelectTools(c.coreTools, agentDef.Tools)
 	if c.mcpManager != nil {
 		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
+		
+		// Load agent-specific MCP tools if defined
+		if len(agentDef.MCPTools) > 0 {
+			err := c.mcpManager.LoadAgentMCPServer(agentDef.Name, agentDef.MCPTools, agentDef.Shell)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load MCP server for agent %s: %w", agentDef.Name, err)
+			}
+			mcpTools := c.mcpManager.GetAgentMCPTools(agentDef.Name, agentDef.Shell)
+			if len(mcpTools) > 0 {
+				agentTools = append(agentTools, mcpTools...)
+			}
+		}
 	}
 
 	getAgModelID := c.resolveAgentModel(agentDef, "")
