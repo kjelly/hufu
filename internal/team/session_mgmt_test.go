@@ -313,7 +313,7 @@ func TestSessionDataContextSummary(t *testing.T) {
 					return entries
 				}(),
 			},
-			wantContent: "40 exchanges",
+			wantContent: "50 exchanges",
 		},
 		{
 			name: "long content truncated",

@@ -585,6 +585,9 @@ func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
 	}
 	duration = time.Since(t.taskStart)
 	toolTime = t.toolTime
+	if !t.counting {
+		return duration, 0, toolTime
+	}
 	modelTime = duration - toolTime
 	if modelTime < 0 {
 		modelTime = 0
@@ -2766,7 +2769,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
 		}
-		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(desc)
+		key := strings.ToLower(t.Agent) + ":" + normalizeTaskDesc(desc)
 		localCounts[key]++
 	}
 
@@ -2779,7 +2782,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
 		}
-		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(desc)
+		key := strings.ToLower(t.Agent) + ":" + normalizeTaskDesc(desc)
 		batchSeen[key]++
 
 		// Check if this exact task was already delegated in a previous round
@@ -2806,7 +2809,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
 		}
-		key := strings.ToLower(t.Agent) + ":" + truncateTaskDesc(desc)
+		key := strings.ToLower(t.Agent) + ":" + normalizeTaskDesc(desc)
 		c.delegatedTasks[key]++
 	}
 	c.delegatedTasksMu.Unlock()
@@ -2847,6 +2850,7 @@ func formatTaskResults(results []agentTaskResult, totalTasks int, duplicateWarni
 			errorCount++
 			b.WriteString(fmt.Sprintf("## Agent: %s\n**Status**: ERROR\n**Error**: %s", r.agentName, r.err))
 		} else if r.planText != "" {
+			successCount++
 			b.WriteString(fmt.Sprintf("## Agent: %s\n**Status**: PLAN SUBMITTED\n**Todo ID**: %s\n\n%s", r.agentName, r.todoID, r.planText))
 		} else {
 			successCount++
@@ -5335,6 +5339,10 @@ func truncateTaskDesc(task string) string {
 		return string(runes[:maxLen])
 	}
 	return task
+}
+
+func normalizeTaskDesc(task string) string {
+	return strings.Join(strings.Fields(strings.ToLower(task)), " ")
 }
 
 type dryRunAgentsTool struct {

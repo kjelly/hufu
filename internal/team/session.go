@@ -118,18 +118,33 @@ func ArchiveSession(workspace string, summary string) error {
 	shortDesc := "session"
 	lines := strings.SplitN(summary, "\n", 2)
 	if len(lines) > 0 {
-		first := strings.TrimSpace(lines[0])
-		first = strings.TrimPrefix(first, "# ")
-		first = strings.TrimSpace(first)
-		if first != "" {
-			slug := strings.ToLower(first)
-			slug = strings.ReplaceAll(slug, " ", "-")
-			slug = strings.ReplaceAll(slug, "/", "-")
-			if len(slug) > 40 {
-				slug = slug[:40]
+		firstLine := strings.TrimSpace(lines[0])
+		if strings.HasPrefix(firstLine, "# ") {
+			first := strings.TrimSpace(strings.TrimPrefix(firstLine, "# "))
+			if first != "" {
+				// Slugify: lowercase, replace spaces and special chars with hyphens
+				slug := strings.ToLower(first)
+				var b strings.Builder
+				for _, r := range slug {
+					if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+						b.WriteRune(r)
+					} else {
+						b.WriteRune('-')
+					}
+				}
+				slug = b.String()
+				// Replace multiple hyphens with single hyphen
+				for strings.Contains(slug, "--") {
+					slug = strings.ReplaceAll(slug, "--", "-")
+				}
+				if len(slug) > 40 {
+					slug = slug[:40]
+				}
+				slug = strings.Trim(slug, "-.")
+				if slug != "" {
+					shortDesc = slug
+				}
 			}
-			slug = strings.Trim(slug, "-.")
-			shortDesc = slug
 		}
 	}
 
@@ -148,6 +163,9 @@ func ArchiveSession(workspace string, summary string) error {
 }
 
 func HasSession(workspace string) bool {
-	_, err := os.Stat(filepath.Join(workspace, sessionFile))
-	return err == nil
+	fi, err := os.Stat(filepath.Join(workspace, sessionFile))
+	if err != nil {
+		return false
+	}
+	return !fi.IsDir()
 }

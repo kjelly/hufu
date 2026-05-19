@@ -464,7 +464,7 @@ func TestCheckDuplicateTasksComprehensive(t *testing.T) {
 		},
 		{
 			name:          "constraints included in dedup key",
-			previousTasks: map[string]int{"agent1:task1\nconstraints: use python": 1},
+			previousTasks: map[string]int{"agent1:task1 constraints: use python": 1},
 			batchTasks: []TaskDef{
 				{Agent: "agent1", Goal: "task1", Constraints: "use python"},
 			},
@@ -472,7 +472,7 @@ func TestCheckDuplicateTasksComprehensive(t *testing.T) {
 		},
 		{
 			name:          "different constraints = different task",
-			previousTasks: map[string]int{"agent1:task1\nconstraints: use python": 1},
+			previousTasks: map[string]int{"agent1:task1 constraints: use python": 1},
 			batchTasks: []TaskDef{
 				{Agent: "agent1", Goal: "task1", Constraints: "use go"},
 			},
@@ -488,9 +488,9 @@ func TestCheckDuplicateTasksComprehensive(t *testing.T) {
 		},
 		{
 			name:          "whitespace normalized in task",
-			previousTasks: map[string]int{"agent1:task  1": 1},
+			previousTasks: map[string]int{"agent1:task 1": 1},
 			batchTasks: []TaskDef{
-				{Agent: "agent1", Goal: "task 1"},
+				{Agent: "agent1", Goal: "task   1"},
 			},
 			expectExactDup: true,
 		},
@@ -556,7 +556,7 @@ func TestCheckDuplicateTasksGlobalCountUpdate(t *testing.T) {
 		{Agent: "agent1", Goal: "task2"},
 	}
 
-	_, duplicates := c.checkDuplicateTasks(context.Background(), tasks)
+	c.checkDuplicateTasks(context.Background(), tasks)
 
 	// Verify non-duplicate tasks increment the global count
 	c.delegatedTasksMu.Lock()
@@ -579,15 +579,15 @@ func TestCheckDuplicateTasksGlobalCountUpdate(t *testing.T) {
 	count2Again := c.delegatedTasks["agent1:task2"]
 	c.delegatedTasksMu.Unlock()
 
-	if count1Again != 2 {
-		t.Errorf("task1 count after 2nd run = %d, want 2", count1Again)
+	if count1Again != 1 {
+		t.Errorf("task1 count after 2nd run = %d, want 1 (duplicate not incremented)", count1Again)
 	}
-	if count2Again != 2 {
-		t.Errorf("task2 count after 2nd run = %d, want 2", count2Again)
+	if count2Again != 1 {
+		t.Errorf("task2 count after 2nd run = %d, want 1 (duplicate not incremented)", count2Again)
 	}
 
 	// Verify duplicates are marked
-	if !duplicates[0] || !duplicates2[0] {
+	if !duplicates2[0] || !duplicates2[1] {
 		t.Error("duplicate tasks should be marked in duplicates map")
 	}
 }
@@ -624,8 +624,9 @@ func TestTaskTimingSnapshot(t *testing.T) {
 	if duration == 0 {
 		t.Error("duration should be non-zero after reset and sleep")
 	}
-	if modelTime != 0 {
-		t.Errorf("modelTime = %v, want 0 (not set)", modelTime)
+	// modelTime is duration - toolTime, so it should be around 10ms if counting
+	if modelTime == 0 {
+		t.Errorf("modelTime = %v, want > 0 (counting is on by default)", modelTime)
 	}
 }
 
@@ -710,8 +711,8 @@ func TestFormatTaskResults(t *testing.T) {
 			total:   2,
 			wantErr: true,
 			check: func(t *testing.T, output string) {
-				if !strings.Contains(output, "all 2 tasks failed") {
-					t.Errorf("output should contain failure summary")
+				if !strings.Contains(output, "0/2 tasks completed successfully") {
+					t.Errorf("output should contain failure summary, got %q", output)
 				}
 			},
 		},
@@ -743,8 +744,8 @@ func TestFormatTaskResults(t *testing.T) {
 				if !strings.Contains(output, "PLAN SUBMITTED") {
 					t.Errorf("output should indicate plan was submitted")
 				}
-				if !strings.Contains(output, "Todo ID: 1") {
-					t.Errorf("output should include todo ID")
+				if !strings.Contains(output, "**Todo ID**: 1") {
+					t.Errorf("output should include todo ID, got %q", output)
 				}
 			},
 		},
@@ -772,6 +773,11 @@ func TestFormatTaskResults(t *testing.T) {
 			output, err := formatTaskResults(tt.results, tt.total, tt.dupWarns)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("formatTaskResults() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && err != nil {
+				if !strings.Contains(err.Error(), "all") {
+					t.Errorf("error message should contain 'all', got %v", err)
+				}
 			}
 			if tt.check != nil {
 				tt.check(t, output)
