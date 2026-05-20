@@ -121,6 +121,17 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		return fantasy.NewTextErrorResponse("host parameter is required"), nil
 	}
 
+	// Parse SSH config and merge with explicit parameters
+	sshConfig, _ := GetSSHConfig(args.Host)
+
+	// Use config values if not explicitly provided
+	if args.Port == 0 && sshConfig.Port != 0 {
+		args.Port = sshConfig.Port
+	}
+	if args.IdentityFile == "" && sshConfig.IdentityFile != "" {
+		args.IdentityFile = sshConfig.IdentityFile
+	}
+
 	timeout := defaultSSHTimeout
 	if args.Timeout > 0 {
 		timeout = time.Duration(args.Timeout) * time.Second
