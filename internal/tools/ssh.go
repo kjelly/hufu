@@ -10,6 +10,7 @@ import (
 	"io"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +59,48 @@ func NewSshTool(opts ...ToolOption) fantasy.AgentTool {
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			return executeSSH(ctx, call)
 		},
+	}
+}
+
+func diagnoseSSHErrors(exitCode int, stderr string) string {
+	switch {
+	case strings.Contains(stderr, "Permission denied"):
+		return "SSH authentication failed. Check:\n" +
+			"- Identity file permissions (chmod 600)\n" +
+			"- SSH agent forwarding (ssh-add -l)\n" +
+			"- User@host format"
+	case strings.Contains(stderr, "Connection refused"):
+		return "SSH connection refused. Check:\n" +
+			"- SSH daemon running on remote (systemctl status sshd)\n" +
+			"- Correct port number\n" +
+			"- Firewall rules"
+	case strings.Contains(stderr, "No route to host"):
+		return "Host unreachable. Check:\n" +
+			"- Network connectivity\n" +
+			"- Hostname/IP correctness\n" +
+			"- DNS resolution"
+	case exitCode == 124:
+		return "SSH connection timed out. Consider:\n" +
+			"- Increasing timeout parameter\n" +
+			"- Checking network latency\n" +
+			"- Verifying host availability"
+	default:
+		return stderr
+	}
+}
+
+func getSSHErrorTitle(exitCode int, stderr string) string {
+	switch {
+	case strings.Contains(stderr, "Permission denied"):
+		return "Authentication Failed"
+	case strings.Contains(stderr, "Connection refused"):
+		return "Connection Refused"
+	case strings.Contains(stderr, "No route to host"):
+		return "Host Unreachable"
+	case exitCode == 124:
+		return "Timeout"
+	default:
+		return "SSH Error"
 	}
 }
 
@@ -139,10 +182,19 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 	}
 
 	response := buildBashResponse(stdout.String(), stderr.String(), exitCode)
-	
-	// Add SSH context hint for agent
-	if exitCode == 0 {
-		// Append SSH context hint to the response content
+
+	// Enhanced error diagnostics
+	if exitCode != 0 {
+		diagnosedMsg := diagnoseSSHErrors(exitCode, stderr.String())
+		response.Content = fmt.Sprintf(
+			"[SSH Error: %s]\n\n%s\n\nOriginal error: %s",
+			getSSHErrorTitle(exitCode, stderr.String()),
+			diagnosedMsg,
+			stderr.String(),
+		)
+		response.IsError = true
+	} else {
+		// Add SSH context hint for agent (only on success)
 		response.Content += fmt.Sprintf(
 			"\n\n[SSH Session Active] You have connected to %s. "+
 				"To execute additional commands on this host, use the ssh tool again with the SAME host identifier (keep using '%s' as provided). "+
@@ -151,6 +203,6 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 			args.Host,
 		)
 	}
-	
+
 	return response, nil
 }
