@@ -60,6 +60,7 @@
 - 🔍 **Dry Run Mode** — Preview execution plan without running agents
 - 📝 **Plan-First Mode** — Require agents to submit plans before execution
 - 📊 **Report Generation** — Full execution report as markdown
+- 🌐 **SSH Tool** — Enhanced with session management, error diagnostics, SCP support, SSH config integration, connection reuse, and audit logging
 
 ---
 

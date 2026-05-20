@@ -712,6 +712,7 @@ func (r *PromptReader) Close() error
 - `bash` — Execute shell commands (timeout: 120s, max 600s)
 - `sudo` — Execute commands with root privileges
 - `ssh` — Execute commands on remote hosts via SSH
+- `scp` — Transfer files to/from remote hosts
 - `view` — Read file contents (with line numbers)
 - `write` — Write file contents, auto-creates directories
 - `edit` — Edit files by replacing exact text
