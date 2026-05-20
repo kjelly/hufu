@@ -187,6 +187,22 @@ Active SSH sessions are tracked and displayed in the TUI:
 - **Status Bar**: Shows "SSH: N active" when sessions are present
 - **Team Info Panel** (press `i`): Displays active SSH session count
 
+**Important**: Sessions represent **currently-executing SSH commands**, not persistent connections.
+
+Session lifecycle:
+1. Created when `executeSSH()` starts
+2. Tracked in SSHSessionManager during command execution
+3. Closed automatically when command completes (via defer)
+
+The session count shows how many SSH commands are running **concurrently**.
+This is useful for:
+- Monitoring parallel SSH operations
+- Audit trail (which agents connected to which hosts)
+- Debugging stuck or long-running commands
+
+For persistent SSH connections, use the `connection_reuse` parameter (ControlMaster),
+which keeps the underlying SSH socket open for subsequent commands.
+
 Sessions are automatically created when SSH connections are established and closed when commands complete.
 
 ## Audit Logging

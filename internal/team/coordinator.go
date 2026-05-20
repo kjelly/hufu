@@ -470,6 +470,7 @@ type Coordinator struct {
 	currentTodoID         string
 	currentTodoIDMu       sync.RWMutex
 	auditLogger           *audit.AuditLogger
+	sshSessionMgr         *tools.SSHSessionManager
 	skillUsage            map[string]*skillUsageState
 	skillUsageMu          sync.Mutex
 	delegatedTasks        map[string]int
@@ -651,6 +652,9 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		audit.SetDefault(auditLogger)
 	}
 
+	// Initialize SSH session manager
+	c.sshSessionMgr = tools.NewSSHSessionManager()
+
 	c.coreTools = append(c.coreTools,
 		&requestAgentTool{coordinator: c},
 		&todoTool{coordinator: c},
@@ -718,6 +722,10 @@ func (c *Coordinator) Hooks() *hooks.HookRegistry {
 }
 
 func (c *Coordinator) report(event StatusEvent) {
+	// Populate SSH session count automatically
+	if c.sshSessionMgr != nil {
+		event.SSHSessions = c.sshSessionMgr.Count()
+	}
 	c.reportStatus(event)
 }
 
@@ -4023,6 +4031,9 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 	}
 
 	agentDef = c.injectWorkerContext(ctx, agentDef)
+
+	// Inject SSH session manager into context
+	ctx = tools.SetSSHSessionManager(ctx, c.sshSessionMgr)
 
 	agentTools := agent.SelectTools(c.coreTools, agentDef.Tools)
 	if c.mcpManager != nil {
