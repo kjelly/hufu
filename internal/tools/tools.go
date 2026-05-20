@@ -147,7 +147,7 @@ func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, erro
 	// 0. ForceMCP mode: deny blocked tools immediately (defense in depth)
 	if fm, ok := ctx.Value(AgentForceMCPKey).(bool); ok && fm {
 		if ForceMCPBlockedTools[toolName] {
-			return false, false, nil
+			return false, false, fmt.Errorf("tool '%s' is blocked by --force-mcp. Use an MCP server instead", toolName)
 		}
 	}
 

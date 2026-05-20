@@ -62,6 +62,14 @@ func NewSshTool(opts ...ToolOption) fantasy.AgentTool {
 }
 
 func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	// Check force-mcp mode
+	if fm, ok := ctx.Value(AgentForceMCPKey).(bool); ok && fm {
+		return fantasy.NewTextErrorResponse(
+			"ssh tool is blocked by --force-mcp. " +
+				"Use an MCP server for SSH operations instead.",
+		), nil
+	}
+
 	var args sshArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("host parameter is required"), nil
