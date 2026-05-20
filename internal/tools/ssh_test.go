@@ -138,3 +138,38 @@ func TestGetSSHErrorTitle(t *testing.T) {
 		})
 	}
 }
+
+func TestSSH_ConnectionReuse(t *testing.T) {
+	tool := NewSshTool()
+	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
+	
+	input := `{
+		"host": "user@example.com",
+		"command": "uptime",
+		"connection_reuse": true
+	}`
+	
+	_, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	t.Log("Connection reuse parameter accepted")
+}
+
+func TestSSH_ControlPath(t *testing.T) {
+	tool := NewSshTool()
+	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
+	
+	input := `{
+		"host": "user@example.com",
+		"command": "uptime",
+		"connection_reuse": true,
+		"control_path": "/tmp/custom-ssh-socket"
+	}`
+	
+	_, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	t.Log("Custom control path parameter accepted")
+}

@@ -20,11 +20,13 @@ import (
 const defaultSSHTimeout = 30 * time.Second
 
 type sshArgs struct {
-	Host         string  `json:"host"`
-	Command      string  `json:"command,omitempty"`
-	Port         int     `json:"port,omitempty"`
-	IdentityFile string  `json:"identity_file,omitempty"`
-	Timeout      float64 `json:"timeout,omitempty"`
+	Host           string  `json:"host"`
+	Command        string  `json:"command,omitempty"`
+	Port           int     `json:"port,omitempty"`
+	IdentityFile   string  `json:"identity_file,omitempty"`
+	Timeout        float64 `json:"timeout,omitempty"`
+	ConnectionReuse bool   `json:"connection_reuse,omitempty"`
+	ControlPath    string  `json:"control_path,omitempty"`
 }
 
 func NewSshTool(opts ...ToolOption) fantasy.AgentTool {
@@ -35,7 +37,7 @@ func NewSshTool(opts ...ToolOption) fantasy.AgentTool {
 			Parameters: map[string]any{
 				"host": map[string]any{
 					"type":        "string",
-					"description": "Remote host in [user@]hostname format. If a hostname is provided (e.g., 'offline-test-gpu'), use it as-is. If an IP is provided, use it directly. Do not resolve hostname to IP yourself - use whichever form the user specified.",
+					"description": "Remote host in [user@]hostname format. If a hostname is provided (e.g., 'offline-test-gpu'), use it as-is. If an IP is provided, use it directly. Do not resolve hostname to IP - use whichever form the user specified.",
 				},
 				"command": map[string]any{
 					"type":        "string",
@@ -52,6 +54,14 @@ func NewSshTool(opts ...ToolOption) fantasy.AgentTool {
 				"timeout": map[string]any{
 					"type":        "number",
 					"description": "Timeout in seconds (optional, default 30s, max 600s)",
+				},
+				"connection_reuse": map[string]any{
+					"type":        "boolean",
+					"description": "Enable SSH connection reuse (ControlMaster). Subsequent connections to same host will be faster.",
+				},
+				"control_path": map[string]any{
+					"type":        "string",
+					"description": "Custom ControlPath for connection reuse (default: /tmp/hufu-ssh-%r@%h:%p)",
 				},
 			},
 			Required: []string{"host"},
@@ -148,6 +158,20 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", fmt.Sprintf("ConnectTimeout=%d", max(5, int(timeout.Seconds()/4))),
 	}
+
+	// Add connection reuse options
+	if args.ConnectionReuse {
+		controlPath := args.ControlPath
+		if controlPath == "" {
+			controlPath = "/tmp/hufu-ssh-%r@%h:%p"
+		}
+		sshArgList = append(sshArgList,
+			"-o", "ControlMaster=auto",
+			"-o", "ControlPath="+controlPath,
+			"-o", "ControlPersist=600",
+		)
+	}
+
 	if args.Port > 0 {
 		sshArgList = append(sshArgList, "-p", strconv.Itoa(args.Port))
 	}
