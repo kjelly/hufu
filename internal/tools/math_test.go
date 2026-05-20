@@ -4,6 +4,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"strings"
@@ -12,11 +13,16 @@ import (
 	"charm.land/fantasy"
 )
 
+func ctxWithMathAllowed(ctx context.Context) context.Context {
+	return SetToolsAllowed(ctx, []string{"math"})
+}
+
 func runMath(t *testing.T, expression string) mathResult {
 	t.Helper()
 	tool := NewMathTool()
+	ctx := ctxWithMathAllowed(t.Context())
 	inputBytes, _ := json.Marshal(map[string]string{"expression": expression})
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: string(inputBytes)})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: string(inputBytes)})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -33,8 +39,9 @@ func runMath(t *testing.T, expression string) mathResult {
 func runMathErr(t *testing.T, expression string) string {
 	t.Helper()
 	tool := NewMathTool()
+	ctx := ctxWithMathAllowed(t.Context())
 	inputBytes, _ := json.Marshal(map[string]string{"expression": expression})
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: string(inputBytes)})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: string(inputBytes)})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -204,8 +211,9 @@ func TestMath_ComplexExpression(t *testing.T) {
 
 func TestMath_Precision(t *testing.T) {
 	tool := NewMathTool()
+	ctx := ctxWithMathAllowed(t.Context())
 	inputBytes, _ := json.Marshal(map[string]any{"expression": "10/3", "precision": 2})
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: string(inputBytes)})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: string(inputBytes)})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -223,8 +231,9 @@ func TestMath_Precision(t *testing.T) {
 
 func TestMath_PrecisionZero(t *testing.T) {
 	tool := NewMathTool()
+	ctx := ctxWithMathAllowed(t.Context())
 	inputBytes, _ := json.Marshal(map[string]any{"expression": "10/3", "precision": 0})
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: string(inputBytes)})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: string(inputBytes)})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}

@@ -1,12 +1,17 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
 
 	"charm.land/fantasy"
 )
+
+func ctxWithRandomAllowed(ctx context.Context) context.Context {
+	return SetToolsAllowed(ctx, []string{"random"})
+}
 
 func TestRandomToolInfo(t *testing.T) {
 	tool := NewRandomTool()
@@ -21,7 +26,8 @@ func TestRandomToolInfo(t *testing.T) {
 
 func TestRandomStringDefault(t *testing.T) {
 	tool := NewRandomTool()
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: "{}"})
+	ctx := ctxWithRandomAllowed(t.Context())
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: "{}"})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -40,8 +46,9 @@ func TestRandomStringDefault(t *testing.T) {
 
 func TestRandomStringCustomLength(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"string","length":32}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -55,8 +62,9 @@ func TestRandomStringCustomLength(t *testing.T) {
 
 func TestRandomStringHexCharset(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"string","length":8,"charset":"hex"}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -75,8 +83,9 @@ func TestRandomStringHexCharset(t *testing.T) {
 
 func TestRandomStringAlphaCharset(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"string","length":20,"charset":"alpha"}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -92,8 +101,9 @@ func TestRandomStringAlphaCharset(t *testing.T) {
 
 func TestRandomStringNumericCharset(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"string","length":10,"charset":"numeric"}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -109,8 +119,9 @@ func TestRandomStringNumericCharset(t *testing.T) {
 
 func TestRandomStringInvalidCharset(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"string","charset":"invalid"}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -121,8 +132,9 @@ func TestRandomStringInvalidCharset(t *testing.T) {
 
 func TestRandomStringLengthTooLarge(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"string","length":2000}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -133,8 +145,9 @@ func TestRandomStringLengthTooLarge(t *testing.T) {
 
 func TestRandomIntegerSingle(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"integer","min":0,"max":10}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -152,8 +165,9 @@ func TestRandomIntegerSingle(t *testing.T) {
 
 func TestRandomIntegerMultiple(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"integer","min":1,"max":100,"count":5}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -176,8 +190,9 @@ func TestRandomIntegerMultiple(t *testing.T) {
 
 func TestRandomIntegerMinGreaterThanMax(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"integer","min":10,"max":5}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -188,8 +203,9 @@ func TestRandomIntegerMinGreaterThanMax(t *testing.T) {
 
 func TestRandomIntegerDefaultRange(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"integer"}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -207,8 +223,9 @@ func TestRandomIntegerDefaultRange(t *testing.T) {
 
 func TestRandomChoiceSingle(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"choice","items":["red","green","blue"]}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -227,8 +244,9 @@ func TestRandomChoiceSingle(t *testing.T) {
 
 func TestRandomChoiceMultiple(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"choice","items":["a","b","c","d","e"],"count":3}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -252,8 +270,9 @@ func TestRandomChoiceMultiple(t *testing.T) {
 
 func TestRandomChoiceNoDuplicates(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"choice","items":["a","b","c"],"count":3,"allow_duplicates":false}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -278,8 +297,9 @@ func TestRandomChoiceNoDuplicates(t *testing.T) {
 
 func TestRandomChoiceNoDuplicatesExceedsItems(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"choice","items":["a","b"],"count":3,"allow_duplicates":false}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -290,8 +310,9 @@ func TestRandomChoiceNoDuplicatesExceedsItems(t *testing.T) {
 
 func TestRandomChoiceEmptyItems(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"choice","items":[]}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -302,8 +323,9 @@ func TestRandomChoiceEmptyItems(t *testing.T) {
 
 func TestRandomChoiceWithNumbers(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	input := `{"type":"choice","items":[1,2,3,4,5],"count":2}`
-	result, err := tool.Run(t.Context(), fantasy.ToolCall{Input: input})
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -321,9 +343,10 @@ func TestRandomChoiceWithNumbers(t *testing.T) {
 
 func TestRandomUniqueness(t *testing.T) {
 	tool := NewRandomTool()
+	ctx := ctxWithRandomAllowed(t.Context())
 	results := map[string]bool{}
 	for i := 0; i < 10; i++ {
-		result, _ := tool.Run(t.Context(), fantasy.ToolCall{Input: `{}`})
+		result, _ := tool.Run(ctx, fantasy.ToolCall{Input: `{}`})
 		results[result.Content] = true
 	}
 	if len(results) < 8 {

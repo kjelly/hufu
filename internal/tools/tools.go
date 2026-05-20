@@ -139,7 +139,10 @@ func GetToolLevel(toolName string) string {
 // CheckToolPermission checks if a tool is allowed to be used.
 // Returns (allowed, askUser, error)
 func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, error) {
-	level := GetToolLevel(toolName)
+	// Special case: ask_user is always allowed (used for clarification)
+	if toolName == "ask_user" {
+		return true, false, nil
+	}
 
 	// 0. ForceMCP mode: deny blocked tools immediately (defense in depth)
 	if fm, ok := ctx.Value(AgentForceMCPKey).(bool); ok && fm {
@@ -149,19 +152,12 @@ func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, erro
 	}
 
 	// 1. In CI/non-interactive environments, never ask the user — deny
-	// high/medium-risk tools by default since no user can respond.
+	// all tools except ask_user.
 	if !isInteractiveEnvironment() {
-		switch level {
-		case ToolLevelHigh:
-			return false, false, nil
-		case ToolLevelMedium:
-			return false, false, nil
-		default:
-			return true, false, nil
-		}
+		return false, false, nil
 	}
 
-	// 1. Check permanent session-level permissions first
+	// 2. Check permanent session-level permissions first
 	if sessionPerms, ok := ctx.Value(AgentToolsSessionPermissionsKey).(map[string]bool); ok {
 		if allowed, decided := sessionPerms[toolName]; decided {
 			if allowed {
@@ -171,20 +167,11 @@ func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, erro
 		}
 	}
 
-	// 2. Check explicitly allowed tools from team.yaml (context)
+	// 3. Check explicitly allowed tools from team.yaml (context)
 	val := ctx.Value(AgentToolsAllowedKey)
 	if val == nil {
-		// Not configured: allow Low-risk, deny Medium/High in non-interactive,
-		// ask user in interactive environments.
-		switch level {
-		case ToolLevelLow:
-			return true, false, nil
-		default:
-			if isInteractiveEnvironment() {
-				return false, true, nil
-			}
-			return false, false, nil
-		}
+		// Not configured: deny all tools except ask_user
+		return false, false, nil
 	}
 
 	allowed, _ := val.([]string)
@@ -193,25 +180,13 @@ func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, erro
 		allowedMap[t] = true
 	}
 
-	switch level {
-	case ToolLevelHigh:
-		// High-risk: deny unless explicitly allowed
-		if !allowedMap[toolName] {
-			return false, false, nil
-		}
-		return true, false, nil
-
-	case ToolLevelMedium:
-		// Medium-risk: ask user unless explicitly allowed or denied
-		if allowedMap[toolName] {
-			return true, false, nil
-		}
-		return false, true, nil
-
-	default:
-		// Low-risk: always allowed
-		return true, false, nil
+	// Check if tool is in allowlist
+	if !allowedMap[toolName] {
+		return false, false, nil
 	}
+
+	// Tool is in allowlist - allow it
+	return true, false, nil
 }
 
 var ciEnvVars = []string{

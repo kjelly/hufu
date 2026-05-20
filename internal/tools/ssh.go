@@ -30,11 +30,11 @@ func NewSshTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "ssh",
-			Description: "Execute a command on a remote host via SSH. Non-interactive (batch) mode only — no password prompts. Requires key-based authentication or an already-established agent.",
+			Description: "Execute a command on a remote host via SSH. Non-interactive (batch) mode only — no password prompts. Requires key-based authentication or an already-established agent. TIP: When a hostname is provided (e.g., 'offline-test-gpu'), use it as-is rather than resolving to IP. SSH config settings (IdentityFile, User, etc.) are typically tied to hostnames.",
 			Parameters: map[string]any{
 				"host": map[string]any{
 					"type":        "string",
-					"description": "Remote host in [user@]hostname format",
+					"description": "Remote host in [user@]hostname format. If a hostname is provided (e.g., 'offline-test-gpu'), use it as-is. If an IP is provided, use it directly. Do not resolve hostname to IP yourself - use whichever form the user specified.",
 				},
 				"command": map[string]any{
 					"type":        "string",
@@ -130,5 +130,19 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		}
 	}
 
-	return buildBashResponse(stdout.String(), stderr.String(), exitCode), nil
+	response := buildBashResponse(stdout.String(), stderr.String(), exitCode)
+	
+	// Add SSH context hint for agent
+	if exitCode == 0 {
+		// Append SSH context hint to the response content
+		response.Content += fmt.Sprintf(
+			"\n\n[SSH Session Active] You have connected to %s. "+
+				"To execute additional commands on this host, use the ssh tool again with the SAME host identifier (keep using '%s' as provided). "+
+				"Do NOT embed 'ssh' in bash commands - use the ssh tool directly.",
+			args.Host,
+			args.Host,
+		)
+	}
+	
+	return response, nil
 }

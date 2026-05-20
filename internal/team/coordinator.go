@@ -2842,6 +2842,7 @@ func formatTaskResults(results []agentTaskResult, totalTasks int, duplicateWarni
 	var b strings.Builder
 	successCount := 0
 	errorCount := 0
+	planCount := 0
 	for i, r := range results {
 		if i > 0 {
 			b.WriteString("\n\n---\n\n")
@@ -2850,7 +2851,8 @@ func formatTaskResults(results []agentTaskResult, totalTasks int, duplicateWarni
 			errorCount++
 			b.WriteString(fmt.Sprintf("## Agent: %s\n**Status**: ERROR\n**Error**: %s", r.agentName, r.err))
 		} else if r.planText != "" {
-			successCount++
+			// Plan submitted - don't count as success, just informational
+			planCount++
 			b.WriteString(fmt.Sprintf("## Agent: %s\n**Status**: PLAN SUBMITTED\n**Todo ID**: %s\n\n%s", r.agentName, r.todoID, r.planText))
 		} else {
 			successCount++
@@ -2868,7 +2870,8 @@ func formatTaskResults(results []agentTaskResult, totalTasks int, duplicateWarni
 			b.WriteString(fmt.Sprintf("- %s\n", w))
 		}
 	}
-	if successCount == 0 && len(results) > 0 {
+	// Error only if all tasks failed AND no plans were submitted
+	if successCount == 0 && errorCount > 0 && planCount == 0 {
 		return b.String(), fmt.Errorf("all %d tasks failed", len(results))
 	}
 	return b.String(), nil
@@ -3403,6 +3406,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		stmPath := STMPath(c.session.Workspace)
 		prompt += fmt.Sprintf("\n\n## Instructions\n\nYou are a domain expert. Determine your own implementation approach based on the goal above.\n\n- Key knowledge from previous agents is provided below. You do NOT need to read `%s` at the start. Only read it later if you need to check for *new* updates from concurrent agents.\n- When you discover something important (API shape, file location, decision, error), write it to `stm.md` immediately via `stm_write` — do not wait until the end.", stmPath)
 	}
+
+	// SSH session tracking is handled by the ssh tool's response hint.
+	// No coordinator-level tracking is needed - each SSH call is independent.
 
 	prompt = c.appendSkillContext(prompt, agentDef, agentName, task.Goal, todoID)
 

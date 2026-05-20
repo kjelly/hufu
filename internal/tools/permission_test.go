@@ -65,37 +65,37 @@ func TestGetToolLevel_Empty(t *testing.T) {
 func TestCheckToolPermission_NoConfig_Allowed(t *testing.T) {
 	ctx := context.Background()
 
-	// High-risk tool without config - should ASK (security first)
+	// High-risk tool without config - should be denied
 	allowed, askUser, err := CheckToolPermission(ctx, "bash")
 	if err != nil {
 		t.Errorf("CheckToolPermission() unexpected error = %v", err)
 	}
 	if allowed {
-		t.Errorf("CheckToolPermission(bash) = %v, want false (security first)", allowed)
+		t.Errorf("CheckToolPermission(bash) = %v, want false", allowed)
 	}
-	if !askUser {
-		t.Errorf("CheckToolPermission(bash) askUser = %v, want true", askUser)
+	if askUser {
+		t.Errorf("CheckToolPermission(bash) askUser = %v, want false", askUser)
 	}
 
-	// Medium-risk tool without config - should ASK
+	// Medium-risk tool without config - should be denied
 	allowed, askUser, err = CheckToolPermission(ctx, "download")
 	if err != nil {
 		t.Errorf("CheckToolPermission() unexpected error = %v", err)
 	}
 	if allowed {
-		t.Errorf("CheckToolPermission(download) = %v, want false (security first)", allowed)
+		t.Errorf("CheckToolPermission(download) = %v, want false", allowed)
 	}
-	if !askUser {
-		t.Errorf("CheckToolPermission(download) askUser = %v, want true", askUser)
+	if askUser {
+		t.Errorf("CheckToolPermission(download) askUser = %v, want false", askUser)
 	}
 
-	// Low-risk tool without config - should be allowed automatically
+	// Low-risk tool without config - should be denied (requires allowlist)
 	allowed, askUser, err = CheckToolPermission(ctx, "view")
 	if err != nil {
 		t.Errorf("CheckToolPermission() unexpected error = %v", err)
 	}
-	if !allowed {
-		t.Errorf("CheckToolPermission(view) = %v, want true", allowed)
+	if allowed {
+		t.Errorf("CheckToolPermission(view) = %v, want false", allowed)
 	}
 	if askUser {
 		t.Errorf("CheckToolPermission(view) askUser = %v, want false", askUser)
@@ -182,7 +182,7 @@ func TestCheckToolPermission_MediumRisk_NotInList_AskUser(t *testing.T) {
 	ctx := context.Background()
 	ctx = SetToolsAllowed(ctx, []string{"view", "write"})
 
-	// Medium-risk tool not in allowed list - should ask user
+	// Medium-risk tool not in allowed list - should be denied
 	allowed, askUser, err := CheckToolPermission(ctx, "download")
 	if err != nil {
 		t.Errorf("CheckToolPermission() unexpected error = %v", err)
@@ -190,8 +190,8 @@ func TestCheckToolPermission_MediumRisk_NotInList_AskUser(t *testing.T) {
 	if allowed {
 		t.Errorf("CheckToolPermission(download) = %v, want false (not in allowed list)", allowed)
 	}
-	if !askUser {
-		t.Errorf("CheckToolPermission(download) askUser = %v, want true", askUser)
+	if askUser {
+		t.Errorf("CheckToolPermission(download) askUser = %v, want false", askUser)
 	}
 }
 
@@ -212,20 +212,32 @@ func TestCheckToolPermission_MediumRisk_InList_Allowed(t *testing.T) {
 	}
 }
 
-func TestCheckToolPermission_LowRisk_AlwaysAllowed(t *testing.T) {
+func TestCheckToolPermission_LowRisk_RequiresAllowlist(t *testing.T) {
 	ctx := context.Background()
 	ctx = SetToolsAllowed(ctx, []string{"view"})
 
-	// Low-risk tool - always allowed regardless of config
+	// Low-risk tool not in allowlist - should be denied
 	allowed, askUser, err := CheckToolPermission(ctx, "write")
 	if err != nil {
 		t.Errorf("CheckToolPermission() unexpected error = %v", err)
 	}
-	if !allowed {
-		t.Errorf("CheckToolPermission(write) = %v, want true (low-risk always allowed)", allowed)
+	if allowed {
+		t.Errorf("CheckToolPermission(write) = %v, want false (not in allowlist)", allowed)
 	}
 	if askUser {
 		t.Errorf("CheckToolPermission(write) askUser = %v, want false", askUser)
+	}
+
+	// Low-risk tool in allowlist - should be allowed
+	allowed, askUser, err = CheckToolPermission(ctx, "view")
+	if err != nil {
+		t.Errorf("CheckToolPermission() unexpected error = %v", err)
+	}
+	if !allowed {
+		t.Errorf("CheckToolPermission(view) = %v, want true (in allowlist)", allowed)
+	}
+	if askUser {
+		t.Errorf("CheckToolPermission(view) askUser = %v, want false", askUser)
 	}
 }
 
@@ -254,6 +266,10 @@ func TestCheckToolPermission_AllTools(t *testing.T) {
 		wantAllow bool
 		wantAsk   bool
 	}{
+		// ask_user is always allowed
+		{"ask_user always allowed", "ask_user", []string{}, true, false},
+		{"ask_user with allowlist", "ask_user", []string{"view"}, true, false},
+
 		// High-risk tools
 		{"bash denied", "bash", []string{"view"}, false, false},
 		{"bash allowed", "bash", []string{"view", "bash"}, true, false},
@@ -265,22 +281,28 @@ func TestCheckToolPermission_AllTools(t *testing.T) {
 		{"mcp allowed", "mcp", []string{"view", "mcp"}, true, false},
 
 		// Medium-risk tools
-		{"download ask", "download", []string{"view"}, false, true},
+		{"download denied", "download", []string{"view"}, false, false},
 		{"download allowed", "download", []string{"view", "download"}, true, false},
-		{"fetch ask", "fetch", []string{"view"}, false, true},
+		{"fetch denied", "fetch", []string{"view"}, false, false},
 		{"fetch allowed", "fetch", []string{"view", "fetch"}, true, false},
-		{"agentic_fetch ask", "agentic_fetch", []string{"view"}, false, true},
+		{"agentic_fetch denied", "agentic_fetch", []string{"view"}, false, false},
 		{"agentic_fetch allowed", "agentic_fetch", []string{"view", "agentic_fetch"}, true, false},
 
-		// Low-risk tools
-		{"view always allowed", "view", []string{}, true, false},
-		{"write always allowed", "write", []string{}, true, false},
-		{"edit always allowed", "edit", []string{}, true, false},
-		{"grep always allowed", "grep", []string{}, true, false},
-		{"glob always allowed", "glob", []string{}, true, false},
-		{"ls always allowed", "ls", []string{}, true, false},
-		{"ask_user always allowed", "ask_user", []string{}, true, false},
-		{"random always allowed", "random", []string{}, true, false},
+		// Low-risk tools (now require allowlist)
+		{"view denied", "view", []string{}, false, false},
+		{"view allowed", "view", []string{"view"}, true, false},
+		{"write denied", "write", []string{}, false, false},
+		{"write allowed", "write", []string{"write"}, true, false},
+		{"edit denied", "edit", []string{}, false, false},
+		{"edit allowed", "edit", []string{"edit"}, true, false},
+		{"grep denied", "grep", []string{}, false, false},
+		{"grep allowed", "grep", []string{"grep"}, true, false},
+		{"glob denied", "glob", []string{}, false, false},
+		{"glob allowed", "glob", []string{"glob"}, true, false},
+		{"ls denied", "ls", []string{}, false, false},
+		{"ls allowed", "ls", []string{"ls"}, true, false},
+		{"random denied", "random", []string{}, false, false},
+		{"random allowed", "random", []string{"random"}, true, false},
 	}
 
 	for _, tt := range tests {

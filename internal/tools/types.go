@@ -56,6 +56,19 @@ type agentForceMCPKeyType struct{}
 
 var AgentForceMCPKey = agentForceMCPKeyType{}
 
+// SSH session context key
+type sshSessionKey struct{}
+
+var SSHSessionKey = sshSessionKey{}
+
+// SSHSession represents an active SSH connection context
+type SSHSession struct {
+	Host   string // Remote host in [user@]hostname format
+	User   string // Username (extracted from host)
+	Port   int    // SSH port (default 22)
+	TaskID string // Task ID where this session was created
+}
+
 type AskUserTUIOption struct {
 	Label string
 	Value string

@@ -7,14 +7,14 @@ import (
 
 func TestCheckToolPermission_SessionDecision(t *testing.T) {
 	ctx := context.Background()
-	
-	// 1. Initially ask (Medium risk)
+
+	// 1. Without allowlist, tool is denied
 	allowed, askUser, err := CheckToolPermission(ctx, "fetch")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if allowed || !askUser {
-		t.Errorf("expected allowed=false, askUser=true, got allowed=%v, askUser=%v", allowed, askUser)
+	if allowed || askUser {
+		t.Errorf("expected allowed=false, askUser=false, got allowed=%v, askUser=%v", allowed, askUser)
 	}
 
 	// 2. Set "Always Deny" via session perms
