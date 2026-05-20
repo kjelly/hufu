@@ -57,9 +57,12 @@ type TeamInfo struct {
 	GuardModel     string
 	Workspace      string
 	TeamDir        string
+	SSHSessions    int
 }
 
 type TeamInfoMsg struct{ Info TeamInfo }
+
+type SSHSessionsMsg struct{ Count int }
 
 type WrapUpMsg struct{}
 
@@ -327,6 +330,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TeamInfoMsg:
 		m.teamInfo = msg.Info
+
+	case SSHSessionsMsg:
+		m.teamInfo.SSHSessions = msg.Count
 
 	case FinishedMsg:
 		m.finished = true
@@ -1855,6 +1861,11 @@ func (m Model) infoPanelView() string {
 		b.WriteString(boldStyle.Render("Guard:   "))
 		b.WriteString(info.GuardModel)
 		b.WriteString("\n")
+	}
+
+	if info.SSHSessions > 0 {
+		b.WriteString(boldStyle.Render("SSH:     "))
+		b.WriteString(fmt.Sprintf("%d active session(s)\n", info.SSHSessions))
 	}
 
 	b.WriteString("\n" + dimStyle.Render("esc close"))

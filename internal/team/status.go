@@ -8,22 +8,23 @@ import (
 )
 
 type StatusEvent struct {
-	Type       string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning", "timing"
-	TeamName   string
-	Agent      string
-	Message    string
-	ToolName   string
-	ToolArgs   string
-	ToolResult string
-	Step       int
-	Todos      []*TodoItem
-	SkillName  string
-	Model      string
-	Duration   time.Duration
-	ModelTime  time.Duration
-	ToolTime   time.Duration
-	TodoID     string // ID of the TodoItem this event belongs to (set for worker-task events)
-	Output     string // Final output text (set in done events for task-level events)
+	Type        string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning", "timing"
+	TeamName    string
+	Agent       string
+	Message     string
+	ToolName    string
+	ToolArgs    string
+	ToolResult  string
+	Step        int
+	Todos       []*TodoItem
+	SkillName   string
+	Model       string
+	Duration    time.Duration
+	ModelTime   time.Duration
+	ToolTime    time.Duration
+	TodoID      string // ID of the TodoItem this event belongs to (set for worker-task events)
+	Output      string // Final output text (set in done events for task-level events)
+	SSHSessions int
 }
 
 func (e StatusEvent) withOutput(output string) StatusEvent {

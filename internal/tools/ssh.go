@@ -183,6 +183,21 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		sshArgList = append(sshArgList, args.Command)
 	}
 
+	user, cleanHost := ExtractUserFromHost(args.Host)
+	if args.Port == 0 {
+		args.Port = 22
+	}
+
+	sessionMgr := GetSSHSessionManager(ctx)
+	if sessionMgr != nil {
+		session, _ := sessionMgr.Create(cleanHost, user, args.Port, "")
+		if session != nil {
+			defer func() {
+				sessionMgr.Close(cleanHost)
+			}()
+		}
+	}
+
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 

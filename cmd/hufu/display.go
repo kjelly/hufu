@@ -1203,6 +1203,10 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			if event.Todos != nil {
 				p.Send(tuipkg.TasksUpdatedMsg{Items: event.Todos})
 			}
+			if event.SSHSessions > 0 {
+				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render(fmt.Sprintf("SSH: %d active", event.SSHSessions))})
+				p.Send(tuipkg.SSHSessionsMsg{Count: event.SSHSessions})
+			}
 
 		case "plan_approved":
 			if event.Message != "" {
@@ -1380,7 +1384,7 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			if event.TodoID == "" {
 				return
 			}
-			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 prompt: "+event.Message)})
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 prompt: " + event.Message)})
 		}
 	}, tt.stopAll
 }

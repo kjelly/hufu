@@ -427,6 +427,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 				if teamInfo.MemoryEnabled {
 					teamInfo.MemoryModel = config.ResolveEmbeddingModel(memoryModel)
 				}
+				teamInfo.SSHSessions = 0
 				break
 			}
 		}
