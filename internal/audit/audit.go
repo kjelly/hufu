@@ -133,3 +133,15 @@ func LogToolResult(agent, tool, result string, isError bool) {
 		l.LogToolResult(agent, tool, result, isError)
 	}
 }
+
+func (l *AuditLogger) LogSSHConnection(agent, host, command string, exitCode int, durationMs int64) {
+	l.log(ToolAction{
+		Timestamp: time.Now().Format(time.RFC3339Nano),
+		Team:      l.teamName,
+		Agent:     agent,
+		Tool:      "ssh",
+		Action:    "ssh_connection",
+		Input:     fmt.Sprintf("host=%s, command=%s", host, truncate(command, 500)),
+		Result:    fmt.Sprintf("exit_code=%d, duration_ms=%d", exitCode, durationMs),
+	})
+}

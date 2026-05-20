@@ -15,13 +15,29 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/anomalyco/hufu/internal/audit"
 	"github.com/anomalyco/hufu/internal/hooks"
 )
 
 var askUserActive atomic.Int32
 
+type auditLoggerKeyType struct{}
+
+var AuditLoggerKey = auditLoggerKeyType{}
+
 var onAskUserStart func()
 var onAskUserDone func()
+
+func SetAuditLogger(ctx context.Context, logger *audit.AuditLogger) context.Context {
+	return context.WithValue(ctx, AuditLoggerKey, logger)
+}
+
+func GetAuditLogger(ctx context.Context) *audit.AuditLogger {
+	if v, ok := ctx.Value(AuditLoggerKey).(*audit.AuditLogger); ok {
+		return v
+	}
+	return nil
+}
 
 func SetOnAskUserStart(fn func()) {
 	onAskUserStart = fn
@@ -118,6 +134,7 @@ var ForceMCPBlockedTools = map[string]bool{
 	"bash":          true,
 	"sudo":          true,
 	"ssh":           true,
+	"scp":           true,
 	"golang":        true,
 	"lua":           true,
 	"download":      true,

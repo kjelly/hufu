@@ -105,6 +105,8 @@ func getSSHErrorTitle(exitCode int, stderr string) string {
 }
 
 func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	startTime := time.Now()
+
 	// Check force-mcp mode
 	if fm, ok := ctx.Value(AgentForceMCPKey).(bool); ok && fm {
 		return fantasy.NewTextErrorResponse(
@@ -183,6 +185,8 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 	waitErr := cmd.Wait()
 	wg.Wait()
 
+	duration := time.Since(startTime)
+
 	exitCode := 0
 	if waitErr != nil {
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
@@ -190,6 +194,18 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		} else if cmdCtx.Err() == context.DeadlineExceeded {
 			return fantasy.NewTextErrorResponse("ssh connection timed out"), nil
 		}
+	}
+
+	// Log to audit
+	if auditor := GetAuditLogger(ctx); auditor != nil {
+		agentName, _ := ctx.Value(AgentNameKey).(string)
+		auditor.LogSSHConnection(
+			agentName,
+			args.Host,
+			args.Command,
+			exitCode,
+			duration.Milliseconds(),
+		)
 	}
 
 	response := buildBashResponse(stdout.String(), stderr.String(), exitCode)
