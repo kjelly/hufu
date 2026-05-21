@@ -6,6 +6,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -29,6 +30,8 @@ type sshArgs struct {
 	Timeout         float64 `json:"timeout,omitempty"`
 	ConnectionReuse bool    `json:"connection_reuse,omitempty"`
 	ControlPath     string  `json:"control_path,omitempty"`
+	Interactive     bool    `json:"interactive,omitempty"`
+	Password        string  `json:"password,omitempty"`
 }
 
 func NewSshTool(opts ...ToolOption) fantasy.AgentTool {
@@ -68,6 +71,14 @@ func NewSshTool(opts ...ToolOption) fantasy.AgentTool {
 				"control_path": map[string]any{
 					"type":        "string",
 					"description": "Custom ControlPath for connection reuse (default: /tmp/hufu-ssh-%r@%h:%p)",
+				},
+				"interactive": map[string]any{
+					"type":        "boolean",
+					"description": "Enable interactive mode for password prompts. When true, SSH will prompt for passwords (sudo, SSH password auth, etc.) and use ask_user to request input from the user. Default: false (BatchMode).",
+				},
+				"password": map[string]any{
+					"type":        "string",
+					"description": "Pre-provided password for SSH or sudo. ⚠️ SECURITY WARNING: Avoid using this in YAML files. Prefer interactive: true to let the agent prompt the user securely.",
 				},
 			},
 			Required: []string{"host"},
@@ -118,6 +129,67 @@ func getSSHErrorTitle(exitCode int, stderr string) string {
 	default:
 		return "SSH Error"
 	}
+}
+
+// detectPasswordPrompt checks if stderr contains a password prompt
+func detectPasswordPrompt(stderr string) bool {
+	prompts := []string{
+		"password:",
+		"密碼:",
+		"passphrase",
+		"sudo",
+		"are you sure you want to continue connecting",
+	}
+	stderrLower := strings.ToLower(stderr)
+	for _, prompt := range prompts {
+		if strings.Contains(stderrLower, prompt) {
+			return true
+		}
+	}
+	return false
+}
+
+// askUserForPassword prompts the user for SSH/sudo password using ask_user tool
+func askUserForPassword(ctx context.Context, host, user, promptType string) (string, error) {
+	question := fmt.Sprintf("SSH to %s", host)
+	if user != "" {
+		question += fmt.Sprintf(" (%s)", user)
+	}
+	if promptType == "sudo" {
+		question += " requires sudo password. Please enter:"
+	} else {
+		question += " requires password. Please enter:"
+	}
+
+	// Use ask_user tool to prompt for password
+	askArgs := map[string]any{
+		"question": question,
+		"type":     "free_text",
+	}
+	
+	inputBytes, _ := json.Marshal(askArgs)
+	askTool := NewAskUserTool()
+	result, err := askTool.Run(ctx, fantasy.ToolCall{Input: string(inputBytes)})
+	if err != nil {
+		return "", err
+	}
+	if result.IsError {
+		return "", fmt.Errorf("ask_user failed: %s", result.Content)
+	}
+	
+	// Parse response
+	var reply struct {
+		Free string `json:"free_text"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &reply); err != nil {
+		return "", fmt.Errorf("failed to parse ask_user response: %w", err)
+	}
+	
+	if reply.Free == "" {
+		return "", fmt.Errorf("user provided empty password")
+	}
+	
+	return reply.Free, nil
 }
 
 func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
@@ -198,12 +270,18 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		}
 	}
 
-	// Build the SSH argument list without shell interpolation to avoid injection.
-	sshArgList := []string{
-		"-o", "BatchMode=yes",
+	// Build the SSH argument list
+	sshArgList := []string{}
+	
+	// Only use BatchMode if not in interactive mode
+	if !args.Interactive {
+		sshArgList = append(sshArgList, "-o", "BatchMode=yes")
+	}
+	
+	sshArgList = append(sshArgList,
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", fmt.Sprintf("ConnectTimeout=%d", max(5, int(timeout.Seconds()/4))),
-	}
+	)
 
 	// Add connection reuse options
 	if args.ConnectionReuse {
@@ -239,10 +317,36 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		}
 	}
 
+	// Check if password is cached in session
+	var cachedPassword string
+	if sessionMgr != nil {
+		if pwd, ok := sessionMgr.GetPassword(cleanHost); ok {
+			cachedPassword = pwd
+		}
+	}
+	
+	// Use cached password if available
+	if cachedPassword != "" && args.Password == "" {
+		args.Password = cachedPassword
+	}
+
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, "ssh", sshArgList...)
+	// Check if we need to handle password authentication
+	var cmd *exec.Cmd
+	
+	if args.Password != "" {
+		// Use password from args or cache (with sshpass if available)
+		cmd = exec.CommandContext(cmdCtx, "sshpass", "-p", args.Password, "ssh")
+		cmd.Args = append(cmd.Args, sshArgList...)
+	} else if args.Interactive {
+		// Interactive mode: run SSH and handle password prompts
+		cmd = exec.CommandContext(cmdCtx, "ssh", sshArgList...)
+	} else {
+		// Non-interactive mode (BatchMode)
+		cmd = exec.CommandContext(cmdCtx, "ssh", sshArgList...)
+	}
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -268,6 +372,46 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 	duration := time.Since(startTime)
 
 	exitCode := 0
+	stderrStr := stderr.String()
+	
+	// Check if password prompt was detected and interactive mode is enabled
+	if waitErr != nil && args.Interactive && detectPasswordPrompt(stderrStr) {
+		// Determine prompt type (sudo vs SSH password)
+		promptType := "ssh"
+		if strings.Contains(strings.ToLower(stderrStr), "sudo") {
+			promptType = "sudo"
+		}
+		
+		// Ask user for password
+		password, err := askUserForPassword(ctx, args.Host, finalUser, promptType)
+		if err == nil && password != "" {
+			// Retry SSH with password using sshpass
+			cmdCtx2, cancel2 := context.WithTimeout(ctx, timeout)
+			defer cancel2()
+			
+			// Build sshpass command
+			sshpassCmd := exec.CommandContext(cmdCtx2, "sshpass", "-p", password, "ssh")
+			sshpassCmd.Args = append(sshpassCmd.Args, sshArgList...)
+			
+			stdout2, stderr2, exitCode2 := runCommand(sshpassCmd)
+			stderrStr = stderr2
+			stdout.Reset()
+			stdout.WriteString(stdout2)
+			stderr.Reset()
+			stderr.WriteString(stderr2)
+			exitCode = exitCode2
+			waitErr = nil
+			if exitCode != 0 {
+				waitErr = fmt.Errorf("command failed with exit code %d", exitCode)
+			}
+			
+			// Cache password in session for future use (5 minute expiry)
+			if sessionMgr != nil {
+				sessionMgr.SetPassword(cleanHost, password, 5*time.Minute)
+			}
+		}
+	}
+	
 	if waitErr != nil {
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
@@ -338,4 +482,23 @@ func looksLikeIP(s string) bool {
 		return true
 	}
 	return false
+}
+
+// runCommand executes a command and returns stdout, stderr, and exit code
+func runCommand(cmd *exec.Cmd) (string, string, int) {
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	
+	err := cmd.Run()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1
+		}
+	}
+	
+	return stdout.String(), stderr.String(), exitCode
 }

@@ -53,6 +53,65 @@ func (m *SSHSessionManager) Create(host string, user string, port int, taskID st
 	return session, nil
 }
 
+// SetPassword caches a password for an SSH session with expiration
+func (m *SSHSessionManager) SetPassword(host, password string, expiry time.Duration) bool {
+	if m == nil {
+		return false
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	session, exists := m.sessions[host]
+	if !exists {
+		return false
+	}
+
+	session.Password = password
+	session.PasswordExpiry = time.Now().Add(expiry)
+	return true
+}
+
+// GetPassword retrieves a cached password if not expired
+func (m *SSHSessionManager) GetPassword(host string) (string, bool) {
+	if m == nil {
+		return "", false
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	session, exists := m.sessions[host]
+	if !exists {
+		return "", false
+	}
+
+	if time.Now().After(session.PasswordExpiry) {
+		return "", false // Password expired
+	}
+
+	return session.Password, true
+}
+
+// ClearPassword removes cached password for a session
+func (m *SSHSessionManager) ClearPassword(host string) bool {
+	if m == nil {
+		return false
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	session, exists := m.sessions[host]
+	if !exists {
+		return false
+	}
+
+	session.Password = ""
+	session.PasswordExpiry = time.Time{}
+	return true
+}
+
 // Get retrieves an SSH session by host
 // Returns nil if session not found or manager is nil
 func (m *SSHSessionManager) Get(host string) *SSHSession {

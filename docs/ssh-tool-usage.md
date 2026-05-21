@@ -25,6 +25,8 @@ The SSH tool in hufu allows agents to execute commands on remote hosts via SSH. 
 | `timeout` | number | ❌ | 30 | Timeout in seconds (max 600s) |
 | `connection_reuse` | boolean | ❌ | false | Enable SSH connection reuse (ControlMaster) |
 | `control_path` | string | ❌ | /tmp/hufu-ssh-%r@%h:%p | Custom ControlPath for connection reuse |
+| `interactive` | boolean | ❌ | false | Enable interactive mode for password prompts. When true, SSH will prompt for passwords (sudo, SSH password auth) and use `ask_user` to request input from the user. |
+| `password` | string | ❌ | — | Pre-provided password for SSH or sudo. ⚠️ **SECURITY WARNING**: Avoid using this in YAML files. Prefer `interactive: true` to let the agent prompt the user securely. |
 
 ### Parameter Priority
 
@@ -139,6 +141,104 @@ Host *.prod.example.com
     port: 2222  # Overrides SSH config's Port=22
     command: "uptime"
 ```
+
+## Interactive Mode (Password Authentication)
+
+The SSH tool supports password-based authentication via the `interactive` parameter:
+
+```yaml
+# Enable interactive mode for password prompts
+- tool: ssh
+  args:
+    host: user@example.com
+    command: "sudo apt update"
+    interactive: true
+```
+
+When `interactive: true`:
+1. SSH runs without `BatchMode=yes`, allowing password prompts
+2. If a password prompt is detected (e.g., "password:", "sudo"), the agent uses `ask_user` to securely request input from you
+3. The password is then provided to SSH via `sshpass` for the actual connection
+
+### Security Best Practices
+
+**Preferred**: Use `interactive: true` to let the agent prompt you securely:
+```yaml
+- tool: ssh
+  args:
+    host: server.example.com
+    command: "sudo systemctl restart nginx"
+    interactive: true
+```
+
+**Avoid**: Embedding passwords in YAML files:
+```yaml
+# ⚠️ INSECURE: Password visible in plain text
+- tool: ssh
+  args:
+    host: server.example.com
+    password: "my-secret-password"
+    command: "uptime"
+```
+
+### Use Cases
+
+| Scenario | Recommended Approach |
+|----------|---------------------|
+| SSH password authentication | `interactive: true` |
+| Sudo password on remote host | `interactive: true` |
+| SSH key with passphrase | `interactive: true` (agent prompts for passphrase) |
+| Automated scripts | Use SSH keys instead of passwords |
+| CI/CD pipelines | Use SSH keys or secrets manager |
+
+### How It Works
+
+1. Agent attempts SSH connection with `interactive: true`
+2. If SSH stderr contains password prompt patterns ("password:", "sudo", "passphrase"), the agent detects it
+3. Agent calls `ask_user` tool with a secure prompt: "SSH to server.example.com (user) requires password. Please enter:"
+4. User provides password via TUI dialog
+5. Agent retries SSH using `sshpass -p <password>` to provide the password
+6. **Password is cached for 5 minutes** in the SSH session manager for subsequent connections to the same host
+7. Connection succeeds or fails with appropriate error message
+
+### Password Caching
+
+When you provide a password via `ask_user`, it is **cached for 5 minutes** for that specific host. This means:
+
+- ✅ **Second SSH connection to same host**: No password prompt (uses cached password)
+- ✅ **SCP transfer to same host**: No password prompt (uses cached password)
+- ⏰ **After 5 minutes**: Password expires, next connection prompts again
+- 🔒 **Session-only**: Password is stored in memory only, cleared when hufu exits
+
+Example workflow:
+```yaml
+# First connection: prompts for password
+- tool: ssh
+  args:
+    host: server.example.com
+    command: "uptime"
+    interactive: true
+
+# Second connection (within 5 min): uses cached password, no prompt
+- tool: ssh
+  args:
+    host: server.example.com
+    command: "whoami"
+    interactive: true
+
+# SCP transfer (within 5 min): uses cached password, no prompt
+- tool: scp
+  args:
+    source: /workspace/file.txt
+    destination: /tmp/
+    host: server.example.com
+    interactive: true
+```
+
+**Note**: `sshpass` must be installed on your system for password-based authentication to work. Install with:
+- Debian/Ubuntu: `sudo apt install sshpass`
+- RHEL/CentOS: `sudo yum install sshpass`
+- macOS: `brew install sshpass`
 
 ## SCP File Transfer
 

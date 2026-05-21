@@ -64,11 +64,13 @@ var SSHSessionKey = sshSessionKey{}
 
 // SSHSession represents an active SSH connection context
 type SSHSession struct {
-	Host      string    // Remote host in [user@]hostname format
-	User      string    // Username (extracted from host)
-	Port      int       // SSH port (default 22)
-	TaskID    string    // Task ID where this session was created
-	CreatedAt time.Time // Session creation timestamp
+	Host           string    // Remote host in [user@]hostname format
+	User           string    // Username (extracted from host)
+	Port           int       // SSH port (default 22)
+	TaskID         string    // Task ID where this session was created
+	CreatedAt      time.Time // Session creation timestamp
+	Password       string    // Cached password (if provided via ask_user)
+	PasswordExpiry time.Time // Password expiration timestamp
 }
 
 type AskUserTUIOption struct {
