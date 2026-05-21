@@ -5,6 +5,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -13,7 +14,7 @@ import (
 // SSHSessionManager manages active SSH sessions in memory
 type SSHSessionManager struct {
 	mu       sync.RWMutex
-	sessions map[string]*SSHSession // key: host
+	sessions map[string]*SSHSession // key: host[:port]
 }
 
 // SSHSessionManagerKey is the context key for SSH session manager
@@ -28,6 +29,14 @@ func NewSSHSessionManager() *SSHSessionManager {
 	}
 }
 
+// GetSessionKey generates a unique key for a session based on host and port
+func GetSessionKey(host string, port int) string {
+	if port <= 0 || port == 22 {
+		return host
+	}
+	return fmt.Sprintf("%s:%d", host, port)
+}
+
 // Create creates a new SSH session and stores it in the manager
 // Returns the created session or nil if session already exists
 func (m *SSHSessionManager) Create(host string, user string, port int, taskID string) (*SSHSession, error) {
@@ -35,11 +44,13 @@ func (m *SSHSessionManager) Create(host string, user string, port int, taskID st
 		return nil, nil
 	}
 
+	key := GetSessionKey(host, port)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, exists := m.sessions[host]; exists {
-		return nil, nil // Session already exists
+	if session, exists := m.sessions[key]; exists {
+		return session, nil // Return existing session
 	}
 
 	session := &SSHSession{
@@ -49,20 +60,22 @@ func (m *SSHSessionManager) Create(host string, user string, port int, taskID st
 		TaskID:    taskID,
 		CreatedAt: time.Now(),
 	}
-	m.sessions[host] = session
+	m.sessions[key] = session
 	return session, nil
 }
 
 // SetPassword caches a password for an SSH session with expiration
-func (m *SSHSessionManager) SetPassword(host, password string, expiry time.Duration) bool {
+func (m *SSHSessionManager) SetPassword(host string, port int, password string, expiry time.Duration) bool {
 	if m == nil {
 		return false
 	}
 
+	key := GetSessionKey(host, port)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	session, exists := m.sessions[host]
+	session, exists := m.sessions[key]
 	if !exists {
 		return false
 	}
@@ -73,20 +86,22 @@ func (m *SSHSessionManager) SetPassword(host, password string, expiry time.Durat
 }
 
 // GetPassword retrieves a cached password if not expired
-func (m *SSHSessionManager) GetPassword(host string) (string, bool) {
+func (m *SSHSessionManager) GetPassword(host string, port int) (string, bool) {
 	if m == nil {
 		return "", false
 	}
 
+	key := GetSessionKey(host, port)
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	session, exists := m.sessions[host]
+	session, exists := m.sessions[key]
 	if !exists {
 		return "", false
 	}
 
-	if time.Now().After(session.PasswordExpiry) {
+	if !session.PasswordExpiry.IsZero() && time.Now().After(session.PasswordExpiry) {
 		return "", false // Password expired
 	}
 
@@ -94,15 +109,17 @@ func (m *SSHSessionManager) GetPassword(host string) (string, bool) {
 }
 
 // ClearPassword removes cached password for a session
-func (m *SSHSessionManager) ClearPassword(host string) bool {
+func (m *SSHSessionManager) ClearPassword(host string, port int) bool {
 	if m == nil {
 		return false
 	}
 
+	key := GetSessionKey(host, port)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	session, exists := m.sessions[host]
+	session, exists := m.sessions[key]
 	if !exists {
 		return false
 	}
@@ -112,17 +129,19 @@ func (m *SSHSessionManager) ClearPassword(host string) bool {
 	return true
 }
 
-// Get retrieves an SSH session by host
+// Get retrieves an SSH session by host and port
 // Returns nil if session not found or manager is nil
-func (m *SSHSessionManager) Get(host string) *SSHSession {
+func (m *SSHSessionManager) Get(host string, port int) *SSHSession {
 	if m == nil {
 		return nil
 	}
 
+	key := GetSessionKey(host, port)
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	return m.sessions[host]
+	return m.sessions[key]
 }
 
 // List returns all active SSH sessions
@@ -144,19 +163,21 @@ func (m *SSHSessionManager) List() []*SSHSession {
 
 // Close removes an SSH session from the manager
 // Returns true if session was found and removed, false otherwise
-func (m *SSHSessionManager) Close(host string) bool {
+func (m *SSHSessionManager) Close(host string, port int) bool {
 	if m == nil {
 		return false
 	}
 
+	key := GetSessionKey(host, port)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, exists := m.sessions[host]; !exists {
+	if _, exists := m.sessions[key]; !exists {
 		return false
 	}
 
-	delete(m.sessions, host)
+	delete(m.sessions, key)
 	return true
 }
 

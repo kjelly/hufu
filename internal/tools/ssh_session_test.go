@@ -38,12 +38,35 @@ func TestSSHSessionManager_CreateAndGet(t *testing.T) {
 	}
 
 	// Get the session
-	retrieved := manager.Get("test@example.com")
+	retrieved := manager.Get("test@example.com", 22)
 	if retrieved == nil {
 		t.Fatal("Expected to retrieve session")
 	}
 	if retrieved.Host != session.Host {
 		t.Errorf("Expected host '%s', got '%s'", session.Host, retrieved.Host)
+	}
+}
+
+func TestSSHSessionManager_PortAwareSessions(t *testing.T) {
+	manager := NewSSHSessionManager()
+
+	// Create sessions on different ports for the same host
+	manager.Create("example.com", "user", 22, "task-1")
+	manager.Create("example.com", "user", 2222, "task-1")
+
+	if manager.Count() != 2 {
+		t.Errorf("Expected 2 sessions, got %d", manager.Count())
+	}
+
+	// Verify they are separate
+	s1 := manager.Get("example.com", 22)
+	s2 := manager.Get("example.com", 2222)
+
+	if s1 == nil || s2 == nil {
+		t.Fatal("Expected both sessions to be retrievable")
+	}
+	if s1 == s2 {
+		t.Error("Expected sessions on different ports to be separate")
 	}
 }
 
@@ -61,8 +84,11 @@ func TestSSHSessionManager_CreateDuplicate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create should not return error for duplicate: %v", err)
 	}
-	if session2 != nil {
-		t.Error("Expected nil for duplicate session")
+	if session2 == nil {
+		t.Error("Expected existing session for duplicate, got nil")
+	}
+	if session2 != session1 {
+		t.Error("Expected same session instance for duplicate")
 	}
 
 	// Verify original session unchanged
@@ -107,19 +133,19 @@ func TestSSHSessionManager_Close(t *testing.T) {
 	manager.Create("test@example.com", "test", 22, "task-1")
 
 	// Close existing session
-	closed := manager.Close("test@example.com")
+	closed := manager.Close("test@example.com", 22)
 	if !closed {
 		t.Error("Expected Close to return true for existing session")
 	}
 
 	// Verify session is removed
-	session := manager.Get("test@example.com")
+	session := manager.Get("test@example.com", 22)
 	if session != nil {
 		t.Error("Expected session to be removed after Close")
 	}
 
 	// Try to close non-existent session
-	closed = manager.Close("nonexistent@example.com")
+	closed = manager.Close("nonexistent@example.com", 22)
 	if closed {
 		t.Error("Expected Close to return false for non-existent session")
 	}
@@ -142,7 +168,7 @@ func TestSSHSessionManager_Count(t *testing.T) {
 	}
 
 	// Close one session
-	manager.Close("host1")
+	manager.Close("host1", 22)
 
 	if manager.Count() != 1 {
 		t.Errorf("Expected count 1, got %d", manager.Count())
@@ -177,7 +203,7 @@ func TestSSHSessionManager_NilManager(t *testing.T) {
 	var manager *SSHSessionManager
 
 	// Test methods on nil manager don't panic
-	session := manager.Get("host")
+	session := manager.Get("host", 22)
 	if session != nil {
 		t.Error("Expected nil session from nil manager")
 	}
@@ -187,7 +213,7 @@ func TestSSHSessionManager_NilManager(t *testing.T) {
 		t.Error("Expected nil list from nil manager")
 	}
 
-	closed := manager.Close("host")
+	closed := manager.Close("host", 22)
 	if closed {
 		t.Error("Expected false from nil manager Close")
 	}

@@ -777,6 +777,7 @@ func (c *Coordinator) getSkills() []*skill.SkillDef {
 func (c *Coordinator) skillDirs() []string {
 	return []string{
 		filepath.Join(c.session.Dir, "skills"),
+		filepath.Join(c.session.Dir, ".agents", "skills"), // Fallback for old path
 		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
 	}
 }

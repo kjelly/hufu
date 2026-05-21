@@ -137,14 +137,27 @@ func detectPasswordPrompt(stderr string) bool {
 		"password:",
 		"密碼:",
 		"passphrase",
-		"sudo",
+		"sudo password",
 		"are you sure you want to continue connecting",
 	}
 	stderrLower := strings.ToLower(stderr)
 	for _, prompt := range prompts {
 		if strings.Contains(stderrLower, prompt) {
-			return true
+			// Additional check for sudo to avoid false positives like "Please run with sudo"
+			if prompt == "sudo password" {
+				return true
+			}
+			if strings.HasSuffix(prompt, ":") && strings.Contains(stderrLower, prompt) {
+				return true
+			}
+			if prompt == "passphrase" || prompt == "are you sure you want to continue connecting" {
+				return true
+			}
 		}
+	}
+	// Fallback for generic password prompts that might not have a colon in our list
+	if strings.Contains(stderrLower, "password") && strings.Contains(stderrLower, ":") {
+		return true
 	}
 	return false
 }
@@ -309,18 +322,13 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 
 	sessionMgr := GetSSHSessionManager(ctx)
 	if sessionMgr != nil {
-		session, _ := sessionMgr.Create(cleanHost, finalUser, args.Port, "")
-		if session != nil {
-			defer func() {
-				sessionMgr.Close(cleanHost)
-			}()
-		}
+		_, _ = sessionMgr.Create(cleanHost, finalUser, args.Port, "")
 	}
 
 	// Check if password is cached in session
 	var cachedPassword string
 	if sessionMgr != nil {
-		if pwd, ok := sessionMgr.GetPassword(cleanHost); ok {
+		if pwd, ok := sessionMgr.GetPassword(cleanHost, args.Port); ok {
 			cachedPassword = pwd
 		}
 	}
@@ -337,6 +345,12 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 	var cmd *exec.Cmd
 	
 	if args.Password != "" {
+		// Check if sshpass is installed
+		if _, err := exec.LookPath("sshpass"); err != nil {
+			return fantasy.NewTextErrorResponse(
+				"sshpass is required for password authentication. Please install it (e.g., 'sudo apt install sshpass').",
+			), nil
+		}
 		// Use password from args or cache (with sshpass if available)
 		cmd = exec.CommandContext(cmdCtx, "sshpass", "-p", args.Password, "ssh")
 		cmd.Args = append(cmd.Args, sshArgList...)
@@ -376,6 +390,13 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 	
 	// Check if password prompt was detected and interactive mode is enabled
 	if waitErr != nil && args.Interactive && detectPasswordPrompt(stderrStr) {
+		// Check if sshpass is installed
+		if _, err := exec.LookPath("sshpass"); err != nil {
+			return fantasy.NewTextErrorResponse(
+				"sshpass is required for interactive password authentication. Please install it (e.g., 'sudo apt install sshpass').",
+			), nil
+		}
+
 		// Determine prompt type (sudo vs SSH password)
 		promptType := "ssh"
 		if strings.Contains(strings.ToLower(stderrStr), "sudo") {
@@ -405,11 +426,14 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 				waitErr = fmt.Errorf("command failed with exit code %d", exitCode)
 			}
 			
-			// Cache password in session for future use (5 minute expiry)
-			if sessionMgr != nil {
-				sessionMgr.SetPassword(cleanHost, password, 5*time.Minute)
+			// Cache password in session for future use (5 minute expiry) only on success
+			if exitCode == 0 && sessionMgr != nil {
+				sessionMgr.SetPassword(cleanHost, args.Port, password, 5*time.Minute)
 			}
 		}
+	} else if waitErr == nil && args.Password != "" && sessionMgr != nil {
+		// If command succeeded with a provided password, cache it
+		sessionMgr.SetPassword(cleanHost, args.Port, args.Password, 5*time.Minute)
 	}
 	
 	if waitErr != nil {
