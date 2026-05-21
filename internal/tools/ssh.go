@@ -33,11 +33,11 @@ func NewSshTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "ssh",
-			Description: "Execute a command on a remote host via SSH. Non-interactive (batch) mode only — no password prompts. Requires key-based authentication or an already-established agent. TIP: When a hostname is provided (e.g., 'offline-test-gpu'), use it as-is rather than resolving to IP. SSH config settings (IdentityFile, User, etc.) are typically tied to hostnames.",
+			Description: "Execute a command on a remote host via SSH. CRITICAL: Use the EXACT host identifier provided by the user. If user specified 'offline-test-gpu', use 'offline-test-gpu' — DO NOT resolve to IP (10.1.24.229). SSH config settings (IdentityFile, User, Port) are tied to hostnames, not IPs. Only use IP if user explicitly provided IP.",
 			Parameters: map[string]any{
 				"host": map[string]any{
 					"type":        "string",
-					"description": "Remote host in [user@]hostname format. If a hostname is provided (e.g., 'offline-test-gpu'), use it as-is. If an IP is provided, use it directly. Do not resolve hostname to IP - use whichever form the user specified.",
+					"description": "CRITICAL: Use EXACT host identifier from user. If user said 'offline-test-gpu', use 'offline-test-gpu' — NOT the resolved IP. SSH config requires hostnames. Only use IP if user explicitly provided IP address.",
 				},
 				"command": map[string]any{
 					"type":        "string",
@@ -131,6 +131,15 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 	}
 	if args.Host == "" {
 		return fantasy.NewTextErrorResponse("host parameter is required"), nil
+	}
+
+	// Detect if host looks like an IP address
+	if looksLikeIP(args.Host) {
+		// Check if this IP might have been resolved from a hostname
+		// Warn agent that SSH config requires hostnames
+		return fantasy.NewTextErrorResponse(
+			fmt.Sprintf("Host is an IP address (%s). If the user provided a hostname (e.g., 'offline-test-gpu'), use that instead. SSH config settings (IdentityFile, User, Port) are tied to hostnames and will not work with IPs. Example: use 'ssh host=offline-test-gpu' not 'ssh host=10.1.24.229'.", args.Host),
+		), nil
 	}
 
 	// Parse SSH config and merge with explicit parameters
@@ -271,4 +280,30 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 	}
 
 	return response, nil
+}
+
+// looksLikeIP checks if a string looks like an IPv4 or IPv6 address
+func looksLikeIP(s string) bool {
+	// Simple IPv4 check: x.x.x.x where x is 1-3 digits
+	if strings.Count(s, ".") == 3 {
+		parts := strings.Split(s, ".")
+		if len(parts) == 4 {
+			for _, part := range parts {
+				if len(part) == 0 || len(part) > 3 {
+					return false
+				}
+				for _, c := range part {
+					if c < '0' || c > '9' {
+						return false
+					}
+				}
+			}
+			return true
+		}
+	}
+	// Simple IPv6 check: contains colons
+	if strings.Contains(s, ":") {
+		return true
+	}
+	return false
 }

@@ -173,3 +173,79 @@ func TestSSH_ControlPath(t *testing.T) {
 	}
 	t.Log("Custom control path parameter accepted")
 }
+
+func TestLooksLikeIP(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		// IPv4 addresses
+		{"10.1.24.229", true},
+		{"192.168.1.1", true},
+		{"1.1.1.1", true},
+		{"255.255.255.255", true},
+		// IPv6 addresses
+		{"::1", true},
+		{"2001:db8::1", true},
+		{"fe80::1", true},
+		// Hostnames
+		{"offline-test-gpu", false},
+		{"example.com", false},
+		{"localhost", false},
+		{"server1.example.com", false},
+		// user@host
+		{"user@10.1.24.229", false}, // has @ symbol
+		{"user@example.com", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := looksLikeIP(tt.input)
+			if got != tt.want {
+				t.Errorf("looksLikeIP(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExecuteSSH_IPAddress_Warning(t *testing.T) {
+	tool := NewSshTool()
+	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
+	
+	// Test with IP address - should return error with warning
+	input := `{"host": "10.1.24.229", "command": "uptime"}`
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
+	
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if !result.IsError {
+		t.Error("Expected error when host is IP address")
+	}
+	if !strings.Contains(result.Content, "IP address") {
+		t.Errorf("Expected warning about IP address, got: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "SSH config") {
+		t.Errorf("Expected mention of SSH config, got: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "hostname") {
+		t.Errorf("Expected mention of hostname, got: %s", result.Content)
+	}
+}
+
+func TestExecuteSSH_Hostname_Allowed(t *testing.T) {
+	tool := NewSshTool()
+	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
+	
+	// Test with hostname - should not return IP warning
+	input := `{"host": "offline-test-gpu", "command": "uptime"}`
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
+	
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	// Should not be an error about IP address
+	if result.IsError && strings.Contains(result.Content, "IP address") {
+		t.Errorf("Unexpected IP warning for hostname: %s", result.Content)
+	}
+}
