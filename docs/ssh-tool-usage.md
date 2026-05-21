@@ -17,13 +17,33 @@ The SSH tool in hufu allows agents to execute commands on remote hosts via SSH. 
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `host` | string | ✅ | — | Remote host in [user@]hostname format |
+| `host` | string | ✅ | — | Remote hostname. **CRITICAL**: Use exact hostname from user (e.g., `offline-test-gpu`), NOT resolved IP. SSH config requires hostnames. |
+| `user` | string | ❌ | — | SSH username. Can also specify as `user@host`. Priority: explicit `user` > `user@host` > SSH config. |
 | `command` | string | ❌ | — | Command to execute (omit to test connectivity) |
-| `port` | number | ❌ | 22 | SSH port |
-| `identity_file` | string | ❌ | — | Path to SSH private key file |
+| `port` | number | ❌ | 22 | SSH port (0-65535). Explicit port overrides SSH config. |
+| `identity_file` | string | ❌ | — | Path to SSH private key file. Explicit file overrides SSH config. |
 | `timeout` | number | ❌ | 30 | Timeout in seconds (max 600s) |
 | `connection_reuse` | boolean | ❌ | false | Enable SSH connection reuse (ControlMaster) |
 | `control_path` | string | ❌ | /tmp/hufu-ssh-%r@%h:%p | Custom ControlPath for connection reuse |
+
+### Parameter Priority
+
+Parameters are resolved in this order (highest priority first):
+
+1. **Explicit parameter** — Specified in tool call (e.g., `user: "admin"`)
+2. **user@host format** — Username in host string (e.g., `admin@server.com`)
+3. **SSH config** — From `~/.ssh/config`
+4. **No default** — If not specified anywhere, SSH uses system default
+
+Example:
+```yaml
+# Uses explicit user "root", port 2222 from config, identity from config
+- tool: ssh
+  args:
+    host: server.example.com
+    user: root
+    port: 0  # 0 means "use config"
+```
 
 ## Advanced Features
 
@@ -58,10 +78,34 @@ The SSH tool automatically reads `~/.ssh/config` for:
 - ProxyJump
 - HostName
 
-Explicit parameters override config values.
+## SSH Config Integration
+
+The SSH tool automatically reads `~/.ssh/config` for:
+- User
+- Port
+- IdentityFile
+- ProxyJump
+- HostName
+- ForwardAgent
+
+### Parameter Resolution Order
+
+Parameters are resolved with this priority (highest first):
+
+1. **Explicit parameter** — Specified in tool call
+2. **user@host format** — Username embedded in host string
+3. **SSH config** — From `~/.ssh/config`
+4. **No default** — SSH uses system default if nothing specified
+
+**Example**: If you specify `user: "root"` explicitly, it overrides both `admin@server.com` format and SSH config's `User admin` setting.
 
 Example `~/.ssh/config`:
 ```
+Host offline-test-gpu
+    User kjelly
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519
+
 Host example.com
     User admin
     Port 2222
@@ -70,6 +114,30 @@ Host example.com
 Host *.prod.example.com
     User deploy
     Port 22
+```
+
+### Usage Examples
+
+```yaml
+# Uses SSH config values for offline-test-gpu (User=kjelly, Port=22)
+- tool: ssh
+  args:
+    host: offline-test-gpu
+    command: "uptime"
+
+# Explicit user overrides SSH config
+- tool: ssh
+  args:
+    host: offline-test-gpu
+    user: root  # Overrides SSH config's User=kjelly
+    command: "uptime"
+
+# Explicit port overrides SSH config
+- tool: ssh
+  args:
+    host: offline-test-gpu
+    port: 2222  # Overrides SSH config's Port=22
+    command: "uptime"
 ```
 
 ## SCP File Transfer

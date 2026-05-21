@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -20,13 +21,14 @@ import (
 const defaultSSHTimeout = 30 * time.Second
 
 type sshArgs struct {
-	Host           string  `json:"host"`
-	Command        string  `json:"command,omitempty"`
-	Port           int     `json:"port,omitempty"`
-	IdentityFile   string  `json:"identity_file,omitempty"`
-	Timeout        float64 `json:"timeout,omitempty"`
-	ConnectionReuse bool   `json:"connection_reuse,omitempty"`
-	ControlPath    string  `json:"control_path,omitempty"`
+	Host            string  `json:"host"`
+	User            string  `json:"user,omitempty"`
+	Command         string  `json:"command,omitempty"`
+	Port            int     `json:"port,omitempty"`
+	IdentityFile    string  `json:"identity_file,omitempty"`
+	Timeout         float64 `json:"timeout,omitempty"`
+	ConnectionReuse bool    `json:"connection_reuse,omitempty"`
+	ControlPath     string  `json:"control_path,omitempty"`
 }
 
 func NewSshTool(opts ...ToolOption) fantasy.AgentTool {
@@ -39,17 +41,21 @@ func NewSshTool(opts ...ToolOption) fantasy.AgentTool {
 					"type":        "string",
 					"description": "CRITICAL: Use EXACT host identifier from user. If user said 'offline-test-gpu', use 'offline-test-gpu' — NOT the resolved IP. SSH config requires hostnames. Only use IP if user explicitly provided IP address.",
 				},
+				"user": map[string]any{
+					"type":        "string",
+					"description": "SSH username (optional). Can be specified here or as user@host (e.g., 'admin@server'). Explicit user parameter takes precedence. If not specified, uses SSH config or system default.",
+				},
 				"command": map[string]any{
 					"type":        "string",
 					"description": "Command to execute on the remote host (optional; omit to test connectivity)",
 				},
 				"port": map[string]any{
 					"type":        "number",
-					"description": "SSH port (optional, default 22)",
+					"description": "SSH port (optional, default 22). Explicit port overrides SSH config.",
 				},
 				"identity_file": map[string]any{
 					"type":        "string",
-					"description": "Path to SSH private key file (optional)",
+					"description": "Path to SSH private key file (optional). Explicit identity file overrides SSH config.",
 				},
 				"timeout": map[string]any{
 					"type":        "number",
@@ -142,15 +148,46 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		), nil
 	}
 
-	// Parse SSH config and merge with explicit parameters
+	// Parse SSH config for fallback values
 	sshConfig, _ := GetSSHConfig(args.Host)
 
-	// Use config values if not explicitly provided
+	// Validate and apply parameters with priority:
+	// Explicit parameter > user@host format > SSH config > no default
+	
+	// Port validation and resolution
+	if args.Port < 0 || args.Port > 65535 {
+		return fantasy.NewTextErrorResponse("port must be 0-65535"), nil
+	}
+	if args.IdentityFile != "" {
+		if _, err := os.Stat(args.IdentityFile); os.IsNotExist(err) {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("identity file not found: %s", args.IdentityFile)), nil
+		}
+	}
+	
+	// Resolve port: explicit > SSH config
 	if args.Port == 0 && sshConfig.Port != 0 {
 		args.Port = sshConfig.Port
 	}
+	
+	// Resolve identity file: explicit > SSH config
 	if args.IdentityFile == "" && sshConfig.IdentityFile != "" {
 		args.IdentityFile = sshConfig.IdentityFile
+	}
+	
+	// Resolve user: explicit > user@host format > SSH config
+	userFromHost, cleanHost := ExtractUserFromHost(args.Host)
+	finalUser := args.User
+	if finalUser == "" {
+		finalUser = userFromHost
+	}
+	if finalUser == "" && sshConfig.User != "" {
+		finalUser = sshConfig.User
+	}
+	
+	// Build SSH host argument (user@host or just host)
+	sshHost := cleanHost
+	if finalUser != "" {
+		sshHost = finalUser + "@" + cleanHost
 	}
 
 	timeout := defaultSSHTimeout
@@ -187,19 +224,19 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 	if args.IdentityFile != "" {
 		sshArgList = append(sshArgList, "-i", args.IdentityFile)
 	}
-	sshArgList = append(sshArgList, args.Host)
+	sshArgList = append(sshArgList, sshHost)
 	if args.Command != "" {
 		sshArgList = append(sshArgList, args.Command)
 	}
 
-	user, cleanHost := ExtractUserFromHost(args.Host)
+	// Use default port 22 if still not set
 	if args.Port == 0 {
 		args.Port = 22
 	}
 
 	sessionMgr := GetSSHSessionManager(ctx)
 	if sessionMgr != nil {
-		session, _ := sessionMgr.Create(cleanHost, user, args.Port, "")
+		session, _ := sessionMgr.Create(cleanHost, finalUser, args.Port, "")
 		if session != nil {
 			defer func() {
 				sessionMgr.Close(cleanHost)

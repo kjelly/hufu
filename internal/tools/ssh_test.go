@@ -249,3 +249,111 @@ func TestExecuteSSH_Hostname_Allowed(t *testing.T) {
 		t.Errorf("Unexpected IP warning for hostname: %s", result.Content)
 	}
 }
+
+func TestSSH_UserParameter(t *testing.T) {
+	tool := NewSshTool()
+	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
+	
+	// Test with explicit user parameter
+	input := `{"host": "server.example.com", "user": "admin", "command": "uptime"}`
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
+	
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	// Should not be an error about IP address (server.example.com is not an IP)
+	if result.IsError && strings.Contains(result.Content, "IP address") {
+		t.Errorf("Unexpected IP warning: %s", result.Content)
+	}
+}
+
+func TestSSH_UserAtHostFormat(t *testing.T) {
+	tool := NewSshTool()
+	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
+	
+	// Test with user@host format
+	input := `{"host": "admin@server.example.com", "command": "uptime"}`
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
+	
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	// Should not be an error about IP address
+	if result.IsError && strings.Contains(result.Content, "IP address") {
+		t.Errorf("Unexpected IP warning: %s", result.Content)
+	}
+}
+
+func TestSSH_UserParameterOverridesUserAtHost(t *testing.T) {
+	tool := NewSshTool()
+	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
+	
+	// Test that explicit user parameter overrides user@host format
+	input := `{"host": "admin@server.example.com", "user": "root", "command": "uptime"}`
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
+	
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	// Should not be an error about IP address
+	if result.IsError && strings.Contains(result.Content, "IP address") {
+		t.Errorf("Unexpected IP warning: %s", result.Content)
+	}
+}
+
+func TestSSH_InvalidPort(t *testing.T) {
+	tool := NewSshTool()
+	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
+	
+	// Test with invalid port (negative)
+	input := `{"host": "server.example.com", "port": -1}`
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
+	
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if !result.IsError {
+		t.Error("Expected error for negative port")
+	}
+	if !strings.Contains(result.Content, "port must be 0-65535") {
+		t.Errorf("Expected port validation error, got: %s", result.Content)
+	}
+}
+
+func TestSSH_PortOutOfRange(t *testing.T) {
+	tool := NewSshTool()
+	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
+	
+	// Test with port > 65535
+	input := `{"host": "server.example.com", "port": 70000}`
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
+	
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if !result.IsError {
+		t.Error("Expected error for port out of range")
+	}
+	if !strings.Contains(result.Content, "port must be 0-65535") {
+		t.Errorf("Expected port validation error, got: %s", result.Content)
+	}
+}
+
+func TestSSH_IdentityFileNotFound(t *testing.T) {
+	tool := NewSshTool()
+	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
+	
+	// Test with non-existent identity file
+	input := `{"host": "server.example.com", "identity_file": "/nonexistent/path/key"}`
+	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
+	
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if !result.IsError {
+		t.Error("Expected error for missing identity file")
+	}
+	if !strings.Contains(result.Content, "identity file not found") {
+		t.Errorf("Expected identity file error, got: %s", result.Content)
+	}
+}
