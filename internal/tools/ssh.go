@@ -137,27 +137,14 @@ func detectPasswordPrompt(stderr string) bool {
 		"password:",
 		"密碼:",
 		"passphrase",
-		"sudo password",
+		"sudo",
 		"are you sure you want to continue connecting",
 	}
 	stderrLower := strings.ToLower(stderr)
 	for _, prompt := range prompts {
 		if strings.Contains(stderrLower, prompt) {
-			// Additional check for sudo to avoid false positives like "Please run with sudo"
-			if prompt == "sudo password" {
-				return true
-			}
-			if strings.HasSuffix(prompt, ":") && strings.Contains(stderrLower, prompt) {
-				return true
-			}
-			if prompt == "passphrase" || prompt == "are you sure you want to continue connecting" {
-				return true
-			}
+			return true
 		}
-	}
-	// Fallback for generic password prompts that might not have a colon in our list
-	if strings.Contains(stderrLower, "password") && strings.Contains(stderrLower, ":") {
-		return true
 	}
 	return false
 }
@@ -322,17 +309,14 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 
 	sessionMgr := GetSSHSessionManager(ctx)
 	if sessionMgr != nil {
-		_, _ = sessionMgr.Create(cleanHost, finalUser, args.Port, "")
-		// Restore session closure if not reusing connections
-		if !args.ConnectionReuse {
-			defer sessionMgr.Close(finalUser, cleanHost, args.Port)
-		}
+		taskID, _ := ctx.Value(TaskIDKey).(string)
+		_, _ = sessionMgr.Create(cleanHost, finalUser, args.Port, taskID)
 	}
 
 	// Check if password is cached in session
 	var cachedPassword string
 	if sessionMgr != nil {
-		if pwd, ok := sessionMgr.GetPassword(finalUser, cleanHost, args.Port); ok {
+		if pwd, ok := sessionMgr.GetPassword(cleanHost); ok {
 			cachedPassword = pwd
 		}
 	}
@@ -388,8 +372,6 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 	waitErr := cmd.Wait()
 	wg.Wait()
 
-	duration := time.Since(startTime)
-
 	exitCode := 0
 	stderrStr := stderr.String()
 	
@@ -434,20 +416,28 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 			
 			// Cache password in session for future use (5 minute expiry) only on success
 			if exitCode == 0 && sessionMgr != nil {
-				sessionMgr.SetPassword(finalUser, cleanHost, args.Port, password, 5*time.Minute)
+				sessionMgr.SetPassword(cleanHost, password, 5*time.Minute)
 			}
 		}
 	} else if waitErr == nil && args.Password != "" && sessionMgr != nil {
 		// If command succeeded with a provided password, cache it
-		sessionMgr.SetPassword(finalUser, cleanHost, args.Port, args.Password, 5*time.Minute)
+		sessionMgr.SetPassword(cleanHost, args.Password, 5*time.Minute)
 	}
-	
+
 	if waitErr != nil {
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else if cmdCtx.Err() == context.DeadlineExceeded {
 			return fantasy.NewTextErrorResponse("ssh connection timed out"), nil
 		}
+	}
+
+	// Calculate duration after all retries
+	duration := time.Since(startTime)
+
+	// Update last used time for session
+	if sessionMgr != nil {
+		sessionMgr.UpdateLastUsed(cleanHost)
 	}
 
 	// Log to audit

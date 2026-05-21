@@ -115,7 +115,7 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		}
 	}
 
-	_, cleanHost := ExtractUserFromHost(args.Host)
+	finalUser, cleanHost := ExtractUserFromHost(args.Host)
 
 	timeout := defaultSSHTimeout
 	if args.Timeout > 0 {
@@ -165,14 +165,14 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 
 	sessionMgr := GetSSHSessionManager(ctx)
 	if sessionMgr != nil {
-		_, _ = sessionMgr.Create(cleanHost, finalUser, args.Port, "")
-		defer sessionMgr.Close(finalUser, cleanHost, args.Port)
+		taskID, _ := ctx.Value(TaskIDKey).(string)
+		_, _ = sessionMgr.Create(cleanHost, finalUser, args.Port, taskID)
 	}
 
 	// Check if password is cached in session
 	var cachedPassword string
 	if sessionMgr != nil {
-		if pwd, ok := sessionMgr.GetPassword(finalUser, cleanHost, args.Port); ok {
+		if pwd, ok := sessionMgr.GetPassword(cleanHost); ok {
 			cachedPassword = pwd
 		}
 	}
@@ -239,20 +239,26 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 
 			// Cache password in session for future use (5 minute expiry) only on success
 			if exitCode == 0 && sessionMgr != nil {
-				sessionMgr.SetPassword(finalUser, cleanHost, args.Port, password, 5*time.Minute)
+				sessionMgr.SetPassword(cleanHost, password, 5*time.Minute)
 			}
 		}
 	} else if waitErr == nil && args.Password != "" && sessionMgr != nil {
 		// If command succeeded with a provided password, cache it
-		sessionMgr.SetPassword(finalUser, cleanHost, args.Port, args.Password, 5*time.Minute)
+		sessionMgr.SetPassword(cleanHost, args.Password, 5*time.Minute)
+	}
+
+	// Calculate duration after all retries
+	duration := time.Since(startTime)
+
+	// Update last used time for session
+	if sessionMgr != nil {
+		sessionMgr.UpdateLastUsed(cleanHost)
 	}
 
 	if waitErr != nil {
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		}
-
-		duration := time.Since(startTime)
 
 		// Log to audit
 		if auditor := GetAuditLogger(ctx); auditor != nil {
@@ -276,8 +282,6 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 			IsError: true,
 		}, nil
 	}
-
-	duration := time.Since(startTime)
 
 	// Log to audit
 	if auditor := GetAuditLogger(ctx); auditor != nil {

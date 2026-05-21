@@ -131,15 +131,16 @@ var mediumRiskTools = map[string]bool{
 
 // ForceMCPBlockedTools are disabled when --force-mcp is enabled, forcing use of MCP servers
 var ForceMCPBlockedTools = map[string]bool{
-	"bash":          true,
-	"sudo":          true,
-	"ssh":           true,
-	"scp":           true,
-	"golang":        true,
-	"lua":           true,
-	"download":      true,
-	"fetch":         true,
-	"agentic_fetch": true,
+	"bash":             true,
+	"sudo":             true,
+	"ssh":              true,
+	"scp":              true,
+	"ssh_disconnect":   true,
+	"golang":           true,
+	"lua":              true,
+	"download":         true,
+	"fetch":            true,
+	"agentic_fetch":    true,
 }
 
 // GetToolLevel returns the risk level of a tool
@@ -776,6 +777,8 @@ func AllTools(opts ...ToolOption) []fantasy.AgentTool {
 		NewBashTool(opts...),
 		NewSudoTool(opts...),
 		NewSshTool(opts...),
+		NewScpTool(opts...),
+		NewSSHDisconnectTool(opts...),
 		NewViewTool(opts...),
 		NewWriteTool(opts...),
 		NewEditTool(opts...),

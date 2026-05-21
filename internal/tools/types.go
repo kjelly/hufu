@@ -57,6 +57,10 @@ type agentForceMCPKeyType struct{}
 
 var AgentForceMCPKey = agentForceMCPKeyType{}
 
+type taskIDKeyType struct{}
+
+var TaskIDKey = taskIDKeyType{}
+
 // SSH session context key
 type sshSessionKey struct{}
 
@@ -69,6 +73,7 @@ type SSHSession struct {
 	Port           int       // SSH port (default 22)
 	TaskID         string    // Task ID where this session was created
 	CreatedAt      time.Time // Session creation timestamp
+	LastUsedAt     time.Time // Last activity timestamp (for idle timeout)
 	Password       string    // Cached password (if provided via ask_user)
 	PasswordExpiry time.Time // Password expiration timestamp
 }

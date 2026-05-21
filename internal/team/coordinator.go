@@ -5150,6 +5150,11 @@ func (c *Coordinator) emitThinkText(text string) {
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
 	c.lastStmWrite = time.Time{}
 
+	// Start cleanup daemon for idle SSH sessions on first Run call (30 minute timeout, check every 5 minutes)
+	if c.sshSessionMgr != nil {
+		c.sshSessionMgr.StartCleanupDaemon(ctx, 5*time.Minute, 30*time.Minute)
+	}
+
 	orchDef := c.GetOrchestratorDef()
 	if orchDef == nil {
 		return "", fmt.Errorf("no coordinator agent found in team")

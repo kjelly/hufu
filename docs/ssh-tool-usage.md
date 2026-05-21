@@ -144,21 +144,31 @@ Host *.prod.example.com
 
 ## Interactive Mode (Password Authentication)
 
-The SSH tool supports password-based authentication via the `interactive` parameter:
+The SSH and SCP tools support password-based authentication via the `interactive` parameter:
 
 ```yaml
-# Enable interactive mode for password prompts
+# SSH: Enable interactive mode for password prompts
 - tool: ssh
   args:
     host: user@example.com
     command: "sudo apt update"
     interactive: true
+
+# SCP: Enable interactive mode for password prompts
+- tool: scp
+  args:
+    source: /workspace/file.txt
+    destination: /remote/path/
+    host: user@example.com
+    interactive: true
 ```
 
 When `interactive: true`:
-1. SSH runs without `BatchMode=yes`, allowing password prompts
-2. If a password prompt is detected (e.g., "password:", "sudo"), the agent uses `ask_user` to securely request input from you
-3. The password is then provided to SSH via `sshpass` for the actual connection
+1. SSH/SCP runs without `BatchMode=yes`, allowing password prompts
+2. If a password prompt is detected (e.g., "password:", "sudo", "passphrase"), the agent uses `ask_user` to securely request input from you
+3. The password is then provided via `sshpass` for the actual connection
+4. **Password is cached for 5 minutes** in the SSH session manager for subsequent connections to the same host
+5. **Session idle timeout**: SSH sessions are automatically closed after 30 minutes of inactivity
 
 ### Security Best Practices
 
@@ -188,17 +198,18 @@ When `interactive: true`:
 | SSH password authentication | `interactive: true` |
 | Sudo password on remote host | `interactive: true` |
 | SSH key with passphrase | `interactive: true` (agent prompts for passphrase) |
+| SCP file transfer with password | `interactive: true` |
 | Automated scripts | Use SSH keys instead of passwords |
 | CI/CD pipelines | Use SSH keys or secrets manager |
 
 ### How It Works
 
-1. Agent attempts SSH connection with `interactive: true`
-2. If SSH stderr contains password prompt patterns ("password:", "sudo", "passphrase"), the agent detects it
+1. Agent attempts SSH/SCP connection with `interactive: true`
+2. If stderr contains password prompt patterns ("password:", "sudo", "passphrase"), the agent detects it
 3. Agent calls `ask_user` tool with a secure prompt: "SSH to server.example.com (user) requires password. Please enter:"
 4. User provides password via TUI dialog
-5. Agent retries SSH using `sshpass -p <password>` to provide the password
-6. **Password is cached for 5 minutes** in the SSH session manager for subsequent connections to the same host
+5. Agent retries using `sshpass -p <password>` (or `SSHPASS=<password> scp`) to provide the password
+6. **Password is cached for 5 minutes** for subsequent connections to the same host
 7. Connection succeeds or fails with appropriate error message
 
 ### Password Caching
@@ -209,6 +220,7 @@ When you provide a password via `ask_user`, it is **cached for 5 minutes** for t
 - ✅ **SCP transfer to same host**: No password prompt (uses cached password)
 - ⏰ **After 5 minutes**: Password expires, next connection prompts again
 - 🔒 **Session-only**: Password is stored in memory only, cleared when hufu exits
+- 🧹 **Idle timeout**: Sessions are automatically closed after 30 minutes of inactivity
 
 Example workflow:
 ```yaml
@@ -233,7 +245,37 @@ Example workflow:
     destination: /tmp/
     host: server.example.com
     interactive: true
+
+# Disconnect and clear cached password (optional)
+- tool: ssh_disconnect
+  args:
+    host: server.example.com
 ```
+
+### Managing Sessions
+
+#### Viewing Active Sessions
+
+Active SSH sessions are displayed in the TUI status bar and team info panel.
+
+#### Disconnecting from a Host
+
+Use the `ssh_disconnect` tool to manually close a session and clear cached credentials:
+
+```yaml
+- tool: ssh_disconnect
+  args:
+    host: server.example.com
+```
+
+This is useful when:
+- You're finished with a host and want to clear cached passwords
+- You need to reconnect with different credentials
+- You want to free resources
+
+#### Session Idle Timeout
+
+Sessions are automatically closed after **30 minutes of inactivity** to free resources and clear cached credentials. The cleanup daemon checks every 5 minutes.
 
 **Note**: `sshpass` must be installed on your system for password-based authentication to work. Install with:
 - Debian/Ubuntu: `sudo apt install sshpass`
