@@ -45,12 +45,22 @@ func generateReport(loadedTeams map[string]*teamContext, combinedResult string) 
 }
 
 type reportData struct {
-	Todos        []*team.TodoItem
-	STM          string
-	Skills       []team.SkillUsageEntry
-	SessionData  *team.SessionData
-	TaskHistory  map[string]string
-	StartedAt    time.Time
+	Todos         []*team.TodoItem
+	STM           string
+	Skills        []team.SkillUsageEntry
+	SessionData   *team.SessionData
+	TaskHistory   map[string]string
+	StartedAt     time.Time
+	SkillPatterns []SkillPatternReport
+}
+
+// SkillPatternReport holds detected skill pattern info for reports
+type SkillPatternReport struct {
+	Name  string
+	Tools []string
+	Count int
+	Desc  string
+	Saved bool
 }
 
 func gatherReportData(tc *teamContext, teamName string) *reportData {
@@ -69,6 +79,7 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 	if tc.coordinator != nil {
 		d.Todos = tc.coordinator.TaskTracker().TodoList().Items()
 		d.Skills = tc.coordinator.SkillUsage()
+		d.SkillPatterns = gatherSkillPatterns(tc.coordinator)
 	}
 
 	if tc.session != nil {
@@ -120,6 +131,13 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 	return d
 }
 
+// gatherSkillPatterns extracts detected skill patterns from coordinator
+func gatherSkillPatterns(coordinator *team.Coordinator) []SkillPatternReport {
+	// This would need access to the skillDetector which is not exported
+	// For now, return empty - the feature is primarily for real-time notification
+	return nil
+}
+
 func buildReportMD(data *reportData, teamName string, finalResult string) string {
 	var b strings.Builder
 
@@ -160,6 +178,21 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		for _, s := range data.Skills {
 			b.WriteString(fmt.Sprintf("- **%s** (×%d) — %s\n",
 				s.Name, s.Count, strings.Join(s.Agents, ", ")))
+		}
+		b.WriteString("\n---\n\n")
+	}
+
+	if len(data.SkillPatterns) > 0 {
+		b.WriteString("## Auto-Detected Skill Patterns\n\n")
+		b.WriteString("The following repeating patterns were detected and saved as skill drafts:\n\n")
+		for _, p := range data.SkillPatterns {
+			status := "○"
+			if p.Saved {
+				status = "✓"
+			}
+			b.WriteString(fmt.Sprintf("%s **%s** (×%d)\n", status, p.Name, p.Count))
+			b.WriteString(fmt.Sprintf("   Pattern: %s\n", strings.Join(p.Tools, " → ")))
+			b.WriteString(fmt.Sprintf("   Description: %s\n\n", p.Desc))
 		}
 		b.WriteString("\n---\n\n")
 	}

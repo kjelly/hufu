@@ -500,6 +500,11 @@ type Coordinator struct {
 	lastStmWriteMu        sync.Mutex
 	ltmWriteMu            sync.Mutex // Protect LTM file reads and writes
 
+	// Skill pattern detection
+	skillDetector         *skill.SkillPatternDetector
+	skillGenerator        *skill.AutoSkillGenerator
+	skillPatternsDetected int // count of patterns detected in current session
+
 	// stepConfirmFn must be set before Run() or protected by stepConfirmFnMu.
 	stepConfirmFn   func(context.Context, []TaskDef) (bool, error)
 	stepConfirmFnMu sync.RWMutex
@@ -644,6 +649,9 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		forcePlanFirst:    planMode,
 		autoSkillsEnabled: autoSkillsMode,
 		sessionToolPermissions: make(map[string]bool),
+		skillDetector:         skill.NewSkillPatternDetector(5, 3, 10), // minFrequency=5, windowMin=3, windowMax=10
+		skillGenerator:        skill.NewAutoSkillGenerator(filepath.Join(session.Dir, "skills")),
+		skillPatternsDetected: 0,
 	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -3251,7 +3259,82 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 
 	c.checkpointSTM()
 
+	// Check for skill patterns after completing a round
+	c.checkSkillPatterns()
+
 	return formatTaskResults(results, len(tasks), duplicateWarnings)
+}
+
+// checkSkillPatterns checks for repeating tool call patterns and auto-generates skill drafts
+func (c *Coordinator) checkSkillPatterns() {
+	if c.skillDetector == nil {
+		return
+	}
+
+	candidates := c.skillDetector.FindCandidates()
+	if len(candidates) == 0 {
+		return
+	}
+
+	// Only report new patterns (more than previously detected)
+	newPatterns := len(candidates) - c.skillPatternsDetected
+	if newPatterns <= 0 {
+		return
+	}
+
+	c.skillPatternsDetected = len(candidates)
+
+	// Auto-generate skill drafts
+	savedSkills := c.checkSkillPatternsAndSave()
+
+	// Report skill pattern suggestions
+	var msg strings.Builder
+	msg.WriteString(fmt.Sprintf("─── SKILL SUGGESTIONS ───\n"))
+	msg.WriteString(fmt.Sprintf("Detected %d new repeating pattern(s):\n", newPatterns))
+	for i := 0; i < newPatterns && i < 3; i++ {
+		cand := candidates[i]
+		msg.WriteString(fmt.Sprintf("  %d. [%s] ×%d - %s\n",
+			i+1,
+			strings.Join(cand.Sequence.Tools, " → "),
+			cand.Sequence.Count,
+			cand.SuggestedDesc))
+	}
+	if len(candidates) > 3 {
+		msg.WriteString(fmt.Sprintf("  ... and %d more\n", len(candidates)-3))
+	}
+	if len(savedSkills) > 0 {
+		msg.WriteString(fmt.Sprintf("\nDraft skills saved to:\n"))
+		for _, path := range savedSkills {
+			msg.WriteString(fmt.Sprintf("  - %s\n", path))
+		}
+		msg.WriteString("\nReview and refine with: hufu skill review <skill-name>\n")
+	}
+
+	c.report(c.newEvent("step").withMessage(msg.String()))
+}
+
+// checkSkillPatternsAndSave checks for patterns and auto-generates skill drafts
+func (c *Coordinator) checkSkillPatternsAndSave() []string {
+	if c.skillDetector == nil || c.skillGenerator == nil {
+		return nil
+	}
+
+	candidates := c.skillDetector.FindCandidates()
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	var savedSkills []string
+	for _, cand := range candidates {
+		path, err := c.skillGenerator.GenerateSkill(cand)
+		if err != nil {
+			log.Printf("[WARN] failed to generate skill draft: %v", err)
+			continue
+		}
+		savedSkills = append(savedSkills, path)
+	}
+
+	return savedSkills
 }
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (string, error) {
@@ -3921,6 +4004,16 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			reportFn(c.newEvent("tool_call").withAgent(agentName).withTodoID(todoID).withTool(tc.ToolName, argsPreview))
 			llmLogStreamEvent(logWrite, "tool_call", formatToolCallContent(tc))
 			audit.LogToolCall(agentName, tc.ToolName, tc.Input)
+			
+			// Record tool call for skill pattern detection
+			if c.skillDetector != nil {
+				taskDesc := c.currentTask
+				if taskDesc == "" {
+					taskDesc = "coordinator task"
+				}
+				c.skillDetector.RecordToolCall(agentName, tc.ToolName, tc.Input, taskDesc)
+			}
+			
 			if skillName := c.extractSkillFromToolCall(tc.ToolName, tc.Input); skillName != "" {
 				c.recordSkillUsage(skillName, agentName)
 			}

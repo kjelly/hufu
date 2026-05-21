@@ -80,6 +80,9 @@ func main() {
 		Version: version,
 	}
 
+	// Add skill management commands
+	rootCmd.AddCommand(skillCmd)
+
 	rootCmd.Flags().StringVar(&providerURL, "provider-url", "", "Ollama API base URL (default: from hufu.yaml or http://localhost:11434/v1)")
 	rootCmd.Flags().StringVar(&providerAPIKey, "provider-api-key", "", "Provider API key (default: from HUFU_PROVIDER_API_KEY env or team.yaml)")
 	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show full agent text output in real-time")
