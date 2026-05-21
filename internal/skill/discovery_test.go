@@ -402,8 +402,9 @@ func TestSkillPatternDetector_MergeSimilarSequences(t *testing.T) {
 		},
 	}
 
+	// Put all descriptions in the same cluster
 	clusters := map[int][]int{
-		0: {0, 1},
+		0: {0, 1, 2},
 	}
 
 	merged := detector.mergeSimilarSequences(candidates, clusters, 0.9)
@@ -415,6 +416,45 @@ func TestSkillPatternDetector_MergeSimilarSequences(t *testing.T) {
 
 	if merged[0].Sequence.Count != 5 {
 		t.Errorf("Expected merged count 5, got %d", merged[0].Sequence.Count)
+	}
+}
+
+func TestSkillPatternDetector_MergeSimilarSequences_DifferentClusters(t *testing.T) {
+	detector := NewSkillPatternDetector(2, 2, 3)
+
+	candidates := []PatternCandidate{
+		{
+			Sequence: &ToolSequence{
+				Tools:     []string{"view", "edit"},
+				Count:     3,
+				TaskDescs: []string{"fix bug", "fix issue"},
+			},
+			SimilarityScore: 0.95,
+		},
+		{
+			Sequence: &ToolSequence{
+				Tools:     []string{"view", "edit"},
+				Count:     2,
+				TaskDescs: []string{"modify code"},
+			},
+			SimilarityScore: 0.92,
+		},
+	}
+
+	// Put them in different clusters
+	clusters := map[int][]int{
+		0: {0, 1},
+		1: {2},
+	}
+
+	merged := detector.mergeSimilarSequences(candidates, clusters, 0.9)
+
+	// Verify merging did NOT occur (but they should fallback to keyword overlap unless we ensure overlap is low)
+	// Wait, let's look at descs1: "fix bug", "fix issue" -> keywords: "fix", "bug", "issue"
+	// descs2: "modify code" -> keywords: "modify", "code"
+	// The overlap is 0, which is < 50%, so they will indeed not merge.
+	if len(merged) != 2 {
+		t.Errorf("Expected 2 separate candidates, got %d", len(merged))
 	}
 }
 
@@ -511,24 +551,45 @@ func TestSkillPatternDetector_HashDescriptions(t *testing.T) {
 func TestSkillPatternDetector_IsInSameCluster(t *testing.T) {
 	detector := NewSkillPatternDetector(2, 2, 3)
 
+	// Test case 1: Matching clusters (no keyword overlap)
+	descs1 := []string{"fix backend bug"}
+	descs2 := []string{"resolve server issue"}
+	allDescs := []string{"fix backend bug", "resolve server issue"}
 	clusters := map[int][]int{
-		0: {0, 1, 2},
+		0: {0, 1},
 	}
 
-	// Test with overlapping keywords
-	descs1 := []string{"fix bug code"}
-	descs2 := []string{"fix code bug"}
-
-	if !detector.isInSameCluster(descs1, descs2, clusters) {
-		t.Error("Expected descriptions with overlapping keywords to be in same cluster")
+	if !detector.isInSameCluster(descs1, descs2, clusters, allDescs) {
+		t.Error("Expected descriptions to be in the same cluster via cluster mapping")
 	}
 
-	// Test with no overlap
-	descs3 := []string{"completely different task"}
+	// Test case 2: Different clusters (no keyword overlap)
+	descs3 := []string{"fix backend bug"}
 	descs4 := []string{"another unrelated thing"}
+	allDescs2 := []string{"fix backend bug", "another unrelated thing"}
+	clusters3 := map[int][]int{
+		0: {0},
+		1: {1},
+	}
 
-	if detector.isInSameCluster(descs3, descs4, clusters) {
-		t.Error("Expected descriptions with no overlap to be in different clusters")
+	if detector.isInSameCluster(descs3, descs4, clusters3, allDescs2) {
+		t.Error("Expected descriptions to be in different clusters via cluster mapping")
+	}
+
+	// Test case 3: Fallback keyword overlap (no clusters map)
+	descs5 := []string{"fix bug code"}
+	descs6 := []string{"fix code bug"}
+
+	if !detector.isInSameCluster(descs5, descs6, nil, append(descs5, descs6...)) {
+		t.Error("Expected descriptions with overlapping keywords to be in same cluster via fallback")
+	}
+
+	// Test case 4: Fallback no overlap (no clusters map)
+	descs7 := []string{"completely different task"}
+	descs8 := []string{"another unrelated thing"}
+
+	if detector.isInSameCluster(descs7, descs8, nil, append(descs7, descs8...)) {
+		t.Error("Expected descriptions with no overlap to be in different clusters via fallback")
 	}
 }
 

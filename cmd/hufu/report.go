@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anomalyco/hufu/internal/skill"
 	"github.com/anomalyco/hufu/internal/team"
 )
 
@@ -133,9 +134,22 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 
 // gatherSkillPatterns extracts detected skill patterns from coordinator
 func gatherSkillPatterns(coordinator *team.Coordinator) []SkillPatternReport {
-	// This would need access to the skillDetector which is not exported
-	// For now, return empty - the feature is primarily for real-time notification
-	return nil
+	var detector *skill.SkillPatternDetector = coordinator.SkillDetector()
+	if detector == nil {
+		return nil
+	}
+	var candidates []skill.PatternCandidate = detector.FindCandidates()
+	var reports []SkillPatternReport
+	for _, cand := range candidates {
+		reports = append(reports, SkillPatternReport{
+			Name:  cand.SuggestedName,
+			Tools: cand.Sequence.Tools,
+			Count: cand.Sequence.Count,
+			Desc:  cand.SuggestedDesc,
+			Saved: true,
+		})
+	}
+	return reports
 }
 
 func buildReportMD(data *reportData, teamName string, finalResult string) string {

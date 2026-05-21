@@ -348,6 +348,8 @@ Example format: {"0": [0, 2, 5], "1": [1, 3, 4]}`, descList.String())
 
 // mergeSimilarSequences merges sequences based on cluster analysis
 func (d *SkillPatternDetector) mergeSimilarSequences(candidates []PatternCandidate, clusters map[int][]int, threshold float64) []PatternCandidate {
+	allDescs := d.collectAllTaskDescriptions(candidates)
+
 	// Group candidates by tool sequence
 	groupMap := make(map[string][]PatternCandidate) // tool sequence hash -> candidates
 
@@ -356,16 +358,24 @@ func (d *SkillPatternDetector) mergeSimilarSequences(candidates []PatternCandida
 		groupMap[toolHash] = append(groupMap[toolHash], cand)
 	}
 
-	// Merge groups
+	// Merge groups based on semantic similarity
 	var merged []PatternCandidate
 	for _, group := range groupMap {
-		if len(group) > 1 {
-			// Merge similar candidates
-			mergedCand := d.mergeCandidateGroup(group)
-			merged = append(merged, mergedCand)
-		} else if len(group) == 1 {
-			merged = append(merged, group[0])
+		var mergedGroup []PatternCandidate
+		for _, cand := range group {
+			placed := false
+			for i := range mergedGroup {
+				if d.isInSameCluster(cand.Sequence.TaskDescs, mergedGroup[i].Sequence.TaskDescs, clusters, allDescs) {
+					mergedGroup[i] = d.mergeCandidateGroup([]PatternCandidate{mergedGroup[i], cand})
+					placed = true
+					break
+				}
+			}
+			if !placed {
+				mergedGroup = append(mergedGroup, cand)
+			}
 		}
+		merged = append(merged, mergedGroup...)
 	}
 
 	return merged
@@ -379,9 +389,45 @@ func (d *SkillPatternDetector) hashToolSequence(tools []string) string {
 }
 
 // isInSameCluster checks if two sets of descriptions share a cluster
-func (d *SkillPatternDetector) isInSameCluster(descs1, descs2 []string, clusters map[int][]int) bool {
-	// For now, use simple keyword overlap as a proxy
-	// The full implementation would map descriptions to cluster IDs
+func (d *SkillPatternDetector) isInSameCluster(descs1, descs2 []string, clusters map[int][]int, allDescs []string) bool {
+	// Build map from description string to index in allDescs
+	descIndices := make(map[string]int)
+	for i, desc := range allDescs {
+		descIndices[strings.ToLower(strings.TrimSpace(desc))] = i
+	}
+
+	// Find clusters containing any description from descs1
+	clusters1 := make(map[int]bool)
+	for _, desc := range descs1 {
+		trimmed := strings.ToLower(strings.TrimSpace(desc))
+		if idx, ok := descIndices[trimmed]; ok {
+			for clusterID, memberIndices := range clusters {
+				for _, mIdx := range memberIndices {
+					if mIdx == idx {
+						clusters1[clusterID] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Check if any description in descs2 is in those clusters
+	for _, desc := range descs2 {
+		trimmed := strings.ToLower(strings.TrimSpace(desc))
+		if idx, ok := descIndices[trimmed]; ok {
+			for clusterID, memberIndices := range clusters {
+				for _, mIdx := range memberIndices {
+					if mIdx == idx {
+						if clusters1[clusterID] {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback to keyword overlap if clusters map is empty or no cluster matched
 	keywords1 := d.extractKeywords(descs1)
 	keywords2 := d.extractKeywords(descs2)
 
@@ -397,7 +443,6 @@ func (d *SkillPatternDetector) isInSameCluster(descs1, descs2 []string, clusters
 		return false
 	}
 
-	// Consider same cluster if keyword overlap >= 50%
 	return float64(overlap)/float64(total) >= 0.5
 }
 

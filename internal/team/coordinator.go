@@ -655,8 +655,8 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	}
 
 	// Enable sidecar for skill pattern detection
-	if c.sidecarInst != nil {
-		c.skillDetector.SetSidecar(context.Background(), c.sidecarInst)
+	if s := c.Sidecar(); s != nil {
+		c.skillDetector.SetSidecar(context.Background(), s)
 	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -1367,6 +1367,10 @@ func extractSkillKeywords(s *skill.SkillDef) []string {
 		}
 	}
 	return result
+}
+
+func (c *Coordinator) SkillDetector() *skill.SkillPatternDetector {
+	return c.skillDetector
 }
 
 func (c *Coordinator) Sidecar() *sidecar.Sidecar {
