@@ -1,14 +1,19 @@
 package skill
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/anomalyco/hufu/internal/sidecar"
 )
 
 // ToolCallRecord represents a single tool call with context
@@ -50,6 +55,10 @@ type SkillPatternDetector struct {
 	windowMin         int
 	windowMax         int
 	sidecarEnabled    bool
+	sidecar           *sidecar.Sidecar // sidecar instance for semantic analysis
+	ctx               context.Context  // context for sidecar calls
+	clusterCache      map[string]map[int][]int // descriptions hash -> clusters
+	cacheMu           sync.RWMutex
 }
 
 // NewSkillPatternDetector creates a new pattern detector
@@ -61,12 +70,15 @@ func NewSkillPatternDetector(minFrequency, windowMin, windowMax int) *SkillPatte
 		windowMin:       windowMin,
 		windowMax:       windowMax,
 		sidecarEnabled:  false,
+		clusterCache:    make(map[string]map[int][]int),
 	}
 }
 
-// EnableSidecar enables semantic similarity analysis
-func (d *SkillPatternDetector) EnableSidecar() {
-	d.sidecarEnabled = true
+// SetSidecar sets the sidecar instance and context for semantic analysis
+func (d *SkillPatternDetector) SetSidecar(ctx context.Context, s *sidecar.Sidecar) {
+	d.sidecar = s
+	d.ctx = ctx
+	d.sidecarEnabled = s != nil
 }
 
 // RecordToolCall records a tool call for pattern analysis
@@ -200,7 +212,7 @@ func (d *SkillPatternDetector) FindCandidates() []PatternCandidate {
 		if seq.Count >= d.minFrequency {
 			candidate := PatternCandidate{
 				Sequence:        seq,
-				SimilarityScore: 1.0, // Will be refined by sidecar
+				SimilarityScore: 1.0,
 				SuggestedName:   d.generateSuggestedName(seq),
 				SuggestedDesc:   d.generateSuggestedDescription(seq),
 			}
@@ -213,7 +225,269 @@ func (d *SkillPatternDetector) FindCandidates() []PatternCandidate {
 		return candidates[i].Sequence.Count > candidates[j].Sequence.Count
 	})
 
+	// Apply semantic similarity analysis if sidecar is enabled
+	if d.sidecarEnabled && d.sidecar != nil && len(candidates) > 0 {
+		candidates = d.analyzeSemanticSimilarity(candidates)
+	}
+
 	return candidates
+}
+
+// analyzeSemanticSimilarity uses sidecar to analyze and merge similar sequences
+func (d *SkillPatternDetector) analyzeSemanticSimilarity(candidates []PatternCandidate) []PatternCandidate {
+	// Collect all task descriptions
+	allDescs := d.collectAllTaskDescriptions(candidates)
+	if len(allDescs) < 2 {
+		return candidates
+	}
+
+	// Cluster descriptions using sidecar
+	clusters := d.clusterDescriptions(allDescs)
+	if clusters == nil {
+		return candidates
+	}
+
+	// Merge sequences with similarity >= 0.9
+	merged := d.mergeSimilarSequences(candidates, clusters, 0.9)
+
+	return merged
+}
+
+// collectAllTaskDescriptions collects all unique task descriptions from candidates
+func (d *SkillPatternDetector) collectAllTaskDescriptions(candidates []PatternCandidate) []string {
+	seen := make(map[string]bool)
+	var descs []string
+
+	for _, cand := range candidates {
+		for _, desc := range cand.Sequence.TaskDescs {
+			if desc != "" && !seen[desc] {
+				seen[desc] = true
+				descs = append(descs, desc)
+			}
+		}
+	}
+
+	return descs
+}
+
+// clusterDescriptions uses sidecar to cluster similar task descriptions
+func (d *SkillPatternDetector) clusterDescriptions(descriptions []string) map[int][]int {
+	// Check cache first
+	descHash := d.hashDescriptions(descriptions)
+	
+	d.cacheMu.RLock()
+	if cached, ok := d.clusterCache[descHash]; ok {
+		d.cacheMu.RUnlock()
+		return cached
+	}
+	d.cacheMu.RUnlock()
+
+	// Build prompt for sidecar
+	prompt := d.buildClusterPrompt(descriptions)
+
+	// Call sidecar with timeout
+	ctx, cancel := context.WithTimeout(d.ctx, 5*time.Second)
+	defer cancel()
+
+	result, err := d.sidecar.Execute(ctx, prompt)
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			fmt.Fprintf(os.Stderr, "warning: sidecar cluster timeout\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: sidecar cluster failed: %v\n", err)
+		}
+		return nil
+	}
+
+	// Parse JSON result
+	var clusters map[int][]int
+	if err := json.Unmarshal([]byte(result), &clusters); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to parse cluster JSON: %v\n", err)
+		return nil
+	}
+
+	// Cache the result
+	d.cacheMu.Lock()
+	d.clusterCache[descHash] = clusters
+	d.cacheMu.Unlock()
+
+	return clusters
+}
+
+// hashDescriptions creates a hash of the descriptions list for caching
+func (d *SkillPatternDetector) hashDescriptions(descriptions []string) string {
+	data := strings.Join(descriptions, "|")
+	hash := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(hash[:])
+}
+
+// buildClusterPrompt builds the prompt for clustering task descriptions
+func (d *SkillPatternDetector) buildClusterPrompt(descriptions []string) string {
+	var descList strings.Builder
+	for i, desc := range descriptions {
+		descList.WriteString(fmt.Sprintf("%d. %s\n", i, desc))
+	}
+
+	return fmt.Sprintf(`You are a task similarity analyzer. Group task descriptions that describe essentially the same work.
+
+Return a JSON object where:
+- Keys are cluster IDs (integers starting from 0)
+- Values are arrays of 0-based indices of descriptions in that cluster
+
+Rules:
+- Group descriptions that accomplish the same goal, even if worded differently
+- Keep different workflows in separate clusters
+- A description can only belong to one cluster
+
+Task descriptions:
+%s
+
+Return ONLY the JSON object, no other text.
+Example format: {"0": [0, 2, 5], "1": [1, 3, 4]}`, descList.String())
+}
+
+// mergeSimilarSequences merges sequences based on cluster analysis
+func (d *SkillPatternDetector) mergeSimilarSequences(candidates []PatternCandidate, clusters map[int][]int, threshold float64) []PatternCandidate {
+	// Group candidates by tool sequence
+	groupMap := make(map[string][]PatternCandidate) // tool sequence hash -> candidates
+
+	for _, cand := range candidates {
+		toolHash := d.hashToolSequence(cand.Sequence.Tools)
+		groupMap[toolHash] = append(groupMap[toolHash], cand)
+	}
+
+	// Merge groups
+	var merged []PatternCandidate
+	for _, group := range groupMap {
+		if len(group) > 1 {
+			// Merge similar candidates
+			mergedCand := d.mergeCandidateGroup(group)
+			merged = append(merged, mergedCand)
+		} else if len(group) == 1 {
+			merged = append(merged, group[0])
+		}
+	}
+
+	return merged
+}
+
+// hashToolSequence creates a hash of the tool sequence
+func (d *SkillPatternDetector) hashToolSequence(tools []string) string {
+	data := strings.Join(tools, "|")
+	hash := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(hash[:8])
+}
+
+// isInSameCluster checks if two sets of descriptions share a cluster
+func (d *SkillPatternDetector) isInSameCluster(descs1, descs2 []string, clusters map[int][]int) bool {
+	// For now, use simple keyword overlap as a proxy
+	// The full implementation would map descriptions to cluster IDs
+	keywords1 := d.extractKeywords(descs1)
+	keywords2 := d.extractKeywords(descs2)
+
+	overlap := 0
+	for word := range keywords1 {
+		if keywords2[word] {
+			overlap++
+		}
+	}
+
+	total := len(keywords1) + len(keywords2) - overlap
+	if total == 0 {
+		return false
+	}
+
+	// Consider same cluster if keyword overlap >= 50%
+	return float64(overlap)/float64(total) >= 0.5
+}
+
+// mergeCandidateGroup merges a group of similar candidates
+func (d *SkillPatternDetector) mergeCandidateGroup(group []PatternCandidate) PatternCandidate {
+	totalCount := 0
+	allTaskDescs := []string{}
+	var firstSeen, lastSeen time.Time
+
+	for _, cand := range group {
+		totalCount += cand.Sequence.Count
+		allTaskDescs = append(allTaskDescs, cand.Sequence.TaskDescs...)
+
+		if firstSeen.IsZero() || cand.Sequence.FirstSeen.Before(firstSeen) {
+			firstSeen = cand.Sequence.FirstSeen
+		}
+		if lastSeen.IsZero() || cand.Sequence.LastSeen.After(lastSeen) {
+			lastSeen = cand.Sequence.LastSeen
+		}
+	}
+
+	// Use first candidate's sequence as representative
+	representative := group[0]
+
+	return PatternCandidate{
+		Sequence: &ToolSequence{
+			Tools:     representative.Sequence.Tools,
+			Params:    representative.Sequence.Params,
+			Hash:      representative.Sequence.Hash,
+			Count:     totalCount,
+			FirstSeen: firstSeen,
+			LastSeen:  lastSeen,
+			TaskDescs: allTaskDescs,
+			Agent:     representative.Sequence.Agent,
+		},
+		SimilarityScore: 0.9,
+		SuggestedName:   representative.SuggestedName,
+		SuggestedDesc:   d.generateMergedDescription(allTaskDescs, totalCount),
+	}
+}
+
+// generateMergedDescription generates a description for a merged candidate
+func (d *SkillPatternDetector) generateMergedDescription(descs []string, count int) string {
+	if len(descs) == 0 {
+		return fmt.Sprintf("Auto-generated skill from %d executions", count)
+	}
+
+	descFreq := make(map[string]int)
+	for _, desc := range descs {
+		if desc != "" {
+			descFreq[strings.ToLower(strings.TrimSpace(desc))]++
+		}
+	}
+
+	maxCount := 0
+	mostCommon := ""
+	for desc, c := range descFreq {
+		if c > maxCount {
+			maxCount = c
+			mostCommon = desc
+		}
+	}
+
+	if mostCommon != "" {
+		return fmt.Sprintf("Use when %s (detected from %d similar executions)", mostCommon, count)
+	}
+
+	return fmt.Sprintf("Auto-generated skill from %d executions", count)
+}
+
+// extractKeywords extracts keywords from descriptions
+func (d *SkillPatternDetector) extractKeywords(descs []string) map[string]bool {
+	keywords := make(map[string]bool)
+	stopWords := map[string]bool{
+		"the": true, "a": true, "an": true, "is": true, "are": true,
+		"to": true, "of": true, "in": true, "for": true, "on": true,
+		"with": true, "and": true, "or": true, "but": true,
+	}
+
+	for _, desc := range descs {
+		words := strings.Fields(strings.ToLower(desc))
+		for _, word := range words {
+			word = strings.Trim(word, ".,!?;:")
+			if len(word) > 2 && !stopWords[word] {
+				keywords[word] = true
+			}
+		}
+	}
+
+	return keywords
 }
 
 // generateSuggestedName creates a name from the tool sequence

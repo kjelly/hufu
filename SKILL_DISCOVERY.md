@@ -27,11 +27,41 @@ hufu 現在可以**自動偵測重複執行的動作模式**，並將這些模�
                   ▼
 ┌─────────────────────────────────────────┐
 │  Layer 3: Semantic Similarity (Sidecar) │
-│  - LLM analyzes task descriptions       │
-│  - Clusters similar workflows           │
-│  - Generates skill name & description   │
+│  - ALWAYS ENABLED when sidecar exists   │
+│  - LLM clusters task descriptions       │
+│  - Merges similar sequences (≥0.9)      │
+│  - 5-second timeout with fallback       │
+│  - Cached results for performance       │
 └─────────────────────────────────────────┘
 ```
+
+### 語意相似度分析
+
+**自動啟用**：當 coordinator 初始化時，會自動將 sidecar 實例傳遞給 `SkillPatternDetector`。
+
+**工作流程**：
+1. 收集所有候選模式的 task descriptions
+2. 調用 sidecar LLM 進行聚類分析
+3. 將工具序列相同且語意相似的序列合併（相似度 ≥ 0.9）
+4. 生成合併後的技能描述
+
+**範例**：
+```
+啟用前（僅工具名稱匹配）：
+  1. [view → edit → bash] ×5  (Go code editing)
+  2. [view → edit → bash] ×3  (TypeScript editing)
+
+啟用後（語意合併）：
+  1. [view → edit → bash] ×8  (Code modification workflow)
+     - Merged 2 similar patterns (similarity: 0.92)
+     - Common intent: "Modify source code files"
+```
+
+**性能優化**：
+- **批次處理**：一次性分析所有 descriptions
+- **結果緩存**：相同的 description 組合使用緩存
+- **超時控制**：5 秒超時，失敗時降級到純工具名稱匹配
+- **無 sidecar 時優雅降級**：系統正常工作，僅缺少語意分析
 
 ## 使用方式
 
@@ -92,6 +122,18 @@ vim workspace/skills/draft-view-edit-bash/SKILL.md
 預設：**3-10 個工具**
 
 系統會分析連續 3 到 10 個工具調用的序列。
+
+### 語意相似度閾值
+
+預設：**0.9**
+
+只有相似度 ≥ 0.9 的序列才會被合併。這是一個嚴格的閾值，確保僅合併非常相似的工作流程。
+
+### Sidecar 超時
+
+預設：**5 秒**
+
+語意分析調用有 5 秒超時限制，超時後自動降級到純工具名稱匹配。
 
 ## 技能草稿格式
 

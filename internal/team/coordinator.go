@@ -654,6 +654,11 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		skillPatternsDetected: 0,
 	}
 
+	// Enable sidecar for skill pattern detection
+	if c.sidecarInst != nil {
+		c.skillDetector.SetSidecar(context.Background(), c.sidecarInst)
+	}
+
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
 	if err == nil {
 		c.auditLogger = auditLogger

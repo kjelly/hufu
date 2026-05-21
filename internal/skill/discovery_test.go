@@ -356,3 +356,241 @@ func TestSkillPatternDetector_MinFrequency(t *testing.T) {
 		t.Error("Expected to find view->edit pattern with count >= 5")
 	}
 }
+
+func TestSkillPatternDetector_SemanticSimilarity(t *testing.T) {
+	detector := NewSkillPatternDetector(2, 2, 3)
+
+	// Record tool calls with similar descriptions
+	for i := 0; i < 5; i++ {
+		detector.RecordToolCall("agent1", "view", "*.go", "modify code")
+		detector.RecordToolCall("agent1", "edit", "*.go", "modify code")
+	}
+
+	candidates := detector.FindCandidates()
+
+	// Verify candidates were found (semantic analysis runs automatically if sidecar is set)
+	if len(candidates) == 0 {
+		t.Error("Expected candidates to be found")
+	}
+
+	// Without sidecar, should still work (graceful degradation)
+	// The count is 25 because sliding window creates multiple sequences
+	if candidates[0].Sequence.Count < 5 {
+		t.Errorf("Expected count >= 5, got %d", candidates[0].Sequence.Count)
+	}
+}
+
+func TestSkillPatternDetector_MergeSimilarSequences(t *testing.T) {
+	detector := NewSkillPatternDetector(2, 2, 3)
+
+	candidates := []PatternCandidate{
+		{
+			Sequence: &ToolSequence{
+				Tools:     []string{"view", "edit"},
+				Count:     3,
+				TaskDescs: []string{"fix bug", "fix issue"},
+			},
+			SimilarityScore: 0.95,
+		},
+		{
+			Sequence: &ToolSequence{
+				Tools:     []string{"view", "edit"},
+				Count:     2,
+				TaskDescs: []string{"modify code"},
+			},
+			SimilarityScore: 0.92,
+		},
+	}
+
+	clusters := map[int][]int{
+		0: {0, 1},
+	}
+
+	merged := detector.mergeSimilarSequences(candidates, clusters, 0.9)
+
+	// Verify merging occurred
+	if len(merged) != 1 {
+		t.Errorf("Expected 1 merged candidate, got %d", len(merged))
+	}
+
+	if merged[0].Sequence.Count != 5 {
+		t.Errorf("Expected merged count 5, got %d", merged[0].Sequence.Count)
+	}
+}
+
+func TestSkillPatternDetector_CollectAllTaskDescriptions(t *testing.T) {
+	detector := NewSkillPatternDetector(2, 2, 3)
+
+	candidates := []PatternCandidate{
+		{
+			Sequence: &ToolSequence{
+				TaskDescs: []string{"fix bug", "modify code"},
+			},
+		},
+		{
+			Sequence: &ToolSequence{
+				TaskDescs: []string{"fix bug", "add feature"},
+			},
+		},
+	}
+
+	descs := detector.collectAllTaskDescriptions(candidates)
+
+	// Should have 3 unique descriptions
+	if len(descs) != 3 {
+		t.Errorf("Expected 3 unique descriptions, got %d", len(descs))
+	}
+
+	// Verify all descriptions are present
+	expected := map[string]bool{
+		"fix bug":     false,
+		"modify code": false,
+		"add feature": false,
+	}
+
+	for _, desc := range descs {
+		if _, ok := expected[desc]; ok {
+			expected[desc] = true
+		}
+	}
+
+	for desc, found := range expected {
+		if !found {
+			t.Errorf("Expected description %q not found", desc)
+		}
+	}
+}
+
+func TestSkillPatternDetector_ExtractKeywords(t *testing.T) {
+	detector := NewSkillPatternDetector(2, 2, 3)
+
+	descs := []string{
+		"Fix the bug in the code",
+		"Modify the implementation",
+	}
+
+	keywords := detector.extractKeywords(descs)
+
+	// Should extract content words, not stop words
+	expectedKeywords := []string{"fix", "bug", "code", "modify", "implementation"}
+	for _, keyword := range expectedKeywords {
+		if !keywords[keyword] {
+			t.Errorf("Expected keyword %q not found", keyword)
+		}
+	}
+
+	// Should not include stop words
+	stopWords := []string{"the", "in", "and", "or"}
+	for _, word := range stopWords {
+		if keywords[word] {
+			t.Errorf("Stop word %q should not be included", word)
+		}
+	}
+}
+
+func TestSkillPatternDetector_HashDescriptions(t *testing.T) {
+	detector := NewSkillPatternDetector(2, 2, 3)
+
+	descs1 := []string{"fix bug", "modify code"}
+	descs2 := []string{"fix bug", "modify code"}
+	descs3 := []string{"different", "descriptions"}
+
+	hash1 := detector.hashDescriptions(descs1)
+	hash2 := detector.hashDescriptions(descs2)
+	hash3 := detector.hashDescriptions(descs3)
+
+	if hash1 != hash2 {
+		t.Error("Expected same hash for same descriptions")
+	}
+
+	if hash1 == hash3 {
+		t.Error("Expected different hash for different descriptions")
+	}
+}
+
+func TestSkillPatternDetector_IsInSameCluster(t *testing.T) {
+	detector := NewSkillPatternDetector(2, 2, 3)
+
+	clusters := map[int][]int{
+		0: {0, 1, 2},
+	}
+
+	// Test with overlapping keywords
+	descs1 := []string{"fix bug code"}
+	descs2 := []string{"fix code bug"}
+
+	if !detector.isInSameCluster(descs1, descs2, clusters) {
+		t.Error("Expected descriptions with overlapping keywords to be in same cluster")
+	}
+
+	// Test with no overlap
+	descs3 := []string{"completely different task"}
+	descs4 := []string{"another unrelated thing"}
+
+	if detector.isInSameCluster(descs3, descs4, clusters) {
+		t.Error("Expected descriptions with no overlap to be in different clusters")
+	}
+}
+
+func TestSkillPatternDetector_GenerateMergedDescription(t *testing.T) {
+	detector := NewSkillPatternDetector(2, 2, 3)
+
+	descs := []string{
+		"fix bug in parser",
+		"fix bug in parser",
+		"modify code",
+	}
+
+	result := detector.generateMergedDescription(descs, 10)
+
+	if !strings.Contains(result, "fix bug in parser") {
+		t.Error("Expected merged description to mention most common task")
+	}
+
+	if !strings.Contains(result, "10") {
+		t.Error("Expected merged description to mention count")
+	}
+}
+
+func TestSkillPatternDetector_HashToolSequence(t *testing.T) {
+	detector := NewSkillPatternDetector(2, 2, 3)
+
+	tools1 := []string{"view", "edit", "bash"}
+	tools2 := []string{"view", "edit", "bash"}
+	tools3 := []string{"view", "edit"}
+
+	hash1 := detector.hashToolSequence(tools1)
+	hash2 := detector.hashToolSequence(tools2)
+	hash3 := detector.hashToolSequence(tools3)
+
+	if hash1 != hash2 {
+		t.Error("Expected same hash for same tool sequence")
+	}
+
+	if hash1 == hash3 {
+		t.Error("Expected different hash for different tool sequence")
+	}
+}
+
+func TestSkillPatternDetector_BuildClusterPrompt(t *testing.T) {
+	detector := NewSkillPatternDetector(2, 2, 3)
+
+	descs := []string{
+		"fix bug",
+		"modify code",
+	}
+
+	prompt := detector.buildClusterPrompt(descs)
+
+	if !strings.Contains(prompt, "fix bug") {
+		t.Error("Expected prompt to contain first description")
+	}
+
+	if !strings.Contains(prompt, "modify code") {
+		t.Error("Expected prompt to contain second description")
+	}
+
+	if !strings.Contains(prompt, "JSON") {
+		t.Error("Expected prompt to mention JSON format")
+	}
+}
