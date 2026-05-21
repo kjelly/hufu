@@ -181,7 +181,7 @@ Host *.prod.example.com
 | `source` | string | ✅ | — | Source file path |
 | `destination` | string | ✅ | — | Destination path |
 | `host` | string | ✅ | — | Remote host |
-| `port` | number | ❌ | 22 | SSH port |
+| `port` | number | ❌ | — | SSH port (0-65535). Explicit port overrides SSH config. If not specified, uses SSH config value only (no default). |
 | `identity_file` | string | ❌ | — | SSH private key file |
 | `timeout` | number | ❌ | 30 | Timeout in seconds |
 | `recursive` | boolean | ❌ | false | Transfer directories recursively |

@@ -51,7 +51,7 @@ func NewSshTool(opts ...ToolOption) fantasy.AgentTool {
 				},
 				"port": map[string]any{
 					"type":        "number",
-					"description": "SSH port (optional, default 22). Explicit port overrides SSH config.",
+					"description": "SSH port (optional, 0-65535). Explicit port overrides SSH config. If not specified, uses SSH config value only (no default).",
 				},
 				"identity_file": map[string]any{
 					"type":        "string",
@@ -227,11 +227,6 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 	sshArgList = append(sshArgList, sshHost)
 	if args.Command != "" {
 		sshArgList = append(sshArgList, args.Command)
-	}
-
-	// Use default port 22 if still not set
-	if args.Port == 0 {
-		args.Port = 22
 	}
 
 	sessionMgr := GetSSHSessionManager(ctx)
