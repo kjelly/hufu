@@ -164,10 +164,15 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 	scpArgList = append(scpArgList, src, dst)
 
 	sessionMgr := GetSSHSessionManager(ctx)
+	if sessionMgr != nil {
+		_, _ = sessionMgr.Create(cleanHost, finalUser, args.Port, "")
+		defer sessionMgr.Close(finalUser, cleanHost, args.Port)
+	}
+
 	// Check if password is cached in session
 	var cachedPassword string
 	if sessionMgr != nil {
-		if pwd, ok := sessionMgr.GetPassword(cleanHost, args.Port); ok {
+		if pwd, ok := sessionMgr.GetPassword(finalUser, cleanHost, args.Port); ok {
 			cachedPassword = pwd
 		}
 	}
@@ -188,7 +193,9 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 				"sshpass is required for password authentication. Please install it.",
 			), nil
 		}
-		cmd = exec.CommandContext(cmdCtx, "sshpass", "-p", args.Password, "scp")
+		// Use environment variable for security
+		cmd = exec.CommandContext(cmdCtx, "sshpass", "-e", "scp")
+		cmd.Env = append(os.Environ(), "SSHPASS="+args.Password)
 		cmd.Args = append(cmd.Args, scpArgList...)
 	} else {
 		cmd = exec.CommandContext(cmdCtx, "scp", scpArgList...)
@@ -212,13 +219,14 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		}
 
 		// Ask user for password
-		password, err := askUserForPassword(ctx, args.Host, "", "ssh")
+		password, err := askUserForPassword(ctx, args.Host, finalUser, "ssh")
 		if err == nil && password != "" {
-			// Retry SCP with password using sshpass
+			// Retry SCP with password using sshpass environment variable
 			cmdCtx2, cancel2 := context.WithTimeout(ctx, timeout)
 			defer cancel2()
 
-			sshpassCmd := exec.CommandContext(cmdCtx2, "sshpass", "-p", password, "scp")
+			sshpassCmd := exec.CommandContext(cmdCtx2, "sshpass", "-e", "scp")
+			sshpassCmd.Env = append(os.Environ(), "SSHPASS="+password)
 			sshpassCmd.Args = append(sshpassCmd.Args, scpArgList...)
 
 			_, stderr2, exitCode2 := runCommand(sshpassCmd)
@@ -231,12 +239,12 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 
 			// Cache password in session for future use (5 minute expiry) only on success
 			if exitCode == 0 && sessionMgr != nil {
-				sessionMgr.SetPassword(cleanHost, args.Port, password, 5*time.Minute)
+				sessionMgr.SetPassword(finalUser, cleanHost, args.Port, password, 5*time.Minute)
 			}
 		}
 	} else if waitErr == nil && args.Password != "" && sessionMgr != nil {
 		// If command succeeded with a provided password, cache it
-		sessionMgr.SetPassword(cleanHost, args.Port, args.Password, 5*time.Minute)
+		sessionMgr.SetPassword(finalUser, cleanHost, args.Port, args.Password, 5*time.Minute)
 	}
 
 	if waitErr != nil {

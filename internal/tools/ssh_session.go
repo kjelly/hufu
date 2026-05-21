@@ -29,12 +29,16 @@ func NewSSHSessionManager() *SSHSessionManager {
 	}
 }
 
-// GetSessionKey generates a unique key for a session based on host and port
-func GetSessionKey(host string, port int) string {
-	if port <= 0 || port == 22 {
-		return host
+// GetSessionKey generates a unique key for a session based on user, host and port
+func GetSessionKey(user, host string, port int) string {
+	key := host
+	if user != "" {
+		key = user + "@" + host
 	}
-	return fmt.Sprintf("%s:%d", host, port)
+	if port > 0 && port != 22 {
+		key = fmt.Sprintf("%s:%d", key, port)
+	}
+	return key
 }
 
 // Create creates a new SSH session and stores it in the manager
@@ -44,7 +48,7 @@ func (m *SSHSessionManager) Create(host string, user string, port int, taskID st
 		return nil, nil
 	}
 
-	key := GetSessionKey(host, port)
+	key := GetSessionKey(user, host, port)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -65,12 +69,12 @@ func (m *SSHSessionManager) Create(host string, user string, port int, taskID st
 }
 
 // SetPassword caches a password for an SSH session with expiration
-func (m *SSHSessionManager) SetPassword(host string, port int, password string, expiry time.Duration) bool {
+func (m *SSHSessionManager) SetPassword(user, host string, port int, password string, expiry time.Duration) bool {
 	if m == nil {
 		return false
 	}
 
-	key := GetSessionKey(host, port)
+	key := GetSessionKey(user, host, port)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -86,12 +90,12 @@ func (m *SSHSessionManager) SetPassword(host string, port int, password string, 
 }
 
 // GetPassword retrieves a cached password if not expired
-func (m *SSHSessionManager) GetPassword(host string, port int) (string, bool) {
+func (m *SSHSessionManager) GetPassword(user, host string, port int) (string, bool) {
 	if m == nil {
 		return "", false
 	}
 
-	key := GetSessionKey(host, port)
+	key := GetSessionKey(user, host, port)
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -109,12 +113,12 @@ func (m *SSHSessionManager) GetPassword(host string, port int) (string, bool) {
 }
 
 // ClearPassword removes cached password for a session
-func (m *SSHSessionManager) ClearPassword(host string, port int) bool {
+func (m *SSHSessionManager) ClearPassword(user, host string, port int) bool {
 	if m == nil {
 		return false
 	}
 
-	key := GetSessionKey(host, port)
+	key := GetSessionKey(user, host, port)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -129,14 +133,14 @@ func (m *SSHSessionManager) ClearPassword(host string, port int) bool {
 	return true
 }
 
-// Get retrieves an SSH session by host and port
+// Get retrieves an SSH session by user, host and port
 // Returns nil if session not found or manager is nil
-func (m *SSHSessionManager) Get(host string, port int) *SSHSession {
+func (m *SSHSessionManager) Get(user, host string, port int) *SSHSession {
 	if m == nil {
 		return nil
 	}
 
-	key := GetSessionKey(host, port)
+	key := GetSessionKey(user, host, port)
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -163,12 +167,12 @@ func (m *SSHSessionManager) List() []*SSHSession {
 
 // Close removes an SSH session from the manager
 // Returns true if session was found and removed, false otherwise
-func (m *SSHSessionManager) Close(host string, port int) bool {
+func (m *SSHSessionManager) Close(user, host string, port int) bool {
 	if m == nil {
 		return false
 	}
 
-	key := GetSessionKey(host, port)
+	key := GetSessionKey(user, host, port)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
