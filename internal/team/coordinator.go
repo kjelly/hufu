@@ -776,7 +776,7 @@ func (c *Coordinator) getSkills() []*skill.SkillDef {
 
 func (c *Coordinator) skillDirs() []string {
 	return []string{
-		filepath.Join(c.session.Dir, ".agents", "skills"),
+		filepath.Join(c.session.Dir, "skills"),
 		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
 	}
 }
@@ -801,7 +801,7 @@ func (c *Coordinator) saveAndReloadSkill(name, description, content string) (str
 		return "", fmt.Errorf("invalid skill name %q", name)
 	}
 
-	skillDir := filepath.Join(c.session.Dir, ".agents", "skills", slug)
+	skillDir := filepath.Join(c.session.Dir, "skills", slug)
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create skill directory: %w", err)
 	}

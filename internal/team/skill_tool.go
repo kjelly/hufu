@@ -20,7 +20,7 @@ func (t *saveSkillTool) Info() fantasy.ToolInfo {
 		Name: "save_skill",
 		Description: "Save a reusable skill as a SKILL.md file so it can be loaded by future agents or the coordinator. " +
 			"Use this when you have solved a non-trivial problem and want to encode the solution as a repeatable workflow. " +
-			"The skill is written to the team's local .agents/skills/ directory and is immediately available via load_skill.",
+			"The skill is written to the team's local skills/ directory (e.g., .agent-teams/my-team/skills/<name>/SKILL.md) and is immediately available via load_skill.",
 		Parameters: map[string]any{
 			"name": map[string]any{
 				"type":        "string",

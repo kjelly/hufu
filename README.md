@@ -515,8 +515,8 @@ allowed-tools: view,grep,glob,bash
 
 Skills are searched in the following order:
 
-1. `<teamDir>/.agents/skills/<skill-name>/SKILL.md` — Team-specific skills
-2. `~/.agents/skills/<skill-name>/SKILL.md` — Global skills
+1. `<teamDir>/skills/<skill-name>/SKILL.md` — Team-specific skills (changed from `<teamDir>/.agents/skills/`)
+2. `~/.agents/skills/<skill-name>/SKILL.md` — Global skills (unchanged)
 
 ### Using Skills in Teams
 
@@ -787,7 +787,7 @@ When a guard is triggered, the output is passed to the `guard-model` sidecar for
 | `require-tests` | Ensure test files are included in code changes |
 | `no-profanity` | Block profanity |
 
-You can implement custom rules by creating guard skill definitions in `.agents/skills/guard-<name>/SKILL.md`.
+You can implement custom rules by creating guard skill definitions in `skills/guard-<name>/SKILL.md` in your team directory.
 
 ---
 

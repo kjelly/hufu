@@ -637,7 +637,7 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 	cfg.Vars = interfaceVars
 
 	skillDirs := []string{
-		filepath.Join(absDir, ".agents", "skills"),
+		filepath.Join(absDir, "skills"),
 		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
 	}
 

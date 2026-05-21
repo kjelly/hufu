@@ -511,8 +511,8 @@ allowed-tools: view,grep,glob,bash
 
 Skills 依序從以下路徑搜尋：
 
-1. `<teamDir>/.agents/skills/<skill-name>/SKILL.md` — 團隊專屬 skills
-2. `~/.agents/skills/<skill-name>/SKILL.md` — 全域 skills
+1. `<teamDir>/skills/<skill-name>/SKILL.md` — 團隊專屬 skills（從 `<teamDir>/.agents/skills/` 更改）
+2. `~/.agents/skills/<skill-name>/SKILL.md` — 全域 skills（不變）
 
 ### 在團隊中使用 Skills
 
@@ -769,7 +769,7 @@ guard:
 | `require-tests` | 確保程式碼變更包含測試檔案 |
 | `no-profanity` | 禁止不雅內容 |
 
-你可以透過在 `.agents/skills/guard-<name>/SKILL.md` 建立 guard skill 定義來實作自訂規則。
+你可以透過在團隊目錄的 `skills/guard-<name>/SKILL.md` 建立 guard skill 定義來實作自訂規則。
 
 ---
 

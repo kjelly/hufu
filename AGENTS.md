@@ -931,4 +931,5 @@ Displayed via `skillDisplay` struct in `cmd/hufu/display.go`, updated on each `s
 
 | Path | Description |
 |------|-------------|
-| `.agents/skills/code-reviewer/SKILL.md` | Code review skill (supports local changes and remote PRs) |
+| `.agents/skills/code-reviewer/SKILL.md` | Code review skill (supports local changes and remote PRs) — Global skill at project root (unchanged) |
+

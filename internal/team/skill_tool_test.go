@@ -47,7 +47,7 @@ func TestSaveAndReloadSkill_CreatesFile(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	wantPath := filepath.Join(dir, ".agents", "skills", "my-skill", "SKILL.md")
+	wantPath := filepath.Join(dir, "skills", "my-skill", "SKILL.md")
 	if path != wantPath {
 		t.Errorf("returned path = %q, want %q", path, wantPath)
 	}
@@ -124,7 +124,7 @@ func TestSaveAndReloadSkill_SlugifyName(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// Directory slug should be lowercase-hyphenated.
-	wantDir := filepath.Join(dir, ".agents", "skills", "my-cool-skill")
+	wantDir := filepath.Join(dir, "skills", "my-cool-skill")
 	if _, err := os.Stat(wantDir); os.IsNotExist(err) {
 		t.Errorf("expected slug directory %q to exist", wantDir)
 	}
