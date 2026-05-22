@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -14,6 +13,17 @@ import (
 	"time"
 
 	"github.com/anomalyco/hufu/internal/sidecar"
+)
+
+const maxToolCallHistory = 1000
+
+// Pre-compiled regex patterns for normalizeParams (avoid recompilation on every call)
+var (
+	reFile  = regexp.MustCompile(`[\w./-]+\.(go|ts|js|py|md|yaml|yml|json|txt)`)
+	reNum   = regexp.MustCompile(`\b\d+\b`)
+	reURL   = regexp.MustCompile(`https?://[\w./-]+`)
+	reHash  = regexp.MustCompile(`\b[a-f0-9]{7,40}\b`)
+	reQuote = regexp.MustCompile(`["'][^"']+["']`)
 )
 
 // ToolCallRecord represents a single tool call with context
@@ -56,7 +66,6 @@ type SkillPatternDetector struct {
 	windowMax         int
 	sidecarEnabled    bool
 	sidecar           *sidecar.Sidecar // sidecar instance for semantic analysis
-	ctx               context.Context  // context for sidecar calls
 	clusterCache      map[string]map[int][]int // descriptions hash -> clusters
 	cacheMu           sync.RWMutex
 }
@@ -74,10 +83,11 @@ func NewSkillPatternDetector(minFrequency, windowMin, windowMax int) *SkillPatte
 	}
 }
 
-// SetSidecar sets the sidecar instance and context for semantic analysis
-func (d *SkillPatternDetector) SetSidecar(ctx context.Context, s *sidecar.Sidecar) {
+// SetSidecar sets the sidecar instance for semantic analysis
+func (d *SkillPatternDetector) SetSidecar(s *sidecar.Sidecar) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.sidecar = s
-	d.ctx = ctx
 	d.sidecarEnabled = s != nil
 }
 
@@ -95,6 +105,12 @@ func (d *SkillPatternDetector) RecordToolCall(agent, tool, input, taskDesc strin
 	}
 
 	d.toolCalls = append(d.toolCalls, record)
+
+	// Maintain bounded history to prevent unbounded memory growth
+	if len(d.toolCalls) > maxToolCallHistory {
+		d.toolCalls = d.toolCalls[len(d.toolCalls)-maxToolCallHistory:]
+	}
+
 	d.analyzeSequencesLocked()
 }
 
@@ -117,10 +133,18 @@ func (d *SkillPatternDetector) analyzeSequencesLocked() {
 }
 
 // extractSequencesForAgent extracts sequences from an agent's tool calls
+// Incremental analysis: only process recent calls to avoid O(n³) cumulative analysis
 func (d *SkillPatternDetector) extractSequencesForAgent(agent string, calls []ToolCallRecord) {
 	if len(calls) < d.windowMin {
 		return
 	}
+
+	// Only analyze the last N calls (sliding window) to prevent cumulative reprocessing
+	startIdx := 0
+	if len(calls) > d.windowMax*2 {
+		startIdx = len(calls) - d.windowMax*2
+	}
+	calls = calls[startIdx:]
 
 	// Sliding window extraction
 	for windowSize := d.windowMin; windowSize <= d.windowMax && windowSize <= len(calls); windowSize++ {
@@ -168,27 +192,22 @@ func (d *SkillPatternDetector) buildSequence(calls []ToolCallRecord, agent strin
 
 // normalizeParams normalizes tool input to a pattern
 func (d *SkillPatternDetector) normalizeParams(tool, input string) string {
-	// Replace specific values with placeholders
+	// Replace specific values with placeholders using pre-compiled regex
 	result := input
 
 	// File paths with extensions
-	reFile := regexp.MustCompile(`[\w./-]+\.(go|ts|js|py|md|yaml|yml|json|txt)`)
 	result = reFile.ReplaceAllString(result, "*.$1")
 
 	// Numbers
-	reNum := regexp.MustCompile(`\b\d+\b`)
 	result = reNum.ReplaceAllString(result, "<num>")
 
 	// URLs
-	reURL := regexp.MustCompile(`https?://[\w./-]+`)
 	result = reURL.ReplaceAllString(result, "<url>")
 
 	// Hashes (git, etc)
-	reHash := regexp.MustCompile(`\b[a-f0-9]{7,40}\b`)
 	result = reHash.ReplaceAllString(result, "<hash>")
 
 	// Quoted strings
-	reQuote := regexp.MustCompile(`["'][^"']+["']`)
 	result = reQuote.ReplaceAllString(result, "<str>")
 
 	return result
@@ -204,8 +223,6 @@ func (d *SkillPatternDetector) hashSequence(seq *ToolSequence) string {
 // FindCandidates returns patterns that repeat at least minFrequency times
 func (d *SkillPatternDetector) FindCandidates() []PatternCandidate {
 	d.mu.RLock()
-	defer d.mu.RUnlock()
-
 	var candidates []PatternCandidate
 
 	for _, seq := range d.sequences {
@@ -225,7 +242,9 @@ func (d *SkillPatternDetector) FindCandidates() []PatternCandidate {
 		return candidates[i].Sequence.Count > candidates[j].Sequence.Count
 	})
 
-	// Apply semantic similarity analysis if sidecar is enabled
+	d.mu.RUnlock() // Release lock BEFORE network call
+
+	// Apply semantic similarity analysis if sidecar is enabled (network call outside lock)
 	if d.sidecarEnabled && d.sidecar != nil && len(candidates) > 0 {
 		candidates = d.analyzeSemanticSimilarity(candidates)
 	}
@@ -241,8 +260,8 @@ func (d *SkillPatternDetector) analyzeSemanticSimilarity(candidates []PatternCan
 		return candidates
 	}
 
-	// Cluster descriptions using sidecar
-	clusters := d.clusterDescriptions(allDescs)
+	// Cluster descriptions using sidecar with background context
+	clusters := d.clusterDescriptions(context.Background(), allDescs)
 	if clusters == nil {
 		return candidates
 	}
@@ -271,7 +290,7 @@ func (d *SkillPatternDetector) collectAllTaskDescriptions(candidates []PatternCa
 }
 
 // clusterDescriptions uses sidecar to cluster similar task descriptions
-func (d *SkillPatternDetector) clusterDescriptions(descriptions []string) map[int][]int {
+func (d *SkillPatternDetector) clusterDescriptions(ctx context.Context, descriptions []string) map[int][]int {
 	// Check cache first
 	descHash := d.hashDescriptions(descriptions)
 	
@@ -286,23 +305,19 @@ func (d *SkillPatternDetector) clusterDescriptions(descriptions []string) map[in
 	prompt := d.buildClusterPrompt(descriptions)
 
 	// Call sidecar with timeout
-	ctx, cancel := context.WithTimeout(d.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	result, err := d.sidecar.Execute(ctx, prompt)
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			fmt.Fprintf(os.Stderr, "warning: sidecar cluster timeout\n")
-		} else {
-			fmt.Fprintf(os.Stderr, "warning: sidecar cluster failed: %v\n", err)
-		}
+		// Don't write to stderr - return nil and let caller handle error
 		return nil
 	}
 
 	// Parse JSON result
 	var clusters map[int][]int
 	if err := json.Unmarshal([]byte(result), &clusters); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to parse cluster JSON: %v\n", err)
+		// Don't write to stderr - return nil silently
 		return nil
 	}
 

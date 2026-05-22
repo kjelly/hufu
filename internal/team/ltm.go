@@ -104,7 +104,11 @@ func normalizeLTREntry(entry string) string {
 }
 
 func LTMPath(workspace, teamName string) string {
-	return filepath.Join(workspace, fmt.Sprintf("ltm-%s.md", teamName))
+	// Sanitize teamName to prevent path traversal
+	safeName := strings.ReplaceAll(teamName, "/", "-")
+	safeName = strings.ReplaceAll(safeName, "..", "-")
+	safeName = strings.ReplaceAll(safeName, "\\", "-")
+	return filepath.Join(workspace, fmt.Sprintf("ltm-%s.md", safeName))
 }
 
 func LoadLTM(workspace, teamName string) string {

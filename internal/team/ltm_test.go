@@ -74,6 +74,27 @@ func TestLTMPath(t *testing.T) {
 	}
 }
 
+func TestLTMPathSanitization(t *testing.T) {
+	tests := []struct {
+		teamName string
+		want     string
+	}{
+		{"normal-team", "ltm-normal-team.md"},
+		{"foo/bar", "ltm-foo-bar.md"},
+		{"../../../etc", "ltm-------etc.md"},      // ".." → "-", "/" → "-" for each char
+		{"..\\..\\windows", "ltm-----windows.md"}, // ".." → "-", "\\" → "-" for each char
+		{"team/name/with/slashes", "ltm-team-name-with-slashes.md"},
+	}
+
+	for _, tt := range tests {
+		got := LTMPath("/tmp/workspace", tt.teamName)
+		want := filepath.Join("/tmp/workspace", tt.want)
+		if got != want {
+			t.Errorf("LTMPath(%q) = %q, want %q", tt.teamName, got, want)
+		}
+	}
+}
+
 func TestFormatLTMEntry(t *testing.T) {
 	got := formatLTMEntry("Use bcrypt for password hashing")
 	if got == "" {
