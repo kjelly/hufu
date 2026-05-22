@@ -8,7 +8,7 @@ import (
 
 func TestLoadLTMNonexistent(t *testing.T) {
 	dir := t.TempDir()
-	if got := LoadLTM(dir); got != "" {
+	if got := LoadLTM(dir, "test-team"); got != "" {
 		t.Errorf("LoadLTM() = %q, want empty", got)
 	}
 }
@@ -16,10 +16,10 @@ func TestLoadLTMNonexistent(t *testing.T) {
 func TestSaveAndLoadLTM(t *testing.T) {
 	dir := t.TempDir()
 	content := "## project conventions\n- use conventional commits"
-	if err := SaveLTM(dir, content); err != nil {
+	if err := SaveLTM(dir, "test-team", content); err != nil {
 		t.Fatalf("SaveLTM() error: %v", err)
 	}
-	got := LoadLTM(dir)
+	got := LoadLTM(dir, "test-team")
 	if got != content {
 		t.Errorf("LoadLTM() = %q, want %q", got, content)
 	}
@@ -46,29 +46,29 @@ func TestTruncateLTMOverLimit(t *testing.T) {
 
 func TestInitLTMCreatesFile(t *testing.T) {
 	dir := t.TempDir()
-	if err := InitLTM(dir); err != nil {
+	if err := InitLTM(dir, "test-team"); err != nil {
 		t.Fatalf("InitLTM() error: %v", err)
 	}
-	if _, err := os.Stat(LTMPath(dir)); err != nil {
+	if _, err := os.Stat(LTMPath(dir, "test-team")); err != nil {
 		t.Errorf("ltm.md should exist after InitLTM: %v", err)
 	}
 }
 
 func TestInitLTMIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	SaveLTM(dir, "existing knowledge")
-	if err := InitLTM(dir); err != nil {
+	SaveLTM(dir, "test-team", "existing knowledge")
+	if err := InitLTM(dir, "test-team"); err != nil {
 		t.Fatalf("InitLTM() error: %v", err)
 	}
-	got := LoadLTM(dir)
+	got := LoadLTM(dir, "test-team")
 	if got != "existing knowledge" {
 		t.Errorf("InitLTM() clobbered existing content: got %q", got)
 	}
 }
 
 func TestLTMPath(t *testing.T) {
-	got := LTMPath("/tmp/team")
-	want := filepath.Join("/tmp/team", "ltm.md")
+	got := LTMPath("/tmp/team", "test-team")
+	want := filepath.Join("/tmp/team", "ltm-test-team.md")
 	if got != want {
 		t.Errorf("LTMPath() = %q, want %q", got, want)
 	}
@@ -185,7 +185,6 @@ func TestHasLTREntry(t *testing.T) {
 
 func TestExtractLTMFromHistory(t *testing.T) {
 	workspace := t.TempDir()
-	teamDir := t.TempDir()
 
 	histDir := workspace + "/history"
 	if err := os.MkdirAll(histDir, 0o755); err != nil {
@@ -199,9 +198,9 @@ func TestExtractLTMFromHistory(t *testing.T) {
 	// non-stm file should be ignored
 	os.WriteFile(histDir+"/session.md", []byte("irrelevant"), 0o644)
 
-	ExtractLTMFromHistory(workspace, teamDir)
+	ExtractLTMFromHistory(workspace, "test-team")
 
-	ltm := LoadLTM(teamDir)
+	ltm := LoadLTM(workspace, "test-team")
 	if ltm == "" {
 		t.Fatal("ExtractLTMFromHistory: ltm.md is empty")
 	}
@@ -226,12 +225,11 @@ func TestExtractLTMFromHistory(t *testing.T) {
 
 func TestExtractLTMFromHistoryEmpty(t *testing.T) {
 	workspace := t.TempDir()
-	teamDir := t.TempDir()
 
 	// No history directory at all — should not panic
-	ExtractLTMFromHistory(workspace, teamDir)
+	ExtractLTMFromHistory(workspace, "test-team")
 
-	if ltm := LoadLTM(teamDir); ltm != "" {
+	if ltm := LoadLTM(workspace, "test-team"); ltm != "" {
 		t.Errorf("expected empty ltm, got %q", ltm)
 	}
 }

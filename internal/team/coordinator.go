@@ -999,7 +999,7 @@ func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 		}
 	}
 
-	if rawLTM := LoadLTM(c.session.Dir); rawLTM != "" {
+	if rawLTM := LoadLTM(c.session.Workspace, c.session.Config.Name); rawLTM != "" {
 		sections := ParseSTMSections(rawLTM)
 		if len(sections) > 0 {
 			for i, s := range sections {
@@ -1072,7 +1072,7 @@ func (c *Coordinator) buildTaskSTMContext() string {
 // Used by executeTask in place of buildMemorySuffix (which includes STM)
 // so that STM is not duplicated when buildTaskSTMContext is already prepended.
 func (c *Coordinator) buildLTMContext() string {
-	rawLTM := LoadLTM(c.session.Dir)
+	rawLTM := LoadLTM(c.session.Workspace, c.session.Config.Name)
 	if rawLTM == "" {
 		return ""
 	}
@@ -1180,7 +1180,6 @@ func extractSummary(output string, maxRunes int) string {
 }
 
 func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
-	teamDir := c.session.Dir
 	workspace := c.session.Workspace
 	stmContent := LoadSTM(workspace)
 	if stmContent == "" {
@@ -1190,7 +1189,7 @@ func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
 	c.ltmWriteMu.Lock()
 	defer c.ltmWriteMu.Unlock()
 
-	existingLTM := LoadLTM(teamDir)
+	existingLTM := LoadLTM(workspace, c.session.Config.Name)
 	sections := ParseSTMSections(stmContent)
 	existingLTMSections := ParseSTMSections(existingLTM)
 
@@ -1249,7 +1248,7 @@ func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
 	}
 
 	pruned := PruneLTM(existingLTM)
-	if err := SaveLTM(teamDir, TruncateLTM(pruned)); err != nil {
+	if err := SaveLTM(workspace, c.session.Config.Name, TruncateLTM(pruned)); err != nil {
 		log.Printf("warning: auto LTM extraction failed: %v", err)
 	}
 
@@ -2172,8 +2171,8 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 	t.coordinator.ltmWriteMu.Lock()
 	defer t.coordinator.ltmWriteMu.Unlock()
 
-	teamDir := t.coordinator.session.Dir
-	existingLTM := LoadLTM(teamDir)
+	workspace := t.coordinator.session.Workspace
+	existingLTM := LoadLTM(workspace, t.coordinator.session.Config.Name)
 	entry := formatLTMEntry(args.Content)
 	existingLTMSections := ParseSTMSections(existingLTM)
 	if hasLTREntry(existingLTMSections, section, entry) {
@@ -2182,7 +2181,7 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 
 	newLTM := appendSTMEntry(existingLTM, entry, section)
 	pruned := PruneLTM(newLTM)
-	if err := SaveLTM(teamDir, TruncateLTM(pruned)); err != nil {
+	if err := SaveLTM(workspace, t.coordinator.session.Config.Name, TruncateLTM(pruned)); err != nil {
 		log.Printf("warning: memory_save LTM write-back failed: %v", err)
 	}
 
@@ -2374,11 +2373,11 @@ func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	}
 
 	entry := formatLTMEntry(args.Content)
-	teamDir := t.coordinator.session.Dir
+	workspace := t.coordinator.session.Workspace
 	t.coordinator.ltmWriteMu.Lock()
-	existing := LoadLTM(teamDir)
+	existing := LoadLTM(workspace, t.coordinator.session.Config.Name)
 	newContent := TruncateLTM(appendLTMEntry(existing, entry, args.Section))
-	err := SaveLTM(teamDir, newContent)
+	err := SaveLTM(workspace, t.coordinator.session.Config.Name, newContent)
 	t.coordinator.ltmWriteMu.Unlock()
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write ltm.md: %v", err)), nil

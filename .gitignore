@@ -7,8 +7,6 @@ reports
 ignores/
 dist/
 coverage.out
-ltm.md
 stm.md
 .opencode/plans
-.agent-teams/**/ltm.md
 

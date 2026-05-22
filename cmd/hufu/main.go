@@ -521,7 +521,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 
 	team.EnsureWorkspaceDirs(session.Workspace)
 
-	if err := team.InitLTM(session.Dir); err != nil {
+	if err := team.InitLTM(session.Workspace, session.Config.Name); err != nil {
 		stderrLog("%s Failed to init ltm.md: %v\n", errStyle.Render("⚠"), err)
 	}
 	if err := team.InitSTM(session.Workspace); err != nil {
@@ -530,7 +530,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	if newSession {
 		// Extract knowledge from all accumulated history/*-stm.md snapshots
 		// into ltm.md, then delete the history files.
-		team.ExtractLTMFromHistory(session.Workspace, session.Dir)
+		team.ExtractLTMFromHistory(session.Workspace, session.Config.Name)
 	}
 
 	var sessionData *team.SessionData

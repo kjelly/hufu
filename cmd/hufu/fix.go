@@ -90,7 +90,7 @@ func collectFixData(session *team.TeamSession, taskDesc string) *fixData {
 		d.STM = stm
 	}
 
-	if ltm := team.LoadLTM(session.Dir); ltm != "" {
+	if ltm := team.LoadLTM(session.Workspace, session.Config.Name); ltm != "" {
 		d.LTM = limitStr(ltm, 4000)
 	}
 

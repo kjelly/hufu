@@ -103,20 +103,28 @@ func normalizeLTREntry(entry string) string {
 	return strings.TrimSpace(b.String())
 }
 
-func LTMPath(teamDir string) string {
-	return filepath.Join(teamDir, ltmFile)
+func LTMPath(workspace, teamName string) string {
+	return filepath.Join(workspace, fmt.Sprintf("ltm-%s.md", teamName))
 }
 
-func LoadLTM(teamDir string) string {
-	data, err := os.ReadFile(LTMPath(teamDir))
+func LoadLTM(workspace, teamName string) string {
+	data, err := os.ReadFile(LTMPath(workspace, teamName))
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
 }
 
-func SaveLTM(teamDir string, content string) error {
-	return os.WriteFile(LTMPath(teamDir), []byte(content), 0o644)
+func SaveLTM(workspace, teamName, content string) error {
+	return os.WriteFile(LTMPath(workspace, teamName), []byte(content), 0o644)
+}
+
+func InitLTM(workspace, teamName string) error {
+	path := LTMPath(workspace, teamName)
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	return os.WriteFile(path, []byte(""), 0o644)
 }
 
 func TruncateLTM(content string) string {
@@ -125,14 +133,6 @@ func TruncateLTM(content string) string {
 		return content
 	}
 	return string(runes[len(runes)-maxLTMChars:])
-}
-
-func InitLTM(teamDir string) error {
-	path := LTMPath(teamDir)
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	}
-	return os.WriteFile(path, []byte(""), 0o644)
 }
 
 // extractLTMFromContent merges knowledge from one STM snapshot (stmContent)
@@ -165,14 +165,14 @@ func extractLTMFromContent(stmContent, existingLTM string) string {
 // ExtractLTMFromHistory reads every history/*-stm.md file, extracts knowledge
 // into ltm.md, then deletes the history files. Called on --new startup so that
 // accumulated session snapshots are distilled into long-term memory.
-func ExtractLTMFromHistory(workspace, teamDir string) {
+func ExtractLTMFromHistory(workspace, teamName string) {
 	histDir := filepath.Join(workspace, historyDirName)
 	entries, err := os.ReadDir(histDir)
 	if err != nil {
 		return
 	}
 
-	ltm := LoadLTM(teamDir)
+	ltm := LoadLTM(workspace, teamName)
 	anyContent := false
 
 	for _, e := range entries {
@@ -193,7 +193,7 @@ func ExtractLTMFromHistory(workspace, teamDir string) {
 		return
 	}
 
-	if err := SaveLTM(teamDir, TruncateLTM(PruneLTM(ltm))); err != nil {
+	if err := SaveLTM(workspace, teamName, TruncateLTM(PruneLTM(ltm))); err != nil {
 		fmt.Printf("warning: LTM extraction from history failed: %v\n", err)
 	}
 }

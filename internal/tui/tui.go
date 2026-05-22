@@ -1931,7 +1931,6 @@ func (m *Model) loadMemoryContent() {
 	b.WriteString("\n\n")
 
 	ws := m.teamInfo.Workspace
-	td := m.teamInfo.TeamDir
 
 	if ws != "" {
 		data, err := os.ReadFile(filepath.Join(ws, "stm.md"))
@@ -1952,8 +1951,8 @@ func (m *Model) loadMemoryContent() {
 		}
 	}
 
-	if td != "" {
-		data, err := os.ReadFile(filepath.Join(td, "ltm.md"))
+	if ws != "" && m.teamInfo.TeamName != "" {
+		data, err := os.ReadFile(filepath.Join(ws, fmt.Sprintf("ltm-%s.md", m.teamInfo.TeamName)))
 		if err == nil && len(data) > 0 {
 			content := strings.TrimSpace(string(data))
 			if content != "" {
