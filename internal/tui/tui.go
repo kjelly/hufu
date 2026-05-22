@@ -574,6 +574,34 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case "ctrl+d", "J":
+		h := m.vp.Height
+		if h <= 0 {
+			h = 10
+		}
+		quarterPage := h / 4
+		if quarterPage < 1 {
+			quarterPage = 1
+		}
+		m.vp.SetYOffset(m.vp.YOffset + quarterPage)
+		if m.vpReady {
+			m.vp.SetContent(m.buildDetailContent())
+		}
+		return m, nil
+	case "ctrl+u", "K":
+		h := m.vp.Height
+		if h <= 0 {
+			h = 10
+		}
+		quarterPage := h / 4
+		if quarterPage < 1 {
+			quarterPage = 1
+		}
+		m.vp.SetYOffset(m.vp.YOffset - quarterPage)
+		if m.vpReady {
+			m.vp.SetContent(m.buildDetailContent())
+		}
+		return m, nil
 	case "g":
 		m.cursorLine = 0
 		m.followCursor()
@@ -852,11 +880,33 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchIdx = (m.searchIdx + 1) % len(m.searchResults)
 			m.jumpToSearchMatch()
 		}
+		return m, nil
 	case "N":
 		if len(m.searchResults) > 0 {
 			m.searchIdx = (m.searchIdx - 1 + len(m.searchResults)) % len(m.searchResults)
 			m.jumpToSearchMatch()
 		}
+		return m, nil
+	case "J":
+		quarterPage := max(m.colBodyHeight()/4, 1)
+		newRow := m.row + quarterPage
+		if newRow >= len(col) {
+			newRow = len(col) - 1
+		}
+		if len(col) > 0 {
+			m.row = newRow
+			m.scrollCursorIntoView()
+		}
+		return m, nil
+	case "K":
+		quarterPage := max(m.colBodyHeight()/4, 1)
+		newRow := m.row - quarterPage
+		if newRow < 0 {
+			newRow = 0
+		}
+		m.row = newRow
+		m.scrollCursorIntoView()
+		return m, nil
 	case "up", "k":
 		if m.row > 0 {
 			m.row--
@@ -882,8 +932,8 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "ctrl+d":
-		halfPage := max(m.colBodyHeight()/2, 1)
-		newRow := m.row + halfPage
+		quarterPage := max(m.colBodyHeight()/4, 1)
+		newRow := m.row + quarterPage
 		if newRow >= len(col) {
 			newRow = len(col) - 1
 		}
@@ -893,8 +943,8 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "ctrl+u":
-		halfPage := max(m.colBodyHeight()/2, 1)
-		newRow := m.row - halfPage
+		quarterPage := max(m.colBodyHeight()/4, 1)
+		newRow := m.row - quarterPage
 		if newRow < 0 {
 			newRow = 0
 		}
@@ -1743,7 +1793,7 @@ func (m Model) footer() string {
 				boldStyle.Render("v/esc") + footerStyle.Render(" cancel · ") +
 				boldStyle.Render("j/k") + footerStyle.Render(" extend")
 		}
-		return footerStyle.Render("j/k ↑↓ scroll · v visual · esc back")
+		return footerStyle.Render("J/K/ctrl+d/u ↑↓ scroll · v visual · esc back")
 	}
 	if m.inInfo {
 		return footerStyle.Render("i/esc close · ↑↓ scroll")
@@ -1752,12 +1802,12 @@ func (m Model) footer() string {
 		return footerStyle.Render("enter search · esc cancel")
 	}
 	if len(m.searchResults) > 0 {
-		return footerStyle.Render(fmt.Sprintf("n/N next/prev match (%d/%d) · / search · i info · esc clear · g/G top/bot · ctrl+d/u half-page · ↑↓ j/k · enter detail · q quit", m.searchIdx+1, len(m.searchResults)))
+		return footerStyle.Render(fmt.Sprintf("n/N next/prev match (%d/%d) · / search · i info · esc clear · g/G top/bot · J/K/ctrl+d/u scroll · ↑↓ j/k · enter detail · q quit", m.searchIdx+1, len(m.searchResults)))
 	}
 	if m.finished {
-		return footerStyle.Render("g/G top/bot · ctrl+d/u half-page · / search · r report · i info · ↑↓ j/k · enter detail · q quit")
+		return footerStyle.Render("g/G top/bot · J/K/ctrl+d/u scroll · / search · r report · i info · ↑↓ j/k · enter detail · q quit")
 	}
-	return footerStyle.Render("g/G top/bot · ctrl+d/u half-page · / search · i info · c prompt · ↑↓ j/k · enter detail · esc quit")
+	return footerStyle.Render("g/G top/bot · J/K/ctrl+d/u scroll · / search · i info · c prompt · ↑↓ j/k · enter detail · esc quit")
 }
 
 func (m Model) confirmView() string {
