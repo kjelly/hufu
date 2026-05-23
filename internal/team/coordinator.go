@@ -3407,6 +3407,7 @@ func cloneAgentDef(def *agent.AgentDef) *agent.AgentDef {
 
 // executeSingleAgentWithModel executes a single agent task with a pre-configured agentDef.
 // The caller must ensure agentDef.ExtraModels is nil to prevent infinite recursion.
+// Extra models execute in isolated sub-workspaces to prevent file conflicts.
 func (c *Coordinator) executeSingleAgentWithModel(
 	parentCtx context.Context,
 	agentName string,
@@ -3420,8 +3421,69 @@ func (c *Coordinator) executeSingleAgentWithModel(
 		Model: agentDef.Generation.Model,
 	}
 
+	// Isolate workspace for extra models to prevent concurrent file conflicts.
+	subWS := filepath.Join(c.session.Workspace, "extra-models", sanitizeModel(agentDef.Generation.Model))
+	if err := os.MkdirAll(subWS, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create isolated workspace: %w", err)
+	}
+	defer os.RemoveAll(subWS)
+
+	// Copy shared/ directory from main workspace
+	sharedSrc := filepath.Join(c.session.Workspace, "shared")
+	sharedDst := filepath.Join(subWS, "shared")
+	if _, err := os.Stat(sharedSrc); err == nil {
+		if err := copyDir(sharedSrc, sharedDst); err != nil {
+			log.Printf("warning: failed to copy shared dir to isolated workspace: %v", err)
+		}
+	}
+
+	// Swap workspace to isolated directory for the duration of this task
+	originalWS := c.session.Workspace
+	c.session.Workspace = subWS
+	defer func() { c.session.Workspace = originalWS }()
+
 	result, err := c.executeTask(parentCtx, task, todoID)
 	return result, err
+}
+
+// sanitizeModel removes characters unsafe for file paths from a model name.
+func sanitizeModel(model string) string {
+	s := strings.ReplaceAll(model, "/", "-")
+	s = safeNameRegex.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if s == "" {
+		s = "default"
+	}
+	return s
+}
+
+// copyDir recursively copies a directory tree.
+func copyDir(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			data, err := os.ReadFile(srcPath)
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(dstPath, data, 0o644); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // mergeAgentResults concatenates outputs from multiple models

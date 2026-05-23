@@ -281,7 +281,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scrollCursorIntoView()
 
 	case TaskLogMsg:
-		m.logs[msg.TodoID] = append(m.logs[msg.TodoID], msg.Line)
+		line := msg.Line
+		if msg.Model != "" {
+			line = dimStyle.Render("["+msg.Model+"] ") + line
+		}
+		m.logs[msg.TodoID] = append(m.logs[msg.TodoID], line)
 		if m.inDetail && m.detailID == msg.TodoID && m.vpReady && !m.detailRefreshScheduled {
 			m.detailRefreshScheduled = true
 			return m, func() tea.Msg {
@@ -289,7 +293,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return detailRefreshMsg{}
 			}
 		}
-		m.recentLogs = append(m.recentLogs, msg.Line)
+		m.recentLogs = append(m.recentLogs, line)
 		if len(m.recentLogs) > 500 {
 			m.recentLogs = m.recentLogs[len(m.recentLogs)-500:]
 		}

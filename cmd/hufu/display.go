@@ -1226,6 +1226,12 @@ func (b *tuiTextBufs) get(todoID string) string {
 	return b.texts[todoID]
 }
 
+func (b *tuiTextBufs) set(todoID, text string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.texts[todoID] = text
+}
+
 // makeTUIReporter returns a StatusReporter that forwards relevant events to p,
 // and a cleanup func that stops any background thinking-ticker goroutines.
 func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
@@ -1401,9 +1407,7 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 				}
 				line := cur[:idx]
 				rest := cur[idx+1:]
-				tb.mu.Lock()
-				tb.texts[event.TodoID] = rest
-				tb.mu.Unlock()
+				tb.set(event.TodoID, rest)
 				if trimmed := strings.TrimSpace(line); trimmed != "" {
 					p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 " + trimmed)})
 				}
