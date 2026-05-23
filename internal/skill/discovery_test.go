@@ -187,16 +187,14 @@ func TestSkillPatternDetector_MultipleAgents(t *testing.T) {
 func TestSkillPatternDetector_WindowSize(t *testing.T) {
 	detector := NewSkillPatternDetector(2, 3, 5)
 
-	// Record exactly 5 tool calls
-	tools := []string{"view", "edit", "bash", "view", "bash"}
+	// Record tool calls with a repeating 3-tool sequence: view→edit→bash, then repeat
+	tools := []string{"view", "edit", "bash", "glob", "view", "edit", "bash"}
 	for _, tool := range tools {
 		detector.RecordToolCall("agent1", tool, "args", "task")
 	}
 
-	// Should detect sequences of size 3, 4, and 5
 	candidates := detector.FindCandidates(context.Background())
 
-	// At minimum, should find some repeating patterns
 	if len(candidates) == 0 {
 		t.Error("Expected to find some candidates with window size 3-5")
 	}

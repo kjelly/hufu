@@ -1183,21 +1183,55 @@ func (tt *thinkingTracker) stopAll() {
 	tt.latest = ""
 }
 
+// tuiTextBufs holds per-todoID text buffers and model mappings with
+// concurrency-safe access for use by the multi-model reporter.
+type tuiTextBufs struct {
+	mu       sync.RWMutex
+	texts    map[string]string
+	models   map[string]string
+}
+
+func newTUIBufs() *tuiTextBufs {
+	return &tuiTextBufs{
+		texts:  make(map[string]string),
+		models: make(map[string]string),
+	}
+}
+
+func (b *tuiTextBufs) append(todoID, text string) {
+	b.mu.Lock()
+	b.texts[todoID] += text
+	b.mu.Unlock()
+}
+
+func (b *tuiTextBufs) setModel(todoID, model string) {
+	b.mu.Lock()
+	b.models[todoID] = model
+	b.mu.Unlock()
+}
+
+func (b *tuiTextBufs) flush(todoID string) (text string, model string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	text = strings.TrimSpace(b.texts[todoID])
+	model = b.models[todoID]
+	delete(b.texts, todoID)
+	delete(b.models, todoID)
+	return
+}
+
+func (b *tuiTextBufs) get(todoID string) string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.texts[todoID]
+}
+
 // makeTUIReporter returns a StatusReporter that forwards relevant events to p,
 // and a cleanup func that stops any background thinking-ticker goroutines.
 func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
-	textBufs := make(map[string]string)
-	modelMap := make(map[string]string) // todoID -> model
+	tb := newTUIBufs()
 	coordAdded := false
 	tt := newThinkingTracker(p)
-
-	flushText := func(todoID string) {
-		model := modelMap[todoID]
-		if text := strings.TrimSpace(textBufs[todoID]); text != "" {
-			p.Send(tuipkg.TaskLogMsg{TodoID: todoID, Line: tuipkg.RenderText(text), Model: model})
-		}
-		delete(textBufs, todoID)
-	}
 
 	return func(event team.StatusEvent) {
 		switch event.Type {
@@ -1228,9 +1262,8 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			if todoID == "" {
 				return
 			}
-			// Store model for this todoID
 			if event.Model != "" {
-				modelMap[todoID] = event.Model
+				tb.setModel(todoID, event.Model)
 			}
 			if todoID == team.CoordTodoID {
 				if !coordAdded {
@@ -1257,8 +1290,6 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 				line = label
 			}
 			p.Send(tuipkg.TaskLogMsg{TodoID: todoID, Line: line, Model: event.Model})
-			// Status bar: show which agent is now thinking, and start the
-			// background ticker so elapsed time keeps updating every 5 s.
 			p.Send(tuipkg.StatusBarMsg{Text: label + dimStyle.Render("  thinking…")})
 			tt.start(todoID, label)
 
@@ -1296,7 +1327,6 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolResult(event.ToolName, event.ToolResult), Model: event.Model})
 			agentLabel := agentStyle.Render(event.Agent)
 			p.Send(tuipkg.StatusBarMsg{Text: agentLabel + "  " + doneStyle.Render("✓ "+event.ToolName)})
-			// Agent will call LLM again after tool result; restart thinking ticker.
 			label := agentStyle.Render(event.Agent)
 			if event.Model != "" {
 				label += " " + dimStyle.Render("["+event.Model+"]")
@@ -1315,19 +1345,23 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			if event.TodoID == "" {
 				return
 			}
-			textBufs[event.TodoID] += event.Message
+			tb.append(event.TodoID, event.Message)
 
 		case "done":
 			if event.TodoID == "" {
 				return
 			}
 			tt.stop(event.TodoID)
-			hadText := strings.TrimSpace(textBufs[event.TodoID]) != ""
-			flushText(event.TodoID)
-			if !hadText {
-				if out := strings.TrimSpace(event.Output); out != "" {
-					p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderText(out), Model: event.Model})
+			hadText := strings.TrimSpace(tb.get(event.TodoID)) != ""
+			if text, model := tb.flush(event.TodoID); true {
+				if text != "" {
+					p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderText(text), Model: model})
+				} else if !hadText {
+					if out := strings.TrimSpace(event.Output); out != "" {
+						p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderText(out), Model: event.Model})
+					}
 				}
+				_ = model
 			}
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: doneStyle.Render("✓ done"), Model: event.Model})
 			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + doneStyle.Render("✓ done")})
@@ -1340,7 +1374,9 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 				return
 			}
 			tt.stop(event.TodoID)
-			flushText(event.TodoID)
+			if text, model := tb.flush(event.TodoID); text != "" {
+				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderText(text), Model: model})
+			}
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("✗ " + event.Message), Model: event.Model})
 			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + errStyle.Render("✗ "+utils.TruncateLine(event.Message, 60))})
 
@@ -1348,21 +1384,26 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			if event.TodoID == "" {
 				return
 			}
-			textBufs[event.TodoID] += event.Message
-			if utf8.RuneCountInString(textBufs[event.TodoID]) > 10000 {
-				if trimmed := strings.TrimSpace(textBufs[event.TodoID]); trimmed != "" {
+			tb.append(event.TodoID, event.Message)
+			cur := tb.get(event.TodoID)
+			if utf8.RuneCountInString(cur) > 10000 {
+				if trimmed := strings.TrimSpace(cur); trimmed != "" {
 					p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 " + trimmed)})
 				}
-				textBufs[event.TodoID] = ""
+				tb.flush(event.TodoID) // clear buffer (ignore return values)
 				return
 			}
 			for {
-				idx := strings.Index(textBufs[event.TodoID], "\n")
+				cur = tb.get(event.TodoID)
+				idx := strings.Index(cur, "\n")
 				if idx == -1 {
 					break
 				}
-				line := textBufs[event.TodoID][:idx]
-				textBufs[event.TodoID] = textBufs[event.TodoID][idx+1:]
+				line := cur[:idx]
+				rest := cur[idx+1:]
+				tb.mu.Lock()
+				tb.texts[event.TodoID] = rest
+				tb.mu.Unlock()
 				if trimmed := strings.TrimSpace(line); trimmed != "" {
 					p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 " + trimmed)})
 				}

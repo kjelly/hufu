@@ -3346,18 +3346,24 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	totalModels := len(models) + 1 // +1 for main model
 	results := make(chan *agentResult, totalModels)
 
-	// Execute main model
+	// Create a deep copy of agentDef with ExtraModels cleared for the main model
+	// to prevent infinite recursion and data races.
+	mainDef := cloneAgentDef(agentDef)
+	mainDef.ExtraModels = nil
+	mainModel := mainDef.Generation.Model
+
 	go func() {
-		output, err := c.executeSingleAgentWithModel(parentCtx, agentName, agentDef, taskDesc, todoID, "")
-		results <- &agentResult{model: agentDef.Generation.Model, output: output, err: err}
+		output, err := c.executeSingleAgentWithModel(parentCtx, agentName, mainDef, taskDesc, todoID)
+		results <- &agentResult{model: mainModel, output: output, err: err}
 	}()
 
-	// Execute each extra model
+	// Execute each extra model with its own deep copy
 	for _, extraModel := range models {
 		go func(model string) {
-			extraDef := *agentDef
+			extraDef := cloneAgentDef(agentDef)
+			extraDef.ExtraModels = nil
 			extraDef.Generation.Model = model
-			output, err := c.executeSingleAgentWithModel(parentCtx, agentName, &extraDef, taskDesc, todoID, model)
+			output, err := c.executeSingleAgentWithModel(parentCtx, agentName, extraDef, taskDesc, todoID)
 			results <- &agentResult{model: model, output: output, err: err}
 		}(extraModel)
 	}
@@ -3374,39 +3380,47 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	return merged, nil
 }
 
-// executeSingleAgentWithModel executes a single agent with a specific model
+// cloneAgentDef creates a deep copy of an AgentDef to prevent data races
+// when running multiple models concurrently.
+func cloneAgentDef(def *agent.AgentDef) *agent.AgentDef {
+	clone := *def
+	if len(def.ExtraModels) > 0 {
+		clone.ExtraModels = make([]string, len(def.ExtraModels))
+		copy(clone.ExtraModels, def.ExtraModels)
+	}
+	if len(def.AllowedPaths) > 0 {
+		clone.AllowedPaths = make([]string, len(def.AllowedPaths))
+		copy(clone.AllowedPaths, def.AllowedPaths)
+	}
+	if len(def.Guard) > 0 {
+		clone.Guard = make([]string, len(def.Guard))
+		copy(clone.Guard, def.Guard)
+	}
+	if len(def.MCPTools) > 0 {
+		clone.MCPTools = make(map[string]agent.MCPToolConfig, len(def.MCPTools))
+		for k, v := range def.MCPTools {
+			clone.MCPTools[k] = v
+		}
+	}
+	return &clone
+}
+
+// executeSingleAgentWithModel executes a single agent task with a pre-configured agentDef.
+// The caller must ensure agentDef.ExtraModels is nil to prevent infinite recursion.
 func (c *Coordinator) executeSingleAgentWithModel(
 	parentCtx context.Context,
 	agentName string,
 	agentDef *agent.AgentDef,
 	taskDesc string,
 	todoID string,
-	overrideModel string,
 ) (string, error) {
-	// Create a temporary task and call executeTask with model override
 	task := TaskDef{
 		Agent: agentDef.Name,
 		Goal:  taskDesc,
-		Model: overrideModel,
+		Model: agentDef.Generation.Model,
 	}
-	
-	// We need to temporarily modify the agent in the session to use the override model
-	originalModel := agentDef.Generation.Model
-	if overrideModel != "" {
-		agentDef.Generation.Model = overrideModel
-	}
-	
-	// Clear the ExtraModels to prevent infinite recursion
-	originalExtraModels := agentDef.ExtraModels
-	agentDef.ExtraModels = nil
-	
-	// Execute the task (this will use the modified agentDef)
+
 	result, err := c.executeTask(parentCtx, task, todoID)
-	
-	// Restore original values
-	agentDef.Generation.Model = originalModel
-	agentDef.ExtraModels = originalExtraModels
-	
 	return result, err
 }
 

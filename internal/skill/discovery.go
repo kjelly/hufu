@@ -153,36 +153,35 @@ func (d *SkillPatternDetector) pruneSequencesLocked() {
 	}
 }
 
-// extractSequencesForAgent extracts sequences from an agent's tool calls
-// Incremental analysis: only process recent calls to avoid O(n³) cumulative analysis
+// extractSequencesForAgent extracts sequences from an agent's tool calls.
+// Only analyzes windows that end with the newest call to prevent double-counting
+// of previously seen sequences.
 func (d *SkillPatternDetector) extractSequencesForAgent(agent string, calls []ToolCallRecord) {
 	if len(calls) < d.windowMin {
 		return
 	}
 
-	// Only analyze the last N calls (sliding window) to prevent cumulative reprocessing
-	startIdx := 0
-	if len(calls) > d.windowMax*2 {
-		startIdx = len(calls) - d.windowMax*2
-	}
-	calls = calls[startIdx:]
+	// Only analyze windows ending at the newest call (index len(calls)-1).
+	// This ensures each unique sequence is counted exactly once when it first
+	// appears as a complete window, preventing cumulative double-count inflation.
+	lastIdx := len(calls) - 1
 
-	// Sliding window extraction
 	for windowSize := d.windowMin; windowSize <= d.windowMax && windowSize <= len(calls); windowSize++ {
-		for i := 0; i <= len(calls)-windowSize; i++ {
-			window := calls[i : i+windowSize]
-			seq := d.buildSequence(window, agent)
-			
-			if _, exists := d.sequences[seq.Hash]; !exists {
-				d.sequences[seq.Hash] = seq
-				d.sequenceByAgent[agent] = append(d.sequenceByAgent[agent], seq.Hash)
-			} else {
-				// Update existing sequence
-				existing := d.sequences[seq.Hash]
-				existing.Count++
-				existing.LastSeen = window[len(window)-1].Timestamp
-				existing.TaskDescs = append(existing.TaskDescs, window[len(window)-1].TaskDesc)
-			}
+		startIdx := lastIdx - windowSize + 1
+		if startIdx < 0 {
+			continue
+		}
+		window := calls[startIdx : startIdx+windowSize]
+		seq := d.buildSequence(window, agent)
+
+		if _, exists := d.sequences[seq.Hash]; !exists {
+			d.sequences[seq.Hash] = seq
+			d.sequenceByAgent[agent] = append(d.sequenceByAgent[agent], seq.Hash)
+		} else {
+			existing := d.sequences[seq.Hash]
+			existing.Count++
+			existing.LastSeen = window[windowSize-1].Timestamp
+			existing.TaskDescs = append(existing.TaskDescs, window[windowSize-1].TaskDesc)
 		}
 	}
 }
