@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
+
+var safeNameRegex = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
 const ltmFile = "ltm.md"
 
@@ -104,10 +107,13 @@ func normalizeLTREntry(entry string) string {
 }
 
 func LTMPath(workspace, teamName string) string {
-	// Sanitize teamName to prevent path traversal
-	safeName := strings.ReplaceAll(teamName, "/", "-")
-	safeName = strings.ReplaceAll(safeName, "..", "-")
-	safeName = strings.ReplaceAll(safeName, "\\", "-")
+	// Sanitize teamName to prevent path traversal and invalid characters
+	safeName := safeNameRegex.ReplaceAllString(teamName, "-")
+	safeName = strings.TrimPrefix(safeName, "-")
+	safeName = strings.TrimSuffix(safeName, "-")
+	if safeName == "" {
+		safeName = "default"
+	}
 	return filepath.Join(workspace, fmt.Sprintf("ltm-%s.md", safeName))
 }
 

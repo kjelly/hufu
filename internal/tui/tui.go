@@ -27,6 +27,7 @@ type TasksUpdatedMsg struct{ Items []*team.TodoItem }
 type TaskLogMsg struct {
 	TodoID string
 	Line   string
+	Model  string
 }
 
 type CoordItemMsg struct{ Item *team.TodoItem }

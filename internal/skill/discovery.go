@@ -16,6 +16,7 @@ import (
 )
 
 const maxToolCallHistory = 1000
+const maxSequencesPerAgent = 500
 
 // Pre-compiled regex patterns for normalizeParams (avoid recompilation on every call)
 var (
@@ -111,6 +112,11 @@ func (d *SkillPatternDetector) RecordToolCall(agent, tool, input, taskDesc strin
 		d.toolCalls = d.toolCalls[len(d.toolCalls)-maxToolCallHistory:]
 	}
 
+	// Prune sequences periodically to prevent unbounded memory growth
+	if len(d.toolCalls)%100 == 0 {
+		d.pruneSequencesLocked()
+	}
+
 	d.analyzeSequencesLocked()
 }
 
@@ -129,6 +135,21 @@ func (d *SkillPatternDetector) analyzeSequencesLocked() {
 
 	for agent, calls := range agentCalls {
 		d.extractSequencesForAgent(agent, calls)
+	}
+}
+
+// pruneSequencesLocked removes old sequences to prevent unbounded memory growth
+// Must be called with lock held
+func (d *SkillPatternDetector) pruneSequencesLocked() {
+	for agent, hashes := range d.sequenceByAgent {
+		if len(hashes) > maxSequencesPerAgent {
+			// Keep only the most recent sequences
+			cutoff := len(hashes) - maxSequencesPerAgent
+			for _, hash := range hashes[:cutoff] {
+				delete(d.sequences, hash)
+			}
+			d.sequenceByAgent[agent] = hashes[cutoff:]
+		}
 	}
 }
 
@@ -221,14 +242,24 @@ func (d *SkillPatternDetector) hashSequence(seq *ToolSequence) string {
 }
 
 // FindCandidates returns patterns that repeat at least minFrequency times
-func (d *SkillPatternDetector) FindCandidates() []PatternCandidate {
+func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCandidate {
 	d.mu.RLock()
 	var candidates []PatternCandidate
 
 	for _, seq := range d.sequences {
 		if seq.Count >= d.minFrequency {
+			// Deep copy ToolSequence to prevent data race after RUnlock
+			copiedSeq := &ToolSequence{
+				Tools:     append([]string{}, seq.Tools...),
+				Params:    append([]string{}, seq.Params...),
+				TaskDescs: append([]string{}, seq.TaskDescs...),
+				Count:     seq.Count,
+				FirstSeen: seq.FirstSeen,
+				LastSeen:  seq.LastSeen,
+				Agent:     seq.Agent,
+			}
 			candidate := PatternCandidate{
-				Sequence:        seq,
+				Sequence:        copiedSeq,
 				SimilarityScore: 1.0,
 				SuggestedName:   d.generateSuggestedName(seq),
 				SuggestedDesc:   d.generateSuggestedDescription(seq),
@@ -242,26 +273,34 @@ func (d *SkillPatternDetector) FindCandidates() []PatternCandidate {
 		return candidates[i].Sequence.Count > candidates[j].Sequence.Count
 	})
 
+	// Read sidecar state under lock to prevent race condition
+	var sidecar *sidecar.Sidecar
+	var sidecarEnabled bool
+	if d.sidecar != nil {
+		sidecar = d.sidecar
+		sidecarEnabled = true
+	}
+
 	d.mu.RUnlock() // Release lock BEFORE network call
 
 	// Apply semantic similarity analysis if sidecar is enabled (network call outside lock)
-	if d.sidecarEnabled && d.sidecar != nil && len(candidates) > 0 {
-		candidates = d.analyzeSemanticSimilarity(candidates)
+	if sidecarEnabled && sidecar != nil && len(candidates) > 0 {
+		candidates = d.analyzeSemanticSimilarity(context.Background(), sidecar, candidates)
 	}
 
 	return candidates
 }
 
 // analyzeSemanticSimilarity uses sidecar to analyze and merge similar sequences
-func (d *SkillPatternDetector) analyzeSemanticSimilarity(candidates []PatternCandidate) []PatternCandidate {
+func (d *SkillPatternDetector) analyzeSemanticSimilarity(ctx context.Context, sidecar *sidecar.Sidecar, candidates []PatternCandidate) []PatternCandidate {
 	// Collect all task descriptions
 	allDescs := d.collectAllTaskDescriptions(candidates)
 	if len(allDescs) < 2 {
 		return candidates
 	}
 
-	// Cluster descriptions using sidecar with background context
-	clusters := d.clusterDescriptions(context.Background(), allDescs)
+	// Cluster descriptions using sidecar with context
+	clusters := d.clusterDescriptions(ctx, sidecar, allDescs)
 	if clusters == nil {
 		return candidates
 	}
@@ -290,14 +329,19 @@ func (d *SkillPatternDetector) collectAllTaskDescriptions(candidates []PatternCa
 }
 
 // clusterDescriptions uses sidecar to cluster similar task descriptions
-func (d *SkillPatternDetector) clusterDescriptions(ctx context.Context, descriptions []string) map[int][]int {
+func (d *SkillPatternDetector) clusterDescriptions(ctx context.Context, sidecar *sidecar.Sidecar, descriptions []string) map[int][]int {
 	// Check cache first
 	descHash := d.hashDescriptions(descriptions)
 	
 	d.cacheMu.RLock()
 	if cached, ok := d.clusterCache[descHash]; ok {
+		// Deep copy cache to prevent data race
+		result := make(map[int][]int, len(cached))
+		for k, v := range cached {
+			result[k] = append([]int{}, v...)
+		}
 		d.cacheMu.RUnlock()
-		return cached
+		return result
 	}
 	d.cacheMu.RUnlock()
 
@@ -305,10 +349,10 @@ func (d *SkillPatternDetector) clusterDescriptions(ctx context.Context, descript
 	prompt := d.buildClusterPrompt(descriptions)
 
 	// Call sidecar with timeout
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	result, err := d.sidecar.Execute(ctx, prompt)
+	result, err := sidecar.Execute(timeoutCtx, prompt)
 	if err != nil {
 		// Don't write to stderr - return nil and let caller handle error
 		return nil

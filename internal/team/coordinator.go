@@ -81,6 +81,14 @@ type DirectAgentResult struct {
 	Error     error
 }
 
+type agentResult struct {
+	model  string
+	output string
+	err    error
+}
+
+const maxConcurrentModels = 3
+
 type DryRunAgentInfo struct {
 	Name   string
 	Role   string
@@ -3279,7 +3287,7 @@ func (c *Coordinator) checkSkillPatterns() {
 		return
 	}
 
-	candidates := c.skillDetector.FindCandidates()
+	candidates := c.skillDetector.FindCandidates(context.Background())
 	if len(candidates) == 0 {
 		return
 	}
@@ -3321,13 +3329,121 @@ func (c *Coordinator) checkSkillPatterns() {
 	c.report(c.newEvent("step").withMessage(msg.String()))
 }
 
+// executeTaskWithExtraModels executes a task across multiple models when extra-models is configured
+func (c *Coordinator) executeTaskWithExtraModels(
+	parentCtx context.Context,
+	agentName string,
+	agentDef *agent.AgentDef,
+	taskDesc string,
+	todoID string,
+) (string, error) {
+	// Limit concurrent models
+	models := agentDef.ExtraModels
+	if len(models) > maxConcurrentModels-1 { // -1 for main model
+		models = models[:maxConcurrentModels-1]
+	}
+
+	totalModels := len(models) + 1 // +1 for main model
+	results := make(chan *agentResult, totalModels)
+
+	// Execute main model
+	go func() {
+		output, err := c.executeSingleAgentWithModel(parentCtx, agentName, agentDef, taskDesc, todoID, "")
+		results <- &agentResult{model: agentDef.Generation.Model, output: output, err: err}
+	}()
+
+	// Execute each extra model
+	for _, extraModel := range models {
+		go func(model string) {
+			extraDef := *agentDef
+			extraDef.Generation.Model = model
+			output, err := c.executeSingleAgentWithModel(parentCtx, agentName, &extraDef, taskDesc, todoID, model)
+			results <- &agentResult{model: model, output: output, err: err}
+		}(extraModel)
+	}
+
+	// Collect all results (continue on error)
+	var allResults []*agentResult
+	for i := 0; i < totalModels; i++ {
+		result := <-results
+		allResults = append(allResults, result)
+	}
+
+	// Merge results
+	merged := c.mergeAgentResults(allResults)
+	return merged, nil
+}
+
+// executeSingleAgentWithModel executes a single agent with a specific model
+func (c *Coordinator) executeSingleAgentWithModel(
+	parentCtx context.Context,
+	agentName string,
+	agentDef *agent.AgentDef,
+	taskDesc string,
+	todoID string,
+	overrideModel string,
+) (string, error) {
+	// Create a temporary task and call executeTask with model override
+	task := TaskDef{
+		Agent: agentDef.Name,
+		Goal:  taskDesc,
+		Model: overrideModel,
+	}
+	
+	// We need to temporarily modify the agent in the session to use the override model
+	originalModel := agentDef.Generation.Model
+	if overrideModel != "" {
+		agentDef.Generation.Model = overrideModel
+	}
+	
+	// Clear the ExtraModels to prevent infinite recursion
+	originalExtraModels := agentDef.ExtraModels
+	agentDef.ExtraModels = nil
+	
+	// Execute the task (this will use the modified agentDef)
+	result, err := c.executeTask(parentCtx, task, todoID)
+	
+	// Restore original values
+	agentDef.Generation.Model = originalModel
+	agentDef.ExtraModels = originalExtraModels
+	
+	return result, err
+}
+
+// mergeAgentResults concatenates outputs from multiple models
+func (c *Coordinator) mergeAgentResults(results []*agentResult) string {
+	var b strings.Builder
+
+	b.WriteString("## Multi-Model Response Integration\n\n")
+
+	for _, r := range results {
+		modelLabel := r.model
+		if modelLabel == "" {
+			modelLabel = "main"
+		}
+
+		b.WriteString(fmt.Sprintf("### Model: %s\n\n", modelLabel))
+
+		if r.err != nil {
+			b.WriteString(fmt.Sprintf("*Error: %v*\n\n", r.err))
+		} else {
+			b.WriteString(r.output)
+			b.WriteString("\n\n")
+		}
+	}
+
+	b.WriteString("---\n")
+
+	return b.String()
+}
+
 // checkSkillPatternsAndSave checks for patterns and auto-generates skill drafts
 func (c *Coordinator) checkSkillPatternsAndSave() []string {
 	if c.skillDetector == nil || c.skillGenerator == nil {
 		return nil
 	}
 
-	candidates := c.skillDetector.FindCandidates()
+	candidates := c.skillDetector.FindCandidates(context.Background())
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -3358,6 +3474,11 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		return "", err
 	}
 	agentName := strings.ToLower(agentDef.Name)
+
+	// Check if agent has extra-models configured
+	if len(agentDef.ExtraModels) > 0 {
+		return c.executeTaskWithExtraModels(parentCtx, agentName, agentDef, taskDesc, todoID)
+	}
 
 	// When a model-list is configured, validate the requested model is in it.
 	// When no model-list is configured, ignore task.Model entirely — the agent's

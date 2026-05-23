@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -138,7 +139,7 @@ func gatherSkillPatterns(coordinator *team.Coordinator) []SkillPatternReport {
 	if detector == nil {
 		return nil
 	}
-	var candidates []skill.PatternCandidate = detector.FindCandidates()
+	var candidates []skill.PatternCandidate = detector.FindCandidates(context.Background())
 	var reports []SkillPatternReport
 	for _, cand := range candidates {
 		reports = append(reports, SkillPatternReport{

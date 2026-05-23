@@ -83,6 +83,7 @@ type AgentDef struct {
 	MCPTools       map[string]MCPToolConfig
 	ProviderURL    string
 	Generation     GenerationParams
+	ExtraModels    []string
 }
 
 type TeamConfig struct {

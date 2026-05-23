@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -33,7 +34,7 @@ func TestSkillPatternDetector_FindCandidates(t *testing.T) {
 		detector.RecordToolCall("agent1", "bash", "go test", "review code")
 	}
 
-	candidates := detector.FindCandidates()
+	candidates := detector.FindCandidates(context.Background())
 	if len(candidates) == 0 {
 		t.Fatal("Expected to find at least one candidate")
 	}
@@ -177,7 +178,7 @@ func TestSkillPatternDetector_MultipleAgents(t *testing.T) {
 		detector.RecordToolCall("agent2", "view", "*.go", "task 2")
 	}
 
-	candidates := detector.FindCandidates()
+	candidates := detector.FindCandidates(context.Background())
 	if len(candidates) < 2 {
 		t.Errorf("Expected at least 2 candidates (one per agent), got %d", len(candidates))
 	}
@@ -193,7 +194,7 @@ func TestSkillPatternDetector_WindowSize(t *testing.T) {
 	}
 
 	// Should detect sequences of size 3, 4, and 5
-	candidates := detector.FindCandidates()
+	candidates := detector.FindCandidates(context.Background())
 
 	// At minimum, should find some repeating patterns
 	if len(candidates) == 0 {
@@ -256,7 +257,7 @@ func TestSkillPatternDetector_ParameterPatternMatching(t *testing.T) {
 		detector.RecordToolCall("agent1", "edit", "file2.go", "task")
 	}
 
-	candidates := detector.FindCandidates()
+	candidates := detector.FindCandidates(context.Background())
 	if len(candidates) == 0 {
 		t.Error("Expected to find candidates with normalized parameter patterns")
 	}
@@ -273,7 +274,7 @@ func TestSkillPatternDetector_TimestampTracking(t *testing.T) {
 	}
 	end := time.Now()
 
-	candidates := detector.FindCandidates()
+	candidates := detector.FindCandidates(context.Background())
 	if len(candidates) == 0 {
 		t.Fatal("Expected to find candidates")
 	}
@@ -328,7 +329,7 @@ func TestSkillPatternDetector_MinFrequency(t *testing.T) {
 		detector.RecordToolCall("agent1", "edit", "file.go", "task")
 	}
 
-	candidates := detector.FindCandidates()
+	candidates := detector.FindCandidates(context.Background())
 	if len(candidates) == 0 {
 		t.Fatal("Expected candidates with 10 repetitions")
 	}
@@ -366,7 +367,7 @@ func TestSkillPatternDetector_SemanticSimilarity(t *testing.T) {
 		detector.RecordToolCall("agent1", "edit", "*.go", "modify code")
 	}
 
-	candidates := detector.FindCandidates()
+	candidates := detector.FindCandidates(context.Background())
 
 	// Verify candidates were found (semantic analysis runs automatically if sidecar is set)
 	if len(candidates) == 0 {

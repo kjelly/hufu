@@ -32,6 +32,7 @@ type agentFrontmatter struct {
 	Skills         any      `yaml:"skills"` // string or []string (YAML list)
 	Guard          []string `yaml:"guard"`
 	Model          string   `yaml:"model"`
+	ExtraModels    []string `yaml:"extra-models"`
 	Temperature    string   `yaml:"temperature"`
 	MaxTokens      string   `yaml:"max-tokens"`
 	TopP           string   `yaml:"top-p"`
@@ -325,6 +326,7 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 			TopK:        fm.TopK,
 		},
 		ProviderURL: fm.ProviderURL,
+		ExtraModels:  fm.ExtraModels,
 	}
 	if fm.Timeout > 0 {
 		def.Timeout = fm.Timeout
