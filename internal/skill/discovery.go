@@ -155,34 +155,37 @@ func (d *SkillPatternDetector) pruneSequencesLocked() {
 }
 
 // extractSequencesForAgent extracts sequences from an agent's tool calls.
-// Only analyzes windows that end with the newest call to prevent double-counting
-// of previously seen sequences.
+// Analyzes all windows but tracks analyzed windows to prevent double-counting.
 func (d *SkillPatternDetector) extractSequencesForAgent(agent string, calls []ToolCallRecord) {
 	if len(calls) < d.windowMin {
 		return
 	}
 
-	// Only analyze windows ending at the newest call (index len(calls)-1).
-	// This ensures each unique sequence is counted exactly once when it first
-	// appears as a complete window, preventing cumulative double-count inflation.
-	lastIdx := len(calls) - 1
+	// Track analyzed windows by (hash, startIndex) to prevent double-counting
+	// while still detecting subsequences that appear in the middle of history.
+	analyzedWindows := make(map[string]bool)
 
 	for windowSize := d.windowMin; windowSize <= d.windowMax && windowSize <= len(calls); windowSize++ {
-		startIdx := lastIdx - windowSize + 1
-		if startIdx < 0 {
-			continue
-		}
-		window := calls[startIdx : startIdx+windowSize]
-		seq := d.buildSequence(window, agent)
+		for i := 0; i <= len(calls)-windowSize; i++ {
+			window := calls[i : i+windowSize]
+			seq := d.buildSequence(window, agent)
 
-		if _, exists := d.sequences[seq.Hash]; !exists {
-			d.sequences[seq.Hash] = seq
-			d.sequenceByAgent[agent] = append(d.sequenceByAgent[agent], seq.Hash)
-		} else {
-			existing := d.sequences[seq.Hash]
-			existing.Count++
-			existing.LastSeen = window[windowSize-1].Timestamp
-			existing.TaskDescs = append(existing.TaskDescs, window[windowSize-1].TaskDesc)
+			// Create unique window identifier
+			windowKey := fmt.Sprintf("%s:%d", seq.Hash, i)
+			if analyzedWindows[windowKey] {
+				continue
+			}
+			analyzedWindows[windowKey] = true
+
+			if _, exists := d.sequences[seq.Hash]; !exists {
+				d.sequences[seq.Hash] = seq
+				d.sequenceByAgent[agent] = append(d.sequenceByAgent[agent], seq.Hash)
+			} else {
+				existing := d.sequences[seq.Hash]
+				existing.Count++
+				existing.LastSeen = window[windowSize-1].Timestamp
+				existing.TaskDescs = append(existing.TaskDescs, window[windowSize-1].TaskDesc)
+			}
 		}
 	}
 }
@@ -285,7 +288,7 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 
 	// Apply semantic similarity analysis if sidecar is enabled (network call outside lock)
 	if sidecarEnabled && sidecar != nil && len(candidates) > 0 {
-		candidates = d.analyzeSemanticSimilarity(context.Background(), sidecar, candidates)
+		candidates = d.analyzeSemanticSimilarity(ctx, sidecar, candidates)
 	}
 
 	return candidates
@@ -428,6 +431,9 @@ Example format: {"0": [0, 2, 5], "1": [1, 3, 4]}`, descList.String())
 func (d *SkillPatternDetector) mergeSimilarSequences(candidates []PatternCandidate, clusters map[int][]int, threshold float64) []PatternCandidate {
 	allDescs := d.collectAllTaskDescriptions(candidates)
 
+	// Pre-compute desc → clusterID mapping for O(1) lookup
+	descToCluster := d.buildDescToClusterMap(allDescs, clusters)
+
 	// Group candidates by tool sequence
 	groupMap := make(map[string][]PatternCandidate) // tool sequence hash -> candidates
 
@@ -443,7 +449,7 @@ func (d *SkillPatternDetector) mergeSimilarSequences(candidates []PatternCandida
 		for _, cand := range group {
 			placed := false
 			for i := range mergedGroup {
-				if d.isInSameCluster(cand.Sequence.TaskDescs, mergedGroup[i].Sequence.TaskDescs, clusters, allDescs) {
+				if d.isInSameClusterFast(cand.Sequence.TaskDescs, mergedGroup[i].Sequence.TaskDescs, descToCluster) {
 					mergedGroup[i] = d.mergeCandidateGroup([]PatternCandidate{mergedGroup[i], cand})
 					placed = true
 					break
@@ -466,46 +472,44 @@ func (d *SkillPatternDetector) hashToolSequence(tools []string) string {
 	return hex.EncodeToString(hash[:8])
 }
 
-// isInSameCluster checks if two sets of descriptions share a cluster
-func (d *SkillPatternDetector) isInSameCluster(descs1, descs2 []string, clusters map[int][]int, allDescs []string) bool {
-	// Build map from description string to index in allDescs
-	descIndices := make(map[string]int)
-	for i, desc := range allDescs {
-		descIndices[strings.ToLower(strings.TrimSpace(desc))] = i
+// buildDescToClusterMap creates a mapping from description string to cluster ID.
+// This pre-computation avoids O(n³) repeated lookups in isInSameCluster.
+func (d *SkillPatternDetector) buildDescToClusterMap(allDescs []string, clusters map[int][]int) map[string]int {
+	descToCluster := make(map[string]int, len(allDescs))
+	for clusterID, memberIndices := range clusters {
+		for _, mIdx := range memberIndices {
+			if mIdx < len(allDescs) {
+				desc := strings.ToLower(strings.TrimSpace(allDescs[mIdx]))
+				descToCluster[desc] = clusterID
+			}
+		}
 	}
+	return descToCluster
+}
 
+// isInSameClusterFast checks if two sets of descriptions share a cluster using pre-computed map.
+// O(n*m) instead of O(n³) where n,m are the number of descriptions in each set.
+func (d *SkillPatternDetector) isInSameClusterFast(descs1, descs2 []string, descToCluster map[string]int) bool {
 	// Find clusters containing any description from descs1
 	clusters1 := make(map[int]bool)
 	for _, desc := range descs1 {
 		trimmed := strings.ToLower(strings.TrimSpace(desc))
-		if idx, ok := descIndices[trimmed]; ok {
-			for clusterID, memberIndices := range clusters {
-				for _, mIdx := range memberIndices {
-					if mIdx == idx {
-						clusters1[clusterID] = true
-					}
-				}
-			}
+		if clusterID, ok := descToCluster[trimmed]; ok {
+			clusters1[clusterID] = true
 		}
 	}
 
 	// Check if any description in descs2 is in those clusters
 	for _, desc := range descs2 {
 		trimmed := strings.ToLower(strings.TrimSpace(desc))
-		if idx, ok := descIndices[trimmed]; ok {
-			for clusterID, memberIndices := range clusters {
-				for _, mIdx := range memberIndices {
-					if mIdx == idx {
-						if clusters1[clusterID] {
-							return true
-						}
-					}
-				}
+		if clusterID, ok := descToCluster[trimmed]; ok {
+			if clusters1[clusterID] {
+				return true
 			}
 		}
 	}
 
-	// Fallback to keyword overlap if clusters map is empty or no cluster matched
+	// Fallback to keyword overlap if no cluster matched
 	keywords1 := d.extractKeywords(descs1)
 	keywords2 := d.extractKeywords(descs2)
 

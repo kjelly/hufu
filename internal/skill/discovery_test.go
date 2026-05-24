@@ -557,8 +557,9 @@ func TestSkillPatternDetector_IsInSameCluster(t *testing.T) {
 	clusters := map[int][]int{
 		0: {0, 1},
 	}
+	descToCluster := detector.buildDescToClusterMap(allDescs, clusters)
 
-	if !detector.isInSameCluster(descs1, descs2, clusters, allDescs) {
+	if !detector.isInSameClusterFast(descs1, descs2, descToCluster) {
 		t.Error("Expected descriptions to be in the same cluster via cluster mapping")
 	}
 
@@ -570,8 +571,9 @@ func TestSkillPatternDetector_IsInSameCluster(t *testing.T) {
 		0: {0},
 		1: {1},
 	}
+	descToCluster2 := detector.buildDescToClusterMap(allDescs2, clusters3)
 
-	if detector.isInSameCluster(descs3, descs4, clusters3, allDescs2) {
+	if detector.isInSameClusterFast(descs3, descs4, descToCluster2) {
 		t.Error("Expected descriptions to be in different clusters via cluster mapping")
 	}
 
@@ -579,7 +581,7 @@ func TestSkillPatternDetector_IsInSameCluster(t *testing.T) {
 	descs5 := []string{"fix bug code"}
 	descs6 := []string{"fix code bug"}
 
-	if !detector.isInSameCluster(descs5, descs6, nil, append(descs5, descs6...)) {
+	if !detector.isInSameClusterFast(descs5, descs6, nil) {
 		t.Error("Expected descriptions with overlapping keywords to be in same cluster via fallback")
 	}
 
@@ -587,7 +589,7 @@ func TestSkillPatternDetector_IsInSameCluster(t *testing.T) {
 	descs7 := []string{"completely different task"}
 	descs8 := []string{"another unrelated thing"}
 
-	if detector.isInSameCluster(descs7, descs8, nil, append(descs7, descs8...)) {
+	if detector.isInSameClusterFast(descs7, descs8, nil) {
 		t.Error("Expected descriptions with no overlap to be in different clusters via fallback")
 	}
 }
