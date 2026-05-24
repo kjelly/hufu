@@ -549,7 +549,8 @@ workspace/
 ├── status/              # Agent 狀態檔案
 ├── history/             # 封存的 session 檔案
 ├── session.json         # 結構化 session 資料
-└── session.md           # 人類可讀的 session 日誌
+├── chat_history.md      # 人類可讀的對話歷史紀錄
+└── execution_trace.log  # 詳細的執行軌跡日誌
 ```
 
 ### 目錄說明
@@ -561,7 +562,8 @@ workspace/
 | `status/` | Agent 狀態追蹤檔案 |
 | `history/` | 封存的歷史 session 檔案 |
 | `session.json` | 結構化的 session 資料（機器可讀） |
-| `session.md` | 人類可讀的 session 日誌 |
+| `chat_history.md` | 人類可讀的對話歷史紀錄 |
+| `execution_trace.log` | 詳細的執行軌跡日誌（僅在 TUI 模式下產生） |
 
 ---
 
@@ -885,7 +887,8 @@ kill -USR1 <hufu-pid>
 ### Session 檔案
 
 - `session.json` — 結構化的 session 資料（機器可讀）
-- `session.md` — 人類可讀的 session 日誌
+- `chat_history.md` — 人類可讀的對話歷史紀錄
+- `execution_trace.log` — 詳細的執行軌跡日誌（僅在 TUI 模式下產生）
 - `history/` — 封存的歷史 session 檔案
 
 ---

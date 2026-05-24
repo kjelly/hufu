@@ -219,7 +219,7 @@ func TestExtractLTMFromHistory(t *testing.T) {
 	os.WriteFile(histDir+"/20260101T120000-stm.md", []byte(stm1), 0o644)
 	os.WriteFile(histDir+"/20260102T130000-stm.md", []byte(stm2), 0o644)
 	// non-stm file should be ignored
-	os.WriteFile(histDir+"/session.md", []byte("irrelevant"), 0o644)
+	os.WriteFile(histDir+"/chat_history.md", []byte("irrelevant"), 0o644)
 
 	ExtractLTMFromHistory(workspace, "test-team")
 

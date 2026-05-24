@@ -574,8 +574,9 @@ Your system prompt here.
 ```
 workspace/
 ├── session.json              # Structured session data
-├── session.md                # Human-readable session log
+├── chat_history.md           # Human-readable conversation transcript
 ├── session_history.json      # Raw conversation message history
+├── execution_trace.log       # Detailed execution trace log (TUI mode only)
 ├── stm.md                    # Short-term memory (active session)
 ├── tasks/                    # Per-task records
 │   └── {team-name}/

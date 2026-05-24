@@ -567,7 +567,8 @@ workspace/
 ├── status/              # Agent status files
 ├── history/             # Archived session files
 ├── session.json         # Structured session data
-└── session.md           # Human-readable session log
+├── chat_history.md      # Human-readable conversation transcript
+└── execution_trace.log  # Detailed execution trace log
 ```
 
 ### Directory Descriptions
@@ -579,7 +580,8 @@ workspace/
 | `status/` | Agent status tracking files |
 | `history/` | Archived historical session files |
 | `session.json` | Structured session data (machine-readable) |
-| `session.md` | Human-readable session log |
+| `chat_history.md` | Human-readable conversation transcript |
+| `execution_trace.log` | Detailed execution trace log (TUI mode only) |
 
 ---
 
@@ -903,7 +905,8 @@ kill -USR1 <hufu-pid>
 ### Session Files
 
 - `session.json` — Structured session data (machine-readable)
-- `session.md` — Human-readable session log
+- `chat_history.md` — Human-readable conversation transcript
+- `execution_trace.log` — Detailed execution trace log (TUI mode only)
 - `history/` — Archived historical session files
 
 ---

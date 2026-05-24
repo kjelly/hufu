@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const sessionMDFile = "session.md"
+const sessionMDFile = "chat_history.md"
 
 func SessionMDPath(workspace string) string {
 	return filepath.Join(workspace, sessionMDFile)

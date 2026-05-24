@@ -81,7 +81,7 @@ func collectFixData(session *team.TeamSession, taskDesc string) *fixData {
 		d.SessionMD = limitStr(md, 4000)
 	}
 
-	logPath := filepath.Join(session.Workspace, "session.log")
+	logPath := filepath.Join(session.Workspace, "execution_trace.log")
 	if data, err := os.ReadFile(logPath); err == nil {
 		d.SessionLog = limitStr(string(data), 8000)
 	}
@@ -246,13 +246,13 @@ func buildFixPrompt(question, taskDesc string, data *fixData) string {
 	}
 
 	if data.SessionLog != "" {
-		b.WriteString("## Execution Log (session.log)\n```\n")
+		b.WriteString("## Execution Log (execution_trace.log)\n```\n")
 		b.WriteString(data.SessionLog)
 		b.WriteString("\n```\n\n")
 	}
 
 	if data.SessionMD != "" {
-		b.WriteString("## Session Document (session.md)\n```markdown\n")
+		b.WriteString("## Session Document (chat_history.md)\n```markdown\n")
 		b.WriteString(data.SessionMD)
 		b.WriteString("\n```\n\n")
 	}

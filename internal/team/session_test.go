@@ -97,17 +97,17 @@ func TestSessionMDPath(t *testing.T) {
 		{
 			name:      "basic path",
 			workspace: "/tmp/workspace",
-			expected:  "/tmp/workspace/session.md",
+			expected:  "/tmp/workspace/chat_history.md",
 		},
 		{
 			name:      "path with trailing slash",
 			workspace: "/tmp/workspace/",
-			expected:  "/tmp/workspace/session.md",
+			expected:  "/tmp/workspace/chat_history.md",
 		},
 		{
 			name:      "relative path",
 			workspace: "workspace",
-			expected:  "workspace/session.md",
+			expected:  "workspace/chat_history.md",
 		},
 	}
 

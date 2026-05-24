@@ -3,3 +3,4 @@ description: "Demo team that demonstrates multi-level agent delegation — coord
 max-rounds: 5
 timeout: 9120
 model: ollama/qwen3.5:35b
+tools: [bash]

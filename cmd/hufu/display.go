@@ -1060,7 +1060,7 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 		tuiReporter, stopAll := makeTUIReporter(p)
 
 		// Open session log file for post-hoc traceability
-		logPath := filepath.Join(tc.session.Workspace, "session.log")
+		logPath := filepath.Join(tc.session.Workspace, "execution_trace.log")
 		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err != nil {
 			log.Printf("warning: cannot create session log %q: %v", logPath, err)

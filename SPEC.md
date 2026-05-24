@@ -1130,8 +1130,9 @@ Agents must submit a plan before executing. The coordinator reviews the plan bef
 ```
 workspace/
 ├── session.json              # Structured session data
-├── session.md                # Human-readable session log
+├── chat_history.md           # Human-readable conversation transcript
 ├── session_history.json      # Raw message history
+├── execution_trace.log       # Detailed execution trace log (TUI mode only)
 ├── stm.md                    # Short-term memory
 ├── tasks/
 │   └── {team-name}/
