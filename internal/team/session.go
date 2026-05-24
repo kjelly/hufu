@@ -88,6 +88,14 @@ func (s *SessionData) AddEntry(role, content string) {
 	})
 }
 
+// cloneSession returns a copy of TeamSession with Workspace replaced.
+// All other fields are shallow-copied (safe because they are read-only during task execution).
+func cloneSession(orig *TeamSession, newWorkspace string) *TeamSession {
+	clone := *orig
+	clone.Workspace = newWorkspace
+	return &clone
+}
+
 func (s *SessionData) ContextSummary() string {
 	if len(s.Entries) == 0 {
 		return ""

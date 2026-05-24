@@ -3407,7 +3407,8 @@ func cloneAgentDef(def *agent.AgentDef) *agent.AgentDef {
 
 // executeSingleAgentWithModel executes a single agent task with a pre-configured agentDef.
 // The caller must ensure agentDef.ExtraModels is nil to prevent infinite recursion.
-// Extra models execute in isolated sub-workspaces to prevent file conflicts.
+// Extra models execute in isolated Coordinator instances with cloned sessions
+// to prevent data races on c.session.Workspace.
 func (c *Coordinator) executeSingleAgentWithModel(
 	parentCtx context.Context,
 	agentName string,
@@ -3421,7 +3422,7 @@ func (c *Coordinator) executeSingleAgentWithModel(
 		Model: agentDef.Generation.Model,
 	}
 
-	// Isolate workspace for extra models to prevent concurrent file conflicts.
+	// Create isolated workspace for this model to prevent concurrent file conflicts.
 	subWS := filepath.Join(c.session.Workspace, "extra-models", sanitizeModel(agentDef.Generation.Model))
 	if err := os.MkdirAll(subWS, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create isolated workspace: %w", err)
@@ -3437,13 +3438,269 @@ func (c *Coordinator) executeSingleAgentWithModel(
 		}
 	}
 
-	// Swap workspace to isolated directory for the duration of this task
-	originalWS := c.session.Workspace
-	c.session.Workspace = subWS
-	defer func() { c.session.Workspace = originalWS }()
+	// Clone Coordinator with isolated session to prevent data race on c.session.Workspace.
+	// Direct mutation of c.session.Workspace is unsafe because multiple goroutines
+	// execute this function concurrently for different models.
+	isolatedSession := cloneSession(c.session, subWS)
+	isolatedCoord := cloneCoordinator(c, isolatedSession)
 
-	result, err := c.executeTask(parentCtx, task, todoID)
+	result, err := isolatedCoord.executeTask(parentCtx, task, todoID)
+
+	// Merge skill usage statistics from the isolated coordinator back into the main coordinator
+	c.skillUsageMu.Lock()
+	isolatedCoord.skillUsageMu.Lock()
+	for name, state := range isolatedCoord.skillUsage {
+		if mainState, ok := c.skillUsage[name]; ok {
+			mainState.Count += state.Count
+			if mainState.Agents == nil {
+				mainState.Agents = make(map[string]bool)
+			}
+			for agent := range state.Agents {
+				mainState.Agents[agent] = true
+			}
+		} else {
+			var agentsCopy map[string]bool
+			if state.Agents != nil {
+				agentsCopy = make(map[string]bool, len(state.Agents))
+				for ak, av := range state.Agents {
+					agentsCopy[ak] = av
+				}
+			}
+			c.skillUsage[name] = &skillUsageState{
+				Name:   state.Name,
+				Count:  state.Count,
+				Agents: agentsCopy,
+			}
+		}
+	}
+	isolatedCoord.skillUsageMu.Unlock()
+	c.skillUsageMu.Unlock()
+
 	return result, err
+}
+
+// cloneCoordinator creates a Coordinator copy sharing all references except session.
+// Mutex/atomic fields are zero-initialized (each clone gets independent locks).
+// This avoids the go vet "copies lock value" warning and prevents data races
+// on lock state while keeping all shared resources accessible.
+func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
+	// Deep copy/clone all shared mutable maps and slices under their original locks
+	var agentCacheClone map[string]fantasy.Agent
+	orig.agentCacheMu.RLock()
+	if orig.agentCache != nil {
+		agentCacheClone = make(map[string]fantasy.Agent, len(orig.agentCache))
+		for k, v := range orig.agentCache {
+			agentCacheClone[k] = v
+		}
+	}
+	orig.agentCacheMu.RUnlock()
+
+	var conversationHistoryClone []fantasy.Message
+	orig.conversationHistoryMu.Lock()
+	if orig.conversationHistory != nil {
+		conversationHistoryClone = make([]fantasy.Message, len(orig.conversationHistory))
+		copy(conversationHistoryClone, orig.conversationHistory)
+	}
+	orig.conversationHistoryMu.Unlock()
+
+	var skillsClone []*skill.SkillDef
+	orig.skillsMu.RLock()
+	if orig.skills != nil {
+		skillsClone = make([]*skill.SkillDef, len(orig.skills))
+		copy(skillsClone, orig.skills)
+	}
+	orig.skillsMu.RUnlock()
+
+	var autoLoadedSkillsClone []*skill.SkillDef
+	orig.autoLoadedSkillsMu.RLock()
+	if orig.autoLoadedSkills != nil {
+		autoLoadedSkillsClone = make([]*skill.SkillDef, len(orig.autoLoadedSkills))
+		copy(autoLoadedSkillsClone, orig.autoLoadedSkills)
+	}
+	orig.autoLoadedSkillsMu.RUnlock()
+
+	var skillUsageClone map[string]*skillUsageState
+	orig.skillUsageMu.Lock()
+	if orig.skillUsage != nil {
+		skillUsageClone = make(map[string]*skillUsageState, len(orig.skillUsage))
+		for k, v := range orig.skillUsage {
+			var agentsCopy map[string]bool
+			if v.Agents != nil {
+				agentsCopy = make(map[string]bool, len(v.Agents))
+				for ak, av := range v.Agents {
+					agentsCopy[ak] = av
+				}
+			}
+			skillUsageClone[k] = &skillUsageState{
+				Name:   v.Name,
+				Count:  v.Count,
+				Agents: agentsCopy,
+			}
+		}
+	}
+	orig.skillUsageMu.Unlock()
+
+	var delegatedTasksClone map[string]int
+	orig.delegatedTasksMu.Lock()
+	if orig.delegatedTasks != nil {
+		delegatedTasksClone = make(map[string]int, len(orig.delegatedTasks))
+		for k, v := range orig.delegatedTasks {
+			delegatedTasksClone[k] = v
+		}
+	}
+	orig.delegatedTasksMu.Unlock()
+
+	var taskResultCacheClone map[string][]cachedTaskEntry
+	orig.taskResultCacheMu.RLock()
+	if orig.taskResultCache != nil {
+		taskResultCacheClone = make(map[string][]cachedTaskEntry, len(orig.taskResultCache))
+		for k, v := range orig.taskResultCache {
+			var sliceCopy []cachedTaskEntry
+			if v != nil {
+				sliceCopy = make([]cachedTaskEntry, len(v))
+				copy(sliceCopy, v)
+			}
+			taskResultCacheClone[k] = sliceCopy
+		}
+	}
+	orig.taskResultCacheMu.RUnlock()
+
+	var forcedSkillNamesClone map[string]bool
+	if orig.forcedSkillNames != nil {
+		forcedSkillNamesClone = make(map[string]bool, len(orig.forcedSkillNames))
+		for k, v := range orig.forcedSkillNames {
+			forcedSkillNamesClone[k] = v
+		}
+	}
+
+	var pendingPlansClone map[string]*PlanEntry
+	var approvedOutputsClone map[string]string
+	orig.pendingPlansMu.Lock()
+	if orig.pendingPlans != nil {
+		pendingPlansClone = make(map[string]*PlanEntry, len(orig.pendingPlans))
+		for k, v := range orig.pendingPlans {
+			pendingPlansClone[k] = &PlanEntry{
+				TodoID:      v.TodoID,
+				Agent:       v.Agent,
+				Goal:        v.Goal,
+				PlanText:    v.PlanText,
+				Status:      v.Status,
+				ReviewCount: v.ReviewCount,
+			}
+		}
+	}
+	if orig.approvedOutputs != nil {
+		approvedOutputsClone = make(map[string]string, len(orig.approvedOutputs))
+		for k, v := range orig.approvedOutputs {
+			approvedOutputsClone[k] = v
+		}
+	}
+	orig.pendingPlansMu.Unlock()
+
+	var sessionToolPermissionsClone map[string]bool
+	orig.sessionToolPermissionsMu.RLock()
+	if orig.sessionToolPermissions != nil {
+		sessionToolPermissionsClone = make(map[string]bool, len(orig.sessionToolPermissions))
+		for k, v := range orig.sessionToolPermissions {
+			sessionToolPermissionsClone[k] = v
+		}
+	}
+	orig.sessionToolPermissionsMu.RUnlock()
+
+	var workerSummariesClone map[string]string
+	orig.workerSummariesMu.Lock()
+	if orig.workerSummaries != nil {
+		workerSummariesClone = make(map[string]string, len(orig.workerSummaries))
+		for k, v := range orig.workerSummaries {
+			workerSummariesClone[k] = v
+		}
+	}
+	orig.workerSummariesMu.Unlock()
+
+	orig.sidecarInitMu.Lock()
+	sidecarInitCopy := orig.sidecarInit
+	sidecarInstCopy := orig.sidecarInst
+	orig.sidecarInitMu.Unlock()
+
+	orig.guardInitMu.Lock()
+	guardInitCopy := orig.guardInit
+	guardInstCopy := orig.guardInst
+	orig.guardInitMu.Unlock()
+
+	var sessionDataClone *SessionData
+	if orig.sessionData != nil {
+		var entriesCopy []SessionEntry
+		if orig.sessionData.Entries != nil {
+			entriesCopy = make([]SessionEntry, len(orig.sessionData.Entries))
+			copy(entriesCopy, orig.sessionData.Entries)
+		}
+		sessionDataClone = &SessionData{
+			CreatedAt: orig.sessionData.CreatedAt,
+			UpdatedAt: orig.sessionData.UpdatedAt,
+			Rounds:    orig.sessionData.Rounds,
+			Entries:   entriesCopy,
+		}
+	}
+
+	var coreToolsClone []fantasy.AgentTool
+	if orig.coreTools != nil {
+		coreToolsClone = make([]fantasy.AgentTool, len(orig.coreTools))
+		copy(coreToolsClone, orig.coreTools)
+	}
+
+	orig.stepConfirmFnMu.RLock()
+	stepConfirmFnCopy := orig.stepConfirmFn
+	orig.stepConfirmFnMu.RUnlock()
+
+	return &Coordinator{
+		session:                newSession,
+		providerManager:        orig.providerManager,
+		mcpManager:             orig.mcpManager,
+		coreTools:              coreToolsClone,
+		agentCache:             agentCacheClone,
+		round:                  orig.round,
+		verbose:                orig.verbose,
+		think:                  orig.think,
+		reportStatus:           orig.reportStatus,
+		sessionData:            sessionDataClone,
+		taskTracker:            orig.taskTracker,
+		skills:                 skillsClone,
+		conversationHistory:    conversationHistoryClone,
+		projectDir:             orig.projectDir,
+		auditLogger:            orig.auditLogger,
+		sshSessionMgr:          orig.sshSessionMgr,
+		skillUsage:             skillUsageClone,
+		delegatedTasks:         delegatedTasksClone,
+		taskResultCache:        taskResultCacheClone,
+		memoryStore:            orig.memoryStore,
+		modelList:              orig.modelList,
+		sidecarModel:           orig.sidecarModel,
+		sidecarInst:            sidecarInstCopy,
+		sidecarInit:            sidecarInitCopy,
+		guardModel:             orig.guardModel,
+		guardInst:              guardInstCopy,
+		guardInit:              guardInitCopy,
+		cachedWorkerContext:    orig.cachedWorkerContext,
+		autoLoadedSkills:       autoLoadedSkillsClone,
+		forcedSkillNames:       forcedSkillNamesClone,
+		maxConcurrent:          orig.maxConcurrent,
+		sessionTime:            orig.sessionTime,
+		skillDetector:          orig.skillDetector,
+		skillGenerator:         orig.skillGenerator,
+		skillPatternsDetected:  orig.skillPatternsDetected,
+		hooks:                  orig.hooks,
+		rbashMode:              orig.rbashMode,
+		restrictedPath:         orig.restrictedPath,
+		noNet:                  orig.noNet,
+		forceMCP:               orig.forceMCP,
+		pendingPlans:           pendingPlansClone,
+		approvedOutputs:        approvedOutputsClone,
+		forcePlanFirst:         orig.forcePlanFirst,
+		autoSkillsEnabled:      orig.autoSkillsEnabled,
+		sessionToolPermissions: sessionToolPermissionsClone,
+		workerSummaries:        workerSummariesClone,
+		stepConfirmFn:          stepConfirmFnCopy,
+	}
 }
 
 // sanitizeModel removes characters unsafe for file paths from a model name.
