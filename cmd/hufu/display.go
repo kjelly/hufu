@@ -1232,6 +1232,28 @@ func (b *tuiTextBufs) set(todoID, text string) {
 	b.texts[todoID] = text
 }
 
+// splitLine atomically reads the buffer, extracts the first complete line (up to first \n),
+// and removes that line from the buffer. Returns the line and true if successful,
+// or "" and false if no complete line exists.
+func (b *tuiTextBufs) splitLine(todoID string) (string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	cur := b.texts[todoID]
+	if cur == "" {
+		return "", false
+	}
+
+	idx := strings.Index(cur, "\n")
+	if idx == -1 {
+		return "", false // No complete line yet
+	}
+
+	line := cur[:idx]
+	b.texts[todoID] = cur[idx+1:]
+	return line, true
+}
+
 // makeTUIReporter returns a StatusReporter that forwards relevant events to p,
 // and a cleanup func that stops any background thinking-ticker goroutines.
 func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
@@ -1391,23 +1413,23 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 				return
 			}
 			tb.append(event.TodoID, event.Message)
+
+			// Check if buffer exceeds threshold and flush if needed
 			cur := tb.get(event.TodoID)
 			if utf8.RuneCountInString(cur) > 10000 {
 				if trimmed := strings.TrimSpace(cur); trimmed != "" {
 					p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 " + trimmed)})
 				}
-				tb.flush(event.TodoID) // clear buffer (ignore return values)
+				tb.flush(event.TodoID)
 				return
 			}
+
+			// Atomically extract and send complete lines
 			for {
-				cur = tb.get(event.TodoID)
-				idx := strings.Index(cur, "\n")
-				if idx == -1 {
+				line, ok := tb.splitLine(event.TodoID)
+				if !ok {
 					break
 				}
-				line := cur[:idx]
-				rest := cur[idx+1:]
-				tb.set(event.TodoID, rest)
 				if trimmed := strings.TrimSpace(line); trimmed != "" {
 					p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 " + trimmed)})
 				}

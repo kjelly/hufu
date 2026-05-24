@@ -3423,11 +3423,18 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	}
 
 	// Create isolated workspace for this model to prevent concurrent file conflicts.
-	subWS := filepath.Join(c.session.Workspace, "extra-models", sanitizeModel(agentDef.Generation.Model))
+	// Use unique token (timestamp + agentName) to prevent collision when multiple
+	// agents use the same model simultaneously.
+	token := fmt.Sprintf("%d-%s", time.Now().UnixNano(), sanitizeModel(agentName))
+	subWS := filepath.Join(c.session.Workspace, "extra-models", sanitizeModel(agentDef.Generation.Model)+"-"+token)
 	if err := os.MkdirAll(subWS, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create isolated workspace: %w", err)
 	}
-	defer os.RemoveAll(subWS)
+	defer func() {
+		if rmErr := os.RemoveAll(subWS); rmErr != nil {
+			log.Printf("warning: failed to remove isolated workspace %s: %v", subWS, rmErr)
+		}
+	}()
 
 	// Copy shared/ directory from main workspace
 	sharedSrc := filepath.Join(c.session.Workspace, "shared")
@@ -3714,7 +3721,7 @@ func sanitizeModel(model string) string {
 	return s
 }
 
-// copyDir recursively copies a directory tree.
+// copyDir recursively copies a directory tree, preserving file permissions and symlinks.
 func copyDir(src, dst string) error {
 	entries, err := os.ReadDir(src)
 	if err != nil {
@@ -3726,18 +3733,40 @@ func copyDir(src, dst string) error {
 	for _, entry := range entries {
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
+
+		// Get full file info to preserve permissions
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+
+		// Handle symlinks
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, err := os.Readlink(srcPath)
+			if err != nil {
+				return err
+			}
+			if err := os.Symlink(linkTarget, dstPath); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Handle directories
 		if entry.IsDir() {
 			if err := copyDir(srcPath, dstPath); err != nil {
 				return err
 			}
-		} else {
-			data, err := os.ReadFile(srcPath)
-			if err != nil {
-				return err
-			}
-			if err := os.WriteFile(dstPath, data, 0o644); err != nil {
-				return err
-			}
+			continue
+		}
+
+		// Handle regular files with original permissions
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(dstPath, data, info.Mode().Perm()); err != nil {
+			return err
 		}
 	}
 	return nil
