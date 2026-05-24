@@ -191,12 +191,14 @@ func ExtractLTMFromHistory(workspace, teamName string) {
 		}
 		path := filepath.Join(histDir, e.Name())
 		data, readErr := os.ReadFile(path)
-		content := strings.TrimSpace(string(data))
-		if readErr == nil && content != "" {
-			ltm = extractLTMFromContent(content, ltm)
-			anyContent = true
+		if readErr == nil {
+			content := strings.TrimSpace(string(data))
+			if content != "" {
+				ltm = extractLTMFromContent(content, ltm)
+				anyContent = true
+			}
+			os.Remove(path)
 		}
-		os.Remove(path)
 	}
 
 	if !anyContent {
