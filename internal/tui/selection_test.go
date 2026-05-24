@@ -79,3 +79,46 @@ func TestVisualSelection_StartPoint(t *testing.T) {
 		t.Error("Expected to exit Visual mode after 'Esc'")
 	}
 }
+
+func TestMapRenderedLineToLogIndex(t *testing.T) {
+	m := New("test", TeamInfo{TeamName: "test"})
+	todoID := "t1"
+	m.detailID = todoID
+	m.logs[todoID] = []string{
+		"Short line",                                  // Fits on 1 line (width 20 -> wraps at 18)
+		"Very long line that will wrap onto multiple lines definitely.", // Takes multiple lines
+		"Another short line",
+	}
+
+	// width = 20. wrapText wraps at width-2 = 18.
+	// "Short line" (10 chars) -> 1 line
+	// "Very long line that will wrap onto multiple lines definitely." (61 chars)
+	// wrapped into chunks of max 18 chars:
+	// "Very long line" (14 chars)
+	// "that will wrap" (14 chars)
+	// "onto multiple" (13 chars)
+	// "lines definitely." (17 chars)
+	// Total: 4 lines.
+	// "Another short line" (18 chars) -> 1 line.
+
+	tests := []struct {
+		renderedLine int
+		expectedIdx  int
+	}{
+		{renderedLine: 0, expectedIdx: 0},  // First line of "Short line" -> index 0
+		{renderedLine: 1, expectedIdx: 1},  // First line of "Very long..." -> index 1
+		{renderedLine: 2, expectedIdx: 1},  // Second line of "Very long..." -> index 1
+		{renderedLine: 3, expectedIdx: 1},  // Third line of "Very long..." -> index 1
+		{renderedLine: 4, expectedIdx: 1},  // Fourth line of "Very long..." -> index 1
+		{renderedLine: 5, expectedIdx: 2},  // First line of "Another short..." -> index 2
+		{renderedLine: 6, expectedIdx: 2},  // Second line of "Another short..." -> index 2
+		{renderedLine: 7, expectedIdx: -1}, // Out of bounds -> index -1
+	}
+
+	for _, tt := range tests {
+		got := m.mapRenderedLineToLogIndex(tt.renderedLine, 20)
+		if got != tt.expectedIdx {
+			t.Errorf("mapRenderedLineToLogIndex(%d, 20) = %d, want %d", tt.renderedLine, got, tt.expectedIdx)
+		}
+	}
+}

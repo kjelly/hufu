@@ -391,6 +391,53 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.inDetail {
 			var cmd tea.Cmd
 			m.vp, cmd = m.vp.Update(msg)
+
+			item := m.findTask(m.detailID)
+			if item != nil {
+				header := m.renderDetailHeader(item)
+				headerLines := len(strings.Split(header, "\n"))
+				clickY := msg.Y - headerLines
+
+				if clickY >= 0 && clickY < m.vp.Height {
+					lines, ok := m.logs[m.detailID]
+					if ok && len(lines) > 0 {
+						width := m.width
+						if width < 20 {
+							width = 20
+						}
+						logIndex := m.mapRenderedLineToLogIndex(m.vp.YOffset+clickY, width)
+						if logIndex >= 0 && logIndex < len(lines) {
+							if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+								m.inVisual = true
+								m.cursorLine = logIndex
+								m.visualStart = logIndex
+								m.visualEnd = logIndex
+								m.vp.SetContent(m.buildDetailContent())
+							} else if msg.Action == tea.MouseActionMotion && m.inVisual && msg.Button == tea.MouseButtonLeft {
+								m.cursorLine = logIndex
+								m.visualEnd = logIndex
+								m.vp.SetContent(m.buildDetailContent())
+							}
+						}
+					}
+				}
+			}
+
+			if msg.Action == tea.MouseActionRelease && m.inVisual && msg.Button == tea.MouseButtonLeft {
+				if m.visualStart != m.visualEnd {
+					text := m.getVisualSelection()
+					m.inVisual = false
+					m.visualStart = 0
+					m.visualEnd = 0
+					if m.vpReady {
+						m.vp.SetContent(m.buildDetailContent())
+					}
+					if text != "" {
+						return m, copyToClipboard(text)
+					}
+				}
+			}
+
 			return m, cmd
 		}
 		if !m.mouseEnabled {
@@ -2067,7 +2114,7 @@ func (m Model) detailView() string {
 	if !m.vpReady {
 		return header
 	}
-	footer := footerStyle.Render("j/k ↑↓ scroll · esc back")
+	footer := m.footer()
 	return header + "\n" + m.vp.View() + "\n" + footer
 }
 
@@ -2415,6 +2462,23 @@ func (m Model) getVisualSelection() string {
 	}
 	selected := lines[start : end+1]
 	return strings.Join(selected, "\n")
+}
+
+func (m Model) mapRenderedLineToLogIndex(renderedLine int, width int) int {
+	lines := m.logs[m.detailID]
+	currRenderedLine := 0
+	for i, entry := range lines {
+		wrapped := wrapText(entry, width-2)
+		linesInWrapped := len(strings.Split(wrapped, "\n"))
+		if linesInWrapped == 0 {
+			linesInWrapped = 1
+		}
+		if renderedLine >= currRenderedLine && renderedLine < currRenderedLine+linesInWrapped {
+			return i
+		}
+		currRenderedLine += linesInWrapped
+	}
+	return -1
 }
 
 func copyToClipboard(text string) tea.Cmd {
