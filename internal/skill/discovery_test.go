@@ -219,7 +219,7 @@ func TestAutoSkillGenerator(t *testing.T) {
 	}
 
 	// Verify file was created
-	content := generator.buildSkillContent(candidate)
+	content := generator.buildSkillContent(candidate, candidate.SuggestedName)
 
 	if !strings.Contains(content, "draft-view-edit-bash") {
 		t.Error("Expected skill name in content")
@@ -652,5 +652,72 @@ func TestSkillPatternDetector_BuildClusterPrompt(t *testing.T) {
 
 	if !strings.Contains(prompt, "JSON") {
 		t.Error("Expected prompt to mention JSON format")
+	}
+}
+
+func TestIsValidSkillName(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"fix-null-pointer", true},
+		{"refactor-auth-module", true},
+		{"setup-test-env", true},
+		{"draft-view-edit-bash", true},
+		{"", false},
+		{"Fix-Null-Pointer", false},
+		{"fix_null_pointer", false},
+		{"fix null pointer", false},
+		{"-fix-null-pointer", false},
+		{"fix-null-pointer-", false},
+		{"a-b-c-d-e-f-g-h-i-j-k", false},
+		{"a-b-c-d-e-f-g-h-i-j", true},
+		{"fix123-bug456", true},
+	}
+
+	for _, tt := range tests {
+		if got := isValidSkillName(tt.name); got != tt.want {
+			t.Errorf("isValidSkillName(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestBuildNamingPrompt(t *testing.T) {
+	detector := NewSkillPatternDetector(3, 3, 5)
+	seq := &ToolSequence{
+		Tools:  []string{"view", "edit", "bash"},
+		Params: []string{"*.go", "*.go", "go test"},
+		TaskDescs: []string{
+			"fix null pointer in user service",
+			"resolve NPE in login handler",
+		},
+	}
+
+	prompt := detector.buildNamingPrompt(seq)
+	if !strings.Contains(prompt, "view") {
+		t.Error("Expected prompt to contain tool names")
+	}
+	if !strings.Contains(prompt, "fix null pointer") {
+		t.Error("Expected prompt to contain task descriptions")
+	}
+	if !strings.Contains(prompt, "10 words") {
+		t.Error("Expected prompt to mention max words limit")
+	}
+}
+
+func TestGenerateLLMNameFallback(t *testing.T) {
+	detector := NewSkillPatternDetector(3, 3, 5)
+	seq := &ToolSequence{
+		Tools:  []string{"view", "edit", "bash"},
+		Params: []string{"*.go", "*.go", "go test"},
+	}
+
+	// Without sidecar enabled, should return error
+	_, err := detector.generateLLMName(context.Background(), seq)
+	if err == nil {
+		t.Error("Expected error when sidecar not enabled")
+	}
+	if !strings.Contains(err.Error(), "sidecar not enabled") {
+		t.Errorf("Expected sidecar not enabled error, got: %v", err)
 	}
 }

@@ -50,10 +50,11 @@ type ToolSequence struct {
 
 // PatternCandidate represents a detected repeating pattern
 type PatternCandidate struct {
-	Sequence       *ToolSequence
-	SimilarityScore float64 // 0.0-1.0 from semantic analysis
-	SuggestedName   string
-	SuggestedDesc   string
+	Sequence         *ToolSequence
+	SimilarityScore  float64 // 0.0-1.0 from semantic analysis
+	SuggestedName    string  // Rule-based fallback name
+	SuggestedDesc    string
+	LLMGeneratedName string // LLM-generated meaningful name (preferred)
 }
 
 // SkillPatternDetector detects repeating tool call patterns
@@ -295,19 +296,38 @@ func (d *SkillPatternDetector) analyzeSemanticSimilarity(ctx context.Context, si
 	// Collect all task descriptions
 	allDescs := d.collectAllTaskDescriptions(candidates)
 	if len(allDescs) < 2 {
+		d.enrichLLMNames(ctx, candidates)
 		return candidates
 	}
 
 	// Cluster descriptions using sidecar with context
 	clusters := d.clusterDescriptions(ctx, sidecar, allDescs)
 	if clusters == nil {
+		d.enrichLLMNames(ctx, candidates)
 		return candidates
 	}
 
 	// Merge sequences with similarity >= 0.9
 	merged := d.mergeSimilarSequences(candidates, clusters, 0.9)
 
+	// Generate LLM names for all candidates
+	d.enrichLLMNames(ctx, merged)
+
 	return merged
+}
+
+// enrichLLMNames generates LLM-based names for each candidate.
+// Falls back to rule-based SuggestedName on error.
+func (d *SkillPatternDetector) enrichLLMNames(ctx context.Context, candidates []PatternCandidate) {
+	if !d.sidecarEnabled || d.sidecar == nil {
+		return
+	}
+	for i := range candidates {
+		llmName, err := d.generateLLMName(ctx, candidates[i].Sequence)
+		if err == nil && llmName != "" {
+			candidates[i].LLMGeneratedName = llmName
+		}
+	}
 }
 
 // collectAllTaskDescriptions collects all unique task descriptions from candidates
@@ -610,6 +630,94 @@ func (d *SkillPatternDetector) generateSuggestedName(seq *ToolSequence) string {
 	}
 
 	return "draft-" + name
+}
+
+// isValidSkillName validates a LLM-generated name meets the requirements:
+// lowercase, hyphenated, max 10 words, no leading/trailing hyphens.
+func isValidSkillName(name string) bool {
+	if name == "" {
+		return false
+	}
+	validRe := regexp.MustCompile(`^[a-z0-9-]+$`)
+	if !validRe.MatchString(name) {
+		return false
+	}
+	words := strings.Split(name, "-")
+	if len(words) > 10 {
+		return false
+	}
+	for _, word := range words {
+		if len(word) == 0 {
+			return false
+		}
+	}
+	if strings.HasPrefix(name, "-") || strings.HasSuffix(name, "-") {
+		return false
+	}
+	return true
+}
+
+// buildNamingPrompt constructs the prompt for LLM-based skill naming.
+func (d *SkillPatternDetector) buildNamingPrompt(seq *ToolSequence) string {
+	var sb strings.Builder
+
+	sb.WriteString("You are a skill naming assistant. Generate a concise, descriptive name for an automated skill.\n\n")
+	sb.WriteString("## Tool Sequence\n")
+	for i, tool := range seq.Tools {
+		param := ""
+		if i < len(seq.Params) {
+			param = seq.Params[i]
+		}
+		sb.WriteString(fmt.Sprintf("%d. %s(%s)\n", i+1, tool, param))
+	}
+
+	sb.WriteString("\n## Common Task Descriptions\n")
+	seen := make(map[string]bool)
+	count := 0
+	for _, desc := range seq.TaskDescs {
+		if desc != "" && !seen[desc] {
+			seen[desc] = true
+			sb.WriteString(fmt.Sprintf("- %s\n", desc))
+			count++
+			if count >= 3 {
+				break
+			}
+		}
+	}
+
+	sb.WriteString("\n## Requirements\n")
+	sb.WriteString("- Generate a short, lowercase, hyphenated name\n")
+	sb.WriteString("- Maximum 10 words (hyphen-separated)\n")
+	sb.WriteString("- Should describe the skill's purpose, not the tools used\n")
+	sb.WriteString("- Examples: \"fix-null-pointer\", \"refactor-auth-module\", \"setup-test-env\"\n")
+	sb.WriteString("- Return ONLY the name, no other text\n")
+
+	return sb.String()
+}
+
+// generateLLMName uses sidecar to generate a meaningful skill name.
+// Returns empty string on error (caller must fallback to generateSuggestedName).
+func (d *SkillPatternDetector) generateLLMName(ctx context.Context, seq *ToolSequence) (string, error) {
+	if !d.sidecarEnabled || d.sidecar == nil {
+		return "", fmt.Errorf("sidecar not enabled")
+	}
+
+	prompt := d.buildNamingPrompt(seq)
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	result, err := d.sidecar.Execute(timeoutCtx, prompt)
+	if err != nil {
+		return "", fmt.Errorf("sidecar naming failed: %w", err)
+	}
+
+	name := strings.TrimSpace(result)
+	if !isValidSkillName(name) {
+		return "", fmt.Errorf("invalid name generated: %q", name)
+	}
+
+	return name, nil
 }
 
 // generateSuggestedDescription creates a description from task descriptions

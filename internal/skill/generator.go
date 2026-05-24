@@ -21,14 +21,20 @@ func NewAutoSkillGenerator(baseDir string) *AutoSkillGenerator {
 	}
 }
 
-// GenerateSkill creates a SKILL.md file from a pattern candidate
+// GenerateSkill creates a SKILL.md file from a pattern candidate.
+// Prefers LLM-generated name when available, falls back to rule-based SuggestedName.
 func (g *AutoSkillGenerator) GenerateSkill(candidate PatternCandidate) (string, error) {
-	skillDir := filepath.Join(g.baseDir, candidate.SuggestedName)
+	skillName := candidate.SuggestedName
+	if candidate.LLMGeneratedName != "" {
+		skillName = candidate.LLMGeneratedName
+	}
+
+	skillDir := filepath.Join(g.baseDir, skillName)
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create skill directory: %w", err)
 	}
 
-	content := g.buildSkillContent(candidate)
+	content := g.buildSkillContent(candidate, skillName)
 	skillPath := filepath.Join(skillDir, "SKILL.md")
 
 	if err := os.WriteFile(skillPath, []byte(content), 0o644); err != nil {
@@ -39,17 +45,17 @@ func (g *AutoSkillGenerator) GenerateSkill(candidate PatternCandidate) (string, 
 }
 
 // buildSkillContent generates the SKILL.md content
-func (g *AutoSkillGenerator) buildSkillContent(candidate PatternCandidate) string {
+func (g *AutoSkillGenerator) buildSkillContent(candidate PatternCandidate, skillName string) string {
 	var sb strings.Builder
 
 	// Frontmatter
 	sb.WriteString("---\n")
-	sb.WriteString(fmt.Sprintf("name: %s\n", candidate.SuggestedName))
+	sb.WriteString(fmt.Sprintf("name: %s\n", skillName))
 	sb.WriteString(fmt.Sprintf("description: %s\n", candidate.SuggestedDesc))
 	sb.WriteString("---\n\n")
 
 	// Title
-	sb.WriteString(fmt.Sprintf("# %s\n\n", strings.Title(strings.ReplaceAll(candidate.SuggestedName, "draft-", ""))))
+	sb.WriteString(fmt.Sprintf("# %s\n\n", strings.Title(strings.ReplaceAll(skillName, "-", " "))))
 
 	// Overview
 	sb.WriteString("## Overview\n\n")
