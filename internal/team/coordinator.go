@@ -23,6 +23,7 @@ import (
 	"github.com/anomalyco/hufu/internal/hooks"
 	"github.com/anomalyco/hufu/internal/mcp"
 	"github.com/anomalyco/hufu/internal/memory"
+	"github.com/anomalyco/hufu/internal/readline"
 	"github.com/anomalyco/hufu/internal/sidecar"
 	"github.com/anomalyco/hufu/internal/skill"
 	"github.com/anomalyco/hufu/internal/tools"
@@ -3800,7 +3801,7 @@ func (c *Coordinator) mergeAgentResults(results []*agentResult) string {
 	return b.String()
 }
 
-// checkSkillPatternsAndSave checks for patterns and auto-generates skill drafts
+// checkSkillPatternsAndSave checks for patterns and auto-generates skill drafts (requires user confirmation)
 func (c *Coordinator) checkSkillPatternsAndSave() []string {
 	if c.skillDetector == nil || c.skillGenerator == nil {
 		return nil
@@ -3809,6 +3810,11 @@ func (c *Coordinator) checkSkillPatternsAndSave() []string {
 	candidates := c.skillDetector.FindCandidates(context.Background())
 	if len(candidates) == 0 {
 		return nil
+	}
+
+	// Display preview and wait for user confirmation
+	if !c.displaySkillPreviewAndConfirm(candidates) {
+		return nil // User cancelled
 	}
 
 	var savedSkills []string
@@ -3822,6 +3828,63 @@ func (c *Coordinator) checkSkillPatternsAndSave() []string {
 	}
 
 	return savedSkills
+}
+
+// displaySkillPreviewAndConfirm displays skill preview and waits for user confirmation
+func (c *Coordinator) displaySkillPreviewAndConfirm(candidates []skill.PatternCandidate) bool {
+	var msg strings.Builder
+	msg.WriteString("─── SKILL GENERATION PREVIEW ───\n")
+	msg.WriteString(fmt.Sprintf("Detected %d high-quality patterns:\n\n", len(candidates)))
+	
+	for i, cand := range candidates {
+		msg.WriteString(fmt.Sprintf("%d. **%s**\n", i+1, cand.SuggestedName))
+		msg.WriteString(fmt.Sprintf("   Tools: %s\n", strings.Join(cand.Sequence.Tools, " → ")))
+		msg.WriteString(fmt.Sprintf("   Frequency: ×%d\n", cand.Sequence.Count))
+		msg.WriteString(fmt.Sprintf("   Quality Score: %.2f/1.00\n", cand.QualityScore))
+		msg.WriteString(fmt.Sprintf("   Description: %s\n", cand.SuggestedDesc))
+		
+		// LLM evaluation reason
+		if cand.GeneralizationReason != "" {
+			msg.WriteString(fmt.Sprintf("   Generalization: %s\n", cand.GeneralizationReason))
+		}
+		if len(cand.SpecificElements) > 0 {
+			msg.WriteString(fmt.Sprintf("   Specific Elements: %v\n", strings.Join(cand.SpecificElements, ", ")))
+		}
+		
+		// Display first 4 tool call examples
+		msg.WriteString("   Example Tool Calls:\n")
+		for j := 0; j < len(cand.Sequence.Params) && j < 4; j++ {
+			msg.WriteString(fmt.Sprintf("     %d. %s(%s)\n", j+1, cand.Sequence.Tools[j], cand.Sequence.Params[j]))
+		}
+		if len(cand.Sequence.Params) > 4 {
+			msg.WriteString(fmt.Sprintf("     ... and %d more\n", len(cand.Sequence.Params)-4))
+		}
+		
+		msg.WriteString("\n")
+	}
+	
+	msg.WriteString("Generate these skills? [Y/n]: ")
+	c.report(c.newEvent("step").withMessage(msg.String()))
+	
+	return c.confirmSkillGeneration()
+}
+
+// confirmSkillGeneration waits for user confirmation input
+func (c *Coordinator) confirmSkillGeneration() bool {
+	// Use readline to read user input
+	prompt, err := readline.NewPromptReader("")
+	if err != nil {
+		return false
+	}
+	defer prompt.Close()
+	
+	answer, err := prompt.ReadLine("")
+	if err != nil {
+		return false
+	}
+	
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "" || answer == "y" || answer == "yes"
 }
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (string, error) {

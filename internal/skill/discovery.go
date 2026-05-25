@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -17,6 +18,21 @@ import (
 
 const maxToolCallHistory = 1000
 const maxSequencesPerAgent = 500
+
+// Skill generation quality control
+const (
+	minFrequency       = 10
+	maxSkillCandidates = 5
+	qualityThreshold   = 0.7
+	llmTimeout         = 60 * time.Second
+)
+
+// GeneralizationScore represents LLM evaluation result
+type GeneralizationScore struct {
+	Score          float64  `json:"score"`
+	Reason         string   `json:"reason"`
+	SpecificElements []string `json:"specific_elements"`
+}
 
 // Pre-compiled regex patterns for normalizeParams (avoid recompilation on every call)
 var (
@@ -56,6 +72,10 @@ type PatternCandidate struct {
 	SuggestedName    string  // Rule-based fallback name
 	SuggestedDesc    string
 	LLMGeneratedName string // LLM-generated meaningful name (preferred)
+	QualityScore     float64      // 0-1 quality score
+	IsSingleTool     bool         // true if single tool repeated
+	GeneralizationReason string   // LLM assessment reason
+	SpecificElements []string     // specific values detected
 }
 
 // SkillPatternDetector detects repeating tool call patterns
@@ -234,17 +254,131 @@ func (d *SkillPatternDetector) hashSequence(seq *ToolSequence) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// FindCandidates returns patterns that repeat at least minFrequency times
+// evaluateToolDiversity checks if sequence has at least 2 different tools
+func (d *SkillPatternDetector) evaluateToolDiversity(seq *ToolSequence) bool {
+	uniqueTools := make(map[string]bool)
+	for _, tool := range seq.Tools {
+		uniqueTools[tool] = true
+	}
+	return len(uniqueTools) >= 2
+}
+
+// isSingleToolRepeat checks if sequence is single tool repeated
+func (d *SkillPatternDetector) isSingleToolRepeat(seq *ToolSequence) bool {
+	return !d.evaluateToolDiversity(seq)
+}
+
+// buildParamGeneralizationPrompt builds few-shot prompt for LLM evaluation
+func (d *SkillPatternDetector) buildParamGeneralizationPrompt(seq *ToolSequence) string {
+	var sb strings.Builder
+	sb.WriteString("You are a skill generalization analyzer. Evaluate if tool call parameters are:\n")
+	sb.WriteString("- GENERIC: Reusable across contexts (e.g., file paths, variable names)\n")
+	sb.WriteString("- SPECIFIC: Tied to one context (e.g., hostnames, IPs, specific service names)\n\n")
+	
+	// Few-shot examples
+	sb.WriteString("## Examples\n\n")
+	
+	sb.WriteString("Example 1 (GENERIC - score=0.9):\n")
+	sb.WriteString("  1. view(path=\"src/auth/login.ts\")\n")
+	sb.WriteString("  2. edit(file=\"src/auth/login.ts\", old=\"...\")\n")
+	sb.WriteString("  3. bash(cmd=\"npm test\")\n")
+	sb.WriteString("  Analysis: Uses generic file paths and standard commands\n")
+	sb.WriteString("  JSON: {\"score\": 0.9, \"reason\": \"Fully generic parameters\", \"specific_elements\": []}\n\n")
+	
+	sb.WriteString("Example 2 (SPECIFIC - score=0.2):\n")
+	sb.WriteString("  1. ssh(host=\"prod-server-01.acme.com\", cmd=\"kubectl get pods\")\n")
+	sb.WriteString("  2. ssh(host=\"prod-server-01.acme.com\", cmd=\"kubectl logs\")\n")
+	sb.WriteString("  Analysis: Contains specific hostname and environment\n")
+	sb.WriteString("  JSON: {\"score\": 0.2, \"reason\": \"Tied to production environment\", \"specific_elements\": [\"prod-server-01.acme.com\"]}\n\n")
+	
+	sb.WriteString("Example 3 (MIXED - score=0.6):\n")
+	sb.WriteString("  1. bash(cmd=\"docker build -t myapp .\")\n")
+	sb.WriteString("  2. bash(cmd=\"docker push registry.example.com/myapp:latest\")\n")
+	sb.WriteString("  Analysis: Generic docker commands but specific registry URL\n")
+	sb.WriteString("  JSON: {\"score\": 0.6, \"reason\": \"Generic commands with specific registry\", \"specific_elements\": [\"registry.example.com\"]}\n\n")
+	
+	sb.WriteString("## Task to Analyze\n\n")
+	sb.WriteString("Tool calls:\n")
+	for i, tool := range seq.Tools {
+		param := ""
+		if i < len(seq.Params) {
+			param = seq.Params[i]
+		}
+		sb.WriteString(fmt.Sprintf("  %d. %s(%s)\n", i+1, tool, param))
+	}
+	
+	sb.WriteString("\nReturn ONLY JSON: {\"score\": 0.0-1.0, \"reason\": \"explanation\", \"specific_elements\": [\"list\", \"of\", \"specific\", \"values\"]}\n")
+	sb.WriteString("Scoring:\n")
+	sb.WriteString("  - score=1.0: Fully generic, no specific values\n")
+	sb.WriteString("  - score=0.0: Highly specific, contains hostnames/IPs/service names\n")
+	sb.WriteString("  - score>=0.7: Acceptable for skill generation\n")
+	
+	return sb.String()
+}
+
+// evaluateParamGeneralization uses sidecar to evaluate parameter generalization
+// Returns score (0-1), reason, and specific elements list
+func (d *SkillPatternDetector) evaluateParamGeneralization(ctx context.Context, seq *ToolSequence) (float64, string, []string) {
+	if !d.sidecarEnabled || d.sidecar == nil {
+		return 0, "sidecar unavailable", nil
+	}
+	
+	prompt := d.buildParamGeneralizationPrompt(seq)
+	
+	timeoutCtx, cancel := context.WithTimeout(ctx, llmTimeout)
+	defer cancel()
+	
+	result, err := d.sidecar.Execute(timeoutCtx, prompt)
+	if err != nil {
+		return 0, fmt.Sprintf("sidecar error: %v", err), nil
+	}
+	
+	score, reason, elements := d.parseGeneralizationScore(result)
+	return score, reason, elements
+}
+
+// parseGeneralizationScore parses LLM JSON response
+func (d *SkillPatternDetector) parseGeneralizationScore(result string) (float64, string, []string) {
+	var score GeneralizationScore
+	if err := json.Unmarshal([]byte(result), &score); err != nil {
+		return 0, "parse error", nil
+	}
+	
+	// Clamp score to valid range
+	if score.Score < 0 {
+		score.Score = 0
+	}
+	if score.Score > 1 {
+		score.Score = 1
+	}
+	
+	return score.Score, score.Reason, score.SpecificElements
+}
+
+// calculateQualityScore computes weighted quality score
+// toolDiversity weight: 60%, paramGeneralization weight: 40%
+func (d *SkillPatternDetector) calculateQualityScore(candidate PatternCandidate, paramScore float64) float64 {
+	toolDiversity := 0.0
+	if d.evaluateToolDiversity(candidate.Sequence) {
+		toolDiversity = 1.0
+	}
+	
+	return toolDiversity*0.6 + paramScore*0.4
+}
+
+// FindCandidates returns high-quality patterns that repeat at least minFrequency times
 func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCandidate {
+	// Check sidecar availability - skip if unavailable (no fallback)
+	if !d.sidecarEnabled || d.sidecar == nil {
+		log.Printf("[INFO] Skill generation skipped: sidecar unavailable")
+		return nil
+	}
+	
 	d.mu.RLock()
 	var candidates []PatternCandidate
-
+	
 	for _, seq := range d.sequences {
-		if seq.Count >= d.minFrequency {
-			// Filter out junk/low-value patterns
-			if !d.isHighValueSequence(seq) {
-				continue
-			}
+		if seq.Count >= minFrequency {
 			// Deep copy ToolSequence to prevent data race after RUnlock
 			copiedSeq := &ToolSequence{
 				Tools:     append([]string{}, seq.Tools...),
@@ -264,28 +398,79 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 			candidates = append(candidates, candidate)
 		}
 	}
-
-	// Sort by frequency (descending)
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].Sequence.Count > candidates[j].Sequence.Count
+	
+	d.mu.RUnlock()
+	
+	if len(candidates) == 0 {
+		return nil
+	}
+	
+	// Filtering statistics
+	var (
+		highQualityCandidates []PatternCandidate
+		filteredByFrequency   int
+		filteredBySingleTool  int
+		filteredByQuality     int
+		evaluatedCount        int
+	)
+	
+	for i := range candidates {
+		// Frequency filter (already filtered by loop condition, but count for stats)
+		if candidates[i].Sequence.Count < minFrequency {
+			filteredByFrequency++
+			log.Printf("[INFO] Filtered candidate (frequency %d < %d): %v",
+				candidates[i].Sequence.Count, minFrequency, candidates[i].Sequence.Tools)
+			continue
+		}
+		
+		// Single tool filter
+		candidates[i].IsSingleTool = d.isSingleToolRepeat(candidates[i].Sequence)
+		if candidates[i].IsSingleTool {
+			filteredBySingleTool++
+			log.Printf("[INFO] Filtered candidate (single tool): %v (×%d)",
+				candidates[i].Sequence.Tools, candidates[i].Sequence.Count)
+			continue
+		}
+		
+		// LLM evaluation (limit to maxSkillCandidates)
+		if evaluatedCount >= maxSkillCandidates {
+			log.Printf("[INFO] Stopped LLM evaluation: reached max %d candidates", maxSkillCandidates)
+			break
+		}
+		
+		paramScore, reason, elements := d.evaluateParamGeneralization(ctx, candidates[i].Sequence)
+		candidates[i].GeneralizationReason = reason
+		candidates[i].SpecificElements = elements
+		
+		// Quality score calculation
+		candidates[i].QualityScore = d.calculateQualityScore(candidates[i], paramScore)
+		
+		// Quality filter
+		if candidates[i].QualityScore < qualityThreshold {
+			filteredByQuality++
+			log.Printf("[INFO] Filtered candidate (quality %.2f < %.2f): %s - %s",
+				candidates[i].QualityScore, qualityThreshold, candidates[i].SuggestedName, reason)
+			continue
+		}
+		
+		highQualityCandidates = append(highQualityCandidates, candidates[i])
+		evaluatedCount++
+	}
+	
+	// Filtering summary
+	log.Printf("[INFO] Skill pattern filtering summary:")
+	log.Printf("  Total candidates: %d", len(candidates))
+	log.Printf("  Filtered by frequency (<%d): %d", minFrequency, filteredByFrequency)
+	log.Printf("  Filtered by single tool: %d", filteredBySingleTool)
+	log.Printf("  Filtered by quality (<%.2f): %d", qualityThreshold, filteredByQuality)
+	log.Printf("  High-quality candidates: %d", len(highQualityCandidates))
+	
+	// Sort by quality score (descending)
+	sort.Slice(highQualityCandidates, func(i, j int) bool {
+		return highQualityCandidates[i].QualityScore > highQualityCandidates[j].QualityScore
 	})
-
-	// Read sidecar state under lock to prevent race condition
-	var sidecar *sidecar.Sidecar
-	var sidecarEnabled bool
-	if d.sidecar != nil {
-		sidecar = d.sidecar
-		sidecarEnabled = true
-	}
-
-	d.mu.RUnlock() // Release lock BEFORE network call
-
-	// Apply semantic similarity analysis if sidecar is enabled (network call outside lock)
-	if sidecarEnabled && sidecar != nil && len(candidates) > 0 {
-		candidates = d.analyzeSemanticSimilarity(ctx, sidecar, candidates)
-	}
-
-	return candidates
+	
+	return highQualityCandidates
 }
 
 // analyzeSemanticSimilarity uses sidecar to analyze and merge similar sequences

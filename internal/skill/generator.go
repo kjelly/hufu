@@ -61,8 +61,18 @@ func (g *AutoSkillGenerator) buildSkillContent(candidate PatternCandidate, skill
 	// Overview
 	sb.WriteString("## Overview\n\n")
 	sb.WriteString(fmt.Sprintf("Auto-generated skill detected from **%d** similar executions.\n\n", candidate.Sequence.Count))
+	sb.WriteString(fmt.Sprintf("**Quality Score:** %.2f/1.00\n\n", candidate.QualityScore))
 	sb.WriteString(fmt.Sprintf("**First seen:** %s\n\n", candidate.Sequence.FirstSeen.Format("2006-01-02 15:04")))
 	sb.WriteString(fmt.Sprintf("**Last seen:** %s\n\n", candidate.Sequence.LastSeen.Format("2006-01-02 15:04")))
+
+	// Generalization Analysis
+	if candidate.GeneralizationReason != "" {
+		sb.WriteString("### Generalization Analysis\n\n")
+		sb.WriteString(fmt.Sprintf("**Assessment:** %s\n\n", candidate.GeneralizationReason))
+		if len(candidate.SpecificElements) > 0 {
+			sb.WriteString(fmt.Sprintf("**Specific Elements Detected:** %s\n\n", strings.Join(candidate.SpecificElements, ", ")))
+		}
+	}
 
 	// Workflow
 	sb.WriteString("## Workflow\n\n")
