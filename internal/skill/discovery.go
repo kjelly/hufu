@@ -241,6 +241,10 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 
 	for _, seq := range d.sequences {
 		if seq.Count >= d.minFrequency {
+			// Filter out junk/low-value patterns
+			if !d.isHighValueSequence(seq) {
+				continue
+			}
 			// Deep copy ToolSequence to prevent data race after RUnlock
 			copiedSeq := &ToolSequence{
 				Tools:     append([]string{}, seq.Tools...),
@@ -796,4 +800,44 @@ func (d *SkillPatternDetector) GetAllSequences() []*ToolSequence {
 	}
 
 	return sequences
+}
+
+// isHighValueSequence returns true if the sequence represents a meaningful multi-step workflow.
+// It filters out single-tool repetitions and sequences consisting entirely of generic tools.
+func (d *SkillPatternDetector) isHighValueSequence(seq *ToolSequence) bool {
+	if len(seq.Tools) == 0 {
+		return false
+	}
+
+	// 1. Must have at least 2 unique tool types (filters out e.g. ssh->ssh->ssh)
+	uniqueTools := make(map[string]bool)
+	for _, tool := range seq.Tools {
+		uniqueTools[tool] = true
+	}
+	if len(uniqueTools) < 2 {
+		return false
+	}
+
+	// 2. Must not consist entirely of generic utility/execution/read-only tools
+	genericTools := map[string]bool{
+		"bash":     true,
+		"ssh":      true,
+		"sudo":     true,
+		"ls":       true,
+		"glob":     true,
+		"grep":     true,
+		"view":     true,
+		"ask_user": true,
+		"random":   true,
+		"math":     true,
+	}
+
+	hasNonGeneric := false
+	for _, tool := range seq.Tools {
+		if !genericTools[tool] {
+			hasNonGeneric = true
+			break
+		}
+	}
+	return hasNonGeneric
 }

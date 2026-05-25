@@ -175,7 +175,7 @@ func TestSkillPatternDetector_MultipleAgents(t *testing.T) {
 	// Agent 2 different pattern
 	for i := 0; i < 3; i++ {
 		detector.RecordToolCall("agent2", "grep", "pattern", "task 2")
-		detector.RecordToolCall("agent2", "view", "*.go", "task 2")
+		detector.RecordToolCall("agent2", "edit", "*.go", "task 2")
 	}
 
 	candidates := detector.FindCandidates(context.Background())
@@ -723,3 +723,49 @@ func TestGenerateLLMNameFallback(t *testing.T) {
 		t.Errorf("Expected sidecar not enabled error, got: %v", err)
 	}
 }
+
+func TestSkillPatternDetector_HighValueSequenceFiltering(t *testing.T) {
+	detector := NewSkillPatternDetector(2, 2, 4)
+
+	// Helper to check if a list of tools is considered high-value
+	isHighValue := func(tools []string) bool {
+		seq := &ToolSequence{
+			Tools: tools,
+		}
+		return detector.isHighValueSequence(seq)
+	}
+
+	// 1. Single repeated tool (should be false)
+	if isHighValue([]string{"ssh", "ssh", "ssh"}) {
+		t.Error("Expected [ssh, ssh, ssh] to be low-value")
+	}
+	if isHighValue([]string{"bash", "bash"}) {
+		t.Error("Expected [bash, bash] to be low-value")
+	}
+	if isHighValue([]string{"view", "view", "view", "view"}) {
+		t.Error("Expected [view, view, view, view] to be low-value")
+	}
+
+	// 2. Multi-tool but entirely generic tools (should be false)
+	if isHighValue([]string{"bash", "ssh"}) {
+		t.Error("Expected [bash, ssh] to be low-value")
+	}
+	if isHighValue([]string{"bash", "view", "ssh"}) {
+		t.Error("Expected [bash, view, ssh] to be low-value")
+	}
+	if isHighValue([]string{"grep", "view", "ls"}) {
+		t.Error("Expected [grep, view, ls] to be low-value")
+	}
+
+	// 3. Multi-tool with at least one non-generic tool (should be true)
+	if !isHighValue([]string{"view", "edit"}) {
+		t.Error("Expected [view, edit] to be high-value (edit is non-generic)")
+	}
+	if !isHighValue([]string{"bash", "write", "bash"}) {
+		t.Error("Expected [bash, write, bash] to be high-value (write is non-generic)")
+	}
+	if !isHighValue([]string{"glob", "grep", "multiedit"}) {
+		t.Error("Expected [glob, grep, multiedit] to be high-value (multiedit is non-generic)")
+	}
+}
+
