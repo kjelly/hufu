@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+	"unicode"
 )
 
 // AutoSkillGenerator generates skill files from detected patterns
@@ -55,7 +56,7 @@ func (g *AutoSkillGenerator) buildSkillContent(candidate PatternCandidate, skill
 	sb.WriteString("---\n\n")
 
 	// Title
-	sb.WriteString(fmt.Sprintf("# %s\n\n", strings.Title(strings.ReplaceAll(skillName, "-", " "))))
+	sb.WriteString(fmt.Sprintf("# %s\n\n", titleCase(strings.ReplaceAll(skillName, "-", " "))))
 
 	// Overview
 	sb.WriteString("## Overview\n\n")
@@ -156,4 +157,19 @@ func ApplyWorkflow(ctx context.Context, params map[string]string) error {
 	sb.WriteString("```\n")
 
 	return sb.String()
+}
+
+// titleCase returns the string with the first letter of each word capitalized.
+func titleCase(s string) string {
+	runes := []rune(s)
+	inWord := false
+	for i, r := range runes {
+		if unicode.IsSpace(r) {
+			inWord = false
+		} else if !inWord {
+			runes[i] = unicode.ToUpper(r)
+			inWord = true
+		}
+	}
+	return string(runes)
 }

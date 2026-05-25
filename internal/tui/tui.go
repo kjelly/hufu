@@ -401,7 +401,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if clickY >= 0 && clickY < m.vp.Height {
 					lines, ok := m.logs[m.detailID]
 					if ok && len(lines) > 0 {
-						width := m.width
+						width := m.vp.Width
 						if width < 20 {
 							width = 20
 						}
@@ -589,6 +589,9 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "backspace":
 		m.inDetail = false
+		m.inVisual = false
+		m.visualStart = 0
+		m.visualEnd = 0
 		if !m.mouseManuallyEnabled {
 			m.mouseEnabled = false
 			return m, disableMouseCmd()

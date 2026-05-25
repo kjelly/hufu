@@ -20,11 +20,12 @@ const maxSequencesPerAgent = 500
 
 // Pre-compiled regex patterns for normalizeParams (avoid recompilation on every call)
 var (
-	reFile  = regexp.MustCompile(`[\w./-]+\.(go|ts|js|py|md|yaml|yml|json|txt)`)
-	reNum   = regexp.MustCompile(`\b\d+\b`)
-	reURL   = regexp.MustCompile(`https?://[\w./-]+`)
-	reHash  = regexp.MustCompile(`\b[a-f0-9]{7,40}\b`)
-	reQuote = regexp.MustCompile(`["'][^"']+["']`)
+	reFile           = regexp.MustCompile(`[\w./-]+\.(go|ts|js|py|md|yaml|yml|json|txt)`)
+	reNum            = regexp.MustCompile(`\b\d+\b`)
+	reURL            = regexp.MustCompile(`https?://[\w./-]+`)
+	reHash           = regexp.MustCompile(`\b[a-f0-9]{7,40}\b`)
+	reQuote          = regexp.MustCompile(`["'][^"']+["']`)
+	reValidSkillName = regexp.MustCompile(`^[a-z0-9-]+$`)
 )
 
 // ToolCallRecord represents a single tool call with context
@@ -118,25 +119,23 @@ func (d *SkillPatternDetector) RecordToolCall(agent, tool, input, taskDesc strin
 		d.pruneSequencesLocked()
 	}
 
-	d.analyzeSequencesLocked()
+	d.analyzeAgentSequencesLocked(agent)
 }
 
-// analyzeSequencesLocked analyzes tool calls for repeating sequences
+// analyzeAgentSequencesLocked analyzes tool calls for repeating sequences for a specific agent
 // Must be called with lock held
-func (d *SkillPatternDetector) analyzeSequencesLocked() {
+func (d *SkillPatternDetector) analyzeAgentSequencesLocked(agent string) {
 	if len(d.toolCalls) < d.windowMin {
 		return
 	}
 
-	// Analyze per agent
-	agentCalls := make(map[string][]ToolCallRecord)
+	var calls []ToolCallRecord
 	for _, call := range d.toolCalls {
-		agentCalls[call.Agent] = append(agentCalls[call.Agent], call)
+		if call.Agent == agent {
+			calls = append(calls, call)
+		}
 	}
-
-	for agent, calls := range agentCalls {
-		d.extractSequencesForAgent(agent, calls)
-	}
+	d.extractSequencesForAgent(agent, calls)
 }
 
 // pruneSequencesLocked removes old sequences to prevent unbounded memory growth
@@ -155,37 +154,28 @@ func (d *SkillPatternDetector) pruneSequencesLocked() {
 }
 
 // extractSequencesForAgent extracts sequences from an agent's tool calls.
-// Analyzes all windows but tracks analyzed windows to prevent double-counting.
+// Analyzes only windows ending at the latest tool call to prevent double-counting
+// and avoid cumulative frequency increments on old entries.
 func (d *SkillPatternDetector) extractSequencesForAgent(agent string, calls []ToolCallRecord) {
 	if len(calls) < d.windowMin {
 		return
 	}
 
-	// Track analyzed windows by (hash, startIndex) to prevent double-counting
-	// while still detecting subsequences that appear in the middle of history.
-	analyzedWindows := make(map[string]bool)
+	lastIdx := len(calls) - 1
 
 	for windowSize := d.windowMin; windowSize <= d.windowMax && windowSize <= len(calls); windowSize++ {
-		for i := 0; i <= len(calls)-windowSize; i++ {
-			window := calls[i : i+windowSize]
-			seq := d.buildSequence(window, agent)
+		startIndex := lastIdx - windowSize + 1
+		window := calls[startIndex : lastIdx+1]
+		seq := d.buildSequence(window, agent)
 
-			// Create unique window identifier
-			windowKey := fmt.Sprintf("%s:%d", seq.Hash, i)
-			if analyzedWindows[windowKey] {
-				continue
-			}
-			analyzedWindows[windowKey] = true
-
-			if _, exists := d.sequences[seq.Hash]; !exists {
-				d.sequences[seq.Hash] = seq
-				d.sequenceByAgent[agent] = append(d.sequenceByAgent[agent], seq.Hash)
-			} else {
-				existing := d.sequences[seq.Hash]
-				existing.Count++
-				existing.LastSeen = window[windowSize-1].Timestamp
-				existing.TaskDescs = append(existing.TaskDescs, window[windowSize-1].TaskDesc)
-			}
+		if _, exists := d.sequences[seq.Hash]; !exists {
+			d.sequences[seq.Hash] = seq
+			d.sequenceByAgent[agent] = append(d.sequenceByAgent[agent], seq.Hash)
+		} else {
+			existing := d.sequences[seq.Hash]
+			existing.Count++
+			existing.LastSeen = window[windowSize-1].Timestamp
+			existing.TaskDescs = append(existing.TaskDescs, window[windowSize-1].TaskDesc)
 		}
 	}
 }
@@ -642,8 +632,7 @@ func isValidSkillName(name string) bool {
 	if name == "" {
 		return false
 	}
-	validRe := regexp.MustCompile(`^[a-z0-9-]+$`)
-	if !validRe.MatchString(name) {
+	if !reValidSkillName.MatchString(name) {
 		return false
 	}
 	words := strings.Split(name, "-")

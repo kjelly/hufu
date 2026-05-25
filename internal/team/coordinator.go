@@ -35,6 +35,7 @@ const CoordTodoID = "__coord__"
 
 var skillSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
 var taskStatusRe = regexp.MustCompile(`\*\*Status:\*\*\s*(\S+)`)
+var extraWSSeq atomic.Uint64
 
 // todoIDKey is a context key used to pass the current task's TodoItem ID
 // down through executeTask → runAgentWithStatusAndHistory so that emitted
@@ -3425,7 +3426,7 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	// Create isolated workspace for this model to prevent concurrent file conflicts.
 	// Use unique token (timestamp + agentName) to prevent collision when multiple
 	// agents use the same model simultaneously.
-	token := fmt.Sprintf("%d-%s", time.Now().UnixNano(), sanitizeModel(agentName))
+	token := fmt.Sprintf("%d-%d-%s", time.Now().UnixNano(), extraWSSeq.Add(1), sanitizeModel(agentName))
 	subWS := filepath.Join(c.session.Workspace, "extra-models", sanitizeModel(agentDef.Generation.Model)+"-"+token)
 	if err := os.MkdirAll(subWS, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create isolated workspace: %w", err)
