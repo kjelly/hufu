@@ -6,9 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/anomalyco/hufu/internal/notify"
 	"github.com/anomalyco/hufu/internal/yamlutil"
-	"gopkg.in/yaml.v3"
 )
 
 const DefaultProviderURL = "http://localhost:11434/v1"

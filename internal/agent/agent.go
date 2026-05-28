@@ -87,32 +87,32 @@ type AgentDef struct {
 }
 
 type TeamConfig struct {
-	Name          string
-	Description   string
-	MaxRounds     int
-	MaxSteps      int
-	WorkspaceDir  string
-	Timeout       int64
-	MaxRetries    int
-	Generation    GenerationParams
-	Skills        string
-	SkillsExclude string
-	ProviderURL    string
-	ProviderAPIKey string
-	Providers     map[string]config.ProviderConfig
-	ModelList     []config.ModelEntry
-	SidecarModel  string
-	GuardModel    string
-	MaxConcurrent int
-	Notify        notify.NotifyConfig
-	AllowedPaths   []string
-	RestrictedPath string
-	NoNet            bool
-	ForceMCP         bool
-	Shell            string
-	Vars             map[string]interface{}
+	Name              string
+	Description       string
+	MaxRounds         int
+	MaxSteps          int
+	WorkspaceDir      string
+	Timeout           int64
+	MaxRetries        int
+	Generation        GenerationParams
+	Skills            string
+	SkillsExclude     string
+	ProviderURL       string
+	ProviderAPIKey    string
+	Providers         map[string]config.ProviderConfig
+	ModelList         []config.ModelEntry
+	SidecarModel      string
+	GuardModel        string
+	MaxConcurrent     int
+	Notify            notify.NotifyConfig
+	AllowedPaths      []string
+	RestrictedPath    string
+	NoNet             bool
+	ForceMCP          bool
+	Shell             string
+	Vars              map[string]interface{}
 	WorkerContextSize int
-	ToolsAllowed   []string // List of explicitly allowed tools
+	ToolsAllowed      []string // List of explicitly allowed tools
 }
 
 type OllamaProvider struct {

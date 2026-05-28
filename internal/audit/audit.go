@@ -82,7 +82,7 @@ func (l *AuditLogger) log(entry ToolAction) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.file != nil {
-		l.file.Write(append(data, '\n'))
+		_, _ = l.file.Write(append(data, '\n'))
 	}
 }
 
@@ -111,7 +111,7 @@ func SetDefault(logger *AuditLogger) {
 	defaultLoggerMu.Lock()
 	defer defaultLoggerMu.Unlock()
 	if defaultLogger != nil {
-		defaultLogger.Close()
+		_ = defaultLogger.Close()
 	}
 	defaultLogger = logger
 }

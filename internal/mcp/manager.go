@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"charm.land/fantasy"
-	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/anomalyco/hufu/internal/agent"
 )
 
 type MCPTool struct {
@@ -24,13 +25,13 @@ type MCPTool struct {
 }
 
 type MCPToolManager struct {
-	mu            sync.RWMutex
-	tools         []MCPTool
-	clients       map[string]*client.Client
-	toolMap       map[string]MCPTool
-	agentServers  map[string]*AgentMCPServer
-	globalShell   string
-	teamShell     string
+	mu           sync.RWMutex
+	tools        []MCPTool
+	clients      map[string]*client.Client
+	toolMap      map[string]MCPTool
+	agentServers map[string]*AgentMCPServer
+	globalShell  string
+	teamShell    string
 }
 
 func NewMCPToolManager(globalShell, teamShell string) *MCPToolManager {
@@ -137,13 +138,13 @@ func (m *MCPToolManager) loadLocalServer(ctx context.Context, name string, cfg M
 	}
 
 	if _, err := cli.Initialize(ctx, initReq); err != nil {
-		cli.Close()
+		_ = cli.Close()
 		return nil, nil, fmt.Errorf("failed to initialize: %w", err)
 	}
 
 	toolsResult, err := cli.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
-		cli.Close()
+		_ = cli.Close()
 		return nil, nil, fmt.Errorf("failed to list tools: %w", err)
 	}
 
@@ -191,13 +192,13 @@ func (m *MCPToolManager) loadRemoteServer(ctx context.Context, name string, cfg 
 	}
 
 	if _, err := cli.Initialize(ctx, initReq); err != nil {
-		cli.Close()
+		_ = cli.Close()
 		return nil, nil, fmt.Errorf("failed to initialize: %w", err)
 	}
 
 	toolsResult, err := cli.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
-		cli.Close()
+		_ = cli.Close()
 		return nil, nil, fmt.Errorf("failed to list tools: %w", err)
 	}
 

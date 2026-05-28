@@ -41,7 +41,9 @@ func TestDataDir(t *testing.T) {
 func TestNewMemoryStoreCreatesDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	projectDir := filepath.Join(tmpDir, "test-project")
-	os.MkdirAll(projectDir, 0o755)
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("failed to create project dir: %v", err)
+	}
 
 	hash := projectDirHash(projectDir)
 	expectedPath := filepath.Join(tmpDir, ".local", "share", "hufu", "memory", hash)

@@ -38,9 +38,11 @@ func TestLoadConfigWithProviderURL(t *testing.T) {
 
 	// Change to the temp directory
 	originalDir, _ := os.Getwd()
-	os.Chdir(tmpDir)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
 	defer func() {
-		os.Chdir(originalDir)
+		_ = os.Chdir(originalDir)
 	}()
 
 	cfg := LoadConfig()
@@ -156,8 +158,10 @@ func TestResolveProviderURL(t *testing.T) {
 
 			// Move system config file if it exists
 			if _, err := os.Stat(systemConfigPath); err == nil {
-				os.Rename(systemConfigPath, backupPath)
-				defer os.Rename(backupPath, systemConfigPath)
+				if err := os.Rename(systemConfigPath, backupPath); err != nil {
+					t.Fatalf("failed to backup system config: %v", err)
+				}
+				defer func() { _ = os.Rename(backupPath, systemConfigPath) }()
 			}
 
 			// Create a temporary directory for testing
@@ -173,9 +177,11 @@ func TestResolveProviderURL(t *testing.T) {
 
 				// Change to the temp directory
 				originalDir, _ := os.Getwd()
-				os.Chdir(tmpDir)
+				if err := os.Chdir(tmpDir); err != nil {
+					t.Fatalf("failed to chdir: %v", err)
+				}
 				defer func() {
-					os.Chdir(originalDir)
+					_ = os.Chdir(originalDir)
 				}()
 			} else {
 				// When no config file is provided, override HOME to prevent
@@ -220,16 +226,20 @@ func TestLoadConfigNonExistentFile(t *testing.T) {
 
 	// Move system config file if it exists
 	if _, err := os.Stat(systemConfigPath); err == nil {
-		os.Rename(systemConfigPath, backupPath)
-		defer os.Rename(backupPath, systemConfigPath)
+		if err := os.Rename(systemConfigPath, backupPath); err != nil {
+			t.Fatalf("failed to backup system config: %v", err)
+		}
+		defer func() { _ = os.Rename(backupPath, systemConfigPath) }()
 	}
 
 	// Change to a directory where no config file exists
 	tmpDir := t.TempDir()
 	originalDir, _ := os.Getwd()
-	os.Chdir(tmpDir)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
 	defer func() {
-		os.Chdir(originalDir)
+		_ = os.Chdir(originalDir)
 	}()
 
 	// Also override HOME to prevent the real home config from being read.
@@ -255,8 +265,10 @@ func TestResolveProviderURLWithEmptyStrings(t *testing.T) {
 
 	// Move system config file if it exists
 	if _, err := os.Stat(systemConfigPath); err == nil {
-		os.Rename(systemConfigPath, backupPath)
-		defer os.Rename(backupPath, systemConfigPath)
+		if err := os.Rename(systemConfigPath, backupPath); err != nil {
+			t.Fatalf("failed to backup system config: %v", err)
+		}
+		defer func() { _ = os.Rename(backupPath, systemConfigPath) }()
 	}
 
 	// Create a temporary directory for testing
@@ -264,9 +276,11 @@ func TestResolveProviderURLWithEmptyStrings(t *testing.T) {
 
 	// Change to the temp directory
 	originalDir, _ := os.Getwd()
-	os.Chdir(tmpDir)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
 	defer func() {
-		os.Chdir(originalDir)
+		_ = os.Chdir(originalDir)
 	}()
 
 	// Override HOME to prevent the real home config from being read.

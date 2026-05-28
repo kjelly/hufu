@@ -19,7 +19,7 @@ func TestNewAuditLogger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditLogger() error = %v", err)
 	}
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	// Verify the audit directory was created
 	auditDir := filepath.Join(tmpDir, "logs", "audit")
@@ -54,7 +54,7 @@ func TestAuditLoggerLogToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditLogger() error = %v", err)
 	}
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	// Log a tool call
 	agent := "test-agent"
@@ -105,7 +105,7 @@ func TestAuditLoggerLogToolResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditLogger() error = %v", err)
 	}
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	// Log a successful tool result
 	agent := "test-agent"
@@ -149,7 +149,7 @@ func TestAuditLoggerLogToolResultError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditLogger() error = %v", err)
 	}
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	// Log an error result
 	agent := "test-agent"
@@ -270,7 +270,7 @@ func TestSetDefaultAndGetDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditLogger() error = %v", err)
 	}
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	// Set as default
 	SetDefault(logger)
@@ -286,7 +286,7 @@ func TestSetDefaultAndGetDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditLogger() error = %v", err)
 	}
-	defer newLogger.Close()
+	defer func() { _ = newLogger.Close() }()
 
 	SetDefault(newLogger)
 
@@ -307,7 +307,7 @@ func TestLogToolCallGlobal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditLogger() error = %v", err)
 	}
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	SetDefault(logger)
 
@@ -351,7 +351,7 @@ func TestLogToolResultGlobal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditLogger() error = %v", err)
 	}
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	SetDefault(logger)
 
@@ -452,7 +452,7 @@ func TestConcurrentLogToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditLogger() error = %v", err)
 	}
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	// Run multiple goroutines
 	done := make(chan bool)

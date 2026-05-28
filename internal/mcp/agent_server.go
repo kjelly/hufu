@@ -10,8 +10,9 @@ import (
 	"sync"
 
 	"charm.land/fantasy"
-	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/anomalyco/hufu/internal/agent"
 )
 
 // ShellConfig defines shell behavior
@@ -22,12 +23,12 @@ type ShellConfig struct {
 }
 
 var shellConfigs = map[string]ShellConfig{
-	"bash":      {Name: "bash", Command: "bash", Args: []string{"-c"}},
-	"sh":        {Name: "sh", Command: "sh", Args: []string{"-c"}},
-	"zsh":       {Name: "zsh", Command: "zsh", Args: []string{"-c"}},
-	"fish":      {Name: "fish", Command: "fish", Args: []string{"-c"}},
-	"nu":        {Name: "nu", Command: "nu", Args: []string{"-c"}},
-	"nushell":   {Name: "nu", Command: "nu", Args: []string{"-c"}},
+	"bash":    {Name: "bash", Command: "bash", Args: []string{"-c"}},
+	"sh":      {Name: "sh", Command: "sh", Args: []string{"-c"}},
+	"zsh":     {Name: "zsh", Command: "zsh", Args: []string{"-c"}},
+	"fish":    {Name: "fish", Command: "fish", Args: []string{"-c"}},
+	"nu":      {Name: "nu", Command: "nu", Args: []string{"-c"}},
+	"nushell": {Name: "nu", Command: "nu", Args: []string{"-c"}},
 }
 
 // AgentMCPServer is a lightweight in-process MCP server for agent-specific tools
@@ -176,14 +177,14 @@ func extractTextFromResult(result *mcp.CallToolResult) string {
 	if result == nil || len(result.Content) == 0 {
 		return ""
 	}
-	
+
 	var texts []string
 	for _, content := range result.Content {
 		if textContent, ok := content.(mcp.TextContent); ok {
 			texts = append(texts, textContent.Text)
 		}
 	}
-	
+
 	return strings.Join(texts, "\n")
 }
 

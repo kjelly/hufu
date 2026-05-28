@@ -554,15 +554,15 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 }
 
 type fileWriter struct {
-	mu   sync.Mutex
-	f    *os.File
+	mu sync.Mutex
+	f  *os.File
 }
 
 func (w *fileWriter) write(s string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.f != nil {
-		fmt.Fprint(w.f, s)
+		_, _ = fmt.Fprint(w.f, s)
 	}
 }
 
@@ -1041,7 +1041,7 @@ func (d *coordDisplay) stopTimer() {
 		d.stopThinking()
 	}
 	if d.logFile != nil {
-		d.logFile.Close()
+		_ = d.logFile.Close()
 		d.logFile = nil
 	}
 }
@@ -1186,9 +1186,9 @@ func (tt *thinkingTracker) stopAll() {
 // tuiTextBufs holds per-todoID text buffers and model mappings with
 // concurrency-safe access for use by the multi-model reporter.
 type tuiTextBufs struct {
-	mu       sync.RWMutex
-	texts    map[string]string
-	models   map[string]string
+	mu     sync.RWMutex
+	texts  map[string]string
+	models map[string]string
 }
 
 func newTUIBufs() *tuiTextBufs {
@@ -1224,12 +1224,6 @@ func (b *tuiTextBufs) get(todoID string) string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.texts[todoID]
-}
-
-func (b *tuiTextBufs) set(todoID, text string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.texts[todoID] = text
 }
 
 // splitLine atomically reads the buffer, extracts the first complete line (up to first \n),
@@ -1439,19 +1433,19 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			if event.TodoID == "" {
 				return
 			}
-			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 "+event.Message)})
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 " + event.Message)})
 
 		case "think_skill_detail":
 			if event.TodoID == "" {
 				return
 			}
-			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 "+event.Agent+": "+event.Message)})
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 " + event.Agent + ": " + event.Message)})
 
 		case "think_prompt":
 			if event.TodoID == "" {
 				return
 			}
-			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 prompt: "+event.Message)})
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: thinkStyle.Render("💭 prompt: " + event.Message)})
 
 		case "think_prompt_dump":
 			if event.TodoID == "" {

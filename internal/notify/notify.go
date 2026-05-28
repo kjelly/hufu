@@ -118,16 +118,16 @@ func formatEvent(eventType, agent, message, output string) (title, msg string) {
 			msg = eventType
 		}
 	}
-	return
+	return title, msg
 }
 
 func (n *Notifier) sendOSC(title, message string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	n.writer.Write([]byte{0x07})
-	fmt.Fprintf(n.writer, "\x1b]777;notify;%s;%s\x07", escapeOSC(title), escapeOSC(message))
-	fmt.Fprintf(n.writer, "\x1b]9;%s\x07", escapeOSC(message))
+	_, _ = n.writer.Write([]byte{0x07})
+	_, _ = fmt.Fprintf(n.writer, "\x1b]777;notify;%s;%s\x07", escapeOSC(title), escapeOSC(message))
+	_, _ = fmt.Fprintf(n.writer, "\x1b]9;%s\x07", escapeOSC(message))
 }
 
 func escapeOSC(s string) string {

@@ -138,11 +138,6 @@ func TestParseModelFloat(t *testing.T) {
 
 // TestSelectTools tests the SelectTools function
 func TestSelectTools(t *testing.T) {
-	// Create mock tools for testing
-	type mockTool struct {
-		name string
-	}
-
 	mockTools := []struct {
 		name string
 	}{
@@ -236,9 +231,8 @@ func TestSelectTools(t *testing.T) {
 				"view": true, "glob": true, "bash": true, "write": true,
 			}
 			for name := range requested {
-				if knownTools[name] {
-					// Known tool names should be in the map
-				}
+				// Verify known tools are in the map (no action needed, just documentation)
+				_ = knownTools[name]
 			}
 		})
 	}

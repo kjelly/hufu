@@ -5,8 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
 	"gopkg.in/yaml.v3"
+
+	"github.com/anomalyco/hufu/internal/agent"
 )
 
 func TestMCPInputConfig_UnmarshalYAML(t *testing.T) {
@@ -69,17 +70,17 @@ func TestAgentMCPServer_ExecuteTool_WithDetailedInputs(t *testing.T) {
 		},
 	}
 	server := NewAgentMCPServer("test-agent", tools, "bash")
-	
+
 	input := `{"name": "Alice", "greeting": "Hello"}`
 	result, err := server.executeTool(context.Background(), "echo-test", tools["echo-test"], "", "", "", input)
 	if err != nil {
 		t.Fatalf("executeTool failed: %v", err)
 	}
-	
+
 	if result.IsError {
 		t.Fatalf("result is error: %v", result.Content)
 	}
-	
+
 	output := extractTextFromResult(result)
 	if !strings.Contains(output, "Alice says Hello") {
 		t.Errorf("unexpected output: %q", output)

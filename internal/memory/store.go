@@ -12,8 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/config"
 	"github.com/philippgille/chromem-go"
+
+	"github.com/anomalyco/hufu/internal/config"
 )
 
 const collectionName = "memory"

@@ -51,11 +51,11 @@ var (
 	direnv              bool
 	varFlags            []string
 	varFiles            []string
-	forcedSkills         []string
-	planMode             bool
-	autoSkills           bool
-	fixQuestion          string
-	reportMode           bool
+	forcedSkills        []string
+	planMode            bool
+	autoSkills          bool
+	fixQuestion         string
+	reportMode          bool
 	globalPromptReader  atomic.Pointer[readline.PromptReader]
 )
 
@@ -63,20 +63,16 @@ type errInterrupted struct{}
 
 func (errInterrupted) Error() string { return "interrupted" }
 
-type errForced struct{}
-
-func (errForced) Error() string { return "force quit" }
-
 var version = "dev"
 
 func main() {
 	exitCode := 0
 	rootCmd := &cobra.Command{
-		Use:   "hufu [prompt]",
-		Short: "Run an agent team to accomplish a task",
-		Long:  "hufu discovers and runs agent teams by name. Use --agent-team or @team-name in the prompt to select a team.",
-		Args:  cobra.MaximumNArgs(1),
-		RunE:  runTeam,
+		Use:     "hufu [prompt]",
+		Short:   "Run an agent team to accomplish a task",
+		Long:    "hufu discovers and runs agent teams by name. Use --agent-team or @team-name in the prompt to select a team.",
+		Args:    cobra.MaximumNArgs(1),
+		RunE:    runTeam,
 		Version: version,
 	}
 
@@ -120,7 +116,7 @@ func main() {
 		}
 	}
 	if pr := globalPromptReader.Load(); pr != nil {
-		pr.Close()
+		_ = pr.Close()
 	}
 	os.Exit(exitCode)
 }
@@ -150,7 +146,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to create temp directory: %w", err)
 		}
-		defer os.RemoveAll(tmpDir)
+		defer func() { _ = os.RemoveAll(tmpDir) }()
 		workspace = filepath.Join(tmpDir, "workspace")
 		fmt.Fprintf(os.Stderr, "%s Temp workspace: %s\n", stepStyle.Render("⟳"), workspace)
 	}
@@ -406,15 +402,21 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	if tuiMode {
 		var teamInfo tuipkg.TeamInfo
 		teamInfo.AvailableTeams = registry.ListTeams()
-			for _, tc := range loadedTeams {
+		for _, tc := range loadedTeams {
 			if tc != nil && tc.session != nil {
 				teamInfo.TeamName = tc.session.Config.Name
 				teamInfo.Workspace = tc.session.Workspace
 				teamInfo.TeamDir = tc.session.Dir
+				teamInfo.DefaultModel = tc.session.Config.Generation.Model
 				for _, ag := range sortedAgents(tc.session.Agents) {
+					model := ag.Generation.Model
+					if model == "" {
+						model = tc.session.Config.Generation.Model
+					}
 					teamInfo.Agents = append(teamInfo.Agents, tuipkg.AgentInfoEntry{
-						Name: ag.Name,
-						Role: ag.Role,
+						Name:  ag.Name,
+						Role:  ag.Role,
+						Model: model,
 					})
 				}
 				for _, s := range tc.session.Skills {
@@ -519,7 +521,9 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		session.Config.WorkspaceDir = teamWorkspace
 	}
 
-	team.EnsureWorkspaceDirs(session.Workspace)
+	if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
+		stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)
+	}
 
 	if err := team.InitLTM(session.Workspace, session.Config.Name); err != nil {
 		stderrLog("%s Failed to init ltm.md: %v\n", errStyle.Render("⚠"), err)
@@ -561,7 +565,9 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 			if oldSession != nil && len(oldSession.Entries) > 0 {
 				stderrLog("%s Archiving previous session...\n", stepStyle.Render("⟳"))
 				md := team.GenerateSessionMD(oldSession, session.Config.Name)
-				team.SaveSessionMD(session.Workspace, md)
+				if err := team.SaveSessionMD(session.Workspace, md); err != nil {
+					stderrLog("%s Failed to save session md: %v\n", errStyle.Render("⚠"), err)
+				}
 				archivedPath, err := team.ArchiveSessionMD(session.Workspace)
 				if err != nil {
 					stderrLog("%s Failed to archive session: %v\n", errStyle.Render("⚠"), err)
@@ -574,15 +580,23 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 					stderrLog("%s Failed to remove session file: %v\n", errStyle.Render("⚠"), err)
 				}
 			}
-			team.DeleteConversationHistory(session.Workspace)
+			if err := team.DeleteConversationHistory(session.Workspace); err != nil {
+				stderrLog("%s Failed to delete conversation history: %v\n", errStyle.Render("⚠"), err)
+			}
 		}
 		if err := team.CleanRunDirs(session.Workspace); err != nil {
 			stderrLog("%s Failed to clean workspace: %v\n", errStyle.Render("⚠"), err)
 		}
-		team.EnsureWorkspaceDirs(session.Workspace)
+		if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
+			stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)
+		}
 		sessionData = team.NewSession()
-		team.SaveSession(session.Workspace, sessionData)
-		team.SaveSessionMD(session.Workspace, team.GenerateSessionMD(sessionData, session.Config.Name))
+		if err := team.SaveSession(session.Workspace, sessionData); err != nil {
+			stderrLog("%s Failed to save session: %v\n", errStyle.Render("⚠"), err)
+		}
+		if err := team.SaveSessionMD(session.Workspace, team.GenerateSessionMD(sessionData, session.Config.Name)); err != nil {
+			stderrLog("%s Failed to save session md: %v\n", errStyle.Render("⚠"), err)
+		}
 		stderrLog("%s Started new session\n", boldStyle.Render("→"))
 	} else {
 		sessionData = team.LoadSession(session.Workspace)
@@ -591,7 +605,9 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 			stderrLog("%s Resuming session\n", boldStyle.Render("→"))
 		} else if sessionData != nil && len(sessionData.Entries) > 0 {
 			md := team.GenerateSessionMD(sessionData, session.Config.Name)
-			team.SaveSessionMD(session.Workspace, md)
+			if err := team.SaveSessionMD(session.Workspace, md); err != nil {
+				stderrLog("%s Failed to save session md: %v\n", errStyle.Render("⚠"), err)
+			}
 			existingMD = md
 			stderrLog("%s Resuming session (%d exchanges, since %s)\n",
 				boldStyle.Render("→"),
@@ -602,8 +618,12 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 			if sessionData == nil {
 				sessionData = team.NewSession()
 			}
-			team.SaveSession(session.Workspace, sessionData)
-			team.SaveSessionMD(session.Workspace, team.GenerateSessionMD(sessionData, session.Config.Name))
+			if err := team.SaveSession(session.Workspace, sessionData); err != nil {
+				stderrLog("%s Failed to save session: %v\n", errStyle.Render("⚠"), err)
+			}
+			if err := team.SaveSessionMD(session.Workspace, team.GenerateSessionMD(sessionData, session.Config.Name)); err != nil {
+				stderrLog("%s Failed to save session md: %v\n", errStyle.Render("⚠"), err)
+			}
 			stderrLog("%s Starting new session\n", boldStyle.Render("→"))
 		}
 
@@ -950,7 +970,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			if currentTeamName != "" && currentTeamName != teamName {
 				prevTC := loadedTeams[currentTeamName]
 				if prevTC != nil {
-					team.SaveSessionMD(prevTC.session.Workspace, team.GenerateSessionMD(prevTC.sessionData, prevTC.session.Config.Name))
+					_ = team.SaveSessionMD(prevTC.session.Workspace, team.GenerateSessionMD(prevTC.sessionData, prevTC.session.Config.Name))
 				}
 				stderrLog("\n%s Switching team: %s → %s\n\n", boldStyle.Render("⇒"), teamStyle.Render(currentTeamName), teamStyle.Render(teamName))
 			}
@@ -975,24 +995,24 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			if err != nil {
 				if ctx.Err() == context.Canceled {
-					team.SaveSession(tc.session.Workspace, tc.sessionData)
+					_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
 					stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 					return "", errInterrupted{}
 				}
-				team.SaveSession(tc.session.Workspace, tc.sessionData)
-				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
+				_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
+				_ = team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
 				return strings.Join(results, "\n\n"), fmt.Errorf("team %q failed: %w", teamName, err)
 			}
 
 			result, err = runWithInjection(ctx, tc, result, injector)
 			if err != nil {
 				if ctx.Err() == context.Canceled {
-					team.SaveSession(tc.session.Workspace, tc.sessionData)
+					_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
 					stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 					return "", errInterrupted{}
 				}
-				team.SaveSession(tc.session.Workspace, tc.sessionData)
-				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
+				_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
+				_ = team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
 				return strings.Join(results, "\n\n"), fmt.Errorf("team %q continuation failed: %w", teamName, err)
 			}
 
@@ -1024,7 +1044,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			if err != nil {
 				if ctx.Err() == context.Canceled {
-					team.SaveSession(tc.session.Workspace, tc.sessionData)
+					_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
 					stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 					return "", errInterrupted{}
 				}
@@ -1054,24 +1074,24 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 				activeCoord.Clear()
 				if err != nil {
 					if ctx.Err() == context.Canceled {
-						team.SaveSession(tc.session.Workspace, tc.sessionData)
+						_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
 						stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 						return "", errInterrupted{}
 					}
-					team.SaveSession(tc.session.Workspace, tc.sessionData)
-					team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
+					_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
+					_ = team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
 					return strings.Join(results, "\n\n"), fmt.Errorf("synthesis for @%s failed: %w", seg.Name, err)
 				}
 
 				synthResult, err = runWithInjection(ctx, tc, synthResult, injector)
 				if err != nil {
 					if ctx.Err() == context.Canceled {
-						team.SaveSession(tc.session.Workspace, tc.sessionData)
+						_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
 						stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 						return "", errInterrupted{}
 					}
-					team.SaveSession(tc.session.Workspace, tc.sessionData)
-					team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
+					_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
+					_ = team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
 					return strings.Join(results, "\n\n"), fmt.Errorf("synthesis continuation for @%s failed: %w", seg.Name, err)
 				}
 
@@ -1100,24 +1120,24 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			if err != nil {
 				if ctx.Err() == context.Canceled {
-					team.SaveSession(tc.session.Workspace, tc.sessionData)
+					_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
 					stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 					return "", errInterrupted{}
 				}
-				team.SaveSession(tc.session.Workspace, tc.sessionData)
-				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
+				_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
+				_ = team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
 				return strings.Join(results, "\n\n"), fmt.Errorf("team %q failed: %w", currentTeamName, err)
 			}
 
 			result, err = runWithInjection(ctx, tc, result, injector)
 			if err != nil {
 				if ctx.Err() == context.Canceled {
-					team.SaveSession(tc.session.Workspace, tc.sessionData)
+					_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
 					stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 					return "", errInterrupted{}
 				}
-				team.SaveSession(tc.session.Workspace, tc.sessionData)
-				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
+				_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
+				_ = team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
 				return strings.Join(results, "\n\n"), fmt.Errorf("team %q continuation failed: %w", currentTeamName, err)
 			}
 
@@ -1127,7 +1147,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 		if i == len(segments)-1 {
 			if tc, ok := loadedTeams[currentTeamName]; ok {
-				team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
+				_ = team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
 			}
 		}
 	}
@@ -1201,7 +1221,7 @@ func archiveCurrentSessionToMemory(ctx context.Context, tc *teamContext) {
 		fmt.Fprintf(os.Stderr, "%s Memory unavailable for archive: %v\n", errStyle.Render("⚠"), err)
 		return
 	}
-	defer memStore.Close()
+	defer func() { _ = memStore.Close() }()
 
 	var entries []memory.SessionSummaryEntry
 	for _, e := range tc.sessionData.Entries {
@@ -1262,7 +1282,7 @@ func askUserForPromptFallback() (string, error) {
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Enter Prompt ───"))
 	fmt.Fprintf(os.Stderr, "Describe the task (use @team-name or @agent-name in the prompt):\n")
 	fmt.Fprintf(os.Stderr, "%s ", boldStyle.Render(">"))
-	fmt.Scanln(&input)
+	_, _ = fmt.Fscanln(os.Stdin, &input)
 	prompt := strings.TrimSpace(input)
 	if prompt == "" {
 		fmt.Fprintf(os.Stderr, "%s No prompt provided.\n", errStyle.Render("✗"))
@@ -1282,7 +1302,7 @@ func askUserForTeamFallback(teams []string) string {
 	}
 	fmt.Fprintf(os.Stderr, "\n%s ", boldStyle.Render("Team name or number:>"))
 	var input string
-	fmt.Scanln(&input)
+	_, _ = fmt.Fscanln(os.Stdin, &input)
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return ""

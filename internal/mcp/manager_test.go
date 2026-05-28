@@ -20,7 +20,7 @@ func TestNewMCPToolManager(t *testing.T) {
 		t.Error("NewMCPToolManager() returned manager with nil toolMap")
 	}
 
-	if manager.tools != nil && len(manager.tools) != 0 {
+	if len(manager.tools) != 0 {
 		t.Errorf("NewMCPToolManager() returned manager with %d tools, want 0", len(manager.tools))
 	}
 }

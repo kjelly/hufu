@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -31,7 +32,7 @@ func TestMemoryQueryToolInfo(t *testing.T) {
 
 func TestMemorySaveToolNilStore(t *testing.T) {
 	tool := &memorySaveTool{store: nil}
-	resp, err := tool.Run(nil, fantasy.ToolCall{Input: `{"content": "test knowledge"}`})
+	resp, err := tool.Run(context.TODO(), fantasy.ToolCall{Input: `{"content": "test knowledge"}`})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestMemorySaveToolNilStore(t *testing.T) {
 
 func TestMemoryQueryToolNilStore(t *testing.T) {
 	tool := &memoryQueryTool{store: nil}
-	resp, err := tool.Run(nil, fantasy.ToolCall{Input: `{"query": "test"}`})
+	resp, err := tool.Run(context.TODO(), fantasy.ToolCall{Input: `{"query": "test"}`})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

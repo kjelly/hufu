@@ -112,7 +112,6 @@ type promptInjector struct {
 	ch              chan string
 	wrapUpCh        chan struct{}
 	wrapUpRequested atomic.Bool
-	mu              sync.Mutex
 	promptReader    *readline.PromptReader
 }
 
@@ -141,20 +140,6 @@ func (p *promptInjector) injectWrapUp() {
 
 func (p *promptInjector) IsWrapUpRequested() bool {
 	return p.wrapUpRequested.Load()
-}
-
-// isTUIActive checks if TUI mode is currently active.
-func (p *promptInjector) isTUIActive() bool {
-	return activeTUIProgram.Load() != nil
-}
-
-func (p *promptInjector) poll() (string, bool) {
-	select {
-	case prompt := <-p.ch:
-		return prompt, true
-	default:
-		return "", false
-	}
 }
 
 func (p *promptInjector) promptAndEnqueue() {
