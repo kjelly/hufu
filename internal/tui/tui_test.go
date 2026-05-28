@@ -79,12 +79,12 @@ func TestView_Rendering(t *testing.T) {
 
 func TestUpdate_Messages(t *testing.T) {
 	m := New("initial prompt", TeamInfo{})
-	
+
 	// Test TasksUpdatedMsg
 	newTasks := []*team.TodoItem{{ID: "99", Desc: "New Task"}}
 	m2, _ := m.Update(TasksUpdatedMsg{Items: newTasks})
 	model2 := m2.(Model)
-	
+
 	found := false
 	for _, t := range model2.tasks {
 		if t.ID == "99" {

@@ -572,14 +572,14 @@ func TestSessionEntryWithOptionalTimestamp(t *testing.T) {
 	jsonData := `{"role": "user", "content": "Hello"}`
 	tmpDir := t.TempDir()
 	sessionPath := filepath.Join(tmpDir, sessionFile)
-	
+
 	sessionJSON := `{
 		"created_at": "2024-01-01T00:00:00Z",
 		"updated_at": "2024-01-01T00:00:00Z",
 		"rounds": 1,
 		"entries": [` + jsonData + `]
 	}`
-	
+
 	if err := os.WriteFile(sessionPath, []byte(sessionJSON), 0o644); err != nil {
 		t.Fatalf("failed to write session file: %v", err)
 	}

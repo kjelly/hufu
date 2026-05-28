@@ -160,14 +160,14 @@ func TestDetectTaskCycle(t *testing.T) {
 // TestLookupTaskCache tests the task cache lookup functionality
 func TestLookupTaskCache(t *testing.T) {
 	tests := []struct {
-		name           string
-		cacheSetup     func() map[string][]cachedTaskEntry
-		agentKey       string
-		newTask        string
-		cacheGen       int64
-		wantFound      bool
-		wantOutput     string
-		sidecarHit     bool
+		name       string
+		cacheSetup func() map[string][]cachedTaskEntry
+		agentKey   string
+		newTask    string
+		cacheGen   int64
+		wantFound  bool
+		wantOutput string
+		sidecarHit bool
 	}{
 		{
 			name: "exact match in current generation",
@@ -438,11 +438,11 @@ func TestStoreTaskCacheMaxEntries(t *testing.T) {
 // TestCheckDuplicateTasksComprehensive tests comprehensive duplicate detection scenarios
 func TestCheckDuplicateTasksComprehensive(t *testing.T) {
 	tests := []struct {
-		name             string
-		previousTasks    map[string]int
-		batchTasks       []TaskDef
-		expectExactDup   bool
-		expectBatchDup   bool
+		name              string
+		previousTasks     map[string]int
+		batchTasks        []TaskDef
+		expectExactDup    bool
+		expectBatchDup    bool
 		expectSemanticDup bool
 	}{
 		{

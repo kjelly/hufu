@@ -13,12 +13,12 @@ func TestCheckDuplicateTasks_SameBatch(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		previousTasks  map[string]int
-		batchTasks     []TaskDef
-		expectWarnings bool
+		name             string
+		previousTasks    map[string]int
+		batchTasks       []TaskDef
+		expectWarnings   bool
 		expectedDupCount int
-		warningContains string
+		warningContains  string
 	}{
 		{
 			name:          "two identical tasks in batch - first should not be duplicate",

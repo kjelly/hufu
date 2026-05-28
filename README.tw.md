@@ -419,11 +419,11 @@ mcp-tools:
     cmd: go test ./...
     desc: 執行 Go 測試
     inputs: [package]
-  
+
   build:
     cmd: go build -o /tmp/app ./...
     desc: 構建應用程式
-  
+
   calc:
     cmd: print ($env.V1 + $env.V2)
     desc: 使用 nushell 計算總和

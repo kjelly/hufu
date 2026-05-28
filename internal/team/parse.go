@@ -25,61 +25,61 @@ type TeamSession struct {
 }
 
 type agentFrontmatter struct {
-	Name           string   `yaml:"name"`
-	Description    string   `yaml:"description"`
-	Role           string   `yaml:"role"`
-	Tools          any      `yaml:"tools"` // string or []string (YAML list)
-	Skills         any      `yaml:"skills"` // string or []string (YAML list)
-	Guard          []string `yaml:"guard"`
-	Model          string   `yaml:"model"`
-	ExtraModels    []string `yaml:"extra-models"`
-	Temperature    string   `yaml:"temperature"`
-	MaxTokens      string   `yaml:"max-tokens"`
-	TopP           string   `yaml:"top-p"`
-	TopK           string   `yaml:"top-k"`
-	Timeout        int64    `yaml:"timeout"`
-	MaxRetries     any      `yaml:"max-retries"` // int or string
-	MaxSteps       int      `yaml:"max-steps"`
-	ProviderURL    string   `yaml:"provider-url"`
-	AllowedPaths   any      `yaml:"allowed-paths"` // string or []string
-	RestrictedPath string   `yaml:"restricted-path"`
-	NoNet          bool     `yaml:"no-net"`
-	ForceMCP       bool     `yaml:"force-mcp"`
-	Shell          string   `yaml:"shell"`
+	Name           string                         `yaml:"name"`
+	Description    string                         `yaml:"description"`
+	Role           string                         `yaml:"role"`
+	Tools          any                            `yaml:"tools"`  // string or []string (YAML list)
+	Skills         any                            `yaml:"skills"` // string or []string (YAML list)
+	Guard          []string                       `yaml:"guard"`
+	Model          string                         `yaml:"model"`
+	ExtraModels    []string                       `yaml:"extra-models"`
+	Temperature    string                         `yaml:"temperature"`
+	MaxTokens      string                         `yaml:"max-tokens"`
+	TopP           string                         `yaml:"top-p"`
+	TopK           string                         `yaml:"top-k"`
+	Timeout        int64                          `yaml:"timeout"`
+	MaxRetries     any                            `yaml:"max-retries"` // int or string
+	MaxSteps       int                            `yaml:"max-steps"`
+	ProviderURL    string                         `yaml:"provider-url"`
+	AllowedPaths   any                            `yaml:"allowed-paths"` // string or []string
+	RestrictedPath string                         `yaml:"restricted-path"`
+	NoNet          bool                           `yaml:"no-net"`
+	ForceMCP       bool                           `yaml:"force-mcp"`
+	Shell          string                         `yaml:"shell"`
 	MCPTools       map[string]agent.MCPToolConfig `yaml:"mcp-tools"`
 }
 
 type teamConfigYAML struct {
-	Name          string              `yaml:"name"`
-	Description   string              `yaml:"description"`
-	MaxRounds     int                 `yaml:"max-rounds"`
-	MaxSteps      int                 `yaml:"max-steps"`
-	Workspace     string              `yaml:"workspace"`
-	Timeout       int64               `yaml:"timeout"`
-	MaxRetries    int                 `yaml:"max-retries"`
-	Model         string              `yaml:"model"`
-	Temperature   string              `yaml:"temperature"`
-	MaxTokens     string              `yaml:"max-tokens"`
-	TopP          string              `yaml:"top-p"`
-	TopK          string              `yaml:"top-k"`
-	Skills        string              `yaml:"skills"`
-	SkillsExclude string              `yaml:"skills-exclude"`
-	ProviderURL   string              `yaml:"provider-url"`
-	ProviderAPIKey string             `yaml:"provider-api-key"`
-	Providers     map[string]config.ProviderConfig `yaml:"providers"`
-	ModelList     []config.ModelEntry `yaml:"model-list"`
-	SidecarModel  string              `yaml:"sidecar-model"`
-	GuardModel    string              `yaml:"guard-model"`
-	MaxConcurrent int                 `yaml:"max-concurrent"`
-	Notify        notify.NotifyConfig `yaml:"notify"`
-	AllowedPaths    interface{}         `yaml:"allowed-paths"`
-	RestrictedPath string              `yaml:"restricted-path"`
-	NoNet          bool               `yaml:"no-net"`
-	ForceMCP       bool               `yaml:"force-mcp"`
-	Shell          string             `yaml:"shell"`
-	Vars           map[string]interface{} `yaml:"vars"`
-	WorkerContextSize int              `yaml:"worker-context-size"`
-	ToolsAllowed   interface{}        `yaml:"tools"` // tools.allowed in YAML - string or []string
+	Name              string                           `yaml:"name"`
+	Description       string                           `yaml:"description"`
+	MaxRounds         int                              `yaml:"max-rounds"`
+	MaxSteps          int                              `yaml:"max-steps"`
+	Workspace         string                           `yaml:"workspace"`
+	Timeout           int64                            `yaml:"timeout"`
+	MaxRetries        int                              `yaml:"max-retries"`
+	Model             string                           `yaml:"model"`
+	Temperature       string                           `yaml:"temperature"`
+	MaxTokens         string                           `yaml:"max-tokens"`
+	TopP              string                           `yaml:"top-p"`
+	TopK              string                           `yaml:"top-k"`
+	Skills            string                           `yaml:"skills"`
+	SkillsExclude     string                           `yaml:"skills-exclude"`
+	ProviderURL       string                           `yaml:"provider-url"`
+	ProviderAPIKey    string                           `yaml:"provider-api-key"`
+	Providers         map[string]config.ProviderConfig `yaml:"providers"`
+	ModelList         []config.ModelEntry              `yaml:"model-list"`
+	SidecarModel      string                           `yaml:"sidecar-model"`
+	GuardModel        string                           `yaml:"guard-model"`
+	MaxConcurrent     int                              `yaml:"max-concurrent"`
+	Notify            notify.NotifyConfig              `yaml:"notify"`
+	AllowedPaths      interface{}                      `yaml:"allowed-paths"`
+	RestrictedPath    string                           `yaml:"restricted-path"`
+	NoNet             bool                             `yaml:"no-net"`
+	ForceMCP          bool                             `yaml:"force-mcp"`
+	Shell             string                           `yaml:"shell"`
+	Vars              map[string]interface{}           `yaml:"vars"`
+	WorkerContextSize int                              `yaml:"worker-context-size"`
+	ToolsAllowed      interface{}                      `yaml:"tools"` // tools.allowed in YAML - string or []string
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -326,7 +326,7 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 			TopK:        fm.TopK,
 		},
 		ProviderURL: fm.ProviderURL,
-		ExtraModels:  fm.ExtraModels,
+		ExtraModels: fm.ExtraModels,
 	}
 	if fm.Timeout > 0 {
 		def.Timeout = fm.Timeout

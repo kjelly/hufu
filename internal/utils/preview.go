@@ -25,7 +25,7 @@ func TruncatePreview(text string, maxLen int) string {
 			return ""
 		}
 		if len(runes) <= maxLen {
-			return string(runes[:len(runes)])
+			return string(runes[:])
 		}
 		return string(runes[:maxLen])
 	}

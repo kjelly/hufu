@@ -2,4 +2,3 @@ ollama/minimax-m2.7:cloud
 ollama/glm-3.5:cloud
 ollama/glm-3.5:cloud
 ollama/gpt-oss:120b-cloud
-

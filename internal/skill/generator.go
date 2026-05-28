@@ -106,7 +106,7 @@ func (g *AutoSkillGenerator) buildSkillContent(candidate PatternCandidate, skill
 	if len(candidate.Sequence.TaskDescs) > 0 {
 		sb.WriteString("## Common Use Cases\n\n")
 		sb.WriteString("This skill was used in the following contexts:\n\n")
-		
+
 		// Count task description frequency
 		descFreq := make(map[string]int)
 		for _, desc := range candidate.Sequence.TaskDescs {

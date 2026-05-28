@@ -29,8 +29,8 @@ const (
 
 // GeneralizationScore represents LLM evaluation result
 type GeneralizationScore struct {
-	Score          float64  `json:"score"`
-	Reason         string   `json:"reason"`
+	Score            float64  `json:"score"`
+	Reason           string   `json:"reason"`
 	SpecificElements []string `json:"specific_elements"`
 }
 
@@ -55,42 +55,42 @@ type ToolCallRecord struct {
 
 // ToolSequence represents a sequence of tool calls
 type ToolSequence struct {
-	Tools      []string
-	Params     []string // normalized parameter patterns
-	Hash       string
-	Count      int
-	FirstSeen  time.Time
-	LastSeen   time.Time
-	TaskDescs  []string // task descriptions where this sequence was used
-	Agent      string
+	Tools     []string
+	Params    []string // normalized parameter patterns
+	Hash      string
+	Count     int
+	FirstSeen time.Time
+	LastSeen  time.Time
+	TaskDescs []string // task descriptions where this sequence was used
+	Agent     string
 }
 
 // PatternCandidate represents a detected repeating pattern
 type PatternCandidate struct {
-	Sequence         *ToolSequence
-	SimilarityScore  float64 // 0.0-1.0 from semantic analysis
-	SuggestedName    string  // Rule-based fallback name
-	SuggestedDesc    string
-	LLMGeneratedName string // LLM-generated meaningful name (preferred)
-	QualityScore     float64      // 0-1 quality score
-	IsSingleTool     bool         // true if single tool repeated
+	Sequence             *ToolSequence
+	SimilarityScore      float64 // 0.0-1.0 from semantic analysis
+	SuggestedName        string  // Rule-based fallback name
+	SuggestedDesc        string
+	LLMGeneratedName     string   // LLM-generated meaningful name (preferred)
+	QualityScore         float64  // 0-1 quality score
+	IsSingleTool         bool     // true if single tool repeated
 	GeneralizationReason string   // LLM assessment reason
-	SpecificElements []string     // specific values detected
+	SpecificElements     []string // specific values detected
 }
 
 // SkillPatternDetector detects repeating tool call patterns
 type SkillPatternDetector struct {
-	mu                sync.RWMutex
-	toolCalls         []ToolCallRecord
-	sequences         map[string]*ToolSequence // hash -> sequence
-	sequenceByAgent   map[string][]string      // agent -> sequence hashes
-	minFrequency      int
-	windowMin         int
-	windowMax         int
-	sidecarEnabled    bool
-	sidecar           *sidecar.Sidecar // sidecar instance for semantic analysis
-	clusterCache      map[string]map[int][]int // descriptions hash -> clusters
-	cacheMu           sync.RWMutex
+	mu              sync.RWMutex
+	toolCalls       []ToolCallRecord
+	sequences       map[string]*ToolSequence // hash -> sequence
+	sequenceByAgent map[string][]string      // agent -> sequence hashes
+	minFrequency    int
+	windowMin       int
+	windowMax       int
+	sidecarEnabled  bool
+	sidecar         *sidecar.Sidecar         // sidecar instance for semantic analysis
+	clusterCache    map[string]map[int][]int // descriptions hash -> clusters
+	cacheMu         sync.RWMutex
 }
 
 // NewSkillPatternDetector creates a new pattern detector
@@ -274,29 +274,29 @@ func (d *SkillPatternDetector) buildParamGeneralizationPrompt(seq *ToolSequence)
 	sb.WriteString("You are a skill generalization analyzer. Evaluate if tool call parameters are:\n")
 	sb.WriteString("- GENERIC: Reusable across contexts (e.g., file paths, variable names)\n")
 	sb.WriteString("- SPECIFIC: Tied to one context (e.g., hostnames, IPs, specific service names)\n\n")
-	
+
 	// Few-shot examples
 	sb.WriteString("## Examples\n\n")
-	
+
 	sb.WriteString("Example 1 (GENERIC - score=0.9):\n")
 	sb.WriteString("  1. view(path=\"src/auth/login.ts\")\n")
 	sb.WriteString("  2. edit(file=\"src/auth/login.ts\", old=\"...\")\n")
 	sb.WriteString("  3. bash(cmd=\"npm test\")\n")
 	sb.WriteString("  Analysis: Uses generic file paths and standard commands\n")
 	sb.WriteString("  JSON: {\"score\": 0.9, \"reason\": \"Fully generic parameters\", \"specific_elements\": []}\n\n")
-	
+
 	sb.WriteString("Example 2 (SPECIFIC - score=0.2):\n")
 	sb.WriteString("  1. ssh(host=\"prod-server-01.acme.com\", cmd=\"kubectl get pods\")\n")
 	sb.WriteString("  2. ssh(host=\"prod-server-01.acme.com\", cmd=\"kubectl logs\")\n")
 	sb.WriteString("  Analysis: Contains specific hostname and environment\n")
 	sb.WriteString("  JSON: {\"score\": 0.2, \"reason\": \"Tied to production environment\", \"specific_elements\": [\"prod-server-01.acme.com\"]}\n\n")
-	
+
 	sb.WriteString("Example 3 (MIXED - score=0.6):\n")
 	sb.WriteString("  1. bash(cmd=\"docker build -t myapp .\")\n")
 	sb.WriteString("  2. bash(cmd=\"docker push registry.example.com/myapp:latest\")\n")
 	sb.WriteString("  Analysis: Generic docker commands but specific registry URL\n")
 	sb.WriteString("  JSON: {\"score\": 0.6, \"reason\": \"Generic commands with specific registry\", \"specific_elements\": [\"registry.example.com\"]}\n\n")
-	
+
 	sb.WriteString("## Task to Analyze\n\n")
 	sb.WriteString("Tool calls:\n")
 	for i, tool := range seq.Tools {
@@ -306,13 +306,13 @@ func (d *SkillPatternDetector) buildParamGeneralizationPrompt(seq *ToolSequence)
 		}
 		sb.WriteString(fmt.Sprintf("  %d. %s(%s)\n", i+1, tool, param))
 	}
-	
+
 	sb.WriteString("\nReturn ONLY JSON: {\"score\": 0.0-1.0, \"reason\": \"explanation\", \"specific_elements\": [\"list\", \"of\", \"specific\", \"values\"]}\n")
 	sb.WriteString("Scoring:\n")
 	sb.WriteString("  - score=1.0: Fully generic, no specific values\n")
 	sb.WriteString("  - score=0.0: Highly specific, contains hostnames/IPs/service names\n")
 	sb.WriteString("  - score>=0.7: Acceptable for skill generation\n")
-	
+
 	return sb.String()
 }
 
@@ -322,17 +322,17 @@ func (d *SkillPatternDetector) evaluateParamGeneralization(ctx context.Context, 
 	if !d.sidecarEnabled || d.sidecar == nil {
 		return 0, "sidecar unavailable", nil
 	}
-	
+
 	prompt := d.buildParamGeneralizationPrompt(seq)
-	
+
 	timeoutCtx, cancel := context.WithTimeout(ctx, llmTimeout)
 	defer cancel()
-	
+
 	result, err := d.sidecar.Execute(timeoutCtx, prompt)
 	if err != nil {
 		return 0, fmt.Sprintf("sidecar error: %v", err), nil
 	}
-	
+
 	score, reason, elements := d.parseGeneralizationScore(result)
 	return score, reason, elements
 }
@@ -343,7 +343,7 @@ func (d *SkillPatternDetector) parseGeneralizationScore(result string) (float64,
 	if err := json.Unmarshal([]byte(result), &score); err != nil {
 		return 0, "parse error", nil
 	}
-	
+
 	// Clamp score to valid range
 	if score.Score < 0 {
 		score.Score = 0
@@ -351,7 +351,7 @@ func (d *SkillPatternDetector) parseGeneralizationScore(result string) (float64,
 	if score.Score > 1 {
 		score.Score = 1
 	}
-	
+
 	return score.Score, score.Reason, score.SpecificElements
 }
 
@@ -362,7 +362,7 @@ func (d *SkillPatternDetector) calculateQualityScore(candidate PatternCandidate,
 	if d.evaluateToolDiversity(candidate.Sequence) {
 		toolDiversity = 1.0
 	}
-	
+
 	return toolDiversity*0.6 + paramScore*0.4
 }
 
@@ -373,10 +373,10 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 		log.Printf("[INFO] Skill generation skipped: sidecar unavailable")
 		return nil
 	}
-	
+
 	d.mu.RLock()
 	var candidates []PatternCandidate
-	
+
 	for _, seq := range d.sequences {
 		if seq.Count >= minFrequency {
 			// Deep copy ToolSequence to prevent data race after RUnlock
@@ -398,13 +398,13 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 			candidates = append(candidates, candidate)
 		}
 	}
-	
+
 	d.mu.RUnlock()
-	
+
 	if len(candidates) == 0 {
 		return nil
 	}
-	
+
 	// Filtering statistics
 	var (
 		highQualityCandidates []PatternCandidate
@@ -413,7 +413,7 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 		filteredByQuality     int
 		evaluatedCount        int
 	)
-	
+
 	for i := range candidates {
 		// Frequency filter (already filtered by loop condition, but count for stats)
 		if candidates[i].Sequence.Count < minFrequency {
@@ -422,7 +422,7 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 				candidates[i].Sequence.Count, minFrequency, candidates[i].Sequence.Tools)
 			continue
 		}
-		
+
 		// Single tool filter
 		candidates[i].IsSingleTool = d.isSingleToolRepeat(candidates[i].Sequence)
 		if candidates[i].IsSingleTool {
@@ -431,20 +431,20 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 				candidates[i].Sequence.Tools, candidates[i].Sequence.Count)
 			continue
 		}
-		
+
 		// LLM evaluation (limit to maxSkillCandidates)
 		if evaluatedCount >= maxSkillCandidates {
 			log.Printf("[INFO] Stopped LLM evaluation: reached max %d candidates", maxSkillCandidates)
 			break
 		}
-		
+
 		paramScore, reason, elements := d.evaluateParamGeneralization(ctx, candidates[i].Sequence)
 		candidates[i].GeneralizationReason = reason
 		candidates[i].SpecificElements = elements
-		
+
 		// Quality score calculation
 		candidates[i].QualityScore = d.calculateQualityScore(candidates[i], paramScore)
-		
+
 		// Quality filter
 		if candidates[i].QualityScore < qualityThreshold {
 			filteredByQuality++
@@ -452,11 +452,11 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 				candidates[i].QualityScore, qualityThreshold, candidates[i].SuggestedName, reason)
 			continue
 		}
-		
+
 		highQualityCandidates = append(highQualityCandidates, candidates[i])
 		evaluatedCount++
 	}
-	
+
 	// Filtering summary
 	log.Printf("[INFO] Skill pattern filtering summary:")
 	log.Printf("  Total candidates: %d", len(candidates))
@@ -464,12 +464,12 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 	log.Printf("  Filtered by single tool: %d", filteredBySingleTool)
 	log.Printf("  Filtered by quality (<%.2f): %d", qualityThreshold, filteredByQuality)
 	log.Printf("  High-quality candidates: %d", len(highQualityCandidates))
-	
+
 	// Sort by quality score (descending)
 	sort.Slice(highQualityCandidates, func(i, j int) bool {
 		return highQualityCandidates[i].QualityScore > highQualityCandidates[j].QualityScore
 	})
-	
+
 	return highQualityCandidates
 }
 
@@ -533,7 +533,7 @@ func (d *SkillPatternDetector) collectAllTaskDescriptions(candidates []PatternCa
 func (d *SkillPatternDetector) clusterDescriptions(ctx context.Context, sidecar *sidecar.Sidecar, descriptions []string) map[int][]int {
 	// Check cache first
 	descHash := d.hashDescriptions(descriptions)
-	
+
 	d.cacheMu.RLock()
 	if cached, ok := d.clusterCache[descHash]; ok {
 		// Deep copy cache to prevent data race

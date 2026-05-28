@@ -52,7 +52,7 @@ import (
 
 func TestSSHSessionManager_CreateGet(t *testing.T) {
     mgr := NewSSHSessionManager()
-    
+
     session := mgr.Create("task-1", "user@host1", 22)
     if session == nil {
         t.Fatal("Create() returned nil")
@@ -63,7 +63,7 @@ func TestSSHSessionManager_CreateGet(t *testing.T) {
     if session.Port != 22 {
         t.Errorf("Port = %d, want 22", session.Port)
     }
-    
+
     retrieved := mgr.Get("task-1")
     if retrieved != session {
         t.Error("Get() should return same session")
@@ -74,7 +74,7 @@ func TestSSHSessionManager_List(t *testing.T) {
     mgr := NewSSHSessionManager()
     mgr.Create("task-1", "user@host1", 22)
     mgr.Create("task-2", "user@host2", 2222)
-    
+
     sessions := mgr.List()
     if len(sessions) != 2 {
         t.Errorf("List() count = %d, want 2", len(sessions))
@@ -84,7 +84,7 @@ func TestSSHSessionManager_List(t *testing.T) {
 func TestSSHSessionManager_Close(t *testing.T) {
     mgr := NewSSHSessionManager()
     mgr.Create("task-1", "user@host1", 22)
-    
+
     mgr.Close("task-1")
     if mgr.Get("task-1") != nil {
         t.Error("Close() should remove session")
@@ -94,7 +94,7 @@ func TestSSHSessionManager_Close(t *testing.T) {
 func TestSSHSessionManager_ContextIntegration(t *testing.T) {
     mgr := NewSSHSessionManager()
     ctx := context.WithValue(context.Background(), SSHSessionManagerKey, mgr)
-    
+
     retrieved := GetSSHSessionManager(ctx)
     if retrieved != mgr {
         t.Error("GetSSHSessionManager() should return manager from context")
@@ -146,12 +146,12 @@ func NewSSHSessionManager() *SSHSessionManager {
 func (m *SSHSessionManager) Create(taskID, host string, port int) *SSHSession {
     m.mu.Lock()
     defer m.mu.Unlock()
-    
+
     user := ""
     if idx := strings.Index(host, "@"); idx != -1 {
         user = host[:idx]
     }
-    
+
     session := &SSHSession{
         Host:      host,
         User:      user,
@@ -174,7 +174,7 @@ func (m *SSHSessionManager) Get(taskID string) *SSHSession {
 func (m *SSHSessionManager) List() []*SSHSession {
     m.mu.RLock()
     defer m.mu.RUnlock()
-    
+
     result := make([]*SSHSession, 0, len(m.sessions))
     for _, s := range m.sessions {
         result = append(result, s)
@@ -253,17 +253,17 @@ package tools
 import (
     "context"
     "testing"
-    
+
     "charm.land/fantasy"
 )
 
 func TestExecuteSSH_ForceMCP(t *testing.T) {
     tool := NewSshTool()
     ctx := context.WithValue(context.Background(), AgentForceMCPKey, true)
-    
+
     input := `{"host": "user@example.com", "command": "uptime"}`
     result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-    
+
     if err != nil {
         t.Fatalf("Run() error: %v", err)
     }
@@ -295,7 +295,7 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
                 "Use an MCP server for SSH operations instead.",
         ), nil
     }
-    
+
     var args sshArgs
     if err := parseArgs(call.Input, &args); err != nil {
         return fantasy.NewTextErrorResponse("host parameter is required"), nil
@@ -333,7 +333,7 @@ git commit -m "feat: add --force-mcp check to SSH tool"
 func TestDiagnoseSSHErrors_AuthFailed(t *testing.T) {
     stderr := "Permission denied (publickey,password)."
     result := diagnoseSSHErrors(255, stderr)
-    
+
     if !strings.Contains(result, "Authentication failed") {
         t.Errorf("Expected authentication failure message, got %q", result)
     }
@@ -345,7 +345,7 @@ func TestDiagnoseSSHErrors_AuthFailed(t *testing.T) {
 func TestDiagnoseSSHErrors_ConnectionRefused(t *testing.T) {
     stderr := "ssh: connect to host example.com port 22: Connection refused"
     result := diagnoseSSHErrors(255, stderr)
-    
+
     if !strings.Contains(result, "Connection refused") {
         t.Errorf("Expected connection refused message, got %q", result)
     }
@@ -356,7 +356,7 @@ func TestDiagnoseSSHErrors_ConnectionRefused(t *testing.T) {
 
 func TestDiagnoseSSHErrors_Timeout(t *testing.T) {
     result := diagnoseSSHErrors(124, "ssh connection timed out")
-    
+
     if !strings.Contains(result, "timed out") {
         t.Errorf("Expected timeout message, got %q", result)
     }
@@ -494,14 +494,14 @@ import (
     "os"
     "path/filepath"
     "testing"
-    
+
     "charm.land/fantasy"
 )
 
 func TestSCPTool_Info(t *testing.T) {
     tool := NewScpTool()
     info := tool.Info()
-    
+
     if info.Name != "scp" {
         t.Errorf("Name = %q, want scp", info.Name)
     }
@@ -512,21 +512,21 @@ func TestSCP_Upload(t *testing.T) {
     if os.Getenv("SSH_TEST_HOST") == "" {
         t.Skip("SSH_TEST_HOST not set")
     }
-    
+
     tool := NewScpTool()
     ctx := SetToolsAllowed(context.Background(), []string{"scp"})
-    
+
     // Create test file
     testDir := t.TempDir()
     testFile := filepath.Join(testDir, "test.txt")
     os.WriteFile(testFile, []byte("hello scp"), 0644)
-    
+
     input := `{
         "source": "` + testFile + `",
         "destination": "/tmp/test.txt",
         "host": "` + os.Getenv("SSH_TEST_HOST") + `"
     }`
-    
+
     result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
     if err != nil {
         t.Fatalf("Run() error: %v", err)
@@ -540,19 +540,19 @@ func TestSCP_Download(t *testing.T) {
     if os.Getenv("SSH_TEST_HOST") == "" {
         t.Skip("SSH_TEST_HOST not set")
     }
-    
+
     tool := NewScpTool()
     ctx := SetToolsAllowed(context.Background(), []string{"scp"})
-    
+
     testDir := t.TempDir()
-    
+
     input := `{
         "source": "/etc/hostname",
         "destination": "` + testDir + `/hostname",
         "host": "` + os.Getenv("SSH_TEST_HOST") + `",
         "direction": "download"
     }`
-    
+
     result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
     if err != nil {
         t.Fatalf("Run() error: %v", err)
@@ -560,7 +560,7 @@ func TestSCP_Download(t *testing.T) {
     if result.IsError {
         t.Errorf("Download failed: %s", result.Content)
     }
-    
+
     // Verify file was downloaded
     downloadedFile := filepath.Join(testDir, "hostname")
     if _, err := os.Stat(downloadedFile); os.IsNotExist(err) {
@@ -572,22 +572,22 @@ func TestSCP_Recursive(t *testing.T) {
     if os.Getenv("SSH_TEST_HOST") == "" {
         t.Skip("SSH_TEST_HOST not set")
     }
-    
+
     tool := NewScpTool()
     ctx := SetToolsAllowed(context.Background(), []string{"scp"})
-    
+
     testDir := t.TempDir()
     subdir := filepath.Join(testDir, "subdir")
     os.MkdirAll(subdir, 0755)
     os.WriteFile(filepath.Join(subdir, "file.txt"), []byte("test"), 0644)
-    
+
     input := `{
         "source": "` + testDir + `",
         "destination": "/tmp/testdir",
         "host": "` + os.Getenv("SSH_TEST_HOST") + `",
         "recursive": true
     }`
-    
+
     result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
     if err != nil {
         t.Fatalf("Run() error: %v", err)
@@ -691,11 +691,11 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
     if err := parseArgs(call.Input, &args); err != nil {
         return fantasy.NewTextErrorResponse("source and destination are required"), nil
     }
-    
+
     if args.Source == "" || args.Destination == "" {
         return fantasy.NewTextErrorResponse("source and destination are required"), nil
     }
-    
+
     // Check force-mcp mode
     if fm, ok := ctx.Value(AgentForceMCPKey).(bool); ok && fm {
         return fantasy.NewTextErrorResponse(
@@ -703,7 +703,7 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
                 "Use an MCP server for file transfer instead.",
         ), nil
     }
-    
+
     // Validate parameters
     if args.Port < 0 || args.Port > 65535 {
         return fantasy.NewTextErrorResponse("port must be 0-65535"), nil
@@ -715,7 +715,7 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
             ), nil
         }
     }
-    
+
     timeout := defaultSSHTimeout
     if args.Timeout > 0 {
         timeout = time.Duration(args.Timeout) * time.Second
@@ -723,7 +723,7 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
             timeout = maxBashTimeout
         }
     }
-    
+
     // Build scp command
     scpArgs := []string{}
     if args.Port > 0 {
@@ -737,7 +737,7 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
     }
     scpArgs = append(scpArgs, "-o", "BatchMode=yes")
     scpArgs = append(scpArgs, "-o", "StrictHostKeyChecking=accept-new")
-    
+
     // Determine source and destination based on direction
     var src, dst string
     if args.Direction == "download" || (args.Host == "" && args.Source != "") {
@@ -755,24 +755,24 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
         src = args.Source
         dst = args.Host + ":" + args.Destination
     }
-    
+
     scpArgs = append(scpArgs, src, dst)
-    
+
     cmdCtx, cancel := context.WithTimeout(ctx, timeout)
     defer cancel()
-    
+
     cmd := exec.CommandContext(cmdCtx, "scp", scpArgs...)
-    
+
     var stdout, stderr bytes.Buffer
     cmd.Stdout = &stdout
     cmd.Stderr = &stderr
-    
+
     if err := cmd.Run(); err != nil {
         exitCode := 0
         if exitErr, ok := err.(*exec.ExitError); ok {
             exitCode = exitErr.ExitCode()
         }
-        
+
         diagnosedMsg := diagnoseSSHErrors(exitCode, stderr.String())
         return fantasy.ToolResponse{
             Content: fmt.Sprintf(
@@ -783,7 +783,7 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
             IsError: true,
         }, nil
     }
-    
+
     return fantasy.ToolResponse{
         Content: fmt.Sprintf(
             "SCP transfer successful\nSource: %s\nDestination: %s",
@@ -831,7 +831,7 @@ func TestParseSSHConfig_Basic(t *testing.T) {
     // Create temp SSH config
     tmpDir := t.TempDir()
     configFile := filepath.Join(tmpDir, "ssh_config")
-    
+
     content := `
 Host example.com
     User admin
@@ -839,12 +839,12 @@ Host example.com
     IdentityFile ~/.ssh/id_ed25519
 `
     os.WriteFile(configFile, []byte(content), 0644)
-    
+
     config, err := parseSSHConfigFile(configFile, "example.com")
     if err != nil {
         t.Fatalf("parseSSHConfigFile() error: %v", err)
     }
-    
+
     if config.User != "admin" {
         t.Errorf("User = %q, want admin", config.User)
     }
@@ -859,19 +859,19 @@ Host example.com
 func TestParseSSHConfig_Wildcard(t *testing.T) {
     tmpDir := t.TempDir()
     configFile := filepath.Join(tmpDir, "ssh_config")
-    
+
     content := `
 Host *.example.com
     User webadmin
     Port 22
 `
     os.WriteFile(configFile, []byte(content), 0644)
-    
+
     config, err := parseSSHConfigFile(configFile, "server1.example.com")
     if err != nil {
         t.Fatalf("parseSSHConfigFile() error: %v", err)
     }
-    
+
     if config.User != "webadmin" {
         t.Errorf("User = %q, want webadmin", config.User)
     }
@@ -880,22 +880,22 @@ Host *.example.com
 func TestParseSSHConfig_MergeWithExplicit(t *testing.T) {
     tmpDir := t.TempDir()
     configFile := filepath.Join(tmpDir, "ssh_config")
-    
+
     content := `
 Host example.com
     User admin
     Port 2222
 `
     os.WriteFile(configFile, []byte(content), 0644)
-    
+
     config, _ := parseSSHConfigFile(configFile, "example.com")
-    
+
     // Explicit port should override config
     explicitPort := 0
     if explicitPort == 0 {
         explicitPort = config.Port
     }
-    
+
     if explicitPort != 2222 {
         t.Errorf("Merged port = %d, want 2222", explicitPort)
     }
@@ -942,41 +942,41 @@ func parseSSHConfigFile(configPath, host string) (*SSHConfig, error) {
         return nil, err
     }
     defer file.Close()
-    
+
     config := &SSHConfig{}
     scanner := bufio.NewScanner(file)
-    
+
     currentHostPattern := ""
     matchFound := false
-    
+
     hostPattern := regexp.MustCompile(`(?i)^Host\s+(.+)$`)
     keywordPattern := regexp.MustCompile(`(?i)^\s*(\w+)\s+(.+)$`)
-    
+
     for scanner.Scan() {
         line := strings.TrimSpace(scanner.Text())
-        
+
         // Skip comments and empty lines
         if line == "" || strings.HasPrefix(line, "#") {
             continue
         }
-        
+
         // Check for Host directive
         if matches := hostPattern.FindStringSubmatch(line); matches != nil {
             currentHostPattern = matches[1]
             continue
         }
-        
+
         // Check if this host block matches
         if !matchFound && matchHostPattern(currentHostPattern, host) {
             matchFound = true
         }
-        
+
         // Parse directives in matching block
         if matchFound {
             if matches := keywordPattern.FindStringSubmatch(line); matches != nil {
                 keyword := strings.ToLower(matches[1])
                 value := matches[2]
-                
+
                 switch keyword {
                 case "user":
                     config.User = value
@@ -994,7 +994,7 @@ func parseSSHConfigFile(configPath, host string) (*SSHConfig, error) {
             }
         }
     }
-    
+
     return config, scanner.Err()
 }
 
@@ -1003,7 +1003,7 @@ func matchHostPattern(pattern, host string) bool {
     if pattern == "" {
         return false
     }
-    
+
     // Convert SSH wildcard to regex
     regexPattern := "^" + strings.ReplaceAll(pattern, "*", ".*") + "$"
     matched, _ := regexp.MatchString(regexPattern, host)
@@ -1016,12 +1016,12 @@ func GetSSHConfig(host string) (*SSHConfig, error) {
     if err != nil {
         return nil, err
     }
-    
+
     configPath := filepath.Join(homeDir, ".ssh", "config")
     if _, err := os.Stat(configPath); os.IsNotExist(err) {
         return &SSHConfig{}, nil // No config file, return empty config
     }
-    
+
     return parseSSHConfigFile(configPath, host)
 }
 ```
@@ -1032,15 +1032,15 @@ func GetSSHConfig(host string) (*SSHConfig, error) {
 // internal/tools/ssh.go - modify executeSSH to use config
 func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
     // ... existing force-mcp check ...
-    
+
     var args sshArgs
     if err := parseArgs(call.Input, &args); err != nil {
         return fantasy.NewTextErrorResponse("host parameter is required"), nil
     }
-    
+
     // Parse SSH config and merge with explicit parameters
     sshConfig, _ := GetSSHConfig(args.Host)
-    
+
     // Use config values if not explicitly provided
     if args.Port == 0 && sshConfig.Port != 0 {
         args.Port = sshConfig.Port
@@ -1048,7 +1048,7 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
     if args.IdentityFile == "" && sshConfig.IdentityFile != "" {
         args.IdentityFile = sshConfig.IdentityFile
     }
-    
+
     // ... rest of existing code ...
 }
 ```
@@ -1128,14 +1128,14 @@ import (
 
 func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
     startTime := time.Now()
-    
+
     // ... existing code ...
-    
+
     waitErr := cmd.Wait()
     wg.Wait()
-    
+
     duration := time.Since(startTime)
-    
+
     // Log to audit
     if auditor := GetAuditLogger(ctx); auditor != nil {
         agentName, _ := ctx.Value(AgentNameKey).(string)
@@ -1147,7 +1147,7 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
             duration.Milliseconds(),
         )
     }
-    
+
     // ... rest of existing code ...
 }
 ```
@@ -1202,13 +1202,13 @@ git commit -m "feat: add SSH connection audit logging"
 func TestSSH_ConnectionReuse(t *testing.T) {
     tool := NewSshTool()
     ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-    
+
     input := `{
         "host": "user@example.com",
         "command": "uptime",
         "connection_reuse": true
     }`
-    
+
     result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
     if err != nil {
         t.Fatalf("Run() error: %v", err)
@@ -1319,7 +1319,7 @@ type TeamInfo struct {
 // internal/tui/tui.go - find team info rendering and add SSH sessions
 func (m Model) View() string {
     // ... existing code ...
-    
+
     if m.inInfo {
         var b strings.Builder
         b.WriteString(fmt.Sprintf("Team: %s\n", m.teamInfo.TeamName))
@@ -1330,7 +1330,7 @@ func (m Model) View() string {
         // ...
         return b.String()
     }
-    
+
     // ...
 }
 ```
@@ -1345,7 +1345,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
         mgr = tools.NewSSHSessionManager()
         ctx = tools.SetSSHSessionManager(ctx, mgr)
     }
-    
+
     // ... existing code ...
 }
 ```
@@ -1370,7 +1370,7 @@ func (c *Coordinator) report(event StatusEvent) {
 func makeTUIReporter(p tea.ProgramSender) func(StatusEvent) {
     return func(event StatusEvent) {
         // ... existing code ...
-        
+
         if event.SSHSessions > 0 {
             p.Send(StatusBarMsg{
                 Text: fmt.Sprintf("SSH: %d active", event.SSHSessions),

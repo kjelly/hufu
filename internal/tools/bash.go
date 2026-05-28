@@ -438,7 +438,7 @@ func checkBashPathConsent(ctx context.Context, command string, cfg ToolConfig) e
 	if cfg.PathReviewer != nil && len(candidatePaths) > 0 {
 		var realPaths []string
 		for _, p := range candidatePaths {
-		isFileAccess, err := cfg.PathReviewer(ctx, command, p)
+			isFileAccess, err := cfg.PathReviewer(ctx, command, p)
 			if err == nil && isFileAccess {
 				realPaths = append(realPaths, p)
 			}

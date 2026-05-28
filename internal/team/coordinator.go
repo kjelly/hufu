@@ -163,9 +163,9 @@ func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*plan
 	pr := &planReviewer{coordinator: c, modelID: c.session.Config.Generation.Model, todoID: todoID}
 	ag, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(c.session.Config.Generation.Model), agent.AgentConfig{
 		Def: &agent.AgentDef{
-			Name:    "plan-reviewer",
-			System:  planReviewerSystemPrompt,
-			Role:    "plan_reviewer",
+			Name:   "plan-reviewer",
+			System: planReviewerSystemPrompt,
+			Role:   "plan_reviewer",
 		},
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
@@ -398,7 +398,9 @@ func (t *reviewerApprovePlanTool) Info() fantasy.ToolInfo {
 		Required: []string{"todo_id"},
 	}
 }
-func (t *reviewerApprovePlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
+func (t *reviewerApprovePlanTool) ProviderOptions() fantasy.ProviderOptions {
+	return fantasy.ProviderOptions{}
+}
 func (t *reviewerApprovePlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
 func (t *reviewerApprovePlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	result := t.coordinator.autoApprovePlan(ctx, t.todoID)
@@ -421,7 +423,9 @@ func (t *reviewerRejectPlanTool) Info() fantasy.ToolInfo {
 		Required: []string{"todo_id", "reason"},
 	}
 }
-func (t *reviewerRejectPlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
+func (t *reviewerRejectPlanTool) ProviderOptions() fantasy.ProviderOptions {
+	return fantasy.ProviderOptions{}
+}
 func (t *reviewerRejectPlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
 func (t *reviewerRejectPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
@@ -522,25 +526,25 @@ type Coordinator struct {
 	// when dry-run mode is active. Currently, the CLI's --dry-run flag calls
 	// DryRun() directly and returns early before reaching ExecuteTasks, so
 	// this field is not yet exercised in the main CLI flow.
-	dryRun atomic.Bool
-	hooks  *hooks.HookRegistry
-	rbashMode      bool
-	restrictedPath string
-	noNet                bool
-	forceMCP             bool
-	workerSummariesOnce  sync.Once
-	workerSummaries      map[string]string
-	workerSummariesMu    sync.Mutex
-	pendingPlans          map[string]*PlanEntry
+	dryRun              atomic.Bool
+	hooks               *hooks.HookRegistry
+	rbashMode           bool
+	restrictedPath      string
+	noNet               bool
+	forceMCP            bool
+	workerSummariesOnce sync.Once
+	workerSummaries     map[string]string
+	workerSummariesMu   sync.Mutex
+	pendingPlans        map[string]*PlanEntry
 	// approvedOutputs stores actual task output once autoApprovePlan executes.
 	// CRITICAL: Always access under pendingPlansMu. All access points:
 	//   - review() lines 246-248: read + delete under lock
 	//   - autoApprovePlan() line 289: write under lock
 	// Do NOT read or write without holding pendingPlansMu.
-	approvedOutputs map[string]string
-	pendingPlansMu  sync.Mutex
-	forcePlanFirst        bool
-	autoSkillsEnabled     bool
+	approvedOutputs   map[string]string
+	pendingPlansMu    sync.Mutex
+	forcePlanFirst    bool
+	autoSkillsEnabled bool
 
 	sessionToolPermissions   map[string]bool // toolName -> allowed (permanent session decision)
 	sessionToolPermissionsMu sync.RWMutex
@@ -656,12 +660,12 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 			}
 			return m
 		}(),
-		forcePlanFirst:    planMode,
-		autoSkillsEnabled: autoSkillsMode,
+		forcePlanFirst:         planMode,
+		autoSkillsEnabled:      autoSkillsMode,
 		sessionToolPermissions: make(map[string]bool),
-		skillDetector:         skill.NewSkillPatternDetector(5, 3, 10), // minFrequency=5, windowMin=3, windowMax=10
-		skillGenerator:        skill.NewAutoSkillGenerator(filepath.Join(session.Dir, "skills")),
-		skillPatternsDetected: 0,
+		skillDetector:          skill.NewSkillPatternDetector(5, 3, 10), // minFrequency=5, windowMin=3, windowMax=10
+		skillGenerator:         skill.NewAutoSkillGenerator(filepath.Join(session.Dir, "skills")),
+		skillPatternsDetected:  0,
 	}
 
 	// Enable sidecar for skill pattern detection
@@ -1618,8 +1622,8 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 				"type": "array",
 				"items": map[string]any{
 					"type":                 "object",
-					"properties":          buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir)),
-					"required":            []string{"agent"},
+					"properties":           buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir)),
+					"required":             []string{"agent"},
 					"additionalProperties": false,
 				},
 			},
@@ -2233,10 +2237,15 @@ func (t *submitPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantas
 	t.coordinator.pendingPlansMu.Lock()
 	existing := t.coordinator.pendingPlans[t.todoID]
 	t.coordinator.pendingPlans[t.todoID] = &PlanEntry{
-		TodoID:      t.todoID,
-		PlanText:    args.Plan,
-		Status:      "submitted",
-		ReviewCount: func() int { if existing != nil { return existing.ReviewCount }; return 0 }(),
+		TodoID:   t.todoID,
+		PlanText: args.Plan,
+		Status:   "submitted",
+		ReviewCount: func() int {
+			if existing != nil {
+				return existing.ReviewCount
+			}
+			return 0
+		}(),
 	}
 	t.coordinator.pendingPlansMu.Unlock()
 	if t.coordinator.forcePlanFirst {
@@ -2447,10 +2456,10 @@ func (t *approvePlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
 
 	task := TaskDef{
-		Agent:  agent,
-		Goal:   goal,
+		Agent:     agent,
+		Goal:      goal,
 		PlanFirst: true,
-		PlanID: todoID,
+		PlanID:    todoID,
 	}
 	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{task})
 	if err != nil {
@@ -2511,10 +2520,10 @@ func (t *modifyPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantas
 	t.coordinator.report(t.coordinator.newEvent("step").withMessage(fmt.Sprintf("plan %s modified by coordinator", todoID)))
 
 	task := TaskDef{
-		Agent:  agent,
-		Goal:   goal,
+		Agent:     agent,
+		Goal:      goal,
 		PlanFirst: true,
-		PlanID: todoID,
+		PlanID:    todoID,
 	}
 	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{task})
 	if err != nil {
@@ -3835,14 +3844,14 @@ func (c *Coordinator) displaySkillPreviewAndConfirm(candidates []skill.PatternCa
 	var msg strings.Builder
 	msg.WriteString("─── SKILL GENERATION PREVIEW ───\n")
 	msg.WriteString(fmt.Sprintf("Detected %d high-quality patterns:\n\n", len(candidates)))
-	
+
 	for i, cand := range candidates {
 		msg.WriteString(fmt.Sprintf("%d. **%s**\n", i+1, cand.SuggestedName))
 		msg.WriteString(fmt.Sprintf("   Tools: %s\n", strings.Join(cand.Sequence.Tools, " → ")))
 		msg.WriteString(fmt.Sprintf("   Frequency: ×%d\n", cand.Sequence.Count))
 		msg.WriteString(fmt.Sprintf("   Quality Score: %.2f/1.00\n", cand.QualityScore))
 		msg.WriteString(fmt.Sprintf("   Description: %s\n", cand.SuggestedDesc))
-		
+
 		// LLM evaluation reason
 		if cand.GeneralizationReason != "" {
 			msg.WriteString(fmt.Sprintf("   Generalization: %s\n", cand.GeneralizationReason))
@@ -3850,7 +3859,7 @@ func (c *Coordinator) displaySkillPreviewAndConfirm(candidates []skill.PatternCa
 		if len(cand.SpecificElements) > 0 {
 			msg.WriteString(fmt.Sprintf("   Specific Elements: %v\n", strings.Join(cand.SpecificElements, ", ")))
 		}
-		
+
 		// Display first 4 tool call examples
 		msg.WriteString("   Example Tool Calls:\n")
 		for j := 0; j < len(cand.Sequence.Params) && j < 4; j++ {
@@ -3859,13 +3868,13 @@ func (c *Coordinator) displaySkillPreviewAndConfirm(candidates []skill.PatternCa
 		if len(cand.Sequence.Params) > 4 {
 			msg.WriteString(fmt.Sprintf("     ... and %d more\n", len(cand.Sequence.Params)-4))
 		}
-		
+
 		msg.WriteString("\n")
 	}
-	
+
 	msg.WriteString("Generate these skills? [Y/n]: ")
 	c.report(c.newEvent("step").withMessage(msg.String()))
-	
+
 	return c.confirmSkillGeneration()
 }
 
@@ -3877,12 +3886,12 @@ func (c *Coordinator) confirmSkillGeneration() bool {
 		return false
 	}
 	defer prompt.Close()
-	
+
 	answer, err := prompt.ReadLine("")
 	if err != nil {
 		return false
 	}
-	
+
 	answer = strings.ToLower(strings.TrimSpace(answer))
 	return answer == "" || answer == "y" || answer == "yes"
 }
@@ -3982,11 +3991,16 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		c.pendingPlansMu.Lock()
 		existing := c.pendingPlans[todoID]
 		c.pendingPlans[todoID] = &PlanEntry{
-			TodoID:      todoID,
-			Agent:       agentName,
-			Goal:        task.Goal,
-			Status:      "",
-			ReviewCount: func() int { if existing != nil { return existing.ReviewCount }; return 0 }(),
+			TodoID: todoID,
+			Agent:  agentName,
+			Goal:   task.Goal,
+			Status: "",
+			ReviewCount: func() int {
+				if existing != nil {
+					return existing.ReviewCount
+				}
+				return 0
+			}(),
 		}
 		c.pendingPlansMu.Unlock()
 	}
@@ -4559,7 +4573,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			reportFn(c.newEvent("tool_call").withAgent(agentName).withTodoID(todoID).withTool(tc.ToolName, argsPreview))
 			llmLogStreamEvent(logWrite, "tool_call", formatToolCallContent(tc))
 			audit.LogToolCall(agentName, tc.ToolName, tc.Input)
-			
+
 			// Record tool call for skill pattern detection
 			if c.skillDetector != nil {
 				taskDesc := c.currentTask
@@ -4568,7 +4582,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				}
 				c.skillDetector.RecordToolCall(agentName, tc.ToolName, tc.Input, taskDesc)
 			}
-			
+
 			if skillName := c.extractSkillFromToolCall(tc.ToolName, tc.Input); skillName != "" {
 				c.recordSkillUsage(skillName, agentName)
 			}
@@ -4687,7 +4701,7 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 	agentTools := agent.SelectTools(c.coreTools, agentDef.Tools)
 	if c.mcpManager != nil {
 		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
-		
+
 		// Load agent-specific MCP tools if defined
 		if len(agentDef.MCPTools) > 0 {
 			err := c.mcpManager.LoadAgentMCPServer(agentDef.Name, agentDef.MCPTools, agentDef.Shell)
@@ -6031,8 +6045,8 @@ func (t *dryRunAgentsTool) Info() fantasy.ToolInfo {
 				"type": "array",
 				"items": map[string]any{
 					"type":                 "object",
-					"properties":          buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir)),
-					"required":            []string{"agent"},
+					"properties":           buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir)),
+					"required":             []string{"agent"},
 					"additionalProperties": false,
 				},
 			},

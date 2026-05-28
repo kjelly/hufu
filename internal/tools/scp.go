@@ -16,16 +16,16 @@ import (
 )
 
 type scpArgs struct {
-	Source          string  `json:"source"`
-	Destination     string  `json:"destination"`
-	Host            string  `json:"host,omitempty"`
-	Port            int     `json:"port,omitempty"`
-	IdentityFile    string  `json:"identity_file,omitempty"`
-	Timeout         float64 `json:"timeout,omitempty"`
-	Recursive       bool    `json:"recursive,omitempty"`
-	Direction       string  `json:"direction,omitempty"`
-	Interactive     bool    `json:"interactive,omitempty"`
-	Password        string  `json:"password,omitempty"`
+	Source       string  `json:"source"`
+	Destination  string  `json:"destination"`
+	Host         string  `json:"host,omitempty"`
+	Port         int     `json:"port,omitempty"`
+	IdentityFile string  `json:"identity_file,omitempty"`
+	Timeout      float64 `json:"timeout,omitempty"`
+	Recursive    bool    `json:"recursive,omitempty"`
+	Direction    string  `json:"direction,omitempty"`
+	Interactive  bool    `json:"interactive,omitempty"`
+	Password     string  `json:"password,omitempty"`
 }
 
 func NewScpTool(opts ...ToolOption) fantasy.AgentTool {
@@ -89,7 +89,7 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 
 	if fm, ok := ctx.Value(AgentForceMCPKey).(bool); ok && fm {
 		return fantasy.NewTextErrorResponse(
-			"scp tool is blocked by --force-mcp. "+
+			"scp tool is blocked by --force-mcp. " +
 				"Use an MCP server for file transfer instead.",
 		), nil
 	}

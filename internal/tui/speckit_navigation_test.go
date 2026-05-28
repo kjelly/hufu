@@ -98,7 +98,7 @@ func TestSpeckit_Search(t *testing.T) {
 	if final.col != 3 {
 		t.Errorf("Expected search to jump to DONE column (3), got col %d", final.col)
 	}
-	
+
 	view := final.View()
 	if !strings.Contains(view, "Finished Task") {
 		t.Error("View should contain the searched task")

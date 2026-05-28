@@ -6,12 +6,12 @@ import (
 
 func TestFlattenYAML(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    map[string]interface{}
-		prefix   string
-		want     map[string]string
-		wantErr  bool
-		errMsg   string
+		name    string
+		input   map[string]interface{}
+		prefix  string
+		want    map[string]string
+		wantErr bool
+		errMsg  string
 	}{
 		{
 			name:  "empty map",
@@ -47,14 +47,14 @@ func TestFlattenYAML(t *testing.T) {
 		{
 			name: "mixed nested and flat",
 			input: map[string]interface{}{
-				"flat":   "value",
+				"flat": "value",
 				"nested": map[string]interface{}{
 					"key": "nested_value",
 				},
 			},
 			want: map[string]string{
-				"flat":           "value",
-				"nested.key":     "nested_value",
+				"flat":       "value",
+				"nested.key": "nested_value",
 			},
 		},
 		{
@@ -112,9 +112,9 @@ func TestFlattenYAML(t *testing.T) {
 		{
 			name: "float values",
 			input: map[string]interface{}{
-				"pi":    3.14159,
-				"zero":  0.0,
-				"neg":   -1.5,
+				"pi":   3.14159,
+				"zero": 0.0,
+				"neg":  -1.5,
 			},
 			want: map[string]string{
 				"pi":   "3.14159",
@@ -224,8 +224,8 @@ database:
     pass: secret
 `),
 			want: map[string]string{
-				"database.host":           "localhost",
-				"database.port":           "5432",
+				"database.host":             "localhost",
+				"database.port":             "5432",
 				"database.credentials.user": "admin",
 				"database.credentials.pass": "secret",
 			},

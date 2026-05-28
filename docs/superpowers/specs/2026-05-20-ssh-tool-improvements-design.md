@@ -1,7 +1,7 @@
 # SSH Tool Improvements Design Specification
 
-**Date**: 2026-05-20  
-**Author**: hufu development team  
+**Date**: 2026-05-20
+**Author**: hufu development team
 **Status**: Draft (pending review)
 
 ---

@@ -749,7 +749,7 @@ The TUI is built using the Bubble Tea framework, which emphasizes a pure functio
 
 ### 1. State Machine Testing (Pure Function)
 
-Since the `Update(msg)` function is a pure state transition `(Model, Msg) -> (Model, Cmd)`, we can test TUI logic without a terminal environment. 
+Since the `Update(msg)` function is a pure state transition `(Model, Msg) -> (Model, Cmd)`, we can test TUI logic without a terminal environment.
 
 **Pattern:**
 1. Initialize a `Model` with `New()`.
@@ -770,7 +770,7 @@ func TestUpdate_Navigation(t *testing.T) {
 
     // 2. Action: Simulate pressing 'j' (Down)
     m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-    
+
     // 3. Expectation: Row index should increment
     if m2.(Model).row != 1 {
         t.Errorf("Expected row 1 after 'j', got %d", m2.(Model).row)
@@ -799,7 +799,7 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 ### 1. Agent Tool Trust (Implicit Allowlist)
 
-**Specification:** The `tools` field in an agent's `.md` definition file is considered a **trusted configuration**. 
+**Specification:** The `tools` field in an agent's `.md` definition file is considered a **trusted configuration**.
 - Any tool listed in the agent's Markdown file is automatically added to that agent's **explicit allowlist**.
 - Tools in this implicit allowlist **bypass** the global `team.yaml` restrictions and will not prompt the user for permission.
 - This allows for fine-grained, agent-specific capabilities while maintaining global safety defaults.
@@ -933,4 +933,3 @@ Displayed via `skillDisplay` struct in `cmd/hufu/display.go`, updated on each `s
 | Path | Description |
 |------|-------------|
 | `.agents/skills/code-reviewer/SKILL.md` | Code review skill (supports local changes and remote PRs) — Global skill at project root (unchanged) |
-

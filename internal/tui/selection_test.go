@@ -53,7 +53,7 @@ func TestVisualSelection_StartPoint(t *testing.T) {
 	if curr.visualEnd != 3 {
 		t.Errorf("Expected visualEnd 3 after 'j' in visual mode, got %d", curr.visualEnd)
 	}
-	
+
 	// 6. Verify selection range is [2, 3]
 	if curr.visualStart != 2 || curr.visualEnd != 3 {
 		t.Errorf("Expected selection range [2, 3], got [%d, %d]", curr.visualStart, curr.visualEnd)

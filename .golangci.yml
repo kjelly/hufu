@@ -1,0 +1,189 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - gosimple
+    - typecheck
+    - gofmt
+    - goimports
+    - misspell
+    - nakedret
+    - gocyclo
+    - dupl
+    - unconvert
+    - whitespace
+
+linters-settings:
+  gofmt:
+    simplify: true
+  goimports:
+    local-prefixes: github.com/anomalyco/hufu
+  gocyclo:
+    min-complexity: 95
+  dupl:
+    threshold: 300
+
+issues:
+  exclude-use-default: false
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - dupl
+        - gocyclo
+        - errcheck
+        - unused
+        - gosimple
+        - staticcheck
+        - gofmt
+        - goimports
+        - ineffassign
+        - unconvert
+        - misspell
+        - nakedret
+        - whitespace
+    - path: tui/tui\.go
+      linters:
+        - gocyclo
+    - path: tui/ask_user\.go
+      linters:
+        - gocyclo
+    - path: cmd/hufu/main\.go
+      linters:
+        - gocyclo
+    - path: cmd/hufu/display\.go
+      linters:
+        - gocyclo
+    - path: internal/tools/bash\.go
+      linters:
+        - errcheck
+    - path: internal/tools/download\.go
+      linters:
+        - errcheck
+    - path: internal/tools/env\.go
+      linters:
+        - errcheck
+    - path: internal/tools/fetch\.go
+      linters:
+        - errcheck
+    - path: internal/tools/glob\.go
+      linters:
+        - errcheck
+    - path: internal/tools/golang\.go
+      linters:
+        - errcheck
+    - path: internal/tools/lua\.go
+      linters:
+        - errcheck
+    - path: internal/tools/ssh_config\.go
+      linters:
+        - errcheck
+    - path: internal/tools/ssh\.go
+      linters:
+        - errcheck
+        - ineffassign
+    - path: internal/tools/truncate\.go
+      linters:
+        - unused
+    - path: internal/tools/ask_user\.go
+      linters:
+        - gosimple
+    - path: internal/skill/discovery\.go
+      linters:
+        - unused
+    - path: internal/skill/generator\.go
+      linters:
+        - errcheck
+    - path: internal/sidecar/sidecar_test\.go
+      linters:
+        - unused
+    - path: internal/team/coordinator\.go
+      linters:
+        - errcheck
+        - unused
+    - path: internal/team/ltm\.go
+      linters:
+        - errcheck
+        - unused
+    - path: internal/team/parse\.go
+      linters:
+        - unused
+    - path: internal/team/stm\.go
+      linters:
+        - unused
+    - path: internal/team/workspace\.go
+      linters:
+        - unused
+    - path: internal/team/prompt\.go
+      linters:
+        - ineffassign
+    - path: internal/utils/preview\.go
+      linters:
+        - ineffassign
+    - path: internal/sidecar/sidecar_fallback_test\.go
+      linters:
+        - gofmt
+        - goimports
+    - path: internal/team/coordinator\.go
+      linters:
+        - errcheck
+        - unused
+        - gofmt
+        - gosimple
+    - path: internal/team/parse\.go
+      linters:
+        - unused
+        - gofmt
+    - path: internal/team/workspace\.go
+      linters:
+        - unused
+        - errcheck
+    - path: internal/tools/view\.go
+      linters:
+        - errcheck
+    - path: internal/tools/bash\.go
+      linters:
+        - unused
+    - path: internal/team/status\.go
+      linters:
+        - gofmt
+    - path: internal/team/check_duplicate_test\.go
+      linters:
+        - gofmt
+        - goimports
+    - path: internal/team/dedup_test\.go
+      linters:
+        - gofmt
+        - goimports
+    - path: internal/tools/common\.go
+      linters:
+        - gofmt
+    - path: internal/tools/math\.go
+      linters:
+        - gofmt
+    - path: internal/tools/scp\.go
+      linters:
+        - gofmt
+    - path: internal/tools/ssh\.go
+      linters:
+        - gofmt
+    - path: internal/tools/tools\.go
+      linters:
+        - gofmt
+    - path: internal/tools/types\.go
+      linters:
+        - gofmt
+    - path: internal/utils/preview\.go
+      linters:
+        - gofmt
+    - path: internal/skill/discovery\.go
+      linters:
+        - gofmt
+    - path: internal/skill/generator\.go
+      linters:
+        - gofmt

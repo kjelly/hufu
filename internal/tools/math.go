@@ -88,7 +88,7 @@ func executeMath(call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 
 func formatMathResult(value float64, precision int) string {
 	// float64 can exactly represent integers up to 2^53 (9007199254740992)
-	const maxExactInt = float64(1<<53)
+	const maxExactInt = float64(1 << 53)
 	if math.Trunc(value) == value && !math.IsInf(value, 0) && math.Abs(value) <= maxExactInt {
 		return strconv.FormatFloat(value, 'f', 0, 64)
 	}

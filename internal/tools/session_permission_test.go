@@ -44,20 +44,20 @@ func TestToolPermissionCallback(t *testing.T) {
 	called := false
 	var resultName string
 	var resultAllowed bool
-	
+
 	cb := func(name string, allowed bool) {
 		called = true
 		resultName = name
 		resultAllowed = allowed
 	}
-	
+
 	ctx := context.WithValue(context.Background(), ToolPermissionCallbackKey, ToolPermissionCallback(cb))
-	
+
 	// Simulate using the callback
 	if injected, ok := ctx.Value(ToolPermissionCallbackKey).(ToolPermissionCallback); ok {
 		injected("bash", false)
 	}
-	
+
 	if !called {
 		t.Error("callback was not called")
 	}

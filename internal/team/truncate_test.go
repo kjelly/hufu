@@ -60,17 +60,17 @@ func TestTruncateAtSectionBoundaries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := truncateAtSectionBoundaries(tt.content, tt.maxChars)
-			
+
 			if tt.wantEmpty && got != "" {
 				t.Errorf("truncateAtSectionBoundaries() = %q, want empty", got)
 			}
-			
+
 			for _, want := range tt.wantContains {
 				if !strings.Contains(got, want) {
 					t.Errorf("truncateAtSectionBoundaries() missing %q in %q", want, got)
 				}
 			}
-			
+
 			// Verify result doesn't exceed maxChars (accounting for TrimSpace removing trailing newline)
 			if len([]rune(got)) > tt.maxChars+1 {  // +1 for potential TrimSpace difference
 				t.Errorf("truncateAtSectionBoundaries() len = %d, want <= %d", len([]rune(got)), tt.maxChars)
@@ -94,12 +94,12 @@ func TestTruncateAtSectionBoundaries_PreservesMarkdown(t *testing.T) {
 `
 	// Truncate to only fit the last section
 	got := truncateAtSectionBoundaries(content, 100)
-	
+
 	// Should contain the last section completely, not partial markdown
 	if !strings.Contains(got, "## Issues") {
 		t.Errorf("Expected to contain '## Issues', got: %q", got)
 	}
-	
+
 	// The function keeps complete sections from the end, so earlier sections
 	// may be partially included if they fit within the limit.
 	// Just verify the result is reasonable and doesn't exceed limit by much.
@@ -116,7 +116,7 @@ func TestTruncateAtSectionBoundaries_EdgeCases(t *testing.T) {
 			t.Error("Expected non-empty result for unicode content")
 		}
 	})
-	
+
 	t.Run("very small maxChars", func(t *testing.T) {
 		content := "## Section\n- item"
 		got := truncateAtSectionBoundaries(content, 5)

@@ -124,23 +124,23 @@ var highRiskTools = map[string]bool{
 
 // Medium-risk tools that require user confirmation
 var mediumRiskTools = map[string]bool{
-	"download":       true,
-	"fetch":          true,
-	"agentic_fetch":  true,
+	"download":      true,
+	"fetch":         true,
+	"agentic_fetch": true,
 }
 
 // ForceMCPBlockedTools are disabled when --force-mcp is enabled, forcing use of MCP servers
 var ForceMCPBlockedTools = map[string]bool{
-	"bash":             true,
-	"sudo":             true,
-	"ssh":              true,
-	"scp":              true,
-	"ssh_disconnect":   true,
-	"golang":           true,
-	"lua":              true,
-	"download":         true,
-	"fetch":            true,
-	"agentic_fetch":    true,
+	"bash":           true,
+	"sudo":           true,
+	"ssh":            true,
+	"scp":            true,
+	"ssh_disconnect": true,
+	"golang":         true,
+	"lua":            true,
+	"download":       true,
+	"fetch":          true,
+	"agentic_fetch":  true,
 }
 
 // GetToolLevel returns the risk level of a tool
@@ -269,16 +269,16 @@ func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
 		return cfg
 	}
 	merged := ToolConfig{
-		WorkDir:         cfg.WorkDir,
+		WorkDir:        cfg.WorkDir,
 		AllowedPaths:   mergedAllowedPaths(cfg, ctx),
 		PathConsent:    cfg.PathConsent,
-		ToolName:        cfg.ToolName,
-		WorkspaceName:   cfg.WorkspaceName,
-		Hooks:           cfg.Hooks,
-		RestrictedBash:  cfg.RestrictedBash,
-		RestrictedPath:  mergedRestrictedPath(cfg, ctx),
-		NetworkBlock:    mergedNetworkBlock(cfg, ctx),
-		ForceMCP:        mergedForceMCP(cfg, ctx),
+		ToolName:       cfg.ToolName,
+		WorkspaceName:  cfg.WorkspaceName,
+		Hooks:          cfg.Hooks,
+		RestrictedBash: cfg.RestrictedBash,
+		RestrictedPath: mergedRestrictedPath(cfg, ctx),
+		NetworkBlock:   mergedNetworkBlock(cfg, ctx),
+		ForceMCP:       mergedForceMCP(cfg, ctx),
 	}
 	return merged
 }

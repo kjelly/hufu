@@ -142,13 +142,13 @@ func TestGetSSHErrorTitle(t *testing.T) {
 func TestSSH_ConnectionReuse(t *testing.T) {
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-	
+
 	input := `{
 		"host": "user@example.com",
 		"command": "uptime",
 		"connection_reuse": true
 	}`
-	
+
 	_, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
@@ -159,14 +159,14 @@ func TestSSH_ConnectionReuse(t *testing.T) {
 func TestSSH_ControlPath(t *testing.T) {
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-	
+
 	input := `{
 		"host": "user@example.com",
 		"command": "uptime",
 		"connection_reuse": true,
 		"control_path": "/tmp/custom-ssh-socket"
 	}`
-	
+
 	_, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
@@ -211,11 +211,11 @@ func TestLooksLikeIP(t *testing.T) {
 func TestExecuteSSH_IPAddress_Warning(t *testing.T) {
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-	
+
 	// Test with IP address - should return error with warning
 	input := `{"host": "10.1.24.229", "command": "uptime"}`
 	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-	
+
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -236,11 +236,11 @@ func TestExecuteSSH_IPAddress_Warning(t *testing.T) {
 func TestExecuteSSH_Hostname_Allowed(t *testing.T) {
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-	
+
 	// Test with hostname - should not return IP warning
 	input := `{"host": "offline-test-gpu", "command": "uptime"}`
 	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-	
+
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -253,11 +253,11 @@ func TestExecuteSSH_Hostname_Allowed(t *testing.T) {
 func TestSSH_UserParameter(t *testing.T) {
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-	
+
 	// Test with explicit user parameter
 	input := `{"host": "server.example.com", "user": "admin", "command": "uptime"}`
 	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-	
+
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -270,11 +270,11 @@ func TestSSH_UserParameter(t *testing.T) {
 func TestSSH_UserAtHostFormat(t *testing.T) {
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-	
+
 	// Test with user@host format
 	input := `{"host": "admin@server.example.com", "command": "uptime"}`
 	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-	
+
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -287,11 +287,11 @@ func TestSSH_UserAtHostFormat(t *testing.T) {
 func TestSSH_UserParameterOverridesUserAtHost(t *testing.T) {
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-	
+
 	// Test that explicit user parameter overrides user@host format
 	input := `{"host": "admin@server.example.com", "user": "root", "command": "uptime"}`
 	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-	
+
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -304,11 +304,11 @@ func TestSSH_UserParameterOverridesUserAtHost(t *testing.T) {
 func TestSSH_InvalidPort(t *testing.T) {
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-	
+
 	// Test with invalid port (negative)
 	input := `{"host": "server.example.com", "port": -1}`
 	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-	
+
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -323,11 +323,11 @@ func TestSSH_InvalidPort(t *testing.T) {
 func TestSSH_PortOutOfRange(t *testing.T) {
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-	
+
 	// Test with port > 65535
 	input := `{"host": "server.example.com", "port": 70000}`
 	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-	
+
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -342,11 +342,11 @@ func TestSSH_PortOutOfRange(t *testing.T) {
 func TestSSH_IdentityFileNotFound(t *testing.T) {
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-	
+
 	// Test with non-existent identity file
 	input := `{"host": "server.example.com", "identity_file": "/nonexistent/path/key"}`
 	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-	
+
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}

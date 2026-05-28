@@ -136,7 +136,7 @@ type TodoItem struct {
 	ToolTime       time.Duration
 	Source         string
 	ParentID       string
-	DependsOn      []string  // IDs of tasks that must complete before this one starts
+	DependsOn      []string // IDs of tasks that must complete before this one starts
 }
 
 type TodoList struct {

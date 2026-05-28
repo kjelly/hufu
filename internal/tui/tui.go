@@ -43,13 +43,15 @@ type StatusBarMsg struct{ Text string }
 type ResultMsg struct{ Text string }
 
 type AgentInfoEntry struct {
-	Name string
-	Role string
+	Name  string
+	Role  string
+	Model string
 }
 
 type TeamInfo struct {
 	AvailableTeams []string
 	TeamName       string
+	DefaultModel   string
 	Agents         []AgentInfoEntry
 	MemoryEnabled  bool
 	MemoryModel    string
@@ -89,9 +91,9 @@ var (
 	selectedFg  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
 	selectedBg  = lipgloss.NewStyle().Background(lipgloss.Color("237"))
 
-	pendingIcon   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	progressIcon  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	pausedIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	pendingIcon  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	progressIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	pausedIcon   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	doneIcon     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	errorIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	skippedIcon  = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("8"))
@@ -182,9 +184,9 @@ type Model struct {
 	mouseEnabled         bool // mouse tracking is currently on
 	mouseManuallyEnabled bool // user explicitly toggled mouse on with 'm'
 
-	inActivityLog          bool // 全螢幕 activity log 模式
-	recentLogs              []string // last N activity log entries (circular buffer, max 500 entries; each may be multi-line, capped at maxFeedLines rendered lines)
-	detailRefreshScheduled   bool
+	inActivityLog          bool     // 全螢幕 activity log 模式
+	recentLogs             []string // last N activity log entries (circular buffer, max 500 entries; each may be multi-line, capped at maxFeedLines rendered lines)
+	detailRefreshScheduled bool
 
 	inVisual    bool // VISUAL mode active in detail view
 	cursorLine  int  // current line index within detail logs

@@ -423,11 +423,11 @@ mcp-tools:
     cmd: go test ./...
     desc: Run Go tests
     inputs: [package]
-  
+
   build:
     cmd: go build -o /tmp/app ./...
     desc: Build the application
-  
+
   calc:
     cmd: print ($env.V1 + $env.V2)
     desc: Calculate sum using nushell

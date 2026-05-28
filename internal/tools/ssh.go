@@ -166,7 +166,7 @@ func askUserForPassword(ctx context.Context, host, user, promptType string) (str
 		"question": question,
 		"type":     "free_text",
 	}
-	
+
 	inputBytes, _ := json.Marshal(askArgs)
 	askTool := NewAskUserTool()
 	result, err := askTool.Run(ctx, fantasy.ToolCall{Input: string(inputBytes)})
@@ -176,7 +176,7 @@ func askUserForPassword(ctx context.Context, host, user, promptType string) (str
 	if result.IsError {
 		return "", fmt.Errorf("ask_user failed: %s", result.Content)
 	}
-	
+
 	// Parse response
 	var reply struct {
 		Free string `json:"free_text"`
@@ -184,11 +184,11 @@ func askUserForPassword(ctx context.Context, host, user, promptType string) (str
 	if err := json.Unmarshal([]byte(result.Content), &reply); err != nil {
 		return "", fmt.Errorf("failed to parse ask_user response: %w", err)
 	}
-	
+
 	if reply.Free == "" {
 		return "", fmt.Errorf("user provided empty password")
 	}
-	
+
 	return reply.Free, nil
 }
 
@@ -225,7 +225,7 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 
 	// Validate and apply parameters with priority:
 	// Explicit parameter > user@host format > SSH config > no default
-	
+
 	// Port validation and resolution
 	if args.Port < 0 || args.Port > 65535 {
 		return fantasy.NewTextErrorResponse("port must be 0-65535"), nil
@@ -235,17 +235,17 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("identity file not found: %s", args.IdentityFile)), nil
 		}
 	}
-	
+
 	// Resolve port: explicit > SSH config
 	if args.Port == 0 && sshConfig.Port != 0 {
 		args.Port = sshConfig.Port
 	}
-	
+
 	// Resolve identity file: explicit > SSH config
 	if args.IdentityFile == "" && sshConfig.IdentityFile != "" {
 		args.IdentityFile = sshConfig.IdentityFile
 	}
-	
+
 	// Resolve user: explicit > user@host format > SSH config
 	userFromHost, cleanHost := ExtractUserFromHost(args.Host)
 	finalUser := args.User
@@ -255,7 +255,7 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 	if finalUser == "" && sshConfig.User != "" {
 		finalUser = sshConfig.User
 	}
-	
+
 	// Build SSH host argument (user@host or just host)
 	sshHost := cleanHost
 	if finalUser != "" {
@@ -272,12 +272,12 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 
 	// Build the SSH argument list
 	sshArgList := []string{}
-	
+
 	// Only use BatchMode if not in interactive mode
 	if !args.Interactive {
 		sshArgList = append(sshArgList, "-o", "BatchMode=yes")
 	}
-	
+
 	sshArgList = append(sshArgList,
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", fmt.Sprintf("ConnectTimeout=%d", max(5, int(timeout.Seconds()/4))),
@@ -320,7 +320,7 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 			cachedPassword = pwd
 		}
 	}
-	
+
 	// Use cached password if available
 	if cachedPassword != "" && args.Password == "" {
 		args.Password = cachedPassword
@@ -331,7 +331,7 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 
 	// Check if we need to handle password authentication
 	var cmd *exec.Cmd
-	
+
 	if args.Password != "" {
 		// Check if sshpass is installed
 		if _, err := exec.LookPath("sshpass"); err != nil {
@@ -374,7 +374,7 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 
 	exitCode := 0
 	stderrStr := stderr.String()
-	
+
 	// Check if password prompt was detected and interactive mode is enabled
 	if waitErr != nil && args.Interactive && detectPasswordPrompt(stderrStr) {
 		// Check if sshpass is installed
@@ -389,19 +389,19 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		if strings.Contains(strings.ToLower(stderrStr), "sudo") {
 			promptType = "sudo"
 		}
-		
+
 		// Ask user for password
 		password, err := askUserForPassword(ctx, args.Host, finalUser, promptType)
 		if err == nil && password != "" {
 			// Retry SSH with password using sshpass
 			cmdCtx2, cancel2 := context.WithTimeout(ctx, timeout)
 			defer cancel2()
-			
+
 			// Build sshpass command using environment variable
 			sshpassCmd := exec.CommandContext(cmdCtx2, "sshpass", "-e", "ssh")
 			sshpassCmd.Env = append(os.Environ(), "SSHPASS="+password)
 			sshpassCmd.Args = append(sshpassCmd.Args, sshArgList...)
-			
+
 			stdout2, stderr2, exitCode2 := runCommand(sshpassCmd)
 			stderrStr = stderr2
 			stdout.Reset()
@@ -413,7 +413,7 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 			if exitCode != 0 {
 				waitErr = fmt.Errorf("command failed with exit code %d", exitCode)
 			}
-			
+
 			// Cache password in session for future use (5 minute expiry) only on success
 			if exitCode == 0 && sessionMgr != nil {
 				sessionMgr.SetPassword(cleanHost, password, 5*time.Minute)
@@ -509,7 +509,7 @@ func runCommand(cmd *exec.Cmd) (string, string, int) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	
+
 	err := cmd.Run()
 	exitCode := 0
 	if err != nil {
@@ -519,6 +519,6 @@ func runCommand(cmd *exec.Cmd) (string, string, int) {
 			exitCode = -1
 		}
 	}
-	
+
 	return stdout.String(), stderr.String(), exitCode
 }
