@@ -1,6 +1,7 @@
 package team
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,7 +25,6 @@ import (
 	"github.com/anomalyco/hufu/internal/hooks"
 	"github.com/anomalyco/hufu/internal/mcp"
 	"github.com/anomalyco/hufu/internal/memory"
-	"github.com/anomalyco/hufu/internal/readline"
 	"github.com/anomalyco/hufu/internal/sidecar"
 	"github.com/anomalyco/hufu/internal/skill"
 	"github.com/anomalyco/hufu/internal/tools"
@@ -3841,13 +3842,14 @@ func (c *Coordinator) checkSkillPatternsAndSave() []string {
 		return nil
 	}
 
-	// Display preview and wait for user confirmation
-	if !c.displaySkillPreviewAndConfirm(candidates) {
-		return nil // User cancelled
+	// Multi-select confirm: user picks which drafts to keep.
+	selected := c.displaySkillPreviewMultiSelect(candidates)
+	if len(selected) == 0 {
+		return nil // User declined all
 	}
 
 	var savedSkills []string
-	for _, cand := range candidates {
+	for _, cand := range selected {
 		path, err := c.skillGenerator.GenerateSkill(cand)
 		if err != nil {
 			log.Printf("[WARN] failed to generate skill draft: %v", err)
@@ -3859,61 +3861,52 @@ func (c *Coordinator) checkSkillPatternsAndSave() []string {
 	return savedSkills
 }
 
-// displaySkillPreviewAndConfirm displays skill preview and waits for user confirmation
-func (c *Coordinator) displaySkillPreviewAndConfirm(candidates []skill.PatternCandidate) bool {
+// displaySkillPreviewMultiSelect shows the candidate list and asks the user
+// to pick which drafts to generate. Returns the filtered list.
+// Returns nil if the user declines all (empty input, "n", or invalid).
+func (c *Coordinator) displaySkillPreviewMultiSelect(candidates []skill.PatternCandidate) []skill.PatternCandidate {
 	var msg strings.Builder
-	msg.WriteString("─── SKILL GENERATION PREVIEW ───\n")
+	msg.WriteString("\n─── SKILL GENERATION PREVIEW ───\n")
 	msg.WriteString(fmt.Sprintf("Detected %d high-quality patterns:\n\n", len(candidates)))
 
 	for i, cand := range candidates {
-		msg.WriteString(fmt.Sprintf("%d. **%s**\n", i+1, cand.SuggestedName))
+		msg.WriteString(fmt.Sprintf("%d. **%s** (quality %.2f, ×%d)\n",
+			i+1, cand.SuggestedName, cand.QualityScore, cand.Sequence.Count))
 		msg.WriteString(fmt.Sprintf("   Tools: %s\n", strings.Join(cand.Sequence.Tools, " → ")))
-		msg.WriteString(fmt.Sprintf("   Frequency: ×%d\n", cand.Sequence.Count))
-		msg.WriteString(fmt.Sprintf("   Quality Score: %.2f/1.00\n", cand.QualityScore))
-		msg.WriteString(fmt.Sprintf("   Description: %s\n", cand.SuggestedDesc))
-
-		// LLM evaluation reason
 		if cand.GeneralizationReason != "" {
-			msg.WriteString(fmt.Sprintf("   Generalization: %s\n", cand.GeneralizationReason))
+			msg.WriteString(fmt.Sprintf("   %s\n", cand.GeneralizationReason))
 		}
-		if len(cand.SpecificElements) > 0 {
-			msg.WriteString(fmt.Sprintf("   Specific Elements: %v\n", strings.Join(cand.SpecificElements, ", ")))
-		}
-
-		// Display first 4 tool call examples
-		msg.WriteString("   Example Tool Calls:\n")
-		for j := 0; j < len(cand.Sequence.Params) && j < 4; j++ {
-			msg.WriteString(fmt.Sprintf("     %d. %s(%s)\n", j+1, cand.Sequence.Tools[j], cand.Sequence.Params[j]))
-		}
-		if len(cand.Sequence.Params) > 4 {
-			msg.WriteString(fmt.Sprintf("     ... and %d more\n", len(cand.Sequence.Params)-4))
-		}
-
 		msg.WriteString("\n")
 	}
 
-	msg.WriteString("Generate these skills? [Y/n]: ")
-	c.report(c.newEvent("step").withMessage(msg.String()))
+	msg.WriteString("Keep which drafts? Type numbers (e.g. \"1,3\"), \"a\" for all, \"n\" for none.\n")
+	msg.WriteString("Default: n. ")
 
-	return c.confirmSkillGeneration()
-}
+	fmt.Fprint(os.Stderr, msg.String())
 
-// confirmSkillGeneration waits for user confirmation input
-func (c *Coordinator) confirmSkillGeneration() bool {
-	// Use readline to read user input
-	prompt, err := readline.NewPromptReader("")
-	if err != nil {
-		return false
+	reader := bufio.NewReader(os.Stdin)
+	line, _ := reader.ReadString('\n')
+	response := strings.TrimSpace(strings.ToLower(line))
+
+	if response == "" || response == "n" {
+		return nil
 	}
-	defer prompt.Close()
-
-	answer, err := prompt.ReadLine("")
-	if err != nil {
-		return false
+	if response == "a" {
+		return candidates
 	}
 
-	answer = strings.ToLower(strings.TrimSpace(answer))
-	return answer == "" || answer == "y" || answer == "yes"
+	parts := strings.Split(response, ",")
+	var selected []skill.PatternCandidate
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > len(candidates) {
+			log.Printf("[WARN] invalid selection %q, ignoring", p)
+			continue
+		}
+		selected = append(selected, candidates[n-1])
+	}
+	return selected
 }
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (string, error) {
