@@ -839,13 +839,17 @@ func (c *Coordinator) getAutoLoadedSkills() []*skill.SkillDef {
 
 // saveAndReloadSkill writes a SKILL.md to the team's local skill directory and
 // immediately hot-reloads c.skills so the new skill is available in the same session.
-func (c *Coordinator) saveAndReloadSkill(name, description, content string) (string, error) {
+// When asDraft is true, the file is written under skills/drafts/ instead of skills/.
+func (c *Coordinator) saveAndReloadSkill(name, description, content string, asDraft bool) (string, error) {
 	slug := strings.Trim(skillSlugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
 	if slug == "" {
 		return "", fmt.Errorf("invalid skill name %q", name)
 	}
 
 	skillDir := filepath.Join(c.session.Dir, "skills", slug)
+	if asDraft {
+		skillDir = filepath.Join(c.session.Dir, "skills", "drafts", slug)
+	}
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create skill directory: %w", err)
 	}
@@ -866,7 +870,14 @@ func (c *Coordinator) saveAndReloadSkill(name, description, content string) (str
 		descYAML = strings.TrimRight(db.String(), "\n")
 	}
 
-	fileContent := fmt.Sprintf("---\nname: %s\n%s\n---\n\n%s\n", name, descYAML, strings.TrimSpace(content))
+	var fileContent string
+	if asDraft {
+		now := time.Now().UTC().Format(time.RFC3339)
+		fileContent = fmt.Sprintf("---\nname: %s\n%s\ncreated_at: %s\nlast_modified: %s\n---\n\n%s\n",
+			name, descYAML, now, now, strings.TrimSpace(content))
+	} else {
+		fileContent = fmt.Sprintf("---\nname: %s\n%s\n---\n\n%s\n", name, descYAML, strings.TrimSpace(content))
+	}
 	skillPath := filepath.Join(skillDir, "SKILL.md")
 	if err := os.WriteFile(skillPath, []byte(fileContent), 0o644); err != nil {
 		return "", fmt.Errorf("failed to write skill file: %w", err)

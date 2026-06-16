@@ -34,6 +34,11 @@ func (t *saveSkillTool) Info() fantasy.ToolInfo {
 				"type":        "string",
 				"description": "Full Markdown body of the skill: step-by-step workflow, examples, rules, and any gotchas learned.",
 			},
+			"as_draft": map[string]any{
+				"type":        "boolean",
+				"description": "Save as a draft in skills/drafts/ instead of skills/. Default: false.",
+				"default":     false,
+			},
 		},
 		Required: []string{"name", "description", "content"},
 	}
@@ -47,6 +52,7 @@ func (t *saveSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 		Name        string `json:"name"`
 		Description string `json:"description"`
 		Content     string `json:"content"`
+		AsDraft     bool   `json:"as_draft"`
 	}
 	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -61,7 +67,7 @@ func (t *saveSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 		return fantasy.NewTextErrorResponse("content is required"), nil
 	}
 
-	path, err := t.coordinator.saveAndReloadSkill(args.Name, args.Description, args.Content)
+	path, err := t.coordinator.saveAndReloadSkill(args.Name, args.Description, args.Content, args.AsDraft)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to save skill: %v", err)), nil
 	}

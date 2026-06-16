@@ -42,7 +42,7 @@ func runSaveSkill(t *testing.T, c *Coordinator, input string) fantasy.ToolRespon
 func TestSaveAndReloadSkill_CreatesFile(t *testing.T) {
 	c, dir := newMinimalCoordinator(t)
 
-	path, err := c.saveAndReloadSkill("my-skill", "Does something useful.", "# My Skill\n\nStep 1: do the thing.\n")
+	path, err := c.saveAndReloadSkill("my-skill", "Does something useful.", "# My Skill\n\nStep 1: do the thing.\n", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestSaveAndReloadSkill_HotReload(t *testing.T) {
 
 	before := len(c.getSkills())
 
-	if _, err := c.saveAndReloadSkill("hot-skill", "A hot-reloaded skill.", "# Hot Skill\n\nContent here.\n"); err != nil {
+	if _, err := c.saveAndReloadSkill("hot-skill", "A hot-reloaded skill.", "# Hot Skill\n\nContent here.\n", false); err != nil {
 		t.Fatalf("saveAndReloadSkill: %v", err)
 	}
 
@@ -93,10 +93,10 @@ func TestSaveAndReloadSkill_HotReload(t *testing.T) {
 func TestSaveAndReloadSkill_Overwrite(t *testing.T) {
 	c, _ := newMinimalCoordinator(t)
 
-	if _, err := c.saveAndReloadSkill("overwrite-skill", "v1 description.", "v1 content"); err != nil {
+	if _, err := c.saveAndReloadSkill("overwrite-skill", "v1 description.", "v1 content", false); err != nil {
 		t.Fatalf("first save: %v", err)
 	}
-	if _, err := c.saveAndReloadSkill("overwrite-skill", "v2 description.", "v2 content"); err != nil {
+	if _, err := c.saveAndReloadSkill("overwrite-skill", "v2 description.", "v2 content", false); err != nil {
 		t.Fatalf("second save: %v", err)
 	}
 
@@ -120,7 +120,7 @@ func TestSaveAndReloadSkill_Overwrite(t *testing.T) {
 func TestSaveAndReloadSkill_SlugifyName(t *testing.T) {
 	c, dir := newMinimalCoordinator(t)
 
-	if _, err := c.saveAndReloadSkill("My Cool Skill!", "desc", "body"); err != nil {
+	if _, err := c.saveAndReloadSkill("My Cool Skill!", "desc", "body", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// Directory slug should be lowercase-hyphenated.
@@ -139,10 +139,10 @@ func TestSaveAndReloadSkill_Filtering(t *testing.T) {
 	c, _ := newMinimalCoordinator(t)
 	c.session.Config.Skills = "allowed-skill"
 
-	if _, err := c.saveAndReloadSkill("allowed-skill", "Allowed.", "content"); err != nil {
+	if _, err := c.saveAndReloadSkill("allowed-skill", "Allowed.", "content", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.saveAndReloadSkill("blocked-skill", "Blocked.", "content"); err != nil {
+	if _, err := c.saveAndReloadSkill("blocked-skill", "Blocked.", "content", false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -153,6 +153,33 @@ func TestSaveAndReloadSkill_Filtering(t *testing.T) {
 			names[i] = s.Name
 		}
 		t.Errorf("expected only [allowed-skill], got %v", names)
+	}
+}
+
+func TestSaveAndReloadSkill_AsDraft(t *testing.T) {
+	c, dir := newMinimalCoordinator(t)
+
+	path, err := c.saveAndReloadSkill("test-draft", "A test.", "Content.", true)
+	if err != nil {
+		t.Fatalf("saveAndReloadSkill as draft: %v", err)
+	}
+
+	wantPath := filepath.Join(dir, "skills", "drafts", "test-draft", "SKILL.md")
+	if path != wantPath {
+		t.Errorf("returned path = %q, want %q", path, wantPath)
+	}
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Errorf("draft file not created: %v", err)
+	}
+	// Should NOT exist in the real skills dir
+	realPath := filepath.Join(dir, "skills", "test-draft", "SKILL.md")
+	if _, err := os.Stat(realPath); !os.IsNotExist(err) {
+		t.Errorf("real path unexpectedly created: %v", err)
+	}
+	// Should contain created_at frontmatter
+	data, _ := os.ReadFile(wantPath)
+	if !strings.Contains(string(data), "created_at:") {
+		t.Errorf("draft SKILL.md missing created_at:\n%s", data)
 	}
 }
 
