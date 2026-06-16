@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -15,6 +16,8 @@ type SkillDef struct {
 	Content      string
 	Path         string
 	Summary      string
+	Draft        bool
+	CreatedAt    time.Time
 }
 
 func parseSkillFile(path string) *SkillDef {
@@ -48,6 +51,17 @@ func parseSkillFile(path string) *SkillDef {
 
 	def.Summary = buildSummary(def)
 
+	if ts := fm["created_at"]; ts != "" {
+		if t, err := time.Parse(time.RFC3339, ts); err == nil {
+			def.CreatedAt = t
+		}
+	}
+	if def.CreatedAt.IsZero() {
+		if info, err := os.Stat(path); err == nil {
+			def.CreatedAt = info.ModTime()
+		}
+	}
+
 	return def
 }
 
@@ -75,9 +89,10 @@ func buildSummary(def *SkillDef) string {
 }
 
 type skillFrontmatter struct {
-	Name         string `yaml:"name"`
-	Description  string `yaml:"description"`
-	AllowedTools string `yaml:"allowed-tools"`
+	Name         string    `yaml:"name"`
+	Description  string    `yaml:"description"`
+	AllowedTools string    `yaml:"allowed-tools"`
+	CreatedAt    time.Time `yaml:"created_at"`
 }
 
 func parseSkillYAML(data string) map[string]string {
@@ -92,6 +107,9 @@ func parseSkillYAML(data string) map[string]string {
 		}
 		if fm.AllowedTools != "" {
 			result["allowed-tools"] = fm.AllowedTools
+		}
+		if !fm.CreatedAt.IsZero() {
+			result["created_at"] = fm.CreatedAt.Format(time.RFC3339)
 		}
 		return result
 	}
@@ -121,34 +139,48 @@ func parseSimpleYAML(data string) map[string]string {
 	return result
 }
 
-func DiscoverSkills(dirs []string) []*SkillDef {
+// DiscoverSkills scans the given directories for SKILL.md files.
+// When includeDrafts is true, the `drafts/` subdirectory of each dir is
+// also scanned; discovered drafts are marked with SkillDef.Draft=true.
+// When false (the default for the LLM-facing skill pool), drafts are
+// excluded entirely.
+func DiscoverSkills(dirs []string, includeDrafts bool) []*SkillDef {
 	seen := map[string]bool{}
 	var skills []*SkillDef
 
 	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			skillPath := filepath.Join(dir, entry.Name(), "SKILL.md")
-			def := parseSkillFile(skillPath)
-			if def == nil {
-				continue
-			}
-			nameLower := strings.ToLower(def.Name)
-			if seen[nameLower] {
-				continue
-			}
-			seen[nameLower] = true
-			skills = append(skills, def)
+		scanSkillDir(dir, false, seen, &skills)
+		if includeDrafts {
+			scanSkillDir(filepath.Join(dir, "drafts"), true, seen, &skills)
 		}
 	}
-
 	return skills
+}
+
+// scanSkillDir scans a single directory for skill subdirectories and
+// appends discovered skills to the slice.
+func scanSkillDir(dir string, draft bool, seen map[string]bool, skills *[]*SkillDef) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		skillPath := filepath.Join(dir, entry.Name(), "SKILL.md")
+		def := parseSkillFile(skillPath)
+		if def == nil {
+			continue
+		}
+		def.Draft = draft
+		nameLower := strings.ToLower(def.Name)
+		if seen[nameLower] {
+			continue
+		}
+		seen[nameLower] = true
+		*skills = append(*skills, def)
+	}
 }
 
 func FilterSkills(skills []*SkillDef, include, exclude []string) []*SkillDef {

@@ -866,7 +866,7 @@ func (c *Coordinator) saveAndReloadSkill(name, description, content string) (str
 	}
 
 	// Hot-reload: rediscover and re-filter skills from all directories.
-	allSkills := skill.DiscoverSkills(c.skillDirs())
+	allSkills := skill.DiscoverSkills(c.skillDirs(), false)
 	includeSkills := skill.ParseSkillList(c.session.Config.Skills)
 	excludeSkills := skill.ParseSkillList(c.session.Config.SkillsExclude)
 	newSkills := skill.FilterSkills(allSkills, includeSkills, excludeSkills)

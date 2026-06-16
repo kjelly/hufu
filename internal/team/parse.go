@@ -644,7 +644,7 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
 	}
 
-	allSkills := skill.DiscoverSkills(skillDirs)
+	allSkills := skill.DiscoverSkills(skillDirs, false)
 
 	includeSkills := skill.ParseSkillList(session.Config.Skills)
 	excludeSkills := skill.ParseSkillList(session.Config.SkillsExclude)

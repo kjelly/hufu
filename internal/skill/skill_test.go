@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestParseSkillFile tests the parseSkillFile function with various inputs
@@ -338,7 +339,7 @@ Content for ` + skillName + `
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			skills := DiscoverSkills(tt.dirs)
+			skills := DiscoverSkills(tt.dirs, true)
 
 			if len(skills) != tt.wantLen {
 				t.Errorf("DiscoverSkills() returned %d skills, want %d", len(skills), tt.wantLen)
@@ -594,5 +595,80 @@ func TestSkillDefFields(t *testing.T) {
 	}
 	if skill.Summary != "Test skill summary" {
 		t.Errorf("Summary = %q, want %q", skill.Summary, "Test skill summary")
+	}
+}
+
+// TestDiscoverSkills_IncludeDrafts verifies that the includeDrafts flag
+// controls whether the `drafts/` subdirectory is scanned.
+func TestDiscoverSkills_IncludeDrafts(t *testing.T) {
+	dir := t.TempDir()
+
+	realDir := filepath.Join(dir, "skill-real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "SKILL.md"),
+		[]byte("---\nname: real\ndescription: real\n---\n\n# Real"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	draftDir := filepath.Join(dir, "drafts", "skill-draft")
+	if err := os.MkdirAll(draftDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(draftDir, "SKILL.md"),
+		[]byte("---\nname: draft\ndescription: draft\n---\n\n# Draft"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skills := DiscoverSkills([]string{dir}, false)
+	if len(skills) != 1 {
+		t.Fatalf("includeDrafts=false: got %d skills, want 1", len(skills))
+	}
+	if skills[0].Draft {
+		t.Errorf("real skill marked as draft")
+	}
+	if skills[0].Name != "real" {
+		t.Errorf("got skill name %q, want %q", skills[0].Name, "real")
+	}
+
+	skills = DiscoverSkills([]string{dir}, true)
+	if len(skills) != 2 {
+		t.Fatalf("includeDrafts=true: got %d skills, want 2", len(skills))
+	}
+	var foundDraft bool
+	for _, s := range skills {
+		if s.Draft && s.Name == "draft" {
+			foundDraft = true
+		}
+		if !s.Draft && s.Name == "real" {
+			// Real skill should not be marked as draft.
+		}
+		if s.Name == "real" && s.Draft {
+			t.Errorf("real skill marked as draft when includeDrafts=true")
+		}
+	}
+	if !foundDraft {
+		t.Error("draft not found in includeDrafts=true result")
+	}
+}
+
+// TestParseSkillFile_CreatedAtFromFrontmatter verifies that created_at in the
+// YAML frontmatter is parsed into SkillDef.CreatedAt.
+func TestParseSkillFile_CreatedAtFromFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "SKILL.md")
+	ts := "2026-06-15T10:23:00Z"
+	content := "---\nname: test\ndescription: d\ncreated_at: " + ts + "\n---\n\n# Test"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	def := parseSkillFile(path)
+	if def == nil {
+		t.Fatal("parseSkillFile returned nil")
+	}
+	want, _ := time.Parse(time.RFC3339, ts)
+	if !def.CreatedAt.Equal(want) {
+		t.Errorf("CreatedAt = %v, want %v", def.CreatedAt, want)
 	}
 }
