@@ -832,8 +832,12 @@ func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, c
 	}
 
 	skillDirs := []string{
+		filepath.Join(session.Dir, "skills"),
 		filepath.Join(session.Dir, ".agents", "skills"),
 		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
+	}
+	for _, teamDir := range registry.TeamDirs() {
+		skillDirs = append(skillDirs, filepath.Join(teamDir, "skills"))
 	}
 	migrateLegacyDrafts(skillDirs)
 	for _, dir := range skillDirs {
