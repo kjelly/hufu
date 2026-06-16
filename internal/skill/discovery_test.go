@@ -2,6 +2,7 @@ package skill
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -170,7 +171,8 @@ func TestSkillPatternDetector_WindowSize(t *testing.T) {
 }
 
 func TestAutoSkillGenerator(t *testing.T) {
-	generator := NewAutoSkillGenerator(t.TempDir())
+	tempDir := t.TempDir()
+	generator := NewAutoSkillGenerator(tempDir)
 
 	candidate := PatternCandidate{
 		Sequence: &ToolSequence{
@@ -185,6 +187,10 @@ func TestAutoSkillGenerator(t *testing.T) {
 	path, err := generator.GenerateSkill(candidate)
 	if err != nil {
 		t.Fatalf("Failed to generate skill: %v", err)
+	}
+
+	if !strings.HasPrefix(path, filepath.Join(tempDir, "drafts")) {
+		t.Errorf("GenerateSkill path = %q, want prefix %q", path, filepath.Join(tempDir, "drafts"))
 	}
 
 	// Verify file was created
@@ -205,8 +211,12 @@ func TestAutoSkillGenerator(t *testing.T) {
 	if !strings.Contains(content, "Auto-generated") {
 		t.Error("Expected auto-generated notice")
 	}
-
-	_ = path // path is the file location
+	if !strings.Contains(content, "created_at:") {
+		t.Error("Expected created_at frontmatter field")
+	}
+	if !strings.Contains(content, "last_modified:") {
+		t.Error("Expected last_modified frontmatter field")
+	}
 }
 
 func TestSkillPatternDetector_ParameterPatternMatching(t *testing.T) {

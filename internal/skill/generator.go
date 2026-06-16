@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+	"time"
 	"unicode"
 )
 
@@ -30,7 +31,7 @@ func (g *AutoSkillGenerator) GenerateSkill(candidate PatternCandidate) (string, 
 		skillName = candidate.LLMGeneratedName
 	}
 
-	skillDir := filepath.Join(g.baseDir, skillName)
+	skillDir := filepath.Join(g.baseDir, "drafts", skillName)
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create skill directory: %w", err)
 	}
@@ -50,9 +51,12 @@ func (g *AutoSkillGenerator) buildSkillContent(candidate PatternCandidate, skill
 	var sb strings.Builder
 
 	// Frontmatter
+	now := time.Now().UTC().Format(time.RFC3339)
 	sb.WriteString("---\n")
 	sb.WriteString(fmt.Sprintf("name: %s\n", skillName))
 	sb.WriteString(fmt.Sprintf("description: %s\n", candidate.SuggestedDesc))
+	sb.WriteString(fmt.Sprintf("created_at: %s\n", now))
+	sb.WriteString(fmt.Sprintf("last_modified: %s\n", now))
 	sb.WriteString("---\n\n")
 
 	// Title
