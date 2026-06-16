@@ -51,3 +51,37 @@ func TestFindCandidates_SemanticMergeWired(t *testing.T) {
 	d := NewSkillPatternDetector(2, 2, 4)
 	_ = d.FindCandidates(context.Background())
 }
+
+func TestDedupPrefixes(t *testing.T) {
+	cands := []PatternCandidate{
+		{Sequence: &ToolSequence{Tools: []string{"view", "edit", "bash"}}},
+		{Sequence: &ToolSequence{Tools: []string{"view", "edit"}}},        // prefix
+		{Sequence: &ToolSequence{Tools: []string{"view", "edit", "grep"}}}, // not a prefix of the first
+		{Sequence: &ToolSequence{Tools: []string{"view"}}},                // prefix
+	}
+
+	got := dedupPrefixes(cands)
+	if len(got) != 2 {
+		t.Errorf("dedupPrefixes returned %d candidates, want 2", len(got))
+	}
+}
+
+func TestDedupPrefixes_NoPrefixes(t *testing.T) {
+	cands := []PatternCandidate{
+		{Sequence: &ToolSequence{Tools: []string{"view"}}},
+		{Sequence: &ToolSequence{Tools: []string{"edit"}}},
+		{Sequence: &ToolSequence{Tools: []string{"bash"}}},
+	}
+
+	got := dedupPrefixes(cands)
+	if len(got) != 3 {
+		t.Errorf("dedupPrefixes returned %d candidates, want 3 (no change)", len(got))
+	}
+}
+
+func TestDedupPrefixes_Empty(t *testing.T) {
+	got := dedupPrefixes(nil)
+	if len(got) != 0 {
+		t.Errorf("dedupPrefixes(nil) returned %d, want 0", len(got))
+	}
+}

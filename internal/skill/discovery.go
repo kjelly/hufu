@@ -415,6 +415,13 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 		candidates = d.analyzeSemanticSimilarity(ctx, d.sidecar, candidates)
 	}
 
+	// Deduplicate candidates that are strict prefixes of other candidates.
+	before := len(candidates)
+	candidates = dedupPrefixes(candidates)
+	if len(candidates) < before {
+		log.Printf("[INFO] Deduplicated %d prefix-overlapping candidates", before-len(candidates))
+	}
+
 	// Filtering statistics
 	var (
 		highQualityCandidates []PatternCandidate
@@ -715,6 +722,49 @@ func (d *SkillPatternDetector) isInSameClusterFast(descs1, descs2 []string, desc
 	}
 
 	return float64(overlap)/float64(total) >= 0.5
+}
+
+// dedupPrefixes removes candidates whose tool sequence is a strict prefix
+// of another (longer) candidate. The longer candidate is always kept.
+// When two candidates have the same length, both are kept.
+func dedupPrefixes(candidates []PatternCandidate) []PatternCandidate {
+	if len(candidates) <= 1 {
+		return candidates
+	}
+
+	sorted := make([]PatternCandidate, len(candidates))
+	copy(sorted, candidates)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return len(sorted[i].Sequence.Tools) > len(sorted[j].Sequence.Tools)
+	})
+
+	kept := make([]PatternCandidate, 0, len(sorted))
+	for _, cand := range sorted {
+		isPrefix := false
+		for _, k := range kept {
+			if isStrictPrefix(cand.Sequence.Tools, k.Sequence.Tools) {
+				isPrefix = true
+				break
+			}
+		}
+		if !isPrefix {
+			kept = append(kept, cand)
+		}
+	}
+	return kept
+}
+
+// isStrictPrefix reports whether a is a strict prefix of b.
+func isStrictPrefix(a, b []string) bool {
+	if len(a) >= len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // mergeCandidateGroup merges a group of similar candidates
