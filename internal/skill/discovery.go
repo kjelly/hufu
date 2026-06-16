@@ -94,15 +94,15 @@ type SkillPatternDetector struct {
 }
 
 // NewSkillPatternDetector creates a new pattern detector.
-// If minFrequencyArg is <= 0, the package default is used.
-func NewSkillPatternDetector(minFrequencyArg, windowMin, windowMax int) *SkillPatternDetector {
-	if minFrequencyArg <= 0 {
-		minFrequencyArg = defaultMinFrequency
+// If minFrequency is <= 0, the package default is used.
+func NewSkillPatternDetector(minFrequency, windowMin, windowMax int) *SkillPatternDetector {
+	if minFrequency <= 0 {
+		minFrequency = defaultMinFrequency
 	}
 	return &SkillPatternDetector{
 		sequences:       make(map[string]*ToolSequence),
 		sequenceByAgent: make(map[string][]string),
-		minFrequency:    minFrequencyArg,
+		minFrequency:    minFrequency,
 		windowMin:       windowMin,
 		windowMax:       windowMax,
 		sidecarEnabled:  false,
