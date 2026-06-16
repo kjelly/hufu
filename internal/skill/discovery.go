@@ -428,7 +428,6 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 		filteredByFrequency   int
 		filteredBySingleTool  int
 		filteredByQuality     int
-		evaluatedCount        int
 	)
 
 	for i := range candidates {
@@ -449,12 +448,7 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 			continue
 		}
 
-		// LLM evaluation (limit to maxSkillCandidates)
-		if evaluatedCount >= maxSkillCandidates {
-			log.Printf("[INFO] Stopped LLM evaluation: reached max %d candidates", maxSkillCandidates)
-			break
-		}
-
+		// LLM evaluation
 		paramScore, reason, elements := d.evaluateParamGeneralization(ctx, candidates[i].Sequence)
 		candidates[i].GeneralizationReason = reason
 		candidates[i].SpecificElements = elements
@@ -471,7 +465,18 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 		}
 
 		highQualityCandidates = append(highQualityCandidates, candidates[i])
-		evaluatedCount++
+	}
+
+	// Sort by quality score (descending) BEFORE the cap. This fixes the
+	// long-standing bug where the cap was applied during map iteration.
+	sort.Slice(highQualityCandidates, func(i, j int) bool {
+		return highQualityCandidates[i].QualityScore > highQualityCandidates[j].QualityScore
+	})
+
+	if len(highQualityCandidates) > maxSkillCandidates {
+		log.Printf("[INFO] Capping candidates from %d to %d (maxSkillCandidates)",
+			len(highQualityCandidates), maxSkillCandidates)
+		highQualityCandidates = highQualityCandidates[:maxSkillCandidates]
 	}
 
 	// Filtering summary
@@ -481,11 +486,6 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 	log.Printf("  Filtered by single tool: %d", filteredBySingleTool)
 	log.Printf("  Filtered by quality (<%.2f): %d", qualityThreshold, filteredByQuality)
 	log.Printf("  High-quality candidates: %d", len(highQualityCandidates))
-
-	// Sort by quality score (descending)
-	sort.Slice(highQualityCandidates, func(i, j int) bool {
-		return highQualityCandidates[i].QualityScore > highQualityCandidates[j].QualityScore
-	})
 
 	return highQualityCandidates
 }
