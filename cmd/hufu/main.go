@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -834,6 +835,7 @@ func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, c
 		filepath.Join(session.Dir, ".agents", "skills"),
 		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
 	}
+	migrateLegacyDrafts(skillDirs)
 	for _, dir := range skillDirs {
 		abs, err := filepath.Abs(dir)
 		if err == nil && !seen[abs] {
@@ -864,6 +866,37 @@ func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, c
 	}
 
 	return paths
+}
+
+// migrateLegacyDrafts moves any skills/draft-* to skills/drafts/draft-*
+// to support the new draft directory layout. Idempotent.
+func migrateLegacyDrafts(skillDirs []string) {
+	for _, dir := range skillDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "draft-") {
+				continue
+			}
+			src := filepath.Join(dir, entry.Name())
+			dst := filepath.Join(dir, "drafts", entry.Name())
+			// Skip if dst already exists
+			if _, err := os.Stat(dst); err == nil {
+				continue
+			}
+			if err := os.MkdirAll(filepath.Join(dir, "drafts"), 0o755); err != nil {
+				log.Printf("[WARN] failed to create drafts/ in %s: %v", dir, err)
+				continue
+			}
+			if err := os.Rename(src, dst); err != nil {
+				log.Printf("[WARN] failed to migrate %s -> %s: %v", src, dst, err)
+				continue
+			}
+			log.Printf("[INFO] migrated legacy draft: %s -> %s", src, dst)
+		}
+	}
 }
 
 func newPathConsent() *tools.PathConsent {
