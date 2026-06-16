@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,14 @@ import (
 )
 
 var askUserActive atomic.Int32
+
+// denialReasonStdin is the reader used by promptDenialReason. It is a
+// package-level variable so tests can inject a fake stdin.
+var denialReasonStdin = func() *bufio.Reader { return bufio.NewReader(os.Stdin) }
+
+// denialReasonStderr is the writer used by promptDenialReason. Tests may
+// redirect this to capture output.
+var denialReasonStderr = os.Stderr
 
 type auditLoggerKeyType struct{}
 
@@ -227,6 +236,49 @@ func formatDenialError(toolName, reason string) string {
 		return fmt.Sprintf("user denied permission for tool '%s'", toolName)
 	}
 	return fmt.Sprintf("user denied permission for tool '%s'. Reason: %s", toolName, cleaned)
+}
+
+// promptDenialReason reads an optional one-line free-text reason from the
+// user after they have denied a tool permission. The reason is returned to
+// the LLM as part of the tool-error result. It is optional: an empty input
+// (or a cancelled context) yields an empty string and the caller falls back
+// to the standard "user denied" error string with no Reason suffix.
+//
+// The function is safe to call in TUI mode: it invokes NotifyAskUserStart
+// to release the TUI altscreen (a no-op in CLI mode) and NotifyAskUserDone
+// to restore it. It also serializes on StdinMu so it does not race with
+// ask_user or the promptInjector.
+func promptDenialReason(ctx context.Context) string {
+	StdinMu.Lock()
+	defer StdinMu.Unlock()
+
+	SetAskUserActive(true)
+	defer SetAskUserActive(false)
+
+	// NotifyAskUserStart is called *after* the lock and active flag so
+	// that the deferred SetAskUserActive(false) → NotifyAskUserDone pair
+	// is still balanced even on early return paths.
+	NotifyAskUserStart()
+
+	// Re-check the context after acquiring StdinMu: another goroutine may
+	// have been waiting for the lock while the user (or the system)
+	// cancelled the operation.
+	if err := ctx.Err(); err != nil {
+		return ""
+	}
+
+	reader := denialReasonStdin()
+	fmt.Fprint(denialReasonStderr, "Reason (optional, enter to skip): ")
+
+	line, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return ""
+	}
+	// If the user pressed Ctrl-D (EOF) without typing, line will be "".
+	// If they typed text without a trailing newline, we still get the text.
+	// Trim trailing CR/LF.
+	line = strings.TrimRight(line, "\r\n")
+	return strings.TrimSpace(line)
 }
 
 var ciEnvVars = []string{

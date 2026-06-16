@@ -175,6 +175,7 @@ issues:
     - path: internal/tools/tools\.go
       linters:
         - gofmt
+        - errcheck
     - path: internal/tools/types\.go
       linters:
         - gofmt
