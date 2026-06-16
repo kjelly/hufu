@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -44,6 +46,34 @@ Usage:
 		RunE: runSkillList,
 	}
 
+	skillPromoteCmd = &cobra.Command{
+		Use:   "promote <draft-name>",
+		Short: "Promote a draft skill to a real skill",
+		Long: `Move a draft skill from skills/drafts/<name>/ to skills/<name>/.
+
+The "draft-" prefix is stripped from the directory name. After promotion,
+the skill becomes a regular skill available to all agents.
+
+Examples:
+  hufu skill promote draft-view-edit-bash`,
+		Args: cobra.ExactArgs(1),
+		RunE: runSkillPromote,
+	}
+
+	skillCleanCmd = &cobra.Command{
+		Use:   "clean",
+		Short: "Clean up stale or unused draft skills",
+		Long: `Remove draft skills that match the given criteria.
+
+By default, this runs in dry-run mode and prints what would be deleted.
+Use --apply to actually delete. Use --yes to skip the final confirmation.
+
+Examples:
+  hufu skill clean --older-than 30d --unused
+  hufu skill clean --older-than 7d --apply --yes`,
+		RunE: runSkillClean,
+	}
+
 	skillCmd = &cobra.Command{
 		Use:   "skill",
 		Short: "Manage auto-generated skills",
@@ -51,10 +81,24 @@ Usage:
 	}
 )
 
+var (
+	skillCleanOlderThan string
+	skillCleanUnused    bool
+	skillCleanApply     bool
+	skillCleanYes       bool
+)
+
 func init() {
 	skillCmd.AddCommand(skillReviewCmd)
 	skillCmd.AddCommand(skillListCmd)
+	skillCmd.AddCommand(skillPromoteCmd)
+	skillCmd.AddCommand(skillCleanCmd)
 	skillListCmd.Flags().BoolVar(&draftsOnly, "drafts-only", false, "Show only draft skills")
+
+	skillCleanCmd.Flags().StringVar(&skillCleanOlderThan, "older-than", "", "Delete drafts older than this duration (e.g. 30d, 24h)")
+	skillCleanCmd.Flags().BoolVar(&skillCleanUnused, "unused", false, "Only delete drafts that have never been used")
+	skillCleanCmd.Flags().BoolVar(&skillCleanApply, "apply", false, "Actually delete (default is dry-run)")
+	skillCleanCmd.Flags().BoolVar(&skillCleanYes, "yes", false, "Skip the final confirmation prompt")
 }
 
 func runSkillReview(cmd *cobra.Command, args []string) error {
@@ -102,6 +146,73 @@ func runSkillList(cmd *cobra.Command, args []string) error {
 		fmt.Println("Available skills:")
 	}
 	fmt.Println(output)
+	return nil
+}
+
+func runSkillPromote(cmd *cobra.Command, args []string) error {
+	draftName := args[0]
+	skillsDir := filepath.Join(getWorkspace(), "skills")
+
+	newPath, err := skill.PromoteDraft(skillsDir, draftName)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Promoted: %s -> %s\n", draftName, newPath)
+	return nil
+}
+
+func runSkillClean(cmd *cobra.Command, args []string) error {
+	skillsDir := filepath.Join(getWorkspace(), "skills")
+
+	var olderThan time.Duration
+	if skillCleanOlderThan != "" {
+		d, err := time.ParseDuration(skillCleanOlderThan)
+		if err != nil {
+			return fmt.Errorf("invalid --older-than: %w", err)
+		}
+		olderThan = d
+	}
+
+	result, err := skill.CleanDrafts(skillsDir, skill.CleanOpts{
+		OlderThan:  olderThan,
+		UnusedOnly: skillCleanUnused,
+		DryRun:     !skillCleanApply,
+	})
+	if err != nil {
+		return err
+	}
+
+	if len(result.Deleted) == 0 {
+		fmt.Println("No drafts match the criteria.")
+		return nil
+	}
+
+	if skillCleanApply {
+		fmt.Printf("Deleted %d drafts:\n", len(result.Deleted))
+	} else {
+		fmt.Printf("Would delete %d drafts (dry-run; use --apply to delete):\n", len(result.Deleted))
+	}
+	for _, name := range result.Deleted {
+		fmt.Printf("  - %s\n", name)
+	}
+	if !skillCleanApply && !skillCleanYes {
+		fmt.Print("\nApply? [y/N]: ")
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		if strings.ToLower(strings.TrimSpace(line)) != "y" {
+			fmt.Println("Aborted.")
+			return nil
+		}
+		result, err = skill.CleanDrafts(skillsDir, skill.CleanOpts{
+			OlderThan:  olderThan,
+			UnusedOnly: skillCleanUnused,
+			DryRun:     false,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Deleted %d drafts.\n", len(result.Deleted))
+	}
 	return nil
 }
 
