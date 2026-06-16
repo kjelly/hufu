@@ -7,7 +7,11 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/anomalyco/hufu/internal/skill"
 )
+
+var draftsOnly bool
 
 var (
 	skillReviewCmd = &cobra.Command{
@@ -50,6 +54,7 @@ Usage:
 func init() {
 	skillCmd.AddCommand(skillReviewCmd)
 	skillCmd.AddCommand(skillListCmd)
+	skillListCmd.Flags().BoolVar(&draftsOnly, "drafts-only", false, "Show only draft skills")
 }
 
 func runSkillReview(cmd *cobra.Command, args []string) error {
@@ -59,43 +64,25 @@ func runSkillReview(cmd *cobra.Command, args []string) error {
 
 	skillName := args[0]
 	workspace := getWorkspace()
-
-	// Look for skill in workspace/skills/ directory
-	skillDir := filepath.Join(workspace, "skills", skillName)
-	skillPath := filepath.Join(skillDir, "SKILL.md")
-
-	// Also check team directory
 	teamDir := filepath.Join(workspace, "..")
-	skillPathTeam := filepath.Join(teamDir, "skills", skillName, "SKILL.md")
 
-	var foundPath string
-	if _, err := os.Stat(skillPath); err == nil {
-		foundPath = skillPath
-	} else if _, err := os.Stat(skillPathTeam); err == nil {
-		foundPath = skillPathTeam
-	} else {
-		return fmt.Errorf("skill draft not found: %s\n\nAvailable drafts:\n%s",
-			skillName, listAvailableDrafts(workspace, teamDir))
+	skillDirs := buildSkillDirs(workspace, teamDir)
+	skills := skill.DiscoverSkills(skillDirs, true)
+	var found *skill.SkillDef
+	for _, s := range skills {
+		if strings.EqualFold(s.Name, skillName) {
+			found = s
+			break
+		}
+	}
+	if found == nil {
+		return fmt.Errorf("skill not found: %s", skillName)
 	}
 
-	// Read and display the skill
-	content, err := os.ReadFile(foundPath)
-	if err != nil {
-		return fmt.Errorf("failed to read skill: %w", err)
-	}
-
-	fmt.Printf("Found skill draft: %s\n\n", foundPath)
+	fmt.Printf("Found skill: %s\n\n", found.Path)
 	fmt.Println(strings.Repeat("=", 80))
-	fmt.Println(string(content))
+	fmt.Println(found.Content)
 	fmt.Println(strings.Repeat("=", 80))
-	fmt.Println()
-	fmt.Println("To edit this skill:")
-	fmt.Printf("  1. Open the file: %s\n", foundPath)
-	fmt.Println("  2. Edit the content to refine the workflow")
-	fmt.Println("  3. Save the file")
-	fmt.Println()
-	fmt.Println("The skill will be automatically available via load_skill once edited.")
-
 	return nil
 }
 
@@ -103,66 +90,51 @@ func runSkillList(cmd *cobra.Command, args []string) error {
 	workspace := getWorkspace()
 	teamDir := filepath.Join(workspace, "..")
 
-	drafts := listAvailableDrafts(workspace, teamDir)
-	if drafts == "" {
-		fmt.Println("No skill drafts found.")
+	output := listAvailableSkills(workspace, teamDir, draftsOnly)
+	if output == "" {
+		fmt.Println("No skills found.")
 		return nil
 	}
 
-	fmt.Println("Available skill drafts:")
-	fmt.Println(drafts)
+	if draftsOnly {
+		fmt.Println("Available draft skills:")
+	} else {
+		fmt.Println("Available skills:")
+	}
+	fmt.Println(output)
 	return nil
 }
 
-func listAvailableDrafts(workspace, teamDir string) string {
-	var drafts []string
-
-	// Check workspace/skills/
-	skillsDir := filepath.Join(workspace, "skills")
-	if entries, err := os.ReadDir(skillsDir); err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() && strings.HasPrefix(entry.Name(), "draft-") {
-				skillPath := filepath.Join(skillsDir, entry.Name(), "SKILL.md")
-				if _, err := os.Stat(skillPath); err == nil {
-					drafts = append(drafts, entry.Name())
-				}
-			}
-		}
-	}
-
-	// Check team/skills/
-	teamSkillsDir := filepath.Join(teamDir, "skills")
-	if entries, err := os.ReadDir(teamSkillsDir); err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() && strings.HasPrefix(entry.Name(), "draft-") {
-				skillPath := filepath.Join(teamSkillsDir, entry.Name(), "SKILL.md")
-				if _, err := os.Stat(skillPath); err == nil {
-					if !contains(drafts, entry.Name()) {
-						drafts = append(drafts, entry.Name())
-					}
-				}
-			}
-		}
-	}
-
-	if len(drafts) == 0 {
+func listAvailableSkills(workspace, teamDir string, draftsOnly bool) string {
+	skillDirs := buildSkillDirs(workspace, teamDir)
+	skills := skill.DiscoverSkills(skillDirs, true)
+	if len(skills) == 0 {
 		return ""
 	}
 
 	var sb strings.Builder
-	for _, draft := range drafts {
-		sb.WriteString(fmt.Sprintf("  - %s\n", draft))
+	for _, s := range skills {
+		if draftsOnly && !s.Draft {
+			continue
+		}
+		if !draftsOnly && s.Draft {
+			sb.WriteString(fmt.Sprintf("  [draft] %s\n", s.Name))
+		} else {
+			sb.WriteString(fmt.Sprintf("  - %s\n", s.Name))
+		}
 	}
 	return sb.String()
 }
 
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
+func buildSkillDirs(workspace, teamDir string) []string {
+	dirs := []string{
+		filepath.Join(workspace, "skills"),
+		filepath.Join(teamDir, "skills"),
 	}
-	return false
+	if abs, err := filepath.Abs(teamDir); err == nil {
+		dirs = append(dirs, filepath.Join(abs, "skills"))
+	}
+	return dirs
 }
 
 func getWorkspace() string {
