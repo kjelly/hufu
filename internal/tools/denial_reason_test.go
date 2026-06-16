@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -50,7 +51,19 @@ func TestFormatDenialError_WhitespaceBecomesEmpty(t *testing.T) {
 	}
 }
 
+func TestFormatDenialError_SkipsLeadingBlankLines(t *testing.T) {
+	// Leading blank lines must not silently drop the user's reason.
+	got := formatDenialError("bash", "\n\n  actual reason\nmore")
+	want := "user denied permission for tool 'bash'. Reason: actual reason"
+	if got != want {
+		t.Errorf("formatDenialError with leading blanks = %q, want %q", got, want)
+	}
+}
+
 // withDenialReasonStdin replaces denialReasonStdin for the duration of the test.
+//
+// NOT parallel-safe: it mutates a package global without synchronization.
+// Tests using this helper must not call t.Parallel().
 func withDenialReasonStdin(t *testing.T, input string, fn func()) {
 	t.Helper()
 	orig := denialReasonStdin
@@ -61,23 +74,26 @@ func withDenialReasonStdin(t *testing.T, input string, fn func()) {
 	fn()
 }
 
-func TestPromptDenialReason_EmptyInput(t *testing.T) {
-	withDenialReasonStdin(t, "\n", func() {
-		got := promptDenialReason(context.Background())
-		if got != "" {
-			t.Errorf("promptDenialReason with empty input = %q, want \"\"", got)
-		}
-	})
-}
-
-func TestPromptDenialReason_EOFInput(t *testing.T) {
-	// Reader returns io.EOF immediately (no newline, empty string).
-	withDenialReasonStdin(t, "", func() {
-		got := promptDenialReason(context.Background())
-		if got != "" {
-			t.Errorf("promptDenialReason with EOF input = %q, want \"\"", got)
-		}
-	})
+func TestPromptDenialReason_EmptyAndEOF(t *testing.T) {
+	// Both "\n" (Enter on empty line) and "" (immediate Ctrl-D / EOF)
+	// are documented as yielding an empty reason string.
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{name: "EmptyInput", input: "\n"},
+		{name: "EOFInput", input: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withDenialReasonStdin(t, tc.input, func() {
+				got := promptDenialReason(context.Background())
+				if got != "" {
+					t.Errorf("promptDenialReason with %s = %q, want \"\"", tc.name, got)
+				}
+			})
+		})
+	}
 }
 
 func TestPromptDenialReason_WithReason(t *testing.T) {
@@ -114,9 +130,23 @@ func TestPromptDenialReason_CancelledContext(t *testing.T) {
 func TestPromptDenialReason_InvokesStartDoneHooks(t *testing.T) {
 	var startCount, doneCount int32
 
+	// Record the call order so we can assert Start is invoked before Done.
+	var (
+		orderMu sync.Mutex
+		order   []string
+	)
+	record := func(label string, counter *int32) func() {
+		return func() {
+			atomic.AddInt32(counter, 1)
+			orderMu.Lock()
+			order = append(order, label)
+			orderMu.Unlock()
+		}
+	}
+
 	origStart, origDone := onAskUserStart, onAskUserDone
-	SetOnAskUserStart(func() { atomic.AddInt32(&startCount, 1) })
-	SetOnAskUserDone(func() { atomic.AddInt32(&doneCount, 1) })
+	SetOnAskUserStart(record("start", &startCount))
+	SetOnAskUserDone(record("done", &doneCount))
 	t.Cleanup(func() {
 		SetOnAskUserStart(origStart)
 		SetOnAskUserDone(origDone)
@@ -126,11 +156,34 @@ func TestPromptDenialReason_InvokesStartDoneHooks(t *testing.T) {
 		_ = promptDenialReason(context.Background())
 	})
 
-	if atomic.LoadInt32(&startCount) != 1 {
-		t.Errorf("NotifyAskUserStart called %d times, want 1", startCount)
+	if got := atomic.LoadInt32(&startCount); got != 1 {
+		t.Errorf("NotifyAskUserStart called %d times, want 1", got)
 	}
-	if atomic.LoadInt32(&doneCount) != 1 {
-		t.Errorf("NotifyAskUserDone called %d times, want 1", doneCount)
+	if got := atomic.LoadInt32(&doneCount); got != 1 {
+		t.Errorf("NotifyAskUserDone called %d times, want 1", got)
+	}
+
+	// Verify ordering: Start must be recorded before Done.
+	orderMu.Lock()
+	defer orderMu.Unlock()
+	var startIdx, doneIdx int = -1, -1
+	for i, label := range order {
+		switch label {
+		case "start":
+			if startIdx == -1 {
+				startIdx = i
+			}
+		case "done":
+			if doneIdx == -1 {
+				doneIdx = i
+			}
+		}
+	}
+	if startIdx == -1 || doneIdx == -1 {
+		t.Fatalf("expected both start and done to be recorded, got %v", order)
+	}
+	if startIdx >= doneIdx {
+		t.Errorf("expected Start to be invoked before Done, got order %v", order)
 	}
 }
 
@@ -146,14 +199,16 @@ func TestPromptDenialReason_WritesPromptToStderr(t *testing.T) {
 
 	withDenialReasonStdin(t, "ok\n", func() {
 		_ = promptDenialReason(context.Background())
-		// Close the writer so the read side sees EOF.
-		if err := w.Close(); err != nil {
-			t.Fatalf("close pipe writer: %v", err)
-		}
-		buf, _ := io.ReadAll(r)
-		got := string(buf)
-		if !strings.Contains(got, "Reason (optional, enter to skip):") {
-			t.Errorf("expected prompt to contain 'Reason (optional, enter to skip):', got %q", got)
-		}
 	})
+	// Close the writer *after* the prompt has been written so the read
+	// side sees EOF. Doing this outside the helper callback also makes
+	// the test robust if the callback panics.
+	if err := w.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	buf, _ := io.ReadAll(r)
+	got := string(buf)
+	if !strings.Contains(got, "Reason (optional, enter to skip):") {
+		t.Errorf("expected prompt to contain 'Reason (optional, enter to skip):', got %q", got)
+	}
 }

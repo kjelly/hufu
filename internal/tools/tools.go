@@ -27,7 +27,9 @@ var askUserActive atomic.Int32
 var denialReasonStdin = func() *bufio.Reader { return bufio.NewReader(os.Stdin) }
 
 // denialReasonStderr is the writer used by promptDenialReason. Tests may
-// redirect this to capture output.
+// redirect this to capture output. Must be an unbuffered writer (os.Stderr
+// or os.Pipe); a bufio.Writer would defeat capture-by-redirection since
+// the buffered bytes would not be flushed before the test reads the pipe.
 var denialReasonStderr = os.Stderr
 
 type auditLoggerKeyType struct{}
@@ -227,15 +229,16 @@ func formatDenialError(toolName, reason string) string {
 	if cleaned == "" {
 		return fmt.Sprintf("user denied permission for tool '%s'", toolName)
 	}
-	// Take the first non-empty line.
-	if idx := strings.IndexAny(cleaned, "\r\n"); idx >= 0 {
-		cleaned = cleaned[:idx]
-		cleaned = strings.TrimSpace(cleaned)
+	// Take the first non-empty line (skip leading blank lines so that
+	// padding or stray newlines from the user don't silently drop their
+	// intent). Each line is also stripped of a trailing CR for Windows
+	// line endings.
+	for _, line := range strings.Split(cleaned, "\n") {
+		if trimmed := strings.TrimSpace(strings.TrimRight(line, "\r")); trimmed != "" {
+			return fmt.Sprintf("user denied permission for tool '%s'. Reason: %s", toolName, trimmed)
+		}
 	}
-	if cleaned == "" {
-		return fmt.Sprintf("user denied permission for tool '%s'", toolName)
-	}
-	return fmt.Sprintf("user denied permission for tool '%s'. Reason: %s", toolName, cleaned)
+	return fmt.Sprintf("user denied permission for tool '%s'", toolName)
 }
 
 // promptDenialReason reads an optional one-line free-text reason from the
