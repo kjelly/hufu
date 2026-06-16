@@ -507,7 +507,8 @@ func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 			}
 
 			if !allowed {
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("user denied permission for tool '%s'", t.info.Name)), nil
+				reason := promptDenialReason(ctx)
+				return fantasy.NewTextErrorResponse(formatDenialError(t.info.Name, reason)), nil
 			}
 		} else {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("tool '%s' is not permitted. Add '%s' to tools.allowed in team.yaml to enable.", t.info.Name, t.info.Name)), nil
