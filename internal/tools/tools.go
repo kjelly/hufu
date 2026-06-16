@@ -207,6 +207,28 @@ func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, erro
 	return true, false, nil
 }
 
+// formatDenialError builds the error string returned to the LLM when the
+// user denies a tool permission. When reason is empty, the result is
+// byte-identical to the pre-feature format so existing agents see no change.
+// When reason is non-empty, it is trimmed of surrounding whitespace, its
+// first non-empty line is used, and the result is appended to the standard
+// denial prefix.
+func formatDenialError(toolName, reason string) string {
+	cleaned := strings.TrimSpace(reason)
+	if cleaned == "" {
+		return fmt.Sprintf("user denied permission for tool '%s'", toolName)
+	}
+	// Take the first non-empty line.
+	if idx := strings.IndexAny(cleaned, "\r\n"); idx >= 0 {
+		cleaned = cleaned[:idx]
+		cleaned = strings.TrimSpace(cleaned)
+	}
+	if cleaned == "" {
+		return fmt.Sprintf("user denied permission for tool '%s'", toolName)
+	}
+	return fmt.Sprintf("user denied permission for tool '%s'. Reason: %s", toolName, cleaned)
+}
+
 var ciEnvVars = []string{
 	"CI",
 	"CI_SERVER",
