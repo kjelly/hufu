@@ -372,12 +372,6 @@ func (d *SkillPatternDetector) calculateQualityScore(candidate PatternCandidate,
 
 // FindCandidates returns high-quality patterns that repeat at least minFrequency times
 func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCandidate {
-	// Check sidecar availability - skip if unavailable (no fallback)
-	if !d.sidecarEnabled || d.sidecar == nil {
-		log.Printf("[INFO] Skill generation skipped: sidecar unavailable")
-		return nil
-	}
-
 	d.mu.RLock()
 	var candidates []PatternCandidate
 
@@ -407,6 +401,12 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 
 	if len(candidates) == 0 {
 		return nil
+	}
+
+	// Semantic merge: collapse candidates whose task descriptions cluster
+	// together. This is a no-op if the sidecar is unavailable.
+	if d.sidecarEnabled && d.sidecar != nil {
+		candidates = d.analyzeSemanticSimilarity(ctx, d.sidecar, candidates)
 	}
 
 	// Filtering statistics
@@ -449,8 +449,9 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 		// Quality score calculation
 		candidates[i].QualityScore = d.calculateQualityScore(candidates[i], paramScore)
 
-		// Quality filter
-		if candidates[i].QualityScore < qualityThreshold {
+		// Quality filter (skipped when no sidecar: paramScore is 0 by
+		// default, which makes the score uninformative)
+		if d.sidecar != nil && candidates[i].QualityScore < qualityThreshold {
 			filteredByQuality++
 			log.Printf("[INFO] Filtered candidate (quality %.2f < %.2f): %s - %s",
 				candidates[i].QualityScore, qualityThreshold, candidates[i].SuggestedName, reason)
