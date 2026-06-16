@@ -91,6 +91,13 @@ type agentResult struct {
 
 const maxConcurrentModels = 3
 
+// maxDraftsPerSession caps the number of skill draft candidates that
+// checkSkillPatterns will surface per session. It is the last line of
+// defense after upstream frequency, semantic, and prefix filters; even
+// if all upstream filters let too many through, the user sees at most
+// this many drafts in a session.
+const maxDraftsPerSession = 3
+
 type DryRunAgentInfo struct {
 	Name   string
 	Role   string
@@ -518,6 +525,7 @@ type Coordinator struct {
 	skillDetector         *skill.SkillPatternDetector
 	skillGenerator        *skill.AutoSkillGenerator
 	skillPatternsDetected int // count of patterns detected in current session
+	maxDrafts             int // per-session cap on skill draft candidates (0 disables)
 
 	// stepConfirmFn must be set before Run() or protected by stepConfirmFnMu.
 	stepConfirmFn   func(context.Context, []TaskDef) (bool, error)
@@ -666,6 +674,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		skillDetector:          skill.NewSkillPatternDetector(5, 3, 10), // minFrequency=5, windowMin=3, windowMax=10
 		skillGenerator:         skill.NewAutoSkillGenerator(filepath.Join(session.Dir, "skills")),
 		skillPatternsDetected:  0,
+		maxDrafts:              maxDraftsPerSession,
 	}
 
 	// Enable sidecar for skill pattern detection
@@ -3301,6 +3310,11 @@ func (c *Coordinator) checkSkillPatterns() {
 	candidates := c.skillDetector.FindCandidates(context.Background())
 	if len(candidates) == 0 {
 		return
+	}
+
+	// Apply per-session draft cap.
+	if c.maxDrafts > 0 && len(candidates) > c.maxDrafts {
+		candidates = candidates[:c.maxDrafts]
 	}
 
 	// Only report new patterns (more than previously detected)
