@@ -3875,6 +3875,8 @@ func (c *Coordinator) checkSkillPatternsAndSave() []string {
 // displaySkillPreviewMultiSelect shows the candidate list and asks the user
 // to pick which drafts to generate. Returns the filtered list.
 // Returns nil if the user declines all (empty input, "n", or invalid).
+// Uses the TUI ask_user infrastructure when available (so it works in
+// Bubble Tea mode); falls back to a stderr prompt + stdin read otherwise.
 func (c *Coordinator) displaySkillPreviewMultiSelect(candidates []skill.PatternCandidate) []skill.PatternCandidate {
 	var msg strings.Builder
 	msg.WriteString("\n─── SKILL GENERATION PREVIEW ───\n")
@@ -3893,11 +3895,17 @@ func (c *Coordinator) displaySkillPreviewMultiSelect(candidates []skill.PatternC
 	msg.WriteString("Keep which drafts? Type numbers (e.g. \"1,3\"), \"a\" for all, \"n\" for none.\n")
 	msg.WriteString("Default: n. ")
 
-	fmt.Fprint(os.Stderr, msg.String())
-
-	reader := bufio.NewReader(os.Stdin)
-	line, _ := reader.ReadString('\n')
-	response := strings.TrimSpace(strings.ToLower(line))
+	// Try the TUI path first. It is a no-op when no TUI callback is registered
+	// (i.e. plain CLI mode) and returns ok=false; we then fall back to stdin.
+	response, handled := tools.TryAskUserTUI(context.Background(), msg.String(), "free_text", nil, true)
+	if !handled {
+		fmt.Fprint(os.Stderr, msg.String())
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		response = strings.TrimSpace(strings.ToLower(line))
+	} else {
+		response = strings.TrimSpace(strings.ToLower(response))
+	}
 
 	if response == "" || response == "n" {
 		return nil
@@ -3907,6 +3915,7 @@ func (c *Coordinator) displaySkillPreviewMultiSelect(candidates []skill.PatternC
 	}
 
 	parts := strings.Split(response, ",")
+	seen := map[int]bool{}
 	var selected []skill.PatternCandidate
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
@@ -3915,6 +3924,10 @@ func (c *Coordinator) displaySkillPreviewMultiSelect(candidates []skill.PatternC
 			log.Printf("[WARN] invalid selection %q, ignoring", p)
 			continue
 		}
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
 		selected = append(selected, candidates[n-1])
 	}
 	return selected
