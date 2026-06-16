@@ -849,3 +849,17 @@ func TestBuildParamGeneralizationPrompt(t *testing.T) {
 		t.Error("Expected threshold instruction")
 	}
 }
+
+func TestSkillPatternDetector_MinFrequencyFromConstructor(t *testing.T) {
+	d := NewSkillPatternDetector(3, 3, 5)
+	if d.minFrequency != 3 {
+		t.Errorf("d.minFrequency = %d, want 3 (from constructor)", d.minFrequency)
+	}
+}
+
+func TestSkillPatternDetector_MinFrequencyDefault(t *testing.T) {
+	d := NewSkillPatternDetector(0, 3, 5)
+	if d.minFrequency != defaultMinFrequency {
+		t.Errorf("d.minFrequency = %d, want %d (default)", d.minFrequency, defaultMinFrequency)
+	}
+}

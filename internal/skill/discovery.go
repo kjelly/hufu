@@ -21,10 +21,10 @@ const maxSequencesPerAgent = 500
 
 // Skill generation quality control
 const (
-	minFrequency       = 10
-	maxSkillCandidates = 5
-	qualityThreshold   = 0.7
-	llmTimeout         = 60 * time.Second
+	defaultMinFrequency = 10
+	maxSkillCandidates  = 5
+	qualityThreshold    = 0.7
+	llmTimeout          = 60 * time.Second
 )
 
 // GeneralizationScore represents LLM evaluation result
@@ -93,12 +93,16 @@ type SkillPatternDetector struct {
 	cacheMu         sync.RWMutex
 }
 
-// NewSkillPatternDetector creates a new pattern detector
-func NewSkillPatternDetector(minFrequency, windowMin, windowMax int) *SkillPatternDetector {
+// NewSkillPatternDetector creates a new pattern detector.
+// If minFrequencyArg is <= 0, the package default is used.
+func NewSkillPatternDetector(minFrequencyArg, windowMin, windowMax int) *SkillPatternDetector {
+	if minFrequencyArg <= 0 {
+		minFrequencyArg = defaultMinFrequency
+	}
 	return &SkillPatternDetector{
 		sequences:       make(map[string]*ToolSequence),
 		sequenceByAgent: make(map[string][]string),
-		minFrequency:    minFrequency,
+		minFrequency:    minFrequencyArg,
 		windowMin:       windowMin,
 		windowMax:       windowMax,
 		sidecarEnabled:  false,
@@ -378,7 +382,7 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 	var candidates []PatternCandidate
 
 	for _, seq := range d.sequences {
-		if seq.Count >= minFrequency {
+		if seq.Count >= d.minFrequency {
 			// Deep copy ToolSequence to prevent data race after RUnlock
 			copiedSeq := &ToolSequence{
 				Tools:     append([]string{}, seq.Tools...),
@@ -416,10 +420,10 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 
 	for i := range candidates {
 		// Frequency filter (already filtered by loop condition, but count for stats)
-		if candidates[i].Sequence.Count < minFrequency {
+		if candidates[i].Sequence.Count < d.minFrequency {
 			filteredByFrequency++
 			log.Printf("[INFO] Filtered candidate (frequency %d < %d): %v",
-				candidates[i].Sequence.Count, minFrequency, candidates[i].Sequence.Tools)
+				candidates[i].Sequence.Count, d.minFrequency, candidates[i].Sequence.Tools)
 			continue
 		}
 
@@ -460,7 +464,7 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 	// Filtering summary
 	log.Printf("[INFO] Skill pattern filtering summary:")
 	log.Printf("  Total candidates: %d", len(candidates))
-	log.Printf("  Filtered by frequency (<%d): %d", minFrequency, filteredByFrequency)
+	log.Printf("  Filtered by frequency (<%d): %d", d.minFrequency, filteredByFrequency)
 	log.Printf("  Filtered by single tool: %d", filteredBySingleTool)
 	log.Printf("  Filtered by quality (<%.2f): %d", qualityThreshold, filteredByQuality)
 	log.Printf("  High-quality candidates: %d", len(highQualityCandidates))
