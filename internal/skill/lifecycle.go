@@ -135,7 +135,8 @@ func CleanDrafts(skillsDir string, opts CleanOpts) (CleanResult, error) {
 
 	var usage map[string]UsageStats
 	if opts.UnusedOnly {
-		usage, _ = LoadUsageStats(skillsDir)
+		workspaceDir := filepath.Dir(skillsDir)
+		usage, _ = LoadUsageStats(workspaceDir)
 		if usage == nil {
 			usage = make(map[string]UsageStats)
 		}

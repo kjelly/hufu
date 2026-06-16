@@ -165,9 +165,10 @@ func TestCleanDrafts_Apply(t *testing.T) {
 }
 
 func TestCleanDrafts_UnusedOnly(t *testing.T) {
-	dir := t.TempDir()
+	workspace := t.TempDir()
+	skillsDir := filepath.Join(workspace, "skills")
 	for _, name := range []string{"unused", "used"} {
-		d := filepath.Join(dir, "drafts", name)
+		d := filepath.Join(skillsDir, "drafts", name)
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -177,11 +178,11 @@ func TestCleanDrafts_UnusedOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	writeUsageStats(t, dir, map[string]UsageStats{
+	writeUsageStats(t, workspace, map[string]UsageStats{
 		"used": {Name: "used", UsedCount: 1},
 	})
 
-	result, err := CleanDrafts(dir, CleanOpts{OlderThan: 24 * time.Hour, UnusedOnly: true, DryRun: true})
+	result, err := CleanDrafts(skillsDir, CleanOpts{OlderThan: 24 * time.Hour, UnusedOnly: true, DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
