@@ -782,6 +782,12 @@ func (c *Coordinator) recordSkillUsage(name, agentName string) {
 		entry.Agents[agentName] = true
 	}()
 	c.report(c.newEvent("skill_used").withSkillName(name).withAgent(agentName))
+
+	if c.session != nil && c.session.Workspace != "" {
+		if err := skill.RecordUsage(c.session.Workspace, name, agentName); err != nil {
+			log.Printf("[WARN] failed to persist skill usage: %v", err)
+		}
+	}
 }
 
 func (c *Coordinator) SkillUsage() []SkillUsageEntry {
