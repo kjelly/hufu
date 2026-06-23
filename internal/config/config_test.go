@@ -24,6 +24,40 @@ func TestLoadConfig(t *testing.T) {
 }
 
 // TestLoadConfigWithProviderURL tests LoadConfig with provider-url set
+func TestLoadConfigProfiles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate from a real ~/.config/hufu
+	tmpDir := t.TempDir()
+	configContent := `profiles:
+  batch:
+    unattended: "true"
+    max-duration: "600"
+  safe:
+    no-net: "true"
+`
+	if err := os.WriteFile(filepath.Join(tmpDir, "hufu.yaml"), []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+	originalDir, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(originalDir) }()
+
+	cfg := LoadConfig()
+	if len(cfg.Profiles) != 2 {
+		t.Fatalf("expected 2 profiles, got %d (%v)", len(cfg.Profiles), cfg.Profiles)
+	}
+	if cfg.Profiles["batch"]["unattended"] != "true" {
+		t.Errorf("batch.unattended = %q, want true", cfg.Profiles["batch"]["unattended"])
+	}
+	if cfg.Profiles["batch"]["max-duration"] != "600" {
+		t.Errorf("batch.max-duration = %q, want 600", cfg.Profiles["batch"]["max-duration"])
+	}
+	if cfg.Profiles["safe"]["no-net"] != "true" {
+		t.Errorf("safe.no-net = %q, want true", cfg.Profiles["safe"]["no-net"])
+	}
+}
+
 func TestLoadConfigWithProviderURL(t *testing.T) {
 	// Create a temporary directory for testing
 	tmpDir := t.TempDir()

@@ -1,0 +1,234 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"strings"
+
+	ergoreadline "github.com/ergochat/readline"
+	"github.com/spf13/cobra"
+
+	"github.com/anomalyco/hufu/internal/config"
+	"github.com/anomalyco/hufu/internal/readline"
+	"github.com/anomalyco/hufu/internal/team"
+)
+
+var replCmd = &cobra.Command{
+	Use:     "chat",
+	Aliases: []string{"repl"},
+	Short:   "Interactive REPL that keeps one team loaded across prompts",
+	Long: `Start an interactive session with a single team. The team, its MCP servers
+and memory are loaded once and reused for every prompt, so iterating is fast and
+the coordinator keeps full conversation context between turns.
+
+Pick the team with --agent-team, --default, or interactively. Commands inside the
+REPL: /exit (or /quit) to leave, /reset to clear conversation context.
+
+Examples:
+  hufu chat --agent-team dev-team
+  hufu chat --default --helper-tools bash`,
+	RunE: runChat,
+}
+
+func init() {
+	// Bind the subset of root flags that make sense for an interactive chat
+	// session to the same global vars the root command uses.
+	f := replCmd.Flags()
+	f.StringVar(&agentTeamName, "agent-team", "", "Agent team name to chat with")
+	f.StringVar(&agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams")
+	f.BoolVar(&defaultTeam, "default", false, "Use the built-in default team (coordinator + Helper)")
+	f.StringVar(&helperTools, "helper-tools", "", "Extra tools for the default Helper (e.g. bash,sudo)")
+	f.StringVar(&providerURL, "provider-url", "", "Provider API base URL")
+	f.StringVar(&providerAPIKey, "provider-api-key", "", "Provider API key")
+	f.StringVar(&modelOverride, "model", "", "Override default model (e.g. ollama/qwen3:8b)")
+	f.StringVarP(&workspace, "workspace", "w", "", "Workspace directory")
+	f.BoolVarP(&newSession, "new", "n", false, "Archive old session and start fresh")
+	f.BoolVarP(&verbose, "verbose", "v", false, "Show full agent text output in real-time")
+	f.BoolVar(&memoryEnabled, "memory", false, "Enable long-term memory (RAG with vector search)")
+	f.StringArrayVar(&forcedSkills, "skill", nil, "Force-load specific skills (repeatable)")
+	f.StringArrayVar(&varFlags, "var", nil, "Set template variable key=value (repeatable)")
+	f.StringArrayVar(&varFiles, "var-file", nil, "Read template variables from a file (repeatable)")
+	f.BoolVar(&planMode, "plan", false, "Force plan-first mode")
+	f.BoolVar(&autoSkills, "auto-skills", false, "Enable automatic skill detection")
+	f.BoolVar(&think, "think", false, "Show coordinator decision reasoning")
+	f.Int64Var(&timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds")
+}
+
+func runChat(cmd *cobra.Command, args []string) error {
+	if err := applyProfile(cmd); err != nil {
+		return err
+	}
+	if defaultTeam && agentTeamName != "" {
+		return fmt.Errorf("cannot use --default with --agent-team; pick one")
+	}
+
+	pr, err := readline.NewPromptReader(defaultHistoryPath())
+	if err != nil {
+		pr = nil
+	}
+	globalPromptReader.Store(pr)
+	defer func() {
+		if pr != nil {
+			_ = pr.Close()
+		}
+	}()
+
+	vars, err := buildVars()
+	if err != nil {
+		return err
+	}
+
+	pathConsent := newPathConsent()
+	rootCtx := context.Background()
+
+	// Resolve which team to load.
+	var tc *teamContext
+	var teamName string
+	if defaultTeam {
+		teamName = "default"
+		tc, err = loadDefaultTeam(rootCtx, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
+	} else {
+		var registry *team.TeamRegistry
+		teamName, registry, err = pickChatTeam(pr)
+		if err != nil {
+			return err
+		}
+		tc, err = loadTeamByName(rootCtx, teamName, registry, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to load team %q: %w", teamName, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "\n%s Chatting with team %s. Type %s to leave, %s to clear context.\n\n",
+		boldStyle.Render("💬"), teamStyle.Render(teamName),
+		dimStyle.Render("/exit"), dimStyle.Render("/reset"))
+
+	turn := 0
+	for {
+		line, err := readChatLine(pr)
+		if err != nil {
+			if err == io.EOF || err == ergoreadline.ErrInterrupt {
+				fmt.Fprintln(os.Stderr)
+				return nil
+			}
+			return err
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		switch strings.ToLower(line) {
+		case "/exit", "/quit", ":q", "exit", "quit":
+			return nil
+		case "/reset":
+			tc.coordinator.ResetConversation()
+			turn = 0
+			fmt.Fprintf(os.Stderr, "%s Conversation context cleared.\n\n", dimStyle.Render("·"))
+			continue
+		}
+
+		// Each turn is independently cancellable with Ctrl+C; cancelling a turn
+		// returns to the prompt rather than exiting the REPL.
+		turnCtx, cancel := signal.NotifyContext(rootCtx, os.Interrupt)
+		disp := newCoordDisplay(tc)
+		var result string
+		if turn == 0 {
+			result, err = tc.coordinator.Run(turnCtx, line)
+		} else {
+			result, err = tc.coordinator.ContinueWithPrompt(turnCtx, line)
+		}
+		disp.stopTimer()
+		cancel()
+
+		if err != nil {
+			if turnCtx.Err() == context.Canceled {
+				fmt.Fprintf(os.Stderr, "\n%s Turn cancelled.\n\n", errStyle.Render("⚠"))
+				// A cancelled first turn still established history inside the
+				// coordinator; treat subsequent turns as continuations.
+				turn++
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "\n%s %v\n\n", errStyle.Render("✗"), err)
+			continue
+		}
+
+		disp.finalizeTasks()
+		fmt.Println(result)
+		fmt.Fprintln(os.Stderr)
+		turn++
+
+		// Persist after every turn so the session survives a crash mid-chat.
+		_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
+		_ = team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
+	}
+}
+
+// pickChatTeam discovers teams and resolves which one to chat with, from the
+// --agent-team flag or an interactive menu.
+func pickChatTeam(pr *readline.PromptReader) (string, *team.TeamRegistry, error) {
+	searchPaths := resolveSearchPaths()
+	registry := team.NewTeamRegistry(searchPaths)
+	if err := registry.Discover(); err != nil {
+		return "", nil, fmt.Errorf("failed to discover teams: %w", err)
+	}
+	if registry.TeamCount() == 0 {
+		return "", nil, fmt.Errorf("no teams found in %s — use --default or run `hufu init <team>`", strings.Join(searchPaths, ", "))
+	}
+
+	if agentTeamName != "" {
+		name := strings.ToLower(agentTeamName)
+		if !registry.HasTeam(name) {
+			return "", nil, fmt.Errorf("team %q not found. Available: %s", agentTeamName, strings.Join(registry.ListTeams(), ", "))
+		}
+		return name, registry, nil
+	}
+
+	teams := registry.ListTeams()
+	if len(teams) == 1 {
+		return teams[0], registry, nil
+	}
+
+	var chosen string
+	var err error
+	if pr != nil {
+		chosen, err = askUserForTeam(teams, pr)
+	} else {
+		chosen = askUserForTeamFallback(teams)
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	if chosen == "" {
+		return "", nil, fmt.Errorf("no team selected")
+	}
+	return strings.ToLower(chosen), registry, nil
+}
+
+func readChatLine(pr *readline.PromptReader) (string, error) {
+	if pr != nil {
+		return pr.ReadLine(boldStyle.Render("hufu> "))
+	}
+	fmt.Fprint(os.Stderr, boldStyle.Render("hufu> "))
+	var line string
+	if _, err := fmt.Scanln(&line); err != nil {
+		return "", io.EOF
+	}
+	return line, nil
+}
+
+// buildVars resolves template variables the same way the root command does:
+// --var-file + --var, merged on top of hufu.yaml vars.
+func buildVars() (map[string]string, error) {
+	vars, err := team.ResolveVars(varFiles, varFlags)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve template variables: %w", err)
+	}
+	cfgVars := config.LoadConfig().GetVars()
+	if len(cfgVars) > 0 || len(vars) > 0 {
+		vars = team.MergeVars(cfgVars, vars)
+	}
+	return vars, nil
+}

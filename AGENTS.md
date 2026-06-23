@@ -145,6 +145,38 @@ Results joined and printed to stdout
 | `--unattended` | — | `false` | No-human mode: `ask_user` returns safe defaults instead of blocking on stdin, `--steps`/`--tui` are auto-disabled, and only allowlisted tools may run (deny-by-default even without a TTY) |
 | `--max-duration` | — | `0` | Budget: max total wall-clock seconds before forcing wrap-up (`0` = unlimited) |
 | `--max-total-tokens` | — | `0` | Budget: max cumulative LLM tokens before forcing wrap-up (`0` = unlimited) |
+| `--auto-team` | — | `false` | Auto-select the team best suited to the prompt (sidecar LLM match, keyword fallback) when no team is named, instead of showing the picker |
+| `--profile` | — | `""` | Apply a named flag bundle from `hufu.yaml` `profiles:` (persistent; also works on subcommands). Explicit CLI flags still override |
+| `--quiet` | `-q` | `false` | Suppress status output; print only the final result to stdout |
+| `--output` | — | `""` (text) | Final-result format: `text` (default) or `json`. `json` implies `--quiet` so stdout carries only the JSON document |
+
+### Subcommands
+
+In addition to `hufu [prompt]`, the CLI exposes helper subcommands so users can get going without hand-writing configs:
+
+| Command | Purpose |
+|---------|---------|
+| `hufu doctor` | Preflight: checks provider reachability + model list, resolved default/sidecar/guard models (warns when a model is not in the provider's list), workspace writability, and team discovery. Exits non-zero if any hard check fails. The fastest way to diagnose "the agent did nothing". |
+| `hufu list [team]` | Lists discoverable teams and, per team, each agent's role, model, tools and skills. Reads `.md` frontmatter directly (no workspace side effects). Aliases: `ls`, `teams`. |
+| `hufu init <team> [--template default] [--model …]` | Scaffolds `.agent-teams/<team>/team.yaml` + `helper.md` so a team is runnable immediately. Never overwrites existing files. |
+| `hufu chat [--agent-team … \| --default]` | Interactive REPL: loads one team **once** and reuses it across turns. First turn calls `Run`, later turns call `ContinueWithPrompt` (preserving conversation history); `/reset` calls `Coordinator.ResetConversation()`, `/exit` leaves. Each turn is independently Ctrl+C-cancellable without exiting the REPL. Alias: `repl` (the cobra var is `replCmd`). |
+
+### Profiles
+
+`hufu.yaml` may define named flag bundles under `profiles:`, each a map of flag-name → string value the flag parses itself:
+
+```yaml
+profiles:
+  batch:
+    unattended: "true"
+    max-duration: "600"
+    max-total-tokens: "100000"
+  safe:
+    no-net: "true"
+    rbash: "true"
+```
+
+`--profile batch` applies the bundle via `applyProfile` (`cmd/hufu/main.go`). Precedence is **explicit CLI flag > profile > default**, achieved by skipping any flag with `flag.Changed == true`. An unknown profile name or a profile that names a flag the command does not define is a hard error (typos surface early). Profiles merge across `~/.config/hufu/hufu.yaml` and `./hufu.yaml` by profile name (later wins). `config.Config.Profiles` is `map[string]map[string]string`.
 
 ### Unattended Operation
 
@@ -985,6 +1017,16 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 55. **`runAgentWithStatusAndHistory` token aggregation is nil-safe** — `ag.Stream` returns `(*AgentResult, error)` and yields a `nil` result on error; `addStepTokens` is only called when `result != nil` (guarding both the success and error paths) so a failed/aborted stream — including a loop-detection abort — never nil-derefs.
 
 56. **Tool-loop abort** — `runAgentWithStatusAndHistory` tracks the last tool call and a `consecutiveErrCount`; if the same `(toolName,input)` is invoked again after ≥2 consecutive failing results, `OnToolCall` returns an error ("stuck in a loop executing the same failing command") that aborts the stream. Prevents an agent from burning steps re-running an identical failing command.
+
+57. **Profiles are applied via `flag.Set`, not custom parsing** — `applyProfile` (`cmd/hufu/main.go`) stores each profile value as a string and calls `cmd.Flags().Set(name, val)`, so pflag does the type conversion. It resolves a flag against the current command's flag set first, then the root's (so a profile applied while a subcommand runs can still set root-bound globals). It skips any flag with `flag.Changed == true` so explicit CLI flags always win, and errors on an unknown profile name or unknown flag. **`config.mergeFromFile` must copy `Profiles`** — it is merged by profile name, like `Providers`; forgetting this is why a profile in `hufu.yaml` would silently "not be found".
+
+58. **`--output json` implies `--quiet`** — set in `runTeam` right after `applyProfile`. `stderrLog` early-returns when `quietMode || outputFormat=="json"`, so stdout carries only the JSON document (via `printResultJSON`) or the bare result text. JSON includes per-team `tokens` (`Coordinator.TokensUsed()`) and `tasks` (`Coordinator.TaskTracker().TodoList().Items()`), plus skill usage.
+
+59. **`hufu chat` registers its own flag subset** — the root run flags (`--model`, `--agent-team`, `--var`, …) are local to `rootCmd`, so `replCmd` re-binds the useful subset to the *same global vars* in an `init()` in `chat.go`. Binding one global to multiple cobra flag sets is fine because only one command runs per invocation. `hufu init` similarly re-binds `--model`.
+
+60. **`hufu list` reads frontmatter directly, not via `LoadTeam`** — `LoadTeam` has a side effect (it `MkdirAll`s the workspace). `list` parses each agent `.md`'s YAML frontmatter itself (`readAgentFrontmatter`) so merely listing teams never creates directories.
+
+61. **`--auto-team` auto-selects the best-fitting team, it does NOT fall back to default** — when no team is named (`--agent-team` / `@team` / `--default` all absent), `autoSelectTeam` (`cmd/hufu/autoteam.go`) picks the most suitable discovered team for the prompt: it builds `(name, description)` candidates (team.yaml `description`, or joined agent descriptions when absent), tries `sidecar.MatchTeam` (a one-shot LLM pick, mirroring `MatchSkills`), and falls back to `keywordBestTeam` (token-overlap scoring with stop-word filtering + `singularize` so "manual" matches "manuals"). It returns `""` when there is no signal, so the caller drops to the interactive picker rather than guessing. Building the selection sidecar is best-effort (`buildSelectionSidecar`): no resolvable model → keyword-only. Hooked in `runTeam` right before `ParsePromptWithLazyAgents`.
 
 ## Model Configuration Priority
 

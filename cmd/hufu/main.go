@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 
 	ergoreadline "github.com/ergochat/readline"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/config"
@@ -71,6 +73,11 @@ var (
 	unattended           bool
 	maxDuration          int64
 	maxTotalTokens       int64
+	autoTeam             bool
+	templateName         string
+	profileName          string
+	quietMode            bool
+	outputFormat         string
 	globalPromptReader   atomic.Pointer[readline.PromptReader]
 )
 
@@ -93,6 +100,10 @@ func main() {
 
 	// Add skill management commands
 	rootCmd.AddCommand(skillCmd)
+	rootCmd.AddCommand(replCmd)
+	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(initCmd)
 
 	// Add custom completion commands
 	completionCmd.AddCommand(completionBashCmd, completionZshCmd, completionFishCmd, completionPowerShellCmd, completionNushellCmd)
@@ -139,6 +150,14 @@ func main() {
 	rootCmd.Flags().BoolVar(&unattended, "unattended", false, "Run with no human present: ask_user returns safe defaults instead of blocking, --steps/--tui are disabled, and only allowlisted tools may run")
 	rootCmd.Flags().Int64Var(&maxDuration, "max-duration", 0, "Budget: max total wall-clock seconds before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
 	rootCmd.Flags().Int64Var(&maxTotalTokens, "max-total-tokens", 0, "Budget: max cumulative LLM tokens before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
+	rootCmd.Flags().BoolVar(&autoTeam, "auto-team", false, "Auto-select the team best suited to the prompt (sidecar LLM match, keyword fallback) instead of prompting")
+	rootCmd.PersistentFlags().StringVar(&profileName, "profile", "", "Apply a named flag bundle from hufu.yaml `profiles:` (CLI flags still override)")
+	rootCmd.Flags().BoolVarP(&quietMode, "quiet", "q", false, "Suppress status output; print only the final result to stdout")
+	rootCmd.Flags().StringVar(&outputFormat, "output", "", "Output format for the final result: text (default) or json")
+
+	// init scaffolding flags (consumed by initcmd.go).
+	initCmd.Flags().StringVar(&templateName, "template", "default", "Scaffold template for `hufu init`: default")
+	initCmd.Flags().StringVar(&modelOverride, "model", "", "Pin a model in the scaffolded team.yaml (e.g. ollama/qwen3:8b)")
 
 	rootCmd.RegisterFlagCompletionFunc("agent-team", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		var searchPaths []string
@@ -186,7 +205,142 @@ type teamContext struct {
 	notifier    *notify.Notifier
 }
 
+// jsonRunOutput is the machine-readable shape emitted by --output json.
+type jsonRunOutput struct {
+	Result string         `json:"result"`
+	Teams  []jsonRunTeam  `json:"teams"`
+	Skills []jsonRunSkill `json:"skills,omitempty"`
+}
+
+type jsonRunTeam struct {
+	Name   string        `json:"name"`
+	Tokens int64         `json:"tokens"`
+	Tasks  []jsonRunTask `json:"tasks,omitempty"`
+}
+
+type jsonRunTask struct {
+	ID     string `json:"id"`
+	Agent  string `json:"agent"`
+	Desc   string `json:"desc"`
+	Status string `json:"status"`
+}
+
+type jsonRunSkill struct {
+	Name   string   `json:"name"`
+	Count  int      `json:"count"`
+	Agents []string `json:"agents"`
+}
+
+// printResultJSON writes the run result, per-team task/token data and skill
+// usage to stdout as a single JSON object, for scripting and piping.
+func printResultJSON(result string, loadedTeams map[string]*teamContext, skills []team.SkillUsageEntry) error {
+	out := jsonRunOutput{Result: result}
+
+	names := make([]string, 0, len(loadedTeams))
+	for name := range loadedTeams {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		tc := loadedTeams[name]
+		if tc == nil || tc.coordinator == nil {
+			continue
+		}
+		jt := jsonRunTeam{Name: name, Tokens: tc.coordinator.TokensUsed()}
+		for _, it := range tc.coordinator.TaskTracker().TodoList().Items() {
+			jt.Tasks = append(jt.Tasks, jsonRunTask{
+				ID:     it.ID,
+				Agent:  it.Agent,
+				Desc:   it.Desc,
+				Status: string(it.Status),
+			})
+		}
+		out.Teams = append(out.Teams, jt)
+	}
+	for _, s := range skills {
+		out.Skills = append(out.Skills, jsonRunSkill{Name: s.Name, Count: s.Count, Agents: s.Agents})
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
+}
+
+// applyProfile applies a named flag bundle from hufu.yaml `profiles:` to the
+// current command's flags. Precedence is: explicit CLI flag > profile > default,
+// achieved by skipping any flag the user already set (flag.Changed). Flag values
+// are stored as strings the flag itself parses, so type handling is automatic.
+// A flag named in the profile that this command does not define is reported as
+// an error rather than silently ignored, so typos surface early.
+func applyProfile(cmd *cobra.Command) error {
+	if profileName == "" {
+		return nil
+	}
+	cfg := config.LoadConfig()
+	profile, ok := cfg.Profiles[profileName]
+	if !ok {
+		var names []string
+		for name := range cfg.Profiles {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		if len(names) == 0 {
+			return fmt.Errorf("profile %q not found: no profiles defined in hufu.yaml", profileName)
+		}
+		return fmt.Errorf("profile %q not found. Available: %s", profileName, strings.Join(names, ", "))
+	}
+
+	// Resolve a flag by name against this command, then its root (for flags
+	// bound on the root command while a subcommand is executing).
+	lookup := func(name string) *pflag.FlagSet {
+		if cmd.Flags().Lookup(name) != nil {
+			return cmd.Flags()
+		}
+		if root := cmd.Root(); root != nil && root.Flags().Lookup(name) != nil {
+			return root.Flags()
+		}
+		return nil
+	}
+
+	// Apply in sorted key order for deterministic behavior.
+	keys := make([]string, 0, len(profile))
+	for k := range profile {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, name := range keys {
+		fs := lookup(name)
+		if fs == nil {
+			return fmt.Errorf("profile %q sets unknown flag %q", profileName, name)
+		}
+		if fs.Changed(name) {
+			continue // explicit CLI flag wins
+		}
+		if err := fs.Set(name, profile[name]); err != nil {
+			return fmt.Errorf("profile %q: invalid value for --%s: %w", profileName, name, err)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "%s Applied profile %s\n", dimStyle.Render("·"), boldStyle.Render(profileName))
+	return nil
+}
+
 func runTeam(cmd *cobra.Command, args []string) error {
+	// Apply a named profile first so its values feed the checks below; explicit
+	// CLI flags still win (applyProfile respects flag.Changed).
+	if err := applyProfile(cmd); err != nil {
+		return err
+	}
+
+	switch outputFormat {
+	case "", "text", "json":
+	default:
+		return fmt.Errorf("invalid --output %q: use 'text' or 'json'", outputFormat)
+	}
+	// JSON output implies quiet: stdout must carry only the JSON document.
+	if outputFormat == "json" {
+		quietMode = true
+	}
+
 	// Unattended mode is inherently non-interactive: silently disable the
 	// human-in-the-loop features rather than erroring, so the same command line
 	// works whether or not a human is present.
@@ -384,7 +538,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		}
 
 		if registry.TeamCount() == 0 {
-			return fmt.Errorf("no agent teams found in search paths: %s", strings.Join(searchPaths, ", "))
+			return fmt.Errorf("no agent teams found in search paths: %s\n  Use --default for the built-in team, or scaffold one with `hufu init <team>`", strings.Join(searchPaths, ", "))
 		}
 
 		fmt.Fprintf(os.Stderr, "%s Available teams: %s\n", boldStyle.Render("Teams:"), strings.Join(registry.ListTeams(), ", "))
@@ -402,6 +556,19 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	initialTeam := strings.ToLower(agentTeamName)
 	if defaultTeam {
 		initialTeam = "default"
+	}
+
+	// --auto-team: when the user did not name a team (no --agent-team, no
+	// @team in the prompt, not --default), automatically pick the team best
+	// suited to the prompt instead of showing the interactive picker.
+	if autoTeam && initialTeam == "" && !team.HasAtName(prompt) && registry.TeamCount() > 0 {
+		picked, method := autoSelectTeam(ctx, prompt, registry)
+		if picked != "" {
+			initialTeam = strings.ToLower(picked)
+			fmt.Fprintf(os.Stderr, "%s Auto-selected team %s (%s)\n", boldStyle.Render("→"), teamStyle.Render(picked), method)
+		} else {
+			fmt.Fprintf(os.Stderr, "%s --auto-team could not confidently pick a team; falling back to selection.\n", dimStyle.Render("·"))
+		}
 	}
 
 	initialSegments, err := team.ParsePromptWithLazyAgents(prompt, registry, initialTeam)
@@ -606,7 +773,6 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	if runErr != nil {
 		return runErr
 	}
-	fmt.Println(result)
 
 	if reportMode {
 		generateReport(loadedTeams, result)
@@ -639,7 +805,16 @@ func runTeam(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
-	renderSkillSummary(allSkillUsage)
+	if outputFormat == "json" {
+		if err := printResultJSON(result, loadedTeams, allSkillUsage); err != nil {
+			return err
+		}
+	} else {
+		fmt.Println(result)
+		if !quietMode {
+			renderSkillSummary(allSkillUsage)
+		}
+	}
 
 	if archiveMemory && !newSession {
 		for _, tc := range loadedTeams {

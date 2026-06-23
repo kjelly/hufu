@@ -1459,6 +1459,11 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 // stderrLog writes to stderr only when the TUI is not active (avoids garbling
 // the altscreen with progress lines while the TUI is running).
 func stderrLog(format string, args ...any) {
+	// --quiet and JSON output suppress human-facing status chatter so stdout
+	// carries only the result; errors still go to stderr via their own paths.
+	if quietMode || outputFormat == "json" {
+		return
+	}
 	if activeTUIProgram.Load() == nil {
 		fmt.Fprintf(os.Stderr, format, args...)
 	}

@@ -207,6 +207,70 @@ User task: %s`, skillList.String(), prompt)
 	return filtered, nil
 }
 
+// TeamSummary is a candidate team for auto-selection.
+type TeamSummary struct {
+	Name        string
+	Description string
+}
+
+// MatchTeam asks the sidecar to pick the single most suitable team for the
+// user's prompt from the candidates. It returns the chosen team name (matched
+// case-insensitively against the candidates) or "" if the model declines or
+// returns something unrecognized — callers should then fall back to a
+// deterministic heuristic.
+func (s *Sidecar) MatchTeam(ctx context.Context, prompt string, teams []TeamSummary) (string, error) {
+	if s == nil || s.agent == nil {
+		return "", fmt.Errorf("sidecar not initialized")
+	}
+	if len(teams) == 0 {
+		return "", nil
+	}
+
+	var teamList strings.Builder
+	for i, t := range teams {
+		desc := t.Description
+		if utf8.RuneCountInString(desc) > 300 {
+			runes := []rune(desc)
+			desc = string(runes[:300]) + "..."
+		}
+		fmt.Fprintf(&teamList, "%d. %s: %s\n", i+1, t.Name, desc)
+	}
+
+	matchPrompt := fmt.Sprintf(`Choose the single team best suited to accomplish the user's task from the list below.
+
+Return ONLY the exact team name as a JSON string (e.g. "dev-team"). If none clearly fit, return "".
+
+Available teams:
+%s
+User task: %s`, teamList.String(), prompt)
+
+	result, err := s.generate(ctx, matchPrompt)
+	if err != nil {
+		return "", fmt.Errorf("sidecar match team generate failed: %w", err)
+	}
+	result = strings.TrimSpace(result)
+
+	if extracted := jsonCodeBlockRe.FindStringSubmatch(result); len(extracted) >= 2 {
+		result = strings.TrimSpace(extracted[1])
+	}
+
+	var name string
+	if err := json.Unmarshal([]byte(result), &name); err != nil {
+		// Tolerate a bare, unquoted name on its own line.
+		name = strings.Trim(strings.TrimSpace(result), `"`)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", nil
+	}
+	for _, t := range teams {
+		if strings.EqualFold(t.Name, name) {
+			return t.Name, nil
+		}
+	}
+	return "", nil
+}
+
 type GuardReviewResult struct {
 	Approved bool
 	Reason   string

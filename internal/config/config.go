@@ -45,6 +45,11 @@ type Config struct {
 	RawVars        interface{}               `yaml:"vars"`
 	Hooks          map[string]string         `yaml:"hooks"`
 	Notify         notify.NotifyConfig       `yaml:"notify"`
+	// Profiles are named bundles of CLI flag values, selectable with --profile.
+	// Each value maps a flag name to a string the flag knows how to parse, e.g.
+	//   profiles:
+	//     batch: {unattended: "true", max-duration: "600"}
+	Profiles map[string]map[string]string `yaml:"profiles"`
 }
 
 func (c *Config) GetVars() map[string]string {
@@ -127,6 +132,15 @@ func (c *Config) mergeFromFile(path string) {
 	}
 	if fileCfg.Notify.Enabled() {
 		c.mergeNotify(fileCfg.Notify)
+	}
+	if len(fileCfg.Profiles) > 0 {
+		if c.Profiles == nil {
+			c.Profiles = make(map[string]map[string]string)
+		}
+		// Later files (./hufu.yaml) override earlier ones (~/.config) per profile name.
+		for name, flags := range fileCfg.Profiles {
+			c.Profiles[name] = flags
+		}
 	}
 	if len(fileCfg.Providers) > 0 {
 		if c.Providers == nil {

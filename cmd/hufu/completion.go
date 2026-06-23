@@ -164,6 +164,10 @@ export extern "hufu" [
   --unattended # Run with no human present
   --max-duration: int # Budget: max total wall-clock seconds
   --max-total-tokens: int # Budget: max cumulative LLM tokens
+  --auto-team # Auto-select the team best suited to the prompt
+  --profile: string # Apply a named flag bundle from hufu.yaml profiles:
+  --quiet(-q) # Suppress status output; print only the final result
+  --output: string # Output format for the result: text or json
   -h, --help # help for hufu
   -v, --version # version for hufu
 ]

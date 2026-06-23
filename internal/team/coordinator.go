@@ -826,6 +826,14 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	return c, nil
 }
 
+// ResetConversation clears the accumulated coordinator conversation history so
+// the next Run/ContinueWithPrompt starts fresh. Used by the chat REPL's /reset.
+func (c *Coordinator) ResetConversation() {
+	c.conversationHistoryMu.Lock()
+	c.conversationHistory = nil
+	c.conversationHistoryMu.Unlock()
+}
+
 func (c *Coordinator) SetStatusReporter(fn StatusReporter) {
 	if fn != nil {
 		c.reportStatus = fn
