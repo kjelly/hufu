@@ -830,6 +830,35 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 - `--direnv` loads `.envrc`/`.env` environment files
 - Dangerous commands (curl, wget, sudo, apt, etc.) are blocked by default
 
+### 4. No Hardcoded Sensitive Information in Tracked Files
+
+**Specification:** Tracked configuration files must never contain environment-specific identifiers. Only generic, universal values are allowed.
+
+- **Applies to:** `hufu.yaml`, `~/.config/hufu/hufu.yaml` (local-only), `team.yaml`, agent `.md` frontmatter, Go source defaults in `internal/config/`, example configs, CI workflows, documentation.
+- **Forbidden categories:**
+  - **IPs:** Private IPv4 (`10.x`, `172.16-31.x`, `192.168.x`), public IPs
+  - **API keys / tokens in config values:** `sk-xxx`, raw tokens; env-var refs like `$OPENAI_API_KEY` in config are allowed
+  - **Embedded secrets:** `password=xxx`, `secret=xxx` in connection strings; env-var refs are allowed
+  - **Internal hostnames:** e.g. `mycompany.okta.com`, `vpn-gateway.local`, `dc01.corp`
+  - **Custom ports on specific hosts:** e.g. `:5432`, `:6379`, `:11434` when combined with a non-generic host
+  - **Non-standard cloud endpoints:** e.g. `mycompany.cognitiveservices.azure.com`; standard public endpoints like `api.openai.com` are allowed
+- **Allowed values:**
+  - `localhost`, `127.0.0.1`, `0.0.0.0`
+  - Default ports with generic hosts (e.g., `ollama:11434`, `api.openai.com`, `github.com`)
+  - Env-var placeholders in config: `$OLLAMA_HOST`, `${PROVIDER_URL}`, `$DB_PASS`
+  - GitHub Actions `secrets.GITHUB_TOKEN` syntax in CI workflows
+- **Even commented-out values are forbidden** — git history preserves them forever. If a temporary override is needed, put it in a gitignored `hufu.yaml` override or an env var.
+- **Verification before commit (config files only):**
+
+  ```bash
+  # Check for IPs
+  git grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}' -- '*.yaml' '*.yml' '*.toml' '*.json' '*.env*'
+  # Check for common secret patterns (excluding env-var references)
+  git grep -nEi 'sk-[0-9a-zA-Z]{20,}|password\s*=\s*["'\''][^$][^'\''"]*|secret\s*=\s*["'\''][^$]' -- '*.yaml' '*.yml' '*.toml' '*.json' '*.env*'
+  ```
+
+  Both must return zero hits in config files. Test fixtures (`*_test.go`) and educational examples in tool description strings are exempt — they reference IPs as test data or anti-pattern examples, not as live configuration.
+
 ## Key Gotchas & Non-Obvious Patterns
 
 1. **CLI no longer takes team directory as positional arg** — Usage changed from `hufu <team-dir> [prompt]` to `hufu [prompt]`. Teams are discovered by name from search paths.
