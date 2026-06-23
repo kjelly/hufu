@@ -68,6 +68,9 @@ var (
 	sidecarModelOverride string
 	guardModelOverride   string
 	timeoutOverride      int64
+	unattended           bool
+	maxDuration          int64
+	maxTotalTokens       int64
 	globalPromptReader   atomic.Pointer[readline.PromptReader]
 )
 
@@ -128,6 +131,9 @@ func main() {
 	rootCmd.Flags().StringVar(&sidecarModelOverride, "sidecar-model", "", "Override sidecar model used for skill matching (e.g. ollama/qwen3:1b); falls back to --model when not set")
 	rootCmd.Flags().StringVar(&guardModelOverride, "guard-model", "", "Override guard model used for output review (e.g. ollama/qwen3:8b); falls back to --model when not set")
 	rootCmd.Flags().Int64Var(&timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds (e.g. 1800 for 30 min). 0 = use team/agent default.")
+	rootCmd.Flags().BoolVar(&unattended, "unattended", false, "Run with no human present: ask_user returns safe defaults instead of blocking, --steps/--tui are disabled, and only allowlisted tools may run")
+	rootCmd.Flags().Int64Var(&maxDuration, "max-duration", 0, "Budget: max total wall-clock seconds before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
+	rootCmd.Flags().Int64Var(&maxTotalTokens, "max-total-tokens", 0, "Budget: max cumulative LLM tokens before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
 
 	if err := rootCmd.Execute(); err != nil {
 		var interrupted errInterrupted
@@ -151,6 +157,20 @@ type teamContext struct {
 }
 
 func runTeam(cmd *cobra.Command, args []string) error {
+	// Unattended mode is inherently non-interactive: silently disable the
+	// human-in-the-loop features rather than erroring, so the same command line
+	// works whether or not a human is present.
+	if unattended {
+		if stepsMode {
+			fmt.Fprintln(os.Stderr, "note: --unattended disables --steps (no human to confirm)")
+			stepsMode = false
+		}
+		if tuiMode {
+			fmt.Fprintln(os.Stderr, "note: --unattended disables --tui (no human to watch)")
+			tuiMode = false
+		}
+	}
+
 	// Refuse --steps + --tui combination: step confirmation requires terminal
 	// access that conflicts with the Bubble Tea altscreen.
 	if stepsMode && tuiMode {
@@ -580,6 +600,24 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// applyUnattendedAndBudget configures the coordinator's unattended mode,
+// run budgets, and acceptance check from the CLI flags and team config.
+// CLI flags take precedence; team.yaml values are the fallback.
+func applyUnattendedAndBudget(coordinator *team.Coordinator, session *team.TeamSession) {
+	coordinator.SetUnattended(unattended || session.Config.Unattended)
+
+	budgetSeconds := maxDuration
+	if budgetSeconds == 0 {
+		budgetSeconds = session.Config.MaxWallClock
+	}
+	budgetTokens := maxTotalTokens
+	if budgetTokens == 0 {
+		budgetTokens = session.Config.MaxTotalTokens
+	}
+	coordinator.SetBudget(budgetSeconds, budgetTokens)
+	coordinator.SetAcceptance(session.Config.Acceptance)
+}
+
 func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
 	teamDir, err := registry.Resolve(teamName)
 	if err != nil {
@@ -832,6 +870,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
 	coordinator.SetSessionData(sessionData)
+	applyUnattendedAndBudget(coordinator, session)
 
 	if memStore != nil && len(oldSessionEntries) > 0 {
 		var summarizeFn memory.SummarizeFunc
@@ -879,6 +918,11 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		if resolvedNotify.Command != "" {
 			stderrLog("%s %s %s\n", dimStyle.Render("◆"), "Notify:", resolvedNotify.Command)
 		}
+		// Push a notification when an agent needs human input but none is
+		// available (unattended) so an operator can follow up out-of-band.
+		tools.SetOnNeedsHuman(func(question string) {
+			notifierInst.Notify("needs_human", "", question, "")
+		})
 	}
 
 	return &teamContext{
@@ -1123,6 +1167,7 @@ func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPI
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
 	coordinator.SetSessionData(sessionData)
+	applyUnattendedAndBudget(coordinator, session)
 
 	if memStore != nil && len(oldSessionEntries) > 0 {
 		var summarizeFn memory.SummarizeFunc
@@ -1170,6 +1215,11 @@ func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPI
 		if resolvedNotify.Command != "" {
 			stderrLog("%s %s %s\n", dimStyle.Render("◆"), "Notify:", resolvedNotify.Command)
 		}
+		// Push a notification when an agent needs human input but none is
+		// available (unattended) so an operator can follow up out-of-band.
+		tools.SetOnNeedsHuman(func(question string) {
+			notifierInst.Notify("needs_human", "", question, "")
+		})
 	}
 
 	return &teamContext{

@@ -156,18 +156,23 @@ func filterSTMSectionsByRole(sections []STMSection, role string) []STMSection {
 	case "researcher", "explorer", "investigator":
 		visible[stmSectionFindings] = true
 		visible[stmSectionErrors] = true
-		visible[stmSectionQuestions] = true
 	case "writer", "developer", "coder":
 		visible[stmSectionProgress] = true
-		visible[stmSectionDecisions] = true
+		visible[stmSectionFindings] = true
 	case "reviewer", "tester", "qa":
 		visible[stmSectionProgress] = true
 		visible[stmSectionFindings] = true
 		visible[stmSectionErrors] = true
 	default:
 		visible[stmSectionProgress] = true
-		visible[stmSectionDecisions] = true
+		visible[stmSectionFindings] = true
 	}
+	// Decisions and open questions are cross-cutting knowledge: every role must
+	// see them so agents don't re-make settled decisions or miss blockers.
+	// Without this, e.g. a coder could not see a researcher's findings and would
+	// redo work — the exact overlap this filter is meant to prevent.
+	visible[stmSectionDecisions] = true
+	visible[stmSectionQuestions] = true
 	var filtered []STMSection
 	for _, s := range sections {
 		if visible[s.Title] {

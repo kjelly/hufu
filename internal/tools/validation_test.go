@@ -164,12 +164,13 @@ func TestGuardReview(t *testing.T) {
 			wantErrStr:   "Guard rule violation",
 		},
 		{
-			name:       "reviewer error fails open",
+			name:       "reviewer error fails closed",
 			guardRules: []string{"no sudo"},
 			reviewer: func(ctx context.Context, toolName, args string, rules []string) (bool, string, error) {
 				return false, "", context.DeadlineExceeded
 			},
-			wantApproved: true,
+			wantApproved: false,
+			wantErrStr:   "Guard review unavailable",
 		},
 	}
 

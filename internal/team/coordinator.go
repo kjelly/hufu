@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -60,6 +61,12 @@ type TaskDef struct {
 	PlanFirst    bool     `json:"plan_first,omitempty"`
 	PlanID       string   `json:"plan_id,omitempty"`
 	DependsOn    []int    `json:"depends_on,omitempty"` // 0-based indices into the tasks array for this call
+	// Verify is an optional shell command that objectively checks the task's
+	// deliverable (e.g. "test -f report.pdf", "go build ./..."). It runs after
+	// the agent reports success but before the task is marked done; a non-zero
+	// exit makes the task fail and triggers a retry. This guards against agents
+	// that claim completion without producing the expected artifact.
+	Verify string `json:"verify,omitempty"`
 }
 
 // UnmarshalJSON handles legacy "task" field by mapping it to Goal.
@@ -563,6 +570,66 @@ type Coordinator struct {
 
 	sessionToolPermissions   map[string]bool // toolName -> allowed (permanent session decision)
 	sessionToolPermissionsMu sync.RWMutex
+
+	// Unattended / budget controls for no-human-watching operation.
+	unattended    bool
+	maxWallClock  time.Duration // 0 = unlimited
+	tokenBudget   int64         // 0 = unlimited; cumulative LLM tokens
+	tokensUsed    atomic.Int64
+	acceptanceCmd string // optional shell command run at finish
+	budgetTripped atomic.Bool
+}
+
+// SetUnattended enables unattended (no-human) mode: ask_user returns safe
+// defaults, and only explicitly-allowed tools may run.
+func (c *Coordinator) SetUnattended(v bool) { c.unattended = v }
+
+// IsUnattended reports whether the coordinator is in unattended mode.
+func (c *Coordinator) IsUnattended() bool { return c.unattended }
+
+// SetBudget configures the run's wall-clock and cumulative-token ceilings.
+// Zero values mean unlimited.
+func (c *Coordinator) SetBudget(maxWallClockSeconds, maxTotalTokens int64) {
+	if maxWallClockSeconds > 0 {
+		c.maxWallClock = time.Duration(maxWallClockSeconds) * time.Second
+	}
+	if maxTotalTokens > 0 {
+		c.tokenBudget = maxTotalTokens
+	}
+}
+
+// SetAcceptance sets an optional shell command run when the coordinator
+// finishes; a non-zero exit marks the run as not-accepted.
+func (c *Coordinator) SetAcceptance(cmd string) { c.acceptanceCmd = cmd }
+
+// TokensUsed returns the cumulative LLM token count observed so far.
+func (c *Coordinator) TokensUsed() int64 { return c.tokensUsed.Load() }
+
+// addStepTokens accumulates token usage from a set of agent steps.
+func (c *Coordinator) addStepTokens(steps []fantasy.StepResult) {
+	var total int64
+	for _, s := range steps {
+		total += s.Usage.TotalTokens
+	}
+	if total > 0 {
+		c.tokensUsed.Add(total)
+	}
+}
+
+// budgetExceeded reports whether any configured budget (wall-clock or tokens)
+// has been exceeded, along with a human-readable reason.
+func (c *Coordinator) budgetExceeded() (bool, string) {
+	if c.maxWallClock > 0 {
+		if elapsed := time.Since(c.sessionTime); elapsed > c.maxWallClock {
+			return true, fmt.Sprintf("wall-clock budget exceeded (%s > %s)", elapsed.Round(time.Second), c.maxWallClock)
+		}
+	}
+	if c.tokenBudget > 0 {
+		if used := c.tokensUsed.Load(); used >= c.tokenBudget {
+			return true, fmt.Sprintf("token budget exceeded (%d >= %d)", used, c.tokenBudget)
+		}
+	}
+	return false, ""
 }
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.
@@ -1026,6 +1093,39 @@ func containsAny(keywords []string, text string) bool {
 const maxSTMAutoInject = 2000
 const maxLTMAutoInject = 3000
 const maxTaskSTMContextChars = 1500
+
+// maxWorkerAuxContextChars caps the combined size of the auxiliary context
+// blocks (prior-agent STM, concurrent tasks, LTM background) appended to a
+// worker prompt, so the total injected context cannot grow unbounded and
+// overflow a small model's window.
+const maxWorkerAuxContextChars = 5000
+
+// assembleContextWithinBudget joins context blocks (already in priority order)
+// separated by blank lines, including each only while the running total stays
+// within budget. Lower-priority trailing blocks are dropped entirely rather
+// than truncated mid-way, preserving each block's markdown structure. The
+// returned string is prefixed with "\n\n" when non-empty so it can be appended
+// directly to a prompt.
+func assembleContextWithinBudget(parts []string, budget int) string {
+	if budget <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	total := 0
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		n := len([]rune(p))
+		if total+n > budget {
+			continue
+		}
+		total += n
+		b.WriteString("\n\n")
+		b.WriteString(p)
+	}
+	return b.String()
+}
 
 func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 	var b strings.Builder
@@ -1739,6 +1839,10 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 			"items":       map[string]any{"type": "integer"},
 			"description": "0-based indices of tasks in this call's tasks array that must complete before this task starts. Example: [{agent:\"researcher\",goal:\"find X\"},{agent:\"coder\",goal:\"implement X\",depends_on:[0]}] — the coder waits for the researcher to finish.",
 		},
+		"verify": map[string]any{
+			"type":        "string",
+			"description": "Optional shell command that objectively verifies the task's deliverable exists/works (e.g. 'test -f workspace/report.md', 'go build ./...'). It runs after the agent reports success; a non-zero exit fails the task and triggers a retry. Use it for tasks with a checkable artifact so the agent cannot falsely claim completion.",
+		},
 	}
 	if hasModelList {
 		props["model"] = map[string]any{"type": "string", "description": "Model ID from Available Models to use for this task. Select the model whose strengths best match this task. If empty, the default team model will be used."}
@@ -1849,7 +1953,50 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 
 	t.coordinator.AutoExtractLTM(ctx)
 
-	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", args.Response)), nil
+	// Team-level acceptance check: an objective gate over the whole run. A
+	// non-zero exit does not block finishing (the work is already done) but is
+	// surfaced in the result and via a notifiable event so an unattended run's
+	// failure is not silent.
+	response := args.Response
+	if accErr := t.coordinator.runAcceptance(ctx); accErr != nil {
+		note := fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v", accErr)
+		response += note
+		t.coordinator.report(t.coordinator.newEvent("error").withMessage("acceptance check failed: " + accErr.Error()))
+	}
+
+	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
+}
+
+// runAcceptance runs the team's optional acceptance command in the project dir
+// and returns a non-nil error if it exits non-zero. No-op when unset.
+func (c *Coordinator) runAcceptance(parentCtx context.Context) error {
+	cmd := strings.TrimSpace(c.acceptanceCmd)
+	if cmd == "" {
+		return nil
+	}
+	shell := "sh"
+	if c.session != nil && c.session.Config.Shell != "" {
+		shell = c.session.Config.Shell
+	}
+	timeout := time.Duration(c.session.Config.Timeout) * time.Second
+	if timeout <= 0 || timeout > 300*time.Second {
+		timeout = 300 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
+	defer cancel()
+	ex := exec.CommandContext(ctx, shell, "-c", cmd)
+	if c.projectDir != "" {
+		ex.Dir = c.projectDir
+	}
+	out, err := ex.CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(out))
+		if detail != "" {
+			detail = ": " + truncate(detail, 500)
+		}
+		return fmt.Errorf("%v%s", err, detail)
+	}
+	return nil
 }
 
 type loadSkillTool struct {
@@ -3122,6 +3269,17 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		return "", fmt.Errorf("max rounds (%d) exceeded: call finish immediately with your best summary of work completed so far", c.session.Config.MaxRounds)
 	}
 
+	// Budget circuit-breaker: when running unattended there is no human to stop
+	// a runaway. If a configured wall-clock or token budget is exceeded, force
+	// wrap-up, emit a notifiable event, and refuse to delegate new tasks.
+	if exceeded, reason := c.budgetExceeded(); exceeded {
+		c.wrapUp.Store(1)
+		if c.budgetTripped.CompareAndSwap(false, true) {
+			c.report(c.newEvent("budget_exceeded").withMessage(reason))
+		}
+		return "", fmt.Errorf("%s: call finish immediately with your best summary of work completed so far", reason)
+	}
+
 	// Bump the cache generation when the coordinator starts a new delegation
 	// round. Worker-level ExecuteTasks calls carry a worker todoID in context,
 	// not CoordTodoID, so they do NOT bump the generation. This means all
@@ -3481,13 +3639,16 @@ func (c *Coordinator) checkSkillPatterns() {
 	c.report(c.newEvent("step").withMessage(msg.String()))
 }
 
-// executeTaskWithExtraModels executes a task across multiple models when extra-models is configured
+// executeTaskWithExtraModels executes a task across multiple models when extra-models is configured.
+// verify is the task's optional deliverable-verification command; it is propagated to each model so
+// every model's output is verified (and retried) independently via executeTask.
 func (c *Coordinator) executeTaskWithExtraModels(
 	parentCtx context.Context,
 	agentName string,
 	agentDef *agent.AgentDef,
 	taskDesc string,
 	todoID string,
+	verify string,
 ) (string, error) {
 	// Limit concurrent models
 	models := agentDef.ExtraModels
@@ -3505,7 +3666,7 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	mainModel := mainDef.Generation.Model
 
 	go func() {
-		output, err := c.executeSingleAgentWithModel(parentCtx, agentName, mainDef, taskDesc, todoID)
+		output, err := c.executeSingleAgentWithModel(parentCtx, agentName, mainDef, taskDesc, todoID, verify)
 		results <- &agentResult{model: mainModel, output: output, err: err}
 	}()
 
@@ -3515,7 +3676,7 @@ func (c *Coordinator) executeTaskWithExtraModels(
 			extraDef := cloneAgentDef(agentDef)
 			extraDef.ExtraModels = nil
 			extraDef.Generation.Model = model
-			output, err := c.executeSingleAgentWithModel(parentCtx, agentName, extraDef, taskDesc, todoID)
+			output, err := c.executeSingleAgentWithModel(parentCtx, agentName, extraDef, taskDesc, todoID, verify)
 			results <- &agentResult{model: model, output: output, err: err}
 		}(extraModel)
 	}
@@ -3567,11 +3728,13 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	agentDef *agent.AgentDef,
 	taskDesc string,
 	todoID string,
+	verify string,
 ) (string, error) {
 	task := TaskDef{
-		Agent: agentDef.Name,
-		Goal:  taskDesc,
-		Model: agentDef.Generation.Model,
+		Agent:  agentDef.Name,
+		Goal:   taskDesc,
+		Model:  agentDef.Generation.Model,
+		Verify: verify,
 	}
 
 	// Create isolated workspace for this model to prevent concurrent file conflicts.
@@ -4058,7 +4221,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	// Check if agent has extra-models configured
 	if len(agentDef.ExtraModels) > 0 {
-		return c.executeTaskWithExtraModels(parentCtx, agentName, agentDef, taskDesc, todoID)
+		return c.executeTaskWithExtraModels(parentCtx, agentName, agentDef, taskDesc, todoID, task.Verify)
 	}
 
 	// When a model-list is configured, validate the requested model is in it.
@@ -4233,16 +4396,23 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		prompt = contextBuilder.String() + "\n---\n\n" + prompt
 	}
 
-	// Inject STM knowledge-transfer sections after the goal so the agent
-	// knows what to do before reading prior context, then LTM as background.
+	// Inject STM knowledge-transfer sections after the goal so the agent knows
+	// what to do before reading prior context, then concurrent tasks, then LTM
+	// as background. These are assembled under a combined character budget, in
+	// priority order, so a small model's context window is not overwhelmed —
+	// lower-priority blocks (LTM) are dropped first when over budget.
+	var auxParts []string
 	if stmCtx := c.buildTaskSTMContext(); stmCtx != "" {
-		prompt = prompt + "\n\n" + stmCtx
+		auxParts = append(auxParts, stmCtx)
 	}
 	if concurrentCtx := c.buildConcurrentTasksContext(todoID); concurrentCtx != "" {
-		prompt = prompt + "\n\n" + concurrentCtx
+		auxParts = append(auxParts, concurrentCtx)
 	}
 	if ltmCtx := c.buildLTMContext(); ltmCtx != "" {
-		prompt = prompt + "\n\n" + ltmCtx
+		auxParts = append(auxParts, ltmCtx)
+	}
+	if aux := assembleContextWithinBudget(auxParts, maxWorkerAuxContextChars); aux != "" {
+		prompt = prompt + aux
 	}
 
 	var conversationHistory []fantasy.Message
@@ -4285,6 +4455,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			}
 			if c.forceMCP || agentDef.ForceMCP {
 				taskCtx = context.WithValue(taskCtx, tools.AgentForceMCPKey, true)
+			}
+			if c.unattended {
+				taskCtx = context.WithValue(taskCtx, tools.UnattendedKey, true)
 			}
 
 			// Merge team-level and agent-level tool allowlists.
@@ -4349,24 +4522,47 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				}
 				return planEntry.PlanText, nil
 			}
-			if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "done", taskDesc, output); err != nil {
-				log.Printf("warning: failed to write task file: %v", err)
+			// Deliverable verification: run an objective check before accepting
+			// the agent's claim of success. A non-zero exit converts this into a
+			// failure that flows into the normal retry path below.
+			if task.Verify != "" {
+				if verr := c.verifyTaskDeliverable(parentCtx, agentDef, task.Verify); verr != nil {
+					err = fmt.Errorf("deliverable verification failed (command %q): %w", task.Verify, verr)
+					c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("verification failed: %v", verr)).withTodoID(todoID))
+				}
 			}
-			_ = writeStatus(c.session.Workspace, agentName, "done", taskDesc)
-			duration, modelTime, toolTime := timing.snapshot()
-			c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, extractSummary(output, 300))
-			c.updateTodoTiming(todoID, modelTime, toolTime)
-			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-			c.report(c.newEvent("done").withAgent(agentName).withOutput(output).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
-			if task.Summarize {
-				output = c.summarizeOutput(parentCtx, output)
+			if err == nil {
+				if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "done", taskDesc, output); err != nil {
+					log.Printf("warning: failed to write task file: %v", err)
+				}
+				_ = writeStatus(c.session.Workspace, agentName, "done", taskDesc)
+				duration, modelTime, toolTime := timing.snapshot()
+				c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, extractSummary(output, 300))
+				c.updateTodoTiming(todoID, modelTime, toolTime)
+				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+				c.report(c.newEvent("done").withAgent(agentName).withOutput(output).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
+				if task.Summarize {
+					output = c.summarizeOutput(parentCtx, output)
+				}
+				c.autoWriteSTMASync(agentName, taskDesc, output, "", true)
+				return output, nil
 			}
-			c.autoWriteSTMASync(agentName, taskDesc, output, "", true)
-			return output, nil
 		}
 
 		for _, step := range steps {
 			conversationHistory = append(conversationHistory, step.Messages...)
+		}
+
+		// Repeated-failure detection: if this attempt failed with the same error
+		// as the previous one, retrying is unproductive — the agent is stuck
+		// repeating the same action. Stop early instead of burning the remaining
+		// retry budget on identical failures.
+		if lastErr != nil && attempt < maxRetries && sameFailure(lastErr.Error(), err.Error()) {
+			lastErr = err
+			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d repeated the same failure", attempt)).withTodoID(todoID))
+			c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, fmt.Sprintf("repeated failure after %d attempts: %v", attempt, err))
+			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			break
 		}
 
 		lastErr = err
@@ -4397,15 +4593,15 @@ type teamInfoTool struct {
 func (t *teamInfoTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
 		Name:        "team_info",
-		Description: "Access team member information, task history, and session status. Use this to understand what other agents are doing, what they've completed, and the current state of the team.",
+		Description: "Access team member information, task history, full task results, and session status. Use this to understand what other agents are doing, retrieve the complete output of a completed task (so you don't redo their work), and see the current state of the team.",
 		Parameters: map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"description": "Action: list_agents, agent_info, task_history, todo_status, session_summary",
+				"description": "Action: list_agents, agent_info, task_history, task_result, todo_status, session_summary. Use task_result to read the full output of another agent's most recently completed task.",
 			},
 			"agent": map[string]any{
 				"type":        "string",
-				"description": "Agent name for agent_info, task_history, todo_status actions",
+				"description": "Agent name for agent_info, task_history, task_result, todo_status actions",
 			},
 			"limit": map[string]any{
 				"type":        "integer",
@@ -4450,6 +4646,11 @@ func (t *teamInfoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 			return fantasy.NewTextErrorResponse("agent name is required for task_history action"), nil
 		}
 		return t.handleTaskHistory(workspace, teamName, args.Agent, args.Limit)
+	case "task_result":
+		if args.Agent == "" {
+			return fantasy.NewTextErrorResponse("agent name is required for task_result action"), nil
+		}
+		return t.handleTaskResult(c, workspace, teamName, args.Agent)
 	case "todo_status":
 		if args.Agent == "" {
 			return fantasy.NewTextErrorResponse("agent name is required for todo_status action"), nil
@@ -4458,7 +4659,7 @@ func (t *teamInfoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	case "session_summary":
 		return t.handleSessionSummary(c)
 	default:
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown action %q (valid: list_agents, agent_info, task_history, todo_status, session_summary)", args.Action)), nil
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown action %q (valid: list_agents, agent_info, task_history, task_result, todo_status, session_summary)", args.Action)), nil
 	}
 }
 
@@ -4597,6 +4798,70 @@ func (t *teamInfoTool) handleTaskHistory(workspace, teamName, agentName string, 
 	}
 
 	return fantasy.NewTextResponse(b.String()), nil
+}
+
+// handleTaskResult returns the full result (## Result section) of an agent's
+// most recently completed task. This lets a worker read another agent's actual
+// output instead of only the short STM summary, so it can build on prior work
+// rather than redoing it.
+func (t *teamInfoTool) handleTaskResult(c *Coordinator, workspace, teamName, name string) (fantasy.ToolResponse, error) {
+	agentDef, _, err := c.resolveAgentName(name)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("agent %q not found: %v", name, err)), nil
+	}
+	resolvedName := strings.ToLower(agentDef.Name)
+
+	dir := filepath.Join(workspace, tasksDir, teamName, resolvedName)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fantasy.NewTextResponse(fmt.Sprintf("No completed tasks for agent %q yet.", resolvedName)), nil
+		}
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("cannot read task dir: %v", err)), nil
+	}
+
+	// Newest first (timestamps sort lexicographically).
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() > entries[j].Name() })
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		content := string(data)
+		status := "unknown"
+		if m := taskStatusRe.FindStringSubmatch(content); len(m) > 1 {
+			status = m[1]
+		}
+		if status != "done" {
+			continue
+		}
+		task := "(no description)"
+		if idx := strings.Index(content, "## Task Description"); idx >= 0 {
+			rest := strings.TrimSpace(content[idx+len("## Task Description"):])
+			if firstLine := strings.SplitN(rest, "\n", 2); len(firstLine) > 0 && firstLine[0] != "" {
+				task = firstLine[0]
+			}
+		}
+		result := ""
+		if idx := strings.Index(content, "## Result"); idx >= 0 {
+			result = strings.TrimSpace(content[idx+len("## Result"):])
+		}
+		if result == "" || result == "(pending)" {
+			result = "(no result recorded)"
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Most recent completed task by %s:\n\n", resolvedName)
+		fmt.Fprintf(&b, "**Task:** %s\n\n", task)
+		b.WriteString("**Result:**\n\n")
+		b.WriteString(truncate(result, 8000))
+		return fantasy.NewTextResponse(b.String()), nil
+	}
+
+	return fantasy.NewTextResponse(fmt.Sprintf("Agent %q has task records but none are completed yet.", resolvedName)), nil
 }
 
 func (t *teamInfoTool) handleTodoStatus(c *Coordinator, name string) (fantasy.ToolResponse, error) {
@@ -4817,10 +5082,12 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	if err != nil {
 		c.SetCurrentStage("idle")
 		c.SetCurrentTool("")
+		c.addStepTokens(result.Steps)
 		return "", nil, err
 	}
 	c.SetCurrentStage("idle")
 	c.SetCurrentTool("")
+	c.addStepTokens(result.Steps)
 	return result.Response.Content.Text(), result.Steps, nil
 }
 
@@ -5530,21 +5797,103 @@ func (c *Coordinator) buildConcurrentTasksContext(excludeID string) string {
 	return "## Concurrent Tasks\n\nThe following agents are running in parallel with you. Avoid overlapping with their work:\n\n" + strings.Join(running, "\n")
 }
 
-func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, lastErr string) string {
-	s := c.Sidecar()
-	if s == nil {
-		return ""
+// verifyTaskDeliverable runs the task's optional verify command and returns a
+// non-nil error if the command exits non-zero (or cannot be run). This provides
+// an objective, non-LLM check that the deliverable actually exists/works before
+// a task is accepted as done. The command runs in the project directory using
+// the team's (or agent's) configured shell, falling back to "sh".
+func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef *agent.AgentDef, command string) error {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil
 	}
-	// Use a shorter timeout for reflection to avoid holding up retries
-	reflectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+
+	shell := "sh"
+	if agentDef != nil && agentDef.Shell != "" {
+		shell = agentDef.Shell
+	} else if c.session.Config.Shell != "" {
+		shell = c.session.Config.Shell
+	}
+
+	timeout := time.Duration(c.session.Config.Timeout) * time.Second
+	if timeout <= 0 || timeout > 120*time.Second {
+		timeout = 120 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
-	prompt := fmt.Sprintf("Agent %q failed to achieve goal: %q\nError: %s\n\nAnalyze the error and provide a concise hint (max 100 words) for the next attempt. Focus on what to change or avoid.", agentName, goal, lastErr)
-	reflection, err := s.Execute(reflectCtx, prompt)
-	if err != nil {
-		return ""
+	cmd := exec.CommandContext(ctx, shell, "-c", command)
+	if c.projectDir != "" {
+		cmd.Dir = c.projectDir
 	}
-	return "\n\n## Reflection on Previous Failure\n\n" + reflection
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(out))
+		if detail != "" {
+			detail = ": " + truncate(detail, 500)
+		}
+		return fmt.Errorf("%v%s", err, detail)
+	}
+	return nil
+}
+
+func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, lastErr string) string {
+	s := c.Sidecar()
+	if s != nil {
+		// Use a shorter timeout for reflection to avoid holding up retries
+		reflectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		prompt := fmt.Sprintf("Agent %q failed to achieve goal: %q\nError: %s\n\nAnalyze the error and provide a concise hint (max 100 words) for the next attempt. Focus on what to change or avoid.", agentName, goal, lastErr)
+		if reflection, err := s.Execute(reflectCtx, prompt); err == nil && strings.TrimSpace(reflection) != "" {
+			return "\n\n## Reflection on Previous Failure\n\n" + reflection
+		}
+	}
+	// Fallback: deterministic, LLM-free hint derived from the error so retries
+	// are never blind even when no sidecar is configured or it is unavailable.
+	if hint := localFailureHint(lastErr); hint != "" {
+		return "\n\n## Reflection on Previous Failure\n\n" + hint
+	}
+	return ""
+}
+
+// sameFailure reports whether two error messages represent the same underlying
+// failure, ignoring volatile prefixes like "attempt N failed". It is used to
+// detect an agent stuck repeating an identical failing action across retries.
+func sameFailure(a, b string) bool {
+	norm := func(s string) string {
+		s = strings.ToLower(strings.TrimSpace(s))
+		// Drop a leading "attempt N failed:" wrapper if present.
+		if i := strings.Index(s, "failed:"); i >= 0 && strings.HasPrefix(s, "attempt ") {
+			s = strings.TrimSpace(s[i+len("failed:"):])
+		}
+		return s
+	}
+	na, nb := norm(a), norm(b)
+	return na != "" && na == nb
+}
+
+// localFailureHint classifies a failure message and returns an actionable hint
+// without calling any model. It pattern-matches common error shapes (timeout,
+// missing file/command, permission, verification, step exhaustion).
+func localFailureHint(lastErr string) string {
+	e := strings.ToLower(lastErr)
+	switch {
+	case strings.Contains(e, "deliverable verification failed"):
+		return "Your previous attempt reported success but the verification check failed — the expected deliverable was missing or invalid. Actually produce the artifact (create/modify the file, make it pass the check) before calling finish; do not claim completion prematurely."
+	case strings.Contains(e, "deadline exceeded") || strings.Contains(e, "timed out") || strings.Contains(e, "context deadline"):
+		return "The previous attempt timed out. Work in smaller steps, avoid long-running or interactive commands, and prioritize the core of the goal first."
+	case strings.Contains(e, "no such file") || strings.Contains(e, "not found") || strings.Contains(e, "enoent"):
+		return "A file or command was not found last time. Verify the path exists with ls/glob before using it, and use absolute paths under the workspace."
+	case strings.Contains(e, "permission denied") || strings.Contains(e, "not permitted") || strings.Contains(e, "guard rule"):
+		return "The previous attempt was blocked by a permission or guard rule. Use only the tools and paths you are allowed; do not retry the exact blocked action — find a permitted alternative."
+	case strings.Contains(e, "step") && (strings.Contains(e, "limit") || strings.Contains(e, "count") || strings.Contains(e, "max")):
+		return "You ran out of steps last time. Be more direct: skip exploratory actions and go straight to the actions that satisfy the goal."
+	case strings.Contains(e, "duplicate"):
+		return "This work overlaps with an already-completed task. Reuse the existing result instead of redoing it, or address the part that is genuinely missing."
+	default:
+		return "The previous attempt failed with: " + truncate(strings.TrimSpace(lastErr), 300) + ". Change your approach rather than repeating the same actions."
+	}
 }
 
 func (c *Coordinator) autoWriteSTMASync(agentName, taskDesc, output, errMsg string, success bool) {
@@ -5630,18 +5979,45 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 		compactCount = len(c.conversationHistory) / 3
 	}
 	if compactCount <= 0 {
-		trimmed := make([]fantasy.Message, maxConversationHistory)
-		copy(trimmed, c.conversationHistory[len(c.conversationHistory)-maxConversationHistory:])
-		c.conversationHistory = trimmed
+		c.conversationHistory = trimHistoryPreservingHead(c.conversationHistory, maxConversationHistory)
 		return
 	}
 	compacted := c.compactMessages(ctx, c.conversationHistory[:compactCount])
 	c.conversationHistory = append(compacted, c.conversationHistory[compactCount:]...)
 	if len(c.conversationHistory) > maxConversationHistory {
-		trimmed := make([]fantasy.Message, maxConversationHistory)
-		copy(trimmed, c.conversationHistory[len(c.conversationHistory)-maxConversationHistory:])
-		c.conversationHistory = trimmed
+		// Compaction did not shrink enough (e.g. sidecar unavailable so
+		// compactMessages returned the input unchanged). Keep the first few
+		// messages — which carry the original goal and instructions — plus the
+		// most recent ones, instead of dropping the head entirely.
+		c.conversationHistory = trimHistoryPreservingHead(c.conversationHistory, maxConversationHistory)
 	}
+}
+
+// conversationHeadKeep is the number of earliest messages preserved when the
+// conversation history is hard-trimmed. These usually contain the original goal
+// and setup that later turns depend on.
+const conversationHeadKeep = 4
+
+// trimHistoryPreservingHead reduces msgs to at most max entries by keeping the
+// first conversationHeadKeep messages and the most recent remainder. This avoids
+// the "amnesia" failure where the original goal is dropped and the coordinator
+// re-delegates already-completed work.
+func trimHistoryPreservingHead(msgs []fantasy.Message, max int) []fantasy.Message {
+	if max <= 0 {
+		return nil
+	}
+	if len(msgs) <= max {
+		return msgs
+	}
+	headKeep := conversationHeadKeep
+	if headKeep >= max {
+		headKeep = max / 4
+	}
+	tailKeep := max - headKeep
+	trimmed := make([]fantasy.Message, 0, max)
+	trimmed = append(trimmed, msgs[:headKeep]...)
+	trimmed = append(trimmed, msgs[len(msgs)-tailKeep:]...)
+	return trimmed
 }
 
 func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Message) []fantasy.Message {
@@ -5772,6 +6148,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if c.forceMCP || agentDef.ForceMCP {
 		taskCtx = context.WithValue(taskCtx, tools.AgentForceMCPKey, true)
 	}
+	if c.unattended {
+		taskCtx = context.WithValue(taskCtx, tools.UnattendedKey, true)
+	}
 
 	timing := &taskTiming{}
 	timing.reset()
@@ -5858,6 +6237,9 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	defer cancel()
 	orchCtx = tools.AskUserAwareDeadline(orchCtx)
 	orchCtx = context.WithValue(orchCtx, todoIDKey{}, CoordTodoID)
+	if c.unattended {
+		orchCtx = context.WithValue(orchCtx, tools.UnattendedKey, true)
+	}
 
 	orchModelID := c.resolveAgentModel(orchDef, "")
 	orch, err := agent.CreateAgent(orchCtx, c.providerManager.GetProvider(orchModelID), agent.AgentConfig{

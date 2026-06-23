@@ -498,6 +498,7 @@ func TestTryAskUserTUI_ContextCancelled(t *testing.T) {
 			return `{"answers":["y"]}`, true
 		}
 	})
+	defer SetOnAskUserTUI(nil) // avoid leaking the hook into other tests
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately

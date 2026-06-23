@@ -80,6 +80,10 @@ type teamConfigYAML struct {
 	Vars              map[string]interface{}           `yaml:"vars"`
 	WorkerContextSize int                              `yaml:"worker-context-size"`
 	ToolsAllowed      interface{}                      `yaml:"tools"` // tools.allowed in YAML - string or []string
+	Unattended        bool                             `yaml:"unattended"`
+	MaxWallClock      int64                            `yaml:"max-duration"`
+	MaxTotalTokens    int64                            `yaml:"max-total-tokens"`
+	Acceptance        string                           `yaml:"acceptance"`
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -495,6 +499,18 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.ForceMCP {
 		cfg.ForceMCP = true
+	}
+	if yc.Unattended {
+		cfg.Unattended = true
+	}
+	if yc.MaxWallClock > 0 {
+		cfg.MaxWallClock = yc.MaxWallClock
+	}
+	if yc.MaxTotalTokens > 0 {
+		cfg.MaxTotalTokens = yc.MaxTotalTokens
+	}
+	if yc.Acceptance != "" {
+		cfg.Acceptance = yc.Acceptance
 	}
 	if yc.Shell != "" {
 		cfg.Shell = yc.Shell

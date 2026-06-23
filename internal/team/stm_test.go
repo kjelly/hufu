@@ -205,13 +205,15 @@ func TestFilterSTMSectionsByRole(t *testing.T) {
 	}
 
 	tests := []struct {
-		role      string
+		role       string
 		wantTitles []string
 	}{
 		{"coordinator", []string{"# 進度", "# 發現", "# 錯誤與修復"}},
+		// findings are now visible to all roles; writer/coder also see findings
 		{"researcher", []string{"# 發現", "# 錯誤與修復"}},
-		{"writer", []string{"# 進度"}},
+		{"writer", []string{"# 進度", "# 發現"}},
 		{"reviewer", []string{"# 進度", "# 發現", "# 錯誤與修復"}},
+		// empty role is treated as coordinator-level: all sections visible
 		{"", []string{"# 進度", "# 發現", "# 錯誤與修復"}},
 	}
 
@@ -227,6 +229,19 @@ func TestFilterSTMSectionsByRole(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFilterSTMSectionsByRole_DecisionsAndQuestionsAlwaysVisible(t *testing.T) {
+	sections := []STMSection{
+		{Title: "# 決策", Entries: []string{"- use postgres"}},
+		{Title: "# 待解決", Entries: []string{"- which auth provider?"}},
+	}
+	for _, role := range []string{"researcher", "writer", "coder", "reviewer", "tester", "explorer", ""} {
+		filtered := filterSTMSectionsByRole(sections, role)
+		if len(filtered) != 2 {
+			t.Errorf("role %q: decisions and questions must be visible, got %d sections", role, len(filtered))
+		}
 	}
 }
 

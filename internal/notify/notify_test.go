@@ -128,6 +128,14 @@ func TestFormatEvent(t *testing.T) {
 			output: "", wantTitle: "hufu - start", wantMsgHas: "dev starting: research",
 		},
 		{
+			name: "budget_exceeded", eventType: "budget_exceeded", agent: "", message: "token budget exceeded (10>=5)",
+			output: "", wantTitle: "hufu - budget exceeded", wantMsgHas: "Run stopped: token budget exceeded",
+		},
+		{
+			name: "needs_human", eventType: "needs_human", agent: "", message: "approve deploy?",
+			output: "", wantTitle: "hufu - needs human", wantMsgHas: "approve deploy?",
+		},
+		{
 			name: "unknown event type", eventType: "custom", agent: "", message: "hello",
 			output: "", wantTitle: "hufu", wantMsgHas: "custom: hello",
 		},

@@ -57,6 +57,13 @@ type agentForceMCPKeyType struct{}
 
 var AgentForceMCPKey = agentForceMCPKeyType{}
 
+// UnattendedKey carries whether the run is unattended (no human available).
+// When true, ask_user returns a safe default instead of blocking on stdin and
+// tool permission falls back to deny-by-default for non-allowlisted tools.
+type unattendedKeyType struct{}
+
+var UnattendedKey = unattendedKeyType{}
+
 type taskIDKeyType struct{}
 
 var TaskIDKey = taskIDKeyType{}

@@ -14,7 +14,7 @@ import (
 
 const defaultCommandTimeout = 10 * time.Second
 
-var defaultEvents = []string{"done", "error", "wrap_up"}
+var defaultEvents = []string{"done", "error", "wrap_up", "budget_exceeded", "needs_human"}
 
 type NotifyConfig struct {
 	OSC     bool     `yaml:"osc" json:"osc"`
@@ -107,6 +107,14 @@ func formatEvent(eventType, agent, message, output string) (title, msg string) {
 	case "wrap_up":
 		title = "hufu"
 		msg = "Wrap up requested — no new tasks"
+	case "budget_exceeded":
+		title = "hufu - budget exceeded"
+		msg = fmt.Sprintf("Run stopped: %s", msg)
+	case "needs_human":
+		title = "hufu - needs human"
+		if msg == "" {
+			msg = "An agent requested input but no human is available (unattended mode)"
+		}
 	case "start":
 		title = "hufu - start"
 		msg = fmt.Sprintf("%s starting: %s", agent, msg)

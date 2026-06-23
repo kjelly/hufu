@@ -113,6 +113,19 @@ type TeamConfig struct {
 	Vars              map[string]interface{}
 	WorkerContextSize int
 	ToolsAllowed      []string // List of explicitly allowed tools
+
+	// Unattended runs the team without any blocking human interaction:
+	// ask_user returns a safe default instead of reading stdin, --steps/--tui
+	// are disabled, and only explicitly-allowed tools may run (deny-by-default).
+	Unattended bool
+	// MaxWallClock caps total run wall-clock time in seconds (0 = unlimited).
+	// When exceeded, the coordinator force-enters wrap-up and refuses new tasks.
+	MaxWallClock int64
+	// MaxTotalTokens caps cumulative LLM token usage across the run (0 = unlimited).
+	MaxTotalTokens int64
+	// Acceptance is an optional shell command run when the coordinator finishes;
+	// a non-zero exit marks the whole run as not-accepted (reported/notified).
+	Acceptance string
 }
 
 type OllamaProvider struct {

@@ -127,6 +127,31 @@ func NewAskUserTool(opts ...ToolOption) fantasy.AgentTool {
 	}
 }
 
+// unattendedAskUserResponse produces a safe, non-blocking answer when no human
+// is available. For choice questions it picks the first option as a documented
+// default; for free-text it returns an error so the agent proceeds on its own
+// judgement rather than waiting. Either way it fires a needs-human notification.
+func unattendedAskUserResponse(args askUserArgs, questionType string) (fantasy.ToolResponse, error) {
+	NotifyNeedsHuman(args.Question)
+	fmt.Fprintf(os.Stderr, "\n%s no human available; auto-answering: %s\n", boldFmt("─── Ask User (unattended) ───"), args.Question)
+
+	if (questionType == "single_choice" || questionType == "multiple_choice" || questionType == "mixed") && len(args.Options) > 0 {
+		first := args.Options[0]
+		val := first.Value
+		if val == "" {
+			val = first.Label
+		}
+		resp := askResponseType{Answers: []string{val}}
+		data, err := json.Marshal(resp)
+		if err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to marshal unattended response: %v", err)), nil
+		}
+		return fantasy.NewTextResponse(string(data)), nil
+	}
+
+	return fantasy.NewTextErrorResponse("ask_user unavailable: running unattended with no human to answer. Proceed using your best judgement and reasonable defaults; do not ask again."), nil
+}
+
 func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args askUserArgs
 	if err := parseArgs(call.Input, &args); err != nil {
@@ -162,6 +187,15 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRes
 	// TUI mode returned false — check if context was cancelled.
 	if err := ctx.Err(); err != nil {
 		return fantasy.NewTextErrorResponse("ask_user cancelled: " + err.Error()), nil
+	}
+
+	// Unattended / non-interactive: there is no human to read from stdin.
+	// Returning here is critical — reading stdin would block forever (and the
+	// ask_user-aware deadline means the agent timeout would not rescue it).
+	// Instead return a safe default and fire a needs-human notification so an
+	// operator can follow up out-of-band.
+	if IsUnattended(ctx) || !isInteractiveEnvironment() {
+		return unattendedAskUserResponse(args, questionType)
 	}
 
 	// CLI mode: read from stdin.

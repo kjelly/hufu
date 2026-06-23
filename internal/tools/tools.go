@@ -104,6 +104,32 @@ func TryAskUserTUI(ctx context.Context, question, qtype string, opts []AskUserTU
 	return onAskUserTUI(ctx, question, qtype, opts, allowAny)
 }
 
+// IsUnattended reports whether the context marks the run as unattended
+// (no human available to answer prompts or grant permissions).
+func IsUnattended(ctx context.Context) bool {
+	v, _ := ctx.Value(UnattendedKey).(bool)
+	return v
+}
+
+// IsInteractiveEnvironment reports whether stdin is a terminal and the process
+// is not running in a known CI environment. Exported wrapper around the
+// internal detector so other packages (and ask_user) can branch on it.
+func IsInteractiveEnvironment() bool { return isInteractiveEnvironment() }
+
+var onNeedsHuman func(question string)
+
+// SetOnNeedsHuman registers a hook invoked when an agent requests human input
+// but none is available (unattended / non-interactive). Used to push a
+// notification so an operator can follow up out-of-band.
+func SetOnNeedsHuman(fn func(question string)) { onNeedsHuman = fn }
+
+// NotifyNeedsHuman fires the needs-human hook, if registered.
+func NotifyNeedsHuman(question string) {
+	if onNeedsHuman != nil {
+		onNeedsHuman(question)
+	}
+}
+
 // normalizeWorkspacePath rewrites a path that uses the workspace directory name
 // as if it were at the filesystem root (e.g. /workspace/x) into a relative path
 // (./workspace/x) so it resolves correctly under the workDir.
@@ -181,8 +207,10 @@ func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, erro
 	}
 
 	// 1. In CI/non-interactive environments, never ask the user — deny
-	// all tools except ask_user.
-	if !isInteractiveEnvironment() {
+	// all tools except ask_user. Exception: in unattended mode the allowlist is
+	// trusted to run without a human, so fall through to the allowlist check
+	// (step 3) instead of blanket-denying — otherwise no tool could ever run.
+	if !IsUnattended(ctx) && !isInteractiveEnvironment() {
 		return false, false, nil
 	}
 
@@ -522,8 +550,12 @@ func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 		if rules, _ := ctx.Value(GuardRulesKey).([]string); len(rules) > 0 {
 			approved, reason, reviewErr := t.guardReviewer(ctx, t.info.Name, call.Input, rules)
 			if reviewErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: guard review failed: %v\n", reviewErr)
-				// fail open: allow tool call on reviewer error
+				// Fail closed: when the guard reviewer cannot complete (timeout,
+				// model error, etc.) we must not silently allow a call that was
+				// supposed to be reviewed. Deny it so the agent retries or finds
+				// an allowed alternative, rather than bypassing the guard.
+				fmt.Fprintf(os.Stderr, "warning: guard review failed, denying tool call: %v\n", reviewErr)
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("Guard review unavailable (%v); tool call denied. Retry or use a different approach that does not require review.", reviewErr)), nil
 			} else if !approved {
 				msg := fmt.Sprintf("Guard rule violation: %s", reason)
 				return fantasy.NewTextErrorResponse(msg), nil

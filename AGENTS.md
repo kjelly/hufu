@@ -90,7 +90,8 @@ Results joined and printed to stdout
 |---------|-------------|
 | **Multi-Provider** | `ProviderManager` routes models across multiple providers (Ollama, OpenAI, etc.) |
 | **Sidecar** | Lightweight LLM for skill matching (`sidecarModel`) and guard review (`guardModel`) |
-| **Guard System** | Rule-based output review per agent (`guard` field in .md); triggers `guardModel` sidecar on violation |
+| **Guard System** | Rule-based output review per agent (`guard` field in .md); triggers `guardModel` sidecar on violation. **Fails closed** — if the reviewer errors/times out, the tool call is denied, not allowed |
+| **Deliverable Verification** | Per-task `verify` shell command (in the `agent` tool); runs after the agent reports success and before the task is marked done. A non-zero exit fails the task and triggers a retry — an objective, non-LLM check that the artifact actually exists |
 | **Auto-Skills** | Sidecar-driven skill matching via `--auto-skills` or `auto-skills: true` in team.yml |
 | **Plan-First** | Agents must submit plans before execution if `--plan` or `plan: true` |
 | **Dry Run** | Preview-only execution (`--dry-run`) — no LLM calls |
@@ -141,6 +142,19 @@ Results joined and printed to stdout
 | `--skill` | — | `nil` | Force-load specific skills (repeatable) |
 | `--var` | — | `nil` | Set template variable `key=value` (repeatable) |
 | `--var-file` | — | `nil` | Read template variables from a file (repeatable) |
+| `--unattended` | — | `false` | No-human mode: `ask_user` returns safe defaults instead of blocking on stdin, `--steps`/`--tui` are auto-disabled, and only allowlisted tools may run (deny-by-default even without a TTY) |
+| `--max-duration` | — | `0` | Budget: max total wall-clock seconds before forcing wrap-up (`0` = unlimited) |
+| `--max-total-tokens` | — | `0` | Budget: max cumulative LLM tokens before forcing wrap-up (`0` = unlimited) |
+
+### Unattended Operation
+
+For running with no human watching (cron, queue worker, CI):
+
+- **`--unattended`** is the master switch. It makes `ask_user` non-blocking (choice → first option; free-text → an error telling the agent to proceed on its own), disables `--steps`/`--tui`, and lets the allowlist run without a TTY while still denying non-allowlisted tools.
+- **Budgets** (`--max-duration`, `--max-total-tokens`, or team.yaml `max-duration` / `max-total-tokens`) are the circuit-breaker: when exceeded, `ExecuteTasks` forces wrap-up and refuses new tasks, emitting a notifiable `budget_exceeded` event. Token usage is aggregated from each agent run's `fantasy.StepResult.Usage`.
+- **Notifications** fire on `done` / `error` / `wrap_up` / `budget_exceeded` / `needs_human` via the `notify` config (OSC and/or `command`). `needs_human` fires when an agent calls `ask_user` in unattended mode so an operator can follow up out-of-band.
+- **Acceptance** (`acceptance:` in team.yaml) is an objective whole-run gate run at `finish`; a non-zero exit appends a failure note to the result and emits an `error` notification (it does not block finishing — the work is already done).
+- **Triggers & resume (by design, external):** scheduling is delegated to the host (system cron / systemd timer / queue) invoking `hufu` per run; session state persists under `workspace/` (`session.json`, `stm.md`, `ltm.md`), and `--new` archives it. Full mid-task crash-resume (re-attaching to in-flight worker tasks) is **not** implemented — a crashed run is re-driven from persisted session context on the next invocation.
 
 ### Prompt Syntax
 
@@ -457,6 +471,12 @@ no-net: false
 force-mcp: false
 shell: bash
 
+# === Unattended Operation ===
+unattended: false           # no human present: ask_user auto-answers, deny-by-default tools
+max-duration: 0             # budget: max total wall-clock seconds (0 = unlimited)
+max-total-tokens: 0         # budget: max cumulative LLM tokens (0 = unlimited)
+acceptance: ""              # shell command run at finish; non-zero exit = run not accepted
+
 # === Template Variables ===
 vars:
   project_name: "hufu"
@@ -579,6 +599,10 @@ Your system prompt here.
 | `no-net` | Block network access |
 | `force-mcp` | Force MCP mode: disable built-in execution/network tools |
 | `shell` | Default shell for all agents in this team (searched from PATH, e.g., `bash`, `zsh`, `nu`) |
+| `unattended` | Run with no human: `ask_user` auto-answers, `--steps`/`--tui` off, deny-by-default tools (CLI `--unattended` also sets this) |
+| `max-duration` | Budget: max total wall-clock seconds before forced wrap-up (`0` = unlimited) |
+| `max-total-tokens` | Budget: max cumulative LLM tokens before forced wrap-up (`0` = unlimited) |
+| `acceptance` | Shell command run at `finish` as a whole-run gate; non-zero exit marks the run not-accepted |
 | `vars` | Template variables map |
 | `notify` | Notification configuration |
 
@@ -925,9 +949,29 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 31. **Auto-skills uses keyword fallback** — If sidecar skill matching fails (network error, model unavailable), it falls back to keyword matching against skill names and descriptions.
 
-32. **Guard rules are per-agent only** — There is no global guard configuration. Rules are defined in each agent's `.md` frontmatter under `guard:`.
+32. **Guard rules are per-agent only** — There is no global guard configuration. Rules are defined in each agent's `.md` frontmatter under `guard:`. Guard review **fails closed**: if the `guardModel` reviewer errors or times out, the tool call is denied (returns a `Guard review unavailable` error), so an unreviewed call never slips through.
 
 33. **Multi-provider aliases** — The `aliases` field in provider configs allows mapping short names (e.g., `gpt-4`) to full model names (e.g., `gpt-4o`).
+
+42. **Per-task deliverable verification (`verify`)** — Each task in the `agent` tool accepts an optional `verify` shell command (`TaskDef.Verify`). After the worker reports success, `executeTask` runs it in the project dir (team/agent shell, falling back to `sh`); a non-zero exit converts the task to a failure and triggers the normal retry path (`coordinator.go`, success branch). This is an objective, non-LLM guard against agents that claim completion without producing the artifact. The extra-models path (`executeTaskWithExtraModels` → `executeSingleAgentWithModel`) threads `verify` into each model's `TaskDef`, so every model is verified (and retried) independently; unverified outputs surface as `*Error*` entries in `mergeAgentResults`.
+
+43. **Repeated-failure early stop** — In `executeTask`'s retry loop, if an attempt fails with the same error as the previous attempt (`sameFailure`, ignoring the `attempt N failed:` prefix), retries stop early instead of burning the full `max-retries` budget on an identical failing action.
+
+44. **Failure reflection always produces a hint** — `reflectOnFailure` uses the sidecar when available, but now falls back to `localFailureHint` (deterministic error classification: timeout / missing file / permission / verification / step exhaustion / duplicate) so retries are never blind even with no sidecar configured.
+
+45. **`team_info` `task_result` action** — Workers can call `team_info` with `action: task_result, agent: <name>` to read the full `## Result` of another agent's most recently completed task (up to ~8 KB), not just the short STM summary — reduces duplicate work across agents.
+
+46. **STM role filter relaxed** — `filterSTMSectionsByRole` now shows `# 決策` (decisions) and `# 待解決` (open questions) to **all** roles, and findings to writers/coders, so cross-cutting knowledge is never hidden by role. Empty/coordinator/orchestrator roles still see everything.
+
+47. **Bounded worker context** — The auxiliary context blocks appended to a worker prompt (prior-agent STM, concurrent tasks, LTM) are assembled under a combined `maxWorkerAuxContextChars` (5000) budget via `assembleContextWithinBudget`, dropping lowest-priority blocks (LTM) first. `appendHistory` truncation preserves the first `conversationHeadKeep` (4) messages — which carry the original goal — instead of dropping the head when sidecar compaction is unavailable.
+
+48. **Unattended is a context value, not just a flag** — `Coordinator.unattended` is propagated into worker/direct/orchestrator task contexts via `tools.UnattendedKey`. `ask_user` and `CheckToolPermission` branch on `tools.IsUnattended(ctx)`. Critically, unattended **skips the step-1 blanket deny** in `CheckToolPermission` (which otherwise denies everything when stdin is not a TTY) and falls through to the allowlist — without this, an unattended/no-TTY run could not use any tool.
+
+49. **ask_user never blocks unattended** — In unattended or non-interactive (`!isInteractiveEnvironment()`) mode, `ask_user` returns `unattendedAskUserResponse` (first option for choices; an error for free-text) instead of reading stdin, and fires `tools.NotifyNeedsHuman`. This matters because `AskUserAwareDeadline` excludes ask_user time from the agent timeout — a stdin read would otherwise hang forever.
+
+50. **Budget circuit-breaker** — `ExecuteTasks` checks `budgetExceeded()` right after the max-rounds check: if `maxWallClock` (from `--max-duration`/team `max-duration`) or `tokenBudget` (`--max-total-tokens`/team `max-total-tokens`) is exceeded, it forces wrap-up and emits a one-shot `budget_exceeded` event (`budgetTripped` guards against repeats). Tokens are summed from `fantasy.StepResult.Usage.TotalTokens` in `runAgentWithStatusAndHistory` (the single agent-run chokepoint).
+
+51. **Notify event vocabulary extended** — `notify` `defaultEvents` now also includes `budget_exceeded` and `needs_human`, with dedicated `formatEvent` cases. The coordinator emits `budget_exceeded`; `needs_human` is pushed from the ask_user tool via the `SetOnNeedsHuman` hook (wired in `cmd/hufu` to the active notifier).
 
 ## Model Configuration Priority
 
