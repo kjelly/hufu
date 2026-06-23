@@ -3,7 +3,6 @@ name: study-coordinator
 description: Coordinates the open-source study team, delegating tasks and synthesizing final learning guides.
 tools: read,write
 role: coordinator
-model: ollama/qwen3.5:397b-cloud
 temperature: 0.0
 max-tokens: 12000
 top-p: 0.6

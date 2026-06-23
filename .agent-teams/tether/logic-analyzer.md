@@ -4,7 +4,6 @@ description: Deep-dives into specific functions, traces algorithms, and understa
 tools: read,bash,grep
 role: worker
 timeout: 900
-model: ollama/qwen3.5:397b-cloud
 temperature: 0.0
 max-tokens: 12000
 top-p: 0.6

@@ -4,7 +4,6 @@ description: Identifies design patterns and writes structured markdown learning 
 tools: read,write,bash,grep
 role: worker
 timeout: 900
-model: ollama/qwen3.5:397b-cloud
 temperature: 0.0
 max-tokens: 12000
 top-p: 0.6

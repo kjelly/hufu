@@ -4,7 +4,6 @@ description: Analyzes repository macro-structure, entry points, build systems, a
 tools: read,bash,grep,glob
 role: worker
 timeout: 900
-model: ollama/qwen3.5:397b-cloud
 temperature: 0.0
 max-tokens: 12000
 top-p: 0.6
