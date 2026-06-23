@@ -63,7 +63,7 @@ User Prompt
 main.runTeam()
     │
     ├─► team.NewTeamRegistry(searchPaths)
-    ├─► TeamRegistry.Discover() ── Scans .agent-teams/ dirs for team.yml/team.yaml
+    ├─► TeamRegistry.Discover() ── Scans .agent-teams/ dirs; a directory is a team if it has team.yml/team.yaml **or** at least one *.md file (the directory basename becomes the team name when no team.yml is present)
     │
     ▼
 ParsePromptWithLazyAgents() ── Identifies @team-name references
@@ -98,6 +98,7 @@ Results joined and printed to stdout
 | **Step Confirm** | Pause before each batch via `--steps` |
 | **Report Gen** | Markdown report after execution via `--report` |
 | **Template Vars** | `--var` / `--var-file` / `vars` in team.yml for agent prompts |
+| **Default Team** | Built-in ad-hoc team (coordinator + Helper) via `--default` — no `.agent-teams/` required |
 
 ## CLI Flags
 
@@ -116,7 +117,7 @@ Results joined and printed to stdout
 | `--memory-model` | — | `""` | Embedding model for memory (default: `qwen3-embedding:4b`) |
 | `--archive-memory` | — | `false` | Archive session summary to memory and exit |
 | `--show-history` | — | `false` | Show previous session history on resume |
-| `--dry-run` | — | `false` | Preview skill matching and task delegation without executing agents |
+| `--dry-run` | — | `false` | LLM-free preview of skill matching and available agents (does not call the model, does not execute agents) |
 | `--tui` | — | `false` | Show a Bubble Tea TUI for real-time task tracking |
 | `--rbash` | — | `false` | Use restricted bash (rbash) for the bash tool |
 | `--no-net` | — | `false` | Block all network access for agent subprocesses |
@@ -126,6 +127,16 @@ Results joined and printed to stdout
 | `--plan` | — | `false` | Force plan-first mode: agents must submit plans before executing |
 | `--auto-skills` | — | `false` | Enable automatic skill detection via sidecar / LLM matching |
 | `--report` | — | `false` | Generate a full execution report as a markdown file |
+| `--default` | — | `false` | Use the built-in default team (coordinator + Helper); no `.agent-teams/` directory required (mutually exclusive with `--agent-team`). Discovers global skills from `~/.agents/skills/` and respects `--skill` forced skills. |
+| `--helper-tools` | — | `""` | Comma-separated extra tools to enable for the default Helper worker when `--default` is set (e.g. `bash` or `bash,sudo,ssh`). Whitespace around each entry is trimmed; empty entries are dropped. Empty = Helper's baseline read-only toolset. |
+| `--model` | — | `""` | Override default model for the active team (e.g. `ollama/qwen3:8b`); highest priority — overrides agent .md, team.yaml, and hufu.yaml |
+| `--temperature` | — | `""` | Override sampling temperature (e.g. `0.2`) |
+| `--max-tokens` | — | `""` | Override max output tokens (e.g. `4096`) |
+| `--top-p` | — | `""` | Override top-p value (e.g. `0.9`) |
+| `--top-k` | — | `""` | Override top-k value (e.g. `40`) |
+| `--sidecar-model` | — | `""` | Override sidecar model used for skill matching (e.g. `ollama/qwen3:1b`); falls back to `--model` when not set |
+| `--guard-model` | — | `""` | Override guard model used for output review (e.g. `ollama/qwen3:8b`); falls back to `--model` when not set |
+| `--timeout` | — | `0` | Override agent/coordinator timeout in seconds (e.g. `1800` for 30 min). `0` = use team/agent default. Highest priority — overrides agent `.md` and `team.yaml`. |
 | `--fix` | — | `""` | Analyze previous execution data and suggest improvements |
 | `--skill` | — | `nil` | Force-load specific skills (repeatable) |
 | `--var` | — | `nil` | Set template variable `key=value` (repeatable) |
@@ -382,10 +393,12 @@ The TUI is built on the **Bubble Tea** framework. `Model.Update(msg)` is a **pur
 
 ### team.yml
 
+`team.yml` (or `team.yaml`) is **optional**. A directory is recognized as a team if it contains this file **or** at least one `*.md` agent definition. When the file is absent, the directory basename is used as the team name. When present, the file's `name:` field takes precedence (if non-empty). When the file is absent, all other team-level settings fall back to built-in defaults (`max-rounds: 10`, `workspace: workspace`, `timeout: 600`, `max-retries: 2`).
+
 Complete configuration reference:
 
 ```yaml
-# === Required Fields ===
+# === Optional (recommended) Fields ===
 name: my-team
 
 # === Optional Fields ===
@@ -538,7 +551,7 @@ Your system prompt here.
 
 | Field | Description |
 |-------|-------------|
-| `name` | Team name (required) |
+| `name` | Team name. File `team.yml`/`team.yaml` is optional; if absent or `name` is empty, the directory basename is used. |
 | `description` | Team description |
 | `max-rounds` | Maximum coordination rounds (default: 10) |
 | `max-steps` | Agent default max steps (default: 30) |
@@ -859,7 +872,7 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 20. **setupPromptSignals returns cleanup func** — `setupPromptSignals` now returns a `func()` that stops signal handlers and closes channels. Called via `defer setupPromptSignals(injector)()` to ensure cleanup on function exit.
 
-21. **Graceful shutdown with Ctrl+C** — First Ctrl+C sends SIGINT → `activeCoordinator.SetWrapUp()` → `SetWrapUp()` reports `StatusEvent{Type: "wrap_up"}` (CLI displays `─── WRAP UP ───`) → `ExecuteTasks` checks `IsWrapUp()` and refuses to delegate new tasks → Second Ctrl+C forces `cancel()` for immediate exit.
+21. **Graceful shutdown with Ctrl+C** — First Ctrl+C sends SIGINT → `activeCoordinator.SetWrapUp()` → `SetWrapUp()` reports `StatusEvent{Type: "wrap_up"}` (CLI displays `─── WRAP UP ───`) → `ExecuteTasks` checks `IsWrapUp()` and refuses to delegate new tasks → Second Ctrl+C forces `cancel()` for immediate exit. On 2nd Ctrl+C the handler prints `Coordinator.GetCurrentStatus()` (e.g. `model agent=helper model=ollama/qwen3:8b step=3 (12s elapsed)`) so the user can see which stage is stuck. If main does not return within 8 s, an `os.Exit(130)` watchdog fires after a best-effort `SaveSession` + `SaveSessionMD` so the user never has to SIGKILL with no output.
 
 22. **Wrap-up mechanism** — `promptInjector.wrapUpCh` (buffered channel, size 1) + `wrapUpRequested atomic.Bool` flag. `injectWrapUp()` sets the flag and sends to channel (non-blocking). `IsWrapUpRequested()` atomically checks. `runWithInjection()` uses `select` to handle both normal prompts and wrap-up in one select statement.
 
@@ -873,6 +886,8 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 27. **runWithInjection uses select not polling** — `select { case <-injector.wrapUpCh: ... case prompt, ok := <-injector.ch: ... default: return }` instead of a polling loop. More efficient and responsive.
 
+28. **Coordinator.GetCurrentStatus() for interrupt diagnostics** — `Coordinator` tracks the current stage (`model` / `tool` / `wrapping_up` / `idle`), current step number, current tool name, and current model ID. `GetCurrentStatus()` returns a human-readable snapshot like `model agent=coordinator model=ollama/qwen3:8b step=3 (12s elapsed)`. Used by the SIGINT handler to tell the user exactly where the program is stuck when they hit Ctrl+C.
+
 28. **executeSegments passes activeCoord to all run paths** — Both coordinator `Run()` and `RunDirectAgent()` paths set/clear `activeCoordinator` so wrap-up signal can target the right instance regardless of which code path is active.
 
 29. **`TodoItem` fields are lowercase** — `TodoItem` uses `ID`, `Agent`, `Desc` (exported), while the legacy `TaskInfo` uses `Agent`/`Task`. Be careful not to confuse them.
@@ -884,6 +899,19 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 32. **Guard rules are per-agent only** — There is no global guard configuration. Rules are defined in each agent's `.md` frontmatter under `guard:`.
 
 33. **Multi-provider aliases** — The `aliases` field in provider configs allows mapping short names (e.g., `gpt-4`) to full model names (e.g., `gpt-4o`).
+
+## Model Configuration Priority
+
+When multiple sources of model configuration are present, the effective value follows this priority order (highest first):
+
+1. **CLI flags** (`--model`, `--temperature`, `--max-tokens`, `--top-p`, `--top-k`, `--sidecar-model`, `--guard-model`) — apply last, override everything below.
+2. **Agent `.md` frontmatter** (`model:`, etc.) — per-agent override.
+3. **Team `team.yaml`** (`model:`, `sidecar-model:`, `guard-model:`) — per-team default.
+4. **`hufu.yaml`** global config — last-resort fallback.
+
+CLI flags are only applied when their values are non-empty. The `--default` team (built-in) starts with empty `Generation`, so the CLI flags are the *only* way to set a model for it without editing `hufu.yaml`.
+
+**Sidecar / guard model fallback:** if `--sidecar-model` or `--guard-model` is not specified, the value of `--model` is used. Explicit `--sidecar-model` / `--guard-model` always win. This lets a user set a single `--model` and have all three roles (main, sidecar, guard) use it.
 
 34. **TUI `--steps` flag combination** — `--tui` and `--steps` cannot be used together because step confirmation requires terminal access that conflicts with the Bubble Tea altscreen.
 
@@ -933,3 +961,18 @@ Displayed via `skillDisplay` struct in `cmd/hufu/display.go`, updated on each `s
 | Path | Description |
 |------|-------------|
 | `.agents/skills/code-reviewer/SKILL.md` | Code review skill (supports local changes and remote PRs) — Global skill at project root (unchanged) |
+
+## Ask-User Timeout Exclusion
+
+When an agent invokes the `ask_user` tool, the time spent waiting for the user to respond **does not count** against the agent's LLM timeout. This prevents long user thinking time from causing premature timeout cancellation.
+
+**Mechanism:** `tools.AskUserAwareDeadline(ctx)` wraps a `context.Context` with a deadline so that while `tools.IsAskUserActive()` is true, the wrapped context reports **no deadline, no done channel, and no error**. When ask_user finishes, the original deadline is restored.
+
+**Wrapped sites** (in `internal/team/coordinator.go`):
+- Worker `taskCtx` (line ~4138) — wraps `agentTimeout` so the user response time does not consume the agent's budget.
+- Direct `taskCtx` (line ~5608) — same for direct agent invocations.
+- Coordinator `orchCtx` (line ~5716) — same for the coordinator's own task ctx.
+
+**Implementation:** `internal/tools/ask_user.go` defines `askUserDeadlineCtx` (private) and the public wrapper `AskUserAwareDeadline`. The wrapper delegates `Value()` to the underlying context so all `context.WithValue` keys remain accessible.
+
+**Race-safety:** `IsAskUserActive()` reads an `atomic.Int32`; `Deadline()` is called at safe points (HTTP client, etc.). The toggle between hidden and visible deadline is observed consistently by all goroutines because `IsAskUserActive` is atomic.

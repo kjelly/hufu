@@ -82,6 +82,22 @@ func (r *TeamRegistry) hasTeamFile(dir string) bool {
 			return true
 		}
 	}
+	// Fallback: a directory that contains at least one .md file is treated
+	// as a team. The directory basename will be used as the team name when
+	// no team.yml/team.yaml is present.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := strings.ToLower(e.Name())
+		if strings.HasSuffix(name, ".md") {
+			return true
+		}
+	}
 	return false
 }
 

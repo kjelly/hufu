@@ -1,3 +1,6 @@
-provider-url: "http://192.168.11.117:11434/v1"
-sidecar-model: ollama/qwen3.6:35b
-model: ollama/qwen3.6:35b
+# provider-url: "http://192.168.11.117:11434/v1"
+# sidecar-model: ollama/qwen3.6:35b
+# model: ollama/qwen3.6:35b
+#
+sidecar-model: ollama/minimax-m3:cloud
+model: ollama/minimax-m3:cloud

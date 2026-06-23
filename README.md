@@ -94,7 +94,7 @@ Create an `.agent-teams/` directory in your project root and add a team definiti
 mkdir -p .agent-teams/my-team
 ```
 
-Create `team.yaml`:
+Create `team.yaml` (optional — the directory name is used as the team name when the file is absent):
 
 ```yaml
 name: my-team
@@ -162,7 +162,7 @@ go run ./cmd/hufu
 | `--memory-model` | — | `string` | `""` | Embedding model for memory (default: `qwen3-embedding:4b`) |
 | `--archive-memory` | — | `bool` | `false` | Archive session summary to memory and exit |
 | `--show-history` | — | `bool` | `false` | Show previous session history on resume |
-| `--dry-run` | — | `bool` | `false` | Preview skill matching and task delegation without executing agents |
+| `--dry-run` | — | `bool` | `false` | LLM-free preview of skill matching and available agents (no model calls, no agent execution) |
 | `--tui` | — | `bool` | `false` | Show a Bubble Tea TUI for real-time task tracking |
 | `--rbash` | — | `bool` | `false` | Use restricted bash (rbash) for the bash tool |
 | `--no-net` | — | `bool` | `false` | Block all network access for agent subprocesses |
@@ -172,6 +172,16 @@ go run ./cmd/hufu
 | `--plan` | — | `bool` | `false` | Force plan-first mode: agents must submit plans before executing |
 | `--auto-skills` | — | `bool` | `false` | Enable automatic skill detection via sidecar / LLM matching |
 | `--report` | — | `bool` | `false` | Generate a full execution report as a markdown file |
+| `--default` | — | `bool` | `false` | Use the built-in default team (coordinator + Helper); no `.agent-teams/` directory required (mutually exclusive with `--agent-team`). Discovers global skills from `~/.agents/skills/` and respects `--skill` forced skills. |
+| `--helper-tools` | — | `string` | `""` | Comma-separated extra tools for the default Helper worker when `--default` is set (e.g. `bash` or `bash,sudo,ssh`). Whitespace trimmed; empty entries dropped. Empty = baseline read-only toolset. |
+| `--model` | — | `string` | `""` | Override default model for the active team (highest priority) |
+| `--temperature` | — | `string` | `""` | Override sampling temperature |
+| `--max-tokens` | — | `string` | `""` | Override max output tokens |
+| `--top-p` | — | `string` | `""` | Override top-p value |
+| `--top-k` | — | `string` | `""` | Override top-k value |
+| `--sidecar-model` | — | `string` | `""` | Override sidecar model used for skill matching (falls back to `--model` when not set) |
+| `--guard-model` | — | `string` | `""` | Override guard model used for output review (falls back to `--model` when not set) |
+| `--timeout` | — | `int64` | `0` | Override agent/coordinator timeout in seconds (e.g. `1800` for 30 min). `0` = use team/agent default. |
 | `--fix` | — | `string` | `""` | Analyze previous execution data and suggest improvements |
 | `--skill` | — | `[]string` | `nil` | Force-load specific skills (repeatable) |
 | `--var` | — | `[]string` | `nil` | Set template variable `key=value` (repeatable) |
@@ -939,10 +949,13 @@ Preview execution plan without LLM calls:
 go run ./cmd/hufu --dry-run "Refactor the module"
 ```
 
-Outputs:
-- Matched skills
-- Agents that would be used
-- Planned task delegation
+Outputs (derived purely from team config, no LLM involved):
+- Team name, model, sidecar model
+- User prompt
+- All available agents (name, role, model, tools, skills)
+- All discovered skills
+- Skills whose name/description keywords match the user prompt
+- Note: the actual task delegation is **not** planned here; that requires the LLM. Dry-run only shows the agents that *could* be used.
 
 ---
 

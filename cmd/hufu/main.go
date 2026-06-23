@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	ergoreadline "github.com/ergochat/readline"
 	"github.com/spf13/cobra"
@@ -30,34 +31,44 @@ import (
 )
 
 var (
-	providerURL         string
-	providerAPIKey      string
-	verbose             bool
-	workspace           string
-	newSession          bool
-	tempWorkspace       bool
-	agentTeamName       string
-	agentTeamSearchPath string
-	memoryEnabled       bool
-	memoryModel         string
-	archiveMemory       bool
-	showHistory         bool
-	stepsMode           bool
-	dryRun              bool
-	tuiMode             bool
-	rbashMode           bool
-	noNet               bool
-	forceMCP            bool
-	think               bool
-	direnv              bool
-	varFlags            []string
-	varFiles            []string
-	forcedSkills        []string
-	planMode            bool
-	autoSkills          bool
-	fixQuestion         string
-	reportMode          bool
-	globalPromptReader  atomic.Pointer[readline.PromptReader]
+	providerURL          string
+	providerAPIKey       string
+	verbose              bool
+	workspace            string
+	newSession           bool
+	tempWorkspace        bool
+	agentTeamName        string
+	agentTeamSearchPath  string
+	memoryEnabled        bool
+	memoryModel          string
+	archiveMemory        bool
+	showHistory          bool
+	stepsMode            bool
+	dryRun               bool
+	tuiMode              bool
+	rbashMode            bool
+	noNet                bool
+	forceMCP             bool
+	think                bool
+	direnv               bool
+	varFlags             []string
+	varFiles             []string
+	forcedSkills         []string
+	planMode             bool
+	autoSkills           bool
+	fixQuestion          string
+	reportMode           bool
+	defaultTeam          bool
+	helperTools          string
+	modelOverride        string
+	temperatureOverride  string
+	maxTokensOverride    string
+	topPOverride         string
+	topKOverride         string
+	sidecarModelOverride string
+	guardModelOverride   string
+	timeoutOverride      int64
+	globalPromptReader   atomic.Pointer[readline.PromptReader]
 )
 
 type errInterrupted struct{}
@@ -107,6 +118,16 @@ func main() {
 	rootCmd.Flags().BoolVar(&autoSkills, "auto-skills", false, "Enable automatic skill detection via sidecar/LLM matching")
 	rootCmd.Flags().StringVar(&fixQuestion, "fix", "", "Analyze previous execution data and suggest improvements for the given question")
 	rootCmd.Flags().BoolVar(&reportMode, "report", false, "Generate a full execution report as a markdown file")
+	rootCmd.Flags().BoolVar(&defaultTeam, "default", false, "Use the built-in default team (coordinator + Helper); no .agent-teams/ directory required")
+	rootCmd.Flags().StringVar(&helperTools, "helper-tools", "", "Comma-separated extra tools to enable for the default Helper worker when --default is set (e.g. 'bash' or 'bash,sudo,ssh'). Whitespace is trimmed.")
+	rootCmd.Flags().StringVar(&modelOverride, "model", "", "Override default model for the active team (e.g. ollama/qwen3:8b)")
+	rootCmd.Flags().StringVar(&temperatureOverride, "temperature", "", "Override sampling temperature (e.g. 0.2)")
+	rootCmd.Flags().StringVar(&maxTokensOverride, "max-tokens", "", "Override max output tokens (e.g. 4096)")
+	rootCmd.Flags().StringVar(&topPOverride, "top-p", "", "Override top-p value (e.g. 0.9)")
+	rootCmd.Flags().StringVar(&topKOverride, "top-k", "", "Override top-k value (e.g. 40)")
+	rootCmd.Flags().StringVar(&sidecarModelOverride, "sidecar-model", "", "Override sidecar model used for skill matching (e.g. ollama/qwen3:1b); falls back to --model when not set")
+	rootCmd.Flags().StringVar(&guardModelOverride, "guard-model", "", "Override guard model used for output review (e.g. ollama/qwen3:8b); falls back to --model when not set")
+	rootCmd.Flags().Int64Var(&timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds (e.g. 1800 for 30 min). 0 = use team/agent default.")
 
 	if err := rootCmd.Execute(); err != nil {
 		var interrupted errInterrupted
@@ -134,6 +155,12 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	// access that conflicts with the Bubble Tea altscreen.
 	if stepsMode && tuiMode {
 		return fmt.Errorf("cannot use --steps (step confirmation) with --tui (TUI mode); remove one flag")
+	}
+
+	// --default and --agent-team are mutually exclusive: --default provides its
+	// own in-memory team, so an explicit --agent-team would conflict.
+	if defaultTeam && agentTeamName != "" {
+		return fmt.Errorf("cannot use --default with --agent-team; pick one")
 	}
 
 	pr, err := readline.NewPromptReader(defaultHistoryPath())
@@ -207,9 +234,29 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	activeCoord := &activeCoordinator{}
 	defer setupPromptSignals(injector)()
 
+	// loadedTeams is assigned below; the SIGINT handler reads it via
+	// the pointer to print session paths during the watchdog step.
+	// Declared as a top-level var so the closure captures the
+	// pointer, not the value.
+	var loadedTeams map[string]*teamContext
+
 	sigIntCh := make(chan os.Signal, 1)
 	signal.Notify(sigIntCh, os.Interrupt)
 	sigIntDone := make(chan struct{})
+
+	// Watchdog: 8 seconds after the second Ctrl+C, if the program has
+	// not exited, attempt to save session data and force-exit. This
+	// guarantees users see SOMETHING even if a goroutine is stuck on
+	// a network call that doesn't honor context cancellation.
+	var watchdog *time.Timer
+	stopWatchdog := func() {
+		if watchdog != nil {
+			watchdog.Stop()
+			watchdog = nil
+		}
+	}
+	defer stopWatchdog()
+
 	go func() {
 		defer close(sigIntDone)
 		first := true
@@ -230,8 +277,38 @@ func runTeam(cmd *cobra.Command, args []string) error {
 				first = false
 			} else {
 				if activeTUIProgram.Load() == nil {
-					fmt.Fprintf(os.Stderr, "\n%s Force quit\n", errStyle.Render("✗"))
+					// Print current state so user knows where the program is stuck.
+					currentStatus := "unknown"
+					if c := activeCoord.Get(); c != nil {
+						currentStatus = c.GetCurrentStatus()
+					}
+					fmt.Fprintf(os.Stderr, "\n%s Force quit requested\n", errStyle.Render("✗"))
+					fmt.Fprintf(os.Stderr, "  Current: %s\n", currentStatus)
+					fmt.Fprintf(os.Stderr, "  Cancelling in-flight operations (up to 8s grace period)...\n")
+					fmt.Fprintf(os.Stderr, "  Press Ctrl+\\\\ (SIGQUIT) to dump stack if still stuck\n")
 				}
+
+				// Start watchdog: if main hasn't returned within 8s, force-exit.
+				// Snapshot loaded teams under no lock; best-effort session save.
+				stopWatchdog() // ensure no double-watchdog
+				watchdog = time.AfterFunc(8*time.Second, func() {
+					fmt.Fprintf(os.Stderr, "\n%s Operations did not cancel within 8s. Forcing exit.\n",
+						errStyle.Render("⚠"))
+					for _, tc := range loadedTeams {
+						if tc == nil {
+							continue
+						}
+						if tc.session != nil && tc.session.Workspace != "" {
+							fmt.Fprintf(os.Stderr, "  Session: %s\n", tc.session.Workspace)
+							if tc.sessionData != nil {
+								_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
+								_ = team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
+							}
+						}
+					}
+					os.Exit(130)
+				})
+
 				cancel()
 			}
 		}
@@ -251,15 +328,17 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	}
 
 	registry := team.NewTeamRegistry(searchPaths)
-	if err := registry.Discover(); err != nil {
-		return fmt.Errorf("failed to discover teams: %w", err)
-	}
+	if !defaultTeam {
+		if err := registry.Discover(); err != nil {
+			return fmt.Errorf("failed to discover teams: %w", err)
+		}
 
-	if registry.TeamCount() == 0 {
-		return fmt.Errorf("no agent teams found in search paths: %s", strings.Join(searchPaths, ", "))
-	}
+		if registry.TeamCount() == 0 {
+			return fmt.Errorf("no agent teams found in search paths: %s", strings.Join(searchPaths, ", "))
+		}
 
-	fmt.Fprintf(os.Stderr, "%s Available teams: %s\n", boldStyle.Render("Teams:"), strings.Join(registry.ListTeams(), ", "))
+		fmt.Fprintf(os.Stderr, "%s Available teams: %s\n", boldStyle.Render("Teams:"), strings.Join(registry.ListTeams(), ", "))
+	}
 
 	if archiveMemory && prompt == "" && !newSession {
 		return runArchiveMemory(context.Background(), registry, vars)
@@ -271,6 +350,9 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	}
 
 	initialTeam := strings.ToLower(agentTeamName)
+	if defaultTeam {
+		initialTeam = "default"
+	}
 
 	initialSegments, err := team.ParsePromptWithLazyAgents(prompt, registry, initialTeam)
 	if err != nil {
@@ -312,19 +394,22 @@ func runTeam(cmd *cobra.Command, args []string) error {
 
 	pathConsent := newPathConsent()
 
-	loadedTeams := map[string]*teamContext{}
+	loadedTeams = map[string]*teamContext{}
 	for _, seg := range initialSegments {
 		if seg.Type == team.SegmentSwitchTeam {
 			if _, ok := loadedTeams[seg.Name]; !ok {
-				tc, err := loadTeamByName(ctx, seg.Name, registry, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
+				var tc *teamContext
+				var err error
+				if defaultTeam && seg.Name == "default" {
+					tc, err = loadDefaultTeam(ctx, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
+				} else {
+					tc, err = loadTeamByName(ctx, seg.Name, registry, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
+				}
 				if err != nil {
 					return fmt.Errorf("failed to load team %q: %w", seg.Name, err)
 				}
 				if stepsMode {
 					tc.coordinator.SetStepConfirmFn(makeStepConfirmFn())
-				}
-				if dryRun {
-					tc.coordinator.SetDryRun(true)
 				}
 				loadedTeams[seg.Name] = tc
 			}
@@ -505,6 +590,13 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	if err != nil {
 		return nil, err
 	}
+
+	// Apply CLI model overrides as the highest-priority model config layer,
+	// then propagate the resolved Generation to all agents so per-agent
+	// dispatch uses the same model the user asked for on the command line.
+	applyCLIModelOverrides(&session.Config, currentModelOverrides())
+	applyCLITimeoutOverrides(session, currentTimeoutOverrides())
+	propagateTeamGenerationToAgents(session)
 
 	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, session.Config.ProviderURL, "")
 	resolvedProviderAPIKey := config.ResolveProviderAPIKey(defaultProviderAPIKey, session.Config.ProviderAPIKey)
@@ -706,6 +798,297 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	session.Config.Generation.Model = cfg.ResolveModel(session.Config.Generation.Model)
 
 	allowedPaths := buildAllowedPaths(session, registry, cfg)
+
+	hookRegistry := hooks.NewHookRegistry()
+	if configHooks := cfg.GetHooks(); len(configHooks) > 0 {
+		if err := hooks.RegisterShellHooks(hookRegistry, configHooks); err != nil {
+			stderrLog("%s Invalid hooks config: %v\n", errStyle.Render("⚠"), err)
+		} else {
+			for k := range configHooks {
+				stderrLog("%s Hook: %s\n", dimStyle.Render("◆"), k)
+			}
+		}
+	}
+
+	resolvedRestrictedPath := cfg.RestrictedPath
+	if session.Config.RestrictedPath != "" {
+		resolvedRestrictedPath = session.Config.RestrictedPath
+	}
+	if rbashMode && resolvedRestrictedPath == "" {
+		home, _ := os.UserHomeDir()
+		if home != "" {
+			rbashBin := filepath.Join(home, ".rbash-bin")
+			if fi, err := os.Stat(rbashBin); err == nil && fi.IsDir() {
+				resolvedRestrictedPath = rbashBin
+			}
+		}
+	}
+
+	resolvedNoNet := noNet || cfg.NoNet || session.Config.NoNet
+	resolvedForceMCP := forceMCP || cfg.ForceMCP || session.Config.ForceMCP
+
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, think, direnv, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create coordinator: %w", err)
+	}
+	coordinator.SetSessionData(sessionData)
+
+	if memStore != nil && len(oldSessionEntries) > 0 {
+		var summarizeFn memory.SummarizeFunc
+		if s := coordinator.Sidecar(); s != nil {
+			summarizeFn = s.Summarize
+		}
+		if err := memory.ArchiveSessionSummary(ctx, memStore, oldSessionEntries, session.Config.Name, summarizeFn); err != nil {
+			stderrLog("%s Failed to archive session to memory: %v\n", errStyle.Render("⚠"), err)
+		}
+	}
+
+	if len(session.Skills) > 0 {
+		var skillNames []string
+		for _, s := range session.Skills {
+			skillNames = append(skillNames, s.Name)
+		}
+		stderrLog("%s %s\n", boldStyle.Render("Skills:"), strings.Join(skillNames, ", "))
+	}
+
+	if len(resolvedModelList) > 0 {
+		var modelIDs []string
+		for _, m := range resolvedModelList {
+			modelIDs = append(modelIDs, m.ID)
+		}
+		stderrLog("%s %s\n", boldStyle.Render("Models:"), strings.Join(modelIDs, ", "))
+	}
+
+	if resolvedSidecarModel != "" {
+		stderrLog("%s %s\n", boldStyle.Render("Sidecar:"), resolvedSidecarModel)
+	}
+	if resolvedGuardModel != "" {
+		stderrLog("%s %s\n", boldStyle.Render("Guard:"), resolvedGuardModel)
+	}
+	if resolvedMaxConcurrent != 8 {
+		stderrLog("%s %d\n", boldStyle.Render("Max concurrent:"), resolvedMaxConcurrent)
+	}
+
+	resolvedNotify := cfg.ResolveNotify(session.Config.Notify)
+	var notifierInst *notify.Notifier
+	if resolvedNotify.Enabled() {
+		notifierInst = notify.NewNotifier(resolvedNotify, os.Stderr)
+		if resolvedNotify.OSC {
+			stderrLog("%s %s\n", dimStyle.Render("◆"), "Notify: OSC enabled")
+		}
+		if resolvedNotify.Command != "" {
+			stderrLog("%s %s %s\n", dimStyle.Render("◆"), "Notify:", resolvedNotify.Command)
+		}
+	}
+
+	return &teamContext{
+		session:     session,
+		coordinator: coordinator,
+		sessionData: sessionData,
+		notifier:    notifierInst,
+	}, nil
+}
+
+// loadDefaultTeam builds an in-memory default team (coordinator + Helper)
+// without consulting the .agent-teams/ registry. It mirrors loadTeamByName's
+// post-load setup (workspace, session lifecycle, coordinator) so the rest
+// of the CLI works identically.
+func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
+	teamName := "default"
+
+	// Build a base workspace path the same way loadTeamByName does.
+	// The default team reuses the parent workspace without a subdirectory
+	// because there is no on-disk team folder to back it.
+	var baseWorkspace string
+	if workspace != "" {
+		abs, err := filepath.Abs(workspace)
+		if err != nil {
+			return nil, fmt.Errorf("invalid workspace path: %w", err)
+		}
+		baseWorkspace = abs
+	} else {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get working directory: %w", err)
+		}
+		baseWorkspace = filepath.Join(cwd, "workspace")
+	}
+	teamWorkspace := filepath.Join(baseWorkspace, teamName)
+	if err := os.MkdirAll(teamWorkspace, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create workspace: %w", err)
+	}
+
+	session, err := team.LoadDefaultTeam(teamWorkspace, forcedSkills, helperTools)
+	if err != nil {
+		return nil, err
+	}
+	session.Workspace = teamWorkspace
+	session.Config.WorkspaceDir = teamWorkspace
+
+	// Apply CLI model overrides as the highest-priority model config layer,
+	// then propagate to all agents (Helper, coordinator).
+	applyCLIModelOverrides(&session.Config, currentModelOverrides())
+	applyCLITimeoutOverrides(session, currentTimeoutOverrides())
+	propagateTeamGenerationToAgents(session)
+
+	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, session.Config.ProviderURL, "")
+	resolvedProviderAPIKey := config.ResolveProviderAPIKey(defaultProviderURL, session.Config.ProviderAPIKey)
+
+	if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
+		stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)
+	}
+
+	if err := team.InitLTM(session.Workspace, session.Config.Name); err != nil {
+		stderrLog("%s Failed to init ltm.md: %v\n", errStyle.Render("⚠"), err)
+	}
+	if err := team.InitSTM(session.Workspace); err != nil {
+		stderrLog("%s Failed to init stm.md: %v\n", errStyle.Render("⚠"), err)
+	}
+	if newSession {
+		team.ExtractLTMFromHistory(session.Workspace, session.Config.Name)
+	}
+
+	var sessionData *team.SessionData
+	var oldSessionEntries []memory.SessionSummaryEntry
+	if newSession {
+		oldSession := team.LoadSession(session.Workspace)
+		if oldSession != nil {
+			for _, e := range oldSession.Entries {
+				oldSessionEntries = append(oldSessionEntries, memory.SessionSummaryEntry{
+					Role:      e.Role,
+					Content:   e.Content,
+					Timestamp: e.Timestamp,
+				})
+			}
+		}
+
+		existingMD := team.LoadSessionMD(session.Workspace)
+		if existingMD != "" {
+			stderrLog("%s Archiving previous session...\n", stepStyle.Render("⟳"))
+			archivedPath, err := team.ArchiveSessionMD(session.Workspace)
+			if err != nil {
+				stderrLog("%s Failed to archive session: %v\n", errStyle.Render("⚠"), err)
+			} else {
+				stderrLog("%s Previous session archived to %s\n", doneStyle.Render("✓"), filepath.Base(archivedPath))
+			}
+		} else if team.HasSession(session.Workspace) {
+			oldSession := team.LoadSession(session.Workspace)
+			if oldSession != nil && len(oldSession.Entries) > 0 {
+				stderrLog("%s Archiving previous session...\n", stepStyle.Render("⟳"))
+				md := team.GenerateSessionMD(oldSession, session.Config.Name)
+				if err := team.SaveSessionMD(session.Workspace, md); err != nil {
+					stderrLog("%s Failed to save session md: %v\n", errStyle.Render("⚠"), err)
+				}
+				archivedPath, err := team.ArchiveSessionMD(session.Workspace)
+				if err != nil {
+					stderrLog("%s Failed to archive session: %v\n", errStyle.Render("⚠"), err)
+				} else {
+					stderrLog("%s Previous session archived to %s\n", doneStyle.Render("✓"), filepath.Base(archivedPath))
+				}
+			} else {
+				if err := os.Remove(filepath.Join(session.Workspace, "session.json")); err != nil && !os.IsNotExist(err) {
+					stderrLog("%s Failed to remove session file: %v\n", errStyle.Render("⚠"), err)
+				}
+			}
+			if err := team.DeleteConversationHistory(session.Workspace); err != nil {
+				stderrLog("%s Failed to delete conversation history: %v\n", errStyle.Render("⚠"), err)
+			}
+		}
+		if err := team.CleanRunDirs(session.Workspace); err != nil {
+			stderrLog("%s Failed to clean workspace: %v\n", errStyle.Render("⚠"), err)
+		}
+		if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
+			stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)
+		}
+		sessionData = team.NewSession()
+		if err := team.SaveSession(session.Workspace, sessionData); err != nil {
+			stderrLog("%s Failed to save session: %v\n", errStyle.Render("⚠"), err)
+		}
+		if err := team.SaveSessionMD(session.Workspace, team.GenerateSessionMD(sessionData, session.Config.Name)); err != nil {
+			stderrLog("%s Failed to save session md: %v\n", errStyle.Render("⚠"), err)
+		}
+		stderrLog("%s Started new session\n", boldStyle.Render("→"))
+	} else {
+		sessionData = team.LoadSession(session.Workspace)
+		existingMD := team.LoadSessionMD(session.Workspace)
+		if existingMD != "" {
+			stderrLog("%s Resuming session\n", boldStyle.Render("→"))
+		} else if sessionData != nil && len(sessionData.Entries) > 0 {
+			md := team.GenerateSessionMD(sessionData, session.Config.Name)
+			if err := team.SaveSessionMD(session.Workspace, md); err != nil {
+				stderrLog("%s Failed to save session md: %v\n", errStyle.Render("⚠"), err)
+			}
+			existingMD = md
+			stderrLog("%s Resuming session (%d exchanges, since %s)\n",
+				boldStyle.Render("→"),
+				len(sessionData.Entries),
+				sessionData.CreatedAt,
+			)
+		} else {
+			if sessionData == nil {
+				sessionData = team.NewSession()
+			}
+			if err := team.SaveSession(session.Workspace, sessionData); err != nil {
+				stderrLog("%s Failed to save session: %v\n", errStyle.Render("⚠"), err)
+			}
+			if err := team.SaveSessionMD(session.Workspace, team.GenerateSessionMD(sessionData, session.Config.Name)); err != nil {
+				stderrLog("%s Failed to save session md: %v\n", errStyle.Render("⚠"), err)
+			}
+			stderrLog("%s Starting new session\n", boldStyle.Render("→"))
+		}
+
+		if showHistory && existingMD != "" {
+			lines := strings.SplitN(existingMD, "\n", 30)
+			preview := strings.Join(lines, "\n")
+			stderrLog("\n%s\n%s\n\n",
+				boldStyle.Render("─── Previous Session ───"),
+				dimStyle.Render(preview),
+			)
+		}
+	}
+
+	stderrLog("%s %s\n", boldStyle.Render("Team:"), session.Config.Name)
+	stderrLog("%s ", boldStyle.Render("Agents:"))
+	var agentDisplayNames []string
+	for _, def := range sortedAgents(session.Agents) {
+		roleLabel := def.Role
+		agentDisplayNames = append(agentDisplayNames, fmt.Sprintf("%s (%s)", agentStyle.Render(def.Name), dimStyle.Render(roleLabel)))
+	}
+	stderrLog("%s\n", strings.Join(agentDisplayNames, ", "))
+
+	cfg := config.LoadConfig()
+
+	// Default team has no MCP servers or mcp-tools, so skip MCP manager creation.
+	var mcpManager *mcp.MCPToolManager
+
+	var memStore *memory.MemoryStore
+	if memoryEnabled && !tempWorkspace {
+		ollamaAPIURL := config.ProviderURLToOllamaAPI(resolvedProviderURL)
+		embedModel := config.ResolveEmbeddingModel(memoryModel)
+		projectDir, _ := os.Getwd()
+		var err error
+		memStore, err = memory.NewMemoryStore(projectDir, ollamaAPIURL, embedModel)
+		if err != nil {
+			stderrLog("%s Memory store directory creation failed: %v\n", errStyle.Render("⚠"), err)
+		}
+		stderrLog("%s Memory: enabled (model: %s)\n", doneStyle.Render("✓"), embedModel)
+	} else if !memoryEnabled {
+		stderrLog("%s Memory: disabled\n", dimStyle.Render("○"))
+	}
+
+	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
+	resolvedSidecarModel := cfg.ResolveSidecarModel(session.Config.SidecarModel)
+	resolvedGuardModel := cfg.ResolveGuardModel(session.Config.GuardModel, session.Config.SidecarModel)
+	resolvedMaxConcurrent := cfg.ResolveMaxConcurrent(session.Config.MaxConcurrent)
+	if resolvedMaxConcurrent <= 0 {
+		resolvedMaxConcurrent = 8
+	}
+	session.Config.Generation.Model = cfg.ResolveModel(session.Config.Generation.Model)
+
+	// For the default team there is no registry — only the workspace root
+	// is allowed by default.
+	var allowedPaths []string
+	allowedPaths = append(allowedPaths, baseWorkspace)
 
 	hookRegistry := hooks.NewHookRegistry()
 	if configHooks := cfg.GetHooks(); len(configHooks) > 0 {

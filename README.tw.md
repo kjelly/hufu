@@ -94,7 +94,7 @@ ollama serve
 mkdir -p .agent-teams/my-team
 ```
 
-建立 `team.yaml`：
+建立 `team.yaml`（此檔案為選擇性；若未建立，會以目錄名稱作為 team 名稱）：
 
 ```yaml
 name: my-team
@@ -162,7 +162,7 @@ go run ./cmd/hufu
 | `--memory-model` | — | `string` | `""` | Memory 使用的 embedding model（預設：`qwen3-embedding:4b`） |
 | `--archive-memory` | — | `bool` | `false` | 將 session 摘要封存至 memory 後退出 |
 | `--show-history` | — | `bool` | `false` | 恢復時顯示先前的 session 歷史 |
-| `--dry-run` | — | `bool` | `false` | 預覽技能比對與任務委派，不執行 Agent |
+| `--dry-run` | — | `bool` | `false` | 不呼叫 LLM 的預覽，列出技能比對與可用 agents（不執行 agent） |
 | `--tui` | — | `bool` | `false` | 顯示 Bubble Tea TUI 即時任務追蹤 |
 | `--rbash` | — | `bool` | `false` | 對 bash tool 使用 restricted bash (rbash) |
 | `--no-net` | — | `bool` | `false` | 封鎖 Agent 子程序的所有網路存取 |
@@ -172,6 +172,16 @@ go run ./cmd/hufu
 | `--plan` | — | `bool` | `false` | 強制 plan-first 模式：Agent 必須先提交計畫 |
 | `--auto-skills` | — | `bool` | `false` | 啟用 sidecar / LLM 自動技能偵測 |
 | `--report` | — | `bool` | `false` | 產生完整的 markdown 執行報表 |
+| `--default` | — | `bool` | `false` | 使用內建預設團隊（coordinator + Helper）；不需要 `.agent-teams/` 目錄（與 `--agent-team` 互斥）。會自動探索 `~/.agents/skills/` 的全域技能並支援 `--skill` 強制載入。 |
+| `--helper-tools` | — | `string` | `""` | 為預設 Helper worker 啟用額外的工具列表（逗號分隔），需搭配 `--default` 使用（例如 `bash` 或 `bash,sudo,ssh`）。會自動 trim 空白，忽略空項目。空字串 = 預設唯讀工具集。 |
+| `--model` | — | `string` | `""` | 覆寫目前團隊的預設模型（最高優先權） |
+| `--temperature` | — | `string` | `""` | 覆寫取樣溫度 |
+| `--max-tokens` | — | `string` | `""` | 覆寫最大輸出 token 數 |
+| `--top-p` | — | `string` | `""` | 覆寫 top-p 值 |
+| `--top-k` | — | `string` | `""` | 覆寫 top-k 值 |
+| `--sidecar-model` | — | `string` | `""` | 覆寫用於技能配對的 sidecar 模型（未指定時 fallback 到 `--model`） |
+| `--guard-model` | — | `string` | `""` | 覆寫用於輸出審查的 guard 模型（未指定時 fallback 到 `--model`） |
+| `--timeout` | — | `int64` | `0` | 覆寫 agent / coordinator 的 timeout（秒），例如 `1800` 表示 30 分鐘。`0` = 使用 team / agent 預設值。 |
 | `--fix` | — | `string` | `""` | 分析前次執行資料並提出改善建議 |
 | `--skill` | — | `[]string` | `nil` | 強制載入特定 skill（可重複） |
 | `--var` | — | `[]string` | `nil` | 設定模板變數 `key=value`（可重複） |
@@ -921,10 +931,13 @@ TUI 顯示：
 go run ./cmd/hufu --dry-run "重構模組"
 ```
 
-輸出：
-- 配對到的 skills
-- 將會使用的 agents
-- 計畫的任務委派
+輸出（純粹由 team config 衍生，不涉及 LLM）：
+- Team 名稱、模型、sidecar 模型
+- 使用者 prompt
+- 所有可用的 agents（名稱、角色、模型、工具、技能）
+- 所有已發現的 skills
+- 名稱/描述關鍵字與使用者 prompt 相符的 skills
+- 註：實際的任務委派**不會**在此規劃（那需要 LLM）。Dry-run 只列出*可能*被使用的 agents。
 
 ---
 

@@ -263,8 +263,11 @@ func TestTeamRegistryHasTeamFile(t *testing.T) {
 	yamlDir := filepath.Join(tmpDir, "yaml")
 	ymlDir := filepath.Join(tmpDir, "yml")
 	noTeamDir := filepath.Join(tmpDir, "noteam")
+	mdOnlyDir := filepath.Join(tmpDir, "mdonly")
+	emptyDir := filepath.Join(tmpDir, "empty")
+	capsMDDir := filepath.Join(tmpDir, "capsmd")
 
-	for _, dir := range []string{yamlDir, ymlDir, noTeamDir} {
+	for _, dir := range []string{yamlDir, ymlDir, noTeamDir, mdOnlyDir, emptyDir, capsMDDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -274,6 +277,14 @@ func TestTeamRegistryHasTeamFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(ymlDir, "team.yml"), []byte("name: yml"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// mdOnlyDir: no team.yaml, but contains an agent .md file
+	if err := os.WriteFile(filepath.Join(mdOnlyDir, "agent.md"), []byte("---\nname: agent\nrole: worker\n---\nbody"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// capsMDDir: uppercase .MD suffix should also count
+	if err := os.WriteFile(filepath.Join(capsMDDir, "agent.MD"), []byte("plain"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -286,6 +297,9 @@ func TestTeamRegistryHasTeamFile(t *testing.T) {
 		{yamlDir, true},
 		{ymlDir, true},
 		{noTeamDir, false},
+		{mdOnlyDir, true},
+		{emptyDir, false},
+		{capsMDDir, true},
 	}
 
 	for _, tt := range tests {

@@ -494,7 +494,7 @@ mcp-tools:
 
 1. `tool.shell` (per-tool override)
 2. `agent.shell` (agent-level default)
-3. `team.shell` (team.yml default)
+3. `team.shell` (team.yml default; team.yml is optional)
 4. `hufu.yaml shell` (global default)
 5. `bash` (system default)
 
@@ -671,7 +671,7 @@ The sidecar is a lightweight LLM agent used for auxiliary tasks that should not 
 ### Configuration
 
 ```yaml
-# In team.yaml:
+# In team.yaml (optional file — the directory name is the team name when absent):
 sidecar-model: qwen3:1b      # Lightweight model for skill matching
 guard-model: qwen3:8b        # Model for guard/review tasks
 ```

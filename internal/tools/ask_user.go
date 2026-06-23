@@ -17,14 +17,50 @@ import (
 	"charm.land/fantasy"
 )
 
-type withoutDeadlineCtx struct {
-	context.Context
+// askUserDeadlineCtx freezes the underlying context's deadline while
+// ask_user is active. Once the user answers (IsAskUserActive becomes
+// false), the original deadline is restored. This prevents the user's
+// response time from counting against the agent's LLM timeout.
+type askUserDeadlineCtx struct {
+	base context.Context
 }
 
-func (withoutDeadlineCtx) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *askUserDeadlineCtx) Deadline() (time.Time, bool) {
+	if IsAskUserActive() {
+		return time.Time{}, false
+	}
+	return c.base.Deadline()
+}
 
-func withoutDeadline(ctx context.Context) context.Context {
-	return &withoutDeadlineCtx{Context: ctx}
+func (c *askUserDeadlineCtx) Done() <-chan struct{} {
+	if IsAskUserActive() {
+		return nil
+	}
+	return c.base.Done()
+}
+
+func (c *askUserDeadlineCtx) Err() error {
+	if IsAskUserActive() {
+		return nil
+	}
+	return c.base.Err()
+}
+
+func (c *askUserDeadlineCtx) Value(key any) any {
+	return c.base.Value(key)
+}
+
+// AskUserAwareDeadline wraps ctx so that the wrapped context's
+// Deadline(), Done(), and Err() report no deadline / no error while
+// ask_user is active. When ask_user is not active, the underlying
+// context's values are returned unchanged.
+//
+// If ctx has no deadline, the original context is returned unwrapped.
+func AskUserAwareDeadline(ctx context.Context) context.Context {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		return ctx
+	}
+	return &askUserDeadlineCtx{base: ctx}
 }
 
 type askUserArgs struct {
@@ -92,7 +128,6 @@ func NewAskUserTool(opts ...ToolOption) fantasy.AgentTool {
 }
 
 func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	ctx = withoutDeadline(ctx)
 	var args askUserArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil

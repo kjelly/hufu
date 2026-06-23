@@ -1,0 +1,8 @@
+name: operator
+description: "Strict plan-execution team — decomposes a user plan into sub-tasks and executes them faithfully without deviation"
+max-rounds: 30
+max-steps: 50
+timeout: 1800
+model: ollama/qwen3:8b
+temperature: "0.2"
+max-tokens: "4096"

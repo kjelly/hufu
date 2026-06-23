@@ -1554,13 +1554,17 @@ func renderDryRun(result *team.DryRunResult) {
 	var b strings.Builder
 
 	b.WriteString("\n")
-	b.WriteString(headerStyle.Render("─── DRY RUN ───"))
+	b.WriteString(headerStyle.Render("─── DRY RUN (no LLM calls) ───"))
 	b.WriteString("\n\n")
 
 	b.WriteString(fmt.Sprintf("  %s %s\n", boldStyle.Render("Team:"), teamStyle.Render(result.TeamName)))
 	b.WriteString(fmt.Sprintf("  %s %s\n", boldStyle.Render("Model:"), result.Model))
 	if result.SidecarModel != "" {
 		b.WriteString(fmt.Sprintf("  %s %s\n", boldStyle.Render("Sidecar:"), result.SidecarModel))
+	}
+	if result.UserPrompt != "" {
+		prompt := utils.TruncateLine(result.UserPrompt, 80)
+		b.WriteString(fmt.Sprintf("  %s %s\n", boldStyle.Render("Prompt:"), dimStyle.Render(prompt)))
 	}
 
 	b.WriteString("\n")
@@ -1624,7 +1628,7 @@ func renderDryRun(result *team.DryRunResult) {
 		b.WriteString("\n")
 		b.WriteString(headerStyle.Render("─── Coordinator Plan ───"))
 		b.WriteString("\n")
-		b.WriteString("  " + dimStyle.Render("No tasks delegated (coordinator did not call the agent tool)") + "\n")
+		b.WriteString("  " + dimStyle.Render("No tasks planned (dry-run is LLM-free; see Agents above for what *could* be used)") + "\n")
 	}
 
 	if result.Error != "" {

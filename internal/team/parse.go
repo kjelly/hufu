@@ -404,7 +404,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		}
 	}
 	if !found {
-		return cfg, fmt.Errorf("team.yml or team.yaml not found in %s", teamDir)
+		// team.yml/team.yaml is optional. Return defaults; LoadTeam will
+		// fall back to using the directory basename as the team name.
+		return cfg, nil
 	}
 
 	text := string(data)
@@ -600,19 +602,18 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 		}
 	}
 
-	builtInGP := &agent.AgentDef{
-		Name:        "General-Purpose Agent",
-		FileAlias:   "general-purpose",
+	builtInHelper := &agent.AgentDef{
+		Name:        "Helper",
+		FileAlias:   "helper",
 		Description: "Versatile worker for text processing, string comparison, file I/O, calculations, and miscellaneous tasks",
 		Role:        "worker",
 		Tools:       "view,write,edit,multiedit,grep,glob,ls,random,math",
-		System:      "You are a general-purpose utility agent. You handle text processing, string comparisons, file reading/writing, mathematical calculations via the math tool, and miscellaneous tasks that don't require specialized domain knowledge. Be thorough and precise.",
+		System:      "You are a versatile helper agent. You handle text processing, string comparisons, file reading/writing, mathematical calculations via the math tool, and miscellaneous tasks that don't require specialized domain knowledge. Be thorough and precise.",
 		MaxRetries:  -1,
 		Generation:  cfg.Generation,
 		ProviderURL: cfg.ProviderURL,
 	}
-	session.Agents["general-purpose"] = builtInGP
-	session.Agents["general-purpose agent"] = builtInGP
+	session.Agents["helper"] = builtInHelper
 
 	if len(session.Agents) == 0 {
 		return nil, fmt.Errorf("no valid agent .md files found in %s", absDir)
@@ -636,7 +637,11 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 	for k, v := range templateVars {
 		interfaceVars[k] = v
 	}
-	cfg.Vars = interfaceVars
+	// session.Config was captured by value at session creation, so mutating
+	// cfg.Vars here would leave session.Config.Vars as the pre-population
+	// empty map. Mutate the session copy directly so readers of
+	// session.Config.Vars see the populated template vars.
+	session.Config.Vars = interfaceVars
 
 	skillDirs := []string{
 		filepath.Join(absDir, "skills"),

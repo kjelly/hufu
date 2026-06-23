@@ -113,6 +113,7 @@ type DryRunSkillInfo struct {
 }
 
 type DryRunResult struct {
+	UserPrompt         string
 	TeamName           string
 	Model              string
 	SidecarModel       string
@@ -491,6 +492,16 @@ type Coordinator struct {
 	currentTaskMu         sync.RWMutex
 	currentTodoID         string
 	currentTodoIDMu       sync.RWMutex
+	currentStage          string // "model" | "tool" | "wrapping_up" | "idle"
+	currentStageMu        sync.RWMutex
+	currentStepNum        int
+	currentStepNumMu      sync.RWMutex
+	currentToolName       string
+	currentToolNameMu     sync.RWMutex
+	currentModelID        string
+	currentModelIDMu      sync.RWMutex
+	currentStageStart     time.Time
+	currentStageStartMu   sync.RWMutex
 	auditLogger           *audit.AuditLogger
 	sshSessionMgr         *tools.SSHSessionManager
 	skillUsage            map[string]*skillUsageState
@@ -529,13 +540,8 @@ type Coordinator struct {
 	maxDrafts             int // per-session cap on skill draft candidates (0 disables)
 
 	// stepConfirmFn must be set before Run() or protected by stepConfirmFnMu.
-	stepConfirmFn   func(context.Context, []TaskDef) (bool, error)
-	stepConfirmFnMu sync.RWMutex
-	// dryRun is a forward-looking feature for short-circuiting ExecuteTasks
-	// when dry-run mode is active. Currently, the CLI's --dry-run flag calls
-	// DryRun() directly and returns early before reaching ExecuteTasks, so
-	// this field is not yet exercised in the main CLI flow.
-	dryRun              atomic.Bool
+	stepConfirmFn       func(context.Context, []TaskDef) (bool, error)
+	stepConfirmFnMu     sync.RWMutex
 	hooks               *hooks.HookRegistry
 	rbashMode           bool
 	restrictedPath      string
@@ -1532,6 +1538,7 @@ func (c *Coordinator) updateTodoTiming(todoID string, modelTime, toolTime time.D
 
 func (c *Coordinator) SetWrapUp() {
 	c.wrapUp.Store(1)
+	c.SetCurrentStage("wrapping_up")
 	c.report(c.newEvent("wrap_up_phase").withMessage("finishing active tasks"))
 }
 
@@ -1547,15 +1554,6 @@ func (c *Coordinator) SetStepConfirmFn(fn func(context.Context, []TaskDef) (bool
 	c.stepConfirmFnMu.Lock()
 	defer c.stepConfirmFnMu.Unlock()
 	c.stepConfirmFn = fn
-}
-
-// SetDryRun enables or disables dry-run mode on the coordinator.
-// When enabled, ExecuteTasks will short-circuit and return a plan
-// without actually executing any agent tasks. This is a forward-looking
-// feature; the current CLI --dry-run flag calls DryRun() directly and
-// returns early, so SetDryRun is not yet exercised in the main CLI flow.
-func (c *Coordinator) SetDryRun(v bool) {
-	c.dryRun.Store(v)
 }
 
 func (c *Coordinator) SetCurrentAgent(name string) {
@@ -1592,6 +1590,123 @@ func (c *Coordinator) GetCurrentTodoID() string {
 	c.currentTodoIDMu.RLock()
 	defer c.currentTodoIDMu.RUnlock()
 	return c.currentTodoID
+}
+
+// SetCurrentStage records the high-level stage the coordinator is in:
+// "model" while an LLM call is in flight, "tool" while a tool is being
+// executed, "wrapping_up" during wrap-up, "idle" otherwise.
+func (c *Coordinator) SetCurrentStage(stage string) {
+	c.currentStageMu.Lock()
+	c.currentStage = stage
+	if stage == "idle" {
+		c.currentStageStart = time.Time{}
+	} else {
+		c.currentStageStart = time.Now()
+	}
+	c.currentStageMu.Unlock()
+}
+
+// GetCurrentStage returns the current stage.
+func (c *Coordinator) GetCurrentStage() string {
+	c.currentStageMu.RLock()
+	defer c.currentStageMu.RUnlock()
+	return c.currentStage
+}
+
+// SetCurrentStep records the current step number in the fantasy
+// agent's step loop.
+func (c *Coordinator) SetCurrentStep(n int) {
+	c.currentStepNumMu.Lock()
+	c.currentStepNum = n
+	c.currentStepNumMu.Unlock()
+}
+
+// SetCurrentTool records the tool name currently being executed.
+func (c *Coordinator) SetCurrentTool(name string) {
+	c.currentToolNameMu.Lock()
+	c.currentToolName = name
+	c.currentToolNameMu.Unlock()
+}
+
+// SetCurrentModel records the model ID currently being used for an
+// LLM call.
+func (c *Coordinator) SetCurrentModel(modelID string) {
+	c.currentModelIDMu.Lock()
+	c.currentModelID = modelID
+	c.currentModelIDMu.Unlock()
+}
+
+// GetCurrentStatus returns a human-readable snapshot of the coordinator's
+// current state. Designed for SIGINT/watchdog diagnostics so users know
+// what stage the program is stuck on when they force-quit. Returns
+// "idle" when no work is in progress.
+func (c *Coordinator) GetCurrentStatus() string {
+	c.currentStageMu.RLock()
+	stage := c.currentStage
+	stageStart := c.currentStageStart
+	c.currentStageMu.RUnlock()
+
+	c.currentStepNumMu.RLock()
+	step := c.currentStepNum
+	c.currentStepNumMu.RUnlock()
+
+	c.currentToolNameMu.RLock()
+	tool := c.currentToolName
+	c.currentToolNameMu.RUnlock()
+
+	c.currentModelIDMu.RLock()
+	model := c.currentModelID
+	c.currentModelIDMu.RUnlock()
+
+	c.currentAgentNameMu.RLock()
+	agent := c.currentAgentName
+	c.currentAgentNameMu.RUnlock()
+
+	c.currentTaskMu.RLock()
+	task := c.currentTask
+	c.currentTaskMu.RUnlock()
+
+	if stage == "" || stage == "idle" {
+		return "idle"
+	}
+
+	elapsed := ""
+	if !stageStart.IsZero() {
+		elapsed = fmt.Sprintf(" (%.0fs elapsed)", time.Since(stageStart).Seconds())
+	}
+
+	parts := []string{stage}
+	if agent != "" {
+		parts = append(parts, "agent="+agent)
+	}
+	if model != "" && (stage == "model" || stage == "wrapping_up") {
+		parts = append(parts, "model="+model)
+	}
+	if tool != "" && stage == "tool" {
+		parts = append(parts, "tool="+tool)
+	}
+	if step > 0 {
+		parts = append(parts, fmt.Sprintf("step=%d", step))
+	}
+	if task != "" {
+		parts = append(parts, "task="+truncate(task, 60))
+	}
+	return strings.Join(parts, " ") + elapsed
+}
+
+// truncate returns s shortened to max characters with an ellipsis.
+// If max <= 0, returns "…". If len(s) <= max, returns s unchanged.
+func truncate(s string, max int) string {
+	if max <= 0 {
+		return "…"
+	}
+	if len(s) <= max {
+		return s
+	}
+	if max == 1 {
+		return "…"
+	}
+	return s[:max-1] + "…"
 }
 
 func (c *Coordinator) GetCurrentAgentInfo() tools.AgentInfo {
@@ -1944,7 +2059,7 @@ func (c *Coordinator) selectAgentForGoal(ctx context.Context, goal string) (stri
 	}
 
 	for _, w := range workers {
-		if strings.Contains(strings.ToLower(w.Description), "general") || strings.Contains(strings.ToLower(w.Name), "general-purpose") {
+		if strings.Contains(strings.ToLower(w.Description), "helper") || strings.Contains(strings.ToLower(w.Name), "helper") {
 			return w.Name, nil
 		}
 	}
@@ -3085,12 +3200,6 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
-	if c.dryRun.Load() {
-		c.report(c.newEvent("step").withMessage("Dry run: task plan shown, agents not executed"))
-		c.wrapUp.Store(1)
-		return "Dry run: the above tasks have been planned but will not be executed. Call finish immediately.", nil
-	}
-
 	c.stepConfirmFnMu.RLock()
 	stepFn := c.stepConfirmFn
 	c.stepConfirmFnMu.RUnlock()
@@ -4155,6 +4264,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		func() {
 			taskCtx, cancel := context.WithTimeout(parentCtx, agentTimeout)
 			defer cancel()
+			taskCtx = tools.AskUserAwareDeadline(taskCtx)
 			taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 			taskCtx = context.WithValue(taskCtx, modelKey{}, resolvedModel)
 			taskCtx = context.WithValue(taskCtx, tools.AgentNameKey, agentName)
@@ -4596,6 +4706,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		},
 		OnStepStart: func(stepNumber int) error {
 			reportFn(c.newEvent("step").withAgent(agentName).withTodoID(todoID).withStep(stepNumber).withMessage(fmt.Sprintf("step %d", stepNumber)))
+			c.SetCurrentStep(stepNumber)
 			return nil
 		},
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
@@ -4610,6 +4721,8 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			reportFn(c.newEvent("tool_call").withAgent(agentName).withTodoID(todoID).withTool(tc.ToolName, argsPreview))
 			llmLogStreamEvent(logWrite, "tool_call", formatToolCallContent(tc))
 			audit.LogToolCall(agentName, tc.ToolName, tc.Input)
+			c.SetCurrentStage("tool")
+			c.SetCurrentTool(tc.ToolName)
 
 			// Record tool call for skill pattern detection
 			if c.skillDetector != nil {
@@ -4638,6 +4751,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			llmLogStreamEvent(logWrite, "tool_result", formatToolResultContent(tr))
 			_, isErrResult := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Result)
 			audit.LogToolResult(agentName, tr.ToolName, resultPreview, isErrResult)
+			c.SetCurrentTool("")
 			return nil
 		},
 		OnTextDelta: func(id, text string) error {
@@ -4693,10 +4807,20 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		}
 	}
 
+	c.SetCurrentAgent(agentName)
+	c.SetCurrentStage("model")
+	if resolvedModel, ok := ctx.Value(modelKey{}).(string); ok && resolvedModel != "" {
+		c.SetCurrentModel(resolvedModel)
+	}
+
 	result, err := ag.Stream(ctx, streamCall)
 	if err != nil {
+		c.SetCurrentStage("idle")
+		c.SetCurrentTool("")
 		return "", nil, err
 	}
+	c.SetCurrentStage("idle")
+	c.SetCurrentTool("")
 	return result.Response.Content.Text(), result.Steps, nil
 }
 
@@ -4793,6 +4917,12 @@ func (c *Coordinator) resolveAgentName(input string) (*agent.AgentDef, string, e
 			continue
 		}
 		if seenNames[def.Name] {
+			continue
+		}
+		// Match the full display name case-insensitively (e.g. "Helper" → "helper")
+		if strings.ToLower(def.Name) == key {
+			matches = append(matches, def)
+			seenNames[def.Name] = true
 			continue
 		}
 		for _, word := range strings.Fields(def.Name) {
@@ -5619,6 +5749,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 
 	taskCtx, cancel := context.WithTimeout(ctx, agentTimeout)
 	defer cancel()
+	taskCtx = tools.AskUserAwareDeadline(taskCtx)
 
 	taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 	taskCtx = context.WithValue(taskCtx, modelKey{}, directModel)
@@ -5725,6 +5856,7 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 
 	orchCtx, cancel := context.WithTimeout(ctx, coordinatorTimeout)
 	defer cancel()
+	orchCtx = tools.AskUserAwareDeadline(orchCtx)
 	orchCtx = context.WithValue(orchCtx, todoIDKey{}, CoordTodoID)
 
 	orchModelID := c.resolveAgentModel(orchDef, "")
@@ -5955,6 +6087,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	c.finalizeNormalCompletion()
 	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator finished").withTodoID(CoordTodoID))
+	c.SetCurrentStage("idle")
 	return finalResult, nil
 }
 
@@ -6067,256 +6200,112 @@ func normalizeTaskDesc(task string) string {
 	return strings.Join(strings.Fields(strings.ToLower(task)), " ")
 }
 
-type dryRunAgentsTool struct {
-	coordinator *Coordinator
-	captured    *[]TaskDef
-	pOpts       fantasy.ProviderOptions
-}
-
-func (t *dryRunAgentsTool) Info() fantasy.ToolInfo {
-	return fantasy.ToolInfo{
-		Name:        "agent",
-		Description: "Delegate tasks to team workers. Runs all tasks in parallel. Returns structured results from each agent.",
-		Parameters: map[string]any{
-			"tasks": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type":                 "object",
-					"properties":           buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir)),
-					"required":             []string{"agent"},
-					"additionalProperties": false,
-				},
-			},
-		},
-		Required: []string{"tasks"},
-	}
-}
-
-func (t *dryRunAgentsTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
-func (t *dryRunAgentsTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
-
-func (t *dryRunAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	var args struct {
-		Tasks []TaskDef `json:"tasks"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
-	}
-	if len(args.Tasks) == 0 {
-		return fantasy.NewTextErrorResponse("no tasks provided"), nil
-	}
-
-	*t.captured = append(*t.captured, args.Tasks...)
-
-	var descs []string
-	for _, td := range args.Tasks {
-		desc := td.Goal
-		if td.Constraints != "" {
-			desc += "\nconstraints: " + td.Constraints
-		}
-		descs = append(descs, fmt.Sprintf("  - %s → %s", td.Agent, desc))
-	}
-	return fantasy.NewTextResponse(fmt.Sprintf("[DRY RUN] Tasks recorded (not executed):\n%s\n\nDry run complete. Call finish immediately.", strings.Join(descs, "\n"))), nil
-}
-
-type dryRunFinishTool struct {
-	pOpts fantasy.ProviderOptions
-}
-
-func (t *dryRunFinishTool) Info() fantasy.ToolInfo {
-	return fantasy.ToolInfo{
-		Name:        "finish",
-		Description: "Signal that you have completed the user's request and provide your final answer. Call this when you are done coordinating and have a complete response for the user. You MUST call this instead of just outputting text — your final answer goes in the response field.",
-		Parameters: map[string]any{
-			"response": map[string]any{
-				"type":        "string",
-				"description": "Your final answer to the user",
-			},
-		},
-		Required: []string{"response"},
-	}
-}
-
-func (t *dryRunFinishTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
-func (t *dryRunFinishTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
-
-func (t *dryRunFinishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	var args struct {
-		Response string `json:"response"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
-	}
-	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", args.Response)), nil
-}
-
 func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunResult, error) {
 	orchDef := c.GetOrchestratorDef()
-	if orchDef == nil {
-		return nil, fmt.Errorf("no coordinator agent found in team")
-	}
 
 	EnsureWorkspaceDirs(c.session.Workspace)
 
-	matchedSkills := c.matchSkillsWithSidecar(ctx, userPrompt)
-	c.setAutoLoadedSkills(matchedSkills)
-
-	if c.think {
-		c.emitThinkSkills(matchedSkills)
-		c.computeWorkerSummaries(ctx)
-		c.emitThinkAgents()
-	}
-
-	systemPrompt := c.expandOrchestratorTemplate(orchDef.System)
-	if systemPrompt == "" {
-		systemPrompt = c.expandDefaultOrchestratorTemplate(defaultOrchestratorSystem)
-	}
-	orchestratorPrompt := c.BuildOrchestratorPrompt(matchedSkills...)
-	systemPrompt += "\n\n" + orchestratorPrompt
-
-	if agentsMD := c.loadProjectContext(); agentsMD != "" {
-		if s := c.Sidecar(); s != nil && len(agentsMD) > 4000 {
-			if c.think {
-				c.emitThinkSidecar("Compact", "compacting AGENTS.md")
-			}
-			compacted, err := s.Compact(ctx, agentsMD, "Compress this project context while preserving all key facts, patterns, conventions, and instructions.")
-			if err == nil && compacted != "" {
-				agentsMD = compacted
-			}
-		}
-		systemPrompt += "\n\n---\n## Project Context (AGENTS.md)\n\n" + agentsMD
-	}
-
-	if c.memoryStore != nil {
-		var compactFn memory.CompactFunc
-		if s := c.Sidecar(); s != nil {
-			compactFn = s.Compact
-		}
-		memCtx, err := memory.AutoQuery(ctx, c.memoryStore, userPrompt, compactFn)
-		if err == nil && memCtx != "" {
-			systemPrompt += "\n\n---\n" + memCtx
-		}
-	}
-
-	if !c.forcePlanFirst {
-		if suffix := c.buildMemorySuffix("coordinator"); suffix != "" {
-			systemPrompt += "\n\n" + suffix
-		}
-	}
-
-	orchDefCopy := *orchDef
-	orchDefCopy.System = systemPrompt
-
-	var capturedTasks []TaskDef
-
-	dryRunAgentTool := &dryRunAgentsTool{
-		coordinator: c,
-		captured:    &capturedTasks,
-	}
-
-	orchTools := []fantasy.AgentTool{
-		dryRunAgentTool,
-		&dryRunFinishTool{},
-		&loadSkillTool{coordinator: c},
-		&saveSkillTool{coordinator: c},
-	}
-	for _, t := range c.coreTools {
-		if t.Info().Name == "ask_user" {
-			orchTools = append(orchTools, t)
-			break
-		}
-	}
-
-	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("dry-run coordinator starting").withModel(c.resolveAgentModel(orchDef, "")).withTodoID(CoordTodoID))
-
-	dryRunOrchModelID := c.resolveAgentModel(orchDef, "")
-	orch, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(dryRunOrchModelID), agent.AgentConfig{
-		Def:        &orchDefCopy,
-		TeamConfig: &c.session.Config,
-		WorkDir:    c.projectDir,
-		MaxSteps:   agent.DefaultCoordinatorMaxSteps,
-	}, orchTools)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create coordinator for dry-run: %w", err)
-	}
-
-	coordinatorTimeout := time.Duration(c.session.Config.Timeout) * time.Second * time.Duration(c.session.Config.MaxRounds+1)
-	if orchDef.Timeout > 0 {
-		coordinatorTimeout = time.Duration(orchDef.Timeout) * time.Second
-	}
-	dryRunCtx, cancel := context.WithTimeout(ctx, coordinatorTimeout)
-	defer cancel()
-	dryRunCtx = context.WithValue(dryRunCtx, todoIDKey{}, CoordTodoID)
-
-	_, _, err = c.runAgentWithStatusAndHistory(dryRunCtx, orch, orchDef.Name, userPrompt, nil, &taskTiming{},
-		fantasy.HasToolCall("agent"),
-		fantasy.StepCountIs(agent.DefaultCoordinatorMaxSteps),
-	)
-
 	result := &DryRunResult{
-		TeamName:           c.session.Config.Name,
-		Model:              c.resolveAgentModel(orchDef, ""),
-		SidecarModel:       c.sidecarModel,
-		OrchestratorPrompt: orchestratorPrompt,
-		FirstRoundTasks:    capturedTasks,
+		UserPrompt: userPrompt,
 	}
-	if err != nil {
-		result.Error = err.Error()
+	if c.session != nil && c.session.Config.Name != "" {
+		result.TeamName = c.session.Config.Name
 	}
-
-	for _, sk := range matchedSkills {
-		result.MatchedSkillNames = append(result.MatchedSkillNames, sk.Name)
+	if orchDef != nil {
+		result.Model = c.resolveAgentModel(orchDef, "")
 	}
 
+	if c.session != nil {
+		if c.session.Config.SidecarModel != "" {
+			result.SidecarModel = c.session.Config.SidecarModel
+		}
+		if result.SidecarModel == "" {
+			if resolved := config.LoadConfig(); resolved != nil {
+				result.SidecarModel = resolved.ResolveSidecarModel(c.session.Config.SidecarModel)
+			}
+		}
+	}
+
+	// Skill matching: keyword-only, no LLM, no sidecar.
 	allSkills := c.getSkills()
+	matchedSet := map[string]bool{}
 	for _, sk := range allSkills {
+		if skillMatchesPromptKeywords(sk, userPrompt) {
+			matchedSet[strings.ToLower(sk.Name)] = true
+		}
 		result.AllSkills = append(result.AllSkills, DryRunSkillInfo{
 			Name:        sk.Name,
 			Description: sk.Description,
 		})
 	}
-
-	for _, def := range c.session.Agents {
-		role := def.Role
-		if role == "" {
-			role = "worker"
+	for _, sk := range allSkills {
+		if matchedSet[strings.ToLower(sk.Name)] {
+			result.MatchedSkillNames = append(result.MatchedSkillNames, sk.Name)
 		}
-		model := c.resolveAgentModel(def, "")
-		var tools []string
-		if def.Tools != "" {
-			tools = strings.Split(def.Tools, ",")
-			for i, t := range tools {
-				tools[i] = strings.TrimSpace(t)
-			}
-		}
-		var skills []string
-		if def.Skills != "" {
-			skills = strings.Split(def.Skills, ",")
-			for i, s := range skills {
-				skills[i] = strings.TrimSpace(s)
-			}
-		}
-		if role == "coordinator" || role == "orchestrator" {
-			tools = []string{"agent", "finish", "load_skill", "save_skill", "ask_user"}
-		}
-		result.Agents = append(result.Agents, DryRunAgentInfo{
-			Name:   def.Name,
-			Role:   role,
-			Model:  model,
-			Tools:  tools,
-			Skills: skills,
-		})
 	}
 
-	// sidecarModel is already resolved at coordinator creation time
-	// (via config.ResolveSidecarModel in main.go). If it's still empty,
-	// resolve it here as a fallback using the same resolution path.
-	if result.SidecarModel == "" {
-		resolvedConfig := config.LoadConfig()
-		result.SidecarModel = resolvedConfig.ResolveSidecarModel(c.session.Config.SidecarModel)
+	// Agent listing: derived from session config, not from an LLM.
+	// Dedupe by def.Name so any agent registered under multiple map keys
+	// (e.g. legacy aliases) still appears only once in the dry-run output.
+	if c.session != nil {
+		seenAgents := map[string]bool{}
+		for _, def := range c.session.Agents {
+			if def == nil {
+				continue
+			}
+			if seenAgents[def.Name] {
+				continue
+			}
+			seenAgents[def.Name] = true
+			role := def.Role
+			if role == "" {
+				role = "worker"
+			}
+			model := c.resolveAgentModel(def, "")
+			var tools []string
+			if def.Tools != "" {
+				tools = strings.Split(def.Tools, ",")
+				for i, t := range tools {
+					tools[i] = strings.TrimSpace(t)
+				}
+			}
+			var skills []string
+			if def.Skills != "" {
+				skills = strings.Split(def.Skills, ",")
+				for i, s := range skills {
+					skills[i] = strings.TrimSpace(s)
+				}
+			}
+			if role == "coordinator" || role == "orchestrator" {
+				tools = []string{"agent", "finish", "load_skill", "save_skill", "ask_user"}
+			}
+			result.Agents = append(result.Agents, DryRunAgentInfo{
+				Name:   def.Name,
+				Role:   role,
+				Model:  model,
+				Tools:  tools,
+				Skills: skills,
+			})
+		}
 	}
 
-	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("dry-run coordinator finished").withTodoID(CoordTodoID))
+	c.report(c.newEvent("done").withAgent("coordinator").withMessage("dry-run complete (no LLM calls)").withTodoID(CoordTodoID))
 
 	return result, nil
+}
+
+// skillMatchesPromptKeywords returns true when the user prompt contains any
+// keyword extracted from the skill's name or description (case-insensitive).
+// This is the LLM-free fallback used by DryRun().
+func skillMatchesPromptKeywords(s *skill.SkillDef, prompt string) bool {
+	p := strings.ToLower(prompt)
+	if p == "" || s == nil {
+		return false
+	}
+	for _, kw := range extractSkillKeywords(s) {
+		if strings.Contains(p, kw) {
+			return true
+		}
+	}
+	return false
 }

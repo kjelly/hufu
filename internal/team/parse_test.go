@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/config"
 )
 
@@ -427,4 +428,212 @@ func TestResolveModelListFromConfig(t *testing.T) {
 			t.Errorf("ResolveModelList(nil) = %v, want config-model", result)
 		}
 	})
+}
+
+func TestParseTeamYML_MissingFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	// No team.yml / team.yaml in tmpDir
+
+	cfg, err := parseTeamYML(tmpDir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML returned error for missing file: %v", err)
+	}
+	if cfg.Name != "" {
+		t.Errorf("cfg.Name = %q, want empty (LoadTeam falls back to dir name)", cfg.Name)
+	}
+	if cfg.MaxRounds != 10 {
+		t.Errorf("cfg.MaxRounds = %d, want default 10", cfg.MaxRounds)
+	}
+	if cfg.WorkspaceDir != "workspace" {
+		t.Errorf("cfg.WorkspaceDir = %q, want default %q", cfg.WorkspaceDir, "workspace")
+	}
+	if cfg.Timeout != 600 {
+		t.Errorf("cfg.Timeout = %d, want default 600", cfg.Timeout)
+	}
+	if cfg.MaxRetries != 2 {
+		t.Errorf("cfg.MaxRetries = %d, want default 2", cfg.MaxRetries)
+	}
+	if cfg.Generation.Model != "" {
+		t.Errorf("cfg.Generation.Model = %q, want empty", cfg.Generation.Model)
+	}
+}
+
+func TestLoadTeam_NoYAMLDirName(t *testing.T) {
+	tmpDir := t.TempDir()
+	teamDir := filepath.Join(tmpDir, "myteam")
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Provide one valid agent .md so LoadTeam has at least one agent.
+	agentPath := filepath.Join(teamDir, "worker.md")
+	agentContent := "---\nname: worker\nrole: worker\n---\nI am a worker."
+	if err := os.WriteFile(agentPath, []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := LoadTeam(teamDir, nil, nil)
+	if err != nil {
+		t.Fatalf("LoadTeam returned error: %v", err)
+	}
+	if session.Config.Name != "myteam" {
+		t.Errorf("session.Config.Name = %q, want %q (directory basename)", session.Config.Name, "myteam")
+	}
+	if session.Dir == "" {
+		t.Error("session.Dir is empty, want absolute path")
+	}
+	if _, ok := session.Agents["worker"]; !ok {
+		t.Errorf("session.Agents missing %q, got keys: %v", "worker", agentKeys(session.Agents))
+	}
+}
+
+func agentKeys(m map[string]*agent.AgentDef) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func TestLoadTeam_Helper_NoDuplicates(t *testing.T) {
+	tmpDir := t.TempDir()
+	teamDir := filepath.Join(tmpDir, "myteam")
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentPath := filepath.Join(teamDir, "worker.md")
+	agentContent := "---\nname: worker\nrole: worker\n---\nI am a worker."
+	if err := os.WriteFile(agentPath, []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := LoadTeam(teamDir, nil, nil)
+	if err != nil {
+		t.Fatalf("LoadTeam returned error: %v", err)
+	}
+
+	// Built-in Helper is registered under the "helper" key only.
+	if _, ok := session.Agents["helper"]; !ok {
+		t.Errorf("session.Agents missing %q, got keys: %v", "helper", agentKeys(session.Agents))
+	}
+	// The legacy double-registration must be gone.
+	if _, ok := session.Agents["general-purpose"]; ok {
+		t.Error("session.Agents still has legacy key 'general-purpose' — rename did not take effect")
+	}
+	if _, ok := session.Agents["general-purpose agent"]; ok {
+		t.Error("session.Agents still has legacy key 'general-purpose agent' — double-registration regression")
+	}
+
+	// Iterating the map must yield each unique Name exactly once.
+	seen := map[string]int{}
+	for _, def := range session.Agents {
+		seen[def.Name]++
+	}
+	for name, count := range seen {
+		if count > 1 {
+			t.Errorf("agent %q appears %d times in session.Agents — duplicate registration", name, count)
+		}
+	}
+	if seen["Helper"] != 1 {
+		t.Errorf("Helper appears %d time(s), want 1", seen["Helper"])
+	}
+}
+
+func TestLoadTeam_AGENT_NAMES_NoDuplicates(t *testing.T) {
+	tmpDir := t.TempDir()
+	teamDir := filepath.Join(tmpDir, "myteam")
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentPath := filepath.Join(teamDir, "worker.md")
+	agentContent := "---\nname: worker\nrole: worker\n---\nI am a worker."
+	if err := os.WriteFile(agentPath, []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := LoadTeam(teamDir, nil, nil)
+	if err != nil {
+		t.Fatalf("LoadTeam returned error: %v", err)
+	}
+
+	// Read AGENT_NAMES from session.Config.Vars — the load-team bug fix
+	// (parse.go) ensures this map is populated, not nil.
+	namesRaw, ok := session.Config.Vars["AGENT_NAMES"]
+	if !ok {
+		t.Fatalf("session.Config.Vars[AGENT_NAMES] not set (got %d entries)", len(session.Config.Vars))
+	}
+	names, ok := namesRaw.(string)
+	if !ok {
+		t.Fatalf("AGENT_NAMES type = %T, want string", namesRaw)
+	}
+
+	counts := map[string]int{}
+	for _, n := range strings.Split(names, ",") {
+		n = strings.TrimSpace(n)
+		if n != "" {
+			counts[n]++
+		}
+	}
+	for n, c := range counts {
+		if c > 1 {
+			t.Errorf("AGENT_NAMES contains %q %d times (full: %q) — duplicate", n, c, names)
+		}
+	}
+	if counts["Helper"] != 1 {
+		t.Errorf("AGENT_NAMES contains Helper %d times, want 1 (full: %q)", counts["Helper"], names)
+	}
+}
+
+func TestLoadTeam_SessionConfigVars_Populated(t *testing.T) {
+	tmpDir := t.TempDir()
+	teamDir := filepath.Join(tmpDir, "myteam")
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentPath := filepath.Join(teamDir, "worker.md")
+	agentContent := "---\nname: worker\nrole: worker\n---\nI am a worker."
+	if err := os.WriteFile(agentPath, []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := LoadTeam(teamDir, nil, nil)
+	if err != nil {
+		t.Fatalf("LoadTeam returned error: %v", err)
+	}
+
+	if session.Config.Vars == nil {
+		t.Fatal("session.Config.Vars is nil; LoadTeam must populate it after the latent-bug fix")
+	}
+
+	// TEAM_NAME is injected by LoadTeam and equals the directory basename.
+	teamName, ok := session.Config.Vars["TEAM_NAME"]
+	if !ok {
+		t.Fatal("session.Config.Vars[TEAM_NAME] not set")
+	}
+	if teamName != "myteam" {
+		t.Errorf("TEAM_NAME = %v, want %q", teamName, "myteam")
+	}
+
+	// AGENT_COUNT is the count of non-coordinator agents (worker + Helper = 2).
+	agentCount, ok := session.Config.Vars["AGENT_COUNT"]
+	if !ok {
+		t.Fatal("session.Config.Vars[AGENT_COUNT] not set")
+	}
+	if agentCount != "2" {
+		t.Errorf("AGENT_COUNT = %v, want %q", agentCount, "2")
+	}
+
+	// AGENT_NAMES is a comma-separated list of worker agent names.
+	agentNames, ok := session.Config.Vars["AGENT_NAMES"]
+	if !ok {
+		t.Fatal("session.Config.Vars[AGENT_NAMES] not set")
+	}
+	agentNamesStr, ok := agentNames.(string)
+	if !ok {
+		t.Fatalf("AGENT_NAMES type = %T, want string", agentNames)
+	}
+	parts := strings.Split(agentNamesStr, ",")
+	if len(parts) != 2 {
+		t.Errorf("AGENT_NAMES = %q, expected 2 comma-separated entries (worker + Helper), got %d",
+			agentNamesStr, len(parts))
+	}
 }

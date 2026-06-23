@@ -150,3 +150,31 @@ func TestResolveAgentNameEmptyInput(t *testing.T) {
 		t.Error("expected error for empty input")
 	}
 }
+
+func TestResolveAgentName_ByDisplayName(t *testing.T) {
+	// Built-in Helper is registered under the "helper" map key (FileAlias),
+	// not under its display name "Helper". LLM coordinators may dispatch
+	// using the display name, so resolveAgentName must fall back to a
+	// case-insensitive match against def.Name.
+	c := &Coordinator{
+		session: &TeamSession{
+			Agents: map[string]*agent.AgentDef{
+				"helper": {Name: "Helper", FileAlias: "helper", Role: "worker"},
+			},
+		},
+	}
+
+	for _, input := range []string{"Helper", "helper", "HELPER"} {
+		def, key, err := c.resolveAgentName(input)
+		if err != nil {
+			t.Errorf("resolveAgentName(%q) returned error: %v", input, err)
+			continue
+		}
+		if def == nil || def.Name != "Helper" {
+			t.Errorf("resolveAgentName(%q) returned %v, want Helper", input, def)
+		}
+		if key != "helper" {
+			t.Errorf("resolveAgentName(%q) returned key %q, want %q", input, key, "helper")
+		}
+	}
+}
