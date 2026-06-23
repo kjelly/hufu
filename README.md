@@ -78,6 +78,27 @@ go run ./cmd/hufu [prompt]
 
 ## Quick Start
 
+### 0. Try it in 3 commands (no config)
+
+```bash
+# 1. Check that everything is wired up
+hufu doctor
+
+# 2. Use the built-in default team (no .agent-teams/ directory required)
+hufu --default --model ollama/qwen3:8b "say hello"
+
+# 3. Scaffold your own team (creates .agent-teams/my-team/ with helper.md)
+hufu init my-team --model ollama/qwen3:8b
+```
+
+Other useful commands:
+```bash
+hufu list              # show all discoverable teams and their agents
+hufu list my-team      # show one team in detail
+hufu chat --agent-team my-team  # interactive REPL with that team
+hufu chat --default    # interactive REPL with the built-in team
+```
+
 ### 1. Start Ollama
 
 Ensure Ollama is running at the default address:

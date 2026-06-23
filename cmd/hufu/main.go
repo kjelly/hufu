@@ -8,8 +8,10 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	ergoreadline "github.com/ergochat/readline"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"gopkg.in/yaml.v3"
 
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/config"
@@ -27,58 +30,62 @@ import (
 	"github.com/anomalyco/hufu/internal/memory"
 	"github.com/anomalyco/hufu/internal/notify"
 	"github.com/anomalyco/hufu/internal/readline"
+	"github.com/anomalyco/hufu/internal/sidecar"
 	"github.com/anomalyco/hufu/internal/team"
 	"github.com/anomalyco/hufu/internal/tools"
 	tuipkg "github.com/anomalyco/hufu/internal/tui"
 )
 
 var (
-	providerURL          string
-	providerAPIKey       string
-	verbose              bool
-	workspace            string
-	newSession           bool
-	tempWorkspace        bool
-	agentTeamName        string
-	agentTeamSearchPath  string
-	memoryEnabled        bool
-	memoryModel          string
-	archiveMemory        bool
-	showHistory          bool
-	stepsMode            bool
-	dryRun               bool
-	tuiMode              bool
-	rbashMode            bool
-	noNet                bool
-	forceMCP             bool
-	think                bool
-	direnv               bool
-	varFlags             []string
-	varFiles             []string
-	forcedSkills         []string
-	planMode             bool
-	autoSkills           bool
-	fixQuestion          string
-	reportMode           bool
-	defaultTeam          bool
-	helperTools          string
-	modelOverride        string
-	temperatureOverride  string
-	maxTokensOverride    string
-	topPOverride         string
-	topKOverride         string
-	sidecarModelOverride string
-	guardModelOverride   string
-	timeoutOverride      int64
-	unattended           bool
-	maxDuration          int64
-	maxTotalTokens       int64
-	autoTeam             bool
-	templateName         string
-	profileName          string
-	quietMode            bool
-	outputFormat         string
-	globalPromptReader   atomic.Pointer[readline.PromptReader]
+	providerURL           string
+	providerAPIKey        string
+	verbose               bool
+	workspace             string
+	newSession            bool
+	tempWorkspace         bool
+	agentTeamName         string
+	agentTeamSearchPath   string
+	memoryEnabled         bool
+	memoryModel           string
+	archiveMemory         bool
+	showHistory           bool
+	stepsMode             bool
+	dryRun                bool
+	tuiMode               bool
+	rbashMode             bool
+	noNet                 bool
+	forceMCP              bool
+	think                 bool
+	direnv                bool
+	varFlags              []string
+	varFiles              []string
+	forcedSkills          []string
+	planMode              bool
+	autoSkills            bool
+	fixQuestion           string
+	reportMode            bool
+	defaultTeam           bool
+	helperTools           string
+	modelOverride         string
+	temperatureOverride   string
+	maxTokensOverride     string
+	topPOverride          string
+	topKOverride          string
+	sidecarModelOverride  string
+	guardModelOverride    string
+	timeoutOverride       int64
+	maxRoundsOverride     int
+	maxConcurrentOverride int
+	maxStepsOverride      int
+	unattended            bool
+	maxDuration           int64
+	maxTotalTokens        int64
+	autoTeam              bool
+	templateName          string
+	profileName           string
+	quietMode             bool
+	outputFormat          string
+	globalPromptReader    atomic.Pointer[readline.PromptReader]
 )
 
 type errInterrupted struct{}
@@ -90,9 +97,22 @@ var version = "dev"
 func main() {
 	exitCode := 0
 	rootCmd := &cobra.Command{
-		Use:     "hufu [prompt]",
-		Short:   "Run an agent team to accomplish a task",
-		Long:    "hufu discovers and runs agent teams by name. Use --agent-team or @team-name in the prompt to select a team.",
+		Use:   "hufu [prompt]",
+		Short: "Run an agent team to accomplish a task",
+		Long: `hufu discovers and runs agent teams of LLM agents that collaborate on tasks.
+
+Quick start:
+  hufu doctor                                # preflight: check provider + teams
+  hufu init my-team --model ollama/qwen3:8b  # scaffold a team
+  hufu @my-team "explain this codebase"      # run a team
+  hufu --default --model ollama/qwen3:8b "hello"  # use built-in team (no config)
+  hufu chat --agent-team my-team             # interactive REPL
+  hufu list                                  # show all teams
+
+Specify the team with --agent-team <name> or by writing @<team-name> in the prompt.
+Within a team, target a specific agent with @<agent-name> <task>.
+
+Set the model with --model <name> (highest priority), in team.yaml, or in hufu.yaml.`,
 		Args:    cobra.MaximumNArgs(1),
 		RunE:    runTeam,
 		Version: version,
@@ -101,6 +121,7 @@ func main() {
 	// Add skill management commands
 	rootCmd.AddCommand(skillCmd)
 	rootCmd.AddCommand(replCmd)
+	rootCmd.AddCommand(historyCmd)
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(initCmd)
@@ -147,6 +168,9 @@ func main() {
 	rootCmd.Flags().StringVar(&sidecarModelOverride, "sidecar-model", "", "Override sidecar model used for skill matching (e.g. ollama/qwen3:1b); falls back to --model when not set")
 	rootCmd.Flags().StringVar(&guardModelOverride, "guard-model", "", "Override guard model used for output review (e.g. ollama/qwen3:8b); falls back to --model when not set")
 	rootCmd.Flags().Int64Var(&timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds (e.g. 1800 for 30 min). 0 = use team/agent default.")
+	rootCmd.Flags().IntVar(&maxRoundsOverride, "max-rounds", 0, "Override team.yaml max-rounds (coordinator round limit). 0 = use team default.")
+	rootCmd.Flags().IntVar(&maxConcurrentOverride, "max-concurrent", 0, "Override team.yaml max-concurrent (parallel worker dispatch). 0 = use team default.")
+	rootCmd.Flags().IntVar(&maxStepsOverride, "max-steps", 0, "Override team.yaml max-steps (per-agent step budget). 0 = use team/agent default.")
 	rootCmd.Flags().BoolVar(&unattended, "unattended", false, "Run with no human present: ask_user returns safe defaults instead of blocking, --steps/--tui are disabled, and only allowlisted tools may run")
 	rootCmd.Flags().Int64Var(&maxDuration, "max-duration", 0, "Budget: max total wall-clock seconds before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
 	rootCmd.Flags().Int64Var(&maxTotalTokens, "max-total-tokens", 0, "Budget: max cumulative LLM tokens before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
@@ -199,6 +223,7 @@ func main() {
 }
 
 type teamContext struct {
+	teamName    string
 	session     *team.TeamSession
 	coordinator *team.Coordinator
 	sessionData *team.SessionData
@@ -397,11 +422,11 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 {
 		prompt = args[0]
 	}
-	if prompt == "" {
+	if prompt == "" && templateName == "" {
 		prompt = readStdin()
 	}
 
-	if archiveMemory && prompt == "" {
+	if archiveMemory && prompt == "" && templateName == "" {
 		var searchPaths []string
 		if agentTeamSearchPath != "" {
 			searchPaths = strings.Split(agentTeamSearchPath, ",")
@@ -414,6 +439,24 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		}
 		return runArchiveMemory(context.Background(), registry, vars)
 	}
+
+	if templateName != "" {
+		templated, err := loadPromptTemplate(templateName, vars)
+		if err != nil {
+			return err
+		}
+		if prompt != "" {
+			prompt = templated + "\n\n" + prompt
+		} else {
+			prompt = templated
+		}
+	}
+
+	// Smart file context injection
+	prompt, _ = injectFileContexts(prompt)
+
+	// Smart project & Git context injection
+	prompt = injectProjectContext(prompt)
 
 	if prompt == "" {
 		if pr != nil {
@@ -430,6 +473,8 @@ func runTeam(cmd *cobra.Command, args []string) error {
 			prompt = p
 		}
 	}
+
+	originalPrompt := prompt
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -596,7 +641,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 				chosen = askUserForTeamFallback(registry.ListTeams())
 			}
 			if chosen == "" {
-				fmt.Fprintf(os.Stderr, "%s No team selected.\n", errStyle.Render("✗"))
+				fmt.Fprintf(os.Stderr, "%s No team selected. Pass --agent-team <name>, use @<team> in the prompt, or run 'hufu init <name>' to create one.\n", errStyle.Render("✗"))
 				return fmt.Errorf("no team selected")
 			}
 			initialTeam = chosen
@@ -650,7 +695,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 					tc, err = loadTeamByName(ctx, seg.Name, registry, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
 				}
 				if err != nil {
-					return fmt.Errorf("failed to load team %q: %w", seg.Name, err)
+					return fmt.Errorf("failed to load team %q: %w\n  Verify the team exists in your search paths (run 'hufu list' or 'hufu doctor')", seg.Name, err)
 				}
 				if stepsMode {
 					tc.coordinator.SetStepConfirmFn(makeStepConfirmFn())
@@ -829,6 +874,10 @@ func runTeam(cmd *cobra.Command, args []string) error {
 			absWS, absWS)
 	}
 
+	if originalPrompt != "" {
+		savePromptToHistory(ctx, originalPrompt, providerURL)
+	}
+
 	return nil
 }
 
@@ -867,6 +916,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	// dispatch uses the same model the user asked for on the command line.
 	applyCLIModelOverrides(&session.Config, currentModelOverrides())
 	applyCLITimeoutOverrides(session, currentTimeoutOverrides())
+	applyCLITuningOverrides(session, currentTuningOverrides())
 	propagateTeamGenerationToAgents(session)
 
 	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, session.Config.ProviderURL, "")
@@ -1067,6 +1117,9 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		resolvedMaxConcurrent = 8
 	}
 	session.Config.Generation.Model = cfg.ResolveModel(session.Config.Generation.Model)
+	if session.Config.Generation.Model == "" {
+		return nil, fmt.Errorf("no model specified for team %q\n  Set --model <name>, add 'model:' to the team's team.yaml, or add 'model:' to ~/.config/hufu/hufu.yaml\n  Run 'hufu doctor' to see which model is currently resolved", session.Config.Name)
+	}
 
 	allowedPaths := buildAllowedPaths(session, registry, cfg)
 
@@ -1159,6 +1212,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 	}
 
 	return &teamContext{
+		teamName:    teamName,
 		session:     session,
 		coordinator: coordinator,
 		sessionData: sessionData,
@@ -1206,6 +1260,7 @@ func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPI
 	// then propagate to all agents (Helper, coordinator).
 	applyCLIModelOverrides(&session.Config, currentModelOverrides())
 	applyCLITimeoutOverrides(session, currentTimeoutOverrides())
+	applyCLITuningOverrides(session, currentTuningOverrides())
 	propagateTeamGenerationToAgents(session)
 
 	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, session.Config.ProviderURL, "")
@@ -1361,6 +1416,9 @@ func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPI
 		resolvedMaxConcurrent = 8
 	}
 	session.Config.Generation.Model = cfg.ResolveModel(session.Config.Generation.Model)
+	if session.Config.Generation.Model == "" {
+		return nil, fmt.Errorf("no model specified for the default team\n  Pass --model <name> (e.g. --model ollama/qwen3:8b) or add 'model:' to ~/.config/hufu/hufu.yaml\n  Run 'hufu doctor' to see the resolved model for your config")
+	}
 
 	// For the default team there is no registry — only the workspace root
 	// is allowed by default.
@@ -1456,6 +1514,7 @@ func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPI
 	}
 
 	return &teamContext{
+		teamName:    teamName,
 		session:     session,
 		coordinator: coordinator,
 		sessionData: sessionData,
@@ -2144,4 +2203,432 @@ func completeAtNames(toComplete string) []string {
 	}
 	sort.Strings(sorted)
 	return sorted
+}
+
+func selectTeamAutomatically(ctx context.Context, prompt string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string) (string, error) {
+	type teamInfo struct {
+		Name        string
+		Description string
+	}
+	var infos []teamInfo
+	for _, name := range registry.ListTeams() {
+		dir, err := registry.Resolve(name)
+		if err != nil {
+			continue
+		}
+		desc := ""
+		for _, ymlName := range []string{"team.yml", "team.yaml"} {
+			d, err := os.ReadFile(filepath.Join(dir, ymlName))
+			if err == nil {
+				var yc struct {
+					Description string `yaml:"description"`
+				}
+				if yaml.Unmarshal(d, &yc) == nil {
+					desc = yc.Description
+				}
+				break
+			}
+		}
+		if desc == "" {
+			desc = "No description provided."
+		}
+		infos = append(infos, teamInfo{Name: name, Description: desc})
+	}
+
+	if len(infos) == 0 {
+		return "", fmt.Errorf("no teams available for selection (run 'hufu init <name>' to create one, or pass --default)")
+	}
+
+	cfg := config.LoadConfig()
+	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, "", "")
+	resolvedProviderAPIKey := config.ResolveProviderAPIKey(defaultProviderAPIKey, "")
+
+	resolvedSidecarModel := sidecarModelOverride
+	if resolvedSidecarModel == "" {
+		resolvedSidecarModel = modelOverride
+	}
+	if resolvedSidecarModel == "" {
+		resolvedSidecarModel = cfg.ResolveSidecarModel("")
+	}
+	if resolvedSidecarModel == "" {
+		resolvedSidecarModel = cfg.ResolveModel("")
+	}
+	if resolvedSidecarModel == "" {
+		resolvedSidecarModel = "ollama/qwen3:8b"
+	}
+
+	prov, err := agent.NewOllamaProvider(resolvedProviderURL, resolvedProviderAPIKey, "auto-team-routing")
+	if err != nil {
+		return "", fmt.Errorf("failed to create provider for auto-team routing: %w", err)
+	}
+
+	s, err := sidecar.NewSidecar(ctx, prov, resolvedSidecarModel)
+	if err != nil {
+		return "", fmt.Errorf("failed to create sidecar for auto-team routing: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("You are a routing assistant. Your task is to select the most suitable team to handle the user's request.\n\n")
+	sb.WriteString("Available Teams:\n")
+	for _, t := range infos {
+		sb.WriteString(fmt.Sprintf("- Name: %s\n  Description: %s\n\n", t.Name, t.Description))
+	}
+	sb.WriteString(fmt.Sprintf("User Request: %q\n\n", prompt))
+	sb.WriteString("Output ONLY the name of the selected team in raw JSON format like this:\n")
+	sb.WriteString("{\"selected_team\": \"team_name\"}\n")
+	sb.WriteString("If none of the teams are suitable, or if you cannot decide, select the most relevant one anyway. Do not output any other text.")
+
+	res, err := s.Execute(ctx, sb.String())
+	if err != nil {
+		return "", fmt.Errorf("failed to execute sidecar routing: %w", err)
+	}
+
+	resTrimmed := strings.TrimSpace(res)
+	if strings.HasPrefix(resTrimmed, "```") {
+		lines := strings.Split(resTrimmed, "\n")
+		var jsonLines []string
+		for _, l := range lines {
+			lTrim := strings.TrimSpace(l)
+			if !strings.HasPrefix(lTrim, "```") {
+				jsonLines = append(jsonLines, l)
+			}
+		}
+		resTrimmed = strings.TrimSpace(strings.Join(jsonLines, "\n"))
+	}
+
+	var choice struct {
+		SelectedTeam string `json:"selected_team"`
+	}
+	if err := json.Unmarshal([]byte(resTrimmed), &choice); err != nil {
+		for _, t := range infos {
+			if strings.Contains(strings.ToLower(resTrimmed), strings.ToLower(t.Name)) {
+				return t.Name, nil
+			}
+		}
+		return "", fmt.Errorf("invalid sidecar response: %q", resTrimmed)
+	}
+
+	teamName := strings.ToLower(strings.TrimSpace(choice.SelectedTeam))
+	if registry.HasTeam(teamName) {
+		return teamName, nil
+	}
+
+	return "", fmt.Errorf("sidecar selected an invalid team: %q", choice.SelectedTeam)
+}
+
+func injectFileContexts(prompt string) (string, string) {
+	re := regexp.MustCompile(`\B#([^\s#]+)`)
+	matches := re.FindAllStringSubmatch(prompt, -1)
+	if len(matches) == 0 {
+		return prompt, ""
+	}
+
+	var additions strings.Builder
+	replacedPrompt := prompt
+	injected := make(map[string]bool)
+	var missing []string
+
+	for _, match := range matches {
+		rawPath := match[1]
+		cleanPath := strings.TrimRight(rawPath, ".,;:!?\")'")
+		if injected[cleanPath] {
+			continue
+		}
+		injected[cleanPath] = true
+
+		fi, err := os.Stat(cleanPath)
+		if err != nil || fi.IsDir() {
+			missing = append(missing, cleanPath)
+			continue
+		}
+
+		if fi.Size() > 100*1024 {
+			stderrLog("%s Warning: File %s is too large (>100KB), skipping context injection.\n", errStyle.Render("⚠"), cleanPath)
+			continue
+		}
+
+		data, err := os.ReadFile(cleanPath)
+		if err != nil {
+			continue
+		}
+
+		isBinary := false
+		for i := 0; i < len(data) && i < 1024; i++ {
+			if data[i] == 0 {
+				isBinary = true
+				break
+			}
+		}
+		if isBinary {
+			stderrLog("%s Warning: File %s appears to be binary, skipping context injection.\n", errStyle.Render("⚠"), cleanPath)
+			continue
+		}
+
+		ext := strings.TrimPrefix(filepath.Ext(cleanPath), ".")
+		if ext == "" {
+			ext = "text"
+		}
+
+		additions.WriteString(fmt.Sprintf("\n\n---\nFile: %s\n```%s\n%s\n```", cleanPath, ext, string(data)))
+		injected[cleanPath] = true
+
+		replacedPrompt = strings.ReplaceAll(replacedPrompt, "#"+rawPath, rawPath)
+	}
+
+	if len(missing) > 0 {
+		stderrLog("%s %d file reference(s) not found and were skipped: %s\n", errStyle.Render("⚠"), len(missing), strings.Join(missing, ", "))
+	}
+	if additions.Len() > 0 {
+		stderrLog("%s Injected content of %d file(s) into context.\n", doneStyle.Render("✓"), len(injected))
+		return replacedPrompt + additions.String(), replacedPrompt
+	}
+
+	return prompt, ""
+}
+
+func loadPromptTemplate(name string, existingVars map[string]string) (string, error) {
+	var searchDirs []string
+	cwd, err := os.Getwd()
+	if err == nil {
+		searchDirs = append(searchDirs, filepath.Join(cwd, ".hufu-templates"))
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		searchDirs = append(searchDirs, filepath.Join(home, ".config", "hufu", "templates"))
+	}
+
+	var filePath string
+	var found bool
+	for _, dir := range searchDirs {
+		for _, ext := range []string{".md", ".yaml", ".yml", ""} {
+			p := filepath.Join(dir, name+ext)
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+				filePath = p
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+
+	if !found {
+		return "", fmt.Errorf("prompt template %q not found in search directories", name)
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read template file: %w", err)
+	}
+
+	content := string(data)
+	body := content
+	var vars []string
+
+	if strings.HasPrefix(content, "---\n") {
+		parts := strings.SplitN(content, "---\n", 3)
+		if len(parts) >= 3 {
+			var metadata struct {
+				Description string   `yaml:"description"`
+				Vars        []string `yaml:"vars"`
+			}
+			if yaml.Unmarshal([]byte(parts[1]), &metadata) == nil {
+				vars = metadata.Vars
+				body = parts[2]
+				if metadata.Description != "" {
+					stderrLog("%s Template: %s (%s)\n", boldStyle.Render("📋"), name, metadata.Description)
+				}
+			}
+		}
+	}
+
+	if len(vars) > 0 {
+		for _, v := range vars {
+			v = strings.TrimSpace(v)
+			if _, ok := existingVars[v]; ok {
+				continue
+			}
+
+			if unattended {
+				return "", fmt.Errorf("template variable %q is required but not provided in unattended mode", v)
+			}
+
+			var val string
+			var inputErr error
+			promptStr := fmt.Sprintf("  Enter value for template variable %s: ", teamStyle.Render(v))
+
+			pr := globalPromptReader.Load()
+			if pr != nil {
+				val, inputErr = pr.ReadLine(boldStyle.Render(promptStr))
+			} else {
+				fmt.Fprint(os.Stderr, boldStyle.Render(promptStr))
+				var line string
+				_, inputErr = fmt.Scanln(&line)
+				val = strings.TrimSpace(line)
+			}
+
+			if inputErr != nil {
+				return "", fmt.Errorf("failed to read variable input: %w", inputErr)
+			}
+			existingVars[v] = val
+		}
+	}
+
+	templated := body
+	for k, v := range existingVars {
+		templated = strings.ReplaceAll(templated, "{{"+k+"}}", v)
+		templated = strings.ReplaceAll(templated, "{{ "+k+" }}", v)
+	}
+
+	return strings.TrimSpace(templated), nil
+}
+
+func injectProjectContext(prompt string) string {
+	isGit := false
+	if _, err := os.Stat(".git"); err == nil {
+		isGit = true
+	}
+
+	var sb strings.Builder
+	sb.WriteString(prompt)
+
+	if isGit {
+		cmd := exec.Command("git", "status", "--short")
+		if output, err := cmd.Output(); err == nil && len(output) > 0 {
+			sb.WriteString("\n\n---\n## Git Status\n```text\n")
+			sb.WriteString(string(output))
+			sb.WriteString("```")
+		}
+	}
+
+	var tree []string
+	cwd, err := os.Getwd()
+	if err == nil {
+		tree = generateDirectoryTree(cwd, "", 0, 2)
+	}
+
+	if len(tree) > 0 {
+		sb.WriteString("\n\n## Project Directory Structure\n```text\n")
+		sb.WriteString(strings.Join(tree, "\n"))
+		sb.WriteString("\n```")
+	}
+
+	return sb.String()
+}
+
+func generateDirectoryTree(dir string, prefix string, depth int, maxDepth int) []string {
+	if depth >= maxDepth {
+		return nil
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+
+	var lines []string
+	skipDirs := map[string]bool{
+		".git":         true,
+		"node_modules": true,
+		"workspace":    true,
+		".agent-teams": true,
+		"tmp":          true,
+		"temp":         true,
+		"vendor":       true,
+		"dist":         true,
+		"build":        true,
+	}
+
+	var filtered []os.DirEntry
+	for _, e := range entries {
+		if skipDirs[e.Name()] {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+
+	for i, e := range filtered {
+		isLast := i == len(filtered)-1
+		connector := "├── "
+		nextPrefix := prefix + "│   "
+		if isLast {
+			connector = "└── "
+			nextPrefix = prefix + "    "
+		}
+
+		lines = append(lines, prefix+connector+e.Name())
+		if e.IsDir() {
+			subLines := generateDirectoryTree(filepath.Join(dir, e.Name()), nextPrefix, depth+1, maxDepth)
+			lines = append(lines, subLines...)
+		}
+	}
+
+	return lines
+}
+
+func savePromptToHistory(ctx context.Context, prompt string, defaultProviderURL string) {
+	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, "", "")
+	ollamaAPIURL := config.ProviderURLToOllamaAPI(resolvedProviderURL)
+	embedModel := config.ResolveEmbeddingModel("")
+
+	store, err := memory.NewGlobalMemoryStore(ollamaAPIURL, embedModel)
+	if err != nil {
+		return
+	}
+
+	id := fmt.Sprintf("hist_%d", time.Now().UnixNano())
+	metadata := map[string]string{
+		"type":      "prompt_history",
+		"timestamp": time.Now().Format(time.RFC3339),
+	}
+	_ = store.Save(ctx, id, prompt, metadata)
+}
+
+var historyCmd = &cobra.Command{
+	Use:   "history [query]",
+	Short: "Search semantic history of prompts",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := context.Background()
+		resolvedProviderURL := config.ResolveProviderURL(providerURL, "", "")
+		ollamaAPIURL := config.ProviderURLToOllamaAPI(resolvedProviderURL)
+		embedModel := config.ResolveEmbeddingModel(memoryModel)
+
+		store, err := memory.NewGlobalMemoryStore(ollamaAPIURL, embedModel)
+		if err != nil {
+			return fmt.Errorf("failed to open global memory store: %w", err)
+		}
+
+		query := ""
+		if len(args) > 0 {
+			query = args[0]
+		}
+
+		if query == "" {
+			fmt.Println("Please provide a query to search prompt history. Example: hufu history \"write python script\"")
+			return nil
+		}
+
+		results, err := store.Query(ctx, query, 5, map[string]string{"type": "prompt_history"})
+		if err != nil {
+			return fmt.Errorf("semantic search failed: %w", err)
+		}
+
+		if len(results) == 0 {
+			fmt.Println("No matching prompt history found.")
+			return nil
+		}
+
+		fmt.Printf("\n%s Semantic History Search Results (query: %q):\n\n", boldStyle.Render("🗂️"), query)
+		for i, res := range results {
+			ts := res.Metadata["timestamp"]
+			fmt.Printf("  %d. %s %s\n", i+1, doneStyle.Render("→"), boldStyle.Render(res.Content))
+			if ts != "" {
+				fmt.Printf("     %s\n", dimStyle.Render("Time: "+ts))
+			}
+			fmt.Println()
+		}
+		return nil
+	},
 }

@@ -1084,6 +1084,25 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 	}
 	w := &lineWriter{}
 	idleTimer := newIdleWarningTimer(w, 30*time.Second)
+
+	if !verbose && !quietMode && !unattended {
+		pb := newProgressBarDisplay()
+		tc.coordinator.SetStatusReporter(func(event team.StatusEvent) {
+			pb.update(event)
+			if tc.notifier != nil {
+				tc.notifier.Notify(event.Type, event.Agent, event.Message, event.Output)
+			}
+			idleTimer.reset()
+			if event.Model != "" {
+				idleTimer.SetModel(event.Model)
+			}
+			if event.Type == "done" || event.Type == "error" {
+				pb.clear()
+			}
+		})
+		return &coordDisplay{idleTimer: idleTimer}
+	}
+
 	taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
 	skillDisp := newSkillDisplay(w)
 	setupStatusReporter(w, tc.coordinator, taskDisp, skillDisp, idleTimer, tc.notifier)
@@ -1648,4 +1667,119 @@ func renderDryRun(result *team.DryRunResult) {
 	b.WriteString("\n")
 
 	fmt.Fprint(os.Stderr, b.String())
+}
+
+type progressBarDisplay struct {
+	mu           sync.Mutex
+	lastLines    int
+	totalTasks   int
+	doneTasks    int
+	activeAgent  string
+	activeTool   string
+	activeStage  string
+	activeStatus string
+}
+
+func newProgressBarDisplay() *progressBarDisplay {
+	return &progressBarDisplay{}
+}
+
+func (p *progressBarDisplay) update(event team.StatusEvent) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	switch event.Type {
+	case "todos_updated":
+		if len(event.Todos) > 0 {
+			p.totalTasks = len(event.Todos)
+			p.doneTasks = 0
+			for _, t := range event.Todos {
+				if t.Status == team.TaskDone || t.Status == team.TaskSkipped {
+					p.doneTasks++
+				}
+			}
+		}
+	case "start":
+		p.activeAgent = event.Agent
+		p.activeStage = "model"
+		p.activeTool = ""
+		p.activeStatus = event.Message
+	case "tool_call":
+		p.activeAgent = event.Agent
+		p.activeStage = "tool"
+		p.activeTool = event.ToolName
+		p.activeStatus = "running tool"
+	case "tool_result":
+		p.activeStage = "model"
+		p.activeTool = ""
+		p.activeStatus = "thinking"
+	case "done":
+		p.activeAgent = ""
+		p.activeStage = ""
+		p.activeTool = ""
+		p.activeStatus = ""
+	case "error":
+		p.activeStatus = "error: " + event.Message
+	}
+
+	p.render()
+}
+
+func (p *progressBarDisplay) render() {
+	if tools.IsAskUserActive() {
+		return
+	}
+	if quietMode || outputFormat == "json" {
+		return
+	}
+	p.clear()
+
+	var b strings.Builder
+	b.WriteString("\n")
+
+	statusLine := ""
+	if p.totalTasks > 0 {
+		statusLine += fmt.Sprintf("[%d/%d] ", p.doneTasks, p.totalTasks)
+	}
+	if p.activeAgent != "" {
+		statusLine += fmt.Sprintf("@%s ", agentStyle.Render(p.activeAgent))
+	}
+	if p.activeTool != "" {
+		statusLine += fmt.Sprintf("executing tool: %s ", toolStyle.Render(p.activeTool))
+	} else if p.activeStatus != "" {
+		statusLine += fmt.Sprintf("status: %s ", dimStyle.Render(p.activeStatus))
+	} else {
+		statusLine += "waiting for coordinator..."
+	}
+	b.WriteString("  " + statusLine + "\n")
+
+	percent := 0
+	if p.totalTasks > 0 {
+		percent = (p.doneTasks * 100) / p.totalTasks
+	}
+	width := 30
+	filled := (percent * width) / 100
+	bar := ""
+	for i := 0; i < width; i++ {
+		if i < filled {
+			bar += "█"
+		} else {
+			bar += "░"
+		}
+	}
+	b.WriteString(fmt.Sprintf("  %s %d%%\n", progressIcon.Render(bar), percent))
+
+	fmt.Fprint(os.Stderr, b.String())
+	p.lastLines = 3
+}
+
+func (p *progressBarDisplay) clear() {
+	if quietMode || outputFormat == "json" {
+		p.lastLines = 0
+		return
+	}
+	if p.lastLines > 0 {
+		fmt.Fprintf(os.Stderr, "\033[%dA\033[J", p.lastLines)
+		p.lastLines = 0
+	}
 }

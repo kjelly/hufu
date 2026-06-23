@@ -55,6 +55,9 @@ func init() {
 	f.BoolVar(&autoSkills, "auto-skills", false, "Enable automatic skill detection")
 	f.BoolVar(&think, "think", false, "Show coordinator decision reasoning")
 	f.Int64Var(&timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds")
+	f.IntVar(&maxRoundsOverride, "max-rounds", 0, "Override team.yaml max-rounds. 0 = use team default.")
+	f.IntVar(&maxConcurrentOverride, "max-concurrent", 0, "Override team.yaml max-concurrent. 0 = use team default.")
+	f.IntVar(&maxStepsOverride, "max-steps", 0, "Override team.yaml max-steps. 0 = use team/agent default.")
 }
 
 func runChat(cmd *cobra.Command, args []string) error {
@@ -87,11 +90,11 @@ func runChat(cmd *cobra.Command, args []string) error {
 	// Resolve which team to load.
 	var tc *teamContext
 	var teamName string
+	var registry *team.TeamRegistry
 	if defaultTeam {
 		teamName = "default"
 		tc, err = loadDefaultTeam(rootCtx, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
 	} else {
-		var registry *team.TeamRegistry
 		teamName, registry, err = pickChatTeam(pr)
 		if err != nil {
 			return err
@@ -100,6 +103,27 @@ func runChat(cmd *cobra.Command, args []string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("failed to load team %q: %w", teamName, err)
+	}
+
+	// Recreate the prompt reader with a team-aware tab completer. The
+	// first reader (line 71) had no completer because we did not yet
+	// know the team. Recreating is cheaper than supporting mutable
+	// completer state in the underlying readline library.
+	if pr != nil {
+		_ = pr.Close()
+		var agentNames []string
+		for name := range tc.session.Agents {
+			agentNames = append(agentNames, name)
+		}
+		newPr, perr := readline.NewPromptReaderWithCompleter(
+			defaultHistoryPath(),
+			newChatCompleter(teamName, []string{teamName}, agentNames),
+		)
+		if perr == nil {
+			pr = newPr
+			globalPromptReader.Store(pr)
+			defer func() { _ = pr.Close() }()
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "\n%s Chatting with team %s. Type %s to leave, %s to clear context.\n\n",
@@ -128,7 +152,29 @@ func runChat(cmd *cobra.Command, args []string) error {
 			turn = 0
 			fmt.Fprintf(os.Stderr, "%s Conversation context cleared.\n\n", dimStyle.Render("·"))
 			continue
+		case "/help", "help", "?":
+			fmt.Fprint(os.Stderr, chatHelpText(tc.teamName))
+			continue
+		case "/team":
+			newTc, newName, terr := switchChatTeam(rootCtx, pr, tc, registry)
+			if terr != nil {
+				fmt.Fprintf(os.Stderr, "%s %v\n", errStyle.Render("✗"), terr)
+				continue
+			}
+			if newTc == nil {
+				continue
+			}
+			tc = newTc
+			teamName = newName
+			turn = 0
+			fmt.Fprintf(os.Stderr, "%s Switched to team %s. Conversation context cleared.\n\n",
+				doneStyle.Render("✓"), teamStyle.Render(teamName))
+			continue
 		}
+
+		// Inject file/project contexts
+		promptToRun, _ := injectFileContexts(line)
+		promptToRun = injectProjectContext(promptToRun)
 
 		// Each turn is independently cancellable with Ctrl+C; cancelling a turn
 		// returns to the prompt rather than exiting the REPL.
@@ -136,9 +182,9 @@ func runChat(cmd *cobra.Command, args []string) error {
 		disp := newCoordDisplay(tc)
 		var result string
 		if turn == 0 {
-			result, err = tc.coordinator.Run(turnCtx, line)
+			result, err = tc.coordinator.Run(turnCtx, promptToRun)
 		} else {
-			result, err = tc.coordinator.ContinueWithPrompt(turnCtx, line)
+			result, err = tc.coordinator.ContinueWithPrompt(turnCtx, promptToRun)
 		}
 		disp.stopTimer()
 		cancel()
@@ -160,10 +206,86 @@ func runChat(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stderr)
 		turn++
 
+		if line != "" {
+			savePromptToHistory(rootCtx, line, providerURL)
+		}
+
 		// Persist after every turn so the session survives a crash mid-chat.
 		_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
 		_ = team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
 	}
+}
+
+// chatHelpText returns a multi-line help block shown by the /help command in
+// the chat REPL.
+func chatHelpText(teamName string) string {
+	return fmt.Sprintf(`%s Chatting with team %s
+
+Commands:
+  /help, help, ?       show this help
+  /reset               clear the conversation context (start fresh)
+  /team                switch to a different team mid-session
+  /exit, /quit, :q     leave the chat
+
+Prompt features:
+  @<agent-name> ...    target a specific agent in the current team
+  #filename            inject the file contents into the prompt
+  Tab                  autocomplete @names and /commands
+
+Tips:
+  - Type your message and press Enter to send it
+  - Each turn is independently cancellable with Ctrl+C
+  - Use ↑/↓ to recall previous prompts
+  - Run with --tui for a 6-column dashboard
+
+`,
+		boldStyle.Render("💬"), teamStyle.Render(teamName))
+}
+
+// switchChatTeam allows the user to switch to a different team mid-REPL.
+// If the user types a team name, it switches. If they just press enter,
+// they can pick from a menu.
+func switchChatTeam(rootCtx context.Context, pr *readline.PromptReader, current *teamContext, registry *team.TeamRegistry) (*teamContext, string, error) {
+	if registry == nil {
+		return nil, "", fmt.Errorf("team switching not available with the default team (exit and re-run with --agent-team)")
+	}
+	var others []string
+	for _, name := range registry.ListTeams() {
+		if name != current.teamName {
+			others = append(others, name)
+		}
+	}
+	if len(others) == 0 {
+		return nil, "", fmt.Errorf("no other teams available in %s", strings.Join(registry.SearchPaths(), ", "))
+	}
+	fmt.Fprintf(os.Stderr, "%s Available teams: %s\n", boldStyle.Render("→"), strings.Join(others, ", "))
+	fmt.Fprintf(os.Stderr, "Switch to which team? ")
+	chosen, err := readChatLine(pr)
+	if err != nil {
+		return nil, "", err
+	}
+	chosen = strings.ToLower(strings.TrimSpace(chosen))
+	if chosen == "" {
+		return nil, "", nil
+	}
+	if chosen == current.teamName {
+		return nil, "", fmt.Errorf("already on team %s", current.teamName)
+	}
+	if !registry.HasTeam(chosen) {
+		return nil, "", fmt.Errorf("team %q not found (available: %s)", chosen, strings.Join(others, ", "))
+	}
+	tc, err := loadTeamByName(rootCtx, chosen, registry, providerURL, providerAPIKey, newPathConsent(), buildVarsOrNil(), forcedSkills, planMode, autoSkills)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to load team %q: %w", chosen, err)
+	}
+	return tc, chosen, nil
+}
+
+// buildVarsOrNil returns the merged template variables, or nil on error.
+// Unlike buildVars(), it does not error out so the REPL can stay alive.
+func buildVarsOrNil() map[string]string {
+	vars, _ := buildVars()
+	return vars
 }
 
 // pickChatTeam discovers teams and resolves which one to chat with, from the
@@ -202,7 +324,7 @@ func pickChatTeam(pr *readline.PromptReader) (string, *team.TeamRegistry, error)
 		return "", nil, err
 	}
 	if chosen == "" {
-		return "", nil, fmt.Errorf("no team selected")
+		return "", nil, fmt.Errorf("no team selected (use --agent-team, @<team>, or 'hufu init <name>')")
 	}
 	return strings.ToLower(chosen), registry, nil
 }

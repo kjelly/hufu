@@ -99,6 +99,13 @@ func TestParsePromptWithLazyAgents(t *testing.T) {
 				{Type: SegmentSwitchTeam, Name: "delegate", Content: "research"},
 			},
 		},
+		{
+			name:   "team typo corrected",
+			prompt: "@delegat research",
+			want: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "delegate", Content: "research"},
+			},
+		},
 	}
 
 	for _, tt := range tests {

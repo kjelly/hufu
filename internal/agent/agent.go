@@ -272,7 +272,7 @@ func CreateAgent(ctx context.Context, ollama *OllamaProvider, cfg AgentConfig, a
 		modelStr = cfg.TeamConfig.Generation.Model
 	}
 	if modelStr == "" {
-		return nil, fmt.Errorf("no model specified for agent %q", cfg.Def.Name)
+		return nil, fmt.Errorf("no model specified for agent %q\n  Set --model <name>, add 'model:' to your team's team.yaml, or add 'model:' to ~/.config/hufu/hufu.yaml\n  Run 'hufu doctor' to see which model is currently resolved", cfg.Def.Name)
 	}
 
 	lm, err := ollama.LanguageModel(ctx, modelStr)

@@ -1544,7 +1544,7 @@ func (c *Coordinator) Sidecar() *sidecar.Sidecar {
 	ctx := context.Background()
 	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.sidecarModel), c.sidecarModel)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to initialize sidecar model %q: %v\n", c.sidecarModel, err)
+		fmt.Fprintf(os.Stderr, "⚠ sidecar model %q unavailable: %v (auto-skills and skill matching disabled — set --sidecar-model to a working model to enable)\n", c.sidecarModel, err)
 		return nil
 	}
 	c.sidecarInst = s
@@ -1564,7 +1564,7 @@ func (c *Coordinator) GuardSidecar() *sidecar.Sidecar {
 	ctx := context.Background()
 	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.guardModel), c.guardModel)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to initialize guard model %q: %v\n", c.guardModel, err)
+		fmt.Fprintf(os.Stderr, "⚠ guard model %q unavailable: %v (guard review disabled — tool calls will be denied until a working model is configured)\n", c.guardModel, err)
 		return nil
 	}
 	c.guardInst = s

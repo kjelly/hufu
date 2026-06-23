@@ -2,6 +2,7 @@ package team
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 
@@ -47,6 +48,22 @@ func ParsePromptWithLazyAgents(rawPrompt string, registry *TeamRegistry, default
 			content := strings.TrimSpace(rawPrompt[loc.end:])
 			return []PromptSegment{{Type: SegmentSwitchTeam, Name: name, Content: content}}, nil
 		}
+
+		// Try fuzzy team matching for typo correction
+		bestMatch := ""
+		bestScore := 0.0
+		for _, tName := range registry.ListTeams() {
+			score := similarityScore(name, tName)
+			if score > bestScore {
+				bestScore = score
+				bestMatch = tName
+			}
+		}
+		if bestScore >= 0.75 && bestMatch != "" && bestMatch != name {
+			fmt.Fprintf(os.Stderr, "Note: Corrected typo @%s to @%s (similarity: %.0f%%)\n", name, bestMatch, bestScore*100)
+			content := strings.TrimSpace(rawPrompt[loc.end:])
+			return []PromptSegment{{Type: SegmentSwitchTeam, Name: bestMatch, Content: content}}, nil
+		}
 	}
 
 	return nil, fmt.Errorf("no team found in prompt. Available teams: %s", strings.Join(registry.ListTeams(), ", "))
@@ -85,6 +102,47 @@ func SplitSegmentByAgents(segment PromptSegment, registry *TeamRegistry, current
 		restAfter := content[loc[1]:]
 		taskContent := extractUntilNextAt(restAfter)
 		consumedLen := len(taskContent)
+
+		if !registry.HasTeam(name) && !isAgentInList(name, currentAgents) {
+			// Try fuzzy correction
+			bestMatch := ""
+			bestScore := 0.0
+			isTeamMatch := false
+
+			for _, tName := range registry.ListTeams() {
+				score := similarityScore(name, tName)
+				if score > bestScore {
+					bestScore = score
+					bestMatch = tName
+					isTeamMatch = true
+				}
+			}
+			for _, ag := range currentAgents {
+				if ag.Role == "orchestrator" || ag.Role == "coordinator" {
+					continue
+				}
+				score := similarityScore(name, strings.ToLower(ag.Name))
+				if score > bestScore {
+					bestScore = score
+					bestMatch = strings.ToLower(ag.Name)
+					isTeamMatch = false
+				}
+				if ag.FileAlias != "" {
+					score2 := similarityScore(name, strings.ToLower(ag.FileAlias))
+					if score2 > bestScore {
+						bestScore = score2
+						bestMatch = strings.ToLower(ag.FileAlias)
+						isTeamMatch = false
+					}
+				}
+			}
+
+			if bestScore >= 0.75 && bestMatch != "" && bestMatch != name {
+				fmt.Fprintf(os.Stderr, "Note: Corrected typo @%s to @%s (similarity: %.0f%%)\n", name, bestMatch, bestScore*100)
+				name = bestMatch
+				_ = isTeamMatch
+			}
+		}
 
 		if registry.HasTeam(name) {
 			if needsTeamHeader {
@@ -175,4 +233,47 @@ func extractUntilNextAt(rest string) string {
 		return rest
 	}
 	return rest[:nextAt[0]]
+}
+
+func similarityScore(s, t string) float64 {
+	d := levenshteinDistance(s, t)
+	maxLen := len(s)
+	if len(t) > maxLen {
+		maxLen = len(t)
+	}
+	if maxLen == 0 {
+		return 1.0
+	}
+	return 1.0 - float64(d)/float64(maxLen)
+}
+
+func levenshteinDistance(s, t string) int {
+	d := make([][]int, len(s)+1)
+	for i := range d {
+		d[i] = make([]int, len(t)+1)
+		d[i][0] = i
+	}
+	for j := range d[0] {
+		d[0][j] = j
+	}
+	for i := 1; i <= len(s); i++ {
+		for j := 1; j <= len(t); j++ {
+			cost := 1
+			if s[i-1] == t[j-1] {
+				cost = 0
+			}
+			d[i][j] = minInt(
+				d[i-1][j]+1,
+				minInt(d[i][j-1]+1, d[i-1][j-1]+cost),
+			)
+		}
+	}
+	return d[len(s)][len(t)]
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

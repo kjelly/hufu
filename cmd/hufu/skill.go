@@ -120,7 +120,7 @@ func runSkillReview(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if found == nil {
-		return fmt.Errorf("skill not found: %s", skillName)
+		return fmt.Errorf("skill not found: %s\n  Run 'hufu skill list' to see available skills", skillName)
 	}
 
 	fmt.Printf("Found skill: %s\n\n", found.Path)

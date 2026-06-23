@@ -177,6 +177,8 @@ type Model struct {
 	inInfo   bool
 	teamInfo TeamInfo
 
+	inHelp bool
+
 	wrapUpRequested bool
 	WrapUpCh        chan struct{}
 	ReportCh        chan struct{}
@@ -534,6 +536,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.inAskUser {
 			return m.updateAskUser(msg)
+		}
+		if m.inHelp {
+			return m.updateHelp(msg)
 		}
 		if m.inInfo {
 			return m.updateInfo(msg)
@@ -923,6 +928,9 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "i":
 		m.inInfo = true
 		return m, nil
+	case "?", "F1":
+		m.inHelp = true
+		return m, nil
 	case "a":
 		m.inActivityLog = true
 		m.initActivityVP()
@@ -1197,6 +1205,18 @@ func (m Model) updateInfo(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q", "?", "F1", "enter":
+		m.inHelp = false
+		return m, nil
+	case "ctrl+c":
+		m.inHelp = false
+		return m.handleCtrlC()
+	}
+	return m, nil
+}
+
 func (m Model) updateActivityLog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "q", "a", "enter":
@@ -1340,6 +1360,9 @@ func (m Model) View() string {
 	if m.inAskUser {
 		return m.askUserView()
 	}
+	if m.inHelp {
+		return m.helpView()
+	}
 	if m.inInfo {
 		return m.infoPanelView()
 	}
@@ -1471,6 +1494,17 @@ func (m Model) renderStatusArea(w int) string {
 	}
 
 	text := m.statusText
+	// Prefer showing the most recent in_progress task's name so the status
+	// bar reflects what is happening *now*, not whatever event arrived last
+	// (which may be for a task that has already completed in the background).
+	if !m.finished {
+		for i := len(m.tasks) - 1; i >= 0; i-- {
+			if t := m.tasks[i]; t != nil && t.Status == team.TaskInProgress {
+				text = "  " + agentStyle.Render(t.Agent) + dimStyle.Render("  "+t.Desc)
+				return utils.TruncateLine(ansi.Strip(text), m.width-3)
+			}
+		}
+	}
 	if text == "" {
 		if m.finished {
 			return dimStyle.Render("  ✓ Done")
@@ -1855,6 +1889,9 @@ func (m Model) footer() string {
 	if m.inInfo {
 		return footerStyle.Render("i/esc close · ↑↓ scroll")
 	}
+	if m.inHelp {
+		return footerStyle.Render("?/esc close")
+	}
 	if m.inSearch {
 		return footerStyle.Render("enter search · esc cancel")
 	}
@@ -1864,7 +1901,44 @@ func (m Model) footer() string {
 	if m.finished {
 		return footerStyle.Render("g/G top/bot · J/K/ctrl+d/u scroll · / search · r report · i info · ↑↓ j/k · enter detail · q quit")
 	}
-	return footerStyle.Render("g/G top/bot · J/K/ctrl+d/u scroll · / search · i info · c prompt · ↑↓ j/k · enter detail · esc quit")
+	return footerStyle.Render("g/G top/bot · J/K/ctrl+d/u scroll · / search · i info · c prompt · ? help · ↑↓ j/k · enter detail · esc quit")
+}
+
+func (m Model) helpView() string {
+	box := infoBoxStyle.Render(`hufu TUI — keyboard reference
+
+Columns (dashboard)
+  h / l  ←/→        switch column
+  tab               cycle through all 6 columns
+  j / k  ↑/↓        move cursor in column
+  g / G             first / last item
+  ctrl+d / ctrl+u   half-page down / up
+  enter             open detail view for the focused task
+
+Search
+  /                 open search dialog
+  n / N             next / previous match
+
+Actions
+  c                 inject an additional prompt (mid-run)
+  i                 show team info panel
+  a                 full-screen activity log
+  M                 memory (STM/LTM) view
+  m                 toggle mouse support
+  r                 generate report (only when finished)
+  ?  or  F1         this help screen
+  q                 quit (only when finished)
+  esc               open quit confirmation
+  ctrl+c            request wrap-up (1st) / force quit (2nd)
+
+Detail view
+  j/k ↑/↓           scroll one line
+  g / G             top / bottom
+  v                 enter VISUAL mode
+  y                 yank selection to clipboard (VISUAL only)
+  esc / backspace   return to columns
+`)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
 func (m Model) confirmView() string {
