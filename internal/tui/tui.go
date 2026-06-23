@@ -534,31 +534,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
-		if m.inAskUser {
+		// Overlay dispatch: same priority order as View() — see overlay.go.
+		switch m.currentOverlay() {
+		case OverlayAskUser:
 			return m.updateAskUser(msg)
-		}
-		if m.inHelp {
+		case OverlayHelp:
 			return m.updateHelp(msg)
-		}
-		if m.inInfo {
+		case OverlayInfo:
 			return m.updateInfo(msg)
-		}
-		if m.inSearch {
+		case OverlaySearch:
 			return m.updateSearch(msg)
-		}
-		if m.inPromptInput {
+		case OverlayPromptInput:
 			return m.updatePromptInput(msg)
-		}
-		if m.inConfirm {
+		case OverlayConfirm:
 			return m.updateConfirm(msg)
-		}
-		if m.inDetail {
+		case OverlayDetail:
 			return m.updateDetail(msg)
-		}
-		if m.inMemory {
+		case OverlayMemory:
 			return m.updateMemory(msg)
-		}
-		if m.inActivityLog {
+		case OverlayActivityLog:
 			return m.updateActivityLog(msg)
 		}
 		return m.updateColumns(msg)
@@ -1357,31 +1351,28 @@ func (m Model) View() string {
 	if m.width == 0 {
 		return "Initialising…"
 	}
-	if m.inAskUser {
+	// Overlay dispatch: switch on the active overlay instead of a chain
+	// of bool checks. The priority order is centralized in
+	// currentOverlay() (see overlay.go), so adding a new overlay only
+	// requires extending the enum and currentOverlay().
+	switch m.currentOverlay() {
+	case OverlayAskUser:
 		return m.askUserView()
-	}
-	if m.inHelp {
+	case OverlayHelp:
 		return m.helpView()
-	}
-	if m.inInfo {
+	case OverlayInfo:
 		return m.infoPanelView()
-	}
-	if m.inSearch {
+	case OverlaySearch:
 		return m.searchView()
-	}
-	if m.inPromptInput {
+	case OverlayPromptInput:
 		return m.promptInputView()
-	}
-	if m.inConfirm {
+	case OverlayConfirm:
 		return m.confirmView()
-	}
-	if m.inDetail {
+	case OverlayDetail:
 		return m.detailView()
-	}
-	if m.inActivityLog {
+	case OverlayActivityLog:
 		return m.activityLogView()
-	}
-	if m.inMemory {
+	case OverlayMemory:
 		return m.memoryView()
 	}
 	return m.columnsView()
