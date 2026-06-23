@@ -1,0 +1,5 @@
+name: test-writer
+description: "Starter team for generating and maintaining tests. Includes a test-writer worker and a code-reviewer-style critic."
+max-rounds: 5
+timeout: 1800
+max-retries: 2

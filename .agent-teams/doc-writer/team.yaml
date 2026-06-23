@@ -1,0 +1,5 @@
+name: doc-writer
+description: "Starter team for user-facing documentation: README, API reference, and CHANGELOG entries."
+max-rounds: 5
+timeout: 1800
+max-retries: 2

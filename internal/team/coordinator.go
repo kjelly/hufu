@@ -106,6 +106,11 @@ const maxConcurrentModels = 3
 // this many drafts in a session.
 const maxDraftsPerSession = 3
 
+// summaryMaxRunes is the character cap for the short task summary that
+// the TODO panel shows alongside each task. The full output is kept in
+// the task's Output field; only the summary is truncated to this size.
+const summaryMaxRunes = 300
+
 type DryRunAgentInfo struct {
 	Name   string
 	Role   string
@@ -1313,7 +1318,7 @@ func (c *Coordinator) autoWriteSTM(agentName, taskDesc, output, errMsg string, s
 
 	var entry string
 	if success {
-		summary := extractSummary(output, 300)
+		summary := extractSummary(output, summaryMaxRunes)
 		entry = formatSTMDoneEntry(agentName, taskDesc, summary)
 	} else {
 		entry = formatSTMErrorEntry(agentName, taskDesc, errMsg)
@@ -2237,7 +2242,7 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	if parentID != "" {
 		c.taskTracker.TodoList().UpdateStatus(parentID, TaskInProgress, "")
 	}
-	c.taskTracker.TodoList().UpdateStatusAndOutput(subTodoID, TaskDone, extractSummary(output, 300), output)
+	c.taskTracker.TodoList().UpdateStatusAndOutput(subTodoID, TaskDone, extractSummary(output, summaryMaxRunes), output)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
 	return fantasy.NewTextResponse(output), nil
@@ -3563,7 +3568,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			if !td.Sidecar && !td.Summarize {
 				if cached, ok := c.lookupTaskCache(ctx, agentKey, desc); ok {
 					c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(desc).withTodoID(tid))
-					c.taskTracker.TodoList().UpdateStatusAndOutput(tid, TaskDone, extractSummary(cached, 300), cached)
+					c.taskTracker.TodoList().UpdateStatusAndOutput(tid, TaskDone, extractSummary(cached, summaryMaxRunes), cached)
 					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 					result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: cached}
 					inflightMu.Lock()
@@ -4610,7 +4615,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				}
 				_ = writeStatus(c.session.Workspace, agentName, "done", taskDesc)
 				duration, modelTime, toolTime := timing.snapshot()
-				c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, extractSummary(output, 300), output)
+				c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, extractSummary(output, summaryMaxRunes), output)
 				c.updateTodoTiming(todoID, modelTime, toolTime)
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("done").withAgent(agentName).withOutput(output).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
@@ -5019,7 +5024,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		return "", fmt.Errorf("sidecar execution failed (model: %s): %w", c.sidecarModel, err)
 	}
 
-	c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, extractSummary(result, 300), result)
+	c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, extractSummary(result, summaryMaxRunes), result)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(result).withMessage("sidecar completed").withTodoID(todoID))
 	return result, nil
@@ -6399,7 +6404,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		log.Printf("warning: failed to write task file: %v", err)
 	}
 	_ = writeStatus(c.session.Workspace, resolvedName, "done", task)
-	c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, extractSummary(output, 300), output)
+	c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, extractSummary(output, summaryMaxRunes), output)
 	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(resolvedName).withOutput(output).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
