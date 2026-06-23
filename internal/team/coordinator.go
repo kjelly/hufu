@@ -572,12 +572,14 @@ type Coordinator struct {
 	sessionToolPermissionsMu sync.RWMutex
 
 	// Unattended / budget controls for no-human-watching operation.
-	unattended    bool
-	maxWallClock  time.Duration // 0 = unlimited
-	tokenBudget   int64         // 0 = unlimited; cumulative LLM tokens
-	tokensUsed    atomic.Int64
-	acceptanceCmd string // optional shell command run at finish
-	budgetTripped atomic.Bool
+	unattended          bool
+	maxWallClock        time.Duration // 0 = unlimited
+	tokenBudget         int64         // 0 = unlimited; cumulative LLM tokens
+	tokensUsed          atomic.Int64
+	acceptanceCmd       string // optional shell command run at finish
+	rollbackCmd         string // optional shell command run on acceptance failure
+	selfHealingAttempts int
+	budgetTripped       atomic.Bool
 }
 
 // SetUnattended enables unattended (no-human) mode: ask_user returns safe
@@ -601,6 +603,9 @@ func (c *Coordinator) SetBudget(maxWallClockSeconds, maxTotalTokens int64) {
 // SetAcceptance sets an optional shell command run when the coordinator
 // finishes; a non-zero exit marks the run as not-accepted.
 func (c *Coordinator) SetAcceptance(cmd string) { c.acceptanceCmd = cmd }
+
+// SetRollback sets an optional shell command run on acceptance failure in unattended mode.
+func (c *Coordinator) SetRollback(cmd string) { c.rollbackCmd = cmd }
 
 // TokensUsed returns the cumulative LLM token count observed so far.
 func (c *Coordinator) TokensUsed() int64 { return c.tokensUsed.Load() }
@@ -1959,9 +1964,30 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	// failure is not silent.
 	response := args.Response
 	if accErr := t.coordinator.runAcceptance(ctx); accErr != nil {
-		note := fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v", accErr)
-		response += note
-		t.coordinator.report(t.coordinator.newEvent("error").withMessage("acceptance check failed: " + accErr.Error()))
+		if t.coordinator.IsUnattended() {
+			if t.coordinator.selfHealingAttempts < 2 {
+				t.coordinator.selfHealingAttempts++
+				msg := fmt.Sprintf("Acceptance check failed (attempt %d/2). Initiating self-healing. Error: %v", t.coordinator.selfHealingAttempts, accErr)
+				t.coordinator.report(t.coordinator.newEvent("error").withMessage(msg))
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("Acceptance check failed: %v. Please analyze the failure log, modify files/re-run tasks to fix the issues, and call finish again.", accErr)), nil
+			}
+			// Self-healing attempts exhausted, run rollback
+			msg := fmt.Sprintf("Acceptance check failed after %d self-healing attempts. Initiating rollback...", t.coordinator.selfHealingAttempts)
+			t.coordinator.report(t.coordinator.newEvent("error").withMessage(msg))
+			if rollErr := t.coordinator.runRollback(ctx); rollErr != nil {
+				rollMsg := fmt.Sprintf("Rollback failed: %v", rollErr)
+				t.coordinator.report(t.coordinator.newEvent("error").withMessage(rollMsg))
+				response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\n⚠️ ROLLBACK FAILED: %v", accErr, rollErr)
+			} else {
+				t.coordinator.report(t.coordinator.newEvent("error").withMessage("Workspace rolled back successfully due to acceptance check failure."))
+				response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\n✓ Workspace rolled back successfully.", accErr)
+			}
+		} else {
+			// Interactive mode: preserve standard behavior
+			note := fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v", accErr)
+			response += note
+			t.coordinator.report(t.coordinator.newEvent("error").withMessage("acceptance check failed: " + accErr.Error()))
+		}
 	}
 
 	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
@@ -1984,6 +2010,45 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) error {
 	}
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
+	ex := exec.CommandContext(ctx, shell, "-c", cmd)
+	if c.projectDir != "" {
+		ex.Dir = c.projectDir
+	}
+	out, err := ex.CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(out))
+		if detail != "" {
+			detail = ": " + truncate(detail, 500)
+		}
+		return fmt.Errorf("%v%s", err, detail)
+	}
+	return nil
+}
+
+// runRollback runs the team's optional rollback command or default git rollback.
+func (c *Coordinator) runRollback(parentCtx context.Context) error {
+	cmd := strings.TrimSpace(c.rollbackCmd)
+	shell := "sh"
+	if c.session != nil && c.session.Config.Shell != "" {
+		shell = c.session.Config.Shell
+	}
+	timeout := time.Duration(c.session.Config.Timeout) * time.Second
+	if timeout <= 0 || timeout > 300*time.Second {
+		timeout = 300 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
+	defer cancel()
+
+	if cmd == "" {
+		// Default rollback: git reset --hard and git clean -fd if it's a git repo
+		gitDir := filepath.Join(c.projectDir, ".git")
+		if _, err := os.Stat(gitDir); err == nil {
+			cmd = "git reset --hard && git clean -fd"
+		} else {
+			return fmt.Errorf("no custom rollback command set and no git repository found in workspace")
+		}
+	}
+
 	ex := exec.CommandContext(ctx, shell, "-c", cmd)
 	if c.projectDir != "" {
 		ex.Dir = c.projectDir
@@ -2164,7 +2229,7 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	if parentID != "" {
 		c.taskTracker.TodoList().UpdateStatus(parentID, TaskInProgress, "")
 	}
-	c.taskTracker.TodoList().UpdateStatus(subTodoID, TaskDone, "")
+	c.taskTracker.TodoList().UpdateStatusAndOutput(subTodoID, TaskDone, extractSummary(output, 300), output)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
 	return fantasy.NewTextResponse(output), nil
@@ -3490,7 +3555,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			if !td.Sidecar && !td.Summarize {
 				if cached, ok := c.lookupTaskCache(ctx, agentKey, desc); ok {
 					c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(desc).withTodoID(tid))
-					c.taskTracker.TodoList().UpdateStatus(tid, TaskDone, extractSummary(cached, 300))
+					c.taskTracker.TodoList().UpdateStatusAndOutput(tid, TaskDone, extractSummary(cached, 300), cached)
 					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 					result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: cached}
 					inflightMu.Lock()
@@ -4537,7 +4602,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				}
 				_ = writeStatus(c.session.Workspace, agentName, "done", taskDesc)
 				duration, modelTime, toolTime := timing.snapshot()
-				c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, extractSummary(output, 300))
+				c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, extractSummary(output, 300), output)
 				c.updateTodoTiming(todoID, modelTime, toolTime)
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("done").withAgent(agentName).withOutput(output).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
@@ -4946,7 +5011,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		return "", fmt.Errorf("sidecar execution failed (model: %s): %w", c.sidecarModel, err)
 	}
 
-	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, extractSummary(result, 300))
+	c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, extractSummary(result, 300), result)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(result).withMessage("sidecar completed").withTodoID(todoID))
 	return result, nil
@@ -4960,6 +5025,12 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 
 	// Pick up the TodoItem ID injected by executeTask so events can be attributed to a task.
 	todoID, _ := ctx.Value(todoIDKey{}).(string)
+
+	var lastToolCall *struct {
+		toolName string
+		input    string
+	}
+	consecutiveErrCount := 0
 
 	streamCall := fantasy.AgentStreamCall{
 		Prompt:   prompt,
@@ -4989,6 +5060,22 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			c.SetCurrentStage("tool")
 			c.SetCurrentTool(tc.ToolName)
 
+			// 🔁 Deadloop / thrashing detection!
+			if lastToolCall != nil && lastToolCall.toolName == tc.ToolName && lastToolCall.input == tc.Input {
+				if consecutiveErrCount >= 2 {
+					return fmt.Errorf("agent %s is stuck in a loop executing the same failing command: %s (args: %s)", agentName, tc.ToolName, argsPreview)
+				}
+			} else {
+				lastToolCall = &struct {
+					toolName string
+					input    string
+				}{
+					toolName: tc.ToolName,
+					input:    tc.Input,
+				}
+				consecutiveErrCount = 0
+			}
+
 			// Record tool call for skill pattern detection
 			if c.skillDetector != nil {
 				taskDesc := c.currentTask
@@ -5017,6 +5104,17 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			_, isErrResult := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Result)
 			audit.LogToolResult(agentName, tr.ToolName, resultPreview, isErrResult)
 			c.SetCurrentTool("")
+
+			// 🔁 Track error count
+			if lastToolCall != nil && lastToolCall.toolName == tr.ToolName {
+				if isErrResult {
+					consecutiveErrCount++
+				} else {
+					consecutiveErrCount = 0
+				}
+			}
+
+			c.saveCheckpoint()
 			return nil
 		},
 		OnTextDelta: func(id, text string) error {
@@ -5079,15 +5177,14 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	}
 
 	result, err := ag.Stream(ctx, streamCall)
-	if err != nil {
-		c.SetCurrentStage("idle")
-		c.SetCurrentTool("")
-		c.addStepTokens(result.Steps)
-		return "", nil, err
-	}
 	c.SetCurrentStage("idle")
 	c.SetCurrentTool("")
-	c.addStepTokens(result.Steps)
+	if result != nil {
+		c.addStepTokens(result.Steps)
+	}
+	if err != nil {
+		return "", nil, err
+	}
 	return result.Response.Content.Text(), result.Steps, nil
 }
 
@@ -6061,6 +6158,115 @@ func estimateMessageSize(msg fantasy.Message) int {
 
 func (c *Coordinator) SetSessionData(sd *SessionData) {
 	c.sessionData = sd
+	if sd != nil {
+		if len(sd.Tasks) > 0 {
+			c.taskTracker.TodoList().Restore(sd.Tasks)
+
+			c.taskResultCacheMu.Lock()
+			gen := c.cacheGeneration.Load()
+			for _, t := range sd.Tasks {
+				if t.Status == TaskDone && t.Output != "" {
+					agentKey := strings.ToLower(t.Agent)
+					c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
+						taskDesc:   t.Desc,
+						output:     t.Output,
+						generation: gen,
+					})
+					if len(c.taskResultCache[agentKey]) > maxTaskCacheEntries {
+						c.taskResultCache[agentKey] = c.taskResultCache[agentKey][1:]
+					}
+				}
+			}
+			c.taskResultCacheMu.Unlock()
+		}
+		c.taskTracker.TodoList().onChange = c.saveCheckpoint
+	}
+}
+
+func (c *Coordinator) saveCheckpoint() {
+	if c.sessionData == nil || c.session == nil || c.session.Workspace == "" {
+		return
+	}
+	c.sessionData.Tasks = c.taskTracker.TodoList().Items()
+	_ = SaveSession(c.session.Workspace, c.sessionData)
+}
+
+// isInterruptedStatus reports whether a restored task status indicates the task
+// was left incomplete by an interrupted (crashed/killed) run and must be
+// re-driven on resume. Terminal states (done/skipped) and definitively-failed
+// tasks (error, which already exhausted their retries) are left untouched.
+func isInterruptedStatus(s TaskStatus) bool {
+	switch s {
+	case TaskInProgress, TaskPaused, TaskPlanned, TaskPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// todoIDLess orders numeric todo IDs ("1","2",...) numerically, falling back to
+// string comparison for non-numeric IDs.
+func todoIDLess(a, b string) bool {
+	ai, aerr := strconv.Atoi(a)
+	bi, berr := strconv.Atoi(b)
+	if aerr == nil && berr == nil {
+		return ai < bi
+	}
+	return a < b
+}
+
+// resetInterruptedTasks finds tasks left in-flight by a previous run, resets
+// each to pending so it can be re-driven on its original todo ID, and returns
+// them in dependency-safe (ascending ID) order. Split from execution so the
+// selection/reset logic can be unit-tested without an LLM provider.
+func (c *Coordinator) resetInterruptedTasks() []*TodoItem {
+	items := c.taskTracker.TodoList().Items()
+	var interrupted []*TodoItem
+	for _, it := range items {
+		if isInterruptedStatus(it.Status) {
+			interrupted = append(interrupted, it)
+		}
+	}
+	sort.SliceStable(interrupted, func(i, j int) bool {
+		return todoIDLess(interrupted[i].ID, interrupted[j].ID)
+	})
+	for _, it := range interrupted {
+		c.taskTracker.TodoList().UpdateStatus(it.ID, TaskPending, "resumed after interruption")
+	}
+	return interrupted
+}
+
+// ResumeInterruptedTasks re-drives the worker tasks that a previous run left
+// in-flight (restored from the session checkpoint). Completed work is reused via
+// the result cache prepopulated in SetSessionData; only interrupted tasks are
+// re-executed, on their original todo IDs and in ascending-ID order so that
+// dependencies (which carry lower IDs) run first. It is a no-op on a fresh run
+// because the todo list is empty. Returns the number of tasks re-driven and the
+// first error encountered, if any.
+func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
+	interrupted := c.resetInterruptedTasks()
+	if len(interrupted) == 0 {
+		return 0, nil
+	}
+	c.report(c.newEvent("step").withMessage(fmt.Sprintf("resuming %d interrupted task(s) from checkpoint", len(interrupted))))
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+
+	var firstErr error
+	count := 0
+	for _, it := range interrupted {
+		if ctx.Err() != nil {
+			if firstErr == nil {
+				firstErr = ctx.Err()
+			}
+			break
+		}
+		task := TaskDef{Agent: it.Agent, Goal: it.Desc}
+		if _, err := c.executeTask(ctx, task, it.ID); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		count++
+	}
+	return count, firstErr
 }
 
 func (c *Coordinator) SessionData() *SessionData {
@@ -6185,7 +6391,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		log.Printf("warning: failed to write task file: %v", err)
 	}
 	_ = writeStatus(c.session.Workspace, resolvedName, "done", task)
-	c.taskTracker.TodoList().UpdateStatus(todoID, TaskDone, extractSummary(output, 300))
+	c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, extractSummary(output, 300), output)
 	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(resolvedName).withOutput(output).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
@@ -6376,6 +6582,15 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	EnsureWorkspaceDirs(c.session.Workspace)
 
 	c.report(c.newEvent("step").withMessage("coordinator preparing"))
+
+	// Crash-resume: before delegating new work, re-drive any worker tasks that a
+	// previous interrupted run left in-flight (restored from the checkpoint).
+	// No-op on a fresh run (empty todo list) or with --new (fresh session).
+	if n, err := c.ResumeInterruptedTasks(ctx); err != nil {
+		c.report(c.newEvent("step").withMessage(fmt.Sprintf("resume: re-drove %d interrupted task(s), with errors: %v", n, err)))
+	} else if n > 0 {
+		c.report(c.newEvent("step").withMessage(fmt.Sprintf("resume: re-drove %d interrupted task(s) from checkpoint", n)))
+	}
 
 	if c.sessionData != nil {
 		c.sessionData.AddEntry("user", userPrompt)

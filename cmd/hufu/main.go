@@ -94,6 +94,11 @@ func main() {
 	// Add skill management commands
 	rootCmd.AddCommand(skillCmd)
 
+	// Add custom completion commands
+	completionCmd.AddCommand(completionBashCmd, completionZshCmd, completionFishCmd, completionPowerShellCmd, completionNushellCmd)
+	rootCmd.AddCommand(completionCmd)
+	rootCmd.AddCommand(completionHelperCmd)
+
 	rootCmd.Flags().StringVar(&providerURL, "provider-url", "", "Ollama API base URL (default: from hufu.yaml or http://localhost:11434/v1)")
 	rootCmd.Flags().StringVar(&providerAPIKey, "provider-api-key", "", "Provider API key (default: from HUFU_PROVIDER_API_KEY env or team.yaml)")
 	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show full agent text output in real-time")
@@ -134,6 +139,31 @@ func main() {
 	rootCmd.Flags().BoolVar(&unattended, "unattended", false, "Run with no human present: ask_user returns safe defaults instead of blocking, --steps/--tui are disabled, and only allowlisted tools may run")
 	rootCmd.Flags().Int64Var(&maxDuration, "max-duration", 0, "Budget: max total wall-clock seconds before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
 	rootCmd.Flags().Int64Var(&maxTotalTokens, "max-total-tokens", 0, "Budget: max cumulative LLM tokens before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
+
+	rootCmd.RegisterFlagCompletionFunc("agent-team", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		var searchPaths []string
+		if agentTeamSearchPath != "" {
+			searchPaths = strings.Split(agentTeamSearchPath, ",")
+		} else {
+			searchPaths = team.DefaultSearchPaths()
+		}
+		registry := team.NewTeamRegistry(searchPaths)
+		if err := registry.Discover(); err != nil {
+			return nil, cobra.ShellCompDirectiveError
+		}
+		var matches []string
+		for _, name := range registry.ListTeams() {
+			if strings.HasPrefix(strings.ToLower(name), strings.ToLower(toComplete)) {
+				matches = append(matches, name)
+			}
+		}
+		return matches, cobra.ShellCompDirectiveNoFileComp
+	})
+
+	rootCmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		matches := completeAtNames(toComplete)
+		return matches, cobra.ShellCompDirectiveNoFileComp
+	}
 
 	if err := rootCmd.Execute(); err != nil {
 		var interrupted errInterrupted
@@ -423,6 +453,33 @@ func runTeam(cmd *cobra.Command, args []string) error {
 				if defaultTeam && seg.Name == "default" {
 					tc, err = loadDefaultTeam(ctx, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
 				} else {
+					teamDir, resolveErr := registry.Resolve(seg.Name)
+					if resolveErr == nil && !unattended {
+						missingVars, scanErr := team.FindMissingVars(teamDir, vars)
+						if scanErr == nil && len(missingVars) > 0 {
+							fmt.Fprintf(os.Stderr, "\n%s Some template variables are required for team %s:\n", boldStyle.Render("📋"), teamStyle.Render(seg.Name))
+							for _, mv := range missingVars {
+								var val string
+								var inputErr error
+								promptStr := fmt.Sprintf("  Enter value for %s: ", teamStyle.Render(mv))
+								if pr != nil {
+									val, inputErr = pr.ReadLine(boldStyle.Render(promptStr))
+								} else {
+									fmt.Fprint(os.Stderr, boldStyle.Render(promptStr))
+									var line string
+									_, inputErr = fmt.Scanln(&line)
+									val = strings.TrimSpace(line)
+								}
+								if inputErr != nil {
+									return fmt.Errorf("failed to read variable input: %w", inputErr)
+								}
+								if vars == nil {
+									vars = make(map[string]string)
+								}
+								vars[mv] = val
+							}
+						}
+					}
 					tc, err = loadTeamByName(ctx, seg.Name, registry, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
 				}
 				if err != nil {
@@ -616,6 +673,7 @@ func applyUnattendedAndBudget(coordinator *team.Coordinator, session *team.TeamS
 	}
 	coordinator.SetBudget(budgetSeconds, budgetTokens)
 	coordinator.SetAcceptance(session.Config.Acceptance)
+	coordinator.SetRollback(session.Config.Rollback)
 }
 
 func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
@@ -1851,4 +1909,64 @@ func askUserForTeam(teams []string, pr *readline.PromptReader) (string, error) {
 		}
 	}
 	return input, nil
+}
+
+func completeAtNames(toComplete string) []string {
+	var searchPaths []string
+	if agentTeamSearchPath != "" {
+		searchPaths = strings.Split(agentTeamSearchPath, ",")
+	} else {
+		searchPaths = team.DefaultSearchPaths()
+	}
+	registry := team.NewTeamRegistry(searchPaths)
+	if err := registry.Discover(); err != nil {
+		return nil
+	}
+
+	var results []string
+	prefix := strings.ToLower(toComplete)
+	if !strings.HasPrefix(prefix, "@") {
+		// Suggest all teams with @ prefix
+		for _, name := range registry.ListTeams() {
+			results = append(results, "@"+name)
+		}
+		return results
+	}
+
+	subToComplete := prefix[1:]
+
+	// Find matching teams
+	for _, name := range registry.ListTeams() {
+		if strings.HasPrefix(strings.ToLower(name), subToComplete) {
+			results = append(results, "@"+name)
+		}
+	}
+
+	// Scan all team directories for agent names too!
+	for _, dir := range registry.TeamDirs() {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+				continue
+			}
+			agentName := strings.ToLower(strings.TrimSuffix(entry.Name(), ".md"))
+			if strings.HasPrefix(agentName, subToComplete) {
+				results = append(results, "@"+agentName)
+			}
+		}
+	}
+
+	unique := make(map[string]bool)
+	for _, r := range results {
+		unique[r] = true
+	}
+	var sorted []string
+	for k := range unique {
+		sorted = append(sorted, k)
+	}
+	sort.Strings(sorted)
+	return sorted
 }

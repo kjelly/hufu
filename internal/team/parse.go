@@ -84,6 +84,7 @@ type teamConfigYAML struct {
 	MaxWallClock      int64                            `yaml:"max-duration"`
 	MaxTotalTokens    int64                            `yaml:"max-total-tokens"`
 	Acceptance        string                           `yaml:"acceptance"`
+	Rollback          string                           `yaml:"rollback"`
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -511,6 +512,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.Acceptance != "" {
 		cfg.Acceptance = yc.Acceptance
+	}
+	if yc.Rollback != "" {
+		cfg.Rollback = yc.Rollback
 	}
 	if yc.Shell != "" {
 		cfg.Shell = yc.Shell

@@ -276,3 +276,81 @@ func TestResolveVars(t *testing.T) {
 		}
 	})
 }
+
+func TestFindMissingVars(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 1. Create a dummy team.yml with template placeholders
+	teamYml := `
+name: {@ .TEAM_NAME @}
+model: {@ .model @}
+project:
+  name: {@ .project.name @}
+`
+	if err := os.WriteFile(filepath.Join(tmpDir, "team.yml"), []byte(teamYml), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Create a dummy agent.md file with template placeholders
+	agentMd := `---
+name: developer
+model: {@ .model @}
+---
+System instructions using {@ .missing_agent_var @}.
+`
+	if err := os.WriteFile(filepath.Join(tmpDir, "developer.md"), []byte(agentMd), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("some vars missing", func(t *testing.T) {
+		vars := map[string]string{
+			"model": "qwen3:8b",
+		}
+		missing, err := FindMissingVars(tmpDir, vars)
+		if err != nil {
+			t.Fatalf("FindMissingVars error: %v", err)
+		}
+		// Expect project.name and missing_agent_var
+		// Note: TEAM_NAME is filtered out as a built-in
+		want := []string{"missing_agent_var", "project.name"}
+		if len(missing) != len(want) {
+			t.Fatalf("got missing = %v, want %v", missing, want)
+		}
+		for i, w := range want {
+			if missing[i] != w {
+				t.Errorf("missing[%d] = %q, want %q", i, missing[i], w)
+			}
+		}
+	})
+
+	t.Run("all vars present", func(t *testing.T) {
+		vars := map[string]string{
+			"model":             "qwen3:8b",
+			"project.name":      "hufu",
+			"missing_agent_var": "foo",
+		}
+		missing, err := FindMissingVars(tmpDir, vars)
+		if err != nil {
+			t.Fatalf("FindMissingVars error: %v", err)
+		}
+		if len(missing) != 0 {
+			t.Errorf("expected no missing variables, got %v", missing)
+		}
+	})
+
+	t.Run("nested parent key satisfies", func(t *testing.T) {
+		vars := map[string]string{
+			"model":             "qwen3:8b",
+			"project":           "custom-map",
+			"missing_agent_var": "foo",
+		}
+		missing, err := FindMissingVars(tmpDir, vars)
+		if err != nil {
+			t.Fatalf("FindMissingVars error: %v", err)
+		}
+		if len(missing) != 0 {
+			t.Errorf("expected no missing variables, got %v", missing)
+		}
+	})
+}
+

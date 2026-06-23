@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/anomalyco/hufu/internal/yamlutil"
@@ -110,4 +112,82 @@ func ResolveVars(varFiles []string, varFlags []string) (map[string]string, error
 	}
 
 	return MergeVars(maps...), nil
+}
+
+var (
+	placeholderRegex = regexp.MustCompile(`\{@\s*(.*?)\s*@\}`)
+	dotPathRegex     = regexp.MustCompile(`\B\.([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*)`)
+)
+
+// FindMissingVars scans the team directory (team.yml/yaml and *.md agent files)
+// for template placeholders like {@ .variable_name @} and returns a list of keys
+// that are not present in the provided vars map.
+func FindMissingVars(teamDir string, vars map[string]string) ([]string, error) {
+	absDir, err := filepath.Abs(teamDir)
+	if err != nil {
+		return nil, fmt.Errorf("invalid team directory: %w", err)
+	}
+
+	foundKeys := make(map[string]bool)
+
+	scanFile := func(path string) error {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		content := string(raw)
+		for _, phMatch := range placeholderRegex.FindAllStringSubmatch(content, -1) {
+			expr := phMatch[1]
+			for _, dpMatch := range dotPathRegex.FindAllStringSubmatch(expr, -1) {
+				keyPath := dpMatch[1]
+				parts := strings.Split(keyPath, ".")
+				parentKey := parts[0]
+
+				if parentKey == "TEAM_NAME" || parentKey == "AGENT_COUNT" || parentKey == "AGENT_NAMES" {
+					continue
+				}
+				if _, ok := vars[keyPath]; ok {
+					continue
+				}
+				if _, ok := vars[parentKey]; ok {
+					continue
+				}
+
+				foundKeys[keyPath] = true
+			}
+		}
+		return nil
+	}
+
+	for _, name := range []string{"team.yml", "team.yaml"} {
+		if err := scanFile(filepath.Join(absDir, name)); err != nil {
+			return nil, err
+		}
+	}
+
+	entries, err := os.ReadDir(absDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read team directory: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		if err := scanFile(filepath.Join(absDir, entry.Name())); err != nil {
+			return nil, err
+		}
+	}
+
+	var missing []string
+	for k := range foundKeys {
+		missing = append(missing, k)
+	}
+	sort.Strings(missing)
+	return missing, nil
 }

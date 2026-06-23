@@ -126,6 +126,7 @@ type TodoItem struct {
 	Desc           string
 	Status         TaskStatus
 	Detail         string
+	Output         string // Full task output
 	Model          string
 	Skills         []string
 	InjectedSkills []string
@@ -140,9 +141,10 @@ type TodoItem struct {
 }
 
 type TodoList struct {
-	mu    sync.Mutex
-	items []*TodoItem
-	next  int
+	mu       sync.Mutex
+	items    []*TodoItem
+	next     int
+	onChange func()
 }
 
 func (tl *TodoList) AddBatch(items []struct {
@@ -153,7 +155,6 @@ func (tl *TodoList) AddBatch(items []struct {
 	ParentID string
 }) []*TodoItem {
 	tl.mu.Lock()
-	defer tl.mu.Unlock()
 	var added []*TodoItem
 	for _, item := range items {
 		tl.next++
@@ -169,28 +170,43 @@ func (tl *TodoList) AddBatch(items []struct {
 		tl.items = append(tl.items, ti)
 		added = append(added, ti)
 	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+
+	if onChange != nil {
+		onChange()
+	}
 	return added
 }
 
 func (tl *TodoList) UpdateStatus(id string, status TaskStatus, detail string) {
+	tl.UpdateStatusAndOutput(id, status, detail, "")
+}
+
+func (tl *TodoList) UpdateStatusAndOutput(id string, status TaskStatus, detail string, output string) {
 	tl.mu.Lock()
-	defer tl.mu.Unlock()
+	updated := false
 	for _, ti := range tl.items {
 		if ti.ID == id {
 			// TaskDone and TaskSkipped are terminal states.
 			// TaskError can transition to TaskInProgress for retries.
 			if ti.Status == TaskDone || ti.Status == TaskSkipped {
 				if status != ti.Status {
+					tl.mu.Unlock()
 					return
 				}
 			}
 			// TaskError can only transition to TaskInProgress (for retries)
 			if ti.Status == TaskError && status != TaskInProgress && status != TaskError {
+				tl.mu.Unlock()
 				return
 			}
 			ti.Status = status
 			if detail != "" {
 				ti.Detail = detail
+			}
+			if output != "" {
+				ti.Output = output
 			}
 			switch status {
 			case TaskInProgress:
@@ -202,9 +218,32 @@ func (tl *TodoList) UpdateStatus(id string, status TaskStatus, detail string) {
 					ti.EndedAt = time.Now()
 				}
 			}
-			return
+			updated = true
+			break
 		}
 	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+
+	if updated && onChange != nil {
+		onChange()
+	}
+}
+
+func (tl *TodoList) Restore(items []*TodoItem) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	tl.items = items
+	maxId := 0
+	for _, item := range items {
+		var idVal int
+		if _, err := fmt.Sscanf(item.ID, "%d", &idVal); err == nil {
+			if idVal > maxId {
+				maxId = idVal
+			}
+		}
+	}
+	tl.next = maxId
 }
 
 func (tl *TodoList) Items() []*TodoItem {

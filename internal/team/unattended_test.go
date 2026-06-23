@@ -2,17 +2,26 @@ package team
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"charm.land/fantasy"
 	"github.com/anomalyco/hufu/internal/agent"
 )
 
 func newBudgetCoordinator(t *testing.T) *Coordinator {
 	t.Helper()
 	return &Coordinator{
-		session:     &TeamSession{Config: agent.TeamConfig{Name: "test", Timeout: 30}},
-		sessionTime: time.Now(),
+		session:         &TeamSession{Config: agent.TeamConfig{Name: "test", Timeout: 30}},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(event StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
 	}
 }
 
@@ -109,5 +118,246 @@ func TestRunAcceptance_Fail(t *testing.T) {
 	c.SetAcceptance("echo nope >&2; false")
 	if err := c.runAcceptance(context.Background()); err == nil {
 		t.Fatal("`false` should fail acceptance")
+	}
+}
+
+func TestRunRollback_Custom(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	c.SetRollback("true")
+	if err := c.runRollback(context.Background()); err != nil {
+		t.Errorf("expected custom rollback 'true' to pass, got %v", err)
+	}
+
+	c.SetRollback("false")
+	if err := c.runRollback(context.Background()); err == nil {
+		t.Error("expected custom rollback 'false' to fail")
+	}
+}
+
+func TestRunRollback_Git(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "hufu-rollback-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	gitDir := filepath.Join(tmpDir, ".git")
+	if err := os.MkdirAll(gitDir, 0755); err != nil {
+		t.Fatalf("failed to create mock git dir: %v", err)
+	}
+
+	c := newBudgetCoordinator(t)
+	c.projectDir = tmpDir
+	// We override the default rollback cmd with a mock script because we are not in a real git repo (just empty .git dir)
+	// and calling 'git' might fail or warn. However, we want to test if it detects the .git dir and falls back to git commands.
+	err = c.runRollback(context.Background())
+	if err == nil {
+		t.Error("expected rollback to fail on empty mock git repo")
+	}
+	if !strings.Contains(err.Error(), "git") {
+		t.Errorf("expected error to mention git, got %v", err)
+	}
+}
+
+func TestSelfHealingAndRollback(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	c.SetUnattended(true)
+	c.SetAcceptance("false") // always fails
+	c.SetRollback("true")    // rollback succeeds
+	c.sessionData = NewSession()
+
+	tool := &finishTool{coordinator: c}
+	call := fantasy.ToolCall{Input: `{"response":"test completion"}`}
+
+	// Round 1 of self-healing
+	resp, err := tool.Run(context.Background(), call)
+	if err != nil {
+		t.Fatalf("unexpected tool run error: %v", err)
+	}
+	if !resp.IsError {
+		t.Error("expected error response on first self-healing attempt")
+	}
+	if c.selfHealingAttempts != 1 {
+		t.Errorf("expected selfHealingAttempts = 1, got %d", c.selfHealingAttempts)
+	}
+	if !strings.Contains(resp.Content, "Acceptance check failed") {
+		t.Errorf("expected error message to mention acceptance failure, got %q", resp.Content)
+	}
+
+	// Round 2 of self-healing
+	resp, err = tool.Run(context.Background(), call)
+	if err != nil {
+		t.Fatalf("unexpected tool run error: %v", err)
+	}
+	if !resp.IsError {
+		t.Error("expected error response on second self-healing attempt")
+	}
+	if c.selfHealingAttempts != 2 {
+		t.Errorf("expected selfHealingAttempts = 2, got %d", c.selfHealingAttempts)
+	}
+
+	// Round 3: self-healing exhausted, runs rollback
+	resp, err = tool.Run(context.Background(), call)
+	if err != nil {
+		t.Fatalf("unexpected tool run error: %v", err)
+	}
+	if resp.IsError {
+		t.Error("expected success response indicating finished execution (with rollback message)")
+	}
+	if !strings.Contains(resp.Content, "FINISHED:") {
+		t.Errorf("expected finished output prefix, got %q", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "rolled back successfully") {
+		t.Errorf("expected note about successful rollback, got %q", resp.Content)
+	}
+}
+
+func TestSessionRestoreTasksAndCache(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "hufu-checkpoint-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	c := newBudgetCoordinator(t)
+	c.session.Workspace = tmpDir
+
+	sd := NewSession()
+	sd.Tasks = []*TodoItem{
+		{
+			ID:     "1",
+			Agent:  "worker",
+			Desc:   "task 1",
+			Status: TaskDone,
+			Output: "result of task 1",
+		},
+		{
+			ID:     "2",
+			Agent:  "worker",
+			Desc:   "task 2",
+			Status: TaskError,
+		},
+	}
+
+	// Restoration
+	c.SetSessionData(sd)
+
+	restoredItems := c.taskTracker.TodoList().Items()
+	if len(restoredItems) != 2 {
+		t.Errorf("expected 2 restored items, got %d", len(restoredItems))
+	}
+	if restoredItems[0].ID != "1" || restoredItems[0].Status != TaskDone {
+		t.Errorf("first task not restored correctly: %+v", restoredItems[0])
+	}
+	if restoredItems[1].ID != "2" || restoredItems[1].Status != TaskError {
+		t.Errorf("second task not restored correctly: %+v", restoredItems[1])
+	}
+
+	// Verify semantic cache prepopulation
+	c.taskResultCacheMu.RLock()
+	cache := c.taskResultCache["worker"]
+	c.taskResultCacheMu.RUnlock()
+
+	if len(cache) != 1 {
+		t.Errorf("expected 1 cached entry for 'worker', got %d", len(cache))
+	} else {
+		if cache[0].taskDesc != "task 1" || cache[0].output != "result of task 1" {
+			t.Errorf("cached entry not populated correctly: %+v", cache[0])
+		}
+	}
+
+	// Verify change hook is registered and triggers saveCheckpoint
+	checkpointFile := filepath.Join(tmpDir, "session.json")
+	if _, err := os.Stat(checkpointFile); err == nil {
+		os.Remove(checkpointFile)
+	}
+
+	// Update task status, should trigger checkpoint saving
+	c.taskTracker.TodoList().UpdateStatus("2", TaskInProgress, "retrying")
+
+	if _, err := os.Stat(checkpointFile); err != nil {
+		t.Error("expected session.json checkpoint to be saved on status change")
+	} else {
+		saved := LoadSession(tmpDir)
+		if saved == nil || len(saved.Tasks) != 2 || saved.Tasks[1].Status != TaskInProgress {
+			t.Errorf("saved checkpoint data is invalid: %+v", saved)
+		}
+	}
+}
+
+type mockAgent struct {
+	streamFunc func(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error)
+}
+
+func (m *mockAgent) Stream(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return m.streamFunc(ctx, call)
+}
+
+func (m *mockAgent) Generate(ctx context.Context, call fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return nil, nil
+}
+
+func TestLoopDetection_ToolCallAbort(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	c.session.Workspace = t.TempDir()
+
+	ag := &mockAgent{
+		streamFunc: func(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+			// Call 1: command fails
+			err := call.OnToolCall(fantasy.ToolCallContent{
+				ToolName: "bash",
+				Input:    `{"command":"false"}`,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			var errRes fantasy.ToolResultOutputContentError
+			errRes.Error = errors.New("command failed")
+			err = call.OnToolResult(fantasy.ToolResultContent{
+				ToolName: "bash",
+				Result:   errRes,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			// Call 2: command fails
+			err = call.OnToolCall(fantasy.ToolCallContent{
+				ToolName: "bash",
+				Input:    `{"command":"false"}`,
+			})
+			if err != nil {
+				return nil, err
+			}
+			err = call.OnToolResult(fantasy.ToolResultContent{
+				ToolName: "bash",
+				Result:   errRes,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			// Call 3: exact same command called again. This should fail immediately inside OnToolCall!
+			err = call.OnToolCall(fantasy.ToolCallContent{
+				ToolName: "bash",
+				Input:    `{"command":"false"}`,
+			})
+			if err != nil {
+				// This is the expected loop error!
+				return nil, err
+			}
+
+			return nil, fmt.Errorf("should have aborted before step 3")
+		},
+	}
+
+	_, _, err := c.runAgentWithStatusAndHistory(context.Background(), ag, "developer", "run task", nil, &taskTiming{})
+	if err == nil {
+		t.Fatal("expected runAgentWithStatusAndHistory to return an error due to loop detection")
+	}
+
+	if !strings.Contains(err.Error(), "stuck in a loop executing the same failing command") {
+		t.Errorf("unexpected error message: %v", err)
 	}
 }

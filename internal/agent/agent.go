@@ -126,6 +126,8 @@ type TeamConfig struct {
 	// Acceptance is an optional shell command run when the coordinator finishes;
 	// a non-zero exit marks the whole run as not-accepted (reported/notified).
 	Acceptance string
+	// Rollback is an optional shell command run on acceptance failure in unattended mode
+	Rollback string
 }
 
 type OllamaProvider struct {

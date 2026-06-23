@@ -43,6 +43,7 @@ type SessionData struct {
 	UpdatedAt string         `json:"updated_at"`
 	Rounds    int            `json:"rounds"`
 	Entries   []SessionEntry `json:"entries"`
+	Tasks     []*TodoItem    `json:"tasks,omitempty"`
 }
 
 func LoadSession(workspace string) *SessionData {
