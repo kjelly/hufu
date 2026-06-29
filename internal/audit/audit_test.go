@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/anomalyco/hufu/internal/utils"
 	"time"
 )
 
@@ -228,7 +230,7 @@ func TestTruncate(t *testing.T) {
 			name:     "string longer than maxLen",
 			input:    "hello world this is a long string",
 			maxLen:   10,
-			expected: "hello worl...[truncated]",
+			expected: "hello wor…",
 		},
 		{
 			name:     "empty string",
@@ -240,21 +242,21 @@ func TestTruncate(t *testing.T) {
 			name:     "maxLen zero",
 			input:    "hello",
 			maxLen:   0,
-			expected: "...[truncated]",
+			expected: "…",
 		},
 		{
 			name:     "maxLen negative",
 			input:    "hello",
 			maxLen:   -1,
-			expected: "...[truncated]",
+			expected: "…",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := truncate(tt.input, tt.maxLen)
+			got := utils.TruncateString(tt.input, tt.maxLen)
 			if got != tt.expected {
-				t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.expected)
+				t.Errorf("utils.TruncateString(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.expected)
 			}
 		})
 	}

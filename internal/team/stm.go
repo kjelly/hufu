@@ -3,6 +3,8 @@ package team
 import (
 	"fmt"
 	"os"
+
+	"github.com/anomalyco/hufu/internal/utils"
 	"path/filepath"
 	"strings"
 	"time"
@@ -117,17 +119,17 @@ func appendSTMEntry(content string, entry string, sectionTitle string) string {
 }
 
 func formatSTMDoneEntry(agentName, taskDesc, summary string) string {
-	shortDesc := truncateString(taskDesc, 80)
+	shortDesc := utils.TruncateRunes(taskDesc, 80)
 	shortSummary := summary
 	if shortSummary != "" {
-		shortSummary = ": " + truncateString(shortSummary, 120)
+		shortSummary = ": " + utils.TruncateRunes(shortSummary, 120)
 	}
 	return strings.TrimSpace(fmt.Sprintf("- %s %s%s", agentName, shortDesc, shortSummary))
 }
 
 func formatSTMErrorEntry(agentName, taskDesc, errMsg string) string {
-	shortDesc := truncateString(taskDesc, 80)
-	shortErr := truncateString(errMsg, 120)
+	shortDesc := utils.TruncateRunes(taskDesc, 80)
+	shortErr := utils.TruncateRunes(errMsg, 120)
 	return strings.TrimSpace(fmt.Sprintf("- [FAILED] %s %s: %s", agentName, shortDesc, shortErr))
 }
 
@@ -191,7 +193,7 @@ func filterLTMSectionsByPrompt(sections []STMSection, prompt string) []STMSectio
 	for _, s := range sections {
 		var relevant []string
 		for _, e := range s.Entries {
-			if strings.Contains(promptLower, strings.ToLower(truncateString(e, 80))) {
+			if strings.Contains(promptLower, strings.ToLower(utils.TruncateRunes(e, 80))) {
 				relevant = append(relevant, e)
 			}
 		}

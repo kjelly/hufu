@@ -5,20 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"github.com/anomalyco/hufu/internal/utils"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// truncateString truncates s to at most maxRunes Unicode code points, appending
-// "..." when truncation occurs. Safe for multi-byte characters such as CJK text.
-func truncateString(s string, maxRunes int) string {
-	runes := []rune(s)
-	if len(runes) <= maxRunes {
-		return s
-	}
-	return string(runes[:maxRunes]) + "..."
-}
+
 
 // removeFileIfExists removes path and returns nil when the file does not exist.
 func removeFileIfExists(path string) error {
@@ -110,7 +104,7 @@ func (s *SessionData) ContextSummary() string {
 			b.WriteString(fmt.Sprintf("... (%d earlier exchanges omitted)\n", remaining))
 			break
 		}
-		content := truncateString(entry.Content, 500)
+		content := utils.TruncateRunes(entry.Content, 500)
 		b.WriteString(fmt.Sprintf("[%s] %s\n", entry.Role, content))
 		b.WriteString("\n")
 	}

@@ -117,6 +117,8 @@ func (m *Model) setOverlay(o Overlay) Overlay {
 		m.inActivityLog = true
 	case OverlayNone:
 		// no-op; bools are already cleared
+	default:
+		panic("tui: unknown overlay " + o.String())
 	}
 	return prev
 }

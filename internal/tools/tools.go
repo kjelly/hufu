@@ -112,9 +112,19 @@ func IsUnattended(ctx context.Context) bool {
 }
 
 // IsInteractiveEnvironment reports whether stdin is a terminal and the process
-// is not running in a known CI environment. Exported wrapper around the
-// internal detector so other packages (and ask_user) can branch on it.
-func IsInteractiveEnvironment() bool { return isInteractiveEnvironment() }
+// is not running in a known CI environment.
+func IsInteractiveEnvironment() bool {
+	for _, v := range CIEnvVars {
+		if os.Getenv(v) != "" {
+			return false
+		}
+	}
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
 
 var onNeedsHuman func(question string)
 
@@ -210,7 +220,7 @@ func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, erro
 	// all tools except ask_user. Exception: in unattended mode the allowlist is
 	// trusted to run without a human, so fall through to the allowlist check
 	// (step 3) instead of blanket-denying — otherwise no tool could ever run.
-	if !IsUnattended(ctx) && !isInteractiveEnvironment() {
+	if !IsUnattended(ctx) && !IsInteractiveEnvironment() {
 		return false, false, nil
 	}
 
@@ -312,7 +322,7 @@ func promptDenialReason(ctx context.Context) string {
 	return strings.TrimSpace(line)
 }
 
-var ciEnvVars = []string{
+var CIEnvVars = []string{
 	"CI",
 	"CI_SERVER",
 	"GITHUB_ACTIONS",
@@ -324,19 +334,6 @@ var ciEnvVars = []string{
 	"APPVEYOR",
 	"BUILDKITE",
 	"DRONE",
-}
-
-func isInteractiveEnvironment() bool {
-	for _, v := range ciEnvVars {
-		if os.Getenv(v) != "" {
-			return false
-		}
-	}
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 func mergedAllowedPaths(cfg ToolConfig, ctx context.Context) []string {

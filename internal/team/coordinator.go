@@ -111,6 +111,16 @@ const maxDraftsPerSession = 3
 // the task's Output field; only the summary is truncated to this size.
 const summaryMaxRunes = 300
 
+// coordToolBase provides the common ProviderOptions implementation for all
+// coordinator tools, eliminating the repeated pOpts field + ProviderOptions()
+// + SetProviderOptions() boilerplate in each tool type.
+type coordToolBase struct {
+	opts fantasy.ProviderOptions
+}
+
+func (b *coordToolBase) ProviderOptions() fantasy.ProviderOptions        { return b.opts }
+func (b *coordToolBase) SetProviderOptions(opts fantasy.ProviderOptions) { b.opts = opts }
+
 type DryRunAgentInfo struct {
 	Name   string
 	Role   string
@@ -409,6 +419,9 @@ type reviewerApprovePlanTool struct {
 	todoID      string
 }
 
+func (t *reviewerApprovePlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
+func (t *reviewerApprovePlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
+
 func (t *reviewerApprovePlanTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
 		Name:        "approve_plan",
@@ -419,10 +432,7 @@ func (t *reviewerApprovePlanTool) Info() fantasy.ToolInfo {
 		Required: []string{"todo_id"},
 	}
 }
-func (t *reviewerApprovePlanTool) ProviderOptions() fantasy.ProviderOptions {
-	return fantasy.ProviderOptions{}
-}
-func (t *reviewerApprovePlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
+
 func (t *reviewerApprovePlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	result := t.coordinator.autoApprovePlan(ctx, t.todoID)
 	return fantasy.NewTextResponse("Plan approved and executed.\n\n" + result), nil
@@ -432,6 +442,9 @@ type reviewerRejectPlanTool struct {
 	coordinator *Coordinator
 	todoID      string
 }
+
+func (t *reviewerRejectPlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
+func (t *reviewerRejectPlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
 
 func (t *reviewerRejectPlanTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
@@ -444,10 +457,7 @@ func (t *reviewerRejectPlanTool) Info() fantasy.ToolInfo {
 		Required: []string{"todo_id", "reason"},
 	}
 }
-func (t *reviewerRejectPlanTool) ProviderOptions() fantasy.ProviderOptions {
-	return fantasy.ProviderOptions{}
-}
-func (t *reviewerRejectPlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
+
 func (t *reviewerRejectPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
 		TodoID string `json:"todo_id"`
@@ -498,22 +508,9 @@ type Coordinator struct {
 	conversationHistoryMu sync.Mutex
 	projectDir            string
 	wrapUp                atomic.Int32
-	currentAgentName      string
-	currentAgentNameMu    sync.RWMutex
-	currentTask           string
-	currentTaskMu         sync.RWMutex
-	currentTodoID         string
-	currentTodoIDMu       sync.RWMutex
-	currentStage          string // "model" | "tool" | "wrapping_up" | "idle"
-	currentStageMu        sync.RWMutex
-	currentStepNum        int
-	currentStepNumMu      sync.RWMutex
-	currentToolName       string
-	currentToolNameMu     sync.RWMutex
-	currentModelID        string
-	currentModelIDMu      sync.RWMutex
-	currentStageStart     time.Time
-	currentStageStartMu   sync.RWMutex
+	current atomic.Pointer[currentSnapshot]
+	currentStageStart   time.Time
+	currentStageStartMu sync.RWMutex
 	auditLogger           *audit.AuditLogger
 	sshSessionMgr         *tools.SSHSessionManager
 	skillUsage            map[string]*skillUsageState
@@ -586,6 +583,41 @@ type Coordinator struct {
 	selfHealingAttempts int
 	budgetTripped       atomic.Bool
 }
+
+
+func (c *Coordinator) getSnapshotField(getter func(*currentSnapshot) string) string {
+	s := c.current.Load()
+	if s == nil {
+		return ""
+	}
+	return getter(s)
+}
+
+func (c *Coordinator) updateSnapshot(updater func(*currentSnapshot)) {
+	old := c.current.Load()
+	newS := &currentSnapshot{}
+	if old != nil {
+		*newS = *old
+	}
+	updater(newS)
+	c.current.Store(newS)
+}
+
+// currentSnapshot is an atomic snapshot of the coordinator's active state.
+// Replaces 8 separate Sync.RWMutex-guarded fields with a single atomic.Pointer
+// for lock-free, contention-free reads by the SIGINT handler and status reporter.
+type currentSnapshot struct {
+	Agent  string
+	Task   string
+	TodoID string
+	Stage  string // "model", "tool", "wrapping_up", "idle"
+	Step   int
+	Tool   string
+	Model  string
+	// stageStart is NOT in the snapshot; it is only written/read within the
+	// SetCurrentStage method which still uses its own lightweight mutex.
+}
+
 
 // SetUnattended enables unattended (no-human) mode: ask_user returns safe
 // defaults, and only explicitly-allowed tools may run.
@@ -1145,296 +1177,6 @@ func assembleContextWithinBudget(parts []string, budget int) string {
 	return b.String()
 }
 
-func (c *Coordinator) buildMemorySuffix(agentRole string) string {
-	var b strings.Builder
-
-	rawSTM := LoadSTM(c.session.Workspace)
-	if rawSTM != "" {
-		sections := ParseSTMSections(rawSTM)
-		filtered := filterSTMSectionsByRole(sections, agentRole)
-		stm := FormatSTMSections(filtered)
-		if stm != "" {
-			runes := []rune(stm)
-			if len(runes) > maxSTMAutoInject {
-				stm = string(runes[len(runes)-maxSTMAutoInject:])
-			}
-			b.WriteString("--- Short-term memory (stm.md) ---\n")
-			b.WriteString(stm)
-			b.WriteString("\n--- End stm.md ---")
-		}
-	}
-
-	if rawLTM := LoadLTM(c.session.Workspace, c.session.Config.Name); rawLTM != "" {
-		sections := ParseSTMSections(rawLTM)
-		if len(sections) > 0 {
-			for i, s := range sections {
-				if len(s.Entries) > 3 {
-					sections[i].Entries = s.Entries[len(s.Entries)-3:]
-				}
-			}
-			ltm := FormatSTMSections(sections)
-			runes := []rune(ltm)
-			if len(runes) > maxLTMAutoInject {
-				ltm = string(runes[len(runes)-maxLTMAutoInject:])
-			}
-			if b.Len() > 0 {
-				b.WriteString("\n\n")
-			}
-			b.WriteString("--- Long-term memory (ltm.md) ---\n")
-			b.WriteString(ltm)
-			b.WriteString("\n--- End ltm.md ---")
-		}
-	}
-
-	if b.Len() == 0 {
-		return ""
-	}
-
-	memContent := b.String()
-	b.Reset()
-	b.WriteString("## Memory & Context\n\n")
-	b.WriteString("Review the following memory to understand the current state and prior knowledge before proceeding.\n\n")
-	b.WriteString(memContent)
-	b.WriteString("\n")
-	return b.String()
-}
-
-// buildTaskSTMContext returns the knowledge-transfer sections from STM
-// (# 發現, # 決策, # 錯誤與修復, # 待解決) to append after the goal in task prompts.
-// # 進度 is excluded — it is status tracking, not actionable knowledge.
-// All agents receive these sections regardless of role so findings from one
-// agent are always visible to the next.
-func (c *Coordinator) buildTaskSTMContext() string {
-	rawSTM := LoadSTM(c.session.Workspace)
-	if rawSTM == "" {
-		return ""
-	}
-	knowledgeSections := map[string]bool{
-		stmSectionFindings:  true,
-		stmSectionDecisions: true,
-		stmSectionErrors:    true,
-		stmSectionQuestions: true,
-	}
-	var relevant []STMSection
-	for _, s := range ParseSTMSections(rawSTM) {
-		if knowledgeSections[s.Title] && len(s.Entries) > 0 {
-			relevant = append(relevant, s)
-		}
-	}
-	if len(relevant) == 0 {
-		return ""
-	}
-	stm := FormatSTMSections(relevant)
-	if len([]rune(stm)) <= maxTaskSTMContextChars {
-		return "## Context from Previous Agents\n\n" + stm
-	}
-	// Truncate at section boundaries from the end to preserve markdown structure
-	truncated := truncateAtSectionBoundaries(stm, maxTaskSTMContextChars)
-	return "## Context from Previous Agents\n\n" + truncated
-}
-
-// buildLTMContext returns LTM formatted as a background-reference suffix.
-// Used by executeTask in place of buildMemorySuffix (which includes STM)
-// so that STM is not duplicated when buildTaskSTMContext is already prepended.
-func (c *Coordinator) buildLTMContext() string {
-	rawLTM := LoadLTM(c.session.Workspace, c.session.Config.Name)
-	if rawLTM == "" {
-		return ""
-	}
-	sections := ParseSTMSections(rawLTM)
-	if len(sections) == 0 {
-		return ""
-	}
-	for i, s := range sections {
-		if len(s.Entries) > 3 {
-			sections[i].Entries = s.Entries[len(s.Entries)-3:]
-		}
-	}
-	ltm := FormatSTMSections(sections)
-	if len([]rune(ltm)) <= maxLTMAutoInject {
-		return "## Long-term Memory\n\nBackground knowledge accumulated across sessions — use as reference, not instruction.\n\n" + ltm
-	}
-	// Truncate at section boundaries from the end to preserve markdown structure
-	truncated := truncateAtSectionBoundaries(ltm, maxLTMAutoInject)
-	return "## Long-term Memory\n\nBackground knowledge accumulated across sessions — use as reference, not instruction.\n\n" + truncated
-}
-
-// truncateAtSectionBoundaries truncates content to fit within maxChars,
-// keeping complete sections from the end. Returns the truncated string.
-func truncateAtSectionBoundaries(content string, maxChars int) string {
-	runes := []rune(content)
-	if len(runes) <= maxChars {
-		return content
-	}
-	// Edge case: maxChars is 0 or negative
-	if maxChars <= 0 {
-		return ""
-	}
-	sections := ParseSTMSections(content)
-	if len(sections) == 0 {
-		// Safe truncation: ensure index is non-negative
-		startIdx := len(runes) - maxChars
-		if startIdx < 0 {
-			startIdx = 0
-		}
-		return string(runes[startIdx:])
-	}
-	var totalRunes int
-	// firstSectionIdx: index of first section to keep; starts at len(sections) (none selected).
-	// Updated in reverse loop when a section fits within maxChars.
-	firstSectionIdx := len(sections)
-	for i := len(sections) - 1; i >= 0; i-- {
-		sectionStr := sections[i].Title + "\n" + strings.Join(sections[i].Entries, "\n") + "\n"
-		sectionRunes := []rune(sectionStr)
-		if totalRunes+len(sectionRunes) > maxChars {
-			break
-		}
-		totalRunes += len(sectionRunes)
-		firstSectionIdx = i
-	}
-	// Edge case: no section fits within maxChars; truncate last section
-	if firstSectionIdx == len(sections) {
-		lastSection := sections[len(sections)-1]
-		sectionStr := lastSection.Title + "\n" + strings.Join(lastSection.Entries, "\n")
-		sectionRunes := []rune(sectionStr)
-		if len(sectionRunes) <= maxChars {
-			return strings.TrimSpace(sectionStr)
-		}
-		return strings.TrimSpace(string(sectionRunes[:maxChars]))
-	}
-	var b strings.Builder
-	for i := firstSectionIdx; i < len(sections); i++ {
-		b.WriteString(sections[i].Title)
-		b.WriteString("\n")
-		b.WriteString(strings.Join(sections[i].Entries, "\n"))
-		b.WriteString("\n")
-	}
-	return strings.TrimSpace(b.String())
-}
-
-func (c *Coordinator) autoWriteSTM(agentName, taskDesc, output, errMsg string, success bool) {
-	workspace := c.session.Workspace
-	existing := LoadSTM(workspace)
-
-	var entry string
-	if success {
-		summary := extractSummary(output, summaryMaxRunes)
-		entry = formatSTMDoneEntry(agentName, taskDesc, summary)
-	} else {
-		entry = formatSTMErrorEntry(agentName, taskDesc, errMsg)
-	}
-
-	newContent := appendSTMEntry(existing, entry, stmSectionProgress)
-	if err := SaveSTM(workspace, TruncateSTM(newContent)); err != nil {
-		log.Printf("warning: auto STM write failed: %v", err)
-	}
-	c.lastStmWriteMu.Lock()
-	c.lastStmWrite = time.Now()
-	c.lastStmWriteMu.Unlock()
-}
-
-func extractSummary(output string, maxRunes int) string {
-	runes := []rune(strings.TrimSpace(output))
-	if len(runes) == 0 {
-		return ""
-	}
-	if len(runes) <= maxRunes {
-		return string(runes)
-	}
-	return string(runes[:maxRunes]) + "..."
-}
-
-func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
-	workspace := c.session.Workspace
-	stmContent := LoadSTM(workspace)
-	if stmContent == "" {
-		return
-	}
-
-	c.ltmWriteMu.Lock()
-	defer c.ltmWriteMu.Unlock()
-
-	existingLTM := LoadLTM(workspace, c.session.Config.Name)
-	sections := ParseSTMSections(stmContent)
-	existingLTMSections := ParseSTMSections(existingLTM)
-
-	var newEntries []struct {
-		sectionTitle string
-		entry        string
-	}
-
-	for _, s := range sections {
-		switch s.Title {
-		case stmSectionDecisions:
-			for _, e := range s.Entries {
-				section := ClassifyLTMEntry(e, "decision")
-				if section == "" {
-					section = ltmSectionArchitecture // decisions default to architecture
-				}
-				newEntries = append(newEntries, struct {
-					sectionTitle string
-					entry        string
-				}{section, formatLTMEntry(stripSTMListItem(e))})
-			}
-		case stmSectionFindings:
-			for _, e := range s.Entries {
-				section := ClassifyLTMEntry(e, "finding")
-				if section == "" {
-					section = ltmSectionPatterns // findings default to patterns
-				}
-				newEntries = append(newEntries, struct {
-					sectionTitle string
-					entry        string
-				}{section, formatLTMEntry(stripSTMListItem(e))})
-			}
-		case stmSectionErrors:
-			for _, e := range s.Entries {
-				section := ClassifyLTMEntry(e, "error")
-				if section == "" {
-					section = ltmSectionIssues // errors default to known issues
-				}
-				newEntries = append(newEntries, struct {
-					sectionTitle string
-					entry        string
-				}{section, formatLTMEntry(stripSTMListItem(e))})
-			}
-		}
-	}
-
-	if len(newEntries) == 0 {
-		return
-	}
-
-	for _, ne := range newEntries {
-		if hasLTREntry(existingLTMSections, ne.sectionTitle, ne.entry) {
-			continue
-		}
-		existingLTM = appendSTMEntry(existingLTM, ne.entry, ne.sectionTitle)
-	}
-
-	pruned := PruneLTM(existingLTM)
-	if err := SaveLTM(workspace, c.session.Config.Name, TruncateLTM(pruned)); err != nil {
-		log.Printf("warning: auto LTM extraction failed: %v", err)
-	}
-
-	if c.memoryStore != nil {
-		saveCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		for _, ne := range newEntries {
-			if hasLTREntry(existingLTMSections, ne.sectionTitle, ne.entry) {
-				continue
-			}
-			id := fmt.Sprintf("ltm-%d", time.Now().UnixNano())
-			metadata := map[string]string{
-				"category": ne.sectionTitle,
-				"source":   "auto-extract",
-			}
-			if err := c.memoryStore.Save(saveCtx, id, ne.entry, metadata); err != nil {
-				log.Printf("warning: memory store save failed for LTM entry: %v", err)
-			}
-		}
-	}
-}
 
 // This function has been moved to ltm.go as ClassifyLTMEntry
 
@@ -1674,117 +1416,68 @@ func (c *Coordinator) SetStepConfirmFn(fn func(context.Context, []TaskDef) (bool
 	c.stepConfirmFn = fn
 }
 
-func (c *Coordinator) SetCurrentAgent(name string) {
-	c.currentAgentNameMu.Lock()
-	defer c.currentAgentNameMu.Unlock()
-	c.currentAgentName = name
-}
-
-func (c *Coordinator) GetCurrentAgent() string {
-	c.currentAgentNameMu.RLock()
-	defer c.currentAgentNameMu.RUnlock()
-	return c.currentAgentName
-}
-
-func (c *Coordinator) SetCurrentTask(task string) {
-	c.currentTaskMu.Lock()
-	defer c.currentTaskMu.Unlock()
-	c.currentTask = task
-}
-
-func (c *Coordinator) GetCurrentTask() string {
-	c.currentTaskMu.RLock()
-	defer c.currentTaskMu.RUnlock()
-	return c.currentTask
-}
-
-func (c *Coordinator) SetCurrentTodoID(id string) {
-	c.currentTodoIDMu.Lock()
-	defer c.currentTodoIDMu.Unlock()
-	c.currentTodoID = id
-}
-
-func (c *Coordinator) GetCurrentTodoID() string {
-	c.currentTodoIDMu.RLock()
-	defer c.currentTodoIDMu.RUnlock()
-	return c.currentTodoID
-}
-
 // SetCurrentStage records the high-level stage the coordinator is in:
 // "model" while an LLM call is in flight, "tool" while a tool is being
 // executed, "wrapping_up" during wrap-up, "idle" otherwise.
 func (c *Coordinator) SetCurrentStage(stage string) {
-	c.currentStageMu.Lock()
-	c.currentStage = stage
+	old := c.current.Load()
+	newS := &currentSnapshot{}
+	if old != nil {
+		*newS = *old
+	}
+	newS.Stage = stage
+	c.current.Store(newS)
 	if stage == "idle" {
 		c.currentStageStart = time.Time{}
-	} else {
-		c.currentStageStart = time.Now()
+		return
 	}
-	c.currentStageMu.Unlock()
+	c.currentStageStartMu.Lock()
+	c.currentStageStart = time.Now()
+	c.currentStageStartMu.Unlock()
 }
 
-// GetCurrentStage returns the current stage.
-func (c *Coordinator) GetCurrentStage() string {
-	c.currentStageMu.RLock()
-	defer c.currentStageMu.RUnlock()
-	return c.currentStage
-}
-
-// SetCurrentStep records the current step number in the fantasy
-// agent's step loop.
+// SetCurrentStep records the current step number in the fantasy agent's step loop.
 func (c *Coordinator) SetCurrentStep(n int) {
-	c.currentStepNumMu.Lock()
-	c.currentStepNum = n
-	c.currentStepNumMu.Unlock()
+	old := c.current.Load()
+	newS := &currentSnapshot{}
+	if old != nil {
+		*newS = *old
+	}
+	newS.Step = n
+	c.current.Store(newS)
 }
 
 // SetCurrentTool records the tool name currently being executed.
 func (c *Coordinator) SetCurrentTool(name string) {
-	c.currentToolNameMu.Lock()
-	c.currentToolName = name
-	c.currentToolNameMu.Unlock()
+	old := c.current.Load()
+	newS := &currentSnapshot{}
+	if old != nil {
+		*newS = *old
+	}
+	newS.Tool = name
+	c.current.Store(newS)
 }
 
-// SetCurrentModel records the model ID currently being used for an
-// LLM call.
+// SetCurrentModel records the model ID currently being used for an LLM call.
 func (c *Coordinator) SetCurrentModel(modelID string) {
-	c.currentModelIDMu.Lock()
-	c.currentModelID = modelID
-	c.currentModelIDMu.Unlock()
+	old := c.current.Load()
+	newS := &currentSnapshot{}
+	if old != nil {
+		*newS = *old
+	}
+	newS.Model = modelID
+	c.current.Store(newS)
 }
 
 // GetCurrentStatus returns a human-readable snapshot of the coordinator's
-// current state. Designed for SIGINT/watchdog diagnostics so users know
-// what stage the program is stuck on when they force-quit. Returns
-// "idle" when no work is in progress.
+// current state. Designed for SIGINT/watchdog diagnostics.
 func (c *Coordinator) GetCurrentStatus() string {
-	c.currentStageMu.RLock()
-	stage := c.currentStage
+	s := c.current.Load()
+	c.currentStageStartMu.RLock()
 	stageStart := c.currentStageStart
-	c.currentStageMu.RUnlock()
+	c.currentStageStartMu.RUnlock()
 
-	c.currentStepNumMu.RLock()
-	step := c.currentStepNum
-	c.currentStepNumMu.RUnlock()
-
-	c.currentToolNameMu.RLock()
-	tool := c.currentToolName
-	c.currentToolNameMu.RUnlock()
-
-	c.currentModelIDMu.RLock()
-	model := c.currentModelID
-	c.currentModelIDMu.RUnlock()
-
-	c.currentAgentNameMu.RLock()
-	agent := c.currentAgentName
-	c.currentAgentNameMu.RUnlock()
-
-	c.currentTaskMu.RLock()
-	task := c.currentTask
-	c.currentTaskMu.RUnlock()
-
-	if stage == "" || stage == "idle" {
+	if s == nil || s.Stage == "" || s.Stage == "idle" {
 		return "idle"
 	}
 
@@ -1793,45 +1486,32 @@ func (c *Coordinator) GetCurrentStatus() string {
 		elapsed = fmt.Sprintf(" (%.0fs elapsed)", time.Since(stageStart).Seconds())
 	}
 
-	parts := []string{stage}
-	if agent != "" {
-		parts = append(parts, "agent="+agent)
+	parts := []string{s.Stage}
+	if s.Agent != "" {
+		parts = append(parts, "agent="+s.Agent)
 	}
-	if model != "" && (stage == "model" || stage == "wrapping_up") {
-		parts = append(parts, "model="+model)
+	if s.Model != "" && (s.Stage == "model" || s.Stage == "wrapping_up") {
+		parts = append(parts, "model="+s.Model)
 	}
-	if tool != "" && stage == "tool" {
-		parts = append(parts, "tool="+tool)
+	if s.Tool != "" && s.Stage == "tool" {
+		parts = append(parts, "tool="+s.Tool)
 	}
-	if step > 0 {
-		parts = append(parts, fmt.Sprintf("step=%d", step))
+	if s.Step > 0 {
+		parts = append(parts, fmt.Sprintf("step=%d", s.Step))
 	}
-	if task != "" {
-		parts = append(parts, "task="+truncate(task, 60))
+	if s.Task != "" {
+		parts = append(parts, "task="+utils.TruncateString(s.Task, 60))
 	}
 	return strings.Join(parts, " ") + elapsed
 }
 
-// truncate returns s shortened to max characters with an ellipsis.
-// If max <= 0, returns "…". If len(s) <= max, returns s unchanged.
-func truncate(s string, max int) string {
-	if max <= 0 {
-		return "…"
-	}
-	if len(s) <= max {
-		return s
-	}
-	if max == 1 {
-		return "…"
-	}
-	return s[:max-1] + "…"
-}
 
 func (c *Coordinator) GetCurrentAgentInfo() tools.AgentInfo {
-	return tools.AgentInfo{
-		Name: c.GetCurrentAgent(),
-		Task: c.GetCurrentTask(),
+	s := c.current.Load()
+	if s == nil {
+		return tools.AgentInfo{}
 	}
+	return tools.AgentInfo{Name: s.Agent, Task: s.Task}
 }
 
 // buildAgentTaskProperties returns the JSON schema properties map for a task
@@ -1872,1036 +1552,9 @@ func (c *Coordinator) RunAgentsTool() fantasy.AgentTool {
 	return &runAgentsTool{coordinator: c}
 }
 
-type runAgentsTool struct {
-	coordinator *Coordinator
-	pOpts       fantasy.ProviderOptions
-}
 
-func (t *runAgentsTool) Info() fantasy.ToolInfo {
-	return fantasy.ToolInfo{
-		Name:        "agent",
-		Description: "Delegate tasks to team workers. Runs all tasks in parallel. Returns structured results from each agent.",
-		Parameters: map[string]any{
-			"tasks": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type":                 "object",
-					"properties":           buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir)),
-					"required":             []string{"agent"},
-					"additionalProperties": false,
-				},
-			},
-		},
-		Required: []string{"tasks"},
-	}
-}
-
-func (t *runAgentsTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
-func (t *runAgentsTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
-
-func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	var args struct {
-		Tasks []TaskDef `json:"tasks"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
-	}
-	if len(args.Tasks) == 0 {
-		return fantasy.NewTextErrorResponse("no tasks provided"), nil
-	}
-	for _, t := range args.Tasks {
-		if t.Goal == "" {
-			return fantasy.NewTextErrorResponse("each task requires 'goal'"), nil
-		}
-	}
-
-	result, err := t.coordinator.ExecuteTasks(ctx, args.Tasks)
-	if err != nil {
-		return fantasy.NewTextErrorResponse(err.Error()), nil
-	}
-	return fantasy.NewTextResponse(result), nil
-}
-
-type finishTool struct {
-	coordinator *Coordinator
-	pOpts       fantasy.ProviderOptions
-}
-
-func (t *finishTool) Info() fantasy.ToolInfo {
-	return fantasy.ToolInfo{
-		Name:        "finish",
-		Description: "Signal that you have completed the user's request and provide your final answer. Call this when you are done coordinating and have a complete response for the user. You MUST call this instead of just outputting text — your final answer goes in the response field.",
-		Parameters: map[string]any{
-			"response": map[string]any{
-				"type":        "string",
-				"description": "Your final answer to the user",
-			},
-		},
-		Required: []string{"response"},
-	}
-}
-
-func (t *finishTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
-func (t *finishTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
-
-func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	var args struct {
-		Response string `json:"response"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
-	}
-
-	t.coordinator.lastStmWriteMu.Lock()
-	workspace := t.coordinator.session.Workspace
-	todoList := t.coordinator.taskTracker.TodoList()
-	completed := todoList.CompletedCount()
-	failed := todoList.ErrorCount()
-	summary := fmt.Sprintf("[summary] %d/%d tasks done, %d rounds, %s elapsed",
-		completed, completed+failed, t.coordinator.round,
-		time.Since(t.coordinator.sessionTime).Round(time.Second))
-	existing := LoadSTM(workspace)
-	if existing == "" {
-		existing = fmt.Sprintf("Session started at %s.", t.coordinator.sessionTime.Format(time.RFC3339))
-	}
-	newContent := appendSTMEntry(existing, summary, stmSectionProgress)
-	_ = SaveSTM(workspace, TruncateSTM(newContent))
-	t.coordinator.lastStmWrite = time.Now()
-	t.coordinator.lastStmWriteMu.Unlock()
-
-	t.coordinator.AutoExtractLTM(ctx)
-
-	// Team-level acceptance check: an objective gate over the whole run. A
-	// non-zero exit does not block finishing (the work is already done) but is
-	// surfaced in the result and via a notifiable event so an unattended run's
-	// failure is not silent.
-	response := args.Response
-	if accErr := t.coordinator.runAcceptance(ctx); accErr != nil {
-		if t.coordinator.IsUnattended() {
-			if t.coordinator.selfHealingAttempts < 2 {
-				t.coordinator.selfHealingAttempts++
-				msg := fmt.Sprintf("Acceptance check failed (attempt %d/2). Initiating self-healing. Error: %v", t.coordinator.selfHealingAttempts, accErr)
-				t.coordinator.report(t.coordinator.newEvent("error").withMessage(msg))
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("Acceptance check failed: %v. Please analyze the failure log, modify files/re-run tasks to fix the issues, and call finish again.", accErr)), nil
-			}
-			// Self-healing attempts exhausted, run rollback
-			msg := fmt.Sprintf("Acceptance check failed after %d self-healing attempts. Initiating rollback...", t.coordinator.selfHealingAttempts)
-			t.coordinator.report(t.coordinator.newEvent("error").withMessage(msg))
-			if rollErr := t.coordinator.runRollback(ctx); rollErr != nil {
-				rollMsg := fmt.Sprintf("Rollback failed: %v", rollErr)
-				t.coordinator.report(t.coordinator.newEvent("error").withMessage(rollMsg))
-				response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\n⚠️ ROLLBACK FAILED: %v", accErr, rollErr)
-			} else {
-				t.coordinator.report(t.coordinator.newEvent("error").withMessage("Workspace rolled back successfully due to acceptance check failure."))
-				response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\n✓ Workspace rolled back successfully.", accErr)
-			}
-		} else {
-			// Interactive mode: preserve standard behavior
-			note := fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v", accErr)
-			response += note
-			t.coordinator.report(t.coordinator.newEvent("error").withMessage("acceptance check failed: " + accErr.Error()))
-		}
-	}
-
-	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
-}
-
-// runAcceptance runs the team's optional acceptance command in the project dir
-// and returns a non-nil error if it exits non-zero. No-op when unset.
-func (c *Coordinator) runAcceptance(parentCtx context.Context) error {
-	cmd := strings.TrimSpace(c.acceptanceCmd)
-	if cmd == "" {
-		return nil
-	}
-	shell := "sh"
-	if c.session != nil && c.session.Config.Shell != "" {
-		shell = c.session.Config.Shell
-	}
-	timeout := time.Duration(c.session.Config.Timeout) * time.Second
-	if timeout <= 0 || timeout > 300*time.Second {
-		timeout = 300 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(parentCtx, timeout)
-	defer cancel()
-	ex := exec.CommandContext(ctx, shell, "-c", cmd)
-	if c.projectDir != "" {
-		ex.Dir = c.projectDir
-	}
-	out, err := ex.CombinedOutput()
-	if err != nil {
-		detail := strings.TrimSpace(string(out))
-		if detail != "" {
-			detail = ": " + truncate(detail, 500)
-		}
-		return fmt.Errorf("%v%s", err, detail)
-	}
-	return nil
-}
-
-// runRollback runs the team's optional rollback command or default git rollback.
-func (c *Coordinator) runRollback(parentCtx context.Context) error {
-	cmd := strings.TrimSpace(c.rollbackCmd)
-	shell := "sh"
-	if c.session != nil && c.session.Config.Shell != "" {
-		shell = c.session.Config.Shell
-	}
-	timeout := time.Duration(c.session.Config.Timeout) * time.Second
-	if timeout <= 0 || timeout > 300*time.Second {
-		timeout = 300 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(parentCtx, timeout)
-	defer cancel()
-
-	if cmd == "" {
-		// Default rollback: git reset --hard and git clean -fd if it's a git repo
-		gitDir := filepath.Join(c.projectDir, ".git")
-		if _, err := os.Stat(gitDir); err == nil {
-			cmd = "git reset --hard && git clean -fd"
-		} else {
-			return fmt.Errorf("no custom rollback command set and no git repository found in workspace")
-		}
-	}
-
-	ex := exec.CommandContext(ctx, shell, "-c", cmd)
-	if c.projectDir != "" {
-		ex.Dir = c.projectDir
-	}
-	out, err := ex.CombinedOutput()
-	if err != nil {
-		detail := strings.TrimSpace(string(out))
-		if detail != "" {
-			detail = ": " + truncate(detail, 500)
-		}
-		return fmt.Errorf("%v%s", err, detail)
-	}
-	return nil
-}
-
-type loadSkillTool struct {
-	coordinator *Coordinator
-	pOpts       fantasy.ProviderOptions
-}
-
-func (t *loadSkillTool) Info() fantasy.ToolInfo {
-	return fantasy.ToolInfo{
-		Name:        "load_skill",
-		Description: "Load the full content of a skill by name. Use this when you need detailed instructions from a skill before planning delegation. The skill content will help you understand how to instruct workers properly.",
-		Parameters: map[string]any{
-			"name": map[string]any{
-				"type":        "string",
-				"description": "The skill name to load (e.g. 'git-commit')",
-			},
-		},
-		Required: []string{"name"},
-	}
-}
-
-func (t *loadSkillTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
-func (t *loadSkillTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
-
-func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	var args struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
-	}
-	if args.Name == "" {
-		return fantasy.NewTextErrorResponse("skill name is required"), nil
-	}
-
-	agentName := "coordinator"
-	if name, _ := ctx.Value(tools.AgentNameKey).(string); name != "" {
-		agentName = name
-	}
-
-	nameLower := strings.ToLower(args.Name)
-	skills := t.coordinator.getSkills()
-	for _, s := range skills {
-		if strings.ToLower(s.Name) == nameLower {
-			t.coordinator.recordSkillUsage(s.Name, agentName)
-
-			if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID != "" {
-				t.coordinator.taskTracker.TodoList().AddLoadedSkill(todoID, s.Name)
-				t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
-			}
-
-			return fantasy.NewTextResponse(fmt.Sprintf("Skill: %s\nFile: %s\n\n%s", s.Name, s.Path, s.Content)), nil
-		}
-	}
-
-	available := make([]string, len(skills))
-	for i, s := range skills {
-		available[i] = s.Name
-	}
-	return fantasy.NewTextErrorResponse(fmt.Sprintf("skill %q not found (available: %v)", args.Name, available)), nil
-}
-
-type requestAgentTool struct {
-	coordinator *Coordinator
-	pOpts       fantasy.ProviderOptions
-}
-
-func (t *requestAgentTool) Info() fantasy.ToolInfo {
-	return fantasy.ToolInfo{
-		Name:        "request_agent",
-		Description: "Request the coordinator to delegate a task to another agent. Describe what needs to be done (goal) and any constraints. The coordinator will select the best agent and return the result. You are paused until the result is ready.",
-		Parameters: map[string]any{
-			"goal": map[string]any{
-				"type":        "string",
-				"description": "The goal of the task — what should be achieved",
-			},
-			"constraints": map[string]any{
-				"type":        "string",
-				"description": "Non-obvious restrictions the sub-agent must respect",
-			},
-			"agent": map[string]any{
-				"type":        "string",
-				"description": "Name of the specific agent to assign this task to. If omitted, the best available agent is selected automatically.",
-			},
-		},
-		Required: []string{"goal"},
-	}
-}
-
-func (t *requestAgentTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
-func (t *requestAgentTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
-
-func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	var args struct {
-		Goal        string `json:"goal"`
-		Constraints string `json:"constraints"`
-		Agent       string `json:"agent"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
-	}
-	if args.Goal == "" {
-		return fantasy.NewTextErrorResponse("goal is required"), nil
-	}
-
-	callerName := t.coordinator.GetCurrentAgent()
-	parentID := t.coordinator.GetCurrentTodoID()
-
-	taskDesc := args.Goal
-	if args.Constraints != "" {
-		taskDesc += "\nconstraints: " + args.Constraints
-	}
-
-	c := t.coordinator
-
-	var selected string
-	if args.Agent != "" {
-		def, _, err := c.resolveAgentName(args.Agent)
-		if err != nil {
-			return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown agent %q: %v", args.Agent, err)), nil
-		}
-		selected = def.Name
-	} else {
-		var err error
-		selected, err = c.selectAgentForGoal(ctx, args.Goal)
-		if err != nil {
-			return fantasy.NewTextErrorResponse(fmt.Sprintf("could not select agent: %v", err)), nil
-		}
-	}
-
-	subLabel := callerName + "/" + selected
-	agentKey := strings.ToLower(selected)
-	if cachedOutput, cachedDesc, ok := c.lookupTaskCacheAllGenerations(ctx, agentKey, taskDesc); ok {
-		log.Printf("[INFO] request_agent cache hit: agent=%q, task=%q, matched=%q", selected, taskDesc, cachedDesc)
-		return fantasy.NewTextResponse(fmt.Sprintf("[CACHED RESULT] Task: '%s'\n\n%s", truncateTaskDesc(cachedDesc), cachedOutput)), nil
-	}
-
-	todoItems := c.taskTracker.TodoList().AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{{Agent: subLabel, Desc: taskDesc, Model: "", Source: TaskSourceSubagent, ParentID: parentID}})
-	subTodoID := todoItems[0].ID
-
-	c.taskTracker.TodoList().UpdateStatus(subTodoID, TaskInProgress, "")
-	if parentID != "" {
-		c.taskTracker.TodoList().UpdateStatus(parentID, TaskPaused, "")
-	}
-	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	c.report(c.newEvent("start").withAgent(subLabel).withMessage(taskDesc).withTodoID(subTodoID))
-
-	// Inject subTodoID so events from runAgentWithStatusAndHistory attribute to the right item.
-	execCtx := context.WithValue(ctx, todoIDKey{}, subTodoID)
-	output, err := c.ExecuteSubAgent(execCtx, selected, args.Goal, args.Constraints)
-	if err != nil {
-		c.taskTracker.TodoList().UpdateStatus(subTodoID, TaskError, err.Error())
-		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		return fantasy.NewTextErrorResponse(err.Error()), nil
-	}
-
-	c.storeTaskCache(agentKey, taskDesc, output)
-
-	if parentID != "" {
-		c.taskTracker.TodoList().UpdateStatus(parentID, TaskInProgress, "")
-	}
-	c.taskTracker.TodoList().UpdateStatusAndOutput(subTodoID, TaskDone, extractSummary(output, summaryMaxRunes), output)
-	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-
-	return fantasy.NewTextResponse(output), nil
-}
-
-func (c *Coordinator) selectAgentForGoal(ctx context.Context, goal string) (string, error) {
-	s := c.Sidecar()
-	workers := c.uniqueWorkerDefs()
-	if len(workers) == 0 {
-		return "", fmt.Errorf("no workers available")
-	}
-	if len(workers) == 1 {
-		return workers[0].Name, nil
-	}
-
-	var workersList strings.Builder
-	for _, w := range workers {
-		fmt.Fprintf(&workersList, "- %s", w.Name)
-		if w.Description != "" {
-			fmt.Fprintf(&workersList, ": %s", w.Description)
-		}
-		if w.Tools != "" {
-			fmt.Fprintf(&workersList, " (tools: %s)", w.Tools)
-		}
-		workersList.WriteString("\n")
-	}
-
-	if s != nil {
-		prompt := fmt.Sprintf("Select the single best agent name for this task:\n\nGoal: %s\n\nAvailable agents:\n%s\nReturn ONLY the agent name.", goal, workersList.String())
-		selection, err := s.Execute(ctx, prompt)
-		if err == nil {
-			selection = strings.TrimSpace(selection)
-			for _, w := range workers {
-				if strings.EqualFold(w.Name, selection) {
-					return w.Name, nil
-				}
-			}
-		}
-	}
-
-	for _, w := range workers {
-		if strings.Contains(strings.ToLower(w.Description), "helper") || strings.Contains(strings.ToLower(w.Name), "helper") {
-			return w.Name, nil
-		}
-	}
-	return workers[0].Name, nil
-}
-
-func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task string, constraints string) (string, error) {
-	if c.IsWrapUp() {
-		return "", fmt.Errorf("wrap-up in progress: cannot create sub-agent")
-	}
-
-	agentDef, _, err := c.resolveAgentName(name)
-	if err != nil {
-		agentDef = &agent.AgentDef{
-			Name:        name,
-			Description: "Sub-agent for: " + task,
-			Role:        "worker",
-			Tools:       "",
-			MaxRetries:  -1,
-		}
-	}
-
-	agentDef = c.injectWorkerContext(ctx, agentDef)
-
-	subAgModelID := c.resolveAgentModel(agentDef, "")
-	ag, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(subAgModelID), agent.AgentConfig{
-		Def:        agentDef,
-		TeamConfig: &c.session.Config,
-		WorkDir:    c.projectDir,
-		MaxSteps:   agent.DefaultMaxSteps,
-	}, agent.SelectTools(c.coreTools, agentDef.Tools))
-	if err != nil {
-		return "", fmt.Errorf("failed to create sub-agent %q: %w", name, err)
-	}
-
-	prompt := "## Goal\n\n" + task
-	if constraints != "" {
-		prompt += "\n\n## Constraints\n\n" + constraints
-	}
-	todoID, _ := ctx.Value(todoIDKey{}).(string)
-	prompt = c.appendSkillContext(prompt, agentDef, agentDef.Name, task, todoID)
-
-	timing := &taskTiming{}
-	timing.reset()
-
-	output, _, err := c.runAgentWithStatusAndHistory(ctx, ag, name, prompt, nil, timing)
-	if err != nil {
-		return "", err
-	}
-	return output, nil
-}
-
-type todoTool struct {
-	coordinator *Coordinator
-	pOpts       fantasy.ProviderOptions
-}
-
-func (t *todoTool) Info() fantasy.ToolInfo {
-	return fantasy.ToolInfo{
-		Name:        "todo",
-		Description: "Manage your task list to track progress. Create items to plan your work, update their status as you progress, and list your items to review.",
-		Parameters: map[string]any{
-			"action": map[string]any{
-				"type":        "string",
-				"description": "Action to perform: create, update, or list",
-			},
-			"items": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "string"},
-				"description": "Task descriptions to create (used with action=create)",
-			},
-			"id": map[string]any{
-				"type":        "string",
-				"description": "The TODO item ID to update (used with action=update)",
-			},
-			"status": map[string]any{
-				"type":        "string",
-				"description": "New status: in_progress or done (used with action=update)",
-			},
-			"detail": map[string]any{
-				"type":        "string",
-				"description": "Optional detail or note (used with action=update)",
-			},
-		},
-		Required: []string{"action"},
-	}
-}
-
-func (t *todoTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
-func (t *todoTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
-
-func (t *todoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	var args struct {
-		Action string   `json:"action"`
-		Items  []string `json:"items"`
-		ID     string   `json:"id"`
-		Status string   `json:"status"`
-		Detail string   `json:"detail"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
-	}
-
-	callerName := t.coordinator.GetCurrentAgent()
-	if callerName == "" {
-		callerName = "agent"
-	}
-
-	switch args.Action {
-	case "create":
-		return t.handleCreate(callerName, args.Items)
-	case "update":
-		return t.handleUpdate(callerName, args.ID, args.Status, args.Detail)
-	case "list":
-		return t.handleList(callerName)
-	default:
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown action %q (valid: create, update, list)", args.Action)), nil
-	}
-}
-
-func (t *todoTool) handleCreate(callerName string, items []string) (fantasy.ToolResponse, error) {
-	if len(items) == 0 {
-		return fantasy.NewTextErrorResponse("items is required for create action"), nil
-	}
-
-	resolvedModel := t.coordinator.resolveCurrentAgentModel(callerName)
-	parentID := t.coordinator.GetCurrentTodoID()
-
-	batch := make([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}, len(items))
-	for i, desc := range items {
-		batch[i] = struct {
-			Agent    string
-			Desc     string
-			Model    string
-			Source   string
-			ParentID string
-		}{Agent: callerName, Desc: desc, Model: resolvedModel, Source: TaskSourceAgent, ParentID: parentID}
-	}
-
-	added := t.coordinator.taskTracker.TodoList().AddBatch(batch)
-	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
-
-	var b strings.Builder
-	b.WriteString("Created TODO items:\n")
-	for _, item := range added {
-		fmt.Fprintf(&b, "- %s: %s [%s]\n", item.ID, item.Desc, item.Status)
-	}
-	return fantasy.NewTextResponse(b.String()), nil
-}
-
-func (t *todoTool) handleUpdate(callerName string, id string, status string, detail string) (fantasy.ToolResponse, error) {
-	if id == "" {
-		return fantasy.NewTextErrorResponse("id is required for update action"), nil
-	}
-
-	todoItems := t.coordinator.taskTracker.TodoList().Items()
-	var targetItem *TodoItem
-	for _, item := range todoItems {
-		if item.ID == id {
-			targetItem = item
-			break
-		}
-	}
-	if targetItem == nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("TODO item %q not found", id)), nil
-	}
-	if targetItem.Agent != callerName {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("cannot update TODO item %q: it belongs to agent %q", id, targetItem.Agent)), nil
-	}
-
-	var taskStatus TaskStatus
-	switch status {
-	case "in_progress":
-		taskStatus = TaskInProgress
-	case "done":
-		taskStatus = TaskDone
-	default:
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid status %q (valid: in_progress, done)", status)), nil
-	}
-
-	// TaskDone and TaskSkipped are terminal states - cannot be updated.
-	// TaskError can only be updated to in_progress (for retries).
-	if targetItem.Status == TaskDone || targetItem.Status == TaskSkipped {
-		return fantasy.NewTextErrorResponse(
-			fmt.Sprintf("cannot update completed TODO %q (status: %s): create a new task instead", id, targetItem.Status),
-		), nil
-	}
-	if targetItem.Status == TaskError && status != "in_progress" {
-		return fantasy.NewTextErrorResponse(
-			fmt.Sprintf("cannot update error TODO %q to %s: only in_progress is allowed for retries", id, status),
-		), nil
-	}
-
-	t.coordinator.taskTracker.TodoList().UpdateStatus(id, taskStatus, detail)
-	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
-
-	return fantasy.NewTextResponse(fmt.Sprintf("Updated TODO %s to %s", id, taskStatus)), nil
-}
-
-func (t *todoTool) handleList(callerName string) (fantasy.ToolResponse, error) {
-	todoItems := t.coordinator.taskTracker.TodoList().Items()
-	var myItems []*TodoItem
-	for _, item := range todoItems {
-		if item.Agent == callerName {
-			myItems = append(myItems, item)
-		}
-	}
-	if len(myItems) == 0 {
-		return fantasy.NewTextResponse("No TODO items."), nil
-	}
-
-	var b strings.Builder
-	for _, item := range myItems {
-		fmt.Fprintf(&b, "- %s: %s [%s]", item.ID, item.Desc, item.Status)
-		if item.Detail != "" {
-			fmt.Fprintf(&b, " (%s)", item.Detail)
-		}
-		b.WriteString("\n")
-	}
-	return fantasy.NewTextResponse(b.String()), nil
-}
-
-type memorySaveLTMWrapper struct {
-	original    fantasy.AgentTool
-	coordinator *Coordinator
-}
-
-func (t *memorySaveLTMWrapper) Info() fantasy.ToolInfo {
-	return t.original.Info()
-}
-
-func (t *memorySaveLTMWrapper) ProviderOptions() fantasy.ProviderOptions {
-	return t.original.ProviderOptions()
-}
-
-func (t *memorySaveLTMWrapper) SetProviderOptions(opts fantasy.ProviderOptions) {
-	t.original.SetProviderOptions(opts)
-}
-
-func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	resp, err := t.original.Run(ctx, call)
-	if err != nil || resp.IsError {
-		return resp, err
-	}
-
-	var args struct {
-		Content  string `json:"content"`
-		Category string `json:"category"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil || args.Content == "" {
-		return resp, nil
-	}
-
-	section := ClassifyLTMEntry(args.Content, "finding")
-	if section == "" {
-		section = ltmSectionPatterns
-	}
-
-	t.coordinator.ltmWriteMu.Lock()
-	defer t.coordinator.ltmWriteMu.Unlock()
-
-	workspace := t.coordinator.session.Workspace
-	existingLTM := LoadLTM(workspace, t.coordinator.session.Config.Name)
-	entry := formatLTMEntry(args.Content)
-	existingLTMSections := ParseSTMSections(existingLTM)
-	if hasLTREntry(existingLTMSections, section, entry) {
-		return resp, nil
-	}
-
-	newLTM := appendSTMEntry(existingLTM, entry, section)
-	pruned := PruneLTM(newLTM)
-	if err := SaveLTM(workspace, t.coordinator.session.Config.Name, TruncateLTM(pruned)); err != nil {
-		log.Printf("warning: memory_save LTM write-back failed: %v", err)
-	}
-
-	return resp, nil
-}
-
-type submitPlanTool struct {
-	coordinator *Coordinator
-	todoID      string
-}
-
-func (t *submitPlanTool) Info() fantasy.ToolInfo {
-	return fantasy.ToolInfo{
-		Name:        "submit_plan",
-		Description: "Submit your task execution plan for coordinator review. The plan should be a numbered list of concrete steps with brief descriptions. Do NOT include any execution results — only the plan. After submitting, wait for the coordinator to approve, modify, or reject your plan before executing.",
-		Parameters: map[string]any{
-			"plan": map[string]any{
-				"type":        "string",
-				"description": "The task execution plan as a numbered list of steps with descriptions.",
-			},
-		},
-		Required: []string{"plan"},
-	}
-}
-
-func (t *submitPlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
-func (t *submitPlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
-
-func (t *submitPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	var args struct {
-		Plan string `json:"plan"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
-	}
-	if args.Plan == "" {
-		return fantasy.NewTextErrorResponse("plan is required"), nil
-	}
-	t.coordinator.pendingPlansMu.Lock()
-	existing := t.coordinator.pendingPlans[t.todoID]
-	t.coordinator.pendingPlans[t.todoID] = &PlanEntry{
-		TodoID:   t.todoID,
-		PlanText: args.Plan,
-		Status:   "submitted",
-		ReviewCount: func() int {
-			if existing != nil {
-				return existing.ReviewCount
-			}
-			return 0
-		}(),
-	}
-	t.coordinator.pendingPlansMu.Unlock()
-	if t.coordinator.forcePlanFirst {
-		return fantasy.NewTextResponse("Plan submitted. Awaiting review."), nil
-	}
-	return fantasy.NewTextResponse("Plan submitted. Await coordinator review."), nil
-}
-
-type stmWriteTool struct {
-	coordinator *Coordinator
-	pOpts       fantasy.ProviderOptions
-}
-
-func (t *stmWriteTool) Info() fantasy.ToolInfo {
-	return fantasy.ToolInfo{
-		Name:        "stm_write",
-		Description: "Write to short-term memory (stm.md), a shared workspace file visible to all agents in the current session. Use append mode to add new information, or replace mode to overwrite. This memory is session-scoped and will be archived when the session ends.",
-		Parameters: map[string]any{
-			"content": map[string]any{
-				"type":        "string",
-				"description": "The content to write to short-term memory",
-			},
-			"mode": map[string]any{
-				"type":        "string",
-				"description": "Write mode: \"append\" (add to end, default) or \"replace\" (overwrite entire file)",
-				"enum":        []string{"append", "replace"},
-			},
-		},
-		Required: []string{"content"},
-	}
-}
-
-func (t *stmWriteTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
-func (t *stmWriteTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
-
-func (t *stmWriteTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	var args struct {
-		Content string `json:"content"`
-		Mode    string `json:"mode"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
-	}
-	if args.Content == "" {
-		return fantasy.NewTextErrorResponse("content is required"), nil
-	}
-
-	mode := args.Mode
-	if mode == "" {
-		mode = "append"
-	}
-
-	workspace := t.coordinator.session.Workspace
-	var newContent string
-	switch mode {
-	case "replace":
-		newContent = TruncateSTM(args.Content)
-	default:
-		existing := LoadSTM(workspace)
-		if existing == "" {
-			newContent = TruncateSTM(args.Content)
-		} else {
-			newContent = TruncateSTM(existing + "\n" + args.Content)
-		}
-	}
-
-	if err := SaveSTM(workspace, newContent); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write stm.md: %v", err)), nil
-	}
-	t.coordinator.lastStmWriteMu.Lock()
-	t.coordinator.lastStmWrite = time.Now()
-	t.coordinator.lastStmWriteMu.Unlock()
-
-	verb := "Appended to"
-	if mode == "replace" {
-		verb = "Replaced"
-	}
-	return fantasy.NewTextResponse(fmt.Sprintf("%s short-term memory (stm.md)", verb)), nil
-}
-
-type ltmUpdateTool struct {
-	coordinator *Coordinator
-	pOpts       fantasy.ProviderOptions
-}
-
-func (t *ltmUpdateTool) Info() fantasy.ToolInfo {
-	return fantasy.ToolInfo{
-		Name:        "ltm_update",
-		Description: "Update long-term memory (ltm.md), a persistent file shared across sessions for this team. Each entry is appended to the specified section so it can be retrieved in future sessions.",
-		Parameters: map[string]any{
-			"content": map[string]any{
-				"type":        "string",
-				"description": "The knowledge to record (one concise fact, decision, or pattern per call)",
-			},
-			"section": map[string]any{
-				"type":        "string",
-				"description": "Which long-term memory section to append to",
-				"enum": []string{
-					ltmSectionConventions,
-					ltmSectionArchitecture,
-					ltmSectionPatterns,
-					ltmSectionIssues,
-					ltmSectionFiles,
-					ltmSectionTools,
-				},
-			},
-		},
-		Required: []string{"content", "section"},
-	}
-}
-
-func (t *ltmUpdateTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
-func (t *ltmUpdateTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
-
-func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	var args struct {
-		Content string `json:"content"`
-		Section string `json:"section"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
-	}
-	if args.Content == "" {
-		return fantasy.NewTextErrorResponse("content is required"), nil
-	}
-	if args.Section == "" {
-		return fantasy.NewTextErrorResponse("section is required"), nil
-	}
-
-	// Validate section against the enum defined in Info()
-	validSections := map[string]bool{
-		ltmSectionConventions:  true,
-		ltmSectionArchitecture: true,
-		ltmSectionPatterns:     true,
-		ltmSectionIssues:       true,
-		ltmSectionFiles:        true,
-		ltmSectionTools:        true,
-	}
-	if !validSections[args.Section] {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid section %q; must be one of: %s, %s, %s, %s, %s, %s",
-			args.Section,
-			ltmSectionConventions, ltmSectionArchitecture, ltmSectionPatterns,
-			ltmSectionIssues, ltmSectionFiles, ltmSectionTools)), nil
-	}
-
-	entry := formatLTMEntry(args.Content)
-	workspace := t.coordinator.session.Workspace
-	t.coordinator.ltmWriteMu.Lock()
-	existing := LoadLTM(workspace, t.coordinator.session.Config.Name)
-	newContent := TruncateLTM(appendLTMEntry(existing, entry, args.Section))
-	err := SaveLTM(workspace, t.coordinator.session.Config.Name, newContent)
-	t.coordinator.ltmWriteMu.Unlock()
-	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write ltm.md: %v", err)), nil
-	}
-
-	return fantasy.NewTextResponse(fmt.Sprintf("Appended to long-term memory section %q", args.Section)), nil
-}
-
-type approvePlanTool struct {
-	coordinator *Coordinator
-}
-
-func (t *approvePlanTool) Info() fantasy.ToolInfo {
-	return fantasy.ToolInfo{
-		Name:        "approve_plan",
-		Description: "Approve a submitted task plan and execute it immediately. The plan must have been submitted by an agent via submit_plan. The agent that submitted the plan will execute the approved plan.",
-		Parameters: map[string]any{
-			"todo_id": map[string]any{
-				"type":        "string",
-				"description": "The todo ID of the submitted plan to approve.",
-			},
-		},
-		Required: []string{"todo_id"},
-	}
-}
-
-func (t *approvePlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
-func (t *approvePlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
-
-func (t *approvePlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	var args struct {
-		TodoID string `json:"todo_id"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
-	}
-	if args.TodoID == "" {
-		return fantasy.NewTextErrorResponse("todo_id is required"), nil
-	}
-	t.coordinator.pendingPlansMu.Lock()
-	entry, ok := t.coordinator.pendingPlans[args.TodoID]
-	if !ok {
-		t.coordinator.pendingPlansMu.Unlock()
-		return fantasy.NewTextErrorResponse("plan not found for todo_id: " + args.TodoID), nil
-	}
-	if entry.Status != "submitted" {
-		t.coordinator.pendingPlansMu.Unlock()
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("plan already %s", entry.Status)), nil
-	}
-	entry.Status = "approved"
-	agent := entry.Agent
-	goal := entry.Goal
-	todoID := entry.TodoID
-	t.coordinator.pendingPlansMu.Unlock()
-
-	t.coordinator.taskTracker.TodoList().UpdateStatus(todoID, TaskPlanned, "")
-	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
-
-	task := TaskDef{
-		Agent:     agent,
-		Goal:      goal,
-		PlanFirst: true,
-		PlanID:    todoID,
-	}
-	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{task})
-	if err != nil {
-		return fantasy.NewTextErrorResponse(err.Error()), nil
-	}
-	return fantasy.NewTextResponse(fmt.Sprintf("Plan approved and executed.\n\n%s", result)), nil
-}
-
-type modifyPlanTool struct {
-	coordinator *Coordinator
-}
-
-func (t *modifyPlanTool) Info() fantasy.ToolInfo {
-	return fantasy.ToolInfo{
-		Name:        "modify_plan",
-		Description: "Modify a submitted task plan and execute the modified version. Provide the corrected plan steps. The agent will execute the modified plan.",
-		Parameters: map[string]any{
-			"todo_id": map[string]any{
-				"type":        "string",
-				"description": "The todo ID of the submitted plan to modify.",
-			},
-			"plan": map[string]any{
-				"type":        "string",
-				"description": "The modified task execution plan as a numbered list of steps.",
-			},
-		},
-		Required: []string{"todo_id", "plan"},
-	}
-}
-
-func (t *modifyPlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
-func (t *modifyPlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
-
-func (t *modifyPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	var args struct {
-		TodoID string `json:"todo_id"`
-		Plan   string `json:"plan"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
-	}
-	if args.TodoID == "" || args.Plan == "" {
-		return fantasy.NewTextErrorResponse("todo_id and plan are required"), nil
-	}
-	t.coordinator.pendingPlansMu.Lock()
-	entry, ok := t.coordinator.pendingPlans[args.TodoID]
-	if !ok {
-		t.coordinator.pendingPlansMu.Unlock()
-		return fantasy.NewTextErrorResponse("plan not found for todo_id: " + args.TodoID), nil
-	}
-	entry.Status = "modified"
-	entry.PlanText = args.Plan
-	agent := entry.Agent
-	goal := entry.Goal
-	todoID := entry.TodoID
-	t.coordinator.pendingPlansMu.Unlock()
-
-	t.coordinator.report(t.coordinator.newEvent("step").withMessage(fmt.Sprintf("plan %s modified by coordinator", todoID)))
-
-	task := TaskDef{
-		Agent:     agent,
-		Goal:      goal,
-		PlanFirst: true,
-		PlanID:    todoID,
-	}
-	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{task})
-	if err != nil {
-		return fantasy.NewTextErrorResponse(err.Error()), nil
-	}
-	return fantasy.NewTextResponse(fmt.Sprintf("Plan modified and executed.\n\n%s", result)), nil
-}
-
-type rejectPlanTool struct {
-	coordinator *Coordinator
-}
+func (t *rejectPlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
+func (t *rejectPlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
 
 func (t *rejectPlanTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
@@ -2921,8 +1574,7 @@ func (t *rejectPlanTool) Info() fantasy.ToolInfo {
 	}
 }
 
-func (t *rejectPlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
-func (t *rejectPlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
+
 
 func (t *rejectPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
@@ -3568,7 +2220,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			if !td.Sidecar && !td.Summarize {
 				if cached, ok := c.lookupTaskCache(ctx, agentKey, desc); ok {
 					c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(desc).withTodoID(tid))
-					c.taskTracker.TodoList().UpdateStatusAndOutput(tid, TaskDone, extractSummary(cached, summaryMaxRunes), cached)
+					c.taskTracker.TodoList().UpdateStatusAndOutput(tid, TaskDone, utils.TruncateRunes(cached, summaryMaxRunes), cached)
 					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 					result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: cached}
 					inflightMu.Lock()
@@ -4354,16 +3006,16 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	}
 
 	c.report(c.newEvent("start").withAgent(agentName).withMessage(taskDesc).withModel(resolvedModel).withTodoID(todoID))
-	prevAgent := c.GetCurrentAgent()
-	prevTask := c.GetCurrentTask()
-	prevTodoID := c.GetCurrentTodoID()
-	c.SetCurrentAgent(agentName)
-	c.SetCurrentTask(taskDesc)
-	c.SetCurrentTodoID(todoID)
+	prevAgent := c.getSnapshotField(func(s *currentSnapshot) string { return s.Agent })
+	prevTask := c.getSnapshotField(func(s *currentSnapshot) string { return s.Task })
+	prevTodoID := c.getSnapshotField(func(s *currentSnapshot) string { return s.TodoID })
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = agentName})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Task = taskDesc})
+	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = todoID})
 	defer func() {
-		c.SetCurrentAgent(prevAgent)
-		c.SetCurrentTask(prevTask)
-		c.SetCurrentTodoID(prevTodoID)
+		c.updateSnapshot(func(s *currentSnapshot) { s.Agent = prevAgent})
+		c.updateSnapshot(func(s *currentSnapshot) { s.Task = prevTask})
+		c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = prevTodoID})
 	}()
 	taskTS := time.Now().Format("20060102-150405")
 	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "working", taskDesc, ""); err != nil {
@@ -4615,7 +3267,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				}
 				_ = writeStatus(c.session.Workspace, agentName, "done", taskDesc)
 				duration, modelTime, toolTime := timing.snapshot()
-				c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, extractSummary(output, summaryMaxRunes), output)
+				c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output)
 				c.updateTodoTiming(todoID, modelTime, toolTime)
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("done").withAgent(agentName).withOutput(output).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
@@ -4664,8 +3316,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 }
 
 type teamInfoTool struct {
+	coordToolBase
 	coordinator *Coordinator
-	pOpts       fantasy.ProviderOptions
 }
 
 func (t *teamInfoTool) Info() fantasy.ToolInfo {
@@ -4691,8 +3343,7 @@ func (t *teamInfoTool) Info() fantasy.ToolInfo {
 	}
 }
 
-func (t *teamInfoTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
-func (t *teamInfoTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
+
 
 func (t *teamInfoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
@@ -4797,7 +3448,7 @@ func (t *teamInfoTool) handleAgentInfo(c *Coordinator, name string) (fantasy.Too
 		fmt.Fprintf(&b, "**Instructions:** %s\n", instr)
 	}
 
-	caps := extractCapabilities(agentDef.System)
+	caps := ExtractCapabilitiesFromSystem(agentDef.System)
 	if caps != "" {
 		fmt.Fprintf(&b, "**Capabilities:**\n")
 		for _, line := range strings.Split(caps, "\n") {
@@ -4935,7 +3586,7 @@ func (t *teamInfoTool) handleTaskResult(c *Coordinator, workspace, teamName, nam
 		fmt.Fprintf(&b, "Most recent completed task by %s:\n\n", resolvedName)
 		fmt.Fprintf(&b, "**Task:** %s\n\n", task)
 		b.WriteString("**Result:**\n\n")
-		b.WriteString(truncate(result, 8000))
+		b.WriteString(utils.TruncateString(result, 8000))
 		return fantasy.NewTextResponse(b.String()), nil
 	}
 
@@ -5024,11 +3675,20 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		return "", fmt.Errorf("sidecar execution failed (model: %s): %w", c.sidecarModel, err)
 	}
 
-	c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, extractSummary(result, summaryMaxRunes), result)
+	c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(result, summaryMaxRunes), result)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(result).withMessage("sidecar completed").withTodoID(todoID))
 	return result, nil
 }
+
+// lastToolCallEntry tracks the most recent tool call for deadloop detection.
+// Used by runAgentWithStatusAndHistory to detect stuck agents repeating the
+// same failing tool call.
+type lastToolCallEntry struct {
+	toolName string
+	input    string
+}
+
 
 func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message, timing *taskTiming, extraStop ...fantasy.StopCondition) (string, []fantasy.StepResult, error) {
 	reportFn := c.reportStatus
@@ -5039,10 +3699,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	// Pick up the TodoItem ID injected by executeTask so events can be attributed to a task.
 	todoID, _ := ctx.Value(todoIDKey{}).(string)
 
-	var lastToolCall *struct {
-		toolName string
-		input    string
-	}
+	var lastToolCall *lastToolCallEntry
 	consecutiveErrCount := 0
 
 	streamCall := fantasy.AgentStreamCall{
@@ -5079,10 +3736,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					return fmt.Errorf("agent %s is stuck in a loop executing the same failing command: %s (args: %s)", agentName, tc.ToolName, argsPreview)
 				}
 			} else {
-				lastToolCall = &struct {
-					toolName string
-					input    string
-				}{
+				lastToolCall = &lastToolCallEntry{
 					toolName: tc.ToolName,
 					input:    tc.Input,
 				}
@@ -5091,7 +3745,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 
 			// Record tool call for skill pattern detection
 			if c.skillDetector != nil {
-				taskDesc := c.currentTask
+				taskDesc := ""; if s := c.current.Load(); s != nil { taskDesc = s.Task }
 				if taskDesc == "" {
 					taskDesc = "coordinator task"
 				}
@@ -5183,7 +3837,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		}
 	}
 
-	c.SetCurrentAgent(agentName)
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = agentName})
 	c.SetCurrentStage("model")
 	if resolvedModel, ok := ctx.Value(modelKey{}).(string); ok && resolvedModel != "" {
 		c.SetCurrentModel(resolvedModel)
@@ -5428,54 +4082,7 @@ func (c *Coordinator) workerNameList() []string {
 	return names
 }
 
-func extractCapabilities(system string) string {
-	if system == "" {
-		return ""
-	}
-	lines := strings.Split(system, "\n")
-	var caps []string
-	inList := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			inList = false
-			continue
-		}
-		if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
-			item := strings.TrimPrefix(strings.TrimPrefix(trimmed, "- "), "* ")
-			if len(item) > 3 {
-				caps = append(caps, item)
-				inList = true
-			}
-		} else if inList && len(caps) > 0 && len(trimmed) > 3 {
-			caps[len(caps)-1] += " " + trimmed
-		} else {
-			inList = false
-		}
-	}
-	for i := range caps {
-		caps[i] = strings.TrimSpace(caps[i])
-	}
-	if len(caps) == 0 {
-		sentences := strings.Split(system, ". ")
-		for _, s := range sentences {
-			s = strings.TrimSpace(s)
-			if len(s) > 10 && len(caps) < 5 {
-				caps = append(caps, s)
-			}
-		}
-	}
-	var result []string
-	seen := map[string]bool{}
-	for _, c := range caps {
-		lower := strings.ToLower(c)
-		if !seen[lower] && len(c) > 5 {
-			seen[lower] = true
-			result = append(result, c)
-		}
-	}
-	return strings.Join(result, "\n")
-}
+
 
 const maxAgentsMDSize = 50000
 const defaultWorkerContextSize = 12000
@@ -5697,7 +4304,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 		if def.Tools != "" {
 			fmt.Fprintf(&b, "**Tools:** %s\n", def.Tools)
 		}
-		if caps := extractCapabilities(def.System); caps != "" {
+		if caps := ExtractCapabilitiesFromSystem(def.System); caps != "" {
 			fmt.Fprintf(&b, "**Capabilities:**\n")
 			for _, line := range strings.Split(caps, "\n") {
 				fmt.Fprintf(&b, "- %s\n", line)
@@ -5940,7 +4547,7 @@ func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef 
 	if err != nil {
 		detail := strings.TrimSpace(string(out))
 		if detail != "" {
-			detail = ": " + truncate(detail, 500)
+			detail = ": " + utils.TruncateString(detail, 500)
 		}
 		return fmt.Errorf("%v%s", err, detail)
 	}
@@ -6002,7 +4609,7 @@ func localFailureHint(lastErr string) string {
 	case strings.Contains(e, "duplicate"):
 		return "This work overlaps with an already-completed task. Reuse the existing result instead of redoing it, or address the part that is genuinely missing."
 	default:
-		return "The previous attempt failed with: " + truncate(strings.TrimSpace(lastErr), 300) + ". Change your approach rather than repeating the same actions."
+		return "The previous attempt failed with: " + utils.TruncateString(strings.TrimSpace(lastErr), 300) + ". Change your approach rather than repeating the same actions."
 	}
 }
 
@@ -6065,13 +4672,6 @@ func (c *Coordinator) expandOrchestratorTemplate(tmpl string) string {
 	}
 	return result
 }
-
-// expandDefaultOrchestratorTemplate expands the default orchestrator system prompt
-// using the team's runtime variables.
-func (c *Coordinator) expandDefaultOrchestratorTemplate(tmpl string) string {
-	return c.expandOrchestratorTemplate(tmpl)
-}
-
 func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepResult) {
 	for _, step := range steps {
 		for _, msg := range step.Messages {
@@ -6318,16 +4918,16 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("start").withAgent(resolvedName).withMessage(task).withModel(directModel).withTodoID(todoID))
-	prevAgent := c.GetCurrentAgent()
-	prevTask := c.GetCurrentTask()
-	prevTodoID := c.GetCurrentTodoID()
-	c.SetCurrentAgent(resolvedName)
-	c.SetCurrentTask(task)
-	c.SetCurrentTodoID(todoID)
+	prevAgent := c.getSnapshotField(func(s *currentSnapshot) string { return s.Agent })
+	prevTask := c.getSnapshotField(func(s *currentSnapshot) string { return s.Task })
+	prevTodoID := c.getSnapshotField(func(s *currentSnapshot) string { return s.TodoID })
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = resolvedName})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Task = task})
+	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = todoID})
 	defer func() {
-		c.SetCurrentAgent(prevAgent)
-		c.SetCurrentTask(prevTask)
-		c.SetCurrentTodoID(prevTodoID)
+		c.updateSnapshot(func(s *currentSnapshot) { s.Agent = prevAgent})
+		c.updateSnapshot(func(s *currentSnapshot) { s.Task = prevTask})
+		c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = prevTodoID})
 	}()
 
 	ag, err := c.getOrCreateAgent(ctx, agentDef, "")
@@ -6404,7 +5004,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		log.Printf("warning: failed to write task file: %v", err)
 	}
 	_ = writeStatus(c.session.Workspace, resolvedName, "done", task)
-	c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, extractSummary(output, summaryMaxRunes), output)
+	c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output)
 	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(resolvedName).withOutput(output).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
@@ -6611,7 +5211,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	systemPrompt := c.expandOrchestratorTemplate(orchDef.System)
 	if systemPrompt == "" {
-		systemPrompt = c.expandDefaultOrchestratorTemplate(defaultOrchestratorSystem)
+		systemPrompt = c.expandOrchestratorTemplate(defaultOrchestratorSystem)
 	}
 	matchedSkills := c.matchSkillsWithSidecar(ctx, userPrompt)
 	c.setAutoLoadedSkills(matchedSkills)
@@ -6810,6 +5410,22 @@ func normalizeTaskDesc(task string) string {
 	return strings.Join(strings.Fields(strings.ToLower(task)), " ")
 }
 
+// SkillMatchesPrompt returns true when the prompt contains any keyword
+// extracted from the skill's name or description (case-insensitive).
+// This is the LLM-free fallback used by DryRun().
+func SkillMatchesPrompt(s *skill.SkillDef, prompt string) bool {
+	p := strings.ToLower(prompt)
+	if p == "" || s == nil {
+		return false
+	}
+	for _, kw := range extractSkillKeywords(s) {
+		if strings.Contains(p, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunResult, error) {
 	orchDef := c.GetOrchestratorDef()
 
@@ -6840,7 +5456,7 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 	allSkills := c.getSkills()
 	matchedSet := map[string]bool{}
 	for _, sk := range allSkills {
-		if skillMatchesPromptKeywords(sk, userPrompt) {
+		if strings.Contains(strings.ToLower(userPrompt),strings.ToLower(sk.Name)) || SkillMatchesPrompt(sk, userPrompt) {
 			matchedSet[strings.ToLower(sk.Name)] = true
 		}
 		result.AllSkills = append(result.AllSkills, DryRunSkillInfo{
@@ -6902,20 +5518,4 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 	c.report(c.newEvent("done").withAgent("coordinator").withMessage("dry-run complete (no LLM calls)").withTodoID(CoordTodoID))
 
 	return result, nil
-}
-
-// skillMatchesPromptKeywords returns true when the user prompt contains any
-// keyword extracted from the skill's name or description (case-insensitive).
-// This is the LLM-free fallback used by DryRun().
-func skillMatchesPromptKeywords(s *skill.SkillDef, prompt string) bool {
-	p := strings.ToLower(prompt)
-	if p == "" || s == nil {
-		return false
-	}
-	for _, kw := range extractSkillKeywords(s) {
-		if strings.Contains(p, kw) {
-			return true
-		}
-	}
-	return false
 }

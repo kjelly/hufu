@@ -13,6 +13,7 @@ import (
 	"github.com/anomalyco/hufu/internal/mcp"
 	"github.com/anomalyco/hufu/internal/notify"
 	"github.com/anomalyco/hufu/internal/skill"
+	"github.com/anomalyco/hufu/internal/yamlutil"
 )
 
 type TeamSession struct {
@@ -287,7 +288,7 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 	var fm agentFrontmatter
 	if err := yaml.Unmarshal([]byte(rest[:idx]), &fm); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: YAML parse failed in %s, using fallback: %v\n", path, err)
-		fm = agentFrontmatterFromSimple(parseSimpleYAML(rest[:idx]))
+		fm = agentFrontmatterFromSimple(yamlutil.ParseSimpleYAML(rest[:idx]))
 	}
 	body := strings.TrimSpace(rest[idx+5:])
 
@@ -312,7 +313,7 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 		Tools:          toolsStr,
 		Role:           role,
 		System:         body,
-		Capabilities:   extractCapabilitiesFromSystem(body),
+		Capabilities:   ExtractCapabilitiesFromSystem(body),
 		Skills:         skillsStr,
 		Guard:          fm.Guard,
 		MaxRetries:     maxRetries,
@@ -339,7 +340,7 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 	return def, nil
 }
 
-func extractCapabilitiesFromSystem(system string) string {
+func ExtractCapabilitiesFromSystem(system string) string {
 	if system == "" {
 		return ""
 	}

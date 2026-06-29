@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/anomalyco/hufu/internal/yamlutil"
 )
 
 type SkillDef struct {
@@ -113,7 +115,7 @@ func parseSkillYAML(data string) map[string]string {
 		}
 		return result
 	}
-	return parseSimpleYAML(data)
+	return yamlutil.ParseSimpleYAML(data)
 }
 
 func parseSimpleYAML(data string) map[string]string {

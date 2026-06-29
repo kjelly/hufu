@@ -3,6 +3,8 @@ package team
 import (
 	"fmt"
 	"os"
+
+	"github.com/anomalyco/hufu/internal/utils"
 	"path/filepath"
 	"strings"
 	"time"
@@ -47,7 +49,7 @@ func GenerateSessionMD(sd *SessionData, teamName string) string {
 		if entry.Role == "assistant" {
 			role = "🤖 Coordinator"
 		}
-		content := truncateString(entry.Content, 1000)
+		content := utils.TruncateRunes(entry.Content, 1000)
 		b.WriteString(fmt.Sprintf("### %s", role))
 		if entry.Timestamp != "" {
 			b.WriteString(fmt.Sprintf(" (%s)", entry.Timestamp))

@@ -194,7 +194,7 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRes
 	// ask_user-aware deadline means the agent timeout would not rescue it).
 	// Instead return a safe default and fire a needs-human notification so an
 	// operator can follow up out-of-band.
-	if IsUnattended(ctx) || !isInteractiveEnvironment() {
+	if IsUnattended(ctx) || !IsInteractiveEnvironment() {
 		return unattendedAskUserResponse(args, questionType)
 	}
 

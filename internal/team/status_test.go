@@ -3,6 +3,8 @@ package team
 import (
 	"strings"
 	"testing"
+
+	"github.com/anomalyco/hufu/internal/utils"
 	"time"
 )
 
@@ -15,10 +17,10 @@ func TestCoordinator_GetCurrentStatus_DefaultIdle(t *testing.T) {
 
 func TestCoordinator_GetCurrentStatus_ModelStage(t *testing.T) {
 	c := &Coordinator{}
-	c.SetCurrentAgent("coordinator")
-	c.SetCurrentModel("ollama/qwen3:8b")
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "coordinator"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Model = "ollama/qwen3:8b"})
 	c.SetCurrentStage("model")
-	c.SetCurrentStep(3)
+	c.updateSnapshot(func(s *currentSnapshot) { s.Step = 3})
 
 	got := c.GetCurrentStatus()
 	wantSubstrings := []string{"model", "agent=coordinator", "model=ollama/qwen3:8b", "step=3"}
@@ -31,9 +33,9 @@ func TestCoordinator_GetCurrentStatus_ModelStage(t *testing.T) {
 
 func TestCoordinator_GetCurrentStatus_ToolStage(t *testing.T) {
 	c := &Coordinator{}
-	c.SetCurrentAgent("helper")
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "helper"})
 	c.SetCurrentStage("tool")
-	c.SetCurrentTool("bash")
+	c.updateSnapshot(func(s *currentSnapshot) { s.Tool = "bash"})
 
 	got := c.GetCurrentStatus()
 	wantSubstrings := []string{"tool", "agent=helper", "tool=bash"}
@@ -46,10 +48,10 @@ func TestCoordinator_GetCurrentStatus_ToolStage(t *testing.T) {
 
 func TestCoordinator_GetCurrentStatus_TruncatesLongTask(t *testing.T) {
 	c := &Coordinator{}
-	c.SetCurrentAgent("helper")
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "helper"})
 	c.SetCurrentStage("model")
 	longTask := strings.Repeat("a", 200)
-	c.SetCurrentTask(longTask)
+	c.updateSnapshot(func(s *currentSnapshot) { s.Task = longTask})
 
 	got := c.GetCurrentStatus()
 	if !strings.Contains(got, "task=") {
@@ -78,7 +80,7 @@ func TestCoordinator_GetCurrentStatus_ElapseTime(t *testing.T) {
 func TestCoordinator_GetCurrentStatus_IdleResetsStart(t *testing.T) {
 	c := &Coordinator{}
 	c.SetCurrentStage("model")
-	c.SetCurrentTool("bash")
+	c.updateSnapshot(func(s *currentSnapshot) { s.Tool = "bash"})
 
 	// Stage is set; should be non-idle.
 	if got := c.GetCurrentStatus(); got == "idle" {
@@ -109,9 +111,9 @@ func TestTruncate(t *testing.T) {
 		{"", 5, ""},
 	}
 	for _, tc := range cases {
-		got := truncate(tc.input, tc.max)
+		got := utils.TruncateString(tc.input, tc.max)
 		if got != tc.expect {
-			t.Errorf("truncate(%q, %d) = %q, want %q", tc.input, tc.max, got, tc.expect)
+			t.Errorf("utils.TruncateString(%q, %d) = %q, want %q", tc.input, tc.max, got, tc.expect)
 		}
 	}
 }

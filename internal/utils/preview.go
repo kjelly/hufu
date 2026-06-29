@@ -221,3 +221,33 @@ done:
 
 	return WrapLineResult{Lines: allLines, Truncated: truncated}
 }
+
+// TruncateString returns s shortened to max characters with an ellipsis.
+// If max <= 0, returns "…". If len(s) <= max, returns s unchanged.
+// This is a byte-based truncation (not rune-safe); use TruncateRunes for CJK text.
+func TruncateString(s string, max int) string {
+	if max <= 0 {
+		return "…"
+	}
+	if len(s) <= max {
+		return s
+	}
+	if max == 1 {
+		return "…"
+	}
+	return s[:max-1] + "…"
+}
+
+// TruncateRunes truncates text to at most maxRunes runes, appending "..."
+// when truncation occurs. Safe for multi-byte characters such as CJK text.
+func TruncateRunes(s string, maxRunes int) string {
+	s = strings.TrimSpace(s)
+	runes := []rune(s)
+	if len(runes) == 0 {
+		return ""
+	}
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes]) + "..."
+}

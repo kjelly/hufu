@@ -85,28 +85,11 @@ func (t *idleWarningTimer) stop() {
 	}
 }
 
-type activeCoordinator struct {
-	mu          sync.Mutex
-	coordinator *team.Coordinator
-}
-
-func (a *activeCoordinator) Set(c *team.Coordinator) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.coordinator = c
-}
-
-func (a *activeCoordinator) Get() *team.Coordinator {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.coordinator
-}
-
-func (a *activeCoordinator) Clear() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.coordinator = nil
-}
+// activeCoordinator stores the currently executing coordinator for the
+// SIGINT handler and prompt injector. atomic.Pointer is used for lock-free
+// access since only one coordinator runs at a time in the main goroutine,
+// and the signal handler goroutine only reads it.
+type activeCoordinator = atomic.Pointer[team.Coordinator]
 
 type promptInjector struct {
 	ch              chan string

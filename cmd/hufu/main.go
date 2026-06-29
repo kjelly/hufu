@@ -349,6 +349,10 @@ func applyProfile(cmd *cobra.Command) error {
 }
 
 func runTeam(cmd *cobra.Command, args []string) error {
+	// Push current quiet/JSON/TUI state into internal/log so internal/* packages
+	// that log through it stay in sync with the CLI.
+	syncLogState()
+
 	// Apply a named profile first so its values feed the checks below; explicit
 	// CLI flags still win (applyProfile respects flag.Changed).
 	if err := applyProfile(cmd); err != nil {
@@ -416,7 +420,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	injector := newPromptInjector(pr)
-	activeCoord := &activeCoordinator{}
+	activeCoord := new(atomic.Pointer[team.Coordinator])
 	defer setupPromptSignals(injector)()
 
 	// loadedTeams is assigned below; the SIGINT handler reads it via
@@ -736,20 +740,13 @@ func applyUnattendedAndBudget(coordinator *team.Coordinator, session *team.TeamS
 	coordinator.SetRollback(session.Config.Rollback)
 }
 
-func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
-	teamDir, err := registry.Resolve(teamName)
-	if err != nil {
-		return nil, err
-	}
-
-	session, err := team.LoadTeam(teamDir, vars, forcedSkills)
-	if err != nil {
-		return nil, err
-	}
-
-	// Apply CLI model overrides as the highest-priority model config layer,
-	// then propagate the resolved Generation to all agents so per-agent
-	// dispatch uses the same model the user asked for on the command line.
+// loadTeamCommon is the shared post-load setup for both named and default
+// teams. It handles workspace creation, session lifecycle, model/provider
+// resolution, coordinator construction, and notification setup.
+// The session must already be loaded (via team.LoadTeam or team.LoadDefaultTeam)
+// and have its Workspace set.
+func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSession, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, registry *team.TeamRegistry, forcedSkills []string, planMode bool, autoSkillsMode bool, buildMCP bool) (*teamContext, error) {
+	// Apply CLI model overrides as the highest-priority model config layer.
 	applyCLIModelOverrides(&session.Config, currentModelOverrides())
 	applyCLITimeoutOverrides(session, currentTimeoutOverrides())
 	applyCLITuningOverrides(session, currentTuningOverrides())
@@ -757,113 +754,6 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 
 	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, session.Config.ProviderURL, "")
 	resolvedProviderAPIKey := config.ResolveProviderAPIKey(defaultProviderAPIKey, session.Config.ProviderAPIKey)
-
-	if err := resolveTeamWorkspace(teamName, session); err != nil {
-		return nil, err
-	}
-
-	if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
-		stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)
-	}
-
-	if err := team.InitLTM(session.Workspace, session.Config.Name); err != nil {
-		stderrLog("%s Failed to init ltm.md: %v\n", errStyle.Render("⚠"), err)
-	}
-	if err := team.InitSTM(session.Workspace); err != nil {
-		stderrLog("%s Failed to init stm.md: %v\n", errStyle.Render("⚠"), err)
-	}
-	if newSession {
-		// Extract knowledge from all accumulated history/*-stm.md snapshots
-		// into ltm.md, then delete the history files.
-		team.ExtractLTMFromHistory(session.Workspace, session.Config.Name)
-	}
-
-	var sessionData *team.SessionData
-	var oldSessionEntries []memory.SessionSummaryEntry
-	if false {
-		// Block replaced by prepareSessionLifecycle helper (see team_loader.go).
-		_ = oldSessionEntries
-	}
-
-	sessionData, oldSessionEntries, err = prepareSessionLifecycle(session)
-	if err != nil {
-		return nil, err
-	}
-
-	displayTeamHeader(session)
-
-	cfg := config.LoadConfig()
-	mcpManager := buildMCPManager(ctx, session, cfg)
-	memStore := buildMemoryStore(resolvedProviderURL)
-
-	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
-	resolvedSidecarModel := cfg.ResolveSidecarModel(session.Config.SidecarModel)
-	resolvedGuardModel := cfg.ResolveGuardModel(session.Config.GuardModel, session.Config.SidecarModel)
-	resolvedMaxConcurrent := cfg.ResolveMaxConcurrent(session.Config.MaxConcurrent)
-	if resolvedMaxConcurrent <= 0 {
-		resolvedMaxConcurrent = 8
-	}
-	if err := resolveAndCheckModel(session, cfg); err != nil {
-		return nil, err
-	}
-
-	allowedPaths := buildAllowedPaths(session, registry, cfg)
-	hookRegistry := registerHooks(cfg)
-	resolvedRestrictedPath := resolveRestrictedPath(session, cfg)
-	resolvedNoNet := noNet || cfg.NoNet || session.Config.NoNet
-	resolvedForceMCP := forceMCP || cfg.ForceMCP || session.Config.ForceMCP
-
-	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, think, direnv, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create coordinator: %w", err)
-	}
-	coordinator.SetSessionData(sessionData)
-	applyUnattendedAndBudget(coordinator, session)
-	archiveToMemory(ctx, memStore, coordinator, session, oldSessionEntries)
-	displayResolvedConfig(session, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent)
-	notifierInst := buildNotifier(cfg, session)
-
-	return &teamContext{
-		teamName:    teamName,
-		session:     session,
-		coordinator: coordinator,
-		sessionData: sessionData,
-		notifier:    notifierInst,
-	}, nil
-}
-
-// loadDefaultTeam builds an in-memory default team (coordinator + Helper)
-// without consulting the .agent-teams/ registry. It mirrors loadTeamByName's
-// post-load setup (workspace, session lifecycle, coordinator) so the rest
-// of the CLI works identically.
-func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
-	teamName := "default"
-
-	// The default team lives under <workspace>/default. Use the
-	// shared resolveTeamWorkspace helper so the workspace path logic
-	// stays in one place.
-	dummySession := &team.TeamSession{}
-	if err := resolveTeamWorkspace(teamName, dummySession); err != nil {
-		return nil, err
-	}
-	teamWorkspace := dummySession.Workspace
-
-	session, err := team.LoadDefaultTeam(teamWorkspace, forcedSkills, helperTools)
-	if err != nil {
-		return nil, err
-	}
-	session.Workspace = teamWorkspace
-	session.Config.WorkspaceDir = teamWorkspace
-
-	// Apply CLI model overrides as the highest-priority model config layer,
-	// then propagate to all agents (Helper, coordinator).
-	applyCLIModelOverrides(&session.Config, currentModelOverrides())
-	applyCLITimeoutOverrides(session, currentTimeoutOverrides())
-	applyCLITuningOverrides(session, currentTuningOverrides())
-	propagateTeamGenerationToAgents(session)
-
-	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, session.Config.ProviderURL, "")
-	resolvedProviderAPIKey := config.ResolveProviderAPIKey(defaultProviderURL, session.Config.ProviderAPIKey)
 
 	if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
 		stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)
@@ -886,8 +776,10 @@ func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPI
 	displayTeamHeader(session)
 
 	cfg := config.LoadConfig()
-	// Default team has no MCP servers or mcp-tools, so skip MCP manager creation.
 	var mcpManager *mcp.MCPToolManager
+	if buildMCP {
+		mcpManager = buildMCPManager(ctx, session, cfg)
+	}
 	memStore := buildMemoryStore(resolvedProviderURL)
 
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
@@ -901,10 +793,12 @@ func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPI
 		return nil, err
 	}
 
-	// For the default team there is no registry — only the workspace root
-	// is allowed by default.
 	var allowedPaths []string
-	allowedPaths = append(allowedPaths, teamWorkspace)
+	if registry != nil {
+		allowedPaths = buildAllowedPaths(session, registry, cfg)
+	} else {
+		allowedPaths = append(allowedPaths, session.Workspace)
+	}
 
 	hookRegistry := registerHooks(cfg)
 	resolvedRestrictedPath := resolveRestrictedPath(session, cfg)
@@ -929,6 +823,47 @@ func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPI
 		notifier:    notifierInst,
 	}, nil
 }
+
+func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
+	teamDir, err := registry.Resolve(teamName)
+	if err != nil {
+		return nil, err
+	}
+
+	session, err := team.LoadTeam(teamDir, vars, forcedSkills)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := resolveTeamWorkspace(teamName, session); err != nil {
+		return nil, err
+	}
+
+	return loadTeamCommon(ctx, teamName, session, defaultProviderURL, defaultProviderAPIKey, pathConsent, registry, forcedSkills, planMode, autoSkillsMode, true)
+}
+
+// loadDefaultTeam builds an in-memory default team (coordinator + Helper)
+// without consulting the .agent-teams/ registry.
+func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
+	teamName := "default"
+
+	dummySession := &team.TeamSession{}
+	if err := resolveTeamWorkspace(teamName, dummySession); err != nil {
+		return nil, err
+	}
+	teamWorkspace := dummySession.Workspace
+
+	session, err := team.LoadDefaultTeam(teamWorkspace, forcedSkills, helperTools)
+	if err != nil {
+		return nil, err
+	}
+	session.Workspace = teamWorkspace
+	session.Config.WorkspaceDir = teamWorkspace
+
+	return loadTeamCommon(ctx, teamName, session, defaultProviderURL, defaultProviderAPIKey, pathConsent, nil, forcedSkills, planMode, autoSkillsMode, false)
+}
+
+
 
 func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, cfg *config.Config) []string {
 	seen := make(map[string]bool)
@@ -1214,7 +1149,7 @@ func setupInterruptHandler(injector *promptInjector, activeCoord *activeCoordina
 					p.Send(tuipkg.WrapUpMsg{})
 				} else {
 					fmt.Fprintf(os.Stderr, "\n%s Wrapping up... (press Ctrl+C again to force quit)\n", boldStyle.Render("⏹"))
-					if c := activeCoord.Get(); c != nil {
+					if c := activeCoord.Load(); c != nil {
 						c.SetWrapUp()
 					}
 					injector.injectWrapUp()
@@ -1223,7 +1158,7 @@ func setupInterruptHandler(injector *promptInjector, activeCoord *activeCoordina
 			} else {
 				if activeTUIProgram.Load() == nil {
 					currentStatus := "unknown"
-					if c := activeCoord.Get(); c != nil {
+					if c := activeCoord.Load(); c != nil {
 						currentStatus = c.GetCurrentStatus()
 					}
 					fmt.Fprintf(os.Stderr, "\n%s Force quit requested\n", errStyle.Render("✗"))
@@ -1307,7 +1242,7 @@ func promptForMissingTemplateVars(ctx context.Context, segName string, registry 
 // they can read the docs. In a non-TTY environment it falls back to a
 // plain error message.
 func offerFirstTimeWizard(searchPaths []string) error {
-	if !isInteractiveEnvironment() {
+	if !tools.IsInteractiveEnvironment() {
 		return fmt.Errorf("no agent teams found in search paths: %s\n  Use --default for the built-in team, or scaffold one with `hufu init <team>`", strings.Join(searchPaths, ", "))
 	}
 
@@ -1354,19 +1289,6 @@ func offerFirstTimeWizard(searchPaths []string) error {
 	}
 }
 
-// isInteractiveEnvironment returns true when the standard streams are
-// connected to a terminal (and CI env vars are not set). Used by the
-// first-time wizard to decide whether to offer an interactive menu.
-func isInteractiveEnvironment() bool {
-	if os.Getenv("CI") != "" || os.Getenv("GITHUB_ACTIONS") != "" || os.Getenv("GITLAB_CI") != "" {
-		return false
-	}
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
-}
 
 // handleSegmentError is the standard error-exit for each step in
 // executeSegments. It saves session state, prints an interrupted notice
@@ -1426,12 +1348,12 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			stderrLog("\n%s Starting team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(teamName))
 
-			activeCoord.Set(tc.coordinator)
+			activeCoord.Store(tc.coordinator)
 			if injector.IsWrapUpRequested() {
 				tc.coordinator.SetWrapUp()
 			}
 			result, err := tc.coordinator.Run(ctx, seg.Content)
-			activeCoord.Clear()
+			activeCoord.Store(nil)
 			disp.stopTimer()
 
 			if err != nil {
@@ -1461,12 +1383,12 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			stderrLog("\n%s Direct invocation: @%s (team: %s)\n\n", boldStyle.Render("→"), agentStyle.Render(seg.Name), teamStyle.Render(currentTeamName))
 
-			activeCoord.Set(tc.coordinator)
+			activeCoord.Store(tc.coordinator)
 			if injector.IsWrapUpRequested() {
 				tc.coordinator.SetWrapUp()
 			}
 			directResult, err := tc.coordinator.RunDirectAgent(ctx, seg.Name, seg.Content)
-			activeCoord.Clear()
+			activeCoord.Store(nil)
 			disp2.stopTimer()
 
 			if err != nil {
@@ -1488,12 +1410,12 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			} else {
 				synthesisPrompt := fmt.Sprintf("A user directly asked @%s to do the following task:\n\n%s\n\nHere is what %s produced:\n\n---\n%s\n---\n\nPlease synthesize this into a final, well-organized answer for the user.",
 					seg.Name, seg.Content, seg.Name, directResult.Output)
-				activeCoord.Set(tc.coordinator)
+				activeCoord.Store(tc.coordinator)
 				if injector.IsWrapUpRequested() {
 					tc.coordinator.SetWrapUp()
 				}
 				synthResult, err := tc.coordinator.Run(ctx, synthesisPrompt)
-				activeCoord.Clear()
+				activeCoord.Store(nil)
 				if err != nil {
 					return handleSegmentError(ctx, tc, results, err, "synthesis for @%s failed", seg.Name)
 				}
@@ -1518,12 +1440,12 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			stderrLog("\n%s Team %s processing...\n\n", boldStyle.Render("→"), teamStyle.Render(currentTeamName))
 
-			activeCoord.Set(tc.coordinator)
+			activeCoord.Store(tc.coordinator)
 			if injector.IsWrapUpRequested() {
 				tc.coordinator.SetWrapUp()
 			}
 			result, err := tc.coordinator.Run(ctx, seg.Content)
-			activeCoord.Clear()
+			activeCoord.Store(nil)
 			disp3.stopTimer()
 
 			if err != nil {

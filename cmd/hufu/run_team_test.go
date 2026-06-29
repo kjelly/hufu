@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/anomalyco/hufu/internal/tools"
 )
 
 func TestValidateRunFlags(t *testing.T) {
@@ -110,7 +112,7 @@ func TestIsInteractiveEnvironment(t *testing.T) {
 		t.Setenv(k, "")
 	}
 	// In test environment, stdin is typically not a TTY
-	result := isInteractiveEnvironment()
+	result := tools.IsInteractiveEnvironment()
 	// We can only assert it's a bool — actual value depends on test environment
 	_ = result
 }

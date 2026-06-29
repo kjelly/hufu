@@ -161,7 +161,7 @@ func collectFixData(session *team.TeamSession, taskDesc string) *fixData {
 func runFixAnalysis(ctx context.Context, tc *teamContext, question string, taskDesc string, data *fixData) (string, error) {
 	s := tc.coordinator.Sidecar()
 	if s == nil {
-		return runFixAnalysisDirect(ctx, question, taskDesc, data, tc.session.Config.Name)
+		return runFixAnalysisDirect(ctx, question, taskDesc, data, tc.session.Config.Name, tc.session.Config.SidecarModel)
 	}
 
 	prompt := buildFixPrompt(question, taskDesc, data)
@@ -175,12 +175,15 @@ func runFixAnalysis(ctx context.Context, tc *teamContext, question string, taskD
 	return result, nil
 }
 
-func runFixAnalysisDirect(ctx context.Context, question string, taskDesc string, data *fixData, teamName string) (string, error) {
+func runFixAnalysisDirect(ctx context.Context, question string, taskDesc string, data *fixData, teamName, sidecarModel string) (string, error) {
 	prompt := buildFixPrompt(question, taskDesc, data)
 	ctx2, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx2, "ollama", "run", "--format", "```", "qwen3:8b", prompt)
+	if sidecarModel == "" {
+		sidecarModel = "qwen3:8b" // last-resort fallback when neither team config nor hufu.yaml specifies one
+	}
+	cmd := exec.CommandContext(ctx2, "ollama", "run", "--format", "```", sidecarModel, prompt)
 	cmd.Env = append(os.Environ(), "OLLAMA_NUM_PARALLEL=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {

@@ -267,9 +267,9 @@ func TestSkillMatchesPromptKeywords(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := skillMatchesPromptKeywords(tt.skill, tt.prompt)
+			got := SkillMatchesPrompt(tt.skill, tt.prompt)
 			if got != tt.want {
-				t.Errorf("skillMatchesPromptKeywords(%q, %q) = %v, want %v",
+				t.Errorf("SkillMatchesPrompt(%q, %q) = %v, want %v",
 					tt.skill.Name, tt.prompt, got, tt.want)
 			}
 		})

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/anomalyco/hufu/internal/utils"
 	"time"
 )
 
@@ -56,9 +58,9 @@ func TestTruncateString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := truncateString(tt.input, tt.maxRunes)
+			got := utils.TruncateRunes(tt.input, tt.maxRunes)
 			if got != tt.want {
-				t.Errorf("truncateString(%q, %d) = %q, want %q", tt.input, tt.maxRunes, got, tt.want)
+				t.Errorf("utils.TruncateRunes(%q, %d) = %q, want %q", tt.input, tt.maxRunes, got, tt.want)
 			}
 		})
 	}

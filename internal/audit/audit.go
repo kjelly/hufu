@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/anomalyco/hufu/internal/utils"
 	"path/filepath"
 	"sync"
 	"time"
@@ -54,7 +56,7 @@ func (l *AuditLogger) LogToolCall(agent, tool, input string) {
 		Agent:     agent,
 		Tool:      tool,
 		Action:    "call",
-		Input:     truncate(input, 10000),
+		Input:     utils.TruncateString(input, 10000),
 	})
 }
 
@@ -65,10 +67,10 @@ func (l *AuditLogger) LogToolResult(agent, tool, result string, isError bool) {
 		Agent:     agent,
 		Tool:      tool,
 		Action:    "result",
-		Result:    truncate(result, 5000),
+		Result:    utils.TruncateString(result, 5000),
 	}
 	if isError {
-		entry.Error = truncate(result, 5000)
+		entry.Error = utils.TruncateString(result, 5000)
 		entry.Result = ""
 	}
 	l.log(entry)
@@ -97,15 +99,7 @@ func (l *AuditLogger) Close() error {
 	return nil
 }
 
-func truncate(s string, maxLen int) string {
-	if maxLen <= 0 {
-		return "...[truncated]"
-	}
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "...[truncated]"
-}
+
 
 func SetDefault(logger *AuditLogger) {
 	defaultLoggerMu.Lock()
@@ -141,7 +135,7 @@ func (l *AuditLogger) LogSSHConnection(agent, host, command string, exitCode int
 		Agent:     agent,
 		Tool:      "ssh",
 		Action:    "ssh_connection",
-		Input:     fmt.Sprintf("host=%s, command=%s", host, truncate(command, 500)),
+		Input:     fmt.Sprintf("host=%s, command=%s", host, utils.TruncateString(command, 500)),
 		Result:    fmt.Sprintf("exit_code=%d, duration_ms=%d", exitCode, durationMs),
 	})
 }

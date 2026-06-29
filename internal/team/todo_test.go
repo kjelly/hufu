@@ -260,8 +260,8 @@ func TestTodoToolHandleUpdatePreventDoneToInProgress(t *testing.T) {
 
 	tool := &todoTool{coordinator: c}
 
-	c.SetCurrentAgent("researcher")
-	c.SetCurrentTodoID("1")
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1"})
 
 	resp, err := tool.handleUpdate("researcher", "1", "in_progress", "")
 	if err != nil {
@@ -300,8 +300,8 @@ func TestTodoToolHandleUpdatePreventErrorToDone(t *testing.T) {
 
 	tool := &todoTool{coordinator: c}
 
-	c.SetCurrentAgent("researcher")
-	c.SetCurrentTodoID("1")
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1"})
 
 	// TaskError -> TaskDone should be blocked (not a valid retry)
 	resp, err := tool.handleUpdate("researcher", "1", "done", "")
@@ -487,8 +487,8 @@ func TestTodoToolHandleUpdatePreventDoneToAny(t *testing.T) {
 
 	tool := &todoTool{coordinator: c}
 
-	c.SetCurrentAgent("researcher")
-	c.SetCurrentTodoID("1")
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1"})
 
 	resp, err := tool.handleUpdate("researcher", "1", "in_progress", "")
 	if err != nil {
@@ -529,8 +529,8 @@ func TestTodoToolHandleUpdatePreventErrorToDoneDup(t *testing.T) {
 
 	tool := &todoTool{coordinator: c}
 
-	c.SetCurrentAgent("researcher")
-	c.SetCurrentTodoID("1")
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1"})
 
 	// TaskError -> TaskDone should be blocked (not a valid retry)
 	resp, err := tool.handleUpdate("researcher", "1", "done", "")
@@ -569,8 +569,8 @@ func TestTodoToolHandleUpdatePreventSkippedToAny(t *testing.T) {
 
 	tool := &todoTool{coordinator: c}
 
-	c.SetCurrentAgent("researcher")
-	c.SetCurrentTodoID("1")
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1"})
 
 	resp, err := tool.handleUpdate("researcher", "1", "in_progress", "")
 	if err != nil {

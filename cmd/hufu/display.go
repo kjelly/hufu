@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,6 +19,7 @@ import (
 	"github.com/anomalyco/hufu/internal/team"
 	"github.com/anomalyco/hufu/internal/tools"
 	tuipkg "github.com/anomalyco/hufu/internal/tui"
+	hulog "github.com/anomalyco/hufu/internal/log"
 	"github.com/anomalyco/hufu/internal/utils"
 )
 
@@ -132,6 +132,267 @@ func init() {
 			sd.refreshIfDirty()
 		}
 	})
+}
+
+
+// Shared status event dispatch — eliminates ~150 lines of duplication between
+// setupStatusReporter and makeFileReporter.
+
+// statusWriter is satisfied by both lineWriter and fileWriter.
+type statusWriter interface {
+	write(string)
+}
+
+// reporterState holds mutable text-buffering state shared by all status reporters.
+type reporterState struct {
+	currentAgent string
+	textBuf      string
+}
+
+// dispatchStatusEvent renders a single StatusEvent to w, updating state in-place.
+// Returns true when the event type was handled (written to w). Callers should
+// handle unrecognized event types themselves.
+func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEvent) {
+	switch event.Type {
+	case "start":
+		if st.currentAgent != "" && st.textBuf != "" {
+			w.write(flushText(st.currentAgent, st.textBuf))
+			st.textBuf = ""
+		}
+		st.currentAgent = event.Agent
+		w.write(fmt.Sprintf("\n%s %s %s\n",
+			headerStyle.Render("▶"),
+			formatAgentLabel(event),
+			dimStyle.Render("— "+event.Message),
+		))
+
+	case "step":
+		label := event.Message
+		if event.Step > 0 {
+			label = fmt.Sprintf("step %d", event.Step)
+		}
+		w.write(fmt.Sprintf("  %s %s\n",
+			stepStyle.Render("│"),
+			stepStyle.Render(label),
+		))
+
+	case "tool_call":
+		if st.textBuf != "" {
+			w.write(flushText(st.currentAgent, st.textBuf))
+			st.textBuf = ""
+		}
+		argsPreview := formatToolArgs(event.ToolName, event.ToolArgs)
+		w.write(fmt.Sprintf("  %s %s %s %s\n",
+			toolStyle.Render("⟹"),
+			formatAgentLabel(event),
+			toolStyle.Render("›"),
+			toolStyle.Render(event.ToolName),
+		))
+		if argsPreview != "" {
+			if strings.Contains(argsPreview, "\n") {
+				for _, line := range strings.Split(argsPreview, "\n") {
+					w.write(fmt.Sprintf("    %s\n", dimStyle.Render(line)))
+				}
+			} else {
+				w.write(fmt.Sprintf("    %s\n", dimStyle.Render(argsPreview)))
+			}
+		}
+
+	case "tool_result":
+		resultLine := ""
+		if event.ToolResult != "" {
+			lines := strings.Split(event.ToolResult, "\n")
+			maxLines := 3
+			if len(lines) > maxLines {
+				resultLine = strings.Join(lines[:maxLines], "\n    ") + fmt.Sprintf("  ... (%d more lines)", len(lines)-maxLines)
+			} else {
+				resultLine = strings.Join(lines, "\n    ")
+			}
+			w.write(fmt.Sprintf("  %s %s %s %s\n    %s\n",
+				doneStyle.Render("✓"),
+				formatAgentLabel(event),
+				toolStyle.Render("›"),
+				toolStyle.Render(event.ToolName),
+				resultStyle.Render(utils.TruncatePreview(resultLine, 200)),
+			))
+		} else {
+			w.write(fmt.Sprintf("  %s %s %s %s\n",
+				doneStyle.Render("✓"),
+				formatAgentLabel(event),
+				toolStyle.Render("›"),
+				toolStyle.Render(event.ToolName),
+			))
+		}
+
+	case "text":
+		st.textBuf += event.Message
+
+	case "done":
+		if st.textBuf != "" {
+			w.write(flushText(st.currentAgent, st.textBuf))
+			st.textBuf = ""
+		}
+		timingStr := ""
+		if event.Duration > 0 {
+			timingStr = formatTimingBreakdown(event.Duration, event.ModelTime, event.ToolTime)
+		}
+		if timingStr != "" {
+			w.write(fmt.Sprintf("%s %s %s %s\n",
+				doneStyle.Render("✓"),
+				formatAgentLabel(event),
+				doneStyle.Render("done"),
+				dimStyle.Render(timingStr),
+			))
+		} else {
+			w.write(fmt.Sprintf("%s %s %s\n",
+				doneStyle.Render("✓"),
+				formatAgentLabel(event),
+				doneStyle.Render("done"),
+			))
+		}
+		st.currentAgent = ""
+
+	case "wrap_up_phase":
+		if st.textBuf != "" {
+			w.write(flushText(st.currentAgent, st.textBuf))
+			st.textBuf = ""
+		}
+		w.write(fmt.Sprintf("\n%s %s\n\n",
+			wrapUpStyle.Render("⏹"),
+			boldStyle.Render(strings.ToUpper(event.Message+"...")),
+		))
+
+	case "error":
+		if st.textBuf != "" {
+			w.write(flushText(st.currentAgent, st.textBuf))
+			st.textBuf = ""
+		}
+		timingStr := ""
+		if event.Duration > 0 {
+			timingStr = formatTimingBreakdown(event.Duration, event.ModelTime, event.ToolTime)
+		}
+		if timingStr != "" {
+			w.write(fmt.Sprintf("%s %s: %s %s\n",
+				errStyle.Render("✗"),
+				formatAgentLabel(event),
+				errStyle.Render(event.Message),
+				dimStyle.Render(timingStr),
+			))
+		} else {
+			w.write(fmt.Sprintf("%s %s: %s\n",
+				errStyle.Render("✗"),
+				formatAgentLabel(event),
+				errStyle.Render(event.Message),
+			))
+		}
+
+	case "plan_approved":
+		w.write(fmt.Sprintf("%s %s\n",
+			doneStyle.Render("✓"),
+			dimStyle.Render(event.Message),
+		))
+
+	case "loop_warning":
+		if st.textBuf != "" {
+			w.write(flushText(st.currentAgent, st.textBuf))
+			st.textBuf = ""
+		}
+		w.write(fmt.Sprintf("%s %s\n",
+			errStyle.Render("⚠ LOOP"),
+			errStyle.Render(event.Message),
+		))
+
+	case "sidecar_call":
+		if st.textBuf != "" {
+			w.write(flushText(st.currentAgent, st.textBuf))
+			st.textBuf = ""
+		}
+		label := "sidecar"
+		if event.Agent != "" {
+			label = fmt.Sprintf("sidecar/%s", event.Agent)
+		}
+		msg := event.Message
+		if msg == "summarize" {
+			msg = "summarizing output"
+		}
+		w.write(fmt.Sprintf("%s %s %s\n",
+			dimStyle.Render("⟐"),
+			dimStyle.Render(label),
+			dimStyle.Render(msg),
+		))
+
+	case "cache_hit":
+		if st.textBuf != "" {
+			w.write(flushText(st.currentAgent, st.textBuf))
+			st.textBuf = ""
+		}
+		w.write(fmt.Sprintf("%s %s %s %s\n",
+			dimStyle.Render("⟐"),
+			agentStyle.Render(event.Agent),
+			doneStyle.Render("✓ cached"),
+			dimStyle.Render(utils.TruncateLine(event.Message, 60)),
+		))
+
+	case "skill_auto_loaded":
+		if st.textBuf != "" {
+			w.write(flushText(st.currentAgent, st.textBuf))
+			st.textBuf = ""
+		}
+		w.write(fmt.Sprintf("%s %s auto-loaded: %s\n",
+			dimStyle.Render("⟐"),
+			agentStyle.Render(event.Agent),
+			doneStyle.Render(event.SkillName),
+		))
+
+	case "think_skills":
+		w.write(fmt.Sprintf("%s %s\n",
+			thinkStyle.Render("💭 skills"),
+			dimStyle.Render(event.Message),
+		))
+
+	case "think_skill_detail":
+		w.write(fmt.Sprintf("%s   %s — %s\n",
+			thinkStyle.Render("💭"),
+			agentStyle.Render(event.Agent),
+			dimStyle.Render(utils.TruncateLine(event.Message, 80)),
+		))
+
+	case "think_agents":
+		w.write(fmt.Sprintf("%s %s\n",
+			thinkStyle.Render("💭 agents"),
+			dimStyle.Render(event.Message),
+		))
+
+	case "think_prompt":
+		w.write(fmt.Sprintf("%s %s\n",
+			thinkStyle.Render("💭 prompt"),
+			dimStyle.Render(event.Message),
+		))
+
+	case "think_prompt_dump":
+		w.write(fmt.Sprintf("%s %s\n",
+			thinkStyle.Render("💭 prompt"),
+			dimStyle.Render(event.Message),
+		))
+
+	case "think_delegation":
+		w.write(fmt.Sprintf("%s %s\n",
+			thinkStyle.Render("💭 delegate"),
+			dimStyle.Render(event.Message),
+		))
+
+	case "think_sidecar":
+		w.write(fmt.Sprintf("%s %s\n",
+			thinkStyle.Render("💭 sidecar"),
+			dimStyle.Render(event.Message),
+		))
+
+	case "think_text":
+		w.write(fmt.Sprintf("%s %s",
+			thinkStyle.Render("💭"),
+			thinkStyle.Render(event.Message),
+		))
+	}
 }
 
 type lineWriter struct {
@@ -281,8 +542,7 @@ func formatAgentLabel(event team.StatusEvent) string {
 
 func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp *taskDisplay, skillDisp *skillDisplay, idleTimer *idleWarningTimer, notifier *notify.Notifier) {
 	var mu sync.Mutex
-	currentAgent := ""
-	textBuf := ""
+	st := reporterState{}
 
 	coordinator.SetStatusReporter(func(event team.StatusEvent) {
 		mu.Lock()
@@ -297,258 +557,24 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 			idleTimer.SetModel(event.Model)
 		}
 
+		// Handle events that are unique to the interactive reporter.
 		switch event.Type {
-		case "start":
-			if currentAgent != "" && textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			currentAgent = event.Agent
-			w.write(fmt.Sprintf("\n%s %s %s\n",
-				headerStyle.Render("▶"),
-				formatAgentLabel(event),
-				dimStyle.Render("— "+event.Message),
-			))
-			taskDisp.update()
-
-		case "step":
-			label := event.Message
-			if event.Step > 0 {
-				label = fmt.Sprintf("step %d", event.Step)
-			}
-			w.write(fmt.Sprintf("  %s %s\n",
-				stepStyle.Render("│"),
-				stepStyle.Render(label),
-			))
-
-		case "tool_call":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			argsPreview := formatToolArgs(event.ToolName, event.ToolArgs)
-			icon := "⟹"
-			w.write(fmt.Sprintf("  %s %s %s %s\n",
-				toolStyle.Render(icon),
-				formatAgentLabel(event),
-				toolStyle.Render("›"),
-				toolStyle.Render(event.ToolName),
-			))
-			if argsPreview != "" {
-				if strings.Contains(argsPreview, "\n") {
-					for _, line := range strings.Split(argsPreview, "\n") {
-						w.write(fmt.Sprintf("    %s\n", dimStyle.Render(line)))
-					}
-				} else {
-					w.write(fmt.Sprintf("    %s\n", dimStyle.Render(argsPreview)))
-				}
-			}
-
-		case "tool_result":
-			resultLine := ""
-			if event.ToolResult != "" {
-				lines := strings.Split(event.ToolResult, "\n")
-				maxLines := 3
-				if len(lines) > maxLines {
-					resultLine = strings.Join(lines[:maxLines], "\n    ") + fmt.Sprintf("  ... (%d more lines)", len(lines)-maxLines)
-				} else {
-					resultLine = strings.Join(lines, "\n    ")
-				}
-				w.write(fmt.Sprintf("  %s %s %s %s\n    %s\n",
-					doneStyle.Render("✓"),
-					formatAgentLabel(event),
-					toolStyle.Render("›"),
-					toolStyle.Render(event.ToolName),
-					resultStyle.Render(utils.TruncatePreview(resultLine, 200)),
-				))
-			} else {
-				w.write(fmt.Sprintf("  %s %s %s %s\n",
-					doneStyle.Render("✓"),
-					formatAgentLabel(event),
-					toolStyle.Render("›"),
-					toolStyle.Render(event.ToolName),
-				))
-			}
-
-		case "text":
-			textBuf += event.Message
-
-		case "done":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			timingStr := ""
-			if event.Duration > 0 {
-				timingStr = formatTimingBreakdown(event.Duration, event.ModelTime, event.ToolTime)
-			}
-			if timingStr != "" {
-				w.write(fmt.Sprintf("%s %s %s %s\n",
-					doneStyle.Render("✓"),
-					formatAgentLabel(event),
-					doneStyle.Render("done"),
-					dimStyle.Render(timingStr),
-				))
-			} else {
-				w.write(fmt.Sprintf("%s %s %s\n",
-					doneStyle.Render("✓"),
-					formatAgentLabel(event),
-					doneStyle.Render("done"),
-				))
-			}
-			currentAgent = ""
-			taskDisp.update()
-
-		case "wrap_up_phase":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			w.write(fmt.Sprintf("\n%s %s\n\n",
-				wrapUpStyle.Render("⏹"),
-				boldStyle.Render(strings.ToUpper(event.Message+"...")),
-			))
-
-		case "error":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			timingStr := ""
-			if event.Duration > 0 {
-				timingStr = formatTimingBreakdown(event.Duration, event.ModelTime, event.ToolTime)
-			}
-			if timingStr != "" {
-				w.write(fmt.Sprintf("%s %s: %s %s\n",
-					errStyle.Render("✗"),
-					formatAgentLabel(event),
-					errStyle.Render(event.Message),
-					dimStyle.Render(timingStr),
-				))
-			} else {
-				w.write(fmt.Sprintf("%s %s: %s\n",
-					errStyle.Render("✗"),
-					formatAgentLabel(event),
-					errStyle.Render(event.Message),
-				))
-			}
-			taskDisp.update()
-
 		case "todos_updated":
 			taskDisp.update()
-
-		case "plan_approved":
-			w.write(fmt.Sprintf("%s %s\n",
-				doneStyle.Render("✓"),
-				dimStyle.Render(event.Message),
-			))
-
+			return
 		case "skill_used":
 			if skillDisp != nil {
 				skillDisp.record(event.SkillName, event.Agent)
 				skillDisp.update()
 			}
+			return
+		}
 
-		case "loop_warning":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			w.write(fmt.Sprintf("%s %s\n",
-				errStyle.Render("⚠ LOOP"),
-				errStyle.Render(event.Message),
-			))
+		dispatchStatusEvent(w, &st, event)
 
-		case "sidecar_call":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			label := "sidecar"
-			if event.Agent != "" {
-				label = fmt.Sprintf("sidecar/%s", event.Agent)
-			}
-			msg := event.Message
-			if msg == "summarize" {
-				msg = "summarizing output"
-			}
-			w.write(fmt.Sprintf("%s %s %s\n",
-				dimStyle.Render("⟐"),
-				dimStyle.Render(label),
-				dimStyle.Render(msg),
-			))
-
-		case "cache_hit":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			w.write(fmt.Sprintf("%s %s %s %s\n",
-				dimStyle.Render("⟐"),
-				agentStyle.Render(event.Agent),
-				doneStyle.Render("✓ cached"),
-				dimStyle.Render(utils.TruncateLine(event.Message, 60)),
-			))
-
-		case "skill_auto_loaded":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			w.write(fmt.Sprintf("%s %s auto-loaded: %s\n",
-				dimStyle.Render("⟐"),
-				agentStyle.Render(event.Agent),
-				doneStyle.Render(event.SkillName),
-			))
-
-		case "think_skills":
-			w.write(fmt.Sprintf("%s %s\n",
-				thinkStyle.Render("💭 skills"),
-				dimStyle.Render(event.Message),
-			))
-
-		case "think_skill_detail":
-			w.write(fmt.Sprintf("%s   %s — %s\n",
-				thinkStyle.Render("💭"),
-				agentStyle.Render(event.Agent),
-				dimStyle.Render(utils.TruncateLine(event.Message, 80)),
-			))
-
-		case "think_agents":
-			w.write(fmt.Sprintf("%s %s\n",
-				thinkStyle.Render("💭 agents"),
-				dimStyle.Render(event.Message),
-			))
-
-		case "think_prompt":
-			w.write(fmt.Sprintf("%s %s\n",
-				thinkStyle.Render("💭 prompt"),
-				dimStyle.Render(event.Message),
-			))
-
-		case "think_prompt_dump":
-			w.write(fmt.Sprintf("%s %s\n",
-				thinkStyle.Render("💭 prompt"),
-				dimStyle.Render(event.Message),
-			))
-
-		case "think_delegation":
-			w.write(fmt.Sprintf("%s %s\n",
-				thinkStyle.Render("💭 delegate"),
-				dimStyle.Render(event.Message),
-			))
-
-		case "think_sidecar":
-			w.write(fmt.Sprintf("%s %s\n",
-				thinkStyle.Render("💭 sidecar"),
-				dimStyle.Render(event.Message),
-			))
-
-		case "think_text":
-			w.write(fmt.Sprintf("%s %s",
-				thinkStyle.Render("💭"),
-				thinkStyle.Render(event.Message),
-			))
+		// After certain events, refresh the task display.
+		if event.Type == "start" || event.Type == "done" || event.Type == "error" {
+			taskDisp.update()
 		}
 	})
 }
@@ -576,245 +602,12 @@ func newFileWriter(f *os.File) *fileWriter {
 func makeFileReporter(f *os.File) team.StatusReporter {
 	var mu sync.Mutex
 	w := newFileWriter(f)
-	currentAgent := ""
-	textBuf := ""
+	st := reporterState{}
 
 	return func(event team.StatusEvent) {
 		mu.Lock()
 		defer mu.Unlock()
-		switch event.Type {
-		case "start":
-			if currentAgent != "" && textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			currentAgent = event.Agent
-			w.write(fmt.Sprintf("\n%s %s %s\n",
-				headerStyle.Render("▶"),
-				formatAgentLabel(event),
-				dimStyle.Render("— "+event.Message),
-			))
-
-		case "step":
-			label := event.Message
-			if event.Step > 0 {
-				label = fmt.Sprintf("step %d", event.Step)
-			}
-			w.write(fmt.Sprintf("  %s %s\n",
-				stepStyle.Render("│"),
-				stepStyle.Render(label),
-			))
-
-		case "tool_call":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			argsPreview := formatToolArgs(event.ToolName, event.ToolArgs)
-			w.write(fmt.Sprintf("  %s %s %s %s\n",
-				toolStyle.Render("⟹"),
-				formatAgentLabel(event),
-				toolStyle.Render("›"),
-				toolStyle.Render(event.ToolName),
-			))
-			if argsPreview != "" {
-				if strings.Contains(argsPreview, "\n") {
-					for _, line := range strings.Split(argsPreview, "\n") {
-						w.write(fmt.Sprintf("    %s\n", dimStyle.Render(line)))
-					}
-				} else {
-					w.write(fmt.Sprintf("    %s\n", dimStyle.Render(argsPreview)))
-				}
-			}
-
-		case "tool_result":
-			resultLine := ""
-			if event.ToolResult != "" {
-				lines := strings.Split(event.ToolResult, "\n")
-				maxLines := 3
-				if len(lines) > maxLines {
-					resultLine = strings.Join(lines[:maxLines], "\n    ") + fmt.Sprintf("  ... (%d more lines)", len(lines)-maxLines)
-				} else {
-					resultLine = strings.Join(lines, "\n    ")
-				}
-				w.write(fmt.Sprintf("  %s %s %s %s\n    %s\n",
-					doneStyle.Render("✓"),
-					formatAgentLabel(event),
-					toolStyle.Render("›"),
-					toolStyle.Render(event.ToolName),
-					resultStyle.Render(utils.TruncatePreview(resultLine, 200)),
-				))
-			} else {
-				w.write(fmt.Sprintf("  %s %s %s %s\n",
-					doneStyle.Render("✓"),
-					formatAgentLabel(event),
-					toolStyle.Render("›"),
-					toolStyle.Render(event.ToolName),
-				))
-			}
-
-		case "text":
-			textBuf += event.Message
-
-		case "done":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			timingStr := ""
-			if event.Duration > 0 {
-				timingStr = formatTimingBreakdown(event.Duration, event.ModelTime, event.ToolTime)
-			}
-			if timingStr != "" {
-				w.write(fmt.Sprintf("%s %s %s %s\n",
-					doneStyle.Render("✓"),
-					formatAgentLabel(event),
-					doneStyle.Render("done"),
-					dimStyle.Render(timingStr),
-				))
-			} else {
-				w.write(fmt.Sprintf("%s %s %s\n",
-					doneStyle.Render("✓"),
-					formatAgentLabel(event),
-					doneStyle.Render("done"),
-				))
-			}
-			currentAgent = ""
-
-		case "wrap_up_phase":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			w.write(fmt.Sprintf("\n%s %s\n\n",
-				wrapUpStyle.Render("⏹"),
-				boldStyle.Render(strings.ToUpper(event.Message+"...")),
-			))
-
-		case "error":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			timingStr := ""
-			if event.Duration > 0 {
-				timingStr = formatTimingBreakdown(event.Duration, event.ModelTime, event.ToolTime)
-			}
-			if timingStr != "" {
-				w.write(fmt.Sprintf("%s %s: %s %s\n",
-					errStyle.Render("✗"),
-					formatAgentLabel(event),
-					errStyle.Render(event.Message),
-					dimStyle.Render(timingStr),
-				))
-			} else {
-				w.write(fmt.Sprintf("%s %s: %s\n",
-					errStyle.Render("✗"),
-					formatAgentLabel(event),
-					errStyle.Render(event.Message),
-				))
-			}
-
-		case "plan_approved":
-			w.write(fmt.Sprintf("%s %s\n",
-				doneStyle.Render("✓"),
-				dimStyle.Render(event.Message),
-			))
-
-		case "loop_warning":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			w.write(fmt.Sprintf("%s %s\n",
-				errStyle.Render("⚠ LOOP"),
-				errStyle.Render(event.Message),
-			))
-
-		case "sidecar_call":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			label := "sidecar"
-			if event.Agent != "" {
-				label = fmt.Sprintf("sidecar/%s", event.Agent)
-			}
-			msg := event.Message
-			if msg == "summarize" {
-				msg = "summarizing output"
-			}
-			w.write(fmt.Sprintf("%s %s %s\n",
-				dimStyle.Render("⟐"),
-				dimStyle.Render(label),
-				dimStyle.Render(msg),
-			))
-
-		case "cache_hit":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			w.write(fmt.Sprintf("%s %s %s %s\n",
-				dimStyle.Render("⟐"),
-				agentStyle.Render(event.Agent),
-				doneStyle.Render("✓ cached"),
-				dimStyle.Render(utils.TruncateLine(event.Message, 60)),
-			))
-
-		case "skill_auto_loaded":
-			if textBuf != "" {
-				w.write(flushText(currentAgent, textBuf))
-				textBuf = ""
-			}
-			w.write(fmt.Sprintf("%s %s auto-loaded: %s\n",
-				dimStyle.Render("⟐"),
-				agentStyle.Render(event.Agent),
-				doneStyle.Render(event.SkillName),
-			))
-
-		case "think_skills":
-			w.write(fmt.Sprintf("%s %s\n",
-				thinkStyle.Render("💭 skills"),
-				dimStyle.Render(event.Message),
-			))
-		case "think_skill_detail":
-			w.write(fmt.Sprintf("%s   %s — %s\n",
-				thinkStyle.Render("💭"),
-				agentStyle.Render(event.Agent),
-				dimStyle.Render(utils.TruncateLine(event.Message, 80)),
-			))
-		case "think_agents":
-			w.write(fmt.Sprintf("%s %s\n",
-				thinkStyle.Render("💭 agents"),
-				dimStyle.Render(event.Message),
-			))
-		case "think_prompt":
-			w.write(fmt.Sprintf("%s %s\n",
-				thinkStyle.Render("💭 prompt"),
-				dimStyle.Render(event.Message),
-			))
-		case "think_prompt_dump":
-			w.write(fmt.Sprintf("%s %s\n",
-				thinkStyle.Render("💭 prompt"),
-				dimStyle.Render(event.Message),
-			))
-		case "think_delegation":
-			w.write(fmt.Sprintf("%s %s\n",
-				thinkStyle.Render("💭 delegate"),
-				dimStyle.Render(event.Message),
-			))
-		case "think_sidecar":
-			w.write(fmt.Sprintf("%s %s\n",
-				thinkStyle.Render("💭 sidecar"),
-				dimStyle.Render(event.Message),
-			))
-		case "think_text":
-			w.write(fmt.Sprintf("%s %s",
-				thinkStyle.Render("💭"),
-				thinkStyle.Render(event.Message),
-			))
-		}
+		dispatchStatusEvent(w, &st, event)
 	}
 }
 
@@ -1063,7 +856,7 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 		logPath := filepath.Join(tc.session.Workspace, "execution_trace.log")
 		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err != nil {
-			log.Printf("warning: cannot create session log %q: %v", logPath, err)
+			hulog.Printf("warning: cannot create session log %q: %v", logPath, err)
 		}
 		fileRep := makeFileReporter(logFile)
 
@@ -1475,17 +1268,19 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 	}, tt.stopAll
 }
 
-// stderrLog writes to stderr only when the TUI is not active (avoids garbling
-// the altscreen with progress lines while the TUI is running).
+// stderrLog writes to stderr only when the TUI is not active. It is a thin
+// wrapper around internal/log that preserves the historical call signature.
+// All callers should prefer internal/log directly in new code; this wrapper
+// exists only to avoid touching every existing call site.
 func stderrLog(format string, args ...any) {
-	// --quiet and JSON output suppress human-facing status chatter so stdout
-	// carries only the result; errors still go to stderr via their own paths.
-	if quietMode || outputFormat == "json" {
-		return
-	}
-	if activeTUIProgram.Load() == nil {
-		fmt.Fprintf(os.Stderr, format, args...)
-	}
+	hulog.Printf(format, args...)
+}
+
+// syncLogState pushes the current quiet/JSON/TUI state to internal/log so
+// any internal/* package that logs through it stays in sync with the CLI.
+func syncLogState() {
+	hulog.SetQuiet(quietMode || outputFormat == "json")
+	hulog.SetTUIActive(activeTUIProgram.Load() != nil)
 }
 
 // runWithTUI starts executeSegments in a goroutine and blocks on the Bubble Tea
@@ -1495,7 +1290,9 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithoutSignalHandler())
 
 	activeTUIProgram.Store(p)
+	syncLogState()
 	defer activeTUIProgram.Store(nil)
+	defer syncLogState()
 
 	if injector != nil {
 		promptCh := model.PromptInjectCh
@@ -1513,7 +1310,7 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 		for range wrapUpCh {
 			wrapUpCount++
 			if wrapUpCount == 1 {
-				if c := activeCoord.Get(); c != nil {
+				if c := activeCoord.Load(); c != nil {
 					c.SetWrapUp()
 				}
 				if injector != nil {

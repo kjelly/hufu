@@ -2,6 +2,7 @@ package yamlutil
 
 import (
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -49,4 +50,29 @@ func FlattenYAMLBytes(data []byte, path string) (map[string]string, error) {
 		return nil, fmt.Errorf("failed to process YAML %s: %w", path, err)
 	}
 	return result, nil
+}
+
+// ParseSimpleYAML reads key: value lines from data, ignoring comments and blank lines.
+// Used as a fallback parser when go-yaml.v3 fails on simple frontmatter.
+func ParseSimpleYAML(data string) map[string]string {
+	result := map[string]string{}
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		i := strings.Index(line, ":")
+		if i <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:i])
+		val := strings.TrimSpace(line[i+1:])
+		if len(val) >= 2 &&
+			((val[0] == '"' && val[len(val)-1] == '"') ||
+				(val[0] == '\'' && val[len(val)-1] == '\'')) {
+			val = val[1 : len(val)-1]
+		}
+		result[key] = val
+	}
+	return result
 }
