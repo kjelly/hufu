@@ -10,14 +10,15 @@ import (
 
 	"os/exec"
 
-	"charm.land/fantasy"
 	"encoding/json"
+	"path/filepath"
+
+	"charm.land/fantasy"
+
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/tools"
 	"github.com/anomalyco/hufu/internal/utils"
-	"path/filepath"
 )
-
 
 type runAgentsTool struct {
 	coordToolBase
@@ -42,8 +43,6 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 		Required: []string{"tasks"},
 	}
 }
-
-
 
 func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
@@ -86,8 +85,6 @@ func (t *finishTool) Info() fantasy.ToolInfo {
 		Required: []string{"response"},
 	}
 }
-
-
 
 func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
@@ -241,8 +238,6 @@ func (t *loadSkillTool) Info() fantasy.ToolInfo {
 	}
 }
 
-
-
 func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
 		Name string `json:"name"`
@@ -307,8 +302,6 @@ func (t *requestAgentTool) Info() fantasy.ToolInfo {
 		Required: []string{"goal"},
 	}
 }
-
-
 
 func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
@@ -515,8 +508,6 @@ func (t *todoTool) Info() fantasy.ToolInfo {
 		Required: []string{"action"},
 	}
 }
-
-
 
 func (t *todoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
@@ -733,8 +724,6 @@ func (t *submitPlanTool) Info() fantasy.ToolInfo {
 	}
 }
 
-
-
 func (t *submitPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
 		Plan string `json:"plan"`
@@ -788,8 +777,6 @@ func (t *stmWriteTool) Info() fantasy.ToolInfo {
 		Required: []string{"content"},
 	}
 }
-
-
 
 func (t *stmWriteTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
@@ -867,8 +854,6 @@ func (t *ltmUpdateTool) Info() fantasy.ToolInfo {
 	}
 }
 
-
-
 func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
 		Content string `json:"content"`
@@ -934,8 +919,6 @@ func (t *approvePlanTool) Info() fantasy.ToolInfo {
 		Required: []string{"todo_id"},
 	}
 }
-
-
 
 func (t *approvePlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
@@ -1003,8 +986,6 @@ func (t *modifyPlanTool) Info() fantasy.ToolInfo {
 		Required: []string{"todo_id", "plan"},
 	}
 }
-
-
 
 func (t *modifyPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {

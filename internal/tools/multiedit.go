@@ -207,16 +207,16 @@ func buildMultiEditResult(filePath, oldContent, newContent string, appliedCount 
 	if oldContent != "" {
 		normalizedOld := strings.ReplaceAll(oldContent, "\r\n", "\n")
 		diff := udiff.Unified(filePath, filePath, normalizedOld, newContent)
-		b.WriteString(fmt.Sprintf("Applied %d edit(s) to %s\n", appliedCount, filePath))
+		fmt.Fprintf(&b, "Applied %d edit(s) to %s\n", appliedCount, filePath)
 		b.WriteString(diff)
 	} else {
-		b.WriteString(fmt.Sprintf("Created %s with %d edit(s)\n", filePath, appliedCount))
+		fmt.Fprintf(&b, "Created %s with %d edit(s)\n", filePath, appliedCount)
 	}
 
 	if len(failed) > 0 {
-		b.WriteString(fmt.Sprintf("\n%d edit(s) failed:\n", len(failed)))
+		fmt.Fprintf(&b, "\n%d edit(s) failed:\n", len(failed))
 		for _, f := range failed {
-			b.WriteString(fmt.Sprintf("  - edits[%d]: %s\n", f.Index, f.Error))
+			fmt.Fprintf(&b, "  - edits[%d]: %s\n", f.Index, f.Error)
 		}
 	}
 

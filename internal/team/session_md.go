@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/anomalyco/hufu/internal/utils"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 const sessionMDFile = "chat_history.md"
@@ -33,16 +34,16 @@ func GenerateSessionMD(sd *SessionData, teamName string) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("# Session — %s\n\n", teamName))
-	b.WriteString(fmt.Sprintf("**Started:** %s  \n", sd.CreatedAt))
-	b.WriteString(fmt.Sprintf("**Last activity:** %s  \n", sd.UpdatedAt))
-	b.WriteString(fmt.Sprintf("**Rounds:** %d  \n", sd.Rounds))
-	b.WriteString(fmt.Sprintf("**Exchanges:** %d\n\n", len(sd.Entries)))
+	fmt.Fprintf(&b, "# Session — %s\n\n", teamName)
+	fmt.Fprintf(&b, "**Started:** %s  \n", sd.CreatedAt)
+	fmt.Fprintf(&b, "**Last activity:** %s  \n", sd.UpdatedAt)
+	fmt.Fprintf(&b, "**Rounds:** %d  \n", sd.Rounds)
+	fmt.Fprintf(&b, "**Exchanges:** %d\n\n", len(sd.Entries))
 	b.WriteString("---\n\n")
 	for i, entry := range sd.Entries {
 		if i >= maxSessionEntries {
 			remaining := len(sd.Entries) - i
-			b.WriteString(fmt.Sprintf("*... %d earlier exchanges omitted*\n\n", remaining))
+			fmt.Fprintf(&b, "*... %d earlier exchanges omitted*\n\n", remaining)
 			break
 		}
 		role := "🧑 User"
@@ -50,9 +51,9 @@ func GenerateSessionMD(sd *SessionData, teamName string) string {
 			role = "🤖 Coordinator"
 		}
 		content := utils.TruncateRunes(entry.Content, 1000)
-		b.WriteString(fmt.Sprintf("### %s", role))
+		fmt.Fprintf(&b, "### %s", role)
 		if entry.Timestamp != "" {
-			b.WriteString(fmt.Sprintf(" (%s)", entry.Timestamp))
+			fmt.Fprintf(&b, " (%s)", entry.Timestamp)
 		}
 		b.WriteString("\n\n")
 		b.WriteString(content)

@@ -194,7 +194,7 @@ func formatTree(root string, entries []fileEntry) string {
 		if e.isDir {
 			name += "/"
 		}
-		b.WriteString(fmt.Sprintf("%s- %s\n", indent, name))
+		fmt.Fprintf(&b, "%s- %s\n", indent, name)
 	}
 
 	return strings.TrimRight(b.String(), "\n")

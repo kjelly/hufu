@@ -42,10 +42,10 @@ func formatMessagePart(part fantasy.MessagePart) string {
 
 func llmLogRequest(logWrite func(string), opts fantasy.PrepareStepFunctionOptions) {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("[%s] === REQUEST step=%d model=%s ===\n",
-		time.Now().Format(time.RFC3339), opts.StepNumber, opts.Model.Model()))
+	fmt.Fprintf(&b, "[%s] === REQUEST step=%d model=%s ===\n",
+		time.Now().Format(time.RFC3339), opts.StepNumber, opts.Model.Model())
 	for _, msg := range opts.Messages {
-		b.WriteString(fmt.Sprintf("[%s] ", msg.Role))
+		fmt.Fprintf(&b, "[%s] ", msg.Role)
 		for _, part := range msg.Content {
 			b.WriteString(formatMessagePart(part))
 		}

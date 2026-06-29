@@ -2012,7 +2012,7 @@ func (m Model) infoPanelView() string {
 		b.WriteString(doneStyle.Render("✓") + " " + boldStyle.Render("Memory: "))
 		b.WriteString("enabled")
 		if info.MemoryModel != "" {
-			b.WriteString(fmt.Sprintf(" (model: %s)", info.MemoryModel))
+			fmt.Fprintf(&b, " (model: %s)", info.MemoryModel)
 		}
 		b.WriteString("\n")
 	}
@@ -2037,7 +2037,7 @@ func (m Model) infoPanelView() string {
 
 	if info.SSHSessions > 0 {
 		b.WriteString(boldStyle.Render("SSH:     "))
-		b.WriteString(fmt.Sprintf("%d active session(s)\n", info.SSHSessions))
+		fmt.Fprintf(&b, "%d active session(s)\n", info.SSHSessions)
 	}
 
 	b.WriteString("\n" + dimStyle.Render("esc close"))

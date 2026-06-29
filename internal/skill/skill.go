@@ -118,29 +118,6 @@ func parseSkillYAML(data string) map[string]string {
 	return yamlutil.ParseSimpleYAML(data)
 }
 
-func parseSimpleYAML(data string) map[string]string {
-	result := map[string]string{}
-	for _, line := range strings.Split(data, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		i := strings.Index(line, ":")
-		if i <= 0 {
-			continue
-		}
-		key := strings.TrimSpace(line[:i])
-		val := strings.TrimSpace(line[i+1:])
-		if len(val) >= 2 &&
-			((val[0] == '"' && val[len(val)-1] == '"') ||
-				(val[0] == '\'' && val[len(val)-1] == '\'')) {
-			val = val[1 : len(val)-1]
-		}
-		result[key] = val
-	}
-	return result
-}
-
 // DiscoverSkills scans the given directories for SKILL.md files.
 // When includeDrafts is true, the `drafts/` subdirectory of each dir is
 // also scanned; discovered drafts are marked with SkillDef.Draft=true.

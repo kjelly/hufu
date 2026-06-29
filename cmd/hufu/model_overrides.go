@@ -54,39 +54,6 @@ func applyCLIModelOverrides(cfg *agent.TeamConfig, overrides ModelCLIOverrides) 
 	}
 }
 
-// applyOverridesToAgents propagates team-level config overrides to every
-// agent in the session. Agents built with stale Generation values from
-// LoadTeam/LoadDefaultTime inherit the new values here.
-func applyOverridesToAgents(session interface {
-	GetConfig() agent.TeamConfig
-	GetAgents() map[string]*agent.AgentDef
-}) {
-	cfg := session.GetConfig()
-	for _, def := range session.GetAgents() {
-		if def == nil {
-			continue
-		}
-		if cfg.Generation.Model != "" {
-			def.Generation.Model = cfg.Generation.Model
-		}
-		if cfg.Generation.Temperature != "" {
-			def.Generation.Temperature = cfg.Generation.Temperature
-		}
-		if cfg.Generation.MaxTokens != "" {
-			def.Generation.MaxTokens = cfg.Generation.MaxTokens
-		}
-		if cfg.Generation.TopP != "" {
-			def.Generation.TopP = cfg.Generation.TopP
-		}
-		if cfg.Generation.TopK != "" {
-			def.Generation.TopK = cfg.Generation.TopK
-		}
-		if cfg.ProviderURL != "" {
-			def.ProviderURL = cfg.ProviderURL
-		}
-	}
-}
-
 // currentModelOverrides returns the live CLI flag values as a
 // ModelCLIOverrides struct. Flags that were not set on the command line
 // stay empty, signalling "no override" to applyCLIModelOverrides.

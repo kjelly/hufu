@@ -497,14 +497,15 @@ func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 				var askResp askResponseType
 				if err := json.Unmarshal([]byte(jsonResp), &askResp); err == nil && len(askResp.Answers) > 0 {
 					ans := askResp.Answers[0]
-					if ans == "y" || ans == "ay" {
+					switch ans {
+					case "y", "ay":
 						allowed = true
 						if ans == "ay" {
 							if cb, ok := ctx.Value(ToolPermissionCallbackKey).(ToolPermissionCallback); ok {
 								cb(t.info.Name, true)
 							}
 						}
-					} else if ans == "an" {
+					case "an":
 						if cb, ok := ctx.Value(ToolPermissionCallbackKey).(ToolPermissionCallback); ok {
 							cb(t.info.Name, false)
 						}
@@ -520,14 +521,15 @@ func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 				reader := bufio.NewReader(os.Stdin)
 				input, _ := reader.ReadString('\n')
 				choice := strings.ToLower(strings.TrimSpace(input))
-				if choice == "y" || choice == "ay" {
+				switch choice {
+				case "y", "ay":
 					allowed = true
 					if choice == "ay" {
 						if cb, ok := ctx.Value(ToolPermissionCallbackKey).(ToolPermissionCallback); ok {
 							cb(t.info.Name, true)
 						}
 					}
-				} else if choice == "an" {
+				case "an":
 					if cb, ok := ctx.Value(ToolPermissionCallbackKey).(ToolPermissionCallback); ok {
 						cb(t.info.Name, false)
 					}

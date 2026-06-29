@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/skill"
 	"github.com/anomalyco/hufu/internal/team"
 )
 
@@ -118,9 +117,9 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 					if err != nil {
 						continue
 					}
-					b.WriteString(fmt.Sprintf("### %s\n```\n%s\n```\n\n",
+					fmt.Fprintf(&b, "### %s\n```\n%s\n```\n\n",
 						strings.TrimSuffix(te.Name(), ".md"),
-						limitStr(string(data), 1500)))
+						limitStr(string(data), 1500))
 					count++
 				}
 				if count > 0 {
@@ -135,11 +134,11 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 
 // gatherSkillPatterns extracts detected skill patterns from coordinator
 func gatherSkillPatterns(coordinator *team.Coordinator) []SkillPatternReport {
-	var detector *skill.SkillPatternDetector = coordinator.SkillDetector()
+	detector := coordinator.SkillDetector()
 	if detector == nil {
 		return nil
 	}
-	var candidates []skill.PatternCandidate = detector.FindCandidates(context.Background())
+	candidates := detector.FindCandidates(context.Background())
 	var reports []SkillPatternReport
 	for _, cand := range candidates {
 		reports = append(reports, SkillPatternReport{
@@ -156,11 +155,11 @@ func gatherSkillPatterns(coordinator *team.Coordinator) []SkillPatternReport {
 func buildReportMD(data *reportData, teamName string, finalResult string) string {
 	var b strings.Builder
 
-	b.WriteString(fmt.Sprintf("# Execution Report — %s\n\n", teamName))
-	b.WriteString(fmt.Sprintf("**Generated:** %s\n\n", time.Now().Format(time.RFC3339)))
+	fmt.Fprintf(&b, "# Execution Report — %s\n\n", teamName)
+	fmt.Fprintf(&b, "**Generated:** %s\n\n", time.Now().Format(time.RFC3339))
 
 	duration := time.Since(data.StartedAt).Round(time.Second)
-	b.WriteString(fmt.Sprintf("**Duration:** %s\n\n", duration))
+	fmt.Fprintf(&b, "**Duration:** %s\n\n", duration)
 	b.WriteString("---\n\n")
 
 	if finalResult != "" {
@@ -182,8 +181,8 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 			if !t.EndedAt.IsZero() && !t.StartedAt.IsZero() {
 				dur = t.EndedAt.Sub(t.StartedAt).Round(time.Second).String()
 			}
-			b.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s |\n",
-				t.ID, statusIcon, t.Agent, t.Desc, dur))
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n",
+				t.ID, statusIcon, t.Agent, t.Desc, dur)
 		}
 		b.WriteString("\n---\n\n")
 	}
@@ -191,8 +190,8 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	if len(data.Skills) > 0 {
 		b.WriteString("## Skills Used\n\n")
 		for _, s := range data.Skills {
-			b.WriteString(fmt.Sprintf("- **%s** (×%d) — %s\n",
-				s.Name, s.Count, strings.Join(s.Agents, ", ")))
+			fmt.Fprintf(&b, "- **%s** (×%d) — %s\n",
+				s.Name, s.Count, strings.Join(s.Agents, ", "))
 		}
 		b.WriteString("\n---\n\n")
 	}
@@ -205,9 +204,9 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 			if p.Saved {
 				status = "✓"
 			}
-			b.WriteString(fmt.Sprintf("%s **%s** (×%d)\n", status, p.Name, p.Count))
-			b.WriteString(fmt.Sprintf("   Pattern: %s\n", strings.Join(p.Tools, " → ")))
-			b.WriteString(fmt.Sprintf("   Description: %s\n\n", p.Desc))
+			fmt.Fprintf(&b, "%s **%s** (×%d)\n", status, p.Name, p.Count)
+			fmt.Fprintf(&b, "   Pattern: %s\n", strings.Join(p.Tools, " → "))
+			fmt.Fprintf(&b, "   Description: %s\n\n", p.Desc)
 		}
 		b.WriteString("\n---\n\n")
 	}
@@ -226,7 +225,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		}
 		sort.Strings(agentNames)
 		for _, name := range agentNames {
-			b.WriteString(fmt.Sprintf("### %s\n\n", name))
+			fmt.Fprintf(&b, "### %s\n\n", name)
 			b.WriteString(data.TaskHistory[name])
 		}
 	}

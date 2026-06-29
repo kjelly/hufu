@@ -229,9 +229,9 @@ func listAvailableSkills(workspace, teamDir string, draftsOnly bool) string {
 			continue
 		}
 		if !draftsOnly && s.Draft {
-			sb.WriteString(fmt.Sprintf("  [draft] %s\n", s.Name))
+			fmt.Fprintf(&sb, "  [draft] %s\n", s.Name)
 		} else {
-			sb.WriteString(fmt.Sprintf("  - %s\n", s.Name))
+			fmt.Fprintf(&sb, "  - %s\n", s.Name)
 		}
 	}
 	return sb.String()

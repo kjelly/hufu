@@ -126,7 +126,7 @@ func fetchModels(providerURL, apiKey string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
 	}
@@ -146,18 +146,18 @@ func fetchModels(providerURL, apiKey string) ([]string, error) {
 // is set to false to mark the overall run as failed.
 func printRole(w *os.File, role, model string, available []string, failPtr *bool) {
 	if model == "" {
-		fmt.Fprintf(w, "  %-9s %s\n", role+":", dimStyle.Render("(not set — must be supplied via --model, team.yaml, or agent .md)"))
+		_, _ = fmt.Fprintf(w, "  %-9s %s\n", role+":", dimStyle.Render("(not set — must be supplied via --model, team.yaml, or agent .md)"))
 		return
 	}
 	bare := strings.TrimPrefix(model, "ollama/")
 	if len(available) > 0 && !modelAvailable(bare, available) {
-		fmt.Fprintf(w, "  %-9s %s  %s\n", role+":", model, errStyle.Render("⚠ not in provider's model list"))
+		_, _ = fmt.Fprintf(w, "  %-9s %s  %s\n", role+":", model, errStyle.Render("⚠ not in provider's model list"))
 		if failPtr != nil {
 			*failPtr = false
 		}
 		return
 	}
-	fmt.Fprintf(w, "  %-9s %s\n", role+":", model)
+	_, _ = fmt.Fprintf(w, "  %-9s %s\n", role+":", model)
 }
 
 func modelAvailable(bare string, available []string) bool {

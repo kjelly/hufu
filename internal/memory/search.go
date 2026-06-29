@@ -34,7 +34,7 @@ func AutoQuery(ctx context.Context, store *MemoryStore, prompt string, compact C
 		if r.Metadata != nil && r.Metadata["category"] != "" {
 			cat = fmt.Sprintf(" [%s]", r.Metadata["category"])
 		}
-		b.WriteString(fmt.Sprintf("- [%.2f]%s %s\n", r.Similarity, cat, r.Content))
+		fmt.Fprintf(&b, "- [%.2f]%s %s\n", r.Similarity, cat, r.Content)
 	}
 	b.WriteString("\nUse `memory_query` to search for more memories if needed.\n")
 

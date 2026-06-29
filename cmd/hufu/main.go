@@ -29,7 +29,6 @@ import (
 	"github.com/anomalyco/hufu/internal/memory"
 	"github.com/anomalyco/hufu/internal/notify"
 	"github.com/anomalyco/hufu/internal/readline"
-	"github.com/anomalyco/hufu/internal/sidecar"
 	"github.com/anomalyco/hufu/internal/team"
 	"github.com/anomalyco/hufu/internal/tools"
 	tuipkg "github.com/anomalyco/hufu/internal/tui"
@@ -182,7 +181,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	initCmd.Flags().StringVar(&templateName, "template", "default", "Scaffold template for `hufu init`: default")
 	initCmd.Flags().StringVar(&modelOverride, "model", "", "Pin a model in the scaffolded team.yaml (e.g. ollama/qwen3:8b)")
 
-	rootCmd.RegisterFlagCompletionFunc("agent-team", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	_ = rootCmd.RegisterFlagCompletionFunc("agent-team", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		var searchPaths []string
 		if agentTeamSearchPath != "" {
 			searchPaths = strings.Split(agentTeamSearchPath, ",")
@@ -863,8 +862,6 @@ func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPI
 	return loadTeamCommon(ctx, teamName, session, defaultProviderURL, defaultProviderAPIKey, pathConsent, nil, forcedSkills, planMode, autoSkillsMode, false)
 }
 
-
-
 func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, cfg *config.Config) []string {
 	seen := make(map[string]bool)
 	var paths []string
@@ -1288,7 +1285,6 @@ func offerFirstTimeWizard(searchPaths []string) error {
 		return fmt.Errorf("no team configured; pass --default or scaffold a team with `hufu init`")
 	}
 }
-
 
 // handleSegmentError is the standard error-exit for each step in
 // executeSegments. It saves session state, prints an interrupted notice
@@ -1759,117 +1755,6 @@ func completeAtNames(toComplete string) []string {
 	return sorted
 }
 
-func selectTeamAutomatically(ctx context.Context, prompt string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string) (string, error) {
-	type teamInfo struct {
-		Name        string
-		Description string
-	}
-	var infos []teamInfo
-	for _, name := range registry.ListTeams() {
-		dir, err := registry.Resolve(name)
-		if err != nil {
-			continue
-		}
-		desc := ""
-		for _, ymlName := range []string{"team.yml", "team.yaml"} {
-			d, err := os.ReadFile(filepath.Join(dir, ymlName))
-			if err == nil {
-				var yc struct {
-					Description string `yaml:"description"`
-				}
-				if yaml.Unmarshal(d, &yc) == nil {
-					desc = yc.Description
-				}
-				break
-			}
-		}
-		if desc == "" {
-			desc = "No description provided."
-		}
-		infos = append(infos, teamInfo{Name: name, Description: desc})
-	}
-
-	if len(infos) == 0 {
-		return "", fmt.Errorf("no teams available for selection (run 'hufu init <name>' to create one, or pass --default)")
-	}
-
-	cfg := config.LoadConfig()
-	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, "", "")
-	resolvedProviderAPIKey := config.ResolveProviderAPIKey(defaultProviderAPIKey, "")
-
-	resolvedSidecarModel := sidecarModelOverride
-	if resolvedSidecarModel == "" {
-		resolvedSidecarModel = modelOverride
-	}
-	if resolvedSidecarModel == "" {
-		resolvedSidecarModel = cfg.ResolveSidecarModel("")
-	}
-	if resolvedSidecarModel == "" {
-		resolvedSidecarModel = cfg.ResolveModel("")
-	}
-	if resolvedSidecarModel == "" {
-		resolvedSidecarModel = "ollama/qwen3:8b"
-	}
-
-	prov, err := agent.NewOllamaProvider(resolvedProviderURL, resolvedProviderAPIKey, "auto-team-routing")
-	if err != nil {
-		return "", fmt.Errorf("failed to create provider for auto-team routing: %w", err)
-	}
-
-	s, err := sidecar.NewSidecar(ctx, prov, resolvedSidecarModel)
-	if err != nil {
-		return "", fmt.Errorf("failed to create sidecar for auto-team routing: %w", err)
-	}
-
-	var sb strings.Builder
-	sb.WriteString("You are a routing assistant. Your task is to select the most suitable team to handle the user's request.\n\n")
-	sb.WriteString("Available Teams:\n")
-	for _, t := range infos {
-		sb.WriteString(fmt.Sprintf("- Name: %s\n  Description: %s\n\n", t.Name, t.Description))
-	}
-	sb.WriteString(fmt.Sprintf("User Request: %q\n\n", prompt))
-	sb.WriteString("Output ONLY the name of the selected team in raw JSON format like this:\n")
-	sb.WriteString("{\"selected_team\": \"team_name\"}\n")
-	sb.WriteString("If none of the teams are suitable, or if you cannot decide, select the most relevant one anyway. Do not output any other text.")
-
-	res, err := s.Execute(ctx, sb.String())
-	if err != nil {
-		return "", fmt.Errorf("failed to execute sidecar routing: %w", err)
-	}
-
-	resTrimmed := strings.TrimSpace(res)
-	if strings.HasPrefix(resTrimmed, "```") {
-		lines := strings.Split(resTrimmed, "\n")
-		var jsonLines []string
-		for _, l := range lines {
-			lTrim := strings.TrimSpace(l)
-			if !strings.HasPrefix(lTrim, "```") {
-				jsonLines = append(jsonLines, l)
-			}
-		}
-		resTrimmed = strings.TrimSpace(strings.Join(jsonLines, "\n"))
-	}
-
-	var choice struct {
-		SelectedTeam string `json:"selected_team"`
-	}
-	if err := json.Unmarshal([]byte(resTrimmed), &choice); err != nil {
-		for _, t := range infos {
-			if strings.Contains(strings.ToLower(resTrimmed), strings.ToLower(t.Name)) {
-				return t.Name, nil
-			}
-		}
-		return "", fmt.Errorf("invalid sidecar response: %q", resTrimmed)
-	}
-
-	teamName := strings.ToLower(strings.TrimSpace(choice.SelectedTeam))
-	if registry.HasTeam(teamName) {
-		return teamName, nil
-	}
-
-	return "", fmt.Errorf("sidecar selected an invalid team: %q", choice.SelectedTeam)
-}
-
 func injectFileContexts(prompt string) (string, string) {
 	re := regexp.MustCompile(`\B#([^\s#]+)`)
 	matches := re.FindAllStringSubmatch(prompt, -1)
@@ -1923,7 +1808,7 @@ func injectFileContexts(prompt string) (string, string) {
 			ext = "text"
 		}
 
-		additions.WriteString(fmt.Sprintf("\n\n---\nFile: %s\n```%s\n%s\n```", cleanPath, ext, string(data)))
+		fmt.Fprintf(&additions, "\n\n---\nFile: %s\n```%s\n%s\n```", cleanPath, ext, string(data))
 		injected[cleanPath] = true
 
 		replacedPrompt = strings.ReplaceAll(replacedPrompt, "#"+rawPath, rawPath)

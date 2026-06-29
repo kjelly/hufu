@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/anomalyco/hufu/internal/utils"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 const stmFile = "stm.md"

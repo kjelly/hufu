@@ -151,7 +151,7 @@ func (t *memoryQueryTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		if r.Metadata != nil && r.Metadata["saved_at"] != "" {
 			savedAt = fmt.Sprintf(" (saved: %s)", r.Metadata["saved_at"])
 		}
-		b.WriteString(fmt.Sprintf("- [%.2f]%s %s%s", r.Similarity, cat, r.Content, savedAt))
+		fmt.Fprintf(&b, "- [%.2f]%s %s%s", r.Similarity, cat, r.Content, savedAt)
 	}
 	return fantasy.NewTextResponse(b.String()), nil
 }

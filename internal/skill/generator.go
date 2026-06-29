@@ -53,28 +53,28 @@ func (g *AutoSkillGenerator) buildSkillContent(candidate PatternCandidate, skill
 	// Frontmatter
 	now := time.Now().UTC().Format(time.RFC3339)
 	sb.WriteString("---\n")
-	sb.WriteString(fmt.Sprintf("name: %s\n", skillName))
-	sb.WriteString(fmt.Sprintf("description: %s\n", candidate.SuggestedDesc))
-	sb.WriteString(fmt.Sprintf("created_at: %s\n", now))
-	sb.WriteString(fmt.Sprintf("last_modified: %s\n", now))
+	fmt.Fprintf(&sb, "name: %s\n", skillName)
+	fmt.Fprintf(&sb, "description: %s\n", candidate.SuggestedDesc)
+	fmt.Fprintf(&sb, "created_at: %s\n", now)
+	fmt.Fprintf(&sb, "last_modified: %s\n", now)
 	sb.WriteString("---\n\n")
 
 	// Title
-	sb.WriteString(fmt.Sprintf("# %s\n\n", titleCase(strings.ReplaceAll(skillName, "-", " "))))
+	fmt.Fprintf(&sb, "# %s\n\n", titleCase(strings.ReplaceAll(skillName, "-", " ")))
 
 	// Overview
 	sb.WriteString("## Overview\n\n")
-	sb.WriteString(fmt.Sprintf("Auto-generated skill detected from **%d** similar executions.\n\n", candidate.Sequence.Count))
-	sb.WriteString(fmt.Sprintf("**Quality Score:** %.2f/1.00\n\n", candidate.QualityScore))
-	sb.WriteString(fmt.Sprintf("**First seen:** %s\n\n", candidate.Sequence.FirstSeen.Format("2006-01-02 15:04")))
-	sb.WriteString(fmt.Sprintf("**Last seen:** %s\n\n", candidate.Sequence.LastSeen.Format("2006-01-02 15:04")))
+	fmt.Fprintf(&sb, "Auto-generated skill detected from **%d** similar executions.\n\n", candidate.Sequence.Count)
+	fmt.Fprintf(&sb, "**Quality Score:** %.2f/1.00\n\n", candidate.QualityScore)
+	fmt.Fprintf(&sb, "**First seen:** %s\n\n", candidate.Sequence.FirstSeen.Format("2006-01-02 15:04"))
+	fmt.Fprintf(&sb, "**Last seen:** %s\n\n", candidate.Sequence.LastSeen.Format("2006-01-02 15:04"))
 
 	// Generalization Analysis
 	if candidate.GeneralizationReason != "" {
 		sb.WriteString("### Generalization Analysis\n\n")
-		sb.WriteString(fmt.Sprintf("**Assessment:** %s\n\n", candidate.GeneralizationReason))
+		fmt.Fprintf(&sb, "**Assessment:** %s\n\n", candidate.GeneralizationReason)
 		if len(candidate.SpecificElements) > 0 {
-			sb.WriteString(fmt.Sprintf("**Specific Elements Detected:** %s\n\n", strings.Join(candidate.SpecificElements, ", ")))
+			fmt.Fprintf(&sb, "**Specific Elements Detected:** %s\n\n", strings.Join(candidate.SpecificElements, ", "))
 		}
 	}
 
@@ -86,7 +86,7 @@ func (g *AutoSkillGenerator) buildSkillContent(candidate PatternCandidate, skill
 		if i < len(candidate.Sequence.Params) {
 			param = candidate.Sequence.Params[i]
 		}
-		sb.WriteString(fmt.Sprintf("%d. **%s** - `%s`\n", i+1, tool, param))
+		fmt.Fprintf(&sb, "%d. **%s** - `%s`\n", i+1, tool, param)
 	}
 	sb.WriteString("\n")
 
@@ -99,9 +99,9 @@ func (g *AutoSkillGenerator) buildSkillContent(candidate PatternCandidate, skill
 		if i < len(candidate.Sequence.Params) {
 			param = candidate.Sequence.Params[i]
 		}
-		sb.WriteString(fmt.Sprintf("# Step %d: %s\n", i+1, tool))
+		fmt.Fprintf(&sb, "# Step %d: %s\n", i+1, tool)
 		if param != "" {
-			sb.WriteString(fmt.Sprintf("%s %s\n", tool, param))
+			fmt.Fprintf(&sb, "%s %s\n", tool, param)
 		}
 	}
 	sb.WriteString("```\n\n")
@@ -137,7 +137,7 @@ func (g *AutoSkillGenerator) buildSkillContent(candidate PatternCandidate, skill
 			if count >= 5 {
 				break
 			}
-			sb.WriteString(fmt.Sprintf("- %s (×%d)\n", item.Key, item.Value))
+			fmt.Fprintf(&sb, "- %s (×%d)\n", item.Key, item.Value)
 			count++
 		}
 		sb.WriteString("\n")

@@ -308,7 +308,7 @@ func (d *SkillPatternDetector) buildParamGeneralizationPrompt(seq *ToolSequence)
 		if i < len(seq.Params) {
 			param = seq.Params[i]
 		}
-		sb.WriteString(fmt.Sprintf("  %d. %s(%s)\n", i+1, tool, param))
+		fmt.Fprintf(&sb, "  %d. %s(%s)\n", i+1, tool, param)
 	}
 
 	sb.WriteString("\nReturn ONLY JSON: {\"score\": 0.0-1.0, \"reason\": \"explanation\", \"specific_elements\": [\"list\", \"of\", \"specific\", \"values\"]}\n")
@@ -602,7 +602,7 @@ func (d *SkillPatternDetector) hashDescriptions(descriptions []string) string {
 func (d *SkillPatternDetector) buildClusterPrompt(descriptions []string) string {
 	var descList strings.Builder
 	for i, desc := range descriptions {
-		descList.WriteString(fmt.Sprintf("%d. %s\n", i, desc))
+		fmt.Fprintf(&descList, "%d. %s\n", i, desc)
 	}
 
 	return fmt.Sprintf(`You are a task similarity analyzer. Group task descriptions that describe essentially the same work.
@@ -910,7 +910,7 @@ func (d *SkillPatternDetector) buildNamingPrompt(seq *ToolSequence) string {
 		if i < len(seq.Params) {
 			param = seq.Params[i]
 		}
-		sb.WriteString(fmt.Sprintf("%d. %s(%s)\n", i+1, tool, param))
+		fmt.Fprintf(&sb, "%d. %s(%s)\n", i+1, tool, param)
 	}
 
 	sb.WriteString("\n## Common Task Descriptions\n")
@@ -919,7 +919,7 @@ func (d *SkillPatternDetector) buildNamingPrompt(seq *ToolSequence) string {
 	for _, desc := range seq.TaskDescs {
 		if desc != "" && !seen[desc] {
 			seen[desc] = true
-			sb.WriteString(fmt.Sprintf("- %s\n", desc))
+			fmt.Fprintf(&sb, "- %s\n", desc)
 			count++
 			if count >= 3 {
 				break

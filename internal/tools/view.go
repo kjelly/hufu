@@ -106,13 +106,13 @@ func executeView(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("<%s>\n", args.FilePath))
+	fmt.Fprintf(&b, "<%s>\n", args.FilePath)
 	b.WriteString(content)
-	b.WriteString(fmt.Sprintf("</%s>\n", args.FilePath))
+	fmt.Fprintf(&b, "</%s>\n", args.FilePath)
 
 	if hasMore {
-		b.WriteString(fmt.Sprintf("\n[showing lines %d-%d of %d total. Use offset=%d to continue reading]",
-			offset, offset+limit-1, totalLines, offset+limit))
+		fmt.Fprintf(&b, "\n[showing lines %d-%d of %d total. Use offset=%d to continue reading]",
+			offset, offset+limit-1, totalLines, offset+limit)
 	}
 
 	return fantasy.NewTextResponse(b.String()), nil

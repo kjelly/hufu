@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/anomalyco/hufu/internal/utils"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/anomalyco/hufu/internal/utils"
 )
-
-
 
 // removeFileIfExists removes path and returns nil when the file does not exist.
 func removeFileIfExists(path string) error {
@@ -96,16 +95,16 @@ func (s *SessionData) ContextSummary() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Previous session context (%d exchanges, %d rounds, since %s):\n\n",
-		len(s.Entries), s.Rounds, s.CreatedAt))
+	fmt.Fprintf(&b, "Previous session context (%d exchanges, %d rounds, since %s):\n\n",
+		len(s.Entries), s.Rounds, s.CreatedAt)
 	for i, entry := range s.Entries {
 		if i >= maxSessionEntries {
 			remaining := len(s.Entries) - i
-			b.WriteString(fmt.Sprintf("... (%d earlier exchanges omitted)\n", remaining))
+			fmt.Fprintf(&b, "... (%d earlier exchanges omitted)\n", remaining)
 			break
 		}
 		content := utils.TruncateRunes(entry.Content, 500)
-		b.WriteString(fmt.Sprintf("[%s] %s\n", entry.Role, content))
+		fmt.Fprintf(&b, "[%s] %s\n", entry.Role, content)
 		b.WriteString("\n")
 	}
 	return b.String()

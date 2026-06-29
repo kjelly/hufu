@@ -15,11 +15,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	hulog "github.com/anomalyco/hufu/internal/log"
 	"github.com/anomalyco/hufu/internal/notify"
 	"github.com/anomalyco/hufu/internal/team"
 	"github.com/anomalyco/hufu/internal/tools"
 	tuipkg "github.com/anomalyco/hufu/internal/tui"
-	hulog "github.com/anomalyco/hufu/internal/log"
 	"github.com/anomalyco/hufu/internal/utils"
 )
 
@@ -133,7 +133,6 @@ func init() {
 		}
 	})
 }
-
 
 // Shared status event dispatch — eliminates ~150 lines of duplication between
 // setupStatusReporter and makeFileReporter.
@@ -491,7 +490,7 @@ func (d *taskDisplay) render() {
 			tag = dimStyle.Render(" [after:"+strings.Join(t.DependsOn, ",")+"]") + tag
 		}
 		timeStr := formatTodoItemTime(t)
-		b.WriteString(fmt.Sprintf("  %s %s %s %s%s %s\n", icon, dimStyle.Render(t.ID+"."), agentLabel, desc, tag, dimStyle.Render(timeStr)))
+		fmt.Fprintf(&b, "  %s %s %s %s%s %s\n", icon, dimStyle.Render(t.ID+"."), agentLabel, desc, tag, dimStyle.Render(timeStr))
 	}
 
 	d.w.write(b.String())
@@ -741,12 +740,11 @@ func (d *skillDisplay) render() {
 
 	for _, entry := range ordered {
 		agentList := strings.Join(entry.agents, ", ")
-		b.WriteString(fmt.Sprintf("  %s %-20s ×%-2d %s\n",
+		fmt.Fprintf(&b, "  %s %-20s ×%-2d %s\n",
 			doneStyle.Render("✓"),
 			entry.name,
 			entry.count,
-			dimStyle.Render(agentList),
-		))
+			dimStyle.Render(agentList))
 	}
 
 	d.w.write(b.String())
@@ -792,12 +790,11 @@ func renderSkillSummary(entries []team.SkillUsageEntry) {
 	b.WriteString("\n")
 	for _, entry := range entries {
 		agentList := strings.Join(entry.Agents, ", ")
-		b.WriteString(fmt.Sprintf("  %s %-20s ×%-2d %s\n",
+		fmt.Fprintf(&b, "  %s %-20s ×%-2d %s\n",
 			doneStyle.Render("✓"),
 			entry.Name,
 			entry.Count,
-			dimStyle.Render(agentList),
-		))
+			dimStyle.Render(agentList))
 	}
 	fmt.Fprint(os.Stderr, b.String())
 }
@@ -1378,14 +1375,14 @@ func renderDryRun(result *team.DryRunResult) {
 	b.WriteString(headerStyle.Render("─── DRY RUN (no LLM calls) ───"))
 	b.WriteString("\n\n")
 
-	b.WriteString(fmt.Sprintf("  %s %s\n", boldStyle.Render("Team:"), teamStyle.Render(result.TeamName)))
-	b.WriteString(fmt.Sprintf("  %s %s\n", boldStyle.Render("Model:"), result.Model))
+	fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Team:"), teamStyle.Render(result.TeamName))
+	fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Model:"), result.Model)
 	if result.SidecarModel != "" {
-		b.WriteString(fmt.Sprintf("  %s %s\n", boldStyle.Render("Sidecar:"), result.SidecarModel))
+		fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Sidecar:"), result.SidecarModel)
 	}
 	if result.UserPrompt != "" {
 		prompt := utils.TruncateLine(result.UserPrompt, 80)
-		b.WriteString(fmt.Sprintf("  %s %s\n", boldStyle.Render("Prompt:"), dimStyle.Render(prompt)))
+		fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Prompt:"), dimStyle.Render(prompt))
 	}
 
 	b.WriteString("\n")
@@ -1398,14 +1395,14 @@ func renderDryRun(result *team.DryRunResult) {
 			modelLabel = dimStyle.Render("[" + a.Model + "]")
 		}
 		nameStr := agentStyle.Render(a.Name)
-		b.WriteString(fmt.Sprintf("  %s %s %s", padRight(nameStr, 20), padRight(roleLabel, 14), modelLabel))
+		fmt.Fprintf(&b, "  %s %s %s", padRight(nameStr, 20), padRight(roleLabel, 14), modelLabel)
 		if len(a.Tools) > 0 {
 			toolStr := strings.Join(a.Tools, ",")
-			b.WriteString(fmt.Sprintf("  %s", dimStyle.Render("tools: "+toolStr)))
+			fmt.Fprintf(&b, "  %s", dimStyle.Render("tools: "+toolStr))
 		}
 		if len(a.Skills) > 0 {
 			skillStr := strings.Join(a.Skills, ",")
-			b.WriteString(fmt.Sprintf("  %s", dimStyle.Render("skills: "+skillStr)))
+			fmt.Fprintf(&b, "  %s", dimStyle.Render("skills: "+skillStr))
 		}
 		b.WriteString("\n")
 	}
@@ -1418,7 +1415,7 @@ func renderDryRun(result *team.DryRunResult) {
 	} else {
 		for _, s := range result.AllSkills {
 			desc := utils.TruncateLine(s.Description, 60)
-			b.WriteString(fmt.Sprintf("  %s %s\n", padRight(doneStyle.Render(s.Name), 20), dimStyle.Render(desc)))
+			fmt.Fprintf(&b, "  %s %s\n", padRight(doneStyle.Render(s.Name), 20), dimStyle.Render(desc))
 		}
 	}
 
@@ -1430,7 +1427,7 @@ func renderDryRun(result *team.DryRunResult) {
 		for i, n := range result.MatchedSkillNames {
 			matchedDisplay[i] = doneStyle.Render(n)
 		}
-		b.WriteString(fmt.Sprintf("  Matched: %s\n", strings.Join(matchedDisplay, ", ")))
+		fmt.Fprintf(&b, "  Matched: %s\n", strings.Join(matchedDisplay, ", "))
 	}
 
 	if len(result.FirstRoundTasks) > 0 {
@@ -1443,7 +1440,7 @@ func renderDryRun(result *team.DryRunResult) {
 			if t.Model != "" {
 				modelLabel = " " + dimStyle.Render("["+t.Model+"]")
 			}
-			b.WriteString(fmt.Sprintf("    %s → %s%s\n", agentStyle.Render(t.Agent), t.Goal, modelLabel))
+			fmt.Fprintf(&b, "    %s → %s%s\n", agentStyle.Render(t.Agent), t.Goal, modelLabel)
 		}
 	} else {
 		b.WriteString("\n")
@@ -1456,7 +1453,7 @@ func renderDryRun(result *team.DryRunResult) {
 		b.WriteString("\n")
 		b.WriteString(headerStyle.Render("─── Warning ───"))
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("  %s\n", errStyle.Render(result.Error)))
+		fmt.Fprintf(&b, "  %s\n", errStyle.Render(result.Error))
 	}
 
 	b.WriteString("\n")
@@ -1564,7 +1561,7 @@ func (p *progressBarDisplay) render() {
 			bar += "░"
 		}
 	}
-	b.WriteString(fmt.Sprintf("  %s %d%%\n", progressIcon.Render(bar), percent))
+	fmt.Fprintf(&b, "  %s %d%%\n", progressIcon.Render(bar), percent)
 
 	fmt.Fprint(os.Stderr, b.String())
 	p.lastLines = 3

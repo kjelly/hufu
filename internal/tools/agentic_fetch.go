@@ -63,9 +63,9 @@ func executeAgenticFetch(ctx context.Context, call fantasy.ToolCall, workDir str
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Fetched content from %s:\n\n", args.URL))
+	fmt.Fprintf(&b, "Fetched content from %s:\n\n", args.URL)
 	b.WriteString(fetchResult)
-	b.WriteString(fmt.Sprintf("\n\n---\n\nInstruction: %s", args.Prompt))
+	fmt.Fprintf(&b, "\n\n---\n\nInstruction: %s", args.Prompt)
 
 	return fantasy.NewTextResponse(b.String()), nil
 }

@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/anomalyco/hufu/internal/utils"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 type AuditLogger struct {
@@ -98,8 +99,6 @@ func (l *AuditLogger) Close() error {
 	}
 	return nil
 }
-
-
 
 func SetDefault(logger *AuditLogger) {
 	defaultLoggerMu.Lock()

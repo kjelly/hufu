@@ -10,7 +10,6 @@ import (
 	"github.com/anomalyco/hufu/internal/utils"
 )
 
-
 func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 	var b strings.Builder
 
@@ -198,7 +197,6 @@ func (c *Coordinator) autoWriteSTM(agentName, taskDesc, output, errMsg string, s
 	c.lastStmWrite = time.Now()
 	c.lastStmWriteMu.Unlock()
 }
-
 
 func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
 	workspace := c.session.Workspace

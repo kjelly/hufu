@@ -72,7 +72,7 @@ func collectFixData(session *team.TeamSession, taskDesc string) *fixData {
 			if i >= 20 {
 				break
 			}
-			b.WriteString(fmt.Sprintf("[%s] %s: %s\n", e.Timestamp, e.Role, limitStr(e.Content, 500)))
+			fmt.Fprintf(&b, "[%s] %s: %s\n", e.Timestamp, e.Role, limitStr(e.Content, 500))
 		}
 		d.SessionJSON = b.String()
 	}
@@ -134,7 +134,7 @@ func collectFixData(session *team.TeamSession, taskDesc string) *fixData {
 				if err != nil {
 					continue
 				}
-				b.WriteString(fmt.Sprintf("--- %s ---\n", te.Name()))
+				fmt.Fprintf(&b, "--- %s ---\n", te.Name())
 				b.WriteString(limitStr(string(data), 1000))
 				b.WriteString("\n")
 				count++
@@ -226,7 +226,7 @@ func buildFixPrompt(question, taskDesc string, data *fixData) string {
 	if len(data.AgentMDs) > 0 {
 		b.WriteString("## Agent Definitions\n\n")
 		for name, md := range data.AgentMDs {
-			b.WriteString(fmt.Sprintf("### %s.md\n```markdown\n%s\n```\n\n", name, limitStr(md, 1500)))
+			fmt.Fprintf(&b, "### %s.md\n```markdown\n%s\n```\n\n", name, limitStr(md, 1500))
 		}
 	}
 
@@ -263,7 +263,7 @@ func buildFixPrompt(question, taskDesc string, data *fixData) string {
 	if len(data.TaskHistory) > 0 {
 		b.WriteString("## Worker Task History\n\n")
 		for agentName, history := range data.TaskHistory {
-			b.WriteString(fmt.Sprintf("### %s\n```\n%s\n```\n\n", agentName, history))
+			fmt.Fprintf(&b, "### %s\n```\n%s\n```\n\n", agentName, history)
 		}
 	}
 

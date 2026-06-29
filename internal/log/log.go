@@ -66,7 +66,7 @@ func Print(args ...any) {
 	if w == nil {
 		return
 	}
-	fmt.Fprint(*w, args...)
+	_, _ = fmt.Fprint(*w, args...)
 }
 
 // Printf writes a formatted line to stderr unless muted. It does NOT
@@ -79,7 +79,7 @@ func Printf(format string, args ...any) {
 	if w == nil {
 		return
 	}
-	fmt.Fprintf(*w, format, args...)
+	_, _ = fmt.Fprintf(*w, format, args...)
 }
 
 // Println writes args to stderr separated by spaces and followed by a newline,
@@ -92,5 +92,5 @@ func Println(args ...any) {
 	if w == nil {
 		return
 	}
-	fmt.Fprintln(*w, args...)
+	_, _ = fmt.Fprintln(*w, args...)
 }
