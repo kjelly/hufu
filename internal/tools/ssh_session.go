@@ -12,8 +12,9 @@ import (
 
 // SSHSessionManager manages active SSH sessions in memory
 type SSHSessionManager struct {
-	mu       sync.RWMutex
-	sessions map[string]*SSHSession // key: host[:port]
+	mu             sync.RWMutex
+	sessions       map[string]*SSHSession // key: host[:port]
+	cleanupRunning bool
 }
 
 // SSHSessionManagerKey is the context key for SSH session manager
@@ -203,9 +204,27 @@ func (m *SSHSessionManager) CleanupIdle(timeout time.Duration) int {
 
 // StartCleanupDaemon starts a background goroutine that periodically cleans up idle sessions
 func (m *SSHSessionManager) StartCleanupDaemon(ctx context.Context, interval, timeout time.Duration) {
+	if m == nil {
+		return
+	}
+
+	m.mu.Lock()
+	if m.cleanupRunning {
+		m.mu.Unlock()
+		return
+	}
+	m.cleanupRunning = true
+	m.mu.Unlock()
+
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+
+		defer func() {
+			m.mu.Lock()
+			m.cleanupRunning = false
+			m.mu.Unlock()
+		}()
 
 		for {
 			select {
