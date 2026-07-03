@@ -137,9 +137,9 @@ func TestDirOfPath(t *testing.T) {
 		{"existing directory", subDir, subDir},
 		{"file in directory", filepath.Join(subDir, "file.txt"), subDir},
 		{"non-existent file with extension", filepath.Join(tmpDir, "noexist", "file.txt"), filepath.Join(tmpDir, "noexist")},
-		{"non-existent directory without extension", filepath.Join(tmpDir, "noexist", "subdir"), filepath.Join(tmpDir, "noexist", "subdir")},
+		{"non-existent directory without extension", filepath.Join(tmpDir, "noexist", "subdir") + string(os.PathSeparator), filepath.Join(tmpDir, "noexist", "subdir")},
 		{"non-existent dotfile", filepath.Join(tmpDir, "noexist", ".gitignore"), filepath.Join(tmpDir, "noexist")},
-		{"non-existent Makefile treated as dir", filepath.Join(tmpDir, "noexist", "Makefile"), filepath.Join(tmpDir, "noexist", "Makefile")},
+		{"non-existent Makefile treated as file", filepath.Join(tmpDir, "noexist", "Makefile"), filepath.Join(tmpDir, "noexist")},
 	}
 
 	for _, tt := range tests {

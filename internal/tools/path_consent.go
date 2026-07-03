@@ -67,10 +67,10 @@ func dirOfPath(path string) string {
 		}
 		return filepath.Dir(path)
 	}
-	if filepath.Ext(path) != "" {
-		return filepath.Dir(path)
+	if len(path) > 0 && os.IsPathSeparator(path[len(path)-1]) {
+		return filepath.Clean(path)
 	}
-	return filepath.Clean(path)
+	return filepath.Dir(path)
 }
 
 func (pc *PathConsent) AskConsent(path, operation string, toolName, toolArgs string) (ConsentResult, error) {
