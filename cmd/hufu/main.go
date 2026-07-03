@@ -1714,6 +1714,7 @@ func completeAtNames(toComplete string) []string {
 		for _, name := range registry.ListTeams() {
 			results = append(results, "@"+name)
 		}
+		sort.Strings(results)
 		return results
 	}
 
