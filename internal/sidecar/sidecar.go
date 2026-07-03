@@ -308,14 +308,14 @@ or
 	result, err := s.generate(ctx, prompt)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: sidecar guard review generate failed: %v\n", err)
-		return GuardReviewResult{Approved: true}, err
+		return GuardReviewResult{Approved: false, Reason: fmt.Sprintf("guard review generation failed: %v", err)}, err
 	}
 
 	result = strings.TrimSpace(result)
 	reviewResult, err := parseReviewToolCallResponse(result)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: sidecar guard review: failed to parse JSON response %q: %v\n", result, err)
-		return GuardReviewResult{Approved: true}, err
+		return GuardReviewResult{Approved: false, Reason: fmt.Sprintf("failed to parse guard review response: %v", err)}, err
 	}
 	return reviewResult, nil
 }

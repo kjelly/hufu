@@ -832,7 +832,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		agentName, _ := ctx.Value(tools.AgentNameKey).(string)
 		result, err := s.ReviewToolCall(ctx, agentName, toolName, args, rules)
 		if err != nil {
-			return true, "", err
+			return false, "", err
 		}
 		return result.Approved, result.Reason, nil
 	}
