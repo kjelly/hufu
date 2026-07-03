@@ -91,3 +91,14 @@ type AskUserTUIOption struct {
 }
 
 type GuardReviewFn func(ctx context.Context, toolName string, args string, rules []string) (approved bool, reason string, err error)
+
+type pathReviewerKeyType struct{}
+
+var PathReviewerKey = pathReviewerKeyType{}
+
+func GetPathReviewerFromContext(ctx context.Context) PathReviewer {
+	if v, ok := ctx.Value(PathReviewerKey).(PathReviewer); ok {
+		return v
+	}
+	return nil
+}

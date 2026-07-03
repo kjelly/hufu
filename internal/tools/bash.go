@@ -435,10 +435,14 @@ func checkBashPathConsent(ctx context.Context, command string, cfg ToolConfig) e
 	}
 
 	// Sidecar path review: filter out non-filesystem paths (e.g. sed replacements, env var values)
-	if cfg.PathReviewer != nil && len(candidatePaths) > 0 {
+	pathReviewer := cfg.PathReviewer
+	if pr := GetPathReviewerFromContext(ctx); pr != nil {
+		pathReviewer = pr
+	}
+	if pathReviewer != nil && len(candidatePaths) > 0 {
 		var realPaths []string
 		for _, p := range candidatePaths {
-			isFileAccess, err := cfg.PathReviewer(ctx, command, p)
+			isFileAccess, err := pathReviewer(ctx, command, p)
 			if err == nil && isFileAccess {
 				realPaths = append(realPaths, p)
 			}

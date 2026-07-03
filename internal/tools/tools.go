@@ -452,6 +452,10 @@ func extractHookContext(ctx context.Context) hooks.HookContext {
 }
 
 func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	if t.pathReviewer != nil {
+		ctx = context.WithValue(ctx, PathReviewerKey, t.pathReviewer)
+	}
+
 	if err := validateToolInput(call.Input, t.info); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
