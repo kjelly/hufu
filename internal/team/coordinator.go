@@ -49,6 +49,12 @@ type todoIDKey struct{}
 // events can include the model for TUI display.
 type modelKey struct{}
 
+// delegationChainKey carries the "/"-joined chain of agent names that led to
+// the current request_agent call, propagated through the context (the same
+// way todoIDKey is) since the coordinator's mutable snapshot only ever holds
+// the single currently-running agent's flat name.
+type delegationChainKey struct{}
+
 type TaskDef struct {
 	Agent        string   `json:"agent"`
 	Goal         string   `json:"goal"`

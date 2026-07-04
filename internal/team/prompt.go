@@ -287,7 +287,7 @@ func SplitSegmentsByPipe(segments []PromptSegment) []PromptSegment {
 			continue
 		}
 
-		parts := strings.Split(seg.Content, " | ")
+		parts := splitOnChainPipe(seg.Content)
 		for i, part := range parts {
 			part = strings.TrimSpace(part)
 
@@ -306,4 +306,33 @@ func SplitSegmentsByPipe(segments []PromptSegment) []PromptSegment {
 		}
 	}
 	return result
+}
+
+// splitOnChainPipe splits content on " | " only where the delimiter is
+// immediately followed by an @mention. Prompt chaining is meant to hand off
+// to another agent/team step, so this avoids misinterpreting a literal
+// " | " inside task text (e.g. a shell pipeline the user is describing) as
+// a chain boundary.
+func splitOnChainPipe(content string) []string {
+	const delim = " | "
+	var parts []string
+	start := 0
+	for {
+		idx := strings.Index(content[start:], delim)
+		if idx < 0 {
+			break
+		}
+		splitAt := start + idx
+		after := content[splitAt+len(delim):]
+		trimmedAfter := strings.TrimLeft(after, " \t")
+		if loc := atNamePattern.FindStringIndex(trimmedAfter); loc != nil && loc[0] == 0 {
+			parts = append(parts, content[:splitAt])
+			content = after
+			start = 0
+			continue
+		}
+		start = splitAt + len(delim)
+	}
+	parts = append(parts, content)
+	return parts
 }

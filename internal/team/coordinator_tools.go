@@ -276,6 +276,38 @@ func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	return fantasy.NewTextErrorResponse(fmt.Sprintf("skill %q not found (available: %v)", args.Name, available)), nil
 }
 
+const maxDelegationDepth = 5
+
+// delegationChain returns the ancestor chain of agent names that led to the
+// current request_agent call. The chain is propagated through the context
+// (see delegationChainKey) rather than the coordinator's mutable snapshot,
+// since the snapshot only ever holds the single currently-running agent's
+// flat name and gets overwritten on every nested agent run.
+func delegationChain(ctx context.Context, callerName string) []string {
+	if raw, ok := ctx.Value(delegationChainKey{}).(string); ok && raw != "" {
+		return strings.Split(raw, "/")
+	}
+	if callerName == "" {
+		return nil
+	}
+	return []string{callerName}
+}
+
+// checkDelegationLimits rejects a delegation to selected if it would exceed
+// the maximum chain depth or would re-introduce an agent already present in
+// the chain (a delegation cycle).
+func checkDelegationLimits(chain []string, selected string) error {
+	if len(chain) >= maxDelegationDepth {
+		return fmt.Errorf("maximum delegation depth (%d) reached to prevent infinite recursion", maxDelegationDepth)
+	}
+	for _, a := range chain {
+		if strings.EqualFold(a, selected) {
+			return fmt.Errorf("circular delegation detected: agent '%s' is already in the delegation chain (%s)", selected, strings.Join(chain, "/"))
+		}
+	}
+	return nil
+}
+
 type requestAgentTool struct {
 	coordToolBase
 	coordinator *Coordinator
@@ -341,7 +373,12 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		}
 	}
 
-	subLabel := callerName + "/" + selected
+	chainAgents := delegationChain(ctx, callerName)
+	if err := checkDelegationLimits(chainAgents, selected); err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+
+	subLabel := strings.Join(append(chainAgents, selected), "/")
 	agentKey := strings.ToLower(selected)
 	if cachedOutput, cachedDesc, ok := c.lookupTaskCacheAllGenerations(ctx, agentKey, taskDesc); ok {
 		log.Printf("[INFO] request_agent cache hit: agent=%q, task=%q, matched=%q", selected, taskDesc, cachedDesc)
@@ -366,6 +403,7 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 
 	// Inject subTodoID so events from runAgentWithStatusAndHistory attribute to the right item.
 	execCtx := context.WithValue(ctx, todoIDKey{}, subTodoID)
+	execCtx = context.WithValue(execCtx, delegationChainKey{}, subLabel)
 	output, err := c.ExecuteSubAgent(execCtx, selected, args.Goal, args.Constraints)
 	if err != nil {
 		c.taskTracker.TodoList().UpdateStatus(subTodoID, TaskError, err.Error())

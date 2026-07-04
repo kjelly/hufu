@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"charm.land/fantasy"
 )
@@ -14,6 +16,8 @@ type createSkillArgs struct {
 	Description string `json:"description"`
 	Content     string `json:"content"`
 }
+
+var validSkillName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
 func NewCreateSkillTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
@@ -48,11 +52,19 @@ func NewCreateSkillTool(opts ...ToolOption) fantasy.AgentTool {
 				return fantasy.NewTextErrorResponse("name and content are required"), nil
 			}
 
+			if !validSkillName.MatchString(args.Name) {
+				return fantasy.NewTextErrorResponse("invalid name: must contain only letters, digits, '-', or '_' (no path separators)"), nil
+			}
+
 			if cfg.WorkDir == "" {
 				return fantasy.NewTextErrorResponse("workspace not configured"), nil
 			}
 
-			skillsDir := filepath.Join(cfg.WorkDir, "skills", args.Name)
+			baseDir := filepath.Clean(filepath.Join(cfg.WorkDir, "skills"))
+			skillsDir := filepath.Join(baseDir, args.Name)
+			if skillsDir != baseDir && !strings.HasPrefix(skillsDir, baseDir+string(filepath.Separator)) {
+				return fantasy.NewTextErrorResponse("invalid name: resolves outside the skills directory"), nil
+			}
 			if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to create skill directory: %v", err)), nil
 			}

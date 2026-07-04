@@ -279,6 +279,25 @@ This will sequentially:
 2. Switch to `dev-team` for implementation
 3. Switch back to `research-team` to verify results
 
+### Advanced Agentic Patterns
+
+`hufu` is designed to support modern agentic workflows seamlessly without hardcoding complex orchestration logic. By combining tools like `create_skill` and Prompt Chaining (`|`), you can achieve advanced patterns:
+
+#### 1. Hierarchical / Dynamic Delegation (Pattern 2)
+Agents can dynamically delegate subtasks or spawn specialized helpers during execution.
+Instead of the Coordinator manually planning everything upfront, you can prompt an agent to write its own sub-tools:
+```bash
+go run ./cmd/hufu "@coder You are building a complex feature. If you need specialized help, use the create_skill tool to write a bash script that invokes 'hufu @specialist' as a subtask, then execute it."
+```
+This enables the agent to recursively spawn CLI processes or create skills on the fly for deep hierarchical delegation.
+
+#### 2. Multi-Agent Debate / Cross-Examination (Pattern 3)
+For high-stakes tasks (like code reviews or architecture decisions), you can force two different agents to debate and refine a solution until consensus is reached.
+Use the Prompt Chaining syntax (`|`) and `{{PREV_RESULT}}` to chain multiple agents into a debate loop:
+```bash
+go run ./cmd/hufu "@generator Propose a system architecture | @auditor Critique the architecture proposed by generator and point out flaws: {{PREV_RESULT}} | @generator Based on the critique: {{PREV_RESULT}}, revise the architecture"
+```
+
 ---
 
 ## Interactive Mode

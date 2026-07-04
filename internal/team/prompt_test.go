@@ -418,6 +418,67 @@ func TestSplitSegmentByAgentsEdgeCases(t *testing.T) {
 	}
 }
 
+func TestSplitSegmentsByPipe(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []PromptSegment
+		want  []PromptSegment
+	}{
+		{
+			name: "chains on pipe before an at-mention",
+			input: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "team1", Content: "@generator propose | @auditor critique: {{PREV_RESULT}}"},
+			},
+			want: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "team1", Content: "@generator propose", IsPiped: false},
+				{Type: SegmentSwitchTeam, Name: "team1", Content: "@auditor critique: {{PREV_RESULT}}", IsPiped: true},
+			},
+		},
+		{
+			name: "does not chain on a literal shell pipe in task text",
+			input: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "team1", Content: "@coder run: find . -name '*.go' | xargs gofmt"},
+			},
+			want: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "team1", Content: "@coder run: find . -name '*.go' | xargs gofmt", IsPiped: false},
+			},
+		},
+		{
+			name: "mixed: literal pipe followed by a real chain step",
+			input: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "team1", Content: "@coder run: ls | grep foo | @reviewer check the output: {{PREV_RESULT}}"},
+			},
+			want: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "team1", Content: "@coder run: ls | grep foo", IsPiped: false},
+				{Type: SegmentSwitchTeam, Name: "team1", Content: "@reviewer check the output: {{PREV_RESULT}}", IsPiped: true},
+			},
+		},
+		{
+			name: "empty content segment passes through unchanged",
+			input: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "team1", Content: ""},
+			},
+			want: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "team1", Content: ""},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SplitSegmentsByPipe(tt.input)
+			if len(got) != len(tt.want) {
+				t.Fatalf("SplitSegmentsByPipe() returned %d segments, want %d: %+v", len(got), len(tt.want), got)
+			}
+			for i := range got {
+				if got[i].Content != tt.want[i].Content || got[i].IsPiped != tt.want[i].IsPiped {
+					t.Errorf("segment %d = %+v, want %+v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 // Helper function
 func containsStr(s, substr string) bool {
 	return len(s) >= len(substr) && findSubstr(s, substr)

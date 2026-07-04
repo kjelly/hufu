@@ -258,6 +258,25 @@ go run ./cmd/hufu "@research-team 調查 API 設計 @dev-team 實作功能 @rese
 2. 切換到 `dev-team` 進行實作
 3. 切回 `research-team` 驗證結果
 
+### 進階 Agentic 模式 (Advanced Patterns)
+
+`hufu` 的設計理念是保持核心引擎的輕量，並透過靈活的語法與工具組合來達成複雜的 Agentic 工作流。搭配 `create_skill` 工具與 Prompt Chaining (`|` 串聯)，你可以輕鬆實現以下進階模式：
+
+#### 1. 動態階層委派 (Hierarchical Delegation)
+允許 Agent 在執行過程中，動態地委派子任務或生成專屬的助手。
+與其讓 Coordinator 在一開始就把所有計畫寫死，你可以指示 Agent 遇到困難時自行發布子任務：
+```bash
+go run ./cmd/hufu "@coder 你正在開發一項複雜的功能。如果需要特定領域的協助，請使用 create_skill 工具寫一個包含 'hufu @specialist' 指令的 shell script，然後執行它來獲取答案。"
+```
+這使得 Agent 具備了遞迴呼叫與動態委派的能力。
+
+#### 2. 多 Agent 辯論與交叉審查 (Multi-Agent Debate)
+對於高風險任務（如程式碼審查、架構設計），你可以強迫兩個不同的 Agent 進行辯論，直到得出最佳解。
+透過 Prompt Chaining 語法 (`|`) 與 `{{PREV_RESULT}}` 變數，可以輕鬆串聯出一個辯論迴圈：
+```bash
+go run ./cmd/hufu "@generator 請提出一個系統架構方案 | @auditor 嚴厲地審查上一個人的提案並指出漏洞：{{PREV_RESULT}} | @generator 針對審查意見：{{PREV_RESULT}}，請提出修正後的最終架構"
+```
+
 ---
 
 ## 互動模式
