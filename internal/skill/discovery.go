@@ -24,6 +24,7 @@ const (
 	defaultMinFrequency = 10
 	maxSkillCandidates  = 5
 	qualityThreshold    = 0.7
+	minParamScore       = 0.5 // hard floor for parameter generalization score
 	llmTimeout          = 60 * time.Second
 )
 
@@ -272,6 +273,31 @@ func (d *SkillPatternDetector) isSingleToolRepeat(seq *ToolSequence) bool {
 	return !d.evaluateToolDiversity(seq)
 }
 
+// dynamicMinFrequency returns the minimum repetition count required for a
+// sequence of the given length. Short sequences (3-4 tools) are more likely
+// to occur by coincidence and therefore require a higher repetition count.
+// Longer sequences (>=6 tools) represent complex, deliberate workflows and
+// may qualify with fewer repetitions.
+//
+// The baseline is d.minFrequency (the constructor value). Short sequences
+// get a 2× multiplier; medium sequences use the baseline; long sequences
+// get a 60% reduction (but never below 3).
+func (d *SkillPatternDetector) dynamicMinFrequency(seqLen int) int {
+	base := d.minFrequency
+	switch {
+	case seqLen <= 4:
+		return base * 2 // short sequences need more evidence
+	case seqLen >= 6:
+		reduced := base * 3 / 5 // 60% of base
+		if reduced < 3 {
+			reduced = 3
+		}
+		return reduced
+	default:
+		return base // length 5: use baseline
+	}
+}
+
 // buildParamGeneralizationPrompt builds few-shot prompt for LLM evaluation
 func (d *SkillPatternDetector) buildParamGeneralizationPrompt(seq *ToolSequence) string {
 	var sb strings.Builder
@@ -382,7 +408,8 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 	var candidates []PatternCandidate
 
 	for _, seq := range d.sequences {
-		if seq.Count >= d.minFrequency {
+		requiredFreq := d.dynamicMinFrequency(len(seq.Tools))
+		if seq.Count >= requiredFreq {
 			// Deep copy ToolSequence to prevent data race after RUnlock
 			copiedSeq := &ToolSequence{
 				Tools:     append([]string{}, seq.Tools...),
@@ -424,18 +451,22 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 
 	// Filtering statistics
 	var (
-		highQualityCandidates []PatternCandidate
-		filteredByFrequency   int
-		filteredBySingleTool  int
-		filteredByQuality     int
+		highQualityCandidates  []PatternCandidate
+		filteredByFrequency    int
+		filteredBySingleTool   int
+		filteredByLowValue     int
+		filteredByNoAction     int
+		filteredByParamFloor   int
+		filteredByQuality      int
 	)
 
 	for i := range candidates {
 		// Frequency filter (already filtered by loop condition, but count for stats)
-		if candidates[i].Sequence.Count < d.minFrequency {
+		requiredFreq := d.dynamicMinFrequency(len(candidates[i].Sequence.Tools))
+		if candidates[i].Sequence.Count < requiredFreq {
 			filteredByFrequency++
-			log.Printf("[INFO] Filtered candidate (frequency %d < %d): %v",
-				candidates[i].Sequence.Count, d.minFrequency, candidates[i].Sequence.Tools)
+			log.Printf("[INFO] Filtered candidate (frequency %d < %d for len %d): %v",
+				candidates[i].Sequence.Count, requiredFreq, len(candidates[i].Sequence.Tools), candidates[i].Sequence.Tools)
 			continue
 		}
 
@@ -448,10 +479,34 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 			continue
 		}
 
+		// High-value sequence filter: must include at least one non-generic tool
+		if !d.isHighValueSequence(candidates[i].Sequence) {
+			filteredByLowValue++
+			log.Printf("[INFO] Filtered candidate (low-value, all generic tools): %v (×%d)",
+				candidates[i].Sequence.Tools, candidates[i].Sequence.Count)
+			continue
+		}
+
+		// Action tool filter: must include at least one mutating/executing tool
+		if !d.hasActionTool(candidates[i].Sequence) {
+			filteredByNoAction++
+			log.Printf("[INFO] Filtered candidate (no action tool): %v (×%d)",
+				candidates[i].Sequence.Tools, candidates[i].Sequence.Count)
+			continue
+		}
+
 		// LLM evaluation
 		paramScore, reason, elements := d.evaluateParamGeneralization(ctx, candidates[i].Sequence)
 		candidates[i].GeneralizationReason = reason
 		candidates[i].SpecificElements = elements
+
+		// Parameter generalization hard floor: reject overly specific sequences
+		if paramScore < minParamScore {
+			filteredByParamFloor++
+			log.Printf("[INFO] Filtered candidate (param score %.2f < %.2f floor): %s - %s",
+				paramScore, minParamScore, candidates[i].SuggestedName, reason)
+			continue
+		}
 
 		// Quality score calculation
 		candidates[i].QualityScore = d.calculateQualityScore(candidates[i], paramScore)
@@ -482,8 +537,11 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 	// Filtering summary
 	log.Printf("[INFO] Skill pattern filtering summary:")
 	log.Printf("  Total candidates: %d", len(candidates))
-	log.Printf("  Filtered by frequency (<%d): %d", d.minFrequency, filteredByFrequency)
+	log.Printf("  Filtered by frequency (dynamic): %d", filteredByFrequency)
 	log.Printf("  Filtered by single tool: %d", filteredBySingleTool)
+	log.Printf("  Filtered by low-value (all generic): %d", filteredByLowValue)
+	log.Printf("  Filtered by no action tool: %d", filteredByNoAction)
+	log.Printf("  Filtered by param floor (<%.2f): %d", minParamScore, filteredByParamFloor)
 	log.Printf("  Filtered by quality (<%.2f): %d", qualityThreshold, filteredByQuality)
 	log.Printf("  High-quality candidates: %d", len(highQualityCandidates))
 
@@ -724,9 +782,9 @@ func (d *SkillPatternDetector) isInSameClusterFast(descs1, descs2 []string, desc
 	return float64(overlap)/float64(total) >= 0.5
 }
 
-// dedupPrefixes removes candidates whose tool sequence is a strict prefix
-// of another (longer) candidate. The longer candidate is always kept.
-// When two candidates have the same length, both are kept.
+// dedupPrefixes removes candidates whose tool sequence is a contiguous
+// sub-sequence of another (longer) candidate. The longer candidate is always
+// kept. When two candidates have the same length, both are kept.
 func dedupPrefixes(candidates []PatternCandidate) []PatternCandidate {
 	if len(candidates) <= 1 {
 		return candidates
@@ -740,21 +798,44 @@ func dedupPrefixes(candidates []PatternCandidate) []PatternCandidate {
 
 	kept := make([]PatternCandidate, 0, len(sorted))
 	for _, cand := range sorted {
-		isPrefix := false
+		subsumed := false
 		for _, k := range kept {
-			if isStrictPrefix(cand.Sequence.Tools, k.Sequence.Tools) {
-				isPrefix = true
+			if isContiguousSubsequence(cand.Sequence.Tools, k.Sequence.Tools) {
+				subsumed = true
 				break
 			}
 		}
-		if !isPrefix {
+		if !subsumed {
 			kept = append(kept, cand)
 		}
 	}
 	return kept
 }
 
+// isContiguousSubsequence reports whether a is a strict contiguous
+// sub-sequence of b (i.e. a appears as a consecutive run inside b and
+// len(a) < len(b)).
+func isContiguousSubsequence(a, b []string) bool {
+	if len(a) >= len(b) {
+		return false
+	}
+	for i := 0; i <= len(b)-len(a); i++ {
+		match := true
+		for j := range a {
+			if a[j] != b[i+j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
 // isStrictPrefix reports whether a is a strict prefix of b.
+// Retained for backward compatibility; isContiguousSubsequence subsumes it.
 func isStrictPrefix(a, b []string) bool {
 	if len(a) >= len(b) {
 		return false
@@ -1085,4 +1166,27 @@ func (d *SkillPatternDetector) isHighValueSequence(seq *ToolSequence) bool {
 		}
 	}
 	return hasNonGeneric
+}
+
+// hasActionTool returns true if the sequence contains at least one mutating or
+// executing tool. Pure read-only sequences (e.g. view→grep→glob) are not
+// valuable as automated skills because they don't produce artifacts.
+func (d *SkillPatternDetector) hasActionTool(seq *ToolSequence) bool {
+	actionTools := map[string]bool{
+		"write":     true,
+		"edit":      true,
+		"multiedit": true,
+		"bash":      true,
+		"sudo":      true,
+		"ssh":       true,
+		"lua":       true,
+		"golang":    true,
+		"download":  true,
+	}
+	for _, tool := range seq.Tools {
+		if actionTools[tool] {
+			return true
+		}
+	}
+	return false
 }
