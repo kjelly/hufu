@@ -19,20 +19,12 @@ func TruncatePreview(text string, maxLen int) string {
 	if maxLen <= 0 {
 		return ""
 	}
-	if maxLen <= 3 {
-		runes := []rune(text)
-		if len(runes) == 0 {
-			return ""
-		}
-		if len(runes) <= maxLen {
-			return string(runes[:])
-		}
-		return string(runes[:maxLen])
-	}
-
 	runes := []rune(text)
 	if len(runes) <= maxLen {
 		return text
+	}
+	if maxLen <= 3 {
+		return string(runes[:maxLen])
 	}
 	return string(runes[:maxLen-3]) + "..."
 }
@@ -51,6 +43,31 @@ func TruncateLine(text string, maxLen int) string {
 type WrapLineResult struct {
 	Lines     []string
 	Truncated bool
+}
+
+// truncateAndReturn is a helper that truncates the last line of the given list
+// of lines to fit the maximum lengths and returns a WrapLineResult with Truncated=true.
+func truncateAndReturn(allLines []string, maxLen, contWidth int, contPrefix string) WrapLineResult {
+	if len(allLines) == 0 {
+		return WrapLineResult{}
+	}
+	lastIdx := len(allLines) - 1
+	lastLine := allLines[lastIdx]
+	if strings.HasPrefix(lastLine, contPrefix) {
+		content := strings.TrimPrefix(lastLine, contPrefix)
+		runes := []rune(content)
+		if len(runes) > contWidth-3 {
+			content = string(runes[:contWidth-3])
+		}
+		allLines[lastIdx] = contPrefix + content + "..."
+	} else {
+		runes := []rune(lastLine)
+		if len(runes) > maxLen-3 {
+			lastLine = string(runes[:maxLen-3])
+		}
+		allLines[lastIdx] = lastLine + "..."
+	}
+	return WrapLineResult{Lines: allLines, Truncated: true}
 }
 
 // WrapLine wraps text to fit within maxLen rune width per line.
@@ -79,9 +96,8 @@ func WrapLine(text string, maxLen int, maxLines int) WrapLineResult {
 
 	var allLines []string
 	isFirst := true
-	hitLimit := false
 
-	emitLine := func(content string) bool {
+	emitAndCheckLimit := func(content string) bool {
 		if isFirst {
 			allLines = append(allLines, content)
 			isFirst = false
@@ -100,17 +116,15 @@ func WrapLine(text string, maxLen int, maxLines int) WrapLineResult {
 		words := strings.Fields(srcLine)
 		if srcLine == "" && len(words) == 0 {
 			if curLen > 0 {
-				if emitLine(cur.String()) {
-					hitLimit = true
-					goto done
+				if emitAndCheckLimit(cur.String()) {
+					return truncateAndReturn(allLines, maxLen, contWidth, contPrefix)
 				}
 				cur.Reset()
 				curLen = 0
 				width = contWidth
 			}
-			if emitLine("") {
-				hitLimit = true
-				goto done
+			if emitAndCheckLimit("") {
+				return truncateAndReturn(allLines, maxLen, contWidth, contPrefix)
 			}
 			width = contWidth
 			continue
@@ -127,9 +141,8 @@ func WrapLine(text string, maxLen int, maxLines int) WrapLineResult {
 			}
 			// Word doesn't fit on current line — flush current line
 			if curLen > 0 {
-				if emitLine(cur.String()) {
-					hitLimit = true
-					goto done
+				if emitAndCheckLimit(cur.String()) {
+					return truncateAndReturn(allLines, maxLen, contWidth, contPrefix)
 				}
 				cur.Reset()
 				curLen = 0
@@ -149,9 +162,8 @@ func WrapLine(text string, maxLen int, maxLines int) WrapLineResult {
 					chunk = len(wRunes)
 				}
 				if curLen > 0 {
-					if emitLine(cur.String()) {
-						hitLimit = true
-						goto done
+					if emitAndCheckLimit(cur.String()) {
+						return truncateAndReturn(allLines, maxLen, contWidth, contPrefix)
 					}
 					cur.Reset()
 					curLen = 0
@@ -167,73 +179,30 @@ func WrapLine(text string, maxLen int, maxLines int) WrapLineResult {
 
 	// Flush remaining content
 	if curLen > 0 {
-		emitLine(cur.String())
+		emitAndCheckLimit(cur.String())
 	}
 
-done:
 	if len(allLines) == 0 {
 		return WrapLineResult{}
 	}
 
-	// Check if there's remaining content that was cut off
-	// (this covers the case where we hit maxLines via goto)
-	// If we have exactly maxLines lines and hit the limit, content was dropped.
-	if hitLimit {
-		// Truncate the last line and add "..." to indicate more content
-		lastLine := allLines[len(allLines)-1]
-		if strings.HasPrefix(lastLine, contPrefix) {
-			content := strings.TrimPrefix(lastLine, contPrefix)
-			runes := []rune(content)
-			if len(runes) > contWidth-3 {
-				content = string(runes[:contWidth-3])
-			}
-			allLines[len(allLines)-1] = contPrefix + content + "..."
-		} else {
-			runes := []rune(lastLine)
-			if len(runes) > maxLen-3 {
-				lastLine = string(runes[:maxLen-3])
-			}
-			allLines[len(allLines)-1] = lastLine + "..."
-		}
-		return WrapLineResult{Lines: allLines, Truncated: true}
-	}
-
-	truncated := false
 	if len(allLines) > maxLines {
 		allLines = allLines[:maxLines]
-		lastLine := allLines[maxLines-1]
-		if strings.HasPrefix(lastLine, contPrefix) {
-			content := strings.TrimPrefix(lastLine, contPrefix)
-			runes := []rune(content)
-			if len(runes) > contWidth-3 {
-				content = string(runes[:contWidth-3])
-			}
-			allLines[maxLines-1] = contPrefix + content + "..."
-		} else {
-			runes := []rune(lastLine)
-			if len(runes) > maxLen-3 {
-				lastLine = string(runes[:maxLen-3])
-			}
-			allLines[maxLines-1] = lastLine + "..."
-		}
-		truncated = true
+		return truncateAndReturn(allLines, maxLen, contWidth, contPrefix)
 	}
 
-	return WrapLineResult{Lines: allLines, Truncated: truncated}
+	return WrapLineResult{Lines: allLines, Truncated: false}
 }
 
 // TruncateString returns s shortened to max characters with an ellipsis.
 // If max <= 0, returns "…". If len(s) <= max, returns s unchanged.
 // This is a byte-based truncation (not rune-safe); use TruncateRunes for CJK text.
 func TruncateString(s string, max int) string {
-	if max <= 0 {
+	if max <= 0 || max == 1 {
 		return "…"
 	}
 	if len(s) <= max {
 		return s
-	}
-	if max == 1 {
-		return "…"
 	}
 	return s[:max-1] + "…"
 }
@@ -242,6 +211,9 @@ func TruncateString(s string, max int) string {
 // when truncation occurs. Safe for multi-byte characters such as CJK text.
 func TruncateRunes(s string, maxRunes int) string {
 	s = strings.TrimSpace(s)
+	if maxRunes <= 0 {
+		return "..."
+	}
 	runes := []rune(s)
 	if len(runes) == 0 {
 		return ""

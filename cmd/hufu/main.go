@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -350,7 +349,6 @@ func applyProfile(cmd *cobra.Command) error {
 	fmt.Fprintf(os.Stderr, "%s Applied profile %s\n", dimStyle.Render("·"), boldStyle.Render(profileName))
 	return nil
 }
-
 func runTeam(cmd *cobra.Command, args []string) error {
 	// Push current quiet/JSON/TUI state into internal/log so internal/* packages
 	// that log through it stay in sync with the CLI.
@@ -520,208 +518,21 @@ func runTeam(cmd *cobra.Command, args []string) error {
 
 	pathConsent := newPathConsent()
 
-	loadedTeams = map[string]*teamContext{}
-	for _, seg := range initialSegments {
-		if seg.Type != team.SegmentSwitchTeam {
-			continue
-		}
-		if _, ok := loadedTeams[seg.Name]; ok {
-			continue
-		}
-		var tc *teamContext
-		var err error
-		if defaultTeam && seg.Name == "default" {
-			tc, err = loadDefaultTeam(ctx, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
-		} else {
-			vars, err = promptForMissingTemplateVars(ctx, seg.Name, registry, pr, vars)
-			if err != nil {
-				return err
-			}
-			tc, err = loadTeamByName(ctx, seg.Name, registry, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
-		}
-		if err != nil {
-			return fmt.Errorf("failed to load team %q: %w\n  Verify the team exists in your search paths (run 'hufu list' or 'hufu doctor')", seg.Name, err)
-		}
-		if stepsMode {
-			tc.coordinator.SetStepConfirmFn(makeStepConfirmFn())
-		}
-		loadedTeams[seg.Name] = tc
+	loadedTeams, vars, err = loadTeamsForSegments(ctx, initialSegments, registry, pathConsent, pr, vars)
+	if err != nil {
+		return err
 	}
 
-	var segments []team.PromptSegment
-	for _, seg := range initialSegments {
-		if seg.Type == team.SegmentSwitchTeam {
-			tc := loadedTeams[seg.Name]
-			if tc != nil && seg.Content != "" {
-				subSegs, err := team.SplitSegmentByAgents(seg, registry, agentNamesFromSession(tc.session))
-				if err != nil {
-					return err
-				}
-				segments = append(segments, subSegs...)
-			} else {
-				segments = append(segments, seg)
-			}
-		} else {
-			segments = append(segments, seg)
-		}
+	segments, err := expandSegmentsWithAgents(initialSegments, loadedTeams, registry)
+	if err != nil {
+		return err
 	}
 
 	if dryRun {
-		var dryRunTeamName string
-		for _, seg := range segments {
-			if seg.Type == team.SegmentSwitchTeam {
-				dryRunTeamName = seg.Name
-				break
-			}
-		}
-		if dryRunTeamName == "" {
-			dryRunTeamName = strings.ToLower(agentTeamName)
-		}
-		if dryRunTeamName == "" {
-			return fmt.Errorf("--dry-run requires a team (use --agent-team or @team-name in the prompt)")
-		}
-		tc, ok := loadedTeams[dryRunTeamName]
-		if !ok {
-			return fmt.Errorf("failed to load team %q for dry-run", dryRunTeamName)
-		}
-		dryRunPrompt := ""
-		for _, seg := range segments {
-			if seg.Type == team.SegmentSwitchTeam && seg.Name == dryRunTeamName {
-				dryRunPrompt = seg.Content
-			} else if seg.Type == team.SegmentText && dryRunPrompt == "" && dryRunTeamName != "" {
-				dryRunPrompt = seg.Content
-			}
-		}
-		if dryRunPrompt == "" {
-			dryRunPrompt = prompt
-		}
-		if dryRunPrompt == "" {
-			return fmt.Errorf("--dry-run requires a prompt")
-		}
-
-		fmt.Fprintf(os.Stderr, "\n%s Running dry-run for team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(dryRunTeamName))
-
-		dryDisp := newCoordDisplay(tc)
-		result, err := tc.coordinator.DryRun(ctx, dryRunPrompt)
-		dryDisp.stopTimer()
-
-		if err != nil {
-			return fmt.Errorf("dry-run failed: %w", err)
-		}
-		renderDryRun(result)
-		if reportMode {
-			generateReport(loadedTeams, "(dry-run — no tasks executed)")
-		}
-		return nil
+		return executeDryRun(ctx, segments, prompt, loadedTeams)
 	}
 
-	var result string
-	var runErr error
-	if tuiMode {
-		var teamInfo tuipkg.TeamInfo
-		teamInfo.AvailableTeams = registry.ListTeams()
-		for _, tc := range loadedTeams {
-			if tc != nil && tc.session != nil {
-				teamInfo.TeamName = tc.session.Config.Name
-				teamInfo.Workspace = tc.session.Workspace
-				teamInfo.TeamDir = tc.session.Dir
-				teamInfo.DefaultModel = tc.session.Config.Generation.Model
-				for _, ag := range sortedAgents(tc.session.Agents) {
-					model := ag.Generation.Model
-					if model == "" {
-						model = tc.session.Config.Generation.Model
-					}
-					teamInfo.Agents = append(teamInfo.Agents, tuipkg.AgentInfoEntry{
-						Name:  ag.Name,
-						Role:  ag.Role,
-						Model: model,
-					})
-				}
-				for _, s := range tc.session.Skills {
-					teamInfo.Skills = append(teamInfo.Skills, s.Name)
-				}
-				if sc := tc.session.Config.SidecarModel; sc != "" {
-					teamInfo.SidecarModel = sc
-				}
-				if gm := tc.session.Config.GuardModel; gm != "" {
-					teamInfo.GuardModel = gm
-				}
-				teamInfo.MemoryEnabled = memoryEnabled && !tempWorkspace
-				if teamInfo.MemoryEnabled {
-					teamInfo.MemoryModel = config.ResolveEmbeddingModel(memoryModel)
-				}
-				teamInfo.SSHSessions = 0
-				break
-			}
-		}
-		result, runErr = runWithTUI(ctx, cancel, prompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, teamInfo)
-	} else {
-		result, runErr = executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord, pathConsent, vars)
-	}
-	if runErr != nil {
-		return runErr
-	}
-
-	if reportMode {
-		generateReport(loadedTeams, result)
-	}
-
-	var allSkillUsage []team.SkillUsageEntry
-	seenSkill := map[string]int{}
-	for teamName, tc := range loadedTeams {
-		for _, entry := range tc.coordinator.SkillUsage() {
-			key := strings.ToLower(entry.Name)
-			if idx, ok := seenSkill[key]; ok {
-				allSkillUsage[idx].Count += entry.Count
-				for _, a := range entry.Agents {
-					prefixed := teamName + "/" + a
-					if !slices.Contains(allSkillUsage[idx].Agents, prefixed) {
-						allSkillUsage[idx].Agents = append(allSkillUsage[idx].Agents, prefixed)
-					}
-				}
-			} else {
-				seenSkill[key] = len(allSkillUsage)
-				prefixed := make([]string, len(entry.Agents))
-				for i, a := range entry.Agents {
-					prefixed[i] = teamName + "/" + a
-				}
-				allSkillUsage = append(allSkillUsage, team.SkillUsageEntry{
-					Name:   entry.Name,
-					Count:  entry.Count,
-					Agents: prefixed,
-				})
-			}
-		}
-	}
-	if outputFormat == "json" {
-		if err := printResultJSON(result, loadedTeams, allSkillUsage); err != nil {
-			return err
-		}
-	} else {
-		fmt.Println(result)
-		if !quietMode {
-			renderSkillSummary(allSkillUsage)
-		}
-	}
-
-	if archiveMemory && !newSession {
-		for _, tc := range loadedTeams {
-			archiveCurrentSessionToMemory(ctx, tc)
-		}
-	}
-
-	if tempWorkspace {
-		absWS, _ := filepath.Abs(workspace)
-		fmt.Fprintf(os.Stderr, "\n%s\n  Path: %s\n  Reuse: hufu -w %s [prompt]\n",
-			boldStyle.Render("─── Temporary Workspace ───"),
-			absWS, absWS)
-	}
-
-	if originalPrompt != "" {
-		savePromptToHistory(ctx, originalPrompt, providerURL)
-	}
-
-	return nil
+	return executeAndReport(ctx, cancel, prompt, originalPrompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars)
 }
 
 // applyUnattendedAndBudget configures the coordinator's unattended mode,
@@ -1108,8 +919,6 @@ func resolveInitialPrompt(initialPrompt string, pr *readline.PromptReader, vars 
 			prompt = templated
 		}
 	}
-	prompt, _ = injectFileContexts(prompt)
-	prompt = injectProjectContext(prompt)
 	if prompt == "" {
 		var err error
 		if pr != nil {
@@ -1121,6 +930,8 @@ func resolveInitialPrompt(initialPrompt string, pr *readline.PromptReader, vars 
 			return "", err
 		}
 	}
+	prompt, _ = injectFileContexts(prompt)
+	prompt = injectProjectContext(prompt)
 	return prompt, nil
 }
 

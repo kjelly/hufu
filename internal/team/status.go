@@ -277,6 +277,7 @@ func (tl *TodoList) Items() []*TodoItem {
 			Desc:           item.Desc,
 			Status:         item.Status,
 			Detail:         item.Detail,
+			Output:         item.Output,
 			Model:          item.Model,
 			Skills:         skills,
 			InjectedSkills: injectedSkills,
