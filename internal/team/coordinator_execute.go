@@ -347,10 +347,15 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 					r.err = fmt.Errorf("plan reviewer failed: %w", err)
 					break
 				}
-				output, approved, err := pr.review(ctx, r.planText)
+				output, approved, execErr, err := pr.review(ctx, r.planText)
 				if err != nil {
 					r.planText = ""
-					r.err = fmt.Errorf("plan review failed: %w", err)
+					r.err = fmt.Errorf("plan reviewer failed: %w", err)
+					break
+				}
+				if execErr != nil {
+					r.planText = ""
+					r.err = execErr
 					break
 				}
 				if approved {
@@ -693,6 +698,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 
 	var pendingPlansClone map[string]*PlanEntry
 	var approvedOutputsClone map[string]string
+	var approvedErrorsClone map[string]error
 	orig.pendingPlansMu.Lock()
 	if orig.pendingPlans != nil {
 		pendingPlansClone = make(map[string]*PlanEntry, len(orig.pendingPlans))
@@ -704,6 +710,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 				PlanText:    v.PlanText,
 				Status:      v.Status,
 				ReviewCount: v.ReviewCount,
+				Task:        cloneTaskDef(v.Task),
 			}
 		}
 	}
@@ -711,6 +718,12 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		approvedOutputsClone = make(map[string]string, len(orig.approvedOutputs))
 		for k, v := range orig.approvedOutputs {
 			approvedOutputsClone[k] = v
+		}
+	}
+	if orig.approvedErrors != nil {
+		approvedErrorsClone = make(map[string]error, len(orig.approvedErrors))
+		for k, v := range orig.approvedErrors {
+			approvedErrorsClone[k] = v
 		}
 	}
 	orig.pendingPlansMu.Unlock()
@@ -813,6 +826,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		forceMCP:               orig.forceMCP,
 		pendingPlans:           pendingPlansClone,
 		approvedOutputs:        approvedOutputsClone,
+		approvedErrors:         approvedErrorsClone,
 		forcePlanFirst:         orig.forcePlanFirst,
 		autoSkillsEnabled:      orig.autoSkillsEnabled,
 		sessionToolPermissions: sessionToolPermissionsClone,
@@ -1144,6 +1158,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				}
 				return 0
 			}(),
+			Task: task,
 		}
 		c.pendingPlansMu.Unlock()
 	}
@@ -1339,6 +1354,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				c.pendingPlansMu.Lock()
 				planEntry.Agent = agentName
 				planEntry.Goal = task.Goal
+				planEntry.Task = task
 				c.pendingPlansMu.Unlock()
 				c.taskTracker.TodoList().UpdateStatus(todoID, TaskPlanned, "")
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))

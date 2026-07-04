@@ -736,16 +736,15 @@ func (t *submitPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantas
 	}
 	t.coordinator.pendingPlansMu.Lock()
 	existing := t.coordinator.pendingPlans[t.todoID]
-	t.coordinator.pendingPlans[t.todoID] = &PlanEntry{
-		TodoID:   t.todoID,
-		PlanText: args.Plan,
-		Status:   "submitted",
-		ReviewCount: func() int {
-			if existing != nil {
-				return existing.ReviewCount
-			}
-			return 0
-		}(),
+	if existing != nil {
+		existing.PlanText = args.Plan
+		existing.Status = "submitted"
+	} else {
+		t.coordinator.pendingPlans[t.todoID] = &PlanEntry{
+			TodoID:   t.todoID,
+			PlanText: args.Plan,
+			Status:   "submitted",
+		}
 	}
 	t.coordinator.pendingPlansMu.Unlock()
 	if t.coordinator.forcePlanFirst {
@@ -941,21 +940,24 @@ func (t *approvePlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("plan already %s", entry.Status)), nil
 	}
 	entry.Status = "approved"
-	agent := entry.Agent
-	goal := entry.Goal
+	var approvedTask TaskDef
+	if entry.Task.Agent != "" {
+		approvedTask = cloneTaskDef(entry.Task)
+	} else {
+		approvedTask = TaskDef{
+			Agent: entry.Agent,
+			Goal:  entry.Goal,
+		}
+	}
+	approvedTask.PlanFirst = true
+	approvedTask.PlanID = entry.TodoID
 	todoID := entry.TodoID
 	t.coordinator.pendingPlansMu.Unlock()
 
 	t.coordinator.taskTracker.TodoList().UpdateStatus(todoID, TaskPlanned, "")
 	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
 
-	task := TaskDef{
-		Agent:     agent,
-		Goal:      goal,
-		PlanFirst: true,
-		PlanID:    todoID,
-	}
-	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{task})
+	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{approvedTask})
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
@@ -1006,20 +1008,23 @@ func (t *modifyPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantas
 	}
 	entry.Status = "modified"
 	entry.PlanText = args.Plan
-	agent := entry.Agent
-	goal := entry.Goal
+	var modifiedTask TaskDef
+	if entry.Task.Agent != "" {
+		modifiedTask = cloneTaskDef(entry.Task)
+	} else {
+		modifiedTask = TaskDef{
+			Agent: entry.Agent,
+			Goal:  entry.Goal,
+		}
+	}
+	modifiedTask.PlanFirst = true
+	modifiedTask.PlanID = entry.TodoID
 	todoID := entry.TodoID
 	t.coordinator.pendingPlansMu.Unlock()
 
 	t.coordinator.report(t.coordinator.newEvent("step").withMessage(fmt.Sprintf("plan %s modified by coordinator", todoID)))
 
-	task := TaskDef{
-		Agent:     agent,
-		Goal:      goal,
-		PlanFirst: true,
-		PlanID:    todoID,
-	}
-	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{task})
+	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{modifiedTask})
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}

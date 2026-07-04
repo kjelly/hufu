@@ -223,6 +223,7 @@ type Coordinator struct {
 	//   - autoApprovePlan() line 289: write under lock
 	// Do NOT read or write without holding pendingPlansMu.
 	approvedOutputs   map[string]string
+	approvedErrors    map[string]error
 	pendingPlansMu    sync.Mutex
 	forcePlanFirst    bool
 	autoSkillsEnabled bool
@@ -419,6 +420,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		delegatedTasks:  make(map[string]int),
 		pendingPlans:    make(map[string]*PlanEntry),
 		approvedOutputs: make(map[string]string),
+		approvedErrors:  make(map[string]error),
 		taskResultCache: make(map[string][]cachedTaskEntry),
 		memoryStore:     memoryStore,
 		modelList:       modelList,
@@ -1251,18 +1253,22 @@ func (t *rejectPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantas
 		return fantasy.NewTextErrorResponse("plan not found for todo_id: " + args.TodoID), nil
 	}
 	entry.Status = "rejected"
-	agent := entry.Agent
-	goal := entry.Goal
+	var revisedTask TaskDef
+	if entry.Task.Agent != "" {
+		revisedTask = cloneTaskDef(entry.Task)
+	} else {
+		revisedTask = TaskDef{
+			Agent: entry.Agent,
+		}
+	}
+	revisedTask.Goal = fmt.Sprintf("%s\n\n## Plan Rejected\nYour previous plan was rejected for the following reason:\n\n%s\n\nPlease re-plan and submit a new plan.", entry.Goal, args.Reason)
+	revisedTask.PlanFirst = true
+	revisedTask.PlanID = ""
 	t.coordinator.pendingPlansMu.Unlock()
 
 	t.coordinator.report(t.coordinator.newEvent("step").withMessage(fmt.Sprintf("plan %s rejected: %s", args.TodoID, args.Reason)))
 
-	task := TaskDef{
-		Agent:     agent,
-		Goal:      fmt.Sprintf("%s\n\n## Plan Rejected\nYour previous plan was rejected for the following reason:\n\n%s\n\nPlease re-plan and submit a new plan.", goal, args.Reason),
-		PlanFirst: true,
-	}
-	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{task})
+	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{revisedTask})
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
@@ -2889,4 +2895,17 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 	c.report(c.newEvent("done").withAgent("coordinator").withMessage("dry-run complete (no LLM calls)").withTodoID(CoordTodoID))
 
 	return result, nil
+}
+
+func cloneTaskDef(td TaskDef) TaskDef {
+	clone := td
+	if td.ContextFiles != nil {
+		clone.ContextFiles = make([]string, len(td.ContextFiles))
+		copy(clone.ContextFiles, td.ContextFiles)
+	}
+	if td.DependsOn != nil {
+		clone.DependsOn = make([]int, len(td.DependsOn))
+		copy(clone.DependsOn, td.DependsOn)
+	}
+	return clone
 }
