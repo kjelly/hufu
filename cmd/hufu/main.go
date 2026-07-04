@@ -80,6 +80,7 @@ var (
 	maxTotalTokens        int64
 	autoTeam              bool
 	templateName          string
+	initTemplateName      string
 	profileName           string
 	quietMode             bool
 	outputFormat          string
@@ -123,6 +124,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(installCmd)
 
 	// Add custom completion commands
 	completionCmd.AddCommand(completionBashCmd, completionZshCmd, completionFishCmd, completionPowerShellCmd, completionNushellCmd)
@@ -177,8 +179,10 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().BoolVarP(&quietMode, "quiet", "q", false, "Suppress status output; print only the final result to stdout")
 	rootCmd.Flags().StringVar(&outputFormat, "output", "", "Output format for the final result: text (default) or json")
 
+	rootCmd.Flags().StringVar(&templateName, "template", "", "Load prompt template by name from .hufu-templates/ or ~/.config/hufu/templates/")
+
 	// init scaffolding flags (consumed by initcmd.go).
-	initCmd.Flags().StringVar(&templateName, "template", "default", "Scaffold template for `hufu init`: default")
+	initCmd.Flags().StringVar(&initTemplateName, "template", "default", "Scaffold template for `hufu init`: default")
 	initCmd.Flags().StringVar(&modelOverride, "model", "", "Pin a model in the scaffolded team.yaml (e.g. ollama/qwen3:8b)")
 
 	_ = rootCmd.RegisterFlagCompletionFunc("agent-team", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
@@ -409,7 +413,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 
 	// resolveInitialPrompt handles stdin/template/file/project/interactive
 	// sources and returns a fully-resolved prompt.
-	prompt, err = resolveInitialPrompt(pr, vars)
+	prompt, err = resolveInitialPrompt(prompt, pr, vars)
 	if err != nil {
 		return err
 	}
@@ -1088,8 +1092,8 @@ func validateRunFlags() error {
 // args, stdin, the --template flag, and (if still empty) an
 // interactive prompt. The returned prompt is fully resolved including
 // any template expansion and file/project context injection.
-func resolveInitialPrompt(pr *readline.PromptReader, vars map[string]string) (string, error) {
-	prompt := ""
+func resolveInitialPrompt(initialPrompt string, pr *readline.PromptReader, vars map[string]string) (string, error) {
+	prompt := initialPrompt
 	if prompt == "" && templateName == "" {
 		prompt = readStdin()
 	}

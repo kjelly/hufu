@@ -226,6 +226,17 @@ func TestApplyProfile_NoProfileIsNoop(t *testing.T) {
 	}
 }
 
+func TestResolveInitialPrompt(t *testing.T) {
+	// Passing a non-empty initialPrompt should bypass stdin and interactive fallbacks.
+	got, err := resolveInitialPrompt("test prompt", nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasPrefix(got, "test prompt") {
+		t.Errorf("got %q, expected prefix 'test prompt'", got)
+	}
+}
+
 // --- helpers ---
 
 func writeHufuYAML(t *testing.T, dir, content string) {

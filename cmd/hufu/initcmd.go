@@ -51,11 +51,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("team name required: hufu init <team-name>")
 	}
 
-	switch templateName {
+	switch initTemplateName {
 	case "", "default":
 		// the only template currently supported
 	default:
-		return fmt.Errorf("unknown --template %q: supported templates: default", templateName)
+		return fmt.Errorf("unknown --template %q: supported templates: default", initTemplateName)
 	}
 
 	teamDir := filepath.Join(".agent-teams", name)
