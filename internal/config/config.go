@@ -28,23 +28,24 @@ type ProviderConfig struct {
 }
 
 type Config struct {
-	ProviderURL    string                    `yaml:"provider-url"`
-	ProviderAPIKey string                    `yaml:"provider-api-key"`
-	Providers      map[string]ProviderConfig `yaml:"providers"`
-	Model          string                    `yaml:"model"`
-	EmbeddingModel string                    `yaml:"embedding-model"`
-	ModelList      []ModelEntry              `yaml:"model-list"`
-	SidecarModel   string                    `yaml:"sidecar-model"`
-	GuardModel     string                    `yaml:"guard-model"`
-	MaxConcurrent  int                       `yaml:"max-concurrent"`
-	AllowedPaths   []string                  `yaml:"allowed-paths"`
-	RestrictedPath string                    `yaml:"restricted-path"`
-	NoNet          bool                      `yaml:"no-net"`
-	ForceMCP       bool                      `yaml:"force-mcp"`
-	Shell          string                    `yaml:"shell"`
-	RawVars        interface{}               `yaml:"vars"`
-	Hooks          map[string]string         `yaml:"hooks"`
-	Notify         notify.NotifyConfig       `yaml:"notify"`
+	ProviderURL       string                    `yaml:"provider-url"`
+	ProviderAPIKey    string                    `yaml:"provider-api-key"`
+	Providers         map[string]ProviderConfig `yaml:"providers"`
+	Model             string                    `yaml:"model"`
+	EmbeddingModel    string                    `yaml:"embedding-model"`
+	ModelList         []ModelEntry              `yaml:"model-list"`
+	SidecarModel      string                    `yaml:"sidecar-model"`
+	GuardModel        string                    `yaml:"guard-model"`
+	PlanReviewerModel string                    `yaml:"plan-reviewer-model"`
+	MaxConcurrent     int                       `yaml:"max-concurrent"`
+	AllowedPaths      []string                  `yaml:"allowed-paths"`
+	RestrictedPath    string                    `yaml:"restricted-path"`
+	NoNet             bool                      `yaml:"no-net"`
+	ForceMCP          bool                      `yaml:"force-mcp"`
+	Shell             string                    `yaml:"shell"`
+	RawVars           interface{}               `yaml:"vars"`
+	Hooks             map[string]string         `yaml:"hooks"`
+	Notify            notify.NotifyConfig       `yaml:"notify"`
 	// Profiles are named bundles of CLI flag values, selectable with --profile.
 	// Each value maps a flag name to a string the flag knows how to parse, e.g.
 	//   profiles:
@@ -112,6 +113,9 @@ func (c *Config) mergeFromFile(path string) {
 	}
 	if fileCfg.SidecarModel != "" {
 		c.SidecarModel = fileCfg.SidecarModel
+	}
+	if fileCfg.PlanReviewerModel != "" {
+		c.PlanReviewerModel = fileCfg.PlanReviewerModel
 	}
 	if fileCfg.GuardModel != "" {
 		c.GuardModel = fileCfg.GuardModel
@@ -274,6 +278,19 @@ func (c *Config) ResolveGuardModel(teamGuard, teamSidecar string) string {
 		return teamSidecar
 	}
 	return c.SidecarModel
+}
+
+func (c *Config) ResolvePlanReviewerModel(teamPlanReviewer, teamModel string) string {
+	if teamPlanReviewer != "" {
+		return teamPlanReviewer
+	}
+	if c.PlanReviewerModel != "" {
+		return c.PlanReviewerModel
+	}
+	if teamModel != "" {
+		return teamModel
+	}
+	return c.Model
 }
 
 // ResolveModel returns the effective default model following priority:

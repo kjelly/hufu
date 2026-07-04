@@ -34,56 +34,57 @@ import (
 )
 
 var (
-	providerURL           string
-	providerAPIKey        string
-	verbose               bool
-	workspace             string
-	newSession            bool
-	tempWorkspace         bool
-	agentTeamName         string
-	agentTeamSearchPath   string
-	memoryEnabled         bool
-	memoryModel           string
-	archiveMemory         bool
-	showHistory           bool
-	stepsMode             bool
-	dryRun                bool
-	tuiMode               bool
-	rbashMode             bool
-	noNet                 bool
-	forceMCP              bool
-	think                 bool
-	direnv                bool
-	varFlags              []string
-	varFiles              []string
-	forcedSkills          []string
-	planMode              bool
-	autoSkills            bool
-	fixQuestion           string
-	reportMode            bool
-	defaultTeam           bool
-	helperTools           string
-	modelOverride         string
-	temperatureOverride   string
-	maxTokensOverride     string
-	topPOverride          string
-	topKOverride          string
-	sidecarModelOverride  string
-	guardModelOverride    string
-	timeoutOverride       int64
-	maxRoundsOverride     int
-	maxConcurrentOverride int
-	maxStepsOverride      int
-	unattended            bool
-	maxDuration           int64
-	maxTotalTokens        int64
-	autoTeam              bool
-	templateName          string
-	initTemplateName      string
-	profileName           string
-	quietMode             bool
-	outputFormat          string
-	globalPromptReader    atomic.Pointer[readline.PromptReader]
+	providerURL               string
+	providerAPIKey            string
+	verbose                   bool
+	workspace                 string
+	newSession                bool
+	tempWorkspace             bool
+	agentTeamName             string
+	agentTeamSearchPath       string
+	memoryEnabled             bool
+	memoryModel               string
+	archiveMemory             bool
+	showHistory               bool
+	stepsMode                 bool
+	dryRun                    bool
+	tuiMode                   bool
+	rbashMode                 bool
+	noNet                     bool
+	forceMCP                  bool
+	think                     bool
+	direnv                    bool
+	varFlags                  []string
+	varFiles                  []string
+	forcedSkills              []string
+	planMode                  bool
+	autoSkills                bool
+	fixQuestion               string
+	reportMode                bool
+	defaultTeam               bool
+	helperTools               string
+	modelOverride             string
+	temperatureOverride       string
+	maxTokensOverride         string
+	topPOverride              string
+	topKOverride              string
+	sidecarModelOverride      string
+	guardModelOverride        string
+	planReviewerModelOverride string
+	timeoutOverride           int64
+	maxRoundsOverride         int
+	maxConcurrentOverride     int
+	maxStepsOverride          int
+	unattended                bool
+	maxDuration               int64
+	maxTotalTokens            int64
+	autoTeam                  bool
+	templateName              string
+	initTemplateName          string
+	profileName               string
+	quietMode                 bool
+	outputFormat              string
+	globalPromptReader        atomic.Pointer[readline.PromptReader]
 )
 
 type errInterrupted struct{}
@@ -166,6 +167,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringVar(&topKOverride, "top-k", "", "Override top-k value (e.g. 40)")
 	rootCmd.Flags().StringVar(&sidecarModelOverride, "sidecar-model", "", "Override sidecar model used for skill matching (e.g. ollama/qwen3:1b); falls back to --model when not set")
 	rootCmd.Flags().StringVar(&guardModelOverride, "guard-model", "", "Override guard model used for output review (e.g. ollama/qwen3:8b); falls back to --model when not set")
+	rootCmd.Flags().StringVar(&planReviewerModelOverride, "plan-reviewer-model", "", "Override plan reviewer model used for plan review (e.g. ollama/qwen3:8b); falls back to --model when not set")
 	rootCmd.Flags().Int64Var(&timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds (e.g. 1800 for 30 min). 0 = use team/agent default.")
 	rootCmd.Flags().IntVar(&maxRoundsOverride, "max-rounds", 0, "Override team.yaml max-rounds (coordinator round limit). 0 = use team default.")
 	rootCmd.Flags().IntVar(&maxConcurrentOverride, "max-concurrent", 0, "Override team.yaml max-concurrent (parallel worker dispatch). 0 = use team default.")
@@ -599,6 +601,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
 	resolvedSidecarModel := cfg.ResolveSidecarModel(session.Config.SidecarModel)
 	resolvedGuardModel := cfg.ResolveGuardModel(session.Config.GuardModel, session.Config.SidecarModel)
+	resolvedPlanReviewerModel := cfg.ResolvePlanReviewerModel(session.Config.PlanReviewerModel, session.Config.Generation.Model)
 	resolvedMaxConcurrent := cfg.ResolveMaxConcurrent(session.Config.MaxConcurrent)
 	if resolvedMaxConcurrent <= 0 {
 		resolvedMaxConcurrent = 8
@@ -619,14 +622,15 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	resolvedNoNet := noNet || cfg.NoNet || session.Config.NoNet
 	resolvedForceMCP := forceMCP || cfg.ForceMCP || session.Config.ForceMCP
 
-	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent, verbose, think, direnv, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode)
+	roleModels := team.RoleModels{Sidecar: resolvedSidecarModel, Guard: resolvedGuardModel, PlanReviewer: resolvedPlanReviewerModel}
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, roleModels, resolvedMaxConcurrent, verbose, think, direnv, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
 	coordinator.SetSessionData(sessionData)
 	applyUnattendedAndBudget(coordinator, session)
 	archiveToMemory(ctx, memStore, coordinator, session, oldSessionEntries)
-	displayResolvedConfig(session, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedMaxConcurrent)
+	displayResolvedConfig(session, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedPlanReviewerModel, resolvedMaxConcurrent)
 	notifierInst := buildNotifier(cfg, session)
 
 	return &teamContext{

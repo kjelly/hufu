@@ -103,6 +103,7 @@ type TeamConfig struct {
 	ModelList         []config.ModelEntry
 	SidecarModel      string
 	GuardModel        string
+	PlanReviewerModel string
 	MaxConcurrent     int
 	Notify            notify.NotifyConfig
 	AllowedPaths      []string

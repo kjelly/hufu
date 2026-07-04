@@ -56,12 +56,14 @@ type planReviewer struct {
 }
 
 func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*planReviewer, error) {
-	pr := &planReviewer{coordinator: c, modelID: c.session.Config.Generation.Model, todoID: todoID}
-	ag, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(c.session.Config.Generation.Model), agent.AgentConfig{
+	modelID := c.planReviewerModel
+	pr := &planReviewer{coordinator: c, modelID: modelID, todoID: todoID}
+	ag, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(modelID), agent.AgentConfig{
 		Def: &agent.AgentDef{
-			Name:   "plan-reviewer",
-			System: planReviewerSystemPrompt,
-			Role:   "plan_reviewer",
+			Name:       "plan-reviewer",
+			System:     planReviewerSystemPrompt,
+			Role:       "plan_reviewer",
+			Generation: agent.GenerationParams{Model: modelID},
 		},
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,

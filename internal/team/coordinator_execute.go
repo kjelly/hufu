@@ -811,6 +811,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		guardModel:             orig.guardModel,
 		guardInst:              guardInstCopy,
 		guardInit:              guardInitCopy,
+		planReviewerModel:      orig.planReviewerModel,
 		cachedWorkerContext:    orig.cachedWorkerContext,
 		autoLoadedSkills:       autoLoadedSkillsClone,
 		forcedSkillNames:       forcedSkillNamesClone,

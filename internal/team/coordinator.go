@@ -165,9 +165,9 @@ type Coordinator struct {
 	conversationHistoryMu sync.Mutex
 	projectDir            string
 	wrapUp                atomic.Int32
-	current atomic.Pointer[currentSnapshot]
-	currentStageStart   time.Time
-	currentStageStartMu sync.RWMutex
+	current               atomic.Pointer[currentSnapshot]
+	currentStageStart     time.Time
+	currentStageStartMu   sync.RWMutex
 	auditLogger           *audit.AuditLogger
 	sshSessionMgr         *tools.SSHSessionManager
 	skillUsage            map[string]*skillUsageState
@@ -188,6 +188,7 @@ type Coordinator struct {
 	guardInst             *sidecar.Sidecar
 	guardInitMu           sync.Mutex
 	guardInit             bool
+	planReviewerModel     string
 	cachedWorkerContext   string
 	workerCtxOnce         sync.Once
 	autoLoadedSkills      []*skill.SkillDef
@@ -242,7 +243,6 @@ type Coordinator struct {
 	budgetTripped       atomic.Bool
 }
 
-
 func (c *Coordinator) getSnapshotField(getter func(*currentSnapshot) string) string {
 	s := c.current.Load()
 	if s == nil {
@@ -275,7 +275,6 @@ type currentSnapshot struct {
 	// stageStart is NOT in the snapshot; it is only written/read within the
 	// SetCurrentStage method which still uses its own lightweight mutex.
 }
-
 
 // SetUnattended enables unattended (no-human) mode: ask_user returns safe
 // defaults, and only explicitly-allowed tools may run.
@@ -397,7 +396,17 @@ func (t *taskTiming) snapshot() (duration, modelTime, toolTime time.Duration) {
 	return
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, sidecarModel string, guardModel string, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forceMCP bool, forcedSkillNames []string, planMode bool, autoSkillsMode bool) (*Coordinator, error) {
+// RoleModels groups the resolved model IDs for the sidecar, guard, and
+// plan-reviewer roles. Passing this instead of three adjacent string
+// parameters prevents NewCoordinator callers from silently transposing
+// same-typed positional arguments.
+type RoleModels struct {
+	Sidecar      string
+	Guard        string
+	PlanReviewer string
+}
+
+func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, roleModels RoleModels, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forceMCP bool, forcedSkillNames []string, planMode bool, autoSkillsMode bool) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
 	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath), tools.WithNetworkBlock(noNet), tools.WithForceMCP(forceMCP), tools.WithDirenv(direnv))
 	pm, err := agent.NewProviderManager(defaultProviderURL, defaultProviderAPIKey, session.Config.Providers)
@@ -405,34 +414,35 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		return nil, fmt.Errorf("failed to create provider manager: %w", err)
 	}
 	c := &Coordinator{
-		providerManager: pm,
-		session:         session,
-		mcpManager:      mcpManager,
-		coreTools:       coreTools,
-		agentCache:      make(map[string]fantasy.Agent),
-		verbose:         verbose,
-		think:           think,
-		reportStatus:    func(event StatusEvent) {},
-		taskTracker:     NewTaskTracker(),
-		skills:          session.Skills,
-		projectDir:      projectDir,
-		skillUsage:      make(map[string]*skillUsageState),
-		delegatedTasks:  make(map[string]int),
-		pendingPlans:    make(map[string]*PlanEntry),
-		approvedOutputs: make(map[string]string),
-		approvedErrors:  make(map[string]error),
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		memoryStore:     memoryStore,
-		modelList:       modelList,
-		sidecarModel:    sidecarModel,
-		guardModel:      guardModel,
-		maxConcurrent:   maxConcurrent,
-		sessionTime:     time.Now(),
-		hooks:           hookRegistry,
-		rbashMode:       rbashMode,
-		restrictedPath:  restrictedPath,
-		noNet:           noNet,
-		forceMCP:        forceMCP,
+		providerManager:   pm,
+		session:           session,
+		mcpManager:        mcpManager,
+		coreTools:         coreTools,
+		agentCache:        make(map[string]fantasy.Agent),
+		verbose:           verbose,
+		think:             think,
+		reportStatus:      func(event StatusEvent) {},
+		taskTracker:       NewTaskTracker(),
+		skills:            session.Skills,
+		projectDir:        projectDir,
+		skillUsage:        make(map[string]*skillUsageState),
+		delegatedTasks:    make(map[string]int),
+		pendingPlans:      make(map[string]*PlanEntry),
+		approvedOutputs:   make(map[string]string),
+		approvedErrors:    make(map[string]error),
+		taskResultCache:   make(map[string][]cachedTaskEntry),
+		memoryStore:       memoryStore,
+		modelList:         modelList,
+		sidecarModel:      roleModels.Sidecar,
+		guardModel:        roleModels.Guard,
+		planReviewerModel: roleModels.PlanReviewer,
+		maxConcurrent:     maxConcurrent,
+		sessionTime:       time.Now(),
+		hooks:             hookRegistry,
+		rbashMode:         rbashMode,
+		restrictedPath:    restrictedPath,
+		noNet:             noNet,
+		forceMCP:          forceMCP,
 		forcedSkillNames: func() map[string]bool {
 			m := make(map[string]bool)
 			for _, n := range forcedSkillNames {
@@ -836,7 +846,6 @@ func assembleContextWithinBudget(parts []string, budget int) string {
 	return b.String()
 }
 
-
 // This function has been moved to ltm.go as ClassifyLTMEntry
 
 func stripSTMListItem(entry string) string {
@@ -1164,7 +1173,6 @@ func (c *Coordinator) GetCurrentStatus() string {
 	return strings.Join(parts, " ") + elapsed
 }
 
-
 func (c *Coordinator) GetCurrentAgentInfo() tools.AgentInfo {
 	s := c.current.Load()
 	if s == nil {
@@ -1211,7 +1219,6 @@ func (c *Coordinator) RunAgentsTool() fantasy.AgentTool {
 	return &runAgentsTool{coordinator: c}
 }
 
-
 func (t *rejectPlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }
 func (t *rejectPlanTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
 
@@ -1232,8 +1239,6 @@ func (t *rejectPlanTool) Info() fantasy.ToolInfo {
 		Required: []string{"todo_id", "reason"},
 	}
 }
-
-
 
 func (t *rejectPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
@@ -2298,13 +2303,13 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	prevAgent := c.getSnapshotField(func(s *currentSnapshot) string { return s.Agent })
 	prevTask := c.getSnapshotField(func(s *currentSnapshot) string { return s.Task })
 	prevTodoID := c.getSnapshotField(func(s *currentSnapshot) string { return s.TodoID })
-	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = resolvedName})
-	c.updateSnapshot(func(s *currentSnapshot) { s.Task = task})
-	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = todoID})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = resolvedName })
+	c.updateSnapshot(func(s *currentSnapshot) { s.Task = task })
+	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = todoID })
 	defer func() {
-		c.updateSnapshot(func(s *currentSnapshot) { s.Agent = prevAgent})
-		c.updateSnapshot(func(s *currentSnapshot) { s.Task = prevTask})
-		c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = prevTodoID})
+		c.updateSnapshot(func(s *currentSnapshot) { s.Agent = prevAgent })
+		c.updateSnapshot(func(s *currentSnapshot) { s.Task = prevTask })
+		c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = prevTodoID })
 	}()
 
 	ag, err := c.getOrCreateAgent(ctx, agentDef, "")
@@ -2833,7 +2838,7 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 	allSkills := c.getSkills()
 	matchedSet := map[string]bool{}
 	for _, sk := range allSkills {
-		if strings.Contains(strings.ToLower(userPrompt),strings.ToLower(sk.Name)) || SkillMatchesPrompt(sk, userPrompt) {
+		if strings.Contains(strings.ToLower(userPrompt), strings.ToLower(sk.Name)) || SkillMatchesPrompt(sk, userPrompt) {
 			matchedSet[strings.ToLower(sk.Name)] = true
 		}
 		result.AllSkills = append(result.AllSkills, DryRunSkillInfo{

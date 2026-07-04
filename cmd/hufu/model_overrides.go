@@ -8,13 +8,14 @@ import (
 // ModelCLIOverrides collects model-related CLI flag values. Empty fields
 // mean "no override" and the underlying config keeps its current value.
 type ModelCLIOverrides struct {
-	Model        string
-	Temperature  string
-	MaxTokens    string
-	TopP         string
-	TopK         string
-	SidecarModel string
-	GuardModel   string
+	Model             string
+	Temperature       string
+	MaxTokens         string
+	TopP              string
+	TopK              string
+	SidecarModel      string
+	GuardModel        string
+	PlanReviewerModel string
 }
 
 // applyCLIModelOverrides mutates cfg in place to apply non-empty CLI
@@ -44,13 +45,18 @@ func applyCLIModelOverrides(cfg *agent.TeamConfig, overrides ModelCLIOverrides) 
 	}
 	if overrides.SidecarModel != "" {
 		cfg.SidecarModel = overrides.SidecarModel
-	} else if cfg.Generation.Model != "" {
-		cfg.SidecarModel = cfg.Generation.Model
+	} else if overrides.Model != "" {
+		cfg.SidecarModel = overrides.Model
 	}
 	if overrides.GuardModel != "" {
 		cfg.GuardModel = overrides.GuardModel
-	} else if cfg.Generation.Model != "" {
-		cfg.GuardModel = cfg.Generation.Model
+	} else if overrides.Model != "" {
+		cfg.GuardModel = overrides.Model
+	}
+	if overrides.PlanReviewerModel != "" {
+		cfg.PlanReviewerModel = overrides.PlanReviewerModel
+	} else if overrides.Model != "" {
+		cfg.PlanReviewerModel = overrides.Model
 	}
 }
 
@@ -59,13 +65,14 @@ func applyCLIModelOverrides(cfg *agent.TeamConfig, overrides ModelCLIOverrides) 
 // stay empty, signalling "no override" to applyCLIModelOverrides.
 func currentModelOverrides() ModelCLIOverrides {
 	return ModelCLIOverrides{
-		Model:        modelOverride,
-		Temperature:  temperatureOverride,
-		MaxTokens:    maxTokensOverride,
-		TopP:         topPOverride,
-		TopK:         topKOverride,
-		SidecarModel: sidecarModelOverride,
-		GuardModel:   guardModelOverride,
+		Model:             modelOverride,
+		Temperature:       temperatureOverride,
+		MaxTokens:         maxTokensOverride,
+		TopP:              topPOverride,
+		TopK:              topKOverride,
+		SidecarModel:      sidecarModelOverride,
+		GuardModel:        guardModelOverride,
+		PlanReviewerModel: planReviewerModelOverride,
 	}
 }
 

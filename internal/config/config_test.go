@@ -518,6 +518,32 @@ func TestResolveModel(t *testing.T) {
 	}
 }
 
+func TestResolvePlanReviewerModel(t *testing.T) {
+	cases := []struct {
+		name             string
+		cfgPlanReviewer  string
+		cfgModel         string
+		teamPlanReviewer string
+		teamModel        string
+		want             string
+	}{
+		{name: "team plan-reviewer model takes precedence", cfgPlanReviewer: "cfg-reviewer", cfgModel: "cfg-model", teamPlanReviewer: "team-reviewer", teamModel: "team-model", want: "team-reviewer"},
+		{name: "falls back to cfg plan-reviewer model", cfgPlanReviewer: "cfg-reviewer", cfgModel: "cfg-model", teamPlanReviewer: "", teamModel: "team-model", want: "cfg-reviewer"},
+		{name: "falls back to team model", cfgPlanReviewer: "", cfgModel: "cfg-model", teamPlanReviewer: "", teamModel: "team-model", want: "team-model"},
+		{name: "falls back to cfg model", cfgPlanReviewer: "", cfgModel: "cfg-model", teamPlanReviewer: "", teamModel: "", want: "cfg-model"},
+		{name: "all empty returns empty", cfgPlanReviewer: "", cfgModel: "", teamPlanReviewer: "", teamModel: "", want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{PlanReviewerModel: tc.cfgPlanReviewer, Model: tc.cfgModel}
+			got := cfg.ResolvePlanReviewerModel(tc.teamPlanReviewer, tc.teamModel)
+			if got != tc.want {
+				t.Errorf("ResolvePlanReviewerModel(%q, %q) with cfg.PlanReviewerModel=%q cfg.Model=%q = %q, want %q", tc.teamPlanReviewer, tc.teamModel, tc.cfgPlanReviewer, tc.cfgModel, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestModelMergeFromFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	content := "model: ollama/qwen3:8b\n"

@@ -71,6 +71,7 @@ type teamConfigYAML struct {
 	ModelList         []config.ModelEntry              `yaml:"model-list"`
 	SidecarModel      string                           `yaml:"sidecar-model"`
 	GuardModel        string                           `yaml:"guard-model"`
+	PlanReviewerModel string                           `yaml:"plan-reviewer-model"`
 	MaxConcurrent     int                              `yaml:"max-concurrent"`
 	Notify            notify.NotifyConfig              `yaml:"notify"`
 	AllowedPaths      interface{}                      `yaml:"allowed-paths"`
@@ -475,6 +476,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.SidecarModel != "" {
 		cfg.SidecarModel = yc.SidecarModel
+	}
+	if yc.PlanReviewerModel != "" {
+		cfg.PlanReviewerModel = yc.PlanReviewerModel
 	}
 	if yc.GuardModel != "" {
 		cfg.GuardModel = yc.GuardModel
