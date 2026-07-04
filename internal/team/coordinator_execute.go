@@ -1496,6 +1496,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 
 	var lastToolCall *lastToolCallEntry
 	consecutiveErrCount := 0
+	tp := &ThinkParser{}
 
 	streamCall := fantasy.AgentStreamCall{
 		Prompt:   prompt,
@@ -1583,19 +1584,36 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			return nil
 		},
 		OnTextDelta: func(id, text string) error {
-			eventType := "text"
-			if c.think {
-				eventType = "think_text"
-			}
-			reportFn(c.newEvent(eventType).withAgent(agentName).withTodoID(todoID).withMessage(text))
-			logWrite(text)
+			tp.Process(text, func(txt string) {
+				eventType := "text"
+				if c.think {
+					eventType = "think_text"
+				}
+				reportFn(c.newEvent(eventType).withAgent(agentName).withTodoID(todoID).withMessage(txt))
+				logWrite(txt)
+			}, func(rsn string) {
+				reportFn(c.newEvent("reasoning").withAgent(agentName).withTodoID(todoID).withMessage(rsn))
+				logWrite(rsn)
+			})
 			return nil
 		},
 		OnReasoningDelta: func(id, text string) error {
+			reportFn(c.newEvent("reasoning").withAgent(agentName).withTodoID(todoID).withMessage(text))
 			logWrite(text)
 			return nil
 		},
 		OnStreamFinish: func(usage fantasy.Usage, finishReason fantasy.FinishReason, providerMetadata fantasy.ProviderMetadata) error {
+			tp.Flush(func(txt string) {
+				eventType := "text"
+				if c.think {
+					eventType = "think_text"
+				}
+				reportFn(c.newEvent(eventType).withAgent(agentName).withTodoID(todoID).withMessage(txt))
+				logWrite(txt)
+			}, func(rsn string) {
+				reportFn(c.newEvent("reasoning").withAgent(agentName).withTodoID(todoID).withMessage(rsn))
+				logWrite(rsn)
+			})
 			llmLogStreamFinish(logWrite, finishReason, usage)
 
 			if c.hooks != nil && c.hooks.HasHooks("after_llm_step") {

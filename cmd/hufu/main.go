@@ -1127,8 +1127,16 @@ func handleSegmentError(ctx context.Context, tc *teamContext, results []string, 
 func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, defaultProviderURL string, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string) (string, error) {
 	var results []string
 	currentTeamName := ""
+	var prevResult string
 
 	for i, seg := range segments {
+		content := seg.Content
+		if seg.IsPiped && prevResult != "" {
+			content = content + "\n\n" + prevResult
+		} else if strings.Contains(content, "{{PREV_RESULT}}") {
+			content = strings.ReplaceAll(content, "{{PREV_RESULT}}", prevResult)
+		}
+
 		switch seg.Type {
 		case team.SegmentSwitchTeam:
 			teamName := seg.Name
@@ -1155,7 +1163,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			currentTeamName = teamName
 
-			if seg.Content == "" {
+			if content == "" {
 				continue
 			}
 
@@ -1167,7 +1175,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			if injector.IsWrapUpRequested() {
 				tc.coordinator.SetWrapUp()
 			}
-			result, err := tc.coordinator.Run(ctx, seg.Content)
+			result, err := tc.coordinator.Run(ctx, content)
 			activeCoord.Store(nil)
 			disp.stopTimer()
 
@@ -1183,6 +1191,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			disp.finalizeTasks()
 			stderrLog("\n%s Team %s coordination complete.\n", doneStyle.Render("✓"), teamStyle.Render(teamName))
 			results = append(results, fmt.Sprintf("## Team: %s\n%s", teamName, result))
+			prevResult = result
 
 		case team.SegmentInvokeAgent:
 			if currentTeamName == "" {
@@ -1202,7 +1211,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			if injector.IsWrapUpRequested() {
 				tc.coordinator.SetWrapUp()
 			}
-			directResult, err := tc.coordinator.RunDirectAgent(ctx, seg.Name, seg.Content)
+			directResult, err := tc.coordinator.RunDirectAgent(ctx, seg.Name, content)
 			activeCoord.Store(nil)
 			disp2.stopTimer()
 
@@ -1222,9 +1231,10 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			if orchDef == nil {
 				disp2.finalizeTasks()
 				results = append(results, fmt.Sprintf("## Agent: @%s (team: %s)\n%s", seg.Name, currentTeamName, directResult.Output))
+				prevResult = directResult.Output
 			} else {
 				synthesisPrompt := fmt.Sprintf("A user directly asked @%s to do the following task:\n\n%s\n\nHere is what %s produced:\n\n---\n%s\n---\n\nPlease synthesize this into a final, well-organized answer for the user.",
-					seg.Name, seg.Content, seg.Name, directResult.Output)
+					seg.Name, content, seg.Name, directResult.Output)
 				activeCoord.Store(tc.coordinator)
 				if injector.IsWrapUpRequested() {
 					tc.coordinator.SetWrapUp()
@@ -1242,6 +1252,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 				disp2.finalizeTasks()
 				results = append(results, fmt.Sprintf("## Agent: @%s (team: %s)\n%s", seg.Name, currentTeamName, synthResult))
+				prevResult = synthResult
 			}
 
 		case team.SegmentText:
@@ -1259,7 +1270,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			if injector.IsWrapUpRequested() {
 				tc.coordinator.SetWrapUp()
 			}
-			result, err := tc.coordinator.Run(ctx, seg.Content)
+			result, err := tc.coordinator.Run(ctx, content)
 			activeCoord.Store(nil)
 			disp3.stopTimer()
 
@@ -1274,6 +1285,7 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			disp3.finalizeTasks()
 			results = append(results, fmt.Sprintf("## Team: %s\n%s", currentTeamName, result))
+			prevResult = result
 		}
 
 		if i == len(segments)-1 {

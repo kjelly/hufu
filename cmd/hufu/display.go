@@ -386,7 +386,7 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 			dimStyle.Render(event.Message),
 		))
 
-	case "think_text":
+	case "think_text", "reasoning":
 		w.write(fmt.Sprintf("%s %s",
 			thinkStyle.Render("💭"),
 			thinkStyle.Render(event.Message),
@@ -1211,7 +1211,7 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("✗ " + event.Message), Model: event.Model})
 			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + errStyle.Render("✗ "+utils.TruncateLine(event.Message, 60))})
 
-		case "think_text":
+		case "think_text", "reasoning":
 			if event.TodoID == "" {
 				return
 			}

@@ -907,6 +907,7 @@ func AllTools(opts ...ToolOption) []fantasy.AgentTool {
 		NewAgenticFetchTool(opts...),
 		NewRandomTool(opts...),
 		NewMathTool(opts...),
+		NewCreateSkillTool(opts...),
 	}
 	if cfg.NetworkBlock {
 		netTools := map[string]bool{"fetch": true, "download": true, "agentic_fetch": true}

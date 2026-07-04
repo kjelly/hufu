@@ -97,16 +97,28 @@ func loadTeamsForSegments(ctx context.Context, initialSegments []team.PromptSegm
 	return loadedTeams, vars, nil
 }
 
-// expandSegmentsWithAgents splits prompt segments by individual agents if specified.
 func expandSegmentsWithAgents(initialSegments []team.PromptSegment, loadedTeams map[string]*teamContext, registry *team.TeamRegistry) ([]team.PromptSegment, error) {
+	pipedSegments := team.SplitSegmentsByPipe(initialSegments)
+
 	var segments []team.PromptSegment
-	for _, seg := range initialSegments {
+	for _, seg := range pipedSegments {
 		if seg.Type == team.SegmentSwitchTeam {
 			tc := loadedTeams[seg.Name]
 			if tc != nil && seg.Content != "" {
 				subSegs, err := team.SplitSegmentByAgents(seg, registry, agentNamesFromSession(tc.session))
 				if err != nil {
 					return nil, err
+				}
+				if seg.IsPiped {
+					// The piped result must land on the segment that actually
+					// executes the @mention (team switch or agent invoke), not
+					// on leading filler text split off before it.
+					for i := len(subSegs) - 1; i >= 0; i-- {
+						if subSegs[i].Content != "" {
+							subSegs[i].IsPiped = true
+							break
+						}
+					}
 				}
 				segments = append(segments, subSegs...)
 			} else {

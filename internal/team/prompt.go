@@ -21,6 +21,7 @@ type PromptSegment struct {
 	Type    PromptSegmentType
 	Name    string
 	Content string
+	IsPiped bool
 }
 
 var atNamePattern = regexp.MustCompile(`\B@([\w][\w-]*)`)
@@ -276,4 +277,33 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func SplitSegmentsByPipe(segments []PromptSegment) []PromptSegment {
+	var result []PromptSegment
+	for _, seg := range segments {
+		if seg.Content == "" {
+			result = append(result, seg)
+			continue
+		}
+
+		parts := strings.Split(seg.Content, " | ")
+		for i, part := range parts {
+			part = strings.TrimSpace(part)
+
+			isPiped := false
+			if i > 0 {
+				isPiped = true
+			} else {
+				isPiped = seg.IsPiped
+			}
+
+			newSeg := seg
+			newSeg.Content = part
+			newSeg.IsPiped = isPiped
+
+			result = append(result, newSeg)
+		}
+	}
+	return result
 }
