@@ -1,0 +1,415 @@
+package team
+
+// Agent resolution and worker context: name lookup/aliases, the agent cache,
+// model resolution, and the injected per-worker context sections.
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"charm.land/fantasy"
+
+	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/anomalyco/hufu/internal/tools"
+)
+
+func agentCacheKey(def *agent.AgentDef, overrideModel string) string {
+	if overrideModel != "" {
+		return def.Name + "|" + overrideModel
+	}
+	return def.Name
+}
+
+func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef, overrideModel string) (fantasy.Agent, error) {
+	cacheKey := agentCacheKey(def, overrideModel)
+	c.agentCacheMu.RLock()
+	if ag, ok := c.agentCache[cacheKey]; ok {
+		c.agentCacheMu.RUnlock()
+		return ag, nil
+	}
+	c.agentCacheMu.RUnlock()
+
+	c.agentCacheMu.Lock()
+	defer c.agentCacheMu.Unlock()
+
+	if ag, ok := c.agentCache[cacheKey]; ok {
+		return ag, nil
+	}
+
+	agentDef := def
+	if overrideModel != "" {
+		overriddenDef := *def
+		overriddenDef.Generation.Model = overrideModel
+		agentDef = &overriddenDef
+	}
+
+	agentDef = c.injectWorkerContext(ctx, agentDef)
+
+	// Inject SSH session manager into context
+	ctx = tools.SetSSHSessionManager(ctx, c.sshSessionMgr)
+
+	agentTools := agent.SelectTools(c.coreTools, agentDef.Tools)
+	if c.mcpManager != nil {
+		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
+
+		// Load agent-specific MCP tools if defined
+		if len(agentDef.MCPTools) > 0 {
+			err := c.mcpManager.LoadAgentMCPServer(agentDef.Name, agentDef.MCPTools, agentDef.Shell)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load MCP server for agent %s: %w", agentDef.Name, err)
+			}
+			mcpTools := c.mcpManager.GetAgentMCPTools(agentDef.Name, agentDef.Shell)
+			if len(mcpTools) > 0 {
+				agentTools = append(agentTools, mcpTools...)
+			}
+		}
+	}
+
+	getAgModelID := c.resolveAgentModel(agentDef, "")
+	ag, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(getAgModelID), agent.AgentConfig{
+		Def:        agentDef,
+		TeamConfig: &c.session.Config,
+		WorkDir:    c.projectDir,
+		MaxSteps:   agent.DefaultMaxSteps,
+	}, agentTools)
+	if err != nil {
+		return nil, err
+	}
+
+	c.agentCache[cacheKey] = ag
+	return ag, nil
+}
+
+// resolveAgentName resolves an agent name (exact, case-insensitive, or fuzzy match)
+// to its AgentDef.
+//
+// Thread Safety: c.session is set once in NewCoordinator and never modified.
+// c.session.Agents is populated during team loading and remains read-only during
+// execution. Therefore, no mutex protection is needed for reading session fields.
+// If future changes require runtime mutation of session, add RWMutex protection.
+func (c *Coordinator) resolveAgentName(input string) (*agent.AgentDef, string, error) {
+	if c.session == nil {
+		return nil, "", fmt.Errorf("session not initialized")
+	}
+	key := strings.ToLower(input)
+	if def, ok := c.session.Agents[key]; ok {
+		if def.Role == "orchestrator" || def.Role == "coordinator" {
+			return nil, "", fmt.Errorf("cannot delegate to coordinator agent %q", input)
+		}
+		return def, key, nil
+	}
+
+	var matches []*agent.AgentDef
+	seenNames := make(map[string]bool)
+	for _, def := range c.session.Agents {
+		if def.Role == "orchestrator" || def.Role == "coordinator" {
+			continue
+		}
+		if seenNames[def.Name] {
+			continue
+		}
+		// Match the full display name case-insensitively (e.g. "Helper" → "helper")
+		if strings.ToLower(def.Name) == key {
+			matches = append(matches, def)
+			seenNames[def.Name] = true
+			continue
+		}
+		for _, word := range strings.Fields(def.Name) {
+			if strings.ToLower(word) == key {
+				matches = append(matches, def)
+				seenNames[def.Name] = true
+				break
+			}
+		}
+		if seenNames[def.Name] {
+			continue
+		}
+		if def.FileAlias != "" {
+			for _, seg := range strings.Split(strings.ToLower(def.FileAlias), "-") {
+				if seg != "" && seg == key {
+					matches = append(matches, def)
+					seenNames[def.Name] = true
+					break
+				}
+			}
+		}
+	}
+
+	if len(matches) == 1 {
+		def := matches[0]
+		return def, strings.ToLower(def.Name), nil
+	}
+	if len(matches) > 1 {
+		var names []string
+		for _, m := range matches {
+			names = append(names, m.Name)
+		}
+		sort.Strings(names)
+		return nil, "", fmt.Errorf("ambiguous agent name %q matches multiple agents: %v", input, names)
+	}
+
+	var available []string
+	seenAvail := make(map[string]bool)
+	for _, def := range c.session.Agents {
+		if def.Role != "orchestrator" && def.Role != "coordinator" && !seenAvail[def.Name] {
+			seenAvail[def.Name] = true
+			available = append(available, def.Name)
+		}
+	}
+	sort.Strings(available)
+	return nil, "", fmt.Errorf("unknown agent %q (available: %v)", input, available)
+}
+
+func (c *Coordinator) uniqueWorkerDefs() []*agent.AgentDef {
+	seen := make(map[string]bool)
+	var defs []*agent.AgentDef
+	for _, def := range c.session.Agents {
+		if def.Role == "orchestrator" || def.Role == "coordinator" {
+			continue
+		}
+		if seen[def.Name] {
+			continue
+		}
+		seen[def.Name] = true
+		defs = append(defs, def)
+	}
+	return defs
+}
+
+func (c *Coordinator) buildWorkerNamesAndDescs() (names []string, descs []string) {
+	for _, def := range c.uniqueWorkerDefs() {
+		desc := def.Name
+		aliases := c.agentAliasesFor(def)
+		if aliases != "" {
+			desc += " (aliases: " + aliases + ")"
+		}
+		if def.Description != "" {
+			desc += ": " + def.Description
+		}
+		if def.Tools != "" {
+			desc += fmt.Sprintf(" (tools: %s)", def.Tools)
+		}
+		names = append(names, def.Name)
+		descs = append(descs, desc)
+	}
+	return names, descs
+}
+
+func (c *Coordinator) agentAliasesFor(def *agent.AgentDef) string {
+	nameLower := strings.ToLower(def.Name)
+	var parts []string
+	if def.FileAlias != "" && strings.ToLower(def.FileAlias) != nameLower {
+		parts = append(parts, def.FileAlias)
+	}
+	for _, word := range strings.Fields(def.Name) {
+		w := strings.ToLower(word)
+		if w != nameLower && !containsPart(parts, w) {
+			parts = append(parts, w)
+		}
+	}
+	if def.FileAlias != "" {
+		for _, seg := range strings.Split(strings.ToLower(def.FileAlias), "-") {
+			if seg != nameLower && seg != "" && !containsPart(parts, seg) {
+				parts = append(parts, seg)
+			}
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func containsPart(parts []string, s string) bool {
+	for _, p := range parts {
+		if p == s {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Coordinator) workerNameList() []string {
+	names, _ := c.buildWorkerNamesAndDescs()
+	return names
+}
+
+const maxAgentsMDSize = 50000
+const defaultWorkerContextSize = 12000
+
+func (c *Coordinator) loadProjectContext() string {
+	path := filepath.Join(c.projectDir, "AGENTS.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if utf8.RuneCountInString(string(data)) > maxAgentsMDSize {
+		runes := []rune(string(data))
+		data = []byte(string(runes[:maxAgentsMDSize]) + "\n\n... [AGENTS.md truncated]")
+	}
+	return string(data)
+}
+
+func (c *Coordinator) getWorkerContext(ctx context.Context) string {
+	c.workerCtxOnce.Do(func() {
+		raw := c.loadProjectContext()
+		if raw == "" {
+			return
+		}
+		ctxSize := c.getWorkerContextSize()
+		if s := c.Sidecar(); s != nil && utf8.RuneCountInString(raw) > ctxSize/2 {
+			if c.think {
+				c.emitThinkSidecar("Compact", "compacting worker context (AGENTS.md)")
+			}
+			compacted, err := s.Compact(ctx, raw, "Extract the essential project context: tech stack, language, framework, key conventions, and directory structure. Preserve all factual details but remove verbose descriptions.")
+			if err == nil && compacted != "" {
+				raw = compacted
+			}
+		}
+		if utf8.RuneCountInString(raw) > ctxSize {
+			raw = string([]rune(raw)[:ctxSize]) + "\n\n... [truncated]"
+		}
+		c.cachedWorkerContext = raw
+	})
+	return c.cachedWorkerContext
+}
+
+func (c *Coordinator) getWorkerContextSize() int {
+	if c.session != nil && c.session.Config.WorkerContextSize > 0 {
+		return c.session.Config.WorkerContextSize
+	}
+	return defaultWorkerContextSize
+}
+
+func (c *Coordinator) getWorkerSummary(name string) string {
+	c.workerSummariesMu.Lock()
+	defer c.workerSummariesMu.Unlock()
+	if c.workerSummaries == nil {
+		return ""
+	}
+	return c.workerSummaries[name]
+}
+
+func (c *Coordinator) computeWorkerSummaries(ctx context.Context) {
+	c.workerSummariesOnce.Do(func() {
+		c.workerSummaries = make(map[string]string)
+		for _, def := range c.uniqueWorkerDefs() {
+			if def.System == "" {
+				continue
+			}
+			c.workerSummariesMu.Lock()
+			summary := c.summarizeSystem(ctx, def.System)
+			c.workerSummaries[def.Name] = summary
+			c.workerSummariesMu.Unlock()
+		}
+	})
+}
+
+func (c *Coordinator) summarizeSystem(ctx context.Context, system string) string {
+	if s := c.Sidecar(); s != nil {
+		if c.think {
+			c.emitThinkSidecar("Compact", "summarizing worker system prompt for coordinator")
+		}
+		compacted, err := s.Compact(ctx, system, "Summarize this agent's role, key behavioral guidelines, and unique instructions in 2-3 concise sentences. Preserve what makes this agent distinct.")
+		if err == nil && compacted != "" {
+			return compacted
+		}
+	}
+	if utf8.RuneCountInString(system) > 500 {
+		runes := []rune(system)
+		return string(runes[:500]) + "..."
+	}
+	return system
+}
+
+func (c *Coordinator) buildCoreReminder(def *agent.AgentDef) string {
+	if def.System == "" {
+		return ""
+	}
+	lines := strings.Split(def.System, "\n")
+	var keyLines []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "---") {
+			continue
+		}
+		keyLines = append(keyLines, trimmed)
+		if len(keyLines) >= 5 {
+			break
+		}
+	}
+	if len(keyLines) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Core Instructions Reminder\n\n")
+	fmt.Fprintf(&b, "You are **%s**", def.Name)
+	if def.Description != "" {
+		fmt.Fprintf(&b, ": %s", def.Description)
+	}
+	b.WriteString(". Your core directives:\n")
+	for _, line := range keyLines {
+		fmt.Fprintf(&b, "- %s\n", line)
+	}
+	b.WriteString("\nFollow these as your primary directive — they define your identity and priorities.\n")
+	return b.String()
+}
+
+// injectWorkerContext prepends the project context to the agent's system prompt
+// if the agent is not an orchestrator/coordinator and a worker context is available.
+// It returns a new AgentDef pointer (either the original unchanged or a copy with
+// the modified System field) to avoid mutating shared state.
+func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentDef) *agent.AgentDef {
+	if def.Role == "orchestrator" || def.Role == "coordinator" {
+		return def
+	}
+	wc := c.getWorkerContext(ctx)
+
+	var b strings.Builder
+	b.WriteString("## Project Context\n\n")
+	if wc != "" {
+		b.WriteString(wc)
+		b.WriteString("\n\n---\n\n")
+	}
+	wsPath := c.session.Workspace
+	sharedPath := filepath.Join(wsPath, sharedDir)
+	b.WriteString("## Environment & Rules\n\n")
+	fmt.Fprintf(&b, "- CWD: %s | Workspace: %s | Shared: %s | Time: %s\n", c.projectDir, wsPath, sharedPath, c.sessionTime.Format(time.RFC3339))
+	fmt.Fprintf(&b, "- ALL intermediate files (drafts, logs, notes, etc.) MUST be written to workspace: %s\n", wsPath)
+	fmt.Fprintf(&b, "- Use %s to share files between agents. NEVER write outside workspace.\n\n", sharedPath)
+	b.WriteString("---\n\n")
+
+	if memSuffix := c.buildMemorySuffix(def.Role); memSuffix != "" {
+		b.WriteString(memSuffix)
+		b.WriteString("\n")
+	}
+
+	injectedDef := *def
+	injectedDef.System = injectedDef.System + "\n\n---\n\n" + b.String()
+
+	if reminder := c.buildCoreReminder(def); reminder != "" {
+		injectedDef.System += "\n\n" + reminder
+	}
+
+	return &injectedDef
+}
+func (c *Coordinator) resolveCurrentAgentModel(agentName string) string {
+	agentDef, _, err := c.resolveAgentName(agentName)
+	if err == nil && agentDef != nil {
+		return c.resolveAgentModel(agentDef, "")
+	}
+	return c.session.Config.Generation.Model
+}
+
+func (c *Coordinator) resolveAgentModel(def *agent.AgentDef, overrideModel string) string {
+	if overrideModel != "" {
+		return overrideModel
+	}
+	if def.Generation.Model != "" {
+		return def.Generation.Model
+	}
+	return c.session.Config.Generation.Model
+}

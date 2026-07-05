@@ -9,13 +9,7 @@ import (
 func TestTodoListAddBatch(t *testing.T) {
 	tl := &TodoList{}
 
-	items := tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	items := tl.AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 		{Agent: "writer", Desc: "write docs"},
 		{Agent: "checker", Desc: "verify tests"},
@@ -44,13 +38,7 @@ func TestTodoListAddBatch(t *testing.T) {
 func TestTodoListUpdateStatus(t *testing.T) {
 	tl := &TodoList{}
 
-	tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	tl.AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 		{Agent: "writer", Desc: "write docs"},
 	})
@@ -83,13 +71,7 @@ func TestTodoListUpdateStatus(t *testing.T) {
 func TestTodoListClear(t *testing.T) {
 	tl := &TodoList{}
 
-	tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	tl.AddBatch([]TodoSpec{
 		{Agent: "a", Desc: "task a"},
 		{Agent: "b", Desc: "task b"},
 	})
@@ -104,13 +86,7 @@ func TestTodoListClear(t *testing.T) {
 		t.Errorf("expected 0 items after clear, got %d", len(tl.Items()))
 	}
 
-	items := tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	items := tl.AddBatch([]TodoSpec{
 		{Agent: "c", Desc: "task c"},
 	})
 
@@ -122,22 +98,10 @@ func TestTodoListClear(t *testing.T) {
 func TestTodoListIDsAutoIncrement(t *testing.T) {
 	tl := &TodoList{}
 
-	batch1 := tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	batch1 := tl.AddBatch([]TodoSpec{
 		{Agent: "a", Desc: "first"},
 	})
-	batch2 := tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	batch2 := tl.AddBatch([]TodoSpec{
 		{Agent: "b", Desc: "second"},
 		{Agent: "c", Desc: "third"},
 	})
@@ -160,13 +124,7 @@ func TestTaskTrackerTodoList(t *testing.T) {
 		t.Fatal("expected TodoList to be non-nil")
 	}
 
-	tr.TodoList().AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	tr.TodoList().AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 	})
 
@@ -182,13 +140,7 @@ func TestTaskTrackerTodoList(t *testing.T) {
 func TestTodoListUpdateStatusPreventDoneToInProgress(t *testing.T) {
 	tl := &TodoList{}
 
-	tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	tl.AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 	})
 
@@ -211,13 +163,7 @@ func TestTodoListUpdateStatusPreventDoneToInProgress(t *testing.T) {
 func TestTodoListUpdateStatusAllowErrorToInProgressForRetry(t *testing.T) {
 	tl := &TodoList{}
 
-	tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	tl.AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 	})
 
@@ -245,13 +191,7 @@ func TestTodoToolHandleUpdatePreventDoneToInProgress(t *testing.T) {
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),
 	}
-	c.taskTracker.TodoList().AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 	})
 
@@ -260,8 +200,8 @@ func TestTodoToolHandleUpdatePreventDoneToInProgress(t *testing.T) {
 
 	tool := &todoTool{coordinator: c}
 
-	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher"})
-	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher" })
+	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1" })
 
 	resp, err := tool.handleUpdate("researcher", "1", "in_progress", "")
 	if err != nil {
@@ -285,13 +225,7 @@ func TestTodoToolHandleUpdatePreventErrorToDone(t *testing.T) {
 		},
 		reportStatus: func(event StatusEvent) {},
 	}
-	c.taskTracker.TodoList().AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 	})
 
@@ -300,8 +234,8 @@ func TestTodoToolHandleUpdatePreventErrorToDone(t *testing.T) {
 
 	tool := &todoTool{coordinator: c}
 
-	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher"})
-	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher" })
+	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1" })
 
 	// TaskError -> TaskDone should be blocked (not a valid retry)
 	resp, err := tool.handleUpdate("researcher", "1", "done", "")
@@ -321,13 +255,7 @@ func TestTodoToolHandleUpdatePreventErrorToDone(t *testing.T) {
 func TestTodoListUpdateStatusPreventDoneToPlanned(t *testing.T) {
 	tl := &TodoList{}
 
-	tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	tl.AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 	})
 
@@ -345,13 +273,7 @@ func TestTodoListUpdateStatusPreventDoneToPlanned(t *testing.T) {
 func TestTodoListUpdateStatusPreventDoneToPaused(t *testing.T) {
 	tl := &TodoList{}
 
-	tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	tl.AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 	})
 
@@ -369,13 +291,7 @@ func TestTodoListUpdateStatusPreventDoneToPaused(t *testing.T) {
 func TestTodoListUpdateStatusPreventErrorToPlanned(t *testing.T) {
 	tl := &TodoList{}
 
-	tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	tl.AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 	})
 
@@ -393,13 +309,7 @@ func TestTodoListUpdateStatusPreventErrorToPlanned(t *testing.T) {
 func TestTodoListUpdateStatusAllowErrorToInProgress(t *testing.T) {
 	tl := &TodoList{}
 
-	tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	tl.AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 	})
 
@@ -421,13 +331,7 @@ func TestTodoListUpdateStatusAllowErrorToInProgress(t *testing.T) {
 func TestTodoListUpdateStatusPreventSkippedToPending(t *testing.T) {
 	tl := &TodoList{}
 
-	tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	tl.AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 	})
 
@@ -444,13 +348,7 @@ func TestTodoListUpdateStatusPreventSkippedToPending(t *testing.T) {
 func TestTodoListUpdateStatusPreventSkippedToInProgress(t *testing.T) {
 	tl := &TodoList{}
 
-	tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	tl.AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 	})
 
@@ -472,13 +370,7 @@ func TestTodoToolHandleUpdatePreventDoneToAny(t *testing.T) {
 		},
 		reportStatus: func(event StatusEvent) {},
 	}
-	c.taskTracker.TodoList().AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 	})
 
@@ -487,8 +379,8 @@ func TestTodoToolHandleUpdatePreventDoneToAny(t *testing.T) {
 
 	tool := &todoTool{coordinator: c}
 
-	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher"})
-	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher" })
+	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1" })
 
 	resp, err := tool.handleUpdate("researcher", "1", "in_progress", "")
 	if err != nil {
@@ -504,8 +396,6 @@ func TestTodoToolHandleUpdatePreventDoneToAny(t *testing.T) {
 	}
 }
 
-
-
 func TestTodoToolHandleUpdatePreventErrorToDoneDup(t *testing.T) {
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),
@@ -514,13 +404,7 @@ func TestTodoToolHandleUpdatePreventErrorToDoneDup(t *testing.T) {
 		},
 		reportStatus: func(event StatusEvent) {},
 	}
-	c.taskTracker.TodoList().AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 	})
 
@@ -529,8 +413,8 @@ func TestTodoToolHandleUpdatePreventErrorToDoneDup(t *testing.T) {
 
 	tool := &todoTool{coordinator: c}
 
-	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher"})
-	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher" })
+	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1" })
 
 	// TaskError -> TaskDone should be blocked (not a valid retry)
 	resp, err := tool.handleUpdate("researcher", "1", "done", "")
@@ -555,13 +439,7 @@ func TestTodoToolHandleUpdatePreventSkippedToAny(t *testing.T) {
 		},
 		reportStatus: func(event StatusEvent) {},
 	}
-	c.taskTracker.TodoList().AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "researcher", Desc: "find bugs"},
 	})
 
@@ -569,8 +447,8 @@ func TestTodoToolHandleUpdatePreventSkippedToAny(t *testing.T) {
 
 	tool := &todoTool{coordinator: c}
 
-	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher"})
-	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher" })
+	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1" })
 
 	resp, err := tool.handleUpdate("researcher", "1", "in_progress", "")
 	if err != nil {

@@ -8,7 +8,7 @@ import (
 )
 
 type StatusEvent struct {
-	Type        string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning", "timing"
+	Type        string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning", "timing", "judge", "skeptic"
 	TeamName    string
 	Agent       string
 	Message     string
@@ -138,6 +138,10 @@ type TodoItem struct {
 	Source         string
 	ParentID       string
 	DependsOn      []string // IDs of tasks that must complete before this one starts
+	Verify         string   // Command to run to verify the task
+	MaxRetries     int      // Maximum number of retries for this task
+	Retries        int      // Current number of retries
+	OnFailure      string   // ID of the task to jump back to if this task fails (creates a loop)
 }
 
 type TodoList struct {
@@ -147,25 +151,34 @@ type TodoList struct {
 	onChange func()
 }
 
-func (tl *TodoList) AddBatch(items []struct {
-	Agent    string
-	Desc     string
-	Model    string
-	Source   string
-	ParentID string
-}) []*TodoItem {
+// TodoSpec describes a todo item to be created via AddBatch.
+type TodoSpec struct {
+	Agent      string
+	Desc       string
+	Model      string
+	Source     string
+	ParentID   string
+	Verify     string
+	MaxRetries int
+	OnFailure  string
+}
+
+func (tl *TodoList) AddBatch(items []TodoSpec) []*TodoItem {
 	tl.mu.Lock()
 	var added []*TodoItem
 	for _, item := range items {
 		tl.next++
 		ti := &TodoItem{
-			ID:       fmt.Sprintf("%d", tl.next),
-			Agent:    item.Agent,
-			Desc:     item.Desc,
-			Model:    item.Model,
-			Status:   TaskPending,
-			Source:   item.Source,
-			ParentID: item.ParentID,
+			ID:         fmt.Sprintf("%d", tl.next),
+			Agent:      item.Agent,
+			Desc:       item.Desc,
+			Model:      item.Model,
+			Status:     TaskPending,
+			Source:     item.Source,
+			ParentID:   item.ParentID,
+			Verify:     item.Verify,
+			MaxRetries: item.MaxRetries,
+			OnFailure:  item.OnFailure,
 		}
 		tl.items = append(tl.items, ti)
 		added = append(added, ti)
@@ -218,6 +231,33 @@ func (tl *TodoList) UpdateStatusAndOutput(id string, status TaskStatus, detail s
 					ti.EndedAt = time.Now()
 				}
 			}
+			updated = true
+			break
+		}
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+
+	if updated && onChange != nil {
+		onChange()
+	}
+}
+
+// ResetForRetry returns a task to TaskPending so it can run again as part of
+// an on_failure DAG loop. Unlike UpdateStatus, it deliberately bypasses the
+// terminal-state protection (Done/Error are normally final) because a retry
+// re-executes tasks that already completed. Timing fields are cleared so the
+// re-run records fresh timestamps, and Retries is incremented.
+func (tl *TodoList) ResetForRetry(id string, detail string) {
+	tl.mu.Lock()
+	updated := false
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			ti.Status = TaskPending
+			ti.Detail = detail
+			ti.StartedAt = time.Time{}
+			ti.EndedAt = time.Time{}
+			ti.Retries++
 			updated = true
 			break
 		}
@@ -289,6 +329,10 @@ func (tl *TodoList) Items() []*TodoItem {
 			Source:         item.Source,
 			ParentID:       item.ParentID,
 			DependsOn:      dependsOn,
+			Verify:         item.Verify,
+			MaxRetries:     item.MaxRetries,
+			Retries:        item.Retries,
+			OnFailure:      item.OnFailure,
 		}
 	}
 	return result
@@ -377,6 +421,10 @@ func (tl *TodoList) Children(parentID string) []*TodoItem {
 				Source:         item.Source,
 				ParentID:       item.ParentID,
 				DependsOn:      dependsOn,
+				Verify:         item.Verify,
+				MaxRetries:     item.MaxRetries,
+				Retries:        item.Retries,
+				OnFailure:      item.OnFailure,
 			})
 		}
 	}

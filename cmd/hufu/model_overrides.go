@@ -15,6 +15,7 @@ type ModelCLIOverrides struct {
 	TopK              string
 	SidecarModel      string
 	GuardModel        string
+	JudgeModel        string
 	PlanReviewerModel string
 }
 
@@ -53,6 +54,12 @@ func applyCLIModelOverrides(cfg *agent.TeamConfig, overrides ModelCLIOverrides) 
 	} else if overrides.Model != "" {
 		cfg.GuardModel = overrides.Model
 	}
+	// Judge deliberately has no --model fallback: it falls back to the
+	// sidecar model at resolve time instead, preserving the cheap-by-default
+	// property (judging with the main model would double main-model cost).
+	if overrides.JudgeModel != "" {
+		cfg.JudgeModel = overrides.JudgeModel
+	}
 	if overrides.PlanReviewerModel != "" {
 		cfg.PlanReviewerModel = overrides.PlanReviewerModel
 	} else if overrides.Model != "" {
@@ -72,6 +79,7 @@ func currentModelOverrides() ModelCLIOverrides {
 		TopK:              topKOverride,
 		SidecarModel:      sidecarModelOverride,
 		GuardModel:        guardModelOverride,
+		JudgeModel:        judgeModelOverride,
 		PlanReviewerModel: planReviewerModelOverride,
 	}
 }

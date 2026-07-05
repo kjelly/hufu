@@ -17,13 +17,7 @@ func TestTodoListConcurrentAddBatch(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			tl.AddBatch([]struct {
-				Agent    string
-				Desc     string
-				Model    string
-				Source   string
-				ParentID string
-			}{{Agent: "agent", Desc: "task"}})
+			tl.AddBatch([]TodoSpec{{Agent: "agent", Desc: "task"}})
 		}(i)
 	}
 	wg.Wait()
@@ -44,13 +38,7 @@ func TestTodoListConcurrentAddBatch(t *testing.T) {
 
 func TestTodoListConcurrentUpdateStatus(t *testing.T) {
 	tl := &TodoList{}
-	items := tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	items := tl.AddBatch([]TodoSpec{
 		{Agent: "a", Desc: "t1"},
 		{Agent: "b", Desc: "t2"},
 		{Agent: "c", Desc: "t3"},
@@ -91,26 +79,14 @@ func TestTodoListConcurrentUpdateStatus(t *testing.T) {
 
 func TestTodoListConcurrentReadWrite(t *testing.T) {
 	tl := &TodoList{}
-	tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{{Agent: "a", Desc: "initial"}})
+	tl.AddBatch([]TodoSpec{{Agent: "a", Desc: "initial"}})
 
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		wg.Add(2)
 		go func(n int) {
 			defer wg.Done()
-			tl.AddBatch([]struct {
-				Agent    string
-				Desc     string
-				Model    string
-				Source   string
-				ParentID string
-			}{{Agent: "a", Desc: "concurrent"}})
+			tl.AddBatch([]TodoSpec{{Agent: "a", Desc: "concurrent"}})
 		}(i)
 		go func() {
 			defer wg.Done()
@@ -127,13 +103,7 @@ func TestTodoListConcurrentReadWrite(t *testing.T) {
 
 func TestTodoListConcurrentClearAndRead(t *testing.T) {
 	tl := &TodoList{}
-	tl.AddBatch([]struct {
-		Agent    string
-		Desc     string
-		Model    string
-		Source   string
-		ParentID string
-	}{
+	tl.AddBatch([]TodoSpec{
 		{Agent: "a", Desc: "t1"},
 		{Agent: "b", Desc: "t2"},
 	})

@@ -13,7 +13,7 @@ func TestDisplayResolvedConfig(t *testing.T) {
 	session := &team.TeamSession{
 		Agents: map[string]*agent.AgentDef{},
 	}
-	displayResolvedConfig(session, nil, "", "", "", 8)
+	displayResolvedConfig(session, nil, "", "", "", "", 8)
 }
 
 func TestBuildAllowedPaths(t *testing.T) {

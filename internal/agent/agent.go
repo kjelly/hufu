@@ -103,8 +103,12 @@ type TeamConfig struct {
 	ModelList         []config.ModelEntry
 	SidecarModel      string
 	GuardModel        string
+	JudgeModel        string
 	PlanReviewerModel string
 	MaxConcurrent     int
+	// EscalateOnRetry makes every task retry escalate to the next stronger
+	// model in ModelList (ordered weakest→strongest) by default.
+	EscalateOnRetry   bool
 	Notify            notify.NotifyConfig
 	AllowedPaths      []string
 	RestrictedPath    string

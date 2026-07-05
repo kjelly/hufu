@@ -51,6 +51,7 @@ var (
 	tuiMode                   bool
 	rbashMode                 bool
 	noNet                     bool
+	noJournal                 bool
 	forceMCP                  bool
 	think                     bool
 	direnv                    bool
@@ -70,6 +71,7 @@ var (
 	topKOverride              string
 	sidecarModelOverride      string
 	guardModelOverride        string
+	judgeModelOverride        string
 	planReviewerModelOverride string
 	timeoutOverride           int64
 	maxRoundsOverride         int
@@ -148,6 +150,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().BoolVar(&tuiMode, "tui", false, "Show a Bubble Tea TUI for real-time task tracking")
 	rootCmd.Flags().BoolVar(&rbashMode, "rbash", false, "Use restricted bash (rbash) for the bash tool")
 	rootCmd.Flags().BoolVar(&noNet, "no-net", false, "Block all network access for agent subprocesses")
+	rootCmd.Flags().BoolVar(&noJournal, "no-journal", false, "Disable the persistent task-result journal (workspace/logs/task_journal.jsonl)")
 	rootCmd.Flags().BoolVar(&forceMCP, "force-mcp", false, "Force MCP mode: disable built-in execution/network tools, require MCP servers")
 	rootCmd.Flags().BoolVar(&direnv, "direnv", false, "Load .envrc/.env environment for bash tool; parses .env (key=value) and/or uses direnv for full shell support")
 	rootCmd.Flags().BoolVar(&think, "think", false, "Show coordinator decision reasoning (skills, agents, tasks, system prompt)")
@@ -167,6 +170,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringVar(&topKOverride, "top-k", "", "Override top-k value (e.g. 40)")
 	rootCmd.Flags().StringVar(&sidecarModelOverride, "sidecar-model", "", "Override sidecar model used for skill matching (e.g. ollama/qwen3:1b); falls back to --model when not set")
 	rootCmd.Flags().StringVar(&guardModelOverride, "guard-model", "", "Override guard model used for output review (e.g. ollama/qwen3:8b); falls back to --model when not set")
+	rootCmd.Flags().StringVar(&judgeModelOverride, "judge-model", "", "Override judge model used to pick the best multi-model result (e.g. ollama/qwen3:8b); falls back to the sidecar model when not set")
 	rootCmd.Flags().StringVar(&planReviewerModelOverride, "plan-reviewer-model", "", "Override plan reviewer model used for plan review (e.g. ollama/qwen3:8b); falls back to --model when not set")
 	rootCmd.Flags().Int64Var(&timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds (e.g. 1800 for 30 min). 0 = use team/agent default.")
 	rootCmd.Flags().IntVar(&maxRoundsOverride, "max-rounds", 0, "Override team.yaml max-rounds (coordinator round limit). 0 = use team default.")
@@ -542,6 +546,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 // CLI flags take precedence; team.yaml values are the fallback.
 func applyUnattendedAndBudget(coordinator *team.Coordinator, session *team.TeamSession) {
 	coordinator.SetUnattended(unattended || session.Config.Unattended)
+	coordinator.SetNoJournal(noJournal)
 
 	budgetSeconds := maxDuration
 	if budgetSeconds == 0 {
@@ -601,6 +606,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
 	resolvedSidecarModel := cfg.ResolveSidecarModel(session.Config.SidecarModel)
 	resolvedGuardModel := cfg.ResolveGuardModel(session.Config.GuardModel, session.Config.SidecarModel)
+	resolvedJudgeModel := cfg.ResolveJudgeModel(session.Config.JudgeModel, session.Config.SidecarModel)
 	resolvedPlanReviewerModel := cfg.ResolvePlanReviewerModel(session.Config.PlanReviewerModel, session.Config.Generation.Model)
 	resolvedMaxConcurrent := cfg.ResolveMaxConcurrent(session.Config.MaxConcurrent)
 	if resolvedMaxConcurrent <= 0 {
@@ -622,7 +628,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	resolvedNoNet := noNet || cfg.NoNet || session.Config.NoNet
 	resolvedForceMCP := forceMCP || cfg.ForceMCP || session.Config.ForceMCP
 
-	roleModels := team.RoleModels{Sidecar: resolvedSidecarModel, Guard: resolvedGuardModel, PlanReviewer: resolvedPlanReviewerModel}
+	roleModels := team.RoleModels{Sidecar: resolvedSidecarModel, Guard: resolvedGuardModel, Judge: resolvedJudgeModel, PlanReviewer: resolvedPlanReviewerModel}
 	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, roleModels, resolvedMaxConcurrent, verbose, think, direnv, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
@@ -630,7 +636,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	coordinator.SetSessionData(sessionData)
 	applyUnattendedAndBudget(coordinator, session)
 	archiveToMemory(ctx, memStore, coordinator, session, oldSessionEntries)
-	displayResolvedConfig(session, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedPlanReviewerModel, resolvedMaxConcurrent)
+	displayResolvedConfig(session, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedMaxConcurrent)
 	notifierInst := buildNotifier(cfg, session)
 
 	return &teamContext{

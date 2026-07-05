@@ -36,6 +36,7 @@ type Config struct {
 	ModelList         []ModelEntry              `yaml:"model-list"`
 	SidecarModel      string                    `yaml:"sidecar-model"`
 	GuardModel        string                    `yaml:"guard-model"`
+	JudgeModel        string                    `yaml:"judge-model"`
 	PlanReviewerModel string                    `yaml:"plan-reviewer-model"`
 	MaxConcurrent     int                       `yaml:"max-concurrent"`
 	AllowedPaths      []string                  `yaml:"allowed-paths"`
@@ -119,6 +120,9 @@ func (c *Config) mergeFromFile(path string) {
 	}
 	if fileCfg.GuardModel != "" {
 		c.GuardModel = fileCfg.GuardModel
+	}
+	if fileCfg.JudgeModel != "" {
+		c.JudgeModel = fileCfg.JudgeModel
 	}
 	if fileCfg.MaxConcurrent > 0 {
 		c.MaxConcurrent = fileCfg.MaxConcurrent
@@ -273,6 +277,23 @@ func (c *Config) ResolveGuardModel(teamGuard, teamSidecar string) string {
 	}
 	if c.GuardModel != "" {
 		return c.GuardModel
+	}
+	if teamSidecar != "" {
+		return teamSidecar
+	}
+	return c.SidecarModel
+}
+
+// ResolveJudgeModel falls back to the sidecar model (not the main model):
+// judging is a cheap classification task, and defaulting to the sidecar
+// avoids silently doubling main-model cost. An empty result disables the
+// judge, and multi-model results use the concatenation merge.
+func (c *Config) ResolveJudgeModel(teamJudge, teamSidecar string) string {
+	if teamJudge != "" {
+		return teamJudge
+	}
+	if c.JudgeModel != "" {
+		return c.JudgeModel
 	}
 	if teamSidecar != "" {
 		return teamSidecar

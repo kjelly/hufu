@@ -71,8 +71,10 @@ type teamConfigYAML struct {
 	ModelList         []config.ModelEntry              `yaml:"model-list"`
 	SidecarModel      string                           `yaml:"sidecar-model"`
 	GuardModel        string                           `yaml:"guard-model"`
+	JudgeModel        string                           `yaml:"judge-model"`
 	PlanReviewerModel string                           `yaml:"plan-reviewer-model"`
 	MaxConcurrent     int                              `yaml:"max-concurrent"`
+	EscalateOnRetry   bool                             `yaml:"escalate-on-retry"`
 	Notify            notify.NotifyConfig              `yaml:"notify"`
 	AllowedPaths      interface{}                      `yaml:"allowed-paths"`
 	RestrictedPath    string                           `yaml:"restricted-path"`
@@ -483,8 +485,14 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	if yc.GuardModel != "" {
 		cfg.GuardModel = yc.GuardModel
 	}
+	if yc.JudgeModel != "" {
+		cfg.JudgeModel = yc.JudgeModel
+	}
 	if yc.MaxConcurrent > 0 {
 		cfg.MaxConcurrent = yc.MaxConcurrent
+	}
+	if yc.EscalateOnRetry {
+		cfg.EscalateOnRetry = true
 	}
 	if yc.Notify.Enabled() {
 		cfg.Notify = yc.Notify

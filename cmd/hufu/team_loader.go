@@ -304,7 +304,7 @@ func resolveRestrictedPath(session *team.TeamSession, cfg *config.Config) string
 // displayResolvedConfig prints the resolved skill/model/sidecar/guard/
 // max-concurrent settings for the user. Called after the coordinator
 // is created.
-func displayResolvedConfig(session *team.TeamSession, resolvedModelList []config.ModelEntry, resolvedSidecarModel, resolvedGuardModel, resolvedPlanReviewerModel string, resolvedMaxConcurrent int) {
+func displayResolvedConfig(session *team.TeamSession, resolvedModelList []config.ModelEntry, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel string, resolvedMaxConcurrent int) {
 	if len(session.Skills) > 0 {
 		var skillNames []string
 		for _, s := range session.Skills {
@@ -324,6 +324,9 @@ func displayResolvedConfig(session *team.TeamSession, resolvedModelList []config
 	}
 	if resolvedGuardModel != "" {
 		stderrLog("%s %s\n", boldStyle.Render("Guard:"), resolvedGuardModel)
+	}
+	if resolvedJudgeModel != "" {
+		stderrLog("%s %s\n", boldStyle.Render("Judge:"), resolvedJudgeModel)
 	}
 	if resolvedPlanReviewerModel != "" {
 		stderrLog("%s %s\n", boldStyle.Render("Plan Reviewer:"), resolvedPlanReviewerModel)
