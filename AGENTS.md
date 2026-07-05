@@ -89,7 +89,13 @@ Results joined and printed to stdout
 | Feature | Description |
 |---------|-------------|
 | **Multi-Provider** | `ProviderManager` routes models across multiple providers (Ollama, OpenAI, etc.) |
-| **Sidecar** | Lightweight LLM for skill matching (`sidecarModel`) and guard review (`guardModel`) |
+| **Multi-Model Judge** | Picks the best of N worker results via `--judge-model` or `judge-model:` (defaults to sidecar model) |
+| **Skeptic** | Challenges a single result before acceptance via adversarial verification |
+| **Escalation on Retry** | Automatically escalates to next stronger model when `escalate-on-retry` is enabled |
+| **DAG Scheduling** | `OnFailure` creates loops back to earlier tasks; `Verify` runs non-LLM deliverable checks |
+| **Reflexion** | Structured failure hints inform retries; deterministic local fallback when no sidecar |
+| **Task Journal** | Durable per-task results persisted to `workspace/logs/task_journal.jsonl` |
+| **Sidecar** | Lightweight LLM for skill matching (`sidecarModel`), guard review (`guardModel`), judge, skeptic, and plan review |
 | **Guard System** | Rule-based output review per agent (`guard` field in .md); triggers `guardModel` sidecar on violation. **Fails closed** — if the reviewer errors/times out, the tool call is denied, not allowed |
 | **Deliverable Verification** | Per-task `verify` shell command (in the `agent` tool); runs after the agent reports success and before the task is marked done. A non-zero exit fails the task and triggers a retry — an objective, non-LLM check that the artifact actually exists |
 | **Auto-Skills** | Sidecar-driven skill matching via `--auto-skills` or `auto-skills: true` in team.yml |
@@ -137,7 +143,13 @@ Results joined and printed to stdout
 | `--top-k` | — | `""` | Override top-k value (e.g. `40`) |
 | `--sidecar-model` | — | `""` | Override sidecar model used for skill matching (e.g. `ollama/qwen3:1b`); falls back to `--model` when not set |
 | `--guard-model` | — | `""` | Override guard model used for output review (e.g. `ollama/qwen3:8b`); falls back to `--model` when not set |
+| `--judge-model` | — | `""` | Override judge model used for multi-model result selection (e.g. `ollama/qwen3:1b`); falls back to sidecar when not set |
+| `--plan-reviewer-model` | — | `""` | Override plan reviewer model (e.g. `ollama/qwen3:8b`); falls back to `--model` when not set |
 | `--timeout` | — | `0` | Override agent/coordinator timeout in seconds (e.g. `1800` for 30 min). `0` = use team/agent default. Highest priority — overrides agent `.md` and `team.yaml`. |
+| `--max-rounds` | — | `0` | Override team.yaml max-rounds (coordinator round limit). `0` = use team default. |
+| `--max-concurrent` | — | `0` | Override team.yaml max-concurrent (parallel worker dispatch). `0` = use team default. |
+| `--max-steps` | — | `0` | Override team.yaml max-steps (per-agent step budget). `0` = use team/agent default. |
+| `--no-journal` | — | `false` | Disable the persistent task-result journal (`workspace/logs/task_journal.jsonl`) |
 | `--fix` | — | `""` | Analyze previous execution data and suggest improvements |
 | `--skill` | — | `nil` | Force-load specific skills (repeatable) |
 | `--var` | — | `nil` | Set template variable `key=value` (repeatable) |
@@ -980,7 +992,7 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 29. **`TodoItem` fields are lowercase** — `TodoItem` uses `ID`, `Agent`, `Desc` (exported), while the legacy `TaskInfo` uses `Agent`/`Task`. Be careful not to confuse them.
 
-30. **Sidecar model defaults to empty** — If `sidecarModel` is empty, sidecar features (skill matching, guard review) are silently disabled. No errors.
+30. **Sidecar model defaults to empty** — If `sidecarModel` is empty, sidecar features (skill matching, guard review, judge, skeptic, plan review) are silently disabled. No errors.
 
 31. **Auto-skills uses keyword fallback** — If sidecar skill matching fails (network error, model unavailable), it falls back to keyword matching against skill names and descriptions.
 
@@ -1039,7 +1051,7 @@ When multiple sources of model configuration are present, the effective value fo
 
 CLI flags are only applied when their values are non-empty. The `--default` team (built-in) starts with empty `Generation`, so the CLI flags are the *only* way to set a model for it without editing `hufu.yaml`.
 
-**Sidecar / guard model fallback:** if `--sidecar-model` or `--guard-model` is not specified, the value of `--model` is used. Explicit `--sidecar-model` / `--guard-model` always win. This lets a user set a single `--model` and have all three roles (main, sidecar, guard) use it.
+**Sidecar / guard / judge model fallback:** if `--sidecar-model`, `--guard-model`, or `--judge-model` is not specified, the value of `--model` is used. Explicit `--sidecar-model` / `--guard-model` / `--judge-model` always win. This lets a user set a single `--model` and have all four roles (main, sidecar, guard, judge) use it.
 
 34. **TUI `--steps` flag combination** — `--tui` and `--steps` cannot be used together because step confirmation requires terminal access that conflicts with the Bubble Tea altscreen.
 

@@ -61,6 +61,12 @@
 - 📝 **Plan-First Mode** — Require agents to submit plans before execution
 - 📊 **Report Generation** — Full execution report as markdown
 - 🌐 **SSH Tool** — Enhanced with session management, error diagnostics, SCP support, SSH config integration, connection reuse, and audit logging
+- ⚖️ **Multi-Model Judge** — Pick the best of N worker results via `--judge-model`
+- 🎭 **Skeptic** — Challenge a single result before acceptance with adversarial verification
+- 📈 **Escalation on Retry** — Automatically escalate to a stronger model when retries are needed
+- 🔄 **DAG Task Scheduling** — Declare `on_failure` loops and `verify` commands for non-LLM task verification
+- 🪞 **Reflexion** — Structured failure hints inform retries with deterministic local fallback
+- 📓 **Task Journal** — Durable per-task results persisted to `workspace/logs/task_journal.jsonl`
 
 ---
 
@@ -202,7 +208,21 @@ go run ./cmd/hufu
 | `--top-k` | — | `string` | `""` | Override top-k value |
 | `--sidecar-model` | — | `string` | `""` | Override sidecar model used for skill matching (falls back to `--model` when not set) |
 | `--guard-model` | — | `string` | `""` | Override guard model used for output review (falls back to `--model` when not set) |
+| `--judge-model` | — | `string` | `""` | Override judge model used for multi-model result selection (falls back to sidecar when not set) |
+| `--plan-reviewer-model` | — | `string` | `""` | Override plan reviewer model (falls back to `--model` when not set) |
 | `--timeout` | — | `int64` | `0` | Override agent/coordinator timeout in seconds (e.g. `1800` for 30 min). `0` = use team/agent default. |
+| `--max-rounds` | — | `int` | `0` | Override team.yaml max-rounds (coordinator round limit) |
+| `--max-concurrent` | — | `int` | `0` | Override team.yaml max-concurrent (parallel worker dispatch) |
+| `--max-steps` | — | `int` | `0` | Override team.yaml max-steps (per-agent step budget) |
+| `--no-journal` | — | `bool` | `false` | Disable task journal (per-task results persisted to workspace/logs/task_journal.jsonl) |
+| `--unattended` | — | `bool` | `false` | No human present: ask_user returns safe defaults, --steps/--tui disabled |
+| `--max-duration` | — | `int64` | `0` | Budget: max total wall-clock seconds before forcing wrap-up |
+| `--max-total-tokens` | — | `int64` | `0` | Budget: max cumulative LLM tokens before forcing wrap-up |
+| `--auto-team` | — | `bool` | `false` | Auto-select the best team for the prompt |
+| `--profile` | — | `string` | `""` | Apply a named flag bundle from hufu.yaml `profiles:` |
+| `--quiet` | `-q` | `bool` | `false` | Suppress status output; print only the final result to stdout |
+| `--output` | — | `string` | `""` | Final-result format: `text` (default) or `json` |
+| `--template` | — | `string` | `""` | Load prompt template by name |
 | `--fix` | — | `string` | `""` | Analyze previous execution data and suggest improvements |
 | `--skill` | — | `[]string` | `nil` | Force-load specific skills (repeatable) |
 | `--var` | — | `[]string` | `nil` | Set template variable `key=value` (repeatable) |
@@ -300,6 +320,142 @@ go run ./cmd/hufu "@generator Propose a system architecture | @auditor Critique 
 
 ---
 
+## Common Use Cases
+
+### 1. Code Review with Multi-Model Judge
+
+When you have multiple models available, use the judge to pick the best code review result:
+
+```yaml
+# team.yaml
+model-list:
+  - name: qwen3:1b
+    provider: ollama
+  - name: qwen3:8b
+    provider: ollama
+judge-model: qwen3:1b  # Cheap model for judging
+```
+
+```bash
+# Run code review with multiple models, judge picks the best
+go run ./cmd/hufu --agent-team code-review "Review the authentication module"
+```
+
+### 2. High-Stakes Decisions with Skeptic
+
+For critical decisions, use adversarial verification to challenge the result:
+
+```bash
+# Ask the coordinator to implement with skeptic verification
+go run ./cmd/hufu --agent-team arch-team "Design the database schema"
+# Agent delegates with: agent("Design schema", adversarial_verify=3)
+```
+
+### 3. Escalating Retry for Stubborn Tasks
+
+Enable escalation when tasks need stronger models on retry:
+
+```yaml
+# team.yaml
+escalate-on-retry: true
+model-list:
+  - name: qwen3:1b
+    provider: ollama
+  - name: qwen3:8b
+    provider: ollama
+  - name: qwen3:30b
+    provider: ollama
+```
+
+### 4. Verify Deliverables with Shell Commands
+
+Ensure tasks produce actual artifacts, not just claims:
+
+```bash
+# The agent must produce tests, verify command runs them
+agent("Implement login feature", verify="go test ./tests/login/...")
+```
+### 5. Reflexion for Blind Retries
+
+Even without a sidecar, retries get structured hints:
+
+```bash
+# Reflexion works without sidecar - deterministic error classification
+go run ./cmd/hufu --agent-team dev-team "Implement complex feature"
+# If it fails, reflexion classifies: timeout / missing file / permission error
+```
+
+### 6. Memory-Augmented Development
+
+Persist learnings across sessions:
+
+```bash
+# Enable memory to search past sessions
+go run ./cmd/hufu --memory "Refactor the API layer"
+
+# Later sessions can query relevant memories
+go run ./cmd/hufu --memory "How did we handle auth errors previously?"
+```
+
+### 7. Unattended Batch Processing
+
+Run jobs with no human watching:
+
+```bash
+# Full unattended configuration
+go run ./cmd/hufu \
+  --unattended \
+  --max-duration 3600 \
+  --max-total-tokens 500000 \
+  --no-journal \
+  --profile batch \
+  --agent-team pipeline \
+  "Process all pending pull requests"
+```
+
+### 8. Plan-First for Complex Features
+
+Require agents to submit plans before acting:
+
+```bash
+# Agents must propose plans first
+go run ./cmd/hufu --plan "Implement a distributed caching layer"
+```
+
+### 9. Dry Run for Safe Exploration
+
+Preview what would happen without executing:
+
+```bash
+# No LLM calls, no agent execution - just preview
+go run ./cmd/hufu --dry-run --agent-team dev-team "Refactor the auth module"
+```
+
+### 10. Guardrails for Code Quality
+
+Add output guardrails per agent:
+
+```markdown
+# researcher.md
+---
+name: researcher
+guard:
+  - require-tests
+  - no-profanity
+---
+```
+
+### 11. TUI for Real-Time Monitoring
+
+Watch tasks progress in real-time:
+
+```bash
+# TUI mode shows task board, logs, skill usage
+go run ./cmd/hufu --tui "Implement the new feature"
+```
+
+---
+
 ## Interactive Mode
 
 When no prompt is provided and stdin is empty, `hufu` enters interactive mode:
@@ -370,9 +526,14 @@ model-list:
   - name: gpt-4o
     provider: openai
 
-# === Sidecar / Guard Models ===
+# === Sidecar / Guard / Judge Models ===
 sidecar-model: qwen3:1b          # Lightweight model for skill matching
 guard-model: qwen3:8b            # Model for guard / review tasks
+judge-model: qwen3:1b            # Model for multi-model result selection (defaults to sidecar)
+plan-reviewer-model: qwen3:8b   # Model for plan review tasks
+
+# === Escalation ===
+escalate-on-retry: false        # Escalate to next stronger model on retry (requires model-list)
 
 # === Skills ===
 skills: code-review,git-commit  # Skills to include
@@ -426,6 +587,9 @@ description: Implementation specialist
 role: worker
 tools: view,write,edit,multiedit,bash,grep,glob,ls
 skills: code-review
+guard:
+  - require-tests
+  - no-profanity
 model: ollama/qwen3:8b
 temperature: "0.7"
 max-tokens: "4096"
@@ -449,6 +613,7 @@ Please follow best practices and ensure proper error handling.
 | `role` | ❌ | `worker` | Agent role (`worker` or `coordinator`) |
 | `tools` | ❌ | — | Available tools list (comma-separated) |
 | `skills` | ❌ | — | Skills to load (comma-separated) |
+| `guard` | ❌ | — | Guard rules (YAML list) |
 | `model` | ❌ | Team default | LLM model to use |
 | `temperature` | ❌ | Team default | Temperature value |
 | `max-tokens` | ❌ | Team default | Maximum output tokens |
@@ -458,6 +623,11 @@ Please follow best practices and ensure proper error handling.
 | `max-retries` | ❌ | `-1` (use team default) | Maximum retries |
 | `max-steps` | ❌ | Team default | Maximum execution steps |
 | `provider-url` | ❌ | Team default | Provider URL override |
+| `provider-api-key` | ❌ | Team default | API key override |
+| `allowed-paths` | ❌ | Team default | Allowed file system paths |
+| `restricted-path` | ❌ | Team default | Restricted file system path |
+| `no-net` | ❌ | Team default | Block network access |
+| `force-mcp` | ❌ | Team default | Force MCP mode (disable execution/network tools) |
 | `shell` | ❌ | Team default | Default shell for agent's MCP tools (e.g., `bash`, `zsh`, `nu`, or full path) |
 | `mcp-tools` | ❌ | — | Custom MCP tools (dict format: `{tool-name: {cmd, desc, inputs, shell, dir}}`) |
 
@@ -616,6 +786,8 @@ workspace/
 │   └── skills/          # Copied SKILL.md files
 ├── status/              # Agent status files
 ├── history/             # Archived session files
+├── logs/                # System and debug logs
+│   └── task_journal.jsonl  # Per-task durable results (journal)
 ├── session.json         # Structured session data
 ├── chat_history.md      # Human-readable conversation transcript
 └── execution_trace.log  # Detailed execution trace log
@@ -629,6 +801,8 @@ workspace/
 | `shared/skills/` | SKILL.md files copied from skill definitions |
 | `status/` | Agent status tracking files |
 | `history/` | Archived historical session files |
+| `logs/` | System and debug logs |
+| `logs/task_journal.jsonl` | Per-task durable results (journal) |
 | `session.json` | Structured session data (machine-readable) |
 | `chat_history.md` | Human-readable conversation transcript |
 | `execution_trace.log` | Detailed execution trace log (TUI mode only) |
@@ -810,12 +984,15 @@ The sidecar is a lightweight auxiliary LLM used for tasks that should not consum
 - **Skill matching** — Match prompts to relevant skills
 - **Guard review** — Review agent outputs against guard rules
 - **Plan review** — Autonomous plan review before execution
+- **Judge** — Pick the best of N worker results (defaults to sidecar model)
+- **Skeptic** — Challenge a single result before acceptance
 
 ### Configuration
 
 ```yaml
 sidecar-model: qwen3:1b   # Lightweight model for skill matching
-guard-model: qwen3:8b      # Model for guard / review tasks
+guard-model: qwen3:8b     # Model for guard / review tasks
+judge-model: qwen3:1b     # Model for multi-model result selection (defaults to sidecar)
 ```
 
 ---
@@ -840,6 +1017,16 @@ When a guard is triggered, the output is passed to the `guard-model` sidecar for
 | `no-profanity` | Block profanity |
 
 You can implement custom rules by creating guard skill definitions in `skills/guard-<name>/SKILL.md` in your team directory.
+
+### Skeptic (Adversarial Verification)
+
+Beyond guard rules, tasks can request adversarial verification via `adversarial_verify` in the `agent` tool call. The skeptic challenges the result before acceptance:
+
+```bash
+agent("Implement feature", adversarial_verify=2)
+```
+
+If the skeptic votes fail, the task is rejected and retried.
 
 ---
 
@@ -1006,6 +1193,97 @@ Require agents to submit a plan before execution:
 ```bash
 go run ./cmd/hufu --plan "Implement a feature"
 ```
+
+---
+
+## Multi-Model Judge
+
+When a task can be executed by multiple models (via `model-list`), the judge picks the best result:
+
+```bash
+# Use a specific judge model
+go run ./cmd/hufu --judge-model qwen3:1b "Implement a feature"
+```
+
+The judge resolves to the sidecar model by default to keep judging cheap. The main model is not used for judging to avoid doubling main-model cost.
+
+---
+
+## Skeptic (Adversarial Verification)
+
+The skeptic challenges a single result before it is accepted. Tasks can specify `adversarial_verify` in the `agent` tool call to run multiple skeptic votes:
+
+```bash
+# In a coordinator prompt, delegate with adversarial verification
+agent("Implement login", adversarial_verify=2)
+```
+
+This runs 2 skeptic challenges; if any fail, the task is rejected.
+
+---
+
+## Escalation on Retry
+
+When `escalate-on-retry` is enabled in team.yaml, a retry automatically escalates to the next stronger model in the `model-list`:
+
+```yaml
+escalate-on-retry: true
+model-list:
+  - name: qwen3:1b
+    provider: ollama
+  - name: qwen3:8b
+    provider: ollama
+```
+
+---
+
+## DAG Task Scheduling
+
+Tasks can declare `on_failure` to create loops back to an earlier task, and `verify` for non-LLM verification:
+
+```javascript
+// Passed as a JSON array to the agent tool by the coordinator
+[
+  {
+    "agent": "researcher",
+    "goal": "Research authentication options",
+    "verify": "ls auth/",
+    "on_failure": 0  // 0-based index to jump back to on failure
+  }
+]
+```
+
+### Verify Command
+
+The `verify` field runs a shell command after the agent reports success but before the task is marked done. A non-zero exit fails the task and triggers the retry path:
+
+```bash
+agent("Implement feature", verify="go test ./...")
+```
+
+---
+
+## Reflexion (Failure Hints)
+
+When a task fails, reflexion produces structured hints that inform retries:
+
+- **With sidecar**: Uses the sidecar model to analyze the failure and suggest corrections
+- **Without sidecar**: Falls back to deterministic local hints (timeout, missing file, permission, verification, step exhaustion, duplicate)
+
+This ensures retries are never blind even without a sidecar configured.
+
+---
+
+## Task Journal
+
+Per-task results are durably persisted to `workspace/logs/task_journal.jsonl`:
+
+```bash
+# Disable task journal
+go run ./cmd/hufu --no-journal "Task"
+```
+
+Each line is a JSON object with task metadata and results, useful for audit trails and crash recovery.
 
 ---
 
