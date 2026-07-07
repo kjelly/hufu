@@ -86,6 +86,7 @@ var (
 	profileName               string
 	quietMode                 bool
 	outputFormat              string
+	projectContext            bool
 	globalPromptReader        atomic.Pointer[readline.PromptReader]
 )
 
@@ -180,6 +181,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().Int64Var(&maxDuration, "max-duration", 0, "Budget: max total wall-clock seconds before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
 	rootCmd.Flags().Int64Var(&maxTotalTokens, "max-total-tokens", 0, "Budget: max cumulative LLM tokens before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
 	rootCmd.Flags().BoolVar(&autoTeam, "auto-team", false, "Auto-select the team best suited to the prompt (sidecar LLM match, keyword fallback) instead of prompting")
+	rootCmd.Flags().BoolVar(&projectContext, "project-context", false, "Inject Git Status and Project Directory Structure into prompt context")
 	rootCmd.PersistentFlags().StringVar(&profileName, "profile", "", "Apply a named flag bundle from hufu.yaml `profiles:` (CLI flags still override)")
 	rootCmd.Flags().BoolVarP(&quietMode, "quiet", "q", false, "Suppress status output; print only the final result to stdout")
 	rootCmd.Flags().StringVar(&outputFormat, "output", "", "Output format for the final result: text (default) or json")
@@ -941,7 +943,10 @@ func resolveInitialPrompt(initialPrompt string, pr *readline.PromptReader, vars 
 		}
 	}
 	prompt, _ = injectFileContexts(prompt)
-	prompt = injectProjectContext(prompt)
+	cfg := config.LoadConfig()
+	if projectContext || cfg.ProjectContext {
+		prompt = injectProjectContext(prompt)
+	}
 	return prompt, nil
 }
 

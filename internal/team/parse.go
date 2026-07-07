@@ -80,6 +80,7 @@ type teamConfigYAML struct {
 	RestrictedPath    string                           `yaml:"restricted-path"`
 	NoNet             bool                             `yaml:"no-net"`
 	ForceMCP          bool                             `yaml:"force-mcp"`
+	ProjectContext    bool                             `yaml:"project-context"`
 	Shell             string                           `yaml:"shell"`
 	Vars              map[string]interface{}           `yaml:"vars"`
 	WorkerContextSize int                              `yaml:"worker-context-size"`
@@ -513,6 +514,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.ForceMCP {
 		cfg.ForceMCP = true
+	}
+	if yc.ProjectContext {
+		cfg.ProjectContext = true
 	}
 	if yc.Unattended {
 		cfg.Unattended = true

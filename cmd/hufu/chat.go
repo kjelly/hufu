@@ -53,6 +53,7 @@ func init() {
 	f.StringArrayVar(&varFiles, "var-file", nil, "Read template variables from a file (repeatable)")
 	f.BoolVar(&planMode, "plan", false, "Force plan-first mode")
 	f.BoolVar(&autoSkills, "auto-skills", false, "Enable automatic skill detection")
+	f.BoolVar(&projectContext, "project-context", false, "Inject Git Status and Project Directory Structure into prompt context")
 	f.BoolVar(&think, "think", false, "Show coordinator decision reasoning")
 	f.Int64Var(&timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds")
 	f.IntVar(&maxRoundsOverride, "max-rounds", 0, "Override team.yaml max-rounds. 0 = use team default.")
@@ -174,7 +175,10 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 		// Inject file/project contexts
 		promptToRun, _ := injectFileContexts(line)
-		promptToRun = injectProjectContext(promptToRun)
+		cfg := config.LoadConfig()
+		if projectContext || cfg.ProjectContext || tc.session.Config.ProjectContext {
+			promptToRun = injectProjectContext(promptToRun)
+		}
 
 		// Each turn is independently cancellable with Ctrl+C; cancelling a turn
 		// returns to the prompt rather than exiting the REPL.

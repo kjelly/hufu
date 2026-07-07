@@ -114,6 +114,7 @@ type TeamConfig struct {
 	RestrictedPath    string
 	NoNet             bool
 	ForceMCP          bool
+	ProjectContext    bool
 	Shell             string
 	Vars              map[string]interface{}
 	WorkerContextSize int

@@ -43,6 +43,7 @@ type Config struct {
 	RestrictedPath    string                    `yaml:"restricted-path"`
 	NoNet             bool                      `yaml:"no-net"`
 	ForceMCP          bool                      `yaml:"force-mcp"`
+	ProjectContext    bool                      `yaml:"project-context"`
 	Shell             string                    `yaml:"shell"`
 	RawVars           interface{}               `yaml:"vars"`
 	Hooks             map[string]string         `yaml:"hooks"`
@@ -129,6 +130,15 @@ func (c *Config) mergeFromFile(path string) {
 	}
 	if len(fileCfg.AllowedPaths) > 0 {
 		c.AllowedPaths = fileCfg.AllowedPaths
+	}
+	if fileCfg.NoNet {
+		c.NoNet = true
+	}
+	if fileCfg.ForceMCP {
+		c.ForceMCP = true
+	}
+	if fileCfg.ProjectContext {
+		c.ProjectContext = true
 	}
 	if len(fileCfg.Hooks) > 0 {
 		if c.Hooks == nil {
