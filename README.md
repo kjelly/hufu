@@ -346,9 +346,9 @@ go run ./cmd/hufu --agent-team code-review "Review the authentication module"
 For critical decisions, use adversarial verification to challenge the result:
 
 ```bash
-# Ask the coordinator to implement with skeptic verification
-go run ./cmd/hufu --agent-team arch-team "Design the database schema"
-# Agent delegates with: agent("Design schema", adversarial_verify=3)
+# Instruct the coordinator to enforce adversarial verification
+go run ./cmd/hufu --agent-team arch-team \
+  "Design the database schema. Ensure the result is rigorously verified by 3 skeptics."
 ```
 
 ### 3. Escalating Retry for Stubborn Tasks
@@ -372,8 +372,9 @@ model-list:
 Ensure tasks produce actual artifacts, not just claims:
 
 ```bash
-# The agent must produce tests, verify command runs them
-agent("Implement login feature", verify="go test ./tests/login/...")
+# Provide clear instructions and verification criteria in your prompt
+go run ./cmd/hufu --agent-team dev-team \
+  "Implement the login feature. Set a verify command 'go test ./tests/login/...' to ensure it works."
 ```
 ### 5. Reflexion for Blind Retries
 
@@ -1020,10 +1021,11 @@ You can implement custom rules by creating guard skill definitions in `skills/gu
 
 ### Skeptic (Adversarial Verification)
 
-Beyond guard rules, tasks can request adversarial verification via `adversarial_verify` in the `agent` tool call. The skeptic challenges the result before acceptance:
+Beyond guard rules, you can request adversarial verification in your prompt. The Coordinator will instruct the skeptic to challenge the result before acceptance:
 
 ```bash
-agent("Implement feature", adversarial_verify=2)
+go run ./cmd/hufu --agent-team arch-team \
+  "Implement the feature and use 2 skeptics to rigorously verify the design."
 ```
 
 If the skeptic votes fail, the task is rejected and retried.
@@ -1211,11 +1213,11 @@ The judge resolves to the sidecar model by default to keep judging cheap. The ma
 
 ## Skeptic (Adversarial Verification)
 
-The skeptic challenges a single result before it is accepted. Tasks can specify `adversarial_verify` in the `agent` tool call to run multiple skeptic votes:
+The skeptic challenges a single result before it is accepted. You can specify the need for adversarial verification directly in your prompt:
 
 ```bash
-# In a coordinator prompt, delegate with adversarial verification
-agent("Implement login", adversarial_verify=2)
+# Instruct the coordinator to delegate with adversarial verification
+go run ./cmd/hufu --agent-team arch-team "Implement login. Request 2 skeptic votes for verification."
 ```
 
 This runs 2 skeptic challenges; if any fail, the task is rejected.
@@ -1239,27 +1241,19 @@ model-list:
 
 ## DAG Task Scheduling
 
-Tasks can declare `on_failure` to create loops back to an earlier task, and `verify` for non-LLM verification:
+DAG task scheduling is dynamically driven by your prompts. You don't need to write configuration files; simply instruct the Coordinator to set up dependencies, pipelines, or verification steps when delegating tasks. The Coordinator will automatically map these instructions into a parallel execution graph.
 
-```javascript
-// Passed as a JSON array to the agent tool by the coordinator
-[
-  {
-    "agent": "researcher",
-    "goal": "Research authentication options",
-    "verify": "ls auth/",
-    "on_failure": 0  // 0-based index to jump back to on failure
-  }
-]
+For example, to enforce a specific sequence and objective verification:
+
+```bash
+# Instruct the coordinator to set up a dependency chain and a verify command
+go run ./cmd/hufu --agent-team dev-team \
+  "First ask the researcher to gather auth best practices. Once done, ask the coder to implement the login feature. For the coder, set a verify command 'go test ./tests/login/...' to ensure it works."
 ```
 
 ### Verify Command
 
-The `verify` field runs a shell command after the agent reports success but before the task is marked done. A non-zero exit fails the task and triggers the retry path:
-
-```bash
-agent("Implement feature", verify="go test ./...")
-```
+The `verify` instruction tells the Coordinator to attach a shell command check to a task. It runs after the agent reports success but before the task is marked done. A non-zero exit fails the task and triggers the retry path, preventing agents from falsely claiming completion.
 
 ---
 

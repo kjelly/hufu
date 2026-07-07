@@ -279,6 +279,144 @@ go run ./cmd/hufu "@generator 請提出一個系統架構方案 | @auditor 嚴�
 
 ---
 
+## 常見使用情境
+
+### 1. 使用多模型評委進行 Code Review
+
+當你有多個模型可供使用時，可以使用 judge 來挑選最佳的程式碼審查結果：
+
+```yaml
+# team.yaml
+model-list:
+  - name: qwen3:1b
+    provider: ollama
+  - name: qwen3:8b
+    provider: ollama
+judge-model: qwen3:1b  # 用較便宜的模型進行評判
+```
+
+```bash
+# 執行 code review 並使用多個模型，評委會挑選最佳結果
+go run ./cmd/hufu --agent-team code-review "Review the authentication module"
+```
+
+### 2. 使用 Skeptic 進行高風險決策
+
+針對關鍵決策，使用對抗性驗證 (adversarial verification) 來質疑結果：
+
+```bash
+# 在 prompt 中明確要求 coordinator 啟用對抗性驗證
+go run ./cmd/hufu --agent-team arch-team \
+  "Design the database schema. 請確保結果經過 3 位 skeptic (評審) 嚴格驗證。"
+```
+
+### 3. 對於頑固任務進行升級重試
+
+啟用升級機制，當任務需要更強大的模型進行重試時：
+
+```yaml
+# team.yaml
+escalate-on-retry: true
+model-list:
+  - name: qwen3:1b
+    provider: ollama
+  - name: qwen3:8b
+    provider: ollama
+  - name: qwen3:30b
+    provider: ollama
+```
+
+### 4. 使用 Shell 指令驗證交付成果
+
+確保任務產生實際的產出，而不僅僅是宣稱完成：
+
+```bash
+# 在 prompt 中提供明確的指令與驗證條件
+go run ./cmd/hufu --agent-team dev-team \
+  "Implement the login feature. 請設定 verify 指令為 'go test ./tests/login/...' 來確保它能運作。"
+```
+
+### 5. 盲目重試時的 Reflexion (反思)
+
+即使沒有 sidecar，重試時也會獲得結構化的提示：
+
+```bash
+# Reflexion 在沒有 sidecar 時也能運作 - 具有確定性的錯誤分類
+go run ./cmd/hufu --agent-team dev-team "Implement complex feature"
+# 如果失敗，reflexion 會進行分類：timeout / missing file / permission error
+```
+
+### 6. 具備記憶的開發 (Memory-Augmented)
+
+在不同 session 之間保留學習到的經驗：
+
+```bash
+# 啟用 memory 以搜尋過去的 session
+go run ./cmd/hufu --memory "Refactor the API layer"
+
+# 之後的 session 可以查詢相關記憶
+go run ./cmd/hufu --memory "How did we handle auth errors previously?"
+```
+
+### 7. 無人值守的批次處理 (Unattended)
+
+執行不需要人工監控的作業：
+
+```bash
+# 完整的 unattended 設定
+go run ./cmd/hufu \
+  --unattended \
+  --max-duration 3600 \
+  --max-total-tokens 500000 \
+  --no-journal \
+  --profile batch \
+  --agent-team pipeline \
+  "Process all pending pull requests"
+```
+
+### 8. 複雜功能的計畫優先 (Plan-First) 模式
+
+要求 Agent 在採取行動前必須先提交計畫：
+
+```bash
+# Agent 必須先提出計畫
+go run ./cmd/hufu --plan "Implement a distributed caching layer"
+```
+
+### 9. 安全探索的 Dry Run 模式
+
+預覽會發生的事情而不會實際執行：
+
+```bash
+# 不會呼叫 LLM，也不會執行 Agent - 純預覽
+go run ./cmd/hufu --dry-run --agent-team dev-team "Refactor the auth module"
+```
+
+### 10. 確保程式碼品質的 Guardrails
+
+為每個 Agent 加上輸出的防護欄：
+
+```markdown
+# researcher.md
+---
+name: researcher
+guard:
+  - require-tests
+  - no-profanity
+---
+```
+
+### 11. 用於即時監控的 TUI 介面
+
+即時監看任務的進度：
+
+```bash
+# TUI 模式會顯示任務看板、日誌、技能使用情況
+go run ./cmd/hufu --tui "Implement the new feature"
+```
+
+---
+
 ## 互動模式
 
 當未提供 prompt 且 stdin 為空時，`hufu` 會進入互動模式：
@@ -1070,6 +1208,24 @@ CLI flag > hufu.yaml > 預設值
 | Grep Limit | 100 筆符合 | `grep.go` |
 | Glob Limit | 100 筆結果 | `glob.go` |
 | LS Limit | 1000 筆項目 | `ls.go` |
+
+---
+
+## DAG 任務排程
+
+DAG 任務排程是完全由你的 Prompt 動態驅動的。你不需要手寫任何設定檔，只需要在對話或指令中清楚描述任務的先後順序、依賴關係或驗證條件，Coordinator 就會自動將其轉譯為底層的執行圖 (Execution Graph)。
+
+例如，你可以透過自然語言強制指定執行順序與客觀驗證：
+
+```bash
+# 指示 coordinator 建立依賴關係與 verify 指令
+go run ./cmd/hufu --agent-team dev-team \
+  "請先指派 researcher 尋找 auth 最佳實踐。完成後，再指派 coder 實作 login 功能。請為 coder 設定 verify 指令 'go test ./tests/login/...' 以確保程式碼通過測試。"
+```
+
+### Verify 指令
+
+在 Prompt 中要求設定 `verify`，會讓 Coordinator 在該任務綁定一段 shell 指令。這段指令會在 Agent 報告成功之後，但在任務標記為 done 之前執行。非零的退出狀態碼將導致任務失敗，並觸發重試路徑，能有效防止 Agent 謊稱任務已完成。
 
 ---
 
