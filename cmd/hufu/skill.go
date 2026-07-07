@@ -1,13 +1,13 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 
 	"github.com/anomalyco/hufu/internal/skill"
@@ -196,10 +196,12 @@ func runSkillClean(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  - %s\n", name)
 	}
 	if !skillCleanApply && !skillCleanYes {
-		fmt.Print("\nApply? [y/N]: ")
-		reader := bufio.NewReader(os.Stdin)
-		line, _ := reader.ReadString('\n')
-		if strings.ToLower(strings.TrimSpace(line)) != "y" {
+		prompt := promptui.Prompt{
+			Label:     "Apply",
+			IsConfirm: true,
+		}
+		_, err := prompt.Run()
+		if err != nil {
 			fmt.Println("Aborted.")
 			return nil
 		}

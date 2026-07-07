@@ -167,9 +167,7 @@ func TestSSHSessionManager_NilManager(t *testing.T) {
 		t.Error("Expected false from ClearPassword with nil manager")
 	}
 
-	if manager.UpdateLastUsed("host"); manager != nil {
-		// UpdateLastUsed should not panic
-	}
+	manager.UpdateLastUsed("host") // Should not panic with nil manager
 }
 
 func TestSSHSessionManager_PasswordCaching(t *testing.T) {

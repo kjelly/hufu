@@ -104,7 +104,7 @@ func TestWriteAndReadEmbeddingMeta(t *testing.T) {
 func TestCheckEmbeddingModelMismatchMatch(t *testing.T) {
 	tmpDir := t.TempDir()
 	storePath := filepath.Join(tmpDir, "store")
-	embedModel := "qwen3-embedding:4b"
+	embedModel := "ollama/nomic-embed-text:latest"
 
 	// Create a persistent DB
 	db, err := chromem.NewPersistentDB(storePath, true)
@@ -144,7 +144,7 @@ func TestCheckEmbeddingModelMismatchLegacy(t *testing.T) {
 	// acceptable as it mirrors real-world usage.
 	tmpDir := t.TempDir()
 	storePath := filepath.Join(tmpDir, "store")
-	embedModel := "qwen3-embedding:4b"
+	embedModel := "ollama/nomic-embed-text:latest"
 
 	// Create a persistent DB
 	db, err := chromem.NewPersistentDB(storePath, true)
@@ -178,10 +178,10 @@ func TestCheckEmbeddingModelMismatchLegacy(t *testing.T) {
 func TestCheckEmbeddingModelMismatchDifferent(t *testing.T) {
 	tmpDir := t.TempDir()
 	storePath := filepath.Join(tmpDir, "store")
-	// "nomic-embed-text" is the legacy default embedding model used before
-	// the project switched to "qwen3-embedding:4b".
-	oldModel := "nomic-embed-text"
-	newModel := "qwen3-embedding:4b"
+	// "qwen3-embedding:4b" is the legacy default embedding model used before
+	// the project switched to "ollama/nomic-embed-text:latest".
+	oldModel := "qwen3-embedding:4b"
+	newModel := "ollama/nomic-embed-text:latest"
 
 	// Create a persistent DB
 	db, err := chromem.NewPersistentDB(storePath, true)

@@ -297,6 +297,84 @@ func (c *Coordinator) emitThinkSidecar(action, detail string) {
 	c.report(c.newEvent("think_sidecar").withMessage(msg))
 }
 
+func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.AgentDef, prompt string, isContinuation bool) string {
+	systemPrompt := c.expandOrchestratorTemplate(orchDef.System)
+	if systemPrompt == "" {
+		systemPrompt = c.expandOrchestratorTemplate(defaultOrchestratorSystem)
+	}
+
+	var matchedSkills []*skill.SkillDef
+	if isContinuation {
+		matchedSkills = c.getAutoLoadedSkills()
+		if c.autoSkillsEnabled && prompt != "" {
+			matchedSkills = c.matchSkillsWithSidecar(ctx, prompt)
+			c.setAutoLoadedSkills(matchedSkills)
+		}
+	} else {
+		matchedSkills = c.matchSkillsWithSidecar(ctx, prompt)
+		c.setAutoLoadedSkills(matchedSkills)
+	}
+
+	c.computeWorkerSummaries(ctx)
+
+	if c.think && !isContinuation {
+		c.emitThinkSkills(matchedSkills)
+	}
+
+	systemPrompt += "\n\n" + c.BuildOrchestratorPrompt(matchedSkills...)
+
+	if c.think && !isContinuation {
+		c.emitThinkAgents()
+	}
+
+	if agentsMD := c.loadProjectContext(); agentsMD != "" {
+		if s := c.Sidecar(); s != nil && len(agentsMD) > 4000 {
+			if c.think && !isContinuation {
+				c.emitThinkSidecar("Compact", "compacting AGENTS.md for coordinator prompt")
+			}
+			compacted, err := s.Compact(ctx, agentsMD, "Compress this project context while preserving all key facts, patterns, conventions, and instructions.")
+			if err == nil && compacted != "" {
+				agentsMD = compacted
+			}
+		}
+		systemPrompt += "\n\n---\n## Project Context (AGENTS.md)\n\n" + agentsMD
+	}
+
+	if c.memoryStore != nil && prompt != "" {
+		var compactFn memory.CompactFunc
+		if s := c.Sidecar(); s != nil {
+			compactFn = s.Compact
+		}
+		memCtx, err := memory.AutoQuery(ctx, c.memoryStore, prompt, compactFn)
+		if err == nil && memCtx != "" {
+			systemPrompt += "\n\n---\n" + memCtx
+		}
+	}
+
+	if !isContinuation {
+		if c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
+			contextSummary := c.sessionData.ContextSummary()
+			if contextSummary != "" {
+				systemPrompt += "\n\n---\n## Session Context\n\n" + contextSummary
+			}
+		}
+	}
+
+	if suffix := c.buildMemorySuffix("coordinator"); suffix != "" {
+		systemPrompt += "\n\n" + suffix
+	}
+
+	if reminder := c.buildCoreReminder(orchDef); reminder != "" {
+		systemPrompt += "\n\n" + reminder
+	}
+
+	if c.think && !isContinuation {
+		c.emitThinkPrompt(systemPrompt)
+	}
+
+	return systemPrompt
+}
+
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
 	c.lastStmWrite = time.Time{}
 
@@ -331,66 +409,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		c.sessionData.AddEntry("user", userPrompt)
 	}
 
-	systemPrompt := c.expandOrchestratorTemplate(orchDef.System)
-	if systemPrompt == "" {
-		systemPrompt = c.expandOrchestratorTemplate(defaultOrchestratorSystem)
-	}
-	matchedSkills := c.matchSkillsWithSidecar(ctx, userPrompt)
-	c.setAutoLoadedSkills(matchedSkills)
-	c.computeWorkerSummaries(ctx)
-
-	if c.think {
-		c.emitThinkSkills(matchedSkills)
-	}
-
-	systemPrompt += "\n\n" + c.BuildOrchestratorPrompt(matchedSkills...)
-
-	if c.think {
-		c.emitThinkAgents()
-	}
-
-	if agentsMD := c.loadProjectContext(); agentsMD != "" {
-		if s := c.Sidecar(); s != nil && len(agentsMD) > 4000 {
-			if c.think {
-				c.emitThinkSidecar("Compact", "compacting AGENTS.md for coordinator prompt")
-			}
-			compacted, err := s.Compact(ctx, agentsMD, "Compress this project context while preserving all key facts, patterns, conventions, and instructions.")
-			if err == nil && compacted != "" {
-				agentsMD = compacted
-			}
-		}
-		systemPrompt += "\n\n---\n## Project Context (AGENTS.md)\n\n" + agentsMD
-	}
-
-	if c.memoryStore != nil {
-		var compactFn memory.CompactFunc
-		if s := c.Sidecar(); s != nil {
-			compactFn = s.Compact
-		}
-		memCtx, err := memory.AutoQuery(ctx, c.memoryStore, userPrompt, compactFn)
-		if err == nil && memCtx != "" {
-			systemPrompt += "\n\n---\n" + memCtx
-		}
-	}
-
-	if c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
-		contextSummary := c.sessionData.ContextSummary()
-		if contextSummary != "" {
-			systemPrompt += "\n\n---\n## Session Context\n\n" + contextSummary
-		}
-	}
-
-	if suffix := c.buildMemorySuffix("coordinator"); suffix != "" {
-		systemPrompt += "\n\n" + suffix
-	}
-
-	if reminder := c.buildCoreReminder(orchDef); reminder != "" {
-		systemPrompt += "\n\n" + reminder
-	}
-
-	if c.think {
-		c.emitThinkPrompt(systemPrompt)
-	}
+	systemPrompt := c.buildSystemPrompt(ctx, orchDef, userPrompt, false)
 
 	// Apply the computed system prompt to a copy so shared state is not mutated.
 	orchDefCopy := *orchDef
@@ -441,13 +460,17 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		c.report(c.newEvent("step").withMessage("coordinator preparing").withTodoID(CoordTodoID))
 	}
 
+	systemPrompt := c.buildSystemPrompt(ctx, orchDef, additionalPrompt, true)
+	orchDefCopy := *orchDef
+	orchDefCopy.System = systemPrompt
+
 	if c.sessionData != nil {
 		c.sessionData.AddEntry("user", additionalPrompt)
 	}
 
 	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("continuing with additional input").withModel(c.resolveAgentModel(orchDef, "")).withTodoID(CoordTodoID))
 
-	result, steps, err := c.runOrchestrator(ctx, orchDef, continuationPrompt)
+	result, steps, err := c.runOrchestrator(ctx, &orchDefCopy, continuationPrompt)
 	if err != nil {
 		c.finalizeRemainingTasks()
 		c.saveHistoryAndSession(ctx, steps)

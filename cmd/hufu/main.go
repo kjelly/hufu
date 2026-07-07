@@ -18,6 +18,7 @@ import (
 	"time"
 
 	ergoreadline "github.com/ergochat/readline"
+	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"gopkg.in/yaml.v3"
@@ -143,7 +144,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringVar(&agentTeamName, "agent-team", "", "Agent team name to load")
 	rootCmd.Flags().StringVar(&agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams (default: .agent-teams/,~/.agent-teams/)")
 	rootCmd.Flags().BoolVar(&memoryEnabled, "memory", false, "Enable long-term memory (RAG with vector search)")
-	rootCmd.Flags().StringVar(&memoryModel, "memory-model", "", "Embedding model for memory (default: qwen3-embedding:4b, overrides hufu.yaml)")
+	rootCmd.Flags().StringVar(&memoryModel, "memory-model", "", "Embedding model for memory (default: ollama/nomic-embed-text:latest, overrides hufu.yaml)")
 	rootCmd.Flags().BoolVar(&archiveMemory, "archive-memory", false, "Archive session summary to memory and exit")
 	rootCmd.Flags().BoolVar(&showHistory, "show-history", false, "Show previous session history on resume")
 	rootCmd.Flags().BoolVarP(&stepsMode, "steps", "s", false, "Pause for user confirmation before executing each batch of worker tasks")
@@ -829,9 +830,13 @@ func makeStepConfirmFn() func(context.Context, []team.TaskDef) (bool, error) {
 			}
 			answer = strings.TrimSpace(line)
 		} else {
-			fmt.Fprintf(os.Stderr, "%s", boldStyle.Render("Execute? [Y/n]: "))
-			if _, err := fmt.Scanln(&answer); err != nil {
-				if err == io.EOF {
+			prompt := promptui.Prompt{
+				Label: "Execute? [Y/n]",
+			}
+			var err error
+			answer, err = prompt.Run()
+			if err != nil {
+				if err == promptui.ErrInterrupt || err == io.EOF {
 					return false, nil
 				}
 				return false, err
@@ -1043,14 +1048,14 @@ func promptForMissingTemplateVars(ctx context.Context, segName string, registry 
 	fmt.Fprintf(os.Stderr, "\n%s Some template variables are required for team %s:\n", boldStyle.Render("📋"), teamStyle.Render(segName))
 	for _, mv := range missingVars {
 		var val string
-		promptStr := fmt.Sprintf("  Enter value for %s: ", teamStyle.Render(mv))
 		if pr != nil {
+			promptStr := fmt.Sprintf("  Enter value for %s: ", teamStyle.Render(mv))
 			val, err = pr.ReadLine(boldStyle.Render(promptStr))
 		} else {
-			fmt.Fprint(os.Stderr, boldStyle.Render(promptStr))
-			var line string
-			_, err = fmt.Scanln(&line)
-			val = strings.TrimSpace(line)
+			prompt := promptui.Prompt{
+				Label: fmt.Sprintf("Enter value for %s", mv),
+			}
+			val, err = prompt.Run()
 		}
 		if err != nil {
 			return vars, fmt.Errorf("failed to read variable input: %w", err)
@@ -1078,41 +1083,36 @@ func offerFirstTimeWizard(searchPaths []string) error {
 	for _, p := range searchPaths {
 		fmt.Fprintf(os.Stderr, "  %s %s\n", dimStyle.Render("•"), p)
 	}
-	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("Pick one:"))
-	fmt.Fprintf(os.Stderr, "  %s %s — try hufu with no team files (built-in coordinator + Helper)\n",
-		dimStyle.Render("[1]"), teamStyle.Render("Use --default"))
-	fmt.Fprintf(os.Stderr, "  %s %s — create a new team interactively\n",
-		dimStyle.Render("[2]"), teamStyle.Render("Scaffold a team"))
-	fmt.Fprintf(os.Stderr, "  %s %s — exit and read the docs\n",
-		dimStyle.Render("[3]"), teamStyle.Render("Cancel"))
+	fmt.Fprintln(os.Stderr)
 
-	fmt.Fprintf(os.Stderr, "\n%s ", boldStyle.Render("Choice [1-3] (default 1):"))
-
-	var input string
-	if pr := globalPromptReader.Load(); pr != nil {
-		line, err := pr.ReadLine("")
-		if err == nil {
-			input = line
-		}
-	} else {
-		_, _ = fmt.Scanln(&input)
-	}
-	input = strings.TrimSpace(input)
-	if input == "" {
-		input = "1"
+	options := []string{
+		"Use --default (try hufu with no team files - built-in coordinator + Helper)",
+		"Scaffold a team (create a new team interactively)",
+		"Cancel (exit and read the docs)",
 	}
 
-	switch input {
-	case "2":
+	prompt := promptui.Select{
+		Label: "No agent teams found. Pick an option",
+		Items: options,
+		Size:  3,
+	}
+
+	index, _, err := prompt.Run()
+	if err != nil {
+		return fmt.Errorf("no team configured; user cancelled first-time wizard")
+	}
+
+	switch index {
+	case 1:
 		fmt.Fprintf(os.Stderr, "%s Run `hufu init <team-name>` to scaffold a new team, then re-run hufu.\n", doneStyle.Render("→"))
 		return fmt.Errorf("no team configured; scaffold one with `hufu init <team-name>`")
-	case "3":
+	case 2:
 		fmt.Fprintf(os.Stderr, "%s See README.md Quick Start or run `hufu doctor` to verify your setup.\n", dimStyle.Render("○"))
 		return fmt.Errorf("no team configured; user cancelled first-time wizard")
-	default:
+	default: // index == 0
 		fmt.Fprintf(os.Stderr, "%s Re-run with --default (and --model <name> if you want a specific LLM):\n", doneStyle.Render("→"))
 		fmt.Fprintf(os.Stderr, "    hufu --default --model ollama/qwen3:8b \"your task here\"\n")
-		return fmt.Errorf("no team configured; pass --default or scaffold a team with `hufu init`")
+		return fmt.Errorf("no team configured; run with --default")
 	}
 }
 
@@ -1432,51 +1432,34 @@ func runArchiveMemory(ctx context.Context, registry *team.TeamRegistry, vars map
 }
 
 func askUserForPromptFallback() (string, error) {
-	var input string
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Enter Prompt ───"))
 	fmt.Fprintf(os.Stderr, "Describe the task (use @team-name or @agent-name in the prompt):\n")
-	fmt.Fprintf(os.Stderr, "%s ", boldStyle.Render(">"))
-	_, _ = fmt.Fscanln(os.Stdin, &input)
-	prompt := strings.TrimSpace(input)
-	if prompt == "" {
+	prompt := promptui.Prompt{
+		Label: "Prompt",
+	}
+	result, err := prompt.Run()
+	if err != nil {
+		if err == promptui.ErrInterrupt {
+			return "", errInterrupted{}
+		}
+		return "", err
+	}
+	promptVal := strings.TrimSpace(result)
+	if promptVal == "" {
 		fmt.Fprintf(os.Stderr, "%s No prompt provided.\n", errStyle.Render("✗"))
 		return "", fmt.Errorf("no prompt provided")
 	}
-	return prompt, nil
+	return promptVal, nil
 }
 
 func askUserForTeamFallback(teams []string) string {
-	if len(teams) == 0 {
-		return ""
-	}
-	sort.Strings(teams)
-	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Select Team ───"))
-	for i, t := range teams {
-		fmt.Fprintf(os.Stderr, "  %s %s\n", dimStyle.Render(fmt.Sprintf("%d.", i+1)), teamStyle.Render(t))
-	}
-	fmt.Fprintf(os.Stderr, "\n%s ", boldStyle.Render("Team name or number:>"))
-	var input string
-	_, _ = fmt.Fscanln(os.Stdin, &input)
-	input = strings.TrimSpace(input)
-	if input == "" {
-		return ""
-	}
-	var num int
-	if n, err := fmt.Sscanf(input, "%d", &num); err == nil && n == 1 && num >= 1 && num <= len(teams) {
-		return teams[num-1]
-	}
-	lower := strings.ToLower(input)
-	for _, t := range teams {
-		if strings.ToLower(t) == lower {
-			return t
-		}
-	}
-	return input
+	res, _ := askUserForTeamWithPromptUI(teams)
+	return res
 }
 
 func readStdin() string {
-	stat, _ := os.Stdin.Stat()
-	if (stat.Mode() & os.ModeCharDevice) != 0 {
+	stat, err := os.Stdin.Stat()
+	if err != nil || (stat.Mode()&os.ModeCharDevice) != 0 {
 		return ""
 	}
 	data, _ := io.ReadAll(os.Stdin)
@@ -1504,37 +1487,43 @@ func askUserForPrompt(pr *readline.PromptReader) (string, error) {
 }
 
 func askUserForTeam(teams []string, pr *readline.PromptReader) (string, error) {
+	return askUserForTeamWithPromptUI(teams)
+}
+
+func askUserForTeamWithPromptUI(teams []string) (string, error) {
 	if len(teams) == 0 {
 		return "", nil
 	}
 	sort.Strings(teams)
-	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Select Team ───"))
-	for i, t := range teams {
-		fmt.Fprintf(os.Stderr, "  %s %s\n", dimStyle.Render(fmt.Sprintf("%d.", i+1)), teamStyle.Render(t))
+
+	stat, err := os.Stdin.Stat()
+	isTTY := err == nil && (stat.Mode()&os.ModeCharDevice) != 0
+	if unattended || !isTTY {
+		return teams[0], nil
 	}
-	input, err := pr.ReadLine(boldStyle.Render("Team name or number:>"))
+
+	searcher := func(input string, index int) bool {
+		team := teams[index]
+		name := strings.ReplaceAll(strings.ToLower(team), " ", "")
+		input = strings.ReplaceAll(strings.ToLower(input), " ", "")
+		return strings.Contains(name, input)
+	}
+
+	prompt := promptui.Select{
+		Label:    "Select Team",
+		Items:    teams,
+		Size:     10,
+		Searcher: searcher,
+	}
+
+	_, result, err := prompt.Run()
 	if err != nil {
-		if err == ergoreadline.ErrInterrupt || err == io.EOF {
-			fmt.Fprintf(os.Stderr, "\n")
+		if err == promptui.ErrInterrupt {
 			return "", errInterrupted{}
 		}
-		return "", fmt.Errorf("input error: %w", err)
+		return "", err
 	}
-	input = strings.TrimSpace(input)
-	if input == "" {
-		return "", nil
-	}
-	var num int
-	if n, err := fmt.Sscanf(input, "%d", &num); err == nil && n == 1 && num >= 1 && num <= len(teams) {
-		return teams[num-1], nil
-	}
-	lower := strings.ToLower(input)
-	for _, t := range teams {
-		if strings.ToLower(t) == lower {
-			return t, nil
-		}
-	}
-	return input, nil
+	return result, nil
 }
 
 func completeAtNames(toComplete string) []string {
@@ -1744,10 +1733,10 @@ func loadPromptTemplate(name string, existingVars map[string]string) (string, er
 			if pr != nil {
 				val, inputErr = pr.ReadLine(boldStyle.Render(promptStr))
 			} else {
-				fmt.Fprint(os.Stderr, boldStyle.Render(promptStr))
-				var line string
-				_, inputErr = fmt.Scanln(&line)
-				val = strings.TrimSpace(line)
+				prompt := promptui.Prompt{
+					Label: fmt.Sprintf("Enter value for template variable %s", v),
+				}
+				val, inputErr = prompt.Run()
 			}
 
 			if inputErr != nil {
@@ -1864,7 +1853,9 @@ func savePromptToHistory(ctx context.Context, prompt string, defaultProviderURL 
 		"type":      "prompt_history",
 		"timestamp": time.Now().Format(time.RFC3339),
 	}
-	_ = store.Save(ctx, id, prompt, metadata)
+	saveCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_ = store.Save(saveCtx, id, prompt, metadata)
 }
 
 var historyCmd = &cobra.Command{

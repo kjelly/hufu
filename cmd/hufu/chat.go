@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	ergoreadline "github.com/ergochat/readline"
+	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 
 	"github.com/anomalyco/hufu/internal/config"
@@ -130,7 +131,6 @@ func runChat(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "\n%s Chatting with team %s. Type %s to leave, %s to clear context.\n\n",
 		boldStyle.Render("💬"), teamStyle.Render(teamName),
 		dimStyle.Render("/exit"), dimStyle.Render("/reset"))
-
 	turn := 0
 	for {
 		line, err := readChatLine(pr)
@@ -197,11 +197,11 @@ func runChat(cmd *cobra.Command, args []string) error {
 			if turnCtx.Err() == context.Canceled {
 				fmt.Fprintf(os.Stderr, "\n%s Turn cancelled.\n\n", errStyle.Render("⚠"))
 				// A cancelled first turn still established history inside the
-				// coordinator; treat subsequent turns as continuations.
+				// coordinator, so next turn must use ContinueWithPrompt.
 				turn++
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "\n%s %v\n\n", errStyle.Render("✗"), err)
+			fmt.Fprintf(os.Stderr, "%s Error executing: %v\n\n", errStyle.Render("✗"), err)
 			continue
 		}
 
@@ -211,7 +211,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 		turn++
 
 		if line != "" {
-			savePromptToHistory(rootCtx, line, providerURL)
+			go savePromptToHistory(context.Background(), line, providerURL)
 		}
 
 		// Persist after every turn so the session survives a crash mid-chat.
@@ -262,21 +262,15 @@ func switchChatTeam(rootCtx context.Context, pr *readline.PromptReader, current 
 	if len(others) == 0 {
 		return nil, "", fmt.Errorf("no other teams available in %s", strings.Join(registry.SearchPaths(), ", "))
 	}
-	fmt.Fprintf(os.Stderr, "%s Available teams: %s\n", boldStyle.Render("→"), strings.Join(others, ", "))
-	fmt.Fprintf(os.Stderr, "Switch to which team? ")
-	chosen, err := readChatLine(pr)
+	chosen, err := askUserForTeamWithPromptUI(others)
 	if err != nil {
+		if _, ok := err.(errInterrupted); ok {
+			return nil, "", nil
+		}
 		return nil, "", err
 	}
-	chosen = strings.ToLower(strings.TrimSpace(chosen))
 	if chosen == "" {
 		return nil, "", nil
-	}
-	if chosen == current.teamName {
-		return nil, "", fmt.Errorf("already on team %s", current.teamName)
-	}
-	if !registry.HasTeam(chosen) {
-		return nil, "", fmt.Errorf("team %q not found (available: %s)", chosen, strings.Join(others, ", "))
 	}
 	tc, err := loadTeamByName(rootCtx, chosen, registry, providerURL, providerAPIKey, newPathConsent(), buildVarsOrNil(), forcedSkills, planMode, autoSkills)
 	if err != nil {
@@ -337,12 +331,14 @@ func readChatLine(pr *readline.PromptReader) (string, error) {
 	if pr != nil {
 		return pr.ReadLine(boldStyle.Render("hufu> "))
 	}
-	fmt.Fprint(os.Stderr, boldStyle.Render("hufu> "))
-	var line string
-	if _, err := fmt.Scanln(&line); err != nil {
+	prompt := promptui.Prompt{
+		Label: "hufu",
+	}
+	res, err := prompt.Run()
+	if err != nil {
 		return "", io.EOF
 	}
-	return line, nil
+	return res, nil
 }
 
 // buildVars resolves template variables the same way the root command does:

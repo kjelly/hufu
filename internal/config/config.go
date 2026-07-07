@@ -13,7 +13,7 @@ import (
 )
 
 const DefaultProviderURL = "http://localhost:11434/v1"
-const DefaultEmbeddingModel = "qwen3-embedding:4b"
+const DefaultEmbeddingModel = "ollama/nomic-embed-text:latest"
 const DefaultOllamaAPIURL = "http://localhost:11434/api"
 
 type ModelEntry struct {

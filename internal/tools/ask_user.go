@@ -4,17 +4,16 @@
 package tools
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/manifoldco/promptui"
 )
 
 // askUserDeadlineCtx freezes the underlying context's deadline while
@@ -207,58 +206,65 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRes
 
 	NotifyAskUserStart()
 
-	reader := bufio.NewReader(os.Stdin)
-
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldFmt("─── Ask User ───"))
 	fmt.Fprintf(os.Stderr, "%s\n", args.Question)
 
 	switch questionType {
 	case "single_choice":
-		return handleSingleChoice(reader, args)
+		return handleSingleChoice(args)
 	case "multiple_choice":
-		return handleMultipleChoice(reader, args)
+		return handleMultipleChoice(args)
 	case "free_text":
-		return handleFreeText(reader, args)
+		return handleFreeText(args)
 	case "mixed":
-		return handleMixed(reader, args)
+		return handleMixed(args)
 	default:
 		if len(args.Options) > 0 {
-			return handleSingleChoice(reader, args)
+			return handleSingleChoice(args)
 		}
-		return handleFreeText(reader, args)
+		return handleFreeText(args)
 	}
 }
 
-func handleSingleChoice(reader *bufio.Reader, args askUserArgs) (fantasy.ToolResponse, error) {
-	for i, opt := range args.Options {
+func handleSingleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
+	var items []string
+	for _, opt := range args.Options {
 		label := opt.Label
 		if opt.Value != "" && opt.Value != opt.Label {
 			label = fmt.Sprintf("%s (%s)", opt.Label, opt.Value)
 		}
-		fmt.Fprintf(os.Stderr, "  %s %s\n", cyanFmt(fmt.Sprintf("[%d]", i+1)), label)
+		items = append(items, label)
 	}
+
 	if args.AllowAny {
-		fmt.Fprintf(os.Stderr, "  %s %s\n", cyanFmt("[0]"), "Type your own answer")
+		items = append(items, "[Type your own answer]")
 	}
-	fmt.Fprintf(os.Stderr, "%s ", boldFmt("Your choice:"))
 
-	input := readLine(reader)
-	choice, err := strconv.Atoi(strings.TrimSpace(input))
-	if err != nil || choice < 0 || choice > len(args.Options) {
-		if args.AllowAny {
-			resp := askResponseType{Free: strings.TrimSpace(input)}
-			data, err := json.Marshal(resp)
-			if err != nil {
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to marshal response: %v", err)), nil
-			}
-			return fantasy.NewTextResponse(string(data)), nil
+	prompt := promptui.Select{
+		Label: "Select Option",
+		Items: items,
+		Size:  10,
+	}
+
+	index, _, err := prompt.Run()
+	if err != nil {
+		if err == promptui.ErrInterrupt {
+			return fantasy.NewTextErrorResponse("ask_user cancelled by user"), nil
 		}
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid choice: %q (please enter a number 1-%d)", input, len(args.Options))), nil
+		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 
-	if choice == 0 && args.AllowAny {
-		fmt.Fprintf(os.Stderr, "%s ", boldFmt("Your answer:"))
-		freeInput := readLine(reader)
+	if args.AllowAny && index == len(args.Options) {
+		promptText := promptui.Prompt{
+			Label: "Your answer",
+		}
+		freeInput, err := promptText.Run()
+		if err != nil {
+			if err == promptui.ErrInterrupt {
+				return fantasy.NewTextErrorResponse("ask_user cancelled by user"), nil
+			}
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
 		resp := askResponseType{Free: strings.TrimSpace(freeInput)}
 		data, err := json.Marshal(resp)
 		if err != nil {
@@ -267,11 +273,7 @@ func handleSingleChoice(reader *bufio.Reader, args askUserArgs) (fantasy.ToolRes
 		return fantasy.NewTextResponse(string(data)), nil
 	}
 
-	if choice < 1 {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid choice: %d", choice)), nil
-	}
-
-	selected := args.Options[choice-1]
+	selected := args.Options[index]
 	value := selected.Value
 	if value == "" {
 		value = selected.Label
@@ -285,7 +287,7 @@ func handleSingleChoice(reader *bufio.Reader, args askUserArgs) (fantasy.ToolRes
 	return fantasy.NewTextResponse(string(data)), nil
 }
 
-func handleMultipleChoice(reader *bufio.Reader, args askUserArgs) (fantasy.ToolResponse, error) {
+func handleMultipleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
 	for i, opt := range args.Options {
 		label := opt.Label
 		if opt.Value != "" && opt.Value != opt.Label {
@@ -293,9 +295,18 @@ func handleMultipleChoice(reader *bufio.Reader, args askUserArgs) (fantasy.ToolR
 		}
 		fmt.Fprintf(os.Stderr, "  %s %s\n", cyanFmt(fmt.Sprintf("[%d]", i+1)), label)
 	}
-	fmt.Fprintf(os.Stderr, "%s ", boldFmt("Your choices (comma-separated, e.g. 1,3):"))
 
-	input := readLine(reader)
+	prompt := promptui.Prompt{
+		Label: "Your choices (comma-separated, e.g. 1,3)",
+	}
+	input, err := prompt.Run()
+	if err != nil {
+		if err == promptui.ErrInterrupt {
+			return fantasy.NewTextErrorResponse("ask_user cancelled by user"), nil
+		}
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return fantasy.NewTextErrorResponse("no choices provided"), nil
@@ -329,9 +340,18 @@ func handleMultipleChoice(reader *bufio.Reader, args askUserArgs) (fantasy.ToolR
 	return fantasy.NewTextResponse(string(data)), nil
 }
 
-func handleFreeText(reader *bufio.Reader, args askUserArgs) (fantasy.ToolResponse, error) {
-	fmt.Fprintf(os.Stderr, "%s ", boldFmt("Your answer:"))
-	input := readLine(reader)
+func handleFreeText(args askUserArgs) (fantasy.ToolResponse, error) {
+	prompt := promptui.Prompt{
+		Label: "Your answer",
+	}
+	input, err := prompt.Run()
+	if err != nil {
+		if err == promptui.ErrInterrupt {
+			return fantasy.NewTextErrorResponse("ask_user cancelled by user"), nil
+		}
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+
 	resp := askResponseType{Free: strings.TrimSpace(input)}
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -340,7 +360,7 @@ func handleFreeText(reader *bufio.Reader, args askUserArgs) (fantasy.ToolRespons
 	return fantasy.NewTextResponse(string(data)), nil
 }
 
-func handleMixed(reader *bufio.Reader, args askUserArgs) (fantasy.ToolResponse, error) {
+func handleMixed(args askUserArgs) (fantasy.ToolResponse, error) {
 	for i, opt := range args.Options {
 		label := opt.Label
 		if opt.Value != "" && opt.Value != opt.Label {
@@ -349,9 +369,18 @@ func handleMixed(reader *bufio.Reader, args askUserArgs) (fantasy.ToolResponse, 
 		fmt.Fprintf(os.Stderr, "  %s %s\n", cyanFmt(fmt.Sprintf("[%d]", i+1)), label)
 	}
 	fmt.Fprintf(os.Stderr, "  %s %s\n", cyanFmt("[0]"), "Type your own answer")
-	fmt.Fprintf(os.Stderr, "%s ", boldFmt("Your choice(s) or free text:"))
 
-	input := readLine(reader)
+	prompt := promptui.Prompt{
+		Label: "Your choice(s) or free text",
+	}
+	input, err := prompt.Run()
+	if err != nil {
+		if err == promptui.ErrInterrupt {
+			return fantasy.NewTextErrorResponse("ask_user cancelled by user"), nil
+		}
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return fantasy.NewTextErrorResponse("no input provided"), nil
@@ -367,8 +396,16 @@ func handleMixed(reader *bufio.Reader, args askUserArgs) (fantasy.ToolResponse, 
 		if choice, err := strconv.Atoi(p); err == nil && choice >= 0 && choice <= len(args.Options) {
 			hasNumber = true
 			if choice == 0 {
-				fmt.Fprintf(os.Stderr, "%s ", boldFmt("Your answer:"))
-				freeInput := readLine(reader)
+				promptText := promptui.Prompt{
+					Label: "Your answer",
+				}
+				freeInput, err := promptText.Run()
+				if err != nil {
+					if err == promptui.ErrInterrupt {
+						return fantasy.NewTextErrorResponse("ask_user cancelled by user"), nil
+					}
+					return fantasy.NewTextErrorResponse(err.Error()), nil
+				}
 				freeText = strings.TrimSpace(freeInput)
 			} else {
 				selected := args.Options[choice-1]
@@ -391,14 +428,6 @@ func handleMixed(reader *bufio.Reader, args askUserArgs) (fantasy.ToolResponse, 
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to marshal response: %v", err)), nil
 	}
 	return fantasy.NewTextResponse(string(data)), nil
-}
-
-func readLine(reader *bufio.Reader) string {
-	line, err := reader.ReadString('\n')
-	if err != nil && err != io.EOF {
-		return ""
-	}
-	return strings.TrimRight(line, "\r\n")
 }
 
 func boldFmt(s string) string {
