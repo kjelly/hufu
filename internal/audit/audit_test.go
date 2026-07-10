@@ -7,8 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/utils"
 	"time"
+
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 // TestNewAuditLogger tests the NewAuditLogger function

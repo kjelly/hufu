@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/term"
 
 	hulog "github.com/anomalyco/hufu/internal/log"
 	"github.com/anomalyco/hufu/internal/notify"
@@ -146,18 +148,22 @@ type statusWriter interface {
 type reporterState struct {
 	currentAgent string
 	textBuf      string
+	thinkBuf     string
+	thinkLabel   string
 }
 
 // dispatchStatusEvent renders a single StatusEvent to w, updating state in-place.
 // Returns true when the event type was handled (written to w). Callers should
 // handle unrecognized event types themselves.
 func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEvent) {
+	width := previewTerminalWidth(120)
 	switch event.Type {
 	case "start":
 		if st.currentAgent != "" && st.textBuf != "" {
 			w.write(flushText(st.currentAgent, st.textBuf))
 			st.textBuf = ""
 		}
+		flushThink(w, st)
 		st.currentAgent = event.Agent
 		w.write(fmt.Sprintf("\n%s %s %s\n",
 			headerStyle.Render("▶"),
@@ -188,31 +194,21 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 			toolStyle.Render(event.ToolName),
 		))
 		if argsPreview != "" {
-			if strings.Contains(argsPreview, "\n") {
-				for _, line := range strings.Split(argsPreview, "\n") {
-					w.write(fmt.Sprintf("    %s\n", dimStyle.Render(line)))
-				}
-			} else {
-				w.write(fmt.Sprintf("    %s\n", dimStyle.Render(argsPreview)))
+			for _, line := range wrapPreviewLines(argsPreview, max(width-4, 20), 4) {
+				w.write(fmt.Sprintf("    %s\n", dimStyle.Render(line)))
 			}
 		}
+		flushThink(w, st)
 
 	case "tool_result":
-		resultLine := ""
 		if event.ToolResult != "" {
-			lines := strings.Split(event.ToolResult, "\n")
-			maxLines := 3
-			if len(lines) > maxLines {
-				resultLine = strings.Join(lines[:maxLines], "\n    ") + fmt.Sprintf("  ... (%d more lines)", len(lines)-maxLines)
-			} else {
-				resultLine = strings.Join(lines, "\n    ")
-			}
+			resultPreview := strings.Join(wrapPreviewLines(event.ToolResult, max(width-4, 20), 4), "\n    ")
 			w.write(fmt.Sprintf("  %s %s %s %s\n    %s\n",
 				doneStyle.Render("✓"),
 				formatAgentLabel(event),
 				toolStyle.Render("›"),
 				toolStyle.Render(event.ToolName),
-				resultStyle.Render(utils.TruncatePreview(resultLine, 200)),
+				resultStyle.Render(resultPreview),
 			))
 		} else {
 			w.write(fmt.Sprintf("  %s %s %s %s\n",
@@ -222,6 +218,7 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 				toolStyle.Render(event.ToolName),
 			))
 		}
+		flushThink(w, st)
 
 	case "text":
 		st.textBuf += event.Message
@@ -249,6 +246,7 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 				doneStyle.Render("done"),
 			))
 		}
+		flushThink(w, st)
 		st.currentAgent = ""
 
 	case "wrap_up_phase":
@@ -258,8 +256,9 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 		}
 		w.write(fmt.Sprintf("\n%s %s\n\n",
 			wrapUpStyle.Render("⏹"),
-			boldStyle.Render(strings.ToUpper(event.Message+"...")),
+			boldStyle.Render(strings.ToUpper(event.Message)),
 		))
+		flushThink(w, st)
 
 	case "error":
 		if st.textBuf != "" {
@@ -284,6 +283,7 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 				errStyle.Render(event.Message),
 			))
 		}
+		flushThink(w, st)
 
 	case "plan_approved":
 		w.write(fmt.Sprintf("%s %s\n",
@@ -300,6 +300,7 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 			errStyle.Render("⚠ LOOP"),
 			errStyle.Render(event.Message),
 		))
+		flushThink(w, st)
 
 	case "sidecar_call":
 		if st.textBuf != "" {
@@ -319,6 +320,7 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 			dimStyle.Render(label),
 			dimStyle.Render(msg),
 		))
+		flushThink(w, st)
 
 	case "cache_hit":
 		if st.textBuf != "" {
@@ -331,6 +333,7 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 			doneStyle.Render("✓ cached"),
 			dimStyle.Render(utils.TruncateLine(event.Message, 60)),
 		))
+		flushThink(w, st)
 
 	case "skill_auto_loaded":
 		if st.textBuf != "" {
@@ -342,6 +345,7 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 			agentStyle.Render(event.Agent),
 			doneStyle.Render(event.SkillName),
 		))
+		flushThink(w, st)
 
 	case "think_skills":
 		w.write(fmt.Sprintf("%s %s\n",
@@ -387,10 +391,13 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 		))
 
 	case "think_text", "reasoning":
-		w.write(fmt.Sprintf("%s %s",
-			thinkStyle.Render("💭"),
-			thinkStyle.Render(event.Message),
-		))
+		if st.thinkLabel == "" {
+			st.thinkLabel = formatAgentLabel(event)
+		}
+		st.thinkBuf += event.Message
+		if st.thinkLabel == "" && event.Agent != "" {
+			st.thinkLabel = agentStyle.Render(event.Agent)
+		}
 	}
 }
 
@@ -624,6 +631,31 @@ func flushText(agentName, text string) string {
 	)
 }
 
+func flushThink(w statusWriter, st *reporterState) {
+	trimmed := strings.TrimSpace(st.thinkBuf)
+	if trimmed == "" {
+		st.thinkBuf = ""
+		st.thinkLabel = ""
+		return
+	}
+	label := st.thinkLabel
+	if label == "" {
+		label = thinkStyle.Render("💭")
+	} else {
+		label = thinkStyle.Render("💭 " + label)
+	}
+	w.write(fmt.Sprintf("  %s\n", label))
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		w.write(fmt.Sprintf("    %s\n", dimStyle.Render(line)))
+	}
+	st.thinkBuf = ""
+	st.thinkLabel = ""
+}
+
 func formatTimingBreakdown(total, modelTime, toolTime time.Duration) string {
 	if total == 0 {
 		return ""
@@ -671,6 +703,106 @@ func formatToolArgs(toolName, args string) string {
 	}
 	args = strings.ReplaceAll(args, "\n", " ")
 	return args
+}
+
+func previewTerminalWidth(fallback int) int {
+	if cols := os.Getenv("COLUMNS"); cols != "" {
+		if n, err := strconv.Atoi(cols); err == nil && n > 0 {
+			return n
+		}
+	}
+	if w, _, err := term.GetSize(os.Stderr.Fd()); err == nil && w > 0 {
+		return w
+	}
+	if w, _, err := term.GetSize(os.Stdout.Fd()); err == nil && w > 0 {
+		return w
+	}
+	return fallback
+}
+
+func wrapPreviewLines(text string, width, maxLines int) []string {
+	text = strings.TrimSpace(text)
+	if text == "" || width <= 0 || maxLines <= 0 {
+		return nil
+	}
+
+	var lines []string
+	for _, src := range strings.Split(text, "\n") {
+		words := strings.Fields(src)
+		if len(words) == 0 {
+			if len(lines) >= maxLines {
+				return truncatePreviewLines(lines)
+			}
+			lines = append(lines, "")
+			continue
+		}
+
+		cur := ""
+		curLen := 0
+		flush := func() bool {
+			if curLen == 0 {
+				return false
+			}
+			lines = append(lines, cur)
+			cur = ""
+			curLen = 0
+			return len(lines) >= maxLines
+		}
+
+		for _, word := range words {
+			runes := []rune(word)
+			for len(runes) > 0 {
+				if curLen == 0 && len(runes) <= width {
+					cur = string(runes)
+					curLen = len(runes)
+					runes = nil
+					continue
+				}
+				if curLen > 0 && curLen+1+len(runes) <= width {
+					cur += " " + string(runes)
+					curLen += 1 + len(runes)
+					runes = nil
+					continue
+				}
+				if curLen > 0 && flush() {
+					return truncatePreviewLines(lines)
+				}
+				chunk := width
+				if chunk > len(runes) {
+					chunk = len(runes)
+				}
+				cur = string(runes[:chunk])
+				curLen = chunk
+				runes = runes[chunk:]
+				if len(runes) > 0 && flush() {
+					return truncatePreviewLines(lines)
+				}
+			}
+		}
+		if curLen > 0 && flush() {
+			return truncatePreviewLines(lines)
+		}
+	}
+
+	return lines
+}
+
+func truncatePreviewLines(lines []string) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	last := lines[len(lines)-1]
+	if last == "" {
+		lines[len(lines)-1] = "..."
+		return lines
+	}
+	runes := []rune(last)
+	if len(runes) <= 3 {
+		lines[len(lines)-1] = "..."
+		return lines
+	}
+	lines[len(lines)-1] = string(runes[:len(runes)-3]) + "..."
+	return lines
 }
 
 type skillEntry struct {
@@ -874,24 +1006,6 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 	}
 	w := &lineWriter{}
 	idleTimer := newIdleWarningTimer(w, 30*time.Second)
-
-	if !verbose && !quietMode && !unattended {
-		pb := newProgressBarDisplay()
-		tc.coordinator.SetStatusReporter(func(event team.StatusEvent) {
-			pb.update(event)
-			if tc.notifier != nil {
-				tc.notifier.Notify(event.Type, event.Agent, event.Message, event.Output)
-			}
-			idleTimer.reset()
-			if event.Model != "" {
-				idleTimer.SetModel(event.Model)
-			}
-			if event.Type == "done" || event.Type == "error" {
-				pb.clear()
-			}
-		})
-		return &coordDisplay{idleTimer: idleTimer}
-	}
 
 	taskDisp := newTaskDisplay(w, tc.coordinator.TaskTracker())
 	skillDisp := newSkillDisplay(w)
@@ -1143,10 +1257,7 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			}
 			tt.stop(event.TodoID)
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolCall(event.ToolName, event.ToolArgs), Model: event.Model})
-			argsPreview := event.ToolArgs
-			if event.ToolName != "bash" {
-				argsPreview = utils.TruncateLine(argsPreview, 120)
-			}
+			argsPreview := strings.TrimSpace(strings.ReplaceAll(event.ToolArgs, "\n", " "))
 			toolLabel := toolStyle.Render("⟹ " + event.ToolName)
 			agentLabel := agentStyle.Render(event.Agent)
 			p.Send(tuipkg.StatusBarMsg{Text: agentLabel + "  " + toolLabel + dimStyle.Render("  "+argsPreview)})
@@ -1284,6 +1395,9 @@ func syncLogState() {
 // program in the main goroutine. Returns when the user quits or the work is done.
 func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string, teamInfo tuipkg.TeamInfo) (string, error) {
 	model := tuipkg.New(prompt, teamInfo)
+	if isChatTUI {
+		model.IsChat = true
+	}
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithoutSignalHandler())
 
 	activeTUIProgram.Store(p)
@@ -1370,6 +1484,7 @@ func waitWithTimeout(finished chan struct{}) {
 
 func renderDryRun(result *team.DryRunResult) {
 	var b strings.Builder
+	width := previewTerminalWidth(80)
 
 	b.WriteString("\n")
 	b.WriteString(headerStyle.Render("─── DRY RUN (no LLM calls) ───"))
@@ -1381,8 +1496,15 @@ func renderDryRun(result *team.DryRunResult) {
 		fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Sidecar:"), result.SidecarModel)
 	}
 	if result.UserPrompt != "" {
-		prompt := utils.TruncateLine(result.UserPrompt, 80)
-		fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Prompt:"), dimStyle.Render(prompt))
+		promptLines := wrapPreviewLines(result.UserPrompt, max(width-10, 20), 6)
+		if len(promptLines) == 1 {
+			fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Prompt:"), dimStyle.Render(promptLines[0]))
+		} else if len(promptLines) > 1 {
+			fmt.Fprintf(&b, "  %s\n", boldStyle.Render("Prompt:"))
+			for _, line := range promptLines {
+				fmt.Fprintf(&b, "    %s\n", dimStyle.Render(line))
+			}
+		}
 	}
 
 	b.WriteString("\n")

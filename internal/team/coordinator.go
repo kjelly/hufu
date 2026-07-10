@@ -227,6 +227,7 @@ type Coordinator struct {
 
 	// Unattended / budget controls for no-human-watching operation.
 	unattended          bool
+	autoApprove         bool
 	maxWallClock        time.Duration // 0 = unlimited
 	tokenBudget         int64         // 0 = unlimited; cumulative LLM tokens
 	tokensUsed          atomic.Int64
@@ -240,11 +241,19 @@ type Coordinator struct {
 // defaults, and only explicitly-allowed tools may run.
 func (c *Coordinator) SetUnattended(v bool) { c.unattended = v }
 
+// SetAutoApprove enables automatic selection of clearly safe ask_user options
+// when one is available.
+func (c *Coordinator) SetAutoApprove(v bool) { c.autoApprove = v }
+
 // SetNoJournal disables the persistent task-result journal.
 func (c *Coordinator) SetNoJournal(v bool) { c.noJournal = v }
 
 // IsUnattended reports whether the coordinator is in unattended mode.
 func (c *Coordinator) IsUnattended() bool { return c.unattended }
+
+// IsAutoApprove reports whether ask_user should auto-select safe options when
+// possible.
+func (c *Coordinator) IsAutoApprove() bool { return c.autoApprove }
 
 // SetBudget configures the run's wall-clock and cumulative-token ceilings.
 // Zero values mean unlimited.
@@ -263,6 +272,14 @@ func (c *Coordinator) SetAcceptance(cmd string) { c.acceptanceCmd = cmd }
 
 // SetRollback sets an optional shell command run on acceptance failure in unattended mode.
 func (c *Coordinator) SetRollback(cmd string) { c.rollbackCmd = cmd }
+
+func (c *Coordinator) chooseAskUserResponse(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (tools.AskUserResponse, error) {
+	s := c.Sidecar()
+	if s == nil {
+		return tools.AskUserResponse{}, fmt.Errorf("no sidecar configured")
+	}
+	return s.ChooseAskUserResponse(ctx, question, qtype, opts, allowAny)
+}
 
 // TokensUsed returns the cumulative LLM token count observed so far.
 func (c *Coordinator) TokensUsed() int64 { return c.tokensUsed.Load() }
@@ -489,6 +506,16 @@ func (c *Coordinator) ResetConversation() {
 	c.conversationHistoryMu.Lock()
 	c.conversationHistory = nil
 	c.conversationHistoryMu.Unlock()
+
+	c.resetRoundState()
+}
+
+func (c *Coordinator) resetRoundState() {
+	c.round = 0
+	c.wrapUp.Store(0)
+	c.delegatedTasksMu.Lock()
+	c.delegatedTasks = make(map[string]int)
+	c.delegatedTasksMu.Unlock()
 }
 
 func (c *Coordinator) SetStatusReporter(fn StatusReporter) {

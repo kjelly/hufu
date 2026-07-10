@@ -8,8 +8,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/charmbracelet/x/term"
 )
 
 type ConsentResult int
@@ -120,13 +124,12 @@ func (pc *PathConsent) AskConsent(path, operation string, toolName, toolArgs str
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldFmt("─── Path Consent ───"))
 
 	agentInfo := pc.currentAgent()
+	width := promptTerminalWidth(100)
 	if agentInfo.Name != "" {
 		if agentInfo.Task != "" {
-			taskPreview := agentInfo.Task
-			if len(taskPreview) > 80 {
-				taskPreview = taskPreview[:77] + "..."
+			for _, line := range formatConsentPreviewLines("Agent: "+agentInfo.Name+" — ", agentInfo.Task, width) {
+				fmt.Fprintln(os.Stderr, line)
 			}
-			fmt.Fprintf(os.Stderr, "Agent: %s — %s\n", agentInfo.Name, taskPreview)
 		} else {
 			fmt.Fprintf(os.Stderr, "Agent: %s\n", agentInfo.Name)
 		}
@@ -134,11 +137,9 @@ func (pc *PathConsent) AskConsent(path, operation string, toolName, toolArgs str
 
 	if toolName != "" {
 		if toolArgs != "" {
-			argsPreview := toolArgs
-			if len(argsPreview) > 300 {
-				argsPreview = argsPreview[:297] + "..."
+			for _, line := range formatConsentPreviewLines("Tool:  "+toolName+" → ", toolArgs, width) {
+				fmt.Fprintln(os.Stderr, line)
 			}
-			fmt.Fprintf(os.Stderr, "Tool:  %s → %s\n", toolName, argsPreview)
 		} else {
 			fmt.Fprintf(os.Stderr, "Tool:  %s\n", toolName)
 		}
@@ -206,4 +207,51 @@ func readConsentLine(reader *bufio.Reader) string {
 		return ""
 	}
 	return strings.TrimRight(line, "\r\n")
+}
+
+func promptTerminalWidth(fallback int) int {
+	if cols := os.Getenv("COLUMNS"); cols != "" {
+		if n, err := strconv.Atoi(cols); err == nil && n > 0 {
+			return n
+		}
+	}
+	if w, _, err := term.GetSize(os.Stderr.Fd()); err == nil && w > 0 {
+		return w
+	}
+	if w, _, err := term.GetSize(os.Stdout.Fd()); err == nil && w > 0 {
+		return w
+	}
+	return fallback
+}
+
+func formatConsentPreviewLines(prefix, text string, width int) []string {
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" {
+		return []string{strings.TrimRight(prefix, " ")}
+	}
+
+	if width <= 0 {
+		return []string{strings.TrimRight(prefix, " ") + text}
+	}
+	if width <= len(prefix) {
+		return []string{strings.TrimRight(prefix, " ") + text}
+	}
+
+	contentWidth := width - len(prefix)
+	wrapped := utils.WrapLine(text, contentWidth, 9999)
+	if len(wrapped.Lines) == 0 {
+		return []string{strings.TrimRight(prefix, " ") + text}
+	}
+
+	lines := make([]string, 0, len(wrapped.Lines))
+	indent := strings.Repeat(" ", len(prefix))
+	for i, line := range wrapped.Lines {
+		if i == 0 {
+			lines = append(lines, prefix+line)
+			continue
+		}
+		line = strings.TrimPrefix(line, "  - ")
+		lines = append(lines, indent+line)
+	}
+	return lines
 }

@@ -50,7 +50,7 @@ func TestUnattendedAskUserResponse_ChoicePicksFirst(t *testing.T) {
 		Question: "pick one",
 		Options:  []askOption{{Label: "Yes", Value: "y"}, {Label: "No", Value: "n"}},
 	}
-	resp, err := unattendedAskUserResponse(args, "single_choice")
+	resp, err := unattendedAskUserResponse(context.Background(), args, "single_choice")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -64,15 +64,15 @@ func TestUnattendedAskUserResponse_ChoicePicksFirst(t *testing.T) {
 	if len(parsed.Answers) != 1 || parsed.Answers[0] != "y" {
 		t.Errorf("expected first option value 'y', got %v", parsed.Answers)
 	}
-	if !called {
-		t.Error("needs-human hook should have fired")
+	if called {
+		t.Error("needs-human hook should not fire for auto-resolved choices")
 	}
 }
 
 func TestUnattendedAskUserResponse_FreeTextErrors(t *testing.T) {
 	SetOnNeedsHuman(nil)
 	args := askUserArgs{Question: "describe the fix"}
-	resp, err := unattendedAskUserResponse(args, "free_text")
+	resp, err := unattendedAskUserResponse(context.Background(), args, "free_text")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -106,5 +106,52 @@ func TestExecuteAskUser_UnattendedDoesNotBlock(t *testing.T) {
 	}
 	if !strings.Contains(resp.Content, "go") {
 		t.Errorf("expected default answer 'go', got %q", resp.Content)
+	}
+}
+
+func TestExecuteAskUser_UnattendedUsesSelector(t *testing.T) {
+	SetOnNeedsHuman(nil)
+	SetOnAskUserTUI(nil)
+	ctx := context.WithValue(context.Background(), UnattendedKey, true)
+	ctx = context.WithValue(ctx, AskUserChoiceSelectorKey, AskUserChoiceSelector(func(ctx context.Context, question, qtype string, opts []AskUserTUIOption, allowAny bool) (AskUserResponse, error) {
+		if question != "continue?" {
+			t.Fatalf("question = %q, want %q", question, "continue?")
+		}
+		if qtype != "single_choice" {
+			t.Fatalf("qtype = %q, want single_choice", qtype)
+		}
+		if allowAny {
+			t.Fatal("allowAny should be false")
+		}
+		if len(opts) != 2 {
+			t.Fatalf("len(opts) = %d, want 2", len(opts))
+		}
+		if opts[0].Value != "go" || opts[1].Value != "stop" {
+			t.Fatalf("unexpected opts: %+v", opts)
+		}
+		return AskUserResponse{Answers: []string{"stop"}}, nil
+	}))
+
+	input, _ := json.Marshal(map[string]any{
+		"question": "continue?",
+		"type":     "single_choice",
+		"options": []map[string]string{
+			{"label": "go", "value": "go"},
+			{"label": "stop", "value": "stop"},
+		},
+	})
+	resp, err := executeAskUser(ctx, fantasy.ToolCall{ID: "1", Name: "ask_user", Input: string(input)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.IsError {
+		t.Fatalf("expected an auto-answer, got error: %s", resp.Content)
+	}
+	var parsed AskUserResponse
+	if err := json.Unmarshal([]byte(resp.Content), &parsed); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if len(parsed.Answers) != 1 || parsed.Answers[0] != "stop" {
+		t.Fatalf("expected selector answer 'stop', got %+v", parsed.Answers)
 	}
 }

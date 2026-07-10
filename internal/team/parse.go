@@ -86,6 +86,7 @@ type teamConfigYAML struct {
 	WorkerContextSize int                              `yaml:"worker-context-size"`
 	ToolsAllowed      interface{}                      `yaml:"tools"` // tools.allowed in YAML - string or []string
 	Unattended        bool                             `yaml:"unattended"`
+	AutoApprove       bool                             `yaml:"auto-approve"`
 	MaxWallClock      int64                            `yaml:"max-duration"`
 	MaxTotalTokens    int64                            `yaml:"max-total-tokens"`
 	Acceptance        string                           `yaml:"acceptance"`
@@ -520,6 +521,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.Unattended {
 		cfg.Unattended = true
+	}
+	if yc.AutoApprove {
+		cfg.AutoApprove = true
 	}
 	if yc.MaxWallClock > 0 {
 		cfg.MaxWallClock = yc.MaxWallClock

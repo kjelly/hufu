@@ -201,6 +201,7 @@ go run ./cmd/hufu
 | `--report` | — | `bool` | `false` | Generate a full execution report as a markdown file |
 | `--default` | — | `bool` | `false` | Use the built-in default team (coordinator + Helper); no `.agent-teams/` directory required (mutually exclusive with `--agent-team`). Discovers global skills from `~/.agents/skills/` and respects `--skill` forced skills. |
 | `--helper-tools` | — | `string` | `""` | Comma-separated extra tools for the default Helper worker when `--default` is set (e.g. `bash` or `bash,sudo,ssh`). Whitespace trimmed; empty entries dropped. Empty = baseline read-only toolset. |
+| `--auto-approve` | — | `bool` | `false` | Automatically choose clearly safe `ask_user` options; dangerous or ambiguous choices still prompt the user |
 | `--model` | — | `string` | `""` | Override default model for the active team (highest priority) |
 | `--temperature` | — | `string` | `""` | Override sampling temperature |
 | `--max-tokens` | — | `string` | `""` | Override max output tokens |
@@ -546,6 +547,7 @@ allowed-paths: ["/home/user/projects", "/tmp"]  # Allowed file system paths
 restricted-path: "/etc"                           # Restricted path
 no-net: false                                     # Block network access
 force-mcp: false                                  # Force MCP mode
+auto-approve: false                               # Auto-select clearly safe ask_user options
 shell: bash                                       # Default shell for MCP tools (searched from PATH)
 
 # === MCP Tools (Agent-level) ===

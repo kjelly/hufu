@@ -81,11 +81,11 @@ func TestLTMPathSanitization(t *testing.T) {
 	}{
 		{"normal-team", "ltm-normal-team.md"},
 		{"foo/bar", "ltm-foo-bar.md"},
-		{"../../../etc", "ltm-..-..-..-etc.md"},   // ".." preserved (dots allowed), "/" → "-"
+		{"../../../etc", "ltm-..-..-..-etc.md"},     // ".." preserved (dots allowed), "/" → "-"
 		{"..\\..\\windows", "ltm-..-..-windows.md"}, // ".." preserved, "\\" → "-"
 		{"team/name/with/slashes", "ltm-team-name-with-slashes.md"},
-		{"", "ltm-default.md"},  // empty name → default
-		{"foo\x00bar", "ltm-foo-bar.md"},  // null byte → "-"
+		{"", "ltm-default.md"},           // empty name → default
+		{"foo\x00bar", "ltm-foo-bar.md"}, // null byte → "-"
 	}
 
 	for _, tt := range tests {

@@ -85,7 +85,7 @@ func TestMapRenderedLineToLogIndex(t *testing.T) {
 	todoID := "t1"
 	m.detailID = todoID
 	m.logs[todoID] = []string{
-		"Short line",                                  // Fits on 1 line (width 20 -> wraps at 18)
+		"Short line", // Fits on 1 line (width 20 -> wraps at 18)
 		"Very long line that will wrap onto multiple lines definitely.", // Takes multiple lines
 		"Another short line",
 	}

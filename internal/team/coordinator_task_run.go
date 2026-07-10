@@ -301,6 +301,12 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			}
 			if c.unattended {
 				taskCtx = context.WithValue(taskCtx, tools.UnattendedKey, true)
+				taskCtx = context.WithValue(taskCtx, tools.AskUserChoiceSelectorKey, tools.AskUserChoiceSelector(func(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (tools.AskUserResponse, error) {
+					return c.chooseAskUserResponse(ctx, question, qtype, opts, allowAny)
+				}))
+			}
+			if c.autoApprove {
+				taskCtx = context.WithValue(taskCtx, tools.AutoApproveKey, true)
 			}
 
 			// Merge team-level and agent-level tool allowlists.
@@ -594,11 +600,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		},
 		OnTextDelta: func(id, text string) error {
 			tp.Process(text, func(txt string) {
-				eventType := "text"
-				if c.think {
-					eventType = "think_text"
-				}
-				reportFn(c.newEvent(eventType).withAgent(agentName).withTodoID(todoID).withMessage(txt))
+				reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage(txt))
 				logWrite(txt)
 			}, func(rsn string) {
 				reportFn(c.newEvent("reasoning").withAgent(agentName).withTodoID(todoID).withMessage(rsn))
@@ -613,11 +615,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		},
 		OnStreamFinish: func(usage fantasy.Usage, finishReason fantasy.FinishReason, providerMetadata fantasy.ProviderMetadata) error {
 			tp.Flush(func(txt string) {
-				eventType := "text"
-				if c.think {
-					eventType = "think_text"
-				}
-				reportFn(c.newEvent(eventType).withAgent(agentName).withTodoID(todoID).withMessage(txt))
+				reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage(txt))
 				logWrite(txt)
 			}, func(rsn string) {
 				reportFn(c.newEvent("reasoning").withAgent(agentName).withTodoID(todoID).withMessage(rsn))

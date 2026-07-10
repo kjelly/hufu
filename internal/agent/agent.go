@@ -124,6 +124,9 @@ type TeamConfig struct {
 	// ask_user returns a safe default instead of reading stdin, --steps/--tui
 	// are disabled, and only explicitly-allowed tools may run (deny-by-default).
 	Unattended bool
+	// AutoApprove lets ask_user auto-select clearly safe options when one is
+	// available. Dangerous or ambiguous choices still prompt the user.
+	AutoApprove bool
 	// MaxWallClock caps total run wall-clock time in seconds (0 = unlimited).
 	// When exceeded, the coordinator force-enters wrap-up and refuses new tasks.
 	MaxWallClock int64

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -13,6 +14,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/anomalyco/hufu/internal/tools"
 )
 
 const (
@@ -388,6 +390,9 @@ NEW TASK: %s`, list.String(), newTask)
 		fmt.Fprintf(os.Stderr, "warning: sidecar similar task: failed to parse JSON response %q: %v\n", result, err)
 		return -1, fmt.Errorf("sidecar similar task: failed to parse JSON response %q: %w", result, err)
 	}
+	if resp.Match == 0 {
+		return -1, nil
+	}
 	if resp.Match < 1 || resp.Match > len(pastTasks) {
 		// Log out-of-bounds match values for debugging LLM response issues
 		fmt.Fprintf(os.Stderr, "warning: sidecar similar task: match value %d out of bounds (expected 1-%d)\n", resp.Match, len(pastTasks))
@@ -444,4 +449,123 @@ Return ONLY a JSON object: {"is_file_access": true/false, "reason": "brief expla
 	}
 
 	return parsed.IsFileAccess, nil
+}
+
+func (s *Sidecar) ChooseAskUserResponse(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (tools.AskUserResponse, error) {
+	if s == nil || s.agent == nil {
+		return tools.AskUserResponse{}, fmt.Errorf("sidecar not initialized")
+	}
+	if len(opts) == 0 {
+		return tools.AskUserResponse{}, fmt.Errorf("no options provided")
+	}
+
+	var list strings.Builder
+	for i, opt := range opts {
+		value := strings.TrimSpace(opt.Value)
+		if value == "" {
+			value = strings.TrimSpace(opt.Label)
+		}
+		fmt.Fprintf(&list, "%d. %s", i+1, opt.Label)
+		if value != opt.Label {
+			fmt.Fprintf(&list, " (value: %s)", value)
+		}
+		list.WriteByte('\n')
+	}
+
+	prompt := fmt.Sprintf(`You are choosing the best answer for an ask_user prompt in unattended mode.
+Pick the safest and most appropriate answer from the options.
+Use the exact option value when present; otherwise use the label.
+
+Return ONLY JSON in this exact shape:
+{"answers":["..."],"free_text":""}
+
+Question type: %s
+Allow free text: %t
+
+Options:
+%s
+User question: %s`, qtype, allowAny, list.String(), question)
+
+	result, err := s.generate(ctx, prompt)
+	if err != nil {
+		return tools.AskUserResponse{}, err
+	}
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return tools.AskUserResponse{}, fmt.Errorf("empty ask_user selection response")
+	}
+
+	if extracted := jsonCodeBlockRe.FindStringSubmatch(result); len(extracted) >= 2 {
+		result = strings.TrimSpace(extracted[1])
+	}
+
+	var resp tools.AskUserResponse
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		return tools.AskUserResponse{}, fmt.Errorf("failed to parse ask_user selection response %q: %w", result, err)
+	}
+
+	normalized, ok := normalizeAskUserSelection(resp, opts, qtype, allowAny)
+	if !ok {
+		return tools.AskUserResponse{}, fmt.Errorf("ask_user selection response was invalid")
+	}
+	return normalized, nil
+}
+
+func normalizeAskUserSelection(resp tools.AskUserResponse, opts []tools.AskUserTUIOption, qtype string, allowAny bool) (tools.AskUserResponse, bool) {
+	if len(opts) == 0 {
+		if strings.TrimSpace(resp.Free) == "" {
+			return tools.AskUserResponse{}, false
+		}
+		return tools.AskUserResponse{Free: strings.TrimSpace(resp.Free)}, true
+	}
+
+	lookup := make(map[string]string, len(opts)*2)
+	for idx, opt := range opts {
+		val := strings.TrimSpace(opt.Value)
+		if val == "" {
+			val = strings.TrimSpace(opt.Label)
+		}
+		lookup[strings.ToLower(val)] = val
+		lookup[strings.ToLower(strings.TrimSpace(opt.Label))] = val
+		lookup[fmt.Sprintf("%d", idx+1)] = val
+	}
+
+	var answers []string
+	for _, ans := range resp.Answers {
+		trimmed := strings.TrimSpace(ans)
+		if trimmed == "" {
+			continue
+		}
+		if normalized, ok := lookup[strings.ToLower(trimmed)]; ok {
+			answers = append(answers, normalized)
+			continue
+		}
+		if idx, err := strconv.Atoi(trimmed); err == nil && idx >= 1 && idx <= len(opts) {
+			opt := opts[idx-1]
+			val := strings.TrimSpace(opt.Value)
+			if val == "" {
+				val = strings.TrimSpace(opt.Label)
+			}
+			answers = append(answers, val)
+			continue
+		}
+		if allowAny {
+			answers = append(answers, trimmed)
+			continue
+		}
+		return tools.AskUserResponse{}, false
+	}
+
+	if len(answers) == 0 {
+		if allowAny && strings.TrimSpace(resp.Free) != "" {
+			return tools.AskUserResponse{Free: strings.TrimSpace(resp.Free)}, true
+		}
+		return tools.AskUserResponse{}, false
+	}
+
+	if qtype == "single_choice" && len(answers) > 1 {
+		answers = answers[:1]
+	}
+
+	return tools.AskUserResponse{Answers: answers, Free: strings.TrimSpace(resp.Free)}, true
 }

@@ -36,6 +36,17 @@ func TestSetUnattended(t *testing.T) {
 	}
 }
 
+func TestSetAutoApprove(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	if c.IsAutoApprove() {
+		t.Fatal("default should not be auto-approve")
+	}
+	c.SetAutoApprove(true)
+	if !c.IsAutoApprove() {
+		t.Error("SetAutoApprove(true) not reflected")
+	}
+}
+
 func TestBudgetExceeded_Disabled(t *testing.T) {
 	c := newBudgetCoordinator(t)
 	if ex, _ := c.budgetExceeded(); ex {

@@ -4,8 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/utils"
 	"time"
+
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 func TestCoordinator_GetCurrentStatus_DefaultIdle(t *testing.T) {
@@ -17,10 +18,10 @@ func TestCoordinator_GetCurrentStatus_DefaultIdle(t *testing.T) {
 
 func TestCoordinator_GetCurrentStatus_ModelStage(t *testing.T) {
 	c := &Coordinator{}
-	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "coordinator"})
-	c.updateSnapshot(func(s *currentSnapshot) { s.Model = "ollama/qwen3:8b"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "coordinator" })
+	c.updateSnapshot(func(s *currentSnapshot) { s.Model = "ollama/qwen3:8b" })
 	c.SetCurrentStage("model")
-	c.updateSnapshot(func(s *currentSnapshot) { s.Step = 3})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Step = 3 })
 
 	got := c.GetCurrentStatus()
 	wantSubstrings := []string{"model", "agent=coordinator", "model=ollama/qwen3:8b", "step=3"}
@@ -33,9 +34,9 @@ func TestCoordinator_GetCurrentStatus_ModelStage(t *testing.T) {
 
 func TestCoordinator_GetCurrentStatus_ToolStage(t *testing.T) {
 	c := &Coordinator{}
-	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "helper"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "helper" })
 	c.SetCurrentStage("tool")
-	c.updateSnapshot(func(s *currentSnapshot) { s.Tool = "bash"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Tool = "bash" })
 
 	got := c.GetCurrentStatus()
 	wantSubstrings := []string{"tool", "agent=helper", "tool=bash"}
@@ -48,10 +49,10 @@ func TestCoordinator_GetCurrentStatus_ToolStage(t *testing.T) {
 
 func TestCoordinator_GetCurrentStatus_TruncatesLongTask(t *testing.T) {
 	c := &Coordinator{}
-	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "helper"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "helper" })
 	c.SetCurrentStage("model")
 	longTask := strings.Repeat("a", 200)
-	c.updateSnapshot(func(s *currentSnapshot) { s.Task = longTask})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Task = longTask })
 
 	got := c.GetCurrentStatus()
 	if !strings.Contains(got, "task=") {
@@ -80,7 +81,7 @@ func TestCoordinator_GetCurrentStatus_ElapseTime(t *testing.T) {
 func TestCoordinator_GetCurrentStatus_IdleResetsStart(t *testing.T) {
 	c := &Coordinator{}
 	c.SetCurrentStage("model")
-	c.updateSnapshot(func(s *currentSnapshot) { s.Tool = "bash"})
+	c.updateSnapshot(func(s *currentSnapshot) { s.Tool = "bash" })
 
 	// Stage is set; should be non-idle.
 	if got := c.GetCurrentStatus(); got == "idle" {

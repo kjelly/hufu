@@ -60,13 +60,13 @@ func TestNormalizeEditInput(t *testing.T) {
 
 func TestFindMatch(t *testing.T) {
 	tests := []struct {
-		name       string
-		content    string
-		edit       replacement
-		wantStart  int
-		wantEnd    int
-		wantFuzzy  bool
-		wantErr    bool
+		name      string
+		content   string
+		edit      replacement
+		wantStart int
+		wantEnd   int
+		wantFuzzy bool
+		wantErr   bool
 	}{
 		{
 			name:    "exact match single",
@@ -170,10 +170,10 @@ func TestApplyEditsAndWrite(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
+		name         string
 		replacements []replacement
-		wantContent string
-		wantErr     bool
+		wantContent  string
+		wantErr      bool
 	}{
 		{
 			name: "single exact edit",

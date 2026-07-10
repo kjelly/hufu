@@ -68,9 +68,9 @@ func TestFindCandidates_TopNByQuality(t *testing.T) {
 func TestDedupPrefixes(t *testing.T) {
 	cands := []PatternCandidate{
 		{Sequence: &ToolSequence{Tools: []string{"view", "edit", "bash"}}},
-		{Sequence: &ToolSequence{Tools: []string{"view", "edit"}}},        // prefix
+		{Sequence: &ToolSequence{Tools: []string{"view", "edit"}}},         // prefix
 		{Sequence: &ToolSequence{Tools: []string{"view", "edit", "grep"}}}, // not a prefix of the first
-		{Sequence: &ToolSequence{Tools: []string{"view"}}},                // prefix
+		{Sequence: &ToolSequence{Tools: []string{"view"}}},                 // prefix
 	}
 
 	got := dedupPrefixes(cands)

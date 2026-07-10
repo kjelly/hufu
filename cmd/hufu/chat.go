@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 
 	ergoreadline "github.com/ergochat/readline"
 	"github.com/manifoldco/promptui"
@@ -15,6 +16,7 @@ import (
 	"github.com/anomalyco/hufu/internal/config"
 	"github.com/anomalyco/hufu/internal/readline"
 	"github.com/anomalyco/hufu/internal/team"
+	tuipkg "github.com/anomalyco/hufu/internal/tui"
 )
 
 var replCmd = &cobra.Command{
@@ -42,6 +44,7 @@ func init() {
 	f.StringVar(&agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams")
 	f.BoolVar(&defaultTeam, "default", false, "Use the built-in default team (coordinator + Helper)")
 	f.StringVar(&helperTools, "helper-tools", "", "Extra tools for the default Helper (e.g. bash,sudo)")
+	f.BoolVar(&autoApprove, "auto-approve", false, "Automatically choose clearly safe ask_user options; dangerous or ambiguous choices still prompt the user")
 	f.StringVar(&providerURL, "provider-url", "", "Provider API base URL")
 	f.StringVar(&providerAPIKey, "provider-api-key", "", "Provider API key")
 	f.StringVar(&modelOverride, "model", "", "Override default model (e.g. ollama/qwen3:8b)")
@@ -56,6 +59,7 @@ func init() {
 	f.BoolVar(&autoSkills, "auto-skills", false, "Enable automatic skill detection")
 	f.BoolVar(&projectContext, "project-context", false, "Inject Git Status and Project Directory Structure into prompt context")
 	f.BoolVar(&think, "think", false, "Show coordinator decision reasoning")
+	f.BoolVar(&tuiMode, "tui", false, "Show a Bubble Tea TUI for real-time task tracking")
 	f.Int64Var(&timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds")
 	f.IntVar(&maxRoundsOverride, "max-rounds", 0, "Override team.yaml max-rounds. 0 = use team default.")
 	f.IntVar(&maxConcurrentOverride, "max-concurrent", 0, "Override team.yaml max-concurrent. 0 = use team default.")
@@ -126,6 +130,65 @@ func runChat(cmd *cobra.Command, args []string) error {
 			globalPromptReader.Store(pr)
 			defer func() { _ = pr.Close() }()
 		}
+	}
+
+	if tuiMode {
+		isChatTUI = true
+		var teamInfo tuipkg.TeamInfo
+		if registry != nil {
+			teamInfo.AvailableTeams = registry.ListTeams()
+		}
+		teamInfo.TeamName = tc.session.Config.Name
+		teamInfo.Workspace = tc.session.Workspace
+		teamInfo.TeamDir = tc.session.Dir
+		teamInfo.DefaultModel = tc.session.Config.Generation.Model
+		for _, ag := range sortedAgents(tc.session.Agents) {
+			model := ag.Generation.Model
+			if model == "" {
+				model = tc.session.Config.Generation.Model
+			}
+			teamInfo.Agents = append(teamInfo.Agents, tuipkg.AgentInfoEntry{
+				Name:  ag.Name,
+				Role:  ag.Role,
+				Model: model,
+			})
+		}
+		for _, s := range tc.session.Skills {
+			teamInfo.Skills = append(teamInfo.Skills, s.Name)
+		}
+		if sc := tc.session.Config.SidecarModel; sc != "" {
+			teamInfo.SidecarModel = sc
+		}
+		if gm := tc.session.Config.GuardModel; gm != "" {
+			teamInfo.GuardModel = gm
+		}
+		teamInfo.MemoryEnabled = memoryEnabled && !tempWorkspace
+		if teamInfo.MemoryEnabled {
+			teamInfo.MemoryModel = config.ResolveEmbeddingModel(memoryModel)
+		}
+		teamInfo.SSHSessions = 0
+		teamInfo.IsChat = true
+
+		segments := []team.PromptSegment{
+			{
+				Type:    team.SegmentSwitchTeam,
+				Name:    teamName,
+				Content: "",
+			},
+		}
+
+		injector := newPromptInjector(nil)
+		activeCoord := new(atomic.Pointer[team.Coordinator])
+
+		loadedTeams := map[string]*teamContext{
+			teamName: tc,
+		}
+
+		turnCtx, cancel := signal.NotifyContext(rootCtx, os.Interrupt)
+		defer cancel()
+
+		_, runErr := runWithTUI(turnCtx, cancel, "", segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, teamInfo)
+		return runErr
 	}
 
 	fmt.Fprintf(os.Stderr, "\n%s Chatting with team %s. Type %s to leave, %s to clear context.\n\n",

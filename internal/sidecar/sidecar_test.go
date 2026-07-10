@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/anomalyco/hufu/internal/tools"
 )
 
 type mockAgent struct {
@@ -108,6 +110,37 @@ func TestMatchSkillsJSON(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNormalizeAskUserSelection(t *testing.T) {
+	opts := []tools.AskUserTUIOption{
+		{Label: "Keep", Value: "keep"},
+		{Label: "Remove", Value: "remove"},
+	}
+
+	resp, ok := normalizeAskUserSelection(tools.AskUserResponse{Answers: []string{"Remove"}}, opts, "single_choice", false)
+	if !ok {
+		t.Fatal("expected label-based selection to normalize")
+	}
+	if len(resp.Answers) != 1 || resp.Answers[0] != "remove" {
+		t.Fatalf("unexpected normalized answers: %+v", resp.Answers)
+	}
+
+	resp, ok = normalizeAskUserSelection(tools.AskUserResponse{Answers: []string{"2"}}, opts, "single_choice", false)
+	if !ok {
+		t.Fatal("expected numeric selection to normalize")
+	}
+	if len(resp.Answers) != 1 || resp.Answers[0] != "remove" {
+		t.Fatalf("unexpected normalized numeric answer: %+v", resp.Answers)
+	}
+
+	resp, ok = normalizeAskUserSelection(tools.AskUserResponse{Free: "custom"}, opts, "mixed", true)
+	if !ok {
+		t.Fatal("expected free-text fallback to normalize when allowed")
+	}
+	if resp.Free != "custom" {
+		t.Fatalf("unexpected free text: %q", resp.Free)
 	}
 }
 

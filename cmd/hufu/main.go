@@ -79,6 +79,7 @@ var (
 	maxConcurrentOverride     int
 	maxStepsOverride          int
 	unattended                bool
+	autoApprove               bool
 	maxDuration               int64
 	maxTotalTokens            int64
 	autoTeam                  bool
@@ -88,6 +89,7 @@ var (
 	quietMode                 bool
 	outputFormat              string
 	projectContext            bool
+	isChatTUI                 bool
 	globalPromptReader        atomic.Pointer[readline.PromptReader]
 )
 
@@ -165,6 +167,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().BoolVar(&reportMode, "report", false, "Generate a full execution report as a markdown file")
 	rootCmd.Flags().BoolVar(&defaultTeam, "default", false, "Use the built-in default team (coordinator + Helper); no .agent-teams/ directory required")
 	rootCmd.Flags().StringVar(&helperTools, "helper-tools", "", "Comma-separated extra tools to enable for the default Helper worker when --default is set (e.g. 'bash' or 'bash,sudo,ssh'). Whitespace is trimmed.")
+	rootCmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Automatically choose clearly safe ask_user options; dangerous or ambiguous choices still prompt the user")
 	rootCmd.Flags().StringVar(&modelOverride, "model", "", "Override default model for the active team (e.g. ollama/qwen3:8b)")
 	rootCmd.Flags().StringVar(&temperatureOverride, "temperature", "", "Override sampling temperature (e.g. 0.2)")
 	rootCmd.Flags().StringVar(&maxTokensOverride, "max-tokens", "", "Override max output tokens (e.g. 4096)")
@@ -549,6 +552,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 // CLI flags take precedence; team.yaml values are the fallback.
 func applyUnattendedAndBudget(coordinator *team.Coordinator, session *team.TeamSession) {
 	coordinator.SetUnattended(unattended || session.Config.Unattended)
+	coordinator.SetAutoApprove(autoApprove || session.Config.AutoApprove)
 	coordinator.SetNoJournal(noJournal)
 
 	budgetSeconds := maxDuration
@@ -850,9 +854,37 @@ func makeStepConfirmFn() func(context.Context, []team.TaskDef) (bool, error) {
 
 func runWithInjection(ctx context.Context, tc *teamContext, initialResult string, injector *promptInjector) (string, error) {
 	result := initialResult
+	turn := 0
 	for {
-		select {
-		case <-injector.wrapUpCh:
+		var prompt string
+		var ok bool
+		var wrapUp bool
+
+		if isChatTUI {
+			select {
+			case <-ctx.Done():
+				return result, nil
+			case <-injector.wrapUpCh:
+				wrapUp = true
+			case prompt, ok = <-injector.ch:
+				if !ok {
+					return result, nil
+				}
+			}
+		} else {
+			select {
+			case <-injector.wrapUpCh:
+				wrapUp = true
+			case prompt, ok = <-injector.ch:
+				if !ok {
+					return result, nil
+				}
+			default:
+				return result, nil
+			}
+		}
+
+		if wrapUp {
 			stderrLog("\n%s Wrapping up — coordinator will summarize and finish.\n\n", boldStyle.Render("⏹"))
 			contResult, err := tc.coordinator.ContinueWithPrompt(ctx, "")
 			if err != nil {
@@ -863,20 +895,22 @@ func runWithInjection(ctx context.Context, tc *teamContext, initialResult string
 			}
 			result += "\n\n---\n\n" + contResult
 			return result, nil
-		case prompt, ok := <-injector.ch:
-			if !ok {
-				return result, nil
-			}
-			stderrLog("\n%s Injecting additional prompt...\n\n", boldStyle.Render("↩"))
-
-			contResult, err := tc.coordinator.ContinueWithPrompt(ctx, prompt)
-			if err != nil {
-				return result, err
-			}
-			result += "\n\n---\n\n" + contResult
-		default:
-			return result, nil
 		}
+
+		stderrLog("\n%s Injecting additional prompt...\n\n", boldStyle.Render("↩"))
+
+		var contResult string
+		var err error
+		if isChatTUI && turn == 0 {
+			contResult, err = tc.coordinator.Run(ctx, prompt)
+		} else {
+			contResult, err = tc.coordinator.ContinueWithPrompt(ctx, prompt)
+		}
+		if err != nil {
+			return result, err
+		}
+		result += "\n\n---\n\n" + contResult
+		turn++
 	}
 }
 
@@ -1173,6 +1207,20 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			}
 
 			currentTeamName = teamName
+
+			if isChatTUI {
+				disp := newCoordDisplay(tc)
+				activeCoord.Store(tc.coordinator)
+				result, err := runWithInjection(ctx, tc, "", injector)
+				activeCoord.Store(nil)
+				disp.stopTimer()
+				disp.finalizeTasks()
+				if err != nil {
+					return handleSegmentError(ctx, tc, results, err, "chat session failed")
+				}
+				results = append(results, result)
+				continue
+			}
 
 			if content == "" {
 				continue

@@ -74,16 +74,16 @@ func TestParsePromptWithLazyAgents(t *testing.T) {
 			},
 		},
 		{
-			name:   "team with hyphen",
-			prompt: "@my-team do something",
+			name:    "team with hyphen",
+			prompt:  "@my-team do something",
 			wantErr: true,
-			errMsg: "no team found",
+			errMsg:  "no team found",
 		},
 		{
-			name:   "unknown team",
-			prompt: "@unknown do task",
+			name:    "unknown team",
+			prompt:  "@unknown do task",
 			wantErr: true,
-			errMsg: "no team found",
+			errMsg:  "no team found",
 		},
 		{
 			name:   "team name case insensitive",
@@ -324,7 +324,7 @@ func TestIsAgentInList(t *testing.T) {
 func TestParsePromptEdgeCases(t *testing.T) {
 	registry := NewTeamRegistry([]string{".test-teams"})
 	registry.teams = map[string]string{
-		"a": "/path/a",
+		"a":  "/path/a",
 		"ab": "/path/ab",
 	}
 

@@ -61,6 +61,7 @@ type TeamInfo struct {
 	Workspace      string
 	TeamDir        string
 	SSHSessions    int
+	IsChat         bool
 }
 
 type TeamInfoMsg struct{ Info TeamInfo }
@@ -158,6 +159,7 @@ type Model struct {
 	width      int
 	height     int
 	finished   bool
+	IsChat     bool
 	statusText string // current status shown in the status bar
 	result     string // final coordinator answer shown when finished
 
@@ -216,7 +218,7 @@ func New(prompt string, teamInfo TeamInfo) Model {
 	si.Placeholder = "Search tasks..."
 	si.CharLimit = 200
 
-	return Model{
+	m := Model{
 		prompt:         prompt,
 		logs:           make(map[string][]string),
 		promptInput:    ti,
@@ -225,10 +227,23 @@ func New(prompt string, teamInfo TeamInfo) Model {
 		WrapUpCh:       make(chan struct{}, 2),
 		ReportCh:       make(chan struct{}, 1),
 		teamInfo:       teamInfo,
+		IsChat:         teamInfo.IsChat,
 	}
+
+	if m.IsChat && prompt == "" {
+		m.inPromptInput = true
+		m.promptInput.Focus()
+	}
+
+	return m
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd {
+	if m.IsChat && m.inPromptInput {
+		return textinput.Blink
+	}
+	return nil
+}
 
 // ── Update ────────────────────────────────────────────────────────────────────
 
@@ -913,7 +928,7 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m.handleReportKey()
 	case "c":
-		if !m.finished {
+		if !m.finished || m.IsChat {
 			m.inPromptInput = true
 			m.promptInput.SetValue("")
 			m.promptInput.Focus()
@@ -1136,6 +1151,11 @@ func (m Model) updatePromptInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.promptInput.SetValue("")
 		m.promptInput.Blur()
 		if prompt != "" {
+			if m.IsChat {
+				m.finished = false
+				m.result = ""
+				m.statusText = "Waiting for coordinator..."
+			}
 			select {
 			case m.PromptInjectCh <- prompt:
 			default:
@@ -1890,6 +1910,9 @@ func (m Model) footer() string {
 		return footerStyle.Render(fmt.Sprintf("n/N next/prev match (%d/%d) · / search · i info · esc clear · g/G top/bot · J/K/ctrl+d/u scroll · ↑↓ j/k · enter detail · q quit", m.searchIdx+1, len(m.searchResults)))
 	}
 	if m.finished {
+		if m.IsChat {
+			return footerStyle.Render("g/G top/bot · J/K/ctrl+d/u scroll · / search · r report · i info · c chat · ↑↓ j/k · enter detail · q quit")
+		}
 		return footerStyle.Render("g/G top/bot · J/K/ctrl+d/u scroll · / search · r report · i info · ↑↓ j/k · enter detail · q quit")
 	}
 	return footerStyle.Render("g/G top/bot · J/K/ctrl+d/u scroll · / search · i info · c prompt · ? help · ↑↓ j/k · enter detail · esc quit")
@@ -1911,7 +1934,7 @@ Search
   n / N             next / previous match
 
 Actions
-  c                 inject an additional prompt (mid-run)
+  c                 inject prompt / chat
   i                 show team info panel
   a                 full-screen activity log
   M                 memory (STM/LTM) view

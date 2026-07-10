@@ -101,6 +101,12 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	if c.unattended {
 		taskCtx = context.WithValue(taskCtx, tools.UnattendedKey, true)
+		taskCtx = context.WithValue(taskCtx, tools.AskUserChoiceSelectorKey, tools.AskUserChoiceSelector(func(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (tools.AskUserResponse, error) {
+			return c.chooseAskUserResponse(ctx, question, qtype, opts, allowAny)
+		}))
+	}
+	if c.autoApprove {
+		taskCtx = context.WithValue(taskCtx, tools.AutoApproveKey, true)
 	}
 
 	timing := &taskTiming{}
@@ -190,6 +196,12 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	orchCtx = context.WithValue(orchCtx, todoIDKey{}, CoordTodoID)
 	if c.unattended {
 		orchCtx = context.WithValue(orchCtx, tools.UnattendedKey, true)
+		orchCtx = context.WithValue(orchCtx, tools.AskUserChoiceSelectorKey, tools.AskUserChoiceSelector(func(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (tools.AskUserResponse, error) {
+			return c.chooseAskUserResponse(ctx, question, qtype, opts, allowAny)
+		}))
+	}
+	if c.autoApprove {
+		orchCtx = context.WithValue(orchCtx, tools.AutoApproveKey, true)
 	}
 
 	orchModelID := c.resolveAgentModel(orchDef, "")
@@ -376,6 +388,7 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 }
 
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
+	c.resetRoundState()
 	c.lastStmWrite = time.Time{}
 
 	// Start cleanup daemon for idle SSH sessions on first Run call (30 minute timeout, check every 5 minutes)
@@ -443,6 +456,8 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 }
 
 func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt string) (string, error) {
+	c.resetRoundState()
+
 	orchDef := c.GetOrchestratorDef()
 	if orchDef == nil {
 		return "", fmt.Errorf("no coordinator agent found in team")

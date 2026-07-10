@@ -22,11 +22,11 @@ func makeTasks(n int, status team.TaskStatus) []*team.TodoItem {
 
 func testModel(items []*team.TodoItem, height int) Model {
 	m := Model{
-		tasks:   items,
-		height:  height,
-		width:   80,
-		col:     0,
-		row:     0,
+		tasks:     items,
+		height:    height,
+		width:     80,
+		col:       0,
+		row:       0,
 		scrollOff: [6]int{},
 	}
 	return m

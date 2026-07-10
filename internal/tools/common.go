@@ -6,6 +6,7 @@ package tools
 import (
 	"github.com/anomalyco/hufu/internal/hooks"
 )
+
 func WithWorkDir(dir string) ToolOption {
 	return func(c *ToolConfig) {
 		c.WorkDir = dir

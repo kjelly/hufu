@@ -65,9 +65,9 @@ func TestView_Rendering(t *testing.T) {
 
 	// Check for key elements
 	tests := []string{
-		"test prompt",    // Original prompt
-		"RESEARCHER",     // Agent name
-		"CRITICAL TASK",  // Task description
+		"test prompt",   // Original prompt
+		"RESEARCHER",    // Agent name
+		"CRITICAL TASK", // Task description
 	}
 
 	for _, s := range tests {

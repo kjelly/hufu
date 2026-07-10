@@ -117,10 +117,10 @@ func TestDiagnoseSSHErrors_Timeout(t *testing.T) {
 
 func TestGetSSHErrorTitle(t *testing.T) {
 	tests := []struct {
-		name   string
+		name     string
 		exitCode int
-		stderr string
-		want   string
+		stderr   string
+		want     string
 	}{
 		{"auth failed", 255, "Permission denied", "Authentication Failed"},
 		{"connection refused", 255, "Connection refused", "Connection Refused"},

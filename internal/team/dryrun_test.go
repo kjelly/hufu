@@ -40,7 +40,7 @@ func TestDryRun_NoLLMCall_Structure(t *testing.T) {
 		{Name: "git-commit", Description: "Execute git commit with conventional commit message analysis"},
 	}
 	cfg := agent.TeamConfig{
-		Name:    "demo",
+		Name: "demo",
 		Generation: agent.GenerationParams{
 			Model: "ollama/qwen3:8b",
 		},
@@ -212,7 +212,7 @@ func TestDryRun_NoLLMCall_DoesNotCreateProviderManager(t *testing.T) {
 	// Smoke test: even with no providerManager set on the coordinator,
 	// DryRun must not panic trying to use it.
 	cfg := agent.TeamConfig{
-		Name: "demo",
+		Name:       "demo",
 		Generation: agent.GenerationParams{Model: "ollama/qwen3:8b"},
 	}
 	agents := map[string]*agent.AgentDef{

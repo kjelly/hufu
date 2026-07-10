@@ -111,6 +111,13 @@ func IsUnattended(ctx context.Context) bool {
 	return v
 }
 
+// IsAutoApprove reports whether ask_user should auto-select clearly safe
+// options instead of prompting the user when possible.
+func IsAutoApprove(ctx context.Context) bool {
+	v, _ := ctx.Value(AutoApproveKey).(bool)
+	return v
+}
+
 // IsInteractiveEnvironment reports whether stdin is a terminal and the process
 // is not running in a known CI environment.
 func IsInteractiveEnvironment() bool {

@@ -3,7 +3,9 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestIsPathAllowed(t *testing.T) {
@@ -189,6 +191,41 @@ func TestCheckPathOrConsentAllowed(t *testing.T) {
 	}
 	if path != insideFile {
 		t.Errorf("expected %s, got %s", insideFile, path)
+	}
+}
+
+func TestFormatConsentPreviewLinesWideEnough(t *testing.T) {
+	prefix := "Agent: helper — "
+	text := "Execute §6 Pre-failure Verification (Baseline) from the runbook."
+
+	got := formatConsentPreviewLines(prefix, text, 200)
+	if len(got) != 1 {
+		t.Fatalf("expected one line, got %d: %#v", len(got), got)
+	}
+	want := prefix + text
+	if got[0] != want {
+		t.Fatalf("formatConsentPreviewLines() = %q, want %q", got[0], want)
+	}
+	if strings.Contains(got[0], "...") {
+		t.Fatalf("did not expect ellipsis in %q", got[0])
+	}
+}
+
+func TestFormatConsentPreviewLinesWrapsWithoutEllipsis(t *testing.T) {
+	prefix := "Tool:  bash → "
+	text := "go run ./cmd/pilot vm-target exec --name ipa-ha-client -- cat /etc/ssh/sshd_config"
+
+	got := formatConsentPreviewLines(prefix, text, 48)
+	if len(got) < 2 {
+		t.Fatalf("expected wrapped output, got %#v", got)
+	}
+	for i, line := range got {
+		if strings.Contains(line, "...") {
+			t.Fatalf("line %d unexpectedly contains ellipsis: %q", i, line)
+		}
+		if gotWidth := utf8.RuneCountInString(line); gotWidth > 48 {
+			t.Fatalf("line %d exceeds width: %d > 48 (%q)", i, gotWidth, line)
+		}
 	}
 }
 

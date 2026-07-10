@@ -31,7 +31,7 @@ func TestApplyCLIModelOverrides_Empty(t *testing.T) {
 
 func TestApplyCLIModelOverrides_All(t *testing.T) {
 	cfg := agent.TeamConfig{
-		Generation:  agent.GenerationParams{Model: "from-yaml"},
+		Generation:   agent.GenerationParams{Model: "from-yaml"},
 		SidecarModel: "sidecar-from-yaml",
 		GuardModel:   "guard-from-yaml",
 	}
@@ -70,7 +70,7 @@ func TestApplyCLIModelOverrides_All(t *testing.T) {
 
 func TestApplyCLIModelOverrides_Partial(t *testing.T) {
 	cfg := agent.TeamConfig{
-		Generation:  agent.GenerationParams{Model: "from-yaml", Temperature: "0.7"},
+		Generation:   agent.GenerationParams{Model: "from-yaml", Temperature: "0.7"},
 		SidecarModel: "sidecar-from-yaml",
 		GuardModel:   "guard-from-yaml",
 	}
@@ -108,11 +108,11 @@ func TestPropagateTeamGenerationToAgents(t *testing.T) {
 			"helper": {
 				Name: "Helper",
 				// Intentionally stale values to verify they get overwritten.
-				Generation: agent.GenerationParams{Model: "stale"},
+				Generation:  agent.GenerationParams{Model: "stale"},
 				ProviderURL: "http://stale:11434/v1",
 			},
 			"coordinator": {
-				Name: "coordinator",
+				Name:       "coordinator",
 				Generation: agent.GenerationParams{Model: "stale"},
 			},
 		},

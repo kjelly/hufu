@@ -174,6 +174,7 @@ go run ./cmd/hufu
 | `--report` | — | `bool` | `false` | 產生完整的 markdown 執行報表 |
 | `--default` | — | `bool` | `false` | 使用內建預設團隊（coordinator + Helper）；不需要 `.agent-teams/` 目錄（與 `--agent-team` 互斥）。會自動探索 `~/.agents/skills/` 的全域技能並支援 `--skill` 強制載入。 |
 | `--helper-tools` | — | `string` | `""` | 為預設 Helper worker 啟用額外的工具列表（逗號分隔），需搭配 `--default` 使用（例如 `bash` 或 `bash,sudo,ssh`）。會自動 trim 空白，忽略空項目。空字串 = 預設唯讀工具集。 |
+| `--auto-approve` | — | `bool` | `false` | 自動選擇 `ask_user` 中明顯安全的選項；危險或不明確的選項仍會詢問使用者 |
 | `--model` | — | `string` | `""` | 覆寫目前團隊的預設模型（最高優先權） |
 | `--temperature` | — | `string` | `""` | 覆寫取樣溫度 |
 | `--max-tokens` | — | `string` | `""` | 覆寫最大輸出 token 數 |
@@ -501,6 +502,7 @@ allowed-paths: ["/home/user/projects", "/tmp"]  # 允許的檔案路徑
 restricted-path: "/etc"                           # 限制的檔案路徑
 no-net: false                                     # 封鎖網路存取
 force-mcp: false                                  # 強制 MCP 模式
+auto-approve: false                               # 自動選擇明顯安全的 ask_user 選項
 shell: bash                                       # MCP tools 預設 shell（從 PATH 搜尋）
 
 # === 模板變數 ===

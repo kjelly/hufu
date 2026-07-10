@@ -451,13 +451,13 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 
 	// Filtering statistics
 	var (
-		highQualityCandidates  []PatternCandidate
-		filteredByFrequency    int
-		filteredBySingleTool   int
-		filteredByLowValue     int
-		filteredByNoAction     int
-		filteredByParamFloor   int
-		filteredByQuality      int
+		highQualityCandidates []PatternCandidate
+		filteredByFrequency   int
+		filteredBySingleTool  int
+		filteredByLowValue    int
+		filteredByNoAction    int
+		filteredByParamFloor  int
+		filteredByQuality     int
 	)
 
 	for i := range candidates {

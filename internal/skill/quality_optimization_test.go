@@ -64,8 +64,8 @@ func TestDynamicMinFrequency(t *testing.T) {
 		{"len=5 (medium)", 5, 10},
 
 		// Long sequences (len >= 6) get 60% reduction
-		{"len=6 (long)", 6, 6},  // 10 * 3/5 = 6
-		{"len=8 (long)", 8, 6},  // same formula
+		{"len=6 (long)", 6, 6},   // 10 * 3/5 = 6
+		{"len=8 (long)", 8, 6},   // same formula
 		{"len=10 (long)", 10, 6}, // same formula
 	}
 
@@ -146,7 +146,7 @@ func TestDedupPrefixes_MiddleSubsequence(t *testing.T) {
 	// [edit] is a middle sub-sequence of [view, edit, bash] — should be deduped
 	cands := []PatternCandidate{
 		{Sequence: &ToolSequence{Tools: []string{"view", "edit", "bash"}}},
-		{Sequence: &ToolSequence{Tools: []string{"edit"}}}, // middle — should be removed
+		{Sequence: &ToolSequence{Tools: []string{"edit"}}},          // middle — should be removed
 		{Sequence: &ToolSequence{Tools: []string{"grep", "write"}}}, // unrelated — kept
 	}
 

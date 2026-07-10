@@ -57,6 +57,12 @@ type agentForceMCPKeyType struct{}
 
 var AgentForceMCPKey = agentForceMCPKeyType{}
 
+// AutoApproveKey carries whether ask_user should auto-select clearly safe
+// options when they exist.
+type autoApproveKeyType struct{}
+
+var AutoApproveKey = autoApproveKeyType{}
+
 // UnattendedKey carries whether the run is unattended (no human available).
 // When true, ask_user returns a safe default instead of blocking on stdin and
 // tool permission falls back to deny-by-default for non-allowlisted tools.
@@ -89,6 +95,21 @@ type AskUserTUIOption struct {
 	Label string
 	Value string
 }
+
+// AskUserResponse is the normalized response shape used by ask_user in
+// interactive, TUI, and unattended modes.
+type AskUserResponse struct {
+	Answers []string `json:"answers"`
+	Free    string   `json:"free_text,omitempty"`
+}
+
+// AskUserChoiceSelector chooses an unattended answer for ask_user when the
+// prompt includes options. It should return a normalized response.
+type AskUserChoiceSelector func(ctx context.Context, question, qtype string, opts []AskUserTUIOption, allowAny bool) (AskUserResponse, error)
+
+type askUserChoiceSelectorKeyType struct{}
+
+var AskUserChoiceSelectorKey = askUserChoiceSelectorKeyType{}
 
 type GuardReviewFn func(ctx context.Context, toolName string, args string, rules []string) (approved bool, reason string, err error)
 
