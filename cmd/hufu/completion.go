@@ -153,6 +153,7 @@ export extern "hufu" [
   --report # Generate a full execution report as a markdown file
   --default # Use the built-in default team
   --helper-tools: string # Comma-separated extra tools to enable for the Helper
+  --allow-path: string # Additional filesystem paths to allow for the active team
   --auto-approve # Automatically choose clearly safe ask_user options
   --model: string # Override default model
   --temperature: string # Override sampling temperature

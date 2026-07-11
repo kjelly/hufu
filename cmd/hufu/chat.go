@@ -44,6 +44,7 @@ func init() {
 	f.StringVar(&agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams")
 	f.BoolVar(&defaultTeam, "default", false, "Use the built-in default team (coordinator + Helper)")
 	f.StringVar(&helperTools, "helper-tools", "", "Extra tools for the default Helper (e.g. bash,sudo)")
+	f.StringSliceVar(&allowPaths, "allow-path", nil, "Additional filesystem paths to allow for the active team")
 	f.BoolVar(&autoApprove, "auto-approve", false, "Automatically choose clearly safe ask_user options; dangerous or ambiguous choices still prompt the user")
 	f.StringVar(&providerURL, "provider-url", "", "Provider API base URL")
 	f.StringVar(&providerAPIKey, "provider-api-key", "", "Provider API key")

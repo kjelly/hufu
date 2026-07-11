@@ -65,6 +65,7 @@ var (
 	reportMode                bool
 	defaultTeam               bool
 	helperTools               string
+	allowPaths                []string
 	modelOverride             string
 	temperatureOverride       string
 	maxTokensOverride         string
@@ -170,6 +171,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().BoolVar(&reportMode, "report", false, "Generate a full execution report as a markdown file")
 	rootCmd.Flags().BoolVar(&defaultTeam, "default", false, "Use the built-in default team (coordinator + Helper); no .agent-teams/ directory required")
 	rootCmd.Flags().StringVar(&helperTools, "helper-tools", "", "Comma-separated extra tools to enable for the default Helper worker when --default is set (e.g. 'bash' or 'bash,sudo,ssh'). Whitespace is trimmed.")
+	rootCmd.Flags().StringSliceVar(&allowPaths, "allow-path", nil, "Additional filesystem paths to allow for the active team; can be repeated.")
 	rootCmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Automatically choose clearly safe ask_user options; dangerous or ambiguous choices still prompt the user")
 	rootCmd.Flags().StringVar(&modelOverride, "model", "", "Override default model for the active team (e.g. ollama/qwen3:8b)")
 	rootCmd.Flags().StringVar(&temperatureOverride, "temperature", "", "Override sampling temperature (e.g. 0.2)")
@@ -746,21 +748,21 @@ func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, c
 		}
 	}
 
-	for _, p := range cfg.AllowedPaths {
-		expanded := os.ExpandEnv(p)
-		if strings.HasPrefix(expanded, "~") {
-			if home, err := os.UserHomeDir(); err == nil {
-				expanded = filepath.Join(home, expanded[1:])
-			}
-		}
-		abs, err := filepath.Abs(expanded)
-		if err == nil && !seen[abs] {
-			seen[abs] = true
-			paths = append(paths, abs)
+	for _, p := range normalizeAllowedPaths(cfg.AllowedPaths) {
+		if !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
 		}
 	}
 
-	for _, p := range session.Config.AllowedPaths {
+	for _, p := range normalizeAllowedPaths(session.Config.AllowedPaths) {
+		if !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	}
+
+	for _, p := range normalizeAllowedPaths(allowPaths) {
 		if !seen[p] {
 			seen[p] = true
 			paths = append(paths, p)
@@ -768,6 +770,33 @@ func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, c
 	}
 
 	return paths
+}
+
+func normalizeAllowedPaths(paths []string) []string {
+	var result []string
+	seen := make(map[string]bool)
+	for _, p := range paths {
+		expanded := os.ExpandEnv(strings.TrimSpace(p))
+		if expanded == "" {
+			continue
+		}
+		if strings.HasPrefix(expanded, "~") {
+			if home, err := os.UserHomeDir(); err == nil {
+				expanded = filepath.Join(home, expanded[1:])
+			}
+		}
+		abs, err := filepath.Abs(expanded)
+		if err != nil {
+			continue
+		}
+		abs = filepath.Clean(abs)
+		if seen[abs] {
+			continue
+		}
+		seen[abs] = true
+		result = append(result, abs)
+	}
+	return result
 }
 
 func currentWorkingDir() string {

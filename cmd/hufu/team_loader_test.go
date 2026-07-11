@@ -37,6 +37,11 @@ func TestBuildAllowedPaths(t *testing.T) {
 	}
 	registry := team.NewTeamRegistry([]string{tmpDir})
 	cfg := &config.Config{}
+	origAllowPaths := allowPaths
+	allowPaths = nil
+	t.Cleanup(func() {
+		allowPaths = origAllowPaths
+	})
 	paths := buildAllowedPaths(session, registry, cfg)
 	if len(paths) == 0 {
 		t.Error("expected at least one allowed path")
@@ -49,6 +54,21 @@ func TestBuildAllowedPaths(t *testing.T) {
 	if len(noRegistryPaths) == 0 || noRegistryPaths[0] != tmpDir {
 		t.Fatalf("expected cwd %q first even without registry, got %#v", tmpDir, noRegistryPaths)
 	}
+
+	allowPaths = []string{filepath.Join(tmpDir, "extra"), "~/more"}
+	withExtra := buildAllowedPaths(session, nil, cfg)
+	if !containsPath(withExtra, filepath.Join(tmpDir, "extra")) {
+		t.Fatalf("expected extra allow path to be included, got %#v", withExtra)
+	}
+}
+
+func containsPath(paths []string, want string) bool {
+	for _, p := range paths {
+		if p == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSortedAgents(t *testing.T) {
