@@ -30,7 +30,7 @@ const (
 )
 
 type journalRecord struct {
-	Op     string `json:"op"` // "put" or "del"
+	Op     string `json:"op"` // "put", "del", or "err" (diagnostic only)
 	Agent  string `json:"agent"`
 	Desc   string `json:"desc"`
 	Output string `json:"output,omitempty"`
@@ -74,6 +74,20 @@ func (j *taskJournal) append(rec journalRecord) error {
 		return fmt.Errorf("append task journal: %w", err)
 	}
 	return nil
+}
+
+func (c *Coordinator) recordTaskFailure(agentName, taskDesc, detail string) {
+	if c == nil || c.journal == nil || agentName == "" || taskDesc == "" || detail == "" {
+		return
+	}
+	_ = c.journal.append(journalRecord{
+		Op:     "err",
+		Agent:  agentName,
+		Desc:   taskDesc,
+		Output: detail,
+		TS:     time.Now().Format(time.RFC3339),
+		Round:  c.round,
+	})
 }
 
 func (j *taskJournal) Close() error {

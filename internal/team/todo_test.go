@@ -117,6 +117,26 @@ func TestTodoListIDsAutoIncrement(t *testing.T) {
 	}
 }
 
+func TestTodoListDeleteIDs(t *testing.T) {
+	tl := &TodoList{}
+
+	items := tl.AddBatch([]TodoSpec{
+		{Agent: "a", Desc: "first"},
+		{Agent: "b", Desc: "second"},
+		{Agent: "c", Desc: "third"},
+	})
+
+	tl.DeleteIDs(items[1].ID)
+
+	all := tl.Items()
+	if len(all) != 2 {
+		t.Fatalf("expected 2 items after delete, got %d", len(all))
+	}
+	if all[0].ID != "1" || all[1].ID != "3" {
+		t.Fatalf("unexpected remaining IDs: %s, %s", all[0].ID, all[1].ID)
+	}
+}
+
 func TestTaskTrackerTodoList(t *testing.T) {
 	tr := NewTaskTracker()
 

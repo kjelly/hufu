@@ -67,12 +67,15 @@ func executeSudo(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		}
 		if !isPathAllowed(abs, effCfg.AllowedPaths) {
 			if effCfg.PathConsent != nil {
-				result, err := effCfg.PathConsent.AskConsent(abs, "workdir", cfg.ToolName, args.WorkDir)
+				result, suggestion, err := effCfg.PathConsent.AskConsent(abs, "workdir", cfg.ToolName, args.WorkDir)
 				if err != nil {
 					return fantasy.NewTextErrorResponse(fmt.Sprintf("working_directory outside allowed paths and consent failed: %v", err)), nil
 				}
 				switch result {
 				case ConsentDenied:
+					if suggestion != "" {
+						return fantasy.NewTextErrorResponse(fmt.Sprintf("working_directory is outside allowed paths. User suggested '%s'; retry with that directory instead.", suggestion)), nil
+					}
 					return fantasy.NewTextErrorResponse("working_directory is outside allowed paths — access denied by user"), nil
 				}
 			} else {

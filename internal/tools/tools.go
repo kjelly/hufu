@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"charm.land/fantasy"
@@ -21,6 +22,8 @@ import (
 )
 
 var askUserActive atomic.Int32
+var interactiveAbortRequested atomic.Bool
+var closeStdinOnce sync.Once
 
 // denialReasonStdin is the reader used by promptDenialReason. It is a
 // package-level variable so tests can inject a fake stdin.
@@ -85,6 +88,19 @@ func SetAskUserActive(active bool) {
 
 func IsAskUserActive() bool {
 	return askUserActive.Load() == 1
+}
+
+// RequestInteractiveAbort marks interactive input as aborted and closes stdin
+// once so any in-flight prompt/consent read returns immediately.
+func RequestInteractiveAbort() {
+	interactiveAbortRequested.Store(true)
+	closeStdinOnce.Do(func() {
+		_ = os.Stdin.Close()
+	})
+}
+
+func IsInteractiveAbortRequested() bool {
+	return interactiveAbortRequested.Load()
 }
 
 // AskUserTUIOption is a choice for the ask_user TUI dialog.
@@ -766,6 +782,10 @@ func isPathAllowed(absPath string, allowedPaths []string) bool {
 	}
 	evalPath = filepath.Clean(evalPath)
 
+	if cwd, err := os.Getwd(); err == nil && isPathWithinDir(evalPath, cwd) {
+		return true
+	}
+
 	checkPath := evalPath
 
 	for _, allowed := range allowedPaths {
@@ -791,6 +811,32 @@ func isPathAllowed(absPath string, allowedPaths []string) bool {
 	return false
 }
 
+func isPathWithinDir(path, dir string) bool {
+	if path == "" || dir == "" {
+		return false
+	}
+	evalPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		evalPath = path
+	}
+	evalPath = filepath.Clean(evalPath)
+
+	evalDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		evalDir = dir
+	}
+	evalDir = filepath.Clean(evalDir)
+
+	if evalPath == evalDir {
+		return true
+	}
+	rel, err := filepath.Rel(evalDir, evalPath)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func checkPathOrConsent(path, workDir, operation string, cfg ToolConfig) (string, error) {
 	path = normalizeWorkspacePath(path, cfg.WorkspaceName)
 	absPath, err := resolvePathWithWorkDir(path, workDir)
@@ -803,7 +849,7 @@ func checkPathOrConsent(path, workDir, operation string, cfg ToolConfig) (string
 	}
 
 	if cfg.PathConsent != nil {
-		result, err := cfg.PathConsent.AskConsent(absPath, operation, cfg.ToolName, path)
+		result, suggestion, err := cfg.PathConsent.AskConsent(absPath, operation, cfg.ToolName, path)
 		if err != nil {
 			return "", fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", path, err)
 		}
@@ -818,7 +864,7 @@ func checkPathOrConsent(path, workDir, operation string, cfg ToolConfig) (string
 			}
 			return absPath, nil
 		default:
-			return "", fmt.Errorf("path '%s' is outside allowed paths — access denied by user", path)
+			return "", formatPathConsentDenied(path, suggestion)
 		}
 	}
 
@@ -837,7 +883,7 @@ func resolveAndValidatePathWithConsent(path string, cfg ToolConfig) (string, err
 	}
 
 	if cfg.PathConsent != nil {
-		result, err := cfg.PathConsent.AskConsent(absPath, "edit", cfg.ToolName, path)
+		result, suggestion, err := cfg.PathConsent.AskConsent(absPath, "edit", cfg.ToolName, path)
 		if err != nil {
 			return "", fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", path, err)
 		}
@@ -849,11 +895,18 @@ func resolveAndValidatePathWithConsent(path string, cfg ToolConfig) (string, err
 			}
 			return resolveAndValidatePathForAllowedPath(absPath, projectDir, cfg.AllowedPaths)
 		default:
-			return "", fmt.Errorf("path '%s' is outside allowed paths — access denied by user", path)
+			return "", formatPathConsentDenied(path, suggestion)
 		}
 	}
 
 	return "", fmt.Errorf("path '%s' is outside allowed paths", path)
+}
+
+func formatPathConsentDenied(path, suggestion string) error {
+	if suggestion == "" {
+		return fmt.Errorf("path '%s' is outside allowed paths — access denied by user", path)
+	}
+	return fmt.Errorf("path '%s' is outside allowed paths; user suggested '%s', retry the command using that path instead", path, suggestion)
 }
 
 func resolveAndValidatePathForAllowedPath(absPath, projectDir string, allowedPaths []string) (string, error) {

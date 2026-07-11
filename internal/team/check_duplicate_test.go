@@ -10,6 +10,7 @@ func TestCheckDuplicateTasks_SameBatch(t *testing.T) {
 	c := &Coordinator{
 		delegatedTasks:   make(map[string]int),
 		delegatedTasksMu: sync.Mutex{},
+		taskTracker:      NewTaskTracker(),
 	}
 
 	tests := []struct {
@@ -103,7 +104,7 @@ func TestCheckDuplicateTasks_SameBatch(t *testing.T) {
 				c.delegatedTasks[k] = v
 			}
 
-			warnings, duplicates := c.checkDuplicateTasks(context.Background(), tt.batchTasks)
+			warnings, duplicates, suppressed := c.checkDuplicateTasks(context.Background(), tt.batchTasks)
 
 			if tt.expectWarnings && len(warnings) == 0 {
 				t.Errorf("expected warnings but got none")
@@ -121,6 +122,9 @@ func TestCheckDuplicateTasks_SameBatch(t *testing.T) {
 			if actualDupCount != tt.expectedDupCount {
 				t.Errorf("duplicate count = %d, want %d", actualDupCount, tt.expectedDupCount)
 			}
+			if len(suppressed) != 0 {
+				t.Errorf("expected no suppressed duplicates, got %d", len(suppressed))
+			}
 
 			if tt.warningContains != "" && len(warnings) > 0 {
 				found := false
@@ -135,6 +139,62 @@ func TestCheckDuplicateTasks_SameBatch(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCheckDuplicateTasks_SuppressesExistingActiveTodo(t *testing.T) {
+	c := &Coordinator{
+		delegatedTasks:   make(map[string]int),
+		delegatedTasksMu: sync.Mutex{},
+		taskTracker:      NewTaskTracker(),
+	}
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
+		Agent: "helper",
+		Desc:  "Investigate DHCP on enp4s0",
+	}})
+	c.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskInProgress, "")
+
+	warnings, duplicates, suppressed := c.checkDuplicateTasks(context.Background(), []TaskDef{{
+		Agent: "helper",
+		Goal:  "Investigate DHCP on enp4s0",
+	}})
+
+	if !duplicates[0] {
+		t.Fatal("expected duplicate to be suppressed")
+	}
+	if suppressed[0] == nil || suppressed[0].Item.ID != items[0].ID {
+		t.Fatalf("expected suppression to reference existing task %s", items[0].ID)
+	}
+	if len(warnings) == 0 || !containsString(warnings[0], "SUPPRESSED DUPLICATE") {
+		t.Fatalf("expected suppression warning, got %v", warnings)
+	}
+}
+
+func TestCheckDuplicateTasks_SuppressesPermissionBlockedFailure(t *testing.T) {
+	c := &Coordinator{
+		delegatedTasks:   make(map[string]int),
+		delegatedTasksMu: sync.Mutex{},
+		taskTracker:      NewTaskTracker(),
+	}
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
+		Agent: "helper",
+		Desc:  "Run bash diagnostic command",
+	}})
+	c.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskError, "tool 'bash' is not permitted. Add 'bash' to tools.allowed in team.yaml to enable.")
+
+	warnings, duplicates, suppressed := c.checkDuplicateTasks(context.Background(), []TaskDef{{
+		Agent: "helper",
+		Goal:  "Run bash diagnostic command",
+	}})
+
+	if !duplicates[0] {
+		t.Fatal("expected blocked failure to suppress duplicate task")
+	}
+	if suppressed[0] == nil || suppressed[0].Item.ID != items[0].ID {
+		t.Fatalf("expected suppression to reference existing task %s", items[0].ID)
+	}
+	if len(warnings) == 0 || !containsString(warnings[0], "SUPPRESSED DUPLICATE") {
+		t.Fatalf("expected suppression warning, got %v", warnings)
 	}
 }
 

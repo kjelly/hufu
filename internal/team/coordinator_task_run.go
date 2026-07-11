@@ -5,6 +5,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -29,8 +30,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	agentDef, _, err := c.resolveAgentName(task.Agent)
 	if err != nil {
-		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
-		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		c.PersistFailure(task.Agent, taskDesc, todoID, c.FailureDetail(err, "error"))
 		return "", err
 	}
 	agentName := strings.ToLower(agentDef.Name)
@@ -146,11 +146,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			MaxSteps:   agent.DefaultMaxSteps,
 		}, append(agent.SelectTools(c.coreTools, agentDef.Tools), &submitPlanTool{coordinator: c, todoID: todoID}))
 		if planErr != nil {
+			detail := c.FailureDetail(planErr, "")
 			c.report(c.newEvent("error").withAgent(agentName).withMessage(planErr.Error()).withTodoID(todoID))
-			c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, planErr.Error())
-			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-			_ = writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", taskDesc, "")
-			_ = writeStatus(c.session.Workspace, agentName, "error", taskDesc)
+			c.PersistFailure(agentName, taskDesc, todoID, detail)
 			return "", planErr
 		}
 		ag = planAg
@@ -158,11 +156,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		var err error
 		ag, err = c.getOrCreateAgent(parentCtx, agentDef, task.Model)
 		if err != nil {
+			detail := c.FailureDetail(err, "")
 			c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
-			c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
-			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-			_ = writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", taskDesc, "")
-			_ = writeStatus(c.session.Workspace, agentName, "error", taskDesc)
+			c.PersistFailure(agentName, taskDesc, todoID, detail)
 			return "", err
 		}
 	}
@@ -385,6 +381,12 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				}
 			}
 			if err == nil {
+				if verr := validateTaskOutput(task, output); verr != nil {
+					err = fmt.Errorf("task completion validation failed: %w", verr)
+					c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("completion validation failed: %v", verr)).withTodoID(todoID))
+				}
+			}
+			if err == nil {
 				if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "done", taskDesc, output); err != nil {
 					log.Printf("warning: failed to write task file: %v", err)
 				}
@@ -416,15 +418,17 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		if lastErr != nil && attempt < maxRetries && sameFailure(lastErr.Error(), err.Error()) {
 			lastErr = err
 			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d repeated the same failure", attempt)).withTodoID(todoID))
-			c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, fmt.Sprintf("repeated failure after %d attempts: %v", attempt, err))
-			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("repeated failure after %d attempts: %w", attempt, err), "error"))
 			break
 		}
 
 		lastErr = err
+		if isTaskTimeout(err) {
+			duration, modelTime, toolTime := timing.snapshot()
+			c.report(c.newEvent("task_timeout").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d timed out after %s", attempt, duration.Round(time.Second))).withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
+		}
 		c.report(c.newEvent("error").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d failed: %v", attempt, err)).withModel(resolvedModel).withTodoID(todoID))
-		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, fmt.Sprintf("attempt %d failed: %v", attempt, err))
-		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
 
 		if parentCtx.Err() != nil {
 			break
@@ -433,10 +437,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	_, modelTime, toolTime := timing.snapshot()
 	c.updateTodoTiming(todoID, modelTime, toolTime)
-	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", taskDesc, ""); err != nil {
-		log.Printf("warning: failed to write task file: %v", err)
-	}
-	_ = writeStatus(c.session.Workspace, agentName, "error", taskDesc)
+	detail := c.FailureDetail(lastErr, "")
+	c.PersistFailure(agentName, taskDesc, todoID, detail)
 	c.autoWriteSTMASync(agentName, taskDesc, "", lastErr.Error(), false)
 	if maxRetries > 1 {
 		c.persistReflexionLessonAsync(agentName, task.Goal, lastErr.Error(), appliedHint, false)
@@ -447,6 +449,13 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 func (c *Coordinator) runAgentWithStatus(ctx context.Context, ag fantasy.Agent, agentName, prompt string, timing *taskTiming) (string, error) {
 	output, _, err := c.runAgentWithStatusAndHistory(ctx, ag, agentName, prompt, nil, timing)
 	return output, err
+}
+
+func isTaskTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "context deadline exceeded")
 }
 
 func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todoID string) (string, error) {
@@ -584,7 +593,6 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			llmLogStreamEvent(logWrite, "tool_result", formatToolResultContent(tr))
 			_, isErrResult := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Result)
 			audit.LogToolResult(agentName, tr.ToolName, resultPreview, isErrResult)
-			c.SetCurrentTool("")
 
 			// 🔁 Track error count
 			if lastToolCall != nil && lastToolCall.toolName == tr.ToolName {
@@ -668,7 +676,6 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 
 	result, err := ag.Stream(ctx, streamCall)
 	c.SetCurrentStage("idle")
-	c.SetCurrentTool("")
 	if result != nil {
 		c.addStepTokens(result.Steps)
 	}

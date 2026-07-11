@@ -87,14 +87,26 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	c.round++
 	if c.session.Config.MaxRounds > 0 && c.round > c.session.Config.MaxRounds {
 		c.wrapUp.Store(1)
+		detail := c.FailureDetail(fmt.Errorf("max rounds (%d) exceeded", c.session.Config.MaxRounds), FailureSourceMaxRoundsExceeded)
+		c.PersistFailure("coordinator", fmt.Sprintf("max rounds (%d) exceeded", c.session.Config.MaxRounds), "", detail)
 		return "", fmt.Errorf("max rounds (%d) exceeded: call finish immediately with your best summary of work completed so far", c.session.Config.MaxRounds)
 	}
+
+	callerID, _ := ctx.Value(todoIDKey{}).(string)
 
 	// Budget circuit-breaker: when running unattended there is no human to stop
 	// a runaway. If a configured wall-clock or token budget is exceeded, force
 	// wrap-up, emit a notifiable event, and refuse to delegate new tasks.
 	if exceeded, reason := c.budgetExceeded(); exceeded {
 		c.wrapUp.Store(1)
+		detail := c.FailureDetail(fmt.Errorf("%s", reason), FailureSourceBudgetExceeded)
+		agentName := c.getSnapshotField(func(s *currentSnapshot) string { return s.Agent })
+		taskDesc := c.getSnapshotField(func(s *currentSnapshot) string { return s.Task })
+		todoID := ""
+		if callerID != "" && callerID != CoordTodoID {
+			todoID = callerID
+		}
+		c.PersistFailure(agentName, taskDesc, todoID, detail)
 		if c.budgetTripped.CompareAndSwap(false, true) {
 			c.report(c.newEvent("budget_exceeded").withMessage(reason))
 		}
@@ -109,7 +121,6 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	// coordinator starts a new round (new agent call), the generation bumps,
 	// making all previous cached results invalid — ensuring stale workspace
 	// state is never reused.
-	callerID, _ := ctx.Value(todoIDKey{}).(string)
 	if callerID == "" || callerID == CoordTodoID {
 		newGen := c.cacheGeneration.Add(1)
 		c.taskResultCacheMu.Lock()
@@ -129,6 +140,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	}
 
 	c.report(c.newEvent("step").withMessage(fmt.Sprintf("Round %d: delegating %d task(s)", c.round, len(tasks))))
+
+	duplicateWarnings, duplicateIndices, suppressedDuplicates := c.checkDuplicateTasks(ctx, tasks)
+	if len(duplicateWarnings) > 0 {
+		c.report(c.newEvent("loop_warning").withMessage(fmt.Sprintf("Duplicate task delegation detected: %v", duplicateWarnings)))
+	}
 
 	todoBatch := make([]TodoSpec, len(tasks))
 	for i, t := range tasks {
@@ -152,6 +168,15 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		todoBatch[i] = TodoSpec{Agent: strings.ToLower(t.Agent), Desc: desc, Model: resolvedModel, Source: TaskSourceCoordinator, ParentID: "", Verify: t.Verify, MaxRetries: t.MaxRetries}
 	}
 	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)
+	if len(suppressedDuplicates) > 0 {
+		var removeIDs []string
+		for idx := range suppressedDuplicates {
+			if idx >= 0 && idx < len(todoItems) {
+				removeIDs = append(removeIDs, todoItems[idx].ID)
+			}
+		}
+		c.taskTracker.TodoList().DeleteIDs(removeIDs...)
+	}
 
 	// Fill in OnFailure IDs now that todo IDs exist. Indices were validated by
 	// validateOnFailureTargets above.
@@ -188,18 +213,14 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		}
 		if !approved {
 			for _, item := range todoItems {
-				c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "cancelled by user")
+				c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, c.FailureDetail(fmt.Errorf("user declined task execution"), FailureSourceUserDeclined))
 			}
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.report(c.newEvent("step").withMessage("Steps: user declined task execution"))
 			c.wrapUp.Store(1)
+			c.PersistFailure("coordinator", "user declined task execution", "", c.FailureDetail(fmt.Errorf("user declined task execution"), FailureSourceUserDeclined))
 			return "", fmt.Errorf("user declined task execution: call finish immediately with your best summary of work completed so far")
 		}
-	}
-
-	duplicateWarnings, duplicateIndices := c.checkDuplicateTasks(ctx, tasks)
-	if len(duplicateWarnings) > 0 {
-		c.report(c.newEvent("loop_warning").withMessage(fmt.Sprintf("Duplicate task delegation detected: %v", duplicateWarnings)))
 	}
 
 	results, err := newDAGScheduler(c, tasks, todoItems, duplicateIndices).run(ctx)

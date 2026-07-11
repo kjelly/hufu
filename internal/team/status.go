@@ -8,7 +8,7 @@ import (
 )
 
 type StatusEvent struct {
-	Type        string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning", "timing", "judge", "skeptic"
+	Type        string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning", "timing", "judge", "skeptic", "budget_exceeded", "task_timeout"
 	TeamName    string
 	Agent       string
 	Message     string
@@ -190,6 +190,41 @@ func (tl *TodoList) AddBatch(items []TodoSpec) []*TodoItem {
 		onChange()
 	}
 	return added
+}
+
+func (tl *TodoList) DeleteIDs(ids ...string) {
+	if len(ids) == 0 {
+		return
+	}
+
+	tl.mu.Lock()
+	remove := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id != "" {
+			remove[id] = struct{}{}
+		}
+	}
+	if len(remove) == 0 {
+		tl.mu.Unlock()
+		return
+	}
+
+	fresh := tl.items[:0]
+	changed := false
+	for _, item := range tl.items {
+		if _, ok := remove[item.ID]; ok {
+			changed = true
+			continue
+		}
+		fresh = append(fresh, item)
+	}
+	tl.items = fresh
+	onChange := tl.onChange
+	tl.mu.Unlock()
+
+	if changed && onChange != nil {
+		onChange()
+	}
 }
 
 func (tl *TodoList) UpdateStatus(id string, status TaskStatus, detail string) {

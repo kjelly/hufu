@@ -279,7 +279,7 @@ func validateLuaPathWithConsent(path, projectDir string, allowedPaths []string, 
 	}
 
 	if consent != nil {
-		result, err := consent.AskConsent(absPath, "read", "lua", path)
+		result, suggestion, err := consent.AskConsent(absPath, "read", "lua", path)
 		if err != nil {
 			return "", fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", path, err)
 		}
@@ -295,6 +295,9 @@ func validateLuaPathWithConsent(path, projectDir string, allowedPaths []string, 
 			}
 			return absPath, nil
 		default:
+			if suggestion != "" {
+				return "", fmt.Errorf("path '%s' is outside allowed paths; user suggested '%s', retry using that path instead", path, suggestion)
+			}
 			return "", fmt.Errorf("path '%s' is outside allowed paths — access denied by user", path)
 		}
 	}

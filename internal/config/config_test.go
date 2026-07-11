@@ -6,10 +6,17 @@ import (
 	"testing"
 )
 
+func isolateHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	return home
+}
+
 // TestLoadConfig tests the LoadConfig function
 func TestLoadConfig(t *testing.T) {
 	// Temporarily set HOME to a temp dir so the home config file is not found.
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 
 	// Test with no config files - should return default config
 	cfg := LoadConfig()
@@ -25,7 +32,7 @@ func TestLoadConfig(t *testing.T) {
 
 // TestLoadConfigWithProviderURL tests LoadConfig with provider-url set
 func TestLoadConfigProfiles(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate from a real ~/.config/hufu
+	isolateHome(t) // isolate from a real ~/.config/hufu
 	tmpDir := t.TempDir()
 	configContent := `profiles:
   batch:
@@ -59,6 +66,7 @@ func TestLoadConfigProfiles(t *testing.T) {
 }
 
 func TestLoadConfigWithProviderURL(t *testing.T) {
+	isolateHome(t)
 	// Create a temporary directory for testing
 	tmpDir := t.TempDir()
 
@@ -185,18 +193,7 @@ func TestResolveProviderURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Temporarily rename system config file to simulate no config files
-			homeDir, _ := os.UserHomeDir()
-			systemConfigPath := filepath.Join(homeDir, ".config", "hufu", "hufu.yaml")
-			backupPath := systemConfigPath + ".backup"
-
-			// Move system config file if it exists
-			if _, err := os.Stat(systemConfigPath); err == nil {
-				if err := os.Rename(systemConfigPath, backupPath); err != nil {
-					t.Fatalf("failed to backup system config: %v", err)
-				}
-				defer func() { _ = os.Rename(backupPath, systemConfigPath) }()
-			}
+			isolateHome(t)
 
 			// Create a temporary directory for testing
 			tmpDir := t.TempDir()
@@ -220,7 +217,7 @@ func TestResolveProviderURL(t *testing.T) {
 			} else {
 				// When no config file is provided, override HOME to prevent
 				// the real home config (~/.config/hufu/hufu.yaml) from being read.
-				t.Setenv("HOME", t.TempDir())
+				isolateHome(t)
 			}
 
 			got := ResolveProviderURL(tt.cliFlag, tt.teamCfgProviderURL, tt.agentProviderURL)
@@ -253,18 +250,7 @@ func TestConfigFields(t *testing.T) {
 
 // TestLoadConfigNonExistentFile tests LoadConfig with non-existent file
 func TestLoadConfigNonExistentFile(t *testing.T) {
-	// Temporarily rename system config file to simulate no config files
-	homeDir, _ := os.UserHomeDir()
-	systemConfigPath := filepath.Join(homeDir, ".config", "hufu", "hufu.yaml")
-	backupPath := systemConfigPath + ".backup"
-
-	// Move system config file if it exists
-	if _, err := os.Stat(systemConfigPath); err == nil {
-		if err := os.Rename(systemConfigPath, backupPath); err != nil {
-			t.Fatalf("failed to backup system config: %v", err)
-		}
-		defer func() { _ = os.Rename(backupPath, systemConfigPath) }()
-	}
+	isolateHome(t)
 
 	// Change to a directory where no config file exists
 	tmpDir := t.TempDir()
@@ -277,7 +263,7 @@ func TestLoadConfigNonExistentFile(t *testing.T) {
 	}()
 
 	// Also override HOME to prevent the real home config from being read.
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 
 	cfg := LoadConfig()
 	if cfg == nil {
@@ -292,18 +278,7 @@ func TestLoadConfigNonExistentFile(t *testing.T) {
 
 // TestResolveProviderURLWithEmptyStrings tests ResolveProviderURL with all empty strings
 func TestResolveProviderURLWithEmptyStrings(t *testing.T) {
-	// Temporarily rename system config file to simulate no config files
-	homeDir, _ := os.UserHomeDir()
-	systemConfigPath := filepath.Join(homeDir, ".config", "hufu", "hufu.yaml")
-	backupPath := systemConfigPath + ".backup"
-
-	// Move system config file if it exists
-	if _, err := os.Stat(systemConfigPath); err == nil {
-		if err := os.Rename(systemConfigPath, backupPath); err != nil {
-			t.Fatalf("failed to backup system config: %v", err)
-		}
-		defer func() { _ = os.Rename(backupPath, systemConfigPath) }()
-	}
+	isolateHome(t)
 
 	// Create a temporary directory for testing
 	tmpDir := t.TempDir()
@@ -318,7 +293,7 @@ func TestResolveProviderURLWithEmptyStrings(t *testing.T) {
 	}()
 
 	// Override HOME to prevent the real home config from being read.
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 
 	got := ResolveProviderURL("", "", "")
 	if got != DefaultProviderURL {

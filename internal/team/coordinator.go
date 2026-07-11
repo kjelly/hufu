@@ -211,6 +211,11 @@ type Coordinator struct {
 	workerSummaries     map[string]string
 	workerSummariesMu   sync.Mutex
 	pendingPlans        map[string]*PlanEntry
+	lastFailureMu       sync.RWMutex
+	lastFailureAgent    string
+	lastFailureTask     string
+	lastFailureTodoID   string
+	lastFailureDetail   string
 	// approvedOutputs stores actual task output once autoApprovePlan executes.
 	// CRITICAL: Always access under pendingPlansMu. All access points:
 	//   - review() lines 246-248: read + delete under lock

@@ -86,6 +86,16 @@ func (c *Coordinator) SetCurrentTool(name string) {
 	c.current.Store(newS)
 }
 
+// GetCurrentTool returns the last recorded tool name, even if the current
+// stage is no longer "tool". This is useful for failure summaries.
+func (c *Coordinator) GetCurrentTool() string {
+	s := c.current.Load()
+	if s == nil {
+		return ""
+	}
+	return s.Tool
+}
+
 // SetCurrentModel records the model ID currently being used for an LLM call.
 func (c *Coordinator) SetCurrentModel(modelID string) {
 	old := c.current.Load()

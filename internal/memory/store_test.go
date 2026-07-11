@@ -8,6 +8,13 @@ import (
 	"github.com/philippgille/chromem-go"
 )
 
+func isolateMemoryHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	return home
+}
+
 func TestProjectDirHash(t *testing.T) {
 	h1 := projectDirHash("/home/user/projects/myapp")
 	h2 := projectDirHash("/home/user/projects/myapp")
@@ -26,12 +33,12 @@ func TestProjectDirHash(t *testing.T) {
 }
 
 func TestDataDir(t *testing.T) {
+	homeDir := isolateMemoryHome(t)
 	dir, err := dataDir()
 	if err != nil {
 		t.Fatalf("dataDir() error: %v", err)
 	}
 
-	homeDir, _ := os.UserHomeDir()
 	expected := filepath.Join(homeDir, ".local", "share", "hufu", "memory")
 	if dir != expected {
 		t.Errorf("dataDir() = %q, want %q", dir, expected)
@@ -39,6 +46,7 @@ func TestDataDir(t *testing.T) {
 }
 
 func TestNewMemoryStoreCreatesDir(t *testing.T) {
+	homeDir := isolateMemoryHome(t)
 	tmpDir := t.TempDir()
 	projectDir := filepath.Join(tmpDir, "test-project")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
@@ -46,7 +54,7 @@ func TestNewMemoryStoreCreatesDir(t *testing.T) {
 	}
 
 	hash := projectDirHash(projectDir)
-	expectedPath := filepath.Join(tmpDir, ".local", "share", "hufu", "memory", hash)
+	expectedPath := filepath.Join(homeDir, ".local", "share", "hufu", "memory", hash)
 
 	t.Logf("projectDir: %s, hash: %s", projectDir, hash)
 	t.Logf("expected store path: %s", expectedPath)
@@ -235,6 +243,7 @@ func TestCheckEmbeddingModelMismatchDifferent(t *testing.T) {
 }
 
 func TestLazyInitFieldsSetWithoutProbe(t *testing.T) {
+	isolateMemoryHome(t)
 	tmpDir := t.TempDir()
 	projectDir := filepath.Join(tmpDir, "project")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
@@ -264,6 +273,7 @@ func TestLazyInitFieldsSetWithoutProbe(t *testing.T) {
 }
 
 func TestLazyInitOnlyOnce(t *testing.T) {
+	isolateMemoryHome(t)
 	tmpDir := t.TempDir()
 	projectDir := filepath.Join(tmpDir, "project")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {

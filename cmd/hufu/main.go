@@ -623,12 +623,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		return nil, err
 	}
 
-	var allowedPaths []string
-	if registry != nil {
-		allowedPaths = buildAllowedPaths(session, registry, cfg)
-	} else {
-		allowedPaths = append(allowedPaths, session.Workspace)
-	}
+	allowedPaths := buildAllowedPaths(session, registry, cfg)
 
 	hookRegistry := registerHooks(cfg)
 	resolvedRestrictedPath := resolveRestrictedPath(session, cfg)
@@ -698,8 +693,7 @@ func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, c
 	seen := make(map[string]bool)
 	var paths []string
 
-	projectDir, _ := os.Getwd()
-	if projectDir != "" && !seen[projectDir] {
+	if projectDir := currentWorkingDir(); projectDir != "" && !seen[projectDir] {
 		seen[projectDir] = true
 		paths = append(paths, projectDir)
 	}
@@ -714,17 +708,19 @@ func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, c
 		paths = append(paths, session.Workspace)
 	}
 
-	for _, searchPath := range registry.SearchPaths() {
-		if !seen[searchPath] {
-			seen[searchPath] = true
-			paths = append(paths, searchPath)
+	if registry != nil {
+		for _, searchPath := range registry.SearchPaths() {
+			if !seen[searchPath] {
+				seen[searchPath] = true
+				paths = append(paths, searchPath)
+			}
 		}
-	}
 
-	for _, teamDir := range registry.TeamDirs() {
-		if !seen[teamDir] {
-			seen[teamDir] = true
-			paths = append(paths, teamDir)
+		for _, teamDir := range registry.TeamDirs() {
+			if !seen[teamDir] {
+				seen[teamDir] = true
+				paths = append(paths, teamDir)
+			}
 		}
 	}
 
@@ -733,8 +729,10 @@ func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, c
 		filepath.Join(session.Dir, ".agents", "skills"),
 		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
 	}
-	for _, teamDir := range registry.TeamDirs() {
-		skillDirs = append(skillDirs, filepath.Join(teamDir, "skills"))
+	if registry != nil {
+		for _, teamDir := range registry.TeamDirs() {
+			skillDirs = append(skillDirs, filepath.Join(teamDir, "skills"))
+		}
 	}
 	migrateLegacyDrafts(skillDirs)
 	for _, dir := range skillDirs {
@@ -767,6 +765,17 @@ func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, c
 	}
 
 	return paths
+}
+
+func currentWorkingDir() string {
+	cwd, err := os.Getwd()
+	if err != nil || cwd == "" {
+		return ""
+	}
+	if eval, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = eval
+	}
+	return filepath.Clean(cwd)
 }
 
 // migrateLegacyDrafts moves any skills/draft-* to skills/drafts/draft-*
@@ -1011,9 +1020,11 @@ func setupInterruptHandler(injector *promptInjector, activeCoord *activeCoordina
 		first := true
 		for range sigIntCh {
 			if first {
+				tools.RequestInteractiveAbort()
 				if p := activeTUIProgram.Load(); p != nil {
 					p.Send(tuipkg.WrapUpMsg{})
 				} else {
+					logCancelSource("sigint", "wrap-up requested")
 					fmt.Fprintf(os.Stderr, "\n%s Wrapping up... (press Ctrl+C again to force quit)\n", boldStyle.Render("⏹"))
 					if c := activeCoord.Load(); c != nil {
 						c.SetWrapUp()
@@ -1027,6 +1038,7 @@ func setupInterruptHandler(injector *promptInjector, activeCoord *activeCoordina
 					if c := activeCoord.Load(); c != nil {
 						currentStatus = c.GetCurrentStatus()
 					}
+					logCancelSource("sigint", "force quit requested")
 					fmt.Fprintf(os.Stderr, "\n%s Force quit requested\n", errStyle.Render("✗"))
 					fmt.Fprintf(os.Stderr, "  Current: %s\n", currentStatus)
 					fmt.Fprintf(os.Stderr, "  Cancelling in-flight operations (up to 8s grace period)...\n")
@@ -1061,6 +1073,14 @@ func setupInterruptHandler(injector *promptInjector, activeCoord *activeCoordina
 		close(sigIntCh)
 		<-sigIntDone
 	}
+}
+
+func logCancelSource(source, detail string) {
+	if detail == "" {
+		stderrLog("\n%s [cancel] source=%s\n", boldStyle.Render("⏹"), source)
+		return
+	}
+	stderrLog("\n%s [cancel] source=%s detail=%s\n", boldStyle.Render("⏹"), source, detail)
 }
 
 // promptForMissingTemplateVars detects required template variables
@@ -1150,19 +1170,41 @@ func offerFirstTimeWizard(searchPaths []string) error {
 	}
 }
 
-// handleSegmentError is the standard error-exit for each step in
-// executeSegments. It saves session state, prints an interrupted notice
-// when the context was cancelled, and returns a wrapped error tagged
-// with the appropriate kind string (e.g. "team %q failed").
 func handleSegmentError(ctx context.Context, tc *teamContext, results []string, err error, kind string, args ...any) (string, error) {
 	if ctx.Err() == context.Canceled {
 		if tc != nil {
+			agentName, taskDesc, todoID, detail := tc.coordinator.GetLastFailureContext()
+			if detail == "" {
+				source := team.FailureSourceContextCanceled
+				if tools.IsInteractiveAbortRequested() {
+					source = team.FailureSourceSigint
+				}
+				detail = tc.coordinator.FailureDetail(err, source)
+				if agentName == "" {
+					agentName = "coordinator"
+				}
+				if taskDesc == "" {
+					taskDesc = fmt.Sprintf(kind, args...)
+				}
+				tc.coordinator.PersistFailure(agentName, taskDesc, todoID, detail)
+			}
 			_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
 		}
 		stderrLog("\n%s Interrupted\n", errStyle.Render("⚠"))
 		return "", errInterrupted{}
 	}
 	if tc != nil {
+		agentName, taskDesc, todoID, detail := tc.coordinator.GetLastFailureContext()
+		if detail == "" {
+			detail = tc.coordinator.FailureDetail(err, team.SegmentFailureSource(kind))
+			if agentName == "" {
+				agentName = "coordinator"
+			}
+			if taskDesc == "" {
+				taskDesc = fmt.Sprintf(kind, args...)
+			}
+			tc.coordinator.PersistFailure(agentName, taskDesc, todoID, detail)
+		}
 		_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
 		_ = team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
 	}

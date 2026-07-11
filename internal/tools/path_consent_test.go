@@ -57,6 +57,32 @@ func TestIsPathAllowedMultiple(t *testing.T) {
 	}
 }
 
+func TestIsPathAllowedCurrentWorkingDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	child := filepath.Join(tmpDir, "docs", "note.txt")
+	if err := os.MkdirAll(filepath.Dir(child), 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(child, []byte("data"), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(orig)
+	})
+
+	if !isPathAllowed(child, nil) {
+		t.Fatalf("expected %q to be allowed under current working directory %q", child, tmpDir)
+	}
+}
+
 func TestPathConsentRemembered(t *testing.T) {
 	pc := NewPathConsent()
 
@@ -191,6 +217,60 @@ func TestCheckPathOrConsentAllowed(t *testing.T) {
 	}
 	if path != insideFile {
 		t.Errorf("expected %s, got %s", insideFile, path)
+	}
+}
+
+func TestParseConsentInputPathAbsolute(t *testing.T) {
+	tmpDir := t.TempDir()
+	selection := parseConsentInput(filepath.Join(tmpDir, "docs"), "/ignored")
+	if selection.kind != ConsentDenied {
+		t.Fatalf("expected ConsentDenied, got %v", selection.kind)
+	}
+	if selection.suggestedPath != filepath.Clean(filepath.Join(tmpDir, "docs")) {
+		t.Fatalf("unexpected suggested path: %q", selection.suggestedPath)
+	}
+}
+
+func TestParseConsentInputPathRelative(t *testing.T) {
+	tmpDir := t.TempDir()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(orig)
+	})
+
+	if err := os.MkdirAll("docs", 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	selection := parseConsentInput("docs", "/ignored")
+	if selection.kind != ConsentDenied {
+		t.Fatalf("expected ConsentDenied, got %v", selection.kind)
+	}
+	want := filepath.Clean(filepath.Join(tmpDir, "docs")) + string(os.PathSeparator)
+	if selection.suggestedPath != strings.TrimSuffix(want, string(os.PathSeparator)) {
+		t.Fatalf("unexpected suggested path: %q want %q", selection.suggestedPath, strings.TrimSuffix(want, string(os.PathSeparator)))
+	}
+}
+
+func TestPathConsentInteractiveAbortShortCircuits(t *testing.T) {
+	interactiveAbortRequested.Store(true)
+	defer interactiveAbortRequested.Store(false)
+
+	pc := NewPathConsent()
+	result, suggestion, err := pc.AskConsent("/tmp/does-not-matter", "read", "view", "args")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != ConsentDenied {
+		t.Fatalf("expected ConsentDenied, got %v", result)
+	}
+	if suggestion != "" {
+		t.Fatalf("expected empty suggestion, got %q", suggestion)
 	}
 }
 

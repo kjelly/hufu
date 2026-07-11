@@ -514,7 +514,7 @@ func TestCheckDuplicateTasksComprehensive(t *testing.T) {
 				c.delegatedTasks[k] = v
 			}
 
-			warnings, duplicates := c.checkDuplicateTasks(context.Background(), tt.batchTasks)
+			warnings, duplicates, suppressed := c.checkDuplicateTasks(context.Background(), tt.batchTasks)
 
 			hasExactDup := false
 			hasBatchDup := false
@@ -540,6 +540,9 @@ func TestCheckDuplicateTasksComprehensive(t *testing.T) {
 					t.Error("duplicates map should contain entries")
 				}
 			}
+			if len(suppressed) != 0 {
+				t.Errorf("expected no suppressed duplicates, got %d", len(suppressed))
+			}
 		})
 	}
 }
@@ -556,7 +559,7 @@ func TestCheckDuplicateTasksGlobalCountUpdate(t *testing.T) {
 		{Agent: "agent1", Goal: "task2"},
 	}
 
-	c.checkDuplicateTasks(context.Background(), tasks)
+	_, _, _ = c.checkDuplicateTasks(context.Background(), tasks)
 
 	// Verify non-duplicate tasks increment the global count
 	c.delegatedTasksMu.Lock()
@@ -572,7 +575,7 @@ func TestCheckDuplicateTasksGlobalCountUpdate(t *testing.T) {
 	}
 
 	// Run again - should increment counts
-	_, duplicates2 := c.checkDuplicateTasks(context.Background(), tasks)
+	_, duplicates2, suppressed2 := c.checkDuplicateTasks(context.Background(), tasks)
 
 	c.delegatedTasksMu.Lock()
 	count1Again := c.delegatedTasks["agent1:task1"]
@@ -589,6 +592,9 @@ func TestCheckDuplicateTasksGlobalCountUpdate(t *testing.T) {
 	// Verify duplicates are marked
 	if !duplicates2[0] || !duplicates2[1] {
 		t.Error("duplicate tasks should be marked in duplicates map")
+	}
+	if len(suppressed2) != 0 {
+		t.Errorf("expected no suppressed duplicates on second run, got %d", len(suppressed2))
 	}
 }
 

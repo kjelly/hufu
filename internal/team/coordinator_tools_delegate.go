@@ -120,6 +120,13 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 
 	subLabel := strings.Join(append(chainAgents, selected), "/")
 	agentKey := strings.ToLower(selected)
+	if match := c.findExistingTodoDuplicate(ctx, strings.ToLower(subLabel), taskDesc); match != nil {
+		msg := fmt.Sprintf("[SUPPRESSED DUPLICATE] %s\n\nExisting task %s is already handling this work (status: %s).", match.Reason, match.Item.ID, match.Item.Status)
+		if match.Item.Detail != "" {
+			msg += "\n\nDetail:\n" + match.Item.Detail
+		}
+		return fantasy.NewTextResponse(msg), nil
+	}
 	if cachedOutput, cachedDesc, ok := c.lookupTaskCacheAllGenerations(ctx, agentKey, taskDesc); ok {
 		log.Printf("[INFO] request_agent cache hit: agent=%q, task=%q, matched=%q", selected, taskDesc, cachedDesc)
 		return fantasy.NewTextResponse(fmt.Sprintf("[CACHED RESULT] Task: '%s'\n\n%s", truncateTaskDesc(cachedDesc), cachedOutput)), nil

@@ -33,6 +33,11 @@ type cachedTaskEntry struct {
 	pinned bool
 }
 
+type duplicateTodoMatch struct {
+	Item   *TodoItem
+	Reason string
+}
+
 // lookupTaskCache checks whether newTask has a semantically equivalent prior
 // result for agentKey (lowercase agent name).
 //
@@ -214,9 +219,81 @@ func (c *Coordinator) invalidateTaskCache(agentKey, taskDesc string) {
 	c.journalAppend(journalRecord{Op: "del", Agent: agentKey, Desc: taskDesc, TS: time.Now().Format(time.RFC3339)})
 }
 
-func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) ([]string, map[int]bool) {
+func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, desc string) *duplicateTodoMatch {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return nil
+	}
+	items := c.taskTracker.TodoList().Items()
+	if len(items) == 0 {
+		return nil
+	}
+
+	normalizedNew := normalizeTaskDesc(desc)
+	exactEligible := make([]*TodoItem, 0, len(items))
+	semanticEligible := make([]*TodoItem, 0, len(items))
+	for _, item := range items {
+		if item == nil || strings.ToLower(item.Agent) != agentKey {
+			continue
+		}
+
+		switch item.Status {
+		case TaskPending, TaskPlanned, TaskInProgress, TaskPaused:
+			exactEligible = append(exactEligible, item)
+			semanticEligible = append(semanticEligible, item)
+		case TaskError:
+			exactEligible = append(exactEligible, item)
+			if isPermissionBlockedFailureDetail(item.Detail) {
+				semanticEligible = append(semanticEligible, item)
+			}
+		}
+	}
+
+	for _, item := range exactEligible {
+		if normalizeTaskDesc(item.Desc) == normalizedNew {
+			return &duplicateTodoMatch{
+				Item:   item,
+				Reason: fmt.Sprintf("existing task %s already has status %s", item.ID, item.Status),
+			}
+		}
+	}
+
+	if len(semanticEligible) == 0 {
+		return nil
+	}
+
+	s := c.Sidecar()
+	if s == nil {
+		return nil
+	}
+
+	pastDescs := make([]string, len(semanticEligible))
+	for i, item := range semanticEligible {
+		pastDescs[i] = item.Desc
+	}
+
+	sidecarCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	if c.think {
+		c.emitThinkSidecar("SimilarTask", fmt.Sprintf("checking todo similarity against active/failed tasks: %.50s", desc))
+	}
+	idx, err := s.SimilarTask(sidecarCtx, desc, pastDescs)
+	if err != nil || idx < 0 || idx >= len(semanticEligible) {
+		return nil
+	}
+
+	item := semanticEligible[idx]
+	reason := fmt.Sprintf("similar to existing task %s with status %s", item.ID, item.Status)
+	if item.Status == TaskError && isPermissionBlockedFailureDetail(item.Detail) {
+		reason = fmt.Sprintf("similar to blocked task %s; previous failure was permission-related", item.ID)
+	}
+	return &duplicateTodoMatch{Item: item, Reason: reason}
+}
+
+func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) ([]string, map[int]bool, map[int]*duplicateTodoMatch) {
 	var warnings []string
 	duplicates := make(map[int]bool)
+	suppressed := make(map[int]*duplicateTodoMatch)
 
 	// First pass: build local counts for this batch to handle duplicates within the batch
 	localCounts := make(map[string]int)
@@ -228,6 +305,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 		key := strings.ToLower(t.Agent) + ":" + normalizeTaskDesc(desc)
 		localCounts[key]++
 	}
+	_ = localCounts
 
 	c.delegatedTasksMu.Lock()
 	// Second pass: check exact duplicates and increment global counts
@@ -270,7 +348,24 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 	}
 	c.delegatedTasksMu.Unlock()
 
-	// Third pass: semantic duplicate check (outside the lock to avoid holding mutex during slow I/O)
+	// Third pass: current todo-list duplicate check (active work and recent failures).
+	for i, t := range tasks {
+		if duplicates[i] {
+			continue
+		}
+		desc := t.Goal
+		if t.Constraints != "" {
+			desc += "\nconstraints: " + t.Constraints
+		}
+		agentKey := strings.ToLower(t.Agent)
+		if match := c.findExistingTodoDuplicate(ctx, agentKey, desc); match != nil {
+			duplicates[i] = true
+			suppressed[i] = match
+			warnings = append(warnings, fmt.Sprintf("SUPPRESSED DUPLICATE: %s (agent=%s, %s)", truncateTaskDesc(desc), t.Agent, match.Reason))
+		}
+	}
+
+	// Fourth pass: semantic duplicate check against completed history only.
 	for i, t := range tasks {
 		if duplicates[i] {
 			continue
@@ -291,7 +386,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 			_ = cachedOutput
 		}
 	}
-	return warnings, duplicates
+	return warnings, duplicates, suppressed
 }
 
 func formatTaskResults(results []agentTaskResult, totalTasks int, duplicateWarnings []string) (string, error) {

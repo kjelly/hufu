@@ -416,6 +416,10 @@ func normalizeAskUserResponse(resp AskUserResponse, args askUserArgs, questionTy
 }
 
 func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	if IsInteractiveAbortRequested() {
+		return fantasy.NewTextErrorResponse("ask_user cancelled during shutdown"), nil
+	}
+
 	var args askUserArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -463,6 +467,10 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRes
 	// operator can follow up out-of-band.
 	if IsUnattended(ctx) || !IsInteractiveEnvironment() {
 		return unattendedAskUserResponse(ctx, args, questionType)
+	}
+
+	if IsInteractiveAbortRequested() {
+		return fantasy.NewTextErrorResponse("ask_user cancelled during shutdown"), nil
 	}
 
 	// CLI mode: read from stdin.
@@ -516,6 +524,9 @@ func handleSingleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
 
 	index, _, err := prompt.Run()
 	if err != nil {
+		if IsInteractiveAbortRequested() {
+			return fantasy.NewTextErrorResponse("ask_user cancelled during shutdown"), nil
+		}
 		if err == promptui.ErrInterrupt {
 			return fantasy.NewTextErrorResponse("ask_user cancelled by user"), nil
 		}
@@ -528,6 +539,9 @@ func handleSingleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
 		}
 		freeInput, err := promptText.Run()
 		if err != nil {
+			if IsInteractiveAbortRequested() {
+				return fantasy.NewTextErrorResponse("ask_user cancelled during shutdown"), nil
+			}
 			if err == promptui.ErrInterrupt {
 				return fantasy.NewTextErrorResponse("ask_user cancelled by user"), nil
 			}
@@ -569,6 +583,9 @@ func handleMultipleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
 	}
 	input, err := prompt.Run()
 	if err != nil {
+		if IsInteractiveAbortRequested() {
+			return fantasy.NewTextErrorResponse("ask_user cancelled during shutdown"), nil
+		}
 		if err == promptui.ErrInterrupt {
 			return fantasy.NewTextErrorResponse("ask_user cancelled by user"), nil
 		}
@@ -614,6 +631,9 @@ func handleFreeText(args askUserArgs) (fantasy.ToolResponse, error) {
 	}
 	input, err := prompt.Run()
 	if err != nil {
+		if IsInteractiveAbortRequested() {
+			return fantasy.NewTextErrorResponse("ask_user cancelled during shutdown"), nil
+		}
 		if err == promptui.ErrInterrupt {
 			return fantasy.NewTextErrorResponse("ask_user cancelled by user"), nil
 		}
@@ -669,6 +689,9 @@ func handleMixed(args askUserArgs) (fantasy.ToolResponse, error) {
 				}
 				freeInput, err := promptText.Run()
 				if err != nil {
+					if IsInteractiveAbortRequested() {
+						return fantasy.NewTextErrorResponse("ask_user cancelled during shutdown"), nil
+					}
 					if err == promptui.ErrInterrupt {
 						return fantasy.NewTextErrorResponse("ask_user cancelled by user"), nil
 					}

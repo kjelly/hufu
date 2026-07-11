@@ -12,8 +12,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/anomalyco/hufu/internal/utils"
 	"github.com/charmbracelet/x/term"
+
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 type ConsentResult int
@@ -77,7 +78,11 @@ func dirOfPath(path string) string {
 	return filepath.Dir(path)
 }
 
-func (pc *PathConsent) AskConsent(path, operation string, toolName, toolArgs string) (ConsentResult, error) {
+func (pc *PathConsent) AskConsent(path, operation string, toolName, toolArgs string) (ConsentResult, string, error) {
+	if IsInteractiveAbortRequested() {
+		return ConsentDenied, "", nil
+	}
+
 	dirToRemember := dirOfPath(path)
 	normalized := dirToRemember + string(os.PathSeparator)
 
@@ -85,14 +90,18 @@ func (pc *PathConsent) AskConsent(path, operation string, toolName, toolArgs str
 	for _, prefix := range pc.remembered {
 		if strings.HasPrefix(normalized, prefix) {
 			pc.mu.Unlock()
-			return ConsentAlways, nil
+			return ConsentAlways, "", nil
 		}
 	}
 	if pc.isDeniedLocked(path) {
 		pc.mu.Unlock()
-		return ConsentDenied, nil
+		return ConsentDenied, "", nil
 	}
 	pc.mu.Unlock()
+
+	if IsInteractiveAbortRequested() {
+		return ConsentDenied, "", nil
+	}
 
 	// Acquire stdin lock before any output so that we never write to the
 	// terminal while it is in raw mode (e.g. when the TUI is active).
@@ -112,12 +121,12 @@ func (pc *PathConsent) AskConsent(path, operation string, toolName, toolArgs str
 	for _, prefix := range pc.remembered {
 		if strings.HasPrefix(normalized, prefix) {
 			pc.mu.Unlock()
-			return ConsentAlways, nil
+			return ConsentAlways, "", nil
 		}
 	}
 	if pc.isDeniedLocked(path) {
 		pc.mu.Unlock()
-		return ConsentDenied, nil
+		return ConsentDenied, "", nil
 	}
 	pc.mu.Unlock()
 
@@ -148,29 +157,88 @@ func (pc *PathConsent) AskConsent(path, operation string, toolName, toolArgs str
 	fmt.Fprintf(os.Stderr, "\n⚠ Path is outside allowed paths.\n")
 	fmt.Fprintf(os.Stderr, "  %s Allow once\n", cyanFmt("[y]"))
 	fmt.Fprintf(os.Stderr, "  %s Always allow %s\n", cyanFmt("[a]"), dirToRemember+string(os.PathSeparator))
+	fmt.Fprintf(os.Stderr, "  Type a path to suggest a replacement path to the agent\n")
 	fmt.Fprintf(os.Stderr, "  %s Always deny %s\n", cyanFmt("[d]"), dirToRemember+string(os.PathSeparator))
 	fmt.Fprintf(os.Stderr, "  %s Deny (default)\n", cyanFmt("[N]"))
+	fmt.Fprintf(os.Stderr, "  You can type an absolute or relative path to suggest a replacement path.\n")
 	fmt.Fprintf(os.Stderr, "%s ", boldFmt("Your choice:"))
 
 	reader := bufio.NewReader(os.Stdin)
 	input := readConsentLine(reader)
 
-	switch strings.ToLower(strings.TrimSpace(input)) {
-	case "a":
+	selection := parseConsentInput(input, dirToRemember)
+	switch selection.kind {
+	case ConsentAlways:
 		pc.mu.Lock()
-		pc.remembered = append(pc.remembered, dirToRemember+string(os.PathSeparator))
+		pc.remembered = append(pc.remembered, selection.rememberPrefix)
 		pc.mu.Unlock()
-		return ConsentAlways, nil
-	case "d":
-		pc.mu.Lock()
-		pc.denied = append(pc.denied, dirToRemember+string(os.PathSeparator))
-		pc.mu.Unlock()
-		return ConsentDenied, nil
-	case "y":
-		return ConsentOnce, nil
+		return ConsentAlways, "", nil
+	case ConsentDenied:
+		if selection.deniedPrefix != "" {
+			pc.mu.Lock()
+			pc.denied = append(pc.denied, selection.deniedPrefix)
+			pc.mu.Unlock()
+		}
+		return ConsentDenied, selection.suggestedPath, nil
+	case ConsentOnce:
+		return ConsentOnce, "", nil
 	default:
-		return ConsentDenied, nil
+		return ConsentDenied, "", nil
 	}
+}
+
+type consentSelection struct {
+	kind           ConsentResult
+	rememberPrefix string
+	deniedPrefix   string
+	suggestedPath  string
+}
+
+func parseConsentInput(input, defaultDir string) consentSelection {
+	trimmed := strings.TrimSpace(input)
+	switch strings.ToLower(trimmed) {
+	case "a":
+		return consentSelection{kind: ConsentAlways, rememberPrefix: defaultDir + string(os.PathSeparator)}
+	case "d":
+		return consentSelection{kind: ConsentDenied, deniedPrefix: defaultDir + string(os.PathSeparator)}
+	case "y":
+		return consentSelection{kind: ConsentOnce}
+	}
+
+	if suggestion, ok := normalizeConsentSuggestedPath(trimmed); ok {
+		return consentSelection{kind: ConsentDenied, suggestedPath: suggestion}
+	}
+
+	return consentSelection{kind: ConsentDenied}
+}
+
+func normalizeConsentSuggestedPath(path string) (string, bool) {
+	if path == "" {
+		return "", false
+	}
+
+	expanded := os.ExpandEnv(path)
+	if strings.HasPrefix(expanded, "~") {
+		if home, err := os.UserHomeDir(); err == nil {
+			expanded = filepath.Join(home, expanded[1:])
+		}
+	}
+
+	if !filepath.IsAbs(expanded) {
+		abs, err := filepath.Abs(expanded)
+		if err == nil {
+			expanded = abs
+		}
+	}
+
+	expanded = filepath.Clean(expanded)
+	if expanded == "." || expanded == string(filepath.Separator) {
+		return "", false
+	}
+	if !filepath.IsAbs(expanded) {
+		return "", false
+	}
+	return expanded, true
 }
 
 func (pc *PathConsent) isDeniedLocked(path string) bool {

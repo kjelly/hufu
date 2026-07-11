@@ -36,6 +36,10 @@ func CleanRunDirs(workspace string) error {
 }
 
 func writeTaskFile(workspace, teamName, agentName, timestamp, status, task, result string) error {
+	return writeTaskFileWithDetail(workspace, teamName, agentName, timestamp, status, task, result, "")
+}
+
+func writeTaskFileWithDetail(workspace, teamName, agentName, timestamp, status, task, result, detail string) error {
 	validStatuses := map[string]bool{"working": true, "done": true, "error": true}
 	if !validStatuses[status] {
 		return fmt.Errorf("invalid task status %q: must be working, done, or error", status)
@@ -58,19 +62,31 @@ func writeTaskFile(workspace, teamName, agentName, timestamp, status, task, resu
 		completedLine = fmt.Sprintf("**Completed:** %s\n", now)
 	}
 
-	content := fmt.Sprintf("# Agent Task: %s\n\n**Status:** %s\n**Updated:** %s\n%s\n---\n\n## Task Description\n\n%s\n\n---\n\n## Result\n\n%s\n",
-		agentName, status, now, completedLine, task, resultSection)
+	failureSection := ""
+	if detail != "" {
+		failureSection = fmt.Sprintf("\n---\n\n## Failure Detail\n\n%s\n", detail)
+	}
+
+	content := fmt.Sprintf("# Agent Task: %s\n\n**Status:** %s\n**Updated:** %s\n%s\n---\n\n## Task Description\n\n%s\n\n---\n\n## Result\n\n%s\n%s",
+		agentName, status, now, completedLine, task, resultSection, failureSection)
 
 	path := filepath.Join(dir, timestamp+".md")
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
 func writeStatus(workspace, agentName, status, task string) error {
+	return writeStatusWithDetail(workspace, agentName, status, task, "")
+}
+
+func writeStatusWithDetail(workspace, agentName, status, task, detail string) error {
 	dir := filepath.Join(workspace, statusDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	data := fmt.Sprintf("status: %s\ntask: %s\ntime: %s\n", status, task, time.Now().Format(time.RFC3339))
+	if detail != "" {
+		data += fmt.Sprintf("detail: %s\n", detail)
+	}
 	path := filepath.Join(dir, agentName+".yml")
 	return os.WriteFile(path, []byte(data), 0o644)
 }
