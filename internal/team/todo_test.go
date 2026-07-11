@@ -207,6 +207,36 @@ func TestTodoListUpdateStatusAllowErrorToInProgressForRetry(t *testing.T) {
 	}
 }
 
+func TestCanTransitionAndTryUpdateStatus(t *testing.T) {
+	if !CanTransition(TaskInProgress, TaskVerifying) {
+		t.Fatal("expected in_progress -> verifying to be allowed")
+	}
+	if !CanTransition(TaskError, TaskInProgress) {
+		t.Fatal("expected error -> in_progress to be allowed")
+	}
+	if !CanTransition(TaskVerifying, TaskDone) {
+		t.Fatal("expected verifying -> done to be allowed")
+	}
+	if CanTransition(TaskDone, TaskInProgress) {
+		t.Fatal("expected done -> in_progress to be blocked")
+	}
+
+	tl := &TodoList{}
+	tl.AddBatch([]TodoSpec{{Agent: "researcher", Desc: "find bugs"}})
+	if err := tl.TryUpdateStatusAndOutput("1", TaskVerifying, "verifying", ""); err == nil {
+		t.Fatal("expected invalid transition from pending to verifying to fail")
+	}
+	if err := tl.TryUpdateStatusAndOutput("1", TaskInProgress, "start", ""); err != nil {
+		t.Fatalf("expected pending -> in_progress to succeed, got %v", err)
+	}
+	if err := tl.TryUpdateStatusAndOutput("1", TaskVerifying, "verify", ""); err != nil {
+		t.Fatalf("expected in_progress -> verifying to succeed, got %v", err)
+	}
+	if err := tl.TryUpdateStatusAndOutput("1", TaskDone, "done", "out"); err != nil {
+		t.Fatalf("expected verifying -> done to succeed, got %v", err)
+	}
+}
+
 func TestTodoToolHandleUpdatePreventDoneToInProgress(t *testing.T) {
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),

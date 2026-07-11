@@ -182,7 +182,7 @@ func (s *dagScheduler) resetWave(targetIdx int) {
 // instead of being served the stale output. Must not be called on a task that
 // is currently in flight — mark it via needsReset instead.
 func (s *dagScheduler) resetTask(i int, detail string) {
-	s.coord.invalidateTaskCache(strings.ToLower(s.tasks[i].Agent), s.taskDesc(i))
+	s.coord.invalidateTaskCacheWithVerify(strings.ToLower(s.tasks[i].Agent), s.taskDesc(i), s.tasks[i].Verify)
 	if s.states[i] == TaskPending {
 		return // never ran in this wave; nothing else to reset
 	}
@@ -305,7 +305,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	// Check the task result cache before running. Sidecar tasks and tasks
 	// that explicitly request summarize always run fresh.
 	if !td.Sidecar && !td.Summarize {
-		if cached, ok := c.lookupTaskCache(ctx, agentKey, desc); ok {
+		if cached, ok := c.lookupTaskCacheWithVerify(ctx, agentKey, desc, td.Verify); ok {
 			c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(desc).withTodoID(tid))
 			c.taskTracker.TodoList().UpdateStatusAndOutput(tid, TaskDone, utils.TruncateRunes(cached, summaryMaxRunes), cached)
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
@@ -327,7 +327,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		output, err = c.executeTask(ctx, td, tid)
 	}
 	if err == nil {
-		c.storeTaskCache(agentKey, desc, output)
+		c.storeTaskCacheWithVerify(agentKey, desc, td.Verify, output)
 	}
 	result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: output, err: err, idx: idx}
 	if err == nil && td.PlanFirst && td.PlanID == "" {

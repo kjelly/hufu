@@ -121,6 +121,20 @@ func TestCacheHitCaseFolding(t *testing.T) {
 	}
 }
 
+func TestCacheVerifyMustMatch(t *testing.T) {
+	c := newTestCacheCoordinator()
+	c.cacheGeneration.Store(1)
+
+	c.storeTaskCacheWithVerify("developer", "build binary", "test -f bin/app", "build succeeded")
+
+	if _, ok := c.lookupTaskCacheWithVerify(context.Background(), "developer", "build binary", "test -f bin/app"); !ok {
+		t.Fatal("expected exact verify match to hit")
+	}
+	if _, ok := c.lookupTaskCacheWithVerify(context.Background(), "developer", "build binary", "test -f bin/other"); ok {
+		t.Fatal("expected different verify command to miss")
+	}
+}
+
 func TestCacheMissDifferentAgent(t *testing.T) {
 	c := newTestCacheCoordinator()
 	c.cacheGeneration.Store(1)

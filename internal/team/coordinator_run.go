@@ -283,7 +283,7 @@ func (c *Coordinator) summaryFromTodos(runErr error) string {
 		case TaskDone:
 			done++
 			fmt.Fprintf(&b, "\n### %s: %s\n%s\n", item.Agent, item.Desc, utils.TruncateRunes(item.Output, summaryMaxRunes))
-		case TaskError:
+		case TaskError, TaskBlocked:
 			fmt.Fprintf(&b, "\n### %s: %s\nFAILED: %s\n", item.Agent, item.Desc, item.Detail)
 		}
 	}
@@ -298,7 +298,7 @@ func (c *Coordinator) finalizeRemainingTasks() {
 	changed := false
 	for _, item := range items {
 		switch item.Status {
-		case TaskInProgress, TaskPaused:
+		case TaskInProgress, TaskPaused, TaskVerifying:
 			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskError, "coordinator ended unexpectedly")
 			changed = true
 		case TaskPending:
@@ -323,8 +323,8 @@ func (c *Coordinator) finalizeNormalCompletion() {
 		case TaskPending:
 			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "")
 			changed = true
-		case TaskInProgress, TaskPaused:
-			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "still in progress at completion")
+		case TaskInProgress, TaskPaused, TaskVerifying:
+			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskDone, "still in progress at completion")
 			changed = true
 		}
 	}

@@ -6,13 +6,13 @@ import (
 )
 
 func TestIsInterruptedStatus(t *testing.T) {
-	interrupted := []TaskStatus{TaskInProgress, TaskPaused, TaskPlanned, TaskPending}
+	interrupted := []TaskStatus{TaskInProgress, TaskVerifying, TaskPaused, TaskPlanned, TaskPending}
 	for _, s := range interrupted {
 		if !isInterruptedStatus(s) {
 			t.Errorf("%q should be treated as interrupted", s)
 		}
 	}
-	terminal := []TaskStatus{TaskDone, TaskSkipped, TaskError}
+	terminal := []TaskStatus{TaskDone, TaskSkipped, TaskError, TaskBlocked}
 	for _, s := range terminal {
 		if isInterruptedStatus(s) {
 			t.Errorf("%q should NOT be treated as interrupted", s)
@@ -37,6 +37,7 @@ func TestResetInterruptedTasks_SelectionAndReset(t *testing.T) {
 	c.taskTracker.TodoList().Restore([]*TodoItem{
 		{ID: "1", Agent: "a", Desc: "done task", Status: TaskDone, Output: "out"},
 		{ID: "2", Agent: "a", Desc: "in-flight task", Status: TaskInProgress},
+		{ID: "2v", Agent: "a", Desc: "verifying task", Status: TaskVerifying},
 		{ID: "3", Agent: "b", Desc: "never started", Status: TaskPending},
 		{ID: "4", Agent: "b", Desc: "failed task", Status: TaskError},
 		{ID: "5", Agent: "c", Desc: "planned task", Status: TaskPlanned},
@@ -45,8 +46,8 @@ func TestResetInterruptedTasks_SelectionAndReset(t *testing.T) {
 
 	got := c.resetInterruptedTasks()
 
-	// Only in-flight / pending / planned are selected (2,3,5); done/error/skipped excluded.
-	wantIDs := map[string]bool{"2": true, "3": true, "5": true}
+	// Only in-flight / verifying / pending / planned are selected (2,2v,3,5); done/error/skipped excluded.
+	wantIDs := map[string]bool{"2": true, "2v": true, "3": true, "5": true}
 	if len(got) != len(wantIDs) {
 		t.Fatalf("expected %d interrupted tasks, got %d", len(wantIDs), len(got))
 	}
@@ -57,8 +58,8 @@ func TestResetInterruptedTasks_SelectionAndReset(t *testing.T) {
 	}
 
 	// Ascending-ID order (deps run first).
-	if got[0].ID != "2" || got[1].ID != "3" || got[2].ID != "5" {
-		t.Errorf("interrupted tasks not in ascending ID order: %s,%s,%s", got[0].ID, got[1].ID, got[2].ID)
+	if got[0].ID != "2" || got[1].ID != "2v" || got[2].ID != "3" || got[3].ID != "5" {
+		t.Errorf("interrupted tasks not in ascending ID order: %s,%s,%s,%s", got[0].ID, got[1].ID, got[2].ID, got[3].ID)
 	}
 
 	// Selected tasks are reset to pending; terminal tasks untouched.

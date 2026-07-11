@@ -308,11 +308,11 @@ func (t *teamInfoTool) handleTodoStatus(c *Coordinator, name string) (fantasy.To
 	fmt.Fprintf(&b, "TODO items for %s:\n\n", agentDef.Name)
 	for _, item := range matched {
 		icon := map[TaskStatus]string{
-			TaskPending: "○", TaskInProgress: "◑", TaskDone: "●",
-			TaskError: "✗", TaskSkipped: "—", TaskPlanned: "◎", TaskPaused: "◐",
+			TaskPending: "○", TaskInProgress: "◑", TaskVerifying: "◔", TaskDone: "●",
+			TaskError: "✗", TaskBlocked: "⚠", TaskSkipped: "—", TaskPlanned: "◎", TaskPaused: "◐",
 		}[item.Status]
 		desc := item.Desc
-		if item.Detail != "" && item.Status == TaskError {
+		if item.Detail != "" && (item.Status == TaskError || item.Status == TaskBlocked) {
 			desc = item.Detail
 		}
 		fmt.Fprintf(&b, "- %s %s: %s\n", icon, item.ID, utils.TruncateLine(desc, 100))

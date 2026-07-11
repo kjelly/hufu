@@ -367,7 +367,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// todos_updated event. This is a safety net for any stragglers.
 		for i, t := range m.tasks {
 			switch t.Status {
-			case team.TaskInProgress, team.TaskPaused:
+			case team.TaskInProgress, team.TaskPaused, team.TaskVerifying:
 				m.tasks[i].Status = team.TaskDone
 			case team.TaskPending, team.TaskPlanned:
 				m.tasks[i].Status = team.TaskSkipped
@@ -375,7 +375,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.coordItem != nil {
 			switch m.coordItem.Status {
-			case team.TaskInProgress:
+			case team.TaskInProgress, team.TaskVerifying:
 				m.coordItem.Status = team.TaskDone
 			case team.TaskPending:
 				m.coordItem.Status = team.TaskSkipped
@@ -1869,10 +1869,14 @@ func taskIconStyle(s team.TaskStatus) (string, lipgloss.Style) {
 	switch s {
 	case team.TaskInProgress:
 		return "◑", progressIcon
+	case team.TaskVerifying:
+		return "◔", progressIcon
 	case team.TaskDone:
 		return "●", doneIcon
 	case team.TaskError:
 		return "✗", errorIcon
+	case team.TaskBlocked:
+		return "⚠", errorIcon
 	case team.TaskSkipped:
 		return "—", skippedIcon
 	case team.TaskPlanned:
@@ -2605,13 +2609,13 @@ func (m Model) colItems(col int) []*team.TodoItem {
 			out = append(out, t)
 		case col == 1 && t.Status == team.TaskPlanned:
 			out = append(out, t)
-		case col == 2 && (t.Status == team.TaskInProgress || t.Status == team.TaskPaused):
+		case col == 2 && (t.Status == team.TaskInProgress || t.Status == team.TaskPaused || t.Status == team.TaskVerifying):
 			out = append(out, t)
 		case col == 3 && t.Status == team.TaskDone:
 			out = append(out, t)
 		case col == 4 && t.Status == team.TaskSkipped:
 			out = append(out, t)
-		case col == 5 && t.Status == team.TaskError:
+		case col == 5 && (t.Status == team.TaskError || t.Status == team.TaskBlocked):
 			out = append(out, t)
 		}
 	}

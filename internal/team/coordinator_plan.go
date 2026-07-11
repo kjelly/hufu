@@ -336,6 +336,8 @@ func (c *Coordinator) buildTaskStatusContext() string {
 			done = append(done, entry)
 		case TaskInProgress:
 			inProgress = append(inProgress, entry)
+		case TaskVerifying:
+			inProgress = append(inProgress, entry)
 		case TaskPaused:
 			paused = append(paused, entry)
 		case TaskPending:
@@ -344,7 +346,7 @@ func (c *Coordinator) buildTaskStatusContext() string {
 			skipped = append(skipped, entry)
 		case TaskPlanned:
 			planned = append(planned, entry)
-		case TaskError:
+		case TaskError, TaskBlocked:
 			errored = append(errored, entry)
 		}
 	}

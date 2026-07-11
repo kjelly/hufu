@@ -4,6 +4,7 @@ package team
 // status reporting, deliverable verification, and failure reflection.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -247,6 +248,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		currentPrompt := prompt
 		if attempt > 1 {
+			if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskInProgress, fmt.Sprintf("retry %d/%d", attempt, maxRetries), ""); statusErr == nil {
+				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			}
 			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retry %d/%d — continuing from previous progress", attempt, maxRetries)))
 			if lastErr != nil {
 				if hint := c.reflectOnFailure(parentCtx, agentName, task.Goal, lastErr.Error()); hint != "" {
@@ -362,13 +366,33 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				}
 				return planEntry.PlanText, nil
 			}
+			if err == nil {
+				if verr := validateTaskOutput(task, output); verr != nil {
+					err = fmt.Errorf("task completion validation failed: %w", verr)
+					c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("completion validation failed: %v", verr)).withTodoID(todoID))
+				}
+			}
 			// Deliverable verification: run an objective check before accepting
 			// the agent's claim of success. A non-zero exit converts this into a
 			// failure that flows into the normal retry path below.
-			if task.Verify != "" {
-				if verr := c.verifyTaskDeliverable(parentCtx, agentDef, task.Verify); verr != nil {
-					err = fmt.Errorf("deliverable verification failed (command %q): %w", task.Verify, verr)
-					c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("verification failed: %v", verr)).withTodoID(todoID))
+			if err == nil && task.Verify != "" {
+				if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskVerifying, "running objective verification", ""); statusErr != nil {
+					err = fmt.Errorf("enter verifying state: %w", statusErr)
+				} else {
+					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+					c.report(c.newEvent("verify_start").withAgent(agentName).withMessage(task.Verify).withTodoID(todoID))
+				}
+				if err == nil {
+					verification, verr := c.verifyTaskDeliverable(parentCtx, agentDef, task.Verify)
+					if verification != nil {
+						_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
+					}
+					if verr != nil {
+						err = fmt.Errorf("deliverable verification failed (command %q): %w", task.Verify, verr)
+						c.report(c.newEvent("verify_error").withAgent(agentName).withMessage(fmt.Sprintf("verification failed: %v", verr)).withTodoID(todoID))
+					} else {
+						c.report(c.newEvent("verify_done").withAgent(agentName).withMessage("objective verification passed").withTodoID(todoID))
+					}
 				}
 			}
 			// Adversarial verification: skeptic votes try to refute the result.
@@ -382,18 +406,14 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				}
 			}
 			if err == nil {
-				if verr := validateTaskOutput(task, output); verr != nil {
-					err = fmt.Errorf("task completion validation failed: %w", verr)
-					c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("completion validation failed: %v", verr)).withTodoID(todoID))
-				}
-			}
-			if err == nil {
 				if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "done", taskDesc, output); err != nil {
 					log.Printf("warning: failed to write task file: %v", err)
 				}
 				_ = writeStatus(c.session.Workspace, agentName, "done", taskDesc)
 				duration, modelTime, toolTime := timing.snapshot()
-				c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output)
+				if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output); statusErr != nil {
+					return "", fmt.Errorf("mark task done: %w", statusErr)
+				}
 				c.updateTodoTiming(todoID, modelTime, toolTime)
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("done").withAgent(agentName).withOutput(output).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
@@ -495,8 +515,30 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		return "", fmt.Errorf("sidecar execution failed (model: %s): %w", c.sidecarModel, err)
 	}
+	if verr := validateTaskOutput(task, result); verr != nil {
+		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, verr.Error())
+		return "", fmt.Errorf("task completion validation failed: %w", verr)
+	}
+	if task.Verify != "" {
+		if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskVerifying, "running objective verification", ""); err != nil {
+			return "", err
+		}
+		c.report(c.newEvent("verify_start").withAgent(task.Agent).withMessage(task.Verify).withTodoID(todoID))
+		verification, verifyErr := c.verifyTaskDeliverable(ctx, nil, task.Verify)
+		if verification != nil {
+			_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
+		}
+		if verifyErr != nil {
+			c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, verifyErr.Error())
+			c.report(c.newEvent("verify_error").withAgent(task.Agent).withMessage(verifyErr.Error()).withTodoID(todoID))
+			return "", fmt.Errorf("deliverable verification failed (command %q): %w", task.Verify, verifyErr)
+		}
+		c.report(c.newEvent("verify_done").withAgent(task.Agent).withMessage("objective verification passed").withTodoID(todoID))
+	}
 
-	c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(result, summaryMaxRunes), result)
+	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(result, summaryMaxRunes), result); err != nil {
+		return "", err
+	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(result).withMessage("sidecar completed").withTodoID(todoID))
 	return result, nil
@@ -728,10 +770,10 @@ func (c *Coordinator) buildConcurrentTasksContext(excludeID string) string {
 // an objective, non-LLM check that the deliverable actually exists/works before
 // a task is accepted as done. The command runs in the project directory using
 // the team's (or agent's) configured shell, falling back to "sh".
-func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef *agent.AgentDef, command string) error {
+func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef *agent.AgentDef, command string) (*VerificationResult, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
-		return nil
+		return nil, nil
 	}
 
 	shell := "sh"
@@ -752,15 +794,35 @@ func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef 
 	if c.projectDir != "" {
 		cmd.Dir = c.projectDir
 	}
-	out, err := cmd.CombinedOutput()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	started := time.Now()
+	err := cmd.Run()
+	result := &VerificationResult{
+		Command:  command,
+		ExitCode: 0,
+		Stdout:   utils.TruncateString(strings.TrimSpace(stdout.String()), 2000),
+		Stderr:   utils.TruncateString(strings.TrimSpace(stderr.String()), 2000),
+		Duration: time.Since(started),
+		TimedOut: errors.Is(ctx.Err(), context.DeadlineExceeded),
+	}
 	if err != nil {
-		detail := strings.TrimSpace(string(out))
+		result.ExitCode = -1
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			result.ExitCode = exitErr.ExitCode()
+		}
+		detail := strings.TrimSpace(strings.Join([]string{result.Stdout, result.Stderr}, "\n"))
 		if detail != "" {
 			detail = ": " + utils.TruncateString(detail, 500)
 		}
-		return fmt.Errorf("%v%s", err, detail)
+		if result.TimedOut {
+			return result, fmt.Errorf("verification timed out after %s%s", result.Duration.Round(time.Millisecond), detail)
+		}
+		return result, fmt.Errorf("%v%s", err, detail)
 	}
-	return nil
+	return result, nil
 }
 
 func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, lastErr string) string {

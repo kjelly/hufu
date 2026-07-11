@@ -28,7 +28,7 @@ func TestTaskJournalRoundtrip(t *testing.T) {
 	now := time.Now()
 	ts := now.Format(time.RFC3339)
 	recs := []journalRecord{
-		{Op: "put", Agent: "coder", Desc: "task A", Output: "out A", TS: ts, Round: 1},
+		{Op: "put", Agent: "coder", Desc: "task A", Verify: "test -f a.txt", Output: "out A", TS: ts, Round: 1},
 		{Op: "put", Agent: "coder", Desc: "task B", Output: "out B", TS: ts, Round: 1},
 		{Op: "put", Agent: "writer", Desc: "task C", Output: "out C", TS: ts, Round: 2},
 	}
@@ -48,7 +48,7 @@ func TestTaskJournalRoundtrip(t *testing.T) {
 	if len(got["coder"]) != 2 || len(got["writer"]) != 1 {
 		t.Fatalf("unexpected replay result: %+v", got)
 	}
-	if got["coder"][0].output != "out A" || !got["coder"][0].pinned {
+	if got["coder"][0].output != "out A" || got["coder"][0].verify != "test -f a.txt" || !got["coder"][0].pinned {
 		t.Errorf("entry not replayed as pinned put: %+v", got["coder"][0])
 	}
 }

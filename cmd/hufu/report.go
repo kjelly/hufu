@@ -13,11 +13,13 @@ import (
 )
 
 var taskStatusIcons = map[team.TaskStatus]string{
-	team.TaskDone:    "●",
-	team.TaskError:   "✗",
-	team.TaskSkipped: "—",
-	team.TaskPending: "○",
-	team.TaskPlanned: "◎",
+	team.TaskDone:      "●",
+	team.TaskError:     "✗",
+	team.TaskBlocked:   "⚠",
+	team.TaskSkipped:   "—",
+	team.TaskPending:   "○",
+	team.TaskPlanned:   "◎",
+	team.TaskVerifying: "◔",
 }
 
 // generateReport creates a markdown execution report for each loaded team

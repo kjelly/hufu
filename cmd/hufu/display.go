@@ -181,6 +181,27 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 			stepStyle.Render(label),
 		))
 
+	case "verify_start":
+		w.write(fmt.Sprintf("  %s %s %s\n",
+			stepStyle.Render("│"),
+			formatAgentLabel(event),
+			dimStyle.Render("verify "+event.Message),
+		))
+
+	case "verify_done":
+		w.write(fmt.Sprintf("  %s %s %s\n",
+			doneStyle.Render("✓"),
+			formatAgentLabel(event),
+			doneStyle.Render("verify passed"),
+		))
+
+	case "verify_error":
+		w.write(fmt.Sprintf("  %s %s %s\n",
+			errStyle.Render("✗"),
+			formatAgentLabel(event),
+			errStyle.Render(event.Message),
+		))
+
 	case "tool_call":
 		if st.textBuf != "" {
 			w.write(flushText(st.currentAgent, st.textBuf))
@@ -504,6 +525,9 @@ func (d *taskDisplay) render() {
 		case team.TaskInProgress:
 			icon = progressIcon.Render("◑")
 			desc = t.Desc
+		case team.TaskVerifying:
+			icon = progressIcon.Render("◔")
+			desc = t.Desc
 		case team.TaskDone:
 			icon = doneIcon.Render("●")
 			desc = dimStyle.Render(t.Desc)
@@ -516,6 +540,14 @@ func (d *taskDisplay) render() {
 				desc = dimStyle.Render(t.Desc)
 			}
 			tag = errTagStyle.Render(" [ERROR]")
+		case team.TaskBlocked:
+			icon = errorIcon.Render("⚠")
+			if t.Detail != "" {
+				desc = errStyle.Render(t.Detail)
+			} else {
+				desc = dimStyle.Render(t.Desc)
+			}
+			tag = errTagStyle.Render(" [BLOCKED]")
 		case team.TaskSkipped:
 			icon = dimStyle.Render("—")
 			desc = dimStyle.Render(t.Desc)

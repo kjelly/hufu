@@ -77,7 +77,11 @@ func (c *Coordinator) PersistFailure(agentName, taskDesc, todoID, detail string)
 	c.rememberFailureContext(agentName, taskDesc, todoID, detail)
 
 	if todoID != "" {
-		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, detail)
+		status := TaskError
+		if isPermissionBlockedFailureDetail(detail) {
+			status = TaskBlocked
+		}
+		c.taskTracker.TodoList().UpdateStatus(todoID, status, detail)
 		if c.reportStatus != nil {
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		}

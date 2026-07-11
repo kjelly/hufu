@@ -25,8 +25,12 @@ func newVerifyCoordinator(t *testing.T, projectDir string) *Coordinator {
 
 func TestVerifyTaskDeliverable_EmptyCommand(t *testing.T) {
 	c := newVerifyCoordinator(t, t.TempDir())
-	if err := c.verifyTaskDeliverable(context.Background(), nil, ""); err != nil {
+	result, err := c.verifyTaskDeliverable(context.Background(), nil, "")
+	if err != nil {
 		t.Errorf("empty verify command should be a no-op, got %v", err)
+	}
+	if result != nil {
+		t.Fatalf("empty verify command returned evidence: %#v", result)
 	}
 }
 
@@ -36,27 +40,37 @@ func TestVerifyTaskDeliverable_Success(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := newVerifyCoordinator(t, dir)
-	if err := c.verifyTaskDeliverable(context.Background(), nil, "test -f report.md"); err != nil {
+	result, err := c.verifyTaskDeliverable(context.Background(), nil, "test -f report.md")
+	if err != nil {
 		t.Errorf("expected success when deliverable exists, got %v", err)
+	}
+	if result == nil || result.ExitCode != 0 || result.Command != "test -f report.md" {
+		t.Fatalf("unexpected verification evidence: %#v", result)
 	}
 }
 
 func TestVerifyTaskDeliverable_FailureWhenMissing(t *testing.T) {
 	c := newVerifyCoordinator(t, t.TempDir())
-	err := c.verifyTaskDeliverable(context.Background(), nil, "test -f does-not-exist.md")
+	result, err := c.verifyTaskDeliverable(context.Background(), nil, "test -f does-not-exist.md")
 	if err == nil {
 		t.Fatal("expected error when deliverable is missing")
+	}
+	if result == nil || result.ExitCode == 0 {
+		t.Fatalf("expected non-zero verification evidence, got %#v", result)
 	}
 }
 
 func TestVerifyTaskDeliverable_FailureIncludesOutput(t *testing.T) {
 	c := newVerifyCoordinator(t, t.TempDir())
-	err := c.verifyTaskDeliverable(context.Background(), nil, "echo boom >&2; exit 3")
+	result, err := c.verifyTaskDeliverable(context.Background(), nil, "echo boom >&2; exit 3")
 	if err == nil {
 		t.Fatal("expected error on non-zero exit")
 	}
 	if !strings.Contains(err.Error(), "boom") {
 		t.Errorf("error should include command output, got %q", err.Error())
+	}
+	if result == nil || result.ExitCode != 3 || result.Stderr != "boom" {
+		t.Fatalf("unexpected verification evidence: %#v", result)
 	}
 }
 

@@ -162,6 +162,7 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 					agentKey := strings.ToLower(t.Agent)
 					c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
 						taskDesc:   t.Desc,
+						verify:     t.Verify,
 						output:     t.Output,
 						generation: gen,
 						pinned:     true,
@@ -191,7 +192,7 @@ func (c *Coordinator) saveCheckpoint() {
 // tasks (error, which already exhausted their retries) are left untouched.
 func isInterruptedStatus(s TaskStatus) bool {
 	switch s {
-	case TaskInProgress, TaskPaused, TaskPlanned, TaskPending:
+	case TaskInProgress, TaskVerifying, TaskPaused, TaskPlanned, TaskPending:
 		return true
 	default:
 		return false
@@ -225,7 +226,7 @@ func (c *Coordinator) resetInterruptedTasks() []*TodoItem {
 		return todoIDLess(interrupted[i].ID, interrupted[j].ID)
 	})
 	for _, it := range interrupted {
-		c.taskTracker.TodoList().UpdateStatus(it.ID, TaskPending, "resumed after interruption")
+		c.taskTracker.TodoList().ResetForRetry(it.ID, "resumed after interruption")
 	}
 	return interrupted
 }

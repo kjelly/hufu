@@ -25,6 +25,7 @@ type agentTaskResult struct {
 // cachedTaskEntry stores a previously completed task and its output for dedup.
 type cachedTaskEntry struct {
 	taskDesc   string
+	verify     string
 	output     string
 	generation int64 // cacheGeneration at time of storage
 	// pinned marks entries restored from a previous run (session.json or the
@@ -38,6 +39,15 @@ type duplicateTodoMatch struct {
 	Reason string
 }
 
+func normalizeTaskCacheKey(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+}
+
+func (e cachedTaskEntry) matches(taskDesc, verify string) bool {
+	return normalizeTaskCacheKey(e.taskDesc) == normalizeTaskCacheKey(taskDesc) &&
+		normalizeTaskCacheKey(e.verify) == normalizeTaskCacheKey(verify)
+}
+
 // lookupTaskCache checks whether newTask has a semantically equivalent prior
 // result for agentKey (lowercase agent name).
 //
@@ -48,8 +58,11 @@ type duplicateTodoMatch struct {
 //
 // Returns (cachedOutput, true) on a hit.
 func (c *Coordinator) lookupTaskCache(ctx context.Context, agentKey, newTask string) (string, bool) {
+	return c.lookupTaskCacheWithVerify(ctx, agentKey, newTask, "")
+}
+
+func (c *Coordinator) lookupTaskCacheWithVerify(ctx context.Context, agentKey, newTask, verify string) (string, bool) {
 	gen := c.cacheGeneration.Load()
-	normalizedNew := strings.ToLower(strings.Join(strings.Fields(newTask), " "))
 
 	c.taskResultCacheMu.RLock()
 	all := c.taskResultCache[agentKey]
@@ -61,18 +74,14 @@ func (c *Coordinator) lookupTaskCache(ctx context.Context, agentKey, newTask str
 
 	// Step 1: exact match in current generation
 	for _, e := range all {
-		if e.generation == gen {
-			norm := strings.ToLower(strings.Join(strings.Fields(e.taskDesc), " "))
-			if norm == normalizedNew {
-				return e.output, true
-			}
+		if e.generation == gen && e.matches(newTask, verify) {
+			return e.output, true
 		}
 	}
 
 	// Step 2: exact match across all generations
 	for _, e := range all {
-		norm := strings.ToLower(strings.Join(strings.Fields(e.taskDesc), " "))
-		if norm == normalizedNew {
+		if e.matches(newTask, verify) {
 			return e.output, true
 		}
 	}
@@ -85,7 +94,7 @@ func (c *Coordinator) lookupTaskCache(ctx context.Context, agentKey, newTask str
 
 	var currentGenEntries []cachedTaskEntry
 	for _, e := range all {
-		if e.generation == gen {
+		if e.generation == gen && normalizeTaskCacheKey(e.verify) == normalizeTaskCacheKey(verify) {
 			currentGenEntries = append(currentGenEntries, e)
 		}
 	}
@@ -124,6 +133,10 @@ func (c *Coordinator) lookupTaskCache(ctx context.Context, agentKey, newTask str
 //
 // Returns (cachedOutput, cachedTaskDesc, true) on a hit.
 func (c *Coordinator) lookupTaskCacheAllGenerations(ctx context.Context, agentKey, newTask string) (string, string, bool) {
+	return c.lookupTaskCacheAllGenerationsWithVerify(ctx, agentKey, newTask, "")
+}
+
+func (c *Coordinator) lookupTaskCacheAllGenerationsWithVerify(ctx context.Context, agentKey, newTask, verify string) (string, string, bool) {
 	c.taskResultCacheMu.RLock()
 	all := c.taskResultCache[agentKey]
 	c.taskResultCacheMu.RUnlock()
@@ -132,12 +145,9 @@ func (c *Coordinator) lookupTaskCacheAllGenerations(ctx context.Context, agentKe
 		return "", "", false
 	}
 
-	normalizedNew := strings.ToLower(strings.Join(strings.Fields(newTask), " "))
-
 	// Step 1: exact match across all generations
 	for _, e := range all {
-		norm := strings.ToLower(strings.Join(strings.Fields(e.taskDesc), " "))
-		if norm == normalizedNew {
+		if e.matches(newTask, verify) {
 			return e.output, e.taskDesc, true
 		}
 	}
@@ -153,7 +163,15 @@ func (c *Coordinator) lookupTaskCacheAllGenerations(ctx context.Context, agentKe
 	if len(all) > 100 {
 		startIdx = len(all) - 100
 	}
-	recentEntries := all[startIdx:]
+	recentEntries := make([]cachedTaskEntry, 0, len(all)-startIdx)
+	for _, e := range all[startIdx:] {
+		if normalizeTaskCacheKey(e.verify) == normalizeTaskCacheKey(verify) {
+			recentEntries = append(recentEntries, e)
+		}
+	}
+	if len(recentEntries) == 0 {
+		return "", "", false
+	}
 
 	pastDescs := make([]string, len(recentEntries))
 	for i, e := range recentEntries {
@@ -181,10 +199,15 @@ const maxTaskCacheEntries = 50
 // storeTaskCache saves a completed task result so future similar tasks within
 // the same coordinator round (same cacheGeneration) can skip re-execution.
 func (c *Coordinator) storeTaskCache(agentKey, taskDesc, output string) {
+	c.storeTaskCacheWithVerify(agentKey, taskDesc, "", output)
+}
+
+func (c *Coordinator) storeTaskCacheWithVerify(agentKey, taskDesc, verify, output string) {
 	gen := c.cacheGeneration.Load()
 	c.taskResultCacheMu.Lock()
 	c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
 		taskDesc:   taskDesc,
+		verify:     verify,
 		output:     output,
 		generation: gen,
 	})
@@ -193,7 +216,7 @@ func (c *Coordinator) storeTaskCache(agentKey, taskDesc, output string) {
 	}
 	c.taskResultCacheMu.Unlock()
 
-	c.journalAppend(journalRecord{Op: "put", Agent: agentKey, Desc: taskDesc, Output: output, TS: time.Now().Format(time.RFC3339), Round: c.round})
+	c.journalAppend(journalRecord{Op: "put", Agent: agentKey, Desc: taskDesc, Verify: verify, Output: output, TS: time.Now().Format(time.RFC3339), Round: c.round})
 }
 
 // invalidateTaskCache removes all cached results for the given agent whose
@@ -202,13 +225,17 @@ func (c *Coordinator) storeTaskCache(agentKey, taskDesc, output string) {
 // previously completed task — otherwise lookupTaskCache would serve the stale
 // output and the retry would be a no-op.
 func (c *Coordinator) invalidateTaskCache(agentKey, taskDesc string) {
-	normalized := strings.ToLower(strings.Join(strings.Fields(taskDesc), " "))
+	c.invalidateTaskCacheWithVerify(agentKey, taskDesc, "")
+}
+
+func (c *Coordinator) invalidateTaskCacheWithVerify(agentKey, taskDesc, verify string) {
+	normalized := normalizeTaskCacheKey(taskDesc)
+	normalizedVerify := normalizeTaskCacheKey(verify)
 	c.taskResultCacheMu.Lock()
 	entries := c.taskResultCache[agentKey]
 	fresh := entries[:0]
 	for _, e := range entries {
-		norm := strings.ToLower(strings.Join(strings.Fields(e.taskDesc), " "))
-		if norm != normalized {
+		if normalizeTaskCacheKey(e.taskDesc) != normalized || normalizeTaskCacheKey(e.verify) != normalizedVerify {
 			fresh = append(fresh, e)
 		}
 	}
@@ -216,10 +243,10 @@ func (c *Coordinator) invalidateTaskCache(agentKey, taskDesc string) {
 	c.taskResultCacheMu.Unlock()
 
 	// Tombstone so a restart cannot resurrect the invalidated result.
-	c.journalAppend(journalRecord{Op: "del", Agent: agentKey, Desc: taskDesc, TS: time.Now().Format(time.RFC3339)})
+	c.journalAppend(journalRecord{Op: "del", Agent: agentKey, Desc: taskDesc, Verify: verify, TS: time.Now().Format(time.RFC3339)})
 }
 
-func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, desc string) *duplicateTodoMatch {
+func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, desc, verify string) *duplicateTodoMatch {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return nil
 	}
@@ -228,7 +255,7 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 		return nil
 	}
 
-	normalizedNew := normalizeTaskDesc(desc)
+	normalizedNew := normalizeTaskCacheKey(desc + "\nverify:" + verify)
 	exactEligible := make([]*TodoItem, 0, len(items))
 	semanticEligible := make([]*TodoItem, 0, len(items))
 	for _, item := range items {
@@ -249,7 +276,7 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 	}
 
 	for _, item := range exactEligible {
-		if normalizeTaskDesc(item.Desc) == normalizedNew {
+		if normalizeTaskCacheKey(item.Desc+"\nverify:"+item.Verify) == normalizedNew {
 			return &duplicateTodoMatch{
 				Item:   item,
 				Reason: fmt.Sprintf("existing task %s already has status %s", item.ID, item.Status),
@@ -268,7 +295,7 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 
 	pastDescs := make([]string, len(semanticEligible))
 	for i, item := range semanticEligible {
-		pastDescs[i] = item.Desc
+		pastDescs[i] = item.Desc + "\nverify: " + item.Verify
 	}
 
 	sidecarCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -277,7 +304,7 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 	if c.think {
 		c.emitThinkSidecar("SimilarTask", fmt.Sprintf("checking todo similarity against active/failed tasks: %.50s", desc))
 	}
-	idx, err := s.SimilarTask(sidecarCtx, desc, pastDescs)
+	idx, err := s.SimilarTask(sidecarCtx, desc+"\nverify: "+verify, pastDescs)
 	if err != nil || idx < 0 || idx >= len(semanticEligible) {
 		return nil
 	}
@@ -358,7 +385,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 			desc += "\nconstraints: " + t.Constraints
 		}
 		agentKey := strings.ToLower(t.Agent)
-		if match := c.findExistingTodoDuplicate(ctx, agentKey, desc); match != nil {
+		if match := c.findExistingTodoDuplicate(ctx, agentKey, desc, t.Verify); match != nil {
 			duplicates[i] = true
 			suppressed[i] = match
 			warnings = append(warnings, fmt.Sprintf("SUPPRESSED DUPLICATE: %s (agent=%s, %s)", truncateTaskDesc(desc), t.Agent, match.Reason))
@@ -376,7 +403,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 		}
 		agentKey := strings.ToLower(t.Agent)
 		dupCtx, dupCancel := context.WithTimeout(ctx, 5*time.Second)
-		cachedOutput, cachedDesc, cacheOK := c.lookupTaskCacheAllGenerations(dupCtx, agentKey, desc)
+		cachedOutput, cachedDesc, cacheOK := c.lookupTaskCacheAllGenerationsWithVerify(dupCtx, agentKey, desc, t.Verify)
 		dupCancel()
 		if cacheOK {
 			warnings = append(warnings, fmt.Sprintf("SEMANTIC DUPLICATE: %s (similar to completed task: %q)", truncateTaskDesc(desc), truncateTaskDesc(cachedDesc)))

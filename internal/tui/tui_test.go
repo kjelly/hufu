@@ -102,3 +102,33 @@ func TestUpdate_Messages(t *testing.T) {
 		t.Errorf("expected status text 'Operation Successful', got %q", m3.(Model).statusText)
 	}
 }
+
+func TestUpdate_FinishedMsgConvertsStragglers(t *testing.T) {
+	m := New("prompt", TeamInfo{})
+	m.tasks = []*team.TodoItem{
+		{ID: "1", Status: team.TaskInProgress},
+		{ID: "2", Status: team.TaskVerifying},
+		{ID: "3", Status: team.TaskPaused},
+		{ID: "4", Status: team.TaskPending},
+	}
+	m.coordItem = &team.TodoItem{ID: team.CoordTodoID, Status: team.TaskVerifying}
+
+	updated, _ := m.Update(FinishedMsg{})
+	model := updated.(Model)
+
+	if model.tasks[0].Status != team.TaskDone {
+		t.Errorf("expected in-progress task to become done, got %s", model.tasks[0].Status)
+	}
+	if model.tasks[1].Status != team.TaskDone {
+		t.Errorf("expected verifying task to become done, got %s", model.tasks[1].Status)
+	}
+	if model.tasks[2].Status != team.TaskDone {
+		t.Errorf("expected paused task to become done, got %s", model.tasks[2].Status)
+	}
+	if model.tasks[3].Status != team.TaskSkipped {
+		t.Errorf("expected pending task to become skipped, got %s", model.tasks[3].Status)
+	}
+	if model.coordItem == nil || model.coordItem.Status != team.TaskDone {
+		t.Fatalf("expected coord item to become done, got %#v", model.coordItem)
+	}
+}

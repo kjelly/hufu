@@ -93,12 +93,51 @@ type TaskStatus string
 const (
 	TaskPending    TaskStatus = "pending"
 	TaskInProgress TaskStatus = "in_progress"
+	TaskVerifying  TaskStatus = "verifying"
 	TaskDone       TaskStatus = "done"
 	TaskError      TaskStatus = "error"
+	TaskBlocked    TaskStatus = "blocked"
 	TaskSkipped    TaskStatus = "skipped"
 	TaskPlanned    TaskStatus = "planned"
 	TaskPaused     TaskStatus = "paused"
 )
+
+// VerificationResult is the durable evidence produced by a task's objective
+// verification command. Output is intentionally bounded by the verifier.
+type VerificationResult struct {
+	Command  string
+	ExitCode int
+	Stdout   string
+	Stderr   string
+	Duration time.Duration
+	TimedOut bool
+}
+
+// CanTransition reports whether a normal lifecycle update may move a task
+// between the supplied states. DAG retries use ResetForRetry explicitly.
+func CanTransition(from, to TaskStatus) bool {
+	if from == to {
+		return true
+	}
+	switch from {
+	case TaskPending:
+		return to == TaskPlanned || to == TaskInProgress || to == TaskDone || to == TaskSkipped || to == TaskBlocked || to == TaskError
+	case TaskPlanned:
+		return to == TaskInProgress || to == TaskSkipped || to == TaskBlocked || to == TaskError
+	case TaskInProgress:
+		return to == TaskPlanned || to == TaskPaused || to == TaskVerifying || to == TaskDone || to == TaskBlocked || to == TaskError || to == TaskSkipped
+	case TaskVerifying:
+		return to == TaskDone || to == TaskBlocked || to == TaskError
+	case TaskPaused:
+		return to == TaskInProgress || to == TaskSkipped || to == TaskBlocked || to == TaskError
+	case TaskError, TaskBlocked:
+		return to == TaskInProgress
+	case TaskDone, TaskSkipped:
+		return false
+	default:
+		return false
+	}
+}
 
 const (
 	TaskSourceCoordinator = "coordinator"
@@ -139,9 +178,10 @@ type TodoItem struct {
 	ParentID       string
 	DependsOn      []string // IDs of tasks that must complete before this one starts
 	Verify         string   // Command to run to verify the task
-	MaxRetries     int      // Maximum number of retries for this task
-	Retries        int      // Current number of retries
-	OnFailure      string   // ID of the task to jump back to if this task fails (creates a loop)
+	VerifyResult   *VerificationResult
+	MaxRetries     int    // Maximum number of retries for this task
+	Retries        int    // Current number of retries
+	OnFailure      string // ID of the task to jump back to if this task fails (creates a loop)
 }
 
 type TodoList struct {
@@ -228,26 +268,25 @@ func (tl *TodoList) DeleteIDs(ids ...string) {
 }
 
 func (tl *TodoList) UpdateStatus(id string, status TaskStatus, detail string) {
-	tl.UpdateStatusAndOutput(id, status, detail, "")
+	_ = tl.TryUpdateStatusAndOutput(id, status, detail, "")
 }
 
 func (tl *TodoList) UpdateStatusAndOutput(id string, status TaskStatus, detail string, output string) {
+	_ = tl.TryUpdateStatusAndOutput(id, status, detail, output)
+}
+
+// TryUpdateStatusAndOutput applies a lifecycle transition and returns an error
+// for unknown tasks or illegal transitions. Callers that make correctness
+// decisions should use this method instead of the compatibility wrappers.
+func (tl *TodoList) TryUpdateStatusAndOutput(id string, status TaskStatus, detail string, output string) error {
 	tl.mu.Lock()
 	updated := false
+	var transitionErr error
 	for _, ti := range tl.items {
 		if ti.ID == id {
-			// TaskDone and TaskSkipped are terminal states.
-			// TaskError can transition to TaskInProgress for retries.
-			if ti.Status == TaskDone || ti.Status == TaskSkipped {
-				if status != ti.Status {
-					tl.mu.Unlock()
-					return
-				}
-			}
-			// TaskError can only transition to TaskInProgress (for retries)
-			if ti.Status == TaskError && status != TaskInProgress && status != TaskError {
-				tl.mu.Unlock()
-				return
+			if !CanTransition(ti.Status, status) {
+				transitionErr = fmt.Errorf("invalid task status transition %s -> %s for task %s", ti.Status, status, id)
+				break
 			}
 			ti.Status = status
 			if detail != "" {
@@ -261,7 +300,7 @@ func (tl *TodoList) UpdateStatusAndOutput(id string, status TaskStatus, detail s
 				if ti.StartedAt.IsZero() {
 					ti.StartedAt = time.Now()
 				}
-			case TaskDone, TaskError, TaskSkipped:
+			case TaskDone, TaskError, TaskBlocked, TaskSkipped:
 				if ti.EndedAt.IsZero() {
 					ti.EndedAt = time.Now()
 				}
@@ -276,6 +315,40 @@ func (tl *TodoList) UpdateStatusAndOutput(id string, status TaskStatus, detail s
 	if updated && onChange != nil {
 		onChange()
 	}
+	if transitionErr != nil {
+		return transitionErr
+	}
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	return nil
+}
+
+func (tl *TodoList) SetVerificationResult(id string, result *VerificationResult) error {
+	tl.mu.Lock()
+	updated := false
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			if result == nil {
+				ti.VerifyResult = nil
+				updated = true
+				break
+			}
+			copyResult := *result
+			ti.VerifyResult = &copyResult
+			updated = true
+			break
+		}
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
 }
 
 // ResetForRetry returns a task to TaskPending so it can run again as part of
@@ -290,8 +363,12 @@ func (tl *TodoList) ResetForRetry(id string, detail string) {
 		if ti.ID == id {
 			ti.Status = TaskPending
 			ti.Detail = detail
+			ti.Output = ""
+			ti.VerifyResult = nil
 			ti.StartedAt = time.Time{}
 			ti.EndedAt = time.Time{}
+			ti.ModelTime = 0
+			ti.ToolTime = 0
 			ti.Retries++
 			updated = true
 			break
@@ -346,6 +423,11 @@ func (tl *TodoList) Items() []*TodoItem {
 			dependsOn = make([]string, len(item.DependsOn))
 			copy(dependsOn, item.DependsOn)
 		}
+		var verifyResult *VerificationResult
+		if item.VerifyResult != nil {
+			copyResult := *item.VerifyResult
+			verifyResult = &copyResult
+		}
 		result[i] = &TodoItem{
 			ID:             item.ID,
 			Agent:          item.Agent,
@@ -365,6 +447,7 @@ func (tl *TodoList) Items() []*TodoItem {
 			ParentID:       item.ParentID,
 			DependsOn:      dependsOn,
 			Verify:         item.Verify,
+			VerifyResult:   verifyResult,
 			MaxRetries:     item.MaxRetries,
 			Retries:        item.Retries,
 			OnFailure:      item.OnFailure,
@@ -502,7 +585,7 @@ func (tl *TodoList) ErrorCount() int {
 	defer tl.mu.Unlock()
 	count := 0
 	for _, ti := range tl.items {
-		if ti.Status == TaskError {
+		if ti.Status == TaskError || ti.Status == TaskBlocked {
 			count++
 		}
 	}

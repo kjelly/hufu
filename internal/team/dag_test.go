@@ -91,15 +91,20 @@ func TestTodoListResetForRetry(t *testing.T) {
 		{name: "resets done task", fromStatus: TaskDone},
 		{name: "resets errored task", fromStatus: TaskError},
 		{name: "resets in-progress task", fromStatus: TaskInProgress},
+		{name: "resets verifying task", fromStatus: TaskVerifying},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tl := &TodoList{}
-			tl.AddBatch([]TodoSpec{{Agent: "a", Desc: "task"}})
+			tl.AddBatch([]TodoSpec{{Agent: "a", Desc: "task", Verify: "test -f out.txt"}})
 			tl.UpdateStatus("1", TaskInProgress, "")
 			if tc.fromStatus != TaskInProgress {
 				tl.UpdateStatus("1", tc.fromStatus, "finished")
+			}
+			if tc.fromStatus == TaskDone || tc.fromStatus == TaskError || tc.fromStatus == TaskVerifying {
+				tl.UpdateStatusAndOutput("1", tc.fromStatus, "finished", "artifact")
+				_ = tl.SetVerificationResult("1", &VerificationResult{Command: "test -f out.txt", ExitCode: 0})
 			}
 
 			tl.ResetForRetry("1", "reset by DAG retry")
@@ -116,6 +121,12 @@ func TestTodoListResetForRetry(t *testing.T) {
 			}
 			if item.Detail != "reset by DAG retry" {
 				t.Errorf("expected reset detail, got %q", item.Detail)
+			}
+			if item.Output != "" {
+				t.Errorf("expected output cleared, got %q", item.Output)
+			}
+			if item.VerifyResult != nil {
+				t.Errorf("expected verification result cleared, got %#v", item.VerifyResult)
 			}
 
 			// The re-run must be able to go Pending -> InProgress -> Done again.
