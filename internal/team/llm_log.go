@@ -26,13 +26,12 @@ func formatMessagePart(part fantasy.MessagePart) string {
 		}
 	case fantasy.ContentTypeToolResult:
 		if trp, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
-			var out string
-			if txt, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentText](trp.Output); ok {
-				out = txt.Text
+			out, isErr := toolResultOutputText(trp.Output)
+			attrs := " id=" + fmt.Sprintf("%q", trp.ToolCallID)
+			if isErr {
+				attrs += ` error="true"`
 			}
-			start := "<tool_result id=" + fmt.Sprintf("%q", trp.ToolCallID) + ">"
-			end := "</tool_result>"
-			return start + out + end
+			return "<tool_result" + attrs + ">" + out + "</tool_result>"
 		}
 	default:
 		return "<" + string(part.GetType()) + "/>"
@@ -71,10 +70,30 @@ func formatToolCallContent(tc fantasy.ToolCallContent) string {
 
 func formatToolResultContent(tr fantasy.ToolResultContent) string {
 	var out string
+	var isErr bool
 	if tr.Result != nil {
-		if txt, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentText](tr.Result); ok {
-			out = txt.Text
-		}
+		out, isErr = toolResultOutputText(tr.Result)
 	}
-	return "<tool_result name=" + fmt.Sprintf("%q", tr.ToolName) + " id=" + fmt.Sprintf("%q", tr.ToolCallID) + ">" + out + "</tool_result>"
+	attrs := " name=" + fmt.Sprintf("%q", tr.ToolName) + " id=" + fmt.Sprintf("%q", tr.ToolCallID)
+	if isErr {
+		attrs += ` error="true"`
+	}
+	return "<tool_result" + attrs + ">" + out + "</tool_result>"
+}
+
+// toolResultOutputText extracts the human-readable text of a tool result
+// output, covering both text and error outputs. Error outputs previously
+// rendered as empty strings in every log view (LLM request dump, stream
+// events, audit), hiding denial and failure messages from all diagnostics.
+func toolResultOutputText(output fantasy.ToolResultOutputContent) (string, bool) {
+	if txt, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentText](output); ok {
+		return txt.Text, false
+	}
+	if errOut, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](output); ok {
+		if errOut.Error != nil {
+			return errOut.Error.Error(), true
+		}
+		return "", true
+	}
+	return "", false
 }

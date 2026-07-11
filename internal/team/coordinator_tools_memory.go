@@ -203,7 +203,11 @@ func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	workspace := t.coordinator.session.Workspace
 	t.coordinator.ltmWriteMu.Lock()
 	existing := LoadLTM(workspace, t.coordinator.session.Config.Name)
-	newContent := TruncateLTM(appendLTMEntry(existing, entry, args.Section))
+	if hasLTREntry(ParseSTMSections(existing), args.Section, entry) {
+		t.coordinator.ltmWriteMu.Unlock()
+		return fantasy.NewTextResponse(fmt.Sprintf("Already recorded in long-term memory section %q; skipped duplicate", args.Section)), nil
+	}
+	newContent := TruncateLTM(PruneLTM(appendLTMEntry(existing, entry, args.Section)))
 	err := SaveLTM(workspace, t.coordinator.session.Config.Name, newContent)
 	t.coordinator.ltmWriteMu.Unlock()
 	if err != nil {

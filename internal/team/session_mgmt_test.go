@@ -269,6 +269,30 @@ func TestSessionDataAddEntry(t *testing.T) {
 	}
 }
 
+func TestSessionDataAddEntrySkipsEmptyAndDuplicates(t *testing.T) {
+	cases := []struct {
+		name    string
+		entries [][2]string // role, content pairs added in order
+		want    int         // expected recorded entry count
+	}{
+		{"empty content skipped", [][2]string{{"user", "  "}}, 0},
+		{"consecutive duplicate user skipped", [][2]string{{"user", "run it"}, {"user", "run it"}}, 1},
+		{"same content different role kept", [][2]string{{"user", "done"}, {"assistant", "done"}}, 2},
+		{"same content after reply kept", [][2]string{{"user", "again"}, {"assistant", "ok"}, {"user", "again"}}, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			session := NewSession()
+			for _, e := range tc.entries {
+				session.AddEntry(e[0], e[1])
+			}
+			if len(session.Entries) != tc.want {
+				t.Errorf("recorded %d entries, want %d", len(session.Entries), tc.want)
+			}
+		})
+	}
+}
+
 // TestSessionDataContextSummary tests the ContextSummary method
 func TestSessionDataContextSummary(t *testing.T) {
 	tests := []struct {

@@ -13,6 +13,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/anomalyco/hufu/internal/tools"
 	"github.com/anomalyco/hufu/internal/utils"
 )
 
@@ -213,16 +214,30 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 
 	agentDef, _, err := c.resolveAgentName(name)
 	if err != nil {
-		agentDef = &agent.AgentDef{
-			Name:        name,
-			Description: "Sub-agent for: " + task,
-			Role:        "worker",
-			Tools:       "",
-			MaxRetries:  -1,
-		}
+		// No silent fallback to a generic worker: a fabricated sub-agent runs
+		// with the caller's own permissions and cannot provide any capability
+		// the caller lacks, so the request would fail in a confusing way later.
+		return "", fmt.Errorf("cannot create sub-agent: %w", err)
 	}
 
 	agentDef = c.injectWorkerContext(ctx, agentDef)
+
+	// Give the sub-agent its own tool allowlist (team-level list plus its own
+	// declared tools), mirroring executeTask. Without this the sub-agent
+	// inherits the caller's allowlist, so tools its definition grants are
+	// denied at permission check while the caller's grants leak through.
+	allowedTools := make([]string, len(c.session.Config.ToolsAllowed))
+	copy(allowedTools, c.session.Config.ToolsAllowed)
+	if agentDef.Tools != "" {
+		for _, tl := range strings.Split(agentDef.Tools, ",") {
+			if tl = strings.TrimSpace(tl); tl != "" {
+				allowedTools = append(allowedTools, tl)
+			}
+		}
+	}
+	if len(allowedTools) > 0 {
+		ctx = context.WithValue(ctx, tools.AgentToolsAllowedKey, allowedTools)
+	}
 
 	subAgModelID := c.resolveAgentModel(agentDef, "")
 	ag, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(subAgModelID), agent.AgentConfig{
@@ -248,6 +263,9 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	output, _, err := c.runAgentWithStatusAndHistory(ctx, ag, name, prompt, nil, timing)
 	if err != nil {
 		return "", err
+	}
+	if strings.TrimSpace(output) == "" {
+		return "", fmt.Errorf("sub-agent %q finished without a final message; the requester received no result", name)
 	}
 	return output, nil
 }

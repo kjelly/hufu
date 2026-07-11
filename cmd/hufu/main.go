@@ -100,6 +100,9 @@ func (errInterrupted) Error() string { return "interrupted" }
 var version = "dev"
 
 func main() {
+	// Pin the interactivity decision before any prompt widget can take over
+	// stdin; a live per-call probe would flip tool permissions mid-session.
+	tools.CaptureInteractiveEnvironment()
 	exitCode := 0
 	rootCmd := &cobra.Command{
 		Use:   "hufu [prompt]",

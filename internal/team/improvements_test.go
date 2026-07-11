@@ -235,44 +235,31 @@ func TestPersistFailureWritesStructuredArtifacts(t *testing.T) {
 	}
 }
 
-func TestValidateTaskOutput_AllowsNormalTaskOutput(t *testing.T) {
+func TestValidateTaskOutput(t *testing.T) {
 	task := TaskDef{Goal: "Summarize the findings"}
-	if err := validateTaskOutput(task, "Summary complete.\n\nKey issue: guest agent was disconnected."); err != nil {
-		t.Fatalf("expected normal task output to pass validation, got %v", err)
-	}
-}
+	longReport := "Let me walk through each finding in detail.\n\n" + strings.Repeat("Finding: the guest agent was disconnected and had to be restarted before verification could proceed. ", 6) + "\nConclusion: PASS."
 
-func TestValidateTaskOutput_RejectsEmptyOutput(t *testing.T) {
-	task := TaskDef{Goal: "Summarize the findings"}
-	if err := validateTaskOutput(task, "   "); err == nil {
-		t.Fatal("expected empty output to fail validation")
+	cases := []struct {
+		name    string
+		output  string
+		wantErr bool
+	}{
+		{"normal output passes", "Summary complete.\n\nKey issue: guest agent was disconnected.", false},
+		{"empty output fails", "   ", true},
+		{"short unfinished progress update fails", "Let me try to query the VMs for their IPs using different methods:", true},
+		{"long report starting with 'let me' passes", longReport, false},
+		{"terse but complete output passes", "CANNOT VERIFY. The VMs do not exist.", false},
 	}
-}
-
-func TestValidateTaskOutput_RejectsUnfinishedProgressUpdate(t *testing.T) {
-	task := TaskDef{Goal: "Summarize the findings"}
-	if err := validateTaskOutput(task, "Let me try to query the VMs for their IPs using different methods:"); err == nil {
-		t.Fatal("expected unfinished progress update to fail validation")
-	}
-}
-
-func TestValidateTaskOutput_RejectsWeakVerificationOutput(t *testing.T) {
-	task := TaskDef{
-		Goal: "Execute ALL verification steps from docs/verification/test.md. For each step show actual output and mark PASS/FAIL.",
-	}
-	output := "CANNOT VERIFY. The VMs do not exist."
-	if err := validateTaskOutput(task, output); err == nil {
-		t.Fatal("expected weak verification output to fail validation")
-	}
-}
-
-func TestValidateTaskOutput_AllowsVerificationOutputWithEvidence(t *testing.T) {
-	task := TaskDef{
-		Goal: "Execute ALL verification steps from docs/verification/test.md. For each step show actual output and mark PASS/FAIL.",
-	}
-	output := "### 1. Command:\n```bash\nkvmforge list\n```\nActual Output:\n```\nrunning\n```\nPASS"
-	if err := validateTaskOutput(task, output); err != nil {
-		t.Fatalf("expected evidence-rich verification output to pass validation, got %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateTaskOutput(task, tc.output)
+			if tc.wantErr && err == nil {
+				t.Fatal("expected validation error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected output to pass validation, got %v", err)
+			}
+		})
 	}
 }
 

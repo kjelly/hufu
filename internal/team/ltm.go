@@ -37,9 +37,21 @@ var ltmSectionDefaults = map[string]string{
 	ltmSectionTools:        "Use this section to record commonly used tools, commands, and scripts.",
 }
 
+// ltmDatePrefixRe matches a leading "- [YYYY-MM-DD]" (bullet optional) so
+// entries re-ingested from STM or echoed back by the model don't accumulate
+// stacked date prefixes.
+var ltmDatePrefixRe = regexp.MustCompile(`^\s*(?:-\s*)?\[\d{4}-\d{2}-\d{2}\]\s*`)
+
 func formatLTMEntry(content string) string {
 	ts := time.Now().Format("2006-01-02")
-	shortContent := content
+	shortContent := strings.TrimSpace(content)
+	for {
+		stripped := ltmDatePrefixRe.ReplaceAllString(shortContent, "")
+		if stripped == shortContent {
+			break
+		}
+		shortContent = stripped
+	}
 	if len([]rune(shortContent)) > 200 {
 		shortContent = string([]rune(shortContent)[:200]) + "..."
 	}
@@ -86,8 +98,14 @@ func deduplicateLTREntries(entries []string) []string {
 
 func normalizeLTREntry(entry string) string {
 	s := strings.TrimSpace(entry)
-	if idx := strings.Index(s, "] "); idx >= 0 {
-		s = s[idx+2:]
+	// Strip every stacked "[date] " prefix, not just the first, so entries
+	// that accumulated double prefixes still collapse to the same key.
+	for {
+		stripped := ltmDatePrefixRe.ReplaceAllString(s, "")
+		if stripped == s {
+			break
+		}
+		s = stripped
 	}
 	s = strings.ToLower(s)
 	s = strings.Map(func(r rune) rune {
@@ -142,7 +160,12 @@ func TruncateLTM(content string) string {
 	if len(runes) <= maxLTMChars {
 		return content
 	}
-	return string(runes[len(runes)-maxLTMChars:])
+	tail := string(runes[len(runes)-maxLTMChars:])
+	// Drop the partial first line so truncation never leaves a torn entry.
+	if idx := strings.IndexByte(tail, '\n'); idx >= 0 && idx < len(tail)-1 {
+		tail = tail[idx+1:]
+	}
+	return tail
 }
 
 // extractLTMFromContent merges knowledge from one STM snapshot (stmContent)

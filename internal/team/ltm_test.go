@@ -3,6 +3,7 @@ package team
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -107,6 +108,56 @@ func TestFormatLTMEntry(t *testing.T) {
 	}
 	if !stringContains(got, "bcrypt") {
 		t.Errorf("formatLTMEntry missing content: %s", got)
+	}
+}
+
+func TestFormatLTMEntry_StripsExistingDatePrefixes(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"single existing prefix", "[2026-07-11] netplan 已修正", "netplan 已修正"},
+		{"stacked prefixes", "[2026-07-11] [2026-07-11] virt-install 需要 bridge.conf", "virt-install 需要 bridge.conf"},
+		{"bulleted prefix", "- [2026-07-11] OVS bridge L2 連通正常", "OVS bridge L2 連通正常"},
+		{"date mid-content untouched", "deployed on [2026-07-11] to prod", "deployed on [2026-07-11] to prod"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatLTMEntry(tc.input)
+			// Exactly one "- [date] " prefix followed by the cleaned content.
+			if !ltmDatePrefixRe.MatchString(got) {
+				t.Fatalf("missing date prefix: %q", got)
+			}
+			rest := ltmDatePrefixRe.ReplaceAllString(got, "")
+			if rest != tc.want {
+				t.Errorf("content = %q, want %q", rest, tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeLTREntry_CollapsesStackedDatePrefixes(t *testing.T) {
+	a := normalizeLTREntry("- [2026-07-10] [2026-07-11] bash tool blocked")
+	b := normalizeLTREntry("- [2026-07-12] bash tool blocked")
+	if a != b {
+		t.Errorf("stacked-date entry should normalize equal: %q vs %q", a, b)
+	}
+}
+
+func TestTruncateLTMDropsPartialFirstLine(t *testing.T) {
+	head := "- " + strings.Repeat("x", 500) + "\n"
+	var lines []string
+	for range maxLTMChars / 20 {
+		lines = append(lines, "- entry line padding out the file")
+	}
+	content := head + strings.Join(lines, "\n")
+	got := TruncateLTM(content)
+	if len([]rune(got)) > maxLTMChars {
+		t.Fatalf("length %d exceeds cap %d", len([]rune(got)), maxLTMChars)
+	}
+	if !strings.HasPrefix(got, "- ") {
+		t.Errorf("truncated content starts mid-line: %q", got[:min(40, len(got))])
 	}
 }
 

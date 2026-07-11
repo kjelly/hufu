@@ -247,7 +247,20 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("command '%s' is not allowed", args.Command)), nil
 	}
 	if bashPrivEscRe.MatchString(args.Command) {
-		return fantasy.NewTextErrorResponse("sudo and ssh are not available in the bash tool — use the sudo or ssh tool instead"), nil
+		msg := "sudo and ssh are not available in the bash tool"
+		var alts []string
+		if ok, _, _ := CheckToolPermission(ctx, "sudo"); ok {
+			alts = append(alts, "sudo")
+		}
+		if ok, _, _ := CheckToolPermission(ctx, "ssh"); ok {
+			alts = append(alts, "ssh")
+		}
+		if len(alts) > 0 {
+			msg += " — use the " + strings.Join(alts, " or ") + " tool instead"
+		} else {
+			msg += ", and no sudo/ssh tool is enabled for this agent. Do not retry with sudo; report the exact command for the user to run manually, or ask the user to add 'sudo' to the agent's tools in team.yaml"
+		}
+		return fantasy.NewTextErrorResponse(msg), nil
 	}
 
 	if err := checkBashPathConsent(ctx, args.Command, effCfg); err != nil {

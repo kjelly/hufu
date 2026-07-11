@@ -134,9 +134,29 @@ func IsAutoApprove(ctx context.Context) bool {
 	return v
 }
 
+var interactiveEnvPinned atomic.Value // bool, set once at startup
+
+// CaptureInteractiveEnvironment pins the interactivity decision for the rest
+// of the process. Call it once at startup: stdin can stop looking like a
+// terminal mid-run (TUI widgets or prompts taking over the fd), and a
+// per-call check would silently flip every permission decision from allow to
+// deny partway through a session.
+func CaptureInteractiveEnvironment() {
+	interactiveEnvPinned.Store(detectInteractiveEnvironment())
+}
+
 // IsInteractiveEnvironment reports whether stdin is a terminal and the process
-// is not running in a known CI environment.
+// is not running in a known CI environment. Uses the value pinned by
+// CaptureInteractiveEnvironment when available and probes live otherwise
+// (tests swap os.Stdin and rely on the live probe).
 func IsInteractiveEnvironment() bool {
+	if v, ok := interactiveEnvPinned.Load().(bool); ok {
+		return v
+	}
+	return detectInteractiveEnvironment()
+}
+
+func detectInteractiveEnvironment() bool {
 	for _, v := range CIEnvVars {
 		if os.Getenv(v) != "" {
 			return false
@@ -227,15 +247,23 @@ func GetToolLevel(toolName string) string {
 // CheckToolPermission checks if a tool is allowed to be used.
 // Returns (allowed, askUser, error)
 func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, error) {
+	allowed, askUser, _, err := CheckToolPermissionDetail(ctx, toolName)
+	return allowed, askUser, err
+}
+
+// CheckToolPermissionDetail is CheckToolPermission with a denial reason.
+// The reason distinguishes the deny branches, which otherwise all surface to
+// the agent as the same generic message and make denials undiagnosable.
+func CheckToolPermissionDetail(ctx context.Context, toolName string) (bool, bool, string, error) {
 	// Special case: ask_user is always allowed (used for clarification)
 	if toolName == "ask_user" {
-		return true, false, nil
+		return true, false, "", nil
 	}
 
 	// 0. ForceMCP mode: deny blocked tools immediately (defense in depth)
 	if fm, ok := ctx.Value(AgentForceMCPKey).(bool); ok && fm {
 		if ForceMCPBlockedTools[toolName] {
-			return false, false, fmt.Errorf("tool '%s' is blocked by --force-mcp. Use an MCP server instead", toolName)
+			return false, false, "", fmt.Errorf("tool '%s' is blocked by --force-mcp. Use an MCP server instead", toolName)
 		}
 	}
 
@@ -244,16 +272,16 @@ func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, erro
 	// trusted to run without a human, so fall through to the allowlist check
 	// (step 3) instead of blanket-denying — otherwise no tool could ever run.
 	if !IsUnattended(ctx) && !IsInteractiveEnvironment() {
-		return false, false, nil
+		return false, false, "non-interactive environment: stdin is not a terminal and unattended mode is off", nil
 	}
 
 	// 2. Check permanent session-level permissions first
 	if sessionPerms, ok := ctx.Value(AgentToolsSessionPermissionsKey).(map[string]bool); ok {
 		if allowed, decided := sessionPerms[toolName]; decided {
 			if allowed {
-				return true, false, nil
+				return true, false, "", nil
 			}
-			return false, false, nil
+			return false, false, "denied earlier in this session (permanent session-level permission)", nil
 		}
 	}
 
@@ -261,7 +289,7 @@ func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, erro
 	val := ctx.Value(AgentToolsAllowedKey)
 	if val == nil {
 		// Not configured: deny all tools except ask_user
-		return false, false, nil
+		return false, false, "no tools allowlist is configured for this agent", nil
 	}
 
 	allowed, _ := val.([]string)
@@ -272,11 +300,11 @@ func CheckToolPermission(ctx context.Context, toolName string) (bool, bool, erro
 
 	// Check if tool is in allowlist
 	if !allowedMap[toolName] {
-		return false, false, nil
+		return false, false, "not in the tools allowlist for this agent", nil
 	}
 
 	// Tool is in allowlist - allow it
-	return true, false, nil
+	return true, false, "", nil
 }
 
 // formatDenialError builds the error string returned to the LLM when the
@@ -504,7 +532,7 @@ func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 	}
 
 	// Check tool permission (after hooks, so hooks can influence tool name/args)
-	allowed, askUser, err := CheckToolPermission(ctx, t.info.Name)
+	allowed, askUser, denyReason, err := CheckToolPermissionDetail(ctx, t.info.Name)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("tool permission check failed: %v", err)), nil
 	}
@@ -568,7 +596,11 @@ func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 				return fantasy.NewTextErrorResponse(formatDenialError(t.info.Name, reason)), nil
 			}
 		} else {
-			return fantasy.NewTextErrorResponse(fmt.Sprintf("tool '%s' is not permitted. Add '%s' to tools.allowed in team.yaml to enable.", t.info.Name, t.info.Name)), nil
+			msg := fmt.Sprintf("tool '%s' is not permitted (%s).", t.info.Name, denyReason)
+			if strings.Contains(denyReason, "allowlist") {
+				msg += fmt.Sprintf(" Add '%s' to tools.allowed in team.yaml to enable.", t.info.Name)
+			}
+			return fantasy.NewTextErrorResponse(msg), nil
 		}
 	}
 

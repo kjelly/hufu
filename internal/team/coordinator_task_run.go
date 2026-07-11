@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/fantasy"
@@ -518,8 +519,13 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	// Pick up the TodoItem ID injected by executeTask so events can be attributed to a task.
 	todoID, _ := ctx.Value(todoIDKey{}).(string)
 
+	var loopDetectMu sync.Mutex
 	var lastToolCall *lastToolCallEntry
 	consecutiveErrCount := 0
+	// Maps in-flight tool call IDs to their input so error counting can match
+	// on tool+input; counting by tool name alone lets one failure of input A
+	// plus one failure of input B trip the detector on a first repeat of B.
+	pendingToolInputs := make(map[string]string)
 	tp := &ThinkParser{}
 
 	streamCall := fantasy.AgentStreamCall{
@@ -551,8 +557,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			c.SetCurrentTool(tc.ToolName)
 
 			// 🔁 Deadloop / thrashing detection!
+			loopDetectMu.Lock()
+			pendingToolInputs[tc.ToolCallID] = tc.Input
 			if lastToolCall != nil && lastToolCall.toolName == tc.ToolName && lastToolCall.input == tc.Input {
 				if consecutiveErrCount >= 2 {
+					loopDetectMu.Unlock()
 					return fmt.Errorf("agent %s is stuck in a loop executing the same failing command: %s (args: %s)", agentName, tc.ToolName, argsPreview)
 				}
 			} else {
@@ -562,6 +571,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				}
 				consecutiveErrCount = 0
 			}
+			loopDetectMu.Unlock()
 
 			// Record tool call for skill pattern detection
 			if c.skillDetector != nil {
@@ -584,9 +594,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			timing.endTool()
 			resultPreview := ""
 			if tr.Result != nil {
-				if txt, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentText](tr.Result); ok {
-					resultPreview = txt.Text
-				}
+				resultPreview, _ = toolResultOutputText(tr.Result)
 			}
 			resolvedModel, _ := ctx.Value(modelKey{}).(string)
 			reportFn(c.newEvent("tool_result").withAgent(agentName).withTodoID(todoID).withToolResult(tr.ToolName, resultPreview).withModel(resolvedModel))
@@ -594,14 +602,20 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			_, isErrResult := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Result)
 			audit.LogToolResult(agentName, tr.ToolName, resultPreview, isErrResult)
 
-			// 🔁 Track error count
-			if lastToolCall != nil && lastToolCall.toolName == tr.ToolName {
+			// 🔁 Track error count for the exact call (tool + input) the
+			// detector is watching; results of other in-flight calls of the
+			// same tool must not inflate the counter.
+			loopDetectMu.Lock()
+			callInput, tracked := pendingToolInputs[tr.ToolCallID]
+			delete(pendingToolInputs, tr.ToolCallID)
+			if tracked && lastToolCall != nil && lastToolCall.toolName == tr.ToolName && lastToolCall.input == callInput {
 				if isErrResult {
 					consecutiveErrCount++
 				} else {
 					consecutiveErrCount = 0
 				}
 			}
+			loopDetectMu.Unlock()
 
 			c.saveCheckpoint()
 			return nil
@@ -781,6 +795,10 @@ func sameFailure(a, b string) bool {
 func localFailureHint(lastErr string) string {
 	e := strings.ToLower(lastErr)
 	switch {
+	case strings.Contains(e, "returned empty output"):
+		return "Your previous attempt ended without a final message. Commands that succeed with no stdout are still results — end with a short summary of what was run and what happened, quoting exit codes or '(no output)' where relevant."
+	case strings.Contains(e, "unfinished progress update"):
+		return "Your previous attempt ended mid-narration ('let me...', 'I'll...'). Finish the work first, then end with the final result, not a description of what you are about to do."
 	case strings.Contains(e, "deliverable verification failed"):
 		return "Your previous attempt reported success but the verification check failed — the expected deliverable was missing or invalid. Actually produce the artifact (create/modify the file, make it pass the check) before calling finish; do not claim completion prematurely."
 	case strings.Contains(e, "deadline exceeded") || strings.Contains(e, "timed out") || strings.Contains(e, "context deadline"):

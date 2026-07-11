@@ -219,6 +219,54 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	return c.runAgentWithStatusAndHistory(orchCtx, orch, orchDef.Name, prompt, historySnapshot, &taskTiming{})
 }
 
+// attemptWrapUpRecovery converts a mid-run coordinator failure into a final
+// summary when wrap-up was already pending (max rounds or budget exceeded).
+// The limits only ask the model to call finish via a tool error; a model that
+// keeps delegating instead gets aborted, which previously turned a budget
+// limit into a hard run failure with no output. This backstop runs one
+// constrained summary turn, and if even that fails, assembles a deterministic
+// summary from completed task outputs so the run never ends empty-handed.
+func (c *Coordinator) attemptWrapUpRecovery(ctx context.Context, orchDef *agent.AgentDef, runErr error) (string, []fantasy.StepResult, bool) {
+	if !c.IsWrapUp() || ctx.Err() != nil {
+		return "", nil, false
+	}
+	c.report(c.newEvent("wrap_up_phase").withMessage(fmt.Sprintf("coordinator stopped before finishing (%v); forcing a final summary turn", runErr)).withTodoID(CoordTodoID))
+	result, steps, err := c.runOrchestrator(ctx, orchDef, wrapUpPromptTemplate)
+	if err == nil && strings.TrimSpace(result) != "" {
+		return strings.TrimPrefix(result, "FINISHED:"), steps, true
+	}
+	summary := c.summaryFromTodos(runErr)
+	if summary == "" {
+		return "", nil, false
+	}
+	return summary, nil, true
+}
+
+// summaryFromTodos builds an LLM-free run summary from the todo list. Used as
+// the last-resort wrap-up when the coordinator model cannot produce one.
+func (c *Coordinator) summaryFromTodos(runErr error) string {
+	items := c.taskTracker.TodoList().Items()
+	if len(items) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "The run stopped early (%v). Results of completed tasks:\n", runErr)
+	done := 0
+	for _, item := range items {
+		switch item.Status {
+		case TaskDone:
+			done++
+			fmt.Fprintf(&b, "\n### %s: %s\n%s\n", item.Agent, item.Desc, utils.TruncateRunes(item.Output, summaryMaxRunes))
+		case TaskError:
+			fmt.Fprintf(&b, "\n### %s: %s\nFAILED: %s\n", item.Agent, item.Desc, item.Detail)
+		}
+	}
+	if done == 0 {
+		return ""
+	}
+	return b.String()
+}
+
 func (c *Coordinator) finalizeRemainingTasks() {
 	items := c.taskTracker.TodoList().Items()
 	changed := false
@@ -428,11 +476,16 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	result, steps, err := c.runOrchestrator(ctx, &orchDefCopy, userPrompt)
 	if err != nil {
-		c.finalizeRemainingTasks()
-		c.saveHistoryAndSession(ctx, steps)
-		orchModel := c.resolveAgentModel(orchDef, "")
-		c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator failed").withTodoID(CoordTodoID))
-		return "", fmt.Errorf("coordinator failed (model: %s): %w", orchModel, err)
+		if recovered, recoveredSteps, ok := c.attemptWrapUpRecovery(ctx, &orchDefCopy, err); ok {
+			result = recovered
+			steps = append(steps, recoveredSteps...)
+		} else {
+			c.finalizeRemainingTasks()
+			c.saveHistoryAndSession(ctx, steps)
+			orchModel := c.resolveAgentModel(orchDef, "")
+			c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator failed").withTodoID(CoordTodoID))
+			return "", fmt.Errorf("coordinator failed (model: %s): %w", orchModel, err)
+		}
 	}
 
 	c.saveHistoryAndSession(ctx, steps)
@@ -452,6 +505,10 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 }
 
 func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt string) (string, error) {
+	// Capture before resetRoundState clears the flag, or the wrap-up branch
+	// below can never trigger and wrap-up requests silently degrade into an
+	// ordinary (empty-prompt) continuation turn.
+	wasWrapUp := c.IsWrapUp()
 	c.resetRoundState()
 
 	orchDef := c.GetOrchestratorDef()
@@ -462,7 +519,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	memorySuffix := c.buildMemorySuffix("coordinator")
 
 	var continuationPrompt string
-	if c.IsWrapUp() {
+	if wasWrapUp {
 		continuationPrompt = wrapUpPromptTemplate + "\n\n" + memorySuffix
 		additionalPrompt = "wrap up now"
 		c.report(c.newEvent("wrap_up_phase").withMessage("coordinator summarizing").withTodoID(CoordTodoID))
@@ -483,11 +540,16 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 
 	result, steps, err := c.runOrchestrator(ctx, &orchDefCopy, continuationPrompt)
 	if err != nil {
-		c.finalizeRemainingTasks()
-		c.saveHistoryAndSession(ctx, steps)
-		orchModel := c.resolveAgentModel(orchDef, "")
-		c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator continuation failed").withTodoID(CoordTodoID))
-		return "", fmt.Errorf("coordinator continuation failed (model: %s): %w", orchModel, err)
+		if recovered, recoveredSteps, ok := c.attemptWrapUpRecovery(ctx, &orchDefCopy, err); ok {
+			result = recovered
+			steps = append(steps, recoveredSteps...)
+		} else {
+			c.finalizeRemainingTasks()
+			c.saveHistoryAndSession(ctx, steps)
+			orchModel := c.resolveAgentModel(orchDef, "")
+			c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator continuation failed").withTodoID(CoordTodoID))
+			return "", fmt.Errorf("coordinator continuation failed (model: %s): %w", orchModel, err)
+		}
 	}
 
 	c.saveHistoryAndSession(ctx, steps)

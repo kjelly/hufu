@@ -75,6 +75,16 @@ func NewSession() *SessionData {
 }
 
 func (s *SessionData) AddEntry(role, content string) {
+	// Skip empty entries (e.g. a wrap-up continuation with no prompt) and
+	// exact repeats of the previous entry: a failed turn leaves a dangling
+	// user entry with no assistant reply, so redispatching the same prompt
+	// would otherwise record the user message twice in chat history.
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+	if n := len(s.Entries); n > 0 && s.Entries[n-1].Role == role && s.Entries[n-1].Content == content {
+		return
+	}
 	s.Entries = append(s.Entries, SessionEntry{
 		Role:      role,
 		Content:   content,
