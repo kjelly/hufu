@@ -57,6 +57,7 @@ type teamConfigYAML struct {
 	MaxSteps          int                              `yaml:"max-steps"`
 	Workspace         string                           `yaml:"workspace"`
 	Timeout           int64                            `yaml:"timeout"`
+	VerifyTimeout     int64                            `yaml:"verify-timeout"`
 	MaxRetries        int                              `yaml:"max-retries"`
 	Model             string                           `yaml:"model"`
 	Temperature       string                           `yaml:"temperature"`
@@ -397,10 +398,11 @@ func ExtractCapabilitiesFromSystem(system string) string {
 
 func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, error) {
 	cfg := agent.TeamConfig{
-		MaxRounds:    10,
-		WorkspaceDir: "workspace",
-		Timeout:      600,
-		MaxRetries:   2,
+		MaxRounds:     10,
+		WorkspaceDir:  "workspace",
+		Timeout:       600,
+		VerifyTimeout: 120,
+		MaxRetries:    2,
 	}
 
 	var data []byte
@@ -447,6 +449,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.Timeout > 0 {
 		cfg.Timeout = yc.Timeout
+	}
+	if yc.VerifyTimeout > 0 {
+		cfg.VerifyTimeout = yc.VerifyTimeout
 	}
 	if yc.MaxRetries >= 0 {
 		cfg.MaxRetries = yc.MaxRetries

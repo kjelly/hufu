@@ -76,6 +76,7 @@ var (
 	judgeModelOverride        string
 	planReviewerModelOverride string
 	timeoutOverride           int64
+	verifyTimeoutOverride     int64
 	maxRoundsOverride         int
 	maxConcurrentOverride     int
 	maxStepsOverride          int
@@ -183,6 +184,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringVar(&judgeModelOverride, "judge-model", "", "Override judge model used to pick the best multi-model result (e.g. ollama/qwen3:8b); falls back to the sidecar model when not set")
 	rootCmd.Flags().StringVar(&planReviewerModelOverride, "plan-reviewer-model", "", "Override plan reviewer model used for plan review (e.g. ollama/qwen3:8b); falls back to --model when not set")
 	rootCmd.Flags().Int64Var(&timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds (e.g. 1800 for 30 min). 0 = use team/agent default.")
+	rootCmd.Flags().Int64Var(&verifyTimeoutOverride, "verify-timeout", 0, "Override deliverable verification timeout in seconds (e.g. 120). 0 = use team default.")
 	rootCmd.Flags().IntVar(&maxRoundsOverride, "max-rounds", 0, "Override team.yaml max-rounds (coordinator round limit). 0 = use team default.")
 	rootCmd.Flags().IntVar(&maxConcurrentOverride, "max-concurrent", 0, "Override team.yaml max-concurrent (parallel worker dispatch). 0 = use team default.")
 	rootCmd.Flags().IntVar(&maxStepsOverride, "max-steps", 0, "Override team.yaml max-steps (per-agent step budget). 0 = use team/agent default.")
@@ -582,6 +584,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	// Apply CLI model overrides as the highest-priority model config layer.
 	applyCLIModelOverrides(&session.Config, currentModelOverrides())
 	applyCLITimeoutOverrides(session, currentTimeoutOverrides())
+	applyCLIVerifyTimeoutOverrides(session, currentVerifyTimeoutOverrides())
 	applyCLITuningOverrides(session, currentTuningOverrides())
 	propagateTeamGenerationToAgents(session)
 

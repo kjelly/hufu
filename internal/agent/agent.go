@@ -96,6 +96,7 @@ type TeamConfig struct {
 	MaxSteps          int
 	WorkspaceDir      string
 	Timeout           int64
+	VerifyTimeout     int64
 	MaxRetries        int
 	Generation        GenerationParams
 	Skills            string

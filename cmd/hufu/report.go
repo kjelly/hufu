@@ -66,6 +66,30 @@ type SkillPatternReport struct {
 	Saved bool
 }
 
+func formatVerificationSummary(item *team.TodoItem) string {
+	if item == nil {
+		return ""
+	}
+	cmd := strings.TrimSpace(item.Verify)
+	if item.VerifyResult == nil {
+		if cmd == "" {
+			return ""
+		}
+		return "pending: " + limitStr(cmd, 120)
+	}
+	if cmd == "" {
+		cmd = item.VerifyResult.Command
+	}
+	status := "ok"
+	if item.VerifyResult.ExitCode != 0 {
+		status = fmt.Sprintf("exit %d", item.VerifyResult.ExitCode)
+	}
+	if item.VerifyResult.TimedOut {
+		status += ", timed out"
+	}
+	return fmt.Sprintf("%s: %s (%s)", status, limitStr(cmd, 120), item.VerifyResult.Duration.Round(time.Millisecond))
+}
+
 func gatherReportData(tc *teamContext, teamName string) *reportData {
 	d := &reportData{
 		TaskHistory: make(map[string]string),
@@ -172,8 +196,8 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 
 	if len(data.Todos) > 0 {
 		b.WriteString("## Task Summary\n\n")
-		b.WriteString("| ID | Status | Agent | Description | Detail | Duration |\n")
-		b.WriteString("|----|--------|-------|-------------|--------|----------|\n")
+		b.WriteString("| ID | Status | Agent | Description | Detail | Verify | Duration |\n")
+		b.WriteString("|----|--------|-------|-------------|--------|--------|----------|\n")
 		for _, t := range data.Todos {
 			statusIcon := taskStatusIcons[t.Status]
 			if statusIcon == "" {
@@ -183,12 +207,47 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 			if t.Detail != "" && (t.Status == team.TaskError || t.Status == team.TaskBlocked) {
 				detail = t.Detail
 			}
+			verify := formatVerificationSummary(t)
 			var dur string
 			if !t.EndedAt.IsZero() && !t.StartedAt.IsZero() {
 				dur = t.EndedAt.Sub(t.StartedAt).Round(time.Second).String()
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n",
-				t.ID, statusIcon, t.Agent, t.Desc, detail, dur)
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s |\n",
+				t.ID, statusIcon, t.Agent, t.Desc, detail, verify, dur)
+		}
+		b.WriteString("\n---\n\n")
+	}
+
+	hasVerificationEvidence := false
+	for _, t := range data.Todos {
+		if t != nil && t.VerifyResult != nil {
+			hasVerificationEvidence = true
+			break
+		}
+	}
+	if hasVerificationEvidence {
+		b.WriteString("## Verification Evidence\n\n")
+		for _, t := range data.Todos {
+			if t == nil || t.VerifyResult == nil {
+				continue
+			}
+			fmt.Fprintf(&b, "### Task %s: %s\n\n", t.ID, t.Desc)
+			fmt.Fprintf(&b, "- Command: `%s`\n", limitStr(strings.TrimSpace(t.VerifyResult.Command), 200))
+			fmt.Fprintf(&b, "- Exit code: %d\n", t.VerifyResult.ExitCode)
+			fmt.Fprintf(&b, "- Duration: %s\n", t.VerifyResult.Duration.Round(time.Millisecond))
+			fmt.Fprintf(&b, "- Timed out: %t\n\n", t.VerifyResult.TimedOut)
+			if stdout := strings.TrimSpace(t.VerifyResult.Stdout); stdout != "" {
+				b.WriteString("#### Stdout\n\n")
+				b.WriteString("```text\n")
+				b.WriteString(stdout)
+				b.WriteString("\n```\n\n")
+			}
+			if stderr := strings.TrimSpace(t.VerifyResult.Stderr); stderr != "" {
+				b.WriteString("#### Stderr\n\n")
+				b.WriteString("```text\n")
+				b.WriteString(stderr)
+				b.WriteString("\n```\n\n")
+			}
 		}
 		b.WriteString("\n---\n\n")
 	}

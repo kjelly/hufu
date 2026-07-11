@@ -26,11 +26,12 @@ import (
 // Pass "" to keep Helper's default toolset.
 func LoadDefaultTeam(workspace string, forcedSkills []string, helperTools string) (*TeamSession, error) {
 	cfg := agent.TeamConfig{
-		Name:         "default",
-		MaxRounds:    10,
-		WorkspaceDir: workspace,
-		Timeout:      600,
-		MaxRetries:   2,
+		Name:          "default",
+		MaxRounds:     10,
+		WorkspaceDir:  workspace,
+		Timeout:       600,
+		VerifyTimeout: 120,
+		MaxRetries:    2,
 	}
 	cfg.Vars = map[string]interface{}{
 		"TEAM_NAME":   "default",

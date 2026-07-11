@@ -106,6 +106,23 @@ func TestMaxStepsParsing(t *testing.T) {
 	}
 }
 
+func TestVerifyTimeoutParsing(t *testing.T) {
+	tmpDir := t.TempDir()
+	teamPath := filepath.Join(tmpDir, "team.yml")
+	yamlContent := "name: test-team\nverify-timeout: 45\nmodel: test-model\n"
+	if err := os.WriteFile(teamPath, []byte(yamlContent), 0o644); err != nil {
+		t.Fatalf("Failed to write test team file: %v", err)
+	}
+
+	cfg, err := parseTeamYML(tmpDir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML returned error: %v", err)
+	}
+	if cfg.VerifyTimeout != 45 {
+		t.Fatalf("parseTeamYML VerifyTimeout = %d, want 45", cfg.VerifyTimeout)
+	}
+}
+
 func TestParseAgentGuardRules(t *testing.T) {
 	tests := []struct {
 		name        string

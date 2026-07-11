@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 
@@ -71,6 +72,20 @@ func TestVerifyTaskDeliverable_FailureIncludesOutput(t *testing.T) {
 	}
 	if result == nil || result.ExitCode != 3 || result.Stderr != "boom" {
 		t.Fatalf("unexpected verification evidence: %#v", result)
+	}
+}
+
+func TestVerifyTaskTimeout_UsesDedicatedVerifyTimeout(t *testing.T) {
+	c := newVerifyCoordinator(t, t.TempDir())
+	c.session.Config.VerifyTimeout = 1
+
+	if got := c.verifyTaskTimeout(); got != time.Second {
+		t.Fatalf("verifyTaskTimeout() = %s, want 1s", got)
+	}
+
+	c.session.Config.VerifyTimeout = 0
+	if got := c.verifyTaskTimeout(); got != 120*time.Second {
+		t.Fatalf("verifyTaskTimeout() = %s, want default 120s", got)
 	}
 }
 

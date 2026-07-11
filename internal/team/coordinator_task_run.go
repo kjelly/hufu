@@ -783,10 +783,7 @@ func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef 
 		shell = c.session.Config.Shell
 	}
 
-	timeout := time.Duration(c.session.Config.Timeout) * time.Second
-	if timeout <= 0 || timeout > 120*time.Second {
-		timeout = 120 * time.Second
-	}
+	timeout := c.verifyTaskTimeout()
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
@@ -823,6 +820,17 @@ func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef 
 		return result, fmt.Errorf("%v%s", err, detail)
 	}
 	return result, nil
+}
+
+func (c *Coordinator) verifyTaskTimeout() time.Duration {
+	if c == nil || c.session == nil {
+		return 120 * time.Second
+	}
+	timeout := time.Duration(c.session.Config.VerifyTimeout) * time.Second
+	if timeout <= 0 {
+		return 120 * time.Second
+	}
+	return timeout
 }
 
 func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, lastErr string) string {
