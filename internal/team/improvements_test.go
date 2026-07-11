@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,6 +101,178 @@ func TestLocalFailureHint(t *testing.T) {
 		if !strings.Contains(got, tt.contains) {
 			t.Errorf("localFailureHint(%q) = %q, want substring %q", tt.in, got, tt.contains)
 		}
+	}
+}
+
+func TestIsTaskTimeout(t *testing.T) {
+	if isTaskTimeout(nil) {
+		t.Fatal("nil error must not be treated as a timeout")
+	}
+	if !isTaskTimeout(context.DeadlineExceeded) {
+		t.Fatal("context deadline exceeded must be treated as a timeout")
+	}
+	if !isTaskTimeout(fmt.Errorf("attempt 1 failed: %w", context.DeadlineExceeded)) {
+		t.Fatal("wrapped deadline exceeded must be treated as a timeout")
+	}
+	if isTaskTimeout(fmt.Errorf("context canceled")) {
+		t.Fatal("context canceled must not be treated as a timeout")
+	}
+}
+
+func TestFailureDetailBudgetExceeded(t *testing.T) {
+	c := &Coordinator{}
+	c.updateSnapshot(func(s *currentSnapshot) {
+		s.Agent = "researcher"
+		s.Task = "Find security bugs"
+		s.Stage = "tool"
+		s.Tool = "bash"
+	})
+
+	detail := c.FailureDetail(fmt.Errorf("wall-clock budget exceeded (11m > 10m)"), "budget_exceeded")
+	if !strings.Contains(detail, "source=budget_exceeded") {
+		t.Fatalf("detail missing source: %q", detail)
+	}
+	if !strings.Contains(detail, "current=") {
+		t.Fatalf("detail missing current status: %q", detail)
+	}
+	if !strings.Contains(detail, "last_tool=bash") {
+		t.Fatalf("detail missing last tool: %q", detail)
+	}
+}
+
+func TestFailureDetailMaxRoundsExceeded(t *testing.T) {
+	c := &Coordinator{}
+	detail := c.FailureDetail(fmt.Errorf("max rounds (10) exceeded"), "max_rounds_exceeded")
+	if !strings.Contains(detail, "source=max_rounds_exceeded") {
+		t.Fatalf("detail missing source: %q", detail)
+	}
+}
+
+func TestFailureDetailUserDeclined(t *testing.T) {
+	c := &Coordinator{}
+	detail := c.FailureDetail(fmt.Errorf("user declined task execution"), "user_declined")
+	if !strings.Contains(detail, "source=user_declined") {
+		t.Fatalf("detail missing source: %q", detail)
+	}
+}
+
+func TestSegmentFailureSource(t *testing.T) {
+	cases := []struct {
+		kind string
+		want string
+	}{
+		{"chat session failed", FailureSourceChatSessionFailed},
+		{"team %q failed", FailureSourceTeamFailed},
+		{"team %q continuation failed", FailureSourceTeamContinuationFailed},
+		{"direct agent @%s failed", FailureSourceDirectAgentFailed},
+		{"synthesis for @%s failed", FailureSourceSynthesisFailed},
+		{"synthesis continuation for @%s failed", FailureSourceSynthesisContinuationFailed},
+		{"something else", FailureSourceSegmentFailed},
+	}
+	for _, tc := range cases {
+		if got := SegmentFailureSource(tc.kind); got != tc.want {
+			t.Fatalf("SegmentFailureSource(%q) = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+}
+
+func TestPersistFailureWritesStructuredArtifacts(t *testing.T) {
+	workspace := t.TempDir()
+	if err := EnsureWorkspaceDirs(workspace); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Coordinator{
+		session: &TeamSession{
+			Config:    agent.TeamConfig{Name: "delegate"},
+			Workspace: workspace,
+		},
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+	}
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
+		Agent: "researcher",
+		Desc:  "Find security bugs",
+	}})
+
+	c.updateSnapshot(func(s *currentSnapshot) {
+		s.Agent = "researcher"
+		s.Task = "Find security bugs"
+		s.TodoID = items[0].ID
+		s.Tool = "bash"
+	})
+
+	detail := c.FailureDetail(fmt.Errorf("context deadline exceeded"), "task_timeout")
+	c.PersistFailure("researcher", "Find security bugs", items[0].ID, detail)
+
+	gotAgent, gotTask, gotTodoID, gotDetail := c.GetLastFailureContext()
+	if gotAgent != "researcher" || gotTask != "Find security bugs" || gotTodoID != items[0].ID || gotDetail != detail {
+		t.Fatalf("last failure context mismatch: got %q %q %q %q", gotAgent, gotTask, gotTodoID, gotDetail)
+	}
+
+	statusPath := filepath.Join(workspace, statusDir, "researcher.yml")
+	statusData, err := os.ReadFile(statusPath)
+	if err != nil {
+		t.Fatalf("read status file: %v", err)
+	}
+	if !strings.Contains(string(statusData), "detail: "+detail) {
+		t.Fatalf("status file missing detail: %s", statusData)
+	}
+
+	taskFiles, err := filepath.Glob(filepath.Join(workspace, tasksDir, "delegate", "researcher", "*.md"))
+	if err != nil {
+		t.Fatalf("glob task files: %v", err)
+	}
+	if len(taskFiles) == 0 {
+		t.Fatal("expected task file to be written")
+	}
+	taskData, err := os.ReadFile(taskFiles[0])
+	if err != nil {
+		t.Fatalf("read task file: %v", err)
+	}
+	if !strings.Contains(string(taskData), "## Failure Detail") || !strings.Contains(string(taskData), detail) {
+		t.Fatalf("task file missing structured failure detail: %s", taskData)
+	}
+}
+
+func TestValidateTaskOutput_AllowsNormalTaskOutput(t *testing.T) {
+	task := TaskDef{Goal: "Summarize the findings"}
+	if err := validateTaskOutput(task, "Summary complete.\n\nKey issue: guest agent was disconnected."); err != nil {
+		t.Fatalf("expected normal task output to pass validation, got %v", err)
+	}
+}
+
+func TestValidateTaskOutput_RejectsEmptyOutput(t *testing.T) {
+	task := TaskDef{Goal: "Summarize the findings"}
+	if err := validateTaskOutput(task, "   "); err == nil {
+		t.Fatal("expected empty output to fail validation")
+	}
+}
+
+func TestValidateTaskOutput_RejectsUnfinishedProgressUpdate(t *testing.T) {
+	task := TaskDef{Goal: "Summarize the findings"}
+	if err := validateTaskOutput(task, "Let me try to query the VMs for their IPs using different methods:"); err == nil {
+		t.Fatal("expected unfinished progress update to fail validation")
+	}
+}
+
+func TestValidateTaskOutput_RejectsWeakVerificationOutput(t *testing.T) {
+	task := TaskDef{
+		Goal: "Execute ALL verification steps from docs/verification/test.md. For each step show actual output and mark PASS/FAIL.",
+	}
+	output := "CANNOT VERIFY. The VMs do not exist."
+	if err := validateTaskOutput(task, output); err == nil {
+		t.Fatal("expected weak verification output to fail validation")
+	}
+}
+
+func TestValidateTaskOutput_AllowsVerificationOutputWithEvidence(t *testing.T) {
+	task := TaskDef{
+		Goal: "Execute ALL verification steps from docs/verification/test.md. For each step show actual output and mark PASS/FAIL.",
+	}
+	output := "### 1. Command:\n```bash\nkvmforge list\n```\nActual Output:\n```\nrunning\n```\nPASS"
+	if err := validateTaskOutput(task, output); err != nil {
+		t.Fatalf("expected evidence-rich verification output to pass validation, got %v", err)
 	}
 }
 

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/anomalyco/hufu/internal/agent"
@@ -18,15 +20,34 @@ func TestDisplayResolvedConfig(t *testing.T) {
 
 func TestBuildAllowedPaths(t *testing.T) {
 	tmpDir := t.TempDir()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(orig)
+	})
+
 	session := &team.TeamSession{
-		Workspace: tmpDir,
-		Dir:       tmpDir,
+		Workspace: filepath.Join(tmpDir, "workspace"),
+		Dir:       filepath.Join(tmpDir, "team"),
 	}
 	registry := team.NewTeamRegistry([]string{tmpDir})
 	cfg := &config.Config{}
 	paths := buildAllowedPaths(session, registry, cfg)
 	if len(paths) == 0 {
 		t.Error("expected at least one allowed path")
+	}
+	if paths[0] != tmpDir {
+		t.Fatalf("expected cwd %q first in allowed paths, got %q", tmpDir, paths[0])
+	}
+
+	noRegistryPaths := buildAllowedPaths(session, nil, cfg)
+	if len(noRegistryPaths) == 0 || noRegistryPaths[0] != tmpDir {
+		t.Fatalf("expected cwd %q first even without registry, got %#v", tmpDir, noRegistryPaths)
 	}
 }
 

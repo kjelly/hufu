@@ -610,3 +610,42 @@ func TestSessionEntryRole(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteTaskFileWithDetailIncludesFailureSection(t *testing.T) {
+	tmpDir := t.TempDir()
+	err := writeTaskFileWithDetail(tmpDir, "delegate", "researcher", "20260502-143005", "error", "Find security bugs", "", "source=task_timeout | current=tool agent=helper tool=kvmforge create | error=context deadline exceeded")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(tmpDir, "tasks", "delegate", "researcher", "20260502-143005.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "## Failure Detail") {
+		t.Fatalf("task file should include failure detail section, got: %s", content)
+	}
+	if !strings.Contains(content, "source=task_timeout") {
+		t.Fatalf("task file should include structured failure detail, got: %s", content)
+	}
+}
+
+func TestWriteStatusWithDetailIncludesDetailField(t *testing.T) {
+	tmpDir := t.TempDir()
+	err := writeStatusWithDetail(tmpDir, "researcher", "error", "Find security bugs", "source=sigint | error=context canceled")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(tmpDir, "status", "researcher.yml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "detail: source=sigint") {
+		t.Fatalf("status file should include detail field, got: %s", content)
+	}
+}

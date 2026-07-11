@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anomalyco/hufu/internal/team"
 )
@@ -35,6 +36,43 @@ func TestDispatchStatusEventBuffersReasoningAfterMainOutput(t *testing.T) {
 	}
 	if thinkIdx < textIdx {
 		t.Fatalf("expected reasoning after main output, got: %q", out)
+	}
+}
+
+func TestDispatchStatusEventShowsBudgetExceeded(t *testing.T) {
+	w := &testStatusWriter{}
+	st := &reporterState{}
+
+	dispatchStatusEvent(w, st, team.StatusEvent{Type: "budget_exceeded", Message: "wall-clock budget exceeded (11m > 10m)"})
+
+	out := w.b.String()
+	if !strings.Contains(out, "budget exceeded") {
+		t.Fatalf("expected budget exceeded marker, got: %q", out)
+	}
+	if !strings.Contains(out, "wall-clock budget exceeded") {
+		t.Fatalf("expected budget reason, got: %q", out)
+	}
+}
+
+func TestDispatchStatusEventShowsTaskTimeout(t *testing.T) {
+	w := &testStatusWriter{}
+	st := &reporterState{}
+
+	dispatchStatusEvent(w, st, team.StatusEvent{
+		Type:      "task_timeout",
+		Agent:     "helper",
+		Message:   "attempt 1 timed out after 2m",
+		Duration:  2 * time.Minute,
+		ModelTime: 90 * time.Second,
+		ToolTime:  30 * time.Second,
+	})
+
+	out := w.b.String()
+	if !strings.Contains(out, "timed out after 2m") {
+		t.Fatalf("expected timeout message, got: %q", out)
+	}
+	if !strings.Contains(out, "helper") {
+		t.Fatalf("expected agent label, got: %q", out)
 	}
 }
 

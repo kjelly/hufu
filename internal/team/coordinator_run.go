@@ -127,11 +127,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	output, err := c.runAgentWithStatus(taskCtx, ag, resolvedName, prompt, timing)
 	duration, modelTime, toolTime := timing.snapshot()
 	if err != nil {
-		if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, resolvedName, taskTS, "error", task, ""); err != nil {
-			log.Printf("warning: failed to write task file: %v", err)
-		}
-		_ = writeStatus(c.session.Workspace, resolvedName, "error", task)
-		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
+		c.PersistFailure(resolvedName, task, todoID, c.FailureDetail(err, ""))
 		c.updateTodoTiming(todoID, modelTime, toolTime)
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		c.report(c.newEvent("error").withAgent(resolvedName).withMessage(err.Error()).withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))

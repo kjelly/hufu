@@ -8,8 +8,8 @@ package tools
 
 func (c *PathConsent) IsAllowed(path string) bool             { return true }
 func (c *PathConsent) SetAgentInfoSource(fn func() AgentInfo) {}
-func (c *PathConsent) AskConsent(path, operation, toolName, toolArgs string) (ConsentResult, error) {
-	return ConsentAlways, nil
+func (c *PathConsent) AskConsent(path, operation, toolName, toolArgs string) (ConsentResult, string, error) {
+	return ConsentAlways, "", nil
 }
 func (c *PathConsent) IsDenied(path string) bool     { return false }
 func (c *PathConsent) IsRemembered(path string) bool { return false }

@@ -155,3 +155,20 @@ func TestExecuteAskUser_UnattendedUsesSelector(t *testing.T) {
 		t.Fatalf("expected selector answer 'stop', got %+v", parsed.Answers)
 	}
 }
+
+func TestExecuteAskUser_InteractiveAbortShortCircuits(t *testing.T) {
+	interactiveAbortRequested.Store(true)
+	defer interactiveAbortRequested.Store(false)
+
+	SetOnAskUserTUI(nil)
+	resp, err := executeAskUser(context.Background(), fantasy.ToolCall{ID: "1", Name: "ask_user", Input: `{"question":"continue?"}`})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.IsError {
+		t.Fatalf("expected error response, got %q", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "shutdown") {
+		t.Fatalf("expected shutdown cancellation message, got %q", resp.Content)
+	}
+}

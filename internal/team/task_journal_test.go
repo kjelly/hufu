@@ -108,6 +108,24 @@ func TestTaskJournalSkipsCorruptLines(t *testing.T) {
 	}
 }
 
+func TestTaskJournalIgnoresErrorOp(t *testing.T) {
+	ws := t.TempDir()
+	now := time.Now()
+	ts := now.Format(time.RFC3339)
+	writeJournalLines(t, ws,
+		`{"op":"err","agent":"coder","desc":"task","output":"source=task_timeout | error=context deadline exceeded","ts":"`+ts+`"}`,
+		`{"op":"put","agent":"coder","desc":"good","output":"ok","ts":"`+ts+`"}`,
+	)
+
+	got, err := loadTaskJournal(ws, now, taskJournalMaxAge, maxTaskCacheEntries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got["coder"]) != 1 || got["coder"][0].taskDesc != "good" {
+		t.Errorf("error op should be ignored on replay: %+v", got["coder"])
+	}
+}
+
 func TestTaskJournalAgeCap(t *testing.T) {
 	ws := t.TempDir()
 	now := time.Now()
