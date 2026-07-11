@@ -139,5 +139,9 @@ func cloneTaskDef(td TaskDef) TaskDef {
 		clone.DependsOn = make([]int, len(td.DependsOn))
 		copy(clone.DependsOn, td.DependsOn)
 	}
+	if td.Requires != nil {
+		clone.Requires = make([]string, len(td.Requires))
+		copy(clone.Requires, td.Requires)
+	}
 	return clone
 }

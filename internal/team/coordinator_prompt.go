@@ -137,6 +137,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("- **goal**: The desired outcome — what should be achieved (do NOT include file paths or implementation steps)\n")
 	b.WriteString("- **constraints**: Non-obvious restrictions the worker must respect (e.g., 'must maintain backward compatibility')\n")
 	b.WriteString("- **task**: DEPRECATED — use 'goal' instead. Legacy task description.\n")
+	b.WriteString("- **requires**: Optional capability names the task depends on. Use this only for checks declared in team.yaml `preflight`.\n")
 	b.WriteString("- **summarize**: Set to `true` to condense the agent's output before returning. Use for tasks that may produce verbose output where only key points matter.\n")
 	b.WriteString("- **adversarial_verify**: Number of skeptic LLM verifiers (1-3) that try to refute the result after success; a majority refutation fails the task into a retry. Use for high-stakes tasks where a shell `verify` cannot check quality.\n")
 	if c.forcePlanFirst {

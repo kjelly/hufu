@@ -168,6 +168,24 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		todoBatch[i] = TodoSpec{Agent: strings.ToLower(t.Agent), Desc: desc, Model: resolvedModel, Source: TaskSourceCoordinator, ParentID: "", Verify: t.Verify, MaxRetries: t.MaxRetries}
 	}
 	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)
+	if len(c.session.Config.Preflight) > 0 {
+		if _, err := c.checkCapabilityRequirements(ctx, c.session.Config.Preflight); err != nil {
+			if blocked, ok := isCapabilityBlockedError(err); ok {
+				detail := blocked.Reason
+				if detail == "" {
+					detail = "capability preflight blocked"
+				}
+				for _, item := range todoItems {
+					c.taskTracker.TodoList().UpdateStatus(item.ID, TaskBlocked, detail)
+				}
+				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+				c.report(c.newEvent("needs_human").withMessage(detail))
+				c.PersistFailure("coordinator", "capability preflight failed", "", detail)
+				return "", fmt.Errorf("capability preflight failed: %s", detail)
+			}
+			return "", err
+		}
+	}
 	if len(suppressedDuplicates) > 0 {
 		var removeIDs []string
 		for idx := range suppressedDuplicates {

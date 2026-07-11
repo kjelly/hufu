@@ -292,6 +292,17 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 		))
 		flushThink(w, st)
 
+	case "needs_human":
+		if st.textBuf != "" {
+			w.write(flushText(st.currentAgent, st.textBuf))
+			st.textBuf = ""
+		}
+		w.write(fmt.Sprintf("\n%s %s\n\n",
+			errStyle.Render("⚠"),
+			errStyle.Render("needs human: "+event.Message),
+		))
+		flushThink(w, st)
+
 	case "task_timeout":
 		if st.textBuf != "" {
 			w.write(flushText(st.currentAgent, st.textBuf))
@@ -1389,6 +1400,12 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			}
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("✗ " + event.Message), Model: event.Model})
 			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + errStyle.Render("✗ "+utils.TruncateLine(event.Message, 60))})
+
+		case "needs_human":
+			if event.TodoID != "" {
+				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("⚠ " + event.Message), Model: event.Model})
+			}
+			p.Send(tuipkg.StatusBarMsg{Text: errStyle.Render("⚠ " + utils.TruncateLine(event.Message, 60))})
 
 		case "think_text", "reasoning":
 			if event.TodoID == "" {

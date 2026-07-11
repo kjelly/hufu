@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/anomalyco/hufu/internal/utils"
 )
@@ -130,6 +131,11 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 
 	s.results[idx] = res
 
+	if _, blocked := isCapabilityBlockedError(res.err); blocked {
+		s.states[idx] = TaskBlocked
+		return
+	}
+
 	if res.err == nil {
 		s.states[idx] = TaskDone
 		s.launchReady(ctx)
@@ -237,6 +243,36 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	agentKey := strings.ToLower(td.Agent)
 	cacheKey := agentKey + ":" + truncateTaskDesc(desc)
 	var isOwner bool
+
+	if len(td.Requires) > 0 {
+		reqs, missing := c.taskCapabilityRequirements(td.Requires)
+		if len(missing) > 0 {
+			detail := fmt.Sprintf("unknown capability requirement(s): %s", strings.Join(missing, ", "))
+			c.taskTracker.TodoList().UpdateStatus(tid, TaskBlocked, detail)
+			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			c.report(c.newEvent("needs_human").withAgent(td.Agent).withTodoID(tid).withMessage(detail))
+			s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: capabilityBlockedError{Result: CapabilityResult{Name: strings.Join(missing, ","), Available: false, Reason: detail, CheckedAt: time.Now()}}, idx: idx}
+			return
+		}
+		if results, err := c.checkCapabilityRequirements(ctx, reqs); err != nil {
+			if blocked, ok := isCapabilityBlockedError(err); ok {
+				detail := blocked.Reason
+				if detail == "" {
+					detail = "capability requirement blocked"
+				}
+				c.taskTracker.TodoList().UpdateStatus(tid, TaskBlocked, detail)
+				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+				c.report(c.newEvent("needs_human").withAgent(td.Agent).withTodoID(tid).withMessage(detail))
+				s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: capabilityBlockedError{Result: blocked}, idx: idx}
+				return
+			}
+			_ = results
+			c.taskTracker.TodoList().UpdateStatus(tid, TaskError, err.Error())
+			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: err, idx: idx}
+			return
+		}
+	}
 
 	defer func() {
 		if r := recover(); r != nil {

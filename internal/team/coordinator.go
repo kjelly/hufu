@@ -68,9 +68,10 @@ type TaskDef struct {
 	// the agent reports success but before the task is marked done; a non-zero
 	// exit makes the task fail and triggers a retry. This guards against agents
 	// that claim completion without producing the expected artifact.
-	Verify     string `json:"verify,omitempty"`
-	MaxRetries int    `json:"max_retries,omitempty"` // Maximum number of retries if verify fails
-	OnFailure  *int   `json:"on_failure,omitempty"`  // 0-based index of the task to jump back to if verify fails
+	Verify     string   `json:"verify,omitempty"`
+	Requires   []string `json:"requires,omitempty"`
+	MaxRetries int      `json:"max_retries,omitempty"` // Maximum number of retries if verify fails
+	OnFailure  *int     `json:"on_failure,omitempty"`  // 0-based index of the task to jump back to if verify fails
 	// Escalate makes each retry after a failure re-run the task on the next
 	// stronger model in the model-list (ordered weakest→strongest).
 	Escalate bool `json:"escalate,omitempty"`
@@ -163,6 +164,9 @@ type Coordinator struct {
 	delegatedTasksMu      sync.Mutex
 	taskResultCache       map[string][]cachedTaskEntry // agent → ordered list of past results
 	taskResultCacheMu     sync.RWMutex
+	capabilityCache       map[string]CapabilityResult
+	capabilityCacheMu     sync.Mutex
+	capabilityInflight    map[string]chan CapabilityResult
 	cacheGeneration       atomic.Int64 // bumped each time coordinator starts a new delegation round
 	journal               *taskJournal // persistent task-result journal (nil when disabled)
 	noJournal             bool
@@ -401,36 +405,38 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		return nil, fmt.Errorf("failed to create provider manager: %w", err)
 	}
 	c := &Coordinator{
-		providerManager:   pm,
-		session:           session,
-		mcpManager:        mcpManager,
-		coreTools:         coreTools,
-		agentCache:        make(map[string]fantasy.Agent),
-		verbose:           verbose,
-		think:             think,
-		reportStatus:      func(event StatusEvent) {},
-		taskTracker:       NewTaskTracker(),
-		skills:            session.Skills,
-		projectDir:        projectDir,
-		skillUsage:        make(map[string]*skillUsageState),
-		delegatedTasks:    make(map[string]int),
-		pendingPlans:      make(map[string]*PlanEntry),
-		approvedOutputs:   make(map[string]string),
-		approvedErrors:    make(map[string]error),
-		taskResultCache:   make(map[string][]cachedTaskEntry),
-		memoryStore:       memoryStore,
-		modelList:         modelList,
-		sidecarModel:      roleModels.Sidecar,
-		guardModel:        roleModels.Guard,
-		judgeModel:        roleModels.Judge,
-		planReviewerModel: roleModels.PlanReviewer,
-		maxConcurrent:     maxConcurrent,
-		sessionTime:       time.Now(),
-		hooks:             hookRegistry,
-		rbashMode:         rbashMode,
-		restrictedPath:    restrictedPath,
-		noNet:             noNet,
-		forceMCP:          forceMCP,
+		providerManager:    pm,
+		session:            session,
+		mcpManager:         mcpManager,
+		coreTools:          coreTools,
+		agentCache:         make(map[string]fantasy.Agent),
+		verbose:            verbose,
+		think:              think,
+		reportStatus:       func(event StatusEvent) {},
+		taskTracker:        NewTaskTracker(),
+		skills:             session.Skills,
+		projectDir:         projectDir,
+		skillUsage:         make(map[string]*skillUsageState),
+		delegatedTasks:     make(map[string]int),
+		pendingPlans:       make(map[string]*PlanEntry),
+		approvedOutputs:    make(map[string]string),
+		approvedErrors:     make(map[string]error),
+		taskResultCache:    make(map[string][]cachedTaskEntry),
+		capabilityCache:    make(map[string]CapabilityResult),
+		capabilityInflight: make(map[string]chan CapabilityResult),
+		memoryStore:        memoryStore,
+		modelList:          modelList,
+		sidecarModel:       roleModels.Sidecar,
+		guardModel:         roleModels.Guard,
+		judgeModel:         roleModels.Judge,
+		planReviewerModel:  roleModels.PlanReviewer,
+		maxConcurrent:      maxConcurrent,
+		sessionTime:        time.Now(),
+		hooks:              hookRegistry,
+		rbashMode:          rbashMode,
+		restrictedPath:     restrictedPath,
+		noNet:              noNet,
+		forceMCP:           forceMCP,
 		forcedSkillNames: func() map[string]bool {
 			m := make(map[string]bool)
 			for _, n := range forcedSkillNames {
@@ -614,6 +620,11 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 		"verify": map[string]any{
 			"type":        "string",
 			"description": "Optional shell command that objectively verifies the task's deliverable exists/works (e.g. 'test -f workspace/report.md', 'go build ./...'). It runs after the agent reports success; a non-zero exit fails the task and triggers a retry. Use it for tasks with a checkable artifact so the agent cannot falsely claim completion.",
+		},
+		"requires": map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string"},
+			"description": "Optional capability names that must be available before this task starts. Each name must match a capability declared in team.yaml `preflight`.",
 		},
 		"adversarial_verify": map[string]any{
 			"type":        "integer",

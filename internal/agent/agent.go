@@ -122,6 +122,7 @@ type TeamConfig struct {
 	Vars              map[string]interface{}
 	WorkerContextSize int
 	ToolsAllowed      []string // List of explicitly allowed tools
+	Preflight         []CapabilityRequirement
 
 	// Unattended runs the team without any blocking human interaction:
 	// ask_user returns a safe default instead of reading stdin, --steps/--tui

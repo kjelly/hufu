@@ -172,19 +172,23 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 
 	if len(data.Todos) > 0 {
 		b.WriteString("## Task Summary\n\n")
-		b.WriteString("| ID | Status | Agent | Description | Duration |\n")
-		b.WriteString("|----|--------|-------|-------------|----------|\n")
+		b.WriteString("| ID | Status | Agent | Description | Detail | Duration |\n")
+		b.WriteString("|----|--------|-------|-------------|--------|----------|\n")
 		for _, t := range data.Todos {
 			statusIcon := taskStatusIcons[t.Status]
 			if statusIcon == "" {
 				statusIcon = "◑"
 			}
+			detail := ""
+			if t.Detail != "" && (t.Status == team.TaskError || t.Status == team.TaskBlocked) {
+				detail = t.Detail
+			}
 			var dur string
 			if !t.EndedAt.IsZero() && !t.StartedAt.IsZero() {
 				dur = t.EndedAt.Sub(t.StartedAt).Round(time.Second).String()
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n",
-				t.ID, statusIcon, t.Agent, t.Desc, dur)
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n",
+				t.ID, statusIcon, t.Agent, t.Desc, detail, dur)
 		}
 		b.WriteString("\n---\n\n")
 	}

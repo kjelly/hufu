@@ -278,6 +278,16 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 	}
 	orig.taskResultCacheMu.RUnlock()
 
+	var capabilityCacheClone map[string]CapabilityResult
+	orig.capabilityCacheMu.Lock()
+	if orig.capabilityCache != nil {
+		capabilityCacheClone = make(map[string]CapabilityResult, len(orig.capabilityCache))
+		for k, v := range orig.capabilityCache {
+			capabilityCacheClone[k] = v
+		}
+	}
+	orig.capabilityCacheMu.Unlock()
+
 	var forcedSkillNamesClone map[string]bool
 	if orig.forcedSkillNames != nil {
 		forcedSkillNamesClone = make(map[string]bool, len(orig.forcedSkillNames))
@@ -398,6 +408,8 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		skillUsage:             skillUsageClone,
 		delegatedTasks:         delegatedTasksClone,
 		taskResultCache:        taskResultCacheClone,
+		capabilityCache:        capabilityCacheClone,
+		capabilityInflight:     make(map[string]chan CapabilityResult),
 		memoryStore:            orig.memoryStore,
 		modelList:              orig.modelList,
 		sidecarModel:           orig.sidecarModel,

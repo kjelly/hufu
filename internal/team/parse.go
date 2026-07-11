@@ -85,6 +85,7 @@ type teamConfigYAML struct {
 	Vars              map[string]interface{}           `yaml:"vars"`
 	WorkerContextSize int                              `yaml:"worker-context-size"`
 	ToolsAllowed      interface{}                      `yaml:"tools"` // tools.allowed in YAML - string or []string
+	Preflight         []agent.CapabilityRequirement    `yaml:"preflight"`
 	Unattended        bool                             `yaml:"unattended"`
 	AutoApprove       bool                             `yaml:"auto-approve"`
 	MaxWallClock      int64                            `yaml:"max-duration"`
@@ -548,6 +549,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if tools := parseAllowedTools(yc.ToolsAllowed); len(tools) > 0 {
 		cfg.ToolsAllowed = tools
+	}
+	if len(yc.Preflight) > 0 {
+		cfg.Preflight = yc.Preflight
 	}
 
 	return cfg, nil
