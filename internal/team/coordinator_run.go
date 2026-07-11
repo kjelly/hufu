@@ -146,6 +146,30 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	return &DirectAgentResult{AgentName: resolvedName, Output: output}, nil
 }
 
+// coordinatorCoreToolNames are the core tools the coordinator always gets,
+// regardless of team.yaml. The read-only file tools (view/grep/glob/ls) let it
+// consult files directly instead of burning a full delegation round asking a
+// worker to cat a document.
+var coordinatorCoreToolNames = map[string]bool{
+	"ask_user":   true,
+	"stm_write":  true,
+	"ltm_update": true,
+	"view":       true,
+	"grep":       true,
+	"glob":       true,
+	"ls":         true,
+}
+
+// coordinatorAllowedToolNames returns the permission allowlist matching
+// coordinatorCoreToolNames for the orchestrator context.
+func coordinatorAllowedToolNames() []string {
+	names := make([]string, 0, len(coordinatorCoreToolNames))
+	for name := range coordinatorCoreToolNames {
+		names = append(names, name)
+	}
+	return names
+}
+
 func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
 	if c.forcePlanFirst {
 		orchTools := []fantasy.AgentTool{
@@ -155,8 +179,7 @@ func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
 			&saveSkillTool{coordinator: c},
 		}
 		for _, t := range c.coreTools {
-			name := t.Info().Name
-			if name == "ask_user" || name == "stm_write" || name == "ltm_update" {
+			if coordinatorCoreToolNames[t.Info().Name] {
 				orchTools = append(orchTools, t)
 			}
 		}
@@ -172,8 +195,7 @@ func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
 		&saveSkillTool{coordinator: c},
 	}
 	for _, t := range c.coreTools {
-		name := t.Info().Name
-		if name == "ask_user" || name == "stm_write" || name == "ltm_update" {
+		if coordinatorCoreToolNames[t.Info().Name] {
 			orchTools = append(orchTools, t)
 		}
 	}
@@ -190,6 +212,10 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	defer cancel()
 	orchCtx = tools.AskUserAwareDeadline(orchCtx)
 	orchCtx = context.WithValue(orchCtx, todoIDKey{}, CoordTodoID)
+	// The coordinator's built-in tools are always permitted, independent of
+	// team.yaml: without this the permission gate denies the forced read-only
+	// tools and the coordinator is back to delegating every file read.
+	orchCtx = context.WithValue(orchCtx, tools.AgentToolsAllowedKey, coordinatorAllowedToolNames())
 	if c.unattended {
 		orchCtx = context.WithValue(orchCtx, tools.UnattendedKey, true)
 		orchCtx = context.WithValue(orchCtx, tools.AskUserChoiceSelectorKey, tools.AskUserChoiceSelector(func(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (tools.AskUserResponse, error) {
@@ -434,6 +460,15 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
 	c.resetRoundState()
 	c.lastStmWrite = time.Time{}
+
+	// Fail fast on misconfigured model names (e.g. a missing tag colon)
+	// instead of surfacing them mid-run as silently-lost requests.
+	c.validateModelsOnce.Do(func() {
+		c.validateModelsErr = c.ValidateConfiguredModels(ctx)
+	})
+	if c.validateModelsErr != nil {
+		return "", c.validateModelsErr
+	}
 
 	// Start cleanup daemon for idle SSH sessions on first Run call (30 minute timeout, check every 5 minutes)
 	if c.sshSessionMgr != nil {

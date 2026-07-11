@@ -533,6 +533,16 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		Messages: history,
 		StopWhen: extraStop,
 		PrepareStep: func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+			// Keep this request within the context byte budget: long streams
+			// re-send every prior tool result each step, so old bulky results
+			// are squeezed once the total exceeds the budget. Applies to
+			// workers and the coordinator alike (workers previously had no
+			// history compaction at all).
+			if capped := capStepMessages(opts.Messages); capped != nil {
+				opts.Messages = capped
+				llmLogRequest(logWrite, opts)
+				return ctx, fantasy.PrepareStepResult{Messages: capped}, nil
+			}
 			llmLogRequest(logWrite, opts)
 			return ctx, fantasy.PrepareStepResult{}, nil
 		},

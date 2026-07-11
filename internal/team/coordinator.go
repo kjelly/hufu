@@ -230,6 +230,10 @@ type Coordinator struct {
 	sessionToolPermissions   map[string]bool // toolName -> allowed (permanent session decision)
 	sessionToolPermissionsMu sync.RWMutex
 
+	// One-shot startup validation of configured model names.
+	validateModelsOnce sync.Once
+	validateModelsErr  error
+
 	// Unattended / budget controls for no-human-watching operation.
 	unattended          bool
 	autoApprove         bool
@@ -289,11 +293,22 @@ func (c *Coordinator) chooseAskUserResponse(ctx context.Context, question, qtype
 // TokensUsed returns the cumulative LLM token count observed so far.
 func (c *Coordinator) TokensUsed() int64 { return c.tokensUsed.Load() }
 
-// addStepTokens accumulates token usage from a set of agent steps.
+// addStepTokens accumulates token usage from a set of agent steps. Some
+// providers report no usage at all (observed: minimax via ollama returned
+// tokens_in/out=0 for every response); estimate from message bytes in that
+// case so token budgets are not silently blind for most of a run.
 func (c *Coordinator) addStepTokens(steps []fantasy.StepResult) {
 	var total int64
 	for _, s := range steps {
-		total += s.Usage.TotalTokens
+		if s.Usage.TotalTokens > 0 {
+			total += s.Usage.TotalTokens
+			continue
+		}
+		est := 0
+		for _, m := range s.Messages {
+			est += messageTextSize(m)
+		}
+		total += int64(est / 4)
 	}
 	if total > 0 {
 		c.tokensUsed.Add(total)

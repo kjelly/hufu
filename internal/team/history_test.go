@@ -3,6 +3,7 @@ package team
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"charm.land/fantasy"
@@ -72,16 +73,23 @@ func TestDeleteConversationHistory(t *testing.T) {
 	}
 }
 
-func TestFilterMessagesSkipsOversized(t *testing.T) {
-	msg := fantasy.NewUserMessage(string(make([]byte, maxMessageSize+1)))
-	filtered := filterMessages([]fantasy.Message{msg})
-	if len(filtered) != 0 {
-		t.Fatalf("expected oversized message to be filtered, got %d", len(filtered))
+func TestFilterMessagesTruncatesOversized(t *testing.T) {
+	big := strings.Repeat("x", maxMessageSize+1000)
+	filtered := filterMessages([]fantasy.Message{fantasy.NewUserMessage(big)})
+	if len(filtered) != 1 {
+		t.Fatalf("oversized message must be kept (truncated), got %d messages", len(filtered))
+	}
+	size := messageTextSize(filtered[0])
+	if size > maxMessageSize {
+		t.Fatalf("truncated message size = %d, want <= %d", size, maxMessageSize)
+	}
+	if size == 0 {
+		t.Fatal("truncated message lost all content")
 	}
 
 	smallMsg := fantasy.NewUserMessage("ok")
 	filtered = filterMessages([]fantasy.Message{smallMsg})
-	if len(filtered) != 1 {
-		t.Fatalf("expected small message to pass, got %d", len(filtered))
+	if len(filtered) != 1 || messageTextSize(filtered[0]) != 2 {
+		t.Fatalf("small message must pass through unchanged")
 	}
 }

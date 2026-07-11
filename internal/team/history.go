@@ -60,10 +60,10 @@ func LoadConversationHistory(workspace string) []fantasy.Message {
 func filterMessages(messages []fantasy.Message) []fantasy.Message {
 	filtered := make([]fantasy.Message, 0, len(messages))
 	for _, msg := range messages {
-		if estimateMessageSize(msg) > maxMessageSize {
-			continue
-		}
-		filtered = append(filtered, msg)
+		// Truncate oversized messages instead of dropping them: a dropped
+		// tool result erases fetched content from history and the
+		// coordinator re-delegates the same read next round.
+		filtered = append(filtered, truncateOversizedMessage(msg, maxMessageSize))
 	}
 	return filtered
 }

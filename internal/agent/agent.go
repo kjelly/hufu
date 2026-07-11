@@ -2,10 +2,13 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openaicompat"
@@ -172,6 +175,45 @@ func (p *OllamaProvider) LanguageModel(ctx context.Context, modelID string) (fan
 	return p.provider.LanguageModel(ctx, model)
 }
 
+// ListModelNames queries the provider's OpenAI-compatible /models endpoint
+// and returns the available model names (without provider prefix). Returns an
+// error when the endpoint is unreachable or unsupported; callers should treat
+// that as "cannot validate", not as "model missing".
+func (p *OllamaProvider) ListModelNames(ctx context.Context) ([]string, error) {
+	url := strings.TrimRight(p.baseURL, "/") + "/models"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build models request: %w", err)
+	}
+	if p.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("query %s: %w", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("query %s: status %s", url, resp.Status)
+	}
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode models response: %w", err)
+	}
+	names := make([]string, 0, len(payload.Data))
+	for _, m := range payload.Data {
+		if m.ID != "" {
+			names = append(names, m.ID)
+		}
+	}
+	return names, nil
+}
+
 // ParseModelProvider extracts the provider prefix and model name from a model ID.
 // "ollama/qwen3:8b" → ("ollama", "qwen3:8b")
 // "qwen3:8b" → ("", "qwen3:8b")
@@ -256,6 +298,11 @@ func (pm *ProviderManager) GetProvider(modelID string) *OllamaProvider {
 // DefaultProvider returns the default (ollama) provider.
 func (pm *ProviderManager) DefaultProvider() *OllamaProvider {
 	return pm.defaultProvider
+}
+
+// Name returns the provider's prefix name (e.g. "ollama").
+func (p *OllamaProvider) Name() string {
+	return p.name
 }
 
 type AgentConfig struct {

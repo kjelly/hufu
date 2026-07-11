@@ -191,6 +191,10 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("### reject_plan\n")
 	b.WriteString("Reject a submitted plan with a reason. The agent will see your reason and re-plan accordingly.\n")
 	b.WriteString("```json\n{\"todo_id\": \"the-plan-todo-id\", \"reason\": \"why the plan was rejected and what needs to change\"}\n```\n\n")
+	b.WriteString("### view / grep / glob / ls (read-only)\n")
+	b.WriteString("Read files and search the project directly. Use these instead of delegating a task just to read a file — delegation costs a full round-trip. Delegate only work that needs execution or modification.\n")
+	b.WriteString("```json\n{\"file_path\": \"/abs/path/to/file\"}\n```\n\n")
+
 	b.WriteString("### ask_user\n")
 	b.WriteString("Ask the user a question when you need clarification before proceeding.\n\n")
 

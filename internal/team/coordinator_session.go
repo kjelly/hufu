@@ -68,10 +68,7 @@ func (c *Coordinator) summarizeOutput(ctx context.Context, text string) string {
 func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepResult) {
 	for _, step := range steps {
 		for _, msg := range step.Messages {
-			if estimateMessageSize(msg) > maxMessageSize {
-				continue
-			}
-			c.conversationHistory = append(c.conversationHistory, msg)
+			c.conversationHistory = append(c.conversationHistory, truncateOversizedMessage(msg, maxMessageSize))
 		}
 	}
 	if len(c.conversationHistory) <= maxConversationHistory {
@@ -150,16 +147,6 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 	return []fantasy.Message{
 		fantasy.NewUserMessage("[Compacted history]\n" + result),
 	}
-}
-
-func estimateMessageSize(msg fantasy.Message) int {
-	total := 0
-	for _, part := range msg.Content {
-		if txt, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok {
-			total += len(txt.Text)
-		}
-	}
-	return total
 }
 
 func (c *Coordinator) SetSessionData(sd *SessionData) {
