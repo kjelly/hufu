@@ -263,9 +263,11 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		return fantasy.NewTextErrorResponse(msg), nil
 	}
 
+	consentStart := time.Now()
 	if err := checkBashPathConsent(ctx, args.Command, effCfg); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
+	warnSlowConsent("bash", consentStart)
 
 	if cdBlockRe.MatchString(args.Command) {
 		return fantasy.NewTextErrorResponse("'cd' is not allowed — use the working_directory parameter to set the working directory instead"), nil

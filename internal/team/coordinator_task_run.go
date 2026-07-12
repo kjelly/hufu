@@ -165,7 +165,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if task.Verify != "" {
 		prompt += completionVerificationInstructions(task.Verify, c.projectDir)
 	}
-	if note := bashToolRoutingNote(agentDef.Tools); note != "" {
+	if note := toolUsageNotes(agentDef.Tools); note != "" {
 		prompt += note
 	}
 
@@ -793,11 +793,12 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	return result.Response.Content.Text(), result.Steps, nil
 }
 
-// bashToolRoutingNote tells agents that also carry the dedicated sudo/ssh
-// tools that the bash tool rejects those commands. Real runs show agents
-// re-learning this by hitting the guardrail on the first tool call of nearly
-// every task, wasting a round-trip each time.
-func bashToolRoutingNote(toolNames string) string {
+// toolUsageNotes builds a "Tool Notes" prompt section warning agents away
+// from tool-usage mistakes real runs showed they repeat every task: prefixing
+// bash commands with sudo/ssh (rejected by a guardrail, wasting a round-trip
+// each time) and hand-rolled sleep+recheck polling loops (each poll is a full
+// LLM round-trip; wait_for collapses the wait into one tool call).
+func toolUsageNotes(toolNames string) string {
 	has := func(name string) bool {
 		if toolNames == "" || toolNames == "all" {
 			return true
@@ -809,21 +810,27 @@ func bashToolRoutingNote(toolNames string) string {
 		}
 		return false
 	}
-	if !has("bash") {
+	var notes []string
+	if has("bash") {
+		var privileged []string
+		if has("sudo") {
+			privileged = append(privileged, "sudo")
+		}
+		if has("ssh") {
+			privileged = append(privileged, "ssh")
+		}
+		if len(privileged) > 0 {
+			notes = append(notes, fmt.Sprintf("- The bash tool REJECTS %s commands. Run privileged/remote commands through the dedicated %s tool(s) directly (no prefix needed there).",
+				strings.Join(privileged, " and "), strings.Join(privileged, "/")))
+		}
+	}
+	if has("wait_for") && (has("bash") || has("sudo")) {
+		notes = append(notes, "- When waiting for a state change (VM boot, service ready, async job completion), call `wait_for` once instead of looping bash sleep + status checks — it polls internally and returns when the condition is met, with the last output on timeout.")
+	}
+	if len(notes) == 0 {
 		return ""
 	}
-	var privileged []string
-	if has("sudo") {
-		privileged = append(privileged, "sudo")
-	}
-	if has("ssh") {
-		privileged = append(privileged, "ssh")
-	}
-	if len(privileged) == 0 {
-		return ""
-	}
-	return fmt.Sprintf("\n\n## Tool Notes\n\n- The bash tool REJECTS %s commands. Run privileged/remote commands through the dedicated %s tool(s) directly (no prefix needed there).",
-		strings.Join(privileged, " and "), strings.Join(privileged, "/"))
+	return "\n\n## Tool Notes\n\n" + strings.Join(notes, "\n")
 }
 
 func (c *Coordinator) buildConcurrentTasksContext(excludeID string) string {

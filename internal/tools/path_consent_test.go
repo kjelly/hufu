@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -470,5 +471,26 @@ func TestResolveAndValidatePathWithConsentAllowed(t *testing.T) {
 	}
 	if path != filepath.Join(subDir, "test.txt") {
 		t.Errorf("expected %s, got %s", filepath.Join(subDir, "test.txt"), path)
+	}
+}
+
+func TestConsentOutcomeString(t *testing.T) {
+	cases := []struct {
+		name   string
+		result ConsentResult
+		err    error
+		want   string
+	}{
+		{"always", ConsentAlways, nil, "always"},
+		{"once", ConsentOnce, nil, "once"},
+		{"denied", ConsentDenied, nil, "denied"},
+		{"error wins over result", ConsentAlways, errors.New("boom"), "error"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := consentOutcomeString(tc.result, tc.err); got != tc.want {
+				t.Errorf("consentOutcomeString(%v, %v) = %q, want %q", tc.result, tc.err, got, tc.want)
+			}
+		})
 	}
 }

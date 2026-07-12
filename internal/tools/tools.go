@@ -981,6 +981,7 @@ func AllTools(opts ...ToolOption) []fantasy.AgentTool {
 	tools := []fantasy.AgentTool{
 		NewBashTool(opts...),
 		NewSudoTool(opts...),
+		NewWaitForTool(opts...),
 		NewSshTool(opts...),
 		NewScpTool(opts...),
 		NewSSHDisconnectTool(opts...),

@@ -24,6 +24,13 @@ const (
 	EventToolResult = "tool_result"
 	EventToolError  = "tool_error"
 	EventSSH        = "ssh_connection"
+	EventWaitPoll   = "wait_poll"
+	// Consent instrumentation: an interactive path-consent prompt can block a
+	// tool for minutes (stdin lock + a human who has not noticed the prompt).
+	// Paired start/resolved events make that wait attributable — without them
+	// a long call→result gap in the audit log looks like a tool hang.
+	EventConsentWaitStart = "consent_wait_start"
+	EventConsentResolved  = "consent_resolved"
 )
 
 type ToolAction struct {
@@ -145,6 +152,69 @@ func LogToolCall(agent, tool, input, callID string) {
 func LogToolResult(agent, tool, result string, isError bool, callID string) {
 	if l := GetDefault(); l != nil {
 		l.LogToolResult(agent, tool, result, isError, callID)
+	}
+}
+
+// LogConsentWaitStart records that a tool is now blocked on an interactive
+// path-consent prompt.
+func (l *AuditLogger) LogConsentWaitStart(agent, tool, path string) {
+	l.log(ToolAction{
+		Timestamp: time.Now().Format(time.RFC3339Nano),
+		Team:      l.teamName,
+		Agent:     agent,
+		Tool:      tool,
+		Action:    "consent",
+		Event:     EventConsentWaitStart,
+		Input:     utils.TruncateString(path, 500),
+	})
+}
+
+// LogConsentResolved records the outcome of a consent prompt and how long the
+// tool was blocked waiting for it.
+func (l *AuditLogger) LogConsentResolved(agent, tool, path, outcome string, wait time.Duration) {
+	l.log(ToolAction{
+		Timestamp: time.Now().Format(time.RFC3339Nano),
+		Team:      l.teamName,
+		Agent:     agent,
+		Tool:      tool,
+		Action:    "consent",
+		Event:     EventConsentResolved,
+		Input:     utils.TruncateString(path, 500),
+		Result:    fmt.Sprintf("outcome=%s, wait_ms=%d", outcome, wait.Milliseconds()),
+	})
+}
+
+func LogConsentWaitStart(agent, tool, path string) {
+	if l := GetDefault(); l != nil {
+		l.LogConsentWaitStart(agent, tool, path)
+	}
+}
+
+func LogConsentResolved(agent, tool, path, outcome string, wait time.Duration) {
+	if l := GetDefault(); l != nil {
+		l.LogConsentResolved(agent, tool, path, outcome, wait)
+	}
+}
+
+// LogWaitPoll records one polling attempt of the wait_for tool so long waits
+// remain attributable in the audit trail (a silent multi-minute gap between a
+// call and its result is indistinguishable from a hang otherwise).
+func (l *AuditLogger) LogWaitPoll(agent, command string, attempt, exitCode int) {
+	l.log(ToolAction{
+		Timestamp: time.Now().Format(time.RFC3339Nano),
+		Team:      l.teamName,
+		Agent:     agent,
+		Tool:      "wait_for",
+		Action:    "poll",
+		Event:     EventWaitPoll,
+		Input:     utils.TruncateString(command, 500),
+		Result:    fmt.Sprintf("attempt=%d, exit_code=%d", attempt, exitCode),
+	})
+}
+
+func LogWaitPoll(agent, command string, attempt, exitCode int) {
+	if l := GetDefault(); l != nil {
+		l.LogWaitPoll(agent, command, attempt, exitCode)
 	}
 }
 

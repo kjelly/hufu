@@ -708,3 +708,70 @@ func TestToolActionFields(t *testing.T) {
 		t.Errorf("Result = %q, want %q", action.Result, "hello")
 	}
 }
+
+// Consent waits can block a tool for minutes; the paired start/resolved
+// events must carry enough detail (path, outcome, wait duration) to make a
+// long call→result gap attributable after the fact.
+func TestConsentWaitEvents(t *testing.T) {
+	cases := []struct {
+		name       string
+		log        func(l *AuditLogger)
+		wantEvent  string
+		wantAction string
+		wantInput  string
+		wantResult []string
+	}{
+		{
+			name:       "wait start",
+			log:        func(l *AuditLogger) { l.LogConsentWaitStart("deployer", "sudo", "/etc/qemu/bridge.conf") },
+			wantEvent:  EventConsentWaitStart,
+			wantAction: "consent",
+			wantInput:  "/etc/qemu/bridge.conf",
+		},
+		{
+			name: "resolved with outcome and wait",
+			log: func(l *AuditLogger) {
+				l.LogConsentResolved("deployer", "sudo", "/etc/qemu/bridge.conf", "once", 613*time.Second)
+			},
+			wantEvent:  EventConsentResolved,
+			wantAction: "consent",
+			wantInput:  "/etc/qemu/bridge.conf",
+			wantResult: []string{"outcome=once", "wait_ms=613000"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			logger, err := NewAuditLogger(tmpDir, "team")
+			if err != nil {
+				t.Fatalf("NewAuditLogger: %v", err)
+			}
+			defer logger.Close()
+
+			tc.log(logger)
+
+			entries := readLogEntries(t, tmpDir)
+			if len(entries) != 1 {
+				t.Fatalf("entries = %d, want 1", len(entries))
+			}
+			e := entries[0]
+			if e.Event != tc.wantEvent {
+				t.Errorf("Event = %q, want %q", e.Event, tc.wantEvent)
+			}
+			if e.Action != tc.wantAction {
+				t.Errorf("Action = %q, want %q", e.Action, tc.wantAction)
+			}
+			if e.Input != tc.wantInput {
+				t.Errorf("Input = %q, want %q", e.Input, tc.wantInput)
+			}
+			if e.Agent != "deployer" || e.Tool != "sudo" {
+				t.Errorf("Agent/Tool = %q/%q, want deployer/sudo", e.Agent, e.Tool)
+			}
+			for _, w := range tc.wantResult {
+				if !strings.Contains(e.Result, w) {
+					t.Errorf("Result %q missing %q", e.Result, w)
+				}
+			}
+		})
+	}
+}

@@ -6,14 +6,17 @@ package tools
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/x/term"
 
+	"github.com/anomalyco/hufu/internal/audit"
 	"github.com/anomalyco/hufu/internal/utils"
 )
 
@@ -78,6 +81,11 @@ func dirOfPath(path string) string {
 	return filepath.Dir(path)
 }
 
+// consentWaitWarnThreshold is how long a consent check may block a tool
+// before it is worth a warning: past this the wait starts to look like a
+// tool hang in the audit timeline.
+const consentWaitWarnThreshold = 5 * time.Second
+
 func (pc *PathConsent) AskConsent(path, operation string, toolName, toolArgs string) (ConsentResult, string, error) {
 	if IsInteractiveAbortRequested() {
 		return ConsentDenied, "", nil
@@ -103,6 +111,54 @@ func (pc *PathConsent) AskConsent(path, operation string, toolName, toolArgs str
 		return ConsentDenied, "", nil
 	}
 
+	// Everything below can block for minutes: the stdin lock may be held by
+	// another prompt, and the prompt itself waits on a human who may not
+	// have noticed it (it writes to stderr underneath an active TUI). A real
+	// run once showed a 10-minute sudo "hang" that was most plausibly this
+	// wait. Bracket it with audit events so long call→result gaps are
+	// attributable, and warn when the wait crosses the threshold.
+	agentName := pc.currentAgent().Name
+	waitStart := time.Now()
+	audit.LogConsentWaitStart(agentName, toolName, path)
+	result, suggestion, err := pc.promptForConsent(path, dirToRemember, normalized, toolName, toolArgs)
+	waited := time.Since(waitStart)
+	audit.LogConsentResolved(agentName, toolName, path, consentOutcomeString(result, err), waited)
+	if waited > consentWaitWarnThreshold {
+		log.Printf("[WARN] path consent for tool %q blocked %s waiting for interactive approval (path %s, outcome %s)",
+			toolName, waited.Round(time.Second), path, consentOutcomeString(result, err))
+	}
+	return result, suggestion, err
+}
+
+// warnSlowConsent logs when a tool's pre-run consent checks (which may span
+// several AskConsent prompts for one command) blocked long enough to look
+// like a hang. started is captured just before checkBashPathConsent. Note
+// the tool's own timeout parameter does NOT cover this wait — it only times
+// the command execution.
+func warnSlowConsent(toolName string, started time.Time) {
+	if waited := time.Since(started); waited > consentWaitWarnThreshold {
+		log.Printf("[WARN] %s: path-consent checks blocked %s before the command ran", toolName, waited.Round(time.Second))
+	}
+}
+
+// consentOutcomeString renders a ConsentResult for audit/log lines.
+func consentOutcomeString(result ConsentResult, err error) string {
+	if err != nil {
+		return "error"
+	}
+	switch result {
+	case ConsentAlways:
+		return "always"
+	case ConsentOnce:
+		return "once"
+	default:
+		return "denied"
+	}
+}
+
+// promptForConsent is the blocking half of AskConsent: it serializes on the
+// stdin lock, re-checks remembered/denied prefixes, and prompts the user.
+func (pc *PathConsent) promptForConsent(path, dirToRemember, normalized, toolName, toolArgs string) (ConsentResult, string, error) {
 	// Acquire stdin lock before any output so that we never write to the
 	// terminal while it is in raw mode (e.g. when the TUI is active).
 	// NotifyAskUserStart releases the altscreen / restores cooked mode in TUI
