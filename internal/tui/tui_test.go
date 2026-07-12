@@ -172,3 +172,14 @@ func TestTaskLogBufferIsBounded(t *testing.T) {
 		t.Errorf("log buffer length = %d, want %d", got, maxTaskLogLines)
 	}
 }
+
+func TestRenderProgressBar(t *testing.T) {
+	m := New("prompt", TeamInfo{})
+	m.tasks = []*team.TodoItem{{Status: team.TaskDone}, {Status: team.TaskInProgress}, {Status: team.TaskError}}
+	bar := m.renderProgressBar(100)
+	for _, want := range []string{"1/3 tasks", "1 active", "1 errors"} {
+		if !strings.Contains(bar, want) {
+			t.Errorf("progress bar missing %q: %q", want, bar)
+		}
+	}
+}

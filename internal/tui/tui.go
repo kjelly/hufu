@@ -1581,6 +1581,7 @@ func (m Model) columnsView() string {
 	}
 
 	widget := m.renderPromptWidget(w)
+	progress := m.renderProgressBar(w)
 	statusArea := m.renderStatusArea(w)
 	activityFeed := m.renderActivityFeed(w)
 	statusH := m.statusAreaHeight()
@@ -1593,13 +1594,17 @@ func (m Model) columnsView() string {
 	if feedH > 0 {
 		feedTotal = feedH + 1
 	}
-	bodyH := m.height - promptH - 1 - statusH - 1 - feedTotal - 2
+	progressH := 0
+	if progress != "" {
+		progressH = 1
+	}
+	bodyH := m.height - promptH - 1 - progressH - statusH - 1 - feedTotal - 2
 	if bodyH < 2 {
 		bodyH = 2
 	}
 
 	if m.isCompact() {
-		return m.compactColumnsView(widget, statusArea, activityFeed, bodyH, feedH)
+		return m.compactColumnsView(widget, progress, statusArea, activityFeed, bodyH, feedH)
 	}
 
 	// Five │ dividers, so each of six columns = (w-5)/6.
@@ -1614,17 +1619,21 @@ func (m Model) columnsView() string {
 	div := dimStyle.Render("│")
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, c0, div, c1, div, c2, div, c3, div, c4, div, c5)
-	if feedH > 0 {
-		return widget + "\n" + statusArea + "\n" + activityFeed + "\n" + body + "\n\n" + m.footer()
+	prefix := widget + "\n"
+	if progress != "" {
+		prefix += progress + "\n"
 	}
-	return widget + "\n" + statusArea + "\n" + body + "\n\n" + m.footer()
+	if feedH > 0 {
+		return prefix + statusArea + "\n" + activityFeed + "\n" + body + "\n\n" + m.footer()
+	}
+	return prefix + statusArea + "\n" + body + "\n\n" + m.footer()
 }
 
 func (m Model) isCompact() bool {
 	return m.width >= 60 && m.width < 80
 }
 
-func (m Model) compactColumnsView(widget, statusArea, activityFeed string, bodyH, feedH int) string {
+func (m Model) compactColumnsView(widget, progress, statusArea, activityFeed string, bodyH, feedH int) string {
 	groups := []struct {
 		title string
 		cols  []int
@@ -1640,10 +1649,38 @@ func (m Model) compactColumnsView(widget, statusArea, activityFeed string, bodyH
 		columns = append(columns, m.renderCompactCol(group.title, group.cols, colW, bodyH))
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, columns[0], div, columns[1], div, columns[2])
-	if feedH > 0 {
-		return widget + "\n" + statusArea + "\n" + activityFeed + "\n" + body + "\n\n" + m.footer()
+	prefix := widget + "\n"
+	if progress != "" {
+		prefix += progress + "\n"
 	}
-	return widget + "\n" + statusArea + "\n" + body + "\n\n" + m.footer()
+	if feedH > 0 {
+		return prefix + statusArea + "\n" + activityFeed + "\n" + body + "\n\n" + m.footer()
+	}
+	return prefix + statusArea + "\n" + body + "\n\n" + m.footer()
+}
+
+func (m Model) renderProgressBar(width int) string {
+	if len(m.tasks) < 3 {
+		return ""
+	}
+	var done, active, failed int
+	for _, task := range m.tasks {
+		switch task.Status {
+		case team.TaskDone:
+			done++
+		case team.TaskInProgress, team.TaskPaused, team.TaskVerifying:
+			active++
+		case team.TaskError, team.TaskBlocked:
+			failed++
+		}
+	}
+	barWidth := 20
+	if width < 55 {
+		barWidth = 10
+	}
+	filled := done * barWidth / len(m.tasks)
+	bar := doneIcon.Render(strings.Repeat("█", filled)) + dimStyle.Render(strings.Repeat("░", barWidth-filled))
+	return fmt.Sprintf("  %s  %d/%d tasks · %d active · %d errors", bar, done, len(m.tasks), active, failed)
 }
 
 func (m Model) renderCompactCol(title string, cols []int, width, height int) string {
@@ -1961,7 +1998,11 @@ func (m Model) colBodyHeight() int {
 	if feedH > 0 {
 		feedTotal = feedH + 1
 	}
-	h := m.height - m.promptWidgetHeight() - 1 - m.statusAreaHeight() - 1 - feedTotal - 2
+	progressH := 0
+	if m.renderProgressBar(m.width) != "" {
+		progressH = 1
+	}
+	h := m.height - m.promptWidgetHeight() - 1 - progressH - m.statusAreaHeight() - 1 - feedTotal - 2
 	if h < 2 {
 		return 2
 	}
