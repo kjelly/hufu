@@ -36,3 +36,23 @@ func TestExecutionEventLoggerWritesStructuredEvent(t *testing.T) {
 		t.Fatalf("event = %+v", got)
 	}
 }
+
+func TestTeamDefinitionRevisionChangesWithDefinition(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: dev\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "developer.md"), []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first := teamDefinitionRevision(dir)
+	if first == "" {
+		t.Fatal("expected a definition revision")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "developer.md"), []byte("second"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := teamDefinitionRevision(dir); got == first {
+		t.Fatalf("revision = %q, want a new hash after definition change", got)
+	}
+}

@@ -6,11 +6,14 @@ package team
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,17 +34,20 @@ type ExecutionUsage struct {
 // identify the unit of work; RunID separates successive invocations that share
 // a workspace.
 type ExecutionEvent struct {
-	Version    int            `json:"version"`
-	Timestamp  string         `json:"timestamp"`
-	RunID      string         `json:"run_id"`
-	Team       string         `json:"team"`
-	TaskID     string         `json:"task_id"`
-	Agent      string         `json:"agent"`
-	Attempt    int            `json:"attempt"`
-	Status     string         `json:"status"`
-	Model      string         `json:"model,omitempty"`
-	DurationMS int64          `json:"duration_ms,omitempty"`
-	Usage      ExecutionUsage `json:"usage"`
+	Version      int            `json:"version"`
+	Timestamp    string         `json:"timestamp"`
+	RunID        string         `json:"run_id"`
+	Team         string         `json:"team"`
+	TaskID       string         `json:"task_id"`
+	Agent        string         `json:"agent"`
+	Attempt      int            `json:"attempt"`
+	Status       string         `json:"status"`
+	Model        string         `json:"model,omitempty"`
+	TaskType     string         `json:"task_type,omitempty"`
+	Skills       []string       `json:"skills,omitempty"`
+	TeamRevision string         `json:"team_revision,omitempty"`
+	DurationMS   int64          `json:"duration_ms,omitempty"`
+	Usage        ExecutionUsage `json:"usage"`
 }
 
 type executionEventLogger struct {
@@ -111,10 +117,12 @@ func (c *Coordinator) beginExecutionRun() func() {
 		return func() {}
 	}
 	runID := newExecutionRunID()
+	teamRevision := teamDefinitionRevision(c.session.Dir)
 	c.executionEventsMu.Lock()
 	previous := c.executionEvents
 	c.executionEvents = logger
 	c.executionRunID = runID
+	c.executionTeamRevision = teamRevision
 	c.executionEventsMu.Unlock()
 	if previous != nil {
 		previous.close()
@@ -124,6 +132,7 @@ func (c *Coordinator) beginExecutionRun() func() {
 		if c.executionEvents == logger {
 			c.executionEvents = nil
 			c.executionRunID = ""
+			c.executionTeamRevision = ""
 		}
 		c.executionEventsMu.Unlock()
 		logger.close()
@@ -132,22 +141,62 @@ func (c *Coordinator) beginExecutionRun() func() {
 
 func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, status, model string, duration time.Duration, usage ExecutionUsage) {
 	c.executionEventsMu.RLock()
-	logger, runID := c.executionEvents, c.executionRunID
+	logger, runID, teamRevision := c.executionEvents, c.executionRunID, c.executionTeamRevision
 	c.executionEventsMu.RUnlock()
 	if logger == nil || runID == "" || taskID == "" || attempt < 1 {
 		return
 	}
+	taskType, skills := c.taskTracker.TodoList().ExecutionMetadata(taskID)
 	_ = logger.append(ExecutionEvent{
-		Version:    1,
-		Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
-		RunID:      runID,
-		Team:       c.session.Config.Name,
-		TaskID:     taskID,
-		Agent:      agent,
-		Attempt:    attempt,
-		Status:     status,
-		Model:      model,
-		DurationMS: duration.Milliseconds(),
-		Usage:      usage,
+		Version:      2,
+		Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
+		RunID:        runID,
+		Team:         c.session.Config.Name,
+		TaskID:       taskID,
+		Agent:        agent,
+		Attempt:      attempt,
+		Status:       status,
+		Model:        model,
+		TaskType:     taskType,
+		Skills:       skills,
+		TeamRevision: teamRevision,
+		DurationMS:   duration.Milliseconds(),
+		Usage:        usage,
 	})
+}
+
+// teamDefinitionRevision hashes only team configuration and agent definition
+// files. It provides a stable, metadata-only revision for telemetry even when
+// the team directory is not inside a Git worktree.
+func teamDefinitionRevision(teamDir string) string {
+	entries, err := os.ReadDir(teamDir)
+	if err != nil {
+		return ""
+	}
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if name == "team.yaml" || name == "team.yml" || strings.HasSuffix(name, ".md") {
+			files = append(files, name)
+		}
+	}
+	sort.Strings(files)
+	hash := sha256.New()
+	for _, name := range files {
+		data, err := os.ReadFile(filepath.Join(teamDir, name))
+		if err != nil {
+			continue
+		}
+		_, _ = hash.Write([]byte(name))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write(data)
+		_, _ = hash.Write([]byte{0})
+	}
+	if len(files) == 0 {
+		return ""
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }

@@ -212,6 +212,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	improveCmd.Flags().StringVar(&improveSearchPath, "agent-team-search-path", "", "Comma-separated team search paths")
 	improveCmd.Flags().StringVarP(&improveOutput, "output", "o", "", "Markdown report path (default: workspace/reports/improve-<team>-<timestamp>.md)")
 	improveCmd.Flags().StringVar(&improveFormat, "format", "markdown", "Report format: markdown or json (json writes to stdout)")
+	improveCmd.Flags().IntVar(&improveRuns, "runs", 1, "Number of most recent runs for the selected team to analyze")
 
 	_ = rootCmd.RegisterFlagCompletionFunc("agent-team", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		var searchPaths []string

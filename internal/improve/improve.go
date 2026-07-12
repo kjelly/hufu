@@ -5,6 +5,7 @@ package improve
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +40,7 @@ type TeamDefinition struct {
 
 type Metrics struct {
 	RunID             string         `json:"run_id"`
+	RunCount          int            `json:"run_count"`
 	StartedAt         string         `json:"started_at"`
 	EndedAt           string         `json:"ended_at"`
 	TotalTasks        int            `json:"total_tasks"`
@@ -47,31 +49,92 @@ type Metrics struct {
 	Planned           int            `json:"planned"`
 	TotalAttempts     int            `json:"total_attempts"`
 	RetriedTasks      int            `json:"retried_tasks"`
+	TotalTokens       int            `json:"total_tokens"`
+	ToolCalls         int            `json:"tool_calls"`
+	ToolErrors        int            `json:"tool_errors"`
 	TokensByAgent     map[string]int `json:"tokens_by_agent"`
 	ToolCallsByAgent  map[string]int `json:"tool_calls_by_agent"`
 	ToolErrorsByAgent map[string]int `json:"tool_errors_by_agent"`
 }
 
 type Finding struct {
-	Layer      string `json:"layer"`
-	Target     string `json:"target"`
-	Severity   string `json:"severity"`
-	Category   string `json:"category"`
-	Metric     string `json:"metric"`
-	Value      string `json:"value"`
-	Suggestion string `json:"suggestion"`
-	SourceRule string `json:"source_rule"`
-	Evidence   string `json:"evidence"`
-	Confidence string `json:"confidence"`
+	Layer         string   `json:"layer"`
+	Target        string   `json:"target"`
+	Severity      string   `json:"severity"`
+	Category      string   `json:"category"`
+	Metric        string   `json:"metric"`
+	Value         string   `json:"value"`
+	Suggestion    string   `json:"suggestion"`
+	SourceRule    string   `json:"source_rule"`
+	Evidence      string   `json:"evidence"`
+	Confidence    string   `json:"confidence"`
+	RunIDs        []string `json:"run_ids,omitempty"`
+	TeamRevisions []string `json:"team_revisions,omitempty"`
+}
+
+// TrendPoint is a single run in chronological order. It contains only durable
+// execution metadata, never task descriptions, output, tool arguments, or
+// tool results.
+type TrendPoint struct {
+	RunID        string  `json:"run_id"`
+	StartedAt    string  `json:"started_at"`
+	EndedAt      string  `json:"ended_at"`
+	TeamRevision string  `json:"team_revision,omitempty"`
+	Metrics      Metrics `json:"metrics"`
+}
+
+// GroupMetric summarizes one independent telemetry dimension. Skill groups
+// overlap by design: a task associated with two skills appears in both groups.
+type GroupMetric struct {
+	Key           string `json:"key"`
+	TotalTasks    int    `json:"total_tasks"`
+	Done          int    `json:"done"`
+	Error         int    `json:"error"`
+	Planned       int    `json:"planned"`
+	TotalAttempts int    `json:"total_attempts"`
+	RetriedTasks  int    `json:"retried_tasks"`
+	TotalTokens   int    `json:"total_tokens"`
+}
+
+type GroupedMetrics struct {
+	ByAgent    []GroupMetric `json:"by_agent"`
+	ByTaskType []GroupMetric `json:"by_task_type"`
+	ByModel    []GroupMetric `json:"by_model"`
+	BySkill    []GroupMetric `json:"by_skill"`
 }
 
 type Report struct {
-	Team        string    `json:"team"`
-	Workspace   string    `json:"workspace"`
-	GeneratedAt string    `json:"generated_at"`
-	Source      string    `json:"source"`
-	Metrics     Metrics   `json:"metrics"`
-	Findings    []Finding `json:"findings"`
+	Team          string         `json:"team"`
+	Workspace     string         `json:"workspace"`
+	GeneratedAt   string         `json:"generated_at"`
+	Source        string         `json:"source"`
+	RunIDs        []string       `json:"run_ids"`
+	TeamRevisions []string       `json:"team_revisions,omitempty"`
+	Metrics       Metrics        `json:"metrics"`
+	Trend         []TrendPoint   `json:"trend"`
+	Groups        GroupedMetrics `json:"groups"`
+	Findings      []Finding      `json:"findings"`
+}
+
+type executionRun struct {
+	ID     string
+	Team   string
+	Events []team.ExecutionEvent
+	Start  time.Time
+	End    time.Time
+}
+
+type taskSummary struct {
+	RunID         string
+	TaskID        string
+	Agent         string
+	Model         string
+	TaskType      string
+	Skills        []string
+	Terminal      string
+	Attempts      int
+	TotalAttempts int
+	TotalTokens   int
 }
 
 type agentFrontmatter struct {
@@ -102,12 +165,26 @@ func LatestTeam(workspace string) (string, error) {
 	if len(events) == 0 {
 		return "", ErrNoExecutionData
 	}
-	return events[len(events)-1].Team, nil
+	teamName, runs := selectRecentRuns(events, "", 1)
+	if len(runs) == 0 {
+		return "", ErrNoExecutionData
+	}
+	return teamName, nil
 }
 
 // Analyze produces a deterministic report for the newest run in workspace.
-// teamDir is read directly and does not load a TeamSession or create folders.
+// It is retained for callers that expect the original one-run behaviour.
 func Analyze(workspace, teamName, teamDir string) (*Report, error) {
+	return AnalyzeRecent(workspace, teamName, teamDir, 1)
+}
+
+// AnalyzeRecent produces a deterministic report for the most recent runCount
+// runs of one team. teamDir is read directly and does not load a TeamSession or
+// create folders.
+func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, error) {
+	if runCount < 1 {
+		return nil, fmt.Errorf("run count must be at least 1")
+	}
 	events, err := readEvents(workspace)
 	if err != nil {
 		return nil, err
@@ -116,18 +193,9 @@ func Analyze(workspace, teamName, teamDir string) (*Report, error) {
 		return nil, ErrNoExecutionData
 	}
 
-	runID := events[len(events)-1].RunID
-	selected := make([]team.ExecutionEvent, 0)
-	for _, event := range events {
-		if event.RunID == runID {
-			selected = append(selected, event)
-		}
-	}
-	if len(selected) == 0 {
+	teamName, runs := selectRecentRuns(events, teamName, runCount)
+	if len(runs) == 0 {
 		return nil, ErrNoExecutionData
-	}
-	if teamName == "" {
-		teamName = selected[len(selected)-1].Team
 	}
 	def, err := readTeamDefinition(teamDir)
 	if err != nil {
@@ -136,14 +204,36 @@ func Analyze(workspace, teamName, teamDir string) (*Report, error) {
 	if def.Name == "" {
 		def.Name = teamName
 	}
+	selected := flattenRuns(runs)
 	metrics := collectMetrics(workspace, teamName, selected)
+	runIDs := make([]string, 0, len(runs))
+	trend := make([]TrendPoint, 0, len(runs))
+	teamRevisions := uniqueTeamRevisions(selected)
+	for _, run := range runs {
+		runMetrics := collectMetrics(workspace, teamName, run.Events)
+		revision := latestTeamRevision(run.Events)
+		runIDs = append(runIDs, run.ID)
+		trend = append(trend, TrendPoint{
+			RunID: run.ID, StartedAt: run.Start.Format(time.RFC3339), EndedAt: run.End.Format(time.RFC3339), TeamRevision: revision, Metrics: runMetrics,
+		})
+	}
+	if len(teamRevisions) == 0 {
+		if revision := definitionRevision(teamDir); revision != "" {
+			teamRevisions = []string{revision}
+		}
+	}
+	provenance := findingProvenance{runIDs: runIDs, teamRevisions: teamRevisions}
 	report := &Report{
-		Team:        teamName,
-		Workspace:   workspace,
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		Source:      "hufu improve",
-		Metrics:     metrics,
-		Findings:    analyze(def, metrics),
+		Team:          teamName,
+		Workspace:     workspace,
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		Source:        "hufu improve",
+		RunIDs:        runIDs,
+		TeamRevisions: teamRevisions,
+		Metrics:       metrics,
+		Trend:         trend,
+		Groups:        collectGroupedMetrics(selected),
+		Findings:      analyze(def, metrics, provenance),
 	}
 	return report, nil
 }
@@ -171,6 +261,125 @@ func readEvents(workspace string) ([]team.ExecutionEvent, error) {
 		return events, fmt.Errorf("read execution events: %w", err)
 	}
 	return events, nil
+}
+
+func selectRecentRuns(events []team.ExecutionEvent, teamName string, runCount int) (string, []executionRun) {
+	runsByID := make(map[string]*executionRun)
+	for _, event := range events {
+		if event.RunID == "" || event.Team == "" {
+			continue
+		}
+		run := runsByID[event.RunID]
+		if run == nil {
+			run = &executionRun{ID: event.RunID, Team: event.Team}
+			runsByID[event.RunID] = run
+		}
+		run.Events = append(run.Events, event)
+		if timestamp, err := time.Parse(time.RFC3339Nano, event.Timestamp); err == nil {
+			if run.Start.IsZero() || timestamp.Before(run.Start) {
+				run.Start = timestamp
+			}
+			if timestamp.After(run.End) {
+				run.End = timestamp
+			}
+		}
+	}
+	runs := make([]executionRun, 0, len(runsByID))
+	for _, run := range runsByID {
+		runs = append(runs, *run)
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		if runs[i].End.Equal(runs[j].End) {
+			return runs[i].ID < runs[j].ID
+		}
+		return runs[i].End.Before(runs[j].End)
+	})
+	if teamName == "" && len(runs) > 0 {
+		teamName = runs[len(runs)-1].Team
+	}
+	selected := make([]executionRun, 0, runCount)
+	for _, run := range runs {
+		if run.Team == teamName {
+			selected = append(selected, run)
+		}
+	}
+	if len(selected) > runCount {
+		selected = selected[len(selected)-runCount:]
+	}
+	return teamName, selected
+}
+
+func flattenRuns(runs []executionRun) []team.ExecutionEvent {
+	count := 0
+	for _, run := range runs {
+		count += len(run.Events)
+	}
+	events := make([]team.ExecutionEvent, 0, count)
+	for _, run := range runs {
+		events = append(events, run.Events...)
+	}
+	return events
+}
+
+func uniqueTeamRevisions(events []team.ExecutionEvent) []string {
+	seen := make(map[string]struct{})
+	revisions := make([]string, 0)
+	for _, event := range events {
+		if event.TeamRevision == "" {
+			continue
+		}
+		if _, ok := seen[event.TeamRevision]; ok {
+			continue
+		}
+		seen[event.TeamRevision] = struct{}{}
+		revisions = append(revisions, event.TeamRevision)
+	}
+	sort.Strings(revisions)
+	return revisions
+}
+
+func latestTeamRevision(events []team.ExecutionEvent) string {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].TeamRevision != "" {
+			return events[i].TeamRevision
+		}
+	}
+	return ""
+}
+
+// definitionRevision matches the metadata-only revision written by new
+// telemetry. It is used as a best-effort fallback for legacy event files.
+func definitionRevision(teamDir string) string {
+	entries, err := os.ReadDir(teamDir)
+	if err != nil {
+		return ""
+	}
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if name == "team.yaml" || name == "team.yml" || strings.HasSuffix(name, ".md") {
+			files = append(files, name)
+		}
+	}
+	if len(files) == 0 {
+		return ""
+	}
+	sort.Strings(files)
+	hash := sha256.New()
+	for _, name := range files {
+		data, err := os.ReadFile(filepath.Join(teamDir, name))
+		if err != nil {
+			continue
+		}
+		_, _ = hash.Write([]byte(name))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write(data)
+		_, _ = hash.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil))
 }
 
 func readTeamDefinition(dir string) (TeamDefinition, error) {
@@ -255,43 +464,46 @@ func splitCSV(value string) []string {
 }
 
 func collectMetrics(workspace, teamName string, events []team.ExecutionEvent) Metrics {
-	metrics := Metrics{RunID: events[0].RunID, TokensByAgent: map[string]int{}, ToolCallsByAgent: map[string]int{}, ToolErrorsByAgent: map[string]int{}}
-	tasks := map[string]string{}
-	attempts := map[string]int{}
-	terminal := map[string]string{}
-	start, _ := time.Parse(time.RFC3339Nano, events[0].Timestamp)
-	end := start
+	metrics := collectExecutionMetrics(events)
+	start, _ := time.Parse(time.RFC3339, metrics.StartedAt)
+	end, _ := time.Parse(time.RFC3339, metrics.EndedAt)
+	collectAuditMetrics(filepath.Join(workspace, "logs", "audit"), teamName, start, end, &metrics)
+	return metrics
+}
+
+func collectExecutionMetrics(events []team.ExecutionEvent) Metrics {
+	metrics := Metrics{TokensByAgent: map[string]int{}, ToolCallsByAgent: map[string]int{}, ToolErrorsByAgent: map[string]int{}}
+	runIDs := make(map[string]struct{})
+	tasks := summarizeTasks(events)
+	start, end := eventWindow(events)
 	for _, event := range events {
+		if event.RunID != "" {
+			runIDs[event.RunID] = struct{}{}
+		}
 		if event.TaskID == "" {
 			continue
 		}
-		tasks[event.TaskID] = event.Agent
-		if event.Attempt > attempts[event.TaskID] {
-			attempts[event.TaskID] = event.Attempt
+		agent := event.Agent
+		if agent == "" {
+			agent = "unspecified"
 		}
-		if event.Status == "done" || event.Status == "error" || event.Status == "planned" {
-			terminal[event.TaskID] = event.Status
-		}
-		metrics.TokensByAgent[event.Agent] += event.Usage.TotalTokens
-		if event.Status == "in_progress" {
-			metrics.TotalAttempts++
-		}
-		if ts, err := time.Parse(time.RFC3339Nano, event.Timestamp); err == nil {
-			if start.IsZero() || ts.Before(start) {
-				start = ts
-			}
-			if ts.After(end) {
-				end = ts
-			}
+		metrics.TokensByAgent[agent] += event.Usage.TotalTokens
+		metrics.TotalTokens += event.Usage.TotalTokens
+	}
+	metrics.RunCount = len(runIDs)
+	if metrics.RunCount == 1 {
+		for runID := range runIDs {
+			metrics.RunID = runID
 		}
 	}
 	metrics.StartedAt, metrics.EndedAt = start.Format(time.RFC3339), end.Format(time.RFC3339)
 	metrics.TotalTasks = len(tasks)
-	for taskID := range tasks {
-		if attempts[taskID] > 1 {
+	for _, task := range tasks {
+		metrics.TotalAttempts += task.TotalAttempts
+		if task.Attempts > 1 {
 			metrics.RetriedTasks++
 		}
-		switch terminal[taskID] {
+		switch task.Terminal {
 		case "done":
 			metrics.Done++
 		case "error":
@@ -300,8 +512,90 @@ func collectMetrics(workspace, teamName string, events []team.ExecutionEvent) Me
 			metrics.Planned++
 		}
 	}
-	collectAuditMetrics(filepath.Join(workspace, "logs", "audit"), teamName, start, end, &metrics)
 	return metrics
+}
+
+func eventWindow(events []team.ExecutionEvent) (time.Time, time.Time) {
+	var start, end time.Time
+	for _, event := range events {
+		timestamp, err := time.Parse(time.RFC3339Nano, event.Timestamp)
+		if err != nil {
+			continue
+		}
+		if start.IsZero() || timestamp.Before(start) {
+			start = timestamp
+		}
+		if timestamp.After(end) {
+			end = timestamp
+		}
+	}
+	return start, end
+}
+
+func summarizeTasks(events []team.ExecutionEvent) []taskSummary {
+	tasks := make(map[string]*taskSummary)
+	for _, event := range events {
+		if event.TaskID == "" {
+			continue
+		}
+		key := event.RunID + "\x00" + event.TaskID
+		task := tasks[key]
+		if task == nil {
+			task = &taskSummary{RunID: event.RunID, TaskID: event.TaskID}
+			tasks[key] = task
+		}
+		if event.Agent != "" {
+			task.Agent = event.Agent
+		}
+		if event.Model != "" {
+			task.Model = event.Model
+		}
+		if event.TaskType != "" {
+			task.TaskType = event.TaskType
+		}
+		if len(event.Skills) > 0 {
+			task.Skills = uniqueStrings(event.Skills)
+		}
+		if event.Attempt > task.Attempts {
+			task.Attempts = event.Attempt
+		}
+		if event.Status == "in_progress" {
+			task.TotalAttempts++
+		}
+		if event.Status == "done" || event.Status == "error" || event.Status == "planned" {
+			task.Terminal = event.Status
+		}
+		task.TotalTokens += event.Usage.TotalTokens
+	}
+	result := make([]taskSummary, 0, len(tasks))
+	for _, task := range tasks {
+		result = append(result, *task)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].RunID == result[j].RunID {
+			return result[i].TaskID < result[j].TaskID
+		}
+		return result[i].RunID < result[j].RunID
+	})
+	return result
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func collectAuditMetrics(dir, teamName string, start, end time.Time, metrics *Metrics) {
@@ -327,25 +621,110 @@ func collectAuditMetrics(dir, teamName string, start, end time.Time, metrics *Me
 			switch event.Event {
 			case "tool_call":
 				metrics.ToolCallsByAgent[event.Agent]++
+				metrics.ToolCalls++
 			case "tool_error":
 				metrics.ToolErrorsByAgent[event.Agent]++
+				metrics.ToolErrors++
 			}
 		}
 		_ = f.Close()
 	}
 }
 
-func analyze(def TeamDefinition, metrics Metrics) []Finding {
+func collectGroupedMetrics(events []team.ExecutionEvent) GroupedMetrics {
+	tasks := summarizeTasks(events)
+	byAgent := make(map[string]*GroupMetric)
+	byTaskType := make(map[string]*GroupMetric)
+	byModel := make(map[string]*GroupMetric)
+	bySkill := make(map[string]*GroupMetric)
+	for _, task := range tasks {
+		addGroupMetric(byAgent, fallbackGroup(task.Agent, "unspecified"), task)
+		addGroupMetric(byTaskType, fallbackGroup(task.TaskType, "legacy/unspecified"), task)
+		addGroupMetric(byModel, fallbackGroup(task.Model, "unspecified"), task)
+		if len(task.Skills) == 0 {
+			addGroupMetric(bySkill, "none", task)
+			continue
+		}
+		for _, skill := range task.Skills {
+			addGroupMetric(bySkill, skill, task)
+		}
+	}
+	return GroupedMetrics{
+		ByAgent: groupMetricSlice(byAgent), ByTaskType: groupMetricSlice(byTaskType), ByModel: groupMetricSlice(byModel), BySkill: groupMetricSlice(bySkill),
+	}
+}
+
+func fallbackGroup(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func addGroupMetric(groups map[string]*GroupMetric, key string, task taskSummary) {
+	group := groups[key]
+	if group == nil {
+		group = &GroupMetric{Key: key}
+		groups[key] = group
+	}
+	group.TotalTasks++
+	group.TotalAttempts += task.TotalAttempts
+	group.TotalTokens += task.TotalTokens
+	if task.Attempts > 1 {
+		group.RetriedTasks++
+	}
+	switch task.Terminal {
+	case "done":
+		group.Done++
+	case "error":
+		group.Error++
+	case "planned":
+		group.Planned++
+	}
+}
+
+func groupMetricSlice(groups map[string]*GroupMetric) []GroupMetric {
+	result := make([]GroupMetric, 0, len(groups))
+	for _, group := range groups {
+		result = append(result, *group)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Key < result[j].Key })
+	return result
+}
+
+type findingProvenance struct {
+	runIDs        []string
+	teamRevisions []string
+}
+
+func (p findingProvenance) attach(finding Finding) Finding {
+	finding.RunIDs = append([]string(nil), p.runIDs...)
+	finding.TeamRevisions = append([]string(nil), p.teamRevisions...)
+	parts := make([]string, 0, 3)
+	if finding.Evidence != "" {
+		parts = append(parts, finding.Evidence)
+	}
+	if len(p.runIDs) > 0 {
+		parts = append(parts, "Runs: "+strings.Join(p.runIDs, ", "))
+	}
+	if len(p.teamRevisions) > 0 {
+		parts = append(parts, "Team revisions: "+strings.Join(p.teamRevisions, ", "))
+	}
+	finding.Evidence = strings.Join(parts, " ")
+	return finding
+}
+
+func analyze(def TeamDefinition, metrics Metrics, provenance findingProvenance) []Finding {
 	findings := make([]Finding, 0)
 	for _, agent := range def.Agents {
 		if len([]rune(agent.Body)) < 200 {
-			findings = append(findings, Finding{"agent", agent.Name, "warning", "prompt", "prompt_length", fmt.Sprintf("%d chars", len([]rune(agent.Body))), "Expand the agent instructions with scope, expected deliverables, and completion criteria.", "agent_prompt_short", "Prompt body is shorter than 200 characters.", "high"})
+			findings = append(findings, provenance.attach(Finding{Layer: "agent", Target: agent.Name, Severity: "warning", Category: "prompt", Metric: "prompt_length", Value: fmt.Sprintf("%d chars", len([]rune(agent.Body))), Suggestion: "Expand the agent instructions with scope, expected deliverables, and completion criteria.", SourceRule: "agent_prompt_short", Evidence: "Prompt body is shorter than 200 characters.", Confidence: "high"}))
 		}
 		if hasSensitiveTool(agent.Tools) && len(agent.Guard) == 0 {
-			findings = append(findings, Finding{"agent", agent.Name, "suggestion", "guard", "sensitive_tools_without_guard", strings.Join(agent.Tools, ", "), "Add guards only for concrete risks this agent must avoid; do not add a blanket guard without an enforceable policy.", "guard_missing", "Agent exposes bash, sudo, or ssh without agent-specific guard rules.", "medium"})
+			findings = append(findings, provenance.attach(Finding{Layer: "agent", Target: agent.Name, Severity: "suggestion", Category: "guard", Metric: "sensitive_tools_without_guard", Value: strings.Join(agent.Tools, ", "), Suggestion: "Add guards only for concrete risks this agent must avoid; do not add a blanket guard without an enforceable policy.", SourceRule: "guard_missing", Evidence: "Agent exposes bash, sudo, or ssh without agent-specific guard rules.", Confidence: "medium"}))
 		}
 		if metrics.ToolErrorsByAgent[agent.Name] >= 3 {
-			findings = append(findings, Finding{"agent", agent.Name, "warning", "tools", "tool_errors", fmt.Sprintf("%d", metrics.ToolErrorsByAgent[agent.Name]), "Inspect the failing tool configuration and prompt the agent to use the supported tool and argument shape.", "tool_error_high", "At least three audited tool errors occurred in this run.", "high"})
+			findings = append(findings, provenance.attach(Finding{Layer: "agent", Target: agent.Name, Severity: "warning", Category: "tools", Metric: "tool_errors", Value: fmt.Sprintf("%d", metrics.ToolErrorsByAgent[agent.Name]), Suggestion: "Inspect the failing tool configuration and prompt the agent to use the supported tool and argument shape.", SourceRule: "tool_error_high", Evidence: "At least three audited tool errors occurred in the selected runs.", Confidence: "high"}))
 		}
 	}
 	if metrics.TotalTasks > 0 && metrics.RetriedTasks > 0 {
@@ -354,7 +733,7 @@ func analyze(def TeamDefinition, metrics Metrics) []Finding {
 		if rate >= 0.5 {
 			severity = "critical"
 		}
-		findings = append(findings, Finding{"team", def.Name, severity, "prompt", "retried_tasks", fmt.Sprintf("%d/%d (%.0f%%)", metrics.RetriedTasks, metrics.TotalTasks, rate*100), "Review the failed task goals and verification criteria; make task inputs and expected deliverables more specific before increasing retry budgets.", "retry_rate", "Attempt-level execution events show one or more tasks required a retry.", "high"})
+		findings = append(findings, provenance.attach(Finding{Layer: "team", Target: def.Name, Severity: severity, Category: "prompt", Metric: "retried_tasks", Value: fmt.Sprintf("%d/%d (%.0f%%)", metrics.RetriedTasks, metrics.TotalTasks, rate*100), Suggestion: "Review the failed task goals and verification criteria; make task inputs and expected deliverables more specific before increasing retry budgets.", SourceRule: "retry_rate", Evidence: "Attempt-level execution events show one or more tasks required a retry.", Confidence: "high"}))
 	}
 	return findings
 }

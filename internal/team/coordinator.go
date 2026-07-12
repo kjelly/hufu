@@ -238,9 +238,10 @@ type Coordinator struct {
 
 	// executionEvents is initialized for each top-level Run/Continue call and
 	// receives attempt-level telemetry for `hufu improve`.
-	executionEventsMu sync.RWMutex
-	executionEvents   *executionEventLogger
-	executionRunID    string
+	executionEventsMu     sync.RWMutex
+	executionEvents       *executionEventLogger
+	executionRunID        string
+	executionTeamRevision string
 
 	// One-shot startup validation of configured model names.
 	validateModelsOnce sync.Once

@@ -20,12 +20,13 @@ var (
 	improveSearchPath string
 	improveOutput     string
 	improveFormat     string
+	improveRuns       int
 )
 
 var improveCmd = &cobra.Command{
 	Use:   "improve",
-	Short: "Analyze the latest execution run and suggest deterministic improvements",
-	Long: `Analyze the newest structured execution run in a workspace and write a
+	Short: "Analyze recent execution runs and suggest deterministic improvements",
+	Long: `Analyze one or more recent structured execution runs in a workspace and write a
 deterministic report. The report contains no prompts, task output, tool input,
 or tool-result text, so it is suitable for sharing by default.`,
 	Args: cobra.NoArgs,
@@ -36,6 +37,9 @@ func runImprove(cmd *cobra.Command, args []string) error {
 	format := strings.ToLower(strings.TrimSpace(improveFormat))
 	if format != "markdown" && format != "json" {
 		return fmt.Errorf("unsupported format %q (want markdown or json)", improveFormat)
+	}
+	if improveRuns < 1 {
+		return fmt.Errorf("runs must be at least 1")
 	}
 	ws, err := resolveImproveWorkspace(improveWorkspace)
 	if err != nil {
@@ -64,7 +68,7 @@ func runImprove(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("team %q not found. Available: %s", teamName, strings.Join(registry.ListTeams(), ", "))
 	}
-	report, err := improve.Analyze(ws, teamName, teamDir)
+	report, err := improve.AnalyzeRecent(ws, teamName, teamDir, improveRuns)
 	if errors.Is(err, improve.ErrNoExecutionData) {
 		fmt.Fprintf(os.Stderr, "No execution data found in %s. Run a team first, then retry.\n", ws)
 		return nil

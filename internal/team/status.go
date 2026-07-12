@@ -457,6 +457,34 @@ func (tl *TodoList) Items() []*TodoItem {
 	return result
 }
 
+// ExecutionMetadata returns the privacy-safe task metadata used in durable
+// execution telemetry. It intentionally excludes the task description, task
+// output, and verification result.
+func (tl *TodoList) ExecutionMetadata(id string) (source string, skills []string) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	for _, item := range tl.items {
+		if item.ID != id {
+			continue
+		}
+		seen := make(map[string]struct{})
+		for _, values := range [][]string{item.Skills, item.InjectedSkills, item.LoadedSkills} {
+			for _, skill := range values {
+				if skill == "" {
+					continue
+				}
+				if _, ok := seen[skill]; ok {
+					continue
+				}
+				seen[skill] = struct{}{}
+				skills = append(skills, skill)
+			}
+		}
+		return item.Source, skills
+	}
+	return "", nil
+}
+
 func (tl *TodoList) SetSkills(id string, skills []string) {
 	tl.mu.Lock()
 	defer tl.mu.Unlock()
