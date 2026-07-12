@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/team"
 )
 
@@ -116,7 +117,7 @@ func printTeam(name, dir string) {
 		if fm.Description != "" {
 			fmt.Printf("      %s\n", fm.Description)
 		}
-		if tools := normalizeList(fm.Tools); tools != "" {
+		if tools := agent.ExpandImpliedTools(normalizeList(fm.Tools)); tools != "" {
 			fmt.Printf("      tools:  %s\n", tools)
 		}
 		if skills := normalizeList(fm.Skills); skills != "" {

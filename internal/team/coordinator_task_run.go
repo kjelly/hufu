@@ -253,9 +253,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		var steps []fantasy.StepResult
 		var err error
 		func() {
-			taskCtx, cancel := context.WithTimeout(parentCtx, agentTimeout)
+			taskCtx, cancel := tools.WithInteractiveAwareTimeout(parentCtx, agentTimeout)
 			defer cancel()
-			taskCtx = tools.AskUserAwareDeadline(taskCtx)
 			taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 			taskCtx = context.WithValue(taskCtx, modelKey{}, resolvedModel)
 			taskCtx = context.WithValue(taskCtx, tools.AgentNameKey, agentName)
@@ -865,6 +864,14 @@ func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef 
 		shell = c.session.Config.Shell
 	}
 
+	// A task that spent its whole budget (e.g. waiting on consent) reaches
+	// here with parentCtx already expired; running the command on that
+	// context kills it at 0s and reports a misleading "verification timed
+	// out after 0s" that masks the real failure. Say what actually happened.
+	if err := parentCtx.Err(); err != nil {
+		return nil, fmt.Errorf("task deadline exceeded before the verify command could run: %w", err)
+	}
+
 	timeout := c.verifyTaskTimeout()
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
@@ -898,6 +905,12 @@ func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef 
 			detail = ": " + utils.TruncateString(detail, 500)
 		}
 		if result.TimedOut {
+			// Distinguish the verify command being slow from the task's own
+			// deadline expiring mid-verify: only the former should be blamed
+			// on the verify command.
+			if parentErr := parentCtx.Err(); parentErr != nil && result.Duration < timeout {
+				return result, fmt.Errorf("task deadline exceeded while the verify command was running (killed after %s): %w", result.Duration.Round(time.Millisecond), parentErr)
+			}
 			return result, fmt.Errorf("verification timed out after %s%s", result.Duration.Round(time.Millisecond), detail)
 		}
 		if result.ExitCode == 127 {

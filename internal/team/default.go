@@ -63,6 +63,7 @@ func LoadDefaultTeam(workspace string, forcedSkills []string, helperTools string
 			helperToolList = helperBaseTools + "," + strings.Join(extras, ",")
 		}
 	}
+	helperToolList = agent.ExpandImpliedTools(helperToolList)
 	helper := &agent.AgentDef{
 		Name:        "Helper",
 		FileAlias:   "helper",

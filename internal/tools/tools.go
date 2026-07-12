@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"charm.land/fantasy"
 
@@ -80,14 +81,39 @@ func NotifyAskUserDone() {
 func SetAskUserActive(active bool) {
 	if active {
 		askUserActive.Store(1)
+		interactiveWaitStartNs.CompareAndSwap(0, time.Now().UnixNano())
 	} else {
 		askUserActive.Store(0)
+		if started := interactiveWaitStartNs.Swap(0); started != 0 {
+			interactiveWaitTotalNs.Add(time.Now().UnixNano() - started)
+		}
 		NotifyAskUserDone()
 	}
 }
 
 func IsAskUserActive() bool {
 	return askUserActive.Load() == 1
+}
+
+// interactiveWaitTotalNs accumulates time this process has spent blocked on
+// interactive prompts (ask_user, path consent). interactiveWaitStartNs is
+// the start of the in-flight prompt, or 0 when none is active; prompts are
+// serialized on StdinMu so at most one runs at a time.
+var (
+	interactiveWaitTotalNs atomic.Int64
+	interactiveWaitStartNs atomic.Int64
+)
+
+// InteractiveWaitTotal returns the cumulative time spent waiting on
+// interactive prompts, including the currently active one. Task deadlines
+// take the delta of this value so human response time does not count
+// against an agent's time budget (see WithInteractiveAwareTimeout).
+func InteractiveWaitTotal() time.Duration {
+	total := interactiveWaitTotalNs.Load()
+	if started := interactiveWaitStartNs.Load(); started != 0 {
+		total += time.Now().UnixNano() - started
+	}
+	return time.Duration(total)
 }
 
 // RequestInteractiveAbort marks interactive input as aborted and closes stdin
@@ -911,7 +937,14 @@ func resolveAndValidatePathWithConsent(path string, cfg ToolConfig) (string, err
 	}
 
 	if isPathAllowed(absPath, cfg.AllowedPaths) {
-		return resolveAndValidatePath(path, cfg.WorkDir)
+		// resolveAndValidatePath only knows about cfg.WorkDir (the project
+		// directory) — calling it here silently discarded the AllowedPaths
+		// check that just passed, rejecting any agent-level allowed-paths
+		// entry outside the project dir (e.g. a /tmp scratch directory) with
+		// a misleading "outside the project directory" from write/edit even
+		// though bash/sudo happily use the same path. Validate against the
+		// allowlist that actually matched, with the same symlink-aware logic.
+		return resolveAndValidatePathForAllowedPath(absPath, cfg.WorkDir, cfg.AllowedPaths)
 	}
 
 	if cfg.PathConsent != nil {
@@ -925,7 +958,13 @@ func resolveAndValidatePathWithConsent(path string, cfg ToolConfig) (string, err
 			if projectDir == "" {
 				projectDir, _ = os.Getwd()
 			}
-			return resolveAndValidatePathForAllowedPath(absPath, projectDir, cfg.AllowedPaths)
+			// The consent applies to the directory that was approved. Add that
+			// directory only for this validation pass so edit/write tools retain
+			// their symlink-aware validation without rejecting a path the user
+			// explicitly approved (including a persisted approval).
+			consentedPaths := append([]string{}, cfg.AllowedPaths...)
+			consentedPaths = append(consentedPaths, dirOfPath(absPath))
+			return resolveAndValidatePathForAllowedPath(absPath, projectDir, consentedPaths)
 		default:
 			return "", formatPathConsentDenied(path, suggestion)
 		}

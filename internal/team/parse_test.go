@@ -654,3 +654,40 @@ func TestLoadTeam_SessionConfigVars_Populated(t *testing.T) {
 			agentNamesStr, len(parts))
 	}
 }
+
+func TestParseAgentFile_ToolsGetImpliedWaitFor(t *testing.T) {
+	tmpDir := t.TempDir()
+	agentPath := filepath.Join(tmpDir, "deployer.md")
+	content := "---\nname: deployer\nrole: worker\ntools: bash,sudo,view\n---\nBody"
+	if err := os.WriteFile(agentPath, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write test agent file: %v", err)
+	}
+
+	def, err := parseAgentFile(agentPath, nil)
+	if err != nil {
+		t.Fatalf("parseAgentFile() error = %v", err)
+	}
+	if !strings.Contains(def.Tools, "wait_for") {
+		t.Errorf("Tools = %q, want it to include wait_for (implied by bash/sudo)", def.Tools)
+	}
+	if !strings.Contains(def.Tools, "bash") || !strings.Contains(def.Tools, "sudo") || !strings.Contains(def.Tools, "view") {
+		t.Errorf("Tools = %q, expected original tools preserved", def.Tools)
+	}
+}
+
+func TestParseAgentFile_ToolsWithoutBashOrSudoUnaffected(t *testing.T) {
+	tmpDir := t.TempDir()
+	agentPath := filepath.Join(tmpDir, "writer.md")
+	content := "---\nname: writer\nrole: worker\ntools: view,write,edit\n---\nBody"
+	if err := os.WriteFile(agentPath, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write test agent file: %v", err)
+	}
+
+	def, err := parseAgentFile(agentPath, nil)
+	if err != nil {
+		t.Fatalf("parseAgentFile() error = %v", err)
+	}
+	if strings.Contains(def.Tools, "wait_for") {
+		t.Errorf("Tools = %q, wait_for should not be implied without bash/sudo", def.Tools)
+	}
+}

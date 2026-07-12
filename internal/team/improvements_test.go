@@ -404,3 +404,70 @@ func firstText(m fantasy.Message) string {
 	}
 	return ""
 }
+
+func TestVerifyTaskDeliverable_ExpiredParentContext(t *testing.T) {
+	c := newVerifyCoordinator(t, t.TempDir())
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	result, err := c.verifyTaskDeliverable(ctx, nil, "true")
+	if err == nil {
+		t.Fatal("expected an error when the parent context is already expired")
+	}
+	if result != nil {
+		t.Fatalf("verify command must not run on an expired context, got evidence: %#v", result)
+	}
+	if !strings.Contains(err.Error(), "task deadline exceeded before the verify command could run") {
+		t.Errorf("error should name the task deadline, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "verification timed out") {
+		t.Errorf("error must not be blamed on the verify command: %v", err)
+	}
+}
+
+func TestVerifyTaskDeliverable_ParentExpiresMidVerify(t *testing.T) {
+	c := newVerifyCoordinator(t, t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	_, err := c.verifyTaskDeliverable(ctx, nil, "sleep 5")
+	if err == nil {
+		t.Fatal("expected an error when the parent deadline expires mid-verify")
+	}
+	if !strings.Contains(err.Error(), "task deadline exceeded while the verify command was running") {
+		t.Errorf("error should say the task deadline hit mid-verify, got: %v", err)
+	}
+}
+
+func TestRecordRunAborted(t *testing.T) {
+	ws := t.TempDir()
+	c := &Coordinator{
+		session:     &TeamSession{Config: agent.TeamConfig{Name: "test"}, Workspace: ws},
+		sessionData: NewSession(),
+		taskTracker: NewTaskTracker(),
+	}
+	c.sessionData.AddEntry("user", "run the mission")
+
+	c.recordRunAborted(fmt.Errorf("coordinator: %w", context.Canceled))
+
+	entries := c.sessionData.Entries
+	last := entries[len(entries)-1]
+	if last.Role != "assistant" {
+		t.Fatalf("last entry role = %q, want assistant", last.Role)
+	}
+	if !strings.Contains(last.Content, "aborted (cancelled by user)") {
+		t.Errorf("abort entry missing reason: %q", last.Content)
+	}
+
+	if loaded := LoadSession(ws); loaded == nil || len(loaded.Entries) != len(entries) {
+		t.Error("aborted session was not persisted to disk")
+	}
+
+	statusData, err := os.ReadFile(filepath.Join(ws, "status", "coordinator.yml"))
+	if err != nil {
+		t.Fatalf("coordinator status not written: %v", err)
+	}
+	if !strings.Contains(string(statusData), "aborted") {
+		t.Errorf("coordinator status missing abort reason: %s", statusData)
+	}
+}

@@ -260,8 +260,12 @@ type Coordinator struct {
 }
 
 // SetUnattended enables unattended (no-human) mode: ask_user returns safe
-// defaults, and only explicitly-allowed tools may run.
-func (c *Coordinator) SetUnattended(v bool) { c.unattended = v }
+// defaults, only explicitly-allowed tools may run, and path consent
+// fast-denies instead of prompting a human who isn't there.
+func (c *Coordinator) SetUnattended(v bool) {
+	c.unattended = v
+	tools.SetProcessUnattended(v)
+}
 
 // SetAutoApprove enables automatic selection of clearly safe ask_user options
 // when one is available.

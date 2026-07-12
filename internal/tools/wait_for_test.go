@@ -51,11 +51,6 @@ func TestWaitForValidation(t *testing.T) {
 			wantErr: "not allowed",
 		},
 		{
-			name:    "sudo prefix is rejected with hint",
-			input:   `{"command":"sudo virsh list"}`,
-			wantErr: "set sudo:true",
-		},
-		{
 			name:    "ssh prefix is rejected with hint",
 			input:   `{"command":"ssh host uptime"}`,
 			wantErr: "ssh tool",
@@ -240,5 +235,77 @@ func TestWaitForWorkDir(t *testing.T) {
 	}
 	if !strings.Contains(resp.Content, "found") {
 		t.Errorf("workdir not honored: %s", resp.Content)
+	}
+}
+
+// A real run set sudo:true correctly but also left a literal "sudo " prefix
+// in the command text out of habit, and got flatly rejected — one wasted
+// round trip to relearn guidance the tool description already gave. Since
+// sudo:true runs the whole command through `sudo bash -c "<command>"`, a
+// redundant "sudo" inside it is a harmless no-op; these tests cover the
+// resulting behavior: bare "sudo ..." is now inferred as sudo:true, ssh
+// still always rejects, and ssh+sudo combined (a remote escalation) is never
+// silently routed to local sudo.
+
+func TestWaitForSudoInferredFromCommandWithoutFlag(t *testing.T) {
+	writeFakeSudo(t)
+	ctx := context.WithValue(context.Background(), AgentToolsAllowedKey, []string{"bash", "wait_for", "sudo"})
+
+	resp, err := executeWaitFor(ctx, fantasy.ToolCall{ID: "1", Name: "wait_for",
+		Input: `{"command":"sudo echo inferred-ok","timeout_seconds":2,"interval_seconds":1}`}, ToolConfig{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.IsError {
+		t.Fatalf("expected success inferring sudo from the command text, got: %s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "inferred-ok") {
+		t.Errorf("expected the forwarded command's output, got: %s", resp.Content)
+	}
+}
+
+func TestWaitForRedundantSudoPrefixWithFlagSetSucceeds(t *testing.T) {
+	writeFakeSudo(t)
+	ctx := context.WithValue(context.Background(), AgentToolsAllowedKey, []string{"bash", "wait_for", "sudo"})
+
+	resp, err := executeWaitFor(ctx, fantasy.ToolCall{ID: "1", Name: "wait_for",
+		Input: `{"command":"sudo echo redundant-ok","sudo":true,"timeout_seconds":2,"interval_seconds":1}`}, ToolConfig{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.IsError {
+		t.Fatalf("expected success with a redundant sudo prefix alongside sudo:true, got: %s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "redundant-ok") {
+		t.Errorf("expected the forwarded command's output, got: %s", resp.Content)
+	}
+}
+
+func TestWaitForSudoInferredWithoutPermissionDenied(t *testing.T) {
+	// No fake sudo binary: without permission this must never execute.
+	ctx := context.WithValue(context.Background(), AgentToolsAllowedKey, []string{"bash", "wait_for"})
+
+	resp, err := executeWaitFor(ctx, fantasy.ToolCall{ID: "1", Name: "wait_for",
+		Input: `{"command":"sudo echo should-not-run","timeout_seconds":2,"interval_seconds":1}`}, ToolConfig{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.IsError || !strings.Contains(resp.Content, "sudo tool in this agent's tools allowlist") {
+		t.Errorf("expected allowlist denial, got: %s", resp.Content)
+	}
+}
+
+func TestWaitForSSHAndSudoCombinedRejected(t *testing.T) {
+	// A remote "sudo" inside an ssh command must never be routed to local
+	// sudo. No fake sudo binary: it must never be invoked.
+	ctx := context.WithValue(context.Background(), AgentToolsAllowedKey, []string{"bash", "wait_for", "sudo", "ssh"})
+
+	resp, err := executeWaitFor(ctx, fantasy.ToolCall{ID: "1", Name: "wait_for",
+		Input: `{"command":"ssh remote-host 'sudo systemctl status foo'","sudo":true,"timeout_seconds":2,"interval_seconds":1}`}, ToolConfig{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.IsError || !strings.Contains(resp.Content, "ssh tool") {
+		t.Errorf("expected ssh rejection, got: %s", resp.Content)
 	}
 }

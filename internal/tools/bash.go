@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"charm.land/fantasy"
@@ -26,6 +27,13 @@ const maxBashTimeout = 600 * time.Second
 var bannedCmdRe = regexp.MustCompile(`^(alias|bg|bind|builtin|caller|command|compgen|complete|compopt|coproc|dirs|disown|enable|fc|fg|hash|help|history|jobs|kill|logout|mapfile|popd|pushd|readonly|select|set|shopt|source|suspend|times|trap|type|typeset|ulimit|umask|unalias|wait)\s`)
 
 var bashPrivEscRe = regexp.MustCompile("(?:^|[|;&(\n\x60]|\\$\\()\\s*(?:sudo|ssh)(?:\\s|$)")
+
+// sudoPrefixRe and sshPrefixRe isolate which of the two bashPrivEscRe caught,
+// so a bare "sudo ..." command can be auto-routed to the sudo tool while an
+// ssh-involving command (including "ssh host 'sudo ...'", a remote escalation
+// that must not be rerouted to local sudo) still gets the reject-with-hint.
+var sudoPrefixRe = regexp.MustCompile("(?:^|[|;&(\n\x60]|\\$\\()\\s*sudo(?:\\s|$)")
+var sshPrefixRe = regexp.MustCompile("(?:^|[|;&(\n\x60]|\\$\\()\\s*ssh(?:\\s|$)")
 
 var absPathInCmdRe = regexp.MustCompile(`(?:^|\s|=|>|<|"|;)(/(?:[a-zA-Z0-9_.-]+/)*(?:[a-zA-Z0-9_.-]+))(?:\s|"|$|;|&|\|)`)
 
@@ -41,6 +49,38 @@ type bashArgs struct {
 	Command string  `json:"command"`
 	Timeout float64 `json:"timeout,omitempty"`
 	WorkDir string  `json:"working_directory,omitempty"`
+}
+
+// commandReapDelay bounds how long Wait blocks after a timeout kill before
+// giving up on the process and closing its pipes. Without it a child the
+// kill could not reach (a root-owned sudo, EPERM) blocks Wait forever — a
+// real run leaked a tool call for over two hours this way.
+const commandReapDelay = 10 * time.Second
+
+// configureCommandReaping makes a context-timeout kill reach the whole
+// process tree, not just the direct child. exec.CommandContext's default
+// cancel SIGKILLs only the child: grandchildren (e.g. a guestfish appliance)
+// survive holding the output pipes, and a root-owned sudo child cannot be
+// signalled at all. Must run after setNetNamespace, which replaces
+// SysProcAttr.
+func configureCommandReaping(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+			// EPERM for root-owned children (sudo). Try the plain kill and
+			// otherwise rely on WaitDelay to unblock Wait; the orphan keeps
+			// running but the tool call returns.
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
+	cmd.WaitDelay = commandReapDelay
 }
 
 // runShellCommand runs name+args under a derived context with the given timeout,
@@ -59,6 +99,7 @@ func runShellCommand(ctx context.Context, timeout time.Duration, workDir string,
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to set network namespace: %v", err)), nil
 		}
 	}
+	configureCommandReaping(cmd)
 	bashPath, err := exec.LookPath("bash")
 	if err != nil {
 		bashPath = "/bin/bash"
@@ -93,13 +134,36 @@ func runShellCommand(ctx context.Context, timeout time.Duration, workDir string,
 
 	exitCode := 0
 	if waitErr != nil {
+		// Check the deadline before the exit error: the timeout kill makes
+		// Wait report a plain signal death (exit -1), which would otherwise
+		// masquerade as the command's own result.
+		if cmdCtx.Err() == context.DeadlineExceeded {
+			return fantasy.NewTextErrorResponse(timeoutResponseMessage(timeout, stdout.String(), stderr.String())), nil
+		}
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
-		} else if cmdCtx.Err() == context.DeadlineExceeded {
-			return fantasy.NewTextErrorResponse("command timed out"), nil
 		}
 	}
 	return buildBashResponse(stdout.String(), stderr.String(), exitCode), nil
+}
+
+// timeoutResponseMessage reports a command timeout together with whatever the
+// command printed before it was killed, so the model can see the state it was
+// stuck in instead of a bare "timed out".
+func timeoutResponseMessage(timeout time.Duration, stdout, stderr string) string {
+	msg := fmt.Sprintf("command timed out after %s", timeout)
+	combined := strings.TrimSpace(stdout)
+	if s := strings.TrimSpace(stderr); s != "" {
+		if combined != "" {
+			combined += "\n"
+		}
+		combined += "STDERR:\n" + s
+	}
+	if combined == "" {
+		return msg
+	}
+	tr := TruncateTail(combined, defaultMaxLines, defaultMaxBytes)
+	return msg + ". Output before the kill:\n" + tr.Content
 }
 
 func NewBashTool(opts ...ToolOption) fantasy.AgentTool {
@@ -246,21 +310,40 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 	if bannedCmdRe.MatchString(args.Command) {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("command '%s' is not allowed", args.Command)), nil
 	}
+
+	// A model that already has sudo permission reflexively typing "sudo foo"
+	// into the bash tool used to just get rejected with a hint to retry via
+	// the sudo tool — and a real run hit that same rejection 11 times in one
+	// session because the hint didn't reliably change its next tool choice.
+	// Since sudo bash -c "<command>" (what the sudo tool itself runs) executes
+	// the whole line as root regardless of where "sudo" appears in it, a bare
+	// sudo command with no ssh involved can be routed there directly instead
+	// of bouncing the round trip back to the model. Restricted/direnv bash
+	// have their own execution paths below and are not covered by this reroute.
+	forwardToSudo := false
 	if bashPrivEscRe.MatchString(args.Command) {
-		msg := "sudo and ssh are not available in the bash tool"
-		var alts []string
-		if ok, _, _ := CheckToolPermission(ctx, "sudo"); ok {
-			alts = append(alts, "sudo")
+		hasSSH := sshPrefixRe.MatchString(args.Command)
+		if !hasSSH && sudoPrefixRe.MatchString(args.Command) && !effCfg.RestrictedBash && !effCfg.Direnv {
+			if ok, _, _ := CheckToolPermission(ctx, "sudo"); ok {
+				forwardToSudo = true
+			}
 		}
-		if ok, _, _ := CheckToolPermission(ctx, "ssh"); ok {
-			alts = append(alts, "ssh")
+		if !forwardToSudo {
+			msg := "sudo and ssh are not available in the bash tool"
+			var alts []string
+			if ok, _, _ := CheckToolPermission(ctx, "sudo"); ok {
+				alts = append(alts, "sudo")
+			}
+			if ok, _, _ := CheckToolPermission(ctx, "ssh"); ok {
+				alts = append(alts, "ssh")
+			}
+			if len(alts) > 0 {
+				msg += " — use the " + strings.Join(alts, " or ") + " tool instead"
+			} else {
+				msg += ", and no sudo/ssh tool is enabled for this agent. Do not retry with sudo; report the exact command for the user to run manually, or ask the user to add 'sudo' to the agent's tools in team.yaml"
+			}
+			return fantasy.NewTextErrorResponse(msg), nil
 		}
-		if len(alts) > 0 {
-			msg += " — use the " + strings.Join(alts, " or ") + " tool instead"
-		} else {
-			msg += ", and no sudo/ssh tool is enabled for this agent. Do not retry with sudo; report the exact command for the user to run manually, or ask the user to add 'sudo' to the agent's tools in team.yaml"
-		}
-		return fantasy.NewTextErrorResponse(msg), nil
 	}
 
 	consentStart := time.Now()
@@ -323,6 +406,14 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		return runShellCommandRestricted(ctx, timeout, effCfg.WorkDir, restrictedPath, effCfg.NetworkBlock, args.Command)
 	}
 
+	if forwardToSudo {
+		resp, err := runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "sudo", []string{"bash", "-c", args.Command}, nil)
+		if err == nil {
+			resp.Content = "[bash: command required root privileges — automatically routed through the sudo tool]\n" + resp.Content
+		}
+		return resp, err
+	}
+
 	return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "bash", []string{"-c", args.Command}, nil)
 }
 
@@ -339,6 +430,7 @@ func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workD
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to set network namespace: %v", err)), nil
 		}
 	}
+	configureCommandReaping(cmd)
 	bashPath, err := exec.LookPath("bash")
 	if err != nil {
 		bashPath = "/bin/bash"
@@ -381,10 +473,11 @@ func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workD
 
 	exitCode := 0
 	if waitErr != nil {
+		if cmdCtx.Err() == context.DeadlineExceeded {
+			return fantasy.NewTextErrorResponse(timeoutResponseMessage(timeout, stdout.String(), stderr.String())), nil
+		}
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
-		} else if cmdCtx.Err() == context.DeadlineExceeded {
-			return fantasy.NewTextErrorResponse("command timed out"), nil
 		}
 	}
 	return buildBashResponse(stdout.String(), stderr.String(), exitCode), nil

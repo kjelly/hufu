@@ -43,7 +43,7 @@ func NewWaitForTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "wait_for",
-			Description: "Poll a shell command until it succeeds, in a single tool call. Use this instead of sleep + re-checking whenever you are waiting for a state change (VM boot, service ready, async job completion, file to appear). The command is re-run every interval_seconds until it exits 0 (and, if success_pattern is set, its combined stdout/stderr matches the regex) or timeout_seconds elapses. On timeout the error includes the last output and exit code so you can see the state it was stuck in. Do not include a 'sudo' prefix in the command — set sudo:true instead.",
+			Description: "Poll a shell command until it succeeds, in a single tool call. Use this instead of sleep + re-checking whenever you are waiting for a state change (VM boot, service ready, async job completion, file to appear). The command is re-run every interval_seconds until it exits 0 (and, if success_pattern is set, its combined stdout/stderr matches the regex) or timeout_seconds elapses. On timeout the error includes the last output and exit code so you can see the state it was stuck in. Prefer sudo:true over a 'sudo' prefix in the command (a stray prefix is tolerated but sudo:true is the clean way to ask for root). A command containing 'ssh' is always rejected — use the ssh tool for remote checks instead.",
 			Parameters: map[string]any{
 				"command": map[string]any{
 					"type":        "string",
@@ -91,8 +91,23 @@ func executeWaitFor(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) 
 	if bannedCmdRe.MatchString(args.Command) {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("command '%s' is not allowed", args.Command)), nil
 	}
-	if bashPrivEscRe.MatchString(args.Command) {
-		return fantasy.NewTextErrorResponse("sudo and ssh prefixes are not allowed in wait_for commands — set sudo:true to run the poll with root privileges, or use the ssh tool for remote checks"), nil
+	// A model that writes "sudo foo" as the command habitually does one of
+	// two things wrong: forgets sudo:true, or sets sudo:true and *also*
+	// leaves the literal "sudo " in the command text. Both used to be a
+	// flat reject ("sudo and ssh prefixes are not allowed"), which a real
+	// run hit even with sudo:true already set — one wasted round trip to
+	// relearn what the tool description already said. Since sudo:true runs
+	// the whole command through `sudo bash -c "<command>"`, a redundant
+	// "sudo" inside it is a harmless no-op (sudo re-invoked as already-root
+	// just proceeds) — so a bare sudo command with no ssh involved can
+	// simply be treated as sudo:true instead of rejected. ssh still always
+	// rejects: this tool has no way to safely parse or route it.
+	needsSudo := args.Sudo
+	if sshPrefixRe.MatchString(args.Command) {
+		return fantasy.NewTextErrorResponse("ssh prefixes are not allowed in wait_for commands — use the ssh tool for remote checks"), nil
+	}
+	if sudoPrefixRe.MatchString(args.Command) {
+		needsSudo = true
 	}
 
 	var pattern *regexp.Regexp
@@ -129,9 +144,10 @@ func executeWaitFor(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) 
 
 	name := "bash"
 	cmdArgs := []string{"-c", args.Command}
-	if args.Sudo {
-		// sudo:true must not escalate past the agent's own toolset: an agent
-		// whose allowlist lacks the sudo tool cannot gain root through
+	if needsSudo {
+		// sudo (whether from sudo:true or inferred from a literal "sudo" in
+		// the command) must not escalate past the agent's own toolset: an
+		// agent whose allowlist lacks the sudo tool cannot gain root through
 		// wait_for either.
 		if allowed, ok := ctx.Value(AgentToolsAllowedKey).([]string); ok {
 			hasSudo := false
@@ -211,6 +227,7 @@ func runPollCommand(ctx context.Context, name string, args []string, workDir str
 			return "", -1, fmt.Errorf("setting network namespace: %w", err)
 		}
 	}
+	configureCommandReaping(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

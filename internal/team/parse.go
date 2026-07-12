@@ -310,7 +310,7 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 
 	toolsList := anyToStrList(fm.Tools)
 	skillsList := anyToStrList(fm.Skills)
-	toolsStr := strings.Join(toolsList, ",")
+	toolsStr := agent.ExpandImpliedTools(strings.Join(toolsList, ","))
 	skillsStr := strings.Join(skillsList, ",")
 	maxRetries := anyToInt(fm.MaxRetries, -1)
 
@@ -553,7 +553,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		cfg.WorkerContextSize = yc.WorkerContextSize
 	}
 	if tools := parseAllowedTools(yc.ToolsAllowed); len(tools) > 0 {
-		cfg.ToolsAllowed = tools
+		cfg.ToolsAllowed = strings.Split(agent.ExpandImpliedTools(strings.Join(tools, ",")), ",")
 	}
 	if len(yc.Preflight) > 0 {
 		cfg.Preflight = yc.Preflight

@@ -389,6 +389,50 @@ var alwaysIncludeTools = map[string]bool{
 	"team_info":     true,
 }
 
+// impliedTools maps a tool to companions that should be granted alongside it
+// automatically. wait_for runs the exact same command through the exact same
+// consent check and sudo allowlist as bash/sudo — it is a single tool call
+// that replaces an LLM-driven sleep-and-recheck loop, not a new capability.
+// A real run burned dozens of round trips on "sleep 5 && check status"
+// because wait_for existed but no team.yaml opted into it; expanding the
+// implication here means every team gets it the moment it grants bash or
+// sudo, with no YAML to remember to update.
+var impliedTools = map[string][]string{
+	"bash": {"wait_for"},
+	"sudo": {"wait_for"},
+}
+
+// ExpandImpliedTools appends tools implied by ones already present in a
+// comma-separated tool list (see impliedTools), skipping tools already
+// listed. An empty or "all" list is returned unchanged: it already grants
+// everything. Call this wherever an agent's tool string is first assembled
+// (team.yaml agent frontmatter, the default team, CLI-provided lists) so
+// SelectTools and the runtime permission allowlist — which both consume the
+// same string — see the expansion for free.
+func ExpandImpliedTools(toolNames string) string {
+	if toolNames == "" || toolNames == "all" {
+		return toolNames
+	}
+	fields := strings.Split(toolNames, ",")
+	have := make(map[string]bool, len(fields))
+	for _, t := range fields {
+		have[strings.TrimSpace(t)] = true
+	}
+	var add []string
+	for _, t := range fields {
+		for _, implied := range impliedTools[strings.TrimSpace(t)] {
+			if !have[implied] {
+				have[implied] = true
+				add = append(add, implied)
+			}
+		}
+	}
+	if len(add) == 0 {
+		return toolNames
+	}
+	return toolNames + "," + strings.Join(add, ",")
+}
+
 func SelectTools(allTools []fantasy.AgentTool, toolNames string) []fantasy.AgentTool {
 	if toolNames == "" || toolNames == "all" {
 		return allTools

@@ -141,6 +141,31 @@ func (c *Coordinator) lookupTaskCacheAllGenerationsWithVerify(ctx context.Contex
 	all := c.taskResultCache[agentKey]
 	c.taskResultCacheMu.RUnlock()
 
+	return c.lookupTaskCacheIn(ctx, all, newTask, verify)
+}
+
+// lookupTaskCacheCurrentRunWithVerify is lookupTaskCacheAllGenerationsWithVerify
+// restricted to entries produced by this run: entries pinned from a previous
+// run (session.json / task journal) are skipped. Duplicate *rejection* must
+// use this variant — a user who explicitly asks to re-run a mission would
+// otherwise have the new run's first task killed as a "duplicate" of work
+// from the previous run. Cross-run reuse stays available through the
+// non-restricted lookup, which returns the cached output instead of an error.
+func (c *Coordinator) lookupTaskCacheCurrentRunWithVerify(ctx context.Context, agentKey, newTask, verify string) (string, string, bool) {
+	c.taskResultCacheMu.RLock()
+	all := c.taskResultCache[agentKey]
+	c.taskResultCacheMu.RUnlock()
+
+	thisRun := make([]cachedTaskEntry, 0, len(all))
+	for _, e := range all {
+		if !e.pinned {
+			thisRun = append(thisRun, e)
+		}
+	}
+	return c.lookupTaskCacheIn(ctx, thisRun, newTask, verify)
+}
+
+func (c *Coordinator) lookupTaskCacheIn(ctx context.Context, all []cachedTaskEntry, newTask, verify string) (string, string, bool) {
 	if len(all) == 0 {
 		return "", "", false
 	}
@@ -392,7 +417,10 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 		}
 	}
 
-	// Fourth pass: semantic duplicate check against completed history only.
+	// Fourth pass: semantic duplicate check against completed history from
+	// THIS run only. Entries pinned from a previous run must not reject new
+	// tasks: "re-run the verification" would have its first task errored as a
+	// duplicate of last run's work.
 	for i, t := range tasks {
 		if duplicates[i] {
 			continue
@@ -403,7 +431,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 		}
 		agentKey := strings.ToLower(t.Agent)
 		dupCtx, dupCancel := context.WithTimeout(ctx, 5*time.Second)
-		cachedOutput, cachedDesc, cacheOK := c.lookupTaskCacheAllGenerationsWithVerify(dupCtx, agentKey, desc, t.Verify)
+		cachedOutput, cachedDesc, cacheOK := c.lookupTaskCacheCurrentRunWithVerify(dupCtx, agentKey, desc, t.Verify)
 		dupCancel()
 		if cacheOK {
 			warnings = append(warnings, fmt.Sprintf("SEMANTIC DUPLICATE: %s (similar to completed task: %q)", truncateTaskDesc(desc), truncateTaskDesc(cachedDesc)))

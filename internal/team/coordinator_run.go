@@ -5,6 +5,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -79,9 +80,8 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		agentTimeout = time.Duration(agentDef.Timeout) * time.Second
 	}
 
-	taskCtx, cancel := context.WithTimeout(ctx, agentTimeout)
+	taskCtx, cancel := tools.WithInteractiveAwareTimeout(ctx, agentTimeout)
 	defer cancel()
-	taskCtx = tools.AskUserAwareDeadline(taskCtx)
 
 	taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 	taskCtx = context.WithValue(taskCtx, modelKey{}, directModel)
@@ -215,9 +215,8 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 		coordinatorTimeout = time.Duration(orchDef.Timeout) * time.Second
 	}
 
-	orchCtx, cancel := context.WithTimeout(ctx, coordinatorTimeout)
+	orchCtx, cancel := tools.WithInteractiveAwareTimeout(ctx, coordinatorTimeout)
 	defer cancel()
-	orchCtx = tools.AskUserAwareDeadline(orchCtx)
 	orchCtx = context.WithValue(orchCtx, todoIDKey{}, CoordTodoID)
 	// The coordinator's built-in tools are always permitted, independent of
 	// team.yaml: without this the permission gate denies the forced read-only
@@ -321,6 +320,36 @@ func (c *Coordinator) summaryFromTodos(runErr error) string {
 		return ""
 	}
 	return b.String()
+}
+
+// recordRunAborted persists an honest trace of a run that died before
+// producing a final answer: a session entry (so chat_history.md and a later
+// `continue` show what happened instead of a user message with no reply) and
+// a coordinator status line naming the abort. A real aborted run left
+// nothing — the next session had no idea the previous one ended mid-flight.
+func (c *Coordinator) recordRunAborted(runErr error) {
+	reason := "run ended before completion"
+	switch {
+	case errors.Is(runErr, context.Canceled):
+		reason = "run aborted (cancelled by user)"
+	case errors.Is(runErr, context.DeadlineExceeded):
+		reason = "run aborted (coordinator timeout)"
+	}
+
+	if c.session != nil && c.session.Workspace != "" {
+		_ = writeStatusWithDetail(c.session.Workspace, "coordinator", "error", reason, fmt.Sprintf("error=%v", runErr))
+	}
+
+	if c.sessionData == nil {
+		return
+	}
+	entry := fmt.Sprintf("[%s: %v]", reason, runErr)
+	if summary := c.summaryFromTodos(runErr); summary != "" {
+		entry += "\n\n" + summary
+	}
+	c.sessionData.AddEntry("assistant", entry)
+	c.sessionData.Rounds = c.totalRounds()
+	_ = SaveSession(c.session.Workspace, c.sessionData)
 }
 
 func (c *Coordinator) finalizeRemainingTasks() {
@@ -561,6 +590,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		} else {
 			c.finalizeRemainingTasks()
 			c.saveHistoryAndSession(ctx, steps)
+			c.recordRunAborted(err)
 			orchModel := c.resolveAgentModel(orchDef, "")
 			c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator failed").withTodoID(CoordTodoID))
 			return "", fmt.Errorf("coordinator failed (model: %s): %w", orchModel, err)
@@ -629,6 +659,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		} else {
 			c.finalizeRemainingTasks()
 			c.saveHistoryAndSession(ctx, steps)
+			c.recordRunAborted(err)
 			orchModel := c.resolveAgentModel(orchDef, "")
 			c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator continuation failed").withTodoID(CoordTodoID))
 			return "", fmt.Errorf("coordinator continuation failed (model: %s): %w", orchModel, err)

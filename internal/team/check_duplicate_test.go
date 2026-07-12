@@ -210,3 +210,57 @@ func containsSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+// A cache entry pinned from a previous run (session/journal restore) must not
+// reject a new run's task as a semantic duplicate: the user may have
+// explicitly asked to re-run the same mission. Only entries produced by this
+// run may do that.
+func TestCheckDuplicateTasks_PinnedEntriesDoNotReject(t *testing.T) {
+	c := &Coordinator{
+		delegatedTasks:   make(map[string]int),
+		delegatedTasksMu: sync.Mutex{},
+		taskTracker:      NewTaskTracker(),
+		taskResultCache: map[string][]cachedTaskEntry{
+			"deployer": {{
+				taskDesc: "clean up old VMs and create OVS bridge",
+				output:   "done last run",
+				pinned:   true,
+			}},
+		},
+	}
+
+	warnings, duplicates, _ := c.checkDuplicateTasks(context.Background(), []TaskDef{{
+		Agent: "deployer",
+		Goal:  "clean up old VMs and create OVS bridge",
+	}})
+
+	if duplicates[0] {
+		t.Fatalf("pinned previous-run entry rejected the task as duplicate; warnings: %v", warnings)
+	}
+}
+
+func TestCheckDuplicateTasks_CurrentRunCacheStillRejects(t *testing.T) {
+	c := &Coordinator{
+		delegatedTasks:   make(map[string]int),
+		delegatedTasksMu: sync.Mutex{},
+		taskTracker:      NewTaskTracker(),
+		taskResultCache: map[string][]cachedTaskEntry{
+			"deployer": {{
+				taskDesc: "clean up old VMs and create OVS bridge",
+				output:   "done this run",
+			}},
+		},
+	}
+
+	warnings, duplicates, _ := c.checkDuplicateTasks(context.Background(), []TaskDef{{
+		Agent: "deployer",
+		Goal:  "clean up old VMs and create OVS bridge",
+	}})
+
+	if !duplicates[0] {
+		t.Fatal("same-run completed task should still be flagged as a semantic duplicate")
+	}
+	if len(warnings) == 0 || !containsString(warnings[0], "SEMANTIC DUPLICATE") {
+		t.Fatalf("expected SEMANTIC DUPLICATE warning, got %v", warnings)
+	}
+}

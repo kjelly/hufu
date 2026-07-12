@@ -25,6 +25,22 @@ func NewPathConsentWithAgentInfo(fn func() AgentInfo) *PathConsent {
 	return &PathConsent{currentAgent: fn}
 }
 
+func NewTeamPathConsent(teamDir string) (*PathConsent, error) { return NewPathConsent(), nil }
+
+type PathConsentPolicy struct {
+	Allowed []string
+	Denied  []string
+}
+
+func PathConsentPolicyPath(teamDir string) string { return "" }
+func LoadPathConsentPolicy(teamDir string) (PathConsentPolicy, error) {
+	return PathConsentPolicy{}, nil
+}
+func SavePathConsentPolicy(teamDir string, policy PathConsentPolicy) error { return nil }
+func UpdatePathConsentPolicy(teamDir, action, path string) (PathConsentPolicy, error) {
+	return PathConsentPolicy{}, nil
+}
+
 func WithWorkDir(dir string) ToolOption           { return func(c *ToolConfig) { c.WorkDir = dir } }
 func WithAllowedPaths(p []string) ToolOption      { return func(c *ToolConfig) { c.AllowedPaths = p } }
 func WithPathConsent(pc *PathConsent) ToolOption  { return func(c *ToolConfig) { c.PathConsent = pc } }

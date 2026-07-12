@@ -2,10 +2,12 @@ package tools
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -106,6 +108,61 @@ func TestPathConsentRemembered(t *testing.T) {
 	}
 	if pc.IsRemembered("/some/path-other/file.txt") {
 		t.Error("path with common prefix but different directory should not be remembered")
+	}
+}
+
+func TestTeamPathConsentPersistsAlwaysDecisions(t *testing.T) {
+	teamDir := t.TempDir()
+	consent, err := NewTeamPathConsent(teamDir)
+	if err != nil {
+		t.Fatalf("NewTeamPathConsent() error = %v", err)
+	}
+
+	consent.mu.Lock()
+	consent.remembered = append(consent.remembered, "/srv/example/")
+	consent.denied = append(consent.denied, "/srv/private/")
+	err = consent.persistLocked()
+	consent.mu.Unlock()
+	if err != nil {
+		t.Fatalf("persistLocked() error = %v", err)
+	}
+
+	reloaded, err := NewTeamPathConsent(teamDir)
+	if err != nil {
+		t.Fatalf("NewTeamPathConsent() reload error = %v", err)
+	}
+	if !reloaded.IsRemembered("/srv/example/file.txt") {
+		t.Error("persisted allow was not restored")
+	}
+	if !reloaded.IsDenied("/srv/private/file.txt") {
+		t.Error("persisted deny was not restored")
+	}
+}
+
+func TestUpdatePathConsentPolicyReplacesOppositeDecision(t *testing.T) {
+	teamDir := t.TempDir()
+	policy, err := UpdatePathConsentPolicy(teamDir, "allow", "/srv/example")
+	if err != nil {
+		t.Fatalf("allow error = %v", err)
+	}
+	if got, want := strings.Join(policy.Allowed, ","), "/srv/example"; got != want {
+		t.Fatalf("allowed = %q, want %q", got, want)
+	}
+
+	policy, err = UpdatePathConsentPolicy(teamDir, "deny", "/srv/example")
+	if err != nil {
+		t.Fatalf("deny error = %v", err)
+	}
+	if len(policy.Allowed) != 0 || strings.Join(policy.Denied, ",") != "/srv/example" {
+		t.Fatalf("policy after deny = %#v, want only denied /srv/example", policy)
+	}
+
+	policy, err = UpdatePathConsentPolicy(teamDir, "remove", "/srv/example")
+	if err != nil {
+		t.Fatalf("remove error = %v", err)
+	}
+	if len(policy.Allowed) != 0 || len(policy.Denied) != 0 {
+		t.Fatalf("policy after remove = %#v, want empty", policy)
 	}
 }
 
@@ -474,6 +531,33 @@ func TestResolveAndValidatePathWithConsentAllowed(t *testing.T) {
 	}
 }
 
+func TestResolveAndValidatePathWithRememberedConsent(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "project")
+	consentedDir := filepath.Join(tmpDir, "shared")
+	if err := os.MkdirAll(consentedDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	consent := NewPathConsent()
+	consent.mu.Lock()
+	consent.remembered = append(consent.remembered, consentedDir+string(os.PathSeparator))
+	consent.mu.Unlock()
+
+	want := filepath.Join(consentedDir, "note.txt")
+	path, err := resolveAndValidatePathWithConsent(want, ToolConfig{
+		WorkDir:      workDir,
+		AllowedPaths: []string{workDir},
+		PathConsent:  consent,
+	})
+	if err != nil {
+		t.Fatalf("resolveAndValidatePathWithConsent() error = %v", err)
+	}
+	if path != want {
+		t.Errorf("path = %q, want %q", path, want)
+	}
+}
+
 func TestConsentOutcomeString(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -492,5 +576,136 @@ func TestConsentOutcomeString(t *testing.T) {
 				t.Errorf("consentOutcomeString(%v, %v) = %q, want %q", tc.result, tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestConsentOutcomeStringTimeout(t *testing.T) {
+	err := fmt.Errorf("%w after 2m0s", ErrConsentPromptTimeout)
+	if got := consentOutcomeString(ConsentDenied, err); got != "timeout-denied" {
+		t.Errorf("consentOutcomeString(timeout err) = %q, want %q", got, "timeout-denied")
+	}
+}
+
+func TestAskConsentUnattendedFastDeny(t *testing.T) {
+	SetProcessUnattended(true)
+	t.Cleanup(func() { SetProcessUnattended(false) })
+
+	pc := NewPathConsent()
+	result, suggestion, err := pc.AskConsent("/etc/nowhere-special", "access", "sudo", "cat /etc/nowhere-special")
+	if result != ConsentDenied {
+		t.Fatalf("result = %v, want ConsentDenied", result)
+	}
+	if suggestion != "" {
+		t.Fatalf("suggestion = %q, want empty", suggestion)
+	}
+	if err == nil || !strings.Contains(err.Error(), "--allow-path") {
+		t.Fatalf("err = %v, want actionable --allow-path error", err)
+	}
+}
+
+func TestConsentReadLineWithTimeout(t *testing.T) {
+	release := make(chan string, 1)
+	consentStdin.mu.Lock()
+	consentStdin.ch = make(chan string, 1)
+	consentStdin.pending = false
+	consentStdin.readLine = func() string { return <-release }
+	consentStdin.mu.Unlock()
+	t.Cleanup(func() {
+		consentStdin.mu.Lock()
+		consentStdin.ch = nil
+		consentStdin.pending = false
+		consentStdin.readLine = nil
+		consentStdin.mu.Unlock()
+		close(release)
+	})
+
+	// Nobody answers: the read times out.
+	line, ok := consentReadLineWithTimeout(50 * time.Millisecond)
+	if ok || line != "" {
+		t.Fatalf("expected timeout, got ok=%v line=%q", ok, line)
+	}
+
+	// The abandoned reader stays pending; a late answer is delivered to the
+	// NEXT read instead of being lost or racing a second reader.
+	release <- "a"
+	line, ok = consentReadLineWithTimeout(2 * time.Second)
+	if !ok || line != "a" {
+		t.Fatalf("expected late line to be delivered, got ok=%v line=%q", ok, line)
+	}
+
+	// After delivery the pending flag clears, so a fresh read spawns.
+	release <- "y"
+	line, ok = consentReadLineWithTimeout(2 * time.Second)
+	if !ok || line != "y" {
+		t.Fatalf("expected fresh read, got ok=%v line=%q", ok, line)
+	}
+}
+
+func TestDrainStaleConsentInput(t *testing.T) {
+	consentStdin.mu.Lock()
+	consentStdin.ch = make(chan string, 1)
+	consentStdin.ch <- "stale"
+	consentStdin.mu.Unlock()
+	t.Cleanup(func() {
+		consentStdin.mu.Lock()
+		consentStdin.ch = nil
+		consentStdin.pending = false
+		consentStdin.readLine = nil
+		consentStdin.mu.Unlock()
+	})
+
+	drainStaleConsentInput()
+
+	select {
+	case got := <-consentStdin.ch:
+		t.Fatalf("stale line %q not drained", got)
+	default:
+	}
+}
+
+func TestConsentPromptTimeoutEnv(t *testing.T) {
+	t.Setenv("HUFU_CONSENT_TIMEOUT", "7")
+	if got := consentPromptTimeout(); got != 7*time.Second {
+		t.Errorf("consentPromptTimeout() = %v, want 7s", got)
+	}
+	t.Setenv("HUFU_CONSENT_TIMEOUT", "0")
+	if got := consentPromptTimeout(); got != 0 {
+		t.Errorf("consentPromptTimeout() with 0 = %v, want 0 (wait forever)", got)
+	}
+	t.Setenv("HUFU_CONSENT_TIMEOUT", "junk")
+	if got := consentPromptTimeout(); got != defaultConsentPromptTimeout {
+		t.Errorf("consentPromptTimeout() with junk = %v, want default", got)
+	}
+}
+
+// TestResolveAndValidatePathWithConsentAllowedOutsideWorkDir reproduces a real
+// failure: an agent's allowed-paths entry lives outside the project WorkDir
+// (a /tmp scratch directory a deployer agent writes helper scripts into).
+// isPathAllowed correctly matches it, but the write/edit/download tools then
+// re-validated with resolveAndValidatePath, which only knows about WorkDir
+// and rejected the very path AllowedPaths had just approved.
+func TestResolveAndValidatePathWithConsentAllowedOutsideWorkDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	projectDir := filepath.Join(tmpDir, "project")
+	scratchDir := filepath.Join(tmpDir, "scratch")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(project) error = %v", err)
+	}
+	if err := os.MkdirAll(scratchDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(scratch) error = %v", err)
+	}
+
+	cfg := ToolConfig{
+		WorkDir:      projectDir,
+		AllowedPaths: []string{projectDir, scratchDir},
+	}
+
+	want := filepath.Join(scratchDir, "configure.sh")
+	path, err := resolveAndValidatePathWithConsent(want, cfg)
+	if err != nil {
+		t.Fatalf("resolveAndValidatePathWithConsent() error = %v, want success for an allowed-paths entry outside WorkDir", err)
+	}
+	if path != want {
+		t.Errorf("path = %q, want %q", path, want)
 	}
 }

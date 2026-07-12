@@ -649,8 +649,19 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	resolvedNoNet := noNet || cfg.NoNet || session.Config.NoNet
 	resolvedForceMCP := forceMCP || cfg.ForceMCP || session.Config.ForceMCP
 
+	// Each team receives its own consent store. The store persists explicit
+	// "always" decisions in the team directory and prevents one team's policy
+	// from granting access to another team in a multi-team prompt.
+	teamPathConsent := pathConsent
+	if pathConsent != nil {
+		teamPathConsent, err = tools.NewTeamPathConsent(session.Dir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load path consent policy: %w", err)
+		}
+	}
+
 	roleModels := team.RoleModels{Sidecar: resolvedSidecarModel, Guard: resolvedGuardModel, Judge: resolvedJudgeModel, PlanReviewer: resolvedPlanReviewerModel}
-	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, roleModels, resolvedMaxConcurrent, verbose, think, direnv, allowedPaths, pathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode)
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, roleModels, resolvedMaxConcurrent, verbose, think, direnv, allowedPaths, teamPathConsent, hookRegistry, rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}

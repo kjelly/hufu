@@ -580,3 +580,28 @@ func TestMaxStepsConfiguration(t *testing.T) {
 		t.Errorf("AgentConfig.MaxSteps = %d, want %d after write", agentConfig.MaxSteps, 200)
 	}
 }
+
+func TestExpandImpliedTools(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty stays empty (unrestricted)", "", ""},
+		{"all stays all (unrestricted)", "all", "all"},
+		{"bash implies wait_for", "bash", "bash,wait_for"},
+		{"sudo implies wait_for", "sudo", "sudo,wait_for"},
+		{"bash and sudo dedupe wait_for", "bash,sudo", "bash,sudo,wait_for"},
+		{"already present is not duplicated", "bash,wait_for", "bash,wait_for"},
+		{"whitespace around tool names is trimmed", " bash , view ", " bash , view ,wait_for"},
+		{"no implication for unrelated tools", "view,grep,glob", "view,grep,glob"},
+		{"implied tool preserved alongside others", "view,bash,edit", "view,bash,edit,wait_for"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ExpandImpliedTools(tt.in); got != tt.want {
+				t.Errorf("ExpandImpliedTools(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
