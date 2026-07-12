@@ -51,23 +51,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// When a model-list is configured, validate the requested model is in it.
 	// When no model-list is configured, ignore task.Model entirely — the agent's
 	// own model (from agent.md > team.yaml) is used via resolveAgentModel below.
-	if len(c.modelList) == 0 {
-		task.Model = ""
-	} else if task.Model != "" {
-		found := false
-		for _, m := range c.modelList {
-			if m.ID == task.Model {
-				found = true
-				break
-			}
-		}
-		if !found {
-			var validIDs []string
-			for _, m := range c.modelList {
-				validIDs = append(validIDs, m.ID)
-			}
-			return "", fmt.Errorf("unknown model %q for agent %q (valid models: %v)", task.Model, task.Agent, validIDs)
-		}
+	if err := c.validateTaskModel(&task); err != nil {
+		return "", err
 	}
 
 	agentTimeout := time.Duration(c.session.Config.Timeout) * time.Second
@@ -140,29 +125,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	}
 
 	var ag fantasy.Agent
-	if task.PlanFirst && task.PlanID == "" {
-		planAg, planErr := agent.CreateAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
-			Def:        agentDef,
-			TeamConfig: &c.session.Config,
-			WorkDir:    c.projectDir,
-			MaxSteps:   agent.DefaultMaxSteps,
-		}, append(agent.SelectTools(c.coreTools, agentDef.Tools), &submitPlanTool{coordinator: c, todoID: todoID}))
-		if planErr != nil {
-			detail := c.FailureDetail(planErr, "")
-			c.report(c.newEvent("error").withAgent(agentName).withMessage(planErr.Error()).withTodoID(todoID))
-			c.PersistFailure(agentName, taskDesc, todoID, detail)
-			return "", planErr
-		}
-		ag = planAg
-	} else {
-		var err error
-		ag, err = c.getOrCreateAgent(parentCtx, agentDef, task.Model)
-		if err != nil {
-			detail := c.FailureDetail(err, "")
-			c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
-			c.PersistFailure(agentName, taskDesc, todoID, detail)
-			return "", err
-		}
+	ag, err = c.createTaskAgent(parentCtx, agentDef, task, resolvedModel, todoID, taskDesc, agentName)
+	if err != nil {
+		return "", err
 	}
 
 	var prompt string
@@ -199,6 +164,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	}
 	if task.Verify != "" {
 		prompt += completionVerificationInstructions(task.Verify, c.projectDir)
+	}
+	if note := bashToolRoutingNote(agentDef.Tools); note != "" {
+		prompt += note
 	}
 
 	// SSH session tracking is handled by the ssh tool's response hint.
@@ -241,6 +209,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	var conversationHistory []fantasy.Message
 	var lastErr error
+	// lastOutput keeps the most recent non-empty agent output so a final
+	// failure (e.g. deliverable verification) does not discard findings the
+	// coordinator could act on.
+	var lastOutput string
 	// appliedHint tracks the most recent reflection hint fed into a retry (and
 	// the error that triggered it) so a rescued task can persist the lesson.
 	var appliedHint, appliedHintTrigger string
@@ -348,7 +320,19 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			}))
 
 			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing)
+			if err == nil && strings.TrimSpace(output) == "" && len(steps) > 0 {
+				// The agent worked but never wrote a final message — almost
+				// always the step cap cutting it off mid-diagnosis. Give it one
+				// tool-free turn to summarize instead of failing the task and
+				// re-running everything from scratch.
+				if rescued := c.rescueFinalSummary(taskCtx, ag, agentName, steps, timing); rescued != "" {
+					output = rescued
+				}
+			}
 		}()
+		if strings.TrimSpace(output) != "" {
+			lastOutput = output
+		}
 
 		if err == nil {
 			c.pendingPlansMu.Lock()
@@ -431,6 +415,13 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			}
 		}
 
+		// Step messages start at the first assistant turn; without re-adding
+		// the prompt, a retry's history opens with an assistant message and
+		// the model sees its past actions but never the original instruction
+		// (some providers also reject histories that do not start with user).
+		if len(conversationHistory) == 0 && len(steps) > 0 {
+			conversationHistory = append(conversationHistory, fantasy.NewUserMessage(currentPrompt))
+		}
 		for _, step := range steps {
 			conversationHistory = append(conversationHistory, step.Messages...)
 		}
@@ -461,13 +452,39 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	_, modelTime, toolTime := timing.snapshot()
 	c.updateTodoTiming(todoID, modelTime, toolTime)
-	detail := c.FailureDetail(lastErr, "")
-	c.PersistFailure(agentName, taskDesc, todoID, detail)
+	// No PersistFailure here: every failure path inside the loop has already
+	// persisted this error; persisting again wrote duplicate journal/status
+	// records for the same failure.
 	c.autoWriteSTMASync(agentName, taskDesc, "", lastErr.Error(), false)
 	if maxRetries > 1 {
 		c.persistReflexionLessonAsync(agentName, task.Goal, lastErr.Error(), appliedHint, false)
 	}
-	return "", fmt.Errorf("agent %q failed after %d attempts (model: %s): %w", agentName, maxRetries, resolvedModel, lastErr)
+	failErr := fmt.Errorf("agent %q failed after %d attempts (model: %s): %w", agentName, maxRetries, resolvedModel, lastErr)
+	if strings.TrimSpace(lastOutput) != "" {
+		failErr = fmt.Errorf("%w\n\nLast agent output before failure (may contain useful findings):\n%s", failErr, utils.TruncateRunes(lastOutput, 2000))
+	}
+	return "", failErr
+}
+
+// rescueFinalSummary gives an agent that stopped without a final message one
+// tool-free turn (its full step history attached) to summarize what it did.
+// Returns "" when the rescue itself fails or produces nothing.
+func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, agentName string, steps []fantasy.StepResult, timing *taskTiming) string {
+	if ctx.Err() != nil {
+		return ""
+	}
+	var history []fantasy.Message
+	for _, step := range steps {
+		history = append(history, step.Messages...)
+	}
+	c.report(c.newEvent("step").withAgent(agentName).withMessage("agent stopped without a final message; requesting a summary turn"))
+	summary, _, err := c.runAgentWithStatusAndHistory(ctx, ag, agentName,
+		"You stopped before writing a final message (the step limit was likely reached). Do NOT call any tools. Based on the work above, write your final report now: what you did, what you found (including partial results and errors), and what remains to be done.",
+		history, timing, fantasy.StepCountIs(1))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(summary)
 }
 
 func (c *Coordinator) runAgentWithStatus(ctx context.Context, ag fantasy.Agent, agentName, prompt string, timing *taskTiming) (string, error) {
@@ -566,6 +583,12 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 
 	var loopDetectMu sync.Mutex
 	var lastToolCall *lastToolCallEntry
+	// Delta-logging state for llm.log: how many messages this stream has
+	// already logged, and the approximate size of the latest request (used to
+	// estimate tokens when the provider reports none).
+	var llmLogMu sync.Mutex
+	loggedMsgs := 0
+	lastReqBytes := 0
 	consecutiveErrCount := 0
 	// Maps in-flight tool call IDs to their input so error counting can match
 	// on tool+input; counting by tool name alone lets one failure of input A
@@ -585,10 +608,14 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			// history compaction at all).
 			if capped := capStepMessages(opts.Messages); capped != nil {
 				opts.Messages = capped
-				llmLogRequest(logWrite, opts)
+				llmLogMu.Lock()
+				loggedMsgs, lastReqBytes = llmLogRequest(logWrite, opts, capped, loggedMsgs)
+				llmLogMu.Unlock()
 				return ctx, fantasy.PrepareStepResult{Messages: capped}, nil
 			}
-			llmLogRequest(logWrite, opts)
+			llmLogMu.Lock()
+			loggedMsgs, lastReqBytes = llmLogRequest(logWrite, opts, opts.Messages, loggedMsgs)
+			llmLogMu.Unlock()
 			return ctx, fantasy.PrepareStepResult{}, nil
 		},
 		OnStepStart: func(stepNumber int) error {
@@ -607,7 +634,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			}
 			reportFn(c.newEvent("tool_call").withAgent(agentName).withTodoID(todoID).withTool(tc.ToolName, argsPreview))
 			llmLogStreamEvent(logWrite, "tool_call", formatToolCallContent(tc))
-			audit.LogToolCall(agentName, tc.ToolName, tc.Input)
+			audit.LogToolCall(agentName, tc.ToolName, tc.Input, tc.ToolCallID)
 			c.SetCurrentStage("tool")
 			c.SetCurrentTool(tc.ToolName)
 
@@ -655,7 +682,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			reportFn(c.newEvent("tool_result").withAgent(agentName).withTodoID(todoID).withToolResult(tr.ToolName, resultPreview).withModel(resolvedModel))
 			llmLogStreamEvent(logWrite, "tool_result", formatToolResultContent(tr))
 			_, isErrResult := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Result)
-			audit.LogToolResult(agentName, tr.ToolName, resultPreview, isErrResult)
+			audit.LogToolResult(agentName, tr.ToolName, resultPreview, isErrResult, tr.ToolCallID)
 
 			// 🔁 Track error count for the exact call (tool + input) the
 			// detector is watching; results of other in-flight calls of the
@@ -698,7 +725,10 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				reportFn(c.newEvent("reasoning").withAgent(agentName).withTodoID(todoID).withMessage(rsn))
 				logWrite(rsn)
 			})
-			llmLogStreamFinish(logWrite, finishReason, usage)
+			llmLogMu.Lock()
+			reqBytes := lastReqBytes
+			llmLogMu.Unlock()
+			llmLogStreamFinish(logWrite, finishReason, usage, reqBytes)
 
 			if c.hooks != nil && c.hooks.HasHooks("after_llm_step") {
 				resolvedModel, _ := ctx.Value(modelKey{}).(string)
@@ -752,6 +782,39 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		return "", nil, err
 	}
 	return result.Response.Content.Text(), result.Steps, nil
+}
+
+// bashToolRoutingNote tells agents that also carry the dedicated sudo/ssh
+// tools that the bash tool rejects those commands. Real runs show agents
+// re-learning this by hitting the guardrail on the first tool call of nearly
+// every task, wasting a round-trip each time.
+func bashToolRoutingNote(toolNames string) string {
+	has := func(name string) bool {
+		if toolNames == "" || toolNames == "all" {
+			return true
+		}
+		for _, t := range strings.Split(toolNames, ",") {
+			if strings.TrimSpace(t) == name {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("bash") {
+		return ""
+	}
+	var privileged []string
+	if has("sudo") {
+		privileged = append(privileged, "sudo")
+	}
+	if has("ssh") {
+		privileged = append(privileged, "ssh")
+	}
+	if len(privileged) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n\n## Tool Notes\n\n- The bash tool REJECTS %s commands. Run privileged/remote commands through the dedicated %s tool(s) directly (no prefix needed there).",
+		strings.Join(privileged, " and "), strings.Join(privileged, "/"))
 }
 
 func (c *Coordinator) buildConcurrentTasksContext(excludeID string) string {
@@ -820,6 +883,11 @@ func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef 
 		}
 		if result.TimedOut {
 			return result, fmt.Errorf("verification timed out after %s%s", result.Duration.Round(time.Millisecond), detail)
+		}
+		if result.ExitCode == 127 {
+			// A coordinator model once filled verify with a natural-language
+			// sentence, which sh dutifully failed with "command not found".
+			return result, fmt.Errorf("%v%s — exit 127 means the command was not found: the verify field must be a runnable shell command (e.g. 'test -f report.md'), not a natural-language description of the expected outcome", err, detail)
 		}
 		return result, fmt.Errorf("%v%s", err, detail)
 	}
@@ -909,4 +977,53 @@ func localFailureHint(lastErr string) string {
 	default:
 		return "The previous attempt failed with: " + utils.TruncateString(strings.TrimSpace(lastErr), 300) + ". Change your approach rather than repeating the same actions."
 	}
+}
+
+// validateTaskModel enforces the team-level model-list against a task.
+// With no model-list configured, the task's Model is cleared so the agent's
+// own model selection wins. With one, only listed model IDs are accepted.
+func (c *Coordinator) validateTaskModel(task *TaskDef) error {
+	if len(c.modelList) == 0 {
+		task.Model = ""
+		return nil
+	}
+	if task.Model == "" {
+		return nil
+	}
+	var validIDs []string
+	for _, m := range c.modelList {
+		if m.ID == task.Model {
+			return nil
+		}
+		validIDs = append(validIDs, m.ID)
+	}
+	return fmt.Errorf("unknown model %q for agent %q (valid models: %v)", task.Model, task.Agent, validIDs)
+}
+
+// createTaskAgent builds the fantasy.Agent for a task, branching on plan-first
+// mode. Plan-first tasks get a fresh agent with a submit_plan tool; normal
+// tasks reuse the cached agent. All failure paths report and persist before
+// returning the error so the caller does not have to.
+func (c *Coordinator) createTaskAgent(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef, resolvedModel, todoID, taskDesc, agentName string) (fantasy.Agent, error) {
+	if task.PlanFirst && task.PlanID == "" {
+		planAg, planErr := agent.CreateAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
+			Def:        agentDef,
+			TeamConfig: &c.session.Config,
+			WorkDir:    c.projectDir,
+			MaxSteps:   agent.DefaultMaxSteps,
+		}, append(agent.SelectTools(c.coreTools, agentDef.Tools), &submitPlanTool{coordinator: c, todoID: todoID}))
+		if planErr != nil {
+			c.report(c.newEvent("error").withAgent(agentName).withMessage(planErr.Error()).withTodoID(todoID))
+			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(planErr, ""))
+			return nil, planErr
+		}
+		return planAg, nil
+	}
+	ag, err := c.getOrCreateAgent(parentCtx, agentDef, task.Model)
+	if err != nil {
+		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
+		c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
+		return nil, err
+	}
+	return ag, nil
 }

@@ -143,6 +143,7 @@ type Coordinator struct {
 	agentCache            map[string]fantasy.Agent
 	agentCacheMu          sync.RWMutex
 	round                 int
+	baseRounds            int // rounds completed before the last round-state reset (resume/continue)
 	verbose               bool
 	think                 bool
 	reportStatus          StatusReporter
@@ -153,6 +154,7 @@ type Coordinator struct {
 	conversationHistoryMu sync.Mutex
 	projectDir            string
 	wrapUp                atomic.Int32
+	finishCalled          atomic.Bool // set when the finish tool completes; cleared per orchestrator run
 	current               atomic.Pointer[currentSnapshot]
 	currentStageStart     time.Time
 	currentStageStartMu   sync.RWMutex
@@ -536,9 +538,20 @@ func (c *Coordinator) ResetConversation() {
 	c.resetRoundState()
 }
 
+// totalRounds returns the round count across the whole session, including
+// rounds run before a continue/resume reset the per-run counter.
+func (c *Coordinator) totalRounds() int {
+	return c.baseRounds + c.round
+}
+
 func (c *Coordinator) resetRoundState() {
+	// Rounds already run must survive the reset: session.json's round count and
+	// stm snapshots previously restarted at 0 on every continue, overwriting
+	// history from earlier segments of the same session.
+	c.baseRounds += c.round
 	c.round = 0
 	c.wrapUp.Store(0)
+	c.finishCalled.Store(false)
 	c.delegatedTasksMu.Lock()
 	c.delegatedTasks = make(map[string]int)
 	c.delegatedTasksMu.Unlock()

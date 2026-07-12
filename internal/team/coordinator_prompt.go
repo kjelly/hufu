@@ -329,6 +329,15 @@ Please take this into account. You may need to:
 
 Continue coordinating. Call finish when you have a complete response that addresses both the original request and the new input.`
 
+const stepLimitWrapUpPrompt = `Your previous turn stopped because the per-turn step limit was reached before you called finish.
+
+Your full progress so far is above, including any tool results you had not yet acted on.
+
+- Review the latest results first — the work may already be complete
+- Do NOT delegate new tasks
+- Call the finish tool NOW with an honest summary: what was accomplished, and what (if anything) remains
+- If work remains, state it explicitly in the response; the user can type "continue" to resume`
+
 const wrapUpPromptTemplate = `The user has requested that you wrap up immediately.
 
 IMPORTANT INSTRUCTIONS:

@@ -60,6 +60,12 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 
 	result, err := t.coordinator.ExecuteTasks(ctx, args.Tasks)
 	if err != nil {
+		// Keep the per-task detail: formatTaskResults returns the full report
+		// even on "all tasks failed", and discarding it left the coordinator
+		// blind to why tasks failed, forcing guesswork re-delegation.
+		if strings.TrimSpace(result) != "" {
+			return fantasy.NewTextErrorResponse(result + "\n\nERROR: " + err.Error()), nil
+		}
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 	return fantasy.NewTextResponse(result), nil
@@ -108,7 +114,7 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	completed := todoList.CompletedCount()
 	failed := todoList.ErrorCount()
 	summary := fmt.Sprintf("[summary] %d/%d tasks done, %d rounds, %s elapsed",
-		completed, completed+failed, t.coordinator.round,
+		completed, completed+failed, t.coordinator.totalRounds(),
 		time.Since(t.coordinator.sessionTime).Round(time.Second))
 	existing := LoadSTM(workspace)
 	if existing == "" {
@@ -156,6 +162,7 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		}
 	}
 
+	t.coordinator.finishCalled.Store(true)
 	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
 }
 

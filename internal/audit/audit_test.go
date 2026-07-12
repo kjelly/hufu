@@ -64,7 +64,7 @@ func TestAuditLoggerLogToolCall(t *testing.T) {
 	tool := "bash"
 	input := "echo hello"
 
-	logger.LogToolCall(agent, tool, input)
+	logger.LogToolCall(agent, tool, input, "call-1")
 
 	// Verify the log file was created and contains the entry
 	auditDir := filepath.Join(tmpDir, "logs", "audit")
@@ -115,7 +115,7 @@ func TestAuditLoggerLogToolResult(t *testing.T) {
 	tool := "bash"
 	result := "hello world"
 
-	logger.LogToolResult(agent, tool, result, false)
+	logger.LogToolResult(agent, tool, result, false, "call-1")
 
 	// Verify the log file contains the result
 	auditDir := filepath.Join(tmpDir, "logs", "audit")
@@ -159,7 +159,7 @@ func TestAuditLoggerLogToolResultError(t *testing.T) {
 	tool := "bash"
 	result := "error: command failed"
 
-	logger.LogToolResult(agent, tool, result, true)
+	logger.LogToolResult(agent, tool, result, true, "call-1")
 
 	// Verify the log file contains the error
 	auditDir := filepath.Join(tmpDir, "logs", "audit")
@@ -319,7 +319,7 @@ func TestLogToolCallGlobal(t *testing.T) {
 	tool := "bash"
 	input := "echo hello"
 
-	LogToolCall(agent, tool, input)
+	LogToolCall(agent, tool, input, "call-1")
 
 	// Verify the log file was created
 	auditDir := filepath.Join(tmpDir, "logs", "audit")
@@ -363,7 +363,7 @@ func TestLogToolResultGlobal(t *testing.T) {
 	tool := "bash"
 	result := "hello world"
 
-	LogToolResult(agent, tool, result, false)
+	LogToolResult(agent, tool, result, false, "call-1")
 
 	// Verify the log file was created
 	auditDir := filepath.Join(tmpDir, "logs", "audit")
@@ -465,7 +465,7 @@ func TestConcurrentLogToolCall(t *testing.T) {
 			tool := "bash"
 			input := "echo test-" + string(rune('0'+id))
 
-			logger.LogToolCall(agent, tool, input)
+			logger.LogToolCall(agent, tool, input, "call-"+string(rune('0'+id)))
 			done <- true
 		}(i)
 	}
@@ -496,6 +496,180 @@ func TestConcurrentLogToolCall(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
 	if len(lines) != 10 {
 		t.Errorf("Expected 10 log entries, got %d", len(lines))
+	}
+}
+
+// readLogEntries reads and parses all JSONL entries from the audit log in tmpDir.
+func readLogEntries(t *testing.T, tmpDir string) []ToolAction {
+	t.Helper()
+	auditDir := filepath.Join(tmpDir, "logs", "audit")
+	files, err := os.ReadDir(auditDir)
+	if err != nil {
+		t.Fatalf("Failed to read audit directory: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("No audit log files created")
+	}
+	content, err := os.ReadFile(filepath.Join(auditDir, files[0].Name()))
+	if err != nil {
+		t.Fatalf("Failed to read log file: %v", err)
+	}
+	var entries []ToolAction
+	for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
+		if line == "" {
+			continue
+		}
+		var entry ToolAction
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("Failed to unmarshal log line %q: %v", line, err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+// TestLogEntryObservability verifies call_id, event type, and error-result
+// fields across call/result/error variants.
+func TestLogEntryObservability(t *testing.T) {
+	tests := []struct {
+		name       string
+		log        func(l *AuditLogger)
+		wantAction string
+		wantEvent  string
+		wantCallID string
+		wantInput  string
+		wantResult string
+		wantError  string
+	}{
+		{
+			name: "tool call carries call_id and tool_call event",
+			log: func(l *AuditLogger) {
+				l.LogToolCall("agent-a", "bash", "echo hi", "toolu_01")
+			},
+			wantAction: "call",
+			wantEvent:  "tool_call",
+			wantCallID: "toolu_01",
+			wantInput:  "echo hi",
+		},
+		{
+			name: "success result carries call_id and tool_result event",
+			log: func(l *AuditLogger) {
+				l.LogToolResult("agent-a", "bash", "hi", false, "toolu_01")
+			},
+			wantAction: "result",
+			wantEvent:  "tool_result",
+			wantCallID: "toolu_01",
+			wantResult: "hi",
+		},
+		{
+			name: "error result fills both result and error with tool_error event",
+			log: func(l *AuditLogger) {
+				l.LogToolResult("agent-a", "bash", "command failed: exit 1", true, "toolu_02")
+			},
+			wantAction: "result",
+			wantEvent:  "tool_error",
+			wantCallID: "toolu_02",
+			wantResult: "command failed: exit 1",
+			wantError:  "command failed: exit 1",
+		},
+		{
+			name: "empty call_id is allowed and omitted",
+			log: func(l *AuditLogger) {
+				l.LogToolCall("agent-a", "bash", "echo hi", "")
+			},
+			wantAction: "call",
+			wantEvent:  "tool_call",
+			wantCallID: "",
+			wantInput:  "echo hi",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			logger, err := NewAuditLogger(tmpDir, "test-team")
+			if err != nil {
+				t.Fatalf("NewAuditLogger() error = %v", err)
+			}
+			defer func() { _ = logger.Close() }()
+
+			tt.log(logger)
+
+			entries := readLogEntries(t, tmpDir)
+			if len(entries) != 1 {
+				t.Fatalf("Expected 1 log entry, got %d", len(entries))
+			}
+			entry := entries[0]
+
+			if entry.Action != tt.wantAction {
+				t.Errorf("Action = %q, want %q", entry.Action, tt.wantAction)
+			}
+			if entry.Event != tt.wantEvent {
+				t.Errorf("Event = %q, want %q", entry.Event, tt.wantEvent)
+			}
+			if entry.CallID != tt.wantCallID {
+				t.Errorf("CallID = %q, want %q", entry.CallID, tt.wantCallID)
+			}
+			if entry.Input != tt.wantInput {
+				t.Errorf("Input = %q, want %q", entry.Input, tt.wantInput)
+			}
+			if entry.Result != tt.wantResult {
+				t.Errorf("Result = %q, want %q", entry.Result, tt.wantResult)
+			}
+			if entry.Error != tt.wantError {
+				t.Errorf("Error = %q, want %q", entry.Error, tt.wantError)
+			}
+		})
+	}
+}
+
+// TestErrorResultFieldNotEmpty guards against error results rendering as
+// blank for readers that only look at the .result field.
+func TestErrorResultFieldNotEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	logger, err := NewAuditLogger(tmpDir, "test-team")
+	if err != nil {
+		t.Fatalf("NewAuditLogger() error = %v", err)
+	}
+	defer func() { _ = logger.Close() }()
+
+	logger.LogToolResult("agent-a", "bash", "boom", true, "toolu_err")
+
+	entries := readLogEntries(t, tmpDir)
+	if len(entries) != 1 {
+		t.Fatalf("Expected 1 log entry, got %d", len(entries))
+	}
+	if entries[0].Result == "" {
+		t.Error("error result wrote empty .result field; readers of .result would see blank")
+	}
+	if entries[0].Error == "" {
+		t.Error("error result wrote empty .error field")
+	}
+	if entries[0].Result != entries[0].Error {
+		t.Errorf("Result %q and Error %q should carry the same content", entries[0].Result, entries[0].Error)
+	}
+}
+
+// TestCallIDOmittedWhenEmpty verifies the raw JSON omits call_id when empty
+// (backward compatibility with old log consumers).
+func TestCallIDOmittedWhenEmpty(t *testing.T) {
+	data, err := json.Marshal(ToolAction{Action: "call"})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if strings.Contains(string(data), "call_id") {
+		t.Errorf("empty call_id should be omitted from JSON, got %s", data)
+	}
+
+	data, err = json.Marshal(ToolAction{Action: "call", CallID: "toolu_01", Event: "tool_call"})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(data), `"call_id":"toolu_01"`) {
+		t.Errorf("JSON missing call_id field, got %s", data)
+	}
+	if !strings.Contains(string(data), `"event":"tool_call"`) {
+		t.Errorf("JSON missing event field, got %s", data)
 	}
 }
 

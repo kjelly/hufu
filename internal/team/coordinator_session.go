@@ -30,7 +30,9 @@ func (c *Coordinator) checkpointSTM() {
 		log.Printf("warning: stm checkpoint dir creation failed: %v", err)
 		return
 	}
-	fname := fmt.Sprintf("stm_r%d.md", c.round)
+	// Cumulative round number: the per-run counter resets on continue/restart,
+	// which used to make later runs overwrite earlier runs' snapshots.
+	fname := fmt.Sprintf("stm_r%d.md", c.totalRounds())
 	path := filepath.Join(histDir, fname)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		log.Printf("warning: stm checkpoint write failed: %v", err)
@@ -152,6 +154,9 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 func (c *Coordinator) SetSessionData(sd *SessionData) {
 	c.sessionData = sd
 	if sd != nil {
+		// A resumed session carries rounds from earlier runs; without this the
+		// saved count restarts at this run's round and understates the session.
+		c.baseRounds = sd.Rounds
 		if len(sd.Tasks) > 0 {
 			c.taskTracker.TodoList().Restore(sd.Tasks)
 

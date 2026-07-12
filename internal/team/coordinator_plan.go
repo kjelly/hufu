@@ -330,7 +330,10 @@ func (c *Coordinator) buildTaskStatusContext() string {
 		if item.Detail != "" {
 			extra = ": " + item.Detail
 		}
-		entry := fmt.Sprintf("  - %s: %s%s", item.Agent, item.Desc, extra)
+		// Flatten and cap each line: task outputs previously flowed into the
+		// system prompt verbatim, growing it ~10KB after a long run and
+		// injecting stray markdown headings into it.
+		entry := "  - " + flattenStatusEntry(fmt.Sprintf("%s: %s%s", item.Agent, item.Desc, extra), 220)
 		switch item.Status {
 		case TaskDone:
 			done = append(done, entry)
@@ -380,4 +383,15 @@ func (c *Coordinator) buildTaskStatusContext() string {
 		fmt.Fprintf(&b, "Error (%d):\n%s\n", len(errored), strings.Join(errored, "\n"))
 	}
 	return b.String()
+}
+
+// flattenStatusEntry collapses whitespace (including newlines and markdown
+// headings) into single spaces and truncates to maxRunes.
+func flattenStatusEntry(s string, maxRunes int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) > maxRunes {
+		return string(r[:maxRunes]) + "…"
+	}
+	return s
 }

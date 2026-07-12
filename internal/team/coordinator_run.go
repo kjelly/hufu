@@ -245,6 +245,29 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	return c.runAgentWithStatusAndHistory(orchCtx, orch, orchDef.Name, prompt, historySnapshot, &taskTiming{})
 }
 
+// ensureFinished forces one wrap-up turn when the orchestrator stream ended
+// without the finish tool — typically the per-turn step cap ran out
+// mid-coordination. Without this the last narration text is silently returned
+// as the "final" answer and tool results delivered on the final step are never
+// read (a real run once idled ~10h this way, with the TUI showing "waiting for
+// reboot" while the verifier had already reported success).
+//
+// The original steps are appended to history here so the wrap-up turn can see
+// them; on success only the wrap-up steps are returned so the caller's
+// saveHistoryAndSession does not append the originals twice.
+func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDef, result string, steps []fantasy.StepResult) (string, []fantasy.StepResult) {
+	if c.finishCalled.Load() || ctx.Err() != nil {
+		return result, steps
+	}
+	c.report(c.newEvent("wrap_up_phase").withMessage("coordinator stopped without calling finish (step limit likely reached); forcing a final summary turn").withTodoID(CoordTodoID))
+	c.saveHistoryAndSession(ctx, steps)
+	wrapResult, wrapSteps, err := c.runOrchestrator(ctx, orchDef, stepLimitWrapUpPrompt)
+	if err != nil || strings.TrimSpace(wrapResult) == "" {
+		return result, nil // original steps already saved above
+	}
+	return wrapResult, wrapSteps
+}
+
 // attemptWrapUpRecovery converts a mid-run coordinator failure into a final
 // summary when wrap-up was already pending (max rounds or budget exceeded).
 // The limits only ask the model to call finish via a tool error; a model that
@@ -330,6 +353,17 @@ func (c *Coordinator) finalizeNormalCompletion() {
 	}
 	if changed {
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	}
+
+	// Converge per-agent status files: after a successful finish, a worker's
+	// status/<agent>.yml otherwise keeps its last mid-run state ("working",
+	// "error" from a retried attempt), making a completed run look failed to
+	// anyone inspecting the workspace afterwards.
+	if c.session != nil && c.session.Workspace != "" {
+		for _, def := range c.uniqueWorkerDefs() {
+			_ = writeStatus(c.session.Workspace, strings.ToLower(def.Name), "idle", "run finished")
+		}
+		_ = writeStatus(c.session.Workspace, "coordinator", "idle", "run finished")
 	}
 }
 
@@ -524,13 +558,15 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		}
 	}
 
+	result, steps = c.ensureFinished(ctx, &orchDefCopy, result, steps)
+
 	c.saveHistoryAndSession(ctx, steps)
 
 	finalResult := strings.TrimPrefix(result, "FINISHED:")
 
 	if c.sessionData != nil {
 		c.sessionData.AddEntry("assistant", finalResult)
-		c.sessionData.Rounds = c.round
+		c.sessionData.Rounds = c.totalRounds()
 		_ = SaveSession(c.session.Workspace, c.sessionData)
 	}
 
@@ -588,13 +624,15 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		}
 	}
 
+	result, steps = c.ensureFinished(ctx, &orchDefCopy, result, steps)
+
 	c.saveHistoryAndSession(ctx, steps)
 
 	finalResult := strings.TrimPrefix(result, "FINISHED:")
 
 	if c.sessionData != nil {
 		c.sessionData.AddEntry("assistant", finalResult)
-		c.sessionData.Rounds = c.round
+		c.sessionData.Rounds = c.totalRounds()
 		_ = SaveSession(c.session.Workspace, c.sessionData)
 	}
 
