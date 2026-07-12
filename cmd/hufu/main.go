@@ -248,6 +248,29 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 		}
 		return matches, cobra.ShellCompDirectiveNoFileComp
 	})
+	registerStaticFlagCompletion(rootCmd, "output", []string{"text", "json"})
+	registerStaticFlagCompletion(rootCmd, "display-mode", []string{"auto", "terminal", "plain"})
+	registerStaticFlagCompletion(rootCmd, "event-format", []string{"text", "jsonl"})
+	_ = rootCmd.RegisterFlagCompletionFunc("profile", func(_ *cobra.Command, _ []string, prefix string) ([]string, cobra.ShellCompDirective) {
+		var names []string
+		for name := range config.LoadConfig().Profiles {
+			if strings.HasPrefix(name, prefix) {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		return names, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = initCmd.RegisterFlagCompletionFunc("template", func(_ *cobra.Command, _ []string, prefix string) ([]string, cobra.ShellCompDirective) {
+		var names []string
+		for name := range scaffoldTemplates {
+			if strings.HasPrefix(name, prefix) {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		return names, cobra.ShellCompDirectiveNoFileComp
+	})
 
 	rootCmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		matches := completeAtNames(toComplete)
@@ -266,6 +289,18 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 		_ = pr.Close()
 	}
 	os.Exit(exitCode)
+}
+
+func registerStaticFlagCompletion(cmd *cobra.Command, name string, values []string) {
+	_ = cmd.RegisterFlagCompletionFunc(name, func(_ *cobra.Command, _ []string, prefix string) ([]string, cobra.ShellCompDirective) {
+		matches := make([]string, 0, len(values))
+		for _, value := range values {
+			if strings.HasPrefix(value, prefix) {
+				matches = append(matches, value)
+			}
+		}
+		return matches, cobra.ShellCompDirectiveNoFileComp
+	})
 }
 
 type teamContext struct {
