@@ -4,7 +4,7 @@
 > 本文件中的命令與介面為提案，並非目前可執行的操作程序；每個項目實作後必須以實際輸出補齊驗證證據。
 
 > 日期：2026-07-12
-> 實作狀態：P0 的非終端安全降級、色彩控制與旗標驗證，以及 P1 的窄螢幕 compact view、task log 上限、overlay 文件同步與 CLI 執行摘要已完成；其餘項目仍待實作與驗證。
+> 實作狀態：已完成非終端安全降級、色彩控制、JSONL events、CLI 摘要、config/status/version、init templates、list JSON、REPL inspection/export、TUI compact view、task log 上限、progress bar、result viewer 與 overlay 文件同步；其餘項目仍待實作與驗證。
 > 範圍：CLI 介面設計、TUI 互動體驗、chat REPL、顯示系統、子命令 UX
 > 依據：對 `cmd/hufu/`（main.go 2,054 行、display.go 1,671 行、chat.go 420 行）與 `internal/tui/`（tui.go 2,674 行、ask_user.go、overlay.go）的原始碼審查
 
