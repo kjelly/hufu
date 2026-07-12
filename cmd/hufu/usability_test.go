@@ -103,6 +103,26 @@ func TestWriteIfAbsent(t *testing.T) {
 	}
 }
 
+func TestCollectListedTeam(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "worker.md"), []byte(`---
+name: worker
+role: worker
+tools: [view, grep]
+skills: code-review
+---
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record := collectListedTeam("demo", dir)
+	if record.Name != "demo" || len(record.Agents) != 1 {
+		t.Fatalf("unexpected record: %#v", record)
+	}
+	if record.Agents[0].Name != "worker" || len(record.Agents[0].Tools) == 0 {
+		t.Errorf("unexpected agent: %#v", record.Agents[0])
+	}
+}
+
 func TestFirstNonEmpty(t *testing.T) {
 	if got := firstNonEmpty("", "", "x", "y"); got != "x" {
 		t.Errorf("got %q, want x", got)

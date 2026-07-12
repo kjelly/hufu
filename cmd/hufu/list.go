@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/team"
 )
+
+var listOutput string
 
 var listCmd = &cobra.Command{
 	Use:     "list",
@@ -39,7 +42,29 @@ type agentFrontmatter struct {
 	Skills      interface{} `yaml:"skills"`
 }
 
+type listedTeam struct {
+	Name   string        `json:"name"`
+	Dir    string        `json:"dir"`
+	Agents []listedAgent `json:"agents"`
+}
+
+type listedAgent struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Role        string   `json:"role"`
+	Model       string   `json:"model,omitempty"`
+	Tools       []string `json:"tools,omitempty"`
+	Skills      []string `json:"skills,omitempty"`
+}
+
+func init() {
+	listCmd.Flags().StringVar(&listOutput, "output", "text", "Output format: text, table, or json")
+}
+
 func runList(cmd *cobra.Command, args []string) error {
+	if listOutput != "text" && listOutput != "table" && listOutput != "json" {
+		return fmt.Errorf("invalid --output %q: use 'text', 'table', or 'json'", listOutput)
+	}
 	searchPaths := resolveSearchPaths()
 	registry := team.NewTeamRegistry(searchPaths)
 	if err := registry.Discover(); err != nil {
@@ -68,13 +93,70 @@ func runList(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			continue
 		}
+		if listOutput == "json" {
+			continue
+		}
 		printTeam(name, dir)
 	}
 
 	if want != "" && shown == 0 {
 		return fmt.Errorf("team %q not found. Available: %s", want, strings.Join(teams, ", "))
 	}
+	if listOutput == "json" {
+		records := make([]listedTeam, 0, shown)
+		for _, name := range teams {
+			if want != "" && strings.ToLower(name) != want {
+				continue
+			}
+			dir, err := registry.Resolve(name)
+			if err != nil {
+				continue
+			}
+			records = append(records, collectListedTeam(name, dir))
+		}
+		return json.NewEncoder(os.Stdout).Encode(records)
+	}
 	return nil
+}
+
+func collectListedTeam(name, dir string) listedTeam {
+	record := listedTeam{Name: name, Dir: dir}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return record
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		fm := readAgentFrontmatter(filepath.Join(dir, entry.Name()))
+		agentName := fm.Name
+		if agentName == "" {
+			agentName = strings.TrimSuffix(entry.Name(), ".md")
+		}
+		role := fm.Role
+		if role == "" {
+			role = "worker"
+		}
+		record.Agents = append(record.Agents, listedAgent{
+			Name: agentName, Description: fm.Description, Role: role, Model: fm.Model,
+			Tools:  splitNormalizedList(agent.ExpandImpliedTools(normalizeList(fm.Tools))),
+			Skills: splitNormalizedList(normalizeList(fm.Skills)),
+		})
+	}
+	sort.Slice(record.Agents, func(i, j int) bool { return record.Agents[i].Name < record.Agents[j].Name })
+	return record
+}
+
+func splitNormalizedList(value string) []string {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts
 }
 
 func printTeam(name, dir string) {
