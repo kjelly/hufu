@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1110,6 +1111,10 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 		tc.coordinator.SetStatusReporter(compositeReporter)
 		return &coordDisplay{stopThinking: stopAll, logFile: logFile}
 	}
+	if eventFormat == "jsonl" {
+		tc.coordinator.SetStatusReporter(makeJSONLReporter(tc.notifier))
+		return &coordDisplay{}
+	}
 	w := &lineWriter{}
 	idleTimer := newIdleWarningTimer(w, 30*time.Second)
 
@@ -1118,6 +1123,30 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 	setupStatusReporter(w, tc.coordinator, taskDisp, skillDisp, idleTimer, tc.notifier)
 	setStatusFlusher(w, taskDisp, skillDisp)
 	return &coordDisplay{idleTimer: idleTimer, taskDisp: taskDisp}
+}
+
+type jsonStatusEvent struct {
+	Type    string `json:"type"`
+	Team    string `json:"team,omitempty"`
+	Agent   string `json:"agent,omitempty"`
+	TodoID  string `json:"todo_id,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Message string `json:"message,omitempty"`
+	Tool    string `json:"tool,omitempty"`
+	Time    string `json:"time"`
+}
+
+func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
+	var mu sync.Mutex
+	return func(event team.StatusEvent) {
+		if notifier != nil {
+			notifier.Notify(event.Type, event.Agent, event.Message, event.Output)
+		}
+		encoded := jsonStatusEvent{Type: event.Type, Team: event.TeamName, Agent: event.Agent, TodoID: event.TodoID, Model: event.Model, Message: event.Message, Tool: event.ToolName, Time: time.Now().UTC().Format(time.RFC3339Nano)}
+		mu.Lock()
+		defer mu.Unlock()
+		_ = json.NewEncoder(os.Stderr).Encode(encoded)
+	}
 }
 
 // thinkingEntry tracks one agent's LLM wait so the TUI status bar keeps

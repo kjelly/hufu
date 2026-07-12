@@ -17,6 +17,7 @@ func TestValidateRunFlags(t *testing.T) {
 	origDefault := defaultTeam
 	origAgentTeam := agentTeamName
 	origDisplayMode := displayMode
+	origEventFormat := eventFormat
 	defer func() {
 		outputFormat = origOutput
 		stepsMode = origSteps
@@ -25,6 +26,7 @@ func TestValidateRunFlags(t *testing.T) {
 		defaultTeam = origDefault
 		agentTeamName = origAgentTeam
 		displayMode = origDisplayMode
+		eventFormat = origEventFormat
 	}()
 
 	// resetAll sets all flags to their default (non-conflicting) values
@@ -37,6 +39,7 @@ func TestValidateRunFlags(t *testing.T) {
 		defaultTeam = false
 		agentTeamName = ""
 		displayMode = "auto"
+		eventFormat = "text"
 	}
 
 	t.Run("accepts empty output format", func(t *testing.T) {
@@ -69,6 +72,13 @@ func TestValidateRunFlags(t *testing.T) {
 		err := validateRunFlags()
 		if err == nil || !strings.Contains(err.Error(), "invalid --display-mode") {
 			t.Errorf("expected invalid display mode error, got %v", err)
+		}
+	})
+	t.Run("rejects unknown event format", func(t *testing.T) {
+		resetAll()
+		eventFormat = "yaml"
+		if err := validateRunFlags(); err == nil || !strings.Contains(err.Error(), "invalid --event-format") {
+			t.Errorf("expected invalid event format error, got %v", err)
 		}
 	})
 	t.Run("json implies quiet", func(t *testing.T) {

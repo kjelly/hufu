@@ -93,6 +93,7 @@ var (
 	displayMode               string
 	noColorMode               bool
 	noSummary                 bool
+	eventFormat               string
 	projectContext            bool
 	isChatTUI                 bool
 	globalPromptReader        atomic.Pointer[readline.PromptReader]
@@ -210,6 +211,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringVar(&displayMode, "display-mode", "auto", "Status display mode: auto, terminal, or plain")
 	rootCmd.PersistentFlags().BoolVar(&noColorMode, "no-color", false, "Disable ANSI color output (also honors NO_COLOR)")
 	rootCmd.Flags().BoolVar(&noSummary, "no-summary", false, "Suppress the execution summary written to stderr")
+	rootCmd.Flags().StringVar(&eventFormat, "event-format", "text", "Status event format: text or jsonl")
 
 	rootCmd.Flags().StringVar(&templateName, "template", "", "Load prompt template by name from .hufu-templates/ or ~/.config/hufu/templates/")
 
@@ -1007,6 +1009,9 @@ func validateRunFlags() error {
 	case "auto", "terminal", "plain":
 	default:
 		return fmt.Errorf("invalid --display-mode %q: use 'auto', 'terminal', or 'plain'", displayMode)
+	}
+	if eventFormat != "text" && eventFormat != "jsonl" {
+		return fmt.Errorf("invalid --event-format %q: use 'text' or 'jsonl'", eventFormat)
 	}
 	// JSON output implies quiet: stdout must carry only the JSON document.
 	if outputFormat == "json" {

@@ -1,12 +1,20 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/anomalyco/hufu/internal/team"
 )
+
+func TestJSONStatusEventMarshals(t *testing.T) {
+	data, err := json.Marshal(jsonStatusEvent{Type: "start", Agent: "worker", Time: "2026-01-01T00:00:00Z"})
+	if err != nil || !strings.Contains(string(data), `"type":"start"`) {
+		t.Fatalf("json = %q, err = %v", data, err)
+	}
+}
 
 type testStatusWriter struct {
 	b strings.Builder
