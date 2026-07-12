@@ -21,6 +21,7 @@ const (
 	OverlayPromptInput
 	OverlayConfirm
 	OverlayDetail
+	OverlayResult
 	OverlayMemory
 	OverlayActivityLog
 )
@@ -45,6 +46,8 @@ func (o Overlay) String() string {
 		return "confirm"
 	case OverlayDetail:
 		return "detail"
+	case OverlayResult:
+		return "result"
 	case OverlayMemory:
 		return "memory"
 	case OverlayActivityLog:
@@ -74,6 +77,8 @@ func (m *Model) currentOverlay() Overlay {
 		return OverlayConfirm
 	case m.inDetail:
 		return OverlayDetail
+	case m.inResult:
+		return OverlayResult
 	case m.inMemory:
 		return OverlayMemory
 	case m.inActivityLog:
@@ -111,6 +116,8 @@ func (m *Model) setOverlay(o Overlay) Overlay {
 		m.inConfirm = true
 	case OverlayDetail:
 		m.inDetail = true
+	case OverlayResult:
+		m.inResult = true
 	case OverlayMemory:
 		m.inMemory = true
 	case OverlayActivityLog:
@@ -133,6 +140,7 @@ func (m *Model) clearAllOverlays() {
 	m.inPromptInput = false
 	m.inConfirm = false
 	m.inDetail = false
+	m.inResult = false
 	m.inMemory = false
 	m.inActivityLog = false
 }

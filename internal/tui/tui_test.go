@@ -183,3 +183,12 @@ func TestRenderProgressBar(t *testing.T) {
 		}
 	}
 }
+
+func TestEnterOpensResultView(t *testing.T) {
+	m := New("prompt", TeamInfo{})
+	m.finished, m.result = true, "full result"
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !updated.(Model).inResult {
+		t.Error("enter should open result view")
+	}
+}

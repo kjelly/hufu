@@ -15,6 +15,7 @@ func TestOverlayString(t *testing.T) {
 		{OverlayPromptInput, "prompt_input"},
 		{OverlayConfirm, "confirm"},
 		{OverlayDetail, "detail"},
+		{OverlayResult, "result"},
 		{OverlayMemory, "memory"},
 		{OverlayActivityLog, "activity_log"},
 		{Overlay(999), "unknown"},

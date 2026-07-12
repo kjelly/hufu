@@ -148,6 +148,7 @@ type Model struct {
 	detailID string
 	vp       viewport.Model
 	vpReady  bool
+	inResult bool
 
 	inMemory    bool
 	memoryVP    viewport.Model
@@ -278,6 +279,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.inDetail {
 			m.vp.SetContent(m.buildDetailContent())
+		}
+		if m.inResult {
+			m.vp.SetContent(m.result)
 		}
 		if m.inActivityLog {
 			m.vp.SetContent(m.formatActivityLogContent())
@@ -570,6 +574,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirm(msg)
 		case OverlayDetail:
 			return m.updateDetail(msg)
+		case OverlayResult:
+			return m.updateResult(msg)
 		case OverlayMemory:
 			return m.updateMemory(msg)
 		case OverlayActivityLog:
@@ -1050,6 +1056,14 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "enter":
+		if m.finished && m.result != "" {
+			m.inResult = true
+			if m.vpReady {
+				m.vp.SetContent(m.result)
+				m.vp.GotoTop()
+			}
+			return m, nil
+		}
 		if m.row < len(col) {
 			m.detailID = col[m.row].ID
 			m.inDetail = true
@@ -1082,6 +1096,23 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+func (m Model) updateResult(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "backspace", "enter":
+		m.inResult = false
+		return m, nil
+	case "q":
+		if m.finished {
+			return m, tea.Quit
+		}
+	case "ctrl+c":
+		return m.handleCtrlC()
+	}
+	var cmd tea.Cmd
+	m.vp, cmd = m.vp.Update(msg)
+	return m, cmd
 }
 
 func (m Model) handleReportKey() (tea.Model, tea.Cmd) {
@@ -1395,12 +1426,19 @@ func (m Model) View() string {
 		return m.confirmView()
 	case OverlayDetail:
 		return m.detailView()
+	case OverlayResult:
+		return m.resultView()
 	case OverlayActivityLog:
 		return m.activityLogView()
 	case OverlayMemory:
 		return m.memoryView()
 	}
 	return m.columnsView()
+}
+
+func (m Model) resultView() string {
+	header := headerStyle.Render("Result") + "\n" + dimStyle.Render("esc/enter back · q quit") + "\n\n"
+	return header + m.vp.View()
 }
 
 // ── Column view ───────────────────────────────────────────────────────────────
