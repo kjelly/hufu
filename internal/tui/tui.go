@@ -73,6 +73,7 @@ type WrapUpMsg struct{}
 type AskUserCancelMsg struct{}
 
 type detailRefreshMsg struct{}
+type spinnerTickMsg struct{}
 
 type copySuccessMsg struct{ Lines int }
 
@@ -131,6 +132,11 @@ var (
 			Padding(1, 3)
 )
 
+var defaultSpinnerEnabled = true
+
+// SetSpinnerEnabled configures the default for newly created TUI models.
+func SetSpinnerEnabled(enabled bool) { defaultSpinnerEnabled = enabled }
+
 // ── Model ─────────────────────────────────────────────────────────────────────
 
 type Model struct {
@@ -157,12 +163,14 @@ type Model struct {
 	inConfirm     bool // showing quit confirmation dialog
 	confirmChoice int  // 0=no 1=yes 2=force
 
-	width      int
-	height     int
-	finished   bool
-	IsChat     bool
-	statusText string // current status shown in the status bar
-	result     string // final coordinator answer shown when finished
+	width          int
+	height         int
+	finished       bool
+	IsChat         bool
+	statusText     string // current status shown in the status bar
+	spinnerFrame   int
+	spinnerEnabled bool
+	result         string // final coordinator answer shown when finished
 
 	inAskUser bool
 	ask       askState
@@ -229,6 +237,7 @@ func New(prompt string, teamInfo TeamInfo) Model {
 		ReportCh:       make(chan struct{}, 1),
 		teamInfo:       teamInfo,
 		IsChat:         teamInfo.IsChat,
+		spinnerEnabled: defaultSpinnerEnabled && os.Getenv("NO_SPINNER") == "",
 	}
 
 	if m.IsChat && prompt == "" {
@@ -302,6 +311,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.clampScroll()
 		m.scrollCursorIntoView()
+		return m, m.spinnerTickCmd()
+
+	case spinnerTickMsg:
+		m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+		return m, m.spinnerTickCmd()
 
 	case TaskLogMsg:
 		line := msg.Line
@@ -1566,6 +1580,9 @@ func (m Model) renderStatusArea(w int) string {
 		}
 		return dimStyle.Render("  ⟳ Initialising…")
 	}
+	if m.spinnerActive() {
+		text = spinnerFrames[m.spinnerFrame] + " " + text
+	}
 	// Strip ANSI, take the last (most recent) line, and truncate to terminal
 	// width so the status bar always occupies exactly 1 line.
 	plain := ansi.Strip(text)
@@ -1578,6 +1595,27 @@ func (m Model) renderStatusArea(w int) string {
 	}
 	plain = utils.TruncateLine(plain, maxW)
 	return "  " + plain
+}
+
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func (m Model) spinnerActive() bool {
+	if !m.spinnerEnabled || m.finished {
+		return false
+	}
+	for _, task := range m.tasks {
+		if task.Status == team.TaskInProgress {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) spinnerTickCmd() tea.Cmd {
+	if !m.spinnerActive() {
+		return nil
+	}
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg { return spinnerTickMsg{} })
 }
 
 func (m Model) renderActivityFeed(w int) string {

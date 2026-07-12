@@ -93,6 +93,7 @@ var (
 	displayMode               string
 	noColorMode               bool
 	noSummary                 bool
+	noSpinner                 bool
 	eventFormat               string
 	projectContext            bool
 	isChatTUI                 bool
@@ -212,6 +213,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringVar(&displayMode, "display-mode", "auto", "Status display mode: auto, terminal, or plain")
 	rootCmd.PersistentFlags().BoolVar(&noColorMode, "no-color", false, "Disable ANSI color output (also honors NO_COLOR)")
 	rootCmd.Flags().BoolVar(&noSummary, "no-summary", false, "Suppress the execution summary written to stderr")
+	rootCmd.Flags().BoolVar(&noSpinner, "no-spinner", false, "Disable the TUI waiting spinner (also honors NO_SPINNER)")
 	rootCmd.Flags().StringVar(&eventFormat, "event-format", "text", "Status event format: text or jsonl")
 
 	rootCmd.Flags().StringVar(&templateName, "template", "", "Load prompt template by name from .hufu-templates/ or ~/.config/hufu/templates/")
@@ -443,6 +445,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	configureOutputRendering()
+	tuipkg.SetSpinnerEnabled(!noSpinner)
 
 	pr, err := readline.NewPromptReader(defaultHistoryPath())
 	if err != nil {
