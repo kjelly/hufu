@@ -236,6 +236,12 @@ type Coordinator struct {
 	sessionToolPermissions   map[string]bool // toolName -> allowed (permanent session decision)
 	sessionToolPermissionsMu sync.RWMutex
 
+	// executionEvents is initialized for each top-level Run/Continue call and
+	// receives attempt-level telemetry for `hufu improve`.
+	executionEventsMu sync.RWMutex
+	executionEvents   *executionEventLogger
+	executionRunID    string
+
 	// One-shot startup validation of configured model names.
 	validateModelsOnce sync.Once
 	validateModelsErr  error

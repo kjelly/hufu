@@ -35,6 +35,8 @@ func ParseDirectAgent(prompt string) (agentName string, task string, ok bool) {
 }
 
 func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (*DirectAgentResult, error) {
+	endExecutionRun := c.beginExecutionRun()
+	defer endExecutionRun()
 	agentDef, _, err := c.resolveAgentName(agentName)
 	if err != nil {
 		return nil, err
@@ -47,6 +49,8 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 
 	todoItems := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: resolvedName, Desc: task, Model: directModel, Source: TaskSourceCoordinator, ParentID: ""}})
 	todoID := todoItems[0].ID
+	attemptStarted := time.Now()
+	c.recordExecutionEvent(todoID, resolvedName, 1, "in_progress", directModel, 0, ExecutionUsage{})
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("start").withAgent(resolvedName).withMessage(task).withModel(directModel).withTodoID(todoID))
@@ -64,6 +68,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 
 	ag, err := c.getOrCreateAgent(ctx, agentDef, "")
 	if err != nil {
+		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), ExecutionUsage{})
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		return nil, fmt.Errorf("failed to create agent %q: %w", resolvedName, err)
@@ -124,9 +129,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		prompt = prompt + "\n\n" + suffix
 	}
 
-	output, err := c.runAgentWithStatus(taskCtx, ag, resolvedName, prompt, timing)
+	output, steps, err := c.runAgentWithStatusAndHistory(taskCtx, ag, resolvedName, prompt, nil, timing)
 	duration, modelTime, toolTime := timing.snapshot()
 	if err != nil {
+		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), usageFromSteps(steps))
 		c.PersistFailure(resolvedName, task, todoID, c.FailureDetail(err, ""))
 		c.updateTodoTiming(todoID, modelTime, toolTime)
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
@@ -142,6 +148,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(resolvedName).withOutput(output).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
+	c.recordExecutionEvent(todoID, resolvedName, 1, "done", directModel, time.Since(attemptStarted), usageFromSteps(steps))
 
 	return &DirectAgentResult{AgentName: resolvedName, Output: output}, nil
 }
@@ -492,6 +499,8 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 }
 
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
+	endExecutionRun := c.beginExecutionRun()
+	defer endExecutionRun()
 	c.resetRoundState()
 	c.lastStmWrite = time.Time{}
 
@@ -577,6 +586,8 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 }
 
 func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt string) (string, error) {
+	endExecutionRun := c.beginExecutionRun()
+	defer endExecutionRun()
 	// Capture before resetRoundState clears the flag, or the wrap-up branch
 	// below can never trigger and wrap-up requests silently degrade into an
 	// ordinary (empty-prompt) continuation turn.

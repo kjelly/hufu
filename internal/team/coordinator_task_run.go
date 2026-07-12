@@ -221,6 +221,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	escalate := taskEscalationEnabled(task, &c.session.Config, len(c.modelList)) &&
 		(!task.PlanFirst || task.PlanID != "")
 	for attempt := 1; attempt <= maxRetries; attempt++ {
+		attemptStarted := time.Now()
+		c.recordExecutionEvent(todoID, agentName, attempt, "in_progress", resolvedModel, 0, ExecutionUsage{})
 		currentPrompt := prompt
 		if attempt > 1 {
 			if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskInProgress, fmt.Sprintf("retry %d/%d", attempt, maxRetries), ""); statusErr == nil {
@@ -348,6 +350,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("step").withAgent(agentName).withMessage("plan submitted").withTodoID(todoID))
 				c.report(c.newEvent("done").withAgent(agentName).withMessage("plan submitted").withTodoID(todoID))
+				c.recordExecutionEvent(todoID, agentName, attempt, "planned", resolvedModel, time.Since(attemptStarted), usageFromSteps(steps))
 				if c.forcePlanFirst {
 					return "", nil
 				}
@@ -404,6 +407,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				c.updateTodoTiming(todoID, modelTime, toolTime)
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("done").withAgent(agentName).withOutput(output).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
+				c.recordExecutionEvent(todoID, agentName, attempt, "done", resolvedModel, time.Since(attemptStarted), usageFromSteps(steps))
 				if task.Summarize {
 					output = c.summarizeOutput(parentCtx, output)
 				}
@@ -414,6 +418,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				return output, nil
 			}
 		}
+
+		c.recordExecutionEvent(todoID, agentName, attempt, "error", resolvedModel, time.Since(attemptStarted), usageFromSteps(steps))
 
 		// Step messages start at the first assistant turn; without re-adding
 		// the prompt, a retry's history opens with an assistant message and
@@ -487,11 +493,6 @@ func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, 
 	return strings.TrimSpace(summary)
 }
 
-func (c *Coordinator) runAgentWithStatus(ctx context.Context, ag fantasy.Agent, agentName, prompt string, timing *taskTiming) (string, error) {
-	output, _, err := c.runAgentWithStatusAndHistory(ctx, ag, agentName, prompt, nil, timing)
-	return output, err
-}
-
 func isTaskTimeout(err error) bool {
 	if err == nil {
 		return false
@@ -511,6 +512,8 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	if task.Constraints != "" {
 		taskDesc += "\nconstraints: " + task.Constraints
 	}
+	attemptStarted := time.Now()
+	c.recordExecutionEvent(todoID, task.Agent, 1, "in_progress", c.sidecarModel, 0, ExecutionUsage{})
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
@@ -530,17 +533,20 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 
 	result, err := s.Execute(sidecarCtx, taskDesc)
 	if err != nil {
+		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		fmt.Fprintf(os.Stderr, "warning: sidecar execute failed for agent %q: %v\n", task.Agent, err)
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		return "", fmt.Errorf("sidecar execution failed (model: %s): %w", c.sidecarModel, err)
 	}
 	if verr := validateTaskOutput(task, result); verr != nil {
+		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, verr.Error())
 		return "", fmt.Errorf("task completion validation failed: %w", verr)
 	}
 	if task.Verify != "" {
 		if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskVerifying, "running objective verification", ""); err != nil {
+			c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 			return "", err
 		}
 		c.report(c.newEvent("verify_start").withAgent(task.Agent).withMessage(task.Verify).withTodoID(todoID))
@@ -549,6 +555,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 			_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
 		}
 		if verifyErr != nil {
+			c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 			c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, verifyErr.Error())
 			c.report(c.newEvent("verify_error").withAgent(task.Agent).withMessage(verifyErr.Error()).withTodoID(todoID))
 			return "", fmt.Errorf("deliverable verification failed (command %q): %w", task.Verify, verifyErr)
@@ -557,10 +564,12 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	}
 
 	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(result, summaryMaxRunes), result); err != nil {
+		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		return "", err
 	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(result).withMessage("sidecar completed").withTodoID(todoID))
+	c.recordExecutionEvent(todoID, task.Agent, 1, "done", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 	return result, nil
 }
 

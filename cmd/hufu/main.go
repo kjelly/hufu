@@ -133,6 +133,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.AddCommand(replCmd)
 	rootCmd.AddCommand(historyCmd)
 	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(improveCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(teamCmd)
@@ -203,6 +204,14 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	// init scaffolding flags (consumed by initcmd.go).
 	initCmd.Flags().StringVar(&initTemplateName, "template", "default", "Scaffold template for `hufu init`: default")
 	initCmd.Flags().StringVar(&modelOverride, "model", "", "Pin a model in the scaffolded team.yaml (e.g. ollama/qwen3:8b)")
+
+	// Root flags are intentionally not inherited by Cobra subcommands, so the
+	// diagnostic command declares the small, relevant subset explicitly.
+	improveCmd.Flags().StringVarP(&improveWorkspace, "workspace", "w", "", "Workspace to analyze (default: <cwd>/workspace)")
+	improveCmd.Flags().StringVar(&improveTeam, "team", "", "Target team (default: newest execution run)")
+	improveCmd.Flags().StringVar(&improveSearchPath, "agent-team-search-path", "", "Comma-separated team search paths")
+	improveCmd.Flags().StringVarP(&improveOutput, "output", "o", "", "Markdown report path (default: workspace/reports/improve-<team>-<timestamp>.md)")
+	improveCmd.Flags().StringVar(&improveFormat, "format", "markdown", "Report format: markdown or json (json writes to stdout)")
 
 	_ = rootCmd.RegisterFlagCompletionFunc("agent-team", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		var searchPaths []string
