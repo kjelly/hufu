@@ -250,6 +250,7 @@ The TUI is built on the **Bubble Tea** framework. `Model.Update(msg)` is a **pur
 | `searchIdx` | `int` | Current match index |
 | `inInfo` | `bool` | Team info panel active |
 | `teamInfo` | `TeamInfo` | Team metadata |
+| `inHelp` | `bool` | Keyboard help panel active |
 | `wrapUpRequested` | `bool` | First Ctrl+C pressed |
 | `WrapUpCh` | `chan struct{}` | Ctrl+C → coordinator wrap-up |
 | `ReportCh` | `chan struct{}` | `r` key → report generation |
@@ -267,14 +268,15 @@ The TUI is built on the **Bubble Tea** framework. `Model.Update(msg)` is a **pur
 `Model.View()` checks overlays in this strict priority. Adding a new overlay bool MUST insert it in the correct position:
 
 1. `inAskUser` — Modal dialog, centered
-2. `inInfo` — Team info panel, centered
-3. `inSearch` — Search textinput, centered
-4. `inPromptInput` — Prompt injection textinput, centered
-5. `inConfirm` — Quit confirmation (No/Yes/Force), centered
-6. `inDetail` — Task log viewport + header + footer
-7. `inActivityLog` — Full-screen recent logs viewport
-8. `inMemory` — STM/LTM content viewport
-9. Default — 6-column Kanban dashboard
+2. `inHelp` — Keyboard reference, centered
+3. `inInfo` — Team info panel, centered
+4. `inSearch` — Search textinput, centered
+5. `inPromptInput` — Prompt injection textinput, centered
+6. `inConfirm` — Quit confirmation (No/Yes/Force), centered
+7. `inDetail` — Task log viewport + header + footer
+8. `inActivityLog` — Full-screen recent logs viewport
+9. `inMemory` — STM/LTM content viewport
+10. Default — 6-column Kanban dashboard
 
 ### Key Bindings Reference
 

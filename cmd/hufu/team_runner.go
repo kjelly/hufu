@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/anomalyco/hufu/internal/config"
 	"github.com/anomalyco/hufu/internal/readline"
@@ -133,6 +136,7 @@ func expandSegmentsWithAgents(initialSegments []team.PromptSegment, loadedTeams 
 
 // executeAndReport handles the execution (either in TUI or CLI mode) and aggregates skill usage/reports.
 func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, originalPrompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string) error {
+	startedAt := time.Now()
 	var result string
 	var runErr error
 	if tuiMode {
@@ -219,6 +223,9 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 		fmt.Println(result)
 		if !quietMode {
 			renderSkillSummary(allSkillUsage)
+			if !noSummary {
+				renderExecutionSummary(os.Stderr, loadedTeams, time.Since(startedAt))
+			}
 		}
 	}
 
@@ -240,4 +247,67 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 	}
 
 	return nil
+}
+
+type executionSummary struct {
+	teams      []string
+	workspaces []string
+	total      int
+	done       int
+	errored    int
+	skipped    int
+	pending    int
+}
+
+func summarizeExecution(loadedTeams map[string]*teamContext) executionSummary {
+	summary := executionSummary{}
+	for name, tc := range loadedTeams {
+		if tc == nil || tc.coordinator == nil {
+			continue
+		}
+		summary.teams = append(summary.teams, name)
+		if tc.session != nil && tc.session.Workspace != "" {
+			summary.workspaces = append(summary.workspaces, tc.session.Workspace)
+		}
+		for _, item := range tc.coordinator.TaskTracker().TodoList().Items() {
+			summary.total++
+			switch item.Status {
+			case team.TaskDone:
+				summary.done++
+			case team.TaskError, team.TaskBlocked:
+				summary.errored++
+			case team.TaskSkipped:
+				summary.skipped++
+			default:
+				summary.pending++
+			}
+		}
+	}
+	sort.Strings(summary.teams)
+	sort.Strings(summary.workspaces)
+	return summary
+}
+
+func renderExecutionSummary(w io.Writer, loadedTeams map[string]*teamContext, duration time.Duration) {
+	summary := summarizeExecution(loadedTeams)
+	if summary.total == 0 && len(summary.teams) == 0 {
+		return
+	}
+	_, _ = fmt.Fprint(w, formatExecutionSummary(summary, duration))
+}
+
+func formatExecutionSummary(summary executionSummary, duration time.Duration) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("─── Summary ───"))
+	b.WriteString("\n")
+	if len(summary.teams) > 0 {
+		fmt.Fprintf(&b, "  Team:      %s\n", strings.Join(summary.teams, ", "))
+	}
+	fmt.Fprintf(&b, "  Tasks:     %d done · %d error · %d skipped · %d pending (%d total)\n", summary.done, summary.errored, summary.skipped, summary.pending, summary.total)
+	fmt.Fprintf(&b, "  Duration:  %s\n", duration.Round(time.Second))
+	if len(summary.workspaces) > 0 {
+		fmt.Fprintf(&b, "  Workspace: %s\n", strings.Join(summary.workspaces, ", "))
+	}
+	return b.String()
 }

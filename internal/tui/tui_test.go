@@ -132,3 +132,43 @@ func TestUpdate_FinishedMsgConvertsStragglers(t *testing.T) {
 		t.Fatalf("expected coord item to become done, got %#v", model.coordItem)
 	}
 }
+
+func TestView_UsesCompactColumnsOnNarrowTerminal(t *testing.T) {
+	m := New("prompt", TeamInfo{})
+	m.width = 70
+	m.height = 30
+	m.tasks = []*team.TodoItem{
+		{ID: "1", Status: team.TaskPending, Desc: "queued task", Agent: "worker"},
+		{ID: "2", Status: team.TaskInProgress, Desc: "active task", Agent: "worker"},
+		{ID: "3", Status: team.TaskDone, Desc: "finished task", Agent: "worker"},
+	}
+
+	view := m.View()
+	for _, want := range []string{"Queued", "Active", "Finished"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("compact view missing %q: %q", want, view)
+		}
+	}
+}
+
+func TestView_ShowsNarrowTerminalWarning(t *testing.T) {
+	m := New("prompt", TeamInfo{})
+	m.width = 59
+	m.height = 20
+
+	if view := m.View(); !strings.Contains(view, "Terminal too narrow") {
+		t.Errorf("expected narrow terminal warning, got %q", view)
+	}
+}
+
+func TestTaskLogBufferIsBounded(t *testing.T) {
+	m := New("prompt", TeamInfo{})
+	for i := 0; i < maxTaskLogLines+1; i++ {
+		updated, _ := m.Update(TaskLogMsg{TodoID: "task", Line: "log"})
+		m = updated.(Model)
+	}
+
+	if got := len(m.logs["task"]); got != maxTaskLogLines {
+		t.Errorf("log buffer length = %d, want %d", got, maxTaskLogLines)
+	}
+}

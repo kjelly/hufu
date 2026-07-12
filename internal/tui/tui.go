@@ -305,6 +305,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			line = dimStyle.Render("["+msg.Model+"] ") + line
 		}
 		m.logs[msg.TodoID] = append(m.logs[msg.TodoID], line)
+		m.trimTaskLogs(msg.TodoID)
 		if m.inDetail && m.detailID == msg.TodoID && m.vpReady && !m.detailRefreshScheduled {
 			m.detailRefreshScheduled = true
 			return m, func() tea.Msg {
@@ -460,6 +461,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if !m.mouseEnabled {
+			return m, nil
+		}
+		if m.isCompact() {
+			// Compact columns merge task states, so six-column hit testing is invalid.
 			return m, nil
 		}
 		// Click on a task to select it or enter detail view
@@ -1450,6 +1455,7 @@ func (m Model) promptWidgetHeight() int {
 
 const maxResultLines = 8
 const maxFeedLines = 6
+const maxTaskLogLines = 5000
 
 // statusAreaHeight returns the number of terminal lines occupied by the status area.
 func (m Model) statusAreaHeight() int {
@@ -1569,6 +1575,10 @@ func (m Model) columnsView() string {
 	if w < 9 {
 		return ""
 	}
+	if w < 60 {
+		warning := infoBoxStyle.Render("Terminal too narrow\n\nResize to at least 60 columns to view task status.")
+		return lipgloss.Place(w, m.height, lipgloss.Center, lipgloss.Center, warning)
+	}
 
 	widget := m.renderPromptWidget(w)
 	statusArea := m.renderStatusArea(w)
@@ -1588,6 +1598,10 @@ func (m Model) columnsView() string {
 		bodyH = 2
 	}
 
+	if m.isCompact() {
+		return m.compactColumnsView(widget, statusArea, activityFeed, bodyH, feedH)
+	}
+
 	// Five │ dividers, so each of six columns = (w-5)/6.
 	colW := (w - 5) / 6
 
@@ -1604,6 +1618,95 @@ func (m Model) columnsView() string {
 		return widget + "\n" + statusArea + "\n" + activityFeed + "\n" + body + "\n\n" + m.footer()
 	}
 	return widget + "\n" + statusArea + "\n" + body + "\n\n" + m.footer()
+}
+
+func (m Model) isCompact() bool {
+	return m.width >= 60 && m.width < 80
+}
+
+func (m Model) compactColumnsView(widget, statusArea, activityFeed string, bodyH, feedH int) string {
+	groups := []struct {
+		title string
+		cols  []int
+	}{
+		{title: "Queued", cols: []int{0, 1}},
+		{title: "Active", cols: []int{2}},
+		{title: "Finished", cols: []int{3, 4, 5}},
+	}
+	colW := (m.width - 2) / len(groups)
+	div := dimStyle.Render("│")
+	columns := make([]string, 0, len(groups))
+	for _, group := range groups {
+		columns = append(columns, m.renderCompactCol(group.title, group.cols, colW, bodyH))
+	}
+	body := lipgloss.JoinHorizontal(lipgloss.Top, columns[0], div, columns[1], div, columns[2])
+	if feedH > 0 {
+		return widget + "\n" + statusArea + "\n" + activityFeed + "\n" + body + "\n\n" + m.footer()
+	}
+	return widget + "\n" + statusArea + "\n" + body + "\n\n" + m.footer()
+}
+
+func (m Model) renderCompactCol(title string, cols []int, width, height int) string {
+	focused := false
+	var items []*team.TodoItem
+	for _, col := range cols {
+		if m.col == col {
+			focused = true
+		}
+		items = append(items, m.colItems(col)...)
+	}
+
+	plainTitle := fmt.Sprintf("%s (%d)", title, len(items))
+	var sb strings.Builder
+	if focused {
+		sb.WriteString(headerStyle.Render(utils.TruncateLine(plainTitle, width)) + "\n")
+	} else {
+		sb.WriteString(dimStyle.Render(utils.TruncateLine(plainTitle, width)) + "\n")
+	}
+	sb.WriteString("\n")
+	usedLines := 2
+	selectedID := ""
+	if focused {
+		selected := m.colItems(m.col)
+		if m.row >= 0 && m.row < len(selected) {
+			selectedID = selected[m.row].ID
+		}
+	}
+	for _, item := range items {
+		if usedLines >= height {
+			break
+		}
+		for _, line := range m.itemLines(item, item.ID == selectedID, m.isCurrentSearchMatch(item.ID), width) {
+			if usedLines >= height {
+				break
+			}
+			sb.WriteString(line + "\n")
+			usedLines++
+		}
+		if usedLines < height {
+			sb.WriteString("\n")
+			usedLines++
+		}
+	}
+	for usedLines < height {
+		sb.WriteString("\n")
+		usedLines++
+	}
+	return sb.String()
+}
+
+func (m *Model) trimTaskLogs(todoID string) {
+	lines := m.logs[todoID]
+	if len(lines) <= maxTaskLogLines {
+		return
+	}
+	dropped := len(lines) - maxTaskLogLines
+	m.logs[todoID] = lines[dropped:]
+	if m.detailID == todoID {
+		m.cursorLine = max(0, m.cursorLine-dropped)
+		m.visualStart = max(0, m.visualStart-dropped)
+		m.visualEnd = max(0, m.visualEnd-dropped)
+	}
 }
 
 func (m Model) renderCol(col, width, height int) string {

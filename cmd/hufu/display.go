@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
+	"github.com/muesli/termenv"
 
 	hulog "github.com/anomalyco/hufu/internal/log"
 	"github.com/anomalyco/hufu/internal/notify"
@@ -503,12 +504,28 @@ type taskDisplay struct {
 	mu      sync.Mutex
 	w       *lineWriter
 	tracker *team.TaskTracker
+	redraw  bool
 	lines   int
 	dirty   bool
 }
 
 func newTaskDisplay(w *lineWriter, tracker *team.TaskTracker) *taskDisplay {
-	return &taskDisplay{w: w, tracker: tracker}
+	return &taskDisplay{
+		w:       w,
+		tracker: tracker,
+		redraw:  shouldRedrawTaskDisplay(displayMode, term.IsTerminal(os.Stderr.Fd())),
+	}
+}
+
+func shouldRedrawTaskDisplay(mode string, stderrIsTerminal bool) bool {
+	switch mode {
+	case "terminal":
+		return true
+	case "plain":
+		return false
+	default:
+		return stderrIsTerminal
+	}
 }
 
 func (d *taskDisplay) render() {
@@ -584,10 +601,20 @@ func (d *taskDisplay) render() {
 }
 
 func (d *taskDisplay) clear() {
-	if d.lines > 0 {
+	if d.redraw && d.lines > 0 {
 		d.w.write(fmt.Sprintf("\033[%dA\033[J", d.lines))
 		d.lines = 0
 	}
+}
+
+func configureOutputRendering() {
+	if shouldDisableColor(noColorMode, outputFormat, os.Getenv("NO_COLOR")) {
+		lipgloss.SetColorProfile(termenv.Ascii)
+	}
+}
+
+func shouldDisableColor(noColor bool, format, noColorEnv string) bool {
+	return noColor || noColorEnv != "" || format == "json"
 }
 
 func (d *taskDisplay) update() {

@@ -71,6 +71,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 	if err := applyProfile(cmd); err != nil {
 		return err
 	}
+	configureOutputRendering()
 	if defaultTeam && agentTeamName != "" {
 		return fmt.Errorf("cannot use --default with --agent-team; pick one")
 	}

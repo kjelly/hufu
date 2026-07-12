@@ -98,3 +98,47 @@ func TestWrapPreviewLinesWrapsWithoutPrematureEllipsis(t *testing.T) {
 		t.Fatalf("did not expect ellipsis while within max lines: %#v", got)
 	}
 }
+
+func TestShouldRedrawTaskDisplay(t *testing.T) {
+	tests := []struct {
+		mode       string
+		isTerminal bool
+		want       bool
+	}{
+		{mode: "auto", isTerminal: true, want: true},
+		{mode: "auto", isTerminal: false, want: false},
+		{mode: "terminal", isTerminal: false, want: true},
+		{mode: "plain", isTerminal: true, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.mode, func(t *testing.T) {
+			if got := shouldRedrawTaskDisplay(tt.mode, tt.isTerminal); got != tt.want {
+				t.Errorf("shouldRedrawTaskDisplay(%q, %t) = %t, want %t", tt.mode, tt.isTerminal, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldDisableColor(t *testing.T) {
+	tests := []struct {
+		name       string
+		noColor    bool
+		format     string
+		noColorEnv string
+		want       bool
+	}{
+		{name: "default", want: false},
+		{name: "flag", noColor: true, want: true},
+		{name: "environment", noColorEnv: "1", want: true},
+		{name: "json", format: "json", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldDisableColor(tt.noColor, tt.format, tt.noColorEnv); got != tt.want {
+				t.Errorf("shouldDisableColor(%t, %q, %q) = %t, want %t", tt.noColor, tt.format, tt.noColorEnv, got, tt.want)
+			}
+		})
+	}
+}

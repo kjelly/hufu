@@ -90,6 +90,9 @@ var (
 	profileName               string
 	quietMode                 bool
 	outputFormat              string
+	displayMode               string
+	noColorMode               bool
+	noSummary                 bool
 	projectContext            bool
 	isChatTUI                 bool
 	globalPromptReader        atomic.Pointer[readline.PromptReader]
@@ -126,6 +129,9 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 		Args:    cobra.MaximumNArgs(1),
 		RunE:    runTeam,
 		Version: version,
+		PersistentPreRun: func(_ *cobra.Command, _ []string) {
+			configureOutputRendering()
+		},
 	}
 
 	// Add skill management commands
@@ -198,6 +204,9 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.PersistentFlags().StringVar(&profileName, "profile", "", "Apply a named flag bundle from hufu.yaml `profiles:` (CLI flags still override)")
 	rootCmd.Flags().BoolVarP(&quietMode, "quiet", "q", false, "Suppress status output; print only the final result to stdout")
 	rootCmd.Flags().StringVar(&outputFormat, "output", "", "Output format for the final result: text (default) or json")
+	rootCmd.Flags().StringVar(&displayMode, "display-mode", "auto", "Status display mode: auto, terminal, or plain")
+	rootCmd.PersistentFlags().BoolVar(&noColorMode, "no-color", false, "Disable ANSI color output (also honors NO_COLOR)")
+	rootCmd.Flags().BoolVar(&noSummary, "no-summary", false, "Suppress the execution summary written to stderr")
 
 	rootCmd.Flags().StringVar(&templateName, "template", "", "Load prompt template by name from .hufu-templates/ or ~/.config/hufu/templates/")
 
@@ -392,6 +401,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	if err := validateRunFlags(); err != nil {
 		return err
 	}
+	configureOutputRendering()
 
 	pr, err := readline.NewPromptReader(defaultHistoryPath())
 	if err != nil {
@@ -989,6 +999,11 @@ func validateRunFlags() error {
 	case "", "text", "json":
 	default:
 		return fmt.Errorf("invalid --output %q: use 'text' or 'json'", outputFormat)
+	}
+	switch displayMode {
+	case "auto", "terminal", "plain":
+	default:
+		return fmt.Errorf("invalid --display-mode %q: use 'auto', 'terminal', or 'plain'", displayMode)
 	}
 	// JSON output implies quiet: stdout must carry only the JSON document.
 	if outputFormat == "json" {

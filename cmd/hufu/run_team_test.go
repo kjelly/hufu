@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anomalyco/hufu/internal/tools"
 )
@@ -15,6 +16,7 @@ func TestValidateRunFlags(t *testing.T) {
 	origUnattended := unattended
 	origDefault := defaultTeam
 	origAgentTeam := agentTeamName
+	origDisplayMode := displayMode
 	defer func() {
 		outputFormat = origOutput
 		stepsMode = origSteps
@@ -22,6 +24,7 @@ func TestValidateRunFlags(t *testing.T) {
 		unattended = origUnattended
 		defaultTeam = origDefault
 		agentTeamName = origAgentTeam
+		displayMode = origDisplayMode
 	}()
 
 	// resetAll sets all flags to their default (non-conflicting) values
@@ -33,6 +36,7 @@ func TestValidateRunFlags(t *testing.T) {
 		unattended = false
 		defaultTeam = false
 		agentTeamName = ""
+		displayMode = "auto"
 	}
 
 	t.Run("accepts empty output format", func(t *testing.T) {
@@ -57,6 +61,14 @@ func TestValidateRunFlags(t *testing.T) {
 		err := validateRunFlags()
 		if err == nil || !strings.Contains(err.Error(), "invalid --output") {
 			t.Errorf("expected invalid --output error, got %v", err)
+		}
+	})
+	t.Run("rejects unknown display mode", func(t *testing.T) {
+		resetAll()
+		displayMode = "jsonl"
+		err := validateRunFlags()
+		if err == nil || !strings.Contains(err.Error(), "invalid --display-mode") {
+			t.Errorf("expected invalid display mode error, got %v", err)
 		}
 	})
 	t.Run("json implies quiet", func(t *testing.T) {
@@ -115,6 +127,16 @@ func TestIsInteractiveEnvironment(t *testing.T) {
 	result := tools.IsInteractiveEnvironment()
 	// We can only assert it's a bool — actual value depends on test environment
 	_ = result
+}
+
+func TestRenderExecutionSummary(t *testing.T) {
+	summary := executionSummary{teams: []string{"dev"}, workspaces: []string{"/tmp/workspace"}, total: 4, done: 1, errored: 1, skipped: 1, pending: 1}
+	out := formatExecutionSummary(summary, 3*time.Second)
+	for _, want := range []string{"Team:      dev", "1 done", "3s"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary missing %q: %q", want, out)
+		}
+	}
 }
 
 func TestOfferFirstTimeWizard(t *testing.T) {
