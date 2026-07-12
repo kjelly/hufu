@@ -9,3 +9,4 @@ dist/
 coverage.out
 stm.md
 .opencode/plans
+docs/tmp

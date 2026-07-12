@@ -197,6 +197,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		stmPath := STMPath(c.session.Workspace)
 		prompt += fmt.Sprintf("\n\n## Instructions\n\nYou are a domain expert. Determine your own implementation approach based on the goal above.\n\n- Key knowledge from previous agents is provided below. You do NOT need to read `%s` at the start. Only read it later if you need to check for *new* updates from concurrent agents.\n- When you discover something important (API shape, file location, decision, error), write it to `stm.md` immediately via `stm_write` — do not wait until the end.", stmPath)
 	}
+	if task.Verify != "" {
+		prompt += completionVerificationInstructions(task.Verify, c.projectDir)
+	}
 
 	// SSH session tracking is handled by the ssh tool's response hint.
 	// No coordinator-level tracking is needed - each SSH call is independent.
@@ -798,6 +801,7 @@ func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef 
 	err := cmd.Run()
 	result := &VerificationResult{
 		Command:  command,
+		WorkDir:  c.verificationWorkDir(),
 		ExitCode: 0,
 		Stdout:   utils.TruncateString(strings.TrimSpace(stdout.String()), 2000),
 		Stderr:   utils.TruncateString(strings.TrimSpace(stderr.String()), 2000),
@@ -820,6 +824,17 @@ func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef 
 		return result, fmt.Errorf("%v%s", err, detail)
 	}
 	return result, nil
+}
+
+func (c *Coordinator) verificationWorkDir() string {
+	if c != nil && c.projectDir != "" {
+		return c.projectDir
+	}
+	return "the hufu process working directory"
+}
+
+func completionVerificationInstructions(command, workDir string) string {
+	return fmt.Sprintf("\n\n## Completion Verification\n\nYour work is not accepted until this exact command succeeds. Create the deliverable at the exact path it checks, then run the command yourself before your final response.\n\n- Command: `%s`\n- Runs from: `%s`\n- If it fails, fix the deliverable instead of only describing the intended result.\n", strings.TrimSpace(command), workDir)
 }
 
 func (c *Coordinator) verifyTaskTimeout() time.Duration {

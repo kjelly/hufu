@@ -233,6 +233,9 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 			}
 			fmt.Fprintf(&b, "### Task %s: %s\n\n", t.ID, t.Desc)
 			fmt.Fprintf(&b, "- Command: `%s`\n", limitStr(strings.TrimSpace(t.VerifyResult.Command), 200))
+			if workDir := strings.TrimSpace(t.VerifyResult.WorkDir); workDir != "" {
+				fmt.Fprintf(&b, "- Working directory: `%s`\n", limitStr(workDir, 200))
+			}
 			fmt.Fprintf(&b, "- Exit code: %d\n", t.VerifyResult.ExitCode)
 			fmt.Fprintf(&b, "- Duration: %s\n", t.VerifyResult.Duration.Round(time.Millisecond))
 			fmt.Fprintf(&b, "- Timed out: %t\n\n", t.VerifyResult.TimedOut)

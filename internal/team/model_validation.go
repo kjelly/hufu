@@ -41,8 +41,9 @@ func (c *Coordinator) collectConfiguredModels() []string {
 
 // ValidateConfiguredModels checks each configured model against its
 // provider's available-model list and returns an error naming every missing
-// model with nearby suggestions. Providers whose /models endpoint cannot be
-// queried are skipped — unreachable is "cannot validate", not "missing".
+// model with nearby suggestions. Callers may choose to treat the result as a
+// warning. Providers whose /models endpoint cannot be queried are skipped —
+// unreachable is "cannot validate", not "missing".
 func (c *Coordinator) ValidateConfiguredModels(ctx context.Context) error {
 	ids := c.collectConfiguredModels()
 	if len(ids) == 0 {
@@ -77,10 +78,10 @@ func (c *Coordinator) ValidateConfiguredModels(ctx context.Context) error {
 		if !pm.ok {
 			continue
 		}
-		bare := strings.TrimPrefix(id, key+"/")
-		if pm.names[bare] {
+		if modelAvailableOnProvider(id, key, pm.names) {
 			continue
 		}
+		bare := strings.TrimPrefix(id, key+"/")
 		problem := fmt.Sprintf("model %q not found on provider %q", id, key)
 		if suggestions := nearestModelNames(bare, pm.names, 3); len(suggestions) > 0 {
 			problem += fmt.Sprintf(" (did you mean: %s?)", strings.Join(suggestions, ", "))
@@ -94,12 +95,34 @@ func (c *Coordinator) ValidateConfiguredModels(ctx context.Context) error {
 	return nil
 }
 
+// modelAvailableOnProvider checks whether a configured model ID matches one of
+// the provider-reported names, accepting either bare names or provider-prefixed
+// names such as "ollama/qwen3:8b".
+func modelAvailableOnProvider(modelID, providerName string, available map[string]bool) bool {
+	bare := strings.TrimPrefix(modelID, providerName+"/")
+	if available[modelID] || available[bare] {
+		return true
+	}
+	for name := range available {
+		if strings.TrimPrefix(name, providerName+"/") == bare {
+			return true
+		}
+	}
+	return false
+}
+
 // nearestModelNames returns up to max available names close to the missing
 // one. Comparison ignores the tag colon so "glm-5.2cloud" matches
 // "glm-5.2:cloud", plus a short shared prefix to catch wrong tags — enough
 // for common typos without a full edit-distance implementation.
 func nearestModelNames(missing string, available map[string]bool, max int) []string {
-	norm := func(s string) string { return strings.ReplaceAll(strings.ToLower(s), ":", "") }
+	norm := func(s string) string {
+		s = strings.ToLower(s)
+		if idx := strings.IndexByte(s, '/'); idx >= 0 {
+			s = s[idx+1:]
+		}
+		return strings.ReplaceAll(s, ":", "")
+	}
 	base := norm(missing)
 	if len(base) < 2 {
 		return nil

@@ -45,8 +45,40 @@ func TestVerifyTaskDeliverable_Success(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected success when deliverable exists, got %v", err)
 	}
-	if result == nil || result.ExitCode != 0 || result.Command != "test -f report.md" {
+	if result == nil || result.ExitCode != 0 || result.Command != "test -f report.md" || result.WorkDir != dir {
 		t.Fatalf("unexpected verification evidence: %#v", result)
+	}
+}
+
+func TestCompletionVerificationInstructions(t *testing.T) {
+	instructions := completionVerificationInstructions("test -f reports/final.md", "/tmp/project")
+	for _, want := range []string{"test -f reports/final.md", "/tmp/project", "not accepted until"} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("verification instructions missing %q: %s", want, instructions)
+		}
+	}
+}
+
+func TestFinalizeNormalCompletionMarksIncompleteTasksAsErrors(t *testing.T) {
+	c := &Coordinator{
+		session:      &TeamSession{Config: agent.TeamConfig{Name: "test"}},
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+	}
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "running"}, {Agent: "worker", Desc: "verifying"}})
+	c.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskInProgress, "")
+	c.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskInProgress, "")
+	c.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskVerifying, "")
+
+	c.finalizeNormalCompletion()
+
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item.Status != TaskError {
+			t.Fatalf("task %s status = %s, want error", item.ID, item.Status)
+		}
+		if item.Detail != "coordinator finished before task completed" {
+			t.Fatalf("task %s detail = %q", item.ID, item.Detail)
+		}
 	}
 }
 

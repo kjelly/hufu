@@ -106,6 +106,7 @@ const (
 // verification command. Output is intentionally bounded by the verifier.
 type VerificationResult struct {
 	Command  string
+	WorkDir  string
 	ExitCode int
 	Stdout   string
 	Stderr   string

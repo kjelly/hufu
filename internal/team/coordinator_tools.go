@@ -73,11 +73,15 @@ type finishTool struct {
 func (t *finishTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
 		Name:        "finish",
-		Description: "Signal that you have completed the user's request and provide your final answer. Call this when you are done coordinating and have a complete response for the user. You MUST call this instead of just outputting text — your final answer goes in the response field.",
+		Description: "Signal that you have completed the user's request and provide your final answer. Call this when you are done coordinating and have a complete response for the user. You MUST call this instead of just outputting text — your final answer goes in the response field. If worker tasks failed or were blocked, first fix them; only set acknowledge_failed_tasks when you must end with a clearly disclosed partial result.",
 		Parameters: map[string]any{
 			"response": map[string]any{
 				"type":        "string",
 				"description": "Your final answer to the user",
+			},
+			"acknowledge_failed_tasks": map[string]any{
+				"type":        "boolean",
+				"description": "Set true only when ending with unresolved failed or blocked tasks. The final response will include their IDs and errors.",
 			},
 		},
 		Required: []string{"response"},
@@ -86,15 +90,21 @@ func (t *finishTool) Info() fantasy.ToolInfo {
 
 func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
-		Response string `json:"response"`
+		Response               string `json:"response"`
+		AcknowledgeFailedTasks bool   `json:"acknowledge_failed_tasks"`
 	}
 	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
 	}
 
+	todoList := t.coordinator.taskTracker.TodoList()
+	failedTasks := failedTodoItems(todoList.Items())
+	if len(failedTasks) > 0 && !args.AcknowledgeFailedTasks {
+		return fantasy.NewTextErrorResponse("cannot finish successfully while worker tasks failed or were blocked:\n" + formatFailedTasks(failedTasks) + "\nFix or re-delegate these tasks. If the user needs a partial result, call finish again with acknowledge_failed_tasks:true; hufu will append the unresolved-task warning."), nil
+	}
+
 	t.coordinator.lastStmWriteMu.Lock()
 	workspace := t.coordinator.session.Workspace
-	todoList := t.coordinator.taskTracker.TodoList()
 	completed := todoList.CompletedCount()
 	failed := todoList.ErrorCount()
 	summary := fmt.Sprintf("[summary] %d/%d tasks done, %d rounds, %s elapsed",
@@ -116,6 +126,9 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	// surfaced in the result and via a notifiable event so an unattended run's
 	// failure is not silent.
 	response := args.Response
+	if len(failedTasks) > 0 {
+		response += "\n\n⚠️ UNRESOLVED TASKS\n" + formatFailedTasks(failedTasks)
+	}
 	if accErr := t.coordinator.runAcceptance(ctx); accErr != nil {
 		if t.coordinator.IsUnattended() {
 			if t.coordinator.selfHealingAttempts < 2 {
@@ -144,6 +157,28 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	}
 
 	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
+}
+
+func failedTodoItems(items []*TodoItem) []*TodoItem {
+	failed := make([]*TodoItem, 0)
+	for _, item := range items {
+		if item != nil && (item.Status == TaskError || item.Status == TaskBlocked) {
+			failed = append(failed, item)
+		}
+	}
+	return failed
+}
+
+func formatFailedTasks(items []*TodoItem) string {
+	var b strings.Builder
+	for _, item := range items {
+		detail := strings.TrimSpace(item.Detail)
+		if detail == "" {
+			detail = "no failure detail recorded"
+		}
+		fmt.Fprintf(&b, "- Task %s (%s, %s): %s\n", item.ID, item.Agent, item.Status, utils.TruncateString(detail, 500))
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // runAcceptance runs the team's optional acceptance command in the project dir

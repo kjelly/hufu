@@ -20,6 +20,7 @@ func TestBuildReportMDIncludesVerificationEvidence(t *testing.T) {
 				Verify: "test -f report.md",
 				VerifyResult: &team.VerificationResult{
 					Command:  "test -f report.md",
+					WorkDir:  "/tmp/project",
 					ExitCode: 0,
 					Stdout:   "ok",
 					Stderr:   "",
@@ -40,6 +41,9 @@ func TestBuildReportMDIncludesVerificationEvidence(t *testing.T) {
 	}
 	if !strings.Contains(report, "Stdout") || !strings.Contains(report, "ok") {
 		t.Fatalf("report missing verify stdout:\n%s", report)
+	}
+	if !strings.Contains(report, "Working directory") || !strings.Contains(report, "/tmp/project") {
+		t.Fatalf("report missing verify working directory:\n%s", report)
 	}
 	if !strings.Contains(report, "Verify") {
 		t.Fatalf("task summary missing verify column:\n%s", report)

@@ -223,6 +223,30 @@ func TestSelfHealingAndRollback(t *testing.T) {
 	}
 }
 
+func TestFinishRequiresAcknowledgementForFailedTasks(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	c.session.Workspace = t.TempDir()
+	failed := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "write final report"}})[0]
+	c.taskTracker.TodoList().UpdateStatus(failed.ID, TaskError, "expected report.md was not created")
+	tool := &finishTool{coordinator: c}
+
+	resp, err := tool.Run(context.Background(), fantasy.ToolCall{Input: `{"response":"all tasks passed"}`})
+	if err != nil {
+		t.Fatalf("unexpected tool error: %v", err)
+	}
+	if !resp.IsError || !strings.Contains(resp.Content, "cannot finish successfully") {
+		t.Fatalf("finish without acknowledgement = %#v, want failed-task error", resp)
+	}
+
+	resp, err = tool.Run(context.Background(), fantasy.ToolCall{Input: `{"response":"partial result", "acknowledge_failed_tasks":true}`})
+	if err != nil {
+		t.Fatalf("unexpected tool error: %v", err)
+	}
+	if resp.IsError || !strings.Contains(resp.Content, "UNRESOLVED TASKS") || !strings.Contains(resp.Content, failed.ID) {
+		t.Fatalf("acknowledged finish = %#v, want unresolved-task summary", resp)
+	}
+}
+
 func TestSessionRestoreTasksAndCache(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "hufu-checkpoint-test")
 	if err != nil {

@@ -46,7 +46,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("    - `# 待解決` — open questions or blockers for later agents\n")
 	b.WriteString("    Skip this step only if the agent result contains no new knowledge (e.g. pure \"done\" confirmations).\n")
 	b.WriteString("11. **Synthesize** results into a coherent answer for the user\n")
-	b.WriteString("12. When satisfied, call the finish tool with your final response\n\n")
+	b.WriteString("12. Resolve every failed or blocked task before calling finish. If that is impossible, call finish with `acknowledge_failed_tasks:true` and give the user an explicitly partial result; hufu will list unresolved tasks automatically.\n\n")
 
 	b.WriteString("## Deduplication Rules\n\n")
 	b.WriteString("CRITICAL: BEFORE delegating ANY task, you MUST check the Task Status section above.\n\n")
@@ -178,7 +178,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("Save a reusable skill to disk and reload it immediately. Use this when you or a worker has solved a non-trivial problem and you want to encode the solution for future reuse.\n")
 	b.WriteString("```json\n{\"name\": \"skill-name\", \"description\": \"what it does\", \"content\": \"# Skill\\n\\nStep-by-step workflow...\"}\n```\n\n")
 	b.WriteString("### finish\n")
-	b.WriteString("Signal completion and provide your final answer to the user. ALWAYS call this when you are done.\n**Important: Call stm_write with a session summary BEFORE calling finish.**\n")
+	b.WriteString("Signal completion and provide your final answer to the user. ALWAYS call this when you are done.\n**Important: Call stm_write with a session summary BEFORE calling finish.** Failed or blocked tasks prevent a normal finish; fix them first, or explicitly acknowledge a partial result.\n")
 	b.WriteString("```json\n{\"response\": \"Your final synthesized answer to the user\"}\n```\n\n")
 
 	b.WriteString("### approve_plan\n")

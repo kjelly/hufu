@@ -313,8 +313,8 @@ func (c *Coordinator) finalizeRemainingTasks() {
 
 // finalizeNormalCompletion marks tasks that are still pending as skipped when
 // the coordinator finishes successfully. Tasks in progress should not exist at
-// this point since ExecuteTasks waits for all goroutines, but we handle them as
-// done out of caution.
+// this point since ExecuteTasks waits for all goroutines. Do not mark them done
+// defensively: that would turn an incomplete task into a false success.
 func (c *Coordinator) finalizeNormalCompletion() {
 	items := c.taskTracker.TodoList().Items()
 	changed := false
@@ -324,7 +324,7 @@ func (c *Coordinator) finalizeNormalCompletion() {
 			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "")
 			changed = true
 		case TaskInProgress, TaskPaused, TaskVerifying:
-			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskDone, "still in progress at completion")
+			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskError, "coordinator finished before task completed")
 			changed = true
 		}
 	}
@@ -461,13 +461,14 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	c.resetRoundState()
 	c.lastStmWrite = time.Time{}
 
-	// Fail fast on misconfigured model names (e.g. a missing tag colon)
-	// instead of surfacing them mid-run as silently-lost requests.
+	// Validate configured model names once per coordinator. This is advisory:
+	// we warn on mismatches but keep running so a stale provider list does not
+	// block the whole team.
 	c.validateModelsOnce.Do(func() {
 		c.validateModelsErr = c.ValidateConfiguredModels(ctx)
 	})
 	if c.validateModelsErr != nil {
-		return "", c.validateModelsErr
+		c.report(c.newEvent("step").withMessage(fmt.Sprintf("model validation warning: %v", c.validateModelsErr)))
 	}
 
 	// Start cleanup daemon for idle SSH sessions on first Run call (30 minute timeout, check every 5 minutes)
