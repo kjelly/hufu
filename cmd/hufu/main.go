@@ -144,6 +144,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(teamCmd)
 	rootCmd.AddCommand(installCmd)
+	rootCmd.AddCommand(versionCmd)
 
 	// Add custom completion commands
 	completionCmd.AddCommand(completionBashCmd, completionZshCmd, completionFishCmd, completionPowerShellCmd, completionNushellCmd)
@@ -211,7 +212,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringVar(&templateName, "template", "", "Load prompt template by name from .hufu-templates/ or ~/.config/hufu/templates/")
 
 	// init scaffolding flags (consumed by initcmd.go).
-	initCmd.Flags().StringVar(&initTemplateName, "template", "default", "Scaffold template for `hufu init`: default")
+	initCmd.Flags().StringVar(&initTemplateName, "template", "default", "Scaffold template: default, dev, research, ops, or minimal")
 	initCmd.Flags().StringVar(&modelOverride, "model", "", "Pin a model in the scaffolded team.yaml (e.g. ollama/qwen3:8b)")
 
 	// Root flags are intentionally not inherited by Cobra subcommands, so the
