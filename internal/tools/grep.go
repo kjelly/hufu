@@ -34,7 +34,7 @@ func NewGrepTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "grep",
-			Description: "Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output truncated to 100 matches or 50KB.",
+			Description: "Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Hufu workspace execution records (session/journal files and logs under the workspace directory) are excluded unless the search path points inside the workspace. Output truncated to 100 matches or 50KB.",
 			Parameters: map[string]any{
 				"pattern": map[string]any{
 					"type":        "string",
@@ -108,15 +108,20 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 		globPattern = args.Glob
 	}
 
-	result, err := grepWithRg(ctx, args, searchPath, globPattern, limit)
+	// Exclude hufu workspace execution records by default; searching with a
+	// path inside the workspace directory bypasses the exclusion.
+	wsName := workspaceDirName(cfg)
+	excludeRecords := !pathHasComponent(searchPath, wsName)
+
+	result, err := grepWithRg(ctx, args, searchPath, globPattern, limit, wsName, excludeRecords)
 	if err == nil {
 		return result, nil
 	}
 
-	return grepFallback(ctx, args, searchPath, limit)
+	return grepFallback(ctx, args, searchPath, limit, wsName, excludeRecords)
 }
 
-func grepWithRg(ctx context.Context, args grepArgs, searchPath, globPattern string, limit int) (fantasy.ToolResponse, error) {
+func grepWithRg(ctx context.Context, args grepArgs, searchPath, globPattern string, limit int, wsName string, excludeRecords bool) (fantasy.ToolResponse, error) {
 	rgArgs := []string{
 		"--line-number",
 		"--no-heading",
@@ -136,6 +141,12 @@ func grepWithRg(ctx context.Context, args grepArgs, searchPath, globPattern stri
 	if globPattern != "" {
 		rgArgs = append(rgArgs, "--glob="+globPattern)
 	}
+	if excludeRecords {
+		// Appended after any user glob so the exclusion takes precedence.
+		for _, g := range workspaceRecordRgGlobs(wsName) {
+			rgArgs = append(rgArgs, "--glob="+g)
+		}
+	}
 
 	rgArgs = append(rgArgs, args.Pattern, searchPath)
 
@@ -154,7 +165,9 @@ func grepWithRg(ctx context.Context, args grepArgs, searchPath, globPattern stri
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("rg error: %s", stderr.String())), nil
 			}
 		}
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("rg failed: %v", err)), nil
+		// rg is unavailable (or failed to start); let the caller try the
+		// plain-grep fallback.
+		return fantasy.ToolResponse{}, fmt.Errorf("running rg: %w", err)
 	}
 
 	output := stdout.String()
@@ -169,10 +182,10 @@ func grepWithRg(ctx context.Context, args grepArgs, searchPath, globPattern stri
 	output = strings.Join(lines, "\n")
 
 	tr := truncateHead(output, limit, defaultMaxBytes)
-	return fantasy.NewTextResponse(tr.Content), nil
+	return fantasy.NewTextResponse(tr.Content + formatTruncationNotice(tr)), nil
 }
 
-func grepFallback(ctx context.Context, args grepArgs, searchPath string, limit int) (fantasy.ToolResponse, error) {
+func grepFallback(ctx context.Context, args grepArgs, searchPath string, limit int, wsName string, excludeRecords bool) (fantasy.ToolResponse, error) {
 	grepArgs := []string{"-rn", "--color=never"}
 
 	if args.IgnoreCase {
@@ -207,10 +220,13 @@ func grepFallback(ctx context.Context, args grepArgs, searchPath string, limit i
 	}
 
 	output := stdout.String()
-	if output == "" {
+	if excludeRecords {
+		output = filterWorkspaceRecordLines(output, wsName)
+	}
+	if strings.TrimSpace(output) == "" {
 		return fantasy.NewTextResponse("No matches found."), nil
 	}
 
 	tr := truncateHead(output, limit, defaultMaxBytes)
-	return fantasy.NewTextResponse(tr.Content), nil
+	return fantasy.NewTextResponse(tr.Content + formatTruncationNotice(tr)), nil
 }

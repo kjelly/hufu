@@ -29,7 +29,7 @@ func NewGlobTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "glob",
-			Description: "Search for files by glob pattern. Returns matching file paths. Uses ripgrep (rg) if available, falls back to Go implementation. Respects .gitignore. Limited to 100 results.",
+			Description: "Search for files by glob pattern. Returns matching file paths. Uses ripgrep (rg) if available, falls back to Go implementation. Respects .gitignore. Hufu workspace execution records (session/journal files and logs under the workspace directory) are excluded unless the search path points inside the workspace. Limited to 100 results.",
 			Parameters: map[string]any{
 				"pattern": map[string]any{
 					"type":        "string",
@@ -69,7 +69,12 @@ func executeGlob(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 		searchPath = workDir
 	}
 
-	paths, truncated, err := globFiles(ctx, args.Pattern, searchPath, defaultGlobLimit)
+	// Exclude hufu workspace execution records by default; searching with a
+	// path inside the workspace directory bypasses the exclusion.
+	wsName := workspaceDirName(cfg)
+	excludeRecords := !pathHasComponent(searchPath, wsName)
+
+	paths, truncated, err := globFiles(ctx, args.Pattern, searchPath, defaultGlobLimit, wsName, excludeRecords)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("glob failed: %v", err)), nil
 	}
@@ -103,21 +108,27 @@ func executeGlob(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 	return fantasy.NewTextResponse(strings.TrimRight(b.String(), "\n")), nil
 }
 
-func globFiles(ctx context.Context, pattern, searchPath string, limit int) ([]string, bool, error) {
-	paths, err := globWithRg(ctx, pattern, searchPath, limit)
+func globFiles(ctx context.Context, pattern, searchPath string, limit int, wsName string, excludeRecords bool) ([]string, bool, error) {
+	paths, err := globWithRg(ctx, pattern, searchPath, limit, wsName, excludeRecords)
 	if err == nil && len(paths) > 0 {
 		return paths, len(paths) >= limit, nil
 	}
 
-	return globWithWalk(pattern, searchPath, limit)
+	return globWithWalk(pattern, searchPath, limit, wsName, excludeRecords)
 }
 
-func globWithRg(ctx context.Context, pattern, searchPath string, limit int) ([]string, error) {
+func globWithRg(ctx context.Context, pattern, searchPath string, limit int, wsName string, excludeRecords bool) ([]string, error) {
 	rgArgs := []string{
 		"--files",
 		"-L",
 		"--glob", pattern,
 		"--max-depth", "100",
+	}
+	if excludeRecords {
+		// Appended after the user pattern so the exclusion takes precedence.
+		for _, g := range workspaceRecordRgGlobs(wsName) {
+			rgArgs = append(rgArgs, "--glob", g)
+		}
 	}
 
 	cmd := exec.CommandContext(ctx, "rg", rgArgs...)
@@ -150,7 +161,7 @@ func globWithRg(ctx context.Context, pattern, searchPath string, limit int) ([]s
 	return paths, nil
 }
 
-func globWithWalk(pattern, searchPath string, limit int) ([]string, bool, error) {
+func globWithWalk(pattern, searchPath string, limit int, wsName string, excludeRecords bool) ([]string, bool, error) {
 	var paths []string
 	truncated := false
 
@@ -161,6 +172,9 @@ func globWithWalk(pattern, searchPath string, limit int) ([]string, bool, error)
 			return nil
 		}
 		if info.IsDir() {
+			return nil
+		}
+		if excludeRecords && isWorkspaceRecordPath(path, wsName) {
 			return nil
 		}
 		rel, err := filepath.Rel(searchPath, path)
