@@ -133,9 +133,13 @@ var (
 )
 
 var defaultSpinnerEnabled = true
+var defaultCompactMode bool
 
 // SetSpinnerEnabled configures the default for newly created TUI models.
 func SetSpinnerEnabled(enabled bool) { defaultSpinnerEnabled = enabled }
+
+// SetCompactMode configures the default layout for newly created TUI models.
+func SetCompactMode(enabled bool) { defaultCompactMode = enabled }
 
 // ── Model ─────────────────────────────────────────────────────────────────────
 
@@ -170,6 +174,7 @@ type Model struct {
 	statusText     string // current status shown in the status bar
 	spinnerFrame   int
 	spinnerEnabled bool
+	forceCompact   bool
 	result         string // final coordinator answer shown when finished
 
 	inAskUser bool
@@ -238,6 +243,7 @@ func New(prompt string, teamInfo TeamInfo) Model {
 		teamInfo:       teamInfo,
 		IsChat:         teamInfo.IsChat,
 		spinnerEnabled: defaultSpinnerEnabled && os.Getenv("NO_SPINNER") == "",
+		forceCompact:   defaultCompactMode,
 	}
 
 	if m.IsChat && prompt == "" {
@@ -1706,7 +1712,7 @@ func (m Model) columnsView() string {
 }
 
 func (m Model) isCompact() bool {
-	return m.width >= 60 && m.width < 80
+	return m.forceCompact || (m.width >= 60 && m.width < 80)
 }
 
 func (m Model) compactColumnsView(widget, progress, statusArea, activityFeed string, bodyH, feedH int) string {
