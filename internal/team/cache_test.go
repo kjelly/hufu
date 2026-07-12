@@ -135,6 +135,44 @@ func TestCacheVerifyMustMatch(t *testing.T) {
 	}
 }
 
+func TestCacheVerifyModeMustMatch(t *testing.T) {
+	c := newTestCacheCoordinator()
+	c.storeTaskCacheWithVerification("developer", "inspect service", "systemctl is-active api", "success", "service is active")
+
+	if _, ok := c.lookupTaskCacheWithVerification(context.Background(), "developer", "inspect service", "systemctl is-active api", "expected_failure"); ok {
+		t.Fatal("expected_failure must not reuse a success-mode cache result")
+	}
+	if _, ok := c.lookupTaskCacheWithVerification(context.Background(), "developer", "inspect service", "systemctl is-active api", "observation"); ok {
+		t.Fatal("observation must not reuse a success-mode cache result")
+	}
+	if got, ok := c.lookupTaskCacheWithVerification(context.Background(), "developer", "inspect service", "systemctl is-active api", ""); !ok || got != "service is active" {
+		t.Fatalf("default success mode cache lookup = (%q, %t), want stored result", got, ok)
+	}
+}
+
+func TestSessionCacheRestoreKeepsVerifyMode(t *testing.T) {
+	c := &Coordinator{
+		taskTracker:     NewTaskTracker(),
+		taskResultCache: make(map[string][]cachedTaskEntry),
+	}
+	c.SetSessionData(&SessionData{Tasks: []*TodoItem{{
+		ID:         "1",
+		Agent:      "developer",
+		Desc:       "inspect service",
+		Status:     TaskDone,
+		Verify:     "systemctl is-active api",
+		VerifyMode: "success",
+		Output:     "active",
+	}}})
+
+	if _, ok := c.lookupTaskCacheWithVerification(context.Background(), "developer", "inspect service", "systemctl is-active api", "expected_failure"); ok {
+		t.Fatal("restored success-mode result must not satisfy expected_failure")
+	}
+	if got, ok := c.lookupTaskCacheWithVerification(context.Background(), "developer", "inspect service", "systemctl is-active api", "success"); !ok || got != "active" {
+		t.Fatalf("restored success-mode result = (%q, %t), want active", got, ok)
+	}
+}
+
 func TestCacheMissDifferentAgent(t *testing.T) {
 	c := newTestCacheCoordinator()
 	c.cacheGeneration.Store(1)

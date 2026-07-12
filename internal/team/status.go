@@ -1,11 +1,16 @@
 package team
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"sync"
 	"time"
 )
+
+// ErrTasksUnresolved marks a completed coordinator response that still has
+// failed or blocked tasks. Callers must not report this as a successful run.
+var ErrTasksUnresolved = errors.New("tasks unresolved")
 
 type StatusEvent struct {
 	Type        string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning", "timing", "judge", "skeptic", "budget_exceeded", "task_timeout"
@@ -179,6 +184,7 @@ type TodoItem struct {
 	ParentID       string
 	DependsOn      []string // IDs of tasks that must complete before this one starts
 	Verify         string   // Command to run to verify the task
+	VerifyMode     string   // success, expected_failure, or observation
 	VerifyResult   *VerificationResult
 	MaxRetries     int    // Maximum number of retries for this task
 	Retries        int    // Current number of retries
@@ -200,6 +206,7 @@ type TodoSpec struct {
 	Source     string
 	ParentID   string
 	Verify     string
+	VerifyMode string
 	MaxRetries int
 	OnFailure  string
 }
@@ -218,6 +225,7 @@ func (tl *TodoList) AddBatch(items []TodoSpec) []*TodoItem {
 			Source:     item.Source,
 			ParentID:   item.ParentID,
 			Verify:     item.Verify,
+			VerifyMode: item.VerifyMode,
 			MaxRetries: item.MaxRetries,
 			OnFailure:  item.OnFailure,
 		}
@@ -448,6 +456,7 @@ func (tl *TodoList) Items() []*TodoItem {
 			ParentID:       item.ParentID,
 			DependsOn:      dependsOn,
 			Verify:         item.Verify,
+			VerifyMode:     item.VerifyMode,
 			VerifyResult:   verifyResult,
 			MaxRetries:     item.MaxRetries,
 			Retries:        item.Retries,
@@ -569,6 +578,7 @@ func (tl *TodoList) Children(parentID string) []*TodoItem {
 				ParentID:       item.ParentID,
 				DependsOn:      dependsOn,
 				Verify:         item.Verify,
+				VerifyMode:     item.VerifyMode,
 				MaxRetries:     item.MaxRetries,
 				Retries:        item.Retries,
 				OnFailure:      item.OnFailure,

@@ -30,13 +30,14 @@ const (
 )
 
 type journalRecord struct {
-	Op     string `json:"op"` // "put", "del", or "err" (diagnostic only)
-	Agent  string `json:"agent"`
-	Desc   string `json:"desc"`
-	Verify string `json:"verify,omitempty"`
-	Output string `json:"output,omitempty"`
-	TS     string `json:"ts"`
-	Round  int    `json:"round,omitempty"`
+	Op         string `json:"op"` // "put", "del", or "err" (diagnostic only)
+	Agent      string `json:"agent"`
+	Desc       string `json:"desc"`
+	Verify     string `json:"verify,omitempty"`
+	VerifyMode string `json:"verify_mode,omitempty"`
+	Output     string `json:"output,omitempty"`
+	TS         string `json:"ts"`
+	Round      int    `json:"round,omitempty"`
 }
 
 type taskJournal struct {
@@ -140,18 +141,20 @@ func loadTaskJournal(workspace string, now time.Time, maxAge time.Duration, perA
 				}
 			}
 			out[rec.Agent] = append(out[rec.Agent], cachedTaskEntry{
-				taskDesc: rec.Desc,
-				verify:   rec.Verify,
-				output:   rec.Output,
-				pinned:   true,
+				taskDesc:   rec.Desc,
+				verify:     rec.Verify,
+				verifyMode: normalizeVerifyMode(rec.VerifyMode),
+				output:     rec.Output,
+				pinned:     true,
 			})
 		case "del":
 			norm := normalizeTaskCacheKey(rec.Desc)
 			normVerify := normalizeTaskCacheKey(rec.Verify)
+			normVerifyMode := normalizeVerifyMode(rec.VerifyMode)
 			entries := out[rec.Agent]
 			fresh := entries[:0]
 			for _, e := range entries {
-				if normalizeTaskCacheKey(e.taskDesc) != norm || normalizeTaskCacheKey(e.verify) != normVerify {
+				if normalizeTaskCacheKey(e.taskDesc) != norm || normalizeTaskCacheKey(e.verify) != normVerify || normalizeVerifyMode(e.verifyMode) != normVerifyMode {
 					fresh = append(fresh, e)
 				}
 			}
@@ -202,7 +205,7 @@ func compactTaskJournalIfNeeded(workspace string, maxBytes int64, now time.Time)
 	ts := now.Format(time.RFC3339)
 	for agentKey, entries := range survivors {
 		for _, e := range entries {
-			data, err := json.Marshal(journalRecord{Op: "put", Agent: agentKey, Desc: e.taskDesc, Verify: e.verify, Output: e.output, TS: ts})
+			data, err := json.Marshal(journalRecord{Op: "put", Agent: agentKey, Desc: e.taskDesc, Verify: e.verify, VerifyMode: normalizeVerifyMode(e.verifyMode), Output: e.output, TS: ts})
 			if err != nil {
 				continue
 			}
@@ -247,10 +250,10 @@ func (c *Coordinator) initTaskJournal() {
 		for agentKey, recs := range loaded {
 			existing := make(map[string]bool, len(c.taskResultCache[agentKey]))
 			for _, e := range c.taskResultCache[agentKey] {
-				existing[normalizeTaskDesc(e.taskDesc)] = true
+				existing[taskCacheIdentity(e.taskDesc, e.verify, e.verifyMode)] = true
 			}
 			for _, r := range recs {
-				if existing[normalizeTaskDesc(r.taskDesc)] {
+				if existing[taskCacheIdentity(r.taskDesc, r.verify, r.verifyMode)] {
 					continue
 				}
 				r.generation = gen

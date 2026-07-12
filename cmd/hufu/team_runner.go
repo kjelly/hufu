@@ -137,6 +137,16 @@ func expandSegmentsWithAgents(initialSegments []team.PromptSegment, loadedTeams 
 // executeAndReport handles the execution (either in TUI or CLI mode) and aggregates skill usage/reports.
 func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, originalPrompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string) error {
 	startedAt := time.Now()
+	// Restored sessions retain terminal failures so they remain visible to the
+	// operator, but those historical failures must not make a later successful
+	// invocation exit non-zero. Record the unresolved tasks that predate this
+	// execution and only report failures created (or re-created) below.
+	priorUnresolved := make(map[string]map[string]time.Time, len(loadedTeams))
+	for name, tc := range loadedTeams {
+		if tc != nil && tc.coordinator != nil {
+			priorUnresolved[name] = snapshotUnresolvedTasks(tc.coordinator.TaskTracker().TodoList().Items())
+		}
+	}
 	var result string
 	var runErr error
 	if tuiMode {
@@ -246,6 +256,40 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 		savePromptToHistory(ctx, originalPrompt, providerURL)
 	}
 
+	for name, tc := range loadedTeams {
+		if tc == nil || tc.coordinator == nil {
+			continue
+		}
+		if item := executionUnresolvedTask(tc.coordinator.TaskTracker().TodoList().Items(), priorUnresolved[name]); item != nil {
+			return fmt.Errorf("%w: team %s task %s (%s): %s", team.ErrTasksUnresolved, tc.teamName, item.ID, item.Agent, item.Detail)
+		}
+	}
+
+	return nil
+}
+
+// snapshotUnresolvedTasks records terminal failures already present before an
+// execution. EndedAt lets a retry of the same todo ID count as this run while
+// an unchanged, restored failure remains historical state.
+func snapshotUnresolvedTasks(items []*team.TodoItem) map[string]time.Time {
+	prior := make(map[string]time.Time)
+	for _, item := range items {
+		if item != nil && (item.Status == team.TaskError || item.Status == team.TaskBlocked) {
+			prior[item.ID] = item.EndedAt
+		}
+	}
+	return prior
+}
+
+func executionUnresolvedTask(items []*team.TodoItem, prior map[string]time.Time) *team.TodoItem {
+	for _, item := range items {
+		if item == nil || (item.Status != team.TaskError && item.Status != team.TaskBlocked) {
+			continue
+		}
+		if endedAt, existedBefore := prior[item.ID]; !existedBefore || !item.EndedAt.Equal(endedAt) {
+			return item
+		}
+	}
 	return nil
 }
 

@@ -69,6 +69,7 @@ type TaskDef struct {
 	// exit makes the task fail and triggers a retry. This guards against agents
 	// that claim completion without producing the expected artifact.
 	Verify     string   `json:"verify,omitempty"`
+	VerifyMode string   `json:"verify_mode,omitempty"`
 	Requires   []string `json:"requires,omitempty"`
 	MaxRetries int      `json:"max_retries,omitempty"` // Maximum number of retries if verify fails
 	OnFailure  *int     `json:"on_failure,omitempty"`  // 0-based index of the task to jump back to if verify fails
@@ -645,6 +646,7 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 			"type":        "string",
 			"description": "Optional shell command that objectively verifies the task's deliverable exists/works (e.g. 'test -f workspace/report.md', 'go build ./...'). It runs after the agent reports success; a non-zero exit fails the task and triggers a retry. Use it for tasks with a checkable artifact so the agent cannot falsely claim completion.",
 		},
+		"verify_mode": map[string]any{"type": "string", "enum": []string{"success", "expected_failure", "observation"}},
 		"requires": map[string]any{
 			"type":        "array",
 			"items":       map[string]any{"type": "string"},

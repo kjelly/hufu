@@ -206,7 +206,15 @@ func TestScrollCursorIntoView_MultiLinePromptMatchesColBodyHeight(t *testing.T) 
 	m.scrollCursorIntoView()
 
 	bodyH := m.colBodyHeight()
-	renderBodyH := m.height - m.promptWidgetHeight() - 1 - m.statusAreaHeight() - 1 - 1 - 1
+	progressH := 0
+	if m.renderProgressBar(m.width) != "" {
+		progressH = 1
+	}
+	feedTotal := 0
+	if feedH := m.countFeedLines(); feedH > 0 {
+		feedTotal = feedH + 1
+	}
+	renderBodyH := m.height - m.promptWidgetHeight() - 1 - progressH - m.statusAreaHeight() - 1 - feedTotal - 2
 	if renderBodyH < 2 {
 		renderBodyH = 2
 	}

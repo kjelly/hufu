@@ -439,6 +439,82 @@ func TestVerifyTaskDeliverable_ParentExpiresMidVerify(t *testing.T) {
 	}
 }
 
+func TestVerifyModeObservationPreservesExecutionFailures(t *testing.T) {
+	t.Run("normal non-zero exit is observed", func(t *testing.T) {
+		c := newVerifyCoordinator(t, t.TempDir())
+		result, err := c.verifyTaskDeliverableWithMode(context.Background(), nil, "false", "observation")
+		if err != nil {
+			t.Fatalf("observation mode should accept an ordinary non-zero exit, got %v", err)
+		}
+		if result == nil || result.ExitCode == 0 {
+			t.Fatalf("observation result = %#v, want non-zero exit evidence", result)
+		}
+	})
+
+	t.Run("verification timeout", func(t *testing.T) {
+		c := newVerifyCoordinator(t, t.TempDir())
+		c.session.Config.VerifyTimeout = 1
+		result, err := c.verifyTaskDeliverableWithMode(context.Background(), nil, "sleep 5", "observation")
+		if err == nil {
+			t.Fatal("observation mode must preserve a verification timeout")
+		}
+		if result == nil || !result.TimedOut {
+			t.Fatalf("timeout result = %#v, want timed out evidence", result)
+		}
+	})
+
+	t.Run("cancelled parent context", func(t *testing.T) {
+		c := newVerifyCoordinator(t, t.TempDir())
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		result, err := c.verifyTaskDeliverableWithMode(ctx, nil, "true", "observation")
+		if err == nil {
+			t.Fatal("observation mode must preserve a cancelled parent context")
+		}
+		if result != nil {
+			t.Fatalf("cancelled context should not run the command, got %#v", result)
+		}
+	})
+
+	t.Run("command cannot start", func(t *testing.T) {
+		c := newVerifyCoordinator(t, t.TempDir())
+		missingShell := filepath.Join(t.TempDir(), "missing-shell")
+		result, err := c.verifyTaskDeliverableWithMode(context.Background(), &agent.AgentDef{Shell: missingShell}, "true", "observation")
+		if err == nil {
+			t.Fatal("observation mode must preserve a command-start failure")
+		}
+		if result == nil || result.ExitCode != -1 {
+			t.Fatalf("start failure result = %#v, want exit code -1", result)
+		}
+	})
+}
+
+func TestVerifyModesAcceptDiagnosticNonZeroExits(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		mode    string
+	}{
+		{name: "expected failure preserves non-ASCII diagnostic", command: "false # 中文", mode: "expected_failure"},
+		{name: "observation preserves non-ASCII diagnostic", command: "false # 中文", mode: "observation"},
+		{name: "expected failure preserves wrong-polarity diagnostic", command: "printf x | grep -c missing", mode: "expected_failure"},
+		{name: "observation preserves wrong-polarity diagnostic", command: "printf x | grep -c missing", mode: "observation"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newVerifyCoordinator(t, t.TempDir())
+			result, err := c.verifyTaskDeliverableWithMode(context.Background(), nil, tt.command, tt.mode)
+			if err != nil {
+				t.Fatalf("%s mode should accept a normal non-zero exit, got %v", tt.mode, err)
+			}
+			if result == nil || result.ExitCode == 0 || result.TimedOut {
+				t.Fatalf("verification result = %#v, want ordinary non-zero exit evidence", result)
+			}
+		})
+	}
+}
+
 func TestRecordRunAborted(t *testing.T) {
 	ws := t.TempDir()
 	c := &Coordinator{

@@ -121,7 +121,7 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 
 	subLabel := strings.Join(append(chainAgents, selected), "/")
 	agentKey := strings.ToLower(selected)
-	if match := c.findExistingTodoDuplicate(ctx, strings.ToLower(subLabel), taskDesc, ""); match != nil {
+	if match := c.findExistingTodoDuplicate(ctx, strings.ToLower(subLabel), taskDesc, "", ""); match != nil {
 		msg := fmt.Sprintf("[SUPPRESSED DUPLICATE] %s\n\nExisting task %s is already handling this work (status: %s).", match.Reason, match.Item.ID, match.Item.Status)
 		if match.Item.Detail != "" {
 			msg += "\n\nDetail:\n" + match.Item.Detail

@@ -140,6 +140,12 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("- **requires**: Optional capability names the task depends on. Use this only for checks declared in team.yaml `preflight`.\n")
 	b.WriteString("- **summarize**: Set to `true` to condense the agent's output before returning. Use for tasks that may produce verbose output where only key points matter.\n")
 	b.WriteString("- **adversarial_verify**: Number of skeptic LLM verifiers (1-3) that try to refute the result after success; a majority refutation fails the task into a retry. Use for high-stakes tasks where a shell `verify` cannot check quality.\n")
+	b.WriteString("- **verify**: Optional shell command run in the project directory after the task succeeds to objectively confirm the deliverable exists or a condition holds. MUST be a runnable `sh -c` command — NOT a natural-language description.\n")
+	b.WriteString("  - ✅ CREATE/DEPLOY tasks — verify the resource EXISTS: `test -f workspace/report.md` or `virsh list --all | grep -c running`\n")
+	b.WriteString("  - ✅ DELETE/CLEANUP tasks — verify the resource is GONE (use `!` negation): `! ovs-vsctl show 2>&1 | grep -q br-verify` or `! virsh dominfo live-ovs-vm-a 2>&1 | grep -q running`\n")
+	b.WriteString("  - ❌ BAD (wrong polarity for cleanup): `ovs-vsctl show | grep -c br-verify` after deleting the bridge — grep returns 0 (not found) which exits 1 and FALSELY fails a successful cleanup\n")
+	b.WriteString("  - ❌ BAD (natural language): \"check that the report file exists\" or \"virsh 顯示 LAN 介面有 IP\"\n")
+
 	if c.forcePlanFirst {
 		b.WriteString("- **plan_first**: ALWAYS `true` — the system handles plan review automatically. Agents will submit plans, a Plan Reviewer will approve or reject them, and you will only receive the final executed results. You never need to call approve_plan, modify_plan, or reject_plan — these are handled by the system.\n")
 	} else {

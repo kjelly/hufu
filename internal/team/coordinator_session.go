@@ -168,6 +168,7 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 					c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
 						taskDesc:   t.Desc,
 						verify:     t.Verify,
+						verifyMode: normalizeVerifyMode(t.VerifyMode),
 						output:     t.Output,
 						generation: gen,
 						pinned:     true,

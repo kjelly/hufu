@@ -372,7 +372,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 					c.report(c.newEvent("verify_start").withAgent(agentName).withMessage(task.Verify).withTodoID(todoID))
 				}
 				if err == nil {
-					verification, verr := c.verifyTaskDeliverable(parentCtx, agentDef, task.Verify)
+					verification, verr := c.verifyTaskDeliverableWithMode(parentCtx, agentDef, task.Verify, task.VerifyMode)
 					if verification != nil {
 						_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
 					}
@@ -549,7 +549,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 			return "", err
 		}
 		c.report(c.newEvent("verify_start").withAgent(task.Agent).withMessage(task.Verify).withTodoID(todoID))
-		verification, verifyErr := c.verifyTaskDeliverable(ctx, nil, task.Verify)
+		verification, verifyErr := c.verifyTaskDeliverableWithMode(ctx, nil, task.Verify, task.VerifyMode)
 		if verification != nil {
 			_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
 		}
@@ -913,14 +913,73 @@ func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef 
 			}
 			return result, fmt.Errorf("verification timed out after %s%s", result.Duration.Round(time.Millisecond), detail)
 		}
+		// CommandContext returns an ExitError when it kills a process after the
+		// parent context is cancelled. That is not an observed non-zero command
+		// exit: callers must be able to distinguish it from a real result.
+		if parentErr := parentCtx.Err(); parentErr != nil {
+			return result, fmt.Errorf("task context ended while the verify command was running: %w", parentErr)
+		}
 		if result.ExitCode == 127 {
 			// A coordinator model once filled verify with a natural-language
 			// sentence, which sh dutifully failed with "command not found".
 			return result, fmt.Errorf("%v%s — exit 127 means the command was not found: the verify field must be a runnable shell command (e.g. 'test -f report.md'), not a natural-language description of the expected outcome", err, detail)
 		}
-		return result, fmt.Errorf("%v%s", err, detail)
+		// Detect verify field filled with natural-language text (e.g. Chinese
+		// sentences): these produce exit 1 with an "unexpected data" error from
+		// the tool being invoked. Identify this by non-ASCII characters in the
+		// verify command itself.
+		if containsNonASCII(command) {
+			return result, fmt.Errorf("%w%s — the verify field appears to contain non-ASCII text (possibly natural language). The verify field must be a runnable shell command, e.g. 'test -f report.md' or 'virsh list --all | grep -c running', not a description of the expected outcome", err, detail)
+		}
+		// Detect wrong-polarity verify for cleanup/delete tasks: the command
+		// used grep/grep-c to assert a resource EXISTS, but the task deleted
+		// it, so grep exits 1 with stdout "0" (or empty). A successful cleanup
+		// should use `! grep -q ...` or `! grep -c ...` so that absence → exit 0.
+		if result.ExitCode == 1 && strings.TrimSpace(result.Stdout) == "0" &&
+			(strings.Contains(command, "grep -c") || strings.Contains(command, "grep-c")) {
+			return result, fmt.Errorf("%w%s — wrong polarity: the verify command checked that a resource EXISTS (grep-c returned 0 = not found), but this looks like a cleanup task where success means the resource is GONE. Use '!' negation for delete/cleanup verify, e.g. '! ovs-vsctl show 2>&1 | grep -q br-verify'", err, detail)
+		}
+		return result, fmt.Errorf("%w%s", err, detail)
 	}
 	return result, nil
+}
+
+func (c *Coordinator) verifyTaskDeliverableWithMode(ctx context.Context, agentDef *agent.AgentDef, command, mode string) (*VerificationResult, error) {
+	result, err := c.verifyTaskDeliverable(ctx, agentDef, command)
+	switch mode {
+	case "", "success":
+		return result, err
+	case "expected_failure":
+		if isExpectedVerificationExit(err, result) {
+			return result, nil
+		}
+		if err == nil {
+			return result, fmt.Errorf("verification expected a non-zero exit but succeeded")
+		}
+		return result, err
+	case "observation":
+		// Observation captures a command's normal output regardless of its exit
+		// status, but a timeout, cancellation, or failure to launch the command
+		// produced no valid observation and must still fail the task.
+		if err == nil || isExpectedVerificationExit(err, result) {
+			return result, nil
+		}
+		return result, err
+	default:
+		return result, fmt.Errorf("invalid verify_mode %q", mode)
+	}
+}
+
+// isExpectedVerificationExit reports the one failure class that verification
+// modes may intentionally accept: a command that started and exited non-zero.
+// In particular, an ExitCode alone is insufficient: commands killed by a
+// deadline can also leave one behind.
+func isExpectedVerificationExit(err error, result *VerificationResult) bool {
+	if err == nil || result == nil || result.TimedOut || result.ExitCode == 0 {
+		return false
+	}
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr)
 }
 
 func (c *Coordinator) verificationWorkDir() string {
@@ -928,6 +987,19 @@ func (c *Coordinator) verificationWorkDir() string {
 		return c.projectDir
 	}
 	return "the hufu process working directory"
+}
+
+// containsNonASCII reports whether s contains any character outside the
+// printable ASCII range (0x20-0x7E). Used to detect when the coordinator
+// model accidentally filled the verify field with a natural-language sentence
+// (e.g. Chinese text) instead of a runnable shell command.
+func containsNonASCII(s string) bool {
+	for _, r := range s {
+		if r > 0x7E || (r < 0x20 && r != '\t' && r != '\n') {
+			return true
+		}
+	}
+	return false
 }
 
 func completionVerificationInstructions(command, workDir string) string {
@@ -992,7 +1064,14 @@ func localFailureHint(lastErr string) string {
 	case strings.Contains(e, "unfinished progress update"):
 		return "Your previous attempt ended mid-narration ('let me...', 'I'll...'). Finish the work first, then end with the final result, not a description of what you are about to do."
 	case strings.Contains(e, "deliverable verification failed"):
+		if strings.Contains(e, "non-ascii") || strings.Contains(e, "natural language") {
+			return "The verify field in your task contained natural-language text (possibly Chinese) instead of a runnable shell command. Fix the verify field to be a shell command, e.g. 'test -f workspace/report.md' or 'virsh list --all | grep -c running'. Do NOT put human-readable descriptions in the verify field."
+		}
+		if strings.Contains(e, "wrong polarity") {
+			return "The verify field used the wrong polarity for a cleanup/delete task. When a task DELETES a resource, success means the resource is GONE — use '!' negation so absence exits 0: e.g. '! ovs-vsctl show 2>&1 | grep -q br-verify' or '! virsh dominfo vm-name 2>&1 | grep -q running'. Without '!', grep-c returning 0 (not found) makes the shell exit 1 and falsely fails a successful cleanup."
+		}
 		return "Your previous attempt reported success but the verification check failed — the expected deliverable was missing or invalid. Actually produce the artifact (create/modify the file, make it pass the check) before calling finish; do not claim completion prematurely."
+
 	case strings.Contains(e, "deadline exceeded") || strings.Contains(e, "timed out") || strings.Contains(e, "context deadline"):
 		return "The previous attempt timed out. Work in smaller steps, avoid long-running or interactive commands, and prioritize the core of the goal first."
 	case strings.Contains(e, "no such file") || strings.Contains(e, "not found") || strings.Contains(e, "enoent"):

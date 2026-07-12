@@ -53,6 +53,27 @@ func TestTaskJournalRoundtrip(t *testing.T) {
 	}
 }
 
+func TestTaskJournalKeepsDistinctVerifyModes(t *testing.T) {
+	ws := t.TempDir()
+	now := time.Now()
+	ts := now.Format(time.RFC3339)
+	writeJournalLines(t, ws,
+		`{"op":"put","agent":"coder","desc":"inspect","verify":"systemctl is-active api","verify_mode":"success","output":"active","ts":"`+ts+`"}`,
+		`{"op":"put","agent":"coder","desc":"inspect","verify":"systemctl is-active api","verify_mode":"expected_failure","output":"inactive","ts":"`+ts+`"}`,
+	)
+
+	got, err := loadTaskJournal(ws, now, taskJournalMaxAge, maxTaskCacheEntries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got["coder"]) != 2 {
+		t.Fatalf("journal replay entries = %#v, want separate entries for each verify mode", got["coder"])
+	}
+	if got["coder"][0].verifyMode != "success" || got["coder"][1].verifyMode != "expected_failure" {
+		t.Fatalf("journal verify modes = %q, %q", got["coder"][0].verifyMode, got["coder"][1].verifyMode)
+	}
+}
+
 func TestTaskJournalTombstone(t *testing.T) {
 	ws := t.TempDir()
 	now := time.Now()

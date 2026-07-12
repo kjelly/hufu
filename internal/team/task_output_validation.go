@@ -12,6 +12,14 @@ var unfinishedOutputPrefixes = []string{
 	"now let me ",
 	"i'll ",
 	"i will ",
+	// Chinese equivalents — cover models that narrate future work in Chinese
+	"讓我",
+	"現在讓我",
+	"我來",
+	"我將",
+	"我會",
+	"接下來我",
+	"接下來，我",
 }
 
 // unfinishedOutputMaxRunes bounds the unfinished-prefix heuristic: a long

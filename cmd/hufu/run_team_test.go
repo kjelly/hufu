@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anomalyco/hufu/internal/team"
 	"github.com/anomalyco/hufu/internal/tools"
 )
 
@@ -126,6 +127,28 @@ func TestValidateRunFlags(t *testing.T) {
 			t.Error("expected tuiMode to be disabled in unattended mode")
 		}
 	})
+}
+
+func TestExecutionUnresolvedTaskExcludesHistoricalFailures(t *testing.T) {
+	started := time.Now().Add(-time.Minute)
+	historical := &team.TodoItem{ID: "old", Status: team.TaskError, EndedAt: started}
+	prior := snapshotUnresolvedTasks([]*team.TodoItem{historical})
+
+	if got := executionUnresolvedTask([]*team.TodoItem{historical}, prior); got != nil {
+		t.Fatalf("unchanged restored failure should not fail this execution, got %#v", got)
+	}
+
+	fresh := &team.TodoItem{ID: "new", Status: team.TaskBlocked, EndedAt: time.Now()}
+	if got := executionUnresolvedTask([]*team.TodoItem{historical, fresh}, prior); got != fresh {
+		t.Fatalf("current execution failure = %#v, want %#v", got, fresh)
+	}
+
+	// A retry can reuse an ID; its new terminal timestamp makes it a current
+	// execution failure rather than stale session state.
+	historical.EndedAt = time.Now()
+	if got := executionUnresolvedTask([]*team.TodoItem{historical}, prior); got != historical {
+		t.Fatalf("re-created failure = %#v, want %#v", got, historical)
+	}
 }
 
 func TestIsInteractiveEnvironment(t *testing.T) {

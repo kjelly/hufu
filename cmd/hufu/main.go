@@ -285,6 +285,8 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 		var interrupted errInterrupted
 		if errors.Is(err, interrupted) {
 			exitCode = 130
+		} else if errors.Is(err, team.ErrTasksUnresolved) {
+			exitCode = 7
 		} else {
 			exitCode = 1
 		}

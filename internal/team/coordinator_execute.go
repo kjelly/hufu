@@ -165,7 +165,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
 		}
-		todoBatch[i] = TodoSpec{Agent: strings.ToLower(t.Agent), Desc: desc, Model: resolvedModel, Source: TaskSourceCoordinator, ParentID: "", Verify: t.Verify, MaxRetries: t.MaxRetries}
+		todoBatch[i] = TodoSpec{Agent: strings.ToLower(t.Agent), Desc: desc, Model: resolvedModel, Source: TaskSourceCoordinator, ParentID: "", Verify: t.Verify, VerifyMode: t.VerifyMode, MaxRetries: t.MaxRetries}
 	}
 	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)
 	if len(c.session.Config.Preflight) > 0 {
