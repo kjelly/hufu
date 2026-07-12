@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -210,7 +212,18 @@ func runChat(cmd *cobra.Command, args []string) error {
 		if line == "" {
 			continue
 		}
-		switch strings.ToLower(line) {
+		command, commandArg := splitChatCommand(line)
+		if command == "/team" && commandArg != "" {
+			newTc, terr := switchChatTeamByName(rootCtx, commandArg, registry)
+			if terr != nil {
+				fmt.Fprintf(os.Stderr, "%s %v\n", errStyle.Render("✗"), terr)
+				continue
+			}
+			tc, teamName, turn = newTc, newTc.teamName, 0
+			fmt.Fprintf(os.Stderr, "%s Switched to team %s. Conversation context cleared.\n\n", doneStyle.Render("✓"), teamStyle.Render(teamName))
+			continue
+		}
+		switch command {
 		case "/exit", "/quit", ":q", "exit", "quit":
 			return nil
 		case "/reset":
@@ -235,6 +248,30 @@ func runChat(cmd *cobra.Command, args []string) error {
 			turn = 0
 			fmt.Fprintf(os.Stderr, "%s Switched to team %s. Conversation context cleared.\n\n",
 				doneStyle.Render("✓"), teamStyle.Render(teamName))
+			continue
+		case "/agents":
+			printChatAgents(tc)
+			continue
+		case "/skills":
+			printChatSkills(tc)
+			continue
+		case "/config":
+			fmt.Fprintf(os.Stderr, "Team: %s\nWorkspace: %s\nModel: %s\n\n", tc.session.Config.Name, tc.session.Workspace, tc.session.Config.Generation.Model)
+			continue
+		case "/save":
+			if commandArg == "" {
+				fmt.Fprintln(os.Stderr, "usage: /save <path>")
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(commandArg), 0o755); err != nil {
+				fmt.Fprintf(os.Stderr, "%s %v\n", errStyle.Render("✗"), err)
+				continue
+			}
+			if err := os.WriteFile(commandArg, []byte(team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name)), 0o644); err != nil {
+				fmt.Fprintf(os.Stderr, "%s %v\n", errStyle.Render("✗"), err)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "%s Saved conversation to %s\n\n", doneStyle.Render("✓"), commandArg)
 			continue
 		}
 
@@ -285,6 +322,38 @@ func runChat(cmd *cobra.Command, args []string) error {
 	}
 }
 
+func splitChatCommand(line string) (string, string) {
+	parts := strings.Fields(line)
+	if len(parts) == 0 {
+		return "", ""
+	}
+	return strings.ToLower(parts[0]), strings.TrimSpace(strings.TrimPrefix(line, parts[0]))
+}
+
+func printChatAgents(tc *teamContext) {
+	agents := sortedAgents(tc.session.Agents)
+	for _, ag := range agents {
+		fmt.Fprintf(os.Stderr, "  @%s [%s] %s\n", ag.Name, ag.Role, ag.Generation.Model)
+	}
+	fmt.Fprintln(os.Stderr)
+}
+
+func printChatSkills(tc *teamContext) {
+	names := make([]string, 0, len(tc.session.Skills))
+	for _, skill := range tc.session.Skills {
+		names = append(names, skill.Name)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		fmt.Fprintln(os.Stderr, "  (no skills loaded)")
+	} else {
+		for _, name := range names {
+			fmt.Fprintf(os.Stderr, "  %s\n", name)
+		}
+	}
+	fmt.Fprintln(os.Stderr)
+}
+
 // chatHelpText returns a multi-line help block shown by the /help command in
 // the chat REPL.
 func chatHelpText(teamName string) string {
@@ -293,7 +362,11 @@ func chatHelpText(teamName string) string {
 Commands:
   /help, help, ?       show this help
   /reset               clear the conversation context (start fresh)
-  /team                switch to a different team mid-session
+  /team [name]         switch teams (no name opens the picker)
+  /agents              list current team agents
+  /skills              list loaded skills
+  /config              show current team settings
+  /save <path>         export the current conversation
   /exit, /quit, :q     leave the chat
 
 Prompt features:
@@ -342,6 +415,21 @@ func switchChatTeam(rootCtx context.Context, pr *readline.PromptReader, current 
 		return nil, "", fmt.Errorf("failed to load team %q: %w", chosen, err)
 	}
 	return tc, chosen, nil
+}
+
+func switchChatTeamByName(rootCtx context.Context, name string, registry *team.TeamRegistry) (*teamContext, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("team switching not available with the default team")
+	}
+	name = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(name), "@"))
+	if !registry.HasTeam(name) {
+		return nil, fmt.Errorf("team %q not found. Available: %s", name, strings.Join(registry.ListTeams(), ", "))
+	}
+	tc, err := loadTeamByName(rootCtx, name, registry, providerURL, providerAPIKey, newPathConsent(), buildVarsOrNil(), forcedSkills, planMode, autoSkills)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load team %q: %w", name, err)
+	}
+	return tc, nil
 }
 
 // buildVarsOrNil returns the merged template variables, or nil on error.
