@@ -145,6 +145,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.AddCommand(teamCmd)
 	rootCmd.AddCommand(installCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(statusCmd)
 
 	// Add custom completion commands
 	completionCmd.AddCommand(completionBashCmd, completionZshCmd, completionFishCmd, completionPowerShellCmd, completionNushellCmd)
