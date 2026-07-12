@@ -207,9 +207,9 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 
 	// Root flags are intentionally not inherited by Cobra subcommands, so the
 	// diagnostic command declares the small, relevant subset explicitly.
-	improveCmd.Flags().StringVarP(&improveWorkspace, "workspace", "w", "", "Workspace to analyze (default: <cwd>/workspace)")
-	improveCmd.Flags().StringVar(&improveTeam, "team", "", "Target team (default: newest execution run)")
-	improveCmd.Flags().StringVar(&improveSearchPath, "agent-team-search-path", "", "Comma-separated team search paths")
+	improveCmd.PersistentFlags().StringVarP(&improveWorkspace, "workspace", "w", "", "Workspace to analyze (default: <cwd>/workspace)")
+	improveCmd.PersistentFlags().StringVar(&improveTeam, "team", "", "Target team (default: newest execution run)")
+	improveCmd.PersistentFlags().StringVar(&improveSearchPath, "agent-team-search-path", "", "Comma-separated team search paths")
 	improveCmd.Flags().StringVarP(&improveOutput, "output", "o", "", "Markdown report path (default: workspace/reports/improve-<team>-<timestamp>.md)")
 	improveCmd.Flags().StringVar(&improveFormat, "format", "markdown", "Report format: markdown or json (json writes to stdout)")
 	improveCmd.Flags().IntVar(&improveRuns, "runs", 1, "Number of most recent runs for the selected team to analyze")

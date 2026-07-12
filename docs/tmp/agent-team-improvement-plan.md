@@ -150,15 +150,15 @@ workspace/
 
 ### Phase 2：候選變更與 benchmark
 
-- 建立 versioned benchmark fixtures 與 baseline snapshot。
-- 由改善 team 生成可審核 patch 與 candidate team。
-- 提供 baseline/candidate A/B runner 與明確的 gate 判定。
+- [x] 建立 versioned benchmark fixtures 與 immutable baseline snapshot（含 fixture、definition 與完整內容 revision）。
+- [x] 支援由改善流程提供 candidate team directory 與必要 review patch，複製為與正式 team 隔離的 candidate snapshot。
+- [x] 提供 baseline/candidate deterministic A/B comparison runner 與 hard gates：baseline control、candidate safety、candidate acceptance、completion/error non-regression。結果僅標記為 `eligible_for_review`，不會自動採納。
 
 ### Phase 3：受控自動化
 
-- 合格候選自動建立 PR，禁止自動合併。
-- 於 production 持續監測已採納變更；安全或驗收退化時自動建立 rollback 建議。
-- 累積「問題類型 → 有效改變 → 適用條件」的改善知識庫，提升後續建議品質。
+- [x] 合格候選可透過受控 `experiment pr` 命令自動建立 branch、commit、push 與 PR；禁止 merge、force push、reset 與自動合併。
+- [x] 以 adoption 為 production 監測起點；安全、acceptance、完成率或 error 退化時自動寫出 immutable baseline 的 rollback suggestion，不執行 rollback。
+- [x] adoption 會自動累積「問題類型 → 有效改變 → 適用條件」的 metadata-only 知識庫，支援依 issue type 查詢。
 
 ## 初始驗收標準
 

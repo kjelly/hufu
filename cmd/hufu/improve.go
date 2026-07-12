@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/anomalyco/hufu/internal/improve"
-	"github.com/anomalyco/hufu/internal/team"
 
 	"github.com/spf13/cobra"
 )
@@ -56,17 +55,9 @@ func runImprove(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	}
-	paths := team.DefaultSearchPaths()
-	if strings.TrimSpace(improveSearchPath) != "" {
-		paths = strings.Split(improveSearchPath, ",")
-	}
-	registry := team.NewTeamRegistry(paths)
-	if err := registry.Discover(); err != nil {
-		return fmt.Errorf("discover teams: %w", err)
-	}
-	teamDir, err := registry.Resolve(teamName)
+	teamDir, err := resolveImproveTeamDir(teamName)
 	if err != nil {
-		return fmt.Errorf("team %q not found. Available: %s", teamName, strings.Join(registry.ListTeams(), ", "))
+		return err
 	}
 	report, err := improve.AnalyzeRecent(ws, teamName, teamDir, improveRuns)
 	if errors.Is(err, improve.ErrNoExecutionData) {
