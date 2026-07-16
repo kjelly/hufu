@@ -21,7 +21,9 @@ env:
 
 jobs:
   goreleaser:
-    name: goreleaser (${{ env.GORELEASER_VERSION }})
+    # NOTE: jobs.<id>.name cannot reference the env context (workflow-level
+    # parse error); the pinned version lives in env.GORELEASER_VERSION.
+    name: goreleaser
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

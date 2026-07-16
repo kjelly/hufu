@@ -25,7 +25,9 @@ jobs:
   # hides test or build results, and the merge gate is the aggregate of four
   # independent required checks.
   lint:
-    name: lint (golangci-lint ${{ env.GOLANGCI_LINT_VERSION }})
+    # NOTE: jobs.<id>.name cannot reference the env context (workflow-level
+    # parse error); the pinned version lives in env.GOLANGCI_LINT_VERSION.
+    name: lint (golangci-lint)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
