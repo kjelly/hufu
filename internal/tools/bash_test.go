@@ -174,6 +174,48 @@ func TestRunShellCommandTimeoutKillsProcessGroup(t *testing.T) {
 	}
 }
 
+// Regression test for a Wait/pipe-read race: Cmd.Wait closes the pipes it
+// handed back from StdoutPipe/StderrPipe as soon as it reaps the child (see
+// the Cmd.StdoutPipe doc), so calling Wait before the reader goroutines have
+// been scheduled at all can truncate a successful command's real output to
+// nothing. Repeated iterations are needed because the race window is a
+// goroutine-scheduling gap, not something a single run reliably hits.
+func TestRunShellCommandDoesNotTruncateOutput(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		resp, err := runShellCommand(context.Background(), 5*time.Second, "", false, "bash", []string{"-c", "echo hello-world"}, nil)
+		if err != nil {
+			t.Fatalf("iteration %d: runShellCommand error: %v", i, err)
+		}
+		if !strings.Contains(resp.Content, "hello-world") {
+			t.Fatalf("iteration %d: expected output to contain %q, got: %q", i, "hello-world", resp.Content)
+		}
+	}
+}
+
+// A command that intentionally backgrounds a long-running process (a model
+// starting a dev server with `server &`, say) must return once its direct
+// child exits, not block for the full timeout waiting on the backgrounded
+// grandchild to close the pipe it inherited. This guards the grace window in
+// waitAndDrain: it must stay short enough that this still returns promptly.
+func TestRunShellCommandBackgroundedProcessReturnsPromptly(t *testing.T) {
+	marker := fmt.Sprintf("299.%06d", os.Getpid()%1000000)
+	cmdStr := fmt.Sprintf("sleep %s & echo done", marker)
+
+	start := time.Now()
+	resp, err := runShellCommand(context.Background(), 30*time.Second, "", false, "bash", []string{"-c", cmdStr}, nil)
+	if err != nil {
+		t.Fatalf("runShellCommand error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("runShellCommand blocked %s on a backgrounded grandchild instead of returning promptly", elapsed)
+	}
+	if !strings.Contains(resp.Content, "done") {
+		t.Fatalf("expected output to contain %q, got: %q", "done", resp.Content)
+	}
+
+	exec.Command("pkill", "-f", "sleep "+marker).Run()
+}
+
 // writeFakeSudo installs a "sudo" on PATH that just execs its remaining
 // arguments unprivileged, so forwarding tests can assert on routing without
 // depending on the test machine's real sudo configuration (password prompt,

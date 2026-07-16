@@ -28,6 +28,52 @@ const maxBashTimeout = 600 * time.Second
 // real run leaked a tool call for over two hours this way.
 const commandReapDelay = 10 * time.Second
 
+// outputDrainGrace bounds how long we give the stdout/stderr reader
+// goroutines to drain already-buffered output before reaping the process.
+//
+// Cmd.Wait closes the pipes it handed us the moment it reaps the child (see
+// the Cmd.StdoutPipe doc: "Wait will close the pipe after seeing the command
+// exit ... it is incorrect to call Wait before all reads from the pipe have
+// completed"). Calling Wait first and only then waiting on the readers — the
+// previous ordering here — raced Wait's reap against the readers' first
+// scheduler slot: under load (worse under -race) Wait could win and close
+// the pipes before a single byte had been read, silently truncating a
+// successful command's output to nothing.
+//
+// Simply flipping the order (always drain before reaping) trades that bug
+// for a worse one: a command that intentionally backgrounds a long-running
+// process (`server &`) exits its direct child immediately, but the
+// backgrounded grandchild inherits the same pipe and can keep it open
+// indefinitely, so draining unconditionally would block the tool call for
+// the full timeout instead of returning right away. The data a normal
+// command produced is already sitting in the kernel pipe buffer by the time
+// its process exits, so a short grace window is enough for the readers to
+// pick it up; past that window we assume an orphan is holding the pipe and
+// reap anyway, letting Wait's own pipe-close unblock the readers with
+// whatever they already captured — the same behavior this code had before.
+const outputDrainGrace = 250 * time.Millisecond
+
+// waitAndDrain reaps cmd while avoiding the truncation/hang tradeoff
+// described above: it gives the reader goroutines tracked by wg up to
+// outputDrainGrace to reach EOF on their own, then reaps regardless. wg must
+// track only the goroutines reading cmd's stdout/stderr pipes.
+func waitAndDrain(cmd *exec.Cmd, wg *sync.WaitGroup) error {
+	drained := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(drained)
+	}()
+
+	select {
+	case <-drained:
+	case <-time.After(outputDrainGrace):
+	}
+
+	waitErr := cmd.Wait()
+	<-drained
+	return waitErr
+}
+
 // configureCommandReaping makes a context-timeout kill reach the whole
 // process tree, not just the direct child. exec.CommandContext's default
 // cancel SIGKILLs only the child: grandchildren (e.g. a guestfish appliance)
@@ -100,8 +146,7 @@ func runShellCommand(ctx context.Context, timeout time.Duration, workDir string,
 	go func() { defer wg.Done(); _, _ = io.Copy(&stdout, stdoutPipe) }()
 	go func() { defer wg.Done(); _, _ = io.Copy(&stderr, stderrPipe) }()
 
-	waitErr := cmd.Wait()
-	wg.Wait()
+	waitErr := waitAndDrain(cmd, &wg)
 
 	exitCode := 0
 	if waitErr != nil {
@@ -169,8 +214,7 @@ func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workD
 	go func() { defer wg.Done(); _, _ = io.Copy(&stdout, stdoutPipe) }()
 	go func() { defer wg.Done(); _, _ = io.Copy(&stderr, stderrPipe) }()
 
-	waitErr := cmd.Wait()
-	wg.Wait()
+	waitErr := waitAndDrain(cmd, &wg)
 
 	exitCode := 0
 	if waitErr != nil {
