@@ -13,9 +13,14 @@ linters:
     dupl:
       threshold: 300
     gocyclo:
-      min-complexity: 95
+      # Ratchet plan: 95 -> 40 (done) -> 25 -> 15-20. Lower this as the
+      # remaining large functions are decomposed; do not raise it.
+      min-complexity: 40
   exclusions:
     generated: lax
+    # Policy: new code must not add exclusions. Each remaining entry below is
+    # lint debt to burn down — remove entries as their files are cleaned up
+    # (see tmp/bug.txt P1 "lint 門檻實際上過於寬鬆").
     rules:
       - linters:
           - dupl
@@ -37,14 +42,31 @@ linters:
         path: tui/ask_user\.go
       - linters:
           - gocyclo
-        path: cmd/hufu/main\.go
-      - linters:
-          - gocyclo
         path: cmd/hufu/display\.go
-      - linters:
-          - errcheck
-          - unused
-        path: internal/tools/bash\.go
+      # gocyclo debt from lowering min-complexity 95 -> 40: each entry below
+      # names one function that predates the new threshold. Remove the entry
+      # when that function is decomposed; do not add new ones.
+      - linters: # runChat: 50
+          - gocyclo
+        path: cmd/hufu/chat\.go
+      - linters: # (*Coordinator).ExecuteTasks: 65
+          - gocyclo
+        path: internal/team/coordinator_execute\.go
+      - linters: # (*Coordinator).executeTask: 95
+          - gocyclo
+        path: internal/team/coordinator_task_run\.go
+      - linters: # ClassifyLTMEntry: 85
+          - gocyclo
+        path: internal/team/ltm\.go
+      - linters: # parseTeamYML: 45
+          - gocyclo
+        path: internal/team/parse\.go
+      - linters: # executeSCP: 47
+          - gocyclo
+        path: internal/tools/scp\.go
+      - linters: # executeSSH: 56
+          - gocyclo
+        path: internal/tools/ssh\.go
       - linters:
           - errcheck
         path: internal/tools/download\.go
