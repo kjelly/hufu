@@ -588,7 +588,6 @@ func TestE2E_AltScreenEntry(t *testing.T) {
 	}
 }
 
-
 // TestE2E_TranscriptSample captures a sample of the TUI output for inspection.
 func TestE2E_TranscriptSample(t *testing.T) {
 	binary := buildTestBinary(t)

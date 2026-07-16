@@ -129,12 +129,12 @@ func keywordBestTeam(prompt string, candidates []sidecar.TeamSummary) string {
 // resolved (then keyword matching is used).
 func buildSelectionSidecar(ctx context.Context) *sidecar.Sidecar {
 	cfg := config.LoadConfig()
-	model := firstNonEmpty(sidecarModelOverride, modelOverride, cfg.SidecarModel, cfg.Model)
+	model := firstNonEmpty(opts.sidecarModelOverride, opts.modelOverride, cfg.SidecarModel, cfg.Model)
 	if model == "" {
 		return nil
 	}
-	url := config.ResolveProviderURL(providerURL, "", "")
-	key := config.ResolveProviderAPIKey(providerAPIKey, "")
+	url := config.ResolveProviderURL(opts.providerURL, "", "")
+	key := config.ResolveProviderAPIKey(opts.providerAPIKey, "")
 	pm, err := agent.NewProviderManager(url, key, cfg.Providers)
 	if err != nil {
 		return nil

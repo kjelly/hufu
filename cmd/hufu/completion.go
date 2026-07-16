@@ -62,13 +62,7 @@ var completionHelperCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var searchPaths []string
-		if agentTeamSearchPath != "" {
-			searchPaths = strings.Split(agentTeamSearchPath, ",")
-		} else {
-			searchPaths = team.DefaultSearchPaths()
-		}
-		registry := team.NewTeamRegistry(searchPaths)
+		registry := team.NewTeamRegistry(resolveSearchPaths())
 		if err := registry.Discover(); err != nil {
 			return err
 		}

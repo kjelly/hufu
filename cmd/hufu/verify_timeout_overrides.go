@@ -29,5 +29,5 @@ func applyCLIVerifyTimeoutOverrides(session *team.TeamSession, overrides VerifyT
 // VerifyTimeoutCLIOverrides struct. Flags that were not set on the command
 // line stay 0, signalling "no override".
 func currentVerifyTimeoutOverrides() VerifyTimeoutCLIOverrides {
-	return VerifyTimeoutCLIOverrides{VerifyTimeout: verifyTimeoutOverride}
+	return VerifyTimeoutCLIOverrides{VerifyTimeout: opts.verifyTimeoutOverride}
 }

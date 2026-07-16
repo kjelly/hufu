@@ -49,8 +49,8 @@ func applyCLITuningOverrides(session *team.TeamSession, overrides TuningCLIOverr
 // "no override".
 func currentTuningOverrides() TuningCLIOverrides {
 	return TuningCLIOverrides{
-		MaxRounds:     maxRoundsOverride,
-		MaxConcurrent: maxConcurrentOverride,
-		MaxSteps:      maxStepsOverride,
+		MaxRounds:     opts.maxRoundsOverride,
+		MaxConcurrent: opts.maxConcurrentOverride,
+		MaxSteps:      opts.maxStepsOverride,
 	}
 }

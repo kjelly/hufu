@@ -23,8 +23,8 @@ import (
 // session.Config.WorkspaceDir before returning.
 func resolveTeamWorkspace(teamName string, session *team.TeamSession) error {
 	var baseWorkspace string
-	if workspace != "" {
-		abs, err := filepath.Abs(workspace)
+	if opts.workspace != "" {
+		abs, err := filepath.Abs(opts.workspace)
 		if err != nil {
 			return fmt.Errorf("invalid workspace path: %w", err)
 		}
@@ -56,7 +56,7 @@ func resolveTeamWorkspace(teamName string, session *team.TeamSession) error {
 // and the (possibly empty) list of old session entries to archive to
 // memory.
 func prepareSessionLifecycle(session *team.TeamSession) (*team.SessionData, []memory.SessionSummaryEntry, error) {
-	if newSession {
+	if opts.newSession {
 		oldSessionEntries := loadOldSessionEntries(session.Workspace)
 		if err := archivePreviousSession(session); err != nil {
 			// Archive failures are non-fatal — the user already gets a warning
@@ -174,7 +174,7 @@ func resumeOrStartSession(session *team.TeamSession) (*team.SessionData, error) 
 		stderrLog("%s Starting new session\n", boldStyle.Render("→"))
 	}
 
-	if showHistory && existingMD != "" {
+	if opts.showHistory && existingMD != "" {
 		lines := strings.SplitN(existingMD, "\n", 30)
 		preview := strings.Join(lines, "\n")
 		stderrLog("\n%s\n%s\n\n",
@@ -236,14 +236,14 @@ func buildMCPManager(ctx context.Context, session *team.TeamSession, cfg *config
 // buildMemoryStore creates the long-term memory store when --memory
 // is enabled (and not in --temp mode). Returns nil if disabled.
 func buildMemoryStore(resolvedProviderURL string) *memory.MemoryStore {
-	if !memoryEnabled || tempWorkspace {
-		if !memoryEnabled {
+	if !opts.memoryEnabled || opts.tempWorkspace {
+		if !opts.memoryEnabled {
 			stderrLog("%s Memory: disabled\n", dimStyle.Render("○"))
 		}
 		return nil
 	}
 	ollamaAPIURL := config.ProviderURLToOllamaAPI(resolvedProviderURL)
-	embedModel := config.ResolveEmbeddingModel(memoryModel)
+	embedModel := config.ResolveEmbeddingModel(opts.memoryModel)
 	projectDir, _ := os.Getwd()
 	store, err := memory.NewMemoryStore(projectDir, ollamaAPIURL, embedModel)
 	if err != nil {
@@ -289,7 +289,7 @@ func resolveRestrictedPath(session *team.TeamSession, cfg *config.Config) string
 	if session.Config.RestrictedPath != "" {
 		resolved = session.Config.RestrictedPath
 	}
-	if rbashMode && resolved == "" {
+	if opts.rbashMode && resolved == "" {
 		home, _ := os.UserHomeDir()
 		if home != "" {
 			rbashBin := filepath.Join(home, ".rbash-bin")

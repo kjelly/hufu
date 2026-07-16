@@ -251,8 +251,8 @@ func buildSkillDirs(workspace, teamDir string) []string {
 }
 
 func getWorkspace() string {
-	if workspace != "" {
-		return workspace
+	if opts.workspace != "" {
+		return opts.workspace
 	}
 	cwd, _ := os.Getwd()
 	return filepath.Join(cwd, "workspace")

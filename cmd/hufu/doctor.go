@@ -50,8 +50,8 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 	// 1. Provider connectivity + model list.
 	cfg := config.LoadConfig()
-	providerURLResolved := config.ResolveProviderURL(providerURL, "", "")
-	apiKey := config.ResolveProviderAPIKey(providerAPIKey, "")
+	providerURLResolved := config.ResolveProviderURL(opts.providerURL, "", "")
+	apiKey := config.ResolveProviderAPIKey(opts.providerAPIKey, "")
 
 	fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Provider:"), providerURLResolved)
 	models, err := fetchModels(providerURLResolved, apiKey)
@@ -73,9 +73,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	// 2. Resolved roles. CLI flag > hufu.yaml. (Team/agent overrides apply later
 	// at run time and can't be resolved without a target team.)
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("Resolved models (hufu.yaml + flags; team/agent may override):"))
-	defModel := firstNonEmpty(modelOverride, cfg.Model)
-	sidecar := firstNonEmpty(sidecarModelOverride, cfg.SidecarModel, defModel)
-	guard := firstNonEmpty(guardModelOverride, cfg.GuardModel, sidecar)
+	defModel := firstNonEmpty(opts.modelOverride, cfg.Model)
+	sidecar := firstNonEmpty(opts.sidecarModelOverride, cfg.SidecarModel, defModel)
+	guard := firstNonEmpty(opts.guardModelOverride, cfg.GuardModel, sidecar)
 	printRole(os.Stderr, "default", defModel, models, &ok)
 	printRole(os.Stderr, "sidecar", sidecar, models, nil)
 	printRole(os.Stderr, "guard", guard, models, nil)
@@ -192,8 +192,8 @@ func firstNonEmpty(vals ...string) string {
 // resolveSearchPaths returns the team search paths from the --agent-team-search-path
 // flag or the built-in defaults.
 func resolveSearchPaths() []string {
-	if agentTeamSearchPath != "" {
-		return strings.Split(agentTeamSearchPath, ",")
+	if opts.agentTeamSearchPath != "" {
+		return strings.Split(opts.agentTeamSearchPath, ",")
 	}
 	return team.DefaultSearchPaths()
 }

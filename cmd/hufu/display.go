@@ -514,7 +514,7 @@ func newTaskDisplay(w *lineWriter, tracker *team.TaskTracker) *taskDisplay {
 	return &taskDisplay{
 		w:       w,
 		tracker: tracker,
-		redraw:  shouldRedrawTaskDisplay(displayMode, term.IsTerminal(os.Stderr.Fd())),
+		redraw:  shouldRedrawTaskDisplay(opts.displayMode, term.IsTerminal(os.Stderr.Fd())),
 	}
 }
 
@@ -609,7 +609,7 @@ func (d *taskDisplay) clear() {
 }
 
 func configureOutputRendering() {
-	if shouldDisableColor(noColorMode, outputFormat, os.Getenv("NO_COLOR")) {
+	if shouldDisableColor(opts.noColorMode, opts.outputFormat, os.Getenv("NO_COLOR")) {
 		lipgloss.SetColorProfile(termenv.Ascii)
 	}
 }
@@ -1111,7 +1111,7 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 		tc.coordinator.SetStatusReporter(compositeReporter)
 		return &coordDisplay{stopThinking: stopAll, logFile: logFile}
 	}
-	if eventFormat == "jsonl" {
+	if opts.eventFormat == "jsonl" {
 		tc.coordinator.SetStatusReporter(makeJSONLReporter(tc.notifier))
 		return &coordDisplay{}
 	}
@@ -1528,7 +1528,7 @@ func stderrLog(format string, args ...any) {
 // syncLogState pushes the current quiet/JSON/TUI state to internal/log so
 // any internal/* package that logs through it stays in sync with the CLI.
 func syncLogState() {
-	hulog.SetQuiet(quietMode || outputFormat == "json")
+	hulog.SetQuiet(opts.quietMode || opts.outputFormat == "json")
 	hulog.SetTUIActive(activeTUIProgram.Load() != nil)
 }
 
@@ -1536,7 +1536,7 @@ func syncLogState() {
 // program in the main goroutine. Returns when the user quits or the work is done.
 func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string, teamInfo tuipkg.TeamInfo) (string, error) {
 	model := tuipkg.New(prompt, teamInfo)
-	if isChatTUI {
+	if opts.isChatTUI {
 		model.IsChat = true
 	}
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithoutSignalHandler())
@@ -1589,7 +1589,7 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		execResult, execErr = executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord, pathConsent, vars)
+		execResult, execErr = executeSegments(ctx, segments, registry, opts.providerURL, loadedTeams, injector, activeCoord, pathConsent, vars)
 		if execResult != "" {
 			p.Send(tuipkg.ResultMsg{Text: execResult})
 		}

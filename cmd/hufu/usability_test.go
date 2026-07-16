@@ -148,9 +148,9 @@ func TestModelAvailable(t *testing.T) {
 // newProfileTestCmd builds a minimal command with the flags applyProfile cares about.
 func newProfileTestCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "test", Run: func(*cobra.Command, []string) {}}
-	cmd.Flags().BoolVar(&think, "think", false, "")
-	cmd.Flags().Int64Var(&maxDuration, "max-duration", 0, "")
-	cmd.Flags().StringVar(&modelOverride, "model", "", "")
+	cmd.Flags().BoolVar(&opts.think, "think", false, "")
+	cmd.Flags().Int64Var(&opts.maxDuration, "max-duration", 0, "")
+	cmd.Flags().StringVar(&opts.modelOverride, "model", "", "")
 	return cmd
 }
 
@@ -165,18 +165,18 @@ profiles:
 	defer chdir(t, dir)()
 
 	// reset globals
-	think, maxDuration, modelOverride, profileName = false, 0, "", "batch"
-	defer func() { profileName = "" }()
+	opts.think, opts.maxDuration, opts.modelOverride, opts.profileName = false, 0, "", "batch"
+	defer func() { opts.profileName = "" }()
 
 	cmd := newProfileTestCmd()
 	if err := applyProfile(cmd); err != nil {
 		t.Fatalf("applyProfile: %v", err)
 	}
-	if !think {
+	if !opts.think {
 		t.Error("expected think=true from profile")
 	}
-	if maxDuration != 600 {
-		t.Errorf("expected max-duration=600, got %d", maxDuration)
+	if opts.maxDuration != 600 {
+		t.Errorf("expected max-duration=600, got %d", opts.maxDuration)
 	}
 }
 
@@ -189,8 +189,8 @@ profiles:
 `)
 	defer chdir(t, dir)()
 
-	think, maxDuration, modelOverride, profileName = false, 0, "", "batch"
-	defer func() { profileName = "" }()
+	opts.think, opts.maxDuration, opts.modelOverride, opts.profileName = false, 0, "", "batch"
+	defer func() { opts.profileName = "" }()
 
 	cmd := newProfileTestCmd()
 	// Simulate an explicit CLI flag.
@@ -200,8 +200,8 @@ profiles:
 	if err := applyProfile(cmd); err != nil {
 		t.Fatalf("applyProfile: %v", err)
 	}
-	if maxDuration != 30 {
-		t.Errorf("explicit CLI flag should win, got max-duration=%d", maxDuration)
+	if opts.maxDuration != 30 {
+		t.Errorf("explicit CLI flag should win, got max-duration=%d", opts.maxDuration)
 	}
 }
 
@@ -210,8 +210,8 @@ func TestApplyProfile_UnknownProfile(t *testing.T) {
 	writeHufuYAML(t, dir, "profiles:\n  batch:\n    think: \"true\"\n")
 	defer chdir(t, dir)()
 
-	profileName = "nope"
-	defer func() { profileName = "" }()
+	opts.profileName = "nope"
+	defer func() { opts.profileName = "" }()
 
 	cmd := newProfileTestCmd()
 	err := applyProfile(cmd)
@@ -228,8 +228,8 @@ func TestApplyProfile_UnknownFlag(t *testing.T) {
 	writeHufuYAML(t, dir, "profiles:\n  bad:\n    no-such-flag: \"x\"\n")
 	defer chdir(t, dir)()
 
-	profileName = "bad"
-	defer func() { profileName = "" }()
+	opts.profileName = "bad"
+	defer func() { opts.profileName = "" }()
 
 	cmd := newProfileTestCmd()
 	err := applyProfile(cmd)
@@ -239,7 +239,7 @@ func TestApplyProfile_UnknownFlag(t *testing.T) {
 }
 
 func TestApplyProfile_NoProfileIsNoop(t *testing.T) {
-	profileName = ""
+	opts.profileName = ""
 	cmd := newProfileTestCmd()
 	if err := applyProfile(cmd); err != nil {
 		t.Errorf("empty profile should be a no-op, got %v", err)

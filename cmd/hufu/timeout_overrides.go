@@ -45,5 +45,5 @@ func applyCLITimeoutOverrides(session *team.TeamSession, overrides TimeoutCLIOve
 // TimeoutCLIOverrides struct. Flags that were not set on the command
 // line stay 0, signalling "no override" to applyCLITimeoutOverrides.
 func currentTimeoutOverrides() TimeoutCLIOverrides {
-	return TimeoutCLIOverrides{Timeout: timeoutOverride}
+	return TimeoutCLIOverrides{Timeout: opts.timeoutOverride}
 }

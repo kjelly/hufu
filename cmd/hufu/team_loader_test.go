@@ -37,10 +37,10 @@ func TestBuildAllowedPaths(t *testing.T) {
 	}
 	registry := team.NewTeamRegistry([]string{tmpDir})
 	cfg := &config.Config{}
-	origAllowPaths := allowPaths
-	allowPaths = nil
+	origAllowPaths := opts.allowPaths
+	opts.allowPaths = nil
 	t.Cleanup(func() {
-		allowPaths = origAllowPaths
+		opts.allowPaths = origAllowPaths
 	})
 	paths := buildAllowedPaths(session, registry, cfg)
 	if len(paths) == 0 {
@@ -55,7 +55,7 @@ func TestBuildAllowedPaths(t *testing.T) {
 		t.Fatalf("expected cwd %q first even without registry, got %#v", tmpDir, noRegistryPaths)
 	}
 
-	allowPaths = []string{filepath.Join(tmpDir, "extra"), "~/more"}
+	opts.allowPaths = []string{filepath.Join(tmpDir, "extra"), "~/more"}
 	withExtra := buildAllowedPaths(session, nil, cfg)
 	if !containsPath(withExtra, filepath.Join(tmpDir, "extra")) {
 		t.Fatalf("expected extra allow path to be included, got %#v", withExtra)

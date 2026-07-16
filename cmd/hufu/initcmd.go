@@ -123,7 +123,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("team name required: hufu init <team-name>")
 	}
 
-	templateName := strings.ToLower(strings.TrimSpace(initTemplateName))
+	templateName := strings.ToLower(strings.TrimSpace(opts.initTemplateName))
 	if templateName == "" {
 		templateName = "default"
 	}
@@ -134,7 +134,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 			names = append(names, candidate)
 		}
 		sort.Strings(names)
-		return fmt.Errorf("unknown --template %q: supported templates: %s", initTemplateName, strings.Join(names, ", "))
+		return fmt.Errorf("unknown --template %q: supported templates: %s", opts.initTemplateName, strings.Join(names, ", "))
 	}
 
 	teamDir := filepath.Join(".agent-teams", name)
@@ -143,8 +143,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	modelLine := ""
-	if modelOverride != "" {
-		modelLine = "model: " + modelOverride + "\n"
+	if opts.modelOverride != "" {
+		modelLine = "model: " + opts.modelOverride + "\n"
 	}
 
 	created, err := writeIfAbsent(

@@ -50,10 +50,10 @@ func TestCompleteAtNames(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	oldSearchPath := agentTeamSearchPath
-	agentTeamSearchPath = tmpDir
+	oldSearchPath := opts.agentTeamSearchPath
+	opts.agentTeamSearchPath = tmpDir
 	defer func() {
-		agentTeamSearchPath = oldSearchPath
+		opts.agentTeamSearchPath = oldSearchPath
 	}()
 
 	t.Run("empty or no prefix suggests all teams with @", func(t *testing.T) {

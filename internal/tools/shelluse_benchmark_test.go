@@ -899,7 +899,7 @@ func shellUseTasks() []shellUseTask {
 				writeFile(t, filepath.Join(dir, "users.json"),
 					`[{"name":"Alice"},{"name":"Bob"},{"name":"Charlie"}]`+"\n")
 			},
-			Command:  "python3 -c \"import json; [print(u['name']) for u in json.load(open('users.json'))]\"",
+			Command: "python3 -c \"import json; [print(u['name']) for u in json.load(open('users.json'))]\"",
 			Verify: func(t *testing.T, dir string, resp fantasy.ToolResponse) {
 				assertNoError(t, resp)
 				assertContains(t, resp.Content, "Alice")
@@ -1519,8 +1519,8 @@ func TestShellUseSecurityWorkingDirectory(t *testing.T) {
 
 	// Execute in dir2 via working_directory parameter
 	resp, err := executeBash(ctx, fantasy.ToolCall{
-		ID:   "wd-1",
-		Name: "bash",
+		ID:    "wd-1",
+		Name:  "bash",
 		Input: fmt.Sprintf(`{"command": "ls marker.txt", "working_directory": %q}`, dir2),
 	}, cfg)
 	if err != nil {

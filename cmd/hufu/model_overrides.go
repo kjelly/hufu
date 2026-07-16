@@ -72,15 +72,15 @@ func applyCLIModelOverrides(cfg *agent.TeamConfig, overrides ModelCLIOverrides) 
 // stay empty, signalling "no override" to applyCLIModelOverrides.
 func currentModelOverrides() ModelCLIOverrides {
 	return ModelCLIOverrides{
-		Model:             modelOverride,
-		Temperature:       temperatureOverride,
-		MaxTokens:         maxTokensOverride,
-		TopP:              topPOverride,
-		TopK:              topKOverride,
-		SidecarModel:      sidecarModelOverride,
-		GuardModel:        guardModelOverride,
-		JudgeModel:        judgeModelOverride,
-		PlanReviewerModel: planReviewerModelOverride,
+		Model:             opts.modelOverride,
+		Temperature:       opts.temperatureOverride,
+		MaxTokens:         opts.maxTokensOverride,
+		TopP:              opts.topPOverride,
+		TopK:              opts.topKOverride,
+		SidecarModel:      opts.sidecarModelOverride,
+		GuardModel:        opts.guardModelOverride,
+		JudgeModel:        opts.judgeModelOverride,
+		PlanReviewerModel: opts.planReviewerModelOverride,
 	}
 }
 

@@ -28,7 +28,7 @@ func executeDryRun(ctx context.Context, segments []team.PromptSegment, prompt st
 		}
 	}
 	if dryRunTeamName == "" {
-		dryRunTeamName = strings.ToLower(agentTeamName)
+		dryRunTeamName = strings.ToLower(opts.agentTeamName)
 	}
 	if dryRunTeamName == "" {
 		return fmt.Errorf("--dry-run requires a team (use --agent-team or @team-name in the prompt)")
@@ -62,7 +62,7 @@ func executeDryRun(ctx context.Context, segments []team.PromptSegment, prompt st
 		return fmt.Errorf("dry-run failed: %w", err)
 	}
 	renderDryRun(result)
-	if reportMode {
+	if opts.reportMode {
 		generateReport(loadedTeams, "(dry-run — no tasks executed)")
 	}
 	return nil
@@ -80,19 +80,19 @@ func loadTeamsForSegments(ctx context.Context, initialSegments []team.PromptSegm
 		}
 		var tc *teamContext
 		var err error
-		if defaultTeam && seg.Name == "default" {
-			tc, err = loadDefaultTeam(ctx, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
+		if opts.defaultTeam && seg.Name == "default" {
+			tc, err = loadDefaultTeam(ctx, opts.providerURL, opts.providerAPIKey, pathConsent, vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 		} else {
 			vars, err = promptForMissingTemplateVars(ctx, seg.Name, registry, pr, vars)
 			if err != nil {
 				return nil, vars, err
 			}
-			tc, err = loadTeamByName(ctx, seg.Name, registry, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
+			tc, err = loadTeamByName(ctx, seg.Name, registry, opts.providerURL, opts.providerAPIKey, pathConsent, vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 		}
 		if err != nil {
 			return nil, vars, fmt.Errorf("failed to load team %q: %w\n  Verify the team exists in your search paths (run 'hufu list' or 'hufu doctor')", seg.Name, err)
 		}
-		if stepsMode {
+		if opts.stepsMode {
 			tc.coordinator.SetStepConfirmFn(makeStepConfirmFn())
 		}
 		loadedTeams[seg.Name] = tc
@@ -149,7 +149,7 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 	}
 	var result string
 	var runErr error
-	if tuiMode {
+	if opts.tuiMode {
 		var teamInfo tuipkg.TeamInfo
 		teamInfo.AvailableTeams = registry.ListTeams()
 		for _, tc := range loadedTeams {
@@ -178,9 +178,9 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 				if gm := tc.session.Config.GuardModel; gm != "" {
 					teamInfo.GuardModel = gm
 				}
-				teamInfo.MemoryEnabled = memoryEnabled && !tempWorkspace
+				teamInfo.MemoryEnabled = opts.memoryEnabled && !opts.tempWorkspace
 				if teamInfo.MemoryEnabled {
-					teamInfo.MemoryModel = config.ResolveEmbeddingModel(memoryModel)
+					teamInfo.MemoryModel = config.ResolveEmbeddingModel(opts.memoryModel)
 				}
 				teamInfo.SSHSessions = 0
 				break
@@ -188,13 +188,13 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 		}
 		result, runErr = runWithTUI(ctx, cancel, prompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, teamInfo)
 	} else {
-		result, runErr = executeSegments(ctx, segments, registry, providerURL, loadedTeams, injector, activeCoord, pathConsent, vars)
+		result, runErr = executeSegments(ctx, segments, registry, opts.providerURL, loadedTeams, injector, activeCoord, pathConsent, vars)
 	}
 	if runErr != nil {
 		return runErr
 	}
 
-	if reportMode {
+	if opts.reportMode {
 		generateReport(loadedTeams, result)
 	}
 
@@ -225,35 +225,35 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 			}
 		}
 	}
-	if outputFormat == "json" {
+	if opts.outputFormat == "json" {
 		if err := printResultJSON(result, loadedTeams, allSkillUsage); err != nil {
 			return err
 		}
 	} else {
 		fmt.Println(result)
-		if !quietMode {
+		if !opts.quietMode {
 			renderSkillSummary(allSkillUsage)
-			if !noSummary {
+			if !opts.noSummary {
 				renderExecutionSummary(os.Stderr, loadedTeams, time.Since(startedAt))
 			}
 		}
 	}
 
-	if archiveMemory && !newSession {
+	if opts.archiveMemory && !opts.newSession {
 		for _, tc := range loadedTeams {
 			archiveCurrentSessionToMemory(ctx, tc)
 		}
 	}
 
-	if tempWorkspace {
-		absWS, _ := filepath.Abs(workspace)
+	if opts.tempWorkspace {
+		absWS, _ := filepath.Abs(opts.workspace)
 		fmt.Fprintf(os.Stderr, "\n%s\n  Path: %s\n",
 			boldStyle.Render("─── Temporary Workspace ───"),
 			absWS)
 	}
 
 	if originalPrompt != "" {
-		savePromptToHistory(ctx, originalPrompt, providerURL)
+		savePromptToHistory(ctx, originalPrompt, opts.providerURL)
 	}
 
 	for name, tc := range loadedTeams {

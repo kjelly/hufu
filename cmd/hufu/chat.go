@@ -42,31 +42,31 @@ func init() {
 	// Bind the subset of root flags that make sense for an interactive chat
 	// session to the same global vars the root command uses.
 	f := replCmd.Flags()
-	f.StringVar(&agentTeamName, "agent-team", "", "Agent team name to chat with")
-	f.StringVar(&agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams")
-	f.BoolVar(&defaultTeam, "default", false, "Use the built-in default team (coordinator + Helper)")
-	f.StringVar(&helperTools, "helper-tools", "", "Extra tools for the default Helper (e.g. bash,sudo)")
-	f.StringSliceVar(&allowPaths, "allow-path", nil, "Additional filesystem paths to allow for the active team")
-	f.BoolVar(&autoApprove, "auto-approve", false, "Automatically choose clearly safe ask_user options; dangerous or ambiguous choices still prompt the user")
-	f.StringVar(&providerURL, "provider-url", "", "Provider API base URL")
-	f.StringVar(&providerAPIKey, "provider-api-key", "", "Provider API key")
-	f.StringVar(&modelOverride, "model", "", "Override default model (e.g. ollama/qwen3:8b)")
-	f.StringVarP(&workspace, "workspace", "w", "", "Workspace directory")
-	f.BoolVarP(&newSession, "new", "n", false, "Archive old session and start fresh")
-	f.BoolVarP(&verbose, "verbose", "v", false, "Show full agent text output in real-time")
-	f.BoolVar(&memoryEnabled, "memory", false, "Enable long-term memory (RAG with vector search)")
-	f.StringArrayVar(&forcedSkills, "skill", nil, "Force-load specific skills (repeatable)")
-	f.StringArrayVar(&varFlags, "var", nil, "Set template variable key=value (repeatable)")
-	f.StringArrayVar(&varFiles, "var-file", nil, "Read template variables from a file (repeatable)")
-	f.BoolVar(&planMode, "plan", false, "Force plan-first mode")
-	f.BoolVar(&autoSkills, "auto-skills", false, "Enable automatic skill detection")
-	f.BoolVar(&projectContext, "project-context", false, "Inject Git Status and Project Directory Structure into prompt context")
-	f.BoolVar(&think, "think", false, "Show coordinator decision reasoning")
-	f.BoolVar(&tuiMode, "tui", false, "Show a Bubble Tea TUI for real-time task tracking")
-	f.Int64Var(&timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds")
-	f.IntVar(&maxRoundsOverride, "max-rounds", 0, "Override team.yaml max-rounds. 0 = use team default.")
-	f.IntVar(&maxConcurrentOverride, "max-concurrent", 0, "Override team.yaml max-concurrent. 0 = use team default.")
-	f.IntVar(&maxStepsOverride, "max-steps", 0, "Override team.yaml max-steps. 0 = use team/agent default.")
+	f.StringVar(&opts.agentTeamName, "agent-team", "", "Agent team name to chat with")
+	f.StringVar(&opts.agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams")
+	f.BoolVar(&opts.defaultTeam, "default", false, "Use the built-in default team (coordinator + Helper)")
+	f.StringVar(&opts.helperTools, "helper-tools", "", "Extra tools for the default Helper (e.g. bash,sudo)")
+	f.StringSliceVar(&opts.allowPaths, "allow-path", nil, "Additional filesystem paths to allow for the active team")
+	f.BoolVar(&opts.autoApprove, "auto-approve", false, "Automatically choose clearly safe ask_user options; dangerous or ambiguous choices still prompt the user")
+	f.StringVar(&opts.providerURL, "provider-url", "", "Provider API base URL")
+	f.StringVar(&opts.providerAPIKey, "provider-api-key", "", "Provider API key")
+	f.StringVar(&opts.modelOverride, "model", "", "Override default model (e.g. ollama/qwen3:8b)")
+	f.StringVarP(&opts.workspace, "workspace", "w", "", "Workspace directory")
+	f.BoolVarP(&opts.newSession, "new", "n", false, "Archive old session and start fresh")
+	f.BoolVarP(&opts.verbose, "verbose", "v", false, "Show full agent text output in real-time")
+	f.BoolVar(&opts.memoryEnabled, "memory", false, "Enable long-term memory (RAG with vector search)")
+	f.StringArrayVar(&opts.forcedSkills, "skill", nil, "Force-load specific skills (repeatable)")
+	f.StringArrayVar(&opts.varFlags, "var", nil, "Set template variable key=value (repeatable)")
+	f.StringArrayVar(&opts.varFiles, "var-file", nil, "Read template variables from a file (repeatable)")
+	f.BoolVar(&opts.planMode, "plan", false, "Force plan-first mode")
+	f.BoolVar(&opts.autoSkills, "auto-skills", false, "Enable automatic skill detection")
+	f.BoolVar(&opts.projectContext, "project-context", false, "Inject Git Status and Project Directory Structure into prompt context")
+	f.BoolVar(&opts.think, "think", false, "Show coordinator decision reasoning")
+	f.BoolVar(&opts.tuiMode, "tui", false, "Show a Bubble Tea TUI for real-time task tracking")
+	f.Int64Var(&opts.timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds")
+	f.IntVar(&opts.maxRoundsOverride, "max-rounds", 0, "Override team.yaml max-rounds. 0 = use team default.")
+	f.IntVar(&opts.maxConcurrentOverride, "max-concurrent", 0, "Override team.yaml max-concurrent. 0 = use team default.")
+	f.IntVar(&opts.maxStepsOverride, "max-steps", 0, "Override team.yaml max-steps. 0 = use team/agent default.")
 }
 
 func runChat(cmd *cobra.Command, args []string) error {
@@ -74,7 +74,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	configureOutputRendering()
-	if defaultTeam && agentTeamName != "" {
+	if opts.defaultTeam && opts.agentTeamName != "" {
 		return fmt.Errorf("cannot use --default with --agent-team; pick one")
 	}
 
@@ -101,15 +101,15 @@ func runChat(cmd *cobra.Command, args []string) error {
 	var tc *teamContext
 	var teamName string
 	var registry *team.TeamRegistry
-	if defaultTeam {
+	if opts.defaultTeam {
 		teamName = "default"
-		tc, err = loadDefaultTeam(rootCtx, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
+		tc, err = loadDefaultTeam(rootCtx, opts.providerURL, opts.providerAPIKey, pathConsent, vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 	} else {
 		teamName, registry, err = pickChatTeam(pr)
 		if err != nil {
 			return err
 		}
-		tc, err = loadTeamByName(rootCtx, teamName, registry, providerURL, providerAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkills)
+		tc, err = loadTeamByName(rootCtx, teamName, registry, opts.providerURL, opts.providerAPIKey, pathConsent, vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to load team %q: %w", teamName, err)
@@ -136,8 +136,8 @@ func runChat(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if tuiMode {
-		isChatTUI = true
+	if opts.tuiMode {
+		opts.isChatTUI = true
 		var teamInfo tuipkg.TeamInfo
 		if registry != nil {
 			teamInfo.AvailableTeams = registry.ListTeams()
@@ -166,9 +166,9 @@ func runChat(cmd *cobra.Command, args []string) error {
 		if gm := tc.session.Config.GuardModel; gm != "" {
 			teamInfo.GuardModel = gm
 		}
-		teamInfo.MemoryEnabled = memoryEnabled && !tempWorkspace
+		teamInfo.MemoryEnabled = opts.memoryEnabled && !opts.tempWorkspace
 		if teamInfo.MemoryEnabled {
-			teamInfo.MemoryModel = config.ResolveEmbeddingModel(memoryModel)
+			teamInfo.MemoryModel = config.ResolveEmbeddingModel(opts.memoryModel)
 		}
 		teamInfo.SSHSessions = 0
 		teamInfo.IsChat = true
@@ -278,7 +278,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 		// Inject file/project contexts
 		promptToRun, _ := injectFileContexts(line)
 		cfg := config.LoadConfig()
-		if projectContext || cfg.ProjectContext || tc.session.Config.ProjectContext {
+		if opts.projectContext || cfg.ProjectContext || tc.session.Config.ProjectContext {
 			promptToRun = injectProjectContext(promptToRun)
 		}
 
@@ -313,7 +313,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 		turn++
 
 		if line != "" {
-			go savePromptToHistory(context.Background(), line, providerURL)
+			go savePromptToHistory(context.Background(), line, opts.providerURL)
 		}
 
 		// Persist after every turn so the session survives a crash mid-chat.
@@ -410,7 +410,7 @@ func switchChatTeam(rootCtx context.Context, pr *readline.PromptReader, current 
 	if chosen == "" {
 		return nil, "", nil
 	}
-	tc, err := loadTeamByName(rootCtx, chosen, registry, providerURL, providerAPIKey, newPathConsent(), buildVarsOrNil(), forcedSkills, planMode, autoSkills)
+	tc, err := loadTeamByName(rootCtx, chosen, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), buildVarsOrNil(), opts.forcedSkills, opts.planMode, opts.autoSkills)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to load team %q: %w", chosen, err)
 	}
@@ -425,7 +425,7 @@ func switchChatTeamByName(rootCtx context.Context, name string, registry *team.T
 	if !registry.HasTeam(name) {
 		return nil, fmt.Errorf("team %q not found. Available: %s", name, strings.Join(registry.ListTeams(), ", "))
 	}
-	tc, err := loadTeamByName(rootCtx, name, registry, providerURL, providerAPIKey, newPathConsent(), buildVarsOrNil(), forcedSkills, planMode, autoSkills)
+	tc, err := loadTeamByName(rootCtx, name, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), buildVarsOrNil(), opts.forcedSkills, opts.planMode, opts.autoSkills)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load team %q: %w", name, err)
 	}
@@ -451,10 +451,10 @@ func pickChatTeam(pr *readline.PromptReader) (string, *team.TeamRegistry, error)
 		return "", nil, fmt.Errorf("no teams found in %s — use --default or run `hufu init <team>`", strings.Join(searchPaths, ", "))
 	}
 
-	if agentTeamName != "" {
-		name := strings.ToLower(agentTeamName)
+	if opts.agentTeamName != "" {
+		name := strings.ToLower(opts.agentTeamName)
 		if !registry.HasTeam(name) {
-			return "", nil, fmt.Errorf("team %q not found. Available: %s", agentTeamName, strings.Join(registry.ListTeams(), ", "))
+			return "", nil, fmt.Errorf("team %q not found. Available: %s", opts.agentTeamName, strings.Join(registry.ListTeams(), ", "))
 		}
 		return name, registry, nil
 	}
@@ -497,7 +497,7 @@ func readChatLine(pr *readline.PromptReader) (string, error) {
 // buildVars resolves template variables the same way the root command does:
 // --var-file + --var, merged on top of hufu.yaml vars.
 func buildVars() (map[string]string, error) {
-	vars, err := team.ResolveVars(varFiles, varFlags)
+	vars, err := team.ResolveVars(opts.varFiles, opts.varFlags)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve template variables: %w", err)
 	}

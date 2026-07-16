@@ -11,36 +11,36 @@ import (
 
 func TestValidateRunFlags(t *testing.T) {
 	// Save originals to restore after each subtest.
-	origOutput := outputFormat
-	origSteps := stepsMode
-	origTUI := tuiMode
-	origUnattended := unattended
-	origDefault := defaultTeam
-	origAgentTeam := agentTeamName
-	origDisplayMode := displayMode
-	origEventFormat := eventFormat
+	origOutput := opts.outputFormat
+	origSteps := opts.stepsMode
+	origTUI := opts.tuiMode
+	origUnattended := opts.unattended
+	origDefault := opts.defaultTeam
+	origAgentTeam := opts.agentTeamName
+	origDisplayMode := opts.displayMode
+	origEventFormat := opts.eventFormat
 	defer func() {
-		outputFormat = origOutput
-		stepsMode = origSteps
-		tuiMode = origTUI
-		unattended = origUnattended
-		defaultTeam = origDefault
-		agentTeamName = origAgentTeam
-		displayMode = origDisplayMode
-		eventFormat = origEventFormat
+		opts.outputFormat = origOutput
+		opts.stepsMode = origSteps
+		opts.tuiMode = origTUI
+		opts.unattended = origUnattended
+		opts.defaultTeam = origDefault
+		opts.agentTeamName = origAgentTeam
+		opts.displayMode = origDisplayMode
+		opts.eventFormat = origEventFormat
 	}()
 
 	// resetAll sets all flags to their default (non-conflicting) values
 	// before each subtest runs, so earlier subtests don't leak state.
 	resetAll := func() {
-		outputFormat = ""
-		stepsMode = false
-		tuiMode = false
-		unattended = false
-		defaultTeam = false
-		agentTeamName = ""
-		displayMode = "auto"
-		eventFormat = "text"
+		opts.outputFormat = ""
+		opts.stepsMode = false
+		opts.tuiMode = false
+		opts.unattended = false
+		opts.defaultTeam = false
+		opts.agentTeamName = ""
+		opts.displayMode = "auto"
+		opts.eventFormat = "text"
 	}
 
 	t.Run("accepts empty output format", func(t *testing.T) {
@@ -53,7 +53,7 @@ func TestValidateRunFlags(t *testing.T) {
 		resetAll()
 		for _, v := range []string{"text", "json"} {
 			resetAll()
-			outputFormat = v
+			opts.outputFormat = v
 			if err := validateRunFlags(); err != nil {
 				t.Errorf("expected nil for %q, got %v", v, err)
 			}
@@ -61,7 +61,7 @@ func TestValidateRunFlags(t *testing.T) {
 	})
 	t.Run("rejects unknown output format", func(t *testing.T) {
 		resetAll()
-		outputFormat = "yaml"
+		opts.outputFormat = "yaml"
 		err := validateRunFlags()
 		if err == nil || !strings.Contains(err.Error(), "invalid --output") {
 			t.Errorf("expected invalid --output error, got %v", err)
@@ -69,7 +69,7 @@ func TestValidateRunFlags(t *testing.T) {
 	})
 	t.Run("rejects unknown display mode", func(t *testing.T) {
 		resetAll()
-		displayMode = "jsonl"
+		opts.displayMode = "jsonl"
 		err := validateRunFlags()
 		if err == nil || !strings.Contains(err.Error(), "invalid --display-mode") {
 			t.Errorf("expected invalid display mode error, got %v", err)
@@ -77,24 +77,24 @@ func TestValidateRunFlags(t *testing.T) {
 	})
 	t.Run("rejects unknown event format", func(t *testing.T) {
 		resetAll()
-		eventFormat = "yaml"
+		opts.eventFormat = "yaml"
 		if err := validateRunFlags(); err == nil || !strings.Contains(err.Error(), "invalid --event-format") {
 			t.Errorf("expected invalid event format error, got %v", err)
 		}
 	})
 	t.Run("json implies quiet", func(t *testing.T) {
 		resetAll()
-		outputFormat = "json"
-		quietMode = false
+		opts.outputFormat = "json"
+		opts.quietMode = false
 		_ = validateRunFlags()
-		if !quietMode {
+		if !opts.quietMode {
 			t.Error("expected quietMode to be set when output is json")
 		}
 	})
 	t.Run("rejects --steps + --tui combination", func(t *testing.T) {
 		resetAll()
-		stepsMode = true
-		tuiMode = true
+		opts.stepsMode = true
+		opts.tuiMode = true
 		err := validateRunFlags()
 		if err == nil || !strings.Contains(err.Error(), "cannot use --steps") {
 			t.Errorf("expected cannot use --steps error, got %v", err)
@@ -102,8 +102,8 @@ func TestValidateRunFlags(t *testing.T) {
 	})
 	t.Run("rejects --default + --agent-team combination", func(t *testing.T) {
 		resetAll()
-		defaultTeam = true
-		agentTeamName = "anything"
+		opts.defaultTeam = true
+		opts.agentTeamName = "anything"
 		err := validateRunFlags()
 		if err == nil || !strings.Contains(err.Error(), "cannot use --default") {
 			t.Errorf("expected cannot use --default error, got %v", err)
@@ -111,19 +111,19 @@ func TestValidateRunFlags(t *testing.T) {
 	})
 	t.Run("unattended disables --steps", func(t *testing.T) {
 		resetAll()
-		unattended = true
-		stepsMode = true
+		opts.unattended = true
+		opts.stepsMode = true
 		_ = validateRunFlags()
-		if stepsMode {
+		if opts.stepsMode {
 			t.Error("expected stepsMode to be disabled in unattended mode")
 		}
 	})
 	t.Run("unattended disables --tui", func(t *testing.T) {
 		resetAll()
-		unattended = true
-		tuiMode = true
+		opts.unattended = true
+		opts.tuiMode = true
 		_ = validateRunFlags()
-		if tuiMode {
+		if opts.tuiMode {
 			t.Error("expected tuiMode to be disabled in unattended mode")
 		}
 	})
