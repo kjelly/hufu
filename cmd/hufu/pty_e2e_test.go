@@ -292,10 +292,6 @@ func buildTestBinary(t *testing.T) string {
 		}
 		cmd := exec.Command("go", "build", "-o", path, "./cmd/hufu")
 		cmd.Dir = moduleRoot
-		cmd.Env = append(os.Environ(),
-			"GOCACHE=/tmp/go-cache",
-			"GOMODCACHE=/home/ubuntu/go/pkg/mod",
-		)
 		combined, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("build test binary: %v\n%s", err, combined)

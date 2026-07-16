@@ -197,15 +197,41 @@ func globWithWalk(pattern, searchPath string, limit int, wsName string, excludeR
 }
 
 func buildGlobMatcher(pattern string) func(string) bool {
+	pattern = filepath.ToSlash(pattern)
 	base := filepath.Base(pattern)
-	hasDirPrefix := strings.Contains(pattern, "/") || strings.Contains(pattern, "\\")
+	hasDirPrefix := strings.Contains(pattern, "/")
+	patSegs := strings.Split(pattern, "/")
 
 	return func(relPath string) bool {
 		if hasDirPrefix {
-			matched, _ := filepath.Match(pattern, relPath)
-			return matched
+			return matchGlobSegments(patSegs, strings.Split(filepath.ToSlash(relPath), "/"))
 		}
 		matched, _ := filepath.Match(base, filepath.Base(relPath))
 		return matched
 	}
+}
+
+// matchGlobSegments matches a slash-split glob pattern against a slash-split
+// relative path, giving `**` rg/gitignore semantics: it spans zero or more
+// path segments, so `**/*.json` also matches a top-level `a.json`.
+// filepath.Match alone cannot do this — its `*` never crosses a separator
+// and it treats `**` the same as `*` — which made the walk fallback disagree
+// with the ripgrep path whenever a pattern used `**`.
+func matchGlobSegments(patSegs, pathSegs []string) bool {
+	if len(patSegs) == 0 {
+		return len(pathSegs) == 0
+	}
+	if patSegs[0] == "**" {
+		if matchGlobSegments(patSegs[1:], pathSegs) {
+			return true
+		}
+		return len(pathSegs) > 0 && matchGlobSegments(patSegs, pathSegs[1:])
+	}
+	if len(pathSegs) == 0 {
+		return false
+	}
+	if matched, _ := filepath.Match(patSegs[0], pathSegs[0]); !matched {
+		return false
+	}
+	return matchGlobSegments(patSegs[1:], pathSegs[1:])
 }
