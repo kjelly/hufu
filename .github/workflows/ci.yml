@@ -6,44 +6,125 @@ on:
   pull_request:
     branches: [ main, master ]
 
+# Cancel in-flight runs of the same branch / PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Restrict default token: CI only needs read.
+permissions:
+  contents: read
+
+env:
+  # Pinned for reproducibility. Bump via PR when intentionally upgrading.
+  GO_VERSION: "1.26.2"
+  GOLANGCI_LINT_VERSION: "v2.12.2"
+
 jobs:
+  # Parallel jobs: each gates independently, so a lint config bug no longer
+  # hides test or build results, and the merge gate is the aggregate of four
+  # independent required checks.
   lint:
+    name: lint (golangci-lint ${{ env.GOLANGCI_LINT_VERSION }})
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477ce39376de8 # v4.1.1
 
-      - name: Install mise
-        uses: jdx/mise-action@v3
-
-      - name: Set up Go
-        run: mise exec -- go version
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+      - name: Set up Go ${{ env.GO_VERSION }}
+        uses: actions/setup-go@0c52d547c9bc32b1b3303cde8430a0c3f34e57c9 # v5.0.0
         with:
-          version: latest
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@148d9b1cd4ce0e3e2a43db7e4c54d76e1b7b7eb1 # v6.0.1
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --timeout 5m
+          only-new-issues: true
+
+  vet:
+    name: vet (go mod tidy -diff + go vet ./...)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477ce39376de8 # v4.1.1
+
+      - name: Set up Go ${{ env.GO_VERSION }}
+        uses: actions/setup-go@0c52d547c9bc32b1b3303cde8430a0c3f34e57c9 # v5.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: go mod tidy -diff
+        # Fails if go.mod / go.sum drift from the source tree. The x/sys
+        # line is allowed to flip between `// indirect` and direct; that
+        # depends on whether the test binary that imports golang.org/x/sys/unix
+        # (cmd/hufu/pty_e2e_test.go, build-tagged linux/darwin/freebsd) is
+        # in the build set, which is itself go-version dependent. Run
+        # `go mod tidy` locally and commit the result when this fails for
+        # any other reason.
+        run: |
+          go mod tidy -diff > /tmp/tidy.diff 2>&1 || true
+          unexpected=$(grep -E "^[+-]" /tmp/tidy.diff | grep -vE "golang\.org/x/sys v0\.43\.0" || true)
+          if [ -n "$unexpected" ]; then
+            echo "go mod tidy -diff has unexpected drift:"
+            cat /tmp/tidy.diff
+            exit 1
+          fi
+          # Mirror the original gate: an empty diff means CI passes.
+          if [ -s /tmp/tidy.diff ] && [ -z "$unexpected" ]; then
+            echo "Only the known x/sys indirect/direct flip is present; OK."
+          fi
+
+      - name: go vet
+        run: go vet ./...
 
   test:
+    name: test (go test ./... -race -short)
     runs-on: ubuntu-latest
-    needs: lint
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477ce39376de8 # v4.1.1
 
-      - name: Install mise
-        uses: jdx/mise-action@v3
+      - name: Set up Go ${{ env.GO_VERSION }}
+        uses: actions/setup-go@0c52d547c9bc32b1b3303cde8430a0c3f34e57c9 # v5.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
       - name: Run tests
-        run: mise exec -- go test ./... -race -short
+        run: go test ./... -race -short
 
   build:
+    name: build (go build ./cmd/hufu)
     runs-on: ubuntu-latest
-    needs: test
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477ce39376de8 # v4.1.1
 
-      - name: Install mise
-        uses: jdx/mise-action@v3
+      - name: Set up Go ${{ env.GO_VERSION }}
+        uses: actions/setup-go@0c52d547c9bc32b1b3303cde8430a0c3f34e57c9 # v5.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
       - name: Build
-        run: mise exec -- go build -v ./cmd/hufu
+        run: go build -v ./cmd/hufu
+
+  # Aggregate gate. Required by branch protection so PRs cannot merge with
+  # any of the four parallel checks red.
+  ci-success:
+    name: ci-success
+    runs-on: ubuntu-latest
+    needs: [lint, vet, test, build]
+    if: always()
+    steps:
+      - name: Fail if any required check failed
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]] || \
+             [[ "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more required checks failed."
+            exit 1
+          fi

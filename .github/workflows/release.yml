@@ -5,25 +5,41 @@ on:
     tags:
       - 'v*'
 
+# Release needs to publish artifacts / create the GitHub Release.
 permissions:
   contents: write
 
+# Avoid two releases racing on the same tag ref.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Pinned. Bump via PR when intentionally upgrading.
+  GO_VERSION: "1.26.2"
+  GORELEASER_VERSION: "v2.7.0"
+
 jobs:
   goreleaser:
+    name: goreleaser (${{ env.GORELEASER_VERSION }})
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477ce39376de8 # v4.1.1
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - name: Set up Go ${{ env.GO_VERSION }}
+        uses: actions/setup-go@0c52d547c9bc32b1b3303cde8430a0c3f34e57c9 # v5.0.0
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
-      - uses: goreleaser/goreleaser-action@v6
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@7ec5c2b0c6cdda27cb5351a4a3adfb4a76b9e375 # v6.0.0
         with:
           distribution: goreleaser
-          version: latest
+          version: ${{ env.GORELEASER_VERSION }}
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

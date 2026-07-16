@@ -1,4 +1,11 @@
+# GoReleaser config for kjelly/hufu.
+# Source of truth for the release target: the `release.github` block below.
+# Module path is intentionally left as github.com/anomalyco/hufu so go
+# module consumers that pin to the original project keep working; this
+# fork is published as prebuilt binaries only.
 version: 2
+
+project_name: hufu
 
 builds:
   - id: hufu
@@ -24,10 +31,6 @@ archives:
       {{- .Version }}_
       {{- .Os }}_
       {{- .Arch }}
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
 
 checksum:
   name_template: checksums.txt
@@ -46,5 +49,5 @@ changelog:
 
 release:
   github:
-    owner: anomalyco
+    owner: kjelly
     name: hufu

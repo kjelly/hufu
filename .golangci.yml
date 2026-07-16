@@ -43,6 +43,7 @@ linters:
         path: cmd/hufu/display\.go
       - linters:
           - errcheck
+          - unused
         path: internal/tools/bash\.go
       - linters:
           - errcheck
@@ -86,6 +87,7 @@ linters:
         path: internal/sidecar/sidecar_test\.go
       - linters:
           - errcheck
+          - staticcheck
           - unused
         path: internal/team/coordinator\.go
       - linters:
@@ -99,6 +101,7 @@ linters:
           - unused
         path: internal/team/stm\.go
       - linters:
+          - errcheck
           - unused
         path: internal/team/workspace\.go
       - linters:
@@ -109,22 +112,7 @@ linters:
         path: internal/utils/preview\.go
       - linters:
           - errcheck
-          - staticcheck
-          - unused
-        path: internal/team/coordinator\.go
-      - linters:
-          - unused
-        path: internal/team/parse\.go
-      - linters:
-          - errcheck
-          - unused
-        path: internal/team/workspace\.go
-      - linters:
-          - errcheck
         path: internal/tools/view\.go
-      - linters:
-          - unused
-        path: internal/tools/bash\.go
       - linters:
           - errcheck
         path: internal/tools/tools\.go
