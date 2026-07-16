@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,6 +13,10 @@ import (
 )
 
 const sessionMDFile = "chat_history.md"
+
+// MaxSessionHistoryFiles bounds how many archived chat-history transcripts
+// (see ArchiveSessionMD) PruneSessionHistory keeps.
+const MaxSessionHistoryFiles = 20
 
 func SessionMDPath(workspace string) string {
 	return filepath.Join(workspace, sessionMDFile)
@@ -85,6 +90,13 @@ func ArchiveSessionMD(workspace string) (string, error) {
 			slug = strings.ReplaceAll(slug, " ", "-")
 			slug = strings.ReplaceAll(slug, "/", "-")
 			slug = strings.ReplaceAll(slug, "—", "-")
+			// The title line is typically "Session — <team>": the em-dash is
+			// surrounded by spaces, so the two replacements above each turn
+			// a neighboring space into "-", stacking into "---" before this
+			// collapses runs of dashes back down to one.
+			for strings.Contains(slug, "--") {
+				slug = strings.ReplaceAll(slug, "--", "-")
+			}
 			if len(slug) > 50 {
 				slug = slug[:50]
 			}
@@ -109,4 +121,37 @@ func ArchiveSessionMD(workspace string) (string, error) {
 		return path, fmt.Errorf("failed to remove session json: %w", err)
 	}
 	return path, nil
+}
+
+// PruneSessionHistory keeps at most keep of the archived chat-history
+// transcripts written by ArchiveSessionMD, deleting the oldest first.
+// Unlike history/*-stm.md snapshots — which ExtractLTMFromHistory distills
+// into ltm.md and then deletes — these are raw transcripts with no
+// structured extraction path, so nothing else ever removes them; left
+// alone they accumulate in the workspace forever.
+func PruneSessionHistory(workspace string, keep int) {
+	if keep < 0 {
+		return
+	}
+	histDir := filepath.Join(workspace, historyDirName)
+	entries, err := os.ReadDir(histDir)
+	if err != nil {
+		return
+	}
+	var files []string
+	for _, e := range entries {
+		if e.IsDir() || strings.HasSuffix(e.Name(), "-stm.md") {
+			continue
+		}
+		files = append(files, e.Name())
+	}
+	if len(files) <= keep {
+		return
+	}
+	// Filenames are date-prefixed ("YYYY-MM-DD-<slug>.md"), so lexical order
+	// is chronological order.
+	sort.Strings(files)
+	for _, name := range files[:len(files)-keep] {
+		_ = os.Remove(filepath.Join(histDir, name))
+	}
 }

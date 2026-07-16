@@ -209,6 +209,13 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	var conversationHistory []fantasy.Message
 	var lastErr error
+	// attemptsMade tracks how many attempts actually ran, since the loop can
+	// exit early (sameFailure, an unfixable verify error, or context
+	// cancellation) well before reaching maxRetries. The final failure
+	// message must report this, not the configured cap, or forensics on a
+	// 2-attempt exit reads "failed after 3 attempts" and looks inconsistent
+	// with the "repeated failure after 2 attempts" persisted alongside it.
+	attemptsMade := 0
 	// lastOutput keeps the most recent non-empty agent output so a final
 	// failure (e.g. deliverable verification) does not discard findings the
 	// coordinator could act on.
@@ -221,6 +228,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	escalate := taskEscalationEnabled(task, &c.session.Config, len(c.modelList)) &&
 		(!task.PlanFirst || task.PlanID != "")
 	for attempt := 1; attempt <= maxRetries; attempt++ {
+		attemptsMade = attempt
 		attemptStarted := time.Now()
 		c.recordExecutionEvent(todoID, agentName, attempt, "in_progress", resolvedModel, 0, ExecutionUsage{})
 		currentPrompt := prompt
@@ -412,7 +420,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				}
 				c.autoWriteSTMASync(agentName, taskDesc, output, "", true)
 				if appliedHint != "" {
-					c.persistReflexionLessonAsync(agentName, task.Goal, appliedHintTrigger, appliedHint, true)
+					c.persistReflexionLessonAsync(agentName, task.Goal, appliedHintTrigger, appliedHint, true, false)
 				}
 				return output, nil
 			}
@@ -429,6 +437,21 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}
 		for _, step := range steps {
 			conversationHistory = append(conversationHistory, step.Messages...)
+		}
+
+		// Unfixable-verify detection: a wrong-polarity verify command (see
+		// verifyTaskDeliverable) is set once by the coordinator at task
+		// assignment and the worker has no way to edit its own task's verify
+		// field — so it fails identically no matter what the worker does.
+		// Retrying just burns an attempt re-running real (sometimes
+		// destructive) work to reproduce a verification failure that was
+		// never about the deliverable. Stop after the first occurrence
+		// instead of waiting for sameFailure to catch the repeat.
+		if attempt < maxRetries && isUnfixableVerifyFailure(err) {
+			lastErr = err
+			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d hit a verify command that cannot be fixed by retrying (wrong exit-code polarity)", attempt)).withTodoID(todoID))
+			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("verify command has unfixable wrong polarity after %d attempt(s): %w", attempt, err), "error"))
+			break
 		}
 
 		// Repeated-failure detection: if this attempt failed with the same error
@@ -462,9 +485,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// records for the same failure.
 	c.autoWriteSTMASync(agentName, taskDesc, "", lastErr.Error(), false)
 	if maxRetries > 1 {
-		c.persistReflexionLessonAsync(agentName, task.Goal, lastErr.Error(), appliedHint, false)
+		c.persistReflexionLessonAsync(agentName, task.Goal, lastErr.Error(), appliedHint, false, isUnfixableVerifyFailure(lastErr))
 	}
-	failErr := fmt.Errorf("agent %q failed after %d attempts (model: %s): %w", agentName, maxRetries, resolvedModel, lastErr)
+	failErr := fmt.Errorf("agent %q failed after %d attempt(s) (model: %s): %w", agentName, attemptsMade, resolvedModel, lastErr)
 	if strings.TrimSpace(lastOutput) != "" {
 		failErr = fmt.Errorf("%w\n\nLast agent output before failure (may contain useful findings):\n%s", failErr, utils.TruncateRunes(lastOutput, 2000))
 	}
@@ -1035,6 +1058,17 @@ func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, las
 		return reflectionHeader + hint
 	}
 	return ""
+}
+
+// isUnfixableVerifyFailure reports whether err comes from the "wrong
+// polarity" verify-command detection in verifyTaskDeliverable (a
+// grep/grep-c-based cleanup check that asserts a resource EXISTS instead of
+// asserting it's GONE). The task.Verify command is fixed by the coordinator
+// at task-assignment time — the worker executing the task has no way to
+// edit its own verify field — so this failure is guaranteed to recur
+// identically on every retry regardless of what the worker does.
+func isUnfixableVerifyFailure(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "wrong polarity")
 }
 
 // sameFailure reports whether two error messages represent the same underlying

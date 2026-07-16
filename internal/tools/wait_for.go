@@ -86,7 +86,15 @@ func executeWaitFor(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) 
 	effCfg := cfgWithMergedPaths(cfg, ctx)
 
 	if cdBlockRe.MatchString(args.Command) {
-		return fantasy.NewTextErrorResponse("'cd' is not allowed in wait_for commands — use absolute paths instead"), nil
+		// wait_for has no working_directory parameter, but the single most
+		// common shape ("cd <dir> && <rest>") is harmless here: each poll
+		// runs the whole string fresh in its own "bash -c" subshell, so the
+		// cd never persists across polls or leaks into anything else. Only
+		// that exact leading shape is let through — anything with cd
+		// anywhere else still rejects below.
+		if _, _, ok := extractLeadingCD(args.Command); !ok {
+			return fantasy.NewTextErrorResponse("'cd' is not allowed in wait_for commands — use absolute paths instead"), nil
+		}
 	}
 	if bannedCmdRe.MatchString(args.Command) {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("command '%s' is not allowed", args.Command)), nil

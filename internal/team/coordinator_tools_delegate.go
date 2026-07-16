@@ -55,6 +55,23 @@ type requestAgentTool struct {
 }
 
 func (t *requestAgentTool) Info() fantasy.ToolInfo {
+	// Built fresh on every call (Info takes no ctx/caller identity, so this
+	// can't exclude "self" — a real run still hit two self-delegation
+	// attempts even with the hint below). The enum is the concrete fix: it
+	// stops the model from inventing agent names that were never valid (a
+	// real run once tried delegating to "exec", which does not exist).
+	agentDesc := "Name of the specific agent to assign this task to. If omitted, the best available agent is selected automatically. You cannot delegate to yourself (the agent making this call) — the coordinator rejects that as a delegation cycle."
+	agentParam := map[string]any{
+		"type":        "string",
+		"description": agentDesc,
+	}
+	if workers := t.coordinator.uniqueWorkerDefs(); len(workers) > 0 {
+		names := make([]string, 0, len(workers))
+		for _, w := range workers {
+			names = append(names, w.Name)
+		}
+		agentParam["enum"] = names
+	}
 	return fantasy.ToolInfo{
 		Name:        "request_agent",
 		Description: "Request the coordinator to delegate a task to another agent. Describe what needs to be done (goal) and any constraints. The coordinator will select the best agent and return the result. You are paused until the result is ready.",
@@ -67,10 +84,7 @@ func (t *requestAgentTool) Info() fantasy.ToolInfo {
 				"type":        "string",
 				"description": "Non-obvious restrictions the sub-agent must respect",
 			},
-			"agent": map[string]any{
-				"type":        "string",
-				"description": "Name of the specific agent to assign this task to. If omitted, the best available agent is selected automatically.",
-			},
+			"agent": agentParam,
 		},
 		Required: []string{"goal"},
 	}

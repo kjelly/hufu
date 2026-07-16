@@ -186,7 +186,7 @@ go run ./cmd/hufu
 | `--agent-team` | — | `string` | `""` | Agent team name to load |
 | `--agent-team-search-path` | — | `string` | `""` | Team search paths (comma-separated), defaults to `.agent-teams/,~/.agent-teams/` |
 | `--memory` | — | `bool` | `false` | Enable long-term memory (RAG vector search) |
-| `--memory-model` | — | `string` | `""` | Embedding model for memory (default: `qwen3-embedding:4b`) |
+| `--memory-model` | — | `string` | `""` | Embedding model for memory (default: `ollama/nomic-embed-text:latest`) |
 | `--archive-memory` | — | `bool` | `false` | Archive session summary to memory and exit |
 | `--show-history` | — | `bool` | `false` | Show previous session history on resume |
 | `--dry-run` | — | `bool` | `false` | LLM-free preview of skill matching and available agents (no model calls, no agent execution) |
@@ -823,7 +823,7 @@ workspace/
 | **Vector Store** | chromem-go (in-process, file-based) |
 | **Embedding** | Ollama embeddings |
 | **Storage Location** | `~/.local/share/hufu/memory/<projectHash>/` |
-| **Default Embedding Model** | `qwen3-embedding:4b` |
+| **Default Embedding Model** | `ollama/nomic-embed-text:latest` |
 
 ### How It Works
 
@@ -1322,7 +1322,7 @@ The report includes:
 
 ```yaml
 provider-url: http://localhost:11434/v1
-embedding-model: qwen3-embedding:4b
+embedding-model: ollama/nomic-embed-text:latest
 ```
 
 ### Configuration Priority
@@ -1344,7 +1344,7 @@ Complete reference for all default values, including their source files:
 | Setting | Default | Source |
 |---------|---------|--------|
 | Provider URL | `http://localhost:11434/v1` | `agent.go` |
-| Embedding Model | `qwen3-embedding:4b` | `config.go` |
+| Embedding Model | `ollama/nomic-embed-text:latest` | `config.go` |
 
 ### Agent Settings
 

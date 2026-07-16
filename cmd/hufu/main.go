@@ -672,6 +672,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	}
 	if newSession {
 		team.ExtractLTMFromHistory(session.Workspace, session.Config.Name)
+		team.PruneSessionHistory(session.Workspace, team.MaxSessionHistoryFiles)
 	}
 
 	sessionData, oldSessionEntries, err := prepareSessionLifecycle(session)

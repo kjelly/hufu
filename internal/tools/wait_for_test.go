@@ -41,9 +41,14 @@ func TestWaitForValidation(t *testing.T) {
 			wantErr: "command parameter is required",
 		},
 		{
-			name:    "cd is blocked",
-			input:   `{"command":"cd /tmp && ls"}`,
+			name:    "cd is blocked outside the simple leading shape",
+			input:   `{"command":"echo hi; cd /tmp && ls"}`,
 			wantErr: "'cd' is not allowed",
+		},
+		{
+			name:    "leading cd to a disallowed path still fails on the path check",
+			input:   `{"command":"cd /tmp && ls"}`,
+			wantErr: "outside allowed paths",
 		},
 		{
 			name:    "banned builtin is blocked",
@@ -71,6 +76,27 @@ func TestWaitForValidation(t *testing.T) {
 				t.Errorf("error %q missing %q", resp.Content, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestWaitForLeadingCDIsAllowed(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker.txt")
+	if err := os.WriteFile(marker, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	cmd := fmt.Sprintf("cd %s && ls marker.txt", dir)
+	input := fmt.Sprintf(`{"command":%q}`, cmd)
+
+	resp, err := executeWaitFor(context.Background(), fantasy.ToolCall{ID: "1", Name: "wait_for", Input: input}, ToolConfig{AllowedPaths: []string{dir}})
+	if err != nil {
+		t.Fatalf("executeWaitFor returned unexpected error: %v", err)
+	}
+	if resp.IsError {
+		t.Fatalf("expected success for a leading 'cd <dir> && ...', got error: %s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "marker.txt") {
+		t.Errorf("output missing evidence the command ran in %q: %s", dir, resp.Content)
 	}
 }
 

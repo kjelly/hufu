@@ -159,7 +159,7 @@ go run ./cmd/hufu
 | `--agent-team` | — | `string` | `""` | 要載入的 Agent 團隊名稱 |
 | `--agent-team-search-path` | — | `string` | `""` | 團隊搜尋路徑（逗號分隔），預設為 `.agent-teams/,~/.agent-teams/` |
 | `--memory` | — | `bool` | `false` | 啟用長期記憶（RAG 向量搜尋） |
-| `--memory-model` | — | `string` | `""` | Memory 使用的 embedding model（預設：`qwen3-embedding:4b`） |
+| `--memory-model` | — | `string` | `""` | Memory 使用的 embedding model（預設：`ollama/nomic-embed-text:latest`） |
 | `--archive-memory` | — | `bool` | `false` | 將 session 摘要封存至 memory 後退出 |
 | `--show-history` | — | `bool` | `false` | 恢復時顯示先前的 session 歷史 |
 | `--dry-run` | — | `bool` | `false` | 不呼叫 LLM 的預覽，列出技能比對與可用 agents（不執行 agent） |
@@ -747,7 +747,7 @@ workspace/
 | **Vector Store** | chromem-go（程序內、檔案型） |
 | **Embedding** | Ollama embeddings |
 | **儲存位置** | `~/.local/share/hufu/memory/<projectHash>/` |
-| **預設 Embedding Model** | `qwen3-embedding:4b` |
+| **預設 Embedding Model** | `ollama/nomic-embed-text:latest` |
 
 ### 運作機制
 
@@ -1149,7 +1149,7 @@ go run ./cmd/hufu --report "重構模組"
 
 ```yaml
 provider-url: http://localhost:11434/v1
-embedding-model: qwen3-embedding:4b
+embedding-model: ollama/nomic-embed-text:latest
 ```
 
 ### 配置優先順序
@@ -1171,7 +1171,7 @@ CLI flag > hufu.yaml > 預設值
 | 設定 | 預設值 | 來源 |
 |------|--------|------|
 | Provider URL | `http://localhost:11434/v1` | `agent.go` |
-| Embedding Model | `qwen3-embedding:4b` | `config.go` |
+| Embedding Model | `ollama/nomic-embed-text:latest` | `config.go` |
 
 ### Agent 設定
 

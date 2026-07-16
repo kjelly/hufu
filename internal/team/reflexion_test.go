@@ -11,14 +11,15 @@ func TestFormatReflexionLesson(t *testing.T) {
 	long := strings.Repeat("x", 300)
 
 	cases := []struct {
-		name     string
-		agent    string
-		goal     string
-		failure  string
-		hint     string
-		rescued  bool
-		contains []string
-		absent   []string
+		name              string
+		agent             string
+		goal              string
+		failure           string
+		hint              string
+		rescued           bool
+		verifyPolarityBug bool
+		contains          []string
+		absent            []string
 	}{
 		{
 			name:     "rescued includes fix",
@@ -57,11 +58,21 @@ func TestFormatReflexionLesson(t *testing.T) {
 			hint:    long,
 			rescued: true,
 		},
+		{
+			name:              "verify polarity bug points at the verify command, not the task",
+			agent:             "deployer",
+			goal:              "Phase 5: cleanup",
+			failure:           `deliverable verification failed (command "grep -c br-verify"): exit status 1: 0 — wrong polarity`,
+			rescued:           false,
+			verifyPolarityBug: true,
+			contains:          []string{"agent deployer", "Phase 5: cleanup", "wrong exit-code polarity", "the task itself is fine"},
+			absent:            []string{"avoid this approach", "fixed by"},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := formatReflexionLesson(tc.agent, tc.goal, tc.failure, tc.hint, tc.rescued)
+			got := formatReflexionLesson(tc.agent, tc.goal, tc.failure, tc.hint, tc.rescued, tc.verifyPolarityBug)
 			for _, want := range tc.contains {
 				if !strings.Contains(got, want) {
 					t.Errorf("lesson %q missing %q", got, want)
@@ -85,7 +96,7 @@ func TestPersistReflexionLesson(t *testing.T) {
 		session: &TeamSession{Workspace: ws, Config: agent.TeamConfig{Name: "test"}},
 	}
 
-	lesson := formatReflexionLesson("coder", "fix bug", "verification failed", "create the file first", true)
+	lesson := formatReflexionLesson("coder", "fix bug", "verification failed", "create the file first", true, false)
 	c.persistReflexionLesson(lesson)
 
 	ltm := LoadLTM(ws, "test")

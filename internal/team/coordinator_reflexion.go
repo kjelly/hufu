@@ -19,10 +19,20 @@ const reflectionHeader = "\n\n## Reflection on Previous Failure\n\n"
 // formatReflexionLesson renders a single-line LTM lesson describing how a task
 // failed and, when rescued, what fixed it. Each part is truncated so the whole
 // lesson fits within the 200-rune cap that formatLTMEntry enforces.
-func formatReflexionLesson(agentName, goal, failure, hint string, rescued bool) string {
+//
+// verifyPolarityBug marks the isUnfixableVerifyFailure case: the task's own
+// actions succeeded, only its (coordinator-assigned, worker-immutable) verify
+// command had the wrong exit-code polarity for a cleanup/delete check. The
+// generic "avoid this approach" framing would be actively misleading there —
+// it tells future runs to avoid a task shape that was never actually wrong —
+// so this gets a distinct lesson pointing at the verify command instead.
+func formatReflexionLesson(agentName, goal, failure, hint string, rescued, verifyPolarityBug bool) string {
 	collapse := func(s string) string { return strings.Join(strings.Fields(s), " ") }
 	goal = utils.TruncateRunes(collapse(goal), 50)
 	failure = utils.TruncateRunes(collapse(failure), 60)
+	if verifyPolarityBug {
+		return fmt.Sprintf("agent %s: %q — actions succeeded but the verify command had wrong exit-code polarity (checked EXISTS instead of GONE); fix the verify command's polarity, the task itself is fine", agentName, goal)
+	}
 	if rescued {
 		hint = utils.TruncateRunes(collapse(hint), 60)
 		return fmt.Sprintf("agent %s: %q failed (%s); fixed by: %s", agentName, goal, failure, hint)
@@ -58,13 +68,13 @@ func (c *Coordinator) persistReflexionLesson(lesson string) {
 	}
 }
 
-func (c *Coordinator) persistReflexionLessonAsync(agentName, goal, failure, hint string, rescued bool) {
+func (c *Coordinator) persistReflexionLessonAsync(agentName, goal, failure, hint string, rescued, verifyPolarityBug bool) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[PANIC] persistReflexionLessonAsync recovered: %v", r)
 			}
 		}()
-		c.persistReflexionLesson(formatReflexionLesson(agentName, goal, failure, hint, rescued))
+		c.persistReflexionLesson(formatReflexionLesson(agentName, goal, failure, hint, rescued, verifyPolarityBug))
 	}()
 }

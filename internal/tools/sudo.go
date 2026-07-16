@@ -55,6 +55,18 @@ func executeSudo(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 
 	effCfg := cfgWithMergedPaths(cfg, ctx)
 
+	if args.WorkDir == "" {
+		if dir, rest, ok := extractLeadingCD(args.Command); ok {
+			args.WorkDir = dir
+			args.Command = rest
+		}
+	} else if dir, rest, ok := extractLeadingCD(args.Command); ok && sameDir(dir, args.WorkDir) {
+		// See the identical comment in executeBash: only strip a redundant
+		// leading cd when it targets the same directory as the explicit
+		// working_directory already set.
+		args.Command = rest
+	}
+
 	if args.WorkDir != "" {
 		abs, err := filepath.Abs(args.WorkDir)
 		if err != nil {

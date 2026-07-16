@@ -1,0 +1,76 @@
+{
+  "tool": "shell-use",
+  "target": "hufu",
+  "timestamp": "2026-07-12T16:14:55",
+  "total": 58,
+  "passed": 58,
+  "failed": 0,
+  "pass_rate": 100.0,
+  "categories": {
+    "cli_basics": {
+      "pass": 4,
+      "fail": 0,
+      "total": 4
+    },
+    "subcommands": {
+      "pass": 6,
+      "fail": 0,
+      "total": 6
+    },
+    "team_ops": {
+      "pass": 3,
+      "fail": 0,
+      "total": 3
+    },
+    "output_formats": {
+      "pass": 2,
+      "fail": 0,
+      "total": 2
+    },
+    "flags": {
+      "pass": 14,
+      "fail": 0,
+      "total": 14
+    },
+    "security": {
+      "pass": 3,
+      "fail": 0,
+      "total": 3
+    },
+    "budget": {
+      "pass": 4,
+      "fail": 0,
+      "total": 4
+    },
+    "model_overrides": {
+      "pass": 8,
+      "fail": 0,
+      "total": 8
+    },
+    "combinations": {
+      "pass": 3,
+      "fail": 0,
+      "total": 3
+    },
+    "discovery": {
+      "pass": 2,
+      "fail": 0,
+      "total": 2
+    },
+    "prompt_syntax": {
+      "pass": 2,
+      "fail": 0,
+      "total": 2
+    },
+    "help_subcommands": {
+      "pass": 4,
+      "fail": 0,
+      "total": 4
+    },
+    "error_handling": {
+      "pass": 3,
+      "fail": 0,
+      "total": 3
+    }
+  }
+}

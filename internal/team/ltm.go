@@ -160,12 +160,49 @@ func TruncateLTM(content string) string {
 	if len(runes) <= maxLTMChars {
 		return content
 	}
-	tail := string(runes[len(runes)-maxLTMChars:])
-	// Drop the partial first line so truncation never leaves a torn entry.
-	if idx := strings.IndexByte(tail, '\n'); idx >= 0 && idx < len(tail)-1 {
-		tail = tail[idx+1:]
+	sections := ParseSTMSections(content)
+	if len(sections) == 0 {
+		// No recognizable "# section" structure (e.g. free-form text) — fall
+		// back to a raw tail cut, dropping the partial first line so
+		// truncation never leaves a torn entry.
+		tail := string(runes[len(runes)-maxLTMChars:])
+		if idx := strings.IndexByte(tail, '\n'); idx >= 0 && idx < len(tail)-1 {
+			tail = tail[idx+1:]
+		}
+		return tail
 	}
-	return tail
+	// Sections render in a fixed order (Conventions, Architecture, Patterns,
+	// Issues, Files, Tools); a raw tail cut on the whole rendered string
+	// would wipe out entire early sections before ever touching a single
+	// stale entry in a later one, which has nothing to do with importance.
+	// Instead drop the oldest (last, since entries are newest-first) entry
+	// from whichever section currently holds the most entries, repeating
+	// until the render fits.
+	render := func() string {
+		var kept []STMSection
+		for _, s := range sections {
+			if len(s.Entries) > 0 {
+				kept = append(kept, s)
+			}
+		}
+		return FormatSTMSections(kept)
+	}
+	for len([]rune(render())) > maxLTMChars {
+		largest := -1
+		for i, s := range sections {
+			if len(s.Entries) == 0 {
+				continue
+			}
+			if largest == -1 || len(s.Entries) > len(sections[largest].Entries) {
+				largest = i
+			}
+		}
+		if largest == -1 {
+			break
+		}
+		sections[largest].Entries = sections[largest].Entries[:len(sections[largest].Entries)-1]
+	}
+	return render()
 }
 
 // extractLTMFromContent merges knowledge from one STM snapshot (stmContent)
@@ -264,6 +301,18 @@ func ClassifyLTMEntry(entry string, source string) string {
 		strings.Contains(entry, "必須") || strings.Contains(entry, "不可") ||
 		strings.Contains(entry, "應該") || strings.Contains(entry, "每次") {
 		return ltmSectionConventions
+	}
+
+	// An "error"-sourced entry is a failure record by definition — that's
+	// already this function's own fallback for source=="error" below. Route
+	// it to Issues here, ahead of the Patterns keyword scan, so incidental
+	// wording can't steal the classification. persistReflexionLesson's
+	// un-rescued lessons all end in "avoid this approach", and "approach"
+	// alone used to match the Patterns check before Issues ever got a look,
+	// so every automatically-generated failure lesson landed in "常見模式"
+	// instead of "已知問題與解法" regardless of what actually failed.
+	if source == "error" {
+		return ltmSectionIssues
 	}
 
 	if strings.Contains(lower, "pattern") || strings.Contains(lower, "approach") ||

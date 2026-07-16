@@ -34,7 +34,12 @@ func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 		if len(sections) > 0 {
 			for i, s := range sections {
 				if len(s.Entries) > 3 {
-					sections[i].Entries = s.Entries[len(s.Entries)-3:]
+					// Entries are newest-first (appendSTMEntry prepends), so
+					// the 3 most recent are the head of the slice, not the
+					// tail — a tail slice here silently hid the freshest
+					// lessons from every agent until they aged toward the
+					// 10-entry cap in PruneLTM.
+					sections[i].Entries = s.Entries[:3]
 				}
 			}
 			ltm := FormatSTMSections(sections)
@@ -112,7 +117,9 @@ func (c *Coordinator) buildLTMContext() string {
 	}
 	for i, s := range sections {
 		if len(s.Entries) > 3 {
-			sections[i].Entries = s.Entries[len(s.Entries)-3:]
+			// See the identical comment in buildMemorySuffix: entries are
+			// newest-first, so the head of the slice is the recent 3.
+			sections[i].Entries = s.Entries[:3]
 		}
 	}
 	ltm := FormatSTMSections(sections)

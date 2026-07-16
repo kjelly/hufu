@@ -61,7 +61,7 @@ hufu [prompt]
   --agent-team                         Directly specify team name (no @ needed in prompt)
   --agent-team-search-path             Comma-separated search paths (default: .agent-teams/,~/.agent-teams/)
   --memory                             Enable long-term memory (RAG vector search)
-  --memory-model                       Embedding model (default: qwen3-embedding:4b)
+  --memory-model                       Embedding model (default: ollama/nomic-embed-text:latest)
   --archive-memory                     Archive session summary to memory and exit
   --show-history                       Show previous session history on resume
   --dry-run                            Preview skill matching and task delegation without executing agents
@@ -1155,14 +1155,14 @@ workspace/
 | **Vector Store** | `chromem-go` (in-process, no external DB) |
 | **Embedding** | Ollama embeddings |
 | **Storage** | `~/.local/share/hufu/memory/<projectHash>/` |
-| **Default Model** | `qwen3-embedding:4b` |
+| **Default Model** | `ollama/nomic-embed-text:latest` |
 
 ## 16. Configuration File (hufu.yaml)
 
 ```yaml
 provider-url: http://localhost:11434/v1
 provider-api-key: ""                    # API key
-embedding-model: qwen3-embedding:4b
+embedding-model: ollama/nomic-embed-text:latest
 max-concurrent: 8
 vars:
   project_name: "default"
@@ -1177,7 +1177,7 @@ vars:
 | Setting | Default | Source |
 |---------|---------|--------|
 | Provider URL | `http://localhost:11434/v1` | `config.go` |
-| Embedding Model | `qwen3-embedding:4b` | `config.go` |
+| Embedding Model | `ollama/nomic-embed-text:latest` | `config.go` |
 | Max Concurrent | `8` | `main.go` |
 
 ### Agent Settings

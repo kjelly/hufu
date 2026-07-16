@@ -121,7 +121,7 @@ Results joined and printed to stdout
 | `--agent-team` | — | `""` | Agent team name to load |
 | `--agent-team-search-path` | — | `""` | Team search paths (comma-separated), defaults to `.agent-teams/,~/.agent-teams/` |
 | `--memory` | — | `false` | Enable long-term memory (RAG vector search) |
-| `--memory-model` | — | `""` | Embedding model for memory (default: `qwen3-embedding:4b`) |
+| `--memory-model` | — | `""` | Embedding model for memory (default: `ollama/nomic-embed-text:latest`) |
 | `--archive-memory` | — | `false` | Archive session summary to memory and exit |
 | `--show-history` | — | `false` | Show previous session history on resume |
 | `--dry-run` | — | `false` | LLM-free preview of skill matching and available agents (does not call the model, does not execute agents) |

@@ -43,6 +43,52 @@ var cdPathRe = regexp.MustCompile(`(?:^|\s|;|&|\||\n)cd\s+(?:'([^']+)'|"([^"]+)"
 
 var cdBlockRe = regexp.MustCompile(`(?:^|[;&&|\|\||\(\s]+)\s*cd\s`)
 
+// leadingCDRe matches the single most common shape models default to out of
+// shell habit: "cd <dir> && <rest>" at the very start of the command, with
+// no other cd anywhere else. Real runs hit this 5 times in one session
+// (always this exact shape) and burned a round trip each time on a reject
+// that just repeats what the tool description already says.
+var leadingCDRe = regexp.MustCompile(`^\s*cd\s+(?:'([^']+)'|"([^"]+)"|(\S+))\s*&&\s*(.+)$`)
+
+// extractLeadingCD splits a "cd <dir> && <rest>" command into its directory
+// and remainder. It only fires for that exact leading shape — if a cd
+// remains anywhere in rest (multiple directory changes, cd after other
+// commands), it returns ok=false so the caller falls back to the normal
+// reject, since that shape is more likely genuine multi-step shell logic a
+// blind rewrite could misinterpret.
+func extractLeadingCD(command string) (dir, rest string, ok bool) {
+	m := leadingCDRe.FindStringSubmatch(command)
+	if m == nil {
+		return "", "", false
+	}
+	dir = m[1]
+	if dir == "" {
+		dir = m[2]
+	}
+	if dir == "" {
+		dir = m[3]
+	}
+	rest = strings.TrimSpace(m[4])
+	if rest == "" || cdBlockRe.MatchString(rest) {
+		return "", "", false
+	}
+	return dir, rest, true
+}
+
+// sameDir reports whether a and b resolve to the same absolute directory.
+// Used to tell a genuinely redundant "cd <dir> && ..." (same dir as an
+// already-set working_directory) from a conflicting one, without resolving
+// symlinks — this is just for spotting an obviously redundant prefix, not a
+// security check.
+func sameDir(a, b string) bool {
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return filepath.Clean(absA) == filepath.Clean(absB)
+}
+
 var systemPathPrefixes = []string{"/usr/", "/bin/", "/sbin/", "/lib/", "/lib32/", "/lib64/", "/proc/", "/sys/", "/dev/", "/etc/alternatives/"}
 
 type bashArgs struct {
@@ -274,6 +320,21 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 	}
 	if args.Command == "" {
 		return fantasy.NewTextErrorResponse("command parameter is required"), nil
+	}
+
+	if args.WorkDir == "" {
+		if dir, rest, ok := extractLeadingCD(args.Command); ok {
+			args.WorkDir = dir
+			args.Command = rest
+		}
+	} else if dir, rest, ok := extractLeadingCD(args.Command); ok && sameDir(dir, args.WorkDir) {
+		// A model that already set working_directory sometimes also
+		// habitually prefixes the command with a redundant "cd <same dir>
+		// && ...". Only strip it when the cd target matches the explicit
+		// working_directory — if they differ, that may be a genuine (if
+		// unusual) request for two different directories, so the reject
+		// below still applies rather than silently picking one.
+		args.Command = rest
 	}
 
 	if args.WorkDir != "" {

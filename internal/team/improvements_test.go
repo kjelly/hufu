@@ -142,6 +142,26 @@ func TestSameFailure(t *testing.T) {
 	}
 }
 
+func TestIsUnfixableVerifyFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"wrong polarity", fmt.Errorf(`deliverable verification failed (command "grep -c foo"): exit status 1: 0 — wrong polarity: the verify command checked that a resource EXISTS`), true},
+		{"unrelated verify failure", fmt.Errorf(`deliverable verification failed (command "test -f report.md"): exit status 1`), false},
+		{"timeout", fmt.Errorf("verification timed out after 5s"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isUnfixableVerifyFailure(tt.err); got != tt.want {
+				t.Errorf("isUnfixableVerifyFailure(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
 // ── Local failure hints ───────────────────────────────────────────────────────
 
 func TestLocalFailureHint(t *testing.T) {

@@ -161,6 +161,29 @@ func TestTruncateLTMDropsPartialFirstLine(t *testing.T) {
 	}
 }
 
+// A raw tail-of-string cut on a properly sectioned file (Conventions,
+// Architecture, Patterns, ...) would wipe out the earliest sections first
+// purely because of where they render, regardless of how much content is in
+// them. TruncateLTM must instead drop entries from whichever section is
+// largest, so an early section with real content survives over a late
+// section that's mostly padding.
+func TestTruncateLTMDropsFromLargestSectionNotEarliestSection(t *testing.T) {
+	var padding []string
+	for range maxLTMChars / 10 {
+		padding = append(padding, "- padding entry to force truncation")
+	}
+	content := ltmSectionConventions + "\n- important rule to keep\n\n" +
+		ltmSectionTools + "\n" + strings.Join(padding, "\n")
+
+	got := TruncateLTM(content)
+	if len([]rune(got)) > maxLTMChars {
+		t.Fatalf("length %d exceeds cap %d", len([]rune(got)), maxLTMChars)
+	}
+	if !strings.Contains(got, "important rule to keep") {
+		t.Errorf("TruncateLTM dropped the small early section instead of trimming the large late one:\n%s", got[:min(200, len(got))])
+	}
+}
+
 func TestPruneLTM(t *testing.T) {
 	content := "# 專案慣例\n- entry1\n- entry2\n- entry3\n- entry4\n- entry5\n- entry6\n- entry7\n- entry8\n- entry9\n- entry10\n- entry11"
 	got := PruneLTM(content)
@@ -215,6 +238,15 @@ func TestClassifyLTMEntry(t *testing.T) {
 		{"switch from SQLite to PostgreSQL", "decision", ltmSectionArchitecture},
 		{"fixed: timeout by adding retry logic", "error", ltmSectionIssues},
 		{"run go build before deploying", "finding", ltmSectionTools},
+		// persistReflexionLesson's un-rescued lessons always end in "avoid
+		// this approach" — "approach" alone used to match the Patterns
+		// keyword check before Issues ever got a look, since that check ran
+		// ahead of the source=="error" routing below.
+		{`agent deployer: "cleanup" fails: deliverable verification failed — avoid this approach`, "error", ltmSectionIssues},
+		{"context canceled", "error", ltmSectionIssues},
+		// An explicit convention/rule signal still wins over the generic
+		// error-source default.
+		{"always retry on timeout", "error", ltmSectionConventions},
 	}
 	for _, tt := range tests {
 		got := ClassifyLTMEntry(tt.entry, tt.source)
