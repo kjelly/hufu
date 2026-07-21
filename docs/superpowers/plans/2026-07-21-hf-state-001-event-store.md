@@ -10,7 +10,7 @@
 3. Create `internal/team/event_store.go` implementing `RunEvent` struct (schema version, ID, previous_id, run_id, session_id, branch_id, task_id, attempt, actor, type, timestamp, idempotency_key, payload, previous_hash, hash) and `EventStore` JSONL logger with SHA-256 hash chaining.
 4. Implement dual-write logic in `Coordinator` and `SessionData` to emit all workflow lifecycle events (`run_started`, `user_message_added`, `task_started`, `task_completed`, `compaction_created`, etc.) while retaining legacy files.
 5. Build state reducers `ReduceToSessionData` and `ReduceToTodoList` in `internal/team/event_reducers.go` to reconstruct session context and task state directly from `EventStore` logs, verified with unit tests.
-6. Update documentation `tmp/hufu-future-improvement-roadmap.md` marking `HF-STATE-001`, `HF-PR-104`, and `HF-PR-002` as `🟡 IMPLEMENTED (PENDING REVIEW)`.
+6. Update documentation `docs/hufu-future-improvement-roadmap.md` marking `HF-STATE-001`, `HF-PR-104`, and `HF-PR-002` as `🟡 IMPLEMENTED (PENDING REVIEW)`.
 
 **Tech Stack:** Go 1.26.2, standard library (`os`, `sync`, `crypto/sha256`, `encoding/json`, `path/filepath`), `internal/team`.
 
@@ -796,9 +796,9 @@ git commit -m "feat(team): integrate dual-write event store into coordinator exe
 ### Task 5: Document Update & Verification (HF-STATE-001)
 
 **Files:**
-- Modify: `tmp/hufu-future-improvement-roadmap.md`
+- Modify: `docs/hufu-future-improvement-roadmap.md`
 
-- [ ] **Step 1: Update status in `tmp/hufu-future-improvement-roadmap.md`**
+- [ ] **Step 1: Update status in `docs/hufu-future-improvement-roadmap.md`**
 
 Mark `HF-STATE-001` in Section 3 as `🟡 IMPLEMENTED (PENDING REVIEW)`.
 Mark `HF-PR-104` and `HF-PR-002` as `🟡 IMPLEMENTED (PENDING REVIEW)`.
@@ -811,6 +811,6 @@ Expected: PASS with 0 errors.
 - [ ] **Step 3: Commit documentation updates**
 
 ```bash
-git add tmp/hufu-future-improvement-roadmap.md
+git add docs/hufu-future-improvement-roadmap.md
 git commit -m "docs: mark HF-STATE-001 (HF-PR-104, HF-PR-002) as implemented pending review"
 ```

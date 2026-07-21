@@ -122,8 +122,8 @@ hufu 不應演進成另一個「單代理 terminal coding agent」，也不應�
 | HF-CTX-001 | P0 | ✅ 已修復（`5f97001`）；殘餘見 HF-PR-001R | session 恢復可能遺失最近內容或保留錯誤時間區段 |
 | HF-CTX-002 | P0 | ✅ 已完成（工作區未合入） | context budget 已實作 model-aware token budget (TokenCounter, ModelContextSpec, ContextBudget)；report breakdown 已接線 `--report`、`estimated` 已 log、compaction token 計數已 model-aware |
 | HF-CTX-003 | P0 | ✅ 已完成（工作區未合入） | compaction 對 tool call/result、artifact、verification 保留不足；殘餘 HF-PR-103 已實作完成（ValidateStructuredSummary 5 項 deterministic 檢查、UserCorrections/SourceEntryIDs 欄位、fallback 保留舊 summary），已 Review 通過 |
-| HF-STATE-001 | P0 | 🟡 IMPLEMENTED (PENDING REVIEW) | session、history、STM、LTM、journal、audit 多份狀態缺少單一真相來源；HF-PR-104 已實作 append-only event store (RunEvent, SHA-256 hash chain, dual-write telemetry, state reducers)，待 Review |
-| HF-STATE-002 | P0 | 🟡 IMPLEMENTED (PENDING REVIEW) | snapshot write 與 crash recovery 一致性不足；HF-PR-002 已實作 AtomicWriteFile (temp write + fsync + atomic rename + dir sync) 與 crash recovery 測試，待 Review |
+| HF-STATE-001 | P0 | 🟡 IMPLEMENTED (PENDING REVIEW) | session、history、STM、LTM、journal、audit 多份狀態缺少單一真相來源；HF-PR-104 已實作 append-only event store (RunEvent, SHA-256 hash chain, dual-write telemetry, state reducers)、訊息/任務雙寫已接線、task 事件冪等去重。殘留 follow-up（見 `docs/superpowers/plans/2026-07-21-hf-state-001-quality-fixes.md` Residual F1–F3）：F1 訊息事件 dual-write 失敗未計入 `DualWriteFailures()`、F2 `emittedTaskTransitions` 跨 resume 不持久化、F3 `OpenEventStore` runID/sessionID 繼承缺獨立測試。待 F1 補完再推進 🟢 |
+| HF-STATE-002 | P0 | 🟡 IMPLEMENTED (PENDING REVIEW) | snapshot write 與 crash recovery 一致性不足；HF-PR-002 已實作 AtomicWriteFile (temp write + fsync + atomic rename + dir sync)，`SaveSession`/`SaveSessionMD`/`SaveCompactionRecord` 全數改用，並涵蓋 crash recovery 測試。Review 備註：`SyncDir` 失敗目前被靜默忽略（`_ = SyncDir(dir)`），極端情境下目錄項未 fsync 可能影響 rename 持久性，建議後續將 `SyncDir` 錯誤納入回傳或計量。待 Review |
 | HF-CACHE-001 | P0 | 🟡 PARTIAL（identity 已含 verify+mode+generation；缺 CachePolicy 與環境指紋） | cache 缺少 workspace/source/environment freshness |
 | HF-RECOVERY-001 | P0 | 🔴 OPEN（風險最高，建議升入下一批 P0） | interrupted task resume 未完整區分可安全重跑與非冪等副作用 |
 | HF-ARCH-001 | P1 | 🟡 PARTIAL（檔案已拆分 `58e5a54`；struct 層面介面解耦未做） | `Coordinator` 聚合過多責任，難測試、難嵌入、難擴充 |
@@ -497,7 +497,14 @@ hufu session diff <branch-a> <branch-b>
 
 ## 9. Append-only Session Event Store
 
-> **落地狀態：🟡 IMPLEMENTED (PENDING REVIEW)**。已於 `internal/team/event_store.go` 實作 `RunEvent`（SchemaVersion, ID, PreviousID, RunID, SessionID, BranchID, TaskID, Attempt, Actor, Type, Timestamp, IdempotencyKey, Payload, PreviousHash, Hash）、`EventStore` (SHA-256 hash chain 驗證)、dual-write 機制、`event_reducers.go` (`ReduceToSessionData`, `ReduceToTodoList`)，單元測試與整合測試全綠，待 Review。對應工作卡 HF-PR-104。
+> **落地狀態：🟡 IMPLEMENTED (PENDING REVIEW)**。已於 `internal/team/event_store.go` 實作 `RunEvent`（SchemaVersion, ID, PreviousID, RunID, SessionID, BranchID, TaskID, Attempt, Actor, Type, Timestamp, IdempotencyKey, Payload, PreviousHash, Hash）、`EventStore`（SHA-256 hash chain 驗證；`NewEventStore` 空參數時繼承 last event 的 runID/sessionID）、dual-write 機制（`coordinator_run.go` 5 處訊息新增已改用 `addSessionUserMessage`/`addSessionAssistantMessage`；task 事件經 `emitTaskEventsFromCheckpoint` 以 `IdempotencyKey = taskID:status:retries` 冪等去重，並區分 `task_skipped`/`task_blocked`）、`event_reducers.go` (`ReduceToSessionData`, `ReduceToTodoList`)，單元/整合測試全綠（`TestCoordinatorRunEmitsSessionEvents`、`TestDeduplicatedTaskEventsEmission` 等）。
+>
+> **殘留 follow-up（2026-07-21 第二輪 Review，詳見 `docs/superpowers/plans/2026-07-21-hf-state-001-quality-fixes.md` Residual §F1–F3）：**
+> - **F1（建議結案前修）**：`RecordSessionUserMessage`/`RecordSessionAssistantMessage` 失敗時只 `log.Printf`，未遞增 `Coordinator.dualWriteFailures`，使 `DualWriteFailures()` 漏掉訊息事件失敗。
+> - **F2**：`emittedTaskTransitions` 去重 map 不持久化，session resume 後第一次 checkpoint 會對已完成任務重發一次 `task_completed`（telemetry 階段可接受，升為真相來源前需處理）。
+> - **F3**：`OpenEventStore` runID/sessionID 繼承缺獨立斷言測試。
+>
+> 待 F1 補完後再評估推進 🟢。對應工作卡 HF-PR-104。
 
 ### 9.1 問題
 
@@ -606,7 +613,9 @@ evidence_validated
 
 ## 10. Atomic snapshot 與 schema migration
 
-> **落地狀態：🟡 IMPLEMENTED (PENDING REVIEW)**。已實作 `internal/team/atomic_write.go` (`AtomicWriteFile`: temp write + `Sync()` + `os.Rename` + directory `SyncDir`)，`SaveSession`、`SaveSessionMD`、`SaveCompactionRecord` 已全數改用此 helper，並於 `atomic_write_test.go` 涵蓋 crash 恢復測試，待 Review。對應工作卡 HF-PR-002。
+> **落地狀態：🟡 IMPLEMENTED (PENDING REVIEW)**。已實作 `internal/team/atomic_write.go` (`AtomicWriteFile`: temp write + `Sync()` + `os.Rename` + directory `SyncDir`)，`SaveSession`、`SaveSessionMD`、`SaveCompactionRecord` 已全數改用此 helper，並於 `atomic_write_test.go` 涵蓋 crash 恢復測試。
+>
+> **Review 備註（2026-07-21 第二輪）：** `AtomicWriteFile` 最後 `_ = SyncDir(dir)` 將目錄 fsync 錯誤靜默忽略；極端情境（檔案系統不保證 rename 後目錄項即時持久）下可能影響 rename 的 crash 持久性。建議後續將 `SyncDir` 錯誤納入回傳值或計量（殘留 follow-up，非 blocker）。待 Review。對應工作卡 HF-PR-002。
 
 即使 event log 成為真相來源，仍可能需要 snapshot 加速啟動。
 
@@ -1870,7 +1879,7 @@ minimum hufu version
 
 ## 42. P0 工作卡（依建議指派順序排列）
 
-### HF-PR-002 Atomic persistence【🟡 IMPLEMENTED (PENDING REVIEW)｜S｜依賴：無】
+### HF-PR-002 Atomic persistence【🟡 IMPLEMENTED (PENDING REVIEW)｜S｜依賴：無｜Review 備註：SyncDir 錯誤靜默忽略】
 
 - **背景**：`SaveSession`（`internal/team/session.go`）用 `os.WriteFile` 直接覆寫 session.json，crash 會留下半份 JSON；全 repo 無 `fsync`。`task_journal.go` 的註解已明確承認此缺口。設計細節見 §10。
 - **既有基礎**：`internal/team/task_journal.go` 的 compaction 已是 temp+rename 模式，直接照抄。
@@ -1902,7 +1911,7 @@ minimum hufu version
   ```
 - **指派指令**：
   ```text
-  HF-PR-001R：為 session resume 加上 head/goal retention。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-001R 工作卡與 §4，修改 internal/team/session.go 的 ContextSummary 採 head（最初 user goal）+ tail（最近 40 筆）結構，補 41/80/200/1000 筆測試，跑卡上的驗證指令。
+  HF-PR-001R：為 session resume 加上 head/goal retention。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-001R 工作卡與 §4，修改 internal/team/session.go 的 ContextSummary 採 head（最初 user goal）+ tail（最近 40 筆）結構，補 41/80/200/1000 筆測試，跑卡上的驗證指令。
   ```
 
 ---
@@ -1923,7 +1932,7 @@ minimum hufu version
   ```
 - **指派指令**：
   ```text
-  HF-PR-003：為 task cache 加上明確 CachePolicy（use/refresh/bypass）。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-003 工作卡與 §12，在 TaskDef 加 cache_policy 欄位並讓 coordinator_taskcache.go 的 lookup/store 遵守，journal 記錄 policy，補測試並跑卡上的驗證指令。
+  HF-PR-003：為 task cache 加上明確 CachePolicy（use/refresh/bypass）。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-003 工作卡與 §12，在 TaskDef 加 cache_policy 欄位並讓 coordinator_taskcache.go 的 lookup/store 遵守，journal 記錄 policy，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -1943,7 +1952,7 @@ minimum hufu version
   ```
 - **指派指令**：
   ```text
-  HF-PR-004：為 capability preflight 加 TTL 與 mutation invalidation。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-004 工作卡與 §12.4，修改 internal/team/capability.go 加快取 TTL、scope invalidation 與 always-fresh 支援，補測試並跑卡上的驗證指令。
+  HF-PR-004：為 capability preflight 加 TTL 與 mutation invalidation。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-004 工作卡與 §12.4，修改 internal/team/capability.go 加快取 TTL、scope invalidation 與 always-fresh 支援，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -1963,7 +1972,7 @@ minimum hufu version
   ```
 - **指派指令**：
   ```text
-  HF-PR-005：實作 required skill 鎖定。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-005 工作卡，team.yml 加 required-skills（可附 hash），載入時缺失或不符即 fatal，並納入 hufu doctor，補測試並跑卡上的驗證指令。
+  HF-PR-005：實作 required skill 鎖定。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-005 工作卡，team.yml 加 required-skills（可附 hash），載入時缺失或不符即 fatal，並納入 hufu doctor，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -1983,7 +1992,7 @@ minimum hufu version
   ```
 - **指派指令**：
   ```text
-  HF-PR-006：為 acceptance 加 advisory/blocking 分級。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-006 工作卡與 §16.3，team.yml acceptance 支援 mode，blocking 失敗時 exit code 非零且結果不得假裝完成（互動模式同），補測試並跑卡上的驗證指令。
+  HF-PR-006：為 acceptance 加 advisory/blocking 分級。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-006 工作卡與 §16.3，team.yml acceptance 支援 mode，blocking 失敗時 exit code 非零且結果不得假裝完成（互動模式同），補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2003,7 +2012,7 @@ minimum hufu version
   ```
 - **指派指令**：
   ```text
-  HF-PR-007：新增 hufu team lint 子命令。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-007 工作卡與 §35.1，在 cmd/hufu/teamcmd.go 掛新子命令，比照 list.go 直接讀 frontmatter（無 workspace side effect），實作 unknown tools/skills、duplicate agents、缺 coordinator、prompt 引用不存在 tool 等檢查，補測試並跑卡上的驗證指令。
+  HF-PR-007：新增 hufu team lint 子命令。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-007 工作卡與 §35.1，在 cmd/hufu/teamcmd.go 掛新子命令，比照 list.go 直接讀 frontmatter（無 workspace side effect），實作 unknown tools/skills、duplicate agents、缺 coordinator、prompt 引用不存在 tool 等檢查，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2024,7 +2033,7 @@ minimum hufu version
   ```
 - **指派指令**：
   ```text
-  HF-PR-107：實作 side-effect-aware crash recovery。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-107 工作卡與 §11，TaskDef 加 side_effect 分級與 recovery policy，修改 ResumeInterruptedTasks 按 policy 分流（retry/reconcile/manual/never），補 fault-injection 測試並跑卡上的驗證指令。
+  HF-PR-107：實作 side-effect-aware crash recovery。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-107 工作卡與 §11，TaskDef 加 side_effect 分級與 recovery policy，修改 ResumeInterruptedTasks 按 policy 分流（retry/reconcile/manual/never），補 fault-injection 測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2051,7 +2060,7 @@ minimum hufu version
   ```
 - **指派指令**：
   ```text
-  HF-PR-101：實作 model-aware token budget。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-101 工作卡與 §5，建立 TokenCounter interface 與 ModelContextSpec registry（含 estimator fallback），把 context_budget.go 的固定字元預算改為 token 預算，overflow 自動 compact+retry 一次，report 加 breakdown，補測試並跑卡上的驗證指令。
+  HF-PR-101：實作 model-aware token budget。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-101 工作卡與 §5，建立 TokenCounter interface 與 ModelContextSpec registry（含 estimator fallback），把 context_budget.go 的固定字元預算改為 token 預算，overflow 自動 compact+retry 一次，report 加 breakdown，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2066,7 +2075,7 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/team/ -run 'TestContext|TestBuildOrchestrator|TestWorker' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-102：抽 ContextCompiler 子系統。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-102 工作卡與 §7，以 legacy adapter 漸進抽取 prompt 拼接邏輯，實作 ContextItem/priority/budget/provenance，補 regression test 並跑卡上的驗證指令。
+  HF-PR-102：抽 ContextCompiler 子系統。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-102 工作卡與 §7，以 legacy adapter 漸進抽取 prompt 拼接邏輯，實作 ContextItem/priority/budget/provenance，補 regression test 並跑卡上的驗證指令。
   ```
 
 ---
@@ -2081,12 +2090,12 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/team/ -run 'TestCompaction' -count=1 -v`
 - **指派指令**：
   ```text
-  HF-PR-103：補齊 structured compaction 殘餘。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-103 工作卡與 §6.4，在 internal/team/compaction.go 加 deterministic validator 與 UserCorrections/SourceEntryIDs 欄位，補測試並跑卡上的驗證指令。
+  HF-PR-103：補齊 structured compaction 殘餘。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-103 工作卡與 §6.4，在 internal/team/compaction.go 加 deterministic validator 與 UserCorrections/SourceEntryIDs 欄位，補測試並跑卡上的驗證指令。
   ```
 
 ---
 
-### HF-PR-104 Event store【🟡 IMPLEMENTED (PENDING REVIEW)｜XL｜依賴：HF-PR-002】
+### HF-PR-104 Event store【🟡 IMPLEMENTED (PENDING REVIEW)｜XL｜依賴：HF-PR-002｜殘留 F1–F3 見 quality-fixes plan】
 
 - **背景**：狀態分散於 6+ 份檔案，無統一 ordering/event ID/replay semantics（§9.1）。
 - **Schema 決策**：`RunEvent` 以本文件 §9.3 為準（含 `SessionID`／`BranchID`／`IdempotencyKey`）；event 類型取 §9.4 與 strict 文件 §7.3 的**聯集**（strict 版多出 `source_locked`／`skill_locked`／`task_authorized`／`terminal_started`／`terminal_closed`／`recovery_decided`／`acceptance_finished`）。
@@ -2095,7 +2104,7 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/team/ -run 'TestEvent|TestReplay|TestReducer' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-104：實作 append-only event store（dual-write 階段）。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-104 工作卡與 §9，按 §9.3 schema 建立 JSONL event store + hash chain，現有寫入路徑雙寫，實作 session/task reducers 並加比對測試，跑卡上的驗證指令。不要在本 PR 移除 legacy state。
+  HF-PR-104：實作 append-only event store（dual-write 階段）。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-104 工作卡與 §9，按 §9.3 schema 建立 JSONL event store + hash chain，現有寫入路徑雙寫，實作 session/task reducers 並加比對測試，跑卡上的驗證指令。不要在本 PR 移除 legacy state。
   ```
 
 ---
@@ -2112,7 +2121,7 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/team/ -run 'TestTaskResult|TestSubmitResult|TestExecute' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-105：實作 typed TaskResult 與 submit_result tool。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-105 工作卡與 §13，建立 TaskResult schema、submit_result tool 與 free-text compatibility parser（低信心標記），dependency injection 改用 typed result，補測試並跑卡上的驗證指令。
+  HF-PR-105：實作 typed TaskResult 與 submit_result tool。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-105 工作卡與 §13，建立 TaskResult schema、submit_result tool 與 free-text compatibility parser（低信心標記），dependency injection 改用 typed result，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2125,7 +2134,7 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/team/ -run 'TestDAG|TestResource|TestSchedule' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-106：為 DAG scheduler 加 resource lock。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-106 工作卡與 §14.4，TaskDef 加 ResourceClaim，scheduler 依 claim 避免不安全並行，補測試並跑卡上的驗證指令。
+  HF-PR-106：為 DAG scheduler 加 resource lock。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-106 工作卡與 §14.4，TaskDef 加 ResourceClaim，scheduler 依 claim 避免不安全並行，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2138,7 +2147,7 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/team/ -run 'TestArtifact|TestEvidence|TestManifest' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-108：實作 artifact/evidence store。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-108 工作卡與 §16，建立 artifact store（hash+metadata）、evidence validators 與 final manifest，report 加引用，補測試並跑卡上的驗證指令。
+  HF-PR-108：實作 artifact/evidence store。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-108 工作卡與 §16，建立 artifact store（hash+metadata）、evidence validators 與 final manifest，report 加引用，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2151,7 +2160,7 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/tools/ ./internal/team/ -run 'TestPolicy|TestGuard|TestPermission' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-109：實作 policy engine middleware。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-109 工作卡，建立 fail-closed 的 tool/MCP policy 中介層（含 secret redaction 與決策稽核），整合現有 guard/allowlist，補 regression test 並跑卡上的驗證指令。
+  HF-PR-109：實作 policy engine middleware。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-109 工作卡，建立 fail-closed 的 tool/MCP policy 中介層（含 secret redaction 與決策稽核），整合現有 guard/allowlist，補 regression test 並跑卡上的驗證指令。
   ```
 
 ---
@@ -2168,7 +2177,7 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/team/ ./internal/tools/ -run 'TestWorkspace' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-110：實作 control/subject workspace 分離驗證。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-110 工作卡與 strict 文件 §5.10，實作 ValidateWorkspaceSeparation（含 symlink/ancestor 檢查）並在 run 啟動時強制執行，補測試並跑卡上的驗證指令。
+  HF-PR-110：實作 control/subject workspace 分離驗證。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-110 工作卡與 strict 文件 §5.10，實作 ValidateWorkspaceSeparation（含 symlink/ancestor 檢查）並在 run 啟動時強制執行，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2184,7 +2193,7 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/tools/ ./internal/audit/ -run 'TestSecret|TestRedact' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-111：實作 secret registry 與統一 redaction。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-111 工作卡與 strict 文件 §5.11，建立 SecretRef/Redactor，audit/report 序列化前強制 redact 且 fail-closed，補掃描測試並跑卡上的驗證指令。
+  HF-PR-111：實作 secret registry 與統一 redaction。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-111 工作卡與 strict 文件 §5.11，建立 SecretRef/Redactor，audit/report 序列化前強制 redact 且 fail-closed，補掃描測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2199,7 +2208,7 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/team/ -run 'TestBranch|TestSessionTree' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-201：實作 session branch/fork。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-201 工作卡與 §8，基於 event store 建立 branch-scoped session tree 與 CLI，補測試並跑卡上的驗證指令。
+  HF-PR-201：實作 session branch/fork。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-201 工作卡與 §8，基於 event store 建立 branch-scoped session tree 與 CLI，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2212,7 +2221,7 @@ minimum hufu version
 - **驗證指令**：`go test ./... -run 'TestRPC|TestSDK|TestServe' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-202：實作 Go SDK 與 RPC serve mode。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-202 工作卡與 §19，建立 engine API、stdio/socket serve 與可重連的 event subscription，補測試並跑卡上的驗證指令。
+  HF-PR-202：實作 Go SDK 與 RPC serve mode。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-202 工作卡與 §19，建立 engine API、stdio/socket serve 與可重連的 event subscription，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2225,7 +2234,7 @@ minimum hufu version
 - **驗證指令**：`go test ./... -run 'TestExtension' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-203：實作 versioned extension API。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-203 工作卡與 §18，建立 extension manifest/permissions/stdio JSON-RPC transport，補測試並跑卡上的驗證指令。
+  HF-PR-203：實作 versioned extension API。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-203 工作卡與 §18，建立 extension manifest/permissions/stdio JSON-RPC transport，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2238,7 +2247,7 @@ minimum hufu version
 - **驗證指令**：`go test ./cmd/hufu/ ./internal/team/ -run 'TestTeamSchema|TestTeamLint|TestLoadTeam' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-204：實作 team schema version 與 contract tests。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-204 工作卡與 §35，加 apiVersion/JSON schema/version pinning 並提供舊 team 相容策略，補 contract tests 並跑卡上的驗證指令。
+  HF-PR-204：實作 team schema version 與 contract tests。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-204 工作卡與 §35，加 apiVersion/JSON schema/version pinning 並提供舊 team 相容策略，補 contract tests 並跑卡上的驗證指令。
   ```
 
 ---
@@ -2251,7 +2260,7 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/tui/ -count=1`
 - **指派指令**：
   ```text
-  HF-PR-205：為 TUI 加 DAG view 與 context inspector。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-205 工作卡與 §25，並遵守 AGENTS.md 的 TUI 安全規則（View 優先序、Update 純函數、key binding 測試），實作後跑卡上的驗證指令。
+  HF-PR-205：為 TUI 加 DAG view 與 context inspector。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-205 工作卡與 §25，並遵守 AGENTS.md 的 TUI 安全規則（View 優先序、Update 純函數、key binding 測試），實作後跑卡上的驗證指令。
   ```
 
 ---
@@ -2264,7 +2273,7 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/tui/ -count=1`
 - **指派指令**：
   ```text
-  HF-PR-206：為 TUI 加 runtime theme 與 e-paper mode。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-206 工作卡與 §26，建立 Theme interface 與五種內建主題，e-paper mode 停高頻動畫並保留 plain-text fallback，補測試並跑卡上的驗證指令。
+  HF-PR-206：為 TUI 加 runtime theme 與 e-paper mode。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-206 工作卡與 §26，建立 Theme interface 與五種內建主題，e-paper mode 停高頻動畫並保留 plain-text fallback，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2277,7 +2286,7 @@ minimum hufu version
 - **驗證指令**：`go test ./cmd/hufu/ -run 'TestRoute|TestAutoTeam' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-207：實作 fast/team ExecutionRouter。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-207 工作卡與 §15，整合 --default 與 autoteam.go 的既有機制，以 deterministic signals 為主做路由，補測試並跑卡上的驗證指令。
+  HF-PR-207：實作 fast/team ExecutionRouter。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-207 工作卡與 §15，整合 --default 與 autoteam.go 的既有機制，以 deterministic signals 為主做路由，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2293,7 +2302,7 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/team/ -run 'TestTerminal' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-112：實作 terminal session manager。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-112 工作卡與 strict 文件 §5.12，把 stateful terminal 建模為第一級 task resource（owner 綁定、leaked gate、timeout 分離、lifecycle event），補測試並跑卡上的驗證指令。
+  HF-PR-112：實作 terminal session manager。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-112 工作卡與 strict 文件 §5.12，把 stateful terminal 建模為第一級 task resource（owner 綁定、leaked gate、timeout 分離、lifecycle event），補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2309,7 +2318,7 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/team/ -run 'TestProfile' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-113：實作具名 execution profiles。讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-113 工作卡與 strict 文件 §7.2，建立 ExecutionProfile 與四個內建 profile（含 fresh-verification 隔離舊 memory/cache/journal），定義與 CLI flag 的優先規則，補測試並跑卡上的驗證指令。
+  HF-PR-113：實作具名 execution profiles。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-113 工作卡與 strict 文件 §7.2，建立 ExecutionProfile 與四個內建 profile（含 fresh-verification 隔離舊 memory/cache/journal），定義與 CLI flag 的優先規則，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2322,8 +2331,8 @@ minimum hufu version
 | HF-PR-103 主體 Structured compaction | `b9b4755` | 13-section summary、7 invariants、CompactionRecord 持久化、restart-safe offsets；殘餘 validator 見下方 |
 | HF-PR-103 殘餘 Validator | 工作區未合入 | `ValidateStructuredSummary` 5 項 deterministic 檢查（goal/activeTask/artifact/userCorrection/failedTask）、`UserCorrections`/`SourceEntryIDs` 欄位、fallback 保留舊 summary、coordinator_session 接線 task IDs |
 | HF-PR-101 Token counter | 工作區未合入 | `TokenCounter`／`ModelContextSpec` registry／`DefaultTokenCounter`（密度估算+保守 margin）／`CalculateContextBudget`／`CapStepMessagesWithCounter`（token 預算）／overflow compact+retry／report breakdown 接線 `--report`（`coordinator_context_report.go`）／`estimated` log（`warnEstimatedOnce`）／compaction token 計數 model-aware |
-| HF-PR-002 Atomic persistence | 工作區未合入 | `AtomicWriteFile`（temp write + `Sync()` + `os.Rename` + directory `SyncDir`），`SaveSession`、`SaveSessionMD`、`SaveCompactionRecord` 已全數改用此 helper，並於 `atomic_write_test.go` 涵蓋 crash 恢復測試 |
-| HF-PR-104 Event store | 工作區未合入 | `RunEvent`（SchemaVersion, ID, PreviousID, RunID, SessionID, BranchID, TaskID, Attempt, Actor, Type, Timestamp, IdempotencyKey, Payload, PreviousHash, Hash）、`EventStore`（SHA-256 hash chain 驗證）、dual-write 機制、`event_reducers.go` (`ReduceToSessionData`, `ReduceToTodoList`) |
+| HF-PR-002 Atomic persistence | 工作區未合入 | `AtomicWriteFile`（temp write + `Sync()` + `os.Rename` + directory `SyncDir`），`SaveSession`、`SaveSessionMD`、`SaveCompactionRecord` 已全數改用此 helper，並於 `atomic_write_test.go` 涵蓋 crash 恢復測試。Review 備註：`SyncDir` 錯誤被靜默忽略，建議後續納入回傳/計量 |
+| HF-PR-104 Event store | 工作區未合入 | `RunEvent`（SchemaVersion, ID, PreviousID, RunID, SessionID, BranchID, TaskID, Attempt, Actor, Type, Timestamp, IdempotencyKey, Payload, PreviousHash, Hash）、`EventStore`（SHA-256 hash chain 驗證；`NewEventStore` 空參數繼承 last runID/sessionID）、dual-write 機制（訊息 5 處接線 `addSessionUserMessage`/`addSessionAssistantMessage`；task 事件 `IdempotencyKey=taskID:status:retries` 冪等去重、`task_skipped`/`task_blocked` 區分）、`event_reducers.go` (`ReduceToSessionData`, `ReduceToTodoList`)。殘留 F1（訊息事件失敗未計入 `DualWriteFailures`）/F2（resume 去重不持久化）/F3（繼承缺測試）見 quality-fixes plan |
 
 ---
 
