@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +27,25 @@ type Result struct {
 	Content    string
 	Similarity float32
 	Metadata   map[string]string
+}
+
+type QueryOptions struct {
+	Query          string
+	N              int
+	Category       string
+	Project        string
+	Team           string
+	TaskID         string
+	FilePaths      []string
+	MinConfidence  float64
+	IncludeStatus  []string          // If empty, defaults to excluding superseded, expired, and rejected
+	MetadataFilter map[string]string // Additional chromem metadata key-value filters (AND logic) for backward compat (R1)
+}
+
+type QueryResult struct {
+	Record     MemoryRecord
+	Similarity float32
+	Score      float64
 }
 
 type MemoryStore struct {
@@ -143,24 +164,37 @@ func (s *MemoryStore) doInit() error {
 	return nil
 }
 
-func (s *MemoryStore) Save(ctx context.Context, id, content string, metadata map[string]string) error {
+// SaveRecord stores a MemoryRecord with full provenance, status, and confidence (§20.1).
+func (s *MemoryStore) SaveRecord(ctx context.Context, rec MemoryRecord) error {
 	if err := s.init(); err != nil {
 		return err
 	}
-	if metadata == nil {
-		metadata = make(map[string]string)
+	if rec.ID == "" {
+		rec.ID = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	if rec.CreatedAt.IsZero() {
+		rec.CreatedAt = time.Now()
+	}
+	if rec.Status == "" {
+		rec.Status = StatusCandidate
+	}
+	if rec.Confidence <= 0 {
+		if rec.Status == StatusConfirmed {
+			rec.Confidence = 1.0
+		} else {
+			rec.Confidence = 0.8
+		}
 	}
 
-	cloned := make(map[string]string, len(metadata)+1)
-	for k, v := range metadata {
-		cloned[k] = v
+	meta, err := recordToMetadata(rec)
+	if err != nil {
+		return err
 	}
-	cloned["saved_at"] = time.Now().Format(time.RFC3339)
 
 	doc := chromem.Document{
-		ID:       id,
-		Content:  content,
-		Metadata: cloned,
+		ID:       rec.ID,
+		Content:  rec.Content,
+		Metadata: meta,
 	}
 
 	s.mu.Lock()
@@ -169,25 +203,345 @@ func (s *MemoryStore) Save(ctx context.Context, id, content string, metadata map
 	return s.collection.AddDocuments(ctx, []chromem.Document{doc}, runtime.NumCPU())
 }
 
-func (s *MemoryStore) Query(ctx context.Context, query string, n int, filter map[string]string) ([]Result, error) {
+// Save is a backward-compatible wrapper that stores content and metadata as a confirmed MemoryRecord.
+// Unknown metadata keys (not part of the MemoryRecord schema) are preserved in ExtraMeta for
+// chromem filter compatibility (R1).
+func (s *MemoryStore) Save(ctx context.Context, id, content string, metadata map[string]string) error {
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	cat := metadata["category"]
+	st := metadata["status"]
+	if st == "" {
+		st = StatusConfirmed
+	}
+
+	// Known schema keys mapped to MemoryRecord fields
+	knownKeys := map[string]bool{
+		"category": true, "status": true, "project": true, "team": true,
+		"source_task_id": true, "source_agent": true, "commit_hash": true,
+		"saved_at": true,
+	}
+
+	rec := MemoryRecord{
+		ID:           id,
+		Content:      content,
+		Category:     cat,
+		Project:      metadata["project"],
+		Team:         metadata["team"],
+		SourceTaskID: metadata["source_task_id"],
+		SourceAgent:  metadata["source_agent"],
+		CommitHash:   metadata["commit_hash"],
+		Status:       st,
+		Confidence:   1.0,
+	}
+
+	if savedAtStr, ok := metadata["saved_at"]; ok && savedAtStr != "" {
+		if t, err := time.Parse(time.RFC3339, savedAtStr); err == nil {
+			rec.CreatedAt = t
+		}
+	}
+
+	// Preserve unknown metadata keys in ExtraMeta (R1)
+	for k, v := range metadata {
+		if !knownKeys[k] && v != "" {
+			if rec.ExtraMeta == nil {
+				rec.ExtraMeta = make(map[string]string)
+			}
+			rec.ExtraMeta[k] = v
+		}
+	}
+
+	return s.SaveRecord(ctx, rec)
+}
+
+// GetRecord retrieves a single MemoryRecord by ID.
+func (s *MemoryStore) GetRecord(ctx context.Context, id string) (*MemoryRecord, error) {
 	if err := s.init(); err != nil {
 		return nil, err
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	results, err := s.collection.Query(ctx, query, n, filter, nil)
+	// Use chromem GetByID for direct lookup (R3: was similarity query workaround)
+	doc, err := s.collection.GetByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("memory record with id %q not found: %w", id, err)
+	}
+
+	rec, err := metadataToRecord(doc.ID, doc.Content, doc.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+// ConfirmRecord updates a record's lifecycle status to confirmed.
+func (s *MemoryStore) ConfirmRecord(ctx context.Context, id string) error {
+	rec, err := s.GetRecord(ctx, id)
+	if err != nil {
+		return err
+	}
+	rec.Status = StatusConfirmed
+	rec.LastConfirmedAt = time.Now()
+	if rec.Confidence < 1.0 {
+		rec.Confidence = 1.0
+	}
+	return s.SaveRecord(ctx, *rec)
+}
+
+// SupersedeRecord marks target records as superseded and links them to the new record.
+func (s *MemoryStore) SupersedeRecord(ctx context.Context, newRecord MemoryRecord, targetIDs []string) error {
+	newRecord.Supersedes = targetIDs
+	if newRecord.Status == "" {
+		newRecord.Status = StatusConfirmed
+	}
+	// Accumulate errors when marking targets as superseded (R2: was silently ignored)
+	var firstErr error
+	for _, targetID := range targetIDs {
+		rec, err := s.GetRecord(ctx, targetID)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("failed to retrieve target record %q for supersession: %w", targetID, err)
+			}
+			continue
+		}
+		if rec != nil {
+			rec.Status = StatusSuperseded
+			if err := s.SaveRecord(ctx, *rec); err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("failed to mark target record %q as superseded: %w", targetID, err)
+				}
+			}
+		}
+	}
+	if err := s.SaveRecord(ctx, newRecord); err != nil {
+		return err
+	}
+	return firstErr
+}
+
+// ExpireRecord marks a record as expired.
+func (s *MemoryStore) ExpireRecord(ctx context.Context, id string) error {
+	rec, err := s.GetRecord(ctx, id)
+	if err != nil {
+		return err
+	}
+	rec.Status = StatusExpired
+	now := time.Now()
+	rec.ExpiresAt = &now
+	return s.SaveRecord(ctx, *rec)
+}
+
+// RejectRecord marks a candidate record as rejected.
+func (s *MemoryStore) RejectRecord(ctx context.Context, id string) error {
+	rec, err := s.GetRecord(ctx, id)
+	if err != nil {
+		return err
+	}
+	rec.Status = StatusRejected
+	return s.SaveRecord(ctx, *rec)
+}
+
+// calculateHybridScore computes the ranking score for a memory record (§20.4).
+func calculateHybridScore(r *chromem.Result, rec *MemoryRecord, opt QueryOptions) float64 {
+	baseScore := float64(r.Similarity)
+	bonus := 0.0
+
+	// Lexical match bonus
+	queryTokens := strings.Fields(strings.ToLower(opt.Query))
+	contentLower := strings.ToLower(rec.Content)
+	lexicalHits := 0
+	for _, tok := range queryTokens {
+		if len(tok) > 2 && strings.Contains(contentLower, tok) {
+			lexicalHits++
+		}
+	}
+	if lexicalHits > 0 {
+		bonus += float64(lexicalHits) * 0.05
+		if bonus > 0.15 {
+			bonus = 0.15
+		}
+	}
+
+	// Recency bonus
+	if !rec.CreatedAt.IsZero() && time.Since(rec.CreatedAt) < 7*24*time.Hour {
+		bonus += 0.05
+	}
+	if !rec.LastConfirmedAt.IsZero() && time.Since(rec.LastConfirmedAt) < 7*24*time.Hour {
+		bonus += 0.05
+	}
+
+	// File relevance bonus
+	if len(opt.FilePaths) > 0 && len(rec.FilePaths) > 0 {
+		if filePathsOverlap(opt.FilePaths, rec.FilePaths) {
+			bonus += 0.10
+		}
+	}
+
+	// Task relevance bonus
+	if opt.TaskID != "" && rec.SourceTaskID == opt.TaskID {
+		bonus += 0.10
+	}
+
+	// Status bonus & penalty
+	switch rec.EffectiveStatus() {
+	case StatusConfirmed:
+		bonus += 0.10
+	case StatusCandidate:
+		// no change
+	case StatusSuperseded, StatusExpired:
+		bonus -= 0.50
+	case StatusRejected:
+		bonus -= 1.00
+	}
+
+	score := baseScore + bonus
+	if rec.Confidence > 0 {
+		score *= rec.Confidence
+	}
+	return score
+}
+
+// filePathsOverlap checks if any path in req overlaps with any path in rec.
+func filePathsOverlap(req, rec []string) bool {
+	for _, reqPath := range req {
+		for _, recPath := range rec {
+			if reqPath == recPath || strings.HasSuffix(recPath, reqPath) || strings.HasSuffix(reqPath, recPath) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// meetsRecordFilters checks whether a record passes all non-scoring filters.
+func meetsRecordFilters(rec *MemoryRecord, opt QueryOptions) bool {
+	effStatus := rec.EffectiveStatus()
+	if len(opt.IncludeStatus) > 0 {
+		matched := false
+		for _, st := range opt.IncludeStatus {
+			if effStatus == st {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	} else if effStatus == StatusSuperseded || effStatus == StatusExpired || effStatus == StatusRejected {
+		return false
+	}
+	if opt.MinConfidence > 0 && rec.Confidence < opt.MinConfidence {
+		return false
+	}
+	if opt.Project != "" && rec.Project != "" && rec.Project != opt.Project {
+		return false
+	}
+	if opt.Team != "" && rec.Team != "" && rec.Team != opt.Team {
+		return false
+	}
+	return true
+}
+
+// QueryRecords performs hybrid search and ranking (§20.4) over MemoryRecords.
+func (s *MemoryStore) QueryRecords(ctx context.Context, opt QueryOptions) ([]QueryResult, error) {
+	if err := s.init(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	n := opt.N
+	if n <= 0 {
+		n = 5
+	}
+
+	var filter map[string]string
+	if opt.Category != "" {
+		filter = map[string]string{"category": opt.Category}
+	}
+	if len(opt.MetadataFilter) > 0 {
+		if filter == nil {
+			filter = make(map[string]string)
+		}
+		for k, v := range opt.MetadataFilter {
+			if k != "category" {
+				filter[k] = v
+			}
+		}
+	}
+
+	totalDocs := s.collection.Count()
+	if totalDocs == 0 {
+		return nil, nil
+	}
+
+	fetchN := n * 5
+	if fetchN < 50 {
+		fetchN = 50
+	}
+	if fetchN > totalDocs {
+		fetchN = totalDocs
+	}
+
+	results, err := s.collection.Query(ctx, opt.Query, fetchN, filter, nil)
 	if err != nil {
 		return nil, fmt.Errorf("memory query failed: %w", err)
 	}
 
-	out := make([]Result, 0, len(results))
+	var candidates []QueryResult
 	for _, r := range results {
-		out = append(out, Result{
-			ID:         r.ID,
-			Content:    r.Content,
+		rec, err := metadataToRecord(r.ID, r.Content, r.Metadata)
+		if err != nil {
+			continue
+		}
+		if !meetsRecordFilters(&rec, opt) {
+			continue
+		}
+		candidates = append(candidates, QueryResult{
+			Record:     rec,
 			Similarity: r.Similarity,
-			Metadata:   r.Metadata,
+			Score:      calculateHybridScore(&r, &rec, opt),
+		})
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].Score > candidates[j].Score
+	})
+	if len(candidates) > n {
+		candidates = candidates[:n]
+	}
+
+	return candidates, nil
+}
+
+// Query is a backward-compatible query returning Result structs, using hybrid ranking under the hood.
+// The full filter map is passed through via MetadataFilter for chromem-level filtering (R1).
+func (s *MemoryStore) Query(ctx context.Context, query string, n int, filter map[string]string) ([]Result, error) {
+	cat := ""
+	if filter != nil {
+		cat = filter["category"]
+	}
+
+	qResults, err := s.QueryRecords(ctx, QueryOptions{
+		Query:          query,
+		N:              n,
+		Category:       cat,
+		MetadataFilter: filter,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Result, 0, len(qResults))
+	for _, qr := range qResults {
+		meta, _ := recordToMetadata(qr.Record)
+		out = append(out, Result{
+			ID:         qr.Record.ID,
+			Content:    qr.Record.Content,
+			Similarity: float32(qr.Score),
+			Metadata:   meta,
 		})
 	}
 	return out, nil
@@ -219,7 +573,6 @@ func (s *MemoryStore) Close() error {
 }
 
 // readEmbeddingMeta reads the embedding metadata sidecar file.
-// Returns nil, nil if the file does not exist.
 func readEmbeddingMeta(storePath string) (*embeddingMeta, error) {
 	metaPath := filepath.Join(storePath, metaFileName)
 	data, err := os.ReadFile(metaPath)
@@ -261,16 +614,13 @@ func probeEmbeddingModel(ctx context.Context, embedFunc chromem.EmbeddingFunc) e
 	return nil
 }
 
-// checkEmbeddingModelMismatch checks if the stored embedding model differs from the
-// current one. If so, it deletes the collection and writes new metadata.
-// Returns true if a mismatch was detected and the collection was deleted.
+// checkEmbeddingModelMismatch checks if the stored embedding model differs from the current one.
 func checkEmbeddingModelMismatch(db *chromem.DB, storePath, embedModel string) (bool, error) {
 	meta, err := readEmbeddingMeta(storePath)
 	if err != nil {
 		return false, err
 	}
 
-	// If no metadata exists, write it and return.
 	if meta == nil {
 		log.Printf("Warning: existing memory store has no embedding model metadata; assuming %q matches. If results seem wrong, re-index with: rm -rf %s", embedModel, storePath)
 		newMeta := &embeddingMeta{
@@ -283,16 +633,10 @@ func checkEmbeddingModelMismatch(db *chromem.DB, storePath, embedModel string) (
 		return false, nil
 	}
 
-	// Models match — nothing to do.
 	if meta.EmbeddingModel == embedModel {
 		return false, nil
 	}
 
-	// Models differ — delete the old collection first. If the process crashes
-	// after deletion but before writing the new metadata, the next startup will
-	// see no metadata (meta == nil) and write new metadata — a safe recovery path.
-	// The reverse order (write-then-delete) would leave stale collection data
-	// with matching metadata that would never be cleaned up.
 	log.Printf("embedding model mismatch: stored=%q, current=%q; deleting old collection", meta.EmbeddingModel, embedModel)
 	if err := db.DeleteCollection(collectionName); err != nil {
 		return false, fmt.Errorf("failed to delete collection during model mismatch cleanup: %w", err)

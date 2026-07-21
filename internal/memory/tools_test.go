@@ -51,3 +51,33 @@ func TestMemoryQueryToolNilStore(t *testing.T) {
 		t.Errorf("expected 'not available' message, got: %s", resp.Content)
 	}
 }
+
+func TestMemoryToolsExecutionWithStore(t *testing.T) {
+	ctx := context.Background()
+	store := setupTestStore(t)
+
+	saveTool := NewMemorySaveTool(store)
+	queryTool := NewMemoryQueryTool(store)
+
+	// Save a memory item
+	saveResp, err := saveTool.Run(ctx, fantasy.ToolCall{
+		Input: `{"content": "Database pool size is 20", "category": "config", "confidence": 0.95}`,
+	})
+	if err != nil {
+		t.Fatalf("saveTool Run error: %v", err)
+	}
+	if !strings.Contains(saveResp.Content, "Saved to memory") {
+		t.Errorf("unexpected save response: %s", saveResp.Content)
+	}
+
+	// Query memory
+	queryResp, err := queryTool.Run(ctx, fantasy.ToolCall{
+		Input: `{"query": "database pool size", "category": "config"}`,
+	})
+	if err != nil {
+		t.Fatalf("queryTool Run error: %v", err)
+	}
+	if !strings.Contains(queryResp.Content, "Database pool size is 20") {
+		t.Errorf("query response missing expected content, got:\n%s", queryResp.Content)
+	}
+}
