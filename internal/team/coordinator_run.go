@@ -137,7 +137,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.updateTodoTiming(todoID, modelTime, toolTime)
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		c.report(c.newEvent("error").withAgent(resolvedName).withMessage(err.Error()).withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
-		return &DirectAgentResult{AgentName: resolvedName, Error: err}, nil
+		return &DirectAgentResult{AgentName: resolvedName, Error: err, Steps: len(steps)}, nil
 	}
 
 	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, resolvedName, taskTS, "done", task, output); err != nil {
@@ -150,7 +150,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	c.report(c.newEvent("done").withAgent(resolvedName).withOutput(output).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 	c.recordExecutionEvent(todoID, resolvedName, 1, "done", directModel, time.Since(attemptStarted), usageFromSteps(steps))
 
-	return &DirectAgentResult{AgentName: resolvedName, Output: output}, nil
+	return &DirectAgentResult{AgentName: resolvedName, Output: output, Steps: len(steps)}, nil
 }
 
 // coordinatorCoreToolNames are the core tools the coordinator always gets,

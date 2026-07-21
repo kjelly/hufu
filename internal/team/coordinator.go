@@ -111,6 +111,9 @@ type DirectAgentResult struct {
 	AgentName string
 	Output    string
 	Error     error
+	// Steps is the number of LLM/tool steps the direct agent executed.
+	// Used by the fast-path router to drive auto-escalation decisions.
+	Steps int
 }
 
 type agentResult struct {
@@ -169,61 +172,61 @@ type Coordinator struct {
 	// Context budget reporting (§5.4). Populated by buildSystemPrompt so the
 	// execution report can emit a token-usage breakdown without re-deriving the
 	// assembled prompt.
-	ctxReportMu         sync.RWMutex
-	lastCtxBreakdown    ContextUsageBreakdown
-	lastCtxBudget       ContextBudget
-	lastCtxModel        string
-	lastCtxReportReady  bool
-	wrapUp              atomic.Int32
-	finishCalled        atomic.Bool // set when the finish tool completes; cleared per orchestrator run
-	current             atomic.Pointer[currentSnapshot]
-	currentStageStart   time.Time
-	currentStageStartMu sync.RWMutex
-	auditLogger         *audit.AuditLogger
-	sshSessionMgr       *tools.SSHSessionManager
-	skillUsage          map[string]*skillUsageState
-	skillUsageMu        sync.Mutex
-	delegatedTasks      map[string]int
-	delegatedTasksMu    sync.Mutex
-	taskResultCache     map[string][]cachedTaskEntry // agent → ordered list of past results
-	taskResultCacheMu   sync.RWMutex
-	cachePolicy         CachePolicy
-	cachePolicyMu       sync.RWMutex
-	capabilityCache     map[string]CapabilityResult
-	capabilityCacheMu   sync.Mutex
-	capabilityInflight  map[string]chan CapabilityResult
-	cacheGeneration     atomic.Int64 // bumped each time coordinator starts a new delegation round
+	ctxReportMu            sync.RWMutex
+	lastCtxBreakdown       ContextUsageBreakdown
+	lastCtxBudget          ContextBudget
+	lastCtxModel           string
+	lastCtxReportReady     bool
+	wrapUp                 atomic.Int32
+	finishCalled           atomic.Bool // set when the finish tool completes; cleared per orchestrator run
+	current                atomic.Pointer[currentSnapshot]
+	currentStageStart      time.Time
+	currentStageStartMu    sync.RWMutex
+	auditLogger            *audit.AuditLogger
+	sshSessionMgr          *tools.SSHSessionManager
+	skillUsage             map[string]*skillUsageState
+	skillUsageMu           sync.Mutex
+	delegatedTasks         map[string]int
+	delegatedTasksMu       sync.Mutex
+	taskResultCache        map[string][]cachedTaskEntry // agent → ordered list of past results
+	taskResultCacheMu      sync.RWMutex
+	cachePolicy            CachePolicy
+	cachePolicyMu          sync.RWMutex
+	capabilityCache        map[string]CapabilityResult
+	capabilityCacheMu      sync.Mutex
+	capabilityInflight     map[string]chan CapabilityResult
+	cacheGeneration        atomic.Int64 // bumped each time coordinator starts a new delegation round
 	journal                *taskJournal // persistent task-result journal (nil when disabled)
 	noJournal              bool
-	eventStore             *EventStore  // append-only session event store
+	eventStore             *EventStore // append-only session event store
 	emittedTaskTransitions map[string]bool
 	dualWriteFailures      atomic.Int64
 	memoryStore            *memory.MemoryStore
-	skillsMu            sync.RWMutex
-	modelList           []config.ModelEntry
-	sidecarModel        string
-	sidecarInst         *sidecar.Sidecar
-	sidecarInitMu       sync.Mutex
-	sidecarInit         bool
-	guardModel          string
-	guardInst           *sidecar.Sidecar
-	guardInitMu         sync.Mutex
-	guardInit           bool
-	judgeModel          string
-	judgeInst           *sidecar.Sidecar
-	judgeInitMu         sync.Mutex
-	judgeInit           bool
-	planReviewerModel   string
-	cachedWorkerContext string
-	workerCtxOnce       sync.Once
-	autoLoadedSkills    []*skill.SkillDef
-	autoLoadedSkillsMu  sync.RWMutex
-	forcedSkillNames    map[string]bool // set of skill names specified via --skill
-	maxConcurrent       int
-	sessionTime         time.Time
-	lastStmWrite        time.Time // tracks when stm_write was last called for finish enforcement
-	lastStmWriteMu      sync.Mutex
-	ltmWriteMu          sync.Mutex // Protect LTM file reads and writes
+	skillsMu               sync.RWMutex
+	modelList              []config.ModelEntry
+	sidecarModel           string
+	sidecarInst            *sidecar.Sidecar
+	sidecarInitMu          sync.Mutex
+	sidecarInit            bool
+	guardModel             string
+	guardInst              *sidecar.Sidecar
+	guardInitMu            sync.Mutex
+	guardInit              bool
+	judgeModel             string
+	judgeInst              *sidecar.Sidecar
+	judgeInitMu            sync.Mutex
+	judgeInit              bool
+	planReviewerModel      string
+	cachedWorkerContext    string
+	workerCtxOnce          sync.Once
+	autoLoadedSkills       []*skill.SkillDef
+	autoLoadedSkillsMu     sync.RWMutex
+	forcedSkillNames       map[string]bool // set of skill names specified via --skill
+	maxConcurrent          int
+	sessionTime            time.Time
+	lastStmWrite           time.Time // tracks when stm_write was last called for finish enforcement
+	lastStmWriteMu         sync.Mutex
+	ltmWriteMu             sync.Mutex // Protect LTM file reads and writes
 
 	// Skill pattern detection
 	skillDetector         *skill.SkillPatternDetector

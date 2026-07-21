@@ -273,6 +273,43 @@ User task: %s`, teamList.String(), prompt)
 	return "", nil
 }
 
+type RouteClassification struct {
+	Route  string `json:"route"`
+	Reason string `json:"reason"`
+}
+
+// ClassifyRoute asks the sidecar to determine whether a task should use a "fast" or "team" execution path.
+func (s *Sidecar) ClassifyRoute(ctx context.Context, prompt string) (RouteClassification, error) {
+	if s == nil || s.agent == nil {
+		return RouteClassification{}, fmt.Errorf("sidecar not initialized")
+	}
+	matchPrompt := fmt.Sprintf(`Classify whether the user task requires a "fast" execution path (single agent, simple lookup/edit/test) or a "team" execution path (multi-agent, multi-role research/design/refactor/deploy workflow).
+
+Return ONLY JSON in this exact format:
+{"route": "fast" or "team", "reason": "brief explanation"}
+
+User task: %s`, prompt)
+
+	result, err := s.generate(ctx, matchPrompt)
+	if err != nil {
+		return RouteClassification{}, fmt.Errorf("sidecar classify route generate failed: %w", err)
+	}
+	result = strings.TrimSpace(result)
+	if extracted := jsonCodeBlockRe.FindStringSubmatch(result); len(extracted) >= 2 {
+		result = strings.TrimSpace(extracted[1])
+	}
+
+	var parsed RouteClassification
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		return RouteClassification{}, fmt.Errorf("failed to parse route classification response %q: %w", result, err)
+	}
+	parsed.Route = strings.ToLower(strings.TrimSpace(parsed.Route))
+	if parsed.Route != "fast" && parsed.Route != "team" {
+		return RouteClassification{}, fmt.Errorf("invalid route %q", parsed.Route)
+	}
+	return parsed, nil
+}
+
 type GuardReviewResult struct {
 	Approved bool
 	Reason   string

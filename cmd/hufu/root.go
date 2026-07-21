@@ -109,6 +109,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().Int64Var(&opts.maxDuration, "max-duration", 0, "Budget: max total wall-clock seconds before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
 	rootCmd.Flags().Int64Var(&opts.maxTotalTokens, "max-total-tokens", 0, "Budget: max cumulative LLM tokens before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
 	rootCmd.Flags().BoolVar(&opts.autoTeam, "auto-team", false, "Auto-select the team best suited to the prompt (sidecar LLM match, keyword fallback) instead of prompting")
+	rootCmd.Flags().StringVar(&opts.routeMode, "route", "auto", "Execution route selection mode: auto, fast, or team")
 	rootCmd.Flags().BoolVar(&opts.projectContext, "project-context", false, "Inject Git Status and Project Directory Structure into prompt context")
 	rootCmd.PersistentFlags().StringVar(&opts.profileName, "profile", "", "Apply a named flag bundle from hufu.yaml `profiles:` (CLI flags still override)")
 	rootCmd.Flags().BoolVarP(&opts.quietMode, "quiet", "q", false, "Suppress status output; print only the final result to stdout")

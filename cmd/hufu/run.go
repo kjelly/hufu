@@ -127,7 +127,8 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		initialTeam = "default"
 	}
 
-	initialTeam = maybeAutoSelectTeam(ctx, prompt, initialTeam, registry)
+	routeDecision := maybeAutoSelectTeam(ctx, prompt, initialTeam, registry)
+	initialTeam = routeDecision.Team
 
 	initialSegments, err := resolveInitialSegments(prompt, initialTeam, registry, pr)
 	if err != nil {
@@ -150,7 +151,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 		return executeDryRun(ctx, segments, prompt, loadedTeams)
 	}
 
-	return executeAndReport(ctx, cancel, prompt, originalPrompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars)
+	return executeAndReport(ctx, cancel, prompt, originalPrompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, routeDecision)
 }
 
 func makeStepConfirmFn() func(context.Context, []team.TaskDef) (bool, error) {
@@ -263,21 +264,40 @@ func runWithInjection(ctx context.Context, tc *teamContext, initialResult string
 	}
 }
 
-// maybeAutoSelectTeam implements --auto-team: when the user did not name a
-// team (no --agent-team, no @team in the prompt, not --default), it picks the
-// team best suited to the prompt instead of showing the interactive picker.
-// It returns the (possibly unchanged) initial team name.
-func maybeAutoSelectTeam(ctx context.Context, prompt, initialTeam string, registry *team.TeamRegistry) string {
-	if !opts.autoTeam || initialTeam != "" || team.HasAtName(prompt) || registry.TeamCount() == 0 {
-		return initialTeam
+// maybeAutoSelectTeam implements execution route selection and --auto-team.
+// It uses ExecutionRouter (evaluating deterministic signals and sidecar classifier)
+// to pick the route (fast vs team) and appropriate team, and returns the full
+// RouteDecision so the caller can thread the chosen route into execution.
+func maybeAutoSelectTeam(ctx context.Context, prompt, initialTeam string, registry *team.TeamRegistry) RouteDecision {
+	router := NewExecutionRouter(registry, buildSelectionSidecar(ctx))
+	decision := router.Route(ctx, prompt, initialTeam)
+
+	if decision.Team != "" && (opts.autoTeam || opts.routeMode != "auto" || opts.defaultTeam || initialTeam != "") {
+		if opts.verbose || opts.autoTeam || opts.routeMode != "auto" {
+			reasonsStr := strings.Join(decision.Reasons, "; ")
+			fmt.Fprintf(os.Stderr, "%s Route decision: %s (team: %s, confidence: %.2f) [%s]\n",
+				boldStyle.Render("→"), teamStyle.Render(string(decision.Route)), teamStyle.Render(decision.Team), decision.Confidence, reasonsStr)
+		}
+		return RouteDecision{Route: decision.Route, Team: strings.ToLower(decision.Team), Confidence: decision.Confidence, Reasons: decision.Reasons}
 	}
+
+	if !opts.autoTeam || initialTeam != "" || team.HasAtName(prompt) || (registry != nil && registry.TeamCount() == 0) {
+		return RouteDecision{Route: decision.Route, Team: initialTeam, Confidence: decision.Confidence, Reasons: decision.Reasons}
+	}
+
+	if decision.Team != "" {
+		fmt.Fprintf(os.Stderr, "%s Auto-selected route %s (team: %s) [%s]\n",
+			boldStyle.Render("→"), teamStyle.Render(string(decision.Route)), teamStyle.Render(decision.Team), strings.Join(decision.Reasons, "; "))
+		return RouteDecision{Route: decision.Route, Team: strings.ToLower(decision.Team), Confidence: decision.Confidence, Reasons: decision.Reasons}
+	}
+
 	picked, method := autoSelectTeam(ctx, prompt, registry)
 	if picked == "" {
 		fmt.Fprintf(os.Stderr, "%s --auto-team could not confidently pick a team; falling back to selection.\n", dimStyle.Render("·"))
-		return initialTeam
+		return RouteDecision{Route: RouteTeam, Team: initialTeam, Confidence: 0, Reasons: []string{"auto-team fallback to manual selection"}}
 	}
 	fmt.Fprintf(os.Stderr, "%s Auto-selected team %s (%s)\n", boldStyle.Render("→"), teamStyle.Render(picked), method)
-	return strings.ToLower(picked)
+	return RouteDecision{Route: RouteTeam, Team: strings.ToLower(picked), Confidence: 0.6, Reasons: []string{"auto-team keyword match: " + method}}
 }
 
 // resolveInitialSegments parses the prompt into team/agent segments. When the

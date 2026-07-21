@@ -135,7 +135,7 @@ func expandSegmentsWithAgents(initialSegments []team.PromptSegment, loadedTeams 
 }
 
 // executeAndReport handles the execution (either in TUI or CLI mode) and aggregates skill usage/reports.
-func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, originalPrompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string) error {
+func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, originalPrompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string, route RouteDecision) error {
 	startedAt := time.Now()
 	// Restored sessions retain terminal failures so they remain visible to the
 	// operator, but those historical failures must not make a later successful
@@ -186,9 +186,9 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 				break
 			}
 		}
-		result, runErr = runWithTUI(ctx, cancel, prompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, teamInfo)
+		result, runErr = runWithTUI(ctx, cancel, prompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, teamInfo, route)
 	} else {
-		result, runErr = executeSegments(ctx, segments, registry, opts.providerURL, loadedTeams, injector, activeCoord, pathConsent, vars)
+		result, runErr = executeSegments(ctx, segments, registry, opts.providerURL, loadedTeams, injector, activeCoord, pathConsent, vars, route)
 	}
 	if runErr != nil {
 		return runErr

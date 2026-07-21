@@ -166,6 +166,20 @@ func (c *Coordinator) resolveAgentName(input string) (*agent.AgentDef, string, e
 	return nil, "", fmt.Errorf("unknown agent %q (available: %v)", input, available)
 }
 
+// PrimaryWorkerName returns the name of the single worker agent available
+// for fast-path direct dispatch. It returns "" when the team has zero or
+// multiple worker agents — in those cases the fast path falls through to
+// the team path (coordinator DAG), since picking an arbitrary specialist
+// could misroute a simple task. The default team (coordinator + Helper)
+// has exactly one worker, so this returns "helper".
+func (c *Coordinator) PrimaryWorkerName() string {
+	defs := c.uniqueWorkerDefs()
+	if len(defs) != 1 {
+		return ""
+	}
+	return defs[0].Name
+}
+
 func (c *Coordinator) uniqueWorkerDefs() []*agent.AgentDef {
 	seen := make(map[string]bool)
 	var defs []*agent.AgentDef

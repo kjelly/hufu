@@ -50,7 +50,48 @@ func handleSegmentError(ctx context.Context, tc *teamContext, results []string, 
 	return strings.Join(results, "\n\n"), fmt.Errorf(kind+": %w", append(args, err)...)
 }
 
-func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, defaultProviderURL string, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string) (string, error) {
+// dispatchSegmentContent executes a segment's text content via the fast path
+// (single-agent direct dispatch with auto-escalation) or the team path
+// (coordinator DAG), based on the resolved route decision. It manages the
+// activeCoordinator pointer around the execution entry points so TUI/SIGINT
+// tracking and prompt injection remain consistent across both paths.
+func dispatchSegmentContent(ctx context.Context, tc *teamContext, content string, route RouteDecision, injector *promptInjector, activeCoord *activeCoordinator) (string, error) {
+	if shouldUseFastPath(route, tc.coordinator) {
+		primary := tc.coordinator.PrimaryWorkerName()
+		d := fastPathDispatch{
+			runDirect: func(ctx context.Context, agentName, task string) (*team.DirectAgentResult, error) {
+				if injector.IsWrapUpRequested() {
+					tc.coordinator.SetWrapUp()
+				}
+				activeCoord.Store(tc.coordinator)
+				res, err := tc.coordinator.RunDirectAgent(ctx, agentName, task)
+				activeCoord.Store(nil)
+				return res, err
+			},
+			canEscalate: NewExecutionRouter(nil, nil).CanEscalateToTeam,
+		}
+		o := runFastPath(ctx, primary, content, route, d)
+		if o.err != nil {
+			return "", o.err
+		}
+		if o.attempted && !o.escalated {
+			return o.output, nil
+		}
+		// Not attempted (no single worker) or escalated -> fall through to team path.
+		if o.escalated {
+			stderrLog("%s Falling back to team path (coordinator DAG).\n", dimStyle.Render("·"))
+		}
+	}
+	activeCoord.Store(tc.coordinator)
+	if injector.IsWrapUpRequested() {
+		tc.coordinator.SetWrapUp()
+	}
+	result, err := tc.coordinator.Run(ctx, content)
+	activeCoord.Store(nil)
+	return result, err
+}
+
+func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, defaultProviderURL string, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string, route RouteDecision) (string, error) {
 	var results []string
 	currentTeamName := ""
 	var prevResult string
@@ -109,14 +150,13 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			disp := newCoordDisplay(tc)
 
-			stderrLog("\n%s Starting team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(teamName))
-
-			activeCoord.Store(tc.coordinator)
-			if injector.IsWrapUpRequested() {
-				tc.coordinator.SetWrapUp()
+			if route.Route == RouteFast {
+				stderrLog("\n%s Fast path → team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(teamName))
+			} else {
+				stderrLog("\n%s Starting team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(teamName))
 			}
-			result, err := tc.coordinator.Run(ctx, content)
-			activeCoord.Store(nil)
+
+			result, err := dispatchSegmentContent(ctx, tc, content, route, injector, activeCoord)
 			disp.stopTimer()
 
 			if err != nil {
@@ -129,7 +169,11 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			}
 
 			disp.finalizeTasks()
-			stderrLog("\n%s Team %s coordination complete.\n", doneStyle.Render("✓"), teamStyle.Render(teamName))
+			if route.Route == RouteFast {
+				stderrLog("\n%s Fast path complete.\n", doneStyle.Render("✓"))
+			} else {
+				stderrLog("\n%s Team %s coordination complete.\n", doneStyle.Render("✓"), teamStyle.Render(teamName))
+			}
 			results = append(results, fmt.Sprintf("## Team: %s\n%s", teamName, result))
 			prevResult = result
 
@@ -204,14 +248,13 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			disp3 := newCoordDisplay(tc)
 
-			stderrLog("\n%s Team %s processing...\n\n", boldStyle.Render("→"), teamStyle.Render(currentTeamName))
-
-			activeCoord.Store(tc.coordinator)
-			if injector.IsWrapUpRequested() {
-				tc.coordinator.SetWrapUp()
+			if route.Route == RouteFast {
+				stderrLog("\n%s Fast path → team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(currentTeamName))
+			} else {
+				stderrLog("\n%s Team %s processing...\n\n", boldStyle.Render("→"), teamStyle.Render(currentTeamName))
 			}
-			result, err := tc.coordinator.Run(ctx, content)
-			activeCoord.Store(nil)
+
+			result, err := dispatchSegmentContent(ctx, tc, content, route, injector, activeCoord)
 			disp3.stopTimer()
 
 			if err != nil {

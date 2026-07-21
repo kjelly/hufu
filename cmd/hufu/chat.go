@@ -191,7 +191,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 		turnCtx, cancel := signal.NotifyContext(rootCtx, os.Interrupt)
 		defer cancel()
 
-		_, runErr := runWithTUI(turnCtx, cancel, "", segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, teamInfo)
+		_, runErr := runWithTUI(turnCtx, cancel, "", segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, teamInfo, RouteDecision{Route: RouteTeam, Team: teamName})
 		return runErr
 	}
 

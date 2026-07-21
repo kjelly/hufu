@@ -24,6 +24,7 @@ type runOptions struct {
 	defaultTeam         bool
 	helperTools         string
 	autoTeam            bool
+	routeMode           string
 
 	// Workspace / session lifecycle
 	workspace     string
