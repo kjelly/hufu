@@ -455,6 +455,13 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		systemPrompt = c.expandOrchestratorTemplate(defaultOrchestratorSystem)
 	}
 
+	// Capture prompt-component texts for the §5.4 context budget breakdown.
+	// coreText holds the orchestrator's own instructions (+ skills + reminder);
+	// projectText and memoryText are tracked separately so the report can
+	// attribute tokens to each context subsystem rather than one opaque blob.
+	var coreText, projectText, memoryText strings.Builder
+	coreText.WriteString(systemPrompt)
+
 	var matchedSkills []*skill.SkillDef
 	if isContinuation {
 		matchedSkills = c.getAutoLoadedSkills()
@@ -473,7 +480,9 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		c.emitThinkSkills(matchedSkills)
 	}
 
-	systemPrompt += "\n\n" + c.BuildOrchestratorPrompt(matchedSkills...)
+	orchPrompt := c.BuildOrchestratorPrompt(matchedSkills...)
+	systemPrompt += "\n\n" + orchPrompt
+	coreText.WriteString("\n\n" + orchPrompt)
 
 	if c.think && !isContinuation {
 		c.emitThinkAgents()
@@ -490,6 +499,7 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 			}
 		}
 		systemPrompt += "\n\n---\n## Project Context (AGENTS.md)\n\n" + agentsMD
+		projectText.WriteString(agentsMD)
 	}
 
 	if c.memoryStore != nil && prompt != "" {
@@ -500,6 +510,7 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		memCtx, err := memory.AutoQuery(ctx, c.memoryStore, prompt, compactFn)
 		if err == nil && memCtx != "" {
 			systemPrompt += "\n\n---\n" + memCtx
+			memoryText.WriteString(memCtx + "\n")
 		}
 	}
 
@@ -508,21 +519,28 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 			contextSummary := c.sessionData.ContextSummary()
 			if contextSummary != "" {
 				systemPrompt += "\n\n---\n## Session Context\n\n" + contextSummary
+				memoryText.WriteString(contextSummary + "\n")
 			}
 		}
 	}
 
 	if suffix := c.buildMemorySuffix("coordinator"); suffix != "" {
 		systemPrompt += "\n\n" + suffix
+		memoryText.WriteString(suffix + "\n")
 	}
 
 	if reminder := c.buildCoreReminder(orchDef); reminder != "" {
 		systemPrompt += "\n\n" + reminder
+		coreText.WriteString("\n\n" + reminder)
 	}
 
 	if c.think && !isContinuation {
 		c.emitThinkPrompt(systemPrompt)
 	}
+
+	// Record the model-aware token breakdown for the execution report (§5.4).
+	c.recordContextBreakdown(ctx, c.resolveAgentModel(orchDef, ""),
+		coreText.String(), projectText.String(), memoryText.String())
 
 	return systemPrompt
 }

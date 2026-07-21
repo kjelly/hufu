@@ -543,24 +543,40 @@ func formatMessagesForCompaction(messages []fantasy.Message) string {
 	return sb.String()
 }
 
-func countTokensInText(text string) int {
-	runes := []rune(text)
-	tokens := len(runes) / 4
-	if tokens == 0 && len(runes) > 0 {
-		return 1
+// countTokensInText estimates tokens for text using the model-aware token counter.
+// modelID selects the estimator family (e.g. "qwen3", "gpt-4o"); "" falls back to
+// the registry default. This makes compaction token accounting model-aware so the
+// tokens_before/after recorded in CompactionRecord reflect the same estimator used
+// for context budgeting (§5.3).
+func countTokensInText(modelID, text string) int {
+	if modelID == "" {
+		modelID = "default"
+	}
+	tokens, err := defaultCounter.CountText(context.Background(), modelID, text)
+	if err != nil || tokens == 0 {
+		runes := []rune(text)
+		if len(runes) > 0 {
+			return 1
+		}
+		return 0
 	}
 	return tokens
 }
 
-func countTokensInMessages(messages []fantasy.Message) int {
-	total := 0
-	for _, msg := range messages {
-		total += messageTextSize(msg) / 4
+// countTokensInMessages estimates tokens for a message slice using the model-aware
+// token counter. See countTokensInText for the modelID semantics.
+func countTokensInMessages(modelID string, messages []fantasy.Message) int {
+	if modelID == "" {
+		modelID = "default"
 	}
-	if total == 0 && len(messages) > 0 {
-		return 1
+	tokens, err := defaultCounter.CountMessages(context.Background(), modelID, messages)
+	if err != nil || tokens == 0 {
+		if len(messages) > 0 {
+			return 1
+		}
+		return 0
 	}
-	return total
+	return tokens
 }
 
 // SaveCompactionRecord persists a CompactionRecord to workspace/compaction_history.json.

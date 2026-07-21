@@ -413,3 +413,13 @@ func (c *Coordinator) resolveAgentModel(def *agent.AgentDef, overrideModel strin
 	}
 	return c.session.Config.Generation.Model
 }
+
+// coordinatorModelID returns the team default model used by the coordinator for
+// model-aware token accounting (compaction records, context budget reporting).
+// It falls back to "default" when no team model is configured.
+func (c *Coordinator) coordinatorModelID() string {
+	if c.session != nil && c.session.Config.Generation.Model != "" {
+		return c.session.Config.Generation.Model
+	}
+	return "default"
+}

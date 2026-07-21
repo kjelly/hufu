@@ -48,13 +48,14 @@ func generateReport(loadedTeams map[string]*teamContext, combinedResult string) 
 }
 
 type reportData struct {
-	Todos         []*team.TodoItem
-	STM           string
-	Skills        []team.SkillUsageEntry
-	SessionData   *team.SessionData
-	TaskHistory   map[string]string
-	StartedAt     time.Time
-	SkillPatterns []SkillPatternReport
+	Todos               []*team.TodoItem
+	STM                 string
+	Skills              []team.SkillUsageEntry
+	SessionData         *team.SessionData
+	TaskHistory         map[string]string
+	StartedAt           time.Time
+	SkillPatterns       []SkillPatternReport
+	ContextUsageSection string
 }
 
 // SkillPatternReport holds detected skill pattern info for reports
@@ -107,6 +108,7 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		d.Todos = tc.coordinator.TaskTracker().TodoList().Items()
 		d.Skills = tc.coordinator.SkillUsage()
 		d.SkillPatterns = gatherSkillPatterns(tc.coordinator)
+		d.ContextUsageSection = tc.coordinator.RenderContextUsageSection()
 	}
 
 	if tc.session != nil {
@@ -192,6 +194,10 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		b.WriteString("## Final Result\n\n")
 		b.WriteString(finalResult)
 		b.WriteString("\n\n---\n\n")
+	}
+
+	if data.ContextUsageSection != "" {
+		b.WriteString(data.ContextUsageSection)
 	}
 
 	if len(data.Todos) > 0 {

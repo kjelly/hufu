@@ -229,9 +229,13 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 		prevSummary = GetLatestCompactionSummary(workspace)
 	}
 
-	tokensBefore := countTokensInMessages(messages)
+	// Model-aware token accounting: use the coordinator's resolved model so the
+	// estimator family matches the one used for context budgeting (§5.3).
+	compactionModel := c.coordinatorModelID()
+
+	tokensBefore := countTokensInMessages(compactionModel, messages)
 	if prevSummary != nil {
-		tokensBefore += countTokensInText(prevSummary.RenderMarkdown())
+		tokensBefore += countTokensInText(compactionModel, prevSummary.RenderMarkdown())
 	}
 
 	// Invariant 2: Original user goal
@@ -256,7 +260,7 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 	c.lastCompactionSummary = summary
 
 	markdownSummary := summary.RenderMarkdown()
-	tokensAfter := countTokensInText(markdownSummary)
+	tokensAfter := countTokensInText(compactionModel, markdownSummary)
 
 	// Invariant 7: Persist compaction record with tokens_before, tokens_after, and source range
 	if workspace != "" {

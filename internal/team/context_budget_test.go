@@ -1,6 +1,7 @@
 package team
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -42,7 +43,7 @@ func TestMessageTextSize(t *testing.T) {
 }
 
 func TestCapStepMessages(t *testing.T) {
-	bigResult := strings.Repeat("a", stepContextBudgetChars/2)
+	bigResult := strings.Repeat("a", 60000)
 
 	t.Run("under budget returns nil", func(t *testing.T) {
 		msgs := []fantasy.Message{fantasy.NewUserMessage("goal"), toolResultMsg("c1", "small")}
@@ -80,12 +81,9 @@ func TestCapStepMessages(t *testing.T) {
 		if messageTextSize(got[headMessagesProtected]) >= messageTextSize(msgs[headMessagesProtected]) {
 			t.Error("old bulky tool result should have been squeezed")
 		}
-		total := 0
-		for _, m := range got {
-			total += messageTextSize(m)
-		}
-		if total > stepContextBudgetChars {
-			t.Errorf("total after shaping = %d, want <= %d", total, stepContextBudgetChars)
+		totalTokens, _ := defaultCounter.CountMessages(context.Background(), "default", got)
+		if totalTokens > defaultStepContextBudgetTokens {
+			t.Errorf("total tokens after shaping = %d, want <= %d", totalTokens, defaultStepContextBudgetTokens)
 		}
 		// Original slice must be untouched.
 		if messageTextSize(msgs[headMessagesProtected]) != len(bigResult) {

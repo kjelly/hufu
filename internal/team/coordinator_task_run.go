@@ -632,12 +632,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		Messages: history,
 		StopWhen: extraStop,
 		PrepareStep: func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
-			// Keep this request within the context byte budget: long streams
-			// re-send every prior tool result each step, so old bulky results
-			// are squeezed once the total exceeds the budget. Applies to
-			// workers and the coordinator alike (workers previously had no
-			// history compaction at all).
-			if capped := capStepMessages(opts.Messages); capped != nil {
+			// Keep this request within the context model token budget.
+			modelID := opts.Model.Model()
+			spec := globalRegistry.GetSpec(modelID)
+			budget := CalculateContextBudget(spec, 0, 0)
+			if capped := CapStepMessagesWithCounter(ctx, defaultCounter, modelID, opts.Messages, budget.Available); capped != nil {
 				opts.Messages = capped
 				llmLogMu.Lock()
 				loggedMsgs, lastReqBytes = llmLogRequest(logWrite, opts, capped, loggedMsgs)
@@ -805,6 +804,14 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	}
 
 	result, err := ag.Stream(ctx, streamCall)
+	if err != nil && IsContextOverflowError(err) {
+		reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage("context overflow detected; triggering emergency history compaction and retrying step"))
+		modelID, _ := ctx.Value(modelKey{}).(string)
+		if capped := CapStepMessagesWithCounter(ctx, defaultCounter, modelID, streamCall.Messages, 15000); capped != nil {
+			streamCall.Messages = capped
+		}
+		result, err = ag.Stream(ctx, streamCall)
+	}
 	c.SetCurrentStage("idle")
 	if result != nil {
 		c.addStepTokens(result.Steps)
