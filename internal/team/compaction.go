@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,10 +17,11 @@ import (
 const CompactionHistoryFile = "compaction_history.json"
 const verificationFailurePrefix = "FAIL: "
 
-// StructuredSummary contains the 13 required sections for structured compaction.
+// StructuredSummary contains the sections for structured compaction.
 type StructuredSummary struct {
 	Goal                string   `json:"goal"`
 	Constraints         []string `json:"constraints"`
+	UserCorrections     []string `json:"user_corrections,omitempty"`
 	CompletedTasks      []string `json:"completed_tasks"`
 	InProgressTasks     []string `json:"in_progress_tasks"`
 	BlockedTasks        []string `json:"blocked_tasks"`
@@ -31,6 +33,7 @@ type StructuredSummary struct {
 	VerificationResults []string `json:"verification_results"`
 	OpenQuestions       []string `json:"open_questions"`
 	NextActions         []string `json:"next_actions"`
+	SourceEntryIDs      []string `json:"source_entry_ids,omitempty"`
 }
 
 // CompactionRange records the range of messages included in a compaction operation.
@@ -92,6 +95,7 @@ func (s *StructuredSummary) RenderMarkdown() string {
 	}
 
 	renderSection("Constraints", s.Constraints)
+	renderSection("User Corrections", s.UserCorrections)
 	renderSection("Completed Tasks", s.CompletedTasks)
 	renderSection("In-progress Tasks", s.InProgressTasks)
 	renderSection("Blocked Tasks", s.BlockedTasks)
@@ -103,6 +107,7 @@ func (s *StructuredSummary) RenderMarkdown() string {
 	renderSection("Verification Results", s.VerificationResults)
 	renderSection("Open Questions", s.OpenQuestions)
 	renderSection("Next Actions", s.NextActions)
+	renderSection("Source Entry IDs", s.SourceEntryIDs)
 
 	return strings.TrimSpace(sb.String())
 }
@@ -165,6 +170,8 @@ func parseMarkdownSummary(text string) StructuredSummary {
 			summary.Goal = content
 		case "constraints":
 			summary.Constraints = items
+		case "user corrections", "user correction":
+			summary.UserCorrections = items
 		case "completed tasks":
 			summary.CompletedTasks = items
 		case "in-progress tasks":
@@ -187,6 +194,8 @@ func parseMarkdownSummary(text string) StructuredSummary {
 			summary.OpenQuestions = items
 		case "next actions":
 			summary.NextActions = items
+		case "source entry ids", "source entry id":
+			summary.SourceEntryIDs = items
 		}
 	}
 
@@ -297,6 +306,12 @@ func PerformStructuredCompaction(ctx context.Context, sidecarCompacter SidecarCo
 
 	// Always run invariant enforcement to merge history and ensure no required items are dropped
 	enforced := EnforceCompactionInvariants(&summary, prevSummary, originalGoal, messages)
+	if valErr := ValidateStructuredSummary(enforced, prevSummary, messages, nil, nil); valErr != nil {
+		log.Printf("warning: post-compaction validation failed (%v); retaining previous summary", valErr)
+		if prevSummary != nil {
+			return prevSummary, nil
+		}
+	}
 	return enforced, nil
 }
 
@@ -323,9 +338,13 @@ func EnforceCompactionInvariants(summary *StructuredSummary, prevSummary *Struct
 				corrections = appendUnique(corrections, c)
 			}
 		}
+		for _, uc := range prevSummary.UserCorrections {
+			corrections = appendUnique(corrections, uc)
+		}
 	}
 	for _, corr := range corrections {
 		summary.Constraints = appendUnique(summary.Constraints, corr)
+		summary.UserCorrections = appendUnique(summary.UserCorrections, corr)
 	}
 
 	// Invariant 4: Preserve failed verification
@@ -371,7 +390,7 @@ func EnforceCompactionInvariants(summary *StructuredSummary, prevSummary *Struct
 	summary.FilesModified = modFiles
 	summary.ArtifactsProduced = artifacts
 
-	// Invariant 6: Carry over previous completed/in-progress/blocked/decisions/questions/actions
+	// Invariant 6: Carry over previous completed/in-progress/blocked/decisions/questions/actions/source_entry_ids
 	if prevSummary != nil {
 		for _, item := range prevSummary.CompletedTasks {
 			summary.CompletedTasks = appendUnique(summary.CompletedTasks, item)
@@ -391,9 +410,164 @@ func EnforceCompactionInvariants(summary *StructuredSummary, prevSummary *Struct
 		for _, item := range prevSummary.NextActions {
 			summary.NextActions = appendUnique(summary.NextActions, item)
 		}
+		for _, item := range prevSummary.SourceEntryIDs {
+			summary.SourceEntryIDs = appendUnique(summary.SourceEntryIDs, item)
+		}
 	}
 
 	return summary
+}
+
+// CompactionValidationError represents a failure during post-compaction validation.
+type CompactionValidationError struct {
+	Check   string
+	Message string
+}
+
+func (e *CompactionValidationError) Error() string {
+	return fmt.Sprintf("compaction validation failed [%s]: %s", e.Check, e.Message)
+}
+
+// ValidateStructuredSummary performs deterministic checks on the post-compaction summary (§6.4).
+// Checks:
+// 1. Goal validation (summary goal must not be empty)
+// 2. Active task IDs preserved (active task IDs must exist in summary task lists)
+// 3. Modified artifacts traceable (modified files & artifacts in prevSummary or messages must be present)
+// 4. Latest user correction present (user corrections in messages or prevSummary must be present)
+// 5. Failed task not marked done (failed tasks or verifications must not be in CompletedTasks)
+func ValidateStructuredSummary(summary *StructuredSummary, prevSummary *StructuredSummary, messages []fantasy.Message, activeTaskIDs []string, failedTaskIDs []string) error {
+	if summary == nil {
+		return &CompactionValidationError{Check: "Goal", Message: "summary is nil"}
+	}
+	if strings.TrimSpace(summary.Goal) == "" || summary.Goal == "(none)" {
+		return &CompactionValidationError{Check: "Goal", Message: "summary goal is empty"}
+	}
+
+	// 1. Active task IDs preserved
+	for _, activeID := range activeTaskIDs {
+		activeID = strings.TrimSpace(activeID)
+		if activeID == "" {
+			continue
+		}
+		found := false
+		allTasks := append([]string{}, summary.InProgressTasks...)
+		allTasks = append(allTasks, summary.BlockedTasks...)
+		allTasks = append(allTasks, summary.CompletedTasks...)
+		for _, t := range allTasks {
+			if strings.Contains(strings.ToLower(t), strings.ToLower(activeID)) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return &CompactionValidationError{
+				Check:   "ActiveTasks",
+				Message: fmt.Sprintf("active task ID %q missing from summary task lists", activeID),
+			}
+		}
+	}
+
+	// 2. Modified artifacts traceable
+	_, msgModFiles, msgArtifacts := extractFileOperations(messages)
+	var expectedArtifacts []string
+	expectedArtifacts = append(expectedArtifacts, msgModFiles...)
+	expectedArtifacts = append(expectedArtifacts, msgArtifacts...)
+	if prevSummary != nil {
+		expectedArtifacts = append(expectedArtifacts, prevSummary.FilesModified...)
+		expectedArtifacts = append(expectedArtifacts, prevSummary.ArtifactsProduced...)
+	}
+	for _, expected := range expectedArtifacts {
+		expected = strings.TrimSpace(expected)
+		if expected == "" || expected == "(none)" {
+			continue
+		}
+		found := false
+		for _, actual := range append(summary.FilesModified, summary.ArtifactsProduced...) {
+			if strings.EqualFold(actual, expected) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return &CompactionValidationError{
+				Check:   "ArtifactsTraceable",
+				Message: fmt.Sprintf("modified file or artifact %q is not traceable in summary", expected),
+			}
+		}
+	}
+
+	// 3. Latest user correction present
+	userCorrections := extractUserCorrections(messages)
+	if prevSummary != nil {
+		userCorrections = append(userCorrections, prevSummary.UserCorrections...)
+		for _, c := range prevSummary.Constraints {
+			if strings.Contains(strings.ToLower(c), "user correction") || strings.Contains(strings.ToLower(c), "user feedback") {
+				userCorrections = append(userCorrections, c)
+			}
+		}
+	}
+	if len(userCorrections) > 0 {
+		latestCorr := userCorrections[len(userCorrections)-1]
+		cleanCorr := strings.TrimPrefix(latestCorr, "User correction: ")
+		found := false
+		for _, c := range append(summary.Constraints, summary.UserCorrections...) {
+			if strings.Contains(strings.ToLower(c), strings.ToLower(cleanCorr)) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return &CompactionValidationError{
+				Check:   "UserCorrection",
+				Message: fmt.Sprintf("latest user correction %q missing from summary", latestCorr),
+			}
+		}
+	}
+
+	// 4. Failed task not marked done
+	for _, failedID := range failedTaskIDs {
+		failedID = strings.TrimSpace(failedID)
+		if failedID == "" {
+			continue
+		}
+		for _, completed := range summary.CompletedTasks {
+			if strings.Contains(strings.ToLower(completed), strings.ToLower(failedID)) {
+				return &CompactionValidationError{
+					Check:   "FailedTaskNotDone",
+					Message: fmt.Sprintf("failed task %q is incorrectly marked as completed in summary", failedID),
+				}
+			}
+		}
+	}
+
+	msgFailures := extractFailedVerifications(messages)
+	if prevSummary != nil {
+		for _, v := range prevSummary.VerificationResults {
+			if isVerificationFailure(v) {
+				msgFailures = append(msgFailures, v)
+			}
+		}
+	}
+	for _, fail := range msgFailures {
+		cleanFail := fail
+		for strings.HasPrefix(strings.ToLower(cleanFail), "fail:") {
+			cleanFail = strings.TrimSpace(cleanFail[5:])
+		}
+		cleanFail = strings.TrimSpace(cleanFail)
+		if cleanFail == "" {
+			continue
+		}
+		for _, completed := range summary.CompletedTasks {
+			if strings.EqualFold(completed, cleanFail) || strings.Contains(strings.ToLower(completed), strings.ToLower(cleanFail)) {
+				return &CompactionValidationError{
+					Check:   "FailedTaskNotDone",
+					Message: fmt.Sprintf("failed verification %q is incorrectly marked as completed in summary", cleanFail),
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func appendUnique(slice []string, item string) []string {
@@ -435,7 +609,10 @@ func extractUserCorrections(messages []fantasy.Message) []string {
 					if txt, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok {
 						t := strings.TrimSpace(txt.Text)
 						if t != "" && !strings.HasPrefix(t, "[Structured Compacted History]") {
-							latestCorrection = "User correction: " + t
+							if !strings.HasPrefix(t, "User correction:") {
+								t = "User correction: " + t
+							}
+							latestCorrection = t
 						}
 					}
 				}

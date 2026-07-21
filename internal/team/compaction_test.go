@@ -369,3 +369,124 @@ func TestPerformStructuredCompaction_WithMockSidecar(t *testing.T) {
 		t.Errorf("expected files read ['mock.go'], got %v", summary.FilesRead)
 	}
 }
+
+func TestStructuredSummary_UserCorrectionsAndSourceEntryIDs(t *testing.T) {
+	summary := StructuredSummary{
+		Goal:            "Test new fields",
+		UserCorrections: []string{"Use v2 API"},
+		SourceEntryIDs:  []string{"entry_1", "entry_2"},
+	}
+
+	md := summary.RenderMarkdown()
+	if !strings.Contains(md, "## User Corrections") || !strings.Contains(md, "Use v2 API") {
+		t.Errorf("rendered markdown missing User Corrections: %s", md)
+	}
+	if !strings.Contains(md, "## Source Entry IDs") || !strings.Contains(md, "entry_1") {
+		t.Errorf("rendered markdown missing Source Entry IDs: %s", md)
+	}
+
+	parsed := ParseStructuredSummary(md)
+	if len(parsed.UserCorrections) != 1 || parsed.UserCorrections[0] != "Use v2 API" {
+		t.Errorf("parsed UserCorrections mismatch: %v", parsed.UserCorrections)
+	}
+	if len(parsed.SourceEntryIDs) != 2 || parsed.SourceEntryIDs[0] != "entry_1" {
+		t.Errorf("parsed SourceEntryIDs mismatch: %v", parsed.SourceEntryIDs)
+	}
+}
+
+func TestValidateStructuredSummary_FiveChecks(t *testing.T) {
+	validSummary := &StructuredSummary{
+		Goal:              "Build system",
+		Constraints:       []string{"User correction: use gRPC"},
+		UserCorrections:   []string{"User correction: use gRPC"},
+		CompletedTasks:    []string{"Task 1: Init repo"},
+		InProgressTasks:   []string{"Task 2: Implement auth"},
+		FilesModified:     []string{"auth.go"},
+		ArtifactsProduced: []string{"bin/app"},
+		SourceEntryIDs:    []string{"e1"},
+	}
+
+	// 1. Goal check
+	emptyGoal := *validSummary
+	emptyGoal.Goal = ""
+	if err := ValidateStructuredSummary(&emptyGoal, nil, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "Goal") {
+		t.Errorf("expected Goal validation failure, got: %v", err)
+	}
+
+	// 2. Active tasks check
+	if err := ValidateStructuredSummary(validSummary, nil, nil, []string{"Task 3: Missing task"}, nil); err == nil || !strings.Contains(err.Error(), "ActiveTasks") {
+		t.Errorf("expected ActiveTasks validation failure, got: %v", err)
+	}
+	if err := ValidateStructuredSummary(validSummary, nil, nil, []string{"Task 2: Implement auth"}, nil); err != nil {
+		t.Errorf("unexpected failure for present active task: %v", err)
+	}
+
+	// 3. Artifacts traceable check
+	prevWithArtifact := &StructuredSummary{
+		Goal:          "Build system",
+		FilesModified: []string{"secret.go"},
+	}
+	if err := ValidateStructuredSummary(validSummary, prevWithArtifact, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "ArtifactsTraceable") {
+		t.Errorf("expected ArtifactsTraceable validation failure, got: %v", err)
+	}
+
+	// 4. User correction check
+	msgsWithCorr := []fantasy.Message{
+		fantasy.NewUserMessage("First prompt"),
+		fantasy.NewUserMessage("User correction: must use HTTPS"),
+	}
+	if err := ValidateStructuredSummary(validSummary, nil, msgsWithCorr, nil, nil); err == nil || !strings.Contains(err.Error(), "UserCorrection") {
+		t.Errorf("expected UserCorrection validation failure, got: %v", err)
+	}
+
+	// 5. Failed task not done check
+	badSummary := *validSummary
+	badSummary.CompletedTasks = []string{"Task 4: Failed migration"}
+	if err := ValidateStructuredSummary(&badSummary, nil, nil, nil, []string{"Task 4: Failed migration"}); err == nil || !strings.Contains(err.Error(), "FailedTaskNotDone") {
+		t.Errorf("expected FailedTaskNotDone validation failure, got: %v", err)
+	}
+
+	callEdit := fantasy.ToolCallPart{ToolCallID: "c2", ToolName: "edit", Input: `{"file_path":"db.go"}`}
+	failResult := fantasy.ToolResultPart{ToolCallID: "c2", Output: fantasy.ToolResultOutputContentText{Text: "FAIL: migration script crashed"}}
+	failMsgs := []fantasy.Message{
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{callEdit}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{failResult}},
+	}
+	badSummary2 := *validSummary
+	badSummary2.FilesModified = append(badSummary2.FilesModified, "db.go")
+	badSummary2.CompletedTasks = []string{"migration script crashed"}
+	if err := ValidateStructuredSummary(&badSummary2, nil, failMsgs, nil, nil); err == nil || !strings.Contains(err.Error(), "FailedTaskNotDone") {
+		t.Errorf("expected FailedTaskNotDone validation failure for failed verification, got: %v", err)
+	}
+}
+
+func TestValidateStructuredSummary_FallbackPreservesOldSummary(t *testing.T) {
+	prevSummary := &StructuredSummary{
+		Goal:            "Original Goal",
+		CompletedTasks:  []string{"Task 1: Done"},
+		InProgressTasks: []string{"Task 2: Pending"},
+		UserCorrections: []string{"User correction: stay on Go 1.22"},
+	}
+
+	badSummary := &StructuredSummary{
+		Goal:           "",
+		CompletedTasks: []string{"Task 1: Done"},
+	}
+
+	mock := &mockCompacter{response: badSummary.RenderMarkdown()}
+	msgs := []fantasy.Message{
+		fantasy.NewUserMessage("Original Goal"),
+	}
+
+	result, err := PerformStructuredCompaction(context.Background(), mock, msgs, prevSummary, "Original Goal")
+	if err != nil {
+		t.Fatalf("PerformStructuredCompaction error: %v", err)
+	}
+
+	if result.Goal != prevSummary.Goal {
+		t.Errorf("expected fallback goal %q, got %q", prevSummary.Goal, result.Goal)
+	}
+	if len(result.InProgressTasks) == 0 || result.InProgressTasks[0] != "Task 2: Pending" {
+		t.Errorf("expected in progress tasks from prevSummary retained: %v", result.InProgressTasks)
+	}
+}

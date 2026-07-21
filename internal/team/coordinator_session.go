@@ -257,6 +257,24 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 		summary = EnforceCompactionInvariants(&StructuredSummary{}, prevSummary, originalGoal, messages)
 	}
 
+	var activeTaskIDs, failedTaskIDs []string
+	if c.taskTracker != nil {
+		for _, item := range c.taskTracker.TodoList().Items() {
+			switch item.Status {
+			case TaskInProgress, TaskVerifying, TaskPlanned, TaskPending:
+				activeTaskIDs = append(activeTaskIDs, item.ID, item.Desc)
+			case TaskError:
+				failedTaskIDs = append(failedTaskIDs, item.ID, item.Desc)
+			}
+		}
+	}
+	if valErr := ValidateStructuredSummary(summary, prevSummary, messages, activeTaskIDs, failedTaskIDs); valErr != nil {
+		log.Printf("warning: post-compaction validation failed (%v); retaining previous summary", valErr)
+		if prevSummary != nil {
+			summary = prevSummary
+		}
+	}
+
 	c.lastCompactionSummary = summary
 
 	markdownSummary := summary.RenderMarkdown()
