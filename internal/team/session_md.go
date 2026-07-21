@@ -45,12 +45,12 @@ func GenerateSessionMD(sd *SessionData, teamName string) string {
 	fmt.Fprintf(&b, "**Rounds:** %d  \n", sd.Rounds)
 	fmt.Fprintf(&b, "**Exchanges:** %d\n\n", len(sd.Entries))
 	b.WriteString("---\n\n")
-	for i, entry := range sd.Entries {
-		if i >= maxSessionEntries {
-			remaining := len(sd.Entries) - i
-			fmt.Fprintf(&b, "*... %d earlier exchanges omitted*\n\n", remaining)
-			break
-		}
+	start := 0
+	if len(sd.Entries) > maxSessionEntries {
+		start = len(sd.Entries) - maxSessionEntries
+		fmt.Fprintf(&b, "*... %d older exchanges omitted*\n\n", start)
+	}
+	for _, entry := range sd.Entries[start:] {
 		role := "🧑 User"
 		if entry.Role == "assistant" {
 			role = "🤖 Coordinator"

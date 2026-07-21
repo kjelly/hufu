@@ -107,12 +107,12 @@ func (s *SessionData) ContextSummary() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Previous session context (%d exchanges, %d rounds, since %s):\n\n",
 		len(s.Entries), s.Rounds, s.CreatedAt)
-	for i, entry := range s.Entries {
-		if i >= maxSessionEntries {
-			remaining := len(s.Entries) - i
-			fmt.Fprintf(&b, "... (%d earlier exchanges omitted)\n", remaining)
-			break
-		}
+	start := 0
+	if len(s.Entries) > maxSessionEntries {
+		start = len(s.Entries) - maxSessionEntries
+		fmt.Fprintf(&b, "... (%d older exchanges omitted)\n\n", start)
+	}
+	for _, entry := range s.Entries[start:] {
 		content := utils.TruncateRunes(entry.Content, 500)
 		fmt.Fprintf(&b, "[%s] %s\n", entry.Role, content)
 		b.WriteString("\n")
