@@ -532,6 +532,9 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	defer endExecutionRun()
 	c.resetRoundState()
 	c.lastStmWrite = time.Time{}
+	if c.initialPrompt == "" {
+		c.initialPrompt = userPrompt
+	}
 
 	// Validate configured model names once per coordinator. This is advisory:
 	// we warn on mismatches but keep running so a stale provider list does not

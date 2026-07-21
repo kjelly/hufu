@@ -136,69 +136,73 @@ func (b *coordToolBase) ProviderOptions() fantasy.ProviderOptions        { retur
 func (b *coordToolBase) SetProviderOptions(opts fantasy.ProviderOptions) { b.opts = opts }
 
 type Coordinator struct {
-	mu                    sync.RWMutex
-	session               *TeamSession
-	providerManager       *agent.ProviderManager
-	mcpManager            *mcp.MCPToolManager
-	coreTools             []fantasy.AgentTool
-	agentCache            map[string]fantasy.Agent
-	agentCacheMu          sync.RWMutex
-	round                 int
-	baseRounds            int // rounds completed before the last round-state reset (resume/continue)
-	verbose               bool
-	think                 bool
-	reportStatus          StatusReporter
-	sessionData           *SessionData
-	taskTracker           *TaskTracker
-	skills                []*skill.SkillDef
-	conversationHistory   []fantasy.Message
-	conversationHistoryMu sync.Mutex
-	projectDir            string
-	wrapUp                atomic.Int32
-	finishCalled          atomic.Bool // set when the finish tool completes; cleared per orchestrator run
-	current               atomic.Pointer[currentSnapshot]
-	currentStageStart     time.Time
-	currentStageStartMu   sync.RWMutex
-	auditLogger           *audit.AuditLogger
-	sshSessionMgr         *tools.SSHSessionManager
-	skillUsage            map[string]*skillUsageState
-	skillUsageMu          sync.Mutex
-	delegatedTasks        map[string]int
-	delegatedTasksMu      sync.Mutex
-	taskResultCache       map[string][]cachedTaskEntry // agent → ordered list of past results
-	taskResultCacheMu     sync.RWMutex
-	capabilityCache       map[string]CapabilityResult
-	capabilityCacheMu     sync.Mutex
-	capabilityInflight    map[string]chan CapabilityResult
-	cacheGeneration       atomic.Int64 // bumped each time coordinator starts a new delegation round
-	journal               *taskJournal // persistent task-result journal (nil when disabled)
-	noJournal             bool
-	memoryStore           *memory.MemoryStore
-	skillsMu              sync.RWMutex
-	modelList             []config.ModelEntry
-	sidecarModel          string
-	sidecarInst           *sidecar.Sidecar
-	sidecarInitMu         sync.Mutex
-	sidecarInit           bool
-	guardModel            string
-	guardInst             *sidecar.Sidecar
-	guardInitMu           sync.Mutex
-	guardInit             bool
-	judgeModel            string
-	judgeInst             *sidecar.Sidecar
-	judgeInitMu           sync.Mutex
-	judgeInit             bool
-	planReviewerModel     string
-	cachedWorkerContext   string
-	workerCtxOnce         sync.Once
-	autoLoadedSkills      []*skill.SkillDef
-	autoLoadedSkillsMu    sync.RWMutex
-	forcedSkillNames      map[string]bool // set of skill names specified via --skill
-	maxConcurrent         int
-	sessionTime           time.Time
-	lastStmWrite          time.Time // tracks when stm_write was last called for finish enforcement
-	lastStmWriteMu        sync.Mutex
-	ltmWriteMu            sync.Mutex // Protect LTM file reads and writes
+	mu                              sync.RWMutex
+	session                         *TeamSession
+	providerManager                 *agent.ProviderManager
+	mcpManager                      *mcp.MCPToolManager
+	coreTools                       []fantasy.AgentTool
+	agentCache                      map[string]fantasy.Agent
+	agentCacheMu                    sync.RWMutex
+	round                           int
+	baseRounds                      int // rounds completed before the last round-state reset (resume/continue)
+	verbose                         bool
+	think                           bool
+	reportStatus                    StatusReporter
+	sessionData                     *SessionData
+	taskTracker                     *TaskTracker
+	skills                          []*skill.SkillDef
+	conversationHistory             []fantasy.Message
+	conversationHistorySourceCounts []int
+	conversationHistoryMu           sync.Mutex
+	conversationHistorySourceOffset int
+	lastCompactionSummary           *StructuredSummary
+	initialPrompt                   string
+	projectDir                      string
+	wrapUp                          atomic.Int32
+	finishCalled                    atomic.Bool // set when the finish tool completes; cleared per orchestrator run
+	current                         atomic.Pointer[currentSnapshot]
+	currentStageStart               time.Time
+	currentStageStartMu             sync.RWMutex
+	auditLogger                     *audit.AuditLogger
+	sshSessionMgr                   *tools.SSHSessionManager
+	skillUsage                      map[string]*skillUsageState
+	skillUsageMu                    sync.Mutex
+	delegatedTasks                  map[string]int
+	delegatedTasksMu                sync.Mutex
+	taskResultCache                 map[string][]cachedTaskEntry // agent → ordered list of past results
+	taskResultCacheMu               sync.RWMutex
+	capabilityCache                 map[string]CapabilityResult
+	capabilityCacheMu               sync.Mutex
+	capabilityInflight              map[string]chan CapabilityResult
+	cacheGeneration                 atomic.Int64 // bumped each time coordinator starts a new delegation round
+	journal                         *taskJournal // persistent task-result journal (nil when disabled)
+	noJournal                       bool
+	memoryStore                     *memory.MemoryStore
+	skillsMu                        sync.RWMutex
+	modelList                       []config.ModelEntry
+	sidecarModel                    string
+	sidecarInst                     *sidecar.Sidecar
+	sidecarInitMu                   sync.Mutex
+	sidecarInit                     bool
+	guardModel                      string
+	guardInst                       *sidecar.Sidecar
+	guardInitMu                     sync.Mutex
+	guardInit                       bool
+	judgeModel                      string
+	judgeInst                       *sidecar.Sidecar
+	judgeInitMu                     sync.Mutex
+	judgeInit                       bool
+	planReviewerModel               string
+	cachedWorkerContext             string
+	workerCtxOnce                   sync.Once
+	autoLoadedSkills                []*skill.SkillDef
+	autoLoadedSkillsMu              sync.RWMutex
+	forcedSkillNames                map[string]bool // set of skill names specified via --skill
+	maxConcurrent                   int
+	sessionTime                     time.Time
+	lastStmWrite                    time.Time // tracks when stm_write was last called for finish enforcement
+	lastStmWriteMu                  sync.Mutex
+	ltmWriteMu                      sync.Mutex // Protect LTM file reads and writes
 
 	// Skill pattern detection
 	skillDetector         *skill.SkillPatternDetector
@@ -527,6 +531,18 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	if !planMode {
 		if history := LoadConversationHistory(session.Workspace); len(history) > 0 {
 			c.conversationHistory = history
+			c.conversationHistorySourceCounts = make([]int, len(history))
+			for i := range c.conversationHistorySourceCounts {
+				c.conversationHistorySourceCounts[i] = 1
+			}
+
+			if persisted := LoadSession(session.Workspace); persisted != nil {
+				c.conversationHistorySourceCounts = normalizeSourceCounts(len(history), persisted.ConversationHistorySourceCounts)
+				c.conversationHistorySourceOffset = persisted.ConversationHistorySourceOffset
+				if c.conversationHistorySourceOffset < 0 {
+					c.conversationHistorySourceOffset = 0
+				}
+			}
 		}
 	}
 
@@ -545,6 +561,12 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 func (c *Coordinator) ResetConversation() {
 	c.conversationHistoryMu.Lock()
 	c.conversationHistory = nil
+	c.conversationHistorySourceCounts = nil
+	c.conversationHistorySourceOffset = 0
+	if c.sessionData != nil {
+		c.sessionData.ConversationHistorySourceCounts = nil
+		c.sessionData.ConversationHistorySourceOffset = 0
+	}
 	c.conversationHistoryMu.Unlock()
 
 	c.resetRoundState()

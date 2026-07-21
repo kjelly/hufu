@@ -392,7 +392,7 @@ func TestTrimHistoryPreservingHead(t *testing.T) {
 		msgs[i] = msgWith(string(rune('a' + i)))
 	}
 
-	trimmed := trimHistoryPreservingHead(msgs, 10)
+	trimmed, _, removed := trimHistoryPreservingHead(msgs, nil, 10)
 	if len(trimmed) != 10 {
 		t.Fatalf("expected length 10, got %d", len(trimmed))
 	}
@@ -400,19 +400,162 @@ func TestTrimHistoryPreservingHead(t *testing.T) {
 	if firstText(trimmed[0]) != firstText(msgs[0]) {
 		t.Errorf("head message not preserved: got %q want %q", firstText(trimmed[0]), firstText(msgs[0]))
 	}
+	if removed <= 0 {
+		t.Fatalf("expected trimmed history to remove source messages, got %d", removed)
+	}
 	// Last message must be the most recent.
 	if firstText(trimmed[len(trimmed)-1]) != firstText(msgs[len(msgs)-1]) {
 		t.Errorf("tail message not preserved")
 	}
 
 	// No-op when already within max.
-	if got := trimHistoryPreservingHead(msgs[:5], 10); len(got) != 5 {
+	got, _, gotRemoved := trimHistoryPreservingHead(msgs[:5], nil, 10)
+	if len(got) != 5 {
 		t.Errorf("within-max should be unchanged, got len %d", len(got))
+	}
+	if gotRemoved != 0 {
+		t.Errorf("within-max should not remove source messages, removed %d", gotRemoved)
 	}
 
 	// Non-positive max yields nil.
-	if got := trimHistoryPreservingHead(msgs, 0); got != nil {
+	got, _, gotRemoved = trimHistoryPreservingHead(msgs, nil, 0)
+	if got != nil {
 		t.Errorf("max<=0 should yield nil")
+	}
+	if gotRemoved != len(msgs) {
+		t.Errorf("max<=0 should remove all source messages, removed %d", gotRemoved)
+	}
+}
+
+func TestTrimHistoryPreservingHead_PreservesToolPairWithSourceCounts(t *testing.T) {
+	callA := fantasy.ToolCallPart{ToolCallID: "call_a", ToolName: "view", Input: `{"file_path":"a.txt"}`}
+	resA := fantasy.ToolResultPart{ToolCallID: "call_a", Output: fantasy.ToolResultOutputContentText{Text: "ok"}}
+	callB := fantasy.ToolCallPart{ToolCallID: "call_b", ToolName: "edit", Input: `{"file_path":"b.txt"}`}
+	resB := fantasy.ToolResultPart{ToolCallID: "call_b", Output: fantasy.ToolResultOutputContentText{Text: "done"}}
+
+	msgs := []fantasy.Message{
+		msgWith("goal"),
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{callA}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{resA}},
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{callB}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{resB}},
+		msgWith("tail"),
+	}
+
+	counts := []int{1, 2, 1, 1, 1, 1}
+	trimmed, trimmedCounts, removed := trimHistoryPreservingHead(msgs, counts, 4)
+	if len(trimmed) != 4 {
+		t.Fatalf("expected kept length 4, got %d", len(trimmed))
+	}
+
+	if removed != 3 {
+		t.Fatalf("expected to remove 3 source-count units, got %d", removed)
+	}
+
+	hasCallA := false
+	hasResA := false
+	hasCallB := false
+	hasResB := false
+	for _, msg := range trimmed {
+		for _, part := range msg.Content {
+			if p, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok {
+				if p.ToolCallID == "call_a" {
+					hasCallA = true
+				}
+				if p.ToolCallID == "call_b" {
+					hasCallB = true
+				}
+			}
+			if p, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
+				if p.ToolCallID == "call_a" {
+					hasResA = true
+				}
+				if p.ToolCallID == "call_b" {
+					hasResB = true
+				}
+			}
+		}
+	}
+	if !hasCallB || !hasResB {
+		t.Fatalf("latest tool pair should be preserved together, got call_b=%v result_b=%v", hasCallB, hasResB)
+	}
+	if hasCallA || hasResA {
+		t.Fatalf("orphaned tool pair should have been trimmed, found call_a=%v result_a=%v", hasCallA, hasResA)
+	}
+	if len(trimmedCounts) != len(trimmed) {
+		t.Fatalf("source count length mismatch: got %d want %d", len(trimmedCounts), len(trimmed))
+	}
+	if trimmedCounts[0] != 1 || trimmedCounts[1] != 1 || trimmedCounts[2] != 1 || trimmedCounts[3] != 1 {
+		t.Fatalf("unexpected normalized source counts: %#v", trimmedCounts)
+	}
+}
+
+func TestTrimHistoryPreservingHead_FallbackNeverReturnsEmpty(t *testing.T) {
+	call := fantasy.ToolCallPart{
+		ToolCallID: "call_1",
+		ToolName:   "view",
+		Input:      `{"file_path":"src/main.go"}`,
+	}
+	result := fantasy.ToolResultPart{
+		ToolCallID: "call_1",
+		Output:     fantasy.ToolResultOutputContentText{Text: "ok"},
+	}
+
+	msgs := []fantasy.Message{
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{call}},
+		fantasy.NewUserMessage("middle"),
+		fantasy.NewUserMessage("tail"),
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{result}},
+	}
+	counts := []int{1, 2, 1, 1}
+
+	trimmed, trimmedCounts, removed := trimHistoryPreservingHead(msgs, counts, 1)
+	if len(trimmed) == 0 {
+		t.Fatalf("trimHistoryPreservingHead returned empty history; expected at least one message")
+	}
+	if removed < 0 || removed > len(msgs) {
+		t.Fatalf("removed source-count units out of range: %d", removed)
+	}
+	if len(trimmedCounts) != len(trimmed) {
+		t.Fatalf("source count length mismatch: got %d want %d", len(trimmedCounts), len(trimmed))
+	}
+}
+
+func TestNewCoordinatorRestoresConversationHistorySourceState(t *testing.T) {
+	ws := t.TempDir()
+	history := []fantasy.Message{
+		fantasy.NewUserMessage("goal"),
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.TextPart{Text: "started"}}},
+	}
+	if err := SaveConversationHistory(ws, history); err != nil {
+		t.Fatalf("SaveConversationHistory failed: %v", err)
+	}
+
+	sd := NewSession()
+	sd.ConversationHistorySourceCounts = []int{2, 4}
+	sd.ConversationHistorySourceOffset = 7
+	if err := SaveSession(ws, sd); err != nil {
+		t.Fatalf("SaveSession failed: %v", err)
+	}
+
+	session := &TeamSession{
+		Config:    agent.TeamConfig{Name: "test"},
+		Workspace: ws,
+		Dir:       ws,
+	}
+	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, []string(nil), false, false)
+	if err != nil {
+		t.Fatalf("NewCoordinator failed: %v", err)
+	}
+
+	if c.conversationHistorySourceOffset != 7 {
+		t.Fatalf("expected restored source offset 7, got %d", c.conversationHistorySourceOffset)
+	}
+	if len(c.conversationHistorySourceCounts) != len(history) {
+		t.Fatalf("expected source count length %d, got %d", len(history), len(c.conversationHistorySourceCounts))
+	}
+	if c.conversationHistorySourceCounts[0] != 2 || c.conversationHistorySourceCounts[1] != 4 {
+		t.Fatalf("restored counts mismatch: %#v", c.conversationHistorySourceCounts)
 	}
 }
 

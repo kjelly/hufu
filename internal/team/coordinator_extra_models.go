@@ -214,6 +214,11 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		conversationHistoryClone = make([]fantasy.Message, len(orig.conversationHistory))
 		copy(conversationHistoryClone, orig.conversationHistory)
 	}
+	var conversationHistorySourceCountsClone []int
+	if orig.conversationHistorySourceCounts != nil {
+		conversationHistorySourceCountsClone = make([]int, len(orig.conversationHistorySourceCounts))
+		copy(conversationHistorySourceCountsClone, orig.conversationHistorySourceCounts)
+	}
 	orig.conversationHistoryMu.Unlock()
 
 	var skillsClone []*skill.SkillDef
@@ -388,61 +393,85 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 	stepConfirmFnCopy := orig.stepConfirmFn
 	orig.stepConfirmFnMu.RUnlock()
 
+	cloneStructuredSummary := func(summary *StructuredSummary) *StructuredSummary {
+		if summary == nil {
+			return nil
+		}
+		cloned := *summary
+		cloned.Constraints = append([]string(nil), summary.Constraints...)
+		cloned.CompletedTasks = append([]string(nil), summary.CompletedTasks...)
+		cloned.InProgressTasks = append([]string(nil), summary.InProgressTasks...)
+		cloned.BlockedTasks = append([]string(nil), summary.BlockedTasks...)
+		cloned.KeyDecisions = append([]string(nil), summary.KeyDecisions...)
+		cloned.ErrorsAndFixes = append([]string(nil), summary.ErrorsAndFixes...)
+		cloned.FilesRead = append([]string(nil), summary.FilesRead...)
+		cloned.FilesModified = append([]string(nil), summary.FilesModified...)
+		cloned.ArtifactsProduced = append([]string(nil), summary.ArtifactsProduced...)
+		cloned.VerificationResults = append([]string(nil), summary.VerificationResults...)
+		cloned.OpenQuestions = append([]string(nil), summary.OpenQuestions...)
+		cloned.NextActions = append([]string(nil), summary.NextActions...)
+		return &cloned
+	}
+
 	return &Coordinator{
-		session:                newSession,
-		providerManager:        orig.providerManager,
-		mcpManager:             orig.mcpManager,
-		coreTools:              coreToolsClone,
-		agentCache:             agentCacheClone,
-		round:                  orig.round,
-		verbose:                orig.verbose,
-		think:                  orig.think,
-		reportStatus:           orig.reportStatus,
-		sessionData:            sessionDataClone,
-		taskTracker:            orig.taskTracker,
-		skills:                 skillsClone,
-		conversationHistory:    conversationHistoryClone,
-		projectDir:             orig.projectDir,
-		auditLogger:            orig.auditLogger,
-		sshSessionMgr:          orig.sshSessionMgr,
-		skillUsage:             skillUsageClone,
-		delegatedTasks:         delegatedTasksClone,
-		taskResultCache:        taskResultCacheClone,
-		capabilityCache:        capabilityCacheClone,
-		capabilityInflight:     make(map[string]chan CapabilityResult),
-		memoryStore:            orig.memoryStore,
-		modelList:              orig.modelList,
-		sidecarModel:           orig.sidecarModel,
-		sidecarInst:            sidecarInstCopy,
-		sidecarInit:            sidecarInitCopy,
-		guardModel:             orig.guardModel,
-		guardInst:              guardInstCopy,
-		guardInit:              guardInitCopy,
-		judgeModel:             orig.judgeModel,
-		judgeInst:              judgeInstCopy,
-		judgeInit:              judgeInitCopy,
-		planReviewerModel:      orig.planReviewerModel,
-		cachedWorkerContext:    orig.cachedWorkerContext,
-		autoLoadedSkills:       autoLoadedSkillsClone,
-		forcedSkillNames:       forcedSkillNamesClone,
-		maxConcurrent:          orig.maxConcurrent,
-		sessionTime:            orig.sessionTime,
-		skillDetector:          orig.skillDetector,
-		skillGenerator:         orig.skillGenerator,
-		skillPatternsDetected:  orig.skillPatternsDetected,
-		hooks:                  orig.hooks,
-		rbashMode:              orig.rbashMode,
-		restrictedPath:         orig.restrictedPath,
-		noNet:                  orig.noNet,
-		forceMCP:               orig.forceMCP,
-		pendingPlans:           pendingPlansClone,
-		approvedOutputs:        approvedOutputsClone,
-		approvedErrors:         approvedErrorsClone,
-		forcePlanFirst:         orig.forcePlanFirst,
-		autoSkillsEnabled:      orig.autoSkillsEnabled,
-		sessionToolPermissions: sessionToolPermissionsClone,
-		workerSummaries:        workerSummariesClone,
-		stepConfirmFn:          stepConfirmFnCopy,
+		session:                         newSession,
+		providerManager:                 orig.providerManager,
+		mcpManager:                      orig.mcpManager,
+		coreTools:                       coreToolsClone,
+		agentCache:                      agentCacheClone,
+		round:                           orig.round,
+		verbose:                         orig.verbose,
+		think:                           orig.think,
+		reportStatus:                    orig.reportStatus,
+		sessionData:                     sessionDataClone,
+		taskTracker:                     orig.taskTracker,
+		skills:                          skillsClone,
+		conversationHistory:             conversationHistoryClone,
+		conversationHistorySourceCounts: conversationHistorySourceCountsClone,
+		conversationHistorySourceOffset: orig.conversationHistorySourceOffset,
+		lastCompactionSummary:           cloneStructuredSummary(orig.lastCompactionSummary),
+		initialPrompt:                   orig.initialPrompt,
+		projectDir:                      orig.projectDir,
+		auditLogger:                     orig.auditLogger,
+		sshSessionMgr:                   orig.sshSessionMgr,
+		skillUsage:                      skillUsageClone,
+		delegatedTasks:                  delegatedTasksClone,
+		taskResultCache:                 taskResultCacheClone,
+		capabilityCache:                 capabilityCacheClone,
+		capabilityInflight:              make(map[string]chan CapabilityResult),
+		memoryStore:                     orig.memoryStore,
+		modelList:                       orig.modelList,
+		sidecarModel:                    orig.sidecarModel,
+		sidecarInst:                     sidecarInstCopy,
+		sidecarInit:                     sidecarInitCopy,
+		guardModel:                      orig.guardModel,
+		guardInst:                       guardInstCopy,
+		guardInit:                       guardInitCopy,
+		judgeModel:                      orig.judgeModel,
+		judgeInst:                       judgeInstCopy,
+		judgeInit:                       judgeInitCopy,
+		planReviewerModel:               orig.planReviewerModel,
+		cachedWorkerContext:             orig.cachedWorkerContext,
+		autoLoadedSkills:                autoLoadedSkillsClone,
+		forcedSkillNames:                forcedSkillNamesClone,
+		maxConcurrent:                   orig.maxConcurrent,
+		sessionTime:                     orig.sessionTime,
+		skillDetector:                   orig.skillDetector,
+		skillGenerator:                  orig.skillGenerator,
+		skillPatternsDetected:           orig.skillPatternsDetected,
+		hooks:                           orig.hooks,
+		rbashMode:                       orig.rbashMode,
+		restrictedPath:                  orig.restrictedPath,
+		noNet:                           orig.noNet,
+		forceMCP:                        orig.forceMCP,
+		pendingPlans:                    pendingPlansClone,
+		approvedOutputs:                 approvedOutputsClone,
+		approvedErrors:                  approvedErrorsClone,
+		forcePlanFirst:                  orig.forcePlanFirst,
+		autoSkillsEnabled:               orig.autoSkillsEnabled,
+		sessionToolPermissions:          sessionToolPermissionsClone,
+		workerSummaries:                 workerSummariesClone,
+		stepConfirmFn:                   stepConfirmFnCopy,
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/fantasy"
 )
@@ -71,7 +72,15 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 	for _, step := range steps {
 		for _, msg := range step.Messages {
 			c.conversationHistory = append(c.conversationHistory, truncateOversizedMessage(msg, maxMessageSize))
+			c.conversationHistorySourceCounts = append(c.conversationHistorySourceCounts, 1)
 		}
+	}
+	if len(c.conversationHistorySourceCounts) < len(c.conversationHistory) {
+		for i := len(c.conversationHistorySourceCounts); i < len(c.conversationHistory); i++ {
+			c.conversationHistorySourceCounts = append(c.conversationHistorySourceCounts, 1)
+		}
+	} else if len(c.conversationHistorySourceCounts) > len(c.conversationHistory) {
+		c.conversationHistorySourceCounts = c.conversationHistorySourceCounts[:len(c.conversationHistory)]
 	}
 	if len(c.conversationHistory) <= maxConversationHistory {
 		return
@@ -81,17 +90,43 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 		compactCount = len(c.conversationHistory) / 3
 	}
 	if compactCount <= 0 {
-		c.conversationHistory = trimHistoryPreservingHead(c.conversationHistory, maxConversationHistory)
+		trimmed, trimmedCounts, removed := trimHistoryPreservingHead(c.conversationHistory, c.conversationHistorySourceCounts, maxConversationHistory)
+		c.conversationHistory = trimmed
+		c.conversationHistorySourceCounts = trimmedCounts
+		c.conversationHistorySourceOffset += removed
 		return
 	}
-	compacted := c.compactMessages(ctx, c.conversationHistory[:compactCount])
+	// Invariant 1: Ensure boundary never splits tool call and tool result.
+	compactCount = AdjustBoundaryToPreserveToolPairs(c.conversationHistory, compactCount)
+	if compactCount <= 0 || compactCount >= len(c.conversationHistory) {
+		trimmed, trimmedCounts, removed := trimHistoryPreservingHead(c.conversationHistory, c.conversationHistorySourceCounts, maxConversationHistory)
+		c.conversationHistory = trimmed
+		c.conversationHistorySourceCounts = trimmedCounts
+		c.conversationHistorySourceOffset += removed
+		return
+	}
+
+	sourceOffset := c.conversationHistorySourceOffset
+	sourceCounts := c.conversationHistorySourceCounts[:compactCount]
+	compacted := c.compactMessages(ctx, c.conversationHistory[:compactCount], sourceOffset, sourceCounts)
+	compactedSourceCount := sumSourceCounts(sourceCounts)
 	c.conversationHistory = append(compacted, c.conversationHistory[compactCount:]...)
+	c.conversationHistorySourceCounts = append(
+		[]int{compactedSourceCount},
+		c.conversationHistorySourceCounts[compactCount:]...,
+	)
 	if len(c.conversationHistory) > maxConversationHistory {
-		// Compaction did not shrink enough (e.g. sidecar unavailable so
-		// compactMessages returned the input unchanged). Keep the first few
-		// messages — which carry the original goal and instructions — plus the
-		// most recent ones, instead of dropping the head entirely.
-		c.conversationHistory = trimHistoryPreservingHead(c.conversationHistory, maxConversationHistory)
+		// The summary message plus the retained tail still exceeds the limit
+		// (the tail alone is near the cap). compactMessages always replaces the
+		// compacted prefix with a structured summary — even without a sidecar —
+		// so this branch means the retained segment is too large, not that
+		// compaction was skipped. Keep the first few messages — which carry the
+		// original goal and instructions — plus the most recent ones, instead of
+		// dropping the head entirely.
+		trimmed, trimmedCounts, removed := trimHistoryPreservingHead(c.conversationHistory, c.conversationHistorySourceCounts, maxConversationHistory)
+		c.conversationHistory = trimmed
+		c.conversationHistorySourceCounts = trimmedCounts
+		c.conversationHistorySourceOffset += removed
 	}
 }
 
@@ -104,84 +139,276 @@ const conversationHeadKeep = 4
 // first conversationHeadKeep messages and the most recent remainder. This avoids
 // the "amnesia" failure where the original goal is dropped and the coordinator
 // re-delegates already-completed work.
-func trimHistoryPreservingHead(msgs []fantasy.Message, max int) []fantasy.Message {
+func trimHistoryPreservingHead(msgs []fantasy.Message, sourceCounts []int, max int) ([]fantasy.Message, []int, int) {
 	if max <= 0 {
-		return nil
+		return nil, nil, len(msgs)
 	}
 	if len(msgs) <= max {
-		return msgs
+		return msgs, sourceCounts, 0
 	}
+
+	sourceCounts = normalizeSourceCounts(len(msgs), sourceCounts)
+
 	headKeep := conversationHeadKeep
 	if headKeep >= max {
 		headKeep = max / 4
 	}
-	tailKeep := max - headKeep
-	trimmed := make([]fantasy.Message, 0, max)
-	trimmed = append(trimmed, msgs[:headKeep]...)
-	trimmed = append(trimmed, msgs[len(msgs)-tailKeep:]...)
-	return trimmed
-}
 
-func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Message) []fantasy.Message {
-	s := c.Sidecar()
-	if s == nil || len(messages) < 2 {
-		return messages
+	for head := trimMinInt(headKeep, len(msgs)); head >= 0; head-- {
+		tail := max - head
+		if tail < 0 || head+tail > len(msgs) {
+			continue
+		}
+		tailStart := len(msgs) - tail
+		if head > tailStart {
+			continue
+		}
+		if !isToolPairBoundaryClean(msgs, head) || !isToolPairBoundaryClean(msgs, tailStart) {
+			continue
+		}
+		trimmed := make([]fantasy.Message, 0, head+tail)
+		trimmed = append(trimmed, msgs[:head]...)
+		trimmed = append(trimmed, msgs[tailStart:]...)
+
+		trimmedCounts := make([]int, 0, head+tail)
+		trimmedCounts = append(trimmedCounts, sourceCounts[:head]...)
+		trimmedCounts = append(trimmedCounts, sourceCounts[tailStart:]...)
+		return trimmed, trimmedCounts, sumSourceCounts(sourceCounts[head:tailStart])
 	}
-	var b strings.Builder
-	for _, msg := range messages {
-		for _, part := range msg.Content {
-			if txt, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok {
-				b.WriteString(txt.Text)
-				b.WriteString("\n")
-			}
+
+	start := len(msgs) - max
+	start = AdjustBoundaryToPreserveToolPairs(msgs, start)
+
+	minKeep := trimMinInt(max, len(msgs))
+	if minKeep < 1 {
+		minKeep = 1
+	}
+	maxStart := len(msgs) - minKeep
+	if start > maxStart {
+		start = maxStart
+	}
+	if start < 0 {
+		start = 0
+	}
+
+	for probe := start; probe >= 0; probe-- {
+		if isToolPairBoundaryClean(msgs, probe) {
+			start = probe
+			break
 		}
 	}
-	if b.Len() == 0 {
+	if start < 0 {
+		start = 0
+	}
+
+	trimmed := make([]fantasy.Message, len(msgs)-start)
+	copy(trimmed, msgs[start:])
+	trimmedCounts := make([]int, len(msgs)-start)
+	copy(trimmedCounts, sourceCounts[start:])
+	return trimmed, trimmedCounts, sumSourceCounts(sourceCounts[:start])
+}
+
+func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Message, sourceOffset int, sourceCounts []int) []fantasy.Message {
+	if len(messages) < 1 {
 		return messages
 	}
+	sourceCounts = normalizeSourceCounts(len(messages), sourceCounts)
+	sourceCount := sumSourceCounts(sourceCounts)
+
+	s := c.Sidecar()
+	workspace := ""
+	if c.session != nil {
+		workspace = c.session.Workspace
+	}
+
+	// Invariant 6: Load previous structured summary if available
+	var prevSummary *StructuredSummary
+	if c.lastCompactionSummary != nil {
+		prevSummary = c.lastCompactionSummary
+	} else if workspace != "" {
+		prevSummary = GetLatestCompactionSummary(workspace)
+	}
+
+	tokensBefore := countTokensInMessages(messages)
+	if prevSummary != nil {
+		tokensBefore += countTokensInText(prevSummary.RenderMarkdown())
+	}
+
+	// Invariant 2: Original user goal
+	originalGoal := c.initialPrompt
+	if originalGoal == "" && prevSummary != nil {
+		originalGoal = prevSummary.Goal
+	}
+	if originalGoal == "" {
+		originalGoal = extractFirstUserMessageText(messages)
+	}
+
+	var sidecarAdapter SidecarCompacter
+	if s != nil {
+		sidecarAdapter = s
+	}
+
+	summary, err := PerformStructuredCompaction(ctx, sidecarAdapter, messages, prevSummary, originalGoal)
+	if err != nil || summary == nil {
+		summary = EnforceCompactionInvariants(&StructuredSummary{}, prevSummary, originalGoal, messages)
+	}
+
+	c.lastCompactionSummary = summary
+
+	markdownSummary := summary.RenderMarkdown()
+	tokensAfter := countTokensInText(markdownSummary)
+
+	// Invariant 7: Persist compaction record with tokens_before, tokens_after, and source range
+	if workspace != "" {
+		rec := CompactionRecord{
+			ID:           fmt.Sprintf("compact_%d", time.Now().UnixNano()),
+			Timestamp:    time.Now(),
+			TokensBefore: tokensBefore,
+			TokensAfter:  tokensAfter,
+			SourceRange: CompactionRange{
+				StartIndex: sourceOffset,
+				EndIndex:   sourceOffset + sourceCount - 1,
+				MsgCount:   sourceCount,
+			},
+			Summary: *summary,
+		}
+		if err := SaveCompactionRecord(workspace, rec); err != nil {
+			log.Printf("warning: failed to save compaction record: %v", err)
+		}
+	}
+
 	if c.think {
-		c.emitThinkSidecar("Compact", fmt.Sprintf("compacting %d messages", len(messages)))
+		c.emitThinkSidecar("Compact", fmt.Sprintf("compacted %d messages into structured summary (%d -> %d tokens)", len(messages), tokensBefore, tokensAfter))
 	}
-	result, err := s.Compact(ctx, b.String(), "Compress the following conversation into a concise summary while preserving key facts, decisions, and results.")
-	if err != nil || result == "" {
-		return messages
-	}
+
 	return []fantasy.Message{
-		fantasy.NewUserMessage("[Compacted history]\n" + result),
+		fantasy.NewUserMessage("[Structured Compacted History]\n" + markdownSummary),
 	}
+}
+
+func normalizeSourceCounts(length int, sourceCounts []int) []int {
+	if len(sourceCounts) < length {
+		normalized := make([]int, length)
+		copy(normalized, sourceCounts)
+		for i := len(sourceCounts); i < length; i++ {
+			normalized[i] = 1
+		}
+		for i := range normalized {
+			if normalized[i] <= 0 {
+				normalized[i] = 1
+			}
+		}
+		return normalized
+	}
+
+	normalized := make([]int, len(sourceCounts))
+	copy(normalized, sourceCounts)
+	if len(normalized) > length {
+		normalized = normalized[:length]
+	}
+	for i := range normalized {
+		if normalized[i] <= 0 {
+			normalized[i] = 1
+		}
+	}
+	return normalized
+}
+
+func sumSourceCounts(sourceCounts []int) int {
+	total := 0
+	for _, c := range sourceCounts {
+		total += c
+	}
+	return trimMaxInt(1, total)
+}
+
+func trimMinInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func trimMaxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (c *Coordinator) SetSessionData(sd *SessionData) {
 	c.sessionData = sd
-	if sd != nil {
-		// A resumed session carries rounds from earlier runs; without this the
-		// saved count restarts at this run's round and understates the session.
-		c.baseRounds = sd.Rounds
-		if len(sd.Tasks) > 0 {
-			c.taskTracker.TodoList().Restore(sd.Tasks)
-
-			c.taskResultCacheMu.Lock()
-			gen := c.cacheGeneration.Load()
-			for _, t := range sd.Tasks {
-				if t.Status == TaskDone && t.Output != "" {
-					agentKey := strings.ToLower(t.Agent)
-					c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
-						taskDesc:   t.Desc,
-						verify:     t.Verify,
-						verifyMode: normalizeVerifyMode(t.VerifyMode),
-						output:     t.Output,
-						generation: gen,
-						pinned:     true,
-					})
-					if len(c.taskResultCache[agentKey]) > maxTaskCacheEntries {
-						c.taskResultCache[agentKey] = c.taskResultCache[agentKey][1:]
-					}
-				}
-			}
-			c.taskResultCacheMu.Unlock()
-		}
-		c.taskTracker.TodoList().onChange = c.saveCheckpoint
+	if sd == nil {
+		return
 	}
+
+	// A resumed session carries rounds from earlier runs; without this the
+	// saved count restarts at this run's round and understates the session.
+	c.baseRounds = sd.Rounds
+	if len(sd.Tasks) > 0 {
+		c.taskTracker.TodoList().Restore(sd.Tasks)
+	}
+
+	c.taskResultCacheMu.Lock()
+	gen := c.cacheGeneration.Load()
+	for _, t := range sd.Tasks {
+		if t.Status == TaskDone && t.Output != "" {
+			agentKey := strings.ToLower(t.Agent)
+			c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
+				taskDesc:   t.Desc,
+				verify:     t.Verify,
+				verifyMode: normalizeVerifyMode(t.VerifyMode),
+				output:     t.Output,
+				generation: gen,
+				pinned:     true,
+			})
+			if len(c.taskResultCache[agentKey]) > maxTaskCacheEntries {
+				c.taskResultCache[agentKey] = c.taskResultCache[agentKey][1:]
+			}
+		}
+	}
+	c.taskResultCacheMu.Unlock()
+
+	c.taskTracker.TodoList().onChange = c.saveCheckpoint
+	c.hydrateConversationHistoryFromSessionData()
+}
+
+func (c *Coordinator) hydrateConversationHistoryFromSessionData() {
+	if c.sessionData == nil || len(c.conversationHistory) == 0 {
+		return
+	}
+
+	if len(c.sessionData.ConversationHistorySourceCounts) > 0 {
+		c.conversationHistorySourceCounts = normalizeSourceCounts(len(c.conversationHistory), c.sessionData.ConversationHistorySourceCounts)
+	} else if len(c.conversationHistorySourceCounts) != len(c.conversationHistory) {
+		c.conversationHistorySourceCounts = make([]int, len(c.conversationHistory))
+		for i := range c.conversationHistorySourceCounts {
+			c.conversationHistorySourceCounts[i] = 1
+		}
+	}
+
+	if c.sessionData.ConversationHistorySourceOffset > 0 || len(c.conversationHistorySourceCounts) > 0 {
+		c.conversationHistorySourceOffset = c.sessionData.ConversationHistorySourceOffset
+	}
+	if c.conversationHistorySourceOffset < 0 {
+		c.conversationHistorySourceOffset = 0
+	}
+}
+
+func (c *Coordinator) syncConversationHistoryStateToSessionData() {
+	if c.sessionData == nil {
+		return
+	}
+	if c.conversationHistorySourceOffset < 0 {
+		c.conversationHistorySourceOffset = 0
+	}
+	c.sessionData.ConversationHistorySourceOffset = c.conversationHistorySourceOffset
+
+	if len(c.conversationHistorySourceCounts) == 0 {
+		c.sessionData.ConversationHistorySourceCounts = nil
+		return
+	}
+	c.sessionData.ConversationHistorySourceCounts = append([]int(nil), c.conversationHistorySourceCounts...)
 }
 
 func (c *Coordinator) saveCheckpoint() {
@@ -278,6 +505,7 @@ func (c *Coordinator) saveHistoryAndSession(ctx context.Context, steps []fantasy
 	c.conversationHistoryMu.Lock()
 	c.appendHistory(ctx, steps)
 	_ = SaveConversationHistory(c.session.Workspace, c.conversationHistory)
+	c.syncConversationHistoryStateToSessionData()
 	c.conversationHistoryMu.Unlock()
 	if c.sessionData != nil {
 		_ = SaveSession(c.session.Workspace, c.sessionData)

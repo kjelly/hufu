@@ -19,6 +19,7 @@ func TestIsWorkspaceRecordPath(t *testing.T) {
 		want   bool
 	}{
 		{"session history under team dir", "workspace/default/session_history.json", "workspace", true},
+		{"compaction history under team dir", "workspace/default/compaction_history.json", "workspace", true},
 		{"session json under team dir", "workspace/default/session.json", "workspace", true},
 		{"session json directly under workspace", "workspace/session.json", "workspace", true},
 		{"task journal", "workspace/default/logs/task_journal.jsonl", "workspace", true},
@@ -85,6 +86,7 @@ func writeWorkspaceFixture(t *testing.T) string {
 		"workspace/default/notes.md",
 		"workspace/default/session_history.json",
 		"workspace/default/session.json",
+		"workspace/default/compaction_history.json",
 		"workspace/default/logs/task_journal.jsonl",
 		"workspace/default/logs/llm/team/agent/llm.log",
 		"workspace/default/logs/audit/audit-2026-07-12.jsonl",
@@ -105,6 +107,7 @@ func writeWorkspaceFixture(t *testing.T) string {
 var workspaceRecordFixtureNames = []string{
 	"session_history.json",
 	"session.json",
+	"compaction_history.json",
 	"task_journal.jsonl",
 	"llm.log",
 	"audit-2026-07-12.jsonl",
@@ -140,10 +143,86 @@ func TestGrepInsideWorkspaceBypassesExclusion(t *testing.T) {
 		t.Fatalf("executeGrep: %v", err)
 	}
 
-	for _, record := range []string{"session_history.json", "llm.log", "task_journal.jsonl"} {
+	for _, record := range []string{"session_history.json", "llm.log", "task_journal.jsonl", "compaction_history.json"} {
 		if !strings.Contains(resp.Content, record) {
 			t.Errorf("explicit workspace search missing record %q:\n%s", record, resp.Content)
 		}
+	}
+}
+
+func TestGrepCompactionHistoryPathFiltersOutsideWorkspace(t *testing.T) {
+	root := t.TempDir()
+	compactionPath := filepath.Join(root, "workspace", "default", "compaction_history.json")
+	regularPath := filepath.Join(root, "outside.txt")
+
+	for _, p := range []string{compactionPath, regularPath} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("creating parent dir for %q: %v", p, err)
+		}
+	}
+
+	compactionContent := "compaction-history-search-keyword: keep-workspace-private\n"
+	regularContent := "compaction-history-search-keyword: visible-outside\n"
+
+	if err := os.WriteFile(compactionPath, []byte(compactionContent), 0o644); err != nil {
+		t.Fatalf("writing compaction file: %v", err)
+	}
+	if err := os.WriteFile(regularPath, []byte(regularContent), 0o644); err != nil {
+		t.Fatalf("writing outside file: %v", err)
+	}
+
+	resp, err := executeGrep(
+		context.Background(),
+		fantasy.ToolCall{Input: `{"pattern":"compaction-history-search-keyword"}`},
+		root,
+		ToolConfig{WorkDir: root},
+	)
+	if err != nil {
+		t.Fatalf("executeGrep: %v", err)
+	}
+
+	if strings.Contains(resp.Content, "compaction_history.json") {
+		t.Fatalf("compaction_history.json should be excluded in workspace-agnostic grep\n%s", resp.Content)
+	}
+	if strings.Contains(resp.Content, compactionContent) {
+		t.Fatalf("compaction history content should not be visible in workspace-agnostic grep\n%s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, regularContent) {
+		t.Fatalf("expected outside workspace match in grep output, got: %q", resp.Content)
+	}
+	if strings.Contains(resp.Content, "outside.txt") == false {
+		t.Fatalf("expected outside.txt to be included in grep output, got: %q", resp.Content)
+	}
+}
+
+func TestGrepCompactionHistoryVisibleInsideWorkspace(t *testing.T) {
+	root := t.TempDir()
+	wsDir := filepath.Join(root, "workspace", "default")
+	compactionPath := filepath.Join(wsDir, "compaction_history.json")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatalf("creating workspace dir: %v", err)
+	}
+
+	compactionContent := "compaction-history-search-keyword: workspace-visible\n"
+	if err := os.WriteFile(compactionPath, []byte(compactionContent), 0o644); err != nil {
+		t.Fatalf("writing compaction file: %v", err)
+	}
+
+	resp, err := executeGrep(
+		context.Background(),
+		fantasy.ToolCall{Input: `{"pattern":"compaction-history-search-keyword"}`},
+		wsDir,
+		ToolConfig{WorkDir: wsDir},
+	)
+	if err != nil {
+		t.Fatalf("executeGrep: %v", err)
+	}
+
+	if !strings.Contains(resp.Content, "compaction_history.json") {
+		t.Fatalf("expected compaction_history.json in workspace-local grep output, got: %q", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "workspace-visible") {
+		t.Fatalf("expected compaction content in workspace-local grep output, got: %q", resp.Content)
 	}
 }
 
@@ -200,7 +279,7 @@ func TestGlobExcludesWorkspaceRecords(t *testing.T) {
 	if !strings.Contains(resp.Content, "config.json") {
 		t.Errorf("glob output missing regular file config.json:\n%s", resp.Content)
 	}
-	for _, record := range []string{"session.json", "session_history.json"} {
+	for _, record := range []string{"session.json", "session_history.json", "compaction_history.json"} {
 		if strings.Contains(resp.Content, record) {
 			t.Errorf("glob output contains workspace record %q:\n%s", record, resp.Content)
 		}
@@ -219,7 +298,7 @@ func TestGlobWalkExcludesWorkspaceRecords(t *testing.T) {
 	if !strings.Contains(joined, "config.json") {
 		t.Errorf("walk output missing regular file config.json:\n%s", joined)
 	}
-	for _, record := range []string{"session.json", "session_history.json"} {
+	for _, record := range []string{"session.json", "session_history.json", "compaction_history.json"} {
 		if strings.Contains(joined, record) {
 			t.Errorf("walk output contains workspace record %q:\n%s", record, joined)
 		}

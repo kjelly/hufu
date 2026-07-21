@@ -569,3 +569,55 @@ func normalizeAskUserSelection(resp tools.AskUserResponse, opts []tools.AskUserT
 
 	return tools.AskUserResponse{Answers: answers, Free: strings.TrimSpace(resp.Free)}, true
 }
+
+func (s *Sidecar) CompactStructured(ctx context.Context, conversationText, prevSummaryText, originalGoal string) (string, error) {
+	if s == nil || s.agent == nil {
+		return "", fmt.Errorf("sidecar not initialized")
+	}
+
+	if prevSummaryText == "" {
+		prevSummaryText = "(none)"
+	}
+
+	prompt := fmt.Sprintf(`You are an expert conversation summarizer for autonomous agent systems.
+Compress the conversation segment into a structured summary. You must merge with the previous structured summary if one exists.
+
+Original User Goal: %s
+
+Previous Structured Summary:
+%s
+
+New Conversation Segment to Compact:
+%s
+
+You MUST produce a JSON object with the following exact keys:
+{
+  "goal": "Original user goal and any refined goal",
+  "constraints": ["Constraint 1", "Constraint 2"],
+  "completed_tasks": ["Task 1", "Task 2"],
+  "in_progress_tasks": ["Task A"],
+  "blocked_tasks": ["Task B"],
+  "key_decisions": ["Decision 1"],
+  "errors_and_fixes": ["Error 1 -> Fix 1"],
+  "files_read": ["path/to/file1"],
+  "files_modified": ["path/to/file2"],
+  "artifacts_produced": ["path/to/artifact"],
+  "verification_results": ["PASS: test_x", "FAIL: verify_cmd"],
+  "open_questions": ["Question 1"],
+  "next_actions": ["Next step 1"]
+}
+
+Rules:
+1. Preserve the original user goal and any user corrections/feedback verbatim or in summary.
+2. Preserve all failed verification results and errors. Do NOT omit failures.
+3. Preserve all file paths read, modified, and artifacts produced, merging with previous lists without losing history.
+4. Ensure every single key is present in the JSON output.
+
+Return ONLY the JSON object.`, originalGoal, prevSummaryText, conversationText)
+
+	result, err := s.generate(ctx, prompt)
+	if err != nil {
+		return "", fmt.Errorf("sidecar compact structured generate failed: %w", err)
+	}
+	return strings.TrimSpace(result), nil
+}

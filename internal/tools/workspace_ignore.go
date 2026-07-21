@@ -32,6 +32,7 @@ var workspaceRecordNames = []string{
 	"session_history.json",
 	"session.json",
 	"task_journal.jsonl",
+	"compaction_history.json",
 	"llm.log",
 }
 

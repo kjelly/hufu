@@ -69,6 +69,7 @@ func filterMessages(messages []fantasy.Message) []fantasy.Message {
 }
 
 func DeleteConversationHistory(workspace string) error {
+	_ = DeleteCompactionHistory(workspace)
 	path := filepath.Join(workspace, historyFile)
 	err := os.Remove(path)
 	if err != nil && !os.IsNotExist(err) {

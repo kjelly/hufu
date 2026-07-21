@@ -105,3 +105,73 @@ func TestPlanReviewerUsesConfiguredModel(t *testing.T) {
 		t.Errorf("expected modelID to be custom-reviewer-model, got %q", pr.modelID)
 	}
 }
+
+func TestCloneCoordinatorCopiesCompactionState(t *testing.T) {
+	orig := &Coordinator{
+		initialPrompt: "implement feature x",
+		lastCompactionSummary: &StructuredSummary{
+			Goal:                "implement feature x",
+			CompletedTasks:      []string{"task-a"},
+			FilesModified:       []string{"a.go"},
+			VerificationResults: []string{"FAIL: go test"},
+		},
+		session: &TeamSession{},
+	}
+
+	cloned := cloneCoordinator(orig, orig.session)
+	if cloned.initialPrompt != orig.initialPrompt {
+		t.Fatalf("initialPrompt not preserved: got %q want %q", cloned.initialPrompt, orig.initialPrompt)
+	}
+
+	if cloned.lastCompactionSummary == nil {
+		t.Fatal("cloned lastCompactionSummary is nil")
+	}
+	if cloned.lastCompactionSummary.Goal != orig.lastCompactionSummary.Goal {
+		t.Errorf("compaction goal mismatch: got %q want %q", cloned.lastCompactionSummary.Goal, orig.lastCompactionSummary.Goal)
+	}
+	if cloned.lastCompactionSummary == orig.lastCompactionSummary {
+		t.Fatal("cloned lastCompactionSummary should be a deep copy, but pointer is shared")
+	}
+
+	cloned.lastCompactionSummary.FilesModified[0] = "b.go"
+	if orig.lastCompactionSummary.FilesModified[0] != "a.go" {
+		t.Fatalf("modifying cloned summary affected original: got %q", orig.lastCompactionSummary.FilesModified[0])
+	}
+
+	cloned.lastCompactionSummary.CompletedTasks = append(cloned.lastCompactionSummary.CompletedTasks, "task-b")
+	if len(orig.lastCompactionSummary.CompletedTasks) != 1 {
+		t.Fatalf("modifying cloned summary mutated original completed tasks: %#v", orig.lastCompactionSummary.CompletedTasks)
+	}
+}
+
+func TestCloneCoordinatorKeepsNilCompactionSummary(t *testing.T) {
+	orig := &Coordinator{
+		initialPrompt:         "initial goal",
+		lastCompactionSummary: nil,
+		session:               &TeamSession{},
+	}
+
+	cloned := cloneCoordinator(orig, orig.session)
+	if cloned.initialPrompt != "initial goal" {
+		t.Fatalf("initialPrompt not preserved when lastCompactionSummary is nil: got %q", cloned.initialPrompt)
+	}
+	if cloned.lastCompactionSummary != nil {
+		t.Fatalf("expected cloned lastCompactionSummary to be nil, got %#v", cloned.lastCompactionSummary)
+	}
+}
+
+func TestCloneCoordinatorCopiesInitialPromptEvenWhenLastSummaryNil(t *testing.T) {
+	orig := &Coordinator{
+		initialPrompt:         "initial prompt should survive",
+		lastCompactionSummary: nil,
+		session:               &TeamSession{},
+	}
+
+	cloned := cloneCoordinator(orig, orig.session)
+	if cloned.initialPrompt != orig.initialPrompt {
+		t.Fatalf("initialPrompt not preserved: got %q want %q", cloned.initialPrompt, orig.initialPrompt)
+	}
+	if cloned.lastCompactionSummary != nil {
+		t.Fatalf("expected nil lastCompactionSummary after clone, got %#v", cloned.lastCompactionSummary)
+	}
+}
