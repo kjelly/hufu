@@ -22,6 +22,7 @@ type CapabilityResult struct {
 	Reason    string
 	Evidence  string
 	CheckedAt time.Time
+	TTL       time.Duration
 }
 
 type capabilityBlockedError struct {
@@ -117,6 +118,16 @@ func (c *Coordinator) checkCapabilityRequirements(ctx context.Context, reqs []ag
 	return results, nil
 }
 
+// InvalidateCapabilityCache clears all cached capability probe results.
+func (c *Coordinator) InvalidateCapabilityCache() {
+	if c == nil {
+		return
+	}
+	c.capabilityCacheMu.Lock()
+	defer c.capabilityCacheMu.Unlock()
+	c.capabilityCache = make(map[string]CapabilityResult)
+}
+
 func (c *Coordinator) checkCapability(ctx context.Context, req agent.CapabilityRequirement) CapabilityResult {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Probe = strings.TrimSpace(req.Probe)
@@ -126,8 +137,16 @@ func (c *Coordinator) checkCapability(ctx context.Context, req agent.CapabilityR
 
 	c.capabilityCacheMu.Lock()
 	if res, ok := c.capabilityCache[key]; ok {
-		c.capabilityCacheMu.Unlock()
-		return res
+		// Check freshness (Scope "always-fresh" bypasses cache; default TTL is 5 min if not specified)
+		isAlwaysFresh := strings.EqualFold(req.Scope, "always-fresh") || strings.EqualFold(res.Scope, "always-fresh")
+		ttl := res.TTL
+		if ttl <= 0 {
+			ttl = 5 * time.Minute
+		}
+		if !isAlwaysFresh && !res.CheckedAt.IsZero() && time.Since(res.CheckedAt) <= ttl {
+			c.capabilityCacheMu.Unlock()
+			return res
+		}
 	}
 	if ch, ok := c.capabilityInflight[key]; ok {
 		c.capabilityCacheMu.Unlock()
@@ -146,11 +165,17 @@ func (c *Coordinator) checkCapability(ctx context.Context, req agent.CapabilityR
 		}
 	}
 	ch := make(chan CapabilityResult, 1)
+	if c.capabilityInflight == nil {
+		c.capabilityInflight = make(map[string]chan CapabilityResult)
+	}
 	c.capabilityInflight[key] = ch
 	c.capabilityCacheMu.Unlock()
 
 	res := c.probeCapability(ctx, req)
 	c.capabilityCacheMu.Lock()
+	if c.capabilityCache == nil {
+		c.capabilityCache = make(map[string]CapabilityResult)
+	}
 	c.capabilityCache[key] = res
 	delete(c.capabilityInflight, key)
 	c.capabilityCacheMu.Unlock()

@@ -30,14 +30,17 @@ const (
 )
 
 type journalRecord struct {
-	Op         string `json:"op"` // "put", "del", or "err" (diagnostic only)
-	Agent      string `json:"agent"`
-	Desc       string `json:"desc"`
-	Verify     string `json:"verify,omitempty"`
-	VerifyMode string `json:"verify_mode,omitempty"`
-	Output     string `json:"output,omitempty"`
-	TS         string `json:"ts"`
-	Round      int    `json:"round,omitempty"`
+	Op                 string         `json:"op"` // "put", "del", or "err" (diagnostic only)
+	Agent              string         `json:"agent"`
+	Desc               string         `json:"desc"`
+	Verify             string         `json:"verify,omitempty"`
+	VerifyMode         string         `json:"verify_mode,omitempty"`
+	Output             string         `json:"output,omitempty"`
+	TS                 string         `json:"ts"`
+	Round              int            `json:"round,omitempty"`
+	RepoCommit         string         `json:"repo_commit,omitempty"`
+	ProjectFingerprint string         `json:"project_fingerprint,omitempty"`
+	Identity           *CacheIdentity `json:"identity,omitempty"`
 }
 
 type taskJournal struct {
@@ -140,12 +143,20 @@ func loadTaskJournal(workspace string, now time.Time, maxAge time.Duration, perA
 					continue
 				}
 			}
+			id := CacheIdentity{}
+			if rec.Identity != nil {
+				id = *rec.Identity
+			} else {
+				id.RepoCommit = rec.RepoCommit
+				id.ProjectFingerprint = rec.ProjectFingerprint
+			}
 			out[rec.Agent] = append(out[rec.Agent], cachedTaskEntry{
 				taskDesc:   rec.Desc,
 				verify:     rec.Verify,
 				verifyMode: normalizeVerifyMode(rec.VerifyMode),
 				output:     rec.Output,
 				pinned:     true,
+				identity:   id,
 			})
 		case "del":
 			norm := normalizeTaskCacheKey(rec.Desc)
@@ -205,7 +216,18 @@ func compactTaskJournalIfNeeded(workspace string, maxBytes int64, now time.Time)
 	ts := now.Format(time.RFC3339)
 	for agentKey, entries := range survivors {
 		for _, e := range entries {
-			data, err := json.Marshal(journalRecord{Op: "put", Agent: agentKey, Desc: e.taskDesc, Verify: e.verify, VerifyMode: normalizeVerifyMode(e.verifyMode), Output: e.output, TS: ts})
+			data, err := json.Marshal(journalRecord{
+				Op:                 "put",
+				Agent:              agentKey,
+				Desc:               e.taskDesc,
+				Verify:             e.verify,
+				VerifyMode:         normalizeVerifyMode(e.verifyMode),
+				Output:             e.output,
+				TS:                 ts,
+				RepoCommit:         e.identity.RepoCommit,
+				ProjectFingerprint: e.identity.ProjectFingerprint,
+				Identity:           &e.identity,
+			})
 			if err != nil {
 				continue
 			}

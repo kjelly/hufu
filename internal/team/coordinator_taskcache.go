@@ -32,7 +32,8 @@ type cachedTaskEntry struct {
 	// pinned marks entries restored from a previous run (session.json or the
 	// task journal); the per-round generation prune keeps them so they survive
 	// until their first lookup. invalidateTaskCache removes them regardless.
-	pinned bool
+	pinned   bool
+	identity CacheIdentity
 }
 
 type duplicateTodoMatch struct {
@@ -83,6 +84,15 @@ func (c *Coordinator) lookupTaskCacheWithVerify(ctx context.Context, agentKey, n
 }
 
 func (c *Coordinator) lookupTaskCacheWithVerification(ctx context.Context, agentKey, newTask, verify, verifyMode string) (string, bool) {
+	policy := c.GetCachePolicy()
+	if policy == CacheBypass || policy == CacheRefresh {
+		return "", false
+	}
+	if c.IsCacheForbidden(newTask, verify) {
+		return "", false
+	}
+
+	target := c.ComputeCacheIdentity(agentKey, newTask, verify, verifyMode)
 	gen := c.cacheGeneration.Load()
 
 	c.taskResultCacheMu.RLock()
@@ -93,16 +103,18 @@ func (c *Coordinator) lookupTaskCacheWithVerification(ctx context.Context, agent
 		return "", false
 	}
 
-	// Step 1: exact match in current generation
-	for _, e := range all {
-		if e.generation == gen && e.matches(newTask, verify, verifyMode) {
+	// Step 1: exact match in current generation (newest entry first)
+	for i := len(all) - 1; i >= 0; i-- {
+		e := all[i]
+		if e.generation == gen && e.matches(newTask, verify, verifyMode) && e.isFresh(target) {
 			return e.output, true
 		}
 	}
 
-	// Step 2: exact match across all generations
-	for _, e := range all {
-		if e.matches(newTask, verify, verifyMode) {
+	// Step 2: exact match across all generations (newest entry first)
+	for i := len(all) - 1; i >= 0; i-- {
+		e := all[i]
+		if e.matches(newTask, verify, verifyMode) && e.isFresh(target) {
 			return e.output, true
 		}
 	}
@@ -115,7 +127,7 @@ func (c *Coordinator) lookupTaskCacheWithVerification(ctx context.Context, agent
 
 	var currentGenEntries []cachedTaskEntry
 	for _, e := range all {
-		if e.generation == gen && normalizeTaskCacheKey(e.verify) == normalizeTaskCacheKey(verify) && normalizeVerifyMode(e.verifyMode) == normalizeVerifyMode(verifyMode) {
+		if e.generation == gen && normalizeTaskCacheKey(e.verify) == normalizeTaskCacheKey(verify) && normalizeVerifyMode(e.verifyMode) == normalizeVerifyMode(verifyMode) && e.isFresh(target) {
 			currentGenEntries = append(currentGenEntries, e)
 		}
 	}
@@ -191,13 +203,24 @@ func (c *Coordinator) lookupTaskCacheCurrentRunWithVerification(ctx context.Cont
 }
 
 func (c *Coordinator) lookupTaskCacheIn(ctx context.Context, all []cachedTaskEntry, newTask, verify, verifyMode string) (string, string, bool) {
+	policy := c.GetCachePolicy()
+	if policy == CacheBypass || policy == CacheRefresh {
+		return "", "", false
+	}
+	if c.IsCacheForbidden(newTask, verify) {
+		return "", "", false
+	}
+
 	if len(all) == 0 {
 		return "", "", false
 	}
 
-	// Step 1: exact match across all generations
-	for _, e := range all {
-		if e.matches(newTask, verify, verifyMode) {
+	target := c.ComputeCacheIdentity("", newTask, verify, verifyMode)
+
+	// Step 1: exact match across all generations (newest entry first)
+	for i := len(all) - 1; i >= 0; i-- {
+		e := all[i]
+		if e.matches(newTask, verify, verifyMode) && e.isFresh(target) {
 			return e.output, e.taskDesc, true
 		}
 	}
@@ -215,7 +238,7 @@ func (c *Coordinator) lookupTaskCacheIn(ctx context.Context, all []cachedTaskEnt
 	}
 	recentEntries := make([]cachedTaskEntry, 0, len(all)-startIdx)
 	for _, e := range all[startIdx:] {
-		if normalizeTaskCacheKey(e.verify) == normalizeTaskCacheKey(verify) && normalizeVerifyMode(e.verifyMode) == normalizeVerifyMode(verifyMode) {
+		if normalizeTaskCacheKey(e.verify) == normalizeTaskCacheKey(verify) && normalizeVerifyMode(e.verifyMode) == normalizeVerifyMode(verifyMode) && e.isFresh(target) {
 			recentEntries = append(recentEntries, e)
 		}
 	}
@@ -257,7 +280,11 @@ func (c *Coordinator) storeTaskCacheWithVerify(agentKey, taskDesc, verify, outpu
 }
 
 func (c *Coordinator) storeTaskCacheWithVerification(agentKey, taskDesc, verify, verifyMode, output string) {
+	if c.GetCachePolicy() == CacheBypass {
+		return
+	}
 	gen := c.cacheGeneration.Load()
+	identity := c.ComputeCacheIdentity(agentKey, taskDesc, verify, verifyMode)
 	c.taskResultCacheMu.Lock()
 	c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
 		taskDesc:   taskDesc,
@@ -265,13 +292,26 @@ func (c *Coordinator) storeTaskCacheWithVerification(agentKey, taskDesc, verify,
 		verifyMode: normalizeVerifyMode(verifyMode),
 		output:     output,
 		generation: gen,
+		identity:   identity,
 	})
 	if len(c.taskResultCache[agentKey]) > maxTaskCacheEntries {
 		c.taskResultCache[agentKey] = c.taskResultCache[agentKey][1:]
 	}
 	c.taskResultCacheMu.Unlock()
 
-	c.journalAppend(journalRecord{Op: "put", Agent: agentKey, Desc: taskDesc, Verify: verify, VerifyMode: normalizeVerifyMode(verifyMode), Output: output, TS: time.Now().Format(time.RFC3339), Round: c.round})
+	c.journalAppend(journalRecord{
+		Op:                 "put",
+		Agent:              agentKey,
+		Desc:               taskDesc,
+		Verify:             verify,
+		VerifyMode:         normalizeVerifyMode(verifyMode),
+		Output:             output,
+		TS:                 time.Now().Format(time.RFC3339),
+		Round:              c.round,
+		RepoCommit:         identity.RepoCommit,
+		ProjectFingerprint: identity.ProjectFingerprint,
+		Identity:           &identity,
+	})
 }
 
 // invalidateTaskCache removes all cached results for the given agent whose

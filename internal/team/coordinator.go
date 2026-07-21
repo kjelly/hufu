@@ -179,6 +179,8 @@ type Coordinator struct {
 	delegatedTasksMu    sync.Mutex
 	taskResultCache     map[string][]cachedTaskEntry // agent → ordered list of past results
 	taskResultCacheMu   sync.RWMutex
+	cachePolicy         CachePolicy
+	cachePolicyMu       sync.RWMutex
 	capabilityCache     map[string]CapabilityResult
 	capabilityCacheMu   sync.Mutex
 	capabilityInflight  map[string]chan CapabilityResult
