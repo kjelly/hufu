@@ -31,7 +31,7 @@ func LoadSessionMD(workspace string) string {
 }
 
 func SaveSessionMD(workspace string, content string) error {
-	return os.WriteFile(SessionMDPath(workspace), []byte(content), 0o644)
+	return AtomicWriteFile(SessionMDPath(workspace), []byte(content), 0o644)
 }
 
 func GenerateSessionMD(sd *SessionData, teamName string) string {

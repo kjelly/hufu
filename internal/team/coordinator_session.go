@@ -439,6 +439,7 @@ func (c *Coordinator) saveCheckpoint() {
 	}
 	c.sessionData.Tasks = c.taskTracker.TodoList().Items()
 	_ = SaveSession(c.session.Workspace, c.sessionData)
+	c.emitTaskEventsFromCheckpoint(c.sessionData.Tasks)
 }
 
 // isInterruptedStatus reports whether a restored task status indicates the task

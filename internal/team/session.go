@@ -63,7 +63,7 @@ func SaveSession(workspace string, session *SessionData) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(workspace, sessionFile), data, 0o644)
+	return AtomicWriteFile(filepath.Join(workspace, sessionFile), data, 0o644)
 }
 
 func NewSession() *SessionData {

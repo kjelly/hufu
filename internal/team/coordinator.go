@@ -185,6 +185,7 @@ type Coordinator struct {
 	cacheGeneration     atomic.Int64 // bumped each time coordinator starts a new delegation round
 	journal             *taskJournal // persistent task-result journal (nil when disabled)
 	noJournal           bool
+	eventStore          *EventStore  // append-only session event store
 	memoryStore         *memory.MemoryStore
 	skillsMu            sync.RWMutex
 	modelList           []config.ModelEntry

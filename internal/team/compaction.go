@@ -770,7 +770,7 @@ func SaveCompactionRecord(workspace string, record CompactionRecord) error {
 	}
 
 	path := filepath.Join(workspace, CompactionHistoryFile)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := AtomicWriteFile(path, data, 0o644); err != nil {
 		return fmt.Errorf("write compaction history: %w", err)
 	}
 	return nil

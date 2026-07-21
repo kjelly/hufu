@@ -127,7 +127,22 @@ func (c *Coordinator) beginExecutionRun() func() {
 	if previous != nil {
 		previous.close()
 	}
+
+	c.initEventStore()
+	teamName := ""
+	if c.session != nil {
+		teamName = c.session.Config.Name
+	}
+	c.emitEvent("run_started", "coordinator", "", map[string]interface{}{
+		"team": teamName,
+	})
+
 	return func() {
+		c.emitEvent("run_finished", "coordinator", "", nil)
+		if c.eventStore != nil {
+			_ = c.eventStore.Close()
+			c.eventStore = nil
+		}
 		c.executionEventsMu.Lock()
 		if c.executionEvents == logger {
 			c.executionEvents = nil
