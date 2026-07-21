@@ -43,9 +43,19 @@ type EventStore struct {
 	path        string
 	runID       string
 	sessionID   string
+	branchID    string
 	lastEventID string
 	lastHash    string
 	sequence    int
+}
+
+// SetBranchID binds the store to a session branch: subsequent events appended
+// without an explicit BranchID are stamped with it. Empty means no stamping
+// (events then fall back to the implicit main lineage).
+func (es *EventStore) SetBranchID(branchID string) {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	es.branchID = branchID
 }
 
 // ComputeEventHash computes a SHA-256 hash over an event's prevHash, ID, type, timestamp, and payload.
@@ -129,6 +139,9 @@ func (es *EventStore) Append(event RunEvent) error {
 	}
 	if event.SessionID == "" {
 		event.SessionID = es.sessionID
+	}
+	if event.BranchID == "" {
+		event.BranchID = es.branchID
 	}
 	if event.Timestamp == "" {
 		event.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)

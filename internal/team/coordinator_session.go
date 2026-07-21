@@ -440,6 +440,35 @@ func (c *Coordinator) saveCheckpoint() {
 	c.sessionData.Tasks = c.taskTracker.TodoList().Items()
 	_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
 	c.emitTaskEventsFromCheckpoint(c.sessionData.Tasks)
+	c.updateBranchState()
+}
+
+// updateBranchState snapshots the coordinator's live state (task plan, active
+// model, selected team, latest compaction summary) into the active session
+// branch, so `hufu session` checkout/time-travel can restore it later (§8).
+// Best-effort: any failure leaves the checkpoint path unaffected.
+func (c *Coordinator) updateBranchState() {
+	st, err := LoadSessionTree(c.session.Workspace)
+	if err != nil {
+		return
+	}
+	b := st.Branches[st.ActiveBranch]
+	if b == nil {
+		return
+	}
+	if len(c.sessionData.Tasks) > 0 {
+		plan := make([]*TodoItem, len(c.sessionData.Tasks))
+		for i, t := range c.sessionData.Tasks {
+			plan[i] = cloneTodoItem(t)
+		}
+		b.State.TaskPlan = plan
+	}
+	b.State.ActiveModel = c.session.Config.Generation.Model
+	b.State.SelectedTeam = c.session.Config.Name
+	if c.lastCompactionSummary != nil {
+		b.State.Compaction = cloneStructuredSummary(c.lastCompactionSummary)
+	}
+	_ = SaveSessionTree(c.session.Workspace, st)
 }
 
 // isInterruptedStatus reports whether a restored task status indicates the task

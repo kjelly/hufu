@@ -79,6 +79,11 @@ func (c *Coordinator) initEventStore() {
 		log.Printf("warning: init event store failed: %v", err)
 		return
 	}
+	// Bind the store to the active session branch (if any) so events written
+	// during this run are collected into that branch's lineage (§8).
+	if st, err := LoadSessionTree(c.session.Workspace); err == nil && st.ActiveBranch != "" {
+		es.SetBranchID(st.ActiveBranch)
+	}
 	c.eventStore = es
 }
 
@@ -150,15 +155,28 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 			continue
 		}
 
-		var rawPayload json.RawMessage
-		data, err := json.Marshal(map[string]interface{}{
+		payload := map[string]interface{}{
 			"id":         item.ID,
 			"desc":       item.Desc,
 			"status":     string(item.Status),
 			"output":     item.Output,
 			"agent":      item.Agent,
 			"depends_on": item.DependsOn,
-		})
+		}
+		if item.Verify != "" {
+			payload["verify"] = item.Verify
+			payload["verify_mode"] = item.VerifyMode
+		}
+		if item.VerifyResult != nil {
+			payload["verify_result"] = map[string]interface{}{
+				"command":   item.VerifyResult.Command,
+				"exit_code": item.VerifyResult.ExitCode,
+				"timed_out": item.VerifyResult.TimedOut,
+			}
+		}
+
+		var rawPayload json.RawMessage
+		data, err := json.Marshal(payload)
 		if err == nil {
 			rawPayload = data
 		}
@@ -171,6 +189,48 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 			Payload:        rawPayload,
 		}); err != nil {
 			log.Printf("warning: dual-write task event emit failed for %s (%s): %v", item.ID, eventType, err)
+			c.dualWriteFailures.Add(1)
+		}
+
+		c.emitArtifactEvents(item)
+	}
+}
+
+// emitArtifactEvents dual-writes one artifact_created event per artifact path
+// declared by a completed task's typed result. Emission is idempotent per
+// (task, path) within this coordinator instance.
+func (c *Coordinator) emitArtifactEvents(item *TodoItem) {
+	if c.eventStore == nil || item == nil || item.TypedResult == nil {
+		return
+	}
+	for _, art := range item.TypedResult.Artifacts {
+		if art.Path == "" {
+			continue
+		}
+		key := fmt.Sprintf("artifact:%s:%s", item.ID, art.Path)
+		c.mu.Lock()
+		alreadyEmitted := c.emittedTaskTransitions[key]
+		if !alreadyEmitted {
+			c.emittedTaskTransitions[key] = true
+		}
+		c.mu.Unlock()
+		if alreadyEmitted {
+			continue
+		}
+
+		payload, _ := json.Marshal(map[string]string{
+			"path":        art.Path,
+			"description": art.Description,
+			"task_id":     item.ID,
+		})
+		if err := c.eventStore.Append(RunEvent{
+			Type:           "artifact_created",
+			Actor:          item.Agent,
+			TaskID:         item.ID,
+			IdempotencyKey: key,
+			Payload:        payload,
+		}); err != nil {
+			log.Printf("warning: dual-write artifact event emit failed for %s (%s): %v", item.ID, art.Path, err)
 			c.dualWriteFailures.Add(1)
 		}
 	}

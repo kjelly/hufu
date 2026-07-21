@@ -51,6 +51,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.AddCommand(installCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(sessionCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(examplesCmd, helpFlagsCmd)
 
@@ -124,17 +125,19 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringVar(&opts.templateName, "template", "", "Load prompt template by name from .hufu-templates/ or ~/.config/hufu/templates/")
 
 	// init scaffolding flags (consumed by initcmd.go).
-	initCmd.Flags().StringVar(&opts.initTemplateName, "template", "default", "Scaffold template: default, dev, research, ops, or minimal")
-	initCmd.Flags().StringVar(&opts.modelOverride, "model", "", "Pin a model in the scaffolded team.yaml (e.g. ollama/qwen3:8b)")
+	if initCmd.Flags().Lookup("template") == nil {
+		initCmd.Flags().StringVar(&opts.initTemplateName, "template", "default", "Scaffold template: default, dev, research, ops, or minimal")
+		initCmd.Flags().StringVar(&opts.modelOverride, "model", "", "Pin a model in the scaffolded team.yaml (e.g. ollama/qwen3:8b)")
+	}
 
-	// Root flags are intentionally not inherited by Cobra subcommands, so the
-	// diagnostic command declares the small, relevant subset explicitly.
-	improveCmd.PersistentFlags().StringVarP(&improveWorkspace, "workspace", "w", "", "Workspace to analyze (default: <cwd>/workspace)")
-	improveCmd.PersistentFlags().StringVar(&improveTeam, "team", "", "Target team (default: newest execution run)")
-	improveCmd.PersistentFlags().StringVar(&improveSearchPath, "agent-team-search-path", "", "Comma-separated team search paths")
-	improveCmd.Flags().StringVarP(&improveOutput, "output", "o", "", "Markdown report path (default: workspace/reports/improve-<team>-<timestamp>.md)")
-	improveCmd.Flags().StringVar(&improveFormat, "format", "markdown", "Report format: markdown or json (json writes to stdout)")
-	improveCmd.Flags().IntVar(&improveRuns, "runs", 1, "Number of most recent runs for the selected team to analyze")
+	if improveCmd.PersistentFlags().Lookup("workspace") == nil {
+		improveCmd.PersistentFlags().StringVarP(&improveWorkspace, "workspace", "w", "", "Workspace to analyze (default: <cwd>/workspace)")
+		improveCmd.PersistentFlags().StringVar(&improveTeam, "team", "", "Target team (default: newest execution run)")
+		improveCmd.PersistentFlags().StringVar(&improveSearchPath, "agent-team-search-path", "", "Comma-separated team search paths")
+		improveCmd.Flags().StringVarP(&improveOutput, "output", "o", "", "Markdown report path (default: workspace/reports/improve-<team>-<timestamp>.md)")
+		improveCmd.Flags().StringVar(&improveFormat, "format", "markdown", "Report format: markdown or json (json writes to stdout)")
+		improveCmd.Flags().IntVar(&improveRuns, "runs", 1, "Number of most recent runs for the selected team to analyze")
+	}
 
 	_ = rootCmd.RegisterFlagCompletionFunc("agent-team", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		registry := team.NewTeamRegistry(resolveSearchPaths())

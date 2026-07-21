@@ -456,71 +456,80 @@ func (tl *TodoList) Restore(items []*TodoItem) {
 	tl.next = maxId
 }
 
+// cloneTodoItem returns a deep copy of item (slice and pointer fields detached)
+// so callers can mutate the result without aliasing the source. Nil-safe.
+func cloneTodoItem(item *TodoItem) *TodoItem {
+	if item == nil {
+		return nil
+	}
+	var skills []string
+	if len(item.Skills) > 0 {
+		skills = make([]string, len(item.Skills))
+		copy(skills, item.Skills)
+	}
+	var injectedSkills []string
+	if len(item.InjectedSkills) > 0 {
+		injectedSkills = make([]string, len(item.InjectedSkills))
+		copy(injectedSkills, item.InjectedSkills)
+	}
+	var loadedSkills []string
+	if len(item.LoadedSkills) > 0 {
+		loadedSkills = make([]string, len(item.LoadedSkills))
+		copy(loadedSkills, item.LoadedSkills)
+	}
+	var dependsOn []string
+	if len(item.DependsOn) > 0 {
+		dependsOn = make([]string, len(item.DependsOn))
+		copy(dependsOn, item.DependsOn)
+	}
+	var verifyResult *VerificationResult
+	if item.VerifyResult != nil {
+		copyResult := *item.VerifyResult
+		verifyResult = &copyResult
+	}
+	var typedResult *TaskResult
+	if item.TypedResult != nil {
+		copyTR := *item.TypedResult
+		typedResult = &copyTR
+	}
+	return &TodoItem{
+		ID:             item.ID,
+		Agent:          item.Agent,
+		Desc:           item.Desc,
+		Status:         item.Status,
+		Detail:         item.Detail,
+		Output:         item.Output,
+		Model:          item.Model,
+		Skills:         skills,
+		InjectedSkills: injectedSkills,
+		LoadedSkills:   loadedSkills,
+		StartedAt:      item.StartedAt,
+		EndedAt:        item.EndedAt,
+		ModelTime:      item.ModelTime,
+		ToolTime:       item.ToolTime,
+		Source:         item.Source,
+		ParentID:       item.ParentID,
+		DependsOn:      dependsOn,
+		Verify:         item.Verify,
+		VerifyMode:     item.VerifyMode,
+		VerifyResult:   verifyResult,
+		MaxRetries:     item.MaxRetries,
+		Retries:        item.Retries,
+		OnFailure:      item.OnFailure,
+		SideEffect:     item.SideEffect,
+		Recovery:       item.Recovery,
+		ReconcileTool:  item.ReconcileTool,
+		RecoveryState:  item.RecoveryState,
+		TypedResult:    typedResult,
+	}
+}
+
 func (tl *TodoList) Items() []*TodoItem {
 	tl.mu.Lock()
 	defer tl.mu.Unlock()
 	result := make([]*TodoItem, len(tl.items))
 	for i, item := range tl.items {
-		var skills []string
-		if len(item.Skills) > 0 {
-			skills = make([]string, len(item.Skills))
-			copy(skills, item.Skills)
-		}
-		var injectedSkills []string
-		if len(item.InjectedSkills) > 0 {
-			injectedSkills = make([]string, len(item.InjectedSkills))
-			copy(injectedSkills, item.InjectedSkills)
-		}
-		var loadedSkills []string
-		if len(item.LoadedSkills) > 0 {
-			loadedSkills = make([]string, len(item.LoadedSkills))
-			copy(loadedSkills, item.LoadedSkills)
-		}
-		var dependsOn []string
-		if len(item.DependsOn) > 0 {
-			dependsOn = make([]string, len(item.DependsOn))
-			copy(dependsOn, item.DependsOn)
-		}
-		var verifyResult *VerificationResult
-		if item.VerifyResult != nil {
-			copyResult := *item.VerifyResult
-			verifyResult = &copyResult
-		}
-		var typedResult *TaskResult
-		if item.TypedResult != nil {
-			copyTR := *item.TypedResult
-			typedResult = &copyTR
-		}
-		result[i] = &TodoItem{
-			ID:             item.ID,
-			Agent:          item.Agent,
-			Desc:           item.Desc,
-			Status:         item.Status,
-			Detail:         item.Detail,
-			Output:         item.Output,
-			Model:          item.Model,
-			Skills:         skills,
-			InjectedSkills: injectedSkills,
-			LoadedSkills:   loadedSkills,
-			StartedAt:      item.StartedAt,
-			EndedAt:        item.EndedAt,
-			ModelTime:      item.ModelTime,
-			ToolTime:       item.ToolTime,
-			Source:         item.Source,
-			ParentID:       item.ParentID,
-			DependsOn:      dependsOn,
-			Verify:         item.Verify,
-			VerifyMode:     item.VerifyMode,
-			VerifyResult:   verifyResult,
-			MaxRetries:     item.MaxRetries,
-			Retries:        item.Retries,
-			OnFailure:      item.OnFailure,
-			SideEffect:     item.SideEffect,
-			Recovery:       item.Recovery,
-			ReconcileTool:  item.ReconcileTool,
-			RecoveryState:  item.RecoveryState,
-			TypedResult:    typedResult,
-		}
+		result[i] = cloneTodoItem(item)
 	}
 	return result
 }

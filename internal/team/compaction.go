@@ -17,6 +17,30 @@ import (
 const CompactionHistoryFile = "compaction_history.json"
 const verificationFailurePrefix = "FAIL: "
 
+// cloneStructuredSummary returns a deep copy of s (all slice fields detached)
+// so callers can mutate the result without aliasing the source. Nil-safe.
+func cloneStructuredSummary(s *StructuredSummary) *StructuredSummary {
+	if s == nil {
+		return nil
+	}
+	cloned := *s
+	cloned.Constraints = append([]string(nil), s.Constraints...)
+	cloned.UserCorrections = append([]string(nil), s.UserCorrections...)
+	cloned.CompletedTasks = append([]string(nil), s.CompletedTasks...)
+	cloned.InProgressTasks = append([]string(nil), s.InProgressTasks...)
+	cloned.BlockedTasks = append([]string(nil), s.BlockedTasks...)
+	cloned.KeyDecisions = append([]string(nil), s.KeyDecisions...)
+	cloned.ErrorsAndFixes = append([]string(nil), s.ErrorsAndFixes...)
+	cloned.FilesRead = append([]string(nil), s.FilesRead...)
+	cloned.FilesModified = append([]string(nil), s.FilesModified...)
+	cloned.ArtifactsProduced = append([]string(nil), s.ArtifactsProduced...)
+	cloned.VerificationResults = append([]string(nil), s.VerificationResults...)
+	cloned.OpenQuestions = append([]string(nil), s.OpenQuestions...)
+	cloned.NextActions = append([]string(nil), s.NextActions...)
+	cloned.SourceEntryIDs = append([]string(nil), s.SourceEntryIDs...)
+	return &cloned
+}
+
 // StructuredSummary contains the sections for structured compaction.
 type StructuredSummary struct {
 	Goal                string   `json:"goal"`
