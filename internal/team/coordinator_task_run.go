@@ -890,7 +890,7 @@ func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef 
 	shell := "sh"
 	if agentDef != nil && agentDef.Shell != "" {
 		shell = agentDef.Shell
-	} else if c.session.Config.Shell != "" {
+	} else if c != nil && c.session != nil && c.session.Config.Shell != "" {
 		shell = c.session.Config.Shell
 	}
 

@@ -466,11 +466,9 @@ func todoIDLess(a, b string) bool {
 	return a < b
 }
 
-// resetInterruptedTasks finds tasks left in-flight by a previous run, resets
-// each to pending so it can be re-driven on its original todo ID, and returns
-// them in dependency-safe (ascending ID) order. Split from execution so the
-// selection/reset logic can be unit-tested without an LLM provider.
-func (c *Coordinator) resetInterruptedTasks() []*TodoItem {
+// getInterruptedTasks finds tasks left in-flight by a previous run and returns
+// them in dependency-safe (ascending ID) order without mutating status.
+func (c *Coordinator) getInterruptedTasks() []*TodoItem {
 	items := c.taskTracker.TodoList().Items()
 	var interrupted []*TodoItem
 	for _, it := range items {
@@ -481,24 +479,21 @@ func (c *Coordinator) resetInterruptedTasks() []*TodoItem {
 	sort.SliceStable(interrupted, func(i, j int) bool {
 		return todoIDLess(interrupted[i].ID, interrupted[j].ID)
 	})
-	for _, it := range interrupted {
-		c.taskTracker.TodoList().ResetForRetry(it.ID, "resumed after interruption")
-	}
 	return interrupted
 }
 
 // ResumeInterruptedTasks re-drives the worker tasks that a previous run left
-// in-flight (restored from the session checkpoint). Completed work is reused via
-// the result cache prepopulated in SetSessionData; only interrupted tasks are
-// re-executed, on their original todo IDs and in ascending-ID order so that
-// dependencies (which carry lower IDs) run first. It is a no-op on a fresh run
-// because the todo list is empty. Returns the number of tasks re-driven and the
-// first error encountered, if any.
+// in-flight (restored from the session checkpoint). Interrupted tasks are
+// evaluated against side-effect class and recovery policy (§11.2-11.4).
+// Tasks with policy 'retry' or reconciled as 'not_started' are re-executed;
+// 'manual' tasks are blocked and flagged for human review; 'never' tasks are
+// skipped (left as-is) since the policy declares they must not be re-driven.
 func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
-	interrupted := c.resetInterruptedTasks()
+	interrupted := c.getInterruptedTasks()
 	if len(interrupted) == 0 {
 		return 0, nil
 	}
+	isUnattended := (c.session != nil && c.session.Config.Unattended) || c.unattended
 	c.report(c.newEvent("step").withMessage(fmt.Sprintf("resuming %d interrupted task(s) from checkpoint", len(interrupted))))
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
@@ -511,11 +506,107 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			}
 			break
 		}
-		task := TaskDef{Agent: it.Agent, Goal: it.Desc}
-		if _, err := c.executeTask(ctx, task, it.ID); err != nil && firstErr == nil {
-			firstErr = err
+
+		pol := ResolveRecoveryPolicy(it.Recovery, it.SideEffect, isUnattended)
+		switch pol {
+		case RecoveryRetry:
+			c.taskTracker.TodoList().ResetForRetry(it.ID, "resumed after interruption")
+			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
+				"side_effect": string(it.SideEffect),
+				"policy":      string(pol),
+				"decision":    "retry",
+			})
+			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			task := TaskDef{
+				Agent:         it.Agent,
+				Goal:          it.Desc,
+				Verify:        it.Verify,
+				VerifyMode:    it.VerifyMode,
+				SideEffect:    it.SideEffect,
+				Recovery:      it.Recovery,
+				ReconcileTool: it.ReconcileTool,
+			}
+			if _, err := c.executeTask(ctx, task, it.ID); err != nil && firstErr == nil {
+				firstErr = err
+			}
+			count++
+
+		case RecoveryManual:
+			detail := fmt.Sprintf("task halted by side-effect recovery policy (%s, side_effect=%s); requires manual intervention", pol, it.SideEffect)
+			c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
+			c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
+			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
+				"side_effect": string(it.SideEffect),
+				"policy":      string(pol),
+				"decision":    "manual_blocked",
+			})
+			c.rememberFailureContext("coordinator", "recovery policy blocked execution", it.ID, detail)
+
+		case RecoveryNever:
+			// 'never' means the task must not be automatically re-driven on
+			// resume — leave it untouched and mark it skipped. Unlike 'manual'
+			// this does not emit needs_human: the policy is a deliberate
+			// "do not touch" declaration, not a request for human action.
+			detail := fmt.Sprintf("task skipped by side-effect recovery policy (%s, side_effect=%s); left as-is, not re-driven", pol, it.SideEffect)
+			c.taskTracker.TodoList().UpdateStatus(it.ID, TaskSkipped, detail)
+			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
+				"side_effect": string(it.SideEffect),
+				"policy":      string(pol),
+				"decision":    "never_skipped",
+			})
+
+		case RecoveryReconcile:
+			state := c.reconcileInterruptedTask(ctx, it)
+			it.RecoveryState = state
+			c.taskTracker.TodoList().SetRecoveryState(it.ID, state)
+			switch state {
+			case RecoveryStateComplete:
+				c.taskTracker.TodoList().UpdateStatus(it.ID, TaskDone, "reconciliation confirmed task was completed")
+				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+				c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
+					"side_effect":    string(it.SideEffect),
+					"policy":         string(pol),
+					"recovery_state": state,
+					"decision":       "mark_done",
+				})
+			case RecoveryStateNotStarted:
+				c.taskTracker.TodoList().ResetForRetry(it.ID, "reconciliation allowed retry")
+				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+				c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
+					"side_effect":    string(it.SideEffect),
+					"policy":         string(pol),
+					"recovery_state": state,
+					"decision":       "retry",
+				})
+				task := TaskDef{
+					Agent:         it.Agent,
+					Goal:          it.Desc,
+					Verify:        it.Verify,
+					VerifyMode:    it.VerifyMode,
+					SideEffect:    it.SideEffect,
+					Recovery:      it.Recovery,
+					ReconcileTool: it.ReconcileTool,
+				}
+				if _, err := c.executeTask(ctx, task, it.ID); err != nil && firstErr == nil {
+					firstErr = err
+				}
+				count++
+			case RecoveryStatePartial, RecoveryStateUnknown:
+				detail := fmt.Sprintf("task halted by side-effect recovery policy (%s, side_effect=%s); reconciliation state: %s", pol, it.SideEffect, state)
+				c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
+				c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
+				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+				c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
+					"side_effect":    string(it.SideEffect),
+					"policy":         string(pol),
+					"recovery_state": state,
+					"decision":       state + "_blocked",
+				})
+				c.rememberFailureContext("coordinator", "reconciliation blocked execution", it.ID, detail)
+			}
 		}
-		count++
 	}
 	return count, firstErr
 }

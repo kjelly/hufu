@@ -48,6 +48,9 @@ type agentFrontmatter struct {
 	ForceMCP       bool                           `yaml:"force-mcp"`
 	Shell          string                         `yaml:"shell"`
 	MCPTools       map[string]agent.MCPToolConfig `yaml:"mcp-tools"`
+	SideEffect     string                         `yaml:"side_effect"`
+	Recovery       string                         `yaml:"recovery"`
+	ReconcileTool  string                         `yaml:"reconcile-tool"`
 }
 
 type teamConfigYAML struct {
@@ -338,8 +341,11 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 			TopP:        fm.TopP,
 			TopK:        fm.TopK,
 		},
-		ProviderURL: fm.ProviderURL,
-		ExtraModels: fm.ExtraModels,
+		ProviderURL:    fm.ProviderURL,
+		ExtraModels:    fm.ExtraModels,
+		SideEffect:     fm.SideEffect,
+		Recovery:       fm.Recovery,
+		ReconcileTool:  fm.ReconcileTool,
 	}
 	if fm.Timeout > 0 {
 		def.Timeout = fm.Timeout

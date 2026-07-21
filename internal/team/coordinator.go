@@ -81,6 +81,12 @@ type TaskDef struct {
 	// the task succeeds; a majority refutation fails the task into the retry
 	// path with the refutation as feedback.
 	AdversarialVerify int `json:"adversarial_verify,omitempty"`
+	// SideEffect classifies the task's side-effect risk (none, workspace_write, external_write, infra_mutation, credential_mutation).
+	SideEffect SideEffectClass `json:"side_effect,omitempty"`
+	// Recovery controls interrupted task recovery behavior (retry, reconcile, manual, never).
+	Recovery RecoveryPolicy `json:"recovery,omitempty"`
+	// ReconcileTool specifies an optional read-only probe command to verify state during crash recovery.
+	ReconcileTool string `json:"reconcile_tool,omitempty"`
 }
 
 // UnmarshalJSON handles legacy "task" field by mapping it to Goal.

@@ -32,7 +32,7 @@ func TestTodoIDLess(t *testing.T) {
 	}
 }
 
-func TestResetInterruptedTasks_SelectionAndReset(t *testing.T) {
+func TestGetInterruptedTasks_Selection(t *testing.T) {
 	c := newBudgetCoordinator(t)
 	c.taskTracker.TodoList().Restore([]*TodoItem{
 		{ID: "1", Agent: "a", Desc: "done task", Status: TaskDone, Output: "out"},
@@ -44,9 +44,10 @@ func TestResetInterruptedTasks_SelectionAndReset(t *testing.T) {
 		{ID: "6", Agent: "c", Desc: "skipped task", Status: TaskSkipped},
 	})
 
-	got := c.resetInterruptedTasks()
+	got := c.getInterruptedTasks()
 
-	// Only in-flight / verifying / pending / planned are selected (2,2v,3,5); done/error/skipped excluded.
+	// Only in-flight / verifying / pending / planned are selected (2,2v,3,5);
+	// done/error/skipped excluded. Selection must not mutate status.
 	wantIDs := map[string]bool{"2": true, "2v": true, "3": true, "5": true}
 	if len(got) != len(wantIDs) {
 		t.Fatalf("expected %d interrupted tasks, got %d", len(wantIDs), len(got))
@@ -62,18 +63,16 @@ func TestResetInterruptedTasks_SelectionAndReset(t *testing.T) {
 		t.Errorf("interrupted tasks not in ascending ID order: %s,%s,%s,%s", got[0].ID, got[1].ID, got[2].ID, got[3].ID)
 	}
 
-	// Selected tasks are reset to pending; terminal tasks untouched.
+	// Selection is read-only; no status changes.
 	byID := map[string]*TodoItem{}
 	for _, it := range c.taskTracker.TodoList().Items() {
 		byID[it.ID] = it
 	}
-	for id := range wantIDs {
-		if byID[id].Status != TaskPending {
-			t.Errorf("task %s should be reset to pending, got %s", id, byID[id].Status)
-		}
-	}
 	if byID["1"].Status != TaskDone {
 		t.Errorf("done task must remain done, got %s", byID["1"].Status)
+	}
+	if byID["2"].Status != TaskInProgress {
+		t.Errorf("in-flight task must remain in_progress, got %s", byID["2"].Status)
 	}
 	if byID["4"].Status != TaskError {
 		t.Errorf("error task must remain error, got %s", byID["4"].Status)

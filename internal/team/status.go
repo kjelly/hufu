@@ -189,6 +189,10 @@ type TodoItem struct {
 	MaxRetries     int    // Maximum number of retries for this task
 	Retries        int    // Current number of retries
 	OnFailure      string // ID of the task to jump back to if this task fails (creates a loop)
+	SideEffect     SideEffectClass `json:"side_effect,omitempty"`
+	Recovery       RecoveryPolicy  `json:"recovery,omitempty"`
+	ReconcileTool  string          `json:"reconcile_tool,omitempty"`
+	RecoveryState  string          `json:"recovery_state,omitempty"`
 }
 
 type TodoList struct {
@@ -200,15 +204,18 @@ type TodoList struct {
 
 // TodoSpec describes a todo item to be created via AddBatch.
 type TodoSpec struct {
-	Agent      string
-	Desc       string
-	Model      string
-	Source     string
-	ParentID   string
-	Verify     string
-	VerifyMode string
-	MaxRetries int
-	OnFailure  string
+	Agent         string
+	Desc          string
+	Model         string
+	Source        string
+	ParentID      string
+	Verify        string
+	VerifyMode    string
+	MaxRetries    int
+	OnFailure     string
+	SideEffect    SideEffectClass
+	Recovery      RecoveryPolicy
+	ReconcileTool string
 }
 
 func (tl *TodoList) AddBatch(items []TodoSpec) []*TodoItem {
@@ -217,17 +224,20 @@ func (tl *TodoList) AddBatch(items []TodoSpec) []*TodoItem {
 	for _, item := range items {
 		tl.next++
 		ti := &TodoItem{
-			ID:         fmt.Sprintf("%d", tl.next),
-			Agent:      item.Agent,
-			Desc:       item.Desc,
-			Model:      item.Model,
-			Status:     TaskPending,
-			Source:     item.Source,
-			ParentID:   item.ParentID,
-			Verify:     item.Verify,
-			VerifyMode: item.VerifyMode,
-			MaxRetries: item.MaxRetries,
-			OnFailure:  item.OnFailure,
+			ID:            fmt.Sprintf("%d", tl.next),
+			Agent:         item.Agent,
+			Desc:          item.Desc,
+			Model:         item.Model,
+			Status:        TaskPending,
+			Source:        item.Source,
+			ParentID:      item.ParentID,
+			Verify:        item.Verify,
+			VerifyMode:    item.VerifyMode,
+			MaxRetries:    item.MaxRetries,
+			OnFailure:     item.OnFailure,
+			SideEffect:    item.SideEffect,
+			Recovery:      item.Recovery,
+			ReconcileTool: item.ReconcileTool,
 		}
 		tl.items = append(tl.items, ti)
 		added = append(added, ti)
@@ -331,6 +341,17 @@ func (tl *TodoList) TryUpdateStatusAndOutput(id string, status TaskStatus, detai
 		return fmt.Errorf("task %s not found", id)
 	}
 	return nil
+}
+
+func (tl *TodoList) SetRecoveryState(id string, state string) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			ti.RecoveryState = state
+			return
+		}
+	}
 }
 
 func (tl *TodoList) SetVerificationResult(id string, result *VerificationResult) error {
@@ -461,6 +482,10 @@ func (tl *TodoList) Items() []*TodoItem {
 			MaxRetries:     item.MaxRetries,
 			Retries:        item.Retries,
 			OnFailure:      item.OnFailure,
+			SideEffect:     item.SideEffect,
+			Recovery:       item.Recovery,
+			ReconcileTool:  item.ReconcileTool,
+			RecoveryState:  item.RecoveryState,
 		}
 	}
 	return result
@@ -582,6 +607,10 @@ func (tl *TodoList) Children(parentID string) []*TodoItem {
 				MaxRetries:     item.MaxRetries,
 				Retries:        item.Retries,
 				OnFailure:      item.OnFailure,
+				SideEffect:     item.SideEffect,
+				Recovery:       item.Recovery,
+				ReconcileTool:  item.ReconcileTool,
+				RecoveryState:  item.RecoveryState,
 			})
 		}
 	}

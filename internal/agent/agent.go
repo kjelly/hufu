@@ -85,8 +85,18 @@ type AgentDef struct {
 	Shell          string
 	MCPTools       map[string]MCPToolConfig
 	ProviderURL    string
-	Generation     GenerationParams
-	ExtraModels    []string
+	// SideEffect is the default side-effect classification for tasks delegated
+	// to this agent (none/workspace_write/external_write/infra_mutation/
+	// credential_mutation). Empty = infer from Tools at task creation time.
+	SideEffect string
+	// Recovery is the default interrupted-task recovery policy for this agent
+	// (retry/reconcile/manual/never). Empty = derive from SideEffect at resume.
+	Recovery string
+	// ReconcileTool is an optional read-only probe command used during crash
+	// recovery to classify whether an interrupted task completed.
+	ReconcileTool string
+	Generation    GenerationParams
+	ExtraModels   []string
 }
 
 type TeamConfig struct {
