@@ -86,6 +86,12 @@ func NewEventStore(workspace, runID, sessionID string) (*EventStore, error) {
 		es.lastEventID = last.ID
 		es.lastHash = last.Hash
 		es.sequence = len(events)
+		if es.runID == "" && last.RunID != "" {
+			es.runID = last.RunID
+		}
+		if es.sessionID == "" && last.SessionID != "" {
+			es.sessionID = last.SessionID
+		}
 	}
 
 	return es, nil

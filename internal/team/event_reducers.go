@@ -41,7 +41,7 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 	var taskOrder []string
 
 	for _, e := range events {
-		if e.TaskID == "" && !strings.HasPrefix(e.Type, "task_") {
+		if !strings.HasPrefix(e.Type, "task_") {
 			continue
 		}
 
@@ -109,8 +109,10 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 			if payload.Output != "" {
 				item.Output = payload.Output
 			}
-		case "task_blocked":
+		case "task_skipped":
 			item.Status = TaskSkipped
+		case "task_blocked":
+			item.Status = TaskBlocked
 		case "task_reset":
 			item.Status = TaskPending
 		}

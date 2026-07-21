@@ -347,9 +347,11 @@ func (c *Coordinator) recordRunAborted(runErr error) {
 	if summary := c.summaryFromTodos(runErr); summary != "" {
 		entry += "\n\n" + summary
 	}
-	c.sessionData.AddEntry("assistant", entry)
-	c.sessionData.Rounds = c.totalRounds()
-	_ = SaveSession(c.session.Workspace, c.sessionData)
+	c.addSessionAssistantMessage(entry)
+	if c.sessionData != nil {
+		c.sessionData.Rounds = c.totalRounds()
+		_ = SaveSession(c.session.Workspace, c.sessionData)
+	}
 }
 
 func (c *Coordinator) finalizeRemainingTasks() {
@@ -591,9 +593,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		c.report(c.newEvent("step").withMessage(fmt.Sprintf("resume: re-drove %d interrupted task(s) from checkpoint", n)))
 	}
 
-	if c.sessionData != nil {
-		c.sessionData.AddEntry("user", userPrompt)
-	}
+	c.addSessionUserMessage(userPrompt)
 
 	systemPrompt := c.buildSystemPrompt(ctx, orchDef, userPrompt, false)
 
@@ -624,8 +624,8 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	finalResult := strings.TrimPrefix(result, "FINISHED:")
 
+	c.addSessionAssistantMessage(finalResult)
 	if c.sessionData != nil {
-		c.sessionData.AddEntry("assistant", finalResult)
 		c.sessionData.Rounds = c.totalRounds()
 		_ = SaveSession(c.session.Workspace, c.sessionData)
 	}
@@ -666,9 +666,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	orchDefCopy := *orchDef
 	orchDefCopy.System = systemPrompt
 
-	if c.sessionData != nil {
-		c.sessionData.AddEntry("user", additionalPrompt)
-	}
+	c.addSessionUserMessage(additionalPrompt)
 
 	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("continuing with additional input").withModel(c.resolveAgentModel(orchDef, "")).withTodoID(CoordTodoID))
 
@@ -693,8 +691,8 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 
 	finalResult := strings.TrimPrefix(result, "FINISHED:")
 
+	c.addSessionAssistantMessage(finalResult)
 	if c.sessionData != nil {
-		c.sessionData.AddEntry("assistant", finalResult)
 		c.sessionData.Rounds = c.totalRounds()
 		_ = SaveSession(c.session.Workspace, c.sessionData)
 	}

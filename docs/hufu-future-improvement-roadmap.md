@@ -1885,7 +1885,7 @@ minimum hufu version
   ```
 - **指派指令**：
   ```text
-  HF-PR-002：為 session 持久化實作 atomic write。先讀 tmp/hufu-future-improvement-roadmap.md 的 HF-PR-002 工作卡與 §10，參考 internal/team/task_journal.go 的 temp+rename 模式，抽共用 helper 套用到 SaveSession/SaveSessionMD/SaveCompactionRecord，補三種 crash 狀態的 fallback 測試，再跑卡上的驗證指令。
+  HF-PR-002：為 session 持久化實作 atomic write。先讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-002 工作卡與 §10，參考 internal/team/task_journal.go 的 temp+rename 模式，抽共用 helper 套用到 SaveSession/SaveSessionMD/SaveCompactionRecord，補三種 crash 狀態的 fallback 測試，再跑卡上的驗證指令。
   ```
 
 ---

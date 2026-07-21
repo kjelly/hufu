@@ -3,6 +3,8 @@ package team
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/anomalyco/hufu/internal/agent"
 )
 
 func TestDualWriteEventStoreIntegration(t *testing.T) {
@@ -48,13 +50,60 @@ func TestDualWriteEventStoreIntegration(t *testing.T) {
 	}
 }
 
-func TestCheckpointTaskEventsEmission(t *testing.T) {
+func TestCoordinatorRunEmitsSessionEvents(t *testing.T) {
 	dir := t.TempDir()
-	teamSession := &TeamSession{Workspace: dir}
+	teamSession := &TeamSession{Workspace: dir, Config: agent.TeamConfig{Name: "test-team"}}
 	coord := &Coordinator{
 		session:     teamSession,
 		sessionData: NewSession(),
 		taskTracker: NewTaskTracker(),
+	}
+	coord.initEventStore()
+	if coord.EventStore() == nil {
+		t.Fatalf("EventStore is nil")
+	}
+	defer coord.EventStore().Close()
+
+	coord.addSessionUserMessage("Analyze repository")
+	coord.addSessionAssistantMessage("Task completed successfully")
+
+	events, err := coord.EventStore().ReadEvents()
+	if err != nil {
+		t.Fatalf("ReadEvents error: %v", err)
+	}
+
+	hasUserMsg := false
+	hasAssistantMsg := false
+	for _, e := range events {
+		if e.Type == "user_message_added" {
+			hasUserMsg = true
+		}
+		if e.Type == "assistant_message_added" {
+			hasAssistantMsg = true
+		}
+	}
+	if !hasUserMsg || !hasAssistantMsg {
+		t.Errorf("expected both user and assistant message events, got user=%v assistant=%v", hasUserMsg, hasAssistantMsg)
+	}
+
+	// Reconstruct session data using reducer
+	sessionProj := ReduceToSessionData(events)
+	if len(sessionProj.Entries) != 2 {
+		t.Fatalf("expected 2 entries in session projection, got %d", len(sessionProj.Entries))
+	}
+	if sessionProj.Entries[0].Content != "Analyze repository" || sessionProj.Entries[1].Content != "Task completed successfully" {
+		t.Errorf("unexpected projection content: %+v", sessionProj.Entries)
+	}
+}
+
+func TestDeduplicatedTaskEventsEmission(t *testing.T) {
+	dir := t.TempDir()
+	teamSession := &TeamSession{Workspace: dir}
+	coord := &Coordinator{
+		session:                 teamSession,
+		sessionData:             NewSession(),
+		taskTracker:             NewTaskTracker(),
+		emittedTaskTransitions: make(map[string]bool),
 	}
 
 	coord.initEventStore()
@@ -63,24 +112,33 @@ func TestCheckpointTaskEventsEmission(t *testing.T) {
 	}
 	defer coord.EventStore().Close()
 
-	// Add batch of tasks
 	items := coord.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "worker1", Desc: "Task 1"},
 	})
-	coord.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskDone, "completed task 1")
+	coord.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskDone, "completed")
 
+	// Call saveCheckpoint multiple times
+	coord.saveCheckpoint()
+	coord.saveCheckpoint()
 	coord.saveCheckpoint()
 
 	events, err := coord.EventStore().ReadEvents()
 	if err != nil {
-		t.Fatalf("ReadEvents failed: %v", err)
+		t.Fatal(err)
 	}
 
-	if len(events) == 0 {
-		t.Fatalf("expected task events in EventStore, got 0")
+	taskCompletedCount := 0
+	for _, e := range events {
+		if e.Type == "task_completed" && e.TaskID == items[0].ID {
+			taskCompletedCount++
+		}
 	}
 
-	// Verify reducer reconstructs completed task
+	if taskCompletedCount != 1 {
+		t.Errorf("expected exactly 1 task_completed event, got %d", taskCompletedCount)
+	}
+
+	// Reconstruct todo list using reducer
 	todos := ReduceToTodoList(events)
 	if len(todos) != 1 {
 		t.Fatalf("expected 1 todo reconstructed, got %d", len(todos))
