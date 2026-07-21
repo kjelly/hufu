@@ -497,7 +497,7 @@ func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string)
 
 	var matched []*skill.SkillDef
 
-	s := c.Sidecar()
+	s := c.AgentPool().Sidecar()
 	if s != nil {
 		summaries := make([]sidecar.SkillSummary, len(allSkills))
 		for i, sk := range allSkills {

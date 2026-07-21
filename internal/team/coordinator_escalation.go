@@ -52,7 +52,7 @@ func (c *Coordinator) escalateTaskModelForRetry(task TaskDef) string {
 	}
 	current := task.Model
 	if current == "" {
-		if def, _, err := c.resolveAgentName(task.Agent); err == nil && def != nil {
+		if def, _, err := c.AgentPool().ResolveAgentName(task.Agent); err == nil && def != nil {
 			current = c.resolveAgentModel(def, "")
 		}
 	}

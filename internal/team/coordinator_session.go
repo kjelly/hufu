@@ -52,7 +52,7 @@ func (c *Coordinator) autoWriteSTMASync(agentName, taskDesc, output, errMsg stri
 }
 
 func (c *Coordinator) summarizeOutput(ctx context.Context, text string) string {
-	s := c.Sidecar()
+	s := c.AgentPool().Sidecar()
 	if s == nil {
 		return text
 	}
@@ -215,7 +215,7 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 	sourceCounts = normalizeSourceCounts(len(messages), sourceCounts)
 	sourceCount := sumSourceCounts(sourceCounts)
 
-	s := c.Sidecar()
+	s := c.AgentPool().Sidecar()
 	workspace := ""
 	if c.session != nil {
 		workspace = c.session.Workspace
@@ -294,7 +294,7 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 			},
 			Summary: *summary,
 		}
-		if err := SaveCompactionRecord(workspace, rec); err != nil {
+		if err := c.SessionStore().SaveCompactionRecord(workspace, rec); err != nil {
 			log.Printf("warning: failed to save compaction record: %v", err)
 		}
 	}
@@ -438,7 +438,7 @@ func (c *Coordinator) saveCheckpoint() {
 		return
 	}
 	c.sessionData.Tasks = c.taskTracker.TodoList().Items()
-	_ = SaveSession(c.session.Workspace, c.sessionData)
+	_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
 	c.emitTaskEventsFromCheckpoint(c.sessionData.Tasks)
 }
 
@@ -622,6 +622,6 @@ func (c *Coordinator) saveHistoryAndSession(ctx context.Context, steps []fantasy
 	c.syncConversationHistoryStateToSessionData()
 	c.conversationHistoryMu.Unlock()
 	if c.sessionData != nil {
-		_ = SaveSession(c.session.Workspace, c.sessionData)
+		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
 	}
 }

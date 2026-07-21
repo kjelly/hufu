@@ -125,7 +125,7 @@ func (c *Coordinator) EstimatedContextModel() bool {
 // report section, or "" when no breakdown is ready (e.g. before the first
 // coordinator step or in a dry run).
 func (c *Coordinator) RenderContextUsageSection() string {
-	budget, usage, modelID, ready := c.ContextUsageReport()
+	budget, usage, modelID, ready := c.ContextCompiler().ContextUsageReport()
 	if !ready {
 		return ""
 	}

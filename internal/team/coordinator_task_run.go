@@ -30,7 +30,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		taskDesc += "\nconstraints: " + task.Constraints
 	}
 
-	agentDef, _, err := c.resolveAgentName(task.Agent)
+	agentDef, _, err := c.AgentPool().ResolveAgentName(task.Agent)
 	if err != nil {
 		c.PersistFailure(task.Agent, taskDesc, todoID, c.FailureDetail(err, "error"))
 		return "", err
@@ -394,7 +394,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			}
 			// Adversarial verification: skeptic votes try to refute the result.
 			// A refutation flows into the same retry path as a failed verify.
-			if err == nil && task.AdversarialVerify > 0 && c.Sidecar() != nil {
+			if err == nil && task.AdversarialVerify > 0 && c.AgentPool().Sidecar() != nil {
 				if averr := c.adversarialVerify(parentCtx, task, output); averr != nil {
 					err = averr
 					c.report(c.newEvent("skeptic").withAgent(agentName).withMessage(averr.Error()).withTodoID(todoID))
@@ -523,7 +523,7 @@ func isTaskTimeout(err error) bool {
 }
 
 func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todoID string) (string, error) {
-	s := c.Sidecar()
+	s := c.AgentPool().Sidecar()
 	if s == nil {
 		// Sidecar not configured: gracefully fall back to normal agent execution
 		log.Printf("[INFO] sidecar not configured for task %q, falling back to normal agent execution", task.Goal)
@@ -635,7 +635,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			// Keep this request within the context model token budget.
 			modelID := opts.Model.Model()
 			spec := globalRegistry.GetSpec(modelID)
-			budget := CalculateContextBudget(spec, 0, 0)
+			budget := c.ContextCompiler().CalculateBudget(spec, 0, 0)
 			if capped := CapStepMessagesWithCounter(ctx, defaultCounter, modelID, opts.Messages, budget.Available); capped != nil {
 				opts.Messages = capped
 				llmLogMu.Lock()
@@ -1048,7 +1048,7 @@ func (c *Coordinator) verifyTaskTimeout() time.Duration {
 }
 
 func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, lastErr string) string {
-	s := c.Sidecar()
+	s := c.AgentPool().Sidecar()
 	if s != nil {
 		// Use a shorter timeout for reflection to avoid holding up retries
 		reflectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)

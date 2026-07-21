@@ -65,7 +65,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	var invalidAgents []string
 	seenInvalid := make(map[string]bool)
 	for _, t := range tasks {
-		if _, _, err := c.resolveAgentName(t.Agent); err != nil {
+		if _, _, err := c.AgentPool().ResolveAgentName(t.Agent); err != nil {
 			if !seenInvalid[t.Agent] {
 				invalidAgents = append(invalidAgents, err.Error())
 				seenInvalid[t.Agent] = true
@@ -141,14 +141,14 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 
 	c.report(c.newEvent("step").withMessage(fmt.Sprintf("Round %d: delegating %d task(s)", c.round, len(tasks))))
 
-	duplicateWarnings, duplicateIndices, suppressedDuplicates := c.checkDuplicateTasks(ctx, tasks)
+	duplicateWarnings, duplicateIndices, suppressedDuplicates := c.Planner().CheckDuplicate(ctx, tasks)
 	if len(duplicateWarnings) > 0 {
 		c.report(c.newEvent("loop_warning").withMessage(fmt.Sprintf("Duplicate task delegation detected: %v", duplicateWarnings)))
 	}
 
 	todoBatch := make([]TodoSpec, len(tasks))
 	for i, t := range tasks {
-		agentDef, _, resolveErr := c.resolveAgentName(t.Agent)
+		agentDef, _, resolveErr := c.AgentPool().ResolveAgentName(t.Agent)
 		var resolvedModel string
 		if resolveErr != nil {
 			c.report(c.newEvent("step").withMessage(fmt.Sprintf("warning: could not resolve agent %q: %v", t.Agent, resolveErr)))
@@ -171,7 +171,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		//   3. tool-inferred heuristic (InferSideEffectClass)
 		// An empty class at all tiers falls back to SideEffectNone (→ retry),
 		// preserving pre-recovery behavior for read-only agents.
-		sideEffect, recovery, reconcileTool := resolveTaskRecovery(agentDef, t)
+		sideEffect, recovery, reconcileTool := c.PolicyEngine().ResolveRecoveryPolicy(agentDef, t)
 		todoBatch[i] = TodoSpec{
 			Agent:         strings.ToLower(t.Agent),
 			Desc:          desc,

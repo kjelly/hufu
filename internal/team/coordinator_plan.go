@@ -134,7 +134,7 @@ func (pr *planReviewer) review(ctx context.Context, planText string) (string, bo
 	}
 
 	taskStatus := c.buildTaskStatusContext()
-	agentDef, _, agentResolveErr := c.resolveAgentName(agentName)
+	agentDef, _, agentResolveErr := c.AgentPool().ResolveAgentName(agentName)
 	var agentInfo string
 	if agentResolveErr != nil || agentDef == nil {
 		agentInfo = fmt.Sprintf("Name: %s\n(could not resolve agent definition: %v)", agentName, agentResolveErr)

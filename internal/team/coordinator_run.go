@@ -38,7 +38,7 @@ func ParseDirectAgent(prompt string) (agentName string, task string, ok bool) {
 func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (*DirectAgentResult, error) {
 	endExecutionRun := c.beginExecutionRun()
 	defer endExecutionRun()
-	agentDef, _, err := c.resolveAgentName(agentName)
+	agentDef, _, err := c.AgentPool().ResolveAgentName(agentName)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +350,7 @@ func (c *Coordinator) recordRunAborted(runErr error) {
 	c.addSessionAssistantMessage(entry)
 	if c.sessionData != nil {
 		c.sessionData.Rounds = c.totalRounds()
-		_ = SaveSession(c.session.Workspace, c.sessionData)
+		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
 	}
 }
 
@@ -491,7 +491,7 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 	}
 
 	if agentsMD := c.loadProjectContext(); agentsMD != "" {
-		if s := c.Sidecar(); s != nil && len(agentsMD) > 4000 {
+		if s := c.AgentPool().Sidecar(); s != nil && len(agentsMD) > 4000 {
 			if c.think && !isContinuation {
 				c.emitThinkSidecar("Compact", "compacting AGENTS.md for coordinator prompt")
 			}
@@ -506,7 +506,7 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 
 	if c.memoryStore != nil && prompt != "" {
 		var compactFn memory.CompactFunc
-		if s := c.Sidecar(); s != nil {
+		if s := c.AgentPool().Sidecar(); s != nil {
 			compactFn = s.Compact
 		}
 		memCtx, err := memory.AutoQuery(ctx, c.memoryStore, prompt, compactFn)
@@ -627,7 +627,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	c.addSessionAssistantMessage(finalResult)
 	if c.sessionData != nil {
 		c.sessionData.Rounds = c.totalRounds()
-		_ = SaveSession(c.session.Workspace, c.sessionData)
+		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
 	}
 
 	c.finalizeNormalCompletion()
@@ -694,7 +694,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	c.addSessionAssistantMessage(finalResult)
 	if c.sessionData != nil {
 		c.sessionData.Rounds = c.totalRounds()
-		_ = SaveSession(c.session.Workspace, c.sessionData)
+		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
 	}
 
 	c.finalizeNormalCompletion()

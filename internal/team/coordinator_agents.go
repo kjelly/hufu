@@ -260,7 +260,7 @@ func (c *Coordinator) getWorkerContext(ctx context.Context) string {
 			return
 		}
 		ctxSize := c.getWorkerContextSize()
-		if s := c.Sidecar(); s != nil && utf8.RuneCountInString(raw) > ctxSize/2 {
+		if s := c.AgentPool().Sidecar(); s != nil && utf8.RuneCountInString(raw) > ctxSize/2 {
 			if c.think {
 				c.emitThinkSidecar("Compact", "compacting worker context (AGENTS.md)")
 			}
@@ -309,7 +309,7 @@ func (c *Coordinator) computeWorkerSummaries(ctx context.Context) {
 }
 
 func (c *Coordinator) summarizeSystem(ctx context.Context, system string) string {
-	if s := c.Sidecar(); s != nil {
+	if s := c.AgentPool().Sidecar(); s != nil {
 		if c.think {
 			c.emitThinkSidecar("Compact", "summarizing worker system prompt for coordinator")
 		}
@@ -397,7 +397,7 @@ func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentD
 	return &injectedDef
 }
 func (c *Coordinator) resolveCurrentAgentModel(agentName string) string {
-	agentDef, _, err := c.resolveAgentName(agentName)
+	agentDef, _, err := c.AgentPool().ResolveAgentName(agentName)
 	if err == nil && agentDef != nil {
 		return c.resolveAgentModel(agentDef, "")
 	}

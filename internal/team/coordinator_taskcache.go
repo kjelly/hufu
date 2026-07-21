@@ -84,7 +84,7 @@ func (c *Coordinator) lookupTaskCacheWithVerify(ctx context.Context, agentKey, n
 }
 
 func (c *Coordinator) lookupTaskCacheWithVerification(ctx context.Context, agentKey, newTask, verify, verifyMode string) (string, bool) {
-	policy := c.GetCachePolicy()
+	policy := c.PolicyEngine().GetCachePolicy()
 	if policy == CacheBypass || policy == CacheRefresh {
 		return "", false
 	}
@@ -106,7 +106,7 @@ func (c *Coordinator) lookupTaskCacheWithVerification(ctx context.Context, agent
 	// Step 1: exact match in current generation (newest entry first)
 	for i := len(all) - 1; i >= 0; i-- {
 		e := all[i]
-		if e.generation == gen && e.matches(newTask, verify, verifyMode) && e.isFresh(target) {
+		if e.generation == gen && e.matches(newTask, verify, verifyMode) && c.PolicyEngine().IsCacheFresh(e, target) {
 			return e.output, true
 		}
 	}
@@ -114,20 +114,20 @@ func (c *Coordinator) lookupTaskCacheWithVerification(ctx context.Context, agent
 	// Step 2: exact match across all generations (newest entry first)
 	for i := len(all) - 1; i >= 0; i-- {
 		e := all[i]
-		if e.matches(newTask, verify, verifyMode) && e.isFresh(target) {
+		if e.matches(newTask, verify, verifyMode) && c.PolicyEngine().IsCacheFresh(e, target) {
 			return e.output, true
 		}
 	}
 
 	// Step 3: sidecar semantic similarity in current generation only
-	s := c.Sidecar()
+	s := c.AgentPool().Sidecar()
 	if s == nil {
 		return "", false
 	}
 
 	var currentGenEntries []cachedTaskEntry
 	for _, e := range all {
-		if e.generation == gen && normalizeTaskCacheKey(e.verify) == normalizeTaskCacheKey(verify) && normalizeVerifyMode(e.verifyMode) == normalizeVerifyMode(verifyMode) && e.isFresh(target) {
+		if e.generation == gen && normalizeTaskCacheKey(e.verify) == normalizeTaskCacheKey(verify) && normalizeVerifyMode(e.verifyMode) == normalizeVerifyMode(verifyMode) && c.PolicyEngine().IsCacheFresh(e, target) {
 			currentGenEntries = append(currentGenEntries, e)
 		}
 	}
@@ -203,7 +203,7 @@ func (c *Coordinator) lookupTaskCacheCurrentRunWithVerification(ctx context.Cont
 }
 
 func (c *Coordinator) lookupTaskCacheIn(ctx context.Context, all []cachedTaskEntry, newTask, verify, verifyMode string) (string, string, bool) {
-	policy := c.GetCachePolicy()
+	policy := c.PolicyEngine().GetCachePolicy()
 	if policy == CacheBypass || policy == CacheRefresh {
 		return "", "", false
 	}
@@ -220,13 +220,13 @@ func (c *Coordinator) lookupTaskCacheIn(ctx context.Context, all []cachedTaskEnt
 	// Step 1: exact match across all generations (newest entry first)
 	for i := len(all) - 1; i >= 0; i-- {
 		e := all[i]
-		if e.matches(newTask, verify, verifyMode) && e.isFresh(target) {
+		if e.matches(newTask, verify, verifyMode) && c.PolicyEngine().IsCacheFresh(e, target) {
 			return e.output, e.taskDesc, true
 		}
 	}
 
 	// Step 2: sidecar semantic similarity across all generations
-	s := c.Sidecar()
+	s := c.AgentPool().Sidecar()
 	if s == nil {
 		return "", "", false
 	}
@@ -238,7 +238,7 @@ func (c *Coordinator) lookupTaskCacheIn(ctx context.Context, all []cachedTaskEnt
 	}
 	recentEntries := make([]cachedTaskEntry, 0, len(all)-startIdx)
 	for _, e := range all[startIdx:] {
-		if normalizeTaskCacheKey(e.verify) == normalizeTaskCacheKey(verify) && normalizeVerifyMode(e.verifyMode) == normalizeVerifyMode(verifyMode) && e.isFresh(target) {
+		if normalizeTaskCacheKey(e.verify) == normalizeTaskCacheKey(verify) && normalizeVerifyMode(e.verifyMode) == normalizeVerifyMode(verifyMode) && c.PolicyEngine().IsCacheFresh(e, target) {
 			recentEntries = append(recentEntries, e)
 		}
 	}
@@ -280,7 +280,7 @@ func (c *Coordinator) storeTaskCacheWithVerify(agentKey, taskDesc, verify, outpu
 }
 
 func (c *Coordinator) storeTaskCacheWithVerification(agentKey, taskDesc, verify, verifyMode, output string) {
-	if c.GetCachePolicy() == CacheBypass {
+	if c.PolicyEngine().GetCachePolicy() == CacheBypass {
 		return
 	}
 	gen := c.cacheGeneration.Load()
@@ -387,7 +387,7 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 		return nil
 	}
 
-	s := c.Sidecar()
+	s := c.AgentPool().Sidecar()
 	if s == nil {
 		return nil
 	}

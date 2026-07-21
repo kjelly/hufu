@@ -281,6 +281,14 @@ type Coordinator struct {
 	rollbackCmd         string // optional shell command run on acceptance failure
 	selfHealingAttempts int
 	budgetTripped       atomic.Bool
+
+	// Decoupled sub-services (§17 struct-level interface decoupling)
+	planner         Planner
+	sessionStore    SessionStore
+	policyEngine    PolicyEngine
+	contextCompiler ContextCompiler
+	agentPool       AgentPool
+	workflowEngine  WorkflowEngine
 }
 
 // SetUnattended enables unattended (no-human) mode: ask_user returns safe
@@ -324,7 +332,7 @@ func (c *Coordinator) SetAcceptance(cmd string) { c.acceptanceCmd = cmd }
 func (c *Coordinator) SetRollback(cmd string) { c.rollbackCmd = cmd }
 
 func (c *Coordinator) chooseAskUserResponse(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (tools.AskUserResponse, error) {
-	s := c.Sidecar()
+	s := c.AgentPool().Sidecar()
 	if s == nil {
 		return tools.AskUserResponse{}, fmt.Errorf("no sidecar configured")
 	}
@@ -493,8 +501,15 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		maxDrafts:              maxDraftsPerSession,
 	}
 
+	c.planner = &defaultPlanner{c: c}
+	c.sessionStore = &defaultSessionStore{c: c}
+	c.policyEngine = &defaultPolicyEngine{c: c}
+	c.contextCompiler = &defaultContextCompiler{c: c}
+	c.agentPool = &defaultAgentPool{c: c}
+	c.workflowEngine = &defaultWorkflowEngine{c: c}
+
 	// Enable sidecar for skill pattern detection
-	if s := c.Sidecar(); s != nil {
+	if s := c.AgentPool().Sidecar(); s != nil {
 		c.skillDetector.SetSidecar(s)
 	}
 
@@ -525,7 +540,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	}
 
 	guardReviewer := func(ctx context.Context, toolName, args string, rules []string) (bool, string, error) {
-		s := c.GuardSidecar()
+		s := c.AgentPool().GuardSidecar()
 		if s == nil {
 			return true, "", nil
 		}
@@ -539,7 +554,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	tools.SetGuardReviewer(c.coreTools, guardReviewer)
 
 	pathReviewer := func(ctx context.Context, command string, path string) (bool, error) {
-		s := c.Sidecar()
+		s := c.AgentPool().Sidecar()
 		if s == nil {
 			return true, nil
 		}
@@ -707,4 +722,108 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 
 func (c *Coordinator) RunAgentsTool() fantasy.AgentTool {
 	return &runAgentsTool{coordinator: c}
+}
+
+// Sub-service interface getters and setters (§17 struct-level interface decoupling)
+
+// Planner returns the Planner sub-service interface.
+func (c *Coordinator) Planner() Planner {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.planner == nil {
+		return &defaultPlanner{c: c}
+	}
+	return c.planner
+}
+
+// SetPlanner sets a custom Planner implementation.
+func (c *Coordinator) SetPlanner(p Planner) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.planner = p
+}
+
+// SessionStore returns the SessionStore sub-service interface.
+func (c *Coordinator) SessionStore() SessionStore {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.sessionStore == nil {
+		return &defaultSessionStore{c: c}
+	}
+	return c.sessionStore
+}
+
+// SetSessionStore sets a custom SessionStore implementation.
+func (c *Coordinator) SetSessionStore(ss SessionStore) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessionStore = ss
+}
+
+// PolicyEngine returns the PolicyEngine sub-service interface.
+func (c *Coordinator) PolicyEngine() PolicyEngine {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.policyEngine == nil {
+		return &defaultPolicyEngine{c: c}
+	}
+	return c.policyEngine
+}
+
+// SetPolicyEngine sets a custom PolicyEngine implementation.
+func (c *Coordinator) SetPolicyEngine(pe PolicyEngine) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.policyEngine = pe
+}
+
+// ContextCompiler returns the ContextCompiler sub-service interface.
+func (c *Coordinator) ContextCompiler() ContextCompiler {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.contextCompiler == nil {
+		return &defaultContextCompiler{c: c}
+	}
+	return c.contextCompiler
+}
+
+// SetContextCompiler sets a custom ContextCompiler implementation.
+func (c *Coordinator) SetContextCompiler(cc ContextCompiler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.contextCompiler = cc
+}
+
+// AgentPool returns the AgentPool sub-service interface.
+func (c *Coordinator) AgentPool() AgentPool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.agentPool == nil {
+		return &defaultAgentPool{c: c}
+	}
+	return c.agentPool
+}
+
+// SetAgentPool sets a custom AgentPool implementation.
+func (c *Coordinator) SetAgentPool(ap AgentPool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.agentPool = ap
+}
+
+// WorkflowEngine returns the WorkflowEngine sub-service interface.
+func (c *Coordinator) WorkflowEngine() WorkflowEngine {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.workflowEngine == nil {
+		return &defaultWorkflowEngine{c: c}
+	}
+	return c.workflowEngine
+}
+
+// SetWorkflowEngine sets a custom WorkflowEngine implementation.
+func (c *Coordinator) SetWorkflowEngine(we WorkflowEngine) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.workflowEngine = we
 }

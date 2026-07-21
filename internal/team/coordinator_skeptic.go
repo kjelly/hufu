@@ -102,7 +102,7 @@ func (c *Coordinator) adversarialVerify(parentCtx context.Context, task TaskDef,
 	if task.AdversarialVerify <= 0 {
 		return nil
 	}
-	s := c.Sidecar()
+	s := c.AgentPool().Sidecar()
 	if s == nil {
 		return nil
 	}

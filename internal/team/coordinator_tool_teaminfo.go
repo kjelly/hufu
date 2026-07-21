@@ -117,7 +117,7 @@ func (t *teamInfoTool) handleListAgents(c *Coordinator) (fantasy.ToolResponse, e
 }
 
 func (t *teamInfoTool) handleAgentInfo(c *Coordinator, name string) (fantasy.ToolResponse, error) {
-	agentDef, _, err := c.resolveAgentName(name)
+	agentDef, _, err := c.AgentPool().ResolveAgentName(name)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("agent %q not found: %v", name, err)), nil
 	}
@@ -227,7 +227,7 @@ func (t *teamInfoTool) handleTaskHistory(workspace, teamName, agentName string, 
 }
 
 func (t *teamInfoTool) handleTaskResult(c *Coordinator, workspace, teamName, name string) (fantasy.ToolResponse, error) {
-	agentDef, _, err := c.resolveAgentName(name)
+	agentDef, _, err := c.AgentPool().ResolveAgentName(name)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("agent %q not found: %v", name, err)), nil
 	}
@@ -287,7 +287,7 @@ func (t *teamInfoTool) handleTaskResult(c *Coordinator, workspace, teamName, nam
 }
 
 func (t *teamInfoTool) handleTodoStatus(c *Coordinator, name string) (fantasy.ToolResponse, error) {
-	agentDef, _, err := c.resolveAgentName(name)
+	agentDef, _, err := c.AgentPool().ResolveAgentName(name)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("agent %q not found: %v", name, err)), nil
 	}

@@ -110,7 +110,7 @@ func composeJudgedOutput(candidates []*agentResult, v judgeVerdict) string {
 // its response parsing fails — in all cases the caller falls back to
 // mergeAgentResults.
 func (c *Coordinator) judgeAgentResults(ctx context.Context, goal, todoID string, results []*agentResult) (string, error) {
-	s := c.JudgeSidecar()
+	s := c.AgentPool().JudgeSidecar()
 	if s == nil {
 		return "", fmt.Errorf("judge agent results: %w", errNoJudgeModel)
 	}

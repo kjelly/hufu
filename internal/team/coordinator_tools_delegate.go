@@ -115,7 +115,7 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 
 	var selected string
 	if args.Agent != "" {
-		def, _, err := c.resolveAgentName(args.Agent)
+		def, _, err := c.AgentPool().ResolveAgentName(args.Agent)
 		if err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown agent %q: %v", args.Agent, err)), nil
 		}
@@ -179,7 +179,7 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 }
 
 func (c *Coordinator) selectAgentForGoal(ctx context.Context, goal string) (string, error) {
-	s := c.Sidecar()
+	s := c.AgentPool().Sidecar()
 	workers := c.uniqueWorkerDefs()
 	if len(workers) == 0 {
 		return "", fmt.Errorf("no workers available")
@@ -226,7 +226,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		return "", fmt.Errorf("wrap-up in progress: cannot create sub-agent")
 	}
 
-	agentDef, _, err := c.resolveAgentName(name)
+	agentDef, _, err := c.AgentPool().ResolveAgentName(name)
 	if err != nil {
 		// No silent fallback to a generic worker: a fabricated sub-agent runs
 		// with the caller's own permissions and cannot provide any capability
