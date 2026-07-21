@@ -788,6 +788,7 @@ workspace/
 │   └── {team-name}/
 │       └── {agent-name}/
 │           └── {timestamp}.md
+├── compaction_history.json  # Structured compaction history (13-section summaries)
 ├── shared/
 │   └── skills/          # Copied SKILL.md files
 ├── status/              # Agent status files
@@ -809,6 +810,7 @@ workspace/
 | `history/` | Archived historical session files |
 | `logs/` | System and debug logs |
 | `logs/task_journal.jsonl` | Per-task durable results (journal) |
+| `compaction_history.json` | Structured compaction summary history |
 | `session.json` | Structured session data (machine-readable) |
 | `chat_history.md` | Human-readable conversation transcript |
 | `execution_trace.log` | Detailed execution trace log (TUI mode only) |

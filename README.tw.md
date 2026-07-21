@@ -716,6 +716,7 @@ workspace/
 │   └── {team-name}/
 │       └── {agent-name}/
 │           └── {timestamp}.md
+├── compaction_history.json # Structured compaction 摘要歷史（13 個區段）
 ├── shared/
 │   └── skills/          # 複製的 SKILL.md 檔案
 ├── status/              # Agent 狀態檔案
@@ -730,6 +731,7 @@ workspace/
 | 目錄/檔案 | 說明 |
 |-----------|------|
 | `tasks/{team-name}/{agent-name}/` | 每個 Agent 的任務檔案（含任務描述、狀態、結果） |
+| `compaction_history.json` | Structured compaction 摘要歷史（13 個區段） |
 | `shared/skills/` | 從 skill 定義複製過來的 SKILL.md |
 | `status/` | Agent 狀態追蹤檔案 |
 | `history/` | 封存的歷史 session 檔案 |

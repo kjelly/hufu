@@ -664,6 +664,7 @@ workspace/
 ├── session.json              # Structured session data
 ├── chat_history.md           # Human-readable conversation transcript
 ├── session_history.json      # Raw conversation message history
+├── compaction_history.json    # Structured compaction summaries across runs
 ├── execution_trace.log       # Detailed execution trace log (TUI mode only)
 ├── stm.md                    # Short-term memory (active session)
 ├── tasks/                    # Per-task records
@@ -1043,6 +1044,7 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 60. **`hufu list` reads frontmatter directly, not via `LoadTeam`** — `LoadTeam` has a side effect (it `MkdirAll`s the workspace). `list` parses each agent `.md`'s YAML frontmatter itself (`readAgentFrontmatter`) so merely listing teams never creates directories.
 
 61. **`--auto-team` auto-selects the best-fitting team, it does NOT fall back to default** — when no team is named (`--agent-team` / `@team` / `--default` all absent), `autoSelectTeam` (`cmd/hufu/autoteam.go`) picks the most suitable discovered team for the prompt: it builds `(name, description)` candidates (team.yaml `description`, or joined agent descriptions when absent), tries `sidecar.MatchTeam` (a one-shot LLM pick, mirroring `MatchSkills`), and falls back to `keywordBestTeam` (token-overlap scoring with stop-word filtering + `singularize` so "manual" matches "manuals"). It returns `""` when there is no signal, so the caller drops to the interactive picker rather than guessing. Building the selection sidecar is best-effort (`buildSelectionSidecar`): no resolvable model → keyword-only. Hooked in `runTeam` right before `ParsePromptWithLazyAgents`.
+62. **Structured compaction is persisted as a session-level history, not ephemeral context text** — `workspace/compaction_history.json` stores `CompactionRecord`s with `tokens_before`, `tokens_after`, and source-range metadata for each compaction cycle. `Coordinator.lastCompactionSummary` and `GetLatestCompactionSummary` enforce a 13-section format (`Goal`, `Constraints`, `Completed Tasks`, `In-progress Tasks`, `Blocked Tasks`, `Key Decisions`, `Errors and Fixes`, `Files Read`, `Files Modified`, `Artifacts Produced`, `Verification Results`, `Open Questions`, `Next Actions`) and carry the 7 invariants (original goal, latest correction, failed verification, file paths, previous decisions/results, and so on) forward. The same state is made restart-safe by persisting `conversationHistorySourceCounts` and `conversationHistorySourceOffset` in `session.json`, so subsequent compactions map source coverage correctly across process restarts.
 
 ## Model Configuration Priority
 

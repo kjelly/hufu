@@ -1129,6 +1129,7 @@ Agents must submit a plan before executing. The coordinator reviews the plan bef
 
 ```
 workspace/
+├── compaction_history.json  # Structured compaction summaries across runs
 ├── session.json              # Structured session data
 ├── chat_history.md           # Human-readable conversation transcript
 ├── session_history.json      # Raw message history
