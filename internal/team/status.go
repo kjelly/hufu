@@ -193,6 +193,7 @@ type TodoItem struct {
 	Recovery       RecoveryPolicy  `json:"recovery,omitempty"`
 	ReconcileTool  string          `json:"reconcile_tool,omitempty"`
 	RecoveryState  string          `json:"recovery_state,omitempty"`
+	TypedResult    *TaskResult     `json:"typed_result,omitempty"`
 }
 
 type TodoList struct {
@@ -381,6 +382,33 @@ func (tl *TodoList) SetVerificationResult(id string, result *VerificationResult)
 	return nil
 }
 
+func (tl *TodoList) SetTypedResult(id string, result *TaskResult) error {
+	tl.mu.Lock()
+	updated := false
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			if result == nil {
+				ti.TypedResult = nil
+				updated = true
+				break
+			}
+			copyResult := *result
+			ti.TypedResult = &copyResult
+			updated = true
+			break
+		}
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
+}
+
 // ResetForRetry returns a task to TaskPending so it can run again as part of
 // an on_failure DAG loop. Unlike UpdateStatus, it deliberately bypasses the
 // terminal-state protection (Done/Error are normally final) because a retry
@@ -458,6 +486,11 @@ func (tl *TodoList) Items() []*TodoItem {
 			copyResult := *item.VerifyResult
 			verifyResult = &copyResult
 		}
+		var typedResult *TaskResult
+		if item.TypedResult != nil {
+			copyTR := *item.TypedResult
+			typedResult = &copyTR
+		}
 		result[i] = &TodoItem{
 			ID:             item.ID,
 			Agent:          item.Agent,
@@ -486,6 +519,7 @@ func (tl *TodoList) Items() []*TodoItem {
 			Recovery:       item.Recovery,
 			ReconcileTool:  item.ReconcileTool,
 			RecoveryState:  item.RecoveryState,
+			TypedResult:    typedResult,
 		}
 	}
 	return result

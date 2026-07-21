@@ -87,6 +87,8 @@ type TaskDef struct {
 	Recovery RecoveryPolicy `json:"recovery,omitempty"`
 	// ReconcileTool specifies an optional read-only probe command to verify state during crash recovery.
 	ReconcileTool string `json:"reconcile_tool,omitempty"`
+	// Execution encapsulates execution policies such as StrictResult.
+	Execution TaskExecutionPolicy `json:"execution,omitempty"`
 }
 
 // UnmarshalJSON handles legacy "task" field by mapping it to Goal.
@@ -259,6 +261,9 @@ type Coordinator struct {
 
 	sessionToolPermissions   map[string]bool // toolName -> allowed (permanent session decision)
 	sessionToolPermissionsMu sync.RWMutex
+
+	taskResults   map[string]*TaskResult
+	taskResultsMu sync.RWMutex
 
 	// executionEvents is initialized for each top-level Run/Continue call and
 	// receives attempt-level telemetry for `hufu improve`.
@@ -466,6 +471,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		pendingPlans:       make(map[string]*PlanEntry),
 		approvedOutputs:    make(map[string]string),
 		approvedErrors:     make(map[string]error),
+		taskResults:        make(map[string]*TaskResult),
 		taskResultCache:    make(map[string][]cachedTaskEntry),
 		capabilityCache:    make(map[string]CapabilityResult),
 		capabilityInflight: make(map[string]chan CapabilityResult),
@@ -826,4 +832,26 @@ func (c *Coordinator) SetWorkflowEngine(we WorkflowEngine) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.workflowEngine = we
+}
+
+func (c *Coordinator) storeSubmittedTaskResult(todoID string, res *TaskResult) {
+	c.taskResultsMu.Lock()
+	if c.taskResults == nil {
+		c.taskResults = make(map[string]*TaskResult)
+	}
+	c.taskResults[todoID] = res
+	c.taskResultsMu.Unlock()
+
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		_ = c.taskTracker.TodoList().SetTypedResult(todoID, res)
+	}
+}
+
+func (c *Coordinator) GetTaskResult(todoID string) *TaskResult {
+	c.taskResultsMu.RLock()
+	defer c.taskResultsMu.RUnlock()
+	if c.taskResults == nil {
+		return nil
+	}
+	return c.taskResults[todoID]
 }

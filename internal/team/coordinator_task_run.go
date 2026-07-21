@@ -246,7 +246,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			}
 			if escalate {
 				if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
-					if escAg, escErr := c.getOrCreateAgent(parentCtx, agentDef, next); escErr == nil {
+					resultTool := &submitResultTool{coordinator: c, todoID: todoID}
+					if escAg, escErr := c.createTaskAgentWithResultTool(parentCtx, agentDef, next, resultTool); escErr == nil {
 						ag = escAg
 						c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("escalating model %s → %s (attempt %d)", resolvedModel, next, attempt)).withTodoID(todoID))
 						resolvedModel = next
@@ -362,6 +363,20 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 					return "", nil
 				}
 				return planEntry.PlanText, nil
+			}
+			if err == nil {
+				typedRes := c.GetTaskResult(todoID)
+				if typedRes == nil {
+					if task.Execution.StrictResult {
+						err = fmt.Errorf("typed task result mandatory for task %s (%s), but agent did not submit structured result", todoID, agentName)
+						c.report(c.newEvent("step").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
+					} else {
+						typedRes = ParseFreeTextResult(output)
+						typedRes.TaskID = todoID
+						typedRes.Agent = agentName
+						c.storeSubmittedTaskResult(todoID, typedRes)
+					}
+				}
 			}
 			if err == nil {
 				if verr := validateTaskOutput(task, output); verr != nil {
@@ -1154,13 +1169,14 @@ func (c *Coordinator) validateTaskModel(task *TaskDef) error {
 // tasks reuse the cached agent. All failure paths report and persist before
 // returning the error so the caller does not have to.
 func (c *Coordinator) createTaskAgent(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef, resolvedModel, todoID, taskDesc, agentName string) (fantasy.Agent, error) {
+	resultTool := &submitResultTool{coordinator: c, todoID: todoID}
 	if task.PlanFirst && task.PlanID == "" {
 		planAg, planErr := agent.CreateAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
 			Def:        agentDef,
 			TeamConfig: &c.session.Config,
 			WorkDir:    c.projectDir,
 			MaxSteps:   agent.DefaultMaxSteps,
-		}, append(agent.SelectTools(c.coreTools, agentDef.Tools), &submitPlanTool{coordinator: c, todoID: todoID}))
+		}, append(agent.SelectTools(c.coreTools, agentDef.Tools), &submitPlanTool{coordinator: c, todoID: todoID}, resultTool))
 		if planErr != nil {
 			c.report(c.newEvent("error").withAgent(agentName).withMessage(planErr.Error()).withTodoID(todoID))
 			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(planErr, ""))
@@ -1168,11 +1184,49 @@ func (c *Coordinator) createTaskAgent(parentCtx context.Context, agentDef *agent
 		}
 		return planAg, nil
 	}
-	ag, err := c.getOrCreateAgent(parentCtx, agentDef, task.Model)
+	ag, err := c.createTaskAgentWithResultTool(parentCtx, agentDef, task.Model, resultTool)
 	if err != nil {
 		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
 		c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
 		return nil, err
 	}
 	return ag, nil
+}
+
+func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *agent.AgentDef, overrideModel string, resultTool *submitResultTool) (fantasy.Agent, error) {
+	agentDef := def
+	if overrideModel != "" {
+		overriddenDef := *def
+		overriddenDef.Generation.Model = overrideModel
+		agentDef = &overriddenDef
+	}
+
+	agentDef = c.injectWorkerContext(ctx, agentDef)
+	ctx = tools.SetSSHSessionManager(ctx, c.sshSessionMgr)
+
+	agentTools := agent.SelectTools(c.coreTools, agentDef.Tools)
+	if c.mcpManager != nil {
+		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
+		if len(agentDef.MCPTools) > 0 {
+			err := c.mcpManager.LoadAgentMCPServer(agentDef.Name, agentDef.MCPTools, agentDef.Shell)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load MCP server for agent %s: %w", agentDef.Name, err)
+			}
+			mcpTools := c.mcpManager.GetAgentMCPTools(agentDef.Name, agentDef.Shell)
+			if len(mcpTools) > 0 {
+				agentTools = append(agentTools, mcpTools...)
+			}
+		}
+	}
+	if resultTool != nil {
+		agentTools = append(agentTools, resultTool)
+	}
+
+	getAgModelID := c.resolveAgentModel(agentDef, "")
+	return agent.CreateAgent(ctx, c.providerManager.GetProvider(getAgModelID), agent.AgentConfig{
+		Def:        agentDef,
+		TeamConfig: &c.session.Config,
+		WorkDir:    c.projectDir,
+		MaxSteps:   agent.DefaultMaxSteps,
+	}, agentTools)
 }
