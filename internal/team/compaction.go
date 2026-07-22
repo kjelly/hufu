@@ -442,6 +442,206 @@ func EnforceCompactionInvariants(summary *StructuredSummary, prevSummary *Struct
 	return summary
 }
 
+// mergeTypedTaskResultFacts adds durable task evidence which may not be present
+// in the compacted conversation. This is deliberately deterministic: a sidecar
+// summary can supplement these facts but cannot drop them.
+func mergeTypedTaskResultFacts(summary *StructuredSummary, items []*TodoItem) *StructuredSummary {
+	summary = cloneStructuredSummary(summary)
+	if summary == nil {
+		summary = &StructuredSummary{}
+	}
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		if result := item.TypedResult; result != nil {
+			for _, file := range result.FilesRead {
+				summary.FilesRead = appendUnique(summary.FilesRead, file.Path)
+			}
+			for _, file := range result.FilesModified {
+				summary.FilesModified = appendUnique(summary.FilesModified, file.Path)
+			}
+			for _, artifact := range result.Artifacts {
+				summary.ArtifactsProduced = appendUnique(summary.ArtifactsProduced, artifact.Path)
+			}
+			for _, verification := range result.Verification {
+				formatted := formatTaskVerification(item.ID, verification)
+				summary.VerificationResults = appendUnique(summary.VerificationResults, formatted)
+				if isVerificationFailure(formatted) {
+					summary.ErrorsAndFixes = appendUnique(summary.ErrorsAndFixes, formatted)
+				}
+			}
+		}
+		if item.VerifyResult != nil {
+			formatted := formatTaskVerification(item.ID, *item.VerifyResult)
+			summary.VerificationResults = appendUnique(summary.VerificationResults, formatted)
+			if isVerificationFailure(formatted) {
+				summary.ErrorsAndFixes = appendUnique(summary.ErrorsAndFixes, formatted)
+			}
+		}
+	}
+
+	// The TodoList is authoritative for task lifecycle state. Preserve the
+	// sidecar's narrative, but make the task sections reflect the current
+	// deterministic state so a fallback cannot forget an active task.
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		entry := summaryTaskEntry(item)
+		switch item.Status {
+		case TaskInProgress, TaskVerifying, TaskPlanned, TaskPending, TaskPaused:
+			summary.CompletedTasks = removeSummaryTask(summary.CompletedTasks, item)
+			summary.BlockedTasks = removeSummaryTask(summary.BlockedTasks, item)
+			summary.InProgressTasks = appendUnique(summary.InProgressTasks, entry)
+		case TaskBlocked:
+			summary.CompletedTasks = removeSummaryTask(summary.CompletedTasks, item)
+			summary.InProgressTasks = removeSummaryTask(summary.InProgressTasks, item)
+			summary.BlockedTasks = appendUnique(summary.BlockedTasks, entry)
+		case TaskDone:
+			summary.InProgressTasks = removeSummaryTask(summary.InProgressTasks, item)
+			summary.BlockedTasks = removeSummaryTask(summary.BlockedTasks, item)
+			if !todoHasFailedVerification(item) {
+				summary.CompletedTasks = appendUnique(summary.CompletedTasks, entry)
+			}
+		case TaskSkipped, TaskError:
+			summary.CompletedTasks = removeSummaryTask(summary.CompletedTasks, item)
+			summary.InProgressTasks = removeSummaryTask(summary.InProgressTasks, item)
+			summary.BlockedTasks = removeSummaryTask(summary.BlockedTasks, item)
+		}
+	}
+
+	// Reconcile completed entries with failed tasks and failed verifications.
+	// Task identity must be exact: a failure for task "1" must not remove
+	// "Task 10" or an unrelated description that happens to contain "1".
+	var failedTasks []*TodoItem
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		if item.Status == TaskError || todoHasFailedVerification(item) {
+			failedTasks = append(failedTasks, item)
+		}
+	}
+
+	var retained []string
+	for _, completed := range summary.CompletedTasks {
+		isFailed := false
+		for _, item := range failedTasks {
+			if summaryTaskMatchesTodo(completed, item) {
+				isFailed = true
+				break
+			}
+		}
+		if !isFailed {
+			retained = append(retained, completed)
+		}
+	}
+	summary.CompletedTasks = retained
+
+	return summary
+}
+
+func todoHasFailedVerification(item *TodoItem) bool {
+	if item == nil {
+		return false
+	}
+	if item.TypedResult != nil {
+		for _, verification := range item.TypedResult.Verification {
+			if isVerificationFailure(formatTaskVerification(item.ID, verification)) {
+				return true
+			}
+		}
+	}
+	return item.VerifyResult != nil && isVerificationFailure(formatTaskVerification(item.ID, *item.VerifyResult))
+}
+
+func summaryTaskEntry(item *TodoItem) string {
+	if item == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(item.ID); id != "" {
+		desc := strings.TrimSpace(item.Desc)
+		if match := canonicalSummaryTaskID.FindStringSubmatch(desc); len(match) == 2 && strings.EqualFold(match[1], id) {
+			return desc
+		}
+		if desc != "" {
+			return "Task " + id + ": " + desc
+		}
+		return "Task " + id + ":"
+	}
+	return strings.TrimSpace(item.Desc)
+}
+
+func removeSummaryTask(entries []string, item *TodoItem) []string {
+	retained := entries[:0]
+	for _, entry := range entries {
+		if !summaryTaskMatchesTodo(entry, item) {
+			retained = append(retained, entry)
+		}
+	}
+	return retained
+}
+
+var canonicalSummaryTaskID = regexp.MustCompile(`(?i)^\s*(?:[-*]\s*)?task\s+([^:\s]+)\s*:`)
+
+// summaryTaskMatchesTodo compares a rendered task entry with an actual Todo.
+// A task ID is accepted only in the canonical "Task <id>:" form; otherwise
+// a description must match in full. This prevents substring collisions.
+func summaryTaskMatchesTodo(entry string, item *TodoItem) bool {
+	if item == nil {
+		return false
+	}
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return false
+	}
+	if desc := strings.TrimSpace(item.Desc); desc != "" && strings.EqualFold(entry, desc) {
+		return true
+	}
+	match := canonicalSummaryTaskID.FindStringSubmatch(entry)
+	return len(match) == 2 && strings.TrimSpace(item.ID) != "" && strings.EqualFold(match[1], strings.TrimSpace(item.ID))
+}
+
+func summaryTaskMatchesReference(entry, reference string) bool {
+	entry = strings.TrimSpace(entry)
+	reference = strings.TrimSpace(reference)
+	if entry == "" || reference == "" {
+		return false
+	}
+	if strings.EqualFold(entry, reference) {
+		return true
+	}
+	entryMatch := canonicalSummaryTaskID.FindStringSubmatch(entry)
+	refMatch := canonicalSummaryTaskID.FindStringSubmatch(reference)
+	if len(entryMatch) == 2 && len(refMatch) == 2 {
+		return strings.EqualFold(entryMatch[1], refMatch[1])
+	}
+	// Callers may pass the raw Todo ID rather than a rendered task label.
+	return len(entryMatch) == 2 && strings.EqualFold(entryMatch[1], reference)
+}
+
+func formatTaskVerification(taskID string, verification VerificationResult) string {
+	command := strings.TrimSpace(verification.Command)
+	if command == "" {
+		command = "(unspecified command)"
+	}
+	prefix := "verification"
+	if strings.TrimSpace(taskID) != "" {
+		prefix = "task " + taskID + " verification"
+	}
+	if verification.TimedOut {
+		if verification.ExitCode != 0 {
+			return fmt.Sprintf("FAIL: %s %q: timed out (exit status %d)", prefix, command, verification.ExitCode)
+		}
+		return fmt.Sprintf("FAIL: %s %q: timed out", prefix, command)
+	}
+	if verification.ExitCode != 0 {
+		return fmt.Sprintf("FAIL: %s %q: exit status %d", prefix, command, verification.ExitCode)
+	}
+	return fmt.Sprintf("%s %q: exit status 0", prefix, command)
+}
+
 // CompactionValidationError represents a failure during post-compaction validation.
 type CompactionValidationError struct {
 	Check   string
@@ -478,7 +678,7 @@ func ValidateStructuredSummary(summary *StructuredSummary, prevSummary *Structur
 		allTasks = append(allTasks, summary.BlockedTasks...)
 		allTasks = append(allTasks, summary.CompletedTasks...)
 		for _, t := range allTasks {
-			if strings.Contains(strings.ToLower(t), strings.ToLower(activeID)) {
+			if summaryTaskMatchesReference(t, activeID) {
 				found = true
 				break
 			}
@@ -555,7 +755,7 @@ func ValidateStructuredSummary(summary *StructuredSummary, prevSummary *Structur
 			continue
 		}
 		for _, completed := range summary.CompletedTasks {
-			if strings.Contains(strings.ToLower(completed), strings.ToLower(failedID)) {
+			if summaryTaskMatchesReference(completed, failedID) {
 				return &CompactionValidationError{
 					Check:   "FailedTaskNotDone",
 					Message: fmt.Sprintf("failed task %q is incorrectly marked as completed in summary", failedID),
@@ -582,7 +782,7 @@ func ValidateStructuredSummary(summary *StructuredSummary, prevSummary *Structur
 			continue
 		}
 		for _, completed := range summary.CompletedTasks {
-			if strings.EqualFold(completed, cleanFail) || strings.Contains(strings.ToLower(completed), strings.ToLower(cleanFail)) {
+			if summaryTaskMatchesReference(completed, cleanFail) {
 				return &CompactionValidationError{
 					Check:   "FailedTaskNotDone",
 					Message: fmt.Sprintf("failed verification %q is incorrectly marked as completed in summary", cleanFail),
@@ -656,7 +856,7 @@ func extractFailedVerifications(messages []fantasy.Message) []string {
 			if trp, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
 				output, isErr := toolResultOutputText(trp.Output)
 				outputLower := strings.ToLower(output)
-				if isErr || strings.Contains(outputLower, "[failed]") || strings.Contains(outputLower, "verification failure") || strings.Contains(outputLower, "fail:") || strings.Contains(outputLower, "exit status") {
+				if isErr || isVerificationFailure(outputLower) {
 					preview := output
 					if len([]rune(preview)) > 150 {
 						preview = string([]rune(preview)[:150]) + "..."
@@ -670,6 +870,18 @@ func extractFailedVerifications(messages []fantasy.Message) []string {
 }
 
 func extractFileOperations(messages []fantasy.Message) (readFiles, modifiedFiles, artifacts []string) {
+	successfulResults := make(map[string]bool)
+	for _, msg := range messages {
+		for _, part := range msg.Content {
+			if trp, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
+				_, isErr := toolResultOutputText(trp.Output)
+				successfulResults[trp.ToolCallID] = !isErr
+			}
+		}
+	}
+
+	allKeys := []string{"file_path", "target_file", "TargetFile", "path", "AbsolutePath", "SearchPath", "DirectoryPath", "destination", "filePath", "targetFile", "output_file", "file", "filename", "src", "dest", "output"}
+
 	for _, msg := range messages {
 		for _, part := range msg.Content {
 			if tcp, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok {
@@ -687,21 +899,29 @@ func extractFileOperations(messages []fantasy.Message) (readFiles, modifiedFiles
 				}
 
 				switch name {
-				case "view", "read_file":
-					path := extractArg("file_path", "target_file", "path", "AbsolutePath", "SearchPath", "DirectoryPath")
+				case "view", "read_file", "cat":
+					if !successfulResults[tcp.ToolCallID] {
+						continue
+					}
+					path := extractArg(allKeys...)
 					if path != "" {
 						readFiles = appendUnique(readFiles, path)
 					}
 				case "grep", "glob", "ls":
-					path := extractArg("path", "SearchPath", "DirectoryPath", "file_path")
+					if !successfulResults[tcp.ToolCallID] {
+						continue
+					}
+					path := extractArg(allKeys...)
 					if path != "" {
 						readFiles = appendUnique(readFiles, path)
 					}
-				case "download", "write", "edit", "multiedit", "write_to_file", "replace_file_content":
-					path := extractArg("file_path", "target_file", "path", "TargetFile", "AbsolutePath")
+				case "download", "write", "edit", "multiedit", "write_to_file", "replace_file_content", "multi_replace_file_content", "patch":
+					if !successfulResults[tcp.ToolCallID] {
+						continue
+					}
+					path := extractArg(allKeys...)
 					if path != "" {
 						modifiedFiles = appendUnique(modifiedFiles, path)
-						artifacts = appendUnique(artifacts, path)
 					}
 				}
 			}
@@ -711,8 +931,32 @@ func extractFileOperations(messages []fantasy.Message) (readFiles, modifiedFiles
 }
 
 func isVerificationFailure(line string) bool {
-	lower := strings.ToLower(strings.TrimSpace(line))
-	return strings.HasPrefix(lower, "fail:") || strings.HasPrefix(lower, "verification failure:") || strings.Contains(lower, "verification failed")
+	for _, rawLine := range strings.Split(line, "\n") {
+		lower := strings.ToLower(strings.TrimSpace(rawLine))
+		if lower == "" || lower == "(none)" || lower == "none" {
+			continue
+		}
+		// A failure always wins within a line. Successful status text only
+		// describes that specific line and must not hide a later failure.
+		if regexp.MustCompile(`\bexit status\s+(?:-[0-9]+|[1-9][0-9]*)\b`).MatchString(lower) ||
+			strings.HasPrefix(lower, "fail:") ||
+			strings.HasPrefix(lower, "[failed]") ||
+			strings.HasPrefix(lower, "verification failed:") ||
+			strings.HasPrefix(lower, "verification failure:") ||
+			strings.Contains(lower, "timed out") ||
+			strings.Contains(lower, "timeout") ||
+			strings.Contains(lower, "cancelled") ||
+			strings.Contains(lower, "canceled") {
+			return true
+		}
+		if regexp.MustCompile(`\b(?:no|zero|0)\s+(?:(?:tests?|checks?)\s+)?(?:failed|failures?|errors?)\b|\b(?:failure|failures?|error|errors?)\s+count\s*:\s*0\b|\bexit status\s+0\b`).MatchString(lower) {
+			continue
+		}
+		if regexp.MustCompile(`\b(?:verification|tests?|checks?|build)\s+(?:has\s+)?(?:failed|failure|error)\b`).MatchString(lower) {
+			return true
+		}
+	}
+	return false
 }
 
 func formatMessagesForCompaction(messages []fantasy.Message) string {
