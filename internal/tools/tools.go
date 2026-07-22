@@ -232,10 +232,12 @@ const (
 
 // High-risk tools that require explicit allow in config
 var highRiskTools = map[string]bool{
-	"golang": true,
-	"lua":    true,
-	"bash":   true,
-	"mcp":    true,
+	"golang":         true,
+	"lua":            true,
+	"bash":           true,
+	"mcp":            true,
+	"terminal":       true,
+	"terminal_start": true,
 }
 
 // Medium-risk tools that require user confirmation
@@ -247,16 +249,23 @@ var mediumRiskTools = map[string]bool{
 
 // ForceMCPBlockedTools are disabled when --force-mcp is enabled, forcing use of MCP servers
 var ForceMCPBlockedTools = map[string]bool{
-	"bash":           true,
-	"sudo":           true,
-	"ssh":            true,
-	"scp":            true,
-	"ssh_disconnect": true,
-	"golang":         true,
-	"lua":            true,
-	"download":       true,
-	"fetch":          true,
-	"agentic_fetch":  true,
+	"bash":               true,
+	"sudo":               true,
+	"ssh":                true,
+	"scp":                true,
+	"ssh_disconnect":     true,
+	"golang":             true,
+	"lua":                true,
+	"download":           true,
+	"fetch":              true,
+	"agentic_fetch":      true,
+	"terminal":           true,
+	"terminal_start":     true,
+	"terminal_write":     true,
+	"terminal_read":      true,
+	"terminal_close":     true,
+	"terminal_list":      true,
+	"terminal_reconcile": true,
 }
 
 // GetToolLevel returns the risk level of a tool
@@ -831,6 +840,10 @@ func resolveAndValidatePath(path, workDir string) (string, error) {
 		return "", fmt.Errorf("path '%s' is outside the project directory", path)
 	}
 	return filepath.Join(evaluatedDir, filepath.Base(absPath)), nil
+}
+
+func IsPathAllowed(absPath string, allowedPaths []string) bool {
+	return isPathAllowed(absPath, allowedPaths)
 }
 
 func isPathAllowed(absPath string, allowedPaths []string) bool {

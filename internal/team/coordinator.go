@@ -184,6 +184,7 @@ type Coordinator struct {
 	currentStageStartMu    sync.RWMutex
 	auditLogger            *audit.AuditLogger
 	sshSessionMgr          *tools.SSHSessionManager
+	terminalSessionMgr     *TerminalSessionManager
 	skillUsage             map[string]*skillUsageState
 	skillUsageMu           sync.Mutex
 	delegatedTasks         map[string]int
@@ -530,6 +531,13 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 
 	// Initialize SSH session manager
 	c.sshSessionMgr = tools.NewSSHSessionManager()
+	terminalSessionMgr, err := NewTerminalSessionManager(session.Workspace, func(eventType, taskID string, payload map[string]interface{}) {
+		c.emitEvent(eventType, "terminal", taskID, payload)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize terminal session manager: %w", err)
+	}
+	c.terminalSessionMgr = terminalSessionMgr
 
 	c.coreTools = append(c.coreTools,
 		&requestAgentTool{coordinator: c},
@@ -539,6 +547,13 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		&stmWriteTool{coordinator: c},
 		&ltmUpdateTool{coordinator: c},
 		&teamInfoTool{coordinator: c},
+		&terminalTool{coordinator: c},
+		&terminalStartTool{coordinator: c},
+		&terminalWriteTool{coordinator: c},
+		&terminalReadTool{coordinator: c},
+		&terminalCloseTool{coordinator: c},
+		&terminalListTool{coordinator: c},
+		&terminalReconcileTool{coordinator: c},
 	)
 
 	if c.memoryStore != nil {
@@ -672,6 +687,15 @@ func (c *Coordinator) IsWrapUp() bool {
 
 func (c *Coordinator) TaskTracker() *TaskTracker {
 	return c.taskTracker
+}
+
+// TerminalManager exposes the coordinator-owned terminal resource manager.
+// Callers must bind requests to the current TODO ID via WithTerminalTaskID.
+func (c *Coordinator) TerminalManager() TerminalManager {
+	if c == nil {
+		return nil
+	}
+	return c.terminalSessionMgr
 }
 
 func (c *Coordinator) SetStepConfirmFn(fn func(context.Context, []TaskDef) (bool, error)) {

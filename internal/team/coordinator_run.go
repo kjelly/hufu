@@ -131,6 +131,11 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 
 	output, steps, err := c.runAgentWithStatusAndHistory(taskCtx, ag, resolvedName, prompt, nil, timing)
 	duration, modelTime, toolTime := timing.snapshot()
+	if err == nil && c.terminalSessionMgr != nil {
+		if terminalErr := c.terminalSessionMgr.RequireTaskClosed(todoID); terminalErr != nil {
+			err = terminalErr
+		}
+	}
 	if err != nil {
 		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), usageFromSteps(steps))
 		c.PersistFailure(resolvedName, task, todoID, c.FailureDetail(err, ""))

@@ -10,3 +10,7 @@ import (
 func setNetNamespace(cmd *exec.Cmd) error {
 	return nil
 }
+
+func SetNetNamespace(cmd *exec.Cmd) error {
+	return setNetNamespace(cmd)
+}

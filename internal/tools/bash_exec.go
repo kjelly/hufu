@@ -78,8 +78,8 @@ func waitAndDrain(cmd *exec.Cmd, wg *sync.WaitGroup) error {
 // process tree, not just the direct child. exec.CommandContext's default
 // cancel SIGKILLs only the child: grandchildren (e.g. a guestfish appliance)
 // survive holding the output pipes, and a root-owned sudo child cannot be
-// signalled at all. Must run after setNetNamespace, which replaces
-// SysProcAttr.
+// signalled at all. Preserves existing SysProcAttr fields if setNetNamespace
+// was called first.
 func configureCommandReaping(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}

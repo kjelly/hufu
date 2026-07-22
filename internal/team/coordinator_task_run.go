@@ -343,6 +343,13 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		if strings.TrimSpace(output) != "" {
 			lastOutput = output
 		}
+		terminalBlocked := false
+		if c.terminalSessionMgr != nil {
+			if terminalErr := c.terminalSessionMgr.RequireTaskClosed(todoID); terminalErr != nil {
+				err = terminalErr
+				terminalBlocked = true
+			}
+		}
 
 		if err == nil {
 			c.pendingPlansMu.Lock()
@@ -442,6 +449,12 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}
 
 		c.recordExecutionEvent(todoID, agentName, attempt, "error", resolvedModel, time.Since(attemptStarted), usageFromSteps(steps))
+		if terminalBlocked {
+			lastErr = err
+			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: an owned terminal session remains active or unknown").withTodoID(todoID))
+			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, "error"))
+			break
+		}
 
 		// Step messages start at the first assistant turn; without re-adding
 		// the prompt, a retry's history opens with an assistant message and

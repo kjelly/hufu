@@ -256,23 +256,33 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 	if err != nil || summary == nil {
 		summary = EnforceCompactionInvariants(&StructuredSummary{}, prevSummary, originalGoal, messages)
 	}
+	var todoItems []*TodoItem
+	if c.taskTracker != nil {
+		todoItems = c.taskTracker.TodoList().Items()
+		summary = mergeTypedTaskResultFacts(summary, todoItems)
+	}
 
 	var activeTaskIDs, failedTaskIDs []string
 	if c.taskTracker != nil {
-		for _, item := range c.taskTracker.TodoList().Items() {
+		for _, item := range todoItems {
 			switch item.Status {
 			case TaskInProgress, TaskVerifying, TaskPlanned, TaskPending:
-				activeTaskIDs = append(activeTaskIDs, item.ID, item.Desc)
+				activeTaskIDs = append(activeTaskIDs, item.ID)
 			case TaskError:
-				failedTaskIDs = append(failedTaskIDs, item.ID, item.Desc)
+				failedTaskIDs = append(failedTaskIDs, item.ID)
 			}
 		}
 	}
 	if valErr := ValidateStructuredSummary(summary, prevSummary, messages, activeTaskIDs, failedTaskIDs); valErr != nil {
-		log.Printf("warning: post-compaction validation failed (%v); retaining previous summary", valErr)
-		if prevSummary != nil {
-			summary = prevSummary
+		log.Printf("warning: post-compaction validation failed (%v); building deterministic fallback", valErr)
+		fallback := EnforceCompactionInvariants(&StructuredSummary{}, prevSummary, originalGoal, messages)
+		fallback = mergeTypedTaskResultFacts(fallback, todoItems)
+		if postValErr := ValidateStructuredSummary(fallback, prevSummary, messages, activeTaskIDs, failedTaskIDs); postValErr != nil {
+			// Never replace history with a summary known to violate invariants.
+			log.Printf("warning: deterministic compaction fallback failed validation (%v); retaining original messages", postValErr)
+			return messages
 		}
+		summary = fallback
 	}
 
 	c.lastCompactionSummary = summary

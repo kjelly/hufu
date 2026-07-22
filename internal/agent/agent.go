@@ -408,8 +408,9 @@ var alwaysIncludeTools = map[string]bool{
 // implication here means every team gets it the moment it grants bash or
 // sudo, with no YAML to remember to update.
 var impliedTools = map[string][]string{
-	"bash": {"wait_for"},
-	"sudo": {"wait_for"},
+	"bash":     {"wait_for"},
+	"sudo":     {"wait_for"},
+	"terminal": {"terminal_start", "terminal_write", "terminal_read", "terminal_close", "terminal_list", "terminal_reconcile"},
 }
 
 // ExpandImpliedTools appends tools implied by ones already present in a

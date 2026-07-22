@@ -108,6 +108,14 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	if len(failedTasks) > 0 && !args.AcknowledgeFailedTasks {
 		return fantasy.NewTextErrorResponse("cannot finish successfully while worker tasks failed or were blocked:\n" + formatFailedTasks(failedTasks) + "\nFix or re-delegate these tasks. If the user needs a partial result, call finish again with acknowledge_failed_tasks:true; hufu will append the unresolved-task warning."), nil
 	}
+	if t.coordinator.terminalSessionMgr != nil {
+		// A resumed terminal can belong to a prior execution run. It remains an
+		// unresolved resource, so a new run must not sidestep the gate by using
+		// a new executionRunID.
+		if err := t.coordinator.terminalSessionMgr.RequireNoLeaks(""); err != nil {
+			return fantasy.NewTextErrorResponse("cannot finish while terminal sessions remain unresolved: " + err.Error()), nil
+		}
+	}
 
 	t.coordinator.lastStmWriteMu.Lock()
 	workspace := t.coordinator.session.Workspace
