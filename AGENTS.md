@@ -174,6 +174,7 @@ In addition to `hufu [prompt]`, the CLI exposes helper subcommands so users can 
 | `hufu list [team]` | Lists discoverable teams and, per team, each agent's role, model, tools and skills. Reads `.md` frontmatter directly (no workspace side effects). Aliases: `ls`, `teams`. |
 | `hufu init <team> [--template default] [--model …]` | Scaffolds `.agent-teams/<team>/team.yaml` + `helper.md` so a team is runnable immediately. Never overwrites existing files. |
 | `hufu chat [--agent-team … \| --default]` | Interactive REPL: loads one team **once** and reuses it across turns. First turn calls `Run`, later turns call `ContinueWithPrompt` (preserving conversation history); `/reset` calls `Coordinator.ResetConversation()`, `/exit` leaves. Each turn is independently Ctrl+C-cancellable without exiting the REPL. Alias: `repl` (the cobra var is `replCmd`). |
+| `hufu session <list\|tree\|fork\|checkout\|label\|diff>` | Manage session branches over the event store: `list` branches/labels, `tree` ASCII view, `fork [target] [--name]` (branch, label, or event ID; fork implies checkout), `checkout <target>` (switches active branch and rebuilds `workspace/session.json` from the branch's event lineage for time-travel resume), `label <target> <name>`, `diff <a> <b>` (task/artifact/verification diff). Flags: `--workspace/-w`, `--json`. State lives in `workspace/session_tree.json` (atomic write). The coordinator run path automatically tags all events with the active branch's ID, so `checkout` time-travel correctly restores the branch's task/conversation state on the next run. |
 
 ### Profiles
 
@@ -586,6 +587,9 @@ mcp-tools:
     cmd: golangci-lint run
     desc: Run linter
     shell: bash
+side_effect: infra_mutation
+recovery: manual
+reconcile-tool: "terraform plan -detailed-exitcode"
 ---
 Your system prompt here.
 ```
@@ -616,6 +620,9 @@ Your system prompt here.
 | `force-mcp` | ❌ | Team default | Force MCP mode (disable execution/network tools) |
 | `shell` | ❌ | Team default | Default shell for agent's MCP tools (e.g., `bash`, `zsh`, `nu`, or full path like `/usr/bin/nu`) |
 | `mcp-tools` | ❌ | — | Custom MCP tools (dict format: `{tool-name: {cmd, desc, inputs, shell, dir}}`) |
+| `side_effect` | ❌ | tool-inferred | Side-effect class for crash-resume recovery: `none`／`workspace_write`／`external_write`／`infra_mutation`／`credential_mutation`. Empty → inferred from `tools` (sudo→infra, ssh→external, bash/write→workspace, read-only→none) |
+| `recovery` | ❌ | class-derived | Interrupted-task recovery policy: `retry`／`reconcile`／`manual`／`never`. Empty → derived from `side_effect` (none/workspace_write→retry; external_write→reconcile; infra/credential→manual) |
+| `reconcile-tool` | ❌ | — | Read-only probe command run during crash recovery to classify whether an interrupted task completed (exit 0=complete, 1=not_started, 2=partial, other=unknown) |
 
 ### Team Frontmatter Fields (team.yml)
 

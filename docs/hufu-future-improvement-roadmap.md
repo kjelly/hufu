@@ -2,9 +2,9 @@
 
 > 文件目的：整理 hufu 作為 Go 多代理協作與工作流引擎的整體演進方向，供未來規劃架構重整、功能開發、相容性遷移、測試與 agent team 生態。
 >
-> 適用範圍：本文件是 **hufu 全產品／全架構 roadmap**，不只處理特定 runbook 或 `pilot` 驗證情境。
+> 適用範圍：本文件是 **hufu 全產品／全架構 roadmap**，不只處理特定 runbook 或單一驗證情境。
 >
-> 伴隨文件：`hufu-strict-verification-workflow-improvement.md` 是高約束、可稽核 workflow 的**領域通用機制設計與驗收案例**（required skill lock、fail-closed policy、evidence gate、cache/recovery 語意等）。分工規則：**Go 子系統的 schema、詞彙與實作狀態以本文件工作卡為單一真相來源**；伴隨文件提供對應的詳細設計與驗收案例（各卡以「詳細設計見 strict 文件 §x.y」引用）。本文件則涵蓋 session、context、workflow kernel、extension、SDK/RPC、TUI、observability、memory 與通用 agent teams 的 backlog。
+> 伴隨文件：`docs/hufu-strict-verification-workflow-improvement.md` 是高約束、可稽核 workflow 的**領域通用機制設計與驗收案例**（required skill lock、fail-closed policy、evidence gate、cache/recovery 語意等）。分工規則：**Go 子系統的 schema、詞彙與實作狀態以本文件工作卡為單一真相來源**；伴隨文件提供對應的詳細設計與驗收案例（各卡以「詳細設計見 strict 文件 §x.y」引用）。本文件則涵蓋 session、context、workflow kernel、extension、SDK/RPC、TUI、observability、memory 與通用 agent teams 的 backlog。
 >
 > 分析基準：**HEAD `b9b47557`（2026-07-21，`feat: add structured conversation compaction with token-aware history management`）**。所有工作項目已對照此 commit 逐一標記落地狀態。**每次相關 PR 合入後，必須更新本文件的狀態欄位與基準 commit**，避免將已修正的問題重做。
 
@@ -124,21 +124,21 @@ hufu 不應演進成另一個「單代理 terminal coding agent」，也不應�
 | HF-CTX-003 | P0 | ✅ 已完成（工作區未合入） | compaction 對 tool call/result、artifact、verification 保留不足；殘餘 HF-PR-103 已實作完成（ValidateStructuredSummary 5 項 deterministic 檢查、UserCorrections/SourceEntryIDs 欄位、fallback 保留舊 summary），已 Review 通過 |
 | HF-STATE-001 | P0 | 🟡 IMPLEMENTED (PENDING REVIEW) | session、history、STM、LTM、journal、audit 多份狀態缺少單一真相來源；HF-PR-104 已實作 append-only event store (RunEvent, SHA-256 hash chain, dual-write telemetry, state reducers)、訊息/任務雙寫已接線、task 事件冪等去重。殘留 follow-up（見 `docs/superpowers/plans/2026-07-21-hf-state-001-quality-fixes.md` Residual F1–F3）：F1 訊息事件 dual-write 失敗未計入 `DualWriteFailures()`、F2 `emittedTaskTransitions` 跨 resume 不持久化、F3 `OpenEventStore` runID/sessionID 繼承缺獨立測試。待 F1 補完再推進 🟢 |
 | HF-STATE-002 | P0 | 🟡 IMPLEMENTED (PENDING REVIEW) | snapshot write 與 crash recovery 一致性不足；HF-PR-002 已實作 AtomicWriteFile (temp write + fsync + atomic rename + dir sync)，`SaveSession`/`SaveSessionMD`/`SaveCompactionRecord` 全數改用，並涵蓋 crash recovery 測試。Review 備註：`SyncDir` 失敗目前被靜默忽略（`_ = SyncDir(dir)`），極端情境下目錄項未 fsync 可能影響 rename 持久性，建議後續將 `SyncDir` 錯誤納入回傳或計量。待 Review |
-| HF-CACHE-001 | P0 | 🟡 PARTIAL（identity 已含 verify+mode+generation；缺 CachePolicy 與環境指紋） | cache 缺少 workspace/source/environment freshness |
-| HF-RECOVERY-001 | P0 | 🔴 OPEN（風險最高，建議升入下一批 P0） | interrupted task resume 未完整區分可安全重跑與非冪等副作用 |
-| HF-ARCH-001 | P1 | 🟡 PARTIAL（檔案已拆分 `58e5a54`；struct 層面介面解耦未做） | `Coordinator` 聚合過多責任，難測試、難嵌入、難擴充 |
-| HF-WF-001 | P1 | 🔴 OPEN | worker output 主要是自由文字，缺少 typed task result |
-| HF-WF-002 | P1 | 🔴 OPEN（`--default` 已是 fast path 雛形，實作時應認領整合） | 簡單任務與複雜 team workflow 沒有明確 fast/team path |
+| HF-CACHE-001 | P0 | ✅ 已修復（工作區未合入，已 Review）；殘餘見 HF-PR-003/004 | cache 缺少 workspace/source/environment freshness；coordinator-level `CachePolicy`（use/refresh/bypass）、`CacheIdentity`（repo commit + project fingerprint + workspace generation + TTL）、`isFresh` freshness gate、capability cache TTL／`always-fresh`／`InvalidateCapabilityCache` 已落地並通過測試 |
+| HF-RECOVERY-001 | P0 | ✅ 已修復（工作區未合入，已 Review）；殘餘見 HF-PR-107 | interrupted task resume 未完整區分可安全重跑與非冪等副作用；HF-PR-107 已實作 side-effect-aware crash recovery (`SideEffectClass`, `RecoveryPolicy`, `ToolRecoverySpec`, `reconcileInterruptedTask` 5-step flow, `SetRecoveryState`, `DefaultRecoveryPolicy`, `ResolveRecoveryPolicy`)，`ResumeInterruptedTasks` 依 policy 分流並寫入 `recovery_decision` event store，通過 `TestResume` / `TestRecovery` / `TestUnattended` 測試。自動 side-effect 分級（`InferSideEffectClass` 依 agent tools 推導）已接線，agent .md frontmatter 支援 `side_effect`／`recovery`／`reconcile-tool`，三層優先序（task>agent>tool）於 `ExecuteTasks` 生效；`RecoveryNever`=skip、`RecoveryManual`=block+needs_human 語意已分化；reconcile exit code 已用具名常數 |
+| HF-ARCH-001 | P1 | ✅ DONE（工作區未合入，已 Review） | `Coordinator` 聚合過多責任，難測試、難嵌入、難擴充；已實作 §17 phase-1 介面解耦：6 大核心子服務介面（`Planner`, `SessionStore`, `PolicyEngine`, `ContextCompiler`, `AgentPool`, `WorkflowEngine`）定義於 `internal/team/services.go`，`Coordinator` struct 增加介面欄位並於 `NewCoordinator` 初始化為 default wrapper（轉發至原有方法），Getters/Setters 以 `c.mu` 保護並含 nil-fallback，`services_test.go` 涵蓋 defaults 非-nil + 6 介面 Set+Get round-trip + nil-fallback + 2 行為測試（override 覆蓋 6/6）。`go build`/`go vet`/`go test ./internal/team/` 全綠。**Review 殘餘（不阻擋，屬後續 phase）**：(1) ~~call-site 未改走介面~~ ✅ 已修復——Coordinator 內部 call-site 已改走介面（`Planner.CheckDuplicate`、`PolicyEngine.GetCachePolicy`/`IsCacheFresh`/`ResolveRecoveryPolicy`、`AgentPool.ResolveAgentName`/`Sidecar`/`GuardSidecar`/`JudgeSidecar`、`SessionStore.SaveSession`/`SaveCompactionRecord`、`ContextCompiler.CalculateBudget`/`ContextUsageReport`），override 現可改變 Coordinator 內部決策（行為測試 `TestCoordinatorSubServices_PolicyEngineOverrideAffectsLookup`／`AgentPoolOverrideAffectsResolve` 驗證）；`WorkflowEngine.Run/ExecuteTasks` 維持 direct（公開入口、無內部 call-site、wrapper 回轉會遞迴，seam 供外部消費者）；(2) `Planner.CheckDuplicate` 回傳 `*duplicateTodoMatch`、`PolicyEngine.IsCacheFresh` 取 `cachedTaskEntry` 為 unexported 型別，外部 package 無法實作這兩個介面，待介面升級為公開 SDK/embedding contract（HF-PR-202）時須 export 或重構簽章；(3) ~~override 測試只覆蓋 Planner/PolicyEngine~~ ✅ 已修復——`services_test.go` 新增 `TestCoordinatorSubServices_RoundTrip`（6 介面 Set+Get round-trip）+ `TestCoordinatorSubServices_NilFallback`（6 介面 getter nil-fallback）+ 2 個行為測試，override 覆蓋 6/6；(4) §17.1 列 11 服務，已完成 6，餘 `EventStore`/`EvidenceService`/`MemoryService`/`TerminalManager`/`EventSink` 分屬 HF-PR-104/108 等獨立卡，符合本卡「6 大核心」scope。 |
+| HF-WF-001 | P1 | ✅ DONE（工作區未合入，已 Review） | worker output 主要是自由文字，缺少 typed task result；HF-PR-105 已實作 TaskResult schema、submit_result tool、free-text compatibility parser（低信心標記 Confidence=0.4）、TaskExecutionPolicy（StrictResult）與 TodoItem.TypedResult 整合，單元測試全綠。**Review 殘餘（不阻擋）**：(R1) `FormatForContext()` 已定義但尚未接線至下游 task prompt——dependency injection 仍走 free-text `output` 經 STM/concurrent-tasks context，typed result 僅可經 `c.GetTaskResult`／`TodoItem.TypedResult` 取得，完整 consumption 接線建議併入 HF-PR-108；(R2) `c.taskResults[todoID]` 跨 retry attempt 未清除——attempt 1 提交後驗證失敗、attempt 2 未 submit 時 `GetTaskResult` 回傳舊 result 致 StrictResult 不觸發，建議每 attempt 開頭清除；(R3) `TestStrictTaskResultEnforcement` 僅測 struct 欄位未測實際 enforce 行為，escalation path result tool 注入亦無測試。 |
+| HF-WF-002 | P1 | ✅ DONE（工作區未合入，已 Review） | 簡單任務與複雜 team workflow 沒有明確 fast/team path；HF-PR-207 已實作 ExecutionRouter（`cmd/hufu/router.go`：`ExecutionRoute`（RouteFast／RouteTeam）、`RouteDecision`（Reasons 可解釋）、`--route` flag auto/fast/team、deterministic signals 優先（multi-role／infra-deploy／refactor scope／verification／multiple @-refs）、`sidecar.Sidecar.ClassifyRoute` LLM classifier 為輔、`CanEscalateToTeam` 自動升級機制），並與 `--default`／`autoteam` 整合（`maybeAutoSelectTeam` 改走 router）。`router_test.go` 5 項（deterministic fast/team signals、explicit flag override、--default handling、CanEscalateToTeam）全綠；`go build`／`go vet`／`go test ./cmd/hufu/ ./internal/sidecar/` 全綠。**Review 殘餘 R1/R2 已修復**：(R1)~~`Route` 未被執行路徑消費~~ ✅ 已修復——`maybeAutoSelectTeam` 改回傳 `RouteDecision` 並經 `executeAndReport`／`runWithTUI` 線傳至 `executeSegments`；新增 `dispatchSegmentContent`（`segments.go`）於 `SegmentSwitchTeam`／`SegmentText` 分支：`Route==RouteFast` 且 team 恰有單一 worker（`Coordinator.PrimaryWorkerName()`）時直送 `RunDirectAgent`（單一 agent，1 todo，不啟動 coordinator DAG／planning／synthesis），落實 §15.1 fast path；多 worker 或無 worker 則安全 fall-through 至 team path。(R2)~~`CanEscalateToTeam` 未接線~~ ✅ 已修復——`runFastPath`（`fastpath.go`）於每次 direct dispatch 失敗後呼叫 `CanEscalateToTeam(route, steps, errorCount, requiresMultiAgent)`，`errorCount≥2` 或 `stepCount>8` 時回傳 `escalated=true` 令 caller fall-through 至 `coordinator.Run`（team path），落實自動升級。`DirectAgentResult.Steps` 新增欄位以驅動 step-budget 信號。測試：`primary_worker_test.go`（4 case）、`fastpath_test.go`（`TestShouldUseFastPath` + 6 個 `TestRunFastPath_*`：success/retry-then-success/重複錯誤升級/step-budget 升級/transport error 升級/無 worker fall-through）。`go build`／`go vet`／`go test ./...` 全綠。 |
 | HF-PLUGIN-001 | P1 | 🔴 OPEN | hooks、skills、MCP 尚未形成穩定公開 extension contract |
-| HF-SESSION-001 | P1 | 🔴 OPEN（大型投資，依賴 event store，建議補價值論證後再排程） | 缺少 session branch、fork、checkpoint、label 與 time travel |
-| HF-MEM-001 | P1 | 🔴 OPEN | STM/LTM/RAG 缺少完整 provenance、confidence、supersession |
+| HF-SESSION-001 | P1 | ✅ DONE（工作區未合入，已 Review） | 缺少 session branch、fork、checkpoint、label 與 time travel；已實作 SessionTree、SessionBranch、BranchState、FilterEventsForBranch（branch event lineage isolation，含 fork point 截斷）與 DiffBranches（task/artifact/verification diff）與 CLI `hufu session`（list、tree、fork、checkout、label、diff），測試全綠。**Review 修復（3 項）**：(1) checkout 無 BranchID 的 legacy event 恒失敗——已將 empty BranchID 歸一為 main；(2) fork 無法解析 target 由靜默 fallback 改為報錯；(3) DiffBranches test payload 誤用 subject key——已修正為 desc。**本批一併實作接線（不列殘餘）**：coordinator run path 依 active branch 標記事件 BranchID（R1）；`artifact_created` 事件生產者 + Verify/VerifyResult 事件攜帶 + reducer 重建，使 artifact/verification diff 維度有資料（R2）；BranchState 由 saveCheckpoint 填充，checkout 依 event lineage 重建 session.json 實現真正 time travel（R3）；`copyBranchState` 深拷貝 TaskPlan/Compaction，杜絕別名風險（R4）。 |
+| HF-MEM-001 | P1 | ✅ DONE（工作區未合入，已 Review） | STM/LTM/RAG 缺少完整 provenance、confidence、supersession；已實作 MemoryRecord schema (§20.1: ID, Content, Category, Project, Team, SourceEventIDs, SourceTaskID, SourceAgent, FilePaths, CommitHash, CreatedAt, LastConfirmedAt, Confidence, ExpiresAt, Supersedes, Status, ExtraMeta)、lifecycle 狀態 (candidate, confirmed, superseded, expired, rejected)、provenance/confidence/supersession 管理方法 (SaveRecord, GetRecord, ConfirmRecord, SupersedeRecord, ExpireRecord, RejectRecord)、Hybrid ranking 檢索 (QueryRecords: vector + lexical + recency + file/task relevance + confidence/status weighting)、AutoQuery 指令與資料邊界 banner (§20.5: Background reference, not authoritative instruction)，並於 memory_save / memory_query 補全相關參數。單元測試與工具測試全數通過。**Review 結果（2026-07-21）**：§20.1–20.5 全數對齊——16 欄位 schema + ExtraMeta、5 狀態生命週期、6 管理 methods、hybrid ranking 9 信號、boundary banner、tool 參數升級、backward-compatible Save/Query wrapper、legacy document fallback 均已落地；`go build`/`go vet`/`go test ./...` 全綠。**Review 殘餘已修復**：(R1)~~`Save()` wrapper 丟失非 schema metadata 鍵~~ ✅ 已修復——`MemoryRecord.ExtraMeta` 欄位保留未知 metadata 鍵，`Save()` wrapper 收集至 `ExtraMeta`，`recordToMetadata` 展開至 chromem metadata map，`Query()` wrapper 經 `QueryOptions.MetadataFilter` pass-through full filter，`hufu history` 的 `type: "prompt_history"` filter 恢復正常；(R2)~~`SupersedeRecord` 靜默忽略 target save 錯誤~~ ✅ 已修復——改為 accumulate first error 並回傳；(R3)~~`GetRecord` 以 similarity 搜尋 workaround 取前 100 筆~~ ✅ 已修復——改用 chromem `Collection.GetByID()` 直接查詢，O(1) 且無漏失風險；(R4)~~test 自定 `containsSubstring`~~ ✅ 已修復——改用 `strings.Contains`/`strings.HasPrefix`，移除 `filepath` 依賴。新增測試 `TestSaveQueryPreservesExtraMetadata`（metadata round-trip + filter）與 `TestSupersedeRecordErrorAccumulation`（非存在 target 報錯）。 |
 | HF-OBS-001 | P1 | 🟡 PARTIAL（`hufu improve` 已有 telemetry/A-B；缺 trace/replay/fault-injection/eval） | 缺少完整 trace、replay、context inspector 與 agent eval |
 | HF-UX-001 | P2 | 🔴 OPEN | TUI 對 context、DAG、terminal lifecycle、e-paper 顯示支援不足 |
 | HF-TEAM-001 | P2 | 🔴 OPEN（`hufu team` 目前只有 `generate`／`permissions`） | bundled teams 缺少 schema lint、版本、合約與標準輸出 |
-| HF-WORKSPACE-001 | P1 | 🔴 OPEN（源自 strict 文件，詳細設計見其 §5.10） | control workspace 與 subject workspace 無強制隔離，ground-up cleanup 可能刪除 hufu 自己的 checkpoint/evidence |
-| HF-SECRET-001 | P1 | 🔴 OPEN（源自 strict 文件，詳細設計見其 §5.11） | audit/tool input/MCP/report 缺少統一 secret-aware redaction |
-| HF-TERM-001 | P1 | 🔴 OPEN（源自 strict 文件，詳細設計見其 §5.12；lifecycle event 依賴 HF-PR-104） | stateful terminal session 不是第一級 task resource，long-running process lifecycle 與 agent timeout/resume 混淆 |
-| HF-PROFILE-001 | P2 | 🔴 OPEN（源自 strict 文件，詳細設計見其 §5.15、§7.2；依賴 HF-PR-003/006） | cache／acceptance／memory 開關散落各 flag，無具名 execution profile；fresh verification 無法一鍵隔離舊 memory |
+| HF-WORKSPACE-001 | P1 | 🔴 OPEN（源自 strict 文件，詳細設計見其 §17） | control workspace 與 subject workspace 無強制隔離，ground-up cleanup 可能刪除 hufu 自己的 checkpoint/evidence |
+| HF-SECRET-001 | P1 | 🔴 OPEN（源自 strict 文件，詳細設計見其 §18） | audit/tool input/MCP/report 缺少統一 secret-aware redaction |
+| HF-TERM-001 | P1 | ✅ DONE（工作區未合入；第四輪 Review 已完成） | stateful terminal session 已成為第一級 task resource：owner binding、durable lifecycle、leaked-session gate、child/model timeout 分離、event lifecycle identity、restart process identity reconciliation、process-group descendant cleanup 與 explicit tool policy 均已落地。`--no-net` 現合併 `SysProcAttr` 並保留 `Setpgid`，close／timeout 不會遺留 child；詳見 `tmp/review.md` |
+| HF-PROFILE-001 | P2 | 🔴 OPEN（源自 strict 文件，詳細設計見其 §7；依賴 HF-PR-003/006） | cache／acceptance／memory 開關散落各 flag，無具名 execution profile；fresh verification 無法一鍵隔離舊 memory |
 
 ---
 
@@ -157,7 +157,7 @@ hufu 不應演進成另一個「單代理 terminal coding agent」，也不應�
 | Unattended acceptance + rollback | `58792a0` | finish gate、self-healing retries、git rollback——HF-PR-006 在此基礎上加 advisory／blocking 語意 |
 | Crash-resume checkpoint | `ResumeInterruptedTasks`、`TodoList.onChange → saveCheckpoint` | HF-PR-107 的 side-effect policy 掛在這裡 |
 | Telemetry／A-B experiment | `internal/improve/`（`hufu improve`） | Part VII observability 與 Part XIV 成功指標的基線來源 |
-| Coordinator 檔案拆分 | `internal/team/coordinator_*.go`（`58e5a54`） | HF-ARCH-001 的下一步是 struct 層面介面解耦，不是再拆檔案 |
+| Coordinator 檔案拆分 + 介面 seam | `internal/team/coordinator_*.go`（`58e5a54`）＋`internal/team/services.go`（HF-ARCH-001 phase-1） | HF-ARCH-001 phase-1 已落地 6 大子服務介面 seam（default wrapper 轉發）。下一步是 call-site migration：Coordinator 內部改走介面而非直接呼叫，逐步讓 Coordinator 變 façade |
 | Fast path 雛形 | `--default`（內建 coordinator+Helper）、`--auto-team` | HF-PR-207 的 ExecutionRouter 從此長出 |
 
 ---
@@ -440,7 +440,7 @@ Why is this in context?
 
 ## 8. Session tree、branch、fork 與 checkpoint
 
-> **落地狀態：🔴 OPEN**。`SessionEntry` 無 `BranchID`／`ParentID`，session 歷史僅線性 archive。依賴 HF-PR-104（event store）。對應工作卡 HF-PR-201；屬大型投資，建議補上對 hufu 主要場景（unattended／CI）的價值論證後再排程。
+> **落地狀態：✅ DONE（工作區未合入，已 Review）**。已實作 `SessionTree`、`SessionBranch`、`BranchState`（`internal/team/session_tree.go`），支援 branch-scoped session tree、fork、checkout、label、branch event lineage isolation（`FilterEventsForBranch`，含 fork point 截斷）與 task/artifact/verification diff（`DiffBranches`），以及 CLI `hufu session`（`list`、`tree`、`fork`、`checkout`、`label`、`diff`），測試單元與 CLI 測試全數通過。**本批接線已全部實作**：(R1) `initEventStore` 依 `session_tree.json` active branch 設定 `es.SetBranchID`，所有 coordinator 事件自動歸屬正確 branch lineage；(R2) `emitTaskEventsFromCheckpoint` _payload 含 verify/verify_mode/verify_result，`emitArtifactEvents` 依 `TypedResult.Artifacts` 發送 `artifact_created`，`ReduceToTodoList` 重建 verify/verify_result——artifact/verification diff 維度有完整資料；(R3) `saveCheckpoint` → `updateBranchState` 將 TaskPlan/ActiveModel/SelectedTeam/Compaction 寫入 active branch，`SnapshotBranchState`+`RebuildSessionForBranch` 使 checkout 依 event lineage 重建 session.json——真正 time travel；(R4) `copyBranchState` 深拷貝 TaskPlan(`cloneTodoItem`)+Compaction(`cloneStructuredSummary`)，杜絕別名。對應工作卡 HF-PR-201。
 
 ### 8.1 需求
 
@@ -664,7 +664,7 @@ type Migrator interface {
 
 ## 11. Side-effect-aware recovery
 
-> **落地狀態：🔴 OPEN（建議升入下一批 P0）**。`ResumeInterruptedTasks` 對所有非終態 task 一律原 ID 重跑，不區分副作用等級。對擁有 `ssh`／`sudo`／`bash` 工具且跑 unattended 的 hufu，這是唯一可能導致「自動重跑非冪等基礎設施操作」的缺口，風險實際高於多數 P0。對應工作卡 HF-PR-107。
+> **落地狀態：✅ 已修復（工作區未合入，已 Review）**。HF-PR-107 已實作 side-effect-aware crash recovery。`TaskDef` / `TodoItem` 支援 `side_effect` 與 `recovery` policy（`retry`／`reconcile`／`manual`／`never`），`ResumeInterruptedTasks` 按 policy 分流（`reconcile` 執行 5 步讀取探查與狀態分類，非冪等或未核實 task 標為 `TaskBlocked` 且發送 `needs_human` 事件；`never`=skip/leave-as-is），全數 recovery 決策雙寫至 `recovery_decision` event store。**自動分級**：`InferSideEffectClass` 依 agent tools 推導 + agent .md frontmatter `side_effect`／`recovery`／`reconcile-tool`，三層優先序（task>agent>tool）於 `ExecuteTasks` 經 `resolveTaskRecovery` 生效。通過 `TestResume` / `TestRecovery` / `TestUnattended` 測試。
 
 ### 11.1 問題
 
@@ -710,6 +710,23 @@ const (
 )
 ```
 
+resume 時各 policy 的行為（已實作）：
+
+| policy | resume 行為 | needs_human | 說明 |
+|---|---|---|---|
+| `retry` | 原 ID 重跑 | — | 冪等／唯讀／workspace write 預設 |
+| `reconcile` | 跑 read-only 探查分類後決定 | 僅 partial/unknown | complete→done、not_started→重跑、partial/unknown→blocked |
+| `manual` | `TaskBlocked` | ✅ | 需人工介入；infra_mutation／credential 預設 |
+| `never` | `TaskSkipped` | ❌ | 「不重跑、leave as-is」——刻意宣告不碰此 task，非請求人工 |
+
+**預設推導**（`DefaultRecoveryPolicy`，未顯式指定時）：none／workspace_write→retry；external_write→reconcile（unattended 下 manual）；infra_mutation／credential→manual。空分級 fallback retry（向後相容）。
+
+**分級來源三層優先序**（`resolveTaskRecovery`，於 `ExecuteTasks` 生效）：
+
+1. task 顯式（`TaskDef.SideEffect`／`Recovery`／`ReconcileTool`）
+2. agent .md frontmatter（`side_effect`／`recovery`／`reconcile-tool`）
+3. tool 推導（`InferSideEffectClass`：sudo→infra_mutation；ssh→external_write；bash/golang/lua/write/edit/download/fetch→workspace_write；唯讀→none；`all`→infra_mutation）
+
 ### 11.4 Reconcile
 
 每個非冪等 tool 可宣告：
@@ -734,7 +751,7 @@ type ToolRecoverySpec struct {
 
 ## 12. Cache freshness 與明確語意
 
-> **落地狀態：🟡 PARTIAL**。cache identity 已含 verify command + verifyMode + per-round generation，journal 有 tombstone、`on_failure` re-drive 會 invalidate（見 `coordinator_taskcache.go`、`dag_scheduler.go`）。仍缺：`CachePolicy`（use/refresh/bypass）明確語意、repo commit／file fingerprint／skill hash／model family 環境指紋、§12.4 capability TTL。對應工作卡 HF-PR-003、HF-PR-004。
+> **落地狀態：✅ 已修復（工作區未合入，已 Review）**。cache identity 已含 verify command + verifyMode + per-round generation，journal 有 tombstone、`on_failure` re-drive 會 invalidate。**本批新增**：coordinator-level `CachePolicy`（use/refresh/bypass，`cache_policy.go`）、`CacheIdentity`（repo commit + project fingerprint + workspace generation + TTL，`ComputeCacheIdentity`/`isFresh`）、`IsCacheForbidden` 關鍵字禁止、capability cache TTL（default 5 min）／`always-fresh` scope／`InvalidateCapabilityCache`。所有 lookup/store 路徑接線 `isFresh` freshness gate；journal 記錄 identity；測試 `TestCachePolicy_UseRefreshBypass`/`TestCacheIdentity_FreshnessValidation`/`TestCapabilityCache_TTLAndInvalidation` 全綠。**殘餘**（見 HF-PR-003/004）：per-task `cache_policy` 欄位（僅 coordinator-level）、mutation 工具成功後自動 invalidate capability、capability TTL 不可由 team.yml 配、`CacheIdentity` 的 constraints/tool-registry/skill-hash/model-family/dependency-hash 欄位已定義但未填、journal 未記錄 policy。
 
 ### 12.1 Cache policy
 
@@ -794,7 +811,7 @@ dependency result hashes
 
 ## 13. Typed TaskResult
 
-> **落地狀態：🔴 OPEN**。worker output 仍是 free text（`TodoItem.Output string`），無 `submit_result` tool。對應工作卡 HF-PR-105。
+> **落地狀態：✅ DONE（工作區未合入，已 Review）**。HF-PR-105 已實作 `TaskResult` schema、`submit_result` tool、free-text compatibility parser（低信心標記 `Confidence=0.4`）、`TaskExecutionPolicy`（`StrictResult`）與 `TodoItem.TypedResult` 整合，單元測試全綠。Review 殘餘（不阻擋）：(R1) `FormatForContext()` 已定義但尚未接線至下游 task prompt（dependency injection 仍走 free-text `output`），typed result 已可經 `c.GetTaskResult`／`TodoItem.TypedResult` 取得，完整 consumption 建議併入 HF-PR-108；(R2) `c.taskResults[todoID]` 跨 retry 未清除，StrictResult 在 retry 場景可能被舊 result 短路，建議每 attempt 開頭清除；(R3) StrictResult enforce 行為與 escalation path result tool 注入缺整合測試。
 
 ### 13.1 問題
 
@@ -924,7 +941,7 @@ Scheduler 依 dependency 之外，也要依 resource claim 避免不安全並行
 
 ## 15. Fast path 與 Team path
 
-> **落地狀態：🔴 OPEN**。無 `ExecutionRouter`；`--auto-team` 只選 team 不選執行路徑。注意 `--default`（內建 coordinator+Helper）已是事實上的 fast path 雛形，實作時應認領整合而非另起爐灶。對應工作卡 HF-PR-207（新增）。
+> **落地狀態：✅ 已完成（工作區未合入，已 Review）**。已實作 `ExecutionRouter`（`cmd/hufu/router.go`）、`ExecutionRoute`（`RouteFast`／`RouteTeam`）、`RouteDecision`（Reasons 可解釋）、`--route` flag（auto/fast/team），deterministic signals 優先（multi-role、infra/deploy、refactor scope、verification 等）、sidecar LLM classifier（`ClassifyRoute`）為輔、`CanEscalateToTeam` 自動升級機制，並與 `--default` 及 `autoteam` 整合。通過 `TestRoute`（5 項）＋ fast-path dispatch／escalation 測試。**Review 殘餘 R1/R2 已修復**：(R1) `Route` 決策已線傳至 `executeSegments` 並由 `dispatchSegmentContent` 消費——`Route==RouteFast` 且單一 worker 時直送 `RunDirectAgent`（跳過 coordinator DAG）；(R2) `runFastPath` 於每次失敗呼叫 `CanEscalateToTeam`，達標（`errorCount≥2`／`stepCount>8`）即 fall-through 至 `coordinator.Run`。對應工作卡 HF-PR-207。
 
 ### 15.1 Fast path
 
@@ -1001,7 +1018,7 @@ LLM classifier 只作補充。
 
 > **落地狀態：🟡 PARTIAL**。`verify` command、`VerifyMode`（success／expected_failure／observation，`d032426`）、unattended acceptance + self-healing + rollback（`58792a0`）已存在。仍缺：evidence requirement schema、advisory／blocking 分級、evidence manifest。對應工作卡 HF-PR-006、HF-PR-108。
 
-通用 hufu 也應將 evidence 視為第一級資料，而不只用於 pilot。
+通用 hufu 也應將 evidence 視為第一級資料，而不只用於特定專案。
 
 ### 16.1 Evidence requirements
 
@@ -1027,7 +1044,7 @@ git_diff
 http_response
 json_assertion
 screenshot
-trec_cast
+terminal_recording
 transcript
 artifact_schema
 manual_approval
@@ -1055,7 +1072,15 @@ Blocking acceptance 失敗時：
 
 ## 17. 拆分 Coordinator God Object
 
-> **落地狀態：🟡 PARTIAL**。檔案層面拆分已完成（`58e5a54`：`coordinator.go` 降至約 691 行 + 25 個職責檔如 `coordinator_task_run.go`、`coordinator_session.go` 等），但 `Coordinator` struct 仍聚合全部狀態與職責、無服務介面。下一步是**介面解耦**（Planner／WorkflowEngine／SessionStore 等），不是再拆檔案。無獨立 PR 卡——隨 HF-PR-104（SessionStore/EventStore）、HF-PR-102（ContextCompiler）等抽取自然演進，每次抽取遵循 §17.3 的漸進式原則。
+> **落地狀態：✅ DONE（工作區未合入，已 Review）**。§17 phase-1 struct 層面介面解耦已完成：6 大核心子服務介面（`Planner`, `SessionStore`, `PolicyEngine`, `ContextCompiler`, `AgentPool`, `WorkflowEngine`）定義於 `internal/team/services.go`，`Coordinator` struct 整合對應介面欄位 + Getters/Setters（`c.mu` 保護、nil-fallback），`NewCoordinator` 初始化為 default wrapper 轉發至原有方法，`services_test.go` 涵蓋 defaults 非-nil 與 Planner/PolicyEngine override，`go build`/`vet`/`test ./internal/team/` 全綠。**殘餘（屬後續 phase，不阻擋）**：~~Coordinator 內部 call-site 仍未改走介面~~ ✅ 已修復（已改走介面，行為測試驗證 override 生效；`WorkflowEngine.Run/ExecuteTasks` 維持 direct——公開入口、無內部 call-site）；`Planner`/`PolicyEngine` 介面含 unexported 型別（`duplicateTodoMatch`/`cachedTaskEntry`），外部 package 暫無法實作，待升級公開 contract 時處理（HF-PR-202）；~~override 測試僅覆蓋 2/6~~ ✅ 已修復（`RoundTrip`+`NilFallback` 覆蓋 6/6 + 2 行為測試）；§17.1 餘 5 服務分屬獨立卡。
+
+> **Review 結果（2026-07-21，獨立複核通過）**：
+> - **驗證指令**：`go build ./...`（exit 0）、`go vet ./internal/team/`（exit 0）、`go test ./internal/team/ -run TestCoordinatorSubServices -count=1 -v`（`Defaults`／`Override`／`RoundTrip`／`NilFallback`／`PolicyEngineOverrideAffectsLookup`／`AgentPoolOverrideAffectsResolve` PASS）、`go test ./internal/team/ -count=1`（ok）、`go test ./cmd/hufu/ ./internal/tools/ ./internal/agent/ -count=1`（全綠）→ call-site migration 與 override 行為不變。
+> - **介面對齊**：`internal/team/services.go` 6 大介面逐方法比對，default wrapper 均正確轉發至既有方法（`ParsePromptWithLazyAgents`／`checkDuplicateTasks`／`SaveSession`／`SaveSessionMD`／`SaveCompactionRecord`／`SessionData`／`SetSessionData`／`GetCachePolicy`／`SetCachePolicy`／`cachedTaskEntry.isFresh`／`resolveTaskRecovery`／`CalculateContextBudget`／`ContextUsageReport`／`resolveAgentName`／`Sidecar`／`GuardSidecar`／`JudgeSidecar`／`Run`／`ExecuteTasks`），行為零變更。
+> - **隔離與執行緒安全**：`Coordinator` struct 新增 6 介面欄位，`NewCoordinator` 初始化為 default wrapper；Getter/Setter 以 `c.mu`（RLock/Lock）保護並含 nil-fallback（回傳新 default wrapper），符合 §17.3 step 1「保留 Coordinator public API」。
+> - **call-site migration 確認**：Coordinator 內部 call-site 已改走介面——`c.checkDuplicateTasks`→`c.Planner().CheckDuplicate`、`c.resolveAgentName`→`c.AgentPool().ResolveAgentName`、`c.Sidecar()`/`c.GuardSidecar()`/`c.JudgeSidecar()`→`c.AgentPool().*`、`c.GetCachePolicy()`→`c.PolicyEngine().GetCachePolicy()`、`e.isFresh(target)`→`c.PolicyEngine().IsCacheFresh(e, target)`、`resolveTaskRecovery(...)`→`c.PolicyEngine().ResolveRecoveryPolicy(...)`、`SaveSession`/`SaveCompactionRecord`→`c.SessionStore().*`、`CalculateContextBudget`/`c.ContextUsageReport()`→`c.ContextCompiler().*`（全 repo 搜 `c.Sidecar()`／`c.resolveAgentName(`／`c.checkDuplicateTasks(`／`c.GetCachePolicy()`／`e.isFresh(` 在 `services.go` wrapper 與各方法定義以外、生產碼已無直接呼叫，僅單元測試直接測實作方法）。`WorkflowEngine.Run/ExecuteTasks` 維持 direct——公開入口、team 套件內無內部 call-site、default wrapper 回轉 `c.Run`/`c.ExecuteTasks` 會遞迴，seam 供外部消費者（cmd/hufu）。override 現可改變 Coordinator 內部決策，decoupling benefit 已實現。
+> - **殘餘確認（不阻擋，屬後續 phase）**：(1) ~~call-site 未改走介面~~ ✅ 已修復——已改走介面（`Planner.CheckDuplicate`、`PolicyEngine.GetCachePolicy/IsCacheFresh/ResolveRecoveryPolicy`、`AgentPool.ResolveAgentName/Sidecar/GuardSidecar/JudgeSidecar`、`SessionStore.SaveSession/SaveCompactionRecord`、`ContextCompiler.CalculateBudget/ContextUsageReport`），行為測試 `TestCoordinatorSubServices_PolicyEngineOverrideAffectsLookup`／`AgentPoolOverrideAffectsResolve` 驗證 override 改變 Coordinator 內部決策；`WorkflowEngine.Run/ExecuteTasks` 維持 direct（公開入口、無內部 call-site、wrapper 回轉會遞迴）；(2) `Planner.CheckDuplicate` 回傳 `*duplicateTodoMatch`、`PolicyEngine.IsCacheFresh` 取 `cachedTaskEntry` 為 unexported，外部 package 無法實作這兩個介面，待 HF-PR-202 升級公開 SDK/embedding contract 時 export 或重構簽章；(3) ~~override 測試僅 2/6~~ ✅ 已修復——`TestCoordinatorSubServices_RoundTrip`（6 介面 Set+Get）+ `NilFallback`（6 介面 nil-fallback）+ 2 行為測試，覆蓋 6/6；(4) §17.1 列 11 服務，已完成 6 大核心，餘 `EventStore`/`EvidenceService`/`MemoryService`/`TerminalManager`/`EventSink` 分屬 HF-PR-104/108 等獨立卡，符合本卡 scope。
+> - **結論**：HF-ARCH-001 phase-1 scope 完成；原殘餘 (1) call-site migration 與 (3) override 測試 6/6 已修復並通過測試，維持 ✅ DONE。殘留 (2) 公開 contract（HF-PR-202）與 (4) 餘 5 服務移交後續卡。
 
 ### 17.1 建議服務
 
@@ -1272,7 +1297,7 @@ sequence 必須 deterministic，client 可斷線重連。
 
 ## 20. STM/LTM 從 Markdown truth 降為 projection
 
-> **落地狀態：🔴 OPEN**。`internal/memory` 無 `Confidence`／`Supersedes`／`SourceEventIDs` 等欄位，無 candidate→confirmed→superseded 生命週期。無獨立 PR 卡（視需求新增）；`SourceEventIDs` 依賴 event store（HF-PR-104）的 event ID 才有意義，建議排在 HF-PR-104 之後。
+> **落地狀態：✅ DONE（工作區未合入，已 Review；殘餘 R1–R4 已修復）**。已實作 `MemoryRecord` schema（含 `ID`, `Content`, `Category`, `Project`, `Team`, `SourceEventIDs`, `SourceTaskID`, `SourceAgent`, `FilePaths`, `CommitHash`, `CreatedAt`, `LastConfirmedAt`, `Confidence`, `ExpiresAt`, `Supersedes`, `Status`, `ExtraMeta`）、`MemoryService` 介面、`MemoryStore` 5 狀態生命週期 (`candidate`, `confirmed`, `superseded`, `expired`, `rejected`) 與 operations (`SaveRecord`, `GetRecord`, `ConfirmRecord`, `SupersedeRecord`, `ExpireRecord`, `RejectRecord`)、§20.4 hybrid ranking (`QueryRecords`) 與 §20.5 instruction/data boundary banner (`AutoQuery`)，工具 `memory_save` / `memory_query` 亦已升級支援對應欄位與檢索。單元測試與整合測試全數通過。**Review 殘餘已修復**：(R1) `MemoryRecord.ExtraMeta` 保留未知 metadata 鍵，`Save()`/`Query()` wrapper 經 `ExtraMeta` + `QueryOptions.MetadataFilter` pass-through full filter——`hufu history` 的 `type: "prompt_history"` filter 恢復正常；(R2) `SupersedeRecord` accumulate target save 錯誤並回傳；(R3) `GetRecord` 改用 chromem `GetByID()` 直接查詢；(R4) test 改用 `strings.Contains`/`strings.HasPrefix`。
 
 ### 20.1 目標記錄
 
@@ -1853,22 +1878,22 @@ minimum hufu version
 
 | Phase | 目標 | 狀態 | 包含工作卡 |
 |---|---|---|---|
-| A. Correctness Foundation | 長 session 不丟 context、crash 不毀狀態、cache／acceptance／side-effect 語意明確 | 🟡 進行中（1/9 已完成） | ~~HF-PR-001~~ ✅、HF-PR-002、HF-PR-003、HF-PR-004、HF-PR-005、HF-PR-006、HF-PR-007、HF-PR-107（自 P1 升入）、HF-PR-110 |
+| A. Correctness Foundation | 長 session 不丟 context、crash 不毀狀態、cache／acceptance／side-effect 語意明確 | 🟡 進行中（3 項完成、2 項待 Review，共 9 項） | ~~HF-PR-001~~ ✅、HF-PR-002 ⏳、HF-PR-003 🟡、HF-PR-004 🟡、HF-PR-005、HF-PR-006、HF-PR-007、~~HF-PR-107~~ ✅（自 P1 升入）、HF-PR-110 |
 | B. Context Kernel | token 為主的 budget、可解釋的 context、不丟 artifact 的 compaction | 🟡 進行中（budget＋compaction 主體＋殘餘 validator 已完成） | ~~HF-PR-101~~ ✅、~~HF-PR-103~~ ✅、HF-PR-102、HF-PR-001R |
-| C. Durable Session Kernel | event log 可重建一切、branch 不互相污染 | 🔴 未開始 | HF-PR-104、HF-PR-201 |
-| D. Workflow Reliability | typed result、resource lock、evidence 綁定、policy engine、terminal/secret/profile | 🔴 未開始 | HF-PR-105、HF-PR-106、HF-PR-108、HF-PR-109、HF-PR-111、HF-PR-112、HF-PR-113 |
+| C. Durable Session Kernel | event log 可重建一切、branch 不互相污染 | 🟡 進行中（session tree 已完成 Review；event store 待 F1 補完） | HF-PR-104 ⏳、~~HF-PR-201~~ ✅ |
+| D. Workflow Reliability | typed result、resource lock、evidence 綁定、policy engine、terminal/secret/profile | 🟡 進行中（typed result 與 terminal 已完成 Review，殘餘接線見 HF-PR-108） | ~~HF-PR-105~~ ✅、HF-PR-106、HF-PR-108、HF-PR-109、HF-PR-111、~~HF-PR-112~~ ✅、HF-PR-113 |
 | E. Platformization | hufu 可作 library／daemon、extension 不需 fork core | 🔴 未開始 | HF-PR-202、HF-PR-203 |
-| F. Product／Ecosystem | fast/team 分流、team catalog、TUI inspector、eval | 🔴 未開始 | HF-PR-204、HF-PR-205、HF-PR-206、HF-PR-207（新增）、built-in team catalog／eval dashboard／package 簽章（未編號 backlog） |
+| F. Product／Ecosystem | fast/team 分流、team catalog、TUI inspector、eval | 🟡 進行中（fast/team router 已完成 Review，殘餘接線見 HF-PR-207 §15） | HF-PR-204、HF-PR-205、HF-PR-206、~~HF-PR-207~~ ✅、built-in team catalog／eval dashboard／package 簽章（未編號 backlog） |
 
 **Phase 完成判準**改由各工作卡的「驗收條件」承擔（Part XII）；Phase A 的整體判準：
 
 - ~~長 session 不失去最近 correction~~ ✅（`5f97001`）
-- crash 不會產生半份 session.json（HF-PR-002）
-- fresh verification 可完全 bypass cache（HF-PR-003）
-- capability probe 有 TTL／invalidation（HF-PR-004）
+- ~~crash 不會產生半份 session.json~~ ⏳ 待 Review（HF-PR-002）
+- ~~fresh verification 可完全 bypass cache~~ ✅ 已 Review（HF-PR-003，coordinator-level CachePolicy + IsCacheForbidden；殘餘：per-task policy 待 TaskExecutionPolicy 整批）
+- ~~capability probe 有 TTL／invalidation~~ ✅ 已 Review（HF-PR-004，TTL + always-fresh + InvalidateCapabilityCache；殘餘：mutation-triggered invalidation + 可配 TTL 待接線）
 - required skill 缺失時 fail fast（HF-PR-005）
 - acceptance failure 不會被當 success（HF-PR-006）
-- 非冪等 task 不盲目重跑（HF-PR-107）
+- ~~非冪等 task 不盲目重跑~~ ✅ 已 Review（HF-PR-107，side-effect 分級 + recovery policy 分流 + reconcile 5 步流程 + 自動 tool→分級推導；殘餘：無）
 
 ---
 
@@ -1916,11 +1941,11 @@ minimum hufu version
 
 ---
 
-### HF-PR-003 CachePolicy【🟡 PARTIAL｜M｜依賴：無】
+### HF-PR-003 CachePolicy【🟡 PARTIAL（已 Review）｜M｜依賴：無】
 
-- **背景**：cache identity 已含 verify command + verifyMode + per-round generation（§12 落地狀態橫幅），但沒有明確的 use/refresh/bypass 語意——使用者要求重跑、live verification、source 變更等場景無法可靠繞過 cache。設計見 §12；**詳細語意表與驗收案例見 strict 文件 §5.6**。
+- **背景**：cache identity 已含 verify command + verifyMode + per-round generation（§12 落地狀態橫幅），但沒有明確的 use/refresh/bypass 語意——使用者要求重跑、live verification、source 變更等場景無法可靠繞過 cache。設計見 §12；**詳細語意表與驗收案例見 strict 文件 §13**。
 - **既有基礎**：`internal/team/coordinator_taskcache.go`（identity、generation、tombstone）；`TaskDef`（`internal/team/coordinator.go`）。
-- **Schema 決策**：TaskDef 的執行語意欄位統一收進 `TaskExecutionPolicy`（`TaskDef.Execution`，strict 文件 §7.1），不直接加在頂層，避免欄位爆炸。HF-PR-105/106/107 同此原則。
+- **Schema 決策**：TaskDef 的執行語意欄位統一收進 `TaskExecutionPolicy`（`TaskDef.Execution`，strict 文件 §10），不直接加在頂層，避免欄位爆炸。HF-PR-105/106/107 同此原則。
 - **任務**：
   1. `TaskDef` 新增 `cache_policy`（`use`／`refresh`／`bypass`，預設 `use`）：`refresh` = 重跑並覆寫 cache；`bypass` = 不讀不寫。
   2. journal 記錄 policy；lookup 與 store 路徑都遵守。
@@ -1930,16 +1955,19 @@ minimum hufu version
   ```bash
   go test ./internal/team/ -run 'TestCache|TestDedup|TestLookupTaskCache' -count=1
   ```
+- **Review 結果（2026-07-21）**：
+  - ✅ **已完成**：`CachePolicy` type（use/refresh/bypass，`cache_policy.go`）；coordinator-level `SetCachePolicy`/`GetCachePolicy`（thread-safe `RWMutex`）；lookup 路徑（`lookupTaskCacheWithVerification`、`lookupTaskCacheIn`）在 `CacheBypass`/`CacheRefresh` 時 return miss；store 路徑在 `CacheBypass` 時不寫、`CacheRefresh` 時覆寫；`IsCacheForbidden` 關鍵字禁止（§12.3 場景：`[no-cache]`/`[bypass-cache]`/`[rerun]`/`[force-refresh]`/`vm_create`/`deploy_prod`/`rotate_credentials`/`security_audit`/`benchmark_run`）；測試 `TestCachePolicy_UseRefreshBypass`/`TestIsCacheForbiddenTasks` 全綠。
+  - ❌ **殘餘**：(1) per-task `cache_policy` 欄位未加（僅 coordinator-level；工作卡要求 `TaskDef` 或 `TaskExecutionPolicy` 層級）。(2) journal 未記錄 policy（僅記錄 `CacheIdentity`）。(3) `CachePolicy` 無 CLI flag／team.yml／config 入口——`SetCachePolicy` 僅程式介面，使用者無法從外部設定。建議殘餘併入 `TaskExecutionPolicy` 整批落地（HF-PR-105/106/107 同原則）。
 - **指派指令**：
   ```text
-  HF-PR-003：為 task cache 加上明確 CachePolicy（use/refresh/bypass）。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-003 工作卡與 §12，在 TaskDef 加 cache_policy 欄位並讓 coordinator_taskcache.go 的 lookup/store 遵守，journal 記錄 policy，補測試並跑卡上的驗證指令。
+  HF-PR-003 殘餘：為 task cache 加上 per-task cache_policy。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-003 工作卡與 §12，在 TaskDef.Execution（TaskExecutionPolicy）加 cache_policy 欄位並讓 coordinator_taskcache.go 的 lookup/store 遵守 per-task policy（fallback 到 coordinator-level），journal 記錄 policy，加 CLI flag/--cache-policy 入口，補測試並跑卡上的驗證指令。
   ```
 
 ---
 
-### HF-PR-004 Capability freshness【🟡 PARTIAL｜M｜依賴：無】
+### HF-PR-004 Capability freshness【🟡 PARTIAL（已 Review）｜M｜依賴：無】
 
-- **背景**：`internal/team/capability.go` 已有 preflight probe（`CapabilityResult`：scope/evidence/CheckedAt），但結果無 TTL、無 mutation invalidation——環境變更後可能用過期的 capability 判斷。設計見 §12.4；**驗收案例（環境重建後重新 probe）見 strict 文件 §5.7**。
+- **背景**：`internal/team/capability.go` 已有 preflight probe（`CapabilityResult`：scope/evidence/CheckedAt），但結果無 TTL、無 mutation invalidation——環境變更後可能用過期的 capability 判斷。設計見 §12.4；**驗收案例（環境重建後重新 probe）見 strict 文件 §14**。
 - **既有基礎**：`capability.go` 的 probe 機制；team.yml `preflight` 設定。
 - **任務**：
   1. capability 結果快取加 TTL（team.yml 可配）與 scope。
@@ -1950,16 +1978,19 @@ minimum hufu version
   ```bash
   go test ./internal/team/ -run 'TestCapab' -count=1 -v
   ```
+- **Review 結果（2026-07-21）**：
+  - ✅ **已完成**：`CapabilityResult.TTL` 欄位；`checkCapability` 內 TTL freshness gate（default 5 min，`time.Since(CheckedAt) <= TTL`）；`always-fresh` scope 每次重新 probe（bypass cache）；`InvalidateCapabilityCache` 清除全部快取；`capabilityInflight` nil-safety；測試 `TestCapabilityCache_TTLAndInvalidation`（TTL 內命中、invalidation 後重新 probe、always-fresh 每次 probe）全綠。
+  - ❌ **殘餘**：(1) mutation-triggered invalidation 未接線——bash/ssh/sudo/write/edit 成功執行後未呼叫 `InvalidateCapabilityCache`（目前僅測試呼叫）。(2) TTL 不可由 team.yml 配（hardcoded 5 min；`CapabilityRequirement` 無 TTL 欄位）。(3) 無 per-scope selective invalidation（`InvalidateCapabilityCache` 清全部，非按 scope）。建議殘餘與 HF-PR-109 policy engine 一併設計（mutation 工具 → policy hook → selective invalidate）。
 - **指派指令**：
   ```text
-  HF-PR-004：為 capability preflight 加 TTL 與 mutation invalidation。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-004 工作卡與 §12.4，修改 internal/team/capability.go 加快取 TTL、scope invalidation 與 always-fresh 支援，補測試並跑卡上的驗證指令。
+  HF-PR-004 殘餘：為 capability preflight 接線 mutation invalidation 與可配 TTL。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-004 工作卡與 §12.4，在 CapabilityRequirement 加 TTL 欄位（team.yml preflight 可配），bash/ssh/sudo/write/edit 工具成功後呼叫 InvalidateCapabilityCache（或 per-scope selective），補測試並跑卡上的驗證指令。
   ```
 
 ---
 
 ### HF-PR-005 Required skills【🔴 OPEN｜M｜依賴：無】
 
-- **背景**：skill 目前有 discovery、`--skill`、auto-skills，但沒有「required + hash lock + 缺失 fail fast」——team 依賴的 skill 缺失時要到執行中才發現。**`RequiredSkillSpec` schema（SHA-256 lock、`inject-into`、snapshot、`policy-lock.json`）與驗收案例見 strict 文件 §5.1，以該 schema 為準**。
+- **背景**：skill 目前有 discovery、`--skill`、auto-skills，但沒有「required + hash lock + 缺失 fail fast」——team 依賴的 skill 缺失時要到執行中才發現。**Required resource schema（`RequiredResourceSpec`，skill 為其中一種 kind；SHA-256 lock、`inject-into`、snapshot）與驗收案例見 strict 文件 §8，以該 schema 為準**。
 - **既有基礎**：`internal/skill/`（discovery、parsing）；`hufu doctor`（preflight 檢查框架）。
 - **任務**：
   1. team.yml 支援 `required-skills`（每項可附 hash）。
@@ -1979,7 +2010,7 @@ minimum hufu version
 
 ### HF-PR-006 Blocking acceptance【🟡 PARTIAL｜M｜依賴：無】
 
-- **背景**：unattended self-healing acceptance + rollback 已存在（`58792a0`），但 acceptance 只有一種語意；缺 §16.3 的 advisory/blocking 分級與 strict exit semantics。**`completed_with_exceptions` 終態與 strict profile 規則見 strict 文件 §5.9**。
+- **背景**：unattended self-healing acceptance + rollback 已存在（`58792a0`），但 acceptance 只有一種語意；缺 §16.3 的 advisory/blocking 分級與 strict exit semantics。**`completed_with_exceptions` 終態與 strict profile 規則見 strict 文件 §16.1**。
 - **既有基礎**：finish gate 的 acceptance 執行路徑（`internal/team/` finish tool）；rollback 機制。
 - **任務**：
   1. team.yml `acceptance` 支援 `mode: advisory|blocking`（預設 `advisory` 維持向後相容）。
@@ -1999,7 +2030,7 @@ minimum hufu version
 
 ### HF-PR-007 Prompt/tool linter【🔴 OPEN｜M｜依賴：無】
 
-- **背景**：`hufu team` 目前只有 `generate`／`permissions` 子命令；§35.1 的檢查可先不帶 schema version 落地（schema version 屬 HF-PR-204）。**已確認 3 個內建 team（`operator`、`delegate`、`dev-team`）prompt 引用不存在的 `run_agents`——這是 linter 的第一個真實案例，見 strict 文件 §5.16**。
+- **背景**：`hufu team` 目前只有 `generate`／`permissions` 子命令；§35.1 的檢查可先不帶 schema version 落地（schema version 屬 HF-PR-204）。**已確認 3 個內建 team（`operator`、`delegate`、`dev-team`）prompt 引用不存在的 `run_agents`——這是 linter 的第一個真實案例，見 strict 文件 §25.2**。
 - **既有基礎**：`cmd/hufu/teamcmd.go`（子命令框架）；`cmd/hufu/list.go` 的 `readAgentFrontmatter`（無 side-effect 讀 frontmatter）。
 - **任務**：
   1. 新增 `hufu team lint <path>`：unknown tools、unknown skills、duplicate agents、coordinator 缺失、prompt 引用不存在的 tool、timeout 不合理、unsupported frontmatter field。
@@ -2017,10 +2048,10 @@ minimum hufu version
 
 ---
 
-### HF-PR-107 Side-effect recovery【🔴 OPEN｜L｜依賴：無｜自 P1 升入 P0，風險最高】
+### HF-PR-107 Side-effect recovery【✅ DONE（工作區未合入，已 Review）｜L｜依賴：無｜自 P1 升入 P0，風險最高】
 
-- **背景**：`ResumeInterruptedTasks` 對所有非終態 task 一律原 ID 重跑，不區分副作用（§11）。agent 擁有 bash/ssh/sudo 工具且跑 unattended 時，crash-resume 可能盲目重跑 VM create/delete、deploy、credential change 等非冪等操作。**reconcile probe 配置範例與恢復流程驗收見 strict 文件 §5.8**。
-- **詞彙決策**：`SideEffectClass` 以本文件 §11.2 為準（superset）；strict 文件 §5.8 的 `local_mutation` 對應本文件的 `workspace_write`。
+- **背景**：`ResumeInterruptedTasks` 對所有非終態 task 一律原 ID 重跑，不區分副作用（§11）。agent 擁有 bash/ssh/sudo 工具且跑 unattended 時，crash-resume 可能盲目重跑 VM create/delete、deploy、credential change 等非冪等操作。**recovery flow、reconcile 設計（`ToolRecoverySpec.ReconcileTool`）與驗收條件見 strict 文件 §15.2–§15.5**。
+- **詞彙決策**：`SideEffectClass` 以本文件 §11.2 為準（superset）；strict 文件 §15 已統一採用本文件詞彙（`workspace_write` 等，無 `local_mutation`）。
 - **既有基礎**：crash-resume checkpoint 機制（`TodoList.onChange → saveCheckpoint`、`ResumeInterruptedTasks`）；task journal。
 - **任務**：
   1. `TaskDef` 新增 `side_effect` 分級（`none`／`workspace_write`／`external_write`／`infra_mutation`／`credential_mutation`）與 `recovery` policy（`retry`／`reconcile`／`manual`／`never`）；預設值依分級推導（§11.2–11.3），未標分級的 task 維持現行行為（向後相容）。
@@ -2031,6 +2062,14 @@ minimum hufu version
   ```bash
   go test ./internal/team/ -run 'TestResume|TestRecovery|TestUnattended' -count=1
   ```
+- **Review 結果（2026-07-21）**：
+  - ✅ **已完成**：`TaskDef`／`TodoItem`／`TodoSpec` 新增 `side_effect`／`recovery`／`reconcile_tool`／`recovery_state` 欄位（`recovery.go`、`coordinator.go`、`status.go`）；`DefaultRecoveryPolicy` 依 `SideEffectClass` + unattended 推導預設（none/workspace_write→retry；external_write→reconcile 或 unattended 下 manual；infra_mutation/credential→manual）；`ResolveRecoveryPolicy` 顯式 override 優先、空分級 fallback retry（向後相容）；`ResumeInterruptedTasks` 改用 `getInterruptedTasks` 後按 policy 分流（retry 原 ID 重跑；manual→`TaskBlocked`+`needs_human`；never→`TaskSkipped`「leave as-is」不發 needs_human；reconcile→`reconcileInterruptedTask` 以 reconcile/verify exit code 分類 complete(0)/not_started(1)/partial(2)/unknown，not_started→重跑、其餘→blocked）；全分支 `emitEvent("recovery_decision")` 雙寫 event store（nil-safe）；checkpoint 透過 json tag + `Items()`/`Children()`/`Restore` 持久化新欄位。
+  - ✅ **自動分級已接線（原殘餘 #1 已修）**：`InferSideEffectClass(tools)` 依 agent 工具清單保守推導分級（sudo→infra_mutation；ssh→external_write；bash/golang/lua/write/edit/download/fetch→workspace_write；唯讀→none；`all`→infra_mutation）；`resolveTaskRecovery(def, task)` 實作三層優先序（task 顯式 > agent .md frontmatter `side_effect`／`recovery`／`reconcile-tool` > tool 推導），已於 `ExecuteTasks` 建構 `TodoSpec` 時接線。`AgentDef` 新增 `SideEffect`／`Recovery`／`ReconcileTool` 欄位，`parse.go` 解析 frontmatter。
+  - ✅ **dead code 已清（原殘餘 #2 已修）**：`resetInterruptedTasks` 已移除；其測試改為 `TestGetInterruptedTasks_Selection`（驗證唯讀選取、ascending order、不變動 status）。
+  - ✅ **`RecoveryNever` 語意已分化（原殘餘 #3 已修）**：`never`=「不重跑、leave as-is」→`TaskSkipped`（不發 needs_human）；`manual`=「需人工介入」→`TaskBlocked`+needs_human。§11.3 已補充文件。
+  - ✅ **exit code 具名常數（原殘餘 #4 已修）**：`ReconcileExitComplete`／`ReconcileExitNotStarted`／`ReconcileExitPartial` 常數已定義並用於 `reconcileInterruptedTask`。
+  - ✅ **測試**：`TestDefaultRecoveryPolicy`、`TestResolveRecoveryPolicy`、`TestInferSideEffectClass`、`TestResolveTaskRecovery_Precedence`（三層優先序）、`TestResumeInterruptedTasks_InfraMutationBlocked`、`TestResumeInterruptedTasks_UnattendedExternalWriteBlocked`、`TestResumeInterruptedTasks_ReconciliationFlow`、`TestResumeInterruptedTasks_RecoveryEventStore`、`TestResumeInterruptedTasks_RecoveryNeverSkipped`、`TestGetInterruptedTasks_Selection`、`TestResumeInterruptedTasks_NoopWhenNothingInterrupted`／`EmptyTodoList` 全綠；`go build ./...`／`go vet ./internal/team/ ./internal/agent/`／`go test ./internal/team/ ./internal/agent/ ./cmd/hufu/ -count=1` 全綠。
+  - ✅ **殘餘全數已修，無 follow-up。**
 - **指派指令**：
   ```text
   HF-PR-107：實作 side-effect-aware crash recovery。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-107 工作卡與 §11，TaskDef 加 side_effect 分級與 recovery policy，修改 ResumeInterruptedTasks 按 policy 分流（retry/reconcile/manual/never），補 fault-injection 測試並跑卡上的驗證指令。
@@ -2098,7 +2137,7 @@ minimum hufu version
 ### HF-PR-104 Event store【🟡 IMPLEMENTED (PENDING REVIEW)｜XL｜依賴：HF-PR-002｜殘留 F1–F3 見 quality-fixes plan】
 
 - **背景**：狀態分散於 6+ 份檔案，無統一 ordering/event ID/replay semantics（§9.1）。
-- **Schema 決策**：`RunEvent` 以本文件 §9.3 為準（含 `SessionID`／`BranchID`／`IdempotencyKey`）；event 類型取 §9.4 與 strict 文件 §7.3 的**聯集**（strict 版多出 `source_locked`／`skill_locked`／`task_authorized`／`terminal_started`／`terminal_closed`／`recovery_decided`／`acceptance_finished`）。
+- **Schema 決策**：`RunEvent` 以本文件 §9.3 為準（含 `SessionID`／`BranchID`／`IdempotencyKey`）；event 類型取 §9.4 與 strict 文件 §20.1 的**聯集**（strict 版多出 `profile_resolved`／`resource_locked`／`task_authorized`／`tool_authorized`／`verification_started`／`verification_finished`／`terminal_started`／`terminal_closed`／`recovery_decided`／`acceptance_finished`）。
 - **任務**：按 §9.3 schema 實作 append-only JSONL event store + §9.4 事件類型 + hash chain；**嚴格遵守 §9.5 dual-write 遷移順序**（先雙寫、再 reducers 比對、最後才升為 source of truth）。
 - **驗收條件**：可從 event log 重建 session/task/STM（reducer 比對測試）；hash chain 可驗證；legacy 檔案行為不變直到切換。
 - **驗證指令**：`go test ./internal/team/ -run 'TestEvent|TestReplay|TestReducer' -count=1`
@@ -2109,10 +2148,10 @@ minimum hufu version
 
 ---
 
-### HF-PR-105 Typed TaskResult【🔴 OPEN｜L｜依賴：無｜HF-PR-108 的前置】
+### HF-PR-105 Typed TaskResult【✅ DONE（工作區未合入，已 Review）｜L｜依賴：無｜HF-PR-108 的前置】
 
 - **背景**：worker output 是 free text（`TodoItem.Output string`），難驗證/compaction/retry/judge/cache（§13.1）。
-- **Schema 決策**：TaskDef 擴充欄位統一收進 `TaskExecutionPolicy`（`TaskDef.Execution`，strict 文件 §7.1），同 HF-PR-003 的原則。
+- **Schema 決策**：TaskDef 擴充欄位統一收進 `TaskExecutionPolicy`（`TaskDef.Execution`，strict 文件 §10），同 HF-PR-003 的原則。
 - **任務**：
   1. §13.2 `TaskResult` schema。
   2. 新增 `submit_result` tool 讓 agent 提交 typed result；無提交時以 compatibility parser 從 final text 產生低信心結果（`Confidence=0.4, Source=parsed_free_text`，§13.3）。
@@ -2141,7 +2180,7 @@ minimum hufu version
 
 ### HF-PR-108 Artifact/evidence【🔴 OPEN｜L｜依賴：HF-PR-105】
 
-- **背景**：task 完成與 evidence 未綁定；report 文字是唯一證據儲存（§16）。**`EvidenceManifest` schema（含 hash chain）、錄影/transcript/secret-scan validator 檢查項、report 引用格式見 strict 文件 §5.5 與 §5.14，以該 schema 為準**。
+- **背景**：task 完成與 evidence 未綁定；report 文字是唯一證據儲存（§16）。**`EvidenceManifest` schema（含 hash chain，§12.3）、artifact store 介面（§11.2）、evidence validator 架構（§12.1–§12.4）與 report/run manifest 引用格式（§24）見 strict 文件，以這些 schema 為準**。
 - **任務**：artifact store（路徑+hash+metadata）、§16.2 evidence validators、final manifest、report 引用 artifact/event ID。
 - **驗收條件**：strict task 的 evidence completeness = 100%；manifest 可追溯每個 artifact 的 hash 與 validator 結果。
 - **驗證指令**：`go test ./internal/team/ -run 'TestArtifact|TestEvidence|TestManifest' -count=1`
@@ -2154,7 +2193,7 @@ minimum hufu version
 
 ### HF-PR-109 Policy engine【🔴 OPEN｜L｜依賴：無｜HF-PR-203 的前置】
 
-- **背景**：工具權限分散於 allowlist、guard、path-consent；無統一 fail-closed policy 中介層。**詳細設計見 strict 文件：§5.2（hook failure-mode，已確認 `internal/hooks/shell.go` 三條 fail-open 路徑）、§5.3（command/file provenance 三層實作）、§5.4（MCP middleware 與 argv/AST 解析，防 `sh -c` 繞過）**。
+- **背景**：工具權限分散於 allowlist、guard、path-consent；無統一 fail-closed policy 中介層。**詳細設計見 strict 文件：§9.4（hook failure-mode；已確認 `internal/hooks/shell.go` 三條 fail-open 路徑）、§9.5（tool/MCP 統一 authorization pipeline）、§9.6（command policy：argv/nested shell 正規化，防 `sh -c` 繞過）、§17.2（read/write path scope）**。
 - **任務**：tool/MCP middleware 形式的 policy engine；fail-closed；secret redaction；policy decision 可稽核。
 - **驗收條件**：policy 錯誤/timeout 時 deny（fail-closed）；決策有 audit 記錄；既有 guard/allowlist 行為有 regression test。
 - **驗證指令**：`go test ./internal/tools/ ./internal/team/ -run 'TestPolicy|TestGuard|TestPermission' -count=1`
@@ -2165,7 +2204,7 @@ minimum hufu version
 
 ---
 
-### HF-PR-110 Workspace separation【🔴 OPEN｜M｜依賴：無｜源自 strict 文件 §5.10】
+### HF-PR-110 Workspace separation【🔴 OPEN｜M｜依賴：無｜源自 strict 文件 §17】
 
 - **背景**：strict 文件 HF-WORKSPACE-001。ground-up cleanup 類任務可能刪除 hufu 自己的 checkpoint／evidence；control workspace（session/journal/manifests）與 subject workspace（被操作對象）無強制隔離。
 - **既有基礎**：`allowed-paths`／`restricted-path` 機制（`internal/tools/`）。
@@ -2177,12 +2216,12 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/team/ ./internal/tools/ -run 'TestWorkspace' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-110：實作 control/subject workspace 分離驗證。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-110 工作卡與 strict 文件 §5.10，實作 ValidateWorkspaceSeparation（含 symlink/ancestor 檢查）並在 run 啟動時強制執行，補測試並跑卡上的驗證指令。
+  HF-PR-110：實作 control/subject workspace 分離驗證。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-110 工作卡與 strict 文件 §17，實作 ValidateWorkspaceSeparation（含 symlink/ancestor 檢查）並在 run 啟動時強制執行，補測試並跑卡上的驗證指令。
   ```
 
 ---
 
-### HF-PR-111 Secret registry/redaction【🔴 OPEN｜L｜依賴：無｜與 HF-PR-109 有綜效｜源自 strict 文件 §5.11】
+### HF-PR-111 Secret registry/redaction【🔴 OPEN｜L｜依賴：無｜與 HF-PR-109 有綜效｜源自 strict 文件 §18】
 
 - **背景**：strict 文件 HF-SECRET-001。tool args、MCP args、command argv、env dump、錄影輸入、audit JSONL、task output、report、transcript、model prompt/history 都可能洩漏 secret，目前無統一防線。
 - **任務**：
@@ -2193,19 +2232,32 @@ minimum hufu version
 - **驗證指令**：`go test ./internal/tools/ ./internal/audit/ -run 'TestSecret|TestRedact' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-111：實作 secret registry 與統一 redaction。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-111 工作卡與 strict 文件 §5.11，建立 SecretRef/Redactor，audit/report 序列化前強制 redact 且 fail-closed，補掃描測試並跑卡上的驗證指令。
+  HF-PR-111：實作 secret registry 與統一 redaction。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-111 工作卡與 strict 文件 §18，建立 SecretRef/Redactor，audit/report 序列化前強制 redact 且 fail-closed，補掃描測試並跑卡上的驗證指令。
   ```
 
 ---
 
 ## 44. P2 工作卡
 
-### HF-PR-201 Session tree【🔴 OPEN｜XL｜依賴：HF-PR-104｜建議補價值論證後再指派】
+### HF-PR-201 Session tree【✅ DONE（工作區未合入，已 Review）｜XL｜依賴：HF-PR-104】
 
 - **背景**：見 §8（branch/fork/label/time travel）。對 hufu 主要場景（unattended／CI）價值未論證，屬大型投資。
 - **任務**：§8.2 `SessionEntry` 加 ParentID/BranchID；§8.3 branch-scoped state；§8.4 CLI/TUI。
 - **驗收條件**：branch 不污染其他 branch；可 diff 兩 branch 的 task/artifact/verification。
 - **驗證指令**：`go test ./internal/team/ -run 'TestBranch|TestSessionTree' -count=1`
+- **Review 結果（2026-07-21）**：
+  - ✅ **已完成**：`SessionTree`/`SessionBranch`/`BranchState` 資料模型（`internal/team/session_tree.go`，`session_tree.json` 經 `AtomicWriteFile` 原子寫入）；`FilterEventsForBranch` lineage 隔離含 fork point 截斷（雙向斷言）；`DiffBranches` task/artifact/verification 三維 diff + `RenderText`；CLI `hufu session list/tree/fork/checkout/label/diff`（`cmd/hufu/sessioncmd.go`，`--json` 輸出）；root.go init/improve flag 改 guard 模式支援 `newRootCommand()` 多次建構。
+  - ✅ **行為 bug 修復**（3 項）：
+    (1) `CheckoutBranch`/`ResolveTarget` 對 empty `BranchID` 的 legacy event 恒回 `not found`——已將 empty→`main` 歸一並加回歸測試；
+    (2) `CreateBranch` 對無法解析 fork target 靜默 fallback——已改為明確報錯；
+    (3) `TestSessionTree_DiffBranches` payload 誤用 `subject`（reducer 讀 `desc`）——已修正。
+  - ✅ **本批接線實作**（4 項，見 §8）：
+    (R1) `initEventStore` 依 `session_tree.json` active branch 呼叫 `es.SetBranchID`，所有 coordinator 事件自動歸屬正確 lineage；
+    (R2) `emitTaskEventsFromCheckpoint` payload 含 verify/verify_mode/verify_result，`emitArtifactEvents` 依 `TypedResult.Artifacts` 發送 `artifact_created`，`ReduceToTodoList` 重建 verify/verify_result——三維 diff 全可運作；
+    (R3) `saveCheckpoint` → `updateBranchState` 將 TaskPlan/ActiveModel/SelectedTeam/Compaction 寫入 active branch；`SnapshotBranchState`+`RebuildSessionForBranch` 使 checkout 依 event lineage 重建 session.json 實現真正 time travel；
+    (R4) `copyBranchState` 深拷貝 TaskPlan（`cloneTodoItem`）+ Compaction（`cloneStructuredSummary`），杜絕別名風險；並重構 `coordinator_extra_models.go` closure 改用 `cloneStructuredSummary`。
+  - ✅ **驗證**：`go test ./internal/team/ -run 'TestBranch|TestSessionTree' -count=1`（11 PASS）、`go test ./cmd/hufu/ -run TestCLISession -count=1`（全綠）、`go build ./...`、`go vet ./internal/team/ ./cmd/hufu/`。
+  - ✅ **無殘餘**。
 - **指派指令**：
   ```text
   HF-PR-201：實作 session branch/fork。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-201 工作卡與 §8，基於 event store 建立 branch-scoped session tree 與 CLI，補測試並跑卡上的驗證指令。
@@ -2278,7 +2330,7 @@ minimum hufu version
 
 ---
 
-### HF-PR-207 Fast/team router（新增）【🔴 OPEN｜L｜依賴：無】
+### HF-PR-207 Fast/team router（新增）【✅ DONE（工作區未合入，已 Review）｜L｜依賴：無】
 
 - **背景**：見 §15。`--default` 已是事實上的 fast path 雛形、`--auto-team` 已有 sidecar match + keyword fallback（`cmd/hufu/autoteam.go`），實作時應認領整合。
 - **任務**：`ExecutionRouter`（§15.3）：deterministic signals 優先、LLM classifier 為輔；fast path 直送單一 agent（不啟動 coordinator DAG）；可自動升級 team path。
@@ -2291,34 +2343,35 @@ minimum hufu version
 
 ---
 
-### HF-PR-112 Terminal session manager【🔴 OPEN｜L｜依賴：HF-PR-104（lifecycle event 入 log）｜源自 strict 文件 §5.12】
+### HF-PR-112 Terminal session manager【✅ DONE（工作區未合入；第四輪 Review 已完成）｜L｜依賴：HF-PR-104（lifecycle event 入 log）｜源自 strict 文件 §19】
 
-- **背景**：strict 文件 HF-TUI-001。stateful terminal session（互動式 wizard、long-running deploy）不是第一級 task resource——session 所有權、關閉時機、與 agent timeout 的關係都沒有建模，resume 時容易與執行中的 child process 混淆。
+- **背景**：strict 文件 HF-TERM-001。stateful terminal session（互動式 wizard、long-running deploy）不是第一級 task resource——session 所有權、關閉時機、與 agent timeout 的關係都沒有建模，resume 時容易與執行中的 child process 混淆。
 - **任務**：
-  1. `TerminalSession` + `TerminalSessionManager`（Start/Write/Read/Close/List，schema 見 strict 文件 §5.12）。
+  1. `TerminalSession` + `TerminalSessionManager`（Start/Write/Read/Close/List，schema 見 strict 文件 §19）。
   2. session 只能由 owner task 使用；task 結束前必須 closed 或 child natural exit；run finish 前 session list 必須為空（leaked-session gate）。
   3. long-running child timeout 與 agent model timeout 分離；lifecycle event 寫 event log。
 - **驗收條件**：coordinator timeout 不把執行中的 long-running child 誤判為可 retry；leaked session 阻擋 final acceptance；session ID 不跨 task 重用。
 - **驗證指令**：`go test ./internal/team/ -run 'TestTerminal' -count=1`
+- **第四輪 Review 結果（2026-07-22）**：✅ APPROVED — DONE。第三輪 P1 已修復：Linux `SetNetNamespace` 改為合併既有 `cmd.SysProcAttr`，保留 terminal manager 設定的 `Setpgid: true`，所以 `--no-net` 下的 Close 與 child timeout 都能終止整個 process group，不會遺留 background descendants 後錯誤標記 closed。新增 `TestSetNetNamespacePreservesExistingSysProcAttr` 與 `NetworkBlock: true` 的 descendant close／timeout regression tests（無 user/network namespace 權限的環境安全 skip）。此前 tool authorization／force-MCP／unattended／path/no-net policy 與 restart process identity fail-closed 修正仍成立。`go test ./internal/team/ -run 'TestTerminal' -count=1`、tools regression test、race test、`go test ./...`、`go vet ./...`、`go build ./cmd/hufu`、`git diff --check` 全綠。完整結果見 `tmp/review.md`。
 - **指派指令**：
   ```text
-  HF-PR-112：實作 terminal session manager。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-112 工作卡與 strict 文件 §5.12，把 stateful terminal 建模為第一級 task resource（owner 綁定、leaked gate、timeout 分離、lifecycle event），補測試並跑卡上的驗證指令。
+  HF-PR-112：實作 terminal session manager。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-112 工作卡與 strict 文件 §19，把 stateful terminal 建模為第一級 task resource（owner 綁定、leaked gate、timeout 分離、lifecycle event），補測試並跑卡上的驗證指令。
   ```
 
 ---
 
-### HF-PR-113 Execution profiles【🔴 OPEN｜M｜依賴：HF-PR-003、HF-PR-006｜源自 strict 文件 §5.15、§7.2】
+### HF-PR-113 Execution profiles【🔴 OPEN｜M｜依賴：HF-PR-003、HF-PR-006｜源自 strict 文件 §7】
 
-- **背景**：strict 文件 HF-MEMORY-001。cache／acceptance／memory／hook failure-mode 等開關散落在各 CLI flag 與 team.yml，無具名 profile；「fresh verification」（不信任任何舊 cache/memory/journal）目前無法一鍵達成。
+- **背景**：strict 文件 HF-PROFILE-001。cache／acceptance／memory／hook failure-mode 等開關散落在各 CLI flag 與 team.yml，無具名 profile；「fresh verification」（不信任任何舊 cache/memory/journal）目前無法一鍵達成。
 - **任務**：
-  1. `ExecutionProfile`（schema 見 strict 文件 §7.2）；內建 `default`／`unattended`／`strict-verification`／`fresh-verification`。
+  1. `ExecutionProfile`（schema 見 strict 文件 §7）；內建 `default`／`unattended`／`strict-verification`；fresh-verification 語意以 `DisableHistoricalMemory`／`DisableHistoricalTaskReuse` 等旗標組合表達（同 §7）。
   2. profile 統一控制 StrictPolicy、HookFailureMode、AcceptanceMode、DisableHistoricalMemory、DisableTaskCache、DisableJournalRestore、RequireEvidenceManifest、RequireClosedTerminals、RequireWorkspaceIsolation。
   3. team.yml `execution-profile` 指定；與既有 CLI flag 衝突時的優先規則明確文件化。
 - **驗收條件**：`fresh-verification` 下 session-resume／LTM／RAG／journal-restore 全停且 control evidence 保留；profile 與 CLI flag 衝突行為有測試。
 - **驗證指令**：`go test ./internal/team/ -run 'TestProfile' -count=1`
 - **指派指令**：
   ```text
-  HF-PR-113：實作具名 execution profiles。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-113 工作卡與 strict 文件 §7.2，建立 ExecutionProfile 與四個內建 profile（含 fresh-verification 隔離舊 memory/cache/journal），定義與 CLI flag 的優先規則，補測試並跑卡上的驗證指令。
+  HF-PR-113：實作具名 execution profiles。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-113 工作卡與 strict 文件 §7，建立 ExecutionProfile 與內建 profile（strict-verification，及以 disable flags 組合的 fresh-verification 語意，隔離舊 memory/cache/journal），定義與 CLI flag 的優先規則，補測試並跑卡上的驗證指令。
   ```
 
 ---
@@ -2333,6 +2386,10 @@ minimum hufu version
 | HF-PR-101 Token counter | 工作區未合入 | `TokenCounter`／`ModelContextSpec` registry／`DefaultTokenCounter`（密度估算+保守 margin）／`CalculateContextBudget`／`CapStepMessagesWithCounter`（token 預算）／overflow compact+retry／report breakdown 接線 `--report`（`coordinator_context_report.go`）／`estimated` log（`warnEstimatedOnce`）／compaction token 計數 model-aware |
 | HF-PR-002 Atomic persistence | 工作區未合入 | `AtomicWriteFile`（temp write + `Sync()` + `os.Rename` + directory `SyncDir`），`SaveSession`、`SaveSessionMD`、`SaveCompactionRecord` 已全數改用此 helper，並於 `atomic_write_test.go` 涵蓋 crash 恢復測試。Review 備註：`SyncDir` 錯誤被靜默忽略，建議後續納入回傳/計量 |
 | HF-PR-104 Event store | 工作區未合入 | `RunEvent`（SchemaVersion, ID, PreviousID, RunID, SessionID, BranchID, TaskID, Attempt, Actor, Type, Timestamp, IdempotencyKey, Payload, PreviousHash, Hash）、`EventStore`（SHA-256 hash chain 驗證；`NewEventStore` 空參數繼承 last runID/sessionID）、dual-write 機制（訊息 5 處接線 `addSessionUserMessage`/`addSessionAssistantMessage`；task 事件 `IdempotencyKey=taskID:status:retries` 冪等去重、`task_skipped`/`task_blocked` 區分）、`event_reducers.go` (`ReduceToSessionData`, `ReduceToTodoList`)。殘留 F1（訊息事件失敗未計入 `DualWriteFailures`）/F2（resume 去重不持久化）/F3（繼承缺測試）見 quality-fixes plan |
+| HF-PR-107 Side-effect recovery | 工作區未合入 | `recovery.go`：`SideEffectClass`（none/workspace_write/external_write/infra_mutation/credential_mutation）、`RecoveryPolicy`（retry/reconcile/manual/never）、`ToolRecoverySpec`、`DefaultRecoveryPolicy`（依分級+unattended 推導）、`ResolveRecoveryPolicy`（顯式 override 優先）、`InferSideEffectClass`（依 agent tools 推導分級）、`resolveTaskRecovery`（三層優先序 task>agent>tool）、`reconcileInterruptedTask`（具名常數 `ReconcileExitComplete`/`NotStarted`/`Partial` 分類）。`ResumeInterruptedTasks` 改用 `getInterruptedTasks` 按 policy 分流（manual→block+needs_human；never→skip）；`TaskDef`/`TodoItem`/`TodoSpec` 加欄位；`AgentDef` 加 `SideEffect`/`Recovery`/`ReconcileTool` + frontmatter 解析（`parse.go`）；全分支 `recovery_decision` event store 雙寫；checkpoint 持久化新欄位。殘餘：無（原 4 項全數已修） |
+| HF-ARCH-001 Coordinator 介面解耦 | 工作區未合入 | §17 phase-1 seam：`internal/team/services.go` 定義 6 大子服務介面（`Planner`/`SessionStore`/`PolicyEngine`/`ContextCompiler`/`AgentPool`/`WorkflowEngine`）+ default wrapper（轉發至 `Coordinator` 原有方法）；`Coordinator` struct 加 6 介面欄位，`NewCoordinator` 初始化為 default wrapper，Getters/Setters 以 `c.mu` 保護含 nil-fallback；`services_test.go` 涵蓋 defaults 非-nil + 6 介面 Set+Get round-trip + nil-fallback + 2 行為測試（override 覆蓋 6/6）。殘餘（屬後續 phase）：(1) ~~內部 call-site 未改走介面~~ ✅ 已修復（已改走介面；`WorkflowEngine.Run/ExecuteTasks` 維持 direct）；(2) `Planner`/`PolicyEngine` 簽章含 unexported 型別 `duplicateTodoMatch`/`cachedTaskEntry`，外部 package 暫無法實作；(3) ~~override 測試僅 2/6~~ ✅ 已修復（`RoundTrip`+`NilFallback`+2 行為測試，6/6）；(4) §17.1 餘 5 服務分屬獨立卡。 |
+| HF-PR-105 Typed TaskResult | 工作區未合入 | `task_result.go`：`TaskResult` schema（TaskID/Agent/Status/Summary/Artifacts/Evidence/FilesRead/FilesModified/Commands/Verification/Decisions/Findings/Risks/OpenQuestions/SuggestedNextTasks/RetryHint/RawOutputRef/Confidence/Source）＋`ParseFreeTextResult`（Confidence=0.4, Source=parsed_free_text）＋`FormatForContext`；`task_execution_policy.go`：`TaskExecutionPolicy`（含 `StrictResult`）；`coordinator_tools_result.go`：`submit_result` tool（JSON schema, `storeSubmittedTaskResult`）；`coordinator.go`：`taskResults` map + `GetTaskResult`/`storeSubmittedTaskResult`；`status.go`：`TodoItem.TypedResult` + `SetTypedResult` + `Items()` deep copy；`coordinator_task_run.go`：StrictResult enforce 分支、free-text fallback、`createTaskAgentWithResultTool`（normal/plan-first/escalation 三路注入 result tool）。測試 `task_result_test.go` 4 項（schema/format、free-text parse、submit tool、strict 欄位）。殘餘（不阻擋）：(R1) `FormatForContext` 未接線下游 prompt；(R2) `taskResults` 跨 retry 未清除；(R3) StrictResult enforce 與 escalation 注入缺整合測試。 |
+| HF-PR-207 Fast/team router | 工作區未合入 | `cmd/hufu/router.go`：`ExecutionRouter`／`ExecutionRoute`（RouteFast/RouteTeam）／`RouteDecision`（Route/Team/Confidence/Reasons）；deterministic signals（`analyzeTeamSignals`：multiple-@、multi-role、infra/deploy、refactor scope、verification；`analyzeFastSignals`：simple query、localized fix、short single-sentence）優先；`--route` flag（auto/fast/team）explicit override；`sidecar.Sidecar.ClassifyRoute` LLM classifier 為輔；`CanEscalateToTeam`（requiresMultiAgent／errorCount≥2／stepCount>8）。`cmd/hufu/run.go`：`maybeAutoSelectTeam` 改走 router 整合 `--default`／autoteam；`options.go`／`root.go` 加 `routeMode`／`--route`。測試 `router_test.go` 5 項全綠。殘餘 R1/R2 已修復：`maybeAutoSelectTeam` 改回傳 `RouteDecision` 並線傳 `executeAndReport`→`runWithTUI`→`executeSegments`；新增 `cmd/hufu/fastpath.go`（`fastPathDispatch`／`fastPathOutcome`／`shouldUseFastPath`／`runFastPath`）與 `cmd/hufu/segments.go` 的 `dispatchSegmentContent`：`Route==RouteFast` 且 `Coordinator.PrimaryWorkerName()`（單一 worker，新增於 `coordinator_agents.go`）非空時直送 `RunDirectAgent`（單一 agent、1 todo、跳過 coordinator DAG），否則 fall-through 至 `coordinator.Run`；`runFastPath` 每次失敗呼叫 `CanEscalateToTeam`，`errorCount≥2`／`stepCount>8` → `escalated=true` → fall-through team path；`DirectAgentResult.Steps` 新增欄位驅動 step-budget 信號。測試 `primary_worker_test.go`（4）＋ `fastpath_test.go`（`TestShouldUseFastPath`＋6 個 `TestRunFastPath_*`）全綠。 |
 
 ---
 
@@ -2488,31 +2545,31 @@ dark/light/e-paper 動態切換
 **下一批可直接指派**（全部 🔴/🟡、依賴皆已滿足，按成本遞增排序）：
 
 ```text
-1. HF-PR-002  Atomic persistence（S）— 最便宜，直接消除 crash 毀損 session 的風險
-2. HF-PR-001R Session head/goal retention（S）
-3. HF-PR-003  CachePolicy（M）
-4. HF-PR-004  Capability freshness（M）
-5. HF-PR-005  Required skills（M）
-6. HF-PR-006  Blocking acceptance（M）
-7. HF-PR-007  Prompt/tool linter（M）
-8. HF-PR-107  Side-effect recovery（L）— 風險最高，M 卡完成後立即做
-9. HF-PR-101  Token counter（L）— 解鎖 Phase B 其餘工作
+1. HF-PR-001R Session head/goal retention（S）
+2. HF-PR-003 殘餘 CachePolicy per-task 欄位（S–M）— 已 Review，coordinator-level 已落地
+3. HF-PR-004 殘餘 Capability mutation invalidation + 可配 TTL（M）— 已 Review，TTL/always-fresh 已落地
+4. HF-PR-005  Required skills（M）
+5. HF-PR-006  Blocking acceptance（M）
+6. HF-PR-007  Prompt/tool linter（M）
 ```
+
+> ~~HF-PR-107 殘餘 Side-effect recovery 自動分級~~ ✅ 已完成（`InferSideEffectClass` + `resolveTaskRecovery` 三層優先序 + frontmatter 已接線）。
+
+**待 Review（不需指派，Review 後改 ✅）**：HF-PR-002、HF-PR-104（殘留 F1–F3 見 `docs/superpowers/plans/2026-07-21-hf-state-001-quality-fixes.md`）。
 
 **之後的 kernel 工程**（依賴鏈：HF-PR-104 → 201/202/112；HF-PR-105 → 108；HF-PR-101 → 102；HF-PR-109 → 203；HF-PR-003+006 → 113）：
 
 ```text
-10. HF-PR-105 Typed TaskResult（L）
-11. HF-PR-104 Event store dual-write（XL）
-~~12. HF-PR-103 Structured compaction 殘餘（M）~~ ✅
-13. HF-PR-102 Context compiler（L）
-14. HF-PR-106 Resource locks（M）
-15. HF-PR-108 Artifact/evidence（L）
-16. HF-PR-109 Policy engine（L）
-17. HF-PR-110 Workspace separation（M）
-18. HF-PR-111 Secret registry（L）
-19. HF-PR-113 Execution profiles（M）
-20. HF-PR-112 Terminal session manager（L，待 HF-PR-104）
+~~8.  HF-PR-105 Typed TaskResult（L）~~ ✅（Review 殘餘 R1–R3 見 §13 落地狀態）
+~~9.  HF-PR-103 Structured compaction 殘餘（M）~~ ✅
+10. HF-PR-102 Context compiler（L）
+11. HF-PR-106 Resource locks（M）
+12. HF-PR-108 Artifact/evidence（L）
+13. HF-PR-109 Policy engine（L）
+14. HF-PR-110 Workspace separation（M）
+15. HF-PR-111 Secret registry（L）
+16. HF-PR-113 Execution profiles（M）
+~~17. HF-PR-112 Terminal session manager（L）~~ ✅（第四輪 Review 已完成）
 ```
 
 **平台與生態**（Phase E/F）：HF-PR-201/202/203/204/205/206/207，時機到了再從工作卡指派。
