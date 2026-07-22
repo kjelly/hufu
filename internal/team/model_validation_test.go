@@ -65,7 +65,7 @@ func TestRunContinuesPastModelValidationWarning(t *testing.T) {
 		session: &TeamSession{
 			Config:    agent.TeamConfig{Name: "test"},
 			Workspace: workspace,
-			Agents: map[string]*agent.AgentDef{},
+			Agents:    map[string]*agent.AgentDef{},
 		},
 		providerManager: pm,
 		taskTracker:     NewTaskTracker(),

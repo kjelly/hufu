@@ -11,9 +11,9 @@ import (
 
 func TestDefaultRecoveryPolicy(t *testing.T) {
 	tests := []struct {
-		class        SideEffectClass
-		unattended   bool
-		wantPolicy   RecoveryPolicy
+		class      SideEffectClass
+		unattended bool
+		wantPolicy RecoveryPolicy
 	}{
 		{SideEffectNone, false, RecoveryRetry},
 		{SideEffectNone, true, RecoveryRetry},

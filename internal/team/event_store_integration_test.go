@@ -100,9 +100,9 @@ func TestDeduplicatedTaskEventsEmission(t *testing.T) {
 	dir := t.TempDir()
 	teamSession := &TeamSession{Workspace: dir}
 	coord := &Coordinator{
-		session:                 teamSession,
-		sessionData:             NewSession(),
-		taskTracker:             NewTaskTracker(),
+		session:                teamSession,
+		sessionData:            NewSession(),
+		taskTracker:            NewTaskTracker(),
 		emittedTaskTransitions: make(map[string]bool),
 	}
 

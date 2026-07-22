@@ -30,8 +30,8 @@ func TestCoordinatorSaveCheckpoint_UpdatesBranchState(t *testing.T) {
 				Generation: agent.GenerationParams{Model: "m-1"},
 			},
 		},
-		sessionData:          NewSession(),
-		taskTracker:          NewTaskTracker(),
+		sessionData:           NewSession(),
+		taskTracker:           NewTaskTracker(),
 		lastCompactionSummary: &StructuredSummary{Goal: "g", CompletedTasks: []string{"x"}},
 	}
 	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "dev", Desc: "t1"}})

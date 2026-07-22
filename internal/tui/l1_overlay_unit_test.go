@@ -582,13 +582,13 @@ func TestWindowSizeMsg_WithSearchOverlay(t *testing.T) {
 func TestMouseWheelScroll(t *testing.T) {
 	tasks := makeTasks(10, team.TaskPending)
 	m := Model{
-		tasks:         tasks,
-		height:        30,
-		width:         100,
-		col:           0,
-		row:           5,
-		mouseEnabled:  true,
-		scrollOff:     [6]int{},
+		tasks:        tasks,
+		height:       30,
+		width:        100,
+		col:          0,
+		row:          5,
+		mouseEnabled: true,
+		scrollOff:    [6]int{},
 	}
 
 	// Wheel down
