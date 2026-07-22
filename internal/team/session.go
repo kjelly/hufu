@@ -32,13 +32,15 @@ type SessionEntry struct {
 }
 
 type SessionData struct {
-	CreatedAt                       string         `json:"created_at"`
-	UpdatedAt                       string         `json:"updated_at"`
-	Rounds                          int            `json:"rounds"`
-	ConversationHistorySourceOffset int            `json:"conversation_history_source_offset"`
-	ConversationHistorySourceCounts []int          `json:"conversation_history_source_counts"`
-	Entries                         []SessionEntry `json:"entries"`
-	Tasks                           []*TodoItem    `json:"tasks,omitempty"`
+	CreatedAt                          string              `json:"created_at"`
+	UpdatedAt                          string              `json:"updated_at"`
+	Rounds                             int                 `json:"rounds"`
+	ConversationHistorySourceOffset    int                 `json:"conversation_history_source_offset"`
+	ConversationHistorySourceCounts    []int               `json:"conversation_history_source_counts"`
+	ConversationHistorySourceRanges    [][]CompactionRange `json:"conversation_history_source_ranges,omitempty"`
+	ConversationHistoryNextSourceIndex int                 `json:"conversation_history_next_source_index,omitempty"`
+	Entries                            []SessionEntry      `json:"entries"`
+	Tasks                              []*TodoItem         `json:"tasks,omitempty"`
 }
 
 func LoadSession(workspace string) *SessionData {

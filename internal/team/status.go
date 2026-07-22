@@ -186,9 +186,9 @@ type TodoItem struct {
 	Verify         string   // Command to run to verify the task
 	VerifyMode     string   // success, expected_failure, or observation
 	VerifyResult   *VerificationResult
-	MaxRetries     int    // Maximum number of retries for this task
-	Retries        int    // Current number of retries
-	OnFailure      string // ID of the task to jump back to if this task fails (creates a loop)
+	MaxRetries     int             // Maximum number of retries for this task
+	Retries        int             // Current number of retries
+	OnFailure      string          // ID of the task to jump back to if this task fails (creates a loop)
 	SideEffect     SideEffectClass `json:"side_effect,omitempty"`
 	Recovery       RecoveryPolicy  `json:"recovery,omitempty"`
 	ReconcileTool  string          `json:"reconcile_tool,omitempty"`

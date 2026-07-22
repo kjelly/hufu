@@ -341,11 +341,11 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 			TopP:        fm.TopP,
 			TopK:        fm.TopK,
 		},
-		ProviderURL:    fm.ProviderURL,
-		ExtraModels:    fm.ExtraModels,
-		SideEffect:     fm.SideEffect,
-		Recovery:       fm.Recovery,
-		ReconcileTool:  fm.ReconcileTool,
+		ProviderURL:   fm.ProviderURL,
+		ExtraModels:   fm.ExtraModels,
+		SideEffect:    fm.SideEffect,
+		Recovery:      fm.Recovery,
+		ReconcileTool: fm.ReconcileTool,
 	}
 	if fm.Timeout > 0 {
 		def.Timeout = fm.Timeout
