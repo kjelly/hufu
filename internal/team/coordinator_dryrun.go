@@ -27,6 +27,7 @@ type DryRunResult struct {
 	TeamName           string
 	Model              string
 	SidecarModel       string
+	ResolvedProfile    ExecutionProfile
 	Agents             []DryRunAgentInfo
 	AllSkills          []DryRunSkillInfo
 	MatchedSkillNames  []string
@@ -41,7 +42,8 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 	_ = EnsureWorkspaceDirs(c.session.Workspace)
 
 	result := &DryRunResult{
-		UserPrompt: userPrompt,
+		UserPrompt:      userPrompt,
+		ResolvedProfile: c.ExecutionProfile(),
 	}
 	if c.session != nil && c.session.Config.Name != "" {
 		result.TeamName = c.session.Config.Name

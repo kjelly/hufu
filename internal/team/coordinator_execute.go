@@ -36,6 +36,12 @@ func expandPipelineDeps(tasks []TaskDef) []TaskDef {
 }
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
+	if err := c.ValidateWorkspaceIsolation(); err != nil {
+		return "", err
+	}
+	if err := c.ValidateResourceLocks(ctx); err != nil {
+		return "", err
+	}
 	if c.IsWrapUp() {
 		c.report(c.newEvent("step").withMessage("Wrap-up: refusing to start new tasks"))
 		return "", fmt.Errorf("wrap-up in progress: refusing to delegate new tasks. Call finish immediately with your best summary of work completed so far")

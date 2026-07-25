@@ -147,12 +147,19 @@ func DefaultRecoveryPolicy(class SideEffectClass, isUnattended bool) RecoveryPol
 }
 
 // ResolveRecoveryPolicy returns the explicit policy if provided, otherwise infers
-// the default recovery policy from the side-effect class.
-func ResolveRecoveryPolicy(explicit RecoveryPolicy, class SideEffectClass, isUnattended bool) RecoveryPolicy {
+// the default recovery policy from the side-effect class and execution profile.
+func ResolveRecoveryPolicy(explicit RecoveryPolicy, class SideEffectClass, isUnattended bool, profile ...ExecutionProfile) RecoveryPolicy {
 	if explicit != "" {
 		return explicit
 	}
-	return DefaultRecoveryPolicy(class, isUnattended)
+	defaultPol := DefaultRecoveryPolicy(class, isUnattended)
+	if defaultPol == RecoveryManual {
+		return RecoveryManual
+	}
+	if len(profile) > 0 && profile[0].DefaultRecoveryPolicy != "" {
+		return profile[0].DefaultRecoveryPolicy
+	}
+	return defaultPol
 }
 
 // reconcileInterruptedTask executes the read-only reconciliation flow for a task (§11.4, §15.2):

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"time"
 
 	"charm.land/fantasy"
 )
@@ -109,26 +108,18 @@ func (t *stmWriteTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 		mode = "append"
 	}
 
-	workspace := t.coordinator.session.Workspace
-	var newContent string
-	switch mode {
-	case "replace":
-		newContent = TruncateSTM(args.Content)
-	default:
-		existing := LoadSTM(workspace)
-		if existing == "" {
-			newContent = TruncateSTM(args.Content)
-		} else {
-			newContent = TruncateSTM(existing + "\n" + args.Content)
+	err := t.coordinator.updateSTM(func(existing string) string {
+		if mode == "replace" {
+			return TruncateSTM(args.Content)
 		}
-	}
-
-	if err := SaveSTM(workspace, newContent); err != nil {
+		if existing == "" {
+			return TruncateSTM(args.Content)
+		}
+		return TruncateSTM(existing + "\n" + args.Content)
+	})
+	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write stm.md: %v", err)), nil
 	}
-	t.coordinator.lastStmWriteMu.Lock()
-	t.coordinator.lastStmWrite = time.Now()
-	t.coordinator.lastStmWriteMu.Unlock()
 
 	verb := "Appended to"
 	if mode == "replace" {

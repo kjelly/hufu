@@ -21,6 +21,9 @@ const compactHistoryThreshold = 80
 const maxMessageSize = 50000
 
 func (c *Coordinator) checkpointSTM() {
+	c.stmWriteMu.Lock()
+	defer c.stmWriteMu.Unlock()
+
 	workspace := c.session.Workspace
 	content := LoadSTM(workspace)
 	if content == "" {
@@ -35,7 +38,7 @@ func (c *Coordinator) checkpointSTM() {
 	// which used to make later runs overwrite earlier runs' snapshots.
 	fname := fmt.Sprintf("stm_r%d.md", c.totalRounds())
 	path := filepath.Join(histDir, fname)
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := AtomicWriteFile(path, []byte(content), 0o644); err != nil {
 		log.Printf("warning: stm checkpoint write failed: %v", err)
 	}
 }
@@ -374,35 +377,47 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 		return
 	}
 
+	prof := c.ExecutionProfile()
+
 	// A resumed session carries rounds from earlier runs; without this the
 	// saved count restarts at this run's round and understates the session.
-	c.baseRounds = sd.Rounds
-	if len(sd.Tasks) > 0 {
+	// When DisableHistoricalTaskReuse is enabled (e.g. fresh-verification),
+	// prior rounds are not inherited so execution starts fresh at round 0.
+	if !prof.DisableHistoricalTaskReuse {
+		c.baseRounds = sd.Rounds
+	} else {
+		c.baseRounds = 0
+	}
+	if len(sd.Tasks) > 0 && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
 		c.taskTracker.TodoList().Restore(sd.Tasks)
 	}
 
-	c.taskResultCacheMu.Lock()
-	gen := c.cacheGeneration.Load()
-	for _, t := range sd.Tasks {
-		if t.Status == TaskDone && t.Output != "" {
-			agentKey := strings.ToLower(t.Agent)
-			c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
-				taskDesc:   t.Desc,
-				verify:     t.Verify,
-				verifyMode: normalizeVerifyMode(t.VerifyMode),
-				output:     t.Output,
-				generation: gen,
-				pinned:     true,
-			})
-			if len(c.taskResultCache[agentKey]) > maxTaskCacheEntries {
-				c.taskResultCache[agentKey] = c.taskResultCache[agentKey][1:]
+	if !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
+		c.taskResultCacheMu.Lock()
+		gen := c.cacheGeneration.Load()
+		for _, t := range sd.Tasks {
+			if t.Status == TaskDone && t.Output != "" {
+				agentKey := strings.ToLower(t.Agent)
+				c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
+					taskDesc:   t.Desc,
+					verify:     t.Verify,
+					verifyMode: normalizeVerifyMode(t.VerifyMode),
+					output:     t.Output,
+					generation: gen,
+					pinned:     true,
+				})
+				if len(c.taskResultCache[agentKey]) > maxTaskCacheEntries {
+					c.taskResultCache[agentKey] = c.taskResultCache[agentKey][1:]
+				}
 			}
 		}
+		c.taskResultCacheMu.Unlock()
 	}
-	c.taskResultCacheMu.Unlock()
 
 	c.taskTracker.TodoList().onChange = c.saveCheckpoint
-	c.hydrateConversationHistoryFromSessionData()
+	if !prof.DisableHistoricalMemory {
+		c.hydrateConversationHistoryFromSessionData()
+	}
 }
 
 func (c *Coordinator) hydrateConversationHistoryFromSessionData() {
@@ -528,6 +543,10 @@ func (c *Coordinator) getInterruptedTasks() []*TodoItem {
 // 'manual' tasks are blocked and flagged for human review; 'never' tasks are
 // skipped (left as-is) since the policy declares they must not be re-driven.
 func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
+	prof := c.ExecutionProfile()
+	if prof.DisableHistoricalTaskReuse || prof.DisableJournalRestore {
+		return 0, nil
+	}
 	interrupted := c.getInterruptedTasks()
 	if len(interrupted) == 0 {
 		return 0, nil
@@ -546,7 +565,7 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			break
 		}
 
-		pol := ResolveRecoveryPolicy(it.Recovery, it.SideEffect, isUnattended)
+		pol := ResolveRecoveryPolicy(it.Recovery, it.SideEffect, isUnattended, c.ExecutionProfile())
 		switch pol {
 		case RecoveryRetry:
 			c.taskTracker.TodoList().ResetForRetry(it.ID, "resumed after interruption")
@@ -633,17 +652,34 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 				}
 				count++
 			case RecoveryStatePartial, RecoveryStateUnknown:
+				prof := c.ExecutionProfile()
+				status := TaskBlocked
+				decision := state + "_blocked"
+				if state == RecoveryStateUnknown && prof.FailOnUnknownState {
+					status = TaskError
+					decision = "failed_on_unknown_state"
+				}
 				detail := fmt.Sprintf("task halted by side-effect recovery policy (%s, side_effect=%s); reconciliation state: %s", pol, it.SideEffect, state)
-				c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
-				c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
+				c.taskTracker.TodoList().UpdateStatus(it.ID, status, detail)
+				if status == TaskBlocked {
+					c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
+				}
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
 					"side_effect":    string(it.SideEffect),
 					"policy":         string(pol),
 					"recovery_state": state,
-					"decision":       state + "_blocked",
+					"decision":       decision,
 				})
-				c.rememberFailureContext("coordinator", "reconciliation blocked execution", it.ID, detail)
+				if status == TaskError {
+					err := fmt.Errorf("task %s failed due to unknown state (FailOnUnknownState profile setting)", it.ID)
+					if firstErr == nil {
+						firstErr = err
+					}
+					c.rememberFailureContext("coordinator", "reconciliation failed execution on unknown state", it.ID, detail)
+				} else {
+					c.rememberFailureContext("coordinator", "reconciliation blocked execution", it.ID, detail)
+				}
 			}
 		}
 	}

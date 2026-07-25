@@ -26,6 +26,8 @@ type SessionStore interface {
 type PolicyEngine interface {
 	GetCachePolicy() CachePolicy
 	SetCachePolicy(policy CachePolicy)
+	GetExecutionProfile() ExecutionProfile
+	SetExecutionProfile(profile ExecutionProfile)
 	IsCacheFresh(entry cachedTaskEntry, identity CacheIdentity) bool
 	ResolveRecoveryPolicy(def *agent.AgentDef, t TaskDef) (SideEffectClass, RecoveryPolicy, string)
 }
@@ -98,6 +100,14 @@ func (pe *defaultPolicyEngine) GetCachePolicy() CachePolicy {
 
 func (pe *defaultPolicyEngine) SetCachePolicy(policy CachePolicy) {
 	pe.c.SetCachePolicy(policy)
+}
+
+func (pe *defaultPolicyEngine) GetExecutionProfile() ExecutionProfile {
+	return pe.c.ExecutionProfile()
+}
+
+func (pe *defaultPolicyEngine) SetExecutionProfile(profile ExecutionProfile) {
+	pe.c.SetExecutionProfile(profile)
 }
 
 func (pe *defaultPolicyEngine) IsCacheFresh(entry cachedTaskEntry, identity CacheIdentity) bool {

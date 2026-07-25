@@ -105,9 +105,17 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 
 	todoList := t.coordinator.taskTracker.TodoList()
 	failedTasks := failedTodoItems(todoList.Items())
-	if len(failedTasks) > 0 && !args.AcknowledgeFailedTasks {
-		return fantasy.NewTextErrorResponse("cannot finish successfully while worker tasks failed or were blocked:\n" + formatFailedTasks(failedTasks) + "\nFix or re-delegate these tasks. If the user needs a partial result, call finish again with acknowledge_failed_tasks:true; hufu will append the unresolved-task warning."), nil
+	prof := t.coordinator.ExecutionProfile()
+
+	if len(failedTasks) > 0 {
+		if prof.RequireEvidenceManifest || prof.StrictPolicy {
+			return fantasy.NewTextErrorResponse("RequireEvidenceManifest policy violation: cannot finish while worker tasks failed or were blocked:\n" + formatFailedTasks(failedTasks)), nil
+		}
+		if !args.AcknowledgeFailedTasks {
+			return fantasy.NewTextErrorResponse("cannot finish successfully while worker tasks failed or were blocked:\n" + formatFailedTasks(failedTasks) + "\nFix or re-delegate these tasks. If the user needs a partial result, call finish again with acknowledge_failed_tasks:true; hufu will append the unresolved-task warning."), nil
+		}
 	}
+
 	if t.coordinator.terminalSessionMgr != nil {
 		// A resumed terminal can belong to a prior execution run. It remains an
 		// unresolved resource, so a new run must not sidestep the gate by using
@@ -117,21 +125,18 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		}
 	}
 
-	t.coordinator.lastStmWriteMu.Lock()
-	workspace := t.coordinator.session.Workspace
 	completed := todoList.CompletedCount()
 	failed := todoList.ErrorCount()
 	summary := fmt.Sprintf("[summary] %d/%d tasks done, %d rounds, %s elapsed",
 		completed, completed+failed, t.coordinator.totalRounds(),
 		time.Since(t.coordinator.sessionTime).Round(time.Second))
-	existing := LoadSTM(workspace)
-	if existing == "" {
-		existing = fmt.Sprintf("Session started at %s.", t.coordinator.sessionTime.Format(time.RFC3339))
-	}
-	newContent := appendSTMEntry(existing, summary, stmSectionProgress)
-	_ = SaveSTM(workspace, TruncateSTM(newContent))
-	t.coordinator.lastStmWrite = time.Now()
-	t.coordinator.lastStmWriteMu.Unlock()
+	_ = t.coordinator.updateSTM(func(existing string) string {
+		if existing == "" {
+			existing = fmt.Sprintf("Session started at %s.", t.coordinator.sessionTime.Format(time.RFC3339))
+		}
+		newContent := appendSTMEntry(existing, summary, stmSectionProgress)
+		return TruncateSTM(newContent)
+	})
 
 	t.coordinator.AutoExtractLTM(ctx)
 
@@ -143,24 +148,53 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	if len(failedTasks) > 0 {
 		response += "\n\n⚠️ UNRESOLVED TASKS\n" + formatFailedTasks(failedTasks)
 	}
+
+	if prof.RequireClosedTerminals && t.coordinator.terminalSessionMgr != nil {
+		if err := t.coordinator.terminalSessionMgr.RequireNoLeaks(""); err != nil {
+			return fantasy.NewTextErrorResponse("RequireClosedTerminals policy violation: active terminal sessions remain open. Close all terminal sessions before finishing: " + err.Error()), nil
+		}
+	}
+
+	if prof.RequireEvidenceManifest {
+		items := t.coordinator.TaskTracker().TodoList().Items()
+		completedCount := 0
+		for _, item := range items {
+			if item != nil && item.Status == TaskDone {
+				completedCount++
+				hasEvidence := item.VerifyResult != nil || (item.TypedResult != nil && len(item.TypedResult.Evidence) > 0)
+				if !hasEvidence {
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("RequireEvidenceManifest policy violation: completed task %q (%s) is missing verification evidence.", item.ID, item.Desc)), nil
+				}
+			}
+		}
+		if completedCount == 0 {
+			return fantasy.NewTextErrorResponse("RequireEvidenceManifest policy violation: no completed tasks with verification evidence recorded."), nil
+		}
+	}
+
 	if accErr := t.coordinator.runAcceptance(ctx); accErr != nil {
-		if t.coordinator.IsUnattended() {
+		if prof.AcceptanceMode == AcceptanceBlocking || t.coordinator.IsUnattended() {
 			if t.coordinator.selfHealingAttempts < 2 {
 				t.coordinator.selfHealingAttempts++
 				msg := fmt.Sprintf("Acceptance check failed (attempt %d/2). Initiating self-healing. Error: %v", t.coordinator.selfHealingAttempts, accErr)
 				t.coordinator.report(t.coordinator.newEvent("error").withMessage(msg))
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("Acceptance check failed: %v. Please analyze the failure log, modify files/re-run tasks to fix the issues, and call finish again.", accErr)), nil
 			}
-			// Self-healing attempts exhausted, run rollback
-			msg := fmt.Sprintf("Acceptance check failed after %d self-healing attempts. Initiating rollback...", t.coordinator.selfHealingAttempts)
-			t.coordinator.report(t.coordinator.newEvent("error").withMessage(msg))
-			if rollErr := t.coordinator.runRollback(ctx); rollErr != nil {
-				rollMsg := fmt.Sprintf("Rollback failed: %v", rollErr)
-				t.coordinator.report(t.coordinator.newEvent("error").withMessage(rollMsg))
-				response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\n⚠️ ROLLBACK FAILED: %v", accErr, rollErr)
-			} else {
-				t.coordinator.report(t.coordinator.newEvent("error").withMessage("Workspace rolled back successfully due to acceptance check failure."))
-				response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\n✓ Workspace rolled back successfully.", accErr)
+			if t.coordinator.IsUnattended() {
+				msg := fmt.Sprintf("Acceptance check failed after %d self-healing attempts. Initiating rollback...", t.coordinator.selfHealingAttempts)
+				t.coordinator.report(t.coordinator.newEvent("error").withMessage(msg))
+				if rollErr := t.coordinator.runRollback(ctx); rollErr != nil {
+					rollMsg := fmt.Sprintf("Rollback failed: %v", rollErr)
+					t.coordinator.report(t.coordinator.newEvent("error").withMessage(rollMsg))
+					response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\n⚠️ ROLLBACK FAILED: %v", accErr, rollErr)
+				} else {
+					t.coordinator.report(t.coordinator.newEvent("error").withMessage("Workspace rolled back successfully due to acceptance check failure."))
+					response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\n✓ Workspace rolled back successfully.", accErr)
+				}
+			}
+			if prof.AcceptanceMode == AcceptanceBlocking {
+				t.coordinator.report(t.coordinator.newEvent("error").withMessage("acceptance check failed (blocking): " + accErr.Error()))
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("Acceptance check failed (blocking): %v", accErr)), nil
 			}
 		} else {
 			// Interactive mode: preserve standard behavior

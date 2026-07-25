@@ -221,7 +221,7 @@ func LoadSTM(workspace string) string {
 }
 
 func SaveSTM(workspace string, content string) error {
-	return os.WriteFile(STMPath(workspace), []byte(content), 0o644)
+	return AtomicWriteFile(STMPath(workspace), []byte(content), 0o644)
 }
 
 func TruncateSTM(content string) string {
@@ -246,7 +246,7 @@ func ArchiveSTM(workspace string) (string, error) {
 	ts := time.Now().Format("20060102T150405")
 	filename := fmt.Sprintf("%s-stm.md", ts)
 	path := filepath.Join(histDir, filename)
-	if err := os.WriteFile(path, []byte(stmContent), 0o644); err != nil {
+	if err := AtomicWriteFile(path, []byte(stmContent), 0o644); err != nil {
 		return "", fmt.Errorf("failed to archive stm.md: %w", err)
 	}
 
@@ -264,5 +264,5 @@ func InitSTM(workspace string) error {
 	if _, err := ArchiveSTM(workspace); err != nil {
 		fmt.Printf("warning: failed to archive stm.md: %v\n", err)
 	}
-	return os.WriteFile(STMPath(workspace), []byte(""), 0o644)
+	return SaveSTM(workspace, "")
 }

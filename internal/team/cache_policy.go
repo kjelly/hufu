@@ -113,12 +113,19 @@ func (c *Coordinator) GetCachePolicy() CachePolicy {
 	if c == nil {
 		return CacheUse
 	}
+	prof := c.ExecutionProfile()
+	if prof.DisableTaskCache {
+		return CacheBypass
+	}
 	c.cachePolicyMu.RLock()
 	defer c.cachePolicyMu.RUnlock()
-	if c.cachePolicy == "" {
-		return CacheUse
+	if c.cachePolicy != "" {
+		return c.cachePolicy
 	}
-	return c.cachePolicy
+	if prof.DefaultCachePolicy != "" {
+		return prof.DefaultCachePolicy
+	}
+	return CacheUse
 }
 
 // ComputeCacheIdentity constructs a CacheIdentity object reflecting current coordinator state.

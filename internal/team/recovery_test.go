@@ -202,6 +202,56 @@ func TestResumeInterruptedTasks_ReconciliationFlow(t *testing.T) {
 	}
 }
 
+func TestResumeInterruptedTasks_FailOnUnknownState(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "hufu-recovery-unknown-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	session := &TeamSession{
+		Workspace: tmpDir,
+		Dir:       tmpDir,
+		Config: agent.TeamConfig{
+			Name: "test-team",
+		},
+	}
+	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatalf("failed to create coordinator: %v", err)
+	}
+
+	strictProf, _ := GetBuiltinProfile(string(ProfileStrictVerification))
+	strictProf.DisableHistoricalTaskReuse = false
+	strictProf.DisableJournalRestore = false
+	c.SetExecutionProfile(strictProf)
+
+	c.taskTracker.TodoList().Restore([]*TodoItem{
+		{
+			ID:            "1",
+			Agent:         "a",
+			Desc:          "task unknown probe with strict profile",
+			Status:        TaskInProgress,
+			SideEffect:    SideEffectExternalWrite,
+			Recovery:      RecoveryReconcile,
+			ReconcileTool: "exit 3",
+		},
+	})
+
+	_, err = c.ResumeInterruptedTasks(context.Background())
+	if err == nil {
+		t.Fatal("expected error from ResumeInterruptedTasks when FailOnUnknownState is true, got nil")
+	}
+
+	item := c.taskTracker.TodoList().Items()[0]
+	if item.Status != TaskError {
+		t.Errorf("expected status TaskError under FailOnUnknownState, got %s", item.Status)
+	}
+	if item.RecoveryState != RecoveryStateUnknown {
+		t.Errorf("expected recovery state 'unknown', got %s", item.RecoveryState)
+	}
+}
+
 func TestResumeInterruptedTasks_RecoveryEventStore(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "hufu-recovery-es-*")
 	if err != nil {

@@ -193,6 +193,8 @@ type Coordinator struct {
 	taskResultCacheMu      sync.RWMutex
 	cachePolicy            CachePolicy
 	cachePolicyMu          sync.RWMutex
+	executionProfile       ExecutionProfile
+	executionProfileMu     sync.RWMutex
 	capabilityCache        map[string]CapabilityResult
 	capabilityCacheMu      sync.Mutex
 	capabilityInflight     map[string]chan CapabilityResult
@@ -227,6 +229,7 @@ type Coordinator struct {
 	sessionTime            time.Time
 	lastStmWrite           time.Time // tracks when stm_write was last called for finish enforcement
 	lastStmWriteMu         sync.Mutex
+	stmWriteMu             sync.Mutex // serializes Read-Modify-Write STM operations to prevent lost-updates
 	ltmWriteMu             sync.Mutex // Protect LTM file reads and writes
 
 	// Skill pattern detection
@@ -565,12 +568,19 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 
 	guardReviewer := func(ctx context.Context, toolName, args string, rules []string) (bool, string, error) {
 		s := c.AgentPool().GuardSidecar()
+		prof := c.ExecutionProfile()
 		if s == nil {
+			if prof.PolicyFailureMode == PolicyFailClosed || prof.StrictPolicy {
+				return false, "guard reviewer unavailable under PolicyFailClosed policy", fmt.Errorf("guard reviewer unavailable")
+			}
 			return true, "", nil
 		}
 		agentName, _ := ctx.Value(tools.AgentNameKey).(string)
 		result, err := s.ReviewToolCall(ctx, agentName, toolName, args, rules)
 		if err != nil {
+			if prof.PolicyFailureMode == PolicyFailOpen {
+				return true, "", nil
+			}
 			return false, "", err
 		}
 		return result.Approved, result.Reason, nil
@@ -881,4 +891,143 @@ func (c *Coordinator) GetTaskResult(todoID string) *TaskResult {
 		return nil
 	}
 	return c.taskResults[todoID]
+}
+
+// SetExecutionProfile sets the active execution profile for the coordinator.
+func (c *Coordinator) SetExecutionProfile(profile ExecutionProfile) {
+	if c == nil {
+		return
+	}
+	c.executionProfileMu.Lock()
+	c.executionProfile = profile
+	c.executionProfileMu.Unlock()
+
+	if profile.DisableTaskCache {
+		c.SetCachePolicy(CacheBypass)
+	} else if profile.DefaultCachePolicy != "" {
+		c.SetCachePolicy(profile.DefaultCachePolicy)
+	}
+
+	if profile.DisableHistoricalMemory || profile.DisableHistoricalTaskReuse {
+		c.conversationHistoryMu.Lock()
+		c.conversationHistory = nil
+		c.conversationHistorySourceCounts = nil
+		c.conversationHistorySourceOffset = 0
+		c.conversationHistoryMu.Unlock()
+	}
+}
+
+// ExecutionProfile returns the active execution profile for the coordinator.
+func (c *Coordinator) ExecutionProfile() ExecutionProfile {
+	if c == nil {
+		return BuiltinProfiles()[ProfileDefault]
+	}
+	c.executionProfileMu.RLock()
+	defer c.executionProfileMu.RUnlock()
+	if c.executionProfile.Name == "" {
+		return BuiltinProfiles()[ProfileDefault]
+	}
+	return c.executionProfile
+}
+
+func canonicalPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		abs = p
+	}
+	if eval, err := filepath.EvalSymlinks(abs); err == nil {
+		return filepath.Clean(eval)
+	}
+	return filepath.Clean(abs)
+}
+
+// ValidateWorkspaceIsolationPaths verifies workspace path isolation without requiring a fully initialized Coordinator.
+func ValidateWorkspaceIsolationPaths(workspace, projectDir, teamDir, teamName string, prof ExecutionProfile) error {
+	if !prof.RequireWorkspaceIsolation {
+		return nil
+	}
+
+	cleanWS := canonicalPath(workspace)
+	cleanProject := canonicalPath(projectDir)
+
+	if cleanWS == "" || cleanProject == "" {
+		return nil
+	}
+
+	isEqualOrDescendant := func(parent, child string) bool {
+		if parent == child {
+			return true
+		}
+		rel, err := filepath.Rel(parent, child)
+		if err != nil {
+			return false
+		}
+		return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+
+	// 1. Control workspace cannot equal, be inside (descendant of), or be parent of subject project root.
+	if isEqualOrDescendant(cleanProject, cleanWS) {
+		return fmt.Errorf("RequireWorkspaceIsolation policy violation: workspace %q is inside or equal to subject project root %q", workspace, projectDir)
+	}
+	if isEqualOrDescendant(cleanWS, cleanProject) {
+		return fmt.Errorf("RequireWorkspaceIsolation policy violation: subject project root %q is inside workspace %q", projectDir, workspace)
+	}
+
+	// 2. Control workspace cannot equal, be inside, or be parent of team definition directory (control dir).
+	if teamDir != "" && teamName != "default" {
+		cleanTeamDir := canonicalPath(teamDir)
+		if cleanTeamDir != "" {
+			if isEqualOrDescendant(cleanTeamDir, cleanWS) {
+				return fmt.Errorf("RequireWorkspaceIsolation policy violation: workspace %q is inside or equal to team definition directory %q", workspace, teamDir)
+			}
+			if isEqualOrDescendant(cleanWS, cleanTeamDir) {
+				return fmt.Errorf("RequireWorkspaceIsolation policy violation: team definition directory %q is inside workspace %q", teamDir, workspace)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateWorkspaceIsolation verifies that the active workspace is isolated from the project root if RequireWorkspaceIsolation is set.
+func (c *Coordinator) ValidateWorkspaceIsolation() error {
+	if c == nil || c.session == nil {
+		return nil
+	}
+	return ValidateWorkspaceIsolationPaths(c.session.Workspace, c.projectDir, c.session.Dir, c.session.Config.Name, c.ExecutionProfile())
+}
+
+// ValidateResourceLocks verifies capability locks and workspace availability if RequireLockedResources is set.
+func (c *Coordinator) ValidateResourceLocks(ctx context.Context) error {
+	if c == nil {
+		return nil
+	}
+	prof := c.ExecutionProfile()
+	if !prof.RequireLockedResources {
+		return nil
+	}
+	if c.session != nil {
+		if err := EnsureWorkspaceDirs(c.session.Workspace); err != nil {
+			return fmt.Errorf("RequireLockedResources policy violation: workspace lock check failed: %w", err)
+		}
+	}
+	reqsMap := c.capabilityRequirementsByName()
+	if len(reqsMap) > 0 {
+		var reqList []agent.CapabilityRequirement
+		for _, r := range reqsMap {
+			reqList = append(reqList, r)
+		}
+		results, err := c.checkCapabilityRequirements(ctx, reqList)
+		if err != nil {
+			return fmt.Errorf("RequireLockedResources policy violation: capability check error: %w", err)
+		}
+		for _, res := range results {
+			if !res.Available {
+				return fmt.Errorf("RequireLockedResources policy violation: capability %q probe failed: %s", res.Scope, res.Reason)
+			}
+		}
+	}
+	return nil
 }

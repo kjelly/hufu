@@ -38,6 +38,12 @@ func ParseDirectAgent(prompt string) (agentName string, task string, ok bool) {
 func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (*DirectAgentResult, error) {
 	endExecutionRun := c.beginExecutionRun()
 	defer endExecutionRun()
+	if err := c.ValidateWorkspaceIsolation(); err != nil {
+		return nil, err
+	}
+	if err := c.ValidateResourceLocks(ctx); err != nil {
+		return nil, err
+	}
 	agentDef, _, err := c.AgentPool().ResolveAgentName(agentName)
 	if err != nil {
 		return nil, err
@@ -509,7 +515,7 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		projectText.WriteString(agentsMD)
 	}
 
-	if c.memoryStore != nil && prompt != "" {
+	if c.memoryStore != nil && prompt != "" && !c.ExecutionProfile().DisableHistoricalMemory {
 		var compactFn memory.CompactFunc
 		if s := c.AgentPool().Sidecar(); s != nil {
 			compactFn = s.Compact
@@ -521,7 +527,7 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		}
 	}
 
-	if !isContinuation {
+	if !isContinuation && !c.ExecutionProfile().DisableHistoricalMemory {
 		if c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
 			contextSummary := c.sessionData.ContextSummary()
 			if contextSummary != "" {
@@ -555,6 +561,12 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
 	endExecutionRun := c.beginExecutionRun()
 	defer endExecutionRun()
+	if err := c.ValidateWorkspaceIsolation(); err != nil {
+		return "", err
+	}
+	if err := c.ValidateResourceLocks(ctx); err != nil {
+		return "", err
+	}
 	c.resetRoundState()
 	c.lastStmWrite = time.Time{}
 	if c.initialPrompt == "" {

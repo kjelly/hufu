@@ -64,15 +64,36 @@ type HookResponse struct {
 
 type HookFunc func(ctx context.Context, payload HookPayload) HookResponse
 
+type PolicyFailureMode string
+
+const (
+	PolicyFailOpen   PolicyFailureMode = "open"
+	PolicyFailClosed PolicyFailureMode = "closed"
+)
+
 type HookRegistry struct {
-	mu    sync.RWMutex
-	hooks map[string][]HookFunc
+	mu          sync.RWMutex
+	hooks       map[string][]HookFunc
+	failureMode PolicyFailureMode
 }
 
 func NewHookRegistry() *HookRegistry {
 	return &HookRegistry{
-		hooks: make(map[string][]HookFunc),
+		hooks:       make(map[string][]HookFunc),
+		failureMode: PolicyFailOpen,
 	}
+}
+
+func (r *HookRegistry) SetFailureMode(mode PolicyFailureMode) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failureMode = mode
+}
+
+func (r *HookRegistry) FailureMode() PolicyFailureMode {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.failureMode
 }
 
 func (r *HookRegistry) Register(hookPoint string, fn HookFunc) {

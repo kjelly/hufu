@@ -16,12 +16,12 @@ import (
 	"github.com/anomalyco/hufu/internal/tools"
 )
 
-// resolveTeamWorkspace computes and creates the per-team workspace
-// directory. For named teams it nests under <workspace>/<team-name>;
+// resolveTeamWorkspacePath computes the per-team workspace directory path
+// without creating it on disk. For named teams it nests under <workspace>/<team-name>;
 // for the built-in default team it uses the workspace root itself.
-// The created directory path is assigned to session.Workspace and
+// The computed directory path is assigned to session.Workspace and
 // session.Config.WorkspaceDir before returning.
-func resolveTeamWorkspace(teamName string, session *team.TeamSession) error {
+func resolveTeamWorkspacePath(teamName string, session *team.TeamSession) error {
 	var baseWorkspace string
 	if opts.workspace != "" {
 		abs, err := filepath.Abs(opts.workspace)
@@ -37,9 +37,6 @@ func resolveTeamWorkspace(teamName string, session *team.TeamSession) error {
 		baseWorkspace = filepath.Join(cwd, "workspace")
 	}
 	teamWorkspace := filepath.Join(baseWorkspace, teamName)
-	if err := os.MkdirAll(teamWorkspace, 0o755); err != nil {
-		return fmt.Errorf("failed to create workspace: %w", err)
-	}
 	session.Workspace = teamWorkspace
 	session.Config.WorkspaceDir = teamWorkspace
 	return nil
@@ -302,9 +299,12 @@ func resolveRestrictedPath(session *team.TeamSession, cfg *config.Config) string
 }
 
 // displayResolvedConfig prints the resolved skill/model/sidecar/guard/
-// max-concurrent settings for the user. Called after the coordinator
+// max-concurrent and execution profile settings for the user. Called after the coordinator
 // is created.
-func displayResolvedConfig(session *team.TeamSession, resolvedModelList []config.ModelEntry, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel string, resolvedMaxConcurrent int) {
+func displayResolvedConfig(session *team.TeamSession, resolvedModelList []config.ModelEntry, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel string, resolvedMaxConcurrent int, execProfile team.ExecutionProfile) {
+	if execProfile.Name != "" {
+		stderrLog("%s %s (v%d)\n", boldStyle.Render("Profile:"), execProfile.Name, execProfile.SchemaVersion)
+	}
 	if len(session.Skills) > 0 {
 		var skillNames []string
 		for _, s := range session.Skills {
@@ -363,9 +363,14 @@ func archiveToMemory(ctx context.Context, memStore *memory.MemoryStore, coordina
 	if memStore == nil || len(oldSessionEntries) == 0 {
 		return
 	}
+	if coordinator != nil && coordinator.ExecutionProfile().DisableHistoricalMemory {
+		return
+	}
 	var summarizeFn memory.SummarizeFunc
-	if s := coordinator.Sidecar(); s != nil {
-		summarizeFn = s.Summarize
+	if coordinator != nil {
+		if s := coordinator.Sidecar(); s != nil {
+			summarizeFn = s.Summarize
+		}
 	}
 	if err := memory.ArchiveSessionSummary(ctx, memStore, oldSessionEntries, session.Config.Name, summarizeFn); err != nil {
 		stderrLog("%s Failed to archive session to memory: %v\n", errStyle.Render("⚠"), err)

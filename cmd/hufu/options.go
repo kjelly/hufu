@@ -38,6 +38,7 @@ type runOptions struct {
 	archiveMemory bool
 
 	// Execution behavior
+	executionProfile      string
 	stepsMode             bool
 	dryRun                bool
 	planMode              bool

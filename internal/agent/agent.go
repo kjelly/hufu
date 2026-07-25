@@ -152,6 +152,8 @@ type TeamConfig struct {
 	Acceptance string
 	// Rollback is an optional shell command run on acceptance failure in unattended mode
 	Rollback string
+	// ExecutionProfile specifies a named execution profile in team.yml (e.g. strict-verification)
+	ExecutionProfile string
 }
 
 type OllamaProvider struct {

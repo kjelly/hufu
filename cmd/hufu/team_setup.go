@@ -13,6 +13,7 @@ import (
 
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/config"
+	"github.com/anomalyco/hufu/internal/hooks"
 	"github.com/anomalyco/hufu/internal/mcp"
 	"github.com/anomalyco/hufu/internal/notify"
 	"github.com/anomalyco/hufu/internal/readline"
@@ -32,7 +33,8 @@ type teamContext struct {
 // run budgets, and acceptance check from the CLI flags and team config.
 // CLI flags take precedence; team.yaml values are the fallback.
 func applyUnattendedAndBudget(coordinator *team.Coordinator, session *team.TeamSession) {
-	coordinator.SetUnattended(opts.unattended || session.Config.Unattended)
+	prof := coordinator.ExecutionProfile()
+	coordinator.SetUnattended(opts.unattended || session.Config.Unattended || prof.IsUnattended())
 	coordinator.SetAutoApprove(opts.autoApprove || session.Config.AutoApprove)
 	coordinator.SetNoJournal(opts.noJournal)
 
@@ -62,27 +64,21 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	applyCLITuningOverrides(session, currentTuningOverrides())
 	propagateTeamGenerationToAgents(session)
 
-	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, session.Config.ProviderURL, "")
-	resolvedProviderAPIKey := config.ResolveProviderAPIKey(defaultProviderAPIKey, session.Config.ProviderAPIKey)
-
-	if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
-		stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)
-	}
-	if err := team.InitLTM(session.Workspace, session.Config.Name); err != nil {
-		stderrLog("%s Failed to init ltm.md: %v\n", errStyle.Render("⚠"), err)
-	}
-	if err := team.InitSTM(session.Workspace); err != nil {
-		stderrLog("%s Failed to init stm.md: %v\n", errStyle.Render("⚠"), err)
-	}
-	if opts.newSession {
-		team.ExtractLTMFromHistory(session.Workspace, session.Config.Name)
-		team.PruneSessionHistory(session.Workspace, team.MaxSessionHistoryFiles)
-	}
-
-	sessionData, oldSessionEntries, err := prepareSessionLifecycle(session)
+	execProfile, err := team.ResolveExecutionProfile(opts.executionProfile, session.Config.ExecutionProfile)
 	if err != nil {
+		return nil, fmt.Errorf("failed to resolve execution profile: %w", err)
+	}
+
+	// Validate workspace isolation early BEFORE any workspace directory creation,
+	// file initialization (InitLTM/InitSTM), or session lifecycle I/O so rejected
+	// strict workspaces leave no side effects on disk.
+	projectDir, _ := os.Getwd()
+	if err := team.ValidateWorkspaceIsolationPaths(session.Workspace, projectDir, session.Dir, session.Config.Name, execProfile); err != nil {
 		return nil, err
 	}
+
+	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, session.Config.ProviderURL, "")
+	resolvedProviderAPIKey := config.ResolveProviderAPIKey(defaultProviderAPIKey, session.Config.ProviderAPIKey)
 
 	displayTeamHeader(session)
 
@@ -108,7 +104,30 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 
 	allowedPaths := buildAllowedPaths(session, registry, cfg)
 
+	if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
+		stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)
+	}
+	if err := team.InitLTM(session.Workspace, session.Config.Name); err != nil {
+		stderrLog("%s Failed to init ltm.md: %v\n", errStyle.Render("⚠"), err)
+	}
+	if err := team.InitSTM(session.Workspace); err != nil {
+		stderrLog("%s Failed to init stm.md: %v\n", errStyle.Render("⚠"), err)
+	}
+	if opts.newSession {
+		team.ExtractLTMFromHistory(session.Workspace, session.Config.Name)
+		team.PruneSessionHistory(session.Workspace, team.MaxSessionHistoryFiles)
+	}
+
+	sessionData, oldSessionEntries, err := prepareSessionLifecycle(session)
+	if err != nil {
+		return nil, err
+	}
+
 	hookRegistry := registerHooks(cfg)
+	if hookRegistry != nil {
+		hookRegistry.SetFailureMode(hooks.PolicyFailureMode(execProfile.HookFailureMode))
+	}
+
 	resolvedRestrictedPath := resolveRestrictedPath(session, cfg)
 	resolvedNoNet := opts.noNet || cfg.NoNet || session.Config.NoNet
 	resolvedForceMCP := opts.forceMCP || cfg.ForceMCP || session.Config.ForceMCP
@@ -129,10 +148,12 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
+
+	coordinator.SetExecutionProfile(execProfile)
 	coordinator.SetSessionData(sessionData)
 	applyUnattendedAndBudget(coordinator, session)
 	archiveToMemory(ctx, memStore, coordinator, session, oldSessionEntries)
-	displayResolvedConfig(session, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedMaxConcurrent)
+	displayResolvedConfig(session, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedMaxConcurrent, execProfile)
 	notifierInst := buildNotifier(cfg, session)
 
 	return &teamContext{
@@ -155,7 +176,7 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		return nil, err
 	}
 
-	if err := resolveTeamWorkspace(teamName, session); err != nil {
+	if err := resolveTeamWorkspacePath(teamName, session); err != nil {
 		return nil, err
 	}
 
@@ -168,7 +189,7 @@ func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPI
 	teamName := "default"
 
 	dummySession := &team.TeamSession{}
-	if err := resolveTeamWorkspace(teamName, dummySession); err != nil {
+	if err := resolveTeamWorkspacePath(teamName, dummySession); err != nil {
 		return nil, err
 	}
 	teamWorkspace := dummySession.Workspace

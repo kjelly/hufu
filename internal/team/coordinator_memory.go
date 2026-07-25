@@ -11,6 +11,9 @@ import (
 )
 
 func (c *Coordinator) buildMemorySuffix(agentRole string) string {
+	if c.ExecutionProfile().DisableHistoricalMemory {
+		return ""
+	}
 	var b strings.Builder
 
 	rawSTM := LoadSTM(c.session.Workspace)
@@ -75,6 +78,9 @@ func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 // All agents receive these sections regardless of role so findings from one
 // agent are always visible to the next.
 func (c *Coordinator) buildTaskSTMContext() string {
+	if c.ExecutionProfile().DisableHistoricalMemory {
+		return ""
+	}
 	rawSTM := LoadSTM(c.session.Workspace)
 	if rawSTM == "" {
 		return ""
@@ -107,6 +113,9 @@ func (c *Coordinator) buildTaskSTMContext() string {
 // Used by executeTask in place of buildMemorySuffix (which includes STM)
 // so that STM is not duplicated when buildTaskSTMContext is already prepended.
 func (c *Coordinator) buildLTMContext() string {
+	if c.ExecutionProfile().DisableHistoricalMemory {
+		return ""
+	}
 	rawLTM := LoadLTM(c.session.Workspace, c.session.Config.Name)
 	if rawLTM == "" {
 		return ""
@@ -184,10 +193,37 @@ func truncateAtSectionBoundaries(content string, maxChars int) string {
 	return strings.TrimSpace(b.String())
 }
 
-func (c *Coordinator) autoWriteSTM(agentName, taskDesc, output, errMsg string, success bool) {
-	workspace := c.session.Workspace
-	existing := LoadSTM(workspace)
+// updateSTM atomically updates stm.md using a Read-Modify-Write callback under stmWriteMu.
+// It also records the write timestamp for finish validation and emits an stm_updated event to EventStore if available.
+func (c *Coordinator) updateSTM(fn func(string) string) error {
+	c.stmWriteMu.Lock()
+	defer c.stmWriteMu.Unlock()
 
+	if c.session == nil || c.session.Workspace == "" {
+		return fmt.Errorf("invalid session workspace")
+	}
+
+	old := LoadSTM(c.session.Workspace)
+	next := fn(old)
+	err := SaveSTM(c.session.Workspace, next)
+	if err == nil {
+		c.lastStmWriteMu.Lock()
+		c.lastStmWrite = time.Now()
+		c.lastStmWriteMu.Unlock()
+
+		c.emitEvent("stm_updated", "coordinator", "", map[string]interface{}{
+			"content": next,
+		})
+	}
+	return err
+}
+
+// UpdateSTM safely updates short-term memory (stm.md) under stmWriteMu.
+func (c *Coordinator) UpdateSTM(fn func(string) string) error {
+	return c.updateSTM(fn)
+}
+
+func (c *Coordinator) autoWriteSTM(agentName, taskDesc, output, errMsg string, success bool) {
 	var entry string
 	if success {
 		summary := utils.TruncateRunes(output, summaryMaxRunes)
@@ -196,13 +232,13 @@ func (c *Coordinator) autoWriteSTM(agentName, taskDesc, output, errMsg string, s
 		entry = formatSTMErrorEntry(agentName, taskDesc, errMsg)
 	}
 
-	newContent := appendSTMEntry(existing, entry, stmSectionProgress)
-	if err := SaveSTM(workspace, TruncateSTM(newContent)); err != nil {
+	err := c.updateSTM(func(existing string) string {
+		newContent := appendSTMEntry(existing, entry, stmSectionProgress)
+		return TruncateSTM(newContent)
+	})
+	if err != nil {
 		log.Printf("warning: auto STM write failed: %v", err)
 	}
-	c.lastStmWriteMu.Lock()
-	c.lastStmWrite = time.Now()
-	c.lastStmWriteMu.Unlock()
 }
 
 func (c *Coordinator) AutoExtractLTM(ctx context.Context) {

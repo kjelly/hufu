@@ -162,3 +162,38 @@ func TestRegisterShellHooksEmpty(t *testing.T) {
 		t.Error("empty command should not register a hook")
 	}
 }
+
+func TestRegisterShellHooks_DynamicFailureMode(t *testing.T) {
+	r := NewHookRegistry()
+	// Register hook when registry failure mode is default (PolicyFailOpen)
+	err := RegisterShellHooks(r, map[string]string{
+		"before_tool_call": "exit 1",
+	})
+	if err != nil {
+		t.Fatalf("RegisterShellHooks error: %v", err)
+	}
+
+	// Before changing mode, failing hook returns HookContinue (fail-open)
+	resp := r.Dispatch(context.Background(), "before_tool_call", HookPayload{})
+	if resp.Result != HookContinue {
+		t.Errorf("expected HookContinue under default fail-open mode, got %v", resp.Result)
+	}
+
+	// Change failure mode to PolicyFailClosed (e.g. after resolving strict profile)
+	r.SetFailureMode(PolicyFailClosed)
+
+	// Now failing hook MUST return HookError (fail-closed)
+	resp = r.Dispatch(context.Background(), "before_tool_call", HookPayload{})
+	if resp.Result != HookError {
+		t.Errorf("expected HookError after updating registry failure mode to closed, got %v", resp.Result)
+	}
+}
+
+func TestRegisterShellHooks_NilRegistry(t *testing.T) {
+	err := RegisterShellHooks(nil, map[string]string{
+		"before_tool_call": "echo hi",
+	})
+	if err == nil {
+		t.Error("RegisterShellHooks with nil registry should return an error")
+	}
+}

@@ -96,6 +96,7 @@ type teamConfigYAML struct {
 	MaxTotalTokens    int64                            `yaml:"max-total-tokens"`
 	Acceptance        string                           `yaml:"acceptance"`
 	Rollback          string                           `yaml:"rollback"`
+	ExecutionProfile  string                           `yaml:"execution-profile"`
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -549,6 +550,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	if yc.Rollback != "" {
 		cfg.Rollback = yc.Rollback
 	}
+	if yc.ExecutionProfile != "" {
+		cfg.ExecutionProfile = yc.ExecutionProfile
+	}
 	if yc.Shell != "" {
 		cfg.Shell = yc.Shell
 	}
@@ -604,10 +608,6 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 		}
 		workspace = filepath.Join(cwd, cfg.WorkspaceDir)
 	}
-	if err := os.MkdirAll(workspace, 0o755); err != nil {
-		return nil, fmt.Errorf("failed to create workspace: %w", err)
-	}
-
 	session := &TeamSession{
 		Config:     cfg,
 		Dir:        absDir,

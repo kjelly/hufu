@@ -495,24 +495,26 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 	// THIS run only. Entries pinned from a previous run must not reject new
 	// tasks: "re-run the verification" would have its first task errored as a
 	// duplicate of last run's work.
-	for i, t := range tasks {
-		if duplicates[i] {
-			continue
-		}
-		desc := t.Goal
-		if t.Constraints != "" {
-			desc += "\nconstraints: " + t.Constraints
-		}
-		agentKey := strings.ToLower(t.Agent)
-		dupCtx, dupCancel := context.WithTimeout(ctx, 5*time.Second)
-		cachedOutput, cachedDesc, cacheOK := c.lookupTaskCacheCurrentRunWithVerification(dupCtx, agentKey, desc, t.Verify, t.VerifyMode)
-		dupCancel()
-		if cacheOK {
-			warnings = append(warnings, fmt.Sprintf("SEMANTIC DUPLICATE: %s (similar to completed task: %q)", truncateTaskDesc(desc), truncateTaskDesc(cachedDesc)))
-			duplicates[i] = true
-			log.Printf("[WARN] duplicate task detected: agent=%q, task=%q, similar to=%q", t.Agent, desc, cachedDesc)
-		} else {
-			_ = cachedOutput
+	if !c.ExecutionProfile().DisableSemanticDedup {
+		for i, t := range tasks {
+			if duplicates[i] {
+				continue
+			}
+			desc := t.Goal
+			if t.Constraints != "" {
+				desc += "\nconstraints: " + t.Constraints
+			}
+			agentKey := strings.ToLower(t.Agent)
+			dupCtx, dupCancel := context.WithTimeout(ctx, 5*time.Second)
+			cachedOutput, cachedDesc, cacheOK := c.lookupTaskCacheCurrentRunWithVerification(dupCtx, agentKey, desc, t.Verify, t.VerifyMode)
+			dupCancel()
+			if cacheOK {
+				warnings = append(warnings, fmt.Sprintf("SEMANTIC DUPLICATE: %s (similar to completed task: %q)", truncateTaskDesc(desc), truncateTaskDesc(cachedDesc)))
+				duplicates[i] = true
+				log.Printf("[WARN] duplicate task detected: agent=%q, task=%q, similar to=%q", t.Agent, desc, cachedDesc)
+			} else {
+				_ = cachedOutput
+			}
 		}
 	}
 	return warnings, duplicates, suppressed

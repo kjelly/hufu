@@ -56,6 +56,7 @@ type reportData struct {
 	StartedAt           time.Time
 	SkillPatterns       []SkillPatternReport
 	ContextUsageSection string
+	ResolvedProfile     team.ExecutionProfile
 }
 
 // SkillPatternReport holds detected skill pattern info for reports
@@ -109,6 +110,7 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		d.Skills = tc.coordinator.SkillUsage()
 		d.SkillPatterns = gatherSkillPatterns(tc.coordinator)
 		d.ContextUsageSection = tc.coordinator.RenderContextUsageSection()
+		d.ResolvedProfile = tc.coordinator.ExecutionProfile()
 	}
 
 	if tc.session != nil {
@@ -194,6 +196,18 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		b.WriteString("## Final Result\n\n")
 		b.WriteString(finalResult)
 		b.WriteString("\n\n---\n\n")
+	}
+
+	if data.ResolvedProfile.Name != "" {
+		b.WriteString("## Execution Profile\n\n")
+		fmt.Fprintf(&b, "- **Profile Name:** `%s` (schema v%d)\n", data.ResolvedProfile.Name, data.ResolvedProfile.SchemaVersion)
+		fmt.Fprintf(&b, "- **Strict Policy:** %t\n", data.ResolvedProfile.StrictPolicy)
+		fmt.Fprintf(&b, "- **Policy Failure Mode:** `%s`\n", data.ResolvedProfile.PolicyFailureMode)
+		fmt.Fprintf(&b, "- **Acceptance Mode:** `%s`\n", data.ResolvedProfile.AcceptanceMode)
+		fmt.Fprintf(&b, "- **Default Cache Policy:** `%s`\n", data.ResolvedProfile.DefaultCachePolicy)
+		fmt.Fprintf(&b, "- **Default Recovery Policy:** `%s`\n", data.ResolvedProfile.DefaultRecoveryPolicy)
+		fmt.Fprintf(&b, "- **Disable Historical Memory:** %t\n", data.ResolvedProfile.DisableHistoricalMemory)
+		fmt.Fprintf(&b, "- **Disable Task Cache:** %t\n\n---\n\n", data.ResolvedProfile.DisableTaskCache)
 	}
 
 	if data.ContextUsageSection != "" {

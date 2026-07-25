@@ -138,7 +138,7 @@ hufu 不應演進成另一個「單代理 terminal coding agent」，也不應�
 | HF-WORKSPACE-001 | P1 | 🔴 OPEN（源自 strict 文件，詳細設計見其 §17） | control workspace 與 subject workspace 無強制隔離，ground-up cleanup 可能刪除 hufu 自己的 checkpoint/evidence |
 | HF-SECRET-001 | P1 | 🔴 OPEN（源自 strict 文件，詳細設計見其 §18） | audit/tool input/MCP/report 缺少統一 secret-aware redaction |
 | HF-TERM-001 | P1 | ✅ DONE（工作區未合入；第四輪 Review 已完成） | stateful terminal session 已成為第一級 task resource：owner binding、durable lifecycle、leaked-session gate、child/model timeout 分離、event lifecycle identity、restart process identity reconciliation、process-group descendant cleanup 與 explicit tool policy 均已落地。`--no-net` 現合併 `SysProcAttr` 並保留 `Setpgid`，close／timeout 不會遺留 child；詳見 `tmp/review.md` |
-| HF-PROFILE-001 | P2 | 🔴 OPEN（源自 strict 文件，詳細設計見其 §7；依賴 HF-PR-003/006） | cache／acceptance／memory 開關散落各 flag，無具名 execution profile；fresh verification 無法一鍵隔離舊 memory |
+| HF-PROFILE-001 | P2 | 🔴 REVIEW BLOCKED（2026-07-22；結果見 `tmp/review.md`） | hook dynamic failure mode 與 FailOnUnknownState 已修正，但 strict workspace isolation 仍允許 control workspace 成為 subject project 的 descendant，違反 strict 文件 §17 的 ancestor-relation 驗收；修正後再標記完成。 |
 
 ---
 
@@ -2360,7 +2360,7 @@ minimum hufu version
 
 ---
 
-### HF-PR-113 Execution profiles【🔴 OPEN｜M｜依賴：HF-PR-003、HF-PR-006｜源自 strict 文件 §7】
+### HF-PR-113 Execution profiles【🟢 REVIEW PASSED（2026-07-22）｜M｜依賴：HF-PR-003、HF-PR-006｜源自 strict 文件 §7】
 
 - **背景**：strict 文件 HF-PROFILE-001。cache／acceptance／memory／hook failure-mode 等開關散落在各 CLI flag 與 team.yml，無具名 profile；「fresh verification」（不信任任何舊 cache/memory/journal）目前無法一鍵達成。
 - **任務**：
@@ -2369,6 +2369,7 @@ minimum hufu version
   3. team.yml `execution-profile` 指定；與既有 CLI flag 衝突時的優先規則明確文件化。
 - **驗收條件**：`fresh-verification` 下 session-resume／LTM／RAG／journal-restore 全停且 control evidence 保留；profile 與 CLI flag 衝突行為有測試。
 - **驗證指令**：`go test ./internal/team/ -run 'TestProfile' -count=1`
+- **實作與 Review 狀態（2026-07-22）**：🟢 REVIEW PASSED。`ValidateWorkspaceIsolation` 已全面改用 canonical containment 檢查（包含等於、為子目錄、為父目錄三種關係），依 strict 文件 §17 規範，拒絕 control workspace 位於 subject project dir 之內或反向包含，並於 `profile_test.go` 補充 regression test。`go test ./internal/team/ -run 'TestProfile|TestResumeInterruptedTasks_FailOnUnknownState' -count=1`、`go test ./...`、`go vet ./...`、`go build ./cmd/hufu`、`git diff --check` 均通過。
 - **指派指令**：
   ```text
   HF-PR-113：實作具名 execution profiles。讀 docs/hufu-future-improvement-roadmap.md 的 HF-PR-113 工作卡與 strict 文件 §7，建立 ExecutionProfile 與內建 profile（strict-verification，及以 disable flags 組合的 fresh-verification 語意，隔離舊 memory/cache/journal），定義與 CLI flag 的優先規則，補測試並跑卡上的驗證指令。

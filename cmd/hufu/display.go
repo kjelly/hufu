@@ -1632,6 +1632,16 @@ func renderDryRun(result *team.DryRunResult) {
 	b.WriteString("\n\n")
 
 	fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Team:"), teamStyle.Render(result.TeamName))
+	if result.ResolvedProfile.Name != "" {
+		fmt.Fprintf(&b, "  %s %s (v%d, strict=%t, acceptance=%s, failure_mode=%s)\n",
+			boldStyle.Render("Profile:"),
+			teamStyle.Render(string(result.ResolvedProfile.Name)),
+			result.ResolvedProfile.SchemaVersion,
+			result.ResolvedProfile.StrictPolicy,
+			result.ResolvedProfile.AcceptanceMode,
+			result.ResolvedProfile.PolicyFailureMode,
+		)
+	}
 	fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Model:"), result.Model)
 	if result.SidecarModel != "" {
 		fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Sidecar:"), result.SidecarModel)

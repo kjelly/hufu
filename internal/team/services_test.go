@@ -22,11 +22,14 @@ func (m *mockPlanner) CheckDuplicate(ctx context.Context, tasks []TaskDef) ([]st
 }
 
 type mockPolicyEngine struct {
-	policy CachePolicy
+	policy  CachePolicy
+	profile ExecutionProfile
 }
 
-func (m *mockPolicyEngine) GetCachePolicy() CachePolicy  { return m.policy }
-func (m *mockPolicyEngine) SetCachePolicy(p CachePolicy) { m.policy = p }
+func (m *mockPolicyEngine) GetCachePolicy() CachePolicy        { return m.policy }
+func (m *mockPolicyEngine) SetCachePolicy(p CachePolicy)       { m.policy = p }
+func (m *mockPolicyEngine) GetExecutionProfile() ExecutionProfile  { return m.profile }
+func (m *mockPolicyEngine) SetExecutionProfile(p ExecutionProfile) { m.profile = p }
 func (m *mockPolicyEngine) IsCacheFresh(entry cachedTaskEntry, identity CacheIdentity) bool {
 	return true
 }

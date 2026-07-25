@@ -262,30 +262,33 @@ func (c *Coordinator) initTaskJournal() {
 	if err := compactTaskJournalIfNeeded(ws, taskJournalMaxBytes, now); err != nil {
 		log.Printf("warning: task journal compaction failed: %v", err)
 	}
-	loaded, err := loadTaskJournal(ws, now, taskJournalMaxAge, maxTaskCacheEntries)
-	if err != nil {
-		log.Printf("warning: task journal load failed: %v", err)
-	}
-	if len(loaded) > 0 {
-		gen := c.cacheGeneration.Load()
-		c.taskResultCacheMu.Lock()
-		for agentKey, recs := range loaded {
-			existing := make(map[string]bool, len(c.taskResultCache[agentKey]))
-			for _, e := range c.taskResultCache[agentKey] {
-				existing[taskCacheIdentity(e.taskDesc, e.verify, e.verifyMode)] = true
-			}
-			for _, r := range recs {
-				if existing[taskCacheIdentity(r.taskDesc, r.verify, r.verifyMode)] {
-					continue
-				}
-				r.generation = gen
-				c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], r)
-			}
-			if n := len(c.taskResultCache[agentKey]); n > maxTaskCacheEntries {
-				c.taskResultCache[agentKey] = c.taskResultCache[agentKey][n-maxTaskCacheEntries:]
-			}
+	prof := c.ExecutionProfile()
+	if !prof.DisableJournalRestore && !prof.DisableHistoricalTaskReuse {
+		loaded, err := loadTaskJournal(ws, now, taskJournalMaxAge, maxTaskCacheEntries)
+		if err != nil {
+			log.Printf("warning: task journal load failed: %v", err)
 		}
-		c.taskResultCacheMu.Unlock()
+		if len(loaded) > 0 {
+			gen := c.cacheGeneration.Load()
+			c.taskResultCacheMu.Lock()
+			for agentKey, recs := range loaded {
+				existing := make(map[string]bool, len(c.taskResultCache[agentKey]))
+				for _, e := range c.taskResultCache[agentKey] {
+					existing[taskCacheIdentity(e.taskDesc, e.verify, e.verifyMode)] = true
+				}
+				for _, r := range recs {
+					if existing[taskCacheIdentity(r.taskDesc, r.verify, r.verifyMode)] {
+						continue
+					}
+					r.generation = gen
+					c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], r)
+				}
+				if n := len(c.taskResultCache[agentKey]); n > maxTaskCacheEntries {
+					c.taskResultCache[agentKey] = c.taskResultCache[agentKey][n-maxTaskCacheEntries:]
+				}
+			}
+			c.taskResultCacheMu.Unlock()
+		}
 	}
 	j, err := openTaskJournal(ws)
 	if err != nil {
