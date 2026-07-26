@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/philippgille/chromem-go"
@@ -18,6 +19,7 @@ const contextVectorCollection = "context_items"
 // VectorStore is a rebuildable chromem index whose document IDs are canonical
 // ContextItem IDs. The SQLite repository remains the source of truth.
 type VectorStore struct {
+	mu         sync.RWMutex
 	db         *chromem.DB
 	collection *chromem.Collection
 	model      string
@@ -56,6 +58,8 @@ func OpenOllamaVectorStore(workspace, model, ollamaURL string) (*VectorStore, er
 }
 
 func (s *VectorStore) Rebuild(ctx context.Context, repo Repository, scope Scope) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	items, err := repo.Query(ctx, RepositoryQuery{Scope: scope, Limit: 100000})
 	if err != nil {
 		return err
@@ -91,6 +95,8 @@ func (s *VectorStore) Rebuild(ctx context.Context, repo Repository, scope Scope)
 }
 
 func (s *VectorStore) SearchVector(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.repo == nil {
 		return nil, errors.New("vector store has no canonical repository; rebuild before searching")
 	}

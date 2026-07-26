@@ -3,7 +3,10 @@ package context
 import (
 	"context"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func testEmbedding(_ context.Context, text string) ([]float32, error) {
@@ -11,6 +14,71 @@ func testEmbedding(_ context.Context, text string) ([]float32, error) {
 		return []float32{1, 0}, nil
 	}
 	return []float32{0, 1}, nil
+}
+
+func TestVectorStoreSupportsConcurrentRebuildAndSearch(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	scope := Scope{ProjectID: "project"}
+	if err := repo.Append(context.Background(), ContextItem{ID: "item", Kind: ContextPattern, Content: "schema migration", Scope: scope}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewVectorStore(filepath.Join(dir, "vectors"), "test-v1", testEmbedding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Rebuild(context.Background(), repo, scope); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	var rebuilds, searches atomic.Int64
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if err := store.Rebuild(context.Background(), repo, scope); err != nil {
+				errs <- err
+				return
+			}
+			rebuilds.Add(1)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := store.SearchVector(context.Background(), SearchRequest{Query: "database upgrade", Scope: scope, Limit: 1}); err != nil {
+				errs <- err
+				return
+			}
+			searches.Add(1)
+		}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent vector operation: %v", err)
+	}
+	if rebuilds.Load() == 0 || searches.Load() == 0 {
+		t.Fatalf("expected both operations to run, rebuilds=%d searches=%d", rebuilds.Load(), searches.Load())
+	}
 }
 
 func TestVectorStoreRebuildsCanonicalItemsAndFindsSemanticMatch(t *testing.T) {

@@ -187,7 +187,7 @@ func BudgetContextItems(items []ContextItem, budget ContextBudget) ([]ContextIte
 	usedTokens := 0
 	maxTokens := budget.Available
 	if maxTokens <= 0 {
-		maxTokens = 4096 // Fallback default
+		return nil, false, fmt.Errorf("available token budget must be positive, got %d", maxTokens)
 	}
 
 	overBudget := false

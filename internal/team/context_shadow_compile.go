@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,17 +17,20 @@ import (
 // ShadowContextTrace contains diagnostics only. It deliberately excludes
 // prompt content, which may contain credentials or other sensitive material.
 type ShadowContextTrace struct {
-	ID              string    `json:"id"`
-	Kind            string    `json:"kind"`
-	CreatedAt       time.Time `json:"created_at"`
-	Fingerprint     string    `json:"fingerprint,omitempty"`
-	LegacyTokens    int       `json:"legacy_tokens"`
-	CanonicalTokens int       `json:"canonical_tokens"`
-	BudgetTokens    int       `json:"budget_tokens"`
-	SelectedItems   int       `json:"selected_items"`
-	DuplicateRatio  float64   `json:"duplicate_ratio"`
-	MissingAnchors  []string  `json:"missing_anchors,omitempty"`
-	Error           string    `json:"error,omitempty"`
+	ID                string    `json:"id"`
+	Kind              string    `json:"kind"`
+	CreatedAt         time.Time `json:"created_at"`
+	Fingerprint       string    `json:"fingerprint,omitempty"`
+	LegacyTokens      int       `json:"legacy_tokens"`
+	CanonicalTokens   int       `json:"canonical_tokens"`
+	BudgetTokens      int       `json:"budget_tokens"`
+	SelectedItems     int       `json:"selected_items"`
+	DuplicateRatio    float64   `json:"duplicate_ratio"`
+	MissingAnchors    []string  `json:"missing_anchors,omitempty"`
+	LegacyOnlyData    []string  `json:"legacy_only_data,omitempty"`
+	CanonicalOnlyData []string  `json:"canonical_only_data,omitempty"`
+	CriticalCoverage  []string  `json:"critical_coverage,omitempty"`
+	Error             string    `json:"error,omitempty"`
 }
 
 var shadowTraceMu sync.Mutex
@@ -54,13 +59,28 @@ func (c *Coordinator) recordShadowTrace(ctx context.Context, kind, legacy string
 			trace.DuplicateRatio = float64(n-len(DeduplicateContextItems(append(append([]ContextItem(nil), compiled.IncludedItems...), compiled.OmittedItems...)))) / float64(n)
 		}
 		canonical := compiled.Prompt
+		trace.LegacyOnlyData = shadowOnlyLines(legacy, canonical)
+		trace.CanonicalOnlyData = shadowOnlyLines(canonical, legacy)
 		for _, anchor := range shadowAnchorRE.FindAllString(legacy, -1) {
 			if !containsAnchor(canonical, anchor) {
 				trace.MissingAnchors = append(trace.MissingAnchors, anchor)
+			} else {
+				trace.CriticalCoverage = append(trace.CriticalCoverage, anchor)
 			}
 		}
 	}
 	c.persistShadowTrace(trace)
+}
+
+func shadowOnlyLines(source, other string) []string {
+	var only []string
+	for _, line := range strings.Split(source, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.Contains(other, line) {
+			only = append(only, line)
+		}
+	}
+	return only
 }
 
 func containsAnchor(s, anchor string) bool {
@@ -73,6 +93,7 @@ func (c *Coordinator) persistShadowTrace(trace ShadowContextTrace) {
 	}
 	b, err := json.Marshal(trace)
 	if err != nil {
+		log.Printf("warning: marshal context shadow trace: %v", err)
 		return
 	}
 	shadowTraceMu.Lock()
@@ -80,10 +101,13 @@ func (c *Coordinator) persistShadowTrace(trace ShadowContextTrace) {
 	path := filepath.Join(c.session.Workspace, "context-shadow-traces.jsonl")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
+		log.Printf("warning: open context shadow trace log: %v", err)
 		return
 	}
 	defer func() { _ = f.Close() }()
-	_, _ = f.Write(append(b, '\n'))
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		log.Printf("warning: write context shadow trace: %v", err)
+	}
 }
 
 func newShadowTraceID() string {
