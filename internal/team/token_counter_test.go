@@ -167,6 +167,33 @@ func TestCapStepMessagesWithCounter(t *testing.T) {
 	})
 }
 
+func TestCapStepMessagesWithCounterDoesNotSqueezeVerifiedHistory(t *testing.T) {
+	ctx := context.Background()
+	counter := NewDefaultTokenCounter(globalRegistry)
+	verified := verifiedHistoryPrefix + strings.Repeat("verified evidence with E1234 and exit status 1\n", 800)
+	bulky := strings.Repeat("ordinary old message ", 2_000)
+	msgs := []fantasy.Message{
+		fantasy.NewSystemMessage("System prompt"),
+		fantasy.NewUserMessage("Original goal"),
+		fantasy.NewUserMessage(verified),
+		fantasy.NewUserMessage(bulky),
+	}
+	for range recentMessagesProtected {
+		msgs = append(msgs, fantasy.NewUserMessage("recent exchange"))
+	}
+	got := CapStepMessagesWithCounter(ctx, counter, "qwen3", msgs, 1_000)
+	if got == nil {
+		t.Fatal("expected budget shaper to process bulky history")
+	}
+	verifiedPart, ok := fantasy.AsMessagePart[fantasy.TextPart](got[2].Content[0])
+	if !ok || verifiedPart.Text != verified {
+		t.Fatalf("verified history was altered: %#v", got[2])
+	}
+	if messageTextSize(got[3]) >= messageTextSize(msgs[3]) {
+		t.Fatal("ordinary old message was not squeezed")
+	}
+}
+
 func TestIsContextOverflowError(t *testing.T) {
 	cases := []struct {
 		err  error

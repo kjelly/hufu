@@ -1099,3 +1099,51 @@ func TestCompactMessages_InvalidSummaryDoesNotReplaceHistoryOrPersist(t *testing
 		t.Fatalf("invalid compaction persisted records: %#v", history)
 	}
 }
+
+func TestCompactMessagesEmbedsVerifiedToolEvidence(t *testing.T) {
+	workspace := t.TempDir()
+	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test"}}, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := strings.Repeat("normal output\n", 4_000) + "COMPILER ERROR E1234: failure in internal/team/run.go\nexit status 1\n" + strings.Repeat("normal output\n", 4_000)
+	messages := []fantasy.Message{
+		fantasy.NewUserMessage("Fix the failing test"),
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "call-1", ToolName: "bash", Input: `{"command":"go test ./...","working_dir":"/repo"}`}}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "call-1", Output: fantasy.ToolResultOutputContentText{Text: output}}}},
+	}
+	got := c.compactMessages(context.Background(), messages, 0, []int{1, 1, 1})
+	if len(got) != 1 {
+		t.Fatalf("compacted messages = %d, want 1", len(got))
+	}
+	text, ok := fantasy.AsMessagePart[fantasy.TextPart](got[0].Content[0])
+	if !ok {
+		t.Fatalf("unexpected compacted part %#v", got[0].Content[0])
+	}
+	for _, want := range []string{"[Verified Compacted History]", "tool_call_id: call-1", "working_dir: /repo", "exit_code: 1", "COMPILER ERROR E1234"} {
+		if !strings.Contains(text.Text, want) {
+			t.Errorf("verified history missing %q", want)
+		}
+	}
+}
+
+func TestCompactMessagesRetainsOriginalWhenVerifiedBudgetCannotFit(t *testing.T) {
+	workspace := t.TempDir()
+	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test"}}, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The original user requirement is Tier 0/must-keep. It deliberately
+	// exceeds verifiedHistoryBudgetTokens, so compaction must return the input
+	// unchanged rather than create an unchecked summary.
+	original := strings.Repeat("non-negotiable requirement ", verifiedHistoryBudgetTokens)
+	messages := []fantasy.Message{fantasy.NewUserMessage(original)}
+	got := c.compactMessages(context.Background(), messages, 0, []int{1})
+	if len(got) != 1 || got[0].Role != messages[0].Role {
+		t.Fatalf("fallback did not retain original message: %#v", got)
+	}
+	text, ok := fantasy.AsMessagePart[fantasy.TextPart](got[0].Content[0])
+	if !ok || text.Text != original {
+		t.Fatal("fallback altered original must-preserve history")
+	}
+}

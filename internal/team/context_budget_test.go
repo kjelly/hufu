@@ -102,3 +102,11 @@ func TestSqueezeTextKeepsHeadAndTail(t *testing.T) {
 		t.Error("missing elision marker")
 	}
 }
+
+func TestCompactToolResultTextPreservesMiddleDiagnostic(t *testing.T) {
+	input := strings.Repeat("ordinary output\n", 4_000) + "COMPILER ERROR E1234: internal failure\n" + strings.Repeat("ordinary output\n", 4_000)
+	got := compactToolResultText(input, 1_000)
+	if !strings.Contains(got, "COMPILER ERROR E1234") {
+		t.Fatalf("middle diagnostic was lost: %q", got)
+	}
+}

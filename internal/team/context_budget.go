@@ -11,6 +11,7 @@ package team
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"charm.land/fantasy"
 )
@@ -24,7 +25,22 @@ const (
 	recentMessagesProtected = 10
 	// headMessagesProtected covers system and goal prompts (index 0 and 1).
 	headMessagesProtected = 2
+	// verifiedHistoryPrefix is a durable marker on a message produced only by
+	// compactMessages after ValidatedCompactor has accepted its evidence.
+	verifiedHistoryPrefix = "[Verified Compacted History]\n"
 )
+
+// isVerifiedHistoryMessage identifies evidence already checked for required
+// IDs, anchors and verification polarity. It must never pass through generic
+// head/tail squeezing, which would invalidate those checks.
+func isVerifiedHistoryMessage(msg fantasy.Message) bool {
+	for _, part := range msg.Content {
+		if text, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok && strings.HasPrefix(text.Text, verifiedHistoryPrefix) {
+			return true
+		}
+	}
+	return false
+}
 
 // messageTextSize measures every text-bearing part of a message in characters.
 func messageTextSize(msg fantasy.Message) int {
@@ -71,6 +87,40 @@ func squeezeText(s string, capChars int) string {
 	return string(runes[:head]) + marker + string(runes[len(runes)-tail:])
 }
 
+// compactToolResultText is intentionally different from generic text
+// squeezing: command output often has its only actionable error in the
+// middle. Preserve every diagnostic-looking line before adding a small head
+// and tail excerpt, so a budget boundary cannot turn a failed command into an
+// apparently clean one.
+func compactToolResultText(s string, capChars int) string {
+	if len([]rune(s)) <= capChars {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	critical := make([]string, 0)
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "error") || strings.Contains(lower, "fail") || strings.Contains(lower, "panic") || strings.Contains(lower, "exit status") || strings.Contains(lower, "exit code") || strings.Contains(lower, "warning") {
+			critical = append(critical, line)
+		}
+	}
+	// A pathological output can contain thousands of matching lines. Keep a
+	// deterministic subset while making the omitted count explicit.
+	criticalText := strings.Join(critical, "\n")
+	if len([]rune(criticalText)) >= capChars/2 {
+		criticalText = squeezeText(criticalText, capChars/2)
+	}
+	remaining := capChars - len([]rune(criticalText)) - 64
+	if remaining < 100 {
+		remaining = 100
+	}
+	excerpt := squeezeText(s, remaining)
+	if criticalText == "" {
+		return excerpt
+	}
+	return "[preserved diagnostics]\n" + criticalText + "\n[output excerpt]\n" + excerpt
+}
+
 // squeezeMessage returns a copy of msg with every text-bearing part reduced to at most capChars.
 func squeezeMessage(msg fantasy.Message, capChars int) (fantasy.Message, bool) {
 	changed := false
@@ -94,7 +144,7 @@ func squeezeMessage(msg fantasy.Message, capChars int) (fantasy.Message, bool) {
 			if p, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
 				txt, isErr := toolResultOutputText(p.Output)
 				if len([]rune(txt)) > capChars && !isErr {
-					p.Output = fantasy.ToolResultOutputContentText{Text: squeezeText(txt, capChars)}
+					p.Output = fantasy.ToolResultOutputContentText{Text: compactToolResultText(txt, capChars)}
 					parts[i] = p
 					changed = true
 				}
@@ -139,6 +189,9 @@ func CapStepMessagesWithCounter(ctx context.Context, counter TokenCounter, model
 		if i >= protectFrom {
 			break
 		}
+		if isVerifiedHistoryMessage(out[i]) {
+			continue
+		}
 		before, _ := counter.CountMessages(ctx, modelID, []fantasy.Message{out[i]})
 		if squeezed, changed := squeezeMessage(out[i], squeezedPartCapChars); changed {
 			out[i] = squeezed
@@ -152,6 +205,9 @@ func CapStepMessagesWithCounter(ctx context.Context, counter TokenCounter, model
 	for i := headMessagesProtected; i < len(out) && totalTokens > maxTokens && capChars >= 100; i++ {
 		if i >= protectFrom {
 			break
+		}
+		if isVerifiedHistoryMessage(out[i]) {
+			continue
 		}
 		before, _ := counter.CountMessages(ctx, modelID, []fantasy.Message{out[i]})
 		if squeezed, changed := squeezeMessage(out[i], capChars); changed {
@@ -171,6 +227,9 @@ func capStepMessages(msgs []fantasy.Message) []fantasy.Message {
 
 // truncateOversizedMessage shrinks a message exceeding maxSize.
 func truncateOversizedMessage(msg fantasy.Message, maxSize int) fantasy.Message {
+	if isVerifiedHistoryMessage(msg) {
+		return msg
+	}
 	size := messageTextSize(msg)
 	if size <= maxSize {
 		return msg

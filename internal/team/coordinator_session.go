@@ -18,6 +18,9 @@ import (
 
 const maxConversationHistory = 100
 const compactHistoryThreshold = 80
+
+// maxMessageSize remains the persistence guard for legacy history helpers.
+// appendHistory itself keeps messages intact until VerifiedCompactor runs.
 const maxMessageSize = 50000
 
 func (c *Coordinator) checkpointSTM() {
@@ -74,7 +77,9 @@ func (c *Coordinator) summarizeOutput(ctx context.Context, text string) string {
 func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepResult) {
 	for _, step := range steps {
 		for _, msg := range step.Messages {
-			c.conversationHistory = append(c.conversationHistory, truncateOversizedMessage(msg, maxMessageSize))
+			// Preserve the original event until verified compaction can extract
+			// its diagnostics and validate tool-call/result evidence.
+			c.conversationHistory = append(c.conversationHistory, msg)
 			c.conversationHistorySourceCounts = append(c.conversationHistorySourceCounts, 1)
 		}
 	}
@@ -250,6 +255,14 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 		originalGoal = extractFirstUserMessageText(messages)
 	}
 
+	verified, verifiedErr := c.compactVerifiedConversation(ctx, messages)
+	if verifiedErr != nil {
+		// Required evidence cannot safely fit the context budget. Do not replace
+		// history with an unchecked/truncated summary.
+		log.Printf("warning: verified history compaction failed: %v; retaining original messages", verifiedErr)
+		return messages
+	}
+
 	var sidecarAdapter SidecarCompacter
 	if s != nil {
 		sidecarAdapter = s
@@ -317,7 +330,7 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 	}
 
 	return []fantasy.Message{
-		fantasy.NewUserMessage("[Structured Compacted History]\n" + markdownSummary),
+		fantasy.NewUserMessage(verifiedHistoryPrefix + verified.Content + "\n\n[Structured Compaction Summary]\n" + markdownSummary),
 	}
 }
 
