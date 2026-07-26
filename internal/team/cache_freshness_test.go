@@ -240,3 +240,240 @@ func TestIsCacheForbiddenTasks(t *testing.T) {
 		t.Fatalf("normal task should be cacheable")
 	}
 }
+
+func TestComputeProjectFingerprint_GitDirtyTreeContentSensitivity(t *testing.T) {
+	ws := t.TempDir()
+
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = ws
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git %v failed: %v", args, err)
+		}
+	}
+
+	runGit("init")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "Test User")
+
+	mainFile := filepath.Join(ws, "main.go")
+	if err := os.WriteFile(mainFile, []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "main.go")
+	runGit("commit", "-m", "initial commit")
+
+	// Case 1: Tracked file content modification (porcelain status remains " M main.go")
+	if err := os.WriteFile(mainFile, []byte("package main\nfunc main() { // v1\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fpTrackedV1 := ComputeProjectFingerprint(ws)
+
+	if err := os.WriteFile(mainFile, []byte("package main\nfunc main() { // v2\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fpTrackedV2 := ComputeProjectFingerprint(ws)
+
+	if fpTrackedV1 == fpTrackedV2 {
+		t.Fatalf("fingerprint should change when tracked file content is modified again, got identical %q", fpTrackedV1)
+	}
+
+	// Case 2: Staged file content modification (porcelain status remains "M  main.go")
+	runGit("add", "main.go")
+	fpStagedV1 := ComputeProjectFingerprint(ws)
+
+	if err := os.WriteFile(mainFile, []byte("package main\nfunc main() { // v3 staged\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "main.go")
+	fpStagedV2 := ComputeProjectFingerprint(ws)
+
+	if fpStagedV1 == fpStagedV2 {
+		t.Fatalf("fingerprint should change when staged file content is modified again, got identical %q", fpStagedV1)
+	}
+
+	// Case 3: Untracked file content modification (porcelain status remains "?? untracked.txt")
+	untrackedFile := filepath.Join(ws, "untracked.txt")
+	if err := os.WriteFile(untrackedFile, []byte("content v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fpUntrackedV1 := ComputeProjectFingerprint(ws)
+
+	if err := os.WriteFile(untrackedFile, []byte("content v2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fpUntrackedV2 := ComputeProjectFingerprint(ws)
+
+	if fpUntrackedV1 == fpUntrackedV2 {
+		t.Fatalf("fingerprint should change when untracked file content is modified, got identical %q", fpUntrackedV1)
+	}
+}
+
+func TestCacheLookup_GitDirtyTreeInvalidation(t *testing.T) {
+	ws := t.TempDir()
+
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = ws
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git %v failed: %v", args, err)
+		}
+	}
+
+	runGit("init")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "Test User")
+
+	mainFile := filepath.Join(ws, "main.go")
+	if err := os.WriteFile(mainFile, []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "main.go")
+	runGit("commit", "-m", "init")
+
+	// Modify main.go to dirty v1
+	if err := os.WriteFile(mainFile, []byte("package main\n// dirty v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Coordinator{
+		projectDir:      ws,
+		taskResultCache: make(map[string][]cachedTaskEntry),
+	}
+
+	// Store task cache result under dirty v1
+	c.storeTaskCache("builder", "build app", "build-v1-success")
+
+	// Lookup immediately under dirty v1 -> HIT
+	out, ok := c.lookupTaskCache(context.Background(), "builder", "build app")
+	if !ok || out != "build-v1-success" {
+		t.Fatalf("expected cache hit under dirty v1, got out=%q, ok=%v", out, ok)
+	}
+
+	// Modify main.go to dirty v2 (porcelain status remains " M main.go")
+	if err := os.WriteFile(mainFile, []byte("package main\n// dirty v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Lookup under dirty v2 -> MUST MISS due to fingerprint mismatch
+	out, ok = c.lookupTaskCache(context.Background(), "builder", "build app")
+	if ok {
+		t.Fatalf("expected cache MISS after second tracked file modification, but got hit with %q", out)
+	}
+}
+
+func TestComputeProjectFingerprint_SpecialCharacterPaths(t *testing.T) {
+	testCases := []struct {
+		name     string
+		filename string
+	}{
+		{"SpaceInFilename", "file with space.txt"},
+		{"QuotedFilename", "file \"quoted\".txt"},
+		{"NewlineInFilename", "file\nwith\nnewline.txt"},
+		{"UnicodeFilename", "檔名_測試_unicode.txt"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := t.TempDir()
+
+			runGit := func(args ...string) {
+				cmd := exec.Command("git", args...)
+				cmd.Dir = ws
+				if err := cmd.Run(); err != nil {
+					t.Fatalf("git %v failed: %v", args, err)
+				}
+			}
+
+			runGit("init")
+			runGit("config", "user.email", "test@example.com")
+			runGit("config", "user.name", "Test User")
+
+			targetFile := filepath.Join(ws, tc.filename)
+			if err := os.WriteFile(targetFile, []byte("content v1"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			fp1 := ComputeProjectFingerprint(ws)
+
+			if err := os.WriteFile(targetFile, []byte("content v2"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			fp2 := ComputeProjectFingerprint(ws)
+
+			if fp1 == fp2 {
+				t.Fatalf("fingerprint should change when %s (%q) content is modified, got identical %q", tc.name, tc.filename, fp1)
+			}
+		})
+	}
+}
+
+func TestCacheLookup_GitCommandFailureIneligible(t *testing.T) {
+	ws := t.TempDir()
+
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = ws
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git %v failed: %v", args, err)
+		}
+	}
+
+	// 1. Normal git repo with commit -> Store & Lookup succeed (HIT)
+	runGit("init")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "Test User")
+
+	mainFile := filepath.Join(ws, "main.go")
+	if err := os.WriteFile(mainFile, []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "main.go")
+	runGit("commit", "-m", "init")
+
+	c := &Coordinator{
+		projectDir:      ws,
+		taskResultCache: make(map[string][]cachedTaskEntry),
+	}
+	ctx := context.Background()
+
+	normId := c.ComputeCacheIdentity("builder", "compile project", "", "")
+	if normId.HasError {
+		t.Fatalf("expected HasError=false on normal git repo, got true")
+	}
+
+	c.storeTaskCache("builder", "compile project", "binary-v1")
+	out, ok := c.lookupTaskCache(ctx, "builder", "compile project")
+	if !ok || out != "binary-v1" {
+		t.Fatalf("expected cache HIT under normal git repo, got out=%q, ok=%v", out, ok)
+	}
+
+	// 2. Real Git command failure via no-commit Git repository (isGitRepo=true, rev-parse HEAD fails)
+	wsNoCommit := t.TempDir()
+	cmdInit := exec.Command("git", "init")
+	cmdInit.Dir = wsNoCommit
+	if err := cmdInit.Run(); err != nil {
+		t.Fatalf("git init failed: %v", err)
+	}
+
+	cNoCommit := &Coordinator{
+		projectDir:      wsNoCommit,
+		taskResultCache: make(map[string][]cachedTaskEntry),
+	}
+
+	// Verify production ComputeCacheIdentity sets HasError=true via real git rev-parse HEAD failure
+	errId := cNoCommit.ComputeCacheIdentity("builder", "compile project", "", "")
+	if !errId.HasError {
+		t.Fatalf("expected HasError=true when git rev-parse HEAD fails on empty repo, got false")
+	}
+
+	// Store task cache result through production method
+	cNoCommit.storeTaskCache("builder", "compile project", "binary-err")
+
+	// Production lookupTaskCache under real git failure identity MUST MISS (ok == false)
+	outErr, okErr := cNoCommit.lookupTaskCache(ctx, "builder", "compile project")
+	if okErr {
+		t.Fatalf("expected lookupTaskCache MISS under real git command failure identity, but got HIT with %q", outErr)
+	}
+}

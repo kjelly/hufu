@@ -886,11 +886,22 @@ func (c *Coordinator) storeSubmittedTaskResult(todoID string, res *TaskResult) {
 
 func (c *Coordinator) GetTaskResult(todoID string) *TaskResult {
 	c.taskResultsMu.RLock()
-	defer c.taskResultsMu.RUnlock()
-	if c.taskResults == nil {
-		return nil
+	var res *TaskResult
+	if c.taskResults != nil {
+		res = c.taskResults[todoID]
 	}
-	return c.taskResults[todoID]
+	c.taskResultsMu.RUnlock()
+	if res != nil {
+		return res
+	}
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		for _, item := range c.taskTracker.TodoList().Items() {
+			if item.ID == todoID && item.TypedResult != nil {
+				return item.TypedResult
+			}
+		}
+	}
+	return nil
 }
 
 // SetExecutionProfile sets the active execution profile for the coordinator.

@@ -11,6 +11,10 @@ import (
 )
 
 func (c *Coordinator) buildMemorySuffix(agentRole string) string {
+	return c.ContextCompiler().BuildMemorySuffix(agentRole)
+}
+
+func (c *Coordinator) buildMemorySuffixImpl(agentRole string) string {
 	if c.ExecutionProfile().DisableHistoricalMemory {
 		return ""
 	}
@@ -37,11 +41,6 @@ func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 		if len(sections) > 0 {
 			for i, s := range sections {
 				if len(s.Entries) > 3 {
-					// Entries are newest-first (appendSTMEntry prepends), so
-					// the 3 most recent are the head of the slice, not the
-					// tail — a tail slice here silently hid the freshest
-					// lessons from every agent until they aged toward the
-					// 10-entry cap in PruneLTM.
 					sections[i].Entries = s.Entries[:3]
 				}
 			}
@@ -72,12 +71,11 @@ func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 	return b.String()
 }
 
-// buildTaskSTMContext returns the knowledge-transfer sections from STM
-// (# 發現, # 決策, # 錯誤與修復, # 待解決) to append after the goal in task prompts.
-// # 進度 is excluded — it is status tracking, not actionable knowledge.
-// All agents receive these sections regardless of role so findings from one
-// agent are always visible to the next.
 func (c *Coordinator) buildTaskSTMContext() string {
+	return c.ContextCompiler().BuildTaskSTMContext()
+}
+
+func (c *Coordinator) buildTaskSTMContextImpl() string {
 	if c.ExecutionProfile().DisableHistoricalMemory {
 		return ""
 	}
@@ -109,10 +107,11 @@ func (c *Coordinator) buildTaskSTMContext() string {
 	return "## Context from Previous Agents\n\n" + truncated
 }
 
-// buildLTMContext returns LTM formatted as a background-reference suffix.
-// Used by executeTask in place of buildMemorySuffix (which includes STM)
-// so that STM is not duplicated when buildTaskSTMContext is already prepended.
 func (c *Coordinator) buildLTMContext() string {
+	return c.ContextCompiler().BuildLTMContext()
+}
+
+func (c *Coordinator) buildLTMContextImpl() string {
 	if c.ExecutionProfile().DisableHistoricalMemory {
 		return ""
 	}

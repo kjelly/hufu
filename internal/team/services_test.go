@@ -4,7 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"charm.land/fantasy"
 	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/anomalyco/hufu/internal/memory"
 	"github.com/anomalyco/hufu/internal/sidecar"
 )
 
@@ -26,8 +28,8 @@ type mockPolicyEngine struct {
 	profile ExecutionProfile
 }
 
-func (m *mockPolicyEngine) GetCachePolicy() CachePolicy        { return m.policy }
-func (m *mockPolicyEngine) SetCachePolicy(p CachePolicy)       { m.policy = p }
+func (m *mockPolicyEngine) GetCachePolicy() CachePolicy            { return m.policy }
+func (m *mockPolicyEngine) SetCachePolicy(p CachePolicy)           { m.policy = p }
 func (m *mockPolicyEngine) GetExecutionProfile() ExecutionProfile  { return m.profile }
 func (m *mockPolicyEngine) SetExecutionProfile(p ExecutionProfile) { m.profile = p }
 func (m *mockPolicyEngine) IsCacheFresh(entry cachedTaskEntry, identity CacheIdentity) bool {
@@ -142,6 +144,30 @@ func (m *mockContextCompiler) CalculateBudget(spec ModelContextSpec, systemToken
 }
 func (m *mockContextCompiler) ContextUsageReport() (ContextBudget, ContextUsageBreakdown, string, bool) {
 	return m.budget, m.usage, m.modelID, m.ready
+}
+func (m *mockContextCompiler) BuildMemorySuffix(agentRole string) string { return "" }
+func (m *mockContextCompiler) BuildTaskSTMContext() string               { return "" }
+func (m *mockContextCompiler) BuildLTMContext() string                   { return "" }
+func (m *mockContextCompiler) AutoQueryMemory(ctx context.Context, store *memory.MemoryStore, prompt string, compact memory.CompactFunc) (string, error) {
+	return "", nil
+}
+func (m *mockContextCompiler) AssembleContextWithinBudget(parts []string, budget int) string {
+	return assembleContextWithinBudget(parts, budget)
+}
+func (m *mockContextCompiler) AssembleContextItems(ctx context.Context, items []ContextItem, budget ContextBudget) (string, bool, error) {
+	return AssembleContextItemsPipeline(ctx, items, budget)
+}
+func (m *mockContextCompiler) CompactProjectContext(ctx context.Context, sidecarCompacter SidecarCompacter, messages []fantasy.Message, prevSummary *StructuredSummary, originalGoal string) (*StructuredSummary, error) {
+	return PerformStructuredCompaction(ctx, sidecarCompacter, messages, prevSummary, originalGoal)
+}
+func (m *mockContextCompiler) FormatDependencyResults(dependencies []TaskResult) string {
+	return FormatDependencyResults(dependencies)
+}
+func (m *mockContextCompiler) CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInput) (CompiledContext, error) {
+	return CompileCoordinatorContext(ctx, input)
+}
+func (m *mockContextCompiler) CompileWorkerContext(ctx context.Context, input WorkerContextInput) (CompiledContext, error) {
+	return CompileWorkerContext(ctx, input)
 }
 
 type mockAgentPool struct {

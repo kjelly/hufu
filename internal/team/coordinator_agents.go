@@ -396,11 +396,6 @@ func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentD
 	fmt.Fprintf(&b, "- Use %s to share files between agents. NEVER write outside workspace.\n\n", sharedPath)
 	b.WriteString("---\n\n")
 
-	if memSuffix := c.buildMemorySuffix(def.Role); memSuffix != "" {
-		b.WriteString(memSuffix)
-		b.WriteString("\n")
-	}
-
 	injectedDef := *def
 	injectedDef.System = injectedDef.System + "\n\n---\n\n" + b.String()
 

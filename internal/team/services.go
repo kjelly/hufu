@@ -3,7 +3,9 @@ package team
 import (
 	"context"
 
+	"charm.land/fantasy"
 	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/anomalyco/hufu/internal/memory"
 	"github.com/anomalyco/hufu/internal/sidecar"
 )
 
@@ -32,10 +34,22 @@ type PolicyEngine interface {
 	ResolveRecoveryPolicy(def *agent.AgentDef, t TaskDef) (SideEffectClass, RecoveryPolicy, string)
 }
 
-// ContextCompiler defines the interface for token context budget, system prompt assembly, and context breakdown.
+// ContextCompiler defines the interface for token context budget, system prompt assembly, context breakdown, and context pipeline management.
 type ContextCompiler interface {
 	CalculateBudget(spec ModelContextSpec, systemTokens, toolsTokens int) ContextBudget
 	ContextUsageReport() (ContextBudget, ContextUsageBreakdown, string, bool)
+
+	// Context Pipeline Methods (HF-PR-102 / spec.md)
+	BuildMemorySuffix(agentRole string) string
+	BuildTaskSTMContext() string
+	BuildLTMContext() string
+	AutoQueryMemory(ctx context.Context, store *memory.MemoryStore, prompt string, compact memory.CompactFunc) (string, error)
+	AssembleContextWithinBudget(parts []string, budget int) string
+	AssembleContextItems(ctx context.Context, items []ContextItem, budget ContextBudget) (string, bool, error)
+	CompactProjectContext(ctx context.Context, sidecarCompacter SidecarCompacter, messages []fantasy.Message, prevSummary *StructuredSummary, originalGoal string) (*StructuredSummary, error)
+	FormatDependencyResults(dependencies []TaskResult) string
+	CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInput) (CompiledContext, error)
+	CompileWorkerContext(ctx context.Context, input WorkerContextInput) (CompiledContext, error)
 }
 
 // AgentPool defines the interface for resolving agents and managing sidecar instances.
@@ -128,6 +142,58 @@ func (cc *defaultContextCompiler) CalculateBudget(spec ModelContextSpec, systemT
 
 func (cc *defaultContextCompiler) ContextUsageReport() (ContextBudget, ContextUsageBreakdown, string, bool) {
 	return cc.c.ContextUsageReport()
+}
+
+func (cc *defaultContextCompiler) BuildMemorySuffix(agentRole string) string {
+	if cc.c == nil {
+		return ""
+	}
+	return cc.c.buildMemorySuffixImpl(agentRole)
+}
+
+func (cc *defaultContextCompiler) BuildTaskSTMContext() string {
+	if cc.c == nil {
+		return ""
+	}
+	return cc.c.buildTaskSTMContextImpl()
+}
+
+func (cc *defaultContextCompiler) BuildLTMContext() string {
+	if cc.c == nil {
+		return ""
+	}
+	return cc.c.buildLTMContextImpl()
+}
+
+func (cc *defaultContextCompiler) AutoQueryMemory(ctx context.Context, store *memory.MemoryStore, prompt string, compact memory.CompactFunc) (string, error) {
+	if store == nil {
+		return "", nil
+	}
+	return memory.AutoQuery(ctx, store, prompt, compact)
+}
+
+func (cc *defaultContextCompiler) AssembleContextWithinBudget(parts []string, budget int) string {
+	return assembleContextWithinBudget(parts, budget)
+}
+
+func (cc *defaultContextCompiler) AssembleContextItems(ctx context.Context, items []ContextItem, budget ContextBudget) (string, bool, error) {
+	return AssembleContextItemsPipeline(ctx, items, budget)
+}
+
+func (cc *defaultContextCompiler) CompactProjectContext(ctx context.Context, sidecarCompacter SidecarCompacter, messages []fantasy.Message, prevSummary *StructuredSummary, originalGoal string) (*StructuredSummary, error) {
+	return PerformStructuredCompaction(ctx, sidecarCompacter, messages, prevSummary, originalGoal)
+}
+
+func (cc *defaultContextCompiler) FormatDependencyResults(dependencies []TaskResult) string {
+	return FormatDependencyResults(dependencies)
+}
+
+func (cc *defaultContextCompiler) CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInput) (CompiledContext, error) {
+	return CompileCoordinatorContext(ctx, input)
+}
+
+func (cc *defaultContextCompiler) CompileWorkerContext(ctx context.Context, input WorkerContextInput) (CompiledContext, error) {
+	return CompileWorkerContext(ctx, input)
 }
 
 type defaultAgentPool struct {

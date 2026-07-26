@@ -68,11 +68,11 @@ func TestProfile_BuiltinProfiles(t *testing.T) {
 
 func TestProfile_ResolutionPrecedence(t *testing.T) {
 	tests := []struct {
-		name        string
-		cli         string
-		team        string
-		wantName    ExecutionProfileName
-		wantErr     bool
+		name     string
+		cli      string
+		team     string
+		wantName ExecutionProfileName
+		wantErr  bool
 	}{
 		{
 			name:     "CLI flag overrides team.yml",

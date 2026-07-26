@@ -161,6 +161,7 @@ formatters:
       - _test\.go
       - internal/sidecar/sidecar_fallback_test\.go
       - internal/team/coordinator\.go
+      - internal/team/services\.go
       - internal/team/parse\.go
       - internal/team/status\.go
       - internal/team/check_duplicate_test\.go

@@ -19,7 +19,6 @@ import (
 
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/hooks"
-	"github.com/anomalyco/hufu/internal/memory"
 	"github.com/anomalyco/hufu/internal/skill"
 	"github.com/anomalyco/hufu/internal/tools"
 	"github.com/anomalyco/hufu/internal/utils"
@@ -131,8 +130,20 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 
 	prompt := c.appendSkillContext(task, agentDef, resolvedName, task, todoID)
 
-	if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
-		prompt = prompt + "\n\n" + suffix
+	workerInput := WorkerContextInput{
+		TaskGoal:      prompt,
+		TaskDef:       TaskDef{Agent: resolvedName, Goal: task},
+		AgentDef:      agentDef,
+		RawSTM:        LoadSTM(c.session.Workspace),
+		RawLTM:        LoadLTM(c.session.Workspace, c.session.Config.Name),
+		MemoryStore:   c.memoryStore,
+		ModelContext:  globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")),
+		MaxAuxChars:   maxWorkerAuxContextChars,
+		DisableMemory: c.ExecutionProfile().DisableHistoricalMemory,
+	}
+	compiled, err := c.ContextCompiler().CompileWorkerContext(taskCtx, workerInput)
+	if err == nil && compiled.Prompt != "" {
+		prompt = compiled.Prompt
 	}
 
 	output, steps, err := c.runAgentWithStatusAndHistory(taskCtx, ag, resolvedName, prompt, nil, timing)
@@ -463,7 +474,10 @@ func (c *Coordinator) emitThinkSidecar(action, detail string) {
 }
 
 func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.AgentDef, prompt string, isContinuation bool) string {
-	systemPrompt := c.expandOrchestratorTemplate(orchDef.System)
+	var systemPrompt string
+	if orchDef != nil {
+		systemPrompt = c.expandOrchestratorTemplate(orchDef.System)
+	}
 	if systemPrompt == "" {
 		systemPrompt = c.expandOrchestratorTemplate(defaultOrchestratorSystem)
 	}
@@ -501,45 +515,33 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		c.emitThinkAgents()
 	}
 
-	if agentsMD := c.loadProjectContext(); agentsMD != "" {
-		if s := c.AgentPool().Sidecar(); s != nil && len(agentsMD) > 4000 {
-			if c.think && !isContinuation {
-				c.emitThinkSidecar("Compact", "compacting AGENTS.md for coordinator prompt")
-			}
-			compacted, err := s.Compact(ctx, agentsMD, "Compress this project context while preserving all key facts, patterns, conventions, and instructions.")
-			if err == nil && compacted != "" {
-				agentsMD = compacted
-			}
-		}
-		systemPrompt += "\n\n---\n## Project Context (AGENTS.md)\n\n" + agentsMD
-		projectText.WriteString(agentsMD)
+	var contextSummary string
+	if !isContinuation && !c.ExecutionProfile().DisableHistoricalMemory && c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
+		contextSummary = c.sessionData.ContextSummary()
 	}
 
-	if c.memoryStore != nil && prompt != "" && !c.ExecutionProfile().DisableHistoricalMemory {
-		var compactFn memory.CompactFunc
-		if s := c.AgentPool().Sidecar(); s != nil {
-			compactFn = s.Compact
-		}
-		memCtx, err := memory.AutoQuery(ctx, c.memoryStore, prompt, compactFn)
-		if err == nil && memCtx != "" {
-			systemPrompt += "\n\n---\n" + memCtx
-			memoryText.WriteString(memCtx + "\n")
-		}
+	var modelSpec ModelContextSpec
+	if orchDef != nil {
+		modelSpec = globalRegistry.GetSpec(c.resolveAgentModel(orchDef, ""))
 	}
 
-	if !isContinuation && !c.ExecutionProfile().DisableHistoricalMemory {
-		if c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
-			contextSummary := c.sessionData.ContextSummary()
-			if contextSummary != "" {
-				systemPrompt += "\n\n---\n## Session Context\n\n" + contextSummary
-				memoryText.WriteString(contextSummary + "\n")
-			}
-		}
+	coordInput := CoordinatorContextInput{
+		Goal:             prompt,
+		SessionContext:   contextSummary,
+		RawSTM:           LoadSTM(c.session.Workspace),
+		RawLTM:           LoadLTM(c.session.Workspace, c.session.Config.Name),
+		MemoryStore:      c.memoryStore,
+		SidecarCompacter: c.AgentPool().Sidecar(),
+		ModelContext:     modelSpec,
+		Role:             "coordinator",
+		IsContinuation:   isContinuation,
+		DisableMemory:    c.ExecutionProfile().DisableHistoricalMemory,
+		ProjectContext:   c.loadProjectContext(),
 	}
 
-	if suffix := c.buildMemorySuffix("coordinator"); suffix != "" {
-		systemPrompt += "\n\n" + suffix
-		memoryText.WriteString(suffix + "\n")
+	compiled, err := c.ContextCompiler().CompileCoordinatorContext(ctx, coordInput)
+	if err == nil && compiled.Prompt != "" {
+		systemPrompt += "\n\n---\n" + compiled.Prompt
 	}
 
 	if reminder := c.buildCoreReminder(orchDef); reminder != "" {
@@ -667,15 +669,13 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		return "", fmt.Errorf("no coordinator agent found in team")
 	}
 
-	memorySuffix := c.buildMemorySuffix("coordinator")
-
 	var continuationPrompt string
 	if wasWrapUp {
-		continuationPrompt = wrapUpPromptTemplate + "\n\n" + memorySuffix
+		continuationPrompt = wrapUpPromptTemplate
 		additionalPrompt = "wrap up now"
 		c.report(c.newEvent("wrap_up_phase").withMessage("coordinator summarizing").withTodoID(CoordTodoID))
 	} else {
-		continuationPrompt = fmt.Sprintf(continuationPromptTemplate, additionalPrompt) + "\n\n" + memorySuffix
+		continuationPrompt = fmt.Sprintf(continuationPromptTemplate, additionalPrompt)
 		c.report(c.newEvent("step").withMessage("coordinator preparing").withTodoID(CoordTodoID))
 	}
 

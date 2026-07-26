@@ -397,11 +397,13 @@ func (m *TerminalSessionManager) Close(ctx context.Context, id string) error {
 		return err
 	}
 
-	if managed.cmd != nil && managed.cmd.Process != nil && managed.session.Running {
-		if managed.stdin != nil {
-			_ = managed.stdin.Close()
+	if managed.cmd != nil && managed.cmd.Process != nil {
+		if managed.session.Running {
+			if managed.stdin != nil {
+				_ = managed.stdin.Close()
+			}
+			killProcessGroup(managed.cmd)
 		}
-		killProcessGroup(managed.cmd)
 		managed.session.Running = false
 		managed.session.State = TerminalSessionClosed
 		err = m.persistLocked()

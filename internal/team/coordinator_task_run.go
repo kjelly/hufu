@@ -165,8 +165,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if task.Verify != "" {
 		prompt += completionVerificationInstructions(task.Verify, c.projectDir)
 	}
-	if note := toolUsageNotes(agentDef.Tools); note != "" {
-		prompt += note
+	if agentDef != nil {
+		if note := toolUsageNotes(agentDef.Tools); note != "" {
+			prompt += note
+		}
 	}
 
 	// SSH session tracking is handled by the ssh tool's response hint.
@@ -174,37 +176,63 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	prompt = c.appendSkillContext(prompt, agentDef, agentName, task.Goal, todoID)
 
+	contextFiles := make(map[string]string)
 	if len(task.ContextFiles) > 0 {
-		var contextBuilder strings.Builder
-		contextBuilder.WriteString("Context files:\n\n")
 		for _, f := range task.ContextFiles {
 			content, err := readShared(c.session.Workspace, f)
-			if err != nil {
-				fmt.Fprintf(&contextBuilder, "(could not read %s: %v)\n", f, err)
-			} else {
-				fmt.Fprintf(&contextBuilder, "### %s\n```\n%s\n```\n\n", f, content)
+			if err == nil && content != "" {
+				contextFiles[f] = content
 			}
 		}
-		prompt = contextBuilder.String() + "\n---\n\n" + prompt
 	}
 
-	// Inject STM knowledge-transfer sections after the goal so the agent knows
-	// what to do before reading prior context, then concurrent tasks, then LTM
-	// as background. These are assembled under a combined character budget, in
-	// priority order, so a small model's context window is not overwhelmed —
-	// lower-priority blocks (LTM) are dropped first when over budget.
-	var auxParts []string
-	if stmCtx := c.buildTaskSTMContext(); stmCtx != "" {
-		auxParts = append(auxParts, stmCtx)
+	var depResults []TaskResult
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		var currentTodo *TodoItem
+		for _, item := range c.taskTracker.TodoList().Items() {
+			if item.ID == todoID {
+				currentTodo = item
+				break
+			}
+		}
+		if currentTodo != nil && len(currentTodo.DependsOn) > 0 {
+			depSet := make(map[string]bool, len(currentTodo.DependsOn))
+			for _, depID := range currentTodo.DependsOn {
+				depSet[depID] = true
+			}
+			for _, item := range c.taskTracker.TodoList().Items() {
+				if depSet[item.ID] && item.Status == TaskDone {
+					if res := c.GetTaskResult(item.ID); res != nil {
+						depResults = append(depResults, *res)
+					}
+				}
+			}
+		}
 	}
-	if concurrentCtx := c.buildConcurrentTasksContext(todoID); concurrentCtx != "" {
-		auxParts = append(auxParts, concurrentCtx)
+
+	var modelSpec ModelContextSpec
+	if agentDef != nil {
+		modelSpec = globalRegistry.GetSpec(c.resolveAgentModel(agentDef, task.Model))
 	}
-	if ltmCtx := c.buildLTMContext(); ltmCtx != "" {
-		auxParts = append(auxParts, ltmCtx)
+
+	workerInput := WorkerContextInput{
+		TaskGoal:          prompt,
+		TaskDef:           task,
+		AgentDef:          agentDef,
+		RawSTM:            LoadSTM(c.session.Workspace),
+		RawLTM:            LoadLTM(c.session.Workspace, c.session.Config.Name),
+		ContextFiles:      contextFiles,
+		ConcurrentTasks:   c.buildConcurrentTasksContext(todoID),
+		DependencyResults: depResults,
+		MemoryStore:       c.memoryStore,
+		ModelContext:      modelSpec,
+		MaxAuxChars:       maxWorkerAuxContextChars,
+		DisableMemory:     c.ExecutionProfile().DisableHistoricalMemory,
 	}
-	if aux := assembleContextWithinBudget(auxParts, maxWorkerAuxContextChars); aux != "" {
-		prompt = prompt + aux
+
+	compiled, err := c.ContextCompiler().CompileWorkerContext(parentCtx, workerInput)
+	if err == nil && compiled.Prompt != "" {
+		prompt = compiled.Prompt
 	}
 
 	var conversationHistory []fantasy.Message

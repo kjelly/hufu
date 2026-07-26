@@ -364,7 +364,6 @@ func TestTerminalSession_ChildTimeout_ProcessGroupKillDescendants_NetworkBlock(t
 	}
 }
 
-
 func TestTerminalSession_RestoredUnknownCloseGate(t *testing.T) {
 	workspace := t.TempDir()
 	manager, err := NewTerminalSessionManager(workspace, nil)
