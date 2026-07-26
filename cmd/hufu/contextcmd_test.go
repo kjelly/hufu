@@ -86,3 +86,25 @@ func TestContextInspectShowsTraceMetadataWithoutPromptContent(t *testing.T) {
 		t.Fatalf("inspect must not render prompt content: %q", got)
 	}
 }
+
+func TestContextQueryUsesHybridRetrieval(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = repo.Append(t.Context(), contextstore.ContextItem{ID: "path", Kind: contextstore.ContextPattern, Content: "edit internal/context/retrieval.go", Scope: contextstore.Scope{ProjectID: "p"}}); err != nil {
+		t.Fatal(err)
+	}
+	repo.Close()
+	root := newRootCommand()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"context", "query", "--workspace", workspace, "--project", "p", "internal/context/retrieval.go"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "path") {
+		t.Fatalf("query output=%q", out.String())
+	}
+}

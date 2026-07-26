@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"path/filepath"
 
@@ -37,7 +38,54 @@ func (c *Coordinator) shadowContextAppend(kind contextstore.ContextKind, content
 		if perr := contextstore.AppendPendingWrite(c.contextPendingPath(), item, err); perr != nil {
 			log.Printf("warning: could not persist pending context write for repair (%s): %s", source, contextstore.RedactSecrets(perr.Error()))
 		}
+		return
 	}
+	// Keep the human-readable projections derived from the canonical store.
+	// This is best-effort so a projection filesystem failure never loses the
+	// already-committed canonical item.
+	if err := c.contextRepo.RebuildProjection(context.Background(), item.Scope); err != nil {
+		log.Printf("warning: context projection rebuild failed (%s): %s", source, contextstore.RedactSecrets(err.Error()))
+	}
+}
+
+// appendCanonicalContext is the unified memory ingestion path. It appends the
+// canonical record first, then regenerates the legacy prompt files solely as
+// projections. Callers must not write STM/LTM directly after this returns.
+func (c *Coordinator) appendCanonicalContext(ctx context.Context, kind contextstore.ContextKind, content, source string, metadata map[string]string) error {
+	if c == nil || c.contextRepo == nil || c.session == nil {
+		return fmt.Errorf("canonical context repository is unavailable")
+	}
+	sessionID := filepath.Base(c.session.Workspace)
+	if c.sessionData != nil && c.sessionData.CreatedAt != "" {
+		sessionID = c.sessionData.CreatedAt
+	}
+	item := contextstore.ContextItem{
+		Kind: kind, Content: content,
+		Scope:     contextstore.Scope{ProjectID: c.projectDir, TeamID: c.session.Config.Name, SessionID: sessionID},
+		Authority: contextstore.AuthorityAgent, TrustLevel: contextstore.TrustInternal,
+		Priority: contextstore.PriorityNormal,
+		Source:   contextstore.SourceRef{Type: "memory", Ref: source},
+		Metadata: metadata,
+	}
+	if err := c.contextRepo.Append(ctx, item); err != nil {
+		return err
+	}
+	if err := c.contextRepo.RebuildProjection(ctx, item.Scope); err != nil {
+		return err
+	}
+	items, err := c.contextRepo.Query(ctx, contextstore.RepositoryQuery{Scope: item.Scope, Limit: 100000})
+	if err != nil {
+		return err
+	}
+	if err := NewSTMWriter(c.session.Workspace).Update(func(string) string {
+		return contextstore.RenderLegacySTMMarkdown(items)
+	}); err != nil {
+		return err
+	}
+	c.ltmWriteMu.Lock()
+	err = SaveLTM(c.session.Workspace, c.session.Config.Name, contextstore.RenderLegacyLTMMarkdown(items))
+	c.ltmWriteMu.Unlock()
+	return err
 }
 
 // contextPendingPath is where failed shadow writes are durably queued so

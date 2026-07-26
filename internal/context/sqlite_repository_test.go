@@ -52,7 +52,7 @@ func TestSQLiteRepositoryPersistsScopeSearchAndProjection(t *testing.T) {
 	if strings.Contains(all.Content, "super-secret-token") {
 		t.Fatalf("secret stored: %q", all.Content)
 	}
-	if err := r.RebuildProjection(ctx, Scope{ProjectID: "project"}); err != nil {
+	if err := r.RebuildProjection(ctx, scope); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "context-stm.md"))
@@ -61,6 +61,68 @@ func TestSQLiteRepositoryPersistsScopeSearchAndProjection(t *testing.T) {
 	}
 	if !strings.Contains(string(b), "SQLite WAL") {
 		t.Fatalf("projection=%s", b)
+	}
+}
+
+func TestSQLiteRepositoryRebuildProjectionLeavesLegacyMemoryFilesUntouched(t *testing.T) {
+	dir := t.TempDir()
+	r, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+	scope := Scope{ProjectID: "project", TeamID: "team"}
+	if err := r.Append(ctx, ContextItem{ID: "canonical", Kind: ContextProgress, Content: "canonical context", Scope: scope, Authority: AuthorityAgent, TrustLevel: TrustInternal}); err != nil {
+		t.Fatal(err)
+	}
+	legacy := map[string]string{
+		"stm.md":      "# \u9032\u5ea6\n- legacy STM entry",
+		"ltm-team.md": "# \u5c08\u6848\u6163\u4f8b\n- legacy LTM entry",
+	}
+	for name, content := range legacy {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := r.RebuildProjection(ctx, scope); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range legacy {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Fatalf("RebuildProjection overwrote legacy %s: got %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestSQLiteRepositorySearchExactFiltersBeforeLimit(t *testing.T) {
+	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+	scope := Scope{ProjectID: "project", TeamID: "team"}
+	items := make([]ContextItem, 0, 31)
+	for n := 0; n < 30; n++ {
+		items = append(items, ContextItem{ID: fmt.Sprintf("filler-%02d", n), Kind: ContextObservation, Content: fmt.Sprintf("unrelated filler %d", n), Scope: scope, Authority: AuthorityAgent, TrustLevel: TrustInternal, Priority: PriorityHigh})
+	}
+	items = append(items, ContextItem{ID: "exact-target", Kind: ContextObservation, Content: "call buildTaskSTMContext before dispatch", Scope: scope, Authority: AuthorityAgent, TrustLevel: TrustInternal, Priority: PriorityLow})
+	if err := r.Append(ctx, items...); err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := r.SearchExact(ctx, SearchRequest{Query: "buildTaskSTMContext", Scope: scope, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 || found[0].Item.ID != "exact-target" {
+		t.Fatalf("SearchExact failed to scan beyond its result limit: %#v", found)
 	}
 }
 

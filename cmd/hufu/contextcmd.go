@@ -9,10 +9,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/anomalyco/hufu/internal/config"
 	contextstore "github.com/anomalyco/hufu/internal/context"
 )
 
 var contextWorkspace string
+var contextProject string
+var contextTeam string
+var contextQueryJSON bool
 
 var contextCmd = &cobra.Command{
 	Use:   "context",
@@ -39,11 +43,62 @@ var contextInspectCmd = &cobra.Command{
 	RunE:  runContextInspect,
 }
 
+var contextQueryCmd = &cobra.Command{
+	Use:   "query <text>",
+	Short: "Hybrid-query canonical context (exact + FTS5; vector index when configured)",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runContextQuery,
+}
+
 func init() {
 	contextRepairCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context.sqlite (default: <cwd>/workspace)")
 	contextInspectCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context shadow traces (default: <cwd>/workspace)")
 	contextCmd.AddCommand(contextRepairCmd)
 	contextCmd.AddCommand(contextInspectCmd)
+	contextQueryCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context.sqlite")
+	contextQueryCmd.Flags().StringVar(&contextProject, "project", "", "Canonical project ID (required)")
+	contextQueryCmd.Flags().StringVar(&contextTeam, "team", "", "Optional team scope")
+	contextQueryCmd.Flags().BoolVar(&contextQueryJSON, "json", false, "Emit JSON")
+	contextCmd.AddCommand(contextQueryCmd)
+}
+
+func runContextQuery(cmd *cobra.Command, args []string) error {
+	if contextProject == "" {
+		return fmt.Errorf("--project is required")
+	}
+	repo, err := contextstore.OpenSQLite(filepath.Join(getContextWorkspace(), "context.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer repo.Close()
+	var vector contextstore.VectorSearcher
+	vectorStore, vectorErr := contextstore.OpenOllamaVectorStore(getContextWorkspace(), config.ResolveEmbeddingModel(""), config.DefaultOllamaAPIURL)
+	if vectorErr == nil {
+		vectorErr = vectorStore.Rebuild(cmd.Context(), repo, contextstore.Scope{ProjectID: contextProject, TeamID: contextTeam})
+	}
+	if vectorErr == nil {
+		vector = vectorStore
+	}
+	results, trace, err := contextstore.HybridRetrieve(cmd.Context(), repo, vector, contextstore.SearchRequest{Query: args[0], Scope: contextstore.Scope{ProjectID: contextProject, TeamID: contextTeam}, Limit: 20})
+	if err != nil {
+		return err
+	}
+	if contextQueryJSON {
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
+			Results []contextstore.SearchResult `json:"results"`
+			Trace   contextstore.RetrievalTrace `json:"trace"`
+		}{results, trace})
+	}
+	for _, result := range results {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s\t%.4f\t%s\n", result.Item.ID, result.Score, result.Item.Content); err != nil {
+			return err
+		}
+	}
+	if trace.RetrievalInsufficient {
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), "context query: retrieval insufficient")
+		return err
+	}
+	return nil
 }
 
 type contextShadowTrace struct {

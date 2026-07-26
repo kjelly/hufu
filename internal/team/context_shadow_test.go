@@ -46,6 +46,76 @@ func TestShadowContextAppendDoesNotNeedLegacyPromptPath(t *testing.T) {
 	if len(items) != 1 || items[0].Content != "completed migration" || items[0].Source.Ref != "stm_write" {
 		t.Fatalf("unexpected shadow item: %#v", items)
 	}
+	projection, err := os.ReadFile(filepath.Join(workspace, "context-stm.md"))
+	if err != nil || !strings.Contains(string(projection), "completed migration") {
+		t.Fatalf("canonical projection missing committed item: %v %q", err, projection)
+	}
+}
+
+func TestCanonicalMemoryIngestionGeneratesLegacySTMProjection(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	c := &Coordinator{contextRepo: repo, projectDir: "/project", session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}}}
+	if err := c.appendCanonicalContext(context.Background(), contextstore.ContextProgress, "completed canonical migration", "stm_write", nil); err != nil {
+		t.Fatal(err)
+	}
+	stm := LoadSTM(workspace)
+	if !strings.Contains(stm, "# \u9032\u5ea6") || !strings.Contains(stm, "- completed canonical migration") {
+		t.Fatalf("legacy STM must be generated from canonical context: %q", stm)
+	}
+	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "/project", TeamID: "team"}})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("canonical STM item = %#v, err=%v", items, err)
+	}
+}
+
+func TestShadowContextAppendAndLegacyAppendsPreserveAllSTMAndLTMEntries(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	c := &Coordinator{
+		contextRepo: repo,
+		projectDir:  "/project",
+		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}},
+	}
+	for _, finding := range []string{"finding number A", "finding number B", "finding number C"} {
+		c.shadowContextAppend(contextstore.ContextProgress, finding, "stm_write")
+		if err := c.updateSTM(func(existing string) string {
+			return appendSTMEntry(existing, "- "+finding, stmSectionFindings)
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		c.shadowContextAppend(contextstore.ContextPattern, finding, "ltm_update")
+		existing := LoadLTM(workspace, "team")
+		if err := SaveLTM(workspace, "team", appendLTMEntry(existing, "- "+finding, ltmSectionPatterns)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, memory := range []struct {
+		name    string
+		content string
+	}{
+		{"STM", LoadSTM(workspace)},
+		{"LTM", LoadLTM(workspace, "team")},
+	} {
+		for _, finding := range []string{"finding number A", "finding number B", "finding number C"} {
+			if !strings.Contains(memory.content, finding) {
+				t.Fatalf("%s lost %q after projection rebuilds: %q", memory.name, finding, memory.content)
+			}
+		}
+		sections := ParseSTMSections(memory.content)
+		if len(sections) != 1 || len(sections[0].Entries) != 3 {
+			t.Fatalf("%s legacy section parse = %#v, want one section with three entries", memory.name, sections)
+		}
+	}
 }
 
 func TestShadowContextAppendFailureIsRepairable(t *testing.T) {
@@ -113,6 +183,36 @@ func TestShadowContextAppendFailureIsRepairable(t *testing.T) {
 	}
 	if recovered != 0 || remaining != 0 {
 		t.Fatalf("recovered=%d remaining=%d on drained queue, want 0/0", recovered, remaining)
+	}
+}
+
+func TestAutoExtractLTMCanonicalFirstAndDeduplicates(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	if err := SaveSTM(workspace, stmSectionDecisions+"\n\n- Use canonical SQLite projection\n"); err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{contextRepo: repo, projectDir: "/project", session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}}}
+	c.AutoExtractLTM(context.Background())
+	scope := contextstore.Scope{ProjectID: "/project", TeamID: "team"}
+	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: scope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || !strings.Contains(items[0].Content, "canonical SQLite") {
+		t.Fatalf("canonical AutoExtractLTM item = %#v", items)
+	}
+	c.AutoExtractLTM(context.Background())
+	items, err = repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: scope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("duplicate AutoExtractLTM canonical item: %#v", items)
 	}
 }
 

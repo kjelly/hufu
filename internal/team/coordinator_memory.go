@@ -247,6 +247,13 @@ func (c *Coordinator) autoWriteSTM(agentName, taskDesc, output, errMsg string, s
 }
 
 func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
+	if c == nil || c.session == nil {
+		return
+	}
+	if c.contextRepo != nil {
+		c.autoExtractCanonicalLTM(ctx)
+		return
+	}
 	workspace := c.session.Workspace
 	stmContent := LoadSTM(workspace)
 	if stmContent == "" {
@@ -311,18 +318,15 @@ func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
 		if hasLTREntry(existingLTMSections, ne.sectionTitle, ne.entry) {
 			continue
 		}
+		// Canonical LTM evidence is durable even if the compatibility Markdown
+		// projection below cannot be written.
+		c.shadowContextAppend(contextstore.ContextPattern, stripSTMListItem(ne.entry), "AutoExtractLTM")
 		existingLTM = appendSTMEntry(existingLTM, ne.entry, ne.sectionTitle)
 	}
 
 	pruned := PruneLTM(existingLTM)
 	if err := SaveLTM(workspace, c.session.Config.Name, TruncateLTM(pruned)); err != nil {
 		log.Printf("warning: auto LTM extraction failed: %v", err)
-	} else {
-		for _, ne := range newEntries {
-			if !hasLTREntry(existingLTMSections, ne.sectionTitle, ne.entry) {
-				c.shadowContextAppend(contextstore.ContextPattern, stripSTMListItem(ne.entry), "AutoExtractLTM")
-			}
-		}
 	}
 
 	if c.memoryStore != nil {
@@ -340,6 +344,61 @@ func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
 			if err := c.memoryStore.Save(saveCtx, id, ne.entry, metadata); err != nil {
 				log.Printf("warning: memory store save failed for LTM entry: %v", err)
 			}
+		}
+	}
+}
+
+// autoExtractCanonicalLTM derives LTM entries from canonical STM kinds and
+// regenerates Markdown through appendCanonicalContext; it never reads or
+// mutates legacy Markdown as a source of truth.
+func (c *Coordinator) autoExtractCanonicalLTM(ctx context.Context) {
+	scope := contextstore.Scope{ProjectID: c.projectDir, TeamID: c.session.Config.Name}
+	items, err := c.contextRepo.Query(ctx, contextstore.RepositoryQuery{Scope: scope, Limit: 100000})
+	if err != nil {
+		log.Printf("warning: canonical LTM extraction query failed: %v", err)
+		return
+	}
+	// One-way compatibility import for workspaces created before unified
+	// ingestion. Once imported, all subsequent extraction reads canonical rows.
+	if len(items) == 0 {
+		for _, section := range ParseSTMSections(LoadSTM(c.session.Workspace)) {
+			kind := contextstore.ContextPattern
+			var ltmSection string
+			switch section.Title {
+			case stmSectionDecisions:
+				ltmSection = ltmSectionArchitecture
+			case stmSectionErrors:
+				ltmSection = ltmSectionIssues
+			case stmSectionFindings:
+				ltmSection = ltmSectionPatterns
+			default:
+				continue
+			}
+			for _, entry := range section.Entries {
+				if err := c.appendCanonicalContext(ctx, kind, stripSTMListItem(entry), "legacy-stm-import", map[string]string{"legacy_section": ltmSection}); err != nil {
+					log.Printf("warning: canonical STM import failed: %v", err)
+				}
+			}
+		}
+		items, err = c.contextRepo.Query(ctx, contextstore.RepositoryQuery{Scope: scope, Limit: 100000})
+		if err != nil {
+			return
+		}
+	}
+	for _, item := range items {
+		var section string
+		switch item.Kind {
+		case contextstore.ContextDecision:
+			section = ltmSectionArchitecture
+		case contextstore.ContextError:
+			section = ltmSectionIssues
+		case contextstore.ContextProgress:
+			section = ltmSectionPatterns
+		default:
+			continue
+		}
+		if err := c.appendCanonicalContext(ctx, contextstore.ContextPattern, stripSTMListItem(item.Content), "AutoExtractLTM", map[string]string{"legacy_section": section}); err != nil {
+			log.Printf("warning: canonical LTM extraction failed: %v", err)
 		}
 	}
 }

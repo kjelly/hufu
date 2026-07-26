@@ -48,7 +48,14 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 	if section == "" {
 		section = ltmSectionPatterns
 	}
+	if t.coordinator.contextRepo != nil {
+		if err := t.coordinator.appendCanonicalContext(ctx, contextstore.ContextPattern, args.Content, "memory_save", map[string]string{"legacy_section": section}); err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to save canonical memory: %v", err)), nil
+		}
+		return resp, nil
+	}
 
+	// Legacy-mode fallback when no canonical repository is configured.
 	t.coordinator.ltmWriteMu.Lock()
 	defer t.coordinator.ltmWriteMu.Unlock()
 
@@ -60,12 +67,12 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 		return resp, nil
 	}
 
+	// Record canonical context before attempting the compatibility projection.
+	t.coordinator.shadowContextAppend(contextstore.ContextPattern, args.Content, "memory_save")
 	newLTM := appendSTMEntry(existingLTM, entry, section)
 	pruned := PruneLTM(newLTM)
 	if err := SaveLTM(workspace, t.coordinator.session.Config.Name, TruncateLTM(pruned)); err != nil {
 		log.Printf("warning: memory_save LTM write-back failed: %v", err)
-	} else {
-		t.coordinator.shadowContextAppend(contextstore.ContextPattern, args.Content, "memory_save")
 	}
 
 	return resp, nil
@@ -118,7 +125,19 @@ func (t *stmWriteTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	if mode == "replace" && !t.allowReplace {
 		return fantasy.NewTextErrorResponse("replace mode is restricted to the coordinator or maintenance operations; use append"), nil
 	}
+	if t.coordinator.contextRepo != nil {
+		if err := t.coordinator.appendCanonicalContext(ctx, contextstore.ContextProgress, args.Content, "stm_write", map[string]string{"legacy_section": stmSectionProgress, "mode": mode}); err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write canonical STM: %v", err)), nil
+		}
+		verb := "Appended to"
+		if mode == "replace" {
+			verb = "Replaced"
+		}
+		return fantasy.NewTextResponse(fmt.Sprintf("%s short-term memory (stm.md)", verb)), nil
+	}
 
+	// Legacy-mode fallback when no canonical repository is configured.
+	t.coordinator.shadowContextAppend(contextstore.ContextProgress, args.Content, "stm_write")
 	err := t.coordinator.updateSTM(func(existing string) string {
 		if mode == "replace" {
 			return TruncateSTM(args.Content)
@@ -131,7 +150,6 @@ func (t *stmWriteTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write stm.md: %v", err)), nil
 	}
-	t.coordinator.shadowContextAppend(contextstore.ContextProgress, args.Content, "stm_write")
 
 	verb := "Appended to"
 	if mode == "replace" {
@@ -201,7 +219,14 @@ func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 			ltmSectionConventions, ltmSectionArchitecture, ltmSectionPatterns,
 			ltmSectionIssues, ltmSectionFiles, ltmSectionTools)), nil
 	}
+	if t.coordinator.contextRepo != nil {
+		if err := t.coordinator.appendCanonicalContext(ctx, contextstore.ContextPattern, args.Content, "ltm_update", map[string]string{"legacy_section": args.Section}); err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write canonical LTM: %v", err)), nil
+		}
+		return fantasy.NewTextResponse(fmt.Sprintf("Appended to long-term memory section %q", args.Section)), nil
+	}
 
+	// Legacy-mode fallback when no canonical repository is configured.
 	entry := formatLTMEntry(args.Content)
 	workspace := t.coordinator.session.Workspace
 	t.coordinator.ltmWriteMu.Lock()
@@ -210,13 +235,14 @@ func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 		t.coordinator.ltmWriteMu.Unlock()
 		return fantasy.NewTextResponse(fmt.Sprintf("Already recorded in long-term memory section %q; skipped duplicate", args.Section)), nil
 	}
+	// Persist canonical knowledge before updating its legacy Markdown projection.
+	t.coordinator.shadowContextAppend(contextstore.ContextPattern, args.Content, "ltm_update")
 	newContent := TruncateLTM(PruneLTM(appendLTMEntry(existing, entry, args.Section)))
 	err := SaveLTM(workspace, t.coordinator.session.Config.Name, newContent)
 	t.coordinator.ltmWriteMu.Unlock()
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write ltm.md: %v", err)), nil
 	}
-	t.coordinator.shadowContextAppend(contextstore.ContextPattern, args.Content, "ltm_update")
 
 	return fantasy.NewTextResponse(fmt.Sprintf("Appended to long-term memory section %q", args.Section)), nil
 }

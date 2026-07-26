@@ -322,6 +322,7 @@ func (r *SQLiteRepository) GetMany(ctx context.Context, ids []string) ([]Context
 	}
 	return out, nil
 }
+
 // scopeWhere builds the shared project/team/session/agent/task scope
 // predicate: a query for a given child scope value also matches rows where
 // that column is NULL (wider, shared scope), but never matches rows scoped
@@ -380,6 +381,7 @@ func (r *SQLiteRepository) Query(ctx context.Context, q RepositoryQuery) ([]Cont
 	}
 	return out, rows.Err()
 }
+
 // itemScope fetches an item's scope for event provenance. It returns a zero
 // Scope on error (e.g. the item does not exist yet) rather than failing the
 // caller's mutation: recording an event with an incomplete scope is better
@@ -447,19 +449,35 @@ func (r *SQLiteRepository) AddEdges(ctx context.Context, edges ...ContextEdge) e
 	return tx.Commit()
 }
 func (r *SQLiteRepository) SearchExact(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
-	q := RepositoryQuery{Scope: req.Scope, Limit: req.Limit}
-	items, e := r.Query(ctx, q)
+	if req.Scope.ProjectID == "" {
+		return nil, errors.New("project scope is required")
+	}
+	needle := strings.ToLower(strings.TrimSpace(req.Query))
+	if needle == "" {
+		return nil, nil
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	args := []any{needle}
+	where := scopeWhere("", req.Scope, &args)
+	where = append(where, "superseded_by IS NULL", "(expires_at IS NULL OR expires_at>?)")
+	args = append(args, time.Now().UnixMilli(), limit)
+	rows, e := r.db.QueryContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE instr(lower(content), ?) > 0 AND "+strings.Join(where, " AND ")+" ORDER BY priority DESC, created_at DESC, id ASC LIMIT ?", args...)
 	if e != nil {
 		return nil, e
 	}
+	defer rows.Close()
 	var out []SearchResult
-	needle := strings.ToLower(strings.TrimSpace(req.Query))
-	for _, i := range items {
-		if strings.Contains(strings.ToLower(i.Content), needle) {
-			out = append(out, SearchResult{Item: i, Score: 1})
+	for rows.Next() {
+		i, e := scanItem(rows)
+		if e != nil {
+			return nil, e
 		}
+		out = append(out, SearchResult{Item: i, Score: 1})
 	}
-	return out, nil
+	return out, rows.Err()
 }
 func (r *SQLiteRepository) SearchLexical(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
 	if req.Scope.ProjectID == "" {
@@ -473,7 +491,7 @@ func (r *SQLiteRepository) SearchLexical(ctx context.Context, req SearchRequest)
 	// Reuse the same scope predicate as Query so lexical retrieval can never
 	// surface another team/session/agent/task's context (it previously only
 	// filtered by project_id).
-	args := []any{req.Query}
+	args := []any{ftsQuery(req.Query)}
 	where := append([]string{}, scopeWhere("c.", req.Scope, &args)...)
 	where = append(where, "c.superseded_by IS NULL")
 	args = append(args, limit)
@@ -493,6 +511,16 @@ func (r *SQLiteRepository) SearchLexical(ctx context.Context, req SearchRequest)
 		out = append(out, SearchResult{Item: i, Score: -score})
 	}
 	return out, rows.Err()
+}
+
+// ftsQuery turns operational identifiers (paths, commands, punctuation) into
+// plain FTS tokens so an exact-matchable path cannot make the lexical stage
+// fail with an FTS syntax error.
+func ftsQuery(query string) string {
+	terms := strings.FieldsFunc(query, func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_'
+	})
+	return strings.Join(terms, " ")
 }
 
 type scanWithScore struct {
