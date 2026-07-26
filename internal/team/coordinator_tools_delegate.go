@@ -13,7 +13,6 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/tools"
 	"github.com/anomalyco/hufu/internal/utils"
 )
 
@@ -236,22 +235,9 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 
 	agentDef = c.injectWorkerContext(ctx, agentDef)
 
-	// Give the sub-agent its own tool allowlist (team-level list plus its own
-	// declared tools), mirroring executeTask. Without this the sub-agent
-	// inherits the caller's allowlist, so tools its definition grants are
-	// denied at permission check while the caller's grants leak through.
-	allowedTools := make([]string, len(c.session.Config.ToolsAllowed))
-	copy(allowedTools, c.session.Config.ToolsAllowed)
-	if agentDef.Tools != "" {
-		for _, tl := range strings.Split(agentDef.Tools, ",") {
-			if tl = strings.TrimSpace(tl); tl != "" {
-				allowedTools = append(allowedTools, tl)
-			}
-		}
-	}
-	if len(allowedTools) > 0 {
-		ctx = context.WithValue(ctx, tools.AgentToolsAllowedKey, allowedTools)
-	}
+	// Give the sub-agent its own tool allowlist rather than inheriting the
+	// caller's permissions.
+	ctx = c.withEffectiveToolsAllowed(ctx, agentDef)
 
 	subAgModelID := c.resolveAgentModel(agentDef, "")
 	ag, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(subAgModelID), agent.AgentConfig{

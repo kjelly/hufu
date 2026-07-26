@@ -119,6 +119,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if c.autoApprove {
 		taskCtx = context.WithValue(taskCtx, tools.AutoApproveKey, true)
 	}
+	taskCtx = c.withEffectiveToolsAllowed(taskCtx, agentDef)
 
 	timing := &taskTiming{}
 	timing.reset()

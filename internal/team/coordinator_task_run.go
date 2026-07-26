@@ -348,23 +348,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				taskCtx = context.WithValue(taskCtx, tools.AutoApproveKey, true)
 			}
 
-			// Merge team-level and agent-level tool allowlists.
-			// Agent .md "tools" field is treated as an explicit allowlist:
-			// if an agent has "bash" in its tools, it should be able to use
-			// bash without prompting the user for permission.
-			allowedTools := make([]string, len(c.session.Config.ToolsAllowed))
-			copy(allowedTools, c.session.Config.ToolsAllowed)
-			if agentDef.Tools != "" {
-				for _, t := range strings.Split(agentDef.Tools, ",") {
-					t = strings.TrimSpace(t)
-					if t != "" {
-						allowedTools = append(allowedTools, t)
-					}
-				}
-			}
-			if len(allowedTools) > 0 {
-				taskCtx = context.WithValue(taskCtx, tools.AgentToolsAllowedKey, allowedTools)
-			}
+			taskCtx = c.withEffectiveToolsAllowed(taskCtx, agentDef)
 
 			// Inject permanent session-level permissions
 			c.sessionToolPermissionsMu.RLock()
@@ -682,6 +666,28 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 type lastToolCallEntry struct {
 	toolName string
 	input    string
+}
+
+// withEffectiveToolsAllowed attaches the tools permitted for a worker run.
+// Team-level tools and the agent's declared tools are both explicit grants.
+// Leaving an empty policy unset preserves deny-by-default behavior.
+func (c *Coordinator) withEffectiveToolsAllowed(ctx context.Context, def *agent.AgentDef) context.Context {
+	if c == nil || c.session == nil {
+		return ctx
+	}
+
+	allowed := append([]string(nil), c.session.Config.ToolsAllowed...)
+	if def != nil {
+		for _, name := range strings.Split(def.Tools, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				allowed = append(allowed, name)
+			}
+		}
+	}
+	if len(allowed) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, tools.AgentToolsAllowedKey, allowed)
 }
 
 func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message, timing *taskTiming, extraStop ...fantasy.StopCondition) (string, []fantasy.StepResult, error) {
