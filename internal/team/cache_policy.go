@@ -250,6 +250,27 @@ func (c *Coordinator) GetCachePolicy() CachePolicy {
 	return CacheUse
 }
 
+func computeDependencyHashes(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	hasher := sha256.New()
+	depFiles := []string{"go.mod", "go.sum", "package.json", "package-lock.json", "Cargo.lock", "requirements.txt"}
+	foundAny := false
+	for _, f := range depFiles {
+		p := filepath.Join(dir, f)
+		if content, err := os.ReadFile(p); err == nil {
+			foundAny = true
+			_, _ = fmt.Fprintf(hasher, "%s:%d;", f, len(content))
+			hasher.Write(content)
+		}
+	}
+	if !foundAny {
+		return ""
+	}
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
 // ComputeCacheIdentity constructs a CacheIdentity object reflecting current coordinator state.
 func (c *Coordinator) ComputeCacheIdentity(agentKey, taskDesc, verify, verifyMode string) CacheIdentity {
 	projDir := ""
@@ -267,16 +288,82 @@ func (c *Coordinator) ComputeCacheIdentity(agentKey, taskDesc, verify, verifyMod
 
 	fp, hasErr := ComputeProjectFingerprintWithStatus(projDir)
 
+	constraints := ""
+	if idx := strings.Index(taskDesc, "\nconstraints: "); idx != -1 {
+		constraints = strings.TrimSpace(taskDesc[idx+len("\nconstraints: "):])
+	} else if strings.HasPrefix(taskDesc, "constraints: ") {
+		constraints = strings.TrimSpace(taskDesc[len("constraints: "):])
+	}
+
+	toolRegVer := ""
+	if c != nil && len(c.coreTools) > 0 {
+		h := sha256.New()
+		for _, t := range c.coreTools {
+			if t != nil {
+				_, _ = fmt.Fprintf(h, "%s;", t.Info().Name)
+			}
+		}
+		toolRegVer = hex.EncodeToString(h.Sum(nil))
+	}
+
+	skillHashes := ""
+	if c != nil && c.session != nil && len(c.session.Skills) > 0 {
+		h := sha256.New()
+		for _, s := range c.session.Skills {
+			_, _ = fmt.Fprintf(h, "%s:%s;", s.Name, s.Summary)
+		}
+		skillHashes = hex.EncodeToString(h.Sum(nil))
+	}
+
+	policyVer := ""
+	if c != nil && c.executionProfile.Name != "" {
+		policyVer = string(c.executionProfile.Name)
+	}
+
+	modelFamily := ""
+	if c != nil {
+		if agentKey != "" && c.session != nil {
+			if ag, ok := c.session.Agents[agentKey]; ok && ag != nil {
+				modelFamily = c.resolveAgentModel(ag, "")
+			}
+		}
+		if modelFamily == "" {
+			if c.sidecarModel != "" {
+				modelFamily = c.sidecarModel
+			} else if c.session != nil && c.session.Config.Generation.Model != "" {
+				modelFamily = c.session.Config.Generation.Model
+			}
+		}
+	}
+
+	depHashes := ""
+	if projDir != "" {
+		depHashes = computeDependencyHashes(projDir)
+	}
+
+	execProfName := ""
+	if c != nil && c.executionProfile.Name != "" {
+		execProfName = string(c.executionProfile.Name)
+	}
+
 	return CacheIdentity{
-		AgentIdentity:      agentKey,
-		TaskGoal:           taskDesc,
-		Verify:             verify,
-		VerifyMode:         normalizeVerifyMode(verifyMode),
-		RepoCommit:         ComputeRepoCommit(projDir),
-		WorkspaceGen:       gen,
-		ProjectFingerprint: fp,
-		HasError:           hasErr,
-		CreatedAt:          time.Now(),
+		AgentIdentity:        agentKey,
+		TaskGoal:             taskDesc,
+		Constraints:          constraints,
+		Verify:               verify,
+		VerifyMode:           normalizeVerifyMode(verifyMode),
+		RepoCommit:           ComputeRepoCommit(projDir),
+		WorkspaceGen:         gen,
+		WorkspacePath:        projDir,
+		ProjectFingerprint:   fp,
+		HasError:             hasErr,
+		ToolRegistryVersion:  toolRegVer,
+		SkillHashes:          skillHashes,
+		PolicyVersion:        policyVer,
+		ModelFamily:          modelFamily,
+		DependencyHashes:     depHashes,
+		ExecutionProfileName: execProfName,
+		CreatedAt:            time.Now(),
 	}
 }
 
@@ -306,6 +393,41 @@ func (e cachedTaskEntry) isFresh(target CacheIdentity) bool {
 		if e.identity.ProjectFingerprint != target.ProjectFingerprint {
 			return false
 		}
+	}
+
+	// 4. Check Constraints
+	if e.identity.Constraints != target.Constraints {
+		return false
+	}
+
+	// 5. Check ToolRegistryVersion
+	if e.identity.ToolRegistryVersion != target.ToolRegistryVersion {
+		return false
+	}
+
+	// 6. Check SkillHashes
+	if e.identity.SkillHashes != target.SkillHashes {
+		return false
+	}
+
+	// 7. Check PolicyVersion
+	if e.identity.PolicyVersion != target.PolicyVersion {
+		return false
+	}
+
+	// 8. Check ExecutionProfileName
+	if e.identity.ExecutionProfileName != target.ExecutionProfileName {
+		return false
+	}
+
+	// 9. Check ModelFamily
+	if e.identity.ModelFamily != target.ModelFamily {
+		return false
+	}
+
+	// 10. Check DependencyHashes
+	if e.identity.DependencyHashes != target.DependencyHashes {
+		return false
 	}
 
 	return true

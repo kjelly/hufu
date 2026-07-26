@@ -8,7 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/fantasy"
 	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/anomalyco/hufu/internal/skill"
+	"github.com/anomalyco/hufu/internal/tools"
 )
 
 func TestCachePolicy_UseRefreshBypass(t *testing.T) {
@@ -475,5 +478,180 @@ func TestCacheLookup_GitCommandFailureIneligible(t *testing.T) {
 	outErr, okErr := cNoCommit.lookupTaskCache(ctx, "builder", "compile project")
 	if okErr {
 		t.Fatalf("expected lookupTaskCache MISS under real git command failure identity, but got HIT with %q", outErr)
+	}
+}
+
+func TestCacheIdentity_ExtendedFieldsFreshness(t *testing.T) {
+	ws := t.TempDir()
+
+	// Write a dependency file to test dependency hashes
+	goModFile := filepath.Join(ws, "go.mod")
+	if err := os.WriteFile(goModFile, []byte("module testapp\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session := &TeamSession{
+		Workspace: ws,
+		Skills: []*skill.SkillDef{
+			{Name: "refactor", Summary: "Refactor code"},
+		},
+		Agents: map[string]*agent.AgentDef{
+			"builder": {
+				Generation: agent.GenerationParams{Model: "gpt-4o"},
+			},
+		},
+	}
+
+	c := &Coordinator{
+		projectDir:   ws,
+		session:      session,
+		sidecarModel: "gpt-4o",
+		coreTools:    []fantasy.AgentTool{tools.NewBashTool()},
+	}
+
+	taskDesc := "task 1\nconstraints: use python"
+	id := c.ComputeCacheIdentity("builder", taskDesc, "verify cmd", "success")
+
+	if id.Constraints != "use python" {
+		t.Fatalf("expected Constraints 'use python', got %q", id.Constraints)
+	}
+	if id.ModelFamily != "gpt-4o" {
+		t.Fatalf("expected ModelFamily 'gpt-4o', got %q", id.ModelFamily)
+	}
+	if id.ToolRegistryVersion == "" {
+		t.Fatalf("expected non-empty ToolRegistryVersion")
+	}
+	if id.SkillHashes == "" {
+		t.Fatalf("expected non-empty SkillHashes")
+	}
+	if id.DependencyHashes == "" {
+		t.Fatalf("expected non-empty DependencyHashes")
+	}
+
+	entry := cachedTaskEntry{
+		taskDesc: taskDesc,
+		identity: id,
+	}
+
+	// 1. Same target -> fresh
+	if !entry.isFresh(id) {
+		t.Fatalf("expected entry to be fresh with identical identity")
+	}
+
+	// 2. Constraints mismatch -> not fresh
+	idDiffConstraints := id
+	idDiffConstraints.Constraints = "use golang"
+	if entry.isFresh(idDiffConstraints) {
+		t.Fatalf("expected isFresh=false on Constraints mismatch")
+	}
+
+	// 3. ToolRegistryVersion mutation -> recomputed identity changes & invalidates
+	c.coreTools = append(c.coreTools, tools.NewViewTool())
+	idNewTools := c.ComputeCacheIdentity("builder", taskDesc, "verify cmd", "success")
+	if idNewTools.ToolRegistryVersion == id.ToolRegistryVersion {
+		t.Fatalf("expected ToolRegistryVersion to change after adding tool")
+	}
+	if entry.isFresh(idNewTools) {
+		t.Fatalf("expected isFresh=false after tool registry changed")
+	}
+	c.coreTools = []fantasy.AgentTool{tools.NewBashTool()} // restore
+
+	// 4. SkillHashes mutation -> recomputed identity changes & invalidates
+	c.session.Skills = append(c.session.Skills, &skill.SkillDef{Name: "testing", Summary: "Run unit tests"})
+	idNewSkills := c.ComputeCacheIdentity("builder", taskDesc, "verify cmd", "success")
+	if idNewSkills.SkillHashes == id.SkillHashes {
+		t.Fatalf("expected SkillHashes to change after adding skill")
+	}
+	if entry.isFresh(idNewSkills) {
+		t.Fatalf("expected isFresh=false after skills changed")
+	}
+	c.session.Skills = []*skill.SkillDef{{Name: "refactor", Summary: "Refactor code"}} // restore
+
+	// 5. PolicyVersion mismatch -> not fresh
+	idDiffPolicy := id
+	idDiffPolicy.PolicyVersion = "different_policy"
+	if entry.isFresh(idDiffPolicy) {
+		t.Fatalf("expected isFresh=false on PolicyVersion mismatch")
+	}
+
+	// 6. ModelFamily mutation -> recomputed identity changes & invalidates
+	c.session.Agents["builder"].Generation.Model = "claude-3-5-sonnet"
+	idNewModel := c.ComputeCacheIdentity("builder", taskDesc, "verify cmd", "success")
+	if idNewModel.ModelFamily == id.ModelFamily {
+		t.Fatalf("expected ModelFamily to change after agent model changed")
+	}
+	if entry.isFresh(idNewModel) {
+		t.Fatalf("expected isFresh=false after agent model changed")
+	}
+	c.session.Agents["builder"].Generation.Model = "gpt-4o" // restore
+
+	// 7. DependencyHashes mutation -> recomputed identity changes & invalidates
+	if err := os.WriteFile(goModFile, []byte("module testapp\n\ngo 1.22\nrequire github.com/foo/bar v1.0.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	idNewDeps := c.ComputeCacheIdentity("builder", taskDesc, "verify cmd", "success")
+	if idNewDeps.DependencyHashes == id.DependencyHashes {
+		t.Fatalf("expected DependencyHashes to change after go.mod mutated")
+	}
+	if entry.isFresh(idNewDeps) {
+		t.Fatalf("expected isFresh=false after dependency file mutated")
+	}
+}
+
+func TestCacheIdentity_EmptyWildcardRejection(t *testing.T) {
+	// Verify that an entry with an empty extended field is NOT treated as a wildcard
+	// when matched against a target identity that has a non-empty value for that field (fail-closed).
+
+	baseID := CacheIdentity{
+		AgentIdentity: "worker",
+		TaskGoal:      "do work",
+	}
+
+	// 1. ToolRegistryVersion empty entry vs populated target
+	emptyToolsEntry := cachedTaskEntry{identity: baseID}
+	targetTools := baseID
+	targetTools.ToolRegistryVersion = "hash_123"
+	if emptyToolsEntry.isFresh(targetTools) {
+		t.Fatalf("expected isFresh=false when entry ToolRegistryVersion is empty and target is non-empty")
+	}
+
+	// 2. SkillHashes empty entry vs populated target
+	emptySkillsEntry := cachedTaskEntry{identity: baseID}
+	targetSkills := baseID
+	targetSkills.SkillHashes = "hash_skills"
+	if emptySkillsEntry.isFresh(targetSkills) {
+		t.Fatalf("expected isFresh=false when entry SkillHashes is empty and target is non-empty")
+	}
+
+	// 3. ModelFamily empty entry vs populated target
+	emptyModelEntry := cachedTaskEntry{identity: baseID}
+	targetModel := baseID
+	targetModel.ModelFamily = "gpt-4o"
+	if emptyModelEntry.isFresh(targetModel) {
+		t.Fatalf("expected isFresh=false when entry ModelFamily is empty and target is non-empty")
+	}
+
+	// 4. DependencyHashes empty entry vs populated target
+	emptyDepsEntry := cachedTaskEntry{identity: baseID}
+	targetDeps := baseID
+	targetDeps.DependencyHashes = "hash_deps"
+	if emptyDepsEntry.isFresh(targetDeps) {
+		t.Fatalf("expected isFresh=false when entry DependencyHashes is empty and target is non-empty")
+	}
+
+	// 5. Constraints empty entry vs populated target
+	emptyConstraintsEntry := cachedTaskEntry{identity: baseID}
+	targetConstraints := baseID
+	targetConstraints.Constraints = "use golang"
+	if emptyConstraintsEntry.isFresh(targetConstraints) {
+		t.Fatalf("expected isFresh=false when entry Constraints is empty and target is non-empty")
+	}
+
+	// 6. PolicyVersion empty entry vs populated target
+	emptyPolicyEntry := cachedTaskEntry{identity: baseID}
+	targetPolicy := baseID
+	targetPolicy.PolicyVersion = "v1"
+	if emptyPolicyEntry.isFresh(targetPolicy) {
+		t.Fatalf("expected isFresh=false when entry PolicyVersion is empty and target is non-empty")
 	}
 }
