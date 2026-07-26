@@ -2,10 +2,13 @@ package context
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/philippgille/chromem-go"
 )
@@ -20,6 +23,7 @@ type VectorStore struct {
 	model      string
 	embed      chromem.EmbeddingFunc
 	modelPath  string
+	repo       Repository
 }
 
 func NewVectorStore(path, model string, embed chromem.EmbeddingFunc) (*VectorStore, error) {
@@ -64,17 +68,32 @@ func (s *VectorStore) Rebuild(ctx context.Context, repo Repository, scope Scope)
 		return err
 	}
 	s.collection = collection
-	docs := make([]chromem.Document, 0, len(items))
+	s.repo = repo
+	var rebuildErrs []error
 	for _, item := range items {
-		docs = append(docs, chromem.Document{ID: item.ID, Content: item.Content})
+		doc := chromem.Document{ID: item.ID, Content: item.Content}
+		if err := s.collection.AddDocuments(ctx, []chromem.Document{doc}, 1); err != nil {
+			// The index was wiped before this attempt, so even a previously
+			// embedded document is no longer indexed when re-embedding fails.
+			// Mark it pending for a later retry, then continue indexing unrelated
+			// documents instead of letting one failure abort the rebuild.
+			if stateErr := repo.UpdateEmbeddingState(ctx, item.ID, "pending", s.model); stateErr != nil {
+				rebuildErrs = append(rebuildErrs, fmt.Errorf("recording pending state for %q: %w", item.ID, stateErr))
+			}
+			rebuildErrs = append(rebuildErrs, fmt.Errorf("embedding %q: %w", item.ID, err))
+			continue
+		}
+		if err := repo.UpdateEmbeddingState(ctx, item.ID, "embedded", s.model); err != nil {
+			rebuildErrs = append(rebuildErrs, fmt.Errorf("recording embedded state for %q: %w", item.ID, err))
+		}
 	}
-	if len(docs) == 0 {
-		return nil
-	}
-	return s.collection.AddDocuments(ctx, docs, 1)
+	return errors.Join(rebuildErrs...)
 }
 
 func (s *VectorStore) SearchVector(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
+	if s.repo == nil {
+		return nil, errors.New("vector store has no canonical repository; rebuild before searching")
+	}
 	if s.collection.Count() == 0 {
 		return nil, nil
 	}
@@ -91,7 +110,34 @@ func (s *VectorStore) SearchVector(ctx context.Context, req SearchRequest) ([]Se
 	}
 	out := make([]SearchResult, 0, len(results))
 	for _, result := range results {
-		out = append(out, SearchResult{Item: ContextItem{ID: result.ID, Content: result.Content, Scope: req.Scope}, Score: float64(result.Similarity)})
+		item, err := s.repo.Get(ctx, result.ID)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue // A stale rebuildable index must never surface a deleted canonical item.
+		}
+		if err != nil {
+			return nil, fmt.Errorf("hydrating vector result %q from canonical store: %w", result.ID, err)
+		}
+		if !isRetrievable(item, req.Scope, time.Now()) {
+			continue
+		}
+		out = append(out, SearchResult{Item: item, Score: float64(result.Similarity)})
 	}
 	return out, nil
+}
+
+// isRetrievable is the vector equivalent of SQLite's scope, supersede, and
+// temporal predicates. Vector documents carry only content and canonical ID;
+// every result must therefore be hydrated and authorized by the canonical row.
+func isRetrievable(item ContextItem, scope Scope, now time.Time) bool {
+	if scope.ProjectID == "" || item.Scope.ProjectID != scope.ProjectID || item.SupersededBy != "" {
+		return false
+	}
+	for _, level := range [][2]string{{scope.TeamID, item.Scope.TeamID}, {scope.SessionID, item.Scope.SessionID}, {scope.AgentID, item.Scope.AgentID}, {scope.TaskID, item.Scope.TaskID}, {scope.AttemptID, item.Scope.AttemptID}} {
+		if level[0] != "" && level[1] != "" && level[0] != level[1] {
+			return false
+		}
+	}
+	return (item.ValidFrom == nil || !item.ValidFrom.After(now)) &&
+		(item.ValidUntil == nil || item.ValidUntil.After(now)) &&
+		(item.ExpiresAt == nil || item.ExpiresAt.After(now))
 }

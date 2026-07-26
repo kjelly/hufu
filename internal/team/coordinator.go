@@ -572,7 +572,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	if c.memoryStore != nil {
 		c.coreTools = append(c.coreTools,
 			&memorySaveLTMWrapper{original: memory.NewMemorySaveTool(c.memoryStore), coordinator: c},
-			memory.NewMemoryQueryTool(c.memoryStore),
+			&canonicalMemoryQueryTool{coordinator: c},
 		)
 	}
 

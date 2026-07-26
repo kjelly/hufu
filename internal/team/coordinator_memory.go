@@ -234,6 +234,13 @@ func (c *Coordinator) autoWriteSTM(agentName, taskDesc, output, errMsg string, s
 		entry = formatSTMErrorEntry(agentName, taskDesc, errMsg)
 	}
 
+	if c.contextRepo != nil {
+		if err := c.appendCanonicalContext(context.Background(), contextstore.ContextProgress, entry, "autoWriteSTM", map[string]string{"legacy_section": stmSectionProgress}); err != nil {
+			log.Printf("warning: canonical auto STM write failed: %v", err)
+			c.emitEvent("stm_write_error", "coordinator", "", map[string]interface{}{"error": err.Error()})
+		}
+		return
+	}
 	err := c.updateSTM(func(existing string) string {
 		newContent := appendSTMEntry(existing, entry, stmSectionProgress)
 		return TruncateSTM(newContent)

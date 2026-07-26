@@ -59,8 +59,25 @@ func DecomposeQuery(query string) QueryParts {
 	p.ArtifactIDs = captureTerms(artifactIDQueryRE, query)
 	p.IPs = retrievalUniqueStrings(ipQueryRE.FindAllString(query, -1))
 	p.Ports = captureTerms(portQueryRE, query)
-	p.Remainder = strings.TrimSpace(query)
+	p.Remainder = naturalLanguageRemainder(query)
 	return p
+}
+
+// naturalLanguageRemainder removes every deterministic operational identifier
+// already exposed on QueryParts, leaving only the terms that are useful for
+// lexical/semantic interpretation of the user's intent.
+func naturalLanguageRemainder(query string) string {
+	remainder := query
+	// Remove wider patterns first: a command can itself contain a path, SHA,
+	// or error code, and should be treated as one operational identifier.
+	for _, re := range []*regexp.Regexp{
+		quotedQueryRE, commandQueryRE, symbolQueryRE, pathQueryRE, shaQueryRE,
+		errorCodeQueryRE, taskIDQueryRE, attemptIDQueryRE, toolNameQueryRE,
+		artifactIDQueryRE, ipQueryRE, portQueryRE,
+	} {
+		remainder = re.ReplaceAllString(remainder, " ")
+	}
+	return strings.Join(strings.Fields(remainder), " ")
 }
 func captureTerms(re *regexp.Regexp, query string) []string {
 	var out []string

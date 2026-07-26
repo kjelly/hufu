@@ -2,10 +2,77 @@ package context
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestHybridRetrieveGoldenQueries(t *testing.T) {
+	var fixture struct {
+		ProjectID string `json:"project_id"`
+		Items     []struct {
+			ID       string      `json:"id"`
+			Kind     ContextKind `json:"kind"`
+			Content  string      `json:"content"`
+			Priority Priority    `json:"priority"`
+		} `json:"items"`
+		Queries []struct {
+			Query  string `json:"query"`
+			WantID string `json:"want_id"`
+		} `json:"queries"`
+	}
+	raw, err := os.ReadFile(filepath.Join("testdata", "retrieval_golden.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	for _, item := range fixture.Items {
+		if err := repo.Append(t.Context(), ContextItem{ID: item.ID, Kind: item.Kind, Content: item.Content, Priority: item.Priority, Scope: Scope{ProjectID: fixture.ProjectID}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range fixture.Queries {
+		t.Run(q.Query, func(t *testing.T) {
+			got, _, err := HybridRetrieve(t.Context(), repo, nil, SearchRequest{Query: q.Query, Scope: Scope{ProjectID: fixture.ProjectID}, Limit: 5})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) == 0 || got[0].Item.ID != q.WantID {
+				t.Fatalf("query %q got %#v, want first %q", q.Query, resultIDs(got), q.WantID)
+			}
+		})
+	}
+}
+
+func BenchmarkHybridRetrieveGoldenQuery(b *testing.B) {
+	repo, err := OpenSQLite(filepath.Join(b.TempDir(), "context.sqlite"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer repo.Close()
+	scope := Scope{ProjectID: "benchmark"}
+	for i := 0; i < 100; i++ {
+		if err := repo.Append(context.Background(), ContextItem{ID: fmt.Sprintf("item-%d", i), Kind: ContextPattern, Content: fmt.Sprintf("context retrieval benchmark document %d", i), Scope: scope}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, _, err := HybridRetrieve(context.Background(), repo, nil, SearchRequest{Query: "context retrieval benchmark", Scope: scope, Limit: 10}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
 
 type staticVectorSearcher struct{ results []SearchResult }
 
@@ -17,6 +84,18 @@ func TestDecomposeQueryExtractsDeterministicTerms(t *testing.T) {
 	p := DecomposeQuery(`fix "exact phrase" in internal/context/store.go using go test ./... after E1234 at 85c8499`)
 	if len(p.Quoted) != 1 || len(p.Paths) == 0 || len(p.Commands) == 0 || len(p.ErrorCodes) != 1 || len(p.SHAs) != 1 {
 		t.Fatalf("unexpected decomposition: %#v", p)
+	}
+}
+
+func TestDecomposeQueryRemainderExcludesOperationalIdentifiers(t *testing.T) {
+	p := DecomposeQuery("fix internal/context/retrieval.go using go test ./...")
+	if p.Remainder != "fix" {
+		t.Fatalf("remainder=%q, want natural-language terms only", p.Remainder)
+	}
+	for _, identifier := range []string{"internal/context/retrieval.go", "go test ./..."} {
+		if strings.Contains(p.Remainder, identifier) {
+			t.Fatalf("remainder retained operational identifier %q: %q", identifier, p.Remainder)
+		}
 	}
 }
 

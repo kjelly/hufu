@@ -353,6 +353,9 @@ func (r *SQLiteRepository) Query(ctx context.Context, q RepositoryQuery) ([]Cont
 		where = append(where, "(expires_at IS NULL OR expires_at>?)")
 		args = append(args, time.Now().UnixMilli())
 	}
+	now := time.Now().UnixMilli()
+	where = append(where, "(valid_from IS NULL OR valid_from<=?)", "(valid_until IS NULL OR valid_until>?)")
+	args = append(args, now, now)
 	if len(q.Kinds) > 0 {
 		ps := make([]string, len(q.Kinds))
 		for x, k := range q.Kinds {
@@ -428,6 +431,35 @@ func (r *SQLiteRepository) MarkSuperseded(ctx context.Context, old []string, new
 	}
 	return tx.Commit()
 }
+
+// UpdateEmbeddingState records rebuild progress in canonical storage. The
+// vector index is disposable, so callers use this state to retry documents
+// whose embedding failed without ever deleting their canonical records.
+func (r *SQLiteRepository) UpdateEmbeddingState(ctx context.Context, id, state, model string) error {
+	if id == "" || state == "" || model == "" {
+		return errors.New("embedding item ID, state, and model are required")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	scope := r.itemScope(ctx, tx, id)
+	result, err := tx.ExecContext(ctx, "UPDATE context_items SET embedding_state=?,embedding_model=?,updated_at=? WHERE id=?", state, model, time.Now().UnixMilli(), id)
+	if err != nil {
+		return err
+	}
+	if n, err := result.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return sql.ErrNoRows
+	}
+	if err := insertEvent(ctx, tx, "embedding_state", id, scope, map[string]string{"state": state, "model": model}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (r *SQLiteRepository) AddEdges(ctx context.Context, edges ...ContextEdge) error {
 	tx, e := r.db.BeginTx(ctx, nil)
 	if e != nil {
@@ -462,8 +494,9 @@ func (r *SQLiteRepository) SearchExact(ctx context.Context, req SearchRequest) (
 	}
 	args := []any{needle}
 	where := scopeWhere("", req.Scope, &args)
-	where = append(where, "superseded_by IS NULL", "(expires_at IS NULL OR expires_at>?)")
-	args = append(args, time.Now().UnixMilli(), limit)
+	now := time.Now().UnixMilli()
+	where = append(where, "superseded_by IS NULL", "(expires_at IS NULL OR expires_at>?)", "(valid_from IS NULL OR valid_from<=?)", "(valid_until IS NULL OR valid_until>?)")
+	args = append(args, now, now, now, limit)
 	rows, e := r.db.QueryContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE instr(lower(content), ?) > 0 AND "+strings.Join(where, " AND ")+" ORDER BY priority DESC, created_at DESC, id ASC LIMIT ?", args...)
 	if e != nil {
 		return nil, e
@@ -493,8 +526,9 @@ func (r *SQLiteRepository) SearchLexical(ctx context.Context, req SearchRequest)
 	// filtered by project_id).
 	args := []any{ftsQuery(req.Query)}
 	where := append([]string{}, scopeWhere("c.", req.Scope, &args)...)
-	where = append(where, "c.superseded_by IS NULL")
-	args = append(args, limit)
+	now := time.Now().UnixMilli()
+	where = append(where, "c.superseded_by IS NULL", "(c.expires_at IS NULL OR c.expires_at>?)", "(c.valid_from IS NULL OR c.valid_from<=?)", "(c.valid_until IS NULL OR c.valid_until>?)")
+	args = append(args, now, now, now, limit)
 	rows, e := r.db.QueryContext(ctx, "SELECT "+columns+", bm25(context_items_fts) FROM context_items_fts JOIN context_items c ON c.id=context_items_fts.id WHERE context_items_fts MATCH ? AND "+strings.Join(where, " AND ")+" ORDER BY bm25(context_items_fts) LIMIT ?", args...)
 	if e != nil {
 		return nil, e
@@ -511,6 +545,23 @@ func (r *SQLiteRepository) SearchLexical(ctx context.Context, req SearchRequest)
 		out = append(out, SearchResult{Item: i, Score: -score})
 	}
 	return out, rows.Err()
+}
+
+// RebuildLexical recreates the FTS5 projection from canonical rows. It is
+// safe to run repeatedly and never changes canonical context records.
+func (r *SQLiteRepository) RebuildLexical(ctx context.Context) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, "DELETE FROM context_items_fts"); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO context_items_fts(id,content,kind,tags) SELECT id,content,kind,tags_json FROM context_items"); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ftsQuery turns operational identifiers (paths, commands, punctuation) into

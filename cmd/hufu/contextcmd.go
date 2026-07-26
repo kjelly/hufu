@@ -50,6 +50,13 @@ var contextQueryCmd = &cobra.Command{
 	RunE:  runContextQuery,
 }
 
+var contextRebuildCmd = &cobra.Command{
+	Use:   "rebuild",
+	Short: "Rebuild the canonical FTS5 lexical index from SQLite records",
+	Args:  cobra.NoArgs,
+	RunE:  runContextRebuild,
+}
+
 func init() {
 	contextRepairCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context.sqlite (default: <cwd>/workspace)")
 	contextInspectCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context shadow traces (default: <cwd>/workspace)")
@@ -60,6 +67,21 @@ func init() {
 	contextQueryCmd.Flags().StringVar(&contextTeam, "team", "", "Optional team scope")
 	contextQueryCmd.Flags().BoolVar(&contextQueryJSON, "json", false, "Emit JSON")
 	contextCmd.AddCommand(contextQueryCmd)
+	contextRebuildCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context.sqlite")
+	contextCmd.AddCommand(contextRebuildCmd)
+}
+
+func runContextRebuild(cmd *cobra.Command, _ []string) error {
+	repo, err := contextstore.OpenSQLite(filepath.Join(getContextWorkspace(), "context.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer repo.Close()
+	if err := repo.RebuildLexical(cmd.Context()); err != nil {
+		return fmt.Errorf("rebuilding FTS5 index: %w", err)
+	}
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), "context rebuild: FTS5 index rebuilt")
+	return err
 }
 
 func runContextQuery(cmd *cobra.Command, args []string) error {

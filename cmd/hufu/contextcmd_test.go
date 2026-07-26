@@ -108,3 +108,25 @@ func TestContextQueryUsesHybridRetrieval(t *testing.T) {
 		t.Fatalf("query output=%q", out.String())
 	}
 }
+
+func TestContextRebuildRestoresFTSIndex(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Append(t.Context(), contextstore.ContextItem{ID: "fts", Kind: contextstore.ContextPattern, Content: "restore lexical index", Scope: contextstore.Scope{ProjectID: "p"}}); err != nil {
+		t.Fatal(err)
+	}
+	repo.Close()
+	root := newRootCommand()
+	out := new(bytes.Buffer)
+	root.SetOut(out)
+	root.SetArgs([]string{"context", "rebuild", "--workspace", workspace})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "FTS5 index rebuilt") {
+		t.Fatalf("output=%q", out.String())
+	}
+}

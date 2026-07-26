@@ -208,6 +208,68 @@ func TestSQLiteRepositorySearchLexicalRejectsOtherTeams(t *testing.T) {
 	}
 }
 
+func TestSQLiteRepositoryRebuildLexicalRestoresFTSIndex(t *testing.T) {
+	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+	scope := Scope{ProjectID: "project"}
+	if err := r.Append(ctx, ContextItem{ID: "rebuild-me", Kind: ContextPattern, Content: "rebuild lexical index", Scope: scope}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.db.ExecContext(ctx, "DELETE FROM context_items_fts"); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := r.SearchLexical(ctx, SearchRequest{Query: "lexical", Scope: scope}); err != nil || len(found) != 0 {
+		t.Fatalf("broken FTS search=%#v err=%v", found, err)
+	}
+	if err := r.RebuildLexical(ctx); err != nil {
+		t.Fatal(err)
+	}
+	found, err := r.SearchLexical(ctx, SearchRequest{Query: "lexical", Scope: scope})
+	if err != nil || len(found) != 1 || found[0].Item.ID != "rebuild-me" {
+		t.Fatalf("rebuilt FTS search=%#v err=%v", found, err)
+	}
+}
+
+func TestSQLiteRepositorySearchExcludesItemsOutsideValidityWindow(t *testing.T) {
+	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+	scope := Scope{ProjectID: "project"}
+	past := time.Now().Add(-time.Hour)
+	future := time.Now().Add(time.Hour)
+	if err := r.Append(ctx,
+		ContextItem{ID: "active", Kind: ContextObservation, Content: "release train checklist for stable", Scope: scope},
+		ContextItem{ID: "not-yet-valid", Kind: ContextObservation, Content: "release train checklist for future", Scope: scope, ValidFrom: &future},
+		ContextItem{ID: "no-longer-valid", Kind: ContextObservation, Content: "release train checklist for retired", Scope: scope, ValidUntil: &past},
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, search := range []struct {
+		name string
+		fn   func(context.Context, SearchRequest) ([]SearchResult, error)
+	}{
+		{name: "exact", fn: r.SearchExact},
+		{name: "lexical", fn: r.SearchLexical},
+	} {
+		t.Run(search.name, func(t *testing.T) {
+			found, err := search.fn(ctx, SearchRequest{Query: "release train", Scope: scope})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(found) != 1 || found[0].Item.ID != "active" {
+				t.Fatalf("search returned items outside validity window: %#v", found)
+			}
+		})
+	}
+}
+
 func TestSQLiteRepositoryDeduplicatesAndExpires(t *testing.T) {
 	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
 	if err != nil {

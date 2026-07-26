@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"charm.land/fantasy"
 
 	contextstore "github.com/anomalyco/hufu/internal/context"
+	"github.com/anomalyco/hufu/internal/memory"
 )
 
 type memorySaveLTMWrapper struct {
@@ -31,17 +33,13 @@ func (t *memorySaveLTMWrapper) SetProviderOptions(opts fantasy.ProviderOptions) 
 }
 
 func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	resp, err := t.original.Run(ctx, call)
-	if err != nil || resp.IsError {
-		return resp, err
-	}
-
 	var args struct {
-		Content  string `json:"content"`
-		Category string `json:"category"`
+		Content    string   `json:"content"`
+		Category   string   `json:"category"`
+		Supersedes []string `json:"supersedes"`
 	}
 	if err := json.Unmarshal([]byte(call.Input), &args); err != nil || args.Content == "" {
-		return resp, nil
+		return fantasy.NewTextErrorResponse("content is required"), nil
 	}
 
 	section := ClassifyLTMEntry(args.Content, "finding")
@@ -52,7 +50,28 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 		if err := t.coordinator.appendCanonicalContext(ctx, contextstore.ContextPattern, args.Content, "memory_save", map[string]string{"legacy_section": section}); err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to save canonical memory: %v", err)), nil
 		}
-		return resp, nil
+		items, err := t.coordinator.contextRepo.Query(ctx, contextstore.RepositoryQuery{Scope: t.coordinator.contextScope(), Limit: 100000})
+		if err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("locating saved canonical memory: %v", err)), nil
+		}
+		var id string
+		for _, item := range items {
+			if item.Content == args.Content && item.Source.Ref == "memory_save" {
+				id = item.ID
+				break
+			}
+		}
+		if id == "" {
+			return fantasy.NewTextErrorResponse("saved canonical memory could not be located"), nil
+		}
+		if err := t.coordinator.contextRepo.MarkSuperseded(ctx, args.Supersedes, id); err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("superseding canonical memory: %v", err)), nil
+		}
+		return fantasy.NewTextResponse(fmt.Sprintf("Saved to canonical memory (id: %s)", id)), nil
+	}
+	resp, err := t.original.Run(ctx, call)
+	if err != nil || resp.IsError {
+		return resp, err
 	}
 
 	// Legacy-mode fallback when no canonical repository is configured.
@@ -76,6 +95,55 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 	}
 
 	return resp, nil
+}
+
+// canonicalMemoryQueryTool deliberately bypasses the legacy chromem memory
+// store when SQLite context is available.  It keeps the public memory_query
+// shape while retrieving only canonical, scope-filtered records.
+type canonicalMemoryQueryTool struct {
+	coordinator *Coordinator
+	pOpts       fantasy.ProviderOptions
+}
+
+func (t *canonicalMemoryQueryTool) Info() fantasy.ToolInfo {
+	return memory.NewMemoryQueryTool(nil).Info()
+}
+func (t *canonicalMemoryQueryTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
+func (t *canonicalMemoryQueryTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
+func (t *canonicalMemoryQueryTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	if t.coordinator == nil || t.coordinator.contextRepo == nil {
+		if t.coordinator == nil {
+			return fantasy.NewTextErrorResponse("memory is not available"), nil
+		}
+		// The canonical store is intentionally best-effort during the phased
+		// migration. Preserve the legacy query path when it could not open.
+		return memory.NewMemoryQueryTool(t.coordinator.memoryStore).Run(ctx, call)
+	}
+	var args struct {
+		Query string `json:"query"`
+		N     int    `json:"n"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil || strings.TrimSpace(args.Query) == "" {
+		return fantasy.NewTextErrorResponse("query is required"), nil
+	}
+	if args.N <= 0 {
+		args.N = 5
+	}
+	if args.N > 20 {
+		args.N = 20
+	}
+	results, _, err := contextstore.HybridRetrieve(ctx, t.coordinator.contextRepo, nil, contextstore.SearchRequest{Query: args.Query, Scope: t.coordinator.contextScope(), Limit: args.N})
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("canonical memory query failed: %v", err)), nil
+	}
+	if len(results) == 0 {
+		return fantasy.NewTextResponse("No relevant memories found."), nil
+	}
+	var b strings.Builder
+	for _, result := range results {
+		fmt.Fprintf(&b, "- [%.2f] %s (id: %s)\n", result.Score, result.Item.Content, result.Item.ID)
+	}
+	return fantasy.NewTextResponse(strings.TrimSpace(b.String())), nil
 }
 
 type stmWriteTool struct {

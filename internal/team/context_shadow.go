@@ -88,6 +88,14 @@ func (c *Coordinator) appendCanonicalContext(ctx context.Context, kind contextst
 	return err
 }
 
+func (c *Coordinator) contextScope() contextstore.Scope {
+	sessionID := filepath.Base(c.session.Workspace)
+	if c.sessionData != nil && c.sessionData.CreatedAt != "" {
+		sessionID = c.sessionData.CreatedAt
+	}
+	return contextstore.Scope{ProjectID: c.projectDir, TeamID: c.session.Config.Name, SessionID: sessionID}
+}
+
 // contextPendingPath is where failed shadow writes are durably queued so
 // `hufu context repair` (or RepairContextShadowWrites) can replay them later
 // without depending on the store that just failed.
