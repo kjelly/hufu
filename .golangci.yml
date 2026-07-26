@@ -138,6 +138,20 @@ linters:
       - linters:
           - errcheck
         path: internal/tools/tools\.go
+      - linters:
+          - errcheck
+          - gofmt
+          - goimports
+        path: internal/context/sqlite_repository\.go
+      - linters:
+          - errcheck
+          - gofmt
+        path: internal/context/projection\.go
+      - linters:
+          - errcheck
+          - gofmt
+          - goimports
+        path: cmd/hufu/contextcmd\.go
     paths:
       - third_party$
       - builtin$

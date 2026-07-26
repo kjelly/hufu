@@ -3,9 +3,10 @@ package team
 import (
 	"fmt"
 	"os"
-
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anomalyco/hufu/internal/utils"
@@ -15,7 +16,10 @@ const stmFile = "stm.md"
 
 const maxSTMChars = 4000
 
-const maxEntriesPerSTMSection = 10
+// Keep enough entries to make concurrent task updates observable. Size is
+// bounded by TruncateSTM, which preserves critical sections rather than
+// silently dropping older entries at append time.
+const maxEntriesPerSTMSection = 100
 
 const (
 	stmSectionProgress  = "# 進度"
@@ -26,6 +30,35 @@ const (
 )
 
 var stmSectionOrder = []string{stmSectionProgress, stmSectionFindings, stmSectionDecisions, stmSectionErrors, stmSectionQuestions}
+
+// stmWriters serializes read-modify-write updates per STM path, including
+// updates made by distinct Coordinators in the same process.
+var stmWriters sync.Map // map[string]*sync.Mutex
+
+// STMWriter is the sole read-modify-write abstraction for stm.md. SaveSTM is
+// retained for lifecycle operations; merging existing content must use Update.
+type STMWriter struct {
+	workspace string
+	mu        *sync.Mutex
+}
+
+func NewSTMWriter(workspace string) *STMWriter {
+	path := STMPath(workspace)
+	mu, _ := stmWriters.LoadOrStore(path, &sync.Mutex{})
+	return &STMWriter{workspace: workspace, mu: mu.(*sync.Mutex)}
+}
+
+func (w *STMWriter) Update(fn func(string) string) error {
+	if w == nil || strings.TrimSpace(w.workspace) == "" {
+		return fmt.Errorf("invalid STM workspace")
+	}
+	if fn == nil {
+		return fmt.Errorf("STM update callback is required")
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return SaveSTM(w.workspace, fn(LoadSTM(w.workspace)))
+}
 
 type STMSection struct {
 	Title   string
@@ -229,7 +262,88 @@ func TruncateSTM(content string) string {
 	if len(runes) <= maxSTMChars {
 		return content
 	}
-	return string(runes[len(runes)-maxSTMChars:])
+	sections := ParseSTMSections(content)
+	if len(sections) == 0 {
+		return truncateSTMTextWithAnchors(content, maxSTMChars)
+	}
+
+	// Preserve critical state before lower-priority narrative. Entries are
+	// newest-first, so recent progress remains available within each section.
+	priority := map[string]int{stmSectionErrors: 0, stmSectionDecisions: 1, stmSectionQuestions: 2, stmSectionFindings: 3, stmSectionProgress: 4}
+	sectionPriority := func(title string) int {
+		if value, ok := priority[title]; ok {
+			return value
+		}
+		return len(priority) + 1
+	}
+	ordered := append([]STMSection(nil), sections...)
+	for i := 0; i < len(ordered); i++ {
+		for j := i + 1; j < len(ordered); j++ {
+			if sectionPriority(ordered[j].Title) < sectionPriority(ordered[i].Title) {
+				ordered[i], ordered[j] = ordered[j], ordered[i]
+			}
+		}
+	}
+	kept := make(map[string][]string, len(sections))
+	used := 0
+	for _, section := range ordered {
+		for _, entry := range section.Entries {
+			remaining := maxSTMChars - used - len([]rune(section.Title)) - 3
+			if remaining <= 0 {
+				break
+			}
+			candidate := entry
+			if len([]rune(candidate)) > remaining {
+				candidate = truncateSTMTextWithAnchors(candidate, remaining)
+			}
+			if candidate == "" {
+				continue
+			}
+			kept[section.Title] = append(kept[section.Title], candidate)
+			used += len([]rune(candidate)) + 1
+		}
+	}
+	result := make([]STMSection, 0, len(sections))
+	for _, section := range sections { // retain familiar deterministic order
+		if entries := kept[section.Title]; len(entries) > 0 {
+			result = append(result, STMSection{Title: section.Title, Entries: entries})
+		}
+	}
+	return truncateSTMTextWithAnchors(FormatSTMSections(result), maxSTMChars)
+}
+
+var stmAnchorPattern = regexp.MustCompile("(?im)`[^`]+`|(?:^|\\s)(?:go|git|npm|pnpm|yarn|make|cargo|python|bash)\\s+[^\\n]+|(?:^|\\s)(?:\\.?\\.?/|/)[A-Za-z0-9_./:@=-]+|(?:error|failed|panic|fatal)[^\\n]*")
+
+// truncateSTMTextWithAnchors retains exact commands, paths, and error text
+// while shortening a single oversized section entry.
+func truncateSTMTextWithAnchors(text string, maxChars int) string {
+	if maxChars <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= maxChars {
+		return text
+	}
+	marker := "\n...[STM content truncated; anchors retained]...\n"
+	budget := maxChars - len([]rune(marker))
+	if budget <= 0 {
+		return string(runes[:maxChars])
+	}
+	head, tail := budget/2, budget-budget/2
+	parts := []string{string(runes[:head]), marker}
+	for _, anchor := range stmAnchorPattern.FindAllString(text, -1) {
+		anchor = strings.TrimSpace(anchor)
+		candidate := strings.Join(append(parts, anchor), "\n") + "\n" + string(runes[len(runes)-tail:])
+		if anchor == "" || strings.Contains(parts[0], anchor) || strings.Contains(string(runes[len(runes)-tail:]), anchor) || len([]rune(candidate)) > maxChars {
+			continue
+		}
+		parts = append(parts, anchor)
+	}
+	out := strings.Join(append(parts, string(runes[len(runes)-tail:])), "\n")
+	if outRunes := []rune(out); len(outRunes) > maxChars {
+		return string(outRunes[:maxChars])
+	}
+	return out
 }
 
 func ArchiveSTM(workspace string) (string, error) {

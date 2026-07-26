@@ -9,6 +9,8 @@ import (
 	"log"
 
 	"charm.land/fantasy"
+
+	contextstore "github.com/anomalyco/hufu/internal/context"
 )
 
 type memorySaveLTMWrapper struct {
@@ -62,6 +64,8 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 	pruned := PruneLTM(newLTM)
 	if err := SaveLTM(workspace, t.coordinator.session.Config.Name, TruncateLTM(pruned)); err != nil {
 		log.Printf("warning: memory_save LTM write-back failed: %v", err)
+	} else {
+		t.coordinator.shadowContextAppend(contextstore.ContextPattern, args.Content, "memory_save")
 	}
 
 	return resp, nil
@@ -69,13 +73,14 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 
 type stmWriteTool struct {
 	coordToolBase
-	coordinator *Coordinator
+	coordinator  *Coordinator
+	allowReplace bool
 }
 
 func (t *stmWriteTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
 		Name:        "stm_write",
-		Description: "Write to short-term memory (stm.md), a shared workspace file visible to all agents in the current session. Use append mode to add new information, or replace mode to overwrite. This memory is session-scoped and will be archived when the session ends.",
+		Description: "Write to short-term memory (stm.md), a shared workspace file visible to all agents in the current session. Use append mode to add new information. Whole-document replace is reserved for the coordinator or maintenance operations. This memory is session-scoped and will be archived when the session ends.",
 		Parameters: map[string]any{
 			"content": map[string]any{
 				"type":        "string",
@@ -107,6 +112,12 @@ func (t *stmWriteTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	if mode == "" {
 		mode = "append"
 	}
+	if mode != "append" && mode != "replace" {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid mode %q; must be append or replace", mode)), nil
+	}
+	if mode == "replace" && !t.allowReplace {
+		return fantasy.NewTextErrorResponse("replace mode is restricted to the coordinator or maintenance operations; use append"), nil
+	}
 
 	err := t.coordinator.updateSTM(func(existing string) string {
 		if mode == "replace" {
@@ -120,6 +131,7 @@ func (t *stmWriteTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write stm.md: %v", err)), nil
 	}
+	t.coordinator.shadowContextAppend(contextstore.ContextProgress, args.Content, "stm_write")
 
 	verb := "Appended to"
 	if mode == "replace" {
@@ -204,6 +216,7 @@ func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write ltm.md: %v", err)), nil
 	}
+	t.coordinator.shadowContextAppend(contextstore.ContextPattern, args.Content, "ltm_update")
 
 	return fantasy.NewTextResponse(fmt.Sprintf("Appended to long-term memory section %q", args.Section)), nil
 }

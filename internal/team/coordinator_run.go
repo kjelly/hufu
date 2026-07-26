@@ -19,6 +19,7 @@ import (
 
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/hooks"
+	"github.com/anomalyco/hufu/internal/memory"
 	"github.com/anomalyco/hufu/internal/skill"
 	"github.com/anomalyco/hufu/internal/tools"
 	"github.com/anomalyco/hufu/internal/utils"
@@ -130,21 +131,16 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 
 	prompt := c.appendSkillContext(task, agentDef, resolvedName, task, todoID)
 
-	workerInput := WorkerContextInput{
-		TaskGoal:      prompt,
-		TaskDef:       TaskDef{Agent: resolvedName, Goal: task},
-		AgentDef:      agentDef,
-		RawSTM:        LoadSTM(c.session.Workspace),
-		RawLTM:        LoadLTM(c.session.Workspace, c.session.Config.Name),
-		MemoryStore:   c.memoryStore,
-		ModelContext:  globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")),
-		MaxAuxChars:   maxWorkerAuxContextChars,
-		DisableMemory: c.ExecutionProfile().DisableHistoricalMemory,
+	// Phase 2 keeps the legacy prompt path authoritative. Compile a shadow
+	// bundle for comparison only; a compiler failure must never affect a task.
+	workerInput := WorkerContextInput{TaskGoal: prompt, TaskDef: TaskDef{Agent: resolvedName, Goal: task}, AgentDef: agentDef,
+		RawSTM: LoadSTM(c.session.Workspace), RawLTM: LoadLTM(c.session.Workspace, c.session.Config.Name), MemoryStore: c.memoryStore,
+		ModelContext: globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")), MaxAuxChars: maxWorkerAuxContextChars,
+		DisableMemory: c.ExecutionProfile().DisableHistoricalMemory}
+	if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
+		prompt += "\n\n" + suffix
 	}
-	compiled, err := c.ContextCompiler().CompileWorkerContext(taskCtx, workerInput)
-	if err == nil && compiled.Prompt != "" {
-		prompt = compiled.Prompt
-	}
+	c.compileShadowWorker(taskCtx, workerInput, prompt)
 
 	output, steps, err := c.runAgentWithStatusAndHistory(taskCtx, ag, resolvedName, prompt, nil, timing)
 	duration, modelTime, toolTime := timing.snapshot()
@@ -208,6 +204,10 @@ func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
 			&saveSkillTool{coordinator: c},
 		}
 		for _, t := range c.coreTools {
+			if t.Info().Name == "stm_write" {
+				orchTools = append(orchTools, &stmWriteTool{coordinator: c, allowReplace: true})
+				continue
+			}
 			if coordinatorCoreToolNames[t.Info().Name] {
 				orchTools = append(orchTools, t)
 			}
@@ -224,6 +224,10 @@ func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
 		&saveSkillTool{coordinator: c},
 	}
 	for _, t := range c.coreTools {
+		if t.Info().Name == "stm_write" {
+			orchTools = append(orchTools, &stmWriteTool{coordinator: c, allowReplace: true})
+			continue
+		}
 		if coordinatorCoreToolNames[t.Info().Name] {
 			orchTools = append(orchTools, t)
 		}
@@ -539,15 +543,36 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		ProjectContext:   c.loadProjectContext(),
 	}
 
-	compiled, err := c.ContextCompiler().CompileCoordinatorContext(ctx, coordInput)
-	if err == nil && compiled.Prompt != "" {
-		systemPrompt += "\n\n---\n" + compiled.Prompt
+	// The compiler is intentionally shadow-only until canonical mode. Retain
+	// the exact legacy assembly below so model-visible prompts do not change.
+	if agentsMD := coordInput.ProjectContext; agentsMD != "" {
+		agentsMD = compactLegacyProjectContext(ctx, c.AgentPool().Sidecar(), agentsMD)
+		systemPrompt += "\n\n---\n## Project Context (AGENTS.md)\n\n" + agentsMD
+		projectText.WriteString(agentsMD)
 	}
-
+	if c.memoryStore != nil && prompt != "" && !c.ExecutionProfile().DisableHistoricalMemory {
+		var compactFn memory.CompactFunc
+		if sidecar := c.AgentPool().Sidecar(); sidecar != nil {
+			compactFn = sidecar.Compact
+		}
+		if memCtx, err := memory.AutoQuery(ctx, c.memoryStore, prompt, compactFn); err == nil && memCtx != "" {
+			systemPrompt += "\n\n---\n" + memCtx
+			memoryText.WriteString(memCtx + "\n")
+		}
+	}
+	if !isContinuation && !c.ExecutionProfile().DisableHistoricalMemory && contextSummary != "" {
+		systemPrompt += "\n\n---\n## Session Context\n\n" + contextSummary
+		memoryText.WriteString(contextSummary + "\n")
+	}
+	if suffix := c.buildMemorySuffix("coordinator"); suffix != "" {
+		systemPrompt += "\n\n" + suffix
+		memoryText.WriteString(suffix + "\n")
+	}
 	if reminder := c.buildCoreReminder(orchDef); reminder != "" {
 		systemPrompt += "\n\n" + reminder
 		coreText.WriteString("\n\n" + reminder)
 	}
+	c.compileShadowCoordinator(ctx, coordInput, systemPrompt)
 
 	if c.think && !isContinuation {
 		c.emitThinkPrompt(systemPrompt)
@@ -558,6 +583,24 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		coreText.String(), projectText.String(), memoryText.String())
 
 	return systemPrompt
+}
+
+// textCompacter is intentionally the sidecar's plain-text compaction API.
+// CompactStructured summarizes conversations into JSON and must never be used
+// for model-visible project instructions in the legacy prompt path.
+type textCompacter interface {
+	Compact(context.Context, string, string) (string, error)
+}
+
+func compactLegacyProjectContext(ctx context.Context, compacter textCompacter, projectContext string) string {
+	if compacter == nil || len(projectContext) <= 4000 {
+		return projectContext
+	}
+	compacted, err := compacter.Compact(ctx, projectContext, "Compress this project context while preserving all key facts, patterns, conventions, and instructions.")
+	if err != nil || compacted == "" {
+		return projectContext
+	}
+	return compacted
 }
 
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	contextstore "github.com/anomalyco/hufu/internal/context"
 	"github.com/anomalyco/hufu/internal/utils"
 )
 
@@ -202,9 +203,11 @@ func (c *Coordinator) updateSTM(fn func(string) string) error {
 		return fmt.Errorf("invalid session workspace")
 	}
 
-	old := LoadSTM(c.session.Workspace)
-	next := fn(old)
-	err := SaveSTM(c.session.Workspace, next)
+	var next string
+	err := NewSTMWriter(c.session.Workspace).Update(func(old string) string {
+		next = fn(old)
+		return next
+	})
 	if err == nil {
 		c.lastStmWriteMu.Lock()
 		c.lastStmWrite = time.Now()
@@ -237,6 +240,9 @@ func (c *Coordinator) autoWriteSTM(agentName, taskDesc, output, errMsg string, s
 	})
 	if err != nil {
 		log.Printf("warning: auto STM write failed: %v", err)
+		c.emitEvent("stm_write_error", "coordinator", "", map[string]interface{}{
+			"error": err.Error(),
+		})
 	}
 }
 
@@ -311,6 +317,12 @@ func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
 	pruned := PruneLTM(existingLTM)
 	if err := SaveLTM(workspace, c.session.Config.Name, TruncateLTM(pruned)); err != nil {
 		log.Printf("warning: auto LTM extraction failed: %v", err)
+	} else {
+		for _, ne := range newEntries {
+			if !hasLTREntry(existingLTMSections, ne.sectionTitle, ne.entry) {
+				c.shadowContextAppend(contextstore.ContextPattern, stripSTMListItem(ne.entry), "AutoExtractLTM")
+			}
+		}
 	}
 
 	if c.memoryStore != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,6 +18,7 @@ import (
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/audit"
 	"github.com/anomalyco/hufu/internal/config"
+	contextstore "github.com/anomalyco/hufu/internal/context"
 	"github.com/anomalyco/hufu/internal/hooks"
 	"github.com/anomalyco/hufu/internal/mcp"
 	"github.com/anomalyco/hufu/internal/memory"
@@ -205,6 +207,7 @@ type Coordinator struct {
 	emittedTaskTransitions map[string]bool
 	dualWriteFailures      atomic.Int64
 	memoryStore            *memory.MemoryStore
+	contextRepo            contextstore.Repository // Phase 1 shadow store; never read by prompt assembly.
 	skillsMu               sync.RWMutex
 	modelList              []config.ModelEntry
 	sidecarModel           string
@@ -519,6 +522,13 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	c.policyEngine = &defaultPolicyEngine{c: c}
 	c.contextCompiler = &defaultContextCompiler{c: c}
 	c.agentPool = &defaultAgentPool{c: c}
+	// Phase 1 is deliberately shadow-write only. A failure to open the new
+	// store is observable but must not prevent a legacy team from running.
+	if repo, openErr := contextstore.OpenSQLite(filepath.Join(session.Workspace, "context.sqlite")); openErr != nil {
+		log.Printf("warning: context shadow store unavailable: %v", openErr)
+	} else {
+		c.contextRepo = repo
+	}
 	c.workflowEngine = &defaultWorkflowEngine{c: c}
 
 	// Enable sidecar for skill pattern detection

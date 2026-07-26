@@ -136,7 +136,7 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 // conversationHeadKeep is the number of earliest messages preserved when the
 // conversation history is hard-trimmed. These usually contain the original goal
 // and setup that later turns depend on.
-const conversationHeadKeep = 4
+const conversationHeadKeep = 1
 
 // trimHistoryPreservingHead reduces msgs to at most max entries by keeping the
 // first conversationHeadKeep messages and the most recent remainder. This avoids

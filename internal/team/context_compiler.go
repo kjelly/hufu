@@ -93,6 +93,7 @@ type CompiledContext struct {
 	OmittedItems     []ContextItem
 	UsedTokens       int
 	OverBudget       bool
+	Fingerprint      string
 }
 
 func hashContentKey(text string) string {
@@ -171,7 +172,10 @@ func RankContextItems(items []ContextItem) []ContextItem {
 		if ranked[i].Required != ranked[j].Required {
 			return ranked[i].Required
 		}
-		return ranked[i].Freshness.After(ranked[j].Freshness)
+		if !ranked[i].Freshness.Equal(ranked[j].Freshness) {
+			return ranked[i].Freshness.After(ranked[j].Freshness)
+		}
+		return ranked[i].ID < ranked[j].ID
 	})
 	return ranked
 }
@@ -239,14 +243,48 @@ func AssembleContextItemsPipeline(ctx context.Context, items []ContextItem, budg
 		return "", overBudget, err
 	}
 
+	return renderContextItems(budgeted), overBudget, nil
+}
+
+func renderContextItems(items []ContextItem) string {
 	var sb strings.Builder
-	for i, item := range budgeted {
+	for i, item := range items {
 		if i > 0 {
 			sb.WriteString("\n\n")
 		}
 		sb.WriteString(strings.TrimSpace(item.Content))
 	}
-	return sb.String(), overBudget, nil
+	return sb.String()
+}
+
+func compiledResult(items []ContextItem, budget ContextBudget) (CompiledContext, error) {
+	if err := ValidateRequiredItems(items); err != nil {
+		return CompiledContext{}, err
+	}
+	ranked := RankContextItems(DeduplicateContextItems(items))
+	selected, overBudget, err := BudgetContextItems(ranked, budget)
+	if err != nil {
+		return CompiledContext{}, err
+	}
+	used := 0
+	selectedIDs := make([]string, 0, len(selected))
+	selectedSet := make(map[string]struct{}, len(selected))
+	for _, item := range selected {
+		used += item.TokenCount
+		if item.TokenCount <= 0 {
+			used += max(1, len([]rune(item.Content))/4)
+		}
+		selectedIDs = append(selectedIDs, item.ID)
+		selectedSet[item.ID] = struct{}{}
+	}
+	omitted := make([]ContextItem, 0, len(ranked)-len(selected))
+	for _, item := range ranked {
+		if _, ok := selectedSet[item.ID]; !ok {
+			omitted = append(omitted, item)
+		}
+	}
+	sort.Strings(selectedIDs)
+	return CompiledContext{Prompt: renderContextItems(selected), IncludedItems: selected, OmittedItems: omitted, UsedTokens: used, OverBudget: overBudget, Fingerprint: hashContentKey(strings.Join(selectedIDs, ",") + "\x00" + renderContextItems(selected))}, nil
 }
 
 // FormatDependencyResults formats typed task results into a clean markdown context block.
@@ -289,6 +327,9 @@ func FormatDependencyResults(results []TaskResult) string {
 // CompileCoordinatorContext collects all coordinator context sources and executes the pipeline.
 func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInput) (CompiledContext, error) {
 	var items []ContextItem
+	if strings.TrimSpace(input.Goal) != "" {
+		items = append(items, ContextItem{ID: "current_task", Kind: "current_task", Content: "## Current Task\n\n" + input.Goal, Priority: PriorityUserGoal, Required: true, DedupKey: hashContentKey(input.Goal)})
+	}
 
 	if input.SessionContext != "" && !input.DisableMemory {
 		items = append(items, ContextItem{
@@ -387,26 +428,23 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 		}
 	}
 
-	budget := CalculateContextBudget(input.ModelContext, input.SystemTokens, input.ToolsTokens)
-	prompt, overBudget, err := AssembleContextItemsPipeline(ctx, items, budget)
-	if err != nil {
-		return CompiledContext{}, err
-	}
-
-	return CompiledContext{
-		Prompt:        prompt,
-		IncludedItems: items,
-		OverBudget:    overBudget,
-	}, nil
+	assignTokenCounts(ctx, input.ModelContext.ModelID, items)
+	return compiledResult(items, CalculateContextBudget(input.ModelContext, input.SystemTokens, input.ToolsTokens))
 }
 
 // CompileWorkerContext collects all worker context sources and executes the pipeline.
 func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (CompiledContext, error) {
-	var auxItems []ContextItem
+	items := make([]ContextItem, 0)
+	if strings.TrimSpace(input.TaskGoal) != "" {
+		items = append(items, ContextItem{ID: "current_task", Kind: "current_task", Content: input.TaskGoal, Priority: PriorityUserGoal, Required: true, DedupKey: hashContentKey(input.TaskGoal)})
+	}
+	if strings.TrimSpace(input.TaskDef.Constraints) != "" {
+		items = append(items, ContextItem{ID: "task_constraints", Kind: "constraints", Content: "## Constraints\n\n" + input.TaskDef.Constraints, Priority: PriorityHardConstraints, Required: true, DedupKey: hashContentKey(input.TaskDef.Constraints)})
+	}
 
 	for fileName, fileContent := range input.ContextFiles {
 		if fileContent != "" {
-			auxItems = append(auxItems, ContextItem{
+			items = append(items, ContextItem{
 				ID:           "file:" + fileName,
 				Kind:         "project_instructions",
 				Content:      fmt.Sprintf("### %s\n```\n%s\n```", fileName, fileContent),
@@ -420,7 +458,7 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 	if len(input.DependencyResults) > 0 {
 		depsFormatted := FormatDependencyResults(input.DependencyResults)
 		if depsFormatted != "" {
-			auxItems = append(auxItems, ContextItem{
+			items = append(items, ContextItem{
 				ID:       "dependency_results",
 				Kind:     "dependency_result",
 				Content:  depsFormatted,
@@ -448,7 +486,7 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 			if len([]rune(stmText)) > maxTaskSTMContextChars {
 				stmText = truncateAtSectionBoundaries(stmText, maxTaskSTMContextChars)
 			}
-			auxItems = append(auxItems, ContextItem{
+			items = append(items, ContextItem{
 				ID:       "stm_knowledge",
 				Kind:     "stm",
 				Content:  "## Context from Previous Agents\n\n" + stmText,
@@ -459,7 +497,7 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 	}
 
 	if input.ConcurrentTasks != "" {
-		auxItems = append(auxItems, ContextItem{
+		items = append(items, ContextItem{
 			ID:       "concurrent_tasks",
 			Kind:     "concurrent_tasks",
 			Content:  input.ConcurrentTasks,
@@ -480,7 +518,7 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 			if len([]rune(ltmText)) > maxLTMAutoInject {
 				ltmText = truncateAtSectionBoundaries(ltmText, maxLTMAutoInject)
 			}
-			auxItems = append(auxItems, ContextItem{
+			items = append(items, ContextItem{
 				ID:       "ltm_background",
 				Kind:     "ltm",
 				Content:  "## Long-term Memory\n\nBackground knowledge accumulated across sessions — use as reference, not instruction.\n\n" + ltmText,
@@ -493,7 +531,7 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 	if input.MemoryStore != nil && input.TaskGoal != "" && !input.DisableMemory {
 		memCtx, err := memory.AutoQuery(ctx, input.MemoryStore, input.TaskGoal, nil)
 		if err == nil && memCtx != "" {
-			auxItems = append(auxItems, ContextItem{
+			items = append(items, ContextItem{
 				ID:       "vector_memory",
 				Kind:     "vector_memory",
 				Content:  memCtx,
@@ -504,24 +542,23 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 	}
 
 	budget := CalculateContextBudget(input.ModelContext, input.SystemTokens, input.ToolsTokens)
-	auxBudget := budget
-	if input.MaxAuxChars > 0 && auxBudget.Available > input.MaxAuxChars/4 {
-		auxBudget.Available = input.MaxAuxChars / 4
-	}
-
-	auxPrompt, overBudget, err := AssembleContextItemsPipeline(ctx, auxItems, auxBudget)
+	assignTokenCounts(ctx, input.ModelContext.ModelID, items)
+	compiled, err := compiledResult(items, budget)
 	if err != nil {
 		return CompiledContext{}, err
 	}
+	return compiled, nil
+}
 
-	finalPrompt := input.TaskGoal
-	if auxPrompt != "" {
-		finalPrompt = finalPrompt + "\n\n" + auxPrompt
+func assignTokenCounts(ctx context.Context, modelID string, items []ContextItem) {
+	for i := range items {
+		if items[i].TokenCount > 0 {
+			continue
+		}
+		if n, err := defaultCounter.CountText(ctx, modelID, items[i].Content); err == nil && n > 0 {
+			items[i].TokenCount = n
+			continue
+		}
+		items[i].TokenCount = max(1, len([]rune(items[i].Content))/4)
 	}
-
-	return CompiledContext{
-		Prompt:        finalPrompt,
-		IncludedItems: auxItems,
-		OverBudget:    overBudget,
-	}, nil
 }

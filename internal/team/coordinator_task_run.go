@@ -230,10 +230,35 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		DisableMemory:     c.ExecutionProfile().DisableHistoricalMemory,
 	}
 
-	compiled, err := c.ContextCompiler().CompileWorkerContext(parentCtx, workerInput)
-	if err == nil && compiled.Prompt != "" {
-		prompt = compiled.Prompt
+	// Keep the legacy prompt as the model input during Phase 2. The compiler
+	// only records a safe, inspectable shadow comparison.
+	if len(task.ContextFiles) > 0 {
+		var contextBuilder strings.Builder
+		contextBuilder.WriteString("Context files:\n\n")
+		for _, f := range task.ContextFiles {
+			content, err := readShared(c.session.Workspace, f)
+			if err != nil {
+				fmt.Fprintf(&contextBuilder, "(could not read %s: %v)\n", f, err)
+			} else {
+				fmt.Fprintf(&contextBuilder, "### %s\n```\n%s\n```\n\n", f, content)
+			}
+		}
+		prompt = contextBuilder.String() + "\n---\n\n" + prompt
 	}
+	var auxParts []string
+	if stmCtx := c.buildTaskSTMContext(); stmCtx != "" {
+		auxParts = append(auxParts, stmCtx)
+	}
+	if concurrentCtx := c.buildConcurrentTasksContext(todoID); concurrentCtx != "" {
+		auxParts = append(auxParts, concurrentCtx)
+	}
+	if ltmCtx := c.buildLTMContext(); ltmCtx != "" {
+		auxParts = append(auxParts, ltmCtx)
+	}
+	if aux := assembleContextWithinBudget(auxParts, maxWorkerAuxContextChars); aux != "" {
+		prompt += aux
+	}
+	c.compileShadowWorker(parentCtx, workerInput, prompt)
 
 	var conversationHistory []fantasy.Message
 	var lastErr error

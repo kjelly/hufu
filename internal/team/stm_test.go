@@ -3,6 +3,7 @@ package team
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -41,6 +42,21 @@ func TestTruncateSTMOverLimit(t *testing.T) {
 	got := TruncateSTM(long)
 	if len(got) != maxSTMChars {
 		t.Errorf("TruncateSTM() len = %d, want %d", len(got), maxSTMChars)
+	}
+}
+
+func TestTruncateSTMPreservesCriticalSectionsAndAnchors(t *testing.T) {
+	content := "# 進度\n- " + strings.Repeat("routine progress ", 300) + "\n\n" +
+		"# 錯誤與修復\n- " + strings.Repeat("noise ", 250) + "ERROR: database migration failed; run `go test ./internal/team/...`; inspect /srv/hufu/migrations/0042.sql\n\n" +
+		"# 決策\n- Use atomic STM writes\n\n# 待解決\n- Resolve migration failure"
+	got := TruncateSTM(content)
+	if len([]rune(got)) > maxSTMChars {
+		t.Fatalf("length = %d, want <= %d", len([]rune(got)), maxSTMChars)
+	}
+	for _, want := range []string{stmSectionErrors, stmSectionDecisions, stmSectionQuestions, "go test ./internal/team/...", "/srv/hufu/migrations/0042.sql", "ERROR: database migration failed"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("truncated STM missing %q:\n%s", want, got)
+		}
 	}
 }
 

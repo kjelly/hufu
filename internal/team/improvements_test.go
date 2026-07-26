@@ -427,6 +427,23 @@ func TestTrimHistoryPreservingHead(t *testing.T) {
 	}
 }
 
+func TestTrimHistoryPreservingHeadKeepsOriginalGoalAndLatestForty(t *testing.T) {
+	msgs := make([]fantasy.Message, 100)
+	msgs[0] = msgWith("original goal: preserve this")
+	for i := 1; i < len(msgs); i++ {
+		msgs[i] = msgWith(fmt.Sprintf("exchange-%d", i))
+	}
+	trimmed, _, _ := trimHistoryPreservingHead(msgs, nil, 41)
+	if len(trimmed) != 41 || firstText(trimmed[0]) != "original goal: preserve this" {
+		t.Fatalf("unexpected retained history: len=%d first=%q", len(trimmed), firstText(trimmed[0]))
+	}
+	for i := 60; i < 100; i++ {
+		if !strings.Contains(firstText(trimmed[i-59]), fmt.Sprintf("exchange-%d", i)) {
+			t.Fatalf("latest exchange-%d was not preserved", i)
+		}
+	}
+}
+
 func TestTrimHistoryPreservingHead_PreservesToolPairWithSourceCounts(t *testing.T) {
 	callA := fantasy.ToolCallPart{ToolCallID: "call_a", ToolName: "view", Input: `{"file_path":"a.txt"}`}
 	resA := fantasy.ToolResultPart{ToolCallID: "call_a", Output: fantasy.ToolResultOutputContentText{Text: "ok"}}
