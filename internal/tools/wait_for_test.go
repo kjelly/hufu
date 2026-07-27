@@ -133,6 +133,57 @@ func TestWaitForSucceedsAfterRetries(t *testing.T) {
 	}
 }
 
+func TestWaitForUntilFailure(t *testing.T) {
+	// A process-existence check exits 0 while the process exists and non-zero
+	// after it exits. until:failure must therefore wait for the second poll,
+	// rather than treating the first successful check as completion.
+	counter := filepath.Join(t.TempDir(), "count")
+	cmd := fmt.Sprintf(`echo x >> %[1]s; [ "$(wc -l < %[1]s)" -lt 2 ]`, counter)
+	input := fmt.Sprintf(`{"command":%q,"until":"failure","interval_seconds":1,"timeout_seconds":30}`, cmd)
+
+	start := time.Now()
+	resp := runWaitFor(t, input)
+	if resp.IsError {
+		t.Fatalf("expected success after the command failed, got: %s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "condition met after 2 attempt(s)") {
+		t.Errorf("expected 2 attempts, got: %s", resp.Content)
+	}
+	if elapsed := time.Since(start); elapsed < time.Second {
+		t.Errorf("expected an interval wait, finished in %s", elapsed)
+	}
+}
+
+func TestWaitForRejectsUnknownUntilMode(t *testing.T) {
+	resp := runWaitFor(t, `{"command":"echo ready","until":"exited"}`)
+	if !resp.IsError {
+		t.Fatalf("expected invalid until mode to fail, got: %s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, `until must be "success" or "failure"`) {
+		t.Errorf("unexpected error: %s", resp.Content)
+	}
+}
+
+func TestWaitForReportsTimeoutCap(t *testing.T) {
+	resp := runWaitFor(t, `{"command":"echo ready","timeout_seconds":1900}`)
+	if resp.IsError {
+		t.Fatalf("expected immediate command success, got: %s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "requested timeout 31m40s capped to 30m0s") {
+		t.Errorf("missing timeout cap warning: %s", resp.Content)
+	}
+}
+
+func TestWaitForUntilFailureDoesNotTreatDeadlineAsCondition(t *testing.T) {
+	resp := runWaitFor(t, `{"command":"sleep 2","until":"failure","timeout_seconds":1}`)
+	if !resp.IsError {
+		t.Fatalf("expected the polling deadline to fail the wait, got: %s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "timed out") {
+		t.Errorf("expected timeout error, got: %s", resp.Content)
+	}
+}
+
 func TestWaitForSuccessPattern(t *testing.T) {
 	tests := []struct {
 		name    string

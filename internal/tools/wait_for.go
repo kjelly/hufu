@@ -27,6 +27,7 @@ const (
 	defaultWaitForInterval = 5 * time.Second
 	minWaitForInterval     = 1 * time.Second
 	defaultWaitForTimeout  = 120 * time.Second
+	maxWaitForTimeout      = 30 * time.Minute
 )
 
 type waitForArgs struct {
@@ -34,6 +35,7 @@ type waitForArgs struct {
 	IntervalSeconds float64 `json:"interval_seconds,omitempty"`
 	TimeoutSeconds  float64 `json:"timeout_seconds,omitempty"`
 	SuccessPattern  string  `json:"success_pattern,omitempty"`
+	Until           string  `json:"until,omitempty"`
 	Sudo            bool    `json:"sudo,omitempty"`
 }
 
@@ -43,7 +45,7 @@ func NewWaitForTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "wait_for",
-			Description: "Poll a shell command until it succeeds, in a single tool call. Use this instead of sleep + re-checking whenever you are waiting for a state change (VM boot, service ready, async job completion, file to appear). The command is re-run every interval_seconds until it exits 0 (and, if success_pattern is set, its combined stdout/stderr matches the regex) or timeout_seconds elapses. On timeout the error includes the last output and exit code so you can see the state it was stuck in. Prefer sudo:true over a 'sudo' prefix in the command (a stray prefix is tolerated but sudo:true is the clean way to ask for root). A command containing 'ssh' is always rejected — use the ssh tool for remote checks instead.",
+			Description: "Poll a shell command until its condition is met, in a single tool call. Use this instead of sleep + re-checking whenever you are waiting for a state change (VM boot, service ready, async job completion, file to appear). By default (until: success), the command is re-run until it exits 0. Set until: failure to wait until it exits non-zero, for example when waiting for a local process check such as 'ps -p 123 -o pid= > /dev/null 2>&1' to report that the process has exited. If success_pattern is set, combined stdout/stderr must also match the regex. timeout_seconds defaults to 120 and is capped at 1800. On timeout the error includes the last output and exit code so you can see the state it was stuck in. Prefer sudo:true over a 'sudo' prefix in the command (a stray prefix is tolerated but sudo:true is the clean way to ask for root). A command containing 'ssh' is always rejected — use the ssh tool for remote checks instead.",
 			Parameters: map[string]any{
 				"command": map[string]any{
 					"type":        "string",
@@ -59,7 +61,12 @@ func NewWaitForTool(opts ...ToolOption) fantasy.AgentTool {
 				},
 				"success_pattern": map[string]any{
 					"type":        "string",
-					"description": "Optional Go regex the command's combined stdout/stderr must match, in addition to exit 0 (e.g. 'exited.*true', 'state:\\s*running')",
+					"description": "Optional Go regex the command's combined stdout/stderr must match, in addition to the selected until exit condition (e.g. 'exited.*true', 'state:\\s*running')",
+				},
+				"until": map[string]any{
+					"type":        "string",
+					"enum":        []string{"success", "failure"},
+					"description": "Exit condition that completes the wait: success (default) waits for exit 0; failure waits for a non-zero exit (e.g. a process no longer exists)",
 				},
 				"sudo": map[string]any{
 					"type":        "boolean",
@@ -81,6 +88,9 @@ func executeWaitFor(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) 
 	}
 	if args.Command == "" {
 		return fantasy.NewTextErrorResponse("command parameter is required"), nil
+	}
+	if args.Until != "" && args.Until != "success" && args.Until != "failure" {
+		return fantasy.NewTextErrorResponse(`until must be "success" or "failure"`), nil
 	}
 
 	effCfg := cfgWithMergedPaths(cfg, ctx)
@@ -143,11 +153,19 @@ func executeWaitFor(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) 
 		}
 	}
 	timeout := defaultWaitForTimeout
+	timeoutCapped := false
+	requestedTimeout := timeout
 	if args.TimeoutSeconds > 0 {
-		timeout = time.Duration(args.TimeoutSeconds * float64(time.Second))
-		if timeout > maxBashTimeout {
-			timeout = maxBashTimeout
+		requestedTimeout = time.Duration(args.TimeoutSeconds * float64(time.Second))
+		timeout = requestedTimeout
+		if timeout > maxWaitForTimeout {
+			timeout = maxWaitForTimeout
+			timeoutCapped = true
 		}
+	}
+	timeoutNotice := ""
+	if timeoutCapped {
+		timeoutNotice = fmt.Sprintf(" (requested timeout %s capped to %s)", requestedTimeout, timeout)
 	}
 
 	name := "bash"
@@ -194,10 +212,16 @@ func executeWaitFor(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) 
 		lastExit = exitCode
 		audit.LogWaitPoll(agentName, args.Command, attempt, exitCode)
 
-		if exitCode == 0 && (pattern == nil || pattern.MatchString(output)) {
+		conditionMet := exitCode == 0
+		if args.Until == "failure" {
+			conditionMet = exitCode != 0
+		}
+		// A deadline-aborted command also returns non-zero. It is not evidence
+		// that an until:failure condition was met.
+		if waitCtx.Err() == nil && conditionMet && (pattern == nil || pattern.MatchString(output)) {
 			tr := TruncateTail(lastOutput, defaultMaxLines, defaultMaxBytes)
-			return fantasy.NewTextResponse(fmt.Sprintf("%s\n\n[wait_for: condition met after %d attempt(s), %s elapsed]",
-				tr.Content, attempt, time.Since(started).Round(time.Second))), nil
+			return fantasy.NewTextResponse(fmt.Sprintf("%s\n\n[wait_for: condition met after %d attempt(s), %s elapsed%s]",
+				tr.Content, attempt, time.Since(started).Round(time.Second), timeoutNotice)), nil
 		}
 
 		// Stop when the parent context is gone or there is no budget left for
@@ -213,7 +237,7 @@ func executeWaitFor(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) 
 		break
 	}
 
-	reason := fmt.Sprintf("wait_for timed out after %s", time.Since(started).Round(time.Second))
+	reason := fmt.Sprintf("wait_for timed out after %s%s", time.Since(started).Round(time.Second), timeoutNotice)
 	if ctx.Err() != nil && time.Now().Before(deadline) {
 		reason = "wait_for cancelled"
 	}
