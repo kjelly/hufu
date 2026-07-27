@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 const (
@@ -69,6 +71,8 @@ func openTaskJournal(workspace string) (*taskJournal, error) {
 }
 
 func (j *taskJournal) append(rec journalRecord) error {
+	rec.Desc = utils.RedactSecrets(rec.Desc)
+	rec.Output = utils.RedactSecrets(rec.Output)
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("append task journal: %w", err)

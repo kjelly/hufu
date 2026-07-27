@@ -193,6 +193,24 @@ func TestSaveSession(t *testing.T) {
 	}
 }
 
+func TestSaveSessionRedactsSecretsOnDisk(t *testing.T) {
+	workspace := t.TempDir()
+	session := &SessionData{Entries: []SessionEntry{{Role: "user", Content: "api_token: top-secret-value"}}}
+	if err := SaveSession(workspace, session); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, sessionFile))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(data), "top-secret-value") {
+		t.Fatalf("session file contains secret: %s", data)
+	}
+	if !strings.Contains(string(data), "[REDACTED]") {
+		t.Fatalf("session file did not record redaction: %s", data)
+	}
+}
+
 // TestNewSession tests the NewSession function
 func TestNewSession(t *testing.T) {
 	session := NewSession()

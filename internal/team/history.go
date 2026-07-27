@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"charm.land/fantasy"
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 const historyFile = "session_history.json"
@@ -23,7 +24,7 @@ func SaveConversationHistory(workspace string, messages []fantasy.Message) error
 	}
 
 	path := filepath.Join(workspace, historyFile)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(utils.RedactSecrets(string(data))), 0o600); err != nil {
 		return fmt.Errorf("write conversation history: %w", err)
 	}
 	return nil

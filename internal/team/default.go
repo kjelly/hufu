@@ -16,9 +16,10 @@ import (
 // are required. workspace is the absolute path used for session
 // persistence; the caller is responsible for creating it.
 //
-// The default team has no teamDir, so skill discovery is limited to
-// global skills under $HOME/.agents/skills/. forcedSkills is merged
-// into the discovered list (missing skills print a warning to stderr).
+// The default team has no teamDir, so it discovers skills from both the
+// current project (.agents/skills) and global skills under $HOME/.agents/skills/.
+// forcedSkills is merged into the discovered list (missing skills print a
+// warning to stderr).
 //
 // helperTools is a comma-separated list of extra tools appended to
 // Helper's default read-only toolset (e.g. "bash" or "bash,sudo,ssh").
@@ -26,8 +27,12 @@ import (
 // Pass "" to keep Helper's default toolset.
 func LoadDefaultTeam(workspace string, forcedSkills []string, helperTools string) (*TeamSession, error) {
 	cfg := agent.TeamConfig{
-		Name:          "default",
-		MaxRounds:     10,
+		Name: "default",
+		// A default runbook often needs more than ten coordinator turns just to
+		// establish and verify a multi-phase environment. Explicit team/CLI
+		// limits still take precedence; this avoids a needless manual resume for
+		// ordinary default-team runs.
+		MaxRounds:     30,
 		WorkspaceDir:  workspace,
 		Timeout:       600,
 		VerifyTimeout: 120,
@@ -88,9 +93,11 @@ func LoadDefaultTeam(workspace string, forcedSkills []string, helperTools string
 	}
 
 	home, _ := os.UserHomeDir()
-	skillDirs := []string{
-		filepath.Join(home, ".agents", "skills"),
+	skillDirs := make([]string, 0, 2)
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		skillDirs = append(skillDirs, filepath.Join(cwd, ".agents", "skills"))
 	}
+	skillDirs = append(skillDirs, filepath.Join(home, ".agents", "skills"))
 	allSkills := skill.DiscoverSkills(skillDirs, false)
 	includeSkills := skill.ParseSkillList(sess.Config.Skills)
 	excludeSkills := skill.ParseSkillList(sess.Config.SkillsExclude)

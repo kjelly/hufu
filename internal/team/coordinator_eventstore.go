@@ -6,6 +6,8 @@ import (
 	"log"
 	"path/filepath"
 	"time"
+
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 // RecordSessionUserMessage adds a user message to SessionData and dual-writes a user_message_added event to EventStore if available.
@@ -17,7 +19,7 @@ func RecordSessionUserMessage(session *SessionData, es *EventStore, content stri
 	if es != nil {
 		payload, _ := json.Marshal(map[string]string{
 			"role":    "user",
-			"content": content,
+			"content": utils.RedactSecrets(content),
 		})
 		if err := es.Append(RunEvent{
 			Type:    "user_message_added",
@@ -38,7 +40,7 @@ func RecordSessionAssistantMessage(session *SessionData, es *EventStore, content
 	if es != nil {
 		payload, _ := json.Marshal(map[string]string{
 			"role":    "assistant",
-			"content": content,
+			"content": utils.RedactSecrets(content),
 		})
 		if err := es.Append(RunEvent{
 			Type:    "assistant_message_added",
@@ -96,7 +98,7 @@ func (c *Coordinator) emitEvent(eventType, actor, taskID string, payload map[str
 	if payload != nil {
 		data, err := json.Marshal(payload)
 		if err == nil {
-			rawPayload = data
+			rawPayload = json.RawMessage(utils.RedactSecrets(string(data)))
 		}
 	}
 	if err := c.eventStore.Append(RunEvent{

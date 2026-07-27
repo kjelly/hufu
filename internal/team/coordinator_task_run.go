@@ -165,6 +165,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if task.Verify != "" {
 		prompt += completionVerificationInstructions(task.Verify, c.projectDir)
 	}
+	if taskUsesVerbatimTranscript(task) {
+		prompt += "\n\n## Verbatim Output Contract\n\nhufu captures every tool call and tool result into a complete transcript artifact. Do not reproduce raw command output in your final response. Submit a concise structured result; the runner will attach the authoritative transcript manifest."
+	}
 	if agentDef != nil {
 		if note := toolUsageNotes(agentDef.Tools); note != "" {
 			prompt += note
@@ -261,6 +264,18 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	c.compileShadowWorker(parentCtx, workerInput, prompt)
 
 	var conversationHistory []fantasy.Message
+	var transcript *taskTranscript
+	if taskUsesVerbatimTranscript(task) {
+		transcript, err = newTaskTranscript(c.session.Workspace, todoID)
+		if err != nil {
+			return "", err
+		}
+		defer func() {
+			if closeErr := transcript.Close(); closeErr != nil {
+				log.Printf("warning: close task transcript: %v", closeErr)
+			}
+		}()
+	}
 	var lastErr error
 	// attemptsMade tracks how many attempts actually ran, since the loop can
 	// exit early (sameFailure, an unfixable verify error, or context
@@ -327,6 +342,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			taskCtx = context.WithValue(taskCtx, hooks.AgentNameKey, agentName)
 			taskCtx = context.WithValue(taskCtx, hooks.TeamNameKey, c.session.Config.Name)
 			taskCtx = context.WithValue(taskCtx, hooks.TaskDescKey, taskDesc)
+			if transcript != nil {
+				taskCtx = context.WithValue(taskCtx, taskTranscriptKey{}, transcript)
+			}
 			if len(agentDef.Guard) > 0 {
 				taskCtx = context.WithValue(taskCtx, tools.GuardRulesKey, agentDef.Guard)
 			}
@@ -406,6 +424,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}
 
 		if err == nil {
+			var typedRes *TaskResult
 			c.pendingPlansMu.Lock()
 			planEntry := c.pendingPlans[todoID]
 			c.pendingPlansMu.Unlock()
@@ -426,7 +445,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				return planEntry.PlanText, nil
 			}
 			if err == nil {
-				typedRes := c.GetTaskResult(todoID)
+				typedRes = c.GetTaskResult(todoID)
 				if typedRes == nil {
 					if task.Execution.StrictResult {
 						err = fmt.Errorf("typed task result mandatory for task %s (%s), but agent did not submit structured result", todoID, agentName)
@@ -438,11 +457,25 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 						c.storeSubmittedTaskResult(todoID, typedRes)
 					}
 				}
+				if err == nil && typedRes.Source == "submitted" {
+					if resultErr := validateSubmittedTaskResult(typedRes); resultErr != nil {
+						err = resultErr
+					}
+				}
 			}
 			if err == nil {
 				if verr := validateTaskOutput(task, output); verr != nil {
 					err = fmt.Errorf("task completion validation failed: %w", verr)
 					c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("completion validation failed: %v", verr)).withTodoID(todoID))
+				}
+			}
+			coordinatorOutput := output
+			if err == nil && transcript != nil {
+				coordinatorOutput, err = finalizeVerbatimTaskResult(transcript, typedRes)
+				if err != nil {
+					err = fmt.Errorf("verbatim transcript validation failed: %w", err)
+				} else if typedRes != nil {
+					c.storeSubmittedTaskResult(todoID, typedRes)
 				}
 			}
 			// Deliverable verification: run an objective check before accepting
@@ -479,26 +512,26 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				}
 			}
 			if err == nil {
-				if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "done", taskDesc, output); err != nil {
+				if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "done", taskDesc, coordinatorOutput); err != nil {
 					log.Printf("warning: failed to write task file: %v", err)
 				}
 				_ = writeStatus(c.session.Workspace, agentName, "done", taskDesc)
 				duration, modelTime, toolTime := timing.snapshot()
-				if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output); statusErr != nil {
+				if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(coordinatorOutput, summaryMaxRunes), coordinatorOutput); statusErr != nil {
 					return "", fmt.Errorf("mark task done: %w", statusErr)
 				}
 				c.updateTodoTiming(todoID, modelTime, toolTime)
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-				c.report(c.newEvent("done").withAgent(agentName).withOutput(output).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
+				c.report(c.newEvent("done").withAgent(agentName).withOutput(coordinatorOutput).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 				c.recordExecutionEvent(todoID, agentName, attempt, "done", resolvedModel, time.Since(attemptStarted), usageFromSteps(steps))
 				if task.Summarize {
-					output = c.summarizeOutput(parentCtx, output)
+					coordinatorOutput = c.summarizeOutput(parentCtx, coordinatorOutput)
 				}
-				c.autoWriteSTMASync(agentName, taskDesc, output, "", true)
+				c.autoWriteSTMASync(agentName, taskDesc, coordinatorOutput, "", true)
 				if appliedHint != "" {
 					c.persistReflexionLessonAsync(agentName, task.Goal, appliedHintTrigger, appliedHint, true, false)
 				}
-				return output, nil
+				return coordinatorOutput, nil
 			}
 		}
 
@@ -759,6 +792,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		},
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
 			timing.beginTool()
+			if transcript, _ := ctx.Value(taskTranscriptKey{}).(*taskTranscript); transcript != nil {
+				if err := transcript.RecordToolCall(tc.ToolCallID, tc.ToolName, tc.Input); err != nil {
+					return err
+				}
+			}
 			argsPreview := tc.Input
 			if len(argsPreview) > 10000 {
 				r := []rune(argsPreview)
@@ -816,6 +854,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			reportFn(c.newEvent("tool_result").withAgent(agentName).withTodoID(todoID).withToolResult(tr.ToolName, resultPreview).withModel(resolvedModel))
 			llmLogStreamEvent(logWrite, "tool_result", formatToolResultContent(tr))
 			_, isErrResult := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Result)
+			if transcript, _ := ctx.Value(taskTranscriptKey{}).(*taskTranscript); transcript != nil {
+				if err := transcript.RecordToolResult(tr.ToolCallID, tr.ToolName, resultPreview, isErrResult); err != nil {
+					return err
+				}
+			}
 			audit.LogToolResult(agentName, tr.ToolName, resultPreview, isErrResult, tr.ToolCallID)
 
 			// 🔁 Track error count for the exact call (tool + input) the

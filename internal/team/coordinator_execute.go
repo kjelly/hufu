@@ -48,6 +48,14 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	}
 
 	tasks = expandPipelineDeps(tasks)
+	for _, task := range tasks {
+		if err := validateTaskOutputMode(task); err != nil {
+			return "", err
+		}
+	}
+	if err := validateObjectiveVerification(tasks); err != nil {
+		return "", err
+	}
 
 	if detectTaskCycle(tasks) {
 		return "", fmt.Errorf("tasks contain a dependency cycle — check depends_on indices")
@@ -60,6 +68,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	// on_failure without max_retries is the natural way to request a retry
 	// loop; default to a single retry so the loop actually triggers.
 	for i := range tasks {
+		// A worker must make its terminal outcome explicit. This is independent
+		// of task type and prevents a prose failure report from being recorded
+		// as a completed task.
+		if !tasks[i].Sidecar {
+			tasks[i].Execution.StrictResult = true
+		}
 		if tasks[i].OnFailure != nil && tasks[i].MaxRetries < 1 {
 			tasks[i].MaxRetries = 1
 		}
@@ -322,4 +336,17 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	c.checkSkillPatterns()
 
 	return formatTaskResults(results, len(tasks), duplicateWarnings)
+}
+
+// validateObjectiveVerification rejects interactive trec-drive tasks that do
+// not provide an objective acceptance command. A syntax lint can pass while a
+// drive run exits unsuccessfully, so accepting the worker's prose alone would
+// incorrectly checkpoint a failed UI automation run as complete.
+func validateObjectiveVerification(tasks []TaskDef) error {
+	for _, task := range tasks {
+		if strings.Contains(strings.ToLower(task.Goal), "trec drive") && strings.TrimSpace(task.Verify) == "" {
+			return fmt.Errorf("task %q runs trec drive and must set verify to an objective result check (for example: jq -e '.status == \"success\"' <cast>.result.json)", task.Goal)
+		}
+	}
+	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"charm.land/fantasy"
 )
@@ -21,8 +22,12 @@ func (t *submitResultTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
 func (t *submitResultTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
 		Name:        "submit_result",
-		Description: "Submit a structured task result for your assigned task.",
+		Description: "Submit the terminal structured result for your assigned task. Call exactly once when finished. status=success is required for the task to be marked done; use partial, failed, or blocked when the requested outcome was not achieved.",
 		Parameters: map[string]any{
+			"status": map[string]any{
+				"type": "string", "enum": []string{"success", "partial", "failed", "blocked"},
+				"description": "Terminal outcome of the assigned goal",
+			},
 			"summary": map[string]any{
 				"type":        "string",
 				"description": "High-level summary of the task result and accomplishments.",
@@ -38,6 +43,17 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 						"type":        map[string]any{"type": "string"},
 					},
 					"required": []string{"path"},
+				},
+			},
+			"raw_output_ref": map[string]any{
+				"type":        "object",
+				"description": "Runner-owned complete tool transcript. For output_mode=verbatim hufu fills and verifies this field automatically; workers must not invent it.",
+				"properties": map[string]any{
+					"path":        map[string]any{"type": "string"},
+					"description": map[string]any{"type": "string"},
+					"type":        map[string]any{"type": "string"},
+					"sha256":      map[string]any{"type": "string"},
+					"bytes":       map[string]any{"type": "integer"},
 				},
 			},
 			"files_read": map[string]any{
@@ -117,7 +133,7 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 				"description": "Self-assessed confidence level (0.0 to 1.0).",
 			},
 		},
-		Required: []string{"summary"},
+		Required: []string{"status", "summary"},
 	}
 }
 
@@ -128,6 +144,12 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	}
 	if res.Summary == "" {
 		return fantasy.NewTextErrorResponse("summary is required"), nil
+	}
+	switch strings.ToLower(strings.TrimSpace(res.Status)) {
+	case "success", "partial", "failed", "blocked":
+		res.Status = strings.ToLower(strings.TrimSpace(res.Status))
+	default:
+		return fantasy.NewTextErrorResponse("status must be success, partial, failed, or blocked"), nil
 	}
 
 	res.TaskID = t.todoID

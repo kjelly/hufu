@@ -9,6 +9,8 @@ type ArtifactRef struct {
 	Path        string `json:"path"`
 	Description string `json:"description,omitempty"`
 	Type        string `json:"type,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	Bytes       int64  `json:"bytes,omitempty"`
 }
 
 type FileRef struct {
@@ -85,6 +87,23 @@ func ParseFreeTextResult(text string) *TaskResult {
 	}
 }
 
+// validateSubmittedTaskResult makes the worker's terminal state explicit.
+// A non-success result is useful evidence, but must flow through retries and
+// error handling rather than silently becoming a completed Todo item.
+func validateSubmittedTaskResult(result *TaskResult) error {
+	if result == nil {
+		return fmt.Errorf("missing structured task result")
+	}
+	switch result.Status {
+	case "success":
+		return nil
+	case "partial", "failed", "blocked":
+		return fmt.Errorf("worker reported task status %q: %s", result.Status, strings.TrimSpace(result.Summary))
+	default:
+		return fmt.Errorf("invalid task result status %q; expected success, partial, failed, or blocked", result.Status)
+	}
+}
+
 // FormatForContext formats the typed result into a human-readable string suitable
 // for passing as context to downstream agents or dependencies.
 func (tr *TaskResult) FormatForContext() string {
@@ -107,6 +126,9 @@ func (tr *TaskResult) FormatForContext() string {
 				fmt.Fprintf(&sb, "  - %s\n", a.Path)
 			}
 		}
+	}
+	if tr.RawOutputRef != nil {
+		fmt.Fprintf(&sb, "Verbatim Transcript: %s (sha256: %s, bytes: %d)\n", tr.RawOutputRef.Path, tr.RawOutputRef.SHA256, tr.RawOutputRef.Bytes)
 	}
 	if len(tr.FilesModified) > 0 {
 		sb.WriteString("Files Modified:\n")

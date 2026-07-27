@@ -45,6 +45,10 @@ type todoIDKey struct{}
 // events can include the model for TUI display.
 type modelKey struct{}
 
+// taskTranscriptKey carries an optional runner-owned transcript recorder into
+// the streaming callbacks for a verbatim task.
+type taskTranscriptKey struct{}
+
 // delegationChainKey carries the "/"-joined chain of agent names that led to
 // the current request_agent call, propagated through the context (the same
 // way todoIDKey is) since the coordinator's mutable snapshot only ever holds
@@ -52,12 +56,17 @@ type modelKey struct{}
 type delegationChainKey struct{}
 
 type TaskDef struct {
-	Agent        string   `json:"agent"`
-	Goal         string   `json:"goal"`
-	Constraints  string   `json:"constraints,omitempty"`
-	Model        string   `json:"model,omitempty"`
-	Sidecar      bool     `json:"sidecar,omitempty"`
-	Summarize    bool     `json:"summarize,omitempty"`
+	Agent       string `json:"agent"`
+	Goal        string `json:"goal"`
+	Constraints string `json:"constraints,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Sidecar     bool   `json:"sidecar,omitempty"`
+	Summarize   bool   `json:"summarize,omitempty"`
+	// OutputMode controls how the worker's output is returned to the
+	// coordinator. "verbatim" captures tool activity in a runner-owned
+	// transcript artifact and returns only its manifest, keeping raw output out
+	// of later LLM context. Empty and "summary" preserve legacy behavior.
+	OutputMode   string   `json:"output_mode,omitempty"`
 	ContextFiles []string `json:"context_files,omitempty"`
 	PlanFirst    bool     `json:"plan_first,omitempty"`
 	PlanID       string   `json:"plan_id,omitempty"`
@@ -527,6 +536,11 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	c.policyEngine = &defaultPolicyEngine{c: c}
 	c.contextCompiler = &defaultContextCompiler{c: c}
 	c.agentPool = &defaultAgentPool{c: c}
+	// Scrub legacy hufu-managed records before they are reloaded into prompts or
+	// opened for append. User workspace artifacts are deliberately excluded.
+	if redactErr := RedactWorkspaceManagedRecords(session.Workspace); redactErr != nil {
+		log.Printf("warning: could not redact managed workspace records: %v", redactErr)
+	}
 	// Phase 1 is deliberately shadow-write only. A failure to open the new
 	// store is observable but must not prevent a legacy team from running.
 	if repo, openErr := contextstore.OpenSQLite(filepath.Join(session.Workspace, "context.sqlite")); openErr != nil {
@@ -745,6 +759,7 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 		"constraints":   map[string]any{"type": "string", "description": "Non-obvious constraints the worker MUST respect (e.g., 'must use Python 3.11', 'cannot modify the public API'). Do NOT include obvious project conventions."},
 		"plan_first":    map[string]any{"type": "boolean", "description": "If true, the agent must draft a task execution plan and call submit_plan before doing any work. Use this for complex tasks where you want to review the approach before execution. After receiving the plan, call approve_plan, modify_plan, or reject_plan."},
 		"summarize":     map[string]any{"type": "boolean", "description": "If true, summarize the agent's output before returning. Use for tasks that produce verbose output where only key points matter."},
+		"output_mode":   map[string]any{"type": "string", "enum": []string{"summary", "verbatim"}, "description": "Output contract. Use verbatim when complete tool output is required: hufu captures a transcript artifact and returns its compact manifest instead of asking the worker to reproduce raw output."},
 		"sidecar":       map[string]any{"type": "boolean", "description": "If true, execute this task directly via the sidecar model instead of an agent. Use for simple, tool-free tasks that need a quick response."},
 		"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": contextFilesDesc},
 		"depends_on": map[string]any{

@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 var safeNameRegex = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
@@ -144,7 +146,7 @@ func LoadLTM(workspace, teamName string) string {
 }
 
 func SaveLTM(workspace, teamName, content string) error {
-	return os.WriteFile(LTMPath(workspace, teamName), []byte(content), 0o644)
+	return os.WriteFile(LTMPath(workspace, teamName), []byte(utils.RedactSecrets(content)), 0o600)
 }
 
 func InitLTM(workspace, teamName string) error {

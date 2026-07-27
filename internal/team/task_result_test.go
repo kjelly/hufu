@@ -49,6 +49,19 @@ func TestTaskResult_SchemaAndFormatting(t *testing.T) {
 	}
 }
 
+func TestValidateSubmittedTaskResultRejectsNonSuccess(t *testing.T) {
+	for _, status := range []string{"partial", "failed", "blocked"} {
+		t.Run(status, func(t *testing.T) {
+			if err := validateSubmittedTaskResult(&TaskResult{Status: status, Summary: "work remains"}); err == nil {
+				t.Fatalf("status %q unexpectedly accepted", status)
+			}
+		})
+	}
+	if err := validateSubmittedTaskResult(&TaskResult{Status: "success", Summary: "done"}); err != nil {
+		t.Fatalf("success rejected: %v", err)
+	}
+}
+
 func TestParseFreeTextResult(t *testing.T) {
 	text := "Done with the task. All tests passed."
 	tr := ParseFreeTextResult(text)
@@ -79,8 +92,12 @@ func TestSubmitResultTool(t *testing.T) {
 	if info.Name != "submit_result" {
 		t.Fatalf("expected tool name 'submit_result', got %q", info.Name)
 	}
+	if _, ok := info.Parameters["raw_output_ref"]; !ok {
+		t.Fatal("submit_result schema omitted raw_output_ref")
+	}
 
 	input := map[string]any{
+		"status":  "success",
 		"summary": "Completed subtask successfully",
 		"artifacts": []map[string]any{
 			{"path": "workspace/result.json", "description": "JSON report"},

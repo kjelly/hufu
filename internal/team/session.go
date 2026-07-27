@@ -65,7 +65,7 @@ func SaveSession(workspace string, session *SessionData) error {
 	if err != nil {
 		return err
 	}
-	return AtomicWriteFile(filepath.Join(workspace, sessionFile), data, 0o644)
+	return AtomicWriteFile(filepath.Join(workspace, sessionFile), []byte(utils.RedactSecrets(string(data))), 0o600)
 }
 
 func NewSession() *SessionData {

@@ -29,8 +29,8 @@ func TestLoadDefaultTeam_BasicStructure(t *testing.T) {
 	if session.Dir != ws {
 		t.Errorf("Dir = %q, want %q", session.Dir, ws)
 	}
-	if session.Config.MaxRounds != 10 {
-		t.Errorf("Config.MaxRounds = %d, want 10", session.Config.MaxRounds)
+	if session.Config.MaxRounds != 30 {
+		t.Errorf("Config.MaxRounds = %d, want 30", session.Config.MaxRounds)
 	}
 	if session.Config.Timeout != 600 {
 		t.Errorf("Config.Timeout = %d, want 600", session.Config.Timeout)
@@ -41,6 +41,30 @@ func TestLoadDefaultTeam_BasicStructure(t *testing.T) {
 	if len(session.MCPServers) != 0 {
 		t.Errorf("MCPServers = %d, want 0", len(session.MCPServers))
 	}
+}
+
+func TestLoadDefaultTeam_DiscoversProjectSkills(t *testing.T) {
+	project := t.TempDir()
+	skillDir := filepath.Join(project, ".agents", "skills", "trec-drive")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: trec-drive\ndescription: Drive interactive terminals safely\n---\nUse snapshots.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Chdir(project)
+	t.Setenv("HOME", t.TempDir())
+
+	session, err := LoadDefaultTeam(t.TempDir(), nil, "")
+	if err != nil {
+		t.Fatalf("LoadDefaultTeam returned error: %v", err)
+	}
+	for _, s := range session.Skills {
+		if s.Name == "trec-drive" {
+			return
+		}
+	}
+	t.Fatalf("session.Skills missing project-local skill; got %#v", session.Skills)
 }
 
 func TestLoadDefaultTeam_AgentsDistinct(t *testing.T) {

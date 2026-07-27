@@ -139,6 +139,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("- **task**: DEPRECATED — use 'goal' instead. Legacy task description.\n")
 	b.WriteString("- **requires**: Optional capability names the task depends on. Use this only for checks declared in team.yaml `preflight`.\n")
 	b.WriteString("- **summarize**: Set to `true` to condense the agent's output before returning. Use for tasks that may produce verbose output where only key points matter.\n")
+	b.WriteString("- **output_mode**: Set to `verbatim` when the user needs complete command/tool output. hufu, not the worker, captures the complete transcript as an artifact; you receive only its manifest. Do not re-read files merely to reconstruct a verbatim transcript.\n")
 	b.WriteString("- **adversarial_verify**: Number of skeptic LLM verifiers (1-3) that try to refute the result after success; a majority refutation fails the task into a retry. Use for high-stakes tasks where a shell `verify` cannot check quality.\n")
 	b.WriteString("- **verify**: Optional shell command run in the project directory after the task succeeds to objectively confirm the deliverable exists or a condition holds. MUST be a runnable `sh -c` command — NOT a natural-language description.\n")
 	b.WriteString("  - ✅ CREATE/DEPLOY tasks — verify the resource EXISTS: `test -f workspace/report.md` or `virsh list --all | grep -c running`\n")
@@ -314,6 +315,7 @@ Rules:
 - ALWAYS call finish when done — do not just output text as your final answer
 - If the user's task relates to a skill, use load_skill to get the detailed instructions. Include the skill name and file path in worker task descriptions so workers can load it themselves if needed
 - Workers have access to load_skill — include the skill name and path in the task description rather than the full skill content
+- When an agent result says VERBATIM TRANSCRIPT CAPTURED, treat its artifact manifest as authoritative evidence. Do not call view, grep, or delegate another task merely to reconstruct that transcript; report its path and integrity metadata instead.
 
 Delegation Guidelines:
 - Break down user requests into outcome-oriented goals for each worker

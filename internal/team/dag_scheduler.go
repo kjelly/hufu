@@ -242,6 +242,12 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	}
 	agentKey := strings.ToLower(td.Agent)
 	cacheKey := agentKey + ":" + taskCacheIdentity(desc, td.Verify, td.VerifyMode)
+	// A verbatim task owns a per-todo evidence artifact. Identical concurrent
+	// tasks must not share an in-flight result, or the follower would report a
+	// manifest for the owner's transcript instead of producing its own evidence.
+	if taskUsesVerbatimTranscript(td) {
+		cacheKey += ":verbatim:" + tid
+	}
 	var isOwner bool
 
 	if len(td.Requires) > 0 {
@@ -338,9 +344,10 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	isOwner = true
 	s.inflightMu.Unlock()
 
-	// Check the task result cache before running. Sidecar tasks and tasks
-	// that explicitly request summarize always run fresh.
-	if !td.Sidecar && !td.Summarize {
+	// Check the task result cache before running. Sidecar tasks, summarized
+	// tasks, and verbatim-output tasks always run fresh: a cached prose result
+	// cannot satisfy a new runner-owned transcript contract.
+	if !td.Sidecar && !td.Summarize && !taskUsesVerbatimTranscript(td) {
 		if cached, ok := c.lookupTaskCacheWithVerification(ctx, agentKey, desc, td.Verify, td.VerifyMode); ok {
 			c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(desc).withTodoID(tid))
 			c.taskTracker.TodoList().UpdateStatusAndOutput(tid, TaskDone, utils.TruncateRunes(cached, summaryMaxRunes), cached)

@@ -254,7 +254,7 @@ func LoadSTM(workspace string) string {
 }
 
 func SaveSTM(workspace string, content string) error {
-	return AtomicWriteFile(STMPath(workspace), []byte(content), 0o644)
+	return AtomicWriteFile(STMPath(workspace), []byte(utils.RedactSecrets(content)), 0o600)
 }
 
 func TruncateSTM(content string) string {

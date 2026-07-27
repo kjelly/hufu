@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 const (
@@ -68,7 +70,7 @@ func writeTaskFileWithDetail(workspace, teamName, agentName, timestamp, status, 
 	}
 
 	content := fmt.Sprintf("# Agent Task: %s\n\n**Status:** %s\n**Updated:** %s\n%s\n---\n\n## Task Description\n\n%s\n\n---\n\n## Result\n\n%s\n%s",
-		agentName, status, now, completedLine, task, resultSection, failureSection)
+		agentName, status, now, completedLine, utils.RedactSecrets(task), utils.RedactSecrets(resultSection), utils.RedactSecrets(failureSection))
 
 	path := filepath.Join(dir, timestamp+".md")
 	return os.WriteFile(path, []byte(content), 0o644)
@@ -83,9 +85,9 @@ func writeStatusWithDetail(workspace, agentName, status, task, detail string) er
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	data := fmt.Sprintf("status: %s\ntask: %s\ntime: %s\n", status, task, time.Now().Format(time.RFC3339))
+	data := fmt.Sprintf("status: %s\ntask: %s\ntime: %s\n", status, utils.RedactSecrets(task), time.Now().Format(time.RFC3339))
 	if detail != "" {
-		data += fmt.Sprintf("detail: %s\n", detail)
+		data += fmt.Sprintf("detail: %s\n", utils.RedactSecrets(detail))
 	}
 	path := filepath.Join(dir, agentName+".yml")
 	return os.WriteFile(path, []byte(data), 0o644)
@@ -118,5 +120,5 @@ func writeLLMLog(workspace, teamName, agentName, entry string) {
 		return
 	}
 	defer f.Close()
-	_, _ = f.WriteString(entry)
+	_, _ = f.WriteString(utils.RedactSecrets(entry))
 }
