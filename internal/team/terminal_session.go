@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"syscall"
 	"time"
@@ -24,6 +25,10 @@ import (
 )
 
 const terminalSessionsFile = "terminal_sessions.json"
+
+const terminalScreenMaxBytes = 16 * 1024
+
+var terminalANSISequence = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
 
 // TerminalSessionState records the durable lifecycle state of a session.
 // Unknown is used after a process restart: hufu must not claim a child is gone
@@ -118,6 +123,7 @@ type TerminalInput struct {
 type TerminalReadResult struct {
 	Session TerminalSession
 	Output  []byte
+	Screen  string
 	EOF     bool
 }
 
@@ -129,6 +135,7 @@ type TerminalManager interface {
 	Close(context.Context, string) error
 	List(context.Context, string) ([]TerminalSession, error)
 	Reconcile(context.Context, string) (TerminalSession, error)
+	Resize(context.Context, string, uint16, uint16) error
 }
 
 // TerminalEventSink receives durable lifecycle facts. Coordinator wires this to
@@ -156,13 +163,15 @@ func terminalTaskID(ctx context.Context) string {
 }
 
 type managedTerminalSession struct {
-	session    TerminalSession
-	cmd        *exec.Cmd
-	stdin      io.WriteCloser
-	outputPath string
-	outputFile *os.File
-	done       chan struct{}
-	readOffset int64
+	session     TerminalSession
+	cmd         *exec.Cmd
+	stdin       io.WriteCloser
+	outputPath  string
+	outputFile  *os.File
+	done        chan struct{}
+	readOffset  int64
+	ptyMaster   *os.File
+	ptyCopyDone chan struct{}
 }
 
 // TerminalSessionManager owns live child handles and persists lifecycle state.
@@ -263,8 +272,6 @@ func (m *TerminalSessionManager) Start(ctx context.Context, req TerminalStartReq
 
 	cmd := exec.Command(req.Command[0], req.Command[1:]...)
 	cmd.Dir = req.WorkingDir
-	cmd.Stdout = outputFile
-	cmd.Stderr = outputFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if req.NetworkBlock {
 		if err := tools.SetNetNamespace(cmd); err != nil {
@@ -272,14 +279,33 @@ func (m *TerminalSessionManager) Start(ctx context.Context, req TerminalStartReq
 			return nil, fmt.Errorf("set network namespace for terminal command: %w", err)
 		}
 	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		_ = outputFile.Close()
-		return nil, fmt.Errorf("open terminal stdin: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		_ = outputFile.Close()
-		return nil, fmt.Errorf("start terminal command: %w", err)
+	var stdin io.WriteCloser
+	var ptyMaster *os.File
+	var ptyCopyDone chan struct{}
+	if req.Mode == TerminalModePTY {
+		ptyMaster, err = startTerminalPTY(cmd, req.Rows, req.Cols)
+		if err != nil {
+			_ = outputFile.Close()
+			return nil, err
+		}
+		stdin = ptyMaster
+		ptyCopyDone = make(chan struct{})
+		go func() {
+			_, _ = io.Copy(outputFile, ptyMaster)
+			close(ptyCopyDone)
+		}()
+	} else {
+		cmd.Stdout = outputFile
+		cmd.Stderr = outputFile
+		stdin, err = cmd.StdinPipe()
+		if err != nil {
+			_ = outputFile.Close()
+			return nil, fmt.Errorf("open terminal stdin: %w", err)
+		}
+		if err := cmd.Start(); err != nil {
+			_ = outputFile.Close()
+			return nil, fmt.Errorf("start terminal command: %w", err)
+		}
 	}
 
 	relOutput, _ := filepath.Rel(m.workspace, outputPath)
@@ -291,7 +317,7 @@ func (m *TerminalSessionManager) Start(ctx context.Context, req TerminalStartReq
 		StartedAt: now, Running: true, State: TerminalSessionRunning, PID: cmd.Process.Pid,
 		ProcessIdentity: identity, Mode: req.Mode, Controller: TerminalControllerAgent, Rows: req.Rows, Cols: req.Cols,
 		OutputRefs: []ArtifactRef{{Path: relOutput, Type: "terminal_output", Description: "complete terminal session output"}},
-	}, cmd: cmd, stdin: stdin, outputPath: outputPath, outputFile: outputFile, done: make(chan struct{})}
+	}, cmd: cmd, stdin: stdin, outputPath: outputPath, outputFile: outputFile, done: make(chan struct{}), ptyMaster: ptyMaster, ptyCopyDone: ptyCopyDone}
 
 	m.mu.Lock()
 	m.sessions[id] = managed
@@ -348,6 +374,12 @@ func (m *TerminalSessionManager) waitForExit(managed *managedTerminalSession, ti
 	m.mu.Lock()
 	if current := m.sessions[managed.session.ID]; current == managed {
 		var ioErr error
+		if managed.ptyMaster != nil {
+			_ = managed.ptyMaster.Close()
+			if managed.ptyCopyDone != nil {
+				<-managed.ptyCopyDone
+			}
+		}
 		if managed.outputFile != nil {
 			if sErr := managed.outputFile.Sync(); sErr != nil && ioErr == nil {
 				ioErr = sErr
@@ -425,6 +457,28 @@ func (m *TerminalSessionManager) ReleaseUserLease(id, leaseID string) error {
 	return nil
 }
 
+// Resize changes the dimensions of a live PTY session.
+func (m *TerminalSessionManager) Resize(ctx context.Context, id string, rows, cols uint16) error {
+	if rows == 0 || cols == 0 {
+		return fmt.Errorf("terminal session %q resize dimensions must be positive", id)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed, err := m.ownerSessionLocked(ctx, id, "")
+	if err != nil {
+		return err
+	}
+	if managed.session.Mode != TerminalModePTY || managed.ptyMaster == nil {
+		return fmt.Errorf("terminal session %q is not a PTY", id)
+	}
+	if err := resizeTerminalPTY(managed.ptyMaster, rows, cols); err != nil {
+		return err
+	}
+	managed.session.Rows = rows
+	managed.session.Cols = cols
+	return m.persistLocked()
+}
+
 func (m *TerminalSessionManager) Write(ctx context.Context, id string, input TerminalInput) error {
 	m.mu.Lock()
 	managed, err := m.ownerSessionLocked(ctx, id, input.OwnerTaskID)
@@ -482,7 +536,11 @@ func (m *TerminalSessionManager) Read(ctx context.Context, id string) (TerminalR
 	copy := deepCopyTerminalSession(managed.session)
 	m.emit("terminal_session_read", copy, map[string]interface{}{"bytes": len(output)})
 	eof := !copy.Running && copy.State != TerminalSessionUnknown
-	return TerminalReadResult{Session: copy, Output: output, EOF: eof}, nil
+	screen := terminalANSISequence.ReplaceAllString(string(data), "")
+	if len(screen) > terminalScreenMaxBytes {
+		screen = screen[len(screen)-terminalScreenMaxBytes:]
+	}
+	return TerminalReadResult{Session: copy, Output: output, Screen: screen, EOF: eof}, nil
 }
 
 func (m *TerminalSessionManager) Close(ctx context.Context, id string) error {

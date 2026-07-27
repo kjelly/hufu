@@ -802,3 +802,74 @@ func TestTerminalSessionLegacyRecordDefaultsToPipe(t *testing.T) {
 		t.Fatalf("legacy session mode = %+v, want pipe", sessions)
 	}
 }
+
+func TestPTYSessionReportsTTYAndAcceptsInput(t *testing.T) {
+	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithTerminalTaskID(context.Background(), "task-pty")
+	session, err := manager.Start(ctx, TerminalStartRequest{
+		RunID: "run-pty", OwnerTaskID: "task-pty", Mode: TerminalModePTY,
+		Command: []string{"sh", "-c", "test -t 0 && { read line; printf 'answer:%s' \"$line\"; }"},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = manager.Close(ctx, session.ID) }()
+	if err := manager.Write(ctx, session.ID, TerminalInput{Data: []byte("ok\n")}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	completed := waitForTerminal(t, manager, session.ID, time.Second)
+	if completed.ExitCode == nil || *completed.ExitCode != 0 {
+		t.Fatalf("PTY command exit = %+v, want 0", completed)
+	}
+	read, err := manager.Read(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(read.Output), "answer:ok") {
+		t.Fatalf("PTY output = %q, want answer", read.Output)
+	}
+}
+
+func TestPTYSessionResizeRejectsPipeSession(t *testing.T) {
+	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithTerminalTaskID(context.Background(), "task-pipe")
+	session, err := manager.Start(ctx, TerminalStartRequest{
+		RunID: "run-pipe", OwnerTaskID: "task-pipe", Command: []string{"sh", "-c", "sleep 1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.Close(ctx, session.ID) }()
+	if err := manager.Resize(ctx, session.ID, 41, 123); err == nil || !strings.Contains(err.Error(), "not a PTY") {
+		t.Fatalf("Resize pipe error = %v, want PTY rejection", err)
+	}
+}
+
+func TestPTYReadReturnsNormalizedBoundedScreen(t *testing.T) {
+	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithTerminalTaskID(context.Background(), "task-screen")
+	session, err := manager.Start(ctx, TerminalStartRequest{
+		RunID: "run-screen", OwnerTaskID: "task-screen", Mode: TerminalModePTY,
+		Command: []string{"sh", "-c", "printf '\\033[2Jhello\\033[0m'"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = waitForTerminal(t, manager, session.ID, time.Second)
+	read, err := manager.Read(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(read.Screen, "\x1b[") || !strings.Contains(read.Screen, "hello") {
+		t.Fatalf("screen = %q, want ANSI-free hello", read.Screen)
+	}
+}
