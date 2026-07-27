@@ -79,7 +79,7 @@ func (l *AuditLogger) LogToolCall(agent, tool, input, callID string) {
 		Action:    "call",
 		Event:     EventToolCall,
 		CallID:    callID,
-		Input:     utils.TruncateString(input, 10000),
+		Input:     utils.RedactSecrets(utils.TruncateString(input, 10000)),
 	})
 }
 
@@ -96,11 +96,11 @@ func (l *AuditLogger) LogToolResult(agent, tool, result string, isError bool, ca
 		Action:    "result",
 		Event:     EventToolResult,
 		CallID:    callID,
-		Result:    utils.TruncateString(result, 5000),
+		Result:    utils.RedactSecrets(utils.TruncateString(result, 5000)),
 	}
 	if isError {
 		entry.Event = EventToolError
-		entry.Error = utils.TruncateString(result, 5000)
+		entry.Error = utils.RedactSecrets(utils.TruncateString(result, 5000))
 	}
 	l.log(entry)
 }
@@ -207,7 +207,7 @@ func (l *AuditLogger) LogWaitPoll(agent, command string, attempt, exitCode int) 
 		Tool:      "wait_for",
 		Action:    "poll",
 		Event:     EventWaitPoll,
-		Input:     utils.TruncateString(command, 500),
+		Input:     utils.RedactSecrets(utils.TruncateString(command, 500)),
 		Result:    fmt.Sprintf("attempt=%d, exit_code=%d", attempt, exitCode),
 	})
 }
@@ -226,7 +226,7 @@ func (l *AuditLogger) LogSSHConnection(agent, host, command string, exitCode int
 		Tool:      "ssh",
 		Action:    "ssh_connection",
 		Event:     EventSSH,
-		Input:     fmt.Sprintf("host=%s, command=%s", host, utils.TruncateString(command, 500)),
+		Input:     fmt.Sprintf("host=%s, command=%s", host, utils.RedactSecrets(utils.TruncateString(command, 500))),
 		Result:    fmt.Sprintf("exit_code=%d, duration_ms=%d", exitCode, durationMs),
 	})
 }
