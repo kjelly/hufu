@@ -457,6 +457,26 @@ func (m *TerminalSessionManager) ReleaseUserLease(id, leaseID string) error {
 	return nil
 }
 
+// WriteUserLease forwards input from the current human controller.
+func (m *TerminalSessionManager) WriteUserLease(id, leaseID string, data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed, ok := m.sessions[id]
+	if !ok {
+		return fmt.Errorf("terminal session %q not found", id)
+	}
+	if managed.session.Controller != TerminalControllerUser || managed.session.LeaseID != leaseID {
+		return fmt.Errorf("terminal session %q lease is no longer active", id)
+	}
+	if !managed.session.Running || managed.stdin == nil {
+		return fmt.Errorf("terminal session %q is not running", id)
+	}
+	if _, err := managed.stdin.Write(data); err != nil {
+		return fmt.Errorf("write terminal session %q: %w", id, err)
+	}
+	return nil
+}
+
 // Resize changes the dimensions of a live PTY session.
 func (m *TerminalSessionManager) Resize(ctx context.Context, id string, rows, cols uint16) error {
 	if rows == 0 || cols == 0 {
