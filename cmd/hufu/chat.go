@@ -171,6 +171,8 @@ func runChat(cmd *cobra.Command, args []string) error {
 			teamInfo.MemoryModel = config.ResolveEmbeddingModel(opts.memoryModel)
 		}
 		teamInfo.SSHSessions = 0
+		teamInfo.PTYEnabled = opts.enablePTYTerminal
+		teamInfo.HufuBinary, _ = os.Executable()
 		teamInfo.IsChat = true
 
 		segments := []team.PromptSegment{

@@ -1329,6 +1329,12 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 				p.Send(tuipkg.StatusBarMsg{Text: doneStyle.Render("✓ " + event.Message)})
 			}
 
+		case "terminal_started":
+			if event.TodoID != "" && event.Message != "" {
+				p.Send(tuipkg.TerminalSessionMsg{TodoID: event.TodoID, SessionID: event.Message})
+				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render("PTY terminal ready — open task detail and press t to attach")})
+			}
+
 		case "wrap_up_phase":
 			if event.Todos != nil {
 				p.Send(tuipkg.TasksUpdatedMsg{Items: event.Todos})

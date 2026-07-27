@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -62,11 +63,23 @@ type TeamInfo struct {
 	TeamDir        string
 	SSHSessions    int
 	IsChat         bool
+	PTYEnabled     bool
+	HufuBinary     string
 }
 
 type TeamInfoMsg struct{ Info TeamInfo }
 
 type SSHSessionsMsg struct{ Count int }
+
+// TerminalSessionMsg maps a task to the PTY session created by its terminal
+// tool call. It lets the detail view attach without asking the operator to
+// copy a session ID from logs.
+type TerminalSessionMsg struct {
+	TodoID    string
+	SessionID string
+}
+
+type terminalAttachFinishedMsg struct{ Err error }
 
 type WrapUpMsg struct{}
 
@@ -206,10 +219,11 @@ type Model struct {
 	recentLogs             []string // last N activity log entries (circular buffer, max 500 entries; each may be multi-line, capped at maxFeedLines rendered lines)
 	detailRefreshScheduled bool
 
-	inVisual    bool // VISUAL mode active in detail view
-	cursorLine  int  // current line index within detail logs
-	visualStart int  // selection start line index
-	visualEnd   int  // selection end line index
+	inVisual    bool              // VISUAL mode active in detail view
+	cursorLine  int               // current line index within detail logs
+	visualStart int               // selection start line index
+	visualEnd   int               // selection end line index
+	terminals   map[string]string // todoID → current PTY session ID
 }
 
 func enableMouseCmd() tea.Cmd {
@@ -235,6 +249,7 @@ func New(prompt string, teamInfo TeamInfo) Model {
 	m := Model{
 		prompt:         prompt,
 		logs:           make(map[string][]string),
+		terminals:      make(map[string]string),
 		promptInput:    ti,
 		searchInput:    si,
 		PromptInjectCh: make(chan string, 16),
@@ -382,6 +397,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SSHSessionsMsg:
 		m.teamInfo.SSHSessions = msg.Count
+
+	case TerminalSessionMsg:
+		if msg.TodoID != "" && msg.SessionID != "" {
+			m.terminals[msg.TodoID] = msg.SessionID
+		}
+
+	case terminalAttachFinishedMsg:
+		if msg.Err != nil {
+			m.statusText = errorIcon.Render("✗ terminal attach: " + msg.Err.Error())
+		} else {
+			m.statusText = doneStyle.Render("✓ terminal control returned to hufu")
+		}
 
 	case FinishedMsg:
 		m.finished = true
@@ -657,6 +684,8 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "v":
 		return m.enterVisual()
+	case "t":
+		return m.attachTerminal()
 	case "j", "down":
 		contentLines := len(m.logs[m.detailID])
 		if contentLines > 0 && m.cursorLine < contentLines-1 {
@@ -753,6 +782,24 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)
 	return m, cmd
+}
+
+func (m Model) attachTerminal() (tea.Model, tea.Cmd) {
+	if !m.teamInfo.PTYEnabled {
+		m.statusText = errorIcon.Render("PTY terminal is disabled; restart hufu with --enable-pty-terminal")
+		return m, nil
+	}
+	if m.teamInfo.Workspace == "" || m.teamInfo.HufuBinary == "" {
+		m.statusText = errorIcon.Render("terminal attach is unavailable without workspace and hufu binary")
+		return m, nil
+	}
+	sessionID := m.terminals[m.detailID]
+	if sessionID == "" {
+		m.statusText = dimStyle.Render("no PTY terminal session is associated with this task")
+		return m, nil
+	}
+	cmd := exec.Command(m.teamInfo.HufuBinary, "terminal", "attach", sessionID, "--workspace", m.teamInfo.Workspace)
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return terminalAttachFinishedMsg{Err: err} })
 }
 
 // followCursor updates the viewport YOffset to keep the cursor visible.
@@ -2125,7 +2172,7 @@ func (m Model) footer() string {
 				boldStyle.Render("v/esc") + footerStyle.Render(" cancel · ") +
 				boldStyle.Render("j/k") + footerStyle.Render(" extend")
 		}
-		return footerStyle.Render("J/K/ctrl+d/u ↑↓ scroll · v visual · esc back")
+		return footerStyle.Render("J/K/ctrl+d/u ↑↓ scroll · t attach PTY · v visual · esc back")
 	}
 	if m.inInfo {
 		return footerStyle.Render("i/esc close · ↑↓ scroll")
@@ -2180,6 +2227,7 @@ Detail view
   g / G             top / bottom
   v                 enter VISUAL mode
   y                 yank selection to clipboard (VISUAL only)
+  t                 attach to the task PTY (Ctrl-] returns control)
   esc / backspace   return to columns
 `)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)

@@ -183,6 +183,8 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 					teamInfo.MemoryModel = config.ResolveEmbeddingModel(opts.memoryModel)
 				}
 				teamInfo.SSHSessions = 0
+				teamInfo.PTYEnabled = opts.enablePTYTerminal
+				teamInfo.HufuBinary, _ = os.Executable()
 				break
 			}
 		}

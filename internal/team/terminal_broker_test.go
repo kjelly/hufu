@@ -122,3 +122,61 @@ func TestTerminalBrokerRejectsConcurrentAttach(t *testing.T) {
 		t.Fatalf("second attach = %+v, want conflict", second)
 	}
 }
+
+func TestTerminalAttachmentClientTransfersInputAndDetaches(t *testing.T) {
+	workspace := t.TempDir()
+	manager, err := NewTerminalSessionManager(workspace, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithTerminalTaskID(context.Background(), "task-client")
+	session, err := manager.Start(ctx, TerminalStartRequest{
+		RunID: "run-client", OwnerTaskID: "task-client", Mode: TerminalModePTY,
+		Command: []string{"sh", "-c", `read line; printf 'client:%s' "$line"`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.Close(ctx, session.ID) }()
+	broker, err := StartTerminalBroker(workspace, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = broker.Close() }()
+
+	client, err := DialTerminalBroker(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+	if _, err := client.Attach(session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Write([]byte("ok\n")); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		snapshot, err := client.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(snapshot.Screen, "client:ok") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("client never received child output")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := client.Detach(); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := manager.List(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sessions[0].Controller; got != TerminalControllerAgent {
+		t.Fatalf("controller after detach = %s, want %s", got, TerminalControllerAgent)
+	}
+}
