@@ -749,3 +749,56 @@ func TestTerminalSession_PIDIdentityMismatch(t *testing.T) {
 		t.Fatalf("RequireTaskClosed should fail for unknown session after identity mismatch")
 	}
 }
+
+func TestTerminalSessionUserLeaseBlocksAgentWrite(t *testing.T) {
+	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithTerminalTaskID(context.Background(), "task-lease")
+	session, err := manager.Start(ctx, TerminalStartRequest{
+		RunID: "run-lease", OwnerTaskID: "task-lease",
+		Command: []string{"sh", "-c", "read line; printf %s \"$line\""},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.Close(ctx, session.ID) }()
+
+	lease, err := manager.AcquireUserLease(session.ID)
+	if err != nil {
+		t.Fatalf("AcquireUserLease: %v", err)
+	}
+	if lease.ID == "" {
+		t.Fatal("AcquireUserLease returned empty ID")
+	}
+	if err := manager.Write(ctx, session.ID, TerminalInput{Data: []byte("blocked\n")}); err == nil || !strings.Contains(err.Error(), "controlled by a user") {
+		t.Fatalf("Write while leased error = %v, want user controller rejection", err)
+	}
+	if err := manager.ReleaseUserLease(session.ID, lease.ID); err != nil {
+		t.Fatalf("ReleaseUserLease: %v", err)
+	}
+}
+
+func TestTerminalSessionLegacyRecordDefaultsToPipe(t *testing.T) {
+	workspace := t.TempDir()
+	logs := filepath.Join(workspace, logsDir)
+	if err := os.MkdirAll(logs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `[{"id":"legacy","run_id":"run","owner_task_id":"task","state":"exited"}]`
+	if err := os.WriteFile(filepath.Join(logs, terminalSessionsFile), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewTerminalSessionManager(workspace, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := manager.List(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Mode != TerminalModePipe {
+		t.Fatalf("legacy session mode = %+v, want pipe", sessions)
+	}
+}

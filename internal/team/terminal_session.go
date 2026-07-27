@@ -37,6 +37,28 @@ const (
 	TerminalSessionUnknown TerminalSessionState = "unknown"
 )
 
+// TerminalMode determines whether a session uses ordinary pipes or a PTY.
+type TerminalMode string
+
+const (
+	TerminalModePipe TerminalMode = "pipe"
+	TerminalModePTY  TerminalMode = "pty"
+)
+
+// TerminalController owns terminal input for a running session.
+type TerminalController string
+
+const (
+	TerminalControllerNone  TerminalController = "none"
+	TerminalControllerAgent TerminalController = "agent"
+	TerminalControllerUser  TerminalController = "user"
+)
+
+// TerminalLease identifies an exclusive human takeover.
+type TerminalLease struct {
+	ID string `json:"id"`
+}
+
 // ProcessIdentity captures verifiable OS process attributes across restarts
 type ProcessIdentity struct {
 	PID       int    `json:"pid,omitempty"`
@@ -62,6 +84,12 @@ type TerminalSession struct {
 	OutputRefs      []ArtifactRef        `json:"output_refs,omitempty"`
 	PID             int                  `json:"pid,omitempty"`
 	ProcessIdentity *ProcessIdentity     `json:"process_identity,omitempty"`
+	Mode            TerminalMode         `json:"mode,omitempty"`
+	Controller      TerminalController   `json:"controller,omitempty"`
+	LeaseID         string               `json:"lease_id,omitempty"`
+	Rows            uint16               `json:"rows,omitempty"`
+	Cols            uint16               `json:"cols,omitempty"`
+	AttachedAt      time.Time            `json:"attached_at,omitempty"`
 }
 
 // TerminalStartRequest describes a child process. ChildTimeout applies only to
@@ -74,6 +102,9 @@ type TerminalStartRequest struct {
 	WorkingDir   string
 	ChildTimeout time.Duration
 	NetworkBlock bool
+	Mode         TerminalMode
+	Rows         uint16
+	Cols         uint16
 }
 
 // TerminalInput carries the caller task identity required for ownership checks.
@@ -176,6 +207,12 @@ func (m *TerminalSessionManager) restore() error {
 	changed := false
 	for i := range sessions {
 		s := sessions[i]
+		if s.Mode == "" {
+			s.Mode = TerminalModePipe
+		}
+		if s.Controller == "" {
+			s.Controller = TerminalControllerNone
+		}
 		if s.State == TerminalSessionRunning || s.Running {
 			prevState := s.State
 			s.State = TerminalSessionUnknown
@@ -203,6 +240,12 @@ func (m *TerminalSessionManager) Start(ctx context.Context, req TerminalStartReq
 	}
 	if len(req.Command) == 0 || req.Command[0] == "" {
 		return nil, errors.New("start terminal session: command is required")
+	}
+	if req.Mode == "" {
+		req.Mode = TerminalModePipe
+	}
+	if req.Mode != TerminalModePipe && req.Mode != TerminalModePTY {
+		return nil, fmt.Errorf("start terminal session: unknown mode %q", req.Mode)
 	}
 
 	id, err := newTerminalSessionID()
@@ -246,8 +289,8 @@ func (m *TerminalSessionManager) Start(ctx context.Context, req TerminalStartReq
 		ID: id, RunID: req.RunID, OwnerTaskID: req.OwnerTaskID, Agent: req.Agent,
 		Command: append([]string(nil), req.Command...), WorkingDir: req.WorkingDir,
 		StartedAt: now, Running: true, State: TerminalSessionRunning, PID: cmd.Process.Pid,
-		ProcessIdentity: identity,
-		OutputRefs:      []ArtifactRef{{Path: relOutput, Type: "terminal_output", Description: "complete terminal session output"}},
+		ProcessIdentity: identity, Mode: req.Mode, Controller: TerminalControllerAgent, Rows: req.Rows, Cols: req.Cols,
+		OutputRefs: []ArtifactRef{{Path: relOutput, Type: "terminal_output", Description: "complete terminal session output"}},
 	}, cmd: cmd, stdin: stdin, outputPath: outputPath, outputFile: outputFile, done: make(chan struct{})}
 
 	m.mu.Lock()
@@ -333,6 +376,55 @@ func (m *TerminalSessionManager) waitForExit(managed *managedTerminalSession, ti
 	m.mu.Unlock()
 }
 
+// AcquireUserLease grants exclusive terminal input to a local human operator.
+func (m *TerminalSessionManager) AcquireUserLease(id string) (TerminalLease, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed, ok := m.sessions[id]
+	if !ok {
+		return TerminalLease{}, fmt.Errorf("terminal session %q not found", id)
+	}
+	if !managed.session.Running {
+		return TerminalLease{}, fmt.Errorf("terminal session %q is not running", id)
+	}
+	if managed.session.Controller == TerminalControllerUser {
+		return TerminalLease{}, fmt.Errorf("terminal session %q is already controlled by a user", id)
+	}
+	leaseID, err := newTerminalSessionID()
+	if err != nil {
+		return TerminalLease{}, err
+	}
+	managed.session.Controller = TerminalControllerUser
+	managed.session.LeaseID = leaseID
+	managed.session.AttachedAt = time.Now().UTC()
+	if err := m.persistLocked(); err != nil {
+		return TerminalLease{}, err
+	}
+	m.emit("terminal_session_taken_over", managed.session, nil)
+	return TerminalLease{ID: leaseID}, nil
+}
+
+// ReleaseUserLease returns terminal input to the owning agent.
+func (m *TerminalSessionManager) ReleaseUserLease(id, leaseID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed, ok := m.sessions[id]
+	if !ok {
+		return fmt.Errorf("terminal session %q not found", id)
+	}
+	if managed.session.Controller != TerminalControllerUser || managed.session.LeaseID != leaseID {
+		return fmt.Errorf("terminal session %q lease is no longer active", id)
+	}
+	managed.session.Controller = TerminalControllerAgent
+	managed.session.LeaseID = ""
+	managed.session.AttachedAt = time.Time{}
+	if err := m.persistLocked(); err != nil {
+		return err
+	}
+	m.emit("terminal_session_released", managed.session, nil)
+	return nil
+}
+
 func (m *TerminalSessionManager) Write(ctx context.Context, id string, input TerminalInput) error {
 	m.mu.Lock()
 	managed, err := m.ownerSessionLocked(ctx, id, input.OwnerTaskID)
@@ -343,6 +435,10 @@ func (m *TerminalSessionManager) Write(ctx context.Context, id string, input Ter
 	if !managed.session.Running || managed.stdin == nil {
 		m.mu.Unlock()
 		return fmt.Errorf("terminal session %q is not running", id)
+	}
+	if managed.session.Controller == TerminalControllerUser {
+		m.mu.Unlock()
+		return fmt.Errorf("terminal session %q is controlled by a user", id)
 	}
 	stdin := managed.stdin
 	sessionCopy := deepCopyTerminalSession(managed.session)
