@@ -115,12 +115,14 @@ func (b *TerminalBroker) handle(conn *net.UnixConn) {
 	dec := json.NewDecoder(bufio.NewReader(conn))
 	enc := json.NewEncoder(conn)
 	sessionID, leaseID := "", ""
+	defer func() {
+		if sessionID != "" && leaseID != "" {
+			_ = b.manager.AbandonUserLease(sessionID, leaseID)
+		}
+	}()
 	for {
 		var req terminalBrokerRequest
 		if err := dec.Decode(&req); err != nil {
-			if sessionID != "" && leaseID != "" {
-				b.release(sessionID, leaseID)
-			}
 			return
 		}
 		resp := b.request(&req, &sessionID, &leaseID)
@@ -150,7 +152,8 @@ func (b *TerminalBroker) request(req *terminalBrokerRequest, sessionID, leaseID 
 		}
 		read, err := b.read(req.SessionID)
 		if err != nil {
-			_ = b.manager.ReleaseUserLease(req.SessionID, lease.ID)
+			_ = b.manager.AbandonUserLease(req.SessionID, lease.ID)
+			*sessionID, *leaseID = "", ""
 			return terminalBrokerResponse{Error: err.Error()}
 		}
 		return terminalBrokerResponse{LeaseID: lease.ID, Screen: read.Screen, EOF: read.EOF}

@@ -457,6 +457,29 @@ func (m *TerminalSessionManager) ReleaseUserLease(id, leaseID string) error {
 	return nil
 }
 
+// AbandonUserLease records an unexpected client disconnect. It intentionally
+// does not return control to the agent: the coordinator keeps the task paused
+// until a human reconnects and explicitly detaches.
+func (m *TerminalSessionManager) AbandonUserLease(id, leaseID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed, ok := m.sessions[id]
+	if !ok {
+		return fmt.Errorf("terminal session %q not found", id)
+	}
+	if managed.session.Controller != TerminalControllerUser || managed.session.LeaseID != leaseID {
+		return fmt.Errorf("terminal session %q lease is no longer active", id)
+	}
+	managed.session.Controller = TerminalControllerNone
+	managed.session.LeaseID = ""
+	managed.session.AttachedAt = time.Time{}
+	if err := m.persistLocked(); err != nil {
+		return err
+	}
+	m.emit("terminal_session_abandoned", managed.session, nil)
+	return nil
+}
+
 // WriteUserLease forwards input from the current human controller.
 func (m *TerminalSessionManager) WriteUserLease(id, leaseID string, data []byte) error {
 	m.mu.Lock()
@@ -513,6 +536,10 @@ func (m *TerminalSessionManager) Write(ctx context.Context, id string, input Ter
 	if managed.session.Controller == TerminalControllerUser {
 		m.mu.Unlock()
 		return fmt.Errorf("terminal session %q is controlled by a user", id)
+	}
+	if managed.session.Controller != TerminalControllerAgent {
+		m.mu.Unlock()
+		return fmt.Errorf("terminal session %q is not controlled by its agent", id)
 	}
 	stdin := managed.stdin
 	sessionCopy := deepCopyTerminalSession(managed.session)

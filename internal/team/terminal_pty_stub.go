@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package team
 
@@ -20,4 +20,3 @@ func resizeTerminalPTY(_ *os.File, _ uint16, _ uint16) error {
 func verifyTerminalBrokerPeer(_ *net.UnixConn) error {
 	return fmt.Errorf("terminal broker peer verification is unsupported on this platform")
 }
-

@@ -60,6 +60,7 @@
 - 🛡️ **Guard System** — Rule-based output review (e.g., require tests, no profanity)
 - ⚡ **Signal Control** — Ctrl+C for graceful shutdown, Ctrl+Z to inject additional prompts
 - 📺 **TUI Mode** — Real-time Bubble Tea terminal UI for task tracking
+- 🖥️ **PTY Handoff (experimental)** — Opt-in interactive terminal sessions with exclusive local human takeover
 - 🔍 **Dry Run Mode** — Preview execution plan without running agents
 - 📝 **Plan-First Mode** — Require agents to submit plans before execution
 - 📊 **Report Generation** — Full execution report as markdown
@@ -194,6 +195,7 @@ go run ./cmd/hufu
 | `--show-history` | — | `bool` | `false` | Show previous session history on resume |
 | `--dry-run` | — | `bool` | `false` | LLM-free preview of skill matching and available agents (no model calls, no agent execution) |
 | `--tui` | — | `bool` | `false` | Show a Bubble Tea TUI for real-time task tracking |
+| `--enable-pty-terminal` | — | `bool` | `false` | Enable experimental Linux/macOS PTY sessions and local human handoff |
 | `--rbash` | — | `bool` | `false` | Use restricted bash (rbash) for the bash tool |
 | `--no-net` | — | `bool` | `false` | Block all network access for agent subprocesses |
 | `--force-mcp` | — | `bool` | `false` | Force MCP mode: disable built-in execution/network tools (bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch), require MCP servers |
@@ -1173,6 +1175,25 @@ The TUI displays:
 - **Wrap-up indicator** — Visual cue when the coordinator is finishing
 
 > **Note**: `--tui` and `--steps` cannot be used together.
+
+### Interactive PTY takeover (experimental)
+
+The stateful `terminal` tool can start a real PTY only when hufu starts with
+`--enable-pty-terminal` and the agent explicitly requests `pty: true`. This
+does not change the ordinary `bash` tool.
+
+```bash
+hufu --enable-pty-terminal --tui --agent-team ops "run the interactive wizard"
+# Or from another local terminal while hufu is still running:
+hufu terminal attach <session-id> --workspace ./workspace
+```
+
+The TUI shows an attach hint when an agent starts a PTY; open that task's detail
+view and press `t`. An attached user exclusively owns input, so the task and
+active model round pause until `Ctrl-]` explicitly returns control. An
+unexpected attach-client disconnect leaves the task paused; reconnect and
+detach normally to resume. The local Unix socket is same-UID only, exists only
+while its owning hufu process runs, and is unavailable in `--unattended` mode.
 
 ---
 

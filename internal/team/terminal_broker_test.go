@@ -180,3 +180,54 @@ func TestTerminalAttachmentClientTransfersInputAndDetaches(t *testing.T) {
 		t.Fatalf("controller after detach = %s, want %s", got, TerminalControllerAgent)
 	}
 }
+
+func TestTerminalBrokerDisconnectKeepsTaskPaused(t *testing.T) {
+	workspace := t.TempDir()
+	manager, err := NewTerminalSessionManager(workspace, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithTerminalTaskID(context.Background(), "task-disconnect")
+	session, err := manager.Start(ctx, TerminalStartRequest{RunID: "run-disconnect", OwnerTaskID: "task-disconnect", Mode: TerminalModePTY, Command: []string{"sh", "-c", "sleep 5"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.Close(ctx, session.ID) }()
+	released := make(chan struct{}, 1)
+	broker, err := StartTerminalBrokerWithHooks(workspace, manager, TerminalBrokerHooks{OnDetach: func(TerminalSession) { released <- struct{}{} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = broker.Close() }()
+
+	conn, err := net.Dial("unix", filepath.Join(workspace, logsDir, terminalBrokerSocket))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewEncoder(conn).Encode(terminalBrokerRequest{Action: "attach", SessionID: session.ID}); err != nil {
+		t.Fatal(err)
+	}
+	var response terminalBrokerResponse
+	if err := json.NewDecoder(conn).Decode(&response); err != nil || response.Error != "" {
+		t.Fatalf("attach response = %+v, err=%v", response, err)
+	}
+	_ = conn.Close()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		sessions, listErr := manager.List(context.Background(), "")
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		if sessions[0].Controller == TerminalControllerNone {
+			select {
+			case <-released:
+				t.Fatal("disconnect must not release the coordinator task")
+			default:
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("disconnect did not leave terminal controller as none")
+}

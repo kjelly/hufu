@@ -199,7 +199,9 @@ func (t *terminalTool) runStart(ctx context.Context, mgr TerminalManager, args *
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
-	t.coordinator.report(t.coordinator.newEvent("terminal_started").withTodoID(taskID).withMessage(sess.ID))
+	if t.coordinator.session != nil {
+		t.coordinator.report(t.coordinator.newEvent("terminal_started").withTodoID(taskID).withMessage(sess.ID))
+	}
 	out, _ := json.MarshalIndent(sess, "", "  ")
 	return fantasy.NewTextResponse(string(out)), nil
 }
