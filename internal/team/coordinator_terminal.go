@@ -23,22 +23,25 @@ func (c *Coordinator) initTerminalControl() {
 	}
 }
 
-// SetPTYTerminalEnabled enables the experimental local PTY broker. Unattended
-// runs deliberately do not expose the user-attach socket.
+// SetPTYTerminalEnabled enables the local PTY broker. It is safe to call from
+// every pty:true terminal start; the first caller initializes the broker and
+// later calls are no-ops. Unattended runs deliberately expose no attach socket.
 func (c *Coordinator) SetPTYTerminalEnabled(enabled bool) error {
 	if c == nil || !enabled {
 		return nil
+	}
+	if c.session == nil || c.session.Workspace == "" || c.terminalSessionMgr == nil {
+		return fmt.Errorf("PTY terminal broker is unavailable without a coordinator workspace")
 	}
 	if c.unattended {
 		return nil
 	}
 	c.initTerminalControl()
 	c.terminalControlMu.Lock()
+	defer c.terminalControlMu.Unlock()
 	if c.ptyTerminalEnabled {
-		c.terminalControlMu.Unlock()
 		return nil
 	}
-	c.terminalControlMu.Unlock()
 	broker, err := StartTerminalBrokerWithHooks(c.session.Workspace, c.terminalSessionMgr, TerminalBrokerHooks{
 		OnAttach: c.pauseTerminalTask,
 		OnDetach: c.resumeTerminalTask,
@@ -46,10 +49,8 @@ func (c *Coordinator) SetPTYTerminalEnabled(enabled bool) error {
 	if err != nil {
 		return fmt.Errorf("start PTY terminal broker: %w", err)
 	}
-	c.terminalControlMu.Lock()
 	c.terminalBroker = broker
 	c.ptyTerminalEnabled = true
-	c.terminalControlMu.Unlock()
 	return nil
 }
 

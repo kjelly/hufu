@@ -150,8 +150,10 @@ func (t *terminalTool) runStart(ctx context.Context, mgr TerminalManager, args *
 	if taskID == "" {
 		return fantasy.NewTextErrorResponse("caller task identity context is required to start a terminal session"), nil
 	}
-	if args.PTY && !t.coordinator.PTYTerminalEnabled() {
-		return fantasy.NewTextErrorResponse("PTY terminal feature is disabled; start hufu with --enable-pty-terminal"), nil
+	if args.PTY {
+		if err := t.coordinator.SetPTYTerminalEnabled(true); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
 	}
 
 	workDir := args.WorkingDir

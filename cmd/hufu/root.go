@@ -77,7 +77,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().BoolVarP(&opts.stepsMode, "steps", "s", false, "Pause for user confirmation before executing each batch of worker tasks")
 	rootCmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Preview skill matching and task delegation without executing agents")
 	rootCmd.Flags().BoolVar(&opts.tuiMode, "tui", false, "Show a Bubble Tea TUI for real-time task tracking")
-	rootCmd.Flags().BoolVar(&opts.enablePTYTerminal, "enable-pty-terminal", false, "Enable experimental PTY terminal sessions with local human handoff")
+	rootCmd.Flags().BoolVar(&opts.enablePTYTerminal, "enable-pty-terminal", false, "Eagerly initialize experimental PTY handoff (normally starts automatically on terminal pty:true)")
 	rootCmd.Flags().BoolVar(&opts.rbashMode, "rbash", false, "Use restricted bash (rbash) for the bash tool")
 	rootCmd.Flags().BoolVar(&opts.noNet, "no-net", false, "Block all network access for agent subprocesses")
 	rootCmd.Flags().BoolVar(&opts.noJournal, "no-journal", false, "Disable the persistent task-result journal (workspace/logs/task_journal.jsonl)")

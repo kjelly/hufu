@@ -785,10 +785,6 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) attachTerminal() (tea.Model, tea.Cmd) {
-	if !m.teamInfo.PTYEnabled {
-		m.statusText = errorIcon.Render("PTY terminal is disabled; restart hufu with --enable-pty-terminal")
-		return m, nil
-	}
 	if m.teamInfo.Workspace == "" || m.teamInfo.HufuBinary == "" {
 		m.statusText = errorIcon.Render("terminal attach is unavailable without workspace and hufu binary")
 		return m, nil

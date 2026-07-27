@@ -698,20 +698,39 @@ func TestTerminalTools_PolicyEnforcement(t *testing.T) {
 	}
 }
 
-func TestTerminalTools_RejectPTYWhenFeatureDisabled(t *testing.T) {
-	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
+func TestTerminalTools_LazilyEnablePTYOnStart(t *testing.T) {
+	workspace := t.TempDir()
+	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	coord := &Coordinator{executionRunID: "run-pty-disabled", terminalSessionMgr: manager, taskTracker: NewTaskTracker()}
-	ctx := WithTerminalTaskID(context.Background(), "task-pty-disabled")
+	coord := &Coordinator{
+		session:            &TeamSession{Workspace: workspace},
+		executionRunID:     "run-pty-lazy",
+		terminalSessionMgr: manager,
+		taskTracker:        NewTaskTracker(),
+		reportStatus:       func(StatusEvent) {},
+	}
+	ctx := WithTerminalTaskID(context.Background(), "task-pty-lazy")
 	ctx = context.WithValue(ctx, tools.AgentToolsAllowedKey, []string{"terminal", "terminal_start"})
 	resp, err := (&terminalStartTool{coordinator: coord}).Run(ctx, fantasy.ToolCall{Input: `{"command":["sh","-c","true"],"pty":true}`})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(resp.Content, "PTY terminal feature is disabled") {
-		t.Fatalf("response = %q, want feature-flag rejection", resp.Content)
+	if strings.Contains(resp.Content, "ERROR:") {
+		t.Fatalf("response = %q", resp.Content)
+	}
+	if !coord.PTYTerminalEnabled() {
+		t.Fatal("pty:true did not lazily start the terminal broker")
+	}
+	var session TerminalSession
+	if err := json.Unmarshal([]byte(resp.Content), &session); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.Close(ctx, session.ID) }()
+	defer func() { _ = coord.terminalBroker.Close() }()
+	if session.Mode != TerminalModePTY {
+		t.Fatalf("terminal mode = %q, want %q", session.Mode, TerminalModePTY)
 	}
 }
 

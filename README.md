@@ -195,7 +195,7 @@ go run ./cmd/hufu
 | `--show-history` | — | `bool` | `false` | Show previous session history on resume |
 | `--dry-run` | — | `bool` | `false` | LLM-free preview of skill matching and available agents (no model calls, no agent execution) |
 | `--tui` | — | `bool` | `false` | Show a Bubble Tea TUI for real-time task tracking |
-| `--enable-pty-terminal` | — | `bool` | `false` | Enable experimental Linux/macOS PTY sessions and local human handoff |
+| `--enable-pty-terminal` | — | `bool` | `false` | Eagerly initialize experimental Linux/macOS PTY handoff; `pty:true` starts it automatically |
 | `--rbash` | — | `bool` | `false` | Use restricted bash (rbash) for the bash tool |
 | `--no-net` | — | `bool` | `false` | Block all network access for agent subprocesses |
 | `--force-mcp` | — | `bool` | `false` | Force MCP mode: disable built-in execution/network tools (bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch), require MCP servers |
@@ -1178,12 +1178,13 @@ The TUI displays:
 
 ### Interactive PTY takeover (experimental)
 
-The stateful `terminal` tool can start a real PTY only when hufu starts with
-`--enable-pty-terminal` and the agent explicitly requests `pty: true`. This
-does not change the ordinary `bash` tool.
+The stateful `terminal` tool starts the local PTY broker automatically when an
+agent explicitly requests `pty: true`. This does not change the ordinary
+`bash` tool. `--enable-pty-terminal` remains available if you want the broker
+created eagerly at startup.
 
 ```bash
-hufu --enable-pty-terminal --tui --agent-team ops "run the interactive wizard"
+hufu --tui --agent-team ops "run the interactive wizard"
 # Or from another local terminal while hufu is still running:
 hufu terminal attach <session-id> --workspace ./workspace
 ```

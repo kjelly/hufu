@@ -10,7 +10,7 @@ import (
 )
 
 func TestDetailTerminalAttachStartsProcessCommand(t *testing.T) {
-	m := New("test", TeamInfo{PTYEnabled: true, HufuBinary: "hufu", Workspace: "/tmp/workspace"})
+	m := New("test", TeamInfo{HufuBinary: "hufu", Workspace: "/tmp/workspace"})
 	m.tasks = []*team.TodoItem{{ID: "task-1", Status: team.TaskInProgress}}
 	m.inDetail = true
 	m.detailID = "task-1"
@@ -27,7 +27,7 @@ func TestDetailTerminalAttachStartsProcessCommand(t *testing.T) {
 }
 
 func TestDetailTerminalAttachExplainsMissingSession(t *testing.T) {
-	m := New("test", TeamInfo{PTYEnabled: true, HufuBinary: "hufu", Workspace: "/tmp/workspace"})
+	m := New("test", TeamInfo{HufuBinary: "hufu", Workspace: "/tmp/workspace"})
 	m.tasks = []*team.TodoItem{{ID: "task-1", Status: team.TaskInProgress}}
 	m.inDetail = true
 	m.detailID = "task-1"
