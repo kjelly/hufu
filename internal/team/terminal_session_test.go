@@ -698,6 +698,23 @@ func TestTerminalTools_PolicyEnforcement(t *testing.T) {
 	}
 }
 
+func TestTerminalTools_RejectPTYWhenFeatureDisabled(t *testing.T) {
+	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coord := &Coordinator{executionRunID: "run-pty-disabled", terminalSessionMgr: manager, taskTracker: NewTaskTracker()}
+	ctx := WithTerminalTaskID(context.Background(), "task-pty-disabled")
+	ctx = context.WithValue(ctx, tools.AgentToolsAllowedKey, []string{"terminal", "terminal_start"})
+	resp, err := (&terminalStartTool{coordinator: coord}).Run(ctx, fantasy.ToolCall{Input: `{"command":["sh","-c","true"],"pty":true}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp.Content, "PTY terminal feature is disabled") {
+		t.Fatalf("response = %q, want feature-flag rejection", resp.Content)
+	}
+}
+
 func TestTerminalSession_PIDIdentityMismatch(t *testing.T) {
 	workspace := t.TempDir()
 	manager, err := NewTerminalSessionManager(workspace, nil)

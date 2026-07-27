@@ -31,13 +31,26 @@ type terminalBrokerResponse struct {
 
 type TerminalBroker struct {
 	manager *TerminalSessionManager
+	hooks   TerminalBrokerHooks
 	path    string
 	ln      *net.UnixListener
 	once    sync.Once
 	done    chan struct{}
 }
 
+// TerminalBrokerHooks bind a terminal handoff to coordinator task state.
+// Hooks execute only after the lease transition has succeeded.
+type TerminalBrokerHooks struct {
+	OnAttach func(TerminalSession)
+	OnDetach func(TerminalSession)
+}
+
 func StartTerminalBroker(workspace string, manager *TerminalSessionManager) (*TerminalBroker, error) {
+	return StartTerminalBrokerWithHooks(workspace, manager, TerminalBrokerHooks{})
+}
+
+// StartTerminalBrokerWithHooks starts a same-user local socket broker.
+func StartTerminalBrokerWithHooks(workspace string, manager *TerminalSessionManager, hooks TerminalBrokerHooks) (*TerminalBroker, error) {
 	if manager == nil {
 		return nil, fmt.Errorf("start terminal broker: manager is required")
 	}
@@ -64,7 +77,7 @@ func StartTerminalBroker(workspace string, manager *TerminalSessionManager) (*Te
 		_ = ln.Close()
 		return nil, fmt.Errorf("set terminal broker permissions: %w", err)
 	}
-	b := &TerminalBroker{manager: manager, path: path, ln: ln, done: make(chan struct{})}
+	b := &TerminalBroker{manager: manager, hooks: hooks, path: path, ln: ln, done: make(chan struct{})}
 	go b.serve()
 	return b, nil
 }
@@ -106,7 +119,7 @@ func (b *TerminalBroker) handle(conn *net.UnixConn) {
 		var req terminalBrokerRequest
 		if err := dec.Decode(&req); err != nil {
 			if sessionID != "" && leaseID != "" {
-				_ = b.manager.ReleaseUserLease(sessionID, leaseID)
+				b.release(sessionID, leaseID)
 			}
 			return
 		}
@@ -120,11 +133,21 @@ func (b *TerminalBroker) handle(conn *net.UnixConn) {
 func (b *TerminalBroker) request(req *terminalBrokerRequest, sessionID, leaseID *string) terminalBrokerResponse {
 	switch req.Action {
 	case "attach":
+		session, err := b.session(req.SessionID)
+		if err != nil {
+			return terminalBrokerResponse{Error: err.Error()}
+		}
+		if session.Mode != TerminalModePTY {
+			return terminalBrokerResponse{Error: fmt.Sprintf("terminal session %q is not a PTY", req.SessionID)}
+		}
 		lease, err := b.manager.AcquireUserLease(req.SessionID)
 		if err != nil {
 			return terminalBrokerResponse{Error: err.Error()}
 		}
 		*sessionID, *leaseID = req.SessionID, lease.ID
+		if b.hooks.OnAttach != nil {
+			b.hooks.OnAttach(session)
+		}
 		read, err := b.read(req.SessionID)
 		if err != nil {
 			_ = b.manager.ReleaseUserLease(req.SessionID, lease.ID)
@@ -160,7 +183,7 @@ func (b *TerminalBroker) request(req *terminalBrokerRequest, sessionID, leaseID 
 		if req.LeaseID != *leaseID {
 			return terminalBrokerResponse{Error: "terminal broker lease mismatch"}
 		}
-		if err := b.manager.ReleaseUserLease(*sessionID, *leaseID); err != nil {
+		if err := b.release(*sessionID, *leaseID); err != nil {
 			return terminalBrokerResponse{Error: err.Error()}
 		}
 		*sessionID, *leaseID = "", ""
@@ -170,15 +193,37 @@ func (b *TerminalBroker) request(req *terminalBrokerRequest, sessionID, leaseID 
 	}
 }
 
-func (b *TerminalBroker) read(id string) (TerminalReadResult, error) {
+func (b *TerminalBroker) release(sessionID, leaseID string) error {
+	session, err := b.session(sessionID)
+	if err != nil {
+		return err
+	}
+	if err := b.manager.ReleaseUserLease(sessionID, leaseID); err != nil {
+		return err
+	}
+	if b.hooks.OnDetach != nil {
+		b.hooks.OnDetach(session)
+	}
+	return nil
+}
+
+func (b *TerminalBroker) session(id string) (TerminalSession, error) {
 	sessions, err := b.manager.List(context.Background(), "")
 	if err != nil {
-		return TerminalReadResult{}, err
+		return TerminalSession{}, err
 	}
 	for _, session := range sessions {
 		if session.ID == id {
-			return b.manager.Read(WithTerminalTaskID(context.Background(), session.OwnerTaskID), id)
+			return session, nil
 		}
 	}
-	return TerminalReadResult{}, fmt.Errorf("terminal session %q not found", id)
+	return TerminalSession{}, fmt.Errorf("terminal session %q not found", id)
+}
+
+func (b *TerminalBroker) read(id string) (TerminalReadResult, error) {
+	session, err := b.session(id)
+	if err != nil {
+		return TerminalReadResult{}, err
+	}
+	return b.manager.Read(WithTerminalTaskID(context.Background(), session.OwnerTaskID), id)
 }

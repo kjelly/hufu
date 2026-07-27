@@ -76,16 +76,17 @@ type runOptions struct {
 	projectContext   bool
 
 	// Output / display
-	verbose      bool
-	quietMode    bool
-	outputFormat string
-	displayMode  string
-	noColorMode  bool
-	noSummary    bool
-	noSpinner    bool
-	tuiMode      bool
-	tuiCompact   bool
-	eventFormat  string
+	verbose           bool
+	quietMode         bool
+	outputFormat      string
+	displayMode       string
+	noColorMode       bool
+	noSummary         bool
+	noSpinner         bool
+	tuiMode           bool
+	enablePTYTerminal bool
+	tuiCompact        bool
+	eventFormat       string
 
 	// Runtime state (not a flag): set by the chat command so the injection
 	// loop knows it drives a TUI conversation instead of a one-shot run.

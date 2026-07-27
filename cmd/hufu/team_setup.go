@@ -152,6 +152,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	coordinator.SetExecutionProfile(execProfile)
 	coordinator.SetSessionData(sessionData)
 	applyUnattendedAndBudget(coordinator, session)
+	if err := coordinator.SetPTYTerminalEnabled(opts.enablePTYTerminal); err != nil {
+		return nil, err
+	}
 	archiveToMemory(ctx, memStore, coordinator, session, oldSessionEntries)
 	displayResolvedConfig(session, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedMaxConcurrent, execProfile)
 	notifierInst := buildNotifier(cfg, session)

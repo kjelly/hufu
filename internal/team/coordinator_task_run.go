@@ -317,6 +317,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		func() {
 			taskCtx, cancel := tools.WithInteractiveAwareTimeout(parentCtx, agentTimeout)
 			defer cancel()
+			taskCtx, roundCancel := context.WithCancel(taskCtx)
+			defer roundCancel()
+			c.registerTerminalRound(todoID, roundCancel)
+			defer c.unregisterTerminalRound(todoID)
 			taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 			taskCtx = context.WithValue(taskCtx, modelKey{}, resolvedModel)
 			taskCtx = context.WithValue(taskCtx, tools.AgentNameKey, agentName)
@@ -379,6 +383,19 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}()
 		if strings.TrimSpace(output) != "" {
 			lastOutput = output
+		}
+		// A terminal attach cancels the active model round and parks this task
+		// until the human explicitly detaches. Re-use its recorded conversation
+		// history and the same retry budget when control comes back.
+		if c.waitForTerminalResume(parentCtx, todoID) {
+			if len(conversationHistory) == 0 && len(steps) > 0 {
+				conversationHistory = append(conversationHistory, fantasy.NewUserMessage(currentPrompt))
+			}
+			for _, step := range steps {
+				conversationHistory = append(conversationHistory, step.Messages...)
+			}
+			attempt--
+			continue
 		}
 		terminalBlocked := false
 		if c.terminalSessionMgr != nil {

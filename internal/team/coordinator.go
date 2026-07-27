@@ -187,6 +187,11 @@ type Coordinator struct {
 	auditLogger            *audit.AuditLogger
 	sshSessionMgr          *tools.SSHSessionManager
 	terminalSessionMgr     *TerminalSessionManager
+	terminalBroker         *TerminalBroker
+	terminalControlMu      sync.Mutex
+	terminalPauses         map[string]*terminalTaskPause
+	terminalRoundCancels   map[string]context.CancelFunc
+	ptyTerminalEnabled     bool
 	skillUsage             map[string]*skillUsageState
 	skillUsageMu           sync.Mutex
 	delegatedTasks         map[string]int

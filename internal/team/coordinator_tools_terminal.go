@@ -19,11 +19,11 @@ type terminalTool struct {
 func (t *terminalTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
 		Name:        "terminal",
-		Description: "Manage stateful terminal sessions for interactive wizards, deploys, long-running processes, or streamed output. Actions: start, write, read, close, list, reconcile.",
+		Description: "Manage stateful terminal sessions for interactive wizards, deploys, long-running processes, or streamed output. Actions: start, write, read, resize, close, list, reconcile. PTY sessions require the experimental PTY terminal feature.",
 		Parameters: map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"description": "Action: start, write, read, close, list, reconcile",
+				"description": "Action: start, write, read, resize, close, list, reconcile",
 			},
 			"id": map[string]any{
 				"type":        "string",
@@ -50,6 +50,12 @@ func (t *terminalTool) Info() fantasy.ToolInfo {
 				"type":        "string",
 				"description": "Optional list filter: unresolved (default), current, all",
 			},
+			"pty": map[string]any{
+				"type":        "boolean",
+				"description": "Start under a real PTY (experimental; requires --enable-pty-terminal)",
+			},
+			"rows": map[string]any{"type": "integer", "description": "PTY rows for start or resize"},
+			"cols": map[string]any{"type": "integer", "description": "PTY columns for start or resize"},
 		},
 		Required: []string{"action"},
 	}
@@ -64,6 +70,9 @@ type terminalArgs struct {
 	Timeout    int      `json:"timeout"`
 	Data       string   `json:"data"`
 	Filter     string   `json:"filter"`
+	PTY        bool     `json:"pty"`
+	Rows       uint16   `json:"rows"`
+	Cols       uint16   `json:"cols"`
 }
 
 func (t *terminalTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
@@ -88,6 +97,8 @@ func (t *terminalTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 		return t.runWrite(ctx, mgr, args)
 	case "read":
 		return t.runRead(ctx, mgr, args)
+	case "resize":
+		return t.runResize(ctx, mgr, args)
 	case "close":
 		return t.runClose(ctx, mgr, args)
 	case "list":
@@ -95,7 +106,7 @@ func (t *terminalTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	case "reconcile":
 		return t.runReconcile(ctx, mgr, args)
 	default:
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown action %q (valid: start, write, read, close, list, reconcile)", args.Action)), nil
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown action %q (valid: start, write, read, resize, close, list, reconcile)", args.Action)), nil
 	}
 }
 
@@ -139,6 +150,9 @@ func (t *terminalTool) runStart(ctx context.Context, mgr TerminalManager, args *
 	if taskID == "" {
 		return fantasy.NewTextErrorResponse("caller task identity context is required to start a terminal session"), nil
 	}
+	if args.PTY && !t.coordinator.PTYTerminalEnabled() {
+		return fantasy.NewTextErrorResponse("PTY terminal feature is disabled; start hufu with --enable-pty-terminal"), nil
+	}
 
 	workDir := args.WorkingDir
 	if workDir == "" {
@@ -173,6 +187,14 @@ func (t *terminalTool) runStart(ctx context.Context, mgr TerminalManager, args *
 		WorkingDir:   args.WorkingDir,
 		ChildTimeout: timeoutDur,
 		NetworkBlock: networkBlock,
+		Mode: func() TerminalMode {
+			if args.PTY {
+				return TerminalModePTY
+			}
+			return TerminalModePipe
+		}(),
+		Rows: args.Rows,
+		Cols: args.Cols,
 	})
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
@@ -221,9 +243,20 @@ func (t *terminalTool) runRead(ctx context.Context, mgr TerminalManager, args *t
 		"session": res.Session,
 		"output":  string(res.Output),
 		"eof":     res.EOF,
+		"screen":  res.Screen,
 	}
 	out, _ := json.MarshalIndent(respMap, "", "  ")
 	return fantasy.NewTextResponse(string(out)), nil
+}
+
+func (t *terminalTool) runResize(ctx context.Context, mgr TerminalManager, args *terminalArgs) (fantasy.ToolResponse, error) {
+	if args.ID == "" {
+		return fantasy.NewTextErrorResponse("id is required for resize action"), nil
+	}
+	if err := mgr.Resize(ctx, args.ID, args.Rows, args.Cols); err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+	return fantasy.NewTextResponse(fmt.Sprintf("Resized terminal session %s to %dx%d", args.ID, args.Rows, args.Cols)), nil
 }
 
 func (t *terminalTool) runClose(ctx context.Context, mgr TerminalManager, args *terminalArgs) (fantasy.ToolResponse, error) {
@@ -301,6 +334,9 @@ func (t *terminalStartTool) Info() fantasy.ToolInfo {
 				"type":        "integer",
 				"description": "Child timeout in seconds (optional)",
 			},
+			"pty":  map[string]any{"type": "boolean", "description": "Start under a real PTY (requires --enable-pty-terminal)"},
+			"rows": map[string]any{"type": "integer", "description": "Initial PTY rows"},
+			"cols": map[string]any{"type": "integer", "description": "Initial PTY columns"},
 		},
 		Required: []string{"command"},
 	}
@@ -311,6 +347,9 @@ func (t *terminalStartTool) Run(ctx context.Context, call fantasy.ToolCall) (fan
 		Command    []string `json:"command"`
 		WorkingDir string   `json:"working_dir"`
 		Timeout    int      `json:"timeout"`
+		PTY        bool     `json:"pty"`
+		Rows       uint16   `json:"rows"`
+		Cols       uint16   `json:"cols"`
 	}
 	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -320,6 +359,9 @@ func (t *terminalStartTool) Run(ctx context.Context, call fantasy.ToolCall) (fan
 		"command":     args.Command,
 		"working_dir": args.WorkingDir,
 		"timeout":     args.Timeout,
+		"pty":         args.PTY,
+		"rows":        args.Rows,
+		"cols":        args.Cols,
 	})
 	return (&terminalTool{coordinator: t.coordinator}).Run(ctx, fantasy.ToolCall{Input: string(payload)})
 }
