@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 type scpArgs struct {
@@ -195,10 +196,11 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		}
 		// Use environment variable for security
 		cmd = exec.CommandContext(cmdCtx, "sshpass", "-e", "scp")
-		cmd.Env = append(os.Environ(), "SSHPASS="+args.Password)
+		cmd.Env = utils.SanitizeSubprocessEnv(append(os.Environ(), "SSHPASS="+args.Password))
 		cmd.Args = append(cmd.Args, scpArgList...)
 	} else {
 		cmd = exec.CommandContext(cmdCtx, "scp", scpArgList...)
+		cmd.Env = utils.SanitizeSubprocessEnv(os.Environ())
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -226,7 +228,7 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 			defer cancel2()
 
 			sshpassCmd := exec.CommandContext(cmdCtx2, "sshpass", "-e", "scp")
-			sshpassCmd.Env = append(os.Environ(), "SSHPASS="+password)
+			sshpassCmd.Env = utils.SanitizeSubprocessEnv(append(os.Environ(), "SSHPASS="+password))
 			sshpassCmd.Args = append(sshpassCmd.Args, scpArgList...)
 
 			_, stderr2, exitCode2 := runCommand(sshpassCmd)

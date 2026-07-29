@@ -1,8 +1,15 @@
 package team
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"os"
 	"strings"
+	"sync"
 )
 
 type ArtifactRef struct {
@@ -19,9 +26,84 @@ type FileRef struct {
 }
 
 type EvidenceRef struct {
+	TaskID      string `json:"task_id,omitempty"`
+	RunID       string `json:"run_id,omitempty"`
 	Type        string `json:"type"`
 	Description string `json:"description"`
 	Value       string `json:"value,omitempty"`
+	SystemHMAC  string `json:"system_hmac,omitempty"`
+}
+
+var (
+	systemSecretOnce sync.Once
+	systemSecretKey  string
+	systemSecretErr  error
+	randReader       io.Reader = rand.Reader
+)
+
+// GetSystemSecret returns a process-isolated, cryptographically random HMAC secret key.
+// It fails closed if cryptographic randomness is unavailable, and unsets HUFU_HMAC_SECRET to prevent subprocess inheritance.
+func GetSystemSecret() (string, error) {
+	systemSecretOnce.Do(func() {
+		// Immediately scrub HUFU_HMAC_SECRET from environment so subprocesses cannot inherit it
+		_ = os.Unsetenv("HUFU_HMAC_SECRET")
+
+		r := randReader
+		if r == nil {
+			r = rand.Reader
+		}
+		b := make([]byte, 32)
+		if _, err := io.ReadFull(r, b); err != nil {
+			systemSecretErr = fmt.Errorf("failed to generate cryptographically secure secret: %w", err)
+			return
+		}
+		systemSecretKey = hex.EncodeToString(b)
+	})
+	if systemSecretErr != nil {
+		return "", systemSecretErr
+	}
+	return systemSecretKey, nil
+}
+
+func ComputeEvidenceHMAC(ref EvidenceRef, secret string) (string, error) {
+	if secret == "" {
+		sec, err := GetSystemSecret()
+		if err != nil {
+			return "", err
+		}
+		secret = sec
+	}
+	h := hmac.New(sha256.New, []byte(secret))
+	// Bind task_id, run_id, type, description, and value to prevent replay attacks across tasks or runs
+	h.Write([]byte(ref.TaskID + ":" + ref.RunID + ":" + ref.Type + ":" + ref.Description + ":" + ref.Value))
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func SignEvidence(ref EvidenceRef, secret string) EvidenceRef {
+	sig, err := ComputeEvidenceHMAC(ref, secret)
+	if err != nil {
+		ref.SystemHMAC = ""
+		return ref
+	}
+	ref.SystemHMAC = sig
+	return ref
+}
+
+func VerifyEvidenceSignature(ref EvidenceRef, secret string, expectedTaskID string, expectedRunID string) bool {
+	if ref.SystemHMAC == "" || ref.TaskID == "" || ref.RunID == "" {
+		return false
+	}
+	if expectedTaskID != "" && ref.TaskID != expectedTaskID {
+		return false // Task ID mismatch -> replay attack prevention
+	}
+	if expectedRunID != "" && ref.RunID != expectedRunID {
+		return false // Run ID mismatch -> replay attack prevention
+	}
+	expected, err := ComputeEvidenceHMAC(ref, secret)
+	if err != nil || expected == "" {
+		return false
+	}
+	return hmac.Equal([]byte(ref.SystemHMAC), []byte(expected))
 }
 
 type CommandResult struct {

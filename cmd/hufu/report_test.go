@@ -49,3 +49,21 @@ func TestBuildReportMDIncludesVerificationEvidence(t *testing.T) {
 		t.Fatalf("task summary missing verify column:\n%s", report)
 	}
 }
+
+func TestBuildReportMDIncludesCanonicalRunOutcome(t *testing.T) {
+	data := &reportData{
+		StartedAt: time.Now(),
+		RunResult: &team.RunResult{
+			Outcome:       team.RunOutcomePartial,
+			GoalSatisfied: false,
+			Acceptance:    &team.AcceptanceResult{Passed: false},
+			Stats:         team.RunStats{TasksUnresolved: 2},
+		},
+	}
+	report := buildReportMD(data, "demo", "partial")
+	for _, want := range []string{"## Run Outcome", "`partial`", "Goal satisfied:** `false`", "Tasks unresolved:** 2", "Acceptance passed:** `false"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+}

@@ -9,7 +9,7 @@ import (
 
 func TestTaskTranscriptCapturesCompleteToolEvidenceAndBuildsManifest(t *testing.T) {
 	workspace := t.TempDir()
-	transcript, err := newTaskTranscript(workspace, "17")
+	transcript, err := newTaskTranscript(workspace, "17", "run-17")
 	if err != nil {
 		t.Fatalf("newTaskTranscript() error = %v", err)
 	}
@@ -55,7 +55,7 @@ func TestTaskTranscriptCapturesCompleteToolEvidenceAndBuildsManifest(t *testing.
 }
 
 func TestTaskTranscriptRequiresAtLeastOneToolResult(t *testing.T) {
-	transcript, err := newTaskTranscript(t.TempDir(), "18")
+	transcript, err := newTaskTranscript(t.TempDir(), "18", "run-18")
 	if err != nil {
 		t.Fatalf("newTaskTranscript() error = %v", err)
 	}
@@ -68,7 +68,7 @@ func TestTaskTranscriptRequiresAtLeastOneToolResult(t *testing.T) {
 
 func TestVerbatimTaskResultUsesTranscriptManifestInsteadOfWorkerSummary(t *testing.T) {
 	workspace := t.TempDir()
-	transcript, err := newTaskTranscript(workspace, "19")
+	transcript, err := newTaskTranscript(workspace, "19", "run-19")
 	if err != nil {
 		t.Fatalf("newTaskTranscript() error = %v", err)
 	}

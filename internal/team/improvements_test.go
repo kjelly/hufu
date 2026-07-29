@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -705,6 +706,9 @@ func TestRecordRunAborted(t *testing.T) {
 	c.sessionData.AddEntry("user", "run the mission")
 
 	c.recordRunAborted(fmt.Errorf("coordinator: %w", context.Canceled))
+	if result := c.LastRunResult(); result == nil || result.Outcome != RunOutcomeCancelled || result.ExitCode != 130 || result.GoalSatisfied {
+		t.Fatalf("abort RunResult = %#v, want cancelled, exit 130, goal_satisfied false", result)
+	}
 
 	entries := c.sessionData.Entries
 	last := entries[len(entries)-1]
@@ -715,7 +719,7 @@ func TestRecordRunAborted(t *testing.T) {
 		t.Errorf("abort entry missing reason: %q", last.Content)
 	}
 
-	if loaded := LoadSession(ws); loaded == nil || len(loaded.Entries) != len(entries) {
+	if loaded := LoadSession(ws); loaded == nil || len(loaded.Entries) != len(entries) || loaded.RunResult == nil || loaded.RunResult.Outcome != RunOutcomeCancelled {
 		t.Error("aborted session was not persisted to disk")
 	}
 
@@ -725,5 +729,14 @@ func TestRecordRunAborted(t *testing.T) {
 	}
 	if !strings.Contains(string(statusData), "aborted") {
 		t.Errorf("coordinator status missing abort reason: %s", statusData)
+	}
+}
+
+func TestRecordRunAbortedFailureCreatesFailedRunResult(t *testing.T) {
+	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir()}, sessionData: NewSession(), taskTracker: NewTaskTracker()}
+	c.recordRunAborted(errors.New("provider unavailable"))
+	result := c.LastRunResult()
+	if result == nil || result.Outcome != RunOutcomeFailed || result.ExitCode != 1 || result.GoalSatisfied || result.Reason == "" {
+		t.Fatalf("failure abort RunResult = %#v", result)
 	}
 }

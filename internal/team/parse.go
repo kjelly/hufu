@@ -1,6 +1,7 @@
 package team
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,49 +55,50 @@ type agentFrontmatter struct {
 }
 
 type teamConfigYAML struct {
-	Name              string                           `yaml:"name"`
-	Description       string                           `yaml:"description"`
-	MaxRounds         int                              `yaml:"max-rounds"`
-	MaxSteps          int                              `yaml:"max-steps"`
-	Workspace         string                           `yaml:"workspace"`
-	Timeout           int64                            `yaml:"timeout"`
-	VerifyTimeout     int64                            `yaml:"verify-timeout"`
-	MaxRetries        int                              `yaml:"max-retries"`
-	Model             string                           `yaml:"model"`
-	Temperature       string                           `yaml:"temperature"`
-	MaxTokens         string                           `yaml:"max-tokens"`
-	TopP              string                           `yaml:"top-p"`
-	TopK              string                           `yaml:"top-k"`
-	Skills            string                           `yaml:"skills"`
-	SkillsExclude     string                           `yaml:"skills-exclude"`
-	ProviderURL       string                           `yaml:"provider-url"`
-	ProviderAPIKey    string                           `yaml:"provider-api-key"`
-	Providers         map[string]config.ProviderConfig `yaml:"providers"`
-	ModelList         []config.ModelEntry              `yaml:"model-list"`
-	SidecarModel      string                           `yaml:"sidecar-model"`
-	GuardModel        string                           `yaml:"guard-model"`
-	JudgeModel        string                           `yaml:"judge-model"`
-	PlanReviewerModel string                           `yaml:"plan-reviewer-model"`
-	MaxConcurrent     int                              `yaml:"max-concurrent"`
-	EscalateOnRetry   bool                             `yaml:"escalate-on-retry"`
-	Notify            notify.NotifyConfig              `yaml:"notify"`
-	AllowedPaths      interface{}                      `yaml:"allowed-paths"`
-	RestrictedPath    string                           `yaml:"restricted-path"`
-	NoNet             bool                             `yaml:"no-net"`
-	ForceMCP          bool                             `yaml:"force-mcp"`
-	ProjectContext    bool                             `yaml:"project-context"`
-	Shell             string                           `yaml:"shell"`
-	Vars              map[string]interface{}           `yaml:"vars"`
-	WorkerContextSize int                              `yaml:"worker-context-size"`
-	ToolsAllowed      interface{}                      `yaml:"tools"` // tools.allowed in YAML - string or []string
-	Preflight         []agent.CapabilityRequirement    `yaml:"preflight"`
-	Unattended        bool                             `yaml:"unattended"`
-	AutoApprove       bool                             `yaml:"auto-approve"`
-	MaxWallClock      int64                            `yaml:"max-duration"`
-	MaxTotalTokens    int64                            `yaml:"max-total-tokens"`
-	Acceptance        string                           `yaml:"acceptance"`
-	Rollback          string                           `yaml:"rollback"`
-	ExecutionProfile  string                           `yaml:"execution-profile"`
+	Name                string                           `yaml:"name"`
+	Description         string                           `yaml:"description"`
+	MaxRounds           int                              `yaml:"max-rounds"`
+	MaxSteps            int                              `yaml:"max-steps"`
+	Workspace           string                           `yaml:"workspace"`
+	Timeout             int64                            `yaml:"timeout"`
+	VerifyTimeout       int64                            `yaml:"verify-timeout"`
+	MaxRetries          int                              `yaml:"max-retries"`
+	Model               string                           `yaml:"model"`
+	Temperature         string                           `yaml:"temperature"`
+	MaxTokens           string                           `yaml:"max-tokens"`
+	TopP                string                           `yaml:"top-p"`
+	TopK                string                           `yaml:"top-k"`
+	Skills              string                           `yaml:"skills"`
+	SkillsExclude       string                           `yaml:"skills-exclude"`
+	ProviderURL         string                           `yaml:"provider-url"`
+	ProviderAPIKey      string                           `yaml:"provider-api-key"`
+	Providers           map[string]config.ProviderConfig `yaml:"providers"`
+	ModelList           []config.ModelEntry              `yaml:"model-list"`
+	SidecarModel        string                           `yaml:"sidecar-model"`
+	GuardModel          string                           `yaml:"guard-model"`
+	JudgeModel          string                           `yaml:"judge-model"`
+	PlanReviewerModel   string                           `yaml:"plan-reviewer-model"`
+	MaxConcurrent       int                              `yaml:"max-concurrent"`
+	MaxCoordinatorTurns int                              `yaml:"max-coordinator-turns"`
+	EscalateOnRetry     bool                             `yaml:"escalate-on-retry"`
+	Notify              notify.NotifyConfig              `yaml:"notify"`
+	AllowedPaths        interface{}                      `yaml:"allowed-paths"`
+	RestrictedPath      string                           `yaml:"restricted-path"`
+	NoNet               bool                             `yaml:"no-net"`
+	ForceMCP            bool                             `yaml:"force-mcp"`
+	ProjectContext      bool                             `yaml:"project-context"`
+	Shell               string                           `yaml:"shell"`
+	Vars                map[string]interface{}           `yaml:"vars"`
+	WorkerContextSize   int                              `yaml:"worker-context-size"`
+	ToolsAllowed        interface{}                      `yaml:"tools"` // tools.allowed in YAML - string or []string
+	Preflight           []agent.CapabilityRequirement    `yaml:"preflight"`
+	Unattended          bool                             `yaml:"unattended"`
+	AutoApprove         bool                             `yaml:"auto-approve"`
+	MaxWallClock        int64                            `yaml:"max-duration"`
+	MaxTotalTokens      int64                            `yaml:"max-total-tokens"`
+	Acceptance          interface{}                      `yaml:"acceptance"`
+	Rollback            string                           `yaml:"rollback"`
+	ExecutionProfile    string                           `yaml:"execution-profile"`
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -506,6 +508,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	if yc.MaxConcurrent > 0 {
 		cfg.MaxConcurrent = yc.MaxConcurrent
 	}
+	if yc.MaxCoordinatorTurns > 0 {
+		cfg.MaxCoordinatorTurns = yc.MaxCoordinatorTurns
+	}
 	if yc.EscalateOnRetry {
 		cfg.EscalateOnRetry = true
 	}
@@ -544,8 +549,31 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	if yc.MaxTotalTokens > 0 {
 		cfg.MaxTotalTokens = yc.MaxTotalTokens
 	}
-	if yc.Acceptance != "" {
-		cfg.Acceptance = yc.Acceptance
+	if yc.Acceptance != nil {
+		switch v := yc.Acceptance.(type) {
+		case string:
+			if v != "" {
+				cfg.Acceptance = v
+				cfg.AcceptanceSpec = &agent.AcceptanceSpec{Commands: []string{v}}
+			}
+		case map[string]interface{}, map[interface{}]interface{}:
+			rawBytes, err := yaml.Marshal(v)
+			if err != nil {
+				return cfg, fmt.Errorf("failed to marshal acceptance config: %w", err)
+			}
+			var spec agent.AcceptanceSpec
+			dec := yaml.NewDecoder(bytes.NewReader(rawBytes))
+			dec.KnownFields(true)
+			if err := dec.Decode(&spec); err != nil {
+				return cfg, fmt.Errorf("invalid acceptance spec format: %w", err)
+			}
+			cfg.AcceptanceSpec = &spec
+			if len(spec.Commands) > 0 {
+				cfg.Acceptance = spec.Commands[0]
+			}
+		default:
+			return cfg, fmt.Errorf("unsupported acceptance config type: %T", v)
+		}
 	}
 	if yc.Rollback != "" {
 		cfg.Rollback = yc.Rollback

@@ -301,15 +301,30 @@ type Coordinator struct {
 	validateModelsErr  error
 
 	// Unattended / budget controls for no-human-watching operation.
-	unattended          bool
-	autoApprove         bool
-	maxWallClock        time.Duration // 0 = unlimited
-	tokenBudget         int64         // 0 = unlimited; cumulative LLM tokens
-	tokensUsed          atomic.Int64
-	acceptanceCmd       string // optional shell command run at finish
-	rollbackCmd         string // optional shell command run on acceptance failure
-	selfHealingAttempts int
-	budgetTripped       atomic.Bool
+	unattended                 bool
+	autoApprove                bool
+	maxWallClock               time.Duration // 0 = unlimited
+	tokenBudget                int64         // 0 = unlimited; cumulative LLM tokens
+	tokensUsed                 atomic.Int64
+	acceptanceCmd              string // optional shell command run at finish
+	acceptanceSpec             *AcceptanceSpec
+	acceptanceContractFixed    bool
+	acceptanceContractRevision int
+	continuationResume         *ContinuationCheckpoint
+	metricsMu                  sync.RWMutex
+	retriesByFailureClass      map[TaskFailureClass]int
+	compactions                int
+	rollbackCmd                string // optional shell command run on acceptance failure
+	selfHealingAttempts        int
+	budgetTripped              atomic.Bool
+	lastRunResult              *RunResult
+	lastRunResultMu            sync.RWMutex
+	// runOrchestratorOverride is a deterministic test seam for continuation
+	// and recovery integration tests; production coordinators leave it nil.
+	runOrchestratorOverride func(context.Context, *agent.AgentDef, string) (string, []fantasy.StepResult, error)
+	// workerAgentOverride is a deterministic integration-test seam; production
+	// execution always creates the configured worker agent.
+	workerAgentOverride fantasy.Agent
 
 	// Decoupled sub-services (§17 struct-level interface decoupling)
 	planner         Planner
@@ -355,7 +370,132 @@ func (c *Coordinator) SetBudget(maxWallClockSeconds, maxTotalTokens int64) {
 
 // SetAcceptance sets an optional shell command run when the coordinator
 // finishes; a non-zero exit marks the run as not-accepted.
-func (c *Coordinator) SetAcceptance(cmd string) { c.acceptanceCmd = cmd }
+func (c *Coordinator) SetAcceptance(cmd string) {
+	spec := AcceptanceSpec{}
+	if cmd != "" {
+		spec.Commands = []string{cmd}
+	}
+	c.SetAcceptanceSpecWithReason(spec, "set_acceptance")
+}
+
+// SetAcceptanceSpec sets an explicit AcceptanceSpec for run-level acceptance.
+func (c *Coordinator) SetAcceptanceSpec(spec AcceptanceSpec) {
+	c.SetAcceptanceSpecWithReason(spec, "set_acceptance_spec")
+}
+
+// SetAcceptanceSpecWithReason sets an explicit AcceptanceSpec with an audit reason and persists audit entries.
+func (c *Coordinator) SetAcceptanceSpecWithReason(spec AcceptanceSpec, reason string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	spec = cloneAcceptanceSpec(spec)
+
+	var oldSpec *AcceptanceSpec
+	if c.acceptanceSpec != nil {
+		oldCopy := cloneAcceptanceSpec(*c.acceptanceSpec)
+		oldSpec = &oldCopy
+	}
+
+	oldSpecJSON := "none"
+	if oldSpec != nil {
+		if b, err := json.Marshal(oldSpec); err == nil {
+			oldSpecJSON = string(b)
+		}
+	}
+	newSpecJSON := ""
+	if b, err := json.Marshal(spec); err == nil {
+		newSpecJSON = string(b)
+	}
+
+	if c.acceptanceContractFixed && c.acceptanceSpec != nil {
+		c.report(c.newEvent("acceptance_contract_modified").
+			withData(map[string]any{
+				"old_spec": oldSpec,
+				"new_spec": spec,
+				"reason":   reason,
+			}).
+			withMessage(fmt.Sprintf("acceptance contract modified after run start. reason: %s", reason)))
+
+		audit.LogAcceptanceModified("coordinator", oldSpecJSON, newSpecJSON, reason)
+		c.persistAcceptanceAuditEvent(oldSpecJSON, newSpecJSON, reason)
+	}
+
+	c.acceptanceContractRevision++
+	revision := AcceptanceContractRevision{
+		Revision:  c.acceptanceContractRevision,
+		Timestamp: time.Now().Format(time.RFC3339Nano),
+		OldSpec:   oldSpec,
+		NewSpec:   spec,
+		Reason:    reason,
+	}
+	if c.sessionData != nil {
+		c.sessionData.AcceptanceContractRevisions = append(c.sessionData.AcceptanceContractRevisions, revision)
+		if c.session != nil && c.session.Workspace != "" {
+			_ = SaveSession(c.session.Workspace, c.sessionData)
+		}
+	}
+	c.emitEvent("acceptance_contract_modified", "coordinator", "", map[string]interface{}{
+		"revision": revision.Revision, "old_spec": oldSpec, "new_spec": spec, "reason": reason,
+	})
+
+	specCopy := cloneAcceptanceSpec(spec)
+	c.acceptanceSpec = &specCopy
+	if len(spec.Commands) > 0 {
+		c.acceptanceCmd = spec.Commands[0]
+	}
+	c.acceptanceContractFixed = true
+}
+
+func (c *Coordinator) persistAcceptanceAuditEvent(oldSpecJSON, newSpecJSON, reason string) {
+	if c.session == nil || c.session.Workspace == "" {
+		return
+	}
+	auditDir := filepath.Join(c.session.Workspace, "logs")
+	_ = os.MkdirAll(auditDir, 0o755)
+	auditPath := filepath.Join(auditDir, "acceptance_audit.jsonl")
+
+	rec := map[string]any{
+		"timestamp": time.Now().Format(time.RFC3339Nano),
+		"event":     "acceptance_contract_modified",
+		"team":      c.session.Config.Name,
+		"old_spec":  oldSpecJSON,
+		"new_spec":  newSpecJSON,
+		"reason":    reason,
+	}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(b, '\n'))
+}
+
+// LastRunResult returns the last computed RunResult for this coordinator.
+func (c *Coordinator) LastRunResult() *RunResult {
+	c.lastRunResultMu.RLock()
+	defer c.lastRunResultMu.RUnlock()
+	return c.lastRunResult
+}
+
+// SetLastRunResult sets the computed RunResult for this coordinator.
+func (c *Coordinator) SetLastRunResult(res *RunResult) {
+	c.lastRunResultMu.Lock()
+	c.lastRunResult = res
+	c.lastRunResultMu.Unlock()
+	// Persist the canonical result immediately. This is intentionally best
+	// effort: the normal checkpoint path still owns task/session durability,
+	// while an outcome must never disappear merely because the process exits
+	// after finish.
+	if c.sessionData != nil {
+		c.sessionData.RunResult = res
+		if c.session != nil && c.session.Workspace != "" {
+			_ = SaveSession(c.session.Workspace, c.sessionData)
+		}
+	}
+}
 
 // SetRollback sets an optional shell command run on acceptance failure in unattended mode.
 func (c *Coordinator) SetRollback(cmd string) { c.rollbackCmd = cmd }
@@ -531,6 +671,12 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		maxDrafts:              maxDraftsPerSession,
 	}
 
+	if session.Config.AcceptanceSpec != nil {
+		c.SetAcceptanceSpec(*session.Config.AcceptanceSpec)
+	} else if session.Config.Acceptance != "" {
+		c.SetAcceptance(session.Config.Acceptance)
+	}
+
 	c.planner = &defaultPlanner{c: c}
 	c.sessionStore = &defaultSessionStore{c: c}
 	c.policyEngine = &defaultPolicyEngine{c: c}
@@ -586,6 +732,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		&terminalCloseTool{coordinator: c},
 		&terminalListTool{coordinator: c},
 		&terminalReconcileTool{coordinator: c},
+		&reconcileTaskTool{coordinator: c},
 	)
 
 	if c.memoryStore != nil {

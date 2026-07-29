@@ -177,13 +177,14 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 // consult files directly instead of burning a full delegation round asking a
 // worker to cat a document.
 var coordinatorCoreToolNames = map[string]bool{
-	"ask_user":   true,
-	"stm_write":  true,
-	"ltm_update": true,
-	"view":       true,
-	"grep":       true,
-	"glob":       true,
-	"ls":         true,
+	"ask_user":       true,
+	"stm_write":      true,
+	"ltm_update":     true,
+	"view":           true,
+	"grep":           true,
+	"glob":           true,
+	"ls":             true,
+	"reconcile_task": true,
 }
 
 // coordinatorAllowedToolNames returns the permission allowlist matching
@@ -237,6 +238,9 @@ func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
 }
 
 func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentDef, prompt string) (string, []fantasy.StepResult, error) {
+	if c.runOrchestratorOverride != nil {
+		return c.runOrchestratorOverride(ctx, orchDef, prompt)
+	}
 	coordinatorTimeout := time.Duration(c.session.Config.Timeout) * time.Second * time.Duration(c.session.Config.MaxRounds+1)
 	if orchDef.Timeout > 0 {
 		coordinatorTimeout = time.Duration(orchDef.Timeout) * time.Second
@@ -260,6 +264,9 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	}
 
 	orchModelID := c.resolveAgentModel(orchDef, "")
+	if c.providerManager == nil {
+		return "", nil, fmt.Errorf("provider manager unavailable")
+	}
 	orch, err := agent.CreateAgent(orchCtx, c.providerManager.GetProvider(orchModelID), agent.AgentConfig{
 		Def:        orchDef,
 		TeamConfig: &c.session.Config,
@@ -292,13 +299,83 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 	if c.finishCalled.Load() || ctx.Err() != nil {
 		return result, steps
 	}
-	c.report(c.newEvent("wrap_up_phase").withMessage("coordinator stopped without calling finish (step limit likely reached); forcing a final summary turn").withTodoID(CoordTodoID))
-	c.saveHistoryAndSession(ctx, steps)
-	wrapResult, wrapSteps, err := c.runOrchestrator(ctx, orchDef, stepLimitWrapUpPrompt)
-	if err != nil || strings.TrimSpace(wrapResult) == "" {
-		return result, nil // original steps already saved above
+
+	maxContinuationTurns := 5
+	if c.session != nil && c.session.Config.MaxCoordinatorTurns > 0 {
+		maxContinuationTurns = c.session.Config.MaxCoordinatorTurns
 	}
-	return wrapResult, wrapSteps
+	continuationTurns := 0
+	continuationReason := ""
+	budgetStopped := false
+	continuationInterrupted := false
+	for turn := 1; turn <= maxContinuationTurns; turn++ {
+		if c.finishCalled.Load() || ctx.Err() != nil {
+			break
+		}
+		if exceeded, reason := c.budgetExceeded(); exceeded {
+			c.report(c.newEvent("budget_exceeded").withMessage(reason))
+			continuationReason = reason
+			budgetStopped = true
+			break
+		}
+		continuationTurns = turn
+		c.saveContinuationCheckpoint(turn, maxContinuationTurns, "step_limit", "pending")
+		c.report(c.newEvent("coordinator_continuation").withMessage(fmt.Sprintf("step limit reached (continuation turn %d/%d); continuing automatically", turn, maxContinuationTurns)).withTodoID(CoordTodoID))
+		c.saveHistoryAndSession(ctx, steps)
+
+		contPrompt := "The step limit for the previous turn was reached. Please continue coordinating and executing the tasks required to satisfy the user's request. When complete, call finish."
+		wrapResult, wrapSteps, err := c.runOrchestrator(ctx, orchDef, contPrompt)
+		if err != nil || strings.TrimSpace(wrapResult) == "" {
+			continuationReason = "continuation turn failed or returned no result"
+			continuationInterrupted = true
+			break
+		}
+		result = wrapResult
+		steps = wrapSteps
+	}
+
+	if !c.finishCalled.Load() && ctx.Err() == nil {
+		c.report(c.newEvent("wrap_up_phase").withMessage("coordinator stopped without calling finish after continuation turns; forcing final summary").withTodoID(CoordTodoID))
+		c.saveHistoryAndSession(ctx, steps)
+		wrapResult, wrapSteps, err := c.runOrchestrator(ctx, orchDef, stepLimitWrapUpPrompt)
+		if err == nil && strings.TrimSpace(wrapResult) != "" {
+			result = wrapResult
+			steps = wrapSteps
+		}
+	}
+
+	if c.LastRunResult() == nil {
+		accRes, accErr := c.runAcceptance(ctx)
+		items := c.taskTracker.TodoList().Items()
+		failedTasks := failedTodoItems(items)
+		unresolvedPending := pendingTodoItems(items)
+		allUnresolved := append(failedTasks, unresolvedPending...)
+		goalSatisfied := !budgetStopped && len(allUnresolved) == 0 && accErr == nil
+		outcome := RunOutcomePartial
+		if goalSatisfied {
+			outcome = RunOutcomeCompleted
+		}
+		c.SetLastRunResult(&RunResult{
+			Outcome:         outcome,
+			GoalSatisfied:   goalSatisfied,
+			Response:        strings.TrimPrefix(result, "FINISHED:"),
+			Reason:          continuationReason,
+			Acceptance:      accRes,
+			UnresolvedTasks: toTaskReferences(allUnresolved),
+			Stats:           SummarizeRunStats(items),
+			Continuation:    &ContinuationInfo{TurnCount: continuationTurns, MaxTurns: maxContinuationTurns, Reason: continuationReason},
+			Metrics:         c.Metrics(),
+		})
+	}
+	if continuationTurns > 0 {
+		status := "completed"
+		if continuationInterrupted || ctx.Err() != nil || !c.finishCalled.Load() {
+			status = "aborted"
+		}
+		c.saveContinuationCheckpoint(continuationTurns, maxContinuationTurns, continuationReason, status)
+	}
+
+	return result, steps
 }
 
 // attemptWrapUpRecovery converts a mid-run coordinator failure into a final
@@ -356,11 +433,38 @@ func (c *Coordinator) summaryFromTodos(runErr error) string {
 // nothing — the next session had no idea the previous one ended mid-flight.
 func (c *Coordinator) recordRunAborted(runErr error) {
 	reason := "run ended before completion"
+	outcome := RunOutcomeFailed
+	exitCode := 1
 	switch {
 	case errors.Is(runErr, context.Canceled):
 		reason = "run aborted (cancelled by user)"
+		outcome = RunOutcomeCancelled
+		exitCode = 130
 	case errors.Is(runErr, context.DeadlineExceeded):
 		reason = "run aborted (coordinator timeout)"
+		exitCode = 124
+	}
+	items := []*TodoItem(nil)
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		items = c.taskTracker.TodoList().Items()
+	}
+	unresolved := append(failedTodoItems(items), pendingTodoItems(items)...)
+	response := fmt.Sprintf("%s: %v", reason, runErr)
+	c.SetLastRunResult(&RunResult{
+		Outcome:         outcome,
+		GoalSatisfied:   false,
+		Response:        response,
+		Reason:          reason,
+		ExitCode:        exitCode,
+		UnresolvedTasks: toTaskReferences(unresolved),
+		Stats:           SummarizeRunStats(items),
+		Metrics:         c.Metrics(),
+	})
+	checkpoint := c.ContinuationCheckpoint()
+	if checkpoint == nil {
+		c.saveContinuationCheckpoint(0, 0, reason, "aborted")
+	} else {
+		c.saveContinuationCheckpoint(checkpoint.TurnCount, checkpoint.MaxTurns, reason, "aborted")
 	}
 
 	if c.session != nil && c.session.Workspace != "" {
@@ -375,7 +479,7 @@ func (c *Coordinator) recordRunAborted(runErr error) {
 		entry += "\n\n" + summary
 	}
 	c.addSessionAssistantMessage(entry)
-	if c.sessionData != nil {
+	if c.sessionData != nil && c.session != nil && c.session.Workspace != "" {
 		c.sessionData.Rounds = c.totalRounds()
 		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
 	}
@@ -543,6 +647,12 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		DisableMemory:    c.ExecutionProfile().DisableHistoricalMemory,
 		ProjectContext:   c.loadProjectContext(),
 	}
+	if c.continuationResume != nil {
+		resume := c.continuationResume
+		checkpointText := fmt.Sprintf("\n\n---\n## Resumed Continuation Checkpoint\n\nThis run is resuming an interrupted coordinator continuation. Continue from turn %d/%d. Previous reason: %s. Reuse completed task results and reconcile in-progress work; do not duplicate completed tasks.\n", resume.TurnCount, resume.MaxTurns, resume.Reason)
+		systemPrompt += checkpointText
+		coreText.WriteString(checkpointText)
+	}
 
 	// The compiler is intentionally shadow-only until canonical mode. Retain
 	// the exact legacy assembly below so model-visible prompts do not change.
@@ -607,6 +717,7 @@ func compactLegacyProjectContext(ctx context.Context, compacter textCompacter, p
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
 	endExecutionRun := c.beginExecutionRun()
 	defer endExecutionRun()
+	defer func() { c.continuationResume = nil }()
 	if err := c.ValidateWorkspaceIsolation(); err != nil {
 		return "", err
 	}
@@ -655,6 +766,8 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	} else if n > 0 {
 		c.report(c.newEvent("step").withMessage(fmt.Sprintf("resume: re-drove %d interrupted task(s) from checkpoint", n)))
 	}
+	c.continuationResume = nil
+	c.ResumeContinuationCheckpoint()
 
 	c.addSessionUserMessage(userPrompt)
 
@@ -676,26 +789,35 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 			c.saveHistoryAndSession(ctx, steps)
 			c.recordRunAborted(err)
 			orchModel := c.resolveAgentModel(orchDef, "")
-			c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator failed").withTodoID(CoordTodoID))
+			c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator failed").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
 			return "", fmt.Errorf("coordinator failed (model: %s): %w", orchModel, err)
 		}
 	}
 
 	result, steps = c.ensureFinished(ctx, &orchDefCopy, result, steps)
+	if ctx.Err() != nil && !c.finishCalled.Load() {
+		c.finalizeRemainingTasks()
+		c.saveHistoryAndSession(ctx, steps)
+		c.recordRunAborted(ctx.Err())
+		return "", ctx.Err()
+	}
 
 	c.saveHistoryAndSession(ctx, steps)
 
 	finalResult := strings.TrimPrefix(result, "FINISHED:")
 
 	c.addSessionAssistantMessage(finalResult)
-	if c.sessionData != nil {
+	if c.sessionData != nil && c.session != nil && c.session.Workspace != "" {
 		c.sessionData.Rounds = c.totalRounds()
 		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
 	}
 
 	c.finalizeNormalCompletion()
-	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator finished").withTodoID(CoordTodoID))
+	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator finished").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
 	c.SetCurrentStage("idle")
+	if lastRes := c.LastRunResult(); lastRes != nil && !IsRunOutcomeSuccess(lastRes.Outcome) {
+		return finalResult, fmt.Errorf("%w: %s", ErrTasksUnresolved, lastRes.Response)
+	}
 	return finalResult, nil
 }
 
@@ -741,24 +863,52 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 			c.saveHistoryAndSession(ctx, steps)
 			c.recordRunAborted(err)
 			orchModel := c.resolveAgentModel(orchDef, "")
-			c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator continuation failed").withTodoID(CoordTodoID))
+			c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator continuation failed").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
 			return "", fmt.Errorf("coordinator continuation failed (model: %s): %w", orchModel, err)
 		}
 	}
 
 	result, steps = c.ensureFinished(ctx, &orchDefCopy, result, steps)
+	if ctx.Err() != nil && !c.finishCalled.Load() {
+		c.finalizeRemainingTasks()
+		c.saveHistoryAndSession(ctx, steps)
+		c.recordRunAborted(ctx.Err())
+		return "", ctx.Err()
+	}
 
 	c.saveHistoryAndSession(ctx, steps)
 
 	finalResult := strings.TrimPrefix(result, "FINISHED:")
 
 	c.addSessionAssistantMessage(finalResult)
-	if c.sessionData != nil {
+	if c.sessionData != nil && c.session != nil && c.session.Workspace != "" {
 		c.sessionData.Rounds = c.totalRounds()
 		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
 	}
 
 	c.finalizeNormalCompletion()
-	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("continuation finished").withTodoID(CoordTodoID))
+	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("continuation finished").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
+	if lastRes := c.LastRunResult(); lastRes != nil && !IsRunOutcomeSuccess(lastRes.Outcome) {
+		return finalResult, fmt.Errorf("%w: %s", ErrTasksUnresolved, lastRes.Response)
+	}
 	return finalResult, nil
+}
+
+func runResultStatusData(result *RunResult) map[string]any {
+	if result == nil {
+		return nil
+	}
+	data := map[string]any{
+		"outcome":          result.Outcome,
+		"goal_satisfied":   result.GoalSatisfied,
+		"stats":            result.Stats,
+		"tasks_unresolved": result.Stats.TasksUnresolved,
+		"attempts_total":   result.Stats.AttemptsTotal,
+		"attempts_failed":  result.Stats.AttemptsFailed,
+		"metrics":          result.Metrics,
+	}
+	if result.Acceptance != nil {
+		data["acceptance_passed"] = result.Acceptance.Passed
+	}
+	return data
 }

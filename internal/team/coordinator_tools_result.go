@@ -157,6 +157,10 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	if res.Confidence == 0 {
 		res.Confidence = 1.0
 	}
+	// Security: strip model-injected HMAC signatures from submit_result tool input
+	for i := range res.Evidence {
+		res.Evidence[i].SystemHMAC = ""
+	}
 
 	if t.coordinator != nil {
 		t.coordinator.storeSubmittedTaskResult(t.todoID, &res)

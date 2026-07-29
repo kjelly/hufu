@@ -66,6 +66,12 @@ func NewNotifier(cfg NotifyConfig, w io.Writer) *Notifier {
 }
 
 func (n *Notifier) Notify(eventType, agent, message, output string) {
+	n.NotifyWithData(eventType, agent, message, output, nil)
+}
+
+// NotifyWithData emits canonical run metadata alongside the human-readable
+// event. Consumers should use outcome rather than infer success from prose.
+func (n *Notifier) NotifyWithData(eventType, agent, message, output string, data map[string]any) {
 	if !n.cfg.Enabled() {
 		return
 	}
@@ -73,7 +79,7 @@ func (n *Notifier) Notify(eventType, agent, message, output string) {
 		return
 	}
 
-	title, msg := formatEvent(eventType, agent, message, output)
+	title, msg := formatEventWithData(eventType, agent, message, output, data)
 
 	if n.cfg.OSC {
 		n.sendOSC(title, msg)
@@ -84,6 +90,10 @@ func (n *Notifier) Notify(eventType, agent, message, output string) {
 }
 
 func formatEvent(eventType, agent, message, output string) (title, msg string) {
+	return formatEventWithData(eventType, agent, message, output, nil)
+}
+
+func formatEventWithData(eventType, agent, message, output string, data map[string]any) (title, msg string) {
 	if agent == "" {
 		agent = "coordinator"
 	}
@@ -125,6 +135,12 @@ func formatEvent(eventType, agent, message, output string) (title, msg string) {
 		} else {
 			msg = eventType
 		}
+	}
+	if outcome, ok := data["outcome"].(string); ok && outcome != "" {
+		msg = fmt.Sprintf("%s [outcome=%s]", msg, outcome)
+	}
+	if unresolved, ok := data["tasks_unresolved"]; ok {
+		msg = fmt.Sprintf("%s [tasks_unresolved=%v]", msg, unresolved)
 	}
 	return title, msg
 }

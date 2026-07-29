@@ -323,6 +323,7 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 		if err := c.SessionStore().SaveCompactionRecord(workspace, rec); err != nil {
 			log.Printf("warning: failed to save compaction record: %v", err)
 		}
+		c.recordCompaction()
 	}
 
 	if c.think {
@@ -389,6 +390,19 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	if sd == nil {
 		return
 	}
+	if sd.RunResult != nil {
+		c.SetLastRunResult(sd.RunResult)
+	}
+	if len(sd.AcceptanceContractRevisions) > 0 {
+		latest := sd.AcceptanceContractRevisions[len(sd.AcceptanceContractRevisions)-1]
+		c.acceptanceContractRevision = latest.Revision
+		c.acceptanceContractFixed = true
+		spec := cloneAcceptanceSpec(latest.NewSpec)
+		c.acceptanceSpec = &spec
+		if len(spec.Commands) > 0 {
+			c.acceptanceCmd = spec.Commands[0]
+		}
+	}
 
 	prof := c.ExecutionProfile()
 
@@ -431,6 +445,37 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	if !prof.DisableHistoricalMemory {
 		c.hydrateConversationHistoryFromSessionData()
 	}
+}
+
+// ContinuationCheckpoint returns a copy of the persisted continuation state.
+func (c *Coordinator) ContinuationCheckpoint() *ContinuationCheckpoint {
+	if c == nil || c.sessionData == nil || c.sessionData.ContinuationCheckpoint == nil {
+		return nil
+	}
+	cp := *c.sessionData.ContinuationCheckpoint
+	return &cp
+}
+
+func (c *Coordinator) saveContinuationCheckpoint(turn, maxTurns int, reason, status string) {
+	if c == nil || c.sessionData == nil || c.session == nil || c.session.Workspace == "" {
+		return
+	}
+	c.sessionData.ContinuationCheckpoint = &ContinuationCheckpoint{TurnCount: turn, MaxTurns: maxTurns, Reason: reason, Status: status}
+	_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
+	c.emitEvent("coordinator_continuation_checkpoint", "coordinator", "", map[string]interface{}{"turn_count": turn, "max_turns": maxTurns, "reason": reason, "status": status})
+}
+
+// ResumeContinuationCheckpoint persists the transition from an interrupted
+// continuation to a new run, allowing callers to query the restart boundary.
+func (c *Coordinator) ResumeContinuationCheckpoint() *ContinuationCheckpoint {
+	cp := c.ContinuationCheckpoint()
+	if cp == nil || (cp.Status != "pending" && cp.Status != "aborted") {
+		return cp
+	}
+	resume := *cp
+	c.continuationResume = &resume
+	c.saveContinuationCheckpoint(cp.TurnCount, cp.MaxTurns, cp.Reason, "resumed")
+	return c.ContinuationCheckpoint()
 }
 
 func (c *Coordinator) hydrateConversationHistoryFromSessionData() {
@@ -706,10 +751,12 @@ func (c *Coordinator) SessionData() *SessionData {
 func (c *Coordinator) saveHistoryAndSession(ctx context.Context, steps []fantasy.StepResult) {
 	c.conversationHistoryMu.Lock()
 	c.appendHistory(ctx, steps)
-	_ = SaveConversationHistory(c.session.Workspace, c.conversationHistory)
+	if c.session != nil && c.session.Workspace != "" {
+		_ = SaveConversationHistory(c.session.Workspace, c.conversationHistory)
+	}
 	c.syncConversationHistoryStateToSessionData()
 	c.conversationHistoryMu.Unlock()
-	if c.sessionData != nil {
+	if c.sessionData != nil && c.session != nil && c.session.Workspace != "" {
 		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
 	}
 }

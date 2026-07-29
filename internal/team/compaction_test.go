@@ -757,6 +757,9 @@ func TestCompactMessages_MergesTypedTaskResultFactsWithoutSidecar(t *testing.T) 
 	}
 
 	_ = c.compactMessages(context.Background(), []fantasy.Message{fantasy.NewUserMessage("produce a report")}, 0, []int{1})
+	if got := c.Metrics().Compactions; got != 1 {
+		t.Fatalf("compaction metric = %d, want 1", got)
+	}
 	summary := c.lastCompactionSummary
 	if summary == nil {
 		t.Fatal("expected compaction summary")

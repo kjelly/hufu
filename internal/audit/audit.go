@@ -29,8 +29,9 @@ const (
 	// tool for minutes (stdin lock + a human who has not noticed the prompt).
 	// Paired start/resolved events make that wait attributable — without them
 	// a long call→result gap in the audit log looks like a tool hang.
-	EventConsentWaitStart = "consent_wait_start"
-	EventConsentResolved  = "consent_resolved"
+	EventConsentWaitStart   = "consent_wait_start"
+	EventConsentResolved    = "consent_resolved"
+	EventAcceptanceModified = "acceptance_contract_modified"
 )
 
 type ToolAction struct {
@@ -229,4 +230,23 @@ func (l *AuditLogger) LogSSHConnection(agent, host, command string, exitCode int
 		Input:     fmt.Sprintf("host=%s, command=%s", host, utils.RedactSecrets(utils.TruncateString(command, 500))),
 		Result:    fmt.Sprintf("exit_code=%d, duration_ms=%d", exitCode, durationMs),
 	})
+}
+
+func (l *AuditLogger) LogAcceptanceModified(agent, oldSpecJSON, newSpecJSON, reason string) {
+	l.log(ToolAction{
+		Timestamp: time.Now().Format(time.RFC3339Nano),
+		Team:      l.teamName,
+		Agent:     agent,
+		Tool:      "coordinator",
+		Action:    "acceptance_contract_modified",
+		Event:     EventAcceptanceModified,
+		Input:     fmt.Sprintf("old_spec=%s", oldSpecJSON),
+		Result:    fmt.Sprintf("new_spec=%s, reason=%s", newSpecJSON, reason),
+	})
+}
+
+func LogAcceptanceModified(agent, oldSpecJSON, newSpecJSON, reason string) {
+	if l := GetDefault(); l != nil {
+		l.LogAcceptanceModified(agent, oldSpecJSON, newSpecJSON, reason)
+	}
 }

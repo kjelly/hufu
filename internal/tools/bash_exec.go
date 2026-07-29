@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 const defaultBashTimeout = 120 * time.Second
@@ -121,7 +122,7 @@ func runShellCommand(ctx context.Context, timeout time.Duration, workDir string,
 	if err != nil {
 		bashPath = "/bin/bash"
 	}
-	env := os.Environ()
+	env := SanitizeSubprocessEnv(os.Environ())
 	env = append(env, "SHELL="+bashPath)
 	if envReplacer != nil {
 		env = envReplacer(env)
@@ -194,7 +195,7 @@ func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workD
 	}
 	filtered = append(filtered, "PATH="+pathVal)
 	filtered = append(filtered, "SHELL="+bashPath)
-	cmd.Env = filtered
+	cmd.Env = utils.SanitizeSubprocessEnv(filtered)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -256,6 +257,11 @@ func runBashDirenv(ctx context.Context, timeout time.Duration, cfg ToolConfig, c
 		base = append(base, projectEnv...)
 		base = append(base, "PATH="+os.Getenv("PATH"))
 		base = append(base, "SHELL="+bashPath)
-		return base
+		return SanitizeSubprocessEnv(base)
 	})
+}
+
+// SanitizeSubprocessEnv strips secret environment variables like HUFU_HMAC_SECRET from subprocess environments.
+func SanitizeSubprocessEnv(env []string) []string {
+	return utils.SanitizeSubprocessEnv(env)
 }

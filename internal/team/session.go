@@ -41,6 +41,12 @@ type SessionData struct {
 	ConversationHistoryNextSourceIndex int                 `json:"conversation_history_next_source_index,omitempty"`
 	Entries                            []SessionEntry      `json:"entries"`
 	Tasks                              []*TodoItem         `json:"tasks,omitempty"`
+	// RunResult is the canonical outcome of the latest execution. It is
+	// persisted with the session so reloads, reports, and notifications retain
+	// the same completed/partial/blocked/failed/cancelled semantics.
+	RunResult                   *RunResult                   `json:"run_result,omitempty"`
+	AcceptanceContractRevisions []AcceptanceContractRevision `json:"acceptance_contract_revisions,omitempty"`
+	ContinuationCheckpoint      *ContinuationCheckpoint      `json:"continuation_checkpoint,omitempty"`
 }
 
 func LoadSession(workspace string) *SessionData {

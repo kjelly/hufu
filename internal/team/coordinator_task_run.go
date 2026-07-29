@@ -125,9 +125,13 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	}
 
 	var ag fantasy.Agent
-	ag, err = c.createTaskAgent(parentCtx, agentDef, task, resolvedModel, todoID, taskDesc, agentName)
-	if err != nil {
-		return "", err
+	if c.workerAgentOverride != nil {
+		ag = c.workerAgentOverride
+	} else {
+		ag, err = c.createTaskAgent(parentCtx, agentDef, task, resolvedModel, todoID, taskDesc, agentName)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	var prompt string
@@ -266,7 +270,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	var conversationHistory []fantasy.Message
 	var transcript *taskTranscript
 	if taskUsesVerbatimTranscript(task) {
-		transcript, err = newTaskTranscript(c.session.Workspace, todoID)
+		transcript, err = newTaskTranscript(c.session.Workspace, todoID, c.executionRunID)
 		if err != nil {
 			return "", err
 		}
@@ -297,6 +301,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		(!task.PlanFirst || task.PlanID != "")
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		attemptsMade = attempt
+		if attempt > 1 {
+			c.recordRetry(classifyTaskFailure(lastErr))
+		}
 		attemptStarted := time.Now()
 		c.recordExecutionEvent(todoID, agentName, attempt, "in_progress", resolvedModel, 0, ExecutionUsage{})
 		currentPrompt := prompt
@@ -329,6 +336,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		var output string
 		var steps []fantasy.StepResult
 		var err error
+		protocolFailure := false
+		recoveredProtocol := false
 		func() {
 			taskCtx, cancel := tools.WithInteractiveAwareTimeout(parentCtx, agentTimeout)
 			defer cancel()
@@ -444,23 +453,52 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				}
 				return planEntry.PlanText, nil
 			}
-			if err == nil {
-				typedRes = c.GetTaskResult(todoID)
-				if typedRes == nil {
-					if task.Execution.StrictResult {
-						err = fmt.Errorf("typed task result mandatory for task %s (%s), but agent did not submit structured result", todoID, agentName)
-						c.report(c.newEvent("step").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
+			typedRes = c.GetTaskResult(todoID)
+			if typedRes == nil {
+				if task.Execution.StrictResult {
+					// Protocol failure: the agent finished (tools ran, output produced)
+					// but never called submit_result. Classify this as FailureProtocol
+					// and attempt deterministic result recovery from the agent's text
+					// output before falling back to a full retry that would re-run
+					// all side-effecting tools (write, bash, infra, etc.).
+					//
+					// Recovery algorithm:
+					//  1. Parse free-text output as a low-confidence TypedResult.
+					//  2. Mark it as "recovered" (source != "submitted") and store.
+					//  3. Proceed to verify if configured — objective verification
+					//     is sufficient to promote a recovered result to done.
+					//  4. Only if output is empty or recovery still leaves err set
+					//     fall through to the retry path.
+					if strings.TrimSpace(output) != "" {
+						recovered := ParseFreeTextResult(output)
+						recovered.TaskID = todoID
+						recovered.Agent = agentName
+						recovered.Source = "recovered_protocol"
+						c.storeSubmittedTaskResult(todoID, recovered)
+						typedRes = recovered
+						recoveredProtocol = true
+						protocolErrMsg := fmt.Sprintf("protocol-only failure for task %s (%s): agent omitted submit_result; recovered typed result from output text (class: %s)",
+							todoID, agentName, string(FailureProtocol))
+						c.report(c.newEvent("step").withAgent(agentName).withMessage(protocolErrMsg).withTodoID(todoID))
+						// err stays nil — fall through to verify below so an
+						// objective check can confirm the side-effects are complete.
 					} else {
-						typedRes = ParseFreeTextResult(output)
-						typedRes.TaskID = todoID
-						typedRes.Agent = agentName
-						c.storeSubmittedTaskResult(todoID, typedRes)
+						// No output at all: cannot recover — fall to full retry.
+						err = fmt.Errorf("protocol failure (class: %s) for task %s (%s): agent produced no output and did not call submit_result",
+							string(FailureProtocol), todoID, agentName)
+						protocolFailure = true
+						c.report(c.newEvent("step").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
 					}
 				}
 				if err == nil && typedRes.Source == "submitted" {
 					if resultErr := validateSubmittedTaskResult(typedRes); resultErr != nil {
 						err = resultErr
 					}
+				}
+			}
+			if err == nil {
+				if recoveredProtocol && strings.TrimSpace(task.Verify) == "" {
+					err = fmt.Errorf("protocol result recovered for task %s but no objective verify command is configured", todoID)
 				}
 			}
 			if err == nil {
@@ -542,6 +580,16 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, "error"))
 			break
 		}
+		// A protocol-only failure after an external/infra/credential operation
+		// has no safe replay semantics. Preserve the transcript/evidence and
+		// block for reconciliation rather than invoking the worker tools again.
+		if protocolFailure && nonReplayableSideEffect(task.SideEffect) {
+			lastErr = err
+			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, "protocol"))
+			c.taskTracker.TodoList().UpdateStatus(todoID, TaskBlocked, fmt.Sprintf("protocol result missing after %s side effect; reconcile before retry: %v", task.SideEffect, err))
+			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: protocol-only failure after non-replayable side effect; reconciliation required").withTodoID(todoID))
+			break
+		}
 
 		// Step messages start at the first assistant turn; without re-adding
 		// the prompt, a retry's history opens with an assistant message and
@@ -607,6 +655,26 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		failErr = fmt.Errorf("%w\n\nLast agent output before failure (may contain useful findings):\n%s", failErr, utils.TruncateRunes(lastOutput, 2000))
 	}
 	return "", failErr
+}
+
+func classifyTaskFailure(err error) TaskFailureClass {
+	if err == nil {
+		return FailureExecution
+	}
+	if isTaskTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
+		return FailureTimeout
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "protocol") || strings.Contains(msg, "empty output") {
+		return FailureProtocol
+	}
+	if strings.Contains(msg, "verification") || strings.Contains(msg, "deliverable") {
+		return FailureVerify
+	}
+	if strings.Contains(msg, "policy") || strings.Contains(msg, "blocked") {
+		return FailurePolicy
+	}
+	return FailureExecution
 }
 
 // rescueFinalSummary gives an agent that stopped without a final message one
@@ -1054,6 +1122,7 @@ func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef 
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, shell, "-c", command)
+	cmd.Env = utils.SanitizeSubprocessEnv(os.Environ())
 	if c.projectDir != "" {
 		cmd.Dir = c.projectDir
 	}

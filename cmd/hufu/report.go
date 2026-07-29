@@ -57,6 +57,7 @@ type reportData struct {
 	SkillPatterns       []SkillPatternReport
 	ContextUsageSection string
 	ResolvedProfile     team.ExecutionProfile
+	RunResult           *team.RunResult
 }
 
 // SkillPatternReport holds detected skill pattern info for reports
@@ -111,6 +112,10 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		d.SkillPatterns = gatherSkillPatterns(tc.coordinator)
 		d.ContextUsageSection = tc.coordinator.RenderContextUsageSection()
 		d.ResolvedProfile = tc.coordinator.ExecutionProfile()
+		d.RunResult = tc.coordinator.LastRunResult()
+	}
+	if d.RunResult == nil && d.SessionData != nil {
+		d.RunResult = d.SessionData.RunResult
 	}
 
 	if tc.session != nil {
@@ -190,6 +195,16 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 
 	duration := time.Since(data.StartedAt).Round(time.Second)
 	fmt.Fprintf(&b, "**Duration:** %s\n\n", duration)
+	if data.RunResult != nil {
+		b.WriteString("## Run Outcome\n\n")
+		fmt.Fprintf(&b, "- **Outcome:** `%s`\n", data.RunResult.Outcome)
+		fmt.Fprintf(&b, "- **Goal satisfied:** `%t`\n", data.RunResult.GoalSatisfied)
+		fmt.Fprintf(&b, "- **Tasks unresolved:** %d\n", data.RunResult.Stats.TasksUnresolved)
+		if data.RunResult.Acceptance != nil {
+			fmt.Fprintf(&b, "- **Acceptance passed:** `%t`\n", data.RunResult.Acceptance.Passed)
+		}
+		b.WriteString("\n---\n\n")
+	}
 	b.WriteString("---\n\n")
 
 	if finalResult != "" {

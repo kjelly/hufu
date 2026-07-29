@@ -663,7 +663,7 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 		idleTimer.reset()
 
 		if notifier != nil {
-			notifier.Notify(event.Type, event.Agent, event.Message, event.Output)
+			notifier.NotifyWithData(event.Type, event.Agent, event.Message, event.Output, event.Data)
 		}
 
 		if event.Model != "" {
@@ -1104,7 +1104,7 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 			orig := compositeReporter
 			compositeReporter = func(event team.StatusEvent) {
 				orig(event)
-				tc.notifier.Notify(event.Type, event.Agent, event.Message, event.Output)
+				tc.notifier.NotifyWithData(event.Type, event.Agent, event.Message, event.Output, event.Data)
 			}
 		}
 
@@ -1140,7 +1140,7 @@ func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
 	var mu sync.Mutex
 	return func(event team.StatusEvent) {
 		if notifier != nil {
-			notifier.Notify(event.Type, event.Agent, event.Message, event.Output)
+			notifier.NotifyWithData(event.Type, event.Agent, event.Message, event.Output, event.Data)
 		}
 		encoded := jsonStatusEvent{Type: event.Type, Team: event.TeamName, Agent: event.Agent, TodoID: event.TodoID, Model: event.Model, Message: event.Message, Tool: event.ToolName, Time: time.Now().UTC().Format(time.RFC3339Nano)}
 		mu.Lock()

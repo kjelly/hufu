@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -112,17 +113,33 @@ func usageFromSteps(steps []fantasy.StepResult) ExecutionUsage {
 }
 
 func (c *Coordinator) beginExecutionRun() func() {
-	logger, err := newExecutionEventLogger(c.session.Workspace)
+	runID := newExecutionRunID()
+	teamRevision := ""
+	if c.session != nil {
+		teamRevision = teamDefinitionRevision(c.session.Dir)
+	}
+
+	c.executionEventsMu.Lock()
+	c.executionRunID = runID
+	c.executionTeamRevision = teamRevision
+	if c.taskTracker != nil {
+		c.taskTracker.TodoList().SetRunID(runID)
+	}
+	c.executionEventsMu.Unlock()
+
+	workspace := ""
+	if c.session != nil {
+		workspace = c.session.Workspace
+	}
+	logger, err := newExecutionEventLogger(workspace)
 	if err != nil {
+		log.Printf("warning: create execution event logger: %v", err)
 		return func() {}
 	}
-	runID := newExecutionRunID()
-	teamRevision := teamDefinitionRevision(c.session.Dir)
+
 	c.executionEventsMu.Lock()
 	previous := c.executionEvents
 	c.executionEvents = logger
-	c.executionRunID = runID
-	c.executionTeamRevision = teamRevision
 	c.executionEventsMu.Unlock()
 	if previous != nil {
 		previous.close()
@@ -138,7 +155,17 @@ func (c *Coordinator) beginExecutionRun() func() {
 	})
 
 	return func() {
-		c.emitEvent("run_finished", "coordinator", "", nil)
+		payload := map[string]interface{}{}
+		if result := c.LastRunResult(); result != nil {
+			payload["outcome"] = result.Outcome
+			payload["goal_satisfied"] = result.GoalSatisfied
+			if result.Acceptance != nil {
+				payload["acceptance_passed"] = result.Acceptance.Passed
+			}
+			payload["stats"] = result.Stats
+			payload["metrics"] = result.Metrics
+		}
+		c.emitEvent("run_finished", "coordinator", "", payload)
 		if c.eventStore != nil {
 			_ = c.eventStore.Close()
 			c.eventStore = nil

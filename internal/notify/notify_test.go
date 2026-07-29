@@ -206,3 +206,12 @@ func TestNewNotifierFillsDefaultEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestNotifyWithDataIncludesCanonicalOutcome(t *testing.T) {
+	var buf bytes.Buffer
+	n := NewNotifier(NotifyConfig{OSC: true, Events: []string{"done"}}, &buf)
+	n.NotifyWithData("done", "coordinator", "finished", "", map[string]any{"outcome": "partial", "tasks_unresolved": 2})
+	if !strings.Contains(buf.String(), "outcome=partial") || !strings.Contains(buf.String(), "tasks_unresolved=2") {
+		t.Fatalf("notification did not include canonical outcome: %q", buf.String())
+	}
+}

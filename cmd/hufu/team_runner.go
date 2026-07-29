@@ -193,6 +193,18 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 		result, runErr = executeSegments(ctx, segments, registry, opts.providerURL, loadedTeams, injector, activeCoord, pathConsent, vars, route)
 	}
 	if runErr != nil {
+		// Abort paths still have a canonical RunResult on each coordinator.
+		// Machine-readable callers must receive that result even though the
+		// process returns non-zero; otherwise an abort is indistinguishable from
+		// missing output (and callers may incorrectly treat it as completed).
+		if opts.reportMode {
+			generateReport(loadedTeams, result)
+		}
+		if opts.outputFormat == "json" {
+			if outputErr := printResultJSON(result, loadedTeams, nil); outputErr != nil {
+				return fmt.Errorf("%w (json output failed: %v)", runErr, outputErr)
+			}
+		}
 		return runErr
 	}
 

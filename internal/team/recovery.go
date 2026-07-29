@@ -17,6 +17,15 @@ const (
 	SideEffectCredential     SideEffectClass = "credential_mutation"
 )
 
+func nonReplayableSideEffect(class SideEffectClass) bool {
+	switch class {
+	case SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential:
+		return true
+	default:
+		return false
+	}
+}
+
 type RecoveryPolicy string
 
 const (

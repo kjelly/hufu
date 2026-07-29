@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 const defaultSSHTimeout = 30 * time.Second
@@ -341,14 +342,16 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		}
 		// Use password from environment variable for security
 		cmd = exec.CommandContext(cmdCtx, "sshpass", "-e", "ssh")
-		cmd.Env = append(os.Environ(), "SSHPASS="+args.Password)
+		cmd.Env = utils.SanitizeSubprocessEnv(append(os.Environ(), "SSHPASS="+args.Password))
 		cmd.Args = append(cmd.Args, sshArgList...)
 	} else if args.Interactive {
 		// Interactive mode: run SSH and handle password prompts
 		cmd = exec.CommandContext(cmdCtx, "ssh", sshArgList...)
+		cmd.Env = utils.SanitizeSubprocessEnv(os.Environ())
 	} else {
 		// Non-interactive mode (BatchMode)
 		cmd = exec.CommandContext(cmdCtx, "ssh", sshArgList...)
+		cmd.Env = utils.SanitizeSubprocessEnv(os.Environ())
 	}
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -399,7 +402,7 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 
 			// Build sshpass command using environment variable
 			sshpassCmd := exec.CommandContext(cmdCtx2, "sshpass", "-e", "ssh")
-			sshpassCmd.Env = append(os.Environ(), "SSHPASS="+password)
+			sshpassCmd.Env = utils.SanitizeSubprocessEnv(append(os.Environ(), "SSHPASS="+password))
 			sshpassCmd.Args = append(sshpassCmd.Args, sshArgList...)
 
 			stdout2, stderr2, exitCode2 := runCommand(sshpassCmd)

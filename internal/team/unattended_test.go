@@ -111,7 +111,7 @@ func TestSetBudget_IgnoresZero(t *testing.T) {
 
 func TestRunAcceptance_Empty(t *testing.T) {
 	c := newBudgetCoordinator(t)
-	if err := c.runAcceptance(context.Background()); err != nil {
+	if _, err := c.runAcceptance(context.Background()); err != nil {
 		t.Errorf("no acceptance command should be a no-op, got %v", err)
 	}
 }
@@ -119,7 +119,7 @@ func TestRunAcceptance_Empty(t *testing.T) {
 func TestRunAcceptance_Pass(t *testing.T) {
 	c := newBudgetCoordinator(t)
 	c.SetAcceptance("true")
-	if err := c.runAcceptance(context.Background()); err != nil {
+	if _, err := c.runAcceptance(context.Background()); err != nil {
 		t.Errorf("`true` should pass, got %v", err)
 	}
 }
@@ -127,7 +127,7 @@ func TestRunAcceptance_Pass(t *testing.T) {
 func TestRunAcceptance_Fail(t *testing.T) {
 	c := newBudgetCoordinator(t)
 	c.SetAcceptance("echo nope >&2; false")
-	if err := c.runAcceptance(context.Background()); err == nil {
+	if _, err := c.runAcceptance(context.Background()); err == nil {
 		t.Fatal("`false` should fail acceptance")
 	}
 }

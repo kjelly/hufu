@@ -30,6 +30,12 @@ type StatusEvent struct {
 	TodoID      string // ID of the TodoItem this event belongs to (set for worker-task events)
 	Output      string // Final output text (set in done events for task-level events)
 	SSHSessions int
+	Data        map[string]any
+}
+
+func (e StatusEvent) withData(data map[string]any) StatusEvent {
+	e.Data = data
+	return e
 }
 
 func (e StatusEvent) withOutput(output string) StatusEvent {
@@ -136,7 +142,12 @@ func CanTransition(from, to TaskStatus) bool {
 		return to == TaskDone || to == TaskBlocked || to == TaskError
 	case TaskPaused:
 		return to == TaskInProgress || to == TaskSkipped || to == TaskBlocked || to == TaskError
-	case TaskError, TaskBlocked:
+	case TaskError:
+		// A terminal execution error may be refined into blocked when
+		// reconciliation proves that replay is unsafe (for example a
+		// protocol-only failure after an external side effect).
+		return to == TaskInProgress || to == TaskBlocked
+	case TaskBlocked:
 		return to == TaskInProgress
 	case TaskDone, TaskSkipped:
 		return false
@@ -194,13 +205,27 @@ type TodoItem struct {
 	ReconcileTool  string          `json:"reconcile_tool,omitempty"`
 	RecoveryState  string          `json:"recovery_state,omitempty"`
 	TypedResult    *TaskResult     `json:"typed_result,omitempty"`
+	Resolution     *TaskResolution `json:"resolution,omitempty"`
 }
 
 type TodoList struct {
 	mu       sync.Mutex
 	items    []*TodoItem
 	next     int
+	runID    string
 	onChange func()
+}
+
+func (tl *TodoList) SetRunID(runID string) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	tl.runID = runID
+}
+
+func (tl *TodoList) RunID() string {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	return tl.runID
 }
 
 // TodoSpec describes a todo item to be created via AddBatch.
@@ -385,6 +410,7 @@ func (tl *TodoList) SetVerificationResult(id string, result *VerificationResult)
 func (tl *TodoList) SetTypedResult(id string, result *TaskResult) error {
 	tl.mu.Lock()
 	updated := false
+	sec, _ := GetSystemSecret()
 	for _, ti := range tl.items {
 		if ti.ID == id {
 			if result == nil {
@@ -393,6 +419,22 @@ func (tl *TodoList) SetTypedResult(id string, result *TaskResult) error {
 				break
 			}
 			copyResult := *result
+			if len(copyResult.Evidence) > 0 {
+				cleanEv := make([]EvidenceRef, len(copyResult.Evidence))
+				for i, ev := range copyResult.Evidence {
+					if ev.TaskID == "" {
+						ev.TaskID = id
+					}
+					// Only keep SystemHMAC if signature is valid system HMAC for this task & run!
+					if sec != "" && VerifyEvidenceSignature(ev, sec, id, tl.runID) {
+						cleanEv[i] = ev
+					} else {
+						ev.SystemHMAC = ""
+						cleanEv[i] = ev
+					}
+				}
+				copyResult.Evidence = cleanEv
+			}
 			ti.TypedResult = &copyResult
 			updated = true
 			break
@@ -492,6 +534,11 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		copyTR := *item.TypedResult
 		typedResult = &copyTR
 	}
+	var resolution *TaskResolution
+	if item.Resolution != nil {
+		copyRes := *item.Resolution
+		resolution = &copyRes
+	}
 	return &TodoItem{
 		ID:             item.ID,
 		Agent:          item.Agent,
@@ -521,7 +568,43 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		ReconcileTool:  item.ReconcileTool,
 		RecoveryState:  item.RecoveryState,
 		TypedResult:    typedResult,
+		Resolution:     resolution,
 	}
+}
+
+func (tl *TodoList) SetTaskResolution(id string, resolution *TaskResolution) error {
+	tl.mu.Lock()
+	updated := false
+	var valErr error
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			if resolution != nil {
+				if err := ValidateResolution(resolution, id, tl.items, tl.runID); err != nil {
+					valErr = err
+					break
+				}
+				copyRes := *resolution
+				ti.Resolution = &copyRes
+			} else {
+				ti.Resolution = nil
+			}
+			updated = true
+			break
+		}
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+
+	if valErr != nil {
+		return valErr
+	}
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
 }
 
 func (tl *TodoList) Items() []*TodoItem {

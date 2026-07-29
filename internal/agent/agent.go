@@ -120,6 +120,9 @@ type TeamConfig struct {
 	JudgeModel        string
 	PlanReviewerModel string
 	MaxConcurrent     int
+	// MaxCoordinatorTurns bounds automatic continuation turns after a
+	// coordinator step limit. Zero uses the built-in safe default.
+	MaxCoordinatorTurns int
 	// EscalateOnRetry makes every task retry escalate to the next stronger
 	// model in ModelList (ordered weakest→strongest) by default.
 	EscalateOnRetry   bool
@@ -148,12 +151,19 @@ type TeamConfig struct {
 	// MaxTotalTokens caps cumulative LLM token usage across the run (0 = unlimited).
 	MaxTotalTokens int64
 	// Acceptance is an optional shell command run when the coordinator finishes;
-	// a non-zero exit marks the whole run as not-accepted (reported/notified).
-	Acceptance string
-	// Rollback is an optional shell command run on acceptance failure in unattended mode
+	// a non-zero exit marks the run as not-accepted.
+	Acceptance     string
+	AcceptanceSpec *AcceptanceSpec
+	// Rollback is an optional shell command run on acceptance failure in unattended mode.
 	Rollback string
-	// ExecutionProfile specifies a named execution profile in team.yml (e.g. strict-verification)
+	// ExecutionProfile specifies named defaults like strict-verification.
 	ExecutionProfile string
+}
+
+type AcceptanceSpec struct {
+	Commands                 []string `yaml:"commands" json:"commands,omitempty"`
+	RequiredArtifacts        []string `yaml:"required-artifacts" json:"required_artifacts,omitempty"`
+	RequireNoUnresolvedTasks bool     `yaml:"require-no-unresolved-tasks" json:"require_no_unresolved_tasks,omitempty"`
 }
 
 type OllamaProvider struct {

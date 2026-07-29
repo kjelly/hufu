@@ -172,7 +172,8 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		}
 	}
 
-	if accErr := t.coordinator.runAcceptance(ctx); accErr != nil {
+	accRes, accErr := t.coordinator.runAcceptance(ctx)
+	if accErr != nil {
 		if prof.AcceptanceMode == AcceptanceBlocking || t.coordinator.IsUnattended() {
 			if t.coordinator.selfHealingAttempts < 2 {
 				t.coordinator.selfHealingAttempts++
@@ -204,6 +205,32 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		}
 	}
 
+	unresolvedPending := pendingTodoItems(todoList.Items())
+	goalSatisfied := len(failedTasks) == 0 && len(unresolvedPending) == 0 && accErr == nil
+
+	var outcome RunOutcome
+	if goalSatisfied {
+		outcome = RunOutcomeCompleted
+	} else if args.AcknowledgeFailedTasks || len(failedTasks) > 0 {
+		outcome = RunOutcomePartial
+	} else if accErr != nil {
+		outcome = RunOutcomePartial
+	} else {
+		outcome = RunOutcomePartial
+	}
+
+	allUnresolved := append(failedTasks, unresolvedPending...)
+	runRes := &RunResult{
+		Outcome:         outcome,
+		GoalSatisfied:   goalSatisfied,
+		Response:        args.Response,
+		Acceptance:      accRes,
+		UnresolvedTasks: toTaskReferences(allUnresolved),
+		Stats:           SummarizeRunStats(todoList.Items()),
+		Metrics:         t.coordinator.Metrics(),
+	}
+	t.coordinator.SetLastRunResult(runRes)
+
 	t.coordinator.finishCalled.Store(true)
 	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
 }
@@ -212,10 +239,26 @@ func failedTodoItems(items []*TodoItem) []*TodoItem {
 	failed := make([]*TodoItem, 0)
 	for _, item := range items {
 		if item != nil && (item.Status == TaskError || item.Status == TaskBlocked) {
+			if item.Resolution != nil && (item.Resolution.Status == "superseded" || item.Resolution.Status == "reconciled" || item.Resolution.Status == "waived") {
+				continue
+			}
 			failed = append(failed, item)
 		}
 	}
 	return failed
+}
+
+func pendingTodoItems(items []*TodoItem) []*TodoItem {
+	pending := make([]*TodoItem, 0)
+	for _, item := range items {
+		if item != nil && (item.Status == TaskPending || item.Status == TaskInProgress || item.Status == TaskPlanned || item.Status == TaskVerifying || item.Status == TaskPaused) {
+			if item.Resolution != nil && (item.Resolution.Status == "superseded" || item.Resolution.Status == "reconciled" || item.Resolution.Status == "waived") {
+				continue
+			}
+			pending = append(pending, item)
+		}
+	}
+	return pending
 }
 
 func formatFailedTasks(items []*TodoItem) string {
@@ -230,13 +273,61 @@ func formatFailedTasks(items []*TodoItem) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// runAcceptance runs the team's optional acceptance command in the project dir
-// and returns a non-nil error if it exits non-zero. No-op when unset.
-func (c *Coordinator) runAcceptance(parentCtx context.Context) error {
-	cmd := strings.TrimSpace(c.acceptanceCmd)
-	if cmd == "" {
-		return nil
+// runAcceptance runs the team's optional acceptance command / spec in the project dir.
+func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResult, error) {
+	res := &AcceptanceResult{Passed: true}
+	c.mu.RLock()
+	var spec *AcceptanceSpec
+	if c.acceptanceSpec != nil {
+		specCopy := cloneAcceptanceSpec(*c.acceptanceSpec)
+		spec = &specCopy
 	}
+	acceptanceCmd := c.acceptanceCmd
+	c.mu.RUnlock()
+
+	if spec == nil && acceptanceCmd != "" {
+		spec = &AcceptanceSpec{Commands: []string{acceptanceCmd}}
+	}
+	if spec == nil {
+		return res, nil
+	}
+
+	res.Commands = spec.Commands
+	res.RequiredArtifacts = spec.RequiredArtifacts
+
+	// 1. Required Artifacts check
+	for _, artPath := range spec.RequiredArtifacts {
+		artPath = strings.TrimSpace(artPath)
+		if artPath == "" {
+			continue
+		}
+		evalPath := artPath
+		if !filepath.IsAbs(evalPath) {
+			if c.projectDir != "" {
+				evalPath = filepath.Join(c.projectDir, artPath)
+			} else if c.session != nil && c.session.Workspace != "" {
+				evalPath = filepath.Join(c.session.Workspace, artPath)
+			}
+		}
+		if _, err := os.Stat(evalPath); err != nil {
+			errMsg := fmt.Sprintf("required artifact missing: %s", artPath)
+			res.Errors = append(res.Errors, errMsg)
+			res.Passed = false
+		}
+	}
+
+	// 2. RequireNoUnresolvedTasks check
+	if spec.RequireNoUnresolvedTasks {
+		items := c.taskTracker.TodoList().Items()
+		unresolved := append(failedTodoItems(items), pendingTodoItems(items)...)
+		if len(unresolved) > 0 {
+			errMsg := fmt.Sprintf("unresolved tasks exist (%d task(s))", len(unresolved))
+			res.Errors = append(res.Errors, errMsg)
+			res.Passed = false
+		}
+	}
+
+	// 3. Shell commands check
 	shell := "sh"
 	if c.session != nil && c.session.Config.Shell != "" {
 		shell = c.session.Config.Shell
@@ -245,21 +336,35 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) error {
 	if timeout <= 0 || timeout > 300*time.Second {
 		timeout = 300 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(parentCtx, timeout)
-	defer cancel()
-	ex := exec.CommandContext(ctx, shell, "-c", cmd)
-	if c.projectDir != "" {
-		ex.Dir = c.projectDir
-	}
-	out, err := ex.CombinedOutput()
-	if err != nil {
-		detail := strings.TrimSpace(string(out))
-		if detail != "" {
-			detail = ": " + utils.TruncateString(detail, 500)
+
+	for _, cmd := range spec.Commands {
+		cmd = strings.TrimSpace(cmd)
+		if cmd == "" {
+			continue
 		}
-		return fmt.Errorf("%v%s", err, detail)
+		ctx, cancel := context.WithTimeout(parentCtx, timeout)
+		ex := exec.CommandContext(ctx, shell, "-c", cmd)
+		ex.Env = utils.SanitizeSubprocessEnv(os.Environ())
+		if c.projectDir != "" {
+			ex.Dir = c.projectDir
+		}
+		out, err := ex.CombinedOutput()
+		cancel()
+		if err != nil {
+			detail := strings.TrimSpace(string(out))
+			if detail != "" {
+				detail = ": " + utils.TruncateString(detail, 500)
+			}
+			errMsg := fmt.Sprintf("acceptance command failed (%s): %v%s", cmd, err, detail)
+			res.Errors = append(res.Errors, errMsg)
+			res.Passed = false
+		}
 	}
-	return nil
+
+	if !res.Passed {
+		return res, fmt.Errorf("acceptance check failed: %s", strings.Join(res.Errors, "; "))
+	}
+	return res, nil
 }
 
 // runRollback runs the team's optional rollback command or default git rollback.
@@ -287,6 +392,7 @@ func (c *Coordinator) runRollback(parentCtx context.Context) error {
 	}
 
 	ex := exec.CommandContext(ctx, shell, "-c", cmd)
+	ex.Env = utils.SanitizeSubprocessEnv(os.Environ())
 	if c.projectDir != "" {
 		ex.Dir = c.projectDir
 	}
@@ -421,6 +527,78 @@ func (t *todoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 	default:
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown action %q (valid: create, update, list)", args.Action)), nil
 	}
+}
+
+type reconcileTaskTool struct {
+	coordToolBase
+	coordinator *Coordinator
+}
+
+func (t *reconcileTaskTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "reconcile_task",
+		Description: "Mark a failed or superseded task as resolved by a subsequent task or objective evidence, removing it from the unresolved failed tasks finish gate.",
+		Parameters: map[string]any{
+			"task_id": map[string]any{
+				"type":        "string",
+				"description": "ID of the failed task to reconcile or mark superseded",
+			},
+			"status": map[string]any{
+				"type":        "string",
+				"description": "Resolution status: superseded or reconciled",
+				"enum":        []string{"superseded", "reconciled"},
+			},
+			"resolved_by": map[string]any{
+				"type":        "string",
+				"description": "ID of the successful task that replaced or fixed the failed task",
+			},
+			"reason": map[string]any{
+				"type":        "string",
+				"description": "Explanation of how the issue was fixed or why the task was superseded",
+			},
+			"evidence": map[string]any{
+				"type":        "array",
+				"description": "Optional list of objective evidence references verifying resolution",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"type":        map[string]any{"type": "string"},
+						"description": map[string]any{"type": "string"},
+						"value":       map[string]any{"type": "string"},
+					},
+				},
+			},
+		},
+		Required: []string{"task_id", "status", "resolved_by", "reason"},
+	}
+}
+
+func (t *reconcileTaskTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		TaskID     string        `json:"task_id"`
+		Status     string        `json:"status"`
+		ResolvedBy string        `json:"resolved_by"`
+		Reason     string        `json:"reason"`
+		Evidence   []EvidenceRef `json:"evidence"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+	// Security: strip model-injected HMAC signatures from tool input to prevent forged signatures
+	for i := range args.Evidence {
+		args.Evidence[i].SystemHMAC = ""
+	}
+	res := &TaskResolution{
+		Status:     args.Status,
+		ResolvedBy: args.ResolvedBy,
+		Reason:     args.Reason,
+		Evidence:   args.Evidence,
+	}
+	if err := t.coordinator.taskTracker.TodoList().SetTaskResolution(args.TaskID, res); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to reconcile task: %v", err)), nil
+	}
+	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
+	return fantasy.NewTextResponse(fmt.Sprintf("task %s marked as %s by task %s: %s", args.TaskID, args.Status, args.ResolvedBy, args.Reason)), nil
 }
 
 func (t *todoTool) handleCreate(callerName string, items []string) (fantasy.ToolResponse, error) {

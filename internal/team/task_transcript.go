@@ -54,6 +54,8 @@ func validateTaskOutputMode(task TaskDef) error {
 type taskTranscript struct {
 	mu          sync.Mutex
 	path        string
+	todoID      string
+	runID       string
 	f           *os.File
 	toolResults int
 }
@@ -68,7 +70,7 @@ type taskTranscriptRecord struct {
 	Error      bool   `json:"error,omitempty"`
 }
 
-func newTaskTranscript(workspace, todoID string) (*taskTranscript, error) {
+func newTaskTranscript(workspace, todoID, runID string) (*taskTranscript, error) {
 	if workspace == "" {
 		return nil, fmt.Errorf("create task transcript: empty workspace")
 	}
@@ -84,7 +86,7 @@ func newTaskTranscript(workspace, todoID string) (*taskTranscript, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create task transcript: %w", err)
 	}
-	return &taskTranscript{path: path, f: f}, nil
+	return &taskTranscript{path: path, todoID: todoID, runID: runID, f: f}, nil
 }
 
 func (t *taskTranscript) RecordToolCall(id, tool, input string) error {
@@ -184,7 +186,18 @@ func finalizeVerbatimTaskResult(transcript *taskTranscript, result *TaskResult) 
 	}
 	if result != nil {
 		result.RawOutputRef = ref
-		result.Evidence = append(result.Evidence, EvidenceRef{Type: "task_transcript", Description: "Complete runner-captured tool transcript", Value: ref.Path})
+		sec, err := GetSystemSecret()
+		if err != nil {
+			return "", fmt.Errorf("failed to obtain system secret for transcript signing: %w", err)
+		}
+		ev := EvidenceRef{
+			TaskID:      transcript.todoID,
+			RunID:       transcript.runID,
+			Type:        "task_transcript",
+			Description: "Complete runner-captured tool transcript",
+			Value:       ref.Path,
+		}
+		result.Evidence = append(result.Evidence, SignEvidence(ev, sec))
 	}
 	return formatVerbatimTranscriptManifest(ref), nil
 }
