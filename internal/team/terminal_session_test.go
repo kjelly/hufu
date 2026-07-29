@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -29,7 +30,6 @@ func TestTerminalSessionManager_OwnerLifecycleAndOutputArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	ownerCtx := WithTerminalTaskID(context.Background(), "task-a")
 	session, err := manager.Start(ownerCtx, TerminalStartRequest{
 		RunID: "run-a", OwnerTaskID: "task-a", Agent: "worker",
@@ -79,6 +79,194 @@ func TestTerminalSessionManager_OwnerLifecycleAndOutputArtifact(t *testing.T) {
 	}
 }
 
+func TestTerminalSessionLifecycleFactsAndExplicitWaitTargets(t *testing.T) {
+	workspace := t.TempDir()
+	var events []string
+	var mu sync.Mutex
+	manager, err := NewTerminalSessionManager(workspace, func(eventType, _ string, _ map[string]interface{}) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, eventType)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiter := NewTerminalSessionWaiter(manager)
+
+	ctx := WithTerminalTaskID(context.Background(), "task-lifecycle")
+	session, err := manager.Start(ctx, TerminalStartRequest{
+		RunID: "run-lifecycle", OwnerTaskID: "task-lifecycle",
+		Command: []string{"sh", "-c", "printf observed; sleep 0.08"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The terminal output artifact exists immediately, but it must not satisfy
+	// an exit wait for this process invocation.
+	shortCtx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	defer cancel()
+	if _, err := waiter.Wait(shortCtx, TerminalWaitRequest{SessionID: session.ID, Target: TerminalWaitExit}); err == nil {
+		t.Fatal("existing output artifact must not satisfy an exit wait")
+	}
+	if _, err := manager.Read(ctx, session.ID); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if _, err := waiter.Wait(context.Background(), TerminalWaitRequest{SessionID: session.ID, Target: TerminalWaitExit}); err != nil {
+		t.Fatalf("Wait(exit): %v", err)
+	}
+	if _, err := waiter.Wait(context.Background(), TerminalWaitRequest{SessionID: session.ID, Target: TerminalWaitResourceReleased}); err != nil {
+		t.Fatalf("Wait(resource_released): %v", err)
+	}
+	if _, err := waiter.Wait(context.Background(), TerminalWaitRequest{SessionID: session.ID, Target: TerminalWaitArtifactVerified}); err == nil || !strings.Contains(err.Error(), "ArtifactVerifier") {
+		t.Fatalf("Wait(artifact_verified) error = %v, want verifier-bound rejection", err)
+	}
+	if _, err := manager.Reconcile(context.Background(), session.ID); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	sessions, err := manager.List(context.Background(), "run-lifecycle")
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("List = %+v, %v", sessions, err)
+	}
+	got := sessions[0]
+	if got.ObservedAt.IsZero() || got.ExitedAt.IsZero() || got.ReleasedAt.IsZero() || got.ReconciledAt.IsZero() {
+		t.Fatalf("lifecycle timestamps were not persisted: %+v", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{string(TerminalProcessStarted), string(TerminalProcessObserved), string(TerminalProcessExited), string(TerminalProcessReconciled)}
+	last := -1
+	for _, event := range want {
+		index := -1
+		for i, gotEvent := range events {
+			if gotEvent == event {
+				index = i
+				break
+			}
+		}
+		if index <= last {
+			t.Fatalf("lifecycle event %q missing or out of order in %v", event, events)
+		}
+		last = index
+	}
+}
+
+func TestTerminalSessionManager_EmptyReadDoesNotObserveOutput(t *testing.T) {
+	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithTerminalTaskID(context.Background(), "task-empty-read")
+	session, err := manager.Start(ctx, TerminalStartRequest{
+		RunID: "run-empty-read", OwnerTaskID: "task-empty-read",
+		Command: []string{"sh", "-c", "sleep 0.06; printf later"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := manager.Read(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Output) != 0 || !first.Session.ObservedAt.IsZero() {
+		t.Fatalf("empty read = %+v; it must not claim process output was observed", first)
+	}
+	completed := waitForTerminal(t, manager, session.ID, time.Second)
+	second, err := manager.Read(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(second.Output) != "later" || second.Session.ObservedAt.IsZero() || completed.ExitedAt.IsZero() {
+		t.Fatalf("non-empty read = %+v; it must establish output observation", second)
+	}
+}
+
+type fakeTerminalSessionSource struct {
+	mu       sync.Mutex
+	sessions []TerminalSession
+	calls    int
+	onList   func(*fakeTerminalSessionSource)
+}
+
+func (f *fakeTerminalSessionSource) List(_ context.Context, _ string) ([]TerminalSession, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.onList != nil {
+		f.onList(f)
+	}
+	result := make([]TerminalSession, len(f.sessions))
+	copy(result, f.sessions)
+	return result, nil
+}
+
+func TestTerminalSessionWaiterUsesLifecycleFactsNotOutputExistence(t *testing.T) {
+	now := time.Now().UTC()
+	source := &fakeTerminalSessionSource{sessions: []TerminalSession{{
+		ID:         "session-1",
+		State:      TerminalSessionRunning,
+		Running:    true,
+		OutputRefs: []ArtifactRef{{Path: "previous-output.log", Type: "terminal_output"}},
+	}}}
+	source.onList = func(f *fakeTerminalSessionSource) {
+		if f.calls == 2 {
+			f.sessions[0].Running = false
+			f.sessions[0].State = TerminalSessionExited
+			f.sessions[0].ExitedAt = now
+			f.sessions[0].ReleasedAt = now
+		}
+	}
+	waiter := NewTerminalSessionWaiter(source)
+
+	result, err := waiter.Wait(context.Background(), TerminalWaitRequest{
+		SessionID: "session-1", Target: TerminalWaitExit, PollInterval: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Wait(exit): %v", err)
+	}
+	if result.Session.ExitedAt.IsZero() || source.calls < 2 {
+		t.Fatalf("wait result = %+v after %d source reads; output existence must not satisfy exit", result, source.calls)
+	}
+	if _, err := waiter.Wait(context.Background(), TerminalWaitRequest{SessionID: "session-1", Target: TerminalWaitArtifactVerified}); err == nil {
+		t.Fatal("terminal waiter must delegate artifact verification to ArtifactVerifier")
+	}
+
+	unknown := NewTerminalSessionWaiter(&fakeTerminalSessionSource{sessions: []TerminalSession{{ID: "unknown", State: TerminalSessionUnknown}}})
+	if _, err := unknown.Wait(context.Background(), TerminalWaitRequest{SessionID: "unknown", Target: TerminalWaitExit}); err == nil || !strings.Contains(err.Error(), "reconcile") {
+		t.Fatalf("unknown session wait error = %v, want reconciliation requirement", err)
+	}
+}
+
+func TestTerminalExitWaitDoesNotMarkTaskDoneBeforeVerification(t *testing.T) {
+	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := NewTaskTracker()
+	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "requires verification"}})[0]
+	tracker.TodoList().UpdateStatus(item.ID, TaskInProgress, "")
+	ctx := WithTerminalTaskID(context.Background(), item.ID)
+	session, err := manager.Start(ctx, TerminalStartRequest{
+		RunID: "run-unverified", OwnerTaskID: item.ID, Command: []string{"sh", "-c", "true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewTerminalSessionWaiter(manager).Wait(context.Background(), TerminalWaitRequest{SessionID: session.ID, Target: TerminalWaitExit}); err != nil {
+		t.Fatal(err)
+	}
+	var current *TodoItem
+	for _, candidate := range tracker.TodoList().Items() {
+		if candidate.ID == item.ID {
+			current = candidate
+			break
+		}
+	}
+	if current == nil || current.Status != TaskInProgress {
+		t.Fatalf("terminal exit wait must not decide task completion; task = %+v", current)
+	}
+}
+
 func TestTerminalSessionManager_ResumeMarksRunningSessionUnknownAndBlocksGates(t *testing.T) {
 	workspace := t.TempDir()
 	manager, err := NewTerminalSessionManager(workspace, nil)
@@ -110,6 +298,150 @@ func TestTerminalSessionManager_ResumeMarksRunningSessionUnknownAndBlocksGates(t
 	}
 	if err := restored.RequireNoLeaks("run-a"); err == nil {
 		t.Fatal("unknown session must block final acceptance")
+	}
+}
+
+func TestTerminalSessionManager_ReconcileRestoredDeadProcessRecordsExitBeforeReconciliation(t *testing.T) {
+	workspace := t.TempDir()
+	logsPath := filepath.Join(workspace, logsDir)
+	if err := os.MkdirAll(logsPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	persisted := []TerminalSession{{
+		ID: "restored-dead", RunID: "run-restored", OwnerTaskID: "task-restored",
+		StartedAt: time.Now().Add(-time.Minute), Running: true, State: TerminalSessionRunning,
+		PID: 99999999, ProcessIdentity: &ProcessIdentity{PID: 99999999},
+	}}
+	data, err := json.Marshal(persisted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logsPath, terminalSessionsFile), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var events []string
+	manager, err := NewTerminalSessionManager(workspace, func(eventType, _ string, _ map[string]interface{}) {
+		events = append(events, eventType)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := manager.List(context.Background(), "run-restored")
+	if err != nil || len(before) != 1 || before[0].State != TerminalSessionUnknown {
+		t.Fatalf("restored session = %+v, %v; want unknown", before, err)
+	}
+	if containsTerminalEvent(events, string(TerminalProcessReconciled)) {
+		t.Fatalf("restart alone must not claim reconciliation: %v", events)
+	}
+
+	got, err := manager.Reconcile(context.Background(), "restored-dead")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != TerminalSessionExited || got.ExitedAt.IsZero() || got.ReleasedAt.IsZero() || got.ReconciledAt.IsZero() {
+		t.Fatalf("reconciled session = %+v, want exited lifecycle timestamps", got)
+	}
+	assertTerminalEventOrder(t, events, []string{
+		"terminal_session_unknown",
+		string(TerminalProcessExited),
+		string(TerminalResourceReleased),
+		string(TerminalProcessReconciled),
+	})
+}
+
+func TestTerminalSessionManager_CloseRestoredSessionEstablishesExitFact(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		live bool
+	}{
+		{name: "already dead"},
+		{name: "verified live process is terminated", live: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			pid := 99999999
+			identity := &ProcessIdentity{PID: pid}
+			var cmd *exec.Cmd
+			if tc.live {
+				cmd = exec.Command("sleep", "5")
+				if err := cmd.Start(); err != nil {
+					t.Fatal(err)
+				}
+				reaped := make(chan struct{})
+				go func() {
+					_ = cmd.Wait()
+					close(reaped)
+				}()
+				defer func() {
+					if cmd.Process != nil {
+						_ = cmd.Process.Kill()
+					}
+					select {
+					case <-reaped:
+					case <-time.After(time.Second):
+						t.Error("test child was not reaped")
+					}
+				}()
+				pid = cmd.Process.Pid
+				var err error
+				identity, err = getProcessIdentity(pid)
+				if err != nil || identity == nil {
+					t.Fatalf("getProcessIdentity(%d) = %v, %v", pid, identity, err)
+				}
+			}
+			logsPath := filepath.Join(workspace, logsDir)
+			if err := os.MkdirAll(logsPath, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal([]TerminalSession{{
+				ID: "restored-close", RunID: "run-restored-close", OwnerTaskID: "task-restored-close",
+				StartedAt: time.Now().Add(-time.Minute), Running: true, State: TerminalSessionRunning,
+				PID: pid, ProcessIdentity: identity,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(logsPath, terminalSessionsFile), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var events []string
+			manager, err := NewTerminalSessionManager(workspace, func(eventType, _ string, _ map[string]interface{}) {
+				events = append(events, eventType)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := WithTerminalTaskID(context.Background(), "task-restored-close")
+			if err := manager.Close(ctx, "restored-close"); err != nil {
+				t.Fatal(err)
+			}
+			waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			result, err := NewTerminalSessionWaiter(manager).Wait(waitCtx, TerminalWaitRequest{SessionID: "restored-close", Target: TerminalWaitExit})
+			if err != nil || result.Session.ExitedAt.IsZero() {
+				t.Fatalf("exit wait after restored close = %+v, %v", result, err)
+			}
+			assertTerminalEventOrder(t, events, []string{string(TerminalProcessExited), string(TerminalResourceReleased)})
+		})
+	}
+}
+
+func assertTerminalEventOrder(t *testing.T, events, want []string) {
+	t.Helper()
+	last := -1
+	for _, event := range want {
+		index := -1
+		for i, got := range events {
+			if got == event {
+				index = i
+				break
+			}
+		}
+		if index <= last {
+			t.Fatalf("lifecycle event %q missing or out of order in %v", event, events)
+		}
+		last = index
 	}
 }
 
@@ -509,10 +841,11 @@ func TestTerminalTools_AgentIntegration(t *testing.T) {
 	startTool := &terminalStartTool{coordinator: coord}
 	writeTool := &terminalWriteTool{coordinator: coord}
 	readTool := &terminalReadTool{coordinator: coord}
+	waitTool := &terminalWaitTool{coordinator: coord}
 	closeTool := &terminalCloseTool{coordinator: coord}
 
 	ctx := WithTerminalTaskID(context.Background(), "task-agent-test")
-	ctx = context.WithValue(ctx, tools.AgentToolsAllowedKey, []string{"terminal", "terminal_start", "terminal_write", "terminal_read", "terminal_close", "terminal_list", "terminal_reconcile"})
+	ctx = context.WithValue(ctx, tools.AgentToolsAllowedKey, []string{"terminal", "terminal_start", "terminal_write", "terminal_read", "terminal_wait", "terminal_close", "terminal_list", "terminal_reconcile"})
 
 	// 1. Start session via tool
 	startResp, err := startTool.Run(ctx, fantasy.ToolCall{
@@ -548,6 +881,12 @@ func TestTerminalTools_AgentIntegration(t *testing.T) {
 	completed := waitForTerminal(t, manager, sessInfo.ID, time.Second)
 	if completed.State != TerminalSessionExited {
 		t.Fatalf("expected session exited, got %s", completed.State)
+	}
+	waitResp, err := waitTool.Run(ctx, fantasy.ToolCall{
+		Input: fmt.Sprintf(`{"id":%q,"target":"exit"}`, sessInfo.ID),
+	})
+	if err != nil || strings.Contains(waitResp.Content, "ERROR:") || !strings.Contains(waitResp.Content, sessInfo.ID) {
+		t.Fatalf("waitTool response = %q, %v", waitResp.Content, err)
 	}
 
 	readResp, err := readTool.Run(ctx, fantasy.ToolCall{
@@ -620,6 +959,7 @@ func TestSelectTools_TerminalToolsNotAlwaysIncluded(t *testing.T) {
 		&terminalStartTool{},
 		&terminalWriteTool{},
 		&terminalReadTool{},
+		&terminalWaitTool{},
 		&terminalCloseTool{},
 		&terminalListTool{},
 		&terminalReconcileTool{},

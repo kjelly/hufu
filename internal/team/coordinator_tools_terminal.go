@@ -19,11 +19,11 @@ type terminalTool struct {
 func (t *terminalTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
 		Name:        "terminal",
-		Description: "Manage stateful terminal sessions for interactive wizards, deploys, long-running processes, or streamed output. Actions: start, write, read, resize, close, list, reconcile. PTY sessions require the experimental PTY terminal feature.",
+		Description: "Manage stateful terminal sessions for interactive wizards, deploys, long-running processes, or streamed output. Actions: start, write, read, resize, wait, close, list, reconcile. PTY sessions require the experimental PTY terminal feature.",
 		Parameters: map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"description": "Action: start, write, read, resize, close, list, reconcile",
+				"description": "Action: start, write, read, resize, wait, close, list, reconcile",
 			},
 			"id": map[string]any{
 				"type":        "string",
@@ -40,7 +40,11 @@ func (t *terminalTool) Info() fantasy.ToolInfo {
 			},
 			"timeout": map[string]any{
 				"type":        "integer",
-				"description": "Child timeout in seconds (optional for start action)",
+				"description": "Child timeout in seconds (start) or wait timeout in seconds (wait)",
+			},
+			"target": map[string]any{
+				"type":        "string",
+				"description": "Wait target: exit or resource_released. artifact_verified is owned by ArtifactVerifier.",
 			},
 			"data": map[string]any{
 				"type":        "string",
@@ -73,6 +77,7 @@ type terminalArgs struct {
 	PTY        bool     `json:"pty"`
 	Rows       uint16   `json:"rows"`
 	Cols       uint16   `json:"cols"`
+	Target     string   `json:"target"`
 }
 
 func (t *terminalTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
@@ -99,6 +104,8 @@ func (t *terminalTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 		return t.runRead(ctx, mgr, args)
 	case "resize":
 		return t.runResize(ctx, mgr, args)
+	case "wait":
+		return t.runWait(ctx, mgr, args)
 	case "close":
 		return t.runClose(ctx, mgr, args)
 	case "list":
@@ -106,7 +113,7 @@ func (t *terminalTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	case "reconcile":
 		return t.runReconcile(ctx, mgr, args)
 	default:
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown action %q (valid: start, write, read, resize, close, list, reconcile)", args.Action)), nil
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown action %q (valid: start, write, read, resize, wait, close, list, reconcile)", args.Action)), nil
 	}
 }
 
@@ -262,6 +269,29 @@ func (t *terminalTool) runResize(ctx context.Context, mgr TerminalManager, args 
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 	return fantasy.NewTextResponse(fmt.Sprintf("Resized terminal session %s to %dx%d", args.ID, args.Rows, args.Cols)), nil
+}
+
+func (t *terminalTool) runWait(ctx context.Context, mgr TerminalManager, args *terminalArgs) (fantasy.ToolResponse, error) {
+	if args.ID == "" {
+		return fantasy.NewTextErrorResponse("id is required for wait action"), nil
+	}
+	target := TerminalWaitTarget(args.Target)
+	if target == "" {
+		return fantasy.NewTextErrorResponse("target is required for wait action"), nil
+	}
+	if args.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(args.Timeout)*time.Second)
+		defer cancel()
+	}
+	result, err := NewTerminalSessionWaiter(mgr).Wait(ctx, TerminalWaitRequest{
+		SessionID: args.ID, Target: target, PollInterval: 25 * time.Millisecond,
+	})
+	if err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+	out, _ := json.MarshalIndent(result, "", "  ")
+	return fantasy.NewTextResponse(string(out)), nil
 }
 
 func (t *terminalTool) runClose(ctx context.Context, mgr TerminalManager, args *terminalArgs) (fantasy.ToolResponse, error) {
@@ -439,6 +469,42 @@ func (t *terminalReadTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	payload, _ := json.Marshal(map[string]any{
 		"action": "read",
 		"id":     args.ID,
+	})
+	return (&terminalTool{coordinator: t.coordinator}).Run(ctx, fantasy.ToolCall{Input: string(payload)})
+}
+
+// terminalWaitTool exposes lifecycle-only waiting to agents. It deliberately
+// cannot wait for artifact verification, which remains an ArtifactVerifier
+// concern rather than a terminal/output concern.
+type terminalWaitTool struct {
+	coordToolBase
+	coordinator *Coordinator
+}
+
+func (t *terminalWaitTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:        "terminal_wait",
+		Description: "Wait for a terminal process to exit or its resources to be released.",
+		Parameters: map[string]any{
+			"id":      map[string]any{"type": "string", "description": "Terminal session ID"},
+			"target":  map[string]any{"type": "string", "description": "exit or resource_released"},
+			"timeout": map[string]any{"type": "integer", "description": "Optional wait timeout in seconds"},
+		},
+		Required: []string{"id", "target"},
+	}
+}
+
+func (t *terminalWaitTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var args struct {
+		ID      string `json:"id"`
+		Target  string `json:"target"`
+		Timeout int    `json:"timeout"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"action": "wait", "id": args.ID, "target": args.Target, "timeout": args.Timeout,
 	})
 	return (&terminalTool{coordinator: t.coordinator}).Run(ctx, fantasy.ToolCall{Input: string(payload)})
 }

@@ -758,6 +758,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		&terminalStartTool{coordinator: c},
 		&terminalWriteTool{coordinator: c},
 		&terminalReadTool{coordinator: c},
+		&terminalWaitTool{coordinator: c},
 		&terminalCloseTool{coordinator: c},
 		&terminalListTool{coordinator: c},
 		&terminalReconcileTool{coordinator: c},

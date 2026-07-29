@@ -42,6 +42,45 @@ const (
 	TerminalSessionUnknown TerminalSessionState = "unknown"
 )
 
+// TerminalLifecycleEvent names facts emitted by the terminal manager. These
+// are process facts only: consumers must not infer task completion from them.
+type TerminalLifecycleEvent string
+
+const (
+	TerminalProcessStarted    TerminalLifecycleEvent = "process_started"
+	TerminalProcessObserved   TerminalLifecycleEvent = "process_observed"
+	TerminalProcessExited     TerminalLifecycleEvent = "process_exited"
+	TerminalProcessReconciled TerminalLifecycleEvent = "process_reconciled"
+	TerminalResourceReleased  TerminalLifecycleEvent = "resource_released"
+)
+
+// TerminalWaitTarget is an explicit lifecycle condition a waiter may consume.
+// It intentionally has no generic shell-condition variant.
+type TerminalWaitTarget string
+
+const (
+	TerminalWaitExit             TerminalWaitTarget = "exit"
+	TerminalWaitArtifactVerified TerminalWaitTarget = "artifact_verified"
+	TerminalWaitResourceReleased TerminalWaitTarget = "resource_released"
+)
+
+// TerminalWaitRequest identifies both the resource and the fact being waited
+// for. Artifact verification remains owned by an ArtifactVerifier, so the
+// terminal manager rejects that target rather than treating output existence as
+// proof of verification.
+type TerminalWaitRequest struct {
+	SessionID    string
+	Target       TerminalWaitTarget
+	PollInterval time.Duration
+}
+
+// TerminalWaitResult is the observed durable session state for a completed
+// wait target.
+type TerminalWaitResult struct {
+	Session TerminalSession
+	Target  TerminalWaitTarget
+}
+
 // TerminalMode determines whether a session uses ordinary pipes or a PTY.
 type TerminalMode string
 
@@ -83,6 +122,10 @@ type TerminalSession struct {
 	WorkingDir      string               `json:"working_dir,omitempty"`
 	StartedAt       time.Time            `json:"started_at"`
 	LastReadAt      time.Time            `json:"last_read_at,omitempty"`
+	ObservedAt      time.Time            `json:"observed_at,omitempty"`
+	ExitedAt        time.Time            `json:"exited_at,omitempty"`
+	ReconciledAt    time.Time            `json:"reconciled_at,omitempty"`
+	ReleasedAt      time.Time            `json:"released_at,omitempty"`
 	Running         bool                 `json:"running"`
 	State           TerminalSessionState `json:"state"`
 	ExitCode        *int                 `json:"exit_code,omitempty"`
@@ -334,6 +377,9 @@ func (m *TerminalSessionManager) Start(ctx context.Context, req TerminalStartReq
 		_ = os.Remove(outputPath)
 		return nil, err
 	}
+	m.emit(string(TerminalProcessStarted), copy, map[string]interface{}{"command": req.Command, "pid": copy.PID})
+	// Keep the old event spelling during the migration to the process lifecycle
+	// contract so existing event-store readers remain compatible.
 	m.emit("terminal_session_started", copy, map[string]interface{}{"command": req.Command, "pid": copy.PID})
 
 	go m.waitForExit(managed, req.ChildTimeout)
@@ -392,6 +438,8 @@ func (m *TerminalSessionManager) waitForExit(managed *managedTerminalSession, ti
 		code := exitCode(err)
 		managed.session.ExitCode = &code
 		managed.session.Running = false
+		managed.session.ExitedAt = time.Now().UTC()
+		managed.session.ReleasedAt = managed.session.ExitedAt
 		if managed.session.State != TerminalSessionClosed {
 			managed.session.State = TerminalSessionExited
 		}
@@ -403,6 +451,8 @@ func (m *TerminalSessionManager) waitForExit(managed *managedTerminalSession, ti
 		if pErr != nil {
 			payload["persist_error"] = pErr.Error()
 		}
+		m.emit(string(TerminalProcessExited), managed.session, payload)
+		m.emit(string(TerminalResourceReleased), managed.session, map[string]interface{}{"reason": "process_output_closed"})
 		m.emit("terminal_session_exited", managed.session, payload)
 	}
 	m.mu.Unlock()
@@ -576,11 +626,19 @@ func (m *TerminalSessionManager) Read(ctx context.Context, id string) (TerminalR
 	}
 	output := append([]byte(nil), unread...)
 	managed.readOffset += int64(len(output))
-	managed.session.LastReadAt = time.Now().UTC()
+	now := time.Now().UTC()
+	managed.session.LastReadAt = now
+	firstObservation := len(output) > 0 && managed.session.ObservedAt.IsZero()
+	if firstObservation {
+		managed.session.ObservedAt = now
+	}
 	if err := m.persistLocked(); err != nil {
 		return TerminalReadResult{}, err
 	}
 	copy := deepCopyTerminalSession(managed.session)
+	if firstObservation {
+		m.emit(string(TerminalProcessObserved), copy, map[string]interface{}{"bytes": len(output)})
+	}
 	m.emit("terminal_session_read", copy, map[string]interface{}{"bytes": len(output)})
 	eof := !copy.Running && copy.State != TerminalSessionUnknown
 	screen := terminalANSISequence.ReplaceAllString(string(data), "")
@@ -636,8 +694,16 @@ func (m *TerminalSessionManager) Close(ctx context.Context, id string) error {
 		}
 	}
 
+	// Reaching this path proves the restored child is already gone or was
+	// terminated after its identity was verified. Persist an exit fact as well
+	// as resource release so an explicit exit waiter cannot wait forever.
+	now := time.Now().UTC()
 	managed.session.Running = false
 	managed.session.State = TerminalSessionClosed
+	if managed.session.ExitedAt.IsZero() {
+		managed.session.ExitedAt = now
+	}
+	managed.session.ReleasedAt = now
 	err = m.persistLocked()
 	copy := deepCopyTerminalSession(managed.session)
 	m.mu.Unlock()
@@ -647,6 +713,12 @@ func (m *TerminalSessionManager) Close(ctx context.Context, id string) error {
 	m.emit("terminal_session_closed", copy, map[string]interface{}{
 		"reconciled": true,
 		"evidence":   "process_terminated_or_dead",
+	})
+	m.emit(string(TerminalProcessExited), copy, map[string]interface{}{
+		"reason": "restored_process_terminated_or_dead",
+	})
+	m.emit(string(TerminalResourceReleased), copy, map[string]interface{}{
+		"reason": "restored_process_terminated_or_dead",
 	})
 	return nil
 }
@@ -673,12 +745,20 @@ func (m *TerminalSessionManager) Reconcile(_ context.Context, id string) (Termin
 	prevState := managed.session.State
 	reconciled := false
 	reason := "state_unchanged"
+	processExited := false
 	if managed.session.State == TerminalSessionUnknown || !managed.session.Running {
 		pid := managed.session.PID
 		if pid > 0 && !isPIDAlive(pid) {
 			managed.session.State = TerminalSessionExited
 			managed.session.Running = false
+			if managed.session.ExitedAt.IsZero() {
+				managed.session.ExitedAt = time.Now().UTC()
+			}
+			if managed.session.ReleasedAt.IsZero() {
+				managed.session.ReleasedAt = managed.session.ExitedAt
+			}
 			reconciled = true
+			processExited = true
 			reason = "pid_not_running"
 		} else if pid > 0 && isPIDAlive(pid) {
 			valid, _ := verifyProcessIdentity(managed.session.ProcessIdentity)
@@ -689,16 +769,31 @@ func (m *TerminalSessionManager) Reconcile(_ context.Context, id string) (Termin
 			}
 		}
 	}
+	managed.session.ReconciledAt = time.Now().UTC()
 	if err := m.persistLocked(); err != nil {
 		return TerminalSession{}, err
 	}
 	copy := deepCopyTerminalSession(managed.session)
-	m.emit("terminal_session_reconciled", copy, map[string]interface{}{
+	payload := map[string]interface{}{
 		"reconciled":     reconciled,
 		"reason":         reason,
 		"previous_state": prevState,
 		"state":          copy.State,
-	})
+	}
+	if processExited {
+		// A restored manager did not observe the original wait(2), but it has
+		// now established the process is gone. Record that fact before the
+		// reconciliation event so consumers never need to infer exit from an
+		// output artifact or from reconciliation itself.
+		m.emit(string(TerminalProcessExited), copy, map[string]interface{}{
+			"reason": "reconciled_pid_not_running",
+		})
+		m.emit(string(TerminalResourceReleased), copy, map[string]interface{}{
+			"reason": "reconciled_pid_not_running",
+		})
+	}
+	m.emit(string(TerminalProcessReconciled), copy, payload)
+	m.emit("terminal_session_reconciled", copy, payload)
 	return copy, nil
 }
 
