@@ -108,7 +108,7 @@ func (b *TerminalBroker) serve() {
 }
 
 func (b *TerminalBroker) handle(conn *net.UnixConn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err := verifyTerminalBrokerPeer(conn); err != nil {
 		return
 	}
@@ -178,7 +178,7 @@ func (b *TerminalBroker) request(req *terminalBrokerRequest, sessionID, leaseID 
 		if req.LeaseID != *leaseID {
 			return terminalBrokerResponse{Error: "terminal broker lease mismatch"}
 		}
-		if err := b.manager.Resize(nil, *sessionID, req.Rows, req.Cols); err != nil {
+		if err := b.manager.Resize(context.Background(), *sessionID, req.Rows, req.Cols); err != nil {
 			return terminalBrokerResponse{Error: err.Error()}
 		}
 		return terminalBrokerResponse{}

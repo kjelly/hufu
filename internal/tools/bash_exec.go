@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+
 	"github.com/anomalyco/hufu/internal/utils"
 )
 

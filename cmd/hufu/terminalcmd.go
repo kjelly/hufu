@@ -63,7 +63,7 @@ func attachTerminal(in *os.File, out io.Writer, workspace, sessionID string) err
 			return err
 		}
 	}
-	fmt.Fprint(out, "\x1b[2J\x1b[H")
+	_, _ = fmt.Fprint(out, "\x1b[2J\x1b[H")
 	lastScreen := ""
 	renderTerminalScreen(out, snapshot.Screen, &lastScreen)
 	if snapshot.EOF {
@@ -141,7 +141,7 @@ func renderTerminalScreen(out io.Writer, screen string, last *string) {
 	if screen == *last {
 		return
 	}
-	fmt.Fprintf(out, "\x1b[H\x1b[2J%s", screen)
+	_, _ = fmt.Fprintf(out, "\x1b[H\x1b[2J%s", screen)
 	*last = screen
 }
 

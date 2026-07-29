@@ -129,11 +129,15 @@ func redactEventStore(workspace string) error {
 	return AtomicWriteFile(path, out.Bytes(), info.Mode().Perm())
 }
 
-func OpenAndVerifyEventStore(workspace string) error {
+func OpenAndVerifyEventStore(workspace string) (retErr error) {
 	store, err := OpenEventStore(workspace)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer func() {
+		if cerr := store.Close(); cerr != nil && retErr == nil {
+			retErr = cerr
+		}
+	}()
 	return store.VerifyHashChain()
 }
