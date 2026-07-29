@@ -72,6 +72,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	}
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
+	c.reconcileTaskStatusProjection()
 	if agentDef.Skills != "" {
 		skills := strings.Split(agentDef.Skills, ",")
 		for i, s := range skills {
@@ -103,7 +104,6 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "working", taskDesc, ""); err != nil {
 		log.Printf("warning: failed to write task file: %v", err)
 	}
-	_ = writeStatus(c.session.Workspace, agentName, "working", taskDesc)
 
 	timing := &taskTiming{}
 	timing.reset()
@@ -319,6 +319,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		currentPrompt := prompt
 		if attempt > 1 {
 			if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskInProgress, fmt.Sprintf("retry %d/%d", attempt, maxRetries), ""); statusErr == nil {
+				c.reconcileTaskStatusProjection()
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			}
 			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retry %d/%d — continuing from previous progress", attempt, maxRetries)))
@@ -512,6 +513,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 					protocolErrMsg := fmt.Sprintf("protocol-only failure for task %s (%s): agent omitted submit_result; entering protocol_incomplete for tool-free repair (class: %s)",
 						todoID, agentName, string(FailureProtocol))
 					if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskProtocolIncomplete, "protocol incomplete: missing required result", output); statusErr == nil {
+						c.reconcileTaskStatusProjection()
 						c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 					}
 					c.report(c.newEvent("step").withAgent(agentName).withMessage(protocolErrMsg).withTodoID(todoID))
@@ -636,12 +638,12 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "done", taskDesc, coordinatorOutput); err != nil {
 					log.Printf("warning: failed to write task file: %v", err)
 				}
-				_ = writeStatus(c.session.Workspace, agentName, "done", taskDesc)
 				duration, modelTime, toolTime := timing.snapshot()
 				if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(coordinatorOutput, summaryMaxRunes), coordinatorOutput); statusErr != nil {
 					closeTranscript()
 					return "", fmt.Errorf("mark task done: %w", statusErr)
 				}
+				c.reconcileTaskStatusProjection()
 				c.updateTodoTiming(todoID, modelTime, toolTime)
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("done").withAgent(agentName).withOutput(coordinatorOutput).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
@@ -674,6 +676,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			lastErr = err
 			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, "protocol"))
 			c.taskTracker.TodoList().UpdateStatus(todoID, TaskBlocked, fmt.Sprintf("protocol result missing; automatic replay is not allowed (allows_replay=%v, side_effect=%s, recovery=%s); reconcile before retry: %v", task.Execution.AllowsReplay != nil && *task.Execution.AllowsReplay, task.SideEffect, task.Recovery, err))
+			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: protocol-only failure cannot be automatically replayed; reconciliation required").withTodoID(todoID))
 			closeTranscript()
 			break
@@ -813,6 +816,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	c.recordExecutionEvent(todoID, task.Agent, 1, "in_progress", c.sidecarModel, 0, ExecutionUsage{})
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
+	c.reconcileTaskStatusProjection()
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("sidecar_call").withAgent(task.Agent).withMessage(taskDesc))
 
@@ -833,12 +837,14 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		fmt.Fprintf(os.Stderr, "warning: sidecar execute failed for agent %q: %v\n", task.Agent, err)
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
+		c.reconcileTaskStatusProjection()
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		return "", fmt.Errorf("sidecar execution failed (model: %s): %w", c.sidecarModel, err)
 	}
 	if verr := validateTaskOutput(task, result); verr != nil {
 		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, verr.Error())
+		c.reconcileTaskStatusProjection()
 		return "", fmt.Errorf("task completion validation failed: %w", verr)
 	}
 	if task.Verify != "" {
@@ -854,6 +860,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		if verifyErr != nil {
 			c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 			c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, verifyErr.Error())
+			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("verify_error").withAgent(task.Agent).withMessage(verifyErr.Error()).withTodoID(todoID))
 			return "", fmt.Errorf("deliverable verification failed (command %q): %w", task.Verify, verifyErr)
 		}
@@ -864,6 +871,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		return "", err
 	}
+	c.reconcileTaskStatusProjection()
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(result).withMessage("sidecar completed").withTodoID(todoID))
 	c.recordExecutionEvent(todoID, task.Agent, 1, "done", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})

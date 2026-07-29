@@ -201,7 +201,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		fmt.Fprintf(&b, "- **Goal satisfied:** `%t`\n", data.RunResult.GoalSatisfied)
 		fmt.Fprintf(&b, "- **Tasks unresolved:** %d\n", data.RunResult.Stats.TasksUnresolved)
 		if data.RunResult.Acceptance != nil {
-			fmt.Fprintf(&b, "- **Acceptance passed:** `%t`\n", data.RunResult.Acceptance.Passed)
+			fmt.Fprintf(&b, "- **Acceptance:** `%s`\n", data.RunResult.Acceptance.EffectiveState())
 		}
 		b.WriteString("\n---\n\n")
 	}

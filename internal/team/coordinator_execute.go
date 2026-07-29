@@ -220,6 +220,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				for _, item := range todoItems {
 					c.taskTracker.TodoList().UpdateStatus(item.ID, TaskBlocked, detail)
 				}
+				c.reconcileTaskStatusProjection()
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("needs_human").withMessage(detail))
 				c.PersistFailure("coordinator", "capability preflight failed", "", detail)
@@ -275,6 +276,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			for _, item := range todoItems {
 				c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, c.FailureDetail(fmt.Errorf("user declined task execution"), FailureSourceUserDeclined))
 			}
+			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.report(c.newEvent("step").withMessage("Steps: user declined task execution"))
 			c.wrapUp.Store(1)

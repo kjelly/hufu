@@ -441,7 +441,14 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 		c.taskResultCacheMu.Unlock()
 	}
 
-	c.taskTracker.TodoList().onChange = c.saveCheckpoint
+	// TodoList is the canonical lifecycle state. Every mutation callback must
+	// persist the checkpoint and rebuild the derived status projection so
+	// transitions made by any coordinator path (DAG, plan, delegate, recovery,
+	// or direct execution) cannot leave status files stale.
+	c.taskTracker.TodoList().onChange = func() {
+		c.saveCheckpoint()
+		c.reconcileTaskStatusProjection()
+	}
 	if !prof.DisableHistoricalMemory {
 		c.hydrateConversationHistoryFromSessionData()
 	}
@@ -650,6 +657,7 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 		case RecoveryManual:
 			detail := fmt.Sprintf("task halted by side-effect recovery policy (%s, side_effect=%s); requires manual intervention", pol, it.SideEffect)
 			c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
+			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
@@ -666,6 +674,7 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			// "do not touch" declaration, not a request for human action.
 			detail := fmt.Sprintf("task skipped by side-effect recovery policy (%s, side_effect=%s); left as-is, not re-driven", pol, it.SideEffect)
 			c.taskTracker.TodoList().UpdateStatus(it.ID, TaskSkipped, detail)
+			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
 				"side_effect": string(it.SideEffect),
@@ -680,6 +689,7 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			switch state {
 			case RecoveryStateComplete:
 				c.taskTracker.TodoList().UpdateStatus(it.ID, TaskDone, "reconciliation confirmed task was completed")
+				c.reconcileTaskStatusProjection()
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
 					"side_effect":    string(it.SideEffect),
@@ -719,6 +729,7 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 				}
 				detail := fmt.Sprintf("task halted by side-effect recovery policy (%s, side_effect=%s); reconciliation state: %s", pol, it.SideEffect, state)
 				c.taskTracker.TodoList().UpdateStatus(it.ID, status, detail)
+				c.reconcileTaskStatusProjection()
 				if status == TaskBlocked {
 					c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
 				}

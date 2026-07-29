@@ -489,7 +489,6 @@ func (tl *TodoList) ResetForRetry(id string, detail string) {
 
 func (tl *TodoList) Restore(items []*TodoItem) {
 	tl.mu.Lock()
-	defer tl.mu.Unlock()
 	tl.items = items
 	maxId := 0
 	for _, item := range items {
@@ -501,6 +500,11 @@ func (tl *TodoList) Restore(items []*TodoItem) {
 		}
 	}
 	tl.next = maxId
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if onChange != nil {
+		onChange()
+	}
 }
 
 // cloneTodoItem returns a deep copy of item (slice and pointer fields detached)
@@ -828,9 +832,13 @@ func (tl *TodoList) Children(parentID string) []*TodoItem {
 
 func (tl *TodoList) Clear() {
 	tl.mu.Lock()
-	defer tl.mu.Unlock()
 	tl.items = nil
 	tl.next = 0
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if onChange != nil {
+		onChange()
+	}
 }
 
 func (tl *TodoList) UpdateTodoTiming(id string, modelTime, toolTime time.Duration) {

@@ -24,7 +24,62 @@ func IsRunOutcomeSuccess(outcome RunOutcome) bool {
 	return outcome == RunOutcomeCompleted
 }
 
+// RunOutcomeError carries the canonical evaluator result across the CLI
+// boundary while preserving the underlying execution error for errors.Is and
+// errors.As callers.
+type RunOutcomeError struct {
+	Result *RunResult
+	Cause  error
+}
+
+func (e *RunOutcomeError) Error() string {
+	if e == nil {
+		return "run outcome error"
+	}
+	if e.Cause != nil {
+		return e.Cause.Error()
+	}
+	if e.Result != nil {
+		return fmt.Sprintf("run outcome: %s", e.Result.Outcome)
+	}
+	return "run outcome error"
+}
+
+func (e *RunOutcomeError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+// ProcessExitCode returns the exit code chosen by the canonical evaluator.
+func (e *RunOutcomeError) ProcessExitCode() int {
+	if e != nil && e.Result != nil && e.Result.ExitCode != 0 {
+		return e.Result.ExitCode
+	}
+	return 1
+}
+
+// WrapRunOutcomeError attaches canonical outcome data to an existing error.
+func WrapRunOutcomeError(cause error, result *RunResult) error {
+	if result == nil {
+		return cause
+	}
+	return &RunOutcomeError{Cause: cause, Result: result}
+}
+
 type AcceptanceSpec = agent.AcceptanceSpec
+
+// AcceptanceState describes whether an acceptance gate was configured and,
+// when configured, whether it passed. NotConfigured is deliberately distinct
+// from Passed: absence of a gate is not evidence that the gate succeeded.
+type AcceptanceState string
+
+const (
+	AcceptanceNotConfigured AcceptanceState = "not_configured"
+	AcceptancePassed        AcceptanceState = "passed"
+	AcceptanceFailed        AcceptanceState = "failed"
+)
 
 // cloneAcceptanceSpec detaches every caller-owned slice from the acceptance
 // contract. AcceptanceSpec is part of the run's immutable contract after it is
@@ -42,10 +97,106 @@ func cloneAcceptanceSpec(spec AcceptanceSpec) AcceptanceSpec {
 }
 
 type AcceptanceResult struct {
-	Passed            bool     `json:"passed"`
-	Errors            []string `json:"errors,omitempty"`
-	Commands          []string `json:"commands,omitempty"`
-	RequiredArtifacts []string `json:"required_artifacts,omitempty"`
+	State             AcceptanceState `json:"state"`
+	Passed            bool            `json:"passed"`
+	Errors            []string        `json:"errors,omitempty"`
+	Commands          []string        `json:"commands,omitempty"`
+	RequiredArtifacts []string        `json:"required_artifacts,omitempty"`
+}
+
+// EffectiveState provides a compatibility interpretation for run results
+// persisted before the tri-state field existed. New results always populate
+// State explicitly.
+func (r AcceptanceResult) EffectiveState() AcceptanceState {
+	if r.State != "" {
+		return r.State
+	}
+	if r.Passed {
+		return AcceptancePassed
+	}
+	return AcceptanceFailed
+}
+
+// RunEvaluationInput is the complete canonical input to outcome evaluation.
+// It contains state already observed by the coordinator; evaluating it has no
+// side effects and does not inspect prompts, task descriptions, or output.
+type RunEvaluationInput struct {
+	UnresolvedTasks []TaskReference
+	Acceptance      AcceptanceState
+	Cancelled       bool
+	BudgetExceeded  bool
+	RunFailed       bool
+	ExitCode        int
+	Response        string
+	Reason          string
+	Stats           RunStats
+	Metrics         RunMetrics
+}
+
+// EvaluateRunOutcome is the sole policy for deriving a run outcome and goal
+// satisfaction from canonical run state.
+func EvaluateRunOutcome(input RunEvaluationInput) RunResult {
+	acceptance := input.Acceptance
+	if acceptance == "" {
+		acceptance = AcceptanceNotConfigured
+	}
+	result := RunResult{
+		Response: input.Response,
+		Reason:   input.Reason,
+		Acceptance: &AcceptanceResult{
+			State:  acceptance,
+			Passed: acceptance == AcceptancePassed,
+		},
+		UnresolvedTasks: append([]TaskReference(nil), input.UnresolvedTasks...),
+		Stats:           input.Stats,
+		Metrics:         input.Metrics,
+	}
+	if input.Cancelled {
+		result.Outcome = RunOutcomeCancelled
+		result.ExitCode = input.ExitCode
+		if result.ExitCode == 0 {
+			result.ExitCode = 130
+		}
+		return result
+	}
+	if input.RunFailed {
+		result.Outcome = RunOutcomeFailed
+		result.ExitCode = input.ExitCode
+		if result.ExitCode == 0 {
+			result.ExitCode = 1
+		}
+		return result
+	}
+	if input.BudgetExceeded {
+		result.Outcome = RunOutcomePartial
+		result.ExitCode = 7
+		return result
+	}
+	for _, task := range input.UnresolvedTasks {
+		if task.Status == string(TaskBlocked) {
+			result.Outcome = RunOutcomeBlocked
+			result.ExitCode = 7
+			return result
+		}
+		if task.Status == string(TaskError) {
+			result.Outcome = RunOutcomePartial
+			result.ExitCode = 7
+			return result
+		}
+	}
+	if len(input.UnresolvedTasks) > 0 {
+		result.Outcome = RunOutcomePartial
+		result.ExitCode = 7
+		return result
+	}
+	if acceptance == AcceptanceFailed {
+		result.Outcome = RunOutcomePartial
+		result.ExitCode = 7
+		return result
+	}
+	result.Outcome = RunOutcomeCompleted
+	result.GoalSatisfied = true
+	return result
 }
 
 type TaskReference struct {

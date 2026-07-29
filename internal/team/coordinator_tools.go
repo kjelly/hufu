@@ -206,29 +206,20 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	}
 
 	unresolvedPending := pendingTodoItems(todoList.Items())
-	goalSatisfied := len(failedTasks) == 0 && len(unresolvedPending) == 0 && accErr == nil
-
-	var outcome RunOutcome
-	if goalSatisfied {
-		outcome = RunOutcomeCompleted
-	} else if args.AcknowledgeFailedTasks || len(failedTasks) > 0 {
-		outcome = RunOutcomePartial
-	} else if accErr != nil {
-		outcome = RunOutcomePartial
-	} else {
-		outcome = RunOutcomePartial
-	}
-
 	allUnresolved := append(failedTasks, unresolvedPending...)
-	runRes := &RunResult{
-		Outcome:         outcome,
-		GoalSatisfied:   goalSatisfied,
-		Response:        args.Response,
-		Acceptance:      accRes,
+	acceptanceState := AcceptanceNotConfigured
+	if accRes != nil {
+		acceptanceState = accRes.State
+	}
+	evaluated := EvaluateRunOutcome(RunEvaluationInput{
 		UnresolvedTasks: toTaskReferences(allUnresolved),
+		Acceptance:      acceptanceState,
+		Response:        args.Response,
 		Stats:           SummarizeRunStats(todoList.Items()),
 		Metrics:         t.coordinator.Metrics(),
-	}
+	})
+	evaluated.Acceptance = accRes
+	runRes := &evaluated
 	t.coordinator.SetLastRunResult(runRes)
 
 	t.coordinator.finishCalled.Store(true)
@@ -275,7 +266,7 @@ func formatFailedTasks(items []*TodoItem) string {
 
 // runAcceptance runs the team's optional acceptance command / spec in the project dir.
 func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResult, error) {
-	res := &AcceptanceResult{Passed: true}
+	res := &AcceptanceResult{State: AcceptanceNotConfigured}
 	c.mu.RLock()
 	var spec *AcceptanceSpec
 	if c.acceptanceSpec != nil {
@@ -291,6 +282,8 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 	if spec == nil {
 		return res, nil
 	}
+	res.State = AcceptancePassed
+	res.Passed = true
 
 	res.Commands = spec.Commands
 	res.RequiredArtifacts = spec.RequiredArtifacts
@@ -313,6 +306,7 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 			errMsg := fmt.Sprintf("required artifact missing: %s", artPath)
 			res.Errors = append(res.Errors, errMsg)
 			res.Passed = false
+			res.State = AcceptanceFailed
 		}
 	}
 
@@ -324,6 +318,7 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 			errMsg := fmt.Sprintf("unresolved tasks exist (%d task(s))", len(unresolved))
 			res.Errors = append(res.Errors, errMsg)
 			res.Passed = false
+			res.State = AcceptanceFailed
 		}
 	}
 
@@ -358,6 +353,7 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 			errMsg := fmt.Sprintf("acceptance command failed (%s): %v%s", cmd, err, detail)
 			res.Errors = append(res.Errors, errMsg)
 			res.Passed = false
+			res.State = AcceptanceFailed
 		}
 	}
 

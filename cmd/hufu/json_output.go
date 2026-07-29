@@ -104,8 +104,10 @@ func printResultJSON(result string, loadedTeams map[string]*teamContext, skills 
 				out.ExitCode = lastRes.ExitCode
 			}
 			if lastRes.Acceptance != nil {
-				if out.Acceptance == nil || !lastRes.Acceptance.Passed {
-					out.Acceptance = lastRes.Acceptance
+				acceptance := *lastRes.Acceptance
+				acceptance.State = acceptance.EffectiveState()
+				if out.Acceptance == nil || acceptance.State != team.AcceptancePassed {
+					out.Acceptance = &acceptance
 				}
 			}
 			out.UnresolvedTasks = append(out.UnresolvedTasks, lastRes.UnresolvedTasks...)

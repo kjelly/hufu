@@ -142,9 +142,11 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 	// invocation exit non-zero. Record the unresolved tasks that predate this
 	// execution and only report failures created (or re-created) below.
 	priorUnresolved := make(map[string]map[string]time.Time, len(loadedTeams))
+	priorResults := make(map[string]*team.RunResult, len(loadedTeams))
 	for name, tc := range loadedTeams {
 		if tc != nil && tc.coordinator != nil {
 			priorUnresolved[name] = snapshotUnresolvedTasks(tc.coordinator.TaskTracker().TodoList().Items())
+			priorResults[name] = tc.coordinator.LastRunResult()
 		}
 	}
 	var result string
@@ -205,7 +207,7 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 				return fmt.Errorf("%w (json output failed: %v)", runErr, outputErr)
 			}
 		}
-		return runErr
+		return team.WrapRunOutcomeError(runErr, firstNonSuccessfulRunResult(loadedTeams, priorResults))
 	}
 
 	if opts.reportMode {
@@ -270,16 +272,47 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 		savePromptToHistory(ctx, originalPrompt, opts.providerURL)
 	}
 
+	var unresolvedErr error
 	for name, tc := range loadedTeams {
 		if tc == nil || tc.coordinator == nil {
 			continue
 		}
 		if item := executionUnresolvedTask(tc.coordinator.TaskTracker().TodoList().Items(), priorUnresolved[name]); item != nil {
-			return fmt.Errorf("%w: team %s task %s (%s): %s", team.ErrTasksUnresolved, tc.teamName, item.ID, item.Agent, item.Detail)
+			unresolvedErr = fmt.Errorf("%w: team %s task %s (%s): %s", team.ErrTasksUnresolved, tc.teamName, item.ID, item.Agent, item.Detail)
+			break
 		}
+	}
+	if outcome := firstNonSuccessfulRunResult(loadedTeams, priorResults); outcome != nil {
+		if unresolvedErr == nil {
+			unresolvedErr = fmt.Errorf("run outcome is %s", outcome.Outcome)
+		}
+		return team.WrapRunOutcomeError(unresolvedErr, outcome)
+	}
+	if unresolvedErr != nil {
+		return unresolvedErr
 	}
 
 	return nil
+}
+
+func firstNonSuccessfulRunResult(loadedTeams map[string]*teamContext, priorResults map[string]*team.RunResult) *team.RunResult {
+	var selected *team.RunResult
+	for name, tc := range loadedTeams {
+		if tc == nil || tc.coordinator == nil {
+			continue
+		}
+		result := tc.coordinator.LastRunResult()
+		if result == nil || result == priorResults[name] {
+			continue
+		}
+		if team.IsRunOutcomeSuccess(result.Outcome) {
+			continue
+		}
+		if selected == nil || result.ExitCode > selected.ExitCode {
+			selected = result
+		}
+	}
+	return selected
 }
 
 // snapshotUnresolvedTasks records terminal failures already present before an

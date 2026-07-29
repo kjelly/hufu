@@ -26,8 +26,11 @@ func main() {
 	tools.CaptureInteractiveEnvironment()
 	exitCode := 0
 	if err := newRootCommand().Execute(); err != nil {
+		var outcomeErr interface{ ProcessExitCode() int }
 		var interrupted errInterrupted
-		if errors.Is(err, interrupted) {
+		if errors.As(err, &outcomeErr) {
+			exitCode = outcomeErr.ProcessExitCode()
+		} else if errors.Is(err, interrupted) {
 			exitCode = 130
 		} else if errors.Is(err, team.ErrTasksUnresolved) {
 			exitCode = 7

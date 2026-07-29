@@ -110,3 +110,49 @@ func TestJSONOutputDoesNotReportAbortedRunAsCompleted(t *testing.T) {
 		t.Fatalf("aborted JSON output = %#v", out)
 	}
 }
+
+func TestJSONOutputPreservesAcceptanceNotConfigured(t *testing.T) {
+	tc := &teamContext{teamName: "no-gate", coordinator: &team.Coordinator{}}
+	tc.coordinator.SetLastRunResult(&team.RunResult{
+		Outcome:       team.RunOutcomeCompleted,
+		GoalSatisfied: true,
+		Acceptance:    &team.AcceptanceResult{State: team.AcceptanceNotConfigured},
+	})
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	err = printResultJSON("done", map[string]*teamContext{"no-gate": tc}, nil)
+	_ = w.Close()
+	os.Stdout = oldStdout
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out jsonRunOutput
+	if err := json.NewDecoder(r).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Acceptance == nil || out.Acceptance.State != team.AcceptanceNotConfigured || out.Acceptance.Passed {
+		t.Fatalf("acceptance output = %#v, want not_configured and not passed", out.Acceptance)
+	}
+}
+
+func TestFirstNonSuccessfulRunResultIgnoresRestoredHistoricalResult(t *testing.T) {
+	coordinator := &team.Coordinator{}
+	historical := &team.RunResult{Outcome: team.RunOutcomePartial, ExitCode: 7}
+	coordinator.SetLastRunResult(historical)
+	tc := &teamContext{teamName: "restored", coordinator: coordinator}
+	loaded := map[string]*teamContext{"restored": tc}
+	if got := firstNonSuccessfulRunResult(loaded, map[string]*team.RunResult{"restored": historical}); got != nil {
+		t.Fatalf("historical result selected: %#v", got)
+	}
+
+	current := &team.RunResult{Outcome: team.RunOutcomePartial, ExitCode: 7}
+	coordinator.SetLastRunResult(current)
+	if got := firstNonSuccessfulRunResult(loaded, map[string]*team.RunResult{"restored": historical}); got != current {
+		t.Fatalf("current result = %#v, want %p", got, current)
+	}
+}

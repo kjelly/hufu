@@ -56,12 +56,12 @@ func TestBuildReportMDIncludesCanonicalRunOutcome(t *testing.T) {
 		RunResult: &team.RunResult{
 			Outcome:       team.RunOutcomePartial,
 			GoalSatisfied: false,
-			Acceptance:    &team.AcceptanceResult{Passed: false},
+			Acceptance:    &team.AcceptanceResult{State: team.AcceptanceFailed, Passed: false},
 			Stats:         team.RunStats{TasksUnresolved: 2},
 		},
 	}
 	report := buildReportMD(data, "demo", "partial")
-	for _, want := range []string{"## Run Outcome", "`partial`", "Goal satisfied:** `false`", "Tasks unresolved:** 2", "Acceptance passed:** `false"} {
+	for _, want := range []string{"## Run Outcome", "`partial`", "Goal satisfied:** `false`", "Tasks unresolved:** 2", "Acceptance:** `failed`"} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q:\n%s", want, report)
 		}

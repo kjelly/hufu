@@ -61,6 +61,9 @@ linters:
       - linters: # parseTeamYML: 45
           - gocyclo
         path: internal/team/parse\.go
+      - linters: # executeAndReport: 42
+          - gocyclo
+        path: cmd/hufu/team_runner\.go
       - linters: # executeSCP: 47
           - gocyclo
         path: internal/tools/scp\.go

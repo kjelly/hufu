@@ -56,6 +56,11 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 
 	todoItems := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: resolvedName, Desc: task, Model: directModel, Source: TaskSourceCoordinator, ParentID: ""}})
 	todoID := todoItems[0].ID
+	reconcileDirectStatus := func() {
+		if err := c.reconcileProjectedItems(c.taskTracker.TodoList().Items()); err != nil {
+			log.Printf("warning: direct-agent status projection failed: %v", err)
+		}
+	}
 	attemptStarted := time.Now()
 	c.recordExecutionEvent(todoID, resolvedName, 1, "in_progress", directModel, 0, ExecutionUsage{})
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
@@ -78,6 +83,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), ExecutionUsage{})
 		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		reconcileDirectStatus()
 		return nil, fmt.Errorf("failed to create agent %q: %w", resolvedName, err)
 	}
 
@@ -128,7 +134,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, resolvedName, taskTS, "working", task, ""); err != nil {
 		log.Printf("warning: failed to write task file: %v", err)
 	}
-	_ = writeStatus(c.session.Workspace, resolvedName, "working", task)
+	reconcileDirectStatus()
 
 	prompt := c.appendSkillContext(task, agentDef, resolvedName, task, todoID)
 
@@ -153,19 +159,21 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if err != nil {
 		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), usageFromSteps(steps))
 		c.PersistFailure(resolvedName, task, todoID, c.FailureDetail(err, ""))
+		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
 		c.updateTodoTiming(todoID, modelTime, toolTime)
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		c.report(c.newEvent("error").withAgent(resolvedName).withMessage(err.Error()).withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
+		reconcileDirectStatus()
 		return &DirectAgentResult{AgentName: resolvedName, Error: err, Steps: len(steps)}, nil
 	}
 
 	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, resolvedName, taskTS, "done", task, output); err != nil {
 		log.Printf("warning: failed to write task file: %v", err)
 	}
-	_ = writeStatus(c.session.Workspace, resolvedName, "done", task)
 	c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output)
 	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	reconcileDirectStatus()
 	c.report(c.newEvent("done").withAgent(resolvedName).withOutput(output).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 	c.recordExecutionEvent(todoID, resolvedName, 1, "done", directModel, time.Since(attemptStarted), usageFromSteps(steps))
 
@@ -350,22 +358,26 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 		failedTasks := failedTodoItems(items)
 		unresolvedPending := pendingTodoItems(items)
 		allUnresolved := append(failedTasks, unresolvedPending...)
-		goalSatisfied := !budgetStopped && len(allUnresolved) == 0 && accErr == nil
-		outcome := RunOutcomePartial
-		if goalSatisfied {
-			outcome = RunOutcomeCompleted
+		acceptanceState := AcceptanceNotConfigured
+		if accRes != nil {
+			acceptanceState = accRes.State
 		}
-		c.SetLastRunResult(&RunResult{
-			Outcome:         outcome,
-			GoalSatisfied:   goalSatisfied,
+		if accErr != nil {
+			acceptanceState = AcceptanceFailed
+		}
+		evaluated := EvaluateRunOutcome(RunEvaluationInput{
+			UnresolvedTasks: toTaskReferences(allUnresolved),
+			Acceptance:      acceptanceState,
+			BudgetExceeded:  budgetStopped,
+			Cancelled:       ctx.Err() == context.Canceled,
 			Response:        strings.TrimPrefix(result, "FINISHED:"),
 			Reason:          continuationReason,
-			Acceptance:      accRes,
-			UnresolvedTasks: toTaskReferences(allUnresolved),
 			Stats:           SummarizeRunStats(items),
-			Continuation:    &ContinuationInfo{TurnCount: continuationTurns, MaxTurns: maxContinuationTurns, Reason: continuationReason},
 			Metrics:         c.Metrics(),
 		})
+		evaluated.Acceptance = accRes
+		evaluated.Continuation = &ContinuationInfo{TurnCount: continuationTurns, MaxTurns: maxContinuationTurns, Reason: continuationReason}
+		c.SetLastRunResult(&evaluated)
 	}
 	if continuationTurns > 0 {
 		status := "completed"
@@ -433,12 +445,10 @@ func (c *Coordinator) summaryFromTodos(runErr error) string {
 // nothing — the next session had no idea the previous one ended mid-flight.
 func (c *Coordinator) recordRunAborted(runErr error) {
 	reason := "run ended before completion"
-	outcome := RunOutcomeFailed
 	exitCode := 1
 	switch {
 	case errors.Is(runErr, context.Canceled):
 		reason = "run aborted (cancelled by user)"
-		outcome = RunOutcomeCancelled
 		exitCode = 130
 	case errors.Is(runErr, context.DeadlineExceeded):
 		reason = "run aborted (coordinator timeout)"
@@ -450,16 +460,17 @@ func (c *Coordinator) recordRunAborted(runErr error) {
 	}
 	unresolved := append(failedTodoItems(items), pendingTodoItems(items)...)
 	response := fmt.Sprintf("%s: %v", reason, runErr)
-	c.SetLastRunResult(&RunResult{
-		Outcome:         outcome,
-		GoalSatisfied:   false,
+	evaluated := EvaluateRunOutcome(RunEvaluationInput{
+		UnresolvedTasks: toTaskReferences(unresolved),
+		Cancelled:       errors.Is(runErr, context.Canceled),
+		RunFailed:       !errors.Is(runErr, context.Canceled),
+		ExitCode:        exitCode,
 		Response:        response,
 		Reason:          reason,
-		ExitCode:        exitCode,
-		UnresolvedTasks: toTaskReferences(unresolved),
 		Stats:           SummarizeRunStats(items),
 		Metrics:         c.Metrics(),
 	})
+	c.SetLastRunResult(&evaluated)
 	checkpoint := c.ContinuationCheckpoint()
 	if checkpoint == nil {
 		c.saveContinuationCheckpoint(0, 0, reason, "aborted")
@@ -467,8 +478,8 @@ func (c *Coordinator) recordRunAborted(runErr error) {
 		c.saveContinuationCheckpoint(checkpoint.TurnCount, checkpoint.MaxTurns, reason, "aborted")
 	}
 
-	if c.session != nil && c.session.Workspace != "" {
-		_ = writeStatusWithDetail(c.session.Workspace, "coordinator", "error", reason, fmt.Sprintf("error=%v", runErr))
+	if err := c.reconcileProjectedStatusesWithDetail(AgentStatusError, fmt.Sprintf("%s; error=%v", reason, runErr)); err != nil {
+		log.Printf("warning: aborted-run status projection failed: %v", err)
 	}
 
 	if c.sessionData == nil {
@@ -499,6 +510,7 @@ func (c *Coordinator) finalizeRemainingTasks() {
 		}
 	}
 	if changed {
+		c.reconcileTaskStatusProjection()
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	}
 }
@@ -524,16 +536,9 @@ func (c *Coordinator) finalizeNormalCompletion() {
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	}
 
-	// Converge per-agent status files: after a successful finish, a worker's
-	// status/<agent>.yml otherwise keeps its last mid-run state ("working",
-	// "error" from a retried attempt), making a completed run look failed to
-	// anyone inspecting the workspace afterwards.
-	if c.session != nil && c.session.Workspace != "" {
-		for _, def := range c.uniqueWorkerDefs() {
-			_ = writeStatus(c.session.Workspace, strings.ToLower(def.Name), "idle", "run finished")
-		}
-		_ = writeStatus(c.session.Workspace, "coordinator", "idle", "run finished")
-	}
+	// Rebuild projections from canonical task/session state. This also repairs
+	// stale files left by a retry, cancellation, or restored interrupted run.
+	c.reconcileProjectedStatuses(AgentStatusIdle)
 }
 
 func (c *Coordinator) emitThinkSkills(matched []*skill.SkillDef) {
@@ -751,6 +756,9 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	}
 
 	_ = EnsureWorkspaceDirs(c.session.Workspace)
+	// Status files are projections, so rebuild them from the restored canonical
+	// todo/session state before crash-resume can start new work.
+	c.reconcileTaskStatusProjection()
 
 	// Replay the persistent task journal (crash-safe complement to the
 	// session.json checkpoint) and start appending to it for this run.
@@ -908,7 +916,9 @@ func runResultStatusData(result *RunResult) map[string]any {
 		"metrics":          result.Metrics,
 	}
 	if result.Acceptance != nil {
+		data["acceptance_state"] = result.Acceptance.EffectiveState()
 		data["acceptance_passed"] = result.Acceptance.Passed
 	}
+	data["exit_code"] = result.ExitCode
 	return data
 }

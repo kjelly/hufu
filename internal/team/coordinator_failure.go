@@ -82,6 +82,7 @@ func (c *Coordinator) PersistFailure(agentName, taskDesc, todoID, detail string)
 			status = TaskBlocked
 		}
 		c.taskTracker.TodoList().UpdateStatus(todoID, status, detail)
+		c.reconcileTaskStatusProjection()
 		if c.reportStatus != nil {
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		}
@@ -90,7 +91,6 @@ func (c *Coordinator) PersistFailure(agentName, taskDesc, todoID, detail string)
 	if c.session != nil && c.session.Workspace != "" && agentName != "" && taskDesc != "" {
 		taskTS := time.Now().Format("20060102-150405")
 		_ = writeTaskFileWithDetail(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", taskDesc, "", detail)
-		_ = writeStatusWithDetail(c.session.Workspace, agentName, "error", taskDesc, detail)
 		c.recordTaskFailure(agentName, taskDesc, detail)
 	}
 }

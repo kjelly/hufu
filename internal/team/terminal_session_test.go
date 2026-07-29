@@ -1051,6 +1051,18 @@ func TestTerminalTools_LazilyEnablePTYOnStart(t *testing.T) {
 		taskTracker:        NewTaskTracker(),
 		reportStatus:       func(StatusEvent) {},
 	}
+	// Probe the same broker startup operation used by the lazy PTY path so a
+	// restricted test sandbox can skip using the precise underlying errno. The
+	// production terminal tool still preserves its normal response-only error
+	// behavior.
+	probe, err := StartTerminalBroker(workspace, manager)
+	if err != nil {
+		if isTerminalBrokerSandboxEPERM(err) {
+			t.Skipf("sandbox does not permit Unix socket setup: %v", err)
+		}
+		t.Fatal(err)
+	}
+	_ = probe.Close()
 	ctx := WithTerminalTaskID(context.Background(), "task-pty-lazy")
 	ctx = context.WithValue(ctx, tools.AgentToolsAllowedKey, []string{"terminal", "terminal_start"})
 	resp, err := (&terminalStartTool{coordinator: coord}).Run(ctx, fantasy.ToolCall{Input: `{"command":["sh","-c","true"],"pty":true}`})
