@@ -52,6 +52,9 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		if err := validateTaskOutputMode(task); err != nil {
 			return "", err
 		}
+		if err := ValidateExecutionContract(task); err != nil {
+			return "", err
+		}
 	}
 	if err := validateObjectiveVerification(tasks); err != nil {
 		return "", err
@@ -72,7 +75,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		// of task type and prevents a prose failure report from being recorded
 		// as a completed task.
 		if !tasks[i].Sidecar {
-			tasks[i].Execution.StrictResult = true
+			tasks[i].Execution.RequiresResult = true
 		}
 		if tasks[i].OnFailure != nil && tasks[i].MaxRetries < 1 {
 			tasks[i].MaxRetries = 1
@@ -339,13 +342,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 }
 
 // validateObjectiveVerification rejects interactive trec-drive tasks that do
-// not provide an objective acceptance command. A syntax lint can pass while a
-// drive run exits unsuccessfully, so accepting the worker's prose alone would
-// incorrectly checkpoint a failed UI automation run as complete.
+// validateObjectiveVerification validates structured execution contracts for tasks.
+// Execution risk and verification requirements are driven by ValidateExecutionContract without inspecting Goal prose.
 func validateObjectiveVerification(tasks []TaskDef) error {
 	for _, task := range tasks {
-		if strings.Contains(strings.ToLower(task.Goal), "trec drive") && strings.TrimSpace(task.Verify) == "" {
-			return fmt.Errorf("task %q runs trec drive and must set verify to an objective result check (for example: jq -e '.status == \"success\"' <cast>.result.json)", task.Goal)
+		if err := ValidateExecutionContract(task); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -152,15 +152,15 @@ func TestSubmitResultTool(t *testing.T) {
 }
 
 func TestStrictTaskResultEnforcement(t *testing.T) {
-	// Verify that TaskExecutionPolicy with StrictResult = true fails if no submit_result was called
+	// Verify that ExecutionContract with RequiresResult = true fails if no submit_result was called
 	taskDef := TaskDef{
 		Agent: "worker",
 		Goal:  "do strict work",
-		Execution: TaskExecutionPolicy{
-			StrictResult: true,
+		Execution: ExecutionContract{
+			RequiresResult: true,
 		},
 	}
-	if !taskDef.Execution.StrictResult {
-		t.Errorf("expected StrictResult to be true")
+	if !taskDef.Execution.RequiresResult {
+		t.Errorf("expected RequiresResult to be true")
 	}
 }

@@ -25,6 +25,9 @@ import (
 )
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (string, error) {
+	if err := ValidateExecutionContract(task); err != nil {
+		return "", err
+	}
 	taskDesc := task.Goal
 	if task.Constraints != "" {
 		taskDesc += "\nconstraints: " + task.Constraints
@@ -269,17 +272,6 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	var conversationHistory []fantasy.Message
 	var transcript *taskTranscript
-	if taskUsesVerbatimTranscript(task) {
-		transcript, err = newTaskTranscript(c.session.Workspace, todoID, c.executionRunID)
-		if err != nil {
-			return "", err
-		}
-		defer func() {
-			if closeErr := transcript.Close(); closeErr != nil {
-				log.Printf("warning: close task transcript: %v", closeErr)
-			}
-		}()
-	}
 	var lastErr error
 	// attemptsMade tracks how many attempts actually ran, since the loop can
 	// exit early (sameFailure, an unfixable verify error, or context
@@ -301,6 +293,24 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		(!task.PlanFirst || task.PlanID != "")
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		attemptsMade = attempt
+		transcript = nil
+		closeTranscript := func() {
+			if transcript != nil {
+				if closeErr := transcript.Close(); closeErr != nil {
+					log.Printf("warning: close task transcript: %v", closeErr)
+				}
+				transcript = nil
+			}
+		}
+		if taskUsesVerbatimTranscript(task) || task.Execution.RequiresResult {
+			// Each attempt gets its own immutable transcript. The repair agent
+			// is intentionally given no recorder, so it cannot alter this
+			// execution evidence.
+			transcript, err = newTaskTranscriptForAttempt(c.session.Workspace, todoID, c.executionRunID, attempt)
+			if err != nil {
+				return "", err
+			}
+		}
 		if attempt > 1 {
 			c.recordRetry(classifyTaskFailure(lastErr))
 		}
@@ -337,7 +347,6 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		var steps []fantasy.StepResult
 		var err error
 		protocolFailure := false
-		recoveredProtocol := false
 		func() {
 			taskCtx, cancel := tools.WithInteractiveAwareTimeout(parentCtx, agentTimeout)
 			defer cancel()
@@ -408,6 +417,43 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				}
 			}
 		}()
+		runID := c.executionRunID
+		if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+			runID = c.taskTracker.TodoList().RunID()
+		}
+		transcriptRef := ""
+		if transcript != nil {
+			// Capture the worker's original final response before any repair
+			// agent is started. The repair context intentionally does not carry
+			// this recorder, so its output cannot mutate the original evidence.
+			if recordErr := transcript.RecordAssistantOutput(output); recordErr != nil && err == nil {
+				err = fmt.Errorf("record original task transcript: %w", recordErr)
+			}
+			if ref, manifestErr := transcript.Manifest(); manifestErr != nil {
+				if err == nil {
+					err = fmt.Errorf("create original task transcript manifest: %w", manifestErr)
+				}
+			} else {
+				transcriptRef = ref.Path
+			}
+		}
+		receipt := ExecutionReceipt{
+			RunID:         runID,
+			TaskID:        todoID,
+			Attempt:       attempt,
+			StartedAt:     attemptStarted,
+			FinishedAt:    time.Now(),
+			ProducerID:    agentName,
+			TranscriptRef: transcriptRef,
+		}
+		if err == nil {
+			zero := 0
+			receipt.ExitCode = &zero
+		}
+		if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+			_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+		}
+
 		if strings.TrimSpace(output) != "" {
 			lastOutput = output
 		}
@@ -422,6 +468,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				conversationHistory = append(conversationHistory, step.Messages...)
 			}
 			attempt--
+			closeTranscript()
 			continue
 		}
 		terminalBlocked := false
@@ -449,56 +496,89 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				c.report(c.newEvent("done").withAgent(agentName).withMessage("plan submitted").withTodoID(todoID))
 				c.recordExecutionEvent(todoID, agentName, attempt, "planned", resolvedModel, time.Since(attemptStarted), usageFromSteps(steps))
 				if c.forcePlanFirst {
+					closeTranscript()
 					return "", nil
 				}
+				closeTranscript()
 				return planEntry.PlanText, nil
 			}
 			typedRes = c.GetTaskResult(todoID)
 			if typedRes == nil {
-				if task.Execution.StrictResult {
-					// Protocol failure: the agent finished (tools ran, output produced)
-					// but never called submit_result. Classify this as FailureProtocol
-					// and attempt deterministic result recovery from the agent's text
-					// output before falling back to a full retry that would re-run
-					// all side-effecting tools (write, bash, infra, etc.).
-					//
-					// Recovery algorithm:
-					//  1. Parse free-text output as a low-confidence TypedResult.
-					//  2. Mark it as "recovered" (source != "submitted") and store.
-					//  3. Proceed to verify if configured — objective verification
-					//     is sufficient to promote a recovered result to done.
-					//  4. Only if output is empty or recovery still leaves err set
-					//     fall through to the retry path.
-					if strings.TrimSpace(output) != "" {
-						recovered := ParseFreeTextResult(output)
-						recovered.TaskID = todoID
-						recovered.Agent = agentName
-						recovered.Source = "recovered_protocol"
-						c.storeSubmittedTaskResult(todoID, recovered)
-						typedRes = recovered
-						recoveredProtocol = true
-						protocolErrMsg := fmt.Sprintf("protocol-only failure for task %s (%s): agent omitted submit_result; recovered typed result from output text (class: %s)",
-							todoID, agentName, string(FailureProtocol))
-						c.report(c.newEvent("step").withAgent(agentName).withMessage(protocolErrMsg).withTodoID(todoID))
-						// err stays nil — fall through to verify below so an
-						// objective check can confirm the side-effects are complete.
-					} else {
-						// No output at all: cannot recover — fall to full retry.
-						err = fmt.Errorf("protocol failure (class: %s) for task %s (%s): agent produced no output and did not call submit_result",
-							string(FailureProtocol), todoID, agentName)
-						protocolFailure = true
-						c.report(c.newEvent("step").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
+				if task.Execution.RequiresResult {
+					// Protocol failure: the agent finished execution but omitted submit_result.
+					// Classify as FailureProtocol, set task to protocol_incomplete,
+					// and attempt single-step, tool-free repair allowing ONLY submit_result.
+					protocolFailure = true
+					protocolErrMsg := fmt.Sprintf("protocol-only failure for task %s (%s): agent omitted submit_result; entering protocol_incomplete for tool-free repair (class: %s)",
+						todoID, agentName, string(FailureProtocol))
+					if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskProtocolIncomplete, "protocol incomplete: missing required result", output); statusErr == nil {
+						c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 					}
+					c.report(c.newEvent("step").withAgent(agentName).withMessage(protocolErrMsg).withTodoID(todoID))
+
+					repairResultTool := &submitResultTool{coordinator: c, todoID: todoID}
+					var repairAg fantasy.Agent
+					if c.repairAgentOverride != nil {
+						repairAg = c.repairAgentOverride
+					} else if c.providerManager != nil {
+						var rErr error
+						repairAg, rErr = agent.CreateAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
+							Def:        agentDef,
+							TeamConfig: &c.session.Config,
+							WorkDir:    c.projectDir,
+							MaxSteps:   1,
+						}, []fantasy.AgentTool{repairResultTool})
+						if rErr != nil {
+							c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to create protocol repair agent: %v", rErr)).withTodoID(todoID))
+						}
+					}
+
+					repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using the output above to supply the required structured result. Do NOT call any other tools.", task.Goal, output)
+					if repairAg != nil {
+						repairCtx := context.WithValue(parentCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
+						repairCtx = context.WithValue(repairCtx, todoIDKey{}, todoID)
+						repairCtx = context.WithValue(repairCtx, modelKey{}, resolvedModel)
+						repairCtx = context.WithValue(repairCtx, tools.AgentNameKey, agentName)
+						repairCtx = context.WithValue(repairCtx, hooks.AgentNameKey, agentName)
+						repairCtx = context.WithValue(repairCtx, hooks.TeamNameKey, c.session.Config.Name)
+						repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, taskDesc)
+
+						_, _, _ = c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, repairPrompt, nil, timing, fantasy.StepCountIs(1))
+						typedRes = c.GetTaskResult(todoID)
+					}
+
+					repairSuccess := typedRes != nil && typedRes.Source == "submitted" && validateSubmittedTaskResult(typedRes) == nil
+					receipt.FinishedAt = time.Now()
+					receipt.RepairProvenance = &RepairProvenance{
+						Attempted:       true,
+						Success:         repairSuccess,
+						Prompt:          repairPrompt,
+						SubmittedResult: typedRes,
+					}
+					if repairSuccess {
+						c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("protocol repair succeeded for task %s", todoID)).withTodoID(todoID))
+					} else {
+						typedRes = nil
+						err = fmt.Errorf("protocol failure (class: %s) for task %s (%s): agent produced output but failed protocol repair to submit_result",
+							string(FailureProtocol), todoID, agentName)
+						receipt.RepairProvenance.Error = err.Error()
+					}
+					if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+						_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+					}
+				} else if strings.TrimSpace(output) != "" {
+					// Non-protocol task: recover free text as default summary
+					recovered := ParseFreeTextResult(output)
+					recovered.TaskID = todoID
+					recovered.Agent = agentName
+					recovered.Source = "recovered_protocol"
+					c.storeSubmittedTaskResult(todoID, recovered)
+					typedRes = recovered
 				}
-				if err == nil && typedRes.Source == "submitted" {
+				if err == nil && typedRes != nil && typedRes.Source == "submitted" {
 					if resultErr := validateSubmittedTaskResult(typedRes); resultErr != nil {
 						err = resultErr
 					}
-				}
-			}
-			if err == nil {
-				if recoveredProtocol && strings.TrimSpace(task.Verify) == "" {
-					err = fmt.Errorf("protocol result recovered for task %s but no objective verify command is configured", todoID)
 				}
 			}
 			if err == nil {
@@ -508,7 +588,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				}
 			}
 			coordinatorOutput := output
-			if err == nil && transcript != nil {
+			// A receipt transcript is also captured for summary-mode tasks that
+			// require a typed result, but that must not change the task's output
+			// contract. Only an explicit verbatim task is reduced to a manifest.
+			if err == nil && taskUsesVerbatimTranscript(task) && transcript != nil {
 				coordinatorOutput, err = finalizeVerbatimTaskResult(transcript, typedRes)
 				if err != nil {
 					err = fmt.Errorf("verbatim transcript validation failed: %w", err)
@@ -556,6 +639,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				_ = writeStatus(c.session.Workspace, agentName, "done", taskDesc)
 				duration, modelTime, toolTime := timing.snapshot()
 				if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(coordinatorOutput, summaryMaxRunes), coordinatorOutput); statusErr != nil {
+					closeTranscript()
 					return "", fmt.Errorf("mark task done: %w", statusErr)
 				}
 				c.updateTodoTiming(todoID, modelTime, toolTime)
@@ -569,6 +653,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				if appliedHint != "" {
 					c.persistReflexionLessonAsync(agentName, task.Goal, appliedHintTrigger, appliedHint, true, false)
 				}
+				closeTranscript()
 				return coordinatorOutput, nil
 			}
 		}
@@ -578,16 +663,19 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			lastErr = err
 			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: an owned terminal session remains active or unknown").withTodoID(todoID))
 			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, "error"))
+			closeTranscript()
 			break
 		}
-		// A protocol-only failure after an external/infra/credential operation
-		// has no safe replay semantics. Preserve the transcript/evidence and
-		// block for reconciliation rather than invoking the worker tools again.
-		if protocolFailure && nonReplayableSideEffect(task.SideEffect) {
+		// A protocol-only failure after a non-replayable task (side effect or
+		// AllowsReplay=false), or one whose recovery policy disallows retry, has
+		// no safe automatic replay semantics. Preserve the transcript/evidence
+		// and block for reconciliation rather than invoking worker tools again.
+		if protocolFailure && (!IsTaskReplayable(task) || !c.protocolRepairAllowsRetry(task)) {
 			lastErr = err
 			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, "protocol"))
-			c.taskTracker.TodoList().UpdateStatus(todoID, TaskBlocked, fmt.Sprintf("protocol result missing after %s side effect; reconcile before retry: %v", task.SideEffect, err))
-			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: protocol-only failure after non-replayable side effect; reconciliation required").withTodoID(todoID))
+			c.taskTracker.TodoList().UpdateStatus(todoID, TaskBlocked, fmt.Sprintf("protocol result missing; automatic replay is not allowed (allows_replay=%v, side_effect=%s, recovery=%s); reconcile before retry: %v", task.Execution.AllowsReplay != nil && *task.Execution.AllowsReplay, task.SideEffect, task.Recovery, err))
+			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: protocol-only failure cannot be automatically replayed; reconciliation required").withTodoID(todoID))
+			closeTranscript()
 			break
 		}
 
@@ -614,6 +702,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			lastErr = err
 			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d hit a verify command that cannot be fixed by retrying (wrong exit-code polarity)", attempt)).withTodoID(todoID))
 			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("verify command has unfixable wrong polarity after %d attempt(s): %w", attempt, err), "error"))
+			closeTranscript()
 			break
 		}
 
@@ -625,6 +714,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			lastErr = err
 			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d repeated the same failure", attempt)).withTodoID(todoID))
 			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("repeated failure after %d attempts: %w", attempt, err), "error"))
+			closeTranscript()
 			break
 		}
 
@@ -637,8 +727,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
 
 		if parentCtx.Err() != nil {
+			closeTranscript()
 			break
 		}
+		closeTranscript()
 	}
 
 	_, modelTime, toolTime := timing.snapshot()
@@ -806,6 +898,15 @@ func (c *Coordinator) withEffectiveToolsAllowed(ctx context.Context, def *agent.
 		return ctx
 	}
 	return context.WithValue(ctx, tools.AgentToolsAllowedKey, allowed)
+}
+
+// protocolRepairAllowsRetry applies the task's existing recovery policy to a
+// protocol-only failure. An omitted policy is resolved using the same policy
+// engine as interrupted-task recovery, so protocol repair cannot silently
+// turn manual/reconcile/never policies into worker replays.
+func (c *Coordinator) protocolRepairAllowsRetry(task TaskDef) bool {
+	policy := ResolveRecoveryPolicy(task.Recovery, task.SideEffect, c != nil && c.unattended, c.ExecutionProfile())
+	return policy == RecoveryRetry
 }
 
 func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message, timing *taskTiming, extraStop ...fantasy.StopCondition) (string, []fantasy.StepResult, error) {

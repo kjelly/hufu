@@ -13,6 +13,7 @@ import (
 
 func TestTerminalBrokerAttachStreamsInputAndOutput(t *testing.T) {
 	workspace := t.TempDir()
+	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)

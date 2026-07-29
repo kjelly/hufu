@@ -102,27 +102,28 @@ type StatusReporter func(event StatusEvent)
 type TaskStatus string
 
 const (
-	TaskPending    TaskStatus = "pending"
-	TaskInProgress TaskStatus = "in_progress"
-	TaskVerifying  TaskStatus = "verifying"
-	TaskDone       TaskStatus = "done"
-	TaskError      TaskStatus = "error"
-	TaskBlocked    TaskStatus = "blocked"
-	TaskSkipped    TaskStatus = "skipped"
-	TaskPlanned    TaskStatus = "planned"
-	TaskPaused     TaskStatus = "paused"
+	TaskPending            TaskStatus = "pending"
+	TaskInProgress         TaskStatus = "in_progress"
+	TaskVerifying          TaskStatus = "verifying"
+	TaskDone               TaskStatus = "done"
+	TaskError              TaskStatus = "error"
+	TaskBlocked            TaskStatus = "blocked"
+	TaskSkipped            TaskStatus = "skipped"
+	TaskPlanned            TaskStatus = "planned"
+	TaskPaused             TaskStatus = "paused"
+	TaskProtocolIncomplete TaskStatus = "protocol_incomplete"
 )
 
 // VerificationResult is the durable evidence produced by a task's objective
 // verification command. Output is intentionally bounded by the verifier.
 type VerificationResult struct {
-	Command  string
-	WorkDir  string
-	ExitCode int
-	Stdout   string
-	Stderr   string
-	Duration time.Duration
-	TimedOut bool
+	Command  string        `json:"command,omitempty"`
+	WorkDir  string        `json:"work_dir,omitempty"`
+	ExitCode int           `json:"exit_code"`
+	Stdout   string        `json:"stdout,omitempty"`
+	Stderr   string        `json:"stderr,omitempty"`
+	Duration time.Duration `json:"duration,omitempty"`
+	TimedOut bool          `json:"timed_out,omitempty"`
 }
 
 // CanTransition reports whether a normal lifecycle update may move a task
@@ -133,11 +134,13 @@ func CanTransition(from, to TaskStatus) bool {
 	}
 	switch from {
 	case TaskPending:
-		return to == TaskPlanned || to == TaskInProgress || to == TaskDone || to == TaskSkipped || to == TaskBlocked || to == TaskError
+		return to == TaskPlanned || to == TaskInProgress || to == TaskDone || to == TaskSkipped || to == TaskBlocked || to == TaskError || to == TaskProtocolIncomplete
 	case TaskPlanned:
-		return to == TaskInProgress || to == TaskSkipped || to == TaskBlocked || to == TaskError
+		return to == TaskInProgress || to == TaskSkipped || to == TaskBlocked || to == TaskError || to == TaskProtocolIncomplete
 	case TaskInProgress:
-		return to == TaskPlanned || to == TaskPaused || to == TaskVerifying || to == TaskDone || to == TaskBlocked || to == TaskError || to == TaskSkipped
+		return to == TaskPlanned || to == TaskPaused || to == TaskVerifying || to == TaskDone || to == TaskBlocked || to == TaskError || to == TaskSkipped || to == TaskProtocolIncomplete
+	case TaskProtocolIncomplete:
+		return to == TaskVerifying || to == TaskDone || to == TaskBlocked || to == TaskError || to == TaskInProgress
 	case TaskVerifying:
 		return to == TaskDone || to == TaskBlocked || to == TaskError
 	case TaskPaused:
@@ -177,35 +180,37 @@ func (t *TaskTracker) TodoList() *TodoList {
 }
 
 type TodoItem struct {
-	ID             string
-	Agent          string
-	Desc           string
-	Status         TaskStatus
-	Detail         string
-	Output         string // Full task output
-	Model          string
-	Skills         []string
-	InjectedSkills []string
-	LoadedSkills   []string
-	StartedAt      time.Time
-	EndedAt        time.Time
-	ModelTime      time.Duration
-	ToolTime       time.Duration
-	Source         string
-	ParentID       string
-	DependsOn      []string // IDs of tasks that must complete before this one starts
-	Verify         string   // Command to run to verify the task
-	VerifyMode     string   // success, expected_failure, or observation
-	VerifyResult   *VerificationResult
-	MaxRetries     int             // Maximum number of retries for this task
-	Retries        int             // Current number of retries
-	OnFailure      string          // ID of the task to jump back to if this task fails (creates a loop)
-	SideEffect     SideEffectClass `json:"side_effect,omitempty"`
-	Recovery       RecoveryPolicy  `json:"recovery,omitempty"`
-	ReconcileTool  string          `json:"reconcile_tool,omitempty"`
-	RecoveryState  string          `json:"recovery_state,omitempty"`
-	TypedResult    *TaskResult     `json:"typed_result,omitempty"`
-	Resolution     *TaskResolution `json:"resolution,omitempty"`
+	ID                string
+	Agent             string
+	Desc              string
+	Status            TaskStatus
+	Detail            string
+	Output            string // Full task output
+	Model             string
+	Skills            []string
+	InjectedSkills    []string
+	LoadedSkills      []string
+	StartedAt         time.Time
+	EndedAt           time.Time
+	ModelTime         time.Duration
+	ToolTime          time.Duration
+	Source            string
+	ParentID          string
+	DependsOn         []string // IDs of tasks that must complete before this one starts
+	Verify            string   // Command to run to verify the task
+	VerifyMode        string   // success, expected_failure, or observation
+	VerifyResult      *VerificationResult
+	ExecutionReceipt  *ExecutionReceipt  `json:"execution_receipt,omitempty"`
+	ExecutionReceipts []ExecutionReceipt `json:"execution_receipts,omitempty"`
+	MaxRetries        int                // Maximum number of retries for this task
+	Retries           int                // Current number of retries
+	OnFailure         string             // ID of the task to jump back to if this task fails (creates a loop)
+	SideEffect        SideEffectClass    `json:"side_effect,omitempty"`
+	Recovery          RecoveryPolicy     `json:"recovery,omitempty"`
+	ReconcileTool     string             `json:"reconcile_tool,omitempty"`
+	RecoveryState     string             `json:"recovery_state,omitempty"`
+	TypedResult       *TaskResult        `json:"typed_result,omitempty"`
+	Resolution        *TaskResolution    `json:"resolution,omitempty"`
 }
 
 type TodoList struct {
@@ -539,37 +544,115 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		copyRes := *item.Resolution
 		resolution = &copyRes
 	}
-	return &TodoItem{
-		ID:             item.ID,
-		Agent:          item.Agent,
-		Desc:           item.Desc,
-		Status:         item.Status,
-		Detail:         item.Detail,
-		Output:         item.Output,
-		Model:          item.Model,
-		Skills:         skills,
-		InjectedSkills: injectedSkills,
-		LoadedSkills:   loadedSkills,
-		StartedAt:      item.StartedAt,
-		EndedAt:        item.EndedAt,
-		ModelTime:      item.ModelTime,
-		ToolTime:       item.ToolTime,
-		Source:         item.Source,
-		ParentID:       item.ParentID,
-		DependsOn:      dependsOn,
-		Verify:         item.Verify,
-		VerifyMode:     item.VerifyMode,
-		VerifyResult:   verifyResult,
-		MaxRetries:     item.MaxRetries,
-		Retries:        item.Retries,
-		OnFailure:      item.OnFailure,
-		SideEffect:     item.SideEffect,
-		Recovery:       item.Recovery,
-		ReconcileTool:  item.ReconcileTool,
-		RecoveryState:  item.RecoveryState,
-		TypedResult:    typedResult,
-		Resolution:     resolution,
+	var execReceipt *ExecutionReceipt
+	if item.ExecutionReceipt != nil {
+		copyER := cloneExecutionReceipt(item.ExecutionReceipt)
+		execReceipt = &copyER
 	}
+	var execReceipts []ExecutionReceipt
+	if len(item.ExecutionReceipts) > 0 {
+		execReceipts = make([]ExecutionReceipt, len(item.ExecutionReceipts))
+		for i, r := range item.ExecutionReceipts {
+			copyR := r
+			if r.RepairProvenance != nil {
+				copyRP := *r.RepairProvenance
+				if r.RepairProvenance.SubmittedResult != nil {
+					copyResult := *r.RepairProvenance.SubmittedResult
+					copyRP.SubmittedResult = &copyResult
+				}
+				copyR.RepairProvenance = &copyRP
+			}
+			execReceipts[i] = copyR
+		}
+	}
+	return &TodoItem{
+		ID:                item.ID,
+		Agent:             item.Agent,
+		Desc:              item.Desc,
+		Status:            item.Status,
+		Detail:            item.Detail,
+		Output:            item.Output,
+		Model:             item.Model,
+		Skills:            skills,
+		InjectedSkills:    injectedSkills,
+		LoadedSkills:      loadedSkills,
+		StartedAt:         item.StartedAt,
+		EndedAt:           item.EndedAt,
+		ModelTime:         item.ModelTime,
+		ToolTime:          item.ToolTime,
+		Source:            item.Source,
+		ParentID:          item.ParentID,
+		DependsOn:         dependsOn,
+		Verify:            item.Verify,
+		VerifyMode:        item.VerifyMode,
+		VerifyResult:      verifyResult,
+		ExecutionReceipt:  execReceipt,
+		ExecutionReceipts: execReceipts,
+		MaxRetries:        item.MaxRetries,
+		Retries:           item.Retries,
+		OnFailure:         item.OnFailure,
+		SideEffect:        item.SideEffect,
+		Recovery:          item.Recovery,
+		ReconcileTool:     item.ReconcileTool,
+		RecoveryState:     item.RecoveryState,
+		TypedResult:       typedResult,
+		Resolution:        resolution,
+	}
+}
+
+func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) error {
+	tl.mu.Lock()
+	updated := false
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			if receipt == nil {
+				ti.ExecutionReceipt = nil
+			} else {
+				copyR := cloneExecutionReceipt(receipt)
+				ti.ExecutionReceipt = &copyR
+
+				// A repair updates the durable record for the same execution
+				// attempt. Keep one receipt per attempt rather than appending a
+				// second receipt when provenance is completed after repair.
+				replaced := false
+				for i := range ti.ExecutionReceipts {
+					existing := &ti.ExecutionReceipts[i]
+					if existing.RunID == copyR.RunID && existing.TaskID == copyR.TaskID && existing.Attempt == copyR.Attempt {
+						ti.ExecutionReceipts[i] = copyR
+						replaced = true
+						break
+					}
+				}
+				if !replaced {
+					ti.ExecutionReceipts = append(ti.ExecutionReceipts, copyR)
+				}
+			}
+			updated = true
+			break
+		}
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
+}
+
+func cloneExecutionReceipt(receipt *ExecutionReceipt) ExecutionReceipt {
+	copyR := *receipt
+	if receipt.RepairProvenance != nil {
+		copyRP := *receipt.RepairProvenance
+		if receipt.RepairProvenance.SubmittedResult != nil {
+			copyResult := *receipt.RepairProvenance.SubmittedResult
+			copyRP.SubmittedResult = &copyResult
+		}
+		copyR.RepairProvenance = &copyRP
+	}
+	return copyR
 }
 
 func (tl *TodoList) SetTaskResolution(id string, resolution *TaskResolution) error {

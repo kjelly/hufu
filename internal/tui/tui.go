@@ -2879,7 +2879,7 @@ func (m Model) colItems(col int) []*team.TodoItem {
 			out = append(out, t)
 		case col == 1 && t.Status == team.TaskPlanned:
 			out = append(out, t)
-		case col == 2 && (t.Status == team.TaskInProgress || t.Status == team.TaskPaused || t.Status == team.TaskVerifying):
+		case col == 2 && (t.Status == team.TaskInProgress || t.Status == team.TaskPaused || t.Status == team.TaskVerifying || t.Status == team.TaskProtocolIncomplete):
 			out = append(out, t)
 		case col == 3 && t.Status == team.TaskDone:
 			out = append(out, t)

@@ -52,12 +52,13 @@ func validateTaskOutputMode(task TaskDef) error {
 // tool activity. It deliberately sits below the model: workers cannot replace
 // command output with a prose summary.
 type taskTranscript struct {
-	mu          sync.Mutex
-	path        string
-	todoID      string
-	runID       string
-	f           *os.File
-	toolResults int
+	mu              sync.Mutex
+	path            string
+	todoID          string
+	runID           string
+	f               *os.File
+	toolResults     int
+	assistantOutput bool
 }
 
 type taskTranscriptRecord struct {
@@ -71,6 +72,14 @@ type taskTranscriptRecord struct {
 }
 
 func newTaskTranscript(workspace, todoID, runID string) (*taskTranscript, error) {
+	return newTaskTranscriptForAttempt(workspace, todoID, runID, 0)
+}
+
+// newTaskTranscriptForAttempt creates a distinct runner-owned transcript for
+// one execution attempt. Attempt transcripts are never truncated by retries
+// or by repair; the receipt can therefore identify the exact original
+// execution that produced its evidence.
+func newTaskTranscriptForAttempt(workspace, todoID, runID string, attempt int) (*taskTranscript, error) {
 	if workspace == "" {
 		return nil, fmt.Errorf("create task transcript: empty workspace")
 	}
@@ -81,12 +90,46 @@ func newTaskTranscript(workspace, todoID, runID string) (*taskTranscript, error)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create task transcript directory: %w", err)
 	}
-	path := filepath.Join(dir, todoID+".jsonl")
+	name := todoID + ".jsonl"
+	if attempt > 0 && runID != "" {
+		name = fmt.Sprintf("%s-%s", todoID, runID)
+		if attempt > 0 {
+			name += fmt.Sprintf("-attempt-%d", attempt)
+		}
+		name += ".jsonl"
+	}
+	path := filepath.Join(dir, name)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("create task transcript: %w", err)
 	}
 	return &taskTranscript{path: path, todoID: todoID, runID: runID, f: f}, nil
+}
+
+// RecordAssistantOutput preserves the original worker's final response in
+// the same immutable attempt transcript. It is deliberately separate from
+// tool_result so a task that used no tools still has durable execution
+// evidence for protocol repair and reconciliation.
+func (t *taskTranscript) RecordAssistantOutput(output string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.f == nil {
+		return fmt.Errorf("record task transcript: closed")
+	}
+	record := taskTranscriptRecord{
+		Timestamp: time.Now().Format(time.RFC3339Nano),
+		Event:     "assistant_output",
+		Output:    utils.RedactSecrets(output),
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("encode task transcript: %w", err)
+	}
+	if _, err := t.f.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("write task transcript: %w", err)
+	}
+	t.assistantOutput = true
+	return nil
 }
 
 func (t *taskTranscript) RecordToolCall(id, tool, input string) error {
@@ -134,8 +177,8 @@ func (t *taskTranscript) Manifest() (*ArtifactRef, error) {
 	if t.f == nil {
 		return nil, fmt.Errorf("create task transcript manifest: closed")
 	}
-	if t.toolResults == 0 {
-		return nil, fmt.Errorf("verbatim task produced no tool results")
+	if t.toolResults == 0 && !t.assistantOutput {
+		return nil, fmt.Errorf("task produced no tool results or assistant output")
 	}
 	if err := t.f.Sync(); err != nil {
 		return nil, fmt.Errorf("sync task transcript: %w", err)

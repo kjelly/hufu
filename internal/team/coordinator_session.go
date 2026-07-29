@@ -560,7 +560,7 @@ func (c *Coordinator) updateBranchState() {
 // tasks (error, which already exhausted their retries) are left untouched.
 func isInterruptedStatus(s TaskStatus) bool {
 	switch s {
-	case TaskInProgress, TaskVerifying, TaskPaused, TaskPlanned, TaskPending:
+	case TaskInProgress, TaskVerifying, TaskPaused, TaskPlanned, TaskPending, TaskProtocolIncomplete:
 		return true
 	default:
 		return false

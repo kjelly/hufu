@@ -140,6 +140,8 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 			eventType = "task_skipped"
 		case TaskBlocked:
 			eventType = "task_blocked"
+		case TaskProtocolIncomplete:
+			eventType = "task_protocol_incomplete"
 		}
 		if eventType == "" {
 			continue
@@ -170,11 +172,13 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 			payload["verify_mode"] = item.VerifyMode
 		}
 		if item.VerifyResult != nil {
-			payload["verify_result"] = map[string]interface{}{
-				"command":   item.VerifyResult.Command,
-				"exit_code": item.VerifyResult.ExitCode,
-				"timed_out": item.VerifyResult.TimedOut,
-			}
+			payload["verify_result"] = item.VerifyResult
+		}
+		if item.ExecutionReceipt != nil {
+			payload["execution_receipt"] = item.ExecutionReceipt
+		}
+		if len(item.ExecutionReceipts) > 0 {
+			payload["execution_receipts"] = item.ExecutionReceipts
 		}
 
 		var rawPayload json.RawMessage

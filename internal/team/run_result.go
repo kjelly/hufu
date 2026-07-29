@@ -150,7 +150,7 @@ func SummarizeRunStats(items []*TodoItem) RunStats {
 			}
 		case TaskSkipped:
 		default:
-			if item.Status == TaskPending || item.Status == TaskInProgress || item.Status == TaskPlanned || item.Status == TaskVerifying || item.Status == TaskPaused {
+			if item.Status == TaskPending || item.Status == TaskInProgress || item.Status == TaskPlanned || item.Status == TaskVerifying || item.Status == TaskPaused || item.Status == TaskProtocolIncomplete {
 				stats.TasksUnresolved++
 			}
 		}

@@ -490,7 +490,7 @@ func (c *Coordinator) finalizeRemainingTasks() {
 	changed := false
 	for _, item := range items {
 		switch item.Status {
-		case TaskInProgress, TaskPaused, TaskVerifying:
+		case TaskInProgress, TaskPaused, TaskVerifying, TaskProtocolIncomplete:
 			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskError, "coordinator ended unexpectedly")
 			changed = true
 		case TaskPending:
@@ -515,7 +515,7 @@ func (c *Coordinator) finalizeNormalCompletion() {
 		case TaskPending:
 			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "")
 			changed = true
-		case TaskInProgress, TaskPaused, TaskVerifying:
+		case TaskInProgress, TaskPaused, TaskVerifying, TaskProtocolIncomplete:
 			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskError, "coordinator finished before task completed")
 			changed = true
 		}

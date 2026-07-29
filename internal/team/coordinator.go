@@ -25,6 +25,7 @@ import (
 	"github.com/anomalyco/hufu/internal/sidecar"
 	"github.com/anomalyco/hufu/internal/skill"
 	"github.com/anomalyco/hufu/internal/tools"
+	"gopkg.in/yaml.v3"
 )
 
 // CoordTodoID is the special TodoItem ID used for the coordinator/orchestrator
@@ -98,15 +99,17 @@ type TaskDef struct {
 	Recovery RecoveryPolicy `json:"recovery,omitempty"`
 	// ReconcileTool specifies an optional read-only probe command to verify state during crash recovery.
 	ReconcileTool string `json:"reconcile_tool,omitempty"`
-	// Execution encapsulates execution policies such as StrictResult.
-	Execution TaskExecutionPolicy `json:"execution,omitempty"`
+	// Execution encapsulates execution contract semantics (kind, requires_result, requires_verification, allows_replay).
+	Execution ExecutionContract `json:"execution,omitempty" yaml:"execution,omitempty"`
 }
 
-// UnmarshalJSON handles legacy "task" field by mapping it to Goal.
+// UnmarshalJSON handles legacy "task" field by mapping it to Goal, and legacy "strict_result" / "strict-result" fields.
 func (t *TaskDef) UnmarshalJSON(data []byte) error {
 	type Alias TaskDef
 	aux := &struct {
-		Task *string `json:"task"`
+		Task             *string `json:"task"`
+		StrictResult     *bool   `json:"strict_result"`
+		StrictResultDash *bool   `json:"strict-result"`
 		*Alias
 	}{Alias: (*Alias)(t)}
 	if err := json.Unmarshal(data, aux); err != nil {
@@ -114,6 +117,31 @@ func (t *TaskDef) UnmarshalJSON(data []byte) error {
 	}
 	if t.Goal == "" && aux.Task != nil {
 		t.Goal = *aux.Task
+	}
+	if (aux.StrictResult != nil && *aux.StrictResult) || (aux.StrictResultDash != nil && *aux.StrictResultDash) {
+		t.Execution.RequiresResult = true
+	}
+	return nil
+}
+
+// UnmarshalYAML handles legacy "task" field by mapping it to Goal, and legacy "strict-result" / "strict_result" fields.
+func (t *TaskDef) UnmarshalYAML(node *yaml.Node) error {
+	type Alias TaskDef
+	var aux struct {
+		Task              *string `yaml:"task"`
+		StrictResult      *bool   `yaml:"strict-result"`
+		StrictResultUnder *bool   `yaml:"strict_result"`
+		*Alias            `yaml:",inline"`
+	}
+	aux.Alias = (*Alias)(t)
+	if err := node.Decode(&aux); err != nil {
+		return err
+	}
+	if t.Goal == "" && aux.Task != nil {
+		t.Goal = *aux.Task
+	}
+	if (aux.StrictResult != nil && *aux.StrictResult) || (aux.StrictResultUnder != nil && *aux.StrictResultUnder) {
+		t.Execution.RequiresResult = true
 	}
 	return nil
 }
@@ -325,6 +353,7 @@ type Coordinator struct {
 	// workerAgentOverride is a deterministic integration-test seam; production
 	// execution always creates the configured worker agent.
 	workerAgentOverride fantasy.Agent
+	repairAgentOverride fantasy.Agent
 
 	// Decoupled sub-services (§17 struct-level interface decoupling)
 	planner         Planner
@@ -854,7 +883,11 @@ func (c *Coordinator) report(event StatusEvent) {
 }
 
 func (c *Coordinator) newEvent(eventType string) StatusEvent {
-	return StatusEvent{Type: eventType, TeamName: c.session.Config.Name}
+	teamName := ""
+	if c.session != nil {
+		teamName = c.session.Config.Name
+	}
+	return StatusEvent{Type: eventType, TeamName: teamName}
 }
 
 func (c *Coordinator) updateTodoTiming(todoID string, modelTime, toolTime time.Duration) {
@@ -931,6 +964,29 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 		"adversarial_verify": map[string]any{
 			"type":        "integer",
 			"description": "Optional number of skeptic LLM verifiers (1-3, odd recommended) that independently try to refute the result after the task succeeds. If a majority refutes, the task fails and retries with the refutation as feedback. Use for high-stakes tasks where 'verify' alone cannot check quality.",
+		},
+		"execution": map[string]any{
+			"type":        "object",
+			"description": "Structured execution contract specifying execution mode (inline, process, interactive, external), result requirements, and verification needs.",
+			"properties": map[string]any{
+				"kind": map[string]any{
+					"type":        "string",
+					"enum":        []string{"inline", "process", "interactive", "external"},
+					"description": "Execution kind: inline (default), process, interactive, external.",
+				},
+				"requires_result": map[string]any{
+					"type":        "boolean",
+					"description": "If true, requires the worker to submit a structured task result.",
+				},
+				"requires_verification": map[string]any{
+					"type":        "boolean",
+					"description": "If true, requires an objective verifier contract (e.g. verify command).",
+				},
+				"allows_replay": map[string]any{
+					"type":        "boolean",
+					"description": "If true, task allows replay upon protocol/execution failure.",
+				},
+			},
 		},
 	}
 	if hasModelList {

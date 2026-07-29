@@ -120,7 +120,7 @@ func TestExecuteTaskProtocolOnlyEmptyOutputBlocksWithoutRetry(t *testing.T) {
 	}})
 	_ = items
 	c.workerAgentOverride = &countingEmptyAgent{calls: &calls}
-	_, err := c.executeTask(context.Background(), TaskDef{Agent: "worker", Goal: "perform external mutation", SideEffect: SideEffectExternalWrite, Execution: TaskExecutionPolicy{StrictResult: true}}, "1")
+	_, err := c.executeTask(context.Background(), TaskDef{Agent: "worker", Goal: "perform external mutation", SideEffect: SideEffectExternalWrite, Execution: ExecutionContract{RequiresResult: true}}, "1")
 	if err == nil {
 		t.Fatal("expected protocol-only task failure")
 	}

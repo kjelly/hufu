@@ -46,20 +46,18 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		}
 
 		var payload struct {
-			ID           string   `json:"id"`
-			Description  string   `json:"description"`
-			Desc         string   `json:"desc"`
-			Status       string   `json:"status"`
-			Output       string   `json:"output"`
-			Agent        string   `json:"agent"`
-			DependsOn    []string `json:"depends_on"`
-			Verify       string   `json:"verify"`
-			VerifyMode   string   `json:"verify_mode"`
-			VerifyResult *struct {
-				Command  string `json:"command"`
-				ExitCode int    `json:"exit_code"`
-				TimedOut bool   `json:"timed_out"`
-			} `json:"verify_result"`
+			ID                string              `json:"id"`
+			Description       string              `json:"description"`
+			Desc              string              `json:"desc"`
+			Status            string              `json:"status"`
+			Output            string              `json:"output"`
+			Agent             string              `json:"agent"`
+			DependsOn         []string            `json:"depends_on"`
+			Verify            string              `json:"verify"`
+			VerifyMode        string              `json:"verify_mode"`
+			VerifyResult      *VerificationResult `json:"verify_result"`
+			ExecutionReceipt  *ExecutionReceipt   `json:"execution_receipt"`
+			ExecutionReceipts []ExecutionReceipt  `json:"execution_receipts"`
 		}
 		_ = json.Unmarshal(e.Payload, &payload)
 
@@ -103,11 +101,14 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 			item.VerifyMode = payload.VerifyMode
 		}
 		if payload.VerifyResult != nil {
-			item.VerifyResult = &VerificationResult{
-				Command:  payload.VerifyResult.Command,
-				ExitCode: payload.VerifyResult.ExitCode,
-				TimedOut: payload.VerifyResult.TimedOut,
-			}
+			item.VerifyResult = payload.VerifyResult
+		}
+		if payload.ExecutionReceipt != nil {
+			item.ExecutionReceipt = payload.ExecutionReceipt
+			item.ExecutionReceipts = append(item.ExecutionReceipts, *payload.ExecutionReceipt)
+		}
+		if len(payload.ExecutionReceipts) > 0 {
+			item.ExecutionReceipts = payload.ExecutionReceipts
 		}
 
 		switch e.Type {
@@ -131,6 +132,8 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 			item.Status = TaskSkipped
 		case "task_blocked":
 			item.Status = TaskBlocked
+		case "task_protocol_incomplete":
+			item.Status = TaskProtocolIncomplete
 		case "task_reset":
 			item.Status = TaskPending
 		}
