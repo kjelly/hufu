@@ -27,13 +27,19 @@ type dagScheduler struct {
 	todoItems  []*TodoItem
 	duplicates map[int]bool // batch indices flagged as duplicate delegations
 
-	states     []TaskStatus
-	retries    []int
-	results    []agentTaskResult
-	needsReset []bool
-	revDeps    [][]int // revDeps[i] lists the tasks that depend on i
-	eventCh    chan agentTaskResult
-	inProgress int
+	states  []TaskStatus
+	retries []int
+	// criterionRetryUsed is a run-scoped circuit breaker for progress routing.
+	// criterionRetryCounts tracks retries charged to each target task so a
+	// group of matching tasks cannot reset one another indefinitely.
+	criterionRetryUsed   int
+	criterionRetryBudget int
+	criterionRetryCounts []int
+	results              []agentTaskResult
+	needsReset           []bool
+	revDeps              [][]int // revDeps[i] lists the tasks that depend on i
+	eventCh              chan agentTaskResult
+	inProgress           int
 
 	inflightMu sync.Mutex
 	inflight   map[string]chan agentTaskResult
@@ -42,18 +48,20 @@ type dagScheduler struct {
 
 func newDAGScheduler(c *Coordinator, tasks []TaskDef, todoItems []*TodoItem, duplicates map[int]bool) *dagScheduler {
 	s := &dagScheduler{
-		coord:      c,
-		tasks:      tasks,
-		todoItems:  todoItems,
-		duplicates: duplicates,
-		states:     make([]TaskStatus, len(tasks)),
-		retries:    make([]int, len(tasks)),
-		results:    make([]agentTaskResult, len(tasks)),
-		needsReset: make([]bool, len(tasks)),
-		revDeps:    make([][]int, len(tasks)),
-		eventCh:    make(chan agentTaskResult, len(tasks)),
-		inflight:   make(map[string]chan agentTaskResult),
-		sem:        make(chan struct{}, c.maxConcurrent),
+		coord:                c,
+		tasks:                tasks,
+		todoItems:            todoItems,
+		duplicates:           duplicates,
+		states:               make([]TaskStatus, len(tasks)),
+		retries:              make([]int, len(tasks)),
+		criterionRetryBudget: maxCriterionRetryBudget(tasks),
+		criterionRetryCounts: make([]int, len(tasks)),
+		results:              make([]agentTaskResult, len(tasks)),
+		needsReset:           make([]bool, len(tasks)),
+		revDeps:              make([][]int, len(tasks)),
+		eventCh:              make(chan agentTaskResult, len(tasks)),
+		inflight:             make(map[string]chan agentTaskResult),
+		sem:                  make(chan struct{}, c.maxConcurrent),
 	}
 	for i := range s.states {
 		s.states[i] = TaskPending
@@ -66,6 +74,17 @@ func newDAGScheduler(c *Coordinator, tasks []TaskDef, todoItems []*TodoItem, dup
 		}
 	}
 	return s
+}
+
+func maxCriterionRetryBudget(tasks []TaskDef) int {
+	// Two bounded remediation passes per task are enough to permit a repair
+	// handoff while guaranteeing that criterion routing cannot become an
+	// unbounded alternate retry loop.
+	budget := len(tasks) * 2
+	if budget < 1 {
+		return 1
+	}
+	return budget
 }
 
 // run launches ready tasks and processes completion events until the DAG
@@ -101,6 +120,13 @@ func (s *dagScheduler) launchReady(ctx context.Context) {
 		if !ready {
 			continue
 		}
+		if s.coord.antiThrashingBlocksTask(t, s.todoItems[i]) {
+			s.states[i] = TaskBlocked
+			if item := s.todoItems[i]; item != nil {
+				s.coord.taskTracker.TodoList().UpdateStatus(item.ID, TaskBlocked, "anti-thrashing limit reached for this task's scope; strategy change or human review required")
+			}
+			continue
+		}
 
 		s.states[i] = TaskInProgress
 		s.inProgress++
@@ -129,20 +155,33 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 		return
 	}
 
-	s.results[idx] = res
-
 	if _, blocked := isCapabilityBlockedError(res.err); blocked {
+		s.results[idx] = res
 		s.states[idx] = TaskBlocked
 		return
 	}
 
 	if res.err == nil {
+		s.results[idx] = res
 		s.states[idx] = TaskDone
+		// A worker can complete successfully while making no progress toward
+		// its referenced criteria. Re-evaluate cached/sidecar completions here
+		// as well as in executeTask, then route a still-failed criterion to a
+		// matching repair task instead of treating lifecycle success as outcome
+		// progress.
+		if s.routeNoProgressCriterionRetry(ctx, idx) {
+			return
+		}
 		s.launchReady(ctx)
 		return
 	}
 
 	s.states[idx] = TaskError
+	res.failedCriteria = s.coord.failedCriteriaForTask(s.tasks[idx])
+	s.results[idx] = res
+	if s.routeCriterionRetry(ctx, idx, res.failedCriteria) {
+		return
+	}
 	if s.tasks[idx].OnFailure == nil || s.retries[idx] >= s.tasks[idx].MaxRetries {
 		return
 	}
@@ -156,6 +195,67 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	s.resetWave(targetIdx)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	s.launchReady(ctx)
+}
+
+func (s *dagScheduler) routeNoProgressCriterionRetry(ctx context.Context, idx int) bool {
+	if idx < 0 || idx >= len(s.tasks) || s.tasks[idx].Kind == TaskKindDiagnostic {
+		return false
+	}
+	item := s.todoItems[idx]
+	if item == nil || item.Progress == ProgressUnknown {
+		s.coord.reEvaluateAffectedCriteria(ctx, item)
+	}
+	failed := s.coord.failedCriteriaForTask(s.tasks[idx])
+	if item == nil || !criterionRetryEligible(item.Progress, failed) {
+		return false
+	}
+	return s.routeCriterionRetry(ctx, idx, failed)
+}
+
+func criterionRetryEligible(progress TaskProgress, failed []string) bool {
+	return progress == ProgressNoChange && len(failed) > 0
+}
+
+func (s *dagScheduler) routeCriterionRetry(ctx context.Context, idx int, failed []string) bool {
+	if len(failed) == 0 || s.criterionRetryUsed >= s.criterionRetryBudget {
+		return false
+	}
+	for _, targetIdx := range criterionRetryTargets(s.tasks, failed) {
+		if targetIdx == idx || s.states[targetIdx] == TaskInProgress {
+			continue
+		}
+		// A pending task has not consumed an attempt yet and may be launched
+		// once as the selected remediation. A completed/errored task is a true
+		// retry and must honor its own MaxRetries counter.
+		if s.states[targetIdx] != TaskPending {
+			if !CanAutomaticallyReplay(s.tasks[targetIdx]) {
+				s.states[targetIdx] = TaskBlocked
+				s.coord.taskTracker.TodoList().UpdateStatus(s.todoItems[targetIdx].ID, TaskBlocked, "criterion retry blocked by replay policy; reconcile before re-drive")
+				s.coord.emitEvent("recovery_decision", "coordinator", s.todoItems[targetIdx].ID, map[string]interface{}{"decision": "replay_blocked", "reason": "criterion retry target is not replayable"})
+				continue
+			}
+			maxRetries := s.tasks[targetIdx].MaxRetries
+			if maxRetries <= 0 || s.criterionRetryCounts[targetIdx] >= maxRetries {
+				continue
+			}
+			s.criterionRetryCounts[targetIdx]++
+			s.retries[targetIdx]++
+		}
+		s.criterionRetryUsed++
+		s.coord.report(s.coord.newEvent("criterion_retry_routed").withData(map[string]interface{}{
+			"failed_criteria": failed, "from_task": s.todoItems[idx].ID,
+			"target_task": s.todoItems[targetIdx].ID, "budget_used": s.criterionRetryUsed,
+			"budget_limit": s.criterionRetryBudget,
+		}))
+		// Do not reset the target's dependent wave here. Criterion routing is a
+		// remediation dispatch, not an on_failure DAG loop; resetting a whole
+		// wave would bypass per-task retry counters for matching tasks.
+		s.resetTask(targetIdx, "criterion retry routed")
+		s.coord.report(s.coord.newEvent("todos_updated").withTodos(s.coord.taskTracker.TodoList().Items()))
+		s.launchReady(ctx)
+		return true
+	}
+	return false
 }
 
 // resetWave resets the on_failure target and everything that (transitively)
@@ -191,6 +291,11 @@ func (s *dagScheduler) resetTask(i int, detail string) {
 	s.coord.invalidateTaskCacheWithTypedVerification(strings.ToLower(s.tasks[i].Agent), s.taskDesc(i), s.tasks[i].VerifySpec, s.tasks[i].Verify, s.tasks[i].VerifyMode)
 	if s.states[i] == TaskPending {
 		return // never ran in this wave; nothing else to reset
+	}
+	if !CanAutomaticallyReplay(s.tasks[i]) {
+		s.states[i] = TaskBlocked
+		s.coord.taskTracker.TodoList().UpdateStatus(s.todoItems[i].ID, TaskBlocked, detail+"; replay policy requires reconciliation")
+		return
 	}
 	s.states[i] = TaskPending
 	s.coord.taskTracker.TodoList().ResetForRetry(s.todoItems[i].ID, detail)

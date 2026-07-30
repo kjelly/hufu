@@ -13,13 +13,14 @@ import (
 )
 
 type agentTaskResult struct {
-	agentName string
-	todoID    string
-	task      string
-	output    string
-	err       error
-	planText  string
-	idx       int
+	agentName      string
+	todoID         string
+	task           string
+	output         string
+	err            error
+	planText       string
+	failedCriteria []string
+	idx            int
 }
 
 // cachedTaskEntry stores a previously completed task and its output for dedup.

@@ -121,3 +121,19 @@ func IsTaskReplayable(task TaskDef) bool {
 	}
 	return true
 }
+
+// CanAutomaticallyReplay applies both the structural replay contract and the
+// explicit recovery policy. Manual, reconcile, and never policies require a
+// recovery decision before any second execution, even when the side effect is
+// otherwise locally replayable.
+func CanAutomaticallyReplay(task TaskDef) bool {
+	if !IsTaskReplayable(task) {
+		return false
+	}
+	switch task.Recovery {
+	case RecoveryManual, RecoveryReconcile, RecoveryNever:
+		return false
+	default:
+		return true
+	}
+}

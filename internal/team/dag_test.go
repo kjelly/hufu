@@ -145,6 +145,25 @@ func TestTodoListResetForRetry(t *testing.T) {
 	}
 }
 
+func TestResetTaskAllowsFirstExecutionOfNonReplayablePendingTask(t *testing.T) {
+	coord := &Coordinator{taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}, taskResultCache: make(map[string][]cachedTaskEntry), maxConcurrent: 1}
+	tasks := []TaskDef{
+		{Agent: "repair", Kind: TaskKindRepair, Advances: []string{"build"}, SideEffect: SideEffectExternalWrite, Recovery: RecoveryManual},
+	}
+	items := coord.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "repair", Desc: "repair", Kind: TaskKindRepair, Advances: []string{"build"}},
+	})
+	s := newDAGScheduler(coord, tasks, items, nil)
+
+	s.resetTask(0, "criterion retry routed")
+	if s.states[0] != TaskPending {
+		t.Fatalf("first execution of pending non-replayable task was blocked: %s", s.states[0])
+	}
+	if got := coord.taskTracker.TodoList().Items()[0].Status; got != TaskPending {
+		t.Fatalf("todo status changed before first execution: %s", got)
+	}
+}
+
 func TestInvalidateTaskCache(t *testing.T) {
 	c := &Coordinator{
 		taskResultCache: make(map[string][]cachedTaskEntry),
@@ -213,5 +232,111 @@ func TestResetForRetryTimingReclock(t *testing.T) {
 	secondStart := tl.Items()[0].StartedAt
 	if !secondStart.After(firstStart) {
 		t.Errorf("expected fresh StartedAt after reset, first=%v second=%v", firstStart, secondStart)
+	}
+}
+
+func TestCriterionRetryRoutingHonorsTaskRetriesAndBudget(t *testing.T) {
+	coord := &Coordinator{
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		sessionData:     NewSession(),
+		taskResultCache: make(map[string][]cachedTaskEntry),
+	}
+	coord.sessionData.CriterionResults = []CriterionResult{{ID: "build", State: CriterionFailed}}
+	tasks := []TaskDef{
+		{Agent: "worker", Kind: TaskKindOutcome, Advances: []string{"build"}},
+		{Agent: "repair", Kind: TaskKindRepair, Advances: []string{"build"}, MaxRetries: 1},
+	}
+	items := coord.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "worker", Desc: "outcome", Kind: TaskKindOutcome, Advances: []string{"build"}},
+		{Agent: "repair", Desc: "repair", Kind: TaskKindRepair, Advances: []string{"build"}},
+	})
+	coord.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskInProgress, "running")
+	coord.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskDone, "done")
+	coord.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskInProgress, "running")
+	coord.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskDone, "done")
+	s := newDAGScheduler(coord, tasks, items, nil)
+	s.states[0], s.states[1] = TaskDone, TaskDone
+	s.criterionRetryBudget = 1
+
+	if !s.routeCriterionRetry(context.Background(), 0, []string{"build"}) {
+		t.Fatal("first matching remediation should be routed")
+	}
+	if s.criterionRetryUsed != 1 || s.criterionRetryCounts[1] != 1 || s.retries[1] != 1 {
+		t.Fatalf("retry accounting mismatch: used=%d counts=%v retries=%v", s.criterionRetryUsed, s.criterionRetryCounts, s.retries)
+	}
+	// The global budget prevents a second route even though the target is now
+	// pending; this is the cycle breaker for mutually matching tasks.
+	if s.routeCriterionRetry(context.Background(), 0, []string{"build"}) {
+		t.Fatal("criterion retry budget should prevent an unbounded second route")
+	}
+}
+
+func TestCriterionRetryRoutingHonorsMaxRetriesAfterBudgetReset(t *testing.T) {
+	coord := &Coordinator{taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}, sessionData: NewSession(), taskResultCache: make(map[string][]cachedTaskEntry)}
+	coord.sessionData.CriterionResults = []CriterionResult{{ID: "build", State: CriterionFailed}}
+	tasks := []TaskDef{
+		{Agent: "worker", Kind: TaskKindOutcome, Advances: []string{"build"}},
+		{Agent: "repair", Kind: TaskKindRepair, Advances: []string{"build"}, MaxRetries: 1},
+	}
+	items := coord.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "worker", Desc: "outcome", Kind: TaskKindOutcome, Advances: []string{"build"}},
+		{Agent: "repair", Desc: "repair", Kind: TaskKindRepair, Advances: []string{"build"}},
+	})
+	coord.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskInProgress, "running")
+	coord.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskDone, "done")
+	coord.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskInProgress, "running")
+	coord.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskDone, "done")
+	s := newDAGScheduler(coord, tasks, items, nil)
+	s.states[0], s.states[1] = TaskDone, TaskDone
+	s.criterionRetryBudget = 3
+	if !s.routeCriterionRetry(context.Background(), 0, []string{"build"}) {
+		t.Fatal("first remediation route should succeed")
+	}
+	// Simulate the target completing and failing to advance again.
+	s.states[1] = TaskDone
+	if s.routeCriterionRetry(context.Background(), 0, []string{"build"}) {
+		t.Fatal("target MaxRetries=1 should prevent a second reset")
+	}
+}
+
+func TestDAGSchedulerRoutesSuccessfulNoProgressWithBoundedBudget(t *testing.T) {
+	coord := &Coordinator{
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		sessionData:     NewSession(),
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		maxConcurrent:   1,
+	}
+	coord.sessionData.CriterionResults = []CriterionResult{{ID: "build", State: CriterionFailed}}
+	tasks := []TaskDef{
+		{Agent: "worker", Kind: TaskKindOutcome, Advances: []string{"build"}},
+		{Agent: "repair", Kind: TaskKindRepair, Advances: []string{"build"}, MaxRetries: 1},
+	}
+	items := coord.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "worker", Desc: "outcome", Kind: TaskKindOutcome, Advances: []string{"build"}},
+		{Agent: "repair", Desc: "repair", Kind: TaskKindRepair, Advances: []string{"build"}},
+	})
+	coord.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskInProgress, "running")
+	coord.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskDone, "done")
+	items[0].Progress = ProgressNoChange
+	coord.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskInProgress, "running")
+	coord.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskDone, "done")
+	s := newDAGScheduler(coord, tasks, items, nil)
+	s.states[0], s.states[1], s.inProgress = TaskInProgress, TaskDone, 1
+	s.criterionRetryBudget = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // prevent the newly routed task from doing external work
+	s.handleEvent(ctx, agentTaskResult{idx: 0, agentName: "worker"})
+	if s.criterionRetryUsed != 1 || s.criterionRetryCounts[1] != 1 {
+		t.Fatalf("successful no-progress event did not consume bounded route: used=%d counts=%v", s.criterionRetryUsed, s.criterionRetryCounts)
+	}
+	select {
+	case <-s.eventCh:
+	case <-time.After(time.Second):
+		t.Fatal("routed task did not terminate after canceled context")
+	}
+	if s.routeCriterionRetry(ctx, 0, []string{"build"}) {
+		t.Fatal("second route must be blocked by scheduler budget")
 	}
 }

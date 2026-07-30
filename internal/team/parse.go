@@ -100,6 +100,7 @@ type teamConfigYAML struct {
 	Rollback            string                           `yaml:"rollback"`
 	ExecutionProfile    string                           `yaml:"execution-profile"`
 	GoalMode            string                           `yaml:"goal-mode"`
+	Reliability         agent.ReliabilityConfig          `yaml:"reliability"`
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -569,6 +570,17 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 				return cfg, fmt.Errorf("invalid acceptance spec format: %w", err)
 			}
 			cfg.AcceptanceSpec = &spec
+			if spec.Mode != "" {
+				mode, err := ParseGoalMode(spec.Mode)
+				if err != nil {
+					return cfg, fmt.Errorf("invalid acceptance goal mode: %w", err)
+				}
+				// An explicit team-level goal-mode remains authoritative; otherwise
+				// preserve the mode embedded in the acceptance contract.
+				if cfg.GoalMode == "" {
+					cfg.GoalMode = string(mode)
+				}
+			}
 			if len(spec.Commands) > 0 {
 				cfg.Acceptance = spec.Commands[0]
 			}
@@ -589,6 +601,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		}
 		cfg.GoalMode = string(gm)
 	}
+	cfg.Reliability = yc.Reliability
 	if yc.Shell != "" {
 		cfg.Shell = yc.Shell
 	}

@@ -47,6 +47,7 @@ type SessionData struct {
 	RunResult                   *RunResult                   `json:"run_result,omitempty"`
 	AcceptanceContractRevisions []AcceptanceContractRevision `json:"acceptance_contract_revisions,omitempty"`
 	ContinuationCheckpoint      *ContinuationCheckpoint      `json:"continuation_checkpoint,omitempty"`
+	CriterionResults            []CriterionResult            `json:"criterion_results,omitempty"`
 }
 
 func LoadSession(workspace string) *SessionData {

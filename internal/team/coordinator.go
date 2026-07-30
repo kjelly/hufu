@@ -101,7 +101,11 @@ type TaskDef struct {
 	// ReconcileTool specifies an optional read-only probe command to verify state during crash recovery.
 	ReconcileTool string `json:"reconcile_tool,omitempty"`
 	// Execution encapsulates execution contract semantics (kind, requires_result, requires_verification, allows_replay).
-	Execution ExecutionContract `json:"execution,omitempty" yaml:"execution,omitempty"`
+	Execution           ExecutionContract   `json:"execution,omitempty" yaml:"execution,omitempty"`
+	Kind                TaskKind            `json:"kind,omitempty" yaml:"kind,omitempty"`
+	Advances            []string            `json:"advances,omitempty" yaml:"advances,omitempty"`
+	ExpectedStateChange string              `json:"expected_state_change,omitempty" yaml:"expected_state_change,omitempty"`
+	RecoveryHypothesis  *RecoveryHypothesis `json:"recovery_hypothesis,omitempty" yaml:"recovery_hypothesis,omitempty"`
 }
 
 // UnmarshalJSON handles legacy "task" field by mapping it to Goal, and legacy "strict_result" / "strict-result" fields.
@@ -344,6 +348,7 @@ type Coordinator struct {
 	continuationResume         *ContinuationCheckpoint
 	metricsMu                  sync.RWMutex
 	retriesByFailureClass      map[TaskFailureClass]int
+	antiThrashing              AntiThrashingState
 	compactions                int
 	rollbackCmd                string // optional shell command run on acceptance failure
 	selfHealingAttempts        int

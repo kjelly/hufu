@@ -336,11 +336,7 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 		shell = c.session.Config.Shell
 	}
 	workDir := c.verificationWorkDir()
-	securityMode := ""
-	if c.session != nil {
-		securityMode = fmt.Sprintf("profile=%s;no-net=%t;force-mcp=%t;shell=%s",
-			c.session.Config.ExecutionProfile, c.session.Config.NoNet, c.session.Config.ForceMCP, shell)
-	}
+	securityMode := c.verificationSecurityMode(shell)
 
 	// Use a bounded timeout for each acceptance verification (same as task verification).
 	acceptanceTimeout := c.verifyTaskTimeout()
@@ -401,6 +397,27 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 	}
 	res.VerificationEvidence = evidence
 
+	if len(spec.Criteria) > 0 {
+		criteria, criteriaErr := c.evaluateCriteria(parentCtx, spec.Criteria)
+		res.CriterionResults = criteria
+		if criteriaErr != nil {
+			res.Errors = append(res.Errors, "acceptance criteria invalid: "+criteriaErr.Error())
+			res.Passed, res.State = false, AcceptanceFailed
+		} else {
+			for _, criterion := range spec.Criteria {
+				if !criterion.Required {
+					continue
+				}
+				for _, result := range criteria {
+					if result.ID == criterion.ID && result.State != CriterionPassed {
+						res.Errors = append(res.Errors, fmt.Sprintf("criterion %s is %s: %s", result.ID, result.State, result.FailureReason))
+						res.Passed, res.State = false, AcceptanceFailed
+					}
+				}
+			}
+		}
+	}
+
 	if len(allSpecs) > 0 && mandatoryPassedCount == 0 && res.Passed {
 		res.Errors = append(res.Errors, "no mandatory acceptance criteria passed")
 		res.Passed = false
@@ -427,7 +444,7 @@ func acceptanceSpecHasChecks(spec AcceptanceSpec) bool {
 			return true
 		}
 	}
-	return len(spec.Verifications) > 0
+	return len(spec.Verifications) > 0 || len(spec.Criteria) > 0
 }
 
 // runRollback runs the team's optional rollback command or default git rollback.

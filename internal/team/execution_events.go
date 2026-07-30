@@ -113,6 +113,10 @@ func usageFromSteps(steps []fantasy.StepResult) ExecutionUsage {
 }
 
 func (c *Coordinator) beginExecutionRun() func() {
+	c.metricsMu.Lock()
+	c.antiThrashing.reset()
+	c.metricsMu.Unlock()
+	c.rebuildAntiThrashingState()
 	runID := newExecutionRunID()
 	teamRevision := ""
 	if c.session != nil {

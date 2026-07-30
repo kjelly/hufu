@@ -162,12 +162,25 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 		}
 
 		payload := map[string]interface{}{
-			"id":         item.ID,
-			"desc":       item.Desc,
-			"status":     string(item.Status),
-			"output":     item.Output,
-			"agent":      item.Agent,
-			"depends_on": item.DependsOn,
+			"id":                    item.ID,
+			"desc":                  item.Desc,
+			"status":                string(item.Status),
+			"max_retries":           item.MaxRetries,
+			"retries":               item.Retries,
+			"output":                item.Output,
+			"agent":                 item.Agent,
+			"depends_on":            item.DependsOn,
+			"kind":                  item.Kind,
+			"advances":              item.Advances,
+			"expected_state_change": item.ExpectedStateChange,
+			"progress":              item.Progress,
+			"progress_criteria":     item.ProgressCriteria,
+			"failure_fingerprints":  item.FailureFingerprints,
+			"execution":             item.Execution,
+			"recovery_hypothesis":   item.RecoveryHypothesis,
+			"side_effect":           item.SideEffect,
+			"recovery":              item.Recovery,
+			"reconcile_tool":        item.ReconcileTool,
 		}
 		if item.Verify != "" {
 			payload["verify"] = item.Verify

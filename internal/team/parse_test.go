@@ -739,6 +739,25 @@ func TestParseTeamYML_GoalMode(t *testing.T) {
 	})
 }
 
+func TestParseTeamYML_AcceptanceMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	teamPath := filepath.Join(tmpDir, "team.yml")
+	yamlContent := "name: test-team\nacceptance:\n  mode: exploratory\n  criteria:\n    - id: ready\n      required: true\n      verify:\n        type: command_exit\n        command: 'true'\n"
+	if err := os.WriteFile(teamPath, []byte(yamlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(tmpDir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML returned error: %v", err)
+	}
+	if cfg.GoalMode != "exploratory" {
+		t.Fatalf("cfg.GoalMode = %q, want exploratory", cfg.GoalMode)
+	}
+	if cfg.AcceptanceSpec == nil || cfg.AcceptanceSpec.Mode != "exploratory" || len(cfg.AcceptanceSpec.Criteria) != 1 {
+		t.Fatalf("acceptance mode/criteria not parsed: %#v", cfg.AcceptanceSpec)
+	}
+}
+
 func TestParseTeamYMLAcceptanceTranslation(t *testing.T) {
 	t.Run("legacy string becomes command_exit acceptance", func(t *testing.T) {
 		dir := t.TempDir()

@@ -32,19 +32,20 @@ const (
 )
 
 type journalRecord struct {
-	Op                 string              `json:"op"` // "put", "del", or "err" (diagnostic only)
-	Agent              string              `json:"agent"`
-	Desc               string              `json:"desc"`
-	Verify             string              `json:"verify,omitempty"`
-	VerifyMode         string              `json:"verify_mode,omitempty"`
-	VerifySpec         *VerificationSpec   `json:"verify_spec,omitempty"`
-	Verification       *VerificationResult `json:"verification,omitempty"`
-	Output             string              `json:"output,omitempty"`
-	TS                 string              `json:"ts"`
-	Round              int                 `json:"round,omitempty"`
-	RepoCommit         string              `json:"repo_commit,omitempty"`
-	ProjectFingerprint string              `json:"project_fingerprint,omitempty"`
-	Identity           *CacheIdentity      `json:"identity,omitempty"`
+	Op                  string               `json:"op"` // "put", "del", or "err" (diagnostic only)
+	Agent               string               `json:"agent"`
+	Desc                string               `json:"desc"`
+	Verify              string               `json:"verify,omitempty"`
+	VerifyMode          string               `json:"verify_mode,omitempty"`
+	VerifySpec          *VerificationSpec    `json:"verify_spec,omitempty"`
+	Verification        *VerificationResult  `json:"verification,omitempty"`
+	Output              string               `json:"output,omitempty"`
+	TS                  string               `json:"ts"`
+	Round               int                  `json:"round,omitempty"`
+	RepoCommit          string               `json:"repo_commit,omitempty"`
+	ProjectFingerprint  string               `json:"project_fingerprint,omitempty"`
+	Identity            *CacheIdentity       `json:"identity,omitempty"`
+	FailureFingerprints []FailureFingerprint `json:"failure_fingerprints,omitempty"`
 }
 
 type taskJournal struct {
@@ -87,18 +88,22 @@ func (j *taskJournal) append(rec journalRecord) error {
 	return nil
 }
 
-func (c *Coordinator) recordTaskFailure(agentName, taskDesc, detail string) {
+func (c *Coordinator) recordTaskFailure(agentName, taskDesc, detail string, fingerprints ...[]FailureFingerprint) {
 	if c == nil || c.journal == nil || agentName == "" || taskDesc == "" || detail == "" {
 		return
 	}
-	_ = c.journal.append(journalRecord{
+	record := journalRecord{
 		Op:     "err",
 		Agent:  agentName,
 		Desc:   taskDesc,
 		Output: detail,
 		TS:     time.Now().Format(time.RFC3339),
 		Round:  c.round,
-	})
+	}
+	if len(fingerprints) > 0 {
+		record.FailureFingerprints = append([]FailureFingerprint(nil), fingerprints[0]...)
+	}
+	_ = c.journal.append(record)
 }
 
 func (j *taskJournal) Close() error {

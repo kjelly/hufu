@@ -98,6 +98,9 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	if len(invalidAgents) > 0 {
 		return "", fmt.Errorf("agent validation failed:\n- %s", strings.Join(invalidAgents, "\n- "))
 	}
+	if err := c.validateTaskCriterionLinks(tasks); err != nil {
+		return "", err
+	}
 
 	if c.forcePlanFirst {
 		for i := range tasks {
@@ -196,18 +199,23 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		// preserving pre-recovery behavior for read-only agents.
 		sideEffect, recovery, reconcileTool := c.PolicyEngine().ResolveRecoveryPolicy(agentDef, t)
 		todoBatch[i] = TodoSpec{
-			Agent:         strings.ToLower(t.Agent),
-			Desc:          desc,
-			Model:         resolvedModel,
-			Source:        TaskSourceCoordinator,
-			ParentID:      "",
-			Verify:        t.Verify,
-			VerifyMode:    t.VerifyMode,
-			VerifySpec:    cloneVerificationSpecPtr(t.VerifySpec),
-			MaxRetries:    t.MaxRetries,
-			SideEffect:    sideEffect,
-			Recovery:      recovery,
-			ReconcileTool: reconcileTool,
+			Agent:               strings.ToLower(t.Agent),
+			Desc:                desc,
+			Model:               resolvedModel,
+			Source:              TaskSourceCoordinator,
+			ParentID:            "",
+			Verify:              t.Verify,
+			VerifyMode:          t.VerifyMode,
+			VerifySpec:          cloneVerificationSpecPtr(t.VerifySpec),
+			MaxRetries:          t.MaxRetries,
+			SideEffect:          sideEffect,
+			Recovery:            recovery,
+			ReconcileTool:       reconcileTool,
+			Kind:                t.Kind,
+			Advances:            append([]string(nil), t.Advances...),
+			ExpectedStateChange: t.ExpectedStateChange,
+			RecoveryHypothesis:  t.RecoveryHypothesis,
+			Execution:           t.Execution,
 		}
 	}
 	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)

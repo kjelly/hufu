@@ -119,6 +119,8 @@ type AcceptanceSpec = agent.AcceptanceSpec
 type VerificationSpec = agent.VerificationSpec
 type VerificationType = agent.VerificationType
 type JSONAssertion = agent.JSONAssertion
+type AcceptanceCriterion = agent.AcceptanceCriterion
+type ReliabilityConfig = agent.ReliabilityConfig
 
 const (
 	VerifyCommandExit = agent.VerifyCommandExit
@@ -173,6 +175,14 @@ func cloneAcceptanceSpec(spec AcceptanceSpec) AcceptanceSpec {
 			clone.Verifications[i] = cloneVerificationSpec(v)
 		}
 	}
+	if spec.Criteria != nil {
+		clone.Criteria = make([]AcceptanceCriterion, len(spec.Criteria))
+		for i, criterion := range spec.Criteria {
+			clone.Criteria[i] = criterion
+			clone.Criteria[i].DependsOn = append([]string(nil), criterion.DependsOn...)
+			clone.Criteria[i].Verify = cloneVerificationSpec(criterion.Verify)
+		}
+	}
 	return clone
 }
 
@@ -183,6 +193,7 @@ type AcceptanceResult struct {
 	Commands             []string              `json:"commands,omitempty"`
 	RequiredArtifacts    []string              `json:"required_artifacts,omitempty"`
 	VerificationEvidence []*VerificationResult `json:"verification_evidence,omitempty"`
+	CriterionResults     []CriterionResult     `json:"criterion_results,omitempty"`
 }
 
 // MarshalJSON canonicalizes the legacy Passed field from the tri-state value.
@@ -515,8 +526,14 @@ type AcceptanceContractRevision struct {
 
 // RunMetrics is a queryable snapshot of reliability counters for a run.
 type RunMetrics struct {
-	RetriesByFailureClass map[TaskFailureClass]int `json:"retries_by_failure_class,omitempty"`
-	Compactions           int                      `json:"compactions"`
+	RetriesByFailureClass        map[TaskFailureClass]int    `json:"retries_by_failure_class,omitempty"`
+	Compactions                  int                         `json:"compactions"`
+	RepeatedFailureFingerprints  int                         `json:"repeated_failure_fingerprints,omitempty"`
+	RecoveryStrategyChanges      int                         `json:"recovery_strategy_changes,omitempty"`
+	LastRecoveryStrategies       map[string]RecoveryStrategy `json:"last_recovery_strategies,omitempty"`
+	DiagnosticTasksSinceProgress int                         `json:"diagnostic_tasks_since_progress,omitempty"`
+	RepairAttemptsByCriterion    map[string]int              `json:"repair_attempts_by_criterion,omitempty"`
+	AntiThrashingWarnings        int                         `json:"anti_thrashing_warnings,omitempty"`
 }
 
 type TaskResolution struct {

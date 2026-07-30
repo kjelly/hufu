@@ -418,6 +418,7 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	if len(sd.Tasks) > 0 && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
 		c.taskTracker.TodoList().Restore(sd.Tasks)
 	}
+	c.rebuildAntiThrashingState()
 
 	if !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
 		c.taskResultCacheMu.Lock()
@@ -633,8 +634,17 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 		}
 
 		pol := ResolveRecoveryPolicy(it.Recovery, it.SideEffect, isUnattended, c.ExecutionProfile())
+		task := taskDefFromTodoItem(it)
 		switch pol {
 		case RecoveryRetry:
+			if !IsTaskReplayable(task) {
+				detail := fmt.Sprintf("task blocked by replay policy; side_effect=%s or allows_replay=false", it.SideEffect)
+				c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
+				c.reconcileTaskStatusProjection()
+				c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{"policy": string(pol), "decision": "replay_blocked", "reason": detail})
+				c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
+				continue
+			}
 			c.taskTracker.TodoList().ResetForRetry(it.ID, "resumed after interruption")
 			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
 				"side_effect": string(it.SideEffect),
@@ -642,16 +652,6 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 				"decision":    "retry",
 			})
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-			task := TaskDef{
-				Agent:         it.Agent,
-				Goal:          it.Desc,
-				Verify:        it.Verify,
-				VerifyMode:    it.VerifyMode,
-				VerifySpec:    cloneVerificationSpecPtr(it.VerifySpec),
-				SideEffect:    it.SideEffect,
-				Recovery:      it.Recovery,
-				ReconcileTool: it.ReconcileTool,
-			}
 			if _, err := c.executeTask(ctx, task, it.ID); err != nil && firstErr == nil {
 				firstErr = err
 			}
@@ -701,6 +701,14 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 					"decision":       "mark_done",
 				})
 			case RecoveryStateNotStarted:
+				if !IsTaskReplayable(task) {
+					detail := fmt.Sprintf("task blocked by replay policy after reconciliation; side_effect=%s or allows_replay=false", it.SideEffect)
+					c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
+					c.reconcileTaskStatusProjection()
+					c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{"policy": string(pol), "recovery_state": state, "decision": "replay_blocked", "reason": detail})
+					c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
+					continue
+				}
 				c.taskTracker.TodoList().ResetForRetry(it.ID, "reconciliation allowed retry")
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
@@ -709,15 +717,6 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 					"recovery_state": state,
 					"decision":       "retry",
 				})
-				task := TaskDef{
-					Agent:         it.Agent,
-					Goal:          it.Desc,
-					Verify:        it.Verify,
-					VerifyMode:    it.VerifyMode,
-					SideEffect:    it.SideEffect,
-					Recovery:      it.Recovery,
-					ReconcileTool: it.ReconcileTool,
-				}
 				if _, err := c.executeTask(ctx, task, it.ID); err != nil && firstErr == nil {
 					firstErr = err
 				}
@@ -754,8 +753,27 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 				}
 			}
 		}
+		if pol != RecoveryRetry && pol != RecoveryReconcile && pol != RecoveryManual && pol != RecoveryNever {
+			detail := fmt.Sprintf("task blocked by unknown recovery policy %q", pol)
+			c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
+			c.reconcileTaskStatusProjection()
+			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{"policy": string(pol), "decision": "unknown_policy_blocked"})
+		}
 	}
 	return count, firstErr
+}
+
+func taskDefFromTodoItem(it *TodoItem) TaskDef {
+	if it == nil {
+		return TaskDef{}
+	}
+	return TaskDef{
+		Agent: it.Agent, Goal: it.Desc, Verify: it.Verify, VerifyMode: it.VerifyMode,
+		VerifySpec: cloneVerificationSpecPtr(it.VerifySpec), SideEffect: it.SideEffect,
+		Recovery: it.Recovery, ReconcileTool: it.ReconcileTool, Execution: it.Execution,
+		Kind: it.Kind, Advances: append([]string(nil), it.Advances...),
+		ExpectedStateChange: it.ExpectedStateChange, RecoveryHypothesis: cloneRecoveryHypothesis(it.RecoveryHypothesis),
+	}
 }
 
 func (c *Coordinator) SessionData() *SessionData {

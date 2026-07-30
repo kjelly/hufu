@@ -1,0 +1,7 @@
+[
+  {"name":"coordinator-planning","role":"coordinator","goal":"Plan migration","stm":"# 決策\n- Use SQLite WAL\n","ltm":"# 架構\n- ContextCompiler is canonical\n","legacy_prompt":"Plan migration\nUse SQLite WAL\nContextCompiler is canonical"},
+  {"name":"worker-implementation","role":"worker","goal":"Implement repository","stm":"# 發現\n- internal/context/sqlite_repository.go\n","ltm":"# 慣例\n- Run go test ./...\n","legacy_prompt":"Implement repository\ninternal/context/sqlite_repository.go\nRun go test ./..."},
+  {"name":"worker-error","role":"worker","goal":"Fix E1234","stm":"# 錯誤\n- exit code 1 from build\n","ltm":"# 問題\n- Retry after dependency update\n","legacy_prompt":"Fix E1234\nexit code 1 from build\nRetry after dependency update"},
+  {"name":"coordinator-duplicate","role":"coordinator","goal":"Review policy","stm":"# 發現\n- Shared requirement: no secrets\n","ltm":"# 慣例\n- Shared requirement: no secrets\n","legacy_prompt":"Review policy\nShared requirement: no secrets"},
+  {"name":"worker-anchor","role":"worker","goal":"Verify commit","stm":"# 進度\n- checked abc1234\n","ltm":"# 工具\n- git show abc1234\n","legacy_prompt":"Verify commit\nchecked abc1234\ngit show abc1234"}
+]

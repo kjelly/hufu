@@ -159,7 +159,18 @@ type TeamConfig struct {
 	// ExecutionProfile specifies named defaults like strict-verification.
 	ExecutionProfile string
 	// GoalMode specifies outcome vs exploratory mode.
-	GoalMode string
+	GoalMode    string
+	Reliability ReliabilityConfig
+}
+
+// ReliabilityConfig bounds diagnostic and repair work that repeats without
+// improving a mandatory outcome criterion. Zero values retain the unlimited
+// compatibility behaviour.
+type ReliabilityConfig struct {
+	MaxDiagnosticTasksWithoutProgress int  `yaml:"max-diagnostic-tasks-without-progress" json:"max_diagnostic_tasks_without_progress,omitempty"`
+	MaxSameFailureFingerprint         int  `yaml:"max-same-failure-fingerprint" json:"max_same_failure_fingerprint,omitempty"`
+	MaxRepairsPerCriterion            int  `yaml:"max-repairs-per-criterion" json:"max_repairs_per_criterion,omitempty"`
+	HardEnforcement                   bool `yaml:"hard-enforcement" json:"hard_enforcement,omitempty"`
 }
 
 type VerificationType string
@@ -185,10 +196,22 @@ type JSONAssertion struct {
 }
 
 type AcceptanceSpec struct {
-	Commands                 []string           `yaml:"commands" json:"commands,omitempty"`
-	RequiredArtifacts        []string           `yaml:"required-artifacts" json:"required_artifacts,omitempty"`
-	RequireNoUnresolvedTasks bool               `yaml:"require-no-unresolved-tasks" json:"require_no_unresolved_tasks,omitempty"`
-	Verifications            []VerificationSpec `yaml:"verifications" json:"verifications,omitempty"`
+	Commands                 []string              `yaml:"commands" json:"commands,omitempty"`
+	RequiredArtifacts        []string              `yaml:"required-artifacts" json:"required_artifacts,omitempty"`
+	RequireNoUnresolvedTasks bool                  `yaml:"require-no-unresolved-tasks" json:"require_no_unresolved_tasks,omitempty"`
+	Mode                     string                `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Verifications            []VerificationSpec    `yaml:"verifications" json:"verifications,omitempty"`
+	Criteria                 []AcceptanceCriterion `yaml:"criteria" json:"criteria,omitempty"`
+}
+
+// AcceptanceCriterion is a stable, named acceptance requirement. Existing
+// commands/verifications remain supported and are translated by the team
+// package for backward compatibility.
+type AcceptanceCriterion struct {
+	ID        string           `yaml:"id" json:"id"`
+	Required  bool             `yaml:"required" json:"required"`
+	DependsOn []string         `yaml:"depends-on" json:"depends_on,omitempty"`
+	Verify    VerificationSpec `yaml:"verify" json:"verify"`
 }
 
 type OllamaProvider struct {

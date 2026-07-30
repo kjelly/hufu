@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -101,6 +102,23 @@ type StatusReporter func(event StatusEvent)
 
 type TaskStatus string
 
+type TaskKind string
+
+const (
+	TaskKindOutcome    TaskKind = "outcome"
+	TaskKindRepair     TaskKind = "repair"
+	TaskKindDiagnostic TaskKind = "diagnostic"
+)
+
+type TaskProgress string
+
+const (
+	ProgressUnknown   TaskProgress = "unknown"
+	ProgressAdvanced  TaskProgress = "advanced"
+	ProgressNoChange  TaskProgress = "no_change"
+	ProgressRegressed TaskProgress = "regressed"
+)
+
 const (
 	TaskPending            TaskStatus = "pending"
 	TaskInProgress         TaskStatus = "in_progress"
@@ -189,38 +207,47 @@ func (t *TaskTracker) TodoList() *TodoList {
 }
 
 type TodoItem struct {
-	ID                string
-	Agent             string
-	Desc              string
-	Status            TaskStatus
-	Detail            string
-	Output            string // Full task output
-	Model             string
-	Skills            []string
-	InjectedSkills    []string
-	LoadedSkills      []string
-	StartedAt         time.Time
-	EndedAt           time.Time
-	ModelTime         time.Duration
-	ToolTime          time.Duration
-	Source            string
-	ParentID          string
-	DependsOn         []string          // IDs of tasks that must complete before this one starts
-	Verify            string            // Command to run to verify the task
-	VerifyMode        string            // success, expected_failure, or observation
-	VerifySpec        *VerificationSpec `json:"verify_spec,omitempty"`
-	VerifyResult      *VerificationResult
-	ExecutionReceipt  *ExecutionReceipt  `json:"execution_receipt,omitempty"`
-	ExecutionReceipts []ExecutionReceipt `json:"execution_receipts,omitempty"`
-	MaxRetries        int                // Maximum number of retries for this task
-	Retries           int                // Current number of retries
-	OnFailure         string             // ID of the task to jump back to if this task fails (creates a loop)
-	SideEffect        SideEffectClass    `json:"side_effect,omitempty"`
-	Recovery          RecoveryPolicy     `json:"recovery,omitempty"`
-	ReconcileTool     string             `json:"reconcile_tool,omitempty"`
-	RecoveryState     string             `json:"recovery_state,omitempty"`
-	TypedResult       *TaskResult        `json:"typed_result,omitempty"`
-	Resolution        *TaskResolution    `json:"resolution,omitempty"`
+	ID                  string
+	Agent               string
+	Desc                string
+	Status              TaskStatus
+	Detail              string
+	Output              string // Full task output
+	Model               string
+	Skills              []string
+	InjectedSkills      []string
+	LoadedSkills        []string
+	StartedAt           time.Time
+	EndedAt             time.Time
+	ModelTime           time.Duration
+	ToolTime            time.Duration
+	Source              string
+	ParentID            string
+	DependsOn           []string          // IDs of tasks that must complete before this one starts
+	Verify              string            // Command to run to verify the task
+	VerifyMode          string            // success, expected_failure, or observation
+	VerifySpec          *VerificationSpec `json:"verify_spec,omitempty"`
+	VerifyResult        *VerificationResult
+	ExecutionReceipt    *ExecutionReceipt    `json:"execution_receipt,omitempty"`
+	ExecutionReceipts   []ExecutionReceipt   `json:"execution_receipts,omitempty"`
+	MaxRetries          int                  // Maximum number of retries for this task
+	Retries             int                  // Current number of retries
+	OnFailure           string               // ID of the task to jump back to if this task fails (creates a loop)
+	SideEffect          SideEffectClass      `json:"side_effect,omitempty"`
+	Recovery            RecoveryPolicy       `json:"recovery,omitempty"`
+	ReconcileTool       string               `json:"reconcile_tool,omitempty"`
+	RecoveryState       string               `json:"recovery_state,omitempty"`
+	TypedResult         *TaskResult          `json:"typed_result,omitempty"`
+	Resolution          *TaskResolution      `json:"resolution,omitempty"`
+	Kind                TaskKind             `json:"kind,omitempty"`
+	Advances            []string             `json:"advances,omitempty"`
+	ExpectedStateChange string               `json:"expected_state_change,omitempty"`
+	Progress            TaskProgress         `json:"progress,omitempty"`
+	ProgressCriteria    []string             `json:"progress_criteria,omitempty"`
+	FailureFingerprints []FailureFingerprint `json:"failure_fingerprints,omitempty"`
+	RecoveryHypothesis  *RecoveryHypothesis  `json:"recovery_hypothesis,omitempty"`
+	LastOperation       string               `json:"last_operation,omitempty"`
+	Execution           ExecutionContract    `json:"execution,omitempty"`
 }
 
 type TodoList struct {
@@ -245,19 +272,24 @@ func (tl *TodoList) RunID() string {
 
 // TodoSpec describes a todo item to be created via AddBatch.
 type TodoSpec struct {
-	Agent         string
-	Desc          string
-	Model         string
-	Source        string
-	ParentID      string
-	Verify        string
-	VerifyMode    string
-	VerifySpec    *VerificationSpec
-	MaxRetries    int
-	OnFailure     string
-	SideEffect    SideEffectClass
-	Recovery      RecoveryPolicy
-	ReconcileTool string
+	Agent               string
+	Desc                string
+	Model               string
+	Source              string
+	ParentID            string
+	Verify              string
+	VerifyMode          string
+	VerifySpec          *VerificationSpec
+	MaxRetries          int
+	OnFailure           string
+	SideEffect          SideEffectClass
+	Recovery            RecoveryPolicy
+	ReconcileTool       string
+	Kind                TaskKind
+	Advances            []string
+	ExpectedStateChange string
+	RecoveryHypothesis  *RecoveryHypothesis
+	Execution           ExecutionContract
 }
 
 func (tl *TodoList) AddBatch(items []TodoSpec) []*TodoItem {
@@ -266,21 +298,27 @@ func (tl *TodoList) AddBatch(items []TodoSpec) []*TodoItem {
 	for _, item := range items {
 		tl.next++
 		ti := &TodoItem{
-			ID:            fmt.Sprintf("%d", tl.next),
-			Agent:         item.Agent,
-			Desc:          item.Desc,
-			Model:         item.Model,
-			Status:        TaskPending,
-			Source:        item.Source,
-			ParentID:      item.ParentID,
-			Verify:        item.Verify,
-			VerifyMode:    item.VerifyMode,
-			VerifySpec:    item.VerifySpec,
-			MaxRetries:    item.MaxRetries,
-			OnFailure:     item.OnFailure,
-			SideEffect:    item.SideEffect,
-			Recovery:      item.Recovery,
-			ReconcileTool: item.ReconcileTool,
+			ID:                  fmt.Sprintf("%d", tl.next),
+			Agent:               item.Agent,
+			Desc:                item.Desc,
+			Model:               item.Model,
+			Status:              TaskPending,
+			Source:              item.Source,
+			ParentID:            item.ParentID,
+			Verify:              item.Verify,
+			VerifyMode:          item.VerifyMode,
+			VerifySpec:          item.VerifySpec,
+			MaxRetries:          item.MaxRetries,
+			OnFailure:           item.OnFailure,
+			SideEffect:          item.SideEffect,
+			Recovery:            item.Recovery,
+			ReconcileTool:       item.ReconcileTool,
+			Kind:                item.Kind,
+			Advances:            append([]string(nil), item.Advances...),
+			ExpectedStateChange: item.ExpectedStateChange,
+			Progress:            ProgressUnknown,
+			RecoveryHypothesis:  item.RecoveryHypothesis,
+			Execution:           item.Execution,
 		}
 		tl.items = append(tl.items, ti)
 		added = append(added, ti)
@@ -331,6 +369,67 @@ func (tl *TodoList) DeleteIDs(ids ...string) {
 
 func (tl *TodoList) UpdateStatus(id string, status TaskStatus, detail string) {
 	_ = tl.TryUpdateStatusAndOutput(id, status, detail, "")
+}
+
+// AppendFailureFingerprint mutates the canonical task record (rather than a
+// snapshot returned by Items) and checkpoints the change.
+func (tl *TodoList) AppendFailureFingerprint(id string, fingerprint FailureFingerprint) error {
+	tl.mu.Lock()
+	updated := false
+	for _, ti := range tl.items {
+		if ti.ID != id {
+			continue
+		}
+		duplicate := false
+		for i := range ti.FailureFingerprints {
+			existing := &ti.FailureFingerprints[i]
+			if fingerprint.Digest != "" && existing.Digest == fingerprint.Digest {
+				if existing.Occurrences < 1 {
+					existing.Occurrences = 1
+				}
+				increment := fingerprint.Occurrences
+				if increment < 1 {
+					increment = 1
+				}
+				existing.Occurrences += increment
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			if fingerprint.Occurrences < 1 {
+				fingerprint.Occurrences = 1
+			}
+			ti.FailureFingerprints = append(ti.FailureFingerprints, fingerprint)
+		}
+		updated = true
+		break
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
+}
+
+// SetLastOperation records task-local operation identity without checkpointing
+// every tool call. The next lifecycle mutation persists the value.
+func (tl *TodoList) SetLastOperation(id, operation string) {
+	if strings.TrimSpace(operation) == "" {
+		return
+	}
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			ti.LastOperation = operation
+			return
+		}
+	}
 }
 
 func (tl *TodoList) UpdateStatusAndOutput(id string, status TaskStatus, detail string, output string) {
@@ -482,6 +581,10 @@ func (tl *TodoList) ResetForRetry(id string, detail string) {
 			ti.Detail = detail
 			ti.Output = ""
 			ti.VerifyResult = nil
+			ti.RecoveryState = RecoveryStateNotStarted
+			ti.LastOperation = ""
+			ti.Progress = ProgressUnknown
+			ti.ProgressCriteria = nil
 			ti.StartedAt = time.Time{}
 			ti.EndedAt = time.Time{}
 			ti.ModelTime = 0
@@ -588,39 +691,83 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		}
 	}
 	return &TodoItem{
-		ID:                item.ID,
-		Agent:             item.Agent,
-		Desc:              item.Desc,
-		Status:            item.Status,
-		Detail:            item.Detail,
-		Output:            item.Output,
-		Model:             item.Model,
-		Skills:            skills,
-		InjectedSkills:    injectedSkills,
-		LoadedSkills:      loadedSkills,
-		StartedAt:         item.StartedAt,
-		EndedAt:           item.EndedAt,
-		ModelTime:         item.ModelTime,
-		ToolTime:          item.ToolTime,
-		Source:            item.Source,
-		ParentID:          item.ParentID,
-		DependsOn:         dependsOn,
-		Verify:            item.Verify,
-		VerifyMode:        item.VerifyMode,
-		VerifySpec:        verifySpec,
-		VerifyResult:      verifyResult,
-		ExecutionReceipt:  execReceipt,
-		ExecutionReceipts: execReceipts,
-		MaxRetries:        item.MaxRetries,
-		Retries:           item.Retries,
-		OnFailure:         item.OnFailure,
-		SideEffect:        item.SideEffect,
-		Recovery:          item.Recovery,
-		ReconcileTool:     item.ReconcileTool,
-		RecoveryState:     item.RecoveryState,
-		TypedResult:       typedResult,
-		Resolution:        resolution,
+		ID:                  item.ID,
+		Agent:               item.Agent,
+		Desc:                item.Desc,
+		Status:              item.Status,
+		Detail:              item.Detail,
+		Output:              item.Output,
+		Model:               item.Model,
+		Skills:              skills,
+		InjectedSkills:      injectedSkills,
+		LoadedSkills:        loadedSkills,
+		StartedAt:           item.StartedAt,
+		EndedAt:             item.EndedAt,
+		ModelTime:           item.ModelTime,
+		ToolTime:            item.ToolTime,
+		Source:              item.Source,
+		ParentID:            item.ParentID,
+		DependsOn:           dependsOn,
+		Verify:              item.Verify,
+		VerifyMode:          item.VerifyMode,
+		VerifySpec:          verifySpec,
+		VerifyResult:        verifyResult,
+		ExecutionReceipt:    execReceipt,
+		ExecutionReceipts:   execReceipts,
+		MaxRetries:          item.MaxRetries,
+		Retries:             item.Retries,
+		OnFailure:           item.OnFailure,
+		SideEffect:          item.SideEffect,
+		Recovery:            item.Recovery,
+		ReconcileTool:       item.ReconcileTool,
+		RecoveryState:       item.RecoveryState,
+		TypedResult:         typedResult,
+		Resolution:          resolution,
+		Kind:                item.Kind,
+		Advances:            append([]string(nil), item.Advances...),
+		ExpectedStateChange: item.ExpectedStateChange,
+		Progress:            item.Progress,
+		ProgressCriteria:    append([]string(nil), item.ProgressCriteria...),
+		FailureFingerprints: append([]FailureFingerprint(nil), item.FailureFingerprints...),
+		RecoveryHypothesis:  cloneRecoveryHypothesis(item.RecoveryHypothesis),
+		LastOperation:       item.LastOperation,
+		Execution:           item.Execution,
 	}
+}
+
+// SetProgress persists both the orthogonal task progress and the exact
+// criteria that advanced. Keeping this on the canonical TodoItem is required
+// for session checkpoints; callers often operate on Items() clones.
+func (tl *TodoList) SetProgress(id string, progress TaskProgress, criteria []string) error {
+	tl.mu.Lock()
+	updated := false
+	for _, item := range tl.items {
+		if item.ID != id {
+			continue
+		}
+		item.Progress = progress
+		item.ProgressCriteria = append([]string(nil), criteria...)
+		updated = true
+		break
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
+}
+
+func cloneRecoveryHypothesis(src *RecoveryHypothesis) *RecoveryHypothesis {
+	if src == nil {
+		return nil
+	}
+	clone := *src
+	clone.Evidence = append([]EvidenceRef(nil), src.Evidence...)
+	return &clone
 }
 
 func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) error {
@@ -818,31 +965,40 @@ func (tl *TodoList) Children(parentID string) []*TodoItem {
 				copy(dependsOn, item.DependsOn)
 			}
 			result = append(result, &TodoItem{
-				ID:             item.ID,
-				Agent:          item.Agent,
-				Desc:           item.Desc,
-				Status:         item.Status,
-				Detail:         item.Detail,
-				Model:          item.Model,
-				Skills:         skills,
-				InjectedSkills: injectedSkills,
-				LoadedSkills:   loadedSkills,
-				StartedAt:      item.StartedAt,
-				EndedAt:        item.EndedAt,
-				ModelTime:      item.ModelTime,
-				ToolTime:       item.ToolTime,
-				Source:         item.Source,
-				ParentID:       item.ParentID,
-				DependsOn:      dependsOn,
-				Verify:         item.Verify,
-				VerifyMode:     item.VerifyMode,
-				MaxRetries:     item.MaxRetries,
-				Retries:        item.Retries,
-				OnFailure:      item.OnFailure,
-				SideEffect:     item.SideEffect,
-				Recovery:       item.Recovery,
-				ReconcileTool:  item.ReconcileTool,
-				RecoveryState:  item.RecoveryState,
+				ID:                  item.ID,
+				Agent:               item.Agent,
+				Desc:                item.Desc,
+				Status:              item.Status,
+				Detail:              item.Detail,
+				Model:               item.Model,
+				Skills:              skills,
+				InjectedSkills:      injectedSkills,
+				LoadedSkills:        loadedSkills,
+				StartedAt:           item.StartedAt,
+				EndedAt:             item.EndedAt,
+				ModelTime:           item.ModelTime,
+				ToolTime:            item.ToolTime,
+				Source:              item.Source,
+				ParentID:            item.ParentID,
+				DependsOn:           dependsOn,
+				Verify:              item.Verify,
+				VerifyMode:          item.VerifyMode,
+				MaxRetries:          item.MaxRetries,
+				Retries:             item.Retries,
+				OnFailure:           item.OnFailure,
+				SideEffect:          item.SideEffect,
+				Recovery:            item.Recovery,
+				ReconcileTool:       item.ReconcileTool,
+				RecoveryState:       item.RecoveryState,
+				Kind:                item.Kind,
+				Advances:            append([]string(nil), item.Advances...),
+				ExpectedStateChange: item.ExpectedStateChange,
+				Progress:            item.Progress,
+				ProgressCriteria:    append([]string(nil), item.ProgressCriteria...),
+				FailureFingerprints: append([]FailureFingerprint(nil), item.FailureFingerprints...),
+				RecoveryHypothesis:  cloneRecoveryHypothesis(item.RecoveryHypothesis),
+				LastOperation:       item.LastOperation,
+				Execution:           item.Execution,
 			})
 		}
 	}

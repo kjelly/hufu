@@ -57,7 +57,8 @@ type ExecutionProfile struct {
 	DisableTaskCache           bool `json:"disable_task_cache,omitempty" yaml:"disable-task-cache,omitempty"`
 	DisableJournalRestore      bool `json:"disable_journal_restore,omitempty" yaml:"disable-journal-restore,omitempty"`
 
-	FailOnUnknownState bool `json:"fail_on_unknown_state,omitempty" yaml:"fail-on-unknown-state,omitempty"`
+	FailOnUnknownState    bool `json:"fail_on_unknown_state,omitempty" yaml:"fail-on-unknown-state,omitempty"`
+	AntiThrashingEnforced bool `json:"anti_thrashing_enforced,omitempty" yaml:"anti-thrashing-enforced,omitempty"`
 }
 
 // IsUnattended returns whether the profile is the unattended profile.
@@ -88,6 +89,7 @@ func BuiltinProfiles() map[ExecutionProfileName]ExecutionProfile {
 			DisableTaskCache:           false,
 			DisableJournalRestore:      false,
 			FailOnUnknownState:         false,
+			AntiThrashingEnforced:      false,
 		},
 		ProfileUnattended: {
 			SchemaVersion:              1,
@@ -109,6 +111,7 @@ func BuiltinProfiles() map[ExecutionProfileName]ExecutionProfile {
 			DisableTaskCache:           false,
 			DisableJournalRestore:      false,
 			FailOnUnknownState:         false,
+			AntiThrashingEnforced:      true,
 		},
 		ProfileStrictVerification: {
 			SchemaVersion:              1,
@@ -130,6 +133,7 @@ func BuiltinProfiles() map[ExecutionProfileName]ExecutionProfile {
 			DisableTaskCache:           false,
 			DisableJournalRestore:      false,
 			FailOnUnknownState:         true,
+			AntiThrashingEnforced:      true,
 		},
 		ProfileFreshVerification: {
 			SchemaVersion:              1,
@@ -151,6 +155,7 @@ func BuiltinProfiles() map[ExecutionProfileName]ExecutionProfile {
 			DisableTaskCache:           true,
 			DisableJournalRestore:      true,
 			FailOnUnknownState:         true,
+			AntiThrashingEnforced:      true,
 		},
 	}
 }

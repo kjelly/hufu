@@ -80,6 +80,26 @@ func TestResumeInterruptedTasks_InfraMutationBlocked(t *testing.T) {
 	}
 }
 
+func TestResumeInterruptedTasks_AllowsReplayFalseBlocked(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	allowsReplay := false
+	c.taskTracker.TodoList().Restore([]*TodoItem{{
+		ID: "replay-blocked", Agent: "a", Desc: "non-replayable retry", Status: TaskInProgress,
+		Recovery: RecoveryRetry, Execution: ExecutionContract{AllowsReplay: &allowsReplay},
+	}})
+	n, err := c.ResumeInterruptedTasks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("non-replayable task was re-driven: %d", n)
+	}
+	item := c.taskTracker.TodoList().Items()[0]
+	if item.Status != TaskBlocked || !strings.Contains(item.Detail, "replay policy") {
+		t.Fatalf("unexpected replay-blocked state: %#v", item)
+	}
+}
+
 func TestResumeInterruptedTasks_UnattendedExternalWriteBlocked(t *testing.T) {
 	c := newBudgetCoordinator(t)
 	c.unattended = true

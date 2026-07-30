@@ -646,6 +646,12 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 					return "", fmt.Errorf("mark task done: %w", statusErr)
 				}
 				c.reconcileTaskStatusProjection()
+				for _, item := range c.taskTracker.TodoList().Items() {
+					if item.ID == todoID {
+						c.reEvaluateAffectedCriteria(parentCtx, item)
+						break
+					}
+				}
 				c.updateTodoTiming(todoID, modelTime, toolTime)
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("done").withAgent(agentName).withOutput(coordinatorOutput).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
@@ -680,6 +686,15 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			c.taskTracker.TodoList().UpdateStatus(todoID, TaskBlocked, fmt.Sprintf("protocol result missing; automatic replay is not allowed (allows_replay=%v, side_effect=%s, recovery=%s); reconcile before retry: %v", task.Execution.AllowsReplay != nil && *task.Execution.AllowsReplay, task.SideEffect, task.Recovery, err))
 			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: protocol-only failure cannot be automatically replayed; reconciliation required").withTodoID(todoID))
+			closeTranscript()
+			break
+		}
+		if !CanAutomaticallyReplay(task) {
+			lastErr = err
+			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, "error"))
+			c.taskTracker.TodoList().UpdateStatus(todoID, TaskBlocked, fmt.Sprintf("automatic replay is not allowed (allows_replay=%v, side_effect=%s); reconcile before retry", task.Execution.AllowsReplay != nil && *task.Execution.AllowsReplay, task.SideEffect))
+			c.reconcileTaskStatusProjection()
+			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: task replay policy requires reconciliation").withTodoID(todoID))
 			closeTranscript()
 			break
 		}
@@ -819,6 +834,12 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.reconcileTaskStatusProjection()
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item.ID == todoID {
+			c.reEvaluateAffectedCriteria(ctx, item)
+			break
+		}
+	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("sidecar_call").withAgent(task.Agent).withMessage(taskDesc))
 
@@ -992,6 +1013,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			audit.LogToolCall(agentName, tc.ToolName, tc.Input, tc.ToolCallID)
 			c.SetCurrentStage("tool")
 			c.SetCurrentTool(tc.ToolName)
+			c.taskTracker.TodoList().SetLastOperation(todoID, tc.ToolName)
 
 			// 🔁 Deadloop / thrashing detection!
 			loopDetectMu.Lock()
