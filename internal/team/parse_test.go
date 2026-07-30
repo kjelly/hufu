@@ -738,3 +738,54 @@ func TestParseTeamYML_GoalMode(t *testing.T) {
 		}
 	})
 }
+
+func TestParseTeamYMLAcceptanceTranslation(t *testing.T) {
+	t.Run("legacy string becomes command_exit acceptance", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte("name: test\nacceptance: test -f report.md\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := parseTeamYML(dir, nil)
+		if err != nil {
+			t.Fatalf("parseTeamYML: %v", err)
+		}
+		if cfg.Acceptance != "test -f report.md" {
+			t.Fatalf("legacy acceptance command = %q", cfg.Acceptance)
+		}
+		if cfg.AcceptanceSpec == nil || len(cfg.AcceptanceSpec.Commands) != 1 || cfg.AcceptanceSpec.Commands[0] != cfg.Acceptance {
+			t.Fatalf("legacy acceptance must retain its structured command translation: %#v", cfg.AcceptanceSpec)
+		}
+	})
+
+	t.Run("structured typed assertions survive parsing", func(t *testing.T) {
+		dir := t.TempDir()
+		yaml := `name: test
+acceptance:
+  required-artifacts: [report.md]
+  verifications:
+    - type: json_assert
+      path: summary.json
+      assertions:
+        - path: status
+          equals: ok
+`
+		if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte(yaml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := parseTeamYML(dir, nil)
+		if err != nil {
+			t.Fatalf("parseTeamYML: %v", err)
+		}
+		if cfg.AcceptanceSpec == nil {
+			t.Fatal("expected structured acceptance spec")
+		}
+		if got := cfg.AcceptanceSpec.RequiredArtifacts; len(got) != 1 || got[0] != "report.md" {
+			t.Fatalf("required artifacts = %#v", got)
+		}
+		if got := cfg.AcceptanceSpec.Verifications; len(got) != 1 || got[0].Type != agent.VerifyJSONAssert || got[0].Path != "summary.json" || len(got[0].Assertions) != 1 || got[0].Assertions[0].Path != "status" || got[0].Assertions[0].Equals != "ok" {
+			t.Fatalf("typed verification = %#v", got)
+		}
+	})
+}

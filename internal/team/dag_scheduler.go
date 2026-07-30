@@ -188,7 +188,7 @@ func (s *dagScheduler) resetWave(targetIdx int) {
 // instead of being served the stale output. Must not be called on a task that
 // is currently in flight — mark it via needsReset instead.
 func (s *dagScheduler) resetTask(i int, detail string) {
-	s.coord.invalidateTaskCacheWithVerification(strings.ToLower(s.tasks[i].Agent), s.taskDesc(i), s.tasks[i].Verify, s.tasks[i].VerifyMode)
+	s.coord.invalidateTaskCacheWithTypedVerification(strings.ToLower(s.tasks[i].Agent), s.taskDesc(i), s.tasks[i].VerifySpec, s.tasks[i].Verify, s.tasks[i].VerifyMode)
 	if s.states[i] == TaskPending {
 		return // never ran in this wave; nothing else to reset
 	}
@@ -241,7 +241,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		desc += "\nconstraints: " + td.Constraints
 	}
 	agentKey := strings.ToLower(td.Agent)
-	cacheKey := agentKey + ":" + taskCacheIdentity(desc, td.Verify, td.VerifyMode)
+	cacheKey := agentKey + ":" + taskCacheIdentityWithSpec(desc, td.VerifySpec, td.Verify, td.VerifyMode)
 	// A verbatim task owns a per-todo evidence artifact. Identical concurrent
 	// tasks must not share an in-flight result, or the follower would report a
 	// manifest for the owner's transcript instead of producing its own evidence.
@@ -348,7 +348,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	// tasks, and verbatim-output tasks always run fresh: a cached prose result
 	// cannot satisfy a new runner-owned transcript contract.
 	if !td.Sidecar && !td.Summarize && !taskUsesVerbatimTranscript(td) {
-		if cached, ok := c.lookupTaskCacheWithVerification(ctx, agentKey, desc, td.Verify, td.VerifyMode); ok {
+		if cached, ok := c.lookupTaskCacheWithTypedVerification(ctx, agentKey, desc, td.VerifySpec, td.Verify, td.VerifyMode); ok {
 			c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(desc).withTodoID(tid))
 			c.taskTracker.TodoList().UpdateStatusAndOutput(tid, TaskDone, utils.TruncateRunes(cached, summaryMaxRunes), cached)
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
@@ -370,7 +370,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		output, err = c.executeTask(ctx, td, tid)
 	}
 	if err == nil {
-		c.storeTaskCacheWithVerification(agentKey, desc, td.Verify, td.VerifyMode, output)
+		c.storeTaskCacheWithTypedVerificationEvidence(agentKey, desc, td.VerifySpec, td.Verify, td.VerifyMode, output, verificationForTodo(c.taskTracker.TodoList().Items(), tid))
 	}
 	result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: output, err: err, idx: idx}
 	if err == nil && td.PlanFirst && td.PlanID == "" {

@@ -162,10 +162,33 @@ type TeamConfig struct {
 	GoalMode string
 }
 
+type VerificationType string
+
+const (
+	VerifyCommandExit VerificationType = "command_exit"
+	VerifyFileExists  VerificationType = "file_exists"
+	VerifyFileAbsent  VerificationType = "file_absent"
+	VerifyJSONAssert  VerificationType = "json_assert"
+)
+
+type VerificationSpec struct {
+	Type       VerificationType `json:"type,omitempty" yaml:"type,omitempty"`
+	Mode       string           `json:"mode,omitempty" yaml:"mode,omitempty"`
+	Command    string           `json:"command,omitempty" yaml:"command,omitempty"`
+	Path       string           `json:"path,omitempty" yaml:"path,omitempty"`
+	Assertions []JSONAssertion  `json:"assertions,omitempty" yaml:"assertions,omitempty"`
+}
+
+type JSONAssertion struct {
+	Path   string `json:"path" yaml:"path"`
+	Equals any    `json:"equals" yaml:"equals"`
+}
+
 type AcceptanceSpec struct {
-	Commands                 []string `yaml:"commands" json:"commands,omitempty"`
-	RequiredArtifacts        []string `yaml:"required-artifacts" json:"required_artifacts,omitempty"`
-	RequireNoUnresolvedTasks bool     `yaml:"require-no-unresolved-tasks" json:"require_no_unresolved_tasks,omitempty"`
+	Commands                 []string           `yaml:"commands" json:"commands,omitempty"`
+	RequiredArtifacts        []string           `yaml:"required-artifacts" json:"required_artifacts,omitempty"`
+	RequireNoUnresolvedTasks bool               `yaml:"require-no-unresolved-tasks" json:"require_no_unresolved_tasks,omitempty"`
+	Verifications            []VerificationSpec `yaml:"verifications" json:"verifications,omitempty"`
 }
 
 type OllamaProvider struct {

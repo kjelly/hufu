@@ -32,17 +32,19 @@ const (
 )
 
 type journalRecord struct {
-	Op                 string         `json:"op"` // "put", "del", or "err" (diagnostic only)
-	Agent              string         `json:"agent"`
-	Desc               string         `json:"desc"`
-	Verify             string         `json:"verify,omitempty"`
-	VerifyMode         string         `json:"verify_mode,omitempty"`
-	Output             string         `json:"output,omitempty"`
-	TS                 string         `json:"ts"`
-	Round              int            `json:"round,omitempty"`
-	RepoCommit         string         `json:"repo_commit,omitempty"`
-	ProjectFingerprint string         `json:"project_fingerprint,omitempty"`
-	Identity           *CacheIdentity `json:"identity,omitempty"`
+	Op                 string              `json:"op"` // "put", "del", or "err" (diagnostic only)
+	Agent              string              `json:"agent"`
+	Desc               string              `json:"desc"`
+	Verify             string              `json:"verify,omitempty"`
+	VerifyMode         string              `json:"verify_mode,omitempty"`
+	VerifySpec         *VerificationSpec   `json:"verify_spec,omitempty"`
+	Verification       *VerificationResult `json:"verification,omitempty"`
+	Output             string              `json:"output,omitempty"`
+	TS                 string              `json:"ts"`
+	Round              int                 `json:"round,omitempty"`
+	RepoCommit         string              `json:"repo_commit,omitempty"`
+	ProjectFingerprint string              `json:"project_fingerprint,omitempty"`
+	Identity           *CacheIdentity      `json:"identity,omitempty"`
 }
 
 type taskJournal struct {
@@ -155,21 +157,23 @@ func loadTaskJournal(workspace string, now time.Time, maxAge time.Duration, perA
 				id.ProjectFingerprint = rec.ProjectFingerprint
 			}
 			out[rec.Agent] = append(out[rec.Agent], cachedTaskEntry{
-				taskDesc:   rec.Desc,
-				verify:     rec.Verify,
-				verifyMode: normalizeVerifyMode(rec.VerifyMode),
-				output:     rec.Output,
-				pinned:     true,
-				identity:   id,
+				taskDesc:     rec.Desc,
+				verify:       rec.Verify,
+				verifyMode:   normalizeVerifyMode(rec.VerifyMode),
+				verifySpec:   cloneVerificationSpecPtr(rec.VerifySpec),
+				verification: cloneVerificationResult(rec.Verification),
+				output:       rec.Output,
+				pinned:       true,
+				identity:     id,
 			})
 		case "del":
 			norm := normalizeTaskCacheKey(rec.Desc)
-			normVerify := normalizeTaskCacheKey(rec.Verify)
-			normVerifyMode := normalizeVerifyMode(rec.VerifyMode)
+			contract := taskCacheIdentityWithSpec(rec.Desc, rec.VerifySpec, rec.Verify, rec.VerifyMode)
 			entries := out[rec.Agent]
 			fresh := entries[:0]
 			for _, e := range entries {
-				if normalizeTaskCacheKey(e.taskDesc) != norm || normalizeTaskCacheKey(e.verify) != normVerify || normalizeVerifyMode(e.verifyMode) != normVerifyMode {
+				entryContract := taskCacheIdentityWithSpec(e.taskDesc, e.verifySpec, e.verify, e.verifyMode)
+				if normalizeTaskCacheKey(e.taskDesc) != norm || entryContract != contract {
 					fresh = append(fresh, e)
 				}
 			}
@@ -226,6 +230,8 @@ func compactTaskJournalIfNeeded(workspace string, maxBytes int64, now time.Time)
 				Desc:               e.taskDesc,
 				Verify:             e.verify,
 				VerifyMode:         normalizeVerifyMode(e.verifyMode),
+				VerifySpec:         cloneVerificationSpecPtr(e.verifySpec),
+				Verification:       cloneVerificationResult(e.verification),
 				Output:             e.output,
 				TS:                 ts,
 				RepoCommit:         e.identity.RepoCommit,

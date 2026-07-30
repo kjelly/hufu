@@ -117,13 +117,22 @@ const (
 // VerificationResult is the durable evidence produced by a task's objective
 // verification command. Output is intentionally bounded by the verifier.
 type VerificationResult struct {
-	Command  string        `json:"command,omitempty"`
-	WorkDir  string        `json:"work_dir,omitempty"`
-	ExitCode int           `json:"exit_code"`
-	Stdout   string        `json:"stdout,omitempty"`
-	Stderr   string        `json:"stderr,omitempty"`
-	Duration time.Duration `json:"duration,omitempty"`
-	TimedOut bool          `json:"timed_out,omitempty"`
+	Command     string            `json:"command,omitempty"`
+	WorkDir     string            `json:"work_dir,omitempty"`
+	ExitCode    int               `json:"exit_code"`
+	Stdout      string            `json:"stdout,omitempty"`
+	Stderr      string            `json:"stderr,omitempty"`
+	Duration    time.Duration     `json:"duration,omitempty"`
+	TimedOut    bool              `json:"timed_out,omitempty"`
+	WeakWarning bool              `json:"weak_warning,omitempty"`
+	WeakReason  string            `json:"weak_reason,omitempty"`
+	Fingerprint string            `json:"fingerprint,omitempty"`
+	EvaluatedAt time.Time         `json:"evaluated_at,omitempty"`
+	Spec        *VerificationSpec `json:"spec,omitempty"`
+	// rawStdout is intentionally not serialized. Command verification keeps
+	// persisted evidence bounded, while json_assert needs the complete output
+	// from the same command invocation to parse a single JSON document.
+	rawStdout string
 }
 
 // CanTransition reports whether a normal lifecycle update may move a task
@@ -196,9 +205,10 @@ type TodoItem struct {
 	ToolTime          time.Duration
 	Source            string
 	ParentID          string
-	DependsOn         []string // IDs of tasks that must complete before this one starts
-	Verify            string   // Command to run to verify the task
-	VerifyMode        string   // success, expected_failure, or observation
+	DependsOn         []string          // IDs of tasks that must complete before this one starts
+	Verify            string            // Command to run to verify the task
+	VerifyMode        string            // success, expected_failure, or observation
+	VerifySpec        *VerificationSpec `json:"verify_spec,omitempty"`
 	VerifyResult      *VerificationResult
 	ExecutionReceipt  *ExecutionReceipt  `json:"execution_receipt,omitempty"`
 	ExecutionReceipts []ExecutionReceipt `json:"execution_receipts,omitempty"`
@@ -242,6 +252,7 @@ type TodoSpec struct {
 	ParentID      string
 	Verify        string
 	VerifyMode    string
+	VerifySpec    *VerificationSpec
 	MaxRetries    int
 	OnFailure     string
 	SideEffect    SideEffectClass
@@ -264,6 +275,7 @@ func (tl *TodoList) AddBatch(items []TodoSpec) []*TodoItem {
 			ParentID:      item.ParentID,
 			Verify:        item.Verify,
 			VerifyMode:    item.VerifyMode,
+			VerifySpec:    item.VerifySpec,
 			MaxRetries:    item.MaxRetries,
 			OnFailure:     item.OnFailure,
 			SideEffect:    item.SideEffect,
@@ -533,9 +545,15 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		dependsOn = make([]string, len(item.DependsOn))
 		copy(dependsOn, item.DependsOn)
 	}
+	var verifySpec *VerificationSpec
+	if item.VerifySpec != nil {
+		copySpec := cloneVerificationSpec(*item.VerifySpec)
+		verifySpec = &copySpec
+	}
 	var verifyResult *VerificationResult
 	if item.VerifyResult != nil {
 		copyResult := *item.VerifyResult
+		copyResult.Spec = cloneVerificationSpecPtr(item.VerifyResult.Spec)
 		verifyResult = &copyResult
 	}
 	var typedResult *TaskResult
@@ -589,6 +607,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		DependsOn:         dependsOn,
 		Verify:            item.Verify,
 		VerifyMode:        item.VerifyMode,
+		VerifySpec:        verifySpec,
 		VerifyResult:      verifyResult,
 		ExecutionReceipt:  execReceipt,
 		ExecutionReceipts: execReceipts,

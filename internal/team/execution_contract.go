@@ -84,6 +84,21 @@ func ValidateExecutionContract(task TaskDef) error {
 	}
 
 	if (c.Kind == ExecutionKindInteractive || c.Kind == ExecutionKindExternal) && c.RequiresVerification {
+		// Typed verification supersedes legacy verify fields. Validate it at task
+		// admission so an interactive/external task cannot claim it has an
+		// objective verifier while carrying an unusable (or observation-only)
+		// typed contract. Normalize with legacy fields to preserve mixed
+		// migration-era definitions.
+		if task.VerifySpec != nil {
+			spec := NormalizeVerificationSpec(*task.VerifySpec, task.Verify, task.VerifyMode)
+			if spec.Mode == "observation" {
+				return fmt.Errorf("execution contract for kind %q with requires_verification=true requires an asserting verifier, not observation mode", c.Kind)
+			}
+			if err := validateVerificationSpec(spec); err != nil {
+				return fmt.Errorf("execution contract for kind %q has invalid typed verifier: %w", c.Kind, err)
+			}
+			return nil
+		}
 		verifyCmd := strings.TrimSpace(task.Verify)
 		verifyMode := strings.ToLower(strings.TrimSpace(task.VerifyMode))
 		if verifyCmd == "" || verifyMode == "none" {

@@ -426,12 +426,14 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 			if t.Status == TaskDone && t.Output != "" {
 				agentKey := strings.ToLower(t.Agent)
 				c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
-					taskDesc:   t.Desc,
-					verify:     t.Verify,
-					verifyMode: normalizeVerifyMode(t.VerifyMode),
-					output:     t.Output,
-					generation: gen,
-					pinned:     true,
+					taskDesc:     t.Desc,
+					verify:       t.Verify,
+					verifyMode:   normalizeVerifyMode(t.VerifyMode),
+					verifySpec:   cloneVerificationSpecPtr(t.VerifySpec),
+					verification: cloneVerificationResult(t.VerifyResult),
+					output:       t.Output,
+					generation:   gen,
+					pinned:       true,
 				})
 				if len(c.taskResultCache[agentKey]) > maxTaskCacheEntries {
 					c.taskResultCache[agentKey] = c.taskResultCache[agentKey][1:]
@@ -645,6 +647,7 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 				Goal:          it.Desc,
 				Verify:        it.Verify,
 				VerifyMode:    it.VerifyMode,
+				VerifySpec:    cloneVerificationSpecPtr(it.VerifySpec),
 				SideEffect:    it.SideEffect,
 				Recovery:      it.Recovery,
 				ReconcileTool: it.ReconcileTool,

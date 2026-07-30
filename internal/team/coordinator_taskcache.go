@@ -24,11 +24,13 @@ type agentTaskResult struct {
 
 // cachedTaskEntry stores a previously completed task and its output for dedup.
 type cachedTaskEntry struct {
-	taskDesc   string
-	verify     string
-	verifyMode string
-	output     string
-	generation int64 // cacheGeneration at time of storage
+	taskDesc     string
+	verify       string
+	verifyMode   string
+	verifySpec   *VerificationSpec // typed verification spec (takes precedence over verify/verifyMode)
+	verification *VerificationResult
+	output       string
+	generation   int64 // cacheGeneration at time of storage
 	// pinned marks entries restored from a previous run (session.json or the
 	// task journal); the per-round generation prune keeps them so they survive
 	// until their first lookup. invalidateTaskCache removes them regardless.
@@ -39,6 +41,24 @@ type cachedTaskEntry struct {
 type duplicateTodoMatch struct {
 	Item   *TodoItem
 	Reason string
+}
+
+func cloneVerificationResult(src *VerificationResult) *VerificationResult {
+	if src == nil {
+		return nil
+	}
+	copy := *src
+	copy.Spec = cloneVerificationSpecPtr(src.Spec)
+	return &copy
+}
+
+func verificationForTodo(items []*TodoItem, id string) *VerificationResult {
+	for _, item := range items {
+		if item != nil && item.ID == id {
+			return cloneVerificationResult(item.VerifyResult)
+		}
+	}
+	return nil
 }
 
 func normalizeTaskCacheKey(s string) string {
@@ -56,14 +76,112 @@ func normalizeVerifyMode(mode string) string {
 	}
 }
 
+// verificationSpecCacheKey produces a stable string key for a normalized
+// VerificationSpec for use in cache identity. It canonically encodes
+// assertions as sorted JSON.
+func verificationSpecCacheKey(vs *VerificationSpec) string {
+	if vs == nil {
+		return ""
+	}
+	// Canonical order includes Equals, since json_assert allows multiple
+	// all-of assertions for the same path.
+	assertions := canonicalJSONAssertions(vs.Assertions)
+	assertionKey := ""
+	for _, a := range assertions {
+		assertionKey += fmt.Sprintf("%s=%s;", a.Path, canonicalJSONAssertionValue(a.Equals))
+	}
+	return fmt.Sprintf("type:%s|mode:%s|cmd:%s|path:%s|assertions:%s",
+		string(vs.Type), normalizeVerifyMode(vs.Mode), normalizeTaskCacheKey(vs.Command),
+		normalizeTaskCacheKey(vs.Path), assertionKey)
+}
+
 func taskCacheIdentity(taskDesc, verify, verifyMode string) string {
 	return normalizeTaskCacheKey(taskDesc) + "\nverify:" + normalizeTaskCacheKey(verify) + "\nverify_mode:" + normalizeVerifyMode(verifyMode)
+}
+
+// normalizedVerificationSpecForCache translates legacy verification fields and
+// fills typed defaults before cache matching. This keeps mixed legacy/typed
+// task definitions semantically compatible, including a legacy verify_mode on
+// a typed spec which omits Mode.
+func normalizedVerificationSpecForCache(verifySpec *VerificationSpec, verify, verifyMode string) *VerificationSpec {
+	if verifySpec == nil && strings.TrimSpace(verify) == "" {
+		return nil
+	}
+	var spec VerificationSpec
+	if verifySpec != nil {
+		spec = *verifySpec
+	}
+	normalized := NormalizeVerificationSpec(spec, verify, verifyMode)
+	return &normalized
+}
+
+func taskCacheIdentityWithSpec(taskDesc string, verifySpec *VerificationSpec, verify, verifyMode string) string {
+	if normalized := normalizedVerificationSpecForCache(verifySpec, verify, verifyMode); normalized != nil {
+		return normalizeTaskCacheKey(taskDesc) + "\nverify_spec:" + verificationSpecCacheKey(normalized)
+	}
+	return normalizeTaskCacheKey(taskDesc) + "\nverify_spec:none"
+}
+
+// duplicateTaskIdentity identifies a delegation for suppression purposes.
+// Verification is part of the observable task contract: two otherwise equal
+// tasks with different assertions must both run. Preserve the legacy no-
+// verifier key so existing in-memory delegated-task counters retain their
+// meaning across this migration.
+func duplicateTaskIdentity(agentName, taskDesc string, verifySpec *VerificationSpec, verify, verifyMode string) string {
+	agentKey := strings.ToLower(agentName)
+	if normalizedVerificationSpecForCache(verifySpec, verify, verifyMode) == nil {
+		return agentKey + ":" + normalizeTaskDesc(taskDesc)
+	}
+	return agentKey + ":" + taskCacheIdentityWithSpec(taskDesc, verifySpec, verify, verifyMode)
 }
 
 func (e cachedTaskEntry) matches(taskDesc, verify, verifyMode string) bool {
 	return normalizeTaskCacheKey(e.taskDesc) == normalizeTaskCacheKey(taskDesc) &&
 		normalizeTaskCacheKey(e.verify) == normalizeTaskCacheKey(verify) &&
 		normalizeVerifyMode(e.verifyMode) == normalizeVerifyMode(verifyMode)
+}
+
+// matchesVerificationContract reports whether an entry may be reused for a
+// request with the supplied verification contract. Semantic cache lookup must
+// use this too: legacy fields are empty for many typed specs, so comparing
+// only verify/verifyMode could otherwise conflate distinct command_exit
+// verifiers.
+func (e cachedTaskEntry) matchesVerificationContract(verifySpec *VerificationSpec, verify, verifyMode string) bool {
+	entrySpec := normalizedVerificationSpecForCache(e.verifySpec, e.verify, e.verifyMode)
+	requestedSpec := normalizedVerificationSpecForCache(verifySpec, verify, verifyMode)
+	// Observation-mode entries must not be reused for cache hits
+	if entrySpec != nil && normalizeVerifyMode(entrySpec.Mode) == "observation" {
+		return false
+	}
+	if requestedSpec != nil && normalizeVerifyMode(requestedSpec.Mode) == "observation" {
+		return false
+	}
+	return verificationSpecCacheKey(entrySpec) == verificationSpecCacheKey(requestedSpec)
+}
+
+func (e cachedTaskEntry) matchesWithSpec(taskDesc string, verifySpec *VerificationSpec, verify, verifyMode string) bool {
+	return normalizeTaskCacheKey(e.taskDesc) == normalizeTaskCacheKey(taskDesc) &&
+		e.matchesVerificationContract(verifySpec, verify, verifyMode)
+}
+
+func requiresFreshVerificationEvidence(spec *VerificationSpec) bool {
+	return spec != nil && (spec.Type == VerifyFileExists || spec.Type == VerifyFileAbsent || spec.Type == VerifyJSONAssert)
+}
+
+func (e cachedTaskEntry) verificationEvidenceFresh(spec *VerificationSpec) bool {
+	if !requiresFreshVerificationEvidence(spec) {
+		return true
+	}
+	// JSON produced by a command has no stable local artifact to fingerprint;
+	// fail closed rather than treating old command output as current evidence.
+	if spec.Type == VerifyJSONAssert && strings.TrimSpace(spec.Path) == "" {
+		return false
+	}
+	if e.verification == nil || e.verification.EvaluatedAt.IsZero() || e.verification.Fingerprint == "" {
+		return false
+	}
+	current := ComputeVerificationFingerprint(*spec, e.verification, e.verification.WorkDir)
+	return current == e.verification.Fingerprint
 }
 
 // lookupTaskCache checks whether newTask has a semantically equivalent prior
@@ -84,12 +202,24 @@ func (c *Coordinator) lookupTaskCacheWithVerify(ctx context.Context, agentKey, n
 }
 
 func (c *Coordinator) lookupTaskCacheWithVerification(ctx context.Context, agentKey, newTask, verify, verifyMode string) (string, bool) {
+	return c.lookupTaskCacheWithTypedVerification(ctx, agentKey, newTask, nil, verify, verifyMode)
+}
+
+func (c *Coordinator) lookupTaskCacheWithTypedVerification(ctx context.Context, agentKey, newTask string, verifySpec *VerificationSpec, verify, verifyMode string) (string, bool) {
 	policy := c.PolicyEngine().GetCachePolicy()
 	if policy == CacheBypass || policy == CacheRefresh {
 		return "", false
 	}
 	if c.IsCacheForbidden(newTask, verify) {
 		return "", false
+	}
+	normalized := normalizedVerificationSpecForCache(verifySpec, verify, verifyMode)
+	if normalized != nil {
+		if err := validateVerificationSpec(*normalized); err != nil {
+			// A malformed verifier is never allowed to inherit a previous
+			// success. The normal execution path records its fail-closed error.
+			return "", false
+		}
 	}
 
 	target := c.ComputeCacheIdentity(agentKey, newTask, verify, verifyMode)
@@ -106,7 +236,7 @@ func (c *Coordinator) lookupTaskCacheWithVerification(ctx context.Context, agent
 	// Step 1: exact match in current generation (newest entry first)
 	for i := len(all) - 1; i >= 0; i-- {
 		e := all[i]
-		if e.generation == gen && e.matches(newTask, verify, verifyMode) && c.PolicyEngine().IsCacheFresh(e, target) {
+		if e.generation == gen && e.matchesWithSpec(newTask, verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(normalized) && c.PolicyEngine().IsCacheFresh(e, target) {
 			return e.output, true
 		}
 	}
@@ -114,7 +244,7 @@ func (c *Coordinator) lookupTaskCacheWithVerification(ctx context.Context, agent
 	// Step 2: exact match across all generations (newest entry first)
 	for i := len(all) - 1; i >= 0; i-- {
 		e := all[i]
-		if e.matches(newTask, verify, verifyMode) && c.PolicyEngine().IsCacheFresh(e, target) {
+		if e.matchesWithSpec(newTask, verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(normalized) && c.PolicyEngine().IsCacheFresh(e, target) {
 			return e.output, true
 		}
 	}
@@ -127,7 +257,7 @@ func (c *Coordinator) lookupTaskCacheWithVerification(ctx context.Context, agent
 
 	var currentGenEntries []cachedTaskEntry
 	for _, e := range all {
-		if e.generation == gen && normalizeTaskCacheKey(e.verify) == normalizeTaskCacheKey(verify) && normalizeVerifyMode(e.verifyMode) == normalizeVerifyMode(verifyMode) && c.PolicyEngine().IsCacheFresh(e, target) {
+		if e.generation == gen && e.matchesVerificationContract(verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(normalized) && c.PolicyEngine().IsCacheFresh(e, target) {
 			currentGenEntries = append(currentGenEntries, e)
 		}
 	}
@@ -189,6 +319,10 @@ func (c *Coordinator) lookupTaskCacheAllGenerationsWithVerification(ctx context.
 // from the previous run. Cross-run reuse stays available through the
 // non-restricted lookup, which returns the cached output instead of an error.
 func (c *Coordinator) lookupTaskCacheCurrentRunWithVerification(ctx context.Context, agentKey, newTask, verify, verifyMode string) (string, string, bool) {
+	return c.lookupTaskCacheCurrentRunWithTypedVerification(ctx, agentKey, newTask, nil, verify, verifyMode)
+}
+
+func (c *Coordinator) lookupTaskCacheCurrentRunWithTypedVerification(ctx context.Context, agentKey, newTask string, verifySpec *VerificationSpec, verify, verifyMode string) (string, string, bool) {
 	c.taskResultCacheMu.RLock()
 	all := c.taskResultCache[agentKey]
 	c.taskResultCacheMu.RUnlock()
@@ -199,10 +333,14 @@ func (c *Coordinator) lookupTaskCacheCurrentRunWithVerification(ctx context.Cont
 			thisRun = append(thisRun, e)
 		}
 	}
-	return c.lookupTaskCacheIn(ctx, thisRun, newTask, verify, verifyMode)
+	return c.lookupTaskCacheInWithTypedVerification(ctx, thisRun, newTask, verifySpec, verify, verifyMode)
 }
 
 func (c *Coordinator) lookupTaskCacheIn(ctx context.Context, all []cachedTaskEntry, newTask, verify, verifyMode string) (string, string, bool) {
+	return c.lookupTaskCacheInWithTypedVerification(ctx, all, newTask, nil, verify, verifyMode)
+}
+
+func (c *Coordinator) lookupTaskCacheInWithTypedVerification(ctx context.Context, all []cachedTaskEntry, newTask string, verifySpec *VerificationSpec, verify, verifyMode string) (string, string, bool) {
 	policy := c.PolicyEngine().GetCachePolicy()
 	if policy == CacheBypass || policy == CacheRefresh {
 		return "", "", false
@@ -214,13 +352,19 @@ func (c *Coordinator) lookupTaskCacheIn(ctx context.Context, all []cachedTaskEnt
 	if len(all) == 0 {
 		return "", "", false
 	}
+	normalizedSpec := normalizedVerificationSpecForCache(verifySpec, verify, verifyMode)
+	if normalizedSpec != nil {
+		if err := validateVerificationSpec(*normalizedSpec); err != nil {
+			return "", "", false
+		}
+	}
 
 	target := c.ComputeCacheIdentity("", newTask, verify, verifyMode)
 
 	// Step 1: exact match across all generations (newest entry first)
 	for i := len(all) - 1; i >= 0; i-- {
 		e := all[i]
-		if e.matches(newTask, verify, verifyMode) && c.PolicyEngine().IsCacheFresh(e, target) {
+		if e.matchesWithSpec(newTask, verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(normalizedSpec) && c.PolicyEngine().IsCacheFresh(e, target) {
 			return e.output, e.taskDesc, true
 		}
 	}
@@ -238,7 +382,7 @@ func (c *Coordinator) lookupTaskCacheIn(ctx context.Context, all []cachedTaskEnt
 	}
 	recentEntries := make([]cachedTaskEntry, 0, len(all)-startIdx)
 	for _, e := range all[startIdx:] {
-		if normalizeTaskCacheKey(e.verify) == normalizeTaskCacheKey(verify) && normalizeVerifyMode(e.verifyMode) == normalizeVerifyMode(verifyMode) && c.PolicyEngine().IsCacheFresh(e, target) {
+		if e.matchesVerificationContract(verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(normalizedSpec) && c.PolicyEngine().IsCacheFresh(e, target) {
 			recentEntries = append(recentEntries, e)
 		}
 	}
@@ -280,19 +424,39 @@ func (c *Coordinator) storeTaskCacheWithVerify(agentKey, taskDesc, verify, outpu
 }
 
 func (c *Coordinator) storeTaskCacheWithVerification(agentKey, taskDesc, verify, verifyMode, output string) {
+	c.storeTaskCacheWithTypedVerification(agentKey, taskDesc, nil, verify, verifyMode, output)
+}
+
+func (c *Coordinator) storeTaskCacheWithTypedVerification(agentKey, taskDesc string, verifySpec *VerificationSpec, verify, verifyMode, output string) {
+	c.storeTaskCacheWithTypedVerificationEvidence(agentKey, taskDesc, verifySpec, verify, verifyMode, output, nil)
+}
+
+func (c *Coordinator) storeTaskCacheWithTypedVerificationEvidence(agentKey, taskDesc string, verifySpec *VerificationSpec, verify, verifyMode, output string, verification *VerificationResult) {
 	if c.PolicyEngine().GetCachePolicy() == CacheBypass {
+		return
+	}
+	normalizedSpec := normalizedVerificationSpecForCache(verifySpec, verify, verifyMode)
+	// Observation-mode results must not be cached for reuse. Use the same
+	// translation as execution so a mixed typed/legacy definition cannot lose
+	// its observation mode at the cache boundary.
+	if normalizedSpec != nil && normalizeVerifyMode(normalizedSpec.Mode) == "observation" {
+		return
+	}
+	if requiresFreshVerificationEvidence(normalizedSpec) && (verification == nil || verification.ExitCode != 0 || verification.EvaluatedAt.IsZero() || verification.Fingerprint == "") {
 		return
 	}
 	gen := c.cacheGeneration.Load()
 	identity := c.ComputeCacheIdentity(agentKey, taskDesc, verify, verifyMode)
 	c.taskResultCacheMu.Lock()
 	c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
-		taskDesc:   taskDesc,
-		verify:     verify,
-		verifyMode: normalizeVerifyMode(verifyMode),
-		output:     output,
-		generation: gen,
-		identity:   identity,
+		taskDesc:     taskDesc,
+		verify:       verify,
+		verifyMode:   normalizeVerifyMode(verifyMode),
+		verifySpec:   cloneVerificationSpecPtr(normalizedSpec),
+		verification: cloneVerificationResult(verification),
+		output:       output,
+		generation:   gen,
+		identity:     identity,
 	})
 	if len(c.taskResultCache[agentKey]) > maxTaskCacheEntries {
 		c.taskResultCache[agentKey] = c.taskResultCache[agentKey][1:]
@@ -305,6 +469,8 @@ func (c *Coordinator) storeTaskCacheWithVerification(agentKey, taskDesc, verify,
 		Desc:               taskDesc,
 		Verify:             verify,
 		VerifyMode:         normalizeVerifyMode(verifyMode),
+		VerifySpec:         cloneVerificationSpecPtr(normalizedSpec),
+		Verification:       cloneVerificationResult(verification),
 		Output:             output,
 		TS:                 time.Now().Format(time.RFC3339),
 		Round:              c.round,
@@ -328,13 +494,22 @@ func (c *Coordinator) invalidateTaskCacheWithVerify(agentKey, taskDesc, verify s
 }
 
 func (c *Coordinator) invalidateTaskCacheWithVerification(agentKey, taskDesc, verify, verifyMode string) {
+	c.invalidateTaskCacheWithTypedVerification(agentKey, taskDesc, nil, verify, verifyMode)
+}
+
+// invalidateTaskCacheWithTypedVerification removes only entries whose complete
+// verification contract matches. A typed verifier is part of the cache
+// identity; comparing legacy verify fields alone would delete unrelated typed
+// results which conventionally leave those fields empty.
+func (c *Coordinator) invalidateTaskCacheWithTypedVerification(agentKey, taskDesc string, verifySpec *VerificationSpec, verify, verifyMode string) {
 	normalized := normalizeTaskCacheKey(taskDesc)
-	normalizedVerify := normalizeTaskCacheKey(verify)
+	contract := taskCacheIdentityWithSpec(taskDesc, verifySpec, verify, verifyMode)
 	c.taskResultCacheMu.Lock()
 	entries := c.taskResultCache[agentKey]
 	fresh := entries[:0]
 	for _, e := range entries {
-		if normalizeTaskCacheKey(e.taskDesc) != normalized || normalizeTaskCacheKey(e.verify) != normalizedVerify || normalizeVerifyMode(e.verifyMode) != normalizeVerifyMode(verifyMode) {
+		entryContract := taskCacheIdentityWithSpec(e.taskDesc, e.verifySpec, e.verify, e.verifyMode)
+		if normalizeTaskCacheKey(e.taskDesc) != normalized || entryContract != contract {
 			fresh = append(fresh, e)
 		}
 	}
@@ -342,10 +517,10 @@ func (c *Coordinator) invalidateTaskCacheWithVerification(agentKey, taskDesc, ve
 	c.taskResultCacheMu.Unlock()
 
 	// Tombstone so a restart cannot resurrect the invalidated result.
-	c.journalAppend(journalRecord{Op: "del", Agent: agentKey, Desc: taskDesc, Verify: verify, VerifyMode: normalizeVerifyMode(verifyMode), TS: time.Now().Format(time.RFC3339)})
+	c.journalAppend(journalRecord{Op: "del", Agent: agentKey, Desc: taskDesc, Verify: verify, VerifyMode: normalizeVerifyMode(verifyMode), VerifySpec: cloneVerificationSpecPtr(verifySpec), TS: time.Now().Format(time.RFC3339)})
 }
 
-func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, desc, verify, verifyMode string) *duplicateTodoMatch {
+func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, desc string, verifySpec *VerificationSpec, verify, verifyMode string) *duplicateTodoMatch {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return nil
 	}
@@ -354,7 +529,7 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 		return nil
 	}
 
-	normalizedNew := taskCacheIdentity(desc, verify, verifyMode)
+	normalizedNew := taskCacheIdentityWithSpec(desc, verifySpec, verify, verifyMode)
 	exactEligible := make([]*TodoItem, 0, len(items))
 	semanticEligible := make([]*TodoItem, 0, len(items))
 	for _, item := range items {
@@ -375,7 +550,7 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 	}
 
 	for _, item := range exactEligible {
-		if taskCacheIdentity(item.Desc, item.Verify, item.VerifyMode) == normalizedNew {
+		if taskCacheIdentityWithSpec(item.Desc, item.VerifySpec, item.Verify, item.VerifyMode) == normalizedNew {
 			return &duplicateTodoMatch{
 				Item:   item,
 				Reason: fmt.Sprintf("existing task %s already has status %s", item.ID, item.Status),
@@ -394,7 +569,7 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 
 	pastDescs := make([]string, len(semanticEligible))
 	for i, item := range semanticEligible {
-		pastDescs[i] = taskCacheIdentity(item.Desc, item.Verify, item.VerifyMode)
+		pastDescs[i] = taskCacheIdentityWithSpec(item.Desc, item.VerifySpec, item.Verify, item.VerifyMode)
 	}
 
 	sidecarCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -403,7 +578,7 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 	if c.think {
 		c.emitThinkSidecar("SimilarTask", fmt.Sprintf("checking todo similarity against active/failed tasks: %.50s", desc))
 	}
-	idx, err := s.SimilarTask(sidecarCtx, taskCacheIdentity(desc, verify, verifyMode), pastDescs)
+	idx, err := s.SimilarTask(sidecarCtx, taskCacheIdentityWithSpec(desc, verifySpec, verify, verifyMode), pastDescs)
 	if err != nil || idx < 0 || idx >= len(semanticEligible) {
 		return nil
 	}
@@ -428,7 +603,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
 		}
-		key := strings.ToLower(t.Agent) + ":" + normalizeTaskDesc(desc)
+		key := duplicateTaskIdentity(t.Agent, desc, t.VerifySpec, t.Verify, t.VerifyMode)
 		localCounts[key]++
 	}
 	_ = localCounts
@@ -442,7 +617,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
 		}
-		key := strings.ToLower(t.Agent) + ":" + normalizeTaskDesc(desc)
+		key := duplicateTaskIdentity(t.Agent, desc, t.VerifySpec, t.Verify, t.VerifyMode)
 		batchSeen[key]++
 
 		// Check if this exact task was already delegated in a previous round
@@ -469,7 +644,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
 		}
-		key := strings.ToLower(t.Agent) + ":" + normalizeTaskDesc(desc)
+		key := duplicateTaskIdentity(t.Agent, desc, t.VerifySpec, t.Verify, t.VerifyMode)
 		c.delegatedTasks[key]++
 	}
 	c.delegatedTasksMu.Unlock()
@@ -484,7 +659,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 			desc += "\nconstraints: " + t.Constraints
 		}
 		agentKey := strings.ToLower(t.Agent)
-		if match := c.findExistingTodoDuplicate(ctx, agentKey, desc, t.Verify, t.VerifyMode); match != nil {
+		if match := c.findExistingTodoDuplicate(ctx, agentKey, desc, t.VerifySpec, t.Verify, t.VerifyMode); match != nil {
 			duplicates[i] = true
 			suppressed[i] = match
 			warnings = append(warnings, fmt.Sprintf("SUPPRESSED DUPLICATE: %s (agent=%s, %s)", truncateTaskDesc(desc), t.Agent, match.Reason))
@@ -506,7 +681,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 			}
 			agentKey := strings.ToLower(t.Agent)
 			dupCtx, dupCancel := context.WithTimeout(ctx, 5*time.Second)
-			cachedOutput, cachedDesc, cacheOK := c.lookupTaskCacheCurrentRunWithVerification(dupCtx, agentKey, desc, t.Verify, t.VerifyMode)
+			cachedOutput, cachedDesc, cacheOK := c.lookupTaskCacheCurrentRunWithTypedVerification(dupCtx, agentKey, desc, t.VerifySpec, t.Verify, t.VerifyMode)
 			dupCancel()
 			if cacheOK {
 				warnings = append(warnings, fmt.Sprintf("SEMANTIC DUPLICATE: %s (similar to completed task: %q)", truncateTaskDesc(desc), truncateTaskDesc(cachedDesc)))

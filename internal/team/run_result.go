@@ -116,6 +116,16 @@ func WrapRunOutcomeError(cause error, result *RunResult) error {
 }
 
 type AcceptanceSpec = agent.AcceptanceSpec
+type VerificationSpec = agent.VerificationSpec
+type VerificationType = agent.VerificationType
+type JSONAssertion = agent.JSONAssertion
+
+const (
+	VerifyCommandExit = agent.VerifyCommandExit
+	VerifyFileExists  = agent.VerifyFileExists
+	VerifyFileAbsent  = agent.VerifyFileAbsent
+	VerifyJSONAssert  = agent.VerifyJSONAssert
+)
 
 // AcceptanceState describes whether an acceptance gate was configured and,
 // when configured, whether it passed. NotConfigured is deliberately distinct
@@ -127,6 +137,23 @@ const (
 	AcceptancePassed        AcceptanceState = "passed"
 	AcceptanceFailed        AcceptanceState = "failed"
 )
+
+func cloneVerificationSpec(v VerificationSpec) VerificationSpec {
+	c := v
+	if v.Assertions != nil {
+		c.Assertions = append([]JSONAssertion(nil), v.Assertions...)
+	}
+	return c
+}
+
+// cloneVerificationSpecPtr returns nil if src is nil, or a deep clone otherwise.
+func cloneVerificationSpecPtr(src *VerificationSpec) *VerificationSpec {
+	if src == nil {
+		return nil
+	}
+	clone := cloneVerificationSpec(*src)
+	return &clone
+}
 
 // cloneAcceptanceSpec detaches every caller-owned slice from the acceptance
 // contract. AcceptanceSpec is part of the run's immutable contract after it is
@@ -140,15 +167,22 @@ func cloneAcceptanceSpec(spec AcceptanceSpec) AcceptanceSpec {
 	if spec.RequiredArtifacts != nil {
 		clone.RequiredArtifacts = append([]string(nil), spec.RequiredArtifacts...)
 	}
+	if spec.Verifications != nil {
+		clone.Verifications = make([]VerificationSpec, len(spec.Verifications))
+		for i, v := range spec.Verifications {
+			clone.Verifications[i] = cloneVerificationSpec(v)
+		}
+	}
 	return clone
 }
 
 type AcceptanceResult struct {
-	State             AcceptanceState `json:"state"`
-	Passed            bool            `json:"passed"`
-	Errors            []string        `json:"errors,omitempty"`
-	Commands          []string        `json:"commands,omitempty"`
-	RequiredArtifacts []string        `json:"required_artifacts,omitempty"`
+	State                AcceptanceState       `json:"state"`
+	Passed               bool                  `json:"passed"`
+	Errors               []string              `json:"errors,omitempty"`
+	Commands             []string              `json:"commands,omitempty"`
+	RequiredArtifacts    []string              `json:"required_artifacts,omitempty"`
+	VerificationEvidence []*VerificationResult `json:"verification_evidence,omitempty"`
 }
 
 // MarshalJSON canonicalizes the legacy Passed field from the tri-state value.

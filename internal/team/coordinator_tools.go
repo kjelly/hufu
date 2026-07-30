@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -270,6 +271,7 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 	res := &AcceptanceResult{State: AcceptanceNotConfigured}
 	c.mu.RLock()
 	var spec *AcceptanceSpec
+	acceptanceRevision := c.acceptanceContractRevision
 	if c.acceptanceSpec != nil {
 		specCopy := cloneAcceptanceSpec(*c.acceptanceSpec)
 		spec = &specCopy
@@ -283,35 +285,41 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 	if spec == nil {
 		return res, nil
 	}
+	// An empty structured value is the compatibility representation of no
+	// acceptance gate (for example SetAcceptance("")). It is not evidence of
+	// goal completion and must retain the not_configured state.
+	if !acceptanceSpecHasChecks(*spec) {
+		return res, nil
+	}
 	res.State = AcceptancePassed
 	res.Passed = true
 
 	res.Commands = spec.Commands
 	res.RequiredArtifacts = spec.RequiredArtifacts
 
-	// 1. Required Artifacts check
-	for _, artPath := range spec.RequiredArtifacts {
-		artPath = strings.TrimSpace(artPath)
-		if artPath == "" {
-			continue
-		}
-		evalPath := artPath
-		if !filepath.IsAbs(evalPath) {
-			if c.projectDir != "" {
-				evalPath = filepath.Join(c.projectDir, artPath)
-			} else if c.session != nil && c.session.Workspace != "" {
-				evalPath = filepath.Join(c.session.Workspace, artPath)
-			}
-		}
-		if _, err := os.Stat(evalPath); err != nil {
-			errMsg := fmt.Sprintf("required artifact missing: %s", artPath)
-			res.Errors = append(res.Errors, errMsg)
-			res.Passed = false
-			res.State = AcceptanceFailed
+	// Build all verification specifications (translated legacy + explicit typed verifications)
+	var allSpecs []VerificationSpec
+	for _, cmd := range spec.Commands {
+		if strings.TrimSpace(cmd) != "" {
+			allSpecs = append(allSpecs, VerificationSpec{
+				Type:    VerifyCommandExit,
+				Mode:    "success",
+				Command: cmd,
+			})
 		}
 	}
+	for _, artPath := range spec.RequiredArtifacts {
+		if strings.TrimSpace(artPath) != "" {
+			allSpecs = append(allSpecs, VerificationSpec{
+				Type: VerifyFileExists,
+				Mode: "success",
+				Path: artPath,
+			})
+		}
+	}
+	allSpecs = append(allSpecs, spec.Verifications...)
 
-	// 2. RequireNoUnresolvedTasks check
+	// RequireNoUnresolvedTasks check
 	if spec.RequireNoUnresolvedTasks {
 		items := c.taskTracker.TodoList().Items()
 		unresolved := append(failedTodoItems(items), pendingTodoItems(items)...)
@@ -323,45 +331,103 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 		}
 	}
 
-	// 3. Shell commands check
 	shell := "sh"
 	if c.session != nil && c.session.Config.Shell != "" {
 		shell = c.session.Config.Shell
 	}
-	timeout := time.Duration(c.session.Config.Timeout) * time.Second
-	if timeout <= 0 || timeout > 300*time.Second {
-		timeout = 300 * time.Second
+	workDir := c.verificationWorkDir()
+	securityMode := ""
+	if c.session != nil {
+		securityMode = fmt.Sprintf("profile=%s;no-net=%t;force-mcp=%t;shell=%s",
+			c.session.Config.ExecutionProfile, c.session.Config.NoNet, c.session.Config.ForceMCP, shell)
 	}
 
-	for _, cmd := range spec.Commands {
-		cmd = strings.TrimSpace(cmd)
-		if cmd == "" {
-			continue
+	// Use a bounded timeout for each acceptance verification (same as task verification).
+	acceptanceTimeout := c.verifyTaskTimeout()
+	var evidence []*VerificationResult
+
+	mandatoryPassedCount := 0
+	for _, vSpec := range allSpecs {
+		normalizedSpec := NormalizeVerificationSpec(vSpec, "", "")
+		// Invalid verifier configuration is never an observation. Validate before
+		// the observation-mode skip so a malformed supplemental verifier cannot
+		// make an otherwise passing acceptance contract appear satisfied.
+		validationErr := validateVerificationSpec(normalizedSpec)
+		verifyCtx, verifyCancel := context.WithTimeout(parentCtx, acceptanceTimeout)
+		vRes, vErr := ExecuteVerificationSpec(verifyCtx, shell, workDir, vSpec)
+		verifyCancel()
+		// Always collect evidence for durable inspection
+		if vRes != nil {
+			// Acceptance evidence is tied to the immutable contract revision and
+			// security settings that governed execution. A later contract or
+			// profile change must not make this evidence look reusable.
+			vRes.Fingerprint = ComputeVerificationFingerprintFull(
+				normalizedSpec, vRes, workDir, strconv.Itoa(acceptanceRevision), securityMode)
+			evidence = append(evidence, vRes)
 		}
-		ctx, cancel := context.WithTimeout(parentCtx, timeout)
-		ex := exec.CommandContext(ctx, shell, "-c", cmd)
-		ex.Env = utils.SanitizeSubprocessEnv(os.Environ())
-		if c.projectDir != "" {
-			ex.Dir = c.projectDir
-		}
-		out, err := ex.CombinedOutput()
-		cancel()
-		if err != nil {
-			detail := strings.TrimSpace(string(out))
-			if detail != "" {
-				detail = ": " + utils.TruncateString(detail, 500)
-			}
-			errMsg := fmt.Sprintf("acceptance command failed (%s): %v%s", cmd, err, detail)
+		if validationErr != nil {
+			errMsg := fmt.Sprintf("acceptance verification malformed (%s): %s", normalizedSpec.Type, validationErr)
 			res.Errors = append(res.Errors, errMsg)
 			res.Passed = false
 			res.State = AcceptanceFailed
+			continue
 		}
+		if normalizedSpec.Mode == "observation" {
+			// Observation records useful evidence, but it must not count as a
+			// mandatory acceptance criterion. It is valid to collect observations
+			// alongside actual assertions; an observation-only contract is rejected
+			// below because mandatoryPassedCount remains zero.
+			continue
+		}
+		// ExecuteVerificationSpec has already applied the verification mode.
+		// In particular, an expected_failure assertion is successful when its
+		// underlying check exits non-zero. Looking at ExitCode again here would
+		// incorrectly reject that valid assertion (and would make the mode
+		// usable for task verification but not run acceptance).
+		if vErr != nil || vRes == nil {
+			errMsg := fmt.Sprintf("acceptance verification failed (%s)", vSpec.Type)
+			if vErr != nil {
+				errMsg += ": " + vErr.Error()
+			}
+			if vRes != nil && vRes.Stderr != "" {
+				errMsg += ": " + utils.TruncateString(vRes.Stderr, 500)
+			}
+			res.Errors = append(res.Errors, errMsg)
+			res.Passed = false
+			res.State = AcceptanceFailed
+		} else {
+			mandatoryPassedCount++
+		}
+	}
+	res.VerificationEvidence = evidence
+
+	if len(allSpecs) > 0 && mandatoryPassedCount == 0 && res.Passed {
+		res.Errors = append(res.Errors, "no mandatory acceptance criteria passed")
+		res.Passed = false
+		res.State = AcceptanceFailed
 	}
 
 	if !res.Passed {
 		return res, fmt.Errorf("acceptance check failed: %s", strings.Join(res.Errors, "; "))
 	}
 	return res, nil
+}
+
+func acceptanceSpecHasChecks(spec AcceptanceSpec) bool {
+	if spec.RequireNoUnresolvedTasks {
+		return true
+	}
+	for _, command := range spec.Commands {
+		if strings.TrimSpace(command) != "" {
+			return true
+		}
+	}
+	for _, path := range spec.RequiredArtifacts {
+		if strings.TrimSpace(path) != "" {
+			return true
+		}
+	}
+	return len(spec.Verifications) > 0
 }
 
 // runRollback runs the team's optional rollback command or default git rollback.

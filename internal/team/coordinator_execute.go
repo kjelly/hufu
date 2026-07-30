@@ -203,6 +203,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			ParentID:      "",
 			Verify:        t.Verify,
 			VerifyMode:    t.VerifyMode,
+			VerifySpec:    cloneVerificationSpecPtr(t.VerifySpec),
 			MaxRetries:    t.MaxRetries,
 			SideEffect:    sideEffect,
 			Recovery:      recovery,

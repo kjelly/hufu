@@ -4,13 +4,11 @@ package team
 // status reporting, deliverable verification, and failure reflection.
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -604,20 +602,24 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			// Deliverable verification: run an objective check before accepting
 			// the agent's claim of success. A non-zero exit converts this into a
 			// failure that flows into the normal retry path below.
-			if err == nil && task.Verify != "" {
+			if err == nil && (task.Verify != "" || task.VerifySpec != nil) {
 				if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskVerifying, "running objective verification", ""); statusErr != nil {
 					err = fmt.Errorf("enter verifying state: %w", statusErr)
 				} else {
 					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-					c.report(c.newEvent("verify_start").withAgent(agentName).withMessage(task.Verify).withTodoID(todoID))
+					vMsg := task.Verify
+					if vMsg == "" && task.VerifySpec != nil {
+						vMsg = string(task.VerifySpec.Type)
+					}
+					c.report(c.newEvent("verify_start").withAgent(agentName).withMessage(vMsg).withTodoID(todoID))
 				}
 				if err == nil {
-					verification, verr := c.verifyTaskDeliverableWithMode(parentCtx, agentDef, task.Verify, task.VerifyMode)
+					verification, verr := c.verifyTaskDeliverableWithSpec(parentCtx, agentDef, task)
 					if verification != nil {
 						_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
 					}
 					if verr != nil {
-						err = fmt.Errorf("deliverable verification failed (command %q): %w", task.Verify, verr)
+						err = fmt.Errorf("deliverable verification failed: %w", verr)
 						c.report(c.newEvent("verify_error").withAgent(agentName).withMessage(fmt.Sprintf("verification failed: %v", verr)).withTodoID(todoID))
 					} else {
 						c.report(c.newEvent("verify_done").withAgent(agentName).withMessage("objective verification passed").withTodoID(todoID))
@@ -847,13 +849,17 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		c.reconcileTaskStatusProjection()
 		return "", fmt.Errorf("task completion validation failed: %w", verr)
 	}
-	if task.Verify != "" {
+	if task.Verify != "" || task.VerifySpec != nil {
 		if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskVerifying, "running objective verification", ""); err != nil {
 			c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 			return "", err
 		}
-		c.report(c.newEvent("verify_start").withAgent(task.Agent).withMessage(task.Verify).withTodoID(todoID))
-		verification, verifyErr := c.verifyTaskDeliverableWithMode(ctx, nil, task.Verify, task.VerifyMode)
+		vMsg := task.Verify
+		if vMsg == "" && task.VerifySpec != nil {
+			vMsg = string(task.VerifySpec.Type)
+		}
+		c.report(c.newEvent("verify_start").withAgent(task.Agent).withMessage(vMsg).withTodoID(todoID))
+		verification, verifyErr := c.verifyTaskDeliverableWithSpec(ctx, nil, task)
 		if verification != nil {
 			_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
 		}
@@ -862,7 +868,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 			c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, verifyErr.Error())
 			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("verify_error").withAgent(task.Agent).withMessage(verifyErr.Error()).withTodoID(todoID))
-			return "", fmt.Errorf("deliverable verification failed (command %q): %w", task.Verify, verifyErr)
+			return "", fmt.Errorf("deliverable verification failed: %w", verifyErr)
 		}
 		c.report(c.newEvent("verify_done").withAgent(task.Agent).withMessage("objective verification passed").withTodoID(todoID))
 	}
@@ -1200,141 +1206,65 @@ func (c *Coordinator) buildConcurrentTasksContext(excludeID string) string {
 	return "## Concurrent Tasks\n\nThe following agents are running in parallel with you. Avoid overlapping with their work:\n\n" + strings.Join(running, "\n")
 }
 
-// verifyTaskDeliverable runs the task's optional verify command and returns a
-// non-nil error if the command exits non-zero (or cannot be run). This provides
-// an objective, non-LLM check that the deliverable actually exists/works before
-// a task is accepted as done. The command runs in the project directory using
-// the team's (or agent's) configured shell, falling back to "sh".
-func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef *agent.AgentDef, command string) (*VerificationResult, error) {
-	command = strings.TrimSpace(command)
-	if command == "" {
+func (c *Coordinator) verifyTaskDeliverableWithSpec(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef) (*VerificationResult, error) {
+	spec := task.VerifySpec
+	if spec == nil && task.Verify != "" {
+		spec = &agent.VerificationSpec{
+			Type:    agent.VerifyCommandExit,
+			Mode:    task.VerifyMode,
+			Command: task.Verify,
+		}
+	}
+	if spec == nil {
 		return nil, nil
 	}
-
+	// Mixed legacy/typed task definitions are valid during migration. Preserve
+	// their legacy command and mode when the typed object omits either value,
+	// rather than silently defaulting to a different assertion mode.
+	normalizedSpec := NormalizeVerificationSpec(*spec, task.Verify, task.VerifyMode)
 	shell := "sh"
 	if agentDef != nil && agentDef.Shell != "" {
 		shell = agentDef.Shell
 	} else if c != nil && c.session != nil && c.session.Config.Shell != "" {
 		shell = c.session.Config.Shell
 	}
-
-	// A task that spent its whole budget (e.g. waiting on consent) reaches
-	// here with parentCtx already expired; running the command on that
-	// context kills it at 0s and reports a misleading "verification timed
-	// out after 0s" that masks the real failure. Say what actually happened.
-	if err := parentCtx.Err(); err != nil {
-		return nil, fmt.Errorf("task deadline exceeded before the verify command could run: %w", err)
-	}
-
+	workDir := c.verificationWorkDir()
 	timeout := c.verifyTaskTimeout()
-	ctx, cancel := context.WithTimeout(parentCtx, timeout)
+	verifyCtx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
+	return ExecuteVerificationSpec(verifyCtx, shell, workDir, normalizedSpec)
+}
 
-	cmd := exec.CommandContext(ctx, shell, "-c", command)
-	cmd.Env = utils.SanitizeSubprocessEnv(os.Environ())
-	if c.projectDir != "" {
-		cmd.Dir = c.projectDir
-	}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	started := time.Now()
-	err := cmd.Run()
-	result := &VerificationResult{
-		Command:  command,
-		WorkDir:  c.verificationWorkDir(),
-		ExitCode: 0,
-		Stdout:   utils.TruncateString(strings.TrimSpace(stdout.String()), 2000),
-		Stderr:   utils.TruncateString(strings.TrimSpace(stderr.String()), 2000),
-		Duration: time.Since(started),
-		TimedOut: errors.Is(ctx.Err(), context.DeadlineExceeded),
-	}
-	if err != nil {
-		result.ExitCode = -1
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			result.ExitCode = exitErr.ExitCode()
-		}
-		detail := strings.TrimSpace(strings.Join([]string{result.Stdout, result.Stderr}, "\n"))
-		if detail != "" {
-			detail = ": " + utils.TruncateString(detail, 500)
-		}
-		if result.TimedOut {
-			// Distinguish the verify command being slow from the task's own
-			// deadline expiring mid-verify: only the former should be blamed
-			// on the verify command.
-			if parentErr := parentCtx.Err(); parentErr != nil && result.Duration < timeout {
-				return result, fmt.Errorf("task deadline exceeded while the verify command was running (killed after %s): %w", result.Duration.Round(time.Millisecond), parentErr)
-			}
-			return result, fmt.Errorf("verification timed out after %s%s", result.Duration.Round(time.Millisecond), detail)
-		}
-		// CommandContext returns an ExitError when it kills a process after the
-		// parent context is cancelled. That is not an observed non-zero command
-		// exit: callers must be able to distinguish it from a real result.
-		if parentErr := parentCtx.Err(); parentErr != nil {
-			return result, fmt.Errorf("task context ended while the verify command was running: %w", parentErr)
-		}
-		if result.ExitCode == 127 {
-			// A coordinator model once filled verify with a natural-language
-			// sentence, which sh dutifully failed with "command not found".
-			return result, fmt.Errorf("%v%s — exit 127 means the command was not found: the verify field must be a runnable shell command (e.g. 'test -f report.md'), not a natural-language description of the expected outcome", err, detail)
-		}
-		// Detect verify field filled with natural-language text (e.g. Chinese
-		// sentences): these produce exit 1 with an "unexpected data" error from
-		// the tool being invoked. Identify this by non-ASCII characters in the
-		// verify command itself.
-		if containsNonASCII(command) {
-			return result, fmt.Errorf("%w%s — the verify field appears to contain non-ASCII text (possibly natural language). The verify field must be a runnable shell command, e.g. 'test -f report.md' or 'virsh list --all | grep -c running', not a description of the expected outcome", err, detail)
-		}
-		// Detect wrong-polarity verify for cleanup/delete tasks: the command
-		// used grep/grep-c to assert a resource EXISTS, but the task deleted
-		// it, so grep exits 1 with stdout "0" (or empty). A successful cleanup
-		// should use `! grep -q ...` or `! grep -c ...` so that absence → exit 0.
-		if result.ExitCode == 1 && strings.TrimSpace(result.Stdout) == "0" &&
-			(strings.Contains(command, "grep -c") || strings.Contains(command, "grep-c")) {
-			return result, fmt.Errorf("%w%s — wrong polarity: the verify command checked that a resource EXISTS (grep-c returned 0 = not found), but this looks like a cleanup task where success means the resource is GONE. Use '!' negation for delete/cleanup verify, e.g. '! ovs-vsctl show 2>&1 | grep -q br-verify'", err, detail)
-		}
-		return result, fmt.Errorf("%w%s", err, detail)
-	}
-	return result, nil
+// verifyTaskDeliverable runs the task's optional verify command and returns a
+// non-nil error if the command exits non-zero (or cannot be run). This provides
+// an objective, non-LLM check that the deliverable actually exists/works before
+// a task is accepted as done. The command runs in the project directory using
+// the team's (or agent's) configured shell, falling back to "sh".
+func (c *Coordinator) verifyTaskDeliverable(parentCtx context.Context, agentDef *agent.AgentDef, command string) (*VerificationResult, error) {
+	return c.verifyTaskDeliverableWithMode(parentCtx, agentDef, command, "success")
 }
 
 func (c *Coordinator) verifyTaskDeliverableWithMode(ctx context.Context, agentDef *agent.AgentDef, command, mode string) (*VerificationResult, error) {
-	result, err := c.verifyTaskDeliverable(ctx, agentDef, command)
-	switch mode {
-	case "", "success":
-		return result, err
-	case "expected_failure":
-		if isExpectedVerificationExit(err, result) {
-			return result, nil
-		}
-		if err == nil {
-			return result, fmt.Errorf("verification expected a non-zero exit but succeeded")
-		}
-		return result, err
-	case "observation":
-		// Observation captures a command's normal output regardless of its exit
-		// status, but a timeout, cancellation, or failure to launch the command
-		// produced no valid observation and must still fail the task.
-		if err == nil || isExpectedVerificationExit(err, result) {
-			return result, nil
-		}
-		return result, err
-	default:
-		return result, fmt.Errorf("invalid verify_mode %q", mode)
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil, nil
 	}
-}
-
-// isExpectedVerificationExit reports the one failure class that verification
-// modes may intentionally accept: a command that started and exited non-zero.
-// In particular, an ExitCode alone is insufficient: commands killed by a
-// deadline can also leave one behind.
-func isExpectedVerificationExit(err error, result *VerificationResult) bool {
-	if err == nil || result == nil || result.TimedOut || result.ExitCode == 0 {
-		return false
+	shell := "sh"
+	if agentDef != nil && agentDef.Shell != "" {
+		shell = agentDef.Shell
+	} else if c != nil && c.session != nil && c.session.Config.Shell != "" {
+		shell = c.session.Config.Shell
 	}
-	var exitErr *exec.ExitError
-	return errors.As(err, &exitErr)
+	workDir := c.verificationWorkDir()
+	spec := VerificationSpec{
+		Type:    VerifyCommandExit,
+		Mode:    mode,
+		Command: command,
+	}
+	timeout := c.verifyTaskTimeout()
+	verifyCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return ExecuteVerificationSpec(verifyCtx, shell, workDir, spec)
 }
 
 func (c *Coordinator) verificationWorkDir() string {

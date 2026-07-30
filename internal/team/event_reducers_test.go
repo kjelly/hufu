@@ -65,3 +65,24 @@ func TestReducersEmptyAndMalformedEvents(t *testing.T) {
 		t.Errorf("expected 1 todo item created from TaskID")
 	}
 }
+
+func TestReduceToTodoList_ReconstructsTypedVerificationSpec(t *testing.T) {
+	payload, err := json.Marshal(map[string]any{
+		"id":          "typed-verify",
+		"desc":        "write verified report",
+		"status":      "pending",
+		"verify_spec": VerificationSpec{Type: VerifyJSONAssert, Path: "report.json", Assertions: []JSONAssertion{{Path: "status", Equals: "ok"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	todos := ReduceToTodoList([]RunEvent{{Type: "task_created", TaskID: "typed-verify", Payload: payload}})
+	if len(todos) != 1 || todos[0].VerifySpec == nil {
+		t.Fatalf("typed verifier was lost during event reduction: %#v", todos)
+	}
+	got := todos[0].VerifySpec
+	if got.Type != VerifyJSONAssert || got.Path != "report.json" || len(got.Assertions) != 1 || got.Assertions[0].Path != "status" || got.Assertions[0].Equals != "ok" {
+		t.Fatalf("reduced typed verifier = %#v", got)
+	}
+}

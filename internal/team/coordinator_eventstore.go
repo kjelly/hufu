@@ -1,6 +1,8 @@
 package team
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -147,7 +149,7 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 			continue
 		}
 
-		transitionKey := fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)
+		transitionKey := taskTransitionEventKey(item)
 		c.mu.Lock()
 		alreadyEmitted := c.emittedTaskTransitions[transitionKey]
 		if !alreadyEmitted {
@@ -170,6 +172,9 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 		if item.Verify != "" {
 			payload["verify"] = item.Verify
 			payload["verify_mode"] = item.VerifyMode
+		}
+		if item.VerifySpec != nil {
+			payload["verify_spec"] = item.VerifySpec
 		}
 		if item.VerifyResult != nil {
 			payload["verify_result"] = item.VerifyResult
@@ -200,6 +205,24 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 
 		c.emitArtifactEvents(item)
 	}
+}
+
+// taskTransitionEventKey identifies the checkpointed task state that has
+// already been emitted. A verifier is part of that durable state: retaining
+// only ID/status/retry would suppress a changed typed contract and make branch
+// replay restore stale verification requirements. The no-verifier form stays
+// byte-for-byte compatible with existing idempotency keys.
+func taskTransitionEventKey(item *TodoItem) string {
+	if item == nil {
+		return ""
+	}
+	base := fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)
+	if normalizedVerificationSpecForCache(item.VerifySpec, item.Verify, item.VerifyMode) == nil {
+		return base
+	}
+	contract := taskCacheIdentityWithSpec("", item.VerifySpec, item.Verify, item.VerifyMode)
+	sum := sha256.Sum256([]byte(contract))
+	return base + ":verify-" + hex.EncodeToString(sum[:8])
 }
 
 // emitArtifactEvents dual-writes one artifact_created event per artifact path

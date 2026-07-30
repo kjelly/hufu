@@ -170,6 +170,68 @@ func TestCheckDuplicateTasks_SuppressesExistingActiveTodo(t *testing.T) {
 	}
 }
 
+func TestCheckDuplicateTasks_TypedVerificationIdentity(t *testing.T) {
+	c := &Coordinator{
+		delegatedTasks:   make(map[string]int),
+		delegatedTasksMu: sync.Mutex{},
+		taskTracker:      NewTaskTracker(),
+		taskResultCache:  make(map[string][]cachedTaskEntry),
+	}
+	c.SetPolicyEngine(&defaultPolicyEngine{c: c})
+
+	// A different contract must not be suppressed by the global/batch identity.
+	tasks := []TaskDef{
+		{Agent: "helper", Goal: "verify generated report", VerifySpec: &VerificationSpec{Type: VerifyFileExists, Path: "report-a.json"}},
+		{Agent: "helper", Goal: "verify generated report", VerifySpec: &VerificationSpec{Type: VerifyJSONAssert, Path: "report-b.json", Assertions: []JSONAssertion{{Path: "status", Equals: "ok"}}}},
+	}
+	_, duplicates, _ := c.checkDuplicateTasks(context.Background(), tasks)
+	if duplicates[0] || duplicates[1] {
+		t.Fatalf("different typed verification contracts must not be batch duplicates: %#v", duplicates)
+	}
+
+	// The same typed contract still deduplicates in a later delegation.
+	_, duplicates, _ = c.checkDuplicateTasks(context.Background(), tasks[:1])
+	if !duplicates[0] {
+		t.Fatal("identical typed verification contract must remain a duplicate")
+	}
+}
+
+func TestCheckDuplicateTasks_TypedVerificationContractFiltersActiveAndCurrentRunCache(t *testing.T) {
+	c := &Coordinator{
+		delegatedTasks:   make(map[string]int),
+		delegatedTasksMu: sync.Mutex{},
+		taskTracker:      NewTaskTracker(),
+		taskResultCache:  make(map[string][]cachedTaskEntry),
+	}
+	c.SetPolicyEngine(&defaultPolicyEngine{c: c})
+
+	active := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
+		Agent:      "helper",
+		Desc:       "verify generated report",
+		VerifySpec: &VerificationSpec{Type: VerifyCommandExit, Command: "test -f report-a.json"},
+	}})[0]
+	c.taskTracker.TodoList().UpdateStatus(active.ID, TaskInProgress, "")
+
+	// An active task with a distinct assertion is not a duplicate.
+	other := TaskDef{Agent: "helper", Goal: "verify generated report", VerifySpec: &VerificationSpec{Type: VerifyCommandExit, Command: "test -f report-b.json"}}
+	_, duplicates, suppressed := c.checkDuplicateTasks(context.Background(), []TaskDef{other})
+	if duplicates[0] || suppressed[0] != nil {
+		t.Fatalf("distinct typed verifier must not be suppressed by active todo: duplicates=%#v suppressed=%#v", duplicates, suppressed)
+	}
+
+	// Current-run history has the same compatibility requirement.
+	// Reset the global delegation counter so this check exercises cache-based
+	// suppression rather than rejecting the preceding delegation as exact.
+	c.delegatedTasksMu.Lock()
+	c.delegatedTasks = make(map[string]int)
+	c.delegatedTasksMu.Unlock()
+	c.storeTaskCacheWithTypedVerification("helper", "verify generated report", active.VerifySpec, "", "", "verified")
+	_, duplicates, _ = c.checkDuplicateTasks(context.Background(), []TaskDef{other})
+	if duplicates[0] {
+		t.Fatal("distinct typed verifier must not be suppressed by current-run cache")
+	}
+}
+
 func TestCheckDuplicateTasks_SuppressesPermissionBlockedFailure(t *testing.T) {
 	c := &Coordinator{
 		delegatedTasks:   make(map[string]int),

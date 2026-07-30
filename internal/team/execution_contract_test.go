@@ -142,6 +142,12 @@ func TestValidateExecutionContract_RequiresVerification(t *testing.T) {
 			verify:    "",
 			wantErr:   false,
 		},
+		{
+			name:      "interactive with typed file verifier passes",
+			kind:      ExecutionKindInteractive,
+			reqVerify: true,
+			wantErr:   false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -156,10 +162,42 @@ func TestValidateExecutionContract_RequiresVerification(t *testing.T) {
 					RequiresVerification: tt.reqVerify,
 				},
 			}
+			if tt.name == "interactive with typed file verifier passes" {
+				task.VerifySpec = &VerificationSpec{Type: VerifyFileExists, Path: "report.md"}
+			}
 
 			err := ValidateExecutionContract(task)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ValidateExecutionContract() error = %v, wantErr = %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateExecutionContract_RequiresVerificationRejectsNonAssertingOrMalformedTypedVerifier(t *testing.T) {
+	base := TaskDef{
+		Agent: "dev",
+		Goal:  "perform external action",
+		Execution: ExecutionContract{
+			Kind:                 ExecutionKindExternal,
+			RequiresVerification: true,
+		},
+	}
+
+	tests := []struct {
+		name string
+		spec VerificationSpec
+	}{
+		{name: "observation", spec: VerificationSpec{Type: VerifyFileExists, Path: "report.md", Mode: "observation"}},
+		{name: "missing path", spec: VerificationSpec{Type: VerifyFileExists}},
+		{name: "json assertion without assertions", spec: VerificationSpec{Type: VerifyJSONAssert, Path: "report.json"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			task := base
+			task.VerifySpec = &tt.spec
+			if err := ValidateExecutionContract(task); err == nil {
+				t.Fatal("expected invalid typed verifier to be rejected")
 			}
 		})
 	}

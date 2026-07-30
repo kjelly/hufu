@@ -5,6 +5,96 @@ import (
 	"testing"
 )
 
+func TestTypedVerification_EventStoreBranchReplayAndCheckpointDedup(t *testing.T) {
+	workspace := t.TempDir()
+	es, err := NewEventStore(workspace, "run-typed", "session-typed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{eventStore: es}
+
+	v1 := &TodoItem{
+		ID: "1", Agent: "dev", Desc: "verify report", Status: TaskDone,
+		VerifySpec: &VerificationSpec{Type: VerifyJSONAssert, Path: "report-v1.json", Assertions: []JSONAssertion{{Path: "status", Equals: "ok"}}},
+	}
+	c.emitTaskEventsFromCheckpoint([]*TodoItem{v1})
+	c.emitTaskEventsFromCheckpoint([]*TodoItem{v1}) // unchanged contract: one event only
+	events, err := es.ReadEvents()
+	if err != nil || len(events) != 1 {
+		t.Fatalf("unchanged typed checkpoint must emit one event, events=%d err=%v", len(events), err)
+	}
+	forkEventID := events[0].ID
+
+	// Same task lifecycle state with a changed verifier is a distinct durable
+	// contract and must be emitted so replay observes the newer assertion.
+	v2 := cloneTodoItem(v1)
+	v2.VerifySpec = &VerificationSpec{Type: VerifyJSONAssert, Path: "report-v2.json", Assertions: []JSONAssertion{{Path: "code", Equals: 200}}}
+	c.emitTaskEventsFromCheckpoint([]*TodoItem{v2})
+	events, err = es.ReadEvents()
+	if err != nil || len(events) != 2 {
+		t.Fatalf("changed typed contract must emit an updated event, events=%d err=%v", len(events), err)
+	}
+
+	st := NewSessionTree()
+	exp, err := st.CreateBranch("typed-exp", forkEventID, es)
+	if err != nil {
+		t.Fatal(err)
+	}
+	es.SetBranchID(exp.ID)
+	expTask := &TodoItem{
+		ID: "2", Agent: "dev", Desc: "verify branch artifact", Status: TaskDone,
+		VerifySpec: &VerificationSpec{Type: VerifyFileExists, Path: "branch-report.json"},
+	}
+	c.emitTaskEventsFromCheckpoint([]*TodoItem{expTask})
+	if err := es.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopen the real JSONL store before replaying: this exercises producer
+	// serialization, disk read, branch lineage selection, and session rebuild.
+	reopened, err := OpenEventStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if err := RebuildSessionForBranch(workspace, st, reopened, "main"); err != nil {
+		t.Fatal(err)
+	}
+	main := LoadSession(workspace)
+	if main == nil || len(main.Tasks) != 1 || main.Tasks[0].VerifySpec == nil {
+		t.Fatalf("main branch typed replay lost task contract: %#v", main)
+	}
+	mainSpec := main.Tasks[0].VerifySpec
+	if mainSpec.Path != "report-v2.json" || len(mainSpec.Assertions) != 1 || mainSpec.Assertions[0].Path != "code" || !equalJSONValues(mainSpec.Assertions[0].Equals, 200) {
+		t.Fatalf("main replay restored wrong latest contract: %#v", mainSpec)
+	}
+
+	if err := RebuildSessionForBranch(workspace, st, reopened, exp.ID); err != nil {
+		t.Fatal(err)
+	}
+	branch := LoadSession(workspace)
+	if branch == nil || len(branch.Tasks) != 2 || branch.Tasks[0].VerifySpec == nil || branch.Tasks[1].VerifySpec == nil {
+		t.Fatalf("branch lineage did not restore typed contracts: %#v", branch)
+	}
+	if got := branch.Tasks[0].VerifySpec.Path; got != "report-v1.json" {
+		t.Fatalf("fork lineage must retain pre-fork typed contract, got %q", got)
+	}
+	if got := branch.Tasks[1].VerifySpec.Path; got != "branch-report.json" {
+		t.Fatalf("branch event typed contract lost, got %q", got)
+	}
+
+	// Mutating a decoded projection cannot mutate the persisted event payload;
+	// rebuilding again must restore the original typed values.
+	branch.Tasks[0].VerifySpec.Assertions[0].Equals = "mutated"
+	if err := RebuildSessionForBranch(workspace, st, reopened, exp.ID); err != nil {
+		t.Fatal(err)
+	}
+	replayed := LoadSession(workspace)
+	if got := replayed.Tasks[0].VerifySpec.Assertions[0].Equals; got != "ok" {
+		t.Fatalf("replay reused mutable typed contract instead of event data: %#v", replayed.Tasks[0].VerifySpec)
+	}
+}
+
 // Task events must carry verify command + result so branch diffs can compare
 // verification outcomes, and completed tasks with typed artifacts must emit
 // artifact_created events exactly once (R2).

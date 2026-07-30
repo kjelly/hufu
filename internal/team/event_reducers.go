@@ -55,6 +55,7 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 			DependsOn         []string            `json:"depends_on"`
 			Verify            string              `json:"verify"`
 			VerifyMode        string              `json:"verify_mode"`
+			VerifySpec        *VerificationSpec   `json:"verify_spec"`
 			VerifyResult      *VerificationResult `json:"verify_result"`
 			ExecutionReceipt  *ExecutionReceipt   `json:"execution_receipt"`
 			ExecutionReceipts []ExecutionReceipt  `json:"execution_receipts"`
@@ -99,6 +100,9 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		if payload.Verify != "" {
 			item.Verify = payload.Verify
 			item.VerifyMode = payload.VerifyMode
+		}
+		if payload.VerifySpec != nil {
+			item.VerifySpec = cloneVerificationSpecPtr(payload.VerifySpec)
 		}
 		if payload.VerifyResult != nil {
 			item.VerifyResult = payload.VerifyResult
