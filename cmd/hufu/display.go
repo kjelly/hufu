@@ -1599,7 +1599,27 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 		if execResult != "" {
 			p.Send(tuipkg.ResultMsg{Text: execResult})
 		}
-		p.Send(tuipkg.FinishedMsg{})
+		var names []string
+		for name := range loadedTeams {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		var resList []*team.RunResult
+		for _, name := range names {
+			tc := loadedTeams[name]
+			if tc != nil && tc.coordinator != nil {
+				if r := tc.coordinator.LastRunResult(); r != nil {
+					resList = append(resList, r)
+				}
+			}
+		}
+		var finalRes *team.RunResult
+		if len(resList) > 0 {
+			aggregated := team.AggregateRunResults(resList, nil, team.RunStats{})
+			finalRes = &aggregated
+		}
+		p.Send(tuipkg.FinishedMsg{Result: finalRes})
 	}()
 
 	if _, err := p.Run(); err != nil {

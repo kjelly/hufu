@@ -217,6 +217,7 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		Response:        args.Response,
 		Stats:           SummarizeRunStats(todoList.Items()),
 		Metrics:         t.coordinator.Metrics(),
+		GoalMode:        t.coordinator.GoalMode(),
 	})
 	evaluated.Acceptance = accRes
 	runRes := &evaluated

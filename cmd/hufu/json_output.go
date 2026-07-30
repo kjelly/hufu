@@ -13,8 +13,10 @@ import (
 type jsonRunOutput struct {
 	Outcome         string                 `json:"outcome"`
 	GoalSatisfied   bool                   `json:"goal_satisfied"`
+	GoalMode        string                 `json:"goal_mode,omitempty"`
 	Result          string                 `json:"result"`
 	Reason          string                 `json:"reason,omitempty"`
+	StopReason      string                 `json:"stop_reason,omitempty"`
 	ExitCode        int                    `json:"exit_code,omitempty"`
 	Acceptance      *team.AcceptanceResult `json:"acceptance,omitempty"`
 	UnresolvedTasks []team.TaskReference   `json:"unresolved_tasks,omitempty"`
@@ -95,9 +97,12 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 	out.UnresolvedTasks = appendUniqueTaskReferences(out.UnresolvedTasks, team.UnresolvedTaskReferences(currentItems))
 	out.Stats = team.SummarizeRunStats(allItems)
 	canonical := team.AggregateRunResults(runResults, out.UnresolvedTasks, out.Stats)
+	out.Stats = canonical.Stats
 	out.Outcome = string(canonical.Outcome)
 	out.GoalSatisfied = canonical.GoalSatisfied
+	out.GoalMode = string(canonical.GoalMode)
 	out.Reason = canonical.Reason
+	out.StopReason = string(canonical.StopReason)
 	out.ExitCode = canonical.ExitCode
 	if canonical.Acceptance != nil {
 		acceptance := *canonical.Acceptance

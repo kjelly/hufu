@@ -691,3 +691,50 @@ func TestParseAgentFile_ToolsWithoutBashOrSudoUnaffected(t *testing.T) {
 		t.Errorf("Tools = %q, wait_for should not be implied without bash/sudo", def.Tools)
 	}
 }
+
+func TestParseTeamYML_GoalMode(t *testing.T) {
+	t.Run("valid goal_mode outcome", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		teamPath := filepath.Join(tmpDir, "team.yml")
+		yamlContent := "name: test-team\ngoal-mode: outcome\n"
+		if err := os.WriteFile(teamPath, []byte(yamlContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := parseTeamYML(tmpDir, nil)
+		if err != nil {
+			t.Fatalf("parseTeamYML returned error: %v", err)
+		}
+		if cfg.GoalMode != "outcome" {
+			t.Errorf("cfg.GoalMode = %q, want %q", cfg.GoalMode, "outcome")
+		}
+	})
+
+	t.Run("valid goal_mode exploratory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		teamPath := filepath.Join(tmpDir, "team.yml")
+		yamlContent := "name: test-team\ngoal-mode: exploratory\n"
+		if err := os.WriteFile(teamPath, []byte(yamlContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := parseTeamYML(tmpDir, nil)
+		if err != nil {
+			t.Fatalf("parseTeamYML returned error: %v", err)
+		}
+		if cfg.GoalMode != "exploratory" {
+			t.Errorf("cfg.GoalMode = %q, want %q", cfg.GoalMode, "exploratory")
+		}
+	})
+
+	t.Run("invalid goal_mode produces error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		teamPath := filepath.Join(tmpDir, "team.yml")
+		yamlContent := "name: test-team\ngoal-mode: typo\n"
+		if err := os.WriteFile(teamPath, []byte(yamlContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := parseTeamYML(tmpDir, nil)
+		if err == nil {
+			t.Error("expected error for invalid goal-mode, got nil")
+		}
+	})
+}

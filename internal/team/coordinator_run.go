@@ -374,6 +374,7 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 			Reason:          continuationReason,
 			Stats:           SummarizeRunStats(items),
 			Metrics:         c.Metrics(),
+			GoalMode:        c.GoalMode(),
 		})
 		evaluated.Acceptance = accRes
 		evaluated.Continuation = &ContinuationInfo{TurnCount: continuationTurns, MaxTurns: maxContinuationTurns, Reason: continuationReason}
@@ -469,6 +470,7 @@ func (c *Coordinator) recordRunAborted(runErr error) {
 		Reason:          reason,
 		Stats:           SummarizeRunStats(items),
 		Metrics:         c.Metrics(),
+		GoalMode:        c.GoalMode(),
 	})
 	c.SetLastRunResult(&evaluated)
 	checkpoint := c.ContinuationCheckpoint()
@@ -909,6 +911,9 @@ func runResultStatusData(result *RunResult) map[string]any {
 	data := map[string]any{
 		"outcome":          result.Outcome,
 		"goal_satisfied":   result.GoalSatisfied,
+		"goal_mode":        result.GoalMode,
+		"stop_reason":      result.StopReason,
+		"status":           FormatCanonicalStatus(result),
 		"stats":            result.Stats,
 		"tasks_unresolved": result.Stats.TasksUnresolved,
 		"attempts_total":   result.Stats.AttemptsTotal,

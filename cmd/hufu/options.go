@@ -39,6 +39,7 @@ type runOptions struct {
 
 	// Execution behavior
 	executionProfile      string
+	goalMode              string
 	stepsMode             bool
 	dryRun                bool
 	planMode              bool

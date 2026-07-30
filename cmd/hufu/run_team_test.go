@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -164,11 +165,68 @@ func TestIsInteractiveEnvironment(t *testing.T) {
 
 func TestRenderExecutionSummary(t *testing.T) {
 	summary := executionSummary{teams: []string{"dev"}, workspaces: []string{"/tmp/workspace"}, total: 4, done: 1, errored: 1, skipped: 1, pending: 1}
-	out := formatExecutionSummary(summary, 3*time.Second)
-	for _, want := range []string{"Team:      dev", "1 done", "3s"} {
+	res := &team.RunResult{Outcome: team.RunOutcomePartial, StopReason: team.StopReasonBudgetExceeded, GoalMode: team.GoalModeOutcome}
+	out := formatExecutionSummary(summary, 3*time.Second, []*team.RunResult{res})
+	for _, want := range []string{"Team:      dev", "1 done", "3s", "Outcome:   partial", "Status:    Budget exhausted"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("summary missing %q: %q", want, out)
 		}
+	}
+}
+
+func TestMultiTeamFinishedMsgAggregationPrecedence(t *testing.T) {
+	tc1 := &teamContext{teamName: "teamA", coordinator: &team.Coordinator{}}
+	tc1.coordinator.SetLastRunResult(&team.RunResult{
+		Outcome:       team.RunOutcomeCompleted,
+		GoalSatisfied: false,
+		GoalMode:      team.GoalModeExploratory,
+		Acceptance:    &team.AcceptanceResult{State: team.AcceptanceNotConfigured},
+	})
+	tc2 := &teamContext{teamName: "teamB", coordinator: &team.Coordinator{}}
+	tc2.coordinator.SetLastRunResult(&team.RunResult{
+		Outcome:         team.RunOutcomePartial,
+		GoalSatisfied:   false,
+		GoalMode:        team.GoalModeOutcome,
+		StopReason:      team.StopReasonUnresolvedTasks,
+		UnresolvedTasks: []team.TaskReference{{ID: "t1", Status: "pending"}},
+	})
+
+	loadedTeams := map[string]*teamContext{
+		"teamA": tc1,
+		"teamB": tc2,
+	}
+
+	var names []string
+	for name := range loadedTeams {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var resList []*team.RunResult
+	for _, name := range names {
+		tc := loadedTeams[name]
+		if tc != nil && tc.coordinator != nil {
+			if r := tc.coordinator.LastRunResult(); r != nil {
+				resList = append(resList, r)
+			}
+		}
+	}
+	if len(resList) != 2 {
+		t.Fatalf("resList length = %d, want 2", len(resList))
+	}
+	aggregated := team.AggregateRunResults(resList, nil, team.RunStats{})
+
+	if aggregated.GoalMode != team.GoalModeOutcome {
+		t.Fatalf("aggregated goal_mode = %q, want %q (outcome wins over exploratory)", aggregated.GoalMode, team.GoalModeOutcome)
+	}
+	if aggregated.Outcome != team.RunOutcomePartial || aggregated.GoalSatisfied {
+		t.Fatalf("aggregated result = %#v, want outcome=partial, goal_satisfied=false", aggregated)
+	}
+	if aggregated.StopReason != team.StopReasonUnresolvedTasks {
+		t.Fatalf("aggregated stop_reason = %q, want %q (unresolved tasks preserved, not budget_exceeded)", aggregated.StopReason, team.StopReasonUnresolvedTasks)
+	}
+	if len(aggregated.UnresolvedTasks) != 1 || aggregated.UnresolvedTasks[0].ID != "t1" {
+		t.Fatalf("aggregated unresolved tasks = %#v, want t1", aggregated.UnresolvedTasks)
 	}
 }
 

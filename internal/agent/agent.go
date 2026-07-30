@@ -158,6 +158,8 @@ type TeamConfig struct {
 	Rollback string
 	// ExecutionProfile specifies named defaults like strict-verification.
 	ExecutionProfile string
+	// GoalMode specifies outcome vs exploratory mode.
+	GoalMode string
 }
 
 type AcceptanceSpec struct {

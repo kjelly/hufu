@@ -41,6 +41,7 @@ type ExecutionProfile struct {
 	PolicyFailureMode PolicyFailureMode `json:"policy_failure_mode,omitempty" yaml:"policy-failure-mode,omitempty"`
 	HookFailureMode   PolicyFailureMode `json:"hook_failure_mode,omitempty" yaml:"hook-failure-mode,omitempty"`
 	AcceptanceMode    AcceptanceMode    `json:"acceptance_mode,omitempty" yaml:"acceptance-mode,omitempty"`
+	DefaultGoalMode   GoalMode          `json:"default_goal_mode,omitempty" yaml:"default-goal-mode,omitempty"`
 
 	RequireLockedResources    bool `json:"require_locked_resources,omitempty" yaml:"require-locked-resources,omitempty"`
 	RequireEvidenceManifest   bool `json:"require_evidence_manifest,omitempty" yaml:"require-evidence-manifest,omitempty"`
@@ -74,6 +75,7 @@ func BuiltinProfiles() map[ExecutionProfileName]ExecutionProfile {
 			PolicyFailureMode:          PolicyFailOpen,
 			HookFailureMode:            PolicyFailOpen,
 			AcceptanceMode:             AcceptanceAdvisory,
+			DefaultGoalMode:            GoalModeExploratory,
 			RequireLockedResources:     false,
 			RequireEvidenceManifest:    false,
 			RequireClosedTerminals:     false,
@@ -94,6 +96,7 @@ func BuiltinProfiles() map[ExecutionProfileName]ExecutionProfile {
 			PolicyFailureMode:          PolicyFailClosed,
 			HookFailureMode:            PolicyFailClosed,
 			AcceptanceMode:             AcceptanceBlocking,
+			DefaultGoalMode:            GoalModeOutcome,
 			RequireLockedResources:     false,
 			RequireEvidenceManifest:    false,
 			RequireClosedTerminals:     false,
@@ -114,6 +117,7 @@ func BuiltinProfiles() map[ExecutionProfileName]ExecutionProfile {
 			PolicyFailureMode:          PolicyFailClosed,
 			HookFailureMode:            PolicyFailClosed,
 			AcceptanceMode:             AcceptanceBlocking,
+			DefaultGoalMode:            GoalModeOutcome,
 			RequireLockedResources:     true,
 			RequireEvidenceManifest:    true,
 			RequireClosedTerminals:     true,
@@ -134,6 +138,7 @@ func BuiltinProfiles() map[ExecutionProfileName]ExecutionProfile {
 			PolicyFailureMode:          PolicyFailClosed,
 			HookFailureMode:            PolicyFailClosed,
 			AcceptanceMode:             AcceptanceBlocking,
+			DefaultGoalMode:            GoalModeOutcome,
 			RequireLockedResources:     true,
 			RequireEvidenceManifest:    true,
 			RequireClosedTerminals:     true,

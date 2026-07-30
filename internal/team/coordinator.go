@@ -239,6 +239,8 @@ type Coordinator struct {
 	cachePolicyMu          sync.RWMutex
 	executionProfile       ExecutionProfile
 	executionProfileMu     sync.RWMutex
+	goalMode               GoalMode
+	goalModeMu             sync.RWMutex
 	capabilityCache        map[string]CapabilityResult
 	capabilityCacheMu      sync.Mutex
 	capabilityInflight     map[string]chan CapabilityResult
@@ -909,6 +911,10 @@ func (c *Coordinator) TaskTracker() *TaskTracker {
 	return c.taskTracker
 }
 
+func (c *Coordinator) SetTaskTracker(tracker *TaskTracker) {
+	c.taskTracker = tracker
+}
+
 // TerminalManager exposes the coordinator-owned terminal resource manager.
 // Callers must bind requests to the current TODO ID via WithTerminalTaskID.
 func (c *Coordinator) TerminalManager() TerminalManager {
@@ -1173,6 +1179,45 @@ func (c *Coordinator) ExecutionProfile() ExecutionProfile {
 		return BuiltinProfiles()[ProfileDefault]
 	}
 	return c.executionProfile
+}
+
+// SetGoalMode sets the active goal mode for the coordinator.
+func (c *Coordinator) SetGoalMode(mode GoalMode) error {
+	if c == nil {
+		return nil
+	}
+	if mode != "" {
+		parsed, err := ParseGoalMode(string(mode))
+		if err != nil {
+			return err
+		}
+		mode = parsed
+	}
+	c.goalModeMu.Lock()
+	c.goalMode = mode
+	c.goalModeMu.Unlock()
+	return nil
+}
+
+// GoalMode returns the active goal mode for the coordinator.
+func (c *Coordinator) GoalMode() GoalMode {
+	if c == nil {
+		return GoalModeOutcome
+	}
+	c.goalModeMu.RLock()
+	mode := c.goalMode
+	c.goalModeMu.RUnlock()
+	if mode != "" {
+		return mode
+	}
+	if c.session != nil && c.session.Config.GoalMode != "" {
+		return GoalMode(c.session.Config.GoalMode)
+	}
+	prof := c.ExecutionProfile()
+	if prof.DefaultGoalMode != "" {
+		return prof.DefaultGoalMode
+	}
+	return GoalModeOutcome
 }
 
 func canonicalPath(p string) string {

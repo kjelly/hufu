@@ -133,6 +133,50 @@ func TestUpdate_FinishedMsgConvertsStragglers(t *testing.T) {
 	}
 }
 
+func TestUpdate_FinishedMsgCanonicalStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		res        *team.RunResult
+		wantStatus string
+	}{
+		{
+			name:       "goal satisfied",
+			res:        &team.RunResult{GoalSatisfied: true, Outcome: team.RunOutcomeCompleted},
+			wantStatus: "Execution completed successfully",
+		},
+		{
+			name:       "exploratory no gate",
+			res:        &team.RunResult{GoalSatisfied: false, Outcome: team.RunOutcomeCompleted, GoalMode: team.GoalModeExploratory},
+			wantStatus: "Execution completed; goal unverified",
+		},
+		{
+			name:       "outcome no gate unverified",
+			res:        &team.RunResult{GoalSatisfied: false, Outcome: team.RunOutcomeUnverified, GoalMode: team.GoalModeOutcome},
+			wantStatus: "Execution completed; goal unverified (no acceptance configured)",
+		},
+		{
+			name:       "blocked",
+			res:        &team.RunResult{Outcome: team.RunOutcomeBlocked, StopReason: team.StopReasonExternalBlockage},
+			wantStatus: "Execution blocked",
+		},
+		{
+			name:       "budget exhausted",
+			res:        &team.RunResult{Outcome: team.RunOutcomePartial, StopReason: team.StopReasonBudgetExceeded},
+			wantStatus: "Budget exhausted",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New("prompt", TeamInfo{})
+			updated, _ := m.Update(FinishedMsg{Result: tt.res})
+			model := updated.(Model)
+			if !strings.Contains(model.statusText, tt.wantStatus) {
+				t.Errorf("statusText = %q, want substring %q", model.statusText, tt.wantStatus)
+			}
+		})
+	}
+}
+
 func TestView_UsesCompactColumnsOnNarrowTerminal(t *testing.T) {
 	m := New("prompt", TeamInfo{})
 	m.width = 70

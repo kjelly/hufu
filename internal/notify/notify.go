@@ -136,13 +136,39 @@ func formatEventWithData(eventType, agent, message, output string, data map[stri
 			msg = eventType
 		}
 	}
-	if outcome, ok := data["outcome"].(string); ok && outcome != "" {
-		msg = fmt.Sprintf("%s [outcome=%s]", msg, outcome)
+	if outcomeStr := valToString(data["outcome"]); outcomeStr != "" {
+		msg = fmt.Sprintf("%s [outcome=%s]", msg, outcomeStr)
 	}
-	if unresolved, ok := data["tasks_unresolved"]; ok {
+	if goalSat, ok := data["goal_satisfied"].(bool); ok {
+		msg = fmt.Sprintf("%s [goal_satisfied=%t]", msg, goalSat)
+	}
+	if goalModeStr := valToString(data["goal_mode"]); goalModeStr != "" {
+		msg = fmt.Sprintf("%s [goal_mode=%s]", msg, goalModeStr)
+	}
+	if stopReasonStr := valToString(data["stop_reason"]); stopReasonStr != "" {
+		msg = fmt.Sprintf("%s [stop_reason=%s]", msg, stopReasonStr)
+	}
+	if statusStr := valToString(data["status"]); statusStr != "" {
+		msg = fmt.Sprintf("%s [status=%s]", msg, statusStr)
+	}
+	if unresolved, ok := data["tasks_unresolved"]; ok && unresolved != nil {
 		msg = fmt.Sprintf("%s [tasks_unresolved=%v]", msg, unresolved)
 	}
 	return title, msg
+}
+
+func valToString(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch s := v.(type) {
+	case string:
+		return s
+	case fmt.Stringer:
+		return s.String()
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }
 
 func (n *Notifier) sendOSC(title, message string) {

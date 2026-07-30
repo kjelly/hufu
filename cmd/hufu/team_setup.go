@@ -32,7 +32,7 @@ type teamContext struct {
 // applyUnattendedAndBudget configures the coordinator's unattended mode,
 // run budgets, and acceptance check from the CLI flags and team config.
 // CLI flags take precedence; team.yaml values are the fallback.
-func applyUnattendedAndBudget(coordinator *team.Coordinator, session *team.TeamSession) {
+func applyUnattendedAndBudget(coordinator *team.Coordinator, session *team.TeamSession) error {
 	prof := coordinator.ExecutionProfile()
 	coordinator.SetUnattended(opts.unattended || session.Config.Unattended || prof.IsUnattended())
 	coordinator.SetAutoApprove(opts.autoApprove || session.Config.AutoApprove)
@@ -49,6 +49,21 @@ func applyUnattendedAndBudget(coordinator *team.Coordinator, session *team.TeamS
 	coordinator.SetBudget(budgetSeconds, budgetTokens)
 	coordinator.SetAcceptance(session.Config.Acceptance)
 	coordinator.SetRollback(session.Config.Rollback)
+
+	goalMode := opts.goalMode
+	if goalMode == "" {
+		goalMode = session.Config.GoalMode
+	}
+	if goalMode != "" {
+		gm, err := team.ParseGoalMode(goalMode)
+		if err != nil {
+			return fmt.Errorf("invalid goal mode: %w", err)
+		}
+		if err := coordinator.SetGoalMode(gm); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // loadTeamCommon is the shared post-load setup for both named and default
@@ -151,7 +166,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 
 	coordinator.SetExecutionProfile(execProfile)
 	coordinator.SetSessionData(sessionData)
-	applyUnattendedAndBudget(coordinator, session)
+	if err := applyUnattendedAndBudget(coordinator, session); err != nil {
+		return nil, err
+	}
 	if err := coordinator.SetPTYTerminalEnabled(opts.enablePTYTerminal); err != nil {
 		return nil, err
 	}

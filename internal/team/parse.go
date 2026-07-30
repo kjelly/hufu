@@ -99,6 +99,7 @@ type teamConfigYAML struct {
 	Acceptance          interface{}                      `yaml:"acceptance"`
 	Rollback            string                           `yaml:"rollback"`
 	ExecutionProfile    string                           `yaml:"execution-profile"`
+	GoalMode            string                           `yaml:"goal-mode"`
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -580,6 +581,13 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.ExecutionProfile != "" {
 		cfg.ExecutionProfile = yc.ExecutionProfile
+	}
+	if yc.GoalMode != "" {
+		gm, err := ParseGoalMode(yc.GoalMode)
+		if err != nil {
+			return cfg, fmt.Errorf("invalid team configuration: %w", err)
+		}
+		cfg.GoalMode = string(gm)
 	}
 	if yc.Shell != "" {
 		cfg.Shell = yc.Shell

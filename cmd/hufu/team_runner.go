@@ -424,10 +424,25 @@ func renderExecutionSummary(w io.Writer, loadedTeams map[string]*teamContext, du
 	if summary.total == 0 && len(summary.teams) == 0 {
 		return
 	}
-	_, _ = fmt.Fprint(w, formatExecutionSummary(summary, duration))
+	var names []string
+	for name := range loadedTeams {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var resList []*team.RunResult
+	for _, name := range names {
+		tc := loadedTeams[name]
+		if tc != nil && tc.coordinator != nil {
+			if r := tc.coordinator.LastRunResult(); r != nil {
+				resList = append(resList, r)
+			}
+		}
+	}
+	_, _ = fmt.Fprint(w, formatExecutionSummary(summary, duration, resList))
 }
 
-func formatExecutionSummary(summary executionSummary, duration time.Duration) string {
+func formatExecutionSummary(summary executionSummary, duration time.Duration, runResults []*team.RunResult) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(headerStyle.Render("─── Summary ───"))
@@ -439,6 +454,12 @@ func formatExecutionSummary(summary executionSummary, duration time.Duration) st
 	fmt.Fprintf(&b, "  Duration:  %s\n", duration.Round(time.Second))
 	if len(summary.workspaces) > 0 {
 		fmt.Fprintf(&b, "  Workspace: %s\n", strings.Join(summary.workspaces, ", "))
+	}
+	if len(runResults) > 0 {
+		canonical := team.AggregateRunResults(runResults, nil, team.RunStats{})
+		fmt.Fprintf(&b, "  Outcome:   %s (satisfied: %t, mode: %s, stop reason: %s)\n",
+			canonical.Outcome, canonical.GoalSatisfied, canonical.GoalMode, canonical.StopReason)
+		fmt.Fprintf(&b, "  Status:    %s\n", team.FormatCanonicalStatus(&canonical))
 	}
 	return b.String()
 }

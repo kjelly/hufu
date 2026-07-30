@@ -3,6 +3,7 @@ package team
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/anomalyco/hufu/internal/agent"
 )
@@ -10,11 +11,56 @@ import (
 type RunOutcome string
 
 const (
-	RunOutcomeCompleted RunOutcome = "completed"
-	RunOutcomePartial   RunOutcome = "partial"
-	RunOutcomeBlocked   RunOutcome = "blocked"
-	RunOutcomeFailed    RunOutcome = "failed"
-	RunOutcomeCancelled RunOutcome = "cancelled"
+	RunOutcomeCompleted  RunOutcome = "completed"
+	RunOutcomeUnverified RunOutcome = "unverified"
+	RunOutcomePartial    RunOutcome = "partial"
+	RunOutcomeBlocked    RunOutcome = "blocked"
+	RunOutcomeFailed     RunOutcome = "failed"
+	RunOutcomeCancelled  RunOutcome = "cancelled"
+)
+
+type GoalMode string
+
+const (
+	GoalModeOutcome     GoalMode = "outcome"
+	GoalModeExploratory GoalMode = "exploratory"
+)
+
+func ParseGoalMode(s string) (GoalMode, error) {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	if lower == "" {
+		return GoalModeOutcome, nil
+	}
+	switch GoalMode(lower) {
+	case GoalModeOutcome:
+		return GoalModeOutcome, nil
+	case GoalModeExploratory:
+		return GoalModeExploratory, nil
+	default:
+		return "", fmt.Errorf("invalid goal mode %q (must be \"outcome\" or \"exploratory\")", s)
+	}
+}
+
+func IsValidGoalMode(mode GoalMode) bool {
+	switch mode {
+	case GoalModeOutcome, GoalModeExploratory:
+		return true
+	default:
+		return false
+	}
+}
+
+type StopReason string
+
+const (
+	StopReasonCompleted        StopReason = "completed"
+	StopReasonAcceptanceFailed StopReason = "acceptance_failed"
+	StopReasonAcceptanceNotSet StopReason = "acceptance_not_configured"
+	StopReasonUnresolvedTasks  StopReason = "unresolved_tasks"
+	StopReasonExternalBlockage StopReason = "external_blockage"
+	StopReasonBudgetExceeded   StopReason = "budget_exceeded"
+	StopReasonCancelled        StopReason = "cancelled"
+	StopReasonRunFailed        StopReason = "run_failed"
 )
 
 func (r RunOutcome) String() string {
@@ -141,6 +187,43 @@ func (r AcceptanceResult) IsPassed() bool {
 	return r.EffectiveState() == AcceptancePassed
 }
 
+// FormatCanonicalStatus formats the canonical human-readable status text from a RunResult
+// for CLI, TUI, reports, and notifications.
+func FormatCanonicalStatus(res *RunResult) string {
+	if res == nil {
+		return "All tasks completed"
+	}
+	if res.GoalSatisfied {
+		return "Execution completed successfully"
+	}
+	switch res.Outcome {
+	case RunOutcomeCompleted:
+		return "Execution completed; goal unverified"
+	case RunOutcomeUnverified:
+		return "Execution completed; goal unverified (no acceptance configured)"
+	case RunOutcomeBlocked:
+		return "Execution blocked"
+	case RunOutcomeCancelled:
+		return "Execution cancelled"
+	case RunOutcomeFailed:
+		return "Execution failed"
+	case RunOutcomePartial:
+		switch res.StopReason {
+		case StopReasonBudgetExceeded:
+			return "Budget exhausted"
+		case StopReasonAcceptanceFailed:
+			return "Acceptance check failed"
+		default:
+			return "Execution incomplete"
+		}
+	default:
+		if res.StopReason != "" {
+			return fmt.Sprintf("Execution %s (%s)", res.Outcome, res.StopReason)
+		}
+		return fmt.Sprintf("Execution %s", res.Outcome)
+	}
+}
+
 // RunEvaluationInput is the complete canonical input to outcome evaluation.
 // It contains state already observed by the coordinator; evaluating it has no
 // side effects and does not inspect prompts, task descriptions, or output.
@@ -155,6 +238,7 @@ type RunEvaluationInput struct {
 	Reason          string
 	Stats           RunStats
 	Metrics         RunMetrics
+	GoalMode        GoalMode
 }
 
 // EvaluateRunOutcome is the sole policy for deriving a run outcome and goal
@@ -168,7 +252,13 @@ func EvaluateRunOutcome(input RunEvaluationInput) RunResult {
 		// Fail closed rather than allowing malformed state to become completed.
 		acceptance = AcceptanceFailed
 	}
+	goalMode := input.GoalMode
+	if goalMode == "" || !IsValidGoalMode(goalMode) {
+		goalMode = GoalModeOutcome
+	}
+
 	result := RunResult{
+		GoalMode: goalMode,
 		Response: input.Response,
 		Reason:   input.Reason,
 		Acceptance: &AcceptanceResult{
@@ -179,8 +269,10 @@ func EvaluateRunOutcome(input RunEvaluationInput) RunResult {
 		Stats:           input.Stats,
 		Metrics:         input.Metrics,
 	}
+
 	if input.Cancelled {
 		result.Outcome = RunOutcomeCancelled
+		result.StopReason = StopReasonCancelled
 		result.ExitCode = input.ExitCode
 		if result.ExitCode == 0 {
 			result.ExitCode = 130
@@ -189,6 +281,7 @@ func EvaluateRunOutcome(input RunEvaluationInput) RunResult {
 	}
 	if input.RunFailed {
 		result.Outcome = RunOutcomeFailed
+		result.StopReason = StopReasonRunFailed
 		result.ExitCode = input.ExitCode
 		if result.ExitCode == 0 {
 			result.ExitCode = 1
@@ -197,33 +290,55 @@ func EvaluateRunOutcome(input RunEvaluationInput) RunResult {
 	}
 	if input.BudgetExceeded {
 		result.Outcome = RunOutcomePartial
+		result.StopReason = StopReasonBudgetExceeded
 		result.ExitCode = 7
 		return result
 	}
 	for _, task := range input.UnresolvedTasks {
 		if task.Status == string(TaskBlocked) {
 			result.Outcome = RunOutcomeBlocked
+			result.StopReason = StopReasonExternalBlockage
 			result.ExitCode = 7
 			return result
 		}
 		if task.Status == string(TaskError) {
 			result.Outcome = RunOutcomePartial
+			result.StopReason = StopReasonUnresolvedTasks
 			result.ExitCode = 7
 			return result
 		}
 	}
 	if len(input.UnresolvedTasks) > 0 {
 		result.Outcome = RunOutcomePartial
+		result.StopReason = StopReasonUnresolvedTasks
 		result.ExitCode = 7
 		return result
 	}
 	if acceptance == AcceptanceFailed {
 		result.Outcome = RunOutcomePartial
+		result.StopReason = StopReasonAcceptanceFailed
 		result.ExitCode = 7
 		return result
 	}
+	if acceptance == AcceptanceNotConfigured {
+		if goalMode == GoalModeExploratory {
+			result.Outcome = RunOutcomeCompleted
+			result.StopReason = StopReasonAcceptanceNotSet
+			result.GoalSatisfied = false
+			result.ExitCode = 0
+			return result
+		}
+		result.Outcome = RunOutcomeUnverified
+		result.StopReason = StopReasonAcceptanceNotSet
+		result.GoalSatisfied = false
+		result.ExitCode = 7
+		return result
+	}
+
 	result.Outcome = RunOutcomeCompleted
+	result.StopReason = StopReasonCompleted
 	result.GoalSatisfied = true
+	result.ExitCode = 0
 	return result
 }
 
@@ -239,11 +354,17 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 	}
 	var partial bool
 	var blocked bool
+	var foldedStats RunStats
 	failedExitCode := 0
 	cancelledExitCode := 0
 	for _, result := range results {
 		if result == nil {
 			continue
+		}
+		if result.GoalMode == GoalModeOutcome {
+			input.GoalMode = GoalModeOutcome
+		} else if input.GoalMode == "" && result.GoalMode != "" {
+			input.GoalMode = result.GoalMode
 		}
 		if input.Response == "" {
 			input.Response = result.Response
@@ -251,6 +372,19 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 		if input.Reason == "" {
 			input.Reason = result.Reason
 		}
+		if len(result.UnresolvedTasks) > 0 {
+			input.UnresolvedTasks = append(input.UnresolvedTasks, result.UnresolvedTasks...)
+		}
+		foldedStats.TasksTotal += result.Stats.TasksTotal
+		foldedStats.TasksDone += result.Stats.TasksDone
+		foldedStats.TasksUnresolved += result.Stats.TasksUnresolved
+		foldedStats.AttemptsTotal += result.Stats.AttemptsTotal
+		foldedStats.AttemptsFailed += result.Stats.AttemptsFailed
+
+		if result.StopReason == StopReasonBudgetExceeded {
+			input.BudgetExceeded = true
+		}
+
 		if result.Acceptance != nil {
 			switch result.Acceptance.EffectiveState() {
 			case AcceptanceFailed:
@@ -284,6 +418,9 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 			blocked = true
 		}
 	}
+	if input.Stats.IsZero() {
+		input.Stats = foldedStats
+	}
 	// Cancellation has evaluator precedence over ordinary failures, so its
 	// exit code must also win regardless of result iteration order.
 	if input.Cancelled {
@@ -296,7 +433,7 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 	// completed solely because the reference list is empty.
 	if blocked && len(input.UnresolvedTasks) == 0 {
 		input.UnresolvedTasks = []TaskReference{{ID: "<blocked-run>", Status: string(TaskBlocked)}}
-	} else if partial && len(input.UnresolvedTasks) == 0 && stats.TasksUnresolved > 0 {
+	} else if partial && len(input.UnresolvedTasks) == 0 && input.Stats.TasksUnresolved > 0 {
 		input.UnresolvedTasks = []TaskReference{{ID: "<unresolved-run>", Status: string(TaskPending)}}
 	}
 	// A partial team result with no unresolved task or failed acceptance is the
@@ -333,6 +470,7 @@ type ContinuationCheckpoint struct {
 }
 
 // AcceptanceContractRevision records an immutable acceptance-contract change.
+// Criterion states: pending, passed, failed, blocked.
 type AcceptanceContractRevision struct {
 	Revision  int             `json:"revision"`
 	Timestamp string          `json:"timestamp"`
@@ -362,11 +500,17 @@ type RunStats struct {
 	AttemptsFailed  int `json:"attempts_failed"`
 }
 
+func (s RunStats) IsZero() bool {
+	return s.TasksTotal == 0 && s.TasksDone == 0 && s.TasksUnresolved == 0 && s.AttemptsTotal == 0 && s.AttemptsFailed == 0
+}
+
 type RunResult struct {
 	Outcome         RunOutcome        `json:"outcome"`
 	GoalSatisfied   bool              `json:"goal_satisfied"`
+	GoalMode        GoalMode          `json:"goal_mode,omitempty"`
 	Response        string            `json:"response"`
 	Reason          string            `json:"reason,omitempty"`
+	StopReason      StopReason        `json:"stop_reason,omitempty"`
 	ExitCode        int               `json:"exit_code,omitempty"`
 	Acceptance      *AcceptanceResult `json:"acceptance,omitempty"`
 	UnresolvedTasks []TaskReference   `json:"unresolved_tasks,omitempty"`

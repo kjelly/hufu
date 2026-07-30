@@ -6,6 +6,37 @@ import (
 	"testing"
 )
 
+type customOutcome string
+type customGoalMode string
+type customStopReason string
+
+func TestNotifyWithDataIncludesCanonicalOutcome(t *testing.T) {
+	var buf bytes.Buffer
+	n := NewNotifier(NotifyConfig{OSC: true, Events: []string{"done"}}, &buf)
+	data := map[string]any{
+		"outcome":          customOutcome("unverified"),
+		"goal_satisfied":   false,
+		"goal_mode":        customGoalMode("outcome"),
+		"stop_reason":      customStopReason("acceptance_not_configured"),
+		"status":           "Execution completed; goal unverified (no acceptance configured)",
+		"tasks_unresolved": 0,
+	}
+	n.NotifyWithData("done", "coordinator", "finished", "", data)
+	out := buf.String()
+	for _, want := range []string{
+		"outcome=unverified",
+		"goal_satisfied=false",
+		"goal_mode=outcome",
+		"stop_reason=acceptance_not_configured",
+		"status=Execution completed; goal unverified (no acceptance configured)",
+		"tasks_unresolved=0",
+	} {
+		if !strings.Contains(out, escapeOSC(want)) {
+			t.Fatalf("notification missing %q (escaped: %q) in output:\n%s", want, escapeOSC(want), out)
+		}
+	}
+}
+
 func TestNotifyConfigShouldNotify(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -204,14 +235,5 @@ func TestNewNotifierFillsDefaultEvents(t *testing.T) {
 		if n.cfg.Events[i] != e {
 			t.Errorf("Events[%d] = %q, want %q", i, n.cfg.Events[i], e)
 		}
-	}
-}
-
-func TestNotifyWithDataIncludesCanonicalOutcome(t *testing.T) {
-	var buf bytes.Buffer
-	n := NewNotifier(NotifyConfig{OSC: true, Events: []string{"done"}}, &buf)
-	n.NotifyWithData("done", "coordinator", "finished", "", map[string]any{"outcome": "partial", "tasks_unresolved": 2})
-	if !strings.Contains(buf.String(), "outcome=partial") || !strings.Contains(buf.String(), "tasks_unresolved=2") {
-		t.Fatalf("notification did not include canonical outcome: %q", buf.String())
 	}
 }

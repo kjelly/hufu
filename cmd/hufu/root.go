@@ -117,6 +117,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().BoolVar(&opts.projectContext, "project-context", false, "Inject Git Status and Project Directory Structure into prompt context")
 	rootCmd.PersistentFlags().StringVar(&opts.profileName, "profile", "", "Apply a named flag bundle from hufu.yaml `profiles:` (CLI flags still override)")
 	rootCmd.PersistentFlags().StringVar(&opts.executionProfile, "execution-profile", "", "Set execution profile: default, unattended, strict-verification, fresh-verification")
+	rootCmd.PersistentFlags().StringVar(&opts.goalMode, "goal-mode", "", "Goal mode: outcome (default for strict/unattended) or exploratory")
 	rootCmd.Flags().BoolVarP(&opts.quietMode, "quiet", "q", false, "Suppress status output; print only the final result to stdout")
 	rootCmd.Flags().StringVar(&opts.outputFormat, "output", "", "Output format for the final result: text (default) or json")
 	rootCmd.Flags().StringVar(&opts.displayMode, "display-mode", "auto", "Status display mode: auto, terminal, or plain")

@@ -115,8 +115,10 @@ func TestJSONOutputDoesNotReportAbortedRunAsCompleted(t *testing.T) {
 func TestJSONOutputPreservesAcceptanceNotConfigured(t *testing.T) {
 	tc := &teamContext{teamName: "no-gate", coordinator: &team.Coordinator{}}
 	tc.coordinator.SetLastRunResult(&team.RunResult{
-		Outcome:       team.RunOutcomeCompleted,
-		GoalSatisfied: true,
+		Outcome:       team.RunOutcomeUnverified,
+		GoalSatisfied: false,
+		GoalMode:      team.GoalModeOutcome,
+		StopReason:    team.StopReasonAcceptanceNotSet,
 		Acceptance:    &team.AcceptanceResult{State: team.AcceptanceNotConfigured},
 	})
 
@@ -138,6 +140,9 @@ func TestJSONOutputPreservesAcceptanceNotConfigured(t *testing.T) {
 	}
 	if out.Acceptance == nil || out.Acceptance.State != team.AcceptanceNotConfigured || out.Acceptance.Passed {
 		t.Fatalf("acceptance output = %#v, want not_configured and not passed", out.Acceptance)
+	}
+	if out.GoalMode != "outcome" || out.StopReason != "acceptance_not_configured" || out.Outcome != "unverified" || out.GoalSatisfied {
+		t.Fatalf("JSON output = %#v, want outcome/acceptance_not_configured/unverified/unsatisfied", out)
 	}
 }
 
@@ -180,7 +185,7 @@ func TestJSONOutputIgnoresHistoricalUnresolvedTasks(t *testing.T) {
 	tc.coordinator.SetLastRunResult(&team.RunResult{
 		Outcome:       team.RunOutcomeCompleted,
 		GoalSatisfied: true,
-		Acceptance:    &team.AcceptanceResult{State: team.AcceptanceNotConfigured},
+		Acceptance:    &team.AcceptanceResult{State: team.AcceptancePassed},
 	})
 	oldStdout := os.Stdout
 	r, w, err := os.Pipe()
@@ -202,5 +207,68 @@ func TestJSONOutputIgnoresHistoricalUnresolvedTasks(t *testing.T) {
 	}
 	if out.Outcome != string(team.RunOutcomeCompleted) || !out.GoalSatisfied {
 		t.Fatalf("JSON output = %#v, want completed/satisfied", out)
+	}
+}
+
+func TestJSONOutputDoesNotDoubleCountStats(t *testing.T) {
+	// Construct tracked Todo items (1 done, 1 error with 1 retry)
+	// SummarizeRunStats will derive non-zero caller stats:
+	// TasksTotal: 2, TasksDone: 1, TasksUnresolved: 1, AttemptsTotal: 3, AttemptsFailed: 2
+	tracker := team.NewTaskTracker()
+	added := tracker.TodoList().AddBatch([]team.TodoSpec{
+		{Agent: "worker-1", Desc: "done task"},
+		{Agent: "worker-2", Desc: "error task"},
+	})
+	added[0].Status = team.TaskDone
+	added[1].Status = team.TaskError
+	added[1].Retries = 1
+
+	expectedStats := team.SummarizeRunStats(tracker.TodoList().Items())
+	if expectedStats.TasksTotal != 2 || expectedStats.TasksDone != 1 || expectedStats.TasksUnresolved != 1 || expectedStats.AttemptsTotal != 3 || expectedStats.AttemptsFailed != 2 {
+		t.Fatalf("unexpected fixture stats: %#v", expectedStats)
+	}
+
+	coord := &team.Coordinator{}
+	coord.SetTaskTracker(tracker)
+	coord.SetLastRunResult(&team.RunResult{
+		Outcome:       team.RunOutcomePartial,
+		GoalSatisfied: false,
+		Acceptance:    &team.AcceptanceResult{State: team.AcceptanceNotConfigured},
+		Stats:         expectedStats,
+	})
+
+	tc := &teamContext{teamName: "dev", coordinator: coord}
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	err = printResultJSON("partial", map[string]*teamContext{"dev": tc}, nil)
+	_ = w.Close()
+	os.Stdout = oldStdout
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out jsonRunOutput
+	if err := json.NewDecoder(r).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+
+	// Assert that ALL 5 public JSON stats fields match expectedStats exactly once, NOT double-counted
+	if out.Stats.TasksTotal != 2 {
+		t.Errorf("out.Stats.TasksTotal = %d, want 2 (must not double-count to 4)", out.Stats.TasksTotal)
+	}
+	if out.Stats.TasksDone != 1 {
+		t.Errorf("out.Stats.TasksDone = %d, want 1 (must not double-count to 2)", out.Stats.TasksDone)
+	}
+	if out.Stats.TasksUnresolved != 1 {
+		t.Errorf("out.Stats.TasksUnresolved = %d, want 1 (must not double-count to 2)", out.Stats.TasksUnresolved)
+	}
+	if out.Stats.AttemptsTotal != 3 {
+		t.Errorf("out.Stats.AttemptsTotal = %d, want 3 (must not double-count to 6)", out.Stats.AttemptsTotal)
+	}
+	if out.Stats.AttemptsFailed != 2 {
+		t.Errorf("out.Stats.AttemptsFailed = %d, want 2 (must not double-count to 4)", out.Stats.AttemptsFailed)
 	}
 }

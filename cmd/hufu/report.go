@@ -199,6 +199,12 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		b.WriteString("## Run Outcome\n\n")
 		fmt.Fprintf(&b, "- **Outcome:** `%s`\n", data.RunResult.Outcome)
 		fmt.Fprintf(&b, "- **Goal satisfied:** `%t`\n", data.RunResult.GoalSatisfied)
+		if data.RunResult.GoalMode != "" {
+			fmt.Fprintf(&b, "- **Goal mode:** `%s`\n", data.RunResult.GoalMode)
+		}
+		if data.RunResult.StopReason != "" {
+			fmt.Fprintf(&b, "- **Stop reason:** `%s`\n", data.RunResult.StopReason)
+		}
 		fmt.Fprintf(&b, "- **Tasks unresolved:** %d\n", data.RunResult.Stats.TasksUnresolved)
 		if data.RunResult.Acceptance != nil {
 			fmt.Fprintf(&b, "- **Acceptance:** `%s`\n", data.RunResult.Acceptance.EffectiveState())

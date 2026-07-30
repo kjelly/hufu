@@ -35,7 +35,9 @@ type CoordItemMsg struct{ Item *team.TodoItem }
 
 type CoordStatusMsg struct{ Status team.TaskStatus }
 
-type FinishedMsg struct{}
+type FinishedMsg struct {
+	Result *team.RunResult
+}
 
 // StatusBarMsg updates the status line shown between the prompt and the columns.
 type StatusBarMsg struct{ Text string }
@@ -184,6 +186,7 @@ type Model struct {
 	height         int
 	finished       bool
 	IsChat         bool
+	runResult      *team.RunResult
 	statusText     string // current status shown in the status bar
 	spinnerFrame   int
 	spinnerEnabled bool
@@ -413,7 +416,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FinishedMsg:
 		m.finished = true
 		m.recentLogs = nil
-		m.statusText = doneIcon.Render("✓") + dimStyle.Render("  All tasks completed")
+		m.runResult = msg.Result
+		statusStr := team.FormatCanonicalStatus(msg.Result)
+		if msg.Result != nil && msg.Result.GoalSatisfied {
+			m.statusText = doneIcon.Render("✓") + dimStyle.Render("  "+statusStr)
+		} else if msg.Result != nil && (msg.Result.Outcome == team.RunOutcomeCompleted || msg.Result.Outcome == team.RunOutcomeUnverified) {
+			m.statusText = pausedIcon.Render("ℹ") + dimStyle.Render("  "+statusStr)
+		} else if msg.Result != nil && (msg.Result.Outcome == team.RunOutcomeBlocked || msg.Result.Outcome == team.RunOutcomePartial) {
+			m.statusText = errorIcon.Render("⚠") + dimStyle.Render("  "+statusStr)
+		} else if msg.Result != nil && (msg.Result.Outcome == team.RunOutcomeFailed || msg.Result.Outcome == team.RunOutcomeCancelled) {
+			m.statusText = errorIcon.Render("✗") + dimStyle.Render("  "+statusStr)
+		} else {
+			m.statusText = doneIcon.Render("✓") + dimStyle.Render("  "+statusStr)
+		}
 		// The coordinator already called finalizeNormalCompletion() which marks
 		// TaskPending → TaskSkipped and TaskInProgress → TaskDone via a
 		// todos_updated event. This is a safety net for any stragglers.
