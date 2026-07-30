@@ -1,6 +1,7 @@
 package team
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/anomalyco/hufu/internal/agent"
@@ -104,17 +105,40 @@ type AcceptanceResult struct {
 	RequiredArtifacts []string        `json:"required_artifacts,omitempty"`
 }
 
+// MarshalJSON canonicalizes the legacy Passed field from the tri-state value.
+// This prevents an inconsistent in-memory value such as
+// {state:not_configured, passed:true} from being persisted as acceptance
+// evidence.
+func (r AcceptanceResult) MarshalJSON() ([]byte, error) {
+	type wire AcceptanceResult
+	canonical := wire(r)
+	canonical.State = r.EffectiveState()
+	canonical.Passed = canonical.State == AcceptancePassed
+	return json.Marshal(canonical)
+}
+
 // EffectiveState provides a compatibility interpretation for run results
 // persisted before the tri-state field existed. New results always populate
 // State explicitly.
 func (r AcceptanceResult) EffectiveState() AcceptanceState {
 	if r.State != "" {
-		return r.State
+		switch r.State {
+		case AcceptanceNotConfigured, AcceptancePassed, AcceptanceFailed:
+			return r.State
+		default:
+			return AcceptanceFailed
+		}
 	}
 	if r.Passed {
 		return AcceptancePassed
 	}
 	return AcceptanceFailed
+}
+
+// IsPassed derives acceptance success from the canonical state, ignoring a
+// stale legacy Passed bit.
+func (r AcceptanceResult) IsPassed() bool {
+	return r.EffectiveState() == AcceptancePassed
 }
 
 // RunEvaluationInput is the complete canonical input to outcome evaluation.
@@ -139,6 +163,10 @@ func EvaluateRunOutcome(input RunEvaluationInput) RunResult {
 	acceptance := input.Acceptance
 	if acceptance == "" {
 		acceptance = AcceptanceNotConfigured
+	} else if acceptance != AcceptanceNotConfigured && acceptance != AcceptancePassed && acceptance != AcceptanceFailed {
+		// An unknown persisted/configured state is not evidence of acceptance.
+		// Fail closed rather than allowing malformed state to become completed.
+		acceptance = AcceptanceFailed
 	}
 	result := RunResult{
 		Response: input.Response,
@@ -197,6 +225,87 @@ func EvaluateRunOutcome(input RunEvaluationInput) RunResult {
 	result.Outcome = RunOutcomeCompleted
 	result.GoalSatisfied = true
 	return result
+}
+
+// AggregateRunResults evaluates a multi-team run from the already computed
+// per-team canonical results. Presentation layers must use this helper rather
+// than reimplementing outcome or goal-satisfaction rules. The aggregation is
+// deliberately pure: it only folds observed results and delegates the final
+// decision to EvaluateRunOutcome.
+func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats RunStats) RunResult {
+	input := RunEvaluationInput{
+		UnresolvedTasks: append([]TaskReference(nil), unresolved...),
+		Stats:           stats,
+	}
+	var partial bool
+	var blocked bool
+	failedExitCode := 0
+	cancelledExitCode := 0
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		if input.Response == "" {
+			input.Response = result.Response
+		}
+		if input.Reason == "" {
+			input.Reason = result.Reason
+		}
+		if result.Acceptance != nil {
+			switch result.Acceptance.EffectiveState() {
+			case AcceptanceFailed:
+				input.Acceptance = AcceptanceFailed
+			case AcceptancePassed:
+				if input.Acceptance != AcceptanceFailed {
+					input.Acceptance = AcceptancePassed
+				}
+			case AcceptanceNotConfigured:
+				if input.Acceptance == "" {
+					input.Acceptance = AcceptanceNotConfigured
+				}
+			default:
+				input.Acceptance = AcceptanceFailed
+			}
+		}
+		switch result.Outcome {
+		case RunOutcomeCancelled:
+			input.Cancelled = true
+			if result.ExitCode > cancelledExitCode {
+				cancelledExitCode = result.ExitCode
+			}
+		case RunOutcomeFailed:
+			input.RunFailed = true
+			if result.ExitCode > failedExitCode {
+				failedExitCode = result.ExitCode
+			}
+		case RunOutcomePartial:
+			partial = true
+		case RunOutcomeBlocked:
+			blocked = true
+		}
+	}
+	// Cancellation has evaluator precedence over ordinary failures, so its
+	// exit code must also win regardless of result iteration order.
+	if input.Cancelled {
+		input.ExitCode = cancelledExitCode
+	} else if input.RunFailed {
+		input.ExitCode = failedExitCode
+	}
+	// A legacy or partially persisted result may omit its task references. Keep
+	// that result fail-closed instead of allowing presentation to turn it into
+	// completed solely because the reference list is empty.
+	if blocked && len(input.UnresolvedTasks) == 0 {
+		input.UnresolvedTasks = []TaskReference{{ID: "<blocked-run>", Status: string(TaskBlocked)}}
+	} else if partial && len(input.UnresolvedTasks) == 0 && stats.TasksUnresolved > 0 {
+		input.UnresolvedTasks = []TaskReference{{ID: "<unresolved-run>", Status: string(TaskPending)}}
+	}
+	// A partial team result with no unresolved task or failed acceptance is the
+	// canonical signal for a budget/early-stop outcome. If unresolved work is
+	// present, let the evaluator classify it as partial or blocked instead.
+	if partial && len(input.UnresolvedTasks) == 0 && input.Acceptance != AcceptanceFailed {
+		input.BudgetExceeded = true
+	}
+	return EvaluateRunOutcome(input)
 }
 
 type TaskReference struct {
@@ -339,6 +448,35 @@ func toTaskReferences(items []*TodoItem) []TaskReference {
 		}
 	}
 	return refs
+}
+
+// UnresolvedTaskReferences projects the non-terminal canonical task states
+// into evaluator input. It is intentionally a state-only conversion: it does
+// not inspect task text or infer outcome from descriptions.
+func UnresolvedTaskReferences(items []*TodoItem) []TaskReference {
+	if len(items) == 0 {
+		return nil
+	}
+	unresolved := make([]*TodoItem, 0, len(items))
+	for _, item := range items {
+		if item == nil || !isUnresolvedTaskStatus(item.Status) {
+			continue
+		}
+		if item.Resolution != nil && (item.Resolution.Status == "superseded" || item.Resolution.Status == "reconciled" || item.Resolution.Status == "waived") {
+			continue
+		}
+		unresolved = append(unresolved, item)
+	}
+	return toTaskReferences(unresolved)
+}
+
+func isUnresolvedTaskStatus(status TaskStatus) bool {
+	switch status {
+	case TaskPending, TaskPlanned, TaskInProgress, TaskPaused, TaskVerifying, TaskProtocolIncomplete, TaskError, TaskBlocked:
+		return true
+	default:
+		return false
+	}
 }
 
 // ValidateResolution checks a TaskResolution for validity, evidence requirements, and N-node cycle prevention.

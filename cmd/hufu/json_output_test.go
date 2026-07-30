@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/anomalyco/hufu/internal/team"
 )
@@ -140,19 +141,66 @@ func TestJSONOutputPreservesAcceptanceNotConfigured(t *testing.T) {
 	}
 }
 
-func TestFirstNonSuccessfulRunResultIgnoresRestoredHistoricalResult(t *testing.T) {
+func TestCanonicalNonSuccessfulRunResultIgnoresRestoredHistoricalResult(t *testing.T) {
 	coordinator := &team.Coordinator{}
 	historical := &team.RunResult{Outcome: team.RunOutcomePartial, ExitCode: 7}
 	coordinator.SetLastRunResult(historical)
 	tc := &teamContext{teamName: "restored", coordinator: coordinator}
 	loaded := map[string]*teamContext{"restored": tc}
-	if got := firstNonSuccessfulRunResult(loaded, map[string]*team.RunResult{"restored": historical}); got != nil {
+	if got := canonicalNonSuccessfulRunResult(loaded, map[string]*team.RunResult{"restored": historical}); got != nil {
 		t.Fatalf("historical result selected: %#v", got)
 	}
 
 	current := &team.RunResult{Outcome: team.RunOutcomePartial, ExitCode: 7}
 	coordinator.SetLastRunResult(current)
-	if got := firstNonSuccessfulRunResult(loaded, map[string]*team.RunResult{"restored": historical}); got != current {
-		t.Fatalf("current result = %#v, want %p", got, current)
+	got := canonicalNonSuccessfulRunResult(loaded, map[string]*team.RunResult{"restored": historical})
+	if got == nil || got.Outcome != current.Outcome || got.ExitCode != current.ExitCode {
+		t.Fatalf("current result = %#v, want outcome=%q exit=%d", got, current.Outcome, current.ExitCode)
+	}
+}
+
+func TestCanonicalNonSuccessfulRunResultDelegatesExitCodeSelection(t *testing.T) {
+	failed := &team.RunResult{Outcome: team.RunOutcomeFailed, ExitCode: 1}
+	partial := &team.RunResult{Outcome: team.RunOutcomePartial, ExitCode: 7}
+	loaded := map[string]*teamContext{
+		"failed":  {teamName: "failed", coordinator: &team.Coordinator{}},
+		"partial": {teamName: "partial", coordinator: &team.Coordinator{}},
+	}
+	loaded["failed"].coordinator.SetLastRunResult(failed)
+	loaded["partial"].coordinator.SetLastRunResult(partial)
+
+	got := canonicalNonSuccessfulRunResult(loaded, nil)
+	if got == nil || got.Outcome != team.RunOutcomeFailed || got.ExitCode != 1 {
+		t.Fatalf("canonical result = %#v, want failed/1", got)
+	}
+}
+
+func TestJSONOutputIgnoresHistoricalUnresolvedTasks(t *testing.T) {
+	tc := &teamContext{teamName: "resumed", coordinator: &team.Coordinator{}}
+	tc.coordinator.SetLastRunResult(&team.RunResult{
+		Outcome:       team.RunOutcomeCompleted,
+		GoalSatisfied: true,
+		Acceptance:    &team.AcceptanceResult{State: team.AcceptanceNotConfigured},
+	})
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	err = printResultJSONWithPrior("done", map[string]*teamContext{"resumed": tc}, nil, map[string]map[string]time.Time{
+		"resumed": {"old": time.Time{}},
+	})
+	_ = w.Close()
+	os.Stdout = oldStdout
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out jsonRunOutput
+	if err := json.NewDecoder(r).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Outcome != string(team.RunOutcomeCompleted) || !out.GoalSatisfied {
+		t.Fatalf("JSON output = %#v, want completed/satisfied", out)
 	}
 }

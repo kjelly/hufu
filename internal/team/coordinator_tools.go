@@ -242,7 +242,7 @@ func failedTodoItems(items []*TodoItem) []*TodoItem {
 func pendingTodoItems(items []*TodoItem) []*TodoItem {
 	pending := make([]*TodoItem, 0)
 	for _, item := range items {
-		if item != nil && (item.Status == TaskPending || item.Status == TaskInProgress || item.Status == TaskPlanned || item.Status == TaskVerifying || item.Status == TaskPaused) {
+		if item != nil && (item.Status == TaskPending || item.Status == TaskInProgress || item.Status == TaskPlanned || item.Status == TaskVerifying || item.Status == TaskPaused || item.Status == TaskProtocolIncomplete) {
 			if item.Resolution != nil && (item.Resolution.Status == "superseded" || item.Resolution.Status == "reconciled" || item.Resolution.Status == "waived") {
 				continue
 			}

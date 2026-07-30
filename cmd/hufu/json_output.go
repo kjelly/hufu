@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/anomalyco/hufu/internal/team"
 )
@@ -41,44 +42,13 @@ type jsonRunSkill struct {
 	Agents []string `json:"agents"`
 }
 
-func aggregateOutcomes(outcomes []team.RunOutcome) team.RunOutcome {
-	if len(outcomes) == 0 {
-		return team.RunOutcomeCompleted
-	}
-	hasFailed := false
-	hasBlocked := false
-	hasPartial := false
-	hasCancelled := false
-	for _, o := range outcomes {
-		switch o {
-		case team.RunOutcomeFailed:
-			hasFailed = true
-		case team.RunOutcomeBlocked:
-			hasBlocked = true
-		case team.RunOutcomePartial:
-			hasPartial = true
-		case team.RunOutcomeCancelled:
-			hasCancelled = true
-		}
-	}
-	if hasFailed {
-		return team.RunOutcomeFailed
-	}
-	if hasBlocked {
-		return team.RunOutcomeBlocked
-	}
-	if hasPartial {
-		return team.RunOutcomePartial
-	}
-	if hasCancelled {
-		return team.RunOutcomeCancelled
-	}
-	return team.RunOutcomeCompleted
-}
-
 // printResultJSON writes the run result, per-team task/token data and skill
 // usage to stdout as a single JSON object, for scripting and piping.
 func printResultJSON(result string, loadedTeams map[string]*teamContext, skills []team.SkillUsageEntry) error {
+	return printResultJSONWithPrior(result, loadedTeams, skills, nil)
+}
+
+func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext, skills []team.SkillUsageEntry, priorUnresolved map[string]map[string]time.Time) error {
 	out := jsonRunOutput{Result: result}
 
 	names := make([]string, 0, len(loadedTeams))
@@ -87,8 +57,9 @@ func printResultJSON(result string, loadedTeams map[string]*teamContext, skills 
 	}
 	sort.Strings(names)
 
-	var teamOutcomes []team.RunOutcome
+	var runResults []*team.RunResult
 	var allItems []*team.TodoItem
+	var currentItems []*team.TodoItem
 
 	for _, name := range names {
 		tc := loadedTeams[name]
@@ -96,20 +67,7 @@ func printResultJSON(result string, loadedTeams map[string]*teamContext, skills 
 			continue
 		}
 		if lastRes := tc.coordinator.LastRunResult(); lastRes != nil {
-			teamOutcomes = append(teamOutcomes, lastRes.Outcome)
-			if out.Reason == "" && lastRes.Reason != "" {
-				out.Reason = lastRes.Reason
-			}
-			if out.ExitCode == 0 && lastRes.ExitCode != 0 {
-				out.ExitCode = lastRes.ExitCode
-			}
-			if lastRes.Acceptance != nil {
-				acceptance := *lastRes.Acceptance
-				acceptance.State = acceptance.EffectiveState()
-				if out.Acceptance == nil || acceptance.State != team.AcceptancePassed {
-					out.Acceptance = &acceptance
-				}
-			}
+			runResults = append(runResults, lastRes)
 			out.UnresolvedTasks = append(out.UnresolvedTasks, lastRes.UnresolvedTasks...)
 		}
 		jt := jsonRunTeam{Name: name, Tokens: tc.coordinator.TokensUsed()}
@@ -118,6 +76,11 @@ func printResultJSON(result string, loadedTeams map[string]*teamContext, skills 
 			items = tracker.TodoList().Items()
 		}
 		allItems = append(allItems, items...)
+		for _, item := range items {
+			if item == nil || !isHistoricalUnresolvedTask(name, item, priorUnresolved) {
+				currentItems = append(currentItems, item)
+			}
+		}
 		for _, it := range items {
 			jt.Tasks = append(jt.Tasks, jsonRunTask{
 				ID:     it.ID,
@@ -129,13 +92,18 @@ func printResultJSON(result string, loadedTeams map[string]*teamContext, skills 
 		out.Teams = append(out.Teams, jt)
 	}
 
-	topOutcome := aggregateOutcomes(teamOutcomes)
+	out.UnresolvedTasks = appendUniqueTaskReferences(out.UnresolvedTasks, team.UnresolvedTaskReferences(currentItems))
 	out.Stats = team.SummarizeRunStats(allItems)
-	if out.Stats.TasksUnresolved > 0 && topOutcome == team.RunOutcomeCompleted {
-		topOutcome = team.RunOutcomePartial
+	canonical := team.AggregateRunResults(runResults, out.UnresolvedTasks, out.Stats)
+	out.Outcome = string(canonical.Outcome)
+	out.GoalSatisfied = canonical.GoalSatisfied
+	out.Reason = canonical.Reason
+	out.ExitCode = canonical.ExitCode
+	if canonical.Acceptance != nil {
+		acceptance := *canonical.Acceptance
+		acceptance.State = acceptance.EffectiveState()
+		out.Acceptance = &acceptance
 	}
-	out.Outcome = string(topOutcome)
-	out.GoalSatisfied = topOutcome == team.RunOutcomeCompleted
 
 	for _, s := range skills {
 		out.Skills = append(out.Skills, jsonRunSkill{Name: s.Name, Count: s.Count, Agents: s.Agents})
@@ -144,4 +112,29 @@ func printResultJSON(result string, loadedTeams map[string]*teamContext, skills 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+func isHistoricalUnresolvedTask(teamName string, item *team.TodoItem, priorUnresolved map[string]map[string]time.Time) bool {
+	if item == nil || (item.Status != team.TaskError && item.Status != team.TaskBlocked) {
+		return false
+	}
+	prior := priorUnresolved[teamName]
+	endedAt, ok := prior[item.ID]
+	return ok && endedAt.Equal(item.EndedAt)
+}
+
+func appendUniqueTaskReferences(existing, additional []team.TaskReference) []team.TaskReference {
+	seen := make(map[string]struct{}, len(existing)+len(additional))
+	key := func(ref team.TaskReference) string { return ref.ID + "\x00" + ref.Status }
+	for _, ref := range existing {
+		seen[key(ref)] = struct{}{}
+	}
+	for _, ref := range additional {
+		if _, ok := seen[key(ref)]; ok {
+			continue
+		}
+		seen[key(ref)] = struct{}{}
+		existing = append(existing, ref)
+	}
+	return existing
 }

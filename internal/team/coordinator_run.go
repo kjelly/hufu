@@ -917,7 +917,7 @@ func runResultStatusData(result *RunResult) map[string]any {
 	}
 	if result.Acceptance != nil {
 		data["acceptance_state"] = result.Acceptance.EffectiveState()
-		data["acceptance_passed"] = result.Acceptance.Passed
+		data["acceptance_passed"] = result.Acceptance.IsPassed()
 	}
 	data["exit_code"] = result.ExitCode
 	return data

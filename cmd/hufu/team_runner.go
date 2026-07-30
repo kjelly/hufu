@@ -152,44 +152,7 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 	var result string
 	var runErr error
 	if opts.tuiMode {
-		var teamInfo tuipkg.TeamInfo
-		teamInfo.AvailableTeams = registry.ListTeams()
-		for _, tc := range loadedTeams {
-			if tc != nil && tc.session != nil {
-				teamInfo.TeamName = tc.session.Config.Name
-				teamInfo.Workspace = tc.session.Workspace
-				teamInfo.TeamDir = tc.session.Dir
-				teamInfo.DefaultModel = tc.session.Config.Generation.Model
-				for _, ag := range sortedAgents(tc.session.Agents) {
-					model := ag.Generation.Model
-					if model == "" {
-						model = tc.session.Config.Generation.Model
-					}
-					teamInfo.Agents = append(teamInfo.Agents, tuipkg.AgentInfoEntry{
-						Name:  ag.Name,
-						Role:  ag.Role,
-						Model: model,
-					})
-				}
-				for _, s := range tc.session.Skills {
-					teamInfo.Skills = append(teamInfo.Skills, s.Name)
-				}
-				if sc := tc.session.Config.SidecarModel; sc != "" {
-					teamInfo.SidecarModel = sc
-				}
-				if gm := tc.session.Config.GuardModel; gm != "" {
-					teamInfo.GuardModel = gm
-				}
-				teamInfo.MemoryEnabled = opts.memoryEnabled && !opts.tempWorkspace
-				if teamInfo.MemoryEnabled {
-					teamInfo.MemoryModel = config.ResolveEmbeddingModel(opts.memoryModel)
-				}
-				teamInfo.SSHSessions = 0
-				teamInfo.PTYEnabled = opts.enablePTYTerminal
-				teamInfo.HufuBinary, _ = os.Executable()
-				break
-			}
-		}
+		teamInfo := buildTeamInfoForTUI(registry, loadedTeams)
 		result, runErr = runWithTUI(ctx, cancel, prompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, teamInfo, route)
 	} else {
 		result, runErr = executeSegments(ctx, segments, registry, opts.providerURL, loadedTeams, injector, activeCoord, pathConsent, vars, route)
@@ -203,11 +166,11 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 			generateReport(loadedTeams, result)
 		}
 		if opts.outputFormat == "json" {
-			if outputErr := printResultJSON(result, loadedTeams, nil); outputErr != nil {
+			if outputErr := printResultJSONWithPrior(result, loadedTeams, nil, priorUnresolved); outputErr != nil {
 				return fmt.Errorf("%w (json output failed: %v)", runErr, outputErr)
 			}
 		}
-		return team.WrapRunOutcomeError(runErr, firstNonSuccessfulRunResult(loadedTeams, priorResults))
+		return team.WrapRunOutcomeError(runErr, canonicalNonSuccessfulRunResultWithPrior(loadedTeams, priorResults, priorUnresolved))
 	}
 
 	if opts.reportMode {
@@ -242,7 +205,7 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 		}
 	}
 	if opts.outputFormat == "json" {
-		if err := printResultJSON(result, loadedTeams, allSkillUsage); err != nil {
+		if err := printResultJSONWithPrior(result, loadedTeams, allSkillUsage, priorUnresolved); err != nil {
 			return err
 		}
 	} else {
@@ -282,7 +245,7 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 			break
 		}
 	}
-	if outcome := firstNonSuccessfulRunResult(loadedTeams, priorResults); outcome != nil {
+	if outcome := canonicalNonSuccessfulRunResultWithPrior(loadedTeams, priorResults, priorUnresolved); outcome != nil {
 		if unresolvedErr == nil {
 			unresolvedErr = fmt.Errorf("run outcome is %s", outcome.Outcome)
 		}
@@ -295,8 +258,18 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 	return nil
 }
 
-func firstNonSuccessfulRunResult(loadedTeams map[string]*teamContext, priorResults map[string]*team.RunResult) *team.RunResult {
-	var selected *team.RunResult
+// canonicalNonSuccessfulRunResult folds only results produced by this
+// invocation and delegates outcome/exit-code selection to the team evaluator.
+// Historical restored results are intentionally excluded so a later run is
+// not made to fail by an earlier session branch.
+func canonicalNonSuccessfulRunResult(loadedTeams map[string]*teamContext, priorResults map[string]*team.RunResult) *team.RunResult {
+	return canonicalNonSuccessfulRunResultWithPrior(loadedTeams, priorResults, nil)
+}
+
+func canonicalNonSuccessfulRunResultWithPrior(loadedTeams map[string]*teamContext, priorResults map[string]*team.RunResult, priorUnresolved map[string]map[string]time.Time) *team.RunResult {
+	var results []*team.RunResult
+	var unresolved []team.TaskReference
+	var stats team.RunStats
 	for name, tc := range loadedTeams {
 		if tc == nil || tc.coordinator == nil {
 			continue
@@ -305,14 +278,37 @@ func firstNonSuccessfulRunResult(loadedTeams map[string]*teamContext, priorResul
 		if result == nil || result == priorResults[name] {
 			continue
 		}
-		if team.IsRunOutcomeSuccess(result.Outcome) {
-			continue
+		results = append(results, result)
+		unresolved = append(unresolved, result.UnresolvedTasks...)
+		if tracker := tc.coordinator.TaskTracker(); tracker != nil && tracker.TodoList() != nil {
+			for _, item := range tracker.TodoList().Items() {
+				if item == nil {
+					continue
+				}
+				if item.Status == team.TaskError || item.Status == team.TaskBlocked {
+					if prior := priorUnresolved[name]; prior != nil {
+						if endedAt, ok := prior[item.ID]; ok && endedAt.Equal(item.EndedAt) {
+							continue
+						}
+					}
+				}
+				unresolved = append(unresolved, team.UnresolvedTaskReferences([]*team.TodoItem{item})...)
+			}
 		}
-		if selected == nil || result.ExitCode > selected.ExitCode {
-			selected = result
-		}
+		stats.TasksTotal += result.Stats.TasksTotal
+		stats.TasksDone += result.Stats.TasksDone
+		stats.TasksUnresolved += result.Stats.TasksUnresolved
+		stats.AttemptsTotal += result.Stats.AttemptsTotal
+		stats.AttemptsFailed += result.Stats.AttemptsFailed
 	}
-	return selected
+	if len(results) == 0 {
+		return nil
+	}
+	evaluated := team.AggregateRunResults(results, unresolved, stats)
+	if team.IsRunOutcomeSuccess(evaluated.Outcome) {
+		return nil
+	}
+	return &evaluated
 }
 
 // snapshotUnresolvedTasks records terminal failures already present before an
@@ -326,6 +322,50 @@ func snapshotUnresolvedTasks(items []*team.TodoItem) map[string]time.Time {
 		}
 	}
 	return prior
+}
+
+// buildTeamInfoForTUI constructs TeamInfo from loaded teams for the TUI.
+func buildTeamInfoForTUI(registry *team.TeamRegistry, loadedTeams map[string]*teamContext) tuipkg.TeamInfo {
+	var teamInfo tuipkg.TeamInfo
+	teamInfo.AvailableTeams = registry.ListTeams()
+	for _, tc := range loadedTeams {
+		if tc == nil || tc.session == nil {
+			continue
+		}
+		teamInfo.TeamName = tc.session.Config.Name
+		teamInfo.Workspace = tc.session.Workspace
+		teamInfo.TeamDir = tc.session.Dir
+		teamInfo.DefaultModel = tc.session.Config.Generation.Model
+		for _, ag := range sortedAgents(tc.session.Agents) {
+			model := ag.Generation.Model
+			if model == "" {
+				model = tc.session.Config.Generation.Model
+			}
+			teamInfo.Agents = append(teamInfo.Agents, tuipkg.AgentInfoEntry{
+				Name:  ag.Name,
+				Role:  ag.Role,
+				Model: model,
+			})
+		}
+		for _, s := range tc.session.Skills {
+			teamInfo.Skills = append(teamInfo.Skills, s.Name)
+		}
+		if sc := tc.session.Config.SidecarModel; sc != "" {
+			teamInfo.SidecarModel = sc
+		}
+		if gm := tc.session.Config.GuardModel; gm != "" {
+			teamInfo.GuardModel = gm
+		}
+		teamInfo.MemoryEnabled = opts.memoryEnabled && !opts.tempWorkspace
+		if teamInfo.MemoryEnabled {
+			teamInfo.MemoryModel = config.ResolveEmbeddingModel(opts.memoryModel)
+		}
+		teamInfo.SSHSessions = 0
+		teamInfo.PTYEnabled = opts.enablePTYTerminal
+		teamInfo.HufuBinary, _ = os.Executable()
+		break
+	}
+	return teamInfo
 }
 
 func executionUnresolvedTask(items []*team.TodoItem, prior map[string]time.Time) *team.TodoItem {

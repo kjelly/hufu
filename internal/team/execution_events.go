@@ -161,7 +161,7 @@ func (c *Coordinator) beginExecutionRun() func() {
 			payload["goal_satisfied"] = result.GoalSatisfied
 			if result.Acceptance != nil {
 				payload["acceptance_state"] = result.Acceptance.EffectiveState()
-				payload["acceptance_passed"] = result.Acceptance.Passed
+				payload["acceptance_passed"] = result.Acceptance.IsPassed()
 			}
 			payload["stats"] = result.Stats
 			payload["metrics"] = result.Metrics
