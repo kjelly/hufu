@@ -92,16 +92,26 @@ func (c *Coordinator) initEventStore() {
 }
 
 // emitEvent logs a RunEvent to the coordinator's eventStore if initialized.
-func (c *Coordinator) emitEvent(eventType, actor, taskID string, payload map[string]interface{}) {
+func (c *Coordinator) emitEvent(eventType, actor, taskID string, payload map[string]interface{}) error {
 	if c == nil || c.eventStore == nil {
-		return
+		return nil
+	}
+	if IsTerminalEvent(eventType) && len(payload) == 0 {
+		err := fmt.Errorf("terminal event %q emitted with empty payload", eventType)
+		log.Printf("error: dual-write event emit failed for type %s: %v", eventType, err)
+		c.dualWriteFailures.Add(1)
+		return err
 	}
 	var rawPayload json.RawMessage
-	if payload != nil {
-		data, err := json.Marshal(payload)
-		if err == nil {
-			rawPayload = json.RawMessage(utils.RedactSecrets(string(data)))
-		}
+	data, err := json.Marshal(payload)
+	if err == nil {
+		rawPayload = json.RawMessage(utils.RedactSecrets(string(data)))
+	}
+	if IsTerminalEvent(eventType) && IsEmptyPayload(rawPayload) {
+		err := fmt.Errorf("terminal event %q produced empty payload after marshal", eventType)
+		log.Printf("error: dual-write event emit failed for type %s: %v", eventType, err)
+		c.dualWriteFailures.Add(1)
+		return err
 	}
 	if err := c.eventStore.Append(RunEvent{
 		Type:    eventType,
@@ -111,7 +121,9 @@ func (c *Coordinator) emitEvent(eventType, actor, taskID string, payload map[str
 	}); err != nil {
 		log.Printf("warning: dual-write event emit failed for type %s: %v", eventType, err)
 		c.dualWriteFailures.Add(1)
+		return err
 	}
+	return nil
 }
 
 func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {

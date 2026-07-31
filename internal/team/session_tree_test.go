@@ -117,7 +117,7 @@ func TestSessionTree_FilterEventsForBranch(t *testing.T) {
 	}
 
 	_ = es.Append(RunEvent{ID: "evt-1", BranchID: "main", Type: "task_started"})
-	_ = es.Append(RunEvent{ID: "evt-2", BranchID: "main", Type: "task_completed"})
+	_ = es.Append(RunEvent{ID: "evt-2", BranchID: "main", Type: "task_completed", Payload: []byte(`{"status":"done"}`)})
 	_ = es.Append(RunEvent{ID: "evt-3", BranchID: "main", Type: "task_started"})
 
 	b1, err := st.CreateBranch("feature-b", "evt-3", es)
@@ -125,9 +125,9 @@ func TestSessionTree_FilterEventsForBranch(t *testing.T) {
 		t.Fatalf("CreateBranch failed: %v", err)
 	}
 
-	_ = es.Append(RunEvent{ID: "evt-4", BranchID: "main", Type: "task_completed"})
+	_ = es.Append(RunEvent{ID: "evt-4", BranchID: "main", Type: "task_completed", Payload: []byte(`{"status":"done"}`)})
 	_ = es.Append(RunEvent{ID: "evt-5", BranchID: b1.ID, Type: "task_started"})
-	_ = es.Append(RunEvent{ID: "evt-6", BranchID: b1.ID, Type: "task_completed"})
+	_ = es.Append(RunEvent{ID: "evt-6", BranchID: b1.ID, Type: "task_completed", Payload: []byte(`{"status":"done"}`)})
 
 	events, err := es.ReadEvents()
 	if err != nil {

@@ -118,6 +118,43 @@ func generateEventID() string {
 	return fmt.Sprintf("evt-%s-%s", time.Now().UTC().Format("20060102150405"), hex.EncodeToString(buf))
 }
 
+// IsTerminalEvent returns true if the event type represents a terminal run or task outcome.
+func IsTerminalEvent(eventType string) bool {
+	switch eventType {
+	case "run_finished", "task_completed", "task_failed", "task_blocked", "task_skipped", "task_protocol_incomplete":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsEmptyPayload checks if a JSON raw payload is nil, 0 bytes, whitespace, or a vacuous empty container ({}, [], null).
+func IsEmptyPayload(payload json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 {
+		return true
+	}
+	s := string(trimmed)
+	if s == "null" || s == "{}" || s == "[]" {
+		return true
+	}
+	var val interface{}
+	if err := json.Unmarshal(trimmed, &val); err != nil {
+		return true
+	}
+	if val == nil {
+		return true
+	}
+	switch v := val.(type) {
+	case map[string]interface{}:
+		return len(v) == 0
+	case []interface{}:
+		return len(v) == 0
+	default:
+		return false
+	}
+}
+
 // Append appends a new RunEvent to the log with hash chaining.
 func (es *EventStore) Append(event RunEvent) error {
 	es.mu.Lock()
@@ -125,6 +162,10 @@ func (es *EventStore) Append(event RunEvent) error {
 
 	if es.f == nil {
 		return fmt.Errorf("event store closed")
+	}
+
+	if IsTerminalEvent(event.Type) && IsEmptyPayload(event.Payload) {
+		return fmt.Errorf("reject terminal event %q with empty payload", event.Type)
 	}
 
 	es.sequence++

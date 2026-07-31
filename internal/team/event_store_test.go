@@ -58,7 +58,7 @@ func TestEventStoreTamperDetection(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = es.Append(RunEvent{Type: "run_started", Actor: "user"})
-	_ = es.Append(RunEvent{Type: "run_finished", Actor: "coordinator"})
+	_ = es.Append(RunEvent{Type: "run_finished", Actor: "coordinator", Payload: []byte(`{"outcome":"success"}`)})
 	_ = es.Close()
 
 	// Tamper with event log file directly
@@ -75,5 +75,54 @@ func TestEventStoreTamperDetection(t *testing.T) {
 
 	if err := es2.VerifyHashChain(); err == nil {
 		t.Errorf("expected hash chain error on tampered file, got nil")
+	}
+}
+
+func TestWP14_RejectTerminalEventsWithEmptyPayload(t *testing.T) {
+	dir := t.TempDir()
+	es, err := NewEventStore(dir, "run-101", "session-202")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer es.Close()
+
+	// 1. All empty payload variations (nil, empty string, whitespace, null, {}, { }, {\n}, [], [ ]) for terminal event must be rejected
+	emptyCases := [][]byte{
+		nil,
+		[]byte(""),
+		[]byte("   "),
+		[]byte("null"),
+		[]byte("{}"),
+		[]byte("{ }"),
+		[]byte("{\n  \t\n}"),
+		[]byte("[]"),
+		[]byte("[ ]"),
+		[]byte("[\n  \t\n]"),
+	}
+	for _, tc := range emptyCases {
+		if err := es.Append(RunEvent{Type: "run_finished", Actor: "coordinator", Payload: tc}); err == nil {
+			t.Errorf("expected error appending run_finished with empty payload %q, got nil", string(tc))
+		}
+	}
+
+	// 2. Non-terminal event with nil payload is allowed
+	if err := es.Append(RunEvent{Type: "run_started", Actor: "user", Payload: nil}); err != nil {
+		t.Errorf("unexpected error appending non-terminal run_started with nil payload: %v", err)
+	}
+
+	// 3. Terminal event with valid non-empty payload must succeed
+	if err := es.Append(RunEvent{Type: "run_finished", Actor: "coordinator", Payload: []byte(`{"outcome":"success","goal_satisfied":true}`)}); err != nil {
+		t.Errorf("unexpected error appending run_finished with valid payload: %v", err)
+	}
+
+	// 4. Coordinator.emitEvent with empty payload must fail and increment dualWriteFailures
+	coord := &Coordinator{
+		eventStore: es,
+	}
+	if err := coord.emitEvent("run_finished", "coordinator", "", nil); err == nil {
+		t.Error("expected emitEvent error for run_finished with nil payload, got nil")
+	}
+	if coord.DualWriteFailures() != 1 {
+		t.Errorf("DualWriteFailures = %d, want 1", coord.DualWriteFailures())
 	}
 }

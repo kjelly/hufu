@@ -171,8 +171,13 @@ func (c *Coordinator) beginExecutionRun() func() {
 			}
 			payload["stats"] = result.Stats
 			payload["metrics"] = result.Metrics
+		} else {
+			payload["outcome"] = string(RunOutcomeFailed)
+			payload["goal_satisfied"] = false
 		}
-		c.emitEvent("run_finished", "coordinator", "", payload)
+		if err := c.emitEvent("run_finished", "coordinator", "", payload); err != nil {
+			log.Printf("error: failed to write run_finished event: %v", err)
+		}
 		if c.eventStore != nil {
 			_ = c.eventStore.Close()
 			c.eventStore = nil
