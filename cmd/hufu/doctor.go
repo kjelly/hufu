@@ -102,6 +102,40 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "  %s %d team(s): %s\n", pass, registry.TeamCount(), strings.Join(registry.ListTeams(), ", "))
 	}
 
+	// 5. Verifier contract linting.
+	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("Contract & Verifier Linting:"))
+	contractWarnings := 0
+	contractErrors := 0
+
+	if registry != nil && registry.TeamCount() > 0 {
+		for _, teamName := range registry.ListTeams() {
+			teamDir, err := registry.Resolve(teamName)
+			if err != nil {
+				continue
+			}
+			session, err := team.LoadTeam(teamDir, nil, nil)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  %s team %s: load failed: %v\n", warn, teamName, err)
+				continue
+			}
+			findings := team.LintTeamContracts(session)
+			for _, f := range findings {
+				if f.Severity == team.FindingSeverityError {
+					contractErrors++
+					ok = false
+					fmt.Fprintf(os.Stderr, "  %s team %s acceptance: %s (%s)\n", fail, teamName, f.Message, f.Code)
+				} else {
+					contractWarnings++
+					fmt.Fprintf(os.Stderr, "  %s team %s acceptance: %s (%s)\n", warn, teamName, f.Message, f.Code)
+				}
+			}
+		}
+	}
+
+	if contractErrors == 0 && contractWarnings == 0 {
+		fmt.Fprintf(os.Stderr, "  %s all team verifier contracts valid and asserting\n", pass)
+	}
+
 	fmt.Fprintln(os.Stderr)
 	if ok {
 		fmt.Fprintf(os.Stderr, "%s Ready to call agents.\n", pass)

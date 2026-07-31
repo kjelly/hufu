@@ -1,6 +1,7 @@
 package team
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -18,7 +19,12 @@ import (
 //
 // Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3
 func LintVerifier(spec VerificationSpec, legacyCommand string) []ContractFinding {
-	normalized := NormalizeVerificationSpec(spec, legacyCommand, "")
+	return LintVerifierWithMode(spec, legacyCommand, "")
+}
+
+// LintVerifierWithMode is like LintVerifier, but accepts an explicit legacyMode.
+func LintVerifierWithMode(spec VerificationSpec, legacyCommand, legacyMode string) []ContractFinding {
+	normalized := NormalizeVerificationSpec(spec, legacyCommand, legacyMode)
 
 	// Observation verifiers are exempt: they are never a success gate.
 	if normalized.Mode == "observation" {
@@ -39,6 +45,72 @@ func LintVerifier(spec VerificationSpec, legacyCommand string) []ContractFinding
 	return lintShellCommand(command)
 }
 
+// LintTaskDef statically analyzes a TaskDef's verification spec and legacy command
+// for §4.3 anti-patterns.
+func LintTaskDef(task TaskDef) []ContractFinding {
+	var specArg VerificationSpec
+	if task.VerifySpec != nil {
+		specArg = *task.VerifySpec
+	}
+	return LintVerifierWithMode(specArg, task.Verify, task.VerifyMode)
+}
+
+// LintTeamContracts statically analyzes team-level acceptance criteria and contracts.
+func LintTeamContracts(session *TeamSession) []ContractFinding {
+	if session == nil {
+		return nil
+	}
+	var findings []ContractFinding
+
+	accSpec := session.Config.AcceptanceSpec
+	if accSpec != nil {
+		// 1. Lint every command in accSpec.Commands
+		for _, cmd := range accSpec.Commands {
+			cmd = strings.TrimSpace(cmd)
+			if cmd != "" {
+				spec := VerificationSpec{
+					Type:    VerifyCommandExit,
+					Command: cmd,
+				}
+				findings = append(findings, LintVerifierWithMode(spec, cmd, "")...)
+			}
+		}
+
+		// 2. Lint every VerificationSpec in accSpec.Verifications
+		for _, v := range accSpec.Verifications {
+			findings = append(findings, LintVerifierWithMode(v, v.Command, v.Mode)...)
+		}
+
+		// 3. Lint every AcceptanceCriterion in accSpec.Criteria
+		for _, crit := range accSpec.Criteria {
+			findings = append(findings, LintVerifierWithMode(crit.Verify, crit.Verify.Command, crit.Verify.Mode)...)
+		}
+	}
+
+	// 4. Preserve legacy Acceptance lint when not already represented in accSpec.Commands
+	legacyCmd := strings.TrimSpace(session.Config.Acceptance)
+	if legacyCmd != "" {
+		alreadyLinted := false
+		if accSpec != nil {
+			for _, cmd := range accSpec.Commands {
+				if strings.TrimSpace(cmd) == legacyCmd {
+					alreadyLinted = true
+					break
+				}
+			}
+		}
+		if !alreadyLinted {
+			spec := VerificationSpec{
+				Type:    VerifyCommandExit,
+				Command: legacyCmd,
+			}
+			findings = append(findings, LintVerifierWithMode(spec, legacyCmd, "")...)
+		}
+	}
+
+	return findings
+}
+
 // lintShellCommand analyses a raw shell command for §4.3 anti-patterns.
 // It operates on the textual representation of the command; no execution occurs.
 func lintShellCommand(command string) []ContractFinding {
@@ -55,12 +127,8 @@ func lintShellCommand(command string) []ContractFinding {
 // lintTailSwallowsExitCode detects patterns where the verifier always exits 0
 // regardless of assertion outcome:
 //   - `<assert> || true`           — rhs is the bare word "true"
-//   - `<assert> || echo ...`       — rhs is a terminal echo (no further pipe)
+//   - `<assert> || <printer>`      — rhs ends with a pure printer (echo, cat, etc.)
 //   - `...; exit 0`                — explicit forced exit code
-//
-// When the rhs of `||` is a pipeline (e.g. `echo fail | grep -q no-match`),
-// the analysis is undecidable at the syntax level, so a warning is emitted
-// instead of an error.
 //
 // Refs: §4.3 anti-pattern table, row 1.
 func lintTailSwallowsExitCode(command string) []ContractFinding {
@@ -69,7 +137,8 @@ func lintTailSwallowsExitCode(command string) []ContractFinding {
 	// Split on semicolons to detect trailing `; exit 0`.
 	semicolonParts := splitRespectingQuotes(command, ';')
 	lastSemi := strings.TrimSpace(semicolonParts[len(semicolonParts)-1])
-	if lastSemi == "exit 0" || lastSemi == "exit\t0" {
+	lastSemiFields := strings.Fields(lastSemi)
+	if len(lastSemiFields) == 2 && strings.ToLower(lastSemiFields[0]) == "exit" && lastSemiFields[1] == "0" {
 		findings = append(findings, ContractFinding{
 			Severity: FindingSeverityError,
 			Code:     FindingVerifierNotAsserting,
@@ -79,15 +148,54 @@ func lintTailSwallowsExitCode(command string) []ContractFinding {
 		})
 	}
 
-	// Detect `|| <rhs>` at the end of the command.
-	orIdx := lastOrOperatorIndex(command)
+	// Detect `|| <rhs>` in the last semicolon segment.
+	orIdx := lastOrOperatorIndex(lastSemi)
 	if orIdx >= 0 {
-		// Extract the rhs of the last `||`, e.g. everything after `||`.
-		rhs := strings.TrimSpace(command[orIdx+2:])
-		rhsLower := strings.ToLower(rhs)
+		rhs := strings.TrimSpace(lastSemi[orIdx+2:])
+		andParts := splitAndOperators(rhs)
+		firstAndPart := strings.TrimSpace(andParts[0])
 
-		// `|| true` — structurally always exits 0: error.
-		if rhsLower == "true" {
+		rhsStages := SplitPipelineStages(firstAndPart)
+		if len(rhsStages) == 0 {
+			return findings
+		}
+		lastRHSStage := strings.TrimSpace(rhsStages[len(rhsStages)-1])
+		firstToken := strings.ToLower(firstShellToken(lastRHSStage))
+
+		isFallbackPrinter := isPurePrinter(firstToken) || firstToken == "true"
+		if !isFallbackPrinter {
+			// The command right after || is not a fallback printer or true (e.g. || false, || grep).
+			// When the assertion fails, || false returns non-zero so && true is skipped.
+			return findings
+		}
+
+		if len(andParts) > 1 {
+			severity, isFinding := evaluateAndChain(andParts[1:])
+			if !isFinding {
+				return findings
+			}
+			lastAndPart := strings.TrimSpace(andParts[len(andParts)-1])
+			if severity == FindingSeverityError {
+				findings = append(findings, ContractFinding{
+					Severity: FindingSeverityError,
+					Code:     FindingVerifierNotAsserting,
+					Field:    "verify",
+					Message:  "verifier uses `|| ... && " + lastAndPart + "` which forces exit code 0, swallowing assertion failure",
+					Hint:     "Remove `&& " + lastAndPart + "` or ensure the fallback control list propagates assertion failures as non-zero exit codes.",
+				})
+			} else {
+				findings = append(findings, ContractFinding{
+					Severity: FindingSeverityWarning,
+					Code:     FindingVerifierNotAsserting,
+					Field:    "verify",
+					Message:  "verifier uses `|| ... && ...` control list; static analysis cannot determine if final status asserts failure",
+					Hint:     "Ensure the command returns a non-zero exit code on assertion failure.",
+				})
+			}
+			return findings
+		}
+
+		if firstToken == "true" {
 			findings = append(findings, ContractFinding{
 				Severity: FindingSeverityError,
 				Code:     FindingVerifierNotAsserting,
@@ -95,35 +203,14 @@ func lintTailSwallowsExitCode(command string) []ContractFinding {
 				Message:  "verifier uses `|| true` which swallows all failures and always exits 0",
 				Hint:     "Remove the `|| true` fallback so assertion failures propagate as non-zero exit codes.",
 			})
-			return findings
-		}
-
-		// `|| echo <text>` where echo is the sole terminal command (no further
-		// pipe): structurally exits 0 — error.
-		// But `|| echo ... | ...` continues with a pipeline stage, making the
-		// final exit code undecidable statically — warning.
-		if rhsLower == "echo" || strings.HasPrefix(rhsLower, "echo ") {
-			// Check whether the rhs contains a further pipe (not `||`).
-			rhsStages := SplitPipelineStages(rhs)
-			if len(rhsStages) == 1 {
-				// Terminal echo — always exits 0: error.
-				findings = append(findings, ContractFinding{
-					Severity: FindingSeverityError,
-					Code:     FindingVerifierNotAsserting,
-					Field:    "verify",
-					Message:  "verifier uses `|| echo ...` as a terminal fallback which always exits 0, swallowing the assertion failure",
-					Hint:     "Remove the `|| echo` fallback so assertion failures propagate as non-zero exit codes.",
-				})
-			} else {
-				// RHS continues into a pipeline — undecidable statically: warning.
-				findings = append(findings, ContractFinding{
-					Severity: FindingSeverityWarning,
-					Code:     FindingVerifierNotAsserting,
-					Field:    "verify",
-					Message:  "verifier uses `|| echo ... | ...`; static analysis cannot determine whether the pipeline always exits 0",
-					Hint:     "Ensure the final pipeline stage is an asserting command, or use a typed verifier.",
-				})
-			}
+		} else if isPurePrinter(firstToken) {
+			findings = append(findings, ContractFinding{
+				Severity: FindingSeverityError,
+				Code:     FindingVerifierNotAsserting,
+				Field:    "verify",
+				Message:  "verifier uses `|| " + firstToken + " ...` as a terminal fallback which always exits 0, swallowing the assertion failure",
+				Hint:     "Remove the `|| " + firstToken + "` fallback so assertion failures propagate as non-zero exit codes.",
+			})
 		}
 	}
 
@@ -145,19 +232,38 @@ func lintLastStageIsPrinter(command string) []ContractFinding {
 	}
 
 	last := strings.TrimSpace(stages[len(stages)-1])
-	firstToken := firstShellToken(last)
-	firstTokenLower := strings.ToLower(firstToken)
-
-	// Well-known pure-output commands that always exit 0.
-	purePrinters := map[string]bool{
-		"echo":   true,
-		"cat":    true,
-		"printf": true,
-		"tee":    true,
-		"print":  true,
+	andParts := splitAndOperators(last)
+	if len(andParts) > 1 {
+		firstPart := strings.TrimSpace(andParts[0])
+		firstToken := firstShellToken(firstPart)
+		if isPurePrinter(firstToken) {
+			severity, isFinding := evaluateAndChain(andParts[1:])
+			if !isFinding {
+				return nil
+			}
+			lastAndPart := strings.TrimSpace(andParts[len(andParts)-1])
+			if severity == FindingSeverityError {
+				return []ContractFinding{{
+					Severity: FindingSeverityError,
+					Code:     FindingVerifierNotAsserting,
+					Field:    "verify",
+					Message:  "last pipeline stage is a pure output command (" + firstToken + ") followed by `&& " + lastAndPart + "` which forces exit code 0",
+					Hint:     "Ensure the verifier pipeline returns a non-zero exit code on assertion failure.",
+				}}
+			}
+			return []ContractFinding{{
+				Severity: FindingSeverityWarning,
+				Code:     FindingVerifierNotAsserting,
+				Field:    "verify",
+				Message:  "last pipeline stage is a pure output command (" + firstToken + ") followed by `&& ...`; static analysis cannot determine if final status asserts failure",
+				Hint:     "Ensure the verifier pipeline returns a non-zero exit code on assertion failure.",
+			}}
+		}
+		return nil
 	}
 
-	if !purePrinters[firstTokenLower] {
+	firstToken := firstShellToken(last)
+	if !isPurePrinter(firstToken) {
 		return nil
 	}
 
@@ -174,6 +280,111 @@ func lintLastStageIsPrinter(command string) []ContractFinding {
 		Message:  msg,
 		Hint:     "Move the assertion to be the final stage, or use `json_assert` to check structured output instead.",
 	}}
+}
+
+// splitAndOperators splits s on unquoted `&&` operators.
+func splitAndOperators(s string) []string {
+	var parts []string
+	var cur strings.Builder
+	inSingle := false
+	inDouble := false
+	runes := []rune(s)
+
+	for i := 0; i < len(runes); i++ {
+		ch := runes[i]
+		switch {
+		case ch == '\'' && !inDouble:
+			inSingle = !inSingle
+		case ch == '"' && !inSingle:
+			inDouble = !inDouble
+		}
+
+		if !inSingle && !inDouble && ch == '&' && i+1 < len(runes) && runes[i+1] == '&' {
+			parts = append(parts, cur.String())
+			cur.Reset()
+			i++ // skip second '&'
+			continue
+		}
+		cur.WriteRune(ch)
+	}
+	parts = append(parts, cur.String())
+	return parts
+}
+
+// isAssertingFailureCommand reports whether cmd is known to produce a non-zero exit code.
+func isAssertingFailureCommand(cmd string) bool {
+	cmd = strings.TrimSpace(cmd)
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return false
+	}
+	token := strings.ToLower(firstShellToken(cmd))
+	if token == "false" {
+		return true
+	}
+	if token == "exit" && len(fields) >= 2 {
+		code, err := strconv.Atoi(fields[1])
+		if err == nil && code != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// isAlwaysSuccessCommand reports whether cmd is known to produce a 0 (success) exit code.
+func isAlwaysSuccessCommand(cmd string) bool {
+	cmd = strings.TrimSpace(cmd)
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return false
+	}
+	token := strings.ToLower(firstShellToken(cmd))
+	if token == "true" {
+		return true
+	}
+	if token == "exit" && len(fields) >= 2 {
+		code, err := strconv.Atoi(fields[1])
+		if err == nil && code == 0 {
+			return true
+		}
+	}
+	if isPurePrinter(token) {
+		return true
+	}
+	return false
+}
+
+// evaluateAndChain evaluates the sequence of commands in an AND-list following
+// a fallback or printer. It returns the finding severity if the chain does not
+// assert failure, or false if the chain contains a command that guarantees
+// failure (thus asserting failure).
+func evaluateAndChain(andParts []string) (string, bool) {
+	hasUnknown := false
+	for _, part := range andParts {
+		cmd := strings.TrimSpace(part)
+		if isAssertingFailureCommand(cmd) {
+			// A known non-zero command (e.g. false, exit 1) terminates the && chain with non-zero status.
+			// The verifier asserts failure. Clean!
+			return "", false
+		}
+		if !isAlwaysSuccessCommand(cmd) {
+			hasUnknown = true
+		}
+	}
+	if hasUnknown {
+		return FindingSeverityWarning, true
+	}
+	return FindingSeverityError, true
+}
+
+// isPurePrinter reports whether token is a known pure-output command.
+func isPurePrinter(token string) bool {
+	switch strings.ToLower(token) {
+	case "echo", "cat", "printf", "tee", "print":
+		return true
+	default:
+		return false
+	}
 }
 
 // lintErrorDiscarded detects when the last (or only) pipeline stage redirects

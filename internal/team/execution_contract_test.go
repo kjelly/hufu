@@ -392,3 +392,47 @@ func TestCoordinatorExecuteTasks_RejectsInvalidExecutionContract(t *testing.T) {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
+
+func TestValidateExecutionContract_RejectsNonAssertingVerifier(t *testing.T) {
+	kinds := []ExecutionKind{
+		ExecutionKindInline,
+		ExecutionKindProcess,
+		ExecutionKindInteractive,
+		ExecutionKindExternal,
+	}
+
+	for _, k := range kinds {
+		t.Run(string(k), func(t *testing.T) {
+			task := TaskDef{
+				Agent:  "worker",
+				Goal:   "do work",
+				Verify: "test -f artifact || echo FAIL",
+				Execution: ExecutionContract{
+					Kind: k,
+				},
+			}
+			err := ValidateExecutionContract(task)
+			if err == nil {
+				t.Fatalf("expected ValidateExecutionContract to reject || echo FAIL for kind %q", k)
+			}
+			if !strings.Contains(err.Error(), "verifier contract error") {
+				t.Errorf("expected 'verifier contract error', got: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateExecutionContract_ObservationExempt(t *testing.T) {
+	task := TaskDef{
+		Agent:      "worker",
+		Goal:       "observe work",
+		Verify:     "test -f artifact || echo FAIL",
+		VerifyMode: "observation",
+		Execution: ExecutionContract{
+			Kind: ExecutionKindInline,
+		},
+	}
+	if err := ValidateExecutionContract(task); err != nil {
+		t.Fatalf("observation mode verifier should be exempt from anti-pattern rejection, got: %v", err)
+	}
+}

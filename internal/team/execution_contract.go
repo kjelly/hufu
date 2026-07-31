@@ -83,26 +83,29 @@ func ValidateExecutionContract(task TaskDef) error {
 		return fmt.Errorf("invalid execution kind: %q", task.Execution.Kind)
 	}
 
-	if (c.Kind == ExecutionKindInteractive || c.Kind == ExecutionKindExternal) && c.RequiresVerification {
-		// Typed verification supersedes legacy verify fields. Validate it at task
-		// admission so an interactive/external task cannot claim it has an
-		// objective verifier while carrying an unusable (or observation-only)
-		// typed contract. Normalize with legacy fields to preserve mixed
-		// migration-era definitions.
-		if task.VerifySpec != nil {
-			spec := NormalizeVerificationSpec(*task.VerifySpec, task.Verify, task.VerifyMode)
+	if task.VerifySpec != nil {
+		spec := NormalizeVerificationSpec(*task.VerifySpec, task.Verify, task.VerifyMode)
+		if (c.Kind == ExecutionKindInteractive || c.Kind == ExecutionKindExternal) && c.RequiresVerification {
 			if spec.Mode == "observation" {
 				return fmt.Errorf("execution contract for kind %q with requires_verification=true requires an asserting verifier, not observation mode", c.Kind)
 			}
-			if err := validateVerificationSpec(spec); err != nil {
-				return fmt.Errorf("execution contract for kind %q has invalid typed verifier: %w", c.Kind, err)
-			}
-			return nil
 		}
+		if err := validateVerificationSpec(spec); err != nil {
+			return fmt.Errorf("execution contract for kind %q has invalid typed verifier: %w", c.Kind, err)
+		}
+	} else if (c.Kind == ExecutionKindInteractive || c.Kind == ExecutionKindExternal) && c.RequiresVerification {
 		verifyCmd := strings.TrimSpace(task.Verify)
 		verifyMode := strings.ToLower(strings.TrimSpace(task.VerifyMode))
 		if verifyCmd == "" || verifyMode == "none" {
 			return fmt.Errorf("execution contract for kind %q with requires_verification=true requires an objective verifier contract (non-empty verify command and verify_mode != 'none')", c.Kind)
+		}
+	}
+
+	// Lint the verifier contract for §4.3 anti-patterns and reject non-asserting forms.
+	findings := LintTaskDef(task)
+	for _, f := range findings {
+		if f.Severity == FindingSeverityError {
+			return fmt.Errorf("verifier contract error: %s (%s)", f.Message, f.Code)
 		}
 	}
 
