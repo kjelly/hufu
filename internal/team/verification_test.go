@@ -140,6 +140,20 @@ func TestVerification_CommandExit_WeakVerifierWarning(t *testing.T) {
 	}
 }
 
+func TestVerification_CommandExitRejectsExplicitFailureOutput(t *testing.T) {
+	dir := t.TempDir()
+	res, err := ExecuteVerificationSpec(context.Background(), "sh", dir, VerificationSpec{
+		Type:    VerifyCommandExit,
+		Command: "echo 'failed -1' && exit 0",
+	})
+	if err == nil {
+		t.Fatal("explicit failed result must fail verification even when wrapper exits 0")
+	}
+	if res == nil || res.ExitCode == 0 {
+		t.Fatalf("expected non-zero verification result, got %#v", res)
+	}
+}
+
 // Minimum Test Matrix Item 7: observation records stdout and exit status but cannot satisfy a mandatory criterion
 func TestVerification_Observation_CannotSatisfyMandatoryCriterion(t *testing.T) {
 	dir := t.TempDir()

@@ -147,6 +147,22 @@ func CheckWeakVerifierWarning(stdout, stderr string) (bool, string) {
 	return false, ""
 }
 
+// CheckDefinitiveVerifierFailure recognizes the compact status emitted by
+// process-based runners (for example, "failed -1"). Unlike the broader weak
+// warning check, this shape is an explicit failure result and must not be
+// accepted merely because the wrapper itself exited zero.
+func CheckDefinitiveVerifierFailure(stdout, stderr string) (bool, string) {
+	for _, line := range strings.Split(stdout+"\n"+stderr, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) == 2 && strings.EqualFold(fields[0], "failed") {
+			if _, err := strconv.Atoi(fields[1]); err == nil {
+				return true, fmt.Sprintf("verifier reported explicit failure %q", strings.TrimSpace(line))
+			}
+		}
+	}
+	return false, ""
+}
+
 // EvaluateJSONAssertion checks a JSON path against expected value.
 func EvaluateJSONAssertion(jsonData any, assertion JSONAssertion) error {
 	path := strings.TrimSpace(assertion.Path)
@@ -485,7 +501,10 @@ func executeCommandVerificationWithRawOutput(parentCtx context.Context, shell, w
 			err = fmt.Errorf("%w%s", err, detail)
 		}
 	} else {
-		if isWeak, reason := CheckWeakVerifierWarning(res.Stdout, res.Stderr); isWeak {
+		if failed, reason := CheckDefinitiveVerifierFailure(res.Stdout, res.Stderr); failed {
+			res.ExitCode = 1
+			return applyVerificationMode(res, errors.New(reason), spec.Mode)
+		} else if isWeak, reason := CheckWeakVerifierWarning(res.Stdout, res.Stderr); isWeak {
 			res.WeakWarning = true
 			res.WeakReason = reason
 		}

@@ -74,7 +74,17 @@ func SaveSession(workspace string, session *SessionData) error {
 	if err != nil {
 		return err
 	}
-	return AtomicWriteFile(filepath.Join(workspace, sessionFile), []byte(utils.RedactSecrets(string(data))), 0o600)
+	// Redact the decoded JSON tree rather than applying text substitutions to
+	// serialized JSON. The latter can match credential-looking text inside a
+	// task description and corrupt escaped quotes in the document.
+	data, err = utils.RedactJSON(data)
+	if err != nil {
+		return fmt.Errorf("redact session JSON: %w", err)
+	}
+	if !json.Valid(data) {
+		return errors.New("redacted session is invalid JSON")
+	}
+	return AtomicWriteFile(filepath.Join(workspace, sessionFile), data, 0o600)
 }
 
 func NewSession() *SessionData {

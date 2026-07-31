@@ -211,6 +211,20 @@ func TestSaveSessionRedactsSecretsOnDisk(t *testing.T) {
 	}
 }
 
+func TestSaveSessionRedactsNestedCredentialTextWithoutCorruptingJSON(t *testing.T) {
+	workspace := t.TempDir()
+	session := &SessionData{Entries: []SessionEntry{{
+		Role:    "user",
+		Content: `Generate ipa_admin_password: "PilotSecret" and keep the JSON valid`,
+	}}}
+	if err := SaveSession(workspace, session); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+	if loaded := LoadSession(workspace); loaded == nil {
+		t.Fatal("saved session could not be loaded")
+	}
+}
+
 // TestNewSession tests the NewSession function
 func TestNewSession(t *testing.T) {
 	session := NewSession()
