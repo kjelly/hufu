@@ -738,10 +738,11 @@ func RebuildSessionForBranch(workspace string, st *SessionTree, es *EventStore, 
 			tasks[i] = cloneTodoItem(t)
 		}
 	}
-	entries := ReduceToSessionData(lineage).Entries
+	replayed := ReduceToSessionData(lineage)
+	entries := replayed.Entries
 
 	// Nothing to rebuild from: leave the live session untouched.
-	if len(tasks) == 0 && len(entries) == 0 {
+	if len(tasks) == 0 && len(entries) == 0 && len(replayed.CriterionResults) == 0 && len(replayed.CriterionCheckpoints) == 0 && replayed.LastCriterionProgressAt == "" {
 		return nil
 	}
 
@@ -751,6 +752,9 @@ func RebuildSessionForBranch(workspace string, st *SessionTree, es *EventStore, 
 	}
 	sd.Tasks = tasks
 	sd.Entries = entries
+	sd.CriterionResults = replayed.CriterionResults
+	sd.CriterionCheckpoints = replayed.CriterionCheckpoints
+	sd.LastCriterionProgressAt = replayed.LastCriterionProgressAt
 	if err := SaveSession(workspace, sd); err != nil {
 		return fmt.Errorf("rebuild session for branch %q: %w", b.ID, err)
 	}

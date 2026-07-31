@@ -632,7 +632,6 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			}
 			break
 		}
-
 		pol := ResolveRecoveryPolicy(it.Recovery, it.SideEffect, isUnattended, c.ExecutionProfile())
 		task := taskDefFromTodoItem(it)
 		switch pol {
@@ -691,8 +690,40 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			c.taskTracker.TodoList().SetRecoveryState(it.ID, state)
 			switch state {
 			case RecoveryStateComplete:
+				// Reconciliation establishes that the operation completed; it is
+				// not acceptance proof. Re-run affected criteria now so external
+				// state changed after the old checkpoint cannot be marked done.
+				if err := c.revalidateRecoveryCriteria(ctx, it); err != nil {
+					detail := fmt.Sprintf("reconciliation completed but criterion re-validation failed: %v", err)
+					c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
+					c.reconcileTaskStatusProjection()
+					c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
+					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+					c.emitEvent("criterion_checkpoint_rejected", "coordinator", it.ID, map[string]interface{}{"reason": detail})
+					continue
+				}
 				c.taskTracker.TodoList().UpdateStatus(it.ID, TaskDone, "reconciliation confirmed task was completed")
 				c.reconcileTaskStatusProjection()
+				current := it
+				for _, candidate := range c.taskTracker.TodoList().Items() {
+					if candidate.ID == it.ID {
+						current = candidate
+						break
+					}
+				}
+				if requiresCriterionCheckpoint(current) {
+					if c.sessionData == nil {
+						return count, fmt.Errorf("criterion checkpoint recovery requires session data")
+					}
+					c.recordCriterionCheckpoints(current, c.sessionData.CriterionResults)
+					if err := c.validateCriterionCheckpoint(current); err != nil {
+						detail := fmt.Sprintf("fresh criterion checkpoint rejected: %v", err)
+						c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
+						c.reconcileTaskStatusProjection()
+						c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
+						continue
+					}
+				}
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
 					"side_effect":    string(it.SideEffect),

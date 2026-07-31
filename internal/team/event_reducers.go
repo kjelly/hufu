@@ -32,10 +32,35 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			}
 		case "criterion_re_evaluated":
 			var payload struct {
-				After []CriterionResult `json:"after"`
+				After        []CriterionResult `json:"after"`
+				Progress     TaskProgress      `json:"progress"`
+				ProgressedAt string            `json:"progressed_at"`
 			}
 			if err := json.Unmarshal(e.Payload, &payload); err == nil && len(payload.After) > 0 {
 				session.CriterionResults = payload.After
+				if payload.Progress == ProgressAdvanced {
+					if payload.ProgressedAt != "" {
+						session.LastCriterionProgressAt = payload.ProgressedAt
+					} else if e.Timestamp != "" {
+						// Older events did not include an explicit timestamp. The
+						// event time remains a deterministic approximation only for
+						// a recorded criterion advance.
+						session.LastCriterionProgressAt = e.Timestamp
+					}
+				}
+			}
+		case "criterion_checkpoint_saved":
+			var payload struct {
+				Checkpoint CriterionCheckpoint `json:"checkpoint"`
+			}
+			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Checkpoint.CriterionID != "" {
+				filtered := session.CriterionCheckpoints[:0]
+				for _, checkpoint := range session.CriterionCheckpoints {
+					if checkpoint.CriterionID != payload.Checkpoint.CriterionID {
+						filtered = append(filtered, checkpoint)
+					}
+				}
+				session.CriterionCheckpoints = append(filtered, payload.Checkpoint)
 			}
 		}
 	}

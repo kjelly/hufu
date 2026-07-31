@@ -144,7 +144,7 @@ func TestCriterionAndTaskProgressReplayFromEvents(t *testing.T) {
 	}
 	events := []RunEvent{
 		{Type: "task_created", TaskID: "1", Payload: encode(map[string]any{"id": "1", "desc": "repair", "kind": TaskKindRepair, "advances": []string{"artifact"}, "progress": ProgressAdvanced})},
-		{Type: "criterion_re_evaluated", Payload: encode(map[string]any{"after": []CriterionResult{{ID: "artifact", State: CriterionPassed}}})},
+		{Type: "criterion_re_evaluated", Payload: encode(map[string]any{"progress": ProgressAdvanced, "progressed_at": "2026-07-31T12:00:00Z", "after": []CriterionResult{{ID: "artifact", State: CriterionPassed}}})},
 	}
 	items := ReduceToTodoList(events)
 	if len(items) != 1 || items[0].Kind != TaskKindRepair || items[0].Progress != ProgressAdvanced || len(items[0].Advances) != 1 {
@@ -153,6 +153,9 @@ func TestCriterionAndTaskProgressReplayFromEvents(t *testing.T) {
 	session := ReduceToSessionData(events)
 	if len(session.CriterionResults) != 1 || session.CriterionResults[0].State != CriterionPassed {
 		t.Fatalf("criterion replay mismatch: %#v", session.CriterionResults)
+	}
+	if session.LastCriterionProgressAt != "2026-07-31T12:00:00Z" {
+		t.Fatalf("criterion progress timestamp replay mismatch: %q", session.LastCriterionProgressAt)
 	}
 }
 

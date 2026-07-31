@@ -48,6 +48,8 @@ type SessionData struct {
 	AcceptanceContractRevisions []AcceptanceContractRevision `json:"acceptance_contract_revisions,omitempty"`
 	ContinuationCheckpoint      *ContinuationCheckpoint      `json:"continuation_checkpoint,omitempty"`
 	CriterionResults            []CriterionResult            `json:"criterion_results,omitempty"`
+	CriterionCheckpoints        []CriterionCheckpoint        `json:"criterion_checkpoints,omitempty"`
+	LastCriterionProgressAt     string                       `json:"last_criterion_progress_at,omitempty"`
 }
 
 func LoadSession(workspace string) *SessionData {

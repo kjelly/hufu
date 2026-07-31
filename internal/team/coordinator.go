@@ -336,25 +336,27 @@ type Coordinator struct {
 	validateModelsErr  error
 
 	// Unattended / budget controls for no-human-watching operation.
-	unattended                 bool
-	autoApprove                bool
-	maxWallClock               time.Duration // 0 = unlimited
-	tokenBudget                int64         // 0 = unlimited; cumulative LLM tokens
-	tokensUsed                 atomic.Int64
-	acceptanceCmd              string // optional shell command run at finish
-	acceptanceSpec             *AcceptanceSpec
-	acceptanceContractFixed    bool
-	acceptanceContractRevision int
-	continuationResume         *ContinuationCheckpoint
-	metricsMu                  sync.RWMutex
-	retriesByFailureClass      map[TaskFailureClass]int
-	antiThrashing              AntiThrashingState
-	compactions                int
-	rollbackCmd                string // optional shell command run on acceptance failure
-	selfHealingAttempts        int
-	budgetTripped              atomic.Bool
-	lastRunResult              *RunResult
-	lastRunResultMu            sync.RWMutex
+	unattended                   bool
+	autoApprove                  bool
+	maxWallClock                 time.Duration // 0 = unlimited
+	tokenBudget                  int64         // 0 = unlimited; cumulative LLM tokens
+	tokensUsed                   atomic.Int64
+	acceptanceCmd                string // optional shell command run at finish
+	acceptanceSpec               *AcceptanceSpec
+	acceptanceContractFixed      bool
+	acceptanceContractRevision   int
+	continuationResume           *ContinuationCheckpoint
+	metricsMu                    sync.RWMutex
+	retriesByFailureClass        map[TaskFailureClass]int
+	antiThrashing                AntiThrashingState
+	compactions                  int
+	tokensSinceCriterionProgress int64
+	reliabilityUsageByAttempt    map[string]int
+	rollbackCmd                  string // optional shell command run on acceptance failure
+	selfHealingAttempts          int
+	budgetTripped                atomic.Bool
+	lastRunResult                *RunResult
+	lastRunResultMu              sync.RWMutex
 	// runOrchestratorOverride is a deterministic test seam for continuation
 	// and recovery integration tests; production coordinators leave it nil.
 	runOrchestratorOverride func(context.Context, *agent.AgentDef, string) (string, []fantasy.StepResult, error)

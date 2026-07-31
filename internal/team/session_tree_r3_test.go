@@ -3,6 +3,7 @@ package team
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/anomalyco/hufu/internal/agent"
 )
@@ -63,6 +64,35 @@ func TestCoordinatorSaveCheckpoint_UpdatesBranchState(t *testing.T) {
 	c.lastCompactionSummary.CompletedTasks[0] = "mutated"
 	if b.State.Compaction.CompletedTasks[0] != "x" {
 		t.Errorf("stored Compaction aliases coordinator state: %q", b.State.Compaction.CompletedTasks[0])
+	}
+}
+
+func TestRebuildSessionForBranchRestoresCriterionProgressTimestamp(t *testing.T) {
+	tempDir := t.TempDir()
+	es, err := NewEventStore(tempDir, "run-1", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = es.Close() }()
+	progressedAt := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339Nano)
+	payload, err := json.Marshal(map[string]any{"progress": ProgressAdvanced, "progressed_at": progressedAt, "after": []CriterionResult{{ID: "ready", State: CriterionPassed}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := es.Append(RunEvent{ID: "criterion-1", BranchID: "main", Type: "criterion_re_evaluated", Timestamp: progressedAt, Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	st := NewSessionTree()
+	if err := RebuildSessionForBranch(tempDir, st, es, "main"); err != nil {
+		t.Fatal(err)
+	}
+	sd := LoadSession(tempDir)
+	if sd == nil || sd.LastCriterionProgressAt != progressedAt {
+		t.Fatalf("progress timestamp not restored: %#v", sd)
+	}
+	c := &Coordinator{sessionData: sd}
+	if got := c.Metrics().TimeSinceCriterionProgressSeconds; got < 60 {
+		t.Fatalf("replayed time since progress = %d, want non-zero based on original timestamp", got)
 	}
 }
 

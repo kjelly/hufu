@@ -209,6 +209,29 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		if data.RunResult.Acceptance != nil {
 			fmt.Fprintf(&b, "- **Acceptance:** `%s`\n", data.RunResult.Acceptance.EffectiveState())
 		}
+		metrics := data.RunResult.Metrics
+		b.WriteString("\n### Reliability Metrics\n\n")
+		fmt.Fprintf(&b, "- **Acceptance criteria passed:** %d\n", metrics.AcceptanceCriteriaPassed)
+		fmt.Fprintf(&b, "- **Protocol repairs:** %d attempted, %d succeeded\n", metrics.ProtocolRepairsAttempted, metrics.ProtocolRepairsSucceeded)
+		fmt.Fprintf(&b, "- **Worker success claims rejected by verification:** %d\n", metrics.WorkerSuccessRejected)
+		fmt.Fprintf(&b, "- **Weak verifier warnings:** %d\n", metrics.WeakVerifierWarnings)
+		fmt.Fprintf(&b, "- **Execution replays avoided:** %d\n", metrics.ExecutionReplaysAvoided)
+		fmt.Fprintf(&b, "- **Diagnostic tasks since criterion progress:** %d\n", metrics.DiagnosticTasksSinceProgress)
+		fmt.Fprintf(&b, "- **Repeated failure fingerprints:** %d\n", metrics.RepeatedFailureFingerprints)
+		fmt.Fprintf(&b, "- **Recovery strategy changes:** %d\n", metrics.RecoveryStrategyChanges)
+		fmt.Fprintf(&b, "- **Time since criterion progress:** %ds\n", metrics.TimeSinceCriterionProgressSeconds)
+		fmt.Fprintf(&b, "- **Tokens since criterion progress:** %d\n", metrics.TokensSinceCriterionProgress)
+		if len(metrics.TasksByCriterion) > 0 {
+			b.WriteString("- **Tasks by criterion:**\n")
+			keys := make([]string, 0, len(metrics.TasksByCriterion))
+			for id := range metrics.TasksByCriterion {
+				keys = append(keys, id)
+			}
+			sort.Strings(keys)
+			for _, id := range keys {
+				fmt.Fprintf(&b, "  - `%s`: %d\n", id, metrics.TasksByCriterion[id])
+			}
+		}
 		b.WriteString("\n---\n\n")
 	}
 	b.WriteString("---\n\n")

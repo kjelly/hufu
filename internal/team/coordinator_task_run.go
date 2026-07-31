@@ -899,6 +899,12 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		return "", err
 	}
 	c.reconcileTaskStatusProjection()
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item.ID == todoID {
+			c.reEvaluateAffectedCriteria(ctx, item)
+			break
+		}
+	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(result).withMessage("sidecar completed").withTodoID(todoID))
 	c.recordExecutionEvent(todoID, task.Agent, 1, "done", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})

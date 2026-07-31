@@ -1469,6 +1469,9 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			}
 			p.Send(tuipkg.StatusBarMsg{Text: errStyle.Render("⚠ " + utils.TruncateLine(event.Message, 60))})
 
+		case "reliability_metrics":
+			p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render(utils.TruncateLine(event.Message, 100))})
+
 		case "think_text", "reasoning":
 			if event.TodoID == "" {
 				return

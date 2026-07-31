@@ -514,6 +514,22 @@ type ContinuationCheckpoint struct {
 	Status    string `json:"status"` // pending, resumed, completed, aborted
 }
 
+// CriterionCheckpoint is the durable, objective handoff for an acceptance
+// criterion affected by an interactive or external task.  It deliberately
+// stores verifier evidence rather than a worker claim so recovery can reject
+// stale or incompatible proof before any unsafe replay.
+type CriterionCheckpoint struct {
+	ID               string                `json:"id"`
+	TaskID           string                `json:"task_id,omitempty"`
+	CriterionID      string                `json:"criterion_id"`
+	Proven           bool                  `json:"proven"`
+	Evidence         []*VerificationResult `json:"evidence,omitempty"`
+	InputFingerprint string                `json:"input_fingerprint,omitempty"`
+	ResumeAction     string                `json:"resume_action,omitempty"`
+	ReplayPolicy     RecoveryPolicy        `json:"replay_policy,omitempty"`
+	CreatedAt        string                `json:"created_at"`
+}
+
 // AcceptanceContractRevision records an immutable acceptance-contract change.
 // Criterion states: pending, passed, failed, blocked.
 type AcceptanceContractRevision struct {
@@ -526,14 +542,23 @@ type AcceptanceContractRevision struct {
 
 // RunMetrics is a queryable snapshot of reliability counters for a run.
 type RunMetrics struct {
-	RetriesByFailureClass        map[TaskFailureClass]int    `json:"retries_by_failure_class,omitempty"`
-	Compactions                  int                         `json:"compactions"`
-	RepeatedFailureFingerprints  int                         `json:"repeated_failure_fingerprints,omitempty"`
-	RecoveryStrategyChanges      int                         `json:"recovery_strategy_changes,omitempty"`
-	LastRecoveryStrategies       map[string]RecoveryStrategy `json:"last_recovery_strategies,omitempty"`
-	DiagnosticTasksSinceProgress int                         `json:"diagnostic_tasks_since_progress,omitempty"`
-	RepairAttemptsByCriterion    map[string]int              `json:"repair_attempts_by_criterion,omitempty"`
-	AntiThrashingWarnings        int                         `json:"anti_thrashing_warnings,omitempty"`
+	RetriesByFailureClass             map[TaskFailureClass]int    `json:"retries_by_failure_class,omitempty"`
+	Compactions                       int                         `json:"compactions"`
+	RepeatedFailureFingerprints       int                         `json:"repeated_failure_fingerprints,omitempty"`
+	RecoveryStrategyChanges           int                         `json:"recovery_strategy_changes,omitempty"`
+	LastRecoveryStrategies            map[string]RecoveryStrategy `json:"last_recovery_strategies,omitempty"`
+	DiagnosticTasksSinceProgress      int                         `json:"diagnostic_tasks_since_progress,omitempty"`
+	RepairAttemptsByCriterion         map[string]int              `json:"repair_attempts_by_criterion,omitempty"`
+	AntiThrashingWarnings             int                         `json:"anti_thrashing_warnings,omitempty"`
+	AcceptanceCriteriaPassed          int                         `json:"acceptance_criteria_passed,omitempty"`
+	TasksByCriterion                  map[string]int              `json:"tasks_by_criterion,omitempty"`
+	ProtocolRepairsAttempted          int                         `json:"protocol_repairs_attempted,omitempty"`
+	ProtocolRepairsSucceeded          int                         `json:"protocol_repairs_succeeded,omitempty"`
+	ExecutionReplaysAvoided           int                         `json:"execution_replays_avoided,omitempty"`
+	WorkerSuccessRejected             int                         `json:"worker_success_rejected_by_verification,omitempty"`
+	WeakVerifierWarnings              int                         `json:"weak_verifier_warnings,omitempty"`
+	TimeSinceCriterionProgressSeconds int64                       `json:"time_since_criterion_progress_seconds,omitempty"`
+	TokensSinceCriterionProgress      int64                       `json:"tokens_since_criterion_progress,omitempty"`
 }
 
 type TaskResolution struct {

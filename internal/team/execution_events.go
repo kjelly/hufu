@@ -115,6 +115,8 @@ func usageFromSteps(steps []fantasy.StepResult) ExecutionUsage {
 func (c *Coordinator) beginExecutionRun() func() {
 	c.metricsMu.Lock()
 	c.antiThrashing.reset()
+	c.tokensSinceCriterionProgress = 0
+	c.reliabilityUsageByAttempt = make(map[string]int)
 	c.metricsMu.Unlock()
 	c.rebuildAntiThrashingState()
 	runID := newExecutionRunID()
@@ -187,6 +189,9 @@ func (c *Coordinator) beginExecutionRun() func() {
 }
 
 func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, status, model string, duration time.Duration, usage ExecutionUsage) {
+	if usage.TotalTokens > 0 {
+		c.recordReliabilityUsage(taskID, attempt, usage.TotalTokens)
+	}
 	c.executionEventsMu.RLock()
 	logger, runID, teamRevision := c.executionEvents, c.executionRunID, c.executionTeamRevision
 	c.executionEventsMu.RUnlock()

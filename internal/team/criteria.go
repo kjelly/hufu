@@ -196,6 +196,7 @@ func (c *Coordinator) reEvaluateAffectedCriteria(ctx context.Context, item *Todo
 	}
 	item.Progress = ProgressNoChange
 	item.ProgressCriteria = nil
+	progressedAt := ""
 	if len(advancedCriteria) > 0 {
 		item.Progress = ProgressAdvanced
 		item.ProgressCriteria = append([]string(nil), advancedCriteria...)
@@ -207,14 +208,25 @@ func (c *Coordinator) reEvaluateAffectedCriteria(ctx context.Context, item *Todo
 		c.antiThrashing.DiagnosticSinceProgress = 0
 		c.antiThrashing.DiagnosticTasksCounted = make(map[string]bool)
 		c.antiThrashing.resetAfterCriterionProgress(advancedCriteria, items)
+		c.tokensSinceCriterionProgress = 0
+		c.reliabilityUsageByAttempt = make(map[string]int)
 		c.metricsMu.Unlock()
+		if c.sessionData != nil {
+			progressedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			c.sessionData.LastCriterionProgressAt = progressedAt
+		}
 	} else if item.Kind == TaskKindDiagnostic && item.Status == TaskDone {
 		c.recordDiagnosticCompletion(item)
 	}
 	if c.taskTracker != nil {
 		_ = c.taskTracker.TodoList().SetProgress(item.ID, item.Progress, item.ProgressCriteria)
 	}
-	c.emitEvent("criterion_re_evaluated", "coordinator", item.ID, map[string]interface{}{"advances": item.Advances, "progress": item.Progress, "progress_criteria": item.ProgressCriteria, "before": before, "after": results})
+	c.emitEvent("criterion_re_evaluated", "coordinator", item.ID, map[string]interface{}{"advances": item.Advances, "progress": item.Progress, "progress_criteria": item.ProgressCriteria, "progressed_at": progressedAt, "before": before, "after": results})
+	c.recordCriterionCheckpoints(item, results)
+	if c.reportStatus != nil {
+		metrics := c.Metrics()
+		c.report(c.newEvent("reliability_metrics").withMessage(fmt.Sprintf("criteria passed: %d; diagnostics since progress: %d; tokens since progress: %d", metrics.AcceptanceCriteriaPassed, metrics.DiagnosticTasksSinceProgress, metrics.TokensSinceCriterionProgress)).withTodoID(item.ID))
+	}
 }
 
 func (c *Coordinator) validateTaskCriterionLinks(tasks []TaskDef) error {

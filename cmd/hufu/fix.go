@@ -58,6 +58,7 @@ type fixData struct {
 	AgentMDs      map[string]string
 	TaskHistory   map[string]string
 	TeamYAML      string
+	Reliability   string
 }
 
 func collectFixData(session *team.TeamSession, taskDesc string) *fixData {
@@ -75,6 +76,10 @@ func collectFixData(session *team.TeamSession, taskDesc string) *fixData {
 			fmt.Fprintf(&b, "[%s] %s: %s\n", e.Timestamp, e.Role, limitStr(e.Content, 500))
 		}
 		d.SessionJSON = b.String()
+		if js.RunResult != nil {
+			metrics := js.RunResult.Metrics
+			d.Reliability = fmt.Sprintf("outcome=%s stop_reason=%s criteria_passed=%d tasks_by_criterion=%v diagnostic_tasks_since_progress=%d repeated_failure_fingerprints=%d recovery_strategy_changes=%d protocol_repairs=%d/%d replays_avoided=%d worker_success_rejected=%d weak_verifiers=%d time_since_progress_seconds=%d tokens_since_progress=%d", js.RunResult.Outcome, js.RunResult.StopReason, metrics.AcceptanceCriteriaPassed, metrics.TasksByCriterion, metrics.DiagnosticTasksSinceProgress, metrics.RepeatedFailureFingerprints, metrics.RecoveryStrategyChanges, metrics.ProtocolRepairsSucceeded, metrics.ProtocolRepairsAttempted, metrics.ExecutionReplaysAvoided, metrics.WorkerSuccessRejected, metrics.WeakVerifierWarnings, metrics.TimeSinceCriterionProgressSeconds, metrics.TokensSinceCriterionProgress)
+		}
 	}
 
 	if md := team.LoadSessionMD(session.Workspace); md != "" {
@@ -245,6 +250,12 @@ func buildFixPrompt(question, taskDesc string, data *fixData) string {
 	if data.SessionJSON != "" {
 		b.WriteString("## Session History (session.json)\n```\n")
 		b.WriteString(data.SessionJSON)
+		b.WriteString("\n```\n\n")
+	}
+
+	if data.Reliability != "" {
+		b.WriteString("## Reliability Metrics\n```\n")
+		b.WriteString(data.Reliability)
 		b.WriteString("\n```\n\n")
 	}
 
