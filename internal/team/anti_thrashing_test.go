@@ -836,3 +836,166 @@ func TestConcurrentTaskOperationsRemainTaskLocal(t *testing.T) {
 		t.Fatalf("concurrent task operation identity crossed: %#v", got)
 	}
 }
+
+func TestWP09_DefaultAntiThrashingLimitsAppliedWhenYAMLUnset(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: default-reliability\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := agent.DefaultReliabilityConfig()
+	if cfg.Reliability.MaxSameFailureFingerprint != defaults.MaxSameFailureFingerprint {
+		t.Fatalf("MaxSameFailureFingerprint = %d, want default %d", cfg.Reliability.MaxSameFailureFingerprint, defaults.MaxSameFailureFingerprint)
+	}
+	if cfg.Reliability.MaxDiagnosticTasksWithoutProgress != defaults.MaxDiagnosticTasksWithoutProgress {
+		t.Fatalf("MaxDiagnosticTasksWithoutProgress = %d, want default %d", cfg.Reliability.MaxDiagnosticTasksWithoutProgress, defaults.MaxDiagnosticTasksWithoutProgress)
+	}
+	if cfg.Reliability.MaxRepairsPerCriterion != defaults.MaxRepairsPerCriterion {
+		t.Fatalf("MaxRepairsPerCriterion = %d, want default %d", cfg.Reliability.MaxRepairsPerCriterion, defaults.MaxRepairsPerCriterion)
+	}
+	if !cfg.Reliability.HardEnforcement {
+		t.Fatalf("HardEnforcement = false, want default true")
+	}
+
+	// Verify second failure of same digest is limited & hard blocked under defaults
+	var state AntiThrashingState
+	fp := NewFailureFingerprint("build", "worker", "bash", FailureVerify, "exit 1")
+	first := &TodoItem{ID: "1", Kind: TaskKindRepair, Advances: []string{"build"}}
+	second := &TodoItem{ID: "2", Kind: TaskKindRepair, Advances: []string{"build"}}
+	_, _ = state.record(first, fp, RecoveryStrategyRetry, cfg.Reliability)
+	repeated, limited := state.record(second, fp, RecoveryStrategyRetry, cfg.Reliability)
+	if !repeated || !limited {
+		t.Fatalf("second failure under defaults: repeated=%v limited=%v, want both true", repeated, limited)
+	}
+	if !state.HardBlocked {
+		t.Fatal("defaults must hard block on second failure limit")
+	}
+}
+
+func TestWP09_WarnOnlyOptInDoesNotHardBlock(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: warn-only-team\nreliability:\n  warn-only: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Reliability.WarnOnly || cfg.Reliability.HardEnforcement {
+		t.Fatalf("unexpected reliability config for warn-only: %#v", cfg.Reliability)
+	}
+
+	var state AntiThrashingState
+	fp := NewFailureFingerprint("build", "worker", "bash", FailureVerify, "exit 1")
+	first := &TodoItem{ID: "1", Kind: TaskKindRepair, Advances: []string{"build"}}
+	second := &TodoItem{ID: "2", Kind: TaskKindRepair, Advances: []string{"build"}}
+	_, _ = state.record(first, fp, RecoveryStrategyRetry, cfg.Reliability)
+	repeated, limited := state.record(second, fp, RecoveryStrategyRetry, cfg.Reliability)
+	if !repeated || !limited {
+		t.Fatalf("second failure under warn-only: repeated=%v limited=%v, want both true", repeated, limited)
+	}
+	if state.HardBlocked {
+		t.Fatal("warn-only mode must NOT hard block")
+	}
+	if state.Warnings == 0 {
+		t.Fatal("warn-only mode should record warnings")
+	}
+}
+
+func TestWP09_MDOnlyTeamReceivesDefaultReliabilityConfig(t *testing.T) {
+	dir := t.TempDir()
+	// Create an MD-only team directory (with only worker.md and no team.yml)
+	mdFile := filepath.Join(dir, "worker.md")
+	mdContent := "---\nname: worker\nrole: worker\n---\nYou are a worker."
+	if err := os.WriteFile(mdFile, []byte(mdContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := LoadTeam(dir, nil, nil)
+	if err != nil {
+		t.Fatalf("LoadTeam failed for MD-only team: %v", err)
+	}
+
+	defaults := agent.DefaultReliabilityConfig()
+	if sess.Config.Reliability.MaxSameFailureFingerprint != defaults.MaxSameFailureFingerprint {
+		t.Fatalf("MD-only team MaxSameFailureFingerprint = %d, want %d", sess.Config.Reliability.MaxSameFailureFingerprint, defaults.MaxSameFailureFingerprint)
+	}
+	if !sess.Config.Reliability.HardEnforcement {
+		t.Fatalf("MD-only team HardEnforcement = false, want true")
+	}
+
+	c := &Coordinator{
+		session:     sess,
+		sessionData: NewSession(),
+		taskTracker: NewTaskTracker(),
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "repair", Kind: TaskKindRepair, Advances: []string{"build"}}})[0]
+	c.PersistFailure("worker", item.Desc, item.ID, "exit code 1")
+	c.PersistFailure("worker", item.Desc, item.ID, "exit code 1")
+	if !c.antiThrashingHardBlocked() {
+		t.Fatal("MD-only team did not hard block on second identical failure")
+	}
+}
+
+func TestWP09_LoadDefaultTeamReceivesDefaultReliabilityConfig(t *testing.T) {
+	dir := t.TempDir()
+	sess, err := LoadDefaultTeam(dir, nil, "")
+	if err != nil {
+		t.Fatalf("LoadDefaultTeam failed: %v", err)
+	}
+
+	defaults := agent.DefaultReliabilityConfig()
+	if sess.Config.Reliability.MaxSameFailureFingerprint != defaults.MaxSameFailureFingerprint {
+		t.Fatalf("LoadDefaultTeam MaxSameFailureFingerprint = %d, want %d", sess.Config.Reliability.MaxSameFailureFingerprint, defaults.MaxSameFailureFingerprint)
+	}
+	if !sess.Config.Reliability.HardEnforcement {
+		t.Fatalf("LoadDefaultTeam HardEnforcement = false, want true")
+	}
+
+	c := &Coordinator{
+		session:     sess,
+		sessionData: NewSession(),
+		taskTracker: NewTaskTracker(),
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "helper", Desc: "repair", Kind: TaskKindRepair, Advances: []string{"build"}}})[0]
+	c.PersistFailure("helper", item.Desc, item.ID, "exit code 1")
+	c.PersistFailure("helper", item.Desc, item.ID, "exit code 1")
+	if !c.antiThrashingHardBlocked() {
+		t.Fatal("LoadDefaultTeam did not hard block on second identical failure")
+	}
+}
+
+func TestWP09_ZeroValueSessionConfigPreservesHardEnforcementDefault(t *testing.T) {
+	// Construct a TeamSession where Reliability is explicitly the zero struct (agent.ReliabilityConfig{})
+	sess := &TeamSession{
+		Config: agent.TeamConfig{
+			Name:        "zero-config-team",
+			Reliability: agent.ReliabilityConfig{}, // zero value struct
+		},
+	}
+
+	c := &Coordinator{
+		session:     sess,
+		sessionData: NewSession(),
+		taskTracker: NewTaskTracker(),
+	}
+
+	rc := c.reliabilityConfig()
+	defaults := agent.DefaultReliabilityConfig()
+	if rc.MaxSameFailureFingerprint != defaults.MaxSameFailureFingerprint {
+		t.Fatalf("reliabilityConfig().MaxSameFailureFingerprint = %d, want %d", rc.MaxSameFailureFingerprint, defaults.MaxSameFailureFingerprint)
+	}
+	if !rc.HardEnforcement {
+		t.Fatalf("reliabilityConfig().HardEnforcement = false, want true")
+	}
+
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "repair", Kind: TaskKindRepair, Advances: []string{"build"}}})[0]
+	c.PersistFailure("worker", item.Desc, item.ID, "exit code 1")
+	c.PersistFailure("worker", item.Desc, item.ID, "exit code 1")
+	if !c.antiThrashingHardBlocked() {
+		t.Fatal("Coordinator with zero-value session config did not hard block on second identical failure")
+	}
+}

@@ -100,7 +100,15 @@ type teamConfigYAML struct {
 	Rollback            string                           `yaml:"rollback"`
 	ExecutionProfile    string                           `yaml:"execution-profile"`
 	GoalMode            string                           `yaml:"goal-mode"`
-	Reliability         agent.ReliabilityConfig          `yaml:"reliability"`
+	Reliability         rawReliabilityConfig             `yaml:"reliability"`
+}
+
+type rawReliabilityConfig struct {
+	MaxDiagnosticTasksWithoutProgress int   `yaml:"max-diagnostic-tasks-without-progress"`
+	MaxSameFailureFingerprint         int   `yaml:"max-same-failure-fingerprint"`
+	MaxRepairsPerCriterion            int   `yaml:"max-repairs-per-criterion"`
+	HardEnforcement                   *bool `yaml:"hard-enforcement"`
+	WarnOnly                          bool  `yaml:"warn-only"`
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -414,6 +422,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		Timeout:       600,
 		VerifyTimeout: 120,
 		MaxRetries:    2,
+		Reliability:   agent.DefaultReliabilityConfig(),
 	}
 
 	var data []byte
@@ -601,7 +610,23 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		}
 		cfg.GoalMode = string(gm)
 	}
-	cfg.Reliability = yc.Reliability
+	cfg.Reliability = agent.DefaultReliabilityConfig()
+	if yc.Reliability.MaxDiagnosticTasksWithoutProgress > 0 {
+		cfg.Reliability.MaxDiagnosticTasksWithoutProgress = yc.Reliability.MaxDiagnosticTasksWithoutProgress
+	}
+	if yc.Reliability.MaxSameFailureFingerprint > 0 {
+		cfg.Reliability.MaxSameFailureFingerprint = yc.Reliability.MaxSameFailureFingerprint
+	}
+	if yc.Reliability.MaxRepairsPerCriterion > 0 {
+		cfg.Reliability.MaxRepairsPerCriterion = yc.Reliability.MaxRepairsPerCriterion
+	}
+	if yc.Reliability.WarnOnly {
+		cfg.Reliability.WarnOnly = true
+		cfg.Reliability.HardEnforcement = false
+	} else if yc.Reliability.HardEnforcement != nil {
+		cfg.Reliability.HardEnforcement = *yc.Reliability.HardEnforcement
+		cfg.Reliability.WarnOnly = !cfg.Reliability.HardEnforcement
+	}
 	if yc.Shell != "" {
 		cfg.Shell = yc.Shell
 	}

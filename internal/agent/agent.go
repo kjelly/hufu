@@ -164,13 +164,24 @@ type TeamConfig struct {
 }
 
 // ReliabilityConfig bounds diagnostic and repair work that repeats without
-// improving a mandatory outcome criterion. Zero values retain the unlimited
-// compatibility behaviour.
+// improving a mandatory outcome criterion.
 type ReliabilityConfig struct {
 	MaxDiagnosticTasksWithoutProgress int  `yaml:"max-diagnostic-tasks-without-progress" json:"max_diagnostic_tasks_without_progress,omitempty"`
 	MaxSameFailureFingerprint         int  `yaml:"max-same-failure-fingerprint" json:"max_same_failure_fingerprint,omitempty"`
 	MaxRepairsPerCriterion            int  `yaml:"max-repairs-per-criterion" json:"max_repairs_per_criterion,omitempty"`
 	HardEnforcement                   bool `yaml:"hard-enforcement" json:"hard_enforcement,omitempty"`
+	WarnOnly                          bool `yaml:"warn-only" json:"warn_only,omitempty"`
+}
+
+// DefaultReliabilityConfig returns default reliability anti-thrashing limits.
+// By default, HardEnforcement is true and limits are enforced.
+func DefaultReliabilityConfig() ReliabilityConfig {
+	return ReliabilityConfig{
+		MaxDiagnosticTasksWithoutProgress: 3,
+		MaxSameFailureFingerprint:         2,
+		MaxRepairsPerCriterion:            2,
+		HardEnforcement:                   true,
+	}
 }
 
 type VerificationType string

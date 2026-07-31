@@ -268,12 +268,27 @@ func (c *Coordinator) recordDiagnosticCompletion(item *TodoItem) {
 }
 
 func (c *Coordinator) reliabilityConfig() agent.ReliabilityConfig {
+	cfg := agent.DefaultReliabilityConfig()
 	if c != nil && c.session != nil {
-		cfg := c.session.Config.Reliability
-		cfg.HardEnforcement = cfg.HardEnforcement || c.ExecutionProfile().AntiThrashingEnforced
+		sessCfg := c.session.Config.Reliability
+		if sessCfg.MaxDiagnosticTasksWithoutProgress > 0 {
+			cfg.MaxDiagnosticTasksWithoutProgress = sessCfg.MaxDiagnosticTasksWithoutProgress
+		}
+		if sessCfg.MaxSameFailureFingerprint > 0 {
+			cfg.MaxSameFailureFingerprint = sessCfg.MaxSameFailureFingerprint
+		}
+		if sessCfg.MaxRepairsPerCriterion > 0 {
+			cfg.MaxRepairsPerCriterion = sessCfg.MaxRepairsPerCriterion
+		}
+		if sessCfg.WarnOnly {
+			cfg.WarnOnly = true
+			cfg.HardEnforcement = false
+		} else {
+			cfg.HardEnforcement = cfg.HardEnforcement || sessCfg.HardEnforcement || c.ExecutionProfile().AntiThrashingEnforced
+		}
 		return cfg
 	}
-	return agent.ReliabilityConfig{}
+	return cfg
 }
 
 // GetLastFailureContext returns the most recently persisted structured failure
