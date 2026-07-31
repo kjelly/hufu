@@ -206,7 +206,7 @@ func TestAntiThrashingLimitsCountWithoutTaskIDReuse(t *testing.T) {
 
 func TestReliabilityConfigParses(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: reliable\nreliability:\n  max-diagnostic-tasks-without-progress: 3\n  max-same-failure-fingerprint: 2\n  max-repairs-per-criterion: 5\n  hard-enforcement: true\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: reliable\nacceptance: 'true'\nreliability:\n  max-diagnostic-tasks-without-progress: 3\n  max-same-failure-fingerprint: 2\n  max-repairs-per-criterion: 5\n  hard-enforcement: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := parseTeamYML(dir, nil)
@@ -839,7 +839,7 @@ func TestConcurrentTaskOperationsRemainTaskLocal(t *testing.T) {
 
 func TestWP09_DefaultAntiThrashingLimitsAppliedWhenYAMLUnset(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: default-reliability\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: default-reliability\nacceptance: 'true'\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := parseTeamYML(dir, nil)
@@ -877,7 +877,7 @@ func TestWP09_DefaultAntiThrashingLimitsAppliedWhenYAMLUnset(t *testing.T) {
 
 func TestWP09_WarnOnlyOptInDoesNotHardBlock(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: warn-only-team\nreliability:\n  warn-only: true\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: warn-only-team\nacceptance: 'true'\nreliability:\n  warn-only: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := parseTeamYML(dir, nil)
@@ -907,7 +907,10 @@ func TestWP09_WarnOnlyOptInDoesNotHardBlock(t *testing.T) {
 
 func TestWP09_MDOnlyTeamReceivesDefaultReliabilityConfig(t *testing.T) {
 	dir := t.TempDir()
-	// Create an MD-only team directory (with only worker.md and no team.yml)
+	// Create a team.yml with exploratory mode for MD-only testing
+	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte("name: md-team\ngoal-mode: exploratory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	mdFile := filepath.Join(dir, "worker.md")
 	mdContent := "---\nname: worker\nrole: worker\n---\nYou are a worker."
 	if err := os.WriteFile(mdFile, []byte(mdContent), 0o644); err != nil {

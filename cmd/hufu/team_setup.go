@@ -47,7 +47,16 @@ func applyUnattendedAndBudget(coordinator *team.Coordinator, session *team.TeamS
 		budgetTokens = session.Config.MaxTotalTokens
 	}
 	coordinator.SetBudget(budgetSeconds, budgetTokens)
-	coordinator.SetAcceptance(session.Config.Acceptance)
+	// NewCoordinator has already validated and installed the acceptance
+	// contract from TeamConfig. Do not call the legacy setter again: an empty
+	// legacy value is an explicit empty contract in outcome mode and would
+	// otherwise create a rejected audit entry on every run. The guard keeps this
+	// fallback useful for callers that construct a session without a spec.
+	if session.Config.AcceptanceSpec == nil && strings.TrimSpace(session.Config.Acceptance) != "" {
+		if err := coordinator.SetAcceptance(session.Config.Acceptance); err != nil {
+			return err
+		}
+	}
 	coordinator.SetRollback(session.Config.Rollback)
 
 	goalMode := opts.goalMode
@@ -77,11 +86,20 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	applyCLITimeoutOverrides(session, currentTimeoutOverrides())
 	applyCLIVerifyTimeoutOverrides(session, currentVerifyTimeoutOverrides())
 	applyCLITuningOverrides(session, currentTuningOverrides())
+	if opts.goalMode != "" {
+		session.Config.GoalMode = opts.goalMode
+	}
 	propagateTeamGenerationToAgents(session)
 
 	execProfile, err := team.ResolveExecutionProfile(opts.executionProfile, session.Config.ExecutionProfile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve execution profile: %w", err)
+	}
+	if session.Config.GoalMode == "" && execProfile.DefaultGoalMode != "" {
+		// NewCoordinator is constructed below, so carry the already-resolved
+		// profile fallback into it. An omitted mode must not be interpreted as
+		// outcome before the execution profile is known.
+		session.Config.GoalMode = string(execProfile.DefaultGoalMode)
 	}
 
 	// Validate workspace isolation early BEFORE any workspace directory creation,

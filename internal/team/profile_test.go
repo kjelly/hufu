@@ -124,7 +124,7 @@ func TestProfile_FreshVerificationIsolation(t *testing.T) {
 	session := &TeamSession{
 		Workspace: tmpDir,
 		Dir:       tmpDir,
-		Config:    agent.TeamConfig{Name: "test-team"},
+		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
 	// Create non-empty stm.md and ltm.md in workspace
@@ -232,7 +232,7 @@ func TestProfile_RequireEvidenceManifest(t *testing.T) {
 	session := &TeamSession{
 		Workspace: tmpDir,
 		Dir:       tmpDir,
-		Config:    agent.TeamConfig{Name: "test-team"},
+		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
 	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
@@ -263,7 +263,7 @@ func TestProfile_RequireClosedTerminals(t *testing.T) {
 	session := &TeamSession{
 		Workspace: tmpDir,
 		Dir:       tmpDir,
-		Config:    agent.TeamConfig{Name: "test-team"},
+		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
 	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
@@ -304,7 +304,7 @@ func TestProfile_PolicyFailClosed(t *testing.T) {
 	session := &TeamSession{
 		Workspace: tmpDir,
 		Dir:       tmpDir,
-		Config:    agent.TeamConfig{Name: "test-team"},
+		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
 	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
@@ -362,6 +362,7 @@ func TestProfile_RecoveryPolicyResolution(t *testing.T) {
 func TestProfile_TeamYMLParsing(t *testing.T) {
 	tmpDir := t.TempDir()
 	teamYMLContent := `name: test-team
+acceptance: 'true'
 execution-profile: strict-verification
 timeout: 300
 `
@@ -397,7 +398,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 	sessionProjRoot := &TeamSession{
 		Workspace: projDir,
 		Dir:       teamDir,
-		Config:    agent.TeamConfig{Name: "team-a"},
+		Config:    agent.TeamConfig{Name: "team-a", GoalMode: "exploratory"},
 	}
 	c1, err := NewCoordinator(sessionProjRoot, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
@@ -414,7 +415,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 	sessionSubdir := &TeamSession{
 		Workspace: subDir,
 		Dir:       teamDir,
-		Config:    agent.TeamConfig{Name: "team-a"},
+		Config:    agent.TeamConfig{Name: "team-a", GoalMode: "exploratory"},
 	}
 	c2, err := NewCoordinator(sessionSubdir, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
@@ -430,7 +431,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 	sessionControlDir := &TeamSession{
 		Workspace: teamDir,
 		Dir:       teamDir,
-		Config:    agent.TeamConfig{Name: "team-a"},
+		Config:    agent.TeamConfig{Name: "team-a", GoalMode: "exploratory"},
 	}
 	c3, err := NewCoordinator(sessionControlDir, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
@@ -446,7 +447,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 	sessionIsolated := &TeamSession{
 		Workspace: isolatedDir,
 		Dir:       teamDir,
-		Config:    agent.TeamConfig{Name: "team-a"},
+		Config:    agent.TeamConfig{Name: "team-a", GoalMode: "exploratory"},
 	}
 	c4, err := NewCoordinator(sessionIsolated, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
@@ -462,7 +463,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 	sessionDefaultRoot := &TeamSession{
 		Workspace: projDir,
 		Dir:       projDir,
-		Config:    agent.TeamConfig{Name: "default"},
+		Config:    agent.TeamConfig{Name: "default", GoalMode: "exploratory"},
 	}
 	c5, err := NewCoordinator(sessionDefaultRoot, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
@@ -478,7 +479,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 	sessionDefaultSubdir := &TeamSession{
 		Workspace: subDir,
 		Dir:       subDir,
-		Config:    agent.TeamConfig{Name: "default"},
+		Config:    agent.TeamConfig{Name: "default", GoalMode: "exploratory"},
 	}
 	c6, err := NewCoordinator(sessionDefaultSubdir, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
@@ -494,7 +495,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 	sessionDefaultIsolated := &TeamSession{
 		Workspace: isolatedDir,
 		Dir:       isolatedDir,
-		Config:    agent.TeamConfig{Name: "default"},
+		Config:    agent.TeamConfig{Name: "default", GoalMode: "exploratory"},
 	}
 	c7, err := NewCoordinator(sessionDefaultIsolated, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
@@ -513,7 +514,7 @@ func TestProfile_RequireLockedResources(t *testing.T) {
 	session := &TeamSession{
 		Workspace: subDir,
 		Dir:       tmpDir,
-		Config:    agent.TeamConfig{Name: "test-team"},
+		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
 	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
@@ -574,7 +575,7 @@ func TestProfile_RequireEvidenceManifest_ManifestGateAndAcknowledge(t *testing.T
 	session := &TeamSession{
 		Workspace: subDir,
 		Dir:       tmpDir,
-		Config:    agent.TeamConfig{Name: "test-team"},
+		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
 	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
@@ -621,7 +622,7 @@ func TestProfile_RequireEvidenceManifest_ManifestGateAndAcknowledge(t *testing.T
 
 func TestFreshProfile_DoesNotInheritRounds(t *testing.T) {
 	tmpDir := t.TempDir()
-	session := &TeamSession{Workspace: tmpDir, Dir: tmpDir}
+	session := &TeamSession{Workspace: tmpDir, Dir: tmpDir, Config: agent.TeamConfig{GoalMode: "exploratory"}}
 	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
@@ -667,7 +668,7 @@ func TestProfile_StrictVsFreshDifferences(t *testing.T) {
 
 func TestFreshProfile_ClearsPersistedConversationHistory(t *testing.T) {
 	tmpDir := t.TempDir()
-	session := &TeamSession{Workspace: tmpDir, Dir: tmpDir}
+	session := &TeamSession{Workspace: tmpDir, Dir: tmpDir, Config: agent.TeamConfig{GoalMode: "exploratory"}}
 
 	history := []fantasy.Message{
 		fantasy.NewUserMessage("prior prompt from previous run"),

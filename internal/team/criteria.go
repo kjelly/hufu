@@ -29,6 +29,68 @@ type CriterionResult struct {
 	FailureReason    string                `json:"failure_reason,omitempty"`
 }
 
+// AcceptanceContractState distinguishes a missing contract from an explicitly
+// supplied but empty contract. Both have no checks, but they carry different
+// authoring/audit meaning and must not be collapsed into the same event.
+type AcceptanceContractState string
+
+const (
+	AcceptanceContractUnset      AcceptanceContractState = "not_configured"
+	AcceptanceContractEmpty      AcceptanceContractState = "empty"
+	AcceptanceContractConfigured AcceptanceContractState = "configured"
+)
+
+func AcceptanceContractStateOf(spec *AcceptanceSpec) AcceptanceContractState {
+	if spec == nil {
+		return AcceptanceContractUnset
+	}
+	if !AcceptanceSpecHasChecks(*spec) {
+		return AcceptanceContractEmpty
+	}
+	return AcceptanceContractConfigured
+}
+
+// AcceptanceSpecHasChecks reports whether an AcceptanceSpec contains any non-empty verification commands,
+// required artifacts, verifications, criteria, or unresolved task check requirement.
+func AcceptanceSpecHasChecks(spec AcceptanceSpec) bool {
+	if spec.RequireNoUnresolvedTasks {
+		return true
+	}
+	for _, command := range spec.Commands {
+		if strings.TrimSpace(command) != "" {
+			return true
+		}
+	}
+	for _, path := range spec.RequiredArtifacts {
+		if strings.TrimSpace(path) != "" {
+			return true
+		}
+	}
+	return len(spec.Verifications) > 0 || len(spec.Criteria) > 0
+}
+
+// ValidateAcceptanceSpec validates an AcceptanceSpec against the target goalMode.
+// In outcome mode ("outcome"), an empty or missing acceptance contract is invalid
+// and returns an acceptance_vacuous error because run-level completion cannot be achieved.
+func ValidateAcceptanceSpec(spec *AcceptanceSpec, goalMode string) error {
+	mode, err := ParseGoalMode(goalMode)
+	if err != nil {
+		mode = GoalModeOutcome
+	}
+	if mode != GoalModeOutcome {
+		return nil
+	}
+	if spec == nil || !AcceptanceSpecHasChecks(*spec) {
+		return fmt.Errorf("%s: empty acceptance contract in outcome mode", FindingAcceptanceVacuous)
+	}
+	if len(spec.Criteria) > 0 {
+		if err := validateAcceptanceCriteria(spec.Criteria); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateAcceptanceCriteria(criteria []AcceptanceCriterion) error {
 	seen := make(map[string]bool, len(criteria))
 	for _, criterion := range criteria {

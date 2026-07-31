@@ -557,7 +557,7 @@ func TestNewCoordinatorRestoresConversationHistorySourceState(t *testing.T) {
 	}
 
 	session := &TeamSession{
-		Config:    agent.TeamConfig{Name: "test"},
+		Config:    agent.TeamConfig{Name: "test", GoalMode: "exploratory"},
 		Workspace: ws,
 		Dir:       ws,
 	}

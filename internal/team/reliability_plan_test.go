@@ -68,7 +68,7 @@ func TestRunStats_CountsFailedAttemptsBeforeEventualSuccess(t *testing.T) {
 
 func TestParseTeamConfig_MaxCoordinatorTurns(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: bounded\nmax-coordinator-turns: 7\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: bounded\nacceptance: 'true'\nmax-coordinator-turns: 7\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := parseTeamYML(dir, nil)

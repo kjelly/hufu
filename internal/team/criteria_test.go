@@ -3,11 +3,14 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"charm.land/fantasy"
 	"github.com/anomalyco/hufu/internal/agent"
 )
 
@@ -176,5 +179,284 @@ func TestOutcomeTaskReevaluatesAdvancedCriterion(t *testing.T) {
 	}
 	if got := c.sessionData.CriterionResults[0].State; got != CriterionPassed {
 		t.Fatalf("criterion state = %s, want passed", got)
+	}
+}
+
+func TestValidateAcceptanceSpec_VacuousContract(t *testing.T) {
+	// In outcome mode, empty acceptance contracts must fail validation with acceptance_vacuous error.
+	if err := ValidateAcceptanceSpec(nil, "outcome"); err == nil || !strings.Contains(err.Error(), FindingAcceptanceVacuous) {
+		t.Fatalf("expected acceptance_vacuous error for nil spec in outcome mode, got %v", err)
+	}
+	if err := ValidateAcceptanceSpec(&AcceptanceSpec{}, "outcome"); err == nil || !strings.Contains(err.Error(), FindingAcceptanceVacuous) {
+		t.Fatalf("expected acceptance_vacuous error for empty spec in outcome mode, got %v", err)
+	}
+	if err := ValidateAcceptanceSpec(&AcceptanceSpec{Commands: []string{"   "}}, "outcome"); err == nil || !strings.Contains(err.Error(), FindingAcceptanceVacuous) {
+		t.Fatalf("expected acceptance_vacuous error for whitespace command in outcome mode, got %v", err)
+	}
+
+	// Non-outcome mode (e.g. exploratory) allows empty contract.
+	if err := ValidateAcceptanceSpec(&AcceptanceSpec{}, "exploratory"); err != nil {
+		t.Fatalf("exploratory mode should allow empty acceptance spec, got %v", err)
+	}
+
+	// Non-empty spec in outcome mode must pass.
+	validSpec := &AcceptanceSpec{Commands: []string{"test -f report.md"}}
+	if err := ValidateAcceptanceSpec(validSpec, "outcome"); err != nil {
+		t.Fatalf("valid spec should pass validation, got %v", err)
+	}
+}
+
+func TestSetAcceptance_RejectsVacuousContract(t *testing.T) {
+	c := &Coordinator{
+		session:     &TeamSession{Config: agent.TeamConfig{Name: "test", GoalMode: "outcome"}},
+		projectDir:  t.TempDir(),
+		sessionData: NewSession(),
+	}
+
+	// Calling SetAcceptance with empty string in outcome mode must fail.
+	if err := c.SetAcceptance(""); err == nil || !strings.Contains(err.Error(), FindingAcceptanceVacuous) {
+		t.Fatalf("SetAcceptance(\"\") should fail with acceptance_vacuous, got %v", err)
+	}
+
+	// Calling SetAcceptanceSpec with empty spec in outcome mode must fail.
+	if err := c.SetAcceptanceSpec(AcceptanceSpec{}); err == nil || !strings.Contains(err.Error(), FindingAcceptanceVacuous) {
+		t.Fatalf("SetAcceptanceSpec(empty) should fail with acceptance_vacuous, got %v", err)
+	}
+
+	// Valid acceptance command must succeed.
+	if err := c.SetAcceptance("test -f report.md"); err != nil {
+		t.Fatalf("SetAcceptance(valid) failed: %v", err)
+	}
+}
+
+func TestOutcomeModeMissingAcceptanceRejected(t *testing.T) {
+	// 1. YAML with no acceptance field uses the default profile's exploratory mode.
+	dir1 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir1, "team.yml"), []byte("name: no-acc\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(dir1, nil)
+	if err != nil {
+		t.Fatalf("default-profile team without acceptance should parse: %v", err)
+	}
+	if cfg.GoalMode != "" {
+		t.Fatalf("parse should preserve omitted goal-mode for profile resolution, got %q", cfg.GoalMode)
+	}
+
+	// 2. YAML with explicit goal-mode: outcome and no acceptance
+	dir2 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir2, "team.yml"), []byte("name: outcome-no-acc\ngoal-mode: outcome\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseTeamYML(dir2, nil); err == nil || !strings.Contains(err.Error(), FindingAcceptanceVacuous) {
+		t.Fatalf("parseTeamYML with explicit outcome mode and no acceptance should fail with acceptance_vacuous, got %v", err)
+	}
+
+	// 3. MD-only team directory (no team.yml) also uses the default profile.
+	dir3 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir3, "helper.md"), []byte("---\nname: helper\nrole: worker\n---\nWorker prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadTeam(dir3, nil, nil); err != nil {
+		t.Fatalf("default-profile MD-only team without acceptance should load: %v", err)
+	}
+
+	// Case 4: Default session (LoadDefaultTeam) uses the default profile's
+	// exploratory mode and remains constructible without acceptance.
+	defaultSession, err := LoadDefaultTeam(t.TempDir(), nil, "")
+	if err != nil {
+		t.Fatalf("LoadDefaultTeam failed: %v", err)
+	}
+	defaultSession.Config.Acceptance = ""
+	defaultSession.Config.AcceptanceSpec = nil
+	defaultCoordinator, err := NewCoordinator(defaultSession, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatalf("default-profile coordinator without acceptance should construct: %v", err)
+	}
+	if got := defaultCoordinator.GoalMode(); got != GoalModeExploratory {
+		t.Fatalf("default-profile goal mode = %q, want exploratory", got)
+	}
+
+	// 5. An explicitly outcome-oriented team without acceptance remains
+	// rejected by the WP-15 preflight.
+	dir5 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir5, "team.yml"), []byte("name: outcome-no-acc\ngoal-mode: outcome\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseTeamYML(dir5, nil); err == nil || !strings.Contains(err.Error(), FindingAcceptanceVacuous) {
+		t.Fatalf("explicit outcome team without acceptance should fail with acceptance_vacuous, got %v", err)
+	}
+
+	// 6. An outcome-default execution profile also rejects an omitted
+	// goal-mode and empty acceptance contract.
+	dir6 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir6, "team.yml"), []byte("name: unattended-no-acc\nexecution-profile: unattended\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseTeamYML(dir6, nil); err == nil || !strings.Contains(err.Error(), FindingAcceptanceVacuous) {
+		t.Fatalf("unattended-profile team without acceptance should fail with acceptance_vacuous, got %v", err)
+	}
+}
+
+func TestDefaultProfileGoalModeResolution(t *testing.T) {
+	mode, err := ResolveEffectiveGoalMode("", "")
+	if err != nil {
+		t.Fatalf("default profile resolution failed: %v", err)
+	}
+	if mode != GoalModeExploratory {
+		t.Fatalf("default profile mode = %q, want exploratory", mode)
+	}
+	mode, err = ResolveEffectiveGoalMode("", string(ProfileUnattended))
+	if err != nil {
+		t.Fatalf("unattended profile resolution failed: %v", err)
+	}
+	if mode != GoalModeOutcome {
+		t.Fatalf("unattended profile mode = %q, want outcome", mode)
+	}
+	if _, err := ResolveEffectiveGoalMode("not-a-mode", ""); err == nil {
+		t.Fatal("invalid explicit goal mode unexpectedly resolved")
+	}
+}
+
+func TestDefaultTeamCanFinishWithoutAcceptanceGate(t *testing.T) {
+	// Exercise the real default coordinator's finish path without contacting a
+	// provider. This catches regressions where omitted goal-mode is treated as
+	// outcome before the default profile has resolved it.
+	session, err := LoadDefaultTeam(t.TempDir(), nil, "")
+	if err != nil {
+		t.Fatalf("LoadDefaultTeam failed: %v", err)
+	}
+	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatalf("NewCoordinator failed: %v", err)
+	}
+
+	tool := &finishTool{coordinator: c}
+	response, err := tool.Run(context.Background(), fantasy.ToolCall{Input: `{"response":"default run completed"}`})
+	if err != nil {
+		t.Fatalf("finishTool.Run failed: %v", err)
+	}
+	if !c.finishCalled.Load() {
+		t.Fatal("default team finish path did not complete")
+	}
+	if got := fmt.Sprintf("%+v", response); !strings.Contains(got, "FINISHED:default run completed") {
+		t.Fatalf("finish response = %q, want successful FINISHED response", got)
+	}
+	result := c.LastRunResult()
+	if result == nil {
+		t.Fatal("default team finish path did not record a run result")
+	}
+	if result.Outcome != RunOutcomeCompleted || result.ExitCode != 0 {
+		t.Fatalf("default team outcome = %q (exit %d), want completed (exit 0)", result.Outcome, result.ExitCode)
+	}
+	if result.GoalMode != GoalModeExploratory {
+		t.Fatalf("default team result goal mode = %q, want exploratory", result.GoalMode)
+	}
+	if result.Acceptance == nil || result.Acceptance.State != AcceptanceNotConfigured {
+		t.Fatalf("default team acceptance = %#v, want not_configured", result.Acceptance)
+	}
+}
+
+func TestSetAcceptance_RejectedEmptyUpdateAudited(t *testing.T) {
+	ws := t.TempDir()
+	session := &TeamSession{
+		Workspace: ws,
+		Dir:       ws,
+		Config:    agent.TeamConfig{Name: "audit-test", GoalMode: "outcome", AcceptanceSpec: &agent.AcceptanceSpec{Commands: []string{"test -f valid.txt"}}},
+	}
+
+	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatalf("NewCoordinator failed: %v", err)
+	}
+
+	// Enable contract fixing so audit events and persistAcceptanceAuditEvent run
+	c.acceptanceContractFixed = true
+
+	// Attempting to set empty acceptance spec on an existing valid contract must be rejected
+	err = c.SetAcceptance("")
+	if err == nil || !strings.Contains(err.Error(), FindingAcceptanceVacuous) {
+		t.Fatalf("SetAcceptance(\"\") on active contract should be rejected with acceptance_vacuous, got %v", err)
+	}
+
+	// Active contract must remain unchanged
+	if c.acceptanceSpec == nil || len(c.acceptanceSpec.Commands) != 1 || c.acceptanceSpec.Commands[0] != "test -f valid.txt" {
+		t.Fatalf("c.acceptanceSpec was modified on rejection: %#v", c.acceptanceSpec)
+	}
+
+	// Verify that acceptance_audit.jsonl logged the rejected contract update
+	auditPath := filepath.Join(ws, "logs", "acceptance_audit.jsonl")
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("failed to read acceptance_audit.jsonl: %v", err)
+	}
+	logStr := string(data)
+	if !strings.Contains(logStr, "test -f valid.txt") || !strings.Contains(logStr, "rejected") {
+		t.Fatalf("acceptance audit log does not record attempted rejected change: %s", logStr)
+	}
+	if !strings.Contains(logStr, `"event":"acceptance_contract_rejected"`) ||
+		!strings.Contains(logStr, `"old_state":"configured"`) ||
+		!strings.Contains(logStr, `"new_state":"empty"`) {
+		t.Fatalf("acceptance audit log does not preserve configured-to-empty distinction: %s", logStr)
+	}
+}
+
+func TestAcceptanceAuditDistinguishesUnsetFromExplicitEmpty(t *testing.T) {
+	workspace := t.TempDir()
+	events := make([]StatusEvent, 0, 2)
+	c := &Coordinator{
+		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "audit-states", GoalMode: "exploratory"}},
+		sessionData: NewSession(),
+		reportStatus: func(event StatusEvent) {
+			events = append(events, event)
+		},
+	}
+
+	if err := c.SetAcceptance(""); err != nil {
+		t.Fatalf("exploratory mode should accept an explicit empty contract for auditability: %v", err)
+	}
+	if len(c.sessionData.AcceptanceContractRevisions) != 1 {
+		t.Fatalf("expected one contract revision, got %d", len(c.sessionData.AcceptanceContractRevisions))
+	}
+	revision := c.sessionData.AcceptanceContractRevisions[0]
+	if revision.OldSpec != nil || AcceptanceContractStateOf(revision.OldSpec) != AcceptanceContractUnset {
+		t.Fatalf("initial contract must record an unset old state: %#v", revision)
+	}
+	if AcceptanceContractStateOf(&revision.NewSpec) != AcceptanceContractEmpty {
+		t.Fatalf("explicit empty contract must record empty new state: %#v", revision.NewSpec)
+	}
+
+	var modified *StatusEvent
+	for i := range events {
+		if events[i].Type == "acceptance_contract_modified" {
+			modified = &events[i]
+			break
+		}
+	}
+	if modified == nil {
+		t.Fatal("missing acceptance contract audit status event")
+	}
+	if got := modified.Data["old_state"]; got != AcceptanceContractUnset {
+		t.Fatalf("old audit state = %#v, want %q", got, AcceptanceContractUnset)
+	}
+	if got := modified.Data["new_state"]; got != AcceptanceContractEmpty {
+		t.Fatalf("new audit state = %#v, want %q", got, AcceptanceContractEmpty)
+	}
+}
+
+func TestSetGoalModeRejectsExistingVacuousAcceptance(t *testing.T) {
+	c := &Coordinator{
+		session:     &TeamSession{Config: agent.TeamConfig{Name: "mode-switch", GoalMode: "exploratory"}},
+		sessionData: NewSession(),
+		goalMode:    GoalModeExploratory,
+	}
+	if err := c.SetAcceptance(""); err != nil {
+		t.Fatalf("exploratory mode should allow an empty contract before mode switch: %v", err)
+	}
+	if err := c.SetGoalMode(GoalModeOutcome); err == nil || !strings.Contains(err.Error(), FindingAcceptanceVacuous) {
+		t.Fatalf("outcome mode switch should reject vacuous acceptance, got %v", err)
+	}
+	if got := c.GoalMode(); got != GoalModeExploratory {
+		t.Fatalf("failed mode switch changed goal mode to %q", got)
 	}
 }

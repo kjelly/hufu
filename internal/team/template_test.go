@@ -286,7 +286,7 @@ func TestParseAgentFileGitHubActionsUnchanged(t *testing.T) {
 
 func TestParseTeamYMLWithTemplate(t *testing.T) {
 	tmpDir := t.TempDir()
-	yamlContent := "name: {@ .team_name @}\nmodel: {@ .model @}\nmax-rounds: 5\n"
+	yamlContent := "name: {@ .team_name @}\nacceptance: 'true'\nmodel: {@ .model @}\nmax-rounds: 5\n"
 	teamPath := filepath.Join(tmpDir, "team.yml")
 	if err := os.WriteFile(teamPath, []byte(yamlContent), 0644); err != nil {
 		t.Fatal(err)

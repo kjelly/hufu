@@ -431,20 +431,7 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 }
 
 func acceptanceSpecHasChecks(spec AcceptanceSpec) bool {
-	if spec.RequireNoUnresolvedTasks {
-		return true
-	}
-	for _, command := range spec.Commands {
-		if strings.TrimSpace(command) != "" {
-			return true
-		}
-	}
-	for _, path := range spec.RequiredArtifacts {
-		if strings.TrimSpace(path) != "" {
-			return true
-		}
-	}
-	return len(spec.Verifications) > 0 || len(spec.Criteria) > 0
+	return AcceptanceSpecHasChecks(spec)
 }
 
 // runRollback runs the team's optional rollback command or default git rollback.

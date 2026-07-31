@@ -566,6 +566,8 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 			if v != "" {
 				cfg.Acceptance = v
 				cfg.AcceptanceSpec = &agent.AcceptanceSpec{Commands: []string{v}}
+			} else {
+				cfg.AcceptanceSpec = &agent.AcceptanceSpec{}
 			}
 		case map[string]interface{}, map[interface{}]interface{}:
 			rawBytes, err := yaml.Marshal(v)
@@ -609,6 +611,13 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 			return cfg, fmt.Errorf("invalid team configuration: %w", err)
 		}
 		cfg.GoalMode = string(gm)
+	}
+	effectiveGoalMode, err := ResolveEffectiveGoalMode(cfg.GoalMode, cfg.ExecutionProfile)
+	if err != nil {
+		return cfg, fmt.Errorf("invalid effective goal mode: %w", err)
+	}
+	if err := ValidateAcceptanceSpec(cfg.AcceptanceSpec, string(effectiveGoalMode)); err != nil {
+		return cfg, err
 	}
 	cfg.Reliability = agent.DefaultReliabilityConfig()
 	if yc.Reliability.MaxDiagnosticTasksWithoutProgress > 0 {
@@ -654,6 +663,13 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 
 	cfg, err := parseTeamYML(absDir, vars)
 	if err != nil {
+		return nil, err
+	}
+	effectiveGoalMode, err := ResolveEffectiveGoalMode(cfg.GoalMode, cfg.ExecutionProfile)
+	if err != nil {
+		return nil, fmt.Errorf("invalid effective goal mode: %w", err)
+	}
+	if err := ValidateAcceptanceSpec(cfg.AcceptanceSpec, string(effectiveGoalMode)); err != nil {
 		return nil, err
 	}
 	if cfg.Name == "" {

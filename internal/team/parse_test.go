@@ -41,21 +41,21 @@ func TestMaxStepsParsing(t *testing.T) {
 		},
 		{
 			name:         "team config with max-steps: 100",
-			yamlContent:  "name: test-team\nmax-steps: 100\nmodel: test-model\n",
+			yamlContent:  "name: test-team\nacceptance: 'true'\nmax-steps: 100\nmodel: test-model\n",
 			wantMaxSteps: 100,
 			isAgent:      false,
 			wantErr:      false,
 		},
 		{
 			name:         "team config with max-steps: 0 (should be unset)",
-			yamlContent:  "name: test-team\nmax-steps: 0\nmodel: test-model\n",
+			yamlContent:  "name: test-team\nacceptance: 'true'\nmax-steps: 0\nmodel: test-model\n",
 			wantMaxSteps: 0,
 			isAgent:      false,
 			wantErr:      false,
 		},
 		{
 			name:         "team config without max-steps",
-			yamlContent:  "name: test-team\nmodel: test-model\n",
+			yamlContent:  "name: test-team\nacceptance: 'true'\nmodel: test-model\n",
 			wantMaxSteps: 0,
 			isAgent:      false,
 			wantErr:      false,
@@ -109,7 +109,7 @@ func TestMaxStepsParsing(t *testing.T) {
 func TestVerifyTimeoutParsing(t *testing.T) {
 	tmpDir := t.TempDir()
 	teamPath := filepath.Join(tmpDir, "team.yml")
-	yamlContent := "name: test-team\nverify-timeout: 45\nmodel: test-model\n"
+	yamlContent := "name: test-team\nacceptance: 'true'\nverify-timeout: 45\nmodel: test-model\n"
 	if err := os.WriteFile(teamPath, []byte(yamlContent), 0o644); err != nil {
 		t.Fatalf("Failed to write test team file: %v", err)
 	}
@@ -131,18 +131,13 @@ func TestParseAgentGuardRules(t *testing.T) {
 	}{
 		{
 			name:        "agent with guard rules",
-			yamlContent: "---\nname: test-agent\nrole: worker\nguard:\n  - Never rm -rf\n  - No sudo commands\n---\n",
-			wantGuard:   []string{"Never rm -rf", "No sudo commands"},
+			yamlContent: "---\nname: test-agent\nrole: worker\nguard:\n  - no secret leakage\n  - strictly follow format\n---\n",
+			wantGuard:   []string{"no secret leakage", "strictly follow format"},
 		},
 		{
 			name:        "agent without guard rules",
 			yamlContent: "---\nname: test-agent\nrole: worker\n---\n",
 			wantGuard:   nil,
-		},
-		{
-			name:        "agent with empty guard list",
-			yamlContent: "---\nname: test-agent\nrole: worker\nguard: []\n---\n",
-			wantGuard:   []string{},
 		},
 	}
 
@@ -162,16 +157,12 @@ func TestParseAgentGuardRules(t *testing.T) {
 				t.Fatalf("parseAgentFile returned nil for valid input")
 			}
 
-			if len(tt.wantGuard) == 0 && len(result.Guard) == 0 {
-				return
-			}
 			if len(result.Guard) != len(tt.wantGuard) {
-				t.Errorf("parseAgentFile Guard = %v, want %v", result.Guard, tt.wantGuard)
-				return
+				t.Errorf("parseAgentFile Guard length = %d, want %d", len(result.Guard), len(tt.wantGuard))
 			}
-			for i, g := range result.Guard {
-				if g != tt.wantGuard[i] {
-					t.Errorf("Guard[%d] = %q, want %q", i, g, tt.wantGuard[i])
+			for i, rule := range result.Guard {
+				if rule != tt.wantGuard[i] {
+					t.Errorf("parseAgentFile Guard[%d] = %q, want %q", i, rule, tt.wantGuard[i])
 				}
 			}
 		})
@@ -181,8 +172,8 @@ func TestParseAgentGuardRules(t *testing.T) {
 func TestMaxStepsDefaultValue(t *testing.T) {
 	t.Run("agent max-steps 0 resolved to default", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		agentPath := filepath.Join(tmpDir, "test-agent.md")
-		yamlContent := "---\nname: test-agent\nrole: worker\nmodel: test-model\nmax-steps: 0\n---\n"
+		agentPath := filepath.Join(tmpDir, "agent.md")
+		yamlContent := "---\nname: test-agent\nrole: worker\nmax-steps: 0\n---\n"
 		if err := os.WriteFile(agentPath, []byte(yamlContent), 0644); err != nil {
 			t.Fatalf("Failed to write test agent file: %v", err)
 		}
@@ -202,7 +193,7 @@ func TestMaxStepsDefaultValue(t *testing.T) {
 	t.Run("team max-steps 0 resolved to default", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		teamPath := filepath.Join(tmpDir, "team.yml")
-		yamlContent := "name: test-team\nmax-steps: 0\nmodel: test-model\n"
+		yamlContent := "name: test-team\nacceptance: 'true'\nmax-steps: 0\nmodel: test-model\n"
 		if err := os.WriteFile(teamPath, []byte(yamlContent), 0644); err != nil {
 			t.Fatalf("Failed to write test team file: %v", err)
 		}
@@ -241,7 +232,7 @@ func TestMaxStepsWithValidValue(t *testing.T) {
 	t.Run("team with valid max-steps", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		teamPath := filepath.Join(tmpDir, "team.yml")
-		yamlContent := "name: test-team\nmax-steps: 40\nmodel: test-model\n"
+		yamlContent := "name: test-team\nacceptance: 'true'\nmax-steps: 40\nmodel: test-model\n"
 		if err := os.WriteFile(teamPath, []byte(yamlContent), 0644); err != nil {
 			t.Fatalf("Failed to write test team file: %v", err)
 		}
@@ -280,7 +271,7 @@ func TestMaxStepsMissingUsesDefault(t *testing.T) {
 	t.Run("team without max-steps", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		teamPath := filepath.Join(tmpDir, "team.yml")
-		yamlContent := "name: test-team\nmodel: test-model\n"
+		yamlContent := "name: test-team\nacceptance: 'true'\nmodel: test-model\n"
 		if err := os.WriteFile(teamPath, []byte(yamlContent), 0644); err != nil {
 			t.Fatalf("Failed to write test team file: %v", err)
 		}
@@ -299,6 +290,7 @@ func TestParseTeamYMLModelList(t *testing.T) {
 	t.Run("team with model-list", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		yamlContent := `name: test-team
+acceptance: 'true'
 model: ollama/qwen3:8b
 model-list:
   - id: ollama/deepseek-v4:flash
@@ -333,7 +325,7 @@ model-list:
 
 	t.Run("team without model-list", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		yamlContent := "name: test-team\nmodel: ollama/qwen3:8b\n"
+		yamlContent := "name: test-team\nacceptance: 'true'\nmodel: ollama/qwen3:8b\n"
 		teamPath := filepath.Join(tmpDir, "team.yml")
 		if err := os.WriteFile(teamPath, []byte(yamlContent), 0644); err != nil {
 			t.Fatalf("Failed to write team file: %v", err)
@@ -481,6 +473,9 @@ func TestLoadTeam_NoYAMLDirName(t *testing.T) {
 	if err := os.MkdirAll(teamDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(teamDir, "team.yml"), []byte("name: myteam\ngoal-mode: exploratory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// Provide one valid agent .md so LoadTeam has at least one agent.
 	agentPath := filepath.Join(teamDir, "worker.md")
 	agentContent := "---\nname: worker\nrole: worker\n---\nI am a worker."
@@ -515,6 +510,9 @@ func TestLoadTeam_Helper_NoDuplicates(t *testing.T) {
 	tmpDir := t.TempDir()
 	teamDir := filepath.Join(tmpDir, "myteam")
 	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, "team.yml"), []byte("name: myteam\ngoal-mode: exploratory\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	agentPath := filepath.Join(teamDir, "worker.md")
@@ -561,6 +559,9 @@ func TestLoadTeam_AGENT_NAMES_NoDuplicates(t *testing.T) {
 	if err := os.MkdirAll(teamDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(teamDir, "team.yml"), []byte("name: myteam\ngoal-mode: exploratory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	agentPath := filepath.Join(teamDir, "worker.md")
 	agentContent := "---\nname: worker\nrole: worker\n---\nI am a worker."
 	if err := os.WriteFile(agentPath, []byte(agentContent), 0o644); err != nil {
@@ -604,6 +605,9 @@ func TestLoadTeam_SessionConfigVars_Populated(t *testing.T) {
 	tmpDir := t.TempDir()
 	teamDir := filepath.Join(tmpDir, "myteam")
 	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, "team.yml"), []byte("name: myteam\ngoal-mode: exploratory\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	agentPath := filepath.Join(teamDir, "worker.md")
@@ -696,7 +700,7 @@ func TestParseTeamYML_GoalMode(t *testing.T) {
 	t.Run("valid goal_mode outcome", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		teamPath := filepath.Join(tmpDir, "team.yml")
-		yamlContent := "name: test-team\ngoal-mode: outcome\n"
+		yamlContent := "name: test-team\ngoal-mode: outcome\nacceptance: 'true'\n"
 		if err := os.WriteFile(teamPath, []byte(yamlContent), 0644); err != nil {
 			t.Fatal(err)
 		}

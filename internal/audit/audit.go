@@ -32,6 +32,7 @@ const (
 	EventConsentWaitStart   = "consent_wait_start"
 	EventConsentResolved    = "consent_resolved"
 	EventAcceptanceModified = "acceptance_contract_modified"
+	EventAcceptanceRejected = "acceptance_contract_rejected"
 )
 
 type ToolAction struct {
@@ -232,21 +233,41 @@ func (l *AuditLogger) LogSSHConnection(agent, host, command string, exitCode int
 	})
 }
 
-func (l *AuditLogger) LogAcceptanceModified(agent, oldSpecJSON, newSpecJSON, reason string) {
+func (l *AuditLogger) LogAcceptanceChange(event, status, agent, oldState, oldSpecJSON, newState, newSpecJSON, reason string) {
 	l.log(ToolAction{
 		Timestamp: time.Now().Format(time.RFC3339Nano),
 		Team:      l.teamName,
 		Agent:     agent,
 		Tool:      "coordinator",
-		Action:    "acceptance_contract_modified",
-		Event:     EventAcceptanceModified,
-		Input:     fmt.Sprintf("old_spec=%s", oldSpecJSON),
-		Result:    fmt.Sprintf("new_spec=%s, reason=%s", newSpecJSON, reason),
+		Action:    event,
+		Event:     event,
+		Input:     fmt.Sprintf("old_state=%s, old_spec=%s", oldState, oldSpecJSON),
+		Result:    fmt.Sprintf("new_state=%s, new_spec=%s, status=%s, reason=%s", newState, newSpecJSON, status, reason),
 	})
+}
+
+func (l *AuditLogger) LogAcceptanceModified(agent, oldSpecJSON, newSpecJSON, reason string) {
+	l.LogAcceptanceChange(EventAcceptanceModified, "accepted", agent, "unknown", oldSpecJSON, "unknown", newSpecJSON, reason)
+}
+
+func (l *AuditLogger) LogAcceptanceRejected(agent, oldState, oldSpecJSON, newState, newSpecJSON, reason string) {
+	l.LogAcceptanceChange(EventAcceptanceRejected, "rejected", agent, oldState, oldSpecJSON, newState, newSpecJSON, reason)
+}
+
+func LogAcceptanceChange(event, status, agent, oldState, oldSpecJSON, newState, newSpecJSON, reason string) {
+	if l := GetDefault(); l != nil {
+		l.LogAcceptanceChange(event, status, agent, oldState, oldSpecJSON, newState, newSpecJSON, reason)
+	}
 }
 
 func LogAcceptanceModified(agent, oldSpecJSON, newSpecJSON, reason string) {
 	if l := GetDefault(); l != nil {
 		l.LogAcceptanceModified(agent, oldSpecJSON, newSpecJSON, reason)
+	}
+}
+
+func LogAcceptanceRejected(agent, oldState, oldSpecJSON, newState, newSpecJSON, reason string) {
+	if l := GetDefault(); l != nil {
+		l.LogAcceptanceRejected(agent, oldState, oldSpecJSON, newState, newSpecJSON, reason)
 	}
 }

@@ -29,7 +29,7 @@ func newTestCoordinator(t *testing.T, workerCount int) *team.Coordinator {
 	session := &team.TeamSession{
 		Workspace: t.TempDir(),
 		Dir:       t.TempDir(),
-		Config:    agent.TeamConfig{Name: "test"},
+		Config:    agent.TeamConfig{Name: "test", GoalMode: "exploratory"},
 		Agents:    agents,
 	}
 	c, err := team.NewCoordinator(session, "", "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)

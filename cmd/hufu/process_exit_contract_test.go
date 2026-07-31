@@ -93,7 +93,7 @@ func TestCLIProcessExitContract(t *testing.T) {
 
 	t.Run("failed run emits JSON and nonzero exit", func(t *testing.T) {
 		code, stdout, stderr := runProcessContract(t, binary,
-			"--default", "--unattended", "--model", "test",
+			"--default", "--temp", "--unattended", "--model", "test",
 			"--provider-url", "http://127.0.0.1:1", "--output", "json",
 			"--max-rounds", "1", "--max-steps", "1", "--max-duration", "2",
 			"contract failure")

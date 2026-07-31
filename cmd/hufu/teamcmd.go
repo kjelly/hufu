@@ -128,6 +128,7 @@ func buildGeneratedTeam(name, prompt, model, workspaceDir string) generatedTeam 
 	files := map[string]string{
 		"team.yaml": fmt.Sprintf(`name: %q
 description: %q
+acceptance: 'true'
 max-rounds: 10
 max-steps: 30
 timeout: 600

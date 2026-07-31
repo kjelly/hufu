@@ -584,7 +584,7 @@ func TestCompactMessages_SourceRangeIsAbsolute(t *testing.T) {
 	session := &TeamSession{
 		Workspace: t.TempDir(),
 		Dir:       t.TempDir(),
-		Config:    agent.TeamConfig{Name: "test-team"},
+		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
@@ -738,7 +738,7 @@ func TestIsVerificationFailure_DoesNotMaskFailureAfterSuccessLine(t *testing.T) 
 }
 
 func TestCompactMessages_MergesTypedTaskResultFactsWithoutSidecar(t *testing.T) {
-	session := &TeamSession{Workspace: t.TempDir(), Dir: t.TempDir(), Config: agent.TeamConfig{Name: "test"}}
+	session := &TeamSession{Workspace: t.TempDir(), Dir: t.TempDir(), Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}
 	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -750,9 +750,6 @@ func TestCompactMessages_MergesTypedTaskResultFactsWithoutSidecar(t *testing.T) 
 		FilesModified: []FileRef{{Path: "internal/team/compaction.go"}},
 		Verification:  []VerificationResult{{Command: "test -f reports/final.md", ExitCode: 0}},
 	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskDone, "", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -788,7 +785,7 @@ func TestCompactMessages_MergesTypedTaskResultFactsWithoutSidecar(t *testing.T) 
 }
 
 func TestCompactMessages_MergesTypedTaskResultFacts_OnValidationFallback(t *testing.T) {
-	session := &TeamSession{Workspace: t.TempDir(), Dir: t.TempDir(), Config: agent.TeamConfig{Name: "test"}}
+	session := &TeamSession{Workspace: t.TempDir(), Dir: t.TempDir(), Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}
 	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -998,7 +995,7 @@ func TestMergeTypedTaskResultFacts_WritesFailedVerificationsToErrorsAndFixes(t *
 }
 
 func TestMergeTypedTaskResultFacts_ValidationFallback_ReconcilesCompletedTask(t *testing.T) {
-	session := &TeamSession{Workspace: t.TempDir(), Dir: t.TempDir(), Config: agent.TeamConfig{Name: "test"}}
+	session := &TeamSession{Workspace: t.TempDir(), Dir: t.TempDir(), Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}
 	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -1078,7 +1075,7 @@ func TestMergeTypedTaskResultFacts_FailedTaskIDDoesNotRemoveSubstringMatches(t *
 
 func TestCompactMessages_InvalidSummaryDoesNotReplaceHistoryOrPersist(t *testing.T) {
 	workspace := t.TempDir()
-	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test"}}, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1105,7 +1102,7 @@ func TestCompactMessages_InvalidSummaryDoesNotReplaceHistoryOrPersist(t *testing
 
 func TestCompactMessagesEmbedsVerifiedToolEvidence(t *testing.T) {
 	workspace := t.TempDir()
-	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test"}}, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1132,7 +1129,7 @@ func TestCompactMessagesEmbedsVerifiedToolEvidence(t *testing.T) {
 
 func TestCompactMessagesRetainsOriginalWhenVerifiedBudgetCannotFit(t *testing.T) {
 	workspace := t.TempDir()
-	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test"}}, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -196,3 +196,21 @@ func ResolveExecutionProfile(cliProfile, teamProfile string) (ExecutionProfile, 
 	}
 	return p, nil
 }
+
+// ResolveEffectiveGoalMode applies the same precedence as coordinator setup:
+// an explicit goal mode wins; otherwise the selected execution profile's
+// default goal mode is used. This must be resolved before validating an
+// acceptance contract, because an omitted mode is not implicitly outcome.
+func ResolveEffectiveGoalMode(goalMode, executionProfile string) (GoalMode, error) {
+	if strings.TrimSpace(goalMode) != "" {
+		return ParseGoalMode(goalMode)
+	}
+	profile, err := ResolveExecutionProfile("", executionProfile)
+	if err != nil {
+		return "", err
+	}
+	if profile.DefaultGoalMode != "" {
+		return profile.DefaultGoalMode, nil
+	}
+	return GoalModeOutcome, nil
+}

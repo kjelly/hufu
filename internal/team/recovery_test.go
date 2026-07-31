@@ -233,7 +233,8 @@ func TestResumeInterruptedTasks_FailOnUnknownState(t *testing.T) {
 		Workspace: tmpDir,
 		Dir:       tmpDir,
 		Config: agent.TeamConfig{
-			Name: "test-team",
+			Name:     "test-team",
+			GoalMode: "exploratory",
 		},
 	}
 	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)

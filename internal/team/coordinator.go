@@ -409,21 +409,21 @@ func (c *Coordinator) SetBudget(maxWallClockSeconds, maxTotalTokens int64) {
 
 // SetAcceptance sets an optional shell command run when the coordinator
 // finishes; a non-zero exit marks the run as not-accepted.
-func (c *Coordinator) SetAcceptance(cmd string) {
+func (c *Coordinator) SetAcceptance(cmd string) error {
 	spec := AcceptanceSpec{}
 	if cmd != "" {
 		spec.Commands = []string{cmd}
 	}
-	c.SetAcceptanceSpecWithReason(spec, "set_acceptance")
+	return c.SetAcceptanceSpecWithReason(spec, "set_acceptance")
 }
 
 // SetAcceptanceSpec sets an explicit AcceptanceSpec for run-level acceptance.
-func (c *Coordinator) SetAcceptanceSpec(spec AcceptanceSpec) {
-	c.SetAcceptanceSpecWithReason(spec, "set_acceptance_spec")
+func (c *Coordinator) SetAcceptanceSpec(spec AcceptanceSpec) error {
+	return c.SetAcceptanceSpecWithReason(spec, "set_acceptance_spec")
 }
 
 // SetAcceptanceSpecWithReason sets an explicit AcceptanceSpec with an audit reason and persists audit entries.
-func (c *Coordinator) SetAcceptanceSpecWithReason(spec AcceptanceSpec, reason string) {
+func (c *Coordinator) SetAcceptanceSpecWithReason(spec AcceptanceSpec, reason string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	spec = cloneAcceptanceSpec(spec)
@@ -444,19 +444,54 @@ func (c *Coordinator) SetAcceptanceSpecWithReason(spec AcceptanceSpec, reason st
 	if b, err := json.Marshal(spec); err == nil {
 		newSpecJSON = string(b)
 	}
+	oldState := AcceptanceContractStateOf(oldSpec)
+	newState := AcceptanceContractStateOf(&spec)
 
+	goalModeStr := string(c.GoalMode())
+	if valErr := ValidateAcceptanceSpec(&spec, goalModeStr); valErr != nil {
+		rejectReason := fmt.Sprintf("%s (rejected: %v)", reason, valErr)
+		audit.LogAcceptanceRejected("coordinator", string(oldState), oldSpecJSON, string(newState), newSpecJSON, rejectReason)
+		c.persistAcceptanceAuditEvent("acceptance_contract_rejected", "rejected", oldState, oldSpecJSON, newState, newSpecJSON, rejectReason)
+		c.report(c.newEvent("acceptance_contract_rejected").
+			withData(map[string]any{
+				"old_spec":  oldSpec,
+				"new_spec":  spec,
+				"old_state": oldState,
+				"new_state": newState,
+				"reason":    reason,
+				"status":    "rejected",
+				"error":     valErr.Error(),
+			}).
+			withMessage(fmt.Sprintf("acceptance contract update rejected. reason: %s, error: %v", reason, valErr)))
+		c.emitEvent("acceptance_contract_rejected", "coordinator", "", map[string]interface{}{
+			"old_spec": oldSpec, "new_spec": spec, "old_state": oldState, "new_state": newState,
+			"reason": reason, "status": "rejected", "error": valErr.Error(),
+		})
+		return valErr
+	}
+
+	message := fmt.Sprintf("acceptance contract set. reason: %s", reason)
 	if c.acceptanceContractFixed && c.acceptanceSpec != nil {
+		message = fmt.Sprintf("acceptance contract modified after run start. reason: %s", reason)
+	}
+	// A normal initial configured contract is initialization, not a
+	// modification event. An explicit initial empty contract is retained as an
+	// audit event because it must remain distinguishable from no contract.
+	if (c.acceptanceContractFixed && c.acceptanceSpec != nil) ||
+		(oldState == AcceptanceContractUnset && newState == AcceptanceContractEmpty) {
 		c.report(c.newEvent("acceptance_contract_modified").
 			withData(map[string]any{
-				"old_spec": oldSpec,
-				"new_spec": spec,
-				"reason":   reason,
+				"old_spec":  oldSpec,
+				"new_spec":  spec,
+				"old_state": oldState,
+				"new_state": newState,
+				"status":    "accepted",
+				"reason":    reason,
 			}).
-			withMessage(fmt.Sprintf("acceptance contract modified after run start. reason: %s", reason)))
-
-		audit.LogAcceptanceModified("coordinator", oldSpecJSON, newSpecJSON, reason)
-		c.persistAcceptanceAuditEvent(oldSpecJSON, newSpecJSON, reason)
+			withMessage(message))
 	}
+	audit.LogAcceptanceChange(audit.EventAcceptanceModified, "accepted", "coordinator", string(oldState), oldSpecJSON, string(newState), newSpecJSON, reason)
+	c.persistAcceptanceAuditEvent("acceptance_contract_modified", "accepted", oldState, oldSpecJSON, newState, newSpecJSON, reason)
 
 	c.acceptanceContractRevision++
 	revision := AcceptanceContractRevision{
@@ -473,7 +508,8 @@ func (c *Coordinator) SetAcceptanceSpecWithReason(spec AcceptanceSpec, reason st
 		}
 	}
 	c.emitEvent("acceptance_contract_modified", "coordinator", "", map[string]interface{}{
-		"revision": revision.Revision, "old_spec": oldSpec, "new_spec": spec, "reason": reason,
+		"revision": revision.Revision, "old_spec": oldSpec, "new_spec": spec,
+		"old_state": oldState, "new_state": newState, "reason": reason,
 	})
 
 	specCopy := cloneAcceptanceSpec(spec)
@@ -482,9 +518,10 @@ func (c *Coordinator) SetAcceptanceSpecWithReason(spec AcceptanceSpec, reason st
 		c.acceptanceCmd = spec.Commands[0]
 	}
 	c.acceptanceContractFixed = true
+	return nil
 }
 
-func (c *Coordinator) persistAcceptanceAuditEvent(oldSpecJSON, newSpecJSON, reason string) {
+func (c *Coordinator) persistAcceptanceAuditEvent(event, status string, oldState AcceptanceContractState, oldSpecJSON string, newState AcceptanceContractState, newSpecJSON, reason string) {
 	if c.session == nil || c.session.Workspace == "" {
 		return
 	}
@@ -494,9 +531,12 @@ func (c *Coordinator) persistAcceptanceAuditEvent(oldSpecJSON, newSpecJSON, reas
 
 	rec := map[string]any{
 		"timestamp": time.Now().Format(time.RFC3339Nano),
-		"event":     "acceptance_contract_modified",
+		"event":     event,
+		"status":    status,
 		"team":      c.session.Config.Name,
+		"old_state": oldState,
 		"old_spec":  oldSpecJSON,
+		"new_state": newState,
 		"new_spec":  newSpecJSON,
 		"reason":    reason,
 	}
@@ -710,10 +750,24 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		maxDrafts:              maxDraftsPerSession,
 	}
 
+	effectiveGoalMode, err := ResolveEffectiveGoalMode(session.Config.GoalMode, session.Config.ExecutionProfile)
+	if err != nil {
+		return nil, fmt.Errorf("invalid effective goal mode: %w", err)
+	}
+	c.goalMode = effectiveGoalMode
+
 	if session.Config.AcceptanceSpec != nil {
-		c.SetAcceptanceSpec(*session.Config.AcceptanceSpec)
+		if err := c.SetAcceptanceSpec(*session.Config.AcceptanceSpec); err != nil {
+			return nil, err
+		}
 	} else if session.Config.Acceptance != "" {
-		c.SetAcceptance(session.Config.Acceptance)
+		if err := c.SetAcceptance(session.Config.Acceptance); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := ValidateAcceptanceSpec(nil, string(effectiveGoalMode)); err != nil {
+			return nil, err
+		}
 	}
 
 	c.planner = &defaultPlanner{c: c}
@@ -890,7 +944,9 @@ func (c *Coordinator) report(event StatusEvent) {
 	if c.sshSessionMgr != nil {
 		event.SSHSessions = c.sshSessionMgr.Count()
 	}
-	c.reportStatus(event)
+	if c.reportStatus != nil {
+		c.reportStatus(event)
+	}
 }
 
 func (c *Coordinator) newEvent(eventType string) StatusEvent {
@@ -1225,6 +1281,21 @@ func (c *Coordinator) SetGoalMode(mode GoalMode) error {
 			return err
 		}
 		mode = parsed
+	}
+	if mode == GoalModeOutcome {
+		// Validate before changing the mode so an exploratory coordinator cannot
+		// transition into outcome mode while carrying a vacuous contract. Read
+		// the contract under c.mu, matching SetAcceptance's lock order.
+		c.mu.RLock()
+		var spec *AcceptanceSpec
+		if c.acceptanceSpec != nil {
+			copy := cloneAcceptanceSpec(*c.acceptanceSpec)
+			spec = &copy
+		}
+		c.mu.RUnlock()
+		if err := ValidateAcceptanceSpec(spec, string(GoalModeOutcome)); err != nil {
+			return err
+		}
 	}
 	c.goalModeMu.Lock()
 	c.goalMode = mode

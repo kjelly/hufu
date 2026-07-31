@@ -147,7 +147,7 @@ func TestArchiveToMemory_SkipsWhenDisableHistoricalMemory(t *testing.T) {
 	session := &team.TeamSession{
 		Workspace: tmpDir,
 		Dir:       tmpDir,
-		Config:    agent.TeamConfig{Name: "test-team"},
+		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
 	c, err := team.NewCoordinator(session, "", "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
