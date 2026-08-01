@@ -215,6 +215,14 @@ func (c *Coordinator) lookupTaskCacheWithTypedVerification(ctx context.Context, 
 		return "", false
 	}
 	normalized := normalizedVerificationSpecForCache(verifySpec, verify, verifyMode)
+	// Legacy verify commands retain their historical cache policy for backward
+	// compatibility. Explicit verify_spec entries require fresh typed evidence;
+	// this distinction prevents the conservative legacy translation from making
+	// old helper APIs silently stop caching while keeping typed checks fail-closed.
+	evidenceSpec := normalized
+	if verifySpec == nil {
+		evidenceSpec = nil
+	}
 	if normalized != nil {
 		if err := validateVerificationSpec(*normalized); err != nil {
 			// A malformed verifier is never allowed to inherit a previous
@@ -237,7 +245,7 @@ func (c *Coordinator) lookupTaskCacheWithTypedVerification(ctx context.Context, 
 	// Step 1: exact match in current generation (newest entry first)
 	for i := len(all) - 1; i >= 0; i-- {
 		e := all[i]
-		if e.generation == gen && e.matchesWithSpec(newTask, verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(normalized) && c.PolicyEngine().IsCacheFresh(e, target) {
+		if e.generation == gen && e.matchesWithSpec(newTask, verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(evidenceSpec) && c.PolicyEngine().IsCacheFresh(e, target) {
 			return e.output, true
 		}
 	}
@@ -245,7 +253,7 @@ func (c *Coordinator) lookupTaskCacheWithTypedVerification(ctx context.Context, 
 	// Step 2: exact match across all generations (newest entry first)
 	for i := len(all) - 1; i >= 0; i-- {
 		e := all[i]
-		if e.matchesWithSpec(newTask, verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(normalized) && c.PolicyEngine().IsCacheFresh(e, target) {
+		if e.matchesWithSpec(newTask, verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(evidenceSpec) && c.PolicyEngine().IsCacheFresh(e, target) {
 			return e.output, true
 		}
 	}
@@ -258,7 +266,7 @@ func (c *Coordinator) lookupTaskCacheWithTypedVerification(ctx context.Context, 
 
 	var currentGenEntries []cachedTaskEntry
 	for _, e := range all {
-		if e.generation == gen && e.matchesVerificationContract(verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(normalized) && c.PolicyEngine().IsCacheFresh(e, target) {
+		if e.generation == gen && e.matchesVerificationContract(verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(evidenceSpec) && c.PolicyEngine().IsCacheFresh(e, target) {
 			currentGenEntries = append(currentGenEntries, e)
 		}
 	}
@@ -354,6 +362,10 @@ func (c *Coordinator) lookupTaskCacheInWithTypedVerification(ctx context.Context
 		return "", "", false
 	}
 	normalizedSpec := normalizedVerificationSpecForCache(verifySpec, verify, verifyMode)
+	evidenceSpec := normalizedSpec
+	if verifySpec == nil {
+		evidenceSpec = nil
+	}
 	if normalizedSpec != nil {
 		if err := validateVerificationSpec(*normalizedSpec); err != nil {
 			return "", "", false
@@ -365,7 +377,7 @@ func (c *Coordinator) lookupTaskCacheInWithTypedVerification(ctx context.Context
 	// Step 1: exact match across all generations (newest entry first)
 	for i := len(all) - 1; i >= 0; i-- {
 		e := all[i]
-		if e.matchesWithSpec(newTask, verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(normalizedSpec) && c.PolicyEngine().IsCacheFresh(e, target) {
+		if e.matchesWithSpec(newTask, verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(evidenceSpec) && c.PolicyEngine().IsCacheFresh(e, target) {
 			return e.output, e.taskDesc, true
 		}
 	}
@@ -383,7 +395,7 @@ func (c *Coordinator) lookupTaskCacheInWithTypedVerification(ctx context.Context
 	}
 	recentEntries := make([]cachedTaskEntry, 0, len(all)-startIdx)
 	for _, e := range all[startIdx:] {
-		if e.matchesVerificationContract(verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(normalizedSpec) && c.PolicyEngine().IsCacheFresh(e, target) {
+		if e.matchesVerificationContract(verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(evidenceSpec) && c.PolicyEngine().IsCacheFresh(e, target) {
 			recentEntries = append(recentEntries, e)
 		}
 	}
@@ -443,7 +455,7 @@ func (c *Coordinator) storeTaskCacheWithTypedVerificationEvidence(agentKey, task
 	if normalizedSpec != nil && normalizeVerifyMode(normalizedSpec.Mode) == "observation" {
 		return
 	}
-	if requiresFreshVerificationEvidence(normalizedSpec) && (verification == nil || verification.ExitCode != 0 || verification.EvaluatedAt.IsZero() || verification.Fingerprint == "") {
+	if verifySpec != nil && requiresFreshVerificationEvidence(normalizedSpec) && (verification == nil || verification.ExitCode != 0 || verification.EvaluatedAt.IsZero() || verification.Fingerprint == "") {
 		return
 	}
 	gen := c.cacheGeneration.Load()

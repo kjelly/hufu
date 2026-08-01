@@ -22,19 +22,58 @@ import (
 	"github.com/anomalyco/hufu/internal/utils"
 )
 
+// TranslateLegacyVerification converts only legacy commands whose assertion
+// semantics are unambiguous in the typed verifier model. The typed
+// file_exists verifier means "any existing file or directory", so only test
+// -e is equivalent. Regular-file (-f), directory (-d), and more complex shell
+// commands deliberately remain command_exit to preserve their exact
+// predicate/pipeline semantics.
+func TranslateLegacyVerification(command string) (VerificationSpec, bool) {
+	fields := strings.Fields(strings.TrimSpace(command))
+	if len(fields) == 0 {
+		return VerificationSpec{}, false
+	}
+
+	var path string
+	switch {
+	case len(fields) == 3 && fields[0] == "test" && fields[1] == "-e":
+		path = fields[2]
+	case len(fields) == 4 && fields[0] == "[" && fields[1] == "-e" && fields[3] == "]":
+		path = fields[2]
+	default:
+		return VerificationSpec{}, false
+	}
+
+	// Keep the translator conservative: shell quoting, substitutions, and
+	// operators require command_exit semantics and must not become a literal
+	// path or silently lose part of the original command.
+	if path == "" || strings.ContainsAny(path, "'\"`$;&|<>\n\r") {
+		return VerificationSpec{}, false
+	}
+	return VerificationSpec{Type: VerifyFileExists, Path: path}, true
+}
+
 // NormalizeVerificationSpec fills in defaults and translates legacy command/mode.
 func NormalizeVerificationSpec(spec VerificationSpec, legacyCommand, legacyMode string) VerificationSpec {
 	normalized := cloneVerificationSpec(spec)
 	if normalized.Type == "" {
-		if normalized.Path != "" {
+		// An explicit typed shape wins. Only an otherwise untyped legacy command
+		// is eligible for conservative migration.
+		if normalized.Path == "" && len(normalized.Assertions) == 0 {
+			if translated, ok := TranslateLegacyVerification(legacyCommand); ok {
+				normalized.Type = translated.Type
+				normalized.Path = translated.Path
+			}
+		}
+		if normalized.Type == "" && normalized.Path != "" {
 			if len(normalized.Assertions) > 0 {
 				normalized.Type = VerifyJSONAssert
 			} else {
 				normalized.Type = VerifyFileExists
 			}
-		} else if len(normalized.Assertions) > 0 {
+		} else if normalized.Type == "" && len(normalized.Assertions) > 0 {
 			normalized.Type = VerifyJSONAssert
-		} else {
+		} else if normalized.Type == "" {
 			normalized.Type = VerifyCommandExit
 		}
 	}

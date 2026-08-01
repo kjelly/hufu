@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +53,127 @@ func TestVerifySpecLegacyModePopulatesMixedTypedTask(t *testing.T) {
 	}
 	if verification.Command != "exit 1" {
 		t.Fatalf("typed verification command = %q, want legacy command", verification.Command)
+	}
+}
+
+func TestLegacyVerificationTranslationIsConservative(t *testing.T) {
+	tests := []struct {
+		name      string
+		command   string
+		wantTyped bool
+		wantPath  string
+		wantType  VerificationType
+	}{
+		{name: "regular file remains shell", command: "test -f report.md", wantTyped: false},
+		{name: "bracket regular file remains shell", command: "[ -f report.md ]", wantTyped: false},
+		{name: "test exists", command: "test -e workspace", wantTyped: true, wantPath: "workspace", wantType: VerifyFileExists},
+		{name: "pipeline remains shell", command: "test -f report.md && echo ok", wantTyped: false},
+		{name: "directory type remains shell", command: "test -d report.md", wantTyped: false},
+		{name: "quoted path remains shell", command: `test -f "report final.md"`, wantTyped: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NormalizeVerificationSpec(VerificationSpec{}, tt.command, "")
+			if tt.wantTyped {
+				if got.Type != tt.wantType || got.Path != tt.wantPath || got.Mode != "success" {
+					t.Fatalf("normalized legacy verifier = %#v, want type=%q path=%q mode=success", got, tt.wantType, tt.wantPath)
+				}
+				return
+			}
+			if got.Type != VerifyCommandExit || got.Command != tt.command || got.Path != "" {
+				t.Fatalf("ambiguous legacy verifier was translated: %#v", got)
+			}
+		})
+	}
+
+	explicitCommand := NormalizeVerificationSpec(VerificationSpec{Type: VerifyCommandExit}, "test -f report.md", "")
+	if explicitCommand.Type != VerifyCommandExit || explicitCommand.Command != "test -f report.md" {
+		t.Fatalf("explicit command_exit verifier was unexpectedly translated: %#v", explicitCommand)
+	}
+
+	for _, command := range []string{"", "   ", "\t\n"} {
+		t.Run("empty legacy command/"+fmt.Sprintf("%q", command), func(t *testing.T) {
+			if translated, ok := TranslateLegacyVerification(command); ok || translated.Type != "" || translated.Command != "" || translated.Path != "" || len(translated.Assertions) != 0 {
+				t.Fatalf("empty legacy command translated unexpectedly: command=%q spec=%#v ok=%v", command, translated, ok)
+			}
+		})
+	}
+}
+
+func TestLegacyTestExistsExecutionUsesTypedFileExists(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "regular"), []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(workspace, "directory"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		target     string
+		wantPassed bool
+	}{
+		{name: "regular file", target: "regular", wantPassed: true},
+		{name: "directory", target: "directory", wantPassed: true},
+		{name: "missing target", target: "missing", wantPassed: false},
+	}
+	c := &Coordinator{projectDir: workspace}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			verification, err := c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -e " + tt.target})
+			if verification == nil || verification.Spec == nil {
+				t.Fatalf("test -e produced no typed evidence: verification=%#v err=%v", verification, err)
+			}
+			if verification.Spec.Type != VerifyFileExists || verification.Spec.Path != tt.target {
+				t.Fatalf("test -e evidence spec = %#v, want file_exists path %q", verification.Spec, tt.target)
+			}
+			if tt.wantPassed {
+				if err != nil || verification.ExitCode != 0 {
+					t.Fatalf("test -e %s should pass: verification=%#v err=%v", tt.target, verification, err)
+				}
+			} else if err == nil || verification.ExitCode == 0 {
+				t.Fatalf("test -e %s should fail: verification=%#v err=%v", tt.target, verification, err)
+			}
+		})
+	}
+}
+
+func TestLegacyFileAndDirectoryChecksPreserveShellSemantics(t *testing.T) {
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{projectDir: workspace}
+
+	verification, err := c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -f target"})
+	if err == nil || verification == nil || verification.ExitCode == 0 {
+		t.Fatalf("test -f must reject a directory: verification=%#v err=%v", verification, err)
+	}
+	if verification.Spec == nil || verification.Spec.Type != VerifyCommandExit {
+		t.Fatalf("test -f must retain command_exit semantics: %#v", verification.Spec)
+	}
+
+	verification, err = c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -d target"})
+	if err != nil || verification == nil || verification.ExitCode != 0 {
+		t.Fatalf("test -d must accept a directory: verification=%#v err=%v", verification, err)
+	}
+
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	verification, err = c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -f target"})
+	if err != nil || verification == nil || verification.ExitCode != 0 {
+		t.Fatalf("test -f must accept a regular file: verification=%#v err=%v", verification, err)
+	}
+	verification, err = c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -d target"})
+	if err == nil || verification == nil || verification.ExitCode == 0 {
+		t.Fatalf("test -d must reject a regular file: verification=%#v err=%v", verification, err)
 	}
 }
 

@@ -357,6 +357,19 @@ type Coordinator struct {
 	budgetTripped                atomic.Bool
 	lastRunResult                *RunResult
 	lastRunResultMu              sync.RWMutex
+	// contractWarnings deduplicates contract_warning events per
+	// (todoID, code, message) within a single dispatch cycle, so that both
+	// the ExecuteTasks preflight and the executeTask execution-path check
+	// (and the crash-resume path that bypasses ExecuteTasks) collectively
+	// emit at most one warning per finding per task. This is a shared pointer
+	// so cloned/isolated coordinators (extra-models) participate in the same
+	// dedup set rather than each re-emitting the same warning.
+	// contractWarningsOnce guards the lazy initialization of the pointer
+	// because the scheduler dispatches ready tasks in goroutines and
+	// extra-models spawns per-model clones concurrently; unsynchronized nil
+	// checks would race and could lose the dedup set. Refs: §4.3, WP-02.
+	contractWarnings     *contractWarningDedup
+	contractWarningsOnce sync.Once
 	// runOrchestratorOverride is a deterministic test seam for continuation
 	// and recovery integration tests; production coordinators leave it nil.
 	runOrchestratorOverride func(context.Context, *agent.AgentDef, string) (string, []fantasy.StepResult, error)
@@ -1024,12 +1037,12 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 		},
 		"verify": map[string]any{
 			"type":        "string",
-			"description": "Optional shell command that objectively verifies the task's deliverable exists/works (e.g. 'test -f workspace/report.md', 'go build ./...'). It runs after the agent reports success; a non-zero exit fails the task and triggers a retry. Use it for tasks with a checkable artifact so the agent cannot falsely claim completion.",
+			"description": "Legacy fallback: use only when the check cannot be expressed by verify_spec. It accepts a runnable shell command (e.g. 'go build ./...') and runs after the agent reports success; a non-zero exit fails the task and triggers a retry. `test -f` and `test -d` retain shell semantics; only unambiguous `test -e` checks are translated to typed verification.",
 		},
-		"verify_mode": map[string]any{"type": "string", "enum": []string{"success", "expected_failure", "observation"}},
+		"verify_mode": map[string]any{"type": "string", "enum": []string{"success", "expected_failure", "observation"}, "description": "Legacy verify mode; prefer mode inside verify_spec."},
 		"verify_spec": map[string]any{
 			"type":        "object",
-			"description": "Optional typed verification contract. Supports command_exit (shell command), file_exists, file_absent, and json_assert types. Takes precedence over verify/verify_mode when present.",
+			"description": "Preferred typed verification contract. Use this by default for file/path checks and JSON assertions; use command_exit only when a shell command is genuinely required. Supports command_exit, file_exists, file_absent, and json_assert. Takes precedence over legacy verify/verify_mode.",
 			"properties": map[string]any{
 				"type": map[string]any{
 					"type":        "string",

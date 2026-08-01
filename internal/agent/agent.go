@@ -171,6 +171,11 @@ type ReliabilityConfig struct {
 	MaxRepairsPerCriterion            int  `yaml:"max-repairs-per-criterion" json:"max_repairs_per_criterion,omitempty"`
 	HardEnforcement                   bool `yaml:"hard-enforcement" json:"hard_enforcement,omitempty"`
 	WarnOnly                          bool `yaml:"warn-only" json:"warn_only,omitempty"`
+	// VerifierLintMode controls the pre-dispatch verifier assertiveness
+	// lint (§4.3). "error" (default) rejects non-asserting verifiers before
+	// dispatch; "warn" emits a warning event but still dispatches; "off"
+	// disables the lint entirely. Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+	VerifierLintMode string `yaml:"verifier-lint" json:"verifier_lint,omitempty"`
 }
 
 // DefaultReliabilityConfig returns default reliability anti-thrashing limits.
@@ -181,6 +186,27 @@ func DefaultReliabilityConfig() ReliabilityConfig {
 		MaxSameFailureFingerprint:         2,
 		MaxRepairsPerCriterion:            2,
 		HardEnforcement:                   true,
+		VerifierLintMode:                  VerifierLintError,
+	}
+}
+
+// VerifierLintMode constants for ReliabilityConfig.VerifierLintMode.
+// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+const (
+	VerifierLintError = "error"
+	VerifierLintWarn  = "warn"
+	VerifierLintOff   = "off"
+)
+
+// NormalizeVerifierLintMode returns a valid VerifierLintMode, defaulting
+// to "error" when empty or unrecognized. This ensures the transitional
+// switch always has a defined value even when YAML omits it.
+func NormalizeVerifierLintMode(mode string) string {
+	switch mode {
+	case VerifierLintError, VerifierLintWarn, VerifierLintOff:
+		return mode
+	default:
+		return VerifierLintError
 	}
 }
 

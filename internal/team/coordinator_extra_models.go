@@ -389,6 +389,13 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		copy(coreToolsClone, orig.coreTools)
 	}
 
+	// Share the contract-warning dedup set so the isolated coordinator does
+	// not re-emit contract_warning events for the same todoID that the
+	// parent already emitted (reviewer P2 — extra-models duplicate).
+	// Thread-safe via contractWarningsOnce: concurrent extra-model clones all
+	// resolve the same dedup pointer (never reassigning a non-nil set).
+	contractWarnings := orig.contractWarningsDedup()
+
 	orig.stepConfirmFnMu.RLock()
 	stepConfirmFnCopy := orig.stepConfirmFn
 	orig.stepConfirmFnMu.RUnlock()
@@ -452,6 +459,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		sessionToolPermissions:          sessionToolPermissionsClone,
 		workerSummaries:                 workerSummariesClone,
 		stepConfirmFn:                   stepConfirmFnCopy,
+		contractWarnings:                contractWarnings,
 	}
 }
 

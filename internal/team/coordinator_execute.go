@@ -4,7 +4,56 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 )
+
+// contractWarningDedup deduplicates contract_warning events per
+// (todoID, code, message) within a single dispatch cycle. It is a shared
+// pointer so that cloned/isolated coordinators (extra-models) participate in
+// the same dedup set rather than each re-emitting the same warning for the
+// same todoID. Refs: §4.3, WP-02 reviewer P2.
+type contractWarningDedup struct {
+	mu      sync.Mutex
+	emitted map[string]bool
+}
+
+// newContractWarningDedup returns a fresh dedup set.
+func newContractWarningDedup() *contractWarningDedup {
+	return &contractWarningDedup{emitted: make(map[string]bool)}
+}
+
+// contractWarningsDedup returns the coordinator's shared contract-warning
+// dedup set, initializing it exactly once under contractWarningsOnce. This
+// is thread-safe for concurrent scheduler goroutines and parallel extra-model
+// clones; it never reassigns a non-nil pointer, so the dedup set is never
+// lost to a race. Refs: §4.3, WP-02.
+func (c *Coordinator) contractWarningsDedup() *contractWarningDedup {
+	c.contractWarningsOnce.Do(func() {
+		if c.contractWarnings == nil {
+			c.contractWarnings = newContractWarningDedup()
+		}
+	})
+	return c.contractWarnings
+}
+
+// emitOnce reports whether this is the first time the given key is seen. If
+// so it returns true (caller should emit) and records the key; otherwise it
+// returns false (already emitted — suppress).
+func (d *contractWarningDedup) emitOnce(key string) bool {
+	if d == nil {
+		return true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.emitted == nil {
+		d.emitted = make(map[string]bool)
+	}
+	if d.emitted[key] {
+		return false
+	}
+	d.emitted[key] = true
+	return true
+}
 
 // expandPipelineDeps rewrites the pipeline:true shorthand into explicit
 // depends_on edges: a task with Pipeline set gains a dependency on the
@@ -52,12 +101,9 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		if err := validateTaskOutputMode(task); err != nil {
 			return "", err
 		}
-		if err := ValidateExecutionContract(task); err != nil {
+		if err := c.validateAndReportContract(task, ""); err != nil {
 			return "", err
 		}
-	}
-	if err := validateObjectiveVerification(tasks); err != nil {
-		return "", err
 	}
 
 	if detectTaskCycle(tasks) {
@@ -362,4 +408,87 @@ func validateObjectiveVerification(tasks []TaskDef) error {
 		}
 	}
 	return nil
+}
+
+// validateAndReportContract runs the pre-dispatch contract preflight for a
+// single task (called by ExecuteTasks before TODOs are created). It enforces
+// error-severity findings (blocks dispatch) and records contract-class
+// failures, but does NOT emit contract_warning events — the per-task
+// execution path (executeTask → validateContractStructural) is the single
+// warning emitter so a warn-mode task emits exactly one contract_warning per
+// dispatch regardless of entry point (scheduler or crash-resume).
+// Refs: §4.3, WP-02 reviewer P2.
+func (c *Coordinator) validateAndReportContract(task TaskDef, todoID string) error {
+	lintMode := ""
+	if c.session != nil {
+		lintMode = c.session.Config.Reliability.VerifierLintMode
+	}
+	result := ValidateExecutionContractFull(task, lintMode)
+	if err := result.Error(); err != nil {
+		c.recordContractFailure(task, todoID, result.Findings)
+		return err
+	}
+	return nil
+}
+
+// validateContractStructural enforces the blocking (error-severity) findings
+// from the contract preflight AND emits contract_warning events for
+// warning-severity findings. It is the single warning emitter: every
+// executeTask invocation (whether reached via the scheduler or via
+// crash-resume) routes through it. emitContractWarnings deduplicates per
+// (todoID, code, message) so a task retried within a dispatch cycle does not
+// re-emit the same warning. Refs: §4.3, WP-02 reviewer P1 (todoID) & P2.
+func (c *Coordinator) validateContractStructural(task TaskDef, todoID string) error {
+	lintMode := ""
+	if c.session != nil {
+		lintMode = c.session.Config.Reliability.VerifierLintMode
+	}
+	result := ValidateExecutionContractFull(task, lintMode)
+	if err := result.Error(); err != nil {
+		c.recordContractFailure(task, todoID, result.Findings)
+		return err
+	}
+	c.emitContractWarnings(todoID, result.Findings)
+	return nil
+}
+
+// emitContractWarnings emits a contract_warning event for each warning-severity
+// finding, but at most once per (todoID, code) within a dispatch cycle. This
+// ensures a warn-mode task emits exactly one contract_warning per finding
+// whether it reaches execution via the scheduler (preflight + executeTask) or
+// via crash-resume (executeTask only). Refs: §4.3, WP-02 reviewer P2.
+func (c *Coordinator) emitContractWarnings(todoID string, findings []ContractFinding) {
+	if c == nil || len(findings) == 0 {
+		return
+	}
+	dedup := c.contractWarningsDedup()
+	for _, f := range findings {
+		if f.Severity != FindingSeverityWarning {
+			continue
+		}
+		key := todoID + "|" + f.Code + "|" + f.Message
+		if !dedup.emitOnce(key) {
+			continue
+		}
+		c.report(c.newEvent("contract_warning").
+			withMessage(fmt.Sprintf("%s: %s", f.Code, f.Message)))
+	}
+}
+
+// recordContractFailure records a contract-class failure (no dispatch) with
+// structured evidence so the failure is self-contained (§5, §9, WP-02).
+// todoID is passed through to PersistFailure so the resumed task is marked
+// terminal (TaskError/TaskBlocked) rather than left pending and re-driven
+// forever on the next crash-resume (reviewer P1).
+func (c *Coordinator) recordContractFailure(task TaskDef, todoID string, findings []ContractFinding) {
+	agentName := task.Agent
+	taskDesc := task.Goal
+	var msgs []string
+	for _, f := range findings {
+		if f.Severity == FindingSeverityError {
+			msgs = append(msgs, fmt.Sprintf("%s (%s): %s", f.Field, f.Code, f.Message))
+		}
+	}
+	detail := fmt.Errorf("contract preflight failed: %s", strings.Join(msgs, "; "))
+	c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(detail, string(FailureContract)))
 }

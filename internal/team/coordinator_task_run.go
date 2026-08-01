@@ -23,7 +23,7 @@ import (
 )
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (string, error) {
-	if err := ValidateExecutionContract(task); err != nil {
+	if err := c.validateContractStructural(task, todoID); err != nil {
 		return "", err
 	}
 	taskDesc := task.Goal
@@ -777,6 +777,16 @@ func classifyTaskFailure(err error) TaskFailureClass {
 		return FailureTimeout
 	}
 	msg := strings.ToLower(err.Error())
+	// Structured failure detail begins with `source=<label>` (FailureDetail).
+	// Recognize the contract source so preflight failures are recorded with
+	// the contract class rather than falling through to execution.
+	// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, WP-02
+	if strings.HasPrefix(msg, "source=contract") || strings.Contains(msg, "| source=contract") {
+		return FailureContract
+	}
+	if strings.Contains(msg, "contract preflight failed") {
+		return FailureContract
+	}
 	if strings.Contains(msg, "protocol") || strings.Contains(msg, "empty output") {
 		return FailureProtocol
 	}
@@ -1238,7 +1248,6 @@ func (c *Coordinator) verifyTaskDeliverableWithSpec(parentCtx context.Context, a
 	spec := task.VerifySpec
 	if spec == nil && task.Verify != "" {
 		spec = &agent.VerificationSpec{
-			Type:    agent.VerifyCommandExit,
 			Mode:    task.VerifyMode,
 			Command: task.Verify,
 		}

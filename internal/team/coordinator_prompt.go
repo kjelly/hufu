@@ -141,9 +141,10 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("- **summarize**: Set to `true` to condense the agent's output before returning. Use for tasks that may produce verbose output where only key points matter.\n")
 	b.WriteString("- **output_mode**: Set to `verbatim` when the user needs complete command/tool output. hufu, not the worker, captures the complete transcript as an artifact; you receive only its manifest. Do not re-read files merely to reconstruct a verbatim transcript.\n")
 	b.WriteString("- **adversarial_verify**: Number of skeptic LLM verifiers (1-3) that try to refute the result after success; a majority refutation fails the task into a retry. Use for high-stakes tasks where a shell `verify` cannot check quality.\n")
-	b.WriteString("- **verify**: Optional shell command run in the project directory after the task succeeds to objectively confirm the deliverable exists or a condition holds. MUST be a runnable `sh -c` command — NOT a natural-language description.\n")
-	b.WriteString("  - ✅ CREATE/DEPLOY tasks — verify the resource EXISTS: `test -f workspace/report.md` or `virsh list --all | grep -c running`\n")
-	b.WriteString("  - ✅ DELETE/CLEANUP tasks — verify the resource is GONE (use `!` negation): `! ovs-vsctl show 2>&1 | grep -q br-verify` or `! virsh dominfo live-ovs-vm-a 2>&1 | grep -q running`\n")
+	b.WriteString("- **verify_spec**: PREFERRED typed verification contract. Use `file_exists`/`file_absent` for path checks and `json_assert` for JSON scalar assertions; use `command_exit` only when a shell command is genuinely required.\n")
+	b.WriteString("- **verify**: LEGACY FALLBACK only when the check cannot be expressed by `verify_spec`. It MUST be a runnable `sh -c` command — NOT a natural-language description. `test -f PATH` and `test -d PATH` retain shell semantics; only unambiguous `test -e PATH` checks are conservatively translated to `file_exists`.\n")
+	b.WriteString("  - ✅ CREATE/DEPLOY tasks — typed example: `verify_spec: {type: file_exists, path: workspace/report.md}`. Use legacy `verify` for checks such as `virsh list --all | grep -c running` that need shell composition.\n")
+	b.WriteString("  - ✅ DELETE/CLEANUP tasks — typed example: `verify_spec: {type: file_absent, path: workspace/old-report.md}`. For shell-only checks, use `!` negation so success means the resource is GONE, e.g. `! ovs-vsctl show 2>&1 | grep -q br-verify`.\n")
 	b.WriteString("  - ❌ BAD (wrong polarity for cleanup): `ovs-vsctl show | grep -c br-verify` after deleting the bridge — grep returns 0 (not found) which exits 1 and FALSELY fails a successful cleanup\n")
 	b.WriteString("  - ❌ BAD (natural language): \"check that the report file exists\" or \"virsh 顯示 LAN 介面有 IP\"\n")
 

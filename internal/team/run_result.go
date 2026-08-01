@@ -598,6 +598,7 @@ type RunResult struct {
 type TaskFailureClass string
 
 const (
+	FailureContract  TaskFailureClass = "contract"
 	FailureExecution TaskFailureClass = "execution"
 	FailureProtocol  TaskFailureClass = "protocol"
 	FailureVerify    TaskFailureClass = "verification"

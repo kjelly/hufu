@@ -109,6 +109,7 @@ type rawReliabilityConfig struct {
 	MaxRepairsPerCriterion            int   `yaml:"max-repairs-per-criterion"`
 	HardEnforcement                   *bool `yaml:"hard-enforcement"`
 	WarnOnly                          bool  `yaml:"warn-only"`
+	VerifierLintMode                  string `yaml:"verifier-lint"`
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -636,6 +637,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		cfg.Reliability.HardEnforcement = *yc.Reliability.HardEnforcement
 		cfg.Reliability.WarnOnly = !cfg.Reliability.HardEnforcement
 	}
+	cfg.Reliability.VerifierLintMode = agent.NormalizeVerifierLintMode(yc.Reliability.VerifierLintMode)
 	if yc.Shell != "" {
 		cfg.Shell = yc.Shell
 	}
