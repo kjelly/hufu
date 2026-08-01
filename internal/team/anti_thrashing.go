@@ -143,6 +143,36 @@ type AntiThrashingState struct {
 	BlockedFingerprints     map[string]bool
 	BlockedDiagnostics      bool
 	BlockedRepairs          bool
+	// SystemicCounts tracks how many distinct task IDs have observed the
+	// same (component, operation, class, digest) failure. The scope key
+	// deliberately excludes the criterion so a systemic defect that
+	// manifests across different criteria is still aggregated. When the
+	// distinct task count reaches MaxSystemicFailureTasks the scope is
+	// escalated (§6.2): protocol / environment / contract → needs_human,
+	// any other class → replan_required. Refs:
+	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	SystemicCounts        map[string]map[string]bool // scope key → task ID set
+	BlockedSystemicScopes map[string]bool
+	// BlockedSystemicScopePrefixes maps the (component, operation) prefix
+	// of an escalated systemic scope to true. This is the deterministic
+	// pre-dispatch signal: a future/un-fingerprinted candidate task can
+	// only reveal its component (= agent) and operation (= verify/kind)
+	// before execution, not the class or digest. When any escalated scope
+	// shares the candidate's (component, operation), §6.2 requires
+	// "停止對該 scope 派工" and we conservatively block dispatch. Refs:
+	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	BlockedSystemicScopePrefixes map[string]bool
+	// EscalatedSystemicScopes records scopes whose threshold crossing has
+	// already been counted (in SystemicEscalations) and whose
+	// systemic_escalation event has already been emitted. This is kept
+	// separate from BlockedSystemicScopes (the hard-enforcement gate) so
+	// warn-only runs can still record a one-time escalation count and
+	// event without hard-blocking, and so a subsequent failure in the same
+	// scope does not re-emit. It is reconstructed by rebuild() so replay
+	// is stable. Refs:
+	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	EscalatedSystemicScopes map[string]bool
+	SystemicEscalations     int
 }
 
 func (s *AntiThrashingState) reset() {
@@ -160,6 +190,11 @@ func (s *AntiThrashingState) reset() {
 	s.BlockedFingerprints = make(map[string]bool)
 	s.BlockedDiagnostics = false
 	s.BlockedRepairs = false
+	s.SystemicCounts = make(map[string]map[string]bool)
+	s.BlockedSystemicScopes = make(map[string]bool)
+	s.BlockedSystemicScopePrefixes = make(map[string]bool)
+	s.EscalatedSystemicScopes = make(map[string]bool)
+	s.SystemicEscalations = 0
 }
 
 func failureCriterionIDs(item *TodoItem) []string {
@@ -171,7 +206,7 @@ func failureCriterionIDs(item *TodoItem) []string {
 	return ids
 }
 
-func (s *AntiThrashingState) record(item *TodoItem, fp FailureFingerprint, strategy RecoveryStrategy, limits ReliabilityConfig) (repeated, limited bool) {
+func (s *AntiThrashingState) record(item *TodoItem, fp FailureFingerprint, strategy RecoveryStrategy, limits ReliabilityConfig) (repeated, limited, systemic bool) {
 	if s.Counts == nil {
 		s.reset()
 	}
@@ -203,7 +238,14 @@ func (s *AntiThrashingState) record(item *TodoItem, fp FailureFingerprint, strat
 			}
 		}
 	}
-	if repeated || limited {
+	// Systemic scope (§6.2): count distinct task IDs that observed the
+	// same (component, operation, class, digest) failure. The threshold
+	// is MaxSystemicFailureTasks (default 3). When reached, the scope is
+	// escalated and blocked from further dispatch. Cancelled failures
+	// are excluded by the caller (PersistFailure skips record for
+	// cancelled), so they never reach this path.
+	systemic = s.recordSystemic(item, fp, limits)
+	if repeated || limited || systemic {
 		s.Warnings++
 	}
 	if limited && limits.HardEnforcement {
@@ -221,7 +263,7 @@ func (s *AntiThrashingState) record(item *TodoItem, fp FailureFingerprint, strat
 			}
 		}
 	}
-	return repeated, limited
+	return repeated, limited, systemic
 }
 
 func (s *AntiThrashingState) rememberRejectedStrategy(digest string, strategy RecoveryStrategy) {
@@ -297,6 +339,13 @@ func (s *AntiThrashingState) markBlockedCriterion(criterion string, kind TaskKin
 func (s *AntiThrashingState) blocksTask(task TaskDef, item *TodoItem) bool {
 	if !s.HardBlocked {
 		return false
+	}
+	// Systemic scope (§6.2): block dispatch to the escalated scope,
+	// including future un-fingerprinted candidate tasks whose
+	// (component, operation) prefix matches. Refs:
+	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	if s.blockReasonSystemic(task, item) {
+		return true
 	}
 	if item != nil {
 		for _, fp := range item.FailureFingerprints {
@@ -402,7 +451,7 @@ func (s *AntiThrashingState) resetAfterCriterionProgress(criteria []string, item
 			delete(s.RejectedStrategies, fp.Digest)
 		}
 	}
-	s.HardBlocked = len(s.BlockedCriteria) > 0 || len(s.BlockedScopes) > 0 || len(s.BlockedFingerprints) > 0 || s.BlockedDiagnostics || s.BlockedRepairs
+	s.HardBlocked = len(s.BlockedCriteria) > 0 || len(s.BlockedScopes) > 0 || len(s.BlockedFingerprints) > 0 || len(s.BlockedSystemicScopes) > 0 || len(s.BlockedSystemicScopePrefixes) > 0 || s.BlockedDiagnostics || s.BlockedRepairs
 }
 
 // repairAttemptCount reconstructs actual executions without adding two views
@@ -519,6 +568,16 @@ func (s *AntiThrashingState) rebuild(items []*TodoItem, limits ReliabilityConfig
 				}
 				s.LastStrategy[fp.Digest] = strategy
 			}
+			// Systemic scope (§6.2): count the distinct task ID that observed
+			// this fingerprint. The threshold check runs in the second pass
+			// below so all task evidence is aggregated first.
+			if limits.MaxSystemicFailureTasks > 0 && strings.TrimSpace(item.ID) != "" {
+				key := systemicScopeKey(fp)
+				if s.SystemicCounts[key] == nil {
+					s.SystemicCounts[key] = make(map[string]bool)
+				}
+				s.SystemicCounts[key][item.ID] = true
+			}
 		}
 		if item.Progress == ProgressAdvanced {
 			s.DiagnosticSinceProgress = 0
@@ -559,6 +618,12 @@ func (s *AntiThrashingState) rebuild(items []*TodoItem, limits ReliabilityConfig
 			s.markBlockedScope(item, FailureFingerprint{})
 		}
 	}
+	// Systemic scope threshold pass (§6.2): mark any systemic scope that
+	// reached the distinct-task threshold. The one-time escalation count
+	// and hard-block are applied via applySystemicThreshold (see
+	// systemic_scope.go). Refs:
+	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	s.applySystemicThreshold(limits)
 }
 
 func (s *AntiThrashingState) recordDiagnostic(item *TodoItem) bool {

@@ -189,11 +189,11 @@ func TestAntiThrashingLimitsCountWithoutTaskIDReuse(t *testing.T) {
 	limits := agent.ReliabilityConfig{MaxSameFailureFingerprint: 2, HardEnforcement: true}
 	first := &TodoItem{ID: "1", Kind: TaskKindRepair, Advances: []string{"build"}}
 	fp := NewFailureFingerprint("build", "worker", "go test", FailureVerify, "exit code 1")
-	if repeated, limited := state.record(first, fp, RecoveryStrategyReflection, limits); repeated || limited {
+	if repeated, limited, _ := state.record(first, fp, RecoveryStrategyReflection, limits); repeated || limited {
 		t.Fatal("first occurrence must warn only")
 	}
 	second := &TodoItem{ID: "2", Kind: TaskKindRepair, Advances: []string{"build"}}
-	if repeated, limited := state.record(second, fp, RecoveryStrategyReflection, limits); !repeated || !limited {
+	if repeated, limited, _ := state.record(second, fp, RecoveryStrategyReflection, limits); !repeated || !limited {
 		t.Fatal("second equivalent occurrence should hit configured limit")
 	}
 	if state.Counts[fp.Digest] != 2 {
@@ -392,7 +392,7 @@ func TestHardScopeSeparatesRepairAndOutcomeForSameCriterion(t *testing.T) {
 	limits := agent.ReliabilityConfig{MaxSameFailureFingerprint: 1, HardEnforcement: true}
 	fp := NewFailureFingerprint("build", "repairer", "go test", FailureVerify, "exit code 1")
 	repair := &TodoItem{ID: "repair", Kind: TaskKindRepair, Advances: []string{"build"}}
-	if _, limited := state.record(repair, fp, RecoveryStrategyRetry, limits); !limited {
+	if _, limited, _ := state.record(repair, fp, RecoveryStrategyRetry, limits); !limited {
 		t.Fatal("expected fingerprint limit to trip")
 	}
 	repairTask := TaskDef{Kind: TaskKindRepair, Advances: []string{"build"}}
@@ -865,8 +865,8 @@ func TestWP09_DefaultAntiThrashingLimitsAppliedWhenYAMLUnset(t *testing.T) {
 	fp := NewFailureFingerprint("build", "worker", "bash", FailureVerify, "exit 1")
 	first := &TodoItem{ID: "1", Kind: TaskKindRepair, Advances: []string{"build"}}
 	second := &TodoItem{ID: "2", Kind: TaskKindRepair, Advances: []string{"build"}}
-	_, _ = state.record(first, fp, RecoveryStrategyRetry, cfg.Reliability)
-	repeated, limited := state.record(second, fp, RecoveryStrategyRetry, cfg.Reliability)
+	_, _, _ = state.record(first, fp, RecoveryStrategyRetry, cfg.Reliability)
+	repeated, limited, _ := state.record(second, fp, RecoveryStrategyRetry, cfg.Reliability)
 	if !repeated || !limited {
 		t.Fatalf("second failure under defaults: repeated=%v limited=%v, want both true", repeated, limited)
 	}
@@ -892,8 +892,8 @@ func TestWP09_WarnOnlyOptInDoesNotHardBlock(t *testing.T) {
 	fp := NewFailureFingerprint("build", "worker", "bash", FailureVerify, "exit 1")
 	first := &TodoItem{ID: "1", Kind: TaskKindRepair, Advances: []string{"build"}}
 	second := &TodoItem{ID: "2", Kind: TaskKindRepair, Advances: []string{"build"}}
-	_, _ = state.record(first, fp, RecoveryStrategyRetry, cfg.Reliability)
-	repeated, limited := state.record(second, fp, RecoveryStrategyRetry, cfg.Reliability)
+	_, _, _ = state.record(first, fp, RecoveryStrategyRetry, cfg.Reliability)
+	repeated, limited, _ := state.record(second, fp, RecoveryStrategyRetry, cfg.Reliability)
 	if !repeated || !limited {
 		t.Fatalf("second failure under warn-only: repeated=%v limited=%v, want both true", repeated, limited)
 	}

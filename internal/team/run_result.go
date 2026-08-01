@@ -545,6 +545,7 @@ type RunMetrics struct {
 	RetriesByFailureClass             map[TaskFailureClass]int    `json:"retries_by_failure_class,omitempty"`
 	Compactions                       int                         `json:"compactions"`
 	RepeatedFailureFingerprints       int                         `json:"repeated_failure_fingerprints,omitempty"`
+	SystemicFingerprintsEscalated     int                         `json:"systemic_fingerprints_escalated,omitempty"`
 	RecoveryStrategyChanges           int                         `json:"recovery_strategy_changes,omitempty"`
 	LastRecoveryStrategies            map[string]RecoveryStrategy `json:"last_recovery_strategies,omitempty"`
 	DiagnosticTasksSinceProgress      int                         `json:"diagnostic_tasks_since_progress,omitempty"`
@@ -598,12 +599,14 @@ type RunResult struct {
 type TaskFailureClass string
 
 const (
-	FailureContract  TaskFailureClass = "contract"
-	FailureExecution TaskFailureClass = "execution"
-	FailureProtocol  TaskFailureClass = "protocol"
-	FailureVerify    TaskFailureClass = "verification"
-	FailurePolicy    TaskFailureClass = "policy"
-	FailureTimeout   TaskFailureClass = "timeout"
+	FailureContract    TaskFailureClass = "contract"
+	FailureEnvironment TaskFailureClass = "environment"
+	FailureExecution   TaskFailureClass = "execution"
+	FailureProtocol    TaskFailureClass = "protocol"
+	FailureVerify      TaskFailureClass = "verification"
+	FailurePolicy      TaskFailureClass = "policy"
+	FailureTimeout     TaskFailureClass = "timeout"
+	FailureCancelled   TaskFailureClass = "cancelled"
 )
 
 // SummarizeRunStats aggregates canonical statistics over a slice of TodoItems.

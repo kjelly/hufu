@@ -25,11 +25,12 @@ func (c *Coordinator) Metrics() RunMetrics {
 		lastStrategies[fp] = strategy
 	}
 	metrics := RunMetrics{RetriesByFailureClass: byClass, Compactions: c.compactions,
-		RepeatedFailureFingerprints:  repeatedFingerprintCount(c.antiThrashing.Counts),
-		RecoveryStrategyChanges:      c.antiThrashing.StrategyChanges,
-		LastRecoveryStrategies:       lastStrategies,
-		DiagnosticTasksSinceProgress: c.antiThrashing.DiagnosticSinceProgress,
-		RepairAttemptsByCriterion:    repairCounts, AntiThrashingWarnings: c.antiThrashing.Warnings}
+		RepeatedFailureFingerprints:   repeatedFingerprintCount(c.antiThrashing.Counts),
+		SystemicFingerprintsEscalated: c.antiThrashing.SystemicEscalations,
+		RecoveryStrategyChanges:       c.antiThrashing.StrategyChanges,
+		LastRecoveryStrategies:        lastStrategies,
+		DiagnosticTasksSinceProgress:  c.antiThrashing.DiagnosticSinceProgress,
+		RepairAttemptsByCriterion:     repairCounts, AntiThrashingWarnings: c.antiThrashing.Warnings}
 	metrics.TokensSinceCriterionProgress = c.tokensSinceCriterionProgress
 	if c.sessionData != nil {
 		for _, result := range c.sessionData.CriterionResults {

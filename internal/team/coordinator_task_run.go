@@ -310,7 +310,52 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			}
 		}
 		if attempt > 1 {
-			c.recordRetry(classifyTaskFailure(lastErr))
+			// §5.3: cancelled failures are excluded from retry, fingerprint
+			// and anti-thrashing statistics. Classify via structured inputs
+			// (parent context error carries the cancellation signal; the
+			// stored verification result supplies the verify exit code so a
+			// non-zero verify-command exit classifies as FailureVerify via
+			// objective evidence rather than error-text matching, §5/§5.2)
+			// and skip recordRetry for cancelled classes.
+			//
+			// The verify result read here is the *previous* attempt's result
+			// (the failure being classified). Before clearing the todo-wide
+			// slot, attach it to the previous attempt's ExecutionReceipt so
+			// the verification evidence (command, exit code, stdout, stderr)
+			// remains accessible for forensics (§5, §9). The slot is then
+			// cleared so the new attempt starts without a stale todo-wide
+			// verify result — otherwise an attempt that fails before reaching
+			// verification would inherit the prior attempt's exit code and
+			// misclassify (§5, §5.1).
+			verifyResult := verifyResultForTodo(c, todoID)
+			class := ClassifyTaskFailureStructured(FailureClassificationInput{
+				Err:            lastErr,
+				ContextErr:     parentCtx.Err(),
+				ExitCode:       exitCodeFromVerifyResult(verifyResult),
+				ExitCodeSource: ExitCodeSourceVerify,
+				// §5.1: environment evidence (command not found / executable
+				// unresolved) in the verify result must take precedence over
+				// the exit code, so a verify command that itself fails to
+				// resolve is not misclassified as a verification failure.
+				ResolveFindings: environmentFindingsFromVerifyResult(verifyResult),
+			})
+			if !IsCancelledClass(class) {
+				c.recordRetry(class)
+			}
+			// Retain the prior attempt's verification evidence on its
+			// ExecutionReceipt before clearing the todo-wide slot, so
+			// forensics can still access it (§5, §9 evidence retention).
+			// Match on (runID, attempt) so a crash-resumed run does not
+			// overwrite a prior run's receipt that shares the attempt
+			// number.
+			if verifyResult != nil {
+				priorRunID := c.executionRunID
+				if priorRunID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+					priorRunID = c.taskTracker.TodoList().RunID()
+				}
+				c.attachVerifyResultToReceipt(priorRunID, todoID, attempt-1, verifyResult)
+				_ = c.taskTracker.TodoList().SetVerificationResult(todoID, nil)
+			}
 		}
 		attemptStarted := time.Now()
 		c.recordExecutionEvent(todoID, agentName, attempt, "in_progress", resolvedModel, 0, ExecutionUsage{})
@@ -767,36 +812,6 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		failErr = fmt.Errorf("%w\n\nLast agent output before failure (may contain useful findings):\n%s", failErr, utils.TruncateRunes(lastOutput, 2000))
 	}
 	return "", failErr
-}
-
-func classifyTaskFailure(err error) TaskFailureClass {
-	if err == nil {
-		return FailureExecution
-	}
-	if isTaskTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
-		return FailureTimeout
-	}
-	msg := strings.ToLower(err.Error())
-	// Structured failure detail begins with `source=<label>` (FailureDetail).
-	// Recognize the contract source so preflight failures are recorded with
-	// the contract class rather than falling through to execution.
-	// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, WP-02
-	if strings.HasPrefix(msg, "source=contract") || strings.Contains(msg, "| source=contract") {
-		return FailureContract
-	}
-	if strings.Contains(msg, "contract preflight failed") {
-		return FailureContract
-	}
-	if strings.Contains(msg, "protocol") || strings.Contains(msg, "empty output") {
-		return FailureProtocol
-	}
-	if strings.Contains(msg, "verification") || strings.Contains(msg, "deliverable") {
-		return FailureVerify
-	}
-	if strings.Contains(msg, "policy") || strings.Contains(msg, "blocked") {
-		return FailurePolicy
-	}
-	return FailureExecution
 }
 
 // rescueFinalSummary gives an agent that stopped without a final message one

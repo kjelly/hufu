@@ -87,52 +87,92 @@ func (c *Coordinator) PersistFailure(agentName, taskDesc, todoID, detail string)
 	}
 	class := classifyTaskFailure(errors.New(detail))
 	criterion := c.failedCriterionForTask(item)
-	fp := NewFailureFingerprint(criterion, agentName, failureOperation(item), class, detail)
+	// §6.2: the systemic-scope operation must be STABLE across the failed
+	// task and a future un-fingerprinted candidate. LastOperation (the
+	// mutable last tool call) would diverge between a task that ran
+	// (LastOperation set) and a candidate that has not (LastOperation
+	// empty), so the systemic fingerprint uses stableOperation (derived
+	// from the immutable verify/reconcile/kind config) instead of
+	// failureOperation. The full failureOperation is still available in
+	// the task/run fingerprints for non-systemic anti-thrashing. Refs:
+	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	fp := NewFailureFingerprint(criterion, agentName, stableOperation(item), class, detail)
 	strategy := RecoveryStrategy("")
-	c.metricsMu.Lock()
-	priorStrategy := c.antiThrashing.LastStrategy[fp.Digest]
-	if item != nil && item.RecoveryHypothesis != nil {
-		strategy = item.RecoveryHypothesis.Strategy
-	}
-	repeated, limited := c.antiThrashing.record(item, fp, strategy, c.reliabilityConfig())
-	if item != nil {
-		_ = c.taskTracker.TodoList().AppendFailureFingerprint(todoID, fp)
-		for _, storedItem := range c.taskTracker.TodoList().Items() {
-			if storedItem.ID != todoID {
-				continue
-			}
-			for _, stored := range storedItem.FailureFingerprints {
-				if stored.Digest == fp.Digest {
-					fp = stored
-					break
+	// §5.3: cancelled failures must not be counted in retry, failure-class
+	// statistics or the anti-thrashing fingerprint. Skip the fingerprint
+	// recording and anti-thrashing state mutation; the task status update
+	// and workspace error file below still run so the todo list and
+	// forensics reflect the cancellation.
+	// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.3, WP-05
+	cancelled := IsCancelledClass(class)
+	var repeated, limited, systemic bool
+	var hypothesisInvalid bool
+	priorStrategy := RecoveryStrategy("")
+	if !cancelled {
+		c.metricsMu.Lock()
+		priorStrategy = c.antiThrashing.LastStrategy[fp.Digest]
+		if item != nil && item.RecoveryHypothesis != nil {
+			strategy = item.RecoveryHypothesis.Strategy
+		}
+		repeated, limited, systemic = c.antiThrashing.record(item, fp, strategy, c.reliabilityConfig())
+		if item != nil {
+			_ = c.taskTracker.TodoList().AppendFailureFingerprint(todoID, fp)
+			for _, storedItem := range c.taskTracker.TodoList().Items() {
+				if storedItem.ID != todoID {
+					continue
 				}
+				for _, stored := range storedItem.FailureFingerprints {
+					if stored.Digest == fp.Digest {
+						fp = stored
+						break
+					}
+				}
+				break
 			}
-			break
 		}
-	}
-	c.metricsMu.Unlock()
-	if repeated || limited {
-		kind := "repeated_failure_fingerprint"
-		if limited {
-			kind = "anti_thrashing_limit_reached"
-		}
-		c.emitEvent(kind, "coordinator", todoID, map[string]interface{}{"fingerprint": fp, "repeated": repeated, "limited": limited, "warning": true})
-		if limited && c.reliabilityConfig().HardEnforcement && item != nil {
-			detail += " | anti-thrashing limit reached; strategy change or human review required"
-		}
-	}
-	c.emitEvent("failure_fingerprint", "coordinator", todoID, map[string]interface{}{"fingerprint": fp, "count": c.failureFingerprintCount(fp.Digest), "repeated": repeated})
-	hypothesisInvalid := false
-	if repeated && item != nil && item.Kind == TaskKindRepair {
-		hypothesisInvalid = item.RecoveryHypothesis == nil || item.RecoveryHypothesis.ValidateForTask(fp.CriterionID, true, priorStrategy, taskDefFromTodoItem(item)) != nil
-		if hypothesisInvalid {
-			c.emitEvent("recovery_hypothesis_missing", "coordinator", todoID, map[string]interface{}{"fingerprint": fp, "warning": true})
-			c.metricsMu.Lock()
-			c.antiThrashing.rememberRejectedStrategy(fp.Digest, strategy)
-			if c.reliabilityConfig().HardEnforcement {
-				c.antiThrashing.markBlockedScope(item, fp)
+		c.metricsMu.Unlock()
+		if repeated || limited {
+			kind := "repeated_failure_fingerprint"
+			if limited {
+				kind = "anti_thrashing_limit_reached"
 			}
-			c.metricsMu.Unlock()
+			_ = c.emitEvent(kind, "coordinator", todoID, map[string]interface{}{"fingerprint": fp, "repeated": repeated, "limited": limited, "warning": true})
+			if limited && c.reliabilityConfig().HardEnforcement && item != nil {
+				detail += " | anti-thrashing limit reached; strategy change or human review required"
+			}
+		}
+		_ = c.emitEvent("failure_fingerprint", "coordinator", todoID, map[string]interface{}{"fingerprint": fp, "count": c.failureFingerprintCount(fp.Digest), "repeated": repeated})
+		if systemic {
+			// §6.2 systemic scope escalation: a (component, operation, class,
+			// digest) failure has now been observed across MaxSystemicFailureTasks
+			// distinct tasks. The disposition is class-derived (protocol /
+			// environment / contract → needs_human; any other → replan_required)
+			// and dispatch to that scope is blocked. The visible, actionable
+			// behavior is the event + the hard block + the status message.
+			// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+			disposition := SystemicDispositionForClass(class)
+			_ = c.emitEvent("systemic_escalation", "coordinator", todoID, map[string]interface{}{
+				"fingerprint":    fp,
+				"scope":          systemicScopeKey(fp),
+				"disposition":    disposition,
+				"distinct_tasks": c.antiThrashing.systemicTaskCount(systemicScopeKey(fp)),
+				"threshold":      c.reliabilityConfig().MaxSystemicFailureTasks,
+				"class":          string(class),
+				"warning":        true,
+			})
+			detail += " | systemic defect escalated: " + disposition + " (scope blocked)"
+		}
+		if repeated && item != nil && item.Kind == TaskKindRepair {
+			hypothesisInvalid = item.RecoveryHypothesis == nil || item.RecoveryHypothesis.ValidateForTask(fp.CriterionID, true, priorStrategy, taskDefFromTodoItem(item)) != nil
+			if hypothesisInvalid {
+				_ = c.emitEvent("recovery_hypothesis_missing", "coordinator", todoID, map[string]interface{}{"fingerprint": fp, "warning": true})
+				c.metricsMu.Lock()
+				c.antiThrashing.rememberRejectedStrategy(fp.Digest, strategy)
+				if c.reliabilityConfig().HardEnforcement {
+					c.antiThrashing.markBlockedScope(item, fp)
+				}
+				c.metricsMu.Unlock()
+			}
 		}
 	}
 
@@ -141,8 +181,15 @@ func (c *Coordinator) PersistFailure(agentName, taskDesc, todoID, detail string)
 		if isPermissionBlockedFailureDetail(detail) {
 			status = TaskBlocked
 		}
-		if (limited || hypothesisInvalid) && c.reliabilityConfig().HardEnforcement {
+		if (limited || hypothesisInvalid || systemic) && c.reliabilityConfig().HardEnforcement {
 			status = TaskBlocked
+		}
+		if cancelled {
+			// §5.3: cancelled tasks surface as a dedicated event so the run
+			// record distinguishes a user/context cancel from an execution
+			// failure. The todo status stays TaskError (the task did not
+			// complete) but the failure class and all statistics exclude it.
+			c.emitEvent("task_cancelled", "coordinator", todoID, map[string]interface{}{"class": string(class), "agent": agentName})
 		}
 		c.taskTracker.TodoList().UpdateStatus(todoID, status, detail)
 		c.reconcileTaskStatusProjection()
@@ -168,6 +215,22 @@ func failureOperation(item *TodoItem) string {
 	}
 	if strings.TrimSpace(item.LastOperation) != "" {
 		return item.LastOperation
+	}
+	return stableOperation(item)
+}
+
+// stableOperation returns the task's immutable operation identity derived
+// from its verification/recovery/kind configuration, ignoring the mutable
+// LastOperation (the last tool call name recorded during execution, e.g.
+// "bash"/"write"). It is used for the systemic-scope fingerprint so that a
+// failed task (whose LastOperation was populated during execution) and a
+// future un-fingerprinted candidate (which has not run and therefore has
+// no LastOperation) derive the SAME operation, letting the systemic
+// prefix block match post-escalation dispatch (§6.2: 停止對該 scope 派工).
+// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+func stableOperation(item *TodoItem) string {
+	if item == nil {
+		return ""
 	}
 	if item.VerifySpec != nil {
 		if item.VerifySpec.Type != "" {
@@ -259,7 +322,7 @@ func (c *Coordinator) recordDiagnosticCompletion(item *TodoItem) {
 	}
 	c.metricsMu.Unlock()
 	if limited {
-		c.emitEvent("anti_thrashing_limit_reached", "coordinator", item.ID, map[string]interface{}{
+		_ = c.emitEvent("anti_thrashing_limit_reached", "coordinator", item.ID, map[string]interface{}{
 			"limit":   "max-diagnostic-tasks-without-progress",
 			"count":   c.Metrics().DiagnosticTasksSinceProgress,
 			"warning": true,
@@ -279,6 +342,14 @@ func (c *Coordinator) reliabilityConfig() agent.ReliabilityConfig {
 		}
 		if sessCfg.MaxRepairsPerCriterion > 0 {
 			cfg.MaxRepairsPerCriterion = sessCfg.MaxRepairsPerCriterion
+		}
+		if sessCfg.MaxSystemicFailureTasksSet {
+			// Honor an explicit YAML zero (disables the feature) rather
+			// than restoring the default. Refs:
+			// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+			cfg.MaxSystemicFailureTasks = sessCfg.MaxSystemicFailureTasks
+		} else if sessCfg.MaxSystemicFailureTasks > 0 {
+			cfg.MaxSystemicFailureTasks = sessCfg.MaxSystemicFailureTasks
 		}
 		if sessCfg.WarnOnly {
 			cfg.WarnOnly = true

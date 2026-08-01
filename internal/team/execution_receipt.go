@@ -32,6 +32,11 @@ type ExecutionReceipt struct {
 	ProducerID       string            `json:"producer_id,omitempty"`
 	TranscriptRef    string            `json:"transcript_ref,omitempty"`
 	RepairProvenance *RepairProvenance `json:"repair_provenance,omitempty"`
+	// VerifyResult holds the deliverable verification result for this attempt,
+	// when one ran. Retained per-attempt so forensics can inspect the verify
+	// command, exit code, stdout and stderr of each attempt even after the
+	// todo-wide VerifyResult slot is cleared for the next retry (§5, §9).
+	VerifyResult *VerificationResult `json:"verify_result,omitempty"`
 }
 
 // ArtifactExpectation describes an expected output artifact and its verification criteria.

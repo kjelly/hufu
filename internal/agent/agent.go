@@ -166,11 +166,21 @@ type TeamConfig struct {
 // ReliabilityConfig bounds diagnostic and repair work that repeats without
 // improving a mandatory outcome criterion.
 type ReliabilityConfig struct {
-	MaxDiagnosticTasksWithoutProgress int  `yaml:"max-diagnostic-tasks-without-progress" json:"max_diagnostic_tasks_without_progress,omitempty"`
-	MaxSameFailureFingerprint         int  `yaml:"max-same-failure-fingerprint" json:"max_same_failure_fingerprint,omitempty"`
-	MaxRepairsPerCriterion            int  `yaml:"max-repairs-per-criterion" json:"max_repairs_per_criterion,omitempty"`
-	HardEnforcement                   bool `yaml:"hard-enforcement" json:"hard_enforcement,omitempty"`
-	WarnOnly                          bool `yaml:"warn-only" json:"warn_only,omitempty"`
+	MaxDiagnosticTasksWithoutProgress int `yaml:"max-diagnostic-tasks-without-progress" json:"max_diagnostic_tasks_without_progress,omitempty"`
+	MaxSameFailureFingerprint         int `yaml:"max-same-failure-fingerprint" json:"max_same_failure_fingerprint,omitempty"`
+	MaxRepairsPerCriterion            int `yaml:"max-repairs-per-criterion" json:"max_repairs_per_criterion,omitempty"`
+	// MaxSystemicFailureTasks is the threshold of distinct tasks that have
+	// observed an equivalent (component, operation, class, digest) failure
+	// before the anti-thrashing circuit breaker escalates to a systemic
+	// defect. Defaults to 3 (§6.2). An explicit YAML 0 disables the
+	// feature; MaxSystemicFailureTasksSet records whether the value was
+	// explicitly set (so reliabilityConfig() can honor a zero override
+	// rather than restoring the default). Refs:
+	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	MaxSystemicFailureTasks    int  `yaml:"max-systemic-failure-tasks" json:"max_systemic_failure_tasks,omitempty"`
+	MaxSystemicFailureTasksSet bool `yaml:"-" json:"-"`
+	HardEnforcement            bool `yaml:"hard-enforcement" json:"hard_enforcement,omitempty"`
+	WarnOnly                   bool `yaml:"warn-only" json:"warn_only,omitempty"`
 	// VerifierLintMode controls the pre-dispatch verifier assertiveness
 	// lint (§4.3). "error" (default) rejects non-asserting verifiers before
 	// dispatch; "warn" emits a warning event but still dispatches; "off"
@@ -185,6 +195,7 @@ func DefaultReliabilityConfig() ReliabilityConfig {
 		MaxDiagnosticTasksWithoutProgress: 3,
 		MaxSameFailureFingerprint:         2,
 		MaxRepairsPerCriterion:            2,
+		MaxSystemicFailureTasks:           3,
 		HardEnforcement:                   true,
 		VerifierLintMode:                  VerifierLintError,
 	}

@@ -678,16 +678,13 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 	if len(item.ExecutionReceipts) > 0 {
 		execReceipts = make([]ExecutionReceipt, len(item.ExecutionReceipts))
 		for i, r := range item.ExecutionReceipts {
-			copyR := r
-			if r.RepairProvenance != nil {
-				copyRP := *r.RepairProvenance
-				if r.RepairProvenance.SubmittedResult != nil {
-					copyResult := *r.RepairProvenance.SubmittedResult
-					copyRP.SubmittedResult = &copyResult
-				}
-				copyR.RepairProvenance = &copyRP
-			}
-			execReceipts[i] = copyR
+			// Deep-copy via cloneExecutionReceipt so the snapshot's
+			// RepairProvenance and VerifyResult pointers are independent of
+			// the canonical item. A shallow copyR := r would share the
+			// VerifyResult pointer, letting a caller mutate the snapshot's
+			// verify result outside the todo lock and silently change
+			// canonical evidence (race + corruption).
+			execReceipts[i] = cloneExecutionReceipt(&r)
 		}
 	}
 	return &TodoItem{
@@ -812,6 +809,45 @@ func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) er
 	return nil
 }
 
+// UpdateReceiptVerifyResult attaches a verification result to the
+// ExecutionReceipt matching (runID, taskID, attempt), retaining the
+// verification evidence per-attempt for forensics after the todo-wide
+// VerifyResult slot is cleared (§5, §9 evidence retention). The receipt is
+// updated in the durable ExecutionReceipts history slice and the single
+// ExecutionReceipt field. A missing receipt for that (runID, attempt) is a
+// no-op. RunID is required: after crash-resume a todo can carry receipts from
+// a prior run with the same attempt number, so matching on attempt alone
+// would misattribute evidence to the wrong run.
+func (tl *TodoList) UpdateReceiptVerifyResult(runID, taskID string, attempt int, vr *VerificationResult) {
+	if tl == nil || taskID == "" || attempt < 1 || vr == nil {
+		return
+	}
+	tl.mu.Lock()
+	for _, ti := range tl.items {
+		if ti.ID != taskID {
+			continue
+		}
+		copyVR := *vr
+		copyVR.Spec = cloneVerificationSpecPtr(vr.Spec)
+		// Update the durable per-attempt history. Match on (RunID, Attempt)
+		// so a crash-resumed run with a fresh executionRunID does not overwrite
+		// a prior run's receipt that happens to share the attempt number.
+		for i := range ti.ExecutionReceipts {
+			r := &ti.ExecutionReceipts[i]
+			if r.Attempt == attempt && r.RunID == runID {
+				r.VerifyResult = &copyVR
+				break
+			}
+		}
+		// Update the single receipt field if it matches (RunID, attempt).
+		if ti.ExecutionReceipt != nil && ti.ExecutionReceipt.Attempt == attempt && ti.ExecutionReceipt.RunID == runID {
+			ti.ExecutionReceipt.VerifyResult = &copyVR
+		}
+		break
+	}
+	tl.mu.Unlock()
+}
+
 func cloneExecutionReceipt(receipt *ExecutionReceipt) ExecutionReceipt {
 	copyR := *receipt
 	if receipt.RepairProvenance != nil {
@@ -821,6 +857,11 @@ func cloneExecutionReceipt(receipt *ExecutionReceipt) ExecutionReceipt {
 			copyRP.SubmittedResult = &copyResult
 		}
 		copyR.RepairProvenance = &copyRP
+	}
+	if receipt.VerifyResult != nil {
+		copyVR := *receipt.VerifyResult
+		copyVR.Spec = cloneVerificationSpecPtr(receipt.VerifyResult.Spec)
+		copyR.VerifyResult = &copyVR
 	}
 	return copyR
 }

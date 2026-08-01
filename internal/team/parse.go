@@ -107,6 +107,11 @@ type rawReliabilityConfig struct {
 	MaxDiagnosticTasksWithoutProgress int   `yaml:"max-diagnostic-tasks-without-progress"`
 	MaxSameFailureFingerprint         int   `yaml:"max-same-failure-fingerprint"`
 	MaxRepairsPerCriterion            int   `yaml:"max-repairs-per-criterion"`
+	// MaxSystemicFailureTasks is a pointer so an explicit YAML zero
+	// (max-systemic-failure-tasks: 0) is distinguishable from unset and
+	// can override the default (3) to disable the feature. Refs:
+	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	MaxSystemicFailureTasks           *int  `yaml:"max-systemic-failure-tasks"`
 	HardEnforcement                   *bool `yaml:"hard-enforcement"`
 	WarnOnly                          bool  `yaml:"warn-only"`
 	VerifierLintMode                  string `yaml:"verifier-lint"`
@@ -629,6 +634,15 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.Reliability.MaxRepairsPerCriterion > 0 {
 		cfg.Reliability.MaxRepairsPerCriterion = yc.Reliability.MaxRepairsPerCriterion
+	}
+	if yc.Reliability.MaxSystemicFailureTasks != nil {
+		// An explicit YAML value (including 0) overrides the default.
+		// 0 disables systemic counting entirely. MaxSystemicFailureTasksSet
+		// records that the value was explicitly set so reliabilityConfig()
+		// honors the zero override instead of restoring the default. Refs:
+		// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+		cfg.Reliability.MaxSystemicFailureTasks = *yc.Reliability.MaxSystemicFailureTasks
+		cfg.Reliability.MaxSystemicFailureTasksSet = true
 	}
 	if yc.Reliability.WarnOnly {
 		cfg.Reliability.WarnOnly = true

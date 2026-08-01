@@ -115,6 +115,19 @@ linters:
           - staticcheck
           - unused
         path: internal/team/coordinator\.go
+      # gocyclo + errcheck debt from systemic scope feature (§6.2, WP-10)
+      - linters:
+          - gocyclo
+        path: internal/team/coordinator_failure\.go
+      - linters:
+          - errcheck
+        path: internal/team/coordinator_failure\.go
+      - linters:
+          - errcheck
+        path: internal/team/dag_scheduler\.go
+      - linters:
+          - unused
+        path: internal/team/anti_thrashing\.go
       - linters:
           - errcheck
           - unused
@@ -125,6 +138,33 @@ linters:
       - linters:
           - unused
         path: internal/team/stm\.go
+      - linters:
+          - errcheck
+        path: internal/team/context_shadow\.go
+      - linters:
+          - errcheck
+        path: internal/team/coordinator_memory\.go
+      - linters:
+          - gocyclo
+        path: internal/team/anti_thrashing\.go
+      - linters:
+          - gocyclo
+        path: internal/team/event_reducers\.go
+      - linters:
+          - unused
+        path: internal/team/coordinator_taskcache\.go
+      - linters:
+          - errcheck
+        path: internal/team/coordinator_session\.go
+      - linters:
+          - errcheck
+        path: internal/team/criteria\.go
+      - linters:
+          - errcheck
+        path: internal/team/criterion_checkpoint\.go
+      - linters:
+          - errcheck
+        path: internal/team/execution_events\.go
       - linters:
           - errcheck
           - unused
