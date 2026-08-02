@@ -84,8 +84,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	ag, err := c.getOrCreateAgent(ctx, agentDef, "")
 	if err != nil {
 		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), ExecutionUsage{})
-		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
-		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		c.PersistFailureWithClass(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), RetryNone, FailureExecution)
 		reconcileDirectStatus()
 		return nil, fmt.Errorf("failed to create agent %q: %w", resolvedName, err)
 	}
@@ -162,8 +161,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	if err != nil {
 		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), usageFromSteps(steps))
-		c.PersistFailure(resolvedName, task, todoID, c.FailureDetail(err, ""))
-		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
+		c.PersistFailureWithClass(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), RetryNone, FailureExecution)
 		c.updateTodoTiming(todoID, modelTime, toolTime)
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		c.report(c.newEvent("error").withAgent(resolvedName).withMessage(err.Error()).withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
@@ -554,8 +552,8 @@ func (c *Coordinator) summaryFromTodos(runErr error) string {
 		case TaskDone:
 			done++
 			fmt.Fprintf(&b, "\n### %s: %s\n%s\n", item.Agent, item.Desc, utils.TruncateRunes(item.Output, summaryMaxRunes))
-		case TaskError, TaskBlocked:
-			fmt.Fprintf(&b, "\n### %s: %s\nFAILED: %s\n", item.Agent, item.Desc, item.Detail)
+		case TaskError, TaskBlocked, TaskProtocolIncomplete:
+			fmt.Fprintf(&b, "\n### %s: %s\nFAILED: %s\n", item.Agent, item.Desc, FailureDisplayText(item))
 		}
 	}
 	if done == 0 {
@@ -629,7 +627,7 @@ func (c *Coordinator) finalizeRemainingTasks() {
 	for _, item := range items {
 		switch item.Status {
 		case TaskInProgress, TaskPaused, TaskVerifying, TaskProtocolIncomplete:
-			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskError, "coordinator ended unexpectedly")
+			c.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, "coordinator ended unexpectedly", RetryNone, FailureExecution, TaskError)
 			changed = true
 		case TaskPending:
 			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "")
@@ -655,7 +653,7 @@ func (c *Coordinator) finalizeNormalCompletion() {
 			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "")
 			changed = true
 		case TaskInProgress, TaskPaused, TaskVerifying, TaskProtocolIncomplete:
-			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskError, "coordinator finished before task completed")
+			c.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, "coordinator finished before task completed", RetryNone, FailureExecution, TaskError)
 			changed = true
 		}
 	}

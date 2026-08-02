@@ -9,6 +9,16 @@ import (
 	"github.com/anomalyco/hufu/internal/agent"
 )
 
+func assertRecoveryFailureEvent(t *testing.T, item *TodoItem, class TaskFailureClass, disposition RetryDisposition) {
+	t.Helper()
+	if item == nil || item.FailureEvent == nil {
+		t.Fatalf("recovery task missing FailureEvent: %#v", item)
+	}
+	if item.FailureEvent.FailureClass != class || item.FailureEvent.Phase == "" || item.FailureEvent.RetryDisposition != disposition {
+		t.Fatalf("recovery FailureEvent = %#v, want class=%s disposition=%s", item.FailureEvent, class, disposition)
+	}
+}
+
 func TestDefaultRecoveryPolicy(t *testing.T) {
 	tests := []struct {
 		class      SideEffectClass
@@ -78,6 +88,7 @@ func TestResumeInterruptedTasks_InfraMutationBlocked(t *testing.T) {
 	if !strings.Contains(item.Detail, "manual intervention") {
 		t.Errorf("expected manual intervention note in detail, got %q", item.Detail)
 	}
+	assertRecoveryFailureEvent(t, item, FailurePolicy, NeedsHuman)
 }
 
 func TestResumeInterruptedTasks_AllowsReplayFalseBlocked(t *testing.T) {
@@ -98,6 +109,7 @@ func TestResumeInterruptedTasks_AllowsReplayFalseBlocked(t *testing.T) {
 	if item.Status != TaskBlocked || !strings.Contains(item.Detail, "replay policy") {
 		t.Fatalf("unexpected replay-blocked state: %#v", item)
 	}
+	assertRecoveryFailureEvent(t, item, FailurePolicy, ReconcileOnly)
 }
 
 func TestResumeInterruptedTasks_UnattendedExternalWriteBlocked(t *testing.T) {
@@ -192,6 +204,7 @@ func TestResumeInterruptedTasks_ReconciliationFlow(t *testing.T) {
 	if item.RecoveryState != RecoveryStatePartial {
 		t.Errorf("expected recovery state 'partial', got %s", item.RecoveryState)
 	}
+	assertRecoveryFailureEvent(t, item, FailurePolicy, NeedsHuman)
 
 	// Case 3: Reconcile tool exit 3 -> Unknown -> Blocked
 	c.taskTracker.TodoList().Restore([]*TodoItem{
@@ -220,6 +233,7 @@ func TestResumeInterruptedTasks_ReconciliationFlow(t *testing.T) {
 	if item.RecoveryState != RecoveryStateUnknown {
 		t.Errorf("expected recovery state 'unknown', got %s", item.RecoveryState)
 	}
+	assertRecoveryFailureEvent(t, item, FailurePolicy, NeedsHuman)
 }
 
 func TestResumeInterruptedTasks_FailOnUnknownState(t *testing.T) {
@@ -271,6 +285,7 @@ func TestResumeInterruptedTasks_FailOnUnknownState(t *testing.T) {
 	if item.RecoveryState != RecoveryStateUnknown {
 		t.Errorf("expected recovery state 'unknown', got %s", item.RecoveryState)
 	}
+	assertRecoveryFailureEvent(t, item, FailurePolicy, NeedsHuman)
 }
 
 func TestResumeInterruptedTasks_RecoveryEventStore(t *testing.T) {

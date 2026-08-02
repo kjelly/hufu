@@ -309,11 +309,13 @@ func (t *teamInfoTool) handleTodoStatus(c *Coordinator, name string) (fantasy.To
 	for _, item := range matched {
 		icon := map[TaskStatus]string{
 			TaskPending: "○", TaskInProgress: "◑", TaskVerifying: "◔", TaskDone: "●",
-			TaskError: "✗", TaskBlocked: "⚠", TaskSkipped: "—", TaskPlanned: "◎", TaskPaused: "◐",
+			TaskError: "✗", TaskBlocked: "⚠", TaskProtocolIncomplete: "⚠", TaskSkipped: "—", TaskPlanned: "◎", TaskPaused: "◐",
 		}[item.Status]
 		desc := item.Desc
-		if item.Detail != "" && (item.Status == TaskError || item.Status == TaskBlocked) {
-			desc = item.Detail
+		if item.Status == TaskError || item.Status == TaskBlocked || item.Status == TaskProtocolIncomplete {
+			if failure := FailureDisplayText(item); failure != "" {
+				desc = failure
+			}
 		}
 		fmt.Fprintf(&b, "- %s %s: %s\n", icon, item.ID, utils.TruncateLine(desc, 100))
 	}

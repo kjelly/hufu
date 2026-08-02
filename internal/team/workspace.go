@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/anomalyco/hufu/internal/utils"
@@ -42,6 +43,10 @@ func writeTaskFile(workspace, teamName, agentName, timestamp, status, task, resu
 }
 
 func writeTaskFileWithDetail(workspace, teamName, agentName, timestamp, status, task, result, detail string) error {
+	return writeTaskFileWithFailureEvent(workspace, teamName, agentName, timestamp, status, task, result, detail, nil)
+}
+
+func writeTaskFileWithFailureEvent(workspace, teamName, agentName, timestamp, status, task, result, detail string, event *FailureEventPayload) error {
 	validStatuses := map[string]bool{"working": true, "done": true, "error": true}
 	if !validStatuses[status] {
 		return fmt.Errorf("invalid task status %q: must be working, done, or error", status)
@@ -68,6 +73,9 @@ func writeTaskFileWithDetail(workspace, teamName, agentName, timestamp, status, 
 	if detail != "" {
 		failureSection = fmt.Sprintf("\n---\n\n## Failure Detail\n\n%s\n", detail)
 	}
+	if rendered := RenderFailureMarkdown(event); rendered != "" {
+		failureSection += fmt.Sprintf("\n---\n\n## Failure Event\n\n%s\n", rendered)
+	}
 
 	content := fmt.Sprintf("# Agent Task: %s\n\n**Status:** %s\n**Updated:** %s\n%s\n---\n\n## Task Description\n\n%s\n\n---\n\n## Result\n\n%s\n%s",
 		agentName, status, now, completedLine, utils.RedactSecrets(task), utils.RedactSecrets(resultSection), utils.RedactSecrets(failureSection))
@@ -81,6 +89,10 @@ func writeStatus(workspace, agentName, status, task string) error {
 }
 
 func writeStatusWithDetail(workspace, agentName, status, task, detail string) error {
+	return writeStatusWithFailureEvent(workspace, agentName, status, task, detail, nil)
+}
+
+func writeStatusWithFailureEvent(workspace, agentName, status, task, detail string, event *FailureEventPayload) error {
 	dir := filepath.Join(workspace, statusDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -88,6 +100,12 @@ func writeStatusWithDetail(workspace, agentName, status, task, detail string) er
 	data := fmt.Sprintf("status: %s\ntask: %s\ntime: %s\n", status, utils.RedactSecrets(task), time.Now().Format(time.RFC3339))
 	if detail != "" {
 		data += fmt.Sprintf("detail: %s\n", utils.RedactSecrets(detail))
+	}
+	if rendered := RenderFailureText(event); rendered != "" {
+		data += "failure_event: |\n"
+		for _, line := range strings.Split(rendered, "\n") {
+			data += "  " + utils.RedactSecrets(line) + "\n"
+		}
 	}
 	path := filepath.Join(dir, agentName+".yml")
 	return os.WriteFile(path, []byte(data), 0o644)

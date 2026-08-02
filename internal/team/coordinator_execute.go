@@ -277,7 +277,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 					detail = "capability preflight blocked"
 				}
 				for _, item := range todoItems {
-					c.taskTracker.TodoList().UpdateStatus(item.ID, TaskBlocked, detail)
+					c.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, detail, NeedsHuman, FailurePolicy, TaskBlocked)
 				}
 				c.reconcileTaskStatusProjection()
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))

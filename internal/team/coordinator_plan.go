@@ -331,8 +331,10 @@ func (c *Coordinator) buildTaskStatusContext() string {
 
 	for _, item := range items {
 		extra := ""
-		if item.Detail != "" {
-			extra = ": " + item.Detail
+		if failure := FailureDisplayText(item); failure != "" {
+			extra = ": " + failure
+		} else if detail := TaskDetailDisplayText(item); detail != "" {
+			extra = ": " + detail
 		}
 		// Flatten and cap each line: task outputs previously flowed into the
 		// system prompt verbatim, growing it ~10KB after a long run and
@@ -353,7 +355,7 @@ func (c *Coordinator) buildTaskStatusContext() string {
 			skipped = append(skipped, entry)
 		case TaskPlanned:
 			planned = append(planned, entry)
-		case TaskError, TaskBlocked:
+		case TaskError, TaskBlocked, TaskProtocolIncomplete:
 			errored = append(errored, entry)
 		}
 	}

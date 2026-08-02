@@ -72,6 +72,44 @@ func (c *Coordinator) FailureDetail(err error, source string) string {
 // todo/status/workspace records and remembers it for later CLI-level reporting.
 // It is safe to call even when some metadata is unavailable.
 func (c *Coordinator) PersistFailure(agentName, taskDesc, todoID, detail string) {
+	c.persistFailure(agentName, taskDesc, todoID, detail, RetryNone, "", nil)
+}
+
+// PersistFailureWithDisposition records the recovery action selected for a
+// failed attempt. The legacy PersistFailure wrapper remains available for
+// callers that do not have a recovery decision yet.
+func (c *Coordinator) PersistFailureWithDisposition(agentName, taskDesc, todoID, detail string, disposition RetryDisposition) {
+	c.persistFailure(agentName, taskDesc, todoID, detail, disposition, "", nil)
+}
+
+// PersistFailureWithClass preserves the structured class selected by the
+// retry decision. The detail string remains human-readable evidence; it is
+// never used to override this class when building fingerprints or events.
+func (c *Coordinator) PersistFailureWithClass(agentName, taskDesc, todoID, detail string, disposition RetryDisposition, class TaskFailureClass) {
+	c.persistFailure(agentName, taskDesc, todoID, detail, disposition, class, nil)
+}
+
+// PersistFailureWithClassAndStatusAndOutput records structured failure
+// evidence and atomically attaches bounded worker output before the terminal
+// status checkpoint. It is used when the output is the primary evidence for a
+// protocol failure.
+func (c *Coordinator) PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, detail string, disposition RetryDisposition, class TaskFailureClass, status TaskStatus, output string) {
+	c.persistFailureWithOutput(agentName, taskDesc, todoID, detail, disposition, class, &status, output)
+}
+
+// PersistFailureWithClassAndStatus records structured failure evidence while
+// preserving a caller-selected terminal status. Finalization uses this when
+// an incomplete task must remain TaskError, and recovery/capability paths use
+// it when a failure must remain TaskBlocked.
+func (c *Coordinator) PersistFailureWithClassAndStatus(agentName, taskDesc, todoID, detail string, disposition RetryDisposition, class TaskFailureClass, status TaskStatus) {
+	c.persistFailureWithOutput(agentName, taskDesc, todoID, detail, disposition, class, &status, "")
+}
+
+func (c *Coordinator) persistFailure(agentName, taskDesc, todoID, detail string, disposition RetryDisposition, class TaskFailureClass, forcedStatus *TaskStatus) {
+	c.persistFailureWithOutput(agentName, taskDesc, todoID, detail, disposition, class, forcedStatus, "")
+}
+
+func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, detail string, disposition RetryDisposition, class TaskFailureClass, forcedStatus *TaskStatus, output string) {
 	if c == nil || detail == "" {
 		return
 	}
@@ -85,7 +123,10 @@ func (c *Coordinator) PersistFailure(agentName, taskDesc, todoID, detail string)
 			}
 		}
 	}
-	class := classifyTaskFailure(errors.New(detail))
+	if class == "" {
+		class = classifyTaskFailure(errors.New(detail))
+	}
+	var failureEvent *FailureEventPayload
 	criterion := c.failedCriterionForTask(item)
 	// §6.2: the systemic-scope operation must be STABLE across the failed
 	// task and a future un-fingerprinted candidate. LastOperation (the
@@ -137,7 +178,7 @@ func (c *Coordinator) PersistFailure(agentName, taskDesc, todoID, detail string)
 				kind = "anti_thrashing_limit_reached"
 			}
 			_ = c.emitEvent(kind, "coordinator", todoID, map[string]interface{}{"fingerprint": fp, "repeated": repeated, "limited": limited, "warning": true})
-			if limited && c.reliabilityConfig().HardEnforcement && item != nil {
+			if forcedStatus == nil && limited && c.reliabilityConfig().HardEnforcement && item != nil {
 				detail += " | anti-thrashing limit reached; strategy change or human review required"
 			}
 		}
@@ -176,12 +217,33 @@ func (c *Coordinator) PersistFailure(agentName, taskDesc, todoID, detail string)
 		}
 	}
 
+	if todoID != "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		if disposition == "" {
+			disposition = RetryNone
+		}
+		failureEvent = c.failureEventForItem(item, class, disposition, detail, fp, todoID)
+		failureOutput := utils.TruncateString(utils.RedactSecrets(output), 2000)
+		_ = c.taskTracker.TodoList().SetFailureEventAndOutput(todoID, failureEvent, failureOutput)
+		if c.reportStatus != nil {
+			data := map[string]any{
+				"failure_event": failureEvent,
+			}
+			if failureOutput != "" {
+				data["failure_output"] = failureOutput
+			}
+			c.report(c.newEvent("failure").withAgent(agentName).withMessage(RenderFailureText(failureEvent)).withTodoID(todoID).withData(data))
+		}
+	}
+
 	if todoID != "" {
 		status := TaskError
+		if forcedStatus != nil {
+			status = *forcedStatus
+		}
 		if isPermissionBlockedFailureDetail(detail) {
 			status = TaskBlocked
 		}
-		if (limited || hypothesisInvalid || systemic) && c.reliabilityConfig().HardEnforcement {
+		if forcedStatus == nil && (limited || hypothesisInvalid || systemic) && c.reliabilityConfig().HardEnforcement {
 			status = TaskBlocked
 		}
 		if cancelled {
@@ -200,12 +262,16 @@ func (c *Coordinator) PersistFailure(agentName, taskDesc, todoID, detail string)
 
 	if c.session != nil && c.session.Workspace != "" && agentName != "" && taskDesc != "" {
 		taskTS := time.Now().Format("20060102-150405")
-		_ = writeTaskFileWithDetail(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", taskDesc, "", detail)
+		failureOutput := utils.TruncateString(utils.RedactSecrets(output), 2000)
+		if failureOutput == "" && item != nil {
+			failureOutput = utils.TruncateString(utils.RedactSecrets(item.Output), 2000)
+		}
+		_ = writeTaskFileWithFailureEvent(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", taskDesc, failureOutput, detail, failureEvent)
 		var fingerprints []FailureFingerprint
 		if item != nil {
 			fingerprints = item.FailureFingerprints
 		}
-		c.recordTaskFailure(agentName, taskDesc, detail, fingerprints)
+		c.recordTaskFailureWithEventAndOutput(agentName, taskDesc, detail, failureEvent, failureOutput, fingerprints)
 	}
 }
 

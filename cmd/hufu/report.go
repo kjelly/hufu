@@ -269,10 +269,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 			if statusIcon == "" {
 				statusIcon = "◑"
 			}
-			detail := ""
-			if t.Detail != "" && (t.Status == team.TaskError || t.Status == team.TaskBlocked) {
-				detail = t.Detail
-			}
+			detail := reportTaskFailureDetail(t)
 			verify := formatVerificationSummary(t)
 			var dur string
 			if !t.EndedAt.IsZero() && !t.StartedAt.IsZero() {
@@ -282,6 +279,15 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 				t.ID, statusIcon, t.Agent, t.Desc, detail, verify, dur)
 		}
 		b.WriteString("\n---\n\n")
+	}
+
+	if failures := team.FailureEventsFromTodos(data.Todos); len(failures) > 0 {
+		b.WriteString("## Failure Events\n\n")
+		for _, failure := range failures {
+			b.WriteString(team.RenderFailureMarkdown(&failure))
+			b.WriteString("\n\n")
+		}
+		b.WriteString("---\n\n")
 	}
 
 	hasVerificationEvidence := false
@@ -365,4 +371,18 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	}
 
 	return b.String()
+}
+
+func reportTaskFailureDetail(item *team.TodoItem) string {
+	if item == nil {
+		return ""
+	}
+	switch item.Status {
+	case team.TaskError, team.TaskBlocked, team.TaskProtocolIncomplete:
+		failure := team.FailureDisplayText(item)
+		if failure != "" {
+			return limitStr(strings.ReplaceAll(failure, "\n", "<br>"), 1500)
+		}
+	}
+	return ""
 }

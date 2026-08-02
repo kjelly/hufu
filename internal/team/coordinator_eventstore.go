@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -164,9 +165,6 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 		transitionKey := taskTransitionEventKey(item)
 		c.mu.Lock()
 		alreadyEmitted := c.emittedTaskTransitions[transitionKey]
-		if !alreadyEmitted {
-			c.emittedTaskTransitions[transitionKey] = true
-		}
 		c.mu.Unlock()
 
 		if alreadyEmitted {
@@ -175,7 +173,6 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 
 		payload := map[string]interface{}{
 			"id":                    item.ID,
-			"desc":                  item.Desc,
 			"status":                string(item.Status),
 			"max_retries":           item.MaxRetries,
 			"retries":               item.Retries,
@@ -193,6 +190,28 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 			"side_effect":           item.SideEffect,
 			"recovery":              item.Recovery,
 			"reconcile_tool":        item.ReconcileTool,
+		}
+		failureTransition := eventType == "task_failed" || eventType == "task_blocked" || eventType == "task_protocol_incomplete"
+		if !failureTransition {
+			payload["desc"] = item.Desc
+		} else {
+			failureClass := classifyTaskFailure(errors.New(item.Detail))
+			disposition := RetryNone
+			if eventType == "task_protocol_incomplete" {
+				failureClass = FailureProtocol
+				disposition = ReconcileOnly
+			}
+			failure := c.failureEventForItem(item, failureClass, disposition, item.Detail, FailureFingerprint{}, item.ID)
+			if item.FailureEvent != nil {
+				failure = cloneFailureEventPayload(item.FailureEvent)
+			}
+			for key, value := range failureEventPayloadMap(failure) {
+				payload[key] = value
+			}
+			payload["summary"] = failureSummary(item)
+			if eventType == "task_failed" || eventType == "task_protocol_incomplete" {
+				payload["output"] = utils.TruncateString(utils.RedactSecrets(item.Output), 2000)
+			}
 		}
 		if item.Verify != "" {
 			payload["verify"] = item.Verify
@@ -214,10 +233,17 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 			payload["execution_receipts"] = item.ExecutionReceipts
 		}
 
-		var rawPayload json.RawMessage
 		data, err := json.Marshal(payload)
-		if err == nil {
-			rawPayload = data
+		if err != nil {
+			log.Printf("warning: dual-write task event marshal failed for %s (%s): %v", item.ID, eventType, err)
+			c.dualWriteFailures.Add(1)
+			continue
+		}
+		rawPayload := json.RawMessage(data)
+		if IsTerminalEvent(eventType) && IsEmptyPayload(rawPayload) {
+			log.Printf("warning: dual-write task event produced empty payload for %s (%s)", item.ID, eventType)
+			c.dualWriteFailures.Add(1)
+			continue
 		}
 
 		if err := c.eventStore.Append(RunEvent{
@@ -229,7 +255,11 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 		}); err != nil {
 			log.Printf("warning: dual-write task event emit failed for %s (%s): %v", item.ID, eventType, err)
 			c.dualWriteFailures.Add(1)
+			continue
 		}
+		c.mu.Lock()
+		c.emittedTaskTransitions[transitionKey] = true
+		c.mu.Unlock()
 
 		c.emitArtifactEvents(item)
 	}
@@ -246,11 +276,22 @@ func taskTransitionEventKey(item *TodoItem) string {
 	}
 	base := fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)
 	if normalizedVerificationSpecForCache(item.VerifySpec, item.Verify, item.VerifyMode) == nil {
-		return base
+		if item.FailureEvent == nil {
+			return base
+		}
+		data, _ := json.Marshal(item.FailureEvent)
+		sum := sha256.Sum256(data)
+		return base + ":failure-" + hex.EncodeToString(sum[:8])
 	}
 	contract := taskCacheIdentityWithSpec("", item.VerifySpec, item.Verify, item.VerifyMode)
 	sum := sha256.Sum256([]byte(contract))
-	return base + ":verify-" + hex.EncodeToString(sum[:8])
+	key := base + ":verify-" + hex.EncodeToString(sum[:8])
+	if item.FailureEvent != nil {
+		data, _ := json.Marshal(item.FailureEvent)
+		failureSum := sha256.Sum256(data)
+		key += ":failure-" + hex.EncodeToString(failureSum[:8])
+	}
+	return key
 }
 
 // emitArtifactEvents dual-writes one artifact_created event per artifact path

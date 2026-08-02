@@ -137,6 +137,7 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 			MaxRetries          int                  `json:"max_retries"`
 			Retries             int                  `json:"retries"`
 			Output              string               `json:"output"`
+			Summary             string               `json:"summary"`
 			Agent               string               `json:"agent"`
 			DependsOn           []string             `json:"depends_on"`
 			Verify              string               `json:"verify"`
@@ -174,6 +175,7 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		}
 
 		item, exists := taskMap[taskID]
+		failureEvent, hasFailureEvent := mergeFailureEventJSON(nil, e.Payload)
 		if !exists {
 			item = &TodoItem{
 				ID:                  taskID,
@@ -195,6 +197,7 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 				Recovery:            payload.Recovery,
 				ReconcileTool:       payload.ReconcileTool,
 				TypedResult:         payload.TypedResult,
+				FailureEvent:        failureEvent,
 			}
 			taskMap[taskID] = item
 			taskOrder = append(taskOrder, taskID)
@@ -282,6 +285,9 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		if payload.TypedResult != nil {
 			item.TypedResult = payload.TypedResult
 		}
+		if hasFailureEvent {
+			item.FailureEvent, _ = mergeFailureEventJSON(item.FailureEvent, e.Payload)
+		}
 		if payload.ExecutionReceipt != nil {
 			item.ExecutionReceipt = payload.ExecutionReceipt
 			item.ExecutionReceipts = append(item.ExecutionReceipts, *payload.ExecutionReceipt)
@@ -307,12 +313,27 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 			if payload.Output != "" {
 				item.Output = payload.Output
 			}
+			if payload.Summary != "" {
+				item.Detail = payload.Summary
+			}
 		case "task_skipped":
 			item.Status = TaskSkipped
 		case "task_blocked":
 			item.Status = TaskBlocked
+			if payload.Output != "" {
+				item.Output = payload.Output
+			}
+			if payload.Summary != "" {
+				item.Detail = payload.Summary
+			}
 		case "task_protocol_incomplete":
 			item.Status = TaskProtocolIncomplete
+			if payload.Output != "" {
+				item.Output = payload.Output
+			}
+			if payload.Summary != "" {
+				item.Detail = payload.Summary
+			}
 		case "task_reset":
 			item.Status = TaskPending
 		}

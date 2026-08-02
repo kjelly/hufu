@@ -123,7 +123,8 @@ func (s *dagScheduler) launchReady(ctx context.Context) {
 		if s.coord.antiThrashingBlocksTask(t, s.todoItems[i]) {
 			s.states[i] = TaskBlocked
 			if item := s.todoItems[i]; item != nil {
-				s.coord.taskTracker.TodoList().UpdateStatus(item.ID, TaskBlocked, "anti-thrashing limit reached for this task's scope; strategy change or human review required")
+				detail := "anti-thrashing limit reached for this task's scope; strategy change or human review required"
+				s.coord.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, detail, NeedsHuman, FailurePolicy, TaskBlocked)
 			}
 			continue
 		}
@@ -230,7 +231,9 @@ func (s *dagScheduler) routeCriterionRetry(ctx context.Context, idx int, failed 
 		if s.states[targetIdx] != TaskPending {
 			if !CanAutomaticallyReplay(s.tasks[targetIdx]) {
 				s.states[targetIdx] = TaskBlocked
-				s.coord.taskTracker.TodoList().UpdateStatus(s.todoItems[targetIdx].ID, TaskBlocked, "criterion retry blocked by replay policy; reconcile before re-drive")
+				item := s.todoItems[targetIdx]
+				detail := "criterion retry blocked by replay policy; reconcile before re-drive"
+				s.coord.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, detail, ReconcileOnly, FailurePolicy, TaskBlocked)
 				s.coord.emitEvent("recovery_decision", "coordinator", s.todoItems[targetIdx].ID, map[string]interface{}{"decision": "replay_blocked", "reason": "criterion retry target is not replayable"})
 				continue
 			}
@@ -294,7 +297,9 @@ func (s *dagScheduler) resetTask(i int, detail string) {
 	}
 	if !CanAutomaticallyReplay(s.tasks[i]) {
 		s.states[i] = TaskBlocked
-		s.coord.taskTracker.TodoList().UpdateStatus(s.todoItems[i].ID, TaskBlocked, detail+"; replay policy requires reconciliation")
+		item := s.todoItems[i]
+		detail += "; replay policy requires reconciliation"
+		s.coord.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, detail, ReconcileOnly, FailurePolicy, TaskBlocked)
 		return
 	}
 	s.states[i] = TaskPending
@@ -359,8 +364,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		reqs, missing := c.taskCapabilityRequirements(td.Requires)
 		if len(missing) > 0 {
 			detail := fmt.Sprintf("unknown capability requirement(s): %s", strings.Join(missing, ", "))
-			c.taskTracker.TodoList().UpdateStatus(tid, TaskBlocked, detail)
-			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			c.PersistFailureWithClassAndStatus(td.Agent, desc, tid, detail, NeedsHuman, FailurePolicy, TaskBlocked)
 			c.report(c.newEvent("needs_human").withAgent(td.Agent).withTodoID(tid).withMessage(detail))
 			s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: capabilityBlockedError{Result: CapabilityResult{Name: strings.Join(missing, ","), Available: false, Reason: detail, CheckedAt: time.Now()}}, idx: idx}
 			return
@@ -371,15 +375,13 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 				if detail == "" {
 					detail = "capability requirement blocked"
 				}
-				c.taskTracker.TodoList().UpdateStatus(tid, TaskBlocked, detail)
-				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+				c.PersistFailureWithClassAndStatus(td.Agent, desc, tid, detail, NeedsHuman, FailurePolicy, TaskBlocked)
 				c.report(c.newEvent("needs_human").withAgent(td.Agent).withTodoID(tid).withMessage(detail))
 				s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: capabilityBlockedError{Result: blocked}, idx: idx}
 				return
 			}
 			_ = results
-			c.taskTracker.TodoList().UpdateStatus(tid, TaskError, err.Error())
-			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			c.PersistFailureWithClass(td.Agent, desc, tid, c.FailureDetail(err, FailureSourceError), RetryNone, FailureExecution)
 			s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: err, idx: idx}
 			return
 		}
@@ -388,8 +390,8 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[PANIC] task goroutine %q/%q recovered: %v", td.Agent, tid, r)
-			c.taskTracker.TodoList().UpdateStatus(tid, TaskError, fmt.Sprintf("panic: %v", r))
-			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			panicErr := fmt.Errorf("panic recovered: %v", r)
+			c.PersistFailureWithClass(td.Agent, desc, tid, c.FailureDetail(panicErr, FailureSourceError), RetryNone, FailureExecution)
 			res := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: fmt.Errorf("panic recovered: %v", r), idx: idx}
 			if isOwner {
 				s.inflightMu.Lock()
@@ -408,8 +410,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 
 	if dup {
 		errMsg := fmt.Errorf("duplicate task: %s - reference existing completed task instead", truncateTaskDesc(td.Goal))
-		c.taskTracker.TodoList().UpdateStatus(tid, TaskError, "duplicate task detected")
-		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		c.PersistFailureWithClass(td.Agent, desc, tid, c.FailureDetail(errMsg, FailureSourceError), RetryNone, FailureContract)
 		c.report(c.newEvent("step").withAgent(td.Agent).withMessage(fmt.Sprintf("duplicate detected: %s", truncateTaskDesc(td.Goal))))
 		log.Printf("[WARN] duplicate task rejected: agent=%q, task=%q", td.Agent, td.Goal)
 		s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: "", err: errMsg, idx: idx}

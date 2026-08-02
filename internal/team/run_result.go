@@ -659,10 +659,7 @@ func toTaskReference(item *TodoItem) TaskReference {
 	if item == nil {
 		return TaskReference{}
 	}
-	errStr := item.Detail
-	if errStr == "" && item.TypedResult != nil && item.TypedResult.Summary != "" {
-		errStr = item.TypedResult.Summary
-	}
+	errStr := FailureDisplayText(item)
 	return TaskReference{
 		ID:     item.ID,
 		Agent:  item.Agent,

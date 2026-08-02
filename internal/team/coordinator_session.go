@@ -589,9 +589,11 @@ func (c *Coordinator) updateBranchState() {
 }
 
 // isInterruptedStatus reports whether a restored task status indicates the task
-// was left incomplete by an interrupted (crashed/killed) run and must be
-// re-driven on resume. Terminal states (done/skipped) and definitively-failed
-// tasks (error, which already exhausted their retries) are left untouched.
+// was left incomplete by an interrupted (crashed/killed) run and needs resume
+// handling. TaskProtocolIncomplete is included for selection, but it is
+// handled by the result-only repair gate rather than ordinary worker replay.
+// Terminal states (done/skipped) and definitively-failed tasks (error, which
+// already exhausted their retries) are left untouched.
 func isInterruptedStatus(s TaskStatus) bool {
 	switch s {
 	case TaskInProgress, TaskVerifying, TaskPaused, TaskPlanned, TaskPending, TaskProtocolIncomplete:
@@ -628,10 +630,11 @@ func (c *Coordinator) getInterruptedTasks() []*TodoItem {
 	return interrupted
 }
 
-// ResumeInterruptedTasks re-drives the worker tasks that a previous run left
-// in-flight (restored from the session checkpoint). Interrupted tasks are
-// evaluated against side-effect class and recovery policy (§11.2-11.4).
-// Tasks with policy 'retry' or reconciled as 'not_started' are re-executed;
+// ResumeInterruptedTasks resumes tasks that a previous run left in-flight
+// (restored from the session checkpoint). Ordinary interrupted tasks are
+// evaluated against side-effect class and recovery policy (§11.2-11.4), while
+// TaskProtocolIncomplete is always routed through result-only repair. Tasks
+// with policy 'retry' or reconciled as 'not_started' are re-executed;
 // 'manual' tasks are blocked and flagged for human review; 'never' tasks are
 // skipped (left as-is) since the policy declares they must not be re-driven.
 func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
@@ -658,12 +661,23 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 		}
 		pol := ResolveRecoveryPolicy(it.Recovery, it.SideEffect, isUnattended, c.ExecutionProfile())
 		task := taskDefFromTodoItem(it)
+		if it.Status == TaskProtocolIncomplete {
+			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
+				"policy":        string(pol),
+				"decision":      "protocol_result_only_repair",
+				"worker_replay": false,
+			})
+			if _, err := c.resumeProtocolIncompleteTask(ctx, task, it); err != nil && firstErr == nil {
+				firstErr = err
+			}
+			count++
+			continue
+		}
 		switch pol {
 		case RecoveryRetry:
 			if !IsTaskReplayable(task) {
 				detail := fmt.Sprintf("task blocked by replay policy; side_effect=%s or allows_replay=false", it.SideEffect)
-				c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
-				c.reconcileTaskStatusProjection()
+				c.PersistFailureWithClassAndStatus(it.Agent, it.Desc, it.ID, detail, ReconcileOnly, FailurePolicy, TaskBlocked)
 				c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{"policy": string(pol), "decision": "replay_blocked", "reason": detail})
 				c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
 				continue
@@ -682,8 +696,7 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 
 		case RecoveryManual:
 			detail := fmt.Sprintf("task halted by side-effect recovery policy (%s, side_effect=%s); requires manual intervention", pol, it.SideEffect)
-			c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
-			c.reconcileTaskStatusProjection()
+			c.PersistFailureWithClassAndStatus(it.Agent, it.Desc, it.ID, detail, NeedsHuman, FailurePolicy, TaskBlocked)
 			c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
@@ -719,8 +732,7 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 				// state changed after the old checkpoint cannot be marked done.
 				if err := c.revalidateRecoveryCriteria(ctx, it); err != nil {
 					detail := fmt.Sprintf("reconciliation completed but criterion re-validation failed: %v", err)
-					c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
-					c.reconcileTaskStatusProjection()
+					c.PersistFailureWithClassAndStatus(it.Agent, it.Desc, it.ID, detail, NeedsHuman, FailureVerify, TaskBlocked)
 					c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
 					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 					c.emitEvent("criterion_checkpoint_rejected", "coordinator", it.ID, map[string]interface{}{"reason": detail})
@@ -742,8 +754,7 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 					c.recordCriterionCheckpoints(current, c.sessionData.CriterionResults)
 					if err := c.validateCriterionCheckpoint(current); err != nil {
 						detail := fmt.Sprintf("fresh criterion checkpoint rejected: %v", err)
-						c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
-						c.reconcileTaskStatusProjection()
+						c.PersistFailureWithClassAndStatus(it.Agent, it.Desc, it.ID, detail, NeedsHuman, FailureVerify, TaskBlocked)
 						c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
 						continue
 					}
@@ -758,8 +769,7 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			case RecoveryStateNotStarted:
 				if !IsTaskReplayable(task) {
 					detail := fmt.Sprintf("task blocked by replay policy after reconciliation; side_effect=%s or allows_replay=false", it.SideEffect)
-					c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
-					c.reconcileTaskStatusProjection()
+					c.PersistFailureWithClassAndStatus(it.Agent, it.Desc, it.ID, detail, ReconcileOnly, FailurePolicy, TaskBlocked)
 					c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{"policy": string(pol), "recovery_state": state, "decision": "replay_blocked", "reason": detail})
 					c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
 					continue
@@ -785,8 +795,7 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 					decision = "failed_on_unknown_state"
 				}
 				detail := fmt.Sprintf("task halted by side-effect recovery policy (%s, side_effect=%s); reconciliation state: %s", pol, it.SideEffect, state)
-				c.taskTracker.TodoList().UpdateStatus(it.ID, status, detail)
-				c.reconcileTaskStatusProjection()
+				c.PersistFailureWithClassAndStatus(it.Agent, it.Desc, it.ID, detail, NeedsHuman, FailurePolicy, status)
 				if status == TaskBlocked {
 					c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
 				}
@@ -810,8 +819,7 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 		}
 		if pol != RecoveryRetry && pol != RecoveryReconcile && pol != RecoveryManual && pol != RecoveryNever {
 			detail := fmt.Sprintf("task blocked by unknown recovery policy %q", pol)
-			c.taskTracker.TodoList().UpdateStatus(it.ID, TaskBlocked, detail)
-			c.reconcileTaskStatusProjection()
+			c.PersistFailureWithClassAndStatus(it.Agent, it.Desc, it.ID, detail, NeedsHuman, FailurePolicy, TaskBlocked)
 			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{"policy": string(pol), "decision": "unknown_policy_blocked"})
 		}
 	}

@@ -68,6 +68,48 @@ func TestReconcileAgentStatusesRedactsAndSerializesDetailAsYAML(t *testing.T) {
 	}
 }
 
+func TestPersistFailureProjectsStructuredRedactedFailureEvent(t *testing.T) {
+	workspace := t.TempDir()
+	tracker := NewTaskTracker()
+	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "sensitive prompt that must not be projected"}})[0]
+	item.VerifyResult = &VerificationResult{
+		Command:  "curl -H 'Authorization: Bearer token-secret-value'",
+		WorkDir:  "/project/api_token=path-secret-value",
+		ExitCode: 7,
+		Stdout:   "api_token=stdout-secret-value",
+		Stderr:   "password=stderr-secret-value",
+	}
+	c := &Coordinator{
+		session:     &TeamSession{Workspace: workspace},
+		sessionData: NewSession(),
+		taskTracker: tracker,
+	}
+	c.PersistFailureWithClass("worker", item.Desc, item.ID, "source=verification | error=password=detail-secret-value", RetryNone, FailureVerify)
+
+	data, err := os.ReadFile(filepath.Join(workspace, statusDir, "worker.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var projected projectedStatusRecord
+	if err := yaml.Unmarshal(data, &projected); err != nil {
+		t.Fatalf("status projection is not valid YAML: %v; data=%q", err, data)
+	}
+	if projected.Status != AgentStatusError || projected.FailureEvent == nil {
+		t.Fatalf("projected status = %#v, want error with failure event", projected)
+	}
+	if projected.FailureEvent.FailureClass != FailureVerify || projected.FailureEvent.TaskID != item.ID {
+		t.Fatalf("projected failure event = %#v", projected.FailureEvent)
+	}
+	for _, secret := range []string{"token-secret-value", "path-secret-value", "stdout-secret-value", "stderr-secret-value", "detail-secret-value"} {
+		if strings.Contains(string(data), secret) {
+			t.Fatalf("secret %q leaked into projected status: %s", secret, data)
+		}
+	}
+	if !strings.Contains(string(data), "failure_class: verification") || !strings.Contains(string(data), "stderr: password=[REDACTED]") {
+		t.Fatalf("structured failure evidence missing from projected status: %s", data)
+	}
+}
+
 func TestReconcileAgentStatusesRejectsPathTraversalAgentNames(t *testing.T) {
 	for _, name := range []string{"../outside", "/tmp/outside", `..\outside`, "worker/child"} {
 		t.Run(name, func(t *testing.T) {

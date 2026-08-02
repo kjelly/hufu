@@ -23,6 +23,16 @@ import (
 )
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (string, error) {
+	// A checkpointed protocol-incomplete task has already run its worker. It
+	// may only re-enter through the result-only repair gate; never recreate the
+	// worker agent or replay its tools from this status.
+	if c != nil && c.taskTracker != nil && todoID != "" {
+		for _, item := range c.taskTracker.TodoList().Items() {
+			if item != nil && item.ID == todoID && item.Status == TaskProtocolIncomplete {
+				return c.resumeProtocolIncompleteTask(parentCtx, task, item)
+			}
+		}
+	}
 	if err := c.validateContractStructural(task, todoID); err != nil {
 		return "", err
 	}
@@ -590,7 +600,10 @@ retryLoop:
 					protocolFailure = true
 					protocolErrMsg := fmt.Sprintf("protocol-only failure for task %s (%s): agent omitted submit_result; entering protocol_incomplete for tool-free repair (class: %s)",
 						todoID, agentName, string(FailureProtocol))
-					if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskProtocolIncomplete, "protocol incomplete: missing required result", output); statusErr == nil {
+					protocolDetail := "protocol incomplete: missing required result"
+					protocolFailureDetail := c.FailureDetail(errors.New(protocolDetail), FailureSourceError)
+					c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, protocolFailureDetail, ReconcileOnly, FailureProtocol, TaskProtocolIncomplete, output)
+					if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskProtocolIncomplete, protocolDetail, ""); statusErr == nil {
 						c.reconcileTaskStatusProjection()
 						c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 					}
@@ -911,7 +924,7 @@ retryLoop:
 			// the failure and stop — retrying is unsafe.
 			lastErr = err
 			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: " + reason).withTodoID(todoID))
-			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, "error"))
+			c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, "error"), NeedsHuman, currentClass)
 			closeTranscript()
 			break retryLoop
 
@@ -930,9 +943,8 @@ retryLoop:
 				source = "protocol"
 				blockedMsg = fmt.Sprintf("protocol failure; worker tools must not be replayed (side_effect=%s, recovery=%s); reconcile before retry: %v", task.SideEffect, task.Recovery, err)
 			}
-			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, source))
-			c.taskTracker.TodoList().UpdateStatus(todoID, TaskBlocked, blockedMsg)
-			c.reconcileTaskStatusProjection()
+			failureDetail := c.FailureDetail(err, source) + " | " + blockedMsg
+			c.PersistFailureWithClassAndStatus(agentName, taskDesc, todoID, failureDetail, ReconcileOnly, currentClass, TaskBlocked)
 			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: " + reason).withTodoID(todoID))
 			closeTranscript()
 			break retryLoop
@@ -950,13 +962,13 @@ retryLoop:
 			lastErr = err
 			if isUnfixableVerifyFailure(err) && attempt < maxRetries {
 				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d hit a verify command that cannot be fixed by retrying (wrong exit-code polarity)", attempt)).withTodoID(todoID))
-				c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("verify command has unfixable wrong polarity after %d attempt(s): %w", attempt, err), "error"))
+				c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("verify command has unfixable wrong polarity after %d attempt(s): %w", attempt, err), "error"), ReplanRequired, currentClass)
 			} else if prevErr != nil && sameFailure(prevErr.Error(), err.Error()) && attempt < maxRetries {
 				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d repeated the same failure", attempt)).withTodoID(todoID))
-				c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("repeated failure after %d attempts: %w", attempt, err), "error"))
+				c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("repeated failure after %d attempts: %w", attempt, err), "error"), ReplanRequired, currentClass)
 			} else {
 				c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: " + reason).withTodoID(todoID))
-				c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
+				c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, ""), ReplanRequired, currentClass)
 			}
 			closeTranscript()
 			break retryLoop
@@ -970,7 +982,7 @@ retryLoop:
 				c.report(c.newEvent("task_timeout").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d timed out after %s", attempt, duration.Round(time.Second))).withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 			}
 			c.report(c.newEvent("error").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d failed: %v", attempt, err)).withModel(resolvedModel).withTodoID(todoID))
-			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
+			c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, ""), RetryNone, currentClass)
 			closeTranscript()
 			break retryLoop
 
@@ -988,7 +1000,7 @@ retryLoop:
 				c.report(c.newEvent("task_timeout").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d timed out after %s", attempt, duration.Round(time.Second))).withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 			}
 			c.report(c.newEvent("error").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d failed: %v", attempt, err)).withModel(resolvedModel).withTodoID(todoID))
-			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
+			c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, ""), RetryWorker, currentClass)
 			if parentCtx.Err() != nil {
 				closeTranscript()
 				break retryLoop
@@ -1011,6 +1023,306 @@ retryLoop:
 		failErr = fmt.Errorf("%w\n\nLast agent output before failure (may contain useful findings):\n%s", failErr, utils.TruncateRunes(lastOutput, 2000))
 	}
 	return "", failErr
+}
+
+// materializeCheckpointedProtocolRepair fills the receipt gap between a
+// successful submit_result checkpoint and the protocol repair's terminal
+// status update. It preserves prior schema-repair history and records the
+// checkpointed result as the successful attempt so a later restart has a
+// complete forensic record without replaying a repair model turn.
+func (c *Coordinator) materializeCheckpointedProtocolRepair(item *TodoItem, agentName string, result *TaskResult) error {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil || item == nil || result == nil {
+		return fmt.Errorf("protocol repair receipt requires a task and submitted result")
+	}
+
+	receipt := ExecutionReceipt{
+		RunID:      c.executionRunID,
+		TaskID:     item.ID,
+		Attempt:    1,
+		ProducerID: agentName,
+		StartedAt:  time.Now(),
+		FinishedAt: time.Now(),
+	}
+	if item.ExecutionReceipt != nil {
+		receipt = cloneExecutionReceipt(item.ExecutionReceipt)
+	}
+	if receipt.RunID == "" {
+		receipt.RunID = c.executionRunID
+		if receipt.RunID == "" {
+			receipt.RunID = c.taskTracker.TodoList().RunID()
+		}
+	}
+	if receipt.TaskID == "" {
+		receipt.TaskID = item.ID
+	}
+	if receipt.Attempt < 1 {
+		receipt.Attempt = 1
+	}
+	if receipt.ProducerID == "" {
+		receipt.ProducerID = agentName
+	}
+	if receipt.StartedAt.IsZero() {
+		receipt.StartedAt = time.Now()
+	}
+	receipt.FinishedAt = time.Now()
+
+	var prior *RepairProvenance
+	if receipt.RepairProvenance != nil {
+		copyPrior := *receipt.RepairProvenance
+		copyPrior.History = append([]RepairAttemptProvenance(nil), receipt.RepairProvenance.History...)
+		prior = &copyPrior
+	}
+	provenance := &RepairProvenance{
+		Attempted:       true,
+		Success:         true,
+		SubmittedResult: result,
+	}
+	if prior != nil {
+		provenance.History = append(provenance.History, prior.History...)
+		provenance.RepairAttempts = prior.RepairAttempts
+		for _, attempt := range prior.History {
+			if attempt.Attempt > provenance.RepairAttempts {
+				provenance.RepairAttempts = attempt.Attempt
+			}
+		}
+		if prior.Success && prior.SubmittedResult != nil && validateSubmittedTaskResult(prior.SubmittedResult) == nil {
+			provenance.Prompt = prior.Prompt
+		}
+	}
+	if provenance.RepairAttempts == 0 {
+		provenance.RepairAttempts = 1
+	} else if prior == nil || !prior.Success {
+		provenance.RepairAttempts++
+	}
+	if prior == nil || !prior.Success {
+		provenance.History = append(provenance.History, RepairAttemptProvenance{
+			Attempt:         provenance.RepairAttempts,
+			Success:         true,
+			SubmittedResult: result,
+		})
+	}
+	receipt.RepairProvenance = provenance
+	return c.taskTracker.TodoList().SetExecutionReceipt(item.ID, &receipt)
+}
+
+// resumeProtocolIncompleteTask repairs a checkpointed protocol failure using
+// only the result submission tool. The original worker already ran before the
+// checkpoint was written, so this path must never call executeTask's worker
+// setup, reset the todo for retry, or expose the worker's configured tools.
+// The persisted Output is the authoritative execution evidence supplied to
+// the repair model.
+func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, task TaskDef, item *TodoItem) (string, error) {
+	if c == nil || item == nil {
+		return "", fmt.Errorf("protocol repair requires a task checkpoint")
+	}
+	output := item.Output
+	if strings.TrimSpace(output) == "" {
+		err := errors.New("protocol-incomplete checkpoint has no worker output for result-only repair")
+		detail := c.FailureDetail(err, FailureSourceError)
+		c.PersistFailureWithClassAndStatusAndOutput(item.Agent, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
+		return "", err
+	}
+
+	// submit_result checkpoints TypedResult before the caller can persist the
+	// repair receipt and terminal status. A crash in that interval leaves a
+	// protocol_incomplete task with a valid result but no provenance. Treat
+	// that result as the durable repair boundary: record the missing receipt and
+	// finish locally, without clearing it or making another repair-agent call.
+	if item.TypedResult != nil && item.TypedResult.Source == "submitted" && validateSubmittedTaskResult(item.TypedResult) == nil {
+		agentName := strings.ToLower(strings.TrimSpace(item.Agent))
+		if agentName == "" {
+			agentName = strings.ToLower(strings.TrimSpace(task.Agent))
+		}
+		if agentName == "" {
+			agentName = "worker"
+		}
+		resolvedModel := task.Model
+		if resolvedModel == "" && c.session != nil {
+			resolvedModel = c.session.Config.Generation.Model
+		}
+		if err := c.materializeCheckpointedProtocolRepair(item, agentName, item.TypedResult); err != nil {
+			return "", err
+		}
+		c.storeSubmittedTaskResult(item.ID, item.TypedResult)
+		return c.finishProtocolRepair(parentCtx, item, task, agentName, resolvedModel, item.TypedResult, output)
+	}
+
+	agentDef, _, err := c.AgentPool().ResolveAgentName(task.Agent)
+	if err != nil {
+		detail := c.FailureDetail(err, FailureSourceError)
+		c.PersistFailureWithClassAndStatusAndOutput(item.Agent, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
+		return "", err
+	}
+	agentName := strings.ToLower(agentDef.Name)
+	resolvedModel := c.resolveAgentModel(agentDef, task.Model)
+	resultTool := &submitResultTool{coordinator: c, todoID: item.ID}
+
+	// If a successful repair was checkpointed before the status transition,
+	// finalize it locally. This avoids spending another repair turn and still
+	// never replays worker execution.
+	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RepairProvenance != nil {
+		provenance := item.ExecutionReceipt.RepairProvenance
+		if provenance.Success && provenance.SubmittedResult != nil && validateSubmittedTaskResult(provenance.SubmittedResult) == nil {
+			c.storeSubmittedTaskResult(item.ID, provenance.SubmittedResult)
+			return c.finishProtocolRepair(parentCtx, item, task, agentName, resolvedModel, provenance.SubmittedResult, output)
+		}
+		if provenance.Attempted && provenance.RepairAttempts >= 2 {
+			err := fmt.Errorf("protocol result-only repair exhausted after %d attempt(s)", provenance.RepairAttempts)
+			detail := c.FailureDetail(err, FailureSourceError)
+			c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
+			return "", err
+		}
+		if provenance.Attempted && provenance.FailureReason != RepairFailureInvalidSchema {
+			err := fmt.Errorf("protocol result-only repair cannot be retried after %s", provenance.FailureReason)
+			detail := c.FailureDetail(err, FailureSourceError)
+			c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
+			return "", err
+		}
+	}
+
+	var repairAgent fantasy.Agent
+	if c.repairAgentOverride != nil {
+		repairAgent = c.repairAgentOverride
+	} else if c.providerManager != nil {
+		repairAgent, err = agent.CreateAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
+			Def:        agentDef,
+			TeamConfig: &c.session.Config,
+			WorkDir:    c.projectDir,
+			MaxSteps:   1,
+		}, []fantasy.AgentTool{resultTool})
+	}
+	if err != nil {
+		c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to create protocol repair agent: %v", err)).withTodoID(item.ID))
+	}
+	if repairAgent == nil {
+		err = errors.New("protocol result-only repair agent unavailable")
+		detail := c.FailureDetail(err, FailureSourceError)
+		c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
+		return "", err
+	}
+
+	priorAttempts := 0
+	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RepairProvenance != nil {
+		priorAttempts = item.ExecutionReceipt.RepairProvenance.RepairAttempts
+	}
+	repairCtx := context.WithValue(parentCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
+	repairCtx = context.WithValue(repairCtx, llmUsageReceiptExpectedKey{}, false)
+	repairCtx = context.WithValue(repairCtx, todoIDKey{}, item.ID)
+	repairCtx = context.WithValue(repairCtx, modelKey{}, resolvedModel)
+	repairCtx = context.WithValue(repairCtx, tools.AgentNameKey, agentName)
+	repairCtx = context.WithValue(repairCtx, hooks.AgentNameKey, agentName)
+	repairCtx = context.WithValue(repairCtx, hooks.TeamNameKey, c.session.Config.Name)
+	repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, task.Goal)
+	timing := &taskTiming{}
+	timing.reset()
+	c.report(c.newEvent("step").withAgent(agentName).withMessage("resuming protocol task through result-only repair").withTodoID(item.ID))
+	repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nThe worker execution is already complete and produced the output above, but it did not submit a structured result. Call submit_result now using only those execution facts. Do NOT execute work, inspect files, or call any other tool.", task.Goal, output)
+	var typedRes *TaskResult
+	var repairReason RepairFailureReason
+	var repairSuccess bool
+	var runErr error
+	var repairHistory []RepairAttemptProvenance
+	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RepairProvenance != nil {
+		repairHistory = append(repairHistory, item.ExecutionReceipt.RepairProvenance.History...)
+	}
+	for attempt := priorAttempts + 1; attempt <= 2; attempt++ {
+		c.clearSubmittedTaskResult(item.ID)
+		if attempt > priorAttempts+1 {
+			repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous result-only repair call did not match the submit_result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work, inspect files, or call any other tool.\n\n## Execution Output\n%s", task.Goal, output)
+		}
+		_, steps, callErr := c.runAgentWithStatusAndHistory(repairCtx, repairAgent, agentName, repairPrompt, nil, timing, fantasy.StepCountIs(1))
+		runErr = callErr
+		typedRes = c.GetTaskResult(item.ID)
+		repairReason, _ = classifyRepairFailure(steps, typedRes)
+		repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateSubmittedTaskResult(typedRes) == nil
+		repairHistory = append(repairHistory, RepairAttemptProvenance{
+			Attempt:         attempt,
+			Success:         repairSuccess,
+			Prompt:          repairPrompt,
+			SubmittedResult: typedRes,
+			FailureReason:   repairReason,
+		})
+		if repairSuccess || repairReason != RepairFailureInvalidSchema {
+			break
+		}
+	}
+
+	receipt := ExecutionReceipt{RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, ProducerID: agentName, StartedAt: time.Now()}
+	if item.ExecutionReceipt != nil {
+		receipt = cloneExecutionReceipt(item.ExecutionReceipt)
+	}
+	if receipt.RunID == "" {
+		receipt.RunID = c.executionRunID
+		if receipt.RunID == "" {
+			receipt.RunID = c.taskTracker.TodoList().RunID()
+		}
+	}
+	if receipt.TaskID == "" {
+		receipt.TaskID = item.ID
+	}
+	if receipt.Attempt < 1 {
+		receipt.Attempt = 1
+	}
+	receipt.ProducerID = agentName
+	receipt.FinishedAt = time.Now()
+	repairAttempts := priorAttempts
+	for _, attempt := range repairHistory {
+		if attempt.Attempt > repairAttempts {
+			repairAttempts = attempt.Attempt
+		}
+	}
+	receipt.RepairProvenance = &RepairProvenance{
+		Attempted:       true,
+		Success:         repairSuccess,
+		Prompt:          repairHistory[len(repairHistory)-1].Prompt,
+		SubmittedResult: typedRes,
+		RepairAttempts:  repairAttempts,
+		FailureReason:   repairReason,
+		History:         repairHistory,
+	}
+	if runErr != nil && !repairSuccess {
+		receipt.RepairProvenance.Error = runErr.Error()
+	}
+	_ = c.taskTracker.TodoList().SetExecutionReceipt(item.ID, &receipt)
+
+	if repairSuccess {
+		return c.finishProtocolRepair(parentCtx, item, task, agentName, resolvedModel, typedRes, output)
+	}
+	if repairReason == "" {
+		repairReason = RepairFailureNoToolCall
+	}
+	err = fmt.Errorf("protocol result-only repair failed for task %s (%s): %s", item.ID, agentName, repairReason)
+	detail := c.FailureDetail(err, FailureSourceError)
+	c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
+	return "", err
+}
+
+func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, task TaskDef, agentName, resolvedModel string, result *TaskResult, output string) (string, error) {
+	if task.Verify != "" || task.VerifySpec != nil {
+		if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskVerifying, "running objective verification", output); err != nil {
+			return "", err
+		}
+		verification, err := c.verifyTaskDeliverableWithSpec(ctx, nil, task)
+		if verification != nil {
+			_ = c.taskTracker.TodoList().SetVerificationResult(item.ID, verification)
+		}
+		if err != nil {
+			detail := c.FailureDetail(fmt.Errorf("deliverable verification failed after protocol repair: %w", err), FailureSourceError)
+			c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureVerify, TaskBlocked, output)
+			return "", err
+		}
+	}
+	summary := strings.TrimSpace(result.Summary)
+	if summary == "" {
+		summary = "protocol result-only repair succeeded"
+	}
+	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskDone, summary, output); err != nil {
+		return "", err
+	}
+	c.reconcileTaskStatusProjection()
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	c.report(c.newEvent("done").withAgent(agentName).withOutput(output).withMessage("protocol result-only repair completed").withModel(resolvedModel).withTodoID(item.ID))
+	return output, nil
 }
 
 // rescueFinalSummary gives an agent that stopped without a final message one
@@ -1086,15 +1398,12 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	if err != nil {
 		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		fmt.Fprintf(os.Stderr, "warning: sidecar execute failed for agent %q: %v\n", task.Agent, err)
-		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, err.Error())
-		c.reconcileTaskStatusProjection()
-		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		c.PersistFailureWithClass(task.Agent, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), RetryNone, FailureExecution)
 		return "", fmt.Errorf("sidecar execution failed (model: %s): %w", c.sidecarModel, err)
 	}
 	if verr := validateTaskOutput(task, result); verr != nil {
 		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
-		c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, verr.Error())
-		c.reconcileTaskStatusProjection()
+		c.PersistFailureWithClass(task.Agent, taskDesc, todoID, c.FailureDetail(verr, FailureSourceError), RetryNone, FailureProtocol)
 		return "", fmt.Errorf("task completion validation failed: %w", verr)
 	}
 	if task.Verify != "" || task.VerifySpec != nil {
@@ -1114,8 +1423,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		}
 		if verifyErr != nil {
 			c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
-			c.taskTracker.TodoList().UpdateStatus(todoID, TaskError, verifyErr.Error())
-			c.reconcileTaskStatusProjection()
+			c.PersistFailureWithClass(task.Agent, taskDesc, todoID, c.FailureDetail(verifyErr, FailureSourceError), RetryNone, FailureVerify)
 			c.report(c.newEvent("verify_error").withAgent(task.Agent).withMessage(verifyErr.Error()).withTodoID(todoID))
 			return "", fmt.Errorf("deliverable verification failed: %w", verifyErr)
 		}

@@ -83,10 +83,14 @@ func TestExecuteTasksBlocksOnMissingCapability(t *testing.T) {
 	})
 	var mu sync.Mutex
 	var events []string
+	var failureEvents []StatusEvent
 	c.SetStatusReporter(func(event StatusEvent) {
 		mu.Lock()
 		defer mu.Unlock()
 		events = append(events, event.Type)
+		if event.Type == "failure" {
+			failureEvents = append(failureEvents, event)
+		}
 	})
 
 	_, err := c.ExecuteTasks(context.Background(), []TaskDef{
@@ -106,6 +110,9 @@ func TestExecuteTasksBlocksOnMissingCapability(t *testing.T) {
 	if items[0].Detail == "" {
 		t.Fatal("expected blocked task detail to explain the missing capability")
 	}
+	if items[0].FailureEvent == nil || items[0].FailureEvent.FailureClass != FailurePolicy || items[0].FailureEvent.Phase == "" || items[0].FailureEvent.RetryDisposition != NeedsHuman {
+		t.Fatalf("capability preflight failure event = %#v", items[0].FailureEvent)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -113,6 +120,37 @@ func TestExecuteTasksBlocksOnMissingCapability(t *testing.T) {
 		if eventType == "start" {
 			t.Fatal("capability failure should stop before worker start")
 		}
+	}
+	if len(failureEvents) != 1 || failureEvents[0].TodoID != items[0].ID {
+		t.Fatalf("structured capability failure reporter events = %#v", failureEvents)
+	}
+	if payload, ok := failureEvents[0].Data["failure_event"].(*FailureEventPayload); !ok || payload.FailureClass != FailurePolicy {
+		t.Fatalf("reporter failure payload = %#v", failureEvents[0].Data)
+	}
+}
+
+func TestExecuteTasksUnknownCapabilityPersistsStructuredFailureEvent(t *testing.T) {
+	c := newCapabilityCoordinator(t, nil)
+	var failureEvent StatusEvent
+	c.SetStatusReporter(func(event StatusEvent) {
+		if event.Type == "failure" {
+			failureEvent = event
+		}
+	})
+	_, err := c.ExecuteTasks(context.Background(), []TaskDef{{Agent: "worker", Goal: "unknown capability", Requires: []string{"missing-capability"}}})
+	if err == nil || !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("unknown capability execution error = %v, want terminal task failure", err)
+	}
+	items := c.taskTracker.TodoList().Items()
+	if len(items) != 1 || items[0].Status != TaskBlocked {
+		t.Fatalf("unknown capability items = %+v", items)
+	}
+	event := items[0].FailureEvent
+	if event == nil || event.FailureClass != FailurePolicy || event.Phase == "" || event.RetryDisposition != NeedsHuman {
+		t.Fatalf("unknown capability failure event = %#v", event)
+	}
+	if failureEvent.TodoID != items[0].ID {
+		t.Fatalf("unknown capability reporter event = %#v", failureEvent)
 	}
 }
 

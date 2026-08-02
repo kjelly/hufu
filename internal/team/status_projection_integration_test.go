@@ -253,6 +253,9 @@ func TestRunDirectAgentAgentCreationFailureReconcilesCanonicalTodoAndStatus(t *t
 	if len(items) != 1 || items[0].Status != TaskError {
 		t.Fatalf("canonical task after agent creation failure = %+v, want error", items)
 	}
+	if items[0].FailureEvent == nil || items[0].FailureEvent.FailureClass != FailureExecution || items[0].FailureEvent.Phase == "" || items[0].FailureEvent.RetryDisposition == "" {
+		t.Fatalf("agent creation failure event = %#v, want execution class, phase, and disposition", items[0].FailureEvent)
+	}
 	status := readProjectedStatus(t, c.session.Workspace, "worker")
 	if !strings.Contains(status, "status: error") {
 		t.Fatalf("projected status after agent creation failure = %q", status)
@@ -308,6 +311,9 @@ func TestCoordinatorUnexpectedTerminationProjectsFinalizedTaskStates(t *testing.
 	for _, item := range finalItems {
 		if item.Status != TaskError && item.Status != TaskSkipped {
 			t.Fatalf("finalized task %s retained non-terminal status %s", item.ID, item.Status)
+		}
+		if item.Status == TaskError && (item.FailureEvent == nil || item.FailureEvent.FailureClass == "" || item.FailureEvent.Phase == "" || item.FailureEvent.RetryDisposition == "") {
+			t.Fatalf("finalized task %s missing structured failure event: %#v", item.ID, item.FailureEvent)
 		}
 	}
 	status := readProjectedStatus(t, c.session.Workspace, "worker")

@@ -1810,7 +1810,7 @@ func (m Model) renderProgressBar(width int) string {
 			done++
 		case team.TaskInProgress, team.TaskPaused, team.TaskVerifying:
 			active++
-		case team.TaskError, team.TaskBlocked:
+		case team.TaskError, team.TaskBlocked, team.TaskProtocolIncomplete:
 			failed++
 		}
 	}
@@ -1999,9 +1999,11 @@ func (m Model) itemLines(item *team.TodoItem, selected bool, isMatch bool, width
 		lines = append(lines, skillStyle.Render("  "+skillLine))
 	}
 
-	if item.Status == team.TaskError && item.Detail != "" {
-		errLine := utils.TruncateLine(item.Detail, width-4)
-		lines = append(lines, errorIcon.Render("  ✗ "+errLine))
+	if item.Status == team.TaskError || item.Status == team.TaskBlocked || item.Status == team.TaskProtocolIncomplete {
+		if failure := team.FailureDisplayText(item); failure != "" {
+			errLine := utils.TruncateLine(strings.ReplaceAll(failure, "\n", " | "), width-4)
+			lines = append(lines, errorIcon.Render("  ✗ "+errLine))
+		}
 	}
 
 	if selected {

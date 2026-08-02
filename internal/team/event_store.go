@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 const eventStoreFile = "event_store.jsonl"
@@ -166,6 +168,19 @@ func (es *EventStore) Append(event RunEvent) error {
 
 	if IsTerminalEvent(event.Type) && IsEmptyPayload(event.Payload) {
 		return fmt.Errorf("reject terminal event %q with empty payload", event.Type)
+	}
+	if len(bytes.TrimSpace(event.Payload)) > 0 {
+		redacted, err := utils.RedactJSON(event.Payload)
+		if err != nil {
+			return fmt.Errorf("redact event payload: %w", err)
+		}
+		// The outer event marshal compacts RawMessage values. Compact here too
+		// so the hash is computed over exactly the bytes persisted on disk.
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, redacted); err != nil {
+			return fmt.Errorf("compact redacted event payload: %w", err)
+		}
+		event.Payload = compact.Bytes()
 	}
 
 	es.sequence++

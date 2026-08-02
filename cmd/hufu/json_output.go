@@ -11,18 +11,19 @@ import (
 
 // jsonRunOutput is the machine-readable shape emitted by --output json.
 type jsonRunOutput struct {
-	Outcome         string                 `json:"outcome"`
-	GoalSatisfied   bool                   `json:"goal_satisfied"`
-	GoalMode        string                 `json:"goal_mode,omitempty"`
-	Result          string                 `json:"result"`
-	Reason          string                 `json:"reason,omitempty"`
-	StopReason      string                 `json:"stop_reason,omitempty"`
-	ExitCode        int                    `json:"exit_code,omitempty"`
-	Acceptance      *team.AcceptanceResult `json:"acceptance,omitempty"`
-	UnresolvedTasks []team.TaskReference   `json:"unresolved_tasks,omitempty"`
-	Stats           team.RunStats          `json:"stats"`
-	Teams           []jsonRunTeam          `json:"teams"`
-	Skills          []jsonRunSkill         `json:"skills,omitempty"`
+	Outcome         string                     `json:"outcome"`
+	GoalSatisfied   bool                       `json:"goal_satisfied"`
+	GoalMode        string                     `json:"goal_mode,omitempty"`
+	Result          string                     `json:"result"`
+	Reason          string                     `json:"reason,omitempty"`
+	StopReason      string                     `json:"stop_reason,omitempty"`
+	ExitCode        int                        `json:"exit_code,omitempty"`
+	Acceptance      *team.AcceptanceResult     `json:"acceptance,omitempty"`
+	UnresolvedTasks []team.TaskReference       `json:"unresolved_tasks,omitempty"`
+	Stats           team.RunStats              `json:"stats"`
+	Teams           []jsonRunTeam              `json:"teams"`
+	Skills          []jsonRunSkill             `json:"skills,omitempty"`
+	Failures        []team.FailureEventPayload `json:"failures,omitempty"`
 }
 
 type jsonRunTeam struct {
@@ -84,6 +85,9 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 			}
 		}
 		for _, it := range items {
+			if it != nil && it.FailureEvent != nil {
+				out.Failures = append(out.Failures, team.FailureEventsFromTodos([]*team.TodoItem{it})...)
+			}
 			jt.Tasks = append(jt.Tasks, jsonRunTask{
 				ID:     it.ID,
 				Agent:  it.Agent,

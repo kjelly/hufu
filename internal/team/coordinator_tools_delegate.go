@@ -136,8 +136,10 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	agentKey := strings.ToLower(selected)
 	if match := c.findExistingTodoDuplicate(ctx, strings.ToLower(subLabel), taskDesc, nil, "", ""); match != nil {
 		msg := fmt.Sprintf("[SUPPRESSED DUPLICATE] %s\n\nExisting task %s is already handling this work (status: %s).", match.Reason, match.Item.ID, match.Item.Status)
-		if match.Item.Detail != "" {
-			msg += "\n\nDetail:\n" + match.Item.Detail
+		if failure := FailureDisplayText(match.Item); failure != "" {
+			msg += "\n\nFailure:\n" + utils.TruncateString(failure, 1500)
+		} else if detail := TaskDetailDisplayText(match.Item); detail != "" {
+			msg += "\n\nDetail:\n" + utils.TruncateString(detail, 500)
 		}
 		return fantasy.NewTextResponse(msg), nil
 	}
@@ -164,8 +166,7 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	execCtx = context.WithValue(execCtx, delegationChainKey{}, subLabel)
 	output, err := c.ExecuteSubAgent(execCtx, selected, args.Goal, args.Constraints)
 	if err != nil {
-		c.taskTracker.TodoList().UpdateStatus(subTodoID, TaskError, err.Error())
-		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		c.PersistFailureWithClass(subLabel, taskDesc, subTodoID, c.FailureDetail(err, FailureSourceError), RetryNone, FailureExecution)
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 

@@ -230,6 +230,7 @@ type TodoItem struct {
 	VerifyResult        *VerificationResult
 	ExecutionReceipt    *ExecutionReceipt    `json:"execution_receipt,omitempty"`
 	ExecutionReceipts   []ExecutionReceipt   `json:"execution_receipts,omitempty"`
+	FailureEvent        *FailureEventPayload `json:"failure_event,omitempty"`
 	MaxRetries          int                  // Maximum number of retries for this task
 	Retries             int                  // Current number of retries
 	OnFailure           string               // ID of the task to jump back to if this task fails (creates a loop)
@@ -567,6 +568,43 @@ func (tl *TodoList) SetTypedResult(id string, result *TaskResult) error {
 	return nil
 }
 
+// SetFailureEvent stores self-contained failure evidence separately from the
+// human-readable Detail string so terminal failure events can be replayed
+// without parsing an error message.
+func (tl *TodoList) SetFailureEvent(id string, event *FailureEventPayload) error {
+	return tl.SetFailureEventAndOutput(id, event, "")
+}
+
+// SetFailureEventAndOutput atomically attaches failure evidence and an
+// optional bounded output projection before a terminal transition is
+// checkpointed. This prevents a same-status follow-up update from being
+// deduplicated before the worker evidence reaches the event store.
+func (tl *TodoList) SetFailureEventAndOutput(id string, event *FailureEventPayload, output string) error {
+	tl.mu.Lock()
+	updated := false
+	notify := false
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			ti.FailureEvent = cloneFailureEventPayload(event)
+			if output != "" {
+				ti.Output = output
+			}
+			updated = true
+			notify = ti.Status == TaskError || ti.Status == TaskBlocked || ti.Status == TaskSkipped || ti.Status == TaskProtocolIncomplete
+			break
+		}
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if notify && onChange != nil {
+		onChange()
+	}
+	return nil
+}
+
 // ResetForRetry returns a task to TaskPending so it can run again as part of
 // an on_failure DAG loop. Unlike UpdateStatus, it deliberately bypasses the
 // terminal-state protection (Done/Error are normally final) because a retry
@@ -664,6 +702,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		copyTR := *item.TypedResult
 		typedResult = &copyTR
 	}
+	failureEvent := cloneFailureEventPayload(item.FailureEvent)
 	var resolution *TaskResolution
 	if item.Resolution != nil {
 		copyRes := *item.Resolution
@@ -711,6 +750,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		VerifyResult:        verifyResult,
 		ExecutionReceipt:    execReceipt,
 		ExecutionReceipts:   execReceipts,
+		FailureEvent:        failureEvent,
 		MaxRetries:          item.MaxRetries,
 		Retries:             item.Retries,
 		OnFailure:           item.OnFailure,

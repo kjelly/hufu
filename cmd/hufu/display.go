@@ -160,6 +160,18 @@ type reporterState struct {
 func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEvent) {
 	width := previewTerminalWidth(120)
 	switch event.Type {
+	case "failure":
+		if st.textBuf != "" {
+			w.write(flushText(st.currentAgent, st.textBuf))
+			st.textBuf = ""
+		}
+		if failure := failureEventFromStatus(event); failure != nil {
+			w.write(errStyle.Render("✗ failure") + "\n" + team.RenderFailureText(failure) + "\n")
+		} else if event.Message != "" {
+			w.write(errStyle.Render("✗ "+event.Message) + "\n")
+		}
+		flushThink(w, st)
+
 	case "start":
 		if st.currentAgent != "" && st.textBuf != "" {
 			w.write(flushText(st.currentAgent, st.textBuf))
@@ -471,6 +483,21 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 	}
 }
 
+func failureEventFromStatus(event team.StatusEvent) *team.FailureEventPayload {
+	if event.Data == nil {
+		return nil
+	}
+	switch value := event.Data["failure_event"].(type) {
+	case *team.FailureEventPayload:
+		return value
+	case team.FailureEventPayload:
+		copy := value
+		return &copy
+	default:
+		return nil
+	}
+}
+
 type lineWriter struct {
 	mu  sync.Mutex
 	buf []string
@@ -563,16 +590,16 @@ func (d *taskDisplay) render() {
 			tag = doneTagStyle.Render(" [DONE]")
 		case team.TaskError:
 			icon = errorIcon.Render("✗")
-			if t.Detail != "" {
-				desc = errStyle.Render(t.Detail)
+			if failure := team.FailureDisplayText(t); failure != "" {
+				desc = errStyle.Render(utils.TruncateLine(strings.ReplaceAll(failure, "\n", " | "), 120))
 			} else {
 				desc = dimStyle.Render(t.Desc)
 			}
 			tag = errTagStyle.Render(" [ERROR]")
 		case team.TaskBlocked:
 			icon = errorIcon.Render("⚠")
-			if t.Detail != "" {
-				desc = errStyle.Render(t.Detail)
+			if failure := team.FailureDisplayText(t); failure != "" {
+				desc = errStyle.Render(utils.TruncateLine(strings.ReplaceAll(failure, "\n", " | "), 120))
 			} else {
 				desc = dimStyle.Render(t.Desc)
 			}
@@ -1462,6 +1489,18 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			}
 			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("✗ " + event.Message), Model: event.Model})
 			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + errStyle.Render("✗ "+utils.TruncateLine(event.Message, 60))})
+
+		case "failure":
+			if event.TodoID == "" {
+				return
+			}
+			failure := failureEventFromStatus(event)
+			if failure == nil {
+				return
+			}
+			tt.stop(event.TodoID)
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("✗ failure") + "\n" + team.RenderFailureText(failure), Model: event.Model})
+			p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + errStyle.Render("✗ "+utils.TruncateLine(failure.Summary, 60))})
 
 		case "needs_human":
 			if event.TodoID != "" {

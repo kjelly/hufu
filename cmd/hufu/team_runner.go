@@ -241,7 +241,7 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 			continue
 		}
 		if item := executionUnresolvedTask(tc.coordinator.TaskTracker().TodoList().Items(), priorUnresolved[name]); item != nil {
-			unresolvedErr = fmt.Errorf("%w: team %s task %s (%s): %s", team.ErrTasksUnresolved, tc.teamName, item.ID, item.Agent, item.Detail)
+			unresolvedErr = formatUnresolvedTaskError(tc.teamName, item)
 			break
 		}
 	}
@@ -256,6 +256,13 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 	}
 
 	return nil
+}
+
+func formatUnresolvedTaskError(teamName string, item *team.TodoItem) error {
+	if item == nil {
+		return team.ErrTasksUnresolved
+	}
+	return fmt.Errorf("%w: team %s task %s (%s): %s", team.ErrTasksUnresolved, teamName, item.ID, item.Agent, team.FailureDisplayText(item))
 }
 
 // canonicalNonSuccessfulRunResult folds only results produced by this

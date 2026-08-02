@@ -249,7 +249,7 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 func failedTodoItems(items []*TodoItem) []*TodoItem {
 	failed := make([]*TodoItem, 0)
 	for _, item := range items {
-		if item != nil && (item.Status == TaskError || item.Status == TaskBlocked) {
+		if item != nil && (item.Status == TaskError || item.Status == TaskBlocked || item.Status == TaskProtocolIncomplete) {
 			if item.Resolution != nil && (item.Resolution.Status == "superseded" || item.Resolution.Status == "reconciled" || item.Resolution.Status == "waived") {
 				continue
 			}
@@ -275,11 +275,11 @@ func pendingTodoItems(items []*TodoItem) []*TodoItem {
 func formatFailedTasks(items []*TodoItem) string {
 	var b strings.Builder
 	for _, item := range items {
-		detail := strings.TrimSpace(item.Detail)
+		detail := FailureDisplayText(item)
 		if detail == "" {
 			detail = "no failure detail recorded"
 		}
-		fmt.Fprintf(&b, "- Task %s (%s, %s): %s\n", item.ID, item.Agent, item.Status, utils.TruncateString(detail, 500))
+		fmt.Fprintf(&b, "- Task %s (%s, %s): %s\n", item.ID, item.Agent, item.Status, utils.TruncateString(detail, 1500))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -777,8 +777,10 @@ func (t *todoTool) handleList(callerName string) (fantasy.ToolResponse, error) {
 	var b strings.Builder
 	for _, item := range myItems {
 		fmt.Fprintf(&b, "- %s: %s [%s]", item.ID, item.Desc, item.Status)
-		if item.Detail != "" {
-			fmt.Fprintf(&b, " (%s)", item.Detail)
+		if failure := FailureDisplayText(item); failure != "" {
+			fmt.Fprintf(&b, " (%s)", utils.TruncateString(failure, 1500))
+		} else if detail := TaskDetailDisplayText(item); detail != "" {
+			fmt.Fprintf(&b, " (%s)", utils.TruncateString(detail, 500))
 		}
 		b.WriteString("\n")
 	}

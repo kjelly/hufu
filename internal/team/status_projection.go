@@ -132,8 +132,16 @@ func ReconcileAgentStatuses(workspace string, items []*TodoItem, sessions []Term
 	for name, status := range statuses {
 		record := projectedStatusRecord{Status: status}
 		for _, item := range items {
-			if item != nil && strings.EqualFold(strings.TrimSpace(item.Agent), name) && item.Detail != "" {
+			if item == nil || !strings.EqualFold(strings.TrimSpace(item.Agent), name) {
+				continue
+			}
+			if record.Detail == "" && item.Detail != "" {
 				record.Detail = utils.RedactSecrets(item.Detail)
+			}
+			if record.FailureEvent == nil && item.FailureEvent != nil {
+				record.FailureEvent = RedactedFailureEvent(item.FailureEvent)
+			}
+			if record.Detail != "" && record.FailureEvent != nil {
 				break
 			}
 		}
@@ -176,8 +184,9 @@ func validateProjectedStatusName(name string) error {
 }
 
 type projectedStatusRecord struct {
-	Status AgentStatus `yaml:"status"`
-	Detail string      `yaml:"detail,omitempty"`
+	Status       AgentStatus          `yaml:"status"`
+	Detail       string               `yaml:"detail,omitempty"`
+	FailureEvent *FailureEventPayload `yaml:"failure_event,omitempty"`
 }
 
 // ReconcileAgentStatusesFromSource keeps terminal-session acquisition outside

@@ -34,18 +34,21 @@ const (
 type journalRecord struct {
 	Op                  string               `json:"op"` // "put", "del", or "err" (diagnostic only)
 	Agent               string               `json:"agent"`
-	Desc                string               `json:"desc"`
+	TaskID              string               `json:"task_id,omitempty"`
+	Desc                string               `json:"desc,omitempty"`
 	Verify              string               `json:"verify,omitempty"`
 	VerifyMode          string               `json:"verify_mode,omitempty"`
 	VerifySpec          *VerificationSpec    `json:"verify_spec,omitempty"`
 	Verification        *VerificationResult  `json:"verification,omitempty"`
 	Output              string               `json:"output,omitempty"`
+	FailureOutput       string               `json:"failure_output,omitempty"`
 	TS                  string               `json:"ts"`
 	Round               int                  `json:"round,omitempty"`
 	RepoCommit          string               `json:"repo_commit,omitempty"`
 	ProjectFingerprint  string               `json:"project_fingerprint,omitempty"`
 	Identity            *CacheIdentity       `json:"identity,omitempty"`
 	FailureFingerprints []FailureFingerprint `json:"failure_fingerprints,omitempty"`
+	FailureEvent        *FailureEventPayload `json:"failure_event,omitempty"`
 }
 
 type taskJournal struct {
@@ -74,8 +77,25 @@ func openTaskJournal(workspace string) (*taskJournal, error) {
 }
 
 func (j *taskJournal) append(rec journalRecord) error {
+	if rec.Op == "err" {
+		// Failure records are diagnostics, not cache keys. Never persist the
+		// complete task prompt; the structured event carries the task ID and
+		// bounded evidence needed for investigation.
+		if rec.FailureEvent != nil {
+			rec.TaskID = rec.FailureEvent.TaskID
+		}
+		rec.Desc = ""
+	}
 	rec.Desc = utils.RedactSecrets(rec.Desc)
 	rec.Output = utils.RedactSecrets(rec.Output)
+	rec.FailureOutput = utils.RedactSecrets(rec.FailureOutput)
+	rec.FailureOutput = utils.TruncateString(rec.FailureOutput, 2000)
+	if rec.Op == "err" {
+		rec.Output = utils.TruncateString(rec.Output, 500)
+	}
+	if rec.FailureEvent != nil {
+		rec.FailureEvent = RedactedFailureEvent(rec.FailureEvent)
+	}
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("append task journal: %w", err)
@@ -88,22 +108,36 @@ func (j *taskJournal) append(rec journalRecord) error {
 	return nil
 }
 
-func (c *Coordinator) recordTaskFailure(agentName, taskDesc, detail string, fingerprints ...[]FailureFingerprint) {
+func (c *Coordinator) recordTaskFailureWithEvent(agentName, taskDesc, detail string, event *FailureEventPayload, fingerprints ...[]FailureFingerprint) {
+	c.recordTaskFailureWithEventAndOutput(agentName, taskDesc, detail, event, "", fingerprints...)
+}
+
+func (c *Coordinator) recordTaskFailureWithEventAndOutput(agentName, taskDesc, detail string, event *FailureEventPayload, failureOutput string, fingerprints ...[]FailureFingerprint) {
 	if c == nil || c.journal == nil || agentName == "" || taskDesc == "" || detail == "" {
 		return
 	}
 	record := journalRecord{
-		Op:     "err",
-		Agent:  agentName,
-		Desc:   taskDesc,
-		Output: detail,
-		TS:     time.Now().Format(time.RFC3339),
-		Round:  c.round,
+		Op:            "err",
+		Agent:         agentName,
+		TaskID:        eventTaskID(event),
+		Desc:          "",
+		Output:        detail,
+		FailureOutput: failureOutput,
+		FailureEvent:  cloneFailureEventPayload(event),
+		TS:            time.Now().Format(time.RFC3339),
+		Round:         c.round,
 	}
 	if len(fingerprints) > 0 {
 		record.FailureFingerprints = append([]FailureFingerprint(nil), fingerprints[0]...)
 	}
 	_ = c.journal.append(record)
+}
+
+func eventTaskID(event *FailureEventPayload) string {
+	if event == nil {
+		return ""
+	}
+	return event.TaskID
 }
 
 func (j *taskJournal) Close() error {
