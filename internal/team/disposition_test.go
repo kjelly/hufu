@@ -116,7 +116,7 @@ func TestDecideRecovery_ClassBasedDisposition(t *testing.T) {
 		{"environment → replan", FailureEnvironment, SideEffectNone, RecoveryRetry, ReplanRequired},
 		{"policy → replan", FailurePolicy, SideEffectNone, RecoveryRetry, ReplanRequired},
 		{"protocol → reconcile", FailureProtocol, SideEffectNone, RecoveryRetry, ReconcileOnly},
-		{"cancelled (worker self-cancel) → retry", FailureCancelled, SideEffectNone, RecoveryRetry, RetryWorker},
+		{"cancelled (worker self-cancel) → none", FailureCancelled, SideEffectNone, RecoveryRetry, RetryNone},
 		{"execution under reconcile policy → reconcile", FailureExecution, SideEffectNone, RecoveryReconcile, ReconcileOnly},
 		{"execution under manual policy → needs human", FailureExecution, SideEffectNone, RecoveryManual, NeedsHuman},
 		{"execution under never policy → none", FailureExecution, SideEffectNone, RecoveryNever, RetryNone},
@@ -161,9 +161,9 @@ func TestDecideRecovery_CancelledPrecedence(t *testing.T) {
 			want: RetryNone,
 		},
 		{
-			name: "FailureCancelled class on replayable task without parent cancel → retry",
+			name: "FailureCancelled class on replayable task without parent cancel → none",
 			in:   RecoveryDecisionInput{Replayable: true, FailureClass: FailureCancelled, EvidenceComplete: true, Attempt: 1, MaxRetries: 3},
-			want: RetryWorker,
+			want: RetryNone,
 		},
 		{
 			name: "FailureCancelled class with parent cancel → none",
@@ -173,6 +173,11 @@ func TestDecideRecovery_CancelledPrecedence(t *testing.T) {
 		{
 			name: "context cancelled beats class-based retry",
 			in:   RecoveryDecisionInput{ContextCancelled: true, Replayable: true, FailureClass: FailureVerify, Attempt: 1, MaxRetries: 3},
+			want: RetryNone,
+		},
+		{
+			name: "cancelled beats non-replayable reconciliation",
+			in:   RecoveryDecisionInput{ContextCancelled: true, Replayable: false, FailureClass: FailureTimeout, SideEffect: SideEffectExternalWrite, Attempt: 1, MaxRetries: 3},
 			want: RetryNone,
 		},
 	}
@@ -202,6 +207,28 @@ func TestDecideRecovery_BudgetExhausted(t *testing.T) {
 	got, _ := DecideRecovery(in)
 	if got != RetryNone {
 		t.Errorf("DecideRecovery() = %q, want RetryNone (budget exhausted)", got)
+	}
+}
+
+func TestDecideRecovery_NonRetryClassesPreserveDispositionAfterBudget(t *testing.T) {
+	tests := []struct {
+		name string
+		in   RecoveryDecisionInput
+		want RetryDisposition
+	}{
+		{"contract", RecoveryDecisionInput{Replayable: true, FailureClass: FailureContract, Attempt: 3, MaxRetries: 3}, ReplanRequired},
+		{"environment", RecoveryDecisionInput{Replayable: false, FailureClass: FailureEnvironment, Attempt: 3, MaxRetries: 3}, ReplanRequired},
+		{"policy", RecoveryDecisionInput{Replayable: true, FailureClass: FailurePolicy, Attempt: 3, MaxRetries: 3}, ReplanRequired},
+		{"protocol", RecoveryDecisionInput{Replayable: true, FailureClass: FailureProtocol, Attempt: 3, MaxRetries: 3}, ReconcileOnly},
+		{"non-replayable timeout", RecoveryDecisionInput{Replayable: false, FailureClass: FailureTimeout, SideEffect: SideEffectExternalWrite, Attempt: 3, MaxRetries: 3}, ReconcileOnly},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _ := DecideRecovery(tt.in)
+			if got != tt.want {
+				t.Fatalf("DecideRecovery() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -411,9 +438,9 @@ func TestDecideRecovery_S11AcceptanceMatrix(t *testing.T) {
 			want: RetryNone,
 		},
 		{
-			name: "worker self-cancel with live parent → retry",
+			name: "worker self-cancel with live parent → none",
 			in:   RecoveryDecisionInput{ContextCancelled: false, Replayable: true, FailureClass: FailureCancelled, EvidenceComplete: true, Attempt: 1, MaxRetries: 3},
-			want: RetryWorker,
+			want: RetryNone,
 		},
 		{
 			name: "repair submitted progress not final → execution retry (after reclassification)",

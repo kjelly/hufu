@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -474,13 +473,10 @@ func newWP05RetryTestCoordinator(t *testing.T, worker fantasy.Agent) (*Coordinat
 	return c, &events
 }
 
-// TestExecuteTask_CancelledPreviousAttempt_NoRetryRecordedForCancelled
-// drives the actual executeTask retry loop with a worker that returns
-// context.Canceled on the first attempt and succeeds on the second. The
-// parent context stays alive, so the loop proceeds to attempt 2 and the
-// `attempt > 1` retry-classification block runs. The guard must skip
-// recordRetry for the cancelled class, so RetriesByFailureClass has no
-// cancelled entry (reviewer P2).
+// TestExecuteTask_CancelledPreviousAttempt_NoRetryRecordedForCancelled drives
+// the actual executeTask retry loop with a worker that returns context.Canceled.
+// Cancellation has disposition none, so the task must stop after the first
+// call and must not record a cancelled retry statistic.
 //
 // Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.3, WP-05
 func TestExecuteTask_CancelledPreviousAttempt_NoRetryRecordedForCancelled(t *testing.T) {
@@ -490,17 +486,15 @@ func TestExecuteTask_CancelledPreviousAttempt_NoRetryRecordedForCancelled(t *tes
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "do work"}})
 	todoID := items[0].ID
 
-	// Parent context stays alive; the worker returns context.Canceled on
-	// attempt 1 then succeeds on attempt 2.
-	out, err := c.executeTask(context.Background(), TaskDef{
+	_, err := c.executeTask(context.Background(), TaskDef{
 		Agent: "worker",
 		Goal:  "do work",
 	}, todoID)
-	if err != nil {
-		t.Fatalf("executeTask returned error: %v (attempts=%d)", err, worker.calls)
+	if err == nil {
+		t.Fatal("expected cancelled task to stop without retry")
 	}
-	if worker.calls < 2 {
-		t.Fatalf("expected at least 2 worker calls (retry after cancel), got %d", worker.calls)
+	if worker.calls != 1 {
+		t.Fatalf("worker calls = %d, want 1 (cancelled tasks must not retry)", worker.calls)
 	}
 
 	// The cancelled failure on attempt 1 must NOT be counted in retry
@@ -509,38 +503,29 @@ func TestExecuteTask_CancelledPreviousAttempt_NoRetryRecordedForCancelled(t *tes
 	if m.RetriesByFailureClass[FailureCancelled] != 0 {
 		t.Errorf("RetriesByFailureClass[cancelled] = %d, want 0 (guard must skip recordRetry for cancelled, §5.3)", m.RetriesByFailureClass[FailureCancelled])
 	}
-	if strings.TrimSpace(out) == "" {
-		t.Errorf("expected non-empty output after successful retry")
-	}
 }
 
 // TestExecuteTask_CancelledPreviousAttempt_GuardBlocksRecordRetry verifies
-// the guard directly: if the guard `if !IsCancelledClass(class)` were
-// removed, recordRetry(FailureCancelled) would execute and increment the
-// cancelled counter. This test asserts the counter stays zero after a
-// cancelled-then-success retry, which would fail if the guard were deleted
-// (reviewer P2).
+// the metric boundary directly and through executeTask: cancellation must not
+// enter retry statistics even if a future call site accidentally calls
+// recordRetry.
 //
 // Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.3, WP-05
 func TestExecuteTask_CancelledPreviousAttempt_GuardBlocksRecordRetry(t *testing.T) {
-	// First, prove the guard is load-bearing: calling recordRetry directly
-	// with FailureCancelled DOES increment the counter (the counter itself has
-	// no guard). This confirms the guard lives at the call site, not in
-	// recordRetry.
+	// The metric helper itself rejects cancelled classes so every caller keeps
+	// the §5.3 invariant.
 	c := &Coordinator{}
 	c.recordRetry(FailureCancelled)
-	if got := c.Metrics().RetriesByFailureClass[FailureCancelled]; got != 1 {
-		t.Fatalf("sanity: recordRetry(FailureCancelled) = %d, want 1 (counter has no guard; guard is at call site)", got)
+	if got := c.Metrics().RetriesByFailureClass[FailureCancelled]; got != 0 {
+		t.Fatalf("recordRetry(FailureCancelled) = %d, want 0", got)
 	}
 
-	// Now drive executeTask with a cancelled-then-success worker on a fresh
-	// coordinator. The call-site guard must prevent the cancelled counter
-	// from being incremented.
+	// Now drive executeTask with a cancelled worker on a fresh coordinator.
 	worker := &cancellableWorkerAgent{}
 	c2, _ := newWP05RetryTestCoordinator(t, worker)
 	items := c2.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "do work"}})
-	if _, err := c2.executeTask(context.Background(), TaskDef{Agent: "worker", Goal: "do work"}, items[0].ID); err != nil {
-		t.Fatalf("executeTask error: %v", err)
+	if _, err := c2.executeTask(context.Background(), TaskDef{Agent: "worker", Goal: "do work"}, items[0].ID); err == nil {
+		t.Fatal("expected cancelled task to stop without retry")
 	}
 	m := c2.Metrics()
 	if m.RetriesByFailureClass[FailureCancelled] != 0 {

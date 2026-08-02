@@ -120,19 +120,48 @@ func isRepeatedFailure(in RecoveryDecisionInput) bool {
 // while preserving the five early-break paths that previously existed as
 // separate if-statements in the retry loop.
 //
-// The five early-break paths are checked first, in their original order, to
-// ensure behaviour equivalence with the pre-refactoring loop (WP-08 risk:
-// behaviour equivalence). The class-based disposition from §5 is applied
-// only when none of the five paths trigger. Finally, the resolved
+// Cancellation is checked first because it is not a failure eligible for
+// recovery. The five early-break paths then preserve their original safety
+// ordering, while non-retry failure classes retain their §5 disposition even
+// after the worker retry budget is exhausted. Finally, the resolved
 // RecoveryPolicy and EvidenceComplete gate RetryWorker to ensure profile
 // policies are not bypassed (§6.1).
 //
 // Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §5.3, §6.1, WP-07, WP-08
 func DecideRecovery(in RecoveryDecisionInput) (RetryDisposition, string) {
+	// §5.3: cancellation is never a worker failure. Whether it originated
+	// from SIGINT, a parent deadline/budget, or a child that observed its
+	// cancelled context, it must not enter retry, fingerprint, or
+	// anti-thrashing paths. Check it before safety/replay gates so a cancelled
+	// non-replayable task remains an honest no-retry outcome rather than being
+	// recast as a reconciliation failure.
+	if in.ContextCancelled || in.FailureClass == FailureCancelled {
+		return RetryNone, "cancelled"
+	}
+
 	// Path 1: terminal blocked — an owned terminal session is still active
 	// or in an unknown state. Retrying is unsafe; escalate to human.
 	if in.TerminalBlocked {
 		return NeedsHuman, "an owned terminal session remains active or unknown"
+	}
+
+	// These classes never permit worker replay, regardless of retry budget or
+	// task replayability. The budget only limits RetryWorker; it must not erase
+	// the actionable disposition required to repair a broken contract or
+	// protocol boundary.
+	switch in.FailureClass {
+	case FailureContract:
+		return ReplanRequired, "contract failure requires replan"
+	case FailureEnvironment:
+		return ReplanRequired, "environment failure requires replan"
+	case FailurePolicy:
+		return ReplanRequired, "policy failure requires replan"
+	case FailureProtocol:
+		return ReconcileOnly, "protocol failure requires result-only repair; worker tools must not be replayed"
+	case FailureTimeout:
+		if nonReplayableSideEffect(in.SideEffect) {
+			return ReconcileOnly, "timeout on non-replayable side effect; reconcile first"
+		}
 	}
 
 	// Path 2: protocol-only failure on a task whose side effect or recovery
@@ -166,16 +195,6 @@ func DecideRecovery(in RecoveryDecisionInput) (RetryDisposition, string) {
 	// 相同 FailureFingerprint 不得無限制重試).
 	if repeated && in.Attempt < in.MaxRetries {
 		return ReplanRequired, "same failure repeated"
-	}
-
-	// §5.3: cancelled — context cancellation (parent deadline, budget, or
-	// user SIGINT) is strictly separated from execution failures. When the
-	// parent context is actually cancelled, the disposition is RetryNone —
-	// do not retry and do not count in statistics. A worker that self-
-	// cancels (e.g. its own timeout) with a live parent context falls
-	// through to the class-based disposition and may retry.
-	if in.ContextCancelled {
-		return RetryNone, "context cancelled"
 	}
 
 	// Budget exhausted — no remaining attempts. The loop would exit
@@ -218,29 +237,7 @@ func DecideRecovery(in RecoveryDecisionInput) (RetryDisposition, string) {
 // trigger and the retry budget has not been exhausted.
 func classBasedDisposition(in RecoveryDecisionInput) (RetryDisposition, string) {
 	switch in.FailureClass {
-	case FailureContract:
-		// §5: contract failures (malformed verifier, invalid mode, deadline
-		// conflict) require replanning, not retry.
-		return ReplanRequired, "contract failure requires replan"
-	case FailureEnvironment:
-		// §5: environment failures (executable unresolved, PATH/shell/workdir
-		// inconsistency) require replanning or human intervention.
-		return ReplanRequired, "environment failure requires replan"
-	case FailurePolicy:
-		// §5: policy failures (guard / permission / no-net rejection) require
-		// replanning or human intervention.
-		return ReplanRequired, "policy failure requires replan"
-	case FailureProtocol:
-		// §5/§6.1: protocol failures allow result-only repair only; worker
-		// tools must not be replayed. Block for reconciliation.
-		return ReconcileOnly, "protocol failure requires result-only repair; worker tools must not be replayed"
 	case FailureTimeout:
-		// §6.1: external_write / infra_mutation / credential_mutation
-		// timeouts must reconcile first. Only none or workspace_write may
-		// retry execution under an explicit policy.
-		if nonReplayableSideEffect(in.SideEffect) {
-			return ReconcileOnly, "timeout on non-replayable side effect; reconcile first"
-		}
 		return RetryWorker, "timeout on replayable task"
 	case FailureExecution:
 		// §5: genuine execution failures may retry the worker, subject to
@@ -253,12 +250,9 @@ func classBasedDisposition(in RecoveryDecisionInput) (RetryDisposition, string) 
 		// would be FailureContract (caught above).
 		return RetryWorker, "verification failure"
 	case FailureCancelled:
-		// §5.3: a worker self-cancellation with a live parent context is
-		// treated as a retryable execution failure (the ContextCancelled
-		// check above handles the parent-cancelled case). This preserves
-		// the pre-refactoring loop's behaviour where a worker returning
-		// context.Canceled with a live parent context would retry.
-		return RetryWorker, "worker self-cancellation with live parent context"
+		// Handled before the retry budget; retained for exhaustive enum
+		// coverage when this helper is called independently.
+		return RetryNone, "cancelled"
 	default:
 		return RetryWorker, "retry"
 	}

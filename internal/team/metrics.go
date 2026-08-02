@@ -165,7 +165,7 @@ func repeatedFingerprintCount(counts map[string]int) int {
 }
 
 func (c *Coordinator) recordRetry(class TaskFailureClass) {
-	if c == nil {
+	if c == nil || IsCancelledClass(class) {
 		return
 	}
 	c.metricsMu.Lock()
