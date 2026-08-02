@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/team"
 	"github.com/anomalyco/hufu/internal/tools"
 )
@@ -227,6 +230,100 @@ func TestMultiTeamFinishedMsgAggregationPrecedence(t *testing.T) {
 	}
 	if len(aggregated.UnresolvedTasks) != 1 || aggregated.UnresolvedTasks[0].ID != "t1" {
 		t.Fatalf("aggregated unresolved tasks = %#v, want t1", aggregated.UnresolvedTasks)
+	}
+}
+
+func TestExplicitAgentReplanEscalatesThroughCoordinator(t *testing.T) {
+	tc := &teamContext{coordinator: &team.Coordinator{}}
+	injector := newPromptInjector(nil)
+	active := new(activeCoordinator)
+	calls := 0
+	var gotPrompt string
+	runCoordinator := func(_ context.Context, prompt string) (string, error) {
+		calls++
+		gotPrompt = prompt
+		return "coordinator replan result", nil
+	}
+
+	result, err := runDirectReplanThroughCoordinator(context.Background(), tc, "complete the requested work", injector, active, runCoordinator)
+	if err != nil {
+		t.Fatalf("replan escalation error: %v", err)
+	}
+	if calls != 1 || result != "coordinator replan result" {
+		t.Fatalf("replan calls=%d result=%q, want one coordinator result", calls, result)
+	}
+	if !strings.Contains(gotPrompt, "no-progress replan threshold") || !strings.Contains(gotPrompt, "complete the requested work") {
+		t.Fatalf("coordinator prompt = %q, want replan context and original request", gotPrompt)
+	}
+	if active.Load() != nil {
+		t.Fatal("active coordinator was not cleared after replan")
+	}
+}
+
+func TestExplicitAgentReplanPropagatesCoordinatorOutcomeError(t *testing.T) {
+	tc := &teamContext{coordinator: &team.Coordinator{}}
+	injector := newPromptInjector(nil)
+	expected := errors.New("coordinator returned partial run outcome")
+	result, err := runDirectReplanThroughCoordinator(context.Background(), tc, "continue the work", injector, new(activeCoordinator), func(context.Context, string) (string, error) {
+		return "partial result", expected
+	})
+	if !errors.Is(err, expected) {
+		t.Fatalf("replan error = %v, want coordinator outcome error", err)
+	}
+	if result != "partial result" {
+		t.Fatalf("partial replan result = %q, want propagated result", result)
+	}
+}
+
+func TestExecuteSegmentsExplicitAgentReplanBranchSavesFinalSessionMD(t *testing.T) {
+	workspace := t.TempDir()
+	tc := &teamContext{
+		teamName:    "demo",
+		session:     &team.TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "demo"}},
+		sessionData: team.NewSession(),
+		coordinator: &team.Coordinator{},
+	}
+	tc.coordinator.SetTaskTracker(team.NewTaskTracker())
+	loaded := map[string]*teamContext{"demo": tc}
+	injector := newPromptInjector(nil)
+	active := new(activeCoordinator)
+	originalEventFormat := opts.eventFormat
+	opts.eventFormat = "jsonl"
+	defer func() { opts.eventFormat = originalEventFormat }()
+
+	directCalls := 0
+	coordinatorCalls := 0
+	result, err := executeSegmentsWithRunners(
+		context.Background(),
+		[]team.PromptSegment{
+			{Type: team.SegmentSwitchTeam, Name: "demo"},
+			{Type: team.SegmentInvokeAgent, Name: "worker", Content: "do the work"},
+		},
+		nil, "", loaded, injector, active, nil, nil, RouteDecision{},
+		func(context.Context, *team.Coordinator, string, string) (*team.DirectAgentResult, error) {
+			directCalls++
+			return &team.DirectAgentResult{Error: errors.New("direct replan required"), ReplanRequired: true}, nil
+		},
+		func(_ context.Context, _ *team.Coordinator, prompt string) (string, error) {
+			coordinatorCalls++
+			tc.sessionData.Entries = append(tc.sessionData.Entries, team.SessionEntry{Role: "assistant", Content: "replanned result"})
+			if !strings.Contains(prompt, "do the work") {
+				t.Fatalf("coordinator prompt = %q, want original request", prompt)
+			}
+			return "replanned result", nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("executeSegments error: %v", err)
+	}
+	if directCalls != 1 || coordinatorCalls != 1 || !strings.Contains(result, "replanned result") {
+		t.Fatalf("calls/result = %d/%d/%q, want one direct, one coordinator, and replan output", directCalls, coordinatorCalls, result)
+	}
+	if active.Load() != nil {
+		t.Fatal("active coordinator was not cleared")
+	}
+	if md := team.LoadSessionMD(workspace); !strings.Contains(md, "replanned result") {
+		t.Fatalf("final session markdown = %q, want replan result checkpoint", md)
 	}
 }
 

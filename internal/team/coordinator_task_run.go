@@ -400,6 +400,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			defer c.unregisterTerminalRound(todoID)
 			taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 			taskCtx = context.WithValue(taskCtx, modelKey{}, resolvedModel)
+			taskCtx = context.WithValue(taskCtx, llmUsageReceiptExpectedKey{}, true)
 			taskCtx = context.WithValue(taskCtx, tools.AgentNameKey, agentName)
 			taskCtx = context.WithValue(taskCtx, hooks.AgentNameKey, agentName)
 			taskCtx = context.WithValue(taskCtx, hooks.TeamNameKey, c.session.Config.Name)
@@ -581,6 +582,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 					repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using the output above to supply the required structured result. Do NOT call any other tools.", task.Goal, output)
 					if repairAg != nil {
 						repairCtx := context.WithValue(parentCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
+						// Protocol repair has no separate execution receipt. The
+						// parent worker context is receipt-backed, so override its
+						// marker before accounting this auxiliary LLM stream.
+						repairCtx = context.WithValue(repairCtx, llmUsageReceiptExpectedKey{}, false)
 						repairCtx = context.WithValue(repairCtx, todoIDKey{}, todoID)
 						repairCtx = context.WithValue(repairCtx, modelKey{}, resolvedModel)
 						repairCtx = context.WithValue(repairCtx, tools.AgentNameKey, agentName)
@@ -661,6 +666,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				if err == nil {
 					verification, verr := c.verifyTaskDeliverableWithSpec(parentCtx, agentDef, task)
 					if verification != nil {
+						c.noteObjectiveVerifierResult(todoID, verr == nil && isVerifySuccess(verification))
 						_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
 					}
 					if verr != nil {
@@ -821,6 +827,9 @@ func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, 
 	if ctx.Err() != nil {
 		return ""
 	}
+	// The rescue stream has no separate execution receipt; account its usage
+	// directly in the no-progress budget.
+	ctx = context.WithValue(ctx, llmUsageReceiptExpectedKey{}, false)
 	var history []fantasy.Message
 	for _, step := range steps {
 		history = append(history, step.Messages...)
@@ -907,6 +916,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		c.report(c.newEvent("verify_start").withAgent(task.Agent).withMessage(vMsg).withTodoID(todoID))
 		verification, verifyErr := c.verifyTaskDeliverableWithSpec(ctx, nil, task)
 		if verification != nil {
+			c.noteObjectiveVerifierResult(todoID, verifyErr == nil && isVerifySuccess(verification))
 			_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
 		}
 		if verifyErr != nil {
@@ -1197,7 +1207,15 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	}
 	c.SetCurrentStage("idle")
 	if result != nil {
-		c.addStepTokens(result.Steps)
+		accountedTokens := c.addStepTokens(result.Steps)
+		// Coordinator and auxiliary streams do not emit worker execution
+		// receipts, so add their usage directly to the no-progress budget.
+		// Worker/direct-agent streams are accounted by the cumulative receipt
+		// path. The context marker, rather than todo ID shape, is authoritative
+		// because repairs, rescues, sub-agents, and plan reviewers can share IDs.
+		if llmUsageNeedsDirectNoProgressAccounting(ctx) {
+			c.recordNoProgressTokens(accountedTokens)
+		}
 	}
 	if err != nil {
 		return "", nil, err

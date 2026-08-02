@@ -15,6 +15,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"charm.land/fantasy"
+
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/sidecar"
 	"github.com/anomalyco/hufu/internal/skill"
@@ -423,6 +425,26 @@ func (c *Coordinator) SkillDetector() *skill.SkillPatternDetector {
 	return c.skillDetector
 }
 
+func (c *Coordinator) observeSidecarUsage(result *fantasy.AgentResult) {
+	if c == nil || result == nil {
+		return
+	}
+	usage := usageFromSteps(result.Steps)
+	if result.TotalUsage.TotalTokens > int64(usage.TotalTokens) {
+		usage.TotalTokens = int(result.TotalUsage.TotalTokens)
+	}
+	if usage.TotalTokens > 0 {
+		c.recordNoProgressTokens(int64(usage.TotalTokens))
+	}
+}
+
+func (c *Coordinator) attachSidecarUsageObserver(s *sidecar.Sidecar) *sidecar.Sidecar {
+	if s != nil {
+		s.SetUsageObserver(c.observeSidecarUsage)
+	}
+	return s
+}
+
 func (c *Coordinator) Sidecar() *sidecar.Sidecar {
 	if c.sidecarModel == "" {
 		return nil
@@ -438,7 +460,7 @@ func (c *Coordinator) Sidecar() *sidecar.Sidecar {
 		fmt.Fprintf(os.Stderr, "⚠ sidecar model %q unavailable: %v (auto-skills and skill matching disabled — set --sidecar-model to a working model to enable)\n", c.sidecarModel, err)
 		return nil
 	}
-	c.sidecarInst = s
+	c.sidecarInst = c.attachSidecarUsageObserver(s)
 	c.sidecarInit = true
 	return c.sidecarInst
 }
@@ -458,7 +480,7 @@ func (c *Coordinator) GuardSidecar() *sidecar.Sidecar {
 		fmt.Fprintf(os.Stderr, "⚠ guard model %q unavailable: %v (guard review disabled — tool calls will be denied until a working model is configured)\n", c.guardModel, err)
 		return nil
 	}
-	c.guardInst = s
+	c.guardInst = c.attachSidecarUsageObserver(s)
 	c.guardInit = true
 	return c.guardInst
 }
@@ -481,7 +503,7 @@ func (c *Coordinator) JudgeSidecar() *sidecar.Sidecar {
 		fmt.Fprintf(os.Stderr, "⚠ judge model %q unavailable: %v (multi-model results fall back to concatenation merge)\n", c.judgeModel, err)
 		return nil
 	}
-	c.judgeInst = s
+	c.judgeInst = c.attachSidecarUsageObserver(s)
 	c.judgeInit = true
 	return c.judgeInst
 }

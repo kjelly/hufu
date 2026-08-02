@@ -101,7 +101,10 @@ func TestCanonicalTodoTransitionAutomaticallyProjectsStatus(t *testing.T) {
 	}
 }
 
-type directTerminationAgent struct{ err error }
+type directTerminationAgent struct {
+	err   error
+	steps []fantasy.StepResult
+}
 
 func (a directTerminationAgent) Stream(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
 	if a.err != nil {
@@ -109,7 +112,7 @@ func (a directTerminationAgent) Stream(context.Context, fantasy.AgentStreamCall)
 	}
 	return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{
 		fantasy.TextContent{Text: "direct agent completed"},
-	}}}, nil
+	}}, Steps: a.steps}, nil
 }
 
 func (a directTerminationAgent) Generate(context.Context, fantasy.AgentCall) (*fantasy.AgentResult, error) {
@@ -118,7 +121,7 @@ func (a directTerminationAgent) Generate(context.Context, fantasy.AgentCall) (*f
 	}
 	return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{
 		fantasy.TextContent{Text: "direct agent completed"},
-	}}}, nil
+	}}, Steps: a.steps}, nil
 }
 
 func newDirectTerminationCoordinator(t *testing.T, worker fantasy.Agent) *Coordinator {
@@ -168,6 +171,66 @@ func TestRunDirectAgentTerminationReconcilesCanonicalTodoAndStatus(t *testing.T)
 				t.Fatalf("projected direct-agent status = %q, want %q", status, tt.wantFile)
 			}
 		})
+	}
+}
+
+func TestRunDirectAgentEnforcesNoProgressBudget(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, directTerminationAgent{
+		steps: []fantasy.StepResult{{Response: fantasy.Response{Usage: fantasy.Usage{TotalTokens: 2}}}},
+	})
+	c.session.Config.Reliability = agent.ReliabilityConfig{
+		MaxTokensWithoutProgress:    1,
+		MaxTokensWithoutProgressSet: true,
+		MaxTurnsWithoutProgressSet:  true,
+		MaxTasksWithoutProgressSet:  true,
+		HardEnforcement:             true,
+	}
+
+	result, err := c.RunDirectAgent(context.Background(), "worker", "exceed the direct-agent budget")
+	if err != nil {
+		t.Fatalf("RunDirectAgent returned top-level error: %v", err)
+	}
+	if result == nil || result.Error == nil {
+		t.Fatalf("direct result = %#v, want terminal budget error", result)
+	}
+	if !strings.Contains(result.Error.Error(), "no-progress budget exhausted") && !strings.Contains(result.Error.Error(), "direct agent stopped") {
+		t.Fatalf("direct result error = %v, want no-progress stop", result.Error)
+	}
+	if last := c.LastRunResult(); last == nil || last.Outcome != RunOutcomePartial || last.StopReason != StopReasonBudgetExceeded || last.Continuation == nil {
+		t.Fatalf("direct budget result = %#v, want partial budget continuation", last)
+	}
+	if items := c.taskTracker.TodoList().Items(); len(items) != 1 || items[0].Status != TaskDone {
+		t.Fatalf("direct task state = %+v, want completed artifact with partial run outcome", items)
+	}
+}
+
+func TestRunDirectAgentSurfacesNoProgressReplan(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
+	c.session.Config.Reliability = agent.ReliabilityConfig{
+		MaxTokensWithoutProgress:    0,
+		MaxTokensWithoutProgressSet: true,
+		MaxTurnsWithoutProgress:     0,
+		MaxTurnsWithoutProgressSet:  true,
+		MaxTasksWithoutProgress:     1,
+		MaxTasksWithoutProgressSet:  true,
+		HardEnforcement:             true,
+	}
+
+	result, err := c.RunDirectAgent(context.Background(), "worker", "reach the first no-progress threshold")
+	if err != nil {
+		t.Fatalf("RunDirectAgent returned top-level error: %v", err)
+	}
+	if result == nil || result.Error == nil || !result.ReplanRequired {
+		t.Fatalf("direct result = %#v, want explicit replan-required result", result)
+	}
+	if !strings.Contains(result.Error.Error(), "requires replan") {
+		t.Fatalf("direct replan error = %v, want replan message", result.Error)
+	}
+	if !c.noProgressReplanPending() || !c.IsWrapUp() {
+		t.Fatalf("first threshold state: replan_pending=%v wrap_up=%v, want both true", c.noProgressReplanPending(), c.IsWrapUp())
+	}
+	if last := c.LastRunResult(); last != nil {
+		t.Fatalf("first threshold should not create terminal result, got %#v", last)
 	}
 }
 

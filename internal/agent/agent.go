@@ -186,6 +186,27 @@ type ReliabilityConfig struct {
 	// dispatch; "warn" emits a warning event but still dispatches; "off"
 	// disables the lint entirely. Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
 	VerifierLintMode string `yaml:"verifier-lint" json:"verifier_lint,omitempty"`
+	// MaxTokensWithoutProgress is the no-progress budget on cumulative LLM
+	// tokens consumed since the last objective criterion advancement (§8.1).
+	// An explicit YAML 0 disables this one counter; unset restores the
+	// default. MaxTokensWithoutProgressSet records whether the value was
+	// explicitly set so reliabilityConfig() honors a zero override rather
+	// than restoring the default. Refs:
+	// docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+	MaxTokensWithoutProgress    int  `yaml:"max-tokens-without-progress" json:"max_tokens_without_progress,omitempty"`
+	MaxTokensWithoutProgressSet bool `yaml:"-" json:"-"`
+	// MaxTurnsWithoutProgress is the no-progress budget on coordinator turns
+	// since the last objective criterion advancement (§8.1). Same 0-disables
+	// semantics as MaxTokensWithoutProgress. Refs:
+	// docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+	MaxTurnsWithoutProgress    int  `yaml:"max-turns-without-progress" json:"max_turns_without_progress,omitempty"`
+	MaxTurnsWithoutProgressSet bool `yaml:"-" json:"-"`
+	// MaxTasksWithoutProgress is the no-progress budget on tasks created
+	// since the last objective criterion advancement (§8.1). Same 0-disables
+	// semantics as MaxTokensWithoutProgress. Refs:
+	// docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+	MaxTasksWithoutProgress    int  `yaml:"max-tasks-without-progress" json:"max_tasks_without_progress,omitempty"`
+	MaxTasksWithoutProgressSet bool `yaml:"-" json:"-"`
 }
 
 // DefaultReliabilityConfig returns default reliability anti-thrashing limits.
@@ -198,6 +219,13 @@ func DefaultReliabilityConfig() ReliabilityConfig {
 		MaxSystemicFailureTasks:           3,
 		HardEnforcement:                   true,
 		VerifierLintMode:                  VerifierLintError,
+		// No-progress budget defaults (§8.1). Sized generously so a healthy
+		// run is never tripped, but a run that burns tokens/turns/tasks
+		// without any objective criterion advancement is bounded. Refs:
+		// docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+		MaxTokensWithoutProgress: 2_000_000,
+		MaxTurnsWithoutProgress:  8,
+		MaxTasksWithoutProgress:  12,
 	}
 }
 

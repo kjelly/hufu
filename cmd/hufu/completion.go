@@ -143,6 +143,8 @@ export extern "hufu" [
   --skill: string # Force-load specific skills
   --plan # Force plan-first mode
   --auto-skills # Enable automatic skill detection
+  --auto-team # Enable automatic team routing via sidecar
+  --template: string # Load a prompt template
   --fix: string # Analyze previous execution data and suggest improvements
   --report # Generate a full execution report as a markdown file
   --default # Use the built-in default team

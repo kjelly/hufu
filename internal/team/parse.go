@@ -115,6 +115,11 @@ type rawReliabilityConfig struct {
 	HardEnforcement                   *bool `yaml:"hard-enforcement"`
 	WarnOnly                          bool  `yaml:"warn-only"`
 	VerifierLintMode                  string `yaml:"verifier-lint"`
+	// No-progress budget pointers (§8.1, WP-12). Pointers so an explicit
+	// YAML 0 (disable) is distinguishable from unset (restore default).
+	MaxTokensWithoutProgress *int `yaml:"max-tokens-without-progress"`
+	MaxTurnsWithoutProgress  *int `yaml:"max-turns-without-progress"`
+	MaxTasksWithoutProgress  *int `yaml:"max-tasks-without-progress"`
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -643,6 +648,21 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
 		cfg.Reliability.MaxSystemicFailureTasks = *yc.Reliability.MaxSystemicFailureTasks
 		cfg.Reliability.MaxSystemicFailureTasksSet = true
+	}
+	// No-progress budget (§8.1, WP-12): explicit value (including 0 to
+	// disable one counter) overrides the default; unset restores the
+	// default. Mirrors the MaxSystemicFailureTasks pointer pattern.
+	if yc.Reliability.MaxTokensWithoutProgress != nil {
+		cfg.Reliability.MaxTokensWithoutProgress = *yc.Reliability.MaxTokensWithoutProgress
+		cfg.Reliability.MaxTokensWithoutProgressSet = true
+	}
+	if yc.Reliability.MaxTurnsWithoutProgress != nil {
+		cfg.Reliability.MaxTurnsWithoutProgress = *yc.Reliability.MaxTurnsWithoutProgress
+		cfg.Reliability.MaxTurnsWithoutProgressSet = true
+	}
+	if yc.Reliability.MaxTasksWithoutProgress != nil {
+		cfg.Reliability.MaxTasksWithoutProgress = *yc.Reliability.MaxTasksWithoutProgress
+		cfg.Reliability.MaxTasksWithoutProgressSet = true
 	}
 	if yc.Reliability.WarnOnly {
 		cfg.Reliability.WarnOnly = true

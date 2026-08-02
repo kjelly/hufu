@@ -104,7 +104,18 @@ func usageFromSteps(steps []fantasy.StepResult) ExecutionUsage {
 	for _, step := range steps {
 		usage.InputTokens += int(step.Usage.InputTokens)
 		usage.OutputTokens += int(step.Usage.OutputTokens)
-		usage.TotalTokens += int(step.Usage.TotalTokens)
+		total := step.Usage.TotalTokens
+		if total == 0 {
+			// Keep reliability accounting aligned with addStepTokens: providers
+			// that omit usage still contribute a conservative message-size
+			// estimate to the receipt-backed no-progress budget.
+			estimatedChars := 0
+			for _, message := range step.Messages {
+				estimatedChars += messageTextSize(message)
+			}
+			total = int64(estimatedChars / 4)
+		}
+		usage.TotalTokens += int(total)
 	}
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
@@ -116,6 +127,10 @@ func (c *Coordinator) beginExecutionRun() func() {
 	c.metricsMu.Lock()
 	c.antiThrashing.reset()
 	c.tokensSinceCriterionProgress = 0
+	c.turnsSinceCriterionProgress = 0
+	c.tasksSinceCriterionProgress = 0
+	c.noProgressReplanTripped = false
+	c.noProgressStopTripped = false
 	c.reliabilityUsageByAttempt = make(map[string]int)
 	c.metricsMu.Unlock()
 	c.rebuildAntiThrashingState()

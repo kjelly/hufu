@@ -172,6 +172,10 @@ func (c *Coordinator) revalidateRecoveryCriteria(ctx context.Context, item *Todo
 		c.antiThrashing.DiagnosticTasksCounted = make(map[string]bool)
 		c.antiThrashing.resetAfterCriterionProgress(advanced, items)
 		c.tokensSinceCriterionProgress = 0
+		c.turnsSinceCriterionProgress = 0
+		c.tasksSinceCriterionProgress = 0
+		c.noProgressReplanTripped = false
+		c.noProgressStopTripped = false
 		c.reliabilityUsageByAttempt = make(map[string]int)
 		c.metricsMu.Unlock()
 		c.sessionData.LastCriterionProgressAt = progressedAt

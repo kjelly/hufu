@@ -351,6 +351,23 @@ func (c *Coordinator) reliabilityConfig() agent.ReliabilityConfig {
 		} else if sessCfg.MaxSystemicFailureTasks > 0 {
 			cfg.MaxSystemicFailureTasks = sessCfg.MaxSystemicFailureTasks
 		}
+		// No-progress budget (§8.1, WP-12): honor explicit value (including
+		// 0 to disable one counter); unset keeps the default.
+		if sessCfg.MaxTokensWithoutProgressSet {
+			cfg.MaxTokensWithoutProgress = sessCfg.MaxTokensWithoutProgress
+		} else if sessCfg.MaxTokensWithoutProgress > 0 {
+			cfg.MaxTokensWithoutProgress = sessCfg.MaxTokensWithoutProgress
+		}
+		if sessCfg.MaxTurnsWithoutProgressSet {
+			cfg.MaxTurnsWithoutProgress = sessCfg.MaxTurnsWithoutProgress
+		} else if sessCfg.MaxTurnsWithoutProgress > 0 {
+			cfg.MaxTurnsWithoutProgress = sessCfg.MaxTurnsWithoutProgress
+		}
+		if sessCfg.MaxTasksWithoutProgressSet {
+			cfg.MaxTasksWithoutProgress = sessCfg.MaxTasksWithoutProgress
+		} else if sessCfg.MaxTasksWithoutProgress > 0 {
+			cfg.MaxTasksWithoutProgress = sessCfg.MaxTasksWithoutProgress
+		}
 		if sessCfg.WarnOnly {
 			cfg.WarnOnly = true
 			cfg.HardEnforcement = false

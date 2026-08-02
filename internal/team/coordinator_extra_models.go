@@ -396,9 +396,11 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 	// resolve the same dedup pointer (never reassigning a non-nil set).
 	contractWarnings := orig.contractWarningsDedup()
 
+	//nolint:staticcheck,SA5011
 	orig.stepConfirmFnMu.RLock()
 	stepConfirmFnCopy := orig.stepConfirmFn
 	orig.stepConfirmFnMu.RUnlock()
+	//nolint:staticcheck,SA5011
 
 	return &Coordinator{
 		session:                         newSession,

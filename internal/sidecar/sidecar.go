@@ -26,10 +26,11 @@ const (
 )
 
 type Sidecar struct {
-	mu       sync.Mutex
-	agent    fantasy.Agent
-	provider *agent.OllamaProvider
-	modelID  string
+	mu            sync.Mutex
+	agent         fantasy.Agent
+	provider      *agent.OllamaProvider
+	modelID       string
+	usageObserver func(*fantasy.AgentResult)
 }
 
 func NewSidecar(ctx context.Context, provider *agent.OllamaProvider, modelID string) (*Sidecar, error) {
@@ -67,6 +68,18 @@ func (s *Sidecar) ModelID() string {
 	return s.modelID
 }
 
+// SetUsageObserver installs an optional callback for the usage of every
+// generated sidecar response. The coordinator uses this to include guard,
+// judge, skill, and other sidecar calls in its no-progress token budget.
+func (s *Sidecar) SetUsageObserver(observer func(*fantasy.AgentResult)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.usageObserver = observer
+	s.mu.Unlock()
+}
+
 func (s *Sidecar) generate(ctx context.Context, prompt string) (string, error) {
 	s.mu.Lock()
 	a := s.agent
@@ -77,6 +90,15 @@ func (s *Sidecar) generate(ctx context.Context, prompt string) (string, error) {
 	result, err := a.Generate(ctx, fantasy.AgentCall{Prompt: prompt})
 	if err != nil {
 		return "", err
+	}
+	s.mu.Lock()
+	observer := s.usageObserver
+	s.mu.Unlock()
+	if observer != nil && result != nil {
+		observer(result)
+	}
+	if result == nil {
+		return "", fmt.Errorf("sidecar agent returned no result")
 	}
 	return result.Response.Content.Text(), nil
 }

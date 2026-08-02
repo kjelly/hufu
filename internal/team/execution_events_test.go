@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"charm.land/fantasy"
 )
 
 func TestExecutionEventLoggerWritesStructuredEvent(t *testing.T) {
@@ -34,6 +36,14 @@ func TestExecutionEventLoggerWritesStructuredEvent(t *testing.T) {
 	}
 	if got.RunID != event.RunID || got.TaskID != event.TaskID || got.Attempt != 2 || got.Usage.TotalTokens != 8 {
 		t.Fatalf("event = %+v", got)
+	}
+}
+
+func TestUsageFromStepsEstimatesMissingProviderUsage(t *testing.T) {
+	steps := []fantasy.StepResult{{Messages: []fantasy.Message{fantasy.NewUserMessage("12345678")}}}
+	got := usageFromSteps(steps)
+	if got.TotalTokens != 2 {
+		t.Fatalf("usageFromSteps total = %d, want estimated 2", got.TotalTokens)
 	}
 }
 

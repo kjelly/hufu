@@ -49,6 +49,10 @@ func runFastPath(ctx context.Context, primaryWorker, content string, route Route
 	errCount := 0
 	for attempt := 1; attempt <= maxFastAttempts; attempt++ {
 		res, derr := d.runDirect(ctx, primaryWorker, content)
+		if derr == nil && res != nil && res.ReplanRequired {
+			stderrLog("\n%s Fast path escalating to team path after direct-agent replan request.\n", boldStyle.Render("⇡"))
+			return fastPathOutcome{attempted: true, escalated: true}
+		}
 		if derr == nil && res != nil && res.Error == nil {
 			return fastPathOutcome{output: res.Output, attempted: true}
 		}

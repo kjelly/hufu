@@ -46,6 +46,12 @@ type todoIDKey struct{}
 // events can include the model for TUI display.
 type modelKey struct{}
 
+// llmUsageReceiptExpectedKey marks streams whose cumulative usage will be
+// accounted by a worker/direct-agent execution receipt. Auxiliary streams
+// (coordinator, sub-agent, repair, and plan-reviewer calls) have no such
+// receipt and must feed the no-progress token counter directly.
+type llmUsageReceiptExpectedKey struct{}
+
 // taskTranscriptKey carries an optional runner-owned transcript recorder into
 // the streaming callbacks for a verbatim task.
 type taskTranscriptKey struct{}
@@ -155,6 +161,10 @@ type DirectAgentResult struct {
 	AgentName string
 	Output    string
 	Error     error
+	// ReplanRequired marks a first-threshold no-progress result. The fast path
+	// must escalate to the coordinator instead of retrying the direct worker,
+	// since each direct attempt starts a fresh run-scoped budget.
+	ReplanRequired bool
 	// Steps is the number of LLM/tool steps the direct agent executed.
 	// Used by the fast-path router to drive auto-escalation decisions.
 	Steps int
@@ -351,12 +361,30 @@ type Coordinator struct {
 	antiThrashing                AntiThrashingState
 	compactions                  int
 	tokensSinceCriterionProgress int64
-	reliabilityUsageByAttempt    map[string]int
-	rollbackCmd                  string // optional shell command run on acceptance failure
-	selfHealingAttempts          int
-	budgetTripped                atomic.Bool
-	lastRunResult                *RunResult
-	lastRunResultMu              sync.RWMutex
+	// turnsSinceCriterionProgress counts coordinator model turns
+	// (runOrchestrator invocations) since the last objective criterion
+	// advancement. Reset only by criterion progress (§8.1, WP-12).
+	turnsSinceCriterionProgress int
+	// tasksSinceCriterionProgress counts TodoItems added (AddBatch) since
+	// the last objective criterion advancement. Reset only by criterion
+	// progress (§8.1, WP-12).
+	tasksSinceCriterionProgress int
+	// noProgressReplanTripped records whether the first no-progress
+	// threshold (replan_required) has already fired for the current
+	// accumulation, so the second threshold (stop-and-partial) is only
+	// reached after a fresh accumulation crosses again (§8.1, WP-12).
+	noProgressReplanTripped   bool
+	noProgressStopTripped     bool
+	reliabilityUsageByAttempt map[string]int
+	// noProgressUsageOwner routes accounting from an isolated extra-model
+	// clone back to the coordinator that owns the active run budget.
+	noProgressUsageOwner     *Coordinator
+	noProgressUsageNamespace string
+	rollbackCmd              string // optional shell command run on acceptance failure
+	selfHealingAttempts      int
+	budgetTripped            atomic.Bool
+	lastRunResult            *RunResult
+	lastRunResultMu          sync.RWMutex
 	// contractWarnings deduplicates contract_warning events per
 	// (todoID, code, message) within a single dispatch cycle, so that both
 	// the ExecuteTasks preflight and the executeTask execution-path check
@@ -607,7 +635,7 @@ func (c *Coordinator) TokensUsed() int64 { return c.tokensUsed.Load() }
 // providers report no usage at all (observed: minimax via ollama returned
 // tokens_in/out=0 for every response); estimate from message bytes in that
 // case so token budgets are not silently blind for most of a run.
-func (c *Coordinator) addStepTokens(steps []fantasy.StepResult) {
+func (c *Coordinator) addStepTokens(steps []fantasy.StepResult) int64 {
 	var total int64
 	for _, s := range steps {
 		if s.Usage.TotalTokens > 0 {
@@ -623,6 +651,7 @@ func (c *Coordinator) addStepTokens(steps []fantasy.StepResult) {
 	if total > 0 {
 		c.tokensUsed.Add(total)
 	}
+	return total
 }
 
 // budgetExceeded reports whether any configured budget (wall-clock or tokens)

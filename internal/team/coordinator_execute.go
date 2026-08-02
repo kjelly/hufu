@@ -265,6 +265,10 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		}
 	}
 	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)
+	// No-progress budget (§8.1, WP-12): each newly created task is one unit
+	// of "tasks since last objective progress". Increment here at AddBatch;
+	// reset only by criterion advancement (criteria.go).
+	c.recordNoProgressTasks(len(todoItems))
 	if len(c.session.Config.Preflight) > 0 {
 		if _, err := c.checkCapabilityRequirements(ctx, c.session.Config.Preflight); err != nil {
 			if blocked, ok := isCapabilityBlockedError(err); ok {
@@ -394,6 +398,15 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 
 	// Check for skill patterns after completing a round
 	c.checkSkillPatterns()
+
+	// No-progress budget enforcement at the task-end / round boundary (§8.1,
+	// WP-12). After a round of tasks completes, evaluate the three counters
+	// against the configured limits. First threshold → replan (emit event,
+	// force wrap-up turn, refuse further blind delegation); second threshold
+	// → stop the run with a partial outcome and continuation record.
+	if stopped, stopReason := c.enforceNoProgressBudget(); stopped {
+		return "", fmt.Errorf("%s: call finish immediately with your best summary of work completed so far", stopReason)
+	}
 
 	return formatTaskResults(results, len(tasks), duplicateWarnings)
 }

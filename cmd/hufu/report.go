@@ -220,7 +220,9 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		fmt.Fprintf(&b, "- **Repeated failure fingerprints:** %d\n", metrics.RepeatedFailureFingerprints)
 		fmt.Fprintf(&b, "- **Recovery strategy changes:** %d\n", metrics.RecoveryStrategyChanges)
 		fmt.Fprintf(&b, "- **Time since criterion progress:** %ds\n", metrics.TimeSinceCriterionProgressSeconds)
-		fmt.Fprintf(&b, "- **Tokens since criterion progress:** %d\n", metrics.TokensSinceCriterionProgress)
+		fmt.Fprintf(&b, "- **Tokens since criterion progress:** %d (limit %d)\n", metrics.TokensSinceCriterionProgress, metrics.MaxTokensWithoutProgress)
+		fmt.Fprintf(&b, "- **Turns since criterion progress:** %d (limit %d)\n", metrics.TurnsSinceCriterionProgress, metrics.MaxTurnsWithoutProgress)
+		fmt.Fprintf(&b, "- **Tasks since criterion progress:** %d (limit %d)\n", metrics.TasksSinceCriterionProgress, metrics.MaxTasksWithoutProgress)
 		if len(metrics.TasksByCriterion) > 0 {
 			b.WriteString("- **Tasks by criterion:**\n")
 			keys := make([]string, 0, len(metrics.TasksByCriterion))

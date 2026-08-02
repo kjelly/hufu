@@ -499,19 +499,23 @@ type TaskReference struct {
 }
 
 type ContinuationInfo struct {
-	TurnCount int    `json:"turn_count"`
-	MaxTurns  int    `json:"max_turns"`
-	Reason    string `json:"reason,omitempty"`
+	TurnCount               int                 `json:"turn_count"`
+	MaxTurns                int                 `json:"max_turns"`
+	Reason                  string              `json:"reason,omitempty"`
+	NoProgress              *NoProgressCounters `json:"no_progress,omitempty"`
+	NoProgressReplanPending bool                `json:"no_progress_replan_pending,omitempty"`
 }
 
 // ContinuationCheckpoint is the durable handoff point for a coordinator
 // continuation. It is intentionally small so a restart can identify whether
 // a continuation was interrupted without replaying the model transcript.
 type ContinuationCheckpoint struct {
-	TurnCount int    `json:"turn_count"`
-	MaxTurns  int    `json:"max_turns"`
-	Reason    string `json:"reason,omitempty"`
-	Status    string `json:"status"` // pending, resumed, completed, aborted
+	TurnCount               int                 `json:"turn_count"`
+	MaxTurns                int                 `json:"max_turns"`
+	Reason                  string              `json:"reason,omitempty"`
+	Status                  string              `json:"status"` // pending, resumed, completed, aborted
+	NoProgress              *NoProgressCounters `json:"no_progress,omitempty"`
+	NoProgressReplanPending bool                `json:"no_progress_replan_pending,omitempty"`
 }
 
 // CriterionCheckpoint is the durable, objective handoff for an acceptance
@@ -560,6 +564,14 @@ type RunMetrics struct {
 	WeakVerifierWarnings              int                         `json:"weak_verifier_warnings,omitempty"`
 	TimeSinceCriterionProgressSeconds int64                       `json:"time_since_criterion_progress_seconds,omitempty"`
 	TokensSinceCriterionProgress      int64                       `json:"tokens_since_criterion_progress,omitempty"`
+	// No-progress budget counters (§8.1, WP-12). Mirrors the coordinator
+	// fields; reset only by objective criterion progress.
+	TurnsSinceCriterionProgress int `json:"turns_since_criterion_progress,omitempty"`
+	TasksSinceCriterionProgress int `json:"tasks_since_criterion_progress,omitempty"`
+	// No-progress budget configured limits (§8.1, WP-12). 0 = disabled.
+	MaxTokensWithoutProgress int64 `json:"max_tokens_without_progress,omitempty"`
+	MaxTurnsWithoutProgress  int   `json:"max_turns_without_progress,omitempty"`
+	MaxTasksWithoutProgress  int   `json:"max_tasks_without_progress,omitempty"`
 }
 
 type TaskResolution struct {

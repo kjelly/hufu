@@ -147,6 +147,9 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	}
 
 	todoItems := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: subLabel, Desc: taskDesc, Model: "", Source: TaskSourceSubagent, ParentID: parentID}})
+	// Sub-agent creation is another real task-creation boundary for the
+	// no-progress budget; it is not covered by coordinator ExecuteTasks.
+	c.recordNoProgressTasks(len(todoItems))
 	subTodoID := todoItems[0].ID
 
 	c.taskTracker.TodoList().UpdateStatus(subTodoID, TaskInProgress, "")
@@ -238,6 +241,10 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	// Give the sub-agent its own tool allowlist rather than inheriting the
 	// caller's permissions.
 	ctx = c.withEffectiveToolsAllowed(ctx, agentDef)
+	// Sub-agent streams do not produce a separate execution receipt. Make the
+	// usage-accounting boundary explicit even when the parent worker context
+	// carried the receipt marker.
+	ctx = context.WithValue(ctx, llmUsageReceiptExpectedKey{}, false)
 
 	subAgModelID := c.resolveAgentModel(agentDef, "")
 	ag, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(subAgModelID), agent.AgentConfig{

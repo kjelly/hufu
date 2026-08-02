@@ -22,6 +22,15 @@ var (
 	secretKeyNameRe = regexp.MustCompile(`(?i)(?:password|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)`)
 )
 
+// Numeric token counters are telemetry, not credentials. Keep this exception
+// explicit: every other scalar below a secret-looking key is redacted,
+// regardless of its JSON type.
+var numericTelemetryKeys = map[string]struct{}{
+	"tokens_since_progress":           {},
+	"tokens_since_criterion_progress": {},
+	"max_tokens_without_progress":     {},
+}
+
 // RedactSecrets removes recognizable credential values before content is
 // persisted to workspace logs or session state. It intentionally preserves
 // keys and surrounding prose so diagnostics remain useful.
@@ -50,7 +59,13 @@ func RedactJSON(data []byte) ([]byte, error) {
 
 func redactJSONValue(value any, key string) any {
 	if key != "" && secretKeyNameRe.MatchString(key) {
-		return redactedSecret
+		_, telemetry := numericTelemetryKeys[strings.ToLower(key)]
+		if !telemetry {
+			return redactedSecret
+		}
+		if _, numeric := value.(json.Number); !numeric {
+			return redactedSecret
+		}
 	}
 	switch v := value.(type) {
 	case string:

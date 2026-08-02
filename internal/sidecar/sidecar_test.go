@@ -6,8 +6,44 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/fantasy"
+
 	"github.com/anomalyco/hufu/internal/tools"
 )
+
+type usageAgent struct{}
+
+func (usageAgent) Generate(context.Context, fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return &fantasy.AgentResult{
+		TotalUsage: fantasy.Usage{TotalTokens: 23},
+		Response: fantasy.Response{Content: fantasy.ResponseContent{
+			fantasy.TextContent{Text: "ok"},
+		}},
+	}, nil
+}
+
+func (usageAgent) Stream(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return nil, nil
+}
+
+func TestGenerateNotifiesUsageObserver(t *testing.T) {
+	s := &Sidecar{agent: usageAgent{}}
+	var observed int64
+	s.SetUsageObserver(func(result *fantasy.AgentResult) {
+		observed = result.TotalUsage.TotalTokens
+	})
+
+	got, err := s.generate(context.Background(), "prompt")
+	if err != nil {
+		t.Fatalf("generate() error = %v", err)
+	}
+	if got != "ok" {
+		t.Fatalf("generate() = %q, want %q", got, "ok")
+	}
+	if observed != 23 {
+		t.Fatalf("observer saw %d tokens, want 23", observed)
+	}
+}
 
 type mockAgent struct {
 	response string

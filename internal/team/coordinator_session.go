@@ -463,6 +463,10 @@ func (c *Coordinator) ContinuationCheckpoint() *ContinuationCheckpoint {
 		return nil
 	}
 	cp := *c.sessionData.ContinuationCheckpoint
+	if c.sessionData.ContinuationCheckpoint.NoProgress != nil {
+		progress := *c.sessionData.ContinuationCheckpoint.NoProgress
+		cp.NoProgress = &progress
+	}
 	return &cp
 }
 
@@ -470,9 +474,18 @@ func (c *Coordinator) saveContinuationCheckpoint(turn, maxTurns int, reason, sta
 	if c == nil || c.sessionData == nil || c.session == nil || c.session.Workspace == "" {
 		return
 	}
-	c.sessionData.ContinuationCheckpoint = &ContinuationCheckpoint{TurnCount: turn, MaxTurns: maxTurns, Reason: reason, Status: status}
+	progress := c.noProgressCounters()
+	replanPending := c.noProgressReplanPending()
+	c.sessionData.ContinuationCheckpoint = &ContinuationCheckpoint{
+		TurnCount:               turn,
+		MaxTurns:                maxTurns,
+		Reason:                  reason,
+		Status:                  status,
+		NoProgress:              &progress,
+		NoProgressReplanPending: replanPending,
+	}
 	_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
-	c.emitEvent("coordinator_continuation_checkpoint", "coordinator", "", map[string]interface{}{"turn_count": turn, "max_turns": maxTurns, "reason": reason, "status": status})
+	c.emitEvent("coordinator_continuation_checkpoint", "coordinator", "", map[string]interface{}{"turn_count": turn, "max_turns": maxTurns, "reason": reason, "status": status, "no_progress": progress, "no_progress_replan_pending": replanPending})
 }
 
 // ResumeContinuationCheckpoint persists the transition from an interrupted
@@ -483,6 +496,17 @@ func (c *Coordinator) ResumeContinuationCheckpoint() *ContinuationCheckpoint {
 		return cp
 	}
 	resume := *cp
+	if cp.NoProgress != nil {
+		progress := *cp.NoProgress
+		c.metricsMu.Lock()
+		c.tokensSinceCriterionProgress = progress.Tokens
+		c.turnsSinceCriterionProgress = progress.Turns
+		c.tasksSinceCriterionProgress = progress.Tasks
+		c.noProgressReplanTripped = cp.NoProgressReplanPending
+		c.noProgressStopTripped = false
+		c.reliabilityUsageByAttempt = make(map[string]int)
+		c.metricsMu.Unlock()
+	}
 	c.continuationResume = &resume
 	c.saveContinuationCheckpoint(cp.TurnCount, cp.MaxTurns, cp.Reason, "resumed")
 	return c.ContinuationCheckpoint()

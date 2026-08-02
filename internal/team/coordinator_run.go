@@ -55,6 +55,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	directModel := c.resolveAgentModel(agentDef, "")
 
 	todoItems := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: resolvedName, Desc: task, Model: directModel, Source: TaskSourceCoordinator, ParentID: ""}})
+	// Direct-agent invocation creates a real task and must participate in the
+	// same run-scoped task budget as coordinator-created work.
+	c.recordNoProgressTasks(len(todoItems))
 	todoID := todoItems[0].ID
 	reconcileDirectStatus := func() {
 		if err := c.reconcileProjectedItems(c.taskTracker.TodoList().Items()); err != nil {
@@ -97,6 +100,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 
 	taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 	taskCtx = context.WithValue(taskCtx, modelKey{}, directModel)
+	taskCtx = context.WithValue(taskCtx, llmUsageReceiptExpectedKey{}, true)
 	taskCtx = context.WithValue(taskCtx, tools.AgentNameKey, resolvedName)
 	taskCtx = context.WithValue(taskCtx, hooks.AgentNameKey, resolvedName)
 	taskCtx = context.WithValue(taskCtx, hooks.TeamNameKey, c.session.Config.Name)
@@ -164,6 +168,11 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		c.report(c.newEvent("error").withAgent(resolvedName).withMessage(err.Error()).withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 		reconcileDirectStatus()
+		// Direct-agent execution is a complete run boundary, so enforce the
+		// no-progress budget even when the worker itself failed. A worker error
+		// remains the primary failure, while a terminal budget stop is already
+		// persisted by enforceNoProgressBudget for the next coordinator path.
+		c.enforceNoProgressBudget()
 		return &DirectAgentResult{AgentName: resolvedName, Error: err, Steps: len(steps)}, nil
 	}
 
@@ -176,6 +185,31 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	reconcileDirectStatus()
 	c.report(c.newEvent("done").withAgent(resolvedName).withOutput(output).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 	c.recordExecutionEvent(todoID, resolvedName, 1, "done", directModel, time.Since(attemptStarted), usageFromSteps(steps))
+	if stopped, reason := c.enforceNoProgressBudget(); stopped {
+		// The worker artifact is complete, but the run is not: returning an
+		// error keeps the fast path from reporting successful completion while
+		// stopForNoProgress has persisted the canonical partial result and
+		// continuation checkpoint.
+		return &DirectAgentResult{
+			AgentName: resolvedName,
+			Output:    output,
+			Error:     fmt.Errorf("direct agent stopped: %s", reason),
+			Steps:     len(steps),
+		}, nil
+	}
+	if c.noProgressReplanPending() {
+		// Direct execution has no coordinator continuation loop of its own.
+		// Surface the first-threshold disposition explicitly so callers cannot
+		// report a successful direct run without giving the coordinator a chance
+		// to replan. The fast path recognizes ReplanRequired and escalates.
+		return &DirectAgentResult{
+			AgentName:      resolvedName,
+			Output:         output,
+			Error:          fmt.Errorf("direct agent requires replan: no-progress budget reached"),
+			ReplanRequired: true,
+			Steps:          len(steps),
+		}, nil
+	}
 
 	return &DirectAgentResult{AgentName: resolvedName, Output: output, Steps: len(steps)}, nil
 }
@@ -246,6 +280,13 @@ func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
 }
 
 func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentDef, prompt string) (string, []fantasy.StepResult, error) {
+	// A coordinator turn is one orchestrator model invocation. Count it here
+	// rather than in ExecuteTasks: one turn may delegate multiple batches, or
+	// may spend its whole budget reasoning without delegating any task.
+	// Continuations and test overrides use this same boundary.
+	c.metricsMu.Lock()
+	c.turnsSinceCriterionProgress++
+	c.metricsMu.Unlock()
 	if c.runOrchestratorOverride != nil {
 		return c.runOrchestratorOverride(ctx, orchDef, prompt)
 	}
@@ -293,6 +334,23 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	return c.runAgentWithStatusAndHistory(orchCtx, orch, orchDef.Name, prompt, historySnapshot, &taskTiming{})
 }
 
+// runOrchestratorWithNoProgressGuard checks a restored continuation budget
+// before dispatching the next model turn. This is essential after a restart:
+// persisted counters must not be allowed to overshoot once more before the
+// normal ensureFinished boundary gets a chance to enforce them.
+func (c *Coordinator) runOrchestratorWithNoProgressGuard(ctx context.Context, orchDef *agent.AgentDef, prompt string) (string, []fantasy.StepResult, error) {
+	if stopped, reason := c.enforceNoProgressBudget(); stopped {
+		if summary := c.summaryFromTodos(fmt.Errorf("%s", reason)); summary != "" {
+			return summary, nil, nil
+		}
+		if last := c.LastRunResult(); last != nil && last.Response != "" {
+			return last.Response, nil, nil
+		}
+		return fmt.Sprintf("Run stopped before another coordinator turn: %s", reason), nil, nil
+	}
+	return c.runOrchestrator(ctx, orchDef, prompt)
+}
+
 // ensureFinished forces one wrap-up turn when the orchestrator stream ended
 // without the finish tool — typically the per-turn step cap ran out
 // mid-coordination. Without this the last narration text is silently returned
@@ -307,6 +365,15 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 	if c.finishCalled.Load() || ctx.Err() != nil {
 		return result, steps
 	}
+	if c.noProgressStopPending() {
+		// A task-boundary hard stop may arrive here through the coordinator's
+		// error path. Preserve its partial result and never spend a recovery
+		// LLM turn after the no-progress budget has been exhausted.
+		if summary := c.summaryFromTodos(fmt.Errorf("no-progress budget exhausted")); summary != "" {
+			result = summary
+		}
+		return result, steps
+	}
 
 	maxContinuationTurns := 5
 	if c.session != nil && c.session.Config.MaxCoordinatorTurns > 0 {
@@ -315,6 +382,7 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 	continuationTurns := 0
 	continuationReason := ""
 	budgetStopped := false
+	noProgressStopped := false
 	continuationInterrupted := false
 	for turn := 1; turn <= maxContinuationTurns; turn++ {
 		if c.finishCalled.Load() || ctx.Err() != nil {
@@ -325,6 +393,21 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 			continuationReason = reason
 			budgetStopped = true
 			break
+		}
+		// No-progress budget enforcement at the turn boundary (§8.1, WP-12).
+		// Each continuation turn is a coordinator turn; check the counters
+		// before running another orchestrator turn.
+		// The first no-progress boundary already requested a replan. Allow
+		// exactly one continuation turn to respond to it; the post-turn check
+		// below escalates if no criterion advanced. Other boundaries are checked
+		// before dispatch as usual.
+		if !c.noProgressReplanPending() {
+			if stopped, stopReason := c.enforceNoProgressBudget(); stopped {
+				continuationReason = stopReason
+				budgetStopped = true
+				noProgressStopped = true
+				break
+			}
 		}
 		continuationTurns = turn
 		c.saveContinuationCheckpoint(turn, maxContinuationTurns, "step_limit", "pending")
@@ -340,15 +423,36 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 		}
 		result = wrapResult
 		steps = wrapSteps
+		if !c.finishCalled.Load() {
+			if stopped, stopReason := c.enforceNoProgressBudget(); stopped {
+				continuationReason = stopReason
+				budgetStopped = true
+				noProgressStopped = true
+				break
+			}
+		}
 	}
 
-	if !c.finishCalled.Load() && ctx.Err() == nil {
+	if noProgressStopped {
+		// No-progress enforcement is a hard stop: do not spend another LLM
+		// turn after the budget has been exhausted. Return the deterministic
+		// completed-task summary when one is available.
+		if summary := c.summaryFromTodos(fmt.Errorf("%s", continuationReason)); summary != "" {
+			result = summary
+		}
+	} else if !c.finishCalled.Load() && ctx.Err() == nil {
 		c.report(c.newEvent("wrap_up_phase").withMessage("coordinator stopped without calling finish after continuation turns; forcing final summary").withTodoID(CoordTodoID))
 		c.saveHistoryAndSession(ctx, steps)
 		wrapResult, wrapSteps, err := c.runOrchestrator(ctx, orchDef, stepLimitWrapUpPrompt)
 		if err == nil && strings.TrimSpace(wrapResult) != "" {
 			result = wrapResult
 			steps = wrapSteps
+		}
+		if !c.finishCalled.Load() {
+			if stopped, stopReason := c.enforceNoProgressBudget(); stopped {
+				continuationReason = stopReason
+				budgetStopped = true
+			}
 		}
 	}
 
@@ -377,7 +481,8 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 			GoalMode:        c.GoalMode(),
 		})
 		evaluated.Acceptance = accRes
-		evaluated.Continuation = &ContinuationInfo{TurnCount: continuationTurns, MaxTurns: maxContinuationTurns, Reason: continuationReason}
+		progress := c.noProgressCounters()
+		evaluated.Continuation = &ContinuationInfo{TurnCount: continuationTurns, MaxTurns: maxContinuationTurns, Reason: continuationReason, NoProgress: &progress, NoProgressReplanPending: c.noProgressReplanPending()}
 		c.SetLastRunResult(&evaluated)
 	}
 	if continuationTurns > 0 {
@@ -402,9 +507,29 @@ func (c *Coordinator) attemptWrapUpRecovery(ctx context.Context, orchDef *agent.
 	if !c.IsWrapUp() || ctx.Err() != nil {
 		return "", nil, false
 	}
+	if c.noProgressStopPending() {
+		// ExecuteTasks can surface a no-progress hard stop as an error while
+		// the coordinator is already in wrap-up. Return the existing partial
+		// evidence without invoking another model turn.
+		if summary := c.summaryFromTodos(runErr); summary != "" {
+			return summary, nil, true
+		}
+		if last := c.LastRunResult(); last != nil {
+			return last.Response, nil, true
+		}
+		return "no-progress budget exhausted; no further LLM turn is permitted", nil, true
+	}
 	c.report(c.newEvent("wrap_up_phase").withMessage(fmt.Sprintf("coordinator stopped before finishing (%v); forcing a final summary turn", runErr)).withTodoID(CoordTodoID))
 	result, steps, err := c.runOrchestrator(ctx, orchDef, wrapUpPromptTemplate)
 	if err == nil && strings.TrimSpace(result) != "" {
+		if !c.finishCalled.Load() {
+			if stopped, stopReason := c.enforceNoProgressBudget(); stopped {
+				if summary := c.summaryFromTodos(fmt.Errorf("%s", stopReason)); summary != "" {
+					return summary, nil, true
+				}
+				return result, steps, true
+			}
+		}
 		return strings.TrimPrefix(result, "FINISHED:"), steps, true
 	}
 	summary := c.summaryFromTodos(runErr)
@@ -765,6 +890,10 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	// Replay the persistent task journal (crash-safe complement to the
 	// session.json checkpoint) and start appending to it for this run.
 	c.initTaskJournal()
+	// Restore the no-progress continuation baseline before re-driving any
+	// interrupted workers. Their resumed LLM usage must accumulate on top of
+	// the persisted counters, not be overwritten by a later restore.
+	c.ResumeContinuationCheckpoint()
 
 	c.report(c.newEvent("step").withMessage("coordinator preparing"))
 
@@ -777,7 +906,6 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		c.report(c.newEvent("step").withMessage(fmt.Sprintf("resume: re-drove %d interrupted task(s) from checkpoint", n)))
 	}
 	c.continuationResume = nil
-	c.ResumeContinuationCheckpoint()
 
 	c.addSessionUserMessage(userPrompt)
 
@@ -789,7 +917,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("coordinator starting").withModel(c.resolveAgentModel(orchDef, "")).withTodoID(CoordTodoID))
 
-	result, steps, err := c.runOrchestrator(ctx, &orchDefCopy, userPrompt)
+	result, steps, err := c.runOrchestratorWithNoProgressGuard(ctx, &orchDefCopy, userPrompt)
 	if err != nil {
 		if recovered, recoveredSteps, ok := c.attemptWrapUpRecovery(ctx, &orchDefCopy, err); ok {
 			result = recovered
@@ -863,7 +991,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 
 	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("continuing with additional input").withModel(c.resolveAgentModel(orchDef, "")).withTodoID(CoordTodoID))
 
-	result, steps, err := c.runOrchestrator(ctx, &orchDefCopy, continuationPrompt)
+	result, steps, err := c.runOrchestratorWithNoProgressGuard(ctx, &orchDefCopy, continuationPrompt)
 	if err != nil {
 		if recovered, recoveredSteps, ok := c.attemptWrapUpRecovery(ctx, &orchDefCopy, err); ok {
 			result = recovered

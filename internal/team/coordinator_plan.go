@@ -145,6 +145,10 @@ func (pr *planReviewer) review(ctx context.Context, planText string) (string, bo
 	prompt := fmt.Sprintf("## SUBMITTING AGENT\n\n%s\n\n## USER REQUIREMENT\n\n%s\n\n## TASK STATUS\n\n%s\n\n## PLAN\n\n%s", agentInfo, goal, taskStatus, planText)
 
 	c.report(c.newEvent("step").withMessage("plan reviewer evaluating plan").withTodoID(pr.todoID))
+	// Plan review has no separate execution receipt. A review invoked from a
+	// worker context may inherit the worker's receipt marker, so force direct
+	// no-progress token accounting for this auxiliary LLM stream.
+	ctx = context.WithValue(ctx, llmUsageReceiptExpectedKey{}, false)
 	result, _, err := c.runAgentWithStatusAndHistory(ctx, pr.agent, "plan-reviewer", prompt, nil, &taskTiming{})
 	if err != nil {
 		return "", false, nil, err

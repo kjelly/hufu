@@ -173,6 +173,24 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		}
 	}
 
+	// A no-progress second-threshold stop is terminal even when all tasks have
+	// already reached a terminal state. Honor it before acceptance handling so
+	// self-healing and rollback cannot mutate the workspace after the partial
+	// result and continuation have been persisted by stopForNoProgress.
+	if t.coordinator.noProgressStopPending() {
+		existing := t.coordinator.LastRunResult()
+		if existing == nil {
+			return fantasy.NewTextErrorResponse("no-progress budget exhausted; partial run result is not available"), nil
+		}
+		preserved := *existing
+		preserved.Response = response
+		preserved.Stats = SummarizeRunStats(todoList.Items())
+		preserved.Metrics = t.coordinator.Metrics()
+		t.coordinator.SetLastRunResult(&preserved)
+		t.coordinator.finishCalled.Store(true)
+		return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
+	}
+
 	accRes, accErr := t.coordinator.runAcceptance(ctx)
 	if accErr != nil {
 		if prof.AcceptanceMode == AcceptanceBlocking || t.coordinator.IsUnattended() {
@@ -682,6 +700,9 @@ func (t *todoTool) handleCreate(callerName string, items []string) (fantasy.Tool
 	}
 
 	added := t.coordinator.taskTracker.TodoList().AddBatch(batch)
+	// Agent-created TODOs are objective work units even though they bypass the
+	// coordinator's ExecuteTasks batch path.
+	t.coordinator.recordNoProgressTasks(len(added))
 	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
 
 	var b strings.Builder

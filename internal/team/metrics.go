@@ -11,7 +11,6 @@ func (c *Coordinator) Metrics() RunMetrics {
 		return RunMetrics{}
 	}
 	c.metricsMu.RLock()
-	defer c.metricsMu.RUnlock()
 	byClass := make(map[TaskFailureClass]int, len(c.retriesByFailureClass))
 	for class, count := range c.retriesByFailureClass {
 		byClass[class] = count
@@ -32,6 +31,15 @@ func (c *Coordinator) Metrics() RunMetrics {
 		DiagnosticTasksSinceProgress:  c.antiThrashing.DiagnosticSinceProgress,
 		RepairAttemptsByCriterion:     repairCounts, AntiThrashingWarnings: c.antiThrashing.Warnings}
 	metrics.TokensSinceCriterionProgress = c.tokensSinceCriterionProgress
+	// No-progress budget counters (§8.1, WP-12). Read under the same lock.
+	metrics.TurnsSinceCriterionProgress = c.turnsSinceCriterionProgress
+	metrics.TasksSinceCriterionProgress = c.tasksSinceCriterionProgress
+	c.metricsMu.RUnlock()
+	// No-progress budget configured limits (§8.1, WP-12). 0 = disabled.
+	rc := c.reliabilityConfig()
+	metrics.MaxTokensWithoutProgress = int64(rc.MaxTokensWithoutProgress)
+	metrics.MaxTurnsWithoutProgress = rc.MaxTurnsWithoutProgress
+	metrics.MaxTasksWithoutProgress = rc.MaxTasksWithoutProgress
 	if c.sessionData != nil {
 		for _, result := range c.sessionData.CriterionResults {
 			if result.State == CriterionPassed {
@@ -79,16 +87,40 @@ func (c *Coordinator) recordReliabilityUsage(taskID string, attempt, tokens int)
 	if c == nil || taskID == "" || attempt < 1 || tokens <= 0 {
 		return
 	}
-	c.metricsMu.Lock()
-	if c.reliabilityUsageByAttempt == nil {
-		c.reliabilityUsageByAttempt = make(map[string]int)
+	owner := c
+	if c.noProgressUsageOwner != nil {
+		owner = c.noProgressUsageOwner
+		if c.noProgressUsageNamespace != "" {
+			taskID = c.noProgressUsageNamespace + ":" + taskID
+		}
+	}
+	owner.metricsMu.Lock()
+	if owner.reliabilityUsageByAttempt == nil {
+		owner.reliabilityUsageByAttempt = make(map[string]int)
 	}
 	key := taskID + ":" + strconv.Itoa(attempt)
-	prior := c.reliabilityUsageByAttempt[key]
+	prior := owner.reliabilityUsageByAttempt[key]
 	if tokens > prior {
-		c.tokensSinceCriterionProgress += int64(tokens - prior)
-		c.reliabilityUsageByAttempt[key] = tokens
+		owner.tokensSinceCriterionProgress += int64(tokens - prior)
+		owner.reliabilityUsageByAttempt[key] = tokens
 	}
+	owner.metricsMu.Unlock()
+}
+
+// recordNoProgressTokens adds token usage that is not associated with a
+// worker execution receipt, such as coordinator model turns. Worker usage is
+// accounted by recordReliabilityUsage so its cumulative planned/done events
+// are not double-counted.
+func (c *Coordinator) recordNoProgressTokens(tokens int64) {
+	if c == nil || tokens <= 0 {
+		return
+	}
+	if c.noProgressUsageOwner != nil {
+		c.noProgressUsageOwner.recordNoProgressTokens(tokens)
+		return
+	}
+	c.metricsMu.Lock()
+	c.tokensSinceCriterionProgress += tokens
 	c.metricsMu.Unlock()
 }
 

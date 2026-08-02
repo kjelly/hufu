@@ -145,6 +145,25 @@ func TestRunFastPath_EscalateOnStepBudget(t *testing.T) {
 	}
 }
 
+func TestRunFastPath_EscalatesImmediatelyOnReplanRequired(t *testing.T) {
+	calls := 0
+	d := fastPathDispatch{
+		runDirect: func(ctx context.Context, name, task string) (*team.DirectAgentResult, error) {
+			calls++
+			return &team.DirectAgentResult{
+				Error:          errors.New("direct agent requires replan: no-progress budget reached"),
+				ReplanRequired: true,
+				Steps:          1,
+			}, nil
+		},
+		canEscalate: realEscalator(),
+	}
+	o := runFastPath(context.Background(), "Helper", "fix typo", RouteDecision{Route: RouteFast}, d)
+	if !o.escalated || calls != 1 {
+		t.Errorf("expected immediate team escalation after replan request, got %+v calls=%d", o, calls)
+	}
+}
+
 func TestRunFastPath_TransportErrorEscalates(t *testing.T) {
 	calls := 0
 	d := fastPathDispatch{

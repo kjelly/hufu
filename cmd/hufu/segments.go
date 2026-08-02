@@ -91,7 +91,95 @@ func dispatchSegmentContent(ctx context.Context, tc *teamContext, content string
 	return result, err
 }
 
+// runDirectReplanThroughCoordinator promotes an explicit @agent invocation to
+// the coordinator when the direct worker reaches the first no-progress
+// threshold. Direct execution has no continuation loop of its own, so the
+// original request must enter the normal coordinator path rather than being
+// rendered as a standalone direct-agent error.
+func runDirectReplanThroughCoordinator(ctx context.Context, tc *teamContext, content string, injector *promptInjector, activeCoord *activeCoordinator, runCoordinator func(context.Context, string) (string, error)) (string, error) {
+	prompt := fmt.Sprintf("The direct-agent attempt reached the no-progress replan threshold. Continue this request through the team coordinator, reuse the completed direct-agent work where appropriate, and finish with the best final answer.\n\nOriginal request:\n%s", content)
+	if activeCoord != nil {
+		activeCoord.Store(tc.coordinator)
+		defer activeCoord.Store(nil)
+	}
+	result, err := runCoordinator(ctx, prompt)
+	if err != nil {
+		return result, err
+	}
+	return runWithInjection(ctx, tc, result, injector)
+}
+
+type segmentDirectAgentRunner func(context.Context, *team.Coordinator, string, string) (*team.DirectAgentResult, error)
+type segmentCoordinatorRunner func(context.Context, *team.Coordinator, string) (string, error)
+
+// handleDirectAgentReplanResult processes a direct-agent result that surfaced
+// ReplanRequired, promoting the execution to the coordinator. It returns the
+// updated results slice, the replanned output, and any error.
+func handleDirectAgentReplanResult(
+	ctx context.Context,
+	tc *teamContext,
+	segName, segContent, currentTeamName string,
+	results []string,
+	injector *promptInjector,
+	activeCoord *activeCoordinator,
+	disp2 *coordDisplay,
+	totalSegments, segIndex int,
+	loadedTeams map[string]*teamContext,
+	runCoordinator func(context.Context, *team.Coordinator, string) (string, error),
+) ([]string, string, error) {
+	stderrLog("\n%s %s reached the no-progress threshold; escalating to coordinator replan.\n", errStyle.Render("⚠"), agentStyle.Render(segName))
+	replanned, replanErr := runDirectReplanThroughCoordinator(ctx, tc, segContent, injector, activeCoord, func(ctx context.Context, prompt string) (string, error) {
+		return runCoordinator(ctx, tc.coordinator, prompt)
+	})
+	if replanErr != nil {
+		return results, "", fmt.Errorf("direct agent @%s replan failed: %w", segName, replanErr)
+	}
+	disp2.finalizeTasks()
+	results = append(results, fmt.Sprintf("## Agent: @%s (team: %s)\n%s", segName, currentTeamName, replanned))
+	if segIndex == totalSegments-1 {
+		if current := loadedTeams[currentTeamName]; current != nil && current.session != nil {
+			_ = team.SaveSessionMD(current.session.Workspace, team.GenerateSessionMD(current.sessionData, current.session.Config.Name))
+		}
+	}
+	return results, replanned, nil
+}
+
+// synthesizeDirectAgentResult synthesizes a direct agent result through the
+// coordinator if an orchestrator is defined, otherwise returns the raw output.
+func synthesizeDirectAgentResult(ctx context.Context, tc *teamContext, agentName, content, output string, injector *promptInjector, activeCoord *activeCoordinator) (string, error) {
+	orchDef := tc.coordinator.GetOrchestratorDef()
+	if orchDef == nil {
+		return output, nil
+	}
+	synthesisPrompt := fmt.Sprintf("A user directly asked @%s to do the following task:\n\n%s\n\nHere is what %s produced:\n\n---\n%s\n---\n\nPlease synthesize this into a final, well-organized answer for the user.",
+		agentName, content, agentName, output)
+	activeCoord.Store(tc.coordinator)
+	if injector.IsWrapUpRequested() {
+		tc.coordinator.SetWrapUp()
+	}
+	synthResult, err := tc.coordinator.Run(ctx, synthesisPrompt)
+	activeCoord.Store(nil)
+	if err != nil {
+		return "", err
+	}
+	synthResult, err = runWithInjection(ctx, tc, synthResult, injector)
+	if err != nil {
+		return "", err
+	}
+	return synthResult, nil
+}
+
 func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, defaultProviderURL string, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string, route RouteDecision) (string, error) {
+	return executeSegmentsWithRunners(ctx, segments, registry, defaultProviderURL, loadedTeams, injector, activeCoord, pathConsent, vars, route,
+		func(ctx context.Context, coordinator *team.Coordinator, agentName, task string) (*team.DirectAgentResult, error) {
+			return coordinator.RunDirectAgent(ctx, agentName, task)
+		},
+		func(ctx context.Context, coordinator *team.Coordinator, prompt string) (string, error) {
+			return coordinator.Run(ctx, prompt)
+		})
+}
+
+func executeSegmentsWithRunners(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, defaultProviderURL string, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string, route RouteDecision, runDirect segmentDirectAgentRunner, runCoordinator segmentCoordinatorRunner) (string, error) {
 	var results []string
 	currentTeamName := ""
 	var prevResult string
@@ -195,12 +283,22 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 			if injector.IsWrapUpRequested() {
 				tc.coordinator.SetWrapUp()
 			}
-			directResult, err := tc.coordinator.RunDirectAgent(ctx, seg.Name, content)
+			directResult, err := runDirect(ctx, tc.coordinator, seg.Name, content)
 			activeCoord.Store(nil)
 			disp2.stopTimer()
 
 			if err != nil {
 				return handleSegmentError(ctx, tc, results, err, "direct agent @%s failed", seg.Name)
+			}
+
+			if directResult.ReplanRequired {
+				var replanned string
+				results, replanned, err = handleDirectAgentReplanResult(ctx, tc, seg.Name, content, currentTeamName, results, injector, activeCoord, disp2, len(segments), i, loadedTeams, runCoordinator)
+				if err != nil {
+					return "", err
+				}
+				prevResult = replanned
+				continue
 			}
 
 			if directResult.Error != nil {
@@ -211,33 +309,13 @@ func executeSegments(ctx context.Context, segments []team.PromptSegment, registr
 
 			stderrLog("\n%s %s completed, synthesizing...\n\n", doneStyle.Render("✓"), agentStyle.Render(seg.Name))
 
-			orchDef := tc.coordinator.GetOrchestratorDef()
-			if orchDef == nil {
-				disp2.finalizeTasks()
-				results = append(results, fmt.Sprintf("## Agent: @%s (team: %s)\n%s", seg.Name, currentTeamName, directResult.Output))
-				prevResult = directResult.Output
-			} else {
-				synthesisPrompt := fmt.Sprintf("A user directly asked @%s to do the following task:\n\n%s\n\nHere is what %s produced:\n\n---\n%s\n---\n\nPlease synthesize this into a final, well-organized answer for the user.",
-					seg.Name, content, seg.Name, directResult.Output)
-				activeCoord.Store(tc.coordinator)
-				if injector.IsWrapUpRequested() {
-					tc.coordinator.SetWrapUp()
-				}
-				synthResult, err := tc.coordinator.Run(ctx, synthesisPrompt)
-				activeCoord.Store(nil)
-				if err != nil {
-					return handleSegmentError(ctx, tc, results, err, "synthesis for @%s failed", seg.Name)
-				}
-
-				synthResult, err = runWithInjection(ctx, tc, synthResult, injector)
-				if err != nil {
-					return handleSegmentError(ctx, tc, results, err, "synthesis continuation for @%s failed", seg.Name)
-				}
-
-				disp2.finalizeTasks()
-				results = append(results, fmt.Sprintf("## Agent: @%s (team: %s)\n%s", seg.Name, currentTeamName, synthResult))
-				prevResult = synthResult
+			synthResult, synthErr := synthesizeDirectAgentResult(ctx, tc, seg.Name, content, directResult.Output, injector, activeCoord)
+			if synthErr != nil {
+				return handleSegmentError(ctx, tc, results, synthErr, "synthesis for @%s failed", seg.Name)
 			}
+			disp2.finalizeTasks()
+			results = append(results, fmt.Sprintf("## Agent: @%s (team: %s)\n%s", seg.Name, currentTeamName, synthResult))
+			prevResult = synthResult
 
 		case team.SegmentText:
 			if currentTeamName == "" {
