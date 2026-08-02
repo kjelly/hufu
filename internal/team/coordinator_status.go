@@ -55,13 +55,13 @@ func (c *Coordinator) SetCurrentStage(stage string) {
 	}
 	newS.Stage = stage
 	c.current.Store(newS)
+	c.currentStageStartMu.Lock()
+	defer c.currentStageStartMu.Unlock()
 	if stage == "idle" {
 		c.currentStageStart = time.Time{}
 		return
 	}
-	c.currentStageStartMu.Lock()
 	c.currentStageStart = time.Now()
-	c.currentStageStartMu.Unlock()
 }
 
 // SetCurrentStep records the current step number in the fantasy agent's step loop.

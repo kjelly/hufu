@@ -198,7 +198,13 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 	}
 }
 
-func TestProtocolRepair_ReplayableRetryPreservesPerAttemptProvenance(t *testing.T) {
+func TestProtocolRepair_ReplayableTaskBlocksAfterRepairFailure(t *testing.T) {
+	// §5/§6.1: protocol failures allow result-only repair only; worker tools
+	// must not be replayed. After repair fails on a replayable task, the task
+	// is blocked for reconciliation instead of retrying the worker.
+	// This replaces the old replayable-retry behaviour (WP-08).
+	//
+	// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §6.1, WP-08
 	workspace := t.TempDir()
 	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	workerCalls := 0
@@ -228,78 +234,51 @@ func TestProtocolRepair_ReplayableRetryPreservesPerAttemptProvenance(t *testing.
 			})
 		},
 	}
-	// Attempt 1 repair fails, so the replayable task must run the worker again.
+	// Attempt 1 repair fails. Per §6.1 the worker must NOT be replayed.
 	c.repairAgentOverride = &mockWorkerTextAgent{text: "repair-output-must-not-be-in-attempt-1"}
 
-	if _, err := c.executeTask(context.Background(), TaskDef{
+	_, err := c.executeTask(context.Background(), TaskDef{
 		Agent: "worker", Goal: "replayable protocol task",
 		Execution: ExecutionContract{RequiresResult: true},
-	}, item.ID); err != nil {
-		t.Fatalf("expected replayable retry to succeed, got: %v", err)
+	}, item.ID)
+	if err == nil {
+		t.Fatal("expected protocol failure to block, got nil error")
 	}
-	if workerCalls != 2 {
-		t.Fatalf("worker invocation count = %d, want 2", workerCalls)
+
+	// Worker must only be invoked once — no replay (§6.1).
+	if workerCalls != 1 {
+		t.Fatalf("worker invocation count = %d, want 1 (protocol failure must not replay worker, §6.1)", workerCalls)
 	}
 
 	got := c.taskTracker.TodoList().Items()[0]
-	if got.Status != TaskDone {
-		t.Fatalf("task status = %s, want done", got.Status)
+	if got.Status != TaskBlocked {
+		t.Fatalf("task status = %s, want blocked (protocol failure must block for reconciliation, §5/§6.1)", got.Status)
 	}
-	if len(got.ExecutionReceipts) != 2 {
-		t.Fatalf("receipt history length = %d, want 2", len(got.ExecutionReceipts))
+	if len(got.ExecutionReceipts) != 1 {
+		t.Fatalf("receipt history length = %d, want 1 (single attempt, no replay)", len(got.ExecutionReceipts))
 	}
-	first, second := got.ExecutionReceipts[0], got.ExecutionReceipts[1]
-	if first.Attempt != 1 || second.Attempt != 2 || first.TranscriptRef == second.TranscriptRef {
-		t.Fatalf("expected distinct attempt receipts, got first=%#v second=%#v", first, second)
+	first := got.ExecutionReceipts[0]
+	if first.Attempt != 1 {
+		t.Fatalf("receipt attempt = %d, want 1", first.Attempt)
 	}
 	if first.RepairProvenance == nil || first.RepairProvenance.Success {
 		t.Fatalf("attempt 1 should retain failed repair provenance: %#v", first.RepairProvenance)
 	}
-	if second.RepairProvenance != nil {
-		t.Fatalf("attempt 2 should not have repair provenance: %#v", second.RepairProvenance)
+
+	// The transcript must preserve the original worker output and must not
+	// contain the repair agent's output (evidence isolation, §7).
+	if first.TranscriptRef == "" {
+		t.Fatal("expected non-empty transcript ref for attempt 1")
 	}
 	firstData, err := os.ReadFile(first.TranscriptRef)
 	if err != nil {
 		t.Fatalf("read attempt 1 transcript: %v", err)
 	}
-	secondData, err := os.ReadFile(second.TranscriptRef)
-	if err != nil {
-		t.Fatalf("read attempt 2 transcript: %v", err)
+	if !strings.Contains(string(firstData), "attempt-one-original") {
+		t.Fatalf("attempt 1 transcript missing original worker output: %s", firstData)
 	}
-	if !strings.Contains(string(firstData), "attempt-one-original") || strings.Contains(string(firstData), "attempt-two-original") || strings.Contains(string(firstData), "repair-output-must-not") {
-		t.Fatalf("attempt 1 transcript was not immutable/original: %s", firstData)
-	}
-	if !strings.Contains(string(secondData), "attempt-two-original") {
-		t.Fatalf("attempt 2 transcript missing second worker execution: %s", secondData)
-	}
-
-	es, err := NewEventStore(workspace, "run-protocol-retry", "protocol-retry")
-	if err != nil {
-		t.Fatalf("create event store: %v", err)
-	}
-	payload, err := json.Marshal(map[string]interface{}{
-		"id":                 got.ID,
-		"desc":               got.Desc,
-		"status":             string(got.Status),
-		"agent":              got.Agent,
-		"execution_receipts": got.ExecutionReceipts,
-	})
-	if err != nil {
-		_ = es.Close()
-		t.Fatalf("marshal receipt event: %v", err)
-	}
-	if err := es.Append(RunEvent{Type: "task_completed", TaskID: got.ID, Payload: payload}); err != nil {
-		_ = es.Close()
-		t.Fatalf("append receipt event: %v", err)
-	}
-	events, err := es.ReadEvents()
-	_ = es.Close()
-	if err != nil {
-		t.Fatalf("read event store: %v", err)
-	}
-	reduced := ReduceToTodoList(events)
-	if len(reduced) != 1 || len(reduced[0].ExecutionReceipts) != 2 {
-		t.Fatalf("event-store reduction lost receipt history: %#v", reduced)
+	if strings.Contains(string(firstData), "repair-output-must-not") {
+		t.Fatalf("attempt 1 transcript must not contain repair agent output: %s", firstData)
 	}
 }
 

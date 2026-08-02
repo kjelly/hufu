@@ -289,8 +289,28 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// lose, so escalation only applies to the normal execution path.
 	escalate := taskEscalationEnabled(task, &c.session.Config, len(c.modelList)) &&
 		(!task.PlanFirst || task.PlanID != "")
+	// lastFingerprint tracks the previous attempt's failure fingerprint
+	// so DecideRecovery can detect repeated failures via normalised digest
+	// comparison (§6.1) rather than raw err.Error() equality.
+	var lastFingerprint string
+	// Retry-context tracking (§6.1: retry prompt must include class,
+	// evidence, prior command/exit, and explicit mutable fields).
+	var lastClass TaskFailureClass // previous attempt's failure class
+	var lastTranscriptRef string   // previous attempt's transcript manifest path
+	var lastVerifyCmd string       // previous attempt's verify command
+	var lastVerifyExit int         // previous attempt's verify exit code (-1 = unknown)
+	var lastExitCode *int          // previous attempt's worker exit code (nil = errored)
+	var lastToolCall string        // previous attempt's last tool call name (if any)
+	var lastToolInput string       // previous attempt's last tool call input (actual command)
+	var lastToolResult string      // previous attempt's last tool result preview
+	var lastToolResultErr bool     // previous attempt's last tool result was an error
+	var lastPartialOutput string   // previous attempt's partial output (evidence)
+retryLoop:
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		attemptsMade = attempt
+		// Per-attempt tool call evidence — reset at the start of each
+		// attempt to prevent stale data from a prior attempt or task.
+		attemptEvidence := &toolCallEvidence{}
 		transcript = nil
 		closeTranscript := func() {
 			if transcript != nil {
@@ -366,11 +386,18 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			}
 			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retry %d/%d — continuing from previous progress", attempt, maxRetries)))
+			// §6.1: Build structured retry context with failure class,
+			// evidence reference, prior command/exit, and explicit mutable
+			// fields. This is appended to the prompt so the worker knows
+			// exactly what failed and what it can change.
 			if lastErr != nil {
-				if hint := c.reflectOnFailure(parentCtx, agentName, task.Goal, lastErr.Error()); hint != "" {
+				retryCtx := buildRetryContext(lastClass, lastErr, lastTranscriptRef, lastVerifyCmd, lastVerifyExit, lastExitCode, lastToolCall, lastToolInput, lastToolResult, lastToolResultErr, lastPartialOutput, task)
+				currentPrompt += retryCtx
+				failureEvidence := redactRetryText(lastErr.Error(), 500)
+				if hint := c.reflectOnFailure(parentCtx, agentName, task.Goal, failureEvidence); hint != "" {
 					currentPrompt += hint
 					appliedHint = strings.TrimPrefix(hint, reflectionHeader)
-					appliedHintTrigger = lastErr.Error()
+					appliedHintTrigger = failureEvidence
 				}
 			}
 			if escalate {
@@ -400,6 +427,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			defer c.unregisterTerminalRound(todoID)
 			taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 			taskCtx = context.WithValue(taskCtx, modelKey{}, resolvedModel)
+			// Per-attempt tool call evidence (§6.1, P1b: per-attempt, not
+			// coordinator-global, to prevent cross-task leakage).
+			taskCtx = context.WithValue(taskCtx, toolCallEvidenceKey{}, attemptEvidence)
 			taskCtx = context.WithValue(taskCtx, llmUsageReceiptExpectedKey{}, true)
 			taskCtx = context.WithValue(taskCtx, tools.AgentNameKey, agentName)
 			taskCtx = context.WithValue(taskCtx, hooks.AgentNameKey, agentName)
@@ -720,40 +750,73 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}
 
 		c.recordExecutionEvent(todoID, agentName, attempt, "error", resolvedModel, time.Since(attemptStarted), usageFromSteps(steps))
-		if terminalBlocked {
-			lastErr = err
-			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: an owned terminal session remains active or unknown").withTodoID(todoID))
-			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, "error"))
-			closeTranscript()
-			break
-		}
-		// A protocol-only failure after a non-replayable task (side effect or
-		// AllowsReplay=false), or one whose recovery policy disallows retry, has
-		// no safe automatic replay semantics. Preserve the transcript/evidence
-		// and block for reconciliation rather than invoking worker tools again.
-		if protocolFailure && (!IsTaskReplayable(task) || !c.protocolRepairAllowsRetry(task)) {
-			lastErr = err
-			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, "protocol"))
-			c.taskTracker.TodoList().UpdateStatus(todoID, TaskBlocked, fmt.Sprintf("protocol result missing; automatic replay is not allowed (allows_replay=%v, side_effect=%s, recovery=%s); reconcile before retry: %v", task.Execution.AllowsReplay != nil && *task.Execution.AllowsReplay, task.SideEffect, task.Recovery, err))
-			c.reconcileTaskStatusProjection()
-			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: protocol-only failure cannot be automatically replayed; reconciliation required").withTodoID(todoID))
-			closeTranscript()
-			break
-		}
-		if !CanAutomaticallyReplay(task) {
-			lastErr = err
-			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, "error"))
-			c.taskTracker.TodoList().UpdateStatus(todoID, TaskBlocked, fmt.Sprintf("automatic replay is not allowed (allows_replay=%v, side_effect=%s); reconcile before retry", task.Execution.AllowsReplay != nil && *task.Execution.AllowsReplay, task.SideEffect))
-			c.reconcileTaskStatusProjection()
-			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: task replay policy requires reconciliation").withTodoID(todoID))
-			closeTranscript()
-			break
-		}
+		// Classify the current attempt's failure using structured inputs
+		// (§5: the verify result supplies the exit code; environment findings
+		// supply command-not-found signals that take precedence over exit
+		// codes per §5.1).
+		verifyResult := verifyResultForTodo(c, todoID)
+		currentClass := ClassifyTaskFailureStructured(FailureClassificationInput{
+			Err:             err,
+			ContextErr:      parentCtx.Err(),
+			ExitCode:        exitCodeFromVerifyResult(verifyResult),
+			ExitCodeSource:  ExitCodeSourceVerify,
+			ResolveFindings: environmentFindingsFromVerifyResult(verifyResult),
+		})
 
-		// Step messages start at the first assistant turn; without re-adding
-		// the prompt, a retry's history opens with an assistant message and
-		// the model sees its past actions but never the original instruction
-		// (some providers also reject histories that do not start with user).
+		// Compute the current attempt's failure fingerprint for §6.1
+		// anti-thrashing repeat detection. The fingerprint uses the
+		// normalised error digest (via NewFailureFingerprint) so that
+		// differently formatted errors with the same underlying failure
+		// are detected as repeats.
+		currentFingerprint := NewFailureFingerprint(
+			todoID, agentName, stableOperationFromTask(task), currentClass, err.Error(),
+		).Digest
+
+		// Single decision point: DecideRecovery replaces the five separate
+		// early-break if-statements that previously lived here (WP-08).
+		// The five paths (terminalBlocked, protocolFailure, replayable,
+		// unfixableVerify, sameFailure) are now inputs to one function that
+		// prescribes retry / break / block.
+		resolvedPolicy := ResolveRecoveryPolicy(task.Recovery, task.SideEffect, c != nil && c.unattended, c.ExecutionProfile())
+		disposition, reason := DecideRecovery(RecoveryDecisionInput{
+			FailureClass:        currentClass,
+			SideEffect:          task.SideEffect,
+			RecoveryPolicy:      resolvedPolicy,
+			Attempt:             attempt,
+			MaxRetries:          maxRetries,
+			EvidenceComplete:    computeEvidenceComplete(task, transcriptRef, steps, output),
+			FailureFingerprint:  currentFingerprint,
+			PreviousFingerprint: lastFingerprint,
+			TerminalBlocked:     terminalBlocked,
+			ProtocolFailure:     protocolFailure,
+			UnfixableVerify:     isUnfixableVerifyFailure(err),
+			SameFailureRepeated: lastErr != nil && sameFailure(lastErr.Error(), err.Error()),
+			ContextCancelled:    parentCtx.Err() != nil,
+			Replayable:          CanAutomaticallyReplay(task),
+			ProtocolRepairRetry: c.protocolRepairAllowsRetry(task),
+		})
+
+		// Capture the current attempt's evidence for the next iteration's
+		// retry context (§6.1: retry prompt must include class, evidence,
+		// prior command/exit). These are saved before the switch so they
+		// survive the break/continue decision.
+		lastClass = currentClass // nolint:staticcheck,ineffassign
+		priorTranscriptRef := transcriptRef
+		priorVerifyCmd := ""
+		priorVerifyExit := -1
+		if vr := verifyResultForTodo(c, todoID); vr != nil {
+			priorVerifyCmd = vr.Command
+			priorVerifyExit = vr.ExitCode
+		}
+		priorExitCode := receipt.ExitCode
+		priorToolCall := attemptEvidence.toolName
+		priorToolInput := attemptEvidence.toolInput
+		priorToolResult := attemptEvidence.resultText
+		priorToolResultErr := attemptEvidence.resultErr
+		priorPartialOutput := retryPartialOutput(output, lastOutput)
+
+		// Build conversation history for a potential retry. This is harmless
+		// when the disposition stops the loop; the history is simply unused.
 		if len(conversationHistory) == 0 && len(steps) > 0 {
 			conversationHistory = append(conversationHistory, fantasy.NewUserMessage(currentPrompt))
 		}
@@ -761,47 +824,96 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			conversationHistory = append(conversationHistory, step.Messages...)
 		}
 
-		// Unfixable-verify detection: a wrong-polarity verify command (see
-		// verifyTaskDeliverable) is set once by the coordinator at task
-		// assignment and the worker has no way to edit its own task's verify
-		// field — so it fails identically no matter what the worker does.
-		// Retrying just burns an attempt re-running real (sometimes
-		// destructive) work to reproduce a verification failure that was
-		// never about the deliverable. Stop after the first occurrence
-		// instead of waiting for sameFailure to catch the repeat.
-		if attempt < maxRetries && isUnfixableVerifyFailure(err) {
+		switch disposition {
+		case NeedsHuman:
+			// Path 1: an owned terminal session is still active. Persist
+			// the failure and stop — retrying is unsafe.
 			lastErr = err
-			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d hit a verify command that cannot be fixed by retrying (wrong exit-code polarity)", attempt)).withTodoID(todoID))
-			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("verify command has unfixable wrong polarity after %d attempt(s): %w", attempt, err), "error"))
+			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: " + reason).withTodoID(todoID))
+			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, "error"))
 			closeTranscript()
-			break
-		}
+			break retryLoop
 
-		// Repeated-failure detection: if this attempt failed with the same error
-		// as the previous one, retrying is unproductive — the agent is stuck
-		// repeating the same action. Stop early instead of burning the remaining
-		// retry budget on identical failures.
-		if lastErr != nil && attempt < maxRetries && sameFailure(lastErr.Error(), err.Error()) {
+		case ReconcileOnly:
+			// Paths 2/3 (protocol-only non-replayable, or non-replayable
+			// task) or class-based protocol/timeout disposition: block the
+			// task for reconciliation. Worker tools must not be replayed
+			// (§6.1: protocol 只允許 result-only repair；不得重放工具).
 			lastErr = err
-			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d repeated the same failure", attempt)).withTodoID(todoID))
-			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("repeated failure after %d attempts: %w", attempt, err), "error"))
+			source := "error"
+			blockedMsg := fmt.Sprintf("automatic replay is not allowed (allows_replay=%v, side_effect=%s); reconcile before retry", task.Execution.AllowsReplay != nil && *task.Execution.AllowsReplay, task.SideEffect)
+			if protocolFailure && (!IsTaskReplayable(task) || !c.protocolRepairAllowsRetry(task)) {
+				source = "protocol"
+				blockedMsg = fmt.Sprintf("protocol result missing; automatic replay is not allowed (allows_replay=%v, side_effect=%s, recovery=%s); reconcile before retry: %v", task.Execution.AllowsReplay != nil && *task.Execution.AllowsReplay, task.SideEffect, task.Recovery, err)
+			} else if currentClass == FailureProtocol {
+				source = "protocol"
+				blockedMsg = fmt.Sprintf("protocol failure; worker tools must not be replayed (side_effect=%s, recovery=%s); reconcile before retry: %v", task.SideEffect, task.Recovery, err)
+			}
+			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, source))
+			c.taskTracker.TodoList().UpdateStatus(todoID, TaskBlocked, blockedMsg)
+			c.reconcileTaskStatusProjection()
+			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: " + reason).withTodoID(todoID))
 			closeTranscript()
-			break
-		}
+			break retryLoop
 
-		lastErr = err
-		if isTaskTimeout(err) {
-			duration, modelTime, toolTime := timing.snapshot()
-			c.report(c.newEvent("task_timeout").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d timed out after %s", attempt, duration.Round(time.Second))).withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
-		}
-		c.report(c.newEvent("error").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d failed: %v", attempt, err)).withModel(resolvedModel).withTodoID(todoID))
-		c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
-
-		if parentCtx.Err() != nil {
+		case ReplanRequired:
+			// Paths 4/5 (unfixable verify, same failure repeated) or
+			// class-based contract/environment/policy: stop retrying. The
+			// coordinator must produce a new recovery hypothesis before
+			// any further dispatch (§5, §6.1).
+			// Save the pre-decision previous error before overwriting
+			// lastErr so the repeated-failure check compares the prior
+			// attempt's error with the current one, not the current with
+			// itself (reviewer P2).
+			prevErr := lastErr
+			lastErr = err
+			if isUnfixableVerifyFailure(err) && attempt < maxRetries {
+				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d hit a verify command that cannot be fixed by retrying (wrong exit-code polarity)", attempt)).withTodoID(todoID))
+				c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("verify command has unfixable wrong polarity after %d attempt(s): %w", attempt, err), "error"))
+			} else if prevErr != nil && sameFailure(prevErr.Error(), err.Error()) && attempt < maxRetries {
+				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d repeated the same failure", attempt)).withTodoID(todoID))
+				c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("repeated failure after %d attempts: %w", attempt, err), "error"))
+			} else {
+				c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: " + reason).withTodoID(todoID))
+				c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
+			}
 			closeTranscript()
-			break
+			break retryLoop
+
+		case RetryNone:
+			// Cancelled (§5.3) or retry budget exhausted. Persist the
+			// failure and stop.
+			lastErr = err
+			if isTaskTimeout(err) {
+				duration, modelTime, toolTime := timing.snapshot()
+				c.report(c.newEvent("task_timeout").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d timed out after %s", attempt, duration.Round(time.Second))).withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
+			}
+			c.report(c.newEvent("error").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d failed: %v", attempt, err)).withModel(resolvedModel).withTodoID(todoID))
+			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
+			closeTranscript()
+			break retryLoop
+
+		default: // RetryWorker
+			// Normal retry: persist the failure and continue to the next
+			// attempt. A final context check guards against a race where
+			// the context is cancelled between DecideRecovery and here.
+			lastErr = err
+			lastFingerprint = currentFingerprint
+			lastClass = currentClass // nolint:staticcheck,ineffassign
+			// lastTranscriptRef is consumed via buildRetryContext → currentPrompt → ag.Generate
+			lastTranscriptRef, lastVerifyCmd, lastVerifyExit, lastExitCode, lastToolCall, lastToolInput, lastToolResult, lastToolResultErr, lastPartialOutput = priorTranscriptRef, priorVerifyCmd, priorVerifyExit, priorExitCode, priorToolCall, priorToolInput, priorToolResult, priorToolResultErr, priorPartialOutput //nolint:staticcheck
+			if isTaskTimeout(err) {
+				duration, modelTime, toolTime := timing.snapshot()
+				c.report(c.newEvent("task_timeout").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d timed out after %s", attempt, duration.Round(time.Second))).withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
+			}
+			c.report(c.newEvent("error").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d failed: %v", attempt, err)).withModel(resolvedModel).withTodoID(todoID))
+			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
+			if parentCtx.Err() != nil {
+				closeTranscript()
+				break retryLoop
+			}
+			closeTranscript()
 		}
-		closeTranscript()
 	}
 
 	_, modelTime, toolTime := timing.snapshot()
@@ -954,6 +1066,22 @@ type lastToolCallEntry struct {
 	input    string
 }
 
+// toolCallEvidence captures the most recent tool call's name, input, and
+// result within a single executeTask attempt. It is per-attempt (not
+// coordinator-global) to prevent cross-task leakage in the DAG scheduler's
+// concurrent per-task goroutines. Tool input and result are redacted via
+// utils.RedactSecrets before storage to prevent credential exposure in
+// retry prompts (§6.1, §9).
+type toolCallEvidence struct {
+	toolName   string
+	toolInput  string // redacted, bounded to 500 runes
+	resultText string // redacted, bounded to 500 runes
+	resultErr  bool
+}
+
+// toolCallEvidenceKey is a context key for per-attempt tool call evidence.
+type toolCallEvidenceKey struct{}
+
 // withEffectiveToolsAllowed attaches the tools permitted for a worker run.
 // Team-level tools and the agent's declared tools are both explicit grants.
 // Leaving an empty policy unset preserves deny-by-default behavior.
@@ -1055,6 +1183,13 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			c.SetCurrentStage("tool")
 			c.SetCurrentTool(tc.ToolName)
 			c.taskTracker.TodoList().SetLastOperation(todoID, tc.ToolName)
+			// Record the actual tool call input (redacted, bounded) for
+			// retry context (§6.1). Stored in per-attempt evidence via
+			// context to avoid cross-task leakage in concurrent dispatch.
+			if ev, _ := ctx.Value(toolCallEvidenceKey{}).(*toolCallEvidence); ev != nil {
+				ev.toolName = tc.ToolName
+				ev.toolInput = utils.TruncateRunes(utils.RedactSecrets(tc.Input), 500)
+			}
 
 			// 🔁 Deadloop / thrashing detection!
 			loopDetectMu.Lock()
@@ -1106,6 +1241,12 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				}
 			}
 			audit.LogToolResult(agentName, tr.ToolName, resultPreview, isErrResult, tr.ToolCallID)
+			// Record the tool result for retry context (§6.1), redacted
+			// and stored in per-attempt evidence via context.
+			if ev, _ := ctx.Value(toolCallEvidenceKey{}).(*toolCallEvidence); ev != nil {
+				ev.resultText = utils.TruncateRunes(utils.RedactSecrets(resultPreview), 500)
+				ev.resultErr = isErrResult
+			}
 
 			// 🔁 Track error count for the exact call (tool + input) the
 			// detector is watching; results of other in-flight calls of the
@@ -1218,7 +1359,18 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		}
 	}
 	if err != nil {
-		return "", nil, err
+		// Preserve any partial output and steps even when the agent errored,
+		// so the retry prompt can include evidence of what was attempted
+		// (§6.1: retry prompt must include class, evidence, last command/exit).
+		// Without this, a worker that did useful work before failing leaves
+		// no evidence, and computeEvidenceComplete returns false, blocking retry.
+		output := ""
+		var steps []fantasy.StepResult
+		if result != nil {
+			output = result.Response.Content.Text()
+			steps = result.Steps
+		}
+		return output, steps, err
 	}
 	return result.Response.Content.Text(), result.Steps, nil
 }
@@ -1373,13 +1525,14 @@ func (c *Coordinator) verifyTaskTimeout() time.Duration {
 }
 
 func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, lastErr string) string {
+	lastErr = redactRetryText(lastErr, 500)
 	s := c.AgentPool().Sidecar()
 	if s != nil {
 		// Use a shorter timeout for reflection to avoid holding up retries
 		reflectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		prompt := fmt.Sprintf("Agent %q failed to achieve goal: %q\nError: %s\n\nAnalyze the error and provide a concise hint (max 100 words) for the next attempt. Focus on what to change or avoid.", agentName, goal, lastErr)
+		prompt := buildFailureReflectionPrompt(agentName, goal, lastErr)
 		if reflection, err := s.Execute(reflectCtx, prompt); err == nil && strings.TrimSpace(reflection) != "" {
 			return reflectionHeader + reflection
 		}
@@ -1390,6 +1543,28 @@ func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, las
 		return reflectionHeader + hint
 	}
 	return ""
+}
+
+// redactRetryText is the final safety boundary before untrusted execution
+// evidence is sent to a worker or reflection sidecar. Redact before bounding
+// so a credential cannot be split by truncation and evade the matcher.
+func redactRetryText(value string, maxRunes int) string {
+	return utils.TruncateRunes(utils.RedactSecrets(value), maxRunes)
+}
+
+func retryPartialOutput(output, previousOutput string) string {
+	if strings.TrimSpace(output) != "" {
+		return redactRetryText(output, 300)
+	}
+	if strings.TrimSpace(previousOutput) != "" {
+		return redactRetryText(previousOutput, 300)
+	}
+	return ""
+}
+
+func buildFailureReflectionPrompt(agentName, goal, lastErr string) string {
+	return fmt.Sprintf("Agent %q failed to achieve goal: %q\nError: %s\n\nAnalyze the error and provide a concise hint (max 100 words) for the next attempt. Focus on what to change or avoid.",
+		agentName, goal, redactRetryText(lastErr, 500))
 }
 
 var errWrongVerificationPolarity = errors.New("verification wrong polarity")
@@ -1541,4 +1716,138 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 		WorkDir:    c.projectDir,
 		MaxSteps:   agent.DefaultMaxSteps,
 	}, agentTools)
+}
+
+// computeEvidenceComplete determines whether the current attempt captured
+// sufficient execution evidence for a meaningful retry (§6.1: retry prompt
+// must include class, evidence, last command/exit). Evidence is considered
+// complete when:
+//   - if a transcript was required (verbatim/requires_result), the transcript
+//     manifest was successfully created (transcriptRef != "");
+//   - for all tasks (including non-transcript), the agent produced at least
+//     some tool-call steps or output — a bare error with no steps and no
+//     output leaves no evidence of what was attempted.
+//
+// When evidence is incomplete, DecideRecovery downgrades RetryWorker to
+// ReplanRequired because the retry prompt cannot include the required
+// evidence context.
+func computeEvidenceComplete(task TaskDef, transcriptRef string, steps []fantasy.StepResult, output string) bool {
+	// If a transcript was required but not captured, evidence is incomplete.
+	if (taskUsesVerbatimTranscript(task) || task.Execution.RequiresResult) && transcriptRef == "" {
+		return false
+	}
+	// When a transcript was captured, it contains the full conversation
+	// history (tool calls, results, agent output) as evidence.
+	if transcriptRef != "" {
+		return true
+	}
+	// For non-transcript tasks, evidence is complete only when the agent
+	// produced substantive evidence: non-empty output or steps with
+	// actual message content (tool calls, tool results, or assistant
+	// responses). An empty StepResult{} with no Messages does not
+	// constitute evidence of what was attempted.
+	if strings.TrimSpace(output) != "" {
+		return true
+	}
+	for _, step := range steps {
+		if len(step.Messages) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// buildRetryContext constructs the structured retry context required by §6.1.
+// The context includes:
+//  1. Failure class (contract, environment, execution, verification, etc.)
+//  2. Evidence reference (transcript path) and summary (last output)
+//  3. Previous command and exit/verification result — always rendered,
+//     using "unavailable" when no command or exit code was recorded
+//  4. Explicit mutable next-step fields (what the worker can change)
+//
+// This is appended to the retry prompt so the worker knows exactly what
+// failed, what evidence exists, and what it can modify.
+func buildRetryContext(class TaskFailureClass, lastErr error, transcriptRef, verifyCmd string, verifyExit int, workerExitCode *int, lastToolCall, lastToolInput, lastToolResult string, lastToolResultErr bool, lastOutput string, task TaskDef) string {
+	b := &strings.Builder{}
+	b.WriteString("\n\n## Retry Context (§6.1)\n\n")
+	if lastErr == nil {
+		lastErr = errors.New("unknown failure")
+	}
+	transcriptRef = redactRetryText(transcriptRef, 500)
+	verifyCmd = redactRetryText(verifyCmd, 500)
+	lastToolCall = redactRetryText(lastToolCall, 120)
+	lastToolInput = redactRetryText(lastToolInput, 200)
+	lastToolResult = redactRetryText(lastToolResult, 300)
+	lastOutput = redactRetryText(lastOutput, 300)
+	lastFailure := redactRetryText(lastErr.Error(), 500)
+
+	// 1. Failure class
+	fmt.Fprintf(b, "**Failure class:** %s\n", class)
+
+	// 2. Evidence reference — include the actual partial output that
+	// authorized the retry, the transcript path, and the error.
+	b.WriteString("**Evidence:** ")
+	if transcriptRef != "" {
+		fmt.Fprintf(b, "transcript at %s; ", transcriptRef)
+	}
+	if strings.TrimSpace(lastOutput) != "" {
+		fmt.Fprintf(b, "partial output: %s; ", lastOutput)
+	}
+	fmt.Fprintf(b, "error: %s\n", lastFailure)
+
+	// 3. Previous command and exit/verification result — always rendered
+	// with the actual command/input when available (§6.1).
+	b.WriteString("**Previous command/exit:** ")
+	if verifyCmd != "" {
+		fmt.Fprintf(b, "verify `%s` (exit: %d)", verifyCmd, verifyExit)
+	} else if lastToolCall != "" && lastToolInput != "" {
+		exitStr := "unavailable"
+		if lastToolResultErr {
+			exitStr = "error"
+		} else if lastToolResult != "" {
+			exitStr = "ok"
+		}
+		if workerExitCode != nil {
+			exitStr = fmt.Sprintf("%d", *workerExitCode)
+		}
+		fmt.Fprintf(b, "%s (input: `%s`, exit: %s", lastToolCall, lastToolInput, exitStr)
+		if lastToolResult != "" {
+			fmt.Fprintf(b, ", result: %s", lastToolResult)
+		}
+		b.WriteString(")")
+	} else if lastToolCall != "" {
+		exitStr := "unavailable"
+		if workerExitCode != nil {
+			exitStr = fmt.Sprintf("%d", *workerExitCode)
+		}
+		fmt.Fprintf(b, "last tool call: %s (exit: %s)", lastToolCall, exitStr)
+	} else if workerExitCode != nil {
+		fmt.Fprintf(b, "agent execution (exit: %d)", *workerExitCode)
+	} else {
+		b.WriteString("agent execution (exit: unavailable, no tool calls recorded)")
+	}
+	b.WriteString("\n")
+
+	// 4. Explicit mutable next-step fields
+	b.WriteString("**What you can change:** ")
+	switch class {
+	case FailureContract:
+		b.WriteString("The task contract (verify command, assertion, or deadline) is invalid. Fix the contract definition rather than retrying the same work.\n")
+	case FailureEnvironment:
+		b.WriteString("The execution environment (PATH, shell, workdir, or executable) is misconfigured. Resolve the environment issue before retrying.\n")
+	case FailureVerify:
+		b.WriteString("The deliverable exists but does not meet the verification assertion. Fix the artifact content, structure, or format to satisfy the verify command.\n")
+	case FailureTimeout:
+		b.WriteString("The task timed out. Optimize for speed, reduce scope, or break the work into smaller steps.\n")
+	case FailureProtocol:
+		b.WriteString("The execution completed but the result protocol was not followed. Submit the structured result via submit_result.\n")
+	case FailureExecution:
+		b.WriteString("The execution failed. Change your approach, fix the error, and produce a working deliverable.\n")
+	case FailurePolicy:
+		b.WriteString("A policy guard blocked the operation. Adjust the approach to comply with the guard rules.\n")
+	default:
+		b.WriteString("Change your approach based on the error above.\n")
+	}
+
+	return b.String()
 }

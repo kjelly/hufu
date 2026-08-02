@@ -384,3 +384,25 @@ func (c *Coordinator) reliabilityConfig() agent.ReliabilityConfig {
 func (c *Coordinator) GetLastFailureContext() (agentName, taskDesc, todoID, detail string) {
 	return c.getLastFailureContext()
 }
+
+// stableOperationFromTask derives the same operation identity as
+// stableOperation but from a TaskDef instead of a TodoItem. This is used
+// in the retry loop where the TaskDef is available but the TodoItem may not
+// reflect the current attempt's verify configuration.
+func stableOperationFromTask(task TaskDef) string {
+	if task.VerifySpec != nil {
+		if task.VerifySpec.Type != "" {
+			return "verify:" + string(task.VerifySpec.Type)
+		}
+		if strings.TrimSpace(task.VerifySpec.Command) != "" {
+			return "verify:" + task.VerifySpec.Command
+		}
+	}
+	if strings.TrimSpace(task.Verify) != "" {
+		return "verify:" + task.Verify
+	}
+	if strings.TrimSpace(task.ReconcileTool) != "" {
+		return "reconcile:" + task.ReconcileTool
+	}
+	return "task:" + string(task.Kind)
+}

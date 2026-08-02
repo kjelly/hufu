@@ -17,9 +17,20 @@
 ```bash
 go build ./cmd/hufu          # Build binary
 go run ./cmd/hufu [prompt]  # Run directly
-go vet ./...                            # Lint
+go vet ./...                            # Static analysis
 go test ./...                           # Run tests
+golangci-lint run                        # Required lint gate for code changes
 ```
+
+## Required Validation
+
+Any task that modifies Go source code, tests, or other code must run:
+
+```bash
+golangci-lint run
+```
+
+The command must complete successfully with no errors before the task is considered complete. If it reports errors, fix them and rerun the command; do not stop with known lint failures. Documentation-only changes do not require this code lint gate.
 
 ## Package Structure
 

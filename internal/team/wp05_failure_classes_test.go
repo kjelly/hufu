@@ -410,7 +410,15 @@ func (a *cancellableWorkerAgent) Generate(ctx context.Context, call fantasy.Agen
 func (a *cancellableWorkerAgent) Stream(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
 	a.calls++
 	if a.calls == 1 {
-		return nil, context.Canceled
+		// Return partial output alongside context.Canceled so evidence is
+		// captured (computeEvidenceComplete requires steps or output).
+		return &fantasy.AgentResult{
+			Response: fantasy.Response{
+				Content: fantasy.ResponseContent{
+					fantasy.TextContent{Text: "partial work before cancellation"},
+				},
+			},
+		}, context.Canceled
 	}
 	return &fantasy.AgentResult{
 		Response: fantasy.Response{
@@ -803,10 +811,16 @@ func (a *staleVerifyWorkerAgent) Stream(ctx context.Context, call fantasy.AgentS
 			}},
 		}, nil
 	case 2:
-		// Return a plain error (not a verify error) so attempt 2 fails before
+		// Return partial output alongside a plain error so evidence is
+		// captured (computeEvidenceComplete requires steps or output).
+		// The error is not a verify error so attempt 2 fails before
 		// any verification runs. The retry classification for this failure
 		// must not use attempt 1's stale verify exit code.
-		return nil, errors.New("agent failed: connection reset")
+		return &fantasy.AgentResult{
+			Response: fantasy.Response{Content: fantasy.ResponseContent{
+				fantasy.TextContent{Text: "attempt 2 partial output before error"},
+			}},
+		}, errors.New("agent failed: connection reset")
 	default:
 		return &fantasy.AgentResult{
 			Response: fantasy.Response{Content: fantasy.ResponseContent{
