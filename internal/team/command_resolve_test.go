@@ -119,6 +119,48 @@ func TestResolveStageExecutables(t *testing.T) {
 			wantCode:    FindingExecutableUnresolved,
 		},
 		{
+			name:        "shell negation continues to the executable",
+			command:     "! grep -q running",
+			workDir:     tempDir,
+			wantFinding: false,
+		},
+		{
+			name:        "shell negation still catches unresolved executable",
+			command:     "! definitely_missing_cmd_99999",
+			workDir:     tempDir,
+			wantFinding: true,
+			wantCount:   1,
+			wantCode:    FindingExecutableUnresolved,
+		},
+		{
+			name:        "shell control keywords are not executable names",
+			command:     "if test -f foo; then echo ok; fi",
+			workDir:     tempDir,
+			wantFinding: false,
+		},
+		{
+			name:        "case body unresolved executable is inspected",
+			command:     "case x in x) definitely_missing_cmd_99999 ;; esac",
+			workDir:     tempDir,
+			wantFinding: true,
+			wantCount:   1,
+			wantCode:    FindingExecutableUnresolved,
+		},
+		{
+			name:        "case command substitution selector is not an executable",
+			command:     `case "$(printf x)" in x) true ;; *) false ;; esac`,
+			workDir:     tempDir,
+			wantFinding: false,
+		},
+		{
+			name:        "case command substitution selector still inspects body",
+			command:     `case "$(printf x)" in x) definitely_missing_cmd_99999 ;; *) false ;; esac`,
+			workDir:     tempDir,
+			wantFinding: true,
+			wantCount:   1,
+			wantCode:    FindingExecutableUnresolved,
+		},
+		{
 			name:        "absolute path existing",
 			command:     "/bin/ls -la",
 			workDir:     tempDir,
@@ -182,12 +224,12 @@ type mockFileInfo struct {
 	isDir   bool
 }
 
-func (m mockFileInfo) Name() string           { return m.name }
-func (m mockFileInfo) Size() int64            { return m.size }
-func (m mockFileInfo) Mode() os.FileMode      { return m.mode }
-func (m mockFileInfo) ModTime() time.Time     { return m.modTime }
-func (m mockFileInfo) IsDir() bool            { return m.isDir }
-func (m mockFileInfo) Sys() any               { return nil }
+func (m mockFileInfo) Name() string       { return m.name }
+func (m mockFileInfo) Size() int64        { return m.size }
+func (m mockFileInfo) Mode() os.FileMode  { return m.mode }
+func (m mockFileInfo) ModTime() time.Time { return m.modTime }
+func (m mockFileInfo) IsDir() bool        { return m.isDir }
+func (m mockFileInfo) Sys() any           { return nil }
 
 func TestIsExecutableFile(t *testing.T) {
 	tests := []struct {

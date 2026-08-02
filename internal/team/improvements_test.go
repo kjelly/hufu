@@ -150,7 +150,7 @@ func TestIsUnfixableVerifyFailure(t *testing.T) {
 		want bool
 	}{
 		{"nil error", nil, false},
-		{"wrong polarity", fmt.Errorf(`deliverable verification failed (command "grep -c foo"): exit status 1: 0 — wrong polarity: the verify command checked that a resource EXISTS`), true},
+		{"wrong polarity text alone is not structured", fmt.Errorf(`deliverable verification failed (command "grep -c foo"): exit status 1: 0 — wrong polarity: the verify command checked that a resource EXISTS`), false},
 		{"unrelated verify failure", fmt.Errorf(`deliverable verification failed (command "test -f report.md"): exit status 1`), false},
 		{"timeout", fmt.Errorf("verification timed out after 5s"), false},
 	}
@@ -160,6 +160,22 @@ func TestIsUnfixableVerifyFailure(t *testing.T) {
 				t.Errorf("isUnfixableVerifyFailure(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsUnfixableVerifyFailureRequiresStructuredPolarityError(t *testing.T) {
+	_, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), VerificationSpec{
+		Type:    VerifyCommandExit,
+		Command: "printf x | grep -c missing",
+	})
+	if err == nil {
+		t.Fatal("expected the resolved grep-count verifier to fail")
+	}
+	if !isUnfixableVerifyFailure(err) {
+		t.Fatalf("expected only the structured polarity error to be unfixable, got %v", err)
+	}
+	if isUnfixableVerifyFailure(errors.New("hint: wrong polarity may be involved")) {
+		t.Fatal("plain hint text must not trigger unfixable verification handling")
 	}
 }
 

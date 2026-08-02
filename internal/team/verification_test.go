@@ -140,6 +140,125 @@ func TestVerification_CommandExit_WeakVerifierWarning(t *testing.T) {
 	}
 }
 
+func TestVerification_CommandExit_UnresolvedPipelineStageIsEnvironmentNotPolarity(t *testing.T) {
+	// The literal angle-bracket token mirrors the incident shape recorded in
+	// the reliability spec. Its diagnostic would be swallowed by grep if the
+	// shell were allowed to run the pipeline.
+	const command = "<missing> show 2>&1 | grep -c running"
+	res, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), VerificationSpec{
+		Type:    VerifyCommandExit,
+		Command: command,
+	})
+	if err == nil {
+		t.Fatal("expected unresolved pipeline executable to fail before shell execution")
+	}
+	if res == nil || res.ExitCode != 127 {
+		t.Fatalf("expected an unresolved executable result with exit 127, got %#v", res)
+	}
+	combined := strings.ToLower(res.Stderr + "\n" + err.Error())
+	if !strings.Contains(combined, "executable unresolved") {
+		t.Fatalf("expected environment evidence, got result=%#v err=%v", res, err)
+	}
+	if !strings.Contains(combined, "explicit relative path") {
+		t.Fatalf("expected actionable explicit-path hint, got result=%#v err=%v", res, err)
+	}
+	if strings.Contains(combined, "polarity") || strings.Contains(combined, "wrong polarity") {
+		t.Fatalf("unresolved pipeline must not emit polarity diagnostics: result=%#v err=%v", res, err)
+	}
+	if got := ClassifyTaskFailureStructured(FailureClassificationInput{
+		Err:             err,
+		ExitCode:        res.ExitCode,
+		ExitCodeSource:  ExitCodeSourceVerify,
+		ResolveFindings: environmentFindingsFromVerifyResult(res),
+	}); got != FailureEnvironment {
+		t.Fatalf("unresolved pipeline classified as %q, want environment", got)
+	}
+	if isUnfixableVerifyFailure(err) {
+		t.Fatal("unresolved pipeline must not take the unfixable-polarity retry path")
+	}
+}
+
+func TestVerification_UnresolvedPipelineStageNeverAcceptedByNonSuccessModes(t *testing.T) {
+	for _, mode := range []string{"expected_failure", "observation"} {
+		t.Run(mode, func(t *testing.T) {
+			res, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), VerificationSpec{
+				Type:    VerifyCommandExit,
+				Mode:    mode,
+				Command: "definitely_missing_cmd_99999 show 2>&1 | grep -c running",
+			})
+			if err == nil {
+				t.Fatalf("unresolved verifier in %s mode must remain an error", mode)
+			}
+			if res == nil || res.ExitCode != 127 {
+				t.Fatalf("unresolved verifier in %s mode = %#v, want exit 127", mode, res)
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), "executable unresolved") {
+				t.Fatalf("unresolved verifier in %s mode lost environment evidence: %v", mode, err)
+			}
+			if got := ClassifyTaskFailureStructured(FailureClassificationInput{
+				Err:             err,
+				ExitCode:        res.ExitCode,
+				ExitCodeSource:  ExitCodeSourceVerify,
+				ResolveFindings: environmentFindingsFromVerifyResult(res),
+			}); got != FailureEnvironment {
+				t.Fatalf("unresolved verifier in %s mode classified as %q, want environment", mode, got)
+			}
+		})
+	}
+}
+
+func TestVerification_CaseBodyUnresolvedPipelineStageIsEnvironmentNotPolarity(t *testing.T) {
+	const command = "case x in x) definitely_missing_cmd_99999 | grep -c running ;; esac"
+	res, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), VerificationSpec{
+		Type:    VerifyCommandExit,
+		Command: command,
+	})
+	if err == nil || res == nil || res.ExitCode != 127 {
+		t.Fatalf("case body unresolved verifier = result %#v, err %v; want exit 127 error", res, err)
+	}
+	combined := strings.ToLower(res.Stderr + "\n" + err.Error())
+	if !strings.Contains(combined, "executable unresolved") {
+		t.Fatalf("case body lost environment evidence: result=%#v err=%v", res, err)
+	}
+	if strings.Contains(combined, "polarity") || isUnfixableVerifyFailure(err) {
+		t.Fatalf("case body unresolved command must not take polarity path: result=%#v err=%v", res, err)
+	}
+}
+
+func TestVerification_CaseCommandSubstitutionSelectorIsValid(t *testing.T) {
+	res, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), VerificationSpec{
+		Type:    VerifyCommandExit,
+		Command: `case "$(printf x)" in x) true ;; *) false ;; esac`,
+	})
+	if err != nil || res == nil || res.ExitCode != 0 {
+		t.Fatalf("valid case command-substitution verifier = result %#v, err %v; want exit 0", res, err)
+	}
+}
+
+func TestVerification_CaseCommandSubstitutionSelectorStillRejectsUnresolvedBody(t *testing.T) {
+	res, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), VerificationSpec{
+		Type:    VerifyCommandExit,
+		Command: `case "$(printf x)" in x) definitely_missing_cmd_99999 ;; *) false ;; esac`,
+	})
+	if err == nil || res == nil || res.ExitCode != 127 {
+		t.Fatalf("case selector unresolved body = result %#v, err %v; want exit 127 error", res, err)
+	}
+	combined := strings.ToLower(res.Stderr + "\n" + err.Error())
+	if !strings.Contains(combined, "executable unresolved") {
+		t.Fatalf("case selector lost unresolved-body evidence: result=%#v err=%v", res, err)
+	}
+}
+
+func TestVerification_CaseCommandSubstitutionSelectorMismatchIsNonZero(t *testing.T) {
+	res, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), VerificationSpec{
+		Type:    VerifyCommandExit,
+		Command: `case "$(printf y)" in x) true ;; *) false ;; esac`,
+	})
+	if err == nil || res == nil || res.ExitCode == 0 {
+		t.Fatalf("unmatched case selector = result %#v, err %v; want non-zero exit", res, err)
+	}
+}
+
 func TestVerification_CommandExitRejectsExplicitFailureOutput(t *testing.T) {
 	dir := t.TempDir()
 	res, err := ExecuteVerificationSpec(context.Background(), "sh", dir, VerificationSpec{

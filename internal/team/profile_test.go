@@ -279,7 +279,11 @@ func TestProfile_RequireClosedTerminals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTerminalSessionManager failed: %v", err)
 	}
-	session1, _ := mgr.Start(context.Background(), TerminalStartRequest{OwnerTaskID: "task-1", Command: []string{"echo", "hi"}})
+	// Keep the child alive while finishTool evaluates the profile. A one-shot
+	// `echo` can exit before the policy check under race instrumentation, which
+	// makes the test nondeterministically exercise the evidence-manifest gate
+	// instead of RequireClosedTerminals.
+	session1, _ := mgr.Start(context.Background(), TerminalStartRequest{OwnerTaskID: "task-1", Command: []string{"sh", "-c", "sleep 30"}})
 	if session1 != nil {
 		defer func() { _ = mgr.Close(context.Background(), session1.ID) }()
 	}

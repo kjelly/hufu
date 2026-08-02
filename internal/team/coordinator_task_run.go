@@ -1392,7 +1392,9 @@ func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, las
 	return ""
 }
 
-// isUnfixableVerifyFailure reports whether err comes from the "wrong
+var errWrongVerificationPolarity = errors.New("verification wrong polarity")
+
+// isUnfixableVerifyFailure reports whether err comes from the structured "wrong
 // polarity" verify-command detection in verifyTaskDeliverable (a
 // grep/grep-c-based cleanup check that asserts a resource EXISTS instead of
 // asserting it's GONE). The task.Verify command is fixed by the coordinator
@@ -1400,7 +1402,7 @@ func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, las
 // edit its own verify field — so this failure is guaranteed to recur
 // identically on every retry regardless of what the worker does.
 func isUnfixableVerifyFailure(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "wrong polarity")
+	return errors.Is(err, errWrongVerificationPolarity)
 }
 
 // sameFailure reports whether two error messages represent the same underlying

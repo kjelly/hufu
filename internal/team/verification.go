@@ -432,6 +432,14 @@ func isExpectedVerificationExit(err error, result *VerificationResult) bool {
 	if result == nil || result.TimedOut || result.ExitCode == 0 || result.ExitCode == -1 {
 		return false
 	}
+	// An unresolved verifier is an environment/configuration failure, not an
+	// expected assertion failure. This must remain false even for
+	// expected_failure and observation modes; otherwise a missing executable
+	// can satisfy an acceptance gate merely by returning exit 127.
+	if errors.Is(err, errUnresolvedExecutable) ||
+		hasEnvironmentFailureSignal(result.Stdout) || hasEnvironmentFailureSignal(result.Stderr) {
+		return false
+	}
 	return true
 }
 
@@ -460,6 +468,10 @@ func applyVerificationMode(res *VerificationResult, err error, mode string) (*Ve
 	}
 }
 
+// errUnresolvedExecutable marks a verifier that could not be started because
+// one or more command-stage executables failed preflight resolution.
+var errUnresolvedExecutable = errors.New("verification executable unresolved")
+
 func executeCommandVerification(parentCtx context.Context, shell, workDir string, spec VerificationSpec) (*VerificationResult, error) {
 	return executeCommandVerificationWithRawOutput(parentCtx, shell, workDir, spec, false)
 }
@@ -482,6 +494,22 @@ func executeCommandVerificationWithRawOutput(parentCtx context.Context, shell, w
 	if _, hasDeadline := parentCtx.Deadline(); !hasDeadline {
 		ctx, cancel = context.WithTimeout(parentCtx, 120*time.Second)
 		defer cancel()
+	}
+
+	// Resolve every pipeline stage before invoking the shell. A missing
+	// upstream command can be swallowed by a downstream stage (for example
+	// `missing show 2>&1 | grep -c running`), leaving only an ordinary exit
+	// status and making the failure look like a verifier-polarity problem.
+	if findings := ResolveCommandExecutables(command, workDir); len(findings) > 0 {
+		message := formatUnresolvedExecutableFindings(findings)
+		res := &VerificationResult{
+			Command:  command,
+			WorkDir:  workDir,
+			ExitCode: 127,
+			Stderr:   utils.TruncateString(message, 2000),
+			Spec:     &spec,
+		}
+		return applyVerificationMode(res, fmt.Errorf("%w: %s", errUnresolvedExecutable, message), spec.Mode)
 	}
 
 	cmd := exec.CommandContext(ctx, shell, "-c", command)
@@ -535,7 +563,7 @@ func executeCommandVerificationWithRawOutput(parentCtx context.Context, shell, w
 			err = fmt.Errorf("%w%s — the verify field appears to contain non-ASCII text (possibly natural language). The verify field must be a runnable shell command, e.g. 'test -f report.md' or 'virsh list --all | grep -c running', not a description of the expected outcome", err, detail)
 		} else if res.ExitCode == 1 && strings.TrimSpace(res.Stdout) == "0" &&
 			(strings.Contains(command, "grep -c") || strings.Contains(command, "grep-c")) {
-			err = fmt.Errorf("%w%s — wrong polarity: the verify command checked that a resource EXISTS (grep-c returned 0 = not found), but this looks like a cleanup task where success means the resource is GONE. Use '!' negation for delete/cleanup verify, e.g. '! ovs-vsctl show 2>&1 | grep -q br-verify'", err, detail)
+			err = fmt.Errorf("%w: %v%s — wrong polarity: the verify command checked that a resource EXISTS (grep-c returned 0 = not found), but this looks like a cleanup task where success means the resource is GONE. Use '!' negation for delete/cleanup verify, e.g. '! ovs-vsctl show 2>&1 | grep -q br-verify'", errWrongVerificationPolarity, err, detail)
 		} else {
 			err = fmt.Errorf("%w%s", err, detail)
 		}

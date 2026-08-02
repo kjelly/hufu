@@ -396,6 +396,19 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 	// resolve the same dedup pointer (never reassigning a non-nil set).
 	contractWarnings := orig.contractWarningsDedup()
 
+	// Isolated extra-model coordinators must report their LLM usage to the
+	// parent run's no-progress budget. Keep a distinct namespace per clone so
+	// cumulative receipt accounting deduplicates retries within one clone while
+	// still counting the same task executed by different extra models.
+	usageOwner := orig
+	usageNamespace := fmt.Sprintf("extra-clone-%d", extraWSSeq.Add(1))
+	if orig.noProgressUsageOwner != nil {
+		usageOwner = orig.noProgressUsageOwner
+		if orig.noProgressUsageNamespace != "" {
+			usageNamespace = orig.noProgressUsageNamespace + ":" + usageNamespace
+		}
+	}
+
 	//nolint:staticcheck,SA5011
 	orig.stepConfirmFnMu.RLock()
 	stepConfirmFnCopy := orig.stepConfirmFn
@@ -462,6 +475,8 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		workerSummaries:                 workerSummariesClone,
 		stepConfirmFn:                   stepConfirmFnCopy,
 		contractWarnings:                contractWarnings,
+		noProgressUsageOwner:            usageOwner,
+		noProgressUsageNamespace:        usageNamespace,
 	}
 }
 
