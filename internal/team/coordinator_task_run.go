@@ -376,6 +376,10 @@ retryLoop:
 				c.attachVerifyResultToReceipt(priorRunID, todoID, attempt-1, verifyResult)
 				_ = c.taskTracker.TodoList().SetVerificationResult(todoID, nil)
 			}
+			// A submitted partial/failed/blocked result belongs to the prior
+			// execution attempt. Preserve it in that attempt's receipt, but do
+			// not let it satisfy RequiresResult before the new worker runs.
+			c.clearSubmittedTaskResult(todoID)
 		}
 		attemptStarted := time.Now()
 		c.recordExecutionEvent(todoID, agentName, attempt, "in_progress", resolvedModel, 0, ExecutionUsage{})
@@ -593,24 +597,27 @@ retryLoop:
 					c.report(c.newEvent("step").withAgent(agentName).withMessage(protocolErrMsg).withTodoID(todoID))
 
 					repairResultTool := &submitResultTool{coordinator: c, todoID: todoID}
-					var repairAg fantasy.Agent
-					if c.repairAgentOverride != nil {
-						repairAg = c.repairAgentOverride
-					} else if c.providerManager != nil {
-						var rErr error
-						repairAg, rErr = agent.CreateAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
-							Def:        agentDef,
-							TeamConfig: &c.session.Config,
-							WorkDir:    c.projectDir,
-							MaxSteps:   1,
-						}, []fantasy.AgentTool{repairResultTool})
-						if rErr != nil {
-							c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to create protocol repair agent: %v", rErr)).withTodoID(todoID))
-						}
-					}
-
 					repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using the output above to supply the required structured result. Do NOT call any other tools.", task.Goal, output)
-					if repairAg != nil {
+					repairAttempts := make([]RepairAttemptProvenance, 0, 2)
+					runRepair := func(prompt string) []fantasy.StepResult {
+						var repairAg fantasy.Agent
+						if c.repairAgentOverride != nil {
+							repairAg = c.repairAgentOverride
+						} else if c.providerManager != nil {
+							var rErr error
+							repairAg, rErr = agent.CreateAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
+								Def:        agentDef,
+								TeamConfig: &c.session.Config,
+								WorkDir:    c.projectDir,
+								MaxSteps:   1,
+							}, []fantasy.AgentTool{repairResultTool})
+							if rErr != nil {
+								c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to create protocol repair agent: %v", rErr)).withTodoID(todoID))
+							}
+						}
+						if repairAg == nil {
+							return nil
+						}
 						repairCtx := context.WithValue(parentCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
 						// Protocol repair has no separate execution receipt. The
 						// parent worker context is receipt-backed, so override its
@@ -623,25 +630,99 @@ retryLoop:
 						repairCtx = context.WithValue(repairCtx, hooks.TeamNameKey, c.session.Config.Name)
 						repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, taskDesc)
 
-						_, _, _ = c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, repairPrompt, nil, timing, fantasy.StepCountIs(1))
+						_, steps, _ := c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, prompt, nil, timing, fantasy.StepCountIs(1))
 						typedRes = c.GetTaskResult(todoID)
+						return steps
 					}
 
+					repairSteps := runRepair(repairPrompt)
 					repairSuccess := typedRes != nil && typedRes.Source == "submitted" && validateSubmittedTaskResult(typedRes) == nil
+					// §7: classify the repair failure sub-reason so the next-step
+					// disposition is driven by evidence rather than a generic
+					// "protocol failed" message. progress_not_final reclassifies
+					// the task as an execution failure (the worker reported a
+					// progress update, not a final outcome) and must not count
+					// toward protocol repair statistics.
+					repairReason, reclassifyExecution := classifyRepairFailure(repairSteps, typedRes)
+					repairAttempts = append(repairAttempts, RepairAttemptProvenance{
+						Attempt:         1,
+						Success:         repairSuccess,
+						Prompt:          repairPrompt,
+						SubmittedResult: typedRes,
+						FailureReason:   repairReason,
+					})
+
+					// An invalid schema is the one protocol failure allowed a second
+					// time. This turn is schema-only, still allows only submit_result,
+					// and never replays the worker execution (§7).
+					if !repairSuccess && repairReason == RepairFailureInvalidSchema {
+						typedRes = nil
+						schemaRepairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous submit_result call was rejected because its arguments did not match the result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work or call any other tools.\n\n## Execution Output\n%s", task.Goal, output)
+						schemaRepairSteps := runRepair(schemaRepairPrompt)
+						repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateSubmittedTaskResult(typedRes) == nil
+						repairReason, reclassifyExecution = classifyRepairFailure(schemaRepairSteps, typedRes)
+						repairAttempts = append(repairAttempts, RepairAttemptProvenance{
+							Attempt:         2,
+							Success:         repairSuccess,
+							Prompt:          schemaRepairPrompt,
+							SubmittedResult: typedRes,
+							FailureReason:   repairReason,
+						})
+					}
+
 					receipt.FinishedAt = time.Now()
 					receipt.RepairProvenance = &RepairProvenance{
 						Attempted:       true,
 						Success:         repairSuccess,
-						Prompt:          repairPrompt,
+						Prompt:          repairAttempts[len(repairAttempts)-1].Prompt,
 						SubmittedResult: typedRes,
+						RepairAttempts:  len(repairAttempts),
+						History:         repairAttempts,
 					}
 					if repairSuccess {
-						c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("protocol repair succeeded for task %s", todoID)).withTodoID(todoID))
+						c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("protocol repair succeeded for task %s after %d attempt(s)", todoID, len(repairAttempts))).withTodoID(todoID))
 					} else {
-						typedRes = nil
-						err = fmt.Errorf("protocol failure (class: %s) for task %s (%s): agent produced output but failed protocol repair to submit_result",
-							string(FailureProtocol), todoID, agentName)
-						receipt.RepairProvenance.Error = err.Error()
+						receipt.RepairProvenance.FailureReason = repairReason
+						// Capture the submitted status (if any) before preserving the
+						// result as evidence for the error message.
+						submittedStatus := ""
+						if typedRes != nil {
+							submittedStatus = typedRes.Status
+						}
+						if reclassifyExecution {
+							// §7: progress_not_final — the submitted result was a
+							// progress update (partial/failed/blocked), not a final
+							// outcome. Reclassify as FailureExecution so the retry
+							// loop may re-dispatch the worker (subject to the
+							// replay policy), and do not count this attempt toward
+							// protocol repair statistics.
+							protocolFailure = false
+							err = withFailureClassOverride(
+								fmt.Errorf("execution failure (reclassified from protocol repair: worker reported status %q via submit_result; task is not complete) for task %s (%s)", submittedStatus, todoID, agentName),
+								FailureExecution,
+							)
+							receipt.RepairProvenance.Error = err.Error()
+						} else {
+							// Preserve the worker's original output as a low-confidence,
+							// provisional result. It is evidence for reconciliation, not
+							// a successful terminal result and never marks the task done.
+							recovered := ParseFreeTextResult(output)
+							if strings.TrimSpace(recovered.Summary) == "" {
+								recovered.Summary = "No final worker output was available; reconcile using the execution transcript."
+							}
+							recovered.TaskID = todoID
+							recovered.Agent = agentName
+							recovered.Source = "recovered_protocol"
+							if transcriptRef != "" {
+								recovered.RawOutputRef = &ArtifactRef{Path: transcriptRef, Type: "task_transcript", Description: "Original execution evidence for protocol recovery"}
+							}
+							c.storeSubmittedTaskResult(todoID, recovered)
+							typedRes = recovered
+							receipt.RepairProvenance.SubmittedResult = recovered
+							err = fmt.Errorf("protocol failure (class: %s, reason: %s) for task %s (%s): agent produced output but failed protocol repair to submit_result",
+								string(FailureProtocol), string(repairReason), todoID, agentName)
+							receipt.RepairProvenance.Error = err.Error()
+						}
 					}
 					if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 						_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)

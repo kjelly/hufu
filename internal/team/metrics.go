@@ -66,8 +66,12 @@ func (c *Coordinator) Metrics() RunMetrics {
 				metrics.ExecutionReplaysAvoided++
 			}
 			for _, receipt := range item.ExecutionReceipts {
+				// A progress submission is evidence that execution is incomplete,
+				// not a protocol-repair failure. Keep it out of the protocol
+				// repair counters (§7); successful repairs and legacy receipts
+				// without a reason remain counted.
 				if receipt.RepairProvenance != nil && receipt.RepairProvenance.Attempted {
-					metrics.ProtocolRepairsAttempted++
+					metrics.ProtocolRepairsAttempted += protocolRepairAttemptCount(receipt.RepairProvenance)
 					if receipt.RepairProvenance.Success {
 						metrics.ProtocolRepairsSucceeded++
 					}
@@ -81,6 +85,32 @@ func (c *Coordinator) Metrics() RunMetrics {
 		}
 	}
 	return metrics
+}
+
+// protocolRepairAttemptCount counts only repair turns that remain protocol
+// failures. A progress_not_final turn is execution evidence and is excluded,
+// even when it follows an earlier invalid_schema repair in the same receipt.
+func protocolRepairAttemptCount(provenance *RepairProvenance) int {
+	if provenance == nil || !provenance.Attempted {
+		return 0
+	}
+	if len(provenance.History) == 0 {
+		if provenance.FailureReason == RepairFailureProgressNotFinal {
+			return 0
+		}
+		attempts := provenance.RepairAttempts
+		if attempts < 1 {
+			return 1
+		}
+		return attempts
+	}
+	count := 0
+	for _, attempt := range provenance.History {
+		if attempt.FailureReason != RepairFailureProgressNotFinal {
+			count++
+		}
+	}
+	return count
 }
 
 func (c *Coordinator) recordReliabilityUsage(taskID string, attempt, tokens int) {

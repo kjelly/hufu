@@ -12,13 +12,54 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// RepairFailureReason classifies why a protocol repair attempt failed (§7).
+//
+// The sub-reason drives the next-step disposition per §7's table:
+//
+//   - no_tool_call       — repair turn did not call submit_result;
+//     keep provisional result, reconcile_only.
+//   - invalid_schema     — submit_result was called but the arguments did
+//     not satisfy the result schema; a second schema-only repair is allowed.
+//   - progress_not_final — the submitted result is a progress update
+//     (status partial/failed/blocked) rather than a final outcome; the
+//     task is reclassified as FailureExecution, not a protocol failure.
+type RepairFailureReason string
+
+const (
+	RepairFailureNoToolCall       RepairFailureReason = "no_tool_call"
+	RepairFailureInvalidSchema    RepairFailureReason = "invalid_schema"
+	RepairFailureProgressNotFinal RepairFailureReason = "progress_not_final"
+)
+
+// IsProtocolRepairFailure reports whether reason is one of the §7 repair
+// failure sub-reasons. progress_not_final is excluded because it is
+// reclassified as FailureExecution and must not count toward protocol repair
+// statistics (§7).
+func (r RepairFailureReason) IsProtocolRepairFailure() bool {
+	return r == RepairFailureNoToolCall || r == RepairFailureInvalidSchema
+}
+
+// RepairAttemptProvenance records one result-only repair turn. Keeping each
+// turn preserves the distinction between an initial schema failure and a
+// second schema-only repair outcome in the durable receipt.
+type RepairAttemptProvenance struct {
+	Attempt         int                 `json:"attempt"`
+	Success         bool                `json:"success"`
+	Prompt          string              `json:"prompt,omitempty"`
+	SubmittedResult *TaskResult         `json:"submitted_result,omitempty"`
+	FailureReason   RepairFailureReason `json:"failure_reason,omitempty"`
+}
+
 // RepairProvenance records details of protocol repair attempts.
 type RepairProvenance struct {
-	Attempted       bool        `json:"attempted"`
-	Success         bool        `json:"success"`
-	Prompt          string      `json:"prompt,omitempty"`
-	SubmittedResult *TaskResult `json:"submitted_result,omitempty"`
-	Error           string      `json:"error,omitempty"`
+	Attempted       bool                      `json:"attempted"`
+	Success         bool                      `json:"success"`
+	Prompt          string                    `json:"prompt,omitempty"`
+	SubmittedResult *TaskResult               `json:"submitted_result,omitempty"`
+	Error           string                    `json:"error,omitempty"`
+	FailureReason   RepairFailureReason       `json:"failure_reason,omitempty"`
+	RepairAttempts  int                       `json:"repair_attempts,omitempty"`
+	History         []RepairAttemptProvenance `json:"history,omitempty"`
 }
 
 // ExecutionReceipt represents the execution provenance and metadata for a single task run attempt.

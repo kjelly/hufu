@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -12,8 +13,367 @@ import (
 	"github.com/anomalyco/hufu/internal/agent"
 )
 
+func TestClassifyRepairFailure_SubReasons(t *testing.T) {
+	validProgress := &TaskResult{Status: "partial", Source: "submitted", Summary: "still working"}
+
+	tests := []struct {
+		name              string
+		steps             []fantasy.StepResult
+		result            *TaskResult
+		wantReason        RepairFailureReason
+		wantExecutionFail bool
+	}{
+		{
+			name:              "no tool call",
+			wantReason:        RepairFailureNoToolCall,
+			wantExecutionFail: false,
+		},
+		{
+			name:              "invalid schema",
+			steps:             invalidSchemaRepairSteps(),
+			wantReason:        RepairFailureInvalidSchema,
+			wantExecutionFail: false,
+		},
+		{
+			name:              "progress is not final",
+			result:            validProgress,
+			wantReason:        RepairFailureProgressNotFinal,
+			wantExecutionFail: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotReason, gotExecutionFail := classifyRepairFailure(tt.steps, tt.result)
+			if gotReason != tt.wantReason || gotExecutionFail != tt.wantExecutionFail {
+				t.Fatalf("classifyRepairFailure() = (%q, %t), want (%q, %t)", gotReason, gotExecutionFail, tt.wantReason, tt.wantExecutionFail)
+			}
+		})
+	}
+
+	if RepairFailureProgressNotFinal.IsProtocolRepairFailure() {
+		t.Fatal("progress_not_final must not be counted as a protocol repair failure")
+	}
+	if !RepairFailureInvalidSchema.IsProtocolRepairFailure() {
+		t.Fatal("invalid_schema must be counted as a protocol repair failure")
+	}
+}
+
+func TestClassifyTaskFailure_ExplicitOverrideBeatsProtocolText(t *testing.T) {
+	err := withFailureClassOverride(errors.New("execution failure (reclassified from protocol repair)"), FailureExecution)
+	if got := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err}); got != FailureExecution {
+		t.Fatalf("explicit failure class = %q, want %q", got, FailureExecution)
+	}
+}
+
+func TestProtocolRepairMetricsExcludeOnlyProgressTurn(t *testing.T) {
+	tracker := NewTaskTracker()
+	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "mixed repair sequence"}})[0]
+	item.ExecutionReceipts = []ExecutionReceipt{{RepairProvenance: &RepairProvenance{
+		Attempted:      true,
+		RepairAttempts: 2,
+		History: []RepairAttemptProvenance{
+			{Attempt: 1, FailureReason: RepairFailureInvalidSchema},
+			{Attempt: 2, FailureReason: RepairFailureProgressNotFinal},
+		},
+		FailureReason: RepairFailureProgressNotFinal,
+	}}}
+	metrics := (&Coordinator{taskTracker: tracker}).Metrics()
+	if metrics.ProtocolRepairsAttempted != 1 {
+		t.Fatalf("mixed repair protocol attempts = %d, want 1 (invalid_schema only)", metrics.ProtocolRepairsAttempted)
+	}
+}
+
+func TestProtocolRepair_ProgressNotFinalIsExecutionFailure(t *testing.T) {
+	workspace := t.TempDir()
+	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
+	workerCalls := 0
+
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "progress-repair", Timeout: 30, MaxRetries: 2},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", MaxRetries: 2, Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-progress-repair",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "incomplete execution"}})[0]
+
+	c.workerAgentOverride = &countingTextAgent{calls: &workerCalls, text: "execution produced progress"}
+	c.repairAgentOverride = &mockRepairAgent{onSubmit: func() {
+		c.storeSubmittedTaskResult(item.ID, &TaskResult{
+			TaskID: item.ID, Agent: "worker", Status: "partial",
+			Summary: "work remains", Source: "submitted",
+		})
+	}}
+
+	_, err := c.executeTask(context.Background(), TaskDef{
+		Agent: "worker", Goal: "incomplete execution", Recovery: RecoveryRetry,
+		SideEffect: SideEffectExternalWrite,
+		Execution:  ExecutionContract{RequiresResult: true},
+	}, item.ID)
+	if err == nil {
+		t.Fatal("expected execution failure after non-final repair result")
+	}
+	if !strings.Contains(err.Error(), "reclassified from protocol repair") {
+		t.Fatalf("error = %q, want explicit execution reclassification", err)
+	}
+
+	got := c.taskTracker.TodoList().Items()[0]
+	if got.ExecutionReceipt == nil || got.ExecutionReceipt.RepairProvenance == nil {
+		t.Fatal("expected repair provenance on the execution receipt")
+	}
+	if got.ExecutionReceipt.RepairProvenance.FailureReason != RepairFailureProgressNotFinal {
+		t.Fatalf("failure reason = %q, want %q", got.ExecutionReceipt.RepairProvenance.FailureReason, RepairFailureProgressNotFinal)
+	}
+	metrics := c.Metrics()
+	if metrics.ProtocolRepairsAttempted != 0 || metrics.ProtocolRepairsSucceeded != 0 {
+		t.Fatalf("progress_not_final polluted protocol repair metrics: attempted=%d succeeded=%d", metrics.ProtocolRepairsAttempted, metrics.ProtocolRepairsSucceeded)
+	}
+	if workerCalls != 1 {
+		t.Fatalf("worker calls = %d, want 1 (this test uses incomplete evidence and should not replay)", workerCalls)
+	}
+}
+
+func TestProtocolRepair_ProgressNotFinalRetriesAndClearsAttemptResult(t *testing.T) {
+	workspace := t.TempDir()
+	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
+	workerCalls := 0
+	resultClearedBeforeRetry := false
+
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "progress-retry", Timeout: 30, MaxRetries: 2},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", MaxRetries: 2, Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-progress-retry",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "replay progress result"}})[0]
+
+	c.workerAgentOverride = &replayableWorkerAgent{
+		calls: &workerCalls,
+		onSecond: func() {
+			resultClearedBeforeRetry = c.GetTaskResult(item.ID) == nil
+			c.storeSubmittedTaskResult(item.ID, &TaskResult{
+				TaskID: item.ID, Agent: "worker", Status: "success",
+				Summary: "new attempt completed", Source: "submitted",
+			})
+		},
+	}
+	c.repairAgentOverride = &mockRepairAgent{onSubmit: func() {
+		c.storeSubmittedTaskResult(item.ID, &TaskResult{
+			TaskID: item.ID, Agent: "worker", Status: "partial",
+			Summary: "first attempt still in progress", Source: "submitted",
+		})
+	}}
+
+	_, err := c.executeTask(context.Background(), TaskDef{
+		Agent: "worker", Goal: "replay progress result", Recovery: RecoveryRetry,
+		Execution: ExecutionContract{RequiresResult: true},
+	}, item.ID)
+	if err != nil {
+		t.Fatalf("progress result should retry and complete, got %v", err)
+	}
+	if workerCalls != 2 {
+		t.Fatalf("worker invocation count = %d, want 2 (RetryWorker)", workerCalls)
+	}
+	if !resultClearedBeforeRetry {
+		t.Fatal("prior partial result remained visible at the start of the replayed worker attempt")
+	}
+
+	got := c.taskTracker.TodoList().Items()[0]
+	if got.Status != TaskDone || got.TypedResult == nil || got.TypedResult.Status != "success" {
+		t.Fatalf("final task state = status %s, typed result %#v; want done/success", got.Status, got.TypedResult)
+	}
+	if len(got.ExecutionReceipts) != 2 {
+		t.Fatalf("execution receipt history length = %d, want 2", len(got.ExecutionReceipts))
+	}
+	if got.ExecutionReceipts[0].RepairProvenance == nil || got.ExecutionReceipts[0].RepairProvenance.FailureReason != RepairFailureProgressNotFinal {
+		t.Fatalf("first attempt provenance = %#v, want progress_not_final", got.ExecutionReceipts[0].RepairProvenance)
+	}
+	metrics := c.Metrics()
+	if metrics.RetriesByFailureClass[FailureExecution] != 1 {
+		t.Fatalf("execution retries = %d, want 1", metrics.RetriesByFailureClass[FailureExecution])
+	}
+	if metrics.RetriesByFailureClass[FailureProtocol] != 0 {
+		t.Fatalf("protocol retries = %d, want 0", metrics.RetriesByFailureClass[FailureProtocol])
+	}
+	if metrics.ProtocolRepairsAttempted != 0 {
+		t.Fatalf("progress_not_final counted as protocol repair = %d, want 0", metrics.ProtocolRepairsAttempted)
+	}
+}
+
+func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
+	workspace := t.TempDir()
+	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
+	workerCalls := 0
+	repairCalls := 0
+	var prompts []string
+
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "schema-repair", Timeout: 30, MaxRetries: 1},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-schema-repair-success",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "schema repair task"}})[0]
+	c.workerAgentOverride = &countingTextAgent{calls: &workerCalls, text: "execution output"}
+	c.repairAgentOverride = &scriptedRepairAgent{
+		calls:   &repairCalls,
+		prompts: &prompts,
+		steps: func(call int) []fantasy.StepResult {
+			if call == 1 {
+				return invalidSchemaRepairSteps()
+			}
+			return nil
+		},
+		onCall: func(call int) {
+			if call == 2 {
+				c.storeSubmittedTaskResult(item.ID, &TaskResult{
+					TaskID: item.ID, Agent: "worker", Status: "success",
+					Summary: "schema-only repair succeeded", Source: "submitted",
+				})
+			}
+		},
+	}
+
+	out, err := c.executeTask(context.Background(), TaskDef{
+		Agent: "worker", Goal: "schema repair task",
+		Execution: ExecutionContract{RequiresResult: true},
+	}, item.ID)
+	if err != nil {
+		t.Fatalf("expected schema-only repair to succeed, got %v", err)
+	}
+	if out == "" {
+		t.Fatal("expected task output")
+	}
+	if workerCalls != 1 {
+		t.Fatalf("worker calls = %d, want 1; schema repair must not replay execution", workerCalls)
+	}
+	if repairCalls != 2 {
+		t.Fatalf("repair calls = %d, want exactly 2 (one schema-only retry)", repairCalls)
+	}
+	if len(prompts) != 2 || !strings.Contains(prompts[1], "Schema-only repair") || !strings.Contains(prompts[1], "Do NOT execute work") {
+		t.Fatalf("second repair prompt was not schema-only: %#v", prompts)
+	}
+	got := c.taskTracker.TodoList().Items()[0]
+	if got.Status != TaskDone {
+		t.Fatalf("task status = %s, want done", got.Status)
+	}
+	prov := got.ExecutionReceipt.RepairProvenance
+	if prov == nil || !prov.Success || prov.RepairAttempts != 2 {
+		t.Fatalf("unexpected schema repair provenance: %#v", prov)
+	}
+	if len(prov.History) != 2 || prov.History[0].FailureReason != RepairFailureInvalidSchema || !prov.History[1].Success {
+		t.Fatalf("schema repair history = %#v, want invalid_schema then success", prov.History)
+	}
+	if got := c.Metrics().ProtocolRepairsAttempted; got != 2 {
+		t.Fatalf("protocol repair attempts metric = %d, want 2 repair turns", got)
+	}
+}
+
+func TestProtocolRepair_TwoInvalidSchemasRecoverProvisionallyAndBlock(t *testing.T) {
+	workspace := t.TempDir()
+	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
+	workerCalls := 0
+	repairCalls := 0
+
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "schema-repair-failure", Timeout: 30, MaxRetries: 2},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", MaxRetries: 2, Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-schema-repair-failure",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "unrecoverable schema task"}})[0]
+	c.workerAgentOverride = &countingTextAgent{calls: &workerCalls, text: "original execution evidence"}
+	c.repairAgentOverride = &scriptedRepairAgent{
+		calls: &repairCalls,
+		steps: func(int) []fantasy.StepResult { return invalidSchemaRepairSteps() },
+	}
+
+	_, err := c.executeTask(context.Background(), TaskDef{
+		Agent: "worker", Goal: "unrecoverable schema task",
+		Execution: ExecutionContract{RequiresResult: true},
+	}, item.ID)
+	if err == nil {
+		t.Fatal("expected final protocol repair failure")
+	}
+	if workerCalls != 1 || repairCalls != 2 {
+		t.Fatalf("worker/repair calls = %d/%d, want 1/2", workerCalls, repairCalls)
+	}
+	got := c.taskTracker.TodoList().Items()[0]
+	if got.Status != TaskBlocked {
+		t.Fatalf("task status = %s, detail=%q, want blocked for reconcile_only", got.Status, got.Detail)
+	}
+	prov := got.ExecutionReceipt.RepairProvenance
+	if prov == nil || prov.Success || prov.FailureReason != RepairFailureInvalidSchema || prov.RepairAttempts != 2 {
+		t.Fatalf("unexpected final repair provenance: %#v", prov)
+	}
+	if len(prov.History) != 2 || prov.History[0].FailureReason != RepairFailureInvalidSchema || prov.History[1].FailureReason != RepairFailureInvalidSchema {
+		t.Fatalf("repair history = %#v, want two invalid_schema failures", prov.History)
+	}
+	if got.TypedResult == nil || got.TypedResult.Source != "recovered_protocol" || got.TypedResult.Confidence <= 0 || got.TypedResult.RawOutputRef == nil {
+		t.Fatalf("missing evidence-backed recovered_protocol result: %#v", got.TypedResult)
+	}
+	if !strings.Contains(got.TypedResult.Summary, "original execution evidence") {
+		t.Fatalf("provisional result lost worker evidence: %q", got.TypedResult.Summary)
+	}
+	if gotMetrics := c.Metrics().ProtocolRepairsAttempted; gotMetrics != 2 {
+		t.Fatalf("protocol repair attempts metric = %d, want 2 repair turns", gotMetrics)
+	}
+}
+
 type mockWorkerTextAgent struct {
 	text string
+}
+
+type countingTextAgent struct {
+	calls *int
+	text  string
+}
+
+func (m *countingTextAgent) response() *fantasy.AgentResult {
+	(*m.calls)++
+	return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{
+		fantasy.TextContent{Text: m.text},
+	}}}
+}
+
+func (m *countingTextAgent) Generate(context.Context, fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return m.response(), nil
+}
+
+func (m *countingTextAgent) Stream(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return m.response(), nil
 }
 
 func (m *mockWorkerTextAgent) Generate(ctx context.Context, call fantasy.AgentCall) (*fantasy.AgentResult, error) {
@@ -38,6 +398,50 @@ func (m *mockWorkerTextAgent) Stream(ctx context.Context, call fantasy.AgentStre
 
 type mockRepairAgent struct {
 	onSubmit func()
+}
+
+type scriptedRepairAgent struct {
+	calls   *int
+	prompts *[]string
+	onCall  func(int)
+	steps   func(int) []fantasy.StepResult
+}
+
+func invalidSchemaRepairSteps() []fantasy.StepResult {
+	return []fantasy.StepResult{{Response: fantasy.Response{
+		Content: fantasy.ResponseContent{
+			fantasy.ToolCallContent{ToolName: submitResultToolName, Input: "{bad json"},
+			fantasy.ToolResultContent{
+				ToolName: submitResultToolName,
+				Result:   fantasy.ToolResultOutputContentError{Error: errors.New("invalid result schema")},
+			},
+		},
+	}}}
+}
+
+func (m *scriptedRepairAgent) result(call fantasy.AgentCall) *fantasy.AgentResult {
+	(*m.calls)++
+	if m.prompts != nil {
+		*m.prompts = append(*m.prompts, call.Prompt)
+	}
+	if m.onCall != nil {
+		m.onCall(*m.calls)
+	}
+	steps := []fantasy.StepResult(nil)
+	if m.steps != nil {
+		steps = m.steps(*m.calls)
+	}
+	return &fantasy.AgentResult{Steps: steps, Response: fantasy.Response{Content: fantasy.ResponseContent{
+		fantasy.TextContent{Text: "scripted repair response"},
+	}}}
+}
+
+func (m *scriptedRepairAgent) Generate(_ context.Context, call fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return m.result(call), nil
+}
+
+func (m *scriptedRepairAgent) Stream(_ context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return m.result(fantasy.AgentCall{Prompt: call.Prompt, Messages: call.Messages}), nil
 }
 
 type replayableWorkerAgent struct {
@@ -263,6 +667,15 @@ func TestProtocolRepair_ReplayableTaskBlocksAfterRepairFailure(t *testing.T) {
 	}
 	if first.RepairProvenance == nil || first.RepairProvenance.Success {
 		t.Fatalf("attempt 1 should retain failed repair provenance: %#v", first.RepairProvenance)
+	}
+	if first.RepairProvenance.FailureReason != RepairFailureNoToolCall {
+		t.Fatalf("failure reason = %q, want %q", first.RepairProvenance.FailureReason, RepairFailureNoToolCall)
+	}
+	if got.TypedResult == nil || got.TypedResult.Source != "recovered_protocol" || got.TypedResult.Confidence <= 0 {
+		t.Fatalf("missing recovered_protocol provisional result: %#v", got.TypedResult)
+	}
+	if !strings.Contains(got.TypedResult.Summary, "attempt-one-original") || got.TypedResult.RawOutputRef == nil {
+		t.Fatalf("provisional result did not preserve execution evidence: %#v", got.TypedResult)
 	}
 
 	// The transcript must preserve the original worker output and must not
@@ -515,9 +928,10 @@ func TestExecutionReceipt_ProvenanceAndEventStoreReplay(t *testing.T) {
 		ProducerID:    "worker",
 		TranscriptRef: "task-log-1",
 		RepairProvenance: &RepairProvenance{
-			Attempted: true,
-			Success:   false,
-			Error:     "missing submit_result",
+			Attempted:     true,
+			Success:       false,
+			Error:         "missing submit_result",
+			FailureReason: RepairFailureNoToolCall,
 		},
 	}
 	receipt2 := ExecutionReceipt{
@@ -566,8 +980,71 @@ func TestExecutionReceipt_ProvenanceAndEventStoreReplay(t *testing.T) {
 	if item.ExecutionReceipts[0].RepairProvenance == nil || item.ExecutionReceipts[0].RepairProvenance.Success {
 		t.Errorf("attempt 1 repair provenance should show success=false")
 	}
+	if got := item.ExecutionReceipts[0].RepairProvenance.FailureReason; got != RepairFailureNoToolCall {
+		t.Errorf("attempt 1 failure reason = %q, want %q", got, RepairFailureNoToolCall)
+	}
 	if item.ExecutionReceipts[1].RepairProvenance == nil || !item.ExecutionReceipts[1].RepairProvenance.Success {
 		t.Errorf("attempt 2 repair provenance should show success=true")
+	}
+}
+
+func TestProtocolRepair_AllFailureReasonsSurviveEventStoreReduction(t *testing.T) {
+	reasons := []RepairFailureReason{
+		RepairFailureNoToolCall,
+		RepairFailureInvalidSchema,
+		RepairFailureProgressNotFinal,
+	}
+	receipts := make([]ExecutionReceipt, 0, len(reasons))
+	for i, reason := range reasons {
+		receipts = append(receipts, ExecutionReceipt{
+			RunID:   "run-reasons",
+			TaskID:  "todo-reasons",
+			Attempt: i + 1,
+			RepairProvenance: &RepairProvenance{
+				Attempted:      true,
+				Success:        false,
+				FailureReason:  reason,
+				RepairAttempts: 1,
+				History: []RepairAttemptProvenance{{
+					Attempt:       1,
+					FailureReason: reason,
+				}},
+				SubmittedResult: func() *TaskResult {
+					if reason != RepairFailureNoToolCall {
+						return nil
+					}
+					return &TaskResult{Source: "recovered_protocol", Summary: "original evidence"}
+				}(),
+			},
+		})
+	}
+	payloadData, err := json.Marshal(map[string]interface{}{
+		"id":                 "todo-reasons",
+		"desc":               "all repair reasons",
+		"status":             "blocked",
+		"agent":              "worker",
+		"typed_result":       &TaskResult{Source: "recovered_protocol", Summary: "original evidence"},
+		"execution_receipt":  receipts[0],
+		"execution_receipts": receipts,
+	})
+	if err != nil {
+		t.Fatalf("marshal receipts: %v", err)
+	}
+	reduced := ReduceToTodoList([]RunEvent{{Type: "task_created", TaskID: "todo-reasons", Payload: payloadData}})
+	if len(reduced) != 1 || len(reduced[0].ExecutionReceipts) != len(reasons) {
+		t.Fatalf("reduced receipts = %#v, want %d receipts", reduced, len(reasons))
+	}
+	for i, want := range reasons {
+		prov := reduced[0].ExecutionReceipts[i].RepairProvenance
+		if prov == nil || prov.FailureReason != want || len(prov.History) != 1 || prov.History[0].FailureReason != want {
+			t.Fatalf("receipt %d provenance = %#v, want reason %q in current and history", i, prov, want)
+		}
+	}
+	if got := reduced[0].ExecutionReceipts[0].RepairProvenance.SubmittedResult.Source; got != "recovered_protocol" {
+		t.Fatalf("recovered provisional source after reduction = %q, want recovered_protocol", got)
+	}
+	if reduced[0].TypedResult == nil || reduced[0].TypedResult.Source != "recovered_protocol" {
+		t.Fatalf("typed recovered provisional result after reduction = %#v, want recovered_protocol", reduced[0].TypedResult)
 	}
 }
 

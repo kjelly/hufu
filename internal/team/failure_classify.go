@@ -42,6 +42,44 @@ type FailureClassificationInput struct {
 	ContextErr error
 }
 
+// failureClassOverrideError carries an explicit failure class through wrapped
+// errors. This is used when the human-readable error necessarily mentions the
+// original failure mechanism (for example, a protocol repair that uncovered a
+// non-final progress result) but recovery must use the reclassified class.
+// Text matching is intentionally not used for this boundary.
+type failureClassOverrideError struct {
+	class TaskFailureClass
+	err   error
+}
+
+func (e *failureClassOverrideError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *failureClassOverrideError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func (e *failureClassOverrideError) FailureClassOverride() TaskFailureClass {
+	if e == nil {
+		return ""
+	}
+	return e.class
+}
+
+func withFailureClassOverride(err error, class TaskFailureClass) error {
+	if err == nil {
+		return nil
+	}
+	return &failureClassOverrideError{class: class, err: err}
+}
+
 // ExitCodeSource constants for FailureClassificationInput.ExitCodeSource.
 const (
 	ExitCodeSourceVerify = "verify"
@@ -63,6 +101,12 @@ func ClassifyTaskFailureStructured(in FailureClassificationInput) TaskFailureCla
 	}
 	if in.Err == nil {
 		return FailureExecution
+	}
+	var override interface{ FailureClassOverride() TaskFailureClass }
+	if errors.As(in.Err, &override) {
+		if class := override.FailureClassOverride(); class != "" {
+			return class
+		}
 	}
 	// Structured: timeout (deadline exceeded).
 	if isTaskTimeout(in.Err) || errors.Is(in.Err, context.DeadlineExceeded) || errors.Is(in.ContextErr, context.DeadlineExceeded) {

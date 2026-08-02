@@ -1255,6 +1255,24 @@ func (c *Coordinator) storeSubmittedTaskResult(todoID string, res *TaskResult) {
 	}
 }
 
+// clearSubmittedTaskResult removes the attempt-scoped result before an
+// execution retry. The prior attempt's result remains in its execution
+// receipt, but must not satisfy RequiresResult for the new worker attempt.
+func (c *Coordinator) clearSubmittedTaskResult(todoID string) {
+	if c == nil || todoID == "" {
+		return
+	}
+	c.taskResultsMu.Lock()
+	if c.taskResults != nil {
+		delete(c.taskResults, todoID)
+	}
+	c.taskResultsMu.Unlock()
+
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		_ = c.taskTracker.TodoList().SetTypedResult(todoID, nil)
+	}
+}
+
 func (c *Coordinator) GetTaskResult(todoID string) *TaskResult {
 	c.taskResultsMu.RLock()
 	var res *TaskResult

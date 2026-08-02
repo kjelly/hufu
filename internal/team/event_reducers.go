@@ -143,6 +143,7 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 			VerifyMode          string               `json:"verify_mode"`
 			VerifySpec          *VerificationSpec    `json:"verify_spec"`
 			VerifyResult        *VerificationResult  `json:"verify_result"`
+			TypedResult         *TaskResult          `json:"typed_result"`
 			ExecutionReceipt    *ExecutionReceipt    `json:"execution_receipt"`
 			ExecutionReceipts   []ExecutionReceipt   `json:"execution_receipts"`
 			Kind                TaskKind             `json:"kind"`
@@ -193,6 +194,7 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 				SideEffect:          payload.SideEffect,
 				Recovery:            payload.Recovery,
 				ReconcileTool:       payload.ReconcileTool,
+				TypedResult:         payload.TypedResult,
 			}
 			taskMap[taskID] = item
 			taskOrder = append(taskOrder, taskID)
@@ -276,6 +278,9 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		}
 		if payload.VerifyResult != nil {
 			item.VerifyResult = payload.VerifyResult
+		}
+		if payload.TypedResult != nil {
+			item.TypedResult = payload.TypedResult
 		}
 		if payload.ExecutionReceipt != nil {
 			item.ExecutionReceipt = payload.ExecutionReceipt

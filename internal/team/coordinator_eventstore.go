@@ -204,6 +204,9 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 		if item.VerifyResult != nil {
 			payload["verify_result"] = item.VerifyResult
 		}
+		if item.TypedResult != nil {
+			payload["typed_result"] = item.TypedResult
+		}
 		if item.ExecutionReceipt != nil {
 			payload["execution_receipt"] = item.ExecutionReceipt
 		}
