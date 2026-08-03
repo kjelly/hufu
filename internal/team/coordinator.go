@@ -86,9 +86,9 @@ type TaskDef struct {
 	// the agent reports success but before the task is marked done; a non-zero
 	// exit makes the task fail and triggers a retry. This guards against agents
 	// that claim completion without producing the expected artifact.
-	Verify     string            `json:"verify,omitempty"`
-	VerifyMode string            `json:"verify_mode,omitempty"`
-	VerifySpec *VerificationSpec `json:"verify_spec,omitempty"`
+	Verify     string            `json:"verify,omitempty" yaml:"verify,omitempty"`
+	VerifyMode string            `json:"verify_mode,omitempty" yaml:"verify-mode,omitempty"`
+	VerifySpec *VerificationSpec `json:"verify_spec,omitempty" yaml:"verify-spec,omitempty"`
 	Requires   []string          `json:"requires,omitempty"`
 	MaxRetries int               `json:"max_retries,omitempty"` // Maximum number of retries if verify fails
 	OnFailure  *int              `json:"on_failure,omitempty"`  // 0-based index of the task to jump back to if verify fails

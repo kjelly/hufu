@@ -32,19 +32,19 @@ func TestLintVerifier_AntiPatterns(t *testing.T) {
 
 		// observation mode — all anti-patterns are exempt
 		{
-			name:   "observation/exempt: || true is ignored",
-			spec:   VerificationSpec{Type: VerifyCommandExit, Mode: "observation", Command: "check || true"},
-			want:   want{none: true},
+			name: "observation/exempt: || true is ignored",
+			spec: VerificationSpec{Type: VerifyCommandExit, Mode: "observation", Command: "check || true"},
+			want: want{none: true},
 		},
 		{
-			name:   "observation/exempt: echo alone is ignored",
-			spec:   VerificationSpec{Type: VerifyCommandExit, Mode: "observation", Command: "echo status"},
-			want:   want{none: true},
+			name: "observation/exempt: echo alone is ignored",
+			spec: VerificationSpec{Type: VerifyCommandExit, Mode: "observation", Command: "echo status"},
+			want: want{none: true},
 		},
 		{
-			name:   "observation/exempt: grep -c is ignored",
-			spec:   VerificationSpec{Type: VerifyCommandExit, Mode: "observation", Command: "ps aux | grep -c running"},
-			want:   want{none: true},
+			name: "observation/exempt: grep -c is ignored",
+			spec: VerificationSpec{Type: VerifyCommandExit, Mode: "observation", Command: "ps aux | grep -c running"},
+			want: want{none: true},
 		},
 
 		// typed non-command verifiers are always clean
@@ -61,8 +61,8 @@ func TestLintVerifier_AntiPatterns(t *testing.T) {
 		{
 			name: "typed/json_assert is asserting",
 			spec: VerificationSpec{
-				Type: VerifyJSONAssert,
-				Path: "output.json",
+				Type:       VerifyJSONAssert,
+				Path:       "output.json",
 				Assertions: []JSONAssertion{{Path: "status", Equals: "ok"}},
 			},
 			want: want{none: true},
@@ -640,6 +640,107 @@ acceptance:
 	if len(findings) != 0 {
 		t.Fatalf("expected 0 findings for observation verifications/criteria, got %d: %v", len(findings), findings)
 	}
+}
+
+func TestTeamContractPreflightIncludesStaticTasksAndExecutables(t *testing.T) {
+	tests := []struct {
+		name             string
+		session          *TeamSession
+		wantLintCode     string
+		wantResolveCode  string
+		wantLintField    string
+		wantResolveField string
+	}{
+		{
+			name: "static task verifier is linted and resolved",
+			session: &TeamSession{
+				Dir: t.TempDir(),
+				ContractTasks: []TaskDef{{
+					Verify: "missing-wp18-command || true",
+				}},
+			},
+			wantLintCode:     FindingVerifierNotAsserting,
+			wantResolveCode:  FindingExecutableUnresolved,
+			wantLintField:    "tasks[0].verify",
+			wantResolveField: "tasks[0].execution",
+		},
+		{
+			name: "acceptance criterion command is resolved",
+			session: &TeamSession{
+				Dir: t.TempDir(),
+				Config: agent.TeamConfig{AcceptanceSpec: &agent.AcceptanceSpec{Criteria: []agent.AcceptanceCriterion{{
+					ID:     "artifact",
+					Verify: agent.VerificationSpec{Type: VerifyCommandExit, Command: "missing-wp18-criterion-command"},
+				}}}},
+			},
+			wantResolveCode:  FindingExecutableUnresolved,
+			wantResolveField: "acceptance.criteria[0].execution",
+		},
+		{
+			name: "typed non-command contract needs no executable resolution",
+			session: &TeamSession{ContractTasks: []TaskDef{{
+				VerifySpec: &VerificationSpec{Type: VerifyFileExists, Path: "result.txt"},
+			}}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lintFindings := LintTeamContracts(tt.session)
+			if tt.wantLintCode == "" {
+				if len(lintFindings) != 0 {
+					t.Fatalf("LintTeamContracts() = %#v, want no findings", lintFindings)
+				}
+			} else if !hasContractFinding(lintFindings, tt.wantLintCode, tt.wantLintField) {
+				t.Fatalf("LintTeamContracts() = %#v, want %s at %s", lintFindings, tt.wantLintCode, tt.wantLintField)
+			}
+
+			resolveFindings := ResolveTeamContractExecutables(tt.session, tt.session.Dir)
+			if tt.wantResolveCode == "" {
+				if len(resolveFindings) != 0 {
+					t.Fatalf("ResolveTeamContractExecutables() = %#v, want no findings", resolveFindings)
+				}
+			} else if !hasContractFinding(resolveFindings, tt.wantResolveCode, tt.wantResolveField) {
+				t.Fatalf("ResolveTeamContractExecutables() = %#v, want %s at %s", resolveFindings, tt.wantResolveCode, tt.wantResolveField)
+			}
+		})
+	}
+}
+
+func TestLoadTeamRetainsStaticContractTasks(t *testing.T) {
+	dir := t.TempDir()
+	teamYAML := `name: doctor-contracts
+tasks:
+  - agent: worker
+    goal: verify the artifact
+    verify-spec:
+      type: command_exit
+      command: test -f artifact.txt
+`
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(teamYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agentMarkdown := "---\nname: worker\nrole: worker\n---\nWorker.\n"
+	if err := os.WriteFile(filepath.Join(dir, "worker.md"), []byte(agentMarkdown), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := LoadTeam(dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(session.ContractTasks) != 1 || session.ContractTasks[0].VerifySpec == nil || session.ContractTasks[0].VerifySpec.Command != "test -f artifact.txt" {
+		t.Fatalf("ContractTasks = %#v, want static task contract", session.ContractTasks)
+	}
+}
+
+func hasContractFinding(findings []ContractFinding, code, field string) bool {
+	for _, finding := range findings {
+		if finding.Code == code && finding.Field == field {
+			return true
+		}
+	}
+	return false
 }
 
 func TestEvaluateAndChain(t *testing.T) {

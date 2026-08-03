@@ -18,12 +18,13 @@ import (
 )
 
 type TeamSession struct {
-	Config     agent.TeamConfig
-	Dir        string
-	Workspace  string
-	Agents     map[string]*agent.AgentDef
-	MCPServers map[string]mcp.MCPServerConfig
-	Skills     []*skill.SkillDef
+	Config        agent.TeamConfig
+	Dir           string
+	Workspace     string
+	Agents        map[string]*agent.AgentDef
+	MCPServers    map[string]mcp.MCPServerConfig
+	Skills        []*skill.SkillDef
+	ContractTasks []TaskDef // Optional static task contracts used by preflight tooling.
 }
 
 type agentFrontmatter struct {
@@ -101,20 +102,21 @@ type teamConfigYAML struct {
 	ExecutionProfile    string                           `yaml:"execution-profile"`
 	GoalMode            string                           `yaml:"goal-mode"`
 	Reliability         rawReliabilityConfig             `yaml:"reliability"`
+	Tasks               []TaskDef                        `yaml:"tasks"`
 }
 
 type rawReliabilityConfig struct {
-	MaxDiagnosticTasksWithoutProgress int   `yaml:"max-diagnostic-tasks-without-progress"`
-	MaxSameFailureFingerprint         int   `yaml:"max-same-failure-fingerprint"`
-	MaxRepairsPerCriterion            int   `yaml:"max-repairs-per-criterion"`
+	MaxDiagnosticTasksWithoutProgress int `yaml:"max-diagnostic-tasks-without-progress"`
+	MaxSameFailureFingerprint         int `yaml:"max-same-failure-fingerprint"`
+	MaxRepairsPerCriterion            int `yaml:"max-repairs-per-criterion"`
 	// MaxSystemicFailureTasks is a pointer so an explicit YAML zero
 	// (max-systemic-failure-tasks: 0) is distinguishable from unset and
 	// can override the default (3) to disable the feature. Refs:
 	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
-	MaxSystemicFailureTasks           *int  `yaml:"max-systemic-failure-tasks"`
-	HardEnforcement                   *bool `yaml:"hard-enforcement"`
-	WarnOnly                          bool  `yaml:"warn-only"`
-	VerifierLintMode                  string `yaml:"verifier-lint"`
+	MaxSystemicFailureTasks *int   `yaml:"max-systemic-failure-tasks"`
+	HardEnforcement         *bool  `yaml:"hard-enforcement"`
+	WarnOnly                bool   `yaml:"warn-only"`
+	VerifierLintMode        string `yaml:"verifier-lint"`
 	// No-progress budget pointers (§8.1, WP-12). Pointers so an explicit
 	// YAML 0 (disable) is distinguishable from unset (restore default).
 	MaxTokensWithoutProgress *int `yaml:"max-tokens-without-progress"`
@@ -691,6 +693,33 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	return cfg, nil
 }
 
+// loadTeamContractTasks reads optional static task contracts from team YAML.
+// They are intentionally kept on TeamSession for preflight tooling only: task
+// dispatch remains coordinator-driven and is not changed by declaring them.
+func loadTeamContractTasks(teamDir string, vars map[string]string) ([]TaskDef, error) {
+	for _, name := range []string{"team.yml", "team.yaml"} {
+		data, err := os.ReadFile(filepath.Join(teamDir, name))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read team task contracts: %w", err)
+		}
+		text, err := applyTemplate(string(data), name, vars)
+		if err != nil {
+			return nil, fmt.Errorf("template team task contracts: %w", err)
+		}
+		var config struct {
+			Tasks []TaskDef `yaml:"tasks"`
+		}
+		if err := yaml.Unmarshal([]byte(text), &config); err != nil {
+			return nil, fmt.Errorf("parse team task contracts: %w", err)
+		}
+		return config.Tasks, nil
+	}
+	return nil, nil
+}
+
 func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*TeamSession, error) {
 	absDir, err := filepath.Abs(teamDir)
 	if err != nil {
@@ -710,6 +739,10 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 	}
 	if cfg.Name == "" {
 		cfg.Name = filepath.Base(absDir)
+	}
+	contractTasks, err := loadTeamContractTasks(absDir, vars)
+	if err != nil {
+		return nil, err
 	}
 
 	// Build template vars: CLI --var (string) + team.yaml vars (interface{}) + built-in
@@ -735,11 +768,12 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 		workspace = filepath.Join(cwd, cfg.WorkspaceDir)
 	}
 	session := &TeamSession{
-		Config:     cfg,
-		Dir:        absDir,
-		Workspace:  workspace,
-		Agents:     make(map[string]*agent.AgentDef),
-		MCPServers: make(map[string]mcp.MCPServerConfig),
+		Config:        cfg,
+		Dir:           absDir,
+		Workspace:     workspace,
+		Agents:        make(map[string]*agent.AgentDef),
+		MCPServers:    make(map[string]mcp.MCPServerConfig),
+		ContractTasks: contractTasks,
 	}
 
 	// Inject built-in vars BEFORE loading agents

@@ -26,6 +26,7 @@ var doctorCmd = &cobra.Command{
   - the resolved default / sidecar / guard models
   - the workspace directory is writable
   - how many agent teams are discoverable
+  - static task and acceptance verifier contracts are asserting and resolvable
 
 Most "the agent did nothing" failures are a provider/model misconfiguration.
 Run this first to find them in seconds instead of waiting for a timeout.`,
@@ -115,18 +116,31 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 			}
 			session, err := team.LoadTeam(teamDir, nil, nil)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "  %s team %s: load failed: %v\n", warn, teamName, err)
+				contractErrors++
+				ok = false
+				fmt.Fprintf(os.Stderr, "  %s team %s: contract load failed: %v\n", fail, teamName, err)
 				continue
 			}
-			findings := team.LintTeamContracts(session)
-			for _, f := range findings {
+			projectDir, err := os.Getwd()
+			if err != nil {
+				contractErrors++
+				ok = false
+				fmt.Fprintf(os.Stderr, "  %s team %s: resolve runtime project directory: %v\n", fail, teamName, err)
+				continue
+			}
+			for _, finding := range collectDoctorContractFindings(session, projectDir) {
+				f := finding.Finding
+				location := finding.Location
+				if location == "" {
+					location = "contract"
+				}
 				if f.Severity == team.FindingSeverityError {
 					contractErrors++
 					ok = false
-					fmt.Fprintf(os.Stderr, "  %s team %s acceptance: %s (%s)\n", fail, teamName, f.Message, f.Code)
+					fmt.Fprintf(os.Stderr, "  %s team %s %s: %s (%s)\n", fail, teamName, location, f.Message, f.Code)
 				} else {
 					contractWarnings++
-					fmt.Fprintf(os.Stderr, "  %s team %s acceptance: %s (%s)\n", warn, teamName, f.Message, f.Code)
+					fmt.Fprintf(os.Stderr, "  %s team %s %s: %s (%s)\n", warn, teamName, location, f.Message, f.Code)
 				}
 			}
 		}
@@ -143,6 +157,23 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "%s Some checks failed — fix the items above before running a task.\n", fail)
 	return fmt.Errorf("doctor: preflight checks failed")
+}
+
+type doctorContractFinding struct {
+	Location string
+	Finding  team.ContractFinding
+}
+
+// collectDoctorContractFindings combines the pure WP-01 verifier lint and
+// WP-04 executable resolver for a loaded team without executing contracts.
+// projectDir is the same process CWD that NewCoordinator uses at runtime.
+func collectDoctorContractFindings(session *team.TeamSession, projectDir string) []doctorContractFinding {
+	findings := append(team.LintTeamContracts(session), team.ResolveTeamContractExecutables(session, projectDir)...)
+	out := make([]doctorContractFinding, 0, len(findings))
+	for _, finding := range findings {
+		out = append(out, doctorContractFinding{Location: finding.Field, Finding: finding})
+	}
+	return out
 }
 
 func fetchModels(providerURL, apiKey string) ([]string, error) {

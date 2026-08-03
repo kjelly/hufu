@@ -1,6 +1,7 @@
 package team
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -65,25 +66,25 @@ func LintTeamContracts(session *TeamSession) []ContractFinding {
 	accSpec := session.Config.AcceptanceSpec
 	if accSpec != nil {
 		// 1. Lint every command in accSpec.Commands
-		for _, cmd := range accSpec.Commands {
+		for index, cmd := range accSpec.Commands {
 			cmd = strings.TrimSpace(cmd)
 			if cmd != "" {
 				spec := VerificationSpec{
 					Type:    VerifyCommandExit,
 					Command: cmd,
 				}
-				findings = append(findings, LintVerifierWithMode(spec, cmd, "")...)
+				findings = append(findings, scopeContractFindings(fmt.Sprintf("acceptance.commands[%d]", index), LintVerifierWithMode(spec, cmd, ""))...)
 			}
 		}
 
 		// 2. Lint every VerificationSpec in accSpec.Verifications
-		for _, v := range accSpec.Verifications {
-			findings = append(findings, LintVerifierWithMode(v, v.Command, v.Mode)...)
+		for index, v := range accSpec.Verifications {
+			findings = append(findings, scopeContractFindings(fmt.Sprintf("acceptance.verifications[%d]", index), LintVerifierWithMode(v, v.Command, v.Mode))...)
 		}
 
 		// 3. Lint every AcceptanceCriterion in accSpec.Criteria
-		for _, crit := range accSpec.Criteria {
-			findings = append(findings, LintVerifierWithMode(crit.Verify, crit.Verify.Command, crit.Verify.Mode)...)
+		for index, crit := range accSpec.Criteria {
+			findings = append(findings, scopeContractFindings(fmt.Sprintf("acceptance.criteria[%d]", index), LintVerifierWithMode(crit.Verify, crit.Verify.Command, crit.Verify.Mode))...)
 		}
 	}
 
@@ -104,10 +105,83 @@ func LintTeamContracts(session *TeamSession) []ContractFinding {
 				Type:    VerifyCommandExit,
 				Command: legacyCmd,
 			}
-			findings = append(findings, LintVerifierWithMode(spec, legacyCmd, "")...)
+			findings = append(findings, scopeContractFindings("acceptance", LintVerifierWithMode(spec, legacyCmd, ""))...)
 		}
 	}
 
+	for index, task := range session.ContractTasks {
+		findings = append(findings, scopeContractFindings(fmt.Sprintf("tasks[%d]", index), LintTaskDef(task))...)
+	}
+
+	return findings
+}
+
+// ResolveTeamContractExecutables reports unresolved executables in every
+// command-based task and acceptance verifier. workDir must be the runtime
+// project directory used to execute verification commands, rather than the
+// directory containing team.yaml. It calls the WP-04 resolver without
+// executing any command.
+func ResolveTeamContractExecutables(session *TeamSession, workDir string) []ContractFinding {
+	if session == nil {
+		return nil
+	}
+	var findings []ContractFinding
+	appendCommand := func(scope, command string) {
+		command = strings.TrimSpace(command)
+		if command != "" {
+			findings = append(findings, scopeContractFindings(scope, ResolveCommandExecutables(command, workDir))...)
+		}
+	}
+	if spec := session.Config.AcceptanceSpec; spec != nil {
+		for index, command := range spec.Commands {
+			appendCommand(fmt.Sprintf("acceptance.commands[%d]", index), command)
+		}
+		for index, verification := range spec.Verifications {
+			appendCommand(fmt.Sprintf("acceptance.verifications[%d]", index), commandForExecutableResolution(verification, verification.Command, verification.Mode))
+		}
+		for index, criterion := range spec.Criteria {
+			appendCommand(fmt.Sprintf("acceptance.criteria[%d]", index), commandForExecutableResolution(criterion.Verify, criterion.Verify.Command, criterion.Verify.Mode))
+		}
+	}
+	legacyAcceptance := strings.TrimSpace(session.Config.Acceptance)
+	if legacyAcceptance != "" && (session.Config.AcceptanceSpec == nil || !containsCommand(session.Config.AcceptanceSpec.Commands, legacyAcceptance)) {
+		appendCommand("acceptance", legacyAcceptance)
+	}
+	for index, task := range session.ContractTasks {
+		var spec VerificationSpec
+		if task.VerifySpec != nil {
+			spec = *task.VerifySpec
+		}
+		appendCommand(fmt.Sprintf("tasks[%d]", index), commandForExecutableResolution(spec, task.Verify, task.VerifyMode))
+	}
+	return findings
+}
+
+func commandForExecutableResolution(spec VerificationSpec, legacyCommand, legacyMode string) string {
+	normalized := NormalizeVerificationSpec(spec, legacyCommand, legacyMode)
+	if normalized.Type != VerifyCommandExit {
+		return ""
+	}
+	return normalized.Command
+}
+
+func containsCommand(commands []string, target string) bool {
+	for _, command := range commands {
+		if strings.TrimSpace(command) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func scopeContractFindings(scope string, findings []ContractFinding) []ContractFinding {
+	for index := range findings {
+		if findings[index].Field == "" {
+			findings[index].Field = scope
+		} else {
+			findings[index].Field = scope + "." + findings[index].Field
+		}
+	}
 	return findings
 }
 
