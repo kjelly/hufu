@@ -1,0 +1,13 @@
+{
+  "project_id": "golden-project",
+  "items": [
+    {"id":"path","kind":"pattern","content":"edit internal/context/retrieval.go to preserve scope","priority":50},
+    {"id":"symbol","kind":"architecture","content":"ContextCompiler assembles the model bundle","priority":75},
+    {"id":"command","kind":"verification","content":"run go test ./internal/context after changes","priority":50}
+  ],
+  "queries": [
+    {"query":"fix internal/context/retrieval.go","want_id":"path"},
+    {"query":"ContextCompiler()","want_id":"symbol"},
+    {"query":"go test ./internal/context","want_id":"command"}
+  ]
+}
