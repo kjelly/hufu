@@ -494,6 +494,25 @@ func (c *Coordinator) emitContractWarnings(todoID string, findings []ContractFin
 // terminal (TaskError/TaskBlocked) rather than left pending and re-driven
 // forever on the next crash-resume (reviewer P1).
 func (c *Coordinator) recordContractFailure(task TaskDef, todoID string, findings []ContractFinding) {
+	if c != nil {
+		preflightFailures := 0
+		nonAsserting := 0
+		for _, finding := range findings {
+			if finding.Severity != FindingSeverityError {
+				continue
+			}
+			preflightFailures++
+			if finding.Code == FindingVerifierNotAsserting {
+				nonAsserting++
+			}
+		}
+		if preflightFailures > 0 {
+			c.metricsMu.Lock()
+			c.preflightFailuresCaught += preflightFailures
+			c.nonAssertingVerifiersRejected += nonAsserting
+			c.metricsMu.Unlock()
+		}
+	}
 	agentName := task.Agent
 	taskDesc := task.Goal
 	var msgs []string

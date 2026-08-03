@@ -70,3 +70,37 @@ func TestBuildReportMDIncludesCanonicalRunOutcome(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildReportMDWarnsWhenRunHasNoTypedVerifiers(t *testing.T) {
+	data := &reportData{StartedAt: time.Now(), RunResult: &team.RunResult{
+		Metrics: team.RunMetrics{TasksWithVerifier: 2, TypedVerifiers: 0},
+	}}
+	report := buildReportMD(data, "demo", "partial")
+	if !strings.Contains(report, "No typed verifiers were used") {
+		t.Fatalf("report missing typed-adoption warning:\n%s", report)
+	}
+}
+
+func TestReliabilityProjectionsIncludeFailureMaps(t *testing.T) {
+	metrics := team.RunMetrics{
+		FailuresByClass: map[team.TaskFailureClass]int{team.FailureExecution: 2},
+		FailuresByPhase: map[string]int{"verification": 1},
+	}
+	report := buildReportMD(&reportData{StartedAt: time.Now(), RunResult: &team.RunResult{Metrics: metrics}}, "demo", "partial")
+	for _, want := range []string{"Failures by class", "execution:2", "Failures by phase", "verification:1"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+
+	workspace := t.TempDir()
+	if err := team.SaveSession(workspace, &team.SessionData{RunResult: &team.RunResult{Metrics: metrics}}); err != nil {
+		t.Fatal(err)
+	}
+	fixData := collectFixData(&team.TeamSession{Workspace: workspace}, "")
+	for _, want := range []string{"failures_by_class=map[execution:2]", "failures_by_phase=map[verification:1]"} {
+		if !strings.Contains(fixData.Reliability, want) {
+			t.Fatalf("fix reliability context missing %q: %s", want, fixData.Reliability)
+		}
+	}
+}

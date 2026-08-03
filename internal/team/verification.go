@@ -570,6 +570,8 @@ func executeCommandVerificationWithRawOutput(parentCtx context.Context, shell, w
 	} else {
 		if failed, reason := CheckDefinitiveVerifierFailure(res.Stdout, res.Stderr); failed {
 			res.ExitCode = 1
+			res.Overturned = true
+			res.OverturnReason = reason
 			return applyVerificationMode(res, errors.New(reason), spec.Mode)
 		} else if isWeak, reason := CheckWeakVerifierWarning(res.Stdout, res.Stderr); isWeak {
 			res.WeakWarning = true

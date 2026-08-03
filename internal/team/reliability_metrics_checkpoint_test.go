@@ -193,6 +193,142 @@ func TestMetricsIncludeOutcomeReliabilitySignals(t *testing.T) {
 	}
 }
 
+func TestMetricsIncludeWP17ContractAndVerifierSignals(t *testing.T) {
+	tracker := NewTaskTracker()
+	tracker.TodoList().Restore([]*TodoItem{
+		{
+			ID: "typed", Agent: "worker", Status: TaskDone,
+			VerifySpec: &VerificationSpec{Type: VerifyFileExists, Path: "result"},
+		},
+		{
+			ID: "legacy", Agent: "worker", Status: TaskDone, Verify: "test -f legacy",
+		},
+		{
+			ID: "unverified", Agent: "worker", Status: TaskDone,
+		},
+		{
+			ID: "timeout", Agent: "worker", Status: TaskBlocked,
+			FailureEvent: &FailureEventPayload{Phase: "execution", FailureClass: FailureTimeout, RetryDisposition: ReconcileOnly},
+			Resolution:   &TaskResolution{Status: "reconciled"},
+		},
+		{
+			ID: "cancelled", Agent: "worker", Status: TaskError,
+			FailureEvent: &FailureEventPayload{Phase: "dispatch", FailureClass: FailureCancelled, RetryDisposition: RetryNone},
+			VerifyResult: &VerificationResult{Overturned: true, OverturnReason: "structured verifier reported failure"},
+			ExecutionReceipts: []ExecutionReceipt{{RepairProvenance: &RepairProvenance{
+				Attempted: true,
+				History:   []RepairAttemptProvenance{{Attempt: 1, FailureReason: RepairFailureInvalidSchema}},
+			}}},
+		},
+	})
+	c := &Coordinator{taskTracker: tracker, preflightFailuresCaught: 3, nonAssertingVerifiersRejected: 2}
+	m := c.Metrics()
+	if m.TypedVerifiers != 1 || m.TasksWithVerifier != 2 || m.TypedVerifierAdoptionRate != 0.5 {
+		t.Fatalf("typed verifier metrics = %#v", m)
+	}
+	if m.TasksDoneWithoutObjectiveVerifier != 1 || m.TimeoutTasksRecovered != 1 || m.VerificationsOverturned != 1 {
+		t.Fatalf("task/verifier metrics = %#v", m)
+	}
+	if m.FailuresByClass[FailureTimeout] != 1 || m.FailuresByClass[FailureCancelled] != 1 || m.FailuresByPhase["execution"] != 1 || m.RetryAttemptsAvoidedByDisposition[ReconcileOnly] != 1 {
+		t.Fatalf("failure/disposition metrics = %#v", m)
+	}
+	if m.ProtocolRepairFailuresByReason[RepairFailureInvalidSchema] != 1 || m.CancelledTasksExcludedFromRetries != 1 {
+		t.Fatalf("protocol/cancelled metrics = %#v", m)
+	}
+	if m.PreflightFailuresCaught != 3 || m.NonAssertingVerifiersRejected != 2 {
+		t.Fatalf("preflight metrics = %#v", m)
+	}
+}
+
+func TestMetricsIncludeReceiptVerificationAndAllFailureEvents(t *testing.T) {
+	workspace := t.TempDir()
+	eventStore, err := NewEventStore(workspace, "metrics-run", "metrics-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eventStore.Close()
+	appendFailure := func(taskID string, failure FailureEventPayload) {
+		t.Helper()
+		payload, err := json.Marshal(map[string]any{"failure_event": failure})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := eventStore.Append(RunEvent{Type: "task_failed", TaskID: taskID, Payload: payload}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendFailure("1", FailureEventPayload{TaskID: "1", Phase: "execution", FailureClass: FailureExecution, RetryDisposition: RetryWorker})
+	appendFailure("1", FailureEventPayload{TaskID: "1", Phase: "verification", FailureClass: FailureVerify, RetryDisposition: ReplanRequired})
+	appendFailure("2", FailureEventPayload{TaskID: "2", Phase: "preflight", FailureClass: FailureContract, RetryDisposition: ReplanRequired})
+
+	tracker := NewTaskTracker()
+	tracker.TodoList().Restore([]*TodoItem{{
+		ID: "1", Agent: "worker", Status: TaskDone,
+		VerifyResult: &VerificationResult{Command: "test -f output", ExitCode: 0, EvaluatedAt: time.Now()},
+		ExecutionReceipts: []ExecutionReceipt{{
+			RunID: "metrics-run", TaskID: "1", Attempt: 1,
+			VerifyResult: &VerificationResult{Command: "test -f output", ExitCode: 1, WeakWarning: true, Overturned: true, OverturnReason: "verifier reported failure", EvaluatedAt: time.Now().Add(-time.Second)},
+		}},
+	}})
+	c := &Coordinator{taskTracker: tracker, eventStore: eventStore, executionRunID: "metrics-run"}
+	m := c.Metrics()
+	if m.VerificationsOverturned != 1 || m.WorkerSuccessRejected != 1 || m.WeakVerifierWarnings != 1 {
+		t.Fatalf("receipt verification metrics = %#v", m)
+	}
+	if m.FailuresByClass[FailureExecution] != 1 || m.FailuresByClass[FailureVerify] != 1 || m.FailuresByClass[FailureContract] != 1 {
+		t.Fatalf("failure classes did not retain all events: %#v", m.FailuresByClass)
+	}
+	if m.FailuresByPhase["execution"] != 1 || m.FailuresByPhase["verification"] != 1 || m.FailuresByPhase["preflight"] != 1 {
+		t.Fatalf("failure phases did not retain all events: %#v", m.FailuresByPhase)
+	}
+}
+
+func TestMetricsScopeFailureEventsToActiveRun(t *testing.T) {
+	workspace := t.TempDir()
+	appendFailure := func(store *EventStore, taskID string, failure FailureEventPayload) {
+		t.Helper()
+		payload, err := json.Marshal(map[string]any{"failure_event": failure})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Append(RunEvent{Type: "task_failed", TaskID: taskID, Payload: payload}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	priorStore, err := NewEventStore(workspace, "prior-run", "metrics-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendFailure(priorStore, "prior", FailureEventPayload{
+		TaskID: "prior", Phase: "preflight", FailureClass: FailureContract, RetryDisposition: ReplanRequired,
+	})
+	if err := priorStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	activeStore, err := NewEventStore(workspace, "active-run", "metrics-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer activeStore.Close()
+	appendFailure(activeStore, "active", FailureEventPayload{
+		TaskID: "active", Phase: "dispatch", FailureClass: FailureCancelled, RetryDisposition: NeedsHuman,
+	})
+
+	c := &Coordinator{taskTracker: NewTaskTracker(), eventStore: activeStore, executionRunID: "active-run"}
+	m := c.Metrics()
+	if m.FailuresByClass[FailureCancelled] != 1 || m.FailuresByClass[FailureContract] != 0 {
+		t.Fatalf("failure classes include another run: %#v", m.FailuresByClass)
+	}
+	if m.FailuresByPhase["dispatch"] != 1 || m.FailuresByPhase["preflight"] != 0 {
+		t.Fatalf("failure phases include another run: %#v", m.FailuresByPhase)
+	}
+	if m.RetryAttemptsAvoidedByDisposition[NeedsHuman] != 1 || m.RetryAttemptsAvoidedByDisposition[ReplanRequired] != 0 || m.CancelledTasksExcludedFromRetries != 1 {
+		t.Fatalf("failure disposition metrics include another run: %#v", m)
+	}
+}
+
 func TestMetricsTrackProgressTimestampAndPlanUsageWithoutDoubleCounting(t *testing.T) {
 	c := &Coordinator{sessionData: &SessionData{
 		LastCriterionProgressAt: time.Now().Add(-90 * time.Second).UTC().Format(time.RFC3339Nano),

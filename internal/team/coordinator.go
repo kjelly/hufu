@@ -346,21 +346,23 @@ type Coordinator struct {
 	validateModelsErr  error
 
 	// Unattended / budget controls for no-human-watching operation.
-	unattended                   bool
-	autoApprove                  bool
-	maxWallClock                 time.Duration // 0 = unlimited
-	tokenBudget                  int64         // 0 = unlimited; cumulative LLM tokens
-	tokensUsed                   atomic.Int64
-	acceptanceCmd                string // optional shell command run at finish
-	acceptanceSpec               *AcceptanceSpec
-	acceptanceContractFixed      bool
-	acceptanceContractRevision   int
-	continuationResume           *ContinuationCheckpoint
-	metricsMu                    sync.RWMutex
-	retriesByFailureClass        map[TaskFailureClass]int
-	antiThrashing                AntiThrashingState
-	compactions                  int
-	tokensSinceCriterionProgress int64
+	unattended                    bool
+	autoApprove                   bool
+	maxWallClock                  time.Duration // 0 = unlimited
+	tokenBudget                   int64         // 0 = unlimited; cumulative LLM tokens
+	tokensUsed                    atomic.Int64
+	acceptanceCmd                 string // optional shell command run at finish
+	acceptanceSpec                *AcceptanceSpec
+	acceptanceContractFixed       bool
+	acceptanceContractRevision    int
+	continuationResume            *ContinuationCheckpoint
+	metricsMu                     sync.RWMutex
+	retriesByFailureClass         map[TaskFailureClass]int
+	preflightFailuresCaught       int
+	nonAssertingVerifiersRejected int
+	antiThrashing                 AntiThrashingState
+	compactions                   int
+	tokensSinceCriterionProgress  int64
 	// turnsSinceCriterionProgress counts coordinator model turns
 	// (runOrchestrator invocations) since the last objective criterion
 	// advancement. Reset only by criterion progress (§8.1, WP-12).

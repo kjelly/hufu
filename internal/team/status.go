@@ -135,18 +135,20 @@ const (
 // VerificationResult is the durable evidence produced by a task's objective
 // verification command. Output is intentionally bounded by the verifier.
 type VerificationResult struct {
-	Command     string            `json:"command,omitempty"`
-	WorkDir     string            `json:"work_dir,omitempty"`
-	ExitCode    int               `json:"exit_code"`
-	Stdout      string            `json:"stdout,omitempty"`
-	Stderr      string            `json:"stderr,omitempty"`
-	Duration    time.Duration     `json:"duration,omitempty"`
-	TimedOut    bool              `json:"timed_out,omitempty"`
-	WeakWarning bool              `json:"weak_warning,omitempty"`
-	WeakReason  string            `json:"weak_reason,omitempty"`
-	Fingerprint string            `json:"fingerprint,omitempty"`
-	EvaluatedAt time.Time         `json:"evaluated_at,omitempty"`
-	Spec        *VerificationSpec `json:"spec,omitempty"`
+	Command        string            `json:"command,omitempty"`
+	WorkDir        string            `json:"work_dir,omitempty"`
+	ExitCode       int               `json:"exit_code"`
+	Stdout         string            `json:"stdout,omitempty"`
+	Stderr         string            `json:"stderr,omitempty"`
+	Duration       time.Duration     `json:"duration,omitempty"`
+	TimedOut       bool              `json:"timed_out,omitempty"`
+	WeakWarning    bool              `json:"weak_warning,omitempty"`
+	WeakReason     string            `json:"weak_reason,omitempty"`
+	Overturned     bool              `json:"overturned,omitempty"`
+	OverturnReason string            `json:"overturn_reason,omitempty"`
+	Fingerprint    string            `json:"fingerprint,omitempty"`
+	EvaluatedAt    time.Time         `json:"evaluated_at,omitempty"`
+	Spec           *VerificationSpec `json:"spec,omitempty"`
 	// rawStdout is intentionally not serialized. Command verification keeps
 	// persisted evidence bounded, while json_assert needs the complete output
 	// from the same command invocation to parse a single JSON document.

@@ -24,12 +24,17 @@ func (c *Coordinator) Metrics() RunMetrics {
 		lastStrategies[fp] = strategy
 	}
 	metrics := RunMetrics{RetriesByFailureClass: byClass, Compactions: c.compactions,
-		RepeatedFailureFingerprints:   repeatedFingerprintCount(c.antiThrashing.Counts),
-		SystemicFingerprintsEscalated: c.antiThrashing.SystemicEscalations,
-		RecoveryStrategyChanges:       c.antiThrashing.StrategyChanges,
-		LastRecoveryStrategies:        lastStrategies,
-		DiagnosticTasksSinceProgress:  c.antiThrashing.DiagnosticSinceProgress,
-		RepairAttemptsByCriterion:     repairCounts, AntiThrashingWarnings: c.antiThrashing.Warnings}
+		FailuresByClass: make(map[TaskFailureClass]int), FailuresByPhase: make(map[string]int),
+		RetryAttemptsAvoidedByDisposition: make(map[RetryDisposition]int),
+		ProtocolRepairFailuresByReason:    make(map[RepairFailureReason]int),
+		RepeatedFailureFingerprints:       repeatedFingerprintCount(c.antiThrashing.Counts),
+		SystemicFingerprintsEscalated:     c.antiThrashing.SystemicEscalations,
+		RecoveryStrategyChanges:           c.antiThrashing.StrategyChanges,
+		LastRecoveryStrategies:            lastStrategies,
+		DiagnosticTasksSinceProgress:      c.antiThrashing.DiagnosticSinceProgress,
+		RepairAttemptsByCriterion:         repairCounts, AntiThrashingWarnings: c.antiThrashing.Warnings,
+		PreflightFailuresCaught: c.preflightFailuresCaught, NonAssertingVerifiersRejected: c.nonAssertingVerifiersRejected}
+	metrics.RepeatedFailureFingerprintsStopped = metrics.RepeatedFailureFingerprints
 	metrics.TokensSinceCriterionProgress = c.tokensSinceCriterionProgress
 	// No-progress budget counters (§8.1, WP-12). Read under the same lock.
 	metrics.TurnsSinceCriterionProgress = c.turnsSinceCriterionProgress
@@ -49,35 +54,11 @@ func (c *Coordinator) Metrics() RunMetrics {
 	}
 	metrics.TasksByCriterion = make(map[string]int)
 	if c.taskTracker != nil {
-		for _, item := range c.taskTracker.TodoList().Items() {
-			if item == nil {
-				continue
-			}
-			for _, criterionID := range item.Advances {
-				metrics.TasksByCriterion[criterionID]++
-			}
-			if item.VerifyResult != nil && item.VerifyResult.WeakWarning {
-				metrics.WeakVerifierWarnings++
-			}
-			if item.Status == TaskError && item.VerifyResult != nil && item.VerifyResult.ExitCode != 0 {
-				metrics.WorkerSuccessRejected++
-			}
-			if item.RecoveryState != "" && item.RecoveryState != RecoveryStateNotStarted && item.Status != TaskDone {
-				metrics.ExecutionReplaysAvoided++
-			}
-			for _, receipt := range item.ExecutionReceipts {
-				// A progress submission is evidence that execution is incomplete,
-				// not a protocol-repair failure. Keep it out of the protocol
-				// repair counters (§7); successful repairs and legacy receipts
-				// without a reason remain counted.
-				if receipt.RepairProvenance != nil && receipt.RepairProvenance.Attempted {
-					metrics.ProtocolRepairsAttempted += protocolRepairAttemptCount(receipt.RepairProvenance)
-					if receipt.RepairProvenance.Success {
-						metrics.ProtocolRepairsSucceeded++
-					}
-				}
-			}
-		}
+		accumulateTodoMetrics(&metrics, c.taskTracker.TodoList().Items())
+		accumulateFailureEventMetrics(&metrics, c.failureEventsForMetrics(c.taskTracker.TodoList().Items()))
+	}
+	if metrics.TasksWithVerifier > 0 {
+		metrics.TypedVerifierAdoptionRate = float64(metrics.TypedVerifiers) / float64(metrics.TasksWithVerifier)
 	}
 	if c.sessionData != nil && c.sessionData.LastCriterionProgressAt != "" {
 		if last, err := time.Parse(time.RFC3339Nano, c.sessionData.LastCriterionProgressAt); err == nil && !last.IsZero() {
@@ -85,6 +66,153 @@ func (c *Coordinator) Metrics() RunMetrics {
 		}
 	}
 	return metrics
+}
+
+func accumulateTodoMetrics(metrics *RunMetrics, items []*TodoItem) {
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		for _, criterionID := range item.Advances {
+			metrics.TasksByCriterion[criterionID]++
+		}
+		if item.Verify != "" || item.VerifySpec != nil {
+			metrics.TasksWithVerifier++
+			if item.VerifySpec != nil {
+				metrics.TypedVerifiers++
+			}
+		} else if item.Status == TaskDone {
+			metrics.TasksDoneWithoutObjectiveVerifier++
+		}
+		accumulateVerificationMetrics(metrics, item)
+		for _, receipt := range item.ExecutionReceipts {
+			accumulateProtocolRepairMetrics(metrics, receipt.RepairProvenance)
+		}
+	}
+}
+
+func (c *Coordinator) failureEventsForMetrics(items []*TodoItem) []*FailureEventPayload {
+	if c != nil && c.eventStore != nil {
+		events, err := c.eventStore.ReadEvents()
+		if err == nil {
+			failures := make([]*FailureEventPayload, 0)
+			for _, event := range events {
+				// The event store is append-only across coordinator runs. A
+				// reliability snapshot must describe this run, not historical
+				// failures from the same workspace. Leave unscoped reads intact
+				// for callers reconstructing legacy stores without an active run.
+				if c.executionRunID != "" && event.RunID != c.executionRunID {
+					continue
+				}
+				switch event.Type {
+				case "task_failed", "task_blocked", "task_protocol_incomplete":
+					failure, present := mergeFailureEventJSON(nil, event.Payload)
+					if present && failure != nil {
+						failures = append(failures, failure)
+					}
+				}
+			}
+			return failures
+		}
+	}
+	failures := make([]*FailureEventPayload, 0, len(items))
+	for _, item := range items {
+		if item != nil && item.FailureEvent != nil {
+			failures = append(failures, item.FailureEvent)
+		}
+	}
+	return failures
+}
+
+func accumulateFailureEventMetrics(metrics *RunMetrics, failures []*FailureEventPayload) {
+	for _, failure := range failures {
+		if failure == nil {
+			continue
+		}
+		metrics.FailuresByClass[failure.FailureClass]++
+		if failure.Phase != "" {
+			metrics.FailuresByPhase[failure.Phase]++
+		}
+		if failure.RetryDisposition != RetryWorker && failure.RetryDisposition != RetryNone {
+			metrics.RetryAttemptsAvoidedByDisposition[failure.RetryDisposition]++
+		}
+		if failure.FailureClass == FailureCancelled {
+			metrics.CancelledTasksExcludedFromRetries++
+		}
+	}
+}
+
+func accumulateTimeoutRecoveryMetrics(metrics *RunMetrics, item *TodoItem) {
+	if item.FailureEvent != nil && item.FailureEvent.FailureClass == FailureTimeout && item.Resolution != nil && item.Resolution.Status == "reconciled" {
+		metrics.TimeoutTasksRecovered++
+	}
+}
+
+func accumulateVerificationMetrics(metrics *RunMetrics, item *TodoItem) {
+	receiptAttempts := make(map[string]bool)
+	receiptResults := make(map[string]bool)
+	for index, receipt := range item.ExecutionReceipts {
+		if receipt.VerifyResult == nil {
+			continue
+		}
+		attemptKey := receipt.RunID + "\x00" + receipt.TaskID + "\x00" + strconv.Itoa(receipt.Attempt)
+		if receipt.RunID == "" && receipt.TaskID == "" && receipt.Attempt == 0 {
+			attemptKey = "receipt-index:" + strconv.Itoa(index)
+		}
+		if receiptAttempts[attemptKey] {
+			continue
+		}
+		receiptAttempts[attemptKey] = true
+		receiptResults[verificationMetricKey(receipt.VerifyResult)] = true
+		accumulateVerificationResultMetrics(metrics, receipt.VerifyResult, true)
+	}
+	if item.VerifyResult != nil {
+		key := verificationMetricKey(item.VerifyResult)
+		if !receiptResults[key] {
+			accumulateVerificationResultMetrics(metrics, item.VerifyResult, item.Status == TaskError)
+		}
+	}
+	accumulateTimeoutRecoveryMetrics(metrics, item)
+	if item.RecoveryState != "" && item.RecoveryState != RecoveryStateNotStarted && item.Status != TaskDone {
+		metrics.ExecutionReplaysAvoided++
+	}
+}
+
+func verificationMetricKey(result *VerificationResult) string {
+	if result == nil {
+		return ""
+	}
+	return result.Command + "\x00" + result.WorkDir + "\x00" + strconv.Itoa(result.ExitCode) + "\x00" + result.Fingerprint + "\x00" + result.EvaluatedAt.UTC().Format(time.RFC3339Nano) + "\x00" + result.OverturnReason
+}
+
+func accumulateVerificationResultMetrics(metrics *RunMetrics, result *VerificationResult, rejected bool) {
+	if result.WeakWarning {
+		metrics.WeakVerifierWarnings++
+	}
+	if rejected && result.ExitCode != 0 {
+		metrics.WorkerSuccessRejected++
+	}
+	if result.Overturned {
+		metrics.VerificationsOverturned++
+	}
+}
+
+func accumulateProtocolRepairMetrics(metrics *RunMetrics, provenance *RepairProvenance) {
+	if provenance == nil || !provenance.Attempted {
+		return
+	}
+	metrics.ProtocolRepairsAttempted += protocolRepairAttemptCount(provenance)
+	if provenance.Success {
+		metrics.ProtocolRepairsSucceeded++
+	}
+	for _, attempt := range provenance.History {
+		if attempt.FailureReason != "" {
+			metrics.ProtocolRepairFailuresByReason[attempt.FailureReason]++
+		}
+	}
+	if len(provenance.History) == 0 && provenance.FailureReason != "" {
+		metrics.ProtocolRepairFailuresByReason[provenance.FailureReason]++
+	}
 }
 
 // protocolRepairAttemptCount counts only repair turns that remain protocol
