@@ -45,6 +45,7 @@ type SessionData struct {
 	// persisted with the session so reloads, reports, and notifications retain
 	// the same completed/partial/blocked/failed/cancelled semantics.
 	RunResult                   *RunResult                   `json:"run_result,omitempty"`
+	DiagnosticPackets           []DiagnosticPacket           `json:"diagnostic_packets,omitempty"`
 	AcceptanceContractRevisions []AcceptanceContractRevision `json:"acceptance_contract_revisions,omitempty"`
 	ContinuationCheckpoint      *ContinuationCheckpoint      `json:"continuation_checkpoint,omitempty"`
 	CriterionResults            []CriterionResult            `json:"criterion_results,omitempty"`

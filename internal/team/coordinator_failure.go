@@ -49,6 +49,16 @@ func (c *Coordinator) getLastFailureContext() (agentName, taskDesc, todoID, deta
 	return c.lastFailureAgent, c.lastFailureTask, c.lastFailureTodoID, c.lastFailureDetail
 }
 
+// rememberDiagnosticHint keeps the bounded reflection candidate with the task
+// so a later failure packet can include the actual sidecar/local hypothesis,
+// rather than losing it after it was used only in the retry prompt.
+func (c *Coordinator) rememberDiagnosticHint(todoID, hint string) {
+	if c == nil || c.taskTracker == nil || strings.TrimSpace(hint) == "" {
+		return
+	}
+	_ = c.taskTracker.TodoList().AppendDiagnosticHint(todoID, redactRetryText(hint, 500))
+}
+
 // FailureDetail returns the structured failure detail string used across task,
 // coordinator, and CLI failure paths.
 func (c *Coordinator) FailureDetail(err error, source string) string {
@@ -221,6 +231,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 		if disposition == "" {
 			disposition = RetryNone
 		}
+		disposition = c.recordDiagnosticPacket(item, class, disposition, detail, fp, repeated, systemic)
 		failureEvent = c.failureEventForItem(item, class, disposition, detail, fp, todoID)
 		failureOutput := utils.TruncateString(utils.RedactSecrets(output), 2000)
 		_ = c.taskTracker.TodoList().SetFailureEventAndOutput(todoID, failureEvent, failureOutput)
@@ -241,6 +252,9 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 			status = *forcedStatus
 		}
 		if isPermissionBlockedFailureDetail(detail) {
+			status = TaskBlocked
+		}
+		if disposition == NeedsHuman && forcedStatus == nil {
 			status = TaskBlocked
 		}
 		if forcedStatus == nil && (limited || hypothesisInvalid || systemic) && c.reliabilityConfig().HardEnforcement {

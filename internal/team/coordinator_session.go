@@ -390,9 +390,19 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	if sd == nil {
 		return
 	}
+	// SessionData is the durable canonical object shared by checkpointing and
+	// callers inspecting SessionData(). Normalize in place before deriving any
+	// coordinator projection, so legacy packets cannot be re-persisted through
+	// a later checkpoint.
+	for i := range sd.DiagnosticPackets {
+		sd.DiagnosticPackets[i] = normalizeDiagnosticPacket(sd.DiagnosticPackets[i])
+	}
 	if sd.RunResult != nil {
 		c.SetLastRunResult(sd.RunResult)
 	}
+	c.diagnosticPacketsMu.Lock()
+	c.diagnosticPackets = append([]DiagnosticPacket(nil), sd.DiagnosticPackets...)
+	c.diagnosticPacketsMu.Unlock()
 	if len(sd.AcceptanceContractRevisions) > 0 {
 		latest := sd.AcceptanceContractRevisions[len(sd.AcceptanceContractRevisions)-1]
 		c.acceptanceContractRevision = latest.Revision
@@ -556,6 +566,7 @@ func (c *Coordinator) saveCheckpoint() {
 	}
 	c.sessionData.Tasks = c.taskTracker.TodoList().Items()
 	_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
+	c.emitPendingDiagnosticPackets()
 	c.emitTaskEventsFromCheckpoint(c.sessionData.Tasks)
 	c.updateBranchState()
 }

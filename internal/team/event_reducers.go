@@ -78,6 +78,23 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 					Metrics: payload.Metrics, EvidenceManifest: payload.EvidenceManifest,
 				}
 			}
+		case "diagnostic_packet":
+			var payload struct {
+				Packet DiagnosticPacket `json:"packet"`
+			}
+			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Packet.ID != "" {
+				payload.Packet = normalizeDiagnosticPacket(payload.Packet)
+				seen := false
+				for _, existing := range session.DiagnosticPackets {
+					if existing.ID == payload.Packet.ID {
+						seen = true
+						break
+					}
+				}
+				if !seen {
+					session.DiagnosticPackets = append(session.DiagnosticPackets, payload.Packet)
+				}
+			}
 		}
 	}
 	session.Tasks = ReduceToTodoList(events)

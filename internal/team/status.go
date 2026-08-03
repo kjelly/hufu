@@ -249,6 +249,7 @@ type TodoItem struct {
 	ProgressCriteria    []string             `json:"progress_criteria,omitempty"`
 	FailureFingerprints []FailureFingerprint `json:"failure_fingerprints,omitempty"`
 	RecoveryHypothesis  *RecoveryHypothesis  `json:"recovery_hypothesis,omitempty"`
+	DiagnosticHints     []string             `json:"diagnostic_hints,omitempty"`
 	LastOperation       string               `json:"last_operation,omitempty"`
 	Execution           ExecutionContract    `json:"execution,omitempty"`
 }
@@ -412,6 +413,29 @@ func (tl *TodoList) AppendFailureFingerprint(id string, fingerprint FailureFinge
 	tl.mu.Unlock()
 	if !updated {
 		return fmt.Errorf("task %s not found", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
+}
+
+// AppendDiagnosticHint keeps a bounded reflection candidate on the canonical
+// task record so the next diagnostic packet can include it.
+func (tl *TodoList) AppendDiagnosticHint(id, hint string) error {
+	tl.mu.Lock()
+	updated := false
+	for _, item := range tl.items {
+		if item != nil && item.ID == id {
+			item.DiagnosticHints = append(item.DiagnosticHints, hint)
+			updated = true
+			break
+		}
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("todo item %q not found", id)
 	}
 	if onChange != nil {
 		onChange()
@@ -683,6 +707,10 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		loadedSkills = make([]string, len(item.LoadedSkills))
 		copy(loadedSkills, item.LoadedSkills)
 	}
+	var diagnosticHints []string
+	if len(item.DiagnosticHints) > 0 {
+		diagnosticHints = append([]string(nil), item.DiagnosticHints...)
+	}
 	var dependsOn []string
 	if len(item.DependsOn) > 0 {
 		dependsOn = make([]string, len(item.DependsOn))
@@ -769,6 +797,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		ProgressCriteria:    append([]string(nil), item.ProgressCriteria...),
 		FailureFingerprints: append([]FailureFingerprint(nil), item.FailureFingerprints...),
 		RecoveryHypothesis:  cloneRecoveryHypothesis(item.RecoveryHypothesis),
+		DiagnosticHints:     diagnosticHints,
 		LastOperation:       item.LastOperation,
 		Execution:           item.Execution,
 	}

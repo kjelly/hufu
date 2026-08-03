@@ -389,6 +389,9 @@ type Coordinator struct {
 	lastRunResultMu          sync.RWMutex
 	lastEvidenceManifest     *EvidenceManifest
 	lastEvidenceManifestMu   sync.RWMutex
+	diagnosticPackets        []DiagnosticPacket
+	diagnosticPacketsMu      sync.RWMutex
+	pendingDiagnosticPackets map[string]DiagnosticPacket
 	// contractWarnings deduplicates contract_warning events per
 	// (todoID, code, message) within a single dispatch cycle, so that both
 	// the ExecuteTasks preflight and the executeTask execution-path check
@@ -744,39 +747,40 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		return nil, fmt.Errorf("failed to create provider manager: %w", err)
 	}
 	c := &Coordinator{
-		providerManager:    pm,
-		session:            session,
-		mcpManager:         mcpManager,
-		coreTools:          coreTools,
-		agentCache:         make(map[string]fantasy.Agent),
-		verbose:            verbose,
-		think:              think,
-		reportStatus:       func(event StatusEvent) {},
-		taskTracker:        NewTaskTracker(),
-		skills:             session.Skills,
-		projectDir:         projectDir,
-		skillUsage:         make(map[string]*skillUsageState),
-		delegatedTasks:     make(map[string]int),
-		pendingPlans:       make(map[string]*PlanEntry),
-		approvedOutputs:    make(map[string]string),
-		approvedErrors:     make(map[string]error),
-		taskResults:        make(map[string]*TaskResult),
-		taskResultCache:    make(map[string][]cachedTaskEntry),
-		capabilityCache:    make(map[string]CapabilityResult),
-		capabilityInflight: make(map[string]chan CapabilityResult),
-		memoryStore:        memoryStore,
-		modelList:          modelList,
-		sidecarModel:       roleModels.Sidecar,
-		guardModel:         roleModels.Guard,
-		judgeModel:         roleModels.Judge,
-		planReviewerModel:  roleModels.PlanReviewer,
-		maxConcurrent:      maxConcurrent,
-		sessionTime:        time.Now(),
-		hooks:              hookRegistry,
-		rbashMode:          rbashMode,
-		restrictedPath:     restrictedPath,
-		noNet:              noNet,
-		forceMCP:           forceMCP,
+		providerManager:          pm,
+		session:                  session,
+		mcpManager:               mcpManager,
+		coreTools:                coreTools,
+		agentCache:               make(map[string]fantasy.Agent),
+		verbose:                  verbose,
+		think:                    think,
+		reportStatus:             func(event StatusEvent) {},
+		taskTracker:              NewTaskTracker(),
+		skills:                   session.Skills,
+		projectDir:               projectDir,
+		skillUsage:               make(map[string]*skillUsageState),
+		delegatedTasks:           make(map[string]int),
+		pendingPlans:             make(map[string]*PlanEntry),
+		approvedOutputs:          make(map[string]string),
+		approvedErrors:           make(map[string]error),
+		taskResults:              make(map[string]*TaskResult),
+		taskResultCache:          make(map[string][]cachedTaskEntry),
+		pendingDiagnosticPackets: make(map[string]DiagnosticPacket),
+		capabilityCache:          make(map[string]CapabilityResult),
+		capabilityInflight:       make(map[string]chan CapabilityResult),
+		memoryStore:              memoryStore,
+		modelList:                modelList,
+		sidecarModel:             roleModels.Sidecar,
+		guardModel:               roleModels.Guard,
+		judgeModel:               roleModels.Judge,
+		planReviewerModel:        roleModels.PlanReviewer,
+		maxConcurrent:            maxConcurrent,
+		sessionTime:              time.Now(),
+		hooks:                    hookRegistry,
+		rbashMode:                rbashMode,
+		restrictedPath:           restrictedPath,
+		noNet:                    noNet,
+		forceMCP:                 forceMCP,
 		forcedSkillNames: func() map[string]bool {
 			m := make(map[string]bool)
 			for _, n := range forcedSkillNames {

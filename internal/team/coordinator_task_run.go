@@ -418,6 +418,7 @@ retryLoop:
 					currentPrompt += hint
 					appliedHint = strings.TrimPrefix(hint, reflectionHeader)
 					appliedHintTrigger = failureEvidence
+					c.rememberDiagnosticHint(todoID, appliedHint)
 				}
 			}
 			if escalate {
@@ -895,6 +896,13 @@ retryLoop:
 			Replayable:          CanAutomaticallyReplay(task),
 			ProtocolRepairRetry: c.protocolRepairAllowsRetry(task),
 		})
+		// Permission/capability denial is a deterministic human gate. Keep this
+		// operational decision ahead of the retry switch; packet persistence must
+		// not merely record a block after a worker has already been re-dispatched.
+		if isPermissionBlockedFailureDetail(c.FailureDetail(err, "error")) {
+			disposition = NeedsHuman
+			reason = "capability or permission is unavailable"
+		}
 
 		// Capture the current attempt's evidence for the next iteration's
 		// retry context (§6.1: retry prompt must include class, evidence,
