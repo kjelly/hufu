@@ -608,18 +608,19 @@ func (s RunStats) IsZero() bool {
 }
 
 type RunResult struct {
-	Outcome         RunOutcome        `json:"outcome"`
-	GoalSatisfied   bool              `json:"goal_satisfied"`
-	GoalMode        GoalMode          `json:"goal_mode,omitempty"`
-	Response        string            `json:"response"`
-	Reason          string            `json:"reason,omitempty"`
-	StopReason      StopReason        `json:"stop_reason,omitempty"`
-	ExitCode        int               `json:"exit_code,omitempty"`
-	Acceptance      *AcceptanceResult `json:"acceptance,omitempty"`
-	UnresolvedTasks []TaskReference   `json:"unresolved_tasks,omitempty"`
-	Continuation    *ContinuationInfo `json:"continuation,omitempty"`
-	Stats           RunStats          `json:"stats"`
-	Metrics         RunMetrics        `json:"metrics,omitempty"`
+	Outcome          RunOutcome        `json:"outcome"`
+	GoalSatisfied    bool              `json:"goal_satisfied"`
+	GoalMode         GoalMode          `json:"goal_mode,omitempty"`
+	Response         string            `json:"response"`
+	Reason           string            `json:"reason,omitempty"`
+	StopReason       StopReason        `json:"stop_reason,omitempty"`
+	ExitCode         int               `json:"exit_code,omitempty"`
+	Acceptance       *AcceptanceResult `json:"acceptance,omitempty"`
+	UnresolvedTasks  []TaskReference   `json:"unresolved_tasks,omitempty"`
+	Continuation     *ContinuationInfo `json:"continuation,omitempty"`
+	Stats            RunStats          `json:"stats"`
+	Metrics          RunMetrics        `json:"metrics,omitempty"`
+	EvidenceManifest *EvidenceManifest `json:"evidence_manifest,omitempty"`
 }
 
 type TaskFailureClass string

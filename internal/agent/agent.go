@@ -154,6 +154,10 @@ type TeamConfig struct {
 	// a non-zero exit marks the run as not-accepted.
 	Acceptance     string
 	AcceptanceSpec *AcceptanceSpec
+	// AcceptanceMode controls whether a failed acceptance command is advisory
+	// or blocks the run. It is kept separate from AcceptanceSpec.Mode for
+	// compatibility with the historical goal-mode field.
+	AcceptanceMode string
 	// Rollback is an optional shell command run on acceptance failure in unattended mode.
 	Rollback string
 	// ExecutionProfile specifies named defaults like strict-verification.

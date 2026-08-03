@@ -62,6 +62,22 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 				}
 				session.CriterionCheckpoints = append(filtered, payload.Checkpoint)
 			}
+		case "run_finished":
+			var payload struct {
+				Outcome          RunOutcome        `json:"outcome"`
+				GoalSatisfied    bool              `json:"goal_satisfied"`
+				Acceptance       *AcceptanceResult `json:"acceptance"`
+				Stats            RunStats          `json:"stats"`
+				Metrics          RunMetrics        `json:"metrics"`
+				EvidenceManifest *EvidenceManifest `json:"evidence_manifest"`
+			}
+			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Outcome != "" {
+				session.RunResult = &RunResult{
+					Outcome: payload.Outcome, GoalSatisfied: payload.GoalSatisfied,
+					Acceptance: payload.Acceptance, Stats: payload.Stats,
+					Metrics: payload.Metrics, EvidenceManifest: payload.EvidenceManifest,
+				}
+			}
 		}
 	}
 	session.Tasks = ReduceToTodoList(events)
@@ -122,6 +138,48 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 					}
 					item.FailureFingerprints = append(item.FailureFingerprints, payload.Fingerprint)
 				}
+			}
+			continue
+		}
+		if e.Type == "artifact_created" {
+			var payload struct {
+				Artifact    ArtifactRef `json:"artifact"`
+				Path        string      `json:"path"`
+				Description string      `json:"description"`
+				TaskID      string      `json:"task_id"`
+			}
+			if err := json.Unmarshal(e.Payload, &payload); err != nil {
+				continue
+			}
+			taskID := e.TaskID
+			if taskID == "" {
+				taskID = payload.TaskID
+			}
+			if taskID == "" {
+				continue
+			}
+			item := taskMap[taskID]
+			if item == nil {
+				item = &TodoItem{ID: taskID, Status: TaskPending}
+				taskMap[taskID] = item
+				taskOrder = append(taskOrder, taskID)
+			}
+			artifact := payload.Artifact
+			if artifact.Path == "" {
+				artifact.Path, artifact.Description = payload.Path, payload.Description
+			}
+			if item.TypedResult == nil {
+				item.TypedResult = &TaskResult{TaskID: taskID}
+			}
+			duplicate := false
+			for _, existing := range item.TypedResult.Artifacts {
+				if (artifact.ID != "" && existing.ID == artifact.ID) || (artifact.ID == "" && existing.Path == artifact.Path) {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate && artifact.Path != "" {
+				item.TypedResult.Artifacts = append(item.TypedResult.Artifacts, artifact)
 			}
 			continue
 		}

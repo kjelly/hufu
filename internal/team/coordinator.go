@@ -387,6 +387,8 @@ type Coordinator struct {
 	budgetTripped            atomic.Bool
 	lastRunResult            *RunResult
 	lastRunResultMu          sync.RWMutex
+	lastEvidenceManifest     *EvidenceManifest
+	lastEvidenceManifestMu   sync.RWMutex
 	// contractWarnings deduplicates contract_warning events per
 	// (todoID, code, message) within a single dispatch cycle, so that both
 	// the ExecuteTasks preflight and the executeTask execution-path check
@@ -1299,6 +1301,14 @@ func (c *Coordinator) GetTaskResult(todoID string) *TaskResult {
 func (c *Coordinator) SetExecutionProfile(profile ExecutionProfile) {
 	if c == nil {
 		return
+	}
+	if profile.Name == ProfileDefault && c.session != nil {
+		if mode := strings.ToLower(strings.TrimSpace(c.session.Config.AcceptanceMode)); mode != "" {
+			switch AcceptanceMode(mode) {
+			case AcceptanceAdvisory, AcceptanceBlocking:
+				profile.AcceptanceMode = AcceptanceMode(mode)
+			}
+		}
 	}
 	c.executionProfileMu.Lock()
 	c.executionProfile = profile

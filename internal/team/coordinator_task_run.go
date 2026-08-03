@@ -248,8 +248,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		DisableMemory:     c.ExecutionProfile().DisableHistoricalMemory,
 	}
 
-	// Keep the legacy prompt as the model input during Phase 2. The compiler
-	// only records a safe, inspectable shadow comparison.
+	// Assemble the legacy-compatible inputs first, then make the canonical
+	// typed context the actual worker prompt. If compilation fails, retain the
+	// legacy prompt so context migration remains fail-safe.
 	if len(task.ContextFiles) > 0 {
 		var contextBuilder strings.Builder
 		contextBuilder.WriteString("Context files:\n\n")
@@ -276,7 +277,12 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if aux := assembleContextWithinBudget(auxParts, maxWorkerAuxContextChars); aux != "" {
 		prompt += aux
 	}
-	c.compileShadowWorker(parentCtx, workerInput, prompt)
+	workerInput.TaskGoal = prompt
+	compiled, compileErr := c.ContextCompiler().CompileWorkerContext(parentCtx, workerInput)
+	c.recordShadowTrace(parentCtx, "worker", prompt, workerInput.ModelContext, compiled, compileErr)
+	if compileErr == nil && strings.TrimSpace(compiled.Prompt) != "" {
+		prompt = compiled.Prompt
+	}
 
 	var conversationHistory []fantasy.Message
 	var transcript *taskTranscript

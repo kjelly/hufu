@@ -157,19 +157,8 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	}
 
 	if prof.RequireEvidenceManifest {
-		items := t.coordinator.TaskTracker().TodoList().Items()
-		completedCount := 0
-		for _, item := range items {
-			if item != nil && item.Status == TaskDone {
-				completedCount++
-				hasEvidence := item.VerifyResult != nil || (item.TypedResult != nil && len(item.TypedResult.Evidence) > 0)
-				if !hasEvidence {
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("RequireEvidenceManifest policy violation: completed task %q (%s) is missing verification evidence.", item.ID, item.Desc)), nil
-				}
-			}
-		}
-		if completedCount == 0 {
-			return fantasy.NewTextErrorResponse("RequireEvidenceManifest policy violation: no completed tasks with verification evidence recorded."), nil
+		if _, err := t.coordinator.buildEvidenceManifest(ctx, true); err != nil {
+			return fantasy.NewTextErrorResponse("RequireEvidenceManifest policy violation: " + err.Error()), nil
 		}
 	}
 
@@ -179,6 +168,13 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	// result and continuation have been persisted by stopForNoProgress.
 	if t.coordinator.noProgressStopPending() {
 		existing := t.coordinator.LastRunResult()
+		var acceptance *AcceptanceResult
+		if existing != nil {
+			acceptance = existing.Acceptance
+		}
+		if manifestErr := t.coordinator.finalizeEvidenceManifest(ctx, acceptance); manifestErr != nil {
+			t.coordinator.report(t.coordinator.newEvent("error").withMessage("evidence manifest finalization failed: " + manifestErr.Error()))
+		}
 		if existing == nil {
 			return fantasy.NewTextErrorResponse("no-progress budget exhausted; partial run result is not available"), nil
 		}
@@ -186,12 +182,29 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		preserved.Response = response
 		preserved.Stats = SummarizeRunStats(todoList.Items())
 		preserved.Metrics = t.coordinator.Metrics()
+		t.coordinator.lastEvidenceManifestMu.RLock()
+		preserved.EvidenceManifest = t.coordinator.lastEvidenceManifest
+		t.coordinator.lastEvidenceManifestMu.RUnlock()
 		t.coordinator.SetLastRunResult(&preserved)
 		t.coordinator.finishCalled.Store(true)
 		return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
 	}
 
+	// Every finish persists a final evidence manifest. Strict profiles already
+	// built and verified it above; advisory/partial runs retain a failed
+	// manifest rather than silently omitting the evidence chain.
+	if !prof.RequireEvidenceManifest {
+		if _, err := t.coordinator.buildEvidenceManifest(ctx, false); err != nil {
+			t.coordinator.report(t.coordinator.newEvent("error").withMessage("evidence manifest generation failed: " + err.Error()))
+		}
+	}
 	accRes, accErr := t.coordinator.runAcceptance(ctx)
+	if manifestErr := t.coordinator.finalizeEvidenceManifest(ctx, accRes); manifestErr != nil {
+		if prof.RequireEvidenceManifest || prof.StrictPolicy {
+			return fantasy.NewTextErrorResponse("RequireEvidenceManifest policy violation: " + manifestErr.Error()), nil
+		}
+		t.coordinator.report(t.coordinator.newEvent("error").withMessage("evidence manifest finalization failed: " + manifestErr.Error()))
+	}
 	if accErr != nil {
 		if prof.AcceptanceMode == AcceptanceBlocking || t.coordinator.IsUnattended() {
 			if t.coordinator.selfHealingAttempts < 2 {
@@ -239,6 +252,9 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		GoalMode:        t.coordinator.GoalMode(),
 	})
 	evaluated.Acceptance = accRes
+	t.coordinator.lastEvidenceManifestMu.RLock()
+	evaluated.EvidenceManifest = t.coordinator.lastEvidenceManifest
+	t.coordinator.lastEvidenceManifestMu.RUnlock()
 	runRes := &evaluated
 	t.coordinator.SetLastRunResult(runRes)
 

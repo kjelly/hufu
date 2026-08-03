@@ -10,14 +10,25 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 type ArtifactRef struct {
-	Path        string `json:"path"`
-	Description string `json:"description,omitempty"`
-	Type        string `json:"type,omitempty"`
-	SHA256      string `json:"sha256,omitempty"`
-	Bytes       int64  `json:"bytes,omitempty"`
+	ID          string    `json:"id,omitempty"`
+	Kind        string    `json:"kind,omitempty"`
+	Path        string    `json:"path"`
+	Description string    `json:"description,omitempty"`
+	Type        string    `json:"type,omitempty"`
+	SHA256      string    `json:"sha256,omitempty"`
+	Bytes       int64     `json:"bytes,omitempty"`
+	ByteSize    int64     `json:"byte_size,omitempty"`
+	MediaType   string    `json:"media_type,omitempty"`
+	RunID       string    `json:"run_id,omitempty"`
+	TaskID      string    `json:"task_id,omitempty"`
+	Attempt     int       `json:"attempt,omitempty"`
+	Agent       string    `json:"agent,omitempty"`
+	ToolCallID  string    `json:"tool_call_id,omitempty"`
+	CreatedAt   time.Time `json:"created_at,omitempty"`
 }
 
 type FileRef struct {

@@ -456,6 +456,9 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 
 	if c.LastRunResult() == nil {
 		accRes, accErr := c.runAcceptance(ctx)
+		if manifestErr := c.finalizeEvidenceManifest(ctx, accRes); manifestErr != nil {
+			c.report(c.newEvent("error").withMessage("evidence manifest finalization failed: " + manifestErr.Error()))
+		}
 		items := c.taskTracker.TodoList().Items()
 		failedTasks := failedTodoItems(items)
 		unresolvedPending := pendingTodoItems(items)
@@ -479,6 +482,9 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 			GoalMode:        c.GoalMode(),
 		})
 		evaluated.Acceptance = accRes
+		c.lastEvidenceManifestMu.RLock()
+		evaluated.EvidenceManifest = c.lastEvidenceManifest
+		c.lastEvidenceManifestMu.RUnlock()
 		progress := c.noProgressCounters()
 		evaluated.Continuation = &ContinuationInfo{TurnCount: continuationTurns, MaxTurns: maxContinuationTurns, Reason: continuationReason, NoProgress: &progress, NoProgressReplanPending: c.noProgressReplanPending()}
 		c.SetLastRunResult(&evaluated)

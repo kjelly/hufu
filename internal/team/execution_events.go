@@ -5,6 +5,7 @@ package team
 // text are not persisted here so reports can be safely shared by default.
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -124,6 +125,21 @@ func usageFromSteps(steps []fantasy.StepResult) ExecutionUsage {
 }
 
 func (c *Coordinator) beginExecutionRun() func() {
+	// A resumed coordinator may hold the previous run's result in memory. It
+	// must never leak that completed outcome into this run's run_finished event
+	// when the new run stops during acceptance or before finish.
+	c.lastRunResultMu.Lock()
+	c.lastRunResult = nil
+	c.lastRunResultMu.Unlock()
+	c.lastEvidenceManifestMu.Lock()
+	c.lastEvidenceManifest = nil
+	c.lastEvidenceManifestMu.Unlock()
+	if c.sessionData != nil {
+		c.sessionData.RunResult = nil
+		if c.session != nil && c.session.Workspace != "" {
+			_ = SaveSession(c.session.Workspace, c.sessionData)
+		}
+	}
 	c.metricsMu.Lock()
 	c.antiThrashing.reset()
 	c.tokensSinceCriterionProgress = 0
@@ -176,6 +192,21 @@ func (c *Coordinator) beginExecutionRun() func() {
 	})
 
 	return func() {
+		// Every terminal result, including no-progress and coordinator-fallback
+		// exits, must carry the final evidence chain before run_finished is
+		// published. The finish tool also performs this work earlier so policy
+		// failures can be surfaced interactively; this deferred gate covers all
+		// non-tool terminal paths.
+		if result := c.LastRunResult(); result != nil {
+			if err := c.finalizeEvidenceManifest(context.Background(), result.Acceptance); err != nil {
+				log.Printf("warning: final evidence manifest before run_finished failed: %v", err)
+			} else {
+				c.lastEvidenceManifestMu.RLock()
+				result.EvidenceManifest = c.lastEvidenceManifest
+				c.lastEvidenceManifestMu.RUnlock()
+				c.SetLastRunResult(result)
+			}
+		}
 		payload := map[string]interface{}{}
 		if result := c.LastRunResult(); result != nil {
 			payload["outcome"] = result.Outcome
@@ -183,9 +214,13 @@ func (c *Coordinator) beginExecutionRun() func() {
 			if result.Acceptance != nil {
 				payload["acceptance_state"] = result.Acceptance.EffectiveState()
 				payload["acceptance_passed"] = result.Acceptance.IsPassed()
+				payload["acceptance"] = result.Acceptance
 			}
 			payload["stats"] = result.Stats
 			payload["metrics"] = result.Metrics
+			if result.EvidenceManifest != nil {
+				payload["evidence_manifest"] = result.EvidenceManifest
+			}
 		} else {
 			payload["outcome"] = string(RunOutcomeFailed)
 			payload["goal_satisfied"] = false

@@ -595,14 +595,19 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 			}
 			cfg.AcceptanceSpec = &spec
 			if spec.Mode != "" {
-				mode, err := ParseGoalMode(spec.Mode)
-				if err != nil {
-					return cfg, fmt.Errorf("invalid acceptance goal mode: %w", err)
-				}
-				// An explicit team-level goal-mode remains authoritative; otherwise
-				// preserve the mode embedded in the acceptance contract.
-				if cfg.GoalMode == "" {
-					cfg.GoalMode = string(mode)
+				switch strings.ToLower(strings.TrimSpace(spec.Mode)) {
+				case string(AcceptanceAdvisory), string(AcceptanceBlocking):
+					cfg.AcceptanceMode = strings.ToLower(strings.TrimSpace(spec.Mode))
+				default:
+					mode, err := ParseGoalMode(spec.Mode)
+					if err != nil {
+						return cfg, fmt.Errorf("invalid acceptance goal mode: %w", err)
+					}
+					// An explicit team-level goal-mode remains authoritative; otherwise
+					// preserve the mode embedded in the acceptance contract.
+					if cfg.GoalMode == "" {
+						cfg.GoalMode = string(mode)
+					}
 				}
 			}
 			if len(spec.Commands) > 0 {

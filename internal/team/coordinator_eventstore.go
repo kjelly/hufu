@@ -14,9 +14,9 @@ import (
 )
 
 // RecordSessionUserMessage adds a user message to SessionData and dual-writes a user_message_added event to EventStore if available.
-func RecordSessionUserMessage(session *SessionData, es *EventStore, content string) {
+func RecordSessionUserMessage(session *SessionData, es *EventStore, content string) error {
 	if session == nil {
-		return
+		return nil
 	}
 	session.AddEntry("user", content)
 	if es != nil {
@@ -30,14 +30,16 @@ func RecordSessionUserMessage(session *SessionData, es *EventStore, content stri
 			Payload: payload,
 		}); err != nil {
 			log.Printf("warning: dual-write user_message_added event failed: %v", err)
+			return fmt.Errorf("dual-write user_message_added event: %w", err)
 		}
 	}
+	return nil
 }
 
 // RecordSessionAssistantMessage adds an assistant message to SessionData and dual-writes an assistant_message_added event to EventStore if available.
-func RecordSessionAssistantMessage(session *SessionData, es *EventStore, content string) {
+func RecordSessionAssistantMessage(session *SessionData, es *EventStore, content string) error {
 	if session == nil {
-		return
+		return nil
 	}
 	session.AddEntry("assistant", content)
 	if es != nil {
@@ -51,22 +53,28 @@ func RecordSessionAssistantMessage(session *SessionData, es *EventStore, content
 			Payload: payload,
 		}); err != nil {
 			log.Printf("warning: dual-write assistant_message_added event failed: %v", err)
+			return fmt.Errorf("dual-write assistant_message_added event: %w", err)
 		}
 	}
+	return nil
 }
 
 func (c *Coordinator) addSessionUserMessage(content string) {
 	if c == nil {
 		return
 	}
-	RecordSessionUserMessage(c.sessionData, c.eventStore, content)
+	if err := RecordSessionUserMessage(c.sessionData, c.eventStore, content); err != nil {
+		c.dualWriteFailures.Add(1)
+	}
 }
 
 func (c *Coordinator) addSessionAssistantMessage(content string) {
 	if c == nil {
 		return
 	}
-	RecordSessionAssistantMessage(c.sessionData, c.eventStore, content)
+	if err := RecordSessionAssistantMessage(c.sessionData, c.eventStore, content); err != nil {
+		c.dualWriteFailures.Add(1)
+	}
 }
 
 // initEventStore initializes the EventStore on Coordinator.
@@ -90,6 +98,30 @@ func (c *Coordinator) initEventStore() {
 		es.SetBranchID(st.ActiveBranch)
 	}
 	c.eventStore = es
+	c.hydrateEmittedTaskTransitions()
+}
+
+// hydrateEmittedTaskTransitions restores idempotency state after a process
+// restart. Without this, the first checkpoint after resume re-emits every
+// previously persisted transition despite the event already being present.
+func (c *Coordinator) hydrateEmittedTaskTransitions() {
+	if c == nil || c.eventStore == nil {
+		return
+	}
+	events, err := c.eventStore.ReadEvents()
+	if err != nil {
+		log.Printf("warning: hydrate event idempotency state failed: %v", err)
+		c.dualWriteFailures.Add(1)
+		return
+	}
+	if c.emittedTaskTransitions == nil {
+		c.emittedTaskTransitions = make(map[string]bool)
+	}
+	for _, event := range events {
+		if event.IdempotencyKey != "" {
+			c.emittedTaskTransitions[event.IdempotencyKey] = true
+		}
+	}
 }
 
 // emitEvent logs a RunEvent to the coordinator's eventStore if initialized.
@@ -168,6 +200,10 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 		c.mu.Unlock()
 
 		if alreadyEmitted {
+			// The task transition may already be durable while its artifact
+			// side-event was lost. Revisit artifact emission on every checkpoint
+			// so a transient append failure is retryable.
+			c.emitArtifactEvents(item)
 			continue
 		}
 
@@ -190,6 +226,7 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 			"side_effect":           item.SideEffect,
 			"recovery":              item.Recovery,
 			"reconcile_tool":        item.ReconcileTool,
+			"attempt":               item.Retries + 1,
 		}
 		failureTransition := eventType == "task_failed" || eventType == "task_blocked" || eventType == "task_protocol_incomplete"
 		if !failureTransition {
@@ -308,15 +345,13 @@ func (c *Coordinator) emitArtifactEvents(item *TodoItem) {
 		key := fmt.Sprintf("artifact:%s:%s", item.ID, art.Path)
 		c.mu.Lock()
 		alreadyEmitted := c.emittedTaskTransitions[key]
-		if !alreadyEmitted {
-			c.emittedTaskTransitions[key] = true
-		}
 		c.mu.Unlock()
 		if alreadyEmitted {
 			continue
 		}
 
-		payload, _ := json.Marshal(map[string]string{
+		payload, _ := json.Marshal(map[string]interface{}{
+			"artifact":    art,
 			"path":        art.Path,
 			"description": art.Description,
 			"task_id":     item.ID,
@@ -330,7 +365,11 @@ func (c *Coordinator) emitArtifactEvents(item *TodoItem) {
 		}); err != nil {
 			log.Printf("warning: dual-write artifact event emit failed for %s (%s): %v", item.ID, art.Path, err)
 			c.dualWriteFailures.Add(1)
+			continue
 		}
+		c.mu.Lock()
+		c.emittedTaskTransitions[key] = true
+		c.mu.Unlock()
 	}
 }
 
