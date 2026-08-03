@@ -53,14 +53,15 @@ func IsValidGoalMode(mode GoalMode) bool {
 type StopReason string
 
 const (
-	StopReasonCompleted        StopReason = "completed"
-	StopReasonAcceptanceFailed StopReason = "acceptance_failed"
-	StopReasonAcceptanceNotSet StopReason = "acceptance_not_configured"
-	StopReasonUnresolvedTasks  StopReason = "unresolved_tasks"
-	StopReasonExternalBlockage StopReason = "external_blockage"
-	StopReasonBudgetExceeded   StopReason = "budget_exceeded"
-	StopReasonCancelled        StopReason = "cancelled"
-	StopReasonRunFailed        StopReason = "run_failed"
+	StopReasonCompleted          StopReason = "completed"
+	StopReasonAcceptanceFailed   StopReason = "acceptance_failed"
+	StopReasonAcceptanceNotSet   StopReason = "acceptance_not_configured"
+	StopReasonUnresolvedTasks    StopReason = "unresolved_tasks"
+	StopReasonExternalBlockage   StopReason = "external_blockage"
+	StopReasonBudgetExceeded     StopReason = "budget_exceeded"
+	StopReasonCancelled          StopReason = "cancelled"
+	StopReasonRunFailed          StopReason = "run_failed"
+	StopReasonEvidenceIncomplete StopReason = "evidence_incomplete"
 )
 
 func (r RunOutcome) String() string {

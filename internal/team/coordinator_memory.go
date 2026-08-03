@@ -267,12 +267,7 @@ func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
 		return
 	}
 
-	c.ltmWriteMu.Lock()
-	defer c.ltmWriteMu.Unlock()
-
-	existingLTM := LoadLTM(workspace, c.session.Config.Name)
 	sections := ParseSTMSections(stmContent)
-	existingLTMSections := ParseSTMSections(existingLTM)
 
 	var newEntries []struct {
 		sectionTitle string
@@ -320,38 +315,11 @@ func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
 	if len(newEntries) == 0 {
 		return
 	}
-
+	// STM extraction is also untrusted knowledge. Keep it candidate-only until
+	// CompletionGate accepts the run; this prevents a failed run from teaching
+	// future prompts through either Markdown LTM or the vector store.
 	for _, ne := range newEntries {
-		if hasLTREntry(existingLTMSections, ne.sectionTitle, ne.entry) {
-			continue
-		}
-		// Canonical LTM evidence is durable even if the compatibility Markdown
-		// projection below cannot be written.
-		c.shadowContextAppend(contextstore.ContextPattern, stripSTMListItem(ne.entry), "AutoExtractLTM")
-		existingLTM = appendSTMEntry(existingLTM, ne.entry, ne.sectionTitle)
-	}
-
-	pruned := PruneLTM(existingLTM)
-	if err := SaveLTM(workspace, c.session.Config.Name, TruncateLTM(pruned)); err != nil {
-		log.Printf("warning: auto LTM extraction failed: %v", err)
-	}
-
-	if c.memoryStore != nil {
-		saveCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		for _, ne := range newEntries {
-			if hasLTREntry(existingLTMSections, ne.sectionTitle, ne.entry) {
-				continue
-			}
-			id := fmt.Sprintf("ltm-%d", time.Now().UnixNano())
-			metadata := map[string]string{
-				"category": ne.sectionTitle,
-				"source":   "auto-extract",
-			}
-			if err := c.memoryStore.Save(saveCtx, id, ne.entry, metadata); err != nil {
-				log.Printf("warning: memory store save failed for LTM entry: %v", err)
-			}
-		}
+		c.persistKnowledgeCandidate(stripSTMListItem(ne.entry), ne.sectionTitle, "AutoExtractLTM")
 	}
 }
 
@@ -404,8 +372,6 @@ func (c *Coordinator) autoExtractCanonicalLTM(ctx context.Context) {
 		default:
 			continue
 		}
-		if err := c.appendCanonicalContext(ctx, contextstore.ContextPattern, stripSTMListItem(item.Content), "AutoExtractLTM", map[string]string{"legacy_section": section}); err != nil {
-			log.Printf("warning: canonical LTM extraction failed: %v", err)
-		}
+		c.persistKnowledgeCandidate(stripSTMListItem(item.Content), section, "AutoExtractLTM")
 	}
 }

@@ -256,6 +256,7 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	evaluated.EvidenceManifest = t.coordinator.lastEvidenceManifest
 	t.coordinator.lastEvidenceManifestMu.RUnlock()
 	runRes := &evaluated
+	runRes = t.coordinator.applyCompletionGate(ctx, runRes, accRes)
 	t.coordinator.SetLastRunResult(runRes)
 
 	t.coordinator.finishCalled.Store(true)

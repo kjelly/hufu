@@ -84,11 +84,13 @@ func (c *Coordinator) buildEvidenceManifest(ctx context.Context, strict bool) (*
 		}
 		manifest.EvidenceResults = append(manifest.EvidenceResults, result)
 	}
-	if completedCount == 0 {
+	if completedCount == 0 && len(c.taskTracker.TodoList().Items()) > 0 {
 		manifest.Status = "failed"
 		if strict {
 			return nil, fmt.Errorf("no completed tasks with evidence")
 		}
+	} else if completedCount == 0 && strict {
+		return nil, fmt.Errorf("no completed tasks with evidence")
 	}
 	if err := manifest.Seal(); err != nil {
 		return nil, err

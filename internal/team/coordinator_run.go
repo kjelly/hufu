@@ -485,6 +485,10 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 		c.lastEvidenceManifestMu.RLock()
 		evaluated.EvidenceManifest = c.lastEvidenceManifest
 		c.lastEvidenceManifestMu.RUnlock()
+		evaluatedPtr := c.applyCompletionGate(ctx, &evaluated, accRes)
+		if evaluatedPtr != nil {
+			evaluated = *evaluatedPtr
+		}
 		progress := c.noProgressCounters()
 		evaluated.Continuation = &ContinuationInfo{TurnCount: continuationTurns, MaxTurns: maxContinuationTurns, Reason: continuationReason, NoProgress: &progress, NoProgressReplanPending: c.noProgressReplanPending()}
 		c.SetLastRunResult(&evaluated)
