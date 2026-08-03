@@ -105,6 +105,7 @@ func (s *SessionData) AddEntry(role, content string) {
 	// exact repeats of the previous entry: a failed turn leaves a dangling
 	// user entry with no assistant reply, so redispatching the same prompt
 	// would otherwise record the user message twice in chat history.
+	content = utils.RedactSecrets(content)
 	if strings.TrimSpace(content) == "" {
 		return
 	}
@@ -139,7 +140,7 @@ func (s *SessionData) ContextSummary() string {
 		fmt.Fprintf(&b, "... (%d older exchanges omitted)\n\n", start)
 	}
 	for _, entry := range s.Entries[start:] {
-		content := utils.TruncateRunes(entry.Content, 500)
+		content := utils.TruncateRunes(utils.RedactSecrets(entry.Content), 500)
 		fmt.Fprintf(&b, "[%s] %s\n", entry.Role, content)
 		b.WriteString("\n")
 	}
@@ -147,6 +148,7 @@ func (s *SessionData) ContextSummary() string {
 }
 
 func ArchiveSession(workspace string, summary string) error {
+	summary = utils.RedactSecrets(summary)
 	histDir := filepath.Join(workspace, historyDirName)
 	if err := os.MkdirAll(histDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create history directory: %w", err)

@@ -25,6 +25,7 @@ import (
 	"github.com/anomalyco/hufu/internal/sidecar"
 	"github.com/anomalyco/hufu/internal/skill"
 	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/anomalyco/hufu/internal/utils"
 	"gopkg.in/yaml.v3"
 )
 
@@ -114,6 +115,23 @@ type TaskDef struct {
 	ExpectedStateChange string              `json:"expected_state_change,omitempty" yaml:"expected_state_change,omitempty"`
 	RecoveryHypothesis  *RecoveryHypothesis `json:"recovery_hypothesis,omitempty" yaml:"recovery_hypothesis,omitempty"`
 	ResourceClaims      []string            `json:"resource_claims,omitempty" yaml:"resource_claims,omitempty"`
+	Resources           []ResourceClaim     `json:"resources,omitempty" yaml:"resources,omitempty"`
+}
+
+// ResourceClaimMode describes how a task uses a shared resource.
+type ResourceClaimMode string
+
+const (
+	ResourceRead      ResourceClaimMode = "read"
+	ResourceWrite     ResourceClaimMode = "write"
+	ResourceExclusive ResourceClaimMode = "exclusive"
+)
+
+// ResourceClaim is a scheduler-level lock declaration. Legacy
+// TaskDef.ResourceClaims entries are treated as exclusive claims.
+type ResourceClaim struct {
+	Resource string            `json:"resource" yaml:"resource"`
+	Mode     ResourceClaimMode `json:"mode" yaml:"mode"`
 }
 
 // UnmarshalJSON handles legacy "task" field by mapping it to Goal, and legacy "strict_result" / "strict-result" fields.
@@ -422,12 +440,15 @@ type Coordinator struct {
 	repairAgentOverride fantasy.Agent
 
 	// Decoupled sub-services (§17 struct-level interface decoupling)
-	planner         Planner
-	sessionStore    SessionStore
-	policyEngine    PolicyEngine
-	contextCompiler ContextCompiler
-	agentPool       AgentPool
-	workflowEngine  WorkflowEngine
+	planner             Planner
+	sessionStore        SessionStore
+	policyEngine        PolicyEngine
+	repairController    *RepairController
+	authorizationPolicy AuthorizationPolicy
+	secretRegistry      *tools.SecretRegistry
+	contextCompiler     ContextCompiler
+	agentPool           AgentPool
+	workflowEngine      WorkflowEngine
 }
 
 // SetUnattended enables unattended (no-human) mode: ask_user returns safe
@@ -831,6 +852,11 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	c.planner = &defaultPlanner{c: c}
 	c.sessionStore = &defaultSessionStore{c: c}
 	c.policyEngine = &defaultPolicyEngine{c: c}
+	c.repairController = NewRepairController()
+	c.authorizationPolicy = defaultAuthorizationPolicy{}
+	c.secretRegistry = tools.NewSecretRegistry()
+	utils.RegisterSecretRedactor(c.secretRegistry)
+	registerProviderSecrets(c.secretRegistry, session, defaultProviderAPIKey)
 	c.contextCompiler = &defaultContextCompiler{c: c}
 	c.agentPool = &defaultAgentPool{c: c}
 	// Scrub legacy hufu-managed records before they are reloaded into prompts or
@@ -855,6 +881,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
 	if err == nil {
 		c.auditLogger = auditLogger
+		auditLogger.SetRedactor(c.SecretRegistry())
 		audit.SetDefault(auditLogger)
 	}
 
@@ -950,6 +977,37 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	}
 
 	return c, nil
+}
+
+func registerProviderSecrets(registry *tools.SecretRegistry, session *TeamSession, defaultKey string) {
+	if registry == nil {
+		return
+	}
+	if defaultKey != "" {
+		_ = registry.Register(tools.SecretRef{Name: "provider.default.api_key", Source: "resolved provider configuration", ExactValue: defaultKey})
+	}
+	if session == nil {
+		return
+	}
+	for name, provider := range session.Config.Providers {
+		if provider.ProviderAPIKey == "" {
+			continue
+		}
+		_ = registry.Register(tools.SecretRef{
+			Name:       "provider." + name + ".api_key",
+			Source:     "team provider configuration",
+			ExactValue: provider.ProviderAPIKey,
+		})
+	}
+}
+
+// RegisterProviderSecretsGlobally installs resolved provider credentials in a
+// process-memory registry before session lifecycle files are generated. This
+// covers archive/resume paths that run before NewCoordinator is constructed.
+func RegisterProviderSecretsGlobally(session *TeamSession, defaultKey string) {
+	registry := tools.NewSecretRegistry()
+	registerProviderSecrets(registry, session, defaultKey)
+	utils.RegisterSecretRedactor(registry)
 }
 
 // ResetConversation clears the accumulated coordinator conversation history so
@@ -1207,6 +1265,65 @@ func (c *Coordinator) SetPolicyEngine(pe PolicyEngine) {
 	c.policyEngine = pe
 }
 
+// RepairController returns the coordinator's fail-closed recovery service.
+func (c *Coordinator) RepairController() *RepairController {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.repairController == nil {
+		return NewRepairController()
+	}
+	return c.repairController
+}
+
+func (c *Coordinator) SetRepairController(rc *RepairController) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.repairController = rc
+}
+
+func (c *Coordinator) AuthorizationPolicy() AuthorizationPolicy {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.authorizationPolicy == nil {
+		return defaultAuthorizationPolicy{}
+	}
+	return c.authorizationPolicy
+}
+
+func (c *Coordinator) SetAuthorizationPolicy(policy AuthorizationPolicy) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.authorizationPolicy = policy
+}
+
+func (c *Coordinator) SecretRegistry() *tools.SecretRegistry {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.secretRegistry == nil {
+		return tools.NewSecretRegistry()
+	}
+	return c.secretRegistry
+}
+
+func (c *Coordinator) AuthorizeToolCall(ctx context.Context, req ToolAuthorizationRequest) (PolicyDecision, error) {
+	decision, err := c.AuthorizationPolicy().AuthorizeToolCall(ctx, req)
+	_ = c.emitEvent("policy_decision", "policy", "", map[string]interface{}{"kind": "tool", "agent": req.Agent, "tool": req.Tool, "decision": decision, "error": errorString(err)})
+	return decision, err
+}
+
+func (c *Coordinator) AuthorizeMCPCall(ctx context.Context, req MCPAuthorizationRequest) (PolicyDecision, error) {
+	decision, err := c.AuthorizationPolicy().AuthorizeMCPCall(ctx, req)
+	_ = c.emitEvent("policy_decision", "policy", "", map[string]interface{}{"kind": "mcp", "agent": req.Agent, "server": req.Server, "tool": req.Tool, "decision": decision, "error": errorString(err)})
+	return decision, err
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 // ContextCompiler returns the ContextCompiler sub-service interface.
 func (c *Coordinator) ContextCompiler() ContextCompiler {
 	c.mu.RLock()
@@ -1426,6 +1543,9 @@ func canonicalPath(p string) string {
 func ValidateWorkspaceIsolationPaths(workspace, projectDir, teamDir, teamName string, prof ExecutionProfile) error {
 	if !prof.RequireWorkspaceIsolation {
 		return nil
+	}
+	if err := ValidateWorkspaceSeparation(workspace, projectDir); err != nil {
+		return fmt.Errorf("workspace separation: %w", err)
 	}
 
 	cleanWS := canonicalPath(workspace)

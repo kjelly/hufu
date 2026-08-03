@@ -18,6 +18,7 @@ import (
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/audit"
 	"github.com/anomalyco/hufu/internal/hooks"
+	"github.com/anomalyco/hufu/internal/mcp"
 	"github.com/anomalyco/hufu/internal/tools"
 	"github.com/anomalyco/hufu/internal/utils"
 )
@@ -896,6 +897,23 @@ retryLoop:
 			Replayable:          CanAutomaticallyReplay(task),
 			ProtocolRepairRetry: c.protocolRepairAllowsRetry(task),
 		})
+		// RepairController is the phase-3 safety gate for the legacy
+		// disposition engine. Keep the existing disposition as the source of
+		// detailed failure-class behavior, but never allow it to replay a task
+		// that the centralized side-effect policy blocks.
+		repairDecision := c.RepairController().Decide(RepairRequest{
+			Task:            task,
+			Attempt:         attempt,
+			MaxAttempts:     maxRetries,
+			BudgetExhausted: parentCtx.Err() != nil,
+		})
+		_ = c.emitEvent("repair_decision", "repair_controller", todoID, map[string]interface{}{
+			"action": string(repairDecision.Action), "reason": repairDecision.Reason, "attempt": attempt,
+		})
+		if disposition == RetryWorker && repairDecision.Action == RepairBlock {
+			disposition = ReconcileOnly
+			reason = repairDecision.Reason
+		}
 		// Permission/capability denial is a deterministic human gate. Keep this
 		// operational decision ahead of the retry switch; packet persistence must
 		// not merely record a block after a worker has already been re-dispatched.
@@ -934,6 +952,7 @@ retryLoop:
 
 		switch disposition {
 		case NeedsHuman:
+			c.saveCheckpoint()
 			// Path 1: an owned terminal session is still active. Persist
 			// the failure and stop — retrying is unsafe.
 			lastErr = err
@@ -943,6 +962,7 @@ retryLoop:
 			break retryLoop
 
 		case ReconcileOnly:
+			c.saveCheckpoint()
 			// Paths 2/3 (protocol-only non-replayable, or non-replayable
 			// task) or class-based protocol/timeout disposition: block the
 			// task for reconciliation. Worker tools must not be replayed
@@ -964,6 +984,7 @@ retryLoop:
 			break retryLoop
 
 		case ReplanRequired:
+			c.saveCheckpoint()
 			// Paths 4/5 (unfixable verify, same failure repeated) or
 			// class-based contract/environment/policy: stop retrying. The
 			// coordinator must produce a new recovery hypothesis before
@@ -1001,6 +1022,7 @@ retryLoop:
 			break retryLoop
 
 		default: // RetryWorker
+			c.saveCheckpoint()
 			// Normal retry: persist the failure and continue to the next
 			// attempt. A final context check guards against a race where
 			// the context is cancelled between DecideRecovery and here.
@@ -1500,11 +1522,56 @@ func (c *Coordinator) withEffectiveToolsAllowed(ctx context.Context, def *agent.
 				allowed = append(allowed, name)
 			}
 		}
+		// Agent-specific MCP tools are a supported frontmatter grant. Keep
+		// the display/tool-call name for the stream gate and add the canonical
+		// agent:tool name for the transport authorizer.
+		for name := range def.MCPTools {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			allowed = append(allowed, name, strings.ToLower(strings.TrimSpace(def.Name))+":"+name)
+		}
 	}
 	if len(allowed) == 0 {
 		return ctx
 	}
 	return context.WithValue(ctx, tools.AgentToolsAllowedKey, allowed)
+}
+
+// authorizeStreamTool routes namespaced MCP tools through the same policy
+// boundary as built-in tools. MCPToolManager uses server__tool names to keep
+// names distinct; the policy contract records the canonical server:tool key.
+func (c *Coordinator) authorizeStreamTool(ctx context.Context, agentName, toolName string, allowed map[string]bool) (PolicyDecision, error) {
+	canonicalAgent := strings.ToLower(strings.TrimSpace(agentName))
+	if allowed[canonicalAgent+":"+toolName] {
+		return c.AuthorizeMCPCall(ctx, MCPAuthorizationRequest{
+			Agent:        agentName,
+			Server:       canonicalAgent,
+			Tool:         toolName,
+			AllowedTools: allowed,
+			FailureMode:  c.ExecutionProfile().PolicyFailureMode,
+		})
+	}
+	if server, tool, ok := strings.Cut(toolName, "__"); ok && server != "" && tool != "" {
+		canonical := server + ":" + tool
+		if allowed[toolName] || allowed[canonical] {
+			allowed[canonical] = true
+		}
+		return c.AuthorizeMCPCall(ctx, MCPAuthorizationRequest{
+			Agent:        agentName,
+			Server:       server,
+			Tool:         tool,
+			AllowedTools: allowed,
+			FailureMode:  c.ExecutionProfile().PolicyFailureMode,
+		})
+	}
+	return c.AuthorizeToolCall(ctx, ToolAuthorizationRequest{
+		Agent:        agentName,
+		Tool:         toolName,
+		AllowedTools: allowed,
+		FailureMode:  c.ExecutionProfile().PolicyFailureMode,
+	})
 }
 
 // protocolRepairAllowsRetry applies the task's existing recovery policy to a
@@ -1517,6 +1584,34 @@ func (c *Coordinator) protocolRepairAllowsRetry(task TaskDef) bool {
 }
 
 func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message, timing *taskTiming, extraStop ...fantasy.StopCondition) (string, []fantasy.StepResult, error) {
+	ctx = mcp.WithToolAuthorizer(ctx, func(callCtx context.Context, server, tool, _ string) error {
+		allowed := make(map[string]bool)
+		for _, name := range tools.GetToolsAllowed(callCtx) {
+			allowed[strings.TrimSpace(name)] = true
+		}
+		policyServer := server
+		if strings.EqualFold(server, agentName) {
+			policyServer = strings.ToLower(strings.TrimSpace(agentName))
+		}
+		canonical := policyServer + ":" + tool
+		if allowed[server+"__"+tool] || allowed[canonical] || allowed[tool] || allowed[strings.ToLower(server)+":"+tool] {
+			allowed[canonical] = true
+		}
+		decision, err := c.AuthorizeMCPCall(callCtx, MCPAuthorizationRequest{
+			Agent:        agentName,
+			Server:       policyServer,
+			Tool:         tool,
+			AllowedTools: allowed,
+			FailureMode:  c.ExecutionProfile().PolicyFailureMode,
+		})
+		if err != nil {
+			return err
+		}
+		if decision.Code != DecisionAllow {
+			return fmt.Errorf("MCP authorization denied for %s: %s", canonical, decision.Reason)
+		}
+		return nil
+	})
 	reportFn := c.reportStatus
 	workspace := c.session.Workspace
 	teamName := c.session.Config.Name
@@ -1568,6 +1663,25 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		},
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
 			timing.beginTool()
+			// The actual tool adapter remains the source of truth when no
+			// explicit coordinator allowlist is attached (for example, legacy
+			// session permissions or deterministic test agents). Once an
+			// allowlist is present, route the call through the centralized
+			// fail-closed policy before recording or executing it.
+			if configured := tools.GetToolsAllowed(ctx); configured != nil {
+				allowed := make(map[string]bool, len(configured))
+				for _, name := range configured {
+					allowed[strings.TrimSpace(name)] = true
+				}
+				decision, policyErr := c.authorizeStreamTool(ctx, agentName, tc.ToolName, allowed)
+				if policyErr != nil || decision.Code != DecisionAllow {
+					reason := decision.Reason
+					if policyErr != nil {
+						reason = policyErr.Error()
+					}
+					return fmt.Errorf("tool authorization denied for %q: %s", tc.ToolName, reason)
+				}
+			}
 			if transcript, _ := ctx.Value(taskTranscriptKey{}).(*taskTranscript); transcript != nil {
 				if err := transcript.RecordToolCall(tc.ToolCallID, tc.ToolName, tc.Input); err != nil {
 					return err

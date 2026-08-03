@@ -17,6 +17,7 @@ type RepairAction string
 
 const (
 	RepairActionRetry     RepairAction = "retry"
+	RepairActionEscalate  RepairAction = "escalate"
 	RepairActionReconcile RepairAction = "reconcile"
 	RepairActionReplan    RepairAction = "replan"
 	RepairActionBlock     RepairAction = "block"

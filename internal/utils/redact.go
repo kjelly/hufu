@@ -3,9 +3,45 @@ package utils
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 )
+
+// SecretRedactor is the process-memory redaction boundary used by
+// persistence helpers. Implementations must never serialize their exact
+// secret values.
+type SecretRedactor interface {
+	RedactText(string) string
+	RedactJSON([]byte) ([]byte, error)
+}
+
+var processRedactors struct {
+	sync.RWMutex
+	items []SecretRedactor
+}
+
+// RegisterSecretRedactor adds a process-local redactor. Redactors are
+// additive so concurrently active coordinators cannot remove one another's
+// protections from shared persistence paths.
+func RegisterSecretRedactor(redactor SecretRedactor) {
+	if redactor == nil {
+		return
+	}
+	processRedactors.Lock()
+	defer processRedactors.Unlock()
+	value := reflect.ValueOf(redactor)
+	if value.Kind() == reflect.Pointer {
+		for _, existing := range processRedactors.items {
+			other := reflect.ValueOf(existing)
+			if other.Kind() == reflect.Pointer && other.Pointer() == value.Pointer() {
+				return
+			}
+		}
+	}
+	processRedactors.items = append(processRedactors.items, redactor)
+}
 
 const redactedSecret = "[REDACTED]"
 
@@ -39,7 +75,14 @@ func RedactSecrets(content string) string {
 	content = secretAuthorizationRe.ReplaceAllString(content, "${1}"+redactedSecret)
 	content = secretJSONRe.ReplaceAllString(content, `${1}"`+redactedSecret+`"`)
 	content = secretKeyValueRe.ReplaceAllStringFunc(content, redactKeyValue)
-	return secretEnvRe.ReplaceAllString(content, "${1}"+redactedSecret)
+	content = secretEnvRe.ReplaceAllString(content, "${1}"+redactedSecret)
+	processRedactors.RLock()
+	redactors := append([]SecretRedactor(nil), processRedactors.items...)
+	processRedactors.RUnlock()
+	for _, redactor := range redactors {
+		content = redactor.RedactText(content)
+	}
+	return content
 }
 
 // RedactJSON redacts secrets in a JSON document without applying text

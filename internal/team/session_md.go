@@ -31,7 +31,7 @@ func LoadSessionMD(workspace string) string {
 }
 
 func SaveSessionMD(workspace string, content string) error {
-	return AtomicWriteFile(SessionMDPath(workspace), []byte(content), 0o644)
+	return AtomicWriteFile(SessionMDPath(workspace), []byte(utils.RedactSecrets(content)), 0o644)
 }
 
 func GenerateSessionMD(sd *SessionData, teamName string) string {
@@ -55,7 +55,7 @@ func GenerateSessionMD(sd *SessionData, teamName string) string {
 		if entry.Role == "assistant" {
 			role = "🤖 Coordinator"
 		}
-		content := utils.TruncateRunes(entry.Content, 1000)
+		content := utils.TruncateRunes(utils.RedactSecrets(entry.Content), 1000)
 		fmt.Fprintf(&b, "### %s", role)
 		if entry.Timestamp != "" {
 			fmt.Fprintf(&b, " (%s)", entry.Timestamp)
@@ -68,7 +68,7 @@ func GenerateSessionMD(sd *SessionData, teamName string) string {
 }
 
 func ArchiveSessionMD(workspace string) (string, error) {
-	mdContent := LoadSessionMD(workspace)
+	mdContent := utils.RedactSecrets(LoadSessionMD(workspace))
 	if mdContent == "" {
 		return "", nil
 	}

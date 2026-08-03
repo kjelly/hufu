@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/anomalyco/hufu/internal/team"
+	"github.com/anomalyco/hufu/internal/utils"
 )
 
 var taskStatusIcons = map[team.TaskStatus]string{
@@ -383,7 +384,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		}
 	}
 
-	return b.String()
+	return utils.RedactSecrets(b.String())
 }
 
 func reportTaskFailureDetail(item *team.TodoItem) string {

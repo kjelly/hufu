@@ -16,6 +16,37 @@ type AuditLogger struct {
 	mu       sync.Mutex
 	file     *os.File
 	teamName string
+	redactor Redactor
+}
+
+// Redactor is the persistence-boundary secret redaction contract. It is kept
+// local to audit to avoid coupling the audit package to a particular secret
+// registry implementation.
+type Redactor interface {
+	RedactText(string) string
+	RedactJSON([]byte) ([]byte, error)
+}
+
+// SetRedactor installs the process-local redactor used before audit entries
+// are serialized. A nil value restores the legacy pattern-based redaction.
+func (l *AuditLogger) SetRedactor(redactor Redactor) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	l.redactor = redactor
+	l.mu.Unlock()
+}
+
+func (l *AuditLogger) redactText(value string) string {
+	value = utils.RedactSecrets(value)
+	l.mu.Lock()
+	redactor := l.redactor
+	l.mu.Unlock()
+	if redactor != nil {
+		value = redactor.RedactText(value)
+	}
+	return value
 }
 
 // Event type values for ToolAction.Event.
@@ -81,7 +112,7 @@ func (l *AuditLogger) LogToolCall(agent, tool, input, callID string) {
 		Action:    "call",
 		Event:     EventToolCall,
 		CallID:    callID,
-		Input:     utils.RedactSecrets(utils.TruncateString(input, 10000)),
+		Input:     l.redactText(utils.TruncateString(input, 10000)),
 	})
 }
 
@@ -98,11 +129,11 @@ func (l *AuditLogger) LogToolResult(agent, tool, result string, isError bool, ca
 		Action:    "result",
 		Event:     EventToolResult,
 		CallID:    callID,
-		Result:    utils.RedactSecrets(utils.TruncateString(result, 5000)),
+		Result:    l.redactText(utils.TruncateString(result, 5000)),
 	}
 	if isError {
 		entry.Event = EventToolError
-		entry.Error = utils.RedactSecrets(utils.TruncateString(result, 5000))
+		entry.Error = l.redactText(utils.TruncateString(result, 5000))
 	}
 	l.log(entry)
 }
@@ -209,7 +240,7 @@ func (l *AuditLogger) LogWaitPoll(agent, command string, attempt, exitCode int) 
 		Tool:      "wait_for",
 		Action:    "poll",
 		Event:     EventWaitPoll,
-		Input:     utils.RedactSecrets(utils.TruncateString(command, 500)),
+		Input:     l.redactText(utils.TruncateString(command, 500)),
 		Result:    fmt.Sprintf("attempt=%d, exit_code=%d", attempt, exitCode),
 	})
 }
@@ -228,7 +259,7 @@ func (l *AuditLogger) LogSSHConnection(agent, host, command string, exitCode int
 		Tool:      "ssh",
 		Action:    "ssh_connection",
 		Event:     EventSSH,
-		Input:     fmt.Sprintf("host=%s, command=%s", host, utils.RedactSecrets(utils.TruncateString(command, 500))),
+		Input:     fmt.Sprintf("host=%s, command=%s", host, l.redactText(utils.TruncateString(command, 500))),
 		Result:    fmt.Sprintf("exit_code=%d, duration_ms=%d", exitCode, durationMs),
 	})
 }

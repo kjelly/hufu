@@ -112,6 +112,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 
 	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, session.Config.ProviderURL, "")
 	resolvedProviderAPIKey := config.ResolveProviderAPIKey(defaultProviderAPIKey, session.Config.ProviderAPIKey)
+	team.RegisterProviderSecretsGlobally(session, resolvedProviderAPIKey)
 
 	displayTeamHeader(session)
 

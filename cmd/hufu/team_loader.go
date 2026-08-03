@@ -61,7 +61,7 @@ func prepareSessionLifecycle(session *team.TeamSession) (*team.SessionData, []me
 			_ = err
 		}
 		if err := team.CleanRunDirs(session.Workspace); err != nil {
-			stderrLog("%s Failed to clean workspace: %v\n", errStyle.Render("⚠"), err)
+			return nil, nil, fmt.Errorf("failed to clean workspace with durable evidence: %w", err)
 		}
 		if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
 			stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)

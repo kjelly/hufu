@@ -148,6 +148,9 @@ func cloneTaskDef(td TaskDef) TaskDef {
 	if td.ResourceClaims != nil {
 		clone.ResourceClaims = append([]string(nil), td.ResourceClaims...)
 	}
+	if td.Resources != nil {
+		clone.Resources = append([]ResourceClaim(nil), td.Resources...)
+	}
 	clone.VerifySpec = cloneVerificationSpecPtr(td.VerifySpec)
 	clone.RecoveryHypothesis = cloneRecoveryHypothesis(td.RecoveryHypothesis)
 	return clone

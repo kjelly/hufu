@@ -1,6 +1,7 @@
 package team
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,12 +31,95 @@ func EnsureWorkspaceDirs(workspace string) error {
 }
 
 func CleanRunDirs(workspace string) error {
+	_, err := CleanRunDirsWithEvidence(workspace)
+	return err
+}
+
+// CleanupPathState records the observable state of a path immediately before
+// or after a cleanup operation. Entry names are included so the operation is
+// auditable without persisting file contents.
+type CleanupPathState struct {
+	Path       string   `json:"path"`
+	Exists     bool     `json:"exists"`
+	EntryCount int      `json:"entry_count,omitempty"`
+	Entries    []string `json:"entries,omitempty"`
+}
+
+// CleanupEvidence is persisted outside the removed run directories so a
+// restart can prove what cleanup changed.
+type CleanupEvidence struct {
+	StartedAt   string             `json:"started_at"`
+	CompletedAt string             `json:"completed_at,omitempty"`
+	Workspace   string             `json:"workspace"`
+	Before      []CleanupPathState `json:"before"`
+	After       []CleanupPathState `json:"after"`
+	Error       string             `json:"error,omitempty"`
+}
+
+func cleanupPathState(path string) CleanupPathState {
+	state := CleanupPathState{Path: path}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return state
+	}
+	state.Exists = true
+	state.EntryCount = len(entries)
+	state.Entries = make([]string, 0, len(entries))
+	for _, entry := range entries {
+		state.Entries = append(state.Entries, entry.Name())
+	}
+	return state
+}
+
+// CleanRunDirsWithEvidence removes only run-owned directories and persists a
+// before/after record under logs, which is outside the removed directories.
+func CleanRunDirsWithEvidence(workspace string) (CleanupEvidence, error) {
+	cleanWorkspace, err := canonicalWorkspacePath(workspace)
+	if err != nil {
+		return CleanupEvidence{}, fmt.Errorf("cleanup workspace: %w", err)
+	}
+	home, _ := os.UserHomeDir()
+	if cleanWorkspace == string(filepath.Separator) || (home != "" && cleanWorkspace == canonicalPath(home)) {
+		return CleanupEvidence{}, fmt.Errorf("refusing cleanup of protected workspace %q", cleanWorkspace)
+	}
+	evidence := CleanupEvidence{
+		StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Workspace: cleanWorkspace,
+	}
 	for _, dir := range []string{tasksDir, statusDir} {
-		if err := os.RemoveAll(filepath.Join(workspace, dir)); err != nil && !os.IsNotExist(err) {
-			return err
+		evidence.Before = append(evidence.Before, cleanupPathState(filepath.Join(cleanWorkspace, dir)))
+	}
+	var cleanupErr error
+	for _, dir := range []string{tasksDir, statusDir} {
+		if err := os.RemoveAll(filepath.Join(cleanWorkspace, dir)); err != nil && !os.IsNotExist(err) {
+			cleanupErr = err
+			break
 		}
 	}
-	return nil
+	for _, dir := range []string{tasksDir, statusDir} {
+		evidence.After = append(evidence.After, cleanupPathState(filepath.Join(cleanWorkspace, dir)))
+	}
+	if cleanupErr != nil {
+		evidence.Error = cleanupErr.Error()
+	}
+	evidence.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	data, marshalErr := json.MarshalIndent(evidence, "", "  ")
+	if marshalErr == nil {
+		data, marshalErr = utils.RedactJSON(data)
+	}
+	if marshalErr == nil {
+		marshalErr = os.MkdirAll(filepath.Join(cleanWorkspace, logsDir), 0o755)
+	}
+	if marshalErr == nil {
+		marshalErr = AtomicWriteFile(filepath.Join(cleanWorkspace, logsDir, "cleanup_evidence.json"), data, 0o600)
+	}
+	if cleanupErr != nil {
+		return evidence, cleanupErr
+	}
+	if marshalErr != nil {
+		return evidence, fmt.Errorf("persist cleanup evidence: %w", marshalErr)
+	}
+	return evidence, nil
 }
 
 func writeTaskFile(workspace, teamName, agentName, timestamp, status, task, result string) error {

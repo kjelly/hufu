@@ -6,6 +6,23 @@ import (
 	"testing"
 )
 
+type testSecretRedactor struct{ value string }
+
+func (r testSecretRedactor) RedactText(value string) string {
+	return strings.ReplaceAll(value, r.value, "[REGISTRY_REDACTED]")
+}
+
+func (r testSecretRedactor) RedactJSON(data []byte) ([]byte, error) { return data, nil }
+
+func TestRedactSecretsUsesProcessRedactor(t *testing.T) {
+	const exact = "registry-only-secret-7f8e"
+	RegisterSecretRedactor(testSecretRedactor{value: exact})
+	got := RedactSecrets("diagnostic=" + exact)
+	if strings.Contains(got, exact) || !strings.Contains(got, "[REGISTRY_REDACTED]") {
+		t.Fatalf("process redactor did not remove exact secret: %q", got)
+	}
+}
+
 func TestRedactSecrets(t *testing.T) {
 	input := "ipa_admin_password: \"keep-me-secret\"\n" +
 		"export API_TOKEN=token-value\n" +

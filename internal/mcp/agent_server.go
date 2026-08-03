@@ -42,7 +42,7 @@ type AgentMCPServer struct {
 // NewAgentMCPServer creates a new agent MCP server
 func NewAgentMCPServer(agentName string, tools map[string]agent.MCPToolConfig, defaultShell string) *AgentMCPServer {
 	return &AgentMCPServer{
-		agentName:    agentName,
+		agentName:    strings.ToLower(strings.TrimSpace(agentName)),
 		tools:        tools,
 		defaultShell: defaultShell,
 	}
@@ -159,6 +159,11 @@ func (t *agentMCPServerTool) ProviderOptions() fantasy.ProviderOptions        { 
 func (t *agentMCPServerTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
 
 func (t *agentMCPServerTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	if authorize := toolAuthorizerFromContext(ctx); authorize != nil {
+		if err := authorize(ctx, t.server.agentName, t.name, call.Input); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
+	}
 	result, err := t.server.executeTool(ctx, t.name, t.cfg, t.agentShell, t.teamShell, t.globalShell, call.Input)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil

@@ -24,6 +24,22 @@ type MCPTool struct {
 	OrigName    string
 }
 
+// ToolAuthorizer is injected by the coordinator at the execution boundary so
+// MCP transport cannot bypass the same policy used by built-in tools.
+type ToolAuthorizer func(context.Context, string, string, string) error
+
+type toolAuthorizerKey struct{}
+
+// WithToolAuthorizer binds an MCP authorization callback to a run context.
+func WithToolAuthorizer(ctx context.Context, authorizer ToolAuthorizer) context.Context {
+	return context.WithValue(ctx, toolAuthorizerKey{}, authorizer)
+}
+
+func toolAuthorizerFromContext(ctx context.Context) ToolAuthorizer {
+	authorizer, _ := ctx.Value(toolAuthorizerKey{}).(ToolAuthorizer)
+	return authorizer
+}
+
 type MCPToolManager struct {
 	mu           sync.RWMutex
 	tools        []MCPTool
@@ -394,6 +410,11 @@ func (t *mcpAgentTool) ProviderOptions() fantasy.ProviderOptions        { return
 func (t *mcpAgentTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
 
 func (t *mcpAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	if authorize := toolAuthorizerFromContext(ctx); authorize != nil {
+		if err := authorize(ctx, t.tool.ServerName, t.tool.OrigName, call.Input); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
+	}
 	content, isError, err := t.manager.ExecuteTool(ctx, t.tool.Name, call.Input)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil

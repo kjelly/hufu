@@ -703,7 +703,7 @@ func (c *Coordinator) emitThinkPrompt(systemPrompt string) {
 	c.report(c.newEvent("think_prompt").withMessage(fmt.Sprintf("system prompt assembled (%d chars)", n)))
 
 	dumpPath := filepath.Join(c.session.Workspace, "think-prompt.md")
-	if err := os.WriteFile(dumpPath, []byte(systemPrompt), 0o644); err == nil {
+	if err := os.WriteFile(dumpPath, []byte(utils.RedactSecrets(systemPrompt)), 0o644); err == nil {
 		c.report(c.newEvent("think_prompt_dump").withMessage("saved to " + dumpPath))
 	}
 }
@@ -719,9 +719,10 @@ func (c *Coordinator) emitThinkSidecar(action, detail string) {
 }
 
 func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.AgentDef, prompt string, isContinuation bool) string {
+	prompt = utils.RedactSecrets(prompt)
 	var systemPrompt string
 	if orchDef != nil {
-		systemPrompt = c.expandOrchestratorTemplate(orchDef.System)
+		systemPrompt = utils.RedactSecrets(c.expandOrchestratorTemplate(orchDef.System))
 	}
 	if systemPrompt == "" {
 		systemPrompt = c.expandOrchestratorTemplate(defaultOrchestratorSystem)
@@ -773,15 +774,15 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 	coordInput := CoordinatorContextInput{
 		Goal:             prompt,
 		SessionContext:   contextSummary,
-		RawSTM:           LoadSTM(c.session.Workspace),
-		RawLTM:           LoadLTM(c.session.Workspace, c.session.Config.Name),
+		RawSTM:           utils.RedactSecrets(LoadSTM(c.session.Workspace)),
+		RawLTM:           utils.RedactSecrets(LoadLTM(c.session.Workspace, c.session.Config.Name)),
 		MemoryStore:      c.memoryStore,
 		SidecarCompacter: c.AgentPool().Sidecar(),
 		ModelContext:     modelSpec,
 		Role:             "coordinator",
 		IsContinuation:   isContinuation,
 		DisableMemory:    c.ExecutionProfile().DisableHistoricalMemory,
-		ProjectContext:   c.loadProjectContext(),
+		ProjectContext:   utils.RedactSecrets(c.loadProjectContext()),
 	}
 	if c.continuationResume != nil {
 		resume := c.continuationResume
@@ -819,6 +820,7 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		systemPrompt += "\n\n" + reminder
 		coreText.WriteString("\n\n" + reminder)
 	}
+	systemPrompt = utils.RedactSecrets(systemPrompt)
 	c.compileShadowCoordinator(ctx, coordInput, systemPrompt)
 
 	if c.think && !isContinuation {
@@ -827,9 +829,9 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 
 	// Record the model-aware token breakdown for the execution report (§5.4).
 	c.recordContextBreakdown(ctx, c.resolveAgentModel(orchDef, ""),
-		coreText.String(), projectText.String(), memoryText.String())
+		utils.RedactSecrets(coreText.String()), utils.RedactSecrets(projectText.String()), utils.RedactSecrets(memoryText.String()))
 
-	return systemPrompt
+	return utils.RedactSecrets(systemPrompt)
 }
 
 // textCompacter is intentionally the sidecar's plain-text compaction API.

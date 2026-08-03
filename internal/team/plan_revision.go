@@ -309,16 +309,46 @@ func planCycle(tasks []TaskDef) (int, bool) {
 func validateResourceClaims(tasks []TaskDef) error {
 	for i := range tasks {
 		for j := i + 1; j < len(tasks); j++ {
-			for _, left := range tasks[i].ResourceClaims {
-				for _, right := range tasks[j].ResourceClaims {
-					if left == right && !dependsEither(tasks, i, j) {
-						return fmt.Errorf("resource claim %q conflicts between parallel tasks %d and %d", left, i, j)
-					}
-				}
+			if claimsConflict(resourceClaims(tasks[i]), resourceClaims(tasks[j])) && !dependsEither(tasks, i, j) {
+				return fmt.Errorf("resource claims conflict between parallel tasks %d and %d", i, j)
 			}
 		}
 	}
 	return nil
+}
+
+func resourceClaims(task TaskDef) []ResourceClaim {
+	claims := append([]ResourceClaim(nil), task.Resources...)
+	for _, resource := range task.ResourceClaims {
+		if resource != "" {
+			claims = append(claims, ResourceClaim{Resource: resource, Mode: ResourceExclusive})
+		}
+	}
+	return claims
+}
+
+func normalizeResourceClaimMode(mode ResourceClaimMode) ResourceClaimMode {
+	if mode == "" {
+		return ResourceExclusive
+	}
+	return mode
+}
+
+func claimsConflict(left, right []ResourceClaim) bool {
+	for _, a := range left {
+		if a.Resource == "" {
+			continue
+		}
+		for _, b := range right {
+			if a.Resource != b.Resource {
+				continue
+			}
+			if normalizeResourceClaimMode(a.Mode) != ResourceRead || normalizeResourceClaimMode(b.Mode) != ResourceRead {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func dependsEither(tasks []TaskDef, from, target int) bool {

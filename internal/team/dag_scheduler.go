@@ -40,6 +40,7 @@ type dagScheduler struct {
 	revDeps              [][]int // revDeps[i] lists the tasks that depend on i
 	eventCh              chan agentTaskResult
 	inProgress           int
+	activeResources      map[int][]ResourceClaim
 
 	inflightMu sync.Mutex
 	inflight   map[string]chan agentTaskResult
@@ -61,6 +62,7 @@ func newDAGScheduler(c *Coordinator, tasks []TaskDef, todoItems []*TodoItem, dup
 		revDeps:              make([][]int, len(tasks)),
 		eventCh:              make(chan agentTaskResult, len(tasks)),
 		inflight:             make(map[string]chan agentTaskResult),
+		activeResources:      make(map[int][]ResourceClaim),
 		sem:                  make(chan struct{}, c.maxConcurrent),
 	}
 	for i := range s.states {
@@ -120,6 +122,9 @@ func (s *dagScheduler) launchReady(ctx context.Context) {
 		if !ready {
 			continue
 		}
+		if s.resourceConflict(i) {
+			continue
+		}
 		if s.coord.antiThrashingBlocksTask(t, s.todoItems[i]) {
 			s.states[i] = TaskBlocked
 			if item := s.todoItems[i]; item != nil {
@@ -131,6 +136,7 @@ func (s *dagScheduler) launchReady(ctx context.Context) {
 
 		s.states[i] = TaskInProgress
 		s.inProgress++
+		s.activeResources[i] = resourceClaims(t)
 		go s.runTask(ctx, t, s.todoItems[i].ID, i, s.duplicates[i])
 	}
 }
@@ -144,6 +150,7 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	if idx < 0 || idx >= len(s.tasks) {
 		return
 	}
+	delete(s.activeResources, idx)
 
 	// A reset wave swept this task while it was still running: discard the
 	// stale result and re-queue the task.
@@ -196,6 +203,16 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	s.resetWave(targetIdx)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	s.launchReady(ctx)
+}
+
+func (s *dagScheduler) resourceConflict(candidate int) bool {
+	claims := resourceClaims(s.tasks[candidate])
+	for active, held := range s.activeResources {
+		if active != candidate && claimsConflict(claims, held) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *dagScheduler) routeNoProgressCriterionRetry(ctx context.Context, idx int) bool {
