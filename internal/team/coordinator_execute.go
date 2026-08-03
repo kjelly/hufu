@@ -245,6 +245,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		// preserving pre-recovery behavior for read-only agents.
 		sideEffect, recovery, reconcileTool := c.PolicyEngine().ResolveRecoveryPolicy(agentDef, t)
 		todoBatch[i] = TodoSpec{
+			PlanTaskID:          t.ID,
 			Agent:               strings.ToLower(t.Agent),
 			Desc:                desc,
 			Model:               resolvedModel,

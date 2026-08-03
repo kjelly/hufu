@@ -403,6 +403,18 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	c.diagnosticPacketsMu.Lock()
 	c.diagnosticPackets = append([]DiagnosticPacket(nil), sd.DiagnosticPackets...)
 	c.diagnosticPacketsMu.Unlock()
+	c.planRevisionsMu.Lock()
+	c.planRevisions = make([]PlanRevision, 0, len(sd.PlanRevisions))
+	for _, revision := range sd.PlanRevisions {
+		c.planRevisions = append(c.planRevisions, clonePlanRevision(revision))
+	}
+	c.planRevisionsMu.Unlock()
+	c.planReviewsMu.Lock()
+	c.planReviews = make(map[string]PlanReviewResult, len(sd.PlanReviews))
+	for _, review := range sd.PlanReviews {
+		c.planReviews[review.RevisionID] = review
+	}
+	c.planReviewsMu.Unlock()
 	if len(sd.AcceptanceContractRevisions) > 0 {
 		latest := sd.AcceptanceContractRevisions[len(sd.AcceptanceContractRevisions)-1]
 		c.acceptanceContractRevision = latest.Revision
@@ -841,8 +853,12 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 	if it == nil {
 		return TaskDef{}
 	}
+	id := it.PlanTaskID
+	if id == "" {
+		id = it.ID
+	}
 	return TaskDef{
-		Agent: it.Agent, Goal: it.Desc, Verify: it.Verify, VerifyMode: it.VerifyMode,
+		ID: id, Agent: it.Agent, Goal: it.Desc, Verify: it.Verify, VerifyMode: it.VerifyMode,
 		VerifySpec: cloneVerificationSpecPtr(it.VerifySpec), SideEffect: it.SideEffect,
 		Recovery: it.Recovery, ReconcileTool: it.ReconcileTool, Execution: it.Execution,
 		Kind: it.Kind, Advances: append([]string(nil), it.Advances...),

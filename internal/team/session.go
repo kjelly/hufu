@@ -46,6 +46,8 @@ type SessionData struct {
 	// the same completed/partial/blocked/failed/cancelled semantics.
 	RunResult                   *RunResult                   `json:"run_result,omitempty"`
 	DiagnosticPackets           []DiagnosticPacket           `json:"diagnostic_packets,omitempty"`
+	PlanRevisions               []PlanRevision               `json:"plan_revisions,omitempty"`
+	PlanReviews                 []PlanReviewResult           `json:"plan_reviews,omitempty"`
 	AcceptanceContractRevisions []AcceptanceContractRevision `json:"acceptance_contract_revisions,omitempty"`
 	ContinuationCheckpoint      *ContinuationCheckpoint      `json:"continuation_checkpoint,omitempty"`
 	CriterionResults            []CriterionResult            `json:"criterion_results,omitempty"`

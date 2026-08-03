@@ -13,13 +13,19 @@ import (
 )
 
 type PlanEntry struct {
-	TodoID      string
-	Agent       string
-	Goal        string
-	PlanText    string
-	Status      string // "submitted", "approved", "modified", "rejected"
-	ReviewCount int
-	Task        TaskDef
+	TodoID string
+	// PlanRevisionID marks a durable plan-revision review. Such entries use
+	// the same reviewer agent as plan-first execution, but approval only
+	// records the review decision; it must never execute a task as a side
+	// effect of reviewing a revision.
+	PlanRevisionID string
+	ReviewReason   string
+	Agent          string
+	Goal           string
+	PlanText       string
+	Status         string // "submitted", "approved", "modified", "rejected"
+	ReviewCount    int
+	Task           TaskDef
 }
 
 const planReviewerMaxReviews = 3
@@ -243,6 +249,14 @@ func (t *reviewerApprovePlanTool) Info() fantasy.ToolInfo {
 }
 
 func (t *reviewerApprovePlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	t.coordinator.pendingPlansMu.Lock()
+	entry := t.coordinator.pendingPlans[t.todoID]
+	if entry != nil && entry.PlanRevisionID != "" {
+		entry.Status = "approved"
+		t.coordinator.pendingPlansMu.Unlock()
+		return fantasy.NewTextResponse("Plan revision approved."), nil
+	}
+	t.coordinator.pendingPlansMu.Unlock()
 	result := t.coordinator.autoApprovePlan(ctx, t.todoID)
 	return fantasy.NewTextResponse("Plan approved and executed.\n\n" + result), nil
 }
@@ -283,6 +297,11 @@ func (t *reviewerRejectPlanTool) Run(ctx context.Context, call fantasy.ToolCall)
 		return fantasy.NewTextErrorResponse("plan not found"), nil
 	}
 	entry.Status = "rejected"
+	if entry.PlanRevisionID != "" {
+		entry.ReviewReason = strings.TrimSpace(args.Reason)
+		t.coordinator.pendingPlansMu.Unlock()
+		return fantasy.NewTextResponse("Plan revision rejected: " + entry.ReviewReason), nil
+	}
 	var revisedTask TaskDef
 	if entry.Task.Agent != "" {
 		revisedTask = cloneTaskDef(entry.Task)

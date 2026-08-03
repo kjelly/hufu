@@ -63,6 +63,7 @@ type taskTranscriptKey struct{}
 type delegationChainKey struct{}
 
 type TaskDef struct {
+	ID          string `json:"id,omitempty"`
 	Agent       string `json:"agent"`
 	Goal        string `json:"goal"`
 	Constraints string `json:"constraints,omitempty"`
@@ -112,6 +113,7 @@ type TaskDef struct {
 	Advances            []string            `json:"advances,omitempty" yaml:"advances,omitempty"`
 	ExpectedStateChange string              `json:"expected_state_change,omitempty" yaml:"expected_state_change,omitempty"`
 	RecoveryHypothesis  *RecoveryHypothesis `json:"recovery_hypothesis,omitempty" yaml:"recovery_hypothesis,omitempty"`
+	ResourceClaims      []string            `json:"resource_claims,omitempty" yaml:"resource_claims,omitempty"`
 }
 
 // UnmarshalJSON handles legacy "task" field by mapping it to Goal, and legacy "strict_result" / "strict-result" fields.
@@ -392,6 +394,12 @@ type Coordinator struct {
 	diagnosticPackets        []DiagnosticPacket
 	diagnosticPacketsMu      sync.RWMutex
 	pendingDiagnosticPackets map[string]DiagnosticPacket
+	planRevisions            []PlanRevision
+	planRevisionsMu          sync.RWMutex
+	planMaxTasks             int
+	planMaxAttempts          int
+	planReviews              map[string]PlanReviewResult
+	planReviewsMu            sync.RWMutex
 	// contractWarnings deduplicates contract_warning events per
 	// (todoID, code, message) within a single dispatch cycle, so that both
 	// the ExecuteTasks preflight and the executeTask execution-path check

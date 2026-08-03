@@ -95,6 +95,39 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 					session.DiagnosticPackets = append(session.DiagnosticPackets, payload.Packet)
 				}
 			}
+		case "plan_revision":
+			var payload struct {
+				Revision PlanRevision `json:"revision"`
+			}
+			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Revision.ID != "" {
+				seen := false
+				for _, existing := range session.PlanRevisions {
+					if existing.ID == payload.Revision.ID {
+						seen = true
+						break
+					}
+				}
+				if !seen {
+					session.PlanRevisions = append(session.PlanRevisions, payload.Revision)
+				}
+			}
+		case "plan_review":
+			var payload struct {
+				Review PlanReviewResult `json:"review"`
+			}
+			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Review.RevisionID != "" {
+				updated := false
+				for i := range session.PlanReviews {
+					if session.PlanReviews[i].RevisionID == payload.Review.RevisionID {
+						session.PlanReviews[i] = payload.Review
+						updated = true
+						break
+					}
+				}
+				if !updated {
+					session.PlanReviews = append(session.PlanReviews, payload.Review)
+				}
+			}
 		}
 	}
 	session.Tasks = ReduceToTodoList(events)
@@ -206,6 +239,7 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 
 		var payload struct {
 			ID                  string               `json:"id"`
+			PlanTaskID          string               `json:"plan_task_id"`
 			Description         string               `json:"description"`
 			Desc                string               `json:"desc"`
 			Status              string               `json:"status"`
@@ -254,6 +288,7 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		if !exists {
 			item = &TodoItem{
 				ID:                  taskID,
+				PlanTaskID:          payload.PlanTaskID,
 				Desc:                desc,
 				Status:              TaskPending,
 				MaxRetries:          payload.MaxRetries,
@@ -283,6 +318,9 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		}
 		if payload.Agent != "" {
 			item.Agent = payload.Agent
+		}
+		if payload.PlanTaskID != "" {
+			item.PlanTaskID = payload.PlanTaskID
 		}
 		if len(payload.DependsOn) > 0 {
 			item.DependsOn = payload.DependsOn
