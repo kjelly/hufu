@@ -170,9 +170,13 @@ type TeamConfig struct {
 // ReliabilityConfig bounds diagnostic and repair work that repeats without
 // improving a mandatory outcome criterion.
 type ReliabilityConfig struct {
-	MaxDiagnosticTasksWithoutProgress int `yaml:"max-diagnostic-tasks-without-progress" json:"max_diagnostic_tasks_without_progress,omitempty"`
-	MaxSameFailureFingerprint         int `yaml:"max-same-failure-fingerprint" json:"max_same_failure_fingerprint,omitempty"`
-	MaxRepairsPerCriterion            int `yaml:"max-repairs-per-criterion" json:"max_repairs_per_criterion,omitempty"`
+	// Rollout selects the HF-AR-006 reliability-evaluation rollout stage:
+	// shadow, warn-only, strict-opt-in, or strict-default. Empty preserves
+	// the staged default resolved from whether an acceptance contract exists.
+	Rollout                           string `yaml:"rollout" json:"rollout,omitempty"`
+	MaxDiagnosticTasksWithoutProgress int    `yaml:"max-diagnostic-tasks-without-progress" json:"max_diagnostic_tasks_without_progress,omitempty"`
+	MaxSameFailureFingerprint         int    `yaml:"max-same-failure-fingerprint" json:"max_same_failure_fingerprint,omitempty"`
+	MaxRepairsPerCriterion            int    `yaml:"max-repairs-per-criterion" json:"max_repairs_per_criterion,omitempty"`
 	// MaxSystemicFailureTasks is the threshold of distinct tasks that have
 	// observed an equivalent (component, operation, class, digest) failure
 	// before the anti-thrashing circuit breaker escalates to a systemic

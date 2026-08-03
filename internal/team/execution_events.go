@@ -36,20 +36,29 @@ type ExecutionUsage struct {
 // identify the unit of work; RunID separates successive invocations that share
 // a workspace.
 type ExecutionEvent struct {
-	Version      int            `json:"version"`
-	Timestamp    string         `json:"timestamp"`
-	RunID        string         `json:"run_id"`
-	Team         string         `json:"team"`
-	TaskID       string         `json:"task_id"`
-	Agent        string         `json:"agent"`
-	Attempt      int            `json:"attempt"`
-	Status       string         `json:"status"`
-	Model        string         `json:"model,omitempty"`
-	TaskType     string         `json:"task_type,omitempty"`
-	Skills       []string       `json:"skills,omitempty"`
-	TeamRevision string         `json:"team_revision,omitempty"`
-	DurationMS   int64          `json:"duration_ms,omitempty"`
-	Usage        ExecutionUsage `json:"usage"`
+	Version              int             `json:"version"`
+	Timestamp            string          `json:"timestamp"`
+	RunID                string          `json:"run_id"`
+	Team                 string          `json:"team"`
+	TaskID               string          `json:"task_id"`
+	Agent                string          `json:"agent"`
+	Attempt              int             `json:"attempt"`
+	Status               string          `json:"status"`
+	Model                string          `json:"model,omitempty"`
+	TaskType             string          `json:"task_type,omitempty"`
+	Skills               []string        `json:"skills,omitempty"`
+	TeamRevision         string          `json:"team_revision,omitempty"`
+	DurationMS           int64           `json:"duration_ms,omitempty"`
+	Usage                ExecutionUsage  `json:"usage"`
+	Outcome              RunOutcome      `json:"outcome,omitempty"`
+	StopReason           StopReason      `json:"stop_reason,omitempty"`
+	AcceptanceState      AcceptanceState `json:"acceptance_state,omitempty"`
+	EvidenceManifestHash string          `json:"evidence_manifest_hash,omitempty"`
+	RepairAttempts       int             `json:"repair_attempts,omitempty"`
+	DecisionChain        []string        `json:"decision_chain,omitempty"`
+	PlanRevision         string          `json:"plan_revision,omitempty"`
+	RepairCost           RepairCost      `json:"repair_cost,omitempty"`
+	TerminalReason       string          `json:"terminal_reason,omitempty"`
 }
 
 type executionEventLogger struct {
@@ -207,6 +216,24 @@ func (c *Coordinator) beginExecutionRun() func() {
 				c.SetLastRunResult(result)
 			}
 		}
+		if result := c.LastRunResult(); result != nil {
+			if evalReport, err := c.PersistReliabilityEvaluation(result); err != nil {
+				log.Printf("warning: persist reliability evaluation failed: %v", err)
+				// Reliability-report read/write failures are terminal safety
+				// failures too. Publishing a completed result without a valid
+				// historical metrics report would make the run unverifiable.
+				downgradeReliabilityResultForError(result, err)
+				c.SetLastRunResult(result)
+			} else {
+				// Keep the quantitative production metrics visible in the durable
+				// event-store terminal record as well as in the JSON report.
+				_ = c.emitEvent("reliability_eval", "coordinator", "", map[string]interface{}{
+					"metrics":                evalReport.Metrics,
+					"production_observation": evalReport.ProductionObservation,
+				})
+			}
+		}
+		c.recordRunTelemetry(c.LastRunResult())
 		payload := map[string]interface{}{}
 		if result := c.LastRunResult(); result != nil {
 			payload["outcome"] = result.Outcome
@@ -218,6 +245,7 @@ func (c *Coordinator) beginExecutionRun() func() {
 			}
 			payload["stats"] = result.Stats
 			payload["metrics"] = result.Metrics
+			payload["telemetry"] = result.Telemetry
 			if result.EvidenceManifest != nil {
 				payload["evidence_manifest"] = result.EvidenceManifest
 			}
@@ -241,6 +269,83 @@ func (c *Coordinator) beginExecutionRun() func() {
 		c.executionEventsMu.Unlock()
 		logger.close()
 	}
+}
+
+func (c *Coordinator) recordRunTelemetry(result *RunResult) {
+	if c == nil || result == nil {
+		return
+	}
+	telemetry := c.buildRunTelemetry(result)
+	result.Telemetry = &telemetry
+	c.SetLastRunResult(result)
+	c.executionEventsMu.RLock()
+	logger, runID, revision := c.executionEvents, c.executionRunID, c.executionTeamRevision
+	c.executionEventsMu.RUnlock()
+	if logger == nil || runID == "" {
+		return
+	}
+	state := AcceptanceNotConfigured
+	if result.Acceptance != nil {
+		state = result.Acceptance.EffectiveState()
+	}
+	hash := ""
+	if result.EvidenceManifest != nil {
+		hash = result.EvidenceManifest.ManifestHash
+	}
+	_ = logger.append(ExecutionEvent{
+		Version: 3, Timestamp: time.Now().UTC().Format(time.RFC3339Nano), RunID: runID,
+		Team: c.session.Config.Name, Status: "run_finished", TeamRevision: revision,
+		Outcome: result.Outcome, StopReason: result.StopReason, AcceptanceState: state,
+		EvidenceManifestHash: hash, RepairAttempts: telemetry.RepairCost.Attempts,
+		DecisionChain: telemetry.DecisionChain, PlanRevision: telemetry.PlanRevision,
+		RepairCost:     telemetry.RepairCost,
+		TerminalReason: string(result.StopReason),
+	})
+}
+
+func (c *Coordinator) buildRunTelemetry(result *RunResult) RunTelemetry {
+	telemetry := RunTelemetry{TerminalReason: string(result.StopReason)}
+	if result.EvidenceManifest != nil {
+		telemetry.EvidenceManifest = result.EvidenceManifest.ManifestHash
+	}
+	repairs := result.Metrics.ProtocolRepairsAttempted
+	for _, count := range result.Metrics.RepairAttemptsByCriterion {
+		repairs += count
+	}
+	telemetry.RepairCost = RepairCost{
+		Attempts:    repairs,
+		Tokens:      result.Metrics.TokensSinceCriterionProgress,
+		WallClockMS: result.Metrics.TimeSinceCriterionProgressSeconds * 1000,
+	}
+	if revisions := c.PlanRevisions(); len(revisions) > 0 {
+		telemetry.PlanRevision = revisions[len(revisions)-1].ID
+	}
+	telemetry.DecisionChain = []string{
+		"outcome:" + string(result.Outcome),
+		"goal_satisfied:" + fmt.Sprint(result.GoalSatisfied),
+		"acceptance:" + acceptanceState(result),
+		"evidence:" + evidenceState(result),
+		"terminal:" + string(result.StopReason),
+	}
+	for class, count := range result.Metrics.FailuresByClass {
+		telemetry.DecisionChain = append(telemetry.DecisionChain, fmt.Sprintf("failure:%s=%d", class, count))
+	}
+	sort.Strings(telemetry.DecisionChain[5:])
+	return telemetry
+}
+
+func acceptanceState(result *RunResult) string {
+	if result == nil || result.Acceptance == nil {
+		return string(AcceptanceNotConfigured)
+	}
+	return string(result.Acceptance.EffectiveState())
+}
+
+func evidenceState(result *RunResult) string {
+	if result != nil && result.EvidenceManifest != nil && result.EvidenceManifest.Status == "accepted" && result.EvidenceManifest.ManifestHash != "" {
+		return "complete"
+	}
+	return "incomplete"
 }
 
 func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, status, model string, duration time.Duration, usage ExecutionUsage) {

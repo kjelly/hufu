@@ -106,9 +106,10 @@ type teamConfigYAML struct {
 }
 
 type rawReliabilityConfig struct {
-	MaxDiagnosticTasksWithoutProgress int `yaml:"max-diagnostic-tasks-without-progress"`
-	MaxSameFailureFingerprint         int `yaml:"max-same-failure-fingerprint"`
-	MaxRepairsPerCriterion            int `yaml:"max-repairs-per-criterion"`
+	Rollout                           string `yaml:"rollout"`
+	MaxDiagnosticTasksWithoutProgress int    `yaml:"max-diagnostic-tasks-without-progress"`
+	MaxSameFailureFingerprint         int    `yaml:"max-same-failure-fingerprint"`
+	MaxRepairsPerCriterion            int    `yaml:"max-repairs-per-criterion"`
 	// MaxSystemicFailureTasks is a pointer so an explicit YAML zero
 	// (max-systemic-failure-tasks: 0) is distinguishable from unset and
 	// can override the default (3) to disable the feature. Refs:
@@ -638,6 +639,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		return cfg, err
 	}
 	cfg.Reliability = agent.DefaultReliabilityConfig()
+	if strings.TrimSpace(yc.Reliability.Rollout) != "" {
+		cfg.Reliability.Rollout = strings.TrimSpace(yc.Reliability.Rollout)
+	}
 	if yc.Reliability.MaxDiagnosticTasksWithoutProgress > 0 {
 		cfg.Reliability.MaxDiagnosticTasksWithoutProgress = yc.Reliability.MaxDiagnosticTasksWithoutProgress
 	}

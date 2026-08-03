@@ -565,6 +565,10 @@ type RunMetrics struct {
 	ProtocolRepairsSucceeded           int                         `json:"protocol_repairs_succeeded,omitempty"`
 	ProtocolRepairFailuresByReason     map[RepairFailureReason]int `json:"protocol_repair_failures_by_reason,omitempty"`
 	ExecutionReplaysAvoided            int                         `json:"execution_replays_avoided,omitempty"`
+	ReplayAttempts                     int                         `json:"replay_attempts,omitempty"`
+	UnsafeReplaysDetected              int                         `json:"unsafe_replays_detected,omitempty"`
+	ReconciliationAttempts             int                         `json:"reconciliation_attempts,omitempty"`
+	ReconciliationSucceeded            int                         `json:"reconciliation_succeeded,omitempty"`
 	TimeoutTasksRecovered              int                         `json:"timeout_tasks_recovered_through_reconciliation,omitempty"`
 	PreflightFailuresCaught            int                         `json:"preflight_failures_caught_before_dispatch,omitempty"`
 	NonAssertingVerifiersRejected      int                         `json:"non_asserting_verifiers_rejected,omitempty"`
@@ -587,6 +591,23 @@ type RunMetrics struct {
 	MaxTokensWithoutProgress int64 `json:"max_tokens_without_progress,omitempty"`
 	MaxTurnsWithoutProgress  int   `json:"max_turns_without_progress,omitempty"`
 	MaxTasksWithoutProgress  int   `json:"max_tasks_without_progress,omitempty"`
+}
+
+// RepairCost is the quantitative cost of recovery decisions made during a
+// run. Token and wall-clock values are provider-independent and remain zero
+// when the provider did not report them.
+type RepairCost struct {
+	Attempts    int   `json:"attempts"`
+	Tokens      int64 `json:"tokens"`
+	WallClockMS int64 `json:"wall_clock_ms"`
+}
+
+type RunTelemetry struct {
+	DecisionChain    []string   `json:"decision_chain,omitempty"`
+	PlanRevision     string     `json:"plan_revision,omitempty"`
+	EvidenceManifest string     `json:"evidence_manifest,omitempty"`
+	RepairCost       RepairCost `json:"repair_cost"`
+	TerminalReason   string     `json:"terminal_reason,omitempty"`
 }
 
 type TaskResolution struct {
@@ -622,6 +643,7 @@ type RunResult struct {
 	Stats            RunStats          `json:"stats"`
 	Metrics          RunMetrics        `json:"metrics,omitempty"`
 	EvidenceManifest *EvidenceManifest `json:"evidence_manifest,omitempty"`
+	Telemetry        *RunTelemetry     `json:"telemetry,omitempty"`
 }
 
 type TaskFailureClass string

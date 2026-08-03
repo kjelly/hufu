@@ -206,14 +206,14 @@ func TestAntiThrashingLimitsCountWithoutTaskIDReuse(t *testing.T) {
 
 func TestReliabilityConfigParses(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: reliable\nacceptance: 'true'\nreliability:\n  max-diagnostic-tasks-without-progress: 3\n  max-same-failure-fingerprint: 2\n  max-repairs-per-criterion: 5\n  hard-enforcement: true\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: reliable\nacceptance: 'true'\nreliability:\n  rollout: strict-opt-in\n  max-diagnostic-tasks-without-progress: 3\n  max-same-failure-fingerprint: 2\n  max-repairs-per-criterion: 5\n  hard-enforcement: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := parseTeamYML(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Reliability.MaxDiagnosticTasksWithoutProgress != 3 || !cfg.Reliability.HardEnforcement {
+	if cfg.Reliability.Rollout != "strict-opt-in" || cfg.Reliability.MaxDiagnosticTasksWithoutProgress != 3 || !cfg.Reliability.HardEnforcement {
 		t.Fatalf("unexpected reliability config: %#v", cfg.Reliability)
 	}
 }

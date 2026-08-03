@@ -88,6 +88,22 @@ func accumulateTodoMetrics(metrics *RunMetrics, items []*TodoItem) {
 		for _, receipt := range item.ExecutionReceipts {
 			accumulateProtocolRepairMetrics(metrics, receipt.RepairProvenance)
 		}
+		metrics.ReplayAttempts += item.Retries
+		if item.RecoveryState != "" && item.RecoveryState != RecoveryStateNotStarted {
+			metrics.ReconciliationAttempts++
+			if item.RecoveryState == RecoveryStateComplete {
+				metrics.ReconciliationSucceeded++
+			}
+		}
+		// A replay is unsafe only when a task with a non-replayable side
+		// effect was redriven while its prior operation was partial or
+		// unknown. This is an explicit task/recovery fact, not an inference
+		// from avoided-retry or repeated-failure counters.
+		if item.Retries > 0 && nonReplayableSideEffect(item.SideEffect) &&
+			(item.RecoveryState == RecoveryStatePartial || item.RecoveryState == RecoveryStateUnknown) &&
+			(item.Execution.AllowsReplay == nil || *item.Execution.AllowsReplay) {
+			metrics.UnsafeReplaysDetected += item.Retries
+		}
 	}
 }
 

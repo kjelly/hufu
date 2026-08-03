@@ -206,6 +206,13 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		if data.RunResult.StopReason != "" {
 			fmt.Fprintf(&b, "- **Stop reason:** `%s`\n", data.RunResult.StopReason)
 		}
+		if telemetry := data.RunResult.Telemetry; telemetry != nil {
+			fmt.Fprintf(&b, "- **Plan revision:** `%s`\n", telemetry.PlanRevision)
+			fmt.Fprintf(&b, "- **Evidence manifest:** `%s`\n", telemetry.EvidenceManifest)
+			fmt.Fprintf(&b, "- **Terminal reason:** `%s`\n", telemetry.TerminalReason)
+			fmt.Fprintf(&b, "- **Decision chain:** `%v`\n", telemetry.DecisionChain)
+			fmt.Fprintf(&b, "- **Repair cost:** %d attempts, %d tokens, %dms\n", telemetry.RepairCost.Attempts, telemetry.RepairCost.Tokens, telemetry.RepairCost.WallClockMS)
+		}
 		fmt.Fprintf(&b, "- **Tasks unresolved:** %d\n", data.RunResult.Stats.TasksUnresolved)
 		if data.RunResult.Acceptance != nil {
 			fmt.Fprintf(&b, "- **Acceptance:** `%s`\n", data.RunResult.Acceptance.EffectiveState())
