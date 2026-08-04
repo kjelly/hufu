@@ -300,7 +300,12 @@ func replayReliabilityBoundary(s ReliabilityScenario) (ReliabilityBoundaryEviden
 			return evidence, err
 		}
 		evidence.CheckpointCorrupted = true
-		evidence.CheckpointRejected = LoadSession(workspace) == nil
+		// Deliberately the quiet loader: this scenario asserts that a corrupt
+		// checkpoint is rejected, so the rejection is the expected result and
+		// must not print an operator warning about workspace damage into a real
+		// run's stderr.
+		loaded, _ := loadSessionQuiet(workspace)
+		evidence.CheckpointRejected = loaded == nil
 		if !evidence.CheckpointRejected {
 			return evidence, fmt.Errorf("corrupt checkpoint was accepted")
 		}

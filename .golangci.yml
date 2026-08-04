@@ -58,9 +58,12 @@ linters:
       - linters: # ClassifyLTMEntry: 85
           - gocyclo
         path: internal/team/ltm\.go
-      - linters: # parseTeamYML: 45
+      - linters: # parseTeamYML: 72
           - gocyclo
         path: internal/team/parse\.go
+      - linters: # executeWaitFor: 51
+          - gocyclo
+        path: internal/tools/wait_for\.go
       - linters: # executeAndReport: 42
           - gocyclo
         path: cmd/hufu/team_runner\.go

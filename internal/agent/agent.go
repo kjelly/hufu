@@ -203,6 +203,15 @@ type ReliabilityConfig struct {
 	// docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
 	MaxTokensWithoutProgress    int  `yaml:"max-tokens-without-progress" json:"max_tokens_without_progress,omitempty"`
 	MaxTokensWithoutProgressSet bool `yaml:"-" json:"-"`
+	// MaxTokensPerAttempt bounds a single worker attempt before it can consume
+	// the entire run budget. Zero disables this per-attempt circuit breaker.
+	// It counts the *new* content an attempt accumulates — how much the request
+	// context grows plus what the model generates — and not the conversation
+	// resent on every step. Counting resent history instead makes the limit an
+	// implicit step ceiling that shrinks as injected context grows, so a task
+	// needing many small tool calls fails while consuming almost nothing.
+	MaxTokensPerAttempt    int  `yaml:"max-tokens-per-attempt" json:"max_tokens_per_attempt,omitempty"`
+	MaxTokensPerAttemptSet bool `yaml:"-" json:"-"`
 	// MaxTurnsWithoutProgress is the no-progress budget on coordinator turns
 	// since the last objective criterion advancement (§8.1). Same 0-disables
 	// semantics as MaxTokensWithoutProgress. Refs:
@@ -234,6 +243,9 @@ func DefaultReliabilityConfig() ReliabilityConfig {
 		MaxTokensWithoutProgress: 2_000_000,
 		MaxTurnsWithoutProgress:  8,
 		MaxTasksWithoutProgress:  12,
+		// A single runaway agent must not be able to consume the full run
+		// budget before the task/round boundary observes it.
+		MaxTokensPerAttempt: 500_000,
 	}
 }
 

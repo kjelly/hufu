@@ -48,6 +48,52 @@ func (c *Coordinator) TerminalSessions(ctx context.Context) ([]TerminalSession, 
 	return c.terminalSessionMgr.List(ctx, "")
 }
 
+// terminalTaskFailure returns process-level evidence that a task's terminal
+// command exited unsuccessfully. A worker's self-reported result is not
+// allowed to erase this evidence: terminal lifecycle events are facts about
+// the child process, not claims made by the model. Callers must only invoke
+// this against a result that actually claims success (see
+// validateSubmittedTaskResult) — a worker that already reported partial,
+// failed, or blocked has nothing left for terminal evidence to contradict.
+//
+// Only the most recently started session for this task is treated as live
+// evidence. A worker commonly opens and abandons an exploratory session
+// (wrong TTY mode, a probe killed by its own timeout) before completing the
+// same goal a different way; treating every historical session as equally
+// authoritative would let that first abandoned probe veto a later, genuinely
+// successful attempt made through a different session or tool entirely.
+func (c *Coordinator) terminalTaskFailure(ctx context.Context, taskID string) error {
+	if c == nil || c.terminalSessionMgr == nil || taskID == "" {
+		return nil
+	}
+	runID := c.executionRunID
+	if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		runID = c.taskTracker.TodoList().RunID()
+	}
+	sessions, err := c.terminalSessionMgr.List(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("inspect terminal evidence: %w", err)
+	}
+	var latest *TerminalSession
+	for i := range sessions {
+		session := &sessions[i]
+		if session.OwnerTaskID != taskID && session.ControllerTaskID != taskID {
+			continue
+		}
+		if latest == nil || session.StartedAt.After(latest.StartedAt) {
+			latest = session
+		}
+	}
+	if latest == nil || latest.ExitCode == nil || *latest.ExitCode == 0 {
+		return nil
+	}
+	command := strings.TrimSpace(strings.Join(latest.Command, " "))
+	if command == "" {
+		command = latest.ID
+	}
+	return fmt.Errorf("terminal command %q for task %s exited with status %d", command, taskID, *latest.ExitCode)
+}
+
 // TransferTerminal performs the Phase D, operator-authorized task handoff.
 // It is coordinator-only: the model-facing terminal tool deliberately has no
 // transfer action. The original OwnerTaskID remains durable provenance while

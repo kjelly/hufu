@@ -199,11 +199,18 @@ func (c *Coordinator) executeSingleAgentWithModel(
 func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 	// Deep copy/clone all shared mutable maps and slices under their original locks
 	var agentCacheClone map[string]fantasy.Agent
+	var agentToolNameCacheClone map[string][]string
 	orig.agentCacheMu.RLock()
 	if orig.agentCache != nil {
 		agentCacheClone = make(map[string]fantasy.Agent, len(orig.agentCache))
 		for k, v := range orig.agentCache {
 			agentCacheClone[k] = v
+		}
+	}
+	if orig.agentToolNameCache != nil {
+		agentToolNameCacheClone = make(map[string][]string, len(orig.agentToolNameCache))
+		for k, names := range orig.agentToolNameCache {
+			agentToolNameCacheClone[k] = append([]string(nil), names...)
 		}
 	}
 	orig.agentCacheMu.RUnlock()
@@ -421,6 +428,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		mcpManager:                      orig.mcpManager,
 		coreTools:                       coreToolsClone,
 		agentCache:                      agentCacheClone,
+		agentToolNameCache:              agentToolNameCacheClone,
 		round:                           orig.round,
 		verbose:                         orig.verbose,
 		think:                           orig.think,

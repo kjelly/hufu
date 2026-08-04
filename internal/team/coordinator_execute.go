@@ -116,10 +116,19 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 
 	// on_failure without max_retries is the natural way to request a retry
 	// loop; default to a single retry so the loop actually triggers.
+	// A sidecar has no tools, so it cannot be exempted from RequiresResult and
+	// also be trusted to have changed something. Reject that combination before
+	// any model call happens.
+	if err := c.validateSidecarTaskContracts(tasks); err != nil {
+		return "", err
+	}
+
 	for i := range tasks {
 		// A worker must make its terminal outcome explicit. This is independent
 		// of task type and prevents a prose failure report from being recorded
-		// as a completed task.
+		// as a completed task. A sidecar is exempt only because a tool-less call
+		// cannot invoke submit_result — validateSidecarTaskContracts above is
+		// what keeps that exemption from becoming a false success.
 		if !tasks[i].Sidecar {
 			tasks[i].Execution.RequiresResult = true
 		}
@@ -144,6 +153,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	if len(invalidAgents) > 0 {
 		return "", fmt.Errorf("agent validation failed:\n- %s", strings.Join(invalidAgents, "\n- "))
 	}
+	c.normalizeOutcomeTaskKinds(tasks)
 	if err := c.validateTaskCriterionLinks(tasks); err != nil {
 		return "", err
 	}

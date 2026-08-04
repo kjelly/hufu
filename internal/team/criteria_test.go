@@ -72,6 +72,85 @@ func TestDiagnosticTaskRequiresUncertaintyDeclaration(t *testing.T) {
 	}
 }
 
+func TestOutcomeTasksRequireSemanticAcceptanceVerifier(t *testing.T) {
+	newCoordinator := func() *Coordinator {
+		return &Coordinator{
+			session: &TeamSession{Config: agent.TeamConfig{Name: "test", GoalMode: "outcome"}},
+			acceptanceSpec: &AcceptanceSpec{Criteria: []AcceptanceCriterion{{
+				ID: "inventory-roles", Required: true,
+				Verify: VerificationSpec{Type: VerifyCommandExit, Command: "test -s hosts.yml && grep -qx controller hosts.yml"},
+			}}},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		task    TaskDef
+		wantErr string
+	}{
+		{
+			name:    "untyped task cannot evade acceptance links",
+			task:    TaskDef{Goal: "write inventory", Verify: "test -s hosts.yml"},
+			wantErr: "must reference",
+		},
+		{
+			name:    "outcome task requires a verifier",
+			task:    TaskDef{Kind: TaskKindOutcome, Goal: "write inventory", Advances: []string{"inventory-roles"}},
+			wantErr: "objective verifier",
+		},
+		{
+			name:    "simple artifact test cannot prove role outcome",
+			task:    TaskDef{Goal: "write inventory", Advances: []string{"inventory-roles"}, Verify: "test -s hosts.yml"},
+			wantErr: "artifact-only",
+		},
+		{
+			name: "semantic command verifier is accepted",
+			task: TaskDef{Goal: "write inventory", Advances: []string{"inventory-roles"},
+				Verify: "test -s hosts.yml && grep -qx controller hosts.yml"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := newCoordinator().validateTaskCriterionLinks([]TaskDef{tt.task})
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateTaskCriterionLinks() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("validateTaskCriterionLinks() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestNormalizeOutcomeTaskKindsPreservesSidecars(t *testing.T) {
+	c := &Coordinator{
+		session: &TeamSession{Config: agent.TeamConfig{Name: "test", GoalMode: "outcome"}},
+		// Promotion is conditional on there being an acceptance contract for an
+		// outcome task to advance; with none configured an inferred outcome kind
+		// would make every untyped task unschedulable.
+		acceptanceSpec: &AcceptanceSpec{Criteria: []AcceptanceCriterion{{ID: "c1", Required: true}}},
+	}
+	tasks := []TaskDef{
+		{Goal: "legacy outcome"},
+		{Goal: "auxiliary", Sidecar: true},
+		{Goal: "diagnose", Kind: TaskKindDiagnostic},
+	}
+	c.normalizeOutcomeTaskKinds(tasks)
+	if tasks[0].Kind != TaskKindOutcome {
+		t.Fatalf("untyped outcome kind = %q, want %q", tasks[0].Kind, TaskKindOutcome)
+	}
+	if tasks[1].Kind != "" {
+		t.Fatalf("sidecar kind = %q, want empty", tasks[1].Kind)
+	}
+	if tasks[2].Kind != TaskKindDiagnostic {
+		t.Fatalf("explicit kind = %q, want diagnostic", tasks[2].Kind)
+	}
+}
+
 func TestCriterionRetryTargetsFailedCriteria(t *testing.T) {
 	tasks := []TaskDef{
 		{Kind: TaskKindOutcome, Advances: []string{"build"}},
@@ -318,7 +397,7 @@ func TestDefaultProfileGoalModeResolution(t *testing.T) {
 	}
 }
 
-func TestDefaultTeamCanFinishWithoutAcceptanceGate(t *testing.T) {
+func TestDefaultTeamWithoutAcceptanceGateIsUnverified(t *testing.T) {
 	// Exercise the real default coordinator's finish path without contacting a
 	// provider. This catches regressions where omitted goal-mode is treated as
 	// outcome before the default profile has resolved it.
@@ -346,8 +425,8 @@ func TestDefaultTeamCanFinishWithoutAcceptanceGate(t *testing.T) {
 	if result == nil {
 		t.Fatal("default team finish path did not record a run result")
 	}
-	if result.Outcome != RunOutcomeCompleted || result.ExitCode != 0 {
-		t.Fatalf("default team outcome = %q (exit %d), want completed (exit 0)", result.Outcome, result.ExitCode)
+	if result.Outcome != RunOutcomeUnverified || result.ExitCode != 7 || result.GoalSatisfied {
+		t.Fatalf("default team outcome = %q (goal %t, exit %d), want unverified (goal false, exit 7)", result.Outcome, result.GoalSatisfied, result.ExitCode)
 	}
 	if result.GoalMode != GoalModeExploratory {
 		t.Fatalf("default team result goal mode = %q, want exploratory", result.GoalMode)

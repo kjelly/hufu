@@ -615,6 +615,18 @@ func (tl *TodoList) SetFailureEventAndOutput(id string, event *FailureEventPaylo
 	for _, ti := range tl.items {
 		if ti.ID == id {
 			ti.FailureEvent = cloneFailureEventPayload(event)
+			// Detail must move with the evidence. Attaching a failure event
+			// fires onChange, which projects the workspace status immediately —
+			// before the caller's own status update lands. A run killed in that
+			// window left behind "status: working" with "detail: Task completed
+			// successfully" sitting directly above a failure_event with
+			// class=execution, and nothing in the file said which half was
+			// current. Setting both here makes the pair atomic.
+			if event != nil {
+				if summary := strings.TrimSpace(event.Summary); summary != "" {
+					ti.Detail = summary
+				}
+			}
 			if output != "" {
 				ti.Output = output
 			}

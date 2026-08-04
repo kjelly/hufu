@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 
 	"charm.land/fantasy"
@@ -159,45 +157,25 @@ func (t *teamInfoTool) handleAgentInfo(c *Coordinator, name string) (fantasy.Too
 }
 
 func (t *teamInfoTool) handleTaskHistory(workspace, teamName, agentName string, limit int) (fantasy.ToolResponse, error) {
-	dir := filepath.Join(workspace, tasksDir, teamName, agentName)
-	entries, err := os.ReadDir(dir)
+	entries, err := taskHistoryEntries(workspace, teamName, agentName)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return fantasy.NewTextResponse(fmt.Sprintf("No task history for agent %q.", agentName)), nil
-		}
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cannot read task dir: %v", err)), nil
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name() > entries[j].Name()
-	})
-
-	// count only valid .md files for correct "remaining" display
-	totalMD := 0
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
-			totalMD++
-		}
 	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Task history for %s:\n\n", agentName)
 	count := 0
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
 		if count >= limit {
-			fmt.Fprintf(&b, "\n... (%d more tasks)", totalMD-count)
+			fmt.Fprintf(&b, "\n... (%d more tasks)", len(entries)-count)
 			break
 		}
-		path := filepath.Join(dir, entry.Name())
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(entry.path)
 		if err != nil {
 			continue
 		}
 
-		ts := strings.TrimSuffix(entry.Name(), ".md")
+		ts := strings.TrimSuffix(entry.name, ".md")
 		content := string(data)
 
 		// Extract status
@@ -233,23 +211,13 @@ func (t *teamInfoTool) handleTaskResult(c *Coordinator, workspace, teamName, nam
 	}
 	resolvedName := strings.ToLower(agentDef.Name)
 
-	dir := filepath.Join(workspace, tasksDir, teamName, resolvedName)
-	entries, err := os.ReadDir(dir)
+	entries, err := taskHistoryEntries(workspace, teamName, resolvedName)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return fantasy.NewTextResponse(fmt.Sprintf("No completed tasks for agent %q yet.", resolvedName)), nil
-		}
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cannot read task dir: %v", err)), nil
 	}
 
-	// Newest first (timestamps sort lexicographically).
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() > entries[j].Name() })
-
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		data, err := os.ReadFile(entry.path)
 		if err != nil {
 			continue
 		}

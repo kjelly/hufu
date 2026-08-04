@@ -594,3 +594,50 @@ func (t *terminalReconcileTool) Run(ctx context.Context, call fantasy.ToolCall) 
 	})
 	return (&terminalTool{coordinator: t.coordinator}).Run(ctx, fantasy.ToolCall{Input: string(payload)})
 }
+
+// terminalLivenessProbe adapts the terminal session manager to the read-only
+// process-fact probe the tools package needs. wait_for lives in internal/tools,
+// which this package imports, so it cannot reach the manager itself; the probe
+// is injected into the tool context instead.
+//
+// It answers one question — is this process still alive — and deliberately does
+// not read the session's output. TerminalSessionManager.Read advances the
+// session's read offset, so a probe that fetched output would consume bytes the
+// agent's own terminal_read has not seen. The error wait_for builds therefore
+// tells the agent to call terminal_read itself, which is also the action that
+// would have ended the observed 110-minute stall in seconds.
+func (c *Coordinator) terminalLivenessProbe() tools.TerminalLivenessFunc {
+	if c == nil || c.terminalSessionMgr == nil {
+		return nil
+	}
+	mgr := c.terminalSessionMgr
+	runID := c.executionRunID
+	return func(ctx context.Context, sessionID string) (tools.TerminalLiveness, bool) {
+		if sessionID == "" {
+			return tools.TerminalLiveness{}, false
+		}
+		// Scoped to this run: a wait must not be ended by a process fact from
+		// some other run that happens to share an ID prefix.
+		sessions, err := mgr.List(ctx, runID)
+		if err != nil {
+			return tools.TerminalLiveness{}, false
+		}
+		for _, session := range sessions {
+			if session.ID != sessionID {
+				continue
+			}
+			// No Reconcile call here. The manager's own process watcher records
+			// ExitCode/ExitedAt/State when the child exits, so List is already
+			// current, and reconciling on every poll would emit a lifecycle
+			// event per poll.
+			return tools.TerminalLiveness{
+				SessionID: session.ID,
+				Running:   session.Running,
+				State:     string(session.State),
+				ExitCode:  session.ExitCode,
+				ExitedAt:  session.ExitedAt,
+			}, true
+		}
+		return tools.TerminalLiveness{}, false
+	}
+}

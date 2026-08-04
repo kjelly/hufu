@@ -123,6 +123,9 @@ type rawReliabilityConfig struct {
 	MaxTokensWithoutProgress *int `yaml:"max-tokens-without-progress"`
 	MaxTurnsWithoutProgress  *int `yaml:"max-turns-without-progress"`
 	MaxTasksWithoutProgress  *int `yaml:"max-tasks-without-progress"`
+	// Pointer preserves an explicit zero, which disables the per-attempt
+	// circuit breaker for teams that have a justified long-context workflow.
+	MaxTokensPerAttempt *int `yaml:"max-tokens-per-attempt"`
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -674,6 +677,10 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	if yc.Reliability.MaxTasksWithoutProgress != nil {
 		cfg.Reliability.MaxTasksWithoutProgress = *yc.Reliability.MaxTasksWithoutProgress
 		cfg.Reliability.MaxTasksWithoutProgressSet = true
+	}
+	if yc.Reliability.MaxTokensPerAttempt != nil {
+		cfg.Reliability.MaxTokensPerAttempt = *yc.Reliability.MaxTokensPerAttempt
+		cfg.Reliability.MaxTokensPerAttemptSet = true
 	}
 	if yc.Reliability.WarnOnly {
 		cfg.Reliability.WarnOnly = true

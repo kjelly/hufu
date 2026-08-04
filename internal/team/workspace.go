@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -136,7 +137,11 @@ func writeTaskFileWithFailureEvent(workspace, teamName, agentName, timestamp, st
 		return fmt.Errorf("invalid task status %q: must be working, done, or error", status)
 	}
 
-	dir := filepath.Join(workspace, tasksDir, teamName, agentName)
+	agentKey, err := canonicalAgentWorkspaceKey(agentName)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(workspace, tasksDir, teamName, agentKey)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -177,6 +182,10 @@ func writeStatusWithDetail(workspace, agentName, status, task, detail string) er
 }
 
 func writeStatusWithFailureEvent(workspace, agentName, status, task, detail string, event *FailureEventPayload) error {
+	agentKey, err := canonicalAgentWorkspaceKey(agentName)
+	if err != nil {
+		return err
+	}
 	dir := filepath.Join(workspace, statusDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -191,7 +200,7 @@ func writeStatusWithFailureEvent(workspace, agentName, status, task, detail stri
 			data += "  " + utils.RedactSecrets(line) + "\n"
 		}
 	}
-	path := filepath.Join(dir, agentName+".yml")
+	path := filepath.Join(dir, agentKey+".yml")
 	return os.WriteFile(path, []byte(data), 0o644)
 }
 
@@ -212,7 +221,11 @@ func readShared(workspace, filename string) (string, error) {
 }
 
 func writeLLMLog(workspace, teamName, agentName, entry string) {
-	dir := filepath.Join(workspace, llmLogsDir, teamName, agentName)
+	agentKey, err := canonicalAgentWorkspaceKey(agentName)
+	if err != nil {
+		return
+	}
+	dir := filepath.Join(workspace, llmLogsDir, teamName, agentKey)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
@@ -223,4 +236,71 @@ func writeLLMLog(workspace, teamName, agentName, entry string) {
 	}
 	defer f.Close()
 	_, _ = f.WriteString(utils.RedactSecrets(entry))
+}
+
+// canonicalAgentWorkspaceKey is the one filesystem identity used by all
+// agent-owned workspace artifacts. Agent display names remain in file content
+// and MCP authorization; only paths use this normalized key.
+func canonicalAgentWorkspaceKey(agentName string) (string, error) {
+	key := strings.ToLower(strings.TrimSpace(agentName))
+	if key == "" || key == "." || key == ".." || filepath.IsAbs(key) || filepath.Base(key) != key || filepath.Clean(key) != key || strings.ContainsAny(key, `/\\`) || strings.ContainsRune(key, '\x00') {
+		return "", fmt.Errorf("unsafe agent workspace key %q", agentName)
+	}
+	return key, nil
+}
+
+type taskHistoryEntry struct {
+	name string
+	path string
+}
+
+// taskHistoryEntries reads the canonical directory plus legacy directories
+// whose names differ only by case. Writers never create those legacy paths,
+// but merging them deterministically avoids hiding existing forensic records.
+func taskHistoryEntries(workspace, teamName, agentName string) ([]taskHistoryEntry, error) {
+	key, err := canonicalAgentWorkspaceKey(agentName)
+	if err != nil {
+		return nil, err
+	}
+	root := filepath.Join(workspace, tasksDir, teamName)
+	dirs := []string{key}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var legacy []string
+	for _, entry := range entries {
+		if entry.IsDir() && entry.Name() != key && strings.EqualFold(entry.Name(), key) {
+			legacy = append(legacy, entry.Name())
+		}
+	}
+	sort.Strings(legacy)
+	dirs = append(dirs, legacy...)
+
+	var files []taskHistoryEntry
+	for _, dirName := range dirs {
+		dirEntries, readErr := os.ReadDir(filepath.Join(root, dirName))
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				continue
+			}
+			return nil, readErr
+		}
+		for _, entry := range dirEntries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+				continue
+			}
+			files = append(files, taskHistoryEntry{name: entry.Name(), path: filepath.Join(root, dirName, entry.Name())})
+		}
+	}
+	sort.SliceStable(files, func(i, j int) bool {
+		if files[i].name != files[j].name {
+			return files[i].name > files[j].name
+		}
+		return files[i].path < files[j].path
+	})
+	return files, nil
 }

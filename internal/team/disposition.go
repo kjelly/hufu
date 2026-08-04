@@ -24,6 +24,14 @@ const (
 	NeedsHuman RetryDisposition = "needs_human"
 )
 
+const (
+	retrySuppressionRepeatedFingerprint = "repeated_fingerprint"
+	retrySuppressionEvidenceIncomplete  = "evidence_incomplete"
+	retrySuppressionUnfixableVerifier   = "unfixable_verifier"
+	retrySuppressionRejectedStrategy    = "rejected_recovery_strategy"
+	retrySuppressionAntiThrashingLimit  = "anti_thrashing_limit"
+)
+
 // RecoveryDecisionInput carries the structured signals that DecideRecovery uses
 // to prescribe a RetryDisposition. It combines the §5 failure-class taxonomy,
 // the §6.1 retry-policy rules, and the five loop-level early-break signals
@@ -112,6 +120,26 @@ func isRepeatedFailure(in RecoveryDecisionInput) bool {
 		return in.FailureFingerprint == in.PreviousFingerprint
 	}
 	return in.SameFailureRepeated
+}
+
+// retrySuppressionReason identifies a safety guard that prevented a worker
+// replay. It intentionally excludes cancellation, ordinary retry-budget
+// exhaustion, and policy dispositions that are not evidence/fingerprint
+// suppression; those remain observable through their existing events.
+func retrySuppressionReason(in RecoveryDecisionInput, disposition RetryDisposition) (string, bool) {
+	if disposition == RetryWorker || in.ContextCancelled || in.FailureClass == FailureCancelled || in.Attempt >= in.MaxRetries {
+		return "", false
+	}
+	if isRepeatedFailure(in) {
+		return retrySuppressionRepeatedFingerprint, true
+	}
+	if in.UnfixableVerify {
+		return retrySuppressionUnfixableVerifier, true
+	}
+	if !in.EvidenceComplete && in.Replayable && !in.TerminalBlocked && !in.ProtocolFailure {
+		return retrySuppressionEvidenceIncomplete, true
+	}
+	return "", false
 }
 
 // DecideRecovery is the single decision point that prescribes a

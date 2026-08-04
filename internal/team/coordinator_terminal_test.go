@@ -3,8 +3,12 @@ package team
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
+
+	"charm.land/fantasy"
+	"github.com/anomalyco/hufu/internal/agent"
 )
 
 func TestTerminalHandoffPausesAndResumesTaskRound(t *testing.T) {
@@ -79,6 +83,100 @@ func TestCoordinatorFinalizeTaskTerminalResourcesContainsLeakAndPreservesTaskErr
 	}
 	if sessions[0].CleanupState != TerminalCleanupCompleted {
 		t.Fatalf("cleanup state = %q, want completed", sessions[0].CleanupState)
+	}
+}
+
+func TestCoordinatorTerminalTaskFailureOverridesWorkerSuccess(t *testing.T) {
+	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coord := &Coordinator{terminalSessionMgr: manager, executionRunID: "run-evidence"}
+	manager.SetActiveTaskRoundChecker(coord.isTerminalRoundActive)
+	owner := WithTerminalTaskID(context.Background(), "task-evidence")
+	if _, err := manager.Start(owner, TerminalStartRequest{
+		RunID: "run-evidence", OwnerTaskID: "task-evidence",
+		Command: []string{"sh", "-c", "exit 17"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := coord.terminalTaskFailure(context.Background(), "task-evidence"); err != nil {
+			if !strings.Contains(err.Error(), "status 17") {
+				t.Fatalf("terminal failure = %v, want exit status evidence", err)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("terminalTaskFailure did not observe the non-zero child exit")
+}
+
+func TestCoordinatorTerminalTaskFailureIgnoresSupersededSession(t *testing.T) {
+	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coord := &Coordinator{terminalSessionMgr: manager, executionRunID: "run-superseded"}
+	manager.SetActiveTaskRoundChecker(coord.isTerminalRoundActive)
+	owner := WithTerminalTaskID(context.Background(), "task-superseded")
+
+	// The worker opens a session that fails (wrong TTY mode, a probe killed by
+	// its own timeout, ...), abandons it, and later completes the same goal
+	// through a second, successful session. The first, abandoned session must
+	// not veto the second, genuinely successful one.
+	if _, err := manager.Start(owner, TerminalStartRequest{
+		RunID: "run-superseded", OwnerTaskID: "task-superseded",
+		Command: []string{"sh", "-c", "exit 17"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		sessions, err := manager.List(context.Background(), "run-superseded")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sessions) == 1 && sessions[0].ExitCode != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first session never reported its exit code")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if _, err := manager.Start(owner, TerminalStartRequest{
+		RunID: "run-superseded", OwnerTaskID: "task-superseded",
+		Command: []string{"sh", "-c", "exit 0"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		sessions, err := manager.List(context.Background(), "run-superseded")
+		if err != nil {
+			t.Fatal(err)
+		}
+		allObserved := len(sessions) == 2
+		for _, s := range sessions {
+			if s.ExitCode == nil {
+				allObserved = false
+			}
+		}
+		if allObserved {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("second session never reported its exit code")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := coord.terminalTaskFailure(context.Background(), "task-superseded"); err != nil {
+		t.Fatalf("terminalTaskFailure = %v, want nil (only the most recent session should count)", err)
 	}
 }
 
@@ -192,4 +290,112 @@ func managerSessionID(t *testing.T, manager *TerminalSessionManager, runID strin
 		t.Fatalf("list terminal sessions = %#v, err=%v", sessions, err)
 	}
 	return sessions[0].ID
+}
+
+// submittingWorkerAgent simulates a worker that calls submit_result itself,
+// mirroring mockRepairAgent's onSubmit pattern (protocol_repair_test.go) but
+// for the plain worker path instead of the protocol-repair path.
+type submittingWorkerAgent struct {
+	onSubmit func()
+}
+
+func (m *submittingWorkerAgent) result() *fantasy.AgentResult {
+	if m.onSubmit != nil {
+		m.onSubmit()
+	}
+	return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{
+		fantasy.TextContent{Text: "submitted a result"},
+	}}}
+}
+
+func (m *submittingWorkerAgent) Generate(context.Context, fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return m.result(), nil
+}
+
+func (m *submittingWorkerAgent) Stream(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return m.result(), nil
+}
+
+// TestExecuteTaskFailsOnPartialSubmittedResultWithoutConsultingTerminalEvidence
+// pins the claim-aware fix: a worker that submits status="partial" has
+// already told the coordinator the task is not complete, so the attempt must
+// fail on that honest report — not on an unrelated, superseded terminal
+// session that happens to have a non-zero exit code. Before this fix,
+// terminalTaskFailure ran unconditionally at round end and produced a
+// misleading "terminal command ... exited with status N" error instead of
+// surfacing what the worker actually said.
+func TestExecuteTaskFailsOnPartialSubmittedResultWithoutConsultingTerminalEvidence(t *testing.T) {
+	workspace := t.TempDir()
+	// executeTask fires autoWriteSTMASync/persistReflexionLessonAsync as
+	// fire-and-forget goroutines that write into workspace; give them a beat
+	// to finish before TempDir cleanup removes it out from under them (see
+	// the identical guard in TestProtocolRepair_ProgressNotFinalIsExecutionFailure).
+	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
+	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "claim-gate", Timeout: 30, MaxRetries: 2},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", MaxRetries: 2, Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:        time.Now(),
+		taskTracker:        NewTaskTracker(),
+		reportStatus:       func(StatusEvent) {},
+		taskResultCache:    make(map[string][]cachedTaskEntry),
+		executionRunID:     "run-claim-gate",
+		terminalSessionMgr: manager,
+	}
+	manager.SetActiveTaskRoundChecker(c.isTerminalRoundActive)
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "partial with stale terminal evidence"}})[0]
+
+	// An unrelated, abandoned terminal session with a non-zero exit sits on
+	// this task before the worker even runs, exactly as it would after an
+	// exploratory probe the worker itself gave up on.
+	owner := WithTerminalTaskID(context.Background(), item.ID)
+	if _, err := manager.Start(owner, TerminalStartRequest{
+		RunID: "run-claim-gate", OwnerTaskID: item.ID, Command: []string{"sh", "-c", "exit 9"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		sessions, err := manager.List(context.Background(), "run-claim-gate")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sessions) == 1 && sessions[0].ExitCode != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("terminal session never reported its exit code")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	c.workerAgentOverride = &submittingWorkerAgent{onSubmit: func() {
+		c.storeSubmittedTaskResult(item.ID, &TaskResult{
+			TaskID: item.ID, Agent: "worker", Status: "partial", Source: "submitted",
+			Summary: "hosts.yml built by hand; wizard navigation still needs fixing",
+		})
+	}}
+
+	_, err = c.executeTask(context.Background(), TaskDef{
+		Agent: "worker", Goal: "partial with stale terminal evidence", Recovery: RecoveryRetry,
+		SideEffect: SideEffectExternalWrite,
+	}, item.ID)
+	if err == nil {
+		t.Fatal("expected the attempt to fail on the worker's own partial report")
+	}
+	if !strings.Contains(err.Error(), `worker reported task status "partial"`) {
+		t.Fatalf("error = %q, want the worker's own reported status, not terminal evidence", err)
+	}
+	if strings.Contains(err.Error(), "terminal command") {
+		t.Fatalf("error = %q, must not consult unrelated terminal evidence for a non-success claim", err)
+	}
 }

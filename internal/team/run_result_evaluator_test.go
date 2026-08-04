@@ -20,7 +20,7 @@ func TestEvaluateRunOutcome(t *testing.T) {
 		exitCode   int
 	}{
 		{name: "outcome mode without configured acceptance is unverified", goalMode: GoalModeOutcome, outcome: RunOutcomeUnverified, goal: false, exitCode: 7},
-		{name: "exploratory mode without configured acceptance is completed unverified", goalMode: GoalModeExploratory, outcome: RunOutcomeCompleted, goal: false, exitCode: 0},
+		{name: "exploratory mode without configured acceptance is unverified", goalMode: GoalModeExploratory, outcome: RunOutcomeUnverified, goal: false, exitCode: 7},
 		{name: "acceptance passed", acceptance: AcceptancePassed, outcome: RunOutcomeCompleted, goal: true, exitCode: 0},
 		{name: "acceptance failed", acceptance: AcceptanceFailed, outcome: RunOutcomePartial, exitCode: 7},
 		{name: "pending task", unresolved: []TaskReference{{ID: "1", Status: string(TaskPending)}}, outcome: RunOutcomePartial, exitCode: 7},
@@ -87,13 +87,13 @@ func TestEvaluateRunOutcomeGoalModes(t *testing.T) {
 			exitCode:   0,
 		},
 		{
-			name:       "exploratory mode without acceptance completed but unverified goal",
+			name:       "exploratory mode without acceptance is unverified",
 			goalMode:   GoalModeExploratory,
 			acceptance: AcceptanceNotConfigured,
-			outcome:    RunOutcomeCompleted,
+			outcome:    RunOutcomeUnverified,
 			goal:       false,
 			stopReason: StopReasonAcceptanceNotSet,
-			exitCode:   0,
+			exitCode:   7,
 		},
 		{
 			name:       "exploratory mode with passed acceptance is completed with satisfied goal",

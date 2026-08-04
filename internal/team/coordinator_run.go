@@ -81,7 +81,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = prevTodoID })
 	}()
 
-	ag, err := c.getOrCreateAgent(ctx, agentDef, "")
+	ag, exposedToolNames, err := c.getOrCreateAgent(ctx, agentDef, "")
 	if err != nil {
 		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), ExecutionUsage{})
 		c.PersistFailureWithClass(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), RetryNone, FailureExecution)
@@ -130,7 +130,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if c.autoApprove {
 		taskCtx = context.WithValue(taskCtx, tools.AutoApproveKey, true)
 	}
-	taskCtx = c.withEffectiveToolsAllowed(taskCtx, agentDef)
+	taskCtx = c.withEffectiveToolsAllowed(taskCtx, agentDef, exposedToolNames)
 
 	timing := &taskTiming{}
 	timing.reset()
@@ -898,6 +898,12 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	if c.sshSessionMgr != nil {
 		c.sshSessionMgr.StartCleanupDaemon(ctx, 5*time.Minute, 30*time.Minute)
 	}
+
+	// Start the silent-stall watchdog: a run that goes quiet — no step, tool,
+	// or output event at all — for the configured threshold gets a goroutine
+	// dump and a run_stall_detected event, so a stall like a sidecar/LLM call
+	// with no deadline is visible instead of showing up only as elapsed time.
+	c.startStallWatchdog(ctx)
 
 	orchDef := c.GetOrchestratorDef()
 	if orchDef == nil {

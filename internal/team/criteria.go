@@ -310,14 +310,44 @@ func (c *Coordinator) validateTaskCriterionLinks(tasks []TaskDef) error {
 		}
 	}
 	for _, task := range tasks {
-		if task.Kind == TaskKindDiagnostic && strings.TrimSpace(task.ExpectedStateChange) == "" {
+		// Older planners omitted kind. In outcome mode that must not quietly
+		// downgrade a mutation/outcome task into an ungoverned generic task.
+		// Sidecars remain auxiliary by definition; every other untyped task is
+		// treated as an outcome task and therefore needs semantic acceptance.
+		//
+		// The inference requires an acceptance contract to point at. Outcome is
+		// the default goal mode, so inferring it with no criteria configured
+		// would demand a link that cannot exist and reject every task in the
+		// plan — which is exactly the shape of a `--default` run, where
+		// acceptance is reported as not_configured. A task that declares
+		// kind: outcome explicitly is still validated below.
+		kind := task.Kind
+		if kind == "" && !task.Sidecar && len(criteria) > 0 {
+			kind = TaskKindOutcome
+		}
+		if kind == TaskKindDiagnostic && strings.TrimSpace(task.ExpectedStateChange) == "" {
 			return fmt.Errorf("diagnostic task %q must state the uncertainty it resolves", task.Goal)
 		}
-		if task.Kind != TaskKindOutcome && task.Kind != TaskKindRepair {
+		if kind != TaskKindOutcome && kind != TaskKindRepair {
 			continue
 		}
 		if len(task.Advances) == 0 {
-			return fmt.Errorf("%s task %q must reference at least one acceptance criterion", task.Kind, task.Goal)
+			return fmt.Errorf("%s task %q must reference at least one acceptance criterion", kind, task.Goal)
+		}
+		if task.Verify == "" && task.VerifySpec == nil {
+			return fmt.Errorf("%s task %q must include an objective verifier for its acceptance criterion", kind, task.Goal)
+		}
+		// Existence is useful artifact evidence, but it cannot prove that an
+		// outcome changed. Require a command or JSON assertion for work that
+		// claims to advance an acceptance criterion; this blocks false successes
+		// such as `test -s hosts.yml` for a task that promises correct roles.
+		spec := VerificationSpec{}
+		if task.VerifySpec != nil {
+			spec = *task.VerifySpec
+		}
+		spec = NormalizeVerificationSpec(spec, task.Verify, task.VerifyMode)
+		if isArtifactOnlyOutcomeVerifier(spec) {
+			return fmt.Errorf("%s task %q has artifact-only verifier for an acceptance outcome; use command_exit or json_assert", kind, task.Goal)
 		}
 		for _, id := range task.Advances {
 			if !criteria[id] {
@@ -326,6 +356,61 @@ func (c *Coordinator) validateTaskCriterionLinks(tasks []TaskDef) error {
 		}
 	}
 	return nil
+}
+
+// normalizeOutcomeTaskKinds closes a legacy planner escape hatch before the
+// task enters the scheduler. In outcome mode an omitted kind used to survive
+// as a generic task, which let it bypass outcome-only retry routing even when
+// it claimed to advance an acceptance criterion. Sidecars are auxiliary by
+// definition and intentionally retain their empty kind.
+func (c *Coordinator) normalizeOutcomeTaskKinds(tasks []TaskDef) {
+	if c == nil || c.session == nil {
+		return
+	}
+	mode, err := ParseGoalMode(c.session.Config.GoalMode)
+	if err != nil || mode != GoalModeOutcome {
+		return
+	}
+	// Only promote when there is an acceptance contract for an outcome task to
+	// advance; see validateTaskCriterionLinks for why inferring it without one
+	// makes every untyped task unschedulable.
+	if c.acceptanceSpec == nil || len(c.acceptanceSpec.Criteria) == 0 {
+		return
+	}
+	for i := range tasks {
+		if tasks[i].Kind == "" && !tasks[i].Sidecar {
+			tasks[i].Kind = TaskKindOutcome
+		}
+	}
+}
+
+// isArtifactOnlyOutcomeVerifier rejects verifiers that only establish that a
+// local artifact is present. They are valid supporting evidence, but they
+// cannot prove the task's claimed acceptance outcome (for example, that a
+// generated inventory contains the required roles). Keep the shell matching
+// deliberately narrow: uncertain commands remain valid command_exit checks
+// and are still guarded by the linked acceptance criterion evaluation.
+func isArtifactOnlyOutcomeVerifier(spec VerificationSpec) bool {
+	if spec.Mode == "observation" || spec.Type == VerifyFileExists || spec.Type == VerifyFileAbsent {
+		return true
+	}
+	if spec.Type != VerifyCommandExit {
+		return false
+	}
+	fields := strings.Fields(strings.TrimSpace(spec.Command))
+	if len(fields) == 3 && fields[0] == "test" && isArtifactTestFlag(fields[1]) {
+		return true
+	}
+	return len(fields) == 4 && fields[0] == "[" && isArtifactTestFlag(fields[1]) && fields[3] == "]"
+}
+
+func isArtifactTestFlag(flag string) bool {
+	switch flag {
+	case "-e", "-f", "-d", "-s", "-r", "-w", "-x":
+		return true
+	default:
+		return false
+	}
 }
 
 // criterionRetryTargets returns repair/outcome tasks that explicitly advance

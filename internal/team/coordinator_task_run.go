@@ -137,10 +137,11 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	}
 
 	var ag fantasy.Agent
+	var exposedToolNames []string
 	if c.workerAgentOverride != nil {
 		ag = c.workerAgentOverride
 	} else {
-		ag, err = c.createTaskAgent(parentCtx, agentDef, task, resolvedModel, todoID, taskDesc, agentName)
+		ag, exposedToolNames, err = c.createTaskAgent(parentCtx, agentDef, task, resolvedModel, todoID, taskDesc, agentName)
 		if err != nil {
 			return "", err
 		}
@@ -149,7 +150,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// Instructions must only name tools this worker can actually call. The
 	// stream gate is fail-closed, so inviting the worker to use an ungranted
 	// tool converts an obedient worker into a dead attempt.
-	granted := toolNameSet(c.workerExposedToolNames(agentDef))
+	granted := toolNameSet(exposedToolNames)
 
 	var prompt string
 	if task.PlanFirst && task.PlanID != "" {
@@ -436,8 +437,9 @@ retryLoop:
 			if escalate {
 				if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
 					resultTool := &submitResultTool{coordinator: c, todoID: todoID}
-					if escAg, escErr := c.createTaskAgentWithResultTool(parentCtx, agentDef, next, resultTool); escErr == nil {
+					if escAg, escTools, escErr := c.createTaskAgentWithResultTool(parentCtx, agentDef, next, resultTool); escErr == nil {
 						ag = escAg
+						exposedToolNames = escTools
 						c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("escalating model %s → %s (attempt %d)", resolvedModel, next, attempt)).withTodoID(todoID))
 						resolvedModel = next
 					} else {
@@ -468,7 +470,15 @@ retryLoop:
 			// coordinator-global, to prevent cross-task leakage).
 			taskCtx = context.WithValue(taskCtx, toolCallEvidenceKey{}, attemptEvidence)
 			taskCtx = context.WithValue(taskCtx, llmUsageReceiptExpectedKey{}, true)
+			// The run-level budget is only observed at coordinator boundaries.
+			// Give every worker attempt its own live guard so one TUI/debugging
+			// loop cannot burn the entire run before returning control here.
+			taskCtx = context.WithValue(taskCtx, attemptBudgetKey{}, newAttemptBudget(c.reliabilityConfig().MaxTokensPerAttempt))
 			taskCtx = context.WithValue(taskCtx, tools.AgentNameKey, agentName)
+			// Let a poller see whether the process it is waiting on is still
+			// alive. Without this a wait on a terminal that has already exited
+			// runs to its full timeout: one real run lost 110 minutes that way.
+			taskCtx = tools.WithTerminalLiveness(taskCtx, c.terminalLivenessProbe())
 			taskCtx = context.WithValue(taskCtx, hooks.AgentNameKey, agentName)
 			taskCtx = context.WithValue(taskCtx, hooks.TeamNameKey, c.session.Config.Name)
 			taskCtx = context.WithValue(taskCtx, hooks.TaskDescKey, taskDesc)
@@ -500,7 +510,7 @@ retryLoop:
 				taskCtx = context.WithValue(taskCtx, tools.AutoApproveKey, true)
 			}
 
-			taskCtx = c.withEffectiveToolsAllowed(taskCtx, agentDef)
+			taskCtx = c.withEffectiveToolsAllowed(taskCtx, agentDef, exposedToolNames)
 
 			// Inject permanent session-level permissions
 			c.sessionToolPermissionsMu.RLock()
@@ -614,6 +624,20 @@ retryLoop:
 				return planEntry.PlanText, nil
 			}
 			typedRes = c.GetTaskResult(todoID)
+			// A worker that already reported partial/failed/blocked via
+			// submit_result has nothing left for the checks below to
+			// contradict — it already told us the task is not complete. Fail
+			// the attempt on that honest report now, before validateTaskOutput,
+			// deliverable/adversarial verification, or terminalTaskFailure run,
+			// so the retry hint reflects what the worker actually said instead
+			// of whichever unrelated check happens to trip first. This mirrors
+			// the check the protocol-repair recovery paths below already apply
+			// to a recovered result; only the plain submit_result path lacked it.
+			if typedRes != nil && typedRes.Source == "submitted" {
+				if resultErr := validateSubmittedTaskResult(typedRes); resultErr != nil {
+					err = resultErr
+				}
+			}
 			if typedRes == nil {
 				if task.Execution.RequiresResult {
 					// Protocol failure: the agent finished execution but omitted submit_result.
@@ -859,6 +883,15 @@ retryLoop:
 					c.report(c.newEvent("skeptic").withAgent(agentName).withMessage(fmt.Sprintf("confirmed by %d skeptic vote(s)", len(skepticLenses(task.AdversarialVerify)))).withTodoID(todoID))
 				}
 			}
+			// A terminal child is an independent source of truth. Do this even
+			// when the task has no objective verifier: a worker success claim must
+			// not turn a failed terminal command into a successful task.
+			if err == nil {
+				if terminalErr := c.terminalTaskFailure(parentCtx, todoID); terminalErr != nil {
+					err = terminalErr
+					c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("terminal evidence rejected completion: %v", terminalErr)).withTodoID(todoID))
+				}
+			}
 			if err == nil {
 				if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "done", taskDesc, coordinatorOutput); err != nil {
 					log.Printf("warning: failed to write task file: %v", err)
@@ -920,7 +953,7 @@ retryLoop:
 		// unfixableVerify, sameFailure) are now inputs to one function that
 		// prescribes retry / break / block.
 		resolvedPolicy := ResolveRecoveryPolicy(task.Recovery, task.SideEffect, c != nil && c.unattended, c.ExecutionProfile())
-		disposition, reason := DecideRecovery(RecoveryDecisionInput{
+		recoveryInput := RecoveryDecisionInput{
 			FailureClass:        currentClass,
 			SideEffect:          task.SideEffect,
 			RecoveryPolicy:      resolvedPolicy,
@@ -936,7 +969,16 @@ retryLoop:
 			ContextCancelled:    parentCtx.Err() != nil,
 			Replayable:          CanAutomaticallyReplay(task),
 			ProtocolRepairRetry: c.protocolRepairAllowsRetry(task),
-		})
+		}
+		disposition, reason := DecideRecovery(recoveryInput)
+		if isAttemptBudgetExceeded(err) {
+			// Re-running an attempt that exhausted its own budget without a
+			// materially different plan is precisely the expensive thrashing
+			// this guard is intended to stop. Hand the coordinator a bounded
+			// partial result and require an explicit replan instead.
+			disposition = ReplanRequired
+			reason = "per-attempt token budget exhausted; replan before retry"
+		}
 		// RepairController is the phase-3 safety gate for the legacy
 		// disposition engine. Keep the existing disposition as the source of
 		// detailed failure-class behavior, but never allow it to replay a task
@@ -960,6 +1002,15 @@ retryLoop:
 		if isPermissionBlockedFailureDetail(c.FailureDetail(err, "error")) {
 			disposition = NeedsHuman
 			reason = "capability or permission is unavailable"
+		}
+		// Make a deliberately avoided worker replay distinct from another
+		// failed worker attempt in the event timeline and run metrics. Repair
+		// tasks defer repeated-fingerprint reporting to persistFailure, where
+		// anti-thrashing can distinguish a rejected recovery strategy.
+		if task.Kind != TaskKindRepair {
+			if suppressionReason, suppressed := retrySuppressionReason(recoveryInput, disposition); suppressed {
+				c.recordRetrySuppression(todoID, currentFingerprint, disposition, suppressionReason)
+			}
 		}
 
 		// Capture the current attempt's evidence for the next iteration's
@@ -1374,6 +1425,11 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 }
 
 func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, task TaskDef, agentName, resolvedModel string, result *TaskResult, output string) (string, error) {
+	if err := c.terminalTaskFailure(ctx, item.ID); err != nil {
+		detail := c.FailureDetail(err, FailureSourceError)
+		c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureVerify, TaskBlocked, output)
+		return "", err
+	}
 	if task.Verify != "" || task.VerifySpec != nil {
 		if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskVerifying, "running objective verification", output); err != nil {
 			return "", err
@@ -1443,6 +1499,14 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	taskDesc := task.Goal
 	if task.Constraints != "" {
 		taskDesc += "\nconstraints: " + task.Constraints
+	}
+	// Defence in depth for the plan-time gate in ExecuteTasks: a task that
+	// reaches the tool-less sidecar path while needing tools must fail here
+	// rather than have its prose recorded as a completed change.
+	if err := c.validateSidecarTaskContract(task); err != nil {
+		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, 0, ExecutionUsage{})
+		c.PersistFailureWithClassAndStatus(task.Agent, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), NeedsHuman, FailureContract, TaskBlocked)
+		return "", err
 	}
 	attemptStarted := time.Now()
 	c.recordExecutionEvent(todoID, task.Agent, 1, "in_progress", c.sidecarModel, 0, ExecutionUsage{})
@@ -1547,47 +1611,33 @@ type toolCallEvidence struct {
 // toolCallEvidenceKey is a context key for per-attempt tool call evidence.
 type toolCallEvidenceKey struct{}
 
-// protocolToolNames are the result-protocol tools the runner attaches to a
-// worker's tool set itself, outside the agent's declared tools. They are part of
-// the execution contract rather than a capability grant: RequiresResult makes
-// submit_result mandatory, and PlanFirst makes submit_plan mandatory, so a
-// worker that cannot call them cannot satisfy the contract at all.
-var protocolToolNames = []string{"submit_result", "submit_plan"}
-
-// workerExposedToolNames returns every tool name a worker's model will be shown:
-// the tools SelectTools picks for its declared list (including the
-// alwaysIncludeTools it forces in), the globally-loaded MCP tools that
-// createTaskAgentWithResultTool appends, and the result-protocol tools.
-//
-// This is the single source of truth shared by withEffectiveToolsAllowed and the
-// prompt builder, so the allowlist and the instructions cannot drift from what
-// the model can actually call.
-func (c *Coordinator) workerExposedToolNames(def *agent.AgentDef) []string {
-	if c == nil || def == nil {
-		return nil
-	}
-	names := agent.EffectiveToolNames(c.coreTools, def.Tools)
-	if c.mcpManager != nil {
-		for _, t := range c.mcpManager.AsAgentTools() {
-			if name := strings.TrimSpace(t.Info().Name); name != "" {
-				names = append(names, name)
-			}
+// agentToolNames returns the concrete names in the exact tool slice handed to
+// a model. It deliberately does not call SelectTools or consult frontmatter:
+// callers must pass the completed invocation slice, after MCP and protocol
+// tools have been appended, so authorization cannot drift from exposure.
+func agentToolNames(agentTools []fantasy.AgentTool) []string {
+	seen := make(map[string]bool, len(agentTools))
+	names := make([]string, 0, len(agentTools))
+	for _, tool := range agentTools {
+		if tool == nil {
+			continue
 		}
+		name := strings.TrimSpace(tool.Info().Name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
 	}
-	return append(names, protocolToolNames...)
+	return names
 }
 
-// withEffectiveToolsAllowed attaches the tools permitted for a worker run.
-// Team-level tools and the agent's declared tools are both explicit grants. When
-// neither grants anything the policy is left unset, which keeps the tool adapter
-// as the source of truth rather than engaging the stream gate.
-//
-// The allowlist is derived from what the model is actually shown
-// (workerExposedToolNames), not from the declared tool string alone. The stream
-// authorization gate is fail-closed and aborts the entire attempt on a denied
-// call, so exposing a tool without granting it does not restrict the worker —
-// it destroys the attempt the moment the worker takes the invitation.
-func (c *Coordinator) withEffectiveToolsAllowed(ctx context.Context, def *agent.AgentDef) context.Context {
+// withEffectiveToolsAllowed attaches the tools permitted for one worker
+// invocation. exposedToolNames must come from the final []fantasy.AgentTool
+// supplied to that invocation, not a second SelectTools/MCP prediction. The
+// agent-specific canonical MCP alias remains an authorizer concern and is
+// included in addition to the concrete model-visible name.
+func (c *Coordinator) withEffectiveToolsAllowed(ctx context.Context, def *agent.AgentDef, exposedToolNames []string) context.Context {
 	if c == nil || c.session == nil {
 		return ctx
 	}
@@ -1617,11 +1667,8 @@ func (c *Coordinator) withEffectiveToolsAllowed(ctx context.Context, def *agent.
 	if len(declared) == 0 {
 		return ctx
 	}
-	// An allowlist is in force, so it has to cover everything the model is shown.
-	allowed := declared
-	if def != nil {
-		allowed = append(allowed, c.workerExposedToolNames(def)...)
-	}
+	// An allowlist is in force, so it has to cover the final model tool slice.
+	allowed := append(declared, exposedToolNames...)
 	return context.WithValue(ctx, tools.AgentToolsAllowedKey, dedupeToolNames(allowed))
 }
 
@@ -1739,6 +1786,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 
 	// Pick up the TodoItem ID injected by executeTask so events can be attributed to a task.
 	todoID, _ := ctx.Value(todoIDKey{}).(string)
+	attemptTokens, _ := ctx.Value(attemptBudgetKey{}).(*attemptBudget)
 
 	var loopDetectMu sync.Mutex
 	var lastToolCall *lastToolCallEntry
@@ -1761,19 +1809,33 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		StopWhen: extraStop,
 		PrepareStep: func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
 			// Keep this request within the context model token budget.
-			modelID := opts.Model.Model()
+			modelID := ""
+			if opts.Model != nil {
+				modelID = opts.Model.Model()
+			}
 			spec := globalRegistry.GetSpec(modelID)
 			budget := c.ContextCompiler().CalculateBudget(spec, 0, 0)
+			preparedMessages := opts.Messages
+			messagesCapped := false
 			if capped := CapStepMessagesWithCounter(ctx, defaultCounter, modelID, opts.Messages, budget.Available); capped != nil {
 				opts.Messages = capped
-				llmLogMu.Lock()
-				loggedMsgs, lastReqBytes = llmLogRequest(logWrite, opts, capped, loggedMsgs)
-				llmLogMu.Unlock()
-				return ctx, fantasy.PrepareStepResult{Messages: capped}, nil
+				preparedMessages = capped
+				messagesCapped = true
 			}
+			if attemptTokens != nil {
+				if err := attemptTokens.reserveContext(estimateStepRequestTokens(preparedMessages, prompt)); err != nil {
+					return ctx, fantasy.PrepareStepResult{}, err
+				}
+			}
+			// Log only requests that cleared the circuit breaker; a rejected
+			// request was never sent to the provider and must not look like an
+			// attempted model call in the task evidence.
 			llmLogMu.Lock()
-			loggedMsgs, lastReqBytes = llmLogRequest(logWrite, opts, opts.Messages, loggedMsgs)
+			loggedMsgs, lastReqBytes = llmLogRequest(logWrite, opts, preparedMessages, loggedMsgs)
 			llmLogMu.Unlock()
+			if messagesCapped {
+				return ctx, fantasy.PrepareStepResult{Messages: preparedMessages}, nil
+			}
 			return ctx, fantasy.PrepareStepResult{}, nil
 		},
 		OnStepStart: func(stepNumber int) error {
@@ -1916,6 +1978,15 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			reqBytes := lastReqBytes
 			llmLogMu.Unlock()
 			llmLogStreamFinish(logWrite, finishReason, usage, reqBytes)
+			if attemptTokens != nil {
+				// Only generated output is charged here. Input tokens are the
+				// resent conversation, which reserveContext already accounted
+				// for as growth; charging them again is what turned this guard
+				// into a step ceiling.
+				if err := attemptTokens.chargeOutput(usage.OutputTokens); err != nil {
+					return err
+				}
+			}
 
 			if c.hooks != nil && c.hooks.HasHooks("after_llm_step") {
 				resolvedModel, _ := ctx.Value(modelKey{}).(string)
@@ -1996,6 +2067,24 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		return output, steps, err
 	}
 	return result.Response.Content.Text(), result.Steps, nil
+}
+
+// estimateStepRequestTokens derives a conservative request charge when a
+// provider does not report usage. It counts all message content sent on this
+// step (including prior tool output); fantasy normally puts the user prompt in
+// those messages, but the fallback makes custom Agent implementations safe.
+func estimateStepRequestTokens(messages []fantasy.Message, prompt string) int64 {
+	chars := 0
+	for _, message := range messages {
+		chars += messageTextSize(message)
+	}
+	if chars == 0 {
+		chars = len(prompt)
+	}
+	if chars <= 0 {
+		return 1
+	}
+	return int64((chars + 3) / 4)
 }
 
 // toolUsageNotes builds a "Tool Notes" prompt section warning agents away
@@ -2335,32 +2424,33 @@ func (c *Coordinator) validateTaskModel(task *TaskDef) error {
 // mode. Plan-first tasks get a fresh agent with a submit_plan tool; normal
 // tasks reuse the cached agent. All failure paths report and persist before
 // returning the error so the caller does not have to.
-func (c *Coordinator) createTaskAgent(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef, resolvedModel, todoID, taskDesc, agentName string) (fantasy.Agent, error) {
+func (c *Coordinator) createTaskAgent(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef, resolvedModel, todoID, taskDesc, agentName string) (fantasy.Agent, []string, error) {
 	resultTool := &submitResultTool{coordinator: c, todoID: todoID}
 	if task.PlanFirst && task.PlanID == "" {
+		agentTools := append(agent.SelectTools(c.coreTools, agentDef.Tools), &submitPlanTool{coordinator: c, todoID: todoID}, resultTool)
 		planAg, planErr := c.createGatedAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
 			Def:        agentDef,
 			TeamConfig: &c.session.Config,
 			WorkDir:    c.projectDir,
 			MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
-		}, append(agent.SelectTools(c.coreTools, agentDef.Tools), &submitPlanTool{coordinator: c, todoID: todoID}, resultTool))
+		}, agentTools)
 		if planErr != nil {
 			c.report(c.newEvent("error").withAgent(agentName).withMessage(planErr.Error()).withTodoID(todoID))
 			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(planErr, ""))
-			return nil, planErr
+			return nil, nil, planErr
 		}
-		return planAg, nil
+		return planAg, agentToolNames(agentTools), nil
 	}
-	ag, err := c.createTaskAgentWithResultTool(parentCtx, agentDef, task.Model, resultTool)
+	ag, exposedToolNames, err := c.createTaskAgentWithResultTool(parentCtx, agentDef, task.Model, resultTool)
 	if err != nil {
 		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
 		c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
-		return nil, err
+		return nil, nil, err
 	}
-	return ag, nil
+	return ag, exposedToolNames, nil
 }
 
-func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *agent.AgentDef, overrideModel string, resultTool *submitResultTool) (fantasy.Agent, error) {
+func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *agent.AgentDef, overrideModel string, resultTool *submitResultTool) (fantasy.Agent, []string, error) {
 	agentDef := def
 	if overrideModel != "" {
 		overriddenDef := *def
@@ -2377,7 +2467,7 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 		if len(agentDef.MCPTools) > 0 {
 			err := c.mcpManager.LoadAgentMCPServer(agentDef.Name, agentDef.MCPTools, agentDef.Shell)
 			if err != nil {
-				return nil, fmt.Errorf("failed to load MCP server for agent %s: %w", agentDef.Name, err)
+				return nil, nil, fmt.Errorf("failed to load MCP server for agent %s: %w", agentDef.Name, err)
 			}
 			mcpTools := c.mcpManager.GetAgentMCPTools(agentDef.Name, agentDef.Shell)
 			if len(mcpTools) > 0 {
@@ -2390,12 +2480,16 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 	}
 
 	getAgModelID := c.resolveAgentModel(agentDef, "")
-	return c.createGatedAgent(ctx, c.providerManager.GetProvider(getAgModelID), agent.AgentConfig{
+	ag, err := c.createGatedAgent(ctx, c.providerManager.GetProvider(getAgModelID), agent.AgentConfig{
 		Def:        agentDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
 		MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
 	}, agentTools)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ag, agentToolNames(agentTools), nil
 }
 
 // computeEvidenceComplete determines whether the current attempt captured

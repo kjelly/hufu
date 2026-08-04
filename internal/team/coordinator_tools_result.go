@@ -157,6 +157,17 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	if res.Confidence == 0 {
 		res.Confidence = 1.0
 	}
+	// Only a success claim can be mechanically contradicted by terminal
+	// evidence — partial/failed/blocked already say the task isn't done, so
+	// there is nothing here for terminal evidence to override. Rejecting the
+	// claim in the tool response (rather than only at round-end) lets the
+	// model see the contradiction immediately and reconsider within the same
+	// round instead of finding out only after it believed it had succeeded.
+	if res.Status == "success" && t.coordinator != nil {
+		if err := t.coordinator.terminalTaskFailure(ctx, t.todoID); err != nil {
+			return fantasy.NewTextErrorResponse("success rejected: " + err.Error()), nil
+		}
+	}
 	// Security: strip model-injected HMAC signatures from submit_result tool input
 	for i := range res.Evidence {
 		res.Evidence[i].SystemHMAC = ""

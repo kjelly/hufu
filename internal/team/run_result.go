@@ -367,13 +367,12 @@ func EvaluateRunOutcome(input RunEvaluationInput) RunResult {
 		return result
 	}
 	if acceptance == AcceptanceNotConfigured {
-		if goalMode == GoalModeExploratory {
-			result.Outcome = RunOutcomeCompleted
-			result.StopReason = StopReasonAcceptanceNotSet
-			result.GoalSatisfied = false
-			result.ExitCode = 0
-			return result
-		}
+		// An exploratory run may legitimately stop without an acceptance
+		// contract, but it has not established that the user's requested
+		// outcome exists. Keep that distinction in the canonical result: a
+		// successful-looking worker summary or finish call is not evidence of
+		// completion. Callers that only need exploratory output can inspect the
+		// response, while automation must see an unverified non-success result.
 		result.Outcome = RunOutcomeUnverified
 		result.StopReason = StopReasonAcceptanceNotSet
 		result.GoalSatisfied = false
@@ -548,6 +547,8 @@ type AcceptanceContractRevision struct {
 // RunMetrics is a queryable snapshot of reliability counters for a run.
 type RunMetrics struct {
 	RetriesByFailureClass             map[TaskFailureClass]int    `json:"retries_by_failure_class,omitempty"`
+	RetrySuppressions                 int                         `json:"retry_suppressions,omitempty"`
+	RetrySuppressionsByReason         map[string]int              `json:"retry_suppressions_by_reason,omitempty"`
 	FailuresByClass                   map[TaskFailureClass]int    `json:"failures_by_class,omitempty"`
 	FailuresByPhase                   map[string]int              `json:"failures_by_phase,omitempty"`
 	RetryAttemptsAvoidedByDisposition map[RetryDisposition]int    `json:"retry_attempts_avoided_by_disposition,omitempty"`

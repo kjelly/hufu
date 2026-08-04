@@ -35,7 +35,8 @@ func TestWithEffectiveToolsAllowed_DefaultHelperBashPreservesRuntimePermissions(
 		t.Fatalf("LoadDefaultTeam: %v", err)
 	}
 
-	ctx := (&Coordinator{session: session}).withEffectiveToolsAllowed(context.Background(), session.Agents["helper"])
+	toolsForWorker := agent.SelectTools(agent.BuildAllAgentTools(t.TempDir()), session.Agents["helper"].Tools)
+	ctx := (&Coordinator{session: session}).withEffectiveToolsAllowed(context.Background(), session.Agents["helper"], agentToolNames(toolsForWorker))
 	allowed := tools.GetToolsAllowed(ctx)
 	for _, want := range []string{"view", "bash", "wait_for"} {
 		if !slices.Contains(allowed, want) {
@@ -44,7 +45,7 @@ func TestWithEffectiveToolsAllowed_DefaultHelperBashPreservesRuntimePermissions(
 	}
 }
 
-func TestWithEffectiveToolsAllowed_IncludesAgentSpecificMCPTools(t *testing.T) {
+func TestWithEffectiveToolsAllowed_IncludesActualAgentSpecificMCPTools(t *testing.T) {
 	session := &TeamSession{
 		Config: agent.TeamConfig{Name: "team"},
 		Agents: map[string]*agent.AgentDef{
@@ -53,7 +54,8 @@ func TestWithEffectiveToolsAllowed_IncludesAgentSpecificMCPTools(t *testing.T) {
 			}},
 		},
 	}
-	ctx := (&Coordinator{session: session}).withEffectiveToolsAllowed(context.Background(), session.Agents["helper"])
+	actualTools := []fantasy.AgentTool{namedCoordinatorTool("run-tests")}
+	ctx := (&Coordinator{session: session}).withEffectiveToolsAllowed(context.Background(), session.Agents["helper"], agentToolNames(actualTools))
 	allowed := tools.GetToolsAllowed(ctx)
 	for _, want := range []string{"run-tests", "helper:run-tests"} {
 		if !slices.Contains(allowed, want) {
@@ -141,8 +143,9 @@ func TestWorkerExposedToolsAreRuntimeAllowed(t *testing.T) {
 				if def.Role == "coordinator" {
 					continue // covered by TestBuildOrchestratorToolsAreRuntimeAllowed
 				}
-				allowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowed(context.Background(), def))
-				for _, name := range c.workerExposedToolNames(def) {
+				actualTools := append(agent.SelectTools(c.coreTools, def.Tools), namedCoordinatorTool("submit_result"))
+				allowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowed(context.Background(), def, agentToolNames(actualTools)))
+				for _, name := range agentToolNames(actualTools) {
 					if !slices.Contains(allowed, name) {
 						t.Errorf("agent %q: exposed tool %q is missing from runtime allowlist %v", defName, name, allowed)
 					}
@@ -163,9 +166,10 @@ func TestWorkerExposedToolsIncludeResultProtocol(t *testing.T) {
 		t.Fatalf("LoadDefaultTeam: %v", err)
 	}
 	c := &Coordinator{session: session, coreTools: workerInvariantCoreTools(t)}
-	allowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowed(context.Background(), session.Agents["helper"]))
+	actualTools := append(agent.SelectTools(c.coreTools, session.Agents["helper"].Tools), namedCoordinatorTool("submit_result"))
+	allowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowed(context.Background(), session.Agents["helper"], agentToolNames(actualTools)))
 
-	for _, want := range []string{"submit_result", "submit_plan"} {
+	for _, want := range []string{"submit_result"} {
 		if !slices.Contains(allowed, want) {
 			t.Errorf("runtime allowlist is missing result-protocol tool %q: %v", want, allowed)
 		}
@@ -197,7 +201,7 @@ func TestWithEffectiveToolsAllowed_NoDeclaredGrantsLeavesPolicyUnset(t *testing.
 	}
 	c := &Coordinator{session: session, coreTools: workerInvariantCoreTools(t)}
 
-	ctx := c.withEffectiveToolsAllowed(context.Background(), session.Agents["worker"])
+	ctx := c.withEffectiveToolsAllowed(context.Background(), session.Agents["worker"], agentToolNames(agent.SelectTools(c.coreTools, session.Agents["worker"].Tools)))
 	if allowed := tools.GetToolsAllowed(ctx); allowed != nil {
 		t.Fatalf("allowlist should stay unset with no declared grants, got %v", allowed)
 	}
@@ -211,7 +215,8 @@ func TestWorkerExposedToolsAllowlistIsDeduped(t *testing.T) {
 		t.Fatalf("LoadDefaultTeam: %v", err)
 	}
 	c := &Coordinator{session: session, coreTools: workerInvariantCoreTools(t)}
-	allowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowed(context.Background(), session.Agents["helper"]))
+	actualTools := agent.SelectTools(c.coreTools, session.Agents["helper"].Tools)
+	allowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowed(context.Background(), session.Agents["helper"], agentToolNames(actualTools)))
 
 	seen := map[string]bool{}
 	for _, name := range allowed {

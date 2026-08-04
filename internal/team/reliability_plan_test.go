@@ -436,8 +436,8 @@ func TestReconcileTask_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("finish.Run unexpected error: %v", err)
 	}
-	if c.LastRunResult().Outcome != RunOutcomeCompleted {
-		t.Errorf("Outcome = %s, want %s", c.LastRunResult().Outcome, RunOutcomeCompleted)
+	if c.LastRunResult().Outcome != RunOutcomeUnverified {
+		t.Errorf("Outcome = %s, want %s", c.LastRunResult().Outcome, RunOutcomeUnverified)
 	}
 }
 

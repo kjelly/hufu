@@ -67,15 +67,202 @@ var numericTelemetryKeys = map[string]struct{}{
 	"max_tokens_without_progress":     {},
 }
 
+// learnedSecrets remembers credential values that were already recognized
+// beside their key. The patterns above can only redact a value that still
+// carries its key, but an agent legitimately reads a credential and the value
+// then travels alone: `grep '^admin_password:' vault | sed 's/.*: //'` returns
+// the bare secret, a TUI echoes it a character at a time, a generated script
+// embeds it as a positional argument. None of those shapes carry a key, so a
+// value recognized once must stay redacted everywhere it appears afterwards.
+var learnedSecrets struct {
+	sync.RWMutex
+	values map[string]*regexp.Regexp
+	order  []string
+}
+
+const (
+	// Short values are far more likely to be a shared word, an enum, or a
+	// version than a credential, and redacting one poisons every log that
+	// happens to contain it.
+	minLearnedSecretLen = 8
+	// Bound the set so a long run cannot grow it without limit; the oldest
+	// entries are evicted first.
+	maxLearnedSecrets = 256
+	// Longest value for which prefix matching is built at all. A value this
+	// long is not something a human types into an echoing prompt, so only the
+	// exact value is matched.
+	maxLearnedSecretPrefixLen = 64
+	// How many trailing characters a match may be missing. Interactive TUIs
+	// echo a typed secret one character at a time, so a log ends up holding
+	// near-complete prefixes, and one character short of a password is still
+	// effectively the password.
+	learnedSecretPrefixSlack = 2
+	// Floor on the mandatory part of a prefix match. Without it a credential
+	// that happens to begin with an ordinary word rewrites unrelated text:
+	// learning "protocol-secret" with an 8-character floor redacted the word
+	// "protocol" everywhere it appeared, including out of a run ID. Corrupting
+	// evidence is the failure mode this whole file exists to avoid.
+	minLearnedSecretPrefixLen = 12
+)
+
+// learnedSecretPattern matches a credential value, or a prefix of it that is
+// within learnedSecretPrefixSlack characters of the whole value. The optional
+// tail is greedy, so the fullest occurrence present is what gets replaced.
+func learnedSecretPattern(value string) *regexp.Regexp {
+	exact := regexp.MustCompile(regexp.QuoteMeta(value))
+	runes := []rune(value)
+	if len(runes) > maxLearnedSecretPrefixLen {
+		return exact
+	}
+	mandatory := len(runes) - learnedSecretPrefixSlack
+	if mandatory < minLearnedSecretPrefixLen {
+		// Too short for a prefix match to be distinguishable from ordinary
+		// text; the exact value is all that can be matched safely.
+		return exact
+	}
+	tail := ""
+	for i := len(runes) - 1; i >= mandatory; i-- {
+		tail = "(?:" + regexp.QuoteMeta(string(runes[i])) + tail + ")?"
+	}
+	compiled, err := regexp.Compile(regexp.QuoteMeta(string(runes[:mandatory])) + tail)
+	if err != nil {
+		return exact
+	}
+	return compiled
+}
+
+// learnSecretValue records a credential value for value-based redaction.
+// It is deliberately conservative: a false positive here silently corrupts
+// unrelated diagnostics, which is worse than missing one bare occurrence.
+func learnSecretValue(raw string) {
+	value := unquoteSecretValue(raw)
+	if !isLearnableSecret(value) {
+		return
+	}
+	learnedSecrets.Lock()
+	defer learnedSecrets.Unlock()
+	if _, exists := learnedSecrets.values[value]; exists {
+		return
+	}
+	if learnedSecrets.values == nil {
+		learnedSecrets.values = make(map[string]*regexp.Regexp)
+	}
+	learnedSecrets.values[value] = learnedSecretPattern(value)
+	learnedSecrets.order = append(learnedSecrets.order, value)
+	for len(learnedSecrets.order) > maxLearnedSecrets {
+		delete(learnedSecrets.values, learnedSecrets.order[0])
+		learnedSecrets.order = learnedSecrets.order[1:]
+	}
+}
+
+func unquoteSecretValue(raw string) string {
+	value := strings.TrimSpace(raw)
+	for _, quote := range []string{`\"`, `"`, `'`} {
+		if len(value) > 2*len(quote) && strings.HasPrefix(value, quote) && strings.HasSuffix(value, quote) {
+			return strings.TrimSpace(value[len(quote) : len(value)-len(quote)])
+		}
+	}
+	return value
+}
+
+func isLearnableSecret(value string) bool {
+	if len(value) < minLearnedSecretLen {
+		return false
+	}
+	// Never learn the redaction marker, whole or partial. Redaction has to be
+	// idempotent, and re-redacting already-redacted text feeds this function a
+	// truncated marker: the key/value pattern excludes "]" from a value, so
+	// "api_token=[REDACTED]" yields "[REDACTED" without its bracket. Learning
+	// that turned every later redaction into "[REDACTED]]".
+	if strings.Contains(value, redactedSecret) || strings.Contains(redactedSecret, value) {
+		return false
+	}
+	// An all-digit value under a token-shaped key is a counter, not a
+	// credential — `tokens_since_progress: 1048576` is the common case, and
+	// redacting that number would rewrite unrelated telemetry.
+	if strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' }) < 0 {
+		return false
+	}
+	// Unresolved references and fill-me markers are not yet secrets, and
+	// redacting them would hide the fact that they were never filled in.
+	for _, placeholder := range []string{"${", "{{", "<FILL", "CHANGE-ME", "CHANGEME", "changeme", "change-me", "REPLACE_ME", "xxxxx", "*****"} {
+		if strings.Contains(value, placeholder) {
+			return false
+		}
+	}
+	// A filesystem path names a location, not a credential; redacting one
+	// would destroy exactly the evidence a failed run is read for.
+	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "./") || strings.HasPrefix(value, "~/") {
+		return false
+	}
+	return true
+}
+
+// learnSecretsFrom scans content for key/value credential shapes and records
+// their values. The cheap key-name pre-filter keeps this off the hot path for
+// the overwhelming majority of content, which mentions no credential at all.
+func learnSecretsFrom(content string) {
+	if !secretKeyNameRe.MatchString(content) && !strings.Contains(strings.ToLower(content), "authorization") {
+		return
+	}
+	for _, re := range []*regexp.Regexp{secretKeyValueRe, secretJSONRe, secretEnvRe, secretAuthorizationRe} {
+		for _, match := range re.FindAllStringSubmatch(content, -1) {
+			if len(match) == 3 {
+				learnSecretValue(match[2])
+			}
+		}
+	}
+}
+
+// redactLearnedSecrets replaces every remembered credential value, wherever it
+// appears and whether or not it still has a key beside it.
+func redactLearnedSecrets(content string) string {
+	learnedSecrets.RLock()
+	patterns := make([]*regexp.Regexp, 0, len(learnedSecrets.order))
+	prefixes := make([]string, 0, len(learnedSecrets.order))
+	for _, value := range learnedSecrets.order {
+		if pattern := learnedSecrets.values[value]; pattern != nil {
+			patterns = append(patterns, pattern)
+			prefixes = append(prefixes, learnedSecretProbe(value))
+		}
+	}
+	learnedSecrets.RUnlock()
+	for i, pattern := range patterns {
+		// The literal probe is a cheap reject: scanning for a fixed substring
+		// is far cheaper than running the prefix-chain regex over content that
+		// cannot contain the secret at all.
+		if !strings.Contains(content, prefixes[i]) {
+			continue
+		}
+		content = pattern.ReplaceAllString(content, redactedSecret)
+	}
+	return content
+}
+
+// learnedSecretProbe is the shortest literal that any match of the value's
+// pattern must contain, used as a cheap reject before running the pattern.
+func learnedSecretProbe(value string) string {
+	runes := []rune(value)
+	mandatory := len(runes) - learnedSecretPrefixSlack
+	if len(runes) > maxLearnedSecretPrefixLen || mandatory < minLearnedSecretPrefixLen {
+		return value
+	}
+	return string(runes[:mandatory])
+}
+
 // RedactSecrets removes recognizable credential values before content is
 // persisted to workspace logs or session state. It intentionally preserves
 // keys and surrounding prose so diagnostics remain useful.
 func RedactSecrets(content string) string {
+	// Learn before redacting: the passes below destroy the very values that a
+	// later bare occurrence has to be matched against.
+	learnSecretsFrom(content)
 	content = privateKeyBlockRe.ReplaceAllString(content, redactedSecret)
 	content = secretAuthorizationRe.ReplaceAllString(content, "${1}"+redactedSecret)
 	content = secretJSONRe.ReplaceAllString(content, `${1}"`+redactedSecret+`"`)
 	content = secretKeyValueRe.ReplaceAllStringFunc(content, redactKeyValue)
 	content = secretEnvRe.ReplaceAllString(content, "${1}"+redactedSecret)
+	content = redactLearnedSecrets(content)
 	processRedactors.RLock()
 	redactors := append([]SecretRedactor(nil), processRedactors.items...)
 	processRedactors.RUnlock()
@@ -104,6 +291,11 @@ func redactJSONValue(value any, key string) any {
 	if key != "" && secretKeyNameRe.MatchString(key) {
 		_, telemetry := numericTelemetryKeys[strings.ToLower(key)]
 		if !telemetry {
+			// A credential recognized by its JSON key must stay redacted when
+			// the same value later shows up as bare text in a log or prompt.
+			if text, ok := value.(string); ok {
+				learnSecretValue(text)
+			}
 			return redactedSecret
 		}
 		if _, numeric := value.(json.Number); !numeric {
@@ -131,6 +323,13 @@ func redactKeyValue(match string) string {
 		return match
 	}
 	value := parts[2]
+	// Already redacted. Redaction has to be idempotent because redacted text is
+	// re-redacted on the way to several surfaces, and the value pattern excludes
+	// "]" — so a second pass over "api_token=[REDACTED]" captures "[REDACTED"
+	// and re-appending the marker produced "api_token=[REDACTED]]".
+	if unquoted := unquoteSecretValue(value); strings.Contains(unquoted, redactedSecret) || strings.Contains(redactedSecret, unquoted) {
+		return match
+	}
 	if strings.HasPrefix(value, `"`) {
 		return parts[1] + `"` + redactedSecret + `"`
 	}

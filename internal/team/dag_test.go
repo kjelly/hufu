@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -142,6 +143,49 @@ func TestTodoListResetForRetry(t *testing.T) {
 				t.Errorf("expected done after relaunch, got %s", tl.Items()[0].Status)
 			}
 		})
+	}
+}
+
+func TestMarkStrandedBlocksDependentWithProducerVerifierEvidence(t *testing.T) {
+	coord := &Coordinator{taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
+	tasks := []TaskDef{{Agent: "builder"}, {Agent: "tester", DependsOn: []int{0}}}
+	items := coord.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "builder", Desc: "produce artifact"}, {Agent: "tester", Desc: "consume artifact"}})
+	coord.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskError, "deliverable verification failed")
+	if err := coord.taskTracker.TodoList().SetVerificationResult(items[0].ID, &VerificationResult{Command: "test -f artifact", ExitCode: 1, Stderr: "artifact missing"}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newDAGScheduler(coord, tasks, items, nil)
+	s.states[0] = TaskError
+	s.markStranded()
+
+	dependent := coord.taskTracker.TodoList().Items()[1]
+	if dependent.Status != TaskBlocked {
+		t.Fatalf("dependent status = %s, want %s", dependent.Status, TaskBlocked)
+	}
+	for _, want := range []string{"producer_task_id=" + items[0].ID, "verifier_command=\"test -f artifact\"", "verifier_exit_code=1"} {
+		if !strings.Contains(dependent.Detail, want) {
+			t.Fatalf("dependent detail = %q, missing %q", dependent.Detail, want)
+		}
+	}
+	if dependent.FailureEvent == nil || !strings.Contains(dependent.FailureEvent.Summary, "producer_task_id="+items[0].ID) {
+		t.Fatalf("dependent failure event = %#v, want producer evidence", dependent.FailureEvent)
+	}
+	if s.results[1].err == nil || !strings.Contains(s.results[1].err.Error(), "blocked") {
+		t.Fatalf("dependent result = %#v, want blocked error", s.results[1])
+	}
+
+	workspace := t.TempDir()
+	if err := SaveSession(workspace, &SessionData{Tasks: coord.taskTracker.TodoList().Items()}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := LoadSession(workspace)
+	if reloaded == nil || len(reloaded.Tasks) != 2 {
+		t.Fatalf("reloaded session = %#v, want both tasks", reloaded)
+	}
+	blocked := reloaded.Tasks[1]
+	if blocked.Status != TaskBlocked || blocked.FailureEvent == nil || !strings.Contains(blocked.FailureEvent.Summary, "producer_task_id="+items[0].ID) {
+		t.Fatalf("reloaded blocked dependent = %#v, want durable producer evidence", blocked)
 	}
 }
 

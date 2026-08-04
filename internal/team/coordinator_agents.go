@@ -26,12 +26,13 @@ func agentCacheKey(def *agent.AgentDef, overrideModel string) string {
 	return def.Name
 }
 
-func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef, overrideModel string) (fantasy.Agent, error) {
+func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef, overrideModel string) (fantasy.Agent, []string, error) {
 	cacheKey := agentCacheKey(def, overrideModel)
 	c.agentCacheMu.RLock()
 	if ag, ok := c.agentCache[cacheKey]; ok {
+		names := append([]string(nil), c.agentToolNameCache[cacheKey]...)
 		c.agentCacheMu.RUnlock()
-		return ag, nil
+		return ag, names, nil
 	}
 	c.agentCacheMu.RUnlock()
 
@@ -39,7 +40,7 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 	defer c.agentCacheMu.Unlock()
 
 	if ag, ok := c.agentCache[cacheKey]; ok {
-		return ag, nil
+		return ag, append([]string(nil), c.agentToolNameCache[cacheKey]...), nil
 	}
 
 	agentDef := def
@@ -62,7 +63,7 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 		if len(agentDef.MCPTools) > 0 {
 			err := c.mcpManager.LoadAgentMCPServer(agentDef.Name, agentDef.MCPTools, agentDef.Shell)
 			if err != nil {
-				return nil, fmt.Errorf("failed to load MCP server for agent %s: %w", agentDef.Name, err)
+				return nil, nil, fmt.Errorf("failed to load MCP server for agent %s: %w", agentDef.Name, err)
 			}
 			mcpTools := c.mcpManager.GetAgentMCPTools(agentDef.Name, agentDef.Shell)
 			if len(mcpTools) > 0 {
@@ -79,11 +80,16 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 		MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
 	}, agentTools)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	c.agentCache[cacheKey] = ag
-	return ag, nil
+	if c.agentToolNameCache == nil {
+		c.agentToolNameCache = make(map[string][]string)
+	}
+	names := agentToolNames(agentTools)
+	c.agentToolNameCache[cacheKey] = append([]string(nil), names...)
+	return ag, names, nil
 }
 
 // resolveAgentName resolves an agent name (exact, case-insensitive, or fuzzy match)

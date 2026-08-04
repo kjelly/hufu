@@ -113,7 +113,7 @@ func TestAgentSpecificMCPCallUsesMCPPolicyForCasePreservingAgent(t *testing.T) {
 	c := &Coordinator{session: session, taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
 	c.SetAuthorizationPolicy(policy)
 
-	ctx := c.withEffectiveToolsAllowed(context.Background(), session.Agents["helper"])
+	ctx := c.withEffectiveToolsAllowed(context.Background(), session.Agents["helper"], []string{"run-tests"})
 	ctx = context.WithValue(ctx, tools.AgentNameKey, "helper")
 	inner := &recordingTool{name: "run-tests"}
 	gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]

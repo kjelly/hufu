@@ -225,6 +225,16 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 				c.metricsMu.Unlock()
 			}
 		}
+		if item != nil && item.Kind == TaskKindRepair && (repeated || limited || hypothesisInvalid) && disposition != RetryWorker {
+			reason := retrySuppressionRepeatedFingerprint
+			if limited {
+				reason = retrySuppressionAntiThrashingLimit
+			}
+			if hypothesisInvalid {
+				reason = retrySuppressionRejectedStrategy
+			}
+			c.recordRetrySuppression(todoID, fp.Digest, disposition, reason)
+		}
 	}
 
 	if todoID != "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
@@ -447,6 +457,14 @@ func (c *Coordinator) reliabilityConfig() agent.ReliabilityConfig {
 			cfg.MaxTasksWithoutProgress = sessCfg.MaxTasksWithoutProgress
 		} else if sessCfg.MaxTasksWithoutProgress > 0 {
 			cfg.MaxTasksWithoutProgress = sessCfg.MaxTasksWithoutProgress
+		}
+		// A per-attempt token guard is separately configurable from the
+		// run-level token budget. Preserve an explicit zero because some
+		// deliberate long-context workflows need to opt out.
+		if sessCfg.MaxTokensPerAttemptSet {
+			cfg.MaxTokensPerAttempt = sessCfg.MaxTokensPerAttempt
+		} else if sessCfg.MaxTokensPerAttempt > 0 {
+			cfg.MaxTokensPerAttempt = sessCfg.MaxTokensPerAttempt
 		}
 		if sessCfg.WarnOnly {
 			cfg.WarnOnly = true

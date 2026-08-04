@@ -227,6 +227,7 @@ type Coordinator struct {
 	mcpManager                      *mcp.MCPToolManager
 	coreTools                       []fantasy.AgentTool
 	agentCache                      map[string]fantasy.Agent
+	agentToolNameCache              map[string][]string
 	agentCacheMu                    sync.RWMutex
 	round                           int
 	baseRounds                      int // rounds completed before the last round-state reset (resume/continue)
@@ -266,55 +267,64 @@ type Coordinator struct {
 	terminalRoundDone            map[string]chan struct{}
 	terminalRoundShutdownTimeout time.Duration
 	ptyTerminalEnabled           bool
-	skillUsage                   map[string]*skillUsageState
-	skillUsageMu                 sync.Mutex
-	delegatedTasks               map[string]int
-	delegatedTasksMu             sync.Mutex
-	taskResultCache              map[string][]cachedTaskEntry // agent → ordered list of past results
-	taskResultCacheMu            sync.RWMutex
-	cachePolicy                  CachePolicy
-	cachePolicyMu                sync.RWMutex
-	executionProfile             ExecutionProfile
-	executionProfileMu           sync.RWMutex
-	goalMode                     GoalMode
-	goalModeMu                   sync.RWMutex
-	capabilityCache              map[string]CapabilityResult
-	capabilityCacheMu            sync.Mutex
-	capabilityInflight           map[string]chan CapabilityResult
-	cacheGeneration              atomic.Int64 // bumped each time coordinator starts a new delegation round
-	journal                      *taskJournal // persistent task-result journal (nil when disabled)
-	noJournal                    bool
-	eventStore                   *EventStore // append-only session event store
-	emittedTaskTransitions       map[string]bool
-	dualWriteFailures            atomic.Int64
-	memoryStore                  *memory.MemoryStore
-	contextRepo                  contextstore.Repository // Phase 1 shadow store; never read by prompt assembly.
-	skillsMu                     sync.RWMutex
-	modelList                    []config.ModelEntry
-	sidecarModel                 string
-	sidecarInst                  *sidecar.Sidecar
-	sidecarInitMu                sync.Mutex
-	sidecarInit                  bool
-	guardModel                   string
-	guardInst                    *sidecar.Sidecar
-	guardInitMu                  sync.Mutex
-	guardInit                    bool
-	judgeModel                   string
-	judgeInst                    *sidecar.Sidecar
-	judgeInitMu                  sync.Mutex
-	judgeInit                    bool
-	planReviewerModel            string
-	cachedWorkerContext          string
-	workerCtxOnce                sync.Once
-	autoLoadedSkills             []*skill.SkillDef
-	autoLoadedSkillsMu           sync.RWMutex
-	forcedSkillNames             map[string]bool // set of skill names specified via --skill
-	maxConcurrent                int
-	sessionTime                  time.Time
-	lastStmWrite                 time.Time // tracks when stm_write was last called for finish enforcement
-	lastStmWriteMu               sync.Mutex
-	stmWriteMu                   sync.Mutex // serializes Read-Modify-Write STM operations to prevent lost-updates
-	ltmWriteMu                   sync.Mutex // Protect LTM file reads and writes
+	// Silent-stall watchdog (coordinator_stall_watchdog.go): detects periods
+	// with no forward-progress signal at all, distinct from a single slow
+	// tool call, and leaves a goroutine dump as evidence.
+	stallActivityAt        atomic.Int64 // unix nano, last observed forward-progress signal
+	stallLastDumpAt        atomic.Int64 // unix nano, 0 = no dump yet in the current stall episode
+	stallDumps             atomic.Int32 // total dumps written this run, capped at stallMaxDumps
+	stallThreshold         time.Duration
+	stallMaxDumps          int32
+	stallWatchdogOnce      sync.Once
+	skillUsage             map[string]*skillUsageState
+	skillUsageMu           sync.Mutex
+	delegatedTasks         map[string]int
+	delegatedTasksMu       sync.Mutex
+	taskResultCache        map[string][]cachedTaskEntry // agent → ordered list of past results
+	taskResultCacheMu      sync.RWMutex
+	cachePolicy            CachePolicy
+	cachePolicyMu          sync.RWMutex
+	executionProfile       ExecutionProfile
+	executionProfileMu     sync.RWMutex
+	goalMode               GoalMode
+	goalModeMu             sync.RWMutex
+	capabilityCache        map[string]CapabilityResult
+	capabilityCacheMu      sync.Mutex
+	capabilityInflight     map[string]chan CapabilityResult
+	cacheGeneration        atomic.Int64 // bumped each time coordinator starts a new delegation round
+	journal                *taskJournal // persistent task-result journal (nil when disabled)
+	noJournal              bool
+	eventStore             *EventStore // append-only session event store
+	emittedTaskTransitions map[string]bool
+	dualWriteFailures      atomic.Int64
+	memoryStore            *memory.MemoryStore
+	contextRepo            contextstore.Repository // Phase 1 shadow store; never read by prompt assembly.
+	skillsMu               sync.RWMutex
+	modelList              []config.ModelEntry
+	sidecarModel           string
+	sidecarInst            *sidecar.Sidecar
+	sidecarInitMu          sync.Mutex
+	sidecarInit            bool
+	guardModel             string
+	guardInst              *sidecar.Sidecar
+	guardInitMu            sync.Mutex
+	guardInit              bool
+	judgeModel             string
+	judgeInst              *sidecar.Sidecar
+	judgeInitMu            sync.Mutex
+	judgeInit              bool
+	planReviewerModel      string
+	cachedWorkerContext    string
+	workerCtxOnce          sync.Once
+	autoLoadedSkills       []*skill.SkillDef
+	autoLoadedSkillsMu     sync.RWMutex
+	forcedSkillNames       map[string]bool // set of skill names specified via --skill
+	maxConcurrent          int
+	sessionTime            time.Time
+	lastStmWrite           time.Time // tracks when stm_write was last called for finish enforcement
+	lastStmWriteMu         sync.Mutex
+	stmWriteMu             sync.Mutex // serializes Read-Modify-Write STM operations to prevent lost-updates
+	ltmWriteMu             sync.Mutex // Protect LTM file reads and writes
 
 	// Skill pattern detection
 	skillDetector         *skill.SkillPatternDetector
@@ -380,6 +390,8 @@ type Coordinator struct {
 	continuationResume            *ContinuationCheckpoint
 	metricsMu                     sync.RWMutex
 	retriesByFailureClass         map[TaskFailureClass]int
+	retrySuppressionsByReason     map[string]int
+	retrySuppressionSeen          map[string]bool
 	preflightFailuresCaught       int
 	nonAssertingVerifiersRejected int
 	antiThrashing                 AntiThrashingState
@@ -778,40 +790,43 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		return nil, fmt.Errorf("failed to create provider manager: %w", err)
 	}
 	c := &Coordinator{
-		providerManager:          pm,
-		session:                  session,
-		mcpManager:               mcpManager,
-		coreTools:                coreTools,
-		agentCache:               make(map[string]fantasy.Agent),
-		verbose:                  verbose,
-		think:                    think,
-		reportStatus:             func(event StatusEvent) {},
-		taskTracker:              NewTaskTracker(),
-		skills:                   session.Skills,
-		projectDir:               projectDir,
-		skillUsage:               make(map[string]*skillUsageState),
-		delegatedTasks:           make(map[string]int),
-		pendingPlans:             make(map[string]*PlanEntry),
-		approvedOutputs:          make(map[string]string),
-		approvedErrors:           make(map[string]error),
-		taskResults:              make(map[string]*TaskResult),
-		taskResultCache:          make(map[string][]cachedTaskEntry),
-		pendingDiagnosticPackets: make(map[string]DiagnosticPacket),
-		capabilityCache:          make(map[string]CapabilityResult),
-		capabilityInflight:       make(map[string]chan CapabilityResult),
-		memoryStore:              memoryStore,
-		modelList:                modelList,
-		sidecarModel:             roleModels.Sidecar,
-		guardModel:               roleModels.Guard,
-		judgeModel:               roleModels.Judge,
-		planReviewerModel:        roleModels.PlanReviewer,
-		maxConcurrent:            maxConcurrent,
-		sessionTime:              time.Now(),
-		hooks:                    hookRegistry,
-		rbashMode:                rbashMode,
-		restrictedPath:           restrictedPath,
-		noNet:                    noNet,
-		forceMCP:                 forceMCP,
+		providerManager:           pm,
+		session:                   session,
+		mcpManager:                mcpManager,
+		coreTools:                 coreTools,
+		agentCache:                make(map[string]fantasy.Agent),
+		agentToolNameCache:        make(map[string][]string),
+		retrySuppressionsByReason: make(map[string]int),
+		retrySuppressionSeen:      make(map[string]bool),
+		verbose:                   verbose,
+		think:                     think,
+		reportStatus:              func(event StatusEvent) {},
+		taskTracker:               NewTaskTracker(),
+		skills:                    session.Skills,
+		projectDir:                projectDir,
+		skillUsage:                make(map[string]*skillUsageState),
+		delegatedTasks:            make(map[string]int),
+		pendingPlans:              make(map[string]*PlanEntry),
+		approvedOutputs:           make(map[string]string),
+		approvedErrors:            make(map[string]error),
+		taskResults:               make(map[string]*TaskResult),
+		taskResultCache:           make(map[string][]cachedTaskEntry),
+		pendingDiagnosticPackets:  make(map[string]DiagnosticPacket),
+		capabilityCache:           make(map[string]CapabilityResult),
+		capabilityInflight:        make(map[string]chan CapabilityResult),
+		memoryStore:               memoryStore,
+		modelList:                 modelList,
+		sidecarModel:              roleModels.Sidecar,
+		guardModel:                roleModels.Guard,
+		judgeModel:                roleModels.Judge,
+		planReviewerModel:         roleModels.PlanReviewer,
+		maxConcurrent:             maxConcurrent,
+		sessionTime:               time.Now(),
+		hooks:                     hookRegistry,
+		rbashMode:                 rbashMode,
+		restrictedPath:            restrictedPath,
+		noNet:                     noNet,
+		forceMCP:                  forceMCP,
 		forcedSkillNames: func() map[string]bool {
 			m := make(map[string]bool)
 			for _, n := range forcedSkillNames {
@@ -1055,9 +1070,25 @@ func (c *Coordinator) resetRoundState() {
 	c.delegatedTasksMu.Unlock()
 }
 
+// SetStatusReporter wraps fn so every delivered StatusEvent also feeds the
+// stall watchdog. This is the one place that can see every report call
+// regardless of path: c.report(event) calls c.reportStatus directly, and the
+// streaming callbacks in coordinator_task_run.go capture reportFn :=
+// c.reportStatus once and call it many times per task. Wrapping here means
+// touchActivity does not need to be added at each of those call sites, and
+// cannot be forgotten at a future one.
 func (c *Coordinator) SetStatusReporter(fn StatusReporter) {
-	if fn != nil {
-		c.reportStatus = fn
+	if fn == nil {
+		return
+	}
+	c.reportStatus = func(event StatusEvent) {
+		// The watchdog's own stall notification must not reset the idle
+		// clock it is reporting on, or a persistent stall would only ever
+		// produce a single dump.
+		if event.Type != runStallEventType {
+			c.touchActivity()
+		}
+		fn(event)
 	}
 }
 

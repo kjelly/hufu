@@ -239,9 +239,10 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 
 	agentDef = c.injectWorkerContext(ctx, agentDef)
 
-	// Give the sub-agent its own tool allowlist rather than inheriting the
-	// caller's permissions.
-	ctx = c.withEffectiveToolsAllowed(ctx, agentDef)
+	// Derive the sub-agent allowlist from the exact tool slice it receives,
+	// rather than inheriting the caller's permissions or re-selecting later.
+	agentTools := agent.SelectTools(c.coreTools, agentDef.Tools)
+	ctx = c.withEffectiveToolsAllowed(ctx, agentDef, agentToolNames(agentTools))
 	// Sub-agent streams do not produce a separate execution receipt. Make the
 	// usage-accounting boundary explicit even when the parent worker context
 	// carried the receipt marker.
@@ -253,7 +254,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
 		MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
-	}, agent.SelectTools(c.coreTools, agentDef.Tools))
+	}, agentTools)
 	if err != nil {
 		return "", fmt.Errorf("failed to create sub-agent %q: %w", name, err)
 	}

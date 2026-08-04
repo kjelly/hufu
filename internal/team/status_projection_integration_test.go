@@ -101,6 +101,55 @@ func TestCanonicalTodoTransitionAutomaticallyProjectsStatus(t *testing.T) {
 	}
 }
 
+func TestRunReconcilesRestoredKilledRunStatusBeforeCoordinatorDispatch(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, statusDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, statusDir, "worker.yml"), []byte("status: working\ndetail: stale process state\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	worker := &agent.AgentDef{Name: "worker", Role: "worker"}
+	c := &Coordinator{
+		session: &TeamSession{
+			Dir:       workspace,
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "resume-test"},
+			Agents: map[string]*agent.AgentDef{
+				"coordinator": {Name: "coordinator", Role: "coordinator"},
+				"worker":      worker,
+			},
+		},
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+		projectDir:   workspace,
+		sessionTime:  time.Now(),
+	}
+	// This represents a killed run: the canonical checkpoint still has a live
+	// task, but recovery policy says it must be blocked rather than re-driven.
+	// Run must rebuild the projection, apply resume policy, and only then begin
+	// its coordinator turn.
+	sd := NewSession()
+	sd.Tasks = []*TodoItem{{ID: "1", Agent: "worker", Desc: "interrupted work", Status: TaskInProgress, Recovery: RecoveryManual}}
+	c.SetSessionData(sd)
+	c.runOrchestratorOverride = func(context.Context, *agent.AgentDef, string) (string, []fantasy.StepResult, error) {
+		status := readProjectedStatus(t, workspace, "worker")
+		if !strings.Contains(status, "status: error") || strings.Contains(status, "stale process state") {
+			t.Fatalf("status at coordinator dispatch = %q, want reconciled blocked recovery", status)
+		}
+		return "FINISHED: resumed", nil, nil
+	}
+
+	if _, err := c.Run(context.Background(), "resume"); err != nil && !errors.Is(err, ErrTasksUnresolved) {
+		t.Fatalf("Run: %v", err)
+	}
+	item := c.taskTracker.TodoList().Items()[0]
+	if item.Status != TaskBlocked {
+		t.Fatalf("resumed task status = %s, want %s", item.Status, TaskBlocked)
+	}
+}
+
 type directTerminationAgent struct {
 	err   error
 	steps []fantasy.StepResult

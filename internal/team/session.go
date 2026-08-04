@@ -56,16 +56,28 @@ type SessionData struct {
 }
 
 func LoadSession(workspace string) *SessionData {
+	session, err := loadSessionQuiet(workspace)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: corrupt session file in %s: %v\n", workspace, err)
+	}
+	return session
+}
+
+// loadSessionQuiet is the same load without the operator warning, for callers
+// that expect a rejection and treat it as a result rather than a problem — the
+// reliability self-check deliberately feeds it a corrupt checkpoint, and its
+// warning used to surface in real runs as "corrupt session file in
+// /tmp/hufu-reliability-checkpoint-…", which reads like workspace damage.
+func loadSessionQuiet(workspace string) (*SessionData, error) {
 	data, err := os.ReadFile(filepath.Join(workspace, sessionFile))
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	var session SessionData
 	if err := json.Unmarshal(data, &session); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: corrupt session file in %s: %v\n", workspace, err)
-		return nil
+		return nil, err
 	}
-	return &session
+	return &session, nil
 }
 
 func SaveSession(workspace string, session *SessionData) error {

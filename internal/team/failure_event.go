@@ -68,6 +68,13 @@ func RenderFailureText(event *FailureEventPayload) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "failure task_id=%s phase=%s class=%s disposition=%s\n",
 		event.TaskID, event.Phase, event.FailureClass, event.RetryDisposition)
+	// The summary carries the actual cause, so it goes directly under the
+	// header. Every surface that collapses this block into one line truncates
+	// it, and with the summary last the cause was the first thing cut: a real
+	// run displayed "command: wait_for | work_dir: /home/u…" while the reason —
+	// an exhausted attempt budget — appeared nowhere in the CLI output at all.
+	// The fields below are supporting detail and can afford to be cut.
+	fmt.Fprintf(&b, "summary: %s\n", event.Summary)
 	fmt.Fprintf(&b, "command: %s\n", event.Command)
 	fmt.Fprintf(&b, "work_dir: %s\n", event.WorkDir)
 	fmt.Fprintf(&b, "shell: %s\n", event.Shell)
@@ -79,8 +86,7 @@ func RenderFailureText(event *FailureEventPayload) string {
 	fmt.Fprintf(&b, "stdout: %s\n", event.Stdout)
 	fmt.Fprintf(&b, "stderr: %s\n", event.Stderr)
 	fmt.Fprintf(&b, "fingerprint: %s\n", event.Fingerprint)
-	fmt.Fprintf(&b, "hint: %s\n", event.Hint)
-	fmt.Fprintf(&b, "summary: %s", event.Summary)
+	fmt.Fprintf(&b, "hint: %s", event.Hint)
 	return b.String()
 }
 

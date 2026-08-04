@@ -1,6 +1,7 @@
 package team
 
 import (
+	"encoding/json"
 	"strconv"
 	"time"
 )
@@ -23,8 +24,13 @@ func (c *Coordinator) Metrics() RunMetrics {
 	for fp, strategy := range c.antiThrashing.LastStrategy {
 		lastStrategies[fp] = strategy
 	}
+	suppressionReasons := make(map[string]int, len(c.retrySuppressionsByReason))
+	for reason, count := range c.retrySuppressionsByReason {
+		suppressionReasons[reason] = count
+	}
 	metrics := RunMetrics{RetriesByFailureClass: byClass, Compactions: c.compactions,
-		FailuresByClass: make(map[TaskFailureClass]int), FailuresByPhase: make(map[string]int),
+		RetrySuppressionsByReason: suppressionReasons,
+		FailuresByClass:           make(map[TaskFailureClass]int), FailuresByPhase: make(map[string]int),
 		RetryAttemptsAvoidedByDisposition: make(map[RetryDisposition]int),
 		ProtocolRepairFailuresByReason:    make(map[RepairFailureReason]int),
 		RepeatedFailureFingerprints:       repeatedFingerprintCount(c.antiThrashing.Counts),
@@ -40,6 +46,11 @@ func (c *Coordinator) Metrics() RunMetrics {
 	metrics.TurnsSinceCriterionProgress = c.turnsSinceCriterionProgress
 	metrics.TasksSinceCriterionProgress = c.tasksSinceCriterionProgress
 	c.metricsMu.RUnlock()
+	metrics.RetrySuppressions = sumRetrySuppressions(metrics.RetrySuppressionsByReason)
+	if persisted, ok := c.retrySuppressionsFromEvents(); ok {
+		metrics.RetrySuppressionsByReason = persisted
+		metrics.RetrySuppressions = sumRetrySuppressions(persisted)
+	}
 	// No-progress budget configured limits (§8.1, WP-12). 0 = disabled.
 	rc := c.reliabilityConfig()
 	metrics.MaxTokensWithoutProgress = int64(rc.MaxTokensWithoutProgress)
@@ -66,6 +77,43 @@ func (c *Coordinator) Metrics() RunMetrics {
 		}
 	}
 	return metrics
+}
+
+func sumRetrySuppressions(byReason map[string]int) int {
+	total := 0
+	for _, count := range byReason {
+		total += count
+	}
+	return total
+}
+
+// retrySuppressionsFromEvents makes the metric survive a coordinator restart:
+// retry_suppressed is an append-only event, so the active run can be rebuilt
+// without trusting an in-memory counter or duplicating checkpoint state.
+func (c *Coordinator) retrySuppressionsFromEvents() (map[string]int, bool) {
+	if c == nil || c.eventStore == nil {
+		return nil, false
+	}
+	events, err := c.eventStore.ReadEvents()
+	if err != nil {
+		return nil, false
+	}
+	counts := make(map[string]int)
+	found := false
+	for _, event := range events {
+		if event.Type != "retry_suppressed" || (c.executionRunID != "" && event.RunID != c.executionRunID) {
+			continue
+		}
+		var payload struct {
+			ReasonCode string `json:"reason_code"`
+		}
+		if json.Unmarshal(event.Payload, &payload) != nil || payload.ReasonCode == "" {
+			continue
+		}
+		counts[payload.ReasonCode]++
+		found = true
+	}
+	return counts, found
 }
 
 func accumulateTodoMetrics(metrics *RunMetrics, items []*TodoItem) {
@@ -344,6 +392,34 @@ func (c *Coordinator) recordRetry(class TaskFailureClass) {
 	}
 	c.retriesByFailureClass[class]++
 	c.metricsMu.Unlock()
+}
+
+// recordRetrySuppression records an avoided replay once per task/fingerprint
+// within a run and emits durable evidence for reports and restart recovery.
+func (c *Coordinator) recordRetrySuppression(todoID, fingerprint string, disposition RetryDisposition, reason string) {
+	if c == nil || reason == "" {
+		return
+	}
+	key := todoID + "\x00" + fingerprint
+	c.metricsMu.Lock()
+	if c.retrySuppressionSeen == nil {
+		c.retrySuppressionSeen = make(map[string]bool)
+	}
+	if c.retrySuppressionSeen[key] {
+		c.metricsMu.Unlock()
+		return
+	}
+	c.retrySuppressionSeen[key] = true
+	if c.retrySuppressionsByReason == nil {
+		c.retrySuppressionsByReason = make(map[string]int)
+	}
+	c.retrySuppressionsByReason[reason]++
+	c.metricsMu.Unlock()
+	_ = c.emitEvent("retry_suppressed", "coordinator", todoID, map[string]interface{}{
+		"fingerprint": fingerprint,
+		"disposition": disposition,
+		"reason_code": reason,
+	})
 }
 
 func (c *Coordinator) recordCompaction() {

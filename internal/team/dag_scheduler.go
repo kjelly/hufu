@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -324,9 +325,9 @@ func (s *dagScheduler) resetTask(i int, detail string) {
 }
 
 // markStranded handles tasks whose dependencies failed and therefore never
-// became ready. They are marked skipped with an explicit error result —
-// otherwise they would surface as zero-valued "successes" in
-// formatTaskResults and their todos would hang in pending forever.
+// became ready. A dependent is blocked, not skipped: it remains unresolved and
+// carries the direct producer IDs and verifier evidence that explain why no
+// worker was started for it.
 func (s *dagScheduler) markStranded() {
 	c := s.coord
 	stranded := false
@@ -335,18 +336,79 @@ func (s *dagScheduler) markStranded() {
 			continue
 		}
 		stranded = true
-		c.taskTracker.TodoList().UpdateStatus(s.todoItems[i].ID, TaskSkipped, "skipped: dependency did not complete successfully")
+		detail, class := s.strandedDependencyDetail(i)
+		item := s.todoItems[i]
+		s.states[i] = TaskBlocked
+		c.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, detail, RetryNone, class, TaskBlocked)
 		s.results[i] = agentTaskResult{
 			agentName: s.tasks[i].Agent,
-			todoID:    s.todoItems[i].ID,
+			todoID:    item.ID,
 			task:      s.taskDesc(i),
-			err:       fmt.Errorf("skipped: a depends_on task did not complete successfully"),
+			err:       fmt.Errorf("blocked: %s", detail),
 			idx:       i,
 		}
 	}
 	if stranded {
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	}
+}
+
+type strandedDependency struct {
+	taskID string
+	status TaskStatus
+	verify *VerificationResult
+	fail   *FailureEventPayload
+}
+
+// strandedDependencyDetail produces stable, bounded producer evidence for a
+// dependent that cannot launch. The downstream failure event stores this text
+// as its summary, preserving causality through checkpoints and event replay
+// without fabricating a second verifier result for the dependent itself.
+func (s *dagScheduler) strandedDependencyDetail(idx int) (string, TaskFailureClass) {
+	if idx < 0 || idx >= len(s.tasks) {
+		return "dependency did not complete successfully", FailureExecution
+	}
+	deps := make([]strandedDependency, 0, len(s.tasks[idx].DependsOn))
+	for _, depIdx := range s.tasks[idx].DependsOn {
+		if depIdx < 0 || depIdx >= len(s.tasks) || s.states[depIdx] == TaskDone {
+			continue
+		}
+		dep := strandedDependency{status: s.states[depIdx]}
+		if item := s.todoItems[depIdx]; item != nil {
+			dep.taskID = item.ID
+			dep.verify = item.VerifyResult
+			dep.fail = item.FailureEvent
+		}
+		if dep.taskID == "" {
+			dep.taskID = fmt.Sprintf("index:%d", depIdx)
+		}
+		deps = append(deps, dep)
+	}
+	if len(deps) == 0 {
+		return "dependency did not complete successfully", FailureExecution
+	}
+	sort.Slice(deps, func(i, j int) bool { return deps[i].taskID < deps[j].taskID })
+	parts := make([]string, 0, len(deps))
+	class := FailureExecution
+	for _, dep := range deps {
+		part := fmt.Sprintf("producer_task_id=%s producer_status=%s", dep.taskID, dep.status)
+		if dep.verify != nil {
+			class = FailureVerify
+			part += fmt.Sprintf(" verifier_command=%q verifier_exit_code=%d", utils.TruncateString(dep.verify.Command, 200), dep.verify.ExitCode)
+			if text := strings.TrimSpace(dep.verify.Stderr); text != "" {
+				part += fmt.Sprintf(" verifier_stderr=%q", utils.TruncateString(utils.RedactSecrets(text), 300))
+			} else if text := strings.TrimSpace(dep.verify.Stdout); text != "" {
+				part += fmt.Sprintf(" verifier_stdout=%q", utils.TruncateString(utils.RedactSecrets(text), 300))
+			}
+		} else if dep.fail != nil {
+			if class == FailureExecution && dep.fail.FailureClass != "" {
+				class = dep.fail.FailureClass
+			}
+			part += fmt.Sprintf(" producer_failure=%q", utils.TruncateString(utils.RedactSecrets(dep.fail.Summary), 300))
+		}
+		parts = append(parts, part)
+	}
+	return "blocked by failed dependency: " + strings.Join(parts, "; "), class
 }
 
 func (s *dagScheduler) taskDesc(i int) string {

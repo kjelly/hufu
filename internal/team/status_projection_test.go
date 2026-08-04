@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -76,6 +77,83 @@ func TestProjectAgentStatusesDistinguishesContainedAndManualTerminalCleanup(t *t
 	}
 	if !strings.Contains(string(data), "requires manual intervention; do not retry") {
 		t.Fatalf("manual cleanup guidance missing: %s", data)
+	}
+}
+
+func TestReconcileAgentStatusesKeepsDetailAndFailureEventFromSameGoverningTask(t *testing.T) {
+	workspace := t.TempDir()
+	earlier := time.Now().Add(-time.Minute)
+	later := time.Now()
+	items := []*TodoItem{
+		{ID: "1", Agent: "Helper", Status: TaskDone, Detail: "Task completed successfully. Deliverables verified.", EndedAt: earlier},
+		{ID: "2", Agent: "helper", Status: TaskError, Detail: "verification failed", EndedAt: later, FailureEvent: &FailureEventPayload{TaskID: "2", Phase: "verification", FailureClass: FailureVerify, RetryDisposition: RetryNone, Summary: "artifact missing"}},
+	}
+	if err := ReconcileAgentStatuses(workspace, items, nil); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, statusDir, "helper.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if strings.Contains(content, "Task completed successfully") || !strings.Contains(content, "detail: verification failed") || !strings.Contains(content, "artifact missing") {
+		t.Fatalf("error projection combined stale and current evidence: %q", content)
+	}
+
+	items[1].Status = TaskDone
+	items[1].Detail = "recovered successfully"
+	if err := ReconcileAgentStatuses(workspace, items, nil); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(filepath.Join(workspace, statusDir, "helper.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content = string(data); strings.Contains(content, "failure_event:") || strings.Contains(content, "artifact missing") {
+		t.Fatalf("idle projection retained stale failure state: %q", content)
+	}
+}
+
+// TestReconcileAgentStatusesCurrentWorkOutranksOlderReplannedFailure pins the
+// fix for an agent whose earlier task errored and was replanned (not
+// retried) while it moved on to a new, currently in-progress task: the
+// projection must read the agent's current activity, not get stuck showing
+// the old task's error forever just because "error" used to always outrank
+// "working" once emitted for that agent name.
+func TestReconcileAgentStatusesCurrentWorkOutranksOlderReplannedFailure(t *testing.T) {
+	workspace := t.TempDir()
+	earlier := time.Now().Add(-time.Hour)
+	later := time.Now()
+	items := []*TodoItem{
+		{
+			ID: "6", Agent: "helper", Status: TaskError, EndedAt: earlier,
+			Detail: `terminal command "pilot edit" for task 6 exited with status -1`,
+			FailureEvent: &FailureEventPayload{
+				TaskID: "6", Phase: "execution", FailureClass: FailureExecution,
+				RetryDisposition: RetryNone, Summary: "terminal exited with status -1",
+			},
+		},
+		{ID: "8", Agent: "helper", Status: TaskInProgress, StartedAt: later, Detail: "retry 1/2 — continuing from previous progress"},
+	}
+	if err := ReconcileAgentStatuses(workspace, items, nil); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, statusDir, "helper.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded projectedStatusRecord
+	if err := yaml.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("projected status is not valid YAML: %v; data=%q", err, data)
+	}
+	if decoded.Status != AgentStatusWorking {
+		t.Fatalf("status = %q, want working (task 8 is active); got record %#v", decoded.Status, decoded)
+	}
+	if decoded.FailureEvent != nil {
+		t.Fatalf("current-status failure_event must belong to the active task, not task 6: %#v", decoded.FailureEvent)
+	}
+	if decoded.UnresolvedFailure == nil || decoded.UnresolvedFailure.TaskID != "6" {
+		t.Fatalf("unresolved_failure = %#v, want task 6's failure preserved as separate evidence", decoded.UnresolvedFailure)
 	}
 }
 
