@@ -49,7 +49,7 @@ func ProjectAgentStatuses(items []*TodoItem, sessions []TerminalSession) map[str
 	for _, session := range sessions {
 		name := strings.ToLower(strings.TrimSpace(session.Agent))
 		if name == "" {
-			if item := byTask[session.OwnerTaskID]; item != nil {
+			if item := byTask[terminalControllerTaskID(session)]; item != nil {
 				name = strings.ToLower(strings.TrimSpace(item.Agent))
 			}
 		}

@@ -48,6 +48,51 @@ func (c *Coordinator) TerminalSessions(ctx context.Context) ([]TerminalSession, 
 	return c.terminalSessionMgr.List(ctx, "")
 }
 
+// TransferTerminal performs the Phase D, operator-authorized task handoff.
+// It is coordinator-only: the model-facing terminal tool deliberately has no
+// transfer action. The original OwnerTaskID remains durable provenance while
+// controller authority moves to the declared destination task.
+func (c *Coordinator) TransferTerminal(ctx context.Context, req TerminalTransferRequest) (TerminalSession, error) {
+	if c == nil || c.terminalSessionMgr == nil {
+		return TerminalSession{}, errors.New("transfer terminal: terminal manager is unavailable")
+	}
+	if c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return TerminalSession{}, errors.New("transfer terminal: task tracker is unavailable")
+	}
+	if req.RunID == "" {
+		req.RunID = c.executionRunID
+	}
+	if req.RunID == "" || (c.executionRunID != "" && req.RunID != c.executionRunID) {
+		return TerminalSession{}, fmt.Errorf("transfer terminal: requested run %q is not the active run", req.RunID)
+	}
+	var source, destination *TodoItem
+	for _, item := range c.taskTracker.TodoList().Items() {
+		switch item.ID {
+		case req.SourceTaskID:
+			source = item
+		case req.DestinationTaskID:
+			destination = item
+		}
+	}
+	if source == nil || destination == nil {
+		return TerminalSession{}, errors.New("transfer terminal: source and destination tasks must exist in the active run")
+	}
+	if source.Status != TaskPaused {
+		return TerminalSession{}, fmt.Errorf("transfer terminal: source task %q must be paused", source.ID)
+	}
+	if isTerminalTaskStatus(destination.Status) {
+		return TerminalSession{}, fmt.Errorf("transfer terminal: destination task %q is terminal (%s)", destination.ID, destination.Status)
+	}
+	if c.isTerminalRoundActive(source.ID) || c.isTerminalRoundActive(destination.ID) {
+		return TerminalSession{}, errors.New("transfer terminal: source and destination tasks must not have active model rounds")
+	}
+	return c.terminalSessionMgr.TransferTerminal(ctx, req)
+}
+
+func isTerminalTaskStatus(status TaskStatus) bool {
+	return status == TaskDone || status == TaskSkipped || status == TaskError || status == TaskBlocked
+}
+
 // SetPTYTerminalEnabled enables the local PTY broker. It is safe to call from
 // every pty:true terminal start; the first caller initializes the broker and
 // later calls are no-ops. Unattended runs deliberately expose no attach socket.
@@ -68,8 +113,9 @@ func (c *Coordinator) SetPTYTerminalEnabled(enabled bool) error {
 		return nil
 	}
 	broker, err := StartTerminalBrokerWithHooks(c.session.Workspace, c.terminalSessionMgr, TerminalBrokerHooks{
-		OnAttach: c.pauseTerminalTask,
-		OnDetach: c.resumeTerminalTask,
+		OnAttach:   c.pauseTerminalTask,
+		OnDetach:   c.resumeTerminalTask,
+		OnTransfer: c.TransferTerminal,
 	})
 	if err != nil {
 		return fmt.Errorf("start PTY terminal broker: %w", err)
@@ -242,11 +288,12 @@ func (c *Coordinator) blockTerminalCleanupTasks(runID string, cleanupErr error) 
 		return
 	}
 	for _, session := range sessions {
-		if session.OwnerTaskID == "" || (session.CleanupState != TerminalCleanupManual && session.State != TerminalSessionRunning && session.State != TerminalSessionUnknown && !session.Running) {
+		controllerTaskID := terminalControllerTaskID(session)
+		if controllerTaskID == "" || (session.CleanupState != TerminalCleanupManual && session.State != TerminalSessionRunning && session.State != TerminalSessionUnknown && !session.Running) {
 			continue
 		}
 		for _, item := range c.taskTracker.TodoList().Items() {
-			if item.ID != session.OwnerTaskID || item.Status == TaskDone || item.Status == TaskSkipped || item.Status == TaskBlocked {
+			if item.ID != controllerTaskID || item.Status == TaskDone || item.Status == TaskSkipped || item.Status == TaskBlocked {
 				continue
 			}
 			detail := c.FailureDetail(cleanupErr, "terminal_cleanup")
@@ -257,46 +304,48 @@ func (c *Coordinator) blockTerminalCleanupTasks(runID string, cleanupErr error) 
 }
 
 func (c *Coordinator) pauseTerminalTask(session TerminalSession) {
-	if session.OwnerTaskID == "" {
+	controllerTaskID := terminalControllerTaskID(session)
+	if controllerTaskID == "" {
 		return
 	}
 	c.initTerminalControl()
 	c.terminalControlMu.Lock()
-	if _, exists := c.terminalPauses[session.OwnerTaskID]; exists {
+	if _, exists := c.terminalPauses[controllerTaskID]; exists {
 		c.terminalControlMu.Unlock()
 		return
 	}
 	pause := &terminalTaskPause{resume: make(chan struct{})}
-	pause.cancel = c.terminalRoundCancels[session.OwnerTaskID]
-	c.terminalPauses[session.OwnerTaskID] = pause
+	pause.cancel = c.terminalRoundCancels[controllerTaskID]
+	c.terminalPauses[controllerTaskID] = pause
 	c.terminalControlMu.Unlock()
 	if pause.cancel != nil {
 		pause.cancel()
 	}
-	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(session.OwnerTaskID, TaskPaused, "waiting for human terminal handoff", ""); err == nil {
+	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(controllerTaskID, TaskPaused, "waiting for human terminal handoff", ""); err == nil {
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	}
-	c.report(c.newEvent("terminal_taken_over").withTodoID(session.OwnerTaskID).withMessage("human attached to PTY; model round paused"))
+	c.report(c.newEvent("terminal_taken_over").withTodoID(controllerTaskID).withMessage("human attached to PTY; model round paused"))
 }
 
 func (c *Coordinator) resumeTerminalTask(session TerminalSession) {
-	if session.OwnerTaskID == "" {
+	controllerTaskID := terminalControllerTaskID(session)
+	if controllerTaskID == "" {
 		return
 	}
 	c.terminalControlMu.Lock()
-	pause := c.terminalPauses[session.OwnerTaskID]
+	pause := c.terminalPauses[controllerTaskID]
 	if pause != nil {
-		delete(c.terminalPauses, session.OwnerTaskID)
+		delete(c.terminalPauses, controllerTaskID)
 		close(pause.resume)
 	}
 	c.terminalControlMu.Unlock()
 	if pause == nil {
 		return
 	}
-	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(session.OwnerTaskID, TaskInProgress, "human terminal handoff returned", ""); err == nil {
+	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(controllerTaskID, TaskInProgress, "human terminal handoff returned", ""); err == nil {
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	}
-	c.report(c.newEvent("terminal_released").withTodoID(session.OwnerTaskID).withMessage("human released PTY; resuming model round"))
+	c.report(c.newEvent("terminal_released").withTodoID(controllerTaskID).withMessage("human released PTY; resuming model round"))
 }
 
 func (c *Coordinator) waitForTerminalResume(ctx context.Context, taskID string) bool {

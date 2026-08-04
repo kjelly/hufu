@@ -19,6 +19,9 @@ import (
 
 var terminalWorkspace string
 var terminalListJSON bool
+var terminalTransferReason string
+var terminalTransferAuthorization string
+var terminalTransferMode string
 
 var terminalCmd = &cobra.Command{
 	Use:   "terminal",
@@ -35,18 +38,22 @@ var terminalAttachCmd = &cobra.Command{
 }
 
 type terminalListEntry struct {
-	ID                 string                     `json:"id"`
-	RunID              string                     `json:"run_id,omitempty"`
-	OwnerTaskID        string                     `json:"owner_task_id,omitempty"`
-	Agent              string                     `json:"agent,omitempty"`
-	State              team.TerminalSessionState  `json:"state"`
-	Custodian          team.TerminalCustodian     `json:"custodian"`
-	CleanupState       team.TerminalCleanupState  `json:"cleanup_state"`
-	CleanupReason      team.TerminalCleanupReason `json:"cleanup_reason,omitempty"`
-	CleanupRequestedAt time.Time                  `json:"cleanup_requested_at,omitempty"`
-	CleanupCompletedAt time.Time                  `json:"cleanup_completed_at,omitempty"`
-	OutputRefs         []team.ArtifactRef         `json:"output_refs,omitempty"`
-	Guidance           string                     `json:"guidance"`
+	ID                  string                     `json:"id"`
+	RunID               string                     `json:"run_id,omitempty"`
+	OwnerTaskID         string                     `json:"owner_task_id,omitempty"`
+	ControllerTaskID    string                     `json:"controller_task_id,omitempty"`
+	Agent               string                     `json:"agent,omitempty"`
+	State               team.TerminalSessionState  `json:"state"`
+	Custodian           team.TerminalCustodian     `json:"custodian"`
+	CleanupState        team.TerminalCleanupState  `json:"cleanup_state"`
+	CleanupReason       team.TerminalCleanupReason `json:"cleanup_reason,omitempty"`
+	CleanupRequestedAt  time.Time                  `json:"cleanup_requested_at,omitempty"`
+	CleanupCompletedAt  time.Time                  `json:"cleanup_completed_at,omitempty"`
+	HandoffReason       string                     `json:"handoff_reason,omitempty"`
+	HandoffAuthorizedBy string                     `json:"handoff_authorized_by,omitempty"`
+	HandedOffAt         time.Time                  `json:"handed_off_at,omitempty"`
+	OutputRefs          []team.ArtifactRef         `json:"output_refs,omitempty"`
+	Guidance            string                     `json:"guidance"`
 }
 
 var terminalListCmd = &cobra.Command{
@@ -58,6 +65,31 @@ var terminalListCmd = &cobra.Command{
 	},
 }
 
+var terminalTransferCmd = &cobra.Command{
+	Use:   "transfer <session-id> <destination-task-id>",
+	Short: "Operator-authorize transfer of a detached terminal session to a paused task",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if terminalTransferReason == "" || terminalTransferAuthorization == "" || terminalTransferMode == "" {
+			return fmt.Errorf("transfer requires --reason, --authorization, and --mode")
+		}
+		mode := team.TerminalMode(terminalTransferMode)
+		if mode != team.TerminalModePipe && mode != team.TerminalModePTY {
+			return fmt.Errorf("transfer mode must be %q or %q", team.TerminalModePipe, team.TerminalModePTY)
+		}
+		attachment, err := team.DialTerminalBroker(terminalWorkspacePath())
+		if err != nil {
+			return err
+		}
+		defer func() { _ = attachment.Close() }()
+		if err := attachment.Transfer(args[0], args[1], mode, terminalTransferReason, terminalTransferAuthorization); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Transferred terminal session %s to task %s.\n", args[0], args[1])
+		return err
+	},
+}
+
 func listTerminalSessions(out io.Writer, workspace string, asJSON bool) error {
 	sessions, err := team.LoadTerminalSessions(workspace)
 	if err != nil {
@@ -66,10 +98,11 @@ func listTerminalSessions(out io.Writer, workspace string, asJSON bool) error {
 	entries := make([]terminalListEntry, 0, len(sessions))
 	for _, session := range sessions {
 		entries = append(entries, terminalListEntry{
-			ID: session.ID, RunID: session.RunID, OwnerTaskID: session.OwnerTaskID, Agent: session.Agent,
+			ID: session.ID, RunID: session.RunID, OwnerTaskID: session.OwnerTaskID, ControllerTaskID: session.ControllerTaskID, Agent: session.Agent,
 			State: session.State, Custodian: session.Custodian, CleanupState: session.CleanupState,
 			CleanupReason: session.CleanupReason, CleanupRequestedAt: session.CleanupRequestedAt,
 			CleanupCompletedAt: session.CleanupCompletedAt, OutputRefs: session.OutputRefs,
+			HandoffReason: session.HandoffReason, HandoffAuthorizedBy: session.HandoffAuthorizedBy, HandedOffAt: session.HandedOffAt,
 			Guidance: terminalGuidance(session),
 		})
 	}
@@ -82,7 +115,7 @@ func listTerminalSessions(out io.Writer, workspace string, asJSON bool) error {
 		return err
 	}
 	for _, entry := range entries {
-		if _, err := fmt.Fprintf(out, "%s  state=%s cleanup=%s custody=%s  %s\n", entry.ID, entry.State, entry.CleanupState, entry.Custodian, entry.Guidance); err != nil {
+		if _, err := fmt.Fprintf(out, "%s  state=%s cleanup=%s custody=%s controller=%s  %s\n", entry.ID, entry.State, entry.CleanupState, entry.Custodian, entry.ControllerTaskID, entry.Guidance); err != nil {
 			return err
 		}
 	}
@@ -100,7 +133,10 @@ func terminalGuidance(session team.TerminalSession) string {
 		return "unknown after restart; reconcile before retry"
 	}
 	if session.Running || session.State == team.TerminalSessionRunning {
-		return "active; wait for exit or close it from the owner task"
+		if session.ControllerTaskID != "" && session.ControllerTaskID != session.OwnerTaskID {
+			return "active; explicitly handed off to another task"
+		}
+		return "active; wait for exit or close it from the controlling task"
 	}
 	return "exited; safe to retry"
 }
@@ -224,4 +260,8 @@ func init() {
 	terminalCmd.AddCommand(terminalAttachCmd)
 	terminalListCmd.Flags().BoolVar(&terminalListJSON, "json", false, "Output machine-readable JSON")
 	terminalCmd.AddCommand(terminalListCmd)
+	terminalTransferCmd.Flags().StringVar(&terminalTransferReason, "reason", "", "Reason for the operator-authorized handoff")
+	terminalTransferCmd.Flags().StringVar(&terminalTransferAuthorization, "authorization", "", "Operator authorization or incident reference")
+	terminalTransferCmd.Flags().StringVar(&terminalTransferMode, "mode", "", "Destination-accepted terminal mode: pipe or pty")
+	terminalCmd.AddCommand(terminalTransferCmd)
 }

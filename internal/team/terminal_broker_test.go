@@ -188,6 +188,56 @@ func TestTerminalAttachmentClientTransfersInputAndDetaches(t *testing.T) {
 	}
 }
 
+func TestTerminalBrokerTransferRequiresExplicitOperatorHandoff(t *testing.T) {
+	workspace := t.TempDir()
+	manager, err := NewTerminalSessionManager(workspace, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := NewTaskTracker()
+	items := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "source"}, {Agent: "worker", Desc: "destination"}})
+	if err := tracker.TodoList().TryUpdateStatusAndOutput(items[0].ID, TaskInProgress, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := tracker.TodoList().TryUpdateStatusAndOutput(items[0].ID, TaskPaused, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	coord := &Coordinator{terminalSessionMgr: manager, taskTracker: tracker, executionRunID: "run-transfer-broker"}
+	manager.SetActiveTaskRoundChecker(coord.isTerminalRoundActive)
+	session, err := manager.Start(WithTerminalTaskID(context.Background(), items[0].ID), TerminalStartRequest{
+		RunID: "run-transfer-broker", OwnerTaskID: items[0].ID, Mode: TerminalModePTY, Command: []string{"sh", "-c", "sleep 30"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got TerminalTransferRequest
+	broker, err := StartTerminalBrokerWithHooks(workspace, manager, TerminalBrokerHooks{
+		OnTransfer: func(ctx context.Context, req TerminalTransferRequest) (TerminalSession, error) {
+			got = req
+			return coord.TransferTerminal(ctx, req)
+		},
+	})
+	if err != nil {
+		skipTerminalBrokerSandboxRestriction(t, err)
+		t.Fatal(err)
+	}
+	defer func() { _ = broker.Close() }()
+	client, err := DialTerminalBroker(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+	if err := client.Transfer(session.ID, items[1].ID, TerminalModePTY, "repair handoff", "incident-789"); err != nil {
+		t.Fatal(err)
+	}
+	if got.SourceTaskID != items[0].ID || got.DestinationTaskID != items[1].ID || got.AcceptSessionID != session.ID || got.AcceptMode != TerminalModePTY || got.OperatorAuthorization != "incident-789" {
+		t.Fatalf("broker transfer request = %+v", got)
+	}
+	if err := manager.Close(WithTerminalTaskID(context.Background(), items[1].ID), session.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTerminalBrokerDisconnectKeepsTaskPaused(t *testing.T) {
 	workspace := t.TempDir()
 	manager, err := NewTerminalSessionManager(workspace, nil)

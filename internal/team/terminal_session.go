@@ -60,6 +60,7 @@ const (
 	TerminalCleanupManualEvent    TerminalLifecycleEvent = "terminal_cleanup_manual_intervention"
 	TerminalCustodyTransferred    TerminalLifecycleEvent = "terminal_custody_transferred"
 	TerminalLeaseRevoked          TerminalLifecycleEvent = "terminal_user_lease_revoked_for_cleanup"
+	TerminalTaskTransferred       TerminalLifecycleEvent = "terminal_task_transferred"
 )
 
 type TerminalCustodian string
@@ -151,36 +152,43 @@ type ProcessIdentity struct {
 
 // TerminalSession is a stateful child-process resource owned by one task.
 type TerminalSession struct {
-	ID                 string                `json:"id"`
-	RunID              string                `json:"run_id"`
-	OwnerTaskID        string                `json:"owner_task_id"`
-	Agent              string                `json:"agent"`
-	Command            []string              `json:"command"`
-	WorkingDir         string                `json:"working_dir,omitempty"`
-	StartedAt          time.Time             `json:"started_at"`
-	LastReadAt         time.Time             `json:"last_read_at,omitempty"`
-	ObservedAt         time.Time             `json:"observed_at,omitempty"`
-	ExitedAt           time.Time             `json:"exited_at,omitempty"`
-	ReconciledAt       time.Time             `json:"reconciled_at,omitempty"`
-	ReleasedAt         time.Time             `json:"released_at,omitempty"`
-	Running            bool                  `json:"running"`
-	State              TerminalSessionState  `json:"state"`
-	ExitCode           *int                  `json:"exit_code,omitempty"`
-	OutputRefs         []ArtifactRef         `json:"output_refs,omitempty"`
-	PID                int                   `json:"pid,omitempty"`
-	ProcessIdentity    *ProcessIdentity      `json:"process_identity,omitempty"`
-	Mode               TerminalMode          `json:"mode,omitempty"`
-	Controller         TerminalController    `json:"controller,omitempty"`
-	LeaseID            string                `json:"lease_id,omitempty"`
-	Rows               uint16                `json:"rows,omitempty"`
-	Cols               uint16                `json:"cols,omitempty"`
-	AttachedAt         time.Time             `json:"attached_at,omitempty"`
-	Custodian          TerminalCustodian     `json:"custodian,omitempty"`
-	CleanupState       TerminalCleanupState  `json:"cleanup_state,omitempty"`
-	CleanupReason      TerminalCleanupReason `json:"cleanup_reason,omitempty"`
-	CleanupRequestedAt time.Time             `json:"cleanup_requested_at,omitempty"`
-	CleanupCompletedAt time.Time             `json:"cleanup_completed_at,omitempty"`
-	CleanupError       string                `json:"cleanup_error,omitempty"`
+	ID          string `json:"id"`
+	RunID       string `json:"run_id"`
+	OwnerTaskID string `json:"owner_task_id"`
+	// ControllerTaskID is the task currently authorized to use the session.
+	// It normally equals OwnerTaskID. OwnerTaskID is immutable provenance; an
+	// explicit operator handoff changes only this field.
+	ControllerTaskID    string                `json:"controller_task_id,omitempty"`
+	Agent               string                `json:"agent"`
+	Command             []string              `json:"command"`
+	WorkingDir          string                `json:"working_dir,omitempty"`
+	StartedAt           time.Time             `json:"started_at"`
+	LastReadAt          time.Time             `json:"last_read_at,omitempty"`
+	ObservedAt          time.Time             `json:"observed_at,omitempty"`
+	ExitedAt            time.Time             `json:"exited_at,omitempty"`
+	ReconciledAt        time.Time             `json:"reconciled_at,omitempty"`
+	ReleasedAt          time.Time             `json:"released_at,omitempty"`
+	Running             bool                  `json:"running"`
+	State               TerminalSessionState  `json:"state"`
+	ExitCode            *int                  `json:"exit_code,omitempty"`
+	OutputRefs          []ArtifactRef         `json:"output_refs,omitempty"`
+	PID                 int                   `json:"pid,omitempty"`
+	ProcessIdentity     *ProcessIdentity      `json:"process_identity,omitempty"`
+	Mode                TerminalMode          `json:"mode,omitempty"`
+	Controller          TerminalController    `json:"controller,omitempty"`
+	LeaseID             string                `json:"lease_id,omitempty"`
+	Rows                uint16                `json:"rows,omitempty"`
+	Cols                uint16                `json:"cols,omitempty"`
+	AttachedAt          time.Time             `json:"attached_at,omitempty"`
+	Custodian           TerminalCustodian     `json:"custodian,omitempty"`
+	CleanupState        TerminalCleanupState  `json:"cleanup_state,omitempty"`
+	CleanupReason       TerminalCleanupReason `json:"cleanup_reason,omitempty"`
+	CleanupRequestedAt  time.Time             `json:"cleanup_requested_at,omitempty"`
+	CleanupCompletedAt  time.Time             `json:"cleanup_completed_at,omitempty"`
+	CleanupError        string                `json:"cleanup_error,omitempty"`
+	HandoffReason       string                `json:"handoff_reason,omitempty"`
+	HandoffAuthorizedBy string                `json:"handoff_authorized_by,omitempty"`
+	HandedOffAt         time.Time             `json:"handed_off_at,omitempty"`
 }
 
 // TerminalStartRequest describes a child process. ChildTimeout applies only to
@@ -234,6 +242,26 @@ type TerminalCleanupResult struct {
 type TerminalCleanupManager interface {
 	CleanupTaskTerminals(context.Context, TerminalCleanupRequest) ([]TerminalCleanupResult, error)
 	CleanupRunTerminals(context.Context, string, TerminalCleanupReason) ([]TerminalCleanupResult, error)
+}
+
+// TerminalTransferRequest is an operator-authorized, explicit handoff. It is
+// deliberately not included in TerminalManager, the interface exposed to the
+// model-facing terminal tool.
+type TerminalTransferRequest struct {
+	SessionID             string
+	RunID                 string
+	SourceTaskID          string
+	DestinationTaskID     string
+	AcceptSessionID       string
+	AcceptMode            TerminalMode
+	Reason                string
+	OperatorAuthorization string
+}
+
+// TerminalTransferManager is coordinator/operator-only authority for a
+// cross-task handoff. It never changes TerminalSession.OwnerTaskID.
+type TerminalTransferManager interface {
+	TransferTerminal(context.Context, TerminalTransferRequest) (TerminalSession, error)
 }
 
 // TerminalManager is the public contract used by coordinator services and tools.
@@ -354,7 +382,7 @@ func (m *TerminalSessionManager) restore() error {
 	changed := false
 	for i := range sessions {
 		s := sessions[i]
-		if s.Mode == "" || s.Controller == "" || s.Custodian == "" || s.CleanupState == "" {
+		if s.Mode == "" || s.Controller == "" || s.Custodian == "" || s.CleanupState == "" || s.ControllerTaskID == "" {
 			changed = true
 		}
 		normalizeTerminalSessionDefaults(&s)
@@ -389,6 +417,79 @@ func normalizeTerminalSessionDefaults(session *TerminalSession) {
 	if session.CleanupState == "" {
 		session.CleanupState = TerminalCleanupNone
 	}
+	if session.ControllerTaskID == "" {
+		session.ControllerTaskID = session.OwnerTaskID
+	}
+}
+
+func terminalControllerTaskID(session TerminalSession) string {
+	if session.ControllerTaskID != "" {
+		return session.ControllerTaskID
+	}
+	return session.OwnerTaskID
+}
+
+// TransferTerminal hands active control to a declared destination task after
+// the coordinator has validated task lifecycle state and operator authority.
+// The source remains the immutable provenance owner in OwnerTaskID.
+func (m *TerminalSessionManager) TransferTerminal(_ context.Context, req TerminalTransferRequest) (TerminalSession, error) {
+	if req.SessionID == "" || req.RunID == "" || req.SourceTaskID == "" || req.DestinationTaskID == "" {
+		return TerminalSession{}, errors.New("transfer terminal: session, run, source task, and destination task IDs are required")
+	}
+	if req.SourceTaskID == req.DestinationTaskID {
+		return TerminalSession{}, errors.New("transfer terminal: source and destination tasks must differ")
+	}
+	if req.AcceptSessionID != req.SessionID {
+		return TerminalSession{}, errors.New("transfer terminal: destination must explicitly accept the session ID")
+	}
+	if req.AcceptMode == "" {
+		return TerminalSession{}, errors.New("transfer terminal: destination must explicitly accept the terminal mode")
+	}
+	if req.Reason == "" || req.OperatorAuthorization == "" {
+		return TerminalSession{}, errors.New("transfer terminal: reason and operator authorization are required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed, ok := m.sessions[req.SessionID]
+	if !ok {
+		return TerminalSession{}, fmt.Errorf("transfer terminal session %q: session not found", req.SessionID)
+	}
+	s := &managed.session
+	normalizeTerminalSessionDefaults(s)
+	if s.RunID != req.RunID {
+		return TerminalSession{}, fmt.Errorf("transfer terminal session %q: run %q does not match requested run %q", s.ID, s.RunID, req.RunID)
+	}
+	if s.ControllerTaskID != req.SourceTaskID {
+		return TerminalSession{}, fmt.Errorf("transfer terminal session %q: source task %q does not control it", s.ID, req.SourceTaskID)
+	}
+	if !s.Running || s.State != TerminalSessionRunning {
+		return TerminalSession{}, fmt.Errorf("transfer terminal session %q is not running", s.ID)
+	}
+	if s.Mode != req.AcceptMode {
+		return TerminalSession{}, fmt.Errorf("transfer terminal session %q mode %q was not accepted", s.ID, s.Mode)
+	}
+	if s.Controller == TerminalControllerUser || s.LeaseID != "" {
+		return TerminalSession{}, fmt.Errorf("transfer terminal session %q: user lease must be released first", s.ID)
+	}
+	if s.Custodian != TerminalCustodianOwner || s.CleanupState != TerminalCleanupNone || managed.cleanupInProgress {
+		return TerminalSession{}, fmt.Errorf("transfer terminal session %q is unavailable during custody or cleanup", s.ID)
+	}
+	if m.activeTaskRound != nil && m.activeTaskRound(req.SourceTaskID) {
+		return TerminalSession{}, fmt.Errorf("transfer terminal session %q: source task %q still has an active model round", s.ID, req.SourceTaskID)
+	}
+	s.ControllerTaskID = req.DestinationTaskID
+	s.HandoffReason = req.Reason
+	s.HandoffAuthorizedBy = req.OperatorAuthorization
+	s.HandedOffAt = time.Now().UTC()
+	if err := m.persistLocked(); err != nil {
+		return TerminalSession{}, err
+	}
+	copy := deepCopyTerminalSession(*s)
+	m.emit(string(TerminalTaskTransferred), copy, map[string]interface{}{
+		"source_task_id": req.SourceTaskID, "destination_task_id": req.DestinationTaskID,
+		"reason": req.Reason, "operator_authorization": req.OperatorAuthorization,
+	})
+	return copy, nil
 }
 
 // SetActiveTaskRoundChecker lets coordinator lifecycle code prevent cleanup
@@ -404,7 +505,10 @@ func (m *TerminalSessionManager) CleanupTaskTerminals(ctx context.Context, req T
 	if req.OwnerTaskID == "" {
 		return nil, errors.New("cleanup terminal sessions: owner task ID is required")
 	}
-	return m.cleanupMatching(ctx, req, func(s TerminalSession) bool { return s.OwnerTaskID == req.OwnerTaskID })
+	return m.cleanupMatching(ctx, req, func(s TerminalSession) bool {
+		normalizeTerminalSessionDefaults(&s)
+		return s.ControllerTaskID == req.OwnerTaskID
+	})
 }
 
 func (m *TerminalSessionManager) CleanupRunTerminals(ctx context.Context, runID string, reason TerminalCleanupReason) ([]TerminalCleanupResult, error) {
@@ -470,9 +574,9 @@ func (m *TerminalSessionManager) cleanupOne(ctx context.Context, id string, req 
 		m.mu.Unlock()
 		return TerminalCleanupResult{}, fmt.Errorf("cleanup terminal session %q: session not found", id)
 	}
-	if !req.allowActiveRound && m.activeTaskRound != nil && m.activeTaskRound(managed.session.OwnerTaskID) {
+	if !req.allowActiveRound && m.activeTaskRound != nil && m.activeTaskRound(managed.session.ControllerTaskID) {
 		m.mu.Unlock()
-		return TerminalCleanupResult{}, fmt.Errorf("cleanup terminal session %q: owner task %q still has an active model round", id, managed.session.OwnerTaskID)
+		return TerminalCleanupResult{}, fmt.Errorf("cleanup terminal session %q: controlling task %q still has an active model round", id, managed.session.ControllerTaskID)
 	}
 	if managed.cleanupInProgress {
 		m.mu.Unlock()
@@ -777,7 +881,7 @@ func (m *TerminalSessionManager) Start(ctx context.Context, req TerminalStartReq
 	now := time.Now().UTC()
 	identity, _ := getProcessIdentity(cmd.Process.Pid)
 	managed := &managedTerminalSession{session: TerminalSession{
-		ID: id, RunID: req.RunID, OwnerTaskID: req.OwnerTaskID, Agent: req.Agent,
+		ID: id, RunID: req.RunID, OwnerTaskID: req.OwnerTaskID, ControllerTaskID: req.OwnerTaskID, Agent: req.Agent,
 		Command: append([]string(nil), req.Command...), WorkingDir: req.WorkingDir,
 		StartedAt: now, Running: true, State: TerminalSessionRunning, PID: cmd.Process.Pid,
 		ProcessIdentity: identity, Mode: req.Mode, Controller: TerminalControllerAgent, Rows: req.Rows, Cols: req.Cols,
@@ -1227,7 +1331,8 @@ func (m *TerminalSessionManager) RequireTaskClosed(taskID string) error {
 	defer m.mu.RUnlock()
 	for _, managed := range m.sessions {
 		s := managed.session
-		if s.OwnerTaskID == taskID && (s.State == TerminalSessionRunning || s.State == TerminalSessionUnknown || s.Running) {
+		normalizeTerminalSessionDefaults(&s)
+		if s.ControllerTaskID == taskID && (s.State == TerminalSessionRunning || s.State == TerminalSessionUnknown || s.Running) {
 			return fmt.Errorf("task %q has unclosed terminal session %q (%s); close or reconcile it before retrying or completing", taskID, s.ID, s.State)
 		}
 	}
@@ -1256,12 +1361,13 @@ func (m *TerminalSessionManager) ownerSessionLocked(ctx context.Context, id, sup
 	if !ok {
 		return nil, fmt.Errorf("terminal session %q not found", id)
 	}
-	owner := terminalTaskID(ctx)
-	if owner == "" {
-		owner = suppliedTaskID
+	controller := terminalTaskID(ctx)
+	if controller == "" {
+		controller = suppliedTaskID
 	}
-	if owner == "" || owner != managed.session.OwnerTaskID {
-		return nil, fmt.Errorf("terminal session %q belongs to task %q", id, managed.session.OwnerTaskID)
+	normalizeTerminalSessionDefaults(&managed.session)
+	if controller == "" || controller != managed.session.ControllerTaskID {
+		return nil, fmt.Errorf("terminal session %q belongs to task %q (currently controlled by task %q)", id, managed.session.OwnerTaskID, managed.session.ControllerTaskID)
 	}
 	if managed.session.Custodian != "" && managed.session.Custodian != TerminalCustodianOwner {
 		return nil, fmt.Errorf("terminal session %q is under %s custody", id, managed.session.Custodian)
@@ -1296,16 +1402,20 @@ func (m *TerminalSessionManager) emit(eventType string, session TerminalSession,
 		return
 	}
 	envelope := map[string]interface{}{
-		"session_id":     session.ID,
-		"run_id":         session.RunID,
-		"owner_task_id":  session.OwnerTaskID,
-		"agent":          session.Agent,
-		"state":          session.State,
-		"working_dir":    session.WorkingDir,
-		"output_refs":    session.OutputRefs,
-		"custodian":      session.Custodian,
-		"cleanup_state":  session.CleanupState,
-		"cleanup_reason": session.CleanupReason,
+		"session_id":            session.ID,
+		"run_id":                session.RunID,
+		"owner_task_id":         session.OwnerTaskID,
+		"controller_task_id":    session.ControllerTaskID,
+		"agent":                 session.Agent,
+		"state":                 session.State,
+		"working_dir":           session.WorkingDir,
+		"output_refs":           session.OutputRefs,
+		"custodian":             session.Custodian,
+		"cleanup_state":         session.CleanupState,
+		"cleanup_reason":        session.CleanupReason,
+		"handoff_reason":        session.HandoffReason,
+		"handoff_authorized_by": session.HandoffAuthorizedBy,
+		"handed_off_at":         session.HandedOffAt,
 	}
 	for k, v := range payload {
 		envelope[k] = v

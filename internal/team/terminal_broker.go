@@ -14,12 +14,16 @@ import (
 const terminalBrokerSocket = "terminal-broker.sock"
 
 type terminalBrokerRequest struct {
-	Action    string
-	SessionID string
-	LeaseID   string
-	Data      string
-	Rows      uint16
-	Cols      uint16
+	Action                string
+	SessionID             string
+	LeaseID               string
+	Data                  string
+	Rows                  uint16
+	Cols                  uint16
+	DestinationTaskID     string
+	AcceptMode            TerminalMode
+	Reason                string
+	OperatorAuthorization string
 }
 
 type terminalBrokerResponse struct {
@@ -41,8 +45,9 @@ type TerminalBroker struct {
 // TerminalBrokerHooks bind a terminal handoff to coordinator task state.
 // Hooks execute only after the lease transition has succeeded.
 type TerminalBrokerHooks struct {
-	OnAttach func(TerminalSession)
-	OnDetach func(TerminalSession)
+	OnAttach   func(TerminalSession)
+	OnDetach   func(TerminalSession)
+	OnTransfer func(context.Context, TerminalTransferRequest) (TerminalSession, error)
 }
 
 func StartTerminalBroker(workspace string, manager *TerminalSessionManager) (*TerminalBroker, error) {
@@ -191,6 +196,26 @@ func (b *TerminalBroker) request(req *terminalBrokerRequest, sessionID, leaseID 
 		}
 		*sessionID, *leaseID = "", ""
 		return terminalBrokerResponse{}
+	case "transfer":
+		if *leaseID != "" {
+			return terminalBrokerResponse{Error: "terminal broker transfer requires a detached operator"}
+		}
+		if b.hooks.OnTransfer == nil {
+			return terminalBrokerResponse{Error: "terminal transfer is unavailable"}
+		}
+		session, err := b.session(req.SessionID)
+		if err != nil {
+			return terminalBrokerResponse{Error: err.Error()}
+		}
+		_, err = b.hooks.OnTransfer(context.Background(), TerminalTransferRequest{
+			SessionID: req.SessionID, RunID: session.RunID, SourceTaskID: terminalControllerTaskID(session),
+			DestinationTaskID: req.DestinationTaskID, AcceptSessionID: req.SessionID, AcceptMode: req.AcceptMode,
+			Reason: req.Reason, OperatorAuthorization: req.OperatorAuthorization,
+		})
+		if err != nil {
+			return terminalBrokerResponse{Error: err.Error()}
+		}
+		return terminalBrokerResponse{}
 	default:
 		return terminalBrokerResponse{Error: fmt.Sprintf("unknown terminal broker action %q", req.Action)}
 	}
@@ -228,5 +253,5 @@ func (b *TerminalBroker) read(id string) (TerminalReadResult, error) {
 	if err != nil {
 		return TerminalReadResult{}, err
 	}
-	return b.manager.Read(WithTerminalTaskID(context.Background(), session.OwnerTaskID), id)
+	return b.manager.Read(WithTerminalTaskID(context.Background(), terminalControllerTaskID(session)), id)
 }

@@ -85,6 +85,24 @@ func (a *TerminalAttachment) Resize(rows, cols uint16) error {
 	return err
 }
 
+// Transfer requests an explicit, operator-authorized handoff through the
+// coordinator broker. The connection must not hold a human terminal lease.
+func (a *TerminalAttachment) Transfer(sessionID, destinationTaskID string, acceptMode TerminalMode, reason, authorization string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return fmt.Errorf("terminal attachment is closed")
+	}
+	if a.leaseID != "" {
+		return fmt.Errorf("detach before transferring a terminal session")
+	}
+	_, err := a.requestLocked(terminalBrokerRequest{
+		Action: "transfer", SessionID: sessionID, DestinationTaskID: destinationTaskID,
+		AcceptMode: acceptMode, Reason: reason, OperatorAuthorization: authorization,
+	})
+	return err
+}
+
 // Detach releases the user lease and allows the coordinator to resume the
 // paused agent. It is safe to call more than once.
 func (a *TerminalAttachment) Detach() error {
