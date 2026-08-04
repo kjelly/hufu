@@ -218,6 +218,10 @@ type TerminalCleanupRequest struct {
 	Reason      TerminalCleanupReason
 	GracePeriod time.Duration
 	ForceAfter  time.Duration
+	// allowActiveRound is coordinator-only shutdown custody. It is never
+	// supplied by a worker-facing terminal action; cleanupOne atomically
+	// revokes owner custody before it signals the child.
+	allowActiveRound bool
 }
 
 type TerminalCleanupResult struct {
@@ -380,6 +384,17 @@ func (m *TerminalSessionManager) CleanupRunTerminals(ctx context.Context, runID 
 	return m.cleanupMatching(ctx, TerminalCleanupRequest{Reason: reason}, func(s TerminalSession) bool { return s.RunID == runID })
 }
 
+// CleanupRunTerminalsAfterRoundTimeout is the coordinator's bounded-shutdown
+// escape hatch. The owner round was already cancelled but did not unregister
+// in time. Holding the manager mutex while switching custody prevents any
+// later owner tool call from writing to the terminal before termination.
+func (m *TerminalSessionManager) CleanupRunTerminalsAfterRoundTimeout(ctx context.Context, runID string, reason TerminalCleanupReason) ([]TerminalCleanupResult, error) {
+	if runID == "" {
+		return nil, errors.New("cleanup terminal sessions: run ID is required")
+	}
+	return m.cleanupMatching(ctx, TerminalCleanupRequest{Reason: reason, allowActiveRound: true}, func(s TerminalSession) bool { return s.RunID == runID })
+}
+
 func (m *TerminalSessionManager) cleanupMatching(ctx context.Context, req TerminalCleanupRequest, match func(TerminalSession) bool) ([]TerminalCleanupResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -425,7 +440,7 @@ func (m *TerminalSessionManager) cleanupOne(ctx context.Context, id string, req 
 		m.mu.Unlock()
 		return TerminalCleanupResult{}, fmt.Errorf("cleanup terminal session %q: session not found", id)
 	}
-	if m.activeTaskRound != nil && m.activeTaskRound(managed.session.OwnerTaskID) {
+	if !req.allowActiveRound && m.activeTaskRound != nil && m.activeTaskRound(managed.session.OwnerTaskID) {
 		m.mu.Unlock()
 		return TerminalCleanupResult{}, fmt.Errorf("cleanup terminal session %q: owner task %q still has an active model round", id, managed.session.OwnerTaskID)
 	}

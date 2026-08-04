@@ -96,6 +96,8 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 
 	taskCtx, cancel := tools.WithInteractiveAwareTimeout(ctx, agentTimeout)
 	defer cancel()
+	taskCtx, roundCancel := context.WithCancel(taskCtx)
+	c.registerTerminalRound(todoID, roundCancel)
 
 	taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 	taskCtx = context.WithValue(taskCtx, modelKey{}, directModel)
@@ -153,15 +155,17 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	c.compileShadowWorker(taskCtx, workerInput, prompt)
 
 	output, steps, err := c.runAgentWithStatusAndHistory(taskCtx, ag, resolvedName, prompt, nil, timing)
+	roundCancel()
+	c.unregisterTerminalRound(todoID)
 	duration, modelTime, toolTime := timing.snapshot()
-	if err == nil && c.terminalSessionMgr != nil {
-		if terminalErr := c.terminalSessionMgr.RequireTaskClosed(todoID); terminalErr != nil {
-			err = terminalErr
-		}
-	}
+	err, terminalBlocked := c.finalizeTaskTerminalResources(ctx, todoID, err)
 	if err != nil {
 		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), usageFromSteps(steps))
-		c.PersistFailureWithClass(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), RetryNone, FailureExecution)
+		if terminalBlocked {
+			c.PersistFailureWithClassAndStatus(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), ReconcileOnly, FailureExecution, TaskBlocked)
+		} else {
+			c.PersistFailureWithClass(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), RetryNone, FailureExecution)
+		}
 		c.updateTodoTiming(todoID, modelTime, toolTime)
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		c.report(c.newEvent("error").withAgent(resolvedName).withMessage(err.Error()).withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
@@ -933,6 +937,9 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 			result = recovered
 			steps = append(steps, recoveredSteps...)
 		} else {
+			if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunShutdown); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
 			c.finalizeRemainingTasks()
 			c.saveHistoryAndSession(ctx, steps)
 			c.recordRunAborted(err)
@@ -944,6 +951,9 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	result, steps = c.ensureFinished(ctx, &orchDefCopy, result, steps)
 	if ctx.Err() != nil && !c.finishCalled.Load() {
+		if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunCancelled); cleanupErr != nil {
+			c.report(c.newEvent("error").withMessage("terminal cleanup error: " + cleanupErr.Error()))
+		}
 		c.finalizeRemainingTasks()
 		c.saveHistoryAndSession(ctx, steps)
 		c.recordRunAborted(ctx.Err())
@@ -1007,6 +1017,9 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 			result = recovered
 			steps = append(steps, recoveredSteps...)
 		} else {
+			if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunShutdown); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
 			c.finalizeRemainingTasks()
 			c.saveHistoryAndSession(ctx, steps)
 			c.recordRunAborted(err)
@@ -1018,6 +1031,9 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 
 	result, steps = c.ensureFinished(ctx, &orchDefCopy, result, steps)
 	if ctx.Err() != nil && !c.finishCalled.Load() {
+		if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunCancelled); cleanupErr != nil {
+			c.report(c.newEvent("error").withMessage("terminal cleanup error: " + cleanupErr.Error()))
+		}
 		c.finalizeRemainingTasks()
 		c.saveHistoryAndSession(ctx, steps)
 		c.recordRunAborted(ctx.Err())

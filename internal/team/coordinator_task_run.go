@@ -568,13 +568,7 @@ retryLoop:
 			closeTranscript()
 			continue
 		}
-		terminalBlocked := false
-		if c.terminalSessionMgr != nil {
-			if terminalErr := c.terminalSessionMgr.RequireTaskClosed(todoID); terminalErr != nil {
-				err = terminalErr
-				terminalBlocked = true
-			}
-		}
+		err, terminalBlocked := c.finalizeTaskTerminalResources(parentCtx, todoID, err)
 
 		if err == nil {
 			var typedRes *TaskResult

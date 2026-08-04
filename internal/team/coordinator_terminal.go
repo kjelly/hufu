@@ -2,7 +2,10 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
+	"time"
 )
 
 // terminalTaskPause coordinates a model round interrupted for a human terminal
@@ -20,6 +23,9 @@ func (c *Coordinator) initTerminalControl() {
 	}
 	if c.terminalRoundCancels == nil {
 		c.terminalRoundCancels = make(map[string]context.CancelFunc)
+	}
+	if c.terminalRoundDone == nil {
+		c.terminalRoundDone = make(map[string]chan struct{})
 	}
 }
 
@@ -78,6 +84,7 @@ func (c *Coordinator) registerTerminalRound(taskID string, cancel context.Cancel
 	c.terminalControlMu.Lock()
 	defer c.terminalControlMu.Unlock()
 	c.terminalRoundCancels[taskID] = cancel
+	c.terminalRoundDone[taskID] = make(chan struct{})
 	if paused := c.terminalPauses[taskID]; paused != nil {
 		cancel()
 	}
@@ -86,7 +93,158 @@ func (c *Coordinator) registerTerminalRound(taskID string, cancel context.Cancel
 func (c *Coordinator) unregisterTerminalRound(taskID string) {
 	c.terminalControlMu.Lock()
 	delete(c.terminalRoundCancels, taskID)
+	if done := c.terminalRoundDone[taskID]; done != nil {
+		delete(c.terminalRoundDone, taskID)
+		close(done)
+	}
 	c.terminalControlMu.Unlock()
+}
+
+// finalizeTaskTerminalResources contains a terminal left behind by a task
+// after its model round has stopped. It deliberately preserves taskErr: a
+// successful cleanup proves containment, never successful task execution.
+// The returned bool is true only when the resource still needs human
+// intervention, which prevents an automatic retry from racing that session.
+func (c *Coordinator) finalizeTaskTerminalResources(ctx context.Context, todoID string, taskErr error) (error, bool) {
+	if c == nil || c.terminalSessionMgr == nil {
+		return taskErr, false
+	}
+	if taskErr == nil {
+		if err := c.terminalSessionMgr.RequireTaskClosed(todoID); err != nil {
+			taskErr = err
+		}
+	}
+	if taskErr == nil {
+		return nil, false
+	}
+	reason := TerminalCleanupTaskFailed
+	if errors.Is(taskErr, context.Canceled) || errors.Is(taskErr, context.DeadlineExceeded) {
+		reason = TerminalCleanupTaskCancelled
+	} else if strings.Contains(taskErr.Error(), "unclosed terminal session") {
+		reason = TerminalCleanupTaskIncomplete
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	results, cleanupErr := c.terminalSessionMgr.CleanupTaskTerminals(cleanupCtx, TerminalCleanupRequest{
+		OwnerTaskID: todoID,
+		Reason:      reason,
+		GracePeriod: time.Second,
+		ForceAfter:  5 * time.Second,
+	})
+	if cleanupErr != nil {
+		return errors.Join(taskErr, fmt.Errorf("terminal cleanup: %w", cleanupErr)), true
+	}
+	for _, result := range results {
+		if result.ManualAction {
+			return errors.Join(taskErr, fmt.Errorf("terminal cleanup requires manual intervention for session %q", result.Session.ID)), true
+		}
+	}
+	return taskErr, false
+}
+
+// cleanupRunTerminalResources stops model rounds, prevents new broker
+// attachments, and contains every live terminal before run finalization.
+func (c *Coordinator) cleanupRunTerminalResources(reason TerminalCleanupReason) error {
+	if c == nil || c.terminalSessionMgr == nil {
+		return nil
+	}
+	c.initTerminalControl()
+	c.terminalControlMu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(c.terminalRoundCancels))
+	roundDone := make([]<-chan struct{}, 0, len(c.terminalRoundDone))
+	for _, cancel := range c.terminalRoundCancels {
+		cancels = append(cancels, cancel)
+	}
+	for _, done := range c.terminalRoundDone {
+		roundDone = append(roundDone, done)
+	}
+	broker := c.terminalBroker
+	c.terminalBroker = nil
+	c.ptyTerminalEnabled = false
+	c.terminalControlMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	// Closing the listener first prevents a new lease from appearing between
+	// cleanup selection and the manager's lease revocation.
+	if broker != nil {
+		_ = broker.Close()
+	}
+	roundShutdownTimeout := c.terminalRoundShutdownTimeout
+	if roundShutdownTimeout <= 0 {
+		roundShutdownTimeout = 15 * time.Second
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), roundShutdownTimeout)
+	defer cancel()
+	roundTimedOut := false
+	for _, done := range roundDone {
+		select {
+		case <-done:
+		case <-cleanupCtx.Done():
+			roundTimedOut = true
+		}
+		if roundTimedOut {
+			break
+		}
+	}
+	runID := c.executionRunID
+	if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		runID = c.taskTracker.TodoList().RunID()
+	}
+	if roundTimedOut {
+		// The owner has already been cancelled but failed to acknowledge it.
+		// Block it before containment; the manager then atomically revokes
+		// owner custody so a late tool call is denied while the child dies.
+		c.blockTerminalCleanupTasks(runID, fmt.Errorf("terminal model round did not stop before shutdown deadline"))
+		cleanupCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+	}
+	var results []TerminalCleanupResult
+	var err error
+	if roundTimedOut {
+		results, err = c.terminalSessionMgr.CleanupRunTerminalsAfterRoundTimeout(cleanupCtx, runID, reason)
+	} else {
+		results, err = c.terminalSessionMgr.CleanupRunTerminals(cleanupCtx, runID, reason)
+	}
+	if err != nil {
+		cleanupErr := fmt.Errorf("cleanup run terminals: %w", err)
+		c.blockTerminalCleanupTasks(runID, cleanupErr)
+		return cleanupErr
+	}
+	for _, result := range results {
+		if result.ManualAction {
+			cleanupErr := fmt.Errorf("terminal cleanup requires manual intervention for session %q", result.Session.ID)
+			c.blockTerminalCleanupTasks(runID, cleanupErr)
+			return cleanupErr
+		}
+	}
+	return nil
+}
+
+// blockTerminalCleanupTasks makes failed shutdown containment visible in the
+// canonical task state. A later finalizeRemainingTasks call intentionally
+// leaves TaskBlocked untouched, so the operator evidence is not overwritten.
+func (c *Coordinator) blockTerminalCleanupTasks(runID string, cleanupErr error) {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil || c.terminalSessionMgr == nil || cleanupErr == nil {
+		return
+	}
+	sessions, err := c.terminalSessionMgr.List(context.Background(), runID)
+	if err != nil {
+		return
+	}
+	for _, session := range sessions {
+		if session.OwnerTaskID == "" || (session.CleanupState != TerminalCleanupManual && session.State != TerminalSessionRunning && session.State != TerminalSessionUnknown && !session.Running) {
+			continue
+		}
+		for _, item := range c.taskTracker.TodoList().Items() {
+			if item.ID != session.OwnerTaskID || item.Status == TaskDone || item.Status == TaskSkipped || item.Status == TaskBlocked {
+				continue
+			}
+			detail := c.FailureDetail(cleanupErr, "terminal_cleanup")
+			c.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, detail, NeedsHuman, FailureExecution, TaskBlocked)
+			break
+		}
+	}
 }
 
 func (c *Coordinator) pauseTerminalTask(session TerminalSession) {
