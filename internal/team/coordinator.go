@@ -979,6 +979,13 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		})
 	}
 
+	// Every tool an agent is shown must be in its runtime allowlist. Checking it
+	// here costs nothing and surfaces a violation before the first model call,
+	// rather than as a mid-run task failure that looks like a model mistake.
+	if err := c.validateToolGrants(); err != nil {
+		return nil, fmt.Errorf("tool grant validation failed: %w", err)
+	}
+
 	return c, nil
 }
 

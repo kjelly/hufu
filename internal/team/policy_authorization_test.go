@@ -92,7 +92,16 @@ func TestRegisterProviderSecretsAddsResolvedSources(t *testing.T) {
 	}
 }
 
-func TestAgentSpecificMCPStreamUsesMCPPolicyForCasePreservingAgent(t *testing.T) {
+// TestAgentSpecificMCPCallUsesMCPPolicyForCasePreservingAgent pins the routing
+// rule: an agent-specific MCP tool must be authorized through AuthorizeMCPCall
+// (under the canonical lowercased agent:tool key) and never through the built-in
+// AuthorizeToolCall path, even when the agent's declared name preserves case.
+//
+// The decision is made in policyGatedTool.Run rather than in the stream's
+// OnToolCall callback: an error returned from that callback aborts the entire
+// model round, so a denial there destroyed the whole attempt instead of being
+// something the model could adapt to. See internal/team/tool_policy_gate.go.
+func TestAgentSpecificMCPCallUsesMCPPolicyForCasePreservingAgent(t *testing.T) {
 	policy := &distinctMCPPolicy{}
 	session := &TeamSession{
 		Workspace: t.TempDir(),
@@ -103,10 +112,18 @@ func TestAgentSpecificMCPStreamUsesMCPPolicyForCasePreservingAgent(t *testing.T)
 	}
 	c := &Coordinator{session: session, taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
 	c.SetAuthorizationPolicy(policy)
+
 	ctx := c.withEffectiveToolsAllowed(context.Background(), session.Agents["helper"])
-	output, _, err := c.runAgentWithStatusAndHistory(ctx, agentSpecificStreamTestAgent{}, "helper", "run", nil, &taskTiming{})
-	if err != nil || output != "stream-ok" {
-		t.Fatalf("stream output=%q err=%v", output, err)
+	ctx = context.WithValue(ctx, tools.AgentNameKey, "helper")
+	inner := &recordingTool{name: "run-tests"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
+
+	resp, err := gated.Run(ctx, fantasy.ToolCall{ID: "mcp-1", Name: "run-tests", Input: `{}`})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if resp.IsError || !inner.ran {
+		t.Fatalf("MCP-allowed tool should have run: isError=%t ran=%t content=%q", resp.IsError, inner.ran, resp.Content)
 	}
 	if policy.toolCalls != 0 || policy.mcpCalls != 1 {
 		t.Fatalf("policy routing tool=%d mcp=%d, want tool=0 mcp=1", policy.toolCalls, policy.mcpCalls)

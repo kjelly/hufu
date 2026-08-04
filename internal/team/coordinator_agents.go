@@ -72,7 +72,7 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 	}
 
 	getAgModelID := c.resolveAgentModel(agentDef, "")
-	ag, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(getAgModelID), agent.AgentConfig{
+	ag, err := c.createGatedAgent(ctx, c.providerManager.GetProvider(getAgModelID), agent.AgentConfig{
 		Def:        agentDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,

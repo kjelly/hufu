@@ -547,42 +547,47 @@ type AcceptanceContractRevision struct {
 
 // RunMetrics is a queryable snapshot of reliability counters for a run.
 type RunMetrics struct {
-	RetriesByFailureClass              map[TaskFailureClass]int    `json:"retries_by_failure_class,omitempty"`
-	FailuresByClass                    map[TaskFailureClass]int    `json:"failures_by_class,omitempty"`
-	FailuresByPhase                    map[string]int              `json:"failures_by_phase,omitempty"`
-	RetryAttemptsAvoidedByDisposition  map[RetryDisposition]int    `json:"retry_attempts_avoided_by_disposition,omitempty"`
-	Compactions                        int                         `json:"compactions"`
-	RepeatedFailureFingerprints        int                         `json:"repeated_failure_fingerprints,omitempty"`
-	SystemicFingerprintsEscalated      int                         `json:"systemic_fingerprints_escalated,omitempty"`
-	RecoveryStrategyChanges            int                         `json:"recovery_strategy_changes,omitempty"`
-	LastRecoveryStrategies             map[string]RecoveryStrategy `json:"last_recovery_strategies,omitempty"`
-	DiagnosticTasksSinceProgress       int                         `json:"diagnostic_tasks_since_progress,omitempty"`
-	RepairAttemptsByCriterion          map[string]int              `json:"repair_attempts_by_criterion,omitempty"`
-	AntiThrashingWarnings              int                         `json:"anti_thrashing_warnings,omitempty"`
-	AcceptanceCriteriaPassed           int                         `json:"acceptance_criteria_passed,omitempty"`
-	TasksByCriterion                   map[string]int              `json:"tasks_by_criterion,omitempty"`
-	ProtocolRepairsAttempted           int                         `json:"protocol_repairs_attempted,omitempty"`
-	ProtocolRepairsSucceeded           int                         `json:"protocol_repairs_succeeded,omitempty"`
-	ProtocolRepairFailuresByReason     map[RepairFailureReason]int `json:"protocol_repair_failures_by_reason,omitempty"`
-	ExecutionReplaysAvoided            int                         `json:"execution_replays_avoided,omitempty"`
-	ReplayAttempts                     int                         `json:"replay_attempts,omitempty"`
-	UnsafeReplaysDetected              int                         `json:"unsafe_replays_detected,omitempty"`
-	ReconciliationAttempts             int                         `json:"reconciliation_attempts,omitempty"`
-	ReconciliationSucceeded            int                         `json:"reconciliation_succeeded,omitempty"`
-	TimeoutTasksRecovered              int                         `json:"timeout_tasks_recovered_through_reconciliation,omitempty"`
-	PreflightFailuresCaught            int                         `json:"preflight_failures_caught_before_dispatch,omitempty"`
-	NonAssertingVerifiersRejected      int                         `json:"non_asserting_verifiers_rejected,omitempty"`
-	VerificationsOverturned            int                         `json:"verifications_overturned_by_evidence_precedence,omitempty"`
-	TypedVerifiers                     int                         `json:"typed_verifiers,omitempty"`
-	TasksWithVerifier                  int                         `json:"tasks_with_verifier,omitempty"`
-	TypedVerifierAdoptionRate          float64                     `json:"typed_verifier_adoption_rate,omitempty"`
-	TasksDoneWithoutObjectiveVerifier  int                         `json:"tasks_done_without_objective_verifier,omitempty"`
-	RepeatedFailureFingerprintsStopped int                         `json:"repeated_failure_fingerprints_stopped,omitempty"`
-	CancelledTasksExcludedFromRetries  int                         `json:"cancelled_tasks_excluded_from_retry_statistics,omitempty"`
-	WorkerSuccessRejected              int                         `json:"worker_success_rejected_by_verification,omitempty"`
-	WeakVerifierWarnings               int                         `json:"weak_verifier_warnings,omitempty"`
-	TimeSinceCriterionProgressSeconds  int64                       `json:"time_since_criterion_progress_seconds,omitempty"`
-	TokensSinceCriterionProgress       int64                       `json:"tokens_since_criterion_progress,omitempty"`
+	RetriesByFailureClass             map[TaskFailureClass]int    `json:"retries_by_failure_class,omitempty"`
+	FailuresByClass                   map[TaskFailureClass]int    `json:"failures_by_class,omitempty"`
+	FailuresByPhase                   map[string]int              `json:"failures_by_phase,omitempty"`
+	RetryAttemptsAvoidedByDisposition map[RetryDisposition]int    `json:"retry_attempts_avoided_by_disposition,omitempty"`
+	Compactions                       int                         `json:"compactions"`
+	RepeatedFailureFingerprints       int                         `json:"repeated_failure_fingerprints,omitempty"`
+	SystemicFingerprintsEscalated     int                         `json:"systemic_fingerprints_escalated,omitempty"`
+	RecoveryStrategyChanges           int                         `json:"recovery_strategy_changes,omitempty"`
+	LastRecoveryStrategies            map[string]RecoveryStrategy `json:"last_recovery_strategies,omitempty"`
+	DiagnosticTasksSinceProgress      int                         `json:"diagnostic_tasks_since_progress,omitempty"`
+	RepairAttemptsByCriterion         map[string]int              `json:"repair_attempts_by_criterion,omitempty"`
+	AntiThrashingWarnings             int                         `json:"anti_thrashing_warnings,omitempty"`
+	AcceptanceCriteriaPassed          int                         `json:"acceptance_criteria_passed,omitempty"`
+	TasksByCriterion                  map[string]int              `json:"tasks_by_criterion,omitempty"`
+	ProtocolRepairsAttempted          int                         `json:"protocol_repairs_attempted,omitempty"`
+	ProtocolRepairsSucceeded          int                         `json:"protocol_repairs_succeeded,omitempty"`
+	ProtocolRepairFailuresByReason    map[RepairFailureReason]int `json:"protocol_repair_failures_by_reason,omitempty"`
+	// StepBudgetExhaustions counts attempts cut off by the step budget. They also
+	// appear as protocol failures (the worker omitted its result), so this
+	// counter is what separates "tasks needed more tool calls" from "the model
+	// ignored the result contract".
+	StepBudgetExhaustions              int     `json:"step_budget_exhaustions,omitempty"`
+	ExecutionReplaysAvoided            int     `json:"execution_replays_avoided,omitempty"`
+	ReplayAttempts                     int     `json:"replay_attempts,omitempty"`
+	UnsafeReplaysDetected              int     `json:"unsafe_replays_detected,omitempty"`
+	ReconciliationAttempts             int     `json:"reconciliation_attempts,omitempty"`
+	ReconciliationSucceeded            int     `json:"reconciliation_succeeded,omitempty"`
+	TimeoutTasksRecovered              int     `json:"timeout_tasks_recovered_through_reconciliation,omitempty"`
+	PreflightFailuresCaught            int     `json:"preflight_failures_caught_before_dispatch,omitempty"`
+	NonAssertingVerifiersRejected      int     `json:"non_asserting_verifiers_rejected,omitempty"`
+	VerificationsOverturned            int     `json:"verifications_overturned_by_evidence_precedence,omitempty"`
+	TypedVerifiers                     int     `json:"typed_verifiers,omitempty"`
+	TasksWithVerifier                  int     `json:"tasks_with_verifier,omitempty"`
+	TypedVerifierAdoptionRate          float64 `json:"typed_verifier_adoption_rate,omitempty"`
+	TasksDoneWithoutObjectiveVerifier  int     `json:"tasks_done_without_objective_verifier,omitempty"`
+	RepeatedFailureFingerprintsStopped int     `json:"repeated_failure_fingerprints_stopped,omitempty"`
+	CancelledTasksExcludedFromRetries  int     `json:"cancelled_tasks_excluded_from_retry_statistics,omitempty"`
+	WorkerSuccessRejected              int     `json:"worker_success_rejected_by_verification,omitempty"`
+	WeakVerifierWarnings               int     `json:"weak_verifier_warnings,omitempty"`
+	TimeSinceCriterionProgressSeconds  int64   `json:"time_since_criterion_progress_seconds,omitempty"`
+	TokensSinceCriterionProgress       int64   `json:"tokens_since_criterion_progress,omitempty"`
 	// No-progress budget counters (§8.1, WP-12). Mirrors the coordinator
 	// fields; reset only by objective criterion progress.
 	TurnsSinceCriterionProgress int `json:"turns_since_criterion_progress,omitempty"`

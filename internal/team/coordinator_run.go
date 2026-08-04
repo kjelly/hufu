@@ -326,7 +326,7 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	if c.providerManager == nil {
 		return "", nil, fmt.Errorf("provider manager unavailable")
 	}
-	orch, err := agent.CreateAgent(orchCtx, c.providerManager.GetProvider(orchModelID), agent.AgentConfig{
+	orch, err := c.createGatedAgent(orchCtx, c.providerManager.GetProvider(orchModelID), agent.AgentConfig{
 		Def:        orchDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,

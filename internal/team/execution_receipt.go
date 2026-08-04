@@ -62,6 +62,20 @@ type RepairProvenance struct {
 	History         []RepairAttemptProvenance `json:"history,omitempty"`
 }
 
+// StepBudgetUsage records how much of an attempt's step budget was consumed and
+// whether the attempt was cut off by it.
+//
+// Exhaustion is a distinct condition from a protocol violation: the worker was
+// truncated, not disobedient. Recording it structurally keeps that distinction
+// out of error-text matching (§5.2) and stops step exhaustion from inflating
+// failure:protocol, where it is indistinguishable from a model that ignored the
+// result contract.
+type StepBudgetUsage struct {
+	Used      int  `json:"used"`
+	Limit     int  `json:"limit"`
+	Exhausted bool `json:"exhausted,omitempty"`
+}
+
 // ExecutionReceipt represents the execution provenance and metadata for a single task run attempt.
 type ExecutionReceipt struct {
 	RunID            string            `json:"run_id"`
@@ -78,6 +92,9 @@ type ExecutionReceipt struct {
 	// command, exit code, stdout and stderr of each attempt even after the
 	// todo-wide VerifyResult slot is cleared for the next retry (§5, §9).
 	VerifyResult *VerificationResult `json:"verify_result,omitempty"`
+	// StepBudget records this attempt's step consumption, so a truncated attempt
+	// is distinguishable from one that chose to stop.
+	StepBudget *StepBudgetUsage `json:"step_budget,omitempty"`
 }
 
 // ArtifactExpectation describes an expected output artifact and its verification criteria.

@@ -248,7 +248,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	ctx = context.WithValue(ctx, llmUsageReceiptExpectedKey{}, false)
 
 	subAgModelID := c.resolveAgentModel(agentDef, "")
-	ag, err := agent.CreateAgent(ctx, c.providerManager.GetProvider(subAgModelID), agent.AgentConfig{
+	ag, err := c.createGatedAgent(ctx, c.providerManager.GetProvider(subAgModelID), agent.AgentConfig{
 		Def:        agentDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,

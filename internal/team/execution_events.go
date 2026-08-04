@@ -330,6 +330,12 @@ func (c *Coordinator) buildRunTelemetry(result *RunResult) RunTelemetry {
 	for class, count := range result.Metrics.FailuresByClass {
 		telemetry.DecisionChain = append(telemetry.DecisionChain, fmt.Sprintf("failure:%s=%d", class, count))
 	}
+	// Step exhaustion is reported alongside the failure classes it hides inside.
+	// A chain showing failure:protocol=15 alone points at the model; the same
+	// chain with budget_exhausted=9 points at the budget.
+	if n := result.Metrics.StepBudgetExhaustions; n > 0 {
+		telemetry.DecisionChain = append(telemetry.DecisionChain, fmt.Sprintf("budget_exhausted=%d", n))
+	}
 	sort.Strings(telemetry.DecisionChain[5:])
 	return telemetry
 }

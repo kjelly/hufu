@@ -557,6 +557,11 @@ retryLoop:
 			FinishedAt:    time.Now(),
 			ProducerID:    agentName,
 			TranscriptRef: transcriptRef,
+			StepBudget: &StepBudgetUsage{
+				Used:      len(steps),
+				Limit:     stepBudget,
+				Exhausted: stepBudget > 0 && len(steps) >= stepBudget,
+			},
 		}
 		if err == nil {
 			zero := 0
@@ -620,7 +625,7 @@ retryLoop:
 					// protocol violation keeps the retry hint honest — telling a
 					// truncated worker to "change your approach" is what turns a
 					// nearly-finished task into a thrashing loop.
-					budgetExhausted := len(steps) >= stepBudget && stepBudget > 0
+					budgetExhausted := receipt.StepBudget != nil && receipt.StepBudget.Exhausted
 					protocolErrMsg := fmt.Sprintf("protocol-only failure for task %s (%s): agent omitted submit_result; entering protocol_incomplete for tool-free repair (class: %s)",
 						todoID, agentName, string(FailureProtocol))
 					protocolDetail := "protocol incomplete: missing required result"
@@ -661,7 +666,7 @@ retryLoop:
 							repairAg = c.repairAgentOverride
 						} else if c.providerManager != nil {
 							var rErr error
-							repairAg, rErr = agent.CreateAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
+							repairAg, rErr = c.createGatedAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
 								Def:        agentDef,
 								TeamConfig: &c.session.Config,
 								WorkDir:    c.projectDir,
@@ -1255,7 +1260,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	if c.repairAgentOverride != nil {
 		repairAgent = c.repairAgentOverride
 	} else if c.providerManager != nil {
-		repairAgent, err = agent.CreateAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
+		repairAgent, err = c.createGatedAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
 			Def:        agentDef,
 			TeamConfig: &c.session.Config,
 			WorkDir:    c.projectDir,
@@ -1778,25 +1783,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		},
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
 			timing.beginTool()
-			// The actual tool adapter remains the source of truth when no
-			// explicit coordinator allowlist is attached (for example, legacy
-			// session permissions or deterministic test agents). Once an
-			// allowlist is present, route the call through the centralized
-			// fail-closed policy before recording or executing it.
-			if configured := tools.GetToolsAllowed(ctx); configured != nil {
-				allowed := make(map[string]bool, len(configured))
-				for _, name := range configured {
-					allowed[strings.TrimSpace(name)] = true
-				}
-				decision, policyErr := c.authorizeStreamTool(ctx, agentName, tc.ToolName, allowed)
-				if policyErr != nil || decision.Code != DecisionAllow {
-					reason := decision.Reason
-					if policyErr != nil {
-						reason = policyErr.Error()
-					}
-					return fmt.Errorf("tool authorization denied for %q: %s", tc.ToolName, reason)
-				}
-			}
+			// Authorization is enforced in policyGatedTool.Run, not here. An
+			// error returned from this callback aborts the whole model round, so
+			// deciding policy here made every denial destroy the attempt — and
+			// it did so before the call below could record the attempt as
+			// evidence. See internal/team/tool_policy_gate.go.
 			if transcript, _ := ctx.Value(taskTranscriptKey{}).(*taskTranscript); transcript != nil {
 				if err := transcript.RecordToolCall(tc.ToolCallID, tc.ToolName, tc.Input); err != nil {
 					return err
@@ -2347,7 +2338,7 @@ func (c *Coordinator) validateTaskModel(task *TaskDef) error {
 func (c *Coordinator) createTaskAgent(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef, resolvedModel, todoID, taskDesc, agentName string) (fantasy.Agent, error) {
 	resultTool := &submitResultTool{coordinator: c, todoID: todoID}
 	if task.PlanFirst && task.PlanID == "" {
-		planAg, planErr := agent.CreateAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
+		planAg, planErr := c.createGatedAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
 			Def:        agentDef,
 			TeamConfig: &c.session.Config,
 			WorkDir:    c.projectDir,
@@ -2399,7 +2390,7 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 	}
 
 	getAgModelID := c.resolveAgentModel(agentDef, "")
-	return agent.CreateAgent(ctx, c.providerManager.GetProvider(getAgModelID), agent.AgentConfig{
+	return c.createGatedAgent(ctx, c.providerManager.GetProvider(getAgModelID), agent.AgentConfig{
 		Def:        agentDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,

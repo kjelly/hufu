@@ -85,6 +85,7 @@ func accumulateTodoMetrics(metrics *RunMetrics, items []*TodoItem) {
 			metrics.TasksDoneWithoutObjectiveVerifier++
 		}
 		accumulateVerificationMetrics(metrics, item)
+		accumulateStepBudgetMetrics(metrics, item)
 		for _, receipt := range item.ExecutionReceipts {
 			accumulateProtocolRepairMetrics(metrics, receipt.RepairProvenance)
 		}
@@ -210,6 +211,31 @@ func accumulateVerificationResultMetrics(metrics *RunMetrics, result *Verificati
 	}
 	if result.Overturned {
 		metrics.VerificationsOverturned++
+	}
+}
+
+// accumulateStepBudgetMetrics counts attempts that were cut off by the step
+// budget. These land in the run's failure counters as protocol failures — the
+// worker did omit its result — so without a separate counter a run whose tasks
+// simply needed more tool calls is indistinguishable from one whose model
+// ignored the result contract, and the reported diagnosis points at the wrong
+// fix. Attempts are deduped by (run, task, attempt) the same way verification
+// metrics are, so a replayed receipt is not counted twice.
+func accumulateStepBudgetMetrics(metrics *RunMetrics, item *TodoItem) {
+	seen := make(map[string]bool)
+	for index, receipt := range item.ExecutionReceipts {
+		if receipt.StepBudget == nil || !receipt.StepBudget.Exhausted {
+			continue
+		}
+		key := receipt.RunID + "\x00" + receipt.TaskID + "\x00" + strconv.Itoa(receipt.Attempt)
+		if receipt.RunID == "" && receipt.TaskID == "" && receipt.Attempt == 0 {
+			key = "receipt-index:" + strconv.Itoa(index)
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		metrics.StepBudgetExhaustions++
 	}
 }
 
