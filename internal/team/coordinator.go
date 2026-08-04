@@ -893,6 +893,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	if err != nil {
 		return nil, fmt.Errorf("initialize terminal session manager: %w", err)
 	}
+	terminalSessionMgr.SetActiveTaskRoundChecker(c.isTerminalRoundActive)
 	c.terminalSessionMgr = terminalSessionMgr
 
 	c.coreTools = append(c.coreTools,

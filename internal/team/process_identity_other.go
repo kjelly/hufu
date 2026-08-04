@@ -13,8 +13,7 @@ func getProcessIdentity(pid int) (*ProcessIdentity, error) {
 }
 
 func verifyProcessIdentity(expected *ProcessIdentity) (bool, error) {
-	if expected == nil || expected.PID <= 0 {
-		return false, nil
-	}
-	return isPIDAlive(expected.PID), nil
+	// This build has no reliable process-start identity primitive. Treat every
+	// restored live PID as unverifiable rather than risking PID-reuse damage.
+	return false, nil
 }

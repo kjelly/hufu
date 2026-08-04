@@ -23,6 +23,16 @@ func (c *Coordinator) initTerminalControl() {
 	}
 }
 
+func (c *Coordinator) isTerminalRoundActive(taskID string) bool {
+	if c == nil || taskID == "" {
+		return false
+	}
+	c.terminalControlMu.Lock()
+	defer c.terminalControlMu.Unlock()
+	_, active := c.terminalRoundCancels[taskID]
+	return active
+}
+
 // SetPTYTerminalEnabled enables the local PTY broker. It is safe to call from
 // every pty:true terminal start; the first caller initializes the broker and
 // later calls are no-ops. Unattended runs deliberately expose no attach socket.

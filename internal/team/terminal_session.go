@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -47,11 +48,47 @@ const (
 type TerminalLifecycleEvent string
 
 const (
-	TerminalProcessStarted    TerminalLifecycleEvent = "process_started"
-	TerminalProcessObserved   TerminalLifecycleEvent = "process_observed"
-	TerminalProcessExited     TerminalLifecycleEvent = "process_exited"
-	TerminalProcessReconciled TerminalLifecycleEvent = "process_reconciled"
-	TerminalResourceReleased  TerminalLifecycleEvent = "resource_released"
+	TerminalProcessStarted        TerminalLifecycleEvent = "process_started"
+	TerminalProcessObserved       TerminalLifecycleEvent = "process_observed"
+	TerminalProcessExited         TerminalLifecycleEvent = "process_exited"
+	TerminalProcessReconciled     TerminalLifecycleEvent = "process_reconciled"
+	TerminalResourceReleased      TerminalLifecycleEvent = "resource_released"
+	TerminalCleanupRequestedEvent TerminalLifecycleEvent = "terminal_cleanup_requested"
+	TerminalCleanupGracefulEvent  TerminalLifecycleEvent = "terminal_cleanup_graceful"
+	TerminalCleanupForcedEvent    TerminalLifecycleEvent = "terminal_cleanup_forced"
+	TerminalCleanupCompletedEvent TerminalLifecycleEvent = "terminal_cleanup_completed"
+	TerminalCleanupManualEvent    TerminalLifecycleEvent = "terminal_cleanup_manual_intervention"
+	TerminalCustodyTransferred    TerminalLifecycleEvent = "terminal_custody_transferred"
+	TerminalLeaseRevoked          TerminalLifecycleEvent = "terminal_user_lease_revoked_for_cleanup"
+)
+
+type TerminalCustodian string
+
+const (
+	TerminalCustodianOwner       TerminalCustodian = "owner_task"
+	TerminalCustodianCoordinator TerminalCustodian = "coordinator_cleanup"
+	TerminalCustodianOperator    TerminalCustodian = "operator"
+)
+
+type TerminalCleanupState string
+
+const (
+	TerminalCleanupNone      TerminalCleanupState = "none"
+	TerminalCleanupRequested TerminalCleanupState = "requested"
+	TerminalCleanupGraceful  TerminalCleanupState = "graceful_termination"
+	TerminalCleanupForced    TerminalCleanupState = "forced_termination"
+	TerminalCleanupCompleted TerminalCleanupState = "completed"
+	TerminalCleanupManual    TerminalCleanupState = "manual_intervention"
+)
+
+type TerminalCleanupReason string
+
+const (
+	TerminalCleanupTaskFailed     TerminalCleanupReason = "task_failed"
+	TerminalCleanupTaskCancelled  TerminalCleanupReason = "task_cancelled"
+	TerminalCleanupTaskIncomplete TerminalCleanupReason = "task_incomplete"
+	TerminalCleanupRunCancelled   TerminalCleanupReason = "run_cancelled"
+	TerminalCleanupRunShutdown    TerminalCleanupReason = "run_shutdown"
 )
 
 // TerminalWaitTarget is an explicit lifecycle condition a waiter may consume.
@@ -114,30 +151,36 @@ type ProcessIdentity struct {
 
 // TerminalSession is a stateful child-process resource owned by one task.
 type TerminalSession struct {
-	ID              string               `json:"id"`
-	RunID           string               `json:"run_id"`
-	OwnerTaskID     string               `json:"owner_task_id"`
-	Agent           string               `json:"agent"`
-	Command         []string             `json:"command"`
-	WorkingDir      string               `json:"working_dir,omitempty"`
-	StartedAt       time.Time            `json:"started_at"`
-	LastReadAt      time.Time            `json:"last_read_at,omitempty"`
-	ObservedAt      time.Time            `json:"observed_at,omitempty"`
-	ExitedAt        time.Time            `json:"exited_at,omitempty"`
-	ReconciledAt    time.Time            `json:"reconciled_at,omitempty"`
-	ReleasedAt      time.Time            `json:"released_at,omitempty"`
-	Running         bool                 `json:"running"`
-	State           TerminalSessionState `json:"state"`
-	ExitCode        *int                 `json:"exit_code,omitempty"`
-	OutputRefs      []ArtifactRef        `json:"output_refs,omitempty"`
-	PID             int                  `json:"pid,omitempty"`
-	ProcessIdentity *ProcessIdentity     `json:"process_identity,omitempty"`
-	Mode            TerminalMode         `json:"mode,omitempty"`
-	Controller      TerminalController   `json:"controller,omitempty"`
-	LeaseID         string               `json:"lease_id,omitempty"`
-	Rows            uint16               `json:"rows,omitempty"`
-	Cols            uint16               `json:"cols,omitempty"`
-	AttachedAt      time.Time            `json:"attached_at,omitempty"`
+	ID                 string                `json:"id"`
+	RunID              string                `json:"run_id"`
+	OwnerTaskID        string                `json:"owner_task_id"`
+	Agent              string                `json:"agent"`
+	Command            []string              `json:"command"`
+	WorkingDir         string                `json:"working_dir,omitempty"`
+	StartedAt          time.Time             `json:"started_at"`
+	LastReadAt         time.Time             `json:"last_read_at,omitempty"`
+	ObservedAt         time.Time             `json:"observed_at,omitempty"`
+	ExitedAt           time.Time             `json:"exited_at,omitempty"`
+	ReconciledAt       time.Time             `json:"reconciled_at,omitempty"`
+	ReleasedAt         time.Time             `json:"released_at,omitempty"`
+	Running            bool                  `json:"running"`
+	State              TerminalSessionState  `json:"state"`
+	ExitCode           *int                  `json:"exit_code,omitempty"`
+	OutputRefs         []ArtifactRef         `json:"output_refs,omitempty"`
+	PID                int                   `json:"pid,omitempty"`
+	ProcessIdentity    *ProcessIdentity      `json:"process_identity,omitempty"`
+	Mode               TerminalMode          `json:"mode,omitempty"`
+	Controller         TerminalController    `json:"controller,omitempty"`
+	LeaseID            string                `json:"lease_id,omitempty"`
+	Rows               uint16                `json:"rows,omitempty"`
+	Cols               uint16                `json:"cols,omitempty"`
+	AttachedAt         time.Time             `json:"attached_at,omitempty"`
+	Custodian          TerminalCustodian     `json:"custodian,omitempty"`
+	CleanupState       TerminalCleanupState  `json:"cleanup_state,omitempty"`
+	CleanupReason      TerminalCleanupReason `json:"cleanup_reason,omitempty"`
+	CleanupRequestedAt time.Time             `json:"cleanup_requested_at,omitempty"`
+	CleanupCompletedAt time.Time             `json:"cleanup_completed_at,omitempty"`
+	CleanupError       string                `json:"cleanup_error,omitempty"`
 }
 
 // TerminalStartRequest describes a child process. ChildTimeout applies only to
@@ -168,6 +211,25 @@ type TerminalReadResult struct {
 	Output  []byte
 	Screen  string
 	EOF     bool
+}
+
+type TerminalCleanupRequest struct {
+	OwnerTaskID string
+	Reason      TerminalCleanupReason
+	GracePeriod time.Duration
+	ForceAfter  time.Duration
+}
+
+type TerminalCleanupResult struct {
+	Session      TerminalSession
+	Graceful     bool
+	Forced       bool
+	ManualAction bool
+}
+
+type TerminalCleanupManager interface {
+	CleanupTaskTerminals(context.Context, TerminalCleanupRequest) ([]TerminalCleanupResult, error)
+	CleanupRunTerminals(context.Context, string, TerminalCleanupReason) ([]TerminalCleanupResult, error)
 }
 
 // TerminalManager is the public contract used by coordinator services and tools.
@@ -206,24 +268,26 @@ func terminalTaskID(ctx context.Context) string {
 }
 
 type managedTerminalSession struct {
-	session     TerminalSession
-	cmd         *exec.Cmd
-	stdin       io.WriteCloser
-	outputPath  string
-	outputFile  *os.File
-	done        chan struct{}
-	readOffset  int64
-	ptyMaster   *os.File
-	ptyCopyDone chan struct{}
+	session           TerminalSession
+	cmd               *exec.Cmd
+	stdin             io.WriteCloser
+	outputPath        string
+	outputFile        *os.File
+	done              chan struct{}
+	readOffset        int64
+	ptyMaster         *os.File
+	ptyCopyDone       chan struct{}
+	cleanupInProgress bool
 }
 
 // TerminalSessionManager owns live child handles and persists lifecycle state.
 type TerminalSessionManager struct {
-	mu        sync.RWMutex
-	workspace string
-	path      string
-	sessions  map[string]*managedTerminalSession
-	eventSink TerminalEventSink
+	mu              sync.RWMutex
+	workspace       string
+	path            string
+	sessions        map[string]*managedTerminalSession
+	eventSink       TerminalEventSink
+	activeTaskRound func(string) bool
 }
 
 // NewTerminalSessionManager restores durable records. Previously running
@@ -261,9 +325,19 @@ func (m *TerminalSessionManager) restore() error {
 		s := sessions[i]
 		if s.Mode == "" {
 			s.Mode = TerminalModePipe
+			changed = true
 		}
 		if s.Controller == "" {
 			s.Controller = TerminalControllerNone
+			changed = true
+		}
+		if s.Custodian == "" {
+			s.Custodian = TerminalCustodianOwner
+			changed = true
+		}
+		if s.CleanupState == "" {
+			s.CleanupState = TerminalCleanupNone
+			changed = true
 		}
 		if s.State == TerminalSessionRunning || s.Running {
 			prevState := s.State
@@ -279,6 +353,309 @@ func (m *TerminalSessionManager) restore() error {
 	}
 	if changed {
 		return m.persistLocked()
+	}
+	return nil
+}
+
+// SetActiveTaskRoundChecker lets coordinator lifecycle code prevent cleanup
+// from racing an owner model round. The checker is intentionally not part of
+// the worker-facing TerminalManager interface.
+func (m *TerminalSessionManager) SetActiveTaskRoundChecker(checker func(string) bool) {
+	m.mu.Lock()
+	m.activeTaskRound = checker
+	m.mu.Unlock()
+}
+
+func (m *TerminalSessionManager) CleanupTaskTerminals(ctx context.Context, req TerminalCleanupRequest) ([]TerminalCleanupResult, error) {
+	if req.OwnerTaskID == "" {
+		return nil, errors.New("cleanup terminal sessions: owner task ID is required")
+	}
+	return m.cleanupMatching(ctx, req, func(s TerminalSession) bool { return s.OwnerTaskID == req.OwnerTaskID })
+}
+
+func (m *TerminalSessionManager) CleanupRunTerminals(ctx context.Context, runID string, reason TerminalCleanupReason) ([]TerminalCleanupResult, error) {
+	if runID == "" {
+		return nil, errors.New("cleanup terminal sessions: run ID is required")
+	}
+	return m.cleanupMatching(ctx, TerminalCleanupRequest{Reason: reason}, func(s TerminalSession) bool { return s.RunID == runID })
+}
+
+func (m *TerminalSessionManager) cleanupMatching(ctx context.Context, req TerminalCleanupRequest, match func(TerminalSession) bool) ([]TerminalCleanupResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if req.Reason == "" {
+		req.Reason = TerminalCleanupTaskFailed
+	}
+	if req.GracePeriod <= 0 {
+		req.GracePeriod = 100 * time.Millisecond
+	}
+	if req.ForceAfter <= 0 {
+		req.ForceAfter = 500 * time.Millisecond
+	}
+	m.mu.RLock()
+	ids := make([]string, 0, len(m.sessions))
+	for id, managed := range m.sessions {
+		if match(managed.session) && (managed.session.Running || managed.session.State == TerminalSessionRunning || managed.session.State == TerminalSessionUnknown) {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.RUnlock()
+	sort.Strings(ids)
+	results := make([]TerminalCleanupResult, 0, len(ids))
+	for _, id := range ids {
+		select {
+		case <-ctx.Done():
+			return results, ctx.Err()
+		default:
+		}
+		result, err := m.cleanupOne(ctx, id, req)
+		if err != nil {
+			return results, err
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+func (m *TerminalSessionManager) cleanupOne(ctx context.Context, id string, req TerminalCleanupRequest) (TerminalCleanupResult, error) {
+	m.mu.Lock()
+	managed, ok := m.sessions[id]
+	if !ok {
+		m.mu.Unlock()
+		return TerminalCleanupResult{}, fmt.Errorf("cleanup terminal session %q: session not found", id)
+	}
+	if m.activeTaskRound != nil && m.activeTaskRound(managed.session.OwnerTaskID) {
+		m.mu.Unlock()
+		return TerminalCleanupResult{}, fmt.Errorf("cleanup terminal session %q: owner task %q still has an active model round", id, managed.session.OwnerTaskID)
+	}
+	if managed.cleanupInProgress {
+		m.mu.Unlock()
+		return TerminalCleanupResult{}, fmt.Errorf("cleanup terminal session %q is already in progress", id)
+	}
+	if managed.session.CleanupState == TerminalCleanupCompleted && !managed.session.Running {
+		copy := deepCopyTerminalSession(managed.session)
+		m.mu.Unlock()
+		return TerminalCleanupResult{Session: copy, Graceful: true}, nil
+	}
+	if !managed.session.Running && managed.session.State != TerminalSessionUnknown && managed.session.State != TerminalSessionRunning {
+		copy := deepCopyTerminalSession(managed.session)
+		m.mu.Unlock()
+		return TerminalCleanupResult{Session: copy}, nil
+	}
+	leaseRevoked := false
+	if managed.session.Controller == TerminalControllerUser {
+		managed.session.Controller = TerminalControllerNone
+		managed.session.LeaseID = ""
+		managed.session.AttachedAt = time.Time{}
+		leaseRevoked = true
+	}
+	managed.session.Custodian = TerminalCustodianCoordinator
+	managed.session.CleanupState = TerminalCleanupRequested
+	managed.session.CleanupReason = req.Reason
+	managed.session.CleanupRequestedAt = time.Now().UTC()
+	managed.session.CleanupError = ""
+	managed.cleanupInProgress = true
+	if err := m.persistLocked(); err != nil {
+		managed.cleanupInProgress = false
+		m.mu.Unlock()
+		return TerminalCleanupResult{}, err
+	}
+	snapshot := deepCopyTerminalSession(managed.session)
+	cmd, done, stdin := managed.cmd, managed.done, managed.stdin
+	m.emit(string(TerminalCustodyTransferred), snapshot, map[string]interface{}{"from": TerminalCustodianOwner, "to": TerminalCustodianCoordinator})
+	m.emit(string(TerminalCleanupRequestedEvent), snapshot, map[string]interface{}{"reason": req.Reason})
+	if leaseRevoked {
+		m.emit(string(TerminalLeaseRevoked), snapshot, map[string]interface{}{"reason": "coordinator_cleanup"})
+	}
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		if current := m.sessions[id]; current == managed {
+			managed.cleanupInProgress = false
+		}
+		m.mu.Unlock()
+	}()
+
+	if cmd == nil || cmd.Process == nil {
+		return m.cleanupRestored(ctx, id, req)
+	}
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+	_ = signalProcessGroup(cmd.Process.Pid, syscall.SIGTERM)
+	if waitTerminalDone(ctx, done, req.GracePeriod) {
+		return m.finishCleanup(id, true, false, "graceful termination")
+	}
+
+	m.mu.Lock()
+	var forcedPersistErr error
+	if current := m.sessions[id]; current == managed {
+		managed.session.CleanupState = TerminalCleanupForced
+		forcedPersistErr = m.persistLocked()
+		if forcedPersistErr == nil {
+			m.emit(string(TerminalCleanupForcedEvent), managed.session, map[string]interface{}{"reason": "grace period expired"})
+		}
+	}
+	m.mu.Unlock()
+	if forcedPersistErr != nil {
+		return TerminalCleanupResult{}, fmt.Errorf("persist forced terminal cleanup state: %w", forcedPersistErr)
+	}
+	_ = signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL)
+	if waitTerminalDone(ctx, done, req.ForceAfter) {
+		return m.finishCleanup(id, false, true, "forced termination")
+	}
+	return m.markCleanupManual(id, "process survived forced termination")
+}
+
+func (m *TerminalSessionManager) cleanupRestored(ctx context.Context, id string, req TerminalCleanupRequest) (TerminalCleanupResult, error) {
+	m.mu.RLock()
+	managed := m.sessions[id]
+	if managed == nil {
+		m.mu.RUnlock()
+		return TerminalCleanupResult{}, fmt.Errorf("cleanup terminal session %q: session not found", id)
+	}
+	pid, identity := managed.session.PID, managed.session.ProcessIdentity
+	m.mu.RUnlock()
+	if pid <= 0 || !isPIDAlive(pid) {
+		return m.finishRestoredCleanup(id, true, false, "verified process is already gone")
+	}
+	valid, _ := verifyProcessIdentity(identity)
+	if !valid {
+		return m.markCleanupManual(id, "process identity mismatch; PID may have been reused")
+	}
+	_ = signalProcessGroup(pid, syscall.SIGTERM)
+	if waitPIDGone(ctx, pid, req.GracePeriod) {
+		return m.finishRestoredCleanup(id, true, false, "graceful termination")
+	}
+	_ = signalProcessGroup(pid, syscall.SIGKILL)
+	if waitPIDGone(ctx, pid, req.ForceAfter) {
+		return m.finishRestoredCleanup(id, false, true, "forced termination")
+	}
+	return m.markCleanupManual(id, "restored process survived forced termination")
+}
+
+func (m *TerminalSessionManager) finishCleanup(id string, graceful, forced bool, reason string) (TerminalCleanupResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed := m.sessions[id]
+	if managed == nil {
+		return TerminalCleanupResult{}, fmt.Errorf("cleanup terminal session %q: session not found", id)
+	}
+	if graceful {
+		managed.session.CleanupState = TerminalCleanupGraceful
+		if err := m.persistLocked(); err != nil {
+			return TerminalCleanupResult{}, err
+		}
+		gracefulCopy := deepCopyTerminalSession(managed.session)
+		m.emit(string(TerminalCleanupGracefulEvent), gracefulCopy, map[string]interface{}{"reason": reason})
+	}
+	managed.session.CleanupState = TerminalCleanupCompleted
+	managed.session.CleanupCompletedAt = time.Now().UTC()
+	managed.session.CleanupError = ""
+	if err := m.persistLocked(); err != nil {
+		return TerminalCleanupResult{}, err
+	}
+	copy := deepCopyTerminalSession(managed.session)
+	m.emit(string(TerminalCleanupCompletedEvent), copy, map[string]interface{}{"reason": reason, "forced": forced})
+	return TerminalCleanupResult{Session: copy, Graceful: graceful, Forced: forced}, nil
+}
+
+func (m *TerminalSessionManager) finishRestoredCleanup(id string, graceful, forced bool, reason string) (TerminalCleanupResult, error) {
+	m.mu.Lock()
+	managed := m.sessions[id]
+	if managed == nil {
+		m.mu.Unlock()
+		return TerminalCleanupResult{}, fmt.Errorf("cleanup terminal session %q: session not found", id)
+	}
+	now := time.Now().UTC()
+	managed.session.Running = false
+	managed.session.State = TerminalSessionExited
+	if managed.session.ExitedAt.IsZero() {
+		managed.session.ExitedAt = now
+	}
+	managed.session.ReleasedAt = now
+	if graceful {
+		managed.session.CleanupState = TerminalCleanupGraceful
+		if err := m.persistLocked(); err != nil {
+			m.mu.Unlock()
+			return TerminalCleanupResult{}, err
+		}
+		gracefulCopy := deepCopyTerminalSession(managed.session)
+		m.emit(string(TerminalCleanupGracefulEvent), gracefulCopy, map[string]interface{}{"reason": reason})
+	}
+	managed.session.CleanupState = TerminalCleanupCompleted
+	managed.session.CleanupCompletedAt = now
+	managed.session.CleanupError = ""
+	if err := m.persistLocked(); err != nil {
+		m.mu.Unlock()
+		return TerminalCleanupResult{}, err
+	}
+	copy := deepCopyTerminalSession(managed.session)
+	m.emit(string(TerminalCleanupCompletedEvent), copy, map[string]interface{}{"reason": reason, "forced": forced})
+	m.mu.Unlock()
+	return TerminalCleanupResult{Session: copy, Graceful: graceful, Forced: forced}, nil
+}
+
+func (m *TerminalSessionManager) markCleanupManual(id, reason string) (TerminalCleanupResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed := m.sessions[id]
+	if managed == nil {
+		return TerminalCleanupResult{}, fmt.Errorf("cleanup terminal session %q: session not found", id)
+	}
+	managed.session.Custodian = TerminalCustodianCoordinator
+	managed.session.CleanupState = TerminalCleanupManual
+	managed.session.CleanupError = reason
+	if err := m.persistLocked(); err != nil {
+		return TerminalCleanupResult{}, err
+	}
+	copy := deepCopyTerminalSession(managed.session)
+	m.emit(string(TerminalCleanupManualEvent), copy, map[string]interface{}{"reason": reason})
+	return TerminalCleanupResult{Session: copy, ManualAction: true}, nil
+}
+
+func waitTerminalDone(ctx context.Context, done <-chan struct{}, timeout time.Duration) bool {
+	if done == nil {
+		return false
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func waitPIDGone(ctx context.Context, pid int, timeout time.Duration) bool {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if !isPIDAlive(pid) {
+			return true
+		}
+		select {
+		case <-deadline.C:
+			return false
+		case <-ticker.C:
+		case <-ctx.Done():
+			return false
+		}
+	}
+}
+
+func signalProcessGroup(pid int, signal syscall.Signal) error {
+	if pid <= 0 {
+		return errors.New("invalid process ID")
+	}
+	if err := syscall.Kill(-pid, signal); err != nil {
+		return syscall.Kill(pid, signal)
 	}
 	return nil
 }
@@ -360,6 +737,7 @@ func (m *TerminalSessionManager) Start(ctx context.Context, req TerminalStartReq
 		StartedAt: now, Running: true, State: TerminalSessionRunning, PID: cmd.Process.Pid,
 		ProcessIdentity: identity, Mode: req.Mode, Controller: TerminalControllerAgent, Rows: req.Rows, Cols: req.Cols,
 		OutputRefs: []ArtifactRef{{Path: relOutput, Type: "terminal_output", Description: "complete terminal session output"}},
+		Custodian:  TerminalCustodianOwner, CleanupState: TerminalCleanupNone,
 	}, cmd: cmd, stdin: stdin, outputPath: outputPath, outputFile: outputFile, done: make(chan struct{}), ptyMaster: ptyMaster, ptyCopyDone: ptyCopyDone}
 
 	m.mu.Lock()
@@ -840,6 +1218,12 @@ func (m *TerminalSessionManager) ownerSessionLocked(ctx context.Context, id, sup
 	if owner == "" || owner != managed.session.OwnerTaskID {
 		return nil, fmt.Errorf("terminal session %q belongs to task %q", id, managed.session.OwnerTaskID)
 	}
+	if managed.session.Custodian != "" && managed.session.Custodian != TerminalCustodianOwner {
+		return nil, fmt.Errorf("terminal session %q is under %s custody", id, managed.session.Custodian)
+	}
+	if managed.session.CleanupState != "" && managed.session.CleanupState != TerminalCleanupNone {
+		return nil, fmt.Errorf("terminal session %q is under cleanup state %s", id, managed.session.CleanupState)
+	}
 	return managed, nil
 }
 
@@ -867,13 +1251,16 @@ func (m *TerminalSessionManager) emit(eventType string, session TerminalSession,
 		return
 	}
 	envelope := map[string]interface{}{
-		"session_id":    session.ID,
-		"run_id":        session.RunID,
-		"owner_task_id": session.OwnerTaskID,
-		"agent":         session.Agent,
-		"state":         session.State,
-		"working_dir":   session.WorkingDir,
-		"output_refs":   session.OutputRefs,
+		"session_id":     session.ID,
+		"run_id":         session.RunID,
+		"owner_task_id":  session.OwnerTaskID,
+		"agent":          session.Agent,
+		"state":          session.State,
+		"working_dir":    session.WorkingDir,
+		"output_refs":    session.OutputRefs,
+		"custodian":      session.Custodian,
+		"cleanup_state":  session.CleanupState,
+		"cleanup_reason": session.CleanupReason,
 	}
 	for k, v := range payload {
 		envelope[k] = v

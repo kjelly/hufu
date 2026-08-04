@@ -37,7 +37,7 @@ func getProcessIdentity(pid int) (*ProcessIdentity, error) {
 }
 
 func verifyProcessIdentity(expected *ProcessIdentity) (bool, error) {
-	if expected == nil || expected.PID <= 0 {
+	if expected == nil || expected.PID <= 0 || expected.PGID <= 0 || expected.StartStr == "" {
 		return false, nil
 	}
 	current, err := getProcessIdentity(expected.PID)
