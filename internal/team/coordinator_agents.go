@@ -76,7 +76,7 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 		Def:        agentDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
-		MaxSteps:   agent.DefaultMaxSteps,
+		MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
 	}, agentTools)
 	if err != nil {
 		return nil, err

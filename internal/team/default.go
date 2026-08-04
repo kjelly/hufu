@@ -32,7 +32,15 @@ func LoadDefaultTeam(workspace string, forcedSkills []string, helperTools string
 		// establish and verify a multi-phase environment. Explicit team/CLI
 		// limits still take precedence; this avoids a needless manual resume for
 		// ordinary default-team runs.
-		MaxRounds:     30,
+		MaxRounds: 30,
+		// DefaultMaxSteps (30) is sized for text-level work. A default-team
+		// worker driving infrastructure — bringing hosts up, walking a wizard,
+		// waiting on services — routinely needs several times that many tool
+		// calls, and a worker cut off mid-task cannot report a usable result.
+		// The task deadline, no-progress budgets and anti-thrashing limits are
+		// the real stopping conditions; the step cap only decides whether a task
+		// can finish at all. --max-steps still overrides this.
+		MaxSteps:      120,
 		WorkspaceDir:  workspace,
 		Timeout:       600,
 		VerifyTimeout: 120,
@@ -51,6 +59,10 @@ func LoadDefaultTeam(workspace string, forcedSkills []string, helperTools string
 		Description: "Default team coordinator",
 		Role:        "coordinator",
 		Tools:       "ask_user",
+		// The team-level MaxSteps above is a worker budget. Orchestration turns
+		// keep their own default so raising the worker's headroom does not also
+		// widen how much one coordinator turn can dispatch.
+		MaxSteps:    agent.DefaultCoordinatorMaxSteps,
 		MaxRetries:  -1,
 		Generation:  cfg.Generation,
 		ProviderURL: cfg.ProviderURL,

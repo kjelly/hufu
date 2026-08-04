@@ -216,12 +216,17 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	return &DirectAgentResult{AgentName: resolvedName, Output: output, Steps: len(steps)}, nil
 }
 
-// coordinatorCoreToolNames are the core tools the coordinator always gets,
-// regardless of team.yaml. The read-only file tools (view/grep/glob/ls) let it
-// consult files directly instead of burning a full delegation round asking a
-// worker to cat a document.
+// coordinatorCoreToolNames are the tools the coordinator is permitted to use
+// at runtime, regardless of team.yaml. This must include every tool exposed by
+// buildOrchestratorTools: the stream authorization gate fails closed.
+// The read-only file tools (view/grep/glob/ls) let it consult files directly
+// instead of burning a full delegation round asking a worker to cat a document.
 var coordinatorCoreToolNames = map[string]bool{
+	"agent":          true,
 	"ask_user":       true,
+	"finish":         true,
+	"load_skill":     true,
+	"save_skill":     true,
 	"stm_write":      true,
 	"ltm_update":     true,
 	"view":           true,
@@ -229,6 +234,9 @@ var coordinatorCoreToolNames = map[string]bool{
 	"glob":           true,
 	"ls":             true,
 	"reconcile_task": true,
+	"approve_plan":   true,
+	"modify_plan":    true,
+	"reject_plan":    true,
 }
 
 // coordinatorAllowedToolNames returns the permission allowlist matching
@@ -322,7 +330,7 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 		Def:        orchDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
-		MaxSteps:   agent.DefaultCoordinatorMaxSteps,
+		MaxSteps:   c.stepBudget(orchDef, agent.DefaultCoordinatorMaxSteps),
 	}, c.buildOrchestratorTools())
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to create coordinator: %w", err)

@@ -146,6 +146,11 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}
 	}
 
+	// Instructions must only name tools this worker can actually call. The
+	// stream gate is fail-closed, so inviting the worker to use an ungranted
+	// tool converts an obedient worker into a dead attempt.
+	granted := toolNameSet(c.workerExposedToolNames(agentDef))
+
 	var prompt string
 	if task.PlanFirst && task.PlanID != "" {
 		c.pendingPlansMu.Lock()
@@ -162,8 +167,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			prompt += "\n\n## Constraints\n\n" + task.Constraints
 		}
 		prompt += "\n\n## Approved Plan\n\n" + planText
-		stmPath := STMPath(c.session.Workspace)
-		prompt += fmt.Sprintf("\n\n## Instructions\n\nExecute the approved plan above. You have already planned — now implement each step.\n\n- Key knowledge from previous agents is provided below. You do NOT need to read `%s` at the start. Only read it later if you need to check for *new* updates from concurrent agents.\n- Write key discoveries to `stm_write` immediately when found.\n- Call finish when done.", stmPath)
+		prompt += "\n\n## Instructions\n\nExecute the approved plan above. You have already planned — now implement each step.\n"
+		prompt += c.sharedKnowledgeInstructions(granted)
 	} else if task.PlanFirst {
 		prompt = "## Goal\n\n" + task.Goal
 		if task.Constraints != "" {
@@ -175,11 +180,17 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		if task.Constraints != "" {
 			prompt += "\n\n## Constraints\n\n" + task.Constraints
 		}
-		stmPath := STMPath(c.session.Workspace)
-		prompt += fmt.Sprintf("\n\n## Instructions\n\nYou are a domain expert. Determine your own implementation approach based on the goal above.\n\n- Key knowledge from previous agents is provided below. You do NOT need to read `%s` at the start. Only read it later if you need to check for *new* updates from concurrent agents.\n- When you discover something important (API shape, file location, decision, error), write it to `stm.md` immediately via `stm_write` — do not wait until the end.", stmPath)
+		prompt += "\n\n## Instructions\n\nYou are a domain expert. Determine your own implementation approach based on the goal above.\n"
+		prompt += c.sharedKnowledgeInstructions(granted)
 	}
 	if task.Verify != "" {
 		prompt += completionVerificationInstructions(task.Verify, c.projectDir)
+	}
+	// The result protocol is enforced for every non-sidecar task, so it has to
+	// be stated. A worker that ends its turn with prose fails the contract, and
+	// the failure is indistinguishable from real non-completion.
+	if !task.PlanFirst || task.PlanID != "" {
+		prompt += resultProtocolInstructions(task, granted)
 	}
 	if taskUsesVerbatimTranscript(task) {
 		prompt += "\n\n## Verbatim Output Contract\n\nhufu captures every tool call and tool result into a complete transcript artifact. Do not reproduce raw command output in your final response. Submit a concise structured result; the runner will attach the authoritative transcript manifest."
@@ -440,6 +451,10 @@ retryLoop:
 		var steps []fantasy.StepResult
 		var err error
 		protocolFailure := false
+		// A worker that consumed its entire step budget was cut off; it did not
+		// choose to stop. That distinction decides whether the follow-up turn
+		// should ask it to finalize what it has or to change its approach.
+		stepBudget := c.stepBudget(agentDef, agent.DefaultMaxSteps)
 		func() {
 			taskCtx, cancel := tools.WithInteractiveAwareTimeout(parentCtx, agentTimeout)
 			defer cancel()
@@ -600,9 +615,20 @@ retryLoop:
 					// Classify as FailureProtocol, set task to protocol_incomplete,
 					// and attempt single-step, tool-free repair allowing ONLY submit_result.
 					protocolFailure = true
+					// §8: the step budget covers work; result finalization gets its
+					// own turn outside it. Distinguishing exhaustion from a genuine
+					// protocol violation keeps the retry hint honest — telling a
+					// truncated worker to "change your approach" is what turns a
+					// nearly-finished task into a thrashing loop.
+					budgetExhausted := len(steps) >= stepBudget && stepBudget > 0
 					protocolErrMsg := fmt.Sprintf("protocol-only failure for task %s (%s): agent omitted submit_result; entering protocol_incomplete for tool-free repair (class: %s)",
 						todoID, agentName, string(FailureProtocol))
 					protocolDetail := "protocol incomplete: missing required result"
+					if budgetExhausted {
+						protocolDetail = fmt.Sprintf("protocol incomplete: step budget exhausted (%d/%d steps) before submit_result", len(steps), stepBudget)
+						protocolErrMsg = fmt.Sprintf("step budget exhausted for task %s (%s) after %d/%d steps; finalizing result from execution evidence",
+							todoID, agentName, len(steps), stepBudget)
+					}
 					protocolFailureDetail := c.FailureDetail(errors.New(protocolDetail), FailureSourceError)
 					c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, protocolFailureDetail, ReconcileOnly, FailureProtocol, TaskProtocolIncomplete, output)
 					if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskProtocolIncomplete, protocolDetail, ""); statusErr == nil {
@@ -613,6 +639,21 @@ retryLoop:
 
 					repairResultTool := &submitResultTool{coordinator: c, todoID: todoID}
 					repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using the output above to supply the required structured result. Do NOT call any other tools.", task.Goal, output)
+					if budgetExhausted {
+						repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The work above is your evidence; this turn is only for reporting it. Call submit_result now, and do NOT call any other tools.\n\nReport truthfully against the goal: use status `success` only if the goal is fully met, otherwise `partial` (say exactly what is done and what remains) or `blocked`. A truthful `partial` lets the next attempt continue your work; a false `success` destroys it.", task.Goal, output, len(steps), stepBudget)
+					}
+					// §7 requires the transcript to survive as evidence, and the
+					// finalization turn is where that evidence gets converted into a
+					// result. Handing it only the final prose made it guess; the
+					// attempt's own tool calls and results are what it needs to
+					// report accurately.
+					var repairHistory []fantasy.Message
+					for _, step := range steps {
+						repairHistory = append(repairHistory, step.Messages...)
+					}
+					if len(repairHistory) > 0 {
+						repairHistory = append([]fantasy.Message{fantasy.NewUserMessage(currentPrompt)}, repairHistory...)
+					}
 					repairAttempts := make([]RepairAttemptProvenance, 0, 2)
 					runRepair := func(prompt string) []fantasy.StepResult {
 						var repairAg fantasy.Agent
@@ -645,9 +686,9 @@ retryLoop:
 						repairCtx = context.WithValue(repairCtx, hooks.TeamNameKey, c.session.Config.Name)
 						repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, taskDesc)
 
-						_, steps, _ := c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, prompt, nil, timing, fantasy.StepCountIs(1))
+						_, repairSteps, _ := c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, prompt, repairHistory, timing, fantasy.StepCountIs(1))
 						typedRes = c.GetTaskResult(todoID)
-						return steps
+						return repairSteps
 					}
 
 					repairSteps := runRepair(repairPrompt)
@@ -1501,19 +1542,56 @@ type toolCallEvidence struct {
 // toolCallEvidenceKey is a context key for per-attempt tool call evidence.
 type toolCallEvidenceKey struct{}
 
+// protocolToolNames are the result-protocol tools the runner attaches to a
+// worker's tool set itself, outside the agent's declared tools. They are part of
+// the execution contract rather than a capability grant: RequiresResult makes
+// submit_result mandatory, and PlanFirst makes submit_plan mandatory, so a
+// worker that cannot call them cannot satisfy the contract at all.
+var protocolToolNames = []string{"submit_result", "submit_plan"}
+
+// workerExposedToolNames returns every tool name a worker's model will be shown:
+// the tools SelectTools picks for its declared list (including the
+// alwaysIncludeTools it forces in), the globally-loaded MCP tools that
+// createTaskAgentWithResultTool appends, and the result-protocol tools.
+//
+// This is the single source of truth shared by withEffectiveToolsAllowed and the
+// prompt builder, so the allowlist and the instructions cannot drift from what
+// the model can actually call.
+func (c *Coordinator) workerExposedToolNames(def *agent.AgentDef) []string {
+	if c == nil || def == nil {
+		return nil
+	}
+	names := agent.EffectiveToolNames(c.coreTools, def.Tools)
+	if c.mcpManager != nil {
+		for _, t := range c.mcpManager.AsAgentTools() {
+			if name := strings.TrimSpace(t.Info().Name); name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	return append(names, protocolToolNames...)
+}
+
 // withEffectiveToolsAllowed attaches the tools permitted for a worker run.
-// Team-level tools and the agent's declared tools are both explicit grants.
-// Leaving an empty policy unset preserves deny-by-default behavior.
+// Team-level tools and the agent's declared tools are both explicit grants. When
+// neither grants anything the policy is left unset, which keeps the tool adapter
+// as the source of truth rather than engaging the stream gate.
+//
+// The allowlist is derived from what the model is actually shown
+// (workerExposedToolNames), not from the declared tool string alone. The stream
+// authorization gate is fail-closed and aborts the entire attempt on a denied
+// call, so exposing a tool without granting it does not restrict the worker —
+// it destroys the attempt the moment the worker takes the invitation.
 func (c *Coordinator) withEffectiveToolsAllowed(ctx context.Context, def *agent.AgentDef) context.Context {
 	if c == nil || c.session == nil {
 		return ctx
 	}
 
-	allowed := append([]string(nil), c.session.Config.ToolsAllowed...)
+	declared := append([]string(nil), c.session.Config.ToolsAllowed...)
 	if def != nil {
 		for _, name := range strings.Split(def.Tools, ",") {
 			if name = strings.TrimSpace(name); name != "" {
-				allowed = append(allowed, name)
+				declared = append(declared, name)
 			}
 		}
 		// Agent-specific MCP tools are a supported frontmatter grant. Keep
@@ -1524,13 +1602,56 @@ func (c *Coordinator) withEffectiveToolsAllowed(ctx context.Context, def *agent.
 			if name == "" {
 				continue
 			}
-			allowed = append(allowed, name, strings.ToLower(strings.TrimSpace(def.Name))+":"+name)
+			declared = append(declared, name, strings.ToLower(strings.TrimSpace(def.Name))+":"+name)
 		}
 	}
-	if len(allowed) == 0 {
+	// Nothing was granted explicitly anywhere. Leave the policy unset: the
+	// stream gate only engages once an allowlist is attached, so attaching one
+	// here — even a protocol-tools-only one — would flip an unconstrained agent
+	// into a deny-all agent.
+	if len(declared) == 0 {
 		return ctx
 	}
-	return context.WithValue(ctx, tools.AgentToolsAllowedKey, allowed)
+	// An allowlist is in force, so it has to cover everything the model is shown.
+	allowed := declared
+	if def != nil {
+		allowed = append(allowed, c.workerExposedToolNames(def)...)
+	}
+	return context.WithValue(ctx, tools.AgentToolsAllowedKey, dedupeToolNames(allowed))
+}
+
+// stepBudget resolves the per-attempt step budget for def, honouring the agent's
+// max-steps and then the team's (which is what --max-steps writes into), and
+// falling back to the caller's role-specific default.
+//
+// Call sites used to pass a non-zero AgentConfig.MaxSteps directly. CreateAgent
+// prefers that field over resolveMaxSteps, so every team-level and --max-steps
+// override was silently discarded and every agent ran on the compiled-in
+// default. Resolving here keeps the same defaults while making the overrides
+// take effect.
+func (c *Coordinator) stepBudget(def *agent.AgentDef, fallback int) int {
+	if def != nil && def.MaxSteps > 0 {
+		return def.MaxSteps
+	}
+	if c != nil && c.session != nil && c.session.Config.MaxSteps > 0 {
+		return c.session.Config.MaxSteps
+	}
+	return fallback
+}
+
+// dedupeToolNames collapses duplicates introduced by unioning several grant
+// sources, keeping first-seen order so allowlist logs stay readable.
+func dedupeToolNames(names []string) []string {
+	seen := make(map[string]bool, len(names))
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
 }
 
 // authorizeStreamTool routes namespaced MCP tools through the same policy
@@ -2024,6 +2145,58 @@ func completionVerificationInstructions(command, workDir string) string {
 	return fmt.Sprintf("\n\n## Completion Verification\n\nYour work is not accepted until this exact command succeeds. Create the deliverable at the exact path it checks, then run the command yourself before your final response.\n\n- Command: `%s`\n- Runs from: `%s`\n- If it fails, fix the deliverable instead of only describing the intended result.\n", strings.TrimSpace(command), workDir)
 }
 
+// toolNameSet indexes tool names for membership tests.
+func toolNameSet(names []string) map[string]bool {
+	set := make(map[string]bool, len(names))
+	for _, name := range names {
+		if name = strings.TrimSpace(name); name != "" {
+			set[name] = true
+		}
+	}
+	return set
+}
+
+// sharedKnowledgeInstructions describes how to share findings with later agents,
+// naming stm_write only when the worker actually holds that grant. Without the
+// grant the worker gets the same guidance pointed at a tool it can use, instead
+// of an instruction that aborts its attempt.
+func (c *Coordinator) sharedKnowledgeInstructions(granted map[string]bool) string {
+	if c == nil || c.session == nil {
+		return ""
+	}
+	stmPath := STMPath(c.session.Workspace)
+	b := &strings.Builder{}
+	fmt.Fprintf(b, "\n- Key knowledge from previous agents is provided below. You do NOT need to read `%s` at the start. Only read it later if you need to check for *new* updates from concurrent agents.\n", stmPath)
+	switch {
+	case granted["stm_write"]:
+		b.WriteString("- When you discover something important (API shape, file location, decision, error), record it with `stm_write` immediately — do not wait until the end.\n")
+	case granted["write"] || granted["edit"]:
+		fmt.Fprintf(b, "- When you discover something important (API shape, file location, decision, error), append it to `%s` immediately — do not wait until the end.\n", stmPath)
+	default:
+		b.WriteString("- Report anything important you discover (API shape, file location, decision, error) in your structured result.\n")
+	}
+	return b.String()
+}
+
+// resultProtocolInstructions states the result contract the runner enforces.
+// ExecuteTasks sets RequiresResult on every non-sidecar task, so a worker that
+// finishes with prose alone fails the task — and that failure is
+// indistinguishable from genuine non-completion. Stating the contract is the
+// only thing that makes the enforcement fair.
+func resultProtocolInstructions(task TaskDef, granted map[string]bool) string {
+	if !task.Execution.RequiresResult || !granted["submit_result"] {
+		return ""
+	}
+	b := &strings.Builder{}
+	b.WriteString("\n\n## Result Protocol\n\n")
+	b.WriteString("This task is not complete until you call `submit_result`. A prose summary is NOT a result: if you end your turn without calling `submit_result`, the task is recorded as failed no matter how much work you finished.\n\n")
+	b.WriteString("- Call `submit_result` exactly once, as the last thing you do.\n")
+	b.WriteString("- Set `status` truthfully: `success` only when the goal is fully met; otherwise `partial`, `failed`, or `blocked`. A truthful `partial` is far more useful than an optimistic `success`.\n")
+	b.WriteString("- Put the facts a later agent needs into `summary`, `findings`, and `decisions`.\n")
+	b.WriteString("- If you are running out of steps, stop working and call `submit_result` with what you have.\n")
+	return b.String()
+}
+
 func (c *Coordinator) verifyTaskTimeout() time.Duration {
 	if c == nil || c.session == nil {
 		return 120 * time.Second
@@ -2132,6 +2305,11 @@ func localFailureHint(lastErr string) string {
 		return "A file or command was not found last time. Verify the path exists with ls/glob before using it, and use absolute paths under the workspace."
 	case strings.Contains(e, "permission denied") || strings.Contains(e, "not permitted") || strings.Contains(e, "guard rule"):
 		return "The previous attempt was blocked by a permission or guard rule. Use only the tools and paths you are allowed; do not retry the exact blocked action — find a permitted alternative."
+	case strings.Contains(e, "step budget exhausted"):
+		// Truncation is not a wrong approach. The prior attempt's conversation
+		// is carried into this one, so the correct instruction is to resume —
+		// telling it to change approach makes it redo finished work.
+		return "You ran out of steps last time; you were cut off, not wrong. Your earlier work is in the conversation above — continue from where you stopped rather than redoing it. Skip re-exploration, go straight to the remaining actions, and leave a step to call submit_result."
 	case strings.Contains(e, "step") && (strings.Contains(e, "limit") || strings.Contains(e, "count") || strings.Contains(e, "max")):
 		return "You ran out of steps last time. Be more direct: skip exploratory actions and go straight to the actions that satisfy the goal."
 	case strings.Contains(e, "duplicate"):
@@ -2173,7 +2351,7 @@ func (c *Coordinator) createTaskAgent(parentCtx context.Context, agentDef *agent
 			Def:        agentDef,
 			TeamConfig: &c.session.Config,
 			WorkDir:    c.projectDir,
-			MaxSteps:   agent.DefaultMaxSteps,
+			MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
 		}, append(agent.SelectTools(c.coreTools, agentDef.Tools), &submitPlanTool{coordinator: c, todoID: todoID}, resultTool))
 		if planErr != nil {
 			c.report(c.newEvent("error").withAgent(agentName).withMessage(planErr.Error()).withTodoID(todoID))
@@ -2225,7 +2403,7 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 		Def:        agentDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
-		MaxSteps:   agent.DefaultMaxSteps,
+		MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
 	}, agentTools)
 }
 

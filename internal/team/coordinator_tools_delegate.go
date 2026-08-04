@@ -252,7 +252,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		Def:        agentDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
-		MaxSteps:   agent.DefaultMaxSteps,
+		MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
 	}, agent.SelectTools(c.coreTools, agentDef.Tools))
 	if err != nil {
 		return "", fmt.Errorf("failed to create sub-agent %q: %w", name, err)

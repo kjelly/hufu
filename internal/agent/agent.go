@@ -611,6 +611,33 @@ func SelectTools(allTools []fantasy.AgentTool, toolNames string) []fantasy.Agent
 	return selected
 }
 
+// EffectiveToolNames returns the names of the tools SelectTools would hand to a
+// model for toolNames. It is the authoritative answer to "what can this agent
+// see?", and therefore the authoritative input to the runtime permission
+// allowlist: a tool the model is shown but not granted is a trap, because the
+// stream authorization gate aborts the whole attempt when the model calls it.
+//
+// Deriving the allowlist from this function instead of from the declared tool
+// string is what keeps alwaysIncludeTools (which SelectTools forces in
+// regardless of the declaration) from being silently unauthorized.
+func EffectiveToolNames(allTools []fantasy.AgentTool, toolNames string) []string {
+	selected := SelectTools(allTools, toolNames)
+	names := make([]string, 0, len(selected))
+	for _, t := range selected {
+		if name := strings.TrimSpace(t.Info().Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// ResolveMaxSteps exposes the agent/team step-budget precedence so callers that
+// need the number before CreateAgent runs (for example to reserve
+// result-finalization headroom) compute the same value the agent will use.
+func ResolveMaxSteps(agentSteps, teamSteps int) int {
+	return resolveMaxSteps(agentSteps, teamSteps)
+}
+
 func BuildAllAgentTools(workDir string, opts ...tools.ToolOption) []fantasy.AgentTool {
 	allOpts := append([]tools.ToolOption{tools.WithWorkDir(workDir)}, opts...)
 	return tools.AllTools(allOpts...)
