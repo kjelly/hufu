@@ -42,6 +42,65 @@ func TestProjectAgentStatusesUsesCanonicalTaskAndTerminalState(t *testing.T) {
 	}
 }
 
+func TestProjectAgentStatusesDistinguishesContainedAndManualTerminalCleanup(t *testing.T) {
+	items := []*TodoItem{
+		{ID: "contained", Agent: "contained", Status: TaskDone},
+		{ID: "manual", Agent: "manual", Status: TaskDone},
+	}
+	sessions := []TerminalSession{
+		{ID: "contained-session", OwnerTaskID: "contained", Agent: "contained", State: TerminalSessionClosed, CleanupState: TerminalCleanupCompleted},
+		{ID: "manual-session", OwnerTaskID: "manual", Agent: "manual", State: TerminalSessionClosed, CleanupState: TerminalCleanupManual},
+	}
+	got := ProjectAgentStatuses(items, sessions)
+	if got["contained"] != AgentStatusIdle {
+		t.Fatalf("contained terminal status = %q, want idle", got["contained"])
+	}
+	if got["manual"] != AgentStatusError {
+		t.Fatalf("manual cleanup terminal status = %q, want error", got["manual"])
+	}
+
+	workspace := t.TempDir()
+	if err := ReconcileAgentStatuses(workspace, items, sessions); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, statusDir, "contained.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "automatically contained; safe to retry") {
+		t.Fatalf("contained cleanup guidance missing: %s", data)
+	}
+	data, err = os.ReadFile(filepath.Join(workspace, statusDir, "manual.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "requires manual intervention; do not retry") {
+		t.Fatalf("manual cleanup guidance missing: %s", data)
+	}
+}
+
+func TestReconcileAgentStatusesManualCleanupGuidanceOverridesEarlierCompletedSession(t *testing.T) {
+	workspace := t.TempDir()
+	items := []*TodoItem{{ID: "task", Agent: "worker", Status: TaskDone}}
+	sessions := []TerminalSession{
+		{ID: "contained-first", OwnerTaskID: "task", Agent: "worker", State: TerminalSessionClosed, CleanupState: TerminalCleanupCompleted},
+		{ID: "manual-second", OwnerTaskID: "task", Agent: "worker", State: TerminalSessionUnknown, CleanupState: TerminalCleanupManual},
+	}
+	if err := ReconcileAgentStatuses(workspace, items, sessions); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, statusDir, "worker.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "contained-first was automatically contained; safe to retry") {
+		t.Fatalf("contained guidance masked manual intervention: %s", data)
+	}
+	if !strings.Contains(string(data), "manual-second requires manual intervention; do not retry") {
+		t.Fatalf("manual-intervention guidance missing: %s", data)
+	}
+}
+
 func TestReconcileAgentStatusesRedactsAndSerializesDetailAsYAML(t *testing.T) {
 	workspace := t.TempDir()
 	detail := "request failed\nnext: line\napi_token=super-secret-value"

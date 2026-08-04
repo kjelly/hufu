@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -137,8 +138,9 @@ func TestWP08_Path1_TerminalBlocked(t *testing.T) {
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "do work"}})
 	todoID := items[0].ID
 
-	// Create a real TerminalSessionManager and inject a session with an
-	// active state so RequireTaskClosed returns an error.
+	// Inject an unreconciled restored session. A PID identity mismatch makes
+	// cleanup fail closed and therefore requires human reconciliation instead
+	// of replaying the task.
 	mgr, err := NewTerminalSessionManager(c.session.Workspace, nil)
 	if err != nil {
 		t.Fatalf("NewTerminalSessionManager: %v", err)
@@ -149,8 +151,11 @@ func TestWP08_Path1_TerminalBlocked(t *testing.T) {
 		session: TerminalSession{
 			ID:          "test-session",
 			OwnerTaskID: todoID,
-			State:       TerminalSessionRunning,
-			Running:     true,
+			PID:         os.Getpid(),
+			State:       TerminalSessionUnknown,
+			ProcessIdentity: &ProcessIdentity{
+				PID: os.Getpid(), StartTime: -1,
+			},
 		},
 	}
 	mgr.mu.Unlock()
@@ -164,6 +169,31 @@ func TestWP08_Path1_TerminalBlocked(t *testing.T) {
 	}
 	if worker.calls != 1 {
 		t.Errorf("worker dispatched %d time(s), want 1 (terminal blocked must break before retry)", worker.calls)
+	}
+	var item *TodoItem
+	for _, candidate := range c.taskTracker.TodoList().Items() {
+		if candidate.ID == todoID {
+			item = candidate
+			break
+		}
+	}
+	if item == nil || item.Status != TaskBlocked {
+		t.Fatalf("task status after terminal cleanup = %#v, want blocked", item)
+	}
+	sessions, listErr := mgr.List(context.Background(), "")
+	if listErr != nil || len(sessions) != 1 {
+		t.Fatalf("persisted terminal sessions = %#v, err=%v", sessions, listErr)
+	}
+	if sessions[0].CleanupState != TerminalCleanupManual || !strings.Contains(sessions[0].CleanupError, "identity mismatch") {
+		t.Fatalf("persisted terminal cleanup disposition = %#v, want manual identity-mismatch intervention", sessions[0])
+	}
+	restored, restoreErr := NewTerminalSessionManager(c.session.Workspace, nil)
+	if restoreErr != nil {
+		t.Fatal(restoreErr)
+	}
+	persisted, listErr := restored.List(context.Background(), "")
+	if listErr != nil || len(persisted) != 1 || persisted[0].CleanupState != TerminalCleanupManual {
+		t.Fatalf("manual terminal disposition was not durable: %#v, err=%v", persisted, listErr)
 	}
 }
 

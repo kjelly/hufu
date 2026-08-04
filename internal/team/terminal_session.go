@@ -312,6 +312,33 @@ func NewTerminalSessionManager(workspace string, sink TerminalEventSink) (*Termi
 	return m, nil
 }
 
+// LoadTerminalSessions reads durable terminal metadata for diagnostics without
+// acquiring process ownership or changing lifecycle state. In particular,
+// operator-facing commands must not turn a running session into unknown merely
+// by listing it. Restart reconciliation remains the responsibility of a new
+// TerminalSessionManager.
+func LoadTerminalSessions(workspace string) ([]TerminalSession, error) {
+	if workspace == "" {
+		return nil, errors.New("load terminal sessions: empty workspace")
+	}
+	path := filepath.Join(workspace, logsDir, terminalSessionsFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read terminal sessions: %w", err)
+	}
+	var sessions []TerminalSession
+	if err := json.Unmarshal(data, &sessions); err != nil {
+		return nil, fmt.Errorf("decode terminal sessions: %w", err)
+	}
+	for i := range sessions {
+		normalizeTerminalSessionDefaults(&sessions[i])
+	}
+	return sessions, nil
+}
+
 func (m *TerminalSessionManager) restore() error {
 	data, err := os.ReadFile(m.path)
 	if err != nil {
@@ -327,22 +354,10 @@ func (m *TerminalSessionManager) restore() error {
 	changed := false
 	for i := range sessions {
 		s := sessions[i]
-		if s.Mode == "" {
-			s.Mode = TerminalModePipe
+		if s.Mode == "" || s.Controller == "" || s.Custodian == "" || s.CleanupState == "" {
 			changed = true
 		}
-		if s.Controller == "" {
-			s.Controller = TerminalControllerNone
-			changed = true
-		}
-		if s.Custodian == "" {
-			s.Custodian = TerminalCustodianOwner
-			changed = true
-		}
-		if s.CleanupState == "" {
-			s.CleanupState = TerminalCleanupNone
-			changed = true
-		}
+		normalizeTerminalSessionDefaults(&s)
 		if s.State == TerminalSessionRunning || s.Running {
 			prevState := s.State
 			s.State = TerminalSessionUnknown
@@ -359,6 +374,21 @@ func (m *TerminalSessionManager) restore() error {
 		return m.persistLocked()
 	}
 	return nil
+}
+
+func normalizeTerminalSessionDefaults(session *TerminalSession) {
+	if session.Mode == "" {
+		session.Mode = TerminalModePipe
+	}
+	if session.Controller == "" {
+		session.Controller = TerminalControllerNone
+	}
+	if session.Custodian == "" {
+		session.Custodian = TerminalCustodianOwner
+	}
+	if session.CleanupState == "" {
+		session.CleanupState = TerminalCleanupNone
+	}
 }
 
 // SetActiveTaskRoundChecker lets coordinator lifecycle code prevent cleanup

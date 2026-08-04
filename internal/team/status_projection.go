@@ -75,6 +75,14 @@ func taskAgentStatus(status TaskStatus) AgentStatus {
 }
 
 func terminalAgentStatus(session TerminalSession) AgentStatus {
+	// Completed cleanup is containment evidence, not a live-session leak. It
+	// must not keep an otherwise finished task in working/error indefinitely.
+	if session.CleanupState == TerminalCleanupCompleted && !session.Running {
+		return AgentStatusIdle
+	}
+	if session.CleanupState == TerminalCleanupManual {
+		return AgentStatusError
+	}
 	if session.State == TerminalSessionUnknown {
 		// Unknown is fail-closed after a restart: the process cannot be called
 		// idle or successful until reconciliation establishes its fate.
@@ -145,6 +153,13 @@ func ReconcileAgentStatuses(workspace string, items []*TodoItem, sessions []Term
 				break
 			}
 		}
+		if terminalDetail := terminalStatusDetail(name, sessions); terminalDetail != "" {
+			if record.Detail == "" {
+				record.Detail = terminalDetail
+			} else {
+				record.Detail += "; " + terminalDetail
+			}
+		}
 		contentBytes, err := yaml.Marshal(record)
 		if err != nil {
 			return fmt.Errorf("marshal projected status for %s: %w", name, err)
@@ -174,6 +189,31 @@ func ReconcileAgentStatuses(workspace string, items []*TodoItem, sessions []Term
 		}
 	}
 	return nil
+}
+
+// terminalStatusDetail exposes containment state without terminal output.
+func terminalStatusDetail(agent string, sessions []TerminalSession) string {
+	completedID := ""
+	for _, session := range sessions {
+		if !strings.EqualFold(strings.TrimSpace(session.Agent), agent) {
+			continue
+		}
+		switch session.CleanupState {
+		case TerminalCleanupManual:
+			return "terminal " + session.ID + " requires manual intervention; do not retry until reconciled"
+		case TerminalCleanupCompleted:
+			// Keep looking: a manual-intervention session for this same agent
+			// takes precedence over an earlier contained one. Returning safe
+			// retry guidance in that case would contradict the error status.
+			if completedID == "" {
+				completedID = session.ID
+			}
+		}
+	}
+	if completedID != "" {
+		return "terminal " + completedID + " was automatically contained; safe to retry"
+	}
+	return ""
 }
 
 func validateProjectedStatusName(name string) error {

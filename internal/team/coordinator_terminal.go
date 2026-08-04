@@ -39,6 +39,15 @@ func (c *Coordinator) isTerminalRoundActive(taskID string) bool {
 	return active
 }
 
+// TerminalSessions returns durable terminal lifecycle metadata for reporting.
+// It intentionally exposes references and lifecycle state only, never output.
+func (c *Coordinator) TerminalSessions(ctx context.Context) ([]TerminalSession, error) {
+	if c == nil || c.terminalSessionMgr == nil {
+		return nil, nil
+	}
+	return c.terminalSessionMgr.List(ctx, "")
+}
+
 // SetPTYTerminalEnabled enables the local PTY broker. It is safe to call from
 // every pty:true terminal start; the first caller initializes the broker and
 // later calls are no-ops. Unattended runs deliberately expose no attach socket.

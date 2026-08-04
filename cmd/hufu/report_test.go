@@ -71,6 +71,24 @@ func TestBuildReportMDIncludesCanonicalRunOutcome(t *testing.T) {
 	}
 }
 
+func TestBuildReportMDRendersTerminalCleanupWithoutOutput(t *testing.T) {
+	report := buildReportMD(&reportData{StartedAt: time.Now(), TerminalSessions: []team.TerminalSession{{
+		ID: "terminal-1", OwnerTaskID: "task-1", State: team.TerminalSessionClosed,
+		Custodian: team.TerminalCustodianCoordinator, CleanupState: team.TerminalCleanupCompleted,
+		OutputRefs: []team.ArtifactRef{{Path: "logs/terminal/terminal-1.log", Type: "terminal_output", Description: "raw secret output"}},
+	}}}, "demo", "")
+	for _, want := range []string{"## Terminal Session Cleanup", "Automatically contained; safe to retry.", "Terminal output is retained only"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+	for _, forbidden := range []string{"logs/terminal/terminal-1.log", "raw secret output"} {
+		if strings.Contains(report, forbidden) {
+			t.Fatalf("report exposed terminal output reference/content %q:\n%s", forbidden, report)
+		}
+	}
+}
+
 func TestBuildReportMDWarnsWhenRunHasNoTypedVerifiers(t *testing.T) {
 	data := &reportData{StartedAt: time.Now(), RunResult: &team.RunResult{
 		Metrics: team.RunMetrics{TasksWithVerifier: 2, TypedVerifiers: 0},

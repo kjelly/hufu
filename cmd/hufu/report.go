@@ -59,6 +59,7 @@ type reportData struct {
 	ContextUsageSection string
 	ResolvedProfile     team.ExecutionProfile
 	RunResult           *team.RunResult
+	TerminalSessions    []team.TerminalSession
 }
 
 // SkillPatternReport holds detected skill pattern info for reports
@@ -114,6 +115,9 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		d.ContextUsageSection = tc.coordinator.RenderContextUsageSection()
 		d.ResolvedProfile = tc.coordinator.ExecutionProfile()
 		d.RunResult = tc.coordinator.LastRunResult()
+		if sessions, err := tc.coordinator.TerminalSessions(context.Background()); err == nil {
+			d.TerminalSessions = sessions
+		}
 	}
 	if d.RunResult == nil && d.SessionData != nil {
 		d.RunResult = d.SessionData.RunResult
@@ -302,6 +306,8 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		b.WriteString("\n---\n\n")
 	}
 
+	writeTerminalSessionCleanup(&b, data.TerminalSessions)
+
 	if failures := team.FailureEventsFromTodos(data.Todos); len(failures) > 0 {
 		b.WriteString("## Failure Events\n\n")
 		for _, failure := range failures {
@@ -392,6 +398,32 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	}
 
 	return utils.RedactSecrets(b.String())
+}
+
+func terminalSessionReportGuidance(session team.TerminalSession) string {
+	switch session.CleanupState {
+	case team.TerminalCleanupCompleted:
+		return "Automatically contained; safe to retry."
+	case team.TerminalCleanupManual:
+		return "Manual intervention required; reconcile before retry."
+	}
+	if session.State == team.TerminalSessionUnknown {
+		return "Unknown after restart; reconcile before retry."
+	}
+	return "No active terminal cleanup required."
+}
+
+func writeTerminalSessionCleanup(b *strings.Builder, sessions []team.TerminalSession) {
+	if len(sessions) == 0 {
+		return
+	}
+	b.WriteString("## Terminal Session Cleanup\n\n")
+	b.WriteString("| Session | Owner task | State | Cleanup | Custody | Guidance |\n")
+	b.WriteString("|---------|------------|-------|---------|---------|----------|\n")
+	for _, session := range sessions {
+		fmt.Fprintf(b, "| %s | %s | %s | %s | %s | %s |\n", session.ID, session.OwnerTaskID, session.State, session.CleanupState, session.Custodian, terminalSessionReportGuidance(session))
+	}
+	b.WriteString("\nTerminal output is retained only in its artifact reference and is not embedded in this report.\n\n---\n\n")
 }
 
 func reportTaskFailureDetail(item *team.TodoItem) string {

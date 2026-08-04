@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -16,6 +18,7 @@ import (
 )
 
 var terminalWorkspace string
+var terminalListJSON bool
 
 var terminalCmd = &cobra.Command{
 	Use:   "terminal",
@@ -29,6 +32,77 @@ var terminalAttachCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return attachTerminal(os.Stdin, os.Stdout, terminalWorkspacePath(), args[0])
 	},
+}
+
+type terminalListEntry struct {
+	ID                 string                     `json:"id"`
+	RunID              string                     `json:"run_id,omitempty"`
+	OwnerTaskID        string                     `json:"owner_task_id,omitempty"`
+	Agent              string                     `json:"agent,omitempty"`
+	State              team.TerminalSessionState  `json:"state"`
+	Custodian          team.TerminalCustodian     `json:"custodian"`
+	CleanupState       team.TerminalCleanupState  `json:"cleanup_state"`
+	CleanupReason      team.TerminalCleanupReason `json:"cleanup_reason,omitempty"`
+	CleanupRequestedAt time.Time                  `json:"cleanup_requested_at,omitempty"`
+	CleanupCompletedAt time.Time                  `json:"cleanup_completed_at,omitempty"`
+	OutputRefs         []team.ArtifactRef         `json:"output_refs,omitempty"`
+	Guidance           string                     `json:"guidance"`
+}
+
+var terminalListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List terminal sessions and their cleanup status",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return listTerminalSessions(cmd.OutOrStdout(), terminalWorkspacePath(), terminalListJSON)
+	},
+}
+
+func listTerminalSessions(out io.Writer, workspace string, asJSON bool) error {
+	sessions, err := team.LoadTerminalSessions(workspace)
+	if err != nil {
+		return err
+	}
+	entries := make([]terminalListEntry, 0, len(sessions))
+	for _, session := range sessions {
+		entries = append(entries, terminalListEntry{
+			ID: session.ID, RunID: session.RunID, OwnerTaskID: session.OwnerTaskID, Agent: session.Agent,
+			State: session.State, Custodian: session.Custodian, CleanupState: session.CleanupState,
+			CleanupReason: session.CleanupReason, CleanupRequestedAt: session.CleanupRequestedAt,
+			CleanupCompletedAt: session.CleanupCompletedAt, OutputRefs: session.OutputRefs,
+			Guidance: terminalGuidance(session),
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	if asJSON {
+		return json.NewEncoder(out).Encode(entries)
+	}
+	if len(entries) == 0 {
+		_, err := fmt.Fprintln(out, "No terminal sessions.")
+		return err
+	}
+	for _, entry := range entries {
+		if _, err := fmt.Fprintf(out, "%s  state=%s cleanup=%s custody=%s  %s\n", entry.ID, entry.State, entry.CleanupState, entry.Custodian, entry.Guidance); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func terminalGuidance(session team.TerminalSession) string {
+	switch session.CleanupState {
+	case team.TerminalCleanupCompleted:
+		return "contained; safe to retry"
+	case team.TerminalCleanupManual:
+		return "manual intervention required; reconcile before retry"
+	}
+	if session.State == team.TerminalSessionUnknown {
+		return "unknown after restart; reconcile before retry"
+	}
+	if session.Running || session.State == team.TerminalSessionRunning {
+		return "active; wait for exit or close it from the owner task"
+	}
+	return "exited; safe to retry"
 }
 
 func terminalWorkspacePath() string {
@@ -148,4 +222,6 @@ func renderTerminalScreen(out io.Writer, screen string, last *string) {
 func init() {
 	terminalCmd.PersistentFlags().StringVarP(&terminalWorkspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
 	terminalCmd.AddCommand(terminalAttachCmd)
+	terminalListCmd.Flags().BoolVar(&terminalListJSON, "json", false, "Output machine-readable JSON")
+	terminalCmd.AddCommand(terminalListCmd)
 }
