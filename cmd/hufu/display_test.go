@@ -85,7 +85,7 @@ func TestDispatchStatusEventShowsTaskTimeout(t *testing.T) {
 }
 
 func TestWrapPreviewLinesWideEnough(t *testing.T) {
-	got := wrapPreviewLines("go run ./cmd/pilot vm-target exec --name ipa-ha-client -- cat /etc/ssh/sshd_config", 120, 4)
+	got := wrapPreviewLines("go run ./cmd/tool inspect --name host-a -- cat /etc/ssh/sshd_config", 120, 4)
 	if len(got) != 1 {
 		t.Fatalf("expected one line, got %#v", got)
 	}
@@ -95,7 +95,7 @@ func TestWrapPreviewLinesWideEnough(t *testing.T) {
 }
 
 func TestWrapPreviewLinesWrapsWithoutPrematureEllipsis(t *testing.T) {
-	got := wrapPreviewLines("go run ./cmd/pilot vm-target exec --name ipa-ha-client -- cat /etc/ssh/sshd_config", 36, 4)
+	got := wrapPreviewLines("go run ./cmd/tool inspect --name host-a -- cat /etc/ssh/sshd_config", 36, 4)
 	if len(got) < 2 {
 		t.Fatalf("expected wrapped output, got %#v", got)
 	}
