@@ -147,7 +147,7 @@ Results joined and printed to stdout
 | `--plan` | — | `false` | Force plan-first mode: agents must submit plans before executing |
 | `--auto-skills` | — | `false` | Enable automatic skill detection via sidecar / LLM matching |
 | `--report` | — | `false` | Generate a full execution report as a markdown file |
-| `--default` | — | `false` | Use the built-in default team (coordinator + Helper); no `.agent-teams/` directory required (mutually exclusive with `--agent-team`). Discovers global skills from `~/.agents/skills/` and respects `--skill` forced skills. |
+| `--default` | — | `false` | Use the built-in default team (coordinator + Helper); no `.agent-teams/` directory required (mutually exclusive with `--agent-team`). Discovers project skills from `.agents/skills/`, global skills from `~/.agents/skills/`, and respects `--skill` forced skills. |
 | `--helper-tools` | — | `""` | Comma-separated extra tools to enable for the default Helper worker when `--default` is set (e.g. `bash` or `bash,sudo,ssh`). Whitespace around each entry is trimmed; empty entries are dropped. Empty = Helper's baseline read-only toolset. |
 | `--model` | — | `""` | Override default model for the active team (e.g. `ollama/qwen3:8b`); highest priority — overrides agent .md, team.yaml, and hufu.yaml |
 | `--temperature` | — | `""` | Override sampling temperature (e.g. `0.2`) |
