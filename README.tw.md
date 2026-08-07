@@ -175,7 +175,7 @@ go run ./cmd/hufu
 | `--plan` | — | `bool` | `false` | 強制 plan-first 模式：Agent 必須先提交計畫 |
 | `--auto-skills` | — | `bool` | `false` | 啟用 sidecar / LLM 自動技能偵測 |
 | `--report` | — | `bool` | `false` | 產生完整的 markdown 執行報表 |
-| `--default` | — | `bool` | `false` | 使用內建預設團隊（coordinator + Helper）；不需要 `.agent-teams/` 目錄（與 `--agent-team` 互斥）。會自動探索 `~/.agents/skills/` 的全域技能並支援 `--skill` 強制載入。 |
+| `--default` | — | `bool` | `false` | 使用內建預設團隊（coordinator + Helper）；不需要 `.agent-teams/` 目錄（與 `--agent-team` 互斥）。會自動探索目前目錄 `.agents/skills/` 與 `~/.agents/skills/` 的技能並支援 `--skill` 強制載入。 |
 | `--helper-tools` | — | `string` | `""` | 為預設 Helper worker 啟用額外的工具列表（逗號分隔），需搭配 `--default` 使用（例如 `bash` 或 `bash,sudo,ssh`）。會自動 trim 空白，忽略空項目。空字串 = 預設唯讀工具集。 |
 | `--auto-approve` | — | `bool` | `false` | 自動選擇 `ask_user` 中明顯安全的選項；危險或不明確的選項仍會詢問使用者 |
 | `--model` | — | `string` | `""` | 覆寫目前團隊的預設模型（最高優先權） |
@@ -684,7 +684,8 @@ allowed-tools: view,grep,glob,bash
 Skills 依序從以下路徑搜尋：
 
 1. `<teamDir>/skills/<skill-name>/SKILL.md` — 團隊專屬 skills（從 `<teamDir>/.agents/skills/` 更改）
-2. `~/.agents/skills/<skill-name>/SKILL.md` — 全域 skills（不變）
+2. `<current-directory>/.agents/skills/<skill-name>/SKILL.md` — 專案 skills
+3. `~/.agents/skills/<skill-name>/SKILL.md` — 全域 skills（不變）
 
 ### 在團隊中使用 Skills
 
