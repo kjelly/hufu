@@ -223,6 +223,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("\n## Environment & Rules\n\n")
 	fmt.Fprintf(&b, "- CWD: %s | Workspace: %s | Shared: %s | Time: %s\n", c.projectDir, wsPath, sharedPath, c.sessionTime.Format(time.RFC3339))
 	fmt.Fprintf(&b, "- ALL intermediate files go to workspace: %s. Use %s for inter-agent sharing. NEVER write outside workspace.\n", wsPath, sharedPath)
+	b.WriteString("- **Never carry a discovered absolute path across a task boundary as a literal fact another worker must reuse without re-verifying it** — a binary location from `which`, a socket/PID, a generated file path, etc. What one worker discovered in its own execution context is not guaranteed to resolve the same way for a different worker (different sandbox, different session, or the underlying state may simply have changed since). If a later task needs that same fact, let its worker rediscover it itself; never instruct a worker not to verify a path you are handing it. Confirmed live 2026-08-07: a coordinator hardcoded a `trec` binary path an earlier worker had discovered via `which trec` into a later task's goal text and told that worker not to re-run `which trec` — the literal path did not exist in the later worker's execution context (exit 127), failing the task on a stale coordinator-cached fact a 5-second rediscovery would have avoided.\n")
 	b.WriteString("- stm_write after each meaningful agent result (# 發現 / # 決策 / # 錯誤與修復 / # 待解決) AND before finish. ltm_update for cross-session knowledge.\n\n")
 
 	return b.String()

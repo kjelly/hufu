@@ -129,6 +129,64 @@ func TestPolicyGateEnforcesClosedTaskToolSequence(t *testing.T) {
 	}
 }
 
+// TestPolicyGateAdmitsEarlyBlockedSubmitResultButNotSuccess covers the fix
+// for a worker that discovers, partway through a closed sequence, that the
+// checkpoint cannot proceed (e.g. a prerequisite step's inputs don't exist).
+// An honest out-of-position submit_result reporting blocked/failed/partial
+// must be admitted immediately rather than rejected as a sequence
+// violation — the rejection previously surfaced upstream as "protocol
+// incomplete: missing required result" even though the worker had tried to
+// report exactly what happened. A success claim must still be rejected
+// out of position: the escape hatch is for honest early termination, not a
+// shortcut around the remaining evidence-gathering steps.
+func TestPolicyGateAdmitsEarlyBlockedSubmitResultButNotSuccess(t *testing.T) {
+	c := gateTestCoordinator()
+	bash := &recordingTool{name: "bash"}
+	result := &recordingTool{name: "submit_result"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{bash, result})
+	byName := map[string]fantasy.AgentTool{}
+	for _, tool := range gated {
+		byName[tool.Info().Name] = tool
+	}
+
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"bash", "submit_result"})
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence([]string{"bash", "bash", "bash", "submit_result"}))
+
+	if resp, err := byName["bash"].Run(ctx, fantasy.ToolCall{Name: "bash"}); err != nil || resp.IsError {
+		t.Fatalf("expected first sequence bash call to run: response=%+v err=%v", resp, err)
+	}
+
+	// Only 1 of 3 required bash calls has run. A success claim here is a
+	// shortcut around the remaining steps and must still be denied.
+	successCall := fantasy.ToolCall{Name: "submit_result", Input: `{"status":"success","summary":"done"}`}
+	if resp, err := byName["submit_result"].Run(ctx, successCall); err != nil || !resp.IsError {
+		t.Fatalf("out-of-position success claim must be denied: response=%+v err=%v", resp, err)
+	}
+	if result.ran {
+		t.Fatal("denied success claim must not execute")
+	}
+
+	// A blocked report, by contrast, is an honest admission the checkpoint
+	// cannot proceed and must be admitted despite being out of position.
+	blockedCall := fantasy.ToolCall{Name: "submit_result", Input: `{"status":"blocked","summary":"prerequisite files are missing"}`}
+	resp, err := byName["submit_result"].Run(ctx, blockedCall)
+	if err != nil || resp.IsError {
+		t.Fatalf("early blocked submit_result must be admitted: response=%+v err=%v", resp, err)
+	}
+	if !result.ran {
+		t.Fatal("admitted blocked submit_result should have executed")
+	}
+
+	// The escape hatch closes the sequence like any other terminal
+	// submit_result — nothing may run after it.
+	if resp, err := byName["bash"].Run(ctx, fantasy.ToolCall{Name: "bash"}); err != nil || !resp.IsError {
+		t.Fatalf("post-result tool must be denied: response=%+v err=%v", resp, err)
+	}
+	if bash.calls != 1 {
+		t.Fatalf("bash should have run exactly once, ran %d times", bash.calls)
+	}
+}
+
 func TestFilterToolsForSequenceHidesUnrelatedTools(t *testing.T) {
 	bash := &recordingTool{name: "bash"}
 	ls := &recordingTool{name: "ls"}

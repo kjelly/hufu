@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -55,7 +56,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		}
 		return fantasy.NewTextErrorResponse(denial), nil
 	}
-	if sequenceDenial := taskToolSequenceFromContext(ctx).reserve(t.Info().Name); sequenceDenial != "" {
+	if sequenceDenial := taskToolSequenceFromContext(ctx).reserve(t.Info().Name, earlyTerminalSubmitResult(t.Info().Name, call)); sequenceDenial != "" {
 		if t.coordinator != nil {
 			t.coordinator.report(t.coordinator.newEvent("step").withAgent(agentName).
 				withMessage(fmt.Sprintf("tool %q denied by closed task sequence", t.Info().Name)))
@@ -63,6 +64,34 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		return fantasy.NewTextErrorResponse(sequenceDenial), nil
 	}
 	return t.inner.Run(ctx, call)
+}
+
+// earlyTerminalSubmitResult reports whether call is a submit_result
+// invocation whose declared status is an honest early bail-out (blocked,
+// failed, partial) rather than a completion claim (success,
+// completed_with_gaps). Only these statuses may skip ahead in a closed task
+// tool sequence (taskToolSequence.reserve) — a worker must still complete
+// every scripted step before a success claim; it must never be forced to
+// keep fabricating remaining steps once it has already determined, and is
+// honestly reporting, that the checkpoint cannot proceed. Any parse failure
+// (malformed JSON, missing status, an unrecognized status) returns false,
+// so it is never treated as more privileged than an ordinary tool call.
+func earlyTerminalSubmitResult(toolName string, call fantasy.ToolCall) bool {
+	if toolName != "submit_result" {
+		return false
+	}
+	var payload struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(call.Input), &payload); err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(payload.Status)) {
+	case TaskResultStatusBlocked, TaskResultStatusFailed, TaskResultStatusPartial:
+		return true
+	default:
+		return false
+	}
 }
 
 // gatePolicyTools wraps every tool in agentTools with the recoverable policy
