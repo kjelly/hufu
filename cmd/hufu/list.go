@@ -40,6 +40,10 @@ type agentFrontmatter struct {
 	Model       string      `yaml:"model"`
 	Tools       interface{} `yaml:"tools"`
 	Skills      interface{} `yaml:"skills"`
+	MemoryID    string      `yaml:"memory-id"`
+	Memory      struct {
+		Mode string `yaml:"mode"`
+	} `yaml:"memory"`
 }
 
 type listedTeam struct {
@@ -55,6 +59,8 @@ type listedAgent struct {
 	Model       string   `json:"model,omitempty"`
 	Tools       []string `json:"tools,omitempty"`
 	Skills      []string `json:"skills,omitempty"`
+	MemoryID    string   `json:"memory_id,omitempty"`
+	MemoryMode  string   `json:"memory_mode,omitempty"`
 }
 
 func init() {
@@ -140,8 +146,10 @@ func collectListedTeam(name, dir string) listedTeam {
 		}
 		record.Agents = append(record.Agents, listedAgent{
 			Name: agentName, Description: fm.Description, Role: role, Model: fm.Model,
-			Tools:  splitNormalizedList(agent.ExpandImpliedTools(normalizeList(fm.Tools))),
-			Skills: splitNormalizedList(normalizeList(fm.Skills)),
+			Tools:      splitNormalizedList(agent.ExpandImpliedTools(normalizeList(fm.Tools))),
+			Skills:     splitNormalizedList(normalizeList(fm.Skills)),
+			MemoryID:   fm.MemoryID,
+			MemoryMode: fm.Memory.Mode,
 		})
 	}
 	sort.Slice(record.Agents, func(i, j int) bool { return record.Agents[i].Name < record.Agents[j].Name })
@@ -204,6 +212,12 @@ func printTeam(name, dir string) {
 		}
 		if skills := normalizeList(fm.Skills); skills != "" {
 			fmt.Printf("      skills: %s\n", skills)
+		}
+		if fm.Memory.Mode != "" && fm.Memory.Mode != "off" {
+			fmt.Printf("      memory: %s\n", fm.Memory.Mode)
+		}
+		if fm.MemoryID != "" {
+			fmt.Printf("      memory-id: %s\n", fm.MemoryID)
 		}
 	}
 	fmt.Println()
