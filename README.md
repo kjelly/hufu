@@ -204,7 +204,7 @@ go run ./cmd/hufu
 | `--plan` | — | `bool` | `false` | Force plan-first mode: agents must submit plans before executing |
 | `--auto-skills` | — | `bool` | `false` | Enable automatic skill detection via sidecar / LLM matching |
 | `--report` | — | `bool` | `false` | Generate a full execution report as a markdown file |
-| `--default` | — | `bool` | `false` | Use the built-in default team (coordinator + Helper); no `.agent-teams/` directory required (mutually exclusive with `--agent-team`). Discovers global skills from `~/.agents/skills/` and respects `--skill` forced skills. |
+| `--default` | — | `bool` | `false` | Use the built-in default team (coordinator + Helper); no `.agent-teams/` directory required (mutually exclusive with `--agent-team`). Discovers project skills from `.agents/skills/`, global skills from `~/.agents/skills/`, and respects `--skill` forced skills. |
 | `--helper-tools` | — | `string` | `""` | Comma-separated extra tools for the default Helper worker when `--default` is set (e.g. `bash` or `bash,sudo,ssh`). Whitespace trimmed; empty entries dropped. Empty = baseline read-only toolset. |
 | `--auto-approve` | — | `bool` | `false` | Automatically choose clearly safe `ask_user` options; dangerous or ambiguous choices still prompt the user |
 | `--model` | — | `string` | `""` | Override default model for the active team (highest priority) |
@@ -744,7 +744,8 @@ allowed-tools: view,grep,glob,bash
 Skills are searched in the following order:
 
 1. `<teamDir>/skills/<skill-name>/SKILL.md` — Team-specific skills (changed from `<teamDir>/.agents/skills/`)
-2. `~/.agents/skills/<skill-name>/SKILL.md` — Global skills (unchanged)
+2. `<current-directory>/.agents/skills/<skill-name>/SKILL.md` — Project skills
+3. `~/.agents/skills/<skill-name>/SKILL.md` — Global skills (unchanged)
 
 ### Using Skills in Teams
 
