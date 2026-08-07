@@ -1,12 +1,23 @@
 package team
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestBudgetSnapshotLoadsLegacyRedactedTokenCounter(t *testing.T) {
+	var snapshot BudgetSnapshot
+	if err := json.Unmarshal([]byte(`{"tokens_used":"[REDACTED]","attempt":2}`), &snapshot); err != nil {
+		t.Fatalf("legacy budget snapshot should remain loadable: %v", err)
+	}
+	if snapshot.TokensUsed != 0 || snapshot.Attempt != 2 {
+		t.Fatalf("legacy budget snapshot = %#v, want tokens_used=0 attempt=2", snapshot)
+	}
+}
 
 // TestLoadSession tests the LoadSession function
 func TestLoadSession(t *testing.T) {

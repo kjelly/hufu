@@ -241,7 +241,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 
 	// Derive the sub-agent allowlist from the exact tool slice it receives,
 	// rather than inheriting the caller's permissions or re-selecting later.
-	agentTools := agent.SelectTools(c.coreTools, agentDef.Tools)
+	agentTools := c.selectWorkerTools(agentDef)
 	ctx = c.withEffectiveToolsAllowed(ctx, agentDef, agentToolNames(agentTools))
 	// Sub-agent streams do not produce a separate execution receipt. Make the
 	// usage-accounting boundary explicit even when the parent worker context

@@ -17,7 +17,7 @@ func TestTerminalSessionIDsIn(t *testing.T) {
 	}{
 		{
 			name: "the shape a real wait used",
-			text: "cd /home/ubuntu/nfs/github/pilot && tail -200 logs/terminal/term-6f6a0856c7be1193795c0674.log",
+			text: "cd /srv/application && tail -200 logs/terminal/term-6f6a0856c7be1193795c0674.log",
 			want: []string{"term-6f6a0856c7be1193795c0674"},
 		},
 		{

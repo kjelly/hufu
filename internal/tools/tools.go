@@ -639,21 +639,8 @@ func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 		}
 	}
 
-	if t.guardReviewer != nil {
-		if rules, _ := ctx.Value(GuardRulesKey).([]string); len(rules) > 0 {
-			approved, reason, reviewErr := t.guardReviewer(ctx, t.info.Name, call.Input, rules)
-			if reviewErr != nil {
-				// Fail closed: when the guard reviewer cannot complete (timeout,
-				// model error, etc.) we must not silently allow a call that was
-				// supposed to be reviewed. Deny it so the agent retries or finds
-				// an allowed alternative, rather than bypassing the guard.
-				fmt.Fprintf(os.Stderr, "warning: guard review failed, denying tool call: %v\n", reviewErr)
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("Guard review unavailable (%v); tool call denied. Retry or use a different approach that does not require review.", reviewErr)), nil
-			} else if !approved {
-				msg := fmt.Sprintf("Guard rule violation: %s", reason)
-				return fantasy.NewTextErrorResponse(msg), nil
-			}
-		}
+	if guardError := t.guardError(ctx, call.Input); guardError != "" {
+		return fantasy.NewTextErrorResponse(guardError), nil
 	}
 
 	toolResp, err := t.handler(ctx, call)
@@ -689,6 +676,41 @@ func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 	}
 
 	return toolResp, err
+}
+
+// evaluateDeterministicGuard keeps the safety-critical rule check separate
+// from the general tool lifecycle so the model-based reviewer cannot bypass
+// it and the core dispatch path remains easy to audit.
+func evaluateDeterministicGuard(toolName, input string, rules []string) (string, error) {
+	return EvaluateDeterministicGuardRules(toolName, input, rules)
+}
+
+func (t *coreTool) guardError(ctx context.Context, input string) string {
+	rules, _ := ctx.Value(GuardRulesKey).([]string)
+	if len(rules) == 0 {
+		return ""
+	}
+	if reason, ruleErr := evaluateDeterministicGuard(t.info.Name, input, rules); ruleErr != nil {
+		return "deterministic guard configuration error; tool call denied: " + ruleErr.Error()
+	} else if reason != "" {
+		return "Deterministic guard violation: " + reason
+	}
+
+	if t.guardReviewer == nil {
+		return ""
+	}
+	approved, reason, reviewErr := t.guardReviewer(ctx, t.info.Name, input, rules)
+	if reviewErr != nil {
+		// Fail closed: when the guard reviewer cannot complete (timeout, model
+		// error, etc.) we must not silently allow a call that was supposed to be
+		// reviewed. Deny it so the agent retries or finds an allowed alternative.
+		fmt.Fprintf(os.Stderr, "warning: guard review failed, denying tool call: %v\n", reviewErr)
+		return fmt.Sprintf("Guard review unavailable (%v); tool call denied. Retry or use a different approach that does not require review.", reviewErr)
+	}
+	if !approved {
+		return fmt.Sprintf("Guard rule violation: %s", reason)
+	}
+	return ""
 }
 
 func parseArgs(input string, target any) error {
@@ -789,6 +811,7 @@ func validateToolInput(input string, info fantasy.ToolInfo) error {
 }
 
 func resolvePathWithWorkDir(path, workDir string) (string, error) {
+	path = expandUserPath(path)
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path), nil
 	}
@@ -801,6 +824,19 @@ func resolvePathWithWorkDir(path, workDir string) (string, error) {
 		}
 	}
 	return filepath.Clean(filepath.Join(baseDir, path)), nil
+}
+
+// expandUserPath resolves the common path spellings agents use in tool
+// arguments. Tool arguments are not shell commands, so $HOME and ~ must be
+// expanded explicitly rather than relying on a shell to do it.
+func expandUserPath(path string) string {
+	path = os.ExpandEnv(path)
+	if strings.HasPrefix(path, "~") && (path == "~" || strings.HasPrefix(path, "~/")) {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, strings.TrimPrefix(path, "~"))
+		}
+	}
+	return path
 }
 
 func resolveAndValidatePath(path, workDir string) (string, error) {

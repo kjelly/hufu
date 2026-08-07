@@ -173,6 +173,41 @@ func TestPhase0FinalManifestPersistsForAdvisoryAndPartialRuns(t *testing.T) {
 	}
 }
 
+func TestPhase0ManifestUsesSuccessfulExecutionTranscriptAsEvidence(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, logsDir, "task-output", "task-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte(`{"event":"tool_result","exit_code":0}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exitCode := 0
+	c := &Coordinator{
+		session:        &TeamSession{Workspace: dir},
+		taskTracker:    NewTaskTracker(),
+		executionRunID: "run-transcript-evidence",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "transcript-backed task"}})[0]
+	c.taskTracker.TodoList().UpdateStatus(item.ID, TaskDone, "success")
+	item.TypedResult = &TaskResult{Status: "success", Summary: "completed"}
+	item.ExecutionReceipt = &ExecutionReceipt{
+		RunID: "run-transcript-evidence", TaskID: item.ID, Attempt: 1,
+		ExitCode: &exitCode, TranscriptRef: transcript,
+	}
+
+	manifest, err := c.buildEvidenceManifest(context.Background(), true)
+	if err != nil {
+		t.Fatalf("transcript-backed task rejected: %v", err)
+	}
+	if manifest.Status != "accepted" || len(manifest.ArtifactRefs) != 1 {
+		t.Fatalf("manifest = %#v, want accepted with one transcript artifact", manifest)
+	}
+	if len(manifest.EvidenceResults) != 1 || manifest.EvidenceResults[0].Status != "passed" {
+		t.Fatalf("evidence results = %#v, want one passed task result", manifest.EvidenceResults)
+	}
+}
+
 func TestPhase0ManifestBindsAcceptanceOutcome(t *testing.T) {
 	dir := t.TempDir()
 	c := &Coordinator{

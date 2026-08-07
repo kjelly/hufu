@@ -93,8 +93,8 @@ func TestProtocolFailureRecoveryPolicyDoesNotReplayNonReplayableSideEffects(t *t
 
 func TestExecuteTaskProtocolOnlyEmptyOutputBlocksWithoutRetry(t *testing.T) {
 	workspace := t.TempDir()
-	// executeTask's STM recorder is deliberately asynchronous; let it finish
-	// before t.TempDir removes the workspace during a full parallel suite.
+	// Failed tasks may persist a reflexion lesson asynchronously; let that
+	// optional background record finish before t.TempDir removes the workspace.
 	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	calls := 0
 	c := &Coordinator{
@@ -803,7 +803,7 @@ acceptance:
 	}
 }
 
-func TestSection14_PilotRegressionScenario(t *testing.T) {
+func TestSection14_RegressionScenario(t *testing.T) {
 	c := newBudgetCoordinator(t)
 	tmpDir := t.TempDir()
 	c.projectDir = tmpDir

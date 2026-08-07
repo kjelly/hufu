@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	contextstore "github.com/anomalyco/hufu/internal/context"
 )
 
 // CompletionGateInput is the immutable evidence observed at the end of a run.
@@ -119,7 +121,17 @@ func (c *Coordinator) applyCompletionGate(ctx context.Context, result *RunResult
 		TerminalLeaks: terminalLeaks, ArtifactStore: store,
 	})
 	if decision.Accepted {
+		if err := c.confirmWorkerMemoryCandidates(ctx, manifest); err != nil {
+			c.rejectWorkerMemoryCandidates(ctx, manifest, "accepted manifest could not confirm private candidates: "+err.Error())
+			result.Outcome = RunOutcomePartial
+			result.GoalSatisfied = false
+			result.StopReason = StopReasonEvidenceIncomplete
+			result.ExitCode = 7
+			result.Reason = "worker memory candidate promotion failed: " + err.Error()
+			return result
+		}
 		if err := c.bindCandidateLessonsToManifest(manifest); err != nil {
+			c.rejectWorkerMemoryCandidates(ctx, manifest, "legacy candidate manifest binding failed: "+err.Error())
 			result.Outcome = RunOutcomePartial
 			result.GoalSatisfied = false
 			result.StopReason = StopReasonEvidenceIncomplete
@@ -130,12 +142,55 @@ func (c *Coordinator) applyCompletionGate(ctx context.Context, result *RunResult
 		c.promoteCandidateLessons(manifest)
 		return result
 	}
+	c.rejectWorkerMemoryCandidates(ctx, manifest, strings.Join(decision.Reasons, "; "))
 	result.Outcome = RunOutcomePartial
 	result.GoalSatisfied = false
 	result.StopReason = StopReasonEvidenceIncomplete
 	result.ExitCode = 7
 	result.Reason = strings.Join(decision.Reasons, "; ")
 	return result
+}
+
+func (c *Coordinator) confirmWorkerMemoryCandidates(ctx context.Context, manifest *EvidenceManifest) error {
+	if c == nil || c.workerMemorySvc == nil || manifest == nil {
+		return nil
+	}
+	scope := c.contextScope()
+	scope.BranchID = c.activeBranchID()
+	items, err := c.workerMemorySvc.Confirm(ctx, WorkerMemoryPromotionRequest{Scope: scope, Manifest: manifest})
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		_ = c.emitEvent("worker_memory_confirmed", "coordinator", item.Metadata["task_id"], map[string]interface{}{
+			"item_id": item.ID, "worker_id": item.Scope.AgentID, "run_id": manifest.RunID, "manifest_hash": manifest.ManifestHash,
+		})
+	}
+	return nil
+}
+
+func (c *Coordinator) rejectWorkerMemoryCandidates(ctx context.Context, manifest *EvidenceManifest, reason string) {
+	if c == nil || c.workerMemorySvc == nil {
+		return
+	}
+	runID := c.executionRunID
+	if manifest != nil && strings.TrimSpace(manifest.RunID) != "" {
+		runID = manifest.RunID
+	}
+	if strings.TrimSpace(runID) == "" {
+		return
+	}
+	scope := c.contextScope()
+	scope.BranchID = c.activeBranchID()
+	items, err := c.workerMemorySvc.RejectRun(ctx, WorkerMemoryRejectionRequest{Scope: scope, RunID: runID, Reason: reason})
+	if err != nil {
+		return
+	}
+	for _, item := range items {
+		_ = c.emitEvent("worker_memory_rejected", "coordinator", item.Metadata["task_id"], map[string]interface{}{
+			"item_id": item.ID, "worker_id": item.Scope.AgentID, "run_id": runID, "reason": contextstore.RedactSecrets(reason),
+		})
+	}
 }
 
 // completionGateState reads authoritative coordinator state immediately before

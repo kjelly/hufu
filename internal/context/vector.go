@@ -60,7 +60,7 @@ func OpenOllamaVectorStore(workspace, model, ollamaURL string) (*VectorStore, er
 func (s *VectorStore) Rebuild(ctx context.Context, repo Repository, scope Scope) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	items, err := repo.Query(ctx, RepositoryQuery{Scope: scope, Limit: 100000})
+	items, err := repo.Query(ctx, RepositoryQuery{Scope: scope, Visibility: VisibilitySubtree, IncludeCandidates: true, Limit: 100000})
 	if err != nil {
 		return err
 	}
@@ -123,7 +123,7 @@ func (s *VectorStore) SearchVector(ctx context.Context, req SearchRequest) ([]Se
 		if err != nil {
 			return nil, fmt.Errorf("hydrating vector result %q from canonical store: %w", result.ID, err)
 		}
-		if !isRetrievable(item, req.Scope, time.Now()) {
+		if !isRetrievable(item, req, time.Now()) {
 			continue
 		}
 		out = append(out, SearchResult{Item: item, Score: float64(result.Similarity)})
@@ -131,16 +131,48 @@ func (s *VectorStore) SearchVector(ctx context.Context, req SearchRequest) ([]Se
 	return out, nil
 }
 
-// isRetrievable is the vector equivalent of SQLite's scope, supersede, and
-// temporal predicates. Vector documents carry only content and canonical ID;
-// every result must therefore be hydrated and authorized by the canonical row.
-func isRetrievable(item ContextItem, scope Scope, now time.Time) bool {
+// isRetrievable is the vector equivalent of SQLite's scope, supersede,
+// temporal, and lifecycle predicates. Vector documents carry only content
+// and canonical ID; every result must therefore be hydrated and authorized
+// by the canonical row using the same ancestor-visibility semantics as
+// scopeAuthorize.
+func isRetrievable(item ContextItem, req SearchRequest, now time.Time) bool {
+	scope := req.Scope
 	if scope.ProjectID == "" || item.Scope.ProjectID != scope.ProjectID || item.SupersededBy != "" {
 		return false
 	}
-	for _, level := range [][2]string{{scope.TeamID, item.Scope.TeamID}, {scope.SessionID, item.Scope.SessionID}, {scope.AgentID, item.Scope.AgentID}, {scope.TaskID, item.Scope.TaskID}, {scope.AttemptID, item.Scope.AttemptID}} {
-		if level[0] != "" && level[1] != "" && level[0] != level[1] {
-			return false
+	if !req.IncludeCandidates && item.Lifecycle != "" && item.Lifecycle != LifecycleConfirmed {
+		return false
+	}
+	visibility := req.Visibility
+	if visibility == "" {
+		visibility = VisibilityAncestors
+	}
+	for _, level := range [][2]string{
+		{scope.TeamID, item.Scope.TeamID},
+		{scope.SessionID, item.Scope.SessionID},
+		{scope.BranchID, item.Scope.BranchID},
+		{scope.AgentID, item.Scope.AgentID},
+		{scope.TaskID, item.Scope.TaskID},
+		{scope.AttemptID, item.Scope.AttemptID},
+	} {
+		switch visibility {
+		case VisibilitySubtree:
+			if level[0] != "" && level[1] != "" && level[0] != level[1] {
+				return false
+			}
+		case VisibilityExact:
+			if level[0] != level[1] {
+				return false
+			}
+		default: // VisibilityAncestors
+			if level[0] != "" {
+				if level[1] != "" && level[0] != level[1] {
+					return false
+				}
+			} else if level[1] != "" {
+				return false
+			}
 		}
 	}
 	return (item.ValidFrom == nil || !item.ValidFrom.After(now)) &&

@@ -170,6 +170,21 @@ type TaskResult struct {
 	Source     string  `json:"source"` // "submitted" or "parsed_free_text"
 }
 
+const (
+	// TaskResultStatusSuccess means the assigned task reached its intended
+	// outcome without a known external limitation.
+	TaskResultStatusSuccess = "success"
+	// TaskResultStatusCompletedWithGaps means the assigned task itself is
+	// complete and its evidence is usable, but it discovered a limitation in
+	// the target system or an unmet prerequisite. The limitation belongs in
+	// Summary, Findings, Risks, or OpenQuestions; it does not make completed
+	// discovery or analysis work incomplete.
+	TaskResultStatusCompletedWithGaps = "completed_with_gaps"
+	TaskResultStatusPartial           = "partial"
+	TaskResultStatusFailed            = "failed"
+	TaskResultStatusBlocked           = "blocked"
+)
+
 // ParseFreeTextResult constructs a TaskResult from unstructured text output when
 // submit_result tool was not invoked by the agent.
 func ParseFreeTextResult(text string) *TaskResult {
@@ -181,19 +196,21 @@ func ParseFreeTextResult(text string) *TaskResult {
 }
 
 // validateSubmittedTaskResult makes the worker's terminal state explicit.
-// A non-success result is useful evidence, but must flow through retries and
-// error handling rather than silently becoming a completed Todo item.
+// A completed_with_gaps result is a completed task with an explicit target
+// limitation. In contrast, partial, failed, and blocked are useful evidence
+// that must flow through retries and error handling rather than silently
+// becoming a completed Todo item.
 func validateSubmittedTaskResult(result *TaskResult) error {
 	if result == nil {
 		return fmt.Errorf("missing structured task result")
 	}
 	switch result.Status {
-	case "success":
+	case TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps:
 		return nil
-	case "partial", "failed", "blocked":
+	case TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked:
 		return fmt.Errorf("worker reported task status %q: %s", result.Status, strings.TrimSpace(result.Summary))
 	default:
-		return fmt.Errorf("invalid task result status %q; expected success, partial, failed, or blocked", result.Status)
+		return fmt.Errorf("invalid task result status %q; expected success, completed_with_gaps, partial, failed, or blocked", result.Status)
 	}
 }
 

@@ -39,7 +39,7 @@ func TestShadowContextAppendDoesNotNeedLegacyPromptPath(t *testing.T) {
 		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}},
 	}
 	c.shadowContextAppend(contextstore.ContextProgress, "completed migration", "stm_write")
-	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "/project", TeamID: "team"}})
+	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "/project", TeamID: "team", SessionID: filepath.Base(workspace)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestCanonicalMemoryIngestionGeneratesLegacySTMProjection(t *testing.T) {
 	if !strings.Contains(stm, "# \u9032\u5ea6") || !strings.Contains(stm, "- completed canonical migration") {
 		t.Fatalf("legacy STM must be generated from canonical context: %q", stm)
 	}
-	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "/project", TeamID: "team"}})
+	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "/project", TeamID: "team", SessionID: filepath.Base(workspace)}})
 	if err != nil || len(items) != 1 {
 		t.Fatalf("canonical STM item = %#v, err=%v", items, err)
 	}
@@ -167,7 +167,7 @@ func TestShadowContextAppendFailureIsRepairable(t *testing.T) {
 		t.Fatalf("recovered=%d remaining=%d after recovery, want 1/0", recovered, remaining)
 	}
 
-	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "/project", TeamID: "team"}})
+	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "/project", TeamID: "team", SessionID: filepath.Base(workspace)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestAutoExtractLTMCanonicalFirstAndDeduplicates(t *testing.T) {
 	}
 	c := &Coordinator{contextRepo: repo, projectDir: "/project", session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}}}
 	c.AutoExtractLTM(context.Background())
-	scope := contextstore.Scope{ProjectID: "/project", TeamID: "team"}
+	scope := contextstore.Scope{ProjectID: "/project", TeamID: "team", SessionID: filepath.Base(workspace)}
 	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: scope})
 	if err != nil {
 		t.Fatal(err)

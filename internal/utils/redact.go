@@ -62,6 +62,7 @@ var (
 // explicit: every other scalar below a secret-looking key is redacted,
 // regardless of its JSON type.
 var numericTelemetryKeys = map[string]struct{}{
+	"tokens_used":                     {},
 	"tokens_since_progress":           {},
 	"tokens_since_criterion_progress": {},
 	"max_tokens_without_progress":     {},

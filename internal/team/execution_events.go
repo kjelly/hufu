@@ -30,6 +30,18 @@ type ExecutionUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
+	// ProgressTokens is the growth-only token count for this attempt — new
+	// context plus generated output, the same accounting attemptBudget
+	// already uses (see attempt_budget.go) — for feeding the run-level
+	// no-progress budget specifically. TotalTokens sums every step's full
+	// resent-conversation usage and is correct for cost/receipt reporting,
+	// but summed across steps it double- and triple-counts the same resent
+	// history and grows roughly quadratically with an attempt's step count;
+	// recordExecutionEvent prefers this field for recordReliabilityUsage so
+	// one long, legitimate task cannot look identical to unproven thrash.
+	// Zero means "not computed for this call site" and TotalTokens is used
+	// as the fallback, matching the pre-existing behavior.
+	ProgressTokens int `json:"progress_tokens,omitempty"`
 }
 
 // ExecutionEvent records one attempt lifecycle transition. TaskID and Attempt
@@ -129,6 +141,27 @@ func usageFromSteps(steps []fantasy.StepResult) ExecutionUsage {
 	}
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	}
+	return usage
+}
+
+// usageWithProgressTokens augments usageFromSteps(steps) with a
+// ProgressTokens snapshot from this attempt's live attemptBudget. TotalTokens
+// sums every step's full resent-conversation usage, which is correct for
+// cost/receipt reporting but, summed across an attempt's steps, charges the
+// same resent history once per step; a long attempt's total then grows
+// roughly with the square of its step count rather than with the content it
+// actually added. attemptTokens already tracks growth-only usage for this
+// exact attempt (see attempt_budget.go), so reusing its snapshot here — rather
+// than re-deriving a second estimate from steps — keeps the no-progress
+// budget's accounting identical to the per-attempt guard's, instead of a
+// second, differently-biased implementation of the same idea. A nil
+// attemptTokens (guard disabled, MaxTokensPerAttempt <= 0) or a zero
+// snapshot leaves TotalTokens as the fallback via recordExecutionEvent.
+func usageWithProgressTokens(steps []fantasy.StepResult, attemptTokens *attemptBudget) ExecutionUsage {
+	usage := usageFromSteps(steps)
+	if used, _ := attemptTokens.snapshot(); used > 0 {
+		usage.ProgressTokens = int(used)
 	}
 	return usage
 }
@@ -355,7 +388,9 @@ func evidenceState(result *RunResult) string {
 }
 
 func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, status, model string, duration time.Duration, usage ExecutionUsage) {
-	if usage.TotalTokens > 0 {
+	if progressTokens := usage.ProgressTokens; progressTokens > 0 {
+		c.recordReliabilityUsage(taskID, attempt, progressTokens)
+	} else if usage.TotalTokens > 0 {
 		c.recordReliabilityUsage(taskID, attempt, usage.TotalTokens)
 	}
 	c.executionEventsMu.RLock()

@@ -95,8 +95,53 @@ type AgentDef struct {
 	// ReconcileTool is an optional read-only probe command used during crash
 	// recovery to classify whether an interrupted task completed.
 	ReconcileTool string
-	Generation    GenerationParams
-	ExtraModels   []string
+	// MemoryID is the stable worker identity for per-worker memory. When
+	// empty, the runtime falls back to the normalized agent Name. Renaming
+	// an agent while preserving MemoryID keeps its memory continuity.
+	MemoryID string
+	// Memory is the per-worker memory policy resolved from agent frontmatter,
+	// team defaults, and built-in defaults (in that precedence order).
+	Memory      WorkerMemoryPolicy
+	Generation  GenerationParams
+	ExtraModels []string
+}
+
+// WorkerMemoryMode controls whether a worker has private memory and how long
+// it persists. The default is off — all memory remains shared.
+type WorkerMemoryMode string
+
+const (
+	WorkerMemoryOff        WorkerMemoryMode = "off"
+	WorkerMemorySession    WorkerMemoryMode = "session"
+	WorkerMemoryPersistent WorkerMemoryMode = "persistent"
+)
+
+// WorkerMemoryPolicy is the resolved per-worker memory configuration. TTL
+// fields are string durations (e.g. "168h", "0") parsed at load time; an
+// empty string uses the built-in default, "0" means no expiry.
+type WorkerMemoryPolicy struct {
+	Mode          WorkerMemoryMode `yaml:"mode" json:"mode"`
+	AutoRecall    bool             `yaml:"auto-recall" json:"auto_recall"`
+	AutoSave      bool             `yaml:"auto-save" json:"auto_save"`
+	MaxItems      int              `yaml:"max-items" json:"max_items"`
+	MaxTokens     int              `yaml:"max-tokens" json:"max_tokens"`
+	SessionTTL    string           `yaml:"session-ttl" json:"session_ttl"`
+	PersistentTTL string           `yaml:"persistent-ttl" json:"persistent_ttl"`
+}
+
+// DefaultWorkerMemoryPolicy returns the built-in defaults: mode=off,
+// auto-recall=true, auto-save=true, max-items=5, max-tokens=1500,
+// session-ttl=168h, persistent-ttl=0 (no expiry).
+func DefaultWorkerMemoryPolicy() WorkerMemoryPolicy {
+	return WorkerMemoryPolicy{
+		Mode:          WorkerMemoryOff,
+		AutoRecall:    true,
+		AutoSave:      true,
+		MaxItems:      5,
+		MaxTokens:     1500,
+		SessionTTL:    "168h",
+		PersistentTTL: "0",
+	}
 }
 
 type TeamConfig struct {
@@ -136,6 +181,8 @@ type TeamConfig struct {
 	Vars              map[string]interface{}
 	WorkerContextSize int
 	ToolsAllowed      []string // List of explicitly allowed tools
+	ToolsDenied       []string // List of tools never exposed to workers in this team
+	Delegation        DelegationPolicy
 	Preflight         []CapabilityRequirement
 
 	// Unattended runs the team without any blocking human interaction:
@@ -165,6 +212,24 @@ type TeamConfig struct {
 	// GoalMode specifies outcome vs exploratory mode.
 	GoalMode    string
 	Reliability ReliabilityConfig
+	// WorkerMemory is the team-level default worker memory policy. Individual
+	// agents can override it via their frontmatter `memory:` block.
+	WorkerMemory WorkerMemoryPolicy
+}
+
+// DelegationPolicy makes a team's coordinator dispatch contract executable.
+// It is deliberately expressed in terms of configured worker names rather
+// than provider, project, or task-domain concepts.
+type DelegationPolicy struct {
+	// InitialBatch is the ordered worker set required for the first delegation.
+	// It is enforced only when RequireExactInitialBatch is true.
+	InitialBatch []string
+	// RequireExactInitialBatch rejects a first delegation whose cardinality or
+	// worker order differs from InitialBatch.
+	RequireExactInitialBatch bool
+	// NoRedispatchAfterSuccess lists workers that may not be delegated again
+	// after one of their tasks reached a successful terminal result.
+	NoRedispatchAfterSuccess []string
 }
 
 // ReliabilityConfig bounds diagnostic and repair work that repeats without

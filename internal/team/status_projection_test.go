@@ -127,7 +127,7 @@ func TestReconcileAgentStatusesCurrentWorkOutranksOlderReplannedFailure(t *testi
 	items := []*TodoItem{
 		{
 			ID: "6", Agent: "helper", Status: TaskError, EndedAt: earlier,
-			Detail: `terminal command "pilot edit" for task 6 exited with status -1`,
+			Detail: `terminal command "app edit" for task 6 exited with status -1`,
 			FailureEvent: &FailureEventPayload{
 				TaskID: "6", Phase: "execution", FailureClass: FailureExecution,
 				RetryDisposition: RetryNone, Summary: "terminal exited with status -1",

@@ -215,7 +215,7 @@ func TestSaveSessionRedactsNestedCredentialTextWithoutCorruptingJSON(t *testing.
 	workspace := t.TempDir()
 	session := &SessionData{Entries: []SessionEntry{{
 		Role:    "user",
-		Content: `Generate ipa_admin_password: "PilotSecret" and keep the JSON valid`,
+		Content: `Generate ipa_admin_password: "ExampleSecret" and keep the JSON valid`,
 	}}}
 	if err := SaveSession(workspace, session); err != nil {
 		t.Fatalf("SaveSession: %v", err)

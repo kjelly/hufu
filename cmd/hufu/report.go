@@ -60,6 +60,7 @@ type reportData struct {
 	ResolvedProfile     team.ExecutionProfile
 	RunResult           *team.RunResult
 	TerminalSessions    []team.TerminalSession
+	WorkerMemory        team.WorkerMemoryReport
 }
 
 // SkillPatternReport holds detected skill pattern info for reports
@@ -117,6 +118,9 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		d.RunResult = tc.coordinator.LastRunResult()
 		if sessions, err := tc.coordinator.TerminalSessions(context.Background()); err == nil {
 			d.TerminalSessions = sessions
+		}
+		if workerMemory, err := tc.coordinator.WorkerMemoryReport(context.Background()); err == nil {
+			d.WorkerMemory = workerMemory
 		}
 	}
 	if d.RunResult == nil && d.SessionData != nil {
@@ -284,6 +288,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	if data.ContextUsageSection != "" {
 		b.WriteString(data.ContextUsageSection)
 	}
+	writeWorkerMemoryReport(&b, data.WorkerMemory)
 
 	if len(data.Todos) > 0 {
 		b.WriteString("## Task Summary\n\n")
@@ -398,6 +403,23 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	}
 
 	return utils.RedactSecrets(b.String())
+}
+
+func writeWorkerMemoryReport(b *strings.Builder, report team.WorkerMemoryReport) {
+	if report.Total == 0 {
+		return
+	}
+	b.WriteString("## Worker Memory\n\n")
+	fmt.Fprintf(b, "- **Items:** %d (session: %d, persistent: %d)\n", report.Total, report.Session, report.Persistent)
+	fmt.Fprintf(b, "- **Lifecycle:** %d confirmed, %d candidate, %d rejected\n", report.Confirmed, report.Candidate, report.Rejected)
+	b.WriteString("- **Item IDs:** ")
+	for i, id := range report.ItemIDs {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(b, "`%s`", id)
+	}
+	b.WriteString("\n\nPrivate worker-memory content is intentionally omitted from execution reports.\n\n---\n\n")
 }
 
 func terminalSessionReportGuidance(session team.TerminalSession) string {

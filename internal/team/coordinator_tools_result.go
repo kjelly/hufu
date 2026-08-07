@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"charm.land/fantasy"
@@ -22,10 +23,10 @@ func (t *submitResultTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
 func (t *submitResultTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
 		Name:        "submit_result",
-		Description: "Submit the terminal structured result for your assigned task. Call exactly once when finished. status=success is required for the task to be marked done; use partial, failed, or blocked when the requested outcome was not achieved.",
+		Description: "Submit the terminal structured result for your assigned task. Call exactly once when finished. status=success or completed_with_gaps marks the task done; completed_with_gaps means the assigned work is complete but it discovered a target-system limitation. Use partial, failed, or blocked when the assigned work itself was not completed.",
 		Parameters: map[string]any{
 			"status": map[string]any{
-				"type": "string", "enum": []string{"success", "partial", "failed", "blocked"},
+				"type": "string", "enum": []string{TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps, TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked},
 				"description": "Terminal outcome of the assigned goal",
 			},
 			"summary": map[string]any{
@@ -34,7 +35,7 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 			},
 			"artifacts": map[string]any{
 				"type":        "array",
-				"description": "List of artifacts produced by this task.",
+				"description": "List of regular files already created inside the team workspace. Hufu snapshots each file when this result is submitted; do not declare planned or external files.",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -146,10 +147,10 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		return fantasy.NewTextErrorResponse("summary is required"), nil
 	}
 	switch strings.ToLower(strings.TrimSpace(res.Status)) {
-	case "success", "partial", "failed", "blocked":
+	case TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps, TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked:
 		res.Status = strings.ToLower(strings.TrimSpace(res.Status))
 	default:
-		return fantasy.NewTextErrorResponse("status must be success, partial, failed, or blocked"), nil
+		return fantasy.NewTextErrorResponse("status must be success, completed_with_gaps, partial, failed, or blocked"), nil
 	}
 
 	res.TaskID = t.todoID
@@ -158,7 +159,9 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		res.Confidence = 1.0
 	}
 	// Only a success claim can be mechanically contradicted by terminal
-	// evidence — partial/failed/blocked already say the task isn't done, so
+	// evidence — completed_with_gaps reports a target limitation rather than a
+	// failed task, while partial/failed/blocked already say the task itself is
+	// not done, so
 	// there is nothing here for terminal evidence to override. Rejecting the
 	// claim in the tool response (rather than only at round-end) lets the
 	// model see the contradiction immediately and reconsider within the same
@@ -174,7 +177,79 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	}
 
 	if t.coordinator != nil {
+		if err := t.materializeSubmittedArtifacts(ctx, &res); err != nil {
+			return fantasy.NewTextErrorResponse("invalid artifact declaration: " + err.Error()), nil
+		}
 		t.coordinator.storeSubmittedTaskResult(t.todoID, &res)
 	}
 	return fantasy.NewTextResponse("Task result submitted successfully."), nil
+}
+
+// materializeSubmittedArtifacts makes a worker's artifact claim durable before
+// accepting its terminal result. Previously a model could declare a missing
+// path, receive a successful submit_result response, and leave the evidence
+// manifest to fail only at run finalization. Artifacts are workspace-contained
+// evidence, so snapshot them here or reject the result while the worker can
+// still correct its claim.
+func (t *submitResultTool) materializeSubmittedArtifacts(ctx context.Context, res *TaskResult) error {
+	if res == nil || len(res.Artifacts) == 0 {
+		return nil
+	}
+	if t.coordinator == nil || t.coordinator.session == nil || strings.TrimSpace(t.coordinator.session.Workspace) == "" {
+		return fmt.Errorf("artifact submission requires a workspace")
+	}
+	workspace := t.coordinator.session.Workspace
+	store, err := NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		return err
+	}
+	runID := t.coordinator.executionRunID
+	if runID == "" {
+		runID = "run-unknown"
+	}
+	// Validate the complete declaration before snapshotting any files, so a bad
+	// later artifact cannot leave an accepted result with a partial artifact set.
+	for i, artifact := range res.Artifacts {
+		if artifact.ID != "" {
+			if err := store.Verify(ctx, artifact); err != nil {
+				return fmt.Errorf("artifacts[%d] %q: %w", i, artifact.Path, err)
+			}
+			continue
+		}
+		if strings.TrimSpace(artifact.Path) == "" {
+			return fmt.Errorf("artifacts[%d] path is required", i)
+		}
+		path, err := resolveArtifactSourcePath(workspace, artifact.Path)
+		if err != nil {
+			return fmt.Errorf("artifacts[%d] %q: %w", i, artifact.Path, err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("artifacts[%d] %q: %w", i, artifact.Path, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("artifacts[%d] %q must be a regular file", i, artifact.Path)
+		}
+	}
+	for i, artifact := range res.Artifacts {
+		if artifact.ID != "" {
+			continue
+		}
+		ref, err := store.Put(ctx, PutArtifactRequest{
+			Kind:        artifact.Kind,
+			Path:        artifact.Path,
+			Description: artifact.Description,
+			MediaType:   artifact.MediaType,
+			SourcePath:  artifact.Path,
+			RunID:       runID,
+			TaskID:      t.todoID,
+			Attempt:     1,
+			Agent:       res.Agent,
+		})
+		if err != nil {
+			return fmt.Errorf("artifacts[%d] %q: %w", i, artifact.Path, err)
+		}
+		res.Artifacts[i] = ref
+	}
+	return nil
 }

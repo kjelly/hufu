@@ -31,7 +31,7 @@ func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "view",
-			Description: "Read the contents of a file. Output includes line numbers and is wrapped in file path tags. Supports offset/limit for large files. Truncates lines longer than 2000 chars.",
+			Description: "Read the contents of a file. Output includes line numbers and is wrapped in file path tags. Supports relative, absolute, ~, $HOME, and ${HOME} paths. Supports offset/limit for large files. Truncates lines longer than 2000 chars.",
 			Parameters: map[string]any{
 				"file_path": map[string]any{
 					"type":        "string",

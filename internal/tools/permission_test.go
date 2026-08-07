@@ -2,8 +2,27 @@ package tools
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 )
+
+func TestResolvePathWithWorkDir_ExpandsHomeAndTilde(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workDir := t.TempDir()
+
+	for _, input := range []string{"$HOME/.agents/skills/example/SKILL.md", "${HOME}/.agents/skills/example/SKILL.md", "~/.agents/skills/example/SKILL.md"} {
+		got, err := resolvePathWithWorkDir(input, workDir)
+		if err != nil {
+			t.Fatalf("resolvePathWithWorkDir(%q) returned error: %v", input, err)
+		}
+		want := filepath.Join(home, ".agents", "skills", "example", "SKILL.md")
+		if got != want {
+			t.Errorf("resolvePathWithWorkDir(%q) = %q, want %q", input, got, want)
+		}
+	}
+
+}
 
 // ============== GetToolLevel Tests ==============
 

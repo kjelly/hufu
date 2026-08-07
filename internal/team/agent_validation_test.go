@@ -51,6 +51,22 @@ func TestExecuteTasks_AgentValidation(t *testing.T) {
 	}
 }
 
+func TestExecuteTasks_AcceptanceRecoveryCanDelegateDuringWrapUp(t *testing.T) {
+	c := &Coordinator{
+		session: &TeamSession{Agents: map[string]*agent.AgentDef{}, Config: agent.TeamConfig{}},
+	}
+	c.SetWrapUp()
+	c.acceptanceRecovery.Store(true)
+
+	_, err := c.ExecuteTasks(context.Background(), []TaskDef{{Agent: "missing", Goal: "repair acceptance failure"}})
+	if err == nil {
+		t.Fatal("expected agent validation error")
+	}
+	if strings.Contains(err.Error(), "wrap-up in progress") {
+		t.Fatalf("acceptance recovery was still blocked by wrap-up: %v", err)
+	}
+}
+
 func TestResolveAgentName_NilSession(t *testing.T) {
 	c := &Coordinator{session: nil}
 	_, _, err := c.resolveAgentName("developer")

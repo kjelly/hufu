@@ -3,12 +3,41 @@ package team
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/config"
+	"github.com/anomalyco/hufu/internal/skill"
 )
+
+func TestParseTeamDelegationPolicy(t *testing.T) {
+	tmpDir := t.TempDir()
+	yamlContent := `name: test-team
+delegation:
+  initial-batch:
+    agents: [reader, probe]
+    exact: true
+  no-redispatch-after-success: [reader, probe]
+`
+	if err := os.WriteFile(filepath.Join(tmpDir, "team.yaml"), []byte(yamlContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(tmpDir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML: %v", err)
+	}
+	if !cfg.Delegation.RequireExactInitialBatch {
+		t.Fatal("RequireExactInitialBatch = false, want true")
+	}
+	if want := []string{"reader", "probe"}; !reflect.DeepEqual(cfg.Delegation.InitialBatch, want) {
+		t.Fatalf("InitialBatch = %v, want %v", cfg.Delegation.InitialBatch, want)
+	}
+	if want := []string{"reader", "probe"}; !reflect.DeepEqual(cfg.Delegation.NoRedispatchAfterSuccess, want) {
+		t.Fatalf("NoRedispatchAfterSuccess = %v, want %v", cfg.Delegation.NoRedispatchAfterSuccess, want)
+	}
+}
 
 func TestMaxStepsParsing(t *testing.T) {
 	tests := []struct {
@@ -496,6 +525,69 @@ func TestLoadTeam_NoYAMLDirName(t *testing.T) {
 	if _, ok := session.Agents["worker"]; !ok {
 		t.Errorf("session.Agents missing %q, got keys: %v", "worker", agentKeys(session.Agents))
 	}
+}
+
+func TestLoadTeam_DiscoversProjectSkillsNotTeamAgentSkills(t *testing.T) {
+	projectDir := t.TempDir()
+	teamDir := filepath.Join(projectDir, "team")
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, "team.yml"), []byte("name: test-team\nskills: project-skill\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, "worker.md"), []byte("---\nname: worker\nrole: worker\n---\nI am a worker."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	projectSkillDir := filepath.Join(projectDir, ".agents", "skills", "project-skill")
+	if err := os.MkdirAll(projectSkillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectSkillDir, "SKILL.md"), []byte("---\nname: project-skill\ndescription: Project skill\n---\nProject skill body. See .agents/skills/project-dependency/SKILL.md."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dependencyDir := filepath.Join(projectDir, ".agents", "skills", "project-dependency")
+	if err := os.MkdirAll(dependencyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dependencyDir, "SKILL.md"), []byte("---\nname: project-dependency\ndescription: Project dependency\n---\nDependency body."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	legacySkillDir := filepath.Join(teamDir, ".agents", "skills", "legacy-skill")
+	if err := os.MkdirAll(legacySkillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacySkillDir, "SKILL.md"), []byte("---\nname: legacy-skill\ndescription: Legacy skill\n---\nLegacy skill body."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(projectDir)
+	t.Setenv("HOME", t.TempDir())
+	session, err := LoadTeam(teamDir, nil, nil)
+	if err != nil {
+		t.Fatalf("LoadTeam returned error: %v", err)
+	}
+
+	if !hasSkill(session.Skills, "project-skill") {
+		t.Errorf("session.Skills does not include project skill")
+	}
+	if !hasSkill(session.Skills, "project-dependency") {
+		t.Errorf("session.Skills does not include recursively referenced project skill")
+	}
+	if hasSkill(session.Skills, "legacy-skill") {
+		t.Errorf("session.Skills still includes removed team-local .agents skill")
+	}
+}
+
+func hasSkill(skills []*skill.SkillDef, name string) bool {
+	for _, s := range skills {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func agentKeys(m map[string]*agent.AgentDef) []string {

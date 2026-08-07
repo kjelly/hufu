@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -19,8 +20,9 @@ import (
 // recordingTool reports whether its Run was reached, so a denial can be
 // distinguished from an execution.
 type recordingTool struct {
-	name string
-	ran  bool
+	name  string
+	ran   bool
+	calls int
 }
 
 func (t *recordingTool) Info() fantasy.ToolInfo { return fantasy.ToolInfo{Name: t.name} }
@@ -33,6 +35,7 @@ func (t *recordingTool) SetProviderOptions(fantasy.ProviderOptions) {}
 
 func (t *recordingTool) Run(context.Context, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	t.ran = true
+	t.calls++
 	return fantasy.NewTextResponse("ran"), nil
 }
 
@@ -84,6 +87,59 @@ func TestPolicyGateAllowsGrantedTool(t *testing.T) {
 	}
 	if !inner.ran {
 		t.Error("granted tool should execute")
+	}
+}
+
+func TestPolicyGateEnforcesClosedTaskToolSequence(t *testing.T) {
+	c := gateTestCoordinator()
+	bash := &recordingTool{name: "bash"}
+	ls := &recordingTool{name: "ls"}
+	delegate := &recordingTool{name: "request_agent"}
+	result := &recordingTool{name: "submit_result"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{bash, ls, delegate, result})
+	byName := map[string]fantasy.AgentTool{}
+	for _, tool := range gated {
+		byName[tool.Info().Name] = tool
+	}
+
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"bash", "ls", "request_agent", "submit_result"})
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence([]string{"bash", "bash", "submit_result"}))
+	for _, name := range []string{"bash", "bash"} {
+		if resp, err := byName[name].Run(ctx, fantasy.ToolCall{Name: name}); err != nil || resp.IsError {
+			t.Fatalf("expected sequence tool %q to run: response=%+v err=%v", name, resp, err)
+		}
+	}
+
+	for _, name := range []string{"ls", "request_agent"} {
+		resp, err := byName[name].Run(ctx, fantasy.ToolCall{Name: name})
+		if err != nil || !resp.IsError {
+			t.Fatalf("extra tool %q must be denied: response=%+v err=%v", name, resp, err)
+		}
+	}
+	if ls.ran || delegate.ran {
+		t.Fatalf("closed sequence allowed extra tools: ls=%t request_agent=%t", ls.ran, delegate.ran)
+	}
+
+	if resp, err := byName["submit_result"].Run(ctx, fantasy.ToolCall{Name: "submit_result"}); err != nil || resp.IsError {
+		t.Fatalf("terminal result must be admitted: response=%+v err=%v", resp, err)
+	}
+	resp, err := byName["bash"].Run(ctx, fantasy.ToolCall{Name: "bash"})
+	if err != nil || !resp.IsError || bash.calls != 2 {
+		t.Fatalf("post-result tool must be denied without another execution: response=%+v err=%v bash.calls=%d", resp, err, bash.calls)
+	}
+}
+
+func TestFilterToolsForSequenceHidesUnrelatedTools(t *testing.T) {
+	bash := &recordingTool{name: "bash"}
+	ls := &recordingTool{name: "ls"}
+	delegate := &recordingTool{name: "request_agent"}
+	result := &recordingTool{name: "submit_result"}
+	filtered := filterToolsForSequence(
+		[]fantasy.AgentTool{bash, ls, delegate, result},
+		[]string{"bash", "bash", "submit_result"},
+	)
+	if got, want := agentToolNames(filtered), []string{"bash", "submit_result"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("visible sequence tools = %v, want %v", got, want)
 	}
 }
 

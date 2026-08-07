@@ -32,7 +32,7 @@ func TestSidecarTaskWithSideEffectAndNoVerifierIsRejected(t *testing.T) {
 	c := sidecarContractCoordinator(t, "bash,terminal")
 	task := TaskDef{
 		Agent:   "Helper",
-		Goal:    "Execute the pilot deploy site-wide command. This is a long-running task (30+ minutes).",
+		Goal:    "Execute the long-running external deployment command (30+ minutes).",
 		Sidecar: true,
 	}
 
@@ -121,13 +121,13 @@ func TestExecuteSidecarTaskRefusesUnverifiedMutation(t *testing.T) {
 		sidecar:    &sidecar.Sidecar{},
 	})
 	todo := c.taskTracker.TodoList()
-	added := todo.AddBatch([]TodoSpec{{Agent: "helper", Desc: "Execute the pilot deploy site-wide command"}})
+	added := todo.AddBatch([]TodoSpec{{Agent: "helper", Desc: "Execute the long-running external deployment command"}})
 	if len(added) != 1 {
 		t.Fatalf("AddBatch created %d items, want 1", len(added))
 	}
 	id := added[0].ID
 
-	task := TaskDef{Agent: "Helper", Goal: "Execute the pilot deploy site-wide command", Sidecar: true}
+	task := TaskDef{Agent: "Helper", Goal: "Execute the long-running external deployment command", Sidecar: true}
 	out, err := c.executeSidecarTask(t.Context(), task, id)
 	if err == nil {
 		t.Fatal("executeSidecarTask must refuse an unverified mutating task")

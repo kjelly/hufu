@@ -29,6 +29,7 @@ type migrationDef struct {
 var migrations = []migrationDef{
 	{1, "initial_context_store", `CREATE TABLE context_items (id TEXT PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL, content_hash TEXT NOT NULL, project_id TEXT NOT NULL, team_id TEXT, session_id TEXT, agent_id TEXT, task_id TEXT, attempt_id TEXT, authority TEXT NOT NULL, trust_level TEXT NOT NULL, priority INTEGER NOT NULL, must_keep INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0, confidence REAL NOT NULL DEFAULT 1.0, source_json TEXT NOT NULL, evidence_json TEXT NOT NULL DEFAULT '[]', tags_json TEXT NOT NULL DEFAULT '[]', metadata_json TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, valid_from INTEGER, valid_until INTEGER, expires_at INTEGER, superseded_by TEXT, embedding_state TEXT NOT NULL DEFAULT 'pending', embedding_model TEXT); CREATE INDEX idx_context_scope ON context_items(project_id, team_id, session_id, agent_id, task_id); CREATE INDEX idx_context_kind ON context_items(project_id, kind); CREATE INDEX idx_context_created ON context_items(project_id, created_at DESC); CREATE INDEX idx_context_hash ON context_items(project_id, content_hash); CREATE INDEX idx_context_validity ON context_items(project_id, valid_until, expires_at); CREATE TABLE context_edges (from_id TEXT NOT NULL, relation TEXT NOT NULL, to_id TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL, PRIMARY KEY(from_id, relation, to_id)); CREATE TABLE context_events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_type TEXT NOT NULL, item_id TEXT, scope_json TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE VIRTUAL TABLE context_items_fts USING fts5(id UNINDEXED, content, kind, tags, tokenize='unicode61');`},
 	{2, "context_events_type_index", `CREATE INDEX IF NOT EXISTS idx_context_events_type ON context_events(event_type);`},
+	{3, "branch_id_lifecycle_schema", `ALTER TABLE context_items ADD COLUMN branch_id TEXT; ALTER TABLE context_items ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'confirmed'; DROP INDEX idx_context_scope; CREATE INDEX idx_context_scope ON context_items(project_id, team_id, session_id, branch_id, agent_id, task_id);`},
 }
 
 func migrationChecksum(sql string) string {
@@ -175,6 +176,9 @@ func normalize(item *ContextItem) error {
 	if item.EmbeddingState == "" {
 		item.EmbeddingState = "pending"
 	}
+	if item.Lifecycle == "" {
+		item.Lifecycle = LifecycleConfirmed
+	}
 	now := time.Now().UTC()
 	if item.CreatedAt.IsZero() {
 		item.CreatedAt = now
@@ -212,7 +216,7 @@ func (r *SQLiteRepository) appendOnce(ctx context.Context, items ...ContextItem)
 		}
 		it := items[i]
 		var existing string
-		err = tx.QueryRowContext(ctx, `SELECT id FROM context_items WHERE project_id=? AND kind=? AND content_hash=? AND COALESCE(team_id,'')=? AND COALESCE(session_id,'')=? AND COALESCE(agent_id,'')=? AND COALESCE(task_id,'')=? AND COALESCE(attempt_id,'')=? LIMIT 1`, it.Scope.ProjectID, it.Kind, it.ContentHash, it.Scope.TeamID, it.Scope.SessionID, it.Scope.AgentID, it.Scope.TaskID, it.Scope.AttemptID).Scan(&existing)
+		err = tx.QueryRowContext(ctx, `SELECT id FROM context_items WHERE project_id=? AND kind=? AND content_hash=? AND COALESCE(team_id,'')=? AND COALESCE(session_id,'')=? AND COALESCE(branch_id,'')=? AND COALESCE(agent_id,'')=? AND COALESCE(task_id,'')=? AND COALESCE(attempt_id,'')=? LIMIT 1`, it.Scope.ProjectID, it.Kind, it.ContentHash, it.Scope.TeamID, it.Scope.SessionID, it.Scope.BranchID, it.Scope.AgentID, it.Scope.TaskID, it.Scope.AttemptID).Scan(&existing)
 		if err == nil {
 			if _, err = tx.ExecContext(ctx, "UPDATE context_items SET updated_at=?, source_json=? WHERE id=?", it.UpdatedAt.UnixMilli(), mustJSON(it.Source), existing); err != nil {
 				return err
@@ -225,7 +229,7 @@ func (r *SQLiteRepository) appendOnce(ctx context.Context, items ...ContextItem)
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, "INSERT INTO context_items ("+itemColumns+") VALUES ("+strings.TrimSuffix(strings.Repeat("?,", 28), ",")+")", it.ID, it.Kind, it.Content, it.ContentHash, it.Scope.ProjectID, nilIfEmpty(it.Scope.TeamID), nilIfEmpty(it.Scope.SessionID), nilIfEmpty(it.Scope.AgentID), nilIfEmpty(it.Scope.TaskID), nilIfEmpty(it.Scope.AttemptID), it.Authority, it.TrustLevel, it.Priority, boolInt(it.MustKeep), boolInt(it.Pinned), it.Confidence, mustJSON(it.Source), mustJSON(it.Evidence), mustJSON(it.Tags), mustJSON(it.Metadata), it.CreatedAt.UnixMilli(), it.UpdatedAt.UnixMilli(), millis(it.ValidFrom), millis(it.ValidUntil), millis(it.ExpiresAt), nilIfEmpty(it.SupersededBy), it.EmbeddingState, nilIfEmpty(it.EmbeddingModel))
+		_, err = tx.ExecContext(ctx, "INSERT INTO context_items ("+itemColumns+") VALUES ("+strings.TrimSuffix(strings.Repeat("?,", 30), ",")+")", it.ID, it.Kind, it.Content, it.ContentHash, it.Scope.ProjectID, nilIfEmpty(it.Scope.TeamID), nilIfEmpty(it.Scope.SessionID), nilIfEmpty(it.Scope.BranchID), nilIfEmpty(it.Scope.AgentID), nilIfEmpty(it.Scope.TaskID), nilIfEmpty(it.Scope.AttemptID), it.Authority, it.TrustLevel, it.Priority, boolInt(it.MustKeep), boolInt(it.Pinned), it.Confidence, mustJSON(it.Source), mustJSON(it.Evidence), mustJSON(it.Tags), mustJSON(it.Metadata), it.CreatedAt.UnixMilli(), it.UpdatedAt.UnixMilli(), millis(it.ValidFrom), millis(it.ValidUntil), millis(it.ExpiresAt), nilIfEmpty(it.SupersededBy), string(it.Lifecycle), it.EmbeddingState, nilIfEmpty(it.EmbeddingModel))
 		if err != nil {
 			return err
 		}
@@ -267,21 +271,23 @@ func nilIfEmpty(s string) any {
 
 func scanItem(row interface{ Scan(...any) error }) (ContextItem, error) {
 	var i ContextItem
-	var team, session, agent, task, attempt, super, model sql.NullString
+	var team, session, branch, agent, task, attempt, super, model, lifecycle sql.NullString
 	var source, evidence, tags, metadata string
 	var created, updated int64
 	var vf, vu, ex sql.NullInt64
 	var keep, pinned int
-	err := row.Scan(&i.ID, &i.Kind, &i.Content, &i.ContentHash, &i.Scope.ProjectID, &team, &session, &agent, &task, &attempt, &i.Authority, &i.TrustLevel, &i.Priority, &keep, &pinned, &i.Confidence, &source, &evidence, &tags, &metadata, &created, &updated, &vf, &vu, &ex, &super, &i.EmbeddingState, &model)
+	err := row.Scan(&i.ID, &i.Kind, &i.Content, &i.ContentHash, &i.Scope.ProjectID, &team, &session, &branch, &agent, &task, &attempt, &i.Authority, &i.TrustLevel, &i.Priority, &keep, &pinned, &i.Confidence, &source, &evidence, &tags, &metadata, &created, &updated, &vf, &vu, &ex, &super, &lifecycle, &i.EmbeddingState, &model)
 	if err != nil {
 		return i, err
 	}
 	i.Scope.TeamID = team.String
 	i.Scope.SessionID = session.String
+	i.Scope.BranchID = branch.String
 	i.Scope.AgentID = agent.String
 	i.Scope.TaskID = task.String
 	i.Scope.AttemptID = attempt.String
 	i.SupersededBy = super.String
+	i.Lifecycle = ContextLifecycle(lifecycle.String)
 	i.EmbeddingModel = model.String
 	i.MustKeep = keep != 0
 	i.Pinned = pinned != 0
@@ -306,7 +312,7 @@ func scanItem(row interface{ Scan(...any) error }) (ContextItem, error) {
 	return i, nil
 }
 
-const itemColumns = `id,kind,content,content_hash,project_id,team_id,session_id,agent_id,task_id,attempt_id,authority,trust_level,priority,must_keep,pinned,confidence,source_json,evidence_json,tags_json,metadata_json,created_at,updated_at,valid_from,valid_until,expires_at,superseded_by,embedding_state,embedding_model`
+const itemColumns = `id,kind,content,content_hash,project_id,team_id,session_id,branch_id,agent_id,task_id,attempt_id,authority,trust_level,priority,must_keep,pinned,confidence,source_json,evidence_json,tags_json,metadata_json,created_at,updated_at,valid_from,valid_until,expires_at,superseded_by,lifecycle,embedding_state,embedding_model`
 
 func (r *SQLiteRepository) Get(ctx context.Context, id string) (ContextItem, error) {
 	return scanItem(r.db.QueryRowContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE id=?", id))
@@ -323,18 +329,54 @@ func (r *SQLiteRepository) GetMany(ctx context.Context, ids []string) ([]Context
 	return out, nil
 }
 
-// scopeWhere builds the shared project/team/session/agent/task scope
-// predicate: a query for a given child scope value also matches rows where
-// that column is NULL (wider, shared scope), but never matches rows scoped
-// to a *different* value. prefix is a table alias prefix (e.g. "c.") for
-// queries that join context_items against another table.
-func scopeWhere(prefix string, scope Scope, args *[]any) []string {
+// scopeAuthorize builds the scope predicate for a retrieval path. It
+// replaces the pre-WP-1 scopeWhere function and enforces explicit visibility
+// semantics so an empty child field is no longer a wildcard.
+//
+//   - VisibilityAncestors (runtime default): a non-empty request field
+//     matches the same value OR a NULL ancestor (shared). An empty request
+//     field matches ONLY NULL — the fix for the wildcard that let a
+//     coordinator-level query see every agent's private records.
+//   - VisibilityExact: non-empty fields match exactly; empty fields require
+//     NULL. Used by the shared-only projection query.
+//   - VisibilitySubtree: non-empty fields match same-or-NULL; empty fields
+//     are omitted (wildcard). Maintenance/CLI only.
+//
+// prefix is a table alias (e.g. "c.") for queries that join context_items.
+func scopeAuthorize(prefix string, scope Scope, visibility ScopeVisibility, args *[]any) []string {
+	if visibility == "" {
+		visibility = VisibilityAncestors
+	}
 	*args = append(*args, scope.ProjectID)
 	where := []string{prefix + "project_id=?"}
-	for _, p := range []struct{ n, v string }{{"team_id", scope.TeamID}, {"session_id", scope.SessionID}, {"agent_id", scope.AgentID}, {"task_id", scope.TaskID}, {"attempt_id", scope.AttemptID}} {
-		if p.v != "" {
-			where = append(where, "("+prefix+p.n+" IS NULL OR "+prefix+p.n+"=?)")
-			*args = append(*args, p.v)
+	for _, p := range []struct{ n, v string }{
+		{"team_id", scope.TeamID},
+		{"session_id", scope.SessionID},
+		{"branch_id", scope.BranchID},
+		{"agent_id", scope.AgentID},
+		{"task_id", scope.TaskID},
+		{"attempt_id", scope.AttemptID},
+	} {
+		switch visibility {
+		case VisibilitySubtree:
+			if p.v != "" {
+				where = append(where, "("+prefix+p.n+" IS NULL OR "+prefix+p.n+"=?)")
+				*args = append(*args, p.v)
+			}
+		case VisibilityExact:
+			if p.v != "" {
+				where = append(where, prefix+p.n+"=?")
+				*args = append(*args, p.v)
+			} else {
+				where = append(where, prefix+p.n+" IS NULL")
+			}
+		default: // VisibilityAncestors
+			if p.v != "" {
+				where = append(where, "("+prefix+p.n+" IS NULL OR "+prefix+p.n+"=?)")
+				*args = append(*args, p.v)
+			} else {
+				where = append(where, prefix+p.n+" IS NULL")
+			}
 		}
 	}
 	return where
@@ -345,13 +387,16 @@ func (r *SQLiteRepository) Query(ctx context.Context, q RepositoryQuery) ([]Cont
 		return nil, errors.New("project scope is required")
 	}
 	var args []any
-	where := scopeWhere("", q.Scope, &args)
+	where := scopeAuthorize("", q.Scope, q.Visibility, &args)
 	if !q.IncludeSuperseded {
 		where = append(where, "superseded_by IS NULL")
 	}
 	if !q.IncludeExpired {
 		where = append(where, "(expires_at IS NULL OR expires_at>?)")
 		args = append(args, time.Now().UnixMilli())
+	}
+	if !q.IncludeCandidates {
+		where = append(where, "lifecycle='confirmed'")
 	}
 	now := time.Now().UnixMilli()
 	where = append(where, "(valid_from IS NULL OR valid_from<=?)", "(valid_until IS NULL OR valid_until>?)")
@@ -385,17 +430,33 @@ func (r *SQLiteRepository) Query(ctx context.Context, q RepositoryQuery) ([]Cont
 	return out, rows.Err()
 }
 
+// QuerySharedProjection returns only shared-scope items (agent_id, task_id,
+// branch_id, and attempt_id are all NULL) for the given project/team/session.
+// It is the canonical source for rebuilding legacy STM/LTM Markdown
+// projections so private records never leak into shared prompt files.
+func (r *SQLiteRepository) QuerySharedProjection(ctx context.Context, scope Scope) ([]ContextItem, error) {
+	sharedScope := Scope{ProjectID: scope.ProjectID, TeamID: scope.TeamID, SessionID: scope.SessionID}
+	return r.Query(ctx, RepositoryQuery{
+		Scope:             sharedScope,
+		Visibility:        VisibilityExact,
+		IncludeSuperseded: true,
+		IncludeExpired:    true,
+		IncludeCandidates: true,
+		Limit:             100000,
+	})
+}
+
 // itemScope fetches an item's scope for event provenance. It returns a zero
 // Scope on error (e.g. the item does not exist yet) rather than failing the
 // caller's mutation: recording an event with an incomplete scope is better
 // than losing the revision bump entirely.
 func (r *SQLiteRepository) itemScope(ctx context.Context, tx *sql.Tx, id string) Scope {
 	var s Scope
-	var team, session, agent, task, attempt sql.NullString
-	if err := tx.QueryRowContext(ctx, "SELECT project_id, team_id, session_id, agent_id, task_id, attempt_id FROM context_items WHERE id=?", id).Scan(&s.ProjectID, &team, &session, &agent, &task, &attempt); err != nil {
+	var team, session, branch, agent, task, attempt sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT project_id, team_id, session_id, branch_id, agent_id, task_id, attempt_id FROM context_items WHERE id=?", id).Scan(&s.ProjectID, &team, &session, &branch, &agent, &task, &attempt); err != nil {
 		return Scope{}
 	}
-	s.TeamID, s.SessionID, s.AgentID, s.TaskID, s.AttemptID = team.String, session.String, agent.String, task.String, attempt.String
+	s.TeamID, s.SessionID, s.BranchID, s.AgentID, s.TaskID, s.AttemptID = team.String, session.String, branch.String, agent.String, task.String, attempt.String
 	return s
 }
 
@@ -427,6 +488,43 @@ func (r *SQLiteRepository) MarkSuperseded(ctx context.Context, old []string, new
 		}
 		if e = insertEvent(ctx, tx, "supersede", id, scope, map[string]string{"superseded_by": newID}); e != nil {
 			return e
+		}
+	}
+	return tx.Commit()
+}
+
+// UpdateLifecycle changes explicitly selected records and emits an event for
+// each change.  Scope checks deliberately live with the higher-level caller:
+// lifecycle mutation is also used by maintenance operations, while runtime
+// promotion first selects candidates with an authorised exact scope.
+func (r *SQLiteRepository) UpdateLifecycle(ctx context.Context, ids []string, lifecycle ContextLifecycle) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if lifecycle != LifecycleCandidate && lifecycle != LifecycleConfirmed && lifecycle != LifecycleRejected {
+		return fmt.Errorf("invalid context lifecycle %q", lifecycle)
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		scope := r.itemScope(ctx, tx, id)
+		result, err := tx.ExecContext(ctx, "UPDATE context_items SET lifecycle=?,updated_at=? WHERE id=?", string(lifecycle), time.Now().UnixMilli(), id)
+		if err != nil {
+			return err
+		}
+		if n, err := result.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return sql.ErrNoRows
+		}
+		if err := insertEvent(ctx, tx, "lifecycle", id, scope, map[string]string{"lifecycle": string(lifecycle)}); err != nil {
+			return err
 		}
 	}
 	return tx.Commit()
@@ -493,9 +591,12 @@ func (r *SQLiteRepository) SearchExact(ctx context.Context, req SearchRequest) (
 		limit = 100
 	}
 	args := []any{needle}
-	where := scopeWhere("", req.Scope, &args)
+	where := scopeAuthorize("", req.Scope, req.Visibility, &args)
 	now := time.Now().UnixMilli()
 	where = append(where, "superseded_by IS NULL", "(expires_at IS NULL OR expires_at>?)", "(valid_from IS NULL OR valid_from<=?)", "(valid_until IS NULL OR valid_until>?)")
+	if !req.IncludeCandidates {
+		where = append(where, "lifecycle='confirmed'")
+	}
 	args = append(args, now, now, now, limit)
 	rows, e := r.db.QueryContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE instr(lower(content), ?) > 0 AND "+strings.Join(where, " AND ")+" ORDER BY priority DESC, created_at DESC, id ASC LIMIT ?", args...)
 	if e != nil {
@@ -525,9 +626,12 @@ func (r *SQLiteRepository) SearchLexical(ctx context.Context, req SearchRequest)
 	// surface another team/session/agent/task's context (it previously only
 	// filtered by project_id).
 	args := []any{ftsQuery(req.Query)}
-	where := append([]string{}, scopeWhere("c.", req.Scope, &args)...)
+	where := append([]string{}, scopeAuthorize("c.", req.Scope, req.Visibility, &args)...)
 	now := time.Now().UnixMilli()
 	where = append(where, "c.superseded_by IS NULL", "(c.expires_at IS NULL OR c.expires_at>?)", "(c.valid_from IS NULL OR c.valid_from<=?)", "(c.valid_until IS NULL OR c.valid_until>?)")
+	if !req.IncludeCandidates {
+		where = append(where, "c.lifecycle='confirmed'")
+	}
 	args = append(args, now, now, now, limit)
 	rows, e := r.db.QueryContext(ctx, "SELECT "+columns+", bm25(context_items_fts) FROM context_items_fts JOIN context_items c ON c.id=context_items_fts.id WHERE context_items_fts MATCH ? AND "+strings.Join(where, " AND ")+" ORDER BY bm25(context_items_fts) LIMIT ?", args...)
 	if e != nil {
@@ -589,7 +693,7 @@ func (r *SQLiteRepository) DeleteExpired(ctx context.Context, before time.Time) 
 		return 0, e
 	}
 	defer tx.Rollback()
-	rows, e := tx.QueryContext(ctx, "SELECT id, project_id, team_id, session_id, agent_id, task_id, attempt_id FROM context_items WHERE expires_at IS NOT NULL AND expires_at<?", before.UnixMilli())
+	rows, e := tx.QueryContext(ctx, "SELECT id, project_id, team_id, session_id, branch_id, agent_id, task_id, attempt_id FROM context_items WHERE expires_at IS NOT NULL AND expires_at<?", before.UnixMilli())
 	if e != nil {
 		return 0, e
 	}
@@ -600,12 +704,12 @@ func (r *SQLiteRepository) DeleteExpired(ctx context.Context, before time.Time) 
 	var toDelete []expired
 	for rows.Next() {
 		var x expired
-		var team, session, agent, task, attempt sql.NullString
-		if e = rows.Scan(&x.id, &x.scope.ProjectID, &team, &session, &agent, &task, &attempt); e != nil {
+		var team, session, branch, agent, task, attempt sql.NullString
+		if e = rows.Scan(&x.id, &x.scope.ProjectID, &team, &session, &branch, &agent, &task, &attempt); e != nil {
 			rows.Close()
 			return 0, e
 		}
-		x.scope.TeamID, x.scope.SessionID, x.scope.AgentID, x.scope.TaskID, x.scope.AttemptID = team.String, session.String, agent.String, task.String, attempt.String
+		x.scope.TeamID, x.scope.SessionID, x.scope.BranchID, x.scope.AgentID, x.scope.TaskID, x.scope.AttemptID = team.String, session.String, branch.String, agent.String, task.String, attempt.String
 		toDelete = append(toDelete, x)
 	}
 	if e = rows.Err(); e != nil {

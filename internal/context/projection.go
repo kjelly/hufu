@@ -112,9 +112,11 @@ func atomicWrite(path, content string) error {
 
 // RebuildProjection intentionally writes side-by-side projections. During
 // Phase 1 the legacy stm.md/ltm.md remain the prompt source and must not be
-// overwritten by shadow data.
+// overwritten by shadow data. Since WP-1 the projection is rebuilt from
+// shared-scope items only (agent_id, task_id, branch_id, attempt_id are all
+// NULL) so private records never leak into the shared Markdown files.
 func (r *SQLiteRepository) RebuildProjection(ctx context.Context, scope Scope) error {
-	items, err := r.Query(ctx, RepositoryQuery{Scope: scope, IncludeSuperseded: true, IncludeExpired: true, Limit: 100000})
+	items, err := r.QuerySharedProjection(ctx, scope)
 	if err != nil {
 		return err
 	}

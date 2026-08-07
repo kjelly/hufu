@@ -327,8 +327,8 @@ func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
 // regenerates Markdown through appendCanonicalContext; it never reads or
 // mutates legacy Markdown as a source of truth.
 func (c *Coordinator) autoExtractCanonicalLTM(ctx context.Context) {
-	scope := contextstore.Scope{ProjectID: c.projectDir, TeamID: c.session.Config.Name}
-	items, err := c.contextRepo.Query(ctx, contextstore.RepositoryQuery{Scope: scope, Limit: 100000})
+	scope := c.contextScope()
+	items, err := c.contextRepo.QuerySharedProjection(ctx, scope)
 	if err != nil {
 		log.Printf("warning: canonical LTM extraction query failed: %v", err)
 		return
@@ -355,7 +355,7 @@ func (c *Coordinator) autoExtractCanonicalLTM(ctx context.Context) {
 				}
 			}
 		}
-		items, err = c.contextRepo.Query(ctx, contextstore.RepositoryQuery{Scope: scope, Limit: 100000})
+		items, err = c.contextRepo.QuerySharedProjection(ctx, scope)
 		if err != nil {
 			return
 		}

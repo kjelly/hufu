@@ -10,8 +10,10 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/anomalyco/hufu/internal/agent"
 	contextstore "github.com/anomalyco/hufu/internal/context"
 	"github.com/anomalyco/hufu/internal/memory"
+	"github.com/anomalyco/hufu/internal/tools"
 )
 
 type memorySaveLTMWrapper struct {
@@ -20,7 +22,19 @@ type memorySaveLTMWrapper struct {
 }
 
 func (t *memorySaveLTMWrapper) Info() fantasy.ToolInfo {
-	return t.original.Info()
+	info := t.original.Info()
+	if info.Parameters == nil {
+		info.Parameters = make(map[string]any)
+	}
+	info.Parameters["visibility"] = map[string]any{
+		"type": "string", "enum": []string{"shared", "private"},
+		"description": "Memory visibility. Omit or use shared for the legacy team-visible behavior; private is visible only to the calling worker.",
+	}
+	info.Parameters["tier"] = map[string]any{
+		"type": "string", "enum": []string{"session", "persistent"},
+		"description": "Private-memory lifetime tier. Defaults to persistent when visibility is private.",
+	}
+	return info
 }
 
 func (t *memorySaveLTMWrapper) ProviderOptions() fantasy.ProviderOptions {
@@ -36,6 +50,8 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 		Content    string   `json:"content"`
 		Category   string   `json:"category"`
 		Supersedes []string `json:"supersedes"`
+		Visibility string   `json:"visibility"`
+		Tier       string   `json:"tier"`
 	}
 	if err := json.Unmarshal([]byte(call.Input), &args); err != nil || args.Content == "" {
 		return fantasy.NewTextErrorResponse("content is required"), nil
@@ -44,6 +60,20 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 	section := ClassifyLTMEntry(args.Content, "finding")
 	if section == "" {
 		section = ltmSectionPatterns
+	}
+	visibility := strings.ToLower(strings.TrimSpace(args.Visibility))
+	if visibility == "" {
+		visibility = "shared" // backwards-compatible default
+	}
+	if visibility != "shared" && visibility != "private" {
+		return fantasy.NewTextErrorResponse("visibility must be shared or private"), nil
+	}
+	if visibility == "private" {
+		item, err := t.savePrivateCandidate(ctx, args)
+		if err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to save private memory candidate: %v", err)), nil
+		}
+		return fantasy.NewTextResponse(fmt.Sprintf("Saved private %s memory candidate (id: %s); it remains private and is confirmed only after accepted evidence", args.Tier, item.ID)), nil
 	}
 	if t.coordinator.contextRepo != nil {
 		t.coordinator.persistKnowledgeCandidate(args.Content, section, "memory_save")
@@ -57,6 +87,58 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 	// Legacy-mode fallback when no canonical repository is configured.
 	t.coordinator.persistKnowledgeCandidate(args.Content, section, "memory_save")
 	return resp, nil
+}
+
+// savePrivateCandidate resolves all scope fields from the execution context.
+// The model supplies no agent, branch, task, run, or evidence selector, so it
+// cannot write into another worker's memory namespace.
+func (t *memorySaveLTMWrapper) savePrivateCandidate(ctx context.Context, args struct {
+	Content    string   `json:"content"`
+	Category   string   `json:"category"`
+	Supersedes []string `json:"supersedes"`
+	Visibility string   `json:"visibility"`
+	Tier       string   `json:"tier"`
+}) (contextstore.ContextItem, error) {
+	if t.coordinator == nil || t.coordinator.workerMemorySvc == nil || t.coordinator.session == nil {
+		return contextstore.ContextItem{}, fmt.Errorf("canonical worker memory is not available")
+	}
+	caller, _ := ctx.Value(tools.AgentNameKey).(string)
+	def := t.coordinator.agentDefByName(caller)
+	if def == nil || def.Memory.Mode == agent.WorkerMemoryOff || strings.TrimSpace(def.MemoryID) == "" {
+		return contextstore.ContextItem{}, fmt.Errorf("private memory requires an enabled worker identity")
+	}
+	tier := strings.ToLower(strings.TrimSpace(args.Tier))
+	if tier == "" {
+		tier = "persistent"
+	}
+	if tier != "session" && tier != "persistent" {
+		return contextstore.ContextItem{}, fmt.Errorf("tier must be session or persistent")
+	}
+	if tier == "persistent" && def.Memory.Mode != agent.WorkerMemoryPersistent {
+		return contextstore.ContextItem{}, fmt.Errorf("worker memory policy does not allow persistent private memory")
+	}
+	taskID, _ := ctx.Value(todoIDKey{}).(string)
+	if strings.TrimSpace(taskID) == "" {
+		return contextstore.ContextItem{}, fmt.Errorf("private memory requires an active task")
+	}
+	runID := t.coordinator.executionRunID
+	if runID == "" && t.coordinator.taskTracker != nil && t.coordinator.taskTracker.TodoList() != nil {
+		runID = t.coordinator.taskTracker.TodoList().RunID()
+	}
+	if strings.TrimSpace(runID) == "" {
+		return contextstore.ContextItem{}, fmt.Errorf("private memory requires an active run")
+	}
+	scope := resolveWorkerScope(t.coordinator.contextScope(), def, t.coordinator.activeBranchID())
+	return t.coordinator.workerMemorySvc.SaveCandidate(ctx, WorkerMemoryCandidateRequest{
+		WorkerID: def.MemoryID,
+		Scope:    scope,
+		Content:  args.Content,
+		Category: args.Category,
+		Tier:     tier,
+		RunID:    runID,
+		TaskID:   taskID,
+		Source:   "memory_save",
+	})
 }
 
 // canonicalMemoryQueryTool deliberately bypasses the legacy chromem memory

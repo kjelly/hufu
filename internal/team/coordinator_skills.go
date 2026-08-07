@@ -88,11 +88,11 @@ func (c *Coordinator) getSkills() []*skill.SkillDef {
 }
 
 func (c *Coordinator) skillDirs() []string {
-	return []string{
-		filepath.Join(c.session.Dir, "skills"),
-		filepath.Join(c.session.Dir, ".agents", "skills"), // Fallback for old path
-		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
+	dirs := []string{filepath.Join(c.session.Dir, "skills")}
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		dirs = append(dirs, filepath.Join(cwd, ".agents", "skills"))
 	}
+	return append(dirs, filepath.Join(os.Getenv("HOME"), ".agents", "skills"))
 }
 
 func (c *Coordinator) setAutoLoadedSkills(skills []*skill.SkillDef) {
@@ -158,6 +158,7 @@ func (c *Coordinator) saveAndReloadSkill(name, description, content string, asDr
 	includeSkills := skill.ParseSkillList(c.session.Config.Skills)
 	excludeSkills := skill.ParseSkillList(c.session.Config.SkillsExclude)
 	newSkills := skill.FilterSkills(allSkills, includeSkills, excludeSkills)
+	newSkills = skill.ExpandSkillDependenciesForSet(newSkills, allSkills, excludeSkills)
 
 	func() {
 		c.skillsMu.Lock()
@@ -193,8 +194,10 @@ func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
 	var b strings.Builder
 	b.WriteString("## Relevant Skills\n\n")
 	for _, s := range skill.SkillsByName(cachedSkills, agentSkillNames) {
-		fmt.Fprintf(&b, "### %s\n*File: %s*\n\n%s\n\n", s.Name, s.Path, s.Content)
-		foundMap[strings.ToLower(s.Name)] = true
+		for _, expanded := range skill.ExpandSkillDependencies(s, cachedSkills) {
+			fmt.Fprintf(&b, "### %s\n*File: %s*\n\n%s\n\n", expanded.Name, expanded.Path, expanded.Content)
+			foundMap[strings.ToLower(expanded.Name)] = true
+		}
 	}
 	for _, name := range agentSkillNames {
 		if !foundMap[strings.ToLower(strings.TrimSpace(name))] {

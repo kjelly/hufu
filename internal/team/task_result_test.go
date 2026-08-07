@@ -3,6 +3,8 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -49,16 +51,20 @@ func TestTaskResult_SchemaAndFormatting(t *testing.T) {
 	}
 }
 
-func TestValidateSubmittedTaskResultRejectsNonSuccess(t *testing.T) {
-	for _, status := range []string{"partial", "failed", "blocked"} {
+func TestValidateSubmittedTaskResultCompletionStates(t *testing.T) {
+	for _, status := range []string{TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps} {
+		t.Run(status, func(t *testing.T) {
+			if err := validateSubmittedTaskResult(&TaskResult{Status: status, Summary: "done"}); err != nil {
+				t.Fatalf("completion status %q rejected: %v", status, err)
+			}
+		})
+	}
+	for _, status := range []string{TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked} {
 		t.Run(status, func(t *testing.T) {
 			if err := validateSubmittedTaskResult(&TaskResult{Status: status, Summary: "work remains"}); err == nil {
 				t.Fatalf("status %q unexpectedly accepted", status)
 			}
 		})
-	}
-	if err := validateSubmittedTaskResult(&TaskResult{Status: "success", Summary: "done"}); err != nil {
-		t.Fatalf("success rejected: %v", err)
 	}
 }
 
@@ -77,7 +83,13 @@ func TestParseFreeTextResult(t *testing.T) {
 }
 
 func TestSubmitResultTool(t *testing.T) {
+	workspace := t.TempDir()
+	artifactPath := filepath.Join(workspace, "result.json")
+	if err := os.WriteFile(artifactPath, []byte(`{"ok":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	c := &Coordinator{
+		session:     &TeamSession{Workspace: workspace},
 		taskTracker: NewTaskTracker(),
 	}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "test goal", Model: "m1", Source: "src"}})
@@ -95,12 +107,27 @@ func TestSubmitResultTool(t *testing.T) {
 	if _, ok := info.Parameters["raw_output_ref"]; !ok {
 		t.Fatal("submit_result schema omitted raw_output_ref")
 	}
+	statusSchema, ok := info.Parameters["status"].(map[string]any)
+	if !ok {
+		t.Fatalf("status schema = %#v, want object", info.Parameters["status"])
+	}
+	statuses, ok := statusSchema["enum"].([]string)
+	foundCompletedWithGaps := false
+	for _, status := range statuses {
+		if status == TaskResultStatusCompletedWithGaps {
+			foundCompletedWithGaps = true
+			break
+		}
+	}
+	if !ok || !foundCompletedWithGaps {
+		t.Fatalf("status schema omitted completed_with_gaps: %#v", statusSchema)
+	}
 
 	input := map[string]any{
 		"status":  "success",
 		"summary": "Completed subtask successfully",
 		"artifacts": []map[string]any{
-			{"path": "workspace/result.json", "description": "JSON report"},
+			{"path": artifactPath, "description": "JSON report"},
 		},
 		"findings": []map[string]any{
 			{"category": "perf", "summary": "latency reduced by 20%"},
@@ -148,6 +175,53 @@ func TestSubmitResultTool(t *testing.T) {
 	}
 	if updatedItem.TypedResult.Summary != "Completed subtask successfully" {
 		t.Errorf("got TodoItem.TypedResult.Summary %q, want 'Completed subtask successfully'", updatedItem.TypedResult.Summary)
+	}
+	if len(updatedItem.TypedResult.Artifacts) != 1 || updatedItem.TypedResult.Artifacts[0].ID == "" {
+		t.Fatalf("submitted artifact was not materialized: %#v", updatedItem.TypedResult.Artifacts)
+	}
+}
+
+func TestSubmitResultToolAcceptsCompletedWithGaps(t *testing.T) {
+	c := &Coordinator{taskTracker: NewTaskTracker()}
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "analyst", Desc: "survey target capability"}})
+	tool := &submitResultTool{coordinator: c, todoID: items[0].ID}
+
+	response, err := tool.Run(context.Background(), fantasy.ToolCall{Input: `{"status":"completed_with_gaps","summary":"Survey complete; the target has no structured roster action.","findings":[{"category":"capability_gap","summary":"roster workflow is interactive only"}]}`})
+	if err != nil {
+		t.Fatalf("tool.Run unexpected error: %v", err)
+	}
+	if response.IsError {
+		t.Fatalf("completed_with_gaps response = %#v", response)
+	}
+	got := c.GetTaskResult(items[0].ID)
+	if got == nil || got.Status != TaskResultStatusCompletedWithGaps {
+		t.Fatalf("stored task result = %#v", got)
+	}
+}
+
+func TestSubmitResultToolRejectsMissingArtifactBeforeStoringResult(t *testing.T) {
+	workspace := t.TempDir()
+	c := &Coordinator{
+		session:     &TeamSession{Workspace: workspace},
+		taskTracker: NewTaskTracker(),
+	}
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "test goal"}})
+	tool := &submitResultTool{coordinator: c, todoID: items[0].ID}
+
+	input := `{"status":"success","summary":"done","artifacts":[{"path":"missing-report.txt"}]}`
+	response, err := tool.Run(context.Background(), fantasy.ToolCall{Input: input})
+	if err != nil {
+		t.Fatalf("tool.Run unexpected error: %v", err)
+	}
+	if !response.IsError || !strings.Contains(response.Content, "missing-report.txt") {
+		t.Fatalf("missing artifact response = %#v, want path-specific error", response)
+	}
+	if got := c.GetTaskResult(items[0].ID); got != nil {
+		t.Fatalf("missing artifact stored a task result: %#v", got)
+	}
+	item := c.taskTracker.TodoList().Items()[0]
+	if item.TypedResult != nil {
+		t.Fatalf("missing artifact stored a todo typed result: %#v", item.TypedResult)
 	}
 }
 

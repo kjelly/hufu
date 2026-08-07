@@ -54,16 +54,50 @@ const (
 	PriorityCritical   Priority = 100
 )
 
-// Scope follows the project/team/session/agent/task/attempt hierarchy.
-// Empty child fields represent a wider scope.
+// Scope follows the project/team/session/branch/agent/task/attempt hierarchy.
+// Empty child fields represent a wider scope. BranchID was added in WP-1
+// alongside the ScopeVisibility query mode; it is nullable so legacy rows
+// (created before the migration) remain shared.
 type Scope struct {
 	ProjectID string `json:"project_id"`
 	TeamID    string `json:"team_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
+	BranchID  string `json:"branch_id,omitempty"`
 	AgentID   string `json:"agent_id,omitempty"`
 	TaskID    string `json:"task_id,omitempty"`
 	AttemptID string `json:"attempt_id,omitempty"`
 }
+
+// ContextLifecycle controls whether a record is eligible for runtime recall.
+// Candidate and rejected items are never injected into prompts unless a
+// maintenance query explicitly requests them.
+type ContextLifecycle string
+
+const (
+	LifecycleCandidate ContextLifecycle = "candidate"
+	LifecycleConfirmed ContextLifecycle = "confirmed"
+	LifecycleRejected  ContextLifecycle = "rejected"
+)
+
+// ScopeVisibility determines how an empty child scope field is interpreted.
+//
+//   - VisibilityAncestors (runtime default): a non-empty request field matches
+//     the same value OR a NULL ancestor (shared). An empty request field
+//     matches ONLY NULL — it never sees agent/branch/task children. This is
+//     the fix for the pre-WP-1 wildcard that let a coordinator-level query
+//     see every agent's private records.
+//   - VisibilityExact: every field must match exactly; empty request fields
+//     require NULL. Used by the shared-only projection query.
+//   - VisibilitySubtree: a non-empty field matches same-or-NULL; an empty
+//     field is a wildcard (matches anything). Maintenance/CLI only — never
+//     chosen by the model tool path.
+type ScopeVisibility string
+
+const (
+	VisibilityAncestors ScopeVisibility = "ancestors"
+	VisibilityExact     ScopeVisibility = "exact"
+	VisibilitySubtree   ScopeVisibility = "subtree"
+)
 
 type SourceRef struct {
 	Type string `json:"type"`
@@ -99,6 +133,7 @@ type ContextItem struct {
 	ValidUntil     *time.Time        `json:"valid_until,omitempty"`
 	ExpiresAt      *time.Time        `json:"expires_at,omitempty"`
 	SupersededBy   string            `json:"superseded_by,omitempty"`
+	Lifecycle      ContextLifecycle  `json:"lifecycle,omitempty"`
 	EmbeddingState string            `json:"embedding_state"`
 	EmbeddingModel string            `json:"embedding_model,omitempty"`
 }
@@ -113,16 +148,20 @@ type ContextEdge struct {
 
 type RepositoryQuery struct {
 	Scope             Scope
+	Visibility        ScopeVisibility
 	Kinds             []ContextKind
 	IncludeSuperseded bool
 	IncludeExpired    bool
+	IncludeCandidates bool
 	Limit             int
 }
 
 type SearchRequest struct {
-	Query string
-	Scope Scope
-	Limit int
+	Query             string
+	Scope             Scope
+	Visibility        ScopeVisibility
+	Limit             int
+	IncludeCandidates bool
 }
 type SearchResult struct {
 	Item  ContextItem

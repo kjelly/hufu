@@ -39,10 +39,42 @@ func (c *Coordinator) buildEvidenceManifest(ctx context.Context, strict bool) (*
 		} else if item.TypedResult != nil && len(item.TypedResult.Evidence) > 0 {
 			result.Status = "passed"
 		} else {
-			manifest.Status = "failed"
-			result.Status = "failed"
-			if strict {
-				return nil, fmt.Errorf("completed task %q (%s) is missing verification evidence", item.ID, item.Desc)
+			// A successful worker execution always has a runner-owned transcript.
+			// Treat that immutable transcript as evidence when the worker did not
+			// provide a separate verify command or signed evidence reference. The
+			// submit_result schema permits summary/findings-only results, so waiting
+			// until finalization to reject those results made the task contract
+			// internally inconsistent and marked otherwise successful tool tasks as
+			// failed. A non-zero worker exit remains insufficient evidence.
+			receipt := latestSuccessfulExecutionReceipt(item)
+			if receipt != nil && strings.TrimSpace(receipt.TranscriptRef) != "" {
+				ref, putErr := store.Put(ctx, PutArtifactRequest{
+					Kind:        "task_transcript",
+					Path:        receipt.TranscriptRef,
+					Description: fmt.Sprintf("runner transcript for task %s", item.ID),
+					SourcePath:  receipt.TranscriptRef,
+					RunID:       runID,
+					TaskID:      item.ID,
+					Attempt:     receipt.Attempt,
+					Agent:       item.Agent,
+				})
+				if putErr == nil {
+					result.Status = "passed"
+					manifest.ArtifactRefs = append(manifest.ArtifactRefs, ref)
+					result.ArtifactRefs = append(result.ArtifactRefs, ref)
+				} else {
+					manifest.Status = "failed"
+					result.Status = "failed"
+					if strict {
+						return nil, fmt.Errorf("task %q transcript evidence: %w", item.ID, putErr)
+					}
+				}
+			} else {
+				manifest.Status = "failed"
+				result.Status = "failed"
+				if strict {
+					return nil, fmt.Errorf("completed task %q (%s) is missing verification evidence", item.ID, item.Desc)
+				}
 			}
 		}
 		if item.TypedResult != nil {
@@ -110,6 +142,32 @@ func (c *Coordinator) buildEvidenceManifest(ctx context.Context, strict bool) (*
 	c.lastEvidenceManifest = manifest
 	c.lastEvidenceManifestMu.Unlock()
 	return manifest, nil
+}
+
+// latestSuccessfulExecutionReceipt returns runner-owned transcript evidence for
+// a completed task. Retries are searched newest-first so a stale failed attempt
+// cannot satisfy the final task evidence requirement.
+func latestSuccessfulExecutionReceipt(item *TodoItem) *ExecutionReceipt {
+	if item == nil {
+		return nil
+	}
+	for i := len(item.ExecutionReceipts) - 1; i >= 0; i-- {
+		receipt := &item.ExecutionReceipts[i]
+		if receipt.ExitCode != nil && *receipt.ExitCode != 0 {
+			continue
+		}
+		if strings.TrimSpace(receipt.TranscriptRef) != "" {
+			return receipt
+		}
+	}
+	if item.ExecutionReceipt != nil {
+		if item.ExecutionReceipt.ExitCode == nil || *item.ExecutionReceipt.ExitCode == 0 {
+			if strings.TrimSpace(item.ExecutionReceipt.TranscriptRef) != "" {
+				return item.ExecutionReceipt
+			}
+		}
+	}
+	return nil
 }
 
 // finalizeEvidenceManifest binds the run-level acceptance observation to the

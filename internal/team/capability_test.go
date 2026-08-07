@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 
+	"charm.land/fantasy"
+
 	"github.com/anomalyco/hufu/internal/agent"
 )
 
@@ -151,6 +153,64 @@ func TestExecuteTasksUnknownCapabilityPersistsStructuredFailureEvent(t *testing.
 	}
 	if failureEvent.TodoID != items[0].ID {
 		t.Fatalf("unknown capability reporter event = %#v", failureEvent)
+	}
+}
+
+func TestRunAgentsToolCapabilityReferencesAreSchemaBoundAndRejectedBeforeTodoCreation(t *testing.T) {
+	tests := []struct {
+		name          string
+		preflight     []agent.CapabilityRequirement
+		wantRequires  bool
+		wantEnum      []string
+		invalidInput  string
+		wantErrorPart string
+	}{
+		{
+			name:          "no configured capabilities omits requires and guides interactive work",
+			invalidInput:  `{"tasks":[{"agent":"worker","goal":"prepare environment","requires":["interactive"]}]}`,
+			wantErrorPart: "execution.kind=interactive",
+		},
+		{
+			name: "configured capabilities become an enum",
+			preflight: []agent.CapabilityRequirement{
+				{Name: "ssh-ready", Probe: "true"},
+				{Name: "libvirt", Probe: "true"},
+			},
+			wantRequires:  true,
+			wantEnum:      []string{"libvirt", "ssh-ready"},
+			invalidInput:  `{"tasks":[{"agent":"worker","goal":"prepare environment","requires":["interactive"]}]}`,
+			wantErrorPart: "valid names are: libvirt, ssh-ready",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newCapabilityCoordinator(t, tt.preflight)
+			tool := &runAgentsTool{coordinator: c}
+			props := tool.Info().Parameters["tasks"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+			requires, hasRequires := props["requires"]
+			if hasRequires != tt.wantRequires {
+				t.Fatalf("requires present = %t, want %t", hasRequires, tt.wantRequires)
+			}
+			if tt.wantRequires {
+				items := requires.(map[string]any)["items"].(map[string]any)
+				enum := items["enum"].([]string)
+				if strings.Join(enum, ",") != strings.Join(tt.wantEnum, ",") {
+					t.Fatalf("requires enum = %v, want %v", enum, tt.wantEnum)
+				}
+			}
+
+			response, err := tool.Run(context.Background(), fantasy.ToolCall{Input: tt.invalidInput})
+			if err != nil {
+				t.Fatalf("tool run returned transport error: %v", err)
+			}
+			if !response.IsError || !strings.Contains(response.Content, tt.wantErrorPart) {
+				t.Fatalf("invalid capability response = %#v, want error containing %q", response, tt.wantErrorPart)
+			}
+			if items := c.taskTracker.TodoList().Items(); len(items) != 0 {
+				t.Fatalf("invalid coordinator input created todo items: %#v", items)
+			}
+		})
 	}
 }
 

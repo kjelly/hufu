@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -262,6 +263,11 @@ func extractPathsFromCommand(command, workDir string) []string {
 		}
 	}
 
+	// Resolve safe, path-producing substitutions such as
+	// `sha256sum "$(which trec)"`. This is static analysis only: arbitrary
+	// substitutions must never be executed while checking path consent.
+	paths = append(paths, extractLookupSubstitutionPaths(command)...)
+
 	filtered := make([]string, 0, len(paths))
 	for _, p := range paths {
 		if !envPaths[p] {
@@ -269,6 +275,221 @@ func extractPathsFromCommand(command, workDir string) []string {
 		}
 	}
 	return filtered
+}
+
+// extractLookupSubstitutionPaths closes the consent bypass where an absolute
+// path hidden behind $(which ...), $(command -v ...), or backticks was not
+// visible to absPathInCmdRe.
+func extractLookupSubstitutionPaths(command string) []string {
+	var paths []string
+	var scan func(string)
+	scan = func(input string) {
+		for i := 0; i < len(input); i++ {
+			switch input[i] {
+			case '\\':
+				i++
+			case '\'':
+				i = skipSingleQuoted(input, i)
+			case '`':
+				end := findBacktickEnd(input, i+1)
+				if end < 0 {
+					continue
+				}
+				body := input[i+1 : end]
+				if path, ok := resolveLookupSubstitution(body); ok {
+					paths = append(paths, path)
+				}
+				scan(body)
+				i = end
+			case '$':
+				if i+1 >= len(input) || input[i+1] != '(' {
+					continue
+				}
+				end := findCommandSubstitutionEnd(input, i+2)
+				if end < 0 {
+					continue
+				}
+				body := input[i+2 : end]
+				if path, ok := resolveLookupSubstitution(body); ok {
+					paths = append(paths, path)
+				}
+				scan(body)
+				i = end
+			}
+		}
+	}
+	scan(command)
+	return paths
+}
+
+func skipSingleQuoted(input string, start int) int {
+	for i := start + 1; i < len(input); i++ {
+		if input[i] == '\'' {
+			return i
+		}
+	}
+	return len(input)
+}
+
+func findBacktickEnd(input string, start int) int {
+	for i := start; i < len(input); i++ {
+		if input[i] == '\\' {
+			i++
+			continue
+		}
+		if input[i] == '`' {
+			return i
+		}
+	}
+	return -1
+}
+
+// findCommandSubstitutionEnd returns the closing parenthesis for a $()
+// beginning at start, tracking quotes, escapes, and nested $() pairs.
+func findCommandSubstitutionEnd(input string, start int) int {
+	depth := 1
+	var quote byte
+	for i := start; i < len(input); i++ {
+		if quote == '\'' {
+			if input[i] == '\'' {
+				quote = 0
+			}
+			continue
+		}
+		if quote == '"' {
+			if input[i] == '\\' {
+				i++
+			} else if input[i] == '"' {
+				quote = 0
+			} else if input[i] == '$' && i+1 < len(input) && input[i+1] == '(' {
+				depth++
+				i++
+			}
+			continue
+		}
+
+		switch input[i] {
+		case '\\':
+			i++
+		case '\'':
+			quote = '\''
+		case '"':
+			quote = '"'
+		case '$':
+			if i+1 < len(input) && input[i+1] == '(' {
+				depth++
+				i++
+			}
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// resolveLookupSubstitution resolves only commands whose purpose is to
+// return an executable path. It refuses dynamic arguments and arbitrary shell
+// code so consent analysis never runs model-provided commands.
+func resolveLookupSubstitution(body string) (string, bool) {
+	fields := strings.Fields(strings.TrimSpace(body))
+	if len(fields) == 0 {
+		return "", false
+	}
+
+	pathValue := os.Getenv("PATH")
+	idx := 0
+	for idx < len(fields) && isShellAssignment(fields[idx]) {
+		assignment := fields[idx]
+		if strings.HasPrefix(assignment, "PATH=") {
+			pathValue = os.ExpandEnv(strings.TrimPrefix(assignment, "PATH="))
+		}
+		idx++
+	}
+	if idx >= len(fields) {
+		return "", false
+	}
+
+	lookup := fields[idx]
+	idx++
+	var name string
+	switch lookup {
+	case "which":
+		name = lookupArgument(fields[idx:])
+	case "command":
+		if idx >= len(fields) || (fields[idx] != "-v" && fields[idx] != "--verbose") {
+			return "", false
+		}
+		name = lookupArgument(fields[idx+1:])
+	case "type":
+		if idx >= len(fields) || (fields[idx] != "-P" && fields[idx] != "-p") {
+			return "", false
+		}
+		name = lookupArgument(fields[idx+1:])
+	default:
+		return "", false
+	}
+	if name == "" || strings.ContainsAny(name, "$`()") {
+		return "", false
+	}
+
+	if filepath.IsAbs(name) {
+		if _, err := os.Stat(name); err == nil {
+			return name, true
+		}
+		return "", false
+	}
+	path, err := lookPathWithValue(name, pathValue)
+	if err != nil {
+		return "", false
+	}
+	return path, true
+}
+
+func lookupArgument(fields []string) string {
+	var name string
+	for _, field := range fields {
+		if strings.HasPrefix(field, "-") {
+			continue
+		}
+		if name != "" {
+			return ""
+		}
+		name = strings.Trim(field, "\"'")
+	}
+	return name
+}
+
+func lookPathWithValue(name, pathValue string) (string, error) {
+	if pathValue == os.Getenv("PATH") {
+		return exec.LookPath(name)
+	}
+	for _, dir := range strings.Split(pathValue, string(os.PathListSeparator)) {
+		if dir == "" {
+			dir = "."
+		}
+		candidate := filepath.Join(dir, name)
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			return candidate, nil
+		}
+	}
+	return "", exec.ErrNotFound
+}
+
+func isShellAssignment(field string) bool {
+	idx := strings.IndexByte(field, '=')
+	if idx <= 0 {
+		return false
+	}
+	for i, r := range field[:idx] {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (i == 0 || r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func isSystemPath(path string) bool {

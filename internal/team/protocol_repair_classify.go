@@ -35,7 +35,8 @@ const submitResultToolName = "submit_result"
 // does not inspect business semantics, only structural signals:
 //  1. Was submit_result called at all? (steps or typedRes.Source == "submitted")
 //  2. If called, did it return an error? (tool result is_error, or no stored result)
-//  3. If it stored a result, is the status a terminal "success" or a
+//  3. If it stored a result, is the status completion-capable ("success" or
+//     "completed_with_gaps") or a
 //     progress update (partial/failed/blocked)?
 //
 // Refs: docs/hufu-generic-task-reliability-mechanisms.md §7
@@ -68,7 +69,7 @@ func classifyRepairFailure(steps []fantasy.StepResult, typedRes *TaskResult) (re
 		return RepairFailureInvalidSchema, false
 	}
 
-	// A result was stored. A non-success status means the worker reported a
+	// A result was stored. A non-completion status means the worker reported a
 	// progress update (partial/failed/blocked) rather than a final outcome.
 	// Per §7 this is reclassified as an execution failure, not a protocol
 	// failure, and must not count toward protocol repair statistics.

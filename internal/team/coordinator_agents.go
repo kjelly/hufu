@@ -55,7 +55,7 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 	// Inject SSH session manager into context
 	ctx = tools.SetSSHSessionManager(ctx, c.sshSessionMgr)
 
-	agentTools := agent.SelectTools(c.coreTools, agentDef.Tools)
+	agentTools := c.selectWorkerTools(agentDef)
 	if c.mcpManager != nil {
 		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
 
@@ -71,6 +71,7 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 			}
 		}
 	}
+	agentTools = c.filterDeniedWorkerTools(agentTools)
 
 	getAgModelID := c.resolveAgentModel(agentDef, "")
 	ag, err := c.createGatedAgent(ctx, c.providerManager.GetProvider(getAgModelID), agent.AgentConfig{

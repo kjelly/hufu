@@ -35,6 +35,19 @@ func TestTodoListAddBatch(t *testing.T) {
 	}
 }
 
+func TestTodoListHasIgnoresSyntheticAndUnknownIDs(t *testing.T) {
+	tl := &TodoList{}
+	items := tl.AddBatch([]TodoSpec{{Agent: "worker", Desc: "task"}})
+	if !tl.Has(items[0].ID) {
+		t.Fatalf("Has(%q) = false for live item", items[0].ID)
+	}
+	for _, id := range []string{"__coord__", "missing"} {
+		if tl.Has(id) {
+			t.Fatalf("Has(%q) = true for non-task ID", id)
+		}
+	}
+}
+
 func TestTodoListUpdateStatus(t *testing.T) {
 	tl := &TodoList{}
 

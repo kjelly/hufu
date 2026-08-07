@@ -54,6 +54,34 @@ type BudgetSnapshot struct {
 	MaxDiagnosticTasks int   `json:"max_diagnostic_tasks,omitempty"`
 }
 
+// UnmarshalJSON keeps sessions written by older Hufu versions loadable. Those
+// versions incorrectly redacted numeric telemetry such as tokens_used to the
+// string "[REDACTED]"; treating that legacy marker as an unknown/zero value is
+// safe and avoids discarding the entire session during a version upgrade.
+func (b *BudgetSnapshot) UnmarshalJSON(data []byte) error {
+	type budgetSnapshot BudgetSnapshot
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if raw, ok := fields["tokens_used"]; ok {
+		var marker string
+		if err := json.Unmarshal(raw, &marker); err == nil && marker == "[REDACTED]" {
+			fields["tokens_used"] = json.RawMessage("0")
+		}
+	}
+	normalized, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	var decoded budgetSnapshot
+	if err := json.Unmarshal(normalized, &decoded); err != nil {
+		return err
+	}
+	*b = BudgetSnapshot(decoded)
+	return nil
+}
+
 type RepairHypothesis struct {
 	ID             string        `json:"id"`
 	Cause          string        `json:"cause"`

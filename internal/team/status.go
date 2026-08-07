@@ -998,6 +998,21 @@ func (tl *TodoList) Items() []*TodoItem {
 	return result
 }
 
+// Has reports whether id identifies a live todo item. Callers that annotate
+// task metadata may receive synthetic or already-completed context IDs (for
+// example the coordinator stream); checking first keeps those annotations
+// from producing misleading "item not found" warnings.
+func (tl *TodoList) Has(id string) bool {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	for _, item := range tl.items {
+		if item != nil && item.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 // ExecutionMetadata returns the privacy-safe task metadata used in durable
 // execution telemetry. It intentionally excludes the task description, task
 // output, and verification result.

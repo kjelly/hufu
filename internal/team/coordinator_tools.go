@@ -15,6 +15,7 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/anomalyco/hufu/internal/skill"
 	"github.com/anomalyco/hufu/internal/tools"
 	"github.com/anomalyco/hufu/internal/utils"
 )
@@ -33,7 +34,7 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 				"type": "array",
 				"items": map[string]any{
 					"type":                 "object",
-					"properties":           buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir)),
+					"properties":           buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir), t.coordinator.taskCapabilityNames()),
 					"required":             []string{"agent"},
 					"additionalProperties": false,
 				},
@@ -57,6 +58,9 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 		if t.Goal == "" {
 			return fantasy.NewTextErrorResponse("each task requires 'goal'"), nil
 		}
+	}
+	if err := t.coordinator.validateDelegatedTaskCapabilities(args.Tasks); err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 
 	result, err := t.coordinator.ExecuteTasks(ctx, args.Tasks)
@@ -209,6 +213,11 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		if prof.AcceptanceMode == AcceptanceBlocking || t.coordinator.IsUnattended() {
 			if t.coordinator.selfHealingAttempts < 2 {
 				t.coordinator.selfHealingAttempts++
+				// A previous round/budget guard may have put the coordinator in
+				// wrap-up before finish discovered the acceptance failure.  Allow
+				// only these two bounded repair turns to delegate work; otherwise
+				// self-healing deadlocks at "refusing to start new tasks".
+				t.coordinator.acceptanceRecovery.Store(true)
 				msg := fmt.Sprintf("Acceptance check failed (attempt %d/2). Initiating self-healing. Error: %v", t.coordinator.selfHealingAttempts, accErr)
 				t.coordinator.report(t.coordinator.newEvent("error").withMessage(msg))
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("Acceptance check failed: %v. Please analyze the failure log, modify files/re-run tasks to fix the issues, and call finish again.", accErr)), nil
@@ -236,6 +245,8 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 			t.coordinator.report(t.coordinator.newEvent("error").withMessage("acceptance check failed: " + accErr.Error()))
 		}
 	}
+	// A successful finish ends any previously enabled bounded recovery window.
+	t.coordinator.acceptanceRecovery.Store(false)
 
 	unresolvedPending := pendingTodoItems(todoList.Items())
 	allUnresolved := append(failedTasks, unresolvedPending...)
@@ -517,7 +528,7 @@ type loadSkillTool struct {
 func (t *loadSkillTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
 		Name:        "load_skill",
-		Description: "Load the full content of a skill by name. Use this when you need detailed instructions from a skill before planning delegation. The skill content will help you understand how to instruct workers properly.",
+		Description: "Load the full content of a skill by name, including recursively referenced skills. Use this when you need detailed instructions from a skill before planning delegation. The skill content will help you understand how to instruct workers properly.",
 		Parameters: map[string]any{
 			"name": map[string]any{
 				"type":        "string",
@@ -550,12 +561,20 @@ func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 		if strings.ToLower(s.Name) == nameLower {
 			t.coordinator.recordSkillUsage(s.Name, agentName)
 
-			if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID != "" {
+			if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID != "" && t.coordinator.taskTracker.TodoList().Has(todoID) {
 				t.coordinator.taskTracker.TodoList().AddLoadedSkill(todoID, s.Name)
 				t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
 			}
 
-			return fantasy.NewTextResponse(fmt.Sprintf("Skill: %s\nFile: %s\n\n%s", s.Name, s.Path, s.Content)), nil
+			var b strings.Builder
+			for i, expanded := range skill.ExpandSkillDependencies(s, skills) {
+				if i == 0 {
+					fmt.Fprintf(&b, "Skill: %s\nFile: %s\n\n%s", expanded.Name, expanded.Path, expanded.Content)
+					continue
+				}
+				fmt.Fprintf(&b, "\n\nReferenced skill: %s\nFile: %s\n\n%s", expanded.Name, expanded.Path, expanded.Content)
+			}
+			return fantasy.NewTextResponse(b.String()), nil
 		}
 	}
 

@@ -399,3 +399,44 @@ func TestExecuteTaskFailsOnPartialSubmittedResultWithoutConsultingTerminalEviden
 		t.Fatalf("error = %q, must not consult unrelated terminal evidence for a non-success claim", err)
 	}
 }
+
+// TestExecuteTaskAcceptsCompletedWithGaps pins the distinction between an
+// incomplete task and completed analysis that discovered an external gap. The
+// latter must permit downstream work to use the evidence instead of being
+// misclassified as a protocol or execution failure.
+func TestExecuteTaskAcceptsCompletedWithGaps(t *testing.T) {
+	workspace := t.TempDir()
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "completed-with-gaps", Timeout: 30, MaxRetries: 2},
+			Agents: map[string]*agent.AgentDef{
+				"analyst": {Name: "analyst", Role: "worker", MaxRetries: 2, Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-completed-with-gaps",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "analyst", Desc: "survey target capability"}})[0]
+	c.workerAgentOverride = &submittingWorkerAgent{onSubmit: func() {
+		c.storeSubmittedTaskResult(item.ID, &TaskResult{
+			TaskID: item.ID, Agent: "analyst", Status: TaskResultStatusCompletedWithGaps, Source: "submitted",
+			Summary:  "Survey complete; target capability is unavailable.",
+			Findings: []Finding{{Category: "capability_gap", Summary: "required action is interactive only"}},
+		})
+	}}
+
+	if _, err := c.executeTask(context.Background(), TaskDef{Agent: "analyst", Goal: "survey target capability", Recovery: RecoveryRetry}, item.ID); err != nil {
+		t.Fatalf("completed_with_gaps must complete the assigned task: %v", err)
+	}
+	updated := c.taskTracker.TodoList().Items()[0]
+	if updated.Status != TaskDone {
+		t.Fatalf("task status = %s, want %s", updated.Status, TaskDone)
+	}
+	if got := LoadSTM(workspace); !strings.Contains(got, "submitted a result") {
+		t.Fatalf("completed task returned before its STM receipt was durable: %q", got)
+	}
+}

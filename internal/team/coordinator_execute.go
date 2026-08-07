@@ -85,18 +85,37 @@ func expandPipelineDeps(tasks []TaskDef) []TaskDef {
 }
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
+	// A configured delegation policy is checked before workspace validation,
+	// resource locking, TODO creation, or worker startup. It therefore leaves
+	// previously successful independent work untouched on rejection.
+	if err := c.validateDelegationPolicy(tasks); err != nil {
+		return "", err
+	}
 	if err := c.ValidateWorkspaceIsolation(); err != nil {
 		return "", err
 	}
 	if err := c.ValidateResourceLocks(ctx); err != nil {
 		return "", err
 	}
-	if c.IsWrapUp() {
+	if c.IsWrapUp() && !c.acceptanceRecovery.Load() {
 		c.report(c.newEvent("step").withMessage("Wrap-up: refusing to start new tasks"))
 		return "", fmt.Errorf("wrap-up in progress: refusing to delegate new tasks. Call finish immediately with your best summary of work completed so far")
 	}
 
 	tasks = expandPipelineDeps(tasks)
+	// A worker must make its terminal outcome explicit. This is independent of
+	// task type and prevents a prose failure report from being recorded as a
+	// completed task. Apply the runtime invariant before structural preflight:
+	// a closed sequence terminating in submit_result is coherent only when the
+	// worker is required to submit that result.
+	//
+	// A sidecar is exempt because a tool-less call cannot invoke submit_result;
+	// validateSidecarTaskContracts below rejects an unsafe sidecar contract.
+	for i := range tasks {
+		if !tasks[i].Sidecar {
+			tasks[i].Execution.RequiresResult = true
+		}
+	}
 	for _, task := range tasks {
 		if err := validateTaskOutputMode(task); err != nil {
 			return "", err
@@ -124,14 +143,6 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	}
 
 	for i := range tasks {
-		// A worker must make its terminal outcome explicit. This is independent
-		// of task type and prevents a prose failure report from being recorded
-		// as a completed task. A sidecar is exempt only because a tool-less call
-		// cannot invoke submit_result — validateSidecarTaskContracts above is
-		// what keeps that exemption from becoming a false success.
-		if !tasks[i].Sidecar {
-			tasks[i].Execution.RequiresResult = true
-		}
 		if tasks[i].OnFailure != nil && tasks[i].MaxRetries < 1 {
 			tasks[i].MaxRetries = 1
 		}
@@ -167,7 +178,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	}
 
 	c.round++
-	if c.session.Config.MaxRounds > 0 && c.round > c.session.Config.MaxRounds {
+	if c.session.Config.MaxRounds > 0 && c.round > c.session.Config.MaxRounds && !c.acceptanceRecovery.Load() {
 		c.wrapUp.Store(1)
 		detail := c.FailureDetail(fmt.Errorf("max rounds (%d) exceeded", c.session.Config.MaxRounds), FailureSourceMaxRoundsExceeded)
 		c.PersistFailure("coordinator", fmt.Sprintf("max rounds (%d) exceeded", c.session.Config.MaxRounds), "", detail)
@@ -179,7 +190,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	// Budget circuit-breaker: when running unattended there is no human to stop
 	// a runaway. If a configured wall-clock or token budget is exceeded, force
 	// wrap-up, emit a notifiable event, and refuse to delegate new tasks.
-	if exceeded, reason := c.budgetExceeded(); exceeded {
+	if exceeded, reason := c.budgetExceeded(); exceeded && !c.acceptanceRecovery.Load() {
 		c.wrapUp.Store(1)
 		detail := c.FailureDetail(fmt.Errorf("%s", reason), FailureSourceBudgetExceeded)
 		agentName := c.getSnapshotField(func(s *currentSnapshot) string { return s.Agent })

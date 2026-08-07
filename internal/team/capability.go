@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -83,6 +84,56 @@ func (c *Coordinator) capabilityRequirementsByName() map[string]agent.Capability
 		result[key] = req
 	}
 	return result
+}
+
+// taskCapabilityNames returns the configured preflight names in a stable order
+// for the coordinator tool schema and validation errors. A task's Requires
+// field is a reference to one of these configured probes; it is not a generic
+// description of how the worker should execute the task.
+func (c *Coordinator) taskCapabilityNames() []string {
+	if c == nil || c.session == nil {
+		return nil
+	}
+	byNormalizedName := make(map[string]string)
+	for _, req := range c.session.Config.Preflight {
+		name := strings.TrimSpace(req.Name)
+		key := normalizeCapabilityName(name)
+		if key == "" {
+			continue
+		}
+		byNormalizedName[key] = name
+	}
+	names := make([]string, 0, len(byNormalizedName))
+	for _, name := range byNormalizedName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// validateDelegatedTaskCapabilities rejects malformed coordinator-tool input
+// before ExecuteTasks creates a todo item. This is intentionally stricter
+// than the scheduler's runtime guard: a model-invented capability name is a
+// delegation-schema error, not evidence that an external task failed. Keeping
+// it out of the todo ledger lets the coordinator correct and reissue the task
+// without leaving an unreconcilable blocked task behind.
+func (c *Coordinator) validateDelegatedTaskCapabilities(tasks []TaskDef) error {
+	configured := c.capabilityRequirementsByName()
+	var unknown []string
+	for index, task := range tasks {
+		for _, name := range task.Requires {
+			if _, ok := configured[normalizeCapabilityName(name)]; !ok {
+				unknown = append(unknown, fmt.Sprintf("tasks[%d].requires=%q", index, name))
+			}
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	if names := c.taskCapabilityNames(); len(names) > 0 {
+		return fmt.Errorf("unknown preflight capability reference(s): %s; valid names are: %s", strings.Join(unknown, ", "), strings.Join(names, ", "))
+	}
+	return fmt.Errorf("unknown preflight capability reference(s): %s; this team declares no preflight capabilities, so omit requires. Describe interactive work with execution.kind=interactive instead", strings.Join(unknown, ", "))
 }
 
 func (c *Coordinator) taskCapabilityRequirements(names []string) ([]agent.CapabilityRequirement, []string) {

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -351,7 +352,7 @@ func TestFormatConsentPreviewLinesWideEnough(t *testing.T) {
 
 func TestFormatConsentPreviewLinesWrapsWithoutEllipsis(t *testing.T) {
 	prefix := "Tool:  bash → "
-	text := "go run ./cmd/pilot vm-target exec --name ipa-ha-client -- cat /etc/ssh/sshd_config"
+	text := "go run ./cmd/tool inspect --name host-a -- cat /etc/ssh/sshd_config"
 
 	got := formatConsentPreviewLines(prefix, text, 48)
 	if len(got) < 2 {
@@ -368,6 +369,13 @@ func TestFormatConsentPreviewLinesWrapsWithoutEllipsis(t *testing.T) {
 }
 
 func TestExtractPathsFromCommand(t *testing.T) {
+	lookupDir := t.TempDir()
+	lookupPath := filepath.Join(lookupDir, "trec")
+	if err := os.WriteFile(lookupPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write lookup executable: %v", err)
+	}
+	t.Setenv("PATH", lookupDir)
+
 	tests := []struct {
 		name    string
 		cmd     string
@@ -458,6 +466,24 @@ func TestExtractPathsFromCommand(t *testing.T) {
 			wantMin: 1,
 			wantHas: []string{"/tmp"},
 		},
+		{
+			name:    "which command substitution",
+			cmd:     `sha256sum "$(which trec)"`,
+			wantMin: 1,
+			wantHas: []string{lookupPath},
+		},
+		{
+			name:    "command v substitution",
+			cmd:     `sha256sum "$(command -v trec)"`,
+			wantMin: 1,
+			wantHas: []string{lookupPath},
+		},
+		{
+			name:    "backtick which substitution",
+			cmd:     "sha256sum `which trec`",
+			wantMin: 1,
+			wantHas: []string{lookupPath},
+		},
 	}
 
 	for _, tt := range tests {
@@ -479,6 +505,27 @@ func TestExtractPathsFromCommand(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCheckBashPathConsentResolvesLookupSubstitution(t *testing.T) {
+	lookupDir := t.TempDir()
+	lookupPath := filepath.Join(lookupDir, "trec")
+	if err := os.WriteFile(lookupPath, []byte("binary"), 0o755); err != nil {
+		t.Fatalf("write lookup executable: %v", err)
+	}
+	t.Setenv("PATH", lookupDir)
+
+	err := checkBashPathConsent(context.Background(), `sha256sum "$(which trec)"`, ToolConfig{
+		WorkDir:      t.TempDir(),
+		PathConsent:  nil,
+		AllowedPaths: nil,
+	})
+	if err == nil {
+		t.Fatal("expected command substitution path to require consent")
+	}
+	if !strings.Contains(err.Error(), lookupPath) {
+		t.Fatalf("consent error = %v, want lookup path %q", err, lookupPath)
 	}
 }
 

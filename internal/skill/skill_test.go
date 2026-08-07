@@ -653,6 +653,50 @@ func TestDiscoverSkills_IncludeDrafts(t *testing.T) {
 	}
 }
 
+func TestExpandSkillDependencies_Recursive(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	root := &SkillDef{
+		Name:    "root",
+		Path:    "/project/.agents/skills/root/SKILL.md",
+		Content: "Read .agents/skills/child/SKILL.md and $HOME/.agents/skills/leaf/SKILL.md.",
+	}
+	child := &SkillDef{
+		Name:    "child",
+		Path:    "/project/.agents/skills/child/SKILL.md",
+		Content: "The child has no further dependencies.",
+	}
+	leaf := &SkillDef{
+		Name:    "leaf",
+		Path:    filepath.Join(home, ".agents", "skills", "leaf", "SKILL.md"),
+		Content: "The leaf is available globally.",
+	}
+
+	got := ExpandSkillDependencies(root, []*SkillDef{root, child, leaf})
+	if len(got) != 3 {
+		t.Fatalf("ExpandSkillDependencies returned %d skills, want 3", len(got))
+	}
+	for i, want := range []string{"root", "child", "leaf"} {
+		if got[i].Name != want {
+			t.Errorf("expanded skill %d = %q, want %q", i, got[i].Name, want)
+		}
+	}
+}
+
+func TestExpandSkillDependencies_ExplicitExcludeWins(t *testing.T) {
+	root := &SkillDef{
+		Name:    "root",
+		Content: "Read skills/child/SKILL.md.",
+	}
+	child := &SkillDef{Name: "child", Path: "/project/skills/child/SKILL.md", Content: "child"}
+
+	got := ExpandSkillDependenciesForSet([]*SkillDef{root}, []*SkillDef{root, child}, []string{"child"})
+	if len(got) != 1 || got[0].Name != "root" {
+		t.Fatalf("expanded skills = %#v, want only root", got)
+	}
+}
+
 // TestParseSkillFile_CreatedAtFromFrontmatter verifies that created_at in the
 // YAML frontmatter is parsed into SkillDef.CreatedAt.
 func TestParseSkillFile_CreatedAtFromFrontmatter(t *testing.T) {

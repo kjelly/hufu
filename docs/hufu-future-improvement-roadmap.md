@@ -1779,9 +1779,9 @@ final-auditor
 
 ---
 
-## 33. `pilot-reverify`（已移除，改為通用機制）
+## 33. Domain-specific revalidation（已移除，改為通用機制）
 
-原規劃依附於伴隨文件的 pilot/FreeIPA/trec 專用 scaffold 已隨伴隨文件一般化而移除（該附件從未提供）。此類高約束驗證團隊未來由 `infra-operator`（§32）加上 strict-verification 機制（HF-PR-005/006/107/108/109/110/111/112/113）衍生，不再維護專用 scaffold。
+原規劃依附於特定應用文件的專用 scaffold 已隨伴隨文件一般化而移除（該附件從未提供）。此類高約束驗證團隊未來由 `infra-operator`（§32）加上 strict-verification 機制（HF-PR-005/006/107/108/109/110/111/112/113）衍生，不再維護專用 scaffold。
 
 ---
 

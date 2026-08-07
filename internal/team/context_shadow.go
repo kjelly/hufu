@@ -73,7 +73,7 @@ func (c *Coordinator) appendCanonicalContext(ctx context.Context, kind contextst
 	if err := c.contextRepo.RebuildProjection(ctx, item.Scope); err != nil {
 		return err
 	}
-	items, err := c.contextRepo.Query(ctx, contextstore.RepositoryQuery{Scope: item.Scope, Limit: 100000})
+	items, err := c.contextRepo.QuerySharedProjection(ctx, item.Scope)
 	if err != nil {
 		return err
 	}
@@ -93,6 +93,8 @@ func (c *Coordinator) contextScope() contextstore.Scope {
 	if c.sessionData != nil && c.sessionData.CreatedAt != "" {
 		sessionID = c.sessionData.CreatedAt
 	}
+	// Shared canonical context deliberately remains branch-neutral. Branch
+	// isolation is applied only to private worker memory via resolveWorkerScope.
 	return contextstore.Scope{ProjectID: c.projectDir, TeamID: c.session.Config.Name, SessionID: sessionID}
 }
 

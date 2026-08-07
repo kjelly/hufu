@@ -45,7 +45,7 @@ func TestRedactSecrets(t *testing.T) {
 }
 
 func TestRedactJSONPreservesEscapedContent(t *testing.T) {
-	input := []byte(`{"entries":[{"content":"ipa_admin_password: \\\"PilotSecret\\\" and api_token: hidden"}],"password":"top-secret"}`)
+	input := []byte(`{"entries":[{"content":"ipa_admin_password: \\\"ExampleSecret\\\" and api_token: hidden"}],"password":"top-secret"}`)
 	got, err := RedactJSON(input)
 	if err != nil {
 		t.Fatalf("RedactJSON: %v", err)
@@ -53,7 +53,7 @@ func TestRedactJSONPreservesEscapedContent(t *testing.T) {
 	if !json.Valid(got) {
 		t.Fatalf("redacted output is invalid JSON: %s", got)
 	}
-	if strings.Contains(string(got), "PilotSecret") || strings.Contains(string(got), "hidden") || strings.Contains(string(got), "top-secret") {
+	if strings.Contains(string(got), "ExampleSecret") || strings.Contains(string(got), "hidden") || strings.Contains(string(got), "top-secret") {
 		t.Fatalf("secret leaked: %s", got)
 	}
 	var decoded map[string]any
@@ -63,7 +63,7 @@ func TestRedactJSONPreservesEscapedContent(t *testing.T) {
 }
 
 func TestRedactJSONPreservesNumericTelemetryWithSecretLikeKey(t *testing.T) {
-	input := []byte(`{"max_tokens_without_progress":2000000,"tokens_since_criterion_progress":42,"tokens_since_progress":"credential-like","nested":{"max_tokens_without_progress":true},"api_token":"secret"}`)
+	input := []byte(`{"tokens_used":1234,"max_tokens_without_progress":2000000,"tokens_since_criterion_progress":42,"tokens_since_progress":"credential-like","nested":{"max_tokens_without_progress":true},"api_token":"secret"}`)
 	got, err := RedactJSON(input)
 	if err != nil {
 		t.Fatalf("RedactJSON: %v", err)
@@ -71,6 +71,12 @@ func TestRedactJSONPreservesNumericTelemetryWithSecretLikeKey(t *testing.T) {
 	var decoded map[string]any
 	if err := json.Unmarshal(got, &decoded); err != nil {
 		t.Fatalf("unmarshal redacted output: %v", err)
+	}
+	if _, ok := decoded["tokens_used"].(float64); !ok {
+		t.Fatalf("tokens_used changed type: %#v", decoded["tokens_used"])
+	}
+	if decoded["tokens_used"] != float64(1234) {
+		t.Fatalf("tokens_used changed value: %#v", decoded["tokens_used"])
 	}
 	if _, ok := decoded["max_tokens_without_progress"].(float64); !ok {
 		t.Fatalf("numeric telemetry changed type: %#v", decoded["max_tokens_without_progress"])

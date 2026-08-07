@@ -299,6 +299,7 @@ type Coordinator struct {
 	dualWriteFailures      atomic.Int64
 	memoryStore            *memory.MemoryStore
 	contextRepo            contextstore.Repository // Phase 1 shadow store; never read by prompt assembly.
+	workerMemorySvc        WorkerMemoryService    // WP-3 per-worker memory recall service.
 	skillsMu               sync.RWMutex
 	modelList              []config.ModelEntry
 	sidecarModel           string
@@ -418,6 +419,12 @@ type Coordinator struct {
 	noProgressUsageNamespace string
 	rollbackCmd              string // optional shell command run on acceptance failure
 	selfHealingAttempts      int
+	// acceptanceRecovery permits the bounded repair turns requested after a
+	// blocking acceptance failure.  A run may already be in wrap-up because a
+	// round/budget circuit breaker fired; refusing every new delegation there
+	// makes acceptance self-healing impossible.  The flag is cleared when the
+	// run is reset or a finish succeeds.
+	acceptanceRecovery       atomic.Bool
 	budgetTripped            atomic.Bool
 	lastRunResult            *RunResult
 	lastRunResultMu          sync.RWMutex
@@ -887,6 +894,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		log.Printf("warning: context shadow store unavailable: %v", openErr)
 	} else {
 		c.contextRepo = repo
+		c.workerMemorySvc = NewWorkerMemoryService(repo, nil)
 	}
 	c.workflowEngine = &defaultWorkflowEngine{c: c}
 
@@ -1064,6 +1072,7 @@ func (c *Coordinator) resetRoundState() {
 	c.baseRounds += c.round
 	c.round = 0
 	c.wrapUp.Store(0)
+	c.acceptanceRecovery.Store(false)
 	c.finishCalled.Store(false)
 	c.delegatedTasksMu.Lock()
 	c.delegatedTasks = make(map[string]int)
@@ -1156,7 +1165,7 @@ func (c *Coordinator) SetStepConfirmFn(fn func(context.Context, []TaskDef) (bool
 // omitted so the coordinator cannot (and does not need to) specify a model;
 // each agent's model is determined by its own configuration instead.
 // sharedDir is the absolute path to the workspace shared/ directory.
-func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDirPath string) map[string]any {
+func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDirPath string, capabilityNames []string) map[string]any {
 	contextFilesDesc := "Optional files from the shared directory to provide as context"
 	if sharedDirPath != "" {
 		contextFilesDesc = fmt.Sprintf("Optional files from the shared directory (%s) to provide as context", sharedDirPath)
@@ -1209,18 +1218,13 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 				},
 			},
 		},
-		"requires": map[string]any{
-			"type":        "array",
-			"items":       map[string]any{"type": "string"},
-			"description": "Optional capability names that must be available before this task starts. Each name must match a capability declared in team.yaml `preflight`.",
-		},
 		"adversarial_verify": map[string]any{
 			"type":        "integer",
 			"description": "Optional number of skeptic LLM verifiers (1-3, odd recommended) that independently try to refute the result after the task succeeds. If a majority refutes, the task fails and retries with the refutation as feedback. Use for high-stakes tasks where 'verify' alone cannot check quality.",
 		},
 		"execution": map[string]any{
 			"type":        "object",
-			"description": "Structured execution contract specifying execution mode (inline, process, interactive, external), result requirements, and verification needs.",
+			"description": "Structured execution contract specifying execution mode, result requirements, verification needs, and an optional closed tool sequence for atomic tasks.",
 			"properties": map[string]any{
 				"kind": map[string]any{
 					"type":        "string",
@@ -1239,8 +1243,20 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 					"type":        "boolean",
 					"description": "If true, task allows replay upon protocol/execution failure.",
 				},
+				"tool_sequence": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "Optional exact tool-call sequence for an atomic task. It must end with submit_result; Hufu exposes only these tools and rejects out-of-order or extra calls.",
+				},
 			},
 		},
+	}
+	if len(capabilityNames) > 0 {
+		props["requires"] = map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string", "enum": capabilityNames},
+			"description": "Optional configured preflight capability names that must be available before this task starts. Do not use this for execution style; use execution.kind=interactive for interactive work.",
+		}
 	}
 	if hasModelList {
 		props["model"] = map[string]any{"type": "string", "description": "Model ID from Available Models to use for this task. Select the model whose strengths best match this task. If empty, the default team model will be used."}

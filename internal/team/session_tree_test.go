@@ -157,6 +157,37 @@ func TestSessionTree_FilterEventsForBranch(t *testing.T) {
 	}
 }
 
+func TestWP6DiffBranchesShowsMemoryItemIDsWithoutContent(t *testing.T) {
+	workspace := t.TempDir()
+	es, err := NewEventStore(workspace, "run-1", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer es.Close()
+	if err := es.Append(RunEvent{ID: "fork", BranchID: "main", Type: "worker_memory_confirmed", Payload: []byte(`{"item_id":"main-memory"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	tree := NewSessionTree()
+	feature, err := tree.CreateBranch("feature", "fork", es)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := es.Append(RunEvent{ID: "feature-memory", BranchID: feature.ID, Type: "worker_memory_confirmed", Payload: []byte(`{"item_id":"feature-private-memory","content":"must never render"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	diff, err := DiffBranches(workspace, tree, es, "main", feature.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diff.MemoryDiffs) != 1 || diff.MemoryDiffs[0].ItemID != "feature-private-memory" || diff.MemoryDiffs[0].DiffType != "only_in_b" {
+		t.Fatalf("memory diffs = %#v", diff.MemoryDiffs)
+	}
+	rendered := diff.RenderText()
+	if !strings.Contains(rendered, "feature-private-memory") || strings.Contains(rendered, "must never render") {
+		t.Fatalf("memory diff rendering leaked content or omitted ID: %s", rendered)
+	}
+}
+
 func TestSessionTree_DiffBranches(t *testing.T) {
 	tempDir := t.TempDir()
 	st := NewSessionTree()

@@ -59,13 +59,14 @@ func LoadDefaultTeam(workspace string, forcedSkills []string, helperTools string
 		Description: "Default team coordinator",
 		Role:        "coordinator",
 		Tools:       "ask_user",
-		// The team-level MaxSteps above is a worker budget. Orchestration turns
-		// keep their own default so raising the worker's headroom does not also
-		// widen how much one coordinator turn can dispatch.
-		MaxSteps:    agent.DefaultCoordinatorMaxSteps,
+		// Leave the per-agent field unset so the team/CLI max-steps override
+		// reaches the coordinator too. A non-zero value here would take
+		// precedence in stepBudget and silently defeat --max-steps.
+		MaxSteps:    0,
 		MaxRetries:  -1,
 		Generation:  cfg.Generation,
 		ProviderURL: cfg.ProviderURL,
+		Memory:      agent.WorkerMemoryPolicy{Mode: agent.WorkerMemoryOff},
 	}
 	helperBaseTools := "view,write,edit,multiedit,grep,glob,ls,random,math"
 	helperToolList := helperBaseTools
@@ -92,6 +93,7 @@ func LoadDefaultTeam(workspace string, forcedSkills []string, helperTools string
 		MaxRetries:  -1,
 		Generation:  cfg.Generation,
 		ProviderURL: cfg.ProviderURL,
+		Memory:      agent.WorkerMemoryPolicy{Mode: agent.WorkerMemoryOff},
 	}
 
 	sess := &TeamSession{
@@ -143,6 +145,7 @@ func LoadDefaultTeam(workspace string, forcedSkills []string, helperTools string
 			}
 		}
 	}
+	sess.Skills = skill.ExpandSkillDependenciesForSet(sess.Skills, allSkills, excludeSkills)
 
 	return sess, nil
 }

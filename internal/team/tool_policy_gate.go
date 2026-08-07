@@ -55,6 +55,13 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		}
 		return fantasy.NewTextErrorResponse(denial), nil
 	}
+	if sequenceDenial := taskToolSequenceFromContext(ctx).reserve(t.Info().Name); sequenceDenial != "" {
+		if t.coordinator != nil {
+			t.coordinator.report(t.coordinator.newEvent("step").withAgent(agentName).
+				withMessage(fmt.Sprintf("tool %q denied by closed task sequence", t.Info().Name)))
+		}
+		return fantasy.NewTextErrorResponse(sequenceDenial), nil
+	}
 	return t.inner.Run(ctx, call)
 }
 
@@ -174,7 +181,7 @@ func (c *Coordinator) validateToolGrants() error {
 		if def == nil || strings.EqualFold(def.Role, "coordinator") {
 			continue // orchestrator grants are asserted by coordinatorAllowedToolNames
 		}
-		exposed := agentToolNames(agent.SelectTools(c.coreTools, def.Tools))
+		exposed := agentToolNames(c.selectWorkerTools(def))
 		allowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowed(context.Background(), def, exposed))
 		if missing := unauthorizedExposedTools(exposed, allowed); len(missing) > 0 {
 			return fmt.Errorf("agent %q would be shown tools it is not authorized to call: %s — every tool handed to a model must be in its runtime allowlist", name, strings.Join(missing, ", "))

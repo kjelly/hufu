@@ -81,6 +81,20 @@ func TestVectorStoreSupportsConcurrentRebuildAndSearch(t *testing.T) {
 	}
 }
 
+func TestIsRetrievableHonorsRequestedVisibilityAndLifecycle(t *testing.T) {
+	now := time.Now()
+	private := ContextItem{Scope: Scope{ProjectID: "p", TeamID: "team", AgentID: "agent-a"}, Lifecycle: LifecycleCandidate}
+	if isRetrievable(private, SearchRequest{Scope: Scope{ProjectID: "p", TeamID: "team"}}, now) {
+		t.Fatal("runtime ancestor visibility must not return a private child")
+	}
+	if !isRetrievable(private, SearchRequest{Scope: Scope{ProjectID: "p", TeamID: "team", AgentID: "agent-a"}, Visibility: VisibilitySubtree, IncludeCandidates: true}, now) {
+		t.Fatal("explicit maintenance subtree with candidates should return the selected private item")
+	}
+	if isRetrievable(private, SearchRequest{Scope: Scope{ProjectID: "p", TeamID: "team", AgentID: "agent-a"}, Visibility: VisibilitySubtree}, now) {
+		t.Fatal("vector path must apply the same lifecycle filter as SQLite retrieval")
+	}
+}
+
 func TestVectorStoreRebuildsCanonicalItemsAndFindsSemanticMatch(t *testing.T) {
 	dir := t.TempDir()
 	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))

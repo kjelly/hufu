@@ -28,6 +28,12 @@ func TestResultProtocolInstructionsStateTheContract(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "closed sequence is stated",
+			task:    TaskDef{Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"bash", "submit_result"}}},
+			granted: granted,
+			want:    true,
+		},
+		{
 			name:    "not required",
 			task:    TaskDef{},
 			granted: granted,
@@ -56,6 +62,9 @@ func TestResultProtocolInstructionsStateTheContract(t *testing.T) {
 				if !strings.Contains(got, needle) {
 					t.Errorf("result protocol instructions missing %q: %q", needle, got)
 				}
+			}
+			if tc.name == "closed sequence is stated" && !strings.Contains(got, "bash → submit_result") {
+				t.Errorf("closed sequence missing from prompt: %q", got)
 			}
 		})
 	}
@@ -124,8 +133,8 @@ func TestStepBudgetHonoursOverrides(t *testing.T) {
 }
 
 // TestDefaultTeamStepBudget checks the --default path a runbook run actually
-// uses: workers get headroom for multi-step infrastructure work while
-// orchestration turns keep their own, narrower budget.
+// uses: both workers and the coordinator honor the team-level budget, while a
+// CLI --max-steps override can still narrow or widen it for one run.
 func TestDefaultTeamStepBudget(t *testing.T) {
 	session, err := LoadDefaultTeam(t.TempDir(), nil, "bash,terminal")
 	if err != nil {
@@ -137,8 +146,8 @@ func TestDefaultTeamStepBudget(t *testing.T) {
 	if worker <= agent.DefaultMaxSteps {
 		t.Errorf("default-team worker step budget = %d, want more than DefaultMaxSteps (%d)", worker, agent.DefaultMaxSteps)
 	}
-	if coord := c.stepBudget(session.Agents["coordinator"], agent.DefaultCoordinatorMaxSteps); coord != agent.DefaultCoordinatorMaxSteps {
-		t.Errorf("default-team coordinator step budget = %d, want %d", coord, agent.DefaultCoordinatorMaxSteps)
+	if coord := c.stepBudget(session.Agents["coordinator"], agent.DefaultCoordinatorMaxSteps); coord != session.Config.MaxSteps {
+		t.Errorf("default-team coordinator step budget = %d, want team budget %d", coord, session.Config.MaxSteps)
 	}
 }
 

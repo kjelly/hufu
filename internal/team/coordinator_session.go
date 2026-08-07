@@ -47,14 +47,16 @@ func (c *Coordinator) checkpointSTM() {
 }
 
 func (c *Coordinator) autoWriteSTMASync(agentName, taskDesc, output, errMsg string, success bool) {
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("[PANIC] autoWriteSTMASync recovered: %v", r)
-			}
-		}()
-		c.autoWriteSTM(agentName, taskDesc, output, errMsg, success)
+	// Task completion is not complete until its shared-memory receipt is
+	// durable. Running this write in a detached goroutine let workspace cleanup
+	// race an AtomicWriteFile temporary file, and also made a completed task's
+	// handoff nondeterministically omit its STM entry.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[PANIC] autoWriteSTMASync recovered: %v", r)
+		}
 	}()
+	c.autoWriteSTM(agentName, taskDesc, output, errMsg, success)
 }
 
 func (c *Coordinator) summarizeOutput(ctx context.Context, text string) string {

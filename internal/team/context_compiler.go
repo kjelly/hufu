@@ -84,6 +84,7 @@ type WorkerContextInput struct {
 	ToolsTokens       int
 	MaxAuxChars       int
 	DisableMemory     bool
+	WorkerMemory      *WorkerMemoryBundle
 }
 
 type CompiledContext struct {
@@ -537,6 +538,22 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 				Content:  memCtx,
 				Priority: PriorityRelevantLTM,
 				DedupKey: hashContentKey(memCtx),
+			})
+		}
+	}
+
+	// Per-worker private memory (WP-3): injected as a typed bundle, not raw
+	// Markdown. The section is labelled as background context that must not
+	// override current instructions.
+	if input.WorkerMemory != nil && len(input.WorkerMemory.Items) > 0 {
+		memSection := RenderWorkerMemorySection(*input.WorkerMemory)
+		if memSection != "" {
+			items = append(items, ContextItem{
+				ID:       "worker_memory",
+				Kind:     "worker_memory",
+				Content:  memSection,
+				Priority: PriorityRecentSTM, // same level as recent STM; dedup key prevents collision
+				DedupKey: hashContentKey(memSection),
 			})
 		}
 	}

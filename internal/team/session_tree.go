@@ -450,6 +450,14 @@ type VerificationDiffItem struct {
 	DiffType  string `json:"diff_type"` // "status_changed", "only_in_a", "only_in_b"
 }
 
+// MemoryDiffItem identifies a canonical worker-memory record that is visible
+// in only one branch lineage. Content is deliberately omitted: session diff
+// is an observability surface, not a private-memory disclosure path.
+type MemoryDiffItem struct {
+	ItemID   string `json:"item_id"`
+	DiffType string `json:"diff_type"` // "only_in_a" or "only_in_b"
+}
+
 // SessionDiff contains full diff analysis between two branches.
 type SessionDiff struct {
 	BranchA       string                 `json:"branch_a"`
@@ -458,6 +466,7 @@ type SessionDiff struct {
 	TaskDiffs     []TaskDiffItem         `json:"task_diffs"`
 	ArtifactDiffs []ArtifactDiffItem     `json:"artifact_diffs"`
 	VerifyDiffs   []VerificationDiffItem `json:"verify_diffs"`
+	MemoryDiffs   []MemoryDiffItem       `json:"memory_diffs,omitempty"`
 	EventCountA   int                    `json:"event_count_a"`
 	EventCountB   int                    `json:"event_count_b"`
 }
@@ -596,6 +605,28 @@ func DiffBranches(workspace string, st *SessionTree, es *EventStore, branchA, br
 		}
 	}
 
+	// Compare canonical memory IDs from the branch event lineage. This keeps
+	// private content out of a general session diff while making fork/checkout
+	// memory visibility auditable.
+	memoryA := extractMemoryItemIDs(eventsA)
+	memoryB := extractMemoryItemIDs(eventsB)
+	for id := range memoryB {
+		if !memoryA[id] {
+			diff.MemoryDiffs = append(diff.MemoryDiffs, MemoryDiffItem{ItemID: id, DiffType: "only_in_b"})
+		}
+	}
+	for id := range memoryA {
+		if !memoryB[id] {
+			diff.MemoryDiffs = append(diff.MemoryDiffs, MemoryDiffItem{ItemID: id, DiffType: "only_in_a"})
+		}
+	}
+	sort.Slice(diff.MemoryDiffs, func(i, j int) bool {
+		if diff.MemoryDiffs[i].DiffType != diff.MemoryDiffs[j].DiffType {
+			return diff.MemoryDiffs[i].DiffType < diff.MemoryDiffs[j].DiffType
+		}
+		return diff.MemoryDiffs[i].ItemID < diff.MemoryDiffs[j].ItemID
+	})
+
 	return diff, nil
 }
 
@@ -608,7 +639,7 @@ func (sd *SessionDiff) RenderText() string {
 	}
 	fmt.Fprintf(&b, "Events: %s (%d) | %s (%d)\n\n", sd.BranchA, sd.EventCountA, sd.BranchB, sd.EventCountB)
 
-	if len(sd.TaskDiffs) == 0 && len(sd.ArtifactDiffs) == 0 && len(sd.VerifyDiffs) == 0 {
+	if len(sd.TaskDiffs) == 0 && len(sd.ArtifactDiffs) == 0 && len(sd.VerifyDiffs) == 0 && len(sd.MemoryDiffs) == 0 {
 		b.WriteString("No differences found between branches.\n")
 		return b.String()
 	}
@@ -645,6 +676,18 @@ func (sd *SessionDiff) RenderText() string {
 		b.WriteString("\n")
 	}
 
+	if len(sd.MemoryDiffs) > 0 {
+		b.WriteString("Memory Item Diffs:\n")
+		for _, md := range sd.MemoryDiffs {
+			marker := "+"
+			if md.DiffType == "only_in_a" {
+				marker = "-"
+			}
+			fmt.Fprintf(&b, "  %s %s\n", marker, md.ItemID)
+		}
+		b.WriteString("\n")
+	}
+
 	return b.String()
 }
 
@@ -666,6 +709,22 @@ func extractArtifacts(events []RunEvent, state BranchState) map[string]bool {
 		}
 	}
 	return m
+}
+
+func extractMemoryItemIDs(events []RunEvent) map[string]bool {
+	ids := make(map[string]bool)
+	for _, event := range events {
+		switch event.Type {
+		case "worker_memory_candidate_saved", "worker_memory_confirmed", "worker_memory_rejected":
+			var payload struct {
+				ItemID string `json:"item_id"`
+			}
+			if json.Unmarshal(event.Payload, &payload) == nil && payload.ItemID != "" {
+				ids[payload.ItemID] = true
+			}
+		}
+	}
+	return ids
 }
 
 func slugifyBranchName(name string) string {

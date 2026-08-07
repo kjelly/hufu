@@ -122,3 +122,25 @@ func TestReliabilityProjectionsIncludeFailureMaps(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildReportMDIncludesWorkerMemoryStatsAndIDsWithoutContent(t *testing.T) {
+	report := buildReportMD(&reportData{
+		StartedAt: time.Now(),
+		WorkerMemory: team.WorkerMemoryReport{
+			ItemIDs:    []string{"memory-a", "memory-b"},
+			Total:      2,
+			Session:    1,
+			Persistent: 1,
+			Confirmed:  1,
+			Candidate:  1,
+		},
+	}, "demo", "")
+	for _, want := range []string{"## Worker Memory", "memory-a", "memory-b", "Items:** 2", "Private worker-memory content is intentionally omitted"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+	if strings.Contains(report, "private worker memory report secret") {
+		t.Fatalf("report leaked worker-memory content:\n%s", report)
+	}
+}

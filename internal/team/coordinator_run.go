@@ -149,6 +149,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		RawSTM: LoadSTM(c.session.Workspace), RawLTM: LoadLTM(c.session.Workspace, c.session.Config.Name), MemoryStore: c.memoryStore,
 		ModelContext: globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")), MaxAuxChars: maxWorkerAuxContextChars,
 		DisableMemory: c.ExecutionProfile().DisableHistoricalMemory}
+	// WP-3: recall per-worker private memory before direct-agent dispatch.
+	if memBundle := c.recallWorkerMemory(taskCtx, agentDef, task); memBundle != nil {
+		workerInput.WorkerMemory = memBundle
+	}
 	if suffix := c.buildMemorySuffix(agentDef.Role); suffix != "" {
 		prompt += "\n\n" + suffix
 	}
@@ -187,6 +191,19 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	reconcileDirectStatus()
 	c.report(c.newEvent("done").withAgent(resolvedName).withOutput(output).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 	c.recordExecutionEvent(todoID, resolvedName, 1, "done", directModel, time.Since(attemptStarted), usageFromSteps(steps))
+	// WP-4: ingest worker session memory on direct-agent success. The
+	// direct path has no explicit deliverable verification, so verified is
+	// false unless a terminal verifier reported success — making this a
+	// candidate until run acceptance promotes it. Idempotency: the canonical
+	// store deduplicates by execution identity, so if the fast path
+	// escalates to the team path and the same task re-runs, the re-ingest
+	// is a no-op.
+	verified := false
+	if vr := verifyResultForTodo(c, todoID); vr != nil && isVerifySuccess(vr) {
+		verified = true
+	}
+	typedRes := c.GetTaskResult(todoID)
+	c.ingestWorkerSessionMemory(taskCtx, agentDef, todoID, typedRes, output, verified, 1)
 	if stopped, reason := c.enforceNoProgressBudget(); stopped {
 		// The worker artifact is complete, but the run is not: returning an
 		// error keeps the fast path from reporting successful completion while

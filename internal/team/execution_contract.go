@@ -26,6 +26,11 @@ type ExecutionContract struct {
 	RequiresResult       bool          `json:"requires_result,omitempty" yaml:"requires-result,omitempty"`
 	RequiresVerification bool          `json:"requires_verification,omitempty" yaml:"requires-verification,omitempty"`
 	AllowsReplay         *bool         `json:"allows_replay,omitempty" yaml:"allows-replay,omitempty"`
+	// ToolSequence is an optional closed, ordered list of tool calls for an
+	// atomic task. When set, the worker is shown only these tools and the
+	// runtime admits calls only in this order. The final entry must be
+	// submit_result, which closes the task's tool budget.
+	ToolSequence []string `json:"tool_sequence,omitempty" yaml:"tool-sequence,omitempty"`
 }
 
 // UnmarshalJSON handles legacy "strict_result" / "strict-result" keys in JSON.
@@ -150,6 +155,43 @@ func ValidateExecutionContractFull(task TaskDef, lintMode string) ContractPrefli
 				Code:     "verifier_missing",
 				Field:    "verify",
 				Message:  fmt.Sprintf("execution contract for kind %q with requires_verification=true requires an objective verifier contract (non-empty verify command and verify_mode != 'none')", c.Kind),
+			})
+		}
+	}
+
+	if len(c.ToolSequence) > 0 {
+		if task.PlanFirst {
+			findings = append(findings, ContractFinding{
+				Severity: FindingSeverityError,
+				Code:     "tool_sequence_plan_first",
+				Field:    "execution.tool_sequence",
+				Message:  "a closed tool sequence cannot be combined with plan_first",
+			})
+		}
+		for i, tool := range c.ToolSequence {
+			if strings.TrimSpace(tool) == "" {
+				findings = append(findings, ContractFinding{
+					Severity: FindingSeverityError,
+					Code:     "tool_sequence_empty_tool",
+					Field:    "execution.tool_sequence",
+					Message:  fmt.Sprintf("tool sequence entry %d must name a tool", i),
+				})
+			}
+		}
+		if strings.TrimSpace(c.ToolSequence[len(c.ToolSequence)-1]) != "submit_result" {
+			findings = append(findings, ContractFinding{
+				Severity: FindingSeverityError,
+				Code:     "tool_sequence_terminal_result",
+				Field:    "execution.tool_sequence",
+				Message:  "a closed tool sequence must end with submit_result",
+			})
+		}
+		if !c.RequiresResult {
+			findings = append(findings, ContractFinding{
+				Severity: FindingSeverityError,
+				Code:     "tool_sequence_requires_result",
+				Field:    "execution.requires_result",
+				Message:  "a closed tool sequence requires requires_result=true",
 			})
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -53,6 +54,8 @@ type agentFrontmatter struct {
 	SideEffect     string                         `yaml:"side_effect"`
 	Recovery       string                         `yaml:"recovery"`
 	ReconcileTool  string                         `yaml:"reconcile-tool"`
+	MemoryID       string                         `yaml:"memory-id"`
+	Memory         rawWorkerMemoryPolicy          `yaml:"memory"`
 }
 
 type teamConfigYAML struct {
@@ -91,7 +94,8 @@ type teamConfigYAML struct {
 	Shell               string                           `yaml:"shell"`
 	Vars                map[string]interface{}           `yaml:"vars"`
 	WorkerContextSize   int                              `yaml:"worker-context-size"`
-	ToolsAllowed        interface{}                      `yaml:"tools"` // tools.allowed in YAML - string or []string
+	ToolsAllowed        interface{}                      `yaml:"tools"` // tools.allowed/tools.denied in YAML - string or []string
+	Delegation          rawDelegationPolicy              `yaml:"delegation"`
 	Preflight           []agent.CapabilityRequirement    `yaml:"preflight"`
 	Unattended          bool                             `yaml:"unattended"`
 	AutoApprove         bool                             `yaml:"auto-approve"`
@@ -102,7 +106,16 @@ type teamConfigYAML struct {
 	ExecutionProfile    string                           `yaml:"execution-profile"`
 	GoalMode            string                           `yaml:"goal-mode"`
 	Reliability         rawReliabilityConfig             `yaml:"reliability"`
+	WorkerMemory        rawWorkerMemoryPolicy            `yaml:"worker-memory"`
 	Tasks               []TaskDef                        `yaml:"tasks"`
+}
+
+type rawDelegationPolicy struct {
+	InitialBatch struct {
+		Agents []string `yaml:"agents"`
+		Exact  bool     `yaml:"exact"`
+	} `yaml:"initial-batch"`
+	NoRedispatchAfterSuccess []string `yaml:"no-redispatch-after-success"`
 }
 
 type rawReliabilityConfig struct {
@@ -126,6 +139,27 @@ type rawReliabilityConfig struct {
 	// Pointer preserves an explicit zero, which disables the per-attempt
 	// circuit breaker for teams that have a justified long-context workflow.
 	MaxTokensPerAttempt *int `yaml:"max-tokens-per-attempt"`
+}
+
+// rawWorkerMemoryPolicy is the YAML-facing representation of a per-worker
+// memory policy. It uses pointer fields and string TTLs so an explicit zero
+// is distinguishable from unset, and the YAML decoder never has to parse a
+// time.Duration directly.
+type rawWorkerMemoryPolicy struct {
+	Mode          string `yaml:"mode"`
+	AutoRecall    *bool  `yaml:"auto-recall"`
+	AutoSave      *bool  `yaml:"auto-save"`
+	MaxItems      *int   `yaml:"max-items"`
+	MaxTokens     *int   `yaml:"max-tokens"`
+	SessionTTL    string `yaml:"session-ttl"`
+	PersistentTTL string `yaml:"persistent-ttl"`
+}
+
+// isSet returns true when the raw policy has at least one field explicitly
+// set in the YAML source.
+func (r rawWorkerMemoryPolicy) isSet() bool {
+	return r.Mode != "" || r.AutoRecall != nil || r.AutoSave != nil ||
+		r.MaxItems != nil || r.MaxTokens != nil || r.SessionTTL != "" || r.PersistentTTL != ""
 }
 
 func parseAllowedPaths(raw interface{}) []string {
@@ -193,6 +227,15 @@ func parseAllowedTools(raw interface{}) []string {
 	}
 	// Support direct list/string: tools: [bash, view]
 	return anyToStrList(raw)
+}
+
+func parseDeniedTools(raw interface{}) []string {
+	if m, ok := raw.(map[string]interface{}); ok {
+		if denied, exists := m["denied"]; exists {
+			return anyToStrList(denied)
+		}
+	}
+	return nil
 }
 
 func anyToStr(v any, fallback string) string {
@@ -376,9 +419,18 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 		SideEffect:    fm.SideEffect,
 		Recovery:      fm.Recovery,
 		ReconcileTool: fm.ReconcileTool,
+		MemoryID:      fm.MemoryID,
+	}
+	if fm.Memory.isSet() {
+		def.Memory = resolveWorkerMemoryPolicy(fm.Memory, rawWorkerMemoryPolicy{}, agent.DefaultWorkerMemoryPolicy())
+	} else {
+		def.Memory = agent.DefaultWorkerMemoryPolicy()
 	}
 	if fm.Timeout > 0 {
 		def.Timeout = fm.Timeout
+	}
+	if err := validateWorkerMemoryPolicy(def.Memory); err != nil {
+		return nil, fmt.Errorf("agent %s: %w", def.Name, err)
 	}
 	return def, nil
 }
@@ -634,6 +686,14 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		}
 		cfg.GoalMode = string(gm)
 	}
+	if yc.WorkerMemory.isSet() {
+		cfg.WorkerMemory = resolveWorkerMemoryPolicy(yc.WorkerMemory, rawWorkerMemoryPolicy{}, agent.DefaultWorkerMemoryPolicy())
+		if err := validateWorkerMemoryPolicy(cfg.WorkerMemory); err != nil {
+			return cfg, fmt.Errorf("invalid worker-memory config: %w", err)
+		}
+	} else {
+		cfg.WorkerMemory = agent.DefaultWorkerMemoryPolicy()
+	}
 	effectiveGoalMode, err := ResolveEffectiveGoalMode(cfg.GoalMode, cfg.ExecutionProfile)
 	if err != nil {
 		return cfg, fmt.Errorf("invalid effective goal mode: %w", err)
@@ -701,6 +761,16 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if tools := parseAllowedTools(yc.ToolsAllowed); len(tools) > 0 {
 		cfg.ToolsAllowed = strings.Split(agent.ExpandImpliedTools(strings.Join(tools, ",")), ",")
+	}
+	if tools := parseDeniedTools(yc.ToolsAllowed); len(tools) > 0 {
+		cfg.ToolsDenied = tools
+	}
+	if len(yc.Delegation.InitialBatch.Agents) > 0 {
+		cfg.Delegation.InitialBatch = yc.Delegation.InitialBatch.Agents
+		cfg.Delegation.RequireExactInitialBatch = yc.Delegation.InitialBatch.Exact
+	}
+	if len(yc.Delegation.NoRedispatchAfterSuccess) > 0 {
+		cfg.Delegation.NoRedispatchAfterSuccess = yc.Delegation.NoRedispatchAfterSuccess
 	}
 	if len(yc.Preflight) > 0 {
 		cfg.Preflight = yc.Preflight
@@ -844,11 +914,19 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 		MaxRetries:  -1,
 		Generation:  cfg.Generation,
 		ProviderURL: cfg.ProviderURL,
+		Memory:      agent.WorkerMemoryPolicy{Mode: agent.WorkerMemoryOff},
 	}
 	session.Agents["helper"] = builtInHelper
 
 	if len(session.Agents) == 0 {
 		return nil, fmt.Errorf("no valid agent .md files found in %s", absDir)
+	}
+
+	// Resolve per-worker memory: apply team defaults to agents that didn't
+	// override, normalize memory-id (fallback to agent name), and detect
+	// duplicate memory-ids within the same team.
+	if err := resolveAndValidateWorkerMemory(session); err != nil {
+		return nil, err
 	}
 
 	// Inject built-in vars AFTER agents loaded (AGENT_COUNT, AGENT_NAMES)
@@ -875,11 +953,11 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 	// session.Config.Vars see the populated template vars.
 	session.Config.Vars = interfaceVars
 
-	skillDirs := []string{
-		filepath.Join(absDir, "skills"),
-		filepath.Join(absDir, ".agents", "skills"), // Fallback for old path
-		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
+	skillDirs := []string{filepath.Join(absDir, "skills")}
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		skillDirs = append(skillDirs, filepath.Join(cwd, ".agents", "skills"))
 	}
+	skillDirs = append(skillDirs, filepath.Join(os.Getenv("HOME"), ".agents", "skills"))
 
 	allSkills := skill.DiscoverSkills(skillDirs, false)
 
@@ -916,6 +994,151 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 			}
 		}
 	}
+	session.Skills = skill.ExpandSkillDependenciesForSet(session.Skills, allSkills, excludeSkills)
 
 	return session, nil
+}
+
+// normalizeMemoryID lowercases and trims the input, then validates it
+// contains only safe characters (alphanumeric, hyphen, underscore). It
+// rejects path separators and other characters that could break scope
+// queries or filesystem paths. Returns the normalized ID or an error.
+func normalizeMemoryID(name string) (string, error) {
+	id := strings.ToLower(strings.TrimSpace(name))
+	if id == "" {
+		return "", nil
+	}
+	for _, r := range id {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' && r != '_' {
+			return "", fmt.Errorf("memory-id %q contains invalid character %q; only lowercase letters, digits, hyphen, and underscore are allowed", name, string(r))
+		}
+	}
+	return id, nil
+}
+
+// resolveWorkerMemoryPolicy merges a raw agent-level policy, a raw team-level
+// default, and the built-in default into a single resolved policy. Agent
+// fields take precedence over team fields, which take precedence over the
+// built-in default.
+func resolveWorkerMemoryPolicy(agentRaw, teamRaw rawWorkerMemoryPolicy, builtIn agent.WorkerMemoryPolicy) agent.WorkerMemoryPolicy {
+	p := builtIn
+	// Apply team defaults first (lower priority).
+	if teamRaw.Mode != "" {
+		p.Mode = agent.WorkerMemoryMode(teamRaw.Mode)
+	}
+	if teamRaw.AutoRecall != nil {
+		p.AutoRecall = *teamRaw.AutoRecall
+	}
+	if teamRaw.AutoSave != nil {
+		p.AutoSave = *teamRaw.AutoSave
+	}
+	if teamRaw.MaxItems != nil {
+		p.MaxItems = *teamRaw.MaxItems
+	}
+	if teamRaw.MaxTokens != nil {
+		p.MaxTokens = *teamRaw.MaxTokens
+	}
+	if teamRaw.SessionTTL != "" {
+		p.SessionTTL = teamRaw.SessionTTL
+	}
+	if teamRaw.PersistentTTL != "" {
+		p.PersistentTTL = teamRaw.PersistentTTL
+	}
+	// Apply agent overrides (higher priority).
+	if agentRaw.Mode != "" {
+		p.Mode = agent.WorkerMemoryMode(agentRaw.Mode)
+	}
+	if agentRaw.AutoRecall != nil {
+		p.AutoRecall = *agentRaw.AutoRecall
+	}
+	if agentRaw.AutoSave != nil {
+		p.AutoSave = *agentRaw.AutoSave
+	}
+	if agentRaw.MaxItems != nil {
+		p.MaxItems = *agentRaw.MaxItems
+	}
+	if agentRaw.MaxTokens != nil {
+		p.MaxTokens = *agentRaw.MaxTokens
+	}
+	if agentRaw.SessionTTL != "" {
+		p.SessionTTL = agentRaw.SessionTTL
+	}
+	if agentRaw.PersistentTTL != "" {
+		p.PersistentTTL = agentRaw.PersistentTTL
+	}
+	return p
+}
+
+// validateWorkerMemoryPolicy checks that the resolved policy has a valid mode,
+// non-negative limits, and parseable TTL strings.
+func validateWorkerMemoryPolicy(p agent.WorkerMemoryPolicy) error {
+	switch p.Mode {
+	case agent.WorkerMemoryOff, agent.WorkerMemorySession, agent.WorkerMemoryPersistent:
+		// valid
+	default:
+		return fmt.Errorf("invalid memory mode %q: must be off, session, or persistent", p.Mode)
+	}
+	if p.MaxItems < 0 {
+		return fmt.Errorf("max-items must be non-negative, got %d", p.MaxItems)
+	}
+	if p.MaxTokens < 0 {
+		return fmt.Errorf("max-tokens must be non-negative, got %d", p.MaxTokens)
+	}
+	if p.SessionTTL != "" && p.SessionTTL != "0" {
+		if _, err := time.ParseDuration(p.SessionTTL); err != nil {
+			return fmt.Errorf("invalid session-ttl %q: %w", p.SessionTTL, err)
+		}
+	}
+	if p.PersistentTTL != "" && p.PersistentTTL != "0" {
+		if _, err := time.ParseDuration(p.PersistentTTL); err != nil {
+			return fmt.Errorf("invalid persistent-ttl %q: %w", p.PersistentTTL, err)
+		}
+	}
+	return nil
+}
+
+// resolveAndValidateWorkerMemory applies team defaults to agents that didn't
+// override their memory policy, normalizes each agent's memory-id (falling
+// back to the normalized agent name), and detects duplicate memory-ids
+// within the same team.
+func resolveAndValidateWorkerMemory(session *TeamSession) error {
+	teamDefaults := session.Config.WorkerMemory
+	seenIDs := map[string]string{} // memory-id → agent name (for duplicate detection)
+	for _, def := range session.Agents {
+		// If the agent's policy is still the built-in default (i.e. the agent
+		// frontmatter didn't set a memory block), apply team defaults.
+		if !agentMemoryOverridden(def.Memory) {
+			def.Memory = teamDefaults
+		}
+		// Normalize memory-id: use explicit memory-id if set, otherwise
+		// fall back to the normalized agent name.
+		id := def.MemoryID
+		if id == "" {
+			id = def.Name
+		}
+		normalized, err := normalizeMemoryID(id)
+		if err != nil {
+			return fmt.Errorf("agent %s: %w", def.Name, err)
+		}
+		def.MemoryID = normalized
+		// Duplicate detection: only check agents with mode != off, since
+		// off-mode agents don't use memory and their memory-id is irrelevant.
+		if def.Memory.Mode != agent.WorkerMemoryOff && normalized != "" {
+			if existing, dup := seenIDs[normalized]; dup {
+				return fmt.Errorf("duplicate memory-id %q: agents %q and %q share the same identity", normalized, existing, def.Name)
+			}
+			seenIDs[normalized] = def.Name
+		}
+	}
+	return nil
+}
+
+// agentMemoryOverridden returns true when the policy differs from the
+// built-in default in any field, indicating the agent frontmatter set a
+// memory block.
+func agentMemoryOverridden(p agent.WorkerMemoryPolicy) bool {
+	d := agent.DefaultWorkerMemoryPolicy()
+	return p.Mode != d.Mode || p.AutoRecall != d.AutoRecall || p.AutoSave != d.AutoSave ||
+		p.MaxItems != d.MaxItems || p.MaxTokens != d.MaxTokens ||
+		p.SessionTTL != d.SessionTTL || p.PersistentTTL != d.PersistentTTL
 }

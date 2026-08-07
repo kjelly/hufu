@@ -6,6 +6,7 @@ package team
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anomalyco/hufu/internal/agent"
 	"github.com/anomalyco/hufu/internal/utils"
 )
 
@@ -70,7 +72,55 @@ func (c *Coordinator) persistReflexionLesson(lesson string) {
 	if lesson == "" || c.session == nil {
 		return
 	}
+	// A production coordinator has a canonical store. Do not silently fall
+	// back to the shared LTM projection when no trusted worker/task identity
+	// is available: that would leak a private reflexion lesson to the team.
+	if c.contextRepo != nil {
+		return
+	}
 	c.persistKnowledgeCandidate(lesson, ltmSectionIssues, "reflexion")
+}
+
+func (c *Coordinator) persistPrivateReflexionLesson(agentName, taskID, lesson string) {
+	lesson = strings.TrimSpace(lesson)
+	if lesson == "" || c == nil || c.session == nil {
+		return
+	}
+	if c.contextRepo == nil || c.workerMemorySvc == nil {
+		// Compatibility mode has no canonical private namespace. Retain the
+		// historic candidate behavior only in this explicitly legacy mode.
+		c.persistKnowledgeCandidate(lesson, ltmSectionIssues, "reflexion")
+		return
+	}
+	def := c.agentDefByName(agentName)
+	if def == nil || def.Memory.Mode != agent.WorkerMemoryPersistent || strings.TrimSpace(def.MemoryID) == "" || strings.TrimSpace(taskID) == "" {
+		return
+	}
+	runID := c.executionRunID
+	if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		runID = c.taskTracker.TodoList().RunID()
+	}
+	if strings.TrimSpace(runID) == "" {
+		return
+	}
+	scope := resolveWorkerScope(c.contextScope(), def, c.activeBranchID())
+	item, err := c.workerMemorySvc.SaveCandidate(context.Background(), WorkerMemoryCandidateRequest{
+		WorkerID: def.MemoryID,
+		Scope:    scope,
+		Content:  lesson,
+		Category: "lesson",
+		Tier:     "persistent",
+		RunID:    runID,
+		TaskID:   taskID,
+		Source:   "reflexion",
+	})
+	if err != nil {
+		log.Printf("warning: private reflexion candidate write failed: %v", err)
+		return
+	}
+	_ = c.emitEvent("worker_memory_candidate_saved", "coordinator", taskID, map[string]interface{}{
+		"worker_id": def.MemoryID, "item_id": item.ID, "tier": "persistent", "run_id": runID, "task_id": taskID,
+	})
 }
 
 func (c *Coordinator) persistKnowledgeCandidate(lesson, section, source string) {
@@ -254,13 +304,13 @@ func (c *Coordinator) promoteCandidateLessons(manifest *EvidenceManifest) {
 	}
 }
 
-func (c *Coordinator) persistReflexionLessonAsync(agentName, goal, failure, hint string, rescued, verifyPolarityBug bool) {
+func (c *Coordinator) persistReflexionLessonAsync(agentName, taskID, goal, failure, hint string, rescued, verifyPolarityBug bool) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[PANIC] persistReflexionLessonAsync recovered: %v", r)
 			}
 		}()
-		c.persistReflexionLesson(formatReflexionLesson(agentName, goal, failure, hint, rescued, verifyPolarityBug))
+		c.persistPrivateReflexionLesson(agentName, taskID, formatReflexionLesson(agentName, goal, failure, hint, rescued, verifyPolarityBug))
 	}()
 }

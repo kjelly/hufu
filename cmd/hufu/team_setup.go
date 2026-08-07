@@ -280,7 +280,7 @@ func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, c
 
 	skillDirs := []string{
 		filepath.Join(session.Dir, "skills"),
-		filepath.Join(session.Dir, ".agents", "skills"),
+		filepath.Join(currentWorkingDir(), ".agents", "skills"),
 		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
 	}
 	if registry != nil {

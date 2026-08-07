@@ -98,7 +98,7 @@ func TestLearnSecretValueRejectsNonCredentials(t *testing.T) {
 		{"unresolved shell reference", "${VAULT_PASSWORD}"},
 		{"ansible template", "{{ vault_admin_password }}"},
 		{"unfilled placeholder", "CHANGE-ME-please"},
-		{"filesystem path", "/etc/pilot/vault.yml"},
+		{"filesystem path", "/etc/application/vault.yml"},
 		{"already redacted", redactedSecret},
 		{"truncated redaction marker", "[REDACTED"},
 	}

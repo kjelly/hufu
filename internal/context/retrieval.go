@@ -148,7 +148,7 @@ func HybridRetrieve(ctx context.Context, repo Repository, vector VectorSearcher,
 		exactTerms = append(exactTerms, group...)
 	}
 	for _, exact := range exactTerms {
-		found, err := repo.SearchExact(ctx, SearchRequest{Query: exact, Scope: req.Scope, Limit: req.Limit})
+		found, err := repo.SearchExact(ctx, SearchRequest{Query: exact, Scope: req.Scope, Visibility: req.Visibility, Limit: req.Limit, IncludeCandidates: req.IncludeCandidates})
 		if err != nil {
 			return nil, trace, err
 		}

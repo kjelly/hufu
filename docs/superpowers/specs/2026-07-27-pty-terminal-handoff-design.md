@@ -11,8 +11,8 @@ that survives a hufu process restart.
 The existing `bash` tool runs a single non-interactive command and returns its
 output. The existing stateful `terminal` session manager keeps a child process
 alive, but connects it through `StdinPipe` and ordinary output files. Neither
-provides a terminal device, so programs such as `pilot edit` cannot reliably
-run their interactive UI.
+provides a terminal device, so interactive programs cannot reliably run their
+interactive UI.
 
 The feature must let an agent operate an interactive terminal, and let a human
 safely take control of that *same* session through either the hufu TUI or a

@@ -7,7 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/fantasy"
 	"gopkg.in/yaml.v3"
+
+	"github.com/anomalyco/hufu/internal/agent"
 )
 
 func TestValidateExecutionContract_Defaults(t *testing.T) {
@@ -46,6 +49,121 @@ func TestValidateExecutionContract_ValidKinds(t *testing.T) {
 		if err := ValidateExecutionContract(task); err != nil {
 			t.Errorf("ValidateExecutionContract unexpectedly failed for kind %q: %v", k, err)
 		}
+	}
+}
+
+func TestValidateExecutionContract_ClosedToolSequence(t *testing.T) {
+	valid := TaskDef{
+		Agent: "worker",
+		Goal:  "run bounded checkpoint",
+		Execution: ExecutionContract{
+			Kind:           ExecutionKindProcess,
+			RequiresResult: true,
+			ToolSequence:   []string{"bash", "bash", "submit_result"},
+		},
+	}
+	if err := ValidateExecutionContract(valid); err != nil {
+		t.Fatalf("valid closed tool sequence rejected: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		task TaskDef
+		want string
+	}{
+		{
+			name: "terminal result required",
+			task: TaskDef{Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"bash"}}},
+			want: "must end with submit_result",
+		},
+		{
+			name: "requires result flag",
+			task: TaskDef{Execution: ExecutionContract{ToolSequence: []string{"bash", "submit_result"}}},
+			want: "requires requires_result=true",
+		},
+		{
+			name: "plan first is incompatible",
+			task: TaskDef{PlanFirst: true, Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"bash", "submit_result"}}},
+			want: "cannot be combined with plan_first",
+		},
+		{
+			name: "empty name",
+			task: TaskDef{Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"", "submit_result"}}},
+			want: "must name a tool",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateExecutionContract(tc.task)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ValidateExecutionContract error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestExecutionContract_ClosedToolSequenceParsesFromTaskConfig(t *testing.T) {
+	const taskJSON = `{
+  "agent":"worker",
+  "goal":"bounded checkpoint",
+  "execution":{
+    "kind":"process",
+    "requires_result":true,
+    "tool_sequence":["bash","bash","submit_result"]
+  }
+}`
+	var fromJSON TaskDef
+	if err := json.Unmarshal([]byte(taskJSON), &fromJSON); err != nil {
+		t.Fatalf("unmarshal JSON task config: %v", err)
+	}
+	if got, want := fromJSON.Execution.ToolSequence, []string{"bash", "bash", "submit_result"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("JSON tool sequence = %#v, want %#v", got, want)
+	}
+
+	const taskYAML = `
+agent: worker
+goal: bounded checkpoint
+execution:
+  kind: process
+  requires-result: true
+  tool-sequence: [bash, bash, submit_result]
+`
+	var fromYAML TaskDef
+	if err := yaml.Unmarshal([]byte(taskYAML), &fromYAML); err != nil {
+		t.Fatalf("unmarshal YAML task config: %v", err)
+	}
+	if got, want := fromYAML.Execution.ToolSequence, []string{"bash", "bash", "submit_result"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("YAML tool sequence = %#v, want %#v", got, want)
+	}
+}
+
+func TestCoordinatorDispatchClosedToolSequenceRequiresResult(t *testing.T) {
+	// A coordinator can emit requires_result:false despite a closed sequence
+	// ending in submit_result. Dispatch must apply the normal worker-result
+	// invariant before structural contract preflight.
+	c := &Coordinator{
+		session: &TeamSession{
+			Agents: map[string]*agent.AgentDef{},
+		},
+	}
+	tool := &runAgentsTool{coordinator: c}
+	response, err := tool.Run(context.Background(), fantasy.ToolCall{Input: `{
+  "tasks":[{
+    "agent":"worker",
+    "goal":"bounded checkpoint",
+    "execution":{"kind":"process","requires_result":false,"tool_sequence":["bash","submit_result"]}
+  }]
+}`})
+	if err != nil {
+		t.Fatalf("run agent tool: %v", err)
+	}
+	if !response.IsError {
+		t.Fatal("expected unknown worker to stop the test dispatch")
+	}
+	if strings.Contains(response.Content, "tool_sequence_requires_result") {
+		t.Fatalf("closed sequence was rejected before dispatch normalization: %s", response.Content)
+	}
+	if !strings.Contains(response.Content, "agent validation failed") {
+		t.Fatalf("dispatch error = %q, want agent validation after contract preflight", response.Content)
 	}
 }
 
@@ -326,6 +444,7 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 		"RequiresResult":       true,
 		"RequiresVerification": true,
 		"AllowsReplay":         true,
+		"ToolSequence":         true,
 	}
 
 	if contractType.NumField() != len(expectedFields) {
@@ -340,7 +459,7 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 	}
 
 	// 2. Verify buildAgentTaskProperties execution sub-properties map contains ONLY spec fields
-	props := buildAgentTaskProperties([]string{"worker"}, true, "/tmp/shared")
+	props := buildAgentTaskProperties([]string{"worker"}, true, "/tmp/shared", nil)
 	execProp := props["execution"].(map[string]any)
 	execSubProps := execProp["properties"].(map[string]any)
 
@@ -349,6 +468,7 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 		"requires_result":       true,
 		"requires_verification": true,
 		"allows_replay":         true,
+		"tool_sequence":         true,
 	}
 
 	if len(execSubProps) != len(expectedSchemaKeys) {

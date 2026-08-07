@@ -261,6 +261,12 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		DisableMemory:     c.ExecutionProfile().DisableHistoricalMemory,
 	}
 
+	// WP-3: recall per-worker private memory before dispatch. The bundle is
+	// injected as a typed section in the compiled context, not raw Markdown.
+	if memBundle := c.recallWorkerMemory(parentCtx, agentDef, task.Goal); memBundle != nil {
+		workerInput.WorkerMemory = memBundle
+	}
+
 	// Assemble the legacy-compatible inputs first, then make the canonical
 	// typed context the actual worker prompt. If compilation fails, retain the
 	// legacy prompt so context migration remains fail-safe.
@@ -437,7 +443,7 @@ retryLoop:
 			if escalate {
 				if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
 					resultTool := &submitResultTool{coordinator: c, todoID: todoID}
-					if escAg, escTools, escErr := c.createTaskAgentWithResultTool(parentCtx, agentDef, next, resultTool); escErr == nil {
+					if escAg, escTools, escErr := c.createTaskAgentWithResultTool(parentCtx, agentDef, next, resultTool, task.Execution.ToolSequence); escErr == nil {
 						ag = escAg
 						exposedToolNames = escTools
 						c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("escalating model %s → %s (attempt %d)", resolvedModel, next, attempt)).withTodoID(todoID))
@@ -452,6 +458,12 @@ retryLoop:
 		var output string
 		var steps []fantasy.StepResult
 		var err error
+		// attemptTokens is assigned inside the closure below and read after it
+		// returns, so its growth-based snapshot (see attempt_budget.go) can
+		// feed the no-progress budget without re-summing steps and
+		// double-counting resent conversation history the way usageFromSteps
+		// legitimately does for cost/receipt reporting.
+		var attemptTokens *attemptBudget
 		protocolFailure := false
 		// A worker that consumed its entire step budget was cut off; it did not
 		// choose to stop. That distinction decides whether the follow-up turn
@@ -473,7 +485,8 @@ retryLoop:
 			// The run-level budget is only observed at coordinator boundaries.
 			// Give every worker attempt its own live guard so one TUI/debugging
 			// loop cannot burn the entire run before returning control here.
-			taskCtx = context.WithValue(taskCtx, attemptBudgetKey{}, newAttemptBudget(c.reliabilityConfig().MaxTokensPerAttempt))
+			attemptTokens = newAttemptBudget(c.reliabilityConfig().MaxTokensPerAttempt)
+			taskCtx = context.WithValue(taskCtx, attemptBudgetKey{}, attemptTokens)
 			taskCtx = context.WithValue(taskCtx, tools.AgentNameKey, agentName)
 			// Let a poller see whether the process it is waiting on is still
 			// alive. Without this a wait on a terminal that has already exited
@@ -511,6 +524,9 @@ retryLoop:
 			}
 
 			taskCtx = c.withEffectiveToolsAllowed(taskCtx, agentDef, exposedToolNames)
+			if sequence := newTaskToolSequence(task.Execution.ToolSequence); sequence != nil {
+				taskCtx = context.WithValue(taskCtx, taskToolSequenceKey{}, sequence)
+			}
 
 			// Inject permanent session-level permissions
 			c.sessionToolPermissionsMu.RLock()
@@ -615,7 +631,7 @@ retryLoop:
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("step").withAgent(agentName).withMessage("plan submitted").withTodoID(todoID))
 				c.report(c.newEvent("done").withAgent(agentName).withMessage("plan submitted").withTodoID(todoID))
-				c.recordExecutionEvent(todoID, agentName, attempt, "planned", resolvedModel, time.Since(attemptStarted), usageFromSteps(steps))
+				c.recordExecutionEvent(todoID, agentName, attempt, "planned", resolvedModel, time.Since(attemptStarted), usageWithProgressTokens(steps, attemptTokens))
 				if c.forcePlanFirst {
 					closeTranscript()
 					return "", nil
@@ -669,7 +685,7 @@ retryLoop:
 					repairResultTool := &submitResultTool{coordinator: c, todoID: todoID}
 					repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using the output above to supply the required structured result. Do NOT call any other tools.", task.Goal, output)
 					if budgetExhausted {
-						repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The work above is your evidence; this turn is only for reporting it. Call submit_result now, and do NOT call any other tools.\n\nReport truthfully against the goal: use status `success` only if the goal is fully met, otherwise `partial` (say exactly what is done and what remains) or `blocked`. A truthful `partial` lets the next attempt continue your work; a false `success` destroys it.", task.Goal, output, len(steps), stepBudget)
+						repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The work above is your evidence; this turn is only for reporting it. Call submit_result now, and do NOT call any other tools.\n\nReport truthfully against the goal: use status `success` only if the goal is fully met without a known target limitation; use `completed_with_gaps` when the assigned work is complete but it discovered such a limitation; otherwise use `partial` (say exactly what is done and what remains) or `blocked`. A truthful `partial` lets the next attempt continue your work; a false completion claim destroys it.", task.Goal, output, len(steps), stepBudget)
 					}
 					// §7 requires the transcript to survive as evidence, and the
 					// finalization turn is where that evidence gets converted into a
@@ -911,20 +927,30 @@ retryLoop:
 				c.updateTodoTiming(todoID, modelTime, toolTime)
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("done").withAgent(agentName).withOutput(coordinatorOutput).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
-				c.recordExecutionEvent(todoID, agentName, attempt, "done", resolvedModel, time.Since(attemptStarted), usageFromSteps(steps))
+				c.recordExecutionEvent(todoID, agentName, attempt, "done", resolvedModel, time.Since(attemptStarted), usageWithProgressTokens(steps, attemptTokens))
 				if task.Summarize {
 					coordinatorOutput = c.summarizeOutput(parentCtx, coordinatorOutput)
 				}
 				c.autoWriteSTMASync(agentName, taskDesc, coordinatorOutput, "", true)
+				// WP-4: ingest verified session memory into the worker's private
+				// store. This is best-effort: a failure never inverts the task
+				// success (the helper logs + emits an event + queues for repair).
+				// Idempotency: the canonical store deduplicates by execution
+				// identity, so a fast-path-to-team upgrade re-ingest is a no-op.
+				verified := false
+				if vr := verifyResultForTodo(c, todoID); vr != nil && isVerifySuccess(vr) {
+					verified = true
+				}
+				c.ingestWorkerSessionMemory(parentCtx, agentDef, todoID, typedRes, coordinatorOutput, verified, attempt)
 				if appliedHint != "" {
-					c.persistReflexionLessonAsync(agentName, task.Goal, appliedHintTrigger, appliedHint, true, false)
+					c.persistReflexionLessonAsync(agentName, todoID, task.Goal, appliedHintTrigger, appliedHint, true, false)
 				}
 				closeTranscript()
 				return coordinatorOutput, nil
 			}
 		}
 
-		c.recordExecutionEvent(todoID, agentName, attempt, "error", resolvedModel, time.Since(attemptStarted), usageFromSteps(steps))
+		c.recordExecutionEvent(todoID, agentName, attempt, "error", resolvedModel, time.Since(attemptStarted), usageWithProgressTokens(steps, attemptTokens))
 		// Classify the current attempt's failure using structured inputs
 		// (§5: the verify result supplies the exit code; environment findings
 		// supply command-not-found signals that take precedence over exit
@@ -1143,7 +1169,7 @@ retryLoop:
 	// records for the same failure.
 	c.autoWriteSTMASync(agentName, taskDesc, "", lastErr.Error(), false)
 	if maxRetries > 1 {
-		c.persistReflexionLessonAsync(agentName, task.Goal, lastErr.Error(), appliedHint, false, isUnfixableVerifyFailure(lastErr))
+		c.persistReflexionLessonAsync(agentName, todoID, task.Goal, lastErr.Error(), appliedHint, false, isUnfixableVerifyFailure(lastErr))
 	}
 	failErr := fmt.Errorf("agent %q failed after %d attempt(s) (model: %s): %w", agentName, attemptsMade, resolvedModel, lastErr)
 	if strings.TrimSpace(lastOutput) != "" {
@@ -1668,7 +1694,7 @@ func (c *Coordinator) withEffectiveToolsAllowed(ctx context.Context, def *agent.
 		return ctx
 	}
 	// An allowlist is in force, so it has to cover the final model tool slice.
-	allowed := append(declared, exposedToolNames...)
+	allowed := c.filterDeniedToolNames(append(declared, exposedToolNames...))
 	return context.WithValue(ctx, tools.AgentToolsAllowedKey, dedupeToolNames(allowed))
 }
 
@@ -2271,9 +2297,14 @@ func resultProtocolInstructions(task TaskDef, granted map[string]bool) string {
 	b.WriteString("\n\n## Result Protocol\n\n")
 	b.WriteString("This task is not complete until you call `submit_result`. A prose summary is NOT a result: if you end your turn without calling `submit_result`, the task is recorded as failed no matter how much work you finished.\n\n")
 	b.WriteString("- Call `submit_result` exactly once, as the last thing you do.\n")
-	b.WriteString("- Set `status` truthfully: `success` only when the goal is fully met; otherwise `partial`, `failed`, or `blocked`. A truthful `partial` is far more useful than an optimistic `success`.\n")
+	b.WriteString("- Set `status` truthfully: use `success` when the goal is fully met without a known target limitation; use `completed_with_gaps` when the assigned work is complete but it discovered a target limitation, and record that limitation in findings/risks/open questions; otherwise use `partial`, `failed`, or `blocked`. A truthful `partial` is far more useful than an optimistic completion claim.\n")
 	b.WriteString("- Put the facts a later agent needs into `summary`, `findings`, and `decisions`.\n")
 	b.WriteString("- If you are running out of steps, stop working and call `submit_result` with what you have.\n")
+	if len(task.Execution.ToolSequence) > 0 {
+		b.WriteString("- This is a closed tool sequence. The runtime permits only this order: `")
+		b.WriteString(strings.Join(task.Execution.ToolSequence, " → "))
+		b.WriteString("`. Do not call a tool outside that sequence or after `submit_result`.\n")
+	}
 	return b.String()
 }
 
@@ -2427,7 +2458,7 @@ func (c *Coordinator) validateTaskModel(task *TaskDef) error {
 func (c *Coordinator) createTaskAgent(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef, resolvedModel, todoID, taskDesc, agentName string) (fantasy.Agent, []string, error) {
 	resultTool := &submitResultTool{coordinator: c, todoID: todoID}
 	if task.PlanFirst && task.PlanID == "" {
-		agentTools := append(agent.SelectTools(c.coreTools, agentDef.Tools), &submitPlanTool{coordinator: c, todoID: todoID}, resultTool)
+		agentTools := append(c.selectWorkerTools(agentDef), &submitPlanTool{coordinator: c, todoID: todoID}, resultTool)
 		planAg, planErr := c.createGatedAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
 			Def:        agentDef,
 			TeamConfig: &c.session.Config,
@@ -2441,7 +2472,7 @@ func (c *Coordinator) createTaskAgent(parentCtx context.Context, agentDef *agent
 		}
 		return planAg, agentToolNames(agentTools), nil
 	}
-	ag, exposedToolNames, err := c.createTaskAgentWithResultTool(parentCtx, agentDef, task.Model, resultTool)
+	ag, exposedToolNames, err := c.createTaskAgentWithResultTool(parentCtx, agentDef, task.Model, resultTool, task.Execution.ToolSequence)
 	if err != nil {
 		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
 		c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
@@ -2450,7 +2481,7 @@ func (c *Coordinator) createTaskAgent(parentCtx context.Context, agentDef *agent
 	return ag, exposedToolNames, nil
 }
 
-func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *agent.AgentDef, overrideModel string, resultTool *submitResultTool) (fantasy.Agent, []string, error) {
+func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *agent.AgentDef, overrideModel string, resultTool *submitResultTool, toolSequence []string) (fantasy.Agent, []string, error) {
 	agentDef := def
 	if overrideModel != "" {
 		overriddenDef := *def
@@ -2461,7 +2492,7 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 	agentDef = c.injectWorkerContext(ctx, agentDef)
 	ctx = tools.SetSSHSessionManager(ctx, c.sshSessionMgr)
 
-	agentTools := agent.SelectTools(c.coreTools, agentDef.Tools)
+	agentTools := c.selectWorkerTools(agentDef)
 	if c.mcpManager != nil {
 		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
 		if len(agentDef.MCPTools) > 0 {
@@ -2475,9 +2506,11 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 			}
 		}
 	}
+	agentTools = c.filterDeniedWorkerTools(agentTools)
 	if resultTool != nil {
 		agentTools = append(agentTools, resultTool)
 	}
+	agentTools = filterToolsForSequence(agentTools, toolSequence)
 
 	getAgModelID := c.resolveAgentModel(agentDef, "")
 	ag, err := c.createGatedAgent(ctx, c.providerManager.GetProvider(getAgModelID), agent.AgentConfig{
