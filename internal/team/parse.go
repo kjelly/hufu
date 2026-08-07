@@ -492,6 +492,11 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		VerifyTimeout: 120,
 		MaxRetries:    2,
 		Reliability:   agent.DefaultReliabilityConfig(),
+		Generation: agent.GenerationParams{
+			Temperature: agent.DefaultTemperature,
+			MaxTokens:   agent.DefaultMaxTokens,
+			TopP:        agent.DefaultTopP,
+		},
 	}
 
 	var data []byte
@@ -550,10 +555,19 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	cfg.Generation = agent.GenerationParams{
 		Model:       yc.Model,
-		Temperature: yc.Temperature,
-		MaxTokens:   yc.MaxTokens,
-		TopP:        yc.TopP,
+		Temperature: agent.DefaultTemperature,
+		MaxTokens:   agent.DefaultMaxTokens,
+		TopP:        agent.DefaultTopP,
 		TopK:        yc.TopK,
+	}
+	if yc.MaxTokens != "" {
+		cfg.Generation.MaxTokens = yc.MaxTokens
+	}
+	if yc.Temperature != "" {
+		cfg.Generation.Temperature = yc.Temperature
+	}
+	if yc.TopP != "" {
+		cfg.Generation.TopP = yc.TopP
 	}
 	if yc.Skills != "" {
 		cfg.Skills = yc.Skills

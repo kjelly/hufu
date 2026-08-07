@@ -482,6 +482,15 @@ func TestParseTeamYML_MissingFile(t *testing.T) {
 	if cfg.MaxRounds != 10 {
 		t.Errorf("cfg.MaxRounds = %d, want default 10", cfg.MaxRounds)
 	}
+	if cfg.Generation.Temperature != agent.DefaultTemperature {
+		t.Errorf("cfg.Generation.Temperature = %q, want default %q", cfg.Generation.Temperature, agent.DefaultTemperature)
+	}
+	if cfg.Generation.MaxTokens != agent.DefaultMaxTokens {
+		t.Errorf("cfg.Generation.MaxTokens = %q, want default %q", cfg.Generation.MaxTokens, agent.DefaultMaxTokens)
+	}
+	if cfg.Generation.TopP != agent.DefaultTopP {
+		t.Errorf("cfg.Generation.TopP = %q, want default %q", cfg.Generation.TopP, agent.DefaultTopP)
+	}
 	if cfg.WorkspaceDir != "workspace" {
 		t.Errorf("cfg.WorkspaceDir = %q, want default %q", cfg.WorkspaceDir, "workspace")
 	}
@@ -493,6 +502,25 @@ func TestParseTeamYML_MissingFile(t *testing.T) {
 	}
 	if cfg.Generation.Model != "" {
 		t.Errorf("cfg.Generation.Model = %q, want empty", cfg.Generation.Model)
+	}
+}
+
+func TestParseTeamYML_GenerationOverrides(t *testing.T) {
+	tmpDir := t.TempDir()
+	content := "name: custom\ntemperature: \"0.7\"\ntop-p: \"0.8\"\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, "team.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := parseTeamYML(tmpDir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML returned error: %v", err)
+	}
+	if cfg.Generation.Temperature != "0.7" {
+		t.Errorf("cfg.Generation.Temperature = %q, want %q", cfg.Generation.Temperature, "0.7")
+	}
+	if cfg.Generation.TopP != "0.8" {
+		t.Errorf("cfg.Generation.TopP = %q, want %q", cfg.Generation.TopP, "0.8")
 	}
 }
 

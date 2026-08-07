@@ -131,8 +131,8 @@ Create `team.yaml` (optional — the directory name is used as the team name whe
 name: my-team
 description: "My development team"
 model: ollama/qwen3:8b
-temperature: "0.7"
-max-tokens: "4096"
+temperature: "0.2"
+max-tokens: "16384"
 skills: code-review,git-commit
 ```
 
@@ -508,8 +508,8 @@ workspace: workspace             # Workspace directory (default: "workspace")
 
 # === Model Settings ===
 model: ollama/qwen3:8b           # Default model name
-temperature: "0.7"               # Temperature value
-max-tokens: "4096"               # Maximum output tokens
+temperature: "0.2"               # Temperature value
+max-tokens: "16384"               # Maximum output tokens
 top-p: "0.9"                     # Top P value
 top-k: "40"                      # Top K value
 
@@ -599,8 +599,8 @@ guard:
   - require-tests
   - no-profanity
 model: ollama/qwen3:8b
-temperature: "0.7"
-max-tokens: "4096"
+temperature: "0.2"
+max-tokens: "16384"
 top-p: "0.9"
 top-k: "40"
 timeout: 300

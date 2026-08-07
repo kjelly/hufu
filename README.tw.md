@@ -103,8 +103,8 @@ mkdir -p .agent-teams/my-team
 name: my-team
 description: "我的開發團隊"
 model: ollama/qwen3:8b
-temperature: "0.7"
-max-tokens: "4096"
+temperature: "0.2"
+max-tokens: "16384"
 skills: code-review,git-commit
 ```
 
@@ -466,8 +466,8 @@ workspace: workspace             # Workspace 目錄（預設："workspace"）
 
 # === Model 設定 ===
 model: ollama/qwen3:8b           # 預設 model 名稱
-temperature: "0.7"               # Temperature 值
-max-tokens: "4096"               # 最大 output tokens
+temperature: "0.2"               # Temperature 值
+max-tokens: "16384"               # 最大 output tokens
 top-p: "0.9"                     # Top P 值
 top-k: "40"                      # Top K 值
 
@@ -545,8 +545,8 @@ role: worker
 tools: view,write,edit,multiedit,bash,grep,glob,ls
 skills: code-review
 model: ollama/qwen3:8b
-temperature: "0.7"
-max-tokens: "4096"
+temperature: "0.2"
+max-tokens: "16384"
 top-p: "0.9"
 top-k: "40"
 timeout: 300

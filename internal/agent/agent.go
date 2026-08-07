@@ -21,6 +21,14 @@ import (
 const DefaultMaxSteps = 30
 const DefaultCoordinatorMaxSteps = 20
 
+// Default generation settings favor deterministic, reliable agent behavior
+// for tool use and code changes while retaining enough sampling diversity.
+const (
+	DefaultTemperature = "0.2"
+	DefaultTopP        = "0.9"
+	DefaultMaxTokens   = "16384"
+)
+
 type GenerationParams struct {
 	Model       string
 	Temperature string

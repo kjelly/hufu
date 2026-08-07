@@ -45,7 +45,12 @@ func LoadDefaultTeam(workspace string, forcedSkills []string, helperTools string
 		Timeout:       600,
 		VerifyTimeout: 120,
 		MaxRetries:    2,
-		Reliability:   agent.DefaultReliabilityConfig(),
+		Generation: agent.GenerationParams{
+			Temperature: agent.DefaultTemperature,
+			MaxTokens:   agent.DefaultMaxTokens,
+			TopP:        agent.DefaultTopP,
+		},
+		Reliability: agent.DefaultReliabilityConfig(),
 	}
 	cfg.Vars = map[string]interface{}{
 		"TEAM_NAME":   "default",

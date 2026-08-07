@@ -38,6 +38,15 @@ func TestLoadDefaultTeam_BasicStructure(t *testing.T) {
 	if session.Config.MaxRetries != 2 {
 		t.Errorf("Config.MaxRetries = %d, want 2", session.Config.MaxRetries)
 	}
+	if session.Config.Generation.Temperature != agent.DefaultTemperature {
+		t.Errorf("Config.Generation.Temperature = %q, want %q", session.Config.Generation.Temperature, agent.DefaultTemperature)
+	}
+	if session.Config.Generation.MaxTokens != agent.DefaultMaxTokens {
+		t.Errorf("Config.Generation.MaxTokens = %q, want %q", session.Config.Generation.MaxTokens, agent.DefaultMaxTokens)
+	}
+	if session.Config.Generation.TopP != agent.DefaultTopP {
+		t.Errorf("Config.Generation.TopP = %q, want %q", session.Config.Generation.TopP, agent.DefaultTopP)
+	}
 	if len(session.MCPServers) != 0 {
 		t.Errorf("MCPServers = %d, want 0", len(session.MCPServers))
 	}
