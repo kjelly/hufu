@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	contextstore "github.com/anomalyco/hufu/internal/context"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 func TestContextRepairCommandNoPendingFile(t *testing.T) {

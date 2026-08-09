@@ -10,12 +10,12 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/config"
-	"github.com/anomalyco/hufu/internal/mcp"
-	"github.com/anomalyco/hufu/internal/notify"
-	"github.com/anomalyco/hufu/internal/skill"
-	"github.com/anomalyco/hufu/internal/yamlutil"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/mcp"
+	"github.com/kjelly/hufu/internal/notify"
+	"github.com/kjelly/hufu/internal/skill"
+	"github.com/kjelly/hufu/internal/yamlutil"
 )
 
 type TeamSession struct {
@@ -29,33 +29,34 @@ type TeamSession struct {
 }
 
 type agentFrontmatter struct {
-	Name           string                         `yaml:"name"`
-	Description    string                         `yaml:"description"`
-	Role           string                         `yaml:"role"`
-	Tools          any                            `yaml:"tools"`  // string or []string (YAML list)
-	Skills         any                            `yaml:"skills"` // string or []string (YAML list)
-	Guard          []string                       `yaml:"guard"`
-	Model          string                         `yaml:"model"`
-	ExtraModels    []string                       `yaml:"extra-models"`
-	Temperature    string                         `yaml:"temperature"`
-	MaxTokens      string                         `yaml:"max-tokens"`
-	TopP           string                         `yaml:"top-p"`
-	TopK           string                         `yaml:"top-k"`
-	Timeout        int64                          `yaml:"timeout"`
-	MaxRetries     any                            `yaml:"max-retries"` // int or string
-	MaxSteps       int                            `yaml:"max-steps"`
-	ProviderURL    string                         `yaml:"provider-url"`
-	AllowedPaths   any                            `yaml:"allowed-paths"` // string or []string
-	RestrictedPath string                         `yaml:"restricted-path"`
-	NoNet          bool                           `yaml:"no-net"`
-	ForceMCP       bool                           `yaml:"force-mcp"`
-	Shell          string                         `yaml:"shell"`
-	MCPTools       map[string]agent.MCPToolConfig `yaml:"mcp-tools"`
-	SideEffect     string                         `yaml:"side_effect"`
-	Recovery       string                         `yaml:"recovery"`
-	ReconcileTool  string                         `yaml:"reconcile-tool"`
-	MemoryID       string                         `yaml:"memory-id"`
-	Memory         rawWorkerMemoryPolicy          `yaml:"memory"`
+	Name            string                         `yaml:"name"`
+	Description     string                         `yaml:"description"`
+	Role            string                         `yaml:"role"`
+	Tools           any                            `yaml:"tools"`  // string or []string (YAML list)
+	Skills          any                            `yaml:"skills"` // string or []string (YAML list)
+	Guard           []string                       `yaml:"guard"`
+	Model           string                         `yaml:"model"`
+	ExtraModels     []string                       `yaml:"extra-models"`
+	Temperature     string                         `yaml:"temperature"`
+	MaxTokens       string                         `yaml:"max-tokens"`
+	TopP            string                         `yaml:"top-p"`
+	TopK            string                         `yaml:"top-k"`
+	ReasoningEffort string                         `yaml:"reasoning-effort"`
+	Timeout         int64                          `yaml:"timeout"`
+	MaxRetries      any                            `yaml:"max-retries"` // int or string
+	MaxSteps        int                            `yaml:"max-steps"`
+	ProviderURL     string                         `yaml:"provider-url"`
+	AllowedPaths    any                            `yaml:"allowed-paths"` // string or []string
+	RestrictedPath  string                         `yaml:"restricted-path"`
+	NoNet           bool                           `yaml:"no-net"`
+	ForceMCP        bool                           `yaml:"force-mcp"`
+	Shell           string                         `yaml:"shell"`
+	MCPTools        map[string]agent.MCPToolConfig `yaml:"mcp-tools"`
+	SideEffect      string                         `yaml:"side_effect"`
+	Recovery        string                         `yaml:"recovery"`
+	ReconcileTool   string                         `yaml:"reconcile-tool"`
+	MemoryID        string                         `yaml:"memory-id"`
+	Memory          rawWorkerMemoryPolicy          `yaml:"memory"`
 }
 
 type teamConfigYAML struct {
@@ -72,6 +73,7 @@ type teamConfigYAML struct {
 	MaxTokens           string                           `yaml:"max-tokens"`
 	TopP                string                           `yaml:"top-p"`
 	TopK                string                           `yaml:"top-k"`
+	ReasoningEffort     string                           `yaml:"reasoning-effort"`
 	Skills              string                           `yaml:"skills"`
 	SkillsExclude       string                           `yaml:"skills-exclude"`
 	ProviderURL         string                           `yaml:"provider-url"`
@@ -93,27 +95,32 @@ type teamConfigYAML struct {
 	ProjectContext      bool                             `yaml:"project-context"`
 	Shell               string                           `yaml:"shell"`
 	Vars                map[string]interface{}           `yaml:"vars"`
-	WorkerContextSize   int                              `yaml:"worker-context-size"`
-	ToolsAllowed        interface{}                      `yaml:"tools"` // tools.allowed/tools.denied in YAML - string or []string
-	Delegation          rawDelegationPolicy              `yaml:"delegation"`
-	Preflight           []agent.CapabilityRequirement    `yaml:"preflight"`
-	Unattended          bool                             `yaml:"unattended"`
-	AutoApprove         bool                             `yaml:"auto-approve"`
-	MaxWallClock        int64                            `yaml:"max-duration"`
-	MaxTotalTokens      int64                            `yaml:"max-total-tokens"`
-	Acceptance          interface{}                      `yaml:"acceptance"`
-	Rollback            string                           `yaml:"rollback"`
-	ExecutionProfile    string                           `yaml:"execution-profile"`
-	GoalMode            string                           `yaml:"goal-mode"`
-	Reliability         rawReliabilityConfig             `yaml:"reliability"`
-	WorkerMemory        rawWorkerMemoryPolicy            `yaml:"worker-memory"`
-	Tasks               []TaskDef                        `yaml:"tasks"`
+	// WorkerContextSize is a token budget, not a character count (spec.md
+	// item 7); the YAML key is kept as-is for backward compatibility.
+	WorkerContextSize int                           `yaml:"worker-context-size"`
+	ToolsAllowed      interface{}                   `yaml:"tools"` // tools.allowed/tools.denied in YAML - string or []string
+	Delegation        rawDelegationPolicy           `yaml:"delegation"`
+	Preflight         []agent.CapabilityRequirement `yaml:"preflight"`
+	Unattended        bool                          `yaml:"unattended"`
+	AutoApprove       bool                          `yaml:"auto-approve"`
+	MaxWallClock      int64                         `yaml:"max-duration"`
+	MaxTotalTokens    int64                         `yaml:"max-total-tokens"`
+	Acceptance        interface{}                   `yaml:"acceptance"`
+	Rollback          string                        `yaml:"rollback"`
+	ExecutionProfile  string                        `yaml:"execution-profile"`
+	GoalMode          string                        `yaml:"goal-mode"`
+	Reliability       rawReliabilityConfig          `yaml:"reliability"`
+	WorkerMemory      rawWorkerMemoryPolicy         `yaml:"worker-memory"`
+	Tasks             []TaskDef                     `yaml:"tasks"`
 }
 
 type rawDelegationPolicy struct {
-	InitialBatch struct {
-		Agents []string `yaml:"agents"`
-		Exact  bool     `yaml:"exact"`
+	AllowedWorkers []string `yaml:"allowed-workers"`
+	InitialBatch   struct {
+		Agents        []string `yaml:"agents"`
+		Exact         bool     `yaml:"exact"`
+		FirstTool     string   `yaml:"first-tool"`
+		BindContracts bool     `yaml:"bind-contracts"`
 	} `yaml:"initial-batch"`
 	NoRedispatchAfterSuccess []string `yaml:"no-redispatch-after-success"`
 }
@@ -316,6 +323,7 @@ func agentFrontmatterFromSimple(m map[string]string) agentFrontmatter {
 	fm.MaxTokens = m["max-tokens"]
 	fm.TopP = m["top-p"]
 	fm.TopK = m["top-k"]
+	fm.ReasoningEffort = m["reasoning-effort"]
 	fm.ProviderURL = m["provider-url"]
 	fm.AllowedPaths = m["allowed-paths"]
 	fm.RestrictedPath = m["restricted-path"]
@@ -408,11 +416,12 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 		Shell:          fm.Shell,
 		MCPTools:       fm.MCPTools,
 		Generation: agent.GenerationParams{
-			Model:       fm.Model,
-			Temperature: fm.Temperature,
-			MaxTokens:   fm.MaxTokens,
-			TopP:        fm.TopP,
-			TopK:        fm.TopK,
+			Model:           fm.Model,
+			Temperature:     fm.Temperature,
+			MaxTokens:       fm.MaxTokens,
+			TopP:            fm.TopP,
+			TopK:            fm.TopK,
+			ReasoningEffort: fm.ReasoningEffort,
 		},
 		ProviderURL:   fm.ProviderURL,
 		ExtraModels:   fm.ExtraModels,
@@ -554,11 +563,12 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		cfg.MaxSteps = yc.MaxSteps
 	}
 	cfg.Generation = agent.GenerationParams{
-		Model:       yc.Model,
-		Temperature: agent.DefaultTemperature,
-		MaxTokens:   agent.DefaultMaxTokens,
-		TopP:        agent.DefaultTopP,
-		TopK:        yc.TopK,
+		Model:           yc.Model,
+		Temperature:     agent.DefaultTemperature,
+		MaxTokens:       agent.DefaultMaxTokens,
+		TopP:            agent.DefaultTopP,
+		TopK:            yc.TopK,
+		ReasoningEffort: yc.ReasoningEffort,
 	}
 	if yc.MaxTokens != "" {
 		cfg.Generation.MaxTokens = yc.MaxTokens
@@ -779,9 +789,18 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	if tools := parseDeniedTools(yc.ToolsAllowed); len(tools) > 0 {
 		cfg.ToolsDenied = tools
 	}
+	if len(yc.Delegation.AllowedWorkers) > 0 {
+		cfg.Delegation.AllowedWorkers = yc.Delegation.AllowedWorkers
+	}
 	if len(yc.Delegation.InitialBatch.Agents) > 0 {
 		cfg.Delegation.InitialBatch = yc.Delegation.InitialBatch.Agents
 		cfg.Delegation.RequireExactInitialBatch = yc.Delegation.InitialBatch.Exact
+	}
+	if yc.Delegation.InitialBatch.FirstTool != "" {
+		cfg.Delegation.InitialCoordinatorTool = yc.Delegation.InitialBatch.FirstTool
+	}
+	if yc.Delegation.InitialBatch.BindContracts {
+		cfg.Delegation.BindInitialTaskContracts = true
 	}
 	if len(yc.Delegation.NoRedispatchAfterSuccess) > 0 {
 		cfg.Delegation.NoRedispatchAfterSuccess = yc.Delegation.NoRedispatchAfterSuccess
@@ -934,6 +953,9 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 
 	if len(session.Agents) == 0 {
 		return nil, fmt.Errorf("no valid agent .md files found in %s", absDir)
+	}
+	if findings := ValidateTeamTaskContracts(session); len(findings) > 0 {
+		return nil, fmt.Errorf("team task contract validation failed: %s", strings.Join(sortedContractFindingMessages(findings), "; "))
 	}
 
 	// Resolve per-worker memory: apply team defaults to agents that didn't

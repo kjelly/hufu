@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	contextstore "github.com/anomalyco/hufu/internal/context"
-	"github.com/anomalyco/hufu/internal/utils"
+	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 func (c *Coordinator) buildMemorySuffix(agentRole string) string {

@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestApplyCLIModelOverrides_Empty(t *testing.T) {
@@ -92,33 +92,34 @@ func TestApplyCLIModelOverrides_Partial(t *testing.T) {
 	}
 }
 
-func TestPropagateTeamGenerationToAgents(t *testing.T) {
+func TestApplyCLIGenerationOverridesToAgents_ForcesCLIOverrides(t *testing.T) {
+	// A real CLI flag is the highest-priority layer and must overwrite
+	// every agent's own Generation, even a deliberately-set one.
 	session := &team.TeamSession{
 		Config: agent.TeamConfig{
-			Generation: agent.GenerationParams{
-				Model:       "cli-model",
-				Temperature: "0.2",
-				MaxTokens:   "4096",
-				TopP:        "0.9",
-				TopK:        "40",
-			},
 			ProviderURL: "http://cli-host:11434/v1",
 		},
 		Agents: map[string]*agent.AgentDef{
 			"helper": {
-				Name: "Helper",
-				// Intentionally stale values to verify they get overwritten.
-				Generation:  agent.GenerationParams{Model: "stale"},
-				ProviderURL: "http://stale:11434/v1",
+				Name:        "Helper",
+				Generation:  agent.GenerationParams{Model: "agent-own-model", MaxTokens: "4096"},
+				ProviderURL: "",
 			},
 			"coordinator": {
 				Name:       "coordinator",
-				Generation: agent.GenerationParams{Model: "stale"},
+				Generation: agent.GenerationParams{Model: "agent-own-model"},
 			},
 		},
 	}
 
-	propagateTeamGenerationToAgents(session)
+	applyCLIGenerationOverridesToAgents(session, ModelCLIOverrides{
+		Model:           "cli-model",
+		Temperature:     "0.2",
+		MaxTokens:       "4096",
+		TopP:            "0.9",
+		TopK:            "40",
+		ReasoningEffort: "high",
+	})
 
 	for k, def := range session.Agents {
 		if def.Generation.Model != "cli-model" {
@@ -136,45 +137,70 @@ func TestPropagateTeamGenerationToAgents(t *testing.T) {
 		if def.Generation.TopK != "40" {
 			t.Errorf("[%s] Generation.TopK = %q, want %q", k, def.Generation.TopK, "40")
 		}
-		if def.ProviderURL != "http://cli-host:11434/v1" {
-			t.Errorf("[%s] ProviderURL = %q, want %q", k, def.ProviderURL, "http://cli-host:11434/v1")
+		if def.Generation.ReasoningEffort != "high" {
+			t.Errorf("[%s] Generation.ReasoningEffort = %q, want %q", k, def.Generation.ReasoningEffort, "high")
 		}
+	}
+	// ProviderURL only fills in when the agent has none of its own.
+	if session.Agents["helper"].ProviderURL != "http://cli-host:11434/v1" {
+		t.Errorf("helper ProviderURL = %q, want team fallback", session.Agents["helper"].ProviderURL)
 	}
 }
 
-func TestPropagateTeamGenerationToAgents_EmptyConfigDoesNotClobber(t *testing.T) {
-	// If team-level Generation fields are empty, per-agent values must
-	// NOT be overwritten with empty strings (we'd lose the agent's own
-	// model configuration).
+func TestApplyCLIGenerationOverridesToAgents_NoCLIFlagsDoesNotClobber(t *testing.T) {
+	// This is the precedence bug from spec.md item 1: without an actual CLI
+	// flag, an agent's own frontmatter-configured generation values (e.g. a
+	// reviewer's smaller max-tokens) must survive untouched. Team-level
+	// defaults reach agents through CreateAgent's own fallback, not by being
+	// force-copied here.
 	session := &team.TeamSession{
 		Config: agent.TeamConfig{
-			Generation: agent.GenerationParams{}, // all empty
+			Generation: agent.GenerationParams{
+				Temperature: agent.DefaultTemperature,
+				MaxTokens:   agent.DefaultMaxTokens,
+				TopP:        agent.DefaultTopP,
+			},
 		},
 		Agents: map[string]*agent.AgentDef{
-			"helper": {
-				Name: "Helper",
+			"reviewer": {
+				Name: "reviewer",
 				Generation: agent.GenerationParams{
-					Model:       "agent-own-model",
-					Temperature: "0.5",
+					Model:     "agent-own-model",
+					MaxTokens: "4096",
 				},
 			},
 		},
 	}
 
-	propagateTeamGenerationToAgents(session)
+	applyCLIGenerationOverridesToAgents(session, ModelCLIOverrides{})
 
-	helper := session.Agents["helper"]
-	if helper.Generation.Model != "agent-own-model" {
-		t.Errorf("Generation.Model = %q, want %q (must not clobber)", helper.Generation.Model, "agent-own-model")
+	reviewer := session.Agents["reviewer"]
+	if reviewer.Generation.Model != "agent-own-model" {
+		t.Errorf("Generation.Model = %q, want %q (must not clobber)", reviewer.Generation.Model, "agent-own-model")
 	}
-	if helper.Generation.Temperature != "0.5" {
-		t.Errorf("Generation.Temperature = %q, want %q (must not clobber)", helper.Generation.Temperature, "0.5")
+	if reviewer.Generation.MaxTokens != "4096" {
+		t.Errorf("Generation.MaxTokens = %q, want %q (must not clobber with team default %q)", reviewer.Generation.MaxTokens, "4096", agent.DefaultMaxTokens)
 	}
 }
 
-func TestPropagateTeamGenerationToAgents_NilSafe(t *testing.T) {
+func TestApplyCLIGenerationOverridesToAgents_ProviderURLDoesNotClobberAgentOwn(t *testing.T) {
+	session := &team.TeamSession{
+		Config: agent.TeamConfig{ProviderURL: "http://team-host:11434/v1"},
+		Agents: map[string]*agent.AgentDef{
+			"helper": {Name: "Helper", ProviderURL: "http://agent-own:11434/v1"},
+		},
+	}
+
+	applyCLIGenerationOverridesToAgents(session, ModelCLIOverrides{})
+
+	if got := session.Agents["helper"].ProviderURL; got != "http://agent-own:11434/v1" {
+		t.Errorf("ProviderURL = %q, want unchanged %q", got, "http://agent-own:11434/v1")
+	}
+}
+
+func TestApplyCLIGenerationOverridesToAgents_NilSafe(t *testing.T) {
 	// Should not panic.
-	propagateTeamGenerationToAgents(nil)
+	applyCLIGenerationOverridesToAgents(nil, ModelCLIOverrides{})
 }
 
 func TestApplyCLIModelOverrides_SidecarFallsBackToModel(t *testing.T) {

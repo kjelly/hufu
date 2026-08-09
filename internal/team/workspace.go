@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 const (
@@ -218,6 +218,38 @@ func readShared(workspace, filename string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// validateSharedContextFiles makes context_files an explicit handoff boundary.
+// They name existing regular files beneath workspace/shared; STM/LTM and other
+// runtime memory are injected by the coordinator and must never be smuggled in
+// as task state through this field. Previously unreadable paths were silently
+// ignored, allowing stale history to look like an accepted handoff.
+func validateSharedContextFiles(workspace string, files []string) error {
+	sharedRoot := filepath.Join(workspace, sharedDir)
+	for _, file := range files {
+		name := strings.TrimSpace(file)
+		if name == "" || filepath.IsAbs(name) {
+			return fmt.Errorf("context_files entry %q must be a non-empty relative path beneath shared/", file)
+		}
+		clean := filepath.Clean(name)
+		if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("context_files entry %q escapes shared/", file)
+		}
+		path := filepath.Join(sharedRoot, clean)
+		rel, err := filepath.Rel(sharedRoot, path)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("context_files entry %q escapes shared/", file)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("context_files entry %q is not an existing shared file: %w", file, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("context_files entry %q must name a regular shared file", file)
+		}
+	}
+	return nil
 }
 
 func writeLLMLog(workspace, teamName, agentName, entry string) {

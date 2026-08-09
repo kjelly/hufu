@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func makeTasks(n int, status team.TaskStatus) []*team.TodoItem {

@@ -53,6 +53,37 @@ func TestTaskJournalRoundtrip(t *testing.T) {
 	}
 }
 
+func TestTerminalTypedResultIsProjectedToJournal(t *testing.T) {
+	workspace := t.TempDir()
+	journal, err := openTaskJournal(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = journal.Close() }()
+	tracker := NewTaskTracker()
+	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "runner", Desc: "sealed task"}})[0]
+	if err := tracker.TodoList().SetTypedResult(item.ID, &TaskResult{TaskID: item.ID, Status: TaskResultStatusSuccess, Summary: "done", RawOutputRef: &ArtifactRef{Path: "logs/task-output/1.jsonl", SHA256: "sealed", Bytes: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskDone, "done", "done"); err != nil {
+		t.Fatal(err)
+	}
+	coord := &Coordinator{journal: journal, taskTracker: tracker}
+	coord.recordTerminalTypedTaskResult(item.ID)
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(taskJournalPath(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"op":"result"`, `"task_id":"1"`, `"typed_result"`, `"sha256":"sealed"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("journal omitted %q: %s", want, data)
+		}
+	}
+}
+
 func TestTaskJournalKeepsDistinctVerifyModes(t *testing.T) {
 	ws := t.TempDir()
 	now := time.Now()

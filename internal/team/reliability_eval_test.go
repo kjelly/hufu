@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestReliabilityScenarioCorpusCoversPhase5Faults(t *testing.T) {

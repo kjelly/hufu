@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/config"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 type distinctMCPPolicy struct {

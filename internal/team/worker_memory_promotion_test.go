@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	contextstore "github.com/anomalyco/hufu/internal/context"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 func wp5Scope(worker string) contextstore.Scope {

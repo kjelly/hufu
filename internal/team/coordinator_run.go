@@ -17,12 +17,12 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/hooks"
-	"github.com/anomalyco/hufu/internal/memory"
-	"github.com/anomalyco/hufu/internal/skill"
-	"github.com/anomalyco/hufu/internal/tools"
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/hooks"
+	"github.com/kjelly/hufu/internal/memory"
+	"github.com/kjelly/hufu/internal/skill"
+	"github.com/kjelly/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 var directAgentPattern = regexp.MustCompile(`^@(\w[\w-]*)\s+(.+)$`)
@@ -147,7 +147,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	// bundle for comparison only; a compiler failure must never affect a task.
 	workerInput := WorkerContextInput{TaskGoal: prompt, TaskDef: TaskDef{Agent: resolvedName, Goal: task}, AgentDef: agentDef,
 		RawSTM: LoadSTM(c.session.Workspace), RawLTM: LoadLTM(c.session.Workspace, c.session.Config.Name), MemoryStore: c.memoryStore,
-		ModelContext: globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")), MaxAuxChars: maxWorkerAuxContextChars,
+		ModelContext: globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef)), MaxAuxChars: maxWorkerAuxContextChars,
 		DisableMemory: c.ExecutionProfile().DisableHistoricalMemory}
 	// WP-3: recall per-worker private memory before direct-agent dispatch.
 	if memBundle := c.recallWorkerMemory(taskCtx, agentDef, task); memBundle != nil {
@@ -250,6 +250,7 @@ var coordinatorCoreToolNames = map[string]bool{
 	"grep":           true,
 	"glob":           true,
 	"ls":             true,
+	"team_info":      true,
 	"reconcile_task": true,
 	"approve_plan":   true,
 	"modify_plan":    true,
@@ -267,8 +268,9 @@ func coordinatorAllowedToolNames() []string {
 }
 
 func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
+	var orchTools []fantasy.AgentTool
 	if c.forcePlanFirst {
-		orchTools := []fantasy.AgentTool{
+		orchTools = []fantasy.AgentTool{
 			c.RunAgentsTool(),
 			&finishTool{coordinator: c},
 			&loadSkillTool{coordinator: c},
@@ -283,9 +285,9 @@ func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
 				orchTools = append(orchTools, t)
 			}
 		}
-		return orchTools
+		return c.filterDeniedCoordinatorTools(orchTools)
 	}
-	orchTools := []fantasy.AgentTool{
+	orchTools = []fantasy.AgentTool{
 		c.RunAgentsTool(),
 		&finishTool{coordinator: c},
 		&approvePlanTool{coordinator: c},
@@ -303,7 +305,7 @@ func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
 			orchTools = append(orchTools, t)
 		}
 	}
-	return orchTools
+	return c.filterDeniedCoordinatorTools(orchTools)
 }
 
 func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentDef, prompt string) (string, []fantasy.StepResult, error) {
@@ -544,6 +546,13 @@ func (c *Coordinator) attemptWrapUpRecovery(ctx context.Context, orchDef *agent.
 	if !c.IsWrapUp() || ctx.Err() != nil {
 		return "", nil, false
 	}
+	// Direct coordinator tool failures are a terminal boundary. In particular,
+	// do not convert one into another model turn merely because the error
+	// occurred during wrap-up; that would let the coordinator act after an
+	// unavailable or failed tool call.
+	if errors.Is(runErr, errCoordinatorToolFailure) {
+		return "", nil, false
+	}
 	if c.noProgressStopPending() {
 		// ExecuteTasks can surface a no-progress hard stop as an error while
 		// the coordinator is already in wrap-up. Return the existing partial
@@ -751,7 +760,7 @@ func (c *Coordinator) emitThinkSidecar(action, detail string) {
 	c.report(c.newEvent("think_sidecar").withMessage(msg))
 }
 
-func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.AgentDef, prompt string, isContinuation bool) string {
+func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.AgentDef, prompt string, isContinuation bool) (string, error) {
 	prompt = utils.RedactSecrets(prompt)
 	var systemPrompt string
 	if orchDef != nil {
@@ -760,6 +769,7 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 	if systemPrompt == "" {
 		systemPrompt = c.expandOrchestratorTemplate(defaultOrchestratorSystem)
 	}
+	systemPrompt = c.filterDeniedPromptLines(systemPrompt)
 
 	// Capture prompt-component texts for the §5.4 context budget breakdown.
 	// coreText holds the orchestrator's own instructions (+ skills + reminder);
@@ -794,27 +804,49 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		c.emitThinkAgents()
 	}
 
+	// A fresh exact-initial phase has no canonical task result yet. --new may
+	// retain STM/LTM/history archives for later learning, but those records
+	// cannot decide whether this run reached a later phase. Keep every
+	// historical source out of the coordinator's first-turn context until the
+	// initial batch is accepted; the phase prompt and narrowed agent schema are
+	// then the sole normative dispatch inputs.
+	allowHistoricalMemory := !c.ExecutionProfile().DisableHistoricalMemory && !c.initialDelegationPending()
 	var contextSummary string
-	if !isContinuation && !c.ExecutionProfile().DisableHistoricalMemory && c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
+	if !isContinuation && allowHistoricalMemory && c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
 		contextSummary = c.sessionData.ContextSummary()
 	}
 
 	var modelSpec ModelContextSpec
 	if orchDef != nil {
-		modelSpec = globalRegistry.GetSpec(c.resolveAgentModel(orchDef, ""))
+		modelSpec = globalRegistry.GetSpec(c.resolveAgentModel(orchDef, "")).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(orchDef))
 	}
 
 	coordInput := CoordinatorContextInput{
-		Goal:             prompt,
-		SessionContext:   contextSummary,
-		RawSTM:           utils.RedactSecrets(LoadSTM(c.session.Workspace)),
-		RawLTM:           utils.RedactSecrets(LoadLTM(c.session.Workspace, c.session.Config.Name)),
-		MemoryStore:      c.memoryStore,
+		Goal:           prompt,
+		SessionContext: contextSummary,
+		RawSTM: func() string {
+			if allowHistoricalMemory {
+				return utils.RedactSecrets(LoadSTM(c.session.Workspace))
+			}
+			return ""
+		}(),
+		RawLTM: func() string {
+			if allowHistoricalMemory {
+				return utils.RedactSecrets(LoadLTM(c.session.Workspace, c.session.Config.Name))
+			}
+			return ""
+		}(),
+		MemoryStore: func() *memory.MemoryStore {
+			if allowHistoricalMemory {
+				return c.memoryStore
+			}
+			return nil
+		}(),
 		SidecarCompacter: c.AgentPool().Sidecar(),
 		ModelContext:     modelSpec,
 		Role:             "coordinator",
 		IsContinuation:   isContinuation,
-		DisableMemory:    c.ExecutionProfile().DisableHistoricalMemory,
+		DisableMemory:    !allowHistoricalMemory,
 		ProjectContext:   utils.RedactSecrets(c.loadProjectContext()),
 	}
 	if c.continuationResume != nil {
@@ -831,7 +863,7 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		systemPrompt += "\n\n---\n## Project Context (AGENTS.md)\n\n" + agentsMD
 		projectText.WriteString(agentsMD)
 	}
-	if c.memoryStore != nil && prompt != "" && !c.ExecutionProfile().DisableHistoricalMemory {
+	if c.memoryStore != nil && prompt != "" && allowHistoricalMemory {
 		var compactFn memory.CompactFunc
 		if sidecar := c.AgentPool().Sidecar(); sidecar != nil {
 			compactFn = sidecar.Compact
@@ -841,20 +873,35 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 			memoryText.WriteString(memCtx + "\n")
 		}
 	}
-	if !isContinuation && !c.ExecutionProfile().DisableHistoricalMemory && contextSummary != "" {
+	if !isContinuation && allowHistoricalMemory && contextSummary != "" {
 		systemPrompt += "\n\n---\n## Session Context\n\n" + contextSummary
 		memoryText.WriteString(contextSummary + "\n")
 	}
-	if suffix := c.buildMemorySuffix("coordinator"); suffix != "" {
+	if suffix := func() string {
+		if allowHistoricalMemory {
+			return c.buildMemorySuffix("coordinator")
+		}
+		return ""
+	}(); suffix != "" {
 		systemPrompt += "\n\n" + suffix
 		memoryText.WriteString(suffix + "\n")
+		coreText.WriteString("\n\n" + suffix)
 	}
 	if reminder := c.buildCoreReminder(orchDef); reminder != "" {
 		systemPrompt += "\n\n" + reminder
 		coreText.WriteString("\n\n" + reminder)
 	}
 	systemPrompt = utils.RedactSecrets(systemPrompt)
-	c.compileShadowCoordinator(ctx, coordInput, systemPrompt)
+	coordInput.CorePrompt = utils.RedactSecrets(coreText.String())
+	compiled, compileErr := c.ContextCompiler().CompileCoordinatorContext(ctx, coordInput)
+	c.recordShadowTrace(ctx, "coordinator", systemPrompt, coordInput.ModelContext, compiled, compileErr)
+	if compileErr != nil {
+		return "", fmt.Errorf("coordinator context preflight failed: %w", compileErr)
+	}
+	if strings.TrimSpace(compiled.Prompt) == "" {
+		return "", fmt.Errorf("coordinator context preflight failed: compiled prompt is empty")
+	}
+	systemPrompt = compiled.Prompt
 
 	if c.think && !isContinuation {
 		c.emitThinkPrompt(systemPrompt)
@@ -864,7 +911,7 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 	c.recordContextBreakdown(ctx, c.resolveAgentModel(orchDef, ""),
 		utils.RedactSecrets(coreText.String()), utils.RedactSecrets(projectText.String()), utils.RedactSecrets(memoryText.String()))
 
-	return utils.RedactSecrets(systemPrompt)
+	return utils.RedactSecrets(systemPrompt), nil
 }
 
 // textCompacter is intentionally the sidecar's plain-text compaction API.
@@ -954,7 +1001,11 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	c.addSessionUserMessage(userPrompt)
 
-	systemPrompt := c.buildSystemPrompt(ctx, orchDef, userPrompt, false)
+	systemPrompt, promptErr := c.buildSystemPrompt(ctx, orchDef, userPrompt, false)
+	if promptErr != nil {
+		c.recordRunAborted(promptErr)
+		return "", promptErr
+	}
 
 	// Apply the computed system prompt to a copy so shared state is not mutated.
 	orchDefCopy := *orchDef
@@ -1034,7 +1085,11 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		c.report(c.newEvent("step").withMessage("coordinator preparing").withTodoID(CoordTodoID))
 	}
 
-	systemPrompt := c.buildSystemPrompt(ctx, orchDef, additionalPrompt, true)
+	systemPrompt, promptErr := c.buildSystemPrompt(ctx, orchDef, additionalPrompt, true)
+	if promptErr != nil {
+		c.recordRunAborted(promptErr)
+		return "", promptErr
+	}
 	orchDefCopy := *orchDef
 	orchDefCopy.System = systemPrompt
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func writeAgentFile(t *testing.T, dir, filename, frontmatter, body string) {

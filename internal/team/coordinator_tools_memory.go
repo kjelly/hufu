@@ -10,10 +10,10 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	contextstore "github.com/anomalyco/hufu/internal/context"
-	"github.com/anomalyco/hufu/internal/memory"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/memory"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 type memorySaveLTMWrapper struct {

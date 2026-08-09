@@ -6,7 +6,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/anomalyco/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/config"
 )
 
 type DryRunAgentInfo struct {

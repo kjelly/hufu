@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 var safeNameRegex = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)

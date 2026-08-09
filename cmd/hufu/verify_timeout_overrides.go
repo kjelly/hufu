@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // VerifyTimeoutCLIOverrides collects verification-timeout CLI flag values.

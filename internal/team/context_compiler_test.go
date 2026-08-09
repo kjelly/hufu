@@ -2,14 +2,62 @@ package team
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
+
+func TestExecuteTaskFailsClosedWhenWorkerContextPreflightFails(t *testing.T) {
+	workspace := t.TempDir()
+	calls := 0
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "context-preflight", Timeout: 30, MaxRetries: 1},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:         time.Now(),
+		taskTracker:         NewTaskTracker(),
+		reportStatus:        func(StatusEvent) {},
+		taskResultCache:     make(map[string][]cachedTaskEntry),
+		workerAgentOverride: &countingEmptyAgent{calls: &calls},
+	}
+	c.SetContextCompiler(&mockContextCompiler{compileWorkerErr: errors.New("normative conflict")})
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "must not dispatch"}})[0]
+	_, err := c.executeTask(context.Background(), TaskDef{Agent: "worker", Goal: "must not dispatch"}, item.ID)
+	if err == nil || !strings.Contains(err.Error(), "worker context preflight failed") {
+		t.Fatalf("executeTask() error = %v, want context preflight failure", err)
+	}
+	if calls != 0 {
+		t.Fatalf("worker calls = %d, want zero before failed context preflight", calls)
+	}
+}
+
+func TestBuildSystemPromptFailsClosedWhenCoordinatorContextPreflightFails(t *testing.T) {
+	orch := &agent.AgentDef{Name: "coordinator", Role: "orchestrator", System: "coordinate safely", Generation: agent.GenerationParams{Model: "test"}}
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: t.TempDir(),
+			Config:    agent.TeamConfig{Name: "coordinator-context"},
+			Agents:    map[string]*agent.AgentDef{"coordinator": orch},
+		},
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+	}
+	c.SetContextCompiler(&mockContextCompiler{compileCoordinatorErr: errors.New("context budget exceeded")})
+	_, err := c.buildSystemPrompt(context.Background(), orch, "do work", false)
+	if err == nil || !strings.Contains(err.Error(), "coordinator context preflight failed") {
+		t.Fatalf("buildSystemPrompt() error = %v, want coordinator context preflight failure", err)
+	}
+}
 
 func TestContextCompiler_DeduplicateItems(t *testing.T) {
 	now := time.Now()
@@ -127,6 +175,66 @@ func TestContextCompiler_EmptyRequiredItemFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "missing or empty") {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestContextCompiler_RejectsNormativeConflictAndStaleFragments(t *testing.T) {
+	now := time.Now().UTC()
+	conflicting := []ContextItem{
+		{ID: "policy-a", Kind: "constraints", Content: "mode=allow", Authority: ContextAuthorityNormative, ConflictKey: "mode"},
+		{ID: "policy-b", Kind: "constraints", Content: "mode=deny", Authority: ContextAuthorityNormative, ConflictKey: "mode"},
+	}
+	if err := ValidateContextItems(conflicting, now); err == nil || !strings.Contains(err.Error(), "normative context conflict") {
+		t.Fatalf("normative conflict error = %v", err)
+	}
+	stale := []ContextItem{{ID: "old-fact", Kind: "stm", Content: "old", ExpiresAt: now.Add(-time.Second)}}
+	if err := ValidateContextItems(stale, now); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("stale context error = %v", err)
+	}
+}
+
+func TestContextCompiler_RendersAuthorityLabels(t *testing.T) {
+	items := []ContextItem{
+		{ID: "goal", Kind: "current_task", Content: "do current work", Priority: PriorityUserGoal, Required: true},
+		{ID: "history", Kind: "stm", Content: "prior evidence", Priority: PriorityRecentSTM},
+	}
+	text, _, err := AssembleContextItemsPipeline(context.Background(), items, ContextBudget{Available: 100})
+	if err != nil {
+		t.Fatalf("AssembleContextItemsPipeline() error = %v", err)
+	}
+	for _, want := range []string{"authority=normative id=goal", "authority=historical id=history"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("compiled context missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestCompileWorkerContextFailsClosedWhenOptionalContextExceedsBudget(t *testing.T) {
+	input := WorkerContextInput{
+		TaskGoal: "required goal",
+		RawSTM:   "# 發現\n- " + strings.Repeat("historical evidence ", 2000),
+		ModelContext: ModelContextSpec{
+			ModelID: "test", ContextWindow: 500, MaxOutputTokens: 100, SafetyMarginTokens: 100,
+		},
+	}
+	compiled, err := CompileWorkerContext(context.Background(), input)
+	if err == nil || !strings.Contains(err.Error(), "exceeds token budget") {
+		t.Fatalf("CompileWorkerContext() compiled=%#v error=%v, want fail-closed overflow", compiled, err)
+	}
+}
+
+func TestCompileCoordinatorContextFailsClosedWhenOptionalContextExceedsBudget(t *testing.T) {
+	input := CoordinatorContextInput{
+		CorePrompt: "required coordinator contract",
+		Goal:       "required goal",
+		RawSTM:     "# historical\n- " + strings.Repeat("historical evidence ", 2000),
+		ModelContext: ModelContextSpec{
+			ModelID: "test", ContextWindow: 500, MaxOutputTokens: 100, SafetyMarginTokens: 100,
+		},
+	}
+	compiled, err := CompileCoordinatorContext(context.Background(), input)
+	if err == nil || !strings.Contains(err.Error(), "exceeds token budget") {
+		t.Fatalf("CompileCoordinatorContext() compiled=%#v error=%v, want fail-closed overflow", compiled, err)
 	}
 }
 

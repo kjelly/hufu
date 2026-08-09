@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/tools"
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 func TestPhase3PromptAndSessionMarkdownRedactRegisteredSecret(t *testing.T) {

@@ -9,22 +9,54 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/skill"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/skill"
 )
 
 func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) string {
 	workerNames, _ := c.buildWorkerNamesAndDescs()
+	initialPending := c.initialDelegationPending()
+	workerDefs := c.uniqueWorkerDefs()
+	if initialPending {
+		// Do not present later-phase workers as selectable evidence to a fresh
+		// coordinator. The initial agent-tool schema is narrowed independently;
+		// this prompt-side projection keeps an LLM from treating the full team
+		// roster as permission to skip the canonical first batch.
+		byName := make(map[string]*agent.AgentDef, len(workerDefs))
+		for _, def := range workerDefs {
+			byName[strings.ToLower(def.Name)] = def
+		}
+		workerNames = append([]string(nil), c.session.Config.Delegation.InitialBatch...)
+		workerDefs = workerDefs[:0]
+		for _, name := range workerNames {
+			if def := byName[strings.ToLower(name)]; def != nil {
+				workerDefs = append(workerDefs, def)
+			}
+		}
+	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the coordinator of team %q with %d members: %s.\n\n", c.session.Config.Name, len(workerNames), strings.Join(workerNames, ", "))
 
 	b.WriteString("You MUST delegate ALL work to your team members. You do NOT have tools to do work yourself.\n\n")
+	if c.session.Config.Delegation.RequireExactInitialBatch {
+		if initialPending {
+			fmt.Fprintf(&b, "## Canonical Delegation Phase\n\nThe current canonical phase is `initial_pending`. Your only permitted next coordination action is one `agent` call containing exactly the ordered initial batch %s. Do not plan a later phase, inspect memory, infer prior work, or select another worker first. STM, LTM, prior conversation, and memory retrieval are not evidence that a current task was dispatched or completed; they are withheld until this initial batch has been accepted.\n\n", formatAgentNames(c.session.Config.Delegation.InitialBatch))
+		} else {
+			b.WriteString("## Canonical Delegation Phase\n\nThe configured initial batch has been accepted in canonical task state. Use Task Status and typed task results, not STM/LTM prose, to decide subsequent delegation.\n\n")
+		}
+	}
 
 	b.WriteString("## How to Coordinate\n\n")
-	b.WriteString("0. **Check memory first** — Review the Memory & Context section below. STM (# 進度, # 發現, # 決策, # 錯誤與修復, # 待解決) tracks current session state. LTM (# 專案慣例, # 架構決策, # 常見模式, # 已知問題與解法, # 關鍵檔案, # 工具與指令) records cross-session knowledge. This helps you understand ongoing work and past decisions.\n")
+	if initialPending {
+		b.WriteString("0. **Initial delegation first** — Call `agent` now with the exact configured initial batch. No memory lookup, phase-two plan, direct inspection, or later-worker selection is valid before that call succeeds.\n")
+	} else {
+		b.WriteString("0. **Check memory first** — Review the Memory & Context section below. STM (# 進度, # 發現, # 決策, # 錯誤與修復, # 待解決) tracks current session state. LTM (# 專案慣例, # 架構決策, # 常見模式, # 已知問題與解法, # 關鍵檔案, # 工具與指令) records cross-session knowledge. This helps you understand ongoing work and past decisions.\n")
+	}
 	b.WriteString("1. **Analyze** the user's request to identify which team members are needed\n")
-	b.WriteString("2. **Check skills** — if any available skills are relevant to the user's task, call `load_skill` to get the full instructions. Include the relevant skill summary in task descriptions so workers know which skills to load\n")
+	if !c.coordinatorToolDenied("load_skill") {
+		b.WriteString("2. **Check skills** — if any available skills are relevant to the user's task, call `load_skill` to get the full instructions. Include the relevant skill summary in task descriptions so workers know which skills to load\n")
+	}
 	b.WriteString("3. **Plan** your approach before delegating — think step by step\n")
 	b.WriteString("4. **Select model** — for each task, pick the model from Available Models whose strengths best match the task requirements. Using the right model improves quality and speed.\n")
 	b.WriteString("5. **Delegate goals** using agent — describe WHAT outcome each worker should achieve. Use the 'goal' field for the desired outcome and 'constraints' for non-obvious restrictions. Workers are domain experts who determine their own implementation approach.\n\n")
@@ -36,26 +68,31 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("   - ✅ Parallel (no dependency): [{agent:\"writer\",goal:\"write A\"},{agent:\"writer\",goal:\"write B\"}]\n")
 	b.WriteString("   - ✅ Linear chain A→B→C: set pipeline:true on every task after the first instead of writing depends_on indices\n")
 	b.WriteString("   - ⚠️  Separate calls only when coordinator must process results before deciding next steps\n")
-	b.WriteString("7. When delegating to a worker that needs skill knowledge, include ALL relevant skill summaries (name, file path) in the task description so the worker can call `load_skill` if needed\n")
+	if !c.coordinatorToolDenied("load_skill") {
+		b.WriteString("7. When delegating to a worker that needs skill knowledge, include ALL relevant skill summaries (name, file path) in the task description so the worker can call `load_skill` if needed\n")
+	}
 	b.WriteString("8. **Trust worker expertise** — Workers have access to the full project context (AGENTS.md, tech stack, conventions, directory structure). They will explore the codebase, identify relevant files, and determine the best implementation approach. Do NOT pre-specify file paths, function names, or implementation steps unless they are non-obvious constraints.\n")
 	b.WriteString("9. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
-	b.WriteString("10. **Record** key findings and decisions with `stm_write` (append mode) after each meaningful agent result — use the matching section:\n")
-	b.WriteString("    - `# 發現` — new facts discovered (API endpoints, file locations, test results, etc.)\n")
-	b.WriteString("    - `# 決策` — design or implementation choices made\n")
-	b.WriteString("    - `# 錯誤與修復` — errors encountered and how they were resolved\n")
-	b.WriteString("    - `# 待解決` — open questions or blockers for later agents\n")
-	b.WriteString("    Skip this step only if the agent result contains no new knowledge (e.g. pure \"done\" confirmations).\n")
+	if !c.coordinatorToolDenied("stm_write") {
+		b.WriteString("10. **Record** key findings and decisions with `stm_write` (append mode) after each meaningful agent result — use the matching section:\n")
+		b.WriteString("    - `# 發現` — new facts discovered (API endpoints, file locations, test results, etc.)\n")
+		b.WriteString("    - `# 決策` — design or implementation choices made\n")
+		b.WriteString("    - `# 錯誤與修復` — errors encountered and how they were resolved\n")
+		b.WriteString("    - `# 待解決` — open questions or blockers for later agents\n")
+		b.WriteString("    Skip this step only if the agent result contains no new knowledge (e.g. pure \"done\" confirmations).\n")
+	}
 	b.WriteString("11. **Synthesize** results into a coherent answer for the user\n")
 	b.WriteString("12. Resolve every failed or blocked task before calling finish. If that is impossible, call finish with `acknowledge_failed_tasks:true` and give the user an explicitly partial result; hufu will list unresolved tasks automatically.\n\n")
 
 	b.WriteString("## Deduplication Rules\n\n")
 	b.WriteString("CRITICAL: BEFORE delegating ANY task, you MUST check the Task Status section above.\n\n")
 	b.WriteString("- ⚠️ If a task appears in **COMPLETED**, you MUST NOT re-delegate it. Reference or synthesize the existing result.\n")
+	b.WriteString("- If you need the complete output of a completed task, use `team_info` with action `task_result` (and `task_contains` when needed); never call `agent` again merely to retrieve, reformat, or verify that result.\n")
 	b.WriteString("- ⚠️ If a SEMANTICALLY SIMILAR task (same goal, different wording) appears in **COMPLETED**, compare the actual intent - do NOT delegate duplicates with rephrased descriptions.\n")
 	b.WriteString("- ⏸️ If a task appears in **PAUSED**, it is waiting for a sub-agent to complete. Wait for it to resume rather than delegating a duplicate.\n")
 	b.WriteString("- If a task appears in **SKIPPED**, it was flagged as a duplicate by the system. Do NOT re-delegate it.\n")
 	b.WriteString("- If a task appears in **IN PROGRESS**, wait for it to complete rather than delegating a duplicate.\n")
-	b.WriteString("- ❌ DUPLICATE DETECTION: The system will return ERROR if you delegate a duplicate task. You must reference existing results instead.\n\n")
+	b.WriteString("- ❌ DUPLICATE DETECTION: The system will reject a duplicate task. Treat that rejection as a coordination stop, not as a reason to retry; reference existing results with `team_info` instead.\n\n")
 
 	b.WriteString("## Task Status\n\n")
 	b.WriteString(c.buildTaskStatusContext())
@@ -63,7 +100,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("## Available Agents\n\n")
 	fmt.Fprintf(&b, "CRITICAL: You MUST use EXACTLY these names in the 'agent' field of the agent tool. Do NOT invent new names or use generic roles. Using an unknown name will result in an IMMEDIATE ERROR.\n\n")
 	fmt.Fprintf(&b, "Valid names: %s\n\n", strings.Join(workerNames, ", "))
-	for _, def := range c.uniqueWorkerDefs() {
+	for _, def := range workerDefs {
 		fmt.Fprintf(&b, "### %s\n", def.Name)
 		if def.Description != "" {
 			fmt.Fprintf(&b, "**Description:** %s\n", def.Description)
@@ -103,7 +140,9 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 			}
 			fmt.Fprintf(&b, "| %s | %s | %s |\n", s.Name, s.Path, desc)
 		}
-		b.WriteString("\nTo get the full instructions for any skill, call the `load_skill` tool with the skill name.\n\n")
+		if !c.coordinatorToolDenied("load_skill") {
+			b.WriteString("\nTo get the full instructions for any skill, call the `load_skill` tool with the skill name.\n\n")
+		}
 	}
 
 	if len(autoSkills) > 0 {
@@ -179,14 +218,22 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 		b.WriteString("  ]\n")
 		b.WriteString("}\n```\n\n")
 	}
-	b.WriteString("### load_skill\n")
-	b.WriteString("Load the full content of a skill by name. You and your workers can call `load_skill` multiple times to load all relevant skills — include ALL skill names and file paths in worker task descriptions so workers can load them if needed.\n")
-	b.WriteString("```json\n{\"name\": \"skill-name\"}\n```\n\n")
-	b.WriteString("### save_skill\n")
-	b.WriteString("Save a reusable skill to disk and reload it immediately. Use this when you or a worker has solved a non-trivial problem and you want to encode the solution for future reuse.\n")
-	b.WriteString("```json\n{\"name\": \"skill-name\", \"description\": \"what it does\", \"content\": \"# Skill\\n\\nStep-by-step workflow...\"}\n```\n\n")
+	if !c.coordinatorToolDenied("load_skill") {
+		b.WriteString("### load_skill\n")
+		b.WriteString("Load the full content of a skill by name. You and your workers can call `load_skill` multiple times to load all relevant skills — include ALL skill names and file paths in worker task descriptions so workers can load them if needed.\n")
+		b.WriteString("```json\n{\"name\": \"skill-name\"}\n```\n\n")
+	}
+	if !c.coordinatorToolDenied("save_skill") {
+		b.WriteString("### save_skill\n")
+		b.WriteString("Save a reusable skill to disk and reload it immediately. Use this when you or a worker has solved a non-trivial problem and you want to encode the solution for future reuse.\n")
+		b.WriteString("```json\n{\"name\": \"skill-name\", \"description\": \"what it does\", \"content\": \"# Skill\\n\\nStep-by-step workflow...\"}\n```\n\n")
+	}
 	b.WriteString("### finish\n")
-	b.WriteString("Signal completion and provide your final answer to the user. ALWAYS call this when you are done.\n**Important: Call stm_write with a session summary BEFORE calling finish.** Failed or blocked tasks prevent a normal finish; fix them first, or explicitly acknowledge a partial result.\n")
+	b.WriteString("Signal completion and provide your final answer to the user. ALWAYS call this when you are done.\n")
+	if !c.coordinatorToolDenied("stm_write") {
+		b.WriteString("**Important: Call stm_write with a session summary BEFORE calling finish.** ")
+	}
+	b.WriteString("Failed or blocked tasks prevent a normal finish; fix them first, or explicitly acknowledge a partial result.\n")
 	b.WriteString("```json\n{\"response\": \"Your final synthesized answer to the user\"}\n```\n\n")
 
 	b.WriteString("### approve_plan\n")
@@ -207,26 +254,66 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("### ask_user\n")
 	b.WriteString("Ask the user a question when you need clarification before proceeding.\n\n")
 
-	b.WriteString("### stm_write\n")
-	b.WriteString("Write to short-term memory (stm.md), a shared workspace file visible to all agents in the current session. Use **append** mode to add new information, or **replace** mode to overwrite entirely.\n")
-	b.WriteString("**You MUST use stm_write before calling finish** to save a concise session summary (key decisions, findings, errors, and outcomes) so that future agents in this session can build on prior work.\n")
-	b.WriteString("```json\n{\"content\": \"concise summary of what happened\", \"mode\": \"append\"}\n```\n\n")
-
-	b.WriteString("### ltm_update\n")
-	b.WriteString("Append to a specific section of long-term memory (ltm.md), a persistent file shared across sessions for this team.\n")
-	b.WriteString("Use ltm_update to save important cross-session knowledge: project conventions, discovered APIs, recurring patterns, architecture decisions, and lessons learned.\n")
-	b.WriteString("Available sections: `# 專案慣例`, `# 架構決策`, `# 常見模式`, `# 已知問題與解法`, `# 關鍵檔案`, `# 工具與指令`\n")
-	b.WriteString("```json\n{\"content\": \"API endpoint /api/v2/users requires JWT in Authorization header\", \"section\": \"# 專案慣例\"}\n```\n\n")
+	if !c.coordinatorToolDenied("stm_write") {
+		b.WriteString("### stm_write\n")
+		b.WriteString("Write to short-term memory (stm.md), a shared workspace file visible to all agents in the current session. Use **append** mode to add new information, or **replace** mode to overwrite entirely.\n")
+		b.WriteString("**You MUST use stm_write before calling finish** to save a concise session summary (key decisions, findings, errors, and outcomes) so that future agents in this session can build on prior work.\n")
+		b.WriteString("```json\n{\"content\": \"concise summary of what happened\", \"mode\": \"append\"}\n```\n\n")
+	}
+	if !c.coordinatorToolDenied("ltm_update") {
+		b.WriteString("### ltm_update\n")
+		b.WriteString("Append to a specific section of long-term memory (ltm.md), a persistent file shared across sessions for this team.\n")
+		b.WriteString("Use ltm_update to save important cross-session knowledge: project conventions, discovered APIs, recurring patterns, architecture decisions, and lessons learned.\n")
+		b.WriteString("Available sections: `# 專案慣例`, `# 架構決策`, `# 常見模式`, `# 已知問題與解法`, `# 關鍵檔案`, `# 工具與指令`\n")
+		b.WriteString("```json\n{\"content\": \"API endpoint /api/v2/users requires JWT in Authorization header\", \"section\": \"# 專案慣例\"}\n```\n\n")
+	}
 
 	wsPath := c.session.Workspace
 	sharedPath := filepath.Join(wsPath, sharedDir)
 	b.WriteString("\n## Environment & Rules\n\n")
-	fmt.Fprintf(&b, "- CWD: %s | Workspace: %s | Shared: %s | Time: %s\n", c.projectDir, wsPath, sharedPath, c.sessionTime.Format(time.RFC3339))
-	fmt.Fprintf(&b, "- ALL intermediate files go to workspace: %s. Use %s for inter-agent sharing. NEVER write outside workspace.\n", wsPath, sharedPath)
+	fmt.Fprintf(&b, "- Project root (CWD): %s | Control workspace: %s | Shared: %s | Time: %s\n", c.projectDir, wsPath, sharedPath, c.sessionTime.Format(time.RFC3339))
+	b.WriteString("- Workers may modify deliverables under the project root only when their task and active tool policy authorize it.\n")
+	fmt.Fprintf(&b, "- Drafts, logs, notes, and other non-deliverable intermediates belong in the control workspace: %s. Use %s for inter-agent handoff.\n", wsPath, sharedPath)
 	b.WriteString("- **Never carry a discovered absolute path across a task boundary as a literal fact another worker must reuse without re-verifying it** — a binary location from `which`, a socket/PID, a generated file path, etc. What one worker discovered in its own execution context is not guaranteed to resolve the same way for a different worker (different sandbox, different session, or the underlying state may simply have changed since). If a later task needs that same fact, let its worker rediscover it itself; never instruct a worker not to verify a path you are handing it. Confirmed live 2026-08-07: a coordinator hardcoded a `trec` binary path an earlier worker had discovered via `which trec` into a later task's goal text and told that worker not to re-run `which trec` — the literal path did not exist in the later worker's execution context (exit 127), failing the task on a stale coordinator-cached fact a 5-second rediscovery would have avoided.\n")
-	b.WriteString("- stm_write after each meaningful agent result (# 發現 / # 決策 / # 錯誤與修復 / # 待解決) AND before finish. ltm_update for cross-session knowledge.\n\n")
+	if !c.coordinatorToolDenied("stm_write") && !c.coordinatorToolDenied("ltm_update") {
+		b.WriteString("- stm_write after each meaningful agent result (# 發現 / # 決策 / # 錯誤與修復 / # 待解決) AND before finish. ltm_update for cross-session knowledge.\n\n")
+	}
 
 	return b.String()
+}
+
+// filterDeniedPromptLines removes coordinator instructions for tools that the
+// team policy has denied. Denied names must not be replaced with a synthetic
+// phrase: models can still interpret that phrase as a callable tool name.
+func (c *Coordinator) filterDeniedPromptLines(prompt string) string {
+	if c == nil || c.session == nil || len(c.session.Config.ToolsDenied) == 0 {
+		return prompt
+	}
+	denied := make([]string, 0, len(c.session.Config.ToolsDenied))
+	for _, name := range c.session.Config.ToolsDenied {
+		if name = strings.TrimSpace(name); name != "" {
+			denied = append(denied, name)
+		}
+	}
+	if len(denied) == 0 {
+		return prompt
+	}
+
+	lines := strings.Split(prompt, "\n")
+	filtered := lines[:0]
+	for _, line := range lines {
+		remove := false
+		for _, name := range denied {
+			if strings.Contains(line, name) {
+				remove = true
+				break
+			}
+		}
+		if !remove {
+			filtered = append(filtered, line)
+		}
+	}
+	return strings.Join(filtered, "\n")
 }
 
 func (c *Coordinator) GetOrchestratorDef() *agent.AgentDef {
@@ -308,6 +395,7 @@ Rules:
 - You MUST use agent to delegate ALL work to team members
 - Running independent tasks in parallel is preferred
 - After receiving results from agent, evaluate whether more work is needed or if you can provide a final answer
+- Never redispatch a worker whose task is already successful. To read its full result, use team_info with action=task_result; do not use agent as a result-retrieval mechanism.
 - Synthesize results from workers into a coherent answer for the user
 - NEVER attempt to do the work yourself — you do not have tools for that
 - If a task fails, provide clearer GOALS or add missing CONSTRAINTS — do NOT add implementation details

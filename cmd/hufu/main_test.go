@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/config"
 )
 
 func TestProviderURLToOllamaAPI(t *testing.T) {

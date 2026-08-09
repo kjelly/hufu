@@ -211,6 +211,9 @@ func (t *TaskTracker) TodoList() *TodoList {
 type TodoItem struct {
 	ID                  string
 	PlanTaskID          string `json:"plan_task_id,omitempty"`
+	ContractID          string `json:"contract_id,omitempty"`
+	ContractHash        string `json:"contract_hash,omitempty"`
+	ContractRevision    int    `json:"contract_revision,omitempty"`
 	Agent               string
 	Desc                string
 	Status              TaskStatus
@@ -278,6 +281,9 @@ func (tl *TodoList) RunID() string {
 // TodoSpec describes a todo item to be created via AddBatch.
 type TodoSpec struct {
 	PlanTaskID          string
+	ContractID          string
+	ContractHash        string
+	ContractRevision    int
 	Agent               string
 	Desc                string
 	Model               string
@@ -306,6 +312,9 @@ func (tl *TodoList) AddBatch(items []TodoSpec) []*TodoItem {
 		ti := &TodoItem{
 			ID:                  fmt.Sprintf("%d", tl.next),
 			PlanTaskID:          item.PlanTaskID,
+			ContractID:          item.ContractID,
+			ContractHash:        item.ContractHash,
+			ContractRevision:    item.ContractRevision,
 			Agent:               item.Agent,
 			Desc:                item.Desc,
 			Model:               item.Model,
@@ -774,6 +783,9 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 	return &TodoItem{
 		ID:                  item.ID,
 		PlanTaskID:          item.PlanTaskID,
+		ContractID:          item.ContractID,
+		ContractHash:        item.ContractHash,
+		ContractRevision:    item.ContractRevision,
 		Agent:               item.Agent,
 		Desc:                item.Desc,
 		Status:              item.Status,

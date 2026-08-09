@@ -8,10 +8,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 const (
@@ -69,6 +71,7 @@ type taskTranscriptRecord struct {
 	Input      string `json:"input,omitempty"`
 	Output     string `json:"output,omitempty"`
 	Error      bool   `json:"error,omitempty"`
+	ExitCode   *int   `json:"exit_code,omitempty"`
 }
 
 func newTaskTranscript(workspace, todoID, runID string) (*taskTranscript, error) {
@@ -143,6 +146,9 @@ func (t *taskTranscript) RecordToolResult(id, tool, output string, isError bool)
 		return fmt.Errorf("record task transcript: closed")
 	}
 	record := taskTranscriptRecord{Timestamp: time.Now().Format(time.RFC3339Nano), Event: "tool_result", ToolCallID: id, Tool: tool, Output: utils.RedactSecrets(output), Error: isError}
+	if code, ok := transcriptExitCode(tool, output); ok {
+		record.ExitCode = &code
+	}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("encode task transcript: %w", err)
@@ -152,6 +158,23 @@ func (t *taskTranscript) RecordToolResult(id, tool, output string, isError bool)
 	}
 	t.toolResults++
 	return nil
+}
+
+func transcriptExitCode(tool, output string) (int, bool) {
+	if tool != "bash" {
+		return 0, false
+	}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "Exit code: ") {
+			continue
+		}
+		code, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "Exit code: ")))
+		if err == nil {
+			return code, true
+		}
+	}
+	return 0, false
 }
 
 func (t *taskTranscript) append(record taskTranscriptRecord) error {
@@ -226,6 +249,13 @@ func finalizeVerbatimTaskResult(transcript *taskTranscript, result *TaskResult) 
 	ref, err := transcript.Manifest()
 	if err != nil {
 		return "", err
+	}
+	// A terminal result may only publish a manifest after its writer is closed.
+	// This makes the path/hash/bytes stable across the done event and a process
+	// restart; callers can no longer observe a "done" task whose transcript is
+	// still appendable.
+	if err := transcript.Close(); err != nil {
+		return "", fmt.Errorf("seal task transcript: %w", err)
 	}
 	if result != nil {
 		result.RawOutputRef = ref

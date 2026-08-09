@@ -7,7 +7,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // ExecutionKind identifies how a task should be executed.
@@ -20,17 +20,119 @@ const (
 	ExecutionKindExternal    ExecutionKind = "external"
 )
 
+// ExecutionEffect describes the externally observable role of one structured
+// execution step. It is deliberately domain-neutral: integrations may supply
+// their own tools and artifacts, while the runtime only enforces the ordering
+// and validation boundary between production and mutation.
+type ExecutionEffect string
+
+const (
+	ExecutionEffectRead     ExecutionEffect = "read"
+	ExecutionEffectProduce  ExecutionEffect = "produce"
+	ExecutionEffectValidate ExecutionEffect = "validate"
+	ExecutionEffectMutate   ExecutionEffect = "mutate"
+	ExecutionEffectVerify   ExecutionEffect = "verify"
+)
+
+// StepFailurePolicy controls what the runtime may do after a structured step
+// fails. Repairable is intentionally limited to validation steps; a mutation
+// failure must follow the task's ordinary rollback or terminal policy.
+type StepFailurePolicy string
+
+const (
+	StepFailureTerminal   StepFailurePolicy = "terminal"
+	StepFailureRepairable StepFailurePolicy = "repairable"
+)
+
+// ExecutionOutputKind identifies the runtime representation of a declared
+// step output. Empty is treated as artifact for compatibility with the first
+// structured-contract revision.
+type ExecutionOutputKind string
+
+const (
+	ExecutionOutputArtifact ExecutionOutputKind = "artifact"
+	ExecutionOutputFact     ExecutionOutputKind = "fact"
+	ExecutionOutputReceipt  ExecutionOutputKind = "receipt"
+)
+
+// ExecutionStepOutput names a fact or immutable artifact produced by an
+// execution step. Names are task-local and are referenced by Consumes.
+type ExecutionStepOutput struct {
+	Name   string              `json:"name" yaml:"name"`
+	Kind   ExecutionOutputKind `json:"kind,omitempty" yaml:"kind,omitempty"`
+	Schema string              `json:"schema,omitempty" yaml:"schema,omitempty"`
+	Path   string              `json:"path,omitempty" yaml:"path,omitempty"`
+	Scope  string              `json:"scope,omitempty" yaml:"scope,omitempty"`
+}
+
+// ExecutionStepReference is a typed reference to one declared output of an
+// upstream step. Target names the input field supplied to the runner. Scope is
+// task-local by default; "secret" prevents the resolved value from being
+// copied into receipt previews while still allowing the runner to consume it.
+type ExecutionStepReference struct {
+	Target string              `json:"target" yaml:"target"`
+	StepID string              `json:"step_id" yaml:"step-id"`
+	TaskID string              `json:"task_id,omitempty" yaml:"task-id,omitempty"`
+	Output string              `json:"output" yaml:"output"`
+	Kind   ExecutionOutputKind `json:"kind" yaml:"kind"`
+	Schema string              `json:"schema,omitempty" yaml:"schema,omitempty"`
+	Scope  string              `json:"scope,omitempty" yaml:"scope,omitempty"`
+}
+
+// ExecutionStep is a structured, provider-neutral unit of work. Input is
+// decoded data rather than an integration-specific command string; consumers
+// can pass provider-specific detail through it without the Hufu runtime
+// interpreting it. A mutating step may run only after each consumed artifact
+// has been frozen by a successful validate step.
+type ExecutionStep struct {
+	ID         string                   `json:"id" yaml:"id"`
+	Tool       string                   `json:"tool" yaml:"tool"`
+	Input      map[string]any           `json:"input,omitempty" yaml:"input,omitempty"`
+	DependsOn  []string                 `json:"depends_on,omitempty" yaml:"depends-on,omitempty"`
+	Effect     ExecutionEffect          `json:"effect" yaml:"effect"`
+	Outputs    []ExecutionStepOutput    `json:"outputs,omitempty" yaml:"outputs,omitempty"`
+	References []ExecutionStepReference `json:"references,omitempty" yaml:"references,omitempty"`
+	Consumes   []string                 `json:"consumes,omitempty" yaml:"consumes,omitempty"`
+	OnFailure  StepFailurePolicy        `json:"on_failure,omitempty" yaml:"on-failure,omitempty"`
+	MaxRepairs int                      `json:"max_repairs,omitempty" yaml:"max-repairs,omitempty"`
+}
+
 // ExecutionContract defines the structured execution contract for a task.
 type ExecutionContract struct {
 	Kind                 ExecutionKind `json:"kind,omitempty" yaml:"kind,omitempty"`
 	RequiresResult       bool          `json:"requires_result,omitempty" yaml:"requires-result,omitempty"`
 	RequiresVerification bool          `json:"requires_verification,omitempty" yaml:"requires-verification,omitempty"`
 	AllowsReplay         *bool         `json:"allows_replay,omitempty" yaml:"allows-replay,omitempty"`
+	ForbidArtifacts      bool          `json:"forbid_artifacts,omitempty" yaml:"forbid-artifacts,omitempty"`
+	// Steps is the structured execution contract for workflows that need
+	// artifact/validator dataflow and bounded repair. It is mutually exclusive
+	// with the legacy ToolSequence, which remains supported for existing
+	// atomic workflows.
+	Steps []ExecutionStep `json:"steps,omitempty" yaml:"steps,omitempty"`
 	// ToolSequence is an optional closed, ordered list of tool calls for an
 	// atomic task. When set, the worker is shown only these tools and the
 	// runtime admits calls only in this order. The final entry must be
 	// submit_result, which closes the task's tool budget.
 	ToolSequence []string `json:"tool_sequence,omitempty" yaml:"tool-sequence,omitempty"`
+	// ToolInputSequence optionally requires JSON-object fields for each
+	// ToolSequence slot. It has the same length as ToolSequence; an empty object
+	// leaves that slot unconstrained. Every declared field must match before the
+	// underlying tool runs. This makes an atomic task's call budget enforceable
+	// without assigning semantics to a provider, command, or integration.
+	ToolInputSequence []map[string]any `json:"tool_input_sequence,omitempty" yaml:"tool-input-sequence,omitempty"`
+	// ToolInputField and ToolInputValueSequence provide a compact alternative
+	// for atomic tools whose input is a JSON object with one safety-critical
+	// scalar field. Values align with ToolSequence; an empty value is wildcard.
+	ToolInputField         string   `json:"tool_input_field,omitempty" yaml:"tool-input-field,omitempty"`
+	ToolInputValueSequence []string `json:"tool_input_value_sequence,omitempty" yaml:"tool-input-value-sequence,omitempty"`
+	// ToolExpectedExitCodes declares non-zero process exit codes that are an
+	// expected observation for the corresponding ToolSequence slot. This is
+	// useful for bounded discovery commands such as timeout, where exit 124 is
+	// evidence that the observation window ended rather than a task failure.
+	// Each entry aligns with ToolSequence; an empty entry retains the normal
+	// success-only policy. It is deliberately limited to non-terminal slots:
+	// submit_result is a protocol action, not a process observation.
+	ToolExpectedExitCodes [][]int `json:"tool_expected_exit_codes,omitempty" yaml:"tool-expected-exit-codes,omitempty"`
 }
 
 // UnmarshalJSON handles legacy "strict_result" / "strict-result" keys in JSON.
@@ -160,6 +262,14 @@ func ValidateExecutionContractFull(task TaskDef, lintMode string) ContractPrefli
 	}
 
 	if len(c.ToolSequence) > 0 {
+		if len(c.Steps) > 0 {
+			findings = append(findings, ContractFinding{
+				Severity: FindingSeverityError,
+				Code:     "execution_contract_mixed_modes",
+				Field:    "execution",
+				Message:  "structured execution steps cannot be combined with legacy tool_sequence",
+			})
+		}
 		if task.PlanFirst {
 			findings = append(findings, ContractFinding{
 				Severity: FindingSeverityError,
@@ -192,6 +302,36 @@ func ValidateExecutionContractFull(task TaskDef, lintMode string) ContractPrefli
 				Code:     "tool_sequence_requires_result",
 				Field:    "execution.requires_result",
 				Message:  "a closed tool sequence requires requires_result=true",
+			})
+		}
+		if len(c.ToolInputSequence) > 0 {
+			if len(c.ToolInputSequence) != len(c.ToolSequence) {
+				findings = append(findings, ContractFinding{
+					Severity: FindingSeverityError,
+					Code:     "tool_input_sequence_length",
+					Field:    "execution.tool_input_sequence",
+					Message:  "tool_input_sequence must have one entry for every tool_sequence slot",
+				})
+			}
+		}
+	} else if len(c.ToolInputSequence) > 0 {
+		findings = append(findings, ContractFinding{
+			Severity: FindingSeverityError,
+			Code:     "tool_input_sequence_requires_tools",
+			Field:    "execution.tool_input_sequence",
+			Message:  "tool_input_sequence requires a non-empty tool_sequence",
+		})
+	}
+	findings = append(findings, validateToolInputValueSequence(c)...)
+	findings = append(findings, validateToolExpectedExitCodes(c)...)
+	if len(c.Steps) > 0 {
+		findings = append(findings, validateStructuredExecutionSteps(c.Steps)...)
+		if c.RequiresVerification && !structuredStepsContainEffect(c.Steps, ExecutionEffectVerify) {
+			findings = append(findings, ContractFinding{
+				Severity: FindingSeverityError,
+				Code:     "execution_steps_verifier_missing",
+				Field:    "execution.steps",
+				Message:  "structured execution with requires_verification=true must declare a verify step",
 			})
 		}
 	}
@@ -231,6 +371,49 @@ func ValidateExecutionContractFull(task TaskDef, lintMode string) ContractPrefli
 		Findings:    findings,
 		Environment: ExecutionEnvironment{},
 	}
+}
+
+func validateToolInputValueSequence(c ExecutionContract) []ContractFinding {
+	if c.ToolInputField == "" && len(c.ToolInputValueSequence) == 0 {
+		return nil
+	}
+	if len(c.ToolSequence) == 0 || c.ToolInputField == "" || len(c.ToolInputValueSequence) != len(c.ToolSequence) {
+		return []ContractFinding{{Severity: FindingSeverityError, Code: "tool_input_value_sequence_invalid", Field: "execution.tool_input_value_sequence", Message: "tool_input_field and a value for every tool_sequence slot are required together"}}
+	}
+	for i, tool := range c.ToolSequence {
+		if tool == "submit_result" && c.ToolInputField != "status" && c.ToolInputValueSequence[i] != "" {
+			return []ContractFinding{{Severity: FindingSeverityError, Code: "tool_input_value_sequence_terminal_field", Field: "execution.tool_input_value_sequence", Message: "only the status field may constrain a submit_result slot; other fields must use an empty wildcard"}}
+		}
+	}
+	return nil
+}
+
+func validateToolExpectedExitCodes(c ExecutionContract) []ContractFinding {
+	if len(c.ToolExpectedExitCodes) == 0 {
+		return nil
+	}
+	if len(c.ToolSequence) == 0 || len(c.ToolExpectedExitCodes) != len(c.ToolSequence) {
+		return []ContractFinding{{Severity: FindingSeverityError, Code: "tool_expected_exit_codes_invalid", Field: "execution.tool_expected_exit_codes", Message: "tool_expected_exit_codes requires one entry for every tool_sequence slot"}}
+	}
+	for index, codes := range c.ToolExpectedExitCodes {
+		if len(codes) == 0 {
+			continue
+		}
+		if strings.TrimSpace(c.ToolSequence[index]) == "submit_result" {
+			return []ContractFinding{{Severity: FindingSeverityError, Code: "tool_expected_exit_codes_terminal", Field: "execution.tool_expected_exit_codes", Message: "submit_result cannot declare expected process exit codes"}}
+		}
+		seen := make(map[int]bool, len(codes))
+		for _, code := range codes {
+			if code == 0 {
+				return []ContractFinding{{Severity: FindingSeverityError, Code: "tool_expected_exit_codes_zero", Field: "execution.tool_expected_exit_codes", Message: "expected exit codes must be non-zero; zero is always an ordinary successful tool result"}}
+			}
+			if seen[code] {
+				return []ContractFinding{{Severity: FindingSeverityError, Code: "tool_expected_exit_codes_duplicate", Field: "execution.tool_expected_exit_codes", Message: fmt.Sprintf("expected exit code %d is duplicated for tool sequence position %d", code, index+1)}}
+			}
+			seen[code] = true
+		}
+	}
+	return nil
 }
 
 // isLintFinding reports whether a finding code originates from the verifier

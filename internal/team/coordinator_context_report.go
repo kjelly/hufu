@@ -21,7 +21,7 @@ func (c *Coordinator) recordContextBreakdown(ctx context.Context, modelID, coreT
 	if modelID == "" {
 		modelID = c.coordinatorModelID()
 	}
-	spec := globalRegistry.GetSpec(modelID)
+	spec := globalRegistry.GetSpec(modelID).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(nil))
 	counter := defaultCounter
 
 	systemTokens, _ := counter.CountText(ctx, modelID, coreText)

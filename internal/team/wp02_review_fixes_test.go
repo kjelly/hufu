@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // TestClassifyTaskFailure_ContractClass verifies that contract preflight

@@ -4,7 +4,7 @@
 package tools
 
 import (
-	"github.com/anomalyco/hufu/internal/hooks"
+	"github.com/kjelly/hufu/internal/hooks"
 )
 
 func WithWorkDir(dir string) ToolOption {

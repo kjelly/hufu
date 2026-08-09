@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/sidecar"
+	"github.com/kjelly/hufu/internal/sidecar"
 )
 
 const maxToolCallHistory = 1000

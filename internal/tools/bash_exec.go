@@ -17,7 +17,7 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 const defaultBashTimeout = 120 * time.Second

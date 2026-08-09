@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	contextstore "github.com/anomalyco/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 // failingContextRepo lets tests force a shadow Append to fail (simulating a

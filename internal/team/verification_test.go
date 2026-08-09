@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // Minimum Test Matrix Item 5: worker says success while json_assert sees a failed value

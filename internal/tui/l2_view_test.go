@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // ansiReStrip matches ANSI escape sequences for stripping in view tests.

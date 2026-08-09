@@ -11,7 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/exp/teatest"
 
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // ── Helpers ───────────────────────────────────────────────────────────────

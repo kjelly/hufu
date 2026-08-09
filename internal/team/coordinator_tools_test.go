@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestDelegationChain(t *testing.T) {
@@ -29,6 +31,78 @@ func TestDelegationChain(t *testing.T) {
 				t.Errorf("delegationChain() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRunAgentsDescriptionForbidsSuccessfulRedispatch(t *testing.T) {
+	tool := &runAgentsTool{coordinator: &Coordinator{
+		session: &TeamSession{Agents: map[string]*agent.AgentDef{
+			"worker": {Name: "worker"},
+		}},
+	}}
+	description := tool.Info().Description
+	for _, want := range []string{"Never redispatch", "team_info", "task_result"} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("agent tool description missing %q: %s", want, description)
+		}
+	}
+}
+
+func TestRunAgentsToolInfoPinsFreshInitialDelegationSchema(t *testing.T) {
+	c := &Coordinator{
+		session: &TeamSession{Config: agent.TeamConfig{
+			Delegation: agent.DelegationPolicy{
+				InitialBatch:             []string{"surface", "reader"},
+				RequireExactInitialBatch: true,
+				BindInitialTaskContracts: true,
+			},
+		}, Agents: map[string]*agent.AgentDef{
+			"surface": {Name: "surface", Role: "worker"},
+			"reader":  {Name: "reader", Role: "worker"},
+			"planner": {Name: "planner", Role: "worker"},
+		}},
+		taskTracker: NewTaskTracker(),
+		sessionData: NewSession(),
+	}
+
+	info := (&runAgentsTool{coordinator: c}).Info()
+	tasks, ok := info.Parameters["tasks"].(map[string]any)
+	if !ok {
+		t.Fatalf("tasks schema = %#v, want object", info.Parameters["tasks"])
+	}
+	if got := tasks["minItems"]; got != 2 {
+		t.Fatalf("initial minItems = %#v, want 2", got)
+	}
+	if got := tasks["maxItems"]; got != 2 {
+		t.Fatalf("initial maxItems = %#v, want 2", got)
+	}
+	items, ok := tasks["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("task item schema = %#v, want object", tasks["items"])
+	}
+	properties, ok := items["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("task properties = %#v, want object", items["properties"])
+	}
+	agentSchema, ok := properties["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("agent schema = %#v, want object", properties["agent"])
+	}
+	agents, ok := agentSchema["enum"].([]string)
+	if !ok || strings.Join(agents, ",") != "surface,reader" {
+		t.Fatalf("fresh agent enum = %#v, want only ordered initial workers", agentSchema["enum"])
+	}
+	for _, forbidden := range []string{"execution", "output_mode", "context_files"} {
+		if _, exists := properties[forbidden]; exists {
+			t.Fatalf("fresh initial task schema exposed runtime-bound field %q", forbidden)
+		}
+	}
+	prefix, ok := tasks["prefixItems"].([]map[string]any)
+	if !ok || len(prefix) != 2 {
+		t.Fatalf("prefixItems = %#v, want ordered schemas for both initial workers", tasks["prefixItems"])
+	}
+	if !strings.Contains(info.Description, "initial_pending") {
+		t.Fatalf("fresh initial agent tool description omitted canonical phase: %q", info.Description)
 	}
 }
 

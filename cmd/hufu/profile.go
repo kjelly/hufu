@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/anomalyco/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/config"
 )
 
 // applyProfile applies a named flag bundle from hufu.yaml `profiles:` to the

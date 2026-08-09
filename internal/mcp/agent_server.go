@@ -12,7 +12,7 @@ import (
 	"charm.land/fantasy"
 	"github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // ShellConfig defines shell behavior

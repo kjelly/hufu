@@ -10,7 +10,7 @@ import (
 	"charm.land/fantasy"
 	"gopkg.in/yaml.v3"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestValidateExecutionContract_Defaults(t *testing.T) {
@@ -133,6 +133,133 @@ execution:
 	}
 	if got, want := fromYAML.Execution.ToolSequence, []string{"bash", "bash", "submit_result"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("YAML tool sequence = %#v, want %#v", got, want)
+	}
+}
+
+func TestValidateExecutionContract_ToolInputSequence(t *testing.T) {
+	valid := TaskDef{Execution: ExecutionContract{
+		Kind:              ExecutionKindProcess,
+		RequiresResult:    true,
+		ToolSequence:      []string{"bash", "submit_result"},
+		ToolInputSequence: []map[string]any{{"command": "pwd"}, {}},
+	}}
+	if err := ValidateExecutionContract(valid); err != nil {
+		t.Fatalf("valid constrained sequence rejected: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		task TaskDef
+		want string
+	}{
+		{
+			name: "requires tool sequence",
+			task: TaskDef{Execution: ExecutionContract{ToolInputSequence: []map[string]any{{"command": "pwd"}}}},
+			want: "requires a non-empty tool_sequence",
+		},
+		{
+			name: "requires aligned length",
+			task: TaskDef{Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"bash", "submit_result"}, ToolInputSequence: []map[string]any{{"command": "pwd"}}}},
+			want: "must have one entry",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateExecutionContract(tc.task)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ValidateExecutionContract error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateExecutionContract_ToolInputValueSequence(t *testing.T) {
+	valid := TaskDef{Execution: ExecutionContract{
+		Kind:                   ExecutionKindProcess,
+		RequiresResult:         true,
+		ToolSequence:           []string{"bash", "submit_result"},
+		ToolInputField:         "command",
+		ToolInputValueSequence: []string{"pwd", ""},
+	}}
+	if err := ValidateExecutionContract(valid); err != nil {
+		t.Fatalf("valid scalar constrained sequence rejected: %v", err)
+	}
+
+	invalid := TaskDef{Execution: ExecutionContract{
+		RequiresResult:         true,
+		ToolSequence:           []string{"bash", "submit_result"},
+		ToolInputField:         "command",
+		ToolInputValueSequence: []string{"pwd"},
+	}}
+	if err := ValidateExecutionContract(invalid); err == nil || !strings.Contains(err.Error(), "required together") {
+		t.Fatalf("invalid scalar constrained sequence error = %v, want alignment failure", err)
+	}
+
+	invalidTerminal := TaskDef{Execution: ExecutionContract{
+		RequiresResult:         true,
+		ToolSequence:           []string{"bash", "submit_result"},
+		ToolInputField:         "command",
+		ToolInputValueSequence: []string{"pwd", "success"},
+	}}
+	if err := ValidateExecutionContract(invalidTerminal); err == nil || !strings.Contains(err.Error(), "only the status field") {
+		t.Fatalf("invalid terminal scalar contract error = %v, want terminal field failure", err)
+	}
+}
+
+func TestValidateExecutionContract_ToolExpectedExitCodes(t *testing.T) {
+	valid := TaskDef{Execution: ExecutionContract{
+		Kind:                  ExecutionKindProcess,
+		RequiresResult:        true,
+		ToolSequence:          []string{"bash", "submit_result"},
+		ToolExpectedExitCodes: [][]int{{124, 137}, {}},
+	}}
+	if err := ValidateExecutionContract(valid); err != nil {
+		t.Fatalf("valid expected exit-code contract rejected: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		task TaskDef
+		want string
+	}{
+		{
+			name: "requires aligned tool sequence",
+			task: TaskDef{Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"bash", "submit_result"}, ToolExpectedExitCodes: [][]int{{124}}}},
+			want: "requires one entry",
+		},
+		{
+			name: "zero is ordinary success",
+			task: TaskDef{Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"bash", "submit_result"}, ToolExpectedExitCodes: [][]int{{0}, {}}}},
+			want: "must be non-zero",
+		},
+		{
+			name: "terminal is not a process observation",
+			task: TaskDef{Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"bash", "submit_result"}, ToolExpectedExitCodes: [][]int{{}, {124}}}},
+			want: "submit_result cannot declare",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateExecutionContract(tc.task)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ValidateExecutionContract error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+
+	const taskYAML = `
+agent: worker
+goal: bounded interactive observation
+execution:
+  kind: process
+  requires-result: true
+  tool-sequence: [bash, submit_result]
+  tool-expected-exit-codes: [[124, 137], []]
+`
+	var parsed TaskDef
+	if err := yaml.Unmarshal([]byte(taskYAML), &parsed); err != nil {
+		t.Fatalf("unmarshal YAML task: %v", err)
+	}
+	if got, want := parsed.Execution.ToolExpectedExitCodes, [][]int{{124, 137}, {}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("YAML expected exit codes = %#v, want %#v", got, want)
 	}
 }
 
@@ -437,14 +564,20 @@ execution:
 }
 
 func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
-	// 1. Verify ExecutionContract struct exports ONLY the 4 specification fields
+	// 1. Verify ExecutionContract struct exports only the declared specification fields
 	contractType := reflect.TypeOf(ExecutionContract{})
 	expectedFields := map[string]bool{
-		"Kind":                 true,
-		"RequiresResult":       true,
-		"RequiresVerification": true,
-		"AllowsReplay":         true,
-		"ToolSequence":         true,
+		"Kind":                   true,
+		"RequiresResult":         true,
+		"RequiresVerification":   true,
+		"AllowsReplay":           true,
+		"ToolSequence":           true,
+		"ToolInputSequence":      true,
+		"ToolInputField":         true,
+		"ToolInputValueSequence": true,
+		"ToolExpectedExitCodes":  true,
+		"ForbidArtifacts":        true,
+		"Steps":                  true,
 	}
 
 	if contractType.NumField() != len(expectedFields) {
@@ -464,11 +597,17 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 	execSubProps := execProp["properties"].(map[string]any)
 
 	expectedSchemaKeys := map[string]bool{
-		"kind":                  true,
-		"requires_result":       true,
-		"requires_verification": true,
-		"allows_replay":         true,
-		"tool_sequence":         true,
+		"kind":                      true,
+		"requires_result":           true,
+		"requires_verification":     true,
+		"allows_replay":             true,
+		"tool_sequence":             true,
+		"tool_input_sequence":       true,
+		"tool_input_field":          true,
+		"tool_input_value_sequence": true,
+		"tool_expected_exit_codes":  true,
+		"forbid_artifacts":          true,
+		"steps":                     true,
 	}
 
 	if len(execSubProps) != len(expectedSchemaKeys) {
@@ -481,12 +620,47 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 		}
 	}
 
+	toolSequenceDescription := execSubProps["tool_sequence"].(map[string]any)["description"].(string)
+	for _, requiredPhrase := range []string{"complete call budget", "repeat bash", "include write", "submit_result"} {
+		if !strings.Contains(toolSequenceDescription, requiredPhrase) {
+			t.Errorf("tool_sequence schema description missing %q: %s", requiredPhrase, toolSequenceDescription)
+		}
+	}
+	toolInputSequenceDescription := execSubProps["tool_input_sequence"].(map[string]any)["description"].(string)
+	for _, requiredPhrase := range []string{"same length", "empty object", "declared field"} {
+		if !strings.Contains(toolInputSequenceDescription, requiredPhrase) {
+			t.Errorf("tool_input_sequence schema description missing %q: %s", requiredPhrase, toolInputSequenceDescription)
+		}
+	}
+	toolInputValueSequenceDescription := execSubProps["tool_input_value_sequence"].(map[string]any)["description"].(string)
+	for _, requiredPhrase := range []string{"scalar values", "one per tool_sequence slot", "empty string"} {
+		if !strings.Contains(toolInputValueSequenceDescription, requiredPhrase) {
+			t.Errorf("tool_input_value_sequence schema description missing %q: %s", requiredPhrase, toolInputValueSequenceDescription)
+		}
+	}
+	toolExpectedExitCodesDescription := execSubProps["tool_expected_exit_codes"].(map[string]any)["description"].(string)
+	for _, requiredPhrase := range []string{"non-zero", "one integer array per tool_sequence slot", "timeout exit 124"} {
+		if !strings.Contains(toolExpectedExitCodesDescription, requiredPhrase) {
+			t.Errorf("tool_expected_exit_codes schema description missing %q: %s", requiredPhrase, toolExpectedExitCodesDescription)
+		}
+	}
+
 	// 3. Verify buildAgentTaskProperties top-level map does NOT expose non-spec strict_result key
 	if _, hasStrictResult := props["strict_result"]; hasStrictResult {
 		t.Error("buildAgentTaskProperties task schema unexpectedly exposes top-level 'strict_result' key")
 	}
 	if _, hasStrictResultDash := props["strict-result"]; hasStrictResultDash {
 		t.Error("buildAgentTaskProperties task schema unexpectedly exposes top-level 'strict-result' key")
+	}
+}
+
+func TestMissingExecutionToolsRejectsUnavailableClosedSequenceTools(t *testing.T) {
+	got := missingExecutionTools(nil, []string{"bash", "write", "submit_result"})
+	if want := []string{"bash", "write"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("missing execution tools = %v, want %v", got, want)
+	}
+	if got := missingExecutionTools(nil, []string{"submit_result"}); len(got) != 0 {
+		t.Fatalf("submit_result should be available through the result protocol, got %v", got)
 	}
 }
 

@@ -14,9 +14,9 @@ import (
 	"github.com/manifoldco/promptui"
 	"gopkg.in/yaml.v3"
 
-	"github.com/anomalyco/hufu/internal/readline"
-	"github.com/anomalyco/hufu/internal/team"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/readline"
+	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 // offerFirstTimeWizard is shown when no teams are discovered in the

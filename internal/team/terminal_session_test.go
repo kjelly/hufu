@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"charm.land/fantasy"
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 func TestTerminalSessionManager_OwnerLifecycleAndOutputArtifact(t *testing.T) {

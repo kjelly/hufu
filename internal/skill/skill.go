@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/anomalyco/hufu/internal/yamlutil"
+	"github.com/kjelly/hufu/internal/yamlutil"
 )
 
 type SkillDef struct {

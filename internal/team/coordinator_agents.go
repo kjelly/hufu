@@ -9,14 +9,15 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 func agentCacheKey(def *agent.AgentDef, overrideModel string) string {
@@ -255,10 +256,30 @@ func containsPart(parts []string, s string) bool {
 
 func (c *Coordinator) workerNameList() []string {
 	names, _ := c.buildWorkerNamesAndDescs()
-	return names
+	if c == nil || c.session == nil || len(c.session.Config.Delegation.AllowedWorkers) == 0 {
+		return names
+	}
+	allowed := make(map[string]bool, len(c.session.Config.Delegation.AllowedWorkers))
+	for _, name := range c.session.Config.Delegation.AllowedWorkers {
+		allowed[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	filtered := make([]string, 0, len(names))
+	for _, name := range names {
+		if allowed[strings.ToLower(name)] {
+			filtered = append(filtered, name)
+		}
+	}
+	return filtered
 }
 
 const maxAgentsMDSize = 50000
+
+// defaultWorkerContextSize is a token budget, not a character count (spec.md
+// item 7): worker-context-size used to mean "truncate AGENTS.md at N
+// characters", inconsistent with the token-aware context budgeting used
+// everywhere else in Hufu. The numeric default (12000) is unchanged — only
+// its unit is — matching the "project context" line item in a typical
+// token-budget breakdown.
 const defaultWorkerContextSize = 12000
 
 func (c *Coordinator) loadProjectContext() string {
@@ -280,8 +301,14 @@ func (c *Coordinator) getWorkerContext(ctx context.Context) string {
 		if raw == "" {
 			return
 		}
-		ctxSize := c.getWorkerContextSize()
-		if s := c.AgentPool().Sidecar(); s != nil && utf8.RuneCountInString(raw) > ctxSize/2 {
+		modelID := c.coordinatorModelID()
+		estimator := globalRegistry.GetSpec(modelID).Estimator
+		countTokens := func(s string) int {
+			n, _ := defaultCounter.CountText(ctx, modelID, s)
+			return n
+		}
+		ctxTokens := c.getWorkerContextSize()
+		if s := c.AgentPool().Sidecar(); s != nil && countTokens(raw) > ctxTokens/2 {
 			if c.think {
 				c.emitThinkSidecar("Compact", "compacting worker context (AGENTS.md)")
 			}
@@ -290,14 +317,13 @@ func (c *Coordinator) getWorkerContext(ctx context.Context) string {
 				raw = compacted
 			}
 		}
-		if utf8.RuneCountInString(raw) > ctxSize {
-			raw = string([]rune(raw)[:ctxSize]) + "\n\n... [truncated]"
-		}
-		c.cachedWorkerContext = raw
+		c.cachedWorkerContext = TruncateToTokenBudget(raw, estimator, ctxTokens)
 	})
 	return c.cachedWorkerContext
 }
 
+// getWorkerContextSize returns the worker-context-size token budget
+// (session.Config.WorkerContextSize, or defaultWorkerContextSize).
 func (c *Coordinator) getWorkerContextSize() int {
 	if c.session != nil && c.session.Config.WorkerContextSize > 0 {
 		return c.session.Config.WorkerContextSize
@@ -398,9 +424,10 @@ func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentD
 	wsPath := c.session.Workspace
 	sharedPath := filepath.Join(wsPath, sharedDir)
 	b.WriteString("## Environment & Rules\n\n")
-	fmt.Fprintf(&b, "- CWD: %s | Workspace: %s | Shared: %s | Time: %s\n", c.projectDir, wsPath, sharedPath, c.sessionTime.Format(time.RFC3339))
-	fmt.Fprintf(&b, "- ALL intermediate files (drafts, logs, notes, etc.) MUST be written to workspace: %s\n", wsPath)
-	fmt.Fprintf(&b, "- Use %s to share files between agents. NEVER write outside workspace.\n\n", sharedPath)
+	fmt.Fprintf(&b, "- Project root (CWD): %s | Control workspace: %s | Shared: %s | Time: %s\n", c.projectDir, wsPath, sharedPath, c.sessionTime.Format(time.RFC3339))
+	fmt.Fprintf(&b, "- Modify deliverables under the project root only when the task authorizes it and the active tool policy permits it.\n")
+	fmt.Fprintf(&b, "- Put drafts, logs, notes, and other non-deliverable intermediates in the control workspace: %s\n", wsPath)
+	fmt.Fprintf(&b, "- Use %s for inter-agent handoff.\n\n", sharedPath)
 	b.WriteString("---\n\n")
 
 	injectedDef := *def
@@ -428,6 +455,55 @@ func (c *Coordinator) resolveAgentModel(def *agent.AgentDef, overrideModel strin
 		return def.Generation.Model
 	}
 	return c.session.Config.Generation.Model
+}
+
+// resolveAgentMaxOutputTokens returns the max-output-tokens Hufu will
+// actually request for def, using the same agent-first/team-fallback
+// precedence CreateAgent uses (internal/agent/agent.go). Returns 0 when
+// neither the agent nor the team configured a value, so callers can fall
+// back to the model-family registry default (spec.md item 2: the context
+// budget must reserve however much output the request will really allow,
+// not a hardcoded per-family guess).
+func (c *Coordinator) resolveAgentMaxOutputTokens(def *agent.AgentDef) int {
+	raw := ""
+	if def != nil && def.Generation.MaxTokens != "" {
+		raw = def.Generation.MaxTokens
+	} else if c.session != nil {
+		raw = c.session.Config.Generation.MaxTokens
+	}
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// providerSemaphore lazily builds (once per provider) and returns the
+// concurrency-limiting channel for provider, or nil when that provider has
+// no configured max-concurrent — in which case only the team-wide semaphore
+// in dagScheduler applies, matching the pre-existing behavior.
+func (c *Coordinator) providerSemaphore(provider string) chan struct{} {
+	if provider == "" || c.session == nil {
+		return nil
+	}
+	cfg, ok := c.session.Config.Providers[provider]
+	if !ok || cfg.MaxConcurrent <= 0 {
+		return nil
+	}
+	c.providerSemMu.Lock()
+	defer c.providerSemMu.Unlock()
+	if c.providerSem == nil {
+		c.providerSem = make(map[string]chan struct{})
+	}
+	sem, ok := c.providerSem[provider]
+	if !ok {
+		sem = make(chan struct{}, cfg.MaxConcurrent)
+		c.providerSem[provider] = sem
+	}
+	return sem
 }
 
 // coordinatorModelID returns the team default model used by the coordinator for

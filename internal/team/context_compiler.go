@@ -9,11 +9,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/memory"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/memory"
 )
 
 type ContextScope string
+
+// ContextAuthority identifies whether a context fragment can direct current
+// execution or is only explanatory/background material.
+type ContextAuthority string
+
+const (
+	ContextAuthorityNormative  ContextAuthority = "normative"
+	ContextAuthorityExample    ContextAuthority = "example"
+	ContextAuthorityHistorical ContextAuthority = "historical"
+)
 
 const (
 	ScopeGlobal  ContextScope = "global"
@@ -50,9 +60,14 @@ type ContextItem struct {
 	DedupKey     string
 	Compressible bool
 	Required     bool
+	Authority    ContextAuthority
+	ConflictKey  string
+	Revision     string
+	ExpiresAt    time.Time
 }
 
 type CoordinatorContextInput struct {
+	CorePrompt       string
 	Goal             string
 	SessionContext   string
 	RawSTM           string
@@ -124,6 +139,41 @@ func ValidateRequiredItems(items []ContextItem) error {
 	return nil
 }
 
+// ValidateContextItems deterministically rejects contradictory normative
+// fragments, duplicate IDs with different content, and expired fragments
+// before prompt rendering. Historical/example content can never silently
+// override a current normative contract.
+func ValidateContextItems(items []ContextItem, now time.Time) error {
+	if err := ValidateRequiredItems(items); err != nil {
+		return err
+	}
+	ids := make(map[string]string, len(items))
+	normative := make(map[string]ContextItem)
+	for _, item := range items {
+		authority := normalizedContextAuthority(item)
+		if authority != ContextAuthorityNormative && authority != ContextAuthorityExample && authority != ContextAuthorityHistorical {
+			return fmt.Errorf("context item %q has invalid authority %q", item.ID, item.Authority)
+		}
+		if !item.ExpiresAt.IsZero() && !now.Before(item.ExpiresAt) {
+			return fmt.Errorf("context item %q is stale (expired at %s)", item.ID, item.ExpiresAt.UTC().Format(time.RFC3339))
+		}
+		digest := hashContentKey(item.Content)
+		if old, exists := ids[item.ID]; exists && old != digest {
+			return fmt.Errorf("context item id %q has conflicting content", item.ID)
+		}
+		ids[item.ID] = digest
+		if authority != ContextAuthorityNormative || strings.TrimSpace(item.ConflictKey) == "" {
+			continue
+		}
+		key := strings.TrimSpace(item.ConflictKey)
+		if old, exists := normative[key]; exists && old.NormalizedDedupKey() != item.NormalizedDedupKey() {
+			return fmt.Errorf("normative context conflict %q between %q and %q", key, old.ID, item.ID)
+		}
+		normative[key] = item
+	}
+	return nil
+}
+
 // DeduplicateContextItems removes duplicate context items across sources
 // (Session Context, STM, LTM, Vector Memory, Conversation History, TypedResult).
 // Higher priority (lower numerical Priority value) or fresher items win.
@@ -147,10 +197,13 @@ func DeduplicateContextItems(items []ContextItem) []ContextItem {
 			continue
 		}
 
-		// Resolution logic: lower Priority wins; if equal, higher Confidence; if equal, fresher timestamp
-		if item.Priority < existing.Priority ||
-			(item.Priority == existing.Priority && item.Confidence > existing.Confidence) ||
-			(item.Priority == existing.Priority && item.Confidence == existing.Confidence && item.Freshness.After(existing.Freshness)) {
+		// Normative content always outranks examples and historical evidence.
+		itemAuthority := contextAuthorityRank(normalizedContextAuthority(item))
+		existingAuthority := contextAuthorityRank(normalizedContextAuthority(existing))
+		if itemAuthority < existingAuthority ||
+			(itemAuthority == existingAuthority && item.Priority < existing.Priority) ||
+			(itemAuthority == existingAuthority && item.Priority == existing.Priority && item.Confidence > existing.Confidence) ||
+			(itemAuthority == existingAuthority && item.Priority == existing.Priority && item.Confidence == existing.Confidence && item.Freshness.After(existing.Freshness)) {
 			seen[key] = item
 		}
 	}
@@ -233,7 +286,7 @@ func BudgetContextItems(items []ContextItem, budget ContextBudget) ([]ContextIte
 // AssembleContextItemsPipeline executes the full context pipeline:
 // Validate Required → Deduplicate → Rank → Budget → Emit
 func AssembleContextItemsPipeline(ctx context.Context, items []ContextItem, budget ContextBudget) (string, bool, error) {
-	if err := ValidateRequiredItems(items); err != nil {
+	if err := ValidateContextItems(items, time.Now().UTC()); err != nil {
 		return "", false, err
 	}
 
@@ -253,13 +306,14 @@ func renderContextItems(items []ContextItem) string {
 		if i > 0 {
 			sb.WriteString("\n\n")
 		}
+		fmt.Fprintf(&sb, "<!-- hufu-context authority=%s id=%s -->\n", normalizedContextAuthority(item), item.ID)
 		sb.WriteString(strings.TrimSpace(item.Content))
 	}
 	return sb.String()
 }
 
 func compiledResult(items []ContextItem, budget ContextBudget) (CompiledContext, error) {
-	if err := ValidateRequiredItems(items); err != nil {
+	if err := ValidateContextItems(items, time.Now().UTC()); err != nil {
 		return CompiledContext{}, err
 	}
 	ranked := RankContextItems(DeduplicateContextItems(items))
@@ -286,6 +340,31 @@ func compiledResult(items []ContextItem, budget ContextBudget) (CompiledContext,
 	}
 	sort.Strings(selectedIDs)
 	return CompiledContext{Prompt: renderContextItems(selected), IncludedItems: selected, OmittedItems: omitted, UsedTokens: used, OverBudget: overBudget, Fingerprint: hashContentKey(strings.Join(selectedIDs, ",") + "\x00" + renderContextItems(selected))}, nil
+}
+
+func normalizedContextAuthority(item ContextItem) ContextAuthority {
+	if item.Authority != "" {
+		return item.Authority
+	}
+	switch item.Kind {
+	case "current_task", "user_goal", "constraints", "hard_constraints", "approved_plan", "agent_instructions", "project_instructions", "verification_criteria":
+		return ContextAuthorityNormative
+	case "example":
+		return ContextAuthorityExample
+	default:
+		return ContextAuthorityHistorical
+	}
+}
+
+func contextAuthorityRank(authority ContextAuthority) int {
+	switch authority {
+	case ContextAuthorityNormative:
+		return 0
+	case ContextAuthorityExample:
+		return 1
+	default:
+		return 2
+	}
 }
 
 // FormatDependencyResults formats typed task results into a clean markdown context block.
@@ -328,6 +407,9 @@ func FormatDependencyResults(results []TaskResult) string {
 // CompileCoordinatorContext collects all coordinator context sources and executes the pipeline.
 func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInput) (CompiledContext, error) {
 	var items []ContextItem
+	if strings.TrimSpace(input.CorePrompt) != "" {
+		items = append(items, ContextItem{ID: "coordinator_contract", Kind: "constraints", Content: input.CorePrompt, Priority: PriorityHardConstraints, Required: true, DedupKey: hashContentKey(input.CorePrompt), Authority: ContextAuthorityNormative, ConflictKey: "coordinator_contract"})
+	}
 	if strings.TrimSpace(input.Goal) != "" {
 		items = append(items, ContextItem{ID: "current_task", Kind: "current_task", Content: "## Current Task\n\n" + input.Goal, Priority: PriorityUserGoal, Required: true, DedupKey: hashContentKey(input.Goal)})
 	}
@@ -430,7 +512,18 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 	}
 
 	assignTokenCounts(ctx, input.ModelContext.ModelID, items)
-	return compiledResult(items, CalculateContextBudget(input.ModelContext, input.SystemTokens, input.ToolsTokens))
+	compiled, err := compiledResult(items, CalculateContextBudget(input.ModelContext, input.SystemTokens, input.ToolsTokens))
+	if err != nil {
+		return CompiledContext{}, err
+	}
+	if compiled.OverBudget {
+		omitted := make([]string, 0, len(compiled.OmittedItems))
+		for _, item := range compiled.OmittedItems {
+			omitted = append(omitted, item.ID)
+		}
+		return CompiledContext{}, fmt.Errorf("coordinator context exceeds token budget; omitted items would be: %s", strings.Join(omitted, ", "))
+	}
+	return compiled, nil
 }
 
 // CompileWorkerContext collects all worker context sources and executes the pipeline.
@@ -563,6 +656,13 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 	compiled, err := compiledResult(items, budget)
 	if err != nil {
 		return CompiledContext{}, err
+	}
+	if compiled.OverBudget {
+		omitted := make([]string, 0, len(compiled.OmittedItems))
+		for _, item := range compiled.OmittedItems {
+			omitted = append(omitted, item.ID)
+		}
+		return CompiledContext{}, fmt.Errorf("worker context exceeds token budget; omitted items would be: %s", strings.Join(omitted, ", "))
 	}
 	return compiled, nil
 }

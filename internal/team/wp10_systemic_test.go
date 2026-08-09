@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // TestWP10_SystemicCount_AcrossDistinctTasks_EscalatesAtThreshold is the

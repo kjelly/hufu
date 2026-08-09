@@ -7,13 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/anomalyco/hufu/internal/config"
-	"github.com/anomalyco/hufu/internal/hooks"
-	"github.com/anomalyco/hufu/internal/mcp"
-	"github.com/anomalyco/hufu/internal/memory"
-	"github.com/anomalyco/hufu/internal/notify"
-	"github.com/anomalyco/hufu/internal/team"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/hooks"
+	"github.com/kjelly/hufu/internal/mcp"
+	"github.com/kjelly/hufu/internal/memory"
+	"github.com/kjelly/hufu/internal/notify"
+	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 // resolveTeamWorkspacePath computes the per-team workspace directory path

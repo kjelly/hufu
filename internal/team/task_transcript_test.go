@@ -18,7 +18,7 @@ func TestTaskTranscriptCapturesCompleteToolEvidenceAndBuildsManifest(t *testing.
 	if err := transcript.RecordToolCall("call-1", "bash", `{"command":"printf hello"}`); err != nil {
 		t.Fatalf("RecordToolCall() error = %v", err)
 	}
-	if err := transcript.RecordToolResult("call-1", "bash", "hello\nworld\n", false); err != nil {
+	if err := transcript.RecordToolResult("call-1", "bash", "hello\nworld\nExit code: 0", false); err != nil {
 		t.Fatalf("RecordToolResult() error = %v", err)
 	}
 
@@ -40,7 +40,7 @@ func TestTaskTranscriptCapturesCompleteToolEvidenceAndBuildsManifest(t *testing.
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", ref.Path, err)
 	}
-	for _, want := range []string{`"event":"tool_call"`, `"event":"tool_result"`, `printf hello`, "hello\\nworld\\n"} {
+	for _, want := range []string{`"event":"tool_call"`, `"event":"tool_result"`, `"exit_code":0`, `printf hello`, "hello\\nworld\\n"} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("transcript missing %q:\n%s", want, data)
 		}
@@ -90,6 +90,9 @@ func TestVerbatimTaskResultUsesTranscriptManifestInsteadOfWorkerSummary(t *testi
 	}
 	if !strings.Contains(output, result.RawOutputRef.Path) {
 		t.Errorf("coordinator output omitted transcript path:\n%s", output)
+	}
+	if _, err := transcript.Manifest(); err == nil {
+		t.Fatal("sealed transcript remained appendable/manifestable after finalization")
 	}
 }
 

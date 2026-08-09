@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // ModelCLIOverrides collects model-related CLI flag values. Empty fields
@@ -13,6 +13,7 @@ type ModelCLIOverrides struct {
 	MaxTokens         string
 	TopP              string
 	TopK              string
+	ReasoningEffort   string
 	SidecarModel      string
 	GuardModel        string
 	JudgeModel        string
@@ -43,6 +44,9 @@ func applyCLIModelOverrides(cfg *agent.TeamConfig, overrides ModelCLIOverrides) 
 	}
 	if overrides.TopK != "" {
 		cfg.Generation.TopK = overrides.TopK
+	}
+	if overrides.ReasoningEffort != "" {
+		cfg.Generation.ReasoningEffort = overrides.ReasoningEffort
 	}
 	if overrides.SidecarModel != "" {
 		cfg.SidecarModel = overrides.SidecarModel
@@ -77,6 +81,7 @@ func currentModelOverrides() ModelCLIOverrides {
 		MaxTokens:         opts.maxTokensOverride,
 		TopP:              opts.topPOverride,
 		TopK:              opts.topKOverride,
+		ReasoningEffort:   opts.reasoningEffortOverride,
 		SidecarModel:      opts.sidecarModelOverride,
 		GuardModel:        opts.guardModelOverride,
 		JudgeModel:        opts.judgeModelOverride,
@@ -84,11 +89,20 @@ func currentModelOverrides() ModelCLIOverrides {
 	}
 }
 
-// propagateTeamGenerationToAgents copies the team-level Generation and
-// ProviderURL from session.Config into every agent's Generation and
-// ProviderURL. Used after CLI overrides to ensure per-agent dispatch
-// uses the user-requested model.
-func propagateTeamGenerationToAgents(session *team.TeamSession) {
+// applyCLIGenerationOverridesToAgents forces CLI-supplied generation flags
+// onto every agent's Generation, since a CLI flag is the highest-priority
+// configuration layer and must beat both team.yaml and the agent's own
+// frontmatter. Fields left empty in overrides (i.e. not passed on the
+// command line) are left untouched here: the team.yaml/global-default value
+// for those fields already reaches each agent through the normal
+// agent-first/team-fallback resolution in CreateAgent, so force-copying it
+// onto every AgentDef would silently override values an agent's .md
+// frontmatter set intentionally (this used to be the case and was a bug —
+// see spec.md item 1).
+//
+// ProviderURL has no CLI override in this flow, so it only fills in the
+// team-level value when the agent hasn't set its own.
+func applyCLIGenerationOverridesToAgents(session *team.TeamSession, overrides ModelCLIOverrides) {
 	if session == nil {
 		return
 	}
@@ -96,22 +110,25 @@ func propagateTeamGenerationToAgents(session *team.TeamSession) {
 		if def == nil {
 			continue
 		}
-		if session.Config.Generation.Model != "" {
-			def.Generation.Model = session.Config.Generation.Model
+		if overrides.Model != "" {
+			def.Generation.Model = overrides.Model
 		}
-		if session.Config.Generation.Temperature != "" {
-			def.Generation.Temperature = session.Config.Generation.Temperature
+		if overrides.Temperature != "" {
+			def.Generation.Temperature = overrides.Temperature
 		}
-		if session.Config.Generation.MaxTokens != "" {
-			def.Generation.MaxTokens = session.Config.Generation.MaxTokens
+		if overrides.MaxTokens != "" {
+			def.Generation.MaxTokens = overrides.MaxTokens
 		}
-		if session.Config.Generation.TopP != "" {
-			def.Generation.TopP = session.Config.Generation.TopP
+		if overrides.TopP != "" {
+			def.Generation.TopP = overrides.TopP
 		}
-		if session.Config.Generation.TopK != "" {
-			def.Generation.TopK = session.Config.Generation.TopK
+		if overrides.TopK != "" {
+			def.Generation.TopK = overrides.TopK
 		}
-		if session.Config.ProviderURL != "" {
+		if overrides.ReasoningEffort != "" {
+			def.Generation.ReasoningEffort = overrides.ReasoningEffort
+		}
+		if def.ProviderURL == "" && session.Config.ProviderURL != "" {
 			def.ProviderURL = session.Config.ProviderURL
 		}
 	}

@@ -4,9 +4,9 @@ import (
 	"context"
 
 	"charm.land/fantasy"
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/memory"
-	"github.com/anomalyco/hufu/internal/sidecar"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/memory"
+	"github.com/kjelly/hufu/internal/sidecar"
 )
 
 // Planner defines the interface for task planning, prompt segment parsing, and duplicate checking.

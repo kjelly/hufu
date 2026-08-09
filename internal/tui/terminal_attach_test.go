@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestDetailTerminalAttachStartsProcessCommand(t *testing.T) {

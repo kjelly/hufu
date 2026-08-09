@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,11 +13,12 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openai"
 	"charm.land/fantasy/providers/openaicompat"
 
-	"github.com/anomalyco/hufu/internal/config"
-	"github.com/anomalyco/hufu/internal/notify"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/notify"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 const DefaultMaxSteps = 30
@@ -35,6 +38,49 @@ type GenerationParams struct {
 	MaxTokens   string
 	TopP        string
 	TopK        string
+	// ReasoningEffort controls how much a reasoning-capable model "thinks"
+	// before answering: high, medium, low, or none. Passed through to
+	// Ollama's OpenAI-compatible reasoning_effort request field.
+	ReasoningEffort string
+}
+
+// ValidReasoningEfforts are the reasoning_effort values Ollama's
+// OpenAI-compatible endpoint accepts.
+var ValidReasoningEfforts = map[string]bool{
+	"high":   true,
+	"medium": true,
+	"low":    true,
+	"none":   true,
+}
+
+// ProviderCapabilities describes which generation-parameter knobs a wire
+// protocol actually forwards to the backend. Fantasy silently drops an
+// AgentOption/AgentCall field the active provider implementation doesn't
+// read — it does not error — so a sampler configured against an
+// unsupporting provider looks like it "did nothing" with no indication why.
+type ProviderCapabilities struct {
+	TopK            bool
+	ReasoningEffort bool
+}
+
+// OpenAICompatCapabilities describes what OllamaProvider (backed by
+// Fantasy's openaicompat provider, the only wire protocol Hufu currently
+// speaks — see NewOllamaProvider) actually forwards. Ollama's
+// OpenAI-compatible /v1/chat/completions endpoint has no top_k field but
+// does support reasoning_effort.
+var OpenAICompatCapabilities = ProviderCapabilities{TopK: false, ReasoningEffort: true}
+
+var unsupportedSamplerWarnSeen sync.Map
+
+// warnUnsupportedSamplerOnce logs once per (agent, param) pair that a
+// configured sampler has no effect against the active provider, instead of
+// leaving the mismatch to look like a silent no-op.
+func warnUnsupportedSamplerOnce(agentName, param string) {
+	key := agentName + ":" + param
+	if _, loaded := unsupportedSamplerWarnSeen.LoadOrStore(key, struct{}{}); loaded {
+		return
+	}
+	log.Printf("warning: agent %q configures %s, but Hufu's OpenAI-compatible provider (Ollama) does not forward it to the backend — the setting has no effect", agentName, param)
 }
 
 type MCPInputConfig struct {
@@ -178,15 +224,17 @@ type TeamConfig struct {
 	MaxCoordinatorTurns int
 	// EscalateOnRetry makes every task retry escalate to the next stronger
 	// model in ModelList (ordered weakest→strongest) by default.
-	EscalateOnRetry   bool
-	Notify            notify.NotifyConfig
-	AllowedPaths      []string
-	RestrictedPath    string
-	NoNet             bool
-	ForceMCP          bool
-	ProjectContext    bool
-	Shell             string
-	Vars              map[string]interface{}
+	EscalateOnRetry bool
+	Notify          notify.NotifyConfig
+	AllowedPaths    []string
+	RestrictedPath  string
+	NoNet           bool
+	ForceMCP        bool
+	ProjectContext  bool
+	Shell           string
+	Vars            map[string]interface{}
+	// WorkerContextSize bounds the injected project context (AGENTS.md) in
+	// tokens, not characters — see coordinator's getWorkerContextSize.
 	WorkerContextSize int
 	ToolsAllowed      []string // List of explicitly allowed tools
 	ToolsDenied       []string // List of tools never exposed to workers in this team
@@ -229,12 +277,25 @@ type TeamConfig struct {
 // It is deliberately expressed in terms of configured worker names rather
 // than provider, project, or task-domain concepts.
 type DelegationPolicy struct {
+	// AllowedWorkers limits which configured workers the coordinator may
+	// dispatch. An empty list preserves the legacy behavior of allowing every
+	// configured worker; a non-empty list is both a schema and runtime boundary.
+	AllowedWorkers []string
 	// InitialBatch is the ordered worker set required for the first delegation.
 	// It is enforced only when RequireExactInitialBatch is true.
 	InitialBatch []string
 	// RequireExactInitialBatch rejects a first delegation whose cardinality or
 	// worker order differs from InitialBatch.
 	RequireExactInitialBatch bool
+	// InitialCoordinatorTool, when non-empty, requires the coordinator's first
+	// tool call to use this generic tool name. It prevents exploratory
+	// coordinator actions from preceding a configured initial batch.
+	InitialCoordinatorTool string
+	// BindInitialTaskContracts replaces the execution and output contracts of
+	// the configured first batch with same-named static team task contracts.
+	// It lets a team freeze safety-critical initial checkpoints without making
+	// the coordinator reproduce a long provider JSON object.
+	BindInitialTaskContracts bool
 	// NoRedispatchAfterSuccess lists workers that may not be delegated again
 	// after one of their tasks reached a successful terminal result.
 	NoRedispatchAfterSuccess []string
@@ -455,6 +516,66 @@ func (p *OllamaProvider) ListModelNames(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
+// OllamaShowContextTimeout bounds a single /api/show probe so an unreachable
+// or slow endpoint cannot stall team startup; callers still control overall
+// deadline via ctx.
+const OllamaShowContextTimeout = 3 * time.Second
+
+// DetectOllamaContextLength queries Ollama's native /api/show endpoint (not
+// the OpenAI-compatible /v1 surface most of this package talks to) for
+// modelName's configured context length. baseURL is the OpenAI-compatible
+// base (e.g. "http://localhost:11434/v1"); the trailing /v1 is stripped to
+// reach Ollama's native API root.
+//
+// Ollama reports context length as one of several architecture-prefixed
+// model_info keys (e.g. "qwen2.context_length", "llama.context_length")
+// rather than a single stable field, so this scans for any key ending in
+// ".context_length" and returns the largest value found.
+//
+// Returns 0 with a nil error when no such key is present (e.g. talking to a
+// non-Ollama OpenAI-compatible endpoint) — callers should treat that as "fall
+// back to the static registry", not as failure.
+func DetectOllamaContextLength(ctx context.Context, baseURL, apiKey, modelName string) (int, error) {
+	root := strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/v1")
+	reqBody, err := json.Marshal(map[string]string{"model": modelName})
+	if err != nil {
+		return 0, fmt.Errorf("encode /api/show request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, root+"/api/show", bytes.NewReader(reqBody))
+	if err != nil {
+		return 0, fmt.Errorf("build /api/show request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	client := &http.Client{Timeout: OllamaShowContextTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("query %s/api/show: %w", root, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("query %s/api/show: status %s", root, resp.Status)
+	}
+	var payload struct {
+		ModelInfo map[string]any `json:"model_info"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return 0, fmt.Errorf("decode /api/show response: %w", err)
+	}
+	best := 0
+	for key, v := range payload.ModelInfo {
+		if !strings.HasSuffix(key, ".context_length") {
+			continue
+		}
+		if f, ok := v.(float64); ok && int(f) > best {
+			best = int(f)
+		}
+	}
+	return best, nil
+}
+
 // ParseModelProvider extracts the provider prefix and model name from a model ID.
 // "ollama/qwen3:8b" → ("ollama", "qwen3:8b")
 // "qwen3:8b" → ("", "qwen3:8b")
@@ -592,7 +713,21 @@ func CreateAgent(ctx context.Context, ollama *OllamaProvider, cfg AgentConfig, a
 		opts = append(opts, fantasy.WithTopP(topP))
 	}
 	if topK := parseModelInt(cfg.Def.Generation.TopK, cfg.TeamConfig.Generation.TopK); topK > 0 {
-		opts = append(opts, fantasy.WithTopK(int64(topK)))
+		if OpenAICompatCapabilities.TopK {
+			opts = append(opts, fantasy.WithTopK(int64(topK)))
+		} else {
+			warnUnsupportedSamplerOnce(cfg.Def.Name, "top-k")
+		}
+	}
+	if effort := cfg.Def.Generation.ReasoningEffort; effort != "" || cfg.TeamConfig.Generation.ReasoningEffort != "" {
+		if effort == "" {
+			effort = cfg.TeamConfig.Generation.ReasoningEffort
+		}
+		if ValidReasoningEfforts[effort] {
+			opts = append(opts, fantasy.WithProviderOptions(openaicompat.NewProviderOptions(&openaicompat.ProviderOptions{
+				ReasoningEffort: new(openai.ReasoningEffort(effort)),
+			})))
+		}
 	}
 
 	maxSteps := cfg.MaxSteps

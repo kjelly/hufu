@@ -9,10 +9,10 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/config"
-	"github.com/anomalyco/hufu/internal/sidecar"
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/sidecar"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // autoSelectTeam picks the team best suited to the prompt. It prefers an LLM

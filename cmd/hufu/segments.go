@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anomalyco/hufu/internal/team"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 func handleSegmentError(ctx context.Context, tc *teamContext, results []string, err error, kind string, args ...any) (string, error) {

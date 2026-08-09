@@ -12,7 +12,7 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // ── Deliverable verification ──────────────────────────────────────────────────

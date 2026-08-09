@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // TranslateLegacyVerification converts only legacy commands whose assertion

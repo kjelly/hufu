@@ -9,6 +9,8 @@ import (
 	"unicode"
 
 	"charm.land/fantasy"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // TokenCounter measures token counts for text, messages, and tool definitions.
@@ -26,6 +28,19 @@ type ModelContextSpec struct {
 	SafetyMarginTokens int    `json:"safety_margin_tokens"`
 	Estimator          string `json:"estimator"` // e.g. "tiktoken", "claude", "qwen", "llama", "estimated"
 	IsEstimated        bool   `json:"is_estimated"`
+}
+
+// WithEffectiveMaxOutputTokens returns a copy of spec whose MaxOutputTokens
+// reflects the caller's actually-configured generation max-tokens
+// (agent.md / team.yaml / CLI) instead of the static per-model-family
+// registry default. The context budget must reserve however much output the
+// request will really allow (spec.md item 2); a non-positive effective
+// value leaves spec unchanged, falling back to the registry's guess.
+func (spec ModelContextSpec) WithEffectiveMaxOutputTokens(effective int) ModelContextSpec {
+	if effective > 0 {
+		spec.MaxOutputTokens = effective
+	}
+	return spec
 }
 
 // ContextBudget breaks down token allocation across prompt sections and output reply.
@@ -133,6 +148,57 @@ func (r *ModelSpecRegistry) initDefaults() {
 	for _, spec := range defaults {
 		r.specs[spec.ModelID] = spec
 	}
+}
+
+// GlobalModelSpecRegistry returns the process-wide model spec registry used
+// by CalculateContextBudget's callers throughout this package. Exposed so
+// callers outside internal/team (team setup in cmd/hufu) can register
+// runtime-detected specs, e.g. from DetectAndCacheOllamaContextLengths.
+func GlobalModelSpecRegistry() *ModelSpecRegistry {
+	return globalRegistry
+}
+
+// DetectAndCacheOllamaContextLengths probes baseURL's Ollama-native
+// /api/show endpoint for each model in modelIDs and registers its real
+// context length as an override in the global model spec registry, so
+// context-budget accounting reflects the model actually being talked to
+// instead of Hufu's static per-family fallback (spec.md item 2). Only
+// models whose current spec is already flagged estimated are probed —
+// models with an exact hardcoded entry (e.g. "gpt-4o", "claude-3-5-sonnet")
+// are skipped, since those specs are already accurate and probing them
+// would just be a wasted round-trip to a non-Ollama endpoint.
+//
+// Best-effort and bounded: each probe races against its own timeout, probes
+// run concurrently, and a failed/unreachable/non-Ollama endpoint is silently
+// skipped per model rather than treated as an error.
+func DetectAndCacheOllamaContextLengths(ctx context.Context, baseURL, apiKey string, modelIDs []string) {
+	seen := make(map[string]bool, len(modelIDs))
+	var wg sync.WaitGroup
+	for _, modelID := range modelIDs {
+		if modelID == "" || seen[modelID] {
+			continue
+		}
+		seen[modelID] = true
+		if !globalRegistry.GetSpec(modelID).IsEstimated {
+			continue
+		}
+		wg.Add(1)
+		go func(modelID string) {
+			defer wg.Done()
+			_, name := agent.ParseModelProvider(modelID)
+			probeCtx, cancel := context.WithTimeout(ctx, agent.OllamaShowContextTimeout)
+			defer cancel()
+			length, err := agent.DetectOllamaContextLength(probeCtx, baseURL, apiKey, name)
+			if err != nil || length <= 0 {
+				return
+			}
+			spec := globalRegistry.GetSpec(modelID)
+			spec.ModelID = strings.ToLower(modelID)
+			spec.ContextWindow = length
+			globalRegistry.RegisterSpec(spec)
+		}(modelID)
+	}
+	wg.Wait()
 }
 
 func (r *ModelSpecRegistry) RegisterSpec(spec ModelContextSpec) {
@@ -336,6 +402,34 @@ func CalculateContextBudget(spec ModelContextSpec, systemTokens, toolsTokens int
 		SafetyMargin:  margin,
 		Available:     avail,
 	}
+}
+
+// TruncateToTokenBudget returns a prefix of text whose estimated token count
+// (via estimator) is at most maxTokens, appending a truncation marker when
+// text had to be cut. Unlike CapStepMessagesWithCounter (which shapes chat
+// messages), this operates on a single raw string — e.g. project context
+// injected once per session (spec.md item 7: worker-context-size must be a
+// token budget, not a character count, to stay consistent with the rest of
+// Hufu's token-aware context accounting).
+//
+// estimateTextTokens's weighted character-category sum only grows as text
+// grows, so a binary search over the rune-length cutoff finds the longest
+// prefix within budget.
+func TruncateToTokenBudget(text, estimator string, maxTokens int) string {
+	if maxTokens <= 0 || estimateTextTokens(text, estimator) <= maxTokens {
+		return text
+	}
+	runes := []rune(text)
+	lo, hi := 0, len(runes)
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if estimateTextTokens(string(runes[:mid]), estimator) <= maxTokens {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return string(runes[:lo]) + "\n\n... [truncated]"
 }
 
 // IsContextOverflowError checks if an error indicates a model context length overflow.

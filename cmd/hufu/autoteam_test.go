@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/sidecar"
+	"github.com/kjelly/hufu/internal/sidecar"
 )
 
 func TestTokenSet_FiltersStopwordsAndShort(t *testing.T) {

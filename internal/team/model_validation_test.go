@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestNearestModelNames(t *testing.T) {

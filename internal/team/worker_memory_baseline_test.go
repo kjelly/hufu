@@ -27,8 +27,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	contextstore "github.com/anomalyco/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 // --- Shared memory injection baseline ---

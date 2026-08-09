@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/memory"
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/memory"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestLoadTeamCommon_RejectsStrictWorkspaceBeforeWrite(t *testing.T) {

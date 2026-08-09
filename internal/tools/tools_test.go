@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/audit"
+	"github.com/kjelly/hufu/internal/audit"
 )
 
 func TestAuditLogger_Context(t *testing.T) {

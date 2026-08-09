@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/anomalyco/hufu/internal/readline"
+	"github.com/kjelly/hufu/internal/readline"
 )
 
 // chatCompleter provides tab completion for the chat REPL. It completes

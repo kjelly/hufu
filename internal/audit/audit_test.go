@@ -9,7 +9,7 @@ import (
 
 	"time"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // TestNewAuditLogger tests the NewAuditLogger function

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/tools"
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 func detectFailureSource(err error) string {
@@ -269,6 +269,17 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 		}
 		if forcedStatus == nil && (limited || hypothesisInvalid || systemic) && c.reliabilityConfig().HardEnforcement {
 			status = TaskBlocked
+		}
+		// A blocked worker is a terminal safety decision, not an invitation for
+		// the coordinator to improvise a follow-up task.  In particular, a
+		// failed closed tool sequence may have already performed earlier steps;
+		// redispatching an auditor or repair worker without an explicit
+		// reconciliation boundary can duplicate side effects and invalidate the
+		// evidence.  Force the coordinator into wrap-up before another
+		// delegation can be accepted.  Explicit acceptance recovery remains the
+		// only path that may continue after the operator has acknowledged it.
+		if status == TaskBlocked {
+			c.wrapUp.Store(1)
 		}
 		if cancelled {
 			// §5.3: cancelled tasks surface as a dedicated event so the run

@@ -5,9 +5,9 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/anomalyco/hufu/internal/readline"
-	"github.com/anomalyco/hufu/internal/team"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/readline"
+	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 // globalPromptReader is the shared readline reader; stored atomically so the

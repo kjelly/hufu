@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"bytes"
+	"context"
+	"log"
+	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/config"
 )
 
 // TestParseModelInt tests the parseModelInt function
@@ -603,5 +607,46 @@ func TestExpandImpliedTools(t *testing.T) {
 				t.Errorf("ExpandImpliedTools(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestCreateAgentWarnsOnUnsupportedTopK verifies spec.md item 6: since
+// Hufu's only wire protocol (OllamaProvider, backed by Fantasy's
+// openaicompat provider) has no top_k field, configuring top-k must warn
+// instead of silently doing nothing.
+func TestCreateAgentWarnsOnUnsupportedTopK(t *testing.T) {
+	ollama, err := NewOllamaProvider("http://127.0.0.1:1/v1", "key", "ollama")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var logBuf bytes.Buffer
+	origOutput := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(origOutput) })
+
+	cfg := AgentConfig{
+		Def: &AgentDef{
+			Name:       "unique-topk-test-agent",
+			System:     "test",
+			Generation: GenerationParams{Model: "test-model", TopK: "40"},
+		},
+		TeamConfig: &TeamConfig{},
+	}
+	if _, err := CreateAgent(context.Background(), ollama, cfg, nil); err != nil {
+		t.Fatalf("CreateAgent() error = %v", err)
+	}
+
+	if !strings.Contains(logBuf.String(), "unique-topk-test-agent") || !strings.Contains(logBuf.String(), "top-k") {
+		t.Errorf("expected a warning naming the agent and top-k, got log output: %q", logBuf.String())
+	}
+
+	// A repeat call for the same agent+param must not spam the log again.
+	logBuf.Reset()
+	if _, err := CreateAgent(context.Background(), ollama, cfg, nil); err != nil {
+		t.Fatalf("CreateAgent() error = %v", err)
+	}
+	if logBuf.Len() != 0 {
+		t.Errorf("expected no repeat warning, got: %q", logBuf.String())
 	}
 }

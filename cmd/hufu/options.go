@@ -13,6 +13,7 @@ type runOptions struct {
 	maxTokensOverride         string
 	topPOverride              string
 	topKOverride              string
+	reasoningEffortOverride   string
 	sidecarModelOverride      string
 	guardModelOverride        string
 	judgeModelOverride        string

@@ -8,8 +8,8 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 type PlanEntry struct {

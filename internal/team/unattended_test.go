@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func newBudgetCoordinator(t *testing.T) *Coordinator {
@@ -394,5 +394,60 @@ func TestLoopDetection_ToolCallAbort(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "stuck in a loop executing the same failing command") {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestCoordinatorToolErrorTerminatesOrchestratorStream(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	c.session.Workspace = t.TempDir()
+
+	ag := &mockAgent{
+		streamFunc: func(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+			if err := call.OnToolCall(fantasy.ToolCallContent{
+				ToolCallID: "coordinator-grep-1",
+				ToolName:   "grep",
+				Input:      `{"pattern":"--invalid"}`,
+			}); err != nil {
+				return nil, err
+			}
+
+			var errRes fantasy.ToolResultOutputContentError
+			errRes.Error = errors.New("rg: unrecognized flag --invalid")
+			if err := call.OnToolResult(fantasy.ToolResultContent{
+				ToolCallID: "coordinator-grep-1",
+				ToolName:   "grep",
+				Result:     errRes,
+			}); err != nil {
+				return nil, err
+			}
+
+			return nil, fmt.Errorf("coordinator continued after a failed tool call")
+		},
+	}
+
+	ctx := context.WithValue(context.Background(), todoIDKey{}, CoordTodoID)
+	_, _, err := c.runAgentWithStatusAndHistory(ctx, ag, "coordinator", "coordinate task", nil, &taskTiming{})
+	if err == nil {
+		t.Fatal("expected coordinator tool error to terminate the stream")
+	}
+	if !errors.Is(err, errCoordinatorToolFailure) {
+		t.Errorf("expected coordinator tool failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), `tool "grep" failed`) {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestWrapUpRecoveryDoesNotRetryCoordinatorToolFailure(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	c.SetWrapUp()
+	c.runOrchestratorOverride = func(context.Context, *agent.AgentDef, string) (string, []fantasy.StepResult, error) {
+		t.Fatal("wrap-up recovery must not invoke the coordinator after a direct tool failure")
+		return "", nil, nil
+	}
+
+	_, _, recovered := c.attemptWrapUpRecovery(context.Background(), &agent.AgentDef{}, fmt.Errorf("%w: tool %q failed", errCoordinatorToolFailure, "grep"))
+	if recovered {
+		t.Fatal("coordinator tool failure must not be recovered with another model turn")
 	}
 }

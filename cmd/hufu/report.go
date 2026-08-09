@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/team"
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 var taskStatusIcons = map[team.TaskStatus]string{

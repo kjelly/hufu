@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // TestResultProtocolInstructionsStateTheContract covers the prompt half of the
@@ -58,13 +58,29 @@ func TestResultProtocolInstructionsStateTheContract(t *testing.T) {
 			}
 			// The instruction is only useful if it says a prose ending fails and
 			// that a truthful non-success status is preferred over a false one.
-			for _, needle := range []string{"not complete until", "partial"} {
+			for _, needle := range []string{"not complete until", "partial", "open_questions", "do not send arbitrary object shapes"} {
 				if !strings.Contains(got, needle) {
 					t.Errorf("result protocol instructions missing %q: %q", needle, got)
 				}
 			}
 			if tc.name == "closed sequence is stated" && !strings.Contains(got, "bash → submit_result") {
 				t.Errorf("closed sequence missing from prompt: %q", got)
+			}
+			if tc.name == "closed sequence is stated" {
+				for _, needle := range []string{
+					"first assistant action",
+					"Do not plan aloud",
+					"status `failed` or `blocked`",
+					"Each listed position is exactly one tool call",
+					"never repeat, revise, or repair that slot",
+					"early `submit_result`",
+					"descriptive requirements, not extra protocol slots",
+					"never add a discovery/probe call",
+				} {
+					if !strings.Contains(got, needle) {
+						t.Errorf("closed sequence prompt missing %q: %q", needle, got)
+					}
+				}
 			}
 		})
 	}

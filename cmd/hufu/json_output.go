@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // jsonRunOutput is the machine-readable shape emitted by --output json.

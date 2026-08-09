@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 const sessionMDFile = "chat_history.md"

@@ -3,8 +3,8 @@ package team
 import (
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
 )
 
 func TestNextStrongerModel(t *testing.T) {

@@ -28,9 +28,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	contextstore "github.com/anomalyco/hufu/internal/context"
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // WorkerMemoryRecallRequest is the input to the recall service.

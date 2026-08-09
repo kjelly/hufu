@@ -11,14 +11,14 @@ import (
 
 	"github.com/manifoldco/promptui"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/config"
-	"github.com/anomalyco/hufu/internal/hooks"
-	"github.com/anomalyco/hufu/internal/mcp"
-	"github.com/anomalyco/hufu/internal/notify"
-	"github.com/anomalyco/hufu/internal/readline"
-	"github.com/anomalyco/hufu/internal/team"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/hooks"
+	"github.com/kjelly/hufu/internal/mcp"
+	"github.com/kjelly/hufu/internal/notify"
+	"github.com/kjelly/hufu/internal/readline"
+	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 type teamContext struct {
@@ -75,6 +75,35 @@ func applyUnattendedAndBudget(coordinator *team.Coordinator, session *team.TeamS
 	return nil
 }
 
+// modelsInUse collects the distinct model IDs this run may dispatch to: every
+// agent's own model, the team default, and each named role model. Used to
+// scope the Ollama context-length probe (team.DetectAndCacheOllamaContextLengths)
+// to models actually in play instead of guessing.
+func modelsInUse(session *team.TeamSession, sidecarModel, guardModel, judgeModel, planReviewerModel string, modelList []config.ModelEntry) []string {
+	seen := map[string]bool{}
+	var models []string
+	add := func(m string) {
+		if m != "" && !seen[m] {
+			seen[m] = true
+			models = append(models, m)
+		}
+	}
+	add(session.Config.Generation.Model)
+	add(sidecarModel)
+	add(guardModel)
+	add(judgeModel)
+	add(planReviewerModel)
+	for _, def := range session.Agents {
+		if def != nil {
+			add(def.Generation.Model)
+		}
+	}
+	for _, entry := range modelList {
+		add(entry.ID)
+	}
+	return models
+}
+
 // loadTeamCommon is the shared post-load setup for both named and default
 // teams. It handles workspace creation, session lifecycle, model/provider
 // resolution, coordinator construction, and notification setup.
@@ -82,14 +111,15 @@ func applyUnattendedAndBudget(coordinator *team.Coordinator, session *team.TeamS
 // and have its Workspace set.
 func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSession, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, registry *team.TeamRegistry, forcedSkills []string, planMode bool, autoSkillsMode bool, buildMCP bool) (*teamContext, error) {
 	// Apply CLI model overrides as the highest-priority model config layer.
-	applyCLIModelOverrides(&session.Config, currentModelOverrides())
+	cliModelOverrides := currentModelOverrides()
+	applyCLIModelOverrides(&session.Config, cliModelOverrides)
 	applyCLITimeoutOverrides(session, currentTimeoutOverrides())
 	applyCLIVerifyTimeoutOverrides(session, currentVerifyTimeoutOverrides())
 	applyCLITuningOverrides(session, currentTuningOverrides())
 	if opts.goalMode != "" {
 		session.Config.GoalMode = opts.goalMode
 	}
-	propagateTeamGenerationToAgents(session)
+	applyCLIGenerationOverridesToAgents(session, cliModelOverrides)
 
 	execProfile, err := team.ResolveExecutionProfile(opts.executionProfile, session.Config.ExecutionProfile)
 	if err != nil {
@@ -135,6 +165,8 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err := resolveAndCheckModel(session, cfg); err != nil {
 		return nil, err
 	}
+
+	team.DetectAndCacheOllamaContextLengths(ctx, resolvedProviderURL, resolvedProviderAPIKey, modelsInUse(session, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedModelList))
 
 	allowedPaths := buildAllowedPaths(session, registry, cfg)
 

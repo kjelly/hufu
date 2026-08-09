@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anomalyco/hufu/internal/config"
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // newRootCommand builds the root `hufu` command: subcommands, flags bound to
@@ -100,6 +100,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringVar(&opts.maxTokensOverride, "max-tokens", "", "Override max output tokens (e.g. 4096)")
 	rootCmd.Flags().StringVar(&opts.topPOverride, "top-p", "", "Override top-p value (e.g. 0.9)")
 	rootCmd.Flags().StringVar(&opts.topKOverride, "top-k", "", "Override top-k value (e.g. 40)")
+	rootCmd.Flags().StringVar(&opts.reasoningEffortOverride, "reasoning-effort", "", "Override reasoning effort: high, medium, low, or none")
 	rootCmd.Flags().StringVar(&opts.sidecarModelOverride, "sidecar-model", "", "Override sidecar model used for skill matching (e.g. ollama/qwen3:1b); falls back to --model when not set")
 	rootCmd.Flags().StringVar(&opts.guardModelOverride, "guard-model", "", "Override guard model used for output review (e.g. ollama/qwen3:8b); falls back to --model when not set")
 	rootCmd.Flags().StringVar(&opts.judgeModelOverride, "judge-model", "", "Override judge model used to pick the best multi-model result (e.g. ollama/qwen3:8b); falls back to the sidecar model when not set")

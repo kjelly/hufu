@@ -13,8 +13,8 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 // recordingTool reports whether its Run was reached, so a denial can be
@@ -23,6 +23,7 @@ type recordingTool struct {
 	name  string
 	ran   bool
 	calls int
+	resp  fantasy.ToolResponse
 }
 
 func (t *recordingTool) Info() fantasy.ToolInfo { return fantasy.ToolInfo{Name: t.name} }
@@ -36,6 +37,9 @@ func (t *recordingTool) SetProviderOptions(fantasy.ProviderOptions) {}
 func (t *recordingTool) Run(context.Context, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	t.ran = true
 	t.calls++
+	if t.resp.IsError {
+		return t.resp, nil
+	}
 	return fantasy.NewTextResponse("ran"), nil
 }
 
@@ -72,6 +76,64 @@ func TestPolicyGateDenialIsRecoverable(t *testing.T) {
 	}
 }
 
+func TestPolicyGateCoordinatorPolicyDenialsAreTerminal(t *testing.T) {
+	tests := []struct {
+		name    string
+		tool    string
+		allowed []string
+		policy  agent.DelegationPolicy
+	}{
+		{
+			name:    "initial coordinator tool ordering",
+			tool:    "view",
+			allowed: []string{"view", "agent"},
+			policy:  agent.DelegationPolicy{InitialCoordinatorTool: "agent"},
+		},
+		{
+			name:    "coordinator authorization",
+			tool:    "bash",
+			allowed: []string{"view"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := gateTestCoordinator()
+			c.session.Config.Delegation = tt.policy
+			c.taskTracker = NewTaskTracker()
+			inner := &recordingTool{name: tt.tool}
+			gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
+			ctx := tools.SetToolsAllowed(context.Background(), tt.allowed)
+			ctx = context.WithValue(ctx, todoIDKey{}, CoordTodoID)
+
+			_, err := gated.Run(ctx, fantasy.ToolCall{ID: "coordinator-policy-denial", Name: tt.tool})
+			if !errors.Is(err, errCoordinatorToolFailure) {
+				t.Fatalf("denial error = %v, want terminal coordinator tool failure", err)
+			}
+			if inner.ran {
+				t.Fatal("denied coordinator tool must not execute")
+			}
+		})
+	}
+}
+
+func TestPolicyGateCoordinatorToolErrorResponseIsTerminal(t *testing.T) {
+	c := gateTestCoordinator()
+	c.taskTracker = NewTaskTracker()
+	inner := &recordingTool{name: "agent", resp: fantasy.NewTextErrorResponse("first delegation must contain exactly the configured initial batch")}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"agent"})
+	ctx = context.WithValue(ctx, todoIDKey{}, CoordTodoID)
+
+	_, err := gated.Run(ctx, fantasy.ToolCall{ID: "invalid-initial-batch", Name: "agent"})
+	if !errors.Is(err, errCoordinatorToolFailure) {
+		t.Fatalf("tool error = %v, want terminal coordinator tool failure", err)
+	}
+	if !inner.ran {
+		t.Fatal("inner tool should have run before its rejected delegation response")
+	}
+}
+
 func TestPolicyGateAllowsGrantedTool(t *testing.T) {
 	c := gateTestCoordinator()
 	inner := &recordingTool{name: "bash"}
@@ -103,7 +165,7 @@ func TestPolicyGateEnforcesClosedTaskToolSequence(t *testing.T) {
 	}
 
 	ctx := tools.SetToolsAllowed(context.Background(), []string{"bash", "ls", "request_agent", "submit_result"})
-	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence([]string{"bash", "bash", "submit_result"}))
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence([]string{"bash", "bash", "submit_result"}, nil, "", nil))
 	for _, name := range []string{"bash", "bash"} {
 		if resp, err := byName[name].Run(ctx, fantasy.ToolCall{Name: name}); err != nil || resp.IsError {
 			t.Fatalf("expected sequence tool %q to run: response=%+v err=%v", name, resp, err)
@@ -120,12 +182,96 @@ func TestPolicyGateEnforcesClosedTaskToolSequence(t *testing.T) {
 		t.Fatalf("closed sequence allowed extra tools: ls=%t request_agent=%t", ls.ran, delegate.ran)
 	}
 
-	if resp, err := byName["submit_result"].Run(ctx, fantasy.ToolCall{Name: "submit_result"}); err != nil || resp.IsError {
-		t.Fatalf("terminal result must be admitted: response=%+v err=%v", resp, err)
+	if resp, err := byName["submit_result"].Run(ctx, fantasy.ToolCall{Name: "submit_result", Input: `{"status":"success","summary":"done"}`}); err != nil || !resp.IsError {
+		t.Fatalf("success after an out-of-order tool must be denied: response=%+v err=%v", resp, err)
+	}
+	if resp, err := byName["submit_result"].Run(ctx, fantasy.ToolCall{Name: "submit_result", Input: `{"status":"failed","summary":"sequence violation"}`}); err != nil || resp.IsError {
+		t.Fatalf("failed terminal result must be admitted after a sequence violation: response=%+v err=%v", resp, err)
 	}
 	resp, err := byName["bash"].Run(ctx, fantasy.ToolCall{Name: "bash"})
 	if err != nil || !resp.IsError || bash.calls != 2 {
 		t.Fatalf("post-result tool must be denied without another execution: response=%+v err=%v bash.calls=%d", resp, err, bash.calls)
+	}
+}
+
+func TestPolicyGateEnforcesExactToolInputSequence(t *testing.T) {
+	c := gateTestCoordinator()
+	bash := &recordingTool{name: "bash"}
+	result := &recordingTool{name: "submit_result"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{bash, result})
+	byName := map[string]fantasy.AgentTool{}
+	for _, tool := range gated {
+		byName[tool.Info().Name] = tool
+	}
+
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"bash", "submit_result"})
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence(
+		[]string{"bash", "submit_result"},
+		[]map[string]any{{"command": "pwd"}, {}},
+		"",
+		nil,
+	))
+
+	wrong := fantasy.ToolCall{Name: "bash", Input: `{"command":"go version"}`}
+	if resp, err := byName["bash"].Run(ctx, wrong); err != nil || !resp.IsError {
+		t.Fatalf("wrong constrained input must be denied: response=%+v err=%v", resp, err)
+	}
+	if bash.ran {
+		t.Fatal("mismatched input must not reach the underlying tool")
+	}
+	failed := fantasy.ToolCall{Name: "submit_result", Input: `{"status":"failed","summary":"input mismatch"}`}
+	if resp, err := byName["submit_result"].Run(ctx, failed); err != nil || resp.IsError {
+		t.Fatalf("failed terminal result must be admitted after an input violation: response=%+v err=%v", resp, err)
+	}
+
+	ctx = tools.SetToolsAllowed(context.Background(), []string{"bash", "submit_result"})
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence(
+		[]string{"bash", "submit_result"},
+		[]map[string]any{{"command": "pwd"}, {}},
+		"",
+		nil,
+	))
+	matching := fantasy.ToolCall{Name: "bash", Input: `{"command":"pwd"}`}
+	if resp, err := byName["bash"].Run(ctx, matching); err != nil || resp.IsError {
+		t.Fatalf("matching constrained input must run: response=%+v err=%v", resp, err)
+	}
+}
+
+func TestPolicyGateEnforcesScalarToolInputSequence(t *testing.T) {
+	c := gateTestCoordinator()
+	bash := &recordingTool{name: "bash"}
+	result := &recordingTool{name: "submit_result"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{bash, result})
+	byName := map[string]fantasy.AgentTool{}
+	for _, tool := range gated {
+		byName[tool.Info().Name] = tool
+	}
+
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"bash", "submit_result"})
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence(
+		[]string{"bash", "submit_result"},
+		nil,
+		"command",
+		[]string{"pwd", ""},
+	))
+	wrong := fantasy.ToolCall{Name: "bash", Input: `{"command":"go version"}`}
+	if resp, err := byName["bash"].Run(ctx, wrong); err != nil || !resp.IsError {
+		t.Fatalf("wrong scalar constrained input must be denied: response=%+v err=%v", resp, err)
+	}
+	if bash.ran {
+		t.Fatal("mismatched scalar input must not reach the underlying tool")
+	}
+
+	ctx = tools.SetToolsAllowed(context.Background(), []string{"bash", "submit_result"})
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence(
+		[]string{"bash", "submit_result"},
+		nil,
+		"command",
+		[]string{"pwd", ""},
+	))
+	matching := fantasy.ToolCall{Name: "bash", Input: `{"command":"pwd"}`}
+	if resp, err := byName["bash"].Run(ctx, matching); err != nil || resp.IsError {
+		t.Fatalf("matching scalar constrained input must run: response=%+v err=%v", resp, err)
 	}
 }
 
@@ -150,7 +296,7 @@ func TestPolicyGateAdmitsEarlyBlockedSubmitResultButNotSuccess(t *testing.T) {
 	}
 
 	ctx := tools.SetToolsAllowed(context.Background(), []string{"bash", "submit_result"})
-	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence([]string{"bash", "bash", "bash", "submit_result"}))
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence([]string{"bash", "bash", "bash", "submit_result"}, nil, "", nil))
 
 	if resp, err := byName["bash"].Run(ctx, fantasy.ToolCall{Name: "bash"}); err != nil || resp.IsError {
 		t.Fatalf("expected first sequence bash call to run: response=%+v err=%v", resp, err)
@@ -184,6 +330,75 @@ func TestPolicyGateAdmitsEarlyBlockedSubmitResultButNotSuccess(t *testing.T) {
 	}
 	if bash.calls != 1 {
 		t.Fatalf("bash should have run exactly once, ran %d times", bash.calls)
+	}
+}
+
+func TestPolicyGateFailureOnlyAllowsEarlyTerminalResult(t *testing.T) {
+	c := gateTestCoordinator()
+	bash := &recordingTool{name: "bash", resp: fantasy.NewTextErrorResponse("command failed\nExit code: 1")}
+	write := &recordingTool{name: "write"}
+	result := &recordingTool{name: "submit_result"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{bash, write, result})
+	byName := map[string]fantasy.AgentTool{}
+	for _, tool := range gated {
+		byName[tool.Info().Name] = tool
+	}
+
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"bash", "write", "submit_result"})
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence([]string{"bash", "write", "submit_result"}, nil, "", nil))
+	if resp, err := byName["bash"].Run(ctx, fantasy.ToolCall{Name: "bash"}); err != nil || !resp.IsError {
+		t.Fatalf("failed command should return an error response: response=%+v err=%v", resp, err)
+	}
+
+	if resp, err := byName["write"].Run(ctx, fantasy.ToolCall{Name: "write"}); err != nil || !resp.IsError {
+		t.Fatalf("repair after failed command must be rejected: response=%+v err=%v", resp, err)
+	}
+	if write.ran {
+		t.Fatal("write must not execute after the sequence has failed")
+	}
+
+	failedCall := fantasy.ToolCall{Name: "submit_result", Input: `{"status":"failed","summary":"command failed"}`}
+	if resp, err := byName["submit_result"].Run(ctx, failedCall); err != nil || resp.IsError {
+		t.Fatalf("early failed submit_result must be admitted: response=%+v err=%v", resp, err)
+	}
+	if !result.ran {
+		t.Fatal("failed submit_result should execute")
+	}
+}
+
+func TestPolicyGateExpectedExitCodeAllowsClosedSequenceToContinue(t *testing.T) {
+	c := gateTestCoordinator()
+	// timeout intentionally ends the observation window with exit 124. Its
+	// output remains useful evidence, so the closed sequence must advance to
+	// the evidence-preserving ls and final result rather than forcing failed.
+	bash := &recordingTool{name: "bash", resp: fantasy.NewTextErrorResponse("TUI menu captured\nExit code: 124")}
+	ls := &recordingTool{name: "ls"}
+	result := &recordingTool{name: "submit_result"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{bash, ls, result})
+	byName := map[string]fantasy.AgentTool{}
+	for _, tool := range gated {
+		byName[tool.Info().Name] = tool
+	}
+
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"bash", "ls", "submit_result"})
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence(
+		[]string{"bash", "ls", "submit_result"}, nil, "", nil, [][]int{{124, 137}, {}, {}},
+	))
+	resp, err := byName["bash"].Run(ctx, fantasy.ToolCall{Name: "bash"})
+	if err != nil || resp.IsError {
+		t.Fatalf("declared expected exit must be a normal evidence result: response=%+v err=%v", resp, err)
+	}
+	if !strings.Contains(resp.Content, "Exit code: 124") {
+		t.Fatalf("expected result must preserve observation evidence: %q", resp.Content)
+	}
+	if resp, err := byName["ls"].Run(ctx, fantasy.ToolCall{Name: "ls"}); err != nil || resp.IsError {
+		t.Fatalf("next closed-sequence tool must be admitted: response=%+v err=%v", resp, err)
+	}
+	if resp, err := byName["submit_result"].Run(ctx, fantasy.ToolCall{Name: "submit_result", Input: `{"status":"success","summary":"observation recorded"}`}); err != nil || resp.IsError {
+		t.Fatalf("successful terminal result must be admitted: response=%+v err=%v", resp, err)
+	}
+	if !bash.ran || !ls.ran || !result.ran {
+		t.Fatalf("expected all declared tools to run: bash=%t ls=%t result=%t", bash.ran, ls.ran, result.ran)
 	}
 }
 

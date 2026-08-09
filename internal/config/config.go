@@ -8,8 +8,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/anomalyco/hufu/internal/notify"
-	"github.com/anomalyco/hufu/internal/yamlutil"
+	"github.com/kjelly/hufu/internal/notify"
+	"github.com/kjelly/hufu/internal/yamlutil"
 )
 
 const DefaultProviderURL = "http://localhost:11434/v1"
@@ -25,6 +25,13 @@ type ProviderConfig struct {
 	ProviderURL    string `yaml:"provider-url"`
 	ProviderAPIKey string `yaml:"provider-api-key"`
 	Insecure       bool   `yaml:"insecure"`
+	// MaxConcurrent bounds how many tasks may run concurrently against this
+	// specific provider, independent of the team-wide max-concurrent. A
+	// local Ollama model dispatched by many workers is not the same as many
+	// workers able to usefully run concurrent inference — see spec.md item
+	// 5. Zero (the default) means "no additional limit beyond the team-wide
+	// one".
+	MaxConcurrent int `yaml:"max-concurrent"`
 }
 
 type Config struct {

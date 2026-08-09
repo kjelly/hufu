@@ -18,8 +18,8 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/audit"
-	"github.com/anomalyco/hufu/internal/hooks"
+	"github.com/kjelly/hufu/internal/audit"
+	"github.com/kjelly/hufu/internal/hooks"
 )
 
 var askUserActive atomic.Int32

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // newTestCoordinator builds a real Coordinator with a session whose agent map

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	contextstore "github.com/anomalyco/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 type wp6Vector struct{ results []contextstore.SearchResult }

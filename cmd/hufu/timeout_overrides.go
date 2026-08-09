@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // TimeoutCLIOverrides collects timeout-related CLI flag values. A value

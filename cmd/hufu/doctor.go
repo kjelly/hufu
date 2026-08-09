@@ -13,8 +13,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anomalyco/hufu/internal/config"
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 var doctorCmd = &cobra.Command{

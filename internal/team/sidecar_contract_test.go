@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/sidecar"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/sidecar"
 )
 
 func sidecarContractCoordinator(t *testing.T, tools string) *Coordinator {

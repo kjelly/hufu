@@ -17,9 +17,9 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/sidecar"
-	"github.com/anomalyco/hufu/internal/skill"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/sidecar"
+	"github.com/kjelly/hufu/internal/skill"
 )
 
 // skillUsageState is the internal mutable record; Agents uses a map for O(1) dedup.

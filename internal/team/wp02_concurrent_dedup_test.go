@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // TestEmitContractWarnings_ConcurrentNilInitNoRace verifies that concurrent

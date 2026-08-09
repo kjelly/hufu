@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestApplyCLITimeoutOverrides_NoOverride(t *testing.T) {

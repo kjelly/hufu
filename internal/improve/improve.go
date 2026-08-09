@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/team"
 
 	"gopkg.in/yaml.v3"
 )

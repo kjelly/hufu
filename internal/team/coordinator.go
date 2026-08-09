@@ -15,17 +15,17 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/audit"
-	"github.com/anomalyco/hufu/internal/config"
-	contextstore "github.com/anomalyco/hufu/internal/context"
-	"github.com/anomalyco/hufu/internal/hooks"
-	"github.com/anomalyco/hufu/internal/mcp"
-	"github.com/anomalyco/hufu/internal/memory"
-	"github.com/anomalyco/hufu/internal/sidecar"
-	"github.com/anomalyco/hufu/internal/skill"
-	"github.com/anomalyco/hufu/internal/tools"
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/audit"
+	"github.com/kjelly/hufu/internal/config"
+	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/hooks"
+	"github.com/kjelly/hufu/internal/mcp"
+	"github.com/kjelly/hufu/internal/memory"
+	"github.com/kjelly/hufu/internal/sidecar"
+	"github.com/kjelly/hufu/internal/skill"
+	"github.com/kjelly/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/utils"
 	"gopkg.in/yaml.v3"
 )
 
@@ -57,6 +57,10 @@ type llmUsageReceiptExpectedKey struct{}
 // the streaming callbacks for a verbatim task.
 type taskTranscriptKey struct{}
 
+// executionAttemptKey binds tool-call receipts and submit_result claims to the
+// exact task attempt that produced them.
+type executionAttemptKey struct{}
+
 // delegationChainKey carries the "/"-joined chain of agent names that led to
 // the current request_agent call, propagated through the context (the same
 // way todoIDKey is) since the coordinator's mutable snapshot only ever holds
@@ -64,13 +68,16 @@ type taskTranscriptKey struct{}
 type delegationChainKey struct{}
 
 type TaskDef struct {
-	ID          string `json:"id,omitempty"`
-	Agent       string `json:"agent"`
-	Goal        string `json:"goal"`
-	Constraints string `json:"constraints,omitempty"`
-	Model       string `json:"model,omitempty"`
-	Sidecar     bool   `json:"sidecar,omitempty"`
-	Summarize   bool   `json:"summarize,omitempty"`
+	ID               string `json:"id,omitempty"`
+	ContractID       string `json:"contract_id,omitempty"`
+	ContractHash     string `json:"contract_hash,omitempty"`
+	ContractRevision int    `json:"contract_revision,omitempty"`
+	Agent            string `json:"agent"`
+	Goal             string `json:"goal"`
+	Constraints      string `json:"constraints,omitempty"`
+	Model            string `json:"model,omitempty"`
+	Sidecar          bool   `json:"sidecar,omitempty"`
+	Summarize        bool   `json:"summarize,omitempty"`
 	// OutputMode controls how the worker's output is returned to the
 	// coordinator. "verbatim" captures tool activity in a runner-owned
 	// transcript artifact and returns only its manifest, keeping raw output out
@@ -253,6 +260,7 @@ type Coordinator struct {
 	lastCtxModel                 string
 	lastCtxReportReady           bool
 	wrapUp                       atomic.Int32
+	initialDelegationAttempted   atomic.Bool
 	finishCalled                 atomic.Bool // set when the finish tool completes; cleared per orchestrator run
 	current                      atomic.Pointer[currentSnapshot]
 	currentStageStart            time.Time
@@ -299,7 +307,7 @@ type Coordinator struct {
 	dualWriteFailures      atomic.Int64
 	memoryStore            *memory.MemoryStore
 	contextRepo            contextstore.Repository // Phase 1 shadow store; never read by prompt assembly.
-	workerMemorySvc        WorkerMemoryService    // WP-3 per-worker memory recall service.
+	workerMemorySvc        WorkerMemoryService     // WP-3 per-worker memory recall service.
 	skillsMu               sync.RWMutex
 	modelList              []config.ModelEntry
 	sidecarModel           string
@@ -321,11 +329,18 @@ type Coordinator struct {
 	autoLoadedSkillsMu     sync.RWMutex
 	forcedSkillNames       map[string]bool // set of skill names specified via --skill
 	maxConcurrent          int
-	sessionTime            time.Time
-	lastStmWrite           time.Time // tracks when stm_write was last called for finish enforcement
-	lastStmWriteMu         sync.Mutex
-	stmWriteMu             sync.Mutex // serializes Read-Modify-Write STM operations to prevent lost-updates
-	ltmWriteMu             sync.Mutex // Protect LTM file reads and writes
+	// providerSem holds a lazily-created concurrency-limiting channel per
+	// provider name (e.g. "ollama"), built from session.Config.Providers[name].
+	// MaxConcurrent. A local model dispatched by many workers is not the same
+	// as many workers able to usefully run concurrent inference (spec.md item
+	// 5), so this gates in addition to, not instead of, maxConcurrent above.
+	providerSemMu  sync.Mutex
+	providerSem    map[string]chan struct{}
+	sessionTime    time.Time
+	lastStmWrite   time.Time // tracks when stm_write was last called for finish enforcement
+	lastStmWriteMu sync.Mutex
+	stmWriteMu     sync.Mutex // serializes Read-Modify-Write STM operations to prevent lost-updates
+	ltmWriteMu     sync.Mutex // Protect LTM file reads and writes
 
 	// Skill pattern detection
 	skillDetector         *skill.SkillPatternDetector
@@ -364,8 +379,14 @@ type Coordinator struct {
 	sessionToolPermissions   map[string]bool // toolName -> allowed (permanent session decision)
 	sessionToolPermissionsMu sync.RWMutex
 
-	taskResults   map[string]*TaskResult
-	taskResultsMu sync.RWMutex
+	taskResults          map[string]*TaskResult
+	taskResultsMu        sync.RWMutex
+	stepReceipts         *ExecutionStepReceiptRegistry
+	taskAttempts         map[string]int
+	taskAttemptsMu       sync.RWMutex
+	toolPolicyVerdicts   map[string]string
+	toolPolicyVerdictsMu sync.Mutex
+	structuredStepRunner StructuredStepRunner
 
 	// executionEvents is initialized for each top-level Run/Continue call and
 	// receives attempt-level telemetry for `hufu improve`.
@@ -817,6 +838,9 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		approvedOutputs:           make(map[string]string),
 		approvedErrors:            make(map[string]error),
 		taskResults:               make(map[string]*TaskResult),
+		stepReceipts:              NewExecutionStepReceiptRegistry(),
+		taskAttempts:              make(map[string]int),
+		toolPolicyVerdicts:        make(map[string]string),
 		taskResultCache:           make(map[string][]cachedTaskEntry),
 		pendingDiagnosticPackets:  make(map[string]DiagnosticPacket),
 		capabilityCache:           make(map[string]CapabilityResult),
@@ -883,6 +907,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	registerProviderSecrets(c.secretRegistry, session, defaultProviderAPIKey)
 	c.contextCompiler = &defaultContextCompiler{c: c}
 	c.agentPool = &defaultAgentPool{c: c}
+	c.structuredStepRunner = &coordinatorDeclaredToolRunner{c: c}
 	// Scrub legacy hufu-managed records before they are reloaded into prompts or
 	// opened for append. User workspace artifacts are deliberately excluded.
 	if redactErr := RedactWorkspaceManagedRecords(session.Workspace); redactErr != nil {
@@ -1171,7 +1196,7 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 		contextFilesDesc = fmt.Sprintf("Optional files from the shared directory (%s) to provide as context", sharedDirPath)
 	}
 	props := map[string]any{
-		"agent":         map[string]any{"type": "string", "enum": workerNames, "description": "Agent name to delegate to"},
+		"agent":         map[string]any{"type": "string", "enum": workerNames, "description": "Agent name for a new task. Do not select a worker whose prior task is already successful; retrieve its result with team_info/task_result instead."},
 		"goal":          map[string]any{"type": "string", "description": "The desired OUTCOME — what should be achieved. Do NOT include implementation details (file paths, function names, step-by-step instructions). Workers are specialists who determine their own approach."},
 		"constraints":   map[string]any{"type": "string", "description": "Non-obvious constraints the worker MUST respect (e.g., 'must use Python 3.11', 'cannot modify the public API'). Do NOT include obvious project conventions."},
 		"plan_first":    map[string]any{"type": "boolean", "description": "If true, the agent must draft a task execution plan and call submit_plan before doing any work. Use this for complex tasks where you want to review the approach before execution. After receiving the plan, call approve_plan, modify_plan, or reject_plan."},
@@ -1224,7 +1249,7 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 		},
 		"execution": map[string]any{
 			"type":        "object",
-			"description": "Structured execution contract specifying execution mode, result requirements, verification needs, and an optional closed tool sequence for atomic tasks.",
+			"description": "Execution contract. Use steps for artifact-producing workflows that require validator receipts, bounded pre-mutation repair, digest freeze, mutation, and verification. tool_sequence remains the legacy exact call budget for atomic tasks and cannot be combined with steps. tool_input_sequence can require JSON input fields, while tool_input_field with tool_input_value_sequence pins one scalar JSON field at each atomic call slot. tool_expected_exit_codes declares expected non-zero observation outcomes such as timeout exit 124, so bounded discovery can continue without weakening other failures.",
 			"properties": map[string]any{
 				"kind": map[string]any{
 					"type":        "string",
@@ -1243,10 +1268,82 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 					"type":        "boolean",
 					"description": "If true, task allows replay upon protocol/execution failure.",
 				},
+				"forbid_artifacts": map[string]any{
+					"type":        "boolean",
+					"description": "If true, submit_result must omit artifacts; Hufu rejects artifact declarations before accepting the result.",
+				},
 				"tool_sequence": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "Optional exact tool-call sequence for an atomic task. It must end with submit_result; Hufu exposes only these tools and rejects out-of-order or extra calls.",
+					"description": "Optional exact tool-call sequence for an atomic task. It is the complete call budget, not a tool-type summary: include one entry per call in order (repeat bash for every bash call and include write when the task writes a file), then end with submit_result. Hufu exposes only these tools and rejects out-of-order or extra calls.",
+				},
+				"tool_input_sequence": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "object"},
+					"description": "Optional required JSON fields for each tool_sequence slot. It must have the same length; use an empty object for an unconstrained slot. Hufu denies a call that omits or changes a declared field before it runs.",
+				},
+				"tool_input_field": map[string]any{
+					"type":        "string",
+					"description": "Optional JSON field name constrained by tool_input_value_sequence.",
+				},
+				"tool_input_value_sequence": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "Optional required scalar values for tool_input_field, one per tool_sequence slot; use an empty string as wildcard.",
+				},
+				"tool_expected_exit_codes": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
+					"description": "Optional expected non-zero process exit codes, one integer array per tool_sequence slot. Use an empty array when normal success-only handling is required. A declared code (for example timeout exit 124) is returned as normal observation evidence and the sequence continues.",
+				},
+				"steps": map[string]any{
+					"type":        "array",
+					"description": "Provider-neutral execution DAG. Validation may be repairable only before mutation; every mutation must consume an artifact frozen by an ancestor validator.",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"id":         map[string]any{"type": "string"},
+							"tool":       map[string]any{"type": "string"},
+							"input":      map[string]any{"type": "object", "description": "Typed provider-specific input carried without interpretation by Hufu."},
+							"depends_on": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+							"effect":     map[string]any{"type": "string", "enum": []string{"read", "produce", "validate", "mutate", "verify"}},
+							"outputs": map[string]any{
+								"type": "array",
+								"items": map[string]any{
+									"type": "object",
+									"properties": map[string]any{
+										"name":   map[string]any{"type": "string"},
+										"kind":   map[string]any{"type": "string", "enum": []string{"artifact", "fact", "receipt"}},
+										"schema": map[string]any{"type": "string"},
+										"path":   map[string]any{"type": "string", "description": "Optional artifact path used by the built-in declared-tool runner to compute the runtime digest."},
+										"scope":  map[string]any{"type": "string", "enum": []string{"task", "secret"}},
+									},
+									"required": []string{"name"},
+								},
+							},
+							"references": map[string]any{
+								"type":        "array",
+								"description": "Typed task-local references to successful dependency outputs; runtime resolves these without coordinator prose copying.",
+								"items": map[string]any{
+									"type": "object",
+									"properties": map[string]any{
+										"target":  map[string]any{"type": "string"},
+										"step_id": map[string]any{"type": "string"},
+										"task_id": map[string]any{"type": "string", "description": "Alternative to step_id: successful dependency task id from this run_agents batch."},
+										"output":  map[string]any{"type": "string"},
+										"kind":    map[string]any{"type": "string", "enum": []string{"artifact", "fact", "receipt"}},
+										"schema":  map[string]any{"type": "string"},
+										"scope":   map[string]any{"type": "string", "enum": []string{"task", "secret"}},
+									},
+									"required": []string{"target", "output", "kind"},
+								},
+							},
+							"consumes":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+							"on_failure":  map[string]any{"type": "string", "enum": []string{"terminal", "repairable"}},
+							"max_repairs": map[string]any{"type": "integer", "minimum": 0},
+						},
+						"required": []string{"id", "tool", "effect"},
+					},
 				},
 			},
 		},

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestFailureFingerprintIgnoresVolatileMetadata(t *testing.T) {

@@ -429,6 +429,33 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	}
 
 	prof := c.ExecutionProfile()
+	// Legacy session files predate delegation_phase. Their durable TODO list is
+	// the only compatible evidence: any restored task means the initial batch
+	// is no longer pending; an empty/corrupt replacement session remains
+	// pending. Never infer this from STM/LTM or conversation prose.
+	if c.session != nil && c.session.Config.Delegation.RequireExactInitialBatch {
+		switch sd.DelegationPhase {
+		case DelegationPhaseInitialPending, DelegationPhaseActive:
+			// Already explicit.
+		default:
+			if len(sd.Tasks) > 0 && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
+				sd.DelegationPhase = DelegationPhaseActive
+			} else {
+				sd.DelegationPhase = DelegationPhaseInitialPending
+			}
+		}
+	}
+	if c.initialDelegationPending() {
+		// A fresh/replacement session must not send stale in-memory conversation
+		// turns to the first coordinator model call. Session entries, STM, LTM,
+		// and vector memory are all non-canonical for delegation state; the
+		// prompt builder withholds their persisted forms until phase advances.
+		c.conversationHistoryMu.Lock()
+		c.conversationHistory = nil
+		c.conversationHistorySourceCounts = nil
+		c.conversationHistorySourceOffset = 0
+		c.conversationHistoryMu.Unlock()
+	}
 
 	// A resumed session carries rounds from earlier runs; without this the
 	// saved count restarts at this run's round and understates the session.

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // ReliabilityFault identifies a replayable fault-injection scenario in the

@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"github.com/anomalyco/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/config"
 )
 
 var configJSON bool

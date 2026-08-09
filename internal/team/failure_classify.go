@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 // FailureClassificationInput carries the structured signals used to classify a

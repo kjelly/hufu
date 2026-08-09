@@ -15,13 +15,19 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/audit"
-	"github.com/anomalyco/hufu/internal/hooks"
-	"github.com/anomalyco/hufu/internal/mcp"
-	"github.com/anomalyco/hufu/internal/tools"
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/audit"
+	"github.com/kjelly/hufu/internal/hooks"
+	"github.com/kjelly/hufu/internal/mcp"
+	"github.com/kjelly/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/utils"
 )
+
+// errCoordinatorToolFailure marks a direct coordinator tool error as a hard
+// orchestration boundary. It is intentionally distinct from worker failures:
+// workers can still report bounded partial results after collecting failure
+// evidence, while coordinators must not continue making decisions from it.
+var errCoordinatorToolFailure = errors.New("coordinator direct tool failure")
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (string, error) {
 	// A checkpointed protocol-incomplete task has already run its worker. It
@@ -36,6 +42,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	}
 	if err := c.validateContractStructural(task, todoID); err != nil {
 		return "", err
+	}
+	if len(task.Execution.Steps) > 0 {
+		return c.executeStructuredCoordinatorTask(parentCtx, task, todoID)
 	}
 	taskDesc := task.Goal
 	if task.Constraints != "" {
@@ -243,7 +252,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	var modelSpec ModelContextSpec
 	if agentDef != nil {
-		modelSpec = globalRegistry.GetSpec(c.resolveAgentModel(agentDef, task.Model))
+		modelSpec = globalRegistry.GetSpec(c.resolveAgentModel(agentDef, task.Model)).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef))
 	}
 
 	workerInput := WorkerContextInput{
@@ -267,41 +276,20 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		workerInput.WorkerMemory = memBundle
 	}
 
-	// Assemble the legacy-compatible inputs first, then make the canonical
-	// typed context the actual worker prompt. If compilation fails, retain the
-	// legacy prompt so context migration remains fail-safe.
-	if len(task.ContextFiles) > 0 {
-		var contextBuilder strings.Builder
-		contextBuilder.WriteString("Context files:\n\n")
-		for _, f := range task.ContextFiles {
-			content, err := readShared(c.session.Workspace, f)
-			if err != nil {
-				fmt.Fprintf(&contextBuilder, "(could not read %s: %v)\n", f, err)
-			} else {
-				fmt.Fprintf(&contextBuilder, "### %s\n```\n%s\n```\n\n", f, content)
-			}
-		}
-		prompt = contextBuilder.String() + "\n---\n\n" + prompt
-	}
-	var auxParts []string
-	if stmCtx := c.buildTaskSTMContext(); stmCtx != "" {
-		auxParts = append(auxParts, stmCtx)
-	}
-	if concurrentCtx := c.buildConcurrentTasksContext(todoID); concurrentCtx != "" {
-		auxParts = append(auxParts, concurrentCtx)
-	}
-	if ltmCtx := c.buildLTMContext(); ltmCtx != "" {
-		auxParts = append(auxParts, ltmCtx)
-	}
-	if aux := assembleContextWithinBudget(auxParts, maxWorkerAuxContextChars); aux != "" {
-		prompt += aux
-	}
+	// Canonical typed compilation is the only model-visible context assembly.
+	// Context files, STM/LTM, concurrent tasks, memory, and dependency results
+	// are already represented separately in workerInput; duplicating a
+	// char-truncated legacy bundle here would bypass authority/conflict checks.
 	workerInput.TaskGoal = prompt
 	compiled, compileErr := c.ContextCompiler().CompileWorkerContext(parentCtx, workerInput)
 	c.recordShadowTrace(parentCtx, "worker", prompt, workerInput.ModelContext, compiled, compileErr)
-	if compileErr == nil && strings.TrimSpace(compiled.Prompt) != "" {
-		prompt = compiled.Prompt
+	if compileErr != nil {
+		return "", fmt.Errorf("worker context preflight failed: %w", compileErr)
 	}
+	if strings.TrimSpace(compiled.Prompt) == "" {
+		return "", fmt.Errorf("worker context preflight failed: compiled prompt is empty")
+	}
+	prompt = compiled.Prompt
 
 	var conversationHistory []fantasy.Message
 	var transcript *taskTranscript
@@ -343,6 +331,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 retryLoop:
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		attemptsMade = attempt
+		c.setCurrentTaskAttempt(todoID, attempt)
 		// Per-attempt tool call evidence — reset at the start of each
 		// attempt to prevent stale data from a prior attempt or task.
 		attemptEvidence := &toolCallEvidence{}
@@ -477,6 +466,7 @@ retryLoop:
 			c.registerTerminalRound(todoID, roundCancel)
 			defer c.unregisterTerminalRound(todoID)
 			taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
+			taskCtx = context.WithValue(taskCtx, executionAttemptKey{}, attempt)
 			taskCtx = context.WithValue(taskCtx, modelKey{}, resolvedModel)
 			// Per-attempt tool call evidence (§6.1, P1b: per-attempt, not
 			// coordinator-global, to prevent cross-task leakage).
@@ -524,7 +514,7 @@ retryLoop:
 			}
 
 			taskCtx = c.withEffectiveToolsAllowed(taskCtx, agentDef, exposedToolNames)
-			if sequence := newTaskToolSequence(task.Execution.ToolSequence); sequence != nil {
+			if sequence := newTaskToolSequence(task.Execution.ToolSequence, task.Execution.ToolInputSequence, task.Execution.ToolInputField, task.Execution.ToolInputValueSequence, task.Execution.ToolExpectedExitCodes); sequence != nil {
 				taskCtx = context.WithValue(taskCtx, taskToolSequenceKey{}, sequence)
 			}
 
@@ -545,11 +535,13 @@ retryLoop:
 			}))
 
 			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing)
-			if err == nil && strings.TrimSpace(output) == "" && len(steps) > 0 {
+			if err == nil && !task.Execution.RequiresResult && strings.TrimSpace(output) == "" && len(steps) > 0 {
 				// The agent worked but never wrote a final message — almost
 				// always the step cap cutting it off mid-diagnosis. Give it one
 				// tool-free turn to summarize instead of failing the task and
-				// re-running everything from scratch.
+				// re-running everything from scratch. Requires-result workers
+				// instead receive the dedicated result-only finalization turn
+				// below, where submit_result is the sole exposed tool.
 				if rescued := c.rescueFinalSummary(taskCtx, ag, agentName, steps, timing); rescued != "" {
 					output = rescued
 				}
@@ -683,9 +675,9 @@ retryLoop:
 					c.report(c.newEvent("step").withAgent(agentName).withMessage(protocolErrMsg).withTodoID(todoID))
 
 					repairResultTool := &submitResultTool{coordinator: c, todoID: todoID}
-					repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using the output above to supply the required structured result. Do NOT call any other tools.", task.Goal, output)
+					repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using the output above to supply the required structured result. Include a concise summary and put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields. Do NOT call any other tools or emit a prose final response.\n", task.Goal, output)
 					if budgetExhausted {
-						repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The work above is your evidence; this turn is only for reporting it. Call submit_result now, and do NOT call any other tools.\n\nReport truthfully against the goal: use status `success` only if the goal is fully met without a known target limitation; use `completed_with_gaps` when the assigned work is complete but it discovered such a limitation; otherwise use `partial` (say exactly what is done and what remains) or `blocked`. A truthful `partial` lets the next attempt continue your work; a false completion claim destroys it.", task.Goal, output, len(steps), stepBudget)
+						repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The work above is your evidence; this turn is only for reporting it. Call submit_result now, and do NOT call any other tools or emit a prose final response. Put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields.\n\nReport truthfully against the goal: use status `success` only if the goal is fully met without a known target limitation; use `completed_with_gaps` when the assigned work is complete but it discovered such a limitation; otherwise use `partial` (say exactly what is done and what remains) or `blocked`. A truthful `partial` lets the next attempt continue your work; a false completion claim destroys it.", task.Goal, output, len(steps), stepBudget)
 					}
 					// §7 requires the transcript to survive as evidence, and the
 					// finalization turn is where that evidence gets converted into a
@@ -758,7 +750,7 @@ retryLoop:
 					// and never replays the worker execution (§7).
 					if !repairSuccess && repairReason == RepairFailureInvalidSchema {
 						typedRes = nil
-						schemaRepairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous submit_result call was rejected because its arguments did not match the result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work or call any other tools.\n\n## Execution Output\n%s", task.Goal, output)
+						schemaRepairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous submit_result call was rejected because its arguments did not match the result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work, call any other tools, or emit a prose final response. The call must include both required fields: `status` (one of `success`, `completed_with_gaps`, `partial`, `failed`, or `blocked`) and a non-empty `summary`; put any complete textual deliverable in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields.\n\n## Execution Output\n%s", task.Goal, output)
 						schemaRepairSteps := runRepair(schemaRepairPrompt)
 						repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateSubmittedTaskResult(typedRes) == nil
 						repairReason, reclassifyExecution = classifyRepairFailure(schemaRepairSteps, typedRes)
@@ -843,13 +835,21 @@ retryLoop:
 					}
 				}
 			}
+			// For requires-result tasks the typed submission is the terminal
+			// handoff. A final-action-only worker is correctly instructed not to
+			// add prose after submit_result, so validate the authoritative typed
+			// handoff rather than rejecting an otherwise valid empty final text.
+			coordinatorOutput := coordinatorTaskOutput(output, typedRes)
+			completionOutput := coordinatorOutput
+			if strings.TrimSpace(completionOutput) == "" && typedRes != nil && typedRes.Source == "submitted" {
+				completionOutput = typedRes.FormatForContext()
+			}
 			if err == nil {
-				if verr := validateTaskOutput(task, output); verr != nil {
+				if verr := validateTaskOutput(task, completionOutput); verr != nil {
 					err = fmt.Errorf("task completion validation failed: %w", verr)
 					c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("completion validation failed: %v", verr)).withTodoID(todoID))
 				}
 			}
-			coordinatorOutput := output
 			// A receipt transcript is also captured for summary-mode tasks that
 			// require a typed result, but that must not change the task's output
 			// contract. Only an explicit verbatim task is reduced to a manifest.
@@ -917,6 +917,7 @@ retryLoop:
 					closeTranscript()
 					return "", fmt.Errorf("mark task done: %w", statusErr)
 				}
+				c.recordTerminalTypedTaskResult(todoID)
 				c.reconcileTaskStatusProjection()
 				for _, item := range c.taskTracker.TodoList().Items() {
 					if item.ID == todoID {
@@ -1381,7 +1382,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	for attempt := priorAttempts + 1; attempt <= 2; attempt++ {
 		c.clearSubmittedTaskResult(item.ID)
 		if attempt > priorAttempts+1 {
-			repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous result-only repair call did not match the submit_result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work, inspect files, or call any other tool.\n\n## Execution Output\n%s", task.Goal, output)
+			repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous result-only repair call did not match the submit_result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work, inspect files, call any other tool, or emit a prose final response. The call must include both required fields: `status` (one of `success`, `completed_with_gaps`, `partial`, `failed`, or `blocked`) and a non-empty `summary`; put any complete textual deliverable in `details`.\n\n## Execution Output\n%s", task.Goal, output)
 		}
 		_, steps, callErr := c.runAgentWithStatusAndHistory(repairCtx, repairAgent, agentName, repairPrompt, nil, timing, fantasy.StepCountIs(1))
 		runErr = callErr
@@ -1477,6 +1478,7 @@ func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, 
 	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskDone, summary, output); err != nil {
 		return "", err
 	}
+	c.recordTerminalTypedTaskResult(item.ID)
 	c.reconcileTaskStatusProjection()
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(agentName).withOutput(output).withMessage("protocol result-only repair completed").withModel(resolvedModel).withTodoID(item.ID))
@@ -1600,6 +1602,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		return "", err
 	}
+	c.recordTerminalTypedTaskResult(todoID)
 	c.reconcileTaskStatusProjection()
 	for _, item := range c.taskTracker.TodoList().Items() {
 		if item.ID == todoID {
@@ -1827,6 +1830,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	// on tool+input; counting by tool name alone lets one failure of input A
 	// plus one failure of input B trip the detector on a first repeat of B.
 	pendingToolInputs := make(map[string]string)
+	pendingToolStarted := make(map[string]time.Time)
 	tp := &ThinkParser{}
 
 	streamCall := fantasy.AgentStreamCall{
@@ -1839,7 +1843,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			if opts.Model != nil {
 				modelID = opts.Model.Model()
 			}
-			spec := globalRegistry.GetSpec(modelID)
+			spec := globalRegistry.GetSpec(modelID).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(c.agentDefByName(agentName)))
 			budget := c.ContextCompiler().CalculateBudget(spec, 0, 0)
 			preparedMessages := opts.Messages
 			messagesCapped := false
@@ -1905,6 +1909,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			// 🔁 Deadloop / thrashing detection!
 			loopDetectMu.Lock()
 			pendingToolInputs[tc.ToolCallID] = tc.Input
+			pendingToolStarted[tc.ToolCallID] = time.Now().UTC()
 			if lastToolCall != nil && lastToolCall.toolName == tc.ToolName && lastToolCall.input == tc.Input {
 				if consecutiveErrCount >= 2 {
 					loopDetectMu.Unlock()
@@ -1964,7 +1969,9 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			// same tool must not inflate the counter.
 			loopDetectMu.Lock()
 			callInput, tracked := pendingToolInputs[tr.ToolCallID]
+			callStarted := pendingToolStarted[tr.ToolCallID]
 			delete(pendingToolInputs, tr.ToolCallID)
+			delete(pendingToolStarted, tr.ToolCallID)
 			if tracked && lastToolCall != nil && lastToolCall.toolName == tr.ToolName && lastToolCall.input == callInput {
 				if isErrResult {
 					consecutiveErrCount++
@@ -1973,6 +1980,19 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				}
 			}
 			loopDetectMu.Unlock()
+			attempt, _ := ctx.Value(executionAttemptKey{}).(int)
+			if receiptErr := c.recordActualToolReceipt(todoID, attempt, tr.ToolCallID, tr.ToolName, callInput, resultPreview, isErrResult, callStarted); receiptErr != nil {
+				return fmt.Errorf("record tool execution receipt: %w", receiptErr)
+			}
+			// A worker can use a tool error as evidence and still produce a
+			// typed result for its bounded task. The coordinator has no such
+			// result contract: continuing after an unavailable tool, invalid
+			// arguments, or a failed direct tool call lets it make decisions
+			// from incomplete evidence. Stop this orchestrator turn after the
+			// failing receipt has been persisted instead.
+			if todoID == CoordTodoID && isErrResult {
+				return fmt.Errorf("%w: tool %q failed: %s", errCoordinatorToolFailure, tr.ToolName, strings.TrimSpace(resultPreview))
+			}
 
 			c.saveCheckpoint()
 			return nil
@@ -2295,17 +2315,39 @@ func resultProtocolInstructions(task TaskDef, granted map[string]bool) string {
 	}
 	b := &strings.Builder{}
 	b.WriteString("\n\n## Result Protocol\n\n")
+	if task.ContractID != "" && task.ContractHash != "" {
+		fmt.Fprintf(b, "Effective contract: `%s` (revision %d, sha256 %s). This immutable runtime contract is authoritative over any conflicting prose.\n\n", task.ContractID, task.ContractRevision, task.ContractHash)
+	}
 	b.WriteString("This task is not complete until you call `submit_result`. A prose summary is NOT a result: if you end your turn without calling `submit_result`, the task is recorded as failed no matter how much work you finished.\n\n")
 	b.WriteString("- Call `submit_result` exactly once, as the last thing you do.\n")
 	b.WriteString("- Set `status` truthfully: use `success` when the goal is fully met without a known target limitation; use `completed_with_gaps` when the assigned work is complete but it discovered a target limitation, and record that limitation in findings/risks/open questions; otherwise use `partial`, `failed`, or `blocked`. A truthful `partial` is far more useful than an optimistic completion claim.\n")
-	b.WriteString("- Put the facts a later agent needs into `summary`, `findings`, and `decisions`.\n")
-	b.WriteString("- If you are running out of steps, stop working and call `submit_result` with what you have.\n")
+	b.WriteString("- Put the facts a later agent needs into `summary`, `details`, `findings`, and `decisions`. Use `details` for the complete textual plan, analysis, review, or handoff; do not create a report file merely to make that content available.\n")
+	b.WriteString("- `open_questions` accepts strings, or structured objects with required string `question` and optional string `context` and `detail`; do not send arbitrary object shapes.\n")
+	b.WriteString("- Reserve your final model step for `submit_result`. Once you have enough evidence, stop writing prose or making new tool calls and submit the result; if you are running out of steps, submit what you have.\n")
 	if len(task.Execution.ToolSequence) > 0 {
 		b.WriteString("- This is a closed tool sequence. The runtime permits only this order: `")
 		b.WriteString(strings.Join(task.Execution.ToolSequence, " → "))
 		b.WriteString("`. Do not call a tool outside that sequence or after `submit_result`.\n")
+		b.WriteString("- Each listed position is exactly one tool call. After a tool succeeds, advance to the next listed position; never repeat, revise, or repair that slot with another call. If the result makes it impossible to continue, stop immediately with one early `submit_result` using status `failed` or `blocked`; do not consume a later slot to repair it.\n")
+		b.WriteString("- The task goal and constraints are descriptive requirements, not extra protocol slots. A phrase such as discover, confirm, inspect, or check does not authorize an additional tool call unless that tool appears at the current sequence position. If a required value is unavailable from the task context or an already captured result, submit an early truthful `blocked` result; never add a discovery/probe call.\n")
+		b.WriteString("- The first assistant action after receiving this task MUST be the first listed tool call. Do not plan aloud, inspect files, read source, ask for help, or make any exploratory/preparatory tool call before it.\n")
+		b.WriteString("- If the first listed tool cannot be called exactly as specified, call `submit_result` with status `failed` or `blocked`; never probe another tool or repair the sequence.\n")
+		for index, codes := range task.Execution.ToolExpectedExitCodes {
+			if len(codes) == 0 || index >= len(task.Execution.ToolSequence) {
+				continue
+			}
+			fmt.Fprintf(b, "- At sequence position %d (`%s`), exit code(s) %s are expected observations, not failures. Preserve their output and continue to the next sequence slot.\n", index+1, task.Execution.ToolSequence[index], formatExpectedExitCodes(codes))
+		}
 	}
 	return b.String()
+}
+
+func formatExpectedExitCodes(codes []int) string {
+	values := make([]string, len(codes))
+	for index, code := range codes {
+		values[index] = fmt.Sprintf("%d", code)
+	}
+	return strings.Join(values, ", ")
 }
 
 func (c *Coordinator) verifyTaskTimeout() time.Duration {
@@ -2507,6 +2549,9 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 		}
 	}
 	agentTools = c.filterDeniedWorkerTools(agentTools)
+	if missing := missingExecutionTools(agentTools, toolSequence); len(missing) > 0 {
+		return nil, nil, fmt.Errorf("execution tool_sequence requires unavailable tool(s) for agent %q: %s; select an agent that grants the complete sequence", agentDef.Name, strings.Join(missing, ", "))
+	}
 	if resultTool != nil {
 		agentTools = append(agentTools, resultTool)
 	}
@@ -2523,6 +2568,36 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 		return nil, nil, err
 	}
 	return ag, agentToolNames(agentTools), nil
+}
+
+// missingExecutionTools validates a closed sequence against the concrete
+// worker tool set before the model is started. Without this preflight a
+// coordinator can assign a bash/write sequence to a read-only helper; the
+// worker then sees only submit_result, reports an environment block, and the
+// real contract mistake is obscured as a task failure.
+func missingExecutionTools(agentTools []fantasy.AgentTool, sequence []string) []string {
+	if len(sequence) == 0 {
+		return nil
+	}
+	available := make(map[string]bool, len(agentTools)+1)
+	for _, tool := range agentTools {
+		if tool != nil {
+			available[strings.TrimSpace(tool.Info().Name)] = true
+		}
+	}
+	// submit_result is appended by the caller after this check.
+	available["submit_result"] = true
+	seen := make(map[string]bool)
+	var missing []string
+	for _, name := range sequence {
+		name = strings.TrimSpace(name)
+		if name == "" || available[name] || seen[name] {
+			continue
+		}
+		seen[name] = true
+		missing = append(missing, name)
+	}
+	return missing
 }
 
 // computeEvidenceComplete determines whether the current attempt captured

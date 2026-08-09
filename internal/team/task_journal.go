@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 const (
@@ -49,6 +49,10 @@ type journalRecord struct {
 	Identity            *CacheIdentity       `json:"identity,omitempty"`
 	FailureFingerprints []FailureFingerprint `json:"failure_fingerprints,omitempty"`
 	FailureEvent        *FailureEventPayload `json:"failure_event,omitempty"`
+	// TypedResult is a read-only durability projection for stable task_id
+	// lookups. It is deliberately separate from cache "put" records, whose
+	// description-based identity is not authoritative evidence.
+	TypedResult *TaskResult `json:"typed_result,omitempty"`
 }
 
 type taskJournal struct {
@@ -110,6 +114,29 @@ func (j *taskJournal) append(rec journalRecord) error {
 
 func (c *Coordinator) recordTaskFailureWithEvent(agentName, taskDesc, detail string, event *FailureEventPayload, fingerprints ...[]FailureFingerprint) {
 	c.recordTaskFailureWithEventAndOutput(agentName, taskDesc, detail, event, "", fingerprints...)
+}
+
+// recordTerminalTypedTaskResult projects the sealed typed result after the
+// Todo has reached done. Session/event-store state remains authoritative; the
+// journal provides an append-only recovery/audit projection rather than a
+// Markdown-derived result lookup.
+func (c *Coordinator) recordTerminalTypedTaskResult(todoID string) {
+	if c == nil || c.journal == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return
+	}
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item == nil || item.ID != todoID || item.Status != TaskDone || item.TypedResult == nil {
+			continue
+		}
+		copyResult := *item.TypedResult
+		if data, err := json.Marshal(copyResult); err == nil {
+			if redacted, err := utils.RedactJSON(data); err == nil {
+				_ = json.Unmarshal(redacted, &copyResult)
+			}
+		}
+		_ = c.journal.append(journalRecord{Op: "result", Agent: item.Agent, TaskID: item.ID, Desc: item.Desc, TypedResult: &copyResult, TS: time.Now().Format(time.RFC3339)})
+		return
+	}
 }
 
 func (c *Coordinator) recordTaskFailureWithEventAndOutput(agentName, taskDesc, detail string, event *FailureEventPayload, failureOutput string, fingerprints ...[]FailureFingerprint) {

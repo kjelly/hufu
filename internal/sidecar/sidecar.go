@@ -12,9 +12,11 @@ import (
 	"unicode/utf8"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openai"
+	"charm.land/fantasy/providers/openaicompat"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 const (
@@ -24,6 +26,48 @@ const (
 	sidecarMaxSteps     = 1
 	sidecarSystemPrompt = "You are a concise assistant. Follow the user's instruction exactly. Be brief and precise. Do not add unnecessary commentary."
 )
+
+// Profile bounds the generation shape for a category of sidecar calls.
+// Sidecar backs a wide range of very different jobs — from one-line JSON
+// route classification to multi-paragraph structured summarization — through
+// a single underlying agent that otherwise has no generation limits of its
+// own. Without a profile, a reasoning-capable local model (MiniMax M2.7,
+// Gemma 4) has no reason not to "think" at length before answering a trivial
+// classification call whose entire output is a few words of JSON.
+type Profile struct {
+	MaxOutputTokens int64
+	Temperature     float64
+	ReasoningEffort string
+}
+
+var (
+	// ClassifierProfile is for short structured-output decisions: route,
+	// skill, and team matching, guard review, dedup, and other calls whose
+	// entire output is a small JSON object or a single name/value.
+	ClassifierProfile = Profile{MaxOutputTokens: 512, Temperature: 0, ReasoningEffort: "none"}
+	// CompactorProfile is for summarization/compaction, which needs enough
+	// headroom to reproduce a condensed version of its input.
+	CompactorProfile = Profile{MaxOutputTokens: 4096, Temperature: 0.1, ReasoningEffort: "low"}
+	// JudgeProfile is for picking the best of several full candidate
+	// outputs, which needs more than classifier headroom for its reasoning
+	// and any grafted content, but nowhere near a full worker's budget.
+	JudgeProfile = Profile{MaxOutputTokens: 1024, Temperature: 0, ReasoningEffort: "medium"}
+)
+
+// apply layers profile onto call as per-call overrides, which take
+// precedence over the sidecar agent's own (unset) construction-time
+// defaults — see fantasy.Agent.prepareCall.
+func (p Profile) apply(call *fantasy.AgentCall) {
+	maxTokens := p.MaxOutputTokens
+	call.MaxOutputTokens = &maxTokens
+	temp := p.Temperature
+	call.Temperature = &temp
+	if agent.ValidReasoningEfforts[p.ReasoningEffort] {
+		call.ProviderOptions = openaicompat.NewProviderOptions(&openaicompat.ProviderOptions{
+			ReasoningEffort: new(openai.ReasoningEffort(p.ReasoningEffort)),
+		})
+	}
+}
 
 type Sidecar struct {
 	mu            sync.Mutex
@@ -80,14 +124,16 @@ func (s *Sidecar) SetUsageObserver(observer func(*fantasy.AgentResult)) {
 	s.mu.Unlock()
 }
 
-func (s *Sidecar) generate(ctx context.Context, prompt string) (string, error) {
+func (s *Sidecar) generate(ctx context.Context, prompt string, profile Profile) (string, error) {
 	s.mu.Lock()
 	a := s.agent
 	s.mu.Unlock()
 	if a == nil {
 		return "", fmt.Errorf("sidecar agent not initialized")
 	}
-	result, err := a.Generate(ctx, fantasy.AgentCall{Prompt: prompt})
+	call := fantasy.AgentCall{Prompt: prompt}
+	profile.apply(&call)
+	result, err := a.Generate(ctx, call)
 	if err != nil {
 		return "", err
 	}
@@ -117,7 +163,7 @@ func (s *Sidecar) Summarize(ctx context.Context, text string, maxChars int) (str
 
 ---
 %s`, maxChars, text)
-	summary, err := s.generate(ctx, prompt)
+	summary, err := s.generate(ctx, prompt, CompactorProfile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: sidecar summarize generate failed: %v\n", err)
 		return text, nil
@@ -140,7 +186,7 @@ func (s *Sidecar) Compact(ctx context.Context, text string, instruction string) 
 
 ---
 %s`, instruction, text)
-	result, err := s.generate(ctx, prompt)
+	result, err := s.generate(ctx, prompt, CompactorProfile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: sidecar compact generate failed: %v\n", err)
 		return text, nil
@@ -152,7 +198,16 @@ func (s *Sidecar) Compact(ctx context.Context, text string, instruction string) 
 	return result, nil
 }
 
+// Execute runs a generic sidecar task under ClassifierProfile. Every current
+// caller's expected output is a short name/value or small JSON object; use
+// ExecuteProfile directly for a call that genuinely needs a larger budget
+// (e.g. judging full candidate outputs).
 func (s *Sidecar) Execute(ctx context.Context, task string) (string, error) {
+	return s.ExecuteProfile(ctx, task, ClassifierProfile)
+}
+
+// ExecuteProfile is Execute with an explicit generation profile.
+func (s *Sidecar) ExecuteProfile(ctx context.Context, task string, profile Profile) (string, error) {
 	if s == nil {
 		return "", fmt.Errorf("sidecar not configured")
 	}
@@ -160,7 +215,7 @@ func (s *Sidecar) Execute(ctx context.Context, task string) (string, error) {
 	if len(runes) > executeMaxChars {
 		task = string(runes[:executeMaxChars]) + "\n...(truncated)"
 	}
-	result, err := s.generate(ctx, task)
+	result, err := s.generate(ctx, task, profile)
 	if err != nil {
 		return "", err
 	}
@@ -201,7 +256,7 @@ Available skills:
 
 User task: %s`, skillList.String(), prompt)
 
-	result, err := s.generate(ctx, matchPrompt)
+	result, err := s.generate(ctx, matchPrompt, ClassifierProfile)
 	if err != nil {
 		return nil, fmt.Errorf("sidecar match skills generate failed: %w", err)
 	}
@@ -268,7 +323,7 @@ Available teams:
 %s
 User task: %s`, teamList.String(), prompt)
 
-	result, err := s.generate(ctx, matchPrompt)
+	result, err := s.generate(ctx, matchPrompt, ClassifierProfile)
 	if err != nil {
 		return "", fmt.Errorf("sidecar match team generate failed: %w", err)
 	}
@@ -312,7 +367,7 @@ Return ONLY JSON in this exact format:
 
 User task: %s`, prompt)
 
-	result, err := s.generate(ctx, matchPrompt)
+	result, err := s.generate(ctx, matchPrompt, ClassifierProfile)
 	if err != nil {
 		return RouteClassification{}, fmt.Errorf("sidecar classify route generate failed: %w", err)
 	}
@@ -366,7 +421,7 @@ Respond with JSON only:
 or
 {"approved": false, "reason": "explanation of which rules are violated"}`, ruleList.String(), toolName, truncArgs, agentName)
 
-	result, err := s.generate(ctx, prompt)
+	result, err := s.generate(ctx, prompt, ClassifierProfile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: sidecar guard review generate failed: %v\n", err)
 		return GuardReviewResult{Approved: false, Reason: fmt.Sprintf("guard review generation failed: %v", err)}, err
@@ -425,7 +480,7 @@ PAST TASKS:
 %s
 NEW TASK: %s`, list.String(), newTask)
 
-	result, err := s.generate(ctx, prompt)
+	result, err := s.generate(ctx, prompt, ClassifierProfile)
 	if err != nil {
 		return -1, fmt.Errorf("sidecar similar task generate failed: %w", err)
 	}
@@ -486,7 +541,7 @@ Path: %s
 
 Return ONLY a JSON object: {"is_file_access": true/false, "reason": "brief explanation"}`, path, truncCmd, path)
 
-	result, err := s.generate(ctx, prompt)
+	result, err := s.generate(ctx, prompt, ClassifierProfile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: sidecar ReviewPathAccess generate failed: %v\n", err)
 		return true, err
@@ -545,7 +600,7 @@ Options:
 %s
 User question: %s`, qtype, allowAny, list.String(), question)
 
-	result, err := s.generate(ctx, prompt)
+	result, err := s.generate(ctx, prompt, ClassifierProfile)
 	if err != nil {
 		return tools.AskUserResponse{}, err
 	}
@@ -674,7 +729,7 @@ Rules:
 
 Return ONLY the JSON object.`, originalGoal, prevSummaryText, conversationText)
 
-	result, err := s.generate(ctx, prompt)
+	result, err := s.generate(ctx, prompt, CompactorProfile)
 	if err != nil {
 		return "", fmt.Errorf("sidecar compact structured generate failed: %w", err)
 	}

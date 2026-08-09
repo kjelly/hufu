@@ -9,8 +9,8 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 // The authorization boundary for agent tool calls lives here.
@@ -21,6 +21,9 @@ import (
 // call the worker had already completed and burning a retry, before the call was
 // even recorded as evidence. Denials are ordinary, recoverable conditions: the
 // model should be told and given the chance to finish with the tools it has.
+// The exception is a coordinator policy violation: a coordinator makes
+// cross-task decisions, so it cannot safely continue after violating an
+// ordering or authorization boundary.
 //
 // Enforcing in a tool wrapper also unifies the decision with the tool adapter in
 // internal/tools, which already surfaces its own denials as tool errors, so the
@@ -50,20 +53,62 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		return fantasy.ToolResponse{}, fatal
 	}
 	if denial != "" {
+		t.coordinator.setToolPolicyVerdict(call.ID, "denied")
+		if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID {
+			if t.coordinator != nil {
+				t.coordinator.report(t.coordinator.newEvent("step").withAgent(agentName).
+					withMessage(fmt.Sprintf("tool %q denied by coordinator policy; aborting run", t.Info().Name)))
+			}
+			// Initial-batch ordering and all other coordinator policy denials
+			// are hard run boundaries. Reusing errCoordinatorToolFailure also
+			// prevents wrap-up recovery from spending another coordinator turn.
+			return fantasy.ToolResponse{}, fmt.Errorf("%w: %s", errCoordinatorToolFailure, denial)
+		}
 		if t.coordinator != nil {
 			t.coordinator.report(t.coordinator.newEvent("step").withAgent(agentName).
 				withMessage(fmt.Sprintf("tool %q denied by policy; continuing with remaining tools", t.Info().Name)))
 		}
 		return fantasy.NewTextErrorResponse(denial), nil
 	}
-	if sequenceDenial := taskToolSequenceFromContext(ctx).reserve(t.Info().Name, earlyTerminalSubmitResult(t.Info().Name, call)); sequenceDenial != "" {
+	sequence := taskToolSequenceFromContext(ctx)
+	reservedSlot, sequenceDenial := sequence.reserve(t.Info().Name, call.Input, earlyTerminalSubmitResult(t.Info().Name, call))
+	if sequenceDenial != "" {
+		t.coordinator.setToolPolicyVerdict(call.ID, "denied")
 		if t.coordinator != nil {
 			t.coordinator.report(t.coordinator.newEvent("step").withAgent(agentName).
 				withMessage(fmt.Sprintf("tool %q denied by closed task sequence", t.Info().Name)))
 		}
+		// Any out-of-order call is itself a terminal contract failure. Do not
+		// let the model keep trying different tools after the sequence has
+		// rejected one; only an honest failed/blocked submit_result may follow.
+		sequence.markFailed()
 		return fantasy.NewTextErrorResponse(sequenceDenial), nil
 	}
-	return t.inner.Run(ctx, call)
+	response, err := t.inner.Run(ctx, call)
+	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID && (err != nil || response.IsError) {
+		detail := strings.TrimSpace(response.Content)
+		if err != nil {
+			if detail != "" {
+				detail += ": "
+			}
+			detail += err.Error()
+		}
+		return fantasy.ToolResponse{}, fmt.Errorf("%w: tool %q failed: %s", errCoordinatorToolFailure, t.Info().Name, detail)
+	}
+	if err != nil || response.IsError {
+		if sequence.allowsExpectedExitCode(reservedSlot, t.Info().Name, response.Content) {
+			// A bounded probe often terminates with a non-zero process status
+			// (for example timeout=124). When the task contract explicitly
+			// names that result, preserve its output as normal evidence and let
+			// the worker continue to the next declared step.
+			return fantasy.NewTextResponse(response.Content), nil
+		}
+		// A closed sequence is an atomic evidence protocol. Once a tool has
+		// failed, the worker may only report the failure; it must not spend a
+		// later slot on an improvised repair or rerun.
+		taskToolSequenceFromContext(ctx).markFailed()
+	}
+	return response, err
 }
 
 // earlyTerminalSubmitResult reports whether call is a submit_result
@@ -132,6 +177,9 @@ func (c *Coordinator) createGatedAgent(ctx context.Context, provider *agent.Olla
 // error only when the failure is not something the model can work around (a
 // cancelled context, for instance).
 func (c *Coordinator) authorizeToolInvocation(ctx context.Context, agentName, toolName string) (string, error) {
+	if denial := c.initialCoordinatorToolDenial(agentName, toolName); denial != "" {
+		return denial, nil
+	}
 	configured := tools.GetToolsAllowed(ctx)
 	if configured == nil {
 		// No allowlist attached: the tool adapter in internal/tools remains the
@@ -166,6 +214,17 @@ func (c *Coordinator) authorizeToolInvocation(ctx context.Context, agentName, to
 		reason = "not authorized"
 	}
 	return fmt.Sprintf("tool %q is not available to you: %s. Do not call it again — achieve the goal with the tools you do have, and state in your result what you could not do without it.", toolName, reason), nil
+}
+
+func (c *Coordinator) initialCoordinatorToolDenial(agentName, toolName string) string {
+	if c == nil || c.session == nil || c.taskTracker == nil || strings.TrimSpace(agentName) != "" {
+		return ""
+	}
+	want := strings.TrimSpace(c.session.Config.Delegation.InitialCoordinatorTool)
+	if want == "" || len(c.taskTracker.TodoList().Items()) > 0 || toolName == want {
+		return ""
+	}
+	return fmt.Sprintf("coordinator's first tool call must be %q before the initial delegation batch; got %q", want, toolName)
 }
 
 // unauthorizedExposedTools returns the exposed tool names that the allowlist does

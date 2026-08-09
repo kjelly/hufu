@@ -7,8 +7,8 @@ package team
 // prompt presents them to the coordinator LLM.
 
 import (
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
 )
 
 // nextStrongerModel returns the model that follows current in the list, or ""

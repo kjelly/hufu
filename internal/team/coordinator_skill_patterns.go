@@ -13,8 +13,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/anomalyco/hufu/internal/skill"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/skill"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 // checkSkillPatterns checks for repeating tool call patterns and auto-generates skill drafts

@@ -15,9 +15,9 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/skill"
-	"github.com/anomalyco/hufu/internal/tools"
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/skill"
+	"github.com/kjelly/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 type runAgentsTool struct {
@@ -26,19 +26,65 @@ type runAgentsTool struct {
 }
 
 func (t *runAgentsTool) Info() fantasy.ToolInfo {
+	workerNames := t.coordinator.workerNameList()
+	taskProperties := buildAgentTaskProperties(workerNames, len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir), t.coordinator.taskCapabilityNames())
+	taskSchema := map[string]any{
+		"type":                 "object",
+		"properties":           taskProperties,
+		"required":             []string{"agent"},
+		"additionalProperties": false,
+	}
+	tasksSchema := map[string]any{
+		"type":  "array",
+		"items": taskSchema,
+	}
+	if t.coordinator.initialDelegationPending() {
+		initial := append([]string(nil), t.coordinator.session.Config.Delegation.InitialBatch...)
+		taskProperties["agent"] = map[string]any{
+			"type":        "string",
+			"enum":        initial,
+			"description": "Required initial-batch worker. This fresh session cannot delegate any later worker until the complete ordered initial batch is accepted.",
+		}
+		// Static initial contracts own these fields. Leaving them out of the
+		// model-visible schema prevents a coordinator from mistaking phase-one
+		// dispatch for a chance to invent execution, artifact, or file-handoff
+		// behavior; runtime conflict checks remain fail-closed as defense in
+		// depth for providers that do not enforce JSON Schema.
+		if t.coordinator.session.Config.Delegation.BindInitialTaskContracts {
+			delete(taskProperties, "execution")
+			delete(taskProperties, "output_mode")
+			delete(taskProperties, "context_files")
+		}
+		taskSchema["required"] = []string{"agent", "goal"}
+		tasksSchema["minItems"] = len(initial)
+		tasksSchema["maxItems"] = len(initial)
+		tasksSchema["description"] = fmt.Sprintf("Canonical initial delegation: exactly one ordered task for each worker %s. Later workers are unavailable until this batch succeeds policy validation.", formatAgentNames(initial))
+		prefixItems := make([]map[string]any, 0, len(initial))
+		for _, name := range initial {
+			properties := make(map[string]any, len(taskProperties))
+			for key, value := range taskProperties {
+				properties[key] = value
+			}
+			properties["agent"] = map[string]any{"type": "string", "enum": []string{name}}
+			prefixItems = append(prefixItems, map[string]any{
+				"type":                 "object",
+				"properties":           properties,
+				"required":             []string{"agent", "goal"},
+				"additionalProperties": false,
+			})
+		}
+		tasksSchema["prefixItems"] = prefixItems
+	}
 	return fantasy.ToolInfo{
-		Name:        "agent",
-		Description: "Delegate tasks to team workers. Runs all tasks in parallel. Returns structured results from each agent.",
+		Name: "agent",
+		Description: func() string {
+			if t.coordinator.initialDelegationPending() {
+				return fmt.Sprintf("Dispatch the required canonical initial batch %s. This is the only valid delegation while phase is initial_pending; malformed or later-worker calls are rejected by policy.", formatAgentNames(t.coordinator.session.Config.Delegation.InitialBatch))
+			}
+			return "Delegate new tasks to team workers. Runs all tasks in parallel and returns structured results. Never redispatch a worker whose task already completed successfully; use team_info with action=task_result to read that task's full result instead. A successful-worker redispatch is rejected by policy and is terminal for the current coordination step."
+		}(),
 		Parameters: map[string]any{
-			"tasks": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type":                 "object",
-					"properties":           buildAgentTaskProperties(t.coordinator.workerNameList(), len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir), t.coordinator.taskCapabilityNames()),
-					"required":             []string{"agent"},
-					"additionalProperties": false,
-				},
-			},
+			"tasks": tasksSchema,
 		},
 		Required: []string{"tasks"},
 	}

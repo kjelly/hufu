@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 type SideEffectClass string
@@ -222,6 +222,13 @@ func resolveTaskRecovery(def *agent.AgentDef, t TaskDef) (SideEffectClass, Recov
 	sideEffect := t.SideEffect
 	recovery := t.Recovery
 	reconcileTool := t.ReconcileTool
+	if sideEffect == "" && structuredStepsContainEffect(t.Execution.Steps, ExecutionEffectMutate) {
+		// A declared mutation is stronger evidence than an agent-wide default.
+		// Conservatively serialize it even when the planner omitted side_effect.
+		sideEffect = SideEffectExternalWrite
+	} else if sideEffect == "" && structuredStepsContainEffect(t.Execution.Steps, ExecutionEffectProduce) {
+		sideEffect = SideEffectWorkspaceWrite
+	}
 	if def != nil {
 		if sideEffect == "" {
 			sideEffect = SideEffectClass(def.SideEffect)

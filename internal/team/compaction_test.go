@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestStructuredSummary_RenderMarkdownAndParse(t *testing.T) {

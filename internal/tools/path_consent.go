@@ -18,8 +18,8 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
-	"github.com/anomalyco/hufu/internal/audit"
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/audit"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 type ConsentResult int

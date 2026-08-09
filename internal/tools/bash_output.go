@@ -42,12 +42,10 @@ func buildBashResponse(stdout, stderr string, exitCode int) fantasy.ToolResponse
 		result.WriteString("STDERR:\n")
 		result.WriteString(stderr)
 	}
-	if exitCode != 0 {
-		if result.Len() > 0 {
-			result.WriteString("\n")
-		}
-		fmt.Fprintf(&result, "Exit code: %d", exitCode)
+	if result.Len() > 0 {
+		result.WriteString("\n")
 	}
+	fmt.Fprintf(&result, "Exit code: %d", exitCode)
 
 	output := result.String()
 	if output == "" {

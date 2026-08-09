@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // reflectionHeader prefixes every reflection hint appended to a retry prompt.

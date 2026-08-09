@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/skill"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/skill"
 )
 
 // newTestCoordinatorForDryRun builds a Coordinator with no provider, sidecar,

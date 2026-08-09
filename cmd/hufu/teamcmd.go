@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	internalteam "github.com/anomalyco/hufu/internal/team"
+	internalteam "github.com/kjelly/hufu/internal/team"
 )
 
 // teamCmd contains commands that create and maintain on-disk team definitions.
@@ -24,7 +24,20 @@ var (
 	teamGenerateDryRun    bool
 	teamGenerateOutputDir string
 	teamGenerateModel     string
+	teamValidateName      string
 )
+
+var teamValidateCmd = &cobra.Command{
+	Use:   "validate [team-directory]",
+	Short: "Validate static task contracts before dispatch",
+	Long: `Load and validate a team without calling a model or creating a workspace.
+
+Use a directory argument, or --team to resolve a discoverable team name. This
+checks bound initial task contracts for missing/duplicate workers and invalid
+execution/output contracts before they can consume an execution retry.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runTeamValidate,
+}
 
 var teamGenerateCmd = &cobra.Command{
 	Use:   "generate <team-name>",
@@ -42,12 +55,48 @@ deterministic task categories, so generation does not make an LLM call.`,
 
 func init() {
 	teamCmd.AddCommand(teamGenerateCmd)
+	teamCmd.AddCommand(teamValidateCmd)
 	teamGenerateCmd.Flags().StringVar(&teamGeneratePrompt, "from-prompt", "", "Task description used to design the team (required)")
 	teamGenerateCmd.Flags().BoolVar(&teamGenerateWrite, "write", false, "Write the validated team under --output-dir")
 	teamGenerateCmd.Flags().BoolVar(&teamGenerateDryRun, "dry-run", false, "Validate without writing files (the default preview also validates)")
 	teamGenerateCmd.Flags().StringVar(&teamGenerateOutputDir, "output-dir", ".agent-teams", "Directory in which to create the team")
 	teamGenerateCmd.Flags().StringVar(&teamGenerateModel, "model", "", "Optional model to set in the generated team.yaml")
 	_ = teamGenerateCmd.MarkFlagRequired("from-prompt")
+	teamValidateCmd.Flags().StringVar(&teamValidateName, "team", "", "Discoverable team name to validate")
+}
+
+func runTeamValidate(_ *cobra.Command, args []string) error {
+	if len(args) == 1 && strings.TrimSpace(teamValidateName) != "" {
+		return fmt.Errorf("provide either a team directory or --team, not both")
+	}
+	teamDir := ""
+	if len(args) == 1 {
+		teamDir = args[0]
+	} else if strings.TrimSpace(teamValidateName) != "" {
+		registry := internalteam.NewTeamRegistry(resolveSearchPaths())
+		if err := registry.Discover(); err != nil {
+			return fmt.Errorf("discover teams: %w", err)
+		}
+		var err error
+		teamDir, err = registry.Resolve(teamValidateName)
+		if err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("team directory or --team is required")
+	}
+	session, err := internalteam.LoadTeam(teamDir, nil, nil)
+	if err != nil {
+		return err
+	}
+	findings := internalteam.ValidateTeamTaskContracts(session)
+	for _, finding := range findings {
+		if finding.Severity == internalteam.FindingSeverityError {
+			return fmt.Errorf("%s: %s (%s)", finding.Field, finding.Message, finding.Code)
+		}
+	}
+	_, err = fmt.Fprintf(os.Stdout, "team %s: task contracts valid\n", session.Config.Name)
+	return err
 }
 
 func runTeamGenerate(_ *cobra.Command, args []string) error {

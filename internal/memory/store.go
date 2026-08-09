@@ -16,7 +16,7 @@ import (
 
 	"github.com/philippgille/chromem-go"
 
-	"github.com/anomalyco/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/config"
 )
 
 const collectionName = "memory"

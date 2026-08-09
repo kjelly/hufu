@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/tools"
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 func (c *Coordinator) getSnapshotField(getter func(*currentSnapshot) string) string {

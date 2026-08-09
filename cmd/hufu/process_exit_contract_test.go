@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // buildProcessContractBinary builds the real CLI so these tests exercise

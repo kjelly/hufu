@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // saveCheckpoint must snapshot the coordinator's live state (task plan, active

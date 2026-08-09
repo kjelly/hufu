@@ -1,10 +1,12 @@
 package team
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -147,24 +149,123 @@ type TaskProposal struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// OpenQuestions is the canonical textual handoff form for unresolved work.
+// Models naturally produce either terse strings or structured question
+// objects. Accept the documented structured form at the typed-result boundary
+// and normalize it into durable text, while rejecting arbitrary objects that
+// could otherwise silently change the task-result contract.
+type OpenQuestions []string
+
+func (questions *OpenQuestions) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+		*questions = nil
+		return nil
+	}
+
+	entries := []json.RawMessage{data}
+	var array []json.RawMessage
+	if err := json.Unmarshal(data, &array); err == nil {
+		entries = array
+	}
+
+	normalized := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		question, err := normalizeOpenQuestion(entry)
+		if err != nil {
+			return err
+		}
+		normalized = append(normalized, question)
+	}
+	*questions = normalized
+	return nil
+}
+
+func normalizeOpenQuestion(data json.RawMessage) (string, error) {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		if text = strings.TrimSpace(text); text != "" {
+			return text, nil
+		}
+		return "", fmt.Errorf("open_questions entries must not be empty")
+	}
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil || object == nil {
+		return "", fmt.Errorf("open_questions entries must be strings or objects with question, context?, and detail?")
+	}
+	for key := range object {
+		if key != "question" && key != "context" && key != "detail" {
+			return "", fmt.Errorf("open_questions object contains unsupported field %q", key)
+		}
+	}
+
+	read := func(key string, required bool) (string, error) {
+		raw, ok := object[key]
+		if !ok {
+			if required {
+				return "", fmt.Errorf("open_questions object requires %q", key)
+			}
+			return "", nil
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return "", fmt.Errorf("open_questions.%s must be a string", key)
+		}
+		value = strings.TrimSpace(value)
+		if required && value == "" {
+			return "", fmt.Errorf("open_questions.%s must not be empty", key)
+		}
+		return value, nil
+	}
+
+	question, err := read("question", true)
+	if err != nil {
+		return "", err
+	}
+	context, err := read("context", false)
+	if err != nil {
+		return "", err
+	}
+	detail, err := read("detail", false)
+	if err != nil {
+		return "", err
+	}
+	if context != "" {
+		question += "\nContext: " + context
+	}
+	if detail != "" {
+		question += "\nDetail: " + detail
+	}
+	return question, nil
+}
+
 type TaskResult struct {
-	TaskID             string               `json:"task_id,omitempty"`
-	Agent              string               `json:"agent,omitempty"`
-	Status             string               `json:"status,omitempty"`
-	Summary            string               `json:"summary"`
-	Artifacts          []ArtifactRef        `json:"artifacts,omitempty"`
-	Evidence           []EvidenceRef        `json:"evidence,omitempty"`
-	FilesRead          []FileRef            `json:"files_read,omitempty"`
-	FilesModified      []FileRef            `json:"files_modified,omitempty"`
-	Commands           []CommandResult      `json:"commands,omitempty"`
-	Verification       []VerificationResult `json:"verification,omitempty"`
-	Decisions          []Decision           `json:"decisions,omitempty"`
-	Findings           []Finding            `json:"findings,omitempty"`
-	Risks              []Risk               `json:"risks,omitempty"`
-	OpenQuestions      []string             `json:"open_questions,omitempty"`
-	SuggestedNextTasks []TaskProposal       `json:"suggested_next_tasks,omitempty"`
-	RetryHint          string               `json:"retry_hint,omitempty"`
-	RawOutputRef       *ArtifactRef         `json:"raw_output_ref,omitempty"`
+	TaskID  string `json:"task_id,omitempty"`
+	Attempt int    `json:"attempt,omitempty"`
+	Agent   string `json:"agent,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Summary string `json:"summary"`
+	// Details is the complete textual deliverable when a task produces a plan,
+	// analysis, review, or other handoff that does not need a separate file.
+	// It is part of the typed result, so downstream coordinators can consume it
+	// without asking a successful worker to write or repeat a report.
+	Details            string                           `json:"details,omitempty"`
+	Artifacts          []ArtifactRef                    `json:"artifacts,omitempty"`
+	Evidence           []EvidenceRef                    `json:"evidence,omitempty"`
+	FilesRead          []FileRef                        `json:"files_read,omitempty"`
+	FilesModified      []FileRef                        `json:"files_modified,omitempty"`
+	Commands           []CommandResult                  `json:"commands,omitempty"`
+	Verification       []VerificationResult             `json:"verification,omitempty"`
+	Decisions          []Decision                       `json:"decisions,omitempty"`
+	Findings           []Finding                        `json:"findings,omitempty"`
+	Risks              []Risk                           `json:"risks,omitempty"`
+	OpenQuestions      OpenQuestions                    `json:"open_questions,omitempty"`
+	SuggestedNextTasks []TaskProposal                   `json:"suggested_next_tasks,omitempty"`
+	RetryHint          string                           `json:"retry_hint,omitempty"`
+	RawOutputRef       *ArtifactRef                     `json:"raw_output_ref,omitempty"`
+	ReceiptIDs         []string                         `json:"receipt_ids,omitempty"`
+	Outputs            map[string]StructuredOutputValue `json:"outputs,omitempty"`
 
 	Confidence float64 `json:"confidence"`
 	Source     string  `json:"source"` // "submitted" or "parsed_free_text"
@@ -224,6 +325,9 @@ func (tr *TaskResult) FormatForContext() string {
 	if tr.Summary != "" {
 		sb.WriteString("Summary: " + tr.Summary + "\n")
 	}
+	if tr.Details != "" {
+		sb.WriteString("Detailed Deliverable:\n" + tr.Details + "\n")
+	}
 	if tr.Source != "" {
 		fmt.Fprintf(&sb, "Result Source: %s (confidence: %.2f)\n", tr.Source, tr.Confidence)
 	}
@@ -250,6 +354,9 @@ func (tr *TaskResult) FormatForContext() string {
 		sb.WriteString("Findings:\n")
 		for _, f := range tr.Findings {
 			fmt.Fprintf(&sb, "  - [%s] %s\n", f.Category, f.Summary)
+			if f.Detail != "" {
+				fmt.Fprintf(&sb, "    %s\n", f.Detail)
+			}
 		}
 	}
 	if len(tr.Decisions) > 0 {
@@ -259,4 +366,17 @@ func (tr *TaskResult) FormatForContext() string {
 		}
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+// coordinatorTaskOutput makes the submitted typed result, rather than an
+// optional post-tool prose response, the authoritative worker handoff. A
+// worker may acknowledge submit_result in prose or emit nothing after it;
+// neither should hide the data the coordinator needs to continue safely.
+func coordinatorTaskOutput(fallback string, result *TaskResult) string {
+	if result != nil && result.Source == "submitted" && strings.TrimSpace(result.Details) != "" {
+		if formatted := result.FormatForContext(); formatted != "" {
+			return formatted
+		}
+	}
+	return fallback
 }

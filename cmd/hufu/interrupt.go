@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/team"
-	"github.com/anomalyco/hufu/internal/tools"
-	tuipkg "github.com/anomalyco/hufu/internal/tui"
+	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/tools"
+	tuipkg "github.com/kjelly/hufu/internal/tui"
 )
 
 // setupInterruptHandler installs the SIGINT / Ctrl+C handler that

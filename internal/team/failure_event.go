@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // FailureEventPayload is the self-contained diagnostic contract for a task
@@ -25,6 +25,9 @@ type FailureEventPayload struct {
 	Fingerprint      string           `json:"fingerprint" yaml:"fingerprint"`
 	Hint             string           `json:"hint" yaml:"hint"`
 	Summary          string           `json:"summary" yaml:"summary"`
+	FailedStepID     string           `json:"failed_step_id,omitempty" yaml:"failed_step_id,omitempty"`
+	ReceiptID        string           `json:"receipt_id,omitempty" yaml:"receipt_id,omitempty"`
+	FailureType      string           `json:"failure_type,omitempty" yaml:"failure_type,omitempty"`
 }
 
 // MarshalJSON makes direct serialization safe as well as the explicit
@@ -53,6 +56,9 @@ func RedactedFailureEvent(event *FailureEventPayload) *FailureEventPayload {
 	copyEvent.Fingerprint = utils.TruncateString(utils.RedactSecrets(copyEvent.Fingerprint), 200)
 	copyEvent.Hint = utils.TruncateString(utils.RedactSecrets(copyEvent.Hint), 500)
 	copyEvent.Summary = utils.TruncateString(utils.RedactSecrets(copyEvent.Summary), 500)
+	copyEvent.FailedStepID = utils.TruncateString(utils.RedactSecrets(copyEvent.FailedStepID), 200)
+	copyEvent.ReceiptID = utils.TruncateString(utils.RedactSecrets(copyEvent.ReceiptID), 200)
+	copyEvent.FailureType = utils.TruncateString(utils.RedactSecrets(copyEvent.FailureType), 100)
 	return copyEvent
 }
 
@@ -75,6 +81,15 @@ func RenderFailureText(event *FailureEventPayload) string {
 	// an exhausted attempt budget — appeared nowhere in the CLI output at all.
 	// The fields below are supporting detail and can afford to be cut.
 	fmt.Fprintf(&b, "summary: %s\n", event.Summary)
+	if event.FailedStepID != "" {
+		fmt.Fprintf(&b, "failed_step_id: %s\n", event.FailedStepID)
+	}
+	if event.ReceiptID != "" {
+		fmt.Fprintf(&b, "receipt_id: %s\n", event.ReceiptID)
+	}
+	if event.FailureType != "" {
+		fmt.Fprintf(&b, "failure_type: %s\n", event.FailureType)
+	}
 	fmt.Fprintf(&b, "command: %s\n", event.Command)
 	fmt.Fprintf(&b, "work_dir: %s\n", event.WorkDir)
 	fmt.Fprintf(&b, "shell: %s\n", event.Shell)
@@ -216,6 +231,25 @@ func (c *Coordinator) failureEventForItem(item *TodoItem, class TaskFailureClass
 		if result.WeakReason != "" {
 			event.Hint = utils.TruncateString(result.WeakReason, 500)
 		}
+	} else if c != nil {
+		attempt := c.currentTaskAttempt(taskID)
+		if receipt, ok := c.executionStepReceiptRegistry().FirstFailure(taskID, attempt); ok {
+			event.FailedStepID = receipt.StepID
+			event.ReceiptID = receipt.ID
+			failureType := receipt.FailureClass
+			if failureType == "" && receipt.ValidatorVerdict == "fail" {
+				failureType = "validation"
+			} else if failureType == "" && receipt.PolicyVerdict != "" && receipt.PolicyVerdict != "allowed" {
+				failureType = "policy"
+			}
+			event.FailureType = normalizedExecutionFailureClass(failureType)
+			event.Phase = event.FailureType
+			event.Command = receipt.Tool
+			code := receipt.ExitCode
+			event.ExitCode = &code
+			event.Stdout = utils.TruncateString(receipt.Stdout, 2000)
+			event.Stderr = utils.TruncateString(receipt.Stderr, 2000)
+		}
 	}
 	return RedactedFailureEvent(event)
 }
@@ -239,13 +273,16 @@ func failureEventPayloadMap(event *FailureEventPayload) map[string]interface{} {
 		"fingerprint":       event.Fingerprint,
 		"hint":              event.Hint,
 		"summary":           event.Summary,
+		"failed_step_id":    event.FailedStepID,
+		"receipt_id":        event.ReceiptID,
+		"failure_type":      event.FailureType,
 		"failure_event":     event,
 	}
 }
 
 var failureEventFieldNames = []string{
 	"task_id", "phase", "failure_class", "retry_disposition", "command", "work_dir", "shell",
-	"exit_code", "stdout", "stderr", "fingerprint", "hint", "summary",
+	"exit_code", "stdout", "stderr", "fingerprint", "hint", "summary", "failed_step_id", "receipt_id", "failure_type",
 }
 
 // mergeFailureEventJSON applies only fields present in the event payload.
@@ -296,6 +333,9 @@ func mergeFailureEventJSON(existing *FailureEventPayload, payload json.RawMessag
 	apply("fingerprint", &result.Fingerprint)
 	apply("hint", &result.Hint)
 	apply("summary", &result.Summary)
+	apply("failed_step_id", &result.FailedStepID)
+	apply("receipt_id", &result.ReceiptID)
+	apply("failure_type", &result.FailureType)
 	return RedactedFailureEvent(result), true
 }
 

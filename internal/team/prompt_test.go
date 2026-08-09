@@ -3,7 +3,7 @@ package team
 import (
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestHasAtName(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/anomalyco/hufu/internal/yamlutil"
+	"github.com/kjelly/hufu/internal/yamlutil"
 )
 
 // ParseVarFlags parses --var key=value flags into a variable map.

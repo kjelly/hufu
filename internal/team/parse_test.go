@@ -7,18 +7,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/config"
-	"github.com/anomalyco/hufu/internal/skill"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/skill"
 )
 
 func TestParseTeamDelegationPolicy(t *testing.T) {
 	tmpDir := t.TempDir()
 	yamlContent := `name: test-team
 delegation:
+  allowed-workers: [reader, probe]
   initial-batch:
     agents: [reader, probe]
     exact: true
+    first-tool: agent
+    bind-contracts: true
   no-redispatch-after-success: [reader, probe]
 `
 	if err := os.WriteFile(filepath.Join(tmpDir, "team.yaml"), []byte(yamlContent), 0o644); err != nil {
@@ -31,8 +34,17 @@ delegation:
 	if !cfg.Delegation.RequireExactInitialBatch {
 		t.Fatal("RequireExactInitialBatch = false, want true")
 	}
+	if want := []string{"reader", "probe"}; !reflect.DeepEqual(cfg.Delegation.AllowedWorkers, want) {
+		t.Fatalf("AllowedWorkers = %v, want %v", cfg.Delegation.AllowedWorkers, want)
+	}
 	if want := []string{"reader", "probe"}; !reflect.DeepEqual(cfg.Delegation.InitialBatch, want) {
 		t.Fatalf("InitialBatch = %v, want %v", cfg.Delegation.InitialBatch, want)
+	}
+	if got, want := cfg.Delegation.InitialCoordinatorTool, "agent"; got != want {
+		t.Fatalf("InitialCoordinatorTool = %q, want %q", got, want)
+	}
+	if !cfg.Delegation.BindInitialTaskContracts {
+		t.Fatal("BindInitialTaskContracts = false, want true")
 	}
 	if want := []string{"reader", "probe"}; !reflect.DeepEqual(cfg.Delegation.NoRedispatchAfterSuccess, want) {
 		t.Fatalf("NoRedispatchAfterSuccess = %v, want %v", cfg.Delegation.NoRedispatchAfterSuccess, want)

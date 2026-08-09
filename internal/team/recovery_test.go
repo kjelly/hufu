@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func assertRecoveryFailureEvent(t *testing.T, item *TodoItem, class TaskFailureClass, disposition RetryDisposition) {
@@ -446,5 +446,13 @@ func TestResolveTaskRecovery_Precedence(t *testing.T) {
 	}
 	if rec != "" || rt != "" {
 		t.Errorf("nil agent: recovery/reconcile should be empty, got %q/%q", rec, rt)
+	}
+
+	// Structured effects are task-local runtime evidence and therefore take
+	// precedence over a read-only agent default when the planner omitted the
+	// redundant side_effect field.
+	se, _, _ = resolveTaskRecovery(roAgent, TaskDef{Agent: "reader", Goal: "apply", Execution: ExecutionContract{Steps: []ExecutionStep{{ID: "mutate", Tool: "custom", Effect: ExecutionEffectMutate}}}})
+	if se != SideEffectExternalWrite {
+		t.Errorf("structured mutation: expected conservative external_write, got %q", se)
 	}
 }

@@ -15,10 +15,10 @@ import (
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 
-	"github.com/anomalyco/hufu/internal/config"
-	"github.com/anomalyco/hufu/internal/readline"
-	"github.com/anomalyco/hufu/internal/team"
-	tuipkg "github.com/anomalyco/hufu/internal/tui"
+	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/readline"
+	"github.com/kjelly/hufu/internal/team"
+	tuipkg "github.com/kjelly/hufu/internal/tui"
 )
 
 var replCmd = &cobra.Command{

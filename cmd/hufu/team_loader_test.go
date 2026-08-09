@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/config"
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestDisplayResolvedConfig(t *testing.T) {
@@ -109,5 +109,40 @@ func TestAgentNamesFromSession(t *testing.T) {
 	}
 	if !seen["worker-a"] || !seen["worker-b"] {
 		t.Errorf("expected worker-a and worker-b, got %v", got)
+	}
+}
+
+func TestPrepareSessionLifecycle_CorruptArchivedSessionStartsInitialPhase(t *testing.T) {
+	workspace := t.TempDir()
+	session := &team.TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "phase-test"}}
+	if err := os.WriteFile(filepath.Join(workspace, "session.json"), []byte("{broken"), 0o600); err != nil {
+		t.Fatalf("write corrupt session: %v", err)
+	}
+	// A readable transcript is archived while the corrupt JSON is discarded;
+	// neither is allowed to become canonical task/delegation state.
+	if err := team.SaveSessionMD(workspace, "# Prior session\n\nclaimed a worker completed\n"); err != nil {
+		t.Fatalf("write session markdown: %v", err)
+	}
+
+	original := opts
+	opts.newSession = true
+	t.Cleanup(func() { opts = original })
+
+	sd, archived, err := prepareSessionLifecycle(session)
+	if err != nil {
+		t.Fatalf("prepare lifecycle: %v", err)
+	}
+	if len(archived) != 0 {
+		t.Fatalf("corrupt JSON unexpectedly yielded archive entries: %#v", archived)
+	}
+	if sd == nil || sd.DelegationPhase != team.DelegationPhaseInitialPending || len(sd.Tasks) != 0 {
+		t.Fatalf("fresh replacement session retained non-canonical delegation state: %#v", sd)
+	}
+	if persisted := team.LoadSession(workspace); persisted == nil || persisted.DelegationPhase != team.DelegationPhaseInitialPending || len(persisted.Tasks) != 0 {
+		t.Fatalf("persisted fresh session = %#v, want empty initial-pending session", persisted)
+	}
+	history, err := filepath.Glob(filepath.Join(workspace, "history", "*.md"))
+	if err != nil || len(history) != 1 {
+		t.Fatalf("archived transcript = %v, err=%v; want one history file", history, err)
 	}
 }

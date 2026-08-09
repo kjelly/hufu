@@ -12,9 +12,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anomalyco/hufu/internal/config"
-	contextstore "github.com/anomalyco/hufu/internal/context"
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/config"
+	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 var contextWorkspace string

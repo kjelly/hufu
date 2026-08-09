@@ -6,7 +6,7 @@ import (
 	"log"
 	"path/filepath"
 
-	contextstore "github.com/anomalyco/hufu/internal/context"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 // shadowContextAppend records legacy memory writes in the canonical store.

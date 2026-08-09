@@ -4,10 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 func TestTeamToolDenyRemovesAlwaysIncludedStateWriters(t *testing.T) {
@@ -46,5 +47,20 @@ func TestParseTeamToolDeny(t *testing.T) {
 	}
 	if !slices.Equal(cfg.ToolsDenied, []string{"stm_write"}) {
 		t.Fatalf("ToolsDenied = %v, want [stm_write]", cfg.ToolsDenied)
+	}
+}
+
+func TestDeniedToolInstructionsAreRemovedWithoutSyntheticToolNames(t *testing.T) {
+	c := &Coordinator{
+		session: &TeamSession{Config: agent.TeamConfig{
+			ToolsDenied: []string{"custom_memory_tool", "load_skill"},
+		}},
+	}
+	prompt := c.filterDeniedPromptLines("keep this rule\ncall load_skill for details\nuse custom_memory_tool to save\n")
+	if strings.Contains(prompt, "load_skill") || strings.Contains(prompt, "custom_memory_tool") {
+		t.Fatalf("denied tool instructions remained in prompt: %q", prompt)
+	}
+	if !strings.Contains(prompt, "keep this rule") {
+		t.Fatalf("allowed prompt content was removed: %q", prompt)
 	}
 }

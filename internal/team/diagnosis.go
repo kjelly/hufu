@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // RepairAction is the machine-readable action proposed by diagnosis. It is

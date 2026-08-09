@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	contextstore "github.com/anomalyco/hufu/internal/context"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 // CompletionGateInput is the immutable evidence observed at the end of a run.

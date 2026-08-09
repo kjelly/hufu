@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // fastPathDispatch abstracts the two execution entry points so the fast-path

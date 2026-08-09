@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestClassifyRepairFailure_SubReasons(t *testing.T) {
@@ -274,7 +274,7 @@ func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
 	if repairCalls != 2 {
 		t.Fatalf("repair calls = %d, want exactly 2 (one schema-only retry)", repairCalls)
 	}
-	if len(prompts) != 2 || !strings.Contains(prompts[1], "Schema-only repair") || !strings.Contains(prompts[1], "Do NOT execute work") {
+	if len(prompts) != 2 || !strings.Contains(prompts[1], "Schema-only repair") || !strings.Contains(prompts[1], "Do NOT execute work") || !strings.Contains(prompts[1], "`status`") || !strings.Contains(prompts[1], "non-empty `summary`") {
 		t.Fatalf("second repair prompt was not schema-only: %#v", prompts)
 	}
 	got := c.taskTracker.TodoList().Items()[0]
@@ -359,6 +359,28 @@ type mockWorkerTextAgent struct {
 type countingTextAgent struct {
 	calls *int
 	text  string
+}
+
+// exhaustedWorkerAgent simulates a worker that has consumed the final allowed
+// execution step without a final response. It lets the test verify that a
+// requires-result task bypasses prose rescue and enters the result-only path.
+type exhaustedWorkerAgent struct {
+	calls *int
+}
+
+func (m *exhaustedWorkerAgent) response() *fantasy.AgentResult {
+	(*m.calls)++
+	return &fantasy.AgentResult{Steps: []fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{
+		fantasy.TextContent{Text: "read-only evidence from the final work step"},
+	}}}}}
+}
+
+func (m *exhaustedWorkerAgent) Generate(context.Context, fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return m.response(), nil
+}
+
+func (m *exhaustedWorkerAgent) Stream(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return m.response(), nil
 }
 
 func (m *countingTextAgent) response() *fantasy.AgentResult {
@@ -599,6 +621,61 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 	}
 	if len(item.ExecutionReceipts) != 1 {
 		t.Fatalf("execution receipt history length = %d, want one receipt for attempt 1", len(item.ExecutionReceipts))
+	}
+}
+
+func TestProtocolRepair_StepBudgetExhaustionUsesResultOnlyFinalization(t *testing.T) {
+	workspace := t.TempDir()
+	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
+	workerCalls := 0
+	repairCalls := 0
+	var repairPrompts []string
+
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "budget-finalization", Timeout: 30, MaxRetries: 1},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", MaxSteps: 1, Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-budget-finalization",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "long read-only task"}})[0]
+	c.workerAgentOverride = &exhaustedWorkerAgent{calls: &workerCalls}
+	c.repairAgentOverride = &scriptedRepairAgent{
+		calls:   &repairCalls,
+		prompts: &repairPrompts,
+		onCall: func(int) {
+			c.storeSubmittedTaskResult(item.ID, &TaskResult{
+				TaskID: item.ID, Agent: "worker", Status: TaskResultStatusSuccess,
+				Summary: "finalized from read-only evidence", Source: "submitted",
+			})
+		},
+	}
+
+	_, err := c.executeTask(context.Background(), TaskDef{
+		Agent: "worker", Goal: "long read-only task", Execution: ExecutionContract{RequiresResult: true},
+	}, item.ID)
+	if err != nil {
+		t.Fatalf("step-budget finalization should submit a result, got %v", err)
+	}
+	if workerCalls != 1 {
+		t.Fatalf("worker calls = %d, want 1; requires-result exhaustion must not invoke prose rescue", workerCalls)
+	}
+	if repairCalls != 1 || len(repairPrompts) != 1 || !strings.Contains(repairPrompts[0], "Finalization Instructions") {
+		t.Fatalf("repair calls/prompts = %d/%q, want one result-only budget finalization", repairCalls, repairPrompts)
+	}
+	got := c.taskTracker.TodoList().Items()[0]
+	if got.Status != TaskDone || got.TypedResult == nil || got.TypedResult.Status != TaskResultStatusSuccess {
+		t.Fatalf("finalized task = status %s result %#v, want done/success", got.Status, got.TypedResult)
+	}
+	if got.ExecutionReceipt == nil || got.ExecutionReceipt.StepBudget == nil || !got.ExecutionReceipt.StepBudget.Exhausted {
+		t.Fatalf("step budget receipt = %#v, want exhausted receipt", got.ExecutionReceipt)
 	}
 }
 

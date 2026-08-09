@@ -16,7 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/sidecar"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 const (
@@ -131,7 +132,7 @@ func (c *Coordinator) judgeAgentResults(ctx context.Context, goal, todoID string
 	judgeCtx, cancel := context.WithTimeout(ctx, judgeTimeout)
 	defer cancel()
 	c.report(c.newEvent("sidecar_call").withMessage("judge"))
-	response, err := s.Execute(judgeCtx, buildJudgePrompt(goal, valid))
+	response, err := s.ExecuteProfile(judgeCtx, buildJudgePrompt(goal, valid), sidecar.JudgeProfile)
 	if err != nil {
 		return "", fmt.Errorf("judge agent results: %w", err)
 	}

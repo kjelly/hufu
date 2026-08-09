@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 const defaultSSHTimeout = 30 * time.Second

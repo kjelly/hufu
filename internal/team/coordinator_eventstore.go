@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // RecordSessionUserMessage adds a user message to SessionData and dual-writes a user_message_added event to EventStore if available.

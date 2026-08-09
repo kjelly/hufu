@@ -85,11 +85,29 @@ func expandPipelineDeps(tasks []TaskDef) []TaskDef {
 }
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
+	var err error
+	tasks, err = c.bindInitialTaskContracts(tasks)
+	if err != nil {
+		// This is a compile-time configuration conflict, not a worker failure:
+		// no TODO/model call has happened and no execution retry is consumed.
+		return "", c.rejectDelegationPolicy(err.Error())
+	}
+	// Normalize accidental mutation batching before policy/preflight. This
+	// preserves the coordinator's requested task set while making the safety
+	// dependency explicit to the DAG scheduler.
+	tasks = c.serializeMutationTasks(tasks)
 	// A configured delegation policy is checked before workspace validation,
 	// resource locking, TODO creation, or worker startup. It therefore leaves
 	// previously successful independent work untouched on rejection.
 	if err := c.validateDelegationPolicy(tasks); err != nil {
 		return "", err
+	}
+	if c.session != nil {
+		for _, task := range tasks {
+			if err := validateSharedContextFiles(c.session.Workspace, task.ContextFiles); err != nil {
+				return "", fmt.Errorf("invalid context_files for agent %q: %w", task.Agent, err)
+			}
+		}
 	}
 	if err := c.ValidateWorkspaceIsolation(); err != nil {
 		return "", err
@@ -246,7 +264,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		if resolveErr != nil {
 			c.report(c.newEvent("step").withMessage(fmt.Sprintf("warning: could not resolve agent %q: %v", t.Agent, resolveErr)))
 		} else if agentDef != nil {
-			overrideModel := t.Model
+			overrideModel := c.selectTaskModel(t, agentDef)
 			if len(c.modelList) == 0 {
 				overrideModel = ""
 			}
@@ -267,6 +285,9 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		sideEffect, recovery, reconcileTool := c.PolicyEngine().ResolveRecoveryPolicy(agentDef, t)
 		todoBatch[i] = TodoSpec{
 			PlanTaskID:          t.ID,
+			ContractID:          t.ContractID,
+			ContractHash:        t.ContractHash,
+			ContractRevision:    t.ContractRevision,
 			Agent:               strings.ToLower(t.Agent),
 			Desc:                desc,
 			Model:               resolvedModel,
@@ -286,6 +307,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			Execution:           t.Execution,
 		}
 	}
+	// The successful exact initial-policy validation above is the sole point at
+	// which a fresh session may advance. Persist the phase before AddBatch's
+	// checkpoint callback so a crash cannot leave a task list and phase that
+	// disagree on resume.
+	c.markInitialDelegationAccepted()
 	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)
 	// No-progress budget (§8.1, WP-12): each newly created task is one unit
 	// of "tasks since last objective progress". Increment here at AddBatch;

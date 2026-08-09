@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/team"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // ── L1: AskUser dialog ─────────────────────────────────────────────────────

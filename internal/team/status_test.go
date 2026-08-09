@@ -6,7 +6,7 @@ import (
 
 	"time"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 func TestCoordinator_GetCurrentStatus_DefaultIdle(t *testing.T) {

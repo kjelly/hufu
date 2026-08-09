@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/config"
-	"github.com/anomalyco/hufu/internal/readline"
-	"github.com/anomalyco/hufu/internal/team"
-	"github.com/anomalyco/hufu/internal/tools"
-	tuipkg "github.com/anomalyco/hufu/internal/tui"
+	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/readline"
+	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/tools"
+	tuipkg "github.com/kjelly/hufu/internal/tui"
 )
 
 // executeDryRun handles dry run path for the CLI.

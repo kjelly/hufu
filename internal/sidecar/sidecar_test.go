@@ -8,7 +8,7 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 type usageAgent struct{}
@@ -33,7 +33,7 @@ func TestGenerateNotifiesUsageObserver(t *testing.T) {
 		observed = result.TotalUsage.TotalTokens
 	})
 
-	got, err := s.generate(context.Background(), "prompt")
+	got, err := s.generate(context.Background(), "prompt", ClassifierProfile)
 	if err != nil {
 		t.Fatalf("generate() error = %v", err)
 	}
@@ -42,6 +42,64 @@ func TestGenerateNotifiesUsageObserver(t *testing.T) {
 	}
 	if observed != 23 {
 		t.Fatalf("observer saw %d tokens, want 23", observed)
+	}
+}
+
+type callCapturingAgent struct {
+	captured fantasy.AgentCall
+	response string
+}
+
+func (a *callCapturingAgent) Generate(_ context.Context, call fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	a.captured = call
+	return &fantasy.AgentResult{
+		Response: fantasy.Response{Content: fantasy.ResponseContent{fantasy.TextContent{Text: a.response}}},
+	}, nil
+}
+
+func (a *callCapturingAgent) Stream(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return nil, nil
+}
+
+func TestGenerateAppliesProfile(t *testing.T) {
+	capture := &callCapturingAgent{response: "ok"}
+	s := &Sidecar{agent: capture}
+
+	if _, err := s.generate(context.Background(), "prompt", CompactorProfile); err != nil {
+		t.Fatalf("generate() error = %v", err)
+	}
+	if capture.captured.MaxOutputTokens == nil || *capture.captured.MaxOutputTokens != CompactorProfile.MaxOutputTokens {
+		t.Errorf("MaxOutputTokens = %v, want %d", capture.captured.MaxOutputTokens, CompactorProfile.MaxOutputTokens)
+	}
+	if capture.captured.Temperature == nil || *capture.captured.Temperature != CompactorProfile.Temperature {
+		t.Errorf("Temperature = %v, want %g", capture.captured.Temperature, CompactorProfile.Temperature)
+	}
+	if capture.captured.ProviderOptions == nil {
+		t.Error("ProviderOptions not set for a profile with a reasoning effort")
+	}
+}
+
+func TestExecuteDefaultsToClassifierProfile(t *testing.T) {
+	capture := &callCapturingAgent{response: "ok"}
+	s := &Sidecar{agent: capture}
+
+	if _, err := s.Execute(context.Background(), "task"); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if capture.captured.MaxOutputTokens == nil || *capture.captured.MaxOutputTokens != ClassifierProfile.MaxOutputTokens {
+		t.Errorf("Execute MaxOutputTokens = %v, want ClassifierProfile's %d", capture.captured.MaxOutputTokens, ClassifierProfile.MaxOutputTokens)
+	}
+}
+
+func TestExecuteProfileOverridesDefault(t *testing.T) {
+	capture := &callCapturingAgent{response: "ok"}
+	s := &Sidecar{agent: capture}
+
+	if _, err := s.ExecuteProfile(context.Background(), "task", JudgeProfile); err != nil {
+		t.Fatalf("ExecuteProfile() error = %v", err)
+	}
+	if capture.captured.MaxOutputTokens == nil || *capture.captured.MaxOutputTokens != JudgeProfile.MaxOutputTokens {
+		t.Errorf("ExecuteProfile MaxOutputTokens = %v, want JudgeProfile's %d", capture.captured.MaxOutputTokens, JudgeProfile.MaxOutputTokens)
 	}
 }
 

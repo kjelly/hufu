@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/team"
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 // runFixMode analyzes previous execution data and suggests improvements

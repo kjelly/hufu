@@ -16,8 +16,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/anomalyco/hufu/internal/team"
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // ── Public messages (sent from coordinator goroutine via p.Send) ──────────────

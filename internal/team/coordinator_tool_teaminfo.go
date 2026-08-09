@@ -9,7 +9,7 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 type teamInfoTool struct {
@@ -30,6 +30,14 @@ func (t *teamInfoTool) Info() fantasy.ToolInfo {
 				"type":        "string",
 				"description": "Agent name for agent_info, task_history, task_result, todo_status actions",
 			},
+			"task_contains": map[string]any{
+				"type":        "string",
+				"description": "Optional case-sensitive substring of the task description for task_result. Use this when the agent has multiple completed tasks and one exact result is required; omit it for the most recent result.",
+			},
+			"task_id": map[string]any{
+				"type":        "string",
+				"description": "Stable TODO task ID for task_result. Prefer this over agent/task_contains: it returns the authoritative typed result and is not affected by task-description escaping or Markdown publication timing.",
+			},
 			"limit": map[string]any{
 				"type":        "integer",
 				"description": "Max results for task_history (default 10)",
@@ -42,9 +50,11 @@ func (t *teamInfoTool) Info() fantasy.ToolInfo {
 
 func (t *teamInfoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
-		Action string `json:"action"`
-		Agent  string `json:"agent"`
-		Limit  int    `json:"limit"`
+		Action       string `json:"action"`
+		Agent        string `json:"agent"`
+		TaskContains string `json:"task_contains"`
+		TaskID       string `json:"task_id"`
+		Limit        int    `json:"limit"`
 	}
 	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -71,10 +81,10 @@ func (t *teamInfoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 		}
 		return t.handleTaskHistory(workspace, teamName, args.Agent, args.Limit)
 	case "task_result":
-		if args.Agent == "" {
-			return fantasy.NewTextErrorResponse("agent name is required for task_result action"), nil
+		if args.Agent == "" && args.TaskID == "" {
+			return fantasy.NewTextErrorResponse("agent or task_id is required for task_result action"), nil
 		}
-		return t.handleTaskResult(c, workspace, teamName, args.Agent)
+		return t.handleTaskResult(c, workspace, teamName, args.Agent, args.TaskContains, args.TaskID)
 	case "todo_status":
 		if args.Agent == "" {
 			return fantasy.NewTextErrorResponse("agent name is required for todo_status action"), nil
@@ -204,12 +214,24 @@ func (t *teamInfoTool) handleTaskHistory(workspace, teamName, agentName string, 
 	return fantasy.NewTextResponse(b.String()), nil
 }
 
-func (t *teamInfoTool) handleTaskResult(c *Coordinator, workspace, teamName, name string) (fantasy.ToolResponse, error) {
+func (t *teamInfoTool) handleTaskResult(c *Coordinator, workspace, teamName, name, taskContains, taskID string) (fantasy.ToolResponse, error) {
+	if taskID != "" {
+		return taskResultByID(c, taskID)
+	}
 	agentDef, _, err := c.AgentPool().ResolveAgentName(name)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("agent %q not found: %v", name, err)), nil
 	}
 	resolvedName := strings.ToLower(agentDef.Name)
+
+	// The TodoList is reconstructed from session state on restart and holds the
+	// typed terminal result. It is therefore the API authority; task Markdown
+	// is only a human-readable compatibility projection.
+	if response, matched, candidates := completedTaskResultForAgent(c, resolvedName, taskContains); matched {
+		return fantasy.NewTextResponse(response), nil
+	} else if taskContains != "" && len(candidates) > 1 {
+		return fantasy.NewTextResponse(fmt.Sprintf("task_result selector is ambiguous for agent %q; matching task IDs: %s. Retry with task_id.", resolvedName, strings.Join(candidates, ", "))), nil
+	}
 
 	entries, err := taskHistoryEntries(workspace, teamName, resolvedName)
 	if err != nil {
@@ -229,12 +251,9 @@ func (t *teamInfoTool) handleTaskResult(c *Coordinator, workspace, teamName, nam
 		if status != "done" {
 			continue
 		}
-		task := "(no description)"
-		if idx := strings.Index(content, "## Task Description"); idx >= 0 {
-			rest := strings.TrimSpace(content[idx+len("## Task Description"):])
-			if firstLine := strings.SplitN(rest, "\n", 2); len(firstLine) > 0 && firstLine[0] != "" {
-				task = firstLine[0]
-			}
+		task := taskDescription(content)
+		if !taskDescriptionMatches(task, taskContains) {
+			continue
 		}
 		result := ""
 		if idx := strings.Index(content, "## Result"); idx >= 0 {
@@ -251,7 +270,101 @@ func (t *teamInfoTool) handleTaskResult(c *Coordinator, workspace, teamName, nam
 		return fantasy.NewTextResponse(b.String()), nil
 	}
 
-	return fantasy.NewTextResponse(fmt.Sprintf("Agent %q has task records but none are completed yet.", resolvedName)), nil
+	return fantasy.NewTextResponse(fmt.Sprintf("No completed task matched agent %q and selector %q. Use task_id for an exact lookup.", resolvedName, taskContains)), nil
+}
+
+func taskResultByID(c *Coordinator, taskID string) (fantasy.ToolResponse, error) {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return fantasy.NewTextErrorResponse("task result store is unavailable"), nil
+	}
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item == nil || item.ID != taskID {
+			continue
+		}
+		if item.Status != TaskDone {
+			return fantasy.NewTextResponse(fmt.Sprintf("Task %q is %s, not completed.", taskID, item.Status)), nil
+		}
+		return fantasy.NewTextResponse(formatCompletedTaskResult(item)), nil
+	}
+	return fantasy.NewTextResponse(fmt.Sprintf("Task %q was not found. Use todo_status or task_history to discover available task IDs.", taskID)), nil
+}
+
+func completedTaskResultForAgent(c *Coordinator, agentName, taskContains string) (string, bool, []string) {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return "", false, nil
+	}
+	items := c.taskTracker.TodoList().Items()
+	var matches []*TodoItem
+	for i := len(items) - 1; i >= 0; i-- {
+		item := items[i]
+		if item == nil || !strings.EqualFold(strings.TrimSpace(item.Agent), strings.TrimSpace(agentName)) || item.Status != TaskDone {
+			continue
+		}
+		if !taskDescriptionMatches(item.Desc, taskContains) {
+			continue
+		}
+		matches = append(matches, item)
+	}
+	if len(matches) == 0 {
+		return "", false, nil
+	}
+	if taskContains != "" && len(matches) > 1 {
+		ids := make([]string, 0, len(matches))
+		for _, item := range matches {
+			ids = append(ids, item.ID)
+		}
+		return "", false, ids
+	}
+	return formatCompletedTaskResult(matches[0]), true, nil
+}
+
+// inMemoryCompletedTaskResult remains for compatibility with callers and
+// tests added during the Markdown-publication-race fix. New code should use
+// completedTaskResultForAgent or taskResultByID.
+func inMemoryCompletedTaskResult(c *Coordinator, agentName, taskContains string) (string, bool) {
+	result, ok, _ := completedTaskResultForAgent(c, agentName, taskContains)
+	return result, ok
+}
+
+func formatCompletedTaskResult(item *TodoItem) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Completed task %s by %s:\n\n**Task:** %s\n\n", item.ID, item.Agent, item.Desc)
+	b.WriteString("**Result:**\n\n")
+	if result := item.TypedResult; result != nil {
+		if result.RawOutputRef != nil && result.RawOutputRef.Path != "" {
+			b.WriteString(formatVerbatimTranscriptManifest(result.RawOutputRef))
+		} else {
+			b.WriteString(result.FormatForContext())
+		}
+	} else if strings.TrimSpace(item.Output) != "" {
+		b.WriteString(item.Output)
+	} else {
+		b.WriteString("(completed without a recorded typed result)")
+	}
+	return b.String()
+}
+
+func taskDescription(content string) string {
+	task := "(no description)"
+	if idx := strings.Index(content, "## Task Description"); idx >= 0 {
+		rest := strings.TrimSpace(content[idx+len("## Task Description"):])
+		if firstLine := strings.SplitN(rest, "\n", 2); len(firstLine) > 0 && firstLine[0] != "" {
+			task = firstLine[0]
+		}
+	}
+	return task
+}
+
+func taskDescriptionMatches(task, selector string) bool {
+	if selector == "" {
+		return true
+	}
+	// Legacy callers historically copied a JSON-escaped description into the
+	// selector. Normalizing only escaped quotes preserves the documented
+	// substring behavior without making identity depend on serialization.
+	selector = strings.ReplaceAll(selector, `\"`, `"`)
+	task = strings.ReplaceAll(task, `\"`, `"`)
+	return strings.Contains(task, selector)
 }
 
 func (t *teamInfoTool) handleTodoStatus(c *Coordinator, name string) (fantasy.ToolResponse, error) {

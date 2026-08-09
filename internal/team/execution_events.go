@@ -69,6 +69,9 @@ type ExecutionEvent struct {
 	RepairAttempts       int             `json:"repair_attempts,omitempty"`
 	DecisionChain        []string        `json:"decision_chain,omitempty"`
 	PlanRevision         string          `json:"plan_revision,omitempty"`
+	ContractID           string          `json:"contract_id,omitempty"`
+	ContractHash         string          `json:"contract_hash,omitempty"`
+	ContractRevision     int             `json:"contract_revision,omitempty"`
 	RepairCost           RepairCost      `json:"repair_cost,omitempty"`
 	TerminalReason       string          `json:"terminal_reason,omitempty"`
 }
@@ -400,21 +403,28 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 		return
 	}
 	taskType, skills := c.taskTracker.TodoList().ExecutionMetadata(taskID)
+	contractID, contractHash, contractRevision := "", "", 0
+	if item := c.todoItemByID(taskID); item != nil {
+		contractID, contractHash, contractRevision = item.ContractID, item.ContractHash, item.ContractRevision
+	}
 	_ = logger.append(ExecutionEvent{
-		Version:      2,
-		Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
-		RunID:        runID,
-		Team:         c.session.Config.Name,
-		TaskID:       taskID,
-		Agent:        agent,
-		Attempt:      attempt,
-		Status:       status,
-		Model:        model,
-		TaskType:     taskType,
-		Skills:       skills,
-		TeamRevision: teamRevision,
-		DurationMS:   duration.Milliseconds(),
-		Usage:        usage,
+		Version:          2,
+		Timestamp:        time.Now().UTC().Format(time.RFC3339Nano),
+		RunID:            runID,
+		Team:             c.session.Config.Name,
+		TaskID:           taskID,
+		Agent:            agent,
+		Attempt:          attempt,
+		Status:           status,
+		Model:            model,
+		TaskType:         taskType,
+		Skills:           skills,
+		TeamRevision:     teamRevision,
+		DurationMS:       duration.Milliseconds(),
+		Usage:            usage,
+		ContractID:       contractID,
+		ContractHash:     contractHash,
+		ContractRevision: contractRevision,
 	})
 }
 

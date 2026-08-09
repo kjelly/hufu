@@ -9,9 +9,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anomalyco/hufu/internal/config"
-	"github.com/anomalyco/hufu/internal/memory"
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/memory"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func archiveCurrentSessionToMemory(ctx context.Context, tc *teamContext) {

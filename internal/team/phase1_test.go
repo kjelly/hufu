@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestPhase1DiagnosisPolicyDecisionTable(t *testing.T) {

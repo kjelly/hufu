@@ -112,6 +112,7 @@ func LintTeamContracts(session *TeamSession) []ContractFinding {
 	for index, task := range session.ContractTasks {
 		findings = append(findings, scopeContractFindings(fmt.Sprintf("tasks[%d]", index), LintTaskDef(task))...)
 	}
+	findings = append(findings, ValidateTeamTaskContracts(session)...)
 
 	return findings
 }

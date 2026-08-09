@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anomalyco/hufu/internal/improve"
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/improve"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 var (

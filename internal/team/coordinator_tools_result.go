@@ -33,6 +33,10 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 				"type":        "string",
 				"description": "High-level summary of the task result and accomplishments.",
 			},
+			"details": map[string]any{
+				"type":        "string",
+				"description": "Complete textual deliverable for a plan, analysis, review, or handoff. Use this instead of writing a report file solely so the coordinator can read it; keep summary concise.",
+			},
 			"artifacts": map[string]any{
 				"type":        "array",
 				"description": "List of regular files already created inside the team workspace. Hufu snapshots each file when this result is submitted; do not declare planned or external files.",
@@ -122,8 +126,18 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 			},
 			"open_questions": map[string]any{
 				"type":        "array",
-				"description": "Unresolved questions or follow-ups.",
-				"items":       map[string]any{"type": "string"},
+				"description": "Unresolved questions or follow-ups. Each entry may be a string or a structured object with required question and optional context/detail strings.",
+				"items": map[string]any{
+					"oneOf": []any{
+						map[string]any{"type": "string"},
+						map[string]any{
+							"type":                 "object",
+							"properties":           map[string]any{"question": map[string]any{"type": "string"}, "context": map[string]any{"type": "string"}, "detail": map[string]any{"type": "string"}},
+							"required":             []string{"question"},
+							"additionalProperties": false,
+						},
+					},
+				},
 			},
 			"retry_hint": map[string]any{
 				"type":        "string",
@@ -133,6 +147,11 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 				"type":        "number",
 				"description": "Self-assessed confidence level (0.0 to 1.0).",
 			},
+			"receipt_ids": map[string]any{
+				"type":        "array",
+				"description": "Runtime-issued receipt IDs that support this result. Structured execution tasks require actual receipts from the current task attempt.",
+				"items":       map[string]any{"type": "string"},
+			},
 		},
 		Required: []string{"status", "summary"},
 	}
@@ -140,7 +159,8 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 
 func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var res TaskResult
-	if err := json.Unmarshal([]byte(call.Input), &res); err != nil {
+	input := normalizeSubmitResultInput([]byte(call.Input))
+	if err := json.Unmarshal(input, &res); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v", err)), nil
 	}
 	if res.Summary == "" {
@@ -155,8 +175,19 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 
 	res.TaskID = t.todoID
 	res.Source = "submitted"
+	if len(res.Outputs) > 0 {
+		return fantasy.NewTextErrorResponse("outputs are runtime-owned; cite execution receipt_ids instead of declaring task outputs"), nil
+	}
 	if res.Confidence == 0 {
 		res.Confidence = 1.0
+	}
+	if t.forbidsArtifacts() && len(res.Artifacts) > 0 {
+		return fantasy.NewTextErrorResponse("artifacts are forbidden by this task's execution contract; omit the artifacts field and submit the result again"), nil
+	}
+	if t.coordinator != nil {
+		if err := t.coordinator.validateTaskResultReceiptClaims(t.todoID, &res); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
 	}
 	// Only a success claim can be mechanically contradicted by terminal
 	// evidence — completed_with_gaps reports a target limitation rather than a
@@ -183,6 +214,96 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		t.coordinator.storeSubmittedTaskResult(t.todoID, &res)
 	}
 	return fantasy.NewTextResponse("Task result submitted successfully."), nil
+}
+
+func (t *submitResultTool) forbidsArtifacts() bool {
+	if t == nil || t.coordinator == nil || t.coordinator.taskTracker == nil || t.coordinator.taskTracker.TodoList() == nil {
+		return false
+	}
+	for _, item := range t.coordinator.taskTracker.TodoList().Items() {
+		if item != nil && item.ID == t.todoID {
+			return item.Execution.ForbidArtifacts
+		}
+	}
+	return false
+}
+
+// normalizeSubmitResultInput preserves the typed result contract while being
+// tolerant of common model shorthand for descriptive arrays. Models often
+// collapse a one-entry array to a scalar or use an array of strings where the
+// schema expects objects. These fields are result evidence, not mutation
+// instructions, so the scalar forms can be losslessly promoted instead of
+// turning an otherwise valid terminal result into a schema-repair loop.
+func normalizeSubmitResultInput(input []byte) []byte {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(input, &object); err != nil {
+		return input
+	}
+	objectFields := map[string]string{
+		"files_read":           "path",
+		"files_modified":       "path",
+		"decisions":            "choice",
+		"findings":             "summary",
+		"risks":                "description",
+		"suggested_next_tasks": "goal",
+	}
+	for field, key := range objectFields {
+		raw, ok := object[field]
+		if !ok {
+			continue
+		}
+		entries, ok := normalizedStringEntries(raw)
+		if !ok {
+			continue
+		}
+		normalized := make([]json.RawMessage, 0, len(entries))
+		changed := false
+		for _, entry := range entries {
+			var value string
+			if err := json.Unmarshal(entry, &value); err != nil || strings.TrimSpace(value) == "" {
+				normalized = append(normalized, entry)
+				continue
+			}
+			ref, err := json.Marshal(map[string]string{key: value})
+			if err != nil {
+				return input
+			}
+			normalized = append(normalized, ref)
+			changed = true
+		}
+		if changed {
+			encoded, err := json.Marshal(normalized)
+			if err != nil {
+				return input
+			}
+			object[field] = encoded
+		}
+	}
+	// Open questions have a dedicated typed normalizer because their
+	// documented contract accepts both textual and structured entries. Keep
+	// that normalization at TaskResult's JSON boundary so every caller sees
+	// the same validation and canonical representation.
+	normalized, err := json.Marshal(object)
+	if err != nil {
+		return input
+	}
+	return normalized
+}
+
+func normalizedStringEntries(raw json.RawMessage) ([]json.RawMessage, bool) {
+	var entries []json.RawMessage
+	if err := json.Unmarshal(raw, &entries); err == nil {
+		return entries, true
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || strings.TrimSpace(value) == "" {
+		return nil, false
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	return []json.RawMessage{encoded}, true
 }
 
 // materializeSubmittedArtifacts makes a worker's artifact claim durable before

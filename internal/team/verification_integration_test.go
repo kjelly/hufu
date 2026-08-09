@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // TestVerifySpecPropagation_ClonePtr verifies that cloneVerificationSpecPtr works correctly.

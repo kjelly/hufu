@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"charm.land/fantasy"
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/hooks"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/hooks"
 )
 
 func TestProfile_BuiltinProfiles(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // removeFileIfExists removes path and returns nil when the file does not exist.
@@ -24,6 +24,21 @@ func removeFileIfExists(path string) error {
 const sessionFile = "session.json"
 const historyDirName = "history"
 const maxSessionEntries = 40
+
+// DelegationPhase is durable, canonical coordinator state. It deliberately
+// does not derive from STM, LTM, conversation text, or a memory retrieval:
+// those sources can describe an archived run but cannot prove that a task was
+// created in the current session.
+type DelegationPhase string
+
+const (
+	// DelegationPhaseInitialPending means a configured exact initial batch has
+	// not yet been accepted and recorded in this session.
+	DelegationPhaseInitialPending DelegationPhase = "initial_pending"
+	// DelegationPhaseActive means the initial batch was accepted, or this team
+	// has no exact-initial-batch policy to enforce.
+	DelegationPhaseActive DelegationPhase = "active"
+)
 
 type SessionEntry struct {
 	Role      string `json:"role"`
@@ -41,6 +56,10 @@ type SessionData struct {
 	ConversationHistoryNextSourceIndex int                 `json:"conversation_history_next_source_index,omitempty"`
 	Entries                            []SessionEntry      `json:"entries"`
 	Tasks                              []*TodoItem         `json:"tasks,omitempty"`
+	// DelegationPhase records whether a strict initial delegation remains due.
+	// Older session files omit it; SetSessionData derives their phase from the
+	// restored canonical task list for backward compatibility.
+	DelegationPhase DelegationPhase `json:"delegation_phase,omitempty"`
 	// RunResult is the canonical outcome of the latest execution. It is
 	// persisted with the session so reloads, reports, and notifications retain
 	// the same completed/partial/blocked/failed/cancelled semantics.
@@ -105,10 +124,11 @@ func SaveSession(workspace string, session *SessionData) error {
 func NewSession() *SessionData {
 	now := time.Now().Format(time.RFC3339)
 	return &SessionData{
-		CreatedAt: now,
-		UpdatedAt: now,
-		Rounds:    0,
-		Entries:   []SessionEntry{},
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		Rounds:          0,
+		Entries:         []SessionEntry{},
+		DelegationPhase: DelegationPhaseInitialPending,
 	}
 }
 

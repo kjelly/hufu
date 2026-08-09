@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
-	"github.com/anomalyco/hufu/internal/agent"
-	"github.com/anomalyco/hufu/internal/memory"
-	"github.com/anomalyco/hufu/internal/sidecar"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/memory"
+	"github.com/kjelly/hufu/internal/sidecar"
 )
 
 type mockPlanner struct {
@@ -129,13 +129,15 @@ func (m *mockSessionStore) SessionData() *SessionData      { return m.sd }
 func (m *mockSessionStore) SetSessionData(sd *SessionData) { m.sd = sd }
 
 type mockContextCompiler struct {
-	tag        string
-	budget     ContextBudget
-	usage      ContextUsageBreakdown
-	modelID    string
-	ready      bool
-	calcBudget ContextBudget
-	calcCalled bool
+	tag                   string
+	budget                ContextBudget
+	usage                 ContextUsageBreakdown
+	modelID               string
+	ready                 bool
+	calcBudget            ContextBudget
+	calcCalled            bool
+	compileCoordinatorErr error
+	compileWorkerErr      error
 }
 
 func (m *mockContextCompiler) CalculateBudget(spec ModelContextSpec, systemTokens, toolsTokens int) ContextBudget {
@@ -164,9 +166,15 @@ func (m *mockContextCompiler) FormatDependencyResults(dependencies []TaskResult)
 	return FormatDependencyResults(dependencies)
 }
 func (m *mockContextCompiler) CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInput) (CompiledContext, error) {
+	if m.compileCoordinatorErr != nil {
+		return CompiledContext{}, m.compileCoordinatorErr
+	}
 	return CompileCoordinatorContext(ctx, input)
 }
 func (m *mockContextCompiler) CompileWorkerContext(ctx context.Context, input WorkerContextInput) (CompiledContext, error) {
+	if m.compileWorkerErr != nil {
+		return CompiledContext{}, m.compileWorkerErr
+	}
 	return CompileWorkerContext(ctx, input)
 }
 

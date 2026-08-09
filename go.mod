@@ -1,4 +1,4 @@
-module github.com/anomalyco/hufu
+module github.com/kjelly/hufu
 
 go 1.26.2
 

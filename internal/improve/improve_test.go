@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestAnalyzeUsesLatestRunAndProducesDeterministicFindings(t *testing.T) {

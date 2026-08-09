@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	internalteam "github.com/anomalyco/hufu/internal/team"
-	"github.com/anomalyco/hufu/internal/tools"
+	internalteam "github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 var teamPermissionsSearchPath string

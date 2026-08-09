@@ -4,7 +4,7 @@ package tools
 import (
 	"context"
 
-	"github.com/anomalyco/hufu/internal/hooks"
+	"github.com/kjelly/hufu/internal/hooks"
 )
 
 type ToolOption func(*ToolConfig)

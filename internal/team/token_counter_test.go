@@ -2,11 +2,16 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"charm.land/fantasy"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestModelSpecRegistry(t *testing.T) {
@@ -121,6 +126,136 @@ func TestContextBudgetAndReport(t *testing.T) {
 	}
 	if !strings.Contains(report, "System instructions") || !strings.Contains(report, "Reply reserve") {
 		t.Errorf("report missing section breakdown, got:\n%s", report)
+	}
+}
+
+func TestWithEffectiveMaxOutputTokens(t *testing.T) {
+	spec := ModelContextSpec{ModelID: "gemma4:31b", ContextWindow: 128000, MaxOutputTokens: 4096, SafetyMarginTokens: 2000, IsEstimated: true}
+
+	overridden := spec.WithEffectiveMaxOutputTokens(16384)
+	if overridden.MaxOutputTokens != 16384 {
+		t.Errorf("MaxOutputTokens = %d, want 16384 (effective max-tokens must win over the registry guess)", overridden.MaxOutputTokens)
+	}
+	// Everything else is untouched.
+	if overridden.ContextWindow != 128000 || overridden.SafetyMarginTokens != 2000 {
+		t.Errorf("unrelated fields changed: %+v", overridden)
+	}
+
+	unchanged := spec.WithEffectiveMaxOutputTokens(0)
+	if unchanged.MaxOutputTokens != 4096 {
+		t.Errorf("MaxOutputTokens = %d, want unchanged 4096 when effective <= 0", unchanged.MaxOutputTokens)
+	}
+}
+
+func TestResolveAgentMaxOutputTokens(t *testing.T) {
+	c := &Coordinator{session: &TeamSession{
+		Config: agent.TeamConfig{Generation: agent.GenerationParams{MaxTokens: "8192"}},
+	}}
+
+	if got := c.resolveAgentMaxOutputTokens(&agent.AgentDef{Generation: agent.GenerationParams{MaxTokens: "4096"}}); got != 4096 {
+		t.Errorf("agent-configured max-tokens = %d, want 4096 (agent must win over team)", got)
+	}
+	if got := c.resolveAgentMaxOutputTokens(&agent.AgentDef{}); got != 8192 {
+		t.Errorf("unset agent max-tokens = %d, want team fallback 8192", got)
+	}
+	if got := c.resolveAgentMaxOutputTokens(nil); got != 8192 {
+		t.Errorf("nil agent = %d, want team fallback 8192", got)
+	}
+
+	empty := &Coordinator{session: &TeamSession{}}
+	if got := empty.resolveAgentMaxOutputTokens(nil); got != 0 {
+		t.Errorf("no config anywhere = %d, want 0 (let caller fall back to registry)", got)
+	}
+}
+
+func TestDetectAndCacheOllamaContextLengths(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/show" {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct{ Model string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Model != "gemma4:31b" {
+			http.Error(w, "unknown model", http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model_info": map[string]any{
+				"general.architecture":  "gemma3",
+				"gemma3.context_length": 131072,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	modelID := "ollama/gemma4:31b"
+	DetectAndCacheOllamaContextLengths(context.Background(), srv.URL+"/v1", "", []string{modelID})
+
+	spec := globalRegistry.GetSpec(modelID)
+	if spec.ContextWindow != 131072 {
+		t.Errorf("ContextWindow = %d, want 131072 (detected from Ollama /api/show)", spec.ContextWindow)
+	}
+}
+
+func TestDetectAndCacheOllamaContextLengths_SkipsKnownModels(t *testing.T) {
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// gpt-4o has an exact hardcoded registry entry (not estimated), so it must
+	// not be probed over the network at all.
+	DetectAndCacheOllamaContextLengths(context.Background(), srv.URL+"/v1", "", []string{"gpt-4o"})
+
+	if called {
+		t.Error("probed a model with an exact (non-estimated) registry entry; should have been skipped")
+	}
+}
+
+func TestTruncateToTokenBudget(t *testing.T) {
+	t.Run("under budget is unchanged", func(t *testing.T) {
+		text := "short text"
+		if got := TruncateToTokenBudget(text, "estimated", 1000); got != text {
+			t.Errorf("got %q, want unchanged %q", got, text)
+		}
+	})
+
+	t.Run("zero budget is unchanged", func(t *testing.T) {
+		text := strings.Repeat("word ", 5000)
+		if got := TruncateToTokenBudget(text, "estimated", 0); got != text {
+			t.Error("maxTokens <= 0 must leave text unchanged")
+		}
+	})
+
+	t.Run("over budget is cut and stays within it", func(t *testing.T) {
+		text := strings.Repeat("The quick brown fox jumps over the lazy dog. ", 500)
+		budget := 200
+		got := TruncateToTokenBudget(text, "estimated", budget)
+		if len(got) >= len(text) {
+			t.Fatalf("expected truncation, got len %d >= original len %d", len(got), len(text))
+		}
+		if !strings.HasSuffix(got, "... [truncated]") {
+			t.Errorf("expected truncation marker, got suffix %q", got[max(0, len(got)-30):])
+		}
+		prefix := strings.TrimSuffix(got, "\n\n... [truncated]")
+		if tokens := estimateTextTokens(prefix, "estimated"); tokens > budget {
+			t.Errorf("truncated prefix estimates to %d tokens, want <= %d", tokens, budget)
+		}
+	})
+}
+
+func TestGetWorkerContextSizeIsTokenBudget(t *testing.T) {
+	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{}}}
+	if got := c.getWorkerContextSize(); got != defaultWorkerContextSize {
+		t.Errorf("getWorkerContextSize() = %d, want default %d", got, defaultWorkerContextSize)
+	}
+
+	configured := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{WorkerContextSize: 500}}}
+	if got := configured.getWorkerContextSize(); got != 500 {
+		t.Errorf("getWorkerContextSize() = %d, want configured 500", got)
 	}
 }
 

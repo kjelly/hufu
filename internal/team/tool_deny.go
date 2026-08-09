@@ -5,7 +5,7 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // selectWorkerTools is the single worker-facing tool boundary. Team-level
@@ -57,4 +57,40 @@ func (c *Coordinator) filterDeniedToolNames(candidate []string) []string {
 		}
 	}
 	return filtered
+}
+
+// filterDeniedCoordinatorTools applies the same team-level deny boundary to
+// the orchestrator as to workers. Memory/collaboration conveniences are
+// otherwise injected by buildOrchestratorTools after the worker filter and
+// can bypass a read-only or no-memory team contract during wrap-up.
+func (c *Coordinator) filterDeniedCoordinatorTools(candidate []fantasy.AgentTool) []fantasy.AgentTool {
+	if c == nil || c.session == nil || len(c.session.Config.ToolsDenied) == 0 {
+		return candidate
+	}
+	denied := make(map[string]bool, len(c.session.Config.ToolsDenied))
+	for _, name := range c.session.Config.ToolsDenied {
+		if name = strings.TrimSpace(name); name != "" {
+			denied[name] = true
+		}
+	}
+	filtered := make([]fantasy.AgentTool, 0, len(candidate))
+	for _, tool := range candidate {
+		if tool != nil && !denied[tool.Info().Name] {
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered
+}
+
+func (c *Coordinator) coordinatorToolDenied(name string) bool {
+	if c == nil || c.session == nil {
+		return false
+	}
+	name = strings.TrimSpace(name)
+	for _, denied := range c.session.Config.ToolsDenied {
+		if strings.TrimSpace(denied) == name {
+			return true
+		}
+	}
+	return false
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestPlanFirstTaskCloningAndErrorPropagation(t *testing.T) {

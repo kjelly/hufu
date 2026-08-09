@@ -10,7 +10,7 @@ import (
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 
-	"github.com/anomalyco/hufu/internal/skill"
+	"github.com/kjelly/hufu/internal/skill"
 )
 
 var draftsOnly bool

@@ -9,7 +9,7 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestPhase0EventStoreReplaysIdentityAndDedupState(t *testing.T) {

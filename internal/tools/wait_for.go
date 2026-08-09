@@ -20,7 +20,7 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/audit"
+	"github.com/kjelly/hufu/internal/audit"
 )
 
 const (

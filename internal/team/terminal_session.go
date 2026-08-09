@@ -22,7 +22,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 const terminalSessionsFile = "terminal_sessions.json"

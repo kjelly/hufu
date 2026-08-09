@@ -8,7 +8,7 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/anomalyco/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 type terminalTool struct {
