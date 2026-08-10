@@ -1,13 +1,13 @@
 # hufu
 
-> ⚠️ **Fork notice** — This repository (`kjelly/hufu`) is a personal fork of [`anomalyco/hufu`](https://github.com/anomalyco/hufu). The Go module path remains `github.com/anomalyco/hufu` so existing consumers keep resolving dependencies. Releases are published from this fork via GoReleaser.
+> ⚠️ **Fork notice** — This repository (`kjelly/hufu`) is a personal fork of [`anomalyco/hufu`](https://github.com/anomalyco/hufu). Its Go module path is `github.com/kjelly/hufu`. Releases are published from this fork via GoReleaser.
 
 
 > 透過 Ollama 協調 LLM Agent 團隊，協作完成任務的 Go CLI 工具
 
 `hufu` 是一個以 Go 撰寫的命令列工具，能夠協調由多個 LLM Agent 組成的團隊（透過 Ollama），讓它們以分工合作的方式完成複雜任務。團隊透過名稱從設定的搜尋路徑中發現，單一 prompt 可以在多個團隊之間切換，或直接呼叫特定 Agent。
 
-- **Module**: `github.com/anomalyco/hufu` (fork at `github.com/kjelly/hufu`)
+- **Module**: `github.com/kjelly/hufu`
 - **Go 版本**: 1.26.2
 - **CLI 框架**: [cobra](https://github.com/spf13/cobra)
 - **LLM 框架**: [charm.land/fantasy](https://charm.land/fantasy)

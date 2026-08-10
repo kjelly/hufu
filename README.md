@@ -1,13 +1,13 @@
 # hufu
 
-> ⚠️ **Fork notice** — This repository (`kjelly/hufu`) is a personal fork of [`anomalyco/hufu`](https://github.com/anomalyco/hufu). The Go module path remains `github.com/anomalyco/hufu` so existing consumers keep resolving dependencies. Releases are published from this fork via GoReleaser.
+> ⚠️ **Fork notice** — This repository (`kjelly/hufu`) is a personal fork of [`anomalyco/hufu`](https://github.com/anomalyco/hufu). Its Go module path is `github.com/kjelly/hufu`. Releases are published from this fork via GoReleaser.
 
 
 > A Go CLI tool that orchestrates teams of LLM agents via Ollama to collaboratively accomplish tasks
 
 `hufu` is a command-line tool written in Go that coordinates teams of multiple LLM agents (via Ollama), enabling them to work together on complex tasks through division of labor. Teams are discovered by name from configured search paths, and a single prompt can switch between multiple teams or invoke specific agents directly.
 
-- **Module**: `github.com/anomalyco/hufu` (fork at `github.com/kjelly/hufu`)
+- **Module**: `github.com/kjelly/hufu`
 - **Go version**: 1.26.2
 - **CLI framework**: [cobra](https://github.com/spf13/cobra)
 - **LLM framework**: [charm.land/fantasy](https://charm.land/fantasy)

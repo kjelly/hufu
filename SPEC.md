@@ -4,7 +4,7 @@
 
 **hufu** is a Go CLI tool that orchestrates teams of LLM agents (via Ollama) to collaboratively accomplish tasks. Teams are discovered by name from configured search paths, and a single prompt can switch between multiple teams or invoke specific agents directly.
 
-- **Module**: `github.com/anomalyco/hufu`
+- **Module**: `github.com/kjelly/hufu`
 - **Go version**: 1.26.2
 - **CLI framework**: `github.com/spf13/cobra`
 - **LLM framework**: `charm.land/fantasy` (Charm's agent/LLM abstraction)
@@ -339,6 +339,116 @@ hufu [prompt]
 | `load_skill` | Load skill content by name |
 | `finish` | Signal completion with final answer |
 | `agent` | Delegate tasks to workers |
+
+### 5.4 Coordinator Tool-Argument Protocol Repair
+
+#### Problem Statement
+
+Provider tool calling is not assumed to enforce the JSON Schema advertised by
+hufu. A coordinator can therefore return syntactically valid JSON whose value
+types do not match the `agent` tool contract. Known failure shapes include:
+
+```json
+{"tasks":"[{\"agent\":\"worker\",\"goal\":\"...\"}]"}
+```
+
+and a `tasks` array that mixes task objects with strings or other values. The
+canonical wire format remains:
+
+```json
+{"tasks":[{"agent":"worker","goal":"bounded outcome","constraints":"optional safety boundary"}]}
+```
+
+`tasks` MUST be a native JSON array and every element MUST be an object that
+conforms to the current `TaskDef` schema. JSON encoded inside a string is not a
+valid substitute.
+
+#### Required Behaviour
+
+1. hufu MUST validate coordinator tool arguments against the current tool
+   schema before invoking the tool implementation.
+2. An argument-shape failure that occurs before any tool side effect MUST enter
+   one bounded protocol-repair turn. This exception applies only to decoding
+   or schema validation; authorization, capability, contract, policy, closed
+   sequence, execution, and non-zero tool-result failures remain terminal.
+3. The repair request MUST include:
+   - the tool name;
+   - the failing JSON path and expected/actual types;
+   - one compact valid example generated from the current tool schema; and
+   - an instruction to regenerate the complete argument object without
+     commentary.
+4. A repair turn MUST NOT execute the rejected call, advance delegation state,
+   create a task, consume a task retry, or repeat more than once for the same
+   coordinator step.
+5. If the repaired call is still invalid, hufu MUST fail closed with the
+   original error, the repair error, tool name, model/provider identity, and
+   audit call IDs preserved in the terminal diagnostic.
+6. hufu MUST NOT silently coerce, unwrap, or double-decode stringified arrays
+   or objects. In particular, it MUST NOT accept a string-valued `tasks` merely
+   because that string can be parsed as JSON. Silent coercion hides provider
+   regressions and makes the effective wire contract ambiguous.
+7. A coordinator tool error produced after tool execution remains
+   terminal under the existing coordinator direct-tool safety boundary.
+
+#### Repair State
+
+Protocol repair is scoped to one coordinator step and keyed by the original
+tool-call ID. Its state is:
+
+```text
+unvalidated -> valid -> execute
+           \
+            -> invalid, unused repair budget -> repair_requested
+               -> valid -> execute
+               -> invalid -> terminal_failure
+```
+
+The repair budget MUST be stored outside model-generated arguments and MUST be
+reset only when the coordinator advances to a new step. Re-emitting the same
+malformed call consumes the budget and terminates the step.
+
+#### Typed Plan Handoff
+
+Coordinator prompts SHOULD keep `agent` calls minimal and MUST NOT require the
+model to copy a large planner result into a nested `goal` or `constraints`
+string. When one worker consumes another worker's typed result, hufu SHOULD
+attach that result through a coordinator-owned typed handoff referenced by
+stable task/result ID. The handoff is transport metadata, not model-authored
+tool JSON.
+
+A team instruction MUST NOT simultaneously require a bounded/minimal task
+object and require a complete plan to be copied verbatim into that object. If
+typed handoff is unavailable, the team must choose one explicit, schema-valid
+handoff mechanism and define its size limit.
+
+#### Provider Enforcement and Telemetry
+
+- Providers that support strict tool schemas SHOULD enable that facility, but
+  local validation remains mandatory because provider guarantees vary.
+- Audit logs MUST record `tool_argument_schema_violation` with the model,
+  provider, tool, JSON path, expected type, actual type, repair attempt, and
+  final disposition. Argument values continue to use the normal redaction and
+  truncation rules.
+- Reliability evaluation SHOULD aggregate schema violations by model/provider.
+  Repeated violations MAY trigger a configured coordinator-model fallback, but
+  fallback MUST NOT grant an additional repair attempt for the same step.
+
+#### Acceptance Tests
+
+The implementation is complete only when automated tests demonstrate:
+
+1. a native `tasks` array of valid task objects executes normally;
+2. a stringified complete `tasks` array is rejected without execution;
+3. a `tasks` array containing a string element is rejected without execution;
+4. one corrected regeneration executes exactly once and creates no duplicate
+   tasks;
+5. a second malformed regeneration terminates with both diagnostics retained;
+6. policy/capability failures and post-execution tool errors receive no
+   protocol-repair turn;
+7. cancellation during repair creates no task and preserves session state;
+8. audit records contain the schema path and repair disposition without
+   leaking task secrets; and
+9. provider strict-schema support does not disable local validation.
 
 ## 6. Team Configuration Format
 
