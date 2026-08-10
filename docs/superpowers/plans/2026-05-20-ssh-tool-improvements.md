@@ -1123,7 +1123,7 @@ func TestSSH_AuditLogging(t *testing.T) {
 ```go
 // internal/tools/ssh.go - add audit logging
 import (
-    "github.com/anomalyco/hufu/internal/audit"
+    "github.com/kjelly/hufu/internal/audit"
 )
 
 func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {

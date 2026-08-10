@@ -16,7 +16,7 @@
 
 ## Global Constraints
 
-- Go module path: `github.com/anomalyco/hufu`
+- Go module path: `github.com/kjelly/hufu`
 - Must maintain 100% backward compatibility with legacy `session.json`, `chat_history.md`, and `task_journal.jsonl` files (dual-write phase).
 - All tests must pass: `go test ./...`
 - Verification commands must be executed before marking tasks done.
