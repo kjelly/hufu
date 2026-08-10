@@ -304,6 +304,21 @@ type DelegationPolicy struct {
 	// attach workspace/shared files to a delegated task. Teams that do not set
 	// this keep the legacy context_files behavior.
 	ForbidContextFiles bool
+	// TaskGoalInvariants are optional, team-declared text boundaries checked
+	// before a delegated task creates a TODO or starts a worker.  The runtime
+	// only compares literals; provider- and project-specific content remains
+	// in the team configuration.
+	TaskGoalInvariants []TaskGoalInvariant
+}
+
+// TaskGoalInvariant constrains a task goal selected by worker and a required
+// goal substring.  It is deliberately generic: integrations supply literal
+// payloads while the runtime only enforces their presence or absence.
+type TaskGoalInvariant struct {
+	Agent             string   `yaml:"agent" json:"agent"`
+	WhenGoalContains  string   `yaml:"when-goal-contains" json:"when_goal_contains"`
+	RequiredLiterals  []string `yaml:"required-literals" json:"required_literals"`
+	ForbiddenLiterals []string `yaml:"forbidden-literals" json:"forbidden_literals"`
 }
 
 // ReliabilityConfig bounds diagnostic and repair work that repeats without

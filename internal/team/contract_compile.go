@@ -129,10 +129,30 @@ func effectiveContractHash(id, agent string, execution ExecutionContract, output
 // ValidateTeamTaskContracts validates static contracts without interpreting
 // worker/coordinator prose. It is safe to run at load time and from the CLI.
 func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
-	if session == nil || !session.Config.Delegation.BindInitialTaskContracts {
+	if session == nil {
 		return nil
 	}
 	var findings []ContractFinding
+	for index, invariant := range session.Config.Delegation.TaskGoalInvariants {
+		field := fmt.Sprintf("delegation.task-goal-invariants[%d]", index)
+		if strings.TrimSpace(invariant.Agent) == "" {
+			findings = append(findings, contractFinding(field+".agent", "task_goal_invariant_agent_missing", "task-goal invariant must name an agent"))
+		}
+		if strings.TrimSpace(invariant.WhenGoalContains) == "" {
+			findings = append(findings, contractFinding(field+".when-goal-contains", "task_goal_invariant_selector_missing", "task-goal invariant must select a goal substring"))
+		}
+		if len(invariant.RequiredLiterals) == 0 && len(invariant.ForbiddenLiterals) == 0 {
+			findings = append(findings, contractFinding(field, "task_goal_invariant_empty", "task-goal invariant must require or forbid at least one literal"))
+		}
+		for literalIndex, literal := range append(append([]string(nil), invariant.RequiredLiterals...), invariant.ForbiddenLiterals...) {
+			if strings.TrimSpace(literal) == "" {
+				findings = append(findings, contractFinding(fmt.Sprintf("%s.literals[%d]", field, literalIndex), "task_goal_invariant_literal_empty", "task-goal invariant literals must not be empty"))
+			}
+		}
+	}
+	if !session.Config.Delegation.BindInitialTaskContracts {
+		return findings
+	}
 	initial := session.Config.Delegation.InitialBatch
 	if len(initial) == 0 {
 		return []ContractFinding{{Severity: FindingSeverityError, Code: "initial_contract_batch_missing", Field: "delegation.initial-batch", Message: "bind-contracts requires a non-empty initial-batch.agents list"}}

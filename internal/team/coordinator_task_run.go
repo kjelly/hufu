@@ -1991,7 +1991,13 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			// from incomplete evidence. Stop this orchestrator turn after the
 			// failing receipt has been persisted instead.
 			if todoID == CoordTodoID && isErrResult {
-				return fmt.Errorf("%w: tool %q failed: %s", errCoordinatorToolFailure, tr.ToolName, strings.TrimSpace(resultPreview))
+				if strings.HasPrefix(strings.TrimSpace(resultPreview), "Tool argument schema violation:") {
+					// Allow protocol repair prompt to reach the model; it is
+					// explicitly formulated as an error result block so the LLM
+					// knows it must retry.
+				} else {
+					return fmt.Errorf("%w: tool %q failed: %s", errCoordinatorToolFailure, tr.ToolName, strings.TrimSpace(resultPreview))
+				}
 			}
 
 			c.saveCheckpoint()

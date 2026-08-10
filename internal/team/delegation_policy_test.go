@@ -55,6 +55,28 @@ func TestDelegationPolicyBindsInitialStaticExecutionContract(t *testing.T) {
 	}
 }
 
+func TestDelegationPolicyRejectsGoalInvariantBeforeTodoCreation(t *testing.T) {
+	canonical := "BEGIN CANONICAL\nSPACE\nEND CANONICAL"
+	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
+		Agent: "worker", WhenGoalContains: "prepare", RequiredLiterals: []string{canonical}, ForbiddenLiterals: []string{"CHECKLIST_DOWN 0"},
+	}}})
+	for _, goal := range []string{
+		"prepare\nCHECKLIST_DOWN 0",
+		"prepare\nBEGIN CANONICAL\nSPACE\nEND CANONICAL\nCHECKLIST_DOWN 0",
+		"prepare\nSPACE",
+	} {
+		if err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", Goal: goal}}); err == nil || !strings.Contains(err.Error(), "task-goal-invariants") {
+			t.Fatalf("goal %q error = %v, want invariant rejection", goal, err)
+		}
+		if got := len(c.taskTracker.TodoList().Items()); got != 0 {
+			t.Fatalf("rejected goal %q created %d TODOs, want none", goal, got)
+		}
+	}
+	if err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", Goal: "prepare\n" + canonical}}); err != nil {
+		t.Fatalf("canonical goal rejected: %v", err)
+	}
+}
+
 func TestDelegationPolicyBindsEachRecoverablePartialInitialBatchOnce(t *testing.T) {
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		InitialBatch:             []string{"reader", "probe"},

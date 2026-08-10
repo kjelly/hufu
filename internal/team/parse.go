@@ -122,8 +122,9 @@ type rawDelegationPolicy struct {
 		FirstTool     string   `yaml:"first-tool"`
 		BindContracts bool     `yaml:"bind-contracts"`
 	} `yaml:"initial-batch"`
-	NoRedispatchAfterSuccess []string `yaml:"no-redispatch-after-success"`
-	ForbidContextFiles       bool     `yaml:"forbid-context-files"`
+	NoRedispatchAfterSuccess []string                  `yaml:"no-redispatch-after-success"`
+	ForbidContextFiles       bool                      `yaml:"forbid-context-files"`
+	TaskGoalInvariants       []agent.TaskGoalInvariant `yaml:"task-goal-invariants"`
 }
 
 type rawReliabilityConfig struct {
@@ -808,6 +809,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.Delegation.ForbidContextFiles {
 		cfg.Delegation.ForbidContextFiles = true
+	}
+	if len(yc.Delegation.TaskGoalInvariants) > 0 {
+		cfg.Delegation.TaskGoalInvariants = yc.Delegation.TaskGoalInvariants
 	}
 	if len(yc.Preflight) > 0 {
 		cfg.Preflight = yc.Preflight

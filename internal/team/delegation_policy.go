@@ -43,6 +43,9 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 			formatAgentNames(policy.InitialBatch), formatTaskAgents(tasks)))
 	}
 
+	if err := c.validateTaskGoalInvariants(tasks); err != nil {
+		return err
+	}
 	if len(policy.NoRedispatchAfterSuccess) == 0 {
 		return c.validateContextFilePolicy(tasks)
 	}
@@ -68,6 +71,34 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 			formatAgentNames(duplicates)))
 	}
 	return c.validateContextFilePolicy(tasks)
+}
+
+// validateTaskGoalInvariants rejects a selected task goal before TODO creation
+// or worker startup.  The comparison is intentionally literal and generic;
+// teams own the domain-specific selector and payload in their YAML.
+func (c *Coordinator) validateTaskGoalInvariants(tasks []TaskDef) error {
+	if c == nil || c.session == nil {
+		return nil
+	}
+	for taskIndex, task := range tasks {
+		agentName := strings.ToLower(strings.TrimSpace(task.Agent))
+		for invariantIndex, invariant := range c.session.Config.Delegation.TaskGoalInvariants {
+			if agentName != strings.ToLower(strings.TrimSpace(invariant.Agent)) || !strings.Contains(task.Goal, invariant.WhenGoalContains) {
+				continue
+			}
+			for _, required := range invariant.RequiredLiterals {
+				if !strings.Contains(task.Goal, required) {
+					return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].goal violates task-goal-invariants[%d]: required literal is missing", taskIndex, invariantIndex))
+				}
+			}
+			for _, forbidden := range invariant.ForbiddenLiterals {
+				if strings.Contains(task.Goal, forbidden) {
+					return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].goal violates task-goal-invariants[%d]: forbidden literal is present", taskIndex, invariantIndex))
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Coordinator) validateContextFilePolicy(tasks []TaskDef) error {
