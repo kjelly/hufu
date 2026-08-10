@@ -299,6 +299,11 @@ type DelegationPolicy struct {
 	// NoRedispatchAfterSuccess lists workers that may not be delegated again
 	// after one of their tasks reached a successful terminal result.
 	NoRedispatchAfterSuccess []string
+	// ForbidContextFiles removes file-based coordinator-to-worker handoffs for
+	// this team. Typed task results remain available, but a coordinator cannot
+	// attach workspace/shared files to a delegated task. Teams that do not set
+	// this keep the legacy context_files behavior.
+	ForbidContextFiles bool
 }
 
 // ReliabilityConfig bounds diagnostic and repair work that repeats without

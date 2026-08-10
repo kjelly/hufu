@@ -51,11 +51,12 @@ func (l *AuditLogger) redactText(value string) string {
 
 // Event type values for ToolAction.Event.
 const (
-	EventToolCall   = "tool_call"
-	EventToolResult = "tool_result"
-	EventToolError  = "tool_error"
-	EventSSH        = "ssh_connection"
-	EventWaitPoll   = "wait_poll"
+	EventToolCall                    = "tool_call"
+	EventToolResult                  = "tool_result"
+	EventToolError                   = "tool_error"
+	EventToolArgumentSchemaViolation = "tool_argument_schema_violation"
+	EventSSH                         = "ssh_connection"
+	EventWaitPoll                    = "wait_poll"
 	// Consent instrumentation: an interactive path-consent prompt can block a
 	// tool for minutes (stdin lock + a human who has not noticed the prompt).
 	// Paired start/resolved events make that wait attributable — without them
@@ -67,16 +68,23 @@ const (
 )
 
 type ToolAction struct {
-	Timestamp string `json:"timestamp"`
-	Team      string `json:"team"`
-	Agent     string `json:"agent"`
-	Tool      string `json:"tool"`
-	Action    string `json:"action"`
-	Event     string `json:"event,omitempty"`
-	CallID    string `json:"call_id,omitempty"`
-	Input     string `json:"input,omitempty"`
-	Result    string `json:"result,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Timestamp   string `json:"timestamp"`
+	Team        string `json:"team"`
+	Agent       string `json:"agent"`
+	Tool        string `json:"tool"`
+	Action      string `json:"action"`
+	Event       string `json:"event,omitempty"`
+	CallID      string `json:"call_id,omitempty"`
+	Input       string `json:"input,omitempty"`
+	Result      string `json:"result,omitempty"`
+	Error       string `json:"error,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Provider    string `json:"provider,omitempty"`
+	JSONPath    string `json:"json_path,omitempty"`
+	Expected    string `json:"expected_type,omitempty"`
+	Actual      string `json:"actual_type,omitempty"`
+	Repair      *bool  `json:"repair_attempt,omitempty"`
+	Disposition string `json:"disposition,omitempty"`
 }
 
 var defaultLogger *AuditLogger
@@ -136,6 +144,29 @@ func (l *AuditLogger) LogToolResult(agent, tool, result string, isError bool, ca
 		entry.Error = l.redactText(utils.TruncateString(result, 5000))
 	}
 	l.log(entry)
+}
+
+// LogToolArgumentSchemaViolation records a rejected tool call without
+// persisting its argument values. This keeps protocol telemetry useful while
+// preserving the normal audit redaction boundary for task secrets.
+func (l *AuditLogger) LogToolArgumentSchemaViolation(agent, tool, callID, model, provider, jsonPath, expected, actual string, repair bool, disposition string) {
+	repairAttempt := repair
+	l.log(ToolAction{
+		Timestamp:   time.Now().Format(time.RFC3339Nano),
+		Team:        l.teamName,
+		Agent:       agent,
+		Tool:        tool,
+		Action:      "reject",
+		Event:       EventToolArgumentSchemaViolation,
+		CallID:      callID,
+		Model:       l.redactText(utils.TruncateString(model, 500)),
+		Provider:    l.redactText(utils.TruncateString(provider, 200)),
+		JSONPath:    utils.TruncateString(jsonPath, 1000),
+		Expected:    utils.TruncateString(expected, 500),
+		Actual:      utils.TruncateString(actual, 500),
+		Repair:      &repairAttempt,
+		Disposition: utils.TruncateString(disposition, 100),
+	})
 }
 
 func (l *AuditLogger) log(entry ToolAction) {
