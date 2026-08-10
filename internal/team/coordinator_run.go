@@ -342,6 +342,7 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	}
 
 	orchModelID := c.resolveAgentModel(orchDef, "")
+	orchCtx = context.WithValue(orchCtx, modelKey{}, orchModelID)
 	if c.providerManager == nil {
 		return "", nil, fmt.Errorf("provider manager unavailable")
 	}

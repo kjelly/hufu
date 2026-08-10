@@ -228,29 +228,31 @@ func (b *coordToolBase) ProviderOptions() fantasy.ProviderOptions        { retur
 func (b *coordToolBase) SetProviderOptions(opts fantasy.ProviderOptions) { b.opts = opts }
 
 type Coordinator struct {
-	mu                              sync.RWMutex
-	session                         *TeamSession
-	providerManager                 *agent.ProviderManager
-	mcpManager                      *mcp.MCPToolManager
-	coreTools                       []fantasy.AgentTool
-	agentCache                      map[string]fantasy.Agent
-	agentToolNameCache              map[string][]string
-	agentCacheMu                    sync.RWMutex
-	round                           int
-	baseRounds                      int // rounds completed before the last round-state reset (resume/continue)
-	verbose                         bool
-	think                           bool
-	reportStatus                    StatusReporter
-	sessionData                     *SessionData
-	taskTracker                     *TaskTracker
-	skills                          []*skill.SkillDef
-	conversationHistory             []fantasy.Message
-	conversationHistorySourceCounts []int
-	conversationHistoryMu           sync.Mutex
-	conversationHistorySourceOffset int
-	lastCompactionSummary           *StructuredSummary
-	initialPrompt                   string
-	projectDir                      string
+	mu                                sync.RWMutex
+	session                           *TeamSession
+	providerManager                   *agent.ProviderManager
+	mcpManager                        *mcp.MCPToolManager
+	coreTools                         []fantasy.AgentTool
+	agentCache                        map[string]fantasy.Agent
+	agentToolNameCache                map[string][]string
+	agentCacheMu                      sync.RWMutex
+	round                             int
+	baseRounds                        int // rounds completed before the last round-state reset (resume/continue)
+	verbose                           bool
+	think                             bool
+	reportStatus                      StatusReporter
+	sessionData                       *SessionData
+	taskTracker                       *TaskTracker
+	skills                            []*skill.SkillDef
+	conversationHistory               []fantasy.Message
+	conversationHistorySourceCounts   []int
+	conversationHistoryMu             sync.Mutex
+	conversationHistorySourceOffset   int
+	lastCompactionSummary             *StructuredSummary
+	initialPrompt                     string
+	coordinatorProtocolRepairsAttempt atomic.Int32
+	coordinatorProtocolRepairsSuccess atomic.Int32
+	projectDir                        string
 	// Context budget reporting (§5.4). Populated by buildSystemPrompt so the
 	// execution report can emit a token-usage breakdown without re-deriving the
 	// assembled prompt.
@@ -1190,7 +1192,7 @@ func (c *Coordinator) SetStepConfirmFn(fn func(context.Context, []TaskDef) (bool
 // omitted so the coordinator cannot (and does not need to) specify a model;
 // each agent's model is determined by its own configuration instead.
 // sharedDir is the absolute path to the workspace shared/ directory.
-func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDirPath string, capabilityNames []string) map[string]any {
+func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDirPath string, capabilityNames []string, allowContextFiles bool) map[string]any {
 	contextFilesDesc := "Optional files from the shared directory to provide as context"
 	if sharedDirPath != "" {
 		contextFilesDesc = fmt.Sprintf("Optional files from the shared directory (%s) to provide as context", sharedDirPath)
@@ -1358,6 +1360,9 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 	if hasModelList {
 		props["model"] = map[string]any{"type": "string", "description": "Model ID from Available Models to use for this task. Select the model whose strengths best match this task. If empty, the default team model will be used."}
 		props["escalate"] = map[string]any{"type": "boolean", "description": "If true, each retry after a failure re-runs this task on the next stronger model in Available Models (ordered weakest→strongest). Start cheap tasks on a fast model with escalate:true so only failures pay for a stronger model. Not applicable to agents with extra-models."}
+	}
+	if !allowContextFiles {
+		delete(props, "context_files")
 	}
 	return props
 }
