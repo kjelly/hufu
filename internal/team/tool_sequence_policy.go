@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
 	"charm.land/fantasy"
+
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // taskToolSequenceKey carries one attempt-local closed tool sequence. It is
@@ -101,10 +104,10 @@ func (s *taskToolSequence) reserve(tool string, input string, allowEarlyTerminal
 		return -1, fmt.Sprintf("closed tool sequence violation: expected tool %q at position %d of %d, got %q; do not call it", expected, s.next+1, len(s.sequence), tool)
 	}
 	if expectedInput := s.expectedInput(s.next); expectedInput != nil && !matchesJSONFields(expectedInput, input) {
-		return -1, fmt.Sprintf("closed tool sequence input violation at position %d of %d; do not call it", s.next+1, len(s.sequence))
+		return -1, inputViolationMessage(s.next, len(s.sequence), expectedInput, input)
 	}
 	if s.inputField != "" && s.next < len(s.inputValues) && s.inputValues[s.next] != "" && !matchesJSONField(s.inputField, s.inputValues[s.next], input) {
-		return -1, fmt.Sprintf("closed tool sequence input violation at position %d of %d; do not call it", s.next+1, len(s.sequence))
+		return -1, inputViolationMessage(s.next, len(s.sequence), map[string]any{s.inputField: s.inputValues[s.next]}, input)
 	}
 	reserved := s.next
 	s.next++
@@ -184,6 +187,82 @@ func matchesJSONValue(expected, actual any) bool {
 		}
 	}
 	return true
+}
+
+// inputViolationMessage reports which pinned fields did not match, so a
+// coordinator or worker can correct its next call within the same attempt
+// instead of guessing blindly at what "input violation" meant. Before this,
+// the message named only the sequence position, so a worker whose task goal
+// disagreed with a coordinator-authored scalar pin (e.g. it was told to
+// `mkdir` first while the contract pinned a `date` command at slot 1) had no
+// way to tell field mismatch from tool mismatch from a typo, and the only
+// recovery path was an early-terminal submit_result that discarded the whole
+// attempt. Field-level detail lets it retry the very next call correctly.
+func inputViolationMessage(position, length int, expected map[string]any, actual string) string {
+	base := fmt.Sprintf("closed tool sequence input violation at position %d of %d; do not call it", position+1, length)
+	if detail := fieldMismatchDetail(expected, actual); detail != "" {
+		return base + " (" + detail + ")"
+	}
+	return base
+}
+
+// fieldMismatchDetail summarizes exactly which pinned fields disagree with
+// the actual tool call, rendering every value through the same redaction
+// pipeline as the rest of the runtime (redactedFieldValue) so a
+// credential-shaped field never appears in a tool-visible error message. It
+// returns "" when actual is not a JSON object, leaving the caller's generic
+// message as the only diagnostic.
+func fieldMismatchDetail(expected map[string]any, actual string) string {
+	var actualValue map[string]any
+	if json.Unmarshal([]byte(actual), &actualValue) != nil {
+		return ""
+	}
+	keys := make([]string, 0, len(expected))
+	for key := range expected {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var parts []string
+	for _, key := range keys {
+		expectedField := expected[key]
+		actualField, present := actualValue[key]
+		if present && matchesJSONValue(expectedField, actualField) {
+			continue
+		}
+		actualPreview := "<missing>"
+		if present {
+			actualPreview = redactedFieldValue(key, actualField)
+		}
+		parts = append(parts, fmt.Sprintf("field %q expected %s, got %s", key, redactedFieldValue(key, expectedField), actualPreview))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// redactedFieldValue renders one field's value as it would appear in the
+// diagnostic message, routed through utils.RedactJSON first. Reusing that
+// pipeline (rather than a bespoke check here) means a field named
+// `password`/`token`/etc. is masked by the same key-name rule already
+// trusted elsewhere in the runtime, and a value that itself looks like a
+// previously learned credential is masked wherever it appears, not only
+// under a secret-shaped key.
+func redactedFieldValue(field string, value any) string {
+	data, err := json.Marshal(map[string]any{field: value})
+	if err != nil {
+		return "<unrepresentable>"
+	}
+	redacted, err := utils.RedactJSON(data)
+	if err != nil {
+		return "<unrepresentable>"
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(redacted, &decoded); err != nil {
+		return "<unrepresentable>"
+	}
+	raw, ok := decoded[field]
+	if !ok {
+		return "<missing>"
+	}
+	return string(raw)
 }
 
 // markFailed closes the evidence sequence after a tool reports an execution
