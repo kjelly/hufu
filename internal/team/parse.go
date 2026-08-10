@@ -123,6 +123,7 @@ type rawDelegationPolicy struct {
 		BindContracts bool     `yaml:"bind-contracts"`
 	} `yaml:"initial-batch"`
 	NoRedispatchAfterSuccess []string `yaml:"no-redispatch-after-success"`
+	ForbidContextFiles       bool     `yaml:"forbid-context-files"`
 }
 
 type rawReliabilityConfig struct {
@@ -804,6 +805,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if len(yc.Delegation.NoRedispatchAfterSuccess) > 0 {
 		cfg.Delegation.NoRedispatchAfterSuccess = yc.Delegation.NoRedispatchAfterSuccess
+	}
+	if yc.Delegation.ForbidContextFiles {
+		cfg.Delegation.ForbidContextFiles = true
 	}
 	if len(yc.Preflight) > 0 {
 		cfg.Preflight = yc.Preflight

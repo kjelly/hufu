@@ -44,7 +44,7 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 	}
 
 	if len(policy.NoRedispatchAfterSuccess) == 0 {
-		return nil
+		return c.validateContextFilePolicy(tasks)
 	}
 	successful := make(map[string]bool)
 	protected := make(map[string]bool, len(policy.NoRedispatchAfterSuccess))
@@ -66,6 +66,19 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 		return c.rejectDelegationPolicy(fmt.Sprintf(
 			"workers with successful terminal results may not be redispatched in this team: %s",
 			formatAgentNames(duplicates)))
+	}
+	return c.validateContextFilePolicy(tasks)
+}
+
+func (c *Coordinator) validateContextFilePolicy(tasks []TaskDef) error {
+	if c == nil || c.session == nil || !c.session.Config.Delegation.ForbidContextFiles {
+		return nil
+	}
+	for _, task := range tasks {
+		if len(task.ContextFiles) > 0 {
+			return c.rejectDelegationPolicy(fmt.Sprintf(
+				"context_files are forbidden by this team's delegation policy (agent %q)", task.Agent))
+		}
 	}
 	return nil
 }

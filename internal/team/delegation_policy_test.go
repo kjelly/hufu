@@ -274,6 +274,21 @@ func TestDelegationPolicyRejectsWorkerOutsideAllowlist(t *testing.T) {
 	}
 }
 
+func TestDelegationPolicyRejectsForbiddenContextFiles(t *testing.T) {
+	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{ForbidContextFiles: true})
+	_, err := c.ExecuteTasks(context.Background(), []TaskDef{{
+		Agent:        "reader",
+		Goal:         "read the handoff",
+		ContextFiles: []string{"handoff.md"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "context_files are forbidden") {
+		t.Fatalf("expected forbidden-context-files rejection, got %v", err)
+	}
+	if got := len(c.taskTracker.TodoList().Items()); got != 0 {
+		t.Fatalf("context-file policy rejection created %d TODOs, want none", got)
+	}
+}
+
 func TestDelegationPolicySerializesConcurrentStateChangingTasks(t *testing.T) {
 	c := &Coordinator{
 		session: &TeamSession{

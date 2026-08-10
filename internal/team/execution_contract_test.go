@@ -592,7 +592,7 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 	}
 
 	// 2. Verify buildAgentTaskProperties execution sub-properties map contains ONLY spec fields
-	props := buildAgentTaskProperties([]string{"worker"}, true, "/tmp/shared", nil)
+	props := buildAgentTaskProperties([]string{"worker"}, true, "/tmp/shared", nil, true)
 	execProp := props["execution"].(map[string]any)
 	execSubProps := execProp["properties"].(map[string]any)
 

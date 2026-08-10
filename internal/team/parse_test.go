@@ -23,6 +23,7 @@ delegation:
     first-tool: agent
     bind-contracts: true
   no-redispatch-after-success: [reader, probe]
+  forbid-context-files: true
 `
 	if err := os.WriteFile(filepath.Join(tmpDir, "team.yaml"), []byte(yamlContent), 0o644); err != nil {
 		t.Fatal(err)
@@ -48,6 +49,9 @@ delegation:
 	}
 	if want := []string{"reader", "probe"}; !reflect.DeepEqual(cfg.Delegation.NoRedispatchAfterSuccess, want) {
 		t.Fatalf("NoRedispatchAfterSuccess = %v, want %v", cfg.Delegation.NoRedispatchAfterSuccess, want)
+	}
+	if !cfg.Delegation.ForbidContextFiles {
+		t.Fatal("ForbidContextFiles = false, want true")
 	}
 }
 

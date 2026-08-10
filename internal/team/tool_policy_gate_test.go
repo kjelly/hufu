@@ -275,6 +275,80 @@ func TestPolicyGateEnforcesScalarToolInputSequence(t *testing.T) {
 	}
 }
 
+// TestPolicyGateInputViolationReportsFieldMismatch covers the diagnostic
+// detail added to a closed-sequence input violation. Before this, the
+// message named only the sequence position ("input violation at position 1
+// of 2"), giving a coordinator or worker no way to tell a field mismatch
+// from a typo'd tool name — its only recovery was an early-terminal
+// submit_result that discarded the whole attempt. The field-level expected
+// vs. actual summary lets it correct the very next call instead.
+func TestPolicyGateInputViolationReportsFieldMismatch(t *testing.T) {
+	c := gateTestCoordinator()
+	bash := &recordingTool{name: "bash"}
+	result := &recordingTool{name: "submit_result"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{bash, result})
+	byName := map[string]fantasy.AgentTool{}
+	for _, tool := range gated {
+		byName[tool.Info().Name] = tool
+	}
+
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"bash", "submit_result"})
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence(
+		[]string{"bash", "submit_result"},
+		[]map[string]any{{"command": "pwd"}, {}},
+		"",
+		nil,
+	))
+	wrong := fantasy.ToolCall{Name: "bash", Input: `{"command":"go version"}`}
+	resp, err := byName["bash"].Run(ctx, wrong)
+	if err != nil || !resp.IsError {
+		t.Fatalf("wrong constrained input must be denied: response=%+v err=%v", resp, err)
+	}
+	for _, want := range []string{`field "command"`, `expected "pwd"`, `got "go version"`} {
+		if !strings.Contains(resp.Content, want) {
+			t.Fatalf("input violation message %q missing %q", resp.Content, want)
+		}
+	}
+}
+
+// TestPolicyGateInputViolationRedactsSecretFields ensures the new
+// field-level diagnostic never leaks a pinned credential: a mismatch on a
+// secret-shaped field name must name the field but mask both values,
+// reusing the same key-name redaction rule the rest of the runtime already
+// trusts (utils.RedactJSON) rather than a bespoke check local to this gate.
+func TestPolicyGateInputViolationRedactsSecretFields(t *testing.T) {
+	c := gateTestCoordinator()
+	bash := &recordingTool{name: "bash"}
+	result := &recordingTool{name: "submit_result"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{bash, result})
+	byName := map[string]fantasy.AgentTool{}
+	for _, tool := range gated {
+		byName[tool.Info().Name] = tool
+	}
+
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"bash", "submit_result"})
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence(
+		[]string{"bash", "submit_result"},
+		[]map[string]any{{"password": "s3cr3t-expected-value"}, {}},
+		"",
+		nil,
+	))
+	wrong := fantasy.ToolCall{Name: "bash", Input: `{"password":"s3cr3t-actual-value"}`}
+	resp, err := byName["bash"].Run(ctx, wrong)
+	if err != nil || !resp.IsError {
+		t.Fatalf("wrong constrained input must be denied: response=%+v err=%v", resp, err)
+	}
+	if !strings.Contains(resp.Content, `field "password"`) {
+		t.Fatalf("input violation message %q should still name the mismatched field", resp.Content)
+	}
+	if strings.Contains(resp.Content, "s3cr3t-expected-value") || strings.Contains(resp.Content, "s3cr3t-actual-value") {
+		t.Fatalf("input violation message must not leak a secret-shaped field's value: %q", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "[REDACTED]") {
+		t.Fatalf("input violation message should mark the secret-shaped field as redacted: %q", resp.Content)
+	}
+}
+
 // TestPolicyGateAdmitsEarlyBlockedSubmitResultButNotSuccess covers the fix
 // for a worker that discovers, partway through a closed sequence, that the
 // checkpoint cannot proceed (e.g. a prerequisite step's inputs don't exist).

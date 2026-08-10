@@ -106,6 +106,26 @@ func TestRunAgentsToolInfoPinsFreshInitialDelegationSchema(t *testing.T) {
 	}
 }
 
+func TestRunAgentsToolInfoHidesForbiddenContextFiles(t *testing.T) {
+	c := &Coordinator{
+		session: &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
+			ForbidContextFiles: true,
+		}}, Agents: map[string]*agent.AgentDef{
+			"planner": {Name: "planner", Role: "worker"},
+		}},
+		taskTracker: NewTaskTracker(),
+		sessionData: NewSession(),
+	}
+
+	info := (&runAgentsTool{coordinator: c}).Info()
+	tasks := info.Parameters["tasks"].(map[string]any)
+	items := tasks["items"].(map[string]any)
+	properties := items["properties"].(map[string]any)
+	if _, exists := properties["context_files"]; exists {
+		t.Fatal("context_files exposed despite forbid-context-files delegation policy")
+	}
+}
+
 func TestCheckDelegationLimits(t *testing.T) {
 	tests := []struct {
 		name     string

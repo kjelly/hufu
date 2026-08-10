@@ -166,7 +166,14 @@ func (c *Coordinator) gatePolicyTools(agentTools []fantasy.AgentTool) []fantasy.
 // authorization boundary at all now that OnToolCall no longer aborts.
 // TestAgentsAreCreatedThroughTheGatedConstructor enforces the funnel.
 func (c *Coordinator) createGatedAgent(ctx context.Context, provider *agent.OllamaProvider, cfg agent.AgentConfig, agentTools []fantasy.AgentTool) (fantasy.Agent, error) {
-	return agent.CreateAgent(ctx, provider, cfg, c.gatePolicyTools(agentTools))
+	gated := c.gatePolicyTools(agentTools)
+	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID {
+		// Schema validation must be the outermost coordinator boundary: malformed
+		// arguments are rejected before authorization, sequence state, or the
+		// underlying tool can observe the call.
+		gated = c.wrapWithProtocolRepair(gated)
+	}
+	return agent.CreateAgent(ctx, provider, cfg, gated)
 }
 
 // authorizeToolInvocation resolves whether agentName may call toolName under the

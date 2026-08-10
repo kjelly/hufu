@@ -27,11 +27,12 @@ type runAgentsTool struct {
 
 func (t *runAgentsTool) Info() fantasy.ToolInfo {
 	workerNames := t.coordinator.workerNameList()
-	taskProperties := buildAgentTaskProperties(workerNames, len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir), t.coordinator.taskCapabilityNames())
+	allowContextFiles := !t.coordinator.session.Config.Delegation.ForbidContextFiles
+	taskProperties := buildAgentTaskProperties(workerNames, len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir), t.coordinator.taskCapabilityNames(), allowContextFiles)
 	taskSchema := map[string]any{
 		"type":                 "object",
 		"properties":           taskProperties,
-		"required":             []string{"agent"},
+		"required":             []string{"agent", "goal"},
 		"additionalProperties": false,
 	}
 	tasksSchema := map[string]any{
