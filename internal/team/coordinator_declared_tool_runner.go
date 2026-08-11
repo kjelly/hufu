@@ -181,16 +181,41 @@ func (r *coordinatorDeclaredToolRunner) fileArtifactRef(request StructuredStepRe
 	if strings.TrimSpace(base) == "" && r.c.session != nil {
 		base = r.c.session.Workspace
 	}
-	artifact := ArtifactRef{
-		ID: name, Kind: string(ExecutionOutputArtifact), Path: path,
-		TaskID: request.TaskID, Attempt: request.Attempt,
+	workspace := base
+	if r.c.session != nil && strings.TrimSpace(r.c.session.Workspace) != "" {
+		workspace = r.c.session.Workspace
 	}
-	return inspectFileArtifact(base, artifact)
+	store, err := NewFileArtifactStore(workspace, base)
+	if err != nil {
+		return ArtifactRef{}, fmt.Errorf("open structured artifact store: %w", err)
+	}
+	ref, err := store.Put(context.Background(), PutArtifactRequest{
+		Kind:       string(ExecutionOutputArtifact),
+		Path:       path,
+		SourcePath: path,
+		TaskID:     request.TaskID,
+		Attempt:    request.Attempt,
+	})
+	if err != nil {
+		return ArtifactRef{}, fmt.Errorf("snapshot structured artifact %q: %w", name, err)
+	}
+	return ref, nil
 }
 
 // InspectStructuredArtifact re-hashes workspace-backed artifacts immediately
 // before mutation.
-func (r *coordinatorDeclaredToolRunner) InspectStructuredArtifact(_ context.Context, artifact ArtifactRef) (ArtifactRef, error) {
+func (r *coordinatorDeclaredToolRunner) InspectStructuredArtifact(ctx context.Context, artifact ArtifactRef) (ArtifactRef, error) {
+	if artifact.ID != "" && r.c.session != nil && strings.TrimSpace(r.c.session.Workspace) != "" {
+		store, err := NewFileArtifactStore(r.c.session.Workspace, r.c.session.Workspace)
+		if err != nil {
+			return ArtifactRef{}, err
+		}
+		if err := store.Verify(ctx, artifact); err == nil {
+			return artifact, nil
+		} else if strings.HasPrefix(artifact.ID, "sha256-") {
+			return ArtifactRef{}, fmt.Errorf("content-addressed artifact %q failed integrity verification: %w", artifact.ID, err)
+		}
+	}
 	base := r.c.projectDir
 	if strings.TrimSpace(base) == "" && r.c.session != nil {
 		base = r.c.session.Workspace

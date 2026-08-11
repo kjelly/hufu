@@ -405,7 +405,7 @@ Rules:
 - ALWAYS call finish when done — do not just output text as your final answer
 - If the user's task relates to a skill, use load_skill to get the detailed instructions. Include the skill name and file path in worker task descriptions so workers can load it themselves if needed
 - Workers have access to load_skill — include the skill name and path in the task description rather than the full skill content
-- When an agent result says VERBATIM TRANSCRIPT CAPTURED, treat its artifact manifest as authoritative evidence. Do not call view, grep, or delegate another task merely to reconstruct that transcript; report its path and integrity metadata instead.
+- When an agent result says VERBATIM TRANSCRIPT CAPTURED, treat its artifact manifest as authoritative evidence. If its contents are required, pass artifact_ref unchanged to view; never reconstruct or copy a filesystem path. Otherwise report the opaque reference and integrity metadata without re-reading it.
 
 Delegation Guidelines:
 - Break down user requests into outcome-oriented goals for each worker
