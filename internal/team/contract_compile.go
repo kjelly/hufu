@@ -133,6 +133,9 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 		return nil
 	}
 	var findings []ContractFinding
+	if minimum := session.Config.MinimumCoordinatorRounds; minimum > 0 && session.Config.MaxRounds > 0 && session.Config.MaxRounds < minimum {
+		findings = append(findings, contractFinding("max-rounds", "max_rounds_below_minimum_coordinator_rounds", fmt.Sprintf("max-rounds (%d) must be at least minimum-coordinator-rounds (%d); coordinator progress and task retry budgets are separate", session.Config.MaxRounds, minimum)))
+	}
 	for index, invariant := range session.Config.Delegation.TaskGoalInvariants {
 		field := fmt.Sprintf("delegation.task-goal-invariants[%d]", index)
 		if strings.TrimSpace(invariant.Agent) == "" {
@@ -141,12 +144,17 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 		if strings.TrimSpace(invariant.WhenGoalContains) == "" {
 			findings = append(findings, contractFinding(field+".when-goal-contains", "task_goal_invariant_selector_missing", "task-goal invariant must select a goal substring"))
 		}
-		if len(invariant.RequiredLiterals) == 0 && len(invariant.ForbiddenLiterals) == 0 {
-			findings = append(findings, contractFinding(field, "task_goal_invariant_empty", "task-goal invariant must require or forbid at least one literal"))
+		if len(invariant.RequiredLiterals) == 0 && len(invariant.ForbiddenLiterals) == 0 && len(invariant.RequiredToolSequence) == 0 && len(invariant.ForbiddenExecutionFields) == 0 {
+			findings = append(findings, contractFinding(field, "task_goal_invariant_empty", "task-goal invariant must constrain a literal or execution contract field"))
 		}
 		for literalIndex, literal := range append(append([]string(nil), invariant.RequiredLiterals...), invariant.ForbiddenLiterals...) {
 			if strings.TrimSpace(literal) == "" {
 				findings = append(findings, contractFinding(fmt.Sprintf("%s.literals[%d]", field, literalIndex), "task_goal_invariant_literal_empty", "task-goal invariant literals must not be empty"))
+			}
+		}
+		for fieldIndex, executionField := range invariant.ForbiddenExecutionFields {
+			if !knownExecutionContractField(executionField) {
+				findings = append(findings, contractFinding(fmt.Sprintf("%s.forbidden-execution-fields[%d]", field, fieldIndex), "task_goal_invariant_execution_field_unknown", "task-goal invariant names an unknown execution contract field"))
 			}
 		}
 	}

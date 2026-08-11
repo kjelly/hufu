@@ -77,6 +77,39 @@ func TestDelegationPolicyRejectsGoalInvariantBeforeTodoCreation(t *testing.T) {
 	}
 }
 
+func TestDelegationPolicyRejectsExecutionInvariantBeforeTodoCreation(t *testing.T) {
+	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
+		Agent:                    "worker",
+		WhenGoalContains:         "freeze",
+		RequiredToolSequence:     []string{"bash", "bash", "submit_result"},
+		ForbiddenExecutionFields: []string{"tool_input_field", "tool_input_value_sequence", "tool_input_sequence"},
+	}}})
+
+	invalid := TaskDef{
+		Agent: "worker",
+		Goal:  "candidate freeze",
+		Execution: ExecutionContract{
+			ToolSequence:           []string{"bash", "bash", "submit_result"},
+			ToolInputField:         "command",
+			ToolInputValueSequence: []string{"first"},
+		},
+	}
+	_, err := c.ExecuteTasks(context.Background(), []TaskDef{invalid})
+	if err == nil || !strings.Contains(err.Error(), "forbidden execution field") {
+		t.Fatalf("invalid execution contract error = %v, want pre-dispatch invariant rejection", err)
+	}
+	if got := len(c.taskTracker.TodoList().Items()); got != 0 {
+		t.Fatalf("rejected execution contract created %d TODOs, want none", got)
+	}
+
+	valid := invalid
+	valid.Execution.ToolInputField = ""
+	valid.Execution.ToolInputValueSequence = nil
+	if err := c.validateDelegationPolicy([]TaskDef{valid}); err != nil {
+		t.Fatalf("valid execution contract rejected: %v", err)
+	}
+}
+
 func TestDelegationPolicyBindsEachRecoverablePartialInitialBatchOnce(t *testing.T) {
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		InitialBatch:             []string{"reader", "probe"},

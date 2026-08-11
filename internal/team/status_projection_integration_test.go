@@ -275,8 +275,8 @@ func TestRunDirectAgentSurfacesNoProgressReplan(t *testing.T) {
 	if !strings.Contains(result.Error.Error(), "requires replan") {
 		t.Fatalf("direct replan error = %v, want replan message", result.Error)
 	}
-	if !c.noProgressReplanPending() || !c.IsWrapUp() {
-		t.Fatalf("first threshold state: replan_pending=%v wrap_up=%v, want both true", c.noProgressReplanPending(), c.IsWrapUp())
+	if !c.noProgressReplanPending() || c.IsWrapUp() {
+		t.Fatalf("first threshold state: replan_pending=%v wrap_up=%v, want non-terminal replan", c.noProgressReplanPending(), c.IsWrapUp())
 	}
 	if last := c.LastRunResult(); last != nil {
 		t.Fatalf("first threshold should not create terminal result, got %#v", last)

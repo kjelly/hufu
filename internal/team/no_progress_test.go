@@ -342,14 +342,13 @@ func TestEnforceNoProgressBudget_ReplanThenPartialContinuation(t *testing.T) {
 	if stopped || reason != "" {
 		t.Fatalf("first threshold stopped=%v reason=%q, want replan without stop", stopped, reason)
 	}
-	if !c.IsWrapUp() || !c.noProgressReplanPending() {
-		t.Fatalf("first threshold did not request replan: wrap_up=%v pending=%v", c.IsWrapUp(), c.noProgressReplanPending())
+	if c.IsWrapUp() || !c.noProgressReplanPending() {
+		t.Fatalf("first threshold state: wrap_up=%v pending=%v, want non-terminal replan", c.IsWrapUp(), c.noProgressReplanPending())
 	}
 
 	// The first replan is allowed one continuation turn. If that turn makes
 	// no objective progress, the next boundary must produce a resumable
 	// partial result rather than another warning-only replan.
-	c.wrapUp.Store(0)
 	stopped, reason = c.enforceNoProgressBudget()
 	if !stopped || reason == "" {
 		t.Fatalf("second threshold stopped=%v reason=%q, want stopped with reason", stopped, reason)
@@ -367,6 +366,43 @@ func TestEnforceNoProgressBudget_ReplanThenPartialContinuation(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no-progress enforcement did not report a structured replan event")
+	}
+}
+
+func TestEnforceNoProgressBudget_ReplanDoesNotCloseDelegationGate(t *testing.T) {
+	c := &Coordinator{
+		session: &TeamSession{Config: agent.TeamConfig{
+			Reliability: agent.ReliabilityConfig{
+				MaxTokensWithoutProgress:    10,
+				MaxTokensWithoutProgressSet: true,
+				MaxTurnsWithoutProgressSet:  true,
+				MaxTasksWithoutProgressSet:  true,
+				HardEnforcement:             true,
+			},
+		}},
+	}
+	c.tokensSinceCriterionProgress = 10
+
+	stopped, reason := c.enforceNoProgressBudget()
+	if stopped || reason != "" {
+		t.Fatalf("first threshold stopped=%v reason=%q, want replan", stopped, reason)
+	}
+	if c.IsWrapUp() {
+		t.Fatal("replan closed the terminal delegation gate")
+	}
+
+	// Agent validation intentionally fails after the delegation gate. Seeing
+	// that error instead of "wrap-up in progress" proves the replan turn is
+	// still permitted to attempt a new plan.
+	_, err := c.ExecuteTasks(context.Background(), []TaskDef{{Agent: "missing", Goal: "replan work"}})
+	if err == nil {
+		t.Fatal("expected agent validation error")
+	}
+	if strings.Contains(err.Error(), "wrap-up in progress") {
+		t.Fatalf("replan delegation was rejected as terminal wrap-up: %v", err)
+	}
+	if !strings.Contains(err.Error(), "agent validation failed") {
+		t.Fatalf("delegation did not reach validation: %v", err)
 	}
 }
 

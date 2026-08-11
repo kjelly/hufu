@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +12,24 @@ import (
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
 )
+
+func readStoredArtifact(t *testing.T, workspace, id string) []byte {
+	t.Helper()
+	store, err := NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		t.Fatalf("open artifact store: %v", err)
+	}
+	reader, err := store.Open(t.Context(), id)
+	if err != nil {
+		t.Fatalf("open artifact %q: %v", id, err)
+	}
+	defer reader.Close()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read artifact %q: %v", id, err)
+	}
+	return data
+}
 
 func TestClassifyRepairFailure_SubReasons(t *testing.T) {
 	validProgress := &TaskResult{Status: "partial", Source: "submitted", Summary: "still working"}
@@ -606,10 +624,7 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 	if item.ExecutionReceipt.TranscriptRef == "" {
 		t.Error("expected ExecutionReceipt.TranscriptRef to be populated in production execution path")
 	}
-	transcript, readErr := os.ReadFile(item.ExecutionReceipt.TranscriptRef)
-	if readErr != nil {
-		t.Fatalf("read original transcript %q: %v", item.ExecutionReceipt.TranscriptRef, readErr)
-	}
+	transcript := readStoredArtifact(t, c.session.Workspace, item.ExecutionReceipt.TranscriptRef)
 	if !strings.Contains(string(transcript), `"event":"assistant_output"`) {
 		t.Fatalf("original transcript does not contain worker output: %s", transcript)
 	}
@@ -760,10 +775,7 @@ func TestProtocolRepair_ReplayableTaskBlocksAfterRepairFailure(t *testing.T) {
 	if first.TranscriptRef == "" {
 		t.Fatal("expected non-empty transcript ref for attempt 1")
 	}
-	firstData, err := os.ReadFile(first.TranscriptRef)
-	if err != nil {
-		t.Fatalf("read attempt 1 transcript: %v", err)
-	}
+	firstData := readStoredArtifact(t, c.session.Workspace, first.TranscriptRef)
 	if !strings.Contains(string(firstData), "attempt-one-original") {
 		t.Fatalf("attempt 1 transcript missing original worker output: %s", firstData)
 	}
@@ -831,10 +843,7 @@ func TestProtocolRepair_NonReplayableTaskBlocksOnRepairFailure(t *testing.T) {
 		t.Error("ExecutionReceipt should be preserved even when task blocks")
 	}
 	if item.ExecutionReceipt != nil {
-		transcript, readErr := os.ReadFile(item.ExecutionReceipt.TranscriptRef)
-		if readErr != nil {
-			t.Fatalf("read failed-task original transcript %q: %v", item.ExecutionReceipt.TranscriptRef, readErr)
-		}
+		transcript := readStoredArtifact(t, c.session.Workspace, item.ExecutionReceipt.TranscriptRef)
 		if !strings.Contains(string(transcript), "Processed") && !strings.Contains(string(transcript), "assistant_output") {
 			t.Fatalf("failed-task transcript does not preserve original execution: %s", transcript)
 		}

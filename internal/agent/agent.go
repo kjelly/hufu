@@ -199,26 +199,30 @@ func DefaultWorkerMemoryPolicy() WorkerMemoryPolicy {
 }
 
 type TeamConfig struct {
-	Name              string
-	Description       string
-	MaxRounds         int
-	MaxSteps          int
-	WorkspaceDir      string
-	Timeout           int64
-	VerifyTimeout     int64
-	MaxRetries        int
-	Generation        GenerationParams
-	Skills            string
-	SkillsExclude     string
-	ProviderURL       string
-	ProviderAPIKey    string
-	Providers         map[string]config.ProviderConfig
-	ModelList         []config.ModelEntry
-	SidecarModel      string
-	GuardModel        string
-	JudgeModel        string
-	PlanReviewerModel string
-	MaxConcurrent     int
+	Name        string
+	Description string
+	// MaxRounds bounds normal coordinator progress; it is not a task retry
+	// budget. Teams with a declared checkpoint workflow can set
+	// MinimumCoordinatorRounds so validation rejects an undersized limit.
+	MaxRounds                int
+	MinimumCoordinatorRounds int
+	MaxSteps                 int
+	WorkspaceDir             string
+	Timeout                  int64
+	VerifyTimeout            int64
+	MaxRetries               int
+	Generation               GenerationParams
+	Skills                   string
+	SkillsExclude            string
+	ProviderURL              string
+	ProviderAPIKey           string
+	Providers                map[string]config.ProviderConfig
+	ModelList                []config.ModelEntry
+	SidecarModel             string
+	GuardModel               string
+	JudgeModel               string
+	PlanReviewerModel        string
+	MaxConcurrent            int
 	// MaxCoordinatorTurns bounds automatic continuation turns after a
 	// coordinator step limit. Zero uses the built-in safe default.
 	MaxCoordinatorTurns int
@@ -311,14 +315,17 @@ type DelegationPolicy struct {
 	TaskGoalInvariants []TaskGoalInvariant
 }
 
-// TaskGoalInvariant constrains a task goal selected by worker and a required
-// goal substring.  It is deliberately generic: integrations supply literal
-// payloads while the runtime only enforces their presence or absence.
+// TaskGoalInvariant constrains a task selected by worker and a required goal
+// substring. Integrations supply the selector and contract details; the
+// runtime only enforces generic text and execution-shape boundaries before a
+// TODO is created or a worker can start.
 type TaskGoalInvariant struct {
-	Agent             string   `yaml:"agent" json:"agent"`
-	WhenGoalContains  string   `yaml:"when-goal-contains" json:"when_goal_contains"`
-	RequiredLiterals  []string `yaml:"required-literals" json:"required_literals"`
-	ForbiddenLiterals []string `yaml:"forbidden-literals" json:"forbidden_literals"`
+	Agent                    string   `yaml:"agent" json:"agent"`
+	WhenGoalContains         string   `yaml:"when-goal-contains" json:"when_goal_contains"`
+	RequiredLiterals         []string `yaml:"required-literals" json:"required_literals"`
+	ForbiddenLiterals        []string `yaml:"forbidden-literals" json:"forbidden_literals"`
+	RequiredToolSequence     []string `yaml:"required-tool-sequence" json:"required_tool_sequence"`
+	ForbiddenExecutionFields []string `yaml:"forbidden-execution-fields" json:"forbidden_execution_fields"`
 }
 
 // ReliabilityConfig bounds diagnostic and repair work that repeats without

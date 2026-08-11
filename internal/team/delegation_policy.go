@@ -96,9 +96,70 @@ func (c *Coordinator) validateTaskGoalInvariants(tasks []TaskDef) error {
 					return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].goal violates task-goal-invariants[%d]: forbidden literal is present", taskIndex, invariantIndex))
 				}
 			}
+			if len(invariant.RequiredToolSequence) > 0 && !sameStringSequence(task.Execution.ToolSequence, invariant.RequiredToolSequence) {
+				return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].execution.tool_sequence violates task-goal-invariants[%d]: required exact tool sequence is missing", taskIndex, invariantIndex))
+			}
+			for _, field := range invariant.ForbiddenExecutionFields {
+				if executionContractFieldPresent(task.Execution, field) {
+					return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].execution.%s violates task-goal-invariants[%d]: forbidden execution field is present", taskIndex, field, invariantIndex))
+				}
+			}
 		}
 	}
 	return nil
+}
+
+func sameStringSequence(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+// executionContractFieldPresent deliberately recognizes only configured
+// ExecutionContract fields. Team validation rejects unknown field names so a
+// typo cannot silently weaken a pre-dispatch boundary.
+func executionContractFieldPresent(contract ExecutionContract, field string) bool {
+	switch field {
+	case "kind":
+		return contract.Kind != ""
+	case "requires_result":
+		return contract.RequiresResult
+	case "requires_verification":
+		return contract.RequiresVerification
+	case "allows_replay":
+		return contract.AllowsReplay != nil
+	case "forbid_artifacts":
+		return contract.ForbidArtifacts
+	case "steps":
+		return len(contract.Steps) > 0
+	case "tool_sequence":
+		return len(contract.ToolSequence) > 0
+	case "tool_input_sequence":
+		return len(contract.ToolInputSequence) > 0
+	case "tool_input_field":
+		return contract.ToolInputField != ""
+	case "tool_input_value_sequence":
+		return len(contract.ToolInputValueSequence) > 0
+	case "tool_expected_exit_codes":
+		return len(contract.ToolExpectedExitCodes) > 0
+	default:
+		return false
+	}
+}
+
+func knownExecutionContractField(field string) bool {
+	switch field {
+	case "kind", "requires_result", "requires_verification", "allows_replay", "forbid_artifacts", "steps", "tool_sequence", "tool_input_sequence", "tool_input_field", "tool_input_value_sequence", "tool_expected_exit_codes":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Coordinator) validateContextFilePolicy(tasks []TaskDef) error {

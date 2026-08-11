@@ -176,9 +176,9 @@ func TestValidateExecutionContract_ToolInputValueSequence(t *testing.T) {
 	valid := TaskDef{Execution: ExecutionContract{
 		Kind:                   ExecutionKindProcess,
 		RequiresResult:         true,
-		ToolSequence:           []string{"bash", "submit_result"},
-		ToolInputField:         "command",
-		ToolInputValueSequence: []string{"pwd", ""},
+		ToolSequence:           []string{"submit_result"},
+		ToolInputField:         "status",
+		ToolInputValueSequence: []string{"success"},
 	}}
 	if err := ValidateExecutionContract(valid); err != nil {
 		t.Fatalf("valid scalar constrained sequence rejected: %v", err)
@@ -186,9 +186,9 @@ func TestValidateExecutionContract_ToolInputValueSequence(t *testing.T) {
 
 	invalid := TaskDef{Execution: ExecutionContract{
 		RequiresResult:         true,
-		ToolSequence:           []string{"bash", "submit_result"},
+		ToolSequence:           []string{"submit_result"},
 		ToolInputField:         "command",
-		ToolInputValueSequence: []string{"pwd"},
+		ToolInputValueSequence: nil,
 	}}
 	if err := ValidateExecutionContract(invalid); err == nil || !strings.Contains(err.Error(), "required together") {
 		t.Fatalf("invalid scalar constrained sequence error = %v, want alignment failure", err)
@@ -196,12 +196,32 @@ func TestValidateExecutionContract_ToolInputValueSequence(t *testing.T) {
 
 	invalidTerminal := TaskDef{Execution: ExecutionContract{
 		RequiresResult:         true,
-		ToolSequence:           []string{"bash", "submit_result"},
+		ToolSequence:           []string{"submit_result"},
 		ToolInputField:         "command",
-		ToolInputValueSequence: []string{"pwd", "success"},
+		ToolInputValueSequence: []string{"success"},
 	}}
 	if err := ValidateExecutionContract(invalidTerminal); err == nil || !strings.Contains(err.Error(), "only the status field") {
 		t.Fatalf("invalid terminal scalar contract error = %v, want terminal field failure", err)
+	}
+}
+
+func TestValidateExecutionContract_MixedToolSequenceRejectsScalarPinning(t *testing.T) {
+	invalid := TaskDef{Execution: ExecutionContract{
+		Kind:           ExecutionKindProcess,
+		RequiresResult: true,
+		ToolSequence:   []string{"bash", "bash", "submit_result"},
+		ToolInputField: "command",
+	}}
+	result := ValidateExecutionContractFull(invalid, agent.VerifierLintError)
+	if result.Valid || !hasContractFinding(result.Findings, "tool_input_value_sequence_mixed_tools", "execution.tool_input_field") {
+		t.Fatalf("mixed scalar-pinned contract findings = %#v, want mixed-tool rejection", result.Findings)
+	}
+
+	valid := invalid
+	valid.Execution.ToolInputField = ""
+	result = ValidateExecutionContractFull(valid, agent.VerifierLintError)
+	if !result.Valid {
+		t.Fatalf("mixed contract without scalar pinning rejected: %#v", result.Findings)
 	}
 }
 
@@ -633,10 +653,17 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 		}
 	}
 	toolInputValueSequenceDescription := execSubProps["tool_input_value_sequence"].(map[string]any)["description"].(string)
-	for _, requiredPhrase := range []string{"scalar values", "one per tool_sequence slot", "empty string"} {
+	for _, requiredPhrase := range []string{"scalar values", "one per tool_sequence slot", "empty string", "homogeneous sequence", "per-slot tool_input_sequence"} {
 		if !strings.Contains(toolInputValueSequenceDescription, requiredPhrase) {
 			t.Errorf("tool_input_value_sequence schema description missing %q: %s", requiredPhrase, toolInputValueSequenceDescription)
 		}
+	}
+	dependentRequired := execProp["dependentRequired"].(map[string]any)
+	if got := dependentRequired["tool_input_field"]; !reflect.DeepEqual(got, []string{"tool_input_value_sequence"}) {
+		t.Errorf("tool_input_field dependentRequired = %#v, want tool_input_value_sequence", got)
+	}
+	if got := dependentRequired["tool_input_value_sequence"]; !reflect.DeepEqual(got, []string{"tool_input_field"}) {
+		t.Errorf("tool_input_value_sequence dependentRequired = %#v, want tool_input_field", got)
 	}
 	toolExpectedExitCodesDescription := execSubProps["tool_expected_exit_codes"].(map[string]any)["description"].(string)
 	for _, requiredPhrase := range []string{"non-zero", "one integer array per tool_sequence slot", "timeout exit 124"} {

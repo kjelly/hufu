@@ -65,6 +65,19 @@ func TestValidateTeamTaskContractsRejectsMissingInitialContract(t *testing.T) {
 	}
 }
 
+func TestValidateTeamTaskContractsRejectsUndersizedCoordinatorRoundBudget(t *testing.T) {
+	session := &TeamSession{Config: agent.TeamConfig{MaxRounds: 3, MinimumCoordinatorRounds: 4}}
+	findings := ValidateTeamTaskContracts(session)
+	if len(findings) != 1 || findings[0].Code != "max_rounds_below_minimum_coordinator_rounds" {
+		t.Fatalf("findings = %#v, want coordinator-round budget rejection", findings)
+	}
+
+	session.Config.MaxRounds = 4
+	if findings := ValidateTeamTaskContracts(session); len(findings) != 0 {
+		t.Fatalf("sufficient coordinator-round budget findings = %#v, want none", findings)
+	}
+}
+
 func TestEffectiveContractIdentityIsIncludedInWorkerProtocol(t *testing.T) {
 	instructions := resultProtocolInstructions(TaskDef{
 		ContractID:       "reader-ack-v1",

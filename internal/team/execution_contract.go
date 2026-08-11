@@ -121,8 +121,9 @@ type ExecutionContract struct {
 	// without assigning semantics to a provider, command, or integration.
 	ToolInputSequence []map[string]any `json:"tool_input_sequence,omitempty" yaml:"tool-input-sequence,omitempty"`
 	// ToolInputField and ToolInputValueSequence provide a compact alternative
-	// for atomic tools whose input is a JSON object with one safety-critical
-	// scalar field. Values align with ToolSequence; an empty value is wildcard.
+	// only for a homogeneous ToolSequence. Mixed tool calls use
+	// ToolInputSequence so each slot can constrain its own typed payload.
+	// Values align with ToolSequence; an empty value is wildcard.
 	ToolInputField         string   `json:"tool_input_field,omitempty" yaml:"tool-input-field,omitempty"`
 	ToolInputValueSequence []string `json:"tool_input_value_sequence,omitempty" yaml:"tool-input-value-sequence,omitempty"`
 	// ToolExpectedExitCodes declares non-zero process exit codes that are an
@@ -377,6 +378,9 @@ func validateToolInputValueSequence(c ExecutionContract) []ContractFinding {
 	if c.ToolInputField == "" && len(c.ToolInputValueSequence) == 0 {
 		return nil
 	}
+	if toolSequenceIsMixed(c.ToolSequence) {
+		return []ContractFinding{{Severity: FindingSeverityError, Code: "tool_input_value_sequence_mixed_tools", Field: "execution.tool_input_field", Message: "scalar tool input pinning is forbidden for a mixed tool_sequence; use tool_input_sequence for per-slot typed constraints"}}
+	}
 	if len(c.ToolSequence) == 0 || c.ToolInputField == "" || len(c.ToolInputValueSequence) != len(c.ToolSequence) {
 		return []ContractFinding{{Severity: FindingSeverityError, Code: "tool_input_value_sequence_invalid", Field: "execution.tool_input_value_sequence", Message: "tool_input_field and a value for every tool_sequence slot are required together"}}
 	}
@@ -386,6 +390,28 @@ func validateToolInputValueSequence(c ExecutionContract) []ContractFinding {
 		}
 	}
 	return nil
+}
+
+// toolSequenceIsMixed treats submit_result as a distinct tool: its result
+// payload has different fields from a process or provider call. A scalar field
+// can therefore never safely constrain both slots. Per-slot input constraints
+// preserve command safety without guessing an integration-specific payload.
+func toolSequenceIsMixed(sequence []string) bool {
+	first := ""
+	for _, tool := range sequence {
+		tool = strings.TrimSpace(tool)
+		if tool == "" {
+			continue
+		}
+		if first == "" {
+			first = tool
+			continue
+		}
+		if tool != first {
+			return true
+		}
+	}
+	return false
 }
 
 func validateToolExpectedExitCodes(c ExecutionContract) []ContractFinding {

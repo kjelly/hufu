@@ -60,41 +60,42 @@ type agentFrontmatter struct {
 }
 
 type teamConfigYAML struct {
-	Name                string                           `yaml:"name"`
-	Description         string                           `yaml:"description"`
-	MaxRounds           int                              `yaml:"max-rounds"`
-	MaxSteps            int                              `yaml:"max-steps"`
-	Workspace           string                           `yaml:"workspace"`
-	Timeout             int64                            `yaml:"timeout"`
-	VerifyTimeout       int64                            `yaml:"verify-timeout"`
-	MaxRetries          int                              `yaml:"max-retries"`
-	Model               string                           `yaml:"model"`
-	Temperature         string                           `yaml:"temperature"`
-	MaxTokens           string                           `yaml:"max-tokens"`
-	TopP                string                           `yaml:"top-p"`
-	TopK                string                           `yaml:"top-k"`
-	ReasoningEffort     string                           `yaml:"reasoning-effort"`
-	Skills              string                           `yaml:"skills"`
-	SkillsExclude       string                           `yaml:"skills-exclude"`
-	ProviderURL         string                           `yaml:"provider-url"`
-	ProviderAPIKey      string                           `yaml:"provider-api-key"`
-	Providers           map[string]config.ProviderConfig `yaml:"providers"`
-	ModelList           []config.ModelEntry              `yaml:"model-list"`
-	SidecarModel        string                           `yaml:"sidecar-model"`
-	GuardModel          string                           `yaml:"guard-model"`
-	JudgeModel          string                           `yaml:"judge-model"`
-	PlanReviewerModel   string                           `yaml:"plan-reviewer-model"`
-	MaxConcurrent       int                              `yaml:"max-concurrent"`
-	MaxCoordinatorTurns int                              `yaml:"max-coordinator-turns"`
-	EscalateOnRetry     bool                             `yaml:"escalate-on-retry"`
-	Notify              notify.NotifyConfig              `yaml:"notify"`
-	AllowedPaths        interface{}                      `yaml:"allowed-paths"`
-	RestrictedPath      string                           `yaml:"restricted-path"`
-	NoNet               bool                             `yaml:"no-net"`
-	ForceMCP            bool                             `yaml:"force-mcp"`
-	ProjectContext      bool                             `yaml:"project-context"`
-	Shell               string                           `yaml:"shell"`
-	Vars                map[string]interface{}           `yaml:"vars"`
+	Name                     string                           `yaml:"name"`
+	Description              string                           `yaml:"description"`
+	MaxRounds                int                              `yaml:"max-rounds"`
+	MinimumCoordinatorRounds int                              `yaml:"minimum-coordinator-rounds"`
+	MaxSteps                 int                              `yaml:"max-steps"`
+	Workspace                string                           `yaml:"workspace"`
+	Timeout                  int64                            `yaml:"timeout"`
+	VerifyTimeout            int64                            `yaml:"verify-timeout"`
+	MaxRetries               int                              `yaml:"max-retries"`
+	Model                    string                           `yaml:"model"`
+	Temperature              string                           `yaml:"temperature"`
+	MaxTokens                string                           `yaml:"max-tokens"`
+	TopP                     string                           `yaml:"top-p"`
+	TopK                     string                           `yaml:"top-k"`
+	ReasoningEffort          string                           `yaml:"reasoning-effort"`
+	Skills                   string                           `yaml:"skills"`
+	SkillsExclude            string                           `yaml:"skills-exclude"`
+	ProviderURL              string                           `yaml:"provider-url"`
+	ProviderAPIKey           string                           `yaml:"provider-api-key"`
+	Providers                map[string]config.ProviderConfig `yaml:"providers"`
+	ModelList                []config.ModelEntry              `yaml:"model-list"`
+	SidecarModel             string                           `yaml:"sidecar-model"`
+	GuardModel               string                           `yaml:"guard-model"`
+	JudgeModel               string                           `yaml:"judge-model"`
+	PlanReviewerModel        string                           `yaml:"plan-reviewer-model"`
+	MaxConcurrent            int                              `yaml:"max-concurrent"`
+	MaxCoordinatorTurns      int                              `yaml:"max-coordinator-turns"`
+	EscalateOnRetry          bool                             `yaml:"escalate-on-retry"`
+	Notify                   notify.NotifyConfig              `yaml:"notify"`
+	AllowedPaths             interface{}                      `yaml:"allowed-paths"`
+	RestrictedPath           string                           `yaml:"restricted-path"`
+	NoNet                    bool                             `yaml:"no-net"`
+	ForceMCP                 bool                             `yaml:"force-mcp"`
+	ProjectContext           bool                             `yaml:"project-context"`
+	Shell                    string                           `yaml:"shell"`
+	Vars                     map[string]interface{}           `yaml:"vars"`
 	// WorkerContextSize is a token budget, not a character count (spec.md
 	// item 7); the YAML key is kept as-is for backward compatibility.
 	WorkerContextSize int                           `yaml:"worker-context-size"`
@@ -548,6 +549,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.MaxRounds > 0 {
 		cfg.MaxRounds = yc.MaxRounds
+	}
+	if yc.MinimumCoordinatorRounds > 0 {
+		cfg.MinimumCoordinatorRounds = yc.MinimumCoordinatorRounds
 	}
 	if yc.Workspace != "" {
 		cfg.WorkspaceDir = yc.Workspace

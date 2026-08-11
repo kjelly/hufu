@@ -55,6 +55,20 @@ delegation:
 	}
 }
 
+func TestParseTeamYMLMinimumCoordinatorRounds(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "team.yaml"), []byte("max-rounds: 12\nminimum-coordinator-rounds: 8\nmax-retries: 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(tmpDir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML: %v", err)
+	}
+	if cfg.MaxRounds != 12 || cfg.MinimumCoordinatorRounds != 8 || cfg.MaxRetries != 0 {
+		t.Fatalf("parsed coordinator/retry budgets = (%d, %d, %d), want (12, 8, 0)", cfg.MaxRounds, cfg.MinimumCoordinatorRounds, cfg.MaxRetries)
+	}
+}
+
 func TestMaxStepsParsing(t *testing.T) {
 	tests := []struct {
 		name         string

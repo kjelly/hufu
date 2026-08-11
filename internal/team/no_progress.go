@@ -241,10 +241,10 @@ func (c *Coordinator) noProgressStopPending() bool {
 // Disposition handling (§8.1, WP-12):
 //   - continue: no action.
 //   - replan_required (first threshold): emit a notifiable no_progress_replan
-//     event and force a wrap-up turn (SetWrapUp). The run is NOT stopped — the
-//     coordinator gets one replan turn. noProgressReplanTripped records that
-//     the first threshold fired so the second threshold (stop) is only reached
-//     after a fresh accumulation crosses again.
+//     event and mark a replan turn pending. The run is NOT terminal and new
+//     delegation remains available to that replan turn. noProgressReplanTripped
+//     records that the first threshold fired so the next boundary can stop if
+//     the replan made no objective progress.
 //   - stop_partial (second threshold): force wrap-up, evaluate the run
 //     outcome to partial with a continuation record, and stop the run.
 //
@@ -288,12 +288,13 @@ func (c *Coordinator) enforceNoProgressBudget() (bool, string) {
 		if alreadyReplanned {
 			return c.stopForNoProgress(reason + " after replan")
 		}
-		// First threshold: emit event and force a replan/wrap-up turn. The
-		// run is not stopped — the coordinator gets one turn to replan.
+		// First threshold: emit an explicit replan request without entering
+		// terminal wrap-up. Replan and wrap-up are different states: setting
+		// wrapUp here would make ExecuteTasks reject the very delegation that
+		// the replan turn may need in order to make objective progress.
 		c.report(c.newEvent("no_progress_replan").
 			withMessage(fmt.Sprintf("%s (tokens=%d turns=%d tasks=%d); forcing a replan turn", reason, counters.Tokens, counters.Turns, counters.Tasks)).
 			withTodoID(CoordTodoID))
-		c.SetWrapUp()
 		return false, ""
 
 	case NoProgressStop:
