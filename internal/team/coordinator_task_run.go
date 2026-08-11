@@ -319,7 +319,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// Retry-context tracking (§6.1: retry prompt must include class,
 	// evidence, prior command/exit, and explicit mutable fields).
 	var lastClass TaskFailureClass // previous attempt's failure class
-	var lastTranscriptRef string   // previous attempt's transcript manifest path
+	var lastTranscriptRef string   // previous attempt's opaque transcript artifact reference
 	var lastVerifyCmd string       // previous attempt's verify command
 	var lastVerifyExit int         // previous attempt's verify exit code (-1 = unknown)
 	var lastExitCode *int          // previous attempt's worker exit code (nil = errored)
@@ -552,6 +552,7 @@ retryLoop:
 			runID = c.taskTracker.TodoList().RunID()
 		}
 		transcriptRef := ""
+		var transcriptArtifact *ArtifactRef
 		if transcript != nil {
 			// Capture the worker's original final response before any repair
 			// agent is started. The repair context intentionally does not carry
@@ -564,7 +565,8 @@ retryLoop:
 					err = fmt.Errorf("create original task transcript manifest: %w", manifestErr)
 				}
 			} else {
-				transcriptRef = ref.Path
+				transcriptArtifact = ref
+				transcriptRef = ref.ID
 			}
 		}
 		receipt := ExecutionReceipt{
@@ -806,8 +808,9 @@ retryLoop:
 							recovered.TaskID = todoID
 							recovered.Agent = agentName
 							recovered.Source = "recovered_protocol"
-							if transcriptRef != "" {
-								recovered.RawOutputRef = &ArtifactRef{Path: transcriptRef, Type: "task_transcript", Description: "Original execution evidence for protocol recovery"}
+							if transcriptArtifact != nil {
+								copyRef := *transcriptArtifact
+								recovered.RawOutputRef = &copyRef
 							}
 							c.storeSubmittedTaskResult(todoID, recovered)
 							typedRes = recovered
@@ -2648,7 +2651,7 @@ func computeEvidenceComplete(task TaskDef, transcriptRef string, steps []fantasy
 // buildRetryContext constructs the structured retry context required by §6.1.
 // The context includes:
 //  1. Failure class (contract, environment, execution, verification, etc.)
-//  2. Evidence reference (transcript path) and summary (last output)
+//  2. Evidence reference (opaque transcript artifact ID) and summary (last output)
 //  3. Previous command and exit/verification result — always rendered,
 //     using "unavailable" when no command or exit code was recorded
 //  4. Explicit mutable next-step fields (what the worker can change)
@@ -2673,7 +2676,7 @@ func buildRetryContext(class TaskFailureClass, lastErr error, transcriptRef, ver
 	fmt.Fprintf(b, "**Failure class:** %s\n", class)
 
 	// 2. Evidence reference — include the actual partial output that
-	// authorized the retry, the transcript path, and the error.
+	// authorized the retry, the transcript reference, and the error.
 	b.WriteString("**Evidence:** ")
 	if transcriptRef != "" {
 		fmt.Fprintf(b, "transcript at %s; ", transcriptRef)

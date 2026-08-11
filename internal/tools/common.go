@@ -31,6 +31,12 @@ func WithPathReviewer(reviewer PathReviewer) ToolOption {
 	}
 }
 
+func WithArtifactOpener(opener ArtifactOpener) ToolOption {
+	return func(c *ToolConfig) {
+		c.ArtifactOpener = opener
+	}
+}
+
 func WithToolName(name string) ToolOption {
 	return func(c *ToolConfig) {
 		c.ToolName = name

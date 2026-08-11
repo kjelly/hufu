@@ -5,6 +5,7 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -20,9 +21,10 @@ const defaultViewLimit = 2000
 const maxLineLength = 2000
 
 type viewArgs struct {
-	FilePath string `json:"file_path"`
-	Offset   int    `json:"offset,omitempty"`
-	Limit    int    `json:"limit,omitempty"`
+	FilePath    string `json:"file_path,omitempty"`
+	ArtifactRef string `json:"artifact_ref,omitempty"`
+	Offset      int    `json:"offset,omitempty"`
+	Limit       int    `json:"limit,omitempty"`
 }
 
 func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
@@ -31,11 +33,15 @@ func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "view",
-			Description: "Read the contents of a file. Output includes line numbers and is wrapped in file path tags. Supports relative, absolute, ~, $HOME, and ${HOME} paths. Supports offset/limit for large files. Truncates lines longer than 2000 chars.",
+			Description: "Read a file by either a user-supplied file_path or a runtime-issued opaque artifact_ref. Use artifact_ref for worker/task outputs; never copy their display path into file_path. Artifact references are resolved and authorized by hufu without path consent. Exactly one source is required.",
 			Parameters: map[string]any{
 				"file_path": map[string]any{
 					"type":        "string",
 					"description": "The path to the file to read (relative or absolute)",
+				},
+				"artifact_ref": map[string]any{
+					"type":        "string",
+					"description": "Opaque runtime-issued artifact reference. Do not alter it or replace it with a displayed path.",
 				},
 				"offset": map[string]any{
 					"type":        "number",
@@ -46,7 +52,6 @@ func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
 					"description": "The number of lines to read (default 2000)",
 				},
 			},
-			Required: []string{"file_path"},
 			Parallel: true,
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
@@ -60,12 +65,16 @@ func executeView(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
 	}
-	if args.FilePath == "" {
-		return fantasy.NewTextErrorResponse("file_path parameter is required"), nil
+	if (args.FilePath == "") == (args.ArtifactRef == "") {
+		return fantasy.NewTextErrorResponse("exactly one of file_path or artifact_ref is required"), nil
 	}
 
 	if err := ctx.Err(); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
+	}
+
+	if args.ArtifactRef != "" {
+		return executeViewArtifact(ctx, args, cfg)
 	}
 
 	absPath, err := checkPathOrConsent(args.FilePath, workDir, "read", cfgWithMergedPaths(cfg, ctx))
@@ -118,6 +127,47 @@ func executeView(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 	return fantasy.NewTextResponse(b.String()), nil
 }
 
+func executeViewArtifact(ctx context.Context, args viewArgs, cfg ToolConfig) (fantasy.ToolResponse, error) {
+	if cfg.ArtifactOpener == nil {
+		return fantasy.NewTextErrorResponse("invalid artifact_ref: opaque artifact access is unavailable"), nil
+	}
+	reader, err := cfg.ArtifactOpener(ctx, args.ArtifactRef)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid artifact_ref: %v", err)), nil
+	}
+	defer reader.Close()
+
+	data, err := io.ReadAll(io.LimitReader(reader, maxViewSize+1))
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to read artifact: %v", err)), nil
+	}
+	if len(data) > maxViewSize {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("artifact is too large (%d+ bytes, max %d)", maxViewSize, maxViewSize)), nil
+	}
+
+	offset := args.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	limit := args.Limit
+	if limit <= 0 {
+		limit = defaultViewLimit
+	}
+	content, totalLines, hasMore, err := readTextFile(bytes.NewReader(data), offset, limit)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to read artifact: %v", err)), nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "<artifact:%s>\n", args.ArtifactRef)
+	b.WriteString(content)
+	fmt.Fprintf(&b, "</artifact:%s>\n", args.ArtifactRef)
+	if hasMore {
+		fmt.Fprintf(&b, "\n[showing lines %d-%d of %d total. Use offset=%d to continue reading]", offset, offset+limit-1, totalLines, offset+limit)
+	}
+	return fantasy.NewTextResponse(b.String()), nil
+}
+
 type lineScanner struct {
 	scanner *bufio.Scanner
 }
@@ -133,7 +183,7 @@ func (s *lineScanner) scan() bool   { return s.scanner.Scan() }
 func (s *lineScanner) text() string { return s.scanner.Text() }
 func (s *lineScanner) err() error   { return s.scanner.Err() }
 
-func readTextFile(f *os.File, offset, limit int) (string, int, bool, error) {
+func readTextFile(f io.Reader, offset, limit int) (string, int, bool, error) {
 	scanner := newLineScanner(f)
 	lineNum := 0
 	var lines []string

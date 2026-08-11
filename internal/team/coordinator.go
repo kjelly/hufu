@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -814,7 +815,13 @@ type RoleModels struct {
 
 func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, roleModels RoleModels, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forceMCP bool, forcedSkillNames []string, planMode bool, autoSkillsMode bool) (*Coordinator, error) {
 	projectDir, _ := os.Getwd()
-	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath), tools.WithNetworkBlock(noNet), tools.WithForceMCP(forceMCP), tools.WithDirenv(direnv))
+	var coordinator *Coordinator
+	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithArtifactOpener(func(ctx context.Context, ref string) (io.ReadCloser, error) {
+		if coordinator == nil {
+			return nil, fmt.Errorf("artifact resolver is not initialized")
+		}
+		return coordinator.openArtifactRef(ctx, ref)
+	}), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath), tools.WithNetworkBlock(noNet), tools.WithForceMCP(forceMCP), tools.WithDirenv(direnv))
 	pm, err := agent.NewProviderManager(defaultProviderURL, defaultProviderAPIKey, session.Config.Providers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create provider manager: %w", err)
@@ -878,6 +885,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		skillPatternsDetected:  0,
 		maxDrafts:              maxDraftsPerSession,
 	}
+	coordinator = c
 
 	effectiveGoalMode, err := ResolveEffectiveGoalMode(session.Config.GoalMode, session.Config.ExecutionProfile)
 	if err != nil {
@@ -1251,7 +1259,11 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 		},
 		"execution": map[string]any{
 			"type":        "object",
-			"description": "Execution contract. Use steps for artifact-producing workflows that require validator receipts, bounded pre-mutation repair, digest freeze, mutation, and verification. tool_sequence remains the legacy exact call budget for atomic tasks and cannot be combined with steps. tool_input_sequence can require JSON input fields, while tool_input_field with tool_input_value_sequence pins one scalar JSON field at each atomic call slot. tool_expected_exit_codes declares expected non-zero observation outcomes such as timeout exit 124, so bounded discovery can continue without weakening other failures.",
+			"description": "Execution contract. Use steps for artifact-producing workflows that require validator receipts, bounded pre-mutation repair, digest freeze, mutation, and verification. tool_sequence remains the legacy exact call budget for atomic tasks and cannot be combined with steps. tool_input_sequence can require JSON input fields. tool_input_field and tool_input_value_sequence are a paired scalar form permitted only for homogeneous tool sequences; for any mixed sequence (including a non-submit tool followed by submit_result), use tool_input_sequence or omit all input constraints. tool_expected_exit_codes declares expected non-zero observation outcomes such as timeout exit 124, so bounded discovery can continue without weakening other failures.",
+			"dependentRequired": map[string]any{
+				"tool_input_field":          []string{"tool_input_value_sequence"},
+				"tool_input_value_sequence": []string{"tool_input_field"},
+			},
 			"properties": map[string]any{
 				"kind": map[string]any{
 					"type":        "string",
@@ -1286,12 +1298,12 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 				},
 				"tool_input_field": map[string]any{
 					"type":        "string",
-					"description": "Optional JSON field name constrained by tool_input_value_sequence.",
+					"description": "Optional scalar input field, permitted only for a homogeneous tool_sequence. It requires a complete tool_input_value_sequence. For a mixed sequence, including submit_result with another tool, use per-slot tool_input_sequence or omit input constraints.",
 				},
 				"tool_input_value_sequence": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "Optional required scalar values for tool_input_field, one per tool_sequence slot; use an empty string as wildcard.",
+					"description": "Optional required scalar values for tool_input_field, one per tool_sequence slot; use an empty string as wildcard. It is valid only with tool_input_field for a homogeneous sequence. For a mixed sequence, including submit_result with another tool, use per-slot tool_input_sequence or omit both scalar properties.",
 				},
 				"tool_expected_exit_codes": map[string]any{
 					"type":        "array",

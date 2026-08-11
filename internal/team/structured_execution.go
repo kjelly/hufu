@@ -52,9 +52,24 @@ type ExecutionStepReceipt struct {
 	ConsumedDigests  map[string]string   `json:"consumed_digests,omitempty"`
 	ProducedDigests  map[string]string   `json:"produced_digests,omitempty"`
 	ProducedFacts    []StructuredFactRef `json:"produced_facts,omitempty"`
+	ResolvedRefs     []ResolvedStepRef   `json:"resolved_refs,omitempty"`
 	PolicyVerdict    string              `json:"policy_verdict"`
 	ValidatorVerdict string              `json:"validator_verdict,omitempty"`
 	FailureClass     string              `json:"failure_class,omitempty"`
+}
+
+// ResolvedStepRef binds one consumer input to the exact runtime-owned output
+// that supplied it. Values and paths are intentionally absent; the receipt
+// carries only stable identity and integrity metadata.
+type ResolvedStepRef struct {
+	Target       string              `json:"target"`
+	ProducerTask string              `json:"producer_task,omitempty"`
+	ProducerStep string              `json:"producer_step,omitempty"`
+	Output       string              `json:"output"`
+	Kind         ExecutionOutputKind `json:"kind"`
+	Schema       string              `json:"schema,omitempty"`
+	RefID        string              `json:"ref_id,omitempty"`
+	SHA256       string              `json:"sha256,omitempty"`
 }
 
 // ExecutionStepResult is returned by a provider-neutral step runner. Artifact
@@ -325,6 +340,7 @@ func cloneExecutionStepReceipt(receipt ExecutionStepReceipt) ExecutionStepReceip
 	copyReceipt.Consumed = append([]ArtifactRef(nil), receipt.Consumed...)
 	copyReceipt.Produced = append([]ArtifactRef(nil), receipt.Produced...)
 	copyReceipt.ProducedFacts = append([]StructuredFactRef(nil), receipt.ProducedFacts...)
+	copyReceipt.ResolvedRefs = append([]ResolvedStepRef(nil), receipt.ResolvedRefs...)
 	copyReceipt.ConsumedDigests = cloneStringMap(receipt.ConsumedDigests)
 	copyReceipt.ProducedDigests = cloneStringMap(receipt.ProducedDigests)
 	return copyReceipt
@@ -409,7 +425,7 @@ func (e *structuredExecutionRun) runStep(step ExecutionStep, repairAttempt int) 
 	if err := e.validateMutationInputs(step); err != nil {
 		return e.recordPreflightFailure(step, repairAttempt, err), err
 	}
-	resolvedInput, err := e.resolveStepInput(step)
+	resolvedInput, resolvedRefs, err := e.resolveStepInput(step)
 	if err != nil {
 		return e.recordPreflightFailure(step, repairAttempt, err), err
 	}
@@ -432,7 +448,7 @@ func (e *structuredExecutionRun) runStep(step ExecutionStep, repairAttempt int) 
 	if runErr != nil && strings.TrimSpace(stepResult.Stderr) == "" {
 		stepResult.Stderr = runErr.Error()
 	}
-	receipt := e.newReceipt(step, repairAttempt, startedAt, stepResult, runErr, resolvedInput)
+	receipt := e.newReceipt(step, repairAttempt, startedAt, stepResult, runErr, resolvedInput, resolvedRefs)
 	if runErr == nil && stepResult.ExitCode == 0 {
 		runErr = e.recordDeclaredOutputs(step, stepResult, &receipt)
 	}
@@ -504,7 +520,7 @@ func (e *structuredExecutionRun) validateMutationInputs(step ExecutionStep) erro
 	return nil
 }
 
-func (e *structuredExecutionRun) newReceipt(step ExecutionStep, repairAttempt int, startedAt time.Time, stepResult ExecutionStepResult, runErr error, resolvedInput map[string]any) ExecutionStepReceipt {
+func (e *structuredExecutionRun) newReceipt(step ExecutionStep, repairAttempt int, startedAt time.Time, stepResult ExecutionStepResult, runErr error, resolvedInput map[string]any, resolvedRefs []ResolvedStepRef) ExecutionStepReceipt {
 	receipt := ExecutionStepReceipt{
 		ID:     structuredReceiptID(e.request.TaskID, e.request.Attempt, step.ID, repairAttempt, e.receiptCount),
 		TaskID: e.request.TaskID, Attempt: e.request.Attempt, RepairAttempt: repairAttempt,
@@ -512,6 +528,7 @@ func (e *structuredExecutionRun) newReceipt(step ExecutionStep, repairAttempt in
 		StartedAt: startedAt, FinishedAt: time.Now().UTC(), ExitCode: stepResult.ExitCode,
 		Stdout: stepResult.Stdout, Stderr: stepResult.Stderr, Consumed: namedArtifacts(e.result.Artifacts, step.Consumes),
 		ConsumedDigests: namedArtifactDigests(e.result.Artifacts, step.Consumes),
+		ResolvedRefs:    append([]ResolvedStepRef(nil), resolvedRefs...),
 		PolicyVerdict:   normalizedPolicyVerdict(stepResult.PolicyVerdict),
 	}
 	receipt.StdoutRef = executionOutputRef(receipt.ID, "stdout", stepResult.Stdout)

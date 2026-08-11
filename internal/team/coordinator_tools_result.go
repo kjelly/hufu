@@ -50,17 +50,6 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 					"required": []string{"path"},
 				},
 			},
-			"raw_output_ref": map[string]any{
-				"type":        "object",
-				"description": "Runner-owned complete tool transcript. For output_mode=verbatim hufu fills and verifies this field automatically; workers must not invent it.",
-				"properties": map[string]any{
-					"path":        map[string]any{"type": "string"},
-					"description": map[string]any{"type": "string"},
-					"type":        map[string]any{"type": "string"},
-					"sha256":      map[string]any{"type": "string"},
-					"bytes":       map[string]any{"type": "integer"},
-				},
-			},
 			"files_read": map[string]any{
 				"type":        "array",
 				"description": "List of files read during the task.",
@@ -177,6 +166,9 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	res.Source = "submitted"
 	if len(res.Outputs) > 0 {
 		return fantasy.NewTextErrorResponse("outputs are runtime-owned; cite execution receipt_ids instead of declaring task outputs"), nil
+	}
+	if res.RawOutputRef != nil {
+		return fantasy.NewTextErrorResponse("raw_output_ref is runtime-owned; workers cannot declare or copy transcript references"), nil
 	}
 	if res.Confidence == 0 {
 		res.Confidence = 1.0

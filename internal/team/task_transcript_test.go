@@ -32,8 +32,15 @@ func TestTaskTranscriptCapturesCompleteToolEvidenceAndBuildsManifest(t *testing.
 	if ref.Type != taskTranscriptMediaType {
 		t.Errorf("manifest type = %q, want %q", ref.Type, taskTranscriptMediaType)
 	}
-	if ref.SHA256 == "" || ref.Bytes == 0 {
+	if ref.ID == "" || ref.SHA256 == "" || ref.Bytes == 0 || ref.ByteSize != ref.Bytes {
 		t.Errorf("manifest = %#v, want checksum and non-zero bytes", ref)
+	}
+	store, err := NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		t.Fatalf("NewFileArtifactStore() error = %v", err)
+	}
+	if err := store.Verify(t.Context(), *ref); err != nil {
+		t.Fatalf("stored transcript verification failed: %v", err)
 	}
 
 	data, err := os.ReadFile(ref.Path)
@@ -47,10 +54,13 @@ func TestTaskTranscriptCapturesCompleteToolEvidenceAndBuildsManifest(t *testing.
 	}
 
 	manifest := formatVerbatimTranscriptManifest(ref)
-	for _, want := range []string{"VERBATIM TRANSCRIPT CAPTURED", ref.Path, ref.SHA256, "bytes="} {
+	for _, want := range []string{"VERBATIM TRANSCRIPT CAPTURED", "artifact_ref=" + ref.ID, ref.SHA256, "bytes="} {
 		if !strings.Contains(manifest, want) {
 			t.Errorf("manifest missing %q:\n%s", want, manifest)
 		}
+	}
+	if strings.Contains(manifest, ref.Path) {
+		t.Fatalf("opaque manifest leaked filesystem path: %s", manifest)
 	}
 }
 
@@ -85,11 +95,18 @@ func TestVerbatimTaskResultUsesTranscriptManifestInsteadOfWorkerSummary(t *testi
 	if result.RawOutputRef == nil {
 		t.Fatal("RawOutputRef is nil")
 	}
+	outputRef, ok := result.Outputs[rawTranscriptOutputName]
+	if !ok || outputRef.Artifact == nil || outputRef.Artifact.ID != result.RawOutputRef.ID || outputRef.Schema != taskTranscriptMediaType {
+		t.Fatalf("typed raw transcript output = %#v", outputRef)
+	}
 	if strings.Contains(output, "worker prose summary") {
 		t.Errorf("coordinator output included worker summary:\n%s", output)
 	}
-	if !strings.Contains(output, result.RawOutputRef.Path) {
-		t.Errorf("coordinator output omitted transcript path:\n%s", output)
+	if !strings.Contains(output, result.RawOutputRef.ID) {
+		t.Errorf("coordinator output omitted transcript reference:\n%s", output)
+	}
+	if strings.Contains(output, result.RawOutputRef.Path) {
+		t.Errorf("coordinator output leaked transcript path:\n%s", output)
 	}
 	if _, err := transcript.Manifest(); err == nil {
 		t.Fatal("sealed transcript remained appendable/manifestable after finalization")

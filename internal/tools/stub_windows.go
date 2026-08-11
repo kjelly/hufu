@@ -45,14 +45,17 @@ func WithWorkDir(dir string) ToolOption           { return func(c *ToolConfig) {
 func WithAllowedPaths(p []string) ToolOption      { return func(c *ToolConfig) { c.AllowedPaths = p } }
 func WithPathConsent(pc *PathConsent) ToolOption  { return func(c *ToolConfig) { c.PathConsent = pc } }
 func WithPathReviewer(pr PathReviewer) ToolOption { return func(c *ToolConfig) { c.PathReviewer = pr } }
-func WithToolName(n string) ToolOption            { return func(c *ToolConfig) { c.ToolName = n } }
-func WithWorkspaceName(n string) ToolOption       { return func(c *ToolConfig) { c.WorkspaceName = n } }
-func WithHooks(h any) ToolOption                  { return func(c *ToolConfig) {} }
-func WithRestrictedBash(b bool) ToolOption        { return func(c *ToolConfig) { c.RestrictedBash = b } }
-func WithRestrictedPath(p string) ToolOption      { return func(c *ToolConfig) { c.RestrictedPath = p } }
-func WithNetworkBlock(b bool) ToolOption          { return func(c *ToolConfig) { c.NetworkBlock = b } }
-func WithDirenv(b bool) ToolOption                { return func(c *ToolConfig) { c.Direnv = b } }
-func WithForceMCP(b bool) ToolOption              { return func(c *ToolConfig) { c.ForceMCP = b } }
+func WithArtifactOpener(op ArtifactOpener) ToolOption {
+	return func(c *ToolConfig) { c.ArtifactOpener = op }
+}
+func WithToolName(n string) ToolOption       { return func(c *ToolConfig) { c.ToolName = n } }
+func WithWorkspaceName(n string) ToolOption  { return func(c *ToolConfig) { c.WorkspaceName = n } }
+func WithHooks(h any) ToolOption             { return func(c *ToolConfig) {} }
+func WithRestrictedBash(b bool) ToolOption   { return func(c *ToolConfig) { c.RestrictedBash = b } }
+func WithRestrictedPath(p string) ToolOption { return func(c *ToolConfig) { c.RestrictedPath = p } }
+func WithNetworkBlock(b bool) ToolOption     { return func(c *ToolConfig) { c.NetworkBlock = b } }
+func WithDirenv(b bool) ToolOption           { return func(c *ToolConfig) { c.Direnv = b } }
+func WithForceMCP(b bool) ToolOption         { return func(c *ToolConfig) { c.ForceMCP = b } }
 
 func ApplyOptions(opts []ToolOption) ToolConfig {
 	var cfg ToolConfig

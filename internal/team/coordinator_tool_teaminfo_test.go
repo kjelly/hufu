@@ -51,8 +51,10 @@ func TestTaskResultByIDSurvivesSessionReplayWithSealedManifest(t *testing.T) {
 	if err != nil || response.IsError {
 		t.Fatalf("task_result after replay: response=%#v err=%v", response, err)
 	}
-	if !strings.Contains(response.Content, "VERBATIM TRANSCRIPT CAPTURED") || !strings.Contains(response.Content, "sha256=sealed") {
-		t.Fatalf("replayed task result omitted sealed manifest: %s", response.Content)
+	for _, want := range []string{"Summary: complete", "VERBATIM TRANSCRIPT CAPTURED", "sha256=sealed"} {
+		if !strings.Contains(response.Content, want) {
+			t.Fatalf("replayed task result omitted %q: %s", want, response.Content)
+		}
 	}
 
 	// Exercise the public tool schema as well: task_id requires no agent.
@@ -84,8 +86,10 @@ func TestInMemoryCompletedTaskResultBridgesTaskFilePublication(t *testing.T) {
 	if !ok {
 		t.Fatal("expected in-memory completed result")
 	}
-	if !strings.Contains(got, "VERBATIM TRANSCRIPT CAPTURED") || !strings.Contains(got, "/tmp/run/logs/task-output/3.jsonl") {
-		t.Fatalf("fallback omitted transcript manifest: %s", got)
+	for _, want := range []string{"Summary: freeze complete", "VERBATIM TRANSCRIPT CAPTURED", "/tmp/run/logs/task-output/3.jsonl"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("fallback omitted %q: %s", want, got)
+		}
 	}
 }
 

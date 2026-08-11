@@ -331,10 +331,14 @@ func formatCompletedTaskResult(item *TodoItem) string {
 	fmt.Fprintf(&b, "Completed task %s by %s:\n\n**Task:** %s\n\n", item.ID, item.Agent, item.Desc)
 	b.WriteString("**Result:**\n\n")
 	if result := item.TypedResult; result != nil {
-		if result.RawOutputRef != nil && result.RawOutputRef.Path != "" {
+		// A sealed transcript supplements the typed result; it must not hide
+		// the summary, findings, decisions, or stable handoff data. Consumers
+		// use this API rather than constructing a task-output path and reading
+		// it through a filesystem tool.
+		b.WriteString(result.FormatForContext())
+		if result.RawOutputRef != nil && (result.RawOutputRef.ID != "" || result.RawOutputRef.Path != "") {
+			b.WriteString("\n\n")
 			b.WriteString(formatVerbatimTranscriptManifest(result.RawOutputRef))
-		} else {
-			b.WriteString(result.FormatForContext())
 		}
 	} else if strings.TrimSpace(item.Output) != "" {
 		b.WriteString(item.Output)

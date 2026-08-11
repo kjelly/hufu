@@ -450,10 +450,14 @@ func (s *defaultWorkerMemoryService) SaveSessionMemory(ctx context.Context, req 
 			})
 		}
 	}
-	if req.TaskResult != nil && req.TaskResult.RawOutputRef != nil && req.TaskResult.RawOutputRef.Path != "" {
+	if req.TaskResult != nil && req.TaskResult.RawOutputRef != nil && (req.TaskResult.RawOutputRef.ID != "" || req.TaskResult.RawOutputRef.Path != "") {
+		ref := req.TaskResult.RawOutputRef.ID
+		if ref == "" {
+			ref = req.TaskResult.RawOutputRef.Path
+		}
 		evidence = append(evidence, contextstore.EvidenceRef{
 			Type: "task_transcript",
-			Ref:  req.TaskResult.RawOutputRef.Path,
+			Ref:  ref,
 		})
 	}
 

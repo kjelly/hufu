@@ -342,7 +342,11 @@ func (tr *TaskResult) FormatForContext() string {
 		}
 	}
 	if tr.RawOutputRef != nil {
-		fmt.Fprintf(&sb, "Verbatim Transcript: %s (sha256: %s, bytes: %d)\n", tr.RawOutputRef.Path, tr.RawOutputRef.SHA256, tr.RawOutputRef.Bytes)
+		if tr.RawOutputRef.ID != "" {
+			fmt.Fprintf(&sb, "Verbatim Transcript Ref: %s (sha256: %s, bytes: %d)\n", tr.RawOutputRef.ID, tr.RawOutputRef.SHA256, tr.RawOutputRef.Bytes)
+		} else {
+			fmt.Fprintf(&sb, "Legacy Verbatim Transcript: %s (sha256: %s, bytes: %d)\n", tr.RawOutputRef.Path, tr.RawOutputRef.SHA256, tr.RawOutputRef.Bytes)
+		}
 	}
 	if len(tr.FilesModified) > 0 {
 		sb.WriteString("Files Modified:\n")

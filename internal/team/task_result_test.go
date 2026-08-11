@@ -56,6 +56,19 @@ func TestTaskResult_SchemaAndFormatting(t *testing.T) {
 	}
 }
 
+func TestTaskResultContextUsesOpaqueTranscriptRefInsteadOfPath(t *testing.T) {
+	result := &TaskResult{Summary: "done", RawOutputRef: &ArtifactRef{
+		ID: "sha256-opaque", Path: "/workspace/long/hufu-pilot-integration/logs/transcript.jsonl", SHA256: "digest", Bytes: 42,
+	}}
+	formatted := result.FormatForContext()
+	if !strings.Contains(formatted, "sha256-opaque") {
+		t.Fatalf("formatted result omitted opaque ref: %s", formatted)
+	}
+	if strings.Contains(formatted, result.RawOutputRef.Path) {
+		t.Fatalf("formatted result leaked copyable transcript path: %s", formatted)
+	}
+}
+
 func TestValidateSubmittedTaskResultCompletionStates(t *testing.T) {
 	for _, status := range []string{TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps} {
 		t.Run(status, func(t *testing.T) {
@@ -109,8 +122,8 @@ func TestSubmitResultTool(t *testing.T) {
 	if info.Name != "submit_result" {
 		t.Fatalf("expected tool name 'submit_result', got %q", info.Name)
 	}
-	if _, ok := info.Parameters["raw_output_ref"]; !ok {
-		t.Fatal("submit_result schema omitted raw_output_ref")
+	if _, ok := info.Parameters["raw_output_ref"]; ok {
+		t.Fatal("submit_result schema exposed runtime-owned raw_output_ref")
 	}
 	if _, ok := info.Parameters["details"]; !ok {
 		t.Fatal("submit_result schema omitted details")
@@ -190,6 +203,24 @@ func TestSubmitResultTool(t *testing.T) {
 	}
 	if len(updatedItem.TypedResult.Artifacts) != 1 || updatedItem.TypedResult.Artifacts[0].ID == "" {
 		t.Fatalf("submitted artifact was not materialized: %#v", updatedItem.TypedResult.Artifacts)
+	}
+}
+
+func TestSubmitResultToolRejectsModelDeclaredRawOutputRef(t *testing.T) {
+	c := &Coordinator{taskTracker: NewTaskTracker()}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "runtime transcript"}})[0]
+	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(context.Background(), fantasy.ToolCall{
+		Name:  "submit_result",
+		Input: `{"status":"success","summary":"done","raw_output_ref":{"id":"invented","path":"/tmp/invented","sha256":"fake"}}`,
+	})
+	if err != nil {
+		t.Fatalf("submit_result error = %v", err)
+	}
+	if !response.IsError || !strings.Contains(response.Content, "runtime-owned") {
+		t.Fatalf("model-declared raw output response = %#v", response)
+	}
+	if got := c.GetTaskResult(item.ID); got != nil {
+		t.Fatalf("model-declared raw output was stored: %#v", got)
 	}
 }
 

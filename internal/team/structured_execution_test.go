@@ -111,6 +111,36 @@ func TestRunStructuredExecutionResolvesTypedUpstreamReferences(t *testing.T) {
 	}
 }
 
+func TestRunStructuredExecutionInjectsOpaqueArtifactRefAndReceiptsProvenance(t *testing.T) {
+	contract := ExecutionContract{Steps: []ExecutionStep{
+		{ID: "produce", Tool: "producer", Effect: ExecutionEffectProduce, Outputs: []ExecutionStepOutput{{Name: "transcript", Kind: ExecutionOutputArtifact}}},
+		{ID: "audit", Tool: "view", Effect: ExecutionEffectRead, DependsOn: []string{"produce"}, References: []ExecutionStepReference{{Target: "artifact_ref", StepID: "produce", Output: "transcript", Kind: ExecutionOutputArtifact}}},
+	}}
+	const artifactID = "sha256-exact-runtime-reference"
+	const digest = "exact-digest"
+	runner := StructuredStepRunnerFunc(func(_ context.Context, request StructuredStepRequest) (ExecutionStepResult, error) {
+		switch request.Step.ID {
+		case "produce":
+			return ExecutionStepResult{Artifacts: map[string]ArtifactRef{"transcript": {ID: artifactID, SHA256: digest}}}, nil
+		case "audit":
+			if got, ok := request.ResolvedInput["artifact_ref"].(string); !ok || got != artifactID {
+				return ExecutionStepResult{}, errors.New("artifact reference was flattened to a path or changed")
+			}
+			return ExecutionStepResult{}, nil
+		default:
+			return ExecutionStepResult{}, errors.New("unexpected step")
+		}
+	})
+	result, err := RunStructuredExecution(context.Background(), StructuredExecutionRequest{TaskID: "opaque-artifact", Attempt: 1, Contract: contract}, runner)
+	if err != nil {
+		t.Fatalf("RunStructuredExecution() error = %v", err)
+	}
+	refs := result.Receipts[1].ResolvedRefs
+	if len(refs) != 1 || refs[0].RefID != artifactID || refs[0].SHA256 != digest || refs[0].ProducerStep != "produce" || refs[0].Target != "artifact_ref" {
+		t.Fatalf("resolved reference provenance = %#v", refs)
+	}
+}
+
 func TestValidateExecutionContractStructuredStepsRejectUnsafeShapes(t *testing.T) {
 	validSteps := []ExecutionStep{
 		{ID: "produce", Tool: "writer", Effect: ExecutionEffectProduce, Outputs: []ExecutionStepOutput{{Name: "draft"}}},

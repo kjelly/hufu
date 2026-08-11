@@ -1,11 +1,9 @@
 package team
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,6 +17,7 @@ import (
 const (
 	taskTranscriptMediaType = "application/x-ndjson"
 	taskTranscriptDir       = "task-output"
+	rawTranscriptOutputName = "raw_transcript"
 )
 
 const (
@@ -56,8 +55,10 @@ func validateTaskOutputMode(task TaskDef) error {
 type taskTranscript struct {
 	mu              sync.Mutex
 	path            string
+	workspace       string
 	todoID          string
 	runID           string
+	attempt         int
 	f               *os.File
 	toolResults     int
 	assistantOutput bool
@@ -106,7 +107,7 @@ func newTaskTranscriptForAttempt(workspace, todoID, runID string, attempt int) (
 	if err != nil {
 		return nil, fmt.Errorf("create task transcript: %w", err)
 	}
-	return &taskTranscript{path: path, todoID: todoID, runID: runID, f: f}, nil
+	return &taskTranscript{path: path, workspace: workspace, todoID: todoID, runID: runID, attempt: attempt, f: f}, nil
 }
 
 // RecordAssistantOutput preserves the original worker's final response in
@@ -206,17 +207,24 @@ func (t *taskTranscript) Manifest() (*ArtifactRef, error) {
 	if err := t.f.Sync(); err != nil {
 		return nil, fmt.Errorf("sync task transcript: %w", err)
 	}
-	f, err := os.Open(t.path)
+	store, err := NewFileArtifactStore(t.workspace, t.workspace)
 	if err != nil {
-		return nil, fmt.Errorf("read task transcript: %w", err)
+		return nil, fmt.Errorf("open task transcript artifact store: %w", err)
 	}
-	defer func() { _ = f.Close() }()
-	h := sha256.New()
-	bytes, err := io.Copy(h, f)
+	ref, err := store.Put(context.Background(), PutArtifactRequest{
+		Kind:        taskTranscriptMediaType,
+		Path:        t.path,
+		Description: "Complete tool-call transcript captured by hufu",
+		MediaType:   taskTranscriptMediaType,
+		SourcePath:  t.path,
+		RunID:       t.runID,
+		TaskID:      t.todoID,
+		Attempt:     t.attempt,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("hash task transcript: %w", err)
+		return nil, fmt.Errorf("snapshot task transcript: %w", err)
 	}
-	return &ArtifactRef{Path: t.path, Description: "Complete tool-call transcript captured by hufu", Type: taskTranscriptMediaType, SHA256: hex.EncodeToString(h.Sum(nil)), Bytes: bytes}, nil
+	return &ref, nil
 }
 
 func (t *taskTranscript) Close() error {
@@ -237,7 +245,10 @@ func formatVerbatimTranscriptManifest(ref *ArtifactRef) string {
 	if ref == nil {
 		return ""
 	}
-	return fmt.Sprintf("VERBATIM TRANSCRIPT CAPTURED\npath=%s\nsha256=%s\nbytes=%d\n\nThe transcript is authoritative. Do not re-read source files merely to reconstruct its contents.", ref.Path, ref.SHA256, ref.Bytes)
+	if ref.ID == "" {
+		return fmt.Sprintf("VERBATIM TRANSCRIPT CAPTURED (LEGACY REFERENCE)\nlegacy_path=%s\nsha256=%s\nbytes=%d\n\nThe transcript has no opaque artifact reference and cannot be consumed by a reference-only tool.", ref.Path, ref.SHA256, ref.Bytes)
+	}
+	return fmt.Sprintf("VERBATIM TRANSCRIPT CAPTURED\nartifact_ref=%s\nsha256=%s\nbytes=%d\n\nUse artifact_ref exactly as issued. Do not reconstruct or copy a filesystem path.", ref.ID, ref.SHA256, ref.Bytes)
 }
 
 // finalizeVerbatimTaskResult associates runner-owned evidence with the typed
@@ -259,6 +270,13 @@ func finalizeVerbatimTaskResult(transcript *taskTranscript, result *TaskResult) 
 	}
 	if result != nil {
 		result.RawOutputRef = ref
+		if result.Outputs == nil {
+			result.Outputs = make(map[string]StructuredOutputValue)
+		}
+		copyRef := *ref
+		result.Outputs[rawTranscriptOutputName] = StructuredOutputValue{
+			Kind: ExecutionOutputArtifact, Schema: taskTranscriptMediaType, Scope: "task", Artifact: &copyRef,
+		}
 		sec, err := GetSystemSecret()
 		if err != nil {
 			return "", fmt.Errorf("failed to obtain system secret for transcript signing: %w", err)
@@ -268,7 +286,7 @@ func finalizeVerbatimTaskResult(transcript *taskTranscript, result *TaskResult) 
 			RunID:       transcript.runID,
 			Type:        "task_transcript",
 			Description: "Complete runner-captured tool transcript",
-			Value:       ref.Path,
+			Value:       ref.ID,
 		}
 		result.Evidence = append(result.Evidence, SignEvidence(ev, sec))
 	}

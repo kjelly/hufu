@@ -69,8 +69,9 @@ func cloneStructuredFacts(values map[string]StructuredFact) map[string]Structure
 	return clone
 }
 
-func (e *structuredExecutionRun) resolveStepInput(step ExecutionStep) (map[string]any, error) {
+func (e *structuredExecutionRun) resolveStepInput(step ExecutionStep) (map[string]any, []ResolvedStepRef, error) {
 	resolved := make(map[string]any, len(step.Input)+len(step.References))
+	bindings := make([]ResolvedStepRef, 0, len(step.References))
 	for key, value := range step.Input {
 		resolved[key] = value
 	}
@@ -79,53 +80,66 @@ func (e *structuredExecutionRun) resolveStepInput(step ExecutionStep) (map[strin
 		if reference.TaskID != "" {
 			output, ok := e.request.UpstreamOutputs[reference.TaskID][reference.Output]
 			if !ok {
-				return nil, fmt.Errorf("step %q reference %q has no successful upstream task output", step.ID, reference.Output)
+				return nil, nil, fmt.Errorf("step %q reference %q has no successful upstream task output", step.ID, reference.Output)
 			}
+			binding := ResolvedStepRef{Target: reference.Target, ProducerTask: reference.TaskID, Output: reference.Output, Kind: normalizedExecutionOutputKind(reference.Kind), Schema: reference.Schema}
 			switch normalizedExecutionOutputKind(reference.Kind) {
 			case ExecutionOutputArtifact:
-				if output.Artifact == nil {
-					return nil, fmt.Errorf("upstream task output %q is not an artifact", reference.Output)
+				if output.Artifact == nil || strings.TrimSpace(output.Artifact.ID) == "" {
+					return nil, nil, fmt.Errorf("upstream task output %q is not an artifact", reference.Output)
 				}
-				value = *output.Artifact
+				// Only the opaque ID crosses the provider/tool input boundary.
+				// Paths remain runtime metadata and cannot be recopied or mutated
+				// by the coordinator model.
+				value = output.Artifact.ID
+				binding.RefID, binding.SHA256 = output.Artifact.ID, output.Artifact.SHA256
 			case ExecutionOutputFact:
 				if output.Fact == nil {
-					return nil, fmt.Errorf("upstream task output %q is not a fact", reference.Output)
+					return nil, nil, fmt.Errorf("upstream task output %q is not a fact", reference.Output)
 				}
 				value = output.Fact.Value
+				binding.SHA256 = output.Fact.SHA256
 			case ExecutionOutputReceipt:
 				if output.ReceiptID == "" {
-					return nil, fmt.Errorf("upstream task output %q is not a receipt", reference.Output)
+					return nil, nil, fmt.Errorf("upstream task output %q is not a receipt", reference.Output)
 				}
 				value = output.ReceiptID
+				binding.RefID = output.ReceiptID
 			}
 			resolved[reference.Target] = value
+			bindings = append(bindings, binding)
 			continue
 		}
+		binding := ResolvedStepRef{Target: reference.Target, ProducerStep: reference.StepID, Output: reference.Output, Kind: normalizedExecutionOutputKind(reference.Kind), Schema: reference.Schema}
 		switch normalizedExecutionOutputKind(reference.Kind) {
 		case ExecutionOutputArtifact:
 			artifact, ok := e.result.Artifacts[reference.Output]
-			if !ok {
-				return nil, fmt.Errorf("step %q reference %q has no successful upstream artifact", step.ID, reference.Output)
+			if !ok || strings.TrimSpace(artifact.ID) == "" {
+				return nil, nil, fmt.Errorf("step %q reference %q has no successful upstream artifact", step.ID, reference.Output)
 			}
-			value = artifact
+			value = artifact.ID
+			binding.RefID, binding.SHA256 = artifact.ID, artifact.SHA256
 		case ExecutionOutputFact:
 			fact, ok := e.result.Facts[reference.Output]
 			if !ok {
-				return nil, fmt.Errorf("step %q reference %q has no successful upstream fact", step.ID, reference.Output)
+				return nil, nil, fmt.Errorf("step %q reference %q has no successful upstream fact", step.ID, reference.Output)
 			}
 			value = fact.Value
+			binding.SHA256 = fact.SHA256
 		case ExecutionOutputReceipt:
 			receipt, ok := e.stepReceipts[reference.StepID]
 			if !ok || receipt.ExitCode != 0 {
-				return nil, fmt.Errorf("step %q reference %q has no successful upstream receipt", step.ID, reference.Output)
+				return nil, nil, fmt.Errorf("step %q reference %q has no successful upstream receipt", step.ID, reference.Output)
 			}
 			value = cloneExecutionStepReceipt(receipt)
+			binding.RefID = receipt.ID
 		default:
-			return nil, fmt.Errorf("step %q reference %q has invalid kind %q", step.ID, reference.Output, reference.Kind)
+			return nil, nil, fmt.Errorf("step %q reference %q has invalid kind %q", step.ID, reference.Output, reference.Kind)
 		}
 		resolved[reference.Target] = value
+		bindings = append(bindings, binding)
 	}
-	return resolved, nil
+	return resolved, bindings, nil
 }
 
 func (e *structuredExecutionRun) recordDeclaredOutputs(step ExecutionStep, stepResult ExecutionStepResult, receipt *ExecutionStepReceipt) error {
