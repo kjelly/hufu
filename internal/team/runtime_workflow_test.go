@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -472,6 +474,9 @@ func TestRuntimeWorkflowWriteIsolationIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The test needs to run execution tools (bash, lua, write), which are now restricted
+	// to the EXECUTE phase by runtime enforcement. Transition the workflow to EXECUTE.
+	w.state = PhaseExecute
 	c := &Coordinator{phaseWorkflow: w, session: session}
 
 	ctx := context.Background()
@@ -551,5 +556,124 @@ func TestRuntimeWorkflowWriteIsolationIntegration(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPhaseCapabilityExecutionBlockIntegration(t *testing.T) {
+	session := workflowTestSession(t)
+	session.Agents["preparer"].Tools = "all"
+	w, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Leave state as PhasePrepare (which is what it defaults to, or just explicitly set it)
+	w.state = PhasePrepare
+	c := &Coordinator{phaseWorkflow: w, session: session}
+
+	ctx := context.Background()
+	// Ask for all execution tools. The PhaseCapability logic should filter them out in PhasePrepare.
+	ctx = c.withEffectiveToolsAllowed(ctx, session.Agents["preparer"], []string{"bash", "terminal", "terminal_start", "wait_for", "download", "terminal_wait"})
+
+	cwd, _ := os.Getwd()
+	builtTools := agent.BuildAllAgentTools(cwd)
+	builtTools = append(builtTools, &terminalTool{coordinator: c}, &terminalWaitTool{coordinator: c})
+
+	tests := []struct {
+		testName string
+		toolName string
+		input    string
+	}{
+		{"terminal start blocked", "terminal", `{"action":"start","command":["sh","-c","echo 1"]}`},
+		{"wait_for blocked", "wait_for", `{"command":"sleep 1","timeout_seconds":5}`},
+		{"bash blocked", "bash", `{"command":"echo 1"}`},
+		{"download blocked", "download", `{"url":"http://example.com","file_path":"dl.txt"}`},
+		{"terminal_wait blocked", "terminal_wait", `{"id":"session-1"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.testName, func(t *testing.T) {
+			var tool fantasy.AgentTool
+			for _, t := range builtTools {
+				if t.Info().Name == tt.toolName {
+					tool = t
+					break
+				}
+			}
+			if tool == nil {
+				t.Fatalf("tool %s not found", tt.toolName)
+			}
+
+			resp, err := tool.Run(ctx, fantasy.ToolCall{Input: tt.input})
+			if err != nil {
+				t.Fatalf("unexpected system err: %v", err)
+			}
+
+			if !resp.IsError || !strings.Contains(resp.Content, "not permitted") {
+				t.Errorf("expected tool %s to fail with not permitted, got response: %v", tt.toolName, resp.Content)
+			}
+		})
+	}
+}
+
+func TestPhaseCapabilityMCPBlockIntegration(t *testing.T) {
+	session := workflowTestSession(t)
+	session.Agents["preparer"].MCPTools = map[string]agent.MCPToolConfig{
+		"destructive_mcp": {Cmd: "echo 1"},
+	}
+	session.Agents["preparer"].Tools = "destructive_mcp,all"
+
+	w, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.state = PhasePrepare
+	c := &Coordinator{phaseWorkflow: w, session: session, mcpManager: mcp.NewMCPToolManager("", "")}
+
+	ctx := context.Background()
+	ctx = c.withEffectiveToolsAllowedForTask(ctx, session.Agents["preparer"], []string{}, TaskDef{})
+	allowed := tools.GetToolsAllowed(ctx)
+	if slices.Contains(allowed, "destructive_mcp") {
+		t.Fatalf("MCP tool was permitted in PREPARE phase runtime allowlist")
+	}
+
+	w.state = PhaseExecute
+	ctx = c.withEffectiveToolsAllowedForTask(ctx, session.Agents["preparer"], []string{}, TaskDef{})
+	allowed = tools.GetToolsAllowed(ctx)
+	if !slices.Contains(allowed, "destructive_mcp") {
+		t.Fatalf("MCP tool was incorrectly blocked in EXECUTE phase runtime allowlist: %v", allowed)
+	}
+}
+
+func TestPhaseCapabilityMCPBlockModelVisible(t *testing.T) {
+	session := workflowTestSession(t)
+	session.Agents["preparer"].MCPTools = map[string]agent.MCPToolConfig{
+		"destructive_mcp": {Cmd: "echo 1"},
+	}
+	session.Agents["preparer"].Tools = "all"
+	session.Agents["preparer"].Generation.Model = "test-model"
+
+	w, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.state = PhasePrepare
+	pm, _ := agent.NewProviderManager("", "", nil)
+	c := &Coordinator{phaseWorkflow: w, session: session, providerManager: pm, mcpManager: mcp.NewMCPToolManager("", "")}
+
+	_, toolNames, err := c.createTaskAgentWithResultTool(context.Background(), session.Agents["preparer"], "", nil, TaskDef{})
+	if err != nil && !strings.Contains(err.Error(), "no exact tokenizer") {
+		t.Fatalf("unexpected PREPARE err: %v", err)
+	}
+	if slices.Contains(toolNames, "destructive_mcp") {
+		t.Fatalf("MCP tool was exposed to model in PREPARE phase")
+	}
+
+	w.state = PhaseExecute
+	_, toolNames, err = c.createTaskAgentWithResultTool(context.Background(), session.Agents["preparer"], "", nil, TaskDef{})
+	if err != nil && !strings.Contains(err.Error(), "no exact tokenizer") && !strings.Contains(err.Error(), "load MCP server") {
+		t.Fatalf("err: %v", err)
+	}
+	if !slices.Contains(toolNames, "destructive_mcp") {
+		t.Fatalf("MCP tool was blocked from model in EXECUTE phase: %v, err: %v", toolNames, err)
 	}
 }
