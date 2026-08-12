@@ -21,6 +21,7 @@ type EffectiveTaskContract struct {
 	Agent      string            `json:"agent"`
 	Execution  ExecutionContract `json:"execution"`
 	OutputMode string            `json:"output_mode"`
+	Action     *Action           `json:"action,omitempty"`
 }
 
 const effectiveTaskContractRevision = 1
@@ -65,16 +66,19 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 		if contractID == "" {
 			contractID = name
 		}
-		hash, err := effectiveContractHash(contractID, name, contract.Execution, contract.OutputMode)
+		hash, err := effectiveContractHash(contractID, name, contract.Execution, contract.OutputMode, contract.Action)
 		if err != nil {
 			return nil, nil, fmt.Errorf("hash initial task contract %q: %w", contractID, err)
 		}
 		bound[i].Execution = contract.Execution
 		bound[i].OutputMode = contract.OutputMode
+		bound[i].Phase = contract.Phase
+		bound[i].Action = cloneActionPtr(contract.Action)
+		applyStaticVerificationContract(&bound[i], contract)
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: contract.Execution, OutputMode: contract.OutputMode})
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: contract.Execution, OutputMode: contract.OutputMode, Action: cloneActionPtr(contract.Action)})
 	}
 	return bound, effective, nil
 }
@@ -96,13 +100,23 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 	effective := make([]EffectiveTaskContract, 0, len(bound))
 	for i := range bound {
 		matches := make([]TaskDef, 0, 1)
+		agentContracts := make([]TaskDef, 0, 1)
 		for _, contract := range session.ContractTasks {
-			if strings.TrimSpace(contract.WhenGoalContains) == "" ||
-				!strings.EqualFold(strings.TrimSpace(contract.Agent), strings.TrimSpace(bound[i].Agent)) ||
-				!strings.Contains(bound[i].Goal, contract.WhenGoalContains) {
+			selector := strings.TrimSpace(contract.WhenGoalContains)
+			if selector == "" || !strings.EqualFold(strings.TrimSpace(contract.Agent), strings.TrimSpace(bound[i].Agent)) {
 				continue
 			}
-			matches = append(matches, contract)
+			agentContracts = append(agentContracts, contract)
+			if strings.Contains(strings.ToLower(bound[i].Goal), strings.ToLower(selector)) {
+				matches = append(matches, contract)
+			}
+		}
+		// A worker with exactly one configured goal contract has no routing
+		// ambiguity. Bind it by agent identity when the coordinator paraphrases
+		// the selector, so harmless wording changes cannot leak model-authored
+		// execution fields past the static team boundary.
+		if len(matches) == 0 && len(agentContracts) == 1 {
+			matches = append(matches, agentContracts[0])
 		}
 		if len(matches) == 0 {
 			continue
@@ -115,18 +129,35 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 		if contractID == "" {
 			contractID = strings.ToLower(strings.TrimSpace(contract.Agent)) + ":" + contract.WhenGoalContains
 		}
-		hash, err := effectiveContractHash(contractID, strings.ToLower(strings.TrimSpace(contract.Agent)), contract.Execution, contract.OutputMode)
+		hash, err := effectiveContractHash(contractID, strings.ToLower(strings.TrimSpace(contract.Agent)), contract.Execution, contract.OutputMode, contract.Action)
 		if err != nil {
 			return nil, nil, fmt.Errorf("hash task goal contract %q: %w", contractID, err)
 		}
 		bound[i].Execution = contract.Execution
 		bound[i].OutputMode = contract.OutputMode
+		bound[i].Phase = contract.Phase
+		bound[i].Action = cloneActionPtr(contract.Action)
+		applyStaticVerificationContract(&bound[i], contract)
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: contract.Execution, OutputMode: contract.OutputMode})
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: contract.Execution, OutputMode: contract.OutputMode, Action: cloneActionPtr(contract.Action)})
 	}
 	return bound, effective, nil
+}
+
+// applyStaticVerificationContract makes verification fields authoritative for
+// a statically selected task contract. A coordinator may include generic
+// verify_spec defaults in its delegation call, but those defaults must not
+// silently add a worker-side tool call when the team contract deliberately
+// declares requires-verification=false (or vice versa).
+func applyStaticVerificationContract(bound *TaskDef, contract TaskDef) {
+	if bound == nil {
+		return
+	}
+	bound.Verify = contract.Verify
+	bound.VerifyMode = contract.VerifyMode
+	bound.VerifySpec = cloneVerificationSpecPtr(contract.VerifySpec)
 }
 
 func matchesInitialContractBatch(tasks []TaskDef, policy agent.DelegationPolicy) bool {
@@ -160,14 +191,15 @@ func executionContractsEqualOrEmpty(got, want ExecutionContract) bool {
 	return leftErr == nil && rightErr == nil && string(left) == string(right)
 }
 
-func effectiveContractHash(id, agent string, execution ExecutionContract, outputMode string) (string, error) {
+func effectiveContractHash(id, agent string, execution ExecutionContract, outputMode string, action *Action) (string, error) {
 	payload := struct {
 		ID         string            `json:"id"`
 		Revision   int               `json:"revision"`
 		Agent      string            `json:"agent"`
 		Execution  ExecutionContract `json:"execution"`
 		OutputMode string            `json:"output_mode"`
-	}{id, effectiveTaskContractRevision, agent, execution, outputMode}
+		Action     *Action           `json:"action,omitempty"`
+	}{id, effectiveTaskContractRevision, agent, execution, outputMode, cloneActionPtr(action)}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return "", err

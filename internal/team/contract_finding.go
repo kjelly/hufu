@@ -53,6 +53,21 @@ const (
 	// unachievable.
 	// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.4
 	FindingAcceptanceVacuous = "acceptance_vacuous"
+	// FindingCompletionToolDenied reports an outcome team that has an
+	// acceptance contract but removes the finish tool needed to evaluate it.
+	FindingCompletionToolDenied    = "completion_tool_denied"
+	FindingDelegationWorkerUnknown = "delegation_worker_unknown"
+	FindingDelegationWorkerRole    = "delegation_worker_role_invalid"
+	FindingDelegationWorkerDenied  = "delegation_worker_not_allowed"
+	FindingToolPolicyConflict      = "tool_policy_conflict"
+	FindingRequiredToolDenied      = "required_tool_denied"
+	FindingRequiredToolUnavailable = "required_tool_unavailable"
+	FindingRequiredEnvMissing      = "required_environment_missing"
+	FindingRequiredPathDenied      = "required_path_denied"
+	FindingInteractiveUnattended   = "interactive_requirement_unattended"
+	FindingNetworkDisabled         = "network_requirement_disabled"
+	FindingPlanFirstRequired       = "plan_first_required"
+	FindingRequirementInvalid      = "requirement_invalid"
 
 	// FindingDeadlineConflict indicates that a child deadline equals or exceeds
 	// its parent deadline, leaving no room for result finalisation.

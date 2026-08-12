@@ -81,6 +81,94 @@ func TestCompileTaskGoalContractsReplacesCoordinatorExecutionFields(t *testing.T
 	}
 }
 
+func TestCompileTaskGoalContractsBindsStaticActionAndItsIdentity(t *testing.T) {
+	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
+		BindTaskGoalContracts: true,
+	}}, ContractTasks: []TaskDef{{
+		ID: "apply-v1", Agent: "executor", WhenGoalContains: "apply change", Phase: PhaseExecute,
+		Action: &Action{Capability: "structured-actions", Type: "apply", Payload: `{"safe":true}`},
+	}}}
+	bound, effective, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "executor", Goal: "apply change"}})
+	if err != nil {
+		t.Fatalf("compile goal contract: %v", err)
+	}
+	if len(effective) != 1 || effective[0].Action == nil || bound[0].Action == nil {
+		t.Fatalf("static action was not bound: bound=%#v effective=%#v", bound, effective)
+	}
+	if bound[0].Action == session.ContractTasks[0].Action {
+		t.Fatal("bound action aliases mutable team contract")
+	}
+	if bound[0].Action.Capability != "structured-actions" || bound[0].ContractHash == "" {
+		t.Fatalf("bound action identity = %#v", bound[0])
+	}
+}
+
+func TestCompileTaskGoalContractsBindsUniqueAgentContractAfterParaphrase(t *testing.T) {
+	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
+		BindTaskGoalContracts: true,
+	}}, ContractTasks: []TaskDef{{
+		ID: "author-v1", Agent: "author", WhenGoalContains: "author bundle",
+		Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"bash", "submit_result"}},
+	}}}
+	requested := TaskDef{Agent: "author", Goal: "Create the structured-action scenarios", Execution: ExecutionContract{
+		ToolSequence: []string{"bash ./invented-script.sh", "submit_result"}, ToolExpectedExitCodes: [][]int{{0}},
+	}}
+
+	bound, effective, err := CompileTaskGoalContracts(session, []TaskDef{requested})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if len(effective) != 1 || effective[0].ID != "author-v1" {
+		t.Fatalf("unique agent contract was not selected: %#v", effective)
+	}
+	if got := bound[0].Execution; !reflect.DeepEqual(got.ToolSequence, []string{"bash", "submit_result"}) || len(got.ToolExpectedExitCodes) != 0 {
+		t.Fatalf("model-authored execution fields survived unique binding: %#v", got)
+	}
+}
+
+func TestCompileTaskGoalContractsReplacesCoordinatorVerificationFields(t *testing.T) {
+	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
+		BindTaskGoalContracts: true,
+	}}, ContractTasks: []TaskDef{{
+		Agent:            "topology-preparer",
+		WhenGoalContains: "topology",
+		Execution:        ExecutionContract{ToolSequence: []string{"bash", "submit_result"}},
+	}}}
+	requested := TaskDef{
+		Agent:      "topology-preparer",
+		Goal:       "rebuild topology",
+		Verify:     "test -s receipt.json",
+		VerifySpec: &VerificationSpec{Type: VerifyFileExists, Path: "receipt.json"},
+	}
+	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{requested})
+	if err != nil {
+		t.Fatalf("compile goal contract: %v", err)
+	}
+	if bound[0].Verify != "" || bound[0].VerifyMode != "" || bound[0].VerifySpec != nil {
+		t.Fatalf("coordinator verification fields survived static contract: %#v", bound[0])
+	}
+}
+
+func TestCompileTaskGoalContractsMatchesGoalSelectorCaseInsensitively(t *testing.T) {
+	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
+		BindTaskGoalContracts: true,
+	}}, ContractTasks: []TaskDef{{
+		Agent:            "author",
+		WhenGoalContains: "AUTHOR STRUCTURED-ACTION BUNDLE",
+		Execution:        ExecutionContract{ToolSequence: []string{"bash", "submit_result"}},
+	}}}
+	bound, effective, err := CompileTaskGoalContracts(session, []TaskDef{{
+		Agent: "author",
+		Goal:  "Author structured-action bundle",
+	}})
+	if err != nil {
+		t.Fatalf("compile case-insensitive selector: %v", err)
+	}
+	if len(effective) != 1 || !reflect.DeepEqual(bound[0].Execution.ToolSequence, []string{"bash", "submit_result"}) {
+		t.Fatalf("case-insensitive selector did not bind static contract: bound=%#v effective=%#v", bound, effective)
+	}
+}
+
 func TestCompileTaskGoalContractsRejectsAmbiguousSelectors(t *testing.T) {
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
