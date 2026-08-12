@@ -86,6 +86,46 @@ func TestRewriteBashRedirects(t *testing.T) {
 	}
 }
 
+func TestBashAndSudoRuntimeWorkflowWriteIsolation(t *testing.T) {
+	ctx := context.WithValue(context.Background(), AgentAllowedWritePathsKey, []string{"/workspace/runtime"})
+	cfg := ToolConfig{}
+
+	tmpDir := t.TempDir()
+	tests := []struct {
+		name    string
+		command string
+		target  string
+	}{
+		{"nonexistent absolute redirection", "printf x > " + filepath.Join(tmpDir, "escape1"), filepath.Join(tmpDir, "escape1")},
+		{"relative redirection", "printf x > " + filepath.Join(tmpDir, "escape2"), filepath.Join(tmpDir, "escape2")},
+		{"tee absolute", "echo x | tee " + filepath.Join(tmpDir, "escape3"), filepath.Join(tmpDir, "escape3")},
+		{"mkdir absolute", "mkdir " + filepath.Join(tmpDir, "escape-dir"), filepath.Join(tmpDir, "escape-dir")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, toolFn := range []func(context.Context, fantasy.ToolCall, ToolConfig) (fantasy.ToolResponse, error){executeBash, executeSudo} {
+				resp, err := toolFn(ctx, fantasy.ToolCall{Input: `{"command": "` + tt.command + `"}`}, cfg)
+				if err != nil {
+					t.Fatalf("tool function returned system error instead of tool error: %v", err)
+				}
+
+				if !resp.IsError {
+					t.Errorf("expected resp.IsError to be true")
+				}
+
+				if !strings.Contains(resp.Content, "disabled in this runtime workflow") {
+					t.Errorf("expected tool to be rejected in runtime workflow, got: %s", resp.Content)
+				}
+
+				if _, err := os.Stat(tt.target); err == nil {
+					t.Errorf("write isolation failed, target was created: %s", tt.target)
+				}
+			}
+		})
+	}
+}
+
 func TestRewriteLineRedirects(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -189,6 +229,30 @@ func TestRunShellCommandDoesNotTruncateOutput(t *testing.T) {
 		if !strings.Contains(resp.Content, "hello-world") {
 			t.Fatalf("iteration %d: expected output to contain %q, got: %q", i, "hello-world", resp.Content)
 		}
+	}
+}
+
+func TestRunShellCommandRedactsInheritedSecretEnvironment(t *testing.T) {
+	secret := "bash-tool-secret-4c2e"
+	t.Setenv("HUFU_TEST_PASSWORD", secret)
+
+	resp, err := runShellCommand(
+		context.Background(),
+		5*time.Second,
+		"",
+		false,
+		"bash",
+		[]string{"-c", "printf '%s\\n' \"$HUFU_TEST_PASSWORD\"; env | grep '^HUFU_TEST_PASSWORD='"},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("runShellCommand error: %v", err)
+	}
+	if strings.Contains(resp.Content, secret) {
+		t.Fatal("bash tool response exposed an inherited secret value")
+	}
+	if !strings.Contains(resp.Content, "[REDACTED]") {
+		t.Fatalf("bash tool response did not show a redaction marker: %q", resp.Content)
 	}
 }
 
