@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -70,6 +71,37 @@ func TestCollectDoctorContractFindingsUsesRuntimeProjectDir(t *testing.T) {
 				t.Fatalf("unresolved finding = %t, want %t; findings=%#v", gotUnresolved, tt.wantUnresolved, findings)
 			}
 		})
+	}
+}
+
+func TestCollectDoctorContractFindingsRejectsDeniedFinishInOutcomeMode(t *testing.T) {
+	session := &team.TeamSession{Config: agent.TeamConfig{
+		GoalMode:    string(team.GoalModeOutcome),
+		ToolsDenied: []string{"finish"},
+		AcceptanceSpec: &agent.AcceptanceSpec{
+			Commands: []string{"true"},
+		},
+	}}
+
+	findings := collectDoctorContractFindings(session, t.TempDir())
+	if !hasDoctorFinding(findings, team.FindingCompletionToolDenied, "tools.denied") {
+		t.Fatalf("doctor findings = %#v, want denied finish finding", findings)
+	}
+}
+
+func TestCollectDoctorContractFindingsChecksEffectiveRequirements(t *testing.T) {
+	const missingEnv = "HUFU_TEST_MISSING_REQUIRED_ENVIRONMENT"
+	t.Setenv(missingEnv, "")
+	session := &team.TeamSession{
+		Dir: t.TempDir(),
+		Config: agent.TeamConfig{
+			Requirements: agent.ContractRequirements{Environment: []string{missingEnv}},
+		},
+	}
+
+	findings := collectDoctorContractFindings(session, t.TempDir())
+	if !hasDoctorFinding(findings, team.FindingRequiredEnvMissing, "requires.environment[0]") {
+		t.Fatalf("doctor findings = %#v, want missing environment finding", findings)
 	}
 }
 

@@ -147,6 +147,22 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	displayTeamHeader(session)
 
 	cfg := config.LoadConfig()
+	allowedPaths := buildAllowedPaths(session, registry, cfg)
+	resolvedForceMCP := opts.forceMCP || cfg.ForceMCP || session.Config.ForceMCP
+	resolvedNoNet := opts.noNet || cfg.NoNet || session.Config.NoNet
+	effectiveContractFindings := team.LintEffectiveTeamContracts(session, team.EffectiveTeamContractContext{
+		Unattended:        opts.unattended || session.Config.Unattended || execProfile.IsUnattended(),
+		ForceMCP:          resolvedForceMCP,
+		NoNet:             resolvedNoNet,
+		PlanFirst:         &planMode,
+		AllowedPaths:      allowedPaths,
+		EnvironmentLookup: os.LookupEnv,
+	})
+	if messages := contractErrorMessages(effectiveContractFindings); len(messages) > 0 {
+		return nil, fmt.Errorf("effective team contract validation failed: %s", strings.Join(messages, "; "))
+	}
+	migrateLegacyDrafts(teamSkillDirs(session, registry))
+
 	var mcpManager *mcp.MCPToolManager
 	if buildMCP {
 		mcpManager = buildMCPManager(ctx, session, cfg)
@@ -167,8 +183,6 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	}
 
 	team.DetectAndCacheOllamaContextLengths(ctx, resolvedProviderURL, resolvedProviderAPIKey, modelsInUse(session, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedModelList))
-
-	allowedPaths := buildAllowedPaths(session, registry, cfg)
 
 	if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
 		stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)
@@ -195,9 +209,6 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	}
 
 	resolvedRestrictedPath := resolveRestrictedPath(session, cfg)
-	resolvedNoNet := opts.noNet || cfg.NoNet || session.Config.NoNet
-	resolvedForceMCP := opts.forceMCP || cfg.ForceMCP || session.Config.ForceMCP
-
 	// Each team receives its own consent store. The store persists explicit
 	// "always" decisions in the team directory and prevents one team's policy
 	// from granting access to another team in a multi-team prompt.
@@ -236,13 +247,24 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	}, nil
 }
 
+func contractErrorMessages(findings []team.ContractFinding) []string {
+	messages := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		if finding.Severity == team.FindingSeverityError {
+			messages = append(messages, fmt.Sprintf("%s: %s (%s)", finding.Field, finding.Message, finding.Code))
+		}
+	}
+	sort.Strings(messages)
+	return messages
+}
+
 func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
 	teamDir, err := registry.Resolve(teamName)
 	if err != nil {
 		return nil, err
 	}
 
-	session, err := team.LoadTeam(teamDir, vars, forcedSkills)
+	session, err := team.LoadTeam(teamDir, vars, forcedSkills, team.DefaultProviderRegistry)
 	if err != nil {
 		return nil, err
 	}
@@ -310,18 +332,7 @@ func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, c
 		}
 	}
 
-	skillDirs := []string{
-		filepath.Join(session.Dir, "skills"),
-		filepath.Join(currentWorkingDir(), ".agents", "skills"),
-		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
-	}
-	if registry != nil {
-		for _, teamDir := range registry.TeamDirs() {
-			skillDirs = append(skillDirs, filepath.Join(teamDir, "skills"))
-		}
-	}
-	migrateLegacyDrafts(skillDirs)
-	for _, dir := range skillDirs {
+	for _, dir := range teamSkillDirs(session, registry) {
 		abs, err := filepath.Abs(dir)
 		if err == nil && !seen[abs] {
 			seen[abs] = true
@@ -351,6 +362,20 @@ func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, c
 	}
 
 	return paths
+}
+
+func teamSkillDirs(session *team.TeamSession, registry *team.TeamRegistry) []string {
+	skillDirs := []string{
+		filepath.Join(session.Dir, "skills"),
+		filepath.Join(currentWorkingDir(), ".agents", "skills"),
+		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
+	}
+	if registry != nil {
+		for _, teamDir := range registry.TeamDirs() {
+			skillDirs = append(skillDirs, filepath.Join(teamDir, "skills"))
+		}
+	}
+	return skillDirs
 }
 
 func normalizeAllowedPaths(paths []string) []string {

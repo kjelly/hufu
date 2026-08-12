@@ -26,6 +26,7 @@ var doctorCmd = &cobra.Command{
   - the resolved default / sidecar / guard models
   - the workspace directory is writable
   - how many agent teams are discoverable
+  - team requirements and delegation/tool policies do not conflict
   - static task and acceptance verifier contracts are asserting and resolvable
 
 Most "the agent did nothing" failures are a provider/model misconfiguration.
@@ -114,7 +115,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 			if err != nil {
 				continue
 			}
-			session, err := team.LoadTeam(teamDir, nil, nil)
+			session, err := team.LoadTeam(teamDir, nil, nil, team.DefaultProviderRegistry)
 			if err != nil {
 				contractErrors++
 				ok = false
@@ -169,6 +170,18 @@ type doctorContractFinding struct {
 // projectDir is the same process CWD that NewCoordinator uses at runtime.
 func collectDoctorContractFindings(session *team.TeamSession, projectDir string) []doctorContractFinding {
 	findings := append(team.LintTeamContracts(session), team.ResolveTeamContractExecutables(session, projectDir)...)
+	allowedPaths := append([]string{projectDir, session.Dir, session.Workspace}, session.Config.AllowedPaths...)
+	unattended := session.Config.Unattended
+	if profile, err := team.ResolveExecutionProfile("", session.Config.ExecutionProfile); err == nil {
+		unattended = unattended || profile.IsUnattended()
+	}
+	findings = append(findings, team.LintEffectiveTeamContracts(session, team.EffectiveTeamContractContext{
+		Unattended:        unattended,
+		ForceMCP:          session.Config.ForceMCP,
+		NoNet:             session.Config.NoNet,
+		AllowedPaths:      allowedPaths,
+		EnvironmentLookup: os.LookupEnv,
+	})...)
 	out := make([]doctorContractFinding, 0, len(findings))
 	for _, finding := range findings {
 		out = append(out, doctorContractFinding{Location: finding.Field, Finding: finding})

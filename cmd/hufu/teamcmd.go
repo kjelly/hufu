@@ -29,12 +29,14 @@ var (
 
 var teamValidateCmd = &cobra.Command{
 	Use:   "validate [team-directory]",
-	Short: "Validate static task contracts before dispatch",
+	Short: "Validate team contracts before dispatch",
 	Long: `Load and validate a team without calling a model or creating a workspace.
 
 Use a directory argument, or --team to resolve a discoverable team name. This
-checks bound initial task contracts for missing/duplicate workers and invalid
-execution/output contracts before they can consume an execution retry.`,
+checks delegation references, tool-policy conflicts, machine-readable
+requirements, and bound task execution/output contracts before they can consume
+an execution retry. Environment-dependent requirements are checked by doctor and
+again after runtime CLI/profile policy is resolved.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runTeamValidate,
 }
@@ -85,17 +87,17 @@ func runTeamValidate(_ *cobra.Command, args []string) error {
 	} else {
 		return fmt.Errorf("team directory or --team is required")
 	}
-	session, err := internalteam.LoadTeam(teamDir, nil, nil)
+	session, err := internalteam.LoadTeam(teamDir, nil, nil, internalteam.DefaultProviderRegistry)
 	if err != nil {
 		return err
 	}
-	findings := internalteam.ValidateTeamTaskContracts(session)
+	findings := internalteam.LintTeamContracts(session)
 	for _, finding := range findings {
 		if finding.Severity == internalteam.FindingSeverityError {
 			return fmt.Errorf("%s: %s (%s)", finding.Field, finding.Message, finding.Code)
 		}
 	}
-	_, err = fmt.Fprintf(os.Stdout, "team %s: task contracts valid\n", session.Config.Name)
+	_, err = fmt.Fprintf(os.Stdout, "team %s: contracts valid\n", session.Config.Name)
 	return err
 }
 
@@ -268,7 +270,7 @@ func validateGeneratedTeam(g generatedTeam) error {
 	if err := writeGeneratedTeam(teamDir, validation); err != nil {
 		return err
 	}
-	if _, err := internalteam.LoadTeam(teamDir, nil, nil); err != nil {
+	if _, err := internalteam.LoadTeam(teamDir, nil, nil, internalteam.DefaultProviderRegistry); err != nil {
 		return err
 	}
 	return nil
