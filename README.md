@@ -161,6 +161,33 @@ model: ollama/qwen3:8b
 You are a senior developer skilled at writing high-quality code.
 ```
 
+#### Machine-readable team requirements
+
+Optional `requires` contracts let hufu reject contradictory teams before any
+agent or workspace action. They are domain-neutral and are checked by team
+loading, `hufu team validate`, `hufu doctor`, and the resolved runtime policy:
+
+```yaml
+# team.yaml
+requires:
+  environment: [CI_TOKEN]
+  paths: [/srv/project]
+
+# worker.md frontmatter
+requires:
+  tools: [bash]
+  environment: [WORKER_TOKEN]
+  paths: [/srv/project/artifacts]
+  interactive: false
+  network: true
+  plan-first: true
+```
+
+The checker validates delegation references, allowed/denied tool conflicts,
+required tool availability, `force-mcp`, `no-net`, unattended interaction,
+plan-first, environment variables, and allowed paths. It does not infer
+mandatory behavior from free-form prompts.
+
 ### 3. Run a Task
 
 ```bash
@@ -638,6 +665,7 @@ Please follow best practices and ensure proper error handling.
 | `force-mcp` | ❌ | Team default | Force MCP mode (disable execution/network tools) |
 | `shell` | ❌ | Team default | Default shell for agent's MCP tools (e.g., `bash`, `zsh`, `nu`, or full path) |
 | `mcp-tools` | ❌ | — | Custom MCP tools (dict format: `{tool-name: {cmd, desc, inputs, shell, dir}}`) |
+| `requires` | ❌ | — | Machine-readable prerequisites: tools, environment, paths, interactive, network, plan-first |
 
 > **Important**: The default value for `max-retries` is `-1`, meaning the team default is used; if explicitly set, it overrides the team default.
 

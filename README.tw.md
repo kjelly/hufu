@@ -133,6 +133,32 @@ model: ollama/qwen3:8b
 你是一位資深開發者，擅長撰寫高品質程式碼。
 ```
 
+#### 可機器判讀的 team requirements
+
+可選的 `requires` 契約可讓 hufu 在 agent 或 workspace 動作開始前拒絕互相
+矛盾的 team。此機制不綁定特定領域，會在載入 team、`hufu team validate`、
+`hufu doctor` 與合併後的 runtime policy 中檢查：
+
+```yaml
+# team.yaml
+requires:
+  environment: [CI_TOKEN]
+  paths: [/srv/project]
+
+# worker.md frontmatter
+requires:
+  tools: [bash]
+  environment: [WORKER_TOKEN]
+  paths: [/srv/project/artifacts]
+  interactive: false
+  network: true
+  plan-first: true
+```
+
+檢查範圍包含 delegation 引用、tools allowed/denied 衝突、必要工具、
+`force-mcp`、`no-net`、unattended 互動、plan-first、必要環境變數與允許路徑；
+不會從自然語言 prompt 猜測必要行為。
+
 ### 3. 執行任務
 
 ```bash
@@ -578,6 +604,7 @@ provider-url: http://localhost:11434/v1
 | `provider-url` | ❌ | 團隊預設 | Provider URL 覆寫 |
 | `shell` | ❌ | 團隊預設 | Agent 的 MCP tools 預設 shell（例如 `bash`、`zsh`、`nu` 或完整路徑） |
 | `mcp-tools` | ❌ | — | 自訂 MCP tools（dict 格式：`{tool-name: {cmd, desc, inputs, shell, dir}}`） |
+| `requires` | ❌ | — | 可機器判讀的前置條件：tools、environment、paths、interactive、network、plan-first |
 
 > **重要**：`max-retries` 的預設值為 `-1`，表示使用團隊預設值；若明確設定則覆寫團隊預設。
 
