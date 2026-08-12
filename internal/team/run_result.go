@@ -608,6 +608,39 @@ type RepairCost struct {
 	WallClockMS int64 `json:"wall_clock_ms"`
 }
 
+// UnmarshalJSON keeps redacted legacy telemetry loadable. Earlier session
+// redaction could replace a numeric RepairCost field with a string such as
+// "[REDACTED]". Cost telemetry is observational rather than authorization
+// evidence, so an unparseable legacy value safely becomes zero instead of
+// invalidating the whole persisted session.
+func (c *RepairCost) UnmarshalJSON(data []byte) error {
+	type repairCost RepairCost
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, name := range []string{"attempts", "tokens", "wall_clock_ms"} {
+		raw, ok := fields[name]
+		if !ok {
+			continue
+		}
+		var value int64
+		if err := json.Unmarshal(raw, &value); err != nil {
+			fields[name] = json.RawMessage("0")
+		}
+	}
+	normalized, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	var decoded repairCost
+	if err := json.Unmarshal(normalized, &decoded); err != nil {
+		return err
+	}
+	*c = RepairCost(decoded)
+	return nil
+}
+
 type RunTelemetry struct {
 	DecisionChain    []string   `json:"decision_chain,omitempty"`
 	PlanRevision     string     `json:"plan_revision,omitempty"`

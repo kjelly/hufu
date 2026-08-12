@@ -19,6 +19,43 @@ func TestBudgetSnapshotLoadsLegacyRedactedTokenCounter(t *testing.T) {
 	}
 }
 
+func TestLoadSessionLoadsLegacyRedactedRepairCostTokens(t *testing.T) {
+	workspace := t.TempDir()
+	sessionData := `{
+		"created_at": "2026-08-11T00:00:00Z",
+		"updated_at": "2026-08-11T00:00:00Z",
+		"rounds": 0,
+		"entries": [],
+		"run_result": {
+			"outcome": "failed",
+			"goal_satisfied": false,
+			"response": "previous run failed",
+			"telemetry": {
+				"repair_cost": {
+					"attempts": 2,
+					"tokens": "[REDACTED]",
+					"wall_clock_ms": 17
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(workspace, sessionFile), []byte(sessionData), 0o644); err != nil {
+		t.Fatalf("write legacy session: %v", err)
+	}
+
+	loaded, err := loadSessionQuiet(workspace)
+	if err != nil {
+		t.Fatalf("legacy redacted RepairCost must remain loadable: %v", err)
+	}
+	if loaded == nil || loaded.RunResult == nil || loaded.RunResult.Telemetry == nil {
+		t.Fatalf("loaded session telemetry = %#v", loaded)
+	}
+	cost := loaded.RunResult.Telemetry.RepairCost
+	if cost.Attempts != 2 || cost.Tokens != 0 || cost.WallClockMS != 17 {
+		t.Fatalf("loaded RepairCost = %#v, want attempts=2 tokens=0 wall_clock_ms=17", cost)
+	}
+}
+
 // TestLoadSession tests the LoadSession function
 func TestLoadSession(t *testing.T) {
 	tests := []struct {
