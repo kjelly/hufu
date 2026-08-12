@@ -57,7 +57,8 @@ func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef,
 	ctx = tools.SetSSHSessionManager(ctx, c.sshSessionMgr)
 
 	agentTools := c.selectWorkerTools(agentDef)
-	if c.mcpManager != nil {
+	mcpAllowed := c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || c.phaseWorkflow.State() == PhaseExecute
+	if c.mcpManager != nil && mcpAllowed {
 		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
 
 		// Load agent-specific MCP tools if defined

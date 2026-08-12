@@ -40,7 +40,8 @@ func (r *coordinatorDeclaredToolRunner) RunStructuredStep(ctx context.Context, r
 		return ExecutionStepResult{}, fmt.Errorf("resolve structured task agent %q: definition is nil", item.Agent)
 	}
 	agentTools := r.c.selectWorkerTools(agentDef)
-	if r.c.mcpManager != nil {
+	mcpAllowed := r.c.phaseWorkflow == nil || !r.c.phaseWorkflow.Enabled() || r.c.phaseWorkflow.State() == PhaseExecute
+	if r.c.mcpManager != nil && mcpAllowed {
 		agentTools = append(agentTools, r.c.mcpManager.AsAgentTools()...)
 		if len(agentDef.MCPTools) > 0 {
 			agentTools = append(agentTools, r.c.mcpManager.GetAgentMCPTools(agentDef.Name, agentDef.Shell)...)

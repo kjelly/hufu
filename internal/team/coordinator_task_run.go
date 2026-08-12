@@ -1763,12 +1763,35 @@ func (c *Coordinator) withEffectiveToolsAllowedForTask(ctx context.Context, def 
 		// Agent-specific MCP tools are a supported frontmatter grant. Keep
 		// the display/tool-call name for the stream gate and add the canonical
 		// agent:tool name for the transport authorizer.
-		for name := range def.MCPTools {
-			name = strings.TrimSpace(name)
-			if name == "" {
-				continue
+		mcpAllowed := c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || c.phaseWorkflow.State() == PhaseExecute
+		if mcpAllowed {
+			for name := range def.MCPTools {
+				name = strings.TrimSpace(name)
+				if name == "" {
+					continue
+				}
+				declared = append(declared, name, strings.ToLower(strings.TrimSpace(def.Name))+":"+name)
 			}
-			declared = append(declared, name, strings.ToLower(strings.TrimSpace(def.Name))+":"+name)
+		} else if c.mcpManager != nil {
+			mcpNames := make(map[string]bool)
+			for _, t := range c.mcpManager.AsAgentTools() {
+				mcpNames[t.Info().Name] = true
+			}
+			for name := range def.MCPTools {
+				name = strings.TrimSpace(name)
+				if name == "" {
+					continue
+				}
+				mcpNames[name] = true
+				mcpNames[strings.ToLower(strings.TrimSpace(def.Name))+":"+name] = true
+			}
+			var filtered []string
+			for _, name := range declared {
+				if !mcpNames[name] {
+					filtered = append(filtered, name)
+				}
+			}
+			declared = filtered
 		}
 	}
 	// Nothing was granted explicitly anywhere. Leave the policy unset: the
@@ -2627,7 +2650,8 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 	ctx = tools.SetSSHSessionManager(ctx, c.sshSessionMgr)
 
 	agentTools := c.selectWorkerToolsForTask(agentDef, task)
-	if c.mcpManager != nil {
+	mcpAllowed := c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || c.phaseWorkflow.State() == PhaseExecute
+	if c.mcpManager != nil && mcpAllowed {
 		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
 		if len(agentDef.MCPTools) > 0 {
 			err := c.mcpManager.LoadAgentMCPServer(agentDef.Name, agentDef.MCPTools, agentDef.Shell)
