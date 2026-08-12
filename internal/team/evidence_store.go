@@ -160,6 +160,27 @@ func (s *FileArtifactStore) Open(_ context.Context, id string) (io.ReadCloser, e
 	return os.Open(filepath.Join(s.root, "data", id))
 }
 
+// Get resolves immutable artifact metadata by opaque ID. Callers that already
+// hold an artifact reference must use this instead of interpreting the ID as a
+// filesystem path.
+func (s *FileArtifactStore) Get(_ context.Context, id string) (ArtifactRef, error) {
+	if s == nil || !validArtifactID(id) {
+		return ArtifactRef{}, fmt.Errorf("artifact id is required")
+	}
+	b, err := os.ReadFile(filepath.Join(s.root, "meta", id+".json"))
+	if err != nil {
+		return ArtifactRef{}, fmt.Errorf("read artifact metadata %q: %w", id, err)
+	}
+	var ref ArtifactRef
+	if err := json.Unmarshal(b, &ref); err != nil {
+		return ArtifactRef{}, fmt.Errorf("decode artifact metadata %q: %w", id, err)
+	}
+	if ref.ID != id {
+		return ArtifactRef{}, fmt.Errorf("artifact metadata %q has mismatched id %q", id, ref.ID)
+	}
+	return ref, nil
+}
+
 func validArtifactID(id string) bool {
 	return id != "" && id != "." && id != ".." && filepath.Base(id) == id && !strings.ContainsAny(id, `/\\`)
 }

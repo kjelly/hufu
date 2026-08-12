@@ -30,6 +30,22 @@ func (c *Coordinator) buildEvidenceManifest(ctx context.Context, strict bool) (*
 		}
 		if item.Status != TaskDone {
 			manifest.Status = "failed"
+			// A terminal failure must remain auditable even though it cannot
+			// satisfy the task requirement. Preserve its immutable transcript in
+			// the manifest instead of dropping the most useful failure evidence.
+			result := EvidenceResult{RequirementID: "task:" + item.ID, Status: "failed", Validator: "task-verification", CheckedAt: nowUTC()}
+			if receipt := latestExecutionReceiptWithTranscript(item); receipt != nil {
+				ref, refErr := transcriptEvidenceRef(ctx, store, item, receipt, runID)
+				if refErr != nil {
+					if strict {
+						return nil, fmt.Errorf("failed task %q transcript evidence: %w", item.ID, refErr)
+					}
+				} else {
+					manifest.ArtifactRefs = append(manifest.ArtifactRefs, ref)
+					result.ArtifactRefs = append(result.ArtifactRefs, ref)
+				}
+			}
+			manifest.EvidenceResults = append(manifest.EvidenceResults, result)
 			continue
 		}
 		completedCount++
@@ -48,16 +64,7 @@ func (c *Coordinator) buildEvidenceManifest(ctx context.Context, strict bool) (*
 			// failed. A non-zero worker exit remains insufficient evidence.
 			receipt := latestSuccessfulExecutionReceipt(item)
 			if receipt != nil && strings.TrimSpace(receipt.TranscriptRef) != "" {
-				ref, putErr := store.Put(ctx, PutArtifactRequest{
-					Kind:        "task_transcript",
-					Path:        receipt.TranscriptRef,
-					Description: fmt.Sprintf("runner transcript for task %s", item.ID),
-					SourcePath:  receipt.TranscriptRef,
-					RunID:       runID,
-					TaskID:      item.ID,
-					Attempt:     receipt.Attempt,
-					Agent:       item.Agent,
-				})
+				ref, putErr := transcriptEvidenceRef(ctx, store, item, receipt, runID)
 				if putErr == nil {
 					result.Status = "passed"
 					manifest.ArtifactRefs = append(manifest.ArtifactRefs, ref)
@@ -144,6 +151,40 @@ func (c *Coordinator) buildEvidenceManifest(ctx context.Context, strict bool) (*
 	return manifest, nil
 }
 
+// transcriptEvidenceRef resolves current opaque transcript references from the
+// artifact store. Filesystem paths remain supported for legacy receipts, but an
+// opaque ID is never reinterpreted as a path.
+func transcriptEvidenceRef(ctx context.Context, store *FileArtifactStore, item *TodoItem, receipt *ExecutionReceipt, runID string) (ArtifactRef, error) {
+	transcriptRef := strings.TrimSpace(receipt.TranscriptRef)
+	if strings.HasPrefix(transcriptRef, "sha256-") && validArtifactID(transcriptRef) {
+		ref, err := store.Get(ctx, transcriptRef)
+		if err != nil {
+			return ArtifactRef{}, fmt.Errorf("resolve transcript artifact for task %s: %w", item.ID, err)
+		}
+		if err := store.Verify(ctx, ref); err != nil {
+			return ArtifactRef{}, err
+		}
+		// Content addressing can legitimately deduplicate identical transcripts.
+		// Bind this manifest entry to the current receipt without mutating the
+		// immutable store metadata first written for that content.
+		ref.RunID = runID
+		ref.TaskID = item.ID
+		ref.Attempt = receipt.Attempt
+		ref.Agent = item.Agent
+		return ref, nil
+	}
+	return store.Put(ctx, PutArtifactRequest{
+		Kind:        "task_transcript",
+		Path:        transcriptRef,
+		Description: fmt.Sprintf("runner transcript for task %s", item.ID),
+		SourcePath:  transcriptRef,
+		RunID:       runID,
+		TaskID:      item.ID,
+		Attempt:     receipt.Attempt,
+		Agent:       item.Agent,
+	})
+}
+
 // latestSuccessfulExecutionReceipt returns runner-owned transcript evidence for
 // a completed task. Retries are searched newest-first so a stale failed attempt
 // cannot satisfy the final task evidence requirement.
@@ -166,6 +207,25 @@ func latestSuccessfulExecutionReceipt(item *TodoItem) *ExecutionReceipt {
 				return item.ExecutionReceipt
 			}
 		}
+	}
+	return nil
+}
+
+// latestExecutionReceiptWithTranscript returns forensic evidence regardless of
+// exit status. It is used only for failed task manifest entries; successful
+// requirements continue to require latestSuccessfulExecutionReceipt.
+func latestExecutionReceiptWithTranscript(item *TodoItem) *ExecutionReceipt {
+	if item == nil {
+		return nil
+	}
+	for i := len(item.ExecutionReceipts) - 1; i >= 0; i-- {
+		receipt := &item.ExecutionReceipts[i]
+		if strings.TrimSpace(receipt.TranscriptRef) != "" {
+			return receipt
+		}
+	}
+	if item.ExecutionReceipt != nil && strings.TrimSpace(item.ExecutionReceipt.TranscriptRef) != "" {
+		return item.ExecutionReceipt
 	}
 	return nil
 }
