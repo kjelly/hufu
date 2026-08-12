@@ -631,7 +631,7 @@ acceptance:
 		t.Fatalf("failed to write worker.md: %v", err)
 	}
 
-	session, err := LoadTeam(dir, nil, nil)
+	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam failed: %v", err)
 	}
@@ -725,7 +725,7 @@ tasks:
 		t.Fatal(err)
 	}
 
-	session, err := LoadTeam(dir, nil, nil)
+	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatal(err)
 	}

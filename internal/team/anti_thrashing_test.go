@@ -917,7 +917,7 @@ func TestWP09_MDOnlyTeamReceivesDefaultReliabilityConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sess, err := LoadTeam(dir, nil, nil)
+	sess, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam failed for MD-only team: %v", err)
 	}

@@ -132,7 +132,7 @@ worker-memory:
 memory:
   mode: persistent
   max-items: 3`, "You are a worker.")
-	session, err := LoadTeam(dir, nil, nil)
+	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam: %v", err)
 	}
@@ -159,7 +159,7 @@ worker-memory:
 	}
 	writeAgentFile(t, dir, "worker.md", `name: worker
 role: worker`, "You are a worker.")
-	session, err := LoadTeam(dir, nil, nil)
+	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam: %v", err)
 	}
@@ -236,7 +236,7 @@ memory:
 memory-id: shared-id
 memory:
   mode: session`, "Agent B")
-	_, err := LoadTeam(dir, nil, nil)
+	_, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
 	if err == nil || !strings.Contains(err.Error(), "duplicate memory-id") {
 		t.Fatalf("expected duplicate memory-id error, got: %v", err)
 	}
@@ -254,7 +254,7 @@ memory:
   mode: session`, "Agent A")
 	writeAgentFile(t, dir, "agent-b.md", `name: agent-b
 memory-id: shared-id`, "Agent B")
-	session, err := LoadTeam(dir, nil, nil)
+	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam should succeed when one agent is off: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestWP2_AgentRenamePreservesIdentityViaMemoryID(t *testing.T) {
 memory-id: research-v1
 memory:
   mode: session`, "You are a researcher.")
-	session, err := LoadTeam(dir, nil, nil)
+	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam: %v", err)
 	}
@@ -289,7 +289,7 @@ memory:
 memory-id: research-v1
 memory:
   mode: session`, "You are an analyst.")
-	session2, err := LoadTeam(dir2, nil, nil)
+	session2, err := LoadTeam(dir2, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestWP2_AgentWithoutMemoryIDFallsBackToName(t *testing.T) {
 	writeAgentFile(t, dir, "Researcher.md", `name: Researcher
 memory:
   mode: session`, "You are a researcher.")
-	session, err := LoadTeam(dir, nil, nil)
+	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam: %v", err)
 	}
@@ -330,7 +330,7 @@ worker-memory:
 	}
 	writeAgentFile(t, dir, "worker.md", `name: worker
 role: worker`, "You are a worker.")
-	session, err := LoadTeam(dir, nil, nil)
+	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam: %v", err)
 	}
@@ -353,7 +353,7 @@ timeout: 300`), 0o644); err != nil {
 	writeAgentFile(t, dir, "worker.md", `name: worker
 role: worker
 tools: bash,view`, "You are a worker.")
-	session, err := LoadTeam(dir, nil, nil)
+	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam: %v", err)
 	}
@@ -392,7 +392,7 @@ func TestWP2_InvalidMemoryIDFailsAtLoadTime(t *testing.T) {
 memory-id: bad/id
 memory:
   mode: session`, "You are a worker.")
-	_, err := LoadTeam(dir, nil, nil)
+	_, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
 	if err == nil || !strings.Contains(err.Error(), "invalid character") {
 		t.Fatalf("expected invalid memory-id error, got: %v", err)
 	}

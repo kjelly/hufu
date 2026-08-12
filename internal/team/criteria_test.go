@@ -336,7 +336,7 @@ func TestOutcomeModeMissingAcceptanceRejected(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir3, "helper.md"), []byte("---\nname: helper\nrole: worker\n---\nWorker prompt"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadTeam(dir3, nil, nil); err != nil {
+	if _, err := LoadTeam(dir3, nil, nil, DefaultProviderRegistry); err != nil {
 		t.Fatalf("default-profile MD-only team without acceptance should load: %v", err)
 	}
 
