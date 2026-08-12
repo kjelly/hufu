@@ -438,6 +438,43 @@ func TestCoordinatorToolErrorTerminatesOrchestratorStream(t *testing.T) {
 	}
 }
 
+func TestCoordinatorInitialToolCorrectionContinuesOrchestratorStream(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	c.session.Workspace = t.TempDir()
+	c.session.Config.Delegation.InitialCoordinatorTool = "agent"
+	c.initialToolCorrections.Store(1)
+
+	ag := &mockAgent{streamFunc: func(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+		if err := call.OnToolCall(fantasy.ToolCallContent{
+			ToolCallID: "wrong-initial-tool",
+			ToolName:   "team_info",
+		}); err != nil {
+			return nil, err
+		}
+		var errRes fantasy.ToolResultOutputContentError
+		errRes.Error = errors.New(initialCoordinatorToolCorrectionPrefix + ` coordinator's first tool call must be "agent"`)
+		if err := call.OnToolResult(fantasy.ToolResultContent{
+			ToolCallID: "wrong-initial-tool",
+			ToolName:   "team_info",
+			Result:     errRes,
+		}); err != nil {
+			return nil, err
+		}
+		return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{
+			fantasy.TextContent{Text: "continued to required initial tool"},
+		}}}, nil
+	}}
+
+	ctx := context.WithValue(context.Background(), todoIDKey{}, CoordTodoID)
+	result, _, err := c.runAgentWithStatusAndHistory(ctx, ag, "coordinator", "coordinate task", nil, &taskTiming{})
+	if err != nil {
+		t.Fatalf("runtime-issued initial correction terminated stream: %v", err)
+	}
+	if !strings.Contains(result, "continued to required initial tool") {
+		t.Fatalf("result = %q, want continued coordinator output", result)
+	}
+}
+
 func TestWrapUpRecoveryDoesNotRetryCoordinatorToolFailure(t *testing.T) {
 	c := newBudgetCoordinator(t)
 	c.SetWrapUp()
