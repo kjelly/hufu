@@ -2,12 +2,14 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,10 +22,11 @@ import (
 // recordingTool reports whether its Run was reached, so a denial can be
 // distinguished from an execution.
 type recordingTool struct {
-	name  string
-	ran   bool
-	calls int
-	resp  fantasy.ToolResponse
+	name      string
+	ran       bool
+	calls     int
+	lastInput string
+	resp      fantasy.ToolResponse
 }
 
 func (t *recordingTool) Info() fantasy.ToolInfo { return fantasy.ToolInfo{Name: t.name} }
@@ -34,9 +37,10 @@ func (t *recordingTool) ProviderOptions() fantasy.ProviderOptions {
 
 func (t *recordingTool) SetProviderOptions(fantasy.ProviderOptions) {}
 
-func (t *recordingTool) Run(context.Context, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func (t *recordingTool) Run(_ context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	t.ran = true
 	t.calls++
+	t.lastInput = call.Input
 	if t.resp.IsError {
 		return t.resp, nil
 	}
@@ -84,12 +88,6 @@ func TestPolicyGateCoordinatorPolicyDenialsAreTerminal(t *testing.T) {
 		policy  agent.DelegationPolicy
 	}{
 		{
-			name:    "initial coordinator tool ordering",
-			tool:    "view",
-			allowed: []string{"view", "agent"},
-			policy:  agent.DelegationPolicy{InitialCoordinatorTool: "agent"},
-		},
-		{
 			name:    "coordinator authorization",
 			tool:    "bash",
 			allowed: []string{"view"},
@@ -114,6 +112,32 @@ func TestPolicyGateCoordinatorPolicyDenialsAreTerminal(t *testing.T) {
 				t.Fatal("denied coordinator tool must not execute")
 			}
 		})
+	}
+}
+
+func TestPolicyGateInitialCoordinatorToolGetsOneCorrection(t *testing.T) {
+	c := gateTestCoordinator()
+	c.session.Config.Delegation = agent.DelegationPolicy{InitialCoordinatorTool: "agent"}
+	c.taskTracker = NewTaskTracker()
+	inner := &recordingTool{name: "team_info"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"team_info", "agent"})
+	ctx = context.WithValue(ctx, todoIDKey{}, CoordTodoID)
+
+	resp, err := gated.Run(ctx, fantasy.ToolCall{ID: "first-wrong-tool", Name: "team_info"})
+	if err != nil || !resp.IsError || !strings.Contains(resp.Content, `Call the required tool now`) {
+		t.Fatalf("first ordering denial = response=%+v err=%v, want recoverable correction", resp, err)
+	}
+	if inner.ran {
+		t.Fatal("denied initial tool must not execute")
+	}
+
+	_, err = gated.Run(ctx, fantasy.ToolCall{ID: "second-wrong-tool", Name: "team_info"})
+	if !errors.Is(err, errCoordinatorToolFailure) {
+		t.Fatalf("second ordering denial error = %v, want terminal coordinator failure", err)
+	}
+	if inner.ran {
+		t.Fatal("repeated denied initial tool must not execute")
 	}
 }
 
@@ -234,6 +258,203 @@ func TestPolicyGateEnforcesExactToolInputSequence(t *testing.T) {
 	matching := fantasy.ToolCall{Name: "bash", Input: `{"command":"pwd"}`}
 	if resp, err := byName["bash"].Run(ctx, matching); err != nil || resp.IsError {
 		t.Fatalf("matching constrained input must run: response=%+v err=%v", resp, err)
+	}
+}
+
+func TestPolicyGateFinalTerminalWriteMustWaitBeforeFinalRead(t *testing.T) {
+	c := gateTestCoordinator()
+	terminal := &recordingTool{name: "terminal"}
+	result := &recordingTool{name: "submit_result"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{terminal, result})
+	byName := map[string]fantasy.AgentTool{}
+	for _, tool := range gated {
+		byName[tool.Info().Name] = tool
+	}
+
+	inputs := []map[string]any{
+		{"action": "start"}, {"action": "read"}, {"action": "write"},
+		{"action": "read"}, {"action": "write"}, {"action": "read"},
+		{"action": "write"}, {"action": "wait", "target": "exit"},
+		{"action": "read"}, {},
+	}
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"terminal", "submit_result"})
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence(
+		[]string{"terminal", "terminal", "terminal", "terminal", "terminal", "terminal", "terminal", "terminal", "terminal", "submit_result"},
+		inputs, "", nil,
+	))
+
+	for index := 0; index < 7; index++ {
+		payload, err := json.Marshal(inputs[index])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp, err := byName["terminal"].Run(ctx, fantasy.ToolCall{Name: "terminal", Input: string(payload)}); err != nil || resp.IsError {
+			t.Fatalf("terminal slot %d = response=%+v err=%v", index+1, resp, err)
+		}
+	}
+
+	if resp, err := byName["terminal"].Run(ctx, fantasy.ToolCall{Name: "terminal", Input: `{"action":"read"}`}); err != nil || !resp.IsError {
+		t.Fatalf("read between final write and wait = response=%+v err=%v, want denial", resp, err)
+	}
+	if resp, err := byName["terminal"].Run(ctx, fantasy.ToolCall{Name: "terminal", Input: `{"action":"wait","target":"exit"}`}); err != nil || !resp.IsError {
+		t.Fatalf("wait after closed-sequence denial = response=%+v err=%v, want denial", resp, err)
+	}
+	if resp, err := byName["submit_result"].Run(ctx, fantasy.ToolCall{Name: "submit_result", Input: `{"status":"failed","summary":"final write wait barrier violated"}`}); err != nil || resp.IsError {
+		t.Fatalf("failed terminal result after barrier violation = response=%+v err=%v", resp, err)
+	}
+	if terminal.calls != 7 {
+		t.Fatalf("terminal calls = %d, want seven admitted calls before barrier", terminal.calls)
+	}
+}
+
+func TestPolicyGateCanonicalizesTemplateBoundToolInput(t *testing.T) {
+	events := []StatusEvent{}
+	c := gateTestCoordinator()
+	c.reportStatus = func(event StatusEvent) { events = append(events, event) }
+	bash := &recordingTool{name: "bash"}
+	result := &recordingTool{name: "submit_result"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{bash, result})
+	byName := map[string]fantasy.AgentTool{}
+	for _, tool := range gated {
+		byName[tool.Info().Name] = tool
+	}
+
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"bash", "submit_result"})
+	ctx = context.WithValue(ctx, todoIDKey{}, "template-bound-task")
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequenceWithCanonicalInputs(
+		[]string{"bash", "submit_result"},
+		[]map[string]any{{"command": "pwd"}, {}},
+		"",
+		nil,
+		nil,
+		[]bool{true, false},
+	))
+
+	wrong := fantasy.ToolCall{ID: "canonicalized-call", Name: "bash", Input: `{"command":"go version"}`}
+	if resp, err := byName["bash"].Run(ctx, wrong); err != nil || resp.IsError {
+		t.Fatalf("canonical template input must execute: response=%+v err=%v", resp, err)
+	}
+	if got, want := bash.lastInput, `{"command":"pwd"}`; got != want {
+		t.Fatalf("underlying tool input = %q, want runtime-selected %q", got, want)
+	}
+	if got := c.takeToolPolicyVerdict("canonicalized-call"); got != "canonicalized" {
+		t.Fatalf("policy verdict = %q, want canonicalized", got)
+	}
+	if len(events) != 1 || events[0].Type != "policy_decision" || !strings.Contains(events[0].Message, "template-owned input selected") {
+		t.Fatalf("canonicalization event = %#v, want one policy decision", events)
+	}
+}
+
+func TestPolicyGateCanonicalizesNestedMenuPreambleBeforeWrite(t *testing.T) {
+	events := []StatusEvent{}
+	c := gateTestCoordinator()
+	c.reportStatus = func(event StatusEvent) { events = append(events, event) }
+	write := &recordingTool{name: "write"}
+	result := &recordingTool{name: "submit_result"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{write, result})
+	byName := map[string]fantasy.AgentTool{}
+	for _, tool := range gated {
+		byName[tool.Info().Name] = tool
+	}
+
+	content := strings.Join([]string{
+		"# HUFU_NESTED_MENU_V1 parent_menu_anchor=parent menu",
+		"# HUFU_NESTED_MENU_V1 parent_menu_selector=parent item",
+		"# HUFU_NESTED_MENU_V1 child_menu_anchor=child menu",
+		"# HUFU_NESTED_MENU_V1 child_menu_selector=child item",
+		"# HUFU_NESTED_MENU_V1 post_action_guard=child editor",
+		"EXPECT parent menu",
+		"ACTIVATE parent item WITH ENTER",
+		"EXPECT child menu",
+		"SPACE",
+		"ACTIVATE child item WITH ENTER",
+		"EXPECT child editor",
+		"CHECKLIST_DOWN 1",
+		"SPACE",
+	}, "\n")
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"write", "submit_result"})
+	ctx = context.WithValue(ctx, todoIDKey{}, "ui-probe")
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequenceWithBindings(
+		[]string{"write", "submit_result"},
+		[]map[string]any{{}, {}},
+		"",
+		nil,
+		nil,
+		nil,
+		[]string{nestedMenuPreambleTransform, ""},
+	))
+	call := fantasy.ToolCall{ID: "nested-menu-write", Name: "write", Input: `{"file_path":"probe.trec","content":` + strconv.Quote(content) + `}`}
+	if resp, err := byName["write"].Run(ctx, call); err != nil || resp.IsError {
+		t.Fatalf("structural transform must permit the write: response=%+v err=%v", resp, err)
+	}
+	var written map[string]any
+	if err := json.Unmarshal([]byte(write.lastInput), &written); err != nil {
+		t.Fatalf("decode canonical write input: %v", err)
+	}
+	writtenContent, _ := written["content"].(string)
+	for _, want := range []string{
+		"EXPECT parent menu\nACTIVATE parent item WITH ENTER\nEXPECT child menu\nACTIVATE child item WITH ENTER\nEXPECT child editor\nCHECKLIST_DOWN 1",
+	} {
+		if !strings.Contains(writtenContent, want) {
+			t.Fatalf("canonical write content missing %q: %s", want, writtenContent)
+		}
+	}
+	if got := written["file_path"]; got != "probe.trec" {
+		t.Fatalf("canonical write path = %#v, want probe.trec", got)
+	}
+	if strings.Contains(writtenContent, "EXPECT child menu\nSPACE\nACTIVATE child item") {
+		t.Fatalf("canonical write retained misplaced preamble SPACE: %s", writtenContent)
+	}
+	if got := c.takeToolPolicyVerdict("nested-menu-write"); got != "transformed" {
+		t.Fatalf("policy verdict = %q, want transformed", got)
+	}
+	if len(events) != 1 || events[0].Type != "policy_decision" || !strings.Contains(events[0].Message, nestedMenuPreambleTransform) {
+		t.Fatalf("transform event = %#v, want one policy decision", events)
+	}
+}
+
+func TestPolicyGateCanonicalizesTerminalOrderedBatchAcknowledgement(t *testing.T) {
+	events := []StatusEvent{}
+	c := gateTestCoordinator()
+	c.reportStatus = func(event StatusEvent) { events = append(events, event) }
+	result := &recordingTool{name: "submit_result"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{result})[0]
+
+	findings := make([]map[string]string, 7)
+	for i := range findings {
+		findings[i] = map[string]string{"summary": fmt.Sprintf("slot %d current-run evidence", i+1)}
+	}
+	findings[6]["summary"] = "pilot_sha256=trec-value trec_sha256=pilot-value"
+	payload, err := json.Marshal(map[string]any{"status": "success", "summary": "freeze complete", "findings": findings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"submit_result"})
+	ctx = context.WithValue(ctx, todoIDKey{}, "freeze")
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequenceWithBindings(
+		[]string{"submit_result"}, []map[string]any{{}}, "", nil, nil, nil,
+		[]string{terminalLastFindingTranscriptAckTransform},
+	))
+	call := fantasy.ToolCall{ID: "freeze-terminal", Name: "submit_result", Input: string(payload)}
+	if resp, err := gated.Run(ctx, call); err != nil || resp.IsError {
+		t.Fatalf("ordered acknowledgement must permit terminal submission: response=%+v err=%v", resp, err)
+	}
+	var submitted struct {
+		Findings []struct {
+			Summary string `json:"summary"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(result.lastInput), &submitted); err != nil {
+		t.Fatalf("decode transformed submit_result: %v", err)
+	}
+	if got, want := submitted.Findings[6].Summary, "slot_7 ordered evidence retained in sealed transcript"; got != want {
+		t.Fatalf("last summary = %q, want %q", got, want)
+	}
+	if got := c.takeToolPolicyVerdict("freeze-terminal"); got != "transformed" {
+		t.Fatalf("policy verdict = %q, want transformed", got)
+	}
+	if len(events) != 1 || events[0].Type != "policy_decision" || !strings.Contains(events[0].Message, terminalLastFindingTranscriptAckTransform) {
+		t.Fatalf("transform event = %#v, want one policy decision", events)
 	}
 }
 
@@ -473,6 +694,36 @@ func TestPolicyGateExpectedExitCodeAllowsClosedSequenceToContinue(t *testing.T) 
 	}
 	if !bash.ran || !ls.ran || !result.ran {
 		t.Fatalf("expected all declared tools to run: bash=%t ls=%t result=%t", bash.ran, ls.ran, result.ran)
+	}
+}
+
+func TestPolicyGateExpectedPredicateExitAllowsNextBashSlot(t *testing.T) {
+	c := gateTestCoordinator()
+	// A negative predicate commonly exits 1. When the closed contract declares
+	// that code as an observation, it must remain visible as evidence and must
+	// not prevent the next required probe from running.
+	first := &recordingTool{name: "bash", resp: fantasy.NewTextErrorResponse("predicate is false\nExit code: 1")}
+	second := &recordingTool{name: "bash"}
+	result := &recordingTool{name: "submit_result"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{first, second, result})
+
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"bash", "submit_result"})
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence(
+		[]string{"bash", "bash", "submit_result"}, nil, "", nil, [][]int{{1}, {}, {}},
+	))
+
+	resp, err := gated[0].Run(ctx, fantasy.ToolCall{Name: "bash"})
+	if err != nil || resp.IsError || !strings.Contains(resp.Content, "Exit code: 1") {
+		t.Fatalf("expected predicate exit must remain normal evidence: response=%+v err=%v", resp, err)
+	}
+	if resp, err := gated[1].Run(ctx, fantasy.ToolCall{Name: "bash"}); err != nil || resp.IsError {
+		t.Fatalf("next required bash slot must be admitted: response=%+v err=%v", resp, err)
+	}
+	if resp, err := gated[2].Run(ctx, fantasy.ToolCall{Name: "submit_result", Input: `{"status":"success","summary":"probes completed"}`}); err != nil || resp.IsError {
+		t.Fatalf("terminal result must be admitted: response=%+v err=%v", resp, err)
+	}
+	if first.calls != 1 || second.calls != 1 || result.calls != 1 {
+		t.Fatalf("expected each declared call once: first=%d second=%d result=%d", first.calls, second.calls, result.calls)
 	}
 }
 

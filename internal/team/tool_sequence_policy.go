@@ -25,14 +25,39 @@ type taskToolSequence struct {
 	mu                sync.Mutex
 	sequence          []string
 	inputs            []map[string]any
+	canonicalInputs   []bool
+	inputTransforms   []string
 	inputField        string
 	inputValues       []string
 	expectedExitCodes [][]int
 	next              int
 	failed            bool
+	failure           *taskToolSequenceFailure
+}
+
+// taskToolSequenceFailure is runtime-owned evidence for the first failure in
+// a closed sequence. It intentionally records only generic protocol facts;
+// tool-specific output remains in the sealed transcript.
+type taskToolSequenceFailure struct {
+	Position int
+	Length   int
+	Tool     string
+	ExitCode *int
 }
 
 func newTaskToolSequence(sequence []string, inputs []map[string]any, inputField string, inputValues []string, expectedExitCodes ...[][]int) *taskToolSequence {
+	var codes [][]int
+	if len(expectedExitCodes) > 0 {
+		codes = expectedExitCodes[0]
+	}
+	return newTaskToolSequenceWithCanonicalInputs(sequence, inputs, inputField, inputValues, codes, nil)
+}
+
+func newTaskToolSequenceWithCanonicalInputs(sequence []string, inputs []map[string]any, inputField string, inputValues []string, expectedExitCodes [][]int, canonicalInputs []bool) *taskToolSequence {
+	return newTaskToolSequenceWithBindings(sequence, inputs, inputField, inputValues, expectedExitCodes, canonicalInputs, nil)
+}
+
+func newTaskToolSequenceWithBindings(sequence []string, inputs []map[string]any, inputField string, inputValues []string, expectedExitCodes [][]int, canonicalInputs []bool, inputTransforms []string) *taskToolSequence {
 	if len(sequence) == 0 {
 		return nil
 	}
@@ -44,14 +69,16 @@ func newTaskToolSequence(sequence []string, inputs []map[string]any, inputField 
 	copy(copyInputs, inputs)
 	var copyExpectedExitCodes [][]int
 	if len(expectedExitCodes) > 0 {
-		copyExpectedExitCodes = make([][]int, len(expectedExitCodes[0]))
-		for index, codes := range expectedExitCodes[0] {
+		copyExpectedExitCodes = make([][]int, len(expectedExitCodes))
+		for index, codes := range expectedExitCodes {
 			copyExpectedExitCodes[index] = append([]int(nil), codes...)
 		}
 	}
 	return &taskToolSequence{
 		sequence:          copyOf,
 		inputs:            copyInputs,
+		canonicalInputs:   append([]bool(nil), canonicalInputs...),
+		inputTransforms:   append([]string(nil), inputTransforms...),
 		inputField:        inputField,
 		inputValues:       append([]string(nil), inputValues...),
 		expectedExitCodes: copyExpectedExitCodes,
@@ -79,39 +106,70 @@ func newTaskToolSequence(sequence []string, inputs []map[string]any, inputField 
 // whether this particular submit_result call qualifies; reserve only
 // applies it at the mismatch branch below, never overriding a tool that is
 // already in its correct sequence position.
-func (s *taskToolSequence) reserve(tool string, input string, allowEarlyTerminal bool) (int, string) {
+func (s *taskToolSequence) reserve(tool string, input string, allowEarlyTerminal bool) (int, string, bool, string) {
 	if s == nil {
-		return -1, ""
+		return -1, input, false, ""
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failed {
 		if tool == "submit_result" && allowEarlyTerminal {
 			s.next = len(s.sequence)
-			return -1, ""
+			return -1, input, false, ""
 		}
-		return -1, "closed tool sequence after a failed tool result; submit a failed or blocked result"
+		return -1, input, false, "closed tool sequence after a failed tool result; submit a failed or blocked result"
 	}
 	if s.next >= len(s.sequence) {
-		return -1, "closed tool sequence is complete; do not call another tool"
+		return -1, input, false, "closed tool sequence is complete; do not call another tool"
 	}
 	expected := s.sequence[s.next]
 	if tool != expected {
 		if tool == "submit_result" && allowEarlyTerminal {
 			s.next = len(s.sequence)
-			return -1, ""
+			return -1, input, false, ""
 		}
-		return -1, fmt.Sprintf("closed tool sequence violation: expected tool %q at position %d of %d, got %q; do not call it", expected, s.next+1, len(s.sequence), tool)
+		return -1, input, false, fmt.Sprintf("closed tool sequence violation: expected tool %q at position %d of %d, got %q; do not call it", expected, s.next+1, len(s.sequence), tool)
 	}
-	if expectedInput := s.expectedInput(s.next); expectedInput != nil && !matchesJSONFields(expectedInput, input) {
-		return -1, inputViolationMessage(s.next, len(s.sequence), expectedInput, input)
+	if expectedInput := s.expectedInput(s.next); expectedInput != nil {
+		if s.canonicalInput(s.next) {
+			canonical, err := json.Marshal(expectedInput)
+			if err != nil {
+				return -1, input, false, inputViolationMessage(s.next, len(s.sequence), expectedInput, input)
+			}
+			reserved := s.next
+			s.next++
+			return reserved, string(canonical), !matchesExactJSON(string(canonical), input), ""
+		}
+		if !matchesJSONFields(expectedInput, input) {
+			return -1, input, false, inputViolationMessage(s.next, len(s.sequence), expectedInput, input)
+		}
 	}
 	if s.inputField != "" && s.next < len(s.inputValues) && s.inputValues[s.next] != "" && !matchesJSONField(s.inputField, s.inputValues[s.next], input) {
-		return -1, inputViolationMessage(s.next, len(s.sequence), map[string]any{s.inputField: s.inputValues[s.next]}, input)
+		return -1, input, false, inputViolationMessage(s.next, len(s.sequence), map[string]any{s.inputField: s.inputValues[s.next]}, input)
 	}
 	reserved := s.next
 	s.next++
-	return reserved, ""
+	return reserved, input, false, ""
+}
+
+func (s *taskToolSequence) canonicalInput(index int) bool {
+	return index >= 0 && index < len(s.canonicalInputs) && s.canonicalInputs[index]
+}
+
+func (s *taskToolSequence) inputTransform(index int) string {
+	if index < 0 || index >= len(s.inputTransforms) {
+		return ""
+	}
+	return s.inputTransforms[index]
+}
+
+func matchesExactJSON(expected, actual string) bool {
+	var value any
+	if json.Unmarshal([]byte(actual), &value) != nil {
+		return false
+	}
+	canonical, err := json.Marshal(value)
+	return err == nil && string(canonical) == expected
 }
 
 // allowsExpectedExitCode reports whether a tool error is an explicitly
@@ -270,13 +328,59 @@ func redactedFieldValue(field string, value any) string {
 // admissible next action is an honest early terminal submit_result. This is
 // generic for every closed sequence, so failed commands cannot silently turn
 // an atomic checkpoint into an unplanned retry workflow.
-func (s *taskToolSequence) markFailed() {
+func (s *taskToolSequence) markFailedAt(slot int, tool, output string) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.failed = true
-	s.mu.Unlock()
+	if s.failure != nil {
+		return
+	}
+	position := slot + 1
+	if slot < 0 {
+		position = s.next + 1
+	}
+	if position < 1 {
+		position = 1
+	}
+	if position > len(s.sequence) {
+		position = len(s.sequence)
+	}
+	var exitCode *int
+	if code, ok := transcriptExitCode(tool, output); ok {
+		copied := code
+		exitCode = &copied
+	}
+	s.failure = &taskToolSequenceFailure{
+		Position: position,
+		Length:   len(s.sequence),
+		Tool:     strings.TrimSpace(tool),
+		ExitCode: exitCode,
+	}
+}
+
+func (s *taskToolSequence) failureSummary() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failure == nil {
+		return ""
+	}
+	fact := fmt.Sprintf("closed sequence failed at position %d of %d", s.failure.Position, s.failure.Length)
+	if s.failure.Tool != "" {
+		fact += fmt.Sprintf(" (tool %q", s.failure.Tool)
+		if s.failure.ExitCode != nil {
+			fact += fmt.Sprintf(", exit code %d", *s.failure.ExitCode)
+		}
+		fact += ")"
+	} else if s.failure.ExitCode != nil {
+		fact += fmt.Sprintf(" (exit code %d)", *s.failure.ExitCode)
+	}
+	return fact
 }
 
 func taskToolSequenceFromContext(ctx context.Context) *taskToolSequence {

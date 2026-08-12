@@ -224,6 +224,36 @@ func TestSubmitResultToolRejectsModelDeclaredRawOutputRef(t *testing.T) {
 	}
 }
 
+func TestSubmitResultToolPrefixesRuntimeClosedSequenceFailure(t *testing.T) {
+	c := &Coordinator{taskTracker: NewTaskTracker()}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "run fixed sequence"}})[0]
+	sequence := newTaskToolSequence([]string{"bash", "submit_result"}, nil, "", nil)
+	sequence.markFailedAt(0, "bash", "STDERR:\nprobe failed\n\nExit code: 23")
+	ctx := context.WithValue(context.Background(), taskToolSequenceKey{}, sequence)
+
+	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(ctx, fantasy.ToolCall{
+		Name:  "submit_result",
+		Input: `{"status":"blocked","summary":"the fifth command failed"}`,
+	})
+	if err != nil || response.IsError {
+		t.Fatalf("submit_result response = %#v, err = %v", response, err)
+	}
+	result := c.GetTaskResult(item.ID)
+	if result == nil {
+		t.Fatal("submitted result was not stored")
+	}
+	want := `closed sequence failed at position 1 of 2 (tool "bash", exit code 23)`
+	if !strings.HasPrefix(result.Summary, want) {
+		t.Fatalf("summary = %q, want runtime fact prefix %q", result.Summary, want)
+	}
+	if !strings.Contains(result.Summary, "Worker report: the fifth command failed") {
+		t.Fatalf("summary discarded worker context: %q", result.Summary)
+	}
+	if len(result.Findings) != 1 || result.Findings[0].Category != "runtime_execution" || result.Findings[0].Summary != want {
+		t.Fatalf("runtime finding = %#v, want canonical failure fact", result.Findings)
+	}
+}
+
 func TestCoordinatorTaskOutputUsesSubmittedTypedResult(t *testing.T) {
 	typed := &TaskResult{
 		Status:  TaskResultStatusSuccess,
