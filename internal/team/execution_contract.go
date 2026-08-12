@@ -298,12 +298,22 @@ func ValidateExecutionContractFull(task TaskDef, lintMode string) ContractPrefli
 			})
 		}
 		for i, tool := range c.ToolSequence {
-			if strings.TrimSpace(tool) == "" {
+			trimmedTool := strings.TrimSpace(tool)
+			if trimmedTool == "" {
 				findings = append(findings, ContractFinding{
 					Severity: FindingSeverityError,
 					Code:     "tool_sequence_empty_tool",
 					Field:    "execution.tool_sequence",
 					Message:  fmt.Sprintf("tool sequence entry %d must name a tool", i),
+				})
+			} else if strings.IndexFunc(trimmedTool, func(r rune) bool {
+				return r == ' ' || r == '\t' || r == '\r' || r == '\n'
+			}) >= 0 {
+				findings = append(findings, ContractFinding{
+					Severity: FindingSeverityError,
+					Code:     "tool_sequence_invalid_name",
+					Field:    "execution.tool_sequence",
+					Message:  fmt.Sprintf("tool sequence entry %d must be a tool name, not a command", i),
 				})
 			}
 		}

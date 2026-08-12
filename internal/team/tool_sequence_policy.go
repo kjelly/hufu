@@ -383,6 +383,41 @@ func (s *taskToolSequence) failureSummary() string {
 	return fact
 }
 
+// protocolRepairSequence returns the one-call sequence for result
+// finalization. A success claim is allowed only when every non-terminal slot
+// in the original sequence completed, or when the only failure was the
+// terminal submit_result call itself (for example a schema error). An earlier
+// execution failure, a denied out-of-order call, or an unfinished work slot
+// carries into repair as failed state, so repair can report only an honest
+// failed/blocked/partial result.
+func (s *taskToolSequence) protocolRepairSequence() *taskToolSequence {
+	repair := newTaskToolSequence([]string{"submit_result"}, nil, "", nil)
+	if s == nil {
+		return repair
+	}
+
+	s.mu.Lock()
+	next := s.next
+	length := len(s.sequence)
+	var failure *taskToolSequenceFailure
+	if s.failure != nil {
+		copyFailure := *s.failure
+		failure = &copyFailure
+	}
+	s.mu.Unlock()
+
+	readyForTerminal := next >= length-1
+	terminalResultFailure := failure != nil && failure.Position == failure.Length && failure.Tool == "submit_result"
+	if !readyForTerminal || (failure != nil && !terminalResultFailure) {
+		tool := "closed_sequence"
+		if failure != nil && failure.Tool != "" {
+			tool = failure.Tool
+		}
+		repair.markFailedAt(0, tool, "")
+	}
+	return repair
+}
+
 func taskToolSequenceFromContext(ctx context.Context) *taskToolSequence {
 	sequence, _ := ctx.Value(taskToolSequenceKey{}).(*taskToolSequence)
 	return sequence

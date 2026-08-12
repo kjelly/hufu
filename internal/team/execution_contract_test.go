@@ -314,6 +314,18 @@ execution:
 	}
 }
 
+func TestValidateExecutionContractRejectsCommandInToolSequence(t *testing.T) {
+	task := TaskDef{Execution: ExecutionContract{
+		Kind:           ExecutionKindProcess,
+		RequiresResult: true,
+		ToolSequence:   []string{"bash ./invented-script.sh", "submit_result"},
+	}}
+	result := ValidateExecutionContractFull(task, agent.VerifierLintError)
+	if result.Valid || !hasContractFinding(result.Findings, "tool_sequence_invalid_name", "execution.tool_sequence") {
+		t.Fatalf("command-shaped tool sequence findings = %#v, want invalid-name rejection", result.Findings)
+	}
+}
+
 func TestCoordinatorDispatchClosedToolSequenceRequiresResult(t *testing.T) {
 	// A coordinator can emit requires_result:false despite a closed sequence
 	// ending in submit_result. Dispatch must apply the normal worker-result
@@ -687,6 +699,10 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 			t.Errorf("tool_sequence schema description missing %q: %s", requiredPhrase, toolSequenceDescription)
 		}
 	}
+	toolSequenceItems := execSubProps["tool_sequence"].(map[string]any)["items"].(map[string]any)
+	if got := toolSequenceItems["pattern"]; got != `^\S+$` {
+		t.Errorf("tool_sequence item pattern = %#v, want non-whitespace tool name", got)
+	}
 	toolInputSequenceDescription := execSubProps["tool_input_sequence"].(map[string]any)["description"].(string)
 	for _, requiredPhrase := range []string{"same length", "empty object", "declared field"} {
 		if !strings.Contains(toolInputSequenceDescription, requiredPhrase) {
@@ -711,6 +727,10 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 		if !strings.Contains(toolExpectedExitCodesDescription, requiredPhrase) {
 			t.Errorf("tool_expected_exit_codes schema description missing %q: %s", requiredPhrase, toolExpectedExitCodesDescription)
 		}
+	}
+	expectedCodeItems := execSubProps["tool_expected_exit_codes"].(map[string]any)["items"].(map[string]any)["items"].(map[string]any)
+	if got := expectedCodeItems["not"]; !reflect.DeepEqual(got, map[string]any{"const": 0}) {
+		t.Errorf("tool_expected_exit_codes item zero guard = %#v", got)
 	}
 
 	// 3. Verify buildAgentTaskProperties top-level map does NOT expose non-spec strict_result key

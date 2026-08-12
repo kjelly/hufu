@@ -661,6 +661,72 @@ func TestPolicyGateFailureOnlyAllowsEarlyTerminalResult(t *testing.T) {
 	}
 }
 
+func TestProtocolRepairSequencePreservesClosedSequenceTruth(t *testing.T) {
+	tests := []struct {
+		name         string
+		prepare      func(*taskToolSequence)
+		allowSuccess bool
+	}{
+		{
+			name: "all work slots complete",
+			prepare: func(sequence *taskToolSequence) {
+				sequence.next = 2
+			},
+			allowSuccess: true,
+		},
+		{
+			name: "unfinished work slot",
+			prepare: func(sequence *taskToolSequence) {
+				sequence.next = 1
+			},
+		},
+		{
+			name: "execution tool failed",
+			prepare: func(sequence *taskToolSequence) {
+				sequence.next = 1
+				sequence.markFailedAt(0, "bash", "Exit code: 1")
+			},
+		},
+		{
+			name: "out of order tool failed at terminal slot",
+			prepare: func(sequence *taskToolSequence) {
+				sequence.next = 2
+				sequence.markFailedAt(-1, "bash", "sequence violation")
+			},
+		},
+		{
+			name: "terminal result schema failed",
+			prepare: func(sequence *taskToolSequence) {
+				sequence.next = 3
+				sequence.markFailedAt(2, "submit_result", "invalid schema")
+			},
+			allowSuccess: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := newTaskToolSequence([]string{"bash", "bash", "submit_result"}, nil, "", nil)
+			tt.prepare(original)
+			repair := original.protocolRepairSequence()
+
+			_, _, _, denial := repair.reserve("submit_result", `{"status":"success","summary":"done"}`, false)
+			if tt.allowSuccess && denial != "" {
+				t.Fatalf("success repair denied: %s", denial)
+			}
+			if !tt.allowSuccess && denial == "" {
+				t.Fatal("success repair bypassed incomplete or failed execution")
+			}
+			if !tt.allowSuccess {
+				_, _, _, denial = repair.reserve("submit_result", `{"status":"failed","summary":"not complete"}`, true)
+				if denial != "" {
+					t.Fatalf("honest failed repair denied: %s", denial)
+				}
+			}
+		})
+	}
+}
+
 func TestPolicyGateExpectedExitCodeAllowsClosedSequenceToContinue(t *testing.T) {
 	c := gateTestCoordinator()
 	// timeout intentionally ends the observation window with exit 124. Its
