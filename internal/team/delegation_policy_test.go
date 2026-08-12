@@ -110,6 +110,64 @@ func TestDelegationPolicyRejectsExecutionInvariantBeforeTodoCreation(t *testing.
 	}
 }
 
+func TestDelegationPolicyValidatesCompletedTaskReferenceBeforeTodoCreation(t *testing.T) {
+	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
+		Agent: "auditor", WhenGoalContains: "freeze audit",
+		RequiredTaskReference: &agent.TaskGoalReference{
+			GoalPrefix: "runner_task_id=", Agent: "runner", TaskContains: "§3.1 candidate-freeze",
+		},
+	}}})
+	runner := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "runner", Desc: "§3.1 candidate-freeze"}})[0]
+	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(runner.ID, TaskDone, "", "done"); err != nil {
+		t.Fatal(err)
+	}
+
+	valid := TaskDef{Agent: "auditor", Goal: "freeze audit\nrunner_task_id=" + runner.ID}
+	if err := c.validateDelegationPolicy([]TaskDef{valid}); err != nil {
+		t.Fatalf("valid task reference rejected: %v", err)
+	}
+
+	for _, goal := range []string{
+		"freeze audit\nrunner_task_id=sha256-deadbeef",
+		"freeze audit\nrunner_task_id=",
+		"freeze audit\nrunner_task_id=" + runner.ID + "\nrunner_task_id=" + runner.ID,
+	} {
+		if err := c.validateDelegationPolicy([]TaskDef{{Agent: "auditor", Goal: goal}}); err == nil || !strings.Contains(err.Error(), "task reference") && !strings.Contains(err.Error(), "referenced Todo") {
+			t.Fatalf("goal %q error = %v, want task-reference rejection", goal, err)
+		}
+	}
+}
+
+func TestDelegationPolicyValidatesDistinctCompletedProducerSetBeforeTodoCreation(t *testing.T) {
+	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
+		Agent: "consumer", WhenGoalContains: "consensus",
+		RequiredTaskReferences: []agent.TaskGoalReference{
+			{GoalPrefix: "code_task_id=", Agent: "producer", TaskContains: "source candidate"},
+			{GoalPrefix: "live_task_id=", Agent: "observer", TaskContains: "live observation"},
+		},
+	}}})
+	code := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "producer", Desc: "source candidate"}})[0]
+	live := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "observer", Desc: "live observation"}})[0]
+	for _, item := range []*TodoItem{code, live} {
+		if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskDone, "", "done"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	valid := TaskDef{Agent: "consumer", Goal: "consensus\ncode_task_id=" + code.ID + "\nlive_task_id=" + live.ID}
+	if err := c.validateDelegationPolicy([]TaskDef{valid}); err != nil {
+		t.Fatalf("valid producer set rejected: %v", err)
+	}
+	for _, goal := range []string{
+		"consensus\ncode_task_id=" + code.ID,
+		"consensus\ncode_task_id=" + code.ID + "\nlive_task_id=" + code.ID,
+		"consensus\ncode_task_id=" + code.ID + "\nlive_task_id=missing",
+	} {
+		if err := c.validateDelegationPolicy([]TaskDef{{Agent: "consumer", Goal: goal}}); err == nil {
+			t.Fatalf("invalid producer set accepted: %q", goal)
+		}
+	}
+}
+
 func TestDelegationPolicyBindsEachRecoverablePartialInitialBatchOnce(t *testing.T) {
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		InitialBatch:             []string{"reader", "probe"},

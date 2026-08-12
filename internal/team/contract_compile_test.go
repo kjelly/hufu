@@ -51,6 +51,48 @@ func TestCompileInitialTaskContractsBindsPartialBatchWhenExactDisabled(t *testin
 	}
 }
 
+func TestCompileTaskGoalContractsReplacesCoordinatorExecutionFields(t *testing.T) {
+	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
+		BindTaskGoalContracts: true,
+	}}, ContractTasks: []TaskDef{{
+		ID: "freeze-v1", Agent: "runner", WhenGoalContains: "candidate-freeze",
+		OutputMode: TaskOutputModeVerbatim,
+		Execution:  ExecutionContract{ForbidArtifacts: true, ToolSequence: []string{"bash", "bash", "submit_result"}},
+	}}}
+	requested := TaskDef{
+		Agent: "runner", Goal: "§3.1 candidate-freeze",
+		Execution: ExecutionContract{
+			ToolSequence:          []string{"bash", "bash", "submit_result"},
+			ToolExpectedExitCodes: [][]int{{}, {}, {}},
+		},
+	}
+	bound, effective, err := CompileTaskGoalContracts(session, []TaskDef{requested})
+	if err != nil {
+		t.Fatalf("compile goal contract: %v", err)
+	}
+	if len(effective) != 1 || effective[0].ID != "freeze-v1" || bound[0].Goal != requested.Goal {
+		t.Fatalf("goal contract identity/prose = bound=%#v effective=%#v", bound, effective)
+	}
+	if got := bound[0].Execution.ToolExpectedExitCodes; len(got) != 0 {
+		t.Fatalf("coordinator expected-exit-codes survived static binding: %#v", got)
+	}
+	if !bound[0].Execution.ForbidArtifacts || !reflect.DeepEqual(bound[0].Execution.ToolSequence, []string{"bash", "bash", "submit_result"}) || bound[0].OutputMode != TaskOutputModeVerbatim {
+		t.Fatalf("static goal contract was not authoritative: %#v", bound[0])
+	}
+}
+
+func TestCompileTaskGoalContractsRejectsAmbiguousSelectors(t *testing.T) {
+	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
+		BindTaskGoalContracts: true,
+	}}, ContractTasks: []TaskDef{
+		{Agent: "runner", WhenGoalContains: "freeze", Execution: ExecutionContract{ToolSequence: []string{"submit_result"}}},
+		{Agent: "runner", WhenGoalContains: "candidate-freeze", Execution: ExecutionContract{ToolSequence: []string{"submit_result"}}},
+	}}
+	if _, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "runner", Goal: "candidate-freeze"}}); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("ambiguous goal selectors error = %v, want rejection", err)
+	}
+}
+
 func TestValidateTeamTaskContractsRejectsMissingInitialContract(t *testing.T) {
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindInitialTaskContracts: true,
