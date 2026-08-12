@@ -439,9 +439,33 @@ func mergedAllowedPaths(cfg ToolConfig, ctx context.Context) []string {
 	return paths
 }
 
+func mergedAllowedWritePaths(cfg ToolConfig, ctx context.Context) []string {
+	if extra, ok := ctx.Value(AgentAllowedWritePathsKey).([]string); ok && len(extra) > 0 {
+		paths := append([]string(nil), cfg.AllowedWritePaths...)
+		seen := make(map[string]bool, len(paths))
+		for _, p := range paths {
+			seen[p] = true
+		}
+		for _, p := range extra {
+			if !seen[p] {
+				paths = append(paths, p)
+				seen[p] = true
+			}
+		}
+		return paths
+	}
+	if len(cfg.AllowedWritePaths) > 0 {
+		return cfg.AllowedWritePaths
+	}
+	return mergedAllowedPaths(cfg, ctx)
+}
+
 func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
 	needMerge := false
 	if _, ok := ctx.Value(AgentAllowedPathsKey).([]string); ok {
+		needMerge = true
+	}
+	if _, ok := ctx.Value(AgentAllowedWritePathsKey).([]string); ok {
 		needMerge = true
 	}
 	if rp, ok := ctx.Value(AgentRestrictedPathKey).(string); ok && rp != "" {
@@ -456,18 +480,12 @@ func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
 	if !needMerge {
 		return cfg
 	}
-	merged := ToolConfig{
-		WorkDir:        cfg.WorkDir,
-		AllowedPaths:   mergedAllowedPaths(cfg, ctx),
-		PathConsent:    cfg.PathConsent,
-		ToolName:       cfg.ToolName,
-		WorkspaceName:  cfg.WorkspaceName,
-		Hooks:          cfg.Hooks,
-		RestrictedBash: cfg.RestrictedBash,
-		RestrictedPath: mergedRestrictedPath(cfg, ctx),
-		NetworkBlock:   mergedNetworkBlock(cfg, ctx),
-		ForceMCP:       mergedForceMCP(cfg, ctx),
-	}
+	merged := cfg
+	merged.AllowedPaths = mergedAllowedPaths(cfg, ctx)
+	merged.AllowedWritePaths = mergedAllowedWritePaths(cfg, ctx)
+	merged.RestrictedPath = mergedRestrictedPath(cfg, ctx)
+	merged.NetworkBlock = mergedNetworkBlock(cfg, ctx)
+	merged.ForceMCP = mergedForceMCP(cfg, ctx)
 	return merged
 }
 
@@ -918,6 +936,27 @@ func isPathAllowed(absPath string, allowedPaths []string) bool {
 	return false
 }
 
+func isWritePathAllowed(absPath string, allowedWritePaths []string) bool {
+	evalPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		evalPath = absPath
+	}
+	evalPath = filepath.Clean(evalPath)
+
+	for _, allowed := range allowedWritePaths {
+		evalAllowed, err := filepath.EvalSymlinks(allowed)
+		if err != nil {
+			evalAllowed = allowed
+		}
+		evalAllowed = filepath.Clean(evalAllowed)
+
+		if evalPath == evalAllowed || strings.HasPrefix(evalPath, evalAllowed+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
 func isPathWithinDir(path, dir string) bool {
 	if path == "" || dir == "" {
 		return false
@@ -1020,6 +1059,15 @@ func resolveAndValidatePathWithConsent(path string, cfg ToolConfig) (string, err
 	}
 
 	return "", fmt.Errorf("path '%s' is outside allowed paths", path)
+}
+
+func resolveAndValidateWritePathWithConsent(path string, cfg ToolConfig) (string, error) {
+	writeCfg := cfg
+	writeCfg.AllowedPaths = cfg.AllowedWritePaths
+	if len(writeCfg.AllowedPaths) == 0 {
+		writeCfg.AllowedPaths = cfg.AllowedPaths
+	}
+	return resolveAndValidatePathWithConsent(path, writeCfg)
 }
 
 func formatPathConsentDenied(path, suggestion string) error {

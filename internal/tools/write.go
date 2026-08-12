@@ -72,7 +72,7 @@ func executeWrite(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (f
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
 	}
 
-	absPath, err := resolveAndValidatePathWithConsent(filePath, cfgWithMergedPaths(cfg, ctx))
+	absPath, err := resolveAndValidateWritePathWithConsent(filePath, cfgWithMergedPaths(cfg, ctx))
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 	}

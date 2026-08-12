@@ -45,6 +45,10 @@ type agentAllowedPathsKeyType struct{}
 
 var AgentAllowedPathsKey = agentAllowedPathsKeyType{}
 
+type agentAllowedWritePathsKeyType struct{}
+
+var AgentAllowedWritePathsKey = agentAllowedWritePathsKeyType{}
+
 type agentRestrictedPathKeyType struct{}
 
 var AgentRestrictedPathKey = agentRestrictedPathKeyType{}

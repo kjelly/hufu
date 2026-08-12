@@ -69,7 +69,7 @@ func executeDownload(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig)
 		return fantasy.NewTextErrorResponse("url must start with http:// or https://"), nil
 	}
 
-	absPath, err := resolveAndValidatePathWithConsent(args.FilePath, cfgWithMergedPaths(cfg, ctx))
+	absPath, err := resolveAndValidateWritePathWithConsent(args.FilePath, cfgWithMergedPaths(cfg, ctx))
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid file_path: %v", err)), nil
 	}

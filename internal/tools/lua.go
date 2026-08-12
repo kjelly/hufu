@@ -84,7 +84,9 @@ func executeLua(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fan
 
 	ch := make(chan luaResult, 1)
 
-	luaAllowedPaths := mergedAllowedPaths(cfg, ctx)
+	effCfg := cfgWithMergedPaths(cfg, ctx)
+	luaAllowedPaths := effCfg.AllowedPaths
+	luaAllowedWritePaths := effCfg.AllowedWritePaths
 	luaPathConsent := cfg.PathConsent
 
 	go func() {
@@ -113,7 +115,7 @@ func executeLua(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fan
 		lua.OpenIo(L)
 		lua.OpenOs(L)
 
-		sandboxLua(L, projectDir, luaAllowedPaths, luaPathConsent)
+		sandboxLua(L, projectDir, luaAllowedPaths, luaAllowedWritePaths, luaPathConsent)
 
 		var buf bytes.Buffer
 		overridePrint(L, &buf)
@@ -146,7 +148,7 @@ func executeLua(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fan
 	return fantasy.NewTextResponse(tr.Content), nil
 }
 
-func sandboxLua(L *lua.LState, projectDir string, allowedPaths []string, consent *PathConsent) {
+func sandboxLua(L *lua.LState, projectDir string, allowedPaths []string, allowedWritePaths []string, consent *PathConsent) {
 	global := L.Get(lua.EnvironIndex).(*lua.LTable)
 
 	L.SetGlobal(lua.DebugLibName, lua.LNil)
@@ -180,7 +182,21 @@ func sandboxLua(L *lua.LState, projectDir string, allowedPaths []string, consent
 		tbl.RawSetString("open", L.NewFunction(func(L *lua.LState) int {
 			path := L.CheckString(1)
 			top := L.GetTop()
-			absPath, err := validateLuaPathWithConsent(path, projectDir, allowedPaths, consent)
+
+			mode := "r"
+			if top >= 2 {
+				mode = L.CheckString(2)
+			}
+			isWrite := strings.ContainsAny(mode, "wa+")
+
+			pathsToCheck := allowedPaths
+			strictWrite := false
+			if isWrite && len(allowedWritePaths) > 0 {
+				pathsToCheck = allowedWritePaths
+				strictWrite = true
+			}
+
+			absPath, err := validateLuaPathWithConsent(path, projectDir, pathsToCheck, consent, strictWrite)
 			if err != nil {
 				L.Push(lua.LNil)
 				L.Push(lua.LString(err.Error()))
@@ -203,7 +219,7 @@ func sandboxLua(L *lua.LState, projectDir string, allowedPaths []string, consent
 		tbl.RawSetString("lines", L.NewFunction(func(L *lua.LState) int {
 			path := L.CheckString(1)
 			top := L.GetTop()
-			absPath, err := validateLuaPathWithConsent(path, projectDir, allowedPaths, consent)
+			absPath, err := validateLuaPathWithConsent(path, projectDir, allowedPaths, consent, false)
 			if err != nil {
 				L.RaiseError("path outside project directory: %s", path)
 			}
@@ -216,6 +232,60 @@ func sandboxLua(L *lua.LState, projectDir string, allowedPaths []string, consent
 			}
 			L.Call(top, lua.MultRet)
 			return L.GetTop()
+		}))
+
+		originalInput := L.GetGlobal("io").(*lua.LTable).RawGetString("input")
+		tbl.RawSetString("input", L.NewFunction(func(L *lua.LState) int {
+			if L.GetTop() >= 1 && L.Get(1).Type() == lua.LTString {
+				path := L.CheckString(1)
+				absPath, err := validateLuaPathWithConsent(path, projectDir, allowedPaths, consent, false)
+				if err != nil {
+					L.RaiseError("%s", err.Error())
+					return 0
+				}
+				L.Push(originalInput)
+				L.Push(lua.LString(absPath))
+				L.Call(1, 1)
+				return 1
+			}
+			L.Push(originalInput)
+			if L.GetTop() >= 1 {
+				L.Push(L.Get(1))
+				L.Call(1, 1)
+			} else {
+				L.Call(0, 1)
+			}
+			return 1
+		}))
+
+		originalOutput := L.GetGlobal("io").(*lua.LTable).RawGetString("output")
+		tbl.RawSetString("output", L.NewFunction(func(L *lua.LState) int {
+			if L.GetTop() >= 1 && L.Get(1).Type() == lua.LTString {
+				path := L.CheckString(1)
+				pathsToCheck := allowedPaths
+				strictWrite := false
+				if len(allowedWritePaths) > 0 {
+					pathsToCheck = allowedWritePaths
+					strictWrite = true
+				}
+				absPath, err := validateLuaPathWithConsent(path, projectDir, pathsToCheck, consent, strictWrite)
+				if err != nil {
+					L.RaiseError("%s", err.Error())
+					return 0
+				}
+				L.Push(originalOutput)
+				L.Push(lua.LString(absPath))
+				L.Call(1, 1)
+				return 1
+			}
+			L.Push(originalOutput)
+			if L.GetTop() >= 1 {
+				L.Push(L.Get(1))
+				L.Call(1, 1)
+			} else {
+				L.Call(0, 1)
+			}
+			return 1
 		}))
 	}
 
@@ -267,12 +337,25 @@ func validateLuaPath(path, projectDir string) (string, error) {
 	return evaluatedPath, nil
 }
 
-func validateLuaPathWithConsent(path, projectDir string, allowedPaths []string, consent *PathConsent) (string, error) {
+func validateLuaPathWithConsent(path, projectDir string, allowedPaths []string, consent *PathConsent, strictWrite bool) (string, error) {
 	absPath := path
 	if !filepath.IsAbs(path) {
 		absPath = filepath.Join(projectDir, path)
 	}
 	absPath = filepath.Clean(absPath)
+
+	if strictWrite {
+		parentDir := filepath.Dir(absPath)
+		evaluatedDir, err := filepath.EvalSymlinks(parentDir)
+		if err != nil {
+			evaluatedDir = parentDir
+		}
+		evaluatedPath := filepath.Join(evaluatedDir, filepath.Base(absPath))
+		if isWritePathAllowed(evaluatedPath, allowedPaths) {
+			return evaluatedPath, nil
+		}
+		return "", fmt.Errorf("access denied: write to %s is prohibited by runtime workflow write isolation", path)
+	}
 
 	if isPathAllowed(absPath, allowedPaths) {
 		return validateLuaPath(path, projectDir)

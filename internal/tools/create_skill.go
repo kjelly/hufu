@@ -43,6 +43,8 @@ func NewCreateSkillTool(opts ...ToolOption) fantasy.AgentTool {
 			Required: []string{"name", "description", "content"},
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			effCfg := cfgWithMergedPaths(cfg, ctx)
+
 			var args createSkillArgs
 			if err := parseArgs(call.Input, &args); err != nil {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid input JSON: %v", err)), nil
@@ -65,11 +67,16 @@ func NewCreateSkillTool(opts ...ToolOption) fantasy.AgentTool {
 			if skillsDir != baseDir && !strings.HasPrefix(skillsDir, baseDir+string(filepath.Separator)) {
 				return fantasy.NewTextErrorResponse("invalid name: resolves outside the skills directory"), nil
 			}
+
+			skillPath := filepath.Join(skillsDir, "SKILL.md")
+			if len(effCfg.AllowedWritePaths) > 0 && !isWritePathAllowed(skillPath, effCfg.AllowedWritePaths) {
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("access denied: write to %s is prohibited by runtime workflow write isolation", skillPath)), nil
+			}
+
 			if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to create skill directory: %v", err)), nil
 			}
 
-			skillPath := filepath.Join(skillsDir, "SKILL.md")
 			if err := os.WriteFile(skillPath, []byte(args.Content), 0o644); err != nil {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write skill file: %v", err)), nil
 			}

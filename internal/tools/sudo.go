@@ -55,6 +55,10 @@ func executeSudo(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 
 	effCfg := cfgWithMergedPaths(cfg, ctx)
 
+	if len(effCfg.AllowedWritePaths) > 0 {
+		return fantasy.NewTextErrorResponse("sudo tool is disabled in this runtime workflow to enforce write isolation — use structured write/edit tools instead"), nil
+	}
+
 	if args.WorkDir == "" {
 		if dir, rest, ok := extractLeadingCD(args.Command); ok {
 			args.WorkDir = dir
