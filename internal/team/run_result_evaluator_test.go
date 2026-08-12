@@ -132,6 +132,15 @@ func TestEvaluateRunOutcomeGoalModes(t *testing.T) {
 			exitCode:   7,
 		},
 		{
+			name:       "policy-blocked task produces policy_violation stop reason",
+			goalMode:   GoalModeOutcome,
+			unresolved: []TaskReference{{ID: "1", Status: string(TaskBlocked), FailureClass: FailurePolicy}},
+			outcome:    RunOutcomeBlocked,
+			goal:       false,
+			stopReason: StopReasonPolicyViolation,
+			exitCode:   7,
+		},
+		{
 			name:       "budget exceeded produces budget_exceeded stop reason",
 			goalMode:   GoalModeOutcome,
 			budget:     true,
@@ -174,6 +183,20 @@ func TestEvaluateRunOutcomeGoalModes(t *testing.T) {
 					got.Outcome, got.GoalSatisfied, got.ExitCode, got.StopReason, tt.outcome, tt.goal, tt.exitCode, tt.stopReason)
 			}
 		})
+	}
+}
+
+func TestToTaskReferencePreservesFailureClass(t *testing.T) {
+	ref := toTaskReference(&TodoItem{
+		ID:     "blocked-1",
+		Status: TaskBlocked,
+		FailureEvent: &FailureEventPayload{
+			FailureClass: FailureContract,
+		},
+	})
+
+	if ref.FailureClass != FailureContract {
+		t.Fatalf("failure class = %q, want %q", ref.FailureClass, FailureContract)
 	}
 }
 

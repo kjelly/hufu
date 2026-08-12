@@ -58,6 +58,7 @@ const (
 	StopReasonAcceptanceNotSet   StopReason = "acceptance_not_configured"
 	StopReasonUnresolvedTasks    StopReason = "unresolved_tasks"
 	StopReasonExternalBlockage   StopReason = "external_blockage"
+	StopReasonPolicyViolation    StopReason = "policy_violation"
 	StopReasonBudgetExceeded     StopReason = "budget_exceeded"
 	StopReasonCancelled          StopReason = "cancelled"
 	StopReasonRunFailed          StopReason = "run_failed"
@@ -343,7 +344,11 @@ func EvaluateRunOutcome(input RunEvaluationInput) RunResult {
 	for _, task := range input.UnresolvedTasks {
 		if task.Status == string(TaskBlocked) {
 			result.Outcome = RunOutcomeBlocked
-			result.StopReason = StopReasonExternalBlockage
+			if task.FailureClass == FailurePolicy || task.FailureClass == FailureContract || task.FailureClass == FailureProtocol {
+				result.StopReason = StopReasonPolicyViolation
+			} else {
+				result.StopReason = StopReasonExternalBlockage
+			}
 			result.ExitCode = 7
 			return result
 		}
@@ -491,11 +496,12 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 }
 
 type TaskReference struct {
-	ID     string `json:"id"`
-	Agent  string `json:"agent,omitempty"`
-	Desc   string `json:"desc"`
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
+	ID           string           `json:"id"`
+	Agent        string           `json:"agent,omitempty"`
+	Desc         string           `json:"desc"`
+	Status       string           `json:"status"`
+	Error        string           `json:"error,omitempty"`
+	FailureClass TaskFailureClass `json:"failure_class,omitempty"`
 }
 
 type ContinuationInfo struct {
@@ -737,12 +743,17 @@ func toTaskReference(item *TodoItem) TaskReference {
 		return TaskReference{}
 	}
 	errStr := FailureDisplayText(item)
+	failureClass := TaskFailureClass("")
+	if item.FailureEvent != nil {
+		failureClass = item.FailureEvent.FailureClass
+	}
 	return TaskReference{
-		ID:     item.ID,
-		Agent:  item.Agent,
-		Desc:   item.Desc,
-		Status: string(item.Status),
-		Error:  errStr,
+		ID:           item.ID,
+		Agent:        item.Agent,
+		Desc:         item.Desc,
+		Status:       string(item.Status),
+		Error:        errStr,
+		FailureClass: failureClass,
 	}
 }
 

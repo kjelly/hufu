@@ -381,6 +381,14 @@ func TestSubmitResultToolAdvertisesStructuredOpenQuestions(t *testing.T) {
 	}
 }
 
+func TestSubmitResultToolAcceptsStringFileRefsAtProtocolBoundary(t *testing.T) {
+	info := (&submitResultTool{}).Info()
+	input := `{"status":"success","summary":"done","files_read":["docs/runbook.md"],"files_modified":["tmp/result.txt"]}`
+	if err := validateToolArguments(input, info); err != nil {
+		t.Fatalf("losslessly normalizable string file refs rejected by protocol schema: %v", err)
+	}
+}
+
 func TestSubmitResultToolRejectsForbiddenArtifacts(t *testing.T) {
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{

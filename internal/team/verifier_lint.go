@@ -62,6 +62,14 @@ func LintTeamContracts(session *TeamSession) []ContractFinding {
 		return nil
 	}
 	var findings []ContractFinding
+	if mode, err := ParseGoalMode(session.Config.GoalMode); err == nil && mode == GoalModeOutcome && stringSliceContainsFold(session.Config.ToolsDenied, "finish") {
+		findings = append(findings, ContractFinding{
+			Severity: FindingSeverityError,
+			Code:     FindingCompletionToolDenied,
+			Field:    "tools.denied",
+			Message:  "outcome mode requires the finish tool so the coordinator can evaluate acceptance",
+		})
+	}
 
 	accSpec := session.Config.AcceptanceSpec
 	if accSpec != nil {
@@ -113,8 +121,18 @@ func LintTeamContracts(session *TeamSession) []ContractFinding {
 		findings = append(findings, scopeContractFindings(fmt.Sprintf("tasks[%d]", index), LintTaskDef(task))...)
 	}
 	findings = append(findings, ValidateTeamTaskContracts(session)...)
+	findings = append(findings, ValidateTeamPolicyContracts(session)...)
 
 	return findings
+}
+
+func stringSliceContainsFold(values []string, want string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), want) {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveTeamContractExecutables reports unresolved executables in every
