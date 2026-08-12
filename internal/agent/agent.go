@@ -138,7 +138,11 @@ type AgentDef struct {
 	ForceMCP       bool
 	Shell          string
 	MCPTools       map[string]MCPToolConfig
-	ProviderURL    string
+	// Requirements declares machine-readable prerequisites that must remain
+	// satisfiable after team, profile, and CLI policy are merged. It avoids
+	// inferring mandatory capabilities from free-form agent prose.
+	Requirements ContractRequirements
+	ProviderURL  string
 	// SideEffect is the default side-effect classification for tasks delegated
 	// to this agent (none/workspace_write/external_write/infra_mutation/
 	// credential_mutation). Empty = infer from Tools at task creation time.
@@ -158,6 +162,17 @@ type AgentDef struct {
 	Memory      WorkerMemoryPolicy
 	Generation  GenerationParams
 	ExtraModels []string
+}
+
+// ContractRequirements describes prerequisites for a team or worker without
+// coupling hufu to a particular task domain or external program.
+type ContractRequirements struct {
+	Tools       []string `yaml:"tools" json:"tools,omitempty"`
+	Environment []string `yaml:"environment" json:"environment,omitempty"`
+	Paths       []string `yaml:"paths" json:"paths,omitempty"`
+	Interactive bool     `yaml:"interactive" json:"interactive,omitempty"`
+	Network     bool     `yaml:"network" json:"network,omitempty"`
+	PlanFirst   bool     `yaml:"plan-first" json:"plan_first,omitempty"`
 }
 
 // WorkerMemoryMode controls whether a worker has private memory and how long
@@ -242,8 +257,21 @@ type TeamConfig struct {
 	WorkerContextSize int
 	ToolsAllowed      []string // List of explicitly allowed tools
 	ToolsDenied       []string // List of tools never exposed to workers in this team
+	Requirements      ContractRequirements
 	Delegation        DelegationPolicy
 	Preflight         []CapabilityRequirement
+	// Workflow, Policies, and Verification describe an optional runtime-owned
+	// phase contract. When configured, Hufu—not coordinator prose—controls the
+	// PREPARE → AUDIT → EXECUTE → VERIFY progression.
+	Workflow     WorkflowConfig
+	Policies     WorkflowPolicies
+	Capabilities CapabilityConfig
+	Verification VerificationConfig
+	Retry        RetryConfig
+	// ActionProviders bind generic capability names to team-configured adapter
+	// commands. The core never interprets the command's domain-specific action
+	// schema; it supplies a JSON Action over stdin and requires JSON stdout.
+	ActionProviders map[string]ActionProviderConfig
 
 	// Unattended runs the team without any blocking human interaction:
 	// ask_user returns a safe default instead of reading stdin, --steps/--tui
@@ -275,6 +303,56 @@ type TeamConfig struct {
 	// WorkerMemory is the team-level default worker memory policy. Individual
 	// agents can override it via their frontmatter `memory:` block.
 	WorkerMemory WorkerMemoryPolicy
+}
+
+// WorkflowConfig is provider-neutral phase ordering for a team execution.
+// Empty Phases preserves legacy prompt-driven orchestration.
+type WorkflowConfig struct {
+	Phases []string `json:"phases,omitempty" yaml:"phases,omitempty"`
+}
+
+// WorkflowPolicies control the generic runtime state machine. A configured
+// workflow defaults to requiring each phase to succeed and forbidding skips.
+type WorkflowPolicies struct {
+	RequirePhaseSuccess bool `json:"require_phase_success,omitempty" yaml:"require_phase_success,omitempty"`
+	AllowPhaseSkip      bool `json:"allow_phase_skip,omitempty" yaml:"allow_phase_skip,omitempty"`
+}
+
+// VerificationConfig controls the generic whole-workflow finish gate.
+type VerificationConfig struct {
+	Required bool `json:"required,omitempty" yaml:"required,omitempty"`
+}
+
+// RetryConfig is runtime-owned retry policy for configured workflows. A zero
+// limit defers to the task's existing max-retries value for compatibility.
+type RetryConfig struct {
+	Transient RetryTransientConfig `json:"transient,omitempty" yaml:"transient,omitempty"`
+	Repair    RetryRepairConfig    `json:"repair,omitempty" yaml:"repair,omitempty"`
+}
+
+type RetryTransientConfig struct {
+	MaxAttempts int `json:"max_attempts,omitempty" yaml:"max_attempts,omitempty"`
+}
+
+type RetryRepairConfig struct {
+	MaxAttemptsPerFailureSignature int `json:"max_attempts_per_failure_signature,omitempty" yaml:"max_attempts_per_failure_signature,omitempty"`
+}
+
+// ActionProviderConfig configures a process-bound generic action adapter.
+// Command is argv, not shell text, so team manifests cannot rely on implicit
+// shell interpolation. Timeout is expressed in seconds; zero uses the caller
+// context without adding a deadline.
+type ActionProviderConfig struct {
+	Command []string `json:"command" yaml:"command"`
+	Dir     string   `json:"dir,omitempty" yaml:"dir,omitempty"`
+	Timeout int64    `json:"timeout,omitempty" yaml:"timeout,omitempty"`
+}
+
+// CapabilityConfig names provider-neutral capabilities required by a runtime
+// workflow. Enforcement is delegated to the runtime/provider capability
+// registry; this contract never names a product-specific integration.
+type CapabilityConfig struct {
+	Required []string `json:"required,omitempty" yaml:"required,omitempty"`
 }
 
 // DelegationPolicy makes a team's coordinator dispatch contract executable.
