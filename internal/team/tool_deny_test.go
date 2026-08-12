@@ -99,3 +99,60 @@ func TestDeniedToolInstructionsAreRemovedWithoutSyntheticToolNames(t *testing.T)
 		t.Fatalf("allowed prompt content was removed: %q", prompt)
 	}
 }
+
+func TestPhaseCapabilityOverridesTemplateGrant(t *testing.T) {
+	session := &TeamSession{Config: agent.TeamConfig{}}
+	w, err := newRuntimeWorkflow(&TeamSession{
+		Config: agent.TeamConfig{
+			Workflow: agent.WorkflowConfig{Phases: []string{"prepare", "audit", "execute", "verify"}},
+			Policies: agent.WorkflowPolicies{AllowPhaseSkip: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Initial state is PhasePrepare
+	w.state = PhasePrepare
+	c := &Coordinator{
+		session:       session,
+		coreTools:     workerInvariantCoreTools(t),
+		phaseWorkflow: w,
+	}
+
+	def := &agent.AgentDef{Name: "preparer", Tools: "bash,view"}
+	task := TaskDef{ContractID: "static-prep", Execution: ExecutionContract{
+		TemplateToolGrants: []string{"bash"},
+	}}
+
+	// Even though the template grants 'bash', it must be removed in PhasePrepare
+	granted := agentToolNames(c.selectWorkerToolsForTask(def, task))
+	if slices.Contains(granted, "bash") {
+		t.Fatalf("phase capability bypass: bash was exposed via template grant in %s phase", w.state)
+	}
+	allowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowedForTask(t.Context(), def, granted, task))
+	if slices.Contains(allowed, "bash") {
+		t.Fatalf("phase capability bypass: bash was permitted in runtime allowlist in %s phase", w.state)
+	}
+
+	// Change to VERIFY and check again
+	w.state = PhaseVerify
+	granted = agentToolNames(c.selectWorkerToolsForTask(def, task))
+	if slices.Contains(granted, "bash") {
+		t.Fatalf("phase capability bypass: bash was exposed via template grant in %s phase", w.state)
+	}
+	allowed = tools.GetToolsAllowed(c.withEffectiveToolsAllowedForTask(t.Context(), def, granted, task))
+	if slices.Contains(allowed, "bash") {
+		t.Fatalf("phase capability bypass: bash was permitted in runtime allowlist in %s phase", w.state)
+	}
+
+	// Change to EXECUTE and verify it is allowed
+	w.state = PhaseExecute
+	granted = agentToolNames(c.selectWorkerToolsForTask(def, task))
+	if !slices.Contains(granted, "bash") {
+		t.Fatalf("bash was incorrectly removed in %s phase", w.state)
+	}
+	allowed = tools.GetToolsAllowed(c.withEffectiveToolsAllowedForTask(t.Context(), def, granted, task))
+	if !slices.Contains(allowed, "bash") {
+		t.Fatalf("bash was incorrectly removed from allowlist in %s phase", w.state)
+	}
+}
