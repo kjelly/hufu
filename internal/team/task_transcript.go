@@ -248,7 +248,7 @@ func formatVerbatimTranscriptManifest(ref *ArtifactRef) string {
 	if ref.ID == "" {
 		return fmt.Sprintf("VERBATIM TRANSCRIPT CAPTURED (LEGACY REFERENCE)\nlegacy_path=%s\nsha256=%s\nbytes=%d\n\nThe transcript has no opaque artifact reference and cannot be consumed by a reference-only tool.", ref.Path, ref.SHA256, ref.Bytes)
 	}
-	return fmt.Sprintf("VERBATIM TRANSCRIPT CAPTURED\nartifact_ref=%s\nsha256=%s\nbytes=%d\n\nUse artifact_ref exactly as issued. Do not reconstruct or copy a filesystem path.", ref.ID, ref.SHA256, ref.Bytes)
+	return fmt.Sprintf("VERBATIM TRANSCRIPT CAPTURED\nartifact_ref=%s\nsha256=%s\nbytes=%d\n\nThis is an artifact ID, not a Todo ID. Use artifact_ref exactly as issued only where an artifact reference is requested. Do not reconstruct or copy a filesystem path.", ref.ID, ref.SHA256, ref.Bytes)
 }
 
 // finalizeVerbatimTaskResult associates runner-owned evidence with the typed
