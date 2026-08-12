@@ -25,7 +25,7 @@ type TeamSession struct {
 	Agents        map[string]*agent.AgentDef
 	MCPServers    map[string]mcp.MCPServerConfig
 	Skills        []*skill.SkillDef
-	ContractTasks []TaskDef // Optional static task contracts used by preflight tooling.
+	ContractTasks []TaskDef // Optional static task contracts used by preflight tooling and policy binding.
 }
 
 type agentFrontmatter struct {
@@ -123,6 +123,7 @@ type rawDelegationPolicy struct {
 		FirstTool     string   `yaml:"first-tool"`
 		BindContracts bool     `yaml:"bind-contracts"`
 	} `yaml:"initial-batch"`
+	BindTaskGoalContracts    bool                      `yaml:"bind-task-goal-contracts"`
 	NoRedispatchAfterSuccess []string                  `yaml:"no-redispatch-after-success"`
 	ForbidContextFiles       bool                      `yaml:"forbid-context-files"`
 	TaskGoalInvariants       []agent.TaskGoalInvariant `yaml:"task-goal-invariants"`
@@ -808,6 +809,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	if yc.Delegation.InitialBatch.BindContracts {
 		cfg.Delegation.BindInitialTaskContracts = true
 	}
+	if yc.Delegation.BindTaskGoalContracts {
+		cfg.Delegation.BindTaskGoalContracts = true
+	}
 	if len(yc.Delegation.NoRedispatchAfterSuccess) > 0 {
 		cfg.Delegation.NoRedispatchAfterSuccess = yc.Delegation.NoRedispatchAfterSuccess
 	}
@@ -825,8 +829,8 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 }
 
 // loadTeamContractTasks reads optional static task contracts from team YAML.
-// They are intentionally kept on TeamSession for preflight tooling only: task
-// dispatch remains coordinator-driven and is not changed by declaring them.
+// A team may opt in to binding the initial batch or goal-selected later tasks;
+// otherwise these remain available only to preflight tooling.
 func loadTeamContractTasks(teamDir string, vars map[string]string) ([]TaskDef, error) {
 	for _, name := range []string{"team.yml", "team.yaml"} {
 		data, err := os.ReadFile(filepath.Join(teamDir, name))

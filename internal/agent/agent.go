@@ -300,6 +300,11 @@ type DelegationPolicy struct {
 	// It lets a team freeze safety-critical initial checkpoints without making
 	// the coordinator reproduce a long provider JSON object.
 	BindInitialTaskContracts bool
+	// BindTaskGoalContracts replaces the execution and output contracts of a
+	// task that matches a static team task contract's agent and goal selector.
+	// It is for later closed checkpoints whose task goal can be dynamic while
+	// their execution shape must remain coordinator-independent.
+	BindTaskGoalContracts bool
 	// NoRedispatchAfterSuccess lists workers that may not be delegated again
 	// after one of their tasks reached a successful terminal result.
 	NoRedispatchAfterSuccess []string
@@ -320,12 +325,28 @@ type DelegationPolicy struct {
 // runtime only enforces generic text and execution-shape boundaries before a
 // TODO is created or a worker can start.
 type TaskGoalInvariant struct {
-	Agent                    string   `yaml:"agent" json:"agent"`
-	WhenGoalContains         string   `yaml:"when-goal-contains" json:"when_goal_contains"`
-	RequiredLiterals         []string `yaml:"required-literals" json:"required_literals"`
-	ForbiddenLiterals        []string `yaml:"forbidden-literals" json:"forbidden_literals"`
-	RequiredToolSequence     []string `yaml:"required-tool-sequence" json:"required_tool_sequence"`
-	ForbiddenExecutionFields []string `yaml:"forbidden-execution-fields" json:"forbidden_execution_fields"`
+	Agent                    string             `yaml:"agent" json:"agent"`
+	WhenGoalContains         string             `yaml:"when-goal-contains" json:"when_goal_contains"`
+	RequiredLiterals         []string           `yaml:"required-literals" json:"required_literals"`
+	ForbiddenLiterals        []string           `yaml:"forbidden-literals" json:"forbidden_literals"`
+	RequiredToolSequence     []string           `yaml:"required-tool-sequence" json:"required_tool_sequence"`
+	ForbiddenExecutionFields []string           `yaml:"forbidden-execution-fields" json:"forbidden_execution_fields"`
+	RequiredTaskReference    *TaskGoalReference `yaml:"required-task-reference" json:"required_task_reference,omitempty"`
+	// RequiredTaskReferences is the plural form for a sealed producer set. Each
+	// reference must resolve to a distinct completed Todo before a consumer is
+	// created. It is intentionally independent from result content: teams own
+	// the typed agreement rules, while Hufu owns producer identity and state.
+	RequiredTaskReferences []TaskGoalReference `yaml:"required-task-references" json:"required_task_references,omitempty"`
+}
+
+// TaskGoalReference makes one line-oriented goal field a runtime-validated
+// reference to an already completed TODO. This keeps task identity separate
+// from artifact identity and avoids trusting a coordinator's prose claim about
+// where an opaque ID came from.
+type TaskGoalReference struct {
+	GoalPrefix   string `yaml:"goal-prefix" json:"goal_prefix"`
+	Agent        string `yaml:"agent" json:"agent"`
+	TaskContains string `yaml:"task-contains" json:"task_contains"`
 }
 
 // ReliabilityConfig bounds diagnostic and repair work that repeats without

@@ -22,6 +22,7 @@ delegation:
     exact: true
     first-tool: agent
     bind-contracts: true
+  bind-task-goal-contracts: true
   no-redispatch-after-success: [reader, probe]
   forbid-context-files: true
 `
@@ -46,6 +47,9 @@ delegation:
 	}
 	if !cfg.Delegation.BindInitialTaskContracts {
 		t.Fatal("BindInitialTaskContracts = false, want true")
+	}
+	if !cfg.Delegation.BindTaskGoalContracts {
+		t.Fatal("BindTaskGoalContracts = false, want true")
 	}
 	if want := []string{"reader", "probe"}; !reflect.DeepEqual(cfg.Delegation.NoRedispatchAfterSuccess, want) {
 		t.Fatalf("NoRedispatchAfterSuccess = %v, want %v", cfg.Delegation.NoRedispatchAfterSuccess, want)
