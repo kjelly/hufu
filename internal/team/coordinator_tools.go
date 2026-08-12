@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -112,15 +113,47 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 
 	result, err := t.coordinator.ExecuteTasks(ctx, args.Tasks)
 	if err != nil {
-		// Keep the per-task detail: formatTaskResults returns the full report
-		// even on "all tasks failed", and discarding it left the coordinator
-		// blind to why tasks failed, forcing guesswork re-delegation.
-		if strings.TrimSpace(result) != "" {
-			return fantasy.NewTextErrorResponse(result + "\n\nERROR: " + err.Error()), nil
+		if t.coordinator.terminalUnresolvedRun() {
+			return terminalUnresolvedWorkerResponse(t.coordinator), nil
 		}
-		return fantasy.NewTextErrorResponse(err.Error()), nil
+		return renderRunAgentsToolResponse(result, err), nil
 	}
 	return fantasy.NewTextResponse(result), nil
+}
+
+// renderRunAgentsToolResponse keeps a completed worker batch's sealed failure
+// report visible to the coordinator. errAllWorkerTasksFailed is an execution
+// outcome, not an agent-tool transport error: returning it as a tool error
+// would discard the Todo IDs and evidence that the terminal-run boundary needs
+// to report honestly. Policy/wrap-up logic still decides whether another task
+// can be delegated.
+func renderRunAgentsToolResponse(result string, err error) fantasy.ToolResponse {
+	if err == nil {
+		return fantasy.NewTextResponse(result)
+	}
+	if errors.Is(err, errAllWorkerTasksFailed) {
+		message := strings.TrimSpace(result)
+		if message == "" {
+			message = "Worker tasks reached terminal failure states."
+		}
+		return fantasy.NewTextResponse(message + "\n\nWorker tasks reached terminal failure states. Treat the Todo IDs and recorded failure dispositions above as authoritative. Replan, reconcile, request human input, or finish with an acknowledged partial result as appropriate; do not blindly repeat the same task.")
+	}
+	if strings.TrimSpace(result) != "" {
+		return fantasy.NewTextErrorResponse(result + "\n\nERROR: " + err.Error())
+	}
+	return fantasy.NewTextErrorResponse(err.Error())
+}
+
+// terminalUnresolvedWorkerResponse is the coordinator-side hard stop once a
+// failed/blocked worker has put a run into terminal wrap-up. It finalizes an
+// evidence-only nonzero outcome and deliberately returns a tool error: the
+// policy gate converts it into the stream boundary so no finish, team_info, or
+// agent continuation can follow.
+func terminalUnresolvedWorkerResponse(c *Coordinator) fantasy.ToolResponse {
+	if c == nil {
+		return fantasy.NewTextErrorResponse("terminal unresolved worker task; coordinator continuation disabled")
+	}
+	return fantasy.NewTextErrorResponse(c.finalizeTerminalUnresolvedRun())
 }
 
 type finishTool struct {

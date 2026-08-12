@@ -2,8 +2,11 @@ package team
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
 )
@@ -31,6 +34,47 @@ func TestDelegationChain(t *testing.T) {
 				t.Errorf("delegationChain() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRunAgentsToolRendersTerminalWorkerFailureAsCoordinatorEvidence(t *testing.T) {
+	response := renderRunAgentsToolResponse("## Agent: worker\n**Status**: ERROR\n**Todo ID**: 4", errAllWorkerTasksFailed)
+	if response.IsError {
+		t.Fatalf("terminal worker outcome was rendered as agent tool error: %#v", response)
+	}
+	for _, want := range []string{"**Todo ID**: 4", "Replan, reconcile"} {
+		if !strings.Contains(response.Content, want) {
+			t.Fatalf("response omitted %q: %q", want, response.Content)
+		}
+	}
+}
+
+func TestTerminalUnresolvedWorkerResponseStopsCoordinatorToolTurn(t *testing.T) {
+	tracker := NewTaskTracker()
+	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "non-replayable checkpoint"}})[0]
+	tracker.TodoList().UpdateStatus(item.ID, TaskBlocked, "closed task contract failed")
+	coord := &Coordinator{taskTracker: tracker}
+	coord.SetWrapUp()
+
+	if !coord.terminalUnresolvedRun() {
+		t.Fatal("blocked worker in wrap-up must be terminal")
+	}
+	response := terminalUnresolvedWorkerResponse(coord)
+	if !response.IsError || !strings.Contains(response.Content, "non-replayable checkpoint") {
+		t.Fatalf("terminal worker response = %#v, want error containing failed task", response)
+	}
+	result := coord.LastRunResult()
+	if result == nil || IsRunOutcomeSuccess(result.Outcome) || result.ExitCode == 0 {
+		t.Fatalf("terminal run result = %#v, want nonzero unresolved outcome", result)
+	}
+
+	// The policy gate turns an error response from a coordinator tool into the
+	// hard stream boundary used by a live orchestrator.
+	gated := coord.gatePolicyTools([]fantasy.AgentTool{&recordingTool{name: "agent", resp: response}})[0]
+	ctx := context.WithValue(context.Background(), todoIDKey{}, CoordTodoID)
+	_, err := gated.Run(ctx, fantasy.ToolCall{Name: "agent"})
+	if !errors.Is(err, errCoordinatorToolFailure) {
+		t.Fatalf("terminal worker tool response error = %v, want coordinator boundary", err)
 	}
 }
 

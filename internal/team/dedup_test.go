@@ -697,8 +697,8 @@ func TestFormatTaskResults(t *testing.T) {
 		{
 			name: "successful tasks",
 			results: []agentTaskResult{
-				{agentName: "agent1", output: "result1"},
-				{agentName: "agent2", output: "result2"},
+				{agentName: "agent1", todoID: "4", output: "result1"},
+				{agentName: "agent2", todoID: "5", output: "result2"},
 			},
 			total:   2,
 			wantErr: false,
@@ -706,12 +706,17 @@ func TestFormatTaskResults(t *testing.T) {
 				if !strings.Contains(output, "2/2 tasks completed successfully") {
 					t.Errorf("output should contain success summary")
 				}
+				for _, want := range []string{"**Todo ID**: 4", "**Todo ID**: 5"} {
+					if !strings.Contains(output, want) {
+						t.Errorf("successful result omitted %q: %s", want, output)
+					}
+				}
 			},
 		},
 		{
 			name: "failed tasks",
 			results: []agentTaskResult{
-				{agentName: "agent1", err: newTestError("error1")},
+				{agentName: "agent1", todoID: "7", err: newTestError("error1")},
 				{agentName: "agent2", err: newTestError("error2")},
 			},
 			total:   2,
@@ -719,6 +724,9 @@ func TestFormatTaskResults(t *testing.T) {
 			check: func(t *testing.T, output string) {
 				if !strings.Contains(output, "0/2 tasks completed successfully") {
 					t.Errorf("output should contain failure summary, got %q", output)
+				}
+				if !strings.Contains(output, "**Todo ID**: 7") {
+					t.Errorf("failed task output should expose its stable Todo ID, got %q", output)
 				}
 			},
 		},
@@ -780,10 +788,8 @@ func TestFormatTaskResults(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Errorf("formatTaskResults() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if tt.wantErr && err != nil {
-				if !strings.Contains(err.Error(), "all") {
-					t.Errorf("error message should contain 'all', got %v", err)
-				}
+			if tt.wantErr && err != nil && !errors.Is(err, errAllWorkerTasksFailed) {
+				t.Errorf("error = %v, want errAllWorkerTasksFailed", err)
 			}
 			if tt.check != nil {
 				tt.check(t, output)

@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -766,6 +767,58 @@ func TestEnsureFinishedNoProgressStopDoesNotSpendAnotherLLMTurn(t *testing.T) {
 	}
 	if cp := c.ContinuationCheckpoint(); cp == nil || cp.Status != "pending" || cp.Reason == "" {
 		t.Fatalf("continuation checkpoint = %#v, want pending no-progress handoff", cp)
+	}
+}
+
+func TestEnsureFinishedTerminalUnresolvedDoesNotSpendAnotherLLMTurn(t *testing.T) {
+	calls := 0
+	tracker := NewTaskTracker()
+	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "closed checkpoint"}})[0]
+	tracker.TodoList().UpdateStatus(item.ID, TaskBlocked, "terminal evidence")
+	c := &Coordinator{
+		session:     &TeamSession{Config: agent.TeamConfig{Name: "terminal-unresolved", MaxCoordinatorTurns: 3}},
+		sessionData: NewSession(),
+		taskTracker: tracker,
+	}
+	c.SetWrapUp()
+	c.runOrchestratorOverride = func(context.Context, *agent.AgentDef, string) (string, []fantasy.StepResult, error) {
+		calls++
+		return "unexpected coordinator continuation", nil, nil
+	}
+
+	result, _ := c.ensureFinished(context.Background(), &agent.AgentDef{Name: "coordinator"}, "narration", nil)
+	if calls != 0 {
+		t.Fatalf("terminal unresolved run invoked %d coordinator continuation turns, want 0", calls)
+	}
+	if !strings.Contains(result, "closed checkpoint") {
+		t.Fatalf("deterministic result = %q, want failed task summary", result)
+	}
+	if run := c.LastRunResult(); run == nil || IsRunOutcomeSuccess(run.Outcome) || run.ExitCode == 0 {
+		t.Fatalf("run result = %#v, want nonzero unresolved outcome", run)
+	}
+}
+
+func TestAttemptWrapUpRecoveryTerminalUnresolvedDoesNotSpendAnotherLLMTurn(t *testing.T) {
+	tracker := NewTaskTracker()
+	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "blocked checkpoint"}})[0]
+	tracker.TodoList().UpdateStatus(item.ID, TaskBlocked, "terminal evidence")
+	c := &Coordinator{
+		session:     &TeamSession{Config: agent.TeamConfig{Name: "terminal-unresolved-recovery"}},
+		sessionData: NewSession(),
+		taskTracker: tracker,
+	}
+	c.SetWrapUp()
+	c.runOrchestratorOverride = func(context.Context, *agent.AgentDef, string) (string, []fantasy.StepResult, error) {
+		t.Fatal("terminal unresolved run must not invoke a wrap-up model turn")
+		return "", nil, nil
+	}
+
+	result, steps, recovered := c.attemptWrapUpRecovery(context.Background(), &agent.AgentDef{Name: "coordinator"}, errors.New("coordinator tool boundary"))
+	if !recovered || len(steps) != 0 || !strings.Contains(result, "blocked checkpoint") {
+		t.Fatalf("terminal recovery = (%q, %v, %v), want deterministic failed-task summary without model steps", result, steps, recovered)
+	}
+	if run := c.LastRunResult(); run == nil || IsRunOutcomeSuccess(run.Outcome) || run.ExitCode == 0 {
+		t.Fatalf("run result = %#v, want nonzero unresolved outcome", run)
 	}
 }
 

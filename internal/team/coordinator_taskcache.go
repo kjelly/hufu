@@ -5,12 +5,18 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
+
+// errAllWorkerTasksFailed is a task-outcome sentinel, not an agent-tool
+// transport failure. The agent tool renders it as ordinary structured
+// evidence so the coordinator can follow the recorded recovery disposition.
+var errAllWorkerTasksFailed = errors.New("all worker tasks failed")
 
 type agentTaskResult struct {
 	agentName      string
@@ -719,14 +725,22 @@ func formatTaskResults(results []agentTaskResult, totalTasks int, duplicateWarni
 		}
 		if r.err != nil {
 			errorCount++
-			fmt.Fprintf(&b, "## Agent: %s\n**Status**: ERROR\n**Error**: %s", r.agentName, r.err)
+			fmt.Fprintf(&b, "## Agent: %s\n**Status**: ERROR", r.agentName)
+			if r.todoID != "" {
+				fmt.Fprintf(&b, "\n**Todo ID**: %s", r.todoID)
+			}
+			fmt.Fprintf(&b, "\n**Error**: %s", r.err)
 		} else if r.planText != "" {
 			// Plan submitted - don't count as success, just informational
 			planCount++
 			fmt.Fprintf(&b, "## Agent: %s\n**Status**: PLAN SUBMITTED\n**Todo ID**: %s\n\n%s", r.agentName, r.todoID, r.planText)
 		} else {
 			successCount++
-			fmt.Fprintf(&b, "## Agent: %s\n**Status**: Success\n\n%s", r.agentName, r.output)
+			fmt.Fprintf(&b, "## Agent: %s\n**Status**: Success", r.agentName)
+			if r.todoID != "" {
+				fmt.Fprintf(&b, "\n**Todo ID**: %s", r.todoID)
+			}
+			fmt.Fprintf(&b, "\n\n%s", r.output)
 		}
 	}
 	summary := fmt.Sprintf("\n\n---\nSummary: %d/%d tasks completed successfully", successCount, totalTasks)
@@ -742,7 +756,7 @@ func formatTaskResults(results []agentTaskResult, totalTasks int, duplicateWarni
 	}
 	// Error only if all tasks failed AND no plans were submitted
 	if successCount == 0 && errorCount > 0 && planCount == 0 {
-		return b.String(), fmt.Errorf("all %d tasks failed", len(results))
+		return b.String(), fmt.Errorf("%w: %d task(s)", errAllWorkerTasksFailed, len(results))
 	}
 	return b.String(), nil
 }

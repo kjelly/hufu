@@ -86,6 +86,39 @@ func TestCoordinatorFinalizeTaskTerminalResourcesContainsLeakAndPreservesTaskErr
 	}
 }
 
+func TestCoordinatorFinalizeTaskTerminalResourcesClosesLeakAfterAcceptedTerminalResult(t *testing.T) {
+	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coord := &Coordinator{terminalSessionMgr: manager}
+	manager.SetActiveTaskRoundChecker(coord.isTerminalRoundActive)
+	owner := WithTerminalTaskID(context.Background(), "task-accepted-result-leak")
+	if _, err := manager.Start(owner, TerminalStartRequest{
+		RunID: "run-accepted-result-leak", OwnerTaskID: "task-accepted-result-leak", Command: []string{"sh", "-c", "sleep 30"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, blocked := coord.finalizeTaskTerminalResources(context.Background(), "task-accepted-result-leak", nil)
+	if blocked {
+		t.Fatalf("contained terminal unexpectedly requires manual intervention: %v", got)
+	}
+	if got == nil || !strings.Contains(got.Error(), "unclosed terminal session") {
+		t.Fatalf("accepted result with live terminal = %v, want terminal boundary failure", got)
+	}
+	if err := manager.RequireTaskClosed("task-accepted-result-leak"); err != nil {
+		t.Fatalf("terminal remained open after accepted-result finalization: %v", err)
+	}
+	sessions, err := manager.List(context.Background(), "run-accepted-result-leak")
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("list sessions = %#v, err=%v", sessions, err)
+	}
+	if sessions[0].CleanupState != TerminalCleanupCompleted {
+		t.Fatalf("cleanup state = %q, want completed", sessions[0].CleanupState)
+	}
+}
+
 func TestCoordinatorTerminalTaskFailureOverridesWorkerSuccess(t *testing.T) {
 	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
 	if err != nil {
@@ -397,6 +430,10 @@ func TestExecuteTaskFailsOnPartialSubmittedResultWithoutConsultingTerminalEviden
 	}
 	if strings.Contains(err.Error(), "terminal command") {
 		t.Fatalf("error = %q, must not consult unrelated terminal evidence for a non-success claim", err)
+	}
+	updated := c.taskTracker.TodoList().Items()[0]
+	if updated.ExecutionReceipt == nil || updated.ExecutionReceipt.ExitCode == nil || *updated.ExecutionReceipt.ExitCode == 0 {
+		t.Fatalf("partial task receipt = %#v, want non-zero runtime-owned exit code", updated.ExecutionReceipt)
 	}
 }
 

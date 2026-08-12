@@ -285,7 +285,7 @@ func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
 				orchTools = append(orchTools, t)
 			}
 		}
-		return c.filterDeniedCoordinatorTools(orchTools)
+		return c.restrictInitialCoordinatorTools(c.filterDeniedCoordinatorTools(orchTools))
 	}
 	orchTools = []fantasy.AgentTool{
 		c.RunAgentsTool(),
@@ -305,7 +305,32 @@ func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
 			orchTools = append(orchTools, t)
 		}
 	}
-	return c.filterDeniedCoordinatorTools(orchTools)
+	return c.restrictInitialCoordinatorTools(c.filterDeniedCoordinatorTools(orchTools))
+}
+
+// restrictInitialCoordinatorTools makes a configured first-tool policy
+// model-visible as well as runtime-enforced. A fresh session can retain
+// non-authoritative history in an upstream provider or other memory layer; it
+// must not be able to turn that prose into a terminal out-of-order tool call
+// before the canonical initial delegation is created. Once a TODO exists, the
+// ordinary coordinator tool set is restored.
+//
+// This is deliberately generic: it honors whichever coordinator tool a team
+// configured as its first tool and does not inspect task goals, providers, or
+// project-specific state. Returning no tools for an unavailable configured
+// first tool is fail-closed and leaves the existing policy validation error as
+// the diagnostic boundary.
+func (c *Coordinator) restrictInitialCoordinatorTools(candidate []fantasy.AgentTool) []fantasy.AgentTool {
+	want := c.initialCoordinatorToolName()
+	if want == "" {
+		return candidate
+	}
+	for _, tool := range candidate {
+		if tool != nil && tool.Info().Name == want {
+			return []fantasy.AgentTool{tool}
+		}
+	}
+	return nil
 }
 
 func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentDef, prompt string) (string, []fantasy.StepResult, error) {
@@ -394,6 +419,14 @@ func (c *Coordinator) runOrchestratorWithNoProgressGuard(ctx context.Context, or
 func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDef, result string, steps []fantasy.StepResult) (string, []fantasy.StepResult) {
 	if c.finishCalled.Load() || ctx.Err() != nil {
 		return result, steps
+	}
+	if c.terminalUnresolvedRun() {
+		// A terminal worker disposition is evidence, not a request for an
+		// additional coordinator model turn. In particular, do not give a
+		// coordinator whose available tools were intentionally restricted an
+		// opportunity to call a denied finish, team_info, or agent tool while
+		// trying to summarize the already-terminal run.
+		return c.finalizeTerminalUnresolvedRun(), steps
 	}
 	if c.noProgressStopPending() {
 		// A task-boundary hard stop may arrive here through the coordinator's
@@ -547,6 +580,13 @@ func (c *Coordinator) attemptWrapUpRecovery(ctx context.Context, orchDef *agent.
 	if !c.IsWrapUp() || ctx.Err() != nil {
 		return "", nil, false
 	}
+	if c.terminalUnresolvedRun() {
+		// Do not convert a terminal worker result (or the coordinator-tool
+		// boundary it produces) into a summary-model turn. The deterministic
+		// result below preserves the failed task IDs and produces a nonzero run
+		// outcome without exposing any more coordinator tools.
+		return c.finalizeTerminalUnresolvedRun(), nil, true
+	}
 	// Direct coordinator tool failures are a terminal boundary. In particular,
 	// do not convert one into another model turn merely because the error
 	// occurred during wrap-up; that would let the coordinator act after an
@@ -586,6 +626,50 @@ func (c *Coordinator) attemptWrapUpRecovery(ctx context.Context, orchDef *agent.
 	return summary, nil, true
 }
 
+// terminalUnresolvedRun reports the narrow condition in which the coordinator
+// must stop using its model entirely: a run has entered wrap-up and still has
+// a failed, blocked, or protocol-incomplete task. It deliberately does not
+// apply to ordinary retryable failures, acceptance recovery, or successful
+// runs. Those paths retain their existing coordinator behavior.
+func (c *Coordinator) terminalUnresolvedRun() bool {
+	if c == nil || !c.IsWrapUp() || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return false
+	}
+	return len(failedTodoItems(c.taskTracker.TodoList().Items())) > 0
+}
+
+// finalizeTerminalUnresolvedRun creates an LLM-free, canonical failure result
+// for a terminal unresolved worker state. It is safe to call from both the
+// agent-tool path and finalization paths; each call derives the same result
+// from durable todo state and never runs acceptance or another coordinator
+// turn.
+func (c *Coordinator) finalizeTerminalUnresolvedRun() string {
+	const reason = "terminal unresolved worker task; coordinator continuation disabled"
+	if c == nil {
+		return reason
+	}
+	items := []*TodoItem(nil)
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		items = c.taskTracker.TodoList().Items()
+	}
+	summary := c.summaryFromTodos(errors.New(reason))
+	if summary == "" {
+		summary = reason
+	}
+	evaluated := EvaluateRunOutcome(RunEvaluationInput{
+		UnresolvedTasks: UnresolvedTaskReferences(items),
+		Acceptance:      AcceptanceNotConfigured,
+		Response:        summary,
+		Reason:          reason,
+		Stats:           SummarizeRunStats(items),
+		Metrics:         c.Metrics(),
+		GoalMode:        c.GoalMode(),
+	})
+	c.SetLastRunResult(&evaluated)
+	c.SetCurrentStage("terminal_unresolved")
+	return summary
+}
+
 // summaryFromTodos builds an LLM-free run summary from the todo list. Used as
 // the last-resort wrap-up when the coordinator model cannot produce one.
 func (c *Coordinator) summaryFromTodos(runErr error) string {
@@ -596,16 +680,18 @@ func (c *Coordinator) summaryFromTodos(runErr error) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "The run stopped early (%v). Results of completed tasks:\n", runErr)
 	done := 0
+	failed := 0
 	for _, item := range items {
 		switch item.Status {
 		case TaskDone:
 			done++
 			fmt.Fprintf(&b, "\n### %s: %s\n%s\n", item.Agent, item.Desc, utils.TruncateRunes(item.Output, summaryMaxRunes))
 		case TaskError, TaskBlocked, TaskProtocolIncomplete:
+			failed++
 			fmt.Fprintf(&b, "\n### %s: %s\nFAILED: %s\n", item.Agent, item.Desc, FailureDisplayText(item))
 		}
 	}
-	if done == 0 {
+	if done == 0 && failed == 0 {
 		return ""
 	}
 	return b.String()
