@@ -29,6 +29,22 @@ func TestValidateExecutionContract_Defaults(t *testing.T) {
 	}
 }
 
+func TestValidateExecutionContract_TemplateToolGrantMustBeBounded(t *testing.T) {
+	valid := TaskDef{Agent: "observer", Execution: ExecutionContract{
+		RequiresResult:     true,
+		ToolSequence:       []string{"terminal", "submit_result"},
+		TemplateToolGrants: []string{"terminal"},
+	}}
+	if err := ValidateExecutionContract(valid); err != nil {
+		t.Fatalf("bounded template tool grant rejected: %v", err)
+	}
+	invalid := valid
+	invalid.Execution.ToolSequence = []string{"submit_result"}
+	if err := ValidateExecutionContract(invalid); err == nil || !strings.Contains(err.Error(), "not used by tool_sequence") {
+		t.Fatalf("unbound template grant error = %v, want tool-sequence rejection", err)
+	}
+}
+
 func TestValidateExecutionContract_ValidKinds(t *testing.T) {
 	kinds := []ExecutionKind{
 		"",
@@ -161,6 +177,21 @@ func TestValidateExecutionContract_ToolInputSequence(t *testing.T) {
 			name: "requires aligned length",
 			task: TaskDef{Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"bash", "submit_result"}, ToolInputSequence: []map[string]any{{"command": "pwd"}}}},
 			want: "must have one entry",
+		},
+		{
+			name: "canonical requires aligned input sequence",
+			task: TaskDef{Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"bash", "submit_result"}, ToolInputCanonicalSequence: []bool{true, false}}},
+			want: "canonical_sequence requires one tool_input_sequence entry",
+		},
+		{
+			name: "canonical slot requires input",
+			task: TaskDef{Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"bash", "submit_result"}, ToolInputSequence: []map[string]any{{}, {}}, ToolInputCanonicalSequence: []bool{true, false}}},
+			want: "canonical tool input slot 1 requires a non-empty",
+		},
+		{
+			name: "unknown input transform",
+			task: TaskDef{Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"write", "submit_result"}, ToolInputTransformSequence: []string{"not-a-transform", ""}}},
+			want: "unsupported transform",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -587,17 +618,20 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 	// 1. Verify ExecutionContract struct exports only the declared specification fields
 	contractType := reflect.TypeOf(ExecutionContract{})
 	expectedFields := map[string]bool{
-		"Kind":                   true,
-		"RequiresResult":         true,
-		"RequiresVerification":   true,
-		"AllowsReplay":           true,
-		"ToolSequence":           true,
-		"ToolInputSequence":      true,
-		"ToolInputField":         true,
-		"ToolInputValueSequence": true,
-		"ToolExpectedExitCodes":  true,
-		"ForbidArtifacts":        true,
-		"Steps":                  true,
+		"Kind":                       true,
+		"RequiresResult":             true,
+		"RequiresVerification":       true,
+		"AllowsReplay":               true,
+		"ToolSequence":               true,
+		"ToolInputSequence":          true,
+		"ToolInputCanonicalSequence": true,
+		"ToolInputTransformSequence": true,
+		"TemplateToolGrants":         true,
+		"ToolInputField":             true,
+		"ToolInputValueSequence":     true,
+		"ToolExpectedExitCodes":      true,
+		"ForbidArtifacts":            true,
+		"Steps":                      true,
 	}
 
 	if contractType.NumField() != len(expectedFields) {
@@ -611,23 +645,27 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 		}
 	}
 
-	// 2. Verify buildAgentTaskProperties execution sub-properties map contains ONLY spec fields
+	// 2. Verify buildAgentTaskProperties exposes coordinator-authored fields
+	// only. TemplateToolGrants is static-team authority and must never appear
+	// in the delegation schema a coordinator model can populate.
 	props := buildAgentTaskProperties([]string{"worker"}, true, "/tmp/shared", nil, true)
 	execProp := props["execution"].(map[string]any)
 	execSubProps := execProp["properties"].(map[string]any)
 
 	expectedSchemaKeys := map[string]bool{
-		"kind":                      true,
-		"requires_result":           true,
-		"requires_verification":     true,
-		"allows_replay":             true,
-		"tool_sequence":             true,
-		"tool_input_sequence":       true,
-		"tool_input_field":          true,
-		"tool_input_value_sequence": true,
-		"tool_expected_exit_codes":  true,
-		"forbid_artifacts":          true,
-		"steps":                     true,
+		"kind":                          true,
+		"requires_result":               true,
+		"requires_verification":         true,
+		"allows_replay":                 true,
+		"tool_sequence":                 true,
+		"tool_input_sequence":           true,
+		"tool_input_canonical_sequence": true,
+		"tool_input_transform_sequence": true,
+		"tool_input_field":              true,
+		"tool_input_value_sequence":     true,
+		"tool_expected_exit_codes":      true,
+		"forbid_artifacts":              true,
+		"steps":                         true,
 	}
 
 	if len(execSubProps) != len(expectedSchemaKeys) {
@@ -638,6 +676,9 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 		if !expectedSchemaKeys[k] {
 			t.Errorf("execution schema contains non-spec key: %s", k)
 		}
+	}
+	if _, exposed := execSubProps["template_tool_grants"]; exposed {
+		t.Error("execution schema unexpectedly exposes template_tool_grants to coordinator delegation")
 	}
 
 	toolSequenceDescription := execSubProps["tool_sequence"].(map[string]any)["description"].(string)

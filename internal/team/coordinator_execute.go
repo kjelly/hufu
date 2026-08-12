@@ -92,6 +92,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		// no TODO/model call has happened and no execution retry is consumed.
 		return "", c.rejectDelegationPolicy(err.Error())
 	}
+	tasks, err = c.bindTaskGoalContracts(tasks)
+	if err != nil {
+		// A selector ambiguity is a static contract error. No TODO/model call has
+		// happened and no execution retry is consumed.
+		return "", c.rejectDelegationPolicy(err.Error())
+	}
 	// Normalize accidental mutation batching before policy/preflight. This
 	// preserves the coordinator's requested task set while making the safety
 	// dependency explicit to the DAG scheduler.

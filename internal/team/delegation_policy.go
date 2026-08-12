@@ -3,6 +3,8 @@ package team
 import (
 	"fmt"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // validateDelegationPolicy rejects configured dispatch violations before a
@@ -96,6 +98,22 @@ func (c *Coordinator) validateTaskGoalInvariants(tasks []TaskDef) error {
 					return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].goal violates task-goal-invariants[%d]: forbidden literal is present", taskIndex, invariantIndex))
 				}
 			}
+			if invariant.RequiredTaskReference != nil {
+				if err := c.validateTaskGoalReference(task.Goal, *invariant.RequiredTaskReference); err != nil {
+					return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].goal violates task-goal-invariants[%d]: %v", taskIndex, invariantIndex, err))
+				}
+			}
+			seenReferences := make(map[string]bool, len(invariant.RequiredTaskReferences))
+			for _, reference := range invariant.RequiredTaskReferences {
+				if err := c.validateTaskGoalReference(task.Goal, reference); err != nil {
+					return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].goal violates task-goal-invariants[%d]: %v", taskIndex, invariantIndex, err))
+				}
+				id := taskGoalReferenceValue(task.Goal, reference.GoalPrefix)
+				if seenReferences[id] {
+					return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].goal violates task-goal-invariants[%d]: required task references must name distinct completed Todos", taskIndex, invariantIndex))
+				}
+				seenReferences[id] = true
+			}
 			if len(invariant.RequiredToolSequence) > 0 && !sameStringSequence(task.Execution.ToolSequence, invariant.RequiredToolSequence) {
 				return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].execution.tool_sequence violates task-goal-invariants[%d]: required exact tool sequence is missing", taskIndex, invariantIndex))
 			}
@@ -107,6 +125,51 @@ func (c *Coordinator) validateTaskGoalInvariants(tasks []TaskDef) error {
 		}
 	}
 	return nil
+}
+
+func taskGoalReferenceValue(goal, prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	for _, line := range strings.Split(goal, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	return ""
+}
+
+func (c *Coordinator) validateTaskGoalReference(goal string, reference agent.TaskGoalReference) error {
+	prefix := strings.TrimSpace(reference.GoalPrefix)
+	if prefix == "" {
+		return fmt.Errorf("required task reference has an empty goal prefix")
+	}
+	var values []string
+	for _, line := range strings.Split(goal, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			values = append(values, strings.TrimSpace(strings.TrimPrefix(line, prefix)))
+		}
+	}
+	if len(values) != 1 || values[0] == "" {
+		return fmt.Errorf("required task reference %q must occur exactly once with a non-empty Todo ID", prefix)
+	}
+	taskID := values[0]
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item == nil || item.ID != taskID {
+			continue
+		}
+		if item.Status != TaskDone {
+			return fmt.Errorf("referenced Todo %q is %s, not done", taskID, item.Status)
+		}
+		if !strings.EqualFold(strings.TrimSpace(item.Agent), strings.TrimSpace(reference.Agent)) {
+			return fmt.Errorf("referenced Todo %q was produced by %q, not %q", taskID, item.Agent, reference.Agent)
+		}
+		if !strings.Contains(item.Desc, reference.TaskContains) {
+			return fmt.Errorf("referenced Todo %q does not match the required task selector", taskID)
+		}
+		return nil
+	}
+	return fmt.Errorf("referenced Todo %q does not exist", taskID)
 }
 
 func sameStringSequence(left, right []string) bool {
@@ -142,6 +205,10 @@ func executionContractFieldPresent(contract ExecutionContract, field string) boo
 		return len(contract.ToolSequence) > 0
 	case "tool_input_sequence":
 		return len(contract.ToolInputSequence) > 0
+	case "tool_input_canonical_sequence":
+		return len(contract.ToolInputCanonicalSequence) > 0
+	case "tool_input_transform_sequence":
+		return len(contract.ToolInputTransformSequence) > 0
 	case "tool_input_field":
 		return contract.ToolInputField != ""
 	case "tool_input_value_sequence":
@@ -155,7 +222,7 @@ func executionContractFieldPresent(contract ExecutionContract, field string) boo
 
 func knownExecutionContractField(field string) bool {
 	switch field {
-	case "kind", "requires_result", "requires_verification", "allows_replay", "forbid_artifacts", "steps", "tool_sequence", "tool_input_sequence", "tool_input_field", "tool_input_value_sequence", "tool_expected_exit_codes":
+	case "kind", "requires_result", "requires_verification", "allows_replay", "forbid_artifacts", "steps", "tool_sequence", "tool_input_sequence", "tool_input_canonical_sequence", "tool_input_transform_sequence", "tool_input_field", "tool_input_value_sequence", "tool_expected_exit_codes":
 		return true
 	default:
 		return false
@@ -235,6 +302,17 @@ func (c *Coordinator) bindInitialTaskContracts(tasks []TaskDef) ([]TaskDef, erro
 		return tasks, nil
 	}
 	bound, _, err := CompileInitialTaskContracts(c.session, tasks)
+	return bound, err
+}
+
+// bindTaskGoalContracts applies an opt-in, goal-selected static contract to a
+// later dispatch. The template is authoritative so generic coordinator schema
+// defaults cannot leak into a dynamic closed sequence.
+func (c *Coordinator) bindTaskGoalContracts(tasks []TaskDef) ([]TaskDef, error) {
+	if c == nil || c.session == nil || c.taskTracker == nil {
+		return tasks, nil
+	}
+	bound, _, err := CompileTaskGoalContracts(c.session, tasks)
 	return bound, err
 }
 

@@ -120,6 +120,24 @@ type ExecutionContract struct {
 	// underlying tool runs. This makes an atomic task's call budget enforceable
 	// without assigning semantics to a provider, command, or integration.
 	ToolInputSequence []map[string]any `json:"tool_input_sequence,omitempty" yaml:"tool-input-sequence,omitempty"`
+	// ToolInputCanonicalSequence optionally marks a ToolInputSequence slot as
+	// template-owned. A true entry means the runtime replaces the model's input
+	// with that slot's exact JSON object and emits a policy event when it had to
+	// substitute it. This is intentionally per-slot: adjacent slots may require
+	// runtime-produced IDs or result content and therefore remain constrained,
+	// not canonicalized.
+	ToolInputCanonicalSequence []bool `json:"tool_input_canonical_sequence,omitempty" yaml:"tool-input-canonical-sequence,omitempty"`
+	// ToolInputTransformSequence optionally applies a named, runtime-owned
+	// structural transform to a slot after normal input binding and before the
+	// underlying tool runs. It is per-slot so dynamic values remain dynamic.
+	// A transform name is accepted only when Hufu implements it.
+	ToolInputTransformSequence []string `json:"tool_input_transform_sequence,omitempty" yaml:"tool-input-transform-sequence,omitempty"`
+	// TemplateToolGrants is the narrow exception to a team-level tool denial.
+	// A grant is effective only for a goal-selected static contract (never for
+	// coordinator-authored execution), and only when the worker also declares
+	// the tool in its own frontmatter. This supports bounded interactive
+	// observation without exposing a session-management capability to the team.
+	TemplateToolGrants []string `json:"template_tool_grants,omitempty" yaml:"template-tool-grants,omitempty"`
 	// ToolInputField and ToolInputValueSequence provide a compact alternative
 	// only for a homogeneous ToolSequence. Mixed tool calls use
 	// ToolInputSequence so each slot can constrain its own typed payload.
@@ -323,6 +341,8 @@ func ValidateExecutionContractFull(task TaskDef, lintMode string) ContractPrefli
 			Message:  "tool_input_sequence requires a non-empty tool_sequence",
 		})
 	}
+	findings = append(findings, validateToolInputBindings(c)...)
+	findings = append(findings, validateTemplateToolGrants(c)...)
 	findings = append(findings, validateToolInputValueSequence(c)...)
 	findings = append(findings, validateToolExpectedExitCodes(c)...)
 	if len(c.Steps) > 0 {
@@ -372,6 +392,66 @@ func ValidateExecutionContractFull(task TaskDef, lintMode string) ContractPrefli
 		Findings:    findings,
 		Environment: ExecutionEnvironment{},
 	}
+}
+
+func validateTemplateToolGrants(c ExecutionContract) []ContractFinding {
+	if len(c.TemplateToolGrants) == 0 {
+		return nil
+	}
+	if len(c.ToolSequence) == 0 {
+		return []ContractFinding{{Severity: FindingSeverityError, Code: "template_tool_grants_requires_tools", Field: "execution.template_tool_grants", Message: "template_tool_grants requires a non-empty tool_sequence"}}
+	}
+	seen := make(map[string]bool, len(c.TemplateToolGrants))
+	for _, grant := range c.TemplateToolGrants {
+		grant = strings.TrimSpace(grant)
+		if grant == "" || seen[grant] {
+			return []ContractFinding{{Severity: FindingSeverityError, Code: "template_tool_grants_invalid", Field: "execution.template_tool_grants", Message: "template_tool_grants must contain unique non-empty tool names"}}
+		}
+		seen[grant] = true
+		found := false
+		for _, tool := range c.ToolSequence {
+			if tool == grant {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return []ContractFinding{{Severity: FindingSeverityError, Code: "template_tool_grant_not_in_sequence", Field: "execution.template_tool_grants", Message: fmt.Sprintf("template tool grant %q is not used by tool_sequence", grant)}}
+		}
+	}
+	return nil
+}
+
+func validateToolInputBindings(c ExecutionContract) []ContractFinding {
+	var findings []ContractFinding
+	if len(c.ToolInputCanonicalSequence) > 0 {
+		if len(c.ToolSequence) == 0 {
+			findings = append(findings, ContractFinding{Severity: FindingSeverityError, Code: "tool_input_canonical_sequence_requires_tools", Field: "execution.tool_input_canonical_sequence", Message: "tool_input_canonical_sequence requires a non-empty tool_sequence and tool_input_sequence"})
+		} else if len(c.ToolInputCanonicalSequence) != len(c.ToolSequence) || len(c.ToolInputSequence) != len(c.ToolSequence) {
+			findings = append(findings, ContractFinding{Severity: FindingSeverityError, Code: "tool_input_canonical_sequence_length", Field: "execution.tool_input_canonical_sequence", Message: "tool_input_canonical_sequence requires one tool_input_sequence entry for every tool_sequence slot"})
+		} else {
+			for i, canonical := range c.ToolInputCanonicalSequence {
+				if canonical && len(c.ToolInputSequence[i]) == 0 {
+					findings = append(findings, ContractFinding{Severity: FindingSeverityError, Code: "tool_input_canonical_sequence_empty_slot", Field: "execution.tool_input_canonical_sequence", Message: fmt.Sprintf("canonical tool input slot %d requires a non-empty tool_input_sequence object", i+1)})
+				}
+			}
+		}
+	}
+	if len(c.ToolInputTransformSequence) == 0 {
+		return findings
+	}
+	if len(c.ToolSequence) == 0 {
+		return append(findings, ContractFinding{Severity: FindingSeverityError, Code: "tool_input_transform_sequence_requires_tools", Field: "execution.tool_input_transform_sequence", Message: "tool_input_transform_sequence requires a non-empty tool_sequence"})
+	}
+	if len(c.ToolInputTransformSequence) != len(c.ToolSequence) {
+		return append(findings, ContractFinding{Severity: FindingSeverityError, Code: "tool_input_transform_sequence_length", Field: "execution.tool_input_transform_sequence", Message: "tool_input_transform_sequence must have one entry for every tool_sequence slot"})
+	}
+	for i, transform := range c.ToolInputTransformSequence {
+		if transform != "" && !knownToolInputTransform(transform) {
+			findings = append(findings, ContractFinding{Severity: FindingSeverityError, Code: "tool_input_transform_sequence_unknown", Field: "execution.tool_input_transform_sequence", Message: fmt.Sprintf("tool input transform slot %d names unsupported transform %q", i+1, transform)})
+		}
+	}
+	return findings
 }
 
 func validateToolInputValueSequence(c ExecutionContract) []ContractFinding {
