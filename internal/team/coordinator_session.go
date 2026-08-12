@@ -402,6 +402,11 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	if sd.RunResult != nil {
 		c.SetLastRunResult(sd.RunResult)
 	}
+	if c.phaseWorkflow != nil {
+		if err := c.phaseWorkflow.restore(sd.WorkflowState, sd.PhaseResults, sd.RuntimeWorkspace, sd.RetryState); err != nil {
+			log.Printf("warning: runtime workflow checkpoint ignored: %v", err)
+		}
+	}
 	c.diagnosticPacketsMu.Lock()
 	c.diagnosticPackets = append([]DiagnosticPacket(nil), sd.DiagnosticPackets...)
 	c.diagnosticPacketsMu.Unlock()
@@ -606,6 +611,9 @@ func (c *Coordinator) saveCheckpoint() {
 		return
 	}
 	c.sessionData.Tasks = c.taskTracker.TodoList().Items()
+	if c.phaseWorkflow != nil {
+		c.sessionData.WorkflowState, c.sessionData.PhaseResults, c.sessionData.RuntimeWorkspace, c.sessionData.RetryState = c.phaseWorkflow.snapshot()
+	}
 	_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
 	c.emitPendingDiagnosticPackets()
 	c.emitTaskEventsFromCheckpoint(c.sessionData.Tasks)
@@ -887,7 +895,7 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 		id = it.ID
 	}
 	return TaskDef{
-		ID: id, Agent: it.Agent, Goal: it.Desc, Verify: it.Verify, VerifyMode: it.VerifyMode,
+		ID: id, Phase: it.Phase, Action: cloneActionPtr(it.Action), Agent: it.Agent, Goal: it.Desc, Verify: it.Verify, VerifyMode: it.VerifyMode,
 		VerifySpec: cloneVerificationSpecPtr(it.VerifySpec), SideEffect: it.SideEffect,
 		Recovery: it.Recovery, ReconcileTool: it.ReconcileTool, Execution: it.Execution,
 		Kind: it.Kind, Advances: append([]string(nil), it.Advances...),

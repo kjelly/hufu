@@ -133,6 +133,7 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 
 func cloneTaskDef(td TaskDef) TaskDef {
 	clone := td
+	clone.Action = cloneActionPtr(td.Action)
 	if td.ContextFiles != nil {
 		clone.ContextFiles = make([]string, len(td.ContextFiles))
 		copy(clone.ContextFiles, td.ContextFiles)
@@ -154,4 +155,12 @@ func cloneTaskDef(td TaskDef) TaskDef {
 	clone.VerifySpec = cloneVerificationSpecPtr(td.VerifySpec)
 	clone.RecoveryHypothesis = cloneRecoveryHypothesis(td.RecoveryHypothesis)
 	return clone
+}
+
+func cloneActionPtr(action *Action) *Action {
+	if action == nil {
+		return nil
+	}
+	clone := *action
+	return &clone
 }

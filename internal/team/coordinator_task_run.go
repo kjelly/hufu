@@ -43,6 +43,12 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if err := c.validateContractStructural(task, todoID); err != nil {
 		return "", err
 	}
+	if task.Action != nil {
+		if c == nil || c.phaseWorkflow == nil {
+			return "", fmt.Errorf("structured action %q has no runtime workflow", task.Action.Type)
+		}
+		return c.executeRuntimeAction(parentCtx, task, todoID)
+	}
 	if len(task.Execution.Steps) > 0 {
 		return c.executeStructuredCoordinatorTask(parentCtx, task, todoID)
 	}
@@ -216,6 +222,19 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	prompt = c.appendSkillContext(prompt, agentDef, agentName, task.Goal, todoID)
 
+	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+		execCtx := c.phaseWorkflow.executionContext()
+		prompt += "\n\n## Execution Context\n\n"
+		prompt += fmt.Sprintf("- **Phase**: `%s`\n", c.phaseWorkflow.State())
+		prompt += fmt.Sprintf("- **Runtime Workspace**: `%s`\n", execCtx.RuntimeWorkspace.Root)
+		prompt += fmt.Sprintf("- **Artifacts Directory**: `%s/artifacts`\n", execCtx.RuntimeWorkspace.Root)
+		prompt += fmt.Sprintf("- **Receipts Directory**: `%s/receipts`\n", execCtx.RuntimeWorkspace.Root)
+		prompt += "Ensure all durable outputs are written to the artifacts directory, not the project source.\n"
+		if len(execCtx.Capabilities.Required) > 0 {
+			prompt += fmt.Sprintf("- **Required Capabilities**: `%s`\n", strings.Join(execCtx.Capabilities.Required, ", "))
+		}
+	}
+
 	contextFiles := make(map[string]string)
 	if len(task.ContextFiles) > 0 {
 		for _, f := range task.ContextFiles {
@@ -335,6 +354,7 @@ retryLoop:
 		// Per-attempt tool call evidence — reset at the start of each
 		// attempt to prevent stale data from a prior attempt or task.
 		attemptEvidence := &toolCallEvidence{}
+		var attemptSequence *taskToolSequence
 		transcript = nil
 		closeTranscript := func() {
 			if transcript != nil {
@@ -491,8 +511,11 @@ retryLoop:
 			if len(agentDef.Guard) > 0 {
 				taskCtx = context.WithValue(taskCtx, tools.GuardRulesKey, agentDef.Guard)
 			}
-			if len(agentDef.AllowedPaths) > 0 {
-				taskCtx = context.WithValue(taskCtx, tools.AgentAllowedPathsKey, agentDef.AllowedPaths)
+			if allowedPaths := c.runtimeAllowedPaths(agentDef.AllowedPaths); len(allowedPaths) > 0 {
+				taskCtx = context.WithValue(taskCtx, tools.AgentAllowedPathsKey, allowedPaths)
+			}
+			if writePaths := c.runtimeAllowedWritePaths(); len(writePaths) > 0 {
+				taskCtx = context.WithValue(taskCtx, tools.AgentAllowedWritePathsKey, writePaths)
 			}
 			if agentDef.RestrictedPath != "" {
 				taskCtx = context.WithValue(taskCtx, tools.AgentRestrictedPathKey, agentDef.RestrictedPath)
@@ -515,6 +538,7 @@ retryLoop:
 
 			taskCtx = c.withEffectiveToolsAllowedForTask(taskCtx, agentDef, exposedToolNames, task)
 			if sequence := newTaskToolSequenceWithBindings(task.Execution.ToolSequence, task.Execution.ToolInputSequence, task.Execution.ToolInputField, task.Execution.ToolInputValueSequence, task.Execution.ToolExpectedExitCodes, task.Execution.ToolInputCanonicalSequence, task.Execution.ToolInputTransformSequence); sequence != nil {
+				attemptSequence = sequence
 				taskCtx = context.WithValue(taskCtx, taskToolSequenceKey{}, sequence)
 			}
 
@@ -729,6 +753,7 @@ retryLoop:
 						repairCtx = context.WithValue(repairCtx, hooks.AgentNameKey, agentName)
 						repairCtx = context.WithValue(repairCtx, hooks.TeamNameKey, c.session.Config.Name)
 						repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, taskDesc)
+						repairCtx = context.WithValue(repairCtx, taskToolSequenceKey{}, attemptSequence.protocolRepairSequence())
 
 						_, repairSteps, _ := c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, prompt, repairHistory, timing, fantasy.StepCountIs(1))
 						typedRes = c.GetTaskResult(todoID)
@@ -1185,6 +1210,47 @@ retryLoop:
 		failErr = fmt.Errorf("%w\n\nLast agent output before failure (may contain useful findings):\n%s", failErr, utils.TruncateRunes(lastOutput, 2000))
 	}
 	return "", failErr
+}
+
+// executeRuntimeAction gives provider-backed actions the same durable TODO
+// lifecycle as worker tasks. In particular, a successful provider response
+// must mark its static contract done so the phase state machine can advance.
+func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, todoID string) (string, error) {
+	if err := c.taskTracker.TodoList().SetRuntimeError(todoID, nil); err != nil {
+		return "", fmt.Errorf("clear structured action error: %w", err)
+	}
+	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskInProgress, "executing structured action", ""); err != nil {
+		return "", fmt.Errorf("mark structured action in progress: %w", err)
+	}
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	output, err := c.phaseWorkflow.executeAction(ctx, *task.Action)
+	if err != nil {
+		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
+		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
+		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
+		return "", err
+	}
+	if task.Verify != "" || task.VerifySpec != nil {
+		if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskVerifying, "running objective verification", output); err != nil {
+			return "", fmt.Errorf("enter structured action verification: %w", err)
+		}
+		verification, verifyErr := c.verifyTaskDeliverableWithSpec(ctx, nil, task)
+		if verification != nil {
+			_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
+		}
+		if verifyErr != nil {
+			err := fmt.Errorf("structured action verification failed: %w", verifyErr)
+			c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
+			return "", err
+		}
+	}
+	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output); err != nil {
+		return "", fmt.Errorf("mark structured action done: %w", err)
+	}
+	c.reconcileTaskStatusProjection()
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(output).withMessage("structured action completed").withTodoID(todoID))
+	return output, nil
 }
 
 // materializeCheckpointedProtocolRepair fills the receipt gap between a

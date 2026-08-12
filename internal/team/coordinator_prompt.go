@@ -13,10 +13,41 @@ import (
 	"github.com/kjelly/hufu/internal/skill"
 )
 
+func (c *Coordinator) runtimeWorkflowWorkers(workerNames []string, workerDefs []*agent.AgentDef, initialPending bool) ([]string, []*agent.AgentDef, bool) {
+	if c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() {
+		return workerNames, workerDefs, initialPending
+	}
+	allowed := make(map[string]bool)
+	for _, name := range c.phaseWorkflow.activeWorkerNames() {
+		allowed[strings.ToLower(name)] = true
+	}
+	filtered := make([]*agent.AgentDef, 0, len(workerDefs))
+	names := make([]string, 0, len(workerDefs))
+	for _, def := range workerDefs {
+		if allowed[strings.ToLower(def.Name)] {
+			filtered = append(filtered, def)
+			names = append(names, def.Name)
+		}
+	}
+	return names, filtered, false
+}
+
+func (c *Coordinator) appendRuntimeWorkflowPrompt(b *strings.Builder) {
+	if c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() {
+		return
+	}
+	ctx := c.phaseWorkflow.executionContext()
+	fmt.Fprintf(b, "## Runtime Workflow\n\nCurrent runtime-owned phase: `%s`. Only the listed phase workers may be dispatched. Record durable artifacts under `%s` (artifacts: `%s`, receipts: `%s`). A phase advances only after every static task contract for that phase succeeds; `finish` remains unavailable until VERIFY succeeds.\n\n", c.phaseWorkflow.State(), ctx.RuntimeWorkspace.Root, filepath.Join(ctx.RuntimeWorkspace.Root, "artifacts"), filepath.Join(ctx.RuntimeWorkspace.Root, "receipts"))
+	if len(ctx.Capabilities.Required) > 0 {
+		fmt.Fprintf(b, "Required runtime capabilities: %s.\n\n", strings.Join(ctx.Capabilities.Required, ", "))
+	}
+}
+
 func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) string {
 	workerNames, _ := c.buildWorkerNamesAndDescs()
 	initialPending := c.initialDelegationPending()
 	workerDefs := c.uniqueWorkerDefs()
+	workerNames, workerDefs, initialPending = c.runtimeWorkflowWorkers(workerNames, workerDefs, initialPending)
 	if initialPending {
 		// Do not present later-phase workers as selectable evidence to a fresh
 		// coordinator. The initial agent-tool schema is narrowed independently;
@@ -37,6 +68,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the coordinator of team %q with %d members: %s.\n\n", c.session.Config.Name, len(workerNames), strings.Join(workerNames, ", "))
+	c.appendRuntimeWorkflowPrompt(&b)
 
 	b.WriteString("You MUST delegate ALL work to your team members. You do NOT have tools to do work yourself.\n\n")
 	if c.session.Config.Delegation.RequireExactInitialBatch {

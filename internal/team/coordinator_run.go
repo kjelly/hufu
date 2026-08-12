@@ -38,6 +38,9 @@ func ParseDirectAgent(prompt string) (agentName string, task string, ok bool) {
 func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (*DirectAgentResult, error) {
 	endExecutionRun := c.beginExecutionRun()
 	defer endExecutionRun()
+	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+		return nil, fmt.Errorf("direct agent invocation is disabled for runtime workflows; dispatch the active phase through the coordinator")
+	}
 	if err := c.ValidateWorkspaceIsolation(); err != nil {
 		return nil, err
 	}
@@ -109,8 +112,11 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if len(agentDef.Guard) > 0 {
 		taskCtx = context.WithValue(taskCtx, tools.GuardRulesKey, agentDef.Guard)
 	}
-	if len(agentDef.AllowedPaths) > 0 {
-		taskCtx = context.WithValue(taskCtx, tools.AgentAllowedPathsKey, agentDef.AllowedPaths)
+	if allowedPaths := c.runtimeAllowedPaths(agentDef.AllowedPaths); len(allowedPaths) > 0 {
+		taskCtx = context.WithValue(taskCtx, tools.AgentAllowedPathsKey, allowedPaths)
+	}
+	if writePaths := c.runtimeAllowedWritePaths(); len(writePaths) > 0 {
+		taskCtx = context.WithValue(taskCtx, tools.AgentAllowedWritePathsKey, writePaths)
 	}
 	if agentDef.RestrictedPath != "" {
 		taskCtx = context.WithValue(taskCtx, tools.AgentRestrictedPathKey, agentDef.RestrictedPath)
@@ -142,6 +148,19 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	reconcileDirectStatus()
 
 	prompt := c.appendSkillContext(task, agentDef, resolvedName, task, todoID)
+
+	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+		execCtx := c.phaseWorkflow.executionContext()
+		prompt += "\n\n## Execution Context\n\n"
+		prompt += fmt.Sprintf("- **Phase**: `%s`\n", c.phaseWorkflow.State())
+		prompt += fmt.Sprintf("- **Runtime Workspace**: `%s`\n", execCtx.RuntimeWorkspace.Root)
+		prompt += fmt.Sprintf("- **Artifacts Directory**: `%s/artifacts`\n", execCtx.RuntimeWorkspace.Root)
+		prompt += fmt.Sprintf("- **Receipts Directory**: `%s/receipts`\n", execCtx.RuntimeWorkspace.Root)
+		prompt += "Ensure all durable outputs are written to the artifacts directory, not the project source.\n"
+		if len(execCtx.Capabilities.Required) > 0 {
+			prompt += fmt.Sprintf("- **Required Capabilities**: `%s`\n", strings.Join(execCtx.Capabilities.Required, ", "))
+		}
+	}
 
 	// Phase 2 keeps the legacy prompt path authoritative. Compile a shadow
 	// bundle for comparison only; a compiler failure must never affect a task.
@@ -1062,6 +1081,13 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	}
 
 	_ = EnsureWorkspaceDirs(c.session.Workspace)
+	if c.phaseWorkflow != nil {
+		if err := c.phaseWorkflow.Start(); err != nil {
+			c.saveCheckpoint()
+			return "", err
+		}
+		c.saveCheckpoint()
+	}
 	// Status files are projections, so rebuild them from the restored canonical
 	// todo/session state before crash-resume can start new work.
 	c.reconcileTaskStatusProjection()

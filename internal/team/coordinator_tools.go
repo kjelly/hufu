@@ -40,7 +40,7 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 		"type":  "array",
 		"items": taskSchema,
 	}
-	if t.coordinator.initialDelegationPending() {
+	if t.coordinator.initialDelegationPending() && (t.coordinator.phaseWorkflow == nil || !t.coordinator.phaseWorkflow.Enabled()) {
 		initial := append([]string(nil), t.coordinator.session.Config.Delegation.InitialBatch...)
 		taskProperties["agent"] = map[string]any{
 			"type":        "string",
@@ -189,6 +189,11 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	}
 
 	todoList := t.coordinator.taskTracker.TodoList()
+	if t.coordinator.phaseWorkflow != nil {
+		if err := t.coordinator.phaseWorkflow.requireFinished(); err != nil {
+			return fantasy.NewTextErrorResponse("cannot finish: " + err.Error()), nil
+		}
+	}
 	failedTasks := failedTodoItems(todoList.Items())
 	prof := t.coordinator.ExecutionProfile()
 

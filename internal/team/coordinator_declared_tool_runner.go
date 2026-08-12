@@ -67,8 +67,11 @@ func (r *coordinatorDeclaredToolRunner) RunStructuredStep(ctx context.Context, r
 	if len(agentDef.Guard) > 0 {
 		stepCtx = context.WithValue(stepCtx, tools.GuardRulesKey, agentDef.Guard)
 	}
-	if len(agentDef.AllowedPaths) > 0 {
-		stepCtx = context.WithValue(stepCtx, tools.AgentAllowedPathsKey, agentDef.AllowedPaths)
+	if allowedPaths := r.c.runtimeAllowedPaths(agentDef.AllowedPaths); len(allowedPaths) > 0 {
+		stepCtx = context.WithValue(stepCtx, tools.AgentAllowedPathsKey, allowedPaths)
+	}
+	if writePaths := r.c.runtimeAllowedWritePaths(); len(writePaths) > 0 {
+		stepCtx = context.WithValue(stepCtx, tools.AgentAllowedWritePathsKey, writePaths)
 	}
 	if agentDef.RestrictedPath != "" {
 		stepCtx = context.WithValue(stepCtx, tools.AgentRestrictedPathKey, agentDef.RestrictedPath)

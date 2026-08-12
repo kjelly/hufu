@@ -74,15 +74,22 @@ type TaskDef struct {
 	// coordinator dispatch. It is configuration-only and is never exposed as a
 	// coordinator tool parameter.
 	WhenGoalContains string `json:"-" yaml:"when-goal-contains,omitempty"`
-	ContractID       string `json:"contract_id,omitempty"`
-	ContractHash     string `json:"contract_hash,omitempty"`
-	ContractRevision int    `json:"contract_revision,omitempty"`
-	Agent            string `json:"agent"`
-	Goal             string `json:"goal"`
-	Constraints      string `json:"constraints,omitempty"`
-	Model            string `json:"model,omitempty"`
-	Sidecar          bool   `json:"sidecar,omitempty"`
-	Summarize        bool   `json:"summarize,omitempty"`
+	// Phase is configuration-only when a runtime workflow is enabled. The
+	// coordinator cannot set it through the agent tool; static task contracts
+	// bind it to a runtime-owned workflow phase.
+	Phase Phase `json:"-" yaml:"phase,omitempty"`
+	// Action is a static execute-phase contract. Its JSON omission prevents a
+	// coordinator from choosing a provider, action type, or payload at runtime.
+	Action           *Action `json:"-" yaml:"action,omitempty"`
+	ContractID       string  `json:"contract_id,omitempty"`
+	ContractHash     string  `json:"contract_hash,omitempty"`
+	ContractRevision int     `json:"contract_revision,omitempty"`
+	Agent            string  `json:"agent"`
+	Goal             string  `json:"goal"`
+	Constraints      string  `json:"constraints,omitempty"`
+	Model            string  `json:"model,omitempty"`
+	Sidecar          bool    `json:"sidecar,omitempty"`
+	Summarize        bool    `json:"summarize,omitempty"`
 	// OutputMode controls how the worker's output is returned to the
 	// coordinator. "verbatim" captures tool activity in a runner-owned
 	// transcript artifact and returns only its manifest, keeping raw output out
@@ -499,6 +506,7 @@ type Coordinator struct {
 	contextCompiler     ContextCompiler
 	agentPool           AgentPool
 	workflowEngine      WorkflowEngine
+	phaseWorkflow       *runtimeWorkflow
 }
 
 // SetUnattended enables unattended (no-human) mode: ask_user returns safe
@@ -891,6 +899,11 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		maxDrafts:              maxDraftsPerSession,
 	}
 	coordinator = c
+	phaseWorkflow, err := newRuntimeWorkflow(session)
+	if err != nil {
+		return nil, err
+	}
+	c.phaseWorkflow = phaseWorkflow
 
 	effectiveGoalMode, err := ResolveEffectiveGoalMode(session.Config.GoalMode, session.Config.ExecutionProfile)
 	if err != nil {
@@ -1294,7 +1307,7 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 				},
 				"tool_sequence": map[string]any{
 					"type":        "array",
-					"items":       map[string]any{"type": "string"},
+					"items":       map[string]any{"type": "string", "pattern": `^\S+$`},
 					"description": "Optional exact tool-call sequence for an atomic task. It is the complete call budget, not a tool-type summary: include one entry per call in order (repeat bash for every bash call and include write when the task writes a file), then end with submit_result. Hufu exposes only these tools and rejects out-of-order or extra calls.",
 				},
 				"tool_input_sequence": map[string]any{
@@ -1323,7 +1336,7 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 				},
 				"tool_expected_exit_codes": map[string]any{
 					"type":        "array",
-					"items":       map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
+					"items":       map[string]any{"type": "array", "items": map[string]any{"type": "integer", "not": map[string]any{"const": 0}}},
 					"description": "Optional expected non-zero process exit codes, one integer array per tool_sequence slot. Use an empty array when normal success-only handling is required. A declared code (for example timeout exit 124) is returned as normal observation evidence and the sequence continues.",
 				},
 				"steps": map[string]any{

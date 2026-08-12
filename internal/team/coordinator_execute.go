@@ -98,6 +98,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		// happened and no execution retry is consumed.
 		return "", c.rejectDelegationPolicy(err.Error())
 	}
+	if c.phaseWorkflow != nil {
+		if err := c.phaseWorkflow.validateTasks(tasks); err != nil {
+			return "", c.rejectDelegationPolicy(err.Error())
+		}
+	}
 	// Normalize accidental mutation batching before policy/preflight. This
 	// preserves the coordinator's requested task set while making the safety
 	// dependency explicit to the DAG scheduler.
@@ -291,6 +296,8 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		sideEffect, recovery, reconcileTool := c.PolicyEngine().ResolveRecoveryPolicy(agentDef, t)
 		todoBatch[i] = TodoSpec{
 			PlanTaskID:          t.ID,
+			Phase:               t.Phase,
+			Action:              cloneActionPtr(t.Action),
 			ContractID:          t.ContractID,
 			ContractHash:        t.ContractHash,
 			ContractRevision:    t.ContractRevision,
@@ -400,7 +407,18 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 
 	results, err := newDAGScheduler(c, tasks, todoItems, duplicateIndices).run(ctx)
 	if err != nil {
+		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+			_ = c.phaseWorkflow.fail("scheduler", "scheduler", CategoryInternalError, err.Error(), false)
+			c.saveCheckpoint()
+		}
 		return "", err
+	}
+	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+		if err := c.phaseWorkflow.observe(c.taskTracker.TodoList().Items()); err != nil {
+			c.saveCheckpoint()
+			return "", err
+		}
+		c.saveCheckpoint()
 	}
 
 	if c.forcePlanFirst {

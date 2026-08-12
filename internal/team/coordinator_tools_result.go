@@ -53,26 +53,32 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 			"files_read": map[string]any{
 				"type":        "array",
 				"description": "List of files read during the task.",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"path":    map[string]any{"type": "string"},
-						"purpose": map[string]any{"type": "string"},
+				"items": map[string]any{"oneOf": []any{
+					map[string]any{"type": "string"},
+					map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"path":    map[string]any{"type": "string"},
+							"purpose": map[string]any{"type": "string"},
+						},
+						"required": []string{"path"},
 					},
-					"required": []string{"path"},
-				},
+				}},
 			},
 			"files_modified": map[string]any{
 				"type":        "array",
 				"description": "List of files modified or created during the task.",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"path":    map[string]any{"type": "string"},
-						"purpose": map[string]any{"type": "string"},
+				"items": map[string]any{"oneOf": []any{
+					map[string]any{"type": "string"},
+					map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"path":    map[string]any{"type": "string"},
+							"purpose": map[string]any{"type": "string"},
+						},
+						"required": []string{"path"},
 					},
-					"required": []string{"path"},
-				},
+				}},
 			},
 			"decisions": map[string]any{
 				"type":        "array",

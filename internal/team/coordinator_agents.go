@@ -256,6 +256,19 @@ func containsPart(parts []string, s string) bool {
 
 func (c *Coordinator) workerNameList() []string {
 	names, _ := c.buildWorkerNamesAndDescs()
+	if c != nil && c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+		allowed := make(map[string]bool)
+		for _, name := range c.phaseWorkflow.activeWorkerNames() {
+			allowed[strings.ToLower(name)] = true
+		}
+		filtered := make([]string, 0, len(names))
+		for _, name := range names {
+			if allowed[strings.ToLower(name)] {
+				filtered = append(filtered, name)
+			}
+		}
+		return filtered
+	}
 	if c == nil || c.session == nil || len(c.session.Config.Delegation.AllowedWorkers) == 0 {
 		return names
 	}
