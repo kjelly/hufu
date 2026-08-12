@@ -209,31 +209,36 @@ func (t *TaskTracker) TodoList() *TodoList {
 }
 
 type TodoItem struct {
-	ID                  string
-	PlanTaskID          string `json:"plan_task_id,omitempty"`
-	ContractID          string `json:"contract_id,omitempty"`
-	ContractHash        string `json:"contract_hash,omitempty"`
-	ContractRevision    int    `json:"contract_revision,omitempty"`
-	Agent               string
-	Desc                string
-	Status              TaskStatus
-	Detail              string
-	Output              string // Full task output
-	Model               string
-	Skills              []string
-	InjectedSkills      []string
-	LoadedSkills        []string
-	StartedAt           time.Time
-	EndedAt             time.Time
-	ModelTime           time.Duration
-	ToolTime            time.Duration
-	Source              string
-	ParentID            string
-	DependsOn           []string          // IDs of tasks that must complete before this one starts
-	Verify              string            // Command to run to verify the task
-	VerifyMode          string            // success, expected_failure, or observation
-	VerifySpec          *VerificationSpec `json:"verify_spec,omitempty"`
-	VerifyResult        *VerificationResult
+	ID               string
+	Phase            Phase   `json:"phase,omitempty"`
+	Action           *Action `json:"action,omitempty"`
+	PlanTaskID       string  `json:"plan_task_id,omitempty"`
+	ContractID       string  `json:"contract_id,omitempty"`
+	ContractHash     string  `json:"contract_hash,omitempty"`
+	ContractRevision int     `json:"contract_revision,omitempty"`
+	Agent            string
+	Desc             string
+	Status           TaskStatus
+	Detail           string
+	Output           string // Full task output
+	Model            string
+	Skills           []string
+	InjectedSkills   []string
+	LoadedSkills     []string
+	StartedAt        time.Time
+	EndedAt          time.Time
+	ModelTime        time.Duration
+	ToolTime         time.Duration
+	Source           string
+	ParentID         string
+	DependsOn        []string          // IDs of tasks that must complete before this one starts
+	Verify           string            // Command to run to verify the task
+	VerifyMode       string            // success, expected_failure, or observation
+	VerifySpec       *VerificationSpec `json:"verify_spec,omitempty"`
+	VerifyResult     *VerificationResult
+	// RuntimeError preserves a structured runtime/provider failure so phase
+	// aggregation does not degrade it into an unclassified worker error.
+	RuntimeError        *ExecutionError      `json:"runtime_error,omitempty"`
 	ExecutionReceipt    *ExecutionReceipt    `json:"execution_receipt,omitempty"`
 	ExecutionReceipts   []ExecutionReceipt   `json:"execution_receipts,omitempty"`
 	FailureEvent        *FailureEventPayload `json:"failure_event,omitempty"`
@@ -281,6 +286,8 @@ func (tl *TodoList) RunID() string {
 // TodoSpec describes a todo item to be created via AddBatch.
 type TodoSpec struct {
 	PlanTaskID          string
+	Phase               Phase
+	Action              *Action
 	ContractID          string
 	ContractHash        string
 	ContractRevision    int
@@ -312,6 +319,8 @@ func (tl *TodoList) AddBatch(items []TodoSpec) []*TodoItem {
 		ti := &TodoItem{
 			ID:                  fmt.Sprintf("%d", tl.next),
 			PlanTaskID:          item.PlanTaskID,
+			Phase:               item.Phase,
+			Action:              cloneActionPtr(item.Action),
 			ContractID:          item.ContractID,
 			ContractHash:        item.ContractHash,
 			ContractRevision:    item.ContractRevision,
@@ -542,11 +551,38 @@ func (tl *TodoList) SetVerificationResult(id string, result *VerificationResult)
 		if ti.ID == id {
 			if result == nil {
 				ti.VerifyResult = nil
+				ti.RuntimeError = nil
 				updated = true
 				break
 			}
 			copyResult := *result
 			ti.VerifyResult = &copyResult
+			updated = true
+			break
+		}
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
+}
+
+func (tl *TodoList) SetRuntimeError(id string, runtimeErr *ExecutionError) error {
+	tl.mu.Lock()
+	updated := false
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			if runtimeErr == nil {
+				ti.RuntimeError = nil
+			} else {
+				copyErr := *runtimeErr
+				ti.RuntimeError = &copyErr
+			}
 			updated = true
 			break
 		}
@@ -669,6 +705,7 @@ func (tl *TodoList) ResetForRetry(id string, detail string) {
 			ti.Detail = detail
 			ti.Output = ""
 			ti.VerifyResult = nil
+			ti.RuntimeError = nil
 			ti.RecoveryState = RecoveryStateNotStarted
 			ti.LastOperation = ""
 			ti.Progress = ProgressUnknown
@@ -751,6 +788,12 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		copyResult.Spec = cloneVerificationSpecPtr(item.VerifyResult.Spec)
 		verifyResult = &copyResult
 	}
+	var runtimeErr *ExecutionError
+	if item.RuntimeError != nil {
+		copyErr := *item.RuntimeError
+		copyErr.Evidence = append([]string(nil), item.RuntimeError.Evidence...)
+		runtimeErr = &copyErr
+	}
 	var typedResult *TaskResult
 	if item.TypedResult != nil {
 		copyTR := *item.TypedResult
@@ -782,6 +825,8 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 	}
 	return &TodoItem{
 		ID:                  item.ID,
+		Phase:               item.Phase,
+		Action:              cloneActionPtr(item.Action),
 		PlanTaskID:          item.PlanTaskID,
 		ContractID:          item.ContractID,
 		ContractHash:        item.ContractHash,
@@ -806,6 +851,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		VerifyMode:          item.VerifyMode,
 		VerifySpec:          verifySpec,
 		VerifyResult:        verifyResult,
+		RuntimeError:        runtimeErr,
 		ExecutionReceipt:    execReceipt,
 		ExecutionReceipts:   execReceipts,
 		FailureEvent:        failureEvent,

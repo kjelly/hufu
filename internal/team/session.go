@@ -72,6 +72,13 @@ type SessionData struct {
 	CriterionResults            []CriterionResult            `json:"criterion_results,omitempty"`
 	CriterionCheckpoints        []CriterionCheckpoint        `json:"criterion_checkpoints,omitempty"`
 	LastCriterionProgressAt     string                       `json:"last_criterion_progress_at,omitempty"`
+	// WorkflowState and PhaseResults are the durable, runtime-owned workflow
+	// state. They are deliberately separate from task prose and conversation
+	// history so a resumed run cannot infer a completed phase from model text.
+	WorkflowState    Phase                 `json:"workflow_state,omitempty"`
+	PhaseResults     map[Phase]PhaseResult `json:"phase_results,omitempty"`
+	RuntimeWorkspace string                `json:"runtime_workspace,omitempty"`
+	RetryState       *RetryState           `json:"retry_state,omitempty"`
 }
 
 func LoadSession(workspace string) *SessionData {

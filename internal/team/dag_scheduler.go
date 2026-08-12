@@ -218,10 +218,26 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	s.states[idx] = TaskError
 	res.failedCriteria = s.coord.failedCriteriaForTask(s.tasks[idx])
 	s.results[idx] = res
+	if s.coord.phaseWorkflow != nil && s.coord.phaseWorkflow.permitActionRetry(s.tasks[idx], res.err) {
+		s.retries[idx]++
+		c.report(c.newEvent("step").withMessage(fmt.Sprintf("retrying structured action %q after transient provider failure", s.tasks[idx].Action.Type)))
+		s.resetTask(idx, "retrying transient structured action failure")
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		s.launchReady(ctx)
+		return
+	}
 	if s.routeCriterionRetry(ctx, idx, res.failedCriteria) {
 		return
 	}
-	if s.tasks[idx].OnFailure == nil || s.retries[idx] >= s.tasks[idx].MaxRetries {
+	maxRetries := s.tasks[idx].MaxRetries
+	if s.coord.phaseWorkflow != nil {
+		maxRetries = s.coord.phaseWorkflow.repairRetryLimit(maxRetries)
+	}
+	if s.tasks[idx].OnFailure == nil || s.retries[idx] >= maxRetries {
+		return
+	}
+	if s.coord.phaseWorkflow != nil && !s.coord.phaseWorkflow.permitRepairRetry(s.tasks[idx], res.err) {
+		c.report(c.newEvent("step").withMessage(fmt.Sprintf("repair retry for task %q blocked by failure-signature limit", s.tasks[idx].Agent)))
 		return
 	}
 	s.retries[idx]++
@@ -230,7 +246,7 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 		s.tasks[idx].Model = next
 	}
 	targetIdx := *s.tasks[idx].OnFailure
-	c.report(c.newEvent("step").withMessage(fmt.Sprintf("DAG loop triggered: task %q failed, jumping back to task %q (retry %d/%d)", s.tasks[idx].Agent, s.tasks[targetIdx].Agent, s.retries[idx], s.tasks[idx].MaxRetries)))
+	c.report(c.newEvent("step").withMessage(fmt.Sprintf("DAG loop triggered: task %q failed, jumping back to task %q (retry %d/%d)", s.tasks[idx].Agent, s.tasks[targetIdx].Agent, s.retries[idx], maxRetries)))
 	s.resetWave(targetIdx)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	s.launchReady(ctx)
@@ -461,6 +477,11 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	}
 	agentKey := strings.ToLower(td.Agent)
 	cacheKey := agentKey + ":" + taskCacheIdentityWithSpec(desc, td.VerifySpec, td.Verify, td.VerifyMode)
+	// Actions can have external side effects. They must never be satisfied by
+	// an output cache or coalesced with an identical in-flight request.
+	if td.Action != nil {
+		cacheKey += ":action:" + tid
+	}
 	// A verbatim task owns a per-todo evidence artifact. Identical concurrent
 	// tasks must not share an in-flight result, or the follower would report a
 	// manifest for the owner's transcript instead of producing its own evidence.
@@ -579,7 +600,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	// Check the task result cache before running. Sidecar tasks, summarized
 	// tasks, and verbatim-output tasks always run fresh: a cached prose result
 	// cannot satisfy a new runner-owned transcript contract.
-	if !td.Sidecar && !td.Summarize && !taskUsesVerbatimTranscript(td) {
+	if td.Action == nil && !td.Sidecar && !td.Summarize && !taskUsesVerbatimTranscript(td) {
 		if cached, ok := c.lookupTaskCacheWithTypedVerification(ctx, agentKey, desc, td.VerifySpec, td.Verify, td.VerifyMode); ok {
 			c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(desc).withTodoID(tid))
 			c.taskTracker.TodoList().UpdateStatusAndOutput(tid, TaskDone, utils.TruncateRunes(cached, summaryMaxRunes), cached)
@@ -601,7 +622,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	} else {
 		output, err = c.executeTask(ctx, td, tid)
 	}
-	if err == nil {
+	if err == nil && td.Action == nil {
 		c.storeTaskCacheWithTypedVerificationEvidence(agentKey, desc, td.VerifySpec, td.Verify, td.VerifyMode, output, verificationForTodo(c.taskTracker.TodoList().Items(), tid))
 	}
 	result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: output, err: err, idx: idx}
