@@ -26,6 +26,10 @@ type TeamSession struct {
 	MCPServers    map[string]mcp.MCPServerConfig
 	Skills        []*skill.SkillDef
 	ContractTasks []TaskDef // Optional static task contracts used by preflight tooling and policy binding.
+	// ProviderRegistry is injected by the host at load time. It stays outside
+	// persistent session data so a resumed workflow rebinds only to providers
+	// explicitly registered by the current host process.
+	ProviderRegistry *ProviderRegistry
 }
 
 type agentFrontmatter struct {
@@ -52,6 +56,7 @@ type agentFrontmatter struct {
 	ForceMCP        bool                           `yaml:"force-mcp"`
 	Shell           string                         `yaml:"shell"`
 	MCPTools        map[string]agent.MCPToolConfig `yaml:"mcp-tools"`
+	Requirements    agent.ContractRequirements     `yaml:"requires"`
 	SideEffect      string                         `yaml:"side_effect"`
 	Recovery        string                         `yaml:"recovery"`
 	ReconcileTool   string                         `yaml:"reconcile-tool"`
@@ -98,21 +103,28 @@ type teamConfigYAML struct {
 	Vars                     map[string]interface{}           `yaml:"vars"`
 	// WorkerContextSize is a token budget, not a character count (spec.md
 	// item 7); the YAML key is kept as-is for backward compatibility.
-	WorkerContextSize int                           `yaml:"worker-context-size"`
-	ToolsAllowed      interface{}                   `yaml:"tools"` // tools.allowed/tools.denied in YAML - string or []string
-	Delegation        rawDelegationPolicy           `yaml:"delegation"`
-	Preflight         []agent.CapabilityRequirement `yaml:"preflight"`
-	Unattended        bool                          `yaml:"unattended"`
-	AutoApprove       bool                          `yaml:"auto-approve"`
-	MaxWallClock      int64                         `yaml:"max-duration"`
-	MaxTotalTokens    int64                         `yaml:"max-total-tokens"`
-	Acceptance        interface{}                   `yaml:"acceptance"`
-	Rollback          string                        `yaml:"rollback"`
-	ExecutionProfile  string                        `yaml:"execution-profile"`
-	GoalMode          string                        `yaml:"goal-mode"`
-	Reliability       rawReliabilityConfig          `yaml:"reliability"`
-	WorkerMemory      rawWorkerMemoryPolicy         `yaml:"worker-memory"`
-	Tasks             []TaskDef                     `yaml:"tasks"`
+	WorkerContextSize int                                   `yaml:"worker-context-size"`
+	ToolsAllowed      interface{}                           `yaml:"tools"` // tools.allowed/tools.denied in YAML - string or []string
+	Requirements      agent.ContractRequirements            `yaml:"requires"`
+	Delegation        rawDelegationPolicy                   `yaml:"delegation"`
+	Preflight         []agent.CapabilityRequirement         `yaml:"preflight"`
+	Workflow          agent.WorkflowConfig                  `yaml:"workflow"`
+	Policies          agent.WorkflowPolicies                `yaml:"policies"`
+	Capabilities      agent.CapabilityConfig                `yaml:"capabilities"`
+	Verification      agent.VerificationConfig              `yaml:"verification"`
+	Retry             agent.RetryConfig                     `yaml:"retry"`
+	ActionProviders   map[string]agent.ActionProviderConfig `yaml:"action-providers"`
+	Unattended        bool                                  `yaml:"unattended"`
+	AutoApprove       bool                                  `yaml:"auto-approve"`
+	MaxWallClock      int64                                 `yaml:"max-duration"`
+	MaxTotalTokens    int64                                 `yaml:"max-total-tokens"`
+	Acceptance        interface{}                           `yaml:"acceptance"`
+	Rollback          string                                `yaml:"rollback"`
+	ExecutionProfile  string                                `yaml:"execution-profile"`
+	GoalMode          string                                `yaml:"goal-mode"`
+	Reliability       rawReliabilityConfig                  `yaml:"reliability"`
+	WorkerMemory      rawWorkerMemoryPolicy                 `yaml:"worker-memory"`
+	Tasks             []TaskDef                             `yaml:"tasks"`
 }
 
 type rawDelegationPolicy struct {
@@ -419,6 +431,14 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 		ForceMCP:       fm.ForceMCP,
 		Shell:          fm.Shell,
 		MCPTools:       fm.MCPTools,
+		Requirements: agent.ContractRequirements{
+			Tools:       append([]string(nil), fm.Requirements.Tools...),
+			Environment: append([]string(nil), fm.Requirements.Environment...),
+			Paths:       expandAllowedPaths(fm.Requirements.Paths),
+			Interactive: fm.Requirements.Interactive,
+			Network:     fm.Requirements.Network,
+			PlanFirst:   fm.Requirements.PlanFirst,
+		},
 		Generation: agent.GenerationParams{
 			Model:           fm.Model,
 			Temperature:     fm.Temperature,
@@ -796,6 +816,14 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	if tools := parseDeniedTools(yc.ToolsAllowed); len(tools) > 0 {
 		cfg.ToolsDenied = tools
 	}
+	cfg.Requirements = agent.ContractRequirements{
+		Tools:       append([]string(nil), yc.Requirements.Tools...),
+		Environment: append([]string(nil), yc.Requirements.Environment...),
+		Paths:       expandAllowedPaths(yc.Requirements.Paths),
+		Interactive: yc.Requirements.Interactive,
+		Network:     yc.Requirements.Network,
+		PlanFirst:   yc.Requirements.PlanFirst,
+	}
 	if len(yc.Delegation.AllowedWorkers) > 0 {
 		cfg.Delegation.AllowedWorkers = yc.Delegation.AllowedWorkers
 	}
@@ -823,6 +851,21 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if len(yc.Preflight) > 0 {
 		cfg.Preflight = yc.Preflight
+	}
+	if len(yc.Workflow.Phases) > 0 {
+		cfg.Workflow = agent.WorkflowConfig{Phases: append([]string(nil), yc.Workflow.Phases...)}
+		cfg.Policies = yc.Policies
+		cfg.Capabilities = agent.CapabilityConfig{Required: append([]string(nil), yc.Capabilities.Required...)}
+		cfg.Verification = yc.Verification
+		cfg.Retry = yc.Retry
+		if len(yc.ActionProviders) > 0 {
+			cfg.ActionProviders = make(map[string]agent.ActionProviderConfig, len(yc.ActionProviders))
+			for capability, provider := range yc.ActionProviders {
+				cfg.ActionProviders[capability] = agent.ActionProviderConfig{
+					Command: append([]string(nil), provider.Command...), Dir: provider.Dir, Timeout: provider.Timeout,
+				}
+			}
+		}
 	}
 
 	return cfg, nil
@@ -855,7 +898,7 @@ func loadTeamContractTasks(teamDir string, vars map[string]string) ([]TaskDef, e
 	return nil, nil
 }
 
-func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*TeamSession, error) {
+func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, registry *ProviderRegistry) (*TeamSession, error) {
 	absDir, err := filepath.Abs(teamDir)
 	if err != nil {
 		return nil, fmt.Errorf("invalid team directory: %w", err)
@@ -902,13 +945,21 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 		}
 		workspace = filepath.Join(cwd, cfg.WorkspaceDir)
 	}
+	effectiveRegistry, err := registry.Clone()
+	if err != nil {
+		return nil, fmt.Errorf("initialize action provider registry: %w", err)
+	}
+	if err := registerConfiguredActionProviders(effectiveRegistry, cfg.ActionProviders); err != nil {
+		return nil, err
+	}
 	session := &TeamSession{
-		Config:        cfg,
-		Dir:           absDir,
-		Workspace:     workspace,
-		Agents:        make(map[string]*agent.AgentDef),
-		MCPServers:    make(map[string]mcp.MCPServerConfig),
-		ContractTasks: contractTasks,
+		Config:           cfg,
+		Dir:              absDir,
+		Workspace:        workspace,
+		Agents:           make(map[string]*agent.AgentDef),
+		MCPServers:       make(map[string]mcp.MCPServerConfig),
+		ContractTasks:    contractTasks,
+		ProviderRegistry: effectiveRegistry,
 	}
 
 	// Inject built-in vars BEFORE loading agents
@@ -970,8 +1021,12 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string) (*T
 	if len(session.Agents) == 0 {
 		return nil, fmt.Errorf("no valid agent .md files found in %s", absDir)
 	}
-	if findings := ValidateTeamTaskContracts(session); len(findings) > 0 {
-		return nil, fmt.Errorf("team task contract validation failed: %s", strings.Join(sortedContractFindingMessages(findings), "; "))
+	if err := validateRuntimeWorkflowTeam(session, effectiveRegistry); err != nil {
+		return nil, err
+	}
+	loadFindings := append(ValidateTeamTaskContracts(session), ValidateTeamPolicyContracts(session)...)
+	if messages := sortedContractFindingMessages(loadFindings); len(messages) > 0 {
+		return nil, fmt.Errorf("team contract validation failed: %s", strings.Join(messages, "; "))
 	}
 
 	// Resolve per-worker memory: apply team defaults to agents that didn't

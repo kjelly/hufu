@@ -59,6 +59,47 @@ delegation:
 	}
 }
 
+func TestParseTeamRuntimeWorkflowContract(t *testing.T) {
+	tmpDir := t.TempDir()
+	yamlContent := `workflow:
+  phases: [prepare, audit, execute, verify]
+policies:
+  require_phase_success: true
+  allow_phase_skip: false
+capabilities:
+  required: [structured-actions]
+verification:
+  required: true
+retry:
+  transient:
+    max_attempts: 2
+  repair:
+    max_attempts_per_failure_signature: 3
+`
+	if err := os.WriteFile(filepath.Join(tmpDir, "team.yaml"), []byte(yamlContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(tmpDir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML: %v", err)
+	}
+	if want := []string{"prepare", "audit", "execute", "verify"}; !reflect.DeepEqual(cfg.Workflow.Phases, want) {
+		t.Fatalf("workflow phases = %#v, want %#v", cfg.Workflow.Phases, want)
+	}
+	if !cfg.Policies.RequirePhaseSuccess || cfg.Policies.AllowPhaseSkip {
+		t.Fatalf("workflow policies = %#v", cfg.Policies)
+	}
+	if want := []string{"structured-actions"}; !reflect.DeepEqual(cfg.Capabilities.Required, want) {
+		t.Fatalf("workflow capabilities = %#v, want %#v", cfg.Capabilities.Required, want)
+	}
+	if !cfg.Verification.Required {
+		t.Fatal("verification.required = false, want true")
+	}
+	if cfg.Retry.Transient.MaxAttempts != 2 || cfg.Retry.Repair.MaxAttemptsPerFailureSignature != 3 {
+		t.Fatalf("workflow retry policy = %#v", cfg.Retry)
+	}
+}
+
 func TestParseTeamYMLMinimumCoordinatorRounds(t *testing.T) {
 	tmpDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmpDir, "team.yaml"), []byte("max-rounds: 12\nminimum-coordinator-rounds: 8\nmax-retries: 0\n"), 0o644); err != nil {
@@ -574,7 +615,7 @@ func TestLoadTeam_NoYAMLDirName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	session, err := LoadTeam(teamDir, nil, nil)
+	session, err := LoadTeam(teamDir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam returned error: %v", err)
 	}
@@ -627,7 +668,7 @@ func TestLoadTeam_DiscoversProjectSkillsNotTeamAgentSkills(t *testing.T) {
 
 	t.Chdir(projectDir)
 	t.Setenv("HOME", t.TempDir())
-	session, err := LoadTeam(teamDir, nil, nil)
+	session, err := LoadTeam(teamDir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam returned error: %v", err)
 	}
@@ -675,7 +716,7 @@ func TestLoadTeam_Helper_NoDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	session, err := LoadTeam(teamDir, nil, nil)
+	session, err := LoadTeam(teamDir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam returned error: %v", err)
 	}
@@ -722,7 +763,7 @@ func TestLoadTeam_AGENT_NAMES_NoDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	session, err := LoadTeam(teamDir, nil, nil)
+	session, err := LoadTeam(teamDir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam returned error: %v", err)
 	}
@@ -770,7 +811,7 @@ func TestLoadTeam_SessionConfigVars_Populated(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	session, err := LoadTeam(teamDir, nil, nil)
+	session, err := LoadTeam(teamDir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam returned error: %v", err)
 	}
