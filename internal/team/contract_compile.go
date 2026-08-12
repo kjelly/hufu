@@ -79,6 +79,56 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 	return bound, effective, nil
 }
 
+// CompileTaskGoalContracts replaces coordinator-authored execution/output
+// fields with an opt-in static contract selected by worker name and a literal
+// goal substring. The coordinator continues to own the goal prose, but cannot
+// add scalar or per-slot execution values to a matching closed sequence.
+//
+// A matching template is deliberately authoritative instead of a conflict
+// error: a coordinator may send a generic schema default that is irrelevant to
+// the team-selected contract. The runtime discards that value before policy
+// validation, TODO creation, or worker startup.
+func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef, []EffectiveTaskContract, error) {
+	if session == nil || !session.Config.Delegation.BindTaskGoalContracts {
+		return tasks, nil, nil
+	}
+	bound := append([]TaskDef(nil), tasks...)
+	effective := make([]EffectiveTaskContract, 0, len(bound))
+	for i := range bound {
+		matches := make([]TaskDef, 0, 1)
+		for _, contract := range session.ContractTasks {
+			if strings.TrimSpace(contract.WhenGoalContains) == "" ||
+				!strings.EqualFold(strings.TrimSpace(contract.Agent), strings.TrimSpace(bound[i].Agent)) ||
+				!strings.Contains(bound[i].Goal, contract.WhenGoalContains) {
+				continue
+			}
+			matches = append(matches, contract)
+		}
+		if len(matches) == 0 {
+			continue
+		}
+		if len(matches) > 1 {
+			return nil, nil, fmt.Errorf("task goal contract is ambiguous for agent %q", bound[i].Agent)
+		}
+		contract := matches[0]
+		contractID := strings.TrimSpace(contract.ID)
+		if contractID == "" {
+			contractID = strings.ToLower(strings.TrimSpace(contract.Agent)) + ":" + contract.WhenGoalContains
+		}
+		hash, err := effectiveContractHash(contractID, strings.ToLower(strings.TrimSpace(contract.Agent)), contract.Execution, contract.OutputMode)
+		if err != nil {
+			return nil, nil, fmt.Errorf("hash task goal contract %q: %w", contractID, err)
+		}
+		bound[i].Execution = contract.Execution
+		bound[i].OutputMode = contract.OutputMode
+		bound[i].ContractID = contractID
+		bound[i].ContractHash = hash
+		bound[i].ContractRevision = effectiveTaskContractRevision
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: contract.Execution, OutputMode: contract.OutputMode})
+	}
+	return bound, effective, nil
+}
+
 func matchesInitialContractBatch(tasks []TaskDef, policy agent.DelegationPolicy) bool {
 	if sameAgentSequence(tasks, policy.InitialBatch) {
 		return true
@@ -102,7 +152,7 @@ func matchesInitialContractBatch(tasks []TaskDef, policy agent.DelegationPolicy)
 }
 
 func executionContractsEqualOrEmpty(got, want ExecutionContract) bool {
-	if len(got.Steps) == 0 && len(got.ToolSequence) == 0 && got.Kind == "" && !got.RequiresResult && !got.RequiresVerification && got.AllowsReplay == nil && !got.ForbidArtifacts && len(got.ToolInputSequence) == 0 && got.ToolInputField == "" && len(got.ToolInputValueSequence) == 0 && len(got.ToolExpectedExitCodes) == 0 {
+	if len(got.Steps) == 0 && len(got.ToolSequence) == 0 && got.Kind == "" && !got.RequiresResult && !got.RequiresVerification && got.AllowsReplay == nil && !got.ForbidArtifacts && len(got.ToolInputSequence) == 0 && len(got.ToolInputCanonicalSequence) == 0 && len(got.ToolInputTransformSequence) == 0 && got.ToolInputField == "" && len(got.ToolInputValueSequence) == 0 && len(got.ToolExpectedExitCodes) == 0 {
 		return true
 	}
 	left, leftErr := json.Marshal(got)
@@ -138,23 +188,42 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 	}
 	for index, invariant := range session.Config.Delegation.TaskGoalInvariants {
 		field := fmt.Sprintf("delegation.task-goal-invariants[%d]", index)
-		if strings.TrimSpace(invariant.Agent) == "" {
-			findings = append(findings, contractFinding(field+".agent", "task_goal_invariant_agent_missing", "task-goal invariant must name an agent"))
-		}
-		if strings.TrimSpace(invariant.WhenGoalContains) == "" {
-			findings = append(findings, contractFinding(field+".when-goal-contains", "task_goal_invariant_selector_missing", "task-goal invariant must select a goal substring"))
-		}
-		if len(invariant.RequiredLiterals) == 0 && len(invariant.ForbiddenLiterals) == 0 && len(invariant.RequiredToolSequence) == 0 && len(invariant.ForbiddenExecutionFields) == 0 {
-			findings = append(findings, contractFinding(field, "task_goal_invariant_empty", "task-goal invariant must constrain a literal or execution contract field"))
-		}
-		for literalIndex, literal := range append(append([]string(nil), invariant.RequiredLiterals...), invariant.ForbiddenLiterals...) {
-			if strings.TrimSpace(literal) == "" {
-				findings = append(findings, contractFinding(fmt.Sprintf("%s.literals[%d]", field, literalIndex), "task_goal_invariant_literal_empty", "task-goal invariant literals must not be empty"))
+		findings = append(findings, validateTaskGoalInvariantContract(field, invariant)...)
+	}
+	if session.Config.Delegation.BindTaskGoalContracts {
+		seenIDs := map[string]bool{}
+		for index, task := range session.ContractTasks {
+			if strings.TrimSpace(task.WhenGoalContains) == "" {
+				continue
 			}
-		}
-		for fieldIndex, executionField := range invariant.ForbiddenExecutionFields {
-			if !knownExecutionContractField(executionField) {
-				findings = append(findings, contractFinding(fmt.Sprintf("%s.forbidden-execution-fields[%d]", field, fieldIndex), "task_goal_invariant_execution_field_unknown", "task-goal invariant names an unknown execution contract field"))
+			field := fmt.Sprintf("tasks[%d]", index)
+			name := strings.ToLower(strings.TrimSpace(task.Agent))
+			if name == "" {
+				findings = append(findings, contractFinding(field+".agent", "goal_contract_agent_missing", "goal-selected static contract has no agent"))
+				continue
+			}
+			id := strings.TrimSpace(task.ID)
+			if id == "" {
+				id = name + ":" + task.WhenGoalContains
+			}
+			if seenIDs[id] {
+				findings = append(findings, contractFinding(field+".id", "goal_contract_id_duplicate", fmt.Sprintf("goal-selected static contract ID %q is not unique", id)))
+			}
+			seenIDs[id] = true
+			def := session.Agents[name]
+			if def == nil {
+				findings = append(findings, contractFinding(field+".agent", "goal_contract_agent_unknown", fmt.Sprintf("goal-selected static contract agent %q is not a loaded worker", task.Agent)))
+			} else {
+				findings = append(findings, staticContractToolFindings(field, task, def.Tools, def.MCPTools, session.Config.ToolsDenied)...)
+			}
+			if err := validateTaskOutputMode(task); err != nil {
+				findings = append(findings, contractFinding(field+".output_mode", "goal_contract_output_mode", err.Error()))
+			}
+			for _, finding := range ValidateExecutionContractFull(task, "error").Findings {
+				if finding.Severity == FindingSeverityError {
+					finding.Field = field + "." + finding.Field
+					findings = append(findings, finding)
+				}
 			}
 		}
 	}
@@ -167,6 +236,11 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 	}
 	byAgent := make(map[string]TaskDef)
 	for index, task := range session.ContractTasks {
+		if strings.TrimSpace(task.WhenGoalContains) != "" {
+			// Goal-selected contracts are validated above and are not initial
+			// batch templates, even when both binding modes are enabled.
+			continue
+		}
 		field := fmt.Sprintf("tasks[%d]", index)
 		name := strings.ToLower(strings.TrimSpace(task.Agent))
 		if name == "" {
@@ -214,6 +288,57 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 	return findings
 }
 
+func validateTaskGoalInvariantContract(field string, invariant agent.TaskGoalInvariant) []ContractFinding {
+	var findings []ContractFinding
+	if strings.TrimSpace(invariant.Agent) == "" {
+		findings = append(findings, contractFinding(field+".agent", "task_goal_invariant_agent_missing", "task-goal invariant must name an agent"))
+	}
+	if strings.TrimSpace(invariant.WhenGoalContains) == "" {
+		findings = append(findings, contractFinding(field+".when-goal-contains", "task_goal_invariant_selector_missing", "task-goal invariant must select a goal substring"))
+	}
+	if len(invariant.RequiredLiterals) == 0 && len(invariant.ForbiddenLiterals) == 0 && len(invariant.RequiredToolSequence) == 0 && len(invariant.ForbiddenExecutionFields) == 0 && invariant.RequiredTaskReference == nil && len(invariant.RequiredTaskReferences) == 0 {
+		findings = append(findings, contractFinding(field, "task_goal_invariant_empty", "task-goal invariant must constrain a literal, task reference, or execution contract field"))
+	}
+	for literalIndex, literal := range append(append([]string(nil), invariant.RequiredLiterals...), invariant.ForbiddenLiterals...) {
+		if strings.TrimSpace(literal) == "" {
+			findings = append(findings, contractFinding(fmt.Sprintf("%s.literals[%d]", field, literalIndex), "task_goal_invariant_literal_empty", "task-goal invariant literals must not be empty"))
+		}
+	}
+	for fieldIndex, executionField := range invariant.ForbiddenExecutionFields {
+		if !knownExecutionContractField(executionField) {
+			findings = append(findings, contractFinding(fmt.Sprintf("%s.forbidden-execution-fields[%d]", field, fieldIndex), "task_goal_invariant_execution_field_unknown", "task-goal invariant names an unknown execution contract field"))
+		}
+	}
+	if reference := invariant.RequiredTaskReference; reference != nil {
+		findings = append(findings, validateTaskGoalReferenceContract(field+".required-task-reference", *reference)...)
+	}
+	seenPrefixes := map[string]bool{}
+	for index, reference := range invariant.RequiredTaskReferences {
+		entryField := fmt.Sprintf("%s.required-task-references[%d]", field, index)
+		findings = append(findings, validateTaskGoalReferenceContract(entryField, reference)...)
+		prefix := strings.TrimSpace(reference.GoalPrefix)
+		if prefix != "" && seenPrefixes[prefix] {
+			findings = append(findings, contractFinding(entryField+".goal-prefix", "task_goal_reference_prefix_duplicate", "required task reference prefixes must be distinct"))
+		}
+		seenPrefixes[prefix] = true
+	}
+	return findings
+}
+
+func validateTaskGoalReferenceContract(field string, reference agent.TaskGoalReference) []ContractFinding {
+	var findings []ContractFinding
+	if strings.TrimSpace(reference.GoalPrefix) == "" {
+		findings = append(findings, contractFinding(field+".goal-prefix", "task_goal_reference_prefix_missing", "required task reference must declare a goal prefix"))
+	}
+	if strings.TrimSpace(reference.Agent) == "" {
+		findings = append(findings, contractFinding(field+".agent", "task_goal_reference_agent_missing", "required task reference must declare a producer agent"))
+	}
+	if strings.TrimSpace(reference.TaskContains) == "" {
+		findings = append(findings, contractFinding(field+".task-contains", "task_goal_reference_selector_missing", "required task reference must declare a task selector"))
+	}
+	return findings
+}
+
 func staticContractToolFindings(field string, task TaskDef, declaredTools string, mcpTools map[string]agent.MCPToolConfig, denied []string) []ContractFinding {
 	// An empty worker tool declaration retains legacy "all available" behavior;
 	// it cannot be rejected statically. Otherwise every closed/structured tool
@@ -232,6 +357,10 @@ func staticContractToolFindings(field string, task TaskDef, declaredTools string
 	for _, tool := range denied {
 		deniedSet[strings.TrimSpace(tool)] = true
 	}
+	granted := make(map[string]bool, len(task.Execution.TemplateToolGrants))
+	for _, tool := range task.Execution.TemplateToolGrants {
+		granted[strings.TrimSpace(tool)] = true
+	}
 	tools := append([]string(nil), task.Execution.ToolSequence...)
 	for _, step := range task.Execution.Steps {
 		tools = append(tools, step.Tool)
@@ -242,7 +371,7 @@ func staticContractToolFindings(field string, task TaskDef, declaredTools string
 		if tool == "" || tool == "submit_result" {
 			continue
 		}
-		if deniedSet[tool] {
+		if deniedSet[tool] && !granted[tool] {
 			findings = append(findings, contractFinding(field+".execution", "initial_contract_tool_denied", fmt.Sprintf("contract tool %q is denied by team policy", tool)))
 		} else if !allowed[tool] {
 			findings = append(findings, contractFinding(field+".execution", "initial_contract_tool_unauthorized", fmt.Sprintf("contract tool %q is not authorized for its worker", tool)))

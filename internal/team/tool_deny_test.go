@@ -50,6 +50,41 @@ func TestParseTeamToolDeny(t *testing.T) {
 	}
 }
 
+func TestTemplateScopedToolGrantDoesNotLoosenTeamDeny(t *testing.T) {
+	c := &Coordinator{
+		session:   &TeamSession{Config: agent.TeamConfig{ToolsDenied: []string{"terminal"}}},
+		coreTools: workerInvariantCoreTools(t),
+	}
+	def := &agent.AgentDef{Name: "observer", Tools: "view,terminal"}
+	plain := agentToolNames(c.selectWorkerTools(def))
+	if slices.Contains(plain, "terminal") {
+		t.Fatalf("team-denied terminal was exposed without a static contract: %v", plain)
+	}
+
+	task := TaskDef{ContractID: "static-observer", Execution: ExecutionContract{
+		ToolSequence:       []string{"terminal", "submit_result"},
+		TemplateToolGrants: []string{"terminal"},
+	}}
+	granted := agentToolNames(c.selectWorkerToolsForTask(def, task))
+	if !slices.Contains(granted, "terminal") {
+		t.Fatalf("template-scoped terminal grant was not exposed: %v", granted)
+	}
+	allowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowedForTask(t.Context(), def, granted, task))
+	if !slices.Contains(allowed, "terminal") {
+		t.Fatalf("template-scoped terminal grant was not permitted at runtime: %v", allowed)
+	}
+
+	forged := task
+	forged.ContractID = ""
+	if exposed := agentToolNames(c.selectWorkerToolsForTask(def, forged)); slices.Contains(exposed, "terminal") {
+		t.Fatalf("unbound task execution bypassed team deny: %v", exposed)
+	}
+	forgedAllowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowedForTask(t.Context(), def, granted, forged))
+	if slices.Contains(forgedAllowed, "terminal") {
+		t.Fatalf("unbound task grant bypassed runtime deny: %v", forgedAllowed)
+	}
+}
+
 func TestDeniedToolInstructionsAreRemovedWithoutSyntheticToolNames(t *testing.T) {
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{

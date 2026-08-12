@@ -18,10 +18,51 @@ func (c *Coordinator) selectWorkerTools(def *agent.AgentDef) []fantasy.AgentTool
 	return c.filterDeniedWorkerTools(agent.SelectTools(c.coreTools, def.Tools))
 }
 
+// selectWorkerToolsForTask preserves the team-wide deny list except for a
+// tool explicitly granted by a goal-selected static template. The caller must
+// pass the runtime-assigned contract ID: an arbitrary task execution object is
+// never enough to bypass a team denial.
+func (c *Coordinator) selectWorkerToolsForTask(def *agent.AgentDef, task TaskDef) []fantasy.AgentTool {
+	if def == nil {
+		return nil
+	}
+	return c.filterDeniedWorkerToolsWithGrants(agent.SelectTools(c.coreTools, def.Tools), templateGrantedToolNames(def, task))
+}
+
+// templateGrantedToolNames returns only a runtime-selected template's narrow
+// grants. A model-supplied execution object has no ContractID and therefore
+// cannot bypass the team deny policy.
+func templateGrantedToolNames(def *agent.AgentDef, task TaskDef) map[string]bool {
+	grants := make(map[string]bool, len(task.Execution.TemplateToolGrants))
+	if def == nil || task.ContractID == "" {
+		return grants
+	}
+	for _, name := range task.Execution.TemplateToolGrants {
+		name = strings.TrimSpace(name)
+		if name != "" && agentDeclaresTool(def, name) {
+			grants[name] = true
+		}
+	}
+	return grants
+}
+
+func agentDeclaresTool(def *agent.AgentDef, want string) bool {
+	for _, name := range strings.Split(def.Tools, ",") {
+		if strings.TrimSpace(name) == want {
+			return true
+		}
+	}
+	return false
+}
+
 // filterDeniedWorkerTools removes denied tools before they reach a worker
 // model. Result-protocol tools are appended by the caller after this filter so
 // a team cannot accidentally remove the only terminal reporting mechanism.
 func (c *Coordinator) filterDeniedWorkerTools(candidate []fantasy.AgentTool) []fantasy.AgentTool {
+	return c.filterDeniedWorkerToolsWithGrants(candidate, nil)
+}
+
+func (c *Coordinator) filterDeniedWorkerToolsWithGrants(candidate []fantasy.AgentTool, grants map[string]bool) []fantasy.AgentTool {
 	if c == nil || c.session == nil || len(c.session.Config.ToolsDenied) == 0 {
 		return candidate
 	}
@@ -33,14 +74,14 @@ func (c *Coordinator) filterDeniedWorkerTools(candidate []fantasy.AgentTool) []f
 	}
 	filtered := make([]fantasy.AgentTool, 0, len(candidate))
 	for _, tool := range candidate {
-		if tool != nil && !denied[tool.Info().Name] {
+		if tool != nil && (!denied[tool.Info().Name] || grants[tool.Info().Name]) {
 			filtered = append(filtered, tool)
 		}
 	}
 	return filtered
 }
 
-func (c *Coordinator) filterDeniedToolNames(candidate []string) []string {
+func (c *Coordinator) filterDeniedToolNamesWithGrants(candidate []string, grants map[string]bool) []string {
 	if c == nil || c.session == nil || len(c.session.Config.ToolsDenied) == 0 {
 		return candidate
 	}
@@ -52,7 +93,7 @@ func (c *Coordinator) filterDeniedToolNames(candidate []string) []string {
 	}
 	filtered := make([]string, 0, len(candidate))
 	for _, name := range candidate {
-		if name = strings.TrimSpace(name); name != "" && !denied[name] {
+		if name = strings.TrimSpace(name); name != "" && (!denied[name] || grants[name]) {
 			filtered = append(filtered, name)
 		}
 	}
