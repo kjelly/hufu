@@ -149,6 +149,8 @@ func runShellCommand(ctx context.Context, timeout time.Duration, workDir string,
 	go func() { defer wg.Done(); _, _ = io.Copy(&stderr, stderrPipe) }()
 
 	waitErr := waitAndDrain(cmd, &wg)
+	stdoutText := utils.RedactSubprocessOutput(stdout.String(), env)
+	stderrText := utils.RedactSubprocessOutput(stderr.String(), env)
 
 	exitCode := 0
 	if waitErr != nil {
@@ -156,13 +158,13 @@ func runShellCommand(ctx context.Context, timeout time.Duration, workDir string,
 		// Wait report a plain signal death (exit -1), which would otherwise
 		// masquerade as the command's own result.
 		if cmdCtx.Err() == context.DeadlineExceeded {
-			return fantasy.NewTextErrorResponse(timeoutResponseMessage(timeout, stdout.String(), stderr.String())), nil
+			return fantasy.NewTextErrorResponse(timeoutResponseMessage(timeout, stdoutText, stderrText)), nil
 		}
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		}
 	}
-	return buildBashResponse(stdout.String(), stderr.String(), exitCode), nil
+	return buildBashResponse(stdoutText, stderrText, exitCode), nil
 }
 
 func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workDir string, restrictedPath string, networkBlock bool, command string) (fantasy.ToolResponse, error) {
@@ -217,17 +219,19 @@ func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workD
 	go func() { defer wg.Done(); _, _ = io.Copy(&stderr, stderrPipe) }()
 
 	waitErr := waitAndDrain(cmd, &wg)
+	stdoutText := utils.RedactSubprocessOutput(stdout.String(), cmd.Env)
+	stderrText := utils.RedactSubprocessOutput(stderr.String(), cmd.Env)
 
 	exitCode := 0
 	if waitErr != nil {
 		if cmdCtx.Err() == context.DeadlineExceeded {
-			return fantasy.NewTextErrorResponse(timeoutResponseMessage(timeout, stdout.String(), stderr.String())), nil
+			return fantasy.NewTextErrorResponse(timeoutResponseMessage(timeout, stdoutText, stderrText)), nil
 		}
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		}
 	}
-	return buildBashResponse(stdout.String(), stderr.String(), exitCode), nil
+	return buildBashResponse(stdoutText, stderrText, exitCode), nil
 }
 
 // runBashDirenv executes a bash command with the project's .envrc/.env

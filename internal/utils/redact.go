@@ -68,6 +68,20 @@ var numericTelemetryKeys = map[string]struct{}{
 	"max_tokens_without_progress":     {},
 }
 
+// Safe policy metadata describes how a caller handles credentials; it is not
+// itself a credential. Keep the exception deliberately narrow and
+// value-constrained so a secret placed under one of these keys is still
+// redacted. Tool schemas commonly expose this metadata to let an agent choose
+// an environment reference instead of a literal value. Redacting the policy
+// makes the safety boundary self-defeating.
+var safeSecretMetadataValues = map[string]map[string]struct{}{
+	"secret_handling": {
+		"none":                  {},
+		"value_env_recommended": {},
+		"value_env_required":    {},
+	},
+}
+
 // learnedSecrets remembers credential values that were already recognized
 // beside their key. The patterns above can only redact a value that still
 // carries its key, but an agent legitimately reads a credential and the value
@@ -209,6 +223,10 @@ func learnSecretsFrom(content string) {
 	for _, re := range []*regexp.Regexp{secretKeyValueRe, secretJSONRe, secretEnvRe, secretAuthorizationRe} {
 		for _, match := range re.FindAllStringSubmatch(content, -1) {
 			if len(match) == 3 {
+				if (re == secretKeyValueRe || re == secretJSONRe) &&
+					safeSecretMetadataValue(secretKeyFromPrefix(match[1]), unquoteSecretValue(match[2])) {
+					continue
+				}
 				learnSecretValue(match[2])
 			}
 		}
@@ -260,7 +278,7 @@ func RedactSecrets(content string) string {
 	learnSecretsFrom(content)
 	content = privateKeyBlockRe.ReplaceAllString(content, redactedSecret)
 	content = secretAuthorizationRe.ReplaceAllString(content, "${1}"+redactedSecret)
-	content = secretJSONRe.ReplaceAllString(content, `${1}"`+redactedSecret+`"`)
+	content = secretJSONRe.ReplaceAllStringFunc(content, redactJSONKeyValue)
 	content = secretKeyValueRe.ReplaceAllStringFunc(content, redactKeyValue)
 	content = secretEnvRe.ReplaceAllString(content, "${1}"+redactedSecret)
 	content = redactLearnedSecrets(content)
@@ -290,6 +308,9 @@ func RedactJSON(data []byte) ([]byte, error) {
 
 func redactJSONValue(value any, key string) any {
 	if key != "" && secretKeyNameRe.MatchString(key) {
+		if safeSecretMetadataValue(key, value) {
+			return value
+		}
 		_, telemetry := numericTelemetryKeys[strings.ToLower(key)]
 		if !telemetry {
 			// A credential recognized by its JSON key must stay redacted when
@@ -324,6 +345,9 @@ func redactKeyValue(match string) string {
 		return match
 	}
 	value := parts[2]
+	if safeSecretMetadataValue(secretKeyFromPrefix(parts[1]), unquoteSecretValue(value)) {
+		return match
+	}
 	// Already redacted. Redaction has to be idempotent because redacted text is
 	// re-redacted on the way to several surfaces, and the value pattern excludes
 	// "]" — so a second pass over "api_token=[REDACTED]" captures "[REDACTED"
@@ -341,4 +365,37 @@ func redactKeyValue(match string) string {
 		return parts[1] + "'" + redactedSecret + "'"
 	}
 	return parts[1] + redactedSecret
+}
+
+func redactJSONKeyValue(match string) string {
+	parts := secretJSONRe.FindStringSubmatch(match)
+	if len(parts) != 3 {
+		return match
+	}
+	value := unquoteSecretValue(parts[2])
+	if safeSecretMetadataValue(secretKeyFromPrefix(parts[1]), value) {
+		return match
+	}
+	learnSecretValue(value)
+	return parts[1] + `"` + redactedSecret + `"`
+}
+
+func secretKeyFromPrefix(prefix string) string {
+	if index := strings.IndexAny(prefix, ":="); index >= 0 {
+		prefix = prefix[:index]
+	}
+	return strings.ToLower(strings.Trim(strings.TrimSpace(prefix), "\"'\\"))
+}
+
+func safeSecretMetadataValue(key string, value any) bool {
+	allowed := safeSecretMetadataValues[strings.ToLower(strings.TrimSpace(key))]
+	if len(allowed) == 0 {
+		return false
+	}
+	text, ok := value.(string)
+	if !ok {
+		return false
+	}
+	_, ok = allowed[strings.ToLower(strings.TrimSpace(text))]
+	return ok
 }

@@ -121,3 +121,53 @@ func TestRedactJSONRedactsNumericAndBooleanCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestRedactionPreservesSafeSecretHandlingMetadata(t *testing.T) {
+	resetLearnedSecrets(t)
+	input := `{"secret_handling":"value_env_required","api_secret":"real-secret-value"}`
+
+	text := RedactSecrets(input)
+	if !strings.Contains(text, `"secret_handling":"value_env_required"`) {
+		t.Fatalf("text redaction removed safe policy metadata: %s", text)
+	}
+	if strings.Contains(text, "real-secret-value") {
+		t.Fatalf("text redaction leaked credential: %s", text)
+	}
+
+	data, err := RedactJSON([]byte(input))
+	if err != nil {
+		t.Fatalf("RedactJSON: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal redacted JSON: %v", err)
+	}
+	if decoded["secret_handling"] != "value_env_required" {
+		t.Fatalf("secret_handling = %#v, want safe policy metadata", decoded["secret_handling"])
+	}
+	if decoded["api_secret"] != redactedSecret {
+		t.Fatalf("api_secret = %#v, want redacted", decoded["api_secret"])
+	}
+}
+
+func TestRedactionDoesNotTrustUnknownSecretHandlingValue(t *testing.T) {
+	resetLearnedSecrets(t)
+	const credential = "actual-credential-value"
+	for _, got := range []string{
+		RedactSecrets(`{"secret_handling":"` + credential + `"}`),
+		string(mustRedactJSON(t, []byte(`{"secret_handling":"`+credential+`"}`))),
+	} {
+		if strings.Contains(got, credential) || !strings.Contains(got, redactedSecret) {
+			t.Fatalf("unknown policy value was not redacted: %s", got)
+		}
+	}
+}
+
+func mustRedactJSON(t *testing.T, data []byte) []byte {
+	t.Helper()
+	got, err := RedactJSON(data)
+	if err != nil {
+		t.Fatalf("RedactJSON: %v", err)
+	}
+	return got
+}

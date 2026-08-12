@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // timeoutResponseMessage reports a command timeout together with whatever the
@@ -31,6 +33,8 @@ func timeoutResponseMessage(timeout time.Duration, stdout, stderr string) string
 }
 
 func buildBashResponse(stdout, stderr string, exitCode int) fantasy.ToolResponse {
+	stdout = utils.RedactSecrets(stdout)
+	stderr = utils.RedactSecrets(stderr)
 	var result strings.Builder
 	if stdout != "" {
 		result.WriteString(stdout)
