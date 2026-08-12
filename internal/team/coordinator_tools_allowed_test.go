@@ -89,6 +89,33 @@ func TestBuildOrchestratorToolsAreRuntimeAllowed(t *testing.T) {
 	}
 }
 
+func TestBuildOrchestratorToolsExposeOnlyConfiguredFirstToolBeforeInitialDelegation(t *testing.T) {
+	coreTools := make([]fantasy.AgentTool, 0, len(coordinatorCoreToolNames))
+	for name := range coordinatorCoreToolNames {
+		coreTools = append(coreTools, namedCoordinatorTool(name))
+	}
+	c := &Coordinator{
+		coreTools: coreTools,
+		session: &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
+			InitialBatch:             []string{"reader"},
+			RequireExactInitialBatch: true,
+			InitialCoordinatorTool:   "agent",
+		}}},
+		taskTracker: NewTaskTracker(),
+		sessionData: NewSession(),
+	}
+
+	if got := agentToolNames(c.buildOrchestratorTools()); !slices.Equal(got, []string{"agent"}) {
+		t.Fatalf("fresh initial tools = %v, want only agent", got)
+	}
+
+	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reader", Desc: "initial task"}})
+	activeTools := agentToolNames(c.buildOrchestratorTools())
+	if !slices.Contains(activeTools, "team_info") {
+		t.Fatalf("tools after initial delegation = %v, want team_info restored", activeTools)
+	}
+}
+
 // workerCoordinatorToolNames are the coordinator-supplied tools appended to
 // c.coreTools by NewCoordinator, on top of BuildAllAgentTools. SelectTools can
 // hand any of them to a worker (alwaysIncludeTools forces several in regardless

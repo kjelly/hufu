@@ -432,7 +432,7 @@ retryLoop:
 			if escalate {
 				if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
 					resultTool := &submitResultTool{coordinator: c, todoID: todoID}
-					if escAg, escTools, escErr := c.createTaskAgentWithResultTool(parentCtx, agentDef, next, resultTool, task.Execution.ToolSequence); escErr == nil {
+					if escAg, escTools, escErr := c.createTaskAgentWithResultTool(parentCtx, agentDef, next, resultTool, task); escErr == nil {
 						ag = escAg
 						exposedToolNames = escTools
 						c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("escalating model %s → %s (attempt %d)", resolvedModel, next, attempt)).withTodoID(todoID))
@@ -513,8 +513,8 @@ retryLoop:
 				taskCtx = context.WithValue(taskCtx, tools.AutoApproveKey, true)
 			}
 
-			taskCtx = c.withEffectiveToolsAllowed(taskCtx, agentDef, exposedToolNames)
-			if sequence := newTaskToolSequence(task.Execution.ToolSequence, task.Execution.ToolInputSequence, task.Execution.ToolInputField, task.Execution.ToolInputValueSequence, task.Execution.ToolExpectedExitCodes); sequence != nil {
+			taskCtx = c.withEffectiveToolsAllowedForTask(taskCtx, agentDef, exposedToolNames, task)
+			if sequence := newTaskToolSequenceWithBindings(task.Execution.ToolSequence, task.Execution.ToolInputSequence, task.Execution.ToolInputField, task.Execution.ToolInputValueSequence, task.Execution.ToolExpectedExitCodes, task.Execution.ToolInputCanonicalSequence, task.Execution.ToolInputTransformSequence); sequence != nil {
 				taskCtx = context.WithValue(taskCtx, taskToolSequenceKey{}, sequence)
 			}
 
@@ -646,6 +646,11 @@ retryLoop:
 			if typedRes != nil && typedRes.Source == "submitted" {
 				if resultErr := validateSubmittedTaskResult(typedRes); resultErr != nil {
 					err = resultErr
+					failedExit := 1
+					receipt.ExitCode = &failedExit
+					if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+						_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+					}
 				}
 			}
 			if typedRes == nil {
@@ -1670,6 +1675,14 @@ func agentToolNames(agentTools []fantasy.AgentTool) []string {
 // agent-specific canonical MCP alias remains an authorizer concern and is
 // included in addition to the concrete model-visible name.
 func (c *Coordinator) withEffectiveToolsAllowed(ctx context.Context, def *agent.AgentDef, exposedToolNames []string) context.Context {
+	return c.withEffectiveToolsAllowedForTask(ctx, def, exposedToolNames, TaskDef{})
+}
+
+// withEffectiveToolsAllowedForTask keeps team-level denials in force while
+// admitting the exact grants of a runtime-selected static contract. This must
+// mirror selectWorkerToolsForTask: exposing a granted tool without allowing it
+// here makes the worker's first permitted call fail at the runtime gate.
+func (c *Coordinator) withEffectiveToolsAllowedForTask(ctx context.Context, def *agent.AgentDef, exposedToolNames []string, task TaskDef) context.Context {
 	if c == nil || c.session == nil {
 		return ctx
 	}
@@ -1700,7 +1713,7 @@ func (c *Coordinator) withEffectiveToolsAllowed(ctx context.Context, def *agent.
 		return ctx
 	}
 	// An allowlist is in force, so it has to cover the final model tool slice.
-	allowed := c.filterDeniedToolNames(append(declared, exposedToolNames...))
+	allowed := c.filterDeniedToolNamesWithGrants(append(declared, exposedToolNames...), templateGrantedToolNames(def, task))
 	return context.WithValue(ctx, tools.AgentToolsAllowedKey, dedupeToolNames(allowed))
 }
 
@@ -1994,12 +2007,16 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			// from incomplete evidence. Stop this orchestrator turn after the
 			// failing receipt has been persisted instead.
 			if todoID == CoordTodoID && isErrResult {
-				if strings.HasPrefix(strings.TrimSpace(resultPreview), "Tool argument schema violation:") {
+				trimmedResult := strings.TrimSpace(resultPreview)
+				if strings.HasPrefix(trimmedResult, "Tool argument schema violation:") ||
+					c.isInitialToolCorrectionResult(tr.ToolName, trimmedResult) {
 					// Allow protocol repair prompt to reach the model; it is
 					// explicitly formulated as an error result block so the LLM
-					// knows it must retry.
+					// knows it must retry. Initial-tool correction is likewise a
+					// bounded, runtime-issued protocol response; arbitrary
+					// coordinator tool errors remain terminal.
 				} else {
-					return fmt.Errorf("%w: tool %q failed: %s", errCoordinatorToolFailure, tr.ToolName, strings.TrimSpace(resultPreview))
+					return fmt.Errorf("%w: tool %q failed: %s", errCoordinatorToolFailure, tr.ToolName, trimmedResult)
 				}
 			}
 
@@ -2523,7 +2540,7 @@ func (c *Coordinator) createTaskAgent(parentCtx context.Context, agentDef *agent
 		}
 		return planAg, agentToolNames(agentTools), nil
 	}
-	ag, exposedToolNames, err := c.createTaskAgentWithResultTool(parentCtx, agentDef, task.Model, resultTool, task.Execution.ToolSequence)
+	ag, exposedToolNames, err := c.createTaskAgentWithResultTool(parentCtx, agentDef, task.Model, resultTool, task)
 	if err != nil {
 		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
 		c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
@@ -2532,7 +2549,7 @@ func (c *Coordinator) createTaskAgent(parentCtx context.Context, agentDef *agent
 	return ag, exposedToolNames, nil
 }
 
-func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *agent.AgentDef, overrideModel string, resultTool *submitResultTool, toolSequence []string) (fantasy.Agent, []string, error) {
+func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *agent.AgentDef, overrideModel string, resultTool *submitResultTool, task TaskDef) (fantasy.Agent, []string, error) {
 	agentDef := def
 	if overrideModel != "" {
 		overriddenDef := *def
@@ -2543,7 +2560,7 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 	agentDef = c.injectWorkerContext(ctx, agentDef)
 	ctx = tools.SetSSHSessionManager(ctx, c.sshSessionMgr)
 
-	agentTools := c.selectWorkerTools(agentDef)
+	agentTools := c.selectWorkerToolsForTask(agentDef, task)
 	if c.mcpManager != nil {
 		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
 		if len(agentDef.MCPTools) > 0 {
@@ -2557,14 +2574,13 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 			}
 		}
 	}
-	agentTools = c.filterDeniedWorkerTools(agentTools)
-	if missing := missingExecutionTools(agentTools, toolSequence); len(missing) > 0 {
+	if missing := missingExecutionTools(agentTools, task.Execution.ToolSequence); len(missing) > 0 {
 		return nil, nil, fmt.Errorf("execution tool_sequence requires unavailable tool(s) for agent %q: %s; select an agent that grants the complete sequence", agentDef.Name, strings.Join(missing, ", "))
 	}
 	if resultTool != nil {
 		agentTools = append(agentTools, resultTool)
 	}
-	agentTools = filterToolsForSequence(agentTools, toolSequence)
+	agentTools = filterToolsForSequence(agentTools, task.Execution.ToolSequence)
 
 	getAgModelID := c.resolveAgentModel(agentDef, "")
 	ag, err := c.createGatedAgent(ctx, c.providerManager.GetProvider(getAgModelID), agent.AgentConfig{

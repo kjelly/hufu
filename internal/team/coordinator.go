@@ -69,7 +69,11 @@ type executionAttemptKey struct{}
 type delegationChainKey struct{}
 
 type TaskDef struct {
-	ID               string `json:"id,omitempty"`
+	ID string `json:"id,omitempty"`
+	// WhenGoalContains selects a static team task contract for a later
+	// coordinator dispatch. It is configuration-only and is never exposed as a
+	// coordinator tool parameter.
+	WhenGoalContains string `json:"-" yaml:"when-goal-contains,omitempty"`
 	ContractID       string `json:"contract_id,omitempty"`
 	ContractHash     string `json:"contract_hash,omitempty"`
 	ContractRevision int    `json:"contract_revision,omitempty"`
@@ -83,7 +87,7 @@ type TaskDef struct {
 	// coordinator. "verbatim" captures tool activity in a runner-owned
 	// transcript artifact and returns only its manifest, keeping raw output out
 	// of later LLM context. Empty and "summary" preserve legacy behavior.
-	OutputMode   string   `json:"output_mode,omitempty"`
+	OutputMode   string   `json:"output_mode,omitempty" yaml:"output-mode,omitempty"`
 	ContextFiles []string `json:"context_files,omitempty"`
 	PlanFirst    bool     `json:"plan_first,omitempty"`
 	PlanID       string   `json:"plan_id,omitempty"`
@@ -253,6 +257,7 @@ type Coordinator struct {
 	initialPrompt                     string
 	coordinatorProtocolRepairsAttempt atomic.Int32
 	coordinatorProtocolRepairsSuccess atomic.Int32
+	initialToolCorrections            atomic.Int32
 	projectDir                        string
 	// Context budget reporting (§5.4). Populated by buildSystemPrompt so the
 	// execution report can emit a token-usage breakdown without re-deriving the
@@ -1109,6 +1114,7 @@ func (c *Coordinator) resetRoundState() {
 	c.wrapUp.Store(0)
 	c.acceptanceRecovery.Store(false)
 	c.finishCalled.Store(false)
+	c.initialToolCorrections.Store(0)
 	c.delegatedTasksMu.Lock()
 	c.delegatedTasks = make(map[string]int)
 	c.delegatedTasksMu.Unlock()
@@ -1295,6 +1301,16 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 					"type":        "array",
 					"items":       map[string]any{"type": "object"},
 					"description": "Optional required JSON fields for each tool_sequence slot. It must have the same length; use an empty object for an unconstrained slot. Hufu denies a call that omits or changes a declared field before it runs.",
+				},
+				"tool_input_canonical_sequence": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "boolean"},
+					"description": "Optional per-slot template-owned input binding. A true entry requires a same-length non-empty tool_input_sequence entry; Hufu replaces any model-authored input with that exact JSON object and records a policy decision. Use false for slots that need runtime-produced IDs or result content.",
+				},
+				"tool_input_transform_sequence": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "Optional per-slot runtime-owned structural transform. It must align with tool_sequence; only Hufu-supported transform names are accepted. The transform runs after input binding and before the underlying tool, preserving the closed sequence.",
 				},
 				"tool_input_field": map[string]any{
 					"type":        "string",

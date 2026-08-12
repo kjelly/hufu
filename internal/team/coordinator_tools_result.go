@@ -181,6 +181,24 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 			return fantasy.NewTextErrorResponse(err.Error()), nil
 		}
 	}
+	// A model-authored failure summary is useful context, but it is not the
+	// canonical execution record. Prefix non-success results with the first
+	// runtime-observed closed-sequence failure so downstream errors cannot
+	// misidentify which slot or exit status actually failed.
+	if !taskResultStatusIsSuccessful(res.Status) {
+		if fact := taskToolSequenceFromContext(ctx).failureSummary(); fact != "" {
+			workerSummary := strings.TrimSpace(res.Summary)
+			res.Summary = fact
+			if workerSummary != "" {
+				res.Summary += ". Worker report: " + workerSummary
+			}
+			res.Findings = append(res.Findings, Finding{
+				Category: "runtime_execution",
+				Summary:  fact,
+				Detail:   "Runtime-owned closed-sequence evidence; consult the sealed transcript for tool output.",
+			})
+		}
+	}
 	// Only a success claim can be mechanically contradicted by terminal
 	// evidence — completed_with_gaps reports a target limitation rather than a
 	// failed task, while partial/failed/blocked already say the task itself is
