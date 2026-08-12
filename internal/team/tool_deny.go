@@ -63,7 +63,7 @@ func (c *Coordinator) filterDeniedWorkerTools(candidate []fantasy.AgentTool) []f
 }
 
 func (c *Coordinator) filterDeniedWorkerToolsWithGrants(candidate []fantasy.AgentTool, grants map[string]bool) []fantasy.AgentTool {
-	if c == nil || c.session == nil || len(c.session.Config.ToolsDenied) == 0 {
+	if c == nil || c.session == nil {
 		return candidate
 	}
 	denied := make(map[string]bool, len(c.session.Config.ToolsDenied))
@@ -72,17 +72,28 @@ func (c *Coordinator) filterDeniedWorkerToolsWithGrants(candidate []fantasy.Agen
 			denied[name] = true
 		}
 	}
+
 	filtered := make([]fantasy.AgentTool, 0, len(candidate))
 	for _, tool := range candidate {
-		if tool != nil && (!denied[tool.Info().Name] || grants[tool.Info().Name]) {
-			filtered = append(filtered, tool)
+		if tool == nil {
+			continue
 		}
+		name := tool.Info().Name
+		if denied[name] && !grants[name] {
+			continue
+		}
+		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.State() != PhaseExecute {
+			if executionCapabilityTools[name] {
+				continue
+			}
+		}
+		filtered = append(filtered, tool)
 	}
 	return filtered
 }
 
 func (c *Coordinator) filterDeniedToolNamesWithGrants(candidate []string, grants map[string]bool) []string {
-	if c == nil || c.session == nil || len(c.session.Config.ToolsDenied) == 0 {
+	if c == nil || c.session == nil {
 		return candidate
 	}
 	denied := make(map[string]bool, len(c.session.Config.ToolsDenied))
@@ -91,11 +102,22 @@ func (c *Coordinator) filterDeniedToolNamesWithGrants(candidate []string, grants
 			denied[name] = true
 		}
 	}
+
 	filtered := make([]string, 0, len(candidate))
 	for _, name := range candidate {
-		if name = strings.TrimSpace(name); name != "" && (!denied[name] || grants[name]) {
-			filtered = append(filtered, name)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
 		}
+		if denied[name] && !grants[name] {
+			continue
+		}
+		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.State() != PhaseExecute {
+			if executionCapabilityTools[name] {
+				continue
+			}
+		}
+		filtered = append(filtered, name)
 	}
 	return filtered
 }
@@ -105,7 +127,7 @@ func (c *Coordinator) filterDeniedToolNamesWithGrants(candidate []string, grants
 // otherwise injected by buildOrchestratorTools after the worker filter and
 // can bypass a read-only or no-memory team contract during wrap-up.
 func (c *Coordinator) filterDeniedCoordinatorTools(candidate []fantasy.AgentTool) []fantasy.AgentTool {
-	if c == nil || c.session == nil || len(c.session.Config.ToolsDenied) == 0 {
+	if c == nil || c.session == nil {
 		return candidate
 	}
 	denied := make(map[string]bool, len(c.session.Config.ToolsDenied))
@@ -114,11 +136,22 @@ func (c *Coordinator) filterDeniedCoordinatorTools(candidate []fantasy.AgentTool
 			denied[name] = true
 		}
 	}
+
 	filtered := make([]fantasy.AgentTool, 0, len(candidate))
 	for _, tool := range candidate {
-		if tool != nil && !denied[tool.Info().Name] {
-			filtered = append(filtered, tool)
+		if tool == nil {
+			continue
 		}
+		name := tool.Info().Name
+		if denied[name] {
+			continue
+		}
+		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.State() != PhaseExecute {
+			if executionCapabilityTools[name] {
+				continue
+			}
+		}
+		filtered = append(filtered, tool)
 	}
 	return filtered
 }
@@ -133,5 +166,35 @@ func (c *Coordinator) coordinatorToolDenied(name string) bool {
 			return true
 		}
 	}
+
+	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.State() != PhaseExecute {
+		if executionCapabilityTools[name] {
+			return true
+		}
+	}
+
 	return false
+}
+
+var executionCapabilityTools = map[string]bool{
+	"bash":               true,
+	"sudo":               true,
+	"ssh":                true,
+	"write":              true,
+	"edit":               true,
+	"multiedit":          true,
+	"golang":             true,
+	"lua":                true,
+	"scp":                true,
+	"create_skill":       true,
+	"wait_for":           true,
+	"download":           true,
+	"terminal":           true,
+	"terminal_start":     true,
+	"terminal_write":     true,
+	"terminal_read":      true,
+	"terminal_wait":      true,
+	"terminal_close":     true,
+	"terminal_list":      true,
+	"terminal_reconcile": true,
 }
