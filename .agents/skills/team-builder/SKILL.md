@@ -1,23 +1,81 @@
 ---
 name: team-builder
-description: Use when the user asks to create, scaffold, or design an agent team for hufu — generating the team.yaml and agent .md files under .agent-teams/<name>/.
+description: Use when the user asks to create, scaffold, design, or improve an agent team for Hufu — generating or updating team.yaml and agent .md files under .agent-teams/team-name. Design least-privilege roles, execution contracts, workflow phases, verification, recovery, and validation appropriate to the task's risk.
 ---
 
 # Team Builder Skill
 
-Scaffold a runnable hufu agent team under `.agent-teams/<team-name>/` with a `team.yaml` and one or more agent `.md` files.
+Design a runnable, contract-valid Hufu agent team under `.agent-teams/<team-name>/`.
+Optimize for the task's observable outcome and failure boundaries, not the
+largest possible collection of agents.
 
 ## Workflow
 
-1. **Clarify intent.** If the user has not specified a team name or purpose, ask. Collect:
+1. **Classify the task and its risk.** If the user has not specified a team
+   name or purpose, ask. Collect:
    - Team name (lowercase, hyphenated)
    - One-sentence goal
-   - Which agents/roles are needed (coordinator + workers)
    - Default model (e.g. `ollama/qwen3:8b`)
-2. **Pick a template** from the catalog below that closest matches the user's goal. Adapt it; do not copy verbatim if the user's domain differs.
-3. **Write the files.** Create `team.yaml` first, then each agent `.md`. Never overwrite existing files — if the team directory already exists, ask the user before proceeding.
-4. **Validate.** Run `hufu list <team-name>` to confirm the team is discovered and all agents parse. Run `hufu doctor` to verify the model is reachable.
-5. **Report.** Print the file tree and a one-line "try it" command: `hufu @<team-name> "<example task>"`.
+   - Expected deliverable and its objective success criteria
+   - Inputs, outputs, dependencies, and work that can run in parallel
+   - Whether work is read-only, writes the workspace, changes external state,
+     changes infrastructure/credentials, or handles secrets
+   - Whether the run is interactive or unattended, and the required budget,
+     rollback, and operator approval boundaries
+2. **Choose the smallest topology that can verify the outcome.** Start with a
+   single worker for a simple task. Add distinct workers only for independent
+   expertise, a producer/critic separation, a real pipeline stage, or an
+   objective verification boundary. Do not add agents merely to make a team
+   look comprehensive.
+3. **Choose a template and execution mode.** Use prompt-driven templates for
+   low-risk, exploratory work. Use a contract-driven workflow for ordered,
+   high-cost, unattended, or external-side-effect work. Adapt templates to the
+   domain; do not copy their prompts verbatim.
+4. **Define agent contracts before writing prompts.** For every worker specify
+   one responsibility, allowed tools, input source, output format, success
+   criterion, side-effect class, recovery behavior, and whether it may modify
+   files. Define handoffs by typed result or declared artifact, never by an
+   assumed shared conversation.
+5. **Write the files.** Create `team.yaml` first, then each agent `.md`.
+   Never overwrite an existing team directory without the user's approval.
+6. **Run static contract validation.** Run `hufu team validate --team
+   <team-name>` and `hufu list <team-name>`. Fix all errors before a model call.
+   Run `hufu doctor` when provider, verifier executable, and workspace
+   preflight are in scope.
+7. **Run a safe preview.** Use `hufu --agent-team <team-name> --dry-run
+   "<representative prompt>"` to inspect the resolved team without model calls.
+   Run a real smoke test only for a read-only team or with explicit permission
+   for the target system.
+8. **Report.** Show the file tree, task topology, risk/verification choices,
+   validation results, and one safe "try it" command.
+
+## Reliability-First Team Design
+
+### Select the execution shape
+
+| Task shape | Recommended design |
+| --- | --- |
+| Simple, reversible, one deliverable | Single worker with an objective `verify` when possible |
+| Code or document production requiring review | Producer → critic → producer, with critic read-only |
+| Independent investigation | Parallel read-only workers, then one synthesizer |
+| Ordered implementation steps | Plan → execute → verify, with explicit dependency and done criteria |
+| Unattended or high-cost external operation | Runtime-enforced Prepare → Audit → Execute → Verify workflow with acceptance gate |
+| Infrastructure or credential mutation | Dedicated action/execute boundary, capability requirement, reconciliation and rollback plan; do not delegate unrestricted shell access to every worker |
+
+### Design each handoff
+
+For each agent-to-agent edge, answer all of the following before generating
+files:
+
+- What exact result, artifact, or decision is produced?
+- Which later agent consumes it, and how is the producer identified?
+- What objective verifier proves the handoff is usable?
+- What happens when it is partial, blocked, stale, or invalid?
+- Can retry replay a side effect? If so, require reconciliation or manual
+  recovery instead of blind retry.
+
+Treat a model's prose as a claim, not evidence. A `success` result must mean
+the declared outcome and its required verification are both complete.
 
 ## Directory Layout
 
@@ -95,6 +153,74 @@ tools:                  # team-wide tool allowlist
     - ls
 ```
 
+### Contract-Driven Workflow Configuration
+
+Use these fields only when a workflow must be enforced by Hufu at runtime.
+They are not a substitute for a clear worker prompt; they make phase order,
+capabilities, retries, and acceptance independently checkable.
+
+```yaml
+# Reject missing runtime prerequisites before dispatch.
+requires:
+  environment: [REQUIRED_TOKEN]
+  paths: [/srv/project]
+  network: true
+
+# Restrict who can be delegated and freeze safety-critical task shapes.
+delegation:
+  allowed-workers: [preparer, auditor, executor, verifier]
+  bind-task-goal-contracts: true
+  no-redispatch-after-success: [preparer, auditor, executor, verifier]
+  forbid-context-files: true
+
+# Hufu, not coordinator prose, owns phase progression.
+workflow:
+  phases: [prepare, audit, execute, verify]
+policies:
+  require_phase_success: true
+  allow_phase_skip: false
+  max_retries: 0
+  fail_fast: true
+capabilities:
+  required: [domain-action]
+verification:
+  required: true
+retry:
+  transient:
+    max_attempts: 0
+  repair:
+    max_attempts_per_failure_signature: 0
+
+# Bind a provider-neutral capability to a team-owned adapter. Keep domain
+# commands and schemas here, never in Hufu core.
+action-providers:
+  domain-action:
+    command: [bash, .agent-teams/my-team/run-action.sh]
+    dir: /srv/project
+    timeout: 1800
+
+goal-mode: outcome
+acceptance:
+  mode: blocking
+  require-no-unresolved-tasks: true
+  commands: [bash .agent-teams/my-team/acceptance.sh]
+reliability:
+  verifier-lint: error
+  hard-enforcement: true
+  max-systemic-failure-tasks: 1
+```
+
+For a runtime action, declare a static task contract that assigns it to the
+`execute` phase and makes verification objective. For an attestation-only
+phase, give its worker only `submit_result`; do not grant a shell merely
+because a later phase needs one. Keep the action adapter as the sole mutation
+owner.
+
+Do not set `unattended: true` unless every tool is allowlisted, every required
+human decision has a safe default, budgets are configured, and the acceptance
+failure/rollback behavior is intentional. Never use a destructive default
+rollback for a team whose target or workspace has not been explicitly scoped.
+
 ### Field Priority (highest wins)
 
 1. CLI flags (`--model`, `--temperature`, ...)
@@ -128,6 +254,9 @@ restricted-path: "/etc"
 no-net: false
 force-mcp: false
 shell: bash
+side_effect: workspace_write        # none, workspace_write, external_write, infra_mutation, credential_mutation
+recovery: retry                     # retry, reconcile, manual, never
+reconcile-tool: "test -f output"    # read-only status probe for interrupted work
 mcp-tools:                        # custom MCP tools (dict format)
   run-tests:
     cmd: go test ./...
@@ -158,6 +287,9 @@ Your system prompt here. Describe the agent's persona, workflow, and output form
 | `timeout` | no | team default | Seconds |
 | `max-retries` | no | team default | `-1` = inherit team default |
 | `max-steps` | no | team default | Per-agent step budget |
+| `side_effect` | no | tool-inferred | Choose the strongest possible effect: `none`, `workspace_write`, `external_write`, `infra_mutation`, or `credential_mutation` |
+| `recovery` | no | class-derived | Use `retry` only for replay-safe work; use `reconcile`, `manual`, or `never` for external effects as appropriate |
+| `reconcile-tool` | no | — | Read-only probe for an interrupted task: exit 0=complete, 1=not started, 2=partial, other=unknown |
 
 ## Tool Catalog
 
@@ -446,6 +578,42 @@ Return exactly one of:
 Do not perform any execution. Do not write files. Only report.
 ```
 
+### Template: Runtime-Enforced Outcome Workflow
+
+Best for: unattended operations, expensive or externally mutating workflows,
+and tasks where a false-success result is worse than a blocked run.
+
+```
+.agent-teams/<name>/
+├── team.yaml
+├── coordinator.md         # delegates only within the declared contract
+├── preparer.md            # attestation or read-only preparation boundary
+├── auditor.md             # read-only contract/evidence checkpoint
+├── executor.md            # runtime-owned action boundary
+├── verifier.md            # objective verification checkpoint
+├── run-action.sh          # action-provider adapter
+└── acceptance.sh          # whole-run gate
+```
+
+Use this topology only when each phase has a distinct safety purpose. For
+example, a preparer and auditor should be attestation-only workers if the
+runtime action owns all mutation. Do not create nominal phases that merely
+repeat the same shell command.
+
+**Design rules:**
+
+- Give prepare/audit/verify workers only the tools their phase requires. For an
+  attestation boundary, define a static contract whose only tool sequence entry
+  is `submit_result`.
+- Bind the execute capability to an `action-providers` adapter. The adapter
+  owns the mutation, writes durable receipts, and returns failure to Hufu.
+- Define `requires`, workflow phases, `require_phase_success`, `fail_fast`,
+  capabilities, blocking acceptance, and verifier linting in `team.yaml`.
+- Set retries to zero unless the domain operation is explicitly idempotent and
+  replay-safe. Add a read-only reconciliation path before permitting replay.
+- Make `acceptance.sh` verify the delivered outcome rather than merely check
+  that a process exited zero.
+
 ### Template: Pipeline Team
 
 Best for: multi-stage processing where each stage feeds the next (research → analyze → write).
@@ -518,6 +686,7 @@ This is what `hufu init <name>` generates. Use when the user just needs one capa
 | "execute this plan", "follow these steps" | Plan-Execution Team |
 | "research then write", "analyze then report" | Pipeline Team |
 | "security audit", "find vulnerabilities" | Security Audit Team |
+| "run unattended", "deploy", "rebuild and verify", "must not falsely succeed" | Runtime-Enforced Outcome Workflow |
 | "just do X", "simple task" | Single-Worker Team |
 
 ## Design Principles
@@ -532,6 +701,11 @@ This is what `hufu init <name>` generates. Use when the user just needs one capa
 8. **Critic ≠ Fixer.** In review patterns, the critic reports findings but does NOT modify files. The coordinator routes feedback back to the producer.
 9. **Parallelize independent work.** The coordinator can dispatch multiple workers in parallel via the `agent` tool. Use this for independent scans, independent file edits, etc.
 10. **Pass context explicitly.** Workers do not see each other's output unless the coordinator includes it in the task description. When delegating stage N+1, include stage N's results.
+11. **Make output contracts observable.** Define what each worker returns and what proves it is usable. Use typed results, declared artifacts, and `verify`/acceptance checks; do not rely on a final prose claim or a report file appearing eventually.
+12. **Separate mutation from review.** Reviewers, fact-checkers, and verifiers are read-only. Give mutation authority to the smallest practical set of workers or to a runtime action provider.
+13. **Make retries replay-safe.** Set `side_effect` and `recovery` accurately. Do not automatically retry external, infrastructure, or credential mutations without a deliberate idempotency and reconciliation design.
+14. **Use runtime contracts for hard boundaries.** For ordered phases, fixed tool sequences, no-redispatch rules, capabilities, or task references that must not depend on model memory, declare the corresponding team policy or task contract.
+15. **Keep consumer detail out of Hufu core.** Put domain commands, input schemas, paths, and acceptance logic in the team/adapter; use capability names and generic contracts at the Hufu boundary.
 
 ## Common Mistakes
 
@@ -549,24 +723,45 @@ This is what `hufu init <name>` generates. Use when the user just needs one capa
 | Timeout too short for builds | Set worker `timeout: 1800+` for build-heavy tasks |
 | `tools` as YAML list when string is simpler | Both work; use comma string for short lists, YAML list for long |
 | Forgetting `ask_user` on coordinator | Coordinator needs it to clarify ambiguity |
+| Worker claims success with no objective evidence | Add a task `verify`, typed verification spec, or blocking acceptance gate |
+| Reviewer or verifier can modify production state | Remove write/edit/bash mutation permissions; use a separate producer or runtime action |
+| `tool-sequence` names a tool the worker does not have | Align the worker tool grant with the full sequence before dispatch; do not expect the model to work around it |
+| Workflow phase is only described in coordinator prose | Declare `workflow`, `policies`, capabilities, and task phase/action contracts in `team.yaml` |
+| Same worker is redispatched after a successful irreversible step | Use `no-redispatch-after-success` and a downstream verifier or consumer task |
+| Retry replays an external change | Classify `side_effect`, select `recovery: reconcile`/`manual`, and supply a read-only `reconcile-tool` |
+| Producer passes a filesystem path as proof | Use declared artifact/typed result handoff; do not treat Todo IDs, checkpoints, or arbitrary paths as artifact references |
+| Unattended team waits for input or retries forever | Set `unattended`, explicit tool allowlists, budgets, no-progress/retry limits, acceptance, and a reviewed rollback policy |
+| `force-mcp` or `no-net` conflicts with worker tools | Remove incompatible tools or configure the required MCP/provider capability before writing the team |
 
 ## Validation Steps
 
-After creating a team, verify it works:
+After creating or changing a team, validate from cheapest and safest to most
+expensive. Fix static errors before any model call.
 
 ```bash
-# 1. Check the team is discovered and agents parse
+# 1. Validate static contracts: task references, delegation, tool policy,
+#    requirements, workflow/action configuration, and verifier contracts.
+hufu team validate --team <team-name>
+
+# 2. Confirm the team is discovered and agent frontmatter parses.
 hufu list <team-name>
 
-# 2. Preflight: model reachable, workspace writable
+# 3. Preflight provider, workspace, verifier executables, and discoverable teams.
 hufu doctor
 
-# 3. Smoke test with a simple prompt
-hufu @<team-name> "say hello"
+# 4. Preview the resolved team without model calls or task execution.
+hufu --agent-team <team-name> --dry-run "<representative prompt>"
 
-# 4. Run with verbose to see agent output
-hufu @<team-name> "do a small task" -v
+# 5. Run a real smoke test only if it is read-only. For any mutating target,
+#    obtain explicit authorization and report the command, exit code, evidence,
+#    acceptance result, and unresolved tasks.
+hufu @<team-name> "say hello" -v
 ```
+
+For a workflow team, test both a valid path and at least one rejected path:
+missing requirement, unavailable capability, invalid tool sequence, failed
+verification, and blocked/partial result. A team is not production-ready if it
+can only demonstrate its happy path.
 
 ## Example: Creating a Custom Team
 
