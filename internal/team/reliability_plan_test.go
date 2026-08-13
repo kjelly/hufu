@@ -248,6 +248,68 @@ func TestEnsureFinishedContinuationHonorsLimitAndCancellation(t *testing.T) {
 	}
 }
 
+func TestEnsureFinishedInterruptedContinuationIsResumable(t *testing.T) {
+	session := workflowTestSession(t)
+	session.Config.MaxCoordinatorTurns = 2
+	workflow, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workflow.Start(); err != nil {
+		t.Fatal(err)
+	}
+	workflow.mu.Lock()
+	workflow.state = PhaseAudit
+	workflow.results[PhasePrepare] = PhaseResult{Status: PhaseStatusSuccess, Summary: "prepare complete"}
+	workflow.mu.Unlock()
+	calls := 0
+	c := &Coordinator{
+		session:       session,
+		sessionData:   NewSession(),
+		taskTracker:   NewTaskTracker(),
+		reportStatus:  func(StatusEvent) {},
+		phaseWorkflow: workflow,
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "completed task"}})[0]
+	c.taskTracker.TodoList().UpdateStatusAndOutput(item.ID, TaskDone, "done", "durable task result")
+	c.saveCheckpoint()
+	c.runOrchestratorOverride = func(context.Context, *agent.AgentDef, string) (string, []fantasy.StepResult, error) {
+		calls++
+		return "", nil, errors.New("provider stream interrupted")
+	}
+
+	result, _ := c.ensureFinished(context.Background(), &agent.AgentDef{Name: "coordinator"}, "initial", nil)
+	if calls != 1 {
+		t.Fatalf("orchestrator calls = %d, want one failed continuation without forced finish", calls)
+	}
+	if c.finishCalled.Load() {
+		t.Fatal("interrupted continuation must not call finish")
+	}
+	if !c.continuationInterrupted.Load() {
+		t.Fatal("interrupted continuation was not marked resumable")
+	}
+	if !strings.Contains(result, "durable task result") {
+		t.Fatalf("result = %q, want durable completed-task summary", result)
+	}
+	run := c.LastRunResult()
+	if run == nil || run.Outcome != RunOutcomePartial || run.StopReason != StopReasonCoordinatorInterrupted || run.Acceptance != nil {
+		t.Fatalf("run result = %#v, want resumable partial without acceptance", run)
+	}
+	checkpoint := c.ContinuationCheckpoint()
+	if checkpoint == nil || checkpoint.Status != "aborted" || !strings.Contains(checkpoint.Reason, "provider stream interrupted") {
+		t.Fatalf("continuation checkpoint = %#v, want aborted provider interruption", checkpoint)
+	}
+
+	restoredSession := LoadSession(session.Workspace)
+	if restoredSession == nil || restoredSession.WorkflowState != PhaseAudit {
+		t.Fatalf("workflow state = %#v, want AUDIT", restoredSession)
+	}
+	restarted := &Coordinator{session: session, sessionData: restoredSession, taskTracker: NewTaskTracker()}
+	if checkpoint := restarted.ResumeContinuationCheckpoint(); checkpoint == nil || checkpoint.Status != "resumed" {
+		t.Fatalf("resumed checkpoint = %#v, want resumed", checkpoint)
+	}
+}
+
 func TestEnsureFinishedBudgetProducesPartialOutcome(t *testing.T) {
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()

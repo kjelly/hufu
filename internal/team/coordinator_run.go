@@ -499,7 +499,10 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 		contPrompt := "The step limit for the previous turn was reached. Please continue coordinating and executing the tasks required to satisfy the user's request. When complete, call finish."
 		wrapResult, wrapSteps, err := c.runOrchestrator(ctx, orchDef, contPrompt)
 		if err != nil || strings.TrimSpace(wrapResult) == "" {
-			continuationReason = "continuation turn failed or returned no result"
+			continuationReason = "continuation turn returned no result"
+			if err != nil {
+				continuationReason = fmt.Sprintf("continuation turn failed: %v", err)
+			}
 			continuationInterrupted = true
 			break
 		}
@@ -513,6 +516,16 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 				break
 			}
 		}
+	}
+
+	if continuationInterrupted && c.canResumeInterruptedWorkflow() {
+		// A coordinator continuation can end because its provider stalls or
+		// returns no result. The current workflow phase and completed task
+		// receipts are durable state, so this is a resumable interruption—not
+		// permission to force finish or run acceptance against an incomplete
+		// workflow.
+		result = c.recordInterruptedContinuation(continuationTurns, maxContinuationTurns, continuationReason, result)
+		return result, steps
 	}
 
 	if noProgressStopped {
@@ -586,6 +599,59 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 	}
 
 	return result, steps
+}
+
+// canResumeInterruptedWorkflow reports whether a provider interruption can
+// safely leave the runtime workflow open for a later coordinator invocation.
+// Non-workflow teams retain their established forced-summary behavior.
+func (c *Coordinator) canResumeInterruptedWorkflow() bool {
+	if c == nil || c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() {
+		return false
+	}
+	switch c.phaseWorkflow.State() {
+	case PhaseDone, PhaseFailed:
+		return false
+	default:
+		return true
+	}
+}
+
+// recordInterruptedContinuation preserves a failed coordinator continuation as
+// a resumable partial run. It intentionally does not run acceptance or alter
+// workflow/task state: the next invocation resumes from the durable phase
+// checkpoint instead of treating this provider interruption as a finish.
+func (c *Coordinator) recordInterruptedContinuation(turn, maxTurns int, reason, result string) string {
+	if summary := c.summaryFromTodos(errors.New(reason)); summary != "" {
+		result = summary
+	}
+	items := []*TodoItem(nil)
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		items = c.taskTracker.TodoList().Items()
+	}
+	progress := c.noProgressCounters()
+	evaluated := EvaluateRunOutcome(RunEvaluationInput{
+		UnresolvedTasks:        toTaskReferences(pendingTodoItems(items)),
+		CoordinatorInterrupted: true,
+		Response:               result,
+		Reason:                 reason,
+		Stats:                  SummarizeRunStats(items),
+		Metrics:                c.Metrics(),
+		GoalMode:               c.GoalMode(),
+	})
+	// EvaluateRunOutcome supplies a default acceptance placeholder. No
+	// acceptance command ran on this resumable path, so omit it rather than
+	// claiming the workflow has no acceptance contract.
+	evaluated.Acceptance = nil
+	evaluated.Continuation = &ContinuationInfo{
+		TurnCount:  turn,
+		MaxTurns:   maxTurns,
+		Reason:     reason,
+		NoProgress: &progress,
+	}
+	c.SetLastRunResult(&evaluated)
+	c.saveContinuationCheckpoint(turn, maxTurns, reason, "aborted")
+	c.continuationInterrupted.Store(true)
+	return result
 }
 
 // attemptWrapUpRecovery converts a mid-run coordinator failure into a final
@@ -1145,6 +1211,9 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	}
 
 	result, steps = c.ensureFinished(ctx, &orchDefCopy, result, steps)
+	if c.continuationInterrupted.Load() {
+		return c.returnResumableContinuation(ctx, result, steps, "coordinator continuation interrupted; workflow checkpointed for resume")
+	}
 	if ctx.Err() != nil && !c.finishCalled.Load() {
 		if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunCancelled); cleanupErr != nil {
 			c.report(c.newEvent("error").withMessage("terminal cleanup error: " + cleanupErr.Error()))
@@ -1229,6 +1298,9 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	}
 
 	result, steps = c.ensureFinished(ctx, &orchDefCopy, result, steps)
+	if c.continuationInterrupted.Load() {
+		return c.returnResumableContinuation(ctx, result, steps, "coordinator continuation interrupted; workflow checkpointed for resume")
+	}
 	if ctx.Err() != nil && !c.finishCalled.Load() {
 		if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunCancelled); cleanupErr != nil {
 			c.report(c.newEvent("error").withMessage("terminal cleanup error: " + cleanupErr.Error()))
@@ -1255,6 +1327,23 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		return finalResult, fmt.Errorf("%w: %s", ErrTasksUnresolved, lastRes.Response)
 	}
 	return finalResult, nil
+}
+
+// returnResumableContinuation records the partial response while deliberately
+// leaving task and workflow state untouched for the next coordinator run.
+func (c *Coordinator) returnResumableContinuation(ctx context.Context, result string, steps []fantasy.StepResult, message string) (string, error) {
+	c.saveHistoryAndSession(ctx, steps)
+	finalResult := strings.TrimPrefix(result, "FINISHED:")
+	c.addSessionAssistantMessage(finalResult)
+	if c.sessionData != nil && c.session != nil && c.session.Workspace != "" {
+		c.sessionData.Rounds = c.totalRounds()
+		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
+	}
+	c.report(c.newEvent("done").withAgent(c.GetOrchestratorDef().Name).withMessage(message).withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
+	if lastRes := c.LastRunResult(); lastRes != nil {
+		return finalResult, fmt.Errorf("%w: %s", ErrTasksUnresolved, lastRes.Response)
+	}
+	return finalResult, ErrTasksUnresolved
 }
 
 func runResultStatusData(result *RunResult) map[string]any {

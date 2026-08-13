@@ -277,6 +277,7 @@ type Coordinator struct {
 	wrapUp                       atomic.Int32
 	initialDelegationAttempted   atomic.Bool
 	finishCalled                 atomic.Bool // set when the finish tool completes; cleared per orchestrator run
+	continuationInterrupted      atomic.Bool // set when a continuation stops before a workflow can safely finish
 	current                      atomic.Pointer[currentSnapshot]
 	currentStageStart            time.Time
 	currentStageStartMu          sync.RWMutex
@@ -1137,6 +1138,7 @@ func (c *Coordinator) resetRoundState() {
 	c.wrapUp.Store(0)
 	c.acceptanceRecovery.Store(false)
 	c.finishCalled.Store(false)
+	c.continuationInterrupted.Store(false)
 	c.initialToolCorrections.Store(0)
 	c.delegatedTasksMu.Lock()
 	c.delegatedTasks = make(map[string]int)

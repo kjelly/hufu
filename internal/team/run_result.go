@@ -53,16 +53,17 @@ func IsValidGoalMode(mode GoalMode) bool {
 type StopReason string
 
 const (
-	StopReasonCompleted          StopReason = "completed"
-	StopReasonAcceptanceFailed   StopReason = "acceptance_failed"
-	StopReasonAcceptanceNotSet   StopReason = "acceptance_not_configured"
-	StopReasonUnresolvedTasks    StopReason = "unresolved_tasks"
-	StopReasonExternalBlockage   StopReason = "external_blockage"
-	StopReasonPolicyViolation    StopReason = "policy_violation"
-	StopReasonBudgetExceeded     StopReason = "budget_exceeded"
-	StopReasonCancelled          StopReason = "cancelled"
-	StopReasonRunFailed          StopReason = "run_failed"
-	StopReasonEvidenceIncomplete StopReason = "evidence_incomplete"
+	StopReasonCompleted              StopReason = "completed"
+	StopReasonAcceptanceFailed       StopReason = "acceptance_failed"
+	StopReasonAcceptanceNotSet       StopReason = "acceptance_not_configured"
+	StopReasonUnresolvedTasks        StopReason = "unresolved_tasks"
+	StopReasonExternalBlockage       StopReason = "external_blockage"
+	StopReasonPolicyViolation        StopReason = "policy_violation"
+	StopReasonBudgetExceeded         StopReason = "budget_exceeded"
+	StopReasonCoordinatorInterrupted StopReason = "coordinator_interrupted"
+	StopReasonCancelled              StopReason = "cancelled"
+	StopReasonRunFailed              StopReason = "run_failed"
+	StopReasonEvidenceIncomplete     StopReason = "evidence_incomplete"
 )
 
 func (r RunOutcome) String() string {
@@ -275,17 +276,18 @@ func FormatCanonicalStatus(res *RunResult) string {
 // It contains state already observed by the coordinator; evaluating it has no
 // side effects and does not inspect prompts, task descriptions, or output.
 type RunEvaluationInput struct {
-	UnresolvedTasks []TaskReference
-	Acceptance      AcceptanceState
-	Cancelled       bool
-	BudgetExceeded  bool
-	RunFailed       bool
-	ExitCode        int
-	Response        string
-	Reason          string
-	Stats           RunStats
-	Metrics         RunMetrics
-	GoalMode        GoalMode
+	UnresolvedTasks        []TaskReference
+	Acceptance             AcceptanceState
+	Cancelled              bool
+	BudgetExceeded         bool
+	CoordinatorInterrupted bool
+	RunFailed              bool
+	ExitCode               int
+	Response               string
+	Reason                 string
+	Stats                  RunStats
+	Metrics                RunMetrics
+	GoalMode               GoalMode
 }
 
 // EvaluateRunOutcome is the sole policy for deriving a run outcome and goal
@@ -338,6 +340,12 @@ func EvaluateRunOutcome(input RunEvaluationInput) RunResult {
 	if input.BudgetExceeded {
 		result.Outcome = RunOutcomePartial
 		result.StopReason = StopReasonBudgetExceeded
+		result.ExitCode = 7
+		return result
+	}
+	if input.CoordinatorInterrupted {
+		result.Outcome = RunOutcomePartial
+		result.StopReason = StopReasonCoordinatorInterrupted
 		result.ExitCode = 7
 		return result
 	}
