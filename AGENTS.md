@@ -850,6 +850,53 @@ func (r *PromptReader) Close() error
 2. **Prioritize Readability:** Code should be idiomatic, clear, and well-documented.
 3. **Follow Workspace Standards:** Adhere strictly to the established architectural patterns and conventions defined in `AGENTS.md` and related documentation.
 
+## Hufu Development Invariants
+
+These rules apply when modifying Hufu's Go source code. They capture cross-cutting
+execution contracts that are easy to break with an apparently local change.
+
+- **Treat `Coordinator` as a state machine.** Runtime state, typed results,
+  execution receipts, verification, and acceptance gates are authoritative;
+  model prose is not.
+- **Use canonical state transitions.** Do not mutate task status or result
+  fields directly when an existing transition/API exists. Preserve checkpoint,
+  task-journal, event, and status-projection updates together.
+- **Propagate lifecycle changes everywhere.** A new task, workflow, status, or
+  lifecycle event must be traced through the event store/reducer, session
+  persistence, task journal, CLI display, JSON output, reports, TUI reporter,
+  and tests.
+- **Trace every execution path before changing coordinator behavior.** Check
+  normal workers, direct agents, extra-model execution, sidecar tasks,
+  runtime actions, fast-path routing, unattended mode, and crash-resume.
+- **Keep tool authorization centralized.** Do not bypass policy gates,
+  capability checks, denied-tool checks, or phase restrictions from a special
+  execution path.
+- **Treat closed tool sequences as contracts.** Preflight the concrete agent
+  tool set before starting a worker. Do not add exploratory calls, hidden
+  retries, alternate tools, or post-submit calls outside the declared
+  sequence. Expected non-zero exit codes must be declared explicitly.
+- **Centralize recovery decisions.** Route failure classification, retry,
+  repair, reconciliation, and anti-thrashing through the existing recovery
+  machinery. Do not add local retry loops that can replay side effects.
+- **Keep protocol repair side-effect free.** Repair may fix result, schema, or
+  argument state, but must not silently replay a completed external or
+  infrastructure mutation. Preserve the original transcript and receipt.
+- **Do not infer success from output.** A task or run is successful only after
+  its typed result, objective verifier, receipt, and the applicable evidence or
+  acceptance checks pass. Otherwise report `partial`, `blocked`, or another
+  truthful non-success status.
+- **Keep Hufu core integration-independent.** Do not hardcode Pilot paths,
+  commands, inventory names, action schemas, or consumer-specific worker names
+  in `internal/`. Use generic workflow and `ActionProvider` interfaces.
+- **Protect persistence and artifacts.** Use atomic persistence and existing
+  locking mechanisms. Artifact references are opaque/content-addressed IDs,
+  not Todo IDs or arbitrary filesystem paths. Redact secrets before writing
+  subprocess output, audit logs, transcripts, receipts, reports, or sessions.
+- **Test runtime changes at the contract boundary.** Add tests for parsing,
+  policy and capability enforcement, plus a lifecycle/integration path covering
+  failure, verification, and resume behavior. Run the full required validation
+  commands before handing off the change.
+
 ## TUI Testing Guidelines
 
 The TUI is built using the Bubble Tea framework, which emphasizes a pure functional approach to state management. To maintain high code quality and prevent regressions, agents should follow these testing patterns:

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hufu Runtime Hardening"
+  short_description: "Safely change Hufu execution contracts and recovery"
+  default_prompt: "Use $harden-hufu-runtime to implement and validate a cross-cutting Hufu runtime change."
