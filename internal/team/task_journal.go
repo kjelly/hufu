@@ -35,6 +35,7 @@ type journalRecord struct {
 	Op                  string               `json:"op"` // "put", "del", or "err" (diagnostic only)
 	Agent               string               `json:"agent"`
 	TaskID              string               `json:"task_id,omitempty"`
+	RunID               string               `json:"run_id,omitempty"`
 	Desc                string               `json:"desc,omitempty"`
 	Verify              string               `json:"verify,omitempty"`
 	VerifyMode          string               `json:"verify_mode,omitempty"`
@@ -134,7 +135,11 @@ func (c *Coordinator) recordTerminalTypedTaskResult(todoID string) {
 				_ = json.Unmarshal(redacted, &copyResult)
 			}
 		}
-		_ = c.journal.append(journalRecord{Op: "result", Agent: item.Agent, TaskID: item.ID, Desc: item.Desc, TypedResult: &copyResult, TS: time.Now().Format(time.RFC3339)})
+		runID := c.executionRunID
+		if runID == "" {
+			runID = c.taskTracker.TodoList().RunID()
+		}
+		_ = c.journal.append(journalRecord{Op: "result", Agent: item.Agent, TaskID: item.ID, RunID: runID, Desc: item.Desc, TypedResult: &copyResult, TS: time.Now().Format(time.RFC3339)})
 		return
 	}
 }
@@ -143,10 +148,15 @@ func (c *Coordinator) recordTaskFailureWithEventAndOutput(agentName, taskDesc, d
 	if c == nil || c.journal == nil || agentName == "" || taskDesc == "" || detail == "" {
 		return
 	}
+	runID := c.executionRunID
+	if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		runID = c.taskTracker.TodoList().RunID()
+	}
 	record := journalRecord{
 		Op:            "err",
 		Agent:         agentName,
 		TaskID:        eventTaskID(event),
+		RunID:         runID,
 		Desc:          "",
 		Output:        detail,
 		FailureOutput: failureOutput,

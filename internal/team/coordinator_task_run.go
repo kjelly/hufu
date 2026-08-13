@@ -5,10 +5,12 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -87,13 +89,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		agentTimeout = time.Duration(agentDef.Timeout) * time.Second
 	}
 
-	maxRetries := c.session.Config.MaxRetries
-	if agentDef.MaxRetries >= 0 {
-		maxRetries = agentDef.MaxRetries
-	}
-	if maxRetries < 1 {
-		maxRetries = 1
-	}
+	maxRetries := c.effectiveWorkerMaxAttempts(agentDef)
 
 	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
 	c.reconcileTaskStatusProjection()
@@ -1212,14 +1208,32 @@ retryLoop:
 	return "", failErr
 }
 
+func (c *Coordinator) effectiveWorkerMaxAttempts(agentDef *agent.AgentDef) int {
+	maxRetries := c.session.Config.MaxRetries
+	if agentDef != nil && agentDef.MaxRetries >= 0 {
+		maxRetries = agentDef.MaxRetries
+	}
+	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.policies.FailFast {
+		return 1
+	}
+	if maxRetries < 1 {
+		return 1
+	}
+	return maxRetries
+}
+
 // executeRuntimeAction gives provider-backed actions the same durable TODO
 // lifecycle as worker tasks. In particular, a successful provider response
 // must mark its static contract done so the phase state machine can advance.
 func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, todoID string) (string, error) {
+	startedAt := time.Now().UTC()
+	c.emitRuntimeActionEvent("action_started", task, todoID, "started", startedAt, time.Time{}, "", nil)
 	if err := c.taskTracker.TodoList().SetRuntimeError(todoID, nil); err != nil {
+		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("clear structured action error: %w", err)
 	}
 	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskInProgress, "executing structured action", ""); err != nil {
+		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("mark structured action in progress: %w", err)
 	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
@@ -1228,10 +1242,12 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
 		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
 		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
+		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", err
 	}
 	if task.Verify != "" || task.VerifySpec != nil {
 		if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskVerifying, "running objective verification", output); err != nil {
+			c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
 			return "", fmt.Errorf("enter structured action verification: %w", err)
 		}
 		verification, verifyErr := c.verifyTaskDeliverableWithSpec(ctx, nil, task)
@@ -1241,16 +1257,100 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		if verifyErr != nil {
 			err := fmt.Errorf("structured action verification failed: %w", verifyErr)
 			c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
+			c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
 			return "", err
 		}
 	}
 	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output); err != nil {
+		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("mark structured action done: %w", err)
 	}
 	c.reconcileTaskStatusProjection()
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(output).withMessage("structured action completed").withTodoID(todoID))
+	c.emitRuntimeActionEvent("action_completed", task, todoID, "success", startedAt, time.Now().UTC(), output, nil)
 	return output, nil
+}
+
+type runtimeActionReceipt struct {
+	Version    int       `json:"version"`
+	RunID      string    `json:"run_id,omitempty"`
+	TaskID     string    `json:"task_id"`
+	Agent      string    `json:"agent,omitempty"`
+	ActionID   string    `json:"action_id"`
+	Capability string    `json:"capability"`
+	Type       string    `json:"type"`
+	Status     string    `json:"status"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at"`
+	Output     string    `json:"output,omitempty"`
+	Error      string    `json:"error,omitempty"`
+}
+
+func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, todoID, status string, startedAt, finishedAt time.Time, output string, actionErr error) {
+	if c == nil || c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || task.Action == nil {
+		return
+	}
+	actionID := "structured-action-" + safeNameRegex.ReplaceAllString(todoID, "-") + "-" + fmt.Sprintf("%d", startedAt.UnixNano())
+	if strings.TrimSpace(todoID) == "" {
+		actionID = "structured-action-unknown-" + fmt.Sprintf("%d", startedAt.UnixNano())
+	}
+	capability := normalizeCapability(task.Action.Capability)
+	providerName := c.phaseWorkflow.providerName(capability)
+	refs := []ArtifactRef{}
+	failureSignature := ""
+	if actionErr != nil {
+		failureSignature = c.phaseWorkflow.actionExecutionError(task, actionErr).Signature().String()
+	}
+	if eventType != "action_started" {
+		ref, err := c.writeRuntimeActionReceipt(runtimeActionReceipt{
+			Version: 1, RunID: c.executionRunID, TaskID: todoID, Agent: task.Agent, ActionID: actionID,
+			Capability: capability, Type: task.Action.Type, Status: status,
+			StartedAt: startedAt, FinishedAt: finishedAt,
+			Output: utils.TruncateString(utils.RedactSecrets(output), 1000),
+			Error: func() string {
+				if actionErr == nil {
+					return ""
+				}
+				return utils.TruncateString(utils.RedactSecrets(actionErr.Error()), 1000)
+			}(),
+		}, actionID)
+		if err != nil {
+			failureSignature = "runtime_action_receipt_failed: " + utils.TruncateString(utils.RedactSecrets(err.Error()), 300)
+			_ = c.emitEvent("observability_degraded", "runtime", todoID, LifecycleEventPayload{
+				Phase: string(c.phaseWorkflow.State()), Agent: task.Agent, Provider: providerName,
+				Capability: capability, ActionID: actionID, ToolName: task.Action.Type,
+				FailureSignature: failureSignature, Artifacts: []ArtifactRef{},
+			})
+		} else {
+			refs = append(refs, ref)
+		}
+	}
+	_ = c.emitEvent(eventType, "runtime", todoID, LifecycleEventPayload{
+		Phase: string(c.phaseWorkflow.State()), Agent: task.Agent, Provider: providerName,
+		Capability: capability, ActionID: actionID, ToolName: task.Action.Type,
+		ActionStatus: status, FailureSignature: failureSignature, Artifacts: refs,
+	})
+}
+
+func (c *Coordinator) writeRuntimeActionReceipt(receipt runtimeActionReceipt, actionID string) (ArtifactRef, error) {
+	path, err := c.phaseWorkflow.executionContext().RuntimeWorkspace.Resolve(filepath.Join("receipts", actionID+".json"))
+	if err != nil {
+		return ArtifactRef{}, err
+	}
+	data, err := json.MarshalIndent(receipt, "", "  ")
+	if err != nil {
+		return ArtifactRef{}, err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return ArtifactRef{}, err
+	}
+	return ArtifactRef{
+		ID: actionID, Kind: "receipt", Type: "runtime_action_receipt",
+		Path:        filepath.ToSlash(filepath.Join("runtime", "receipts", actionID+".json")),
+		Description: "structured ActionProvider execution receipt", RunID: receipt.RunID,
+		TaskID: receipt.TaskID, Agent: receipt.Agent, CreatedAt: receipt.FinishedAt,
+	}, nil
 }
 
 // materializeCheckpointedProtocolRepair fills the receipt gap between a
@@ -2000,6 +2100,16 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			reportFn(c.newEvent("tool_call").withAgent(agentName).withTodoID(todoID).withTool(tc.ToolName, argsPreview))
 			llmLogStreamEvent(logWrite, "tool_call", formatToolCallContent(tc))
 			audit.LogToolCall(agentName, tc.ToolName, tc.Input, tc.ToolCallID)
+
+			if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+				phase := c.phaseWorkflow.State()
+				_ = c.emitEvent("tool_observation_started", agentName, todoID, LifecycleEventPayload{
+					Phase:    string(phase),
+					Agent:    agentName,
+					ActionID: tc.ToolCallID,
+					ToolName: tc.ToolName,
+				})
+			}
 			c.SetCurrentStage("tool")
 			c.SetCurrentTool(tc.ToolName)
 			c.taskTracker.TodoList().SetLastOperation(todoID, tc.ToolName)
@@ -2088,6 +2198,25 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			attempt, _ := ctx.Value(executionAttemptKey{}).(int)
 			if receiptErr := c.recordActualToolReceipt(todoID, attempt, tr.ToolCallID, tr.ToolName, callInput, resultPreview, isErrResult, callStarted); receiptErr != nil {
 				return fmt.Errorf("record tool execution receipt: %w", receiptErr)
+			}
+			if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+				phase := c.phaseWorkflow.State()
+				eventType := "tool_observation_completed"
+				status := "success"
+				if isErrResult {
+					eventType = "tool_observation_failed"
+					status = "failure"
+				}
+				_ = c.emitEvent(eventType, agentName, todoID, LifecycleEventPayload{
+					Phase:        string(phase),
+					Agent:        agentName,
+					ActionID:     tr.ToolCallID,
+					ToolName:     tr.ToolName,
+					ActionStatus: status,
+					Artifacts: []ArtifactRef{
+						{ID: tr.ToolCallID, Kind: "transcript"},
+					},
+				})
 			}
 			// A worker can use a tool error as evidence and still produce a
 			// typed result for its bounded task. The coordinator has no such

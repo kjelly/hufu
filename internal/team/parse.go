@@ -93,6 +93,7 @@ type teamConfigYAML struct {
 	MaxConcurrent            int                              `yaml:"max-concurrent"`
 	MaxCoordinatorTurns      int                              `yaml:"max-coordinator-turns"`
 	EscalateOnRetry          bool                             `yaml:"escalate-on-retry"`
+	AutoSkills               bool                             `yaml:"auto-skills"`
 	Notify                   notify.NotifyConfig              `yaml:"notify"`
 	AllowedPaths             interface{}                      `yaml:"allowed-paths"`
 	RestrictedPath           string                           `yaml:"restricted-path"`
@@ -114,17 +115,21 @@ type teamConfigYAML struct {
 	Verification      agent.VerificationConfig              `yaml:"verification"`
 	Retry             agent.RetryConfig                     `yaml:"retry"`
 	ActionProviders   map[string]agent.ActionProviderConfig `yaml:"action-providers"`
-	Unattended        bool                                  `yaml:"unattended"`
-	AutoApprove       bool                                  `yaml:"auto-approve"`
-	MaxWallClock      int64                                 `yaml:"max-duration"`
-	MaxTotalTokens    int64                                 `yaml:"max-total-tokens"`
-	Acceptance        interface{}                           `yaml:"acceptance"`
-	Rollback          string                                `yaml:"rollback"`
-	ExecutionProfile  string                                `yaml:"execution-profile"`
-	GoalMode          string                                `yaml:"goal-mode"`
-	Reliability       rawReliabilityConfig                  `yaml:"reliability"`
-	WorkerMemory      rawWorkerMemoryPolicy                 `yaml:"worker-memory"`
-	Tasks             []TaskDef                             `yaml:"tasks"`
+	// Kept as an opaque map here because MCP server loading is owned by the
+	// session layer; declaring the key preserves this long-standing manifest
+	// field while strict validation still rejects unknown top-level keys.
+	MCPServers       map[string]interface{} `yaml:"mcp-servers"`
+	Unattended       bool                   `yaml:"unattended"`
+	AutoApprove      bool                   `yaml:"auto-approve"`
+	MaxWallClock     int64                  `yaml:"max-duration"`
+	MaxTotalTokens   int64                  `yaml:"max-total-tokens"`
+	Acceptance       interface{}            `yaml:"acceptance"`
+	Rollback         string                 `yaml:"rollback"`
+	ExecutionProfile string                 `yaml:"execution-profile"`
+	GoalMode         string                 `yaml:"goal-mode"`
+	Reliability      rawReliabilityConfig   `yaml:"reliability"`
+	WorkerMemory     rawWorkerMemoryPolicy  `yaml:"worker-memory"`
+	Tasks            []TaskDef              `yaml:"tasks"`
 }
 
 type rawDelegationPolicy struct {
@@ -558,7 +563,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	data = []byte(templated)
 
 	var yc teamConfigYAML
-	if err := yaml.Unmarshal(data, &yc); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&yc); err != nil {
 		return cfg, fmt.Errorf("failed to parse team config: %w", err)
 	}
 

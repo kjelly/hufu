@@ -74,6 +74,38 @@ type ExecutionEvent struct {
 	ContractRevision     int             `json:"contract_revision,omitempty"`
 	RepairCost           RepairCost      `json:"repair_cost,omitempty"`
 	TerminalReason       string          `json:"terminal_reason,omitempty"`
+	Phase                Phase           `json:"phase,omitempty"`
+	Provider             string          `json:"provider,omitempty"`
+	ArtifactRefs         []ArtifactRef   `json:"artifact_refs,omitempty"`
+	FailureSignature     string          `json:"failure_signature,omitempty"`
+}
+
+// LifecycleEventPayload defines the canonical observability envelope required for all
+// run and phase events to guarantee a consistent schema for telemetry.
+type LifecycleEventPayload struct {
+	Phase            string        `json:"phase"`
+	Agent            string        `json:"agent"`
+	Provider         string        `json:"provider"`
+	Artifacts        []ArtifactRef `json:"artifacts"`
+	FailureSignature string        `json:"failure_signature"`
+
+	// Extended fields used for specific events (e.g. run_started, run_finished, reliability_eval)
+	Team                  string                  `json:"team,omitempty"`
+	Outcome               RunOutcome              `json:"outcome"`
+	GoalSatisfied         bool                    `json:"goal_satisfied"`
+	AcceptanceState       AcceptanceState         `json:"acceptance_state,omitempty"`
+	AcceptancePassed      bool                    `json:"acceptance_passed,omitempty"`
+	Acceptance            *AcceptanceResult       `json:"acceptance,omitempty"`
+	Stats                 *RunStats               `json:"stats,omitempty"`
+	Metrics               *RunMetrics             `json:"metrics,omitempty"`
+	Telemetry             *RunTelemetry           `json:"telemetry,omitempty"`
+	EvidenceManifest      *EvidenceManifest       `json:"evidence_manifest,omitempty"`
+	ReliabilityMetrics    *ReliabilityEvalMetrics `json:"reliability_metrics,omitempty"`
+	ProductionObservation *ReliabilityObservation `json:"production_observation,omitempty"`
+	ActionID              string                  `json:"action_id,omitempty"`
+	Capability            string                  `json:"capability,omitempty"`
+	ToolName              string                  `json:"tool_name,omitempty"`
+	ActionStatus          string                  `json:"action_status,omitempty"`
 }
 
 type executionEventLogger struct {
@@ -232,9 +264,13 @@ func (c *Coordinator) beginExecutionRun() func() {
 	if c.session != nil {
 		teamName = c.session.Config.Name
 	}
-	c.emitEvent("run_started", "coordinator", "", map[string]interface{}{
-		"team": teamName,
+	c.emitEvent("run_started", "coordinator", "", LifecycleEventPayload{
+		Team: teamName,
 	})
+
+	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+		c.persistRuntimeContextSnapshot(c.phaseWorkflow.State())
+	}
 
 	return func() {
 		// Every terminal result, including no-progress and coordinator-fallback
@@ -263,31 +299,31 @@ func (c *Coordinator) beginExecutionRun() func() {
 			} else {
 				// Keep the quantitative production metrics visible in the durable
 				// event-store terminal record as well as in the JSON report.
-				_ = c.emitEvent("reliability_eval", "coordinator", "", map[string]interface{}{
-					"metrics":                evalReport.Metrics,
-					"production_observation": evalReport.ProductionObservation,
+				_ = c.emitEvent("reliability_eval", "coordinator", "", LifecycleEventPayload{
+					ReliabilityMetrics:    &evalReport.Metrics,
+					ProductionObservation: evalReport.ProductionObservation,
 				})
 			}
 		}
 		c.recordRunTelemetry(c.LastRunResult())
-		payload := map[string]interface{}{}
+		payload := LifecycleEventPayload{}
 		if result := c.LastRunResult(); result != nil {
-			payload["outcome"] = result.Outcome
-			payload["goal_satisfied"] = result.GoalSatisfied
+			payload.Outcome = result.Outcome
+			payload.GoalSatisfied = result.GoalSatisfied
 			if result.Acceptance != nil {
-				payload["acceptance_state"] = result.Acceptance.EffectiveState()
-				payload["acceptance_passed"] = result.Acceptance.IsPassed()
-				payload["acceptance"] = result.Acceptance
+				payload.AcceptanceState = result.Acceptance.EffectiveState()
+				payload.AcceptancePassed = result.Acceptance.IsPassed()
+				payload.Acceptance = result.Acceptance
 			}
-			payload["stats"] = result.Stats
-			payload["metrics"] = result.Metrics
-			payload["telemetry"] = result.Telemetry
+			payload.Stats = &result.Stats
+			payload.Metrics = &result.Metrics
+			payload.Telemetry = result.Telemetry
 			if result.EvidenceManifest != nil {
-				payload["evidence_manifest"] = result.EvidenceManifest
+				payload.EvidenceManifest = result.EvidenceManifest
 			}
 		} else {
-			payload["outcome"] = string(RunOutcomeFailed)
-			payload["goal_satisfied"] = false
+			payload.Outcome = RunOutcomeFailed
+			payload.GoalSatisfied = false
 		}
 		if err := c.emitEvent("run_finished", "coordinator", "", payload); err != nil {
 			log.Printf("error: failed to write run_finished event: %v", err)
@@ -304,6 +340,43 @@ func (c *Coordinator) beginExecutionRun() func() {
 		}
 		c.executionEventsMu.Unlock()
 		logger.close()
+	}
+}
+
+func (c *Coordinator) persistRuntimeContextSnapshot(phase Phase) {
+	if c == nil || c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || c.session == nil {
+		return
+	}
+	c.executionEventsMu.RLock()
+	runID := c.executionRunID
+	c.executionEventsMu.RUnlock()
+	if runID == "" {
+		return
+	}
+	repositoryRoot := strings.TrimSpace(c.projectDir)
+	if repositoryRoot == "" {
+		repositoryRoot = strings.TrimSpace(c.session.Dir)
+	}
+	if repositoryRoot == "" {
+		repositoryRoot = c.session.Workspace
+	}
+	if repositoryRoot == "" {
+		repositoryRoot = "."
+	}
+	ctxObj := c.phaseWorkflow.executionContextAt(phase, repositoryRoot)
+	ctxObj.RunID = runID
+	ctxData, err := json.MarshalIndent(ctxObj, "", "  ")
+	if err == nil {
+		receiptsDir := filepath.Join(c.session.Workspace, "runtime", "receipts")
+		if err = os.MkdirAll(receiptsDir, 0o755); err == nil {
+			err = os.WriteFile(filepath.Join(receiptsDir, runID+"-context.json"), ctxData, 0o644)
+		}
+	}
+	if err != nil {
+		log.Printf("warning: runtime context persistence failed: %v", err)
+		_ = c.emitEvent("observability_degraded", "coordinator", "", LifecycleEventPayload{
+			Phase: string(phase), FailureSignature: fmt.Sprintf("runtime_context_failed: %v", err),
+		})
 	}
 }
 
@@ -404,11 +477,43 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 	}
 	taskType, skills := c.taskTracker.TodoList().ExecutionMetadata(taskID)
 	contractID, contractHash, contractRevision := "", "", 0
+	var phase Phase
+	var provider string
+	var artifactRefs []ArtifactRef
+	var failureSignature string
+
+	if c.phaseWorkflow != nil {
+		phase = c.phaseWorkflow.State()
+	}
+
+	if c.providerManager != nil {
+		if p := c.providerManager.GetProvider(model); p != nil {
+			provider = p.Name()
+		}
+	}
+	if provider == "" {
+		if parts := strings.SplitN(model, "/", 2); len(parts) == 2 {
+			provider = parts[0]
+		}
+	}
+
 	if item := c.todoItemByID(taskID); item != nil {
 		contractID, contractHash, contractRevision = item.ContractID, item.ContractHash, item.ContractRevision
+		if item.TypedResult != nil {
+			artifactRefs = append([]ArtifactRef(nil), item.TypedResult.Artifacts...)
+		}
+		if len(item.FailureFingerprints) > 0 {
+			failureSignature = item.FailureFingerprints[len(item.FailureFingerprints)-1].Digest
+		}
+	}
+	// Also collect phase artifacts if available
+	if c.phaseWorkflow != nil {
+		if res, ok := c.phaseWorkflow.results[phase]; ok {
+			artifactRefs = append(artifactRefs, res.Evidence...)
+		}
 	}
 	_ = logger.append(ExecutionEvent{
-		Version:          2,
+		Version:          4,
 		Timestamp:        time.Now().UTC().Format(time.RFC3339Nano),
 		RunID:            runID,
 		Team:             c.session.Config.Name,
@@ -425,6 +530,10 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 		ContractID:       contractID,
 		ContractHash:     contractHash,
 		ContractRevision: contractRevision,
+		Phase:            phase,
+		Provider:         provider,
+		ArtifactRefs:     artifactRefs,
+		FailureSignature: failureSignature,
 	})
 }
 

@@ -28,6 +28,13 @@ type ActionProvider interface {
 	Execute(ctx context.Context, action Action) (interface{}, error)
 }
 
+// NamedActionProvider optionally exposes the stable adapter identity used in
+// lifecycle telemetry. Capability and provider are deliberately separate:
+// one capability may be backed by different adapters in different teams.
+type NamedActionProvider interface {
+	ProviderName() string
+}
+
 // ProviderRegistry holds the registered action providers.
 type ProviderRegistry struct {
 	mu        sync.RWMutex
@@ -76,6 +83,19 @@ func (r *ProviderRegistry) Has(capability string) bool {
 	return ok
 }
 
+// ProviderName returns a stable identity for the provider bound to a
+// capability. Unnamed providers retain a useful type identity for telemetry.
+func (r *ProviderRegistry) ProviderName(capability string) string {
+	provider, ok := r.Get(capability)
+	if !ok || provider == nil {
+		return ""
+	}
+	if named, ok := provider.(NamedActionProvider); ok && strings.TrimSpace(named.ProviderName()) != "" {
+		return strings.TrimSpace(named.ProviderName())
+	}
+	return fmt.Sprintf("%T", provider)
+}
+
 // Clone returns an isolated registry snapshot. Team-specific adapter
 // registration therefore cannot mutate the process-wide default registry or
 // leak one team's provider configuration into another team.
@@ -111,6 +131,13 @@ type commandActionProvider struct {
 	command    []string
 	dir        string
 	timeout    time.Duration
+}
+
+func (p *commandActionProvider) ProviderName() string {
+	if p == nil || len(p.command) == 0 {
+		return "command"
+	}
+	return "command:" + p.command[0]
 }
 
 func registerConfiguredActionProviders(registry *ProviderRegistry, configs map[string]agent.ActionProviderConfig) error {

@@ -34,6 +34,8 @@ type runtimeWorkflow struct {
 	retryPolicy          agent.RetryConfig
 	registry             *ProviderRegistry
 	verificationRequired bool
+	repositoryRoot       string
+	emitEvent            func(eventType string, phase Phase, details LifecycleEventPayload)
 }
 
 func newRuntimeWorkflow(session *TeamSession) (*runtimeWorkflow, error) {
@@ -54,13 +56,32 @@ func newRuntimeWorkflow(session *TeamSession) (*runtimeWorkflow, error) {
 	}
 	w.enabled = true
 	w.team = session.Config.Name
+	w.repositoryRoot = session.Dir
+	if strings.TrimSpace(w.repositoryRoot) == "" {
+		w.repositoryRoot = session.Workspace
+	}
+	if strings.TrimSpace(w.repositoryRoot) == "" {
+		w.repositoryRoot = "."
+	}
 	w.phases = phases
 	w.workspace = RuntimeWorkspace{Root: root}
 	w.policies = Policies{
-		// A configured workflow is safe by default. The false Go zero-values do
-		// not weaken P0; teams that want legacy behavior simply omit workflow.
 		RequirePhaseSuccess: session.Config.Policies.RequirePhaseSuccess,
 		AllowPhaseSkip:      session.Config.Policies.AllowPhaseSkip,
+		MaxRetries:          session.Config.Policies.MaxRetries,
+		FailFast:            session.Config.Policies.FailFast,
+	}
+	w.capabilities = Capabilities{Required: append([]string(nil), session.Config.Capabilities.Required...)}
+
+	ec := ExecutionContext{
+		Team: w.team, RepositoryRoot: w.repositoryRoot, CurrentPhase: PhaseInit,
+		Workflow:         Workflow{Phases: w.phases},
+		Capabilities:     w.capabilities,
+		RuntimeWorkspace: w.workspace,
+		Policies:         w.policies,
+	}
+	if err := ec.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid runtime context configuration: %w", err)
 	}
 	w.capabilities = Capabilities{Required: append([]string(nil), session.Config.Capabilities.Required...)}
 	w.registry = session.ProviderRegistry
@@ -129,12 +150,28 @@ func (w *runtimeWorkflow) executeAction(ctx context.Context, action Action) (str
 	return string(encoded), nil
 }
 
+func (w *runtimeWorkflow) providerName(capability string) string {
+	if w == nil {
+		return ""
+	}
+	w.mu.RLock()
+	registry := w.registry
+	w.mu.RUnlock()
+	if registry == nil {
+		return ""
+	}
+	return registry.ProviderName(capability)
+}
+
 // permitActionRetry records a retryable provider failure under its stable
 // signature and applies the configured per-signature limit. It deliberately
 // handles only ActionProvider execution: generic worker retries retain their
 // established DAG and recovery policies.
 func (w *runtimeWorkflow) permitActionRetry(task TaskDef, err error) bool {
-	if !w.Enabled() || task.Action == nil || err == nil {
+	if w == nil || !w.Enabled() || task.Action == nil || err == nil {
+		return false
+	}
+	if w.policies.FailFast {
 		return false
 	}
 	var validation ActionValidationError
@@ -148,6 +185,9 @@ func (w *runtimeWorkflow) permitActionRetry(task TaskDef, err error) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	limit := w.retryPolicy.Transient.MaxAttempts
+	if limit <= 0 {
+		limit = w.policies.MaxRetries
+	}
 	if limit <= 0 {
 		limit = task.MaxRetries
 	}
@@ -211,6 +251,9 @@ func (w *runtimeWorkflow) repairRetryLimit(taskMaxRetries int) int {
 	if w.retryPolicy.Repair.MaxAttemptsPerFailureSignature > 0 {
 		return w.retryPolicy.Repair.MaxAttemptsPerFailureSignature
 	}
+	if w.policies.MaxRetries > 0 {
+		return w.policies.MaxRetries
+	}
 	return taskMaxRetries
 }
 
@@ -219,6 +262,9 @@ func (w *runtimeWorkflow) repairRetryLimit(taskMaxRetries int) int {
 // repair a provider, tool, or environment failure only within this bound.
 func (w *runtimeWorkflow) permitRepairRetry(task TaskDef, err error) bool {
 	if !w.Enabled() || err == nil {
+		return false
+	}
+	if w.policies.FailFast {
 		return false
 	}
 	var validation ActionValidationError
@@ -319,6 +365,18 @@ func (w *runtimeWorkflow) State() Phase {
 	return w.state
 }
 
+func (w *runtimeWorkflow) setEventEmitter(fn func(string, Phase, LifecycleEventPayload)) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.emitEvent = fn
+}
+
+func (w *runtimeWorkflow) emit(eventType string, phase Phase, details LifecycleEventPayload) {
+	if w.emitEvent != nil {
+		w.emitEvent(eventType, phase, details)
+	}
+}
+
 func (w *runtimeWorkflow) Start() error {
 	if !w.Enabled() {
 		return nil
@@ -327,6 +385,9 @@ func (w *runtimeWorkflow) Start() error {
 	defer w.mu.Unlock()
 	if w.state == PhaseInit {
 		w.state = w.phases[0]
+		w.emit("phase_started", w.state, LifecycleEventPayload{
+			Agent: "", Provider: "", FailureSignature: "", Artifacts: []ArtifactRef{},
+		})
 	}
 	if w.state == PhaseFailed {
 		return fmt.Errorf("workflow is failed; start a new session before dispatching further work")
@@ -433,6 +494,9 @@ func (w *runtimeWorkflow) observe(items []*TodoItem) error {
 		}
 	}
 	w.results[w.state] = PhaseResult{Status: PhaseStatusSuccess, Summary: fmt.Sprintf("%s phase completed", strings.ToLower(string(w.state))), Evidence: evidence}
+	w.emit("phase_succeeded", w.state, LifecycleEventPayload{
+		Agent: "", Provider: "", FailureSignature: "", Artifacts: evidence,
+	})
 	next := nextWorkflowPhase(w.phases, w.state)
 	if next == "" {
 		return w.failLocked("workflow", "workflow", "CONFIGURATION", "verify must be the final configured workflow phase", false, PhaseStatusFailure)
@@ -441,6 +505,9 @@ func (w *runtimeWorkflow) observe(items []*TodoItem) error {
 		return w.failLocked("workflow", "workflow", "STATE_TRANSITION", fmt.Sprintf("invalid transition %s → %s", w.state, next), false, PhaseStatusFailure)
 	}
 	w.state = next
+	w.emit("phase_started", w.state, LifecycleEventPayload{
+		Agent: "", Provider: "", FailureSignature: "", Artifacts: []ArtifactRef{},
+	})
 	return nil
 }
 
@@ -458,6 +525,12 @@ func (w *runtimeWorkflow) failExecutionErrorLocked(executionErr ExecutionError, 
 	if IsValidTransition(w.state, PhaseFailed) {
 		w.state = PhaseFailed
 	}
+	w.emit("phase_failed", executionErr.Phase, LifecycleEventPayload{
+		Agent:            executionErr.Component,
+		Provider:         executionErr.Source,
+		FailureSignature: executionErr.Signature().String(),
+		Artifacts:        []ArtifactRef{},
+	})
 	return fmt.Errorf("workflow %s failed: %s", strings.ToLower(string(executionErr.Phase)), executionErr.Message)
 }
 
@@ -481,10 +554,17 @@ func (w *runtimeWorkflow) failLocked(component, source, category, message string
 		status = PhaseStatusFailure
 	}
 	phase := w.state
-	w.results[phase] = PhaseResult{Status: status, Summary: message, Errors: []ExecutionError{{Phase: phase, Component: component, Source: source, Category: category, Message: message, Retryable: retryable}}}
+	w.results[phase] = PhaseResult{Status: status, Summary: message, Errors: []ExecutionError{{Phase: phase, Component: component, Source: source, Category: category, Cause: message, Message: message, Retryable: retryable}}}
 	if IsValidTransition(w.state, PhaseFailed) {
 		w.state = PhaseFailed
 	}
+	errObj := ExecutionError{Phase: phase, Component: component, Source: source, Category: category, Cause: message, Message: message, Retryable: retryable}
+	w.emit("phase_failed", phase, LifecycleEventPayload{
+		Agent:            component,
+		Provider:         source,
+		FailureSignature: errObj.Signature().String(),
+		Artifacts:        []ArtifactRef{},
+	})
 	return fmt.Errorf("workflow %s failed: %s", strings.ToLower(string(phase)), message)
 }
 
@@ -520,8 +600,38 @@ func (w *runtimeWorkflow) executionContext() ExecutionContext {
 		return ExecutionContext{}
 	}
 	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return ExecutionContext{Team: w.team, Workflow: Workflow{Phases: append([]Phase(nil), w.phases...)}, Capabilities: w.capabilities, RuntimeWorkspace: w.workspace, Policies: w.policies}
+	phase := w.state
+	root := w.repositoryRoot
+	w.mu.RUnlock()
+	return w.executionContextAt(phase, root)
+}
+
+func (w *runtimeWorkflow) executionContextAt(phase Phase, repositoryRoot string) ExecutionContext {
+	if !w.Enabled() {
+		return ExecutionContext{}
+	}
+	return ExecutionContext{
+		Team: w.team, CurrentPhase: phase, RepositoryRoot: repositoryRoot,
+		Workflow:     Workflow{Phases: append([]Phase(nil), w.phases...)},
+		Capabilities: w.capabilities, RuntimeWorkspace: w.workspace,
+		ArtifactPaths: map[string]string{
+			"root":      filepath.ToSlash(w.workspace.Root),
+			"artifacts": filepath.ToSlash(filepath.Join(w.workspace.Root, "artifacts")),
+			"logs":      filepath.ToSlash(filepath.Join(w.workspace.Root, "logs")),
+			"phases":    filepath.ToSlash(filepath.Join(w.workspace.Root, "phases")),
+			"receipts":  filepath.ToSlash(filepath.Join(w.workspace.Root, "receipts")),
+		},
+		Policies: w.policies,
+	}
+}
+
+func (w *runtimeWorkflow) setRepositoryRoot(root string) {
+	if w == nil || strings.TrimSpace(root) == "" {
+		return
+	}
+	w.mu.Lock()
+	w.repositoryRoot = root
+	w.mu.Unlock()
 }
 
 // runtimeAllowedPaths adds the runtime-owned workspace to the per-worker path

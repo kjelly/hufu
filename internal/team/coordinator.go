@@ -903,7 +903,17 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	if err != nil {
 		return nil, err
 	}
+	phaseWorkflow.setEventEmitter(func(eventType string, phase Phase, details LifecycleEventPayload) {
+		details.Phase = string(phase)
+		c.emitEvent(eventType, "runtime", "", details)
+		c.persistRuntimeContextSnapshot(phase)
+	})
+	phaseWorkflow.setRepositoryRoot(c.projectDir)
 	c.phaseWorkflow = phaseWorkflow
+
+	if len(session.Config.Workflow.Phases) == 0 {
+		fmt.Fprintln(os.Stderr, "Warning: prompt-defined workflow constraints are deprecated and will be removed in a future release. Please migrate to runtime-enforced Workflow ExecutionContext.")
+	}
 
 	effectiveGoalMode, err := ResolveEffectiveGoalMode(session.Config.GoalMode, session.Config.ExecutionProfile)
 	if err != nil {

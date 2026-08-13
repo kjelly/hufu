@@ -316,6 +316,8 @@ type WorkflowConfig struct {
 type WorkflowPolicies struct {
 	RequirePhaseSuccess bool `json:"require_phase_success,omitempty" yaml:"require_phase_success,omitempty"`
 	AllowPhaseSkip      bool `json:"allow_phase_skip,omitempty" yaml:"allow_phase_skip,omitempty"`
+	MaxRetries          int  `json:"max_retries,omitempty" yaml:"max_retries,omitempty"`
+	FailFast            bool `json:"fail_fast,omitempty" yaml:"fail_fast,omitempty"`
 }
 
 // VerificationConfig controls the generic whole-workflow finish gate.

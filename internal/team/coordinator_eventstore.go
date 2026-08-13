@@ -125,15 +125,9 @@ func (c *Coordinator) hydrateEmittedTaskTransitions() {
 }
 
 // emitEvent logs a RunEvent to the coordinator's eventStore if initialized.
-func (c *Coordinator) emitEvent(eventType, actor, taskID string, payload map[string]interface{}) error {
+func (c *Coordinator) emitEvent(eventType, actor, taskID string, payload interface{}) error {
 	if c == nil || c.eventStore == nil {
 		return nil
-	}
-	if IsTerminalEvent(eventType) && len(payload) == 0 {
-		err := fmt.Errorf("terminal event %q emitted with empty payload", eventType)
-		log.Printf("error: dual-write event emit failed for type %s: %v", eventType, err)
-		c.dualWriteFailures.Add(1)
-		return err
 	}
 	var rawPayload json.RawMessage
 	data, err := json.Marshal(payload)
