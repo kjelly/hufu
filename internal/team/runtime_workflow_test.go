@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -163,6 +164,32 @@ type recordingActionProvider struct {
 	err       error
 }
 
+func (*recordingActionProvider) ProviderName() string { return "fake-action-adapter" }
+
+type namedActionProvider struct {
+	name string
+}
+
+func (p *namedActionProvider) ProviderName() string { return p.name }
+
+func (*namedActionProvider) Validate(Action) error { return nil }
+
+func (*namedActionProvider) Execute(context.Context, Action) (interface{}, error) {
+	return nil, nil
+}
+
+func TestProviderRegistryPreservesDistinctProviderIdentities(t *testing.T) {
+	registry := NewProviderRegistry()
+	registry.Register("capability-a", &namedActionProvider{name: "adapter-a"})
+	registry.Register("capability-b", &namedActionProvider{name: "adapter-b"})
+	if got := registry.ProviderName("capability-a"); got != "adapter-a" {
+		t.Fatalf("provider identity for capability-a = %q, want adapter-a", got)
+	}
+	if got := registry.ProviderName("capability-b"); got != "adapter-b" {
+		t.Fatalf("provider identity for capability-b = %q, want adapter-b", got)
+	}
+}
+
 func (p *recordingActionProvider) Validate(action Action) error {
 	p.validated++
 	if action.Type == "" {
@@ -245,6 +272,76 @@ func TestCoordinatorRuntimeActionCompletesTodoWithoutUsingCache(t *testing.T) {
 	got := tracker.TodoList().Items()[0]
 	if got.Status != TaskDone || got.Output != "applied" {
 		t.Fatalf("action todo lifecycle = %#v", got)
+	}
+}
+
+func TestCoordinatorRuntimeActionEmitsProviderLifecycleAndReceipt(t *testing.T) {
+	session := workflowTestSession(t)
+	provider := &recordingActionProvider{result: "applied"}
+	registry := NewProviderRegistry()
+	registry.Register("structured-actions", provider)
+	session.ProviderRegistry = registry
+	w, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.observe([]*TodoItem{{Agent: "preparer", ContractID: "prepare", Phase: PhasePrepare, Status: TaskDone}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.observe([]*TodoItem{{Agent: "auditor", ContractID: "audit", Phase: PhaseAudit, Status: TaskDone}}); err != nil {
+		t.Fatal(err)
+	}
+
+	tracker := NewTaskTracker()
+	task := TaskDef{ID: "execute", Agent: "executor", Goal: "apply", Phase: PhaseExecute, Action: &Action{Capability: "structured-actions", Type: "apply"}}
+	item := tracker.TodoList().AddBatch([]TodoSpec{{PlanTaskID: task.ID, Phase: task.Phase, ContractID: task.ID, Action: task.Action, Agent: task.Agent, Desc: task.Goal}})[0]
+	events, err := NewEventStore(session.Workspace, "run-action", "session-action")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{session: session, taskTracker: tracker, phaseWorkflow: w, eventStore: events, executionRunID: "run-action"}
+	if _, err := c.executeTask(context.Background(), task, item.ID); err != nil {
+		t.Fatalf("executeTask: %v", err)
+	}
+	defer events.Close()
+
+	stored, err := events.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started, completed *RunEvent
+	for i := range stored {
+		switch stored[i].Type {
+		case "action_started":
+			started = &stored[i]
+		case "action_completed":
+			completed = &stored[i]
+		}
+	}
+	if started == nil || completed == nil {
+		t.Fatalf("provider lifecycle events missing: started=%v completed=%v", started != nil, completed != nil)
+	}
+	var payload struct {
+		Provider   string        `json:"provider"`
+		Capability string        `json:"capability"`
+		ToolName   string        `json:"tool_name"`
+		Artifacts  []ArtifactRef `json:"artifacts"`
+	}
+	if err := json.Unmarshal(completed.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Provider != "fake-action-adapter" || payload.Capability != "structured-actions" || payload.ToolName != "apply" {
+		t.Fatalf("provider lifecycle discriminator = %#v", payload)
+	}
+	if len(payload.Artifacts) != 1 || payload.Artifacts[0].Kind != "receipt" {
+		t.Fatalf("provider lifecycle artifacts = %#v, want one receipt", payload.Artifacts)
+	}
+	receiptPath := filepath.Join(session.Workspace, filepath.FromSlash(payload.Artifacts[0].Path))
+	if _, err := os.Stat(receiptPath); err != nil {
+		t.Fatalf("runtime action receipt missing at %s: %v", receiptPath, err)
 	}
 }
 
@@ -675,5 +772,108 @@ func TestPhaseCapabilityMCPBlockModelVisible(t *testing.T) {
 	}
 	if !slices.Contains(toolNames, "destructive_mcp") {
 		t.Fatalf("MCP tool was blocked from model in EXECUTE phase: %v, err: %v", toolNames, err)
+	}
+}
+
+func TestRuntimeWorkflow_PhaseTransitions(t *testing.T) {
+	session := &TeamSession{
+		Config: agent.TeamConfig{
+			Name: "test-team",
+			Workflow: agent.WorkflowConfig{
+				Phases: []string{string(PhasePrepare), string(PhaseAudit), string(PhaseExecute), string(PhaseVerify)},
+			},
+		},
+	}
+	w, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eventReceived := false
+	w.setEventEmitter(func(eventType string, phase Phase, details LifecycleEventPayload) {
+		if eventType == "phase_started" && phase == PhasePrepare {
+			eventReceived = true
+		}
+	})
+
+	w.Start()
+	if !eventReceived {
+		t.Errorf("expected phase_started event for PhasePrepare")
+	}
+
+	err = w.failExecutionErrorLocked(ExecutionError{Phase: PhasePrepare, Message: "test error", Component: "test-agent", Source: "test-provider"}, PhaseStatusFailure)
+	if err == nil || w.state != PhaseFailed {
+		t.Errorf("expected failure and transition to PhaseFailed")
+	}
+}
+
+func TestRuntimeWorkflow_FailFast(t *testing.T) {
+	session := &TeamSession{
+		Config: agent.TeamConfig{
+			Name: "test-team",
+			Workflow: agent.WorkflowConfig{
+				Phases: []string{string(PhasePrepare), string(PhaseAudit), string(PhaseExecute), string(PhaseVerify)},
+			},
+			Policies: agent.WorkflowPolicies{
+				FailFast: true,
+			},
+		},
+	}
+	w, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w.Start()
+
+	// Use observe to see FailFast in action
+	items := []*TodoItem{
+		{
+			ID:         "1",
+			Phase:      PhaseExecute,
+			Status:     TaskError,
+			ContractID: "c1",
+			Agent:      "tester",
+			Detail:     "fatal error",
+			RuntimeError: &ExecutionError{
+				Phase:     PhaseExecute,
+				Component: "tester",
+				Source:    "ollama",
+				Message:   "fatal error",
+			},
+		},
+	}
+
+	// Add contract to expected
+	w.phaseContracts[PhaseExecute] = map[string]bool{"c1": true}
+
+	err = w.observe(items)
+	if err == nil {
+		t.Errorf("expected error from observe")
+	}
+	if w.state != PhaseFailed {
+		t.Errorf("expected workflow to be in PhaseFailed, got %s", w.state)
+	}
+}
+
+func TestRuntimeWorkflow_FailFastStopsWorkerRetryLoop(t *testing.T) {
+	worker := &alwaysFailAgent{}
+	c, _ := newWP08TestCoordinator(t, worker, 4)
+	c.session.Config.Workflow = agent.WorkflowConfig{Phases: []string{"prepare", "audit", "execute", "verify"}}
+	c.session.Config.Policies = agent.WorkflowPolicies{FailFast: true, AllowPhaseSkip: true}
+	w, err := newRuntimeWorkflow(c.session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.phaseWorkflow = w
+	if err := w.Start(); err != nil {
+		t.Fatal(err)
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "must fail once"}})[0]
+	if _, err := c.executeTask(context.Background(), TaskDef{Agent: "worker", Goal: "must fail once"}, item.ID); err == nil {
+		t.Fatal("expected worker failure")
+	}
+	if worker.calls != 1 {
+		t.Fatalf("FailFast worker calls = %d, want exactly 1", worker.calls)
 	}
 }

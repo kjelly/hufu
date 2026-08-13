@@ -100,6 +100,21 @@ retry:
 	}
 }
 
+func TestParseTeamYMLRejectsUnknownRuntimeSchemaFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	yamlContent := `workflow:
+  phases: [prepare, audit, execute, verify]
+policies:
+  fail_fats: true
+`
+	if err := os.WriteFile(filepath.Join(tmpDir, "team.yaml"), []byte(yamlContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseTeamYML(tmpDir, nil); err == nil || !strings.Contains(err.Error(), "fail_fats") {
+		t.Fatalf("parseTeamYML error = %v, want unknown-field validation for fail_fats", err)
+	}
+}
+
 func TestParseTeamYMLMinimumCoordinatorRounds(t *testing.T) {
 	tmpDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmpDir, "team.yaml"), []byte("max-rounds: 12\nminimum-coordinator-rounds: 8\nmax-retries: 0\n"), 0o644); err != nil {

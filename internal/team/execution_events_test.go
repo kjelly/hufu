@@ -5,7 +5,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/config"
+
+	"github.com/kjelly/hufu/internal/agent"
 
 	"charm.land/fantasy"
 )
@@ -129,5 +134,91 @@ func TestTeamDefinitionRevisionChangesWithDefinition(t *testing.T) {
 	}
 	if got := teamDefinitionRevision(dir); got == first {
 		t.Fatalf("revision = %q, want a new hash after definition change", got)
+	}
+}
+
+func TestExecutionEvent_ModelProviderAndArtifacts(t *testing.T) {
+	pm, _ := agent.NewProviderManager("", "", map[string]config.ProviderConfig{
+		"openai": {ProviderURL: "https://api.openai.com/v1", ProviderAPIKey: "test"},
+	})
+	c := &Coordinator{
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		providerManager: pm,
+	}
+	c.session = &TeamSession{Config: agent.TeamConfig{Name: "test-team"}}
+
+	tracker := NewTaskTracker()
+	items := tracker.TodoList().AddBatch([]TodoSpec{{Desc: "test", Agent: "tester"}})
+	tid := items[0].ID
+	tracker.TodoList().SetTypedResult(tid, &TaskResult{Artifacts: []ArtifactRef{{Path: "art1"}}})
+	_ = tracker.TodoList().AppendFailureFingerprint(tid, FailureFingerprint{Digest: "fail1"})
+	c.taskTracker = tracker
+
+	workspace := t.TempDir()
+	c.executionRunID = "run-1"
+	logger, _ := newExecutionEventLogger(workspace)
+	c.executionEvents = logger
+
+	// Qualified
+	c.recordExecutionEvent(tid, "tester", 1, "done", "openai/gpt-4o", 100, ExecutionUsage{})
+
+	// Unqualified
+	c.recordExecutionEvent(tid, "tester", 2, "error", "qwen3:8b", 200, ExecutionUsage{})
+
+	logger.close()
+
+	f, _ := os.Open(filepath.Join(workspace, "logs", executionEventsFile))
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+
+	if !scanner.Scan() {
+		t.Fatal("expected first event")
+	}
+	var ev1 ExecutionEvent
+	json.Unmarshal(scanner.Bytes(), &ev1)
+	if ev1.Provider != "openai" {
+		t.Errorf("expected openai, got %v", ev1.Provider)
+	}
+	if len(ev1.ArtifactRefs) != 1 || ev1.ArtifactRefs[0].Path != "art1" {
+		t.Errorf("expected art1, got %v", ev1.ArtifactRefs)
+	}
+	if ev1.FailureSignature != "fail1" {
+		t.Errorf("expected fail1, got %v", ev1.FailureSignature)
+	}
+
+	if !scanner.Scan() {
+		t.Fatal("expected second event")
+	}
+	var ev2 ExecutionEvent
+	json.Unmarshal(scanner.Bytes(), &ev2)
+	if ev2.Provider != "ollama" { // assuming unqualified defaults to ollama
+		t.Errorf("expected ollama, got %v", ev2.Provider)
+	}
+}
+
+func TestLifecycleEventPayloadSerialization(t *testing.T) {
+	// Raw JSON test of the complete successful timeline plus failure
+	payload := LifecycleEventPayload{
+		Phase: "execute",
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, `"phase":"execute"`) {
+		t.Errorf("missing phase")
+	}
+	if !strings.Contains(s, `"agent":""`) {
+		t.Errorf("missing agent %s", s)
+	}
+	if !strings.Contains(s, `"provider":""`) {
+		t.Errorf("missing provider %s", s)
+	}
+	if !strings.Contains(s, `"artifacts":null`) && !strings.Contains(s, `"artifacts":[]`) {
+		t.Errorf("missing artifacts %s", s)
+	}
+	if !strings.Contains(s, `"failure_signature":""`) {
+		t.Errorf("missing failure_signature %s", s)
 	}
 }

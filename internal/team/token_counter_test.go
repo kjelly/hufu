@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -169,7 +170,7 @@ func TestResolveAgentMaxOutputTokens(t *testing.T) {
 }
 
 func TestDetectAndCacheOllamaContextLengths(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/show" {
 			http.NotFound(w, r)
 			return
@@ -200,7 +201,7 @@ func TestDetectAndCacheOllamaContextLengths(t *testing.T) {
 
 func TestDetectAndCacheOllamaContextLengths_SkipsKnownModels(t *testing.T) {
 	var called bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -213,6 +214,18 @@ func TestDetectAndCacheOllamaContextLengths_SkipsKnownModels(t *testing.T) {
 	if called {
 		t.Error("probed a model with an exact (non-estimated) registry entry; should have been skipped")
 	}
+}
+
+func newIPv4TestServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("network listener unavailable in this environment: %v", err)
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.Listener = listener
+	server.Start()
+	return server
 }
 
 func TestTruncateToTokenBudget(t *testing.T) {
