@@ -55,6 +55,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(contextCmd)
 	rootCmd.AddCommand(terminalCmd)
+	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(examplesCmd, helpFlagsCmd)
 
 	// Add custom completion commands
@@ -65,7 +66,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringVar(&opts.providerURL, "provider-url", "", "Ollama API base URL (default: from hufu.yaml or http://localhost:11434/v1)")
 	rootCmd.Flags().StringVar(&opts.providerAPIKey, "provider-api-key", "", "Provider API key (default: from HUFU_PROVIDER_API_KEY env or team.yaml)")
 	rootCmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "Show full agent text output in real-time")
-	rootCmd.Flags().StringVarP(&opts.workspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
+	rootCmd.PersistentFlags().StringVarP(&opts.workspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
 	rootCmd.Flags().BoolVarP(&opts.newSession, "new", "n", false, "Archive old session and start fresh")
 	rootCmd.Flags().BoolVarP(&opts.tempWorkspace, "temp", "t", false, "Use a temporary directory for workspace")
 	rootCmd.Flags().StringVar(&opts.agentTeamName, "agent-team", "", "Agent team name to load")
