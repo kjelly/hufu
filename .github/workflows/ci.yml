@@ -115,6 +115,12 @@ jobs:
       - name: Build
         run: go build -v ./cmd/hufu
 
+      - name: Build Darwin release target
+        run: GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -v ./cmd/hufu
+
+      - name: Compile Darwin debug tests
+        run: GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go test -c -o /tmp/hufu-darwin.test ./cmd/hufu
+
   # Aggregate gate. Required by branch protection so PRs cannot merge with
   # any of the four parallel checks red.
   ci-success:
