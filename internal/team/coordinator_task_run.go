@@ -89,6 +89,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if agentDef.Timeout > 0 {
 		agentTimeout = time.Duration(agentDef.Timeout) * time.Second
 	}
+	if agentTimeout <= 0 {
+		agentTimeout = 600 * time.Second
+	}
 
 	maxRetries := c.effectiveWorkerMaxAttempts(agentDef)
 
@@ -2149,7 +2152,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 
 			if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 				phase := c.phaseWorkflow.State()
-				_ = c.emitEvent("tool_observation_started", agentName, todoID, LifecycleEventPayload{
+				eventType := "tool_observation_started"
+				if phase == PhaseExecute {
+					eventType = "action_started"
+				}
+				_ = c.emitEvent(eventType, agentName, todoID, LifecycleEventPayload{
 					Phase:    string(phase),
 					Agent:    agentName,
 					ActionID: tc.ToolCallID,
@@ -2252,6 +2259,13 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				if isErrResult {
 					eventType = "tool_observation_failed"
 					status = "failure"
+				}
+				if phase == PhaseExecute {
+					if isErrResult {
+						eventType = "action_failed"
+					} else {
+						eventType = "action_completed"
+					}
 				}
 				_ = c.emitEvent(eventType, agentName, todoID, LifecycleEventPayload{
 					Phase:        string(phase),

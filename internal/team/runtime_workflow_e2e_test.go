@@ -15,40 +15,63 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "TestActionTelemetry_E2E")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte("sample content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
 	// 1. Setup a fake Ollama server to act as a mock provider
 	step := 0
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		// 1st request: Preparer (PhasePrepare) - calls a read-only tool
-		// 2nd request: Preparer (PhasePrepare) - finishes
-		// 3rd request: Executor (PhaseExecute) - calls a write tool
-		// 4th request: Executor (PhaseExecute) - calls a write tool
-		// 5th request: Executor (PhaseExecute) - finishes
-		// 6th request: Verifier (PhaseVerify) - finishes
-		var resp string
+		var toolName string
+		var arguments string
+		var content string
 		switch step {
 		case 0: // prepare read
-			resp = `{"model":"test","message":{"role":"assistant","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"test.txt"}}}]},"done":true}`
+			toolName = "view"
+			arguments = fmt.Sprintf(`{"file_path":%q}`, filepath.Join(tmpDir, "test.txt"))
 		case 1: // prepare finish
-			resp = `{"model":"test","message":{"role":"assistant","content":"prepare done","tool_calls":[{"function":{"name":"finish","arguments":{"status":"success"}}}]},"done":true}`
-		case 2: // audit finish
-			resp = `{"model":"test","message":{"role":"assistant","content":"audit done","tool_calls":[{"function":{"name":"finish","arguments":{"status":"success"}}}]},"done":true}`
-		case 3: // execute write
-			resp = `{"model":"test","message":{"role":"assistant","tool_calls":[{"function":{"name":"write_file","arguments":{"path":"out1.txt"}}}]},"done":true}`
+			content = "prepare done"
+		case 2: // execute write 1
+			toolName = "write"
+			arguments = fmt.Sprintf(`{"file_path":%q,"content":"data1"}`, filepath.Join(tmpDir, "runtime", "out1.txt"))
+		case 3: // execute finish 1
+			content = "execute done 1"
 		case 4: // execute write 2
-			resp = `{"model":"test","message":{"role":"assistant","tool_calls":[{"function":{"name":"write_file","arguments":{"path":"out2.txt"}}}]},"done":true}`
-		case 5: // execute finish
-			resp = `{"model":"test","message":{"role":"assistant","content":"execute done","tool_calls":[{"function":{"name":"finish","arguments":{"status":"success"}}}]},"done":true}`
-		case 6: // verify finish
-			resp = `{"model":"test","message":{"role":"assistant","content":"verify done","tool_calls":[{"function":{"name":"finish","arguments":{"status":"success"}}}]},"done":true}`
+			toolName = "write"
+			arguments = fmt.Sprintf(`{"file_path":%q,"content":"data2"}`, filepath.Join(tmpDir, "runtime", "out2.txt"))
+		case 5: // execute finish 2
+			content = "execute done 2"
 		default:
-			resp = `{"model":"test","message":{"role":"assistant","content":"done","tool_calls":[{"function":{"name":"finish","arguments":{"status":"success"}}}]},"done":true}`
+			content = "done"
 		}
 		step++
-		fmt.Fprintln(w, resp)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		toolCallID := fmt.Sprintf("call-%d", step)
+		if toolName == "" {
+			fmt.Fprintf(w, "data: {\"id\":\"fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":null}]}\n\n", content)
+			fmt.Fprint(w, "data: {\"id\":\"fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		} else {
+			fmt.Fprintf(w, "data: {\"id\":\"fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":%q,\"type\":\"function\",\"function\":{\"name\":%q,\"arguments\":%q}}]},\"finish_reason\":null}]}\n\n", toolCallID, toolName, arguments)
+			fmt.Fprint(w, "data: {\"id\":\"fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n")
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
 	})
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -58,12 +81,6 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 	ts.Listener = listener
 	ts.Start()
 	defer ts.Close()
-
-	tmpDir, err := os.MkdirTemp("", "TestActionTelemetry_E2E")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpDir)
 
 	session := &TeamSession{
 		Workspace: tmpDir,
@@ -78,10 +95,10 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 		},
 	}
 	session.Agents = map[string]*agent.AgentDef{
-		"preparer": {Role: "prepare", Generation: agent.GenerationParams{Model: "test"}},
-		"auditor":  {Role: "audit", Generation: agent.GenerationParams{Model: "test"}},
-		"executor": {Role: "execute", Generation: agent.GenerationParams{Model: "test"}},
-		"verifier": {Role: "verify", Generation: agent.GenerationParams{Model: "test"}},
+		"preparer": {Name: "preparer", Role: "prepare", Tools: "view,ls", Timeout: 600, Generation: agent.GenerationParams{Model: "test"}},
+		"auditor":  {Name: "auditor", Role: "audit", Tools: "view,ls", Timeout: 600, Generation: agent.GenerationParams{Model: "test"}},
+		"executor": {Name: "executor", Role: "execute", Tools: "write,view", Timeout: 600, Generation: agent.GenerationParams{Model: "test"}},
+		"verifier": {Name: "verifier", Role: "verify", Tools: "view,ls", Timeout: 600, Generation: agent.GenerationParams{Model: "test"}},
 	}
 	session.ProviderRegistry = NewProviderRegistry()
 	session.ContractTasks = []TaskDef{
@@ -91,12 +108,14 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 		{ContractID: "verify", Phase: PhaseVerify, Agent: "verifier"},
 	}
 
-	pm, _ := agent.NewProviderManager("", "", map[string]config.ProviderConfig{
+	pm, _ := agent.NewProviderManager(ts.URL, "", map[string]config.ProviderConfig{
 		"ollama": {ProviderURL: ts.URL},
 	})
 	c := &Coordinator{
 		session:         session,
+		projectDir:      tmpDir,
 		providerManager: pm,
+		coreTools:       agent.BuildAllAgentTools(tmpDir, tools.WithAllowedPaths([]string{tmpDir})),
 		taskTracker:     NewTaskTracker(),
 	}
 	es, err := NewEventStore(tmpDir, "run-e2e", "session-e2e")
@@ -113,17 +132,23 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 
 	c.reportStatus = func(event StatusEvent) {}
 
+	// Start workflow first so initial phase is prepare
+	_ = c.phaseWorkflow.Start()
+
 	// Need to initialize the execution event logger
 	finalizeRun := c.beginExecutionRun()
 
 	runID := c.executionRunID
 
-	// Wait for workflow to finish
-	_ = c.phaseWorkflow.Start()
+	todos := c.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "preparer", Desc: "test"},
+		{Agent: "executor", Desc: "test2"},
+		{Agent: "executor", Desc: "test3"},
+	})
 
 	// Execute tool calls manually by executing tasks against the mock provider
 	ctx := context.Background()
-	if _, err := c.executeTask(ctx, TaskDef{Agent: "preparer", Phase: PhasePrepare, Goal: "test"}, "todo_1"); err != nil {
+	if _, err := c.executeTask(ctx, TaskDef{Agent: "preparer", Phase: PhasePrepare, Goal: "test"}, todos[0].ID); err != nil {
 		t.Logf("todo_1 err: %v", err)
 	}
 
@@ -132,12 +157,12 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 	c.phaseWorkflow.state = PhaseExecute
 	c.phaseWorkflow.mu.Unlock()
 
-	if _, err := c.executeTask(ctx, TaskDef{Agent: "executor", Phase: PhaseExecute, Goal: "test2"}, "todo_2"); err != nil {
+	if _, err := c.executeTask(ctx, TaskDef{Agent: "executor", Phase: PhaseExecute, Goal: "test2"}, todos[1].ID); err != nil {
 		t.Logf("todo_2 err: %v", err)
 	}
 
 	// Add one more action so we get 2 action_started and 2 action_completed
-	if _, err := c.executeTask(ctx, TaskDef{Agent: "executor", Phase: PhaseExecute, Goal: "test3"}, "todo_3"); err != nil {
+	if _, err := c.executeTask(ctx, TaskDef{Agent: "executor", Phase: PhaseExecute, Goal: "test3"}, todos[2].ID); err != nil {
 		t.Logf("todo_3 err: %v", err)
 	}
 
