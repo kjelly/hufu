@@ -91,9 +91,6 @@ func EvaluateCompletionGate(ctx context.Context, input CompletionGateInput) Comp
 }
 
 func (c *Coordinator) applyCompletionGate(ctx context.Context, result *RunResult, acceptance *AcceptanceResult) *RunResult {
-	if result == nil || result.Outcome != RunOutcomeCompleted || !result.GoalSatisfied {
-		return result
-	}
 	// A coordinator without a workspace is only used by lightweight unit
 	// callers; production sessions always have a workspace and therefore pass
 	// through the durable manifest gate.
@@ -103,7 +100,10 @@ func (c *Coordinator) applyCompletionGate(ctx context.Context, result *RunResult
 	c.lastEvidenceManifestMu.RLock()
 	manifest := c.lastEvidenceManifest
 	c.lastEvidenceManifestMu.RUnlock()
-	items := c.taskTracker.TodoList().Items()
+	var items []*TodoItem
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		items = c.taskTracker.TodoList().Items()
+	}
 	required := make([]TaskReference, 0, len(items))
 	for _, item := range items {
 		if item != nil {
@@ -120,43 +120,22 @@ func (c *Coordinator) applyCompletionGate(ctx context.Context, result *RunResult
 		RequiredTasks: required, UnresolvedRisks: riskFindings,
 		TerminalLeaks: terminalLeaks, ArtifactStore: store,
 	})
-	if decision.Accepted {
-		if err := c.confirmWorkerMemoryCandidates(ctx, manifest); err != nil {
-			c.rejectWorkerMemoryCandidates(ctx, manifest, "accepted manifest could not confirm private candidates: "+err.Error())
-			c.rejectSharedMemoryCandidates(ctx, manifest, "accepted manifest could not confirm private candidates: "+err.Error())
-			result.Outcome = RunOutcomePartial
-			result.GoalSatisfied = false
-			result.StopReason = StopReasonEvidenceIncomplete
-			result.ExitCode = 7
-			result.Reason = "worker memory candidate promotion failed: " + err.Error()
-			return result
-		}
-		if err := c.confirmSharedMemoryCandidates(ctx, manifest); err != nil {
-			c.rejectWorkerMemoryCandidates(ctx, manifest, "accepted manifest could not confirm shared candidates: "+err.Error())
-			c.rejectSharedMemoryCandidates(ctx, manifest, "accepted manifest could not confirm shared candidates: "+err.Error())
-			result.Outcome = RunOutcomePartial
-			result.GoalSatisfied = false
-			result.StopReason = StopReasonEvidenceIncomplete
-			result.ExitCode = 7
-			result.Reason = "shared memory candidate promotion failed: " + err.Error()
-			return result
-		}
-		if c.contextRepo == nil {
-			if err := c.bindCandidateLessonsToManifest(manifest); err != nil {
-				c.rejectWorkerMemoryCandidates(ctx, manifest, "legacy candidate manifest binding failed: "+err.Error())
-				result.Outcome = RunOutcomePartial
-				result.GoalSatisfied = false
-				result.StopReason = StopReasonEvidenceIncomplete
-				result.ExitCode = 7
-				result.Reason = "candidate manifest binding failed: " + err.Error()
-				return result
-			}
-			c.promoteCandidateLessons(manifest)
-		}
+	input := c.runFinalizationInput(result, acceptance)
+	input.Evidence = manifest
+	if err := c.ExperienceProcessor().Finalize(ctx, input, decision); err != nil {
+		downgradeRunForFinalizationError(result, err)
 		return result
 	}
-	c.rejectWorkerMemoryCandidates(ctx, manifest, strings.Join(decision.Reasons, "; "))
-	c.rejectSharedMemoryCandidates(ctx, manifest, strings.Join(decision.Reasons, "; "))
+	// CompletionGate is only allowed to downgrade a claimed accepted run.
+	// Explicit failed, cancelled, partial, and unverified outcomes remain
+	// distinct for reports/recovery, while the processor above has still
+	// rejected their pending learning candidates.
+	if result == nil || result.Outcome != RunOutcomeCompleted || !result.GoalSatisfied {
+		return result
+	}
+	if decision.Accepted {
+		return result
+	}
 	result.Outcome = RunOutcomePartial
 	result.GoalSatisfied = false
 	result.StopReason = StopReasonEvidenceIncomplete
@@ -188,22 +167,22 @@ func (c *Coordinator) confirmWorkerMemoryCandidates(ctx context.Context, manifes
 	return nil
 }
 
-func (c *Coordinator) rejectWorkerMemoryCandidates(ctx context.Context, manifest *EvidenceManifest, reason string) {
+func (c *Coordinator) rejectWorkerMemoryCandidates(ctx context.Context, manifest *EvidenceManifest, reason string) error {
 	if c == nil || c.workerMemorySvc == nil {
-		return
+		return nil
 	}
 	runID := c.executionRunID
 	if manifest != nil && strings.TrimSpace(manifest.RunID) != "" {
 		runID = manifest.RunID
 	}
 	if strings.TrimSpace(runID) == "" {
-		return
+		return nil
 	}
 	scope := c.contextScope()
 	scope.BranchID = c.activeBranchID()
 	items, err := c.workerMemorySvc.RejectRun(ctx, WorkerMemoryRejectionRequest{Scope: scope, RunID: runID, Reason: reason})
 	if err != nil {
-		return
+		return err
 	}
 	for _, item := range items {
 		_ = c.emitEvent("worker_memory_rejected", "coordinator", item.Metadata["task_id"], map[string]interface{}{
@@ -215,13 +194,14 @@ func (c *Coordinator) rejectWorkerMemoryCandidates(ctx context.Context, manifest
 			_ = c.emitEvent("shared_memory_projection_error", "coordinator", "", map[string]interface{}{"error": contextstore.RedactSecrets(err.Error()), "run_id": runID})
 		}
 	}
+	return nil
 }
 
 func (c *Coordinator) confirmSharedMemoryCandidates(ctx context.Context, manifest *EvidenceManifest) error {
 	if c == nil || c.contextRepo == nil || manifest == nil {
 		return nil
 	}
-	items, err := NewSharedMemoryService(c.contextRepo).ConfirmRun(ctx, SharedMemoryPromotion{Scope: c.contextScope(), Manifest: manifest})
+	items, err := c.sharedMemoryService().ConfirmRun(ctx, SharedMemoryPromotion{Scope: c.contextScope(), Manifest: manifest})
 	if err != nil {
 		return err
 	}
@@ -233,23 +213,108 @@ func (c *Coordinator) confirmSharedMemoryCandidates(ctx context.Context, manifes
 	return nil
 }
 
-func (c *Coordinator) rejectSharedMemoryCandidates(ctx context.Context, manifest *EvidenceManifest, reason string) {
+func (c *Coordinator) rejectSharedMemoryCandidates(ctx context.Context, manifest *EvidenceManifest, reason string) error {
 	if c == nil || c.contextRepo == nil {
-		return
+		return nil
 	}
 	runID := c.executionRunID
 	if manifest != nil && strings.TrimSpace(manifest.RunID) != "" {
 		runID = manifest.RunID
 	}
-	items, err := NewSharedMemoryService(c.contextRepo).RejectRun(ctx, SharedMemoryRejection{Scope: c.contextScope(), RunID: runID, Reason: reason})
+	items, err := c.sharedMemoryService().RejectRun(ctx, SharedMemoryRejection{Scope: c.contextScope(), RunID: runID, Reason: reason})
 	if err != nil {
-		return
+		return err
 	}
 	for _, item := range items {
 		_ = c.emitEvent("shared_memory_rejected", "coordinator", item.Metadata["task_id"], map[string]interface{}{
 			"item_id": item.ID, "run_id": runID, "reason": contextstore.RedactSecrets(reason), "kind": item.Kind,
 		})
 	}
+	return nil
+}
+
+// confirmRunSharedContextCandidates promotes the current run's run-produced
+// shared session candidates (written by appendCanonicalContext) to confirmed
+// knowledge, bound to the accepted evidence manifest. This is the only path
+// that makes run-produced shared context prompt-visible.
+func (c *Coordinator) confirmRunSharedContextCandidates(ctx context.Context, manifest *EvidenceManifest) error {
+	if c == nil || c.contextRepo == nil || manifest == nil || strings.TrimSpace(manifest.RunID) == "" {
+		return nil
+	}
+	ids, err := c.runSharedContextCandidateIDs(ctx, manifest.RunID)
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := c.contextRepo.ConfirmCandidates(ctx, ids, contextstore.CandidateBinding{
+		Evidence: contextstore.EvidenceRef{Type: "evidence_manifest", Ref: manifest.ManifestHash},
+		Metadata: map[string]string{"manifest_hash": manifest.ManifestHash},
+	}); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		_ = c.emitEvent("run_shared_context_confirmed", "coordinator", "", map[string]interface{}{
+			"item_id": id, "run_id": manifest.RunID, "manifest_hash": manifest.ManifestHash,
+		})
+	}
+	return c.rebuildLegacyContextProjections(ctx)
+}
+
+// rejectRunSharedContextCandidates rejects the current run's run-produced
+// shared session candidates so a failed run's records never become
+// prompt-visible knowledge.
+func (c *Coordinator) rejectRunSharedContextCandidates(ctx context.Context, manifest *EvidenceManifest, reason string) error {
+	if c == nil || c.contextRepo == nil {
+		return nil
+	}
+	runID := c.executionRunID
+	if manifest != nil && strings.TrimSpace(manifest.RunID) != "" {
+		runID = manifest.RunID
+	}
+	if strings.TrimSpace(runID) == "" {
+		return nil
+	}
+	ids, err := c.runSharedContextCandidateIDs(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := c.contextRepo.UpdateLifecycle(ctx, ids, contextstore.LifecycleRejected); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		_ = c.emitEvent("run_shared_context_rejected", "coordinator", "", map[string]interface{}{
+			"item_id": id, "run_id": runID, "reason": contextstore.RedactSecrets(reason),
+		})
+	}
+	return c.rebuildLegacyContextProjections(ctx)
+}
+
+// runSharedContextCandidateIDs selects the session-scoped candidates produced
+// by appendCanonicalContext for the given run. Only run_shared_context source
+// items are eligible; persistent shared-memory candidates are owned by
+// SharedMemoryService.
+func (c *Coordinator) runSharedContextCandidateIDs(ctx context.Context, runID string) ([]string, error) {
+	items, err := c.contextRepo.Query(ctx, contextstore.RepositoryQuery{
+		Scope:             c.contextScope(),
+		Visibility:        contextstore.VisibilityExact,
+		IncludeCandidates: true,
+		Limit:             100000,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, item := range items {
+		if item.Lifecycle == contextstore.LifecycleCandidate && item.Source.Type == "run_shared_context" && item.Metadata["run_id"] == runID {
+			ids = append(ids, item.ID)
+		}
+	}
+	return ids, nil
 }
 
 // completionGateState reads authoritative coordinator state immediately before

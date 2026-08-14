@@ -13,6 +13,7 @@ import (
 type submitResultTool struct {
 	coordinator *Coordinator
 	todoID      string
+	sink        TaskResultSink
 }
 
 func (t *submitResultTool) ProviderOptions() fantasy.ProviderOptions {
@@ -246,7 +247,17 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		if err := t.materializeSubmittedArtifacts(ctx, &res); err != nil {
 			return fantasy.NewTextErrorResponse("invalid artifact declaration: " + err.Error()), nil
 		}
-		t.coordinator.storeSubmittedTaskResult(t.todoID, &res)
+	}
+	sink := t.sink
+	if sink == nil && t.coordinator != nil {
+		sink = coordinatorTaskResultSink{coordinator: t.coordinator}
+	}
+	if sink != nil {
+		if err := sink.Submit(ctx, t.todoID, res); err != nil {
+			return fantasy.NewTextErrorResponse("store submitted result: " + err.Error()), nil
+		}
+	}
+	if t.coordinator != nil {
 		t.coordinator.emitMemoryUsageEvents(&res)
 	}
 	return fantasy.NewTextResponse("Task result submitted successfully."), nil

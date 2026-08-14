@@ -367,7 +367,7 @@ func (c *Coordinator) pauseTerminalTask(session TerminalSession) {
 	if pause.cancel != nil {
 		pause.cancel()
 	}
-	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(controllerTaskID, TaskPaused, "waiting for human terminal handoff", ""); err == nil {
+	if err := c.commitTaskTransitionFromCurrent(context.Background(), controllerTaskID, TaskPaused, "waiting for human terminal handoff", "", nil); err == nil {
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	}
 	c.report(c.newEvent("terminal_taken_over").withTodoID(controllerTaskID).withMessage("human attached to PTY; model round paused"))
@@ -388,7 +388,7 @@ func (c *Coordinator) resumeTerminalTask(session TerminalSession) {
 	if pause == nil {
 		return
 	}
-	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(controllerTaskID, TaskInProgress, "human terminal handoff returned", ""); err == nil {
+	if err := c.commitTaskTransitionFromCurrent(context.Background(), controllerTaskID, TaskInProgress, "human terminal handoff returned", "", nil); err == nil {
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	}
 	c.report(c.newEvent("terminal_released").withTodoID(controllerTaskID).withMessage("human released PTY; resuming model round"))

@@ -104,7 +104,7 @@ func TestPhaseCapabilityOverridesTemplateGrant(t *testing.T) {
 	session := &TeamSession{Config: agent.TeamConfig{}}
 	w, err := newRuntimeWorkflow(&TeamSession{
 		Config: agent.TeamConfig{
-			Name: "test-team",
+			Name:     "test-team",
 			Workflow: agent.WorkflowConfig{Phases: []string{"prepare", "audit", "execute", "verify"}},
 			Policies: agent.WorkflowPolicies{AllowPhaseSkip: true},
 		},

@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: Reviews source code for unsafe patterns: SQL injection, command injection, path traversal, XSS, etc.
+description: "Reviews source code for unsafe patterns: SQL injection, command injection, path traversal, XSS, etc."
 tools: view,bash,grep
 role: worker
 timeout: 1200

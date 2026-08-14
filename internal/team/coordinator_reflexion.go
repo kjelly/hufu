@@ -115,7 +115,7 @@ func (c *Coordinator) persistKnowledgeCandidateWithEvidence(lesson, section, sou
 		if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 			runID = c.taskTracker.TodoList().RunID()
 		}
-		item, err := NewSharedMemoryService(c.contextRepo).Propose(context.Background(), SharedMemoryProposal{
+		item, err := c.sharedMemoryService().Propose(context.Background(), SharedMemoryProposal{
 			Scope: c.contextScope(), Content: lesson, Section: section, Source: source, RunID: runID, Evidence: evidence,
 		})
 		if err != nil {
@@ -153,7 +153,12 @@ func (c *Coordinator) promoteCandidateLessons(manifest *EvidenceManifest) {
 }
 
 func (c *Coordinator) persistReflexionLessonAsync(agentName, taskID, goal, failure, hint string, rescued, verifyPolarityBug bool) {
+	if c == nil {
+		return
+	}
+	c.asyncTasksWg.Add(1)
 	go func() {
+		defer c.asyncTasksWg.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[PANIC] persistReflexionLessonAsync recovered: %v", r)

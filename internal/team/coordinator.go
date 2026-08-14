@@ -326,6 +326,8 @@ type Coordinator struct {
 	contextRepo            contextstore.Repository // canonical context store used by prompt assembly and maintenance
 	memoryRankingPolicy    MemoryRuntimeRankingPolicy
 	workerMemorySvc        WorkerMemoryService // WP-3 per-worker memory recall service.
+	sharedMemorySvc        SharedMemoryService // canonical shared persistent memory service.
+	asyncTasksWg           sync.WaitGroup      // tracks in-flight async candidate writes before run finalization
 	skillsMu               sync.RWMutex
 	modelList              []config.ModelEntry
 	sidecarModel           string
@@ -507,6 +509,11 @@ type Coordinator struct {
 	contextCompiler     ContextCompiler
 	agentPool           AgentPool
 	workflowEngine      WorkflowEngine
+	eventJournal        EventJournal
+	toolResolver        ToolResolver
+	modelRuntime        ModelRuntime
+	subagentRegistry    *SubagentRegistry
+	experienceProcessor ExperienceProcessor
 	phaseWorkflow       *runtimeWorkflow
 }
 
@@ -965,7 +972,13 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		return nil, fmt.Errorf("load adopted memory policy: %w", err)
 	}
 	c.workerMemorySvc = NewWorkerMemoryService(repo, nil)
+	c.sharedMemorySvc = NewSharedMemoryService(repo)
 	c.workflowEngine = &defaultWorkflowEngine{c: c}
+	c.eventJournal = eventStoreJournal{}
+	c.toolResolver = &defaultToolResolver{c: c}
+	c.modelRuntime = &defaultModelRuntime{c: c}
+	c.subagentRegistry = NewSubagentRegistry(NewHufuLocalSubagentProvider(c))
+	c.experienceProcessor = &defaultExperienceProcessor{c: c}
 
 	// Enable sidecar for skill pattern detection
 	if s := c.AgentPool().Sidecar(); s != nil {
@@ -1595,6 +1608,141 @@ func (c *Coordinator) SetWorkflowEngine(we WorkflowEngine) {
 	c.workflowEngine = we
 }
 
+// EventJournal returns the coordinator's durable event boundary. Tests may
+// inject a failing or in-memory journal without opening a JSONL file.
+func (c *Coordinator) EventJournal() EventJournal {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.eventJournal != nil {
+		return c.eventJournal
+	}
+	return eventStoreJournal{store: c.eventStore}
+}
+
+func (c *Coordinator) SetEventJournal(journal EventJournal) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.eventJournal = journal
+}
+
+func (c *Coordinator) ToolResolver() ToolResolver {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.toolResolver != nil {
+		return c.toolResolver
+	}
+	return &defaultToolResolver{c: c}
+}
+
+func (c *Coordinator) SetToolResolver(resolver ToolResolver) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.toolResolver = resolver
+}
+
+func (c *Coordinator) ModelRuntime() ModelRuntime {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.modelRuntime != nil {
+		return c.modelRuntime
+	}
+	return &defaultModelRuntime{c: c}
+}
+
+func (c *Coordinator) SetModelRuntime(runtime ModelRuntime) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.modelRuntime = runtime
+}
+
+func (c *Coordinator) SubagentRegistry() *SubagentRegistry {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.subagentRegistry != nil {
+		return c.subagentRegistry
+	}
+	return NewSubagentRegistry(NewHufuLocalSubagentProvider(c))
+}
+
+func (c *Coordinator) SetSubagentRegistry(registry *SubagentRegistry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.subagentRegistry = registry
+}
+
+func (c *Coordinator) ExperienceProcessor() ExperienceProcessor {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.experienceProcessor != nil {
+		return c.experienceProcessor
+	}
+	return &defaultExperienceProcessor{c: c}
+}
+
+func (c *Coordinator) SetExperienceProcessor(processor ExperienceProcessor) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.experienceProcessor = processor
+}
+
+// RuntimeServices returns the active coordinator capability bundle. The
+// method is primarily an internal test seam; public construction remains
+// backwards compatible through NewCoordinator.
+func (c *Coordinator) RuntimeServices() RuntimeServices {
+	return RuntimeServices{
+		Planner:             c.Planner(),
+		SessionStore:        c.SessionStore(),
+		PolicyEngine:        c.PolicyEngine(),
+		ContextCompiler:     c.ContextCompiler(),
+		AgentPool:           c.AgentPool(),
+		WorkflowEngine:      c.WorkflowEngine(),
+		EventJournal:        c.EventJournal(),
+		ToolResolver:        c.ToolResolver(),
+		ModelRuntime:        c.ModelRuntime(),
+		SubagentRegistry:    c.SubagentRegistry(),
+		ExperienceProcessor: c.ExperienceProcessor(),
+	}
+}
+
+// setRuntimeServices is the internal constructor-injection path. Nil fields
+// retain the production default, so a test never needs to build a fake DI
+// container merely to replace one service.
+func (c *Coordinator) setRuntimeServices(services RuntimeServices) {
+	if services.Planner != nil {
+		c.SetPlanner(services.Planner)
+	}
+	if services.SessionStore != nil {
+		c.SetSessionStore(services.SessionStore)
+	}
+	if services.PolicyEngine != nil {
+		c.SetPolicyEngine(services.PolicyEngine)
+	}
+	if services.ContextCompiler != nil {
+		c.SetContextCompiler(services.ContextCompiler)
+	}
+	if services.AgentPool != nil {
+		c.SetAgentPool(services.AgentPool)
+	}
+	if services.WorkflowEngine != nil {
+		c.SetWorkflowEngine(services.WorkflowEngine)
+	}
+	if services.EventJournal != nil {
+		c.SetEventJournal(services.EventJournal)
+	}
+	if services.ToolResolver != nil {
+		c.SetToolResolver(services.ToolResolver)
+	}
+	if services.ModelRuntime != nil {
+		c.SetModelRuntime(services.ModelRuntime)
+	}
+	if services.SubagentRegistry != nil {
+		c.SetSubagentRegistry(services.SubagentRegistry)
+	}
+	if services.ExperienceProcessor != nil {
+		c.SetExperienceProcessor(services.ExperienceProcessor)
+	}
+}
+
 func (c *Coordinator) storeSubmittedTaskResult(todoID string, res *TaskResult) {
 	c.taskResultsMu.Lock()
 	if c.taskResults == nil {
@@ -1848,4 +1996,22 @@ func (c *Coordinator) ValidateResourceLocks(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (c *Coordinator) drainAsyncTasks() {
+	if c == nil {
+		return
+	}
+	c.asyncTasksWg.Wait()
+}
+
+func (c *Coordinator) sharedMemoryService() SharedMemoryService {
+	if c == nil || c.contextRepo == nil {
+		return nil
+	}
+	if c.sharedMemorySvc != nil {
+		return c.sharedMemorySvc
+	}
+	c.sharedMemorySvc = NewSharedMemoryService(c.contextRepo)
+	return c.sharedMemorySvc
 }

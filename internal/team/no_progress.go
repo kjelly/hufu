@@ -338,7 +338,15 @@ func (c *Coordinator) stopForNoProgress(reason string) (bool, string) {
 		NoProgress:              &counters,
 		NoProgressReplanPending: c.noProgressReplanPending(),
 	}
-	c.SetLastRunResult(&evaluated)
+	finalized := c.FinalizeRun(context.Background(), &evaluated, nil)
+	if finalized != nil {
+		if finalized.Continuation == nil {
+			finalized.Continuation = evaluated.Continuation
+		}
+		c.SetLastRunResult(finalized)
+	} else {
+		c.SetLastRunResult(&evaluated)
+	}
 	// Preserve a durable resume handoff even when the stop is observed at a
 	// task boundary before ensureFinished has entered its continuation loop.
 	maxContinuationTurns := 0

@@ -259,14 +259,14 @@ func (c *Coordinator) delegationPhase() DelegationPhase {
 	if c == nil || c.session == nil || !c.session.Config.Delegation.RequireExactInitialBatch {
 		return DelegationPhaseActive
 	}
+	if (c.taskTracker != nil && len(c.taskTracker.TodoList().Items()) > 0) || (c.sessionData != nil && len(c.sessionData.Tasks) > 0) {
+		return DelegationPhaseActive
+	}
 	if c.sessionData != nil {
 		switch c.sessionData.DelegationPhase {
 		case DelegationPhaseInitialPending, DelegationPhaseActive:
 			return c.sessionData.DelegationPhase
 		}
-	}
-	if c.taskTracker != nil && len(c.taskTracker.TodoList().Items()) > 0 {
-		return DelegationPhaseActive
 	}
 	return DelegationPhaseInitialPending
 }
@@ -274,13 +274,17 @@ func (c *Coordinator) delegationPhase() DelegationPhase {
 // markInitialDelegationAccepted advances the durable phase immediately before
 // the first TODO batch is created. The TodoList callback then checkpoints both
 // the phase and the new tasks atomically from the coordinator's perspective.
-func (c *Coordinator) markInitialDelegationAccepted() {
+// It returns true when it advanced the phase, so a caller that subsequently
+// fails to create any task can revert the in-memory advance and keep the
+// initial-batch policy intact for a retry.
+func (c *Coordinator) markInitialDelegationAccepted() bool {
 	if c == nil || c.session == nil || !c.session.Config.Delegation.RequireExactInitialBatch || c.delegationPhase() != DelegationPhaseInitialPending {
-		return
+		return false
 	}
 	if c.sessionData != nil {
 		c.sessionData.DelegationPhase = DelegationPhaseActive
 	}
+	return true
 }
 
 // bindInitialTaskContracts compiles the configured first batch into the only

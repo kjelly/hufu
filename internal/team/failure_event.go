@@ -294,12 +294,24 @@ func mergeFailureEventJSON(existing *FailureEventPayload, payload json.RawMessag
 		return existing, false
 	}
 	fields := top
-	if nested, ok := top["failure_event"]; ok {
+	hasExplicitFailure := false
+	if nested, ok := top["failure_event"]; ok && string(nested) != "null" && string(nested) != "{}" {
 		var decoded map[string]json.RawMessage
-		if err := json.Unmarshal(nested, &decoded); err != nil {
-			return existing, false
+		if err := json.Unmarshal(nested, &decoded); err == nil && len(decoded) > 0 {
+			fields = decoded
+			hasExplicitFailure = true
 		}
-		fields = decoded
+	}
+	if !hasExplicitFailure {
+		for _, marker := range []string{"failure_class", "failure_type", "retry_disposition", "failed_step_id"} {
+			if raw, ok := top[marker]; ok && string(raw) != "null" && string(raw) != `""` {
+				hasExplicitFailure = true
+				break
+			}
+		}
+	}
+	if !hasExplicitFailure {
+		return existing, false
 	}
 	found := false
 	for _, name := range failureEventFieldNames {

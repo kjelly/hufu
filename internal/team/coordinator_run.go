@@ -86,9 +86,55 @@ func (c *Coordinator) buildDirectAgentTaskContext(ctx context.Context, agentDef 
 	return taskCtx, cancel, roundCancel
 }
 
+type directRunDisposition int
+
+const (
+	directRunPending directRunDisposition = iota
+	directRunSuccess
+	directRunBudgetStopped
+	directRunReplanPending
+)
+
+func (c *Coordinator) checkRunAdmission() error {
+	if c.sessionData != nil && c.sessionData.RecoveryRequired {
+		reason := c.sessionData.RecoveryReason
+		if reason == "" {
+			reason = "session recovery required"
+		}
+		c.SetLastRunResult(&RunResult{
+			Outcome:       RunOutcomeBlocked,
+			GoalSatisfied: false,
+			Reason:        reason,
+			Response:      reason,
+		})
+		return fmt.Errorf("recovery required: %s", reason)
+	}
+	return nil
+}
+
+func (c *Coordinator) directAgentWorkflowPrompt(task string, agentDef *agent.AgentDef, resolvedName, todoID string) string {
+	prompt := c.appendSkillContext(task, agentDef, resolvedName, task, todoID)
+	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+		execCtx := c.phaseWorkflow.executionContext()
+		prompt += "\n\n## Execution Context\n\n"
+		prompt += fmt.Sprintf("- **Phase**: `%s`\n", c.phaseWorkflow.State())
+		prompt += fmt.Sprintf("- **Runtime Workspace**: `%s`\n", execCtx.RuntimeWorkspace.Root)
+		prompt += fmt.Sprintf("- **Artifacts Directory**: `%s/artifacts`\n", execCtx.RuntimeWorkspace.Root)
+		prompt += fmt.Sprintf("- **Receipts Directory**: `%s/receipts`\n", execCtx.RuntimeWorkspace.Root)
+		prompt += "Ensure all durable outputs are written to the artifacts directory, not the project source.\n"
+		if len(execCtx.Capabilities.Required) > 0 {
+			prompt += fmt.Sprintf("- **Required Capabilities**: `%s`\n", strings.Join(execCtx.Capabilities.Required, ", "))
+		}
+	}
+	return prompt
+}
+
 func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (*DirectAgentResult, error) {
 	endExecutionRun := c.beginExecutionRun()
 	defer endExecutionRun()
+	if err := c.checkRunAdmission(); err != nil {
+		return nil, err
+	}
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		return nil, fmt.Errorf("direct agent invocation is disabled for runtime workflows; dispatch the active phase through the coordinator")
 	}
@@ -106,9 +152,15 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	c.setAutoLoadedSkills(c.matchSkillsWithSidecar(ctx, task))
 
 	resolvedName := strings.ToLower(agentDef.Name)
-	directModel := c.resolveAgentModel(agentDef, "")
+	directModel, err := c.ModelRuntime().ResolveTaskModel(agentDef, TaskDef{Agent: resolvedName, Goal: task})
+	if err != nil {
+		return nil, err
+	}
 
-	todoItems := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: resolvedName, Desc: task, Model: directModel, Source: TaskSourceCoordinator, ParentID: ""}})
+	todoItems, err := c.CommitTaskCreation(ctx, []TodoSpec{{Agent: resolvedName, Desc: task, Model: directModel, Source: TaskSourceCoordinator, ParentID: ""}})
+	if err != nil {
+		return nil, err
+	}
 	// Direct-agent invocation creates a real task and must participate in the
 	// same run-scoped task budget as coordinator-created work.
 	c.recordNoProgressTasks(len(todoItems))
@@ -117,9 +169,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	// exit, reject run-bound memory candidates so failed knowledge never
 	// becomes prompt-visible; the success path finalizes the run through the
 	// completion gate explicitly.
-	directRunSucceeded := false
+	directRunDisp := directRunPending
 	defer func() {
-		if !directRunSucceeded {
+		if directRunDisp == directRunPending {
 			c.finalizeDirectRun(ctx, todoID, false, "")
 		}
 	}()
@@ -130,7 +182,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	attemptStarted := time.Now()
 	c.recordExecutionEvent(todoID, resolvedName, 1, "in_progress", directModel, 0, ExecutionUsage{})
-	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
+	if err := c.CommitTaskTransition(ctx, todoID, TaskPending, TaskInProgress, "", "", nil); err != nil {
+		return nil, fmt.Errorf("mark direct task started: %w", err)
+	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("start").withAgent(resolvedName).withMessage(task).withModel(directModel).withTodoID(todoID))
 	prevAgent := c.getSnapshotField(func(s *currentSnapshot) string { return s.Agent })
@@ -165,20 +219,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	reconcileDirectStatus()
 
-	prompt := c.appendSkillContext(task, agentDef, resolvedName, task, todoID)
-
-	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
-		execCtx := c.phaseWorkflow.executionContext()
-		prompt += "\n\n## Execution Context\n\n"
-		prompt += fmt.Sprintf("- **Phase**: `%s`\n", c.phaseWorkflow.State())
-		prompt += fmt.Sprintf("- **Runtime Workspace**: `%s`\n", execCtx.RuntimeWorkspace.Root)
-		prompt += fmt.Sprintf("- **Artifacts Directory**: `%s/artifacts`\n", execCtx.RuntimeWorkspace.Root)
-		prompt += fmt.Sprintf("- **Receipts Directory**: `%s/receipts`\n", execCtx.RuntimeWorkspace.Root)
-		prompt += "Ensure all durable outputs are written to the artifacts directory, not the project source.\n"
-		if len(execCtx.Capabilities.Required) > 0 {
-			prompt += fmt.Sprintf("- **Required Capabilities**: `%s`\n", strings.Join(execCtx.Capabilities.Required, ", "))
-		}
-	}
+	prompt := c.directAgentWorkflowPrompt(task, agentDef, resolvedName, todoID)
 
 	// Direct-agent dispatch uses the same canonical compiler as DAG workers.
 	// Historical sources are represented as typed inputs so visibility,
@@ -281,7 +322,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, resolvedName, taskTS, "done", task, output); err != nil {
 		log.Printf("warning: failed to write task file: %v", err)
 	}
-	c.taskTracker.TodoList().UpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output)
+	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output, nil); err != nil {
+		return nil, fmt.Errorf("mark direct task done: %w", err)
+	}
 	c.updateTodoTiming(todoID, modelTime, toolTime)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	reconcileDirectStatus()
@@ -308,6 +351,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		// error keeps the fast path from reporting successful completion while
 		// stopForNoProgress has persisted the canonical partial result and
 		// continuation checkpoint.
+		directRunDisp = directRunBudgetStopped
 		return &DirectAgentResult{
 			AgentName: resolvedName,
 			Output:    output,
@@ -320,6 +364,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		// Surface the first-threshold disposition explicitly so callers cannot
 		// report a successful direct run without giving the coordinator a chance
 		// to replan. The fast path recognizes ReplanRequired and escalates.
+		directRunDisp = directRunReplanPending
 		return &DirectAgentResult{
 			AgentName:      resolvedName,
 			Output:         output,
@@ -329,7 +374,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		}, nil
 	}
 
-	directRunSucceeded = true
+	directRunDisp = directRunSuccess
 	runRes := c.finalizeDirectRun(ctx, todoID, true, output)
 	// Enforce the canonical run outcome: a direct run the completion gate
 	// marked unverified (no acceptance contract) or partial (acceptance
@@ -374,14 +419,18 @@ func (c *Coordinator) finalizeDirectRun(ctx context.Context, todoID string, succ
 		return nil
 	}
 	if !success {
-		reason := "direct agent run did not complete successfully"
-		c.rejectSharedMemoryCandidates(ctx, nil, reason)
-		c.rejectWorkerMemoryCandidates(ctx, nil, reason)
-		return nil
+		items := c.taskTracker.TodoList().Items()
+		evaluated := EvaluateRunOutcome(RunEvaluationInput{
+			UnresolvedTasks: UnresolvedTaskReferences(items),
+			Acceptance:      AcceptanceNotConfigured,
+			Response:        response,
+			Reason:          "direct agent run did not complete successfully",
+			Stats:           SummarizeRunStats(items),
+			Metrics:         c.Metrics(),
+			GoalMode:        c.GoalMode(),
+		})
+		return c.FinalizeRun(ctx, &evaluated, nil)
 	}
-	// Success path: typed extraction runs only after the shared-session
-	// reduction has produced confirmed session items.
-	c.AutoExtractLTM(ctx)
 	accRes, accErr := c.runAcceptance(ctx)
 	if manifestErr := c.finalizeEvidenceManifest(ctx, accRes); manifestErr != nil {
 		c.report(c.newEvent("error").withMessage("evidence manifest finalization failed: " + manifestErr.Error()))
@@ -406,15 +455,7 @@ func (c *Coordinator) finalizeDirectRun(ctx context.Context, todoID string, succ
 	c.lastEvidenceManifestMu.RLock()
 	evaluated.EvidenceManifest = c.lastEvidenceManifest
 	c.lastEvidenceManifestMu.RUnlock()
-	runRes := c.applyCompletionGate(ctx, &evaluated, accRes)
-	c.SetLastRunResult(runRes)
-	// Fail closed: a direct run that did not reach an accepted completed
-	// outcome must not leave run-bound candidates pending forever.
-	if runRes == nil || runRes.Outcome != RunOutcomeCompleted || !runRes.GoalSatisfied {
-		reason := "direct agent run was not accepted"
-		c.rejectSharedMemoryCandidates(ctx, nil, reason)
-		c.rejectWorkerMemoryCandidates(ctx, nil, reason)
-	}
+	runRes := c.FinalizeRun(ctx, &evaluated, accRes)
 	return runRes
 }
 
@@ -748,7 +789,7 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 		c.lastEvidenceManifestMu.RLock()
 		evaluated.EvidenceManifest = c.lastEvidenceManifest
 		c.lastEvidenceManifestMu.RUnlock()
-		evaluatedPtr := c.applyCompletionGate(ctx, &evaluated, accRes)
+		evaluatedPtr := c.FinalizeRun(ctx, &evaluated, accRes)
 		if evaluatedPtr != nil {
 			evaluated = *evaluatedPtr
 		}
@@ -814,7 +855,7 @@ func (c *Coordinator) recordInterruptedContinuation(turn, maxTurns int, reason, 
 		Reason:     reason,
 		NoProgress: &progress,
 	}
-	c.SetLastRunResult(&evaluated)
+	c.FinalizeRun(context.Background(), &evaluated, nil)
 	c.saveContinuationCheckpoint(turn, maxTurns, reason, "aborted")
 	c.continuationInterrupted.Store(true)
 	return result
@@ -916,7 +957,7 @@ func (c *Coordinator) finalizeTerminalUnresolvedRun() string {
 		Metrics:         c.Metrics(),
 		GoalMode:        c.GoalMode(),
 	})
-	c.SetLastRunResult(&evaluated)
+	c.FinalizeRun(context.Background(), &evaluated, nil)
 	c.SetCurrentStage("terminal_unresolved")
 	return summary
 }
@@ -981,7 +1022,7 @@ func (c *Coordinator) recordRunAborted(runErr error) {
 		Metrics:         c.Metrics(),
 		GoalMode:        c.GoalMode(),
 	})
-	c.SetLastRunResult(&evaluated)
+	c.FinalizeRun(context.Background(), &evaluated, nil)
 	checkpoint := c.ContinuationCheckpoint()
 	if checkpoint == nil {
 		c.saveContinuationCheckpoint(0, 0, reason, "aborted")
@@ -1016,8 +1057,9 @@ func (c *Coordinator) finalizeRemainingTasks() {
 			c.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, "coordinator ended unexpectedly", RetryNone, FailureExecution, TaskError)
 			changed = true
 		case TaskPending:
-			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "")
-			changed = true
+			if err := c.commitTaskTransitionFromCurrent(context.Background(), item.ID, TaskSkipped, "", "", nil); err == nil {
+				changed = true
+			}
 		}
 	}
 	if changed {
@@ -1036,8 +1078,9 @@ func (c *Coordinator) finalizeNormalCompletion() {
 	for _, item := range items {
 		switch item.Status {
 		case TaskPending:
-			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, "")
-			changed = true
+			if err := c.commitTaskTransitionFromCurrent(context.Background(), item.ID, TaskSkipped, "", "", nil); err == nil {
+				changed = true
+			}
 		case TaskInProgress, TaskPaused, TaskVerifying, TaskProtocolIncomplete:
 			c.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, "coordinator finished before task completed", RetryNone, FailureExecution, TaskError)
 			changed = true
@@ -1280,6 +1323,9 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	endExecutionRun := c.beginExecutionRun()
 	defer endExecutionRun()
 	defer func() { c.continuationResume = nil }()
+	if err := c.checkRunAdmission(); err != nil {
+		return "", err
+	}
 	if err := c.ValidateWorkspaceIsolation(); err != nil {
 		return "", err
 	}
@@ -1417,6 +1463,9 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt string) (string, error) {
 	endExecutionRun := c.beginExecutionRun()
 	defer endExecutionRun()
+	if err := c.checkRunAdmission(); err != nil {
+		return "", err
+	}
 	// Capture before resetRoundState clears the flag, or the wrap-up branch
 	// below can never trigger and wrap-up requests silently degrade into an
 	// ordinary (empty-prompt) continuation turn.

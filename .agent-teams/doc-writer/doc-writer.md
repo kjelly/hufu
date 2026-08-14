@@ -1,6 +1,6 @@
 ---
 name: doc-writer
-description: Writes user-facing documentation: README sections, API reference, tutorials, and CHANGELOG entries.
+description: "Writes user-facing documentation: README sections, API reference, tutorials, and CHANGELOG entries."
 tools: view,write,edit,bash,grep
 role: worker
 timeout: 1200

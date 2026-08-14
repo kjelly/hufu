@@ -438,17 +438,10 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	// the only compatible evidence: any restored task means the initial batch
 	// is no longer pending; an empty/corrupt replacement session remains
 	// pending. Never infer this from STM/LTM or conversation prose.
-	if c.session != nil && c.session.Config.Delegation.RequireExactInitialBatch {
-		switch sd.DelegationPhase {
-		case DelegationPhaseInitialPending, DelegationPhaseActive:
-			// Already explicit.
-		default:
-			if len(sd.Tasks) > 0 && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
-				sd.DelegationPhase = DelegationPhaseActive
-			} else {
-				sd.DelegationPhase = DelegationPhaseInitialPending
-			}
-		}
+	if len(sd.Tasks) > 0 && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
+		sd.DelegationPhase = DelegationPhaseActive
+	} else if sd.DelegationPhase == "" {
+		sd.DelegationPhase = DelegationPhaseInitialPending
 	}
 	if c.initialDelegationPending() {
 		// A fresh/replacement session must not send stale in-memory conversation
@@ -471,16 +464,32 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	} else {
 		c.baseRounds = 0
 	}
-	if len(sd.Tasks) > 0 && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
-		c.taskTracker.TodoList().Restore(sd.Tasks)
+	c.applyLiveTaskProjection(sd.Tasks)
+	if !prof.DisableHistoricalMemory {
+		c.hydrateConversationHistoryFromSessionData()
+	}
+}
+
+func (c *Coordinator) applyLiveTaskProjection(tasks []*TodoItem) {
+	if c == nil {
+		return
+	}
+	prof := c.ExecutionProfile()
+	if len(tasks) > 0 && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
+		if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+			c.taskTracker.TodoList().Restore(tasks)
+		}
 	}
 	c.rebuildAntiThrashingState()
 
 	if !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
 		c.taskResultCacheMu.Lock()
+		if c.taskResultCache == nil {
+			c.taskResultCache = make(map[string][]cachedTaskEntry)
+		}
 		gen := c.cacheGeneration.Load()
-		for _, t := range sd.Tasks {
-			if t.Status == TaskDone && t.Output != "" {
+		for _, t := range tasks {
+			if t != nil && t.Status == TaskDone && t.Output != "" {
 				agentKey := strings.ToLower(t.Agent)
 				c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
 					taskDesc:     t.Desc,
@@ -500,17 +509,13 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 		c.taskResultCacheMu.Unlock()
 	}
 
-	// TodoList is the canonical lifecycle state. Every mutation callback must
-	// persist the checkpoint and rebuild the derived status projection so
-	// transitions made by any coordinator path (DAG, plan, delegate, recovery,
-	// or direct execution) cannot leave status files stale.
-	c.taskTracker.TodoList().onChange = func() {
-		c.saveCheckpoint()
-		c.reconcileTaskStatusProjection()
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		c.taskTracker.TodoList().onChange = func() {
+			c.saveCheckpoint()
+			c.reconcileTaskStatusProjection()
+		}
 	}
-	if !prof.DisableHistoricalMemory {
-		c.hydrateConversationHistoryFromSessionData()
-	}
+	c.reconcileTaskStatusProjection()
 }
 
 // ContinuationCheckpoint returns a copy of the persisted continuation state.
@@ -697,6 +702,8 @@ func (c *Coordinator) getInterruptedTasks() []*TodoItem {
 // with policy 'retry' or reconciled as 'not_started' are re-executed;
 // 'manual' tasks are blocked and flagged for human review; 'never' tasks are
 // skipped (left as-is) since the policy declares they must not be re-driven.
+//
+//nolint:gocyclo // The recovery matrix is intentionally explicit to preserve fail-closed side-effect semantics.
 func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 	prof := c.ExecutionProfile()
 	if prof.DisableHistoricalTaskReuse || prof.DisableJournalRestore {
@@ -742,7 +749,9 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 				c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
 				continue
 			}
-			c.taskTracker.TodoList().ResetForRetry(it.ID, "resumed after interruption")
+			if err := c.CommitTaskResetForRetry(ctx, it.ID, "resumed after interruption"); err != nil {
+				return count, err
+			}
 			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
 				"side_effect": string(it.SideEffect),
 				"policy":      string(pol),
@@ -772,7 +781,9 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			// this does not emit needs_human: the policy is a deliberate
 			// "do not touch" declaration, not a request for human action.
 			detail := fmt.Sprintf("task skipped by side-effect recovery policy (%s, side_effect=%s); left as-is, not re-driven", pol, it.SideEffect)
-			c.taskTracker.TodoList().UpdateStatus(it.ID, TaskSkipped, detail)
+			if err := c.commitTaskTransitionFromCurrent(ctx, it.ID, TaskSkipped, detail, "", nil); err != nil {
+				return count, err
+			}
 			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
@@ -798,7 +809,9 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 					c.emitEvent("criterion_checkpoint_rejected", "coordinator", it.ID, map[string]interface{}{"reason": detail})
 					continue
 				}
-				c.taskTracker.TodoList().UpdateStatus(it.ID, TaskDone, "reconciliation confirmed task was completed")
+				if err := c.commitTaskTransitionFromCurrent(ctx, it.ID, TaskDone, "reconciliation confirmed task was completed", "", nil); err != nil {
+					return count, err
+				}
 				c.reconcileTaskStatusProjection()
 				current := it
 				for _, candidate := range c.taskTracker.TodoList().Items() {
@@ -834,7 +847,9 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 					c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
 					continue
 				}
-				c.taskTracker.TodoList().ResetForRetry(it.ID, "reconciliation allowed retry")
+				if err := c.CommitTaskResetForRetry(ctx, it.ID, "reconciliation allowed retry"); err != nil {
+					return count, err
+				}
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
 					"side_effect":    string(it.SideEffect),

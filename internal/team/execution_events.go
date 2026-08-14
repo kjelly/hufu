@@ -245,10 +245,25 @@ func (c *Coordinator) beginExecutionRun() func() {
 	if c.session != nil {
 		workspace = c.session.Workspace
 	}
-	logger, err := newExecutionEventLogger(workspace)
-	if err != nil {
-		log.Printf("warning: create execution event logger: %v", err)
-		return func() {}
+
+	c.initEventStore()
+	if c.sessionData != nil && c.sessionData.RecoveryRequired {
+		return func() {
+			c.executionEventsMu.Lock()
+			c.executionRunID = ""
+			c.executionTeamRevision = ""
+			c.executionEventsMu.Unlock()
+		}
+	}
+
+	var logger *executionEventLogger
+	if workspace != "" {
+		l, err := newExecutionEventLogger(workspace)
+		if err != nil {
+			log.Printf("warning: create execution event logger: %v", err)
+		} else {
+			logger = l
+		}
 	}
 
 	c.executionEventsMu.Lock()
@@ -259,7 +274,6 @@ func (c *Coordinator) beginExecutionRun() func() {
 		previous.close()
 	}
 
-	c.initEventStore()
 	teamName := ""
 	if c.session != nil {
 		teamName = c.session.Config.Name
@@ -267,18 +281,29 @@ func (c *Coordinator) beginExecutionRun() func() {
 	c.emitEvent("run_started", "coordinator", "", LifecycleEventPayload{
 		Team: teamName,
 	})
+	if logger != nil {
+		_ = logger.append(ExecutionEvent{
+			Version:      3,
+			Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
+			RunID:        runID,
+			Team:         teamName,
+			Status:       "run_started",
+			TeamRevision: teamRevision,
+		})
+	}
 
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		c.persistRuntimeContextSnapshot(c.phaseWorkflow.State())
 	}
 
 	return func() {
+		c.drainAsyncTasks()
 		// Every terminal result, including no-progress and coordinator-fallback
 		// exits, must carry the final evidence chain before run_finished is
 		// published. The finish tool also performs this work earlier so policy
 		// failures can be surfaced interactively; this deferred gate covers all
 		// non-tool terminal paths.
-		if result := c.LastRunResult(); result != nil {
+		if result := c.LastRunResult(); result != nil && result.EvidenceManifest == nil {
 			if err := c.finalizeEvidenceManifest(context.Background(), result.Acceptance); err != nil {
 				log.Printf("warning: final evidence manifest before run_finished failed: %v", err)
 			} else {
@@ -328,7 +353,13 @@ func (c *Coordinator) beginExecutionRun() func() {
 		if err := c.emitEvent("run_finished", "coordinator", "", payload); err != nil {
 			log.Printf("error: failed to write run_finished event: %v", err)
 		}
+		var canonicalEvents []RunEvent
 		if c.eventStore != nil {
+			var readErr error
+			canonicalEvents, readErr = c.eventStore.ReadEvents()
+			if readErr != nil {
+				log.Printf("warning: read canonical events for execution-event export: %v", readErr)
+			}
 			_ = c.eventStore.Close()
 			c.eventStore = nil
 		}
@@ -339,7 +370,15 @@ func (c *Coordinator) beginExecutionRun() func() {
 			c.executionTeamRevision = ""
 		}
 		c.executionEventsMu.Unlock()
-		logger.close()
+		if logger != nil {
+			logger.close()
+		}
+		if workspace != "" && canonicalEvents != nil {
+			if _, err := ExportAndVerifyExecutionEvents(workspace, runID, canonicalEvents); err != nil {
+				log.Printf("warning: execution-event shadow export parity: %v", err)
+				c.dualWriteFailures.Add(1)
+			}
+		}
 	}
 }
 

@@ -291,88 +291,54 @@ func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
 		return
 	}
 	if c.contextRepo != nil {
-		c.autoExtractCanonicalLTM(ctx)
+		c.autoExtractCanonicalLTM(ctx, c.executionRunID)
 		return
 	}
-	workspace := c.session.Workspace
-	stmContent := LoadSTM(workspace)
-	if stmContent == "" {
-		return
-	}
-
-	sections := ParseSTMSections(stmContent)
-
-	var newEntries []struct {
-		sectionTitle string
-		entry        string
-	}
-
-	for _, s := range sections {
-		switch s.Title {
-		case stmSectionDecisions:
-			for _, e := range s.Entries {
-				section := ClassifyLTMEntry(e, "decision")
-				if section == "" {
-					section = ltmSectionArchitecture // decisions default to architecture
-				}
-				newEntries = append(newEntries, struct {
-					sectionTitle string
-					entry        string
-				}{section, formatLTMEntry(stripSTMListItem(e))})
-			}
-		case stmSectionFindings:
-			for _, e := range s.Entries {
-				section := ClassifyLTMEntry(e, "finding")
-				if section == "" {
-					section = ltmSectionPatterns // findings default to patterns
-				}
-				newEntries = append(newEntries, struct {
-					sectionTitle string
-					entry        string
-				}{section, formatLTMEntry(stripSTMListItem(e))})
-			}
-		case stmSectionErrors:
-			for _, e := range s.Entries {
-				section := ClassifyLTMEntry(e, "error")
-				if section == "" {
-					section = ltmSectionIssues // errors default to known issues
-				}
-				newEntries = append(newEntries, struct {
-					sectionTitle string
-					entry        string
-				}{section, formatLTMEntry(stripSTMListItem(e))})
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		for _, task := range c.taskTracker.TodoList().Items() {
+			if task != nil && task.Status == TaskDone && task.TypedResult != nil && task.TypedResult.Summary != "" {
+				c.persistKnowledgeCandidate(task.TypedResult.Summary, ltmSectionPatterns, "AutoExtractLTM")
 			}
 		}
-	}
-
-	if len(newEntries) == 0 {
-		return
-	}
-	// STM extraction is also untrusted knowledge. Keep it candidate-only until
-	// CompletionGate accepts the run; this prevents a failed run from teaching
-	// future prompts through either Markdown LTM or the vector store.
-	for _, ne := range newEntries {
-		c.persistKnowledgeCandidate(stripSTMListItem(ne.entry), ne.sectionTitle, "AutoExtractLTM")
 	}
 }
 
 // autoExtractCanonicalLTM derives evidence-gated persistent candidates from
 // semantic shared working-memory kinds. Generic progress is operational state,
 // not reusable knowledge, and must never be promoted merely because a run
-// later succeeds.
-func (c *Coordinator) autoExtractCanonicalLTM(ctx context.Context) {
+// later succeeds. runID scopes extraction to the current run: confirmed items
+// stamped with a different run (for example a shared record created by an
+// earlier failed run) are never re-proposed under a later accepted run, and
+// candidates from another run are never extracted at all.
+func (c *Coordinator) autoExtractCanonicalLTM(ctx context.Context, runID string) {
 	scope := c.contextScope()
 	// Persistent candidates must be derived from the current run's typed,
 	// shared session state. Querying the combined projection would recursively
 	// re-extract old LTM and make stale cross-session prose appear newly proven.
-	items, err := c.contextRepo.QuerySharedSessionProjection(ctx, scope)
+	// Candidates are included so the current run's own run-produced shared
+	// context (written as candidates by appendCanonicalContext) is extractable;
+	// the run_id filter below keeps every other run's candidates out.
+	items, err := c.contextRepo.Query(ctx, contextstore.RepositoryQuery{
+		Scope:             scope,
+		Visibility:        contextstore.VisibilityExact,
+		IncludeCandidates: true,
+		Limit:             100000,
+	})
 	if err != nil {
 		log.Printf("warning: canonical LTM extraction query failed: %v", err)
 		return
 	}
 	for _, item := range items {
-		if item.Lifecycle != contextstore.LifecycleConfirmed {
+		if item.Lifecycle == contextstore.LifecycleRejected {
 			continue
+		}
+		if item.Lifecycle == contextstore.LifecycleCandidate && item.Metadata["run_id"] != runID {
+			continue
+		}
+		if item.Lifecycle == contextstore.LifecycleConfirmed {
+			if itemRunID := item.Metadata["run_id"]; itemRunID != "" && itemRunID != runID {
+				continue
+			}
 		}
 		var section string
 		switch item.Kind {

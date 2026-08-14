@@ -130,7 +130,9 @@ func (pr *planReviewer) review(ctx context.Context, planText string) (string, bo
 			return approved, true, actualErr, nil
 		}
 
-		c.taskTracker.TodoList().UpdateStatus(pr.todoID, TaskSkipped, "rejected by user after 3+ plan reviews")
+		if err := c.commitTaskTransitionFromCurrent(ctx, pr.todoID, TaskSkipped, "rejected by user after 3+ plan reviews", "", nil); err != nil {
+			return "", true, nil, err
+		}
 		c.pendingPlansMu.Lock()
 		delete(c.pendingPlans, pr.todoID)
 		c.pendingPlansMu.Unlock()
@@ -199,7 +201,16 @@ func (c *Coordinator) autoApprovePlan(ctx context.Context, todoID string) string
 	goal := entry.Goal
 	c.pendingPlansMu.Unlock()
 
-	c.taskTracker.TodoList().UpdateStatus(todoID, TaskPlanned, "")
+	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskPlanned, "", "", nil); err != nil {
+		c.pendingPlansMu.Lock()
+		if c.approvedErrors == nil {
+			c.approvedErrors = make(map[string]error)
+		}
+		c.approvedErrors[todoID] = err
+		delete(c.pendingPlans, todoID)
+		c.pendingPlansMu.Unlock()
+		return fmt.Sprintf("Plan approval transition failed: %v", err)
+	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("plan_approved").withAgent(agentName).withMessage("plan approved, starting execution").withTodoID(todoID))
 

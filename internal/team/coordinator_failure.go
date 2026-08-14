@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -137,6 +138,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 		class = classifyTaskFailure(errors.New(detail))
 	}
 	var failureEvent *FailureEventPayload
+	var persistedFailureOutput string
 	criterion := c.failedCriterionForTask(item)
 	// §6.2: the systemic-scope operation must be STABLE across the failed
 	// task and a future un-fingerprinted candidate. LastOperation (the
@@ -243,14 +245,13 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 		}
 		disposition = c.recordDiagnosticPacket(item, class, disposition, detail, fp, repeated, systemic)
 		failureEvent = c.failureEventForItem(item, class, disposition, detail, fp, todoID)
-		failureOutput := utils.TruncateString(utils.RedactSecrets(output), 2000)
-		_ = c.taskTracker.TodoList().SetFailureEventAndOutput(todoID, failureEvent, failureOutput)
+		persistedFailureOutput = utils.TruncateString(utils.RedactSecrets(output), 2000)
 		if c.reportStatus != nil {
 			data := map[string]any{
 				"failure_event": failureEvent,
 			}
-			if failureOutput != "" {
-				data["failure_output"] = failureOutput
+			if persistedFailureOutput != "" {
+				data["failure_output"] = persistedFailureOutput
 			}
 			c.report(c.newEvent("failure").withAgent(agentName).withMessage(RenderFailureText(failureEvent)).withTodoID(todoID).withData(data))
 		}
@@ -286,9 +287,22 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 			// record distinguishes a user/context cancel from an execution
 			// failure. The todo status stays TaskError (the task did not
 			// complete) but the failure class and all statistics exclude it.
-			c.emitEvent("task_cancelled", "coordinator", todoID, map[string]interface{}{"class": string(class), "agent": agentName})
+			c.emitEvent("task_cancelled", "coordinator", todoID, map[string]interface{}{"id": todoID, "status": string(TaskError), "class": string(class), "agent": agentName})
 		}
-		c.taskTracker.TodoList().UpdateStatus(todoID, status, detail)
+		metadata := map[string]interface{}{}
+		if failureEvent != nil {
+			metadata["failure_event"] = failureEvent
+		}
+		if persistedFailureOutput != "" {
+			metadata["failure_output"] = persistedFailureOutput
+		}
+		if err := c.commitTaskTransitionFromCurrent(context.Background(), todoID, status, detail, persistedFailureOutput, metadata); err != nil {
+			log.Printf("warning: persist failure transition for task %s: %v", todoID, err)
+		} else if failureEvent != nil {
+			// The event already carries the complete failure projection. This is
+			// only the in-memory reducer update after durability succeeds.
+			_ = c.taskTracker.TodoList().SetFailureEventAndOutput(todoID, failureEvent, persistedFailureOutput)
+		}
 		c.reconcileTaskStatusProjection()
 		if c.reportStatus != nil {
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))

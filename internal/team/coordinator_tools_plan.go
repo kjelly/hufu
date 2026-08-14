@@ -118,7 +118,9 @@ func (t *approvePlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	todoID := entry.TodoID
 	t.coordinator.pendingPlansMu.Unlock()
 
-	t.coordinator.taskTracker.TodoList().UpdateStatus(todoID, TaskPlanned, "")
+	if err := t.coordinator.commitTaskTransitionFromCurrent(ctx, todoID, TaskPlanned, "", "", nil); err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
 	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
 
 	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{approvedTask})

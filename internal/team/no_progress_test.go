@@ -10,6 +10,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 // TestDecideNoProgress_TableDriven drives the pure enforcement function
@@ -909,4 +910,237 @@ func newNoProgressTestCoordinator(t *testing.T) *Coordinator {
 
 func writeFile(dir, name, content string) error {
 	return os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644)
+}
+
+func TestNoProgressStop_RejectsCandidatesAcrossRestart(t *testing.T) {
+	t.Run("direct agent budget stop rejects candidates", func(t *testing.T) {
+		workspace := t.TempDir()
+		dbPath := filepath.Join(workspace, "context.sqlite")
+		repo, err := contextstore.OpenSQLite(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		runID := "run-direct-budget-stop"
+		agentDef := &agent.AgentDef{
+			Name:     "worker",
+			MemoryID: "worker-mem-1",
+			Memory:   agent.WorkerMemoryPolicy{Mode: agent.WorkerMemoryPersistent},
+		}
+		c := &Coordinator{
+			contextRepo:     repo,
+			workerMemorySvc: NewWorkerMemoryService(repo, nil),
+			sharedMemorySvc: NewSharedMemoryService(repo),
+			projectDir:      "/project",
+			executionRunID:  runID,
+			session: &TeamSession{
+				Workspace: workspace,
+				Config: agent.TeamConfig{
+					Name: "team",
+				},
+				Agents: map[string]*agent.AgentDef{"worker": agentDef},
+			},
+			taskTracker: NewTaskTracker(),
+		}
+
+		// Seed candidates
+		c.persistPrivateReflexionLesson("worker", "task-1", "private lesson")
+		if _, err := c.sharedMemoryService().Propose(context.Background(), SharedMemoryProposal{
+			Scope:    c.contextScope(),
+			Content:  "shared lesson",
+			Section:  ltmSectionPatterns,
+			Category: "pattern",
+			Source:   "memory_save",
+			RunID:    runID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.appendCanonicalContext(context.Background(), contextstore.ContextDecision, "decision", "task_done", nil); err != nil {
+			t.Fatal(err)
+		}
+
+		// Trigger budget stop
+		c.session.Config.Reliability.MaxTokensWithoutProgress = 100
+		c.tokensSinceCriterionProgress = 200 // exceeds limit -> NoProgressStop
+		stopped, _ := c.enforceNoProgressBudget()
+		if !stopped {
+			t.Fatal("expected enforceNoProgressBudget to stop run")
+		}
+
+		// Reopen database
+		if err := repo.Close(); err != nil {
+			t.Fatal(err)
+		}
+		repo2, err := contextstore.OpenSQLite(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer repo2.Close()
+
+		items, err := repo2.Query(context.Background(), contextstore.RepositoryQuery{
+			Scope:             contextstore.Scope{ProjectID: "/project", TeamID: "team"},
+			Visibility:        contextstore.VisibilitySubtree,
+			IncludeCandidates: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, it := range items {
+			if it.Metadata["run_id"] == runID && it.Lifecycle == contextstore.LifecycleCandidate {
+				t.Fatalf("found undecided candidate %q after direct budget stop", it.ID)
+			}
+		}
+	})
+
+	t.Run("coordinator ensureFinished budget stop rejects candidates", func(t *testing.T) {
+		workspace := t.TempDir()
+		dbPath := filepath.Join(workspace, "context.sqlite")
+		repo, err := contextstore.OpenSQLite(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		runID := "run-coord-budget-stop"
+		agentDef := &agent.AgentDef{
+			Name:     "worker",
+			MemoryID: "worker-mem-1",
+			Memory:   agent.WorkerMemoryPolicy{Mode: agent.WorkerMemoryPersistent},
+		}
+		c := &Coordinator{
+			contextRepo:     repo,
+			workerMemorySvc: NewWorkerMemoryService(repo, nil),
+			sharedMemorySvc: NewSharedMemoryService(repo),
+			projectDir:      "/project",
+			executionRunID:  runID,
+			session: &TeamSession{
+				Workspace: workspace,
+				Config: agent.TeamConfig{
+					Name: "team",
+				},
+				Agents: map[string]*agent.AgentDef{"worker": agentDef},
+			},
+			taskTracker: NewTaskTracker(),
+		}
+
+		c.persistPrivateReflexionLesson("worker", "task-1", "private lesson")
+		if _, err := c.sharedMemoryService().Propose(context.Background(), SharedMemoryProposal{
+			Scope:    c.contextScope(),
+			Content:  "shared lesson",
+			Section:  ltmSectionPatterns,
+			Category: "pattern",
+			Source:   "memory_save",
+			RunID:    runID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Trigger stop
+		c.stopForNoProgress("tokens limit exhausted")
+		summary, _ := c.ensureFinished(context.Background(), &agent.AgentDef{Name: "coordinator"}, "initial", nil)
+		if summary == "" {
+			t.Fatal("expected non-empty summary from ensureFinished")
+		}
+
+		// Reopen database
+		if err := repo.Close(); err != nil {
+			t.Fatal(err)
+		}
+		repo2, err := contextstore.OpenSQLite(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer repo2.Close()
+
+		items, err := repo2.Query(context.Background(), contextstore.RepositoryQuery{
+			Scope:             contextstore.Scope{ProjectID: "/project", TeamID: "team"},
+			Visibility:        contextstore.VisibilitySubtree,
+			IncludeCandidates: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, it := range items {
+			if it.Metadata["run_id"] == runID && it.Lifecycle == contextstore.LifecycleCandidate {
+				t.Fatalf("found undecided candidate %q after ensureFinished budget stop", it.ID)
+			}
+		}
+	})
+
+	t.Run("finish tool budget stop rejects candidates", func(t *testing.T) {
+		workspace := t.TempDir()
+		dbPath := filepath.Join(workspace, "context.sqlite")
+		repo, err := contextstore.OpenSQLite(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		runID := "run-finish-budget-stop"
+		agentDef := &agent.AgentDef{
+			Name:     "worker",
+			MemoryID: "worker-mem-1",
+			Memory:   agent.WorkerMemoryPolicy{Mode: agent.WorkerMemoryPersistent},
+		}
+		c := &Coordinator{
+			contextRepo:     repo,
+			workerMemorySvc: NewWorkerMemoryService(repo, nil),
+			sharedMemorySvc: NewSharedMemoryService(repo),
+			projectDir:      "/project",
+			executionRunID:  runID,
+			session: &TeamSession{
+				Workspace: workspace,
+				Config: agent.TeamConfig{
+					Name: "team",
+				},
+				Agents: map[string]*agent.AgentDef{"worker": agentDef},
+			},
+			taskTracker: NewTaskTracker(),
+		}
+
+		c.persistPrivateReflexionLesson("worker", "task-1", "private lesson")
+		if _, err := c.sharedMemoryService().Propose(context.Background(), SharedMemoryProposal{
+			Scope:    c.contextScope(),
+			Content:  "shared lesson",
+			Section:  ltmSectionPatterns,
+			Category: "pattern",
+			Source:   "memory_save",
+			RunID:    runID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Trip budget stop before calling finish tool
+		c.stopForNoProgress("turns limit exhausted")
+		tool := &finishTool{coordinator: c}
+		resp, err := tool.Run(context.Background(), fantasy.ToolCall{Input: `{"response":"final response"}`})
+		if err != nil {
+			t.Fatalf("finish tool Run failed: %v", err)
+		}
+		if !strings.Contains(resp.Content, "FINISHED:") {
+			t.Fatalf("expected finish response to contain FINISHED:, got: %s", resp.Content)
+		}
+
+		// Reopen database
+		if err := repo.Close(); err != nil {
+			t.Fatal(err)
+		}
+		repo2, err := contextstore.OpenSQLite(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer repo2.Close()
+
+		items, err := repo2.Query(context.Background(), contextstore.RepositoryQuery{
+			Scope:             contextstore.Scope{ProjectID: "/project", TeamID: "team"},
+			Visibility:        contextstore.VisibilitySubtree,
+			IncludeCandidates: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, it := range items {
+			if it.Metadata["run_id"] == runID && it.Lifecycle == contextstore.LifecycleCandidate {
+				t.Fatalf("found undecided candidate %q after finish budget stop", it.ID)
+			}
+		}
+	})
 }

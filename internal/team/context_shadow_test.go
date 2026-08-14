@@ -68,9 +68,14 @@ func TestCanonicalMemoryIngestionGeneratesLegacySTMProjection(t *testing.T) {
 	if !strings.Contains(stm, "# \u9032\u5ea6") || !strings.Contains(stm, "- completed canonical migration") {
 		t.Fatalf("legacy STM must be generated from canonical context: %q", stm)
 	}
-	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "/project", TeamID: "team", SessionID: filepath.Base(workspace)}})
+	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "/project", TeamID: "team", SessionID: filepath.Base(workspace)}, IncludeCandidates: true})
 	if err != nil || len(items) != 1 {
 		t.Fatalf("canonical STM item = %#v, err=%v", items, err)
+	}
+	// Run-produced shared context is a candidate bound to the run; it is visible
+	// to the current run's prompts but not yet confirmed knowledge.
+	if items[0].Lifecycle != contextstore.LifecycleCandidate || items[0].Metadata["run_id"] != "run-1" {
+		t.Fatalf("run-produced STM item lifecycle = %s run_id=%q, want candidate run-1", items[0].Lifecycle, items[0].Metadata["run_id"])
 	}
 }
 

@@ -101,7 +101,7 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 			runID = t.coordinator.taskTracker.TodoList().RunID()
 		}
 		taskID, _ := ctx.Value(todoIDKey{}).(string)
-		item, err := NewSharedMemoryService(t.coordinator.contextRepo).Propose(ctx, SharedMemoryProposal{
+		item, err := t.coordinator.sharedMemoryService().Propose(ctx, SharedMemoryProposal{
 			Scope: t.coordinator.contextScope(), Content: args.Content, Section: section, Category: args.Category,
 			Source: "memory_save", RunID: runID, TaskID: taskID, Confidence: args.Confidence, FilePaths: paths, Supersedes: args.Supersedes,
 		})

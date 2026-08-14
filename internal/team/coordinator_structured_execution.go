@@ -110,12 +110,12 @@ func (c *Coordinator) executeStructuredCoordinatorTask(ctx context.Context, task
 		defer func() { _ = c.mcpManager.UnloadAgentMCPServer(strings.ToLower(agentDef.Name)) }()
 	}
 	attempt := c.currentTaskAttempt(todoID) + 1
-	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskInProgress, "executing structured lifecycle", ""); err != nil {
+	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskInProgress, "executing structured lifecycle", "", nil); err != nil {
 		return "", err
 	}
 	result, err := c.runStructuredTask(ctx, todoID, attempt, runner, task)
 	if err != nil {
-		_ = c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskError, err.Error(), "")
+		_ = c.commitTaskTransitionFromCurrent(ctx, todoID, TaskError, err.Error(), "", nil)
 		return "", err
 	}
 	ids := make([]string, len(result.Receipts))
@@ -129,11 +129,11 @@ func (c *Coordinator) executeStructuredCoordinatorTask(ctx context.Context, task
 		Outputs: structuredTaskOutputs(task.Execution, result),
 	}
 	if err := c.validateTaskResultReceiptClaims(todoID, typedResult); err != nil {
-		_ = c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskError, err.Error(), "")
+		_ = c.commitTaskTransitionFromCurrent(ctx, todoID, TaskError, err.Error(), "", nil)
 		return "", err
 	}
 	c.storeSubmittedTaskResult(todoID, typedResult)
-	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskDone, summary, summary); err != nil {
+	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskDone, summary, summary, nil); err != nil {
 		return "", err
 	}
 	c.recordTerminalTypedTaskResult(todoID)

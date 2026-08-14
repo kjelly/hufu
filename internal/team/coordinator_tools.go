@@ -238,8 +238,6 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		})
 	}
 
-	t.coordinator.AutoExtractLTM(ctx)
-
 	// Team-level acceptance check: an objective gate over the whole run. A
 	// non-zero exit does not block finishing (the work is already done) but is
 	// surfaced in the result and via a notifiable event so an unattended run's
@@ -284,7 +282,15 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		t.coordinator.lastEvidenceManifestMu.RLock()
 		preserved.EvidenceManifest = t.coordinator.lastEvidenceManifest
 		t.coordinator.lastEvidenceManifestMu.RUnlock()
-		t.coordinator.SetLastRunResult(&preserved)
+		finalized := t.coordinator.FinalizeRun(ctx, &preserved, acceptance)
+		if finalized != nil {
+			if finalized.Continuation == nil {
+				finalized.Continuation = preserved.Continuation
+			}
+			t.coordinator.SetLastRunResult(finalized)
+		} else {
+			t.coordinator.SetLastRunResult(&preserved)
+		}
 		t.coordinator.finishCalled.Store(true)
 		return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
 	}
@@ -361,9 +367,7 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	t.coordinator.lastEvidenceManifestMu.RLock()
 	evaluated.EvidenceManifest = t.coordinator.lastEvidenceManifest
 	t.coordinator.lastEvidenceManifestMu.RUnlock()
-	runRes := &evaluated
-	runRes = t.coordinator.applyCompletionGate(ctx, runRes, accRes)
-	t.coordinator.SetLastRunResult(runRes)
+	_ = t.coordinator.FinalizeRun(ctx, &evaluated, accRes)
 
 	t.coordinator.finishCalled.Store(true)
 	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
@@ -816,7 +820,7 @@ func (t *reconcileTaskTool) Run(ctx context.Context, call fantasy.ToolCall) (fan
 		Reason:     args.Reason,
 		Evidence:   args.Evidence,
 	}
-	if err := t.coordinator.taskTracker.TodoList().SetTaskResolution(args.TaskID, res); err != nil {
+	if err := t.coordinator.CommitTaskResolution(ctx, args.TaskID, res); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to reconcile task: %v", err)), nil
 	}
 	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
@@ -836,7 +840,10 @@ func (t *todoTool) handleCreate(callerName string, items []string) (fantasy.Tool
 		batch[i] = TodoSpec{Agent: callerName, Desc: desc, Model: resolvedModel, Source: TaskSourceAgent, ParentID: parentID}
 	}
 
-	added := t.coordinator.taskTracker.TodoList().AddBatch(batch)
+	added, err := t.coordinator.CommitTaskCreation(context.Background(), batch)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to create todo items: %v", err)), nil
+	}
 	// Agent-created TODOs are objective work units even though they bypass the
 	// coordinator's ExecuteTasks batch path.
 	t.coordinator.recordNoProgressTasks(len(added))
@@ -893,7 +900,9 @@ func (t *todoTool) handleUpdate(callerName string, id string, status string, det
 		), nil
 	}
 
-	t.coordinator.taskTracker.TodoList().UpdateStatus(id, taskStatus, detail)
+	if err := t.coordinator.commitTaskTransitionFromCurrent(context.Background(), id, taskStatus, detail, "", nil); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to update TODO %q: %v", id, err)), nil
+	}
 	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
 
 	return fantasy.NewTextResponse(fmt.Sprintf("Updated TODO %s to %s", id, taskStatus)), nil

@@ -368,6 +368,9 @@ func FilterEventsForBranch(events []RunEvent, st *SessionTree, targetBranchID st
 	if len(events) == 0 {
 		return nil
 	}
+	if st == nil {
+		st = NewSessionTree()
+	}
 	if targetBranchID == "" {
 		targetBranchID = "main"
 	}

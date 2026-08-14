@@ -321,13 +321,41 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		}
 	}
 	// The successful exact initial-policy validation above is the sole point at
-	// which a fresh session may advance. Persist the phase before AddBatch's
+	// which a fresh session may advance. Persist the phase before the creation
 	// checkpoint callback so a crash cannot leave a task list and phase that
-	// disagree on resume.
-	c.markInitialDelegationAccepted()
-	todoItems := c.taskTracker.TodoList().AddBatch(todoBatch)
+	// disagree on resume. If creation fails without committing any task, the
+	// in-memory advance is reverted so a retry cannot bypass the initial-batch
+	// policy with no durable task projection.
+	advancedPhase := c.markInitialDelegationAccepted()
+	// Reserve IDs first so index-based DAG/recovery edges can be resolved to
+	// real todo IDs before the durable task_created payload is serialized. The
+	// initial event must carry the complete execution contract (PR-05): a
+	// dependent task must not be replayed as independent pending work, and an
+	// on_failure loop must not be lost on restart or branch replay.
+	ids := c.taskTracker.TodoList().ReserveIDs(len(todoBatch))
+	for i, t := range tasks {
+		if t.OnFailure != nil && *t.OnFailure >= 0 && *t.OnFailure < len(ids) {
+			todoBatch[i].OnFailure = ids[*t.OnFailure]
+		}
+		if len(t.DependsOn) > 0 {
+			var depIDs []string
+			for _, depIdx := range t.DependsOn {
+				if depIdx >= 0 && depIdx < len(ids) && depIdx != i {
+					depIDs = append(depIDs, ids[depIdx])
+				}
+			}
+			todoBatch[i].DependsOn = depIDs
+		}
+	}
+	todoItems, err := c.CommitTaskCreationResolved(ctx, todoBatch, ids)
+	if err != nil {
+		if advancedPhase && len(todoItems) == 0 && c.sessionData != nil {
+			c.sessionData.DelegationPhase = DelegationPhaseInitialPending
+		}
+		return "", err
+	}
 	// No-progress budget (§8.1, WP-12): each newly created task is one unit
-	// of "tasks since last objective progress". Increment here at AddBatch;
+	// of "tasks since last objective progress". Increment here at creation;
 	// reset only by criterion advancement (criteria.go).
 	c.recordNoProgressTasks(len(todoItems))
 	if len(c.session.Config.Preflight) > 0 {
@@ -356,29 +384,8 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				removeIDs = append(removeIDs, todoItems[idx].ID)
 			}
 		}
-		c.taskTracker.TodoList().DeleteIDs(removeIDs...)
-	}
-
-	// Fill in OnFailure IDs now that todo IDs exist. Indices were validated by
-	// validateOnFailureTargets above.
-	for i, t := range tasks {
-		if t.OnFailure != nil {
-			todoItems[i].OnFailure = todoItems[*t.OnFailure].ID
-		}
-	}
-
-	// Fill in dependency IDs for display and dependency-wait logic.
-	for i, t := range tasks {
-		if len(t.DependsOn) > 0 {
-			var depIDs []string
-			for _, depIdx := range t.DependsOn {
-				if depIdx >= 0 && depIdx < len(todoItems) && depIdx != i {
-					depIDs = append(depIDs, todoItems[depIdx].ID)
-				}
-			}
-			if len(depIDs) > 0 {
-				todoItems[i].DependsOn = depIDs
-			}
+		if err := c.CommitTaskRemoval(ctx, removeIDs...); err != nil {
+			return "", err
 		}
 	}
 
@@ -394,7 +401,9 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		}
 		if !approved {
 			for _, item := range todoItems {
-				c.taskTracker.TodoList().UpdateStatus(item.ID, TaskSkipped, c.FailureDetail(fmt.Errorf("user declined task execution"), FailureSourceUserDeclined))
+				if err := c.commitTaskTransitionFromCurrent(ctx, item.ID, TaskSkipped, c.FailureDetail(fmt.Errorf("user declined task execution"), FailureSourceUserDeclined), "", nil); err != nil {
+					return "", err
+				}
 			}
 			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))

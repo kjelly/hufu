@@ -50,7 +50,7 @@ func TestCandidateExpiredSupersededRejectedAreNeverInjected(t *testing.T) {
 		{ID: "superseded", Kind: contextstore.ContextPattern, Content: "superseded", Lifecycle: contextstore.LifecycleConfirmed, SupersededBy: "confirmed"},
 		{ID: "expired", Kind: contextstore.ContextPattern, Content: "expired", Lifecycle: contextstore.LifecycleConfirmed, ExpiresAt: &expiredAt},
 	}
-	got := canonicalCompilerItems(items, PriorityRelevantLTM, "shared_persistent", false)
+	got := canonicalCompilerItems(items, PriorityRelevantLTM, "shared_persistent", false, false)
 	if len(got) != 1 || got[0].ID != "context:confirmed" {
 		t.Fatalf("eligible compiler items = %+v", got)
 	}

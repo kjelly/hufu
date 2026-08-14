@@ -351,7 +351,7 @@ func TestTypedVerificationInvalidationAndJournalTombstoneAreContractScoped(t *te
 		tasks:  []TaskDef{{Agent: agentKey, Goal: task, VerifySpec: first}},
 		states: []TaskStatus{TaskPending},
 	}
-	s.resetTask(0, "retry")
+	_ = s.resetTask(context.Background(), 0, "retry")
 	entries := c.taskResultCache[agentKey]
 	if len(entries) != 1 || !entries[0].matchesVerificationContract(second, "", "") {
 		t.Fatalf("DAG invalidation removed unrelated typed cache entry: %#v", entries)

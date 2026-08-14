@@ -111,7 +111,7 @@ func TestTaskResultReducerPopulatesArtifactAndVerificationEvidence(t *testing.T)
 	c.reduceTaskResultToSharedMemory(context.Background(), TaskResultMemoryInput{
 		TodoID: "task-1", Attempt: 1,
 		Result: &TaskResult{
-			Artifacts: []ArtifactRef{{ID: "art-1", Path: "out/report.md"}},
+			Artifacts:    []ArtifactRef{{ID: "art-1", Path: "out/report.md"}},
 			Verification: []VerificationResult{{Command: "test -f out/report.md", ExitCode: 0, Fingerprint: "fp-1"}},
 		},
 	})

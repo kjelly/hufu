@@ -86,3 +86,61 @@ func TestReduceToTodoList_ReconstructsTypedVerificationSpec(t *testing.T) {
 		t.Fatalf("reduced typed verifier = %#v", got)
 	}
 }
+
+func TestReducersDeduplicateAndDoNotReopenTerminalTask(t *testing.T) {
+	completed := RunEvent{
+		ID: "evt-completed", IdempotencyKey: "task-1:done:1", Type: string(EventTaskCompleted), TaskID: "task-1",
+		Payload: []byte(`{"id":"task-1","status":"done","output":"durable"}`),
+	}
+	lateStarted := RunEvent{
+		ID: "evt-started", Type: string(EventTaskStarted), TaskID: "task-1",
+		Payload: []byte(`{"id":"task-1","status":"in_progress"}`),
+	}
+	todos := ReduceToTodoList([]RunEvent{completed, completed, lateStarted})
+	if len(todos) != 1 || todos[0].Status != TaskDone || todos[0].Output != "durable" {
+		t.Fatalf("terminal task was not deterministic: %#v", todos)
+	}
+	first := ReduceToSessionData([]RunEvent{completed, lateStarted})
+	second := ReduceToSessionData([]RunEvent{completed, lateStarted})
+	if got, want := first.Tasks[0].Status, second.Tasks[0].Status; got != want {
+		t.Fatalf("replay was nondeterministic: %s != %s", got, want)
+	}
+}
+
+func TestReducersRestoreVerifyingTask(t *testing.T) {
+	events := []RunEvent{
+		{Type: string(EventTaskCreated), TaskID: "verify-1", Payload: []byte(`{"id":"verify-1","status":"pending"}`)},
+		{Type: string(EventTaskStarted), TaskID: "verify-1", Payload: []byte(`{"id":"verify-1","status":"in_progress"}`)},
+		{Type: string(EventTaskVerifying), TaskID: "verify-1", Payload: []byte(`{"id":"verify-1","status":"verifying"}`)},
+	}
+	todos := ReduceToTodoList(events)
+	if len(todos) != 1 || todos[0].Status != TaskVerifying {
+		t.Fatalf("verifying state was not replayed: %#v", todos)
+	}
+}
+
+func TestReducersRestoreRuntimeTaskContract(t *testing.T) {
+	item := &TodoItem{
+		ID: "runtime-1", Phase: PhaseExecute, PlanTaskID: "plan-1", ContractID: "contract-1", ContractHash: "hash", ContractRevision: 2,
+		Agent: "worker", Desc: "apply action", Status: TaskInProgress, Detail: "running", Model: "model-1",
+		Skills: []string{"build"}, InjectedSkills: []string{"team-context"}, LoadedSkills: []string{"build"}, Source: TaskSourceCoordinator, ParentID: "parent-1",
+		OnFailure: "repair-1", SideEffect: SideEffectExternalWrite, Recovery: RecoveryReconcile, RecoveryState: "awaiting_reconcile",
+		RuntimeError: &ExecutionError{Category: "provider_failed"}, Resolution: &TaskResolution{Status: "reconciled", ResolvedBy: "operator"},
+		DiagnosticHints: []string{"use reconciliation evidence"}, LastOperation: "deploy", Execution: ExecutionContract{Kind: ExecutionKindExternal},
+	}
+	payload, err := json.Marshal(taskTransitionPayload(item))
+	if err != nil {
+		t.Fatal(err)
+	}
+	todos := ReduceToTodoList([]RunEvent{{Type: string(EventTaskStarted), TaskID: item.ID, Payload: payload}})
+	if len(todos) != 1 {
+		t.Fatalf("replayed task count = %d", len(todos))
+	}
+	got := todos[0]
+	if got.Phase != item.Phase || got.ContractID != item.ContractID || got.ContractHash != item.ContractHash || got.ContractRevision != item.ContractRevision || got.Model != item.Model || got.ParentID != item.ParentID || got.OnFailure != item.OnFailure || got.RecoveryState != item.RecoveryState || got.RuntimeError == nil || got.Resolution == nil || got.LastOperation != item.LastOperation || got.Detail != item.Detail {
+		t.Fatalf("runtime task contract was not replayed: %#v", got)
+	}
+	if len(got.Skills) != 1 || len(got.DiagnosticHints) != 1 || got.Execution.Kind != ExecutionKindExternal {
+		t.Fatalf("runtime task slices/contract were not replayed: %#v", got)
+	}
+}

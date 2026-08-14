@@ -134,11 +134,22 @@ type CompiledContext struct {
 	Fingerprint      string
 }
 
-func canonicalCompilerItems(records []contextstore.ContextItem, priority int, source string, workerSTMOnly bool) []ContextItem {
+func canonicalCompilerItems(records []contextstore.ContextItem, priority int, source string, workerSTMOnly bool, includeCandidates bool) []ContextItem {
 	items := make([]ContextItem, 0, len(records))
 	now := time.Now().UTC()
 	for _, record := range records {
-		if record.Lifecycle != contextstore.LifecycleConfirmed || record.SupersededBy != "" || strings.TrimSpace(record.Content) == "" || (record.ExpiresAt != nil && !now.Before(*record.ExpiresAt)) {
+		// Shared session STM may carry the current run's candidates (visible to
+		// the run's own prompts); persistent LTM never does. The coordinator
+		// already filters SharedSession to confirmed + current-run candidates, so
+		// includeCandidates only relaxes the lifecycle guard for that list.
+		if record.Lifecycle == contextstore.LifecycleCandidate {
+			if !includeCandidates {
+				continue
+			}
+		} else if record.Lifecycle != contextstore.LifecycleConfirmed {
+			continue
+		}
+		if record.SupersededBy != "" || strings.TrimSpace(record.Content) == "" || (record.ExpiresAt != nil && !now.Before(*record.ExpiresAt)) {
 			continue
 		}
 		if workerSTMOnly && record.Kind == contextstore.ContextProgress {
@@ -179,7 +190,7 @@ func canonicalCompilerItems(records []contextstore.ContextItem, priority int, so
 }
 
 func canonicalCompilerItemsScored(records []contextstore.ContextItem, priority int, source string, workerSTMOnly bool, scores map[string]MemoryScoreParts, finalScores map[string]float64) []ContextItem {
-	items := canonicalCompilerItems(records, priority, source, workerSTMOnly)
+	items := canonicalCompilerItems(records, priority, source, workerSTMOnly, false)
 	for i := range items {
 		id := strings.TrimPrefix(items[i].ID, "context:")
 		parts, ok := scores[id]
@@ -545,7 +556,7 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 	}
 
 	if input.CanonicalMemory != nil && !input.DisableMemory {
-		items = append(items, canonicalCompilerItems(input.CanonicalMemory.SharedSession, PriorityRecentSTM, "shared_session", false)...)
+		items = append(items, canonicalCompilerItems(input.CanonicalMemory.SharedSession, PriorityRecentSTM, "shared_session", false, true)...)
 	} else if input.RawSTM != "" && !input.DisableMemory {
 		sections := ParseSTMSections(input.RawSTM)
 		role := input.Role
@@ -669,7 +680,7 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 	}
 
 	if input.CanonicalMemory != nil && !input.DisableMemory {
-		items = append(items, canonicalCompilerItems(input.CanonicalMemory.SharedSession, PriorityRecentSTM, "shared_session", true)...)
+		items = append(items, canonicalCompilerItems(input.CanonicalMemory.SharedSession, PriorityRecentSTM, "shared_session", true, true)...)
 	} else if input.RawSTM != "" && !input.DisableMemory {
 		knowledgeSections := map[string]bool{
 			stmSectionFindings:  true,

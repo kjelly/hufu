@@ -79,6 +79,10 @@ type dagScheduler struct {
 }
 
 func newDAGScheduler(c *Coordinator, tasks []TaskDef, todoItems []*TodoItem, duplicates map[int]bool) *dagScheduler {
+	var sem chan struct{}
+	if c != nil && c.maxConcurrent > 0 {
+		sem = make(chan struct{}, c.maxConcurrent)
+	}
 	s := &dagScheduler{
 		coord:                c,
 		tasks:                tasks,
@@ -94,7 +98,7 @@ func newDAGScheduler(c *Coordinator, tasks []TaskDef, todoItems []*TodoItem, dup
 		eventCh:              make(chan agentTaskResult, len(tasks)),
 		inflight:             make(map[string]chan agentTaskResult),
 		activeResources:      make(map[int][]ResourceClaim),
-		sem:                  make(chan struct{}, c.maxConcurrent),
+		sem:                  sem,
 	}
 	for i := range s.states {
 		s.states[i] = TaskPending
@@ -188,7 +192,9 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	if s.needsReset[idx] {
 		s.needsReset[idx] = false
 		s.states[idx] = TaskError // no longer in flight; lets resetTask apply
-		s.resetTask(idx, "reset by DAG retry")
+		if err := s.resetTask(ctx, idx, "reset by DAG retry"); err != nil {
+			return
+		}
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		s.launchReady(ctx)
 		return
@@ -221,7 +227,9 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	if s.coord.phaseWorkflow != nil && s.coord.phaseWorkflow.permitActionRetry(s.tasks[idx], res.err) {
 		s.retries[idx]++
 		c.report(c.newEvent("step").withMessage(fmt.Sprintf("retrying structured action %q after transient provider failure", s.tasks[idx].Action.Type)))
-		s.resetTask(idx, "retrying transient structured action failure")
+		if err := s.resetTask(ctx, idx, "retrying transient structured action failure"); err != nil {
+			return
+		}
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		s.launchReady(ctx)
 		return
@@ -247,7 +255,9 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	}
 	targetIdx := *s.tasks[idx].OnFailure
 	c.report(c.newEvent("step").withMessage(fmt.Sprintf("DAG loop triggered: task %q failed, jumping back to task %q (retry %d/%d)", s.tasks[idx].Agent, s.tasks[targetIdx].Agent, s.retries[idx], maxRetries)))
-	s.resetWave(targetIdx)
+	if err := s.resetWave(ctx, targetIdx); err != nil {
+		return
+	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	s.launchReady(ctx)
 }
@@ -317,7 +327,9 @@ func (s *dagScheduler) routeCriterionRetry(ctx context.Context, idx int, failed 
 		// Do not reset the target's dependent wave here. Criterion routing is a
 		// remediation dispatch, not an on_failure DAG loop; resetting a whole
 		// wave would bypass per-task retry counters for matching tasks.
-		s.resetTask(targetIdx, "criterion retry routed")
+		if err := s.resetTask(ctx, targetIdx, "criterion retry routed"); err != nil {
+			return false
+		}
 		s.coord.report(s.coord.newEvent("todos_updated").withTodos(s.coord.taskTracker.TodoList().Items()))
 		s.launchReady(ctx)
 		return true
@@ -331,7 +343,7 @@ func (s *dagScheduler) routeCriterionRetry(ctx context.Context, idx int, failed 
 // applying it immediately would let launchReady start a second concurrent
 // instance (and the inflight dedup would hand that instance the stale
 // in-flight result), so the reset is deferred until their event arrives.
-func (s *dagScheduler) resetWave(targetIdx int) {
+func (s *dagScheduler) resetWave(ctx context.Context, targetIdx int) error {
 	visited := make(map[int]bool)
 	q := []int{targetIdx}
 	for len(q) > 0 {
@@ -344,30 +356,36 @@ func (s *dagScheduler) resetWave(targetIdx int) {
 		if s.states[curr] == TaskInProgress {
 			s.needsReset[curr] = true
 		} else {
-			s.resetTask(curr, "reset by DAG retry")
+			if err := s.resetTask(ctx, curr, "reset by DAG retry"); err != nil {
+				return err
+			}
 		}
 		q = append(q, s.revDeps[curr]...)
 	}
+	return nil
 }
 
 // resetTask returns a finished (or errored) task to Pending so it can run
 // again, and invalidates its cached result so the re-run actually executes
 // instead of being served the stale output. Must not be called on a task that
 // is currently in flight — mark it via needsReset instead.
-func (s *dagScheduler) resetTask(i int, detail string) {
+func (s *dagScheduler) resetTask(ctx context.Context, i int, detail string) error {
 	s.coord.invalidateTaskCacheWithTypedVerification(strings.ToLower(s.tasks[i].Agent), s.taskDesc(i), s.tasks[i].VerifySpec, s.tasks[i].Verify, s.tasks[i].VerifyMode)
 	if s.states[i] == TaskPending {
-		return // never ran in this wave; nothing else to reset
+		return nil // never ran in this wave; nothing else to reset
 	}
 	if !CanAutomaticallyReplay(s.tasks[i]) {
 		s.states[i] = TaskBlocked
 		item := s.todoItems[i]
 		detail += "; replay policy requires reconciliation"
 		s.coord.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, detail, ReconcileOnly, FailurePolicy, TaskBlocked)
-		return
+		return nil
+	}
+	if err := s.coord.CommitTaskResetForRetry(ctx, s.todoItems[i].ID, detail); err != nil {
+		return err
 	}
 	s.states[i] = TaskPending
-	s.coord.taskTracker.TodoList().ResetForRetry(s.todoItems[i].ID, detail)
+	return nil
 }
 
 // markStranded handles tasks whose dependencies failed and therefore never
@@ -603,7 +621,16 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	if td.Action == nil && !td.Sidecar && !td.Summarize && !taskUsesVerbatimTranscript(td) {
 		if cached, ok := c.lookupTaskCacheWithTypedVerification(ctx, agentKey, desc, td.VerifySpec, td.Verify, td.VerifyMode); ok {
 			c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(desc).withTodoID(tid))
-			c.taskTracker.TodoList().UpdateStatusAndOutput(tid, TaskDone, utils.TruncateRunes(cached, summaryMaxRunes), cached)
+			if err := c.commitTaskTransitionFromCurrent(ctx, tid, TaskDone, utils.TruncateRunes(cached, summaryMaxRunes), cached, nil); err != nil {
+				s.inflightMu.Lock()
+				s.inflight[cacheKey] <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: err, idx: idx}
+				delete(s.inflight, cacheKey)
+				s.inflightMu.Unlock()
+				s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: err, idx: idx}
+				return
+			}
+			c.recordTerminalTypedTaskResult(tid)
+			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: cached, idx: idx}
 			s.inflightMu.Lock()

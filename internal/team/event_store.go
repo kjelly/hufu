@@ -18,7 +18,13 @@ import (
 )
 
 const eventStoreFile = "event_store.jsonl"
-const eventStoreSchemaVersion = 1
+
+const (
+	// eventStoreSchemaVersion is the current writer schema. Schema v1 remains
+	// replayable, but all event-first production boundaries now write v2.
+	eventStoreSchemaVersion       = 2
+	eventStoreLegacySchemaVersion = 1
+)
 
 // RunEvent defines a single append-only structured event in the session timeline.
 type RunEvent struct {
@@ -52,7 +58,7 @@ type EventStore struct {
 	sequence        int
 	degraded        bool
 	syncFile        func() error
-	idempotencyKeys map[string]struct{}
+	idempotencyKeys map[string]RunEvent
 }
 
 // SetBranchID binds the store to a session branch: subsequent events appended
@@ -95,7 +101,7 @@ func NewEventStore(workspace, runID, sessionID string) (*EventStore, error) {
 		runID:           runID,
 		sessionID:       sessionID,
 		syncFile:        f.Sync,
-		idempotencyKeys: make(map[string]struct{}),
+		idempotencyKeys: make(map[string]RunEvent),
 	}
 
 	if err := es.rescan(); err != nil {
@@ -154,41 +160,59 @@ func IsEmptyPayload(payload json.RawMessage) bool {
 	}
 }
 
-// Append appends a new RunEvent to the log with hash chaining.
+// Append appends a new RunEvent to the log with hash chaining. It preserves
+// the original API for callers that do not need the assigned durable identity.
 func (es *EventStore) Append(event RunEvent) error {
+	// Preserve the pre-EventJournal public API as a compatibility writer. New
+	// runtime paths use AppendPersisted (via EventJournal) and therefore get
+	// the stricter current schema by default.
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = eventStoreLegacySchemaVersion
+	}
+	_, err := es.AppendPersisted(event)
+	return err
+}
+
+// AppendPersisted appends an event and returns the exact redacted, stamped,
+// hash-chained record that reached the durability boundary. It is the commit
+// primitive used by EventJournal and event-first projections.
+func (es *EventStore) AppendPersisted(event RunEvent) (RunEvent, error) {
 	es.mu.Lock()
 	defer es.mu.Unlock()
 
 	if es.f == nil {
-		return fmt.Errorf("event store closed")
+		return RunEvent{}, fmt.Errorf("event store closed")
 	}
 	if es.degraded {
 		if err := es.reopenAndRescan(); err != nil {
-			return fmt.Errorf("recover degraded event store: %w", err)
+			return RunEvent{}, fmt.Errorf("recover degraded event store: %w", err)
 		}
 	}
 	// A failed Sync leaves durability uncertain: the event may nevertheless be
 	// visible after reopen. Treat a persisted idempotency key as success so a
 	// retry cannot fork the logical event stream with a duplicate observation.
 	if event.IdempotencyKey != "" {
-		if _, exists := es.idempotencyKeys[event.IdempotencyKey]; exists {
-			return nil
+		if durable, exists := es.idempotencyKeys[event.IdempotencyKey]; exists {
+			// The event was already acknowledged as durable. Callers may safely
+			// apply their idempotent projection using its original identity; no
+			// second transition is written.
+			return durable, nil
 		}
 	}
 
 	if IsTerminalEvent(event.Type) && IsEmptyPayload(event.Payload) {
-		return fmt.Errorf("reject terminal event %q with empty payload", event.Type)
+		return RunEvent{}, fmt.Errorf("reject terminal event %q with empty payload", event.Type)
 	}
 	if len(bytes.TrimSpace(event.Payload)) > 0 {
 		redacted, err := utils.RedactJSON(event.Payload)
 		if err != nil {
-			return fmt.Errorf("redact event payload: %w", err)
+			return RunEvent{}, fmt.Errorf("redact event payload: %w", err)
 		}
 		// The outer event marshal compacts RawMessage values. Compact here too
 		// so the hash is computed over exactly the bytes persisted on disk.
 		var compact bytes.Buffer
 		if err := json.Compact(&compact, redacted); err != nil {
-			return fmt.Errorf("compact redacted event payload: %w", err)
+			return RunEvent{}, fmt.Errorf("compact redacted event payload: %w", err)
 		}
 		event.Payload = compact.Bytes()
 	}
@@ -201,9 +225,18 @@ func (es *EventStore) Append(event RunEvent) error {
 		event.ID = generateEventID()
 	}
 	if event.RunID == "" {
+		if es.runID == "" {
+			// A recovered empty store has no inherited identity. Give the first
+			// current-schema event a durable recovery run identity instead of
+			// silently weakening schema validation.
+			es.runID = fmt.Sprintf("run-recovery-%d", time.Now().UTC().UnixNano())
+		}
 		event.RunID = es.runID
 	}
 	if event.SessionID == "" {
+		if es.sessionID == "" {
+			es.sessionID = filepath.Base(filepath.Dir(filepath.Dir(es.path)))
+		}
 		event.SessionID = es.sessionID
 	}
 	if event.BranchID == "" {
@@ -212,6 +245,9 @@ func (es *EventStore) Append(event RunEvent) error {
 	if event.Timestamp == "" {
 		event.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 	}
+	if err := ValidateEventPayload(event); err != nil {
+		return RunEvent{}, fmt.Errorf("validate run event: %w", err)
+	}
 
 	event.PreviousID = es.lastEventID
 	event.PreviousHash = es.lastHash
@@ -219,31 +255,31 @@ func (es *EventStore) Append(event RunEvent) error {
 
 	data, err := json.Marshal(event)
 	if err != nil {
-		return fmt.Errorf("marshal run event: %w", err)
+		return RunEvent{}, fmt.Errorf("marshal run event: %w", err)
 	}
 
 	line := append(data, '\n')
 	n, err := es.f.Write(line)
 	if err != nil {
 		es.degraded = true
-		return fmt.Errorf("write run event: %w", err)
+		return RunEvent{}, fmt.Errorf("write run event: %w", err)
 	}
 	if n != len(line) {
 		es.degraded = true
-		return fmt.Errorf("write run event: %w", io.ErrShortWrite)
+		return RunEvent{}, fmt.Errorf("write run event: %w", io.ErrShortWrite)
 	}
 
 	if err := es.syncFile(); err != nil {
 		es.degraded = true
-		return fmt.Errorf("sync run event: %w", err)
+		return RunEvent{}, fmt.Errorf("sync run event: %w", err)
 	}
 
 	es.lastEventID = event.ID
 	es.lastHash = event.Hash
 	if event.IdempotencyKey != "" {
-		es.idempotencyKeys[event.IdempotencyKey] = struct{}{}
+		es.idempotencyKeys[event.IdempotencyKey] = event
 	}
-	return nil
+	return event, nil
 }
 
 // reopenAndRescan closes the file whose durable state is uncertain, reopens
@@ -287,7 +323,7 @@ func (es *EventStore) rescan() error {
 	es.lastEventID = ""
 	es.lastHash = ""
 	es.sequence = 0
-	es.idempotencyKeys = make(map[string]struct{})
+	es.idempotencyKeys = make(map[string]RunEvent)
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
@@ -309,7 +345,7 @@ func (es *EventStore) rescan() error {
 		es.lastEventID = event.ID
 		es.lastHash = event.Hash
 		if event.IdempotencyKey != "" {
-			es.idempotencyKeys[event.IdempotencyKey] = struct{}{}
+			es.idempotencyKeys[event.IdempotencyKey] = event
 		}
 		es.sequence++
 		if es.runID == "" && event.RunID != "" {

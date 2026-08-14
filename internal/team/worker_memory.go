@@ -27,6 +27,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
@@ -170,8 +171,10 @@ type WorkerMemoryRejectionRequest struct {
 // defaultWorkerMemoryService implements WorkerMemoryService using the
 // canonical context repository and an optional vector searcher.
 type defaultWorkerMemoryService struct {
-	repo   contextstore.Repository
-	vector contextstore.VectorSearcher
+	repo         contextstore.Repository
+	vector       contextstore.VectorSearcher
+	mu           sync.RWMutex
+	rejectedRuns map[string]bool
 }
 
 // NewWorkerMemoryService creates a service backed by the given repository.
@@ -579,6 +582,10 @@ func (s *defaultWorkerMemoryService) SaveCandidate(ctx context.Context, req Work
 		kind = contextstore.ContextPattern
 	}
 	h := sha256.Sum256([]byte(strings.Join([]string{scope.ProjectID, scope.TeamID, scope.AgentID, req.Tier, string(contextstore.ContextPattern), content}, "\x00")))
+	lifecycle := contextstore.LifecycleCandidate
+	if s.isRunRejected(ctx, scope, req.RunID) {
+		lifecycle = contextstore.LifecycleRejected
+	}
 	item := contextstore.ContextItem{
 		ID:         "ctx-worker-" + hex.EncodeToString(h[:12]),
 		Kind:       kind,
@@ -605,7 +612,7 @@ func (s *defaultWorkerMemoryService) SaveCandidate(ctx context.Context, req Work
 			"file_paths":     strings.Join(req.FilePaths, "\n"),
 			"supersedes_ids": strings.Join(req.Supersedes, "\n"),
 		},
-		Lifecycle: contextstore.LifecycleCandidate,
+		Lifecycle: lifecycle,
 	}
 	if err := validatePrivateSupersedes(ctx, s.repo, scope, req.Tier, req.WorkerID, req.Supersedes); err != nil {
 		return contextstore.ContextItem{}, err
@@ -709,10 +716,59 @@ func passedManifestTasks(manifest *EvidenceManifest) map[string]bool {
 	return passed
 }
 
+func (s *defaultWorkerMemoryService) isRunRejected(ctx context.Context, scope contextstore.Scope, runID string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	if s.rejectedRuns == nil {
+		s.rejectedRuns = make(map[string]bool)
+	}
+	s.mu.Unlock()
+	return isDurableRunRejected(ctx, s.repo, &s.mu, s.rejectedRuns, scope, runID)
+}
+
 func (s *defaultWorkerMemoryService) RejectRun(ctx context.Context, req WorkerMemoryRejectionRequest) ([]contextstore.ContextItem, error) {
 	if strings.TrimSpace(req.Scope.ProjectID) == "" || strings.TrimSpace(req.Scope.TeamID) == "" || strings.TrimSpace(req.RunID) == "" {
 		return nil, fmt.Errorf("rejection requires trusted project/team scope and run id")
 	}
+	markerScope := contextstore.Scope{
+		ProjectID: req.Scope.ProjectID,
+		TeamID:    req.Scope.TeamID,
+		AgentID:   req.Scope.AgentID,
+		SessionID: "_system",
+	}
+	h := sha256.Sum256([]byte(strings.Join([]string{req.Scope.ProjectID, req.Scope.TeamID, req.Scope.AgentID, "worker_run_rejection", req.RunID}, "\x00")))
+	markerItem := contextstore.ContextItem{
+		ID:         "ctx-worker-run-rejection-" + hex.EncodeToString(h[:12]),
+		Kind:       contextstore.ContextDecision,
+		Content:    fmt.Sprintf("Worker run %s rejected: %s", req.RunID, req.Reason),
+		Scope:      markerScope,
+		Authority:  contextstore.AuthoritySystem,
+		TrustLevel: contextstore.TrustInternal,
+		Priority:   contextstore.PriorityBackground,
+		Source: contextstore.SourceRef{
+			Type: "worker_run_rejection",
+			Ref:  req.RunID,
+		},
+		Metadata: map[string]string{
+			"visibility":       "system",
+			"memory_tier":      "persistent",
+			"run_id":           req.RunID,
+			"rejection_reason": strings.TrimSpace(req.Reason),
+		},
+		Lifecycle: contextstore.LifecycleRejected,
+	}
+	if err := s.repo.Append(ctx, markerItem); err != nil {
+		return nil, fmt.Errorf("append worker run rejection marker: %w", err)
+	}
+	s.mu.Lock()
+	if s.rejectedRuns == nil {
+		s.rejectedRuns = make(map[string]bool)
+	}
+	s.rejectedRuns[memoryRejectionCacheKey(req.Scope, req.RunID)] = true
+	s.mu.Unlock()
+
 	items, err := s.repo.Query(ctx, contextstore.RepositoryQuery{Scope: req.Scope, Visibility: contextstore.VisibilitySubtree, IncludeCandidates: true, Limit: 100000})
 	if err != nil {
 		return nil, err

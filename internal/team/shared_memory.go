@@ -6,8 +6,11 @@ package team
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
+	"sync"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
 )
@@ -43,7 +46,11 @@ type SharedMemoryService interface {
 	RejectRun(context.Context, SharedMemoryRejection) ([]contextstore.ContextItem, error)
 }
 
-type defaultSharedMemoryService struct{ repo contextstore.Repository }
+type defaultSharedMemoryService struct {
+	repo         contextstore.Repository
+	mu           sync.RWMutex
+	rejectedRuns map[string]bool
+}
 
 func NewSharedMemoryService(repo contextstore.Repository) SharedMemoryService {
 	if repo == nil {
@@ -173,7 +180,106 @@ func (s *defaultSharedMemoryService) Propose(ctx context.Context, req SharedMemo
 	if err := validateSharedSupersedes(ctx, s.repo, scope, req.Supersedes); err != nil {
 		return contextstore.ContextItem{}, err
 	}
+	if s.isRunRejected(ctx, scope, req.RunID) {
+		item.Lifecycle = contextstore.LifecycleRejected
+		if err := s.repo.Append(ctx, item); err != nil {
+			return contextstore.ContextItem{}, fmt.Errorf("append rejected shared memory candidate: %w", err)
+		}
+		return item, nil
+	}
 	return s.repo.UpsertCandidate(ctx, item)
+}
+
+func memoryRejectionCacheKey(scope contextstore.Scope, runID string) string {
+	return strings.Join([]string{scope.ProjectID, scope.TeamID, scope.AgentID, runID}, "\x00")
+}
+
+func isMarkerMatchingScope(item contextstore.ContextItem, scope contextstore.Scope, runID string) bool {
+	if item.Lifecycle != contextstore.LifecycleRejected {
+		return false
+	}
+	if item.Metadata["run_id"] != runID {
+		return false
+	}
+	if item.Scope.ProjectID != scope.ProjectID || item.Scope.TeamID != scope.TeamID {
+		return false
+	}
+	if item.Scope.AgentID != "" && scope.AgentID != "" && item.Scope.AgentID != scope.AgentID {
+		return false
+	}
+	return true
+}
+
+func isDurableRunRejected(ctx context.Context, repo contextstore.Repository, mu *sync.RWMutex, cache map[string]bool, scope contextstore.Scope, runID string) bool {
+	if strings.TrimSpace(runID) == "" {
+		return false
+	}
+	cacheKey := memoryRejectionCacheKey(scope, runID)
+	if mu != nil {
+		mu.RLock()
+		rejected := cache != nil && cache[cacheKey]
+		mu.RUnlock()
+		if rejected {
+			return true
+		}
+	}
+	if repo == nil {
+		return false
+	}
+	sharedHash := sha256.Sum256([]byte(strings.Join([]string{scope.ProjectID, scope.TeamID, "shared_run_rejection", runID}, "\x00")))
+	sharedMarkerID := "ctx-run-rejection-" + hex.EncodeToString(sharedHash[:12])
+	if item, err := repo.Get(ctx, sharedMarkerID); err == nil && isMarkerMatchingScope(item, scope, runID) {
+		if mu != nil && cache != nil {
+			mu.Lock()
+			cache[cacheKey] = true
+			mu.Unlock()
+		}
+		return true
+	}
+	if scope.AgentID != "" {
+		workerHash := sha256.Sum256([]byte(strings.Join([]string{scope.ProjectID, scope.TeamID, scope.AgentID, "worker_run_rejection", runID}, "\x00")))
+		workerMarkerID := "ctx-worker-run-rejection-" + hex.EncodeToString(workerHash[:12])
+		if item, err := repo.Get(ctx, workerMarkerID); err == nil && isMarkerMatchingScope(item, scope, runID) {
+			if mu != nil && cache != nil {
+				mu.Lock()
+				cache[cacheKey] = true
+				mu.Unlock()
+			}
+			return true
+		}
+	}
+	items, err := repo.Query(ctx, contextstore.RepositoryQuery{
+		Scope:             scope,
+		Visibility:        contextstore.VisibilitySubtree,
+		IncludeCandidates: true,
+		Limit:             100,
+	})
+	if err != nil {
+		return false
+	}
+	for _, item := range items {
+		if item.Metadata["run_id"] == runID && item.Lifecycle == contextstore.LifecycleRejected && isMarkerMatchingScope(item, scope, runID) {
+			if mu != nil && cache != nil {
+				mu.Lock()
+				cache[cacheKey] = true
+				mu.Unlock()
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func (s *defaultSharedMemoryService) isRunRejected(ctx context.Context, scope contextstore.Scope, runID string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	if s.rejectedRuns == nil {
+		s.rejectedRuns = make(map[string]bool)
+	}
+	s.mu.Unlock()
+	return isDurableRunRejected(ctx, s.repo, &s.mu, s.rejectedRuns, scope, runID)
 }
 
 func (s *defaultSharedMemoryService) ConfirmRun(ctx context.Context, req SharedMemoryPromotion) ([]contextstore.ContextItem, error) {
@@ -241,6 +347,42 @@ func (s *defaultSharedMemoryService) RejectRun(ctx context.Context, req SharedMe
 	if err != nil {
 		return nil, err
 	}
+	markerScope := contextstore.Scope{
+		ProjectID: scope.ProjectID,
+		TeamID:    scope.TeamID,
+		SessionID: "_system",
+	}
+	h := sha256.Sum256([]byte(strings.Join([]string{scope.ProjectID, scope.TeamID, "shared_run_rejection", req.RunID}, "\x00")))
+	markerItem := contextstore.ContextItem{
+		ID:         "ctx-run-rejection-" + hex.EncodeToString(h[:12]),
+		Kind:       contextstore.ContextDecision,
+		Content:    fmt.Sprintf("Run %s rejected: %s", req.RunID, req.Reason),
+		Scope:      markerScope,
+		Authority:  contextstore.AuthoritySystem,
+		TrustLevel: contextstore.TrustInternal,
+		Priority:   contextstore.PriorityBackground,
+		Source: contextstore.SourceRef{
+			Type: "shared_run_rejection",
+			Ref:  req.RunID,
+		},
+		Metadata: map[string]string{
+			"visibility":       "system",
+			"memory_lifetime":  "persistent",
+			"run_id":           req.RunID,
+			"rejection_reason": strings.TrimSpace(req.Reason),
+		},
+		Lifecycle: contextstore.LifecycleRejected,
+	}
+	if err := s.repo.Append(ctx, markerItem); err != nil {
+		return nil, fmt.Errorf("append shared run rejection marker: %w", err)
+	}
+	s.mu.Lock()
+	if s.rejectedRuns == nil {
+		s.rejectedRuns = make(map[string]bool)
+	}
+	s.rejectedRuns[memoryRejectionCacheKey(scope, req.RunID)] = true
+	s.mu.Unlock()
+
 	items, err := s.repo.Query(ctx, contextstore.RepositoryQuery{Scope: scope, Visibility: contextstore.VisibilityExact, IncludeCandidates: true, Limit: 100000})
 	if err != nil {
 		return nil, err

@@ -1,6 +1,7 @@
 package team
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,49 +15,45 @@ import (
 	"github.com/kjelly/hufu/internal/utils"
 )
 
-// RecordSessionUserMessage adds a user message to SessionData and dual-writes a user_message_added event to EventStore if available.
+// RecordSessionUserMessage commits the event before advancing the in-memory
+// session projection. This is deliberately event-first: an append failure
+// cannot leave conversation history ahead of its canonical replay source.
 func RecordSessionUserMessage(session *SessionData, es *EventStore, content string) error {
-	if session == nil {
-		return nil
-	}
-	session.AddEntry("user", content)
-	if es != nil {
-		payload, _ := json.Marshal(map[string]string{
-			"role":    "user",
-			"content": utils.RedactSecrets(content),
-		})
-		if err := es.Append(RunEvent{
-			Type:    "user_message_added",
-			Actor:   "user",
-			Payload: payload,
-		}); err != nil {
-			log.Printf("warning: dual-write user_message_added event failed: %v", err)
-			return fmt.Errorf("dual-write user_message_added event: %w", err)
-		}
-	}
-	return nil
+	return recordSessionMessage(session, es, "user", content)
 }
 
-// RecordSessionAssistantMessage adds an assistant message to SessionData and dual-writes an assistant_message_added event to EventStore if available.
+// RecordSessionAssistantMessage commits the event before advancing the
+// in-memory session projection.
 func RecordSessionAssistantMessage(session *SessionData, es *EventStore, content string) error {
-	if session == nil {
+	return recordSessionMessage(session, es, "assistant", content)
+}
+
+func recordSessionMessage(session *SessionData, es *EventStore, role, content string) error {
+	if session == nil || strings.TrimSpace(content) == "" {
 		return nil
 	}
-	session.AddEntry("assistant", content)
 	if es != nil {
 		payload, _ := json.Marshal(map[string]string{
-			"role":    "assistant",
+			"role":    role,
 			"content": utils.RedactSecrets(content),
 		})
-		if err := es.Append(RunEvent{
-			Type:    "assistant_message_added",
-			Actor:   "assistant",
-			Payload: payload,
-		}); err != nil {
-			log.Printf("warning: dual-write assistant_message_added event failed: %v", err)
-			return fmt.Errorf("dual-write assistant_message_added event: %w", err)
+		eventType := EventAssistantMessageAdded
+		if role == "user" {
+			eventType = EventUserMessageAdded
 		}
+		durable, err := es.AppendPersisted(RunEvent{
+			Type:    string(eventType),
+			Actor:   role,
+			Payload: payload,
+		})
+		if err != nil {
+			log.Printf("warning: append %s event failed: %v", eventType, err)
+			return fmt.Errorf("append %s event: %w", eventType, err)
+		}
+		session.addEntryAt(role, content, durable.Timestamp)
+		return nil
 	}
+	session.AddEntry(role, content)
 	return nil
 }
 
@@ -64,7 +61,7 @@ func (c *Coordinator) addSessionUserMessage(content string) {
 	if c == nil {
 		return
 	}
-	if err := RecordSessionUserMessage(c.sessionData, c.eventStore, content); err != nil {
+	if err := c.recordSessionMessage(content, "user"); err != nil {
 		c.dualWriteFailures.Add(1)
 	}
 }
@@ -73,15 +70,42 @@ func (c *Coordinator) addSessionAssistantMessage(content string) {
 	if c == nil {
 		return
 	}
-	if err := RecordSessionAssistantMessage(c.sessionData, c.eventStore, content); err != nil {
+	if err := c.recordSessionMessage(content, "assistant"); err != nil {
 		c.dualWriteFailures.Add(1)
 	}
+}
+
+func (c *Coordinator) recordSessionMessage(content, role string) error {
+	if c == nil || c.sessionData == nil || strings.TrimSpace(content) == "" {
+		return nil
+	}
+	if !c.hasDurableEventJournal() {
+		c.sessionData.AddEntry(role, content)
+		return nil
+	}
+	payload, err := json.Marshal(SessionMessageEventPayload{Role: role, Content: utils.RedactSecrets(content)})
+	if err != nil {
+		return fmt.Errorf("marshal %s message: %w", role, err)
+	}
+	eventType := EventAssistantMessageAdded
+	if role == "user" {
+		eventType = EventUserMessageAdded
+	}
+	durable, err := c.EventJournal().Append(context.Background(), RunEvent{Type: string(eventType), Actor: role, Payload: payload})
+	if err != nil {
+		return fmt.Errorf("append %s event: %w", eventType, err)
+	}
+	c.sessionData.addEntryAt(role, content, durable.Timestamp)
+	return nil
 }
 
 // initEventStore initializes the EventStore on Coordinator.
 func (c *Coordinator) initEventStore() {
 	if c.session == nil || c.session.Workspace == "" {
 		return
+	}
+	if c.sessionData == nil {
+		c.sessionData = NewSession()
 	}
 	runID := c.executionRunID
 	if runID == "" {
@@ -91,24 +115,176 @@ func (c *Coordinator) initEventStore() {
 	es, err := NewEventStore(c.session.Workspace, runID, sessionID)
 	if err != nil {
 		log.Printf("warning: init event store failed: %v", err)
+		c.sessionData.RecoveryRequired = true
+		c.sessionData.RecoveryReason = "event-store initialization failed: " + utils.RedactSecrets(err.Error())
+		_ = SaveSession(c.session.Workspace, c.sessionData)
 		return
 	}
-	// Bind the store to the active session branch (if any) so events written
-	// during this run are collected into that branch's lineage (§8).
-	if st, err := LoadSessionTree(c.session.Workspace); err == nil && st.ActiveBranch != "" {
-		es.SetBranchID(st.ActiveBranch)
+	if err := es.VerifyHashChain(); err != nil {
+		log.Printf("warning: event store hash chain verification failed: %v", err)
+		c.sessionData.RecoveryRequired = true
+		c.sessionData.RecoveryReason = "event-store hash chain invalid: " + utils.RedactSecrets(err.Error())
+		_ = SaveSession(c.session.Workspace, c.sessionData)
+		_ = es.Close()
+		return
+	}
+	st, err := LoadSessionTree(c.session.Workspace)
+	if err != nil {
+		log.Printf("warning: load session tree failed: %v", err)
+		c.sessionData.RecoveryRequired = true
+		c.sessionData.RecoveryReason = "session-tree load failed: " + utils.RedactSecrets(err.Error())
+		_ = SaveSession(c.session.Workspace, c.sessionData)
+		_ = es.Close()
+		return
+	}
+	activeBranch := "main"
+	if st != nil && st.ActiveBranch != "" {
+		activeBranch = st.ActiveBranch
+		es.SetBranchID(activeBranch)
 	}
 	c.eventStore = es
-	c.hydrateEmittedEventKeys()
-	c.repairMemoryLearningGaps()
+	c.SetEventJournal(eventStoreJournal{store: es})
+	c.hydrateEmittedEventKeys(st, activeBranch)
+	c.checkCanonicalProjectionShadow(st, activeBranch)
+	c.repairMemoryLearningGaps(st, activeBranch)
+}
+
+func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBranch string) {
+	if c == nil || c.eventStore == nil || c.sessionData == nil {
+		return
+	}
+	events, err := c.eventStore.ReadEvents()
+	if err != nil {
+		c.sessionData.RecoveryRequired = true
+		c.sessionData.RecoveryReason = "event-store read failed: " + utils.RedactSecrets(err.Error())
+		_ = SaveSession(c.session.Workspace, c.sessionData)
+		return
+	}
+	lineage := FilterEventsForBranch(events, st, activeBranch)
+	if !hasCurrentCanonicalProjectionEvents(lineage) {
+		return
+	}
+
+	replayedSD := ReduceToSessionData(lineage)
+	replayedTasks := ReduceToTodoList(lineage)
+
+	if len(c.sessionData.Entries) == 0 && len(c.sessionData.Tasks) == 0 {
+		c.sessionData.Entries = replayedSD.Entries
+		c.sessionData.Tasks = replayedTasks
+		c.sessionData.CriterionResults = replayedSD.CriterionResults
+		c.sessionData.CriterionCheckpoints = replayedSD.CriterionCheckpoints
+		c.sessionData.LastCriterionProgressAt = replayedSD.LastCriterionProgressAt
+		if len(replayedTasks) > 0 {
+			c.sessionData.DelegationPhase = DelegationPhaseActive
+		} else if replayedSD.DelegationPhase != "" {
+			c.sessionData.DelegationPhase = replayedSD.DelegationPhase
+		}
+		c.applyLiveTaskProjection(replayedTasks)
+		prof := c.ExecutionProfile()
+		if !prof.DisableHistoricalMemory {
+			c.hydrateConversationHistoryFromSessionData()
+		}
+		if c.initialDelegationPending() {
+			c.conversationHistoryMu.Lock()
+			c.conversationHistory = nil
+			c.conversationHistorySourceCounts = nil
+			c.conversationHistorySourceOffset = 0
+			c.conversationHistoryMu.Unlock()
+		}
+		_ = SaveSession(c.session.Workspace, c.sessionData)
+		_ = c.emitEvent("projection_rebuilt", "coordinator", "", map[string]string{"source": "event_store", "status": "rebuilt"})
+		return
+	}
+
+	if err := CompareCanonicalProjection(c.sessionData, lineage); err == nil {
+		if len(c.sessionData.Tasks) > 0 && (c.taskTracker == nil || len(c.taskTracker.TodoList().Items()) == 0) {
+			c.applyLiveTaskProjection(c.sessionData.Tasks)
+		}
+		_ = c.emitEvent("projection_rebuilt", "coordinator", "", map[string]string{"source": "event_store", "status": "matched"})
+		_ = SaveSession(c.session.Workspace, c.sessionData)
+		return
+	}
+
+	if isProjectionPrefixOrRecoverable(c.sessionData, replayedSD, replayedTasks) {
+		c.sessionData.Entries = replayedSD.Entries
+		c.sessionData.Tasks = replayedTasks
+		c.sessionData.CriterionResults = replayedSD.CriterionResults
+		c.sessionData.CriterionCheckpoints = replayedSD.CriterionCheckpoints
+		c.sessionData.LastCriterionProgressAt = replayedSD.LastCriterionProgressAt
+		if len(replayedTasks) > 0 {
+			c.sessionData.DelegationPhase = DelegationPhaseActive
+		} else if replayedSD.DelegationPhase != "" {
+			c.sessionData.DelegationPhase = replayedSD.DelegationPhase
+		}
+		c.applyLiveTaskProjection(replayedTasks)
+		prof := c.ExecutionProfile()
+		if !prof.DisableHistoricalMemory {
+			c.hydrateConversationHistoryFromSessionData()
+		}
+		if c.initialDelegationPending() {
+			c.conversationHistoryMu.Lock()
+			c.conversationHistory = nil
+			c.conversationHistorySourceCounts = nil
+			c.conversationHistorySourceOffset = 0
+			c.conversationHistoryMu.Unlock()
+		}
+		_ = SaveSession(c.session.Workspace, c.sessionData)
+		_ = c.emitEvent("projection_rebuilt", "coordinator", "", map[string]string{"source": "event_store", "status": "repaired"})
+		return
+	}
+
+	c.sessionData.RecoveryRequired = true
+	c.sessionData.RecoveryReason = "event-store projection mismatch: " + utils.RedactSecrets(CompareCanonicalProjection(c.sessionData, lineage).Error())
+	_ = c.emitEvent("projection_mismatch", "coordinator", "", map[string]string{"reason": c.sessionData.RecoveryReason})
+	if saveErr := SaveSession(c.session.Workspace, c.sessionData); saveErr != nil {
+		_ = c.emitEvent("projection_write_failed", "coordinator", "", map[string]string{"reason": utils.RedactSecrets(saveErr.Error())})
+	}
+}
+
+func isProjectionPrefixOrRecoverable(live, replayedSD *SessionData, replayedTasks []*TodoItem) bool {
+	if live == nil || replayedSD == nil {
+		return false
+	}
+	if len(live.Entries) > len(replayedSD.Entries) {
+		return false
+	}
+	for i := range live.Entries {
+		if live.Entries[i].Role != replayedSD.Entries[i].Role || live.Entries[i].Content != replayedSD.Entries[i].Content {
+			return false
+		}
+	}
+	if len(live.Tasks) > len(replayedTasks) {
+		return false
+	}
+	for i := range live.Tasks {
+		if err := compareSingleTaskProjection(live.Tasks[i], replayedTasks[i]); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // hydrateEmittedEventKeys restores idempotency state after a process
 // restart. Without this, the first checkpoint after resume re-emits every
 // previously persisted transition despite the event already being present.
-func (c *Coordinator) hydrateEmittedEventKeys() {
+func (c *Coordinator) hydrateEmittedEventKeys(branchOpts ...any) {
 	if c == nil || c.eventStore == nil {
 		return
+	}
+	var st *SessionTree
+	activeBranch := "main"
+	for _, opt := range branchOpts {
+		switch v := opt.(type) {
+		case *SessionTree:
+			st = v
+		case string:
+			if v != "" {
+				activeBranch = v
+			}
+		}
+	}
+	if st != nil && st.ActiveBranch != "" && len(branchOpts) == 1 {
+		activeBranch = st.ActiveBranch
 	}
 	events, err := c.eventStore.ReadEvents()
 	if err != nil {
@@ -116,11 +292,12 @@ func (c *Coordinator) hydrateEmittedEventKeys() {
 		c.dualWriteFailures.Add(1)
 		return
 	}
+	lineage := FilterEventsForBranch(events, st, activeBranch)
 	c.eventOnceMu.Lock()
 	if c.emittedTaskTransitions == nil {
 		c.emittedTaskTransitions = make(map[string]bool)
 	}
-	for _, event := range events {
+	for _, event := range lineage {
 		if event.IdempotencyKey != "" {
 			c.emittedTaskTransitions[event.IdempotencyKey] = true
 		}
@@ -129,7 +306,7 @@ func (c *Coordinator) hydrateEmittedEventKeys() {
 	// A process can crash after the durable event append and before the SQLite
 	// projection commit. Reapplying memory events at startup is safe because the
 	// reducer transaction uses the same durable idempotency key.
-	for _, event := range events {
+	for _, event := range lineage {
 		switch event.Type {
 		case "memory_retrieved", "memory_usage_recorded", "memory_outcome_recorded":
 			c.reduceMemoryEvent(event)
@@ -156,7 +333,7 @@ func (c *Coordinator) emitEventOnce(idempotencyKey string, event RunEvent) (bool
 		return false, nil
 	}
 	event.IdempotencyKey = idempotencyKey
-	if err := c.eventStore.Append(event); err != nil {
+	if _, err := c.eventStore.AppendPersisted(event); err != nil {
 		c.recordLearningGap(event, err)
 		return false, err
 	}
@@ -208,9 +385,24 @@ func (c *Coordinator) recordLearningGap(event RunEvent, appendErr error) {
 	}
 }
 
-func (c *Coordinator) repairMemoryLearningGaps() {
+func (c *Coordinator) repairMemoryLearningGaps(branchOpts ...any) {
 	if c == nil || c.eventStore == nil || c.sessionData == nil {
 		return
+	}
+	var st *SessionTree
+	activeBranch := "main"
+	for _, opt := range branchOpts {
+		switch v := opt.(type) {
+		case *SessionTree:
+			st = v
+		case string:
+			if v != "" {
+				activeBranch = v
+			}
+		}
+	}
+	if st != nil && st.ActiveBranch != "" && len(branchOpts) == 1 {
+		activeBranch = st.ActiveBranch
 	}
 	c.mu.Lock()
 	gaps := append([]LearningGap(nil), c.sessionData.LearningGaps...)
@@ -229,7 +421,8 @@ func (c *Coordinator) repairMemoryLearningGaps() {
 			if err == nil {
 				events, readErr := c.eventStore.ReadEvents()
 				if readErr == nil {
-					for _, durableEvent := range events {
+					lineage := FilterEventsForBranch(events, st, activeBranch)
+					for _, durableEvent := range lineage {
 						if durableEvent.IdempotencyKey == gap.IdempotencyKey {
 							c.reduceMemoryEvent(durableEvent)
 							repaired = true
@@ -241,7 +434,8 @@ func (c *Coordinator) repairMemoryLearningGaps() {
 		} else if gap.EventType == "memory_aggregate_repair" {
 			events, err := c.eventStore.ReadEvents()
 			if err == nil {
-				for _, event := range events {
+				lineage := FilterEventsForBranch(events, st, activeBranch)
+				for _, event := range lineage {
 					if event.IdempotencyKey == gap.IdempotencyKey {
 						c.reduceMemoryEvent(event)
 						repaired = true
@@ -292,7 +486,7 @@ func (c *Coordinator) emitEvent(eventType, actor, taskID string, payload interfa
 		TaskID:  taskID,
 		Payload: rawPayload,
 	}
-	if err := c.eventStore.Append(event); err != nil {
+	if _, err := c.eventStore.AppendPersisted(event); err != nil {
 		log.Printf("warning: dual-write event emit failed for type %s: %v", eventType, err)
 		c.recordLearningGap(event, err)
 		return err
@@ -318,8 +512,14 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 		switch item.Status {
 		case TaskPending:
 			eventType = "task_created"
+		case TaskPlanned:
+			eventType = "task_planned"
 		case TaskInProgress:
 			eventType = "task_started"
+		case TaskVerifying:
+			eventType = "task_verifying"
+		case TaskPaused:
+			eventType = "task_paused"
 		case TaskDone:
 			eventType = "task_completed"
 		case TaskError:
@@ -351,72 +551,7 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 			continue
 		}
 
-		payload := map[string]interface{}{
-			"id":                    item.ID,
-			"status":                string(item.Status),
-			"max_retries":           item.MaxRetries,
-			"retries":               item.Retries,
-			"output":                item.Output,
-			"agent":                 item.Agent,
-			"depends_on":            item.DependsOn,
-			"kind":                  item.Kind,
-			"advances":              item.Advances,
-			"expected_state_change": item.ExpectedStateChange,
-			"progress":              item.Progress,
-			"progress_criteria":     item.ProgressCriteria,
-			"failure_fingerprints":  item.FailureFingerprints,
-			"execution":             item.Execution,
-			"recovery_hypothesis":   item.RecoveryHypothesis,
-			"side_effect":           item.SideEffect,
-			"recovery":              item.Recovery,
-			"reconcile_tool":        item.ReconcileTool,
-			"attempt":               item.Retries + 1,
-		}
-		failureTransition := eventType == "task_failed" || eventType == "task_blocked" || eventType == "task_protocol_incomplete"
-		if !failureTransition {
-			payload["desc"] = item.Desc
-		} else {
-			failureClass := classifyTaskFailure(errors.New(item.Detail))
-			disposition := RetryNone
-			if eventType == "task_protocol_incomplete" {
-				failureClass = FailureProtocol
-				disposition = ReconcileOnly
-			}
-			failure := c.failureEventForItem(item, failureClass, disposition, item.Detail, FailureFingerprint{}, item.ID)
-			if item.FailureEvent != nil {
-				failure = cloneFailureEventPayload(item.FailureEvent)
-			}
-			for key, value := range failureEventPayloadMap(failure) {
-				payload[key] = value
-			}
-			payload["summary"] = failureSummary(item)
-			if eventType == "task_failed" || eventType == "task_protocol_incomplete" {
-				payload["output"] = utils.TruncateString(utils.RedactSecrets(item.Output), 2000)
-			}
-		}
-		if item.Verify != "" {
-			payload["verify"] = item.Verify
-			payload["verify_mode"] = item.VerifyMode
-		}
-		if item.VerifySpec != nil {
-			payload["verify_spec"] = item.VerifySpec
-		}
-		if item.VerifyResult != nil {
-			payload["verify_result"] = item.VerifyResult
-		}
-		if item.TypedResult != nil {
-			payload["typed_result"] = item.TypedResult
-		}
-		if item.ExecutionReceipt != nil {
-			payload["execution_receipt"] = item.ExecutionReceipt
-		}
-		if len(item.ExecutionReceipts) > 0 {
-			payload["execution_receipts"] = item.ExecutionReceipts
-		}
-		if len(item.MemoryManifests) > 0 {
-			payload["memory_manifests"] = item.MemoryManifests
-		}
-
+		payload := c.taskTransitionPayloadWithCoordinator(item)
 		data, err := json.Marshal(payload)
 		if err != nil {
 			log.Printf("warning: dual-write task event marshal failed for %s (%s): %v", item.ID, eventType, err)
@@ -445,6 +580,507 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 			c.recordMemoryOutcomeForTask(item, eventType)
 		}
 	}
+}
+
+// CommitTaskTransition is the event-first transition boundary for task
+// lifecycle states that have an EventStore representation. It appends the
+// complete, redacted projection payload before changing TodoList; a crash
+// after append and before checkpoint is therefore recoverable by replay.
+//
+// Verification, receipts, and typed results should be installed on TodoList
+// before a terminal call so their values are carried by the same transition.
+func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, expected, next TaskStatus, detail, output string, metadata map[string]interface{}) error {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return fmt.Errorf("commit task transition: task tracker is unavailable")
+	}
+	current := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
+	if current == nil {
+		return fmt.Errorf("commit task transition: task %s not found", taskID)
+	}
+	if current.Status != expected {
+		return fmt.Errorf("commit task transition: task %s expected %s, got %s", taskID, expected, current.Status)
+	}
+	eventType := eventTypeForTaskStatus(next)
+	if eventType == "" || !c.hasDurableEventJournal() {
+		return c.taskTracker.TodoList().TryUpdateStatusAndOutput(taskID, next, detail, output)
+	}
+
+	projected := *current
+	projected.Status = next
+	if detail != "" {
+		projected.Detail = detail
+	}
+	if output != "" {
+		projected.Output = output
+	}
+	if fe, ok := metadata["failure_event"].(*FailureEventPayload); ok && fe != nil {
+		projected.FailureEvent = fe
+	}
+	if fo, ok := metadata["failure_output"].(string); ok && fo != "" {
+		projected.Output = fo
+	}
+	payload := c.taskTransitionPayloadWithCoordinator(&projected)
+	for key, value := range metadata {
+		payload[key] = value
+	}
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("commit task transition payload: %w", err)
+	}
+	key := taskTransitionEventKey(&projected)
+	// A terminal/cancellation transition is itself recovery evidence. Do not
+	// let the already-cancelled worker context suppress its durable record.
+	appendCtx := context.WithoutCancel(ctx)
+	if _, err := c.EventJournal().Append(appendCtx, RunEvent{
+		Type:           eventType,
+		Actor:          projected.Agent,
+		TaskID:         projected.ID,
+		IdempotencyKey: key,
+		Payload:        rawPayload,
+	}); err != nil {
+		return fmt.Errorf("commit task transition append: %w", err)
+	}
+	c.eventOnceMu.Lock()
+	if c.emittedTaskTransitions == nil {
+		c.emittedTaskTransitions = make(map[string]bool)
+	}
+	c.emittedTaskTransitions[key] = true
+	c.emittedTaskTransitions[taskTransitionEventKey(&projected)] = true
+	c.emittedTaskTransitions[fmt.Sprintf("%s:%s:%d", projected.ID, projected.Status, projected.Retries)] = true
+	c.eventOnceMu.Unlock()
+	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(taskID, next, detail, output); err != nil {
+		return fmt.Errorf("apply task transition after durable append: %w", err)
+	}
+	if fe, ok := metadata["failure_event"].(*FailureEventPayload); ok && fe != nil {
+		_ = c.taskTracker.TodoList().SetFailureEventAndOutput(taskID, fe, output)
+	}
+	return nil
+}
+
+// CommitTaskResetForRetry is the event-first transition boundary for resetting
+// a task back to TaskPending for DAG or crash-recovery retries. It appends the
+// complete, reset projection payload (with incremented retries and cleared
+// output/timing/runtime errors) before mutating TodoList; if the append fails,
+// the task status, retry count, and checkpoint remain untouched.
+func (c *Coordinator) CommitTaskResetForRetry(ctx context.Context, taskID string, detail string) error {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return fmt.Errorf("commit task reset for retry: task tracker is unavailable")
+	}
+	current := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
+	if current == nil {
+		return fmt.Errorf("commit task reset for retry: task %s not found", taskID)
+	}
+	if !c.hasDurableEventJournal() {
+		c.taskTracker.TodoList().ResetForRetry(taskID, detail)
+		return nil
+	}
+
+	projected := *current
+	projected.Status = TaskPending
+	projected.Detail = detail
+	projected.Output = ""
+	projected.VerifyResult = nil
+	projected.RuntimeError = nil
+	projected.FailureEvent = nil
+	projected.RecoveryState = RecoveryStateNotStarted
+	projected.LastOperation = ""
+	projected.Progress = ProgressUnknown
+	projected.ProgressCriteria = nil
+	projected.StartedAt = time.Time{}
+	projected.EndedAt = time.Time{}
+	projected.ModelTime = 0
+	projected.ToolTime = 0
+	projected.Retries = current.Retries + 1
+
+	payload := c.taskTransitionPayloadWithCoordinator(&projected)
+	payload["reset_for_retry"] = true
+	payload["previous_status"] = string(current.Status)
+
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("commit task reset for retry payload: %w", err)
+	}
+	key := taskTransitionEventKey(&projected)
+	appendCtx := context.WithoutCancel(ctx)
+	if _, err := c.EventJournal().Append(appendCtx, RunEvent{
+		Type:           string(EventTaskCreated),
+		Actor:          projected.Agent,
+		TaskID:         projected.ID,
+		IdempotencyKey: key,
+		Payload:        rawPayload,
+	}); err != nil {
+		return fmt.Errorf("commit task reset for retry append: %w", err)
+	}
+	c.eventOnceMu.Lock()
+	if c.emittedTaskTransitions == nil {
+		c.emittedTaskTransitions = make(map[string]bool)
+	}
+	c.emittedTaskTransitions[key] = true
+	c.emittedTaskTransitions[taskTransitionEventKey(&projected)] = true
+	c.emittedTaskTransitions[fmt.Sprintf("%s:%s:%d", projected.ID, projected.Status, projected.Retries)] = true
+	c.eventOnceMu.Unlock()
+
+	c.taskTracker.TodoList().ResetForRetry(taskID, detail)
+	return nil
+}
+
+// CommitTaskCreation is the event-first creation boundary for new tasks. It
+// reserves IDs and delegates to CommitTaskCreationResolved, which appends
+// complete task_created payloads and makes each successfully appended task
+// visible in the projection before continuing. A crash after append and before
+// checkpoint is recoverable by replay; an append failure returns the partial
+// result (the tasks whose events are already durable and visible) together
+// with the error, so no durable event is ever left without a projection entry.
+func (c *Coordinator) CommitTaskCreation(ctx context.Context, specs []TodoSpec) ([]*TodoItem, error) {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return nil, fmt.Errorf("commit task creation: task tracker is unavailable")
+	}
+	if len(specs) == 0 {
+		return nil, nil
+	}
+	ids := c.taskTracker.TodoList().ReserveIDs(len(specs))
+	return c.CommitTaskCreationResolved(ctx, specs, ids)
+}
+
+// CommitTaskCreationResolved is the event-first creation boundary for a batch
+// whose IDs were already reserved by the caller. Reserving IDs first lets the
+// caller resolve index-based DAG/recovery edges (DependsOn, OnFailure) to real
+// todo IDs before the durable task_created payload is serialized, so the
+// initial event carries the complete execution contract (PR-05).
+//
+// Each item is appended to the journal and then immediately added to TodoList
+// (firing the checkpoint callback). A failure on the Nth append therefore
+// leaves the first N-1 tasks durable AND visible: the returned slice is the
+// explicit partial result and the error reports the failed append. Callers
+// that cannot proceed with a partial batch must treat the returned items as
+// already-committed work, never as orphans to be recreated.
+func (c *Coordinator) CommitTaskCreationResolved(ctx context.Context, specs []TodoSpec, ids []string) ([]*TodoItem, error) {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return nil, fmt.Errorf("commit task creation: task tracker is unavailable")
+	}
+	if len(specs) == 0 {
+		return nil, nil
+	}
+	if len(ids) != len(specs) {
+		return nil, fmt.Errorf("commit task creation: reserved %d IDs for %d specs", len(ids), len(specs))
+	}
+	tl := c.taskTracker.TodoList()
+	items := make([]*TodoItem, len(specs))
+	for i, spec := range specs {
+		items[i] = todoItemFromSpec(spec, ids[i])
+	}
+	if !c.hasDurableEventJournal() {
+		tl.AddReserved(items)
+		return items, nil
+	}
+
+	appendCtx := context.WithoutCancel(ctx)
+	var created []*TodoItem
+	for _, item := range items {
+		payload := c.taskTransitionPayloadWithCoordinator(item)
+		rawPayload, err := json.Marshal(payload)
+		if err != nil {
+			// created items were already added incrementally below; they are
+			// durable AND visible, so return them as the explicit partial result.
+			return created, fmt.Errorf("commit task creation payload: %w", err)
+		}
+		key := taskTransitionEventKey(item)
+		if _, err := c.EventJournal().Append(appendCtx, RunEvent{
+			Type:           string(EventTaskCreated),
+			Actor:          item.Agent,
+			TaskID:         item.ID,
+			IdempotencyKey: key,
+			Payload:        rawPayload,
+		}); err != nil {
+			// created items were already added incrementally below; they are
+			// durable AND visible, so return them as the explicit partial result.
+			return created, fmt.Errorf("commit task creation append: %w", err)
+		}
+		c.eventOnceMu.Lock()
+		if c.emittedTaskTransitions == nil {
+			c.emittedTaskTransitions = make(map[string]bool)
+		}
+		c.emittedTaskTransitions[key] = true
+		c.emittedTaskTransitions[taskTransitionEventKey(item)] = true
+		c.emittedTaskTransitions[fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)] = true
+		c.eventOnceMu.Unlock()
+		created = append(created, item)
+		// Make the item visible immediately so a partial append failure (or a
+		// crash mid-loop) never leaves a durable event without a projection
+		// entry and checkpoint.
+		tl.AddReserved([]*TodoItem{item})
+	}
+	return created, nil
+}
+
+// CommitTaskRemoval is the event-first boundary for removing tasks from the
+// projection (for example suppressed duplicate delegation). It appends a
+// task_removed event per live task before DeleteIDs mutates TodoList, so a
+// crash between append and checkpoint cannot resurrect a suppressed task on
+// replay.
+func (c *Coordinator) CommitTaskRemoval(ctx context.Context, taskIDs ...string) error {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return fmt.Errorf("commit task removal: task tracker is unavailable")
+	}
+	if len(taskIDs) == 0 {
+		return nil
+	}
+	if !c.hasDurableEventJournal() {
+		c.taskTracker.TodoList().DeleteIDs(taskIDs...)
+		return nil
+	}
+
+	appendCtx := context.WithoutCancel(ctx)
+	var appended []string
+	for _, id := range taskIDs {
+		item := todoItemByID(c.taskTracker.TodoList().Items(), id)
+		if item == nil {
+			continue
+		}
+		payload := map[string]interface{}{
+			"id":     item.ID,
+			"status": string(item.Status),
+			"desc":   item.Desc,
+			"agent":  item.Agent,
+		}
+		rawPayload, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("commit task removal payload: %w", err)
+		}
+		key := "removed:" + taskTransitionEventKey(item)
+		if _, err := c.EventJournal().Append(appendCtx, RunEvent{
+			Type:           string(EventTaskRemoved),
+			Actor:          item.Agent,
+			TaskID:         item.ID,
+			IdempotencyKey: key,
+			Payload:        rawPayload,
+		}); err != nil {
+			// Keep the projection aligned with the durable events: remove the
+			// items whose removal was already appended before surfacing the
+			// error, so replay and checkpoint cannot disagree.
+			if len(appended) > 0 {
+				c.taskTracker.TodoList().DeleteIDs(appended...)
+			}
+			return fmt.Errorf("commit task removal append: %w", err)
+		}
+		appended = append(appended, id)
+	}
+	c.taskTracker.TodoList().DeleteIDs(taskIDs...)
+	return nil
+}
+
+// CommitTaskResolution is the event-first boundary for reconcile_task. It
+// appends a task_resolution event carrying the full projected payload before
+// SetTaskResolution mutates TodoList, so the resolution and its evidence
+// survive restart and branch replay. The tool request is rejected when the
+// append fails.
+func (c *Coordinator) CommitTaskResolution(ctx context.Context, taskID string, resolution *TaskResolution) error {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return fmt.Errorf("commit task resolution: task tracker is unavailable")
+	}
+	current := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
+	if current == nil {
+		return fmt.Errorf("commit task resolution: task %s not found", taskID)
+	}
+	// Validate before appending so an invalid resolution never becomes durable
+	// while the projection rejects it.
+	if resolution != nil {
+		if err := ValidateResolution(resolution, taskID, c.taskTracker.TodoList().Items(), c.taskTracker.TodoList().RunID()); err != nil {
+			return err
+		}
+	}
+	if !c.hasDurableEventJournal() {
+		return c.taskTracker.TodoList().SetTaskResolution(taskID, resolution)
+	}
+
+	projected := *current
+	projected.Resolution = resolution
+	payload := c.taskTransitionPayloadWithCoordinator(&projected)
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("commit task resolution payload: %w", err)
+	}
+	key := "resolution:" + taskTransitionEventKey(current)
+	appendCtx := context.WithoutCancel(ctx)
+	if _, err := c.EventJournal().Append(appendCtx, RunEvent{
+		Type:           string(EventTaskResolution),
+		Actor:          current.Agent,
+		TaskID:         current.ID,
+		IdempotencyKey: key,
+		Payload:        rawPayload,
+	}); err != nil {
+		return fmt.Errorf("commit task resolution append: %w", err)
+	}
+	return c.taskTracker.TodoList().SetTaskResolution(taskID, resolution)
+}
+
+func (c *Coordinator) hasDurableEventJournal() bool {
+	if c == nil {
+		return false
+	}
+	if c.eventStore != nil {
+		return true
+	}
+	switch journal := c.eventJournal.(type) {
+	case nil:
+		return false
+	case eventStoreJournal:
+		return journal.store != nil
+	case *eventStoreJournal:
+		return journal != nil && journal.store != nil
+	default:
+		return true
+	}
+}
+
+func (c *Coordinator) commitTaskTransitionFromCurrent(ctx context.Context, taskID string, next TaskStatus, detail, output string, metadata map[string]interface{}) error {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return fmt.Errorf("commit task transition: task tracker is unavailable")
+	}
+	item := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
+	if item == nil {
+		return fmt.Errorf("commit task transition: task %s not found", taskID)
+	}
+	return c.CommitTaskTransition(ctx, taskID, item.Status, next, detail, output, metadata)
+}
+
+func todoItemByID(items []*TodoItem, id string) *TodoItem {
+	for _, item := range items {
+		if item != nil && item.ID == id {
+			return item
+		}
+	}
+	return nil
+}
+
+func eventTypeForTaskStatus(status TaskStatus) string {
+	switch status {
+	case TaskPending:
+		return string(EventTaskCreated)
+	case TaskPlanned:
+		return string(EventTaskPlanned)
+	case TaskInProgress:
+		return string(EventTaskStarted)
+	case TaskVerifying:
+		return string(EventTaskVerifying)
+	case TaskPaused:
+		return string(EventTaskPaused)
+	case TaskDone:
+		return string(EventTaskCompleted)
+	case TaskError:
+		return string(EventTaskFailed)
+	case TaskSkipped:
+		return string(EventTaskSkipped)
+	case TaskBlocked:
+		return string(EventTaskBlocked)
+	case TaskProtocolIncomplete:
+		return string(EventTaskProtocolIncomplete)
+	default:
+		return ""
+	}
+}
+
+func taskTransitionPayload(item *TodoItem) map[string]interface{} {
+	return taskTransitionPayloadWithCoordinator(item, nil)
+}
+
+func (c *Coordinator) taskTransitionPayloadWithCoordinator(item *TodoItem) map[string]interface{} {
+	return taskTransitionPayloadWithCoordinator(item, c)
+}
+
+func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[string]interface{} {
+	if item == nil {
+		return nil
+	}
+	payload := map[string]interface{}{
+		"id":                    item.ID,
+		"phase":                 item.Phase,
+		"action":                item.Action,
+		"plan_task_id":          item.PlanTaskID,
+		"contract_id":           item.ContractID,
+		"contract_hash":         item.ContractHash,
+		"contract_revision":     item.ContractRevision,
+		"status":                string(item.Status),
+		"detail":                item.Detail,
+		"max_retries":           item.MaxRetries,
+		"retries":               item.Retries,
+		"agent":                 item.Agent,
+		"model":                 item.Model,
+		"skills":                item.Skills,
+		"injected_skills":       item.InjectedSkills,
+		"loaded_skills":         item.LoadedSkills,
+		"source":                item.Source,
+		"parent_id":             item.ParentID,
+		"depends_on":            item.DependsOn,
+		"on_failure":            item.OnFailure,
+		"kind":                  item.Kind,
+		"advances":              item.Advances,
+		"expected_state_change": item.ExpectedStateChange,
+		"progress":              item.Progress,
+		"progress_criteria":     item.ProgressCriteria,
+		"failure_fingerprints":  item.FailureFingerprints,
+		"execution":             item.Execution,
+		"recovery_hypothesis":   item.RecoveryHypothesis,
+		"side_effect":           item.SideEffect,
+		"recovery":              item.Recovery,
+		"reconcile_tool":        item.ReconcileTool,
+		"recovery_state":        item.RecoveryState,
+		"runtime_error":         item.RuntimeError,
+		"resolution":            item.Resolution,
+		"diagnostic_hints":      item.DiagnosticHints,
+		"last_operation":        item.LastOperation,
+		"attempt":               item.Retries + 1,
+	}
+	failureTransition := item.Status == TaskError || item.Status == TaskBlocked || item.Status == TaskProtocolIncomplete
+	if !failureTransition {
+		payload["desc"] = item.Desc
+		payload["summary"] = item.Detail
+		payload["output"] = item.Output
+	} else {
+		failureClass := classifyTaskFailure(errors.New(item.Detail))
+		disposition := RetryNone
+		if item.Status == TaskProtocolIncomplete {
+			failureClass = FailureProtocol
+			disposition = ReconcileOnly
+		}
+		var failure *FailureEventPayload
+		if item.FailureEvent != nil {
+			failure = cloneFailureEventPayload(item.FailureEvent)
+		} else if c != nil {
+			failure = c.failureEventForItem(item, failureClass, disposition, item.Detail, FailureFingerprint{}, item.ID)
+		} else {
+			var coord *Coordinator
+			failure = coord.failureEventForItem(item, failureClass, disposition, item.Detail, FailureFingerprint{}, item.ID)
+		}
+		for key, value := range failureEventPayloadMap(failure) {
+			payload[key] = value
+		}
+		payload["summary"] = failureSummary(item)
+		payload["output"] = utils.TruncateString(utils.RedactSecrets(item.Output), 2000)
+	}
+	if item.Verify != "" {
+		payload["verify"] = item.Verify
+		payload["verify_mode"] = item.VerifyMode
+	}
+	if item.VerifySpec != nil {
+		payload["verify_spec"] = item.VerifySpec
+	}
+	if item.VerifyResult != nil {
+		payload["verify_result"] = item.VerifyResult
+	}
+	if item.TypedResult != nil {
+		payload["typed_result"] = item.TypedResult
+	}
+	if item.ExecutionReceipt != nil {
+		payload["execution_receipt"] = item.ExecutionReceipt
+	}
+	if len(item.ExecutionReceipts) > 0 {
+		payload["execution_receipts"] = item.ExecutionReceipts
+	}
+	if len(item.MemoryManifests) > 0 {
+		payload["memory_manifests"] = item.MemoryManifests
+	}
+	return payload
 }
 
 func isMemoryOutcomeTerminalEvent(eventType string) bool {

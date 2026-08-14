@@ -78,10 +78,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		return c.executeTaskWithExtraModels(parentCtx, agentName, agentDef, taskDesc, todoID, task.Verify, task.AdversarialVerify)
 	}
 
-	// When a model-list is configured, validate the requested model is in it.
-	// When no model-list is configured, ignore task.Model entirely — the agent's
-	// own model (from agent.md > team.yaml) is used via resolveAgentModel below.
-	if err := c.validateTaskModel(&task); err != nil {
+	// Model selection is a runtime capability service so workers, local
+	// providers, and tests share the same allowlist and precedence rules.
+	resolvedModel, err := c.ModelRuntime().ResolveTaskModel(agentDef, task)
+	if err != nil {
 		return "", err
 	}
 
@@ -95,7 +95,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	maxRetries := c.effectiveWorkerMaxAttempts(agentDef)
 
-	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
+	if err := c.CommitTaskTransition(parentCtx, todoID, TaskPending, TaskInProgress, "", "", nil); err != nil {
+		return "", fmt.Errorf("mark task started: %w", err)
+	}
 	c.reconcileTaskStatusProjection()
 	if agentDef.Skills != "" {
 		skills := strings.Split(agentDef.Skills, ",")
@@ -105,8 +107,6 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		c.taskTracker.TodoList().SetSkills(todoID, skills)
 	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-
-	resolvedModel := c.resolveAgentModel(agentDef, task.Model)
 
 	if c.think {
 		c.emitThinkDelegation(agentName, taskDesc, resolvedModel)
@@ -153,13 +153,21 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	var ag fantasy.Agent
 	var exposedToolNames []string
+	var resolvedTools ResolvedWorkerTools
 	if c.workerAgentOverride != nil {
 		ag = c.workerAgentOverride
 	} else {
-		ag, exposedToolNames, err = c.createTaskAgent(parentCtx, agentDef, task, resolvedModel, todoID, taskDesc, agentName)
+		extras := []fantasy.AgentTool{&submitResultTool{coordinator: c, todoID: todoID}}
+		if task.PlanFirst && task.PlanID == "" {
+			extras = append(extras, &submitPlanTool{coordinator: c, todoID: todoID})
+		}
+		resolvedTools, err = c.ToolResolver().ResolveTaskTools(parentCtx, agentDef, task, extras)
 		if err != nil {
+			c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
+			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
 			return "", err
 		}
+		exposedToolNames = resolvedTools.Names
 	}
 
 	// Instructions must only name tools this worker can actually call. The
@@ -457,10 +465,13 @@ retryLoop:
 		c.recordExecutionEvent(todoID, agentName, attempt, "in_progress", resolvedModel, 0, ExecutionUsage{})
 		currentPrompt := prompt
 		if attempt > 1 {
-			if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskInProgress, fmt.Sprintf("retry %d/%d", attempt, maxRetries), ""); statusErr == nil {
-				c.reconcileTaskStatusProjection()
-				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			detail := fmt.Sprintf("retry %d/%d", attempt, maxRetries)
+			if err := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskInProgress, detail, "", nil); err != nil {
+				closeTranscript()
+				return "", fmt.Errorf("mark retry task started: %w", err)
 			}
+			c.reconcileTaskStatusProjection()
+			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retry %d/%d — continuing from previous progress", attempt, maxRetries)))
 			// §6.1: Build structured retry context with failure class,
 			// evidence reference, prior command/exit, and explicit mutable
@@ -479,10 +490,7 @@ retryLoop:
 			}
 			if escalate {
 				if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
-					resultTool := &submitResultTool{coordinator: c, todoID: todoID}
-					if escAg, escTools, escErr := c.createTaskAgentWithResultTool(parentCtx, agentDef, next, resultTool, task); escErr == nil {
-						ag = escAg
-						exposedToolNames = escTools
+					if _, escErr := c.ModelRuntime().ProviderFor(next); escErr == nil {
 						c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("escalating model %s → %s (attempt %d)", resolvedModel, next, attempt)).withTodoID(todoID))
 						resolvedModel = next
 					} else {
@@ -586,7 +594,31 @@ retryLoop:
 				c.sessionToolPermissionsMu.Unlock()
 			}))
 
-			output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing)
+			if c.workerAgentOverride != nil {
+				output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing)
+			} else {
+				provider, providerErr := c.SubagentRegistry().Resolve(localSubagentProviderName)
+				if providerErr != nil {
+					err = providerErr
+				} else {
+					attemptResult, runErr := provider.RunAttempt(taskCtx, AttemptRequest{
+						RunID:    runID,
+						BranchID: c.activeBranchID(),
+						TaskID:   todoID,
+						Attempt:  attempt,
+						Agent:    agentDef,
+						Task:     task,
+						Prompt:   currentPrompt,
+						ModelID:  resolvedModel,
+						MaxSteps: stepBudget,
+						Tools:    resolvedTools,
+						History:  conversationHistory,
+						timing:   timing,
+					})
+					output, steps, err = attemptResult.Output, attemptResult.steps, runErr
+					ag = attemptResult.agent
+				}
+			}
 			if err == nil && !task.Execution.RequiresResult && strings.TrimSpace(output) == "" && len(steps) > 0 {
 				// The agent worked but never wrote a final message — almost
 				// always the step cap cutting it off mid-diagnosis. Give it one
@@ -670,7 +702,9 @@ retryLoop:
 				planEntry.Goal = task.Goal
 				planEntry.Task = task
 				c.pendingPlansMu.Unlock()
-				c.taskTracker.TodoList().UpdateStatus(todoID, TaskPlanned, "")
+				if transitionErr := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskPlanned, "", "", nil); transitionErr != nil {
+					return "", transitionErr
+				}
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("step").withAgent(agentName).withMessage("plan submitted").withTodoID(todoID))
 				c.report(c.newEvent("done").withAgent(agentName).withMessage("plan submitted").withTodoID(todoID))
@@ -724,10 +758,8 @@ retryLoop:
 					}
 					protocolFailureDetail := c.FailureDetail(errors.New(protocolDetail), FailureSourceError)
 					c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, protocolFailureDetail, ReconcileOnly, FailureProtocol, TaskProtocolIncomplete, output)
-					if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskProtocolIncomplete, protocolDetail, ""); statusErr == nil {
-						c.reconcileTaskStatusProjection()
-						c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-					}
+					c.reconcileTaskStatusProjection()
+					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 					c.report(c.newEvent("step").withAgent(agentName).withMessage(protocolErrMsg).withTodoID(todoID))
 
 					repairResultTool := &submitResultTool{coordinator: c, todoID: todoID}
@@ -923,7 +955,7 @@ retryLoop:
 			// the agent's claim of success. A non-zero exit converts this into a
 			// failure that flows into the normal retry path below.
 			if err == nil && (task.Verify != "" || task.VerifySpec != nil) {
-				if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskVerifying, "running objective verification", ""); statusErr != nil {
+				if statusErr := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskVerifying, "running objective verification", "", nil); statusErr != nil {
 					err = fmt.Errorf("enter verifying state: %w", statusErr)
 				} else {
 					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
@@ -972,7 +1004,7 @@ retryLoop:
 					log.Printf("warning: failed to write task file: %v", err)
 				}
 				duration, modelTime, toolTime := timing.snapshot()
-				if statusErr := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(coordinatorOutput, summaryMaxRunes), coordinatorOutput); statusErr != nil {
+				if statusErr := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskDone, utils.TruncateRunes(coordinatorOutput, summaryMaxRunes), coordinatorOutput, nil); statusErr != nil {
 					closeTranscript()
 					return "", fmt.Errorf("mark task done: %w", statusErr)
 				}
@@ -1281,7 +1313,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("clear structured action error: %w", err)
 	}
-	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskInProgress, "executing structured action", ""); err != nil {
+	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskInProgress, "executing structured action", "", nil); err != nil {
 		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("mark structured action in progress: %w", err)
 	}
@@ -1295,7 +1327,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		return "", err
 	}
 	if task.Verify != "" || task.VerifySpec != nil {
-		if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskVerifying, "running objective verification", output); err != nil {
+		if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskVerifying, "running objective verification", output, nil); err != nil {
 			c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
 			return "", fmt.Errorf("enter structured action verification: %w", err)
 		}
@@ -1310,7 +1342,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 			return "", err
 		}
 	}
-	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output); err != nil {
+	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output, nil); err != nil {
 		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("mark structured action done: %w", err)
 	}
@@ -1681,7 +1713,7 @@ func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, 
 		return "", err
 	}
 	if task.Verify != "" || task.VerifySpec != nil {
-		if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskVerifying, "running objective verification", output); err != nil {
+		if err := c.commitTaskTransitionFromCurrent(ctx, item.ID, TaskVerifying, "running objective verification", output, nil); err != nil {
 			return "", err
 		}
 		verification, err := c.verifyTaskDeliverableWithSpec(ctx, nil, task)
@@ -1698,7 +1730,7 @@ func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, 
 	if summary == "" {
 		summary = "protocol result-only repair succeeded"
 	}
-	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskDone, summary, output); err != nil {
+	if err := c.commitTaskTransitionFromCurrent(ctx, item.ID, TaskDone, summary, output, nil); err != nil {
 		return "", err
 	}
 	c.recordTerminalTypedTaskResult(item.ID)
@@ -1762,7 +1794,9 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	attemptStarted := time.Now()
 	c.recordExecutionEvent(todoID, task.Agent, 1, "in_progress", c.sidecarModel, 0, ExecutionUsage{})
 
-	c.taskTracker.TodoList().UpdateStatus(todoID, TaskInProgress, "")
+	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskInProgress, "", "", nil); err != nil {
+		return "", fmt.Errorf("mark sidecar task started: %w", err)
+	}
 	c.reconcileTaskStatusProjection()
 	for _, item := range c.taskTracker.TodoList().Items() {
 		if item.ID == todoID {
@@ -1798,7 +1832,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		return "", fmt.Errorf("task completion validation failed: %w", verr)
 	}
 	if task.Verify != "" || task.VerifySpec != nil {
-		if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskVerifying, "running objective verification", ""); err != nil {
+		if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskVerifying, "running objective verification", "", nil); err != nil {
 			c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 			return "", err
 		}
@@ -1821,7 +1855,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		c.report(c.newEvent("verify_done").withAgent(task.Agent).withMessage("objective verification passed").withTodoID(todoID))
 	}
 
-	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskDone, utils.TruncateRunes(result, summaryMaxRunes), result); err != nil {
+	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskDone, utils.TruncateRunes(result, summaryMaxRunes), result, nil); err != nil {
 		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		return "", err
 	}
@@ -2804,37 +2838,15 @@ func (c *Coordinator) validateTaskModel(task *TaskDef) error {
 	return fmt.Errorf("unknown model %q for agent %q (valid models: %v)", task.Model, task.Agent, validIDs)
 }
 
-// createTaskAgent builds the fantasy.Agent for a task, branching on plan-first
-// mode. Plan-first tasks get a fresh agent with a submit_plan tool; normal
-// tasks reuse the cached agent. All failure paths report and persist before
-// returning the error so the caller does not have to.
-func (c *Coordinator) createTaskAgent(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef, resolvedModel, todoID, taskDesc, agentName string) (fantasy.Agent, []string, error) {
-	resultTool := &submitResultTool{coordinator: c, todoID: todoID}
-	if task.PlanFirst && task.PlanID == "" {
-		agentTools := append(c.selectWorkerTools(agentDef), &submitPlanTool{coordinator: c, todoID: todoID}, resultTool)
-		planAg, planErr := c.createGatedAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
-			Def:        agentDef,
-			TeamConfig: &c.session.Config,
-			WorkDir:    c.projectDir,
-			MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
-		}, agentTools)
-		if planErr != nil {
-			c.report(c.newEvent("error").withAgent(agentName).withMessage(planErr.Error()).withTodoID(todoID))
-			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(planErr, ""))
-			return nil, nil, planErr
-		}
-		return planAg, agentToolNames(agentTools), nil
+func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *agent.AgentDef, overrideModel string, resultTool *submitResultTool, task TaskDef) (fantasy.Agent, []string, error) {
+	resolvedTask := task
+	if overrideModel != "" {
+		resolvedTask.Model = overrideModel
 	}
-	ag, exposedToolNames, err := c.createTaskAgentWithResultTool(parentCtx, agentDef, task.Model, resultTool, task)
+	modelID, err := c.ModelRuntime().ResolveTaskModel(def, resolvedTask)
 	if err != nil {
-		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
-		c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
 		return nil, nil, err
 	}
-	return ag, exposedToolNames, nil
-}
-
-func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *agent.AgentDef, overrideModel string, resultTool *submitResultTool, task TaskDef) (fantasy.Agent, []string, error) {
 	agentDef := def
 	if overrideModel != "" {
 		overriddenDef := *def
@@ -2845,40 +2857,28 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 	agentDef = c.injectWorkerContext(ctx, agentDef)
 	ctx = tools.SetSSHSessionManager(ctx, c.sshSessionMgr)
 
-	agentTools := c.selectWorkerToolsForTask(agentDef, task)
-	mcpAllowed := c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || c.phaseWorkflow.State() == PhaseExecute
-	if c.mcpManager != nil && mcpAllowed {
-		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
-		if len(agentDef.MCPTools) > 0 {
-			err := c.mcpManager.LoadAgentMCPServer(agentDef.Name, agentDef.MCPTools, agentDef.Shell)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to load MCP server for agent %s: %w", agentDef.Name, err)
-			}
-			mcpTools := c.mcpManager.GetAgentMCPTools(agentDef.Name, agentDef.Shell)
-			if len(mcpTools) > 0 {
-				agentTools = append(agentTools, mcpTools...)
-			}
-		}
-	}
-	if missing := missingExecutionTools(agentTools, task.Execution.ToolSequence); len(missing) > 0 {
-		return nil, nil, fmt.Errorf("execution tool_sequence requires unavailable tool(s) for agent %q: %s; select an agent that grants the complete sequence", agentDef.Name, strings.Join(missing, ", "))
-	}
+	extras := []fantasy.AgentTool(nil)
 	if resultTool != nil {
-		agentTools = append(agentTools, resultTool)
+		extras = append(extras, resultTool)
 	}
-	agentTools = filterToolsForSequence(agentTools, task.Execution.ToolSequence)
-
-	getAgModelID := c.resolveAgentModel(agentDef, "")
-	ag, err := c.createGatedAgent(ctx, c.providerManager.GetProvider(getAgModelID), agent.AgentConfig{
+	resolvedTools, err := c.ToolResolver().ResolveTaskTools(ctx, agentDef, task, extras)
+	if err != nil {
+		return nil, nil, err
+	}
+	provider, err := c.ModelRuntime().ProviderFor(modelID)
+	if err != nil {
+		return nil, nil, err
+	}
+	ag, err := c.createGatedAgent(ctx, provider, agent.AgentConfig{
 		Def:        agentDef,
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
 		MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
-	}, agentTools)
+	}, resolvedTools.Tools)
 	if err != nil {
 		return nil, nil, err
 	}
-	return ag, agentToolNames(agentTools), nil
+	return ag, resolvedTools.Names, nil
 }
 
 // missingExecutionTools validates a closed sequence against the concrete

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hufu Runtime Code Review"
+  short_description: "Review Hufu runtime integrity changes"
+  default_prompt: "Use $hufu-runtime-code-review to review these Hufu runtime changes."

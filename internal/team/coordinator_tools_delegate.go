@@ -148,15 +148,22 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		return fantasy.NewTextResponse(fmt.Sprintf("[CACHED RESULT] Task: '%s'\n\n%s", truncateTaskDesc(cachedDesc), cachedOutput)), nil
 	}
 
-	todoItems := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: subLabel, Desc: taskDesc, Model: "", Source: TaskSourceSubagent, ParentID: parentID}})
+	todoItems, err := c.CommitTaskCreation(ctx, []TodoSpec{{Agent: subLabel, Desc: taskDesc, Model: "", Source: TaskSourceSubagent, ParentID: parentID}})
+	if err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
 	// Sub-agent creation is another real task-creation boundary for the
 	// no-progress budget; it is not covered by coordinator ExecuteTasks.
 	c.recordNoProgressTasks(len(todoItems))
 	subTodoID := todoItems[0].ID
 
-	c.taskTracker.TodoList().UpdateStatus(subTodoID, TaskInProgress, "")
+	if err := c.commitTaskTransitionFromCurrent(ctx, subTodoID, TaskInProgress, "", "", nil); err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
 	if parentID != "" {
-		c.taskTracker.TodoList().UpdateStatus(parentID, TaskPaused, "")
+		if err := c.commitTaskTransitionFromCurrent(ctx, parentID, TaskPaused, "", "", nil); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
 	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("start").withAgent(subLabel).withMessage(taskDesc).withTodoID(subTodoID))
@@ -173,9 +180,13 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	c.storeTaskCache(agentKey, taskDesc, output)
 
 	if parentID != "" {
-		c.taskTracker.TodoList().UpdateStatus(parentID, TaskInProgress, "")
+		if err := c.commitTaskTransitionFromCurrent(ctx, parentID, TaskInProgress, "", "", nil); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
 	}
-	c.taskTracker.TodoList().UpdateStatusAndOutput(subTodoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output)
+	if err := c.commitTaskTransitionFromCurrent(ctx, subTodoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output, nil); err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
 	return fantasy.NewTextResponse(output), nil

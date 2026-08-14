@@ -94,6 +94,8 @@ type SessionData struct {
 	RuntimeWorkspace string                `json:"runtime_workspace,omitempty"`
 	RetryState       *RetryState           `json:"retry_state,omitempty"`
 	LearningGaps     []LearningGap         `json:"learning_gaps,omitempty"`
+	RecoveryRequired bool                  `json:"recovery_required,omitempty"`
+	RecoveryReason   string                `json:"recovery_reason,omitempty"`
 }
 
 func LoadSession(workspace string) *SessionData {
@@ -155,6 +157,12 @@ func NewSession() *SessionData {
 }
 
 func (s *SessionData) AddEntry(role, content string) {
+	s.addEntryAt(role, content, time.Now().Format(time.RFC3339))
+}
+
+// addEntryAt applies a session-message projection after the event boundary.
+// The durable event timestamp is retained so replay and live projection agree.
+func (s *SessionData) addEntryAt(role, content, timestamp string) {
 	// Skip empty entries (e.g. a wrap-up continuation with no prompt) and
 	// exact repeats of the previous entry: a failed turn leaves a dangling
 	// user entry with no assistant reply, so redispatching the same prompt
@@ -169,7 +177,7 @@ func (s *SessionData) AddEntry(role, content string) {
 	s.Entries = append(s.Entries, SessionEntry{
 		Role:      role,
 		Content:   content,
-		Timestamp: time.Now().Format(time.RFC3339),
+		Timestamp: timestamp,
 	})
 }
 

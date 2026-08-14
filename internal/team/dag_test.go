@@ -199,7 +199,7 @@ func TestResetTaskAllowsFirstExecutionOfNonReplayablePendingTask(t *testing.T) {
 	})
 	s := newDAGScheduler(coord, tasks, items, nil)
 
-	s.resetTask(0, "criterion retry routed")
+	_ = s.resetTask(context.Background(), 0, "criterion retry routed")
 	if s.states[0] != TaskPending {
 		t.Fatalf("first execution of pending non-replayable task was blocked: %s", s.states[0])
 	}

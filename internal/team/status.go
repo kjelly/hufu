@@ -302,6 +302,7 @@ type TodoSpec struct {
 	VerifySpec          *VerificationSpec
 	MaxRetries          int
 	OnFailure           string
+	DependsOn           []string
 	SideEffect          SideEffectClass
 	Recovery            RecoveryPolicy
 	ReconcileTool       string
@@ -312,40 +313,48 @@ type TodoSpec struct {
 	Execution           ExecutionContract
 }
 
+// todoItemFromSpec builds a pending TodoItem from a spec and an explicit ID.
+// It is shared by AddBatch and the event-first CommitTaskCreation boundary so
+// both paths produce byte-identical projection state.
+func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
+	return &TodoItem{
+		ID:                  id,
+		PlanTaskID:          item.PlanTaskID,
+		Phase:               item.Phase,
+		Action:              cloneActionPtr(item.Action),
+		ContractID:          item.ContractID,
+		ContractHash:        item.ContractHash,
+		ContractRevision:    item.ContractRevision,
+		Agent:               item.Agent,
+		Desc:                item.Desc,
+		Model:               item.Model,
+		Status:              TaskPending,
+		Source:              item.Source,
+		ParentID:            item.ParentID,
+		Verify:              item.Verify,
+		VerifyMode:          item.VerifyMode,
+		VerifySpec:          item.VerifySpec,
+		MaxRetries:          item.MaxRetries,
+		OnFailure:           item.OnFailure,
+		DependsOn:           append([]string(nil), item.DependsOn...),
+		SideEffect:          item.SideEffect,
+		Recovery:            item.Recovery,
+		ReconcileTool:       item.ReconcileTool,
+		Kind:                item.Kind,
+		Advances:            append([]string(nil), item.Advances...),
+		ExpectedStateChange: item.ExpectedStateChange,
+		Progress:            ProgressUnknown,
+		RecoveryHypothesis:  item.RecoveryHypothesis,
+		Execution:           item.Execution,
+	}
+}
+
 func (tl *TodoList) AddBatch(items []TodoSpec) []*TodoItem {
 	tl.mu.Lock()
 	var added []*TodoItem
 	for _, item := range items {
 		tl.next++
-		ti := &TodoItem{
-			ID:                  fmt.Sprintf("%d", tl.next),
-			PlanTaskID:          item.PlanTaskID,
-			Phase:               item.Phase,
-			Action:              cloneActionPtr(item.Action),
-			ContractID:          item.ContractID,
-			ContractHash:        item.ContractHash,
-			ContractRevision:    item.ContractRevision,
-			Agent:               item.Agent,
-			Desc:                item.Desc,
-			Model:               item.Model,
-			Status:              TaskPending,
-			Source:              item.Source,
-			ParentID:            item.ParentID,
-			Verify:              item.Verify,
-			VerifyMode:          item.VerifyMode,
-			VerifySpec:          item.VerifySpec,
-			MaxRetries:          item.MaxRetries,
-			OnFailure:           item.OnFailure,
-			SideEffect:          item.SideEffect,
-			Recovery:            item.Recovery,
-			ReconcileTool:       item.ReconcileTool,
-			Kind:                item.Kind,
-			Advances:            append([]string(nil), item.Advances...),
-			ExpectedStateChange: item.ExpectedStateChange,
-			Progress:            ProgressUnknown,
-			RecoveryHypothesis:  item.RecoveryHypothesis,
-			Execution:           item.Execution,
-		}
+		ti := todoItemFromSpec(item, fmt.Sprintf("%d", tl.next))
 		tl.items = append(tl.items, ti)
 		added = append(added, ti)
 	}
@@ -356,6 +365,38 @@ func (tl *TodoList) AddBatch(items []TodoSpec) []*TodoItem {
 		onChange()
 	}
 	return added
+}
+
+// ReserveIDs advances the list's ID counter by count and returns the reserved
+// IDs in order. It is the durable half of the event-first creation boundary:
+// callers append the task_created events for these IDs before adding the items
+// via AddReserved. A failed append leaves the counter advanced but no item in
+// the projection, which is safe because IDs are opaque sequential strings.
+func (tl *TodoList) ReserveIDs(count int) []string {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	ids := make([]string, count)
+	for i := range ids {
+		tl.next++
+		ids[i] = fmt.Sprintf("%d", tl.next)
+	}
+	return ids
+}
+
+// AddReserved appends already-constructed items (with pre-reserved IDs) and
+// fires the change callback. It is the projection half of CommitTaskCreation.
+func (tl *TodoList) AddReserved(items []*TodoItem) {
+	if len(items) == 0 {
+		return
+	}
+	tl.mu.Lock()
+	tl.items = append(tl.items, items...)
+	onChange := tl.onChange
+	tl.mu.Unlock()
+
+	if onChange != nil {
+		onChange()
+	}
 }
 
 func (tl *TodoList) DeleteIDs(ids ...string) {

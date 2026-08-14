@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -198,5 +199,186 @@ func TestCoordinatorSharedKnowledgeDoesNotWriteLegacyJSONL(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workspace, logsDir, "reflexion_candidates.jsonl")); !os.IsNotExist(err) {
 		t.Fatalf("legacy candidate JSONL was written: %v", err)
+	}
+}
+
+func TestSharedMemory_RejectedRunWithoutPriorCandidates_RejectsLateProposalOnFreshServiceAndReopenedRepo(t *testing.T) {
+	workspace := t.TempDir()
+	dbPath := filepath.Join(workspace, "context.sqlite")
+	repo1, err := contextstore.OpenSQLite(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	scope := contextstore.Scope{ProjectID: "project", TeamID: "team"}
+	runID := "run-failed-no-candidates"
+
+	// 1. Reject a run that has 0 prior shared candidates using an ephemeral/first service
+	svc1 := NewSharedMemoryService(repo1)
+	if _, err := svc1.RejectRun(context.Background(), SharedMemoryRejection{
+		Scope:  scope,
+		RunID:  runID,
+		Reason: "task failed with no preliminary candidates",
+	}); err != nil {
+		t.Fatalf("RejectRun failed: %v", err)
+	}
+
+	// Close repo1 to simulate process exit/restart
+	if err := repo1.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Reopen SQLite repo in a fresh process/instance
+	repo2, err := contextstore.OpenSQLite(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo2.Close()
+
+	// 3. Propose a late shared candidate for the rejected run using a brand new SharedMemoryService
+	svc2 := NewSharedMemoryService(repo2)
+	proposed, err := svc2.Propose(context.Background(), SharedMemoryProposal{
+		Scope:    scope,
+		Content:  "late shared candidate lesson",
+		Section:  ltmSectionPatterns,
+		Category: "pattern",
+		Source:   "memory_save",
+		RunID:    runID,
+	})
+	if err != nil {
+		t.Fatalf("Propose failed: %v", err)
+	}
+	if proposed.Lifecycle != contextstore.LifecycleRejected {
+		t.Fatalf("proposed lifecycle = %q, want %q", proposed.Lifecycle, contextstore.LifecycleRejected)
+	}
+
+	// 4. Assert that no candidate for this run exists with LifecycleCandidate
+	items, err := repo2.Query(context.Background(), contextstore.RepositoryQuery{
+		Scope:             scope,
+		Visibility:        contextstore.VisibilitySubtree,
+		IncludeCandidates: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.Metadata["run_id"] == runID && it.Lifecycle == contextstore.LifecycleCandidate {
+			t.Fatalf("found undecided candidate %q for rejected run %q", it.ID, runID)
+		}
+	}
+}
+
+func TestSharedMemory_RejectionIsScopeBound_DoesNotAffectOtherProjectOrTeam(t *testing.T) {
+	workspace := t.TempDir()
+	dbPath := filepath.Join(workspace, "context.sqlite")
+	repo1, err := contextstore.OpenSQLite(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	scopeA := contextstore.Scope{ProjectID: "project-A", TeamID: "team-A"}
+	scopeB := contextstore.Scope{ProjectID: "project-B", TeamID: "team-B"}
+	runID := "shared-run-isolated"
+
+	// 1. Reject runID under scopeA with zero preliminary candidates
+	svc1 := NewSharedMemoryService(repo1)
+	if _, err := svc1.RejectRun(context.Background(), SharedMemoryRejection{
+		Scope:  scopeA,
+		RunID:  runID,
+		Reason: "failed on team A",
+	}); err != nil {
+		t.Fatalf("RejectRun on scopeA: %v", err)
+	}
+
+	// Reopen database to verify durability across restart
+	if err := repo1.Close(); err != nil {
+		t.Fatal(err)
+	}
+	repo2, err := contextstore.OpenSQLite(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo2.Close()
+
+	svc2 := NewSharedMemoryService(repo2)
+
+	// 2. Propose a candidate with same runID for scopeB -> must remain candidate (not rejected)
+	proposedB, err := svc2.Propose(context.Background(), SharedMemoryProposal{
+		Scope:    scopeB,
+		Content:  "team B pattern",
+		Section:  ltmSectionPatterns,
+		Category: "pattern",
+		Source:   "memory_save",
+		RunID:    runID,
+	})
+	if err != nil {
+		t.Fatalf("Propose on scopeB failed: %v", err)
+	}
+	if proposedB.Lifecycle != contextstore.LifecycleCandidate {
+		t.Fatalf("scopeB candidate lifecycle = %q, want candidate (scope isolation violated)", proposedB.Lifecycle)
+	}
+
+	// 3. Propose a candidate with same runID for scopeA -> must be rejected
+	proposedA, err := svc2.Propose(context.Background(), SharedMemoryProposal{
+		Scope:    scopeA,
+		Content:  "team A pattern",
+		Section:  ltmSectionPatterns,
+		Category: "pattern",
+		Source:   "memory_save",
+		RunID:    runID,
+	})
+	if err != nil {
+		t.Fatalf("Propose on scopeA failed: %v", err)
+	}
+	if proposedA.Lifecycle != contextstore.LifecycleRejected {
+		t.Fatalf("scopeA candidate lifecycle = %q, want rejected", proposedA.Lifecycle)
+	}
+}
+
+type failingAppendRepo struct {
+	contextstore.Repository
+	failAppend bool
+}
+
+func (f *failingAppendRepo) Append(ctx context.Context, items ...contextstore.ContextItem) error {
+	if f.failAppend {
+		return errors.New("simulated append failure")
+	}
+	return f.Repository.Append(ctx, items...)
+}
+
+func TestSharedMemory_RejectRun_FailClosedOnAppendError(t *testing.T) {
+	repo := sharedMemoryTestRepo(t)
+	failing := &failingAppendRepo{Repository: repo, failAppend: true}
+	svc := NewSharedMemoryService(failing)
+
+	scope := contextstore.Scope{ProjectID: "project", TeamID: "team"}
+	runID := "run-append-fail"
+
+	// 1. RejectRun must fail closed when durable append fails
+	_, err := svc.RejectRun(context.Background(), SharedMemoryRejection{
+		Scope:  scope,
+		RunID:  runID,
+		Reason: "test failure",
+	})
+	if err == nil {
+		t.Fatal("expected RejectRun to return error when Append fails, got nil")
+	}
+
+	// 2. Clear failure: proposing should not be prematurely blocked by un-persisted rejection
+	failing.failAppend = false
+	proposed, err := svc.Propose(context.Background(), SharedMemoryProposal{
+		Scope:    scope,
+		Content:  "candidate after failed rejection",
+		Section:  ltmSectionPatterns,
+		Category: "pattern",
+		Source:   "memory_save",
+		RunID:    runID,
+	})
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	if proposed.Lifecycle != contextstore.LifecycleCandidate {
+		t.Fatalf("candidate lifecycle = %q, want candidate when rejection failed to persist", proposed.Lifecycle)
 	}
 }
