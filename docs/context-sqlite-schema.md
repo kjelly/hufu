@@ -16,6 +16,10 @@ an existing store requires a new migration, hufu creates a timestamped
 | --- | --- | --- |
 | 1 | `initial_context_store` | Creates canonical records, edges, events, and the FTS5 projection. |
 | 2 | `context_events_type_index` | Adds an event-type index for revision and audit queries. |
+| 3 | `branch_id_lifecycle_schema` | Adds branch scope and explicit candidate/confirmed/rejected lifecycle state. |
+| 4 | `outcome_driven_experience` | Adds experience aggregates, idempotent observations, and versioned learning policy snapshots. |
+| 5 | `memory_consolidation_proposals` | Adds reviewable canonical-memory consolidation proposals. |
+| 6 | `ltm_promotion` | Adds review-gated LTM promotion proposals, immutable source snapshots, and the lifecycle-event outbox. |
 
 ## Tables
 
@@ -56,6 +60,10 @@ FTS5 lexical projection with unindexed canonical `id` plus searchable `content`,
 `kind`, and `tags`. Normal appends and expiry deletion update it transactionally.
 `Repository.RebuildLexical` and `hufu context rebuild` recreate it from
 `context_items` if repair is required; rebuilding does not modify canonical rows.
+
+### Promotion tables
+
+`promotion_proposals` stores the scoped draft, target-relative path, target base hash, metrics snapshot, and review status. `promotion_sources` preserves each source context ID, content hash, and aggregate revision without modifying or superseding the source. `promotion_event_outbox` transactionally records content-free lifecycle events; promotion commands deliver pending rows to the hash-chained event store and then mark them delivered. Proposed or rejected drafts are not runtime context inputs.
 
 ## Indexes
 

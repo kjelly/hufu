@@ -394,6 +394,10 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 	if err != nil {
 		return nil, fmt.Errorf("failed to read agent file %s: %w", path, err)
 	}
+	return parseAgentContent(raw, path, vars)
+}
+
+func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.AgentDef, error) {
 	text := string(raw)
 
 	templated, err := applyTemplate(text, filepath.Base(path), vars)
@@ -485,6 +489,55 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 		return nil, fmt.Errorf("agent %s: %w", def.Name, err)
 	}
 	return def, nil
+}
+
+// ResolveTeamTemplateVars parses team.yaml/team.yml in teamDir and builds the effective
+// template variable map combining team config vars, CLI vars, and built-in TEAM_NAME.
+func ResolveTeamTemplateVars(teamDir string, cliVars map[string]string) (map[string]string, error) {
+	absDir, err := filepath.Abs(teamDir)
+	if err != nil {
+		return nil, fmt.Errorf("invalid team directory: %w", err)
+	}
+	cfg, err := parseTeamYML(absDir, cliVars)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Name == "" {
+		cfg.Name = filepath.Base(absDir)
+	}
+	templateVars := make(map[string]string)
+	for k, v := range cfg.Vars {
+		templateVars[k] = fmt.Sprintf("%v", v)
+	}
+	for k, v := range cliVars {
+		templateVars[k] = v
+	}
+	if _, ok := templateVars["TEAM_NAME"]; !ok && cfg.Name != "" {
+		templateVars["TEAM_NAME"] = cfg.Name
+	}
+	return templateVars, nil
+}
+
+// ValidateAgentFile parses an agent Markdown file through the runtime parser.
+// Promotion apply uses it before and after writes to prove frontmatter identity.
+func ValidateAgentFile(path string) (*agent.AgentDef, error) {
+	return ValidateAgentFileWithVars(path, nil)
+}
+
+// ValidateAgentFileWithVars parses an agent Markdown file through the runtime parser with effective template variables.
+func ValidateAgentFileWithVars(path string, vars map[string]string) (*agent.AgentDef, error) {
+	return parseAgentFile(path, vars)
+}
+
+// ValidateAgentContent parses complete agent Markdown without filesystem I/O.
+// The logical path is used only for diagnostics and template identity.
+func ValidateAgentContent(raw []byte, path string) (*agent.AgentDef, error) {
+	return ValidateAgentContentWithVars(raw, path, nil)
+}
+
+// ValidateAgentContentWithVars parses complete agent Markdown without filesystem I/O with effective template variables.
+func ValidateAgentContentWithVars(raw []byte, path string, vars map[string]string) (*agent.AgentDef, error) {
+	return parseAgentContent(raw, path, vars)
 }
 
 func ExtractCapabilitiesFromSystem(system string) string {

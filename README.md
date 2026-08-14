@@ -623,7 +623,19 @@ mcp-servers:
 
 Outcome-driven memory is opt-in. `observe` records attempt-scoped exposure and validated `TaskResult.memory_uses` without changing selection; `shadow` also records reinforced ranking traces; only `active` changes prompt selection. Inspect the content-free projection with `hufu context outcomes <id>`, `hufu context explain-memory <id> --project <id> --query <goal>`, `hufu context doctor --learning`, and rebuild it from the hash-chained event ledger with `hufu context rebuild --aggregates`.
 
+Confirmed persistent context with repeated verified support can be promoted through an explicit human review flow:
+
+```bash
+hufu context promotion analyze --workspace workspace --project my-project --team my-team
+hufu context promotion show promo-abc123 --workspace workspace --project my-project --team my-team --show-content
+hufu context promotion approve promo-abc123 --workspace workspace --project my-project --team my-team
+hufu context promotion apply promo-abc123 --workspace workspace --project my-project --team my-team
+```
+
+Analysis never changes team Markdown or installed skills, approval never applies a draft, and `apply` fails closed if its source evidence or target changed. Use `reject --reason ...` to close a proposal or `edit --draft-file ...` while it is still proposed. Team-policy promotion appends policy only to the team's single coordinator/orchestrator; it is not a team-wide runtime security contract. Proposed and rejected drafts are never loaded by the runtime.
+
 See the [L3/L4 outcome-driven memory implementation specification](docs/hufu-outcome-driven-memory-hf-mem4-implementation-spec.md) for contracts, rollout gates, and acceptance criteria.
+See the [LTM promotion specification](docs/hufu-ltm-promotion-spec.md) for the promotion lifecycle, safety boundaries, and acceptance matrix.
 
 ---
 

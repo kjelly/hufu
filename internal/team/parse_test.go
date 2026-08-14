@@ -1022,3 +1022,86 @@ acceptance:
 		}
 	})
 }
+
+func TestResolveTeamTemplateVars(t *testing.T) {
+	t.Run("resolves vars from team.yaml and builtins", func(t *testing.T) {
+		dir := t.TempDir()
+		yaml := `name: my-templated-team
+vars:
+  project_name: test-proj
+  env: staging
+`
+		if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(yaml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		vars, err := ResolveTeamTemplateVars(dir, map[string]string{"env": "prod", "cli_extra": "foo"})
+		if err != nil {
+			t.Fatalf("ResolveTeamTemplateVars: %v", err)
+		}
+		if vars["project_name"] != "test-proj" {
+			t.Fatalf("project_name = %q, want %q", vars["project_name"], "test-proj")
+		}
+		if vars["env"] != "prod" {
+			t.Fatalf("env = %q, want CLI override %q", vars["env"], "prod")
+		}
+		if vars["cli_extra"] != "foo" {
+			t.Fatalf("cli_extra = %q, want %q", vars["cli_extra"], "foo")
+		}
+		if vars["TEAM_NAME"] != "my-templated-team" {
+			t.Fatalf("TEAM_NAME = %q, want %q", vars["TEAM_NAME"], "my-templated-team")
+		}
+	})
+
+	t.Run("handles directory without team.yaml", func(t *testing.T) {
+		dir := t.TempDir()
+		vars, err := ResolveTeamTemplateVars(dir, map[string]string{"foo": "bar"})
+		if err != nil {
+			t.Fatalf("ResolveTeamTemplateVars: %v", err)
+		}
+		if vars["foo"] != "bar" {
+			t.Fatalf("foo = %q", vars["foo"])
+		}
+		if vars["TEAM_NAME"] != filepath.Base(dir) {
+			t.Fatalf("TEAM_NAME = %q, want %q", vars["TEAM_NAME"], filepath.Base(dir))
+		}
+	})
+}
+
+func TestValidateAgentFileWithVars(t *testing.T) {
+	dir := t.TempDir()
+	agentContent := `---
+name: templated-worker
+role: worker
+tools: ask_user
+---
+Worker for {@ .project_name @} in {@ .env @}.
+`
+	agentPath := filepath.Join(dir, "worker.md")
+	if err := os.WriteFile(agentPath, []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// When vars is provided but missing required template keys, validation returns an error
+	missingVars := map[string]string{"unrelated_var": "val"}
+	if _, err := ValidateAgentFileWithVars(agentPath, missingVars); err == nil {
+		t.Fatal("expected error with missing template vars")
+	}
+
+	// With matching vars, validation succeeds
+	vars := map[string]string{
+		"project_name": "hufu-app",
+		"env":          "production",
+	}
+	def, err := ValidateAgentFileWithVars(agentPath, vars)
+	if err != nil {
+		t.Fatalf("ValidateAgentFileWithVars: %v", err)
+	}
+	if !strings.Contains(def.System, "hufu-app") {
+		t.Fatalf("system prompt did not interpolate vars: %s", def.System)
+	}
+
+	// Test ValidateAgentContentWithVars
+	if _, err := ValidateAgentContentWithVars([]byte(agentContent), agentPath, vars); err != nil {
+		t.Fatalf("ValidateAgentContentWithVars: %v", err)
+	}
+}

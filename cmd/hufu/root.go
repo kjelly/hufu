@@ -166,6 +166,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	registerStaticFlagCompletion(contextQueryCmd, "lifecycle", []string{"candidate", "confirmed", "rejected"})
 	registerStaticFlagCompletion(contextListCmd, "tier", []string{"session", "persistent"})
 	registerStaticFlagCompletion(contextListCmd, "lifecycle", []string{"candidate", "confirmed", "rejected"})
+	registerStaticFlagCompletion(contextPromotionAnalyzeCmd, "type", []string{"skill", "team-policy", "agent-policy"})
 	_ = rootCmd.RegisterFlagCompletionFunc("profile", func(_ *cobra.Command, _ []string, prefix string) ([]string, cobra.ShellCompDirective) {
 		var names []string
 		for name := range config.LoadConfig().Profiles {

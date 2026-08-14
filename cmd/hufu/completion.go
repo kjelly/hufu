@@ -169,6 +169,54 @@ export extern "hufu" [
   -h, --help # help for hufu
   -v, --version # version for hufu
 ]
+
+export extern "hufu context promotion analyze" [
+  --workspace(-w): string
+  --project: string
+  --team: string
+  --team-search-path: string
+  --policy-version: string
+  --json
+  --type: string
+  --agent: string
+  --model: string
+  --dry-run
+]
+
+export extern "hufu context promotion list" [
+  --workspace(-w): string
+  --project: string
+  --team: string
+  --team-search-path: string
+  --policy-version: string
+  --json
+]
+
+export extern "hufu context promotion show" [
+  proposal_id: string
+  --workspace(-w): string
+  --project: string
+  --team: string
+  --team-search-path: string
+  --policy-version: string
+  --json
+  --show-content
+]
+
+export extern "hufu context promotion edit" [
+  proposal_id: string
+  --workspace(-w): string
+  --project: string
+  --team: string
+  --team-search-path: string
+  --policy-version: string
+  --json
+  --draft-file: string
+]
+
+export extern "hufu context promotion approve" [proposal_id: string --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json]
+export extern "hufu context promotion reject" [proposal_id: string --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json --reason: string]
+export extern "hufu context promotion apply" [proposal_id: string --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json]
 `
 	_, err := fmt.Fprint(w, script)
 	return err

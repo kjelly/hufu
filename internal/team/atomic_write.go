@@ -60,3 +60,42 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	_ = SyncDir(dir)
 	return nil
 }
+
+// AtomicCreateFile publishes a fully-synced new file without replacing an
+// existing path. The hard-link step is atomic and fails when target already
+// exists, which closes the check/write race for promotion-created skills.
+func AtomicCreateFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("atomic create mkdir: %w", err)
+	}
+	randBytes := make([]byte, 4)
+	_, _ = rand.Read(randBytes)
+	tmpPath := fmt.Sprintf("%s.tmp.%s", path, hex.EncodeToString(randBytes))
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return fmt.Errorf("atomic create open temp: %w", err)
+	}
+	cleanup := func() { _ = os.Remove(tmpPath) }
+	if _, err = f.Write(data); err != nil {
+		_ = f.Close()
+		cleanup()
+		return fmt.Errorf("atomic create write temp: %w", err)
+	}
+	if err = f.Sync(); err != nil {
+		_ = f.Close()
+		cleanup()
+		return fmt.Errorf("atomic create sync temp: %w", err)
+	}
+	if err = f.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("atomic create close temp: %w", err)
+	}
+	if err = os.Link(tmpPath, path); err != nil {
+		cleanup()
+		return fmt.Errorf("atomic create publish: %w", err)
+	}
+	cleanup()
+	_ = SyncDir(dir)
+	return nil
+}

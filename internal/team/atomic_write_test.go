@@ -24,6 +24,23 @@ func TestAtomicWriteFileSuccess(t *testing.T) {
 	}
 }
 
+func TestAtomicCreateFileNeverOverwrites(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "new.txt")
+	if err := AtomicCreateFile(target, []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := AtomicCreateFile(target, []byte("second"), 0o644); err == nil {
+		t.Fatal("expected atomic create to reject existing target")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "first" {
+		t.Fatalf("target overwritten: %q", got)
+	}
+}
+
 func TestLoadSessionCrashRecovery(t *testing.T) {
 	dir := t.TempDir()
 	// Create corrupt session file

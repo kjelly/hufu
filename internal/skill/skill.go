@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,28 +28,53 @@ func parseSkillFile(path string) *SkillDef {
 	if err != nil {
 		return nil
 	}
+	def, err := parseSkillBytes(raw)
+	if err != nil {
+		return nil
+	}
+	def.Path = path
+	if info, err := os.Stat(path); err == nil && def.CreatedAt.IsZero() {
+		def.CreatedAt = info.ModTime()
+	}
+	return def
+}
+
+// ValidateSkillDraft parses a complete SKILL.md without touching the filesystem.
+func ValidateSkillDraft(raw []byte) (*SkillDef, error) {
+	def, err := parseSkillBytes(raw)
+	if err != nil {
+		return nil, err
+	}
+	if def.Description == "" {
+		return nil, fmt.Errorf("skill draft is missing required description")
+	}
+	if def.Content == "" {
+		return nil, fmt.Errorf("skill draft body is empty")
+	}
+	return def, nil
+}
+
+func parseSkillBytes(raw []byte) (*SkillDef, error) {
 	text := string(raw)
 	if !strings.HasPrefix(text, "---\n") {
-		return nil
+		return nil, fmt.Errorf("skill draft must start with YAML frontmatter")
 	}
 	rest := text[4:]
 	idx := strings.Index(rest, "\n---\n")
 	if idx < 0 {
-		return nil
+		return nil, fmt.Errorf("skill draft has malformed frontmatter")
 	}
 	fm := parseSkillYAML(rest[:idx])
 	body := strings.TrimSpace(rest[idx+5:])
 
 	if fm["name"] == "" {
-		return nil
+		return nil, fmt.Errorf("skill draft is missing required name")
 	}
-
 	def := &SkillDef{
 		Name:         fm["name"],
 		Description:  fm["description"],
 		AllowedTools: fm["allowed-tools"],
 		Content:      body,
-		Path:         path,
 	}
 
 	def.Summary = buildSummary(def)
@@ -58,13 +84,7 @@ func parseSkillFile(path string) *SkillDef {
 			def.CreatedAt = t
 		}
 	}
-	if def.CreatedAt.IsZero() {
-		if info, err := os.Stat(path); err == nil {
-			def.CreatedAt = info.ModTime()
-		}
-	}
-
-	return def
+	return def, nil
 }
 
 func buildSummary(def *SkillDef) string {
