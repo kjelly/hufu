@@ -294,6 +294,44 @@ func verifyResultForTodo(c *Coordinator, todoID string) *VerificationResult {
 	return nil
 }
 
+// receiptIDsForTodo returns the execution receipt IDs bound to a todo's typed
+// result, so a failed verification can carry authoritative receipt evidence.
+func receiptIDsForTodo(c *Coordinator, todoID string) []string {
+	if c == nil || c.taskTracker == nil || todoID == "" {
+		return nil
+	}
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item != nil && item.ID == todoID && item.TypedResult != nil && len(item.TypedResult.ReceiptIDs) > 0 {
+			return append([]string(nil), item.TypedResult.ReceiptIDs...)
+		}
+	}
+	return nil
+}
+
+// artifactIDsForTodo returns the opaque artifact IDs bound to a todo's typed
+// result, so a failed verification of a produced artifact still carries the
+// authoritative artifact evidence ref. Only opaque IDs are preserved; paths
+// are never used as artifact evidence.
+func artifactIDsForTodo(c *Coordinator, todoID string) []string {
+	if c == nil || c.taskTracker == nil || todoID == "" {
+		return nil
+	}
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item != nil && item.ID == todoID && item.TypedResult != nil && len(item.TypedResult.Artifacts) > 0 {
+			ids := make([]string, 0, len(item.TypedResult.Artifacts))
+			for _, artifact := range item.TypedResult.Artifacts {
+				if strings.TrimSpace(artifact.ID) != "" {
+					ids = append(ids, artifact.ID)
+				}
+			}
+			if len(ids) > 0 {
+				return ids
+			}
+		}
+	}
+	return nil
+}
+
 // exitCodeFromVerifyResult extracts the exit code from a verification result,
 // returning -1 (unknown) when the result is nil.
 func exitCodeFromVerifyResult(vr *VerificationResult) int {

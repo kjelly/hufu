@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/memory"
 )
 
@@ -82,6 +83,7 @@ type CoordinatorContextInput struct {
 	IsContinuation   bool
 	DisableMemory    bool
 	ProjectContext   string
+	CanonicalMemory  *CanonicalContextBundle
 }
 
 type WorkerContextInput struct {
@@ -100,6 +102,16 @@ type WorkerContextInput struct {
 	MaxAuxChars       int
 	DisableMemory     bool
 	WorkerMemory      *WorkerMemoryBundle
+	CanonicalMemory   *CanonicalContextBundle
+}
+
+// CanonicalContextBundle is the compiler's authorized historical-memory
+// input. It intentionally carries canonical rows rather than Markdown or
+// vector records, preserving stable IDs and lifecycle-filtered provenance
+// through ranking, trace, and token-budget decisions.
+type CanonicalContextBundle struct {
+	SharedSession    []contextstore.ContextItem
+	SharedPersistent []contextstore.ContextItem
 }
 
 type CompiledContext struct {
@@ -110,6 +122,53 @@ type CompiledContext struct {
 	UsedTokens       int
 	OverBudget       bool
 	Fingerprint      string
+}
+
+func canonicalCompilerItems(records []contextstore.ContextItem, priority int, source string, workerSTMOnly bool) []ContextItem {
+	items := make([]ContextItem, 0, len(records))
+	for _, record := range records {
+		if record.Lifecycle != contextstore.LifecycleConfirmed || record.SupersededBy != "" || strings.TrimSpace(record.Content) == "" {
+			continue
+		}
+		if workerSTMOnly && record.Kind == contextstore.ContextProgress {
+			continue
+		}
+		provenance := make([]string, 0, len(record.Evidence)+1)
+		provenance = append(provenance, "context:"+record.ID)
+		for _, evidence := range record.Evidence {
+			if evidence.Ref != "" {
+				provenance = append(provenance, evidence.Type+":"+evidence.Ref)
+			}
+		}
+		freshness := record.UpdatedAt
+		if freshness.IsZero() {
+			freshness = record.CreatedAt
+		}
+		items = append(items, ContextItem{
+			ID:           "context:" + record.ID,
+			Kind:         string(record.Kind),
+			Content:      record.Content,
+			Source:       source,
+			Scope:        ScopeSession,
+			Priority:     priority,
+			Confidence:   record.Confidence,
+			Freshness:    freshness,
+			Provenance:   provenance,
+			DedupKey:     record.ContentHash,
+			Compressible: true,
+			Authority:    ContextAuthorityHistorical,
+			Revision:     record.ID,
+			ExpiresAt:    valueOrZero(record.ExpiresAt),
+		})
+	}
+	return items
+}
+
+func valueOrZero(value *time.Time) time.Time {
+	if value == nil {
+		return time.Time{}
+	}
+	return *value
 }
 
 func hashContentKey(text string) string {
@@ -442,7 +501,9 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 		})
 	}
 
-	if input.RawSTM != "" && !input.DisableMemory {
+	if input.CanonicalMemory != nil && !input.DisableMemory {
+		items = append(items, canonicalCompilerItems(input.CanonicalMemory.SharedSession, PriorityRecentSTM, "shared_session", false)...)
+	} else if input.RawSTM != "" && !input.DisableMemory {
 		sections := ParseSTMSections(input.RawSTM)
 		role := input.Role
 		if role == "" {
@@ -467,7 +528,9 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 		}
 	}
 
-	if input.RawLTM != "" && !input.DisableMemory {
+	if input.CanonicalMemory != nil && !input.DisableMemory {
+		items = append(items, canonicalCompilerItems(input.CanonicalMemory.SharedPersistent, PriorityRelevantLTM, "shared_persistent", false)...)
+	} else if input.RawLTM != "" && !input.DisableMemory {
 		sections := ParseSTMSections(input.RawLTM)
 		if len(sections) > 0 {
 			for i, s := range sections {
@@ -492,7 +555,7 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 		}
 	}
 
-	if input.MemoryStore != nil && input.Goal != "" && !input.DisableMemory {
+	if input.CanonicalMemory == nil && input.MemoryStore != nil && input.Goal != "" && !input.DisableMemory {
 		var compactFn memory.CompactFunc
 		if input.SidecarCompacter != nil {
 			compactFn = func(c context.Context, promptText, instruction string) (string, error) {
@@ -562,7 +625,9 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 		}
 	}
 
-	if input.RawSTM != "" && !input.DisableMemory {
+	if input.CanonicalMemory != nil && !input.DisableMemory {
+		items = append(items, canonicalCompilerItems(input.CanonicalMemory.SharedSession, PriorityRecentSTM, "shared_session", true)...)
+	} else if input.RawSTM != "" && !input.DisableMemory {
 		knowledgeSections := map[string]bool{
 			stmSectionFindings:  true,
 			stmSectionDecisions: true,
@@ -600,7 +665,9 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 		})
 	}
 
-	if input.RawLTM != "" && !input.DisableMemory {
+	if input.CanonicalMemory != nil && !input.DisableMemory {
+		items = append(items, canonicalCompilerItems(input.CanonicalMemory.SharedPersistent, PriorityRelevantLTM, "shared_persistent", false)...)
+	} else if input.RawLTM != "" && !input.DisableMemory {
 		sections := ParseSTMSections(input.RawLTM)
 		if len(sections) > 0 {
 			for i, s := range sections {
@@ -622,7 +689,7 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 		}
 	}
 
-	if input.MemoryStore != nil && input.TaskGoal != "" && !input.DisableMemory {
+	if input.CanonicalMemory == nil && input.MemoryStore != nil && input.TaskGoal != "" && !input.DisableMemory {
 		memCtx, err := memory.AutoQuery(ctx, input.MemoryStore, input.TaskGoal, nil)
 		if err == nil && memCtx != "" {
 			items = append(items, ContextItem{

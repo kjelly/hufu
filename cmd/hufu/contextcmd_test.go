@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/memory"
 )
 
 func TestContextRepairCommandNoPendingFile(t *testing.T) {
@@ -132,6 +133,18 @@ func TestContextRebuildRestoresFTSIndex(t *testing.T) {
 	}
 }
 
+func TestContextRebuildVectorRequiresProjectScope(t *testing.T) {
+	contextProject = ""
+	contextTeam = ""
+	contextRebuildVector = false
+	workspace := t.TempDir()
+	root := newRootCommand()
+	root.SetArgs([]string{"context", "rebuild", "--workspace", workspace, "--vector"})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--project is required") {
+		t.Fatalf("vector rebuild error = %v, want project scope validation", err)
+	}
+}
+
 func TestContextQueryDefaultsToSharedMetadataOnly(t *testing.T) {
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
@@ -200,6 +213,91 @@ func TestContextListFiltersWorkerMemoryAndUsesStableRedactedJSON(t *testing.T) {
 	}
 }
 
+func TestContextListShowsSharedLifecycleAndProjectionEligibility(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Append(t.Context(), contextstore.ContextItem{ID: "shared-candidate", Kind: contextstore.ContextDecision, Content: "shared candidate content", Scope: contextstore.Scope{ProjectID: "p", TeamID: "team"}, Lifecycle: contextstore.LifecycleCandidate, Metadata: map[string]string{"visibility": "shared", "memory_lifetime": "persistent"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	contextProject, contextTeam, contextAgent, contextTier, contextLifecycle, contextAllAgents = "", "", "", "", "", false
+	root := newRootCommand()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"context", "list", "--workspace", workspace, "--project", "p", "--team", "team", "--lifecycle", "candidate", "--json"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var got contextReadOutput
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Results) != 1 || got.Results[0].ID != "shared-candidate" || got.Results[0].Lifetime != "persistent" || got.Results[0].ProjectionEligible {
+		t.Fatalf("shared lifecycle list = %#v", got)
+	}
+}
+
+func TestContextLifecycleCommandsShowCandidatesAndHistory(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := contextstore.Scope{ProjectID: "p", TeamID: "team"}
+	if err := repo.Append(t.Context(),
+		contextstore.ContextItem{ID: "old", Kind: contextstore.ContextDecision, Content: "old secret-token=do-not-show", Scope: scope},
+		contextstore.ContextItem{ID: "new", Kind: contextstore.ContextDecision, Content: "new decision", Scope: scope},
+		contextstore.ContextItem{ID: "candidate", Kind: contextstore.ContextPattern, Content: "reviewable candidate", Scope: scope, Lifecycle: contextstore.LifecycleCandidate},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkSuperseded(t.Context(), []string{"old"}, "new"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	contextShowContent = false
+	root := newRootCommand()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"context", "show", "--workspace", workspace, "--project", "p", "--team", "team", "old"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "secret-token") || !strings.Contains(out.String(), "old") {
+		t.Fatalf("show output=%q", out.String())
+	}
+
+	root = newRootCommand()
+	out.Reset()
+	root.SetOut(&out)
+	root.SetArgs([]string{"context", "candidates", "--workspace", workspace, "--project", "p", "--team", "team"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "candidate") || strings.Contains(out.String(), "old\t") {
+		t.Fatalf("candidates output=%q", out.String())
+	}
+
+	root = newRootCommand()
+	out.Reset()
+	root.SetOut(&out)
+	root.SetArgs([]string{"context", "history", "--workspace", workspace, "--project", "p", "--team", "team", "old"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "old") || !strings.Contains(out.String(), "new") {
+		t.Fatalf("history output=%q", out.String())
+	}
+}
+
 func TestContextQuerySessionTierUsesExplicitWorkerMaintenanceScope(t *testing.T) {
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
@@ -238,9 +336,77 @@ func TestContextHelpDocumentsReadOnlyMemoryCommands(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, command := range []string{"list", "explain", "query"} {
+	for _, command := range []string{"list", "show", "candidates", "history", "consolidate", "explain", "query", "confirm", "reject", "supersede", "migrate-memory"} {
 		if !strings.Contains(out.String(), command) {
 			t.Fatalf("context help missing %q: %s", command, out.String())
 		}
+	}
+}
+
+func TestLegacyMemoryItemPreservesLifecycleAndProvenance(t *testing.T) {
+	item := legacyMemoryItem(memory.MemoryRecord{
+		ID: "legacy-1", Content: "legacy architecture fact", Category: "architecture", Status: memory.StatusCandidate,
+		SourceTaskID: "task-1", FilePaths: []string{"internal/app.go"}, Confidence: .7, Supersedes: []string{"legacy-0"},
+	}, contextstore.Scope{ProjectID: "p", TeamID: "team"})
+	if item.Kind != contextstore.ContextArchitecture || item.Lifecycle != contextstore.LifecycleCandidate || item.Metadata["legacy_memory_id"] != "legacy-1" {
+		t.Fatalf("legacy conversion = %#v", item)
+	}
+	if len(item.Evidence) != 2 || item.Evidence[0].Ref != "task-1" || item.Evidence[1].Ref != "internal/app.go" {
+		t.Fatalf("legacy evidence = %#v", item.Evidence)
+	}
+	if item.Metadata["supersedes_ids"] != legacyMemoryContextID("legacy-0") {
+		t.Fatalf("legacy supersession metadata = %#v", item.Metadata)
+	}
+}
+
+func TestContextConfirmAndRejectCandidateLifecycle(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Append(t.Context(),
+		contextstore.ContextItem{ID: "confirm-me", Kind: contextstore.ContextPattern, Content: "approved candidate", Scope: contextstore.Scope{ProjectID: "p", TeamID: "team"}, Lifecycle: contextstore.LifecycleCandidate},
+		contextstore.ContextItem{ID: "reject-me", Kind: contextstore.ContextPattern, Content: "rejected candidate", Scope: contextstore.Scope{ProjectID: "p", TeamID: "team"}, Lifecycle: contextstore.LifecycleCandidate},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCommand()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"context", "confirm", "--workspace", workspace, "--project", "p", "--team", "team", "--evidence", "manifest-1", "confirm-me"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "1 item(s) confirmed") {
+		t.Fatalf("confirm output = %q", out.String())
+	}
+	root = newRootCommand()
+	out.Reset()
+	root.SetOut(&out)
+	root.SetArgs([]string{"context", "reject", "--workspace", workspace, "--project", "p", "--team", "team", "--reason", "operator review", "reject-me"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	repo, err = contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	confirmed, err := repo.Get(t.Context(), "confirm-me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := repo.Get(t.Context(), "reject-me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmed.Lifecycle != contextstore.LifecycleConfirmed || rejected.Lifecycle != contextstore.LifecycleRejected || rejected.Metadata["rejection_reason"] != "operator review" {
+		t.Fatalf("unexpected lifecycle state confirmed=%#v rejected=%#v", confirmed, rejected)
 	}
 }

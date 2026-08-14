@@ -21,6 +21,7 @@ import (
 	"github.com/kjelly/hufu/internal/audit"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
+	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -270,16 +271,31 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		modelSpec = globalRegistry.GetSpec(c.resolveAgentModel(agentDef, task.Model)).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef))
 	}
 
+	rawSTM, rawLTM := "", ""
+	memoryStore := (*memory.MemoryStore)(nil)
+	var canonicalMemory *CanonicalContextBundle
+	canonical := false
+	if !c.ExecutionProfile().DisableHistoricalMemory {
+		bundle, foundCanonical, memoryErr := c.canonicalContextBundle(parentCtx)
+		if memoryErr != nil {
+			return "", fmt.Errorf("worker canonical memory preflight failed: %w", memoryErr)
+		}
+		canonical, canonicalMemory = foundCanonical, bundle
+	}
+	if !c.ExecutionProfile().DisableHistoricalMemory && !canonical {
+		rawSTM, rawLTM, memoryStore = LoadSTM(c.session.Workspace), LoadLTM(c.session.Workspace, c.session.Config.Name), c.memoryStore
+	}
 	workerInput := WorkerContextInput{
 		TaskGoal:          prompt,
 		TaskDef:           task,
 		AgentDef:          agentDef,
-		RawSTM:            LoadSTM(c.session.Workspace),
-		RawLTM:            LoadLTM(c.session.Workspace, c.session.Config.Name),
+		RawSTM:            rawSTM,
+		RawLTM:            rawLTM,
 		ContextFiles:      contextFiles,
 		ConcurrentTasks:   c.buildConcurrentTasksContext(todoID),
 		DependencyResults: depResults,
-		MemoryStore:       c.memoryStore,
+		MemoryStore:       memoryStore,
+		CanonicalMemory:   canonicalMemory,
 		ModelContext:      modelSpec,
 		MaxAuxChars:       maxWorkerAuxContextChars,
 		DisableMemory:     c.ExecutionProfile().DisableHistoricalMemory,
@@ -971,6 +987,9 @@ retryLoop:
 				if vr := verifyResultForTodo(c, todoID); vr != nil && isVerifySuccess(vr) {
 					verified = true
 				}
+				c.reduceTaskResultToSharedMemory(parentCtx, TaskResultMemoryInput{
+					TodoID: todoID, Agent: agentDef, Result: typedRes, Output: coordinatorOutput, Verified: verified, Attempt: attempt,
+				})
 				c.ingestWorkerSessionMemory(parentCtx, agentDef, todoID, typedRes, coordinatorOutput, verified, attempt)
 				if appliedHint != "" {
 					c.persistReflexionLessonAsync(agentName, todoID, task.Goal, appliedHintTrigger, appliedHint, true, false)
@@ -1197,7 +1216,23 @@ retryLoop:
 	// No PersistFailure here: every failure path inside the loop has already
 	// persisted this error; persisting again wrote duplicate journal/status
 	// records for the same failure.
-	c.autoWriteSTMASync(agentName, taskDesc, "", lastErr.Error(), false)
+	if c.contextRepo != nil {
+		// Canonical mode: a failed verification/task is reduced to a typed
+		// ContextError item (with task + verification/receipt evidence), never
+		// to generic ContextProgress. autoWriteSTMASync is kept for the
+		// non-canonical Markdown path.
+		c.recordVerificationFailure(parentCtx, VerificationFailureInput{
+			TodoID:      todoID,
+			Agent:       agentDef,
+			Attempt:     attemptsMade,
+			Err:         lastErr,
+			Verify:      verifyResultForTodo(c, todoID),
+			ReceiptIDs:  receiptIDsForTodo(c, todoID),
+			ArtifactIDs: artifactIDsForTodo(c, todoID),
+		})
+	} else {
+		c.autoWriteSTMASync(agentName, taskDesc, "", lastErr.Error(), false)
+	}
 	if maxRetries > 1 {
 		c.persistReflexionLessonAsync(agentName, todoID, task.Goal, lastErr.Error(), appliedHint, false, isUnfixableVerifyFailure(lastErr))
 	}
@@ -2537,9 +2572,16 @@ func (c *Coordinator) sharedKnowledgeInstructions(granted map[string]bool) strin
 	stmPath := STMPath(c.session.Workspace)
 	b := &strings.Builder{}
 	fmt.Fprintf(b, "\n- Key knowledge from previous agents is provided below. You do NOT need to read `%s` at the start. Only read it later if you need to check for *new* updates from concurrent agents.\n", stmPath)
+	if c.contextRepo != nil {
+		// Canonical mode: shared memory is captured from structured results.
+		// Never instruct workers to edit the projection file directly; a direct
+		// stm.md write would be discarded on the next projection rebuild.
+		b.WriteString("- Return important findings, decisions, questions, artifacts, and verification in your structured result. The runtime captures shared memory automatically.\n")
+		return b.String()
+	}
 	switch {
 	case granted["stm_write"]:
-		b.WriteString("- When you discover something important (API shape, file location, decision, error), record it with `stm_write` immediately — do not wait until the end.\n")
+		b.WriteString("- Return important findings, decisions, questions, artifacts, and verification in your structured result. The runtime captures shared memory automatically; `stm_write` is a deprecated typed compatibility tool.\n")
 	case granted["write"] || granted["edit"]:
 		fmt.Fprintf(b, "- When you discover something important (API shape, file location, decision, error), append it to `%s` immediately — do not wait until the end.\n", stmPath)
 	default:

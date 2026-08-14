@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -15,8 +15,45 @@ func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 	return c.ContextCompiler().BuildMemorySuffix(agentRole)
 }
 
+// ArchiveSessionSummary stores the latest substantial assistant summary as a
+// canonical, session-scoped context item. It replaces the old MemoryStore
+// archive path whenever the coordinator owns SQLite; callers can retain their
+// legacy fallback only for workspaces that have not yet initialized context.
+func (c *Coordinator) ArchiveSessionSummary(ctx context.Context, entries []memory.SessionSummaryEntry) (bool, error) {
+	if c == nil || c.contextRepo == nil || c.session == nil {
+		return false, nil
+	}
+	var content, timestamp string
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Role == "assistant" {
+			content, timestamp = strings.TrimSpace(entries[i].Content), entries[i].Timestamp
+			break
+		}
+	}
+	if len([]rune(content)) < 50 {
+		return true, nil
+	}
+	content = utils.TruncateRunes(content, 2000)
+	item := contextstore.ContextItem{
+		Kind: contextstore.ContextSummary, Content: content, Scope: c.contextScope(),
+		Authority: contextstore.AuthoritySystem, TrustLevel: contextstore.TrustInternal,
+		Priority: contextstore.PriorityLow, Confidence: 1.0, Source: contextstore.SourceRef{Type: "session_archive", Ref: timestamp},
+		Metadata: map[string]string{"visibility": "shared", "memory_lifetime": "session", "archive_timestamp": timestamp},
+	}
+	if err := c.contextRepo.Append(ctx, item); err != nil {
+		return true, err
+	}
+	return true, c.rebuildLegacyContextProjections(ctx)
+}
+
 func (c *Coordinator) buildMemorySuffixImpl(agentRole string) string {
 	if c.ExecutionProfile().DisableHistoricalMemory {
+		return ""
+	}
+	// Canonical prompt assembly supplies SQLite-backed STM/LTM separately.
+	// Returning a suffix here would duplicate it and reintroduce a Markdown
+	// read path into model-visible context.
+	if c.contextRepo != nil {
 		return ""
 	}
 	var b strings.Builder
@@ -209,10 +246,6 @@ func (c *Coordinator) updateSTM(fn func(string) string) error {
 		return next
 	})
 	if err == nil {
-		c.lastStmWriteMu.Lock()
-		c.lastStmWrite = time.Now()
-		c.lastStmWriteMu.Unlock()
-
 		c.emitEvent("stm_updated", "coordinator", "", map[string]interface{}{
 			"content": next,
 		})
@@ -323,55 +356,38 @@ func (c *Coordinator) AutoExtractLTM(ctx context.Context) {
 	}
 }
 
-// autoExtractCanonicalLTM derives LTM entries from canonical STM kinds and
-// regenerates Markdown through appendCanonicalContext; it never reads or
-// mutates legacy Markdown as a source of truth.
+// autoExtractCanonicalLTM derives evidence-gated persistent candidates from
+// semantic shared working-memory kinds. Generic progress is operational state,
+// not reusable knowledge, and must never be promoted merely because a run
+// later succeeds.
 func (c *Coordinator) autoExtractCanonicalLTM(ctx context.Context) {
 	scope := c.contextScope()
-	items, err := c.contextRepo.QuerySharedProjection(ctx, scope)
+	// Persistent candidates must be derived from the current run's typed,
+	// shared session state. Querying the combined projection would recursively
+	// re-extract old LTM and make stale cross-session prose appear newly proven.
+	items, err := c.contextRepo.QuerySharedSessionProjection(ctx, scope)
 	if err != nil {
 		log.Printf("warning: canonical LTM extraction query failed: %v", err)
 		return
 	}
-	// One-way compatibility import for workspaces created before unified
-	// ingestion. Once imported, all subsequent extraction reads canonical rows.
-	if len(items) == 0 {
-		for _, section := range ParseSTMSections(LoadSTM(c.session.Workspace)) {
-			kind := contextstore.ContextPattern
-			var ltmSection string
-			switch section.Title {
-			case stmSectionDecisions:
-				ltmSection = ltmSectionArchitecture
-			case stmSectionErrors:
-				ltmSection = ltmSectionIssues
-			case stmSectionFindings:
-				ltmSection = ltmSectionPatterns
-			default:
-				continue
-			}
-			for _, entry := range section.Entries {
-				if err := c.appendCanonicalContext(ctx, kind, stripSTMListItem(entry), "legacy-stm-import", map[string]string{"legacy_section": ltmSection}); err != nil {
-					log.Printf("warning: canonical STM import failed: %v", err)
-				}
-			}
-		}
-		items, err = c.contextRepo.QuerySharedProjection(ctx, scope)
-		if err != nil {
-			return
-		}
-	}
 	for _, item := range items {
+		if item.Lifecycle != contextstore.LifecycleConfirmed {
+			continue
+		}
 		var section string
 		switch item.Kind {
 		case contextstore.ContextDecision:
 			section = ltmSectionArchitecture
 		case contextstore.ContextError:
+			if item.Metadata["resolved"] != "true" || item.Metadata["verified"] != "true" {
+				continue
+			}
 			section = ltmSectionIssues
-		case contextstore.ContextProgress:
+		case contextstore.ContextObservation, contextstore.ContextConvention, contextstore.ContextArchitecture, contextstore.ContextPattern:
 			section = ltmSectionPatterns
 		default:
 			continue
 		}
-		c.persistKnowledgeCandidate(stripSTMListItem(item.Content), section, "AutoExtractLTM")
+		c.persistKnowledgeCandidateWithEvidence(stripSTMListItem(item.Content), section, "AutoExtractLTM", []contextstore.EvidenceRef{{ItemID: item.ID, Type: "context_item", Ref: item.ID}})
 	}
 }

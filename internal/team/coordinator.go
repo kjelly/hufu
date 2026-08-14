@@ -350,13 +350,11 @@ type Coordinator struct {
 	// MaxConcurrent. A local model dispatched by many workers is not the same
 	// as many workers able to usefully run concurrent inference (spec.md item
 	// 5), so this gates in addition to, not instead of, maxConcurrent above.
-	providerSemMu  sync.Mutex
-	providerSem    map[string]chan struct{}
-	sessionTime    time.Time
-	lastStmWrite   time.Time // tracks when stm_write was last called for finish enforcement
-	lastStmWriteMu sync.Mutex
-	stmWriteMu     sync.Mutex // serializes Read-Modify-Write STM operations to prevent lost-updates
-	ltmWriteMu     sync.Mutex // Protect LTM file reads and writes
+	providerSemMu sync.Mutex
+	providerSem   map[string]chan struct{}
+	sessionTime   time.Time
+	stmWriteMu    sync.Mutex // serializes Read-Modify-Write STM operations to prevent lost-updates
+	ltmWriteMu    sync.Mutex // Protect LTM file reads and writes
 
 	// Skill pattern detection
 	skillDetector         *skill.SkillPatternDetector
@@ -952,14 +950,15 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	if redactErr := RedactWorkspaceManagedRecords(session.Workspace); redactErr != nil {
 		log.Printf("warning: could not redact managed workspace records: %v", redactErr)
 	}
-	// Phase 1 is deliberately shadow-write only. A failure to open the new
-	// store is observable but must not prevent a legacy team from running.
-	if repo, openErr := contextstore.OpenSQLite(filepath.Join(session.Workspace, "context.sqlite")); openErr != nil {
-		log.Printf("warning: context shadow store unavailable: %v", openErr)
-	} else {
-		c.contextRepo = repo
-		c.workerMemorySvc = NewWorkerMemoryService(repo, nil)
+	// Canonical context is now required for every coordinator. Refusing to run
+	// without it prevents a fallback to legacy Markdown/JSONL truth after the
+	// cutover; callers can repair workspace permissions and retry safely.
+	repo, openErr := contextstore.OpenSQLite(filepath.Join(session.Workspace, "context.sqlite"))
+	if openErr != nil {
+		return nil, fmt.Errorf("open canonical context store: %w", openErr)
 	}
+	c.contextRepo = repo
+	c.workerMemorySvc = NewWorkerMemoryService(repo, nil)
 	c.workflowEngine = &defaultWorkflowEngine{c: c}
 
 	// Enable sidecar for skill pattern detection
@@ -1004,7 +1003,10 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		&reconcileTaskTool{coordinator: c},
 	)
 
-	if c.memoryStore != nil {
+	// MemoryStore is a legacy migration adapter only. The model-facing memory
+	// tools are backed by context.sqlite whenever it is available, so enabling
+	// canonical memory must not depend on creating a second record store.
+	if c.contextRepo != nil || c.memoryStore != nil {
 		c.coreTools = append(c.coreTools,
 			&memorySaveLTMWrapper{original: memory.NewMemorySaveTool(c.memoryStore), coordinator: c},
 			&canonicalMemoryQueryTool{coordinator: c},

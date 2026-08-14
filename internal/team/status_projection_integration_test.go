@@ -11,6 +11,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 type statusProjectionSource struct {
@@ -189,6 +190,124 @@ func newDirectTerminationCoordinator(t *testing.T, worker fantasy.Agent) *Coordi
 	}
 }
 
+func TestRunDirectAgentFinalizesRunResult(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
+	result, err := c.RunDirectAgent(context.Background(), "worker", "perform direct work")
+	if err != nil {
+		t.Fatalf("RunDirectAgent: %v", err)
+	}
+	// A successful direct run is a complete run boundary: it must finalize a
+	// run result through the completion gate, not leave the run open.
+	if last := c.LastRunResult(); last == nil {
+		t.Fatal("direct run did not finalize a run result")
+	}
+	// With no acceptance contract configured, the completion gate marks the
+	// run unverified (not completed). The direct run must surface that as an
+	// error so callers never report an unverified run as success.
+	if result == nil || result.Error == nil {
+		t.Fatalf("direct result = %#v, want unverified-run error (no acceptance gate)", result)
+	}
+	if !strings.Contains(result.Error.Error(), "not accepted") {
+		t.Fatalf("direct result error = %v, want not-accepted message", result.Error)
+	}
+	if last := c.LastRunResult(); last == nil || last.Outcome != RunOutcomeUnverified || last.GoalSatisfied {
+		t.Fatalf("direct run result = %#v, want unverified non-satisfied outcome", last)
+	}
+}
+
+// TestRunDirectAgentPersistsExactlyOneReliabilityObservation guards against a
+// regression where a direct run registered beginExecutionRun's terminal
+// teardown twice, appending the same run's production observation twice to the
+// durable reliability history. One direct run must append exactly one
+// observation and emit exactly one terminal run event.
+func TestRunDirectAgentPersistsExactlyOneReliabilityObservation(t *testing.T) {
+	workspace := t.TempDir()
+	obsCount := func() int {
+		report, err := loadReliabilityEvalReport(workspace)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return 0
+			}
+			t.Fatalf("load reliability report: %v", err)
+		}
+		return len(report.ProductionObservations)
+	}
+	if got := obsCount(); got != 0 {
+		t.Fatalf("initial observation count = %d, want 0", got)
+	}
+	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
+	c.session.Config.Reliability = agent.ReliabilityConfig{Rollout: string(RolloutShadow)}
+	// RunDirectAgent uses the workspace from session.Workspace; the temp
+	// workspace must match the one newDirectTerminationCoordinator allocates.
+	c.session.Workspace = workspace
+	if _, err := c.RunDirectAgent(context.Background(), "worker", "perform direct work"); err != nil {
+		t.Fatalf("RunDirectAgent: %v", err)
+	}
+	if got := obsCount(); got != 1 {
+		t.Fatalf("production observation count after one direct run = %d, want exactly 1 (no duplicate finalization)", got)
+	}
+}
+
+func TestFinalizeDirectRunRejectsCandidatesOnUnverifiedRun(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	c := &Coordinator{
+		contextRepo: repo, projectDir: "project", executionRunID: "run-direct",
+		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}},
+		taskTracker: NewTaskTracker(),
+	}
+	svc := NewSharedMemoryService(repo)
+	if _, err := svc.Propose(context.Background(), SharedMemoryProposal{
+		Scope: c.contextScope(), Content: "direct agent lesson", Section: ltmSectionPatterns,
+		Source: "memory_save", RunID: "run-direct",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A successful direct run with no acceptance gate is unverified; its
+	// run-bound candidates must be rejected, not left pending forever.
+	c.finalizeDirectRun(context.Background(), "task-1", true, "done")
+	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "project", TeamID: "team"}, Visibility: contextstore.VisibilityExact, IncludeCandidates: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Lifecycle != contextstore.LifecycleRejected {
+		t.Fatalf("unverified direct-run candidate lifecycle = %#v, want rejected", items)
+	}
+}
+
+func TestFinalizeDirectRunRejectsCandidatesOnFailure(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	c := &Coordinator{
+		contextRepo: repo, projectDir: "project", executionRunID: "run-direct",
+		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}},
+		taskTracker: NewTaskTracker(),
+	}
+	svc := NewSharedMemoryService(repo)
+	if _, err := svc.Propose(context.Background(), SharedMemoryProposal{
+		Scope: c.contextScope(), Content: "failed direct agent lesson", Section: ltmSectionPatterns,
+		Source: "memory_save", RunID: "run-direct",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c.finalizeDirectRun(context.Background(), "task-1", false, "")
+	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "project", TeamID: "team"}, Visibility: contextstore.VisibilityExact, IncludeCandidates: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Lifecycle != contextstore.LifecycleRejected {
+		t.Fatalf("failed direct-run candidate lifecycle = %#v, want rejected", items)
+	}
+}
+
 func TestRunDirectAgentTerminationReconcilesCanonicalTodoAndStatus(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -280,6 +399,29 @@ func TestRunDirectAgentSurfacesNoProgressReplan(t *testing.T) {
 	}
 	if last := c.LastRunResult(); last != nil {
 		t.Fatalf("first threshold should not create terminal result, got %#v", last)
+	}
+}
+
+func TestRunDirectAgentRejectsUnacceptedRun(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
+	// A failing acceptance gate makes the completion gate mark the run
+	// partial (acceptance failed). The direct run must surface that as an
+	// error so automation never reports an unaccepted run as completed.
+	if err := c.SetAcceptance("false"); err != nil {
+		t.Fatalf("SetAcceptance: %v", err)
+	}
+	result, err := c.RunDirectAgent(context.Background(), "worker", "perform direct work")
+	if err != nil {
+		t.Fatalf("RunDirectAgent returned top-level error: %v", err)
+	}
+	if result == nil || result.Error == nil {
+		t.Fatalf("direct result = %#v, want acceptance-failed error", result)
+	}
+	if !strings.Contains(result.Error.Error(), "not accepted") {
+		t.Fatalf("direct result error = %v, want not-accepted message", result.Error)
+	}
+	if last := c.LastRunResult(); last == nil || last.Outcome != RunOutcomePartial || last.StopReason != StopReasonAcceptanceFailed {
+		t.Fatalf("direct run result = %#v, want partial acceptance-failed outcome", last)
 	}
 }
 

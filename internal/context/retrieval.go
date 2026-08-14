@@ -135,6 +135,7 @@ type RetrievalTrace struct {
 	VectorResults         []SearchResult `json:"vector_results"`
 	FusedResults          []SearchResult `json:"fused_results"`
 	Selected              []string       `json:"selected"`
+	FilePathBoosted       []string       `json:"file_path_boosted,omitempty"`
 	RetrievalInsufficient bool           `json:"retrieval_insufficient"`
 }
 
@@ -148,21 +149,23 @@ func HybridRetrieve(ctx context.Context, repo Repository, vector VectorSearcher,
 		exactTerms = append(exactTerms, group...)
 	}
 	for _, exact := range exactTerms {
-		found, err := repo.SearchExact(ctx, SearchRequest{Query: exact, Scope: req.Scope, Visibility: req.Visibility, Limit: req.Limit, IncludeCandidates: req.IncludeCandidates})
+		exactReq := req
+		exactReq.Query = exact
+		found, err := repo.SearchExact(ctx, exactReq)
 		if err != nil {
 			return nil, trace, err
 		}
-		trace.ExactResults = mergeResults(trace.ExactResults, found)
+		trace.ExactResults = mergeResults(trace.ExactResults, filterSearchResults(found, req))
 	}
 	lexical, err := repo.SearchLexical(ctx, req)
 	if err != nil {
 		return nil, trace, err
 	}
-	trace.LexicalResults = lexical
+	trace.LexicalResults = filterSearchResults(lexical, req)
 	if vector != nil {
 		vectorResults, vectorErr := vector.SearchVector(ctx, req)
 		if vectorErr == nil {
-			trace.VectorResults = vectorResults
+			trace.VectorResults = filterSearchResults(vectorResults, req)
 		}
 	}
 	fused := rrf(trace.LexicalResults, trace.VectorResults)
@@ -171,12 +174,55 @@ func HybridRetrieve(ctx context.Context, repo Repository, vector VectorSearcher,
 	// and vector retrieval can still contribute relevant context for the rest
 	// of a mixed query.
 	trace.FusedResults = mergeResults(rankForScope(trace.ExactResults, req.Scope), fused)
+	trace.FusedResults, trace.FilePathBoosted = applyFilePathBoost(trace.FusedResults, req.FilePaths)
 	if req.Limit > 0 && len(trace.FusedResults) > req.Limit {
 		trace.FusedResults = trace.FusedResults[:req.Limit]
 	}
 	trace.Selected = resultIDs(trace.FusedResults)
 	trace.RetrievalInsufficient = len(trace.FusedResults) == 0 || (len(trace.ExactResults) == 0 && !hasRelevantScore(trace.LexicalResults) && !hasRelevantScore(trace.VectorResults))
 	return trace.FusedResults, trace, nil
+}
+
+func filterSearchResults(results []SearchResult, req SearchRequest) []SearchResult {
+	if len(req.Kinds) == 0 && req.MinConfidence == nil {
+		return results
+	}
+	kinds := make(map[ContextKind]bool, len(req.Kinds))
+	for _, kind := range req.Kinds {
+		kinds[kind] = true
+	}
+	out := make([]SearchResult, 0, len(results))
+	for _, result := range results {
+		if len(kinds) > 0 && !kinds[result.Item.Kind] {
+			continue
+		}
+		if req.MinConfidence != nil && result.Item.Confidence < *req.MinConfidence {
+			continue
+		}
+		out = append(out, result)
+	}
+	return out
+}
+
+func applyFilePathBoost(results []SearchResult, paths []string) ([]SearchResult, []string) {
+	if len(paths) == 0 {
+		return results, nil
+	}
+	pathSet := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		pathSet[path] = true
+	}
+	boosted := make([]string, 0)
+	for i := range results {
+		for _, evidence := range results[i].Item.Evidence {
+			if evidence.Type == "file_path" && pathSet[evidence.Ref] {
+				results[i].Score += .15
+				boosted = append(boosted, results[i].Item.ID)
+				break
+			}
+		}
+	}
+	return rankForScope(results, Scope{}), boosted
 }
 func hasRelevantScore(results []SearchResult) bool {
 	for _, result := range results {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 // TestResultProtocolInstructionsStateTheContract covers the prompt half of the
@@ -83,6 +84,35 @@ func TestResultProtocolInstructionsStateTheContract(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSharedKnowledgeInstructionsCanonicalModeNeverOffersSTMEdit pins the
+// canonical-source boundary: when SQLite context is active, workers must never
+// be told to edit the stm.md projection file directly, even when they hold
+// write/edit grants.
+func TestSharedKnowledgeInstructionsCanonicalModeNeverOffersSTMEdit(t *testing.T) {
+	c := &Coordinator{
+		contextRepo: &contextstore.SQLiteRepository{},
+		session: &TeamSession{
+			Config:    agent.TeamConfig{Name: "team"},
+			Workspace: t.TempDir(),
+		},
+	}
+	for _, granted := range []map[string]bool{
+		{"write": true},
+		{"edit": true},
+		{"write": true, "edit": true},
+		{"stm_write": true},
+		{"view": true},
+	} {
+		got := c.sharedKnowledgeInstructions(granted)
+		if strings.Contains(got, "append it to") || strings.Contains(got, "do not wait until the end") {
+			t.Fatalf("canonical-mode instructions offered direct stm.md editing (granted=%v): %q", granted, got)
+		}
+		if !strings.Contains(got, "structured result") {
+			t.Fatalf("canonical-mode instructions did not direct workers to structured results (granted=%v): %q", granted, got)
+		}
 	}
 }
 

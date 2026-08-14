@@ -81,6 +81,32 @@ func TestVectorStoreSupportsConcurrentRebuildAndSearch(t *testing.T) {
 	}
 }
 
+func TestVectorRebuildExcludesUnconfirmedCandidates(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	scope := Scope{ProjectID: "project"}
+	if err := repo.Append(context.Background(),
+		ContextItem{ID: "confirmed", Kind: ContextPattern, Content: "confirmed vector knowledge", Scope: scope},
+		ContextItem{ID: "candidate", Kind: ContextPattern, Content: "candidate vector knowledge", Scope: scope, Lifecycle: LifecycleCandidate},
+	); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewVectorStore(filepath.Join(dir, "vectors"), "test-v1", testEmbedding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Rebuild(context.Background(), repo, scope); err != nil {
+		t.Fatal(err)
+	}
+	if count := store.collection.Count(); count != 1 {
+		t.Fatalf("vector index count = %d, want confirmed rows only", count)
+	}
+}
+
 func TestIsRetrievableHonorsRequestedVisibilityAndLifecycle(t *testing.T) {
 	now := time.Now()
 	private := ContextItem{Scope: Scope{ProjectID: "p", TeamID: "team", AgentID: "agent-a"}, Lifecycle: LifecycleCandidate}

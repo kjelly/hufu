@@ -16,6 +16,7 @@ import (
 
 	"charm.land/fantasy"
 
+	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
@@ -220,13 +221,22 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	summary := fmt.Sprintf("[summary] %d/%d tasks done, %d rounds, %s elapsed",
 		completed, completed+failed, t.coordinator.totalRounds(),
 		time.Since(t.coordinator.sessionTime).Round(time.Second))
-	_ = t.coordinator.updateSTM(func(existing string) string {
-		if existing == "" {
-			existing = fmt.Sprintf("Session started at %s.", t.coordinator.sessionTime.Format(time.RFC3339))
+	if t.coordinator.contextRepo != nil {
+		// Canonical mode: the finish summary is a typed session item, not a
+		// direct stm.md mutation. The projection builder regenerates stm.md
+		// from SQLite, so a direct write here would be silently discarded.
+		if err := t.coordinator.appendCanonicalContext(ctx, contextstore.ContextProgress, summary, "finish", map[string]string{"legacy_section": stmSectionProgress}); err != nil {
+			t.coordinator.report(t.coordinator.newEvent("error").withMessage("finish summary write failed: " + err.Error()))
 		}
-		newContent := appendSTMEntry(existing, summary, stmSectionProgress)
-		return TruncateSTM(newContent)
-	})
+	} else {
+		_ = t.coordinator.updateSTM(func(existing string) string {
+			if existing == "" {
+				existing = fmt.Sprintf("Session started at %s.", t.coordinator.sessionTime.Format(time.RFC3339))
+			}
+			newContent := appendSTMEntry(existing, summary, stmSectionProgress)
+			return TruncateSTM(newContent)
+		})
+	}
 
 	t.coordinator.AutoExtractLTM(ctx)
 

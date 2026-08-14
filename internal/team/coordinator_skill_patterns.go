@@ -1,7 +1,8 @@
 package team
 
 // Skill pattern detection: after each round, repeating tool-call sequences
-// are surfaced as skill-draft candidates and optionally auto-promoted.
+// are surfaced as skill-draft candidates. Publication is always explicitly
+// approved by a human through the skill lifecycle command.
 
 import (
 	"bufio"
@@ -9,7 +10,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -81,40 +81,31 @@ func (c *Coordinator) checkSkillPatternsAndSave() []string {
 		return nil
 	}
 
-	// Auto-promotion: top-tier candidates (quality >= 0.95, count >= 15) are
-	// generated and promoted automatically without user confirmation. This
-	// eliminates manual intervention for obviously high-quality patterns.
+	// Top-tier candidates are safe to draft automatically, but never safe to
+	// publish automatically: a generated procedure changes future agent
+	// behavior and therefore requires an explicit human promotion step.
 	const autoPromoteQuality = 0.95
 	const autoPromoteCount = 15
-	var autoPromoted []string
+	var autoDrafts []string
 	var needConfirmation []skill.PatternCandidate
 	for _, cand := range candidates {
 		if cand.QualityScore >= autoPromoteQuality && cand.Sequence.Count >= autoPromoteCount {
 			path, err := c.skillGenerator.GenerateSkill(cand)
 			if err != nil {
-				log.Printf("[WARN] auto-promote: failed to generate skill draft: %v", err)
+				log.Printf("[WARN] automatic skill draft generation failed: %v", err)
 				continue
 			}
-			// Try to promote from drafts/ to the team skill dir
-			skillsDir := filepath.Dir(filepath.Dir(path)) // drafts/<name>/SKILL.md -> drafts -> skills
-			skillName := filepath.Base(filepath.Dir(path))
-			promoted, promErr := skill.PromoteDraft(skillsDir, skillName)
-			if promErr != nil {
-				log.Printf("[INFO] auto-promote: draft saved but promote failed (may already exist): %v", promErr)
-				autoPromoted = append(autoPromoted, path)
-			} else {
-				autoPromoted = append(autoPromoted, promoted)
-				c.report(c.newEvent("step").withMessage(fmt.Sprintf(
-					"⚡ Auto-promoted skill: %s (quality %.2f, ×%d)",
-					skillName, cand.QualityScore, cand.Sequence.Count)))
-			}
+			autoDrafts = append(autoDrafts, path)
+			c.report(c.newEvent("step").withMessage(fmt.Sprintf(
+				"Generated high-confidence skill draft awaiting approval: %s (quality %.2f, ×%d)",
+				cand.SuggestedName, cand.QualityScore, cand.Sequence.Count)))
 		} else {
 			needConfirmation = append(needConfirmation, cand)
 		}
 	}
 
 	var savedSkills []string
-	savedSkills = append(savedSkills, autoPromoted...)
+	savedSkills = append(savedSkills, autoDrafts...)
 
 	// Multi-select confirm remaining candidates: user picks which drafts to keep.
 	if len(needConfirmation) > 0 {

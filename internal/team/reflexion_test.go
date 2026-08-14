@@ -1,12 +1,11 @@
 package team
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 func TestFormatReflexionLesson(t *testing.T) {
@@ -92,86 +91,26 @@ func TestFormatReflexionLesson(t *testing.T) {
 	}
 }
 
-func TestPersistReflexionLesson(t *testing.T) {
+func TestPersistReflexionLessonRequiresCanonicalContext(t *testing.T) {
 	ws := t.TempDir()
-	c := &Coordinator{
-		session:        &TeamSession{Workspace: ws, Config: agent.TeamConfig{Name: "test"}},
-		executionRunID: "run-1",
-	}
-
-	lesson := formatReflexionLesson("coder", "fix bug", "verification failed", "create the file first", true, false)
-	c.persistReflexionLesson(lesson)
-
-	ltm := LoadLTM(ws, "test")
-	if strings.Contains(ltm, "fix bug") {
-		t.Fatalf("candidate lesson must not be promoted before acceptance:\n%s", ltm)
-	}
-	manifest := &EvidenceManifest{RunID: "run-1", Status: "accepted", ManifestHash: "manifest-1"}
-	c.promoteCandidateLessons(manifest)
-	if got := LoadLTM(ws, "test"); got != "" {
-		t.Fatalf("candidate with blank manifest binding was promoted: %q", got)
-	}
-	if err := c.bindCandidateLessonsToManifest(manifest); err != nil {
-		t.Fatal(err)
-	}
-	c.promoteCandidateLessons(manifest)
-	ltm = LoadLTM(ws, "test")
-	if !strings.Contains(ltm, "fix bug") {
-		t.Fatalf("confirmed lesson not promoted to LTM:\n%s", ltm)
-	}
-
-	// A second identical write must deduplicate.
-	c.persistReflexionLesson(lesson)
-	if err := c.bindCandidateLessonsToManifest(manifest); err != nil {
-		t.Fatal(err)
-	}
-	c.promoteCandidateLessons(manifest)
-	ltm2 := LoadLTM(ws, "test")
-	if strings.Count(ltm2, "fix bug") != 1 {
-		t.Errorf("duplicate lesson not deduplicated:\n%s", ltm2)
-	}
-
-	// Empty lessons are ignored.
-	c.persistReflexionLesson("   ")
-	if LoadLTM(ws, "test") != ltm2 {
-		t.Errorf("empty lesson modified LTM")
-	}
-}
-
-func TestKnowledgeCandidatesRemainHiddenUntilAcceptedPromotion(t *testing.T) {
-	ws := t.TempDir()
-	c := &Coordinator{session: &TeamSession{Workspace: ws, Config: agent.TeamConfig{Name: "test"}}, executionRunID: "run-rejected"}
-	c.persistKnowledgeCandidate("use the verified adapter", ltmSectionPatterns, "ltm_update")
-	if got := LoadLTM(ws, "test"); got != "" {
-		t.Fatalf("candidate knowledge leaked into LTM before acceptance: %q", got)
-	}
-	c.promoteCandidateLessons(&EvidenceManifest{RunID: "run-accepted", Status: "accepted", ManifestHash: "accepted-manifest"})
-	if got := LoadLTM(ws, "test"); got != "" {
-		t.Fatalf("rejected-run candidate promoted by unrelated run: %q", got)
-	}
-	c.promoteCandidateLessons(&EvidenceManifest{RunID: "run-rejected", Status: "accepted", ManifestHash: "rejected-manifest"})
-	got := LoadLTM(ws, "test")
-	if got != "" {
-		t.Fatalf("candidate with blank manifest binding was promoted: %q", got)
-	}
-	if err := c.bindCandidateLessonsToManifest(&EvidenceManifest{RunID: "run-rejected", Status: "accepted", ManifestHash: "rejected-manifest"}); err != nil {
-		t.Fatal(err)
-	}
-	c.promoteCandidateLessons(&EvidenceManifest{RunID: "run-rejected", Status: "accepted", ManifestHash: "other-manifest"})
-	if got := LoadLTM(ws, "test"); got != "" {
-		t.Fatalf("candidate with mismatched manifest binding was promoted: %q", got)
-	}
-	c.promoteCandidateLessons(&EvidenceManifest{RunID: "run-rejected", Status: "accepted", ManifestHash: "rejected-manifest"})
-	got = LoadLTM(ws, "test")
-	if !strings.Contains(got, ltmSectionPatterns) || !strings.Contains(got, "use the verified adapter") {
-		t.Fatalf("bound candidate missing from expected section: %q", got)
-	}
-	c.promoteCandidateLessons(&EvidenceManifest{RunID: "run-rejected", Status: "accepted", ManifestHash: "rejected-manifest"})
-	confirmed, err := os.ReadFile(filepath.Join(ws, logsDir, reflexionConfirmedFile))
+	repo, err := contextstore.OpenSQLite(ws + "/context.sqlite")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(string(confirmed), "use the verified adapter"); got != 1 {
-		t.Fatalf("confirmed candidate duplicated: count=%d", got)
+	defer repo.Close()
+	c := &Coordinator{contextRepo: repo, projectDir: "project", session: &TeamSession{Workspace: ws, Config: agent.TeamConfig{Name: "test"}}, executionRunID: "run-1"}
+	lesson := formatReflexionLesson("coder", "fix bug", "verification failed", "create the file first", true, false)
+	c.persistReflexionLesson(lesson)
+	items, err := repo.Query(t.Context(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "project", TeamID: "test"}, Visibility: contextstore.VisibilityExact, IncludeCandidates: true})
+	if err != nil || len(items) != 1 || items[0].Lifecycle != contextstore.LifecycleCandidate {
+		t.Fatalf("canonical reflexion candidate = %#v, %v", items, err)
+	}
+	if err := c.bindCandidateLessonsToManifest(&EvidenceManifest{RunID: "run-1", Status: "accepted", ManifestHash: "manifest-1"}); err != nil {
+		t.Fatal(err)
+	}
+	c.promoteCandidateLessons(&EvidenceManifest{RunID: "run-1", Status: "accepted", ManifestHash: "manifest-1"})
+	items, err = repo.Query(t.Context(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "project", TeamID: "test"}, Visibility: contextstore.VisibilityExact})
+	if err != nil || len(items) != 1 || items[0].Lifecycle != contextstore.LifecycleConfirmed {
+		t.Fatalf("canonical reflexion promotion = %#v, %v", items, err)
 	}
 }

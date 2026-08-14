@@ -9,8 +9,9 @@ import (
 	"strings"
 )
 
-// RenderSTMMarkdown and RenderLTMMarkdown are human-readable projections only;
-// callers must never read them back as canonical data.
+// RenderSTMMarkdown and RenderLTMMarkdown are debug-only human-readable
+// projections. Callers must never read context-stm.md/context-ltm.md back as
+// canonical data; the official compatibility files are stm.md/ltm-TEAM.md.
 func RenderSTMMarkdown(items []ContextItem) string { return renderProjection(items, "STM") }
 func RenderLTMMarkdown(items []ContextItem) string { return renderProjection(items, "LTM") }
 
@@ -78,7 +79,7 @@ func renderProjection(items []ContextItem, name string) string {
 		return items[i].CreatedAt.Before(items[j].CreatedAt)
 	})
 	var b strings.Builder
-	fmt.Fprintf(&b, "<!-- Generated %s projection. Do not edit; SQLite is canonical. -->\n\n", name)
+	fmt.Fprintf(&b, "<!-- Generated %s projection. Do not edit; SQLite is canonical. DEBUG only: never use as runtime input. -->\n\n", name)
 	for _, item := range items {
 		fmt.Fprintf(&b, "## %s · %s\n\n", item.Kind, item.ID)
 		b.WriteString(item.Content)
@@ -110,19 +111,21 @@ func atomicWrite(path, content string) error {
 	return os.Rename(tmpName, path)
 }
 
-// RebuildProjection intentionally writes side-by-side projections. During
-// Phase 1 the legacy stm.md/ltm.md remain the prompt source and must not be
-// overwritten by shadow data. Since WP-1 the projection is rebuilt from
-// shared-scope items only (agent_id, task_id, branch_id, attempt_id are all
-// NULL) so private records never leak into the shared Markdown files.
+// RebuildProjection writes side-by-side canonical projections. STM and LTM
+// are intentionally queried by different scope lifetimes: session records
+// cannot appear in LTM and persistent records cannot appear in STM.
 func (r *SQLiteRepository) RebuildProjection(ctx context.Context, scope Scope) error {
-	items, err := r.QuerySharedProjection(ctx, scope)
+	stmItems, err := r.QuerySharedSessionProjection(ctx, scope)
+	if err != nil {
+		return err
+	}
+	ltmItems, err := r.QuerySharedPersistentProjection(ctx, scope)
 	if err != nil {
 		return err
 	}
 	dir := filepath.Dir(r.path)
-	stm := RenderSTMMarkdown(items)
-	ltm := RenderLTMMarkdown(items)
+	stm := RenderSTMMarkdown(stmItems)
+	ltm := RenderLTMMarkdown(ltmItems)
 	if err = atomicWrite(filepath.Join(dir, "context-stm.md"), stm); err != nil {
 		return err
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/memory"
 )
 
 // failingContextRepo lets tests force a shadow Append to fail (simulating a
@@ -59,7 +60,7 @@ func TestCanonicalMemoryIngestionGeneratesLegacySTMProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer repo.Close()
-	c := &Coordinator{contextRepo: repo, projectDir: "/project", session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}}}
+	c := &Coordinator{contextRepo: repo, projectDir: "/project", executionRunID: "run-1", session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}}}
 	if err := c.appendCanonicalContext(context.Background(), contextstore.ContextProgress, "completed canonical migration", "stm_write", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +71,47 @@ func TestCanonicalMemoryIngestionGeneratesLegacySTMProjection(t *testing.T) {
 	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "/project", TeamID: "team", SessionID: filepath.Base(workspace)}})
 	if err != nil || len(items) != 1 {
 		t.Fatalf("canonical STM item = %#v, err=%v", items, err)
+	}
+}
+
+func TestCanonicalPromptMemoryDoesNotReadLegacyMarkdown(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	c := &Coordinator{contextRepo: repo, projectDir: "/project", session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}}}
+	if err := c.appendCanonicalContext(context.Background(), contextstore.ContextObservation, "canonical prompt fact", "typed_result", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveSTM(workspace, "# 進度\n- stale markdown fact"); err != nil {
+		t.Fatal(err)
+	}
+	stm, ltm, canonical, err := c.canonicalPromptMemory(context.Background())
+	if err != nil || !canonical {
+		t.Fatalf("canonicalPromptMemory = (%q, %q, %t, %v)", stm, ltm, canonical, err)
+	}
+	if !strings.Contains(stm, "canonical prompt fact") || strings.Contains(stm, "stale markdown fact") || ltm != "" {
+		t.Fatalf("prompt memory did not come solely from SQLite: stm=%q ltm=%q", stm, ltm)
+	}
+}
+
+func TestArchiveSessionSummaryUsesCanonicalContext(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	c := &Coordinator{contextRepo: repo, projectDir: "/project", session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}}}
+	handled, err := c.ArchiveSessionSummary(context.Background(), []memory.SessionSummaryEntry{{Role: "assistant", Content: strings.Repeat("use canonical archive ", 4), Timestamp: "2026-08-13T00:00:00Z"}})
+	if err != nil || !handled {
+		t.Fatalf("ArchiveSessionSummary = (%t, %v)", handled, err)
+	}
+	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: c.contextScope(), Visibility: contextstore.VisibilityExact})
+	if err != nil || len(items) != 1 || items[0].Kind != contextstore.ContextSummary || items[0].Source.Type != "session_archive" {
+		t.Fatalf("canonical archive = %#v, %v", items, err)
 	}
 }
 
@@ -186,33 +228,59 @@ func TestShadowContextAppendFailureIsRepairable(t *testing.T) {
 	}
 }
 
-func TestAutoExtractLTMCanonicalFirstAndDeduplicates(t *testing.T) {
+func TestAutoExtractLTMUsesCanonicalItemsAndNeverImportsMarkdown(t *testing.T) {
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer repo.Close()
-	if err := SaveSTM(workspace, stmSectionDecisions+"\n\n- Use canonical SQLite projection\n"); err != nil {
+	if err := SaveSTM(workspace, stmSectionDecisions+"\n\n- stale Markdown must not be imported\n"); err != nil {
 		t.Fatal(err)
 	}
-	c := &Coordinator{contextRepo: repo, projectDir: "/project", session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}}}
+	c := &Coordinator{contextRepo: repo, projectDir: "/project", executionRunID: "run-1", session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}}}
+	if err := c.appendCanonicalContext(context.Background(), contextstore.ContextDecision, "Use canonical SQLite projection", "typed_result", map[string]string{"verified": "true"}); err != nil {
+		t.Fatal(err)
+	}
 	c.AutoExtractLTM(context.Background())
-	scope := contextstore.Scope{ProjectID: "/project", TeamID: "team", SessionID: filepath.Base(workspace)}
-	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: scope})
+	scope := contextstore.Scope{ProjectID: "/project", TeamID: "team"}
+	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: scope, Visibility: contextstore.VisibilityExact, IncludeCandidates: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 || !strings.Contains(items[0].Content, "canonical SQLite") {
+	if len(items) != 1 || !strings.Contains(items[0].Content, "canonical SQLite") || strings.Contains(items[0].Content, "stale Markdown") {
 		t.Fatalf("canonical AutoExtractLTM item = %#v", items)
 	}
 	c.AutoExtractLTM(context.Background())
-	items, err = repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: scope})
+	items, err = repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: scope, Visibility: contextstore.VisibilityExact, IncludeCandidates: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(items) != 1 {
 		t.Fatalf("duplicate AutoExtractLTM canonical item: %#v", items)
+	}
+}
+
+func TestCanonicalProgressNeverPromotesToPersistentKnowledge(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	c := &Coordinator{contextRepo: repo, projectDir: "/project", executionRunID: "run-1", session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}}}
+	if err := c.appendCanonicalContext(context.Background(), contextstore.ContextProgress, "worker completed README update", "autoWriteSTM", map[string]string{"legacy_section": stmSectionProgress}); err != nil {
+		t.Fatal(err)
+	}
+	c.AutoExtractLTM(context.Background())
+	persistent, err := repo.Query(context.Background(), contextstore.RepositoryQuery{
+		Scope: contextstore.Scope{ProjectID: "/project", TeamID: "team"}, Visibility: contextstore.VisibilityExact, IncludeCandidates: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persistent) != 0 {
+		t.Fatalf("progress was promoted to persistent memory: %#v", persistent)
 	}
 }
 

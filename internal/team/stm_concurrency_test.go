@@ -94,7 +94,7 @@ func TestSTMWriteTool_Concurrency(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			call := fantasy.ToolCall{
-				Input: fmt.Sprintf(`{"content": "- task-item-%d", "mode": "append"}`, workerID),
+				Input: fmt.Sprintf(`{"content": "- task-item-%d", "kind": "observation"}`, workerID),
 			}
 			resp, err := tool.Run(context.Background(), call)
 			if err != nil || resp.IsError {
@@ -173,26 +173,18 @@ func TestSaveSTMUsesAtomicWrite(t *testing.T) {
 	}
 }
 
-func TestSTMWriteToolRestrictsReplaceForWorkers(t *testing.T) {
+func TestSTMWriteToolRejectsLegacyReplaceMode(t *testing.T) {
 	tmpDir := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Workspace: tmpDir}}
 	if err := SaveSTM(tmpDir, "# 進度\n- keep"); err != nil {
 		t.Fatal(err)
 	}
-	worker := &stmWriteTool{coordinator: c}
-	resp, err := worker.Run(context.Background(), fantasy.ToolCall{Input: `{"content":"# 進度\n- replacement","mode":"replace"}`})
+	tool := &stmWriteTool{coordinator: c}
+	resp, err := tool.Run(context.Background(), fantasy.ToolCall{Input: `{"content":"# 進度\n- replacement","mode":"replace"}`})
 	if err != nil || !resp.IsError {
-		t.Fatalf("worker replace = (%v, %v), want tool error", resp, err)
+		t.Fatalf("legacy replace = (%v, %v), want tool error", resp, err)
 	}
 	if got := LoadSTM(tmpDir); !strings.Contains(got, "- keep") {
-		t.Fatalf("worker replace modified STM: %q", got)
-	}
-	coordinator := &stmWriteTool{coordinator: c, allowReplace: true}
-	resp, err = coordinator.Run(context.Background(), fantasy.ToolCall{Input: `{"content":"# 進度\n- replacement","mode":"replace"}`})
-	if err != nil || resp.IsError {
-		t.Fatalf("coordinator replace = (%v, %v), want success", resp, err)
-	}
-	if got := LoadSTM(tmpDir); !strings.Contains(got, "- replacement") || strings.Contains(got, "- keep") {
-		t.Fatalf("coordinator replace result = %q", got)
+		t.Fatalf("legacy replace modified STM: %q", got)
 	}
 }

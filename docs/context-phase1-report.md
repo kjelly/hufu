@@ -1,4 +1,8 @@
-# Context management Phase 1 implementation report
+# Context management Phase 1 implementation report (superseded)
+
+> Status: historical record. HF-MEM3 replaced Phase 1's shadow-write strategy
+> with canonical SQLite read/write and prompt assembly. `context-stm.md` and
+> `context-ltm.md` remain debug projections only; they are never runtime inputs.
 
 ## Scope
 

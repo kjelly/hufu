@@ -111,6 +111,14 @@ type EvidenceRef struct {
 	Ref    string `json:"ref,omitempty"`
 }
 
+// CandidateBinding is the immutable evidence identity attached to a candidate
+// before it can be promoted. Callers must select and authorize candidate IDs
+// before asking the repository to bind them.
+type CandidateBinding struct {
+	Evidence EvidenceRef
+	Metadata map[string]string
+}
+
 type ContextItem struct {
 	ID             string            `json:"id"`
 	Kind           ContextKind       `json:"kind"`
@@ -162,6 +170,11 @@ type SearchRequest struct {
 	Visibility        ScopeVisibility
 	Limit             int
 	IncludeCandidates bool
+	Kinds             []ContextKind
+	MinConfidence     *float64
+	// FilePaths are normalized evidence refs used for a deterministic ranking
+	// boost; they deliberately do not exclude otherwise relevant results.
+	FilePaths []string
 }
 type SearchResult struct {
 	Item  ContextItem

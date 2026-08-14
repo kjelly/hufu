@@ -25,8 +25,8 @@ func (c *Coordinator) shadowContextAppend(kind contextstore.ContextKind, content
 		Kind: kind, Content: content,
 		Scope:     contextstore.Scope{ProjectID: c.projectDir, TeamID: c.session.Config.Name, SessionID: sessionID},
 		Authority: contextstore.AuthorityAgent, TrustLevel: contextstore.TrustInternal,
-		Priority: contextstore.PriorityNormal,
-		Source:   contextstore.SourceRef{Type: "legacy-shadow", Ref: source},
+		Priority: contextstore.PriorityNormal, Confidence: 1.0,
+		Source: contextstore.SourceRef{Type: "legacy-shadow", Ref: source},
 	}
 	if err := c.contextRepo.Append(context.Background(), item); err != nil {
 		// A repository/driver error can echo back the rejected value
@@ -48,6 +48,79 @@ func (c *Coordinator) shadowContextAppend(kind contextstore.ContextKind, content
 	}
 }
 
+// rebuildLegacyContextProjections regenerates compatibility Markdown from the
+// two canonical lifetimes. It is deliberately called after the SQLite write
+// commits: a projection failure never erases canonical knowledge and can be
+// repaired by rebuilding projections later.
+func (c *Coordinator) rebuildLegacyContextProjections(ctx context.Context) error {
+	if c == nil || c.contextRepo == nil || c.session == nil {
+		return fmt.Errorf("canonical context repository is unavailable")
+	}
+	scope := c.contextScope()
+	if err := c.contextRepo.RebuildProjection(ctx, scope); err != nil {
+		return err
+	}
+	stmItems, err := c.contextRepo.QuerySharedSessionProjection(ctx, scope)
+	if err != nil {
+		return err
+	}
+	ltmItems, err := c.contextRepo.QuerySharedPersistentProjection(ctx, scope)
+	if err != nil {
+		return err
+	}
+	if err := NewSTMWriter(c.session.Workspace).Update(func(string) string {
+		return contextstore.RenderLegacySTMMarkdown(stmItems)
+	}); err != nil {
+		return err
+	}
+	c.ltmWriteMu.Lock()
+	err = SaveLTM(c.session.Workspace, c.session.Config.Name, contextstore.RenderLegacyLTMMarkdown(ltmItems))
+	c.ltmWriteMu.Unlock()
+	return err
+}
+
+// canonicalPromptMemory returns compatibility-formatted text directly from
+// the canonical repository. The existing compiler accepts Markdown-shaped
+// text, but it must never reread stm.md or ltm-TEAM.md when SQLite is active:
+// those files are projections only.
+func (c *Coordinator) canonicalPromptMemory(ctx context.Context) (stm, ltm string, canonical bool, err error) {
+	if c == nil || c.contextRepo == nil {
+		return "", "", false, nil
+	}
+	if c.session == nil {
+		return "", "", true, fmt.Errorf("canonical context requires a team session")
+	}
+	scope := c.contextScope()
+	stmItems, err := c.contextRepo.QuerySharedSessionProjection(ctx, scope)
+	if err != nil {
+		return "", "", true, err
+	}
+	ltmItems, err := c.contextRepo.QuerySharedPersistentProjection(ctx, scope)
+	if err != nil {
+		return "", "", true, err
+	}
+	return contextstore.RenderLegacySTMMarkdown(stmItems), contextstore.RenderLegacyLTMMarkdown(ltmItems), true, nil
+}
+
+func (c *Coordinator) canonicalContextBundle(ctx context.Context) (*CanonicalContextBundle, bool, error) {
+	if c == nil || c.contextRepo == nil {
+		return nil, false, nil
+	}
+	if c.session == nil {
+		return nil, true, fmt.Errorf("canonical context requires a team session")
+	}
+	scope := c.contextScope()
+	stm, err := c.contextRepo.QuerySharedSessionProjection(ctx, scope)
+	if err != nil {
+		return nil, true, err
+	}
+	ltm, err := c.contextRepo.QuerySharedPersistentProjection(ctx, scope)
+	if err != nil {
+		return nil, true, err
+	}
+	return &CanonicalContextBundle{SharedSession: stm, SharedPersistent: ltm}, true, nil
+}
+
 // appendCanonicalContext is the unified memory ingestion path. It appends the
 // canonical record first, then regenerates the legacy prompt files solely as
 // projections. Callers must not write STM/LTM directly after this returns.
@@ -63,29 +136,14 @@ func (c *Coordinator) appendCanonicalContext(ctx context.Context, kind contextst
 		Kind: kind, Content: content,
 		Scope:     contextstore.Scope{ProjectID: c.projectDir, TeamID: c.session.Config.Name, SessionID: sessionID},
 		Authority: contextstore.AuthorityAgent, TrustLevel: contextstore.TrustInternal,
-		Priority: contextstore.PriorityNormal,
+		Priority: contextstore.PriorityNormal, Confidence: 1.0,
 		Source:   contextstore.SourceRef{Type: "memory", Ref: source},
 		Metadata: metadata,
 	}
 	if err := c.contextRepo.Append(ctx, item); err != nil {
 		return err
 	}
-	if err := c.contextRepo.RebuildProjection(ctx, item.Scope); err != nil {
-		return err
-	}
-	items, err := c.contextRepo.QuerySharedProjection(ctx, item.Scope)
-	if err != nil {
-		return err
-	}
-	if err := NewSTMWriter(c.session.Workspace).Update(func(string) string {
-		return contextstore.RenderLegacySTMMarkdown(items)
-	}); err != nil {
-		return err
-	}
-	c.ltmWriteMu.Lock()
-	err = SaveLTM(c.session.Workspace, c.session.Config.Name, contextstore.RenderLegacyLTMMarkdown(items))
-	c.ltmWriteMu.Unlock()
-	return err
+	return c.rebuildLegacyContextProjections(ctx)
 }
 
 func (c *Coordinator) contextScope() contextstore.Scope {

@@ -2,10 +2,12 @@ package team
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 func acceptedGateInput() CompletionGateInput {
@@ -17,6 +19,39 @@ func acceptedGateInput() CompletionGateInput {
 			EvidenceResults: []EvidenceResult{{RequirementID: "run:acceptance", Status: "passed"}},
 		},
 		RequiredTasks: []TaskReference{{ID: "task-1", Status: string(TaskDone)}},
+	}
+}
+
+func TestApplyCompletionGatePromotesCanonicalSharedCandidates(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	c := &Coordinator{
+		session:        &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "test"}},
+		projectDir:     "project",
+		executionRunID: "run-shared",
+		contextRepo:    repo,
+		taskTracker:    NewTaskTracker(),
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "task"}})[0]
+	c.taskTracker.TodoList().UpdateStatus(item.ID, TaskDone, "done")
+	c.persistKnowledgeCandidate("use evidence-gated shared memory", ltmSectionPatterns, "ltm_update")
+	manifest := &EvidenceManifest{RunID: "run-shared", Status: "accepted", EvidenceResults: []EvidenceResult{{RequirementID: "run:acceptance", Status: "passed"}}}
+	if err := manifest.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	c.lastEvidenceManifest = manifest
+	result := &RunResult{Outcome: RunOutcomeCompleted, GoalSatisfied: true, Acceptance: &AcceptanceResult{State: AcceptancePassed}}
+	got := c.applyCompletionGate(context.Background(), result, result.Acceptance)
+	if got.Outcome != RunOutcomeCompleted || !got.GoalSatisfied {
+		t.Fatalf("completion gate unexpectedly rejected accepted run: %#v", got)
+	}
+	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "project", TeamID: "test"}, Visibility: contextstore.VisibilityExact})
+	if err != nil || len(items) != 1 || items[0].Lifecycle != contextstore.LifecycleConfirmed {
+		t.Fatalf("shared candidate was not confirmed: %#v err=%v", items, err)
 	}
 }
 

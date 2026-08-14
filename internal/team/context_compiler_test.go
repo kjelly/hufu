@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 func TestExecuteTaskFailsClosedWhenWorkerContextPreflightFails(t *testing.T) {
@@ -640,5 +641,31 @@ func TestContextCompiler_CoordinatorIntegration(t *testing.T) {
 	formattedDeps := cc.FormatDependencyResults(nil)
 	if formattedDeps != "" {
 		t.Errorf("FormatDependencyResults(nil) = %q, want empty", formattedDeps)
+	}
+}
+
+func TestCompileWorkerContextUsesCanonicalBundleInsteadOfMarkdown(t *testing.T) {
+	canonical := &CanonicalContextBundle{SharedSession: []contextstore.ContextItem{{
+		ID: "ctx-verified", Kind: contextstore.ContextObservation, Content: "canonical-only finding",
+		ContentHash: "canonical-hash", Lifecycle: contextstore.LifecycleConfirmed, Confidence: .9,
+	}}}
+	compiled, err := CompileWorkerContext(context.Background(), WorkerContextInput{
+		TaskGoal: "use available context", RawSTM: "# 發現\n- stale markdown-only finding", CanonicalMemory: canonical,
+		ModelContext: ModelContextSpec{ModelID: "test", ContextWindow: 4096, MaxOutputTokens: 512},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(compiled.Prompt, "canonical-only finding") || strings.Contains(compiled.Prompt, "stale markdown-only finding") {
+		t.Fatalf("canonical bundle did not replace Markdown source: %s", compiled.Prompt)
+	}
+	found := false
+	for _, item := range compiled.IncludedItems {
+		if item.ID == "context:ctx-verified" && item.Revision == "ctx-verified" && len(item.Provenance) > 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("compiled context lost canonical identity: %#v", compiled.IncludedItems)
 	}
 }

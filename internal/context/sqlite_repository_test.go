@@ -391,6 +391,99 @@ func TestSQLiteRepositoryDeleteExpiredRemovesFTSRow(t *testing.T) {
 	}
 }
 
+func TestSQLiteRepositoryPreservesExplicitZeroConfidence(t *testing.T) {
+	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+	scope := Scope{ProjectID: "p"}
+	if err := r.Append(ctx, ContextItem{ID: "zero-conf", Kind: ContextObservation, Content: "low trust fact", Scope: scope, Confidence: 0}); err != nil {
+		t.Fatal(err)
+	}
+	item, err := r.Get(ctx, "zero-conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Confidence != 0 {
+		t.Fatalf("explicit confidence 0 was rewritten to %v", item.Confidence)
+	}
+}
+
+func TestSQLiteRepositoryAppendReducerDeduplicatesByExecutionIdentity(t *testing.T) {
+	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+	scope := Scope{ProjectID: "p", TeamID: "team", SessionID: "session"}
+	base := ContextItem{Kind: ContextObservation, Content: "same finding", Scope: scope, Authority: AuthorityAgent, TrustLevel: TrustInternal, Confidence: 1, Lifecycle: LifecycleConfirmed}
+	// Two distinct tasks report the same finding content. They must not
+	// collapse into one item because their execution identity differs.
+	itemA := base
+	itemA.Metadata = map[string]string{"run_id": "run-1", "task_id": "task-a", "attempt": "1"}
+	itemB := base
+	itemB.Metadata = map[string]string{"run_id": "run-1", "task_id": "task-b", "attempt": "1"}
+	if err := r.AppendReducer(ctx, itemA, itemB); err != nil {
+		t.Fatal(err)
+	}
+	items, err := r.Query(ctx, RepositoryQuery{Scope: scope, Visibility: VisibilityExact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("AppendReducer collapsed distinct execution identities: %#v", items)
+	}
+	// Re-appending the same execution identity is a no-op (idempotent).
+	if err := r.AppendReducer(ctx, itemA); err != nil {
+		t.Fatal(err)
+	}
+	items, err = r.Query(ctx, RepositoryQuery{Scope: scope, Visibility: VisibilityExact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("AppendReducer was not idempotent for the same execution identity: %#v", items)
+	}
+}
+
+func TestSQLiteRepositoryAppendReducerMergesEvidenceOnDuplicate(t *testing.T) {
+	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+	scope := Scope{ProjectID: "p", TeamID: "team", SessionID: "session"}
+	item := ContextItem{Kind: ContextObservation, Content: "finding with evidence", Scope: scope, Authority: AuthorityAgent, TrustLevel: TrustInternal, Confidence: 1, Lifecycle: LifecycleConfirmed,
+		Metadata: map[string]string{"run_id": "run-1", "task_id": "task-a", "attempt": "1"},
+		Evidence: []EvidenceRef{{Type: "task", Ref: "task-a"}}}
+	if err := r.AppendReducer(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	// Same execution identity, new immutable evidence ref must be merged.
+	item.Evidence = append(item.Evidence, EvidenceRef{Type: "artifact", Ref: "art-1"})
+	if err := r.AppendReducer(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	items, err := r.Query(ctx, RepositoryQuery{Scope: scope, Visibility: VisibilityExact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one merged item, got %#v", items)
+	}
+	types := map[string]bool{}
+	for _, ev := range items[0].Evidence {
+		types[ev.Type] = true
+	}
+	if !types["task"] || !types["artifact"] {
+		t.Fatalf("duplicate append dropped immutable evidence: %#v", items[0].Evidence)
+	}
+}
+
 func TestSQLiteRepositoryTenThousandItems(t *testing.T) {
 	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
 	if err != nil {

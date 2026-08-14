@@ -213,7 +213,7 @@ For running with no human watching (cron, queue worker, CI):
 - **Notifications** fire on `done` / `error` / `wrap_up` / `budget_exceeded` / `needs_human` via the `notify` config (OSC and/or `command`). `needs_human` fires when an agent calls `ask_user` in unattended mode so an operator can follow up out-of-band.
 - **Acceptance** (`acceptance:` in team.yaml) is an objective whole-run gate run at `finish`. In interactive mode a non-zero exit appends a failure note to the result and emits an `error` notification. In **unattended mode** it drives a self-healing loop: up to 2 retries (the coordinator is told to fix the failures and call `finish` again, tracked by `selfHealingAttempts`); if still failing, it runs **rollback** (`rollback:` command, or a default `git reset --hard && git clean -fd` when the project is a git repo) and reports the outcome.
 - **Mid-task crash-resume (re-attaching in-flight workers):** every task status change checkpoints the todo list to `session.json` (`TodoList.onChange → saveCheckpoint`, including full task `Output`). On the next non-`--new` run the CLI `LoadSession`s it and `SetSessionData` restores the tasks and pre-populates the result cache from completed ones. At the start of `Run()`, `ResumeInterruptedTasks` re-drives every task left in a non-terminal state (`in_progress` / `paused` / `planned` / `pending`) on its **original todo ID**, in ascending-ID order so dependencies run first; `done`/`skipped`/`error` tasks are left as-is (completed work is reused, not redone). It is a no-op on a fresh run or with `--new`.
-- **Triggers (by design, external):** scheduling is delegated to the host (system cron / systemd timer / queue) invoking `hufu` per run; session state persists under `workspace/` (`session.json`, `stm.md`, `ltm.md`).
+- **Triggers (by design, external):** scheduling is delegated to the host (system cron / systemd timer / queue) invoking `hufu` per run. Session execution state persists under `workspace/session.json`; shared/private memory truth persists in `workspace/context.sqlite`. `context-stm.md` and `context-ltm.md` are disposable debug projections, never runtime inputs.
 
 ### Prompt Syntax
 
@@ -684,7 +684,9 @@ workspace/
 ├── session_history.json      # Raw conversation message history
 ├── compaction_history.json    # Structured compaction summaries across runs
 ├── execution_trace.log       # Detailed execution trace log (TUI mode only)
-├── stm.md                    # Short-term memory (active session)
+├── context.sqlite            # Canonical shared/private memory and lifecycle audit
+├── context-stm.md            # Disposable shared-session debug projection
+├── context-ltm.md            # Disposable shared-persistent debug projection
 ├── tasks/                    # Per-task records
 │   └── {team-name}/
 │       └── {agent-name}/

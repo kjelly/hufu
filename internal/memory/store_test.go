@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"context"
+	"encoding/gob"
 	"os"
 	"path/filepath"
 	"testing"
@@ -60,6 +62,39 @@ func TestNewMemoryStoreCreatesDir(t *testing.T) {
 	t.Logf("expected store path: %s", expectedPath)
 
 	_ = expectedPath
+}
+
+func TestExportRecordsOnlyReadsSerializedMemoryRecords(t *testing.T) {
+	storePath := t.TempDir()
+	record := MemoryRecord{ID: "legacy-1", Content: "keep this", Category: "decision", Status: StatusConfirmed}
+	metadata, err := recordToMetadata(record)
+	if err != nil {
+		t.Fatalf("recordToMetadata: %v", err)
+	}
+	for name, doc := range map[string]chromem.Document{
+		"record.gob":  {ID: record.ID, Content: record.Content, Metadata: metadata},
+		"foreign.gob": {ID: "foreign", Content: "must not import", Metadata: map[string]string{"category": "decision"}},
+	} {
+		file, err := os.Create(filepath.Join(storePath, name))
+		if err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		if err := gob.NewEncoder(file).Encode(doc); err != nil {
+			_ = file.Close()
+			t.Fatalf("encode %s: %v", name, err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatalf("close %s: %v", name, err)
+		}
+	}
+
+	records, err := (&MemoryStore{storePath: storePath}).ExportRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ExportRecords: %v", err)
+	}
+	if len(records) != 1 || records[0].ID != record.ID || records[0].Content != record.Content {
+		t.Fatalf("ExportRecords() = %#v, want only %#v", records, record)
+	}
 }
 
 func TestReadEmbeddingMetaNotExist(t *testing.T) {

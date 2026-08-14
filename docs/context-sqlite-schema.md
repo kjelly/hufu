@@ -70,8 +70,14 @@ FTS5 lexical projection with unindexed canonical `id` plus searchable `content`,
 
 ## Operational checks
 
-Run `hufu context rebuild --workspace <workspace>` to rebuild FTS5. Run
-`hufu context query --workspace <workspace> --project <project> <query>` to
-inspect exact, lexical, and (when configured) vector retrieval. The migration,
+Run `hufu context rebuild --workspace <workspace>` to rebuild FTS5, or add
+`--vector --project <project>` to rebuild the disposable vector index from
+confirmed current SQLite items. Use `hufu context query`, `list`, `show`,
+`candidates`, `history`, `confirm`, `reject`, and `supersede` for lifecycle
+inspection and explicit maintenance. To upgrade an old chromem store, first
+run `hufu context migrate-memory --workspace <workspace> --project <project>
+--legacy-project <old-project>` for its count/checksum dry run, then repeat
+with `--apply`; the destination database is backed up before mutation. These
+commands never make Markdown or vector documents authoritative. The migration,
 projection, FTS rebuild, and redaction tests in `internal/context` provide the
 automated schema contract.

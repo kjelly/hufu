@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/kjelly/hufu/internal/config"
+	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -20,36 +21,23 @@ func archiveCurrentSessionToMemory(ctx context.Context, tc *teamContext) {
 		return
 	}
 
-	resolvedURL := config.ResolveProviderURL(opts.providerURL, "", "")
-	ollamaAPIURL := config.ProviderURLToOllamaAPI(resolvedURL)
-	embedModel := config.ResolveEmbeddingModel(opts.memoryModel)
-	projectDir, _ := os.Getwd()
-
-	memStore, err := memory.NewMemoryStore(projectDir, ollamaAPIURL, embedModel)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s Memory unavailable for archive: %v\n", errStyle.Render("⚠"), err)
-		return
-	}
-	defer func() { _ = memStore.Close() }()
-
 	var entries []memory.SessionSummaryEntry
 	for _, e := range tc.sessionData.Entries {
-		entries = append(entries, memory.SessionSummaryEntry{
-			Role:      e.Role,
-			Content:   e.Content,
-			Timestamp: e.Timestamp,
-		})
+		entries = append(entries, memory.SessionSummaryEntry{Role: e.Role, Content: e.Content, Timestamp: e.Timestamp})
 	}
-
-	var summarizeFn memory.SummarizeFunc
-	if s := tc.coordinator.Sidecar(); s != nil {
-		summarizeFn = s.Summarize
-	}
-	if err := memory.ArchiveSessionSummary(ctx, memStore, entries, tc.session.Config.Name, summarizeFn); err != nil {
-		fmt.Fprintf(os.Stderr, "%s Failed to archive session to memory: %v\n", errStyle.Render("⚠"), err)
+	if handled, err := tc.coordinator.ArchiveSessionSummary(ctx, entries); handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s Failed to archive session to canonical context: %v\n", errStyle.Render("⚠"), err)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "%s Session archived to canonical context.\n", doneStyle.Render("✓"))
 		return
 	}
-	fmt.Fprintf(os.Stderr, "%s Session archived to memory.\n", doneStyle.Render("✓"))
+
+	// Coordinators require the canonical repository. Keep this guard explicit
+	// rather than recreating the retired chromem write path if a nonstandard
+	// caller supplied a coordinator without one.
+	fmt.Fprintf(os.Stderr, "%s Session archive unavailable: canonical context is not configured.\n", errStyle.Render("⚠"))
 }
 
 func runArchiveMemory(ctx context.Context, registry *team.TeamRegistry, vars map[string]string) error {
@@ -87,23 +75,25 @@ func runArchiveMemory(ctx context.Context, registry *team.TeamRegistry, vars map
 }
 
 func savePromptToHistory(ctx context.Context, prompt string, defaultProviderURL string) {
-	resolvedProviderURL := config.ResolveProviderURL(defaultProviderURL, "", "")
-	ollamaAPIURL := config.ProviderURLToOllamaAPI(resolvedProviderURL)
-	embedModel := config.ResolveEmbeddingModel("")
-
-	store, err := memory.NewGlobalMemoryStore(ollamaAPIURL, embedModel)
+	_ = defaultProviderURL // retained for call-site compatibility during migration.
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return
+	}
+	repo, err := contextstore.OpenSQLite(filepath.Join(getWorkspace(), "history-context.sqlite"))
 	if err != nil {
 		return
 	}
-
-	id := fmt.Sprintf("hist_%d", time.Now().UnixNano())
-	metadata := map[string]string{
-		"type":      "prompt_history",
-		"timestamp": time.Now().Format(time.RFC3339),
+	defer func() { _ = repo.Close() }()
+	item := contextstore.ContextItem{
+		ID: fmt.Sprintf("hist_%d", time.Now().UnixNano()), Kind: contextstore.ContextSummary, Content: prompt,
+		Scope: contextstore.Scope{ProjectID: "__global_prompt_history__"}, Authority: contextstore.AuthorityUser,
+		TrustLevel: contextstore.TrustInternal, Priority: contextstore.PriorityBackground, Confidence: 1.0,
+		Source: contextstore.SourceRef{Type: "prompt_history"}, Metadata: map[string]string{"type": "prompt_history"},
 	}
 	saveCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	_ = store.Save(saveCtx, id, prompt, metadata)
+	_ = repo.Append(saveCtx, item)
 }
 
 var historyCmd = &cobra.Command{
@@ -112,14 +102,11 @@ var historyCmd = &cobra.Command{
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
-		resolvedProviderURL := config.ResolveProviderURL(opts.providerURL, "", "")
-		ollamaAPIURL := config.ProviderURLToOllamaAPI(resolvedProviderURL)
-		embedModel := config.ResolveEmbeddingModel(opts.memoryModel)
-
-		store, err := memory.NewGlobalMemoryStore(ollamaAPIURL, embedModel)
+		repo, err := contextstore.OpenSQLite(filepath.Join(getWorkspace(), "history-context.sqlite"))
 		if err != nil {
-			return fmt.Errorf("failed to open global memory store: %w", err)
+			return fmt.Errorf("failed to open canonical prompt history: %w", err)
 		}
+		defer func() { _ = repo.Close() }()
 
 		query := ""
 		if len(args) > 0 {
@@ -131,7 +118,7 @@ var historyCmd = &cobra.Command{
 			return nil
 		}
 
-		results, err := store.Query(ctx, query, 5, map[string]string{"type": "prompt_history"})
+		results, _, err := contextstore.HybridRetrieve(ctx, repo, nil, contextstore.SearchRequest{Query: query, Scope: contextstore.Scope{ProjectID: "__global_prompt_history__"}, Limit: 5})
 		if err != nil {
 			return fmt.Errorf("semantic search failed: %w", err)
 		}
@@ -143,10 +130,9 @@ var historyCmd = &cobra.Command{
 
 		fmt.Printf("\n%s Semantic History Search Results (query: %q):\n\n", boldStyle.Render("🗂️"), query)
 		for i, res := range results {
-			ts := res.Metadata["timestamp"]
-			fmt.Printf("  %d. %s %s\n", i+1, doneStyle.Render("→"), boldStyle.Render(res.Content))
-			if ts != "" {
-				fmt.Printf("     %s\n", dimStyle.Render("Time: "+ts))
+			fmt.Printf("  %d. %s %s\n", i+1, doneStyle.Render("→"), boldStyle.Render(res.Item.Content))
+			if !res.Item.CreatedAt.IsZero() {
+				fmt.Printf("     %s\n", dimStyle.Render("Time: "+res.Item.CreatedAt.Format(time.RFC3339)))
 			}
 			fmt.Println()
 		}

@@ -8,8 +8,9 @@ import (
 	"charm.land/fantasy"
 )
 
-// saveSkillTool lets any agent encode a reusable workflow as a SKILL.md file
-// and make it immediately available via load_skill in the same session.
+// saveSkillTool lets an agent propose a reusable workflow. Agents never
+// publish operational skills themselves: every call writes a reviewable draft
+// that an explicit human maintenance action must approve and apply.
 type saveSkillTool struct {
 	coordinator *Coordinator
 	pOpts       fantasy.ProviderOptions
@@ -17,10 +18,8 @@ type saveSkillTool struct {
 
 func (t *saveSkillTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
-		Name: "save_skill",
-		Description: "Save a reusable skill as a SKILL.md file so it can be loaded by future agents or the coordinator. " +
-			"Use this when you have solved a non-trivial problem and want to encode the solution as a repeatable workflow. " +
-			"The skill is written to the team's local skills/ directory (e.g., .agent-teams/my-team/skills/<name>/SKILL.md) and is immediately available via load_skill.",
+		Name:        "save_skill",
+		Description: "Propose a reusable skill as a reviewable SKILL.md draft. It is not active or loadable until an explicit human approval applies it.",
 		Parameters: map[string]any{
 			"name": map[string]any{
 				"type":        "string",
@@ -33,11 +32,6 @@ func (t *saveSkillTool) Info() fantasy.ToolInfo {
 			"content": map[string]any{
 				"type":        "string",
 				"description": "Full Markdown body of the skill: step-by-step workflow, examples, rules, and any gotchas learned.",
-			},
-			"as_draft": map[string]any{
-				"type":        "boolean",
-				"description": "Save as a draft in skills/drafts/ instead of skills/. Default: false.",
-				"default":     false,
 			},
 		},
 		Required: []string{"name", "description", "content"},
@@ -52,7 +46,6 @@ func (t *saveSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 		Name        string `json:"name"`
 		Description string `json:"description"`
 		Content     string `json:"content"`
-		AsDraft     bool   `json:"as_draft"`
 	}
 	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -67,11 +60,11 @@ func (t *saveSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 		return fantasy.NewTextErrorResponse("content is required"), nil
 	}
 
-	path, err := t.coordinator.saveAndReloadSkill(args.Name, args.Description, args.Content, args.AsDraft)
+	path, err := t.coordinator.saveAndReloadSkill(args.Name, args.Description, args.Content, true)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to save skill: %v", err)), nil
 	}
 	return fantasy.NewTextResponse(fmt.Sprintf(
-		"Skill %q saved to %s and is now available via load_skill.", args.Name, path,
+		"Skill proposal %q saved to %s; it remains a draft pending explicit human approval.", args.Name, path,
 	)), nil
 }

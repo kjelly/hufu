@@ -230,25 +230,19 @@ func buildMCPManager(ctx context.Context, session *team.TeamSession, cfg *config
 	return manager
 }
 
-// buildMemoryStore creates the long-term memory store when --memory
-// is enabled (and not in --temp mode). Returns nil if disabled.
+// buildMemoryStore is retained as a compatibility seam while legacy stores
+// are migrated. New runs use context.sqlite plus its rebuildable canonical
+// vector index; they must not create a second MemoryRecord source of truth.
 func buildMemoryStore(resolvedProviderURL string) *memory.MemoryStore {
+	_ = resolvedProviderURL
 	if !opts.memoryEnabled || opts.tempWorkspace {
 		if !opts.memoryEnabled {
 			stderrLog("%s Memory: disabled\n", dimStyle.Render("○"))
 		}
 		return nil
 	}
-	ollamaAPIURL := config.ProviderURLToOllamaAPI(resolvedProviderURL)
-	embedModel := config.ResolveEmbeddingModel(opts.memoryModel)
-	projectDir, _ := os.Getwd()
-	store, err := memory.NewMemoryStore(projectDir, ollamaAPIURL, embedModel)
-	if err != nil {
-		stderrLog("%s Memory store directory creation failed: %v\n", errStyle.Render("⚠"), err)
-		return nil
-	}
-	stderrLog("%s Memory: enabled (model: %s)\n", doneStyle.Render("✓"), embedModel)
-	return store
+	stderrLog("%s Memory: canonical context index enabled (model: %s)\n", doneStyle.Render("✓"), config.ResolveEmbeddingModel(opts.memoryModel))
+	return nil
 }
 
 // resolveAndCheckModel pulls the model from hufu.yaml and validates
@@ -357,22 +351,25 @@ func buildNotifier(cfg *config.Config, session *team.TeamSession) *notify.Notifi
 	return notifierInst
 }
 
-// archiveToMemory stores the old session entries into the long-term
-// memory store with optional sidecar-driven summarization.
+// archiveToMemory stores old session entries in canonical long-term context.
+// memStore remains in the signature temporarily for caller compatibility; it
+// is deliberately never used as a runtime source of truth.
 func archiveToMemory(ctx context.Context, memStore *memory.MemoryStore, coordinator *team.Coordinator, session *team.TeamSession, oldSessionEntries []memory.SessionSummaryEntry) {
-	if memStore == nil || len(oldSessionEntries) == 0 {
+	if len(oldSessionEntries) == 0 {
 		return
 	}
 	if coordinator != nil && coordinator.ExecutionProfile().DisableHistoricalMemory {
 		return
 	}
-	var summarizeFn memory.SummarizeFunc
 	if coordinator != nil {
-		if s := coordinator.Sidecar(); s != nil {
-			summarizeFn = s.Summarize
+		if handled, err := coordinator.ArchiveSessionSummary(ctx, oldSessionEntries); handled {
+			if err != nil {
+				stderrLog("%s Failed to archive session to canonical context: %v\n", errStyle.Render("⚠"), err)
+			}
+			return
 		}
 	}
-	if err := memory.ArchiveSessionSummary(ctx, memStore, oldSessionEntries, session.Config.Name, summarizeFn); err != nil {
-		stderrLog("%s Failed to archive session to memory: %v\n", errStyle.Render("⚠"), err)
-	}
+	_ = memStore
+	_ = session
+	stderrLog("%s Session archive skipped: canonical context is not configured.\n", errStyle.Render("⚠"))
 }

@@ -205,12 +205,19 @@ func TestSaveSkillTool_InvalidArgs(t *testing.T) {
 }
 
 func TestSaveSkillTool_Success(t *testing.T) {
-	c, _ := newMinimalCoordinator(t)
+	c, dir := newMinimalCoordinator(t)
 	resp := runSaveSkill(t, c, `{"name":"test-skill","description":"test desc","content":"# Test\n\ncontent"}`)
 	if resp.IsError {
 		t.Errorf("unexpected error response: %s", resp.Content)
 	}
 	if !strings.Contains(resp.Content, "test-skill") {
 		t.Errorf("response should mention skill name: %s", resp.Content)
+	}
+	draftPath := filepath.Join(dir, "skills", "drafts", "test-skill", "SKILL.md")
+	if _, err := os.Stat(draftPath); err != nil {
+		t.Fatalf("agent proposal was not saved as a draft: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "skills", "test-skill", "SKILL.md")); !os.IsNotExist(err) {
+		t.Fatalf("agent proposal unexpectedly published a live skill: %v", err)
 	}
 }

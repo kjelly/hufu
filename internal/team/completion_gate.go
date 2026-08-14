@@ -123,6 +123,7 @@ func (c *Coordinator) applyCompletionGate(ctx context.Context, result *RunResult
 	if decision.Accepted {
 		if err := c.confirmWorkerMemoryCandidates(ctx, manifest); err != nil {
 			c.rejectWorkerMemoryCandidates(ctx, manifest, "accepted manifest could not confirm private candidates: "+err.Error())
+			c.rejectSharedMemoryCandidates(ctx, manifest, "accepted manifest could not confirm private candidates: "+err.Error())
 			result.Outcome = RunOutcomePartial
 			result.GoalSatisfied = false
 			result.StopReason = StopReasonEvidenceIncomplete
@@ -130,19 +131,32 @@ func (c *Coordinator) applyCompletionGate(ctx context.Context, result *RunResult
 			result.Reason = "worker memory candidate promotion failed: " + err.Error()
 			return result
 		}
-		if err := c.bindCandidateLessonsToManifest(manifest); err != nil {
-			c.rejectWorkerMemoryCandidates(ctx, manifest, "legacy candidate manifest binding failed: "+err.Error())
+		if err := c.confirmSharedMemoryCandidates(ctx, manifest); err != nil {
+			c.rejectWorkerMemoryCandidates(ctx, manifest, "accepted manifest could not confirm shared candidates: "+err.Error())
+			c.rejectSharedMemoryCandidates(ctx, manifest, "accepted manifest could not confirm shared candidates: "+err.Error())
 			result.Outcome = RunOutcomePartial
 			result.GoalSatisfied = false
 			result.StopReason = StopReasonEvidenceIncomplete
 			result.ExitCode = 7
-			result.Reason = "candidate manifest binding failed: " + err.Error()
+			result.Reason = "shared memory candidate promotion failed: " + err.Error()
 			return result
 		}
-		c.promoteCandidateLessons(manifest)
+		if c.contextRepo == nil {
+			if err := c.bindCandidateLessonsToManifest(manifest); err != nil {
+				c.rejectWorkerMemoryCandidates(ctx, manifest, "legacy candidate manifest binding failed: "+err.Error())
+				result.Outcome = RunOutcomePartial
+				result.GoalSatisfied = false
+				result.StopReason = StopReasonEvidenceIncomplete
+				result.ExitCode = 7
+				result.Reason = "candidate manifest binding failed: " + err.Error()
+				return result
+			}
+			c.promoteCandidateLessons(manifest)
+		}
 		return result
 	}
 	c.rejectWorkerMemoryCandidates(ctx, manifest, strings.Join(decision.Reasons, "; "))
+	c.rejectSharedMemoryCandidates(ctx, manifest, strings.Join(decision.Reasons, "; "))
 	result.Outcome = RunOutcomePartial
 	result.GoalSatisfied = false
 	result.StopReason = StopReasonEvidenceIncomplete
@@ -165,6 +179,11 @@ func (c *Coordinator) confirmWorkerMemoryCandidates(ctx context.Context, manifes
 		_ = c.emitEvent("worker_memory_confirmed", "coordinator", item.Metadata["task_id"], map[string]interface{}{
 			"item_id": item.ID, "worker_id": item.Scope.AgentID, "run_id": manifest.RunID, "manifest_hash": manifest.ManifestHash,
 		})
+	}
+	if len(items) > 0 {
+		if err := c.rebuildLegacyContextProjections(ctx); err != nil {
+			return fmt.Errorf("rebuild shared memory projection: %w", err)
+		}
 	}
 	return nil
 }
@@ -189,6 +208,46 @@ func (c *Coordinator) rejectWorkerMemoryCandidates(ctx context.Context, manifest
 	for _, item := range items {
 		_ = c.emitEvent("worker_memory_rejected", "coordinator", item.Metadata["task_id"], map[string]interface{}{
 			"item_id": item.ID, "worker_id": item.Scope.AgentID, "run_id": runID, "reason": contextstore.RedactSecrets(reason),
+		})
+	}
+	if len(items) > 0 {
+		if err := c.rebuildLegacyContextProjections(ctx); err != nil {
+			_ = c.emitEvent("shared_memory_projection_error", "coordinator", "", map[string]interface{}{"error": contextstore.RedactSecrets(err.Error()), "run_id": runID})
+		}
+	}
+}
+
+func (c *Coordinator) confirmSharedMemoryCandidates(ctx context.Context, manifest *EvidenceManifest) error {
+	if c == nil || c.contextRepo == nil || manifest == nil {
+		return nil
+	}
+	items, err := NewSharedMemoryService(c.contextRepo).ConfirmRun(ctx, SharedMemoryPromotion{Scope: c.contextScope(), Manifest: manifest})
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		_ = c.emitEvent("shared_memory_confirmed", "coordinator", item.Metadata["task_id"], map[string]interface{}{
+			"item_id": item.ID, "run_id": manifest.RunID, "manifest_hash": manifest.ManifestHash, "kind": item.Kind,
+		})
+	}
+	return nil
+}
+
+func (c *Coordinator) rejectSharedMemoryCandidates(ctx context.Context, manifest *EvidenceManifest, reason string) {
+	if c == nil || c.contextRepo == nil {
+		return
+	}
+	runID := c.executionRunID
+	if manifest != nil && strings.TrimSpace(manifest.RunID) != "" {
+		runID = manifest.RunID
+	}
+	items, err := NewSharedMemoryService(c.contextRepo).RejectRun(ctx, SharedMemoryRejection{Scope: c.contextScope(), RunID: runID, Reason: reason})
+	if err != nil {
+		return
+	}
+	for _, item := range items {
+		_ = c.emitEvent("shared_memory_rejected", "coordinator", item.Metadata["task_id"], map[string]interface{}{
+			"item_id": item.ID, "run_id": runID, "reason": contextstore.RedactSecrets(reason), "kind": item.Kind,
 		})
 	}
 }

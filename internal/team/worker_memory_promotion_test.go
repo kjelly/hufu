@@ -31,6 +31,22 @@ func wp5AcceptedManifest(run string, tasks ...string) *EvidenceManifest {
 	return m
 }
 
+func TestPrivateMemorySavePreservesExplicitZeroConfidence(t *testing.T) {
+	repo := wp4SetupRepo(t)
+	svc := NewWorkerMemoryService(repo, nil)
+	zero := 0.0
+	item, err := svc.SaveCandidate(context.Background(), WorkerMemoryCandidateRequest{
+		WorkerID: "agent-a", Scope: wp5Scope("agent-a"), Content: "low-trust private fact", Category: "pattern", Tier: "persistent",
+		RunID: "run-a", TaskID: "task-a", Source: "memory_save", Confidence: &zero,
+	})
+	if err != nil {
+		t.Fatalf("SaveCandidate: %v", err)
+	}
+	if item.Confidence != 0 {
+		t.Fatalf("explicit private confidence 0 was rewritten to %v", item.Confidence)
+	}
+}
+
 func TestWP5_CandidateIsInvisibleUntilAcceptedEvidence(t *testing.T) {
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)

@@ -1,9 +1,21 @@
 # Hufu Per-Worker Memory 詳細實作計畫
 
-> 狀態：提案
+> 狀態：部分完成（HF-MEM3 cutover 後更新於 2026-08-13）
 > 範圍：worker 私有短期記憶、跨 session 長期記憶、scope 隔離、召回與寫入、branch 相容、CLI 可觀測性
 > 建議交付策略：先完成 session-scoped MVP，再啟用 persistent memory
 > 預設行為：功能關閉；未設定的 team/agent 完全維持既有共享 STM/LTM 行為
+
+## 實作狀態（2026-08-13）
+
+| Work package | 狀態 | 備註 |
+| --- | --- | --- |
+| WP-1 Scope/lifecycle | DONE | Canonical `context.sqlite` 具 branch、visibility 與 candidate lifecycle。 |
+| WP-2 Shared projection | DONE | STM/LTM 分別由 session/persistent confirmed records 產生；private/candidate 不會洩漏。 |
+| WP-3 Worker recall | DONE | Worker private/session/persistent recall 經 scope 授權與 compiler token budget 注入。 |
+| WP-4 Shared/typed ingestion | DONE | Typed task results 會歸納為 shared session context；persistent knowledge 走 evidence-gated candidate。 |
+| WP-5 Promotion/maintenance | DONE | Worker/shared candidate acceptance 已 evidence-gated；`hufu context` 提供 lifecycle 維護，並有 legacy `MemoryRecord` 的 dry-run、backup、checksum migration importer。 |
+
+Markdown 與 vector store 都是 canonical SQLite 的 projection/index，不能再作為 execution knowledge truth。
 
 ## 1. 執行摘要
 

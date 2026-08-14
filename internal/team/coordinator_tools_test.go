@@ -3,13 +3,58 @@ package team
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
+
+func TestFinishWritesCanonicalSessionItemNotSTMInCanonicalMode(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	c := &Coordinator{
+		contextRepo:  repo,
+		projectDir:   "project",
+		session:      &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}},
+		sessionData:  NewSession(),
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+		sessionTime:  time.Now(),
+	}
+	tool := &finishTool{coordinator: c}
+	response, err := tool.Run(context.Background(), fantasy.ToolCall{Input: `{"response":"all done"}`})
+	if err != nil {
+		t.Fatalf("finishTool.Run failed: %v", err)
+	}
+	if !c.finishCalled.Load() {
+		t.Fatal("finish did not complete")
+	}
+	_ = response
+	// The finish summary must be a typed canonical session item, not a direct
+	// stm.md mutation that the next projection rebuild would discard.
+	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: c.contextScope(), Visibility: contextstore.VisibilityExact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundProgress := false
+	for _, item := range items {
+		if item.Kind == contextstore.ContextProgress && item.Metadata["legacy_section"] == stmSectionProgress {
+			foundProgress = true
+		}
+	}
+	if !foundProgress {
+		t.Fatalf("finish did not write a canonical session progress item: %#v", items)
+	}
+}
 
 func TestDelegationChain(t *testing.T) {
 	tests := []struct {

@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -27,6 +28,51 @@ type Result struct {
 	Content    string
 	Similarity float32
 	Metadata   map[string]string
+}
+
+// ExportRecords reads every persisted legacy MemoryRecord without executing a
+// semantic query or embedding call. It exists solely for the explicit
+// context-store migration command; normal runtime paths must use the
+// canonical context repository instead.
+func (s *MemoryStore) ExportRecords(ctx context.Context) ([]MemoryRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var records []MemoryRecord
+	err := filepath.WalkDir(s.storePath, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() || !strings.HasSuffix(entry.Name(), ".gob") || entry.Name() == "metadata.gob" {
+			return walkErr
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = file.Close() }()
+		var doc chromem.Document
+		if err := gob.NewDecoder(file).Decode(&doc); err != nil {
+			// Unrelated future collection files are intentionally ignored; the
+			// legacy collection's documents retain _record_json metadata.
+			return nil
+		}
+		// Only MemoryRecord documents are importable. The fallback conversion in
+		// metadataToRecord deliberately supports very old memory records, but
+		// accepting arbitrary chromem documents here could migrate unrelated
+		// collections as knowledge.
+		if _, ok := doc.Metadata["_record_json"]; !ok {
+			return nil
+		}
+		record, err := metadataToRecord(doc.ID, doc.Content, doc.Metadata)
+		if err != nil || record.ID == "" || strings.TrimSpace(record.Content) == "" {
+			return nil
+		}
+		records = append(records, record)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
+	return records, nil
 }
 
 type QueryOptions struct {
@@ -84,6 +130,26 @@ func dataDir() (string, error) {
 
 func NewMemoryStore(projectDir, ollamaURL, embedModel string) (*MemoryStore, error) {
 	return newLazyMemoryStore(projectDir, ollamaURL, embedModel, false)
+}
+
+// OpenExistingMemoryStore opens a legacy store only for read-only migration.
+// Unlike NewMemoryStore it never creates directories, probes an embedding
+// provider, or initializes a collection, so a dry-run migration is safe in an
+// offline environment and cannot alter the source store.
+func OpenExistingMemoryStore(projectDir string) (*MemoryStore, error) {
+	basePath, err := dataDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine memory data directory: %w", err)
+	}
+	storePath := filepath.Join(basePath, projectDirHash(projectDir))
+	info, err := os.Stat(storePath)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("legacy memory store path is not a directory: %s", storePath)
+	}
+	return &MemoryStore{storePath: storePath}, nil
 }
 
 func NewGlobalMemoryStore(ollamaURL, embedModel string) (*MemoryStore, error) {

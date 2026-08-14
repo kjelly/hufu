@@ -100,7 +100,7 @@ func conversationEvidence(messages []fantasy.Message, scope contextstore.Scope) 
 				if msg.Role == fantasy.MessageRoleUser && strings.Contains(text.Text, "?") {
 					kind, mustKeep = contextstore.ContextOpenQuestion, true
 				}
-				items = append(items, contextstore.ContextItem{ID: id, Kind: kind, Content: text.Text, Scope: scope, Authority: contextstore.AuthorityAgent, TrustLevel: contextstore.TrustInternal, Priority: priority, MustKeep: mustKeep})
+				items = append(items, contextstore.ContextItem{ID: id, Kind: kind, Content: text.Text, Scope: scope, Authority: contextstore.AuthorityAgent, TrustLevel: contextstore.TrustInternal, Priority: priority, MustKeep: mustKeep, Confidence: 1.0})
 			}
 		}
 	}

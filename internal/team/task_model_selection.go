@@ -1,6 +1,7 @@
 package team
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -119,7 +120,13 @@ func (c *Coordinator) selectTaskModel(task TaskDef, defs ...*agent.AgentDef) str
 		}
 		contextChars += len(c.loadProjectContext())
 		if !c.ExecutionProfile().DisableHistoricalMemory {
-			contextChars += len(LoadSTM(c.session.Workspace)) + len(LoadLTM(c.session.Workspace, c.session.Config.Name))
+			if bundle, canonical, err := c.canonicalContextBundle(context.Background()); err == nil && canonical {
+				for _, item := range append(bundle.SharedSession, bundle.SharedPersistent...) {
+					contextChars += len(item.Content)
+				}
+			} else {
+				contextChars += len(LoadSTM(c.session.Workspace)) + len(LoadLTM(c.session.Workspace, c.session.Config.Name))
+			}
 		}
 	}
 	profile.ContextTokens += contextChars / 4

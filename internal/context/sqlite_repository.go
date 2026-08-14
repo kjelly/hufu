@@ -170,9 +170,9 @@ func normalize(item *ContextItem) error {
 	}
 	sum := sha256.Sum256([]byte(item.Content))
 	item.ContentHash = hex.EncodeToString(sum[:])
-	if item.Confidence == 0 {
-		item.Confidence = 1
-	}
+	// Confidence is preserved verbatim: an explicit 0 is a legitimate low-trust
+	// value and must not be rewritten to the default. Callers that intend a
+	// default set it explicitly before Append.
 	if item.EmbeddingState == "" {
 		item.EmbeddingState = "pending"
 	}
@@ -202,6 +202,69 @@ func mustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
 
 func (r *SQLiteRepository) Append(ctx context.Context, items ...ContextItem) error {
 	return r.withBusyRetry(ctx, func() error { return r.appendOnce(ctx, items...) })
+}
+
+// UpsertCandidate preserves a candidate's canonical identity while allowing a
+// later run to refresh an unconfirmed/rejected duplicate with its own trusted
+// run and evidence metadata. Confirmed records are immutable knowledge: a
+// duplicate proposal returns the confirmed record instead of reopening it.
+func (r *SQLiteRepository) UpsertCandidate(ctx context.Context, item ContextItem) (ContextItem, error) {
+	if item.Lifecycle != LifecycleCandidate {
+		return ContextItem{}, errors.New("upsert candidate requires candidate lifecycle")
+	}
+	var stored ContextItem
+	err := r.withBusyRetry(ctx, func() error {
+		if err := normalize(&item); err != nil {
+			return err
+		}
+		tx, err := r.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		var existingID string
+		err = tx.QueryRowContext(ctx, `SELECT id FROM context_items WHERE project_id=? AND kind=? AND content_hash=? AND COALESCE(team_id,'')=? AND COALESCE(session_id,'')=? AND COALESCE(branch_id,'')=? AND COALESCE(agent_id,'')=? AND COALESCE(task_id,'')=? AND COALESCE(attempt_id,'')=? LIMIT 1`, item.Scope.ProjectID, item.Kind, item.ContentHash, item.Scope.TeamID, item.Scope.SessionID, item.Scope.BranchID, item.Scope.AgentID, item.Scope.TaskID, item.Scope.AttemptID).Scan(&existingID)
+		if errors.Is(err, sql.ErrNoRows) {
+			_, err = tx.ExecContext(ctx, "INSERT INTO context_items ("+itemColumns+") VALUES ("+strings.TrimSuffix(strings.Repeat("?,", 30), ",")+")", item.ID, item.Kind, item.Content, item.ContentHash, item.Scope.ProjectID, nilIfEmpty(item.Scope.TeamID), nilIfEmpty(item.Scope.SessionID), nilIfEmpty(item.Scope.BranchID), nilIfEmpty(item.Scope.AgentID), nilIfEmpty(item.Scope.TaskID), nilIfEmpty(item.Scope.AttemptID), item.Authority, item.TrustLevel, item.Priority, boolInt(item.MustKeep), boolInt(item.Pinned), item.Confidence, mustJSON(item.Source), mustJSON(item.Evidence), mustJSON(item.Tags), mustJSON(item.Metadata), item.CreatedAt.UnixMilli(), item.UpdatedAt.UnixMilli(), millis(item.ValidFrom), millis(item.ValidUntil), millis(item.ExpiresAt), nilIfEmpty(item.SupersededBy), string(item.Lifecycle), item.EmbeddingState, nilIfEmpty(item.EmbeddingModel))
+			if err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, "INSERT INTO context_items_fts(id,content,kind,tags) VALUES(?,?,?,?)", item.ID, item.Content, item.Kind, strings.Join(item.Tags, " ")); err != nil {
+				return err
+			}
+			if err = insertEvent(ctx, tx, "candidate_append", item.ID, item.Scope, map[string]string{"lifecycle": string(LifecycleCandidate)}); err != nil {
+				return err
+			}
+			stored = item
+			return tx.Commit()
+		}
+		if err != nil {
+			return err
+		}
+		existing, err := scanItem(tx.QueryRowContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE id=?", existingID))
+		if err != nil {
+			return err
+		}
+		if existing.Lifecycle == LifecycleConfirmed {
+			stored = existing
+			if err = insertEvent(ctx, tx, "candidate_duplicate_confirmed", existing.ID, existing.Scope, map[string]string{"candidate_id": item.ID}); err != nil {
+				return err
+			}
+			return tx.Commit()
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE context_items SET source_json=?,evidence_json=?,metadata_json=?,confidence=?,lifecycle=?,updated_at=? WHERE id=?", mustJSON(item.Source), mustJSON(item.Evidence), mustJSON(item.Metadata), item.Confidence, string(LifecycleCandidate), item.UpdatedAt.UnixMilli(), existing.ID); err != nil {
+			return err
+		}
+		if err = insertEvent(ctx, tx, "candidate_refresh", existing.ID, existing.Scope, map[string]string{"lifecycle": string(LifecycleCandidate)}); err != nil {
+			return err
+		}
+		stored = existing
+		stored.Source, stored.Evidence, stored.Metadata, stored.Confidence = item.Source, item.Evidence, item.Metadata, item.Confidence
+		stored.Lifecycle, stored.UpdatedAt = LifecycleCandidate, item.UpdatedAt
+		return tx.Commit()
+	})
+	return stored, err
 }
 
 func (r *SQLiteRepository) appendOnce(ctx context.Context, items ...ContextItem) error {
@@ -237,6 +300,101 @@ func (r *SQLiteRepository) appendOnce(ctx context.Context, items ...ContextItem)
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "INSERT INTO context_events(event_type,item_id,scope_json,payload_json,created_at) VALUES(?,?,?,?,?)", "append", it.ID, mustJSON(it.Scope), "{}", it.UpdatedAt.UnixMilli()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// AppendReducer is the shared working-memory reducer's idempotent append. It
+// deduplicates on execution identity (run/task/attempt from metadata) plus
+// kind and content hash, so two tasks reporting the same finding keep distinct
+// provenance instead of collapsing. On a duplicate it merges immutable
+// evidence refs and refreshes metadata rather than overwriting provenance.
+func (r *SQLiteRepository) AppendReducer(ctx context.Context, items ...ContextItem) error {
+	return r.withBusyRetry(ctx, func() error { return r.appendReducerOnce(ctx, items...) })
+}
+
+func (r *SQLiteRepository) appendReducerOnce(ctx context.Context, items ...ContextItem) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for i := range items {
+		if err = normalize(&items[i]); err != nil {
+			return err
+		}
+		it := items[i]
+		runID := it.Metadata["run_id"]
+		taskID := it.Metadata["task_id"]
+		attempt := it.Metadata["attempt"]
+		var existing string
+		err = tx.QueryRowContext(ctx, `SELECT id FROM context_items WHERE project_id=? AND kind=? AND content_hash=? AND COALESCE(team_id,'')=? AND COALESCE(session_id,'')=? AND COALESCE(branch_id,'')=? AND COALESCE(agent_id,'')=? AND COALESCE(task_id,'')=? AND COALESCE(attempt_id,'')=? AND json_extract(metadata_json,'$.run_id')=? AND json_extract(metadata_json,'$.task_id')=? AND json_extract(metadata_json,'$.attempt')=? LIMIT 1`,
+			it.Scope.ProjectID, it.Kind, it.ContentHash, it.Scope.TeamID, it.Scope.SessionID, it.Scope.BranchID, it.Scope.AgentID, it.Scope.TaskID, it.Scope.AttemptID, runID, taskID, attempt).Scan(&existing)
+		if err == nil {
+			// Duplicate from the same execution identity: merge immutable
+			// evidence refs and refresh metadata instead of overwriting the
+			// original provenance.
+			existingItem, err := scanItem(tx.QueryRowContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE id=?", existing))
+			if err != nil {
+				return err
+			}
+			mergedEvidence := append([]EvidenceRef(nil), existingItem.Evidence...)
+			for _, ev := range it.Evidence {
+				found := false
+				for _, have := range mergedEvidence {
+					if have.ItemID == ev.ItemID && have.Type == ev.Type && have.Ref == ev.Ref {
+						found = true
+						break
+					}
+				}
+				if !found {
+					mergedEvidence = append(mergedEvidence, ev)
+				}
+			}
+			mergedMetadata := existingItem.Metadata
+			if mergedMetadata == nil {
+				mergedMetadata = make(map[string]string, len(it.Metadata))
+			}
+			for k, v := range it.Metadata {
+				mergedMetadata[k] = v
+			}
+			if _, err = tx.ExecContext(ctx, "UPDATE context_items SET evidence_json=?,metadata_json=?,updated_at=? WHERE id=?", mustJSON(mergedEvidence), mustJSON(mergedMetadata), it.UpdatedAt.UnixMilli(), existing); err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, "INSERT INTO context_events(event_type,item_id,scope_json,payload_json,created_at) VALUES(?,?,?,?,?)", "reducer_deduplicate", existing, mustJSON(it.Scope), "{}", it.UpdatedAt.UnixMilli()); err != nil {
+				return err
+			}
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		// The deterministic ID from normalize() is content-derived, so two items
+		// with the same content but different execution identity would collide.
+		// Ensure a unique ID before inserting.
+		id := it.ID
+		for {
+			var probe string
+			probeErr := tx.QueryRowContext(ctx, "SELECT id FROM context_items WHERE id=?", id).Scan(&probe)
+			if errors.Is(probeErr, sql.ErrNoRows) {
+				break
+			}
+			if probeErr != nil {
+				return probeErr
+			}
+			id = it.ID + "-" + hex.EncodeToString([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))[:8]
+		}
+		it.ID = id
+		_, err = tx.ExecContext(ctx, "INSERT INTO context_items ("+itemColumns+") VALUES ("+strings.TrimSuffix(strings.Repeat("?,", 30), ",")+")", it.ID, it.Kind, it.Content, it.ContentHash, it.Scope.ProjectID, nilIfEmpty(it.Scope.TeamID), nilIfEmpty(it.Scope.SessionID), nilIfEmpty(it.Scope.BranchID), nilIfEmpty(it.Scope.AgentID), nilIfEmpty(it.Scope.TaskID), nilIfEmpty(it.Scope.AttemptID), it.Authority, it.TrustLevel, it.Priority, boolInt(it.MustKeep), boolInt(it.Pinned), it.Confidence, mustJSON(it.Source), mustJSON(it.Evidence), mustJSON(it.Tags), mustJSON(it.Metadata), it.CreatedAt.UnixMilli(), it.UpdatedAt.UnixMilli(), millis(it.ValidFrom), millis(it.ValidUntil), millis(it.ExpiresAt), nilIfEmpty(it.SupersededBy), string(it.Lifecycle), it.EmbeddingState, nilIfEmpty(it.EmbeddingModel))
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO context_items_fts(id,content,kind,tags) VALUES(?,?,?,?)", it.ID, it.Content, it.Kind, strings.Join(it.Tags, " ")); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO context_events(event_type,item_id,scope_json,payload_json,created_at) VALUES(?,?,?,?,?)", "reducer_append", it.ID, mustJSON(it.Scope), "{}", it.UpdatedAt.UnixMilli()); err != nil {
 			return err
 		}
 	}
@@ -446,6 +604,39 @@ func (r *SQLiteRepository) QuerySharedProjection(ctx context.Context, scope Scop
 	})
 }
 
+// QuerySharedSessionProjection returns prompt-eligible shared knowledge for
+// one session only. Persistent records have session_id NULL and therefore do
+// not satisfy this exact scope.
+func (r *SQLiteRepository) QuerySharedSessionProjection(ctx context.Context, scope Scope) ([]ContextItem, error) {
+	if strings.TrimSpace(scope.SessionID) == "" {
+		// A maintenance rebuild may be requested with project/team scope only.
+		// It has no unambiguous session STM to render, while persistent LTM is
+		// still well-defined, so render STM as empty rather than broadening the
+		// query to every session.
+		return nil, nil
+	}
+	return r.Query(ctx, RepositoryQuery{
+		Scope:      Scope{ProjectID: scope.ProjectID, TeamID: scope.TeamID, SessionID: scope.SessionID},
+		Visibility: contextVisibilityExact(),
+		Limit:      100000,
+	})
+}
+
+// QuerySharedPersistentProjection returns prompt-eligible shared knowledge
+// that deliberately has no session, branch, agent, task, or attempt scope.
+func (r *SQLiteRepository) QuerySharedPersistentProjection(ctx context.Context, scope Scope) ([]ContextItem, error) {
+	return r.Query(ctx, RepositoryQuery{
+		Scope:      Scope{ProjectID: scope.ProjectID, TeamID: scope.TeamID},
+		Visibility: contextVisibilityExact(),
+		Limit:      100000,
+	})
+}
+
+// contextVisibilityExact exists only to keep the two projection constructors
+// visually symmetric and avoid future callers accidentally selecting the
+// runtime ancestors mode for a projection.
+func contextVisibilityExact() ScopeVisibility { return VisibilityExact }
+
 // itemScope fetches an item's scope for event provenance. It returns a zero
 // Scope on error (e.g. the item does not exist yet) rather than failing the
 // caller's mutation: recording an event with an incomplete scope is better
@@ -530,6 +721,150 @@ func (r *SQLiteRepository) UpdateLifecycle(ctx context.Context, ids []string, li
 	return tx.Commit()
 }
 
+// BindCandidates merges sealed evidence into explicitly selected candidate
+// records. It refuses to bind confirmed/rejected items so an evidence receipt
+// cannot be retrofitted onto knowledge that has already reached a terminal
+// lifecycle state.
+func (r *SQLiteRepository) BindCandidates(ctx context.Context, ids []string, binding CandidateBinding) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(binding.Evidence.Type) == "" || strings.TrimSpace(binding.Evidence.Ref) == "" {
+		return errors.New("candidate binding requires evidence type and ref")
+	}
+	return r.withBusyRetry(ctx, func() error {
+		tx, err := r.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		for _, id := range ids {
+			if strings.TrimSpace(id) == "" {
+				continue
+			}
+			item, err := scanItem(tx.QueryRowContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE id=?", id))
+			if err != nil {
+				return err
+			}
+			if item.Lifecycle != LifecycleCandidate {
+				return fmt.Errorf("context item %q is not a candidate", id)
+			}
+			metadata := item.Metadata
+			if metadata == nil {
+				metadata = make(map[string]string, len(binding.Metadata))
+			}
+			for key, value := range binding.Metadata {
+				metadata[key] = value
+			}
+			evidence := append([]EvidenceRef(nil), item.Evidence...)
+			found := false
+			for _, existing := range evidence {
+				if existing.ItemID == binding.Evidence.ItemID && existing.Type == binding.Evidence.Type && existing.Ref == binding.Evidence.Ref {
+					found = true
+					break
+				}
+			}
+			if !found {
+				evidence = append(evidence, binding.Evidence)
+			}
+			now := time.Now().UnixMilli()
+			if _, err = tx.ExecContext(ctx, "UPDATE context_items SET evidence_json=?,metadata_json=?,updated_at=? WHERE id=?", mustJSON(evidence), mustJSON(metadata), now, id); err != nil {
+				return err
+			}
+			if err = insertEvent(ctx, tx, "candidate_bind", id, item.Scope, map[string]string{"evidence_type": binding.Evidence.Type, "evidence_ref": binding.Evidence.Ref}); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
+	})
+}
+
+// ConfirmCandidates is the atomic candidate-to-knowledge transition.  A
+// candidate may carry a newline-separated supersedes_ids metadata value that
+// was authorized by the caller at proposal time.  The new record is only made
+// visible when every referenced current record can be superseded in the same
+// transaction, so a crash can never leave two conflicting current truths or
+// hide an old truth behind a rejected candidate.
+func (r *SQLiteRepository) ConfirmCandidates(ctx context.Context, ids []string, binding CandidateBinding) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(binding.Evidence.Type) == "" || strings.TrimSpace(binding.Evidence.Ref) == "" {
+		return errors.New("candidate binding requires evidence type and ref")
+	}
+	return r.withBusyRetry(ctx, func() error {
+		tx, err := r.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		seenOld := make(map[string]string)
+		for _, id := range ids {
+			if strings.TrimSpace(id) == "" {
+				continue
+			}
+			item, err := scanItem(tx.QueryRowContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE id=?", id))
+			if err != nil {
+				return err
+			}
+			if item.Lifecycle != LifecycleCandidate {
+				return fmt.Errorf("context item %q is not a candidate", id)
+			}
+			metadata := item.Metadata
+			if metadata == nil {
+				metadata = make(map[string]string, len(binding.Metadata))
+			}
+			for key, value := range binding.Metadata {
+				metadata[key] = value
+			}
+			evidence := append([]EvidenceRef(nil), item.Evidence...)
+			bound := false
+			for _, existing := range evidence {
+				if existing.ItemID == binding.Evidence.ItemID && existing.Type == binding.Evidence.Type && existing.Ref == binding.Evidence.Ref {
+					bound = true
+					break
+				}
+			}
+			if !bound {
+				evidence = append(evidence, binding.Evidence)
+			}
+			now := time.Now().UnixMilli()
+			if _, err = tx.ExecContext(ctx, "UPDATE context_items SET evidence_json=?,metadata_json=?,lifecycle=?,updated_at=? WHERE id=?", mustJSON(evidence), mustJSON(metadata), string(LifecycleConfirmed), now, id); err != nil {
+				return err
+			}
+			if err = insertEvent(ctx, tx, "candidate_bind", id, item.Scope, map[string]string{"evidence_type": binding.Evidence.Type, "evidence_ref": binding.Evidence.Ref}); err != nil {
+				return err
+			}
+			if err = insertEvent(ctx, tx, "lifecycle", id, item.Scope, map[string]string{"lifecycle": string(LifecycleConfirmed)}); err != nil {
+				return err
+			}
+			for _, oldID := range strings.Fields(metadata["supersedes_ids"]) {
+				if prior, duplicate := seenOld[oldID]; duplicate && prior != id {
+					return fmt.Errorf("superseded item %q is proposed by multiple candidates", oldID)
+				}
+				seenOld[oldID] = id
+				old, err := scanItem(tx.QueryRowContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE id=?", oldID))
+				if err != nil {
+					return fmt.Errorf("load superseded context item %q: %w", oldID, err)
+				}
+				if old.Lifecycle != LifecycleConfirmed || old.SupersededBy != "" {
+					return fmt.Errorf("superseded context item %q is not current confirmed knowledge", oldID)
+				}
+				if _, err = tx.ExecContext(ctx, "UPDATE context_items SET superseded_by=?,updated_at=? WHERE id=?", id, now, oldID); err != nil {
+					return err
+				}
+				if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO context_edges(from_id,relation,to_id,metadata_json,created_at) VALUES(?,?,?,?,?)", oldID, "supersedes", id, "{}", now); err != nil {
+					return err
+				}
+				if err = insertEvent(ctx, tx, "supersede", oldID, old.Scope, map[string]string{"superseded_by": id}); err != nil {
+					return err
+				}
+			}
+		}
+		return tx.Commit()
+	})
+}
+
 // UpdateEmbeddingState records rebuild progress in canonical storage. The
 // vector index is disposable, so callers use this state to retry documents
 // whose embedding failed without ever deleting their canonical records.
@@ -597,7 +932,9 @@ func (r *SQLiteRepository) SearchExact(ctx context.Context, req SearchRequest) (
 	if !req.IncludeCandidates {
 		where = append(where, "lifecycle='confirmed'")
 	}
-	args = append(args, now, now, now, limit)
+	args = append(args, now, now, now)
+	appendSearchFilters("", &where, &args, req)
+	args = append(args, limit)
 	rows, e := r.db.QueryContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE instr(lower(content), ?) > 0 AND "+strings.Join(where, " AND ")+" ORDER BY priority DESC, created_at DESC, id ASC LIMIT ?", args...)
 	if e != nil {
 		return nil, e
@@ -632,7 +969,9 @@ func (r *SQLiteRepository) SearchLexical(ctx context.Context, req SearchRequest)
 	if !req.IncludeCandidates {
 		where = append(where, "c.lifecycle='confirmed'")
 	}
-	args = append(args, now, now, now, limit)
+	args = append(args, now, now, now)
+	appendSearchFilters("c.", &where, &args, req)
+	args = append(args, limit)
 	rows, e := r.db.QueryContext(ctx, "SELECT "+columns+", bm25(context_items_fts) FROM context_items_fts JOIN context_items c ON c.id=context_items_fts.id WHERE context_items_fts MATCH ? AND "+strings.Join(where, " AND ")+" ORDER BY bm25(context_items_fts) LIMIT ?", args...)
 	if e != nil {
 		return nil, e
@@ -649,6 +988,21 @@ func (r *SQLiteRepository) SearchLexical(ctx context.Context, req SearchRequest)
 		out = append(out, SearchResult{Item: i, Score: -score})
 	}
 	return out, rows.Err()
+}
+
+func appendSearchFilters(prefix string, where *[]string, args *[]any, req SearchRequest) {
+	if len(req.Kinds) > 0 {
+		placeholders := make([]string, 0, len(req.Kinds))
+		for _, kind := range req.Kinds {
+			placeholders = append(placeholders, "?")
+			*args = append(*args, kind)
+		}
+		*where = append(*where, prefix+"kind IN ("+strings.Join(placeholders, ",")+")")
+	}
+	if req.MinConfidence != nil {
+		*where = append(*where, prefix+"confidence>=?")
+		*args = append(*args, *req.MinConfidence)
+	}
 }
 
 // RebuildLexical recreates the FTS5 projection from canonical rows. It is

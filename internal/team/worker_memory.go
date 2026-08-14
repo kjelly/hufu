@@ -136,14 +136,17 @@ type WorkerMemoryWriteRequest struct {
 // provenance. Content/category are model supplied, but scope is never taken
 // from a tool argument.
 type WorkerMemoryCandidateRequest struct {
-	WorkerID string
-	Scope    contextstore.Scope
-	Content  string
-	Category string
-	Tier     string // currently "persistent"; session candidates use WP-4
-	RunID    string
-	TaskID   string
-	Source   string
+	WorkerID   string
+	Scope      contextstore.Scope
+	Content    string
+	Category   string
+	Tier       string // currently "persistent"; session candidates use WP-4
+	RunID      string
+	TaskID     string
+	Source     string
+	Confidence *float64
+	FilePaths  []string
+	Supersedes []string
 }
 
 // WorkerMemoryPromotionRequest makes the caller scope explicit. A worker can
@@ -551,31 +554,55 @@ func (s *defaultWorkerMemoryService) SaveCandidate(ctx context.Context, req Work
 	scope.TaskID = ""
 	scope.AttemptID = ""
 	content = utils.TruncateRunes(contextstore.RedactSecrets(content), sessionMemoryMaxRunes)
+	confidence := 0.5
+	if req.Confidence != nil {
+		confidence = *req.Confidence
+	}
+	if confidence < 0 || confidence > 1 {
+		return contextstore.ContextItem{}, fmt.Errorf("private worker memory confidence must be between 0 and 1")
+	}
+	evidence := []contextstore.EvidenceRef{{Type: "task", Ref: req.TaskID}}
+	for _, path := range req.FilePaths {
+		evidence = append(evidence, contextstore.EvidenceRef{Type: "file_path", Ref: path})
+	}
+	kind, err := memoryCategoryKind(req.Category)
+	if err != nil {
+		return contextstore.ContextItem{}, err
+	}
+	if kind == "" {
+		kind = contextstore.ContextPattern
+	}
 	h := sha256.Sum256([]byte(strings.Join([]string{scope.ProjectID, scope.TeamID, scope.AgentID, req.Tier, string(contextstore.ContextPattern), content}, "\x00")))
 	item := contextstore.ContextItem{
 		ID:         "ctx-worker-" + hex.EncodeToString(h[:12]),
-		Kind:       candidateKind(req.Category),
+		Kind:       kind,
 		Content:    content,
 		Scope:      scope,
 		Authority:  contextstore.AuthorityAgent,
 		TrustLevel: contextstore.TrustInternal,
 		Priority:   contextstore.PriorityBackground,
-		Confidence: 0.5,
+		Confidence: confidence,
 		Source: contextstore.SourceRef{
 			Type: "worker_memory_candidate",
 			Ref:  req.RunID + ":" + req.TaskID,
 		},
-		Evidence: []contextstore.EvidenceRef{{Type: "task", Ref: req.TaskID}},
+		Evidence: evidence,
 		Metadata: map[string]string{
-			"visibility":  "private",
-			"memory_tier": req.Tier,
-			"run_id":      req.RunID,
-			"task_id":     req.TaskID,
-			"branch_id":   req.Scope.BranchID,
-			"worker_id":   req.WorkerID,
-			"source":      strings.TrimSpace(req.Source),
+			"visibility":     "private",
+			"memory_tier":    req.Tier,
+			"run_id":         req.RunID,
+			"task_id":        req.TaskID,
+			"branch_id":      req.Scope.BranchID,
+			"worker_id":      req.WorkerID,
+			"source":         strings.TrimSpace(req.Source),
+			"category":       strings.TrimSpace(req.Category),
+			"file_paths":     strings.Join(req.FilePaths, "\n"),
+			"supersedes_ids": strings.Join(req.Supersedes, "\n"),
 		},
 		Lifecycle: contextstore.LifecycleCandidate,
+	}
+	if err := validatePrivateSupersedes(ctx, s.repo, scope, req.Tier, req.WorkerID, req.Supersedes); err != nil {
+		return contextstore.ContextItem{}, err
 	}
 	if err := s.repo.Append(ctx, item); err != nil {
 		return contextstore.ContextItem{}, fmt.Errorf("append worker memory candidate: %w", err)
@@ -590,21 +617,6 @@ func (s *defaultWorkerMemoryService) SaveCandidate(ctx context.Context, req Work
 		}
 	}
 	return item, nil
-}
-
-func candidateKind(category string) contextstore.ContextKind {
-	switch strings.ToLower(strings.TrimSpace(category)) {
-	case "decision":
-		return contextstore.ContextDecision
-	case "convention":
-		return contextstore.ContextConvention
-	case "architecture":
-		return contextstore.ContextArchitecture
-	case "issue", "error", "lesson":
-		return contextstore.ContextError
-	default:
-		return contextstore.ContextPattern
-	}
 }
 
 func (s *defaultWorkerMemoryService) Confirm(ctx context.Context, req WorkerMemoryPromotionRequest) ([]contextstore.ContextItem, error) {
@@ -646,13 +658,32 @@ func (s *defaultWorkerMemoryService) Confirm(ctx context.Context, req WorkerMemo
 		ids = append(ids, item.ID)
 		promoted = append(promoted, item)
 	}
-	if err := s.repo.UpdateLifecycle(ctx, ids, contextstore.LifecycleConfirmed); err != nil {
+	if err := s.repo.ConfirmCandidates(ctx, ids, contextstore.CandidateBinding{
+		Evidence: contextstore.EvidenceRef{Type: "evidence_manifest", Ref: manifest.ManifestHash},
+		Metadata: map[string]string{"manifest_hash": manifest.ManifestHash},
+	}); err != nil {
 		return nil, err
 	}
 	for i := range promoted {
 		promoted[i].Lifecycle = contextstore.LifecycleConfirmed
 	}
 	return promoted, nil
+}
+
+func validatePrivateSupersedes(ctx context.Context, repo contextstore.Repository, scope contextstore.Scope, tier, workerID string, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	items, err := repo.GetMany(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("load superseded private memory: %w", err)
+	}
+	for _, item := range items {
+		if item.Lifecycle != contextstore.LifecycleConfirmed || item.SupersededBy != "" || !sameContextScope(item.Scope, scope) || item.Metadata["visibility"] != "private" || item.Metadata["memory_tier"] != tier || item.Metadata["worker_id"] != workerID {
+			return fmt.Errorf("cannot supersede memory %q outside the current private memory identity", item.ID)
+		}
+	}
+	return nil
 }
 
 func promotableMemoryTier(tier string) bool {
@@ -1105,6 +1136,7 @@ func (c *Coordinator) ingestWorkerSessionMemory(ctx context.Context, agentDef *a
 			Authority:  contextstore.AuthorityAgent,
 			TrustLevel: contextstore.TrustInternal,
 			Priority:   contextstore.PriorityBackground,
+			Confidence: 1.0,
 			Source: contextstore.SourceRef{
 				Type: "worker_memory_session_pending",
 				Ref:  runID + ":" + todoID,

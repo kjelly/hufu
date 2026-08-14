@@ -60,7 +60,10 @@ func OpenOllamaVectorStore(workspace, model, ollamaURL string) (*VectorStore, er
 func (s *VectorStore) Rebuild(ctx context.Context, repo Repository, scope Scope) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	items, err := repo.Query(ctx, RepositoryQuery{Scope: scope, Visibility: VisibilitySubtree, IncludeCandidates: true, Limit: 100000})
+	// The index is disposable and may contain only prompt-eligible canonical
+	// rows. Candidate/rejected/superseded lifecycle state always remains in
+	// SQLite; a vector document carries search hints only.
+	items, err := repo.Query(ctx, RepositoryQuery{Scope: scope, Visibility: VisibilitySubtree, Limit: 100000})
 	if err != nil {
 		return err
 	}
@@ -75,7 +78,11 @@ func (s *VectorStore) Rebuild(ctx context.Context, repo Repository, scope Scope)
 	s.repo = repo
 	var rebuildErrs []error
 	for _, item := range items {
-		doc := chromem.Document{ID: item.ID, Content: item.Content}
+		doc := chromem.Document{ID: item.ID, Content: item.Content, Metadata: map[string]string{
+			"kind":       string(item.Kind),
+			"project_id": item.Scope.ProjectID,
+			"team_id":    item.Scope.TeamID,
+		}}
 		if err := s.collection.AddDocuments(ctx, []chromem.Document{doc}, 1); err != nil {
 			// The index was wiped before this attempt, so even a previously
 			// embedded document is no longer indexed when re-embedding fails.

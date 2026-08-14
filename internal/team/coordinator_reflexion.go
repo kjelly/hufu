@@ -5,18 +5,13 @@ package team
 // future runs benefit from it instead of rediscovering the same failure.
 
 import (
-	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -48,34 +43,12 @@ func formatReflexionLesson(agentName, goal, failure, hint string, rescued, verif
 	return fmt.Sprintf("agent %s: %q fails: %s — avoid this approach", agentName, goal, failure)
 }
 
-type reflexionLessonRecord struct {
-	ID                   string    `json:"id"`
-	Lesson               string    `json:"lesson"`
-	Section              string    `json:"section,omitempty"`
-	Source               string    `json:"source,omitempty"`
-	RunID                string    `json:"run_id"`
-	EvidenceManifestHash string    `json:"evidence_manifest_hash,omitempty"`
-	CreatedAt            time.Time `json:"created_at"`
-	Status               string    `json:"status"`
-}
-
-const (
-	reflexionCandidatesFile = "reflexion_candidates.jsonl"
-	reflexionConfirmedFile  = "reflexion_confirmed.jsonl"
-)
-
 // persistReflexionLesson stores a candidate only. Candidate lessons are not
 // prompt-visible knowledge until CompletionGate promotes them after an
 // accepted run with complete evidence.
 func (c *Coordinator) persistReflexionLesson(lesson string) {
 	lesson = strings.TrimSpace(lesson)
 	if lesson == "" || c.session == nil {
-		return
-	}
-	// A production coordinator has a canonical store. Do not silently fall
-	// back to the shared LTM projection when no trusted worker/task identity
-	// is available: that would leak a private reflexion lesson to the team.
-	if c.contextRepo != nil {
 		return
 	}
 	c.persistKnowledgeCandidate(lesson, ltmSectionIssues, "reflexion")
@@ -87,9 +60,7 @@ func (c *Coordinator) persistPrivateReflexionLesson(agentName, taskID, lesson st
 		return
 	}
 	if c.contextRepo == nil || c.workerMemorySvc == nil {
-		// Compatibility mode has no canonical private namespace. Retain the
-		// historic candidate behavior only in this explicitly legacy mode.
-		c.persistKnowledgeCandidate(lesson, ltmSectionIssues, "reflexion")
+		log.Printf("warning: canonical context unavailable; refusing private reflexion candidate")
 		return
 	}
 	def := c.agentDefByName(agentName)
@@ -124,6 +95,14 @@ func (c *Coordinator) persistPrivateReflexionLesson(agentName, taskID, lesson st
 }
 
 func (c *Coordinator) persistKnowledgeCandidate(lesson, section, source string) {
+	c.persistKnowledgeCandidateWithEvidence(lesson, section, source, nil)
+}
+
+// persistKnowledgeCandidateWithEvidence records the source evidence used to
+// derive reusable knowledge. A candidate may be proposed before a run is
+// accepted, but its derivation must remain inspectable and it is only promoted
+// by the evidence-manifest transaction in CompletionGate.
+func (c *Coordinator) persistKnowledgeCandidateWithEvidence(lesson, section, source string, evidence []contextstore.EvidenceRef) {
 	lesson = strings.TrimSpace(lesson)
 	if lesson == "" || c == nil || c.session == nil {
 		return
@@ -131,176 +110,45 @@ func (c *Coordinator) persistKnowledgeCandidate(lesson, section, source string) 
 	if strings.TrimSpace(section) == "" {
 		section = ltmSectionIssues
 	}
-	c.ltmWriteMu.Lock()
-	defer c.ltmWriteMu.Unlock()
-	workspace := c.session.Workspace
-	if err := os.MkdirAll(filepath.Join(workspace, logsDir), 0o700); err != nil {
-		log.Printf("warning: reflexion candidate directory creation failed: %v", err)
-		return
-	}
-	hash := sha256.Sum256([]byte(lesson))
-	runID := c.executionRunID
-	if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-		runID = c.taskTracker.TodoList().RunID()
-	}
-	record := reflexionLessonRecord{ID: fmt.Sprintf("%x", hash[:]), Lesson: utils.RedactSecrets(lesson), Section: section, Source: source, RunID: runID, CreatedAt: time.Now().UTC(), Status: "candidate"}
-	path := filepath.Join(workspace, logsDir, reflexionCandidatesFile)
-	if existing, err := os.Open(path); err == nil {
-		scanner := bufio.NewScanner(existing)
-		for scanner.Scan() {
-			var prior reflexionLessonRecord
-			if json.Unmarshal(scanner.Bytes(), &prior) == nil && prior.ID == record.ID {
-				_ = existing.Close()
-				return
-			}
+	if c.contextRepo != nil {
+		runID := c.executionRunID
+		if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+			runID = c.taskTracker.TodoList().RunID()
 		}
-		_ = existing.Close()
-	}
-	b, err := json.Marshal(record)
-	if err != nil {
+		item, err := NewSharedMemoryService(c.contextRepo).Propose(context.Background(), SharedMemoryProposal{
+			Scope: c.contextScope(), Content: lesson, Section: section, Source: source, RunID: runID, Evidence: evidence,
+		})
+		if err != nil {
+			log.Printf("warning: shared memory candidate write failed: %v", err)
+			return
+		}
+		_ = c.emitEvent("shared_memory_candidate_saved", "coordinator", "", map[string]interface{}{
+			"item_id": item.ID, "run_id": runID, "kind": item.Kind, "lifecycle": item.Lifecycle,
+		})
+		if err := c.rebuildLegacyContextProjections(context.Background()); err != nil {
+			log.Printf("warning: shared memory projection rebuild failed: %v", err)
+		}
 		return
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		log.Printf("warning: reflexion candidate write failed: %v", err)
-		return
-	}
-	if _, err = f.Write(append(b, '\n')); err != nil {
-		log.Printf("warning: reflexion candidate write failed: %v", err)
-	}
-	_ = f.Close()
+	log.Printf("warning: canonical context unavailable; refusing shared reflexion candidate")
 }
 
-// bindCandidateLessonsToManifest records the exact sealed manifest digest on
-// candidates from the same run before any candidate can be promoted. Binding
-// is a separate durable step so promotion never fills in an absent digest.
-func (c *Coordinator) bindCandidateLessonsToManifest(manifest *EvidenceManifest) error {
-	if c == nil || c.session == nil || manifest == nil || manifest.Status != "accepted" || strings.TrimSpace(manifest.RunID) == "" || strings.TrimSpace(manifest.ManifestHash) == "" {
-		return fmt.Errorf("accepted manifest identity is incomplete")
+// bindCandidateLessonsToManifest remains as a compatibility call site. Shared
+// candidate binding and promotion are now one atomic repository transaction in
+// CompletionGate, so no JSONL receipt mutation remains.
+func (c *Coordinator) bindCandidateLessonsToManifest(_ *EvidenceManifest) error {
+	if c == nil || c.contextRepo == nil {
+		return fmt.Errorf("canonical context repository is required for candidate promotion")
 	}
-	c.ltmWriteMu.Lock()
-	defer c.ltmWriteMu.Unlock()
-	path := filepath.Join(c.session.Workspace, logsDir, reflexionCandidatesFile)
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Join(c.session.Workspace, logsDir), "reflexion-candidates-*.tmp")
-	if err != nil {
-		_ = f.Close()
-		return err
-	}
-	ok := false
-	defer func() {
-		_ = f.Close()
-		_ = tmp.Close()
-		if !ok {
-			_ = os.Remove(tmp.Name())
-		}
-	}()
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		var record reflexionLessonRecord
-		if json.Unmarshal(line, &record) == nil && record.Status == "candidate" && record.RunID == manifest.RunID && record.EvidenceManifestHash == "" {
-			record.EvidenceManifestHash = manifest.ManifestHash
-			line, err = json.Marshal(record)
-			if err != nil {
-				return err
-			}
-		}
-		if _, err := tmp.Write(append(line, '\n')); err != nil {
-			return err
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return err
-	}
-	ok = true
 	return nil
 }
 
-// promoteCandidateLessons is called only after CompletionGate accepts the
-// run. It converts candidate records into confirmed LTM entries and records a
-// durable confirmation receipt.
 func (c *Coordinator) promoteCandidateLessons(manifest *EvidenceManifest) {
-	if c == nil || c.session == nil || manifest == nil || manifest.Status != "accepted" || strings.TrimSpace(manifest.ManifestHash) == "" {
+	if c == nil || c.contextRepo == nil {
 		return
 	}
-	c.ltmWriteMu.Lock()
-	defer c.ltmWriteMu.Unlock()
-	workspace := c.session.Workspace
-	path := filepath.Join(workspace, logsDir, reflexionCandidatesFile)
-	f, err := os.Open(path)
-	if err != nil {
-		return
-	}
-	defer func() { _ = f.Close() }()
-	confirmedPath := filepath.Join(workspace, logsDir, reflexionConfirmedFile)
-	confirmed, err := os.OpenFile(confirmedPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return
-	}
-	defer func() { _ = confirmed.Close() }()
-	confirmedIDs := make(map[string]bool)
-	if prior, openErr := os.Open(confirmedPath); openErr == nil {
-		s := bufio.NewScanner(prior)
-		for s.Scan() {
-			var record reflexionLessonRecord
-			if json.Unmarshal(s.Bytes(), &record) == nil && record.ID != "" {
-				confirmedIDs[record.ID] = true
-			}
-		}
-		_ = prior.Close()
-	}
-	existingLTM := LoadLTM(workspace, c.session.Config.Name)
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var record reflexionLessonRecord
-		if json.Unmarshal(scanner.Bytes(), &record) != nil || record.ID == "" || strings.TrimSpace(record.Lesson) == "" {
-			continue
-		}
-		if record.RunID == "" || record.RunID != manifest.RunID {
-			continue
-		}
-		if record.EvidenceManifestHash == "" || record.EvidenceManifestHash != manifest.ManifestHash {
-			continue
-		}
-		if confirmedIDs[record.ID] {
-			continue
-		}
-		section := record.Section
-		if section == "" {
-			section = ClassifyLTMEntry(record.Lesson, "error")
-			if section == "" {
-				section = ltmSectionIssues
-			}
-		}
-		entry := formatLTMEntry(record.Lesson)
-		if !hasLTREntry(ParseSTMSections(existingLTM), section, entry) {
-			existingLTM = appendSTMEntry(existingLTM, entry, section)
-		}
-		record.Status = "confirmed"
-		record.EvidenceManifestHash = manifest.ManifestHash
-		confirmedIDs[record.ID] = true
-		if b, marshalErr := json.Marshal(record); marshalErr == nil {
-			_, _ = confirmed.Write(append(b, '\n'))
-		}
-	}
-	if err := SaveLTM(workspace, c.session.Config.Name, TruncateLTM(PruneLTM(existingLTM))); err != nil {
-		log.Printf("warning: confirmed reflexion LTM write failed: %v", err)
+	if err := c.confirmSharedMemoryCandidates(context.Background(), manifest); err != nil {
+		log.Printf("warning: canonical shared memory promotion failed: %v", err)
 	}
 }
 
