@@ -188,8 +188,13 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	memoryStore := (*memory.MemoryStore)(nil)
 	var canonicalMemory *CanonicalContextBundle
 	canonical := false
+	// The retrieval query is the raw direct-agent goal, not the expanded
+	// prompt. The manifest must hash the same value so explain-memory can bind
+	// the actual retrieval query to its retrieval ID (spec §5.1, §7
+	// HF-MEM4-005).
+	retrievalQuery := task
 	if !c.ExecutionProfile().DisableHistoricalMemory {
-		bundle, foundCanonical, memoryErr := c.canonicalContextBundle(taskCtx)
+		bundle, foundCanonical, memoryErr := c.canonicalContextBundleForQuery(taskCtx, retrievalQuery)
 		if memoryErr != nil {
 			return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent canonical memory preflight failed: %w", memoryErr)}, nil
 		}
@@ -227,11 +232,32 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return &DirectAgentResult{AgentName: resolvedName, Error: err}, nil
 	}
 	prompt = compiled.Prompt
+	runID := c.executionRunID
+	if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		runID = c.taskTracker.TodoList().RunID()
+	}
+	memoryManifest := buildMemoryInjectionManifest(compiled, runID, todoID, 1, resolvedName, retrievalQuery, c.session.Config.MemoryLearning)
+	c.setCurrentTaskAttempt(todoID, 1)
+	if manifestErr := c.persistMemoryManifest(memoryManifest); manifestErr != nil {
+		roundCancel()
+		c.unregisterTerminalRound(todoID)
+		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent memory manifest preflight failed: %w", manifestErr)}, nil
+	}
 
 	output, steps, err := c.runAgentWithStatusAndHistory(taskCtx, ag, resolvedName, prompt, nil, timing)
 	roundCancel()
 	c.unregisterTerminalRound(todoID)
 	duration, modelTime, toolTime := timing.snapshot()
+	directReceipt := ExecutionReceipt{
+		RunID: runID, TaskID: todoID, Attempt: 1, StartedAt: attemptStarted,
+		FinishedAt: time.Now(), ProducerID: resolvedName,
+		MemoryManifest: cloneMemoryInjectionManifest(memoryManifest),
+	}
+	if err == nil {
+		zero := 0
+		directReceipt.ExitCode = &zero
+	}
+	_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &directReceipt)
 	err, terminalBlocked := c.finalizeTaskTerminalResources(ctx, todoID, err)
 	if err != nil {
 		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), usageFromSteps(steps))
@@ -1137,7 +1163,7 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 	memoryStore := (*memory.MemoryStore)(nil)
 	var canonicalMemory *CanonicalContextBundle
 	if allowHistoricalMemory {
-		bundle, canonical, memoryErr := c.canonicalContextBundle(ctx)
+		bundle, canonical, memoryErr := c.canonicalContextBundleForQuery(ctx, prompt)
 		if memoryErr != nil {
 			return "", fmt.Errorf("coordinator canonical memory preflight failed: %w", memoryErr)
 		}
@@ -1216,6 +1242,10 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		return "", fmt.Errorf("coordinator context preflight failed: compiled prompt is empty")
 	}
 	systemPrompt = compiled.Prompt
+	if c.session != nil {
+		manifest := buildMemoryInjectionManifest(compiled, c.executionRunID, "", c.totalRounds()+1, "coordinator", prompt, c.session.Config.MemoryLearning)
+		c.emitMemoryRetrievalEvents(manifest)
+	}
 
 	if c.think && !isContinuation {
 		c.emitThinkPrompt(systemPrompt)

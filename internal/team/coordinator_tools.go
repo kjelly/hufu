@@ -566,8 +566,10 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 	}
 
 	if !res.Passed {
+		c.recordMemoryRunOutcome("acceptance_failed_causality_unknown", "", 0)
 		return res, fmt.Errorf("acceptance check failed: %s", strings.Join(res.Errors, "; "))
 	}
+	c.recordMemoryRunOutcome("acceptance_passed", "positive", 1)
 	return res, nil
 }
 
@@ -612,6 +614,10 @@ func (c *Coordinator) runRollback(parentCtx context.Context) error {
 		}
 		return fmt.Errorf("%v%s", err, detail)
 	}
+	// A run-level rollback proves that side effects were reverted, but it does
+	// not by itself prove which memory caused them. Deterministic receipt/action
+	// matching remains required before negative aggregate credit is allowed.
+	c.recordMemoryRollbackOutcome()
 	return nil
 }
 

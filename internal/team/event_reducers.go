@@ -238,35 +238,36 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		}
 
 		var payload struct {
-			ID                  string               `json:"id"`
-			PlanTaskID          string               `json:"plan_task_id"`
-			Description         string               `json:"description"`
-			Desc                string               `json:"desc"`
-			Status              string               `json:"status"`
-			MaxRetries          int                  `json:"max_retries"`
-			Retries             int                  `json:"retries"`
-			Output              string               `json:"output"`
-			Summary             string               `json:"summary"`
-			Agent               string               `json:"agent"`
-			DependsOn           []string             `json:"depends_on"`
-			Verify              string               `json:"verify"`
-			VerifyMode          string               `json:"verify_mode"`
-			VerifySpec          *VerificationSpec    `json:"verify_spec"`
-			VerifyResult        *VerificationResult  `json:"verify_result"`
-			TypedResult         *TaskResult          `json:"typed_result"`
-			ExecutionReceipt    *ExecutionReceipt    `json:"execution_receipt"`
-			ExecutionReceipts   []ExecutionReceipt   `json:"execution_receipts"`
-			Kind                TaskKind             `json:"kind"`
-			Advances            []string             `json:"advances"`
-			ExpectedStateChange string               `json:"expected_state_change"`
-			Progress            TaskProgress         `json:"progress"`
-			ProgressCriteria    []string             `json:"progress_criteria"`
-			FailureFingerprints []FailureFingerprint `json:"failure_fingerprints"`
-			Execution           ExecutionContract    `json:"execution"`
-			RecoveryHypothesis  *RecoveryHypothesis  `json:"recovery_hypothesis"`
-			SideEffect          SideEffectClass      `json:"side_effect"`
-			Recovery            RecoveryPolicy       `json:"recovery"`
-			ReconcileTool       string               `json:"reconcile_tool"`
+			ID                  string                    `json:"id"`
+			PlanTaskID          string                    `json:"plan_task_id"`
+			Description         string                    `json:"description"`
+			Desc                string                    `json:"desc"`
+			Status              string                    `json:"status"`
+			MaxRetries          int                       `json:"max_retries"`
+			Retries             int                       `json:"retries"`
+			Output              string                    `json:"output"`
+			Summary             string                    `json:"summary"`
+			Agent               string                    `json:"agent"`
+			DependsOn           []string                  `json:"depends_on"`
+			Verify              string                    `json:"verify"`
+			VerifyMode          string                    `json:"verify_mode"`
+			VerifySpec          *VerificationSpec         `json:"verify_spec"`
+			VerifyResult        *VerificationResult       `json:"verify_result"`
+			TypedResult         *TaskResult               `json:"typed_result"`
+			ExecutionReceipt    *ExecutionReceipt         `json:"execution_receipt"`
+			ExecutionReceipts   []ExecutionReceipt        `json:"execution_receipts"`
+			Kind                TaskKind                  `json:"kind"`
+			Advances            []string                  `json:"advances"`
+			ExpectedStateChange string                    `json:"expected_state_change"`
+			Progress            TaskProgress              `json:"progress"`
+			ProgressCriteria    []string                  `json:"progress_criteria"`
+			FailureFingerprints []FailureFingerprint      `json:"failure_fingerprints"`
+			Execution           ExecutionContract         `json:"execution"`
+			RecoveryHypothesis  *RecoveryHypothesis       `json:"recovery_hypothesis"`
+			SideEffect          SideEffectClass           `json:"side_effect"`
+			Recovery            RecoveryPolicy            `json:"recovery"`
+			ReconcileTool       string                    `json:"reconcile_tool"`
+			MemoryManifests     []MemoryInjectionManifest `json:"memory_manifests"`
 		}
 		_ = json.Unmarshal(e.Payload, &payload)
 
@@ -407,6 +408,9 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		}
 		if len(payload.ExecutionReceipts) > 0 {
 			item.ExecutionReceipts = payload.ExecutionReceipts
+		}
+		if len(payload.MemoryManifests) > 0 {
+			item.MemoryManifests = payload.MemoryManifests
 		}
 
 		switch e.Type {

@@ -275,8 +275,12 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	memoryStore := (*memory.MemoryStore)(nil)
 	var canonicalMemory *CanonicalContextBundle
 	canonical := false
+	// The retrieval query is the raw task goal, not the expanded prompt. The
+	// manifest must hash the same value so explain-memory can bind the actual
+	// retrieval query to its retrieval ID (spec §5.1, §7 HF-MEM4-005).
+	retrievalQuery := task.Goal
 	if !c.ExecutionProfile().DisableHistoricalMemory {
-		bundle, foundCanonical, memoryErr := c.canonicalContextBundle(parentCtx)
+		bundle, foundCanonical, memoryErr := c.canonicalContextBundleForQuery(parentCtx, retrievalQuery)
 		if memoryErr != nil {
 			return "", fmt.Errorf("worker canonical memory preflight failed: %w", memoryErr)
 		}
@@ -438,6 +442,15 @@ retryLoop:
 			c.clearSubmittedTaskResult(todoID)
 		}
 		attemptStarted := time.Now()
+		runID := c.executionRunID
+		if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+			runID = c.taskTracker.TodoList().RunID()
+		}
+		attemptManifest := buildMemoryInjectionManifest(compiled, runID, todoID, attempt, agentName, retrievalQuery, c.session.Config.MemoryLearning)
+		if err := c.persistMemoryManifest(attemptManifest); err != nil {
+			closeTranscript()
+			return "", fmt.Errorf("worker memory manifest preflight failed: %w", err)
+		}
 		c.recordExecutionEvent(todoID, agentName, attempt, "in_progress", resolvedModel, 0, ExecutionUsage{})
 		currentPrompt := prompt
 		if attempt > 1 {
@@ -583,10 +596,6 @@ retryLoop:
 				}
 			}
 		}()
-		runID := c.executionRunID
-		if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-			runID = c.taskTracker.TodoList().RunID()
-		}
 		transcriptRef := ""
 		var transcriptArtifact *ArtifactRef
 		if transcript != nil {
@@ -606,13 +615,14 @@ retryLoop:
 			}
 		}
 		receipt := ExecutionReceipt{
-			RunID:         runID,
-			TaskID:        todoID,
-			Attempt:       attempt,
-			StartedAt:     attemptStarted,
-			FinishedAt:    time.Now(),
-			ProducerID:    agentName,
-			TranscriptRef: transcriptRef,
+			RunID:          runID,
+			TaskID:         todoID,
+			Attempt:        attempt,
+			StartedAt:      attemptStarted,
+			FinishedAt:     time.Now(),
+			ProducerID:     agentName,
+			TranscriptRef:  transcriptRef,
+			MemoryManifest: cloneMemoryInjectionManifest(attemptManifest),
 			StepBudget: &StepBudgetUsage{
 				Used:      len(steps),
 				Limit:     stepBudget,
@@ -942,6 +952,7 @@ retryLoop:
 					c.report(c.newEvent("skeptic").withAgent(agentName).withMessage(averr.Error()).withTodoID(todoID))
 				} else {
 					c.report(c.newEvent("skeptic").withAgent(agentName).withMessage(fmt.Sprintf("confirmed by %d skeptic vote(s)", len(skepticLenses(task.AdversarialVerify)))).withTodoID(todoID))
+					c.recordMemoryOutcomeSignalForTaskID(todoID, "skeptic_passed", "positive", 0.8)
 				}
 			}
 			// A terminal child is an independent source of truth. Do this even

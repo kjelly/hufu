@@ -149,6 +149,20 @@ type TaskProposal struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+type MemoryUseRef struct {
+	RetrievalID   string  `json:"retrieval_id"`
+	ContextItemID string  `json:"context_item_id"`
+	Disposition   string  `json:"disposition"`
+	ReasonCode    string  `json:"reason_code,omitempty"`
+	Confidence    float64 `json:"confidence"`
+}
+
+const (
+	MemoryUseApplied   = "applied"
+	MemoryUseConsulted = "consulted"
+	MemoryUseRejected  = "rejected"
+)
+
 // OpenQuestions is the canonical textual handoff form for unresolved work.
 // Models naturally produce either terse strings or structured question
 // objects. Accept the documented structured form at the typed-result boundary
@@ -266,6 +280,7 @@ type TaskResult struct {
 	RawOutputRef       *ArtifactRef                     `json:"raw_output_ref,omitempty"`
 	ReceiptIDs         []string                         `json:"receipt_ids,omitempty"`
 	Outputs            map[string]StructuredOutputValue `json:"outputs,omitempty"`
+	MemoryUses         []MemoryUseRef                   `json:"memory_uses,omitempty"`
 
 	Confidence float64 `json:"confidence"`
 	Source     string  `json:"source"` // "submitted" or "parsed_free_text"

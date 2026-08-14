@@ -147,6 +147,22 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 				"description": "Runtime-issued receipt IDs that support this result. Structured execution tasks require actual receipts from the current task attempt.",
 				"items":       map[string]any{"type": "string"},
 			},
+			"memory_uses": map[string]any{
+				"type":        "array",
+				"description": "Canonical memory records actually applied, consulted, or rejected. Use only IDs and retrieval_id from the injected context; an empty array is valid.",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"retrieval_id":    map[string]any{"type": "string"},
+						"context_item_id": map[string]any{"type": "string"},
+						"disposition":     map[string]any{"type": "string", "enum": []string{MemoryUseApplied, MemoryUseConsulted, MemoryUseRejected}},
+						"reason_code":     map[string]any{"type": "string"},
+						"confidence":      map[string]any{"type": "number", "minimum": 0.0, "maximum": 1.0},
+					},
+					"required":             []string{"retrieval_id", "context_item_id", "disposition", "confidence"},
+					"additionalProperties": false,
+				},
+			},
 		},
 		Required: []string{"status", "summary"},
 	}
@@ -184,6 +200,9 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	}
 	if t.coordinator != nil {
 		if err := t.coordinator.validateTaskResultReceiptClaims(t.todoID, &res); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
+		if err := t.coordinator.validateMemoryUseClaims(ctx, t.todoID, &res); err != nil {
 			return fantasy.NewTextErrorResponse(err.Error()), nil
 		}
 	}
@@ -228,6 +247,7 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 			return fantasy.NewTextErrorResponse("invalid artifact declaration: " + err.Error()), nil
 		}
 		t.coordinator.storeSubmittedTaskResult(t.todoID, &res)
+		t.coordinator.emitMemoryUsageEvents(&res)
 	}
 	return fantasy.NewTextResponse("Task result submitted successfully."), nil
 }

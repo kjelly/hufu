@@ -25,10 +25,9 @@ import (
 	"testing"
 )
 
-// TestMigrationFixture_CurrentSchemaVersionIsTwo confirms the baseline: the
-// latest applied migration is version 2. WP-1 will add version 3; if someone
-// accidentally adds it before WP-1, this test catches the premature change.
-func TestMigrationFixture_CurrentSchemaVersionIsTwo(t *testing.T) {
+// TestMigrationFixture_CurrentSchemaVersion confirms the checked-in migration
+// list and a newly opened database agree on the latest schema version.
+func TestMigrationFixture_CurrentSchemaVersion(t *testing.T) {
 	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
@@ -38,11 +37,11 @@ func TestMigrationFixture_CurrentSchemaVersionIsTwo(t *testing.T) {
 	if err := r.db.QueryRowContext(context.Background(), "SELECT MAX(version) FROM schema_migrations").Scan(&maxVersion); err != nil {
 		t.Fatalf("query max version: %v", err)
 	}
-	if maxVersion != 3 {
-		t.Fatalf("current latest migration version = %d, want 3 (WP-1 added version 3: branch_id_lifecycle_schema)", maxVersion)
+	if maxVersion != 5 {
+		t.Fatalf("current latest migration version = %d, want 5 (memory_consolidation_proposals)", maxVersion)
 	}
-	if len(migrations) != 3 {
-		t.Fatalf("len(migrations) = %d, want 3", len(migrations))
+	if len(migrations) != 5 {
+		t.Fatalf("len(migrations) = %d, want 5", len(migrations))
 	}
 }
 

@@ -27,9 +27,10 @@ type jsonRunOutput struct {
 }
 
 type jsonRunTeam struct {
-	Name   string        `json:"name"`
-	Tokens int64         `json:"tokens"`
-	Tasks  []jsonRunTask `json:"tasks,omitempty"`
+	Name           string                    `json:"name"`
+	Tokens         int64                     `json:"tokens"`
+	Tasks          []jsonRunTask             `json:"tasks,omitempty"`
+	MemoryLearning team.MemoryLearningReport `json:"memory_learning,omitempty"`
 }
 
 type jsonRunTask struct {
@@ -73,7 +74,7 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 			runResults = append(runResults, lastRes)
 			out.UnresolvedTasks = append(out.UnresolvedTasks, lastRes.UnresolvedTasks...)
 		}
-		jt := jsonRunTeam{Name: name, Tokens: tc.coordinator.TokensUsed()}
+		jt := jsonRunTeam{Name: name, Tokens: tc.coordinator.TokensUsed(), MemoryLearning: tc.coordinator.MemoryLearningReport()}
 		var items []*team.TodoItem
 		if tracker := tc.coordinator.TaskTracker(); tracker != nil && tracker.TodoList() != nil {
 			items = tracker.TodoList().Items()

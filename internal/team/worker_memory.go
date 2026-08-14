@@ -59,8 +59,11 @@ type WorkerMemoryLineageBranch struct {
 // WorkerMemoryItem is a single recalled memory record with tier metadata.
 type WorkerMemoryItem struct {
 	contextstore.ContextItem
-	Tier   string // "session" or "persistent"
-	Reason string // why it was selected
+	Tier       string // "session" or "persistent"
+	Reason     string // why it was selected
+	BaseScore  float64
+	FinalScore float64
+	ScoreParts MemoryScoreParts
 }
 
 // WorkerMemoryBundle is the output of recall: a ranked, deduped, budgeted
@@ -324,6 +327,9 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 			ContextItem: r.item,
 			Tier:        r.tier,
 			Reason:      fmt.Sprintf("tier=%s score=%.4f", r.tier, r.score),
+			BaseScore:   r.score,
+			FinalScore:  r.score,
+			ScoreParts:  MemoryScoreParts{BaseRelevance: r.score},
 		})
 		if len(items) >= maxItems {
 			break
@@ -906,6 +912,10 @@ func (c *Coordinator) recallWorkerMemory(ctx context.Context, agentDef *agent.Ag
 	if err != nil {
 		return nil
 	}
+	if len(bundle.Items) == 0 {
+		return nil
+	}
+	c.rerankWorkerMemory(ctx, &bundle, taskGoal)
 	if len(bundle.Items) == 0 {
 		return nil
 	}

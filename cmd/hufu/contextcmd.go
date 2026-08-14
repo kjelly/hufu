@@ -14,9 +14,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/memory"
+	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -34,6 +36,7 @@ var contextEvidence string
 var contextReason string
 var contextSupersedeWith string
 var contextRebuildVector bool
+var contextRebuildAggregates bool
 var contextLegacyProject string
 var contextMigrateApply bool
 
@@ -166,6 +169,8 @@ func init() {
 	contextCmd.AddCommand(contextExplainCmd)
 	contextRebuildCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context.sqlite")
 	contextRebuildCmd.Flags().BoolVar(&contextRebuildVector, "vector", false, "Also rebuild the disposable canonical vector index (requires --project and embedding provider access)")
+	contextRebuildCmd.Flags().BoolVar(&contextRebuildAggregates, "aggregates", false, "Rebuild outcome-driven experience aggregates from event_store.jsonl")
+	contextRebuildCmd.Flags().StringVar(&contextPolicyVersion, "policy-version", "memory-policy-v1", "Memory policy version used for aggregate replay")
 	contextRebuildCmd.Flags().StringVar(&contextProject, "project", "", "Canonical project ID required with --vector")
 	contextRebuildCmd.Flags().StringVar(&contextTeam, "team", "", "Optional team scope for --vector")
 	contextCmd.AddCommand(contextRebuildCmd)
@@ -300,7 +305,7 @@ func runContextMigrateMemory(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 	if err := repo.Append(cmd.Context(), items...); err != nil {
 		return fmt.Errorf("append canonical legacy import: %w", err)
 	}
@@ -407,7 +412,7 @@ func runContextConfirm(cmd *cobra.Command, ids []string) error {
 	if err != nil {
 		return err
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 	items, err := loadExactMutationItems(cmd, repo, ids)
 	if err != nil {
 		return err
@@ -516,12 +521,49 @@ func runContextRebuild(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
+	if contextRebuildAggregates {
+		eventStore, openErr := team.OpenEventStore(getContextWorkspace())
+		if openErr != nil {
+			return fmt.Errorf("opening event store for aggregate rebuild: %w", openErr)
+		}
+		defer func() { _ = eventStore.Close() }()
+		if verifyErr := eventStore.VerifyHashChain(); verifyErr != nil {
+			return fmt.Errorf("verify event store before aggregate rebuild: %w", verifyErr)
+		}
+		events, readErr := eventStore.ReadEvents()
+		if readErr != nil {
+			return readErr
+		}
+		policy := agent.DefaultMemoryLearningPolicy()
+		policy.PolicyVersion = contextPolicyVersion
+		observations := team.ExperienceObservationsFromEvents(events, policy)
+		if rebuildErr := repo.RebuildExperienceAggregates(cmd.Context(), observations); rebuildErr != nil {
+			return fmt.Errorf("rebuilding experience aggregates: %w", rebuildErr)
+		}
+		keys := make([]string, 0, len(observations))
+		for _, observation := range observations {
+			keys = append(keys, observation.IdempotencyKey)
+		}
+		sort.Strings(keys)
+		digest := sha256.Sum256([]byte(strings.Join(keys, "\x00")))
+		payload, marshalErr := json.Marshal(map[string]any{"schema_version": 1, "policy_version": policy.PolicyVersion, "observation_count": len(observations)})
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if appendErr := eventStore.Append(team.RunEvent{Type: "memory_aggregate_rebuilt", Actor: "maintenance", IdempotencyKey: "memory:aggregate_rebuilt:" + policy.PolicyVersion + ":" + hex.EncodeToString(digest[:12]), Payload: payload}); appendErr != nil {
+			return fmt.Errorf("record aggregate rebuild: %w", appendErr)
+		}
+	}
 	if err := repo.RebuildLexical(cmd.Context()); err != nil {
 		return fmt.Errorf("rebuilding FTS5 index: %w", err)
 	}
 	if !contextRebuildVector {
-		_, err = fmt.Fprintln(cmd.OutOrStdout(), "context rebuild: FTS5 index rebuilt")
+		message := "context rebuild: FTS5 index rebuilt"
+		if contextRebuildAggregates {
+			message += "; experience aggregates rebuilt"
+		}
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), message)
 		return err
 	}
 	if strings.TrimSpace(contextProject) == "" {
@@ -813,11 +855,7 @@ func runContextHistory(cmd *cobra.Command, args []string) error {
 }
 
 func runContextConsolidate(cmd *cobra.Command, _ []string) error {
-	if err := validateContextReadFilters(true); err != nil {
-		return err
-	}
-	_, err := fmt.Fprintln(cmd.OutOrStdout(), "context consolidate: no automatic mutations; inspect candidates and use `context supersede` after explicit review")
-	return err
+	return runContextConsolidateProposals(cmd)
 }
 
 type contextShadowTrace struct {

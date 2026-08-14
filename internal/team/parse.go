@@ -2,6 +2,7 @@ package team
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,18 +119,31 @@ type teamConfigYAML struct {
 	// Kept as an opaque map here because MCP server loading is owned by the
 	// session layer; declaring the key preserves this long-standing manifest
 	// field while strict validation still rejects unknown top-level keys.
-	MCPServers       map[string]interface{} `yaml:"mcp-servers"`
-	Unattended       bool                   `yaml:"unattended"`
-	AutoApprove      bool                   `yaml:"auto-approve"`
-	MaxWallClock     int64                  `yaml:"max-duration"`
-	MaxTotalTokens   int64                  `yaml:"max-total-tokens"`
-	Acceptance       interface{}            `yaml:"acceptance"`
-	Rollback         string                 `yaml:"rollback"`
-	ExecutionProfile string                 `yaml:"execution-profile"`
-	GoalMode         string                 `yaml:"goal-mode"`
-	Reliability      rawReliabilityConfig   `yaml:"reliability"`
-	WorkerMemory     rawWorkerMemoryPolicy  `yaml:"worker-memory"`
-	Tasks            []TaskDef              `yaml:"tasks"`
+	MCPServers       map[string]interface{}  `yaml:"mcp-servers"`
+	Unattended       bool                    `yaml:"unattended"`
+	AutoApprove      bool                    `yaml:"auto-approve"`
+	MaxWallClock     int64                   `yaml:"max-duration"`
+	MaxTotalTokens   int64                   `yaml:"max-total-tokens"`
+	Acceptance       interface{}             `yaml:"acceptance"`
+	Rollback         string                  `yaml:"rollback"`
+	ExecutionProfile string                  `yaml:"execution-profile"`
+	GoalMode         string                  `yaml:"goal-mode"`
+	Reliability      rawReliabilityConfig    `yaml:"reliability"`
+	WorkerMemory     rawWorkerMemoryPolicy   `yaml:"worker-memory"`
+	MemoryLearning   rawMemoryLearningPolicy `yaml:"memory-learning"`
+	Tasks            []TaskDef               `yaml:"tasks"`
+}
+
+type rawMemoryLearningPolicy struct {
+	Mode                string   `yaml:"mode"`
+	PolicyVersion       string   `yaml:"policy-version"`
+	PriorAlpha          *float64 `yaml:"prior-alpha"`
+	PriorBeta           *float64 `yaml:"prior-beta"`
+	UtilityPercentile   *float64 `yaml:"utility-percentile"`
+	MaxCreditPerSignal  *float64 `yaml:"max-credit-per-signal"`
+	MinConfirmedSupport *int     `yaml:"min-confirmed-support"`
+	MinIndependentTasks *int     `yaml:"min-independent-tasks"`
+	MaxHarmRate         *float64 `yaml:"max-harm-rate"`
 }
 
 type rawDelegationPolicy struct {
@@ -752,6 +766,10 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	} else {
 		cfg.WorkerMemory = agent.DefaultWorkerMemoryPolicy()
 	}
+	cfg.MemoryLearning = resolveMemoryLearningPolicy(yc.MemoryLearning)
+	if err := validateMemoryLearningPolicy(cfg.MemoryLearning); err != nil {
+		return cfg, fmt.Errorf("invalid memory-learning config: %w", err)
+	}
 	effectiveGoalMode, err := ResolveEffectiveGoalMode(cfg.GoalMode, cfg.ExecutionProfile)
 	if err != nil {
 		return cfg, fmt.Errorf("invalid effective goal mode: %w", err)
@@ -876,6 +894,65 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 
 	return cfg, nil
+}
+
+func resolveMemoryLearningPolicy(raw rawMemoryLearningPolicy) agent.MemoryLearningPolicy {
+	p := agent.DefaultMemoryLearningPolicy()
+	if raw.Mode != "" {
+		p.Mode = agent.MemoryLearningMode(strings.TrimSpace(raw.Mode))
+	}
+	if raw.PolicyVersion != "" {
+		p.PolicyVersion = strings.TrimSpace(raw.PolicyVersion)
+	}
+	if raw.PriorAlpha != nil {
+		p.PriorAlpha = *raw.PriorAlpha
+	}
+	if raw.PriorBeta != nil {
+		p.PriorBeta = *raw.PriorBeta
+	}
+	if raw.UtilityPercentile != nil {
+		p.UtilityPercentile = *raw.UtilityPercentile
+	}
+	if raw.MaxCreditPerSignal != nil {
+		p.MaxCreditPerSignal = *raw.MaxCreditPerSignal
+	}
+	if raw.MinConfirmedSupport != nil {
+		p.MinConfirmedSupport = *raw.MinConfirmedSupport
+	}
+	if raw.MinIndependentTasks != nil {
+		p.MinIndependentTasks = *raw.MinIndependentTasks
+	}
+	if raw.MaxHarmRate != nil {
+		p.MaxHarmRate = *raw.MaxHarmRate
+	}
+	return p
+}
+
+func validateMemoryLearningPolicy(p agent.MemoryLearningPolicy) error {
+	switch p.Mode {
+	case agent.MemoryLearningOff, agent.MemoryLearningObserve, agent.MemoryLearningShadow, agent.MemoryLearningActive:
+	default:
+		return fmt.Errorf("mode %q must be off, observe, shadow, or active", p.Mode)
+	}
+	if p.PolicyVersion == "" {
+		return errors.New("policy-version must not be empty")
+	}
+	if p.PriorAlpha <= 0 || p.PriorBeta <= 0 {
+		return errors.New("prior-alpha and prior-beta must be positive")
+	}
+	if p.UtilityPercentile <= 0 || p.UtilityPercentile >= 1 {
+		return errors.New("utility-percentile must be between 0 and 1")
+	}
+	if p.MaxCreditPerSignal <= 0 {
+		return errors.New("max-credit-per-signal must be positive")
+	}
+	if p.MinConfirmedSupport < 0 || p.MinIndependentTasks < 0 {
+		return errors.New("support thresholds must be non-negative")
+	}
+	if p.MaxHarmRate < 0 || p.MaxHarmRate > 1 {
+		return errors.New("max-harm-rate must be between 0 and 1")
+	}
+	return nil
 }
 
 // loadTeamContractTasks reads optional static task contracts from team YAML.

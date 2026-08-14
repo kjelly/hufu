@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -40,15 +41,18 @@ type RunEvent struct {
 
 // EventStore manages durable append-only event logging with hash chain verification.
 type EventStore struct {
-	mu          sync.Mutex
-	f           *os.File
-	path        string
-	runID       string
-	sessionID   string
-	branchID    string
-	lastEventID string
-	lastHash    string
-	sequence    int
+	mu              sync.Mutex
+	f               *os.File
+	path            string
+	runID           string
+	sessionID       string
+	branchID        string
+	lastEventID     string
+	lastHash        string
+	sequence        int
+	degraded        bool
+	syncFile        func() error
+	idempotencyKeys map[string]struct{}
 }
 
 // SetBranchID binds the store to a session branch: subsequent events appended
@@ -86,24 +90,17 @@ func NewEventStore(workspace, runID, sessionID string) (*EventStore, error) {
 	}
 
 	es := &EventStore{
-		f:         f,
-		path:      path,
-		runID:     runID,
-		sessionID: sessionID,
+		f:               f,
+		path:            path,
+		runID:           runID,
+		sessionID:       sessionID,
+		syncFile:        f.Sync,
+		idempotencyKeys: make(map[string]struct{}),
 	}
 
-	events, _ := es.ReadEvents()
-	if len(events) > 0 {
-		last := events[len(events)-1]
-		es.lastEventID = last.ID
-		es.lastHash = last.Hash
-		es.sequence = len(events)
-		if es.runID == "" && last.RunID != "" {
-			es.runID = last.RunID
-		}
-		if es.sessionID == "" && last.SessionID != "" {
-			es.sessionID = last.SessionID
-		}
+	if err := es.rescan(); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("new event store rescan: %w", err)
 	}
 
 	return es, nil
@@ -165,6 +162,19 @@ func (es *EventStore) Append(event RunEvent) error {
 	if es.f == nil {
 		return fmt.Errorf("event store closed")
 	}
+	if es.degraded {
+		if err := es.reopenAndRescan(); err != nil {
+			return fmt.Errorf("recover degraded event store: %w", err)
+		}
+	}
+	// A failed Sync leaves durability uncertain: the event may nevertheless be
+	// visible after reopen. Treat a persisted idempotency key as success so a
+	// retry cannot fork the logical event stream with a duplicate observation.
+	if event.IdempotencyKey != "" {
+		if _, exists := es.idempotencyKeys[event.IdempotencyKey]; exists {
+			return nil
+		}
+	}
 
 	if IsTerminalEvent(event.Type) && IsEmptyPayload(event.Payload) {
 		return fmt.Errorf("reject terminal event %q with empty payload", event.Type)
@@ -212,19 +222,110 @@ func (es *EventStore) Append(event RunEvent) error {
 		return fmt.Errorf("marshal run event: %w", err)
 	}
 
-	if _, err := es.f.Write(append(data, '\n')); err != nil {
+	line := append(data, '\n')
+	n, err := es.f.Write(line)
+	if err != nil {
+		es.degraded = true
 		return fmt.Errorf("write run event: %w", err)
 	}
+	if n != len(line) {
+		es.degraded = true
+		return fmt.Errorf("write run event: %w", io.ErrShortWrite)
+	}
 
-	_ = es.f.Sync()
+	if err := es.syncFile(); err != nil {
+		es.degraded = true
+		return fmt.Errorf("sync run event: %w", err)
+	}
 
 	es.lastEventID = event.ID
 	es.lastHash = event.Hash
+	if event.IdempotencyKey != "" {
+		es.idempotencyKeys[event.IdempotencyKey] = struct{}{}
+	}
 	return nil
+}
+
+// reopenAndRescan closes the file whose durable state is uncertain, reopens
+// it, and derives the chain head from bytes that are actually visible in the
+// event log. It deliberately refuses a malformed or broken chain instead of
+// appending from a guessed last hash.
+func (es *EventStore) reopenAndRescan() error {
+	if es.f != nil {
+		_ = es.f.Close()
+	}
+	f, err := os.OpenFile(es.path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		es.f = nil
+		return err
+	}
+	es.f = f
+	es.syncFile = f.Sync
+	if err := es.rescan(); err != nil {
+		_ = f.Close()
+		es.f = nil
+		return err
+	}
+	es.degraded = false
+	return nil
+}
+
+// rescan strictly validates the persisted JSONL and restores the chain head.
+// ReadEvents remains the tolerant inspection API for compatibility; append
+// recovery must be strict because silently skipping a line would fork the
+// hash chain.
+func (es *EventStore) rescan() error {
+	f, err := os.Open(es.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	es.lastEventID = ""
+	es.lastHash = ""
+	es.sequence = 0
+	es.idempotencyKeys = make(map[string]struct{})
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var event RunEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			return fmt.Errorf("decode event %d: %w", es.sequence+1, err)
+		}
+		if event.PreviousID != es.lastEventID || event.PreviousHash != es.lastHash {
+			return fmt.Errorf("event %d (%s) does not continue hash chain", es.sequence, event.ID)
+		}
+		expected := ComputeEventHash(event.PreviousHash, event.ID, event.Type, event.Timestamp, event.Payload)
+		if event.Hash != expected {
+			return fmt.Errorf("event %d (%s) hash invalid", es.sequence, event.ID)
+		}
+		es.lastEventID = event.ID
+		es.lastHash = event.Hash
+		if event.IdempotencyKey != "" {
+			es.idempotencyKeys[event.IdempotencyKey] = struct{}{}
+		}
+		es.sequence++
+		if es.runID == "" && event.RunID != "" {
+			es.runID = event.RunID
+		}
+		if es.sessionID == "" && event.SessionID != "" {
+			es.sessionID = event.SessionID
+		}
+	}
+	return sc.Err()
 }
 
 // ReadEvents reads all valid events from the event store file.
 func (es *EventStore) ReadEvents() ([]RunEvent, error) {
+	es.mu.Lock()
+	defer es.mu.Unlock()
 	if es.path == "" {
 		return nil, nil
 	}

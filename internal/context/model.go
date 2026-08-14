@@ -1,6 +1,5 @@
-// Package context implements the canonical, durable context store. It is kept
-// separate from the legacy prompt assembly path so shadow writes cannot alter
-// the prompt sent to a model.
+// Package context implements the canonical, durable context store used by
+// prompt assembly, lifecycle maintenance, and retrieval.
 package context
 
 import "time"

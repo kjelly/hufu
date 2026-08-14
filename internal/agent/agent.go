@@ -213,6 +213,38 @@ func DefaultWorkerMemoryPolicy() WorkerMemoryPolicy {
 	}
 }
 
+type MemoryLearningMode string
+
+const (
+	MemoryLearningOff     MemoryLearningMode = "off"
+	MemoryLearningObserve MemoryLearningMode = "observe"
+	MemoryLearningShadow  MemoryLearningMode = "shadow"
+	MemoryLearningActive  MemoryLearningMode = "active"
+)
+
+// MemoryLearningPolicy controls outcome-driven memory observation and
+// ranking. Off is deliberately the default and preserves existing prompts.
+type MemoryLearningPolicy struct {
+	Mode                MemoryLearningMode `yaml:"mode" json:"mode"`
+	PolicyVersion       string             `yaml:"policy-version" json:"policy_version"`
+	PriorAlpha          float64            `yaml:"prior-alpha" json:"prior_alpha"`
+	PriorBeta           float64            `yaml:"prior-beta" json:"prior_beta"`
+	UtilityPercentile   float64            `yaml:"utility-percentile" json:"utility_percentile"`
+	MaxCreditPerSignal  float64            `yaml:"max-credit-per-signal" json:"max_credit_per_signal"`
+	MinConfirmedSupport int                `yaml:"min-confirmed-support" json:"min_confirmed_support"`
+	MinIndependentTasks int                `yaml:"min-independent-tasks" json:"min_independent_tasks"`
+	MaxHarmRate         float64            `yaml:"max-harm-rate" json:"max_harm_rate"`
+}
+
+func DefaultMemoryLearningPolicy() MemoryLearningPolicy {
+	return MemoryLearningPolicy{
+		Mode: MemoryLearningOff, PolicyVersion: "memory-policy-v1",
+		PriorAlpha: 1, PriorBeta: 1, UtilityPercentile: 0.10,
+		MaxCreditPerSignal: 1, MinConfirmedSupport: 2,
+		MinIndependentTasks: 2, MaxHarmRate: 0,
+	}
+}
+
 type TeamConfig struct {
 	Name        string
 	Description string
@@ -302,7 +334,8 @@ type TeamConfig struct {
 	Reliability ReliabilityConfig
 	// WorkerMemory is the team-level default worker memory policy. Individual
 	// agents can override it via their frontmatter `memory:` block.
-	WorkerMemory WorkerMemoryPolicy
+	WorkerMemory   WorkerMemoryPolicy
+	MemoryLearning MemoryLearningPolicy
 }
 
 // WorkflowConfig is provider-neutral phase ordering for a team execution.

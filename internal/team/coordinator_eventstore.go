@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/kjelly/hufu/internal/utils"
@@ -98,13 +99,14 @@ func (c *Coordinator) initEventStore() {
 		es.SetBranchID(st.ActiveBranch)
 	}
 	c.eventStore = es
-	c.hydrateEmittedTaskTransitions()
+	c.hydrateEmittedEventKeys()
+	c.repairMemoryLearningGaps()
 }
 
-// hydrateEmittedTaskTransitions restores idempotency state after a process
+// hydrateEmittedEventKeys restores idempotency state after a process
 // restart. Without this, the first checkpoint after resume re-emits every
 // previously persisted transition despite the event already being present.
-func (c *Coordinator) hydrateEmittedTaskTransitions() {
+func (c *Coordinator) hydrateEmittedEventKeys() {
 	if c == nil || c.eventStore == nil {
 		return
 	}
@@ -114,6 +116,7 @@ func (c *Coordinator) hydrateEmittedTaskTransitions() {
 		c.dualWriteFailures.Add(1)
 		return
 	}
+	c.eventOnceMu.Lock()
 	if c.emittedTaskTransitions == nil {
 		c.emittedTaskTransitions = make(map[string]bool)
 	}
@@ -121,6 +124,148 @@ func (c *Coordinator) hydrateEmittedTaskTransitions() {
 		if event.IdempotencyKey != "" {
 			c.emittedTaskTransitions[event.IdempotencyKey] = true
 		}
+	}
+	c.eventOnceMu.Unlock()
+	// A process can crash after the durable event append and before the SQLite
+	// projection commit. Reapplying memory events at startup is safe because the
+	// reducer transaction uses the same durable idempotency key.
+	for _, event := range events {
+		switch event.Type {
+		case "memory_retrieved", "memory_usage_recorded", "memory_outcome_recorded":
+			c.reduceMemoryEvent(event)
+		}
+	}
+}
+
+// emitEventOnce appends an event at most once for a durable idempotency key.
+// The same key set is hydrated from the event log at startup and is shared by
+// task transitions, artifacts, and memory learning events.
+func (c *Coordinator) emitEventOnce(idempotencyKey string, event RunEvent) (bool, error) {
+	if c == nil || c.eventStore == nil {
+		return false, nil
+	}
+	if idempotencyKey == "" {
+		return false, errors.New("emit event once: empty idempotency key")
+	}
+	c.eventOnceMu.Lock()
+	defer c.eventOnceMu.Unlock()
+	if c.emittedTaskTransitions == nil {
+		c.emittedTaskTransitions = make(map[string]bool)
+	}
+	if c.emittedTaskTransitions[idempotencyKey] {
+		return false, nil
+	}
+	event.IdempotencyKey = idempotencyKey
+	if err := c.eventStore.Append(event); err != nil {
+		c.recordLearningGap(event, err)
+		return false, err
+	}
+	c.emittedTaskTransitions[idempotencyKey] = true
+	return true, nil
+}
+
+func (c *Coordinator) recordLearningGap(event RunEvent, appendErr error) {
+	if c == nil || appendErr == nil {
+		return
+	}
+	c.dualWriteFailures.Add(1)
+	if c.sessionData == nil {
+		return
+	}
+	store := c.SessionStore()
+	workspace := ""
+	if c.session != nil {
+		workspace = c.session.Workspace
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var repairEvent *RunEvent
+	if strings.HasPrefix(event.Type, "memory_") && len(event.Payload) > 0 {
+		copyEvent := event
+		if redacted, err := utils.RedactJSON(event.Payload); err == nil {
+			copyEvent.Payload = redacted
+		}
+		repairEvent = &copyEvent
+	}
+	c.sessionData.LearningGaps = append(c.sessionData.LearningGaps, LearningGap{
+		EventType:      event.Type,
+		TaskID:         event.TaskID,
+		IdempotencyKey: event.IdempotencyKey,
+		Reason:         utils.RedactSecrets(appendErr.Error()),
+		ObservedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+		PendingRepair:  true,
+		RepairEvent:    repairEvent,
+	})
+	if workspace == "" {
+		return
+	}
+	// The gap must be durable before the failed emission path returns: a crash
+	// before the next unrelated checkpoint would otherwise lose the repair
+	// record and its event, leaving no way to rebuild the observation without
+	// re-running the worker (spec §7 HF-MEM4-000 item 4, §9).
+	if err := store.SaveSession(workspace, c.sessionData); err != nil {
+		log.Printf("warning: persist learning gap checkpoint failed: %v", err)
+	}
+}
+
+func (c *Coordinator) repairMemoryLearningGaps() {
+	if c == nil || c.eventStore == nil || c.sessionData == nil {
+		return
+	}
+	c.mu.Lock()
+	gaps := append([]LearningGap(nil), c.sessionData.LearningGaps...)
+	originalGapCount := len(gaps)
+	c.mu.Unlock()
+	changed := false
+	for i := range gaps {
+		gap := &gaps[i]
+		if !gap.PendingRepair {
+			continue
+		}
+		repaired := false
+		if gap.RepairEvent != nil {
+			event := *gap.RepairEvent
+			_, err := c.emitEventOnce(gap.IdempotencyKey, event)
+			if err == nil {
+				events, readErr := c.eventStore.ReadEvents()
+				if readErr == nil {
+					for _, durableEvent := range events {
+						if durableEvent.IdempotencyKey == gap.IdempotencyKey {
+							c.reduceMemoryEvent(durableEvent)
+							repaired = true
+							break
+						}
+					}
+				}
+			}
+		} else if gap.EventType == "memory_aggregate_repair" {
+			events, err := c.eventStore.ReadEvents()
+			if err == nil {
+				for _, event := range events {
+					if event.IdempotencyKey == gap.IdempotencyKey {
+						c.reduceMemoryEvent(event)
+						repaired = true
+						break
+					}
+				}
+			}
+		}
+		if repaired {
+			gap.PendingRepair = false
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	c.mu.Lock()
+	if len(c.sessionData.LearningGaps) > originalGapCount {
+		gaps = append(gaps, c.sessionData.LearningGaps[originalGapCount:]...)
+	}
+	c.sessionData.LearningGaps = gaps
+	c.mu.Unlock()
+	if c.session != nil {
+		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
 	}
 }
 
@@ -131,23 +276,25 @@ func (c *Coordinator) emitEvent(eventType, actor, taskID string, payload interfa
 	}
 	var rawPayload json.RawMessage
 	data, err := json.Marshal(payload)
-	if err == nil {
-		rawPayload = json.RawMessage(utils.RedactSecrets(string(data)))
+	if err != nil {
+		return fmt.Errorf("marshal event payload: %w", err)
 	}
+	rawPayload = json.RawMessage(utils.RedactSecrets(string(data)))
 	if IsTerminalEvent(eventType) && IsEmptyPayload(rawPayload) {
 		err := fmt.Errorf("terminal event %q produced empty payload after marshal", eventType)
 		log.Printf("error: dual-write event emit failed for type %s: %v", eventType, err)
 		c.dualWriteFailures.Add(1)
 		return err
 	}
-	if err := c.eventStore.Append(RunEvent{
+	event := RunEvent{
 		Type:    eventType,
 		Actor:   actor,
 		TaskID:  taskID,
 		Payload: rawPayload,
-	}); err != nil {
+	}
+	if err := c.eventStore.Append(event); err != nil {
 		log.Printf("warning: dual-write event emit failed for type %s: %v", eventType, err)
-		c.dualWriteFailures.Add(1)
+		c.recordLearningGap(event, err)
 		return err
 	}
 	return nil
@@ -157,11 +304,11 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 	if c == nil || c.eventStore == nil {
 		return
 	}
-	c.mu.Lock()
+	c.eventOnceMu.Lock()
 	if c.emittedTaskTransitions == nil {
 		c.emittedTaskTransitions = make(map[string]bool)
 	}
-	c.mu.Unlock()
+	c.eventOnceMu.Unlock()
 
 	for _, item := range tasks {
 		if item == nil {
@@ -189,15 +336,18 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 		}
 
 		transitionKey := taskTransitionEventKey(item)
-		c.mu.Lock()
+		c.eventOnceMu.Lock()
 		alreadyEmitted := c.emittedTaskTransitions[transitionKey]
-		c.mu.Unlock()
+		c.eventOnceMu.Unlock()
 
 		if alreadyEmitted {
 			// The task transition may already be durable while its artifact
 			// side-event was lost. Revisit artifact emission on every checkpoint
 			// so a transient append failure is retryable.
 			c.emitArtifactEvents(item)
+			if isMemoryOutcomeTerminalEvent(eventType) {
+				c.recordMemoryOutcomeForTask(item, eventType)
+			}
 			continue
 		}
 
@@ -263,6 +413,9 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 		if len(item.ExecutionReceipts) > 0 {
 			payload["execution_receipts"] = item.ExecutionReceipts
 		}
+		if len(item.MemoryManifests) > 0 {
+			payload["memory_manifests"] = item.MemoryManifests
+		}
 
 		data, err := json.Marshal(payload)
 		if err != nil {
@@ -277,22 +430,29 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 			continue
 		}
 
-		if err := c.eventStore.Append(RunEvent{
-			Type:           eventType,
-			Actor:          item.Agent,
-			TaskID:         item.ID,
-			IdempotencyKey: transitionKey,
-			Payload:        rawPayload,
+		if _, err := c.emitEventOnce(transitionKey, RunEvent{
+			Type:    eventType,
+			Actor:   item.Agent,
+			TaskID:  item.ID,
+			Payload: rawPayload,
 		}); err != nil {
 			log.Printf("warning: dual-write task event emit failed for %s (%s): %v", item.ID, eventType, err)
-			c.dualWriteFailures.Add(1)
 			continue
 		}
-		c.mu.Lock()
-		c.emittedTaskTransitions[transitionKey] = true
-		c.mu.Unlock()
 
 		c.emitArtifactEvents(item)
+		if isMemoryOutcomeTerminalEvent(eventType) {
+			c.recordMemoryOutcomeForTask(item, eventType)
+		}
+	}
+}
+
+func isMemoryOutcomeTerminalEvent(eventType string) bool {
+	switch eventType {
+	case "task_completed", "task_failed", "task_blocked", "task_protocol_incomplete":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -337,9 +497,9 @@ func (c *Coordinator) emitArtifactEvents(item *TodoItem) {
 			continue
 		}
 		key := fmt.Sprintf("artifact:%s:%s", item.ID, art.Path)
-		c.mu.Lock()
+		c.eventOnceMu.Lock()
 		alreadyEmitted := c.emittedTaskTransitions[key]
-		c.mu.Unlock()
+		c.eventOnceMu.Unlock()
 		if alreadyEmitted {
 			continue
 		}
@@ -350,20 +510,15 @@ func (c *Coordinator) emitArtifactEvents(item *TodoItem) {
 			"description": art.Description,
 			"task_id":     item.ID,
 		})
-		if err := c.eventStore.Append(RunEvent{
-			Type:           "artifact_created",
-			Actor:          item.Agent,
-			TaskID:         item.ID,
-			IdempotencyKey: key,
-			Payload:        payload,
+		if _, err := c.emitEventOnce(key, RunEvent{
+			Type:    "artifact_created",
+			Actor:   item.Agent,
+			TaskID:  item.ID,
+			Payload: payload,
 		}); err != nil {
 			log.Printf("warning: dual-write artifact event emit failed for %s (%s): %v", item.ID, art.Path, err)
-			c.dualWriteFailures.Add(1)
 			continue
 		}
-		c.mu.Lock()
-		c.emittedTaskTransitions[key] = true
-		c.mu.Unlock()
 	}
 }
 

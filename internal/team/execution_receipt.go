@@ -94,7 +94,8 @@ type ExecutionReceipt struct {
 	VerifyResult *VerificationResult `json:"verify_result,omitempty"`
 	// StepBudget records this attempt's step consumption, so a truncated attempt
 	// is distinguishable from one that chose to stop.
-	StepBudget *StepBudgetUsage `json:"step_budget,omitempty"`
+	StepBudget     *StepBudgetUsage         `json:"step_budget,omitempty"`
+	MemoryManifest *MemoryInjectionManifest `json:"memory_manifest,omitempty"`
 }
 
 // ArtifactExpectation describes an expected output artifact and its verification criteria.

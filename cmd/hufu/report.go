@@ -61,6 +61,7 @@ type reportData struct {
 	RunResult           *team.RunResult
 	TerminalSessions    []team.TerminalSession
 	WorkerMemory        team.WorkerMemoryReport
+	MemoryLearning      team.MemoryLearningReport
 }
 
 // SkillPatternReport holds detected skill pattern info for reports
@@ -122,6 +123,7 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		if workerMemory, err := tc.coordinator.WorkerMemoryReport(context.Background()); err == nil {
 			d.WorkerMemory = workerMemory
 		}
+		d.MemoryLearning = tc.coordinator.MemoryLearningReport()
 	}
 	if d.RunResult == nil && d.SessionData != nil {
 		d.RunResult = d.SessionData.RunResult
@@ -289,6 +291,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		b.WriteString(data.ContextUsageSection)
 	}
 	writeWorkerMemoryReport(&b, data.WorkerMemory)
+	writeMemoryLearningReport(&b, data.MemoryLearning)
 
 	if len(data.Todos) > 0 {
 		b.WriteString("## Task Summary\n\n")
@@ -403,6 +406,18 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	}
 
 	return utils.RedactSecrets(b.String())
+}
+
+func writeMemoryLearningReport(b *strings.Builder, report team.MemoryLearningReport) {
+	if report.Mode == "" {
+		return
+	}
+	b.WriteString("## Outcome-driven Memory\n\n")
+	fmt.Fprintf(b, "- **Mode:** `%s`\n", report.Mode)
+	fmt.Fprintf(b, "- **Policy version:** `%s`\n", report.PolicyVersion)
+	fmt.Fprintf(b, "- **Retrievals / exposures:** %d / %d\n", report.RetrievalCount, report.ExposureCount)
+	fmt.Fprintf(b, "- **Applied / outcomes:** %d / %d\n", report.AppliedCount, report.OutcomeCount)
+	fmt.Fprintf(b, "- **Pending reducer repairs:** %d\n\n---\n\n", report.PendingRepairGaps)
 }
 
 func writeWorkerMemoryReport(b *strings.Builder, report team.WorkerMemoryReport) {

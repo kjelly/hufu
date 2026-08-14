@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -338,6 +339,26 @@ func EvaluateExperiment(id string, fixture BenchmarkFixture, baseline, candidate
 			Name: "error_non_regression", Passed: candidate.Report.Metrics.Error <= baseline.Report.Metrics.Error,
 			Expected: fmt.Sprintf("<= %d baseline errors", baseline.Report.Metrics.Error),
 			Observed: fmt.Sprintf("%d candidate errors", candidate.Report.Metrics.Error),
+		},
+		{
+			Name: "memory_harmful_rate", Passed: candidate.Report.Metrics.MemoryHarmfulUseRate == 0,
+			Expected: "0 harmful memory uses", Observed: fmt.Sprintf("%.4f harmful use rate", candidate.Report.Metrics.MemoryHarmfulUseRate),
+		},
+		{
+			Name: "memory_attribution_coverage", Passed: candidate.Report.Metrics.MemoryAttributionCoverage >= baseline.Report.Metrics.MemoryAttributionCoverage,
+			Expected: fmt.Sprintf(">= %.4f baseline coverage", baseline.Report.Metrics.MemoryAttributionCoverage), Observed: fmt.Sprintf("%.4f candidate coverage", candidate.Report.Metrics.MemoryAttributionCoverage),
+		},
+		{
+			Name: "memory_token_overhead", Passed: candidate.Report.Metrics.MemoryTokenOverhead <= math.Max(baseline.Report.Metrics.MemoryTokenOverhead*1.10, 0.10),
+			Expected: "<= 10% overhead or <= 110% of baseline", Observed: fmt.Sprintf("%.4f candidate overhead", candidate.Report.Metrics.MemoryTokenOverhead),
+		},
+		{
+			Name: "memory_stale_rate", Passed: candidate.Report.Metrics.MemoryStaleRetrievalRate <= baseline.Report.Metrics.MemoryStaleRetrievalRate,
+			Expected: fmt.Sprintf("<= %.4f baseline stale rate", baseline.Report.Metrics.MemoryStaleRetrievalRate), Observed: fmt.Sprintf("%.4f candidate stale rate", candidate.Report.Metrics.MemoryStaleRetrievalRate),
+		},
+		{
+			Name: "retry_non_regression", Passed: candidate.Report.Metrics.RetriedTasks <= baseline.Report.Metrics.RetriedTasks,
+			Expected: fmt.Sprintf("<= %d baseline retried tasks", baseline.Report.Metrics.RetriedTasks), Observed: fmt.Sprintf("%d candidate retried tasks", candidate.Report.Metrics.RetriedTasks),
 		},
 	}
 

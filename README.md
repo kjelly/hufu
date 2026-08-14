@@ -574,6 +574,18 @@ skills: code-review,git-commit  # Skills to include
 skills-exclude: debug            # Skills to exclude
 auto-skills: false              # Enable automatic skill detection
 
+# === Outcome-driven Memory ===
+memory-learning:
+  mode: off                     # off | observe | shadow | active
+  policy-version: memory-policy-v1
+  prior-alpha: 1.0
+  prior-beta: 1.0
+  utility-percentile: 0.10
+  max-credit-per-signal: 1.0
+  min-confirmed-support: 2
+  min-independent-tasks: 2
+  max-harm-rate: 0.0
+
 # === Security ===
 allowed-paths: ["/home/user/projects", "/tmp"]  # Allowed file system paths
 restricted-path: "/etc"                           # Restricted path
@@ -608,6 +620,10 @@ mcp-servers:
 ```
 
 > **Note**: `temperature`, `max-tokens`, `top-p`, and `top-k` values are represented as strings in YAML.
+
+Outcome-driven memory is opt-in. `observe` records attempt-scoped exposure and validated `TaskResult.memory_uses` without changing selection; `shadow` also records reinforced ranking traces; only `active` changes prompt selection. Inspect the content-free projection with `hufu context outcomes <id>`, `hufu context explain-memory <id> --project <id> --query <goal>`, `hufu context doctor --learning`, and rebuild it from the hash-chained event ledger with `hufu context rebuild --aggregates`.
+
+See the [L3/L4 outcome-driven memory implementation specification](docs/hufu-outcome-driven-memory-hf-mem4-implementation-spec.md) for contracts, rollout gates, and acceptance criteria.
 
 ---
 

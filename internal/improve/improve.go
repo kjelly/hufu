@@ -39,22 +39,32 @@ type TeamDefinition struct {
 }
 
 type Metrics struct {
-	RunID             string         `json:"run_id"`
-	RunCount          int            `json:"run_count"`
-	StartedAt         string         `json:"started_at"`
-	EndedAt           string         `json:"ended_at"`
-	TotalTasks        int            `json:"total_tasks"`
-	Done              int            `json:"done"`
-	Error             int            `json:"error"`
-	Planned           int            `json:"planned"`
-	TotalAttempts     int            `json:"total_attempts"`
-	RetriedTasks      int            `json:"retried_tasks"`
-	TotalTokens       int            `json:"total_tokens"`
-	ToolCalls         int            `json:"tool_calls"`
-	ToolErrors        int            `json:"tool_errors"`
-	TokensByAgent     map[string]int `json:"tokens_by_agent"`
-	ToolCallsByAgent  map[string]int `json:"tool_calls_by_agent"`
-	ToolErrorsByAgent map[string]int `json:"tool_errors_by_agent"`
+	RunID                     string         `json:"run_id"`
+	RunCount                  int            `json:"run_count"`
+	StartedAt                 string         `json:"started_at"`
+	EndedAt                   string         `json:"ended_at"`
+	TotalTasks                int            `json:"total_tasks"`
+	Done                      int            `json:"done"`
+	Error                     int            `json:"error"`
+	Planned                   int            `json:"planned"`
+	TotalAttempts             int            `json:"total_attempts"`
+	RetriedTasks              int            `json:"retried_tasks"`
+	TotalTokens               int            `json:"total_tokens"`
+	ToolCalls                 int            `json:"tool_calls"`
+	ToolErrors                int            `json:"tool_errors"`
+	TokensByAgent             map[string]int `json:"tokens_by_agent"`
+	ToolCallsByAgent          map[string]int `json:"tool_calls_by_agent"`
+	ToolErrorsByAgent         map[string]int `json:"tool_errors_by_agent"`
+	MemoryRetrievalCount      int            `json:"memory_retrieval_count"`
+	MemoryExposureCount       int            `json:"memory_exposure_count"`
+	MemoryAppliedCount        int            `json:"memory_applied_count"`
+	MemoryAttributionCoverage float64        `json:"memory_attribution_coverage"`
+	MemoryVerifiedAssistRate  float64        `json:"memory_verified_assist_rate"`
+	MemoryHarmfulUseRate      float64        `json:"memory_harmful_use_rate"`
+	MemoryStaleRetrievalRate  float64        `json:"memory_stale_retrieval_rate"`
+	MemoryTokenOverhead       float64        `json:"memory_token_overhead"`
+	MemoryAssistedRetryRate   float64        `json:"memory_assisted_retry_rate"`
+	MemoryUnassistedRetryRate float64        `json:"memory_unassisted_retry_rate"`
 }
 
 type Finding struct {
@@ -468,7 +478,102 @@ func collectMetrics(workspace, teamName string, events []team.ExecutionEvent) Me
 	start, _ := time.Parse(time.RFC3339, metrics.StartedAt)
 	end, _ := time.Parse(time.RFC3339, metrics.EndedAt)
 	collectAuditMetrics(filepath.Join(workspace, "logs", "audit"), teamName, start, end, &metrics)
+	collectMemoryMetrics(workspace, events, &metrics)
 	return metrics
+}
+
+func collectMemoryMetrics(workspace string, executionEvents []team.ExecutionEvent, metrics *Metrics) {
+	store, err := team.OpenEventStore(workspace)
+	if err != nil {
+		return
+	}
+	defer func() { _ = store.Close() }()
+	events, err := store.ReadEvents()
+	if err != nil {
+		return
+	}
+	retrievals := map[string]bool{}
+	appliedTasks := map[string]bool{}
+	verified, harmful, stale, memoryTokens := 0, 0, 0, 0
+	for _, event := range events {
+		if event.Type != "memory_retrieved" && event.Type != "memory_usage_recorded" && event.Type != "memory_outcome_recorded" {
+			continue
+		}
+		var payload map[string]any
+		if json.Unmarshal(event.Payload, &payload) != nil {
+			continue
+		}
+		if id, _ := payload["retrieval_id"].(string); id != "" {
+			retrievals[id] = true
+		}
+		switch event.Type {
+		case "memory_retrieved":
+			metrics.MemoryExposureCount++
+			if reason, _ := payload["reason_code"].(string); reason == "stale_environment" {
+				stale++
+			}
+			if count, ok := payload["token_count"].(float64); ok && count > 0 {
+				memoryTokens += int(count)
+			}
+		case "memory_usage_recorded":
+			if payload["disposition"] == "applied" {
+				metrics.MemoryAppliedCount++
+				appliedTasks[event.RunID+"\x00"+event.TaskID] = true
+			}
+		case "memory_outcome_recorded":
+			signal, _ := payload["signal"].(string)
+			if signal == "verification_passed" {
+				verified++
+			}
+			if direction, _ := payload["direction"].(string); direction == "negative" {
+				harmful++
+			}
+			if signal == "stale_environment" {
+				stale++
+			}
+		}
+	}
+	metrics.MemoryRetrievalCount = len(retrievals)
+	if metrics.MemoryExposureCount > 0 {
+		metrics.MemoryAttributionCoverage = float64(metrics.MemoryAppliedCount) / float64(metrics.MemoryExposureCount)
+		metrics.MemoryStaleRetrievalRate = float64(stale) / float64(metrics.MemoryExposureCount)
+	}
+	if metrics.MemoryAppliedCount > 0 {
+		metrics.MemoryVerifiedAssistRate = float64(verified) / float64(metrics.MemoryAppliedCount)
+		metrics.MemoryHarmfulUseRate = float64(harmful) / float64(metrics.MemoryAppliedCount)
+	}
+	totalInputTokens := 0
+	for _, event := range executionEvents {
+		if event.Usage.InputTokens > 0 {
+			totalInputTokens += event.Usage.InputTokens
+		}
+	}
+	if totalInputTokens > 0 {
+		metrics.MemoryTokenOverhead = float64(memoryTokens) / float64(totalInputTokens)
+	}
+	retriedAssisted, retriedUnassisted, assistedTasks, unassistedTasks := 0, 0, map[string]bool{}, map[string]bool{}
+	for _, event := range executionEvents {
+		key := event.RunID + "\x00" + event.TaskID
+		if event.Attempt <= 1 || event.TaskID == "" {
+			continue
+		}
+		if appliedTasks[key] {
+			if !assistedTasks[key] {
+				retriedAssisted++
+				assistedTasks[key] = true
+			}
+		} else if !unassistedTasks[key] {
+			retriedUnassisted++
+			unassistedTasks[key] = true
+		}
+	}
+	if len(appliedTasks) > 0 {
+		metrics.MemoryAssistedRetryRate = float64(retriedAssisted) / float64(len(appliedTasks))
+	}
+	unassistedTotal := metrics.TotalTasks - len(appliedTasks)
+	if unassistedTotal > 0 {
+		metrics.MemoryUnassistedRetryRate = float64(retriedUnassisted) / float64(unassistedTotal)
+	}
 }
 
 func collectExecutionMetrics(events []team.ExecutionEvent) Metrics {

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"time"
 
+	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
@@ -103,6 +105,10 @@ func (c *Coordinator) canonicalPromptMemory(ctx context.Context) (stm, ltm strin
 }
 
 func (c *Coordinator) canonicalContextBundle(ctx context.Context) (*CanonicalContextBundle, bool, error) {
+	return c.canonicalContextBundleForQuery(ctx, "")
+}
+
+func (c *Coordinator) canonicalContextBundleForQuery(ctx context.Context, query string) (*CanonicalContextBundle, bool, error) {
 	if c == nil || c.contextRepo == nil {
 		return nil, false, nil
 	}
@@ -114,11 +120,22 @@ func (c *Coordinator) canonicalContextBundle(ctx context.Context) (*CanonicalCon
 	if err != nil {
 		return nil, true, err
 	}
-	ltm, err := c.contextRepo.QuerySharedPersistentProjection(ctx, scope)
+	baseLTM, err := c.contextRepo.QuerySharedPersistentProjection(ctx, scope)
 	if err != nil {
 		return nil, true, err
 	}
-	return &CanonicalContextBundle{SharedSession: stm, SharedPersistent: ltm}, true, nil
+	ltm, scores, finalScores, rankErr := c.rankSharedPersistentMemory(ctx, query, baseLTM)
+	if rankErr != nil {
+		mode := c.session.Config.MemoryLearning.Mode
+		if mode == agent.MemoryLearningShadow || mode == agent.MemoryLearningActive {
+			redactedErr := contextstore.RedactSecrets(rankErr.Error())
+			log.Printf("warning: %s memory ranker degraded to base ordering: %s", mode, redactedErr)
+			c.persistMemoryRankingTrace(MemoryRankingTrace{CreatedAt: time.Now().UTC(), Mode: mode, PolicyVersion: c.session.Config.MemoryLearning.PolicyVersion, QueryHash: hashContentKey(query), Error: redactedErr})
+			_ = c.emitEvent("observability_degraded", "memory_ranker", "", map[string]any{"component": "memory_learning", "mode": mode, "policy_version": c.session.Config.MemoryLearning.PolicyVersion, "error": redactedErr})
+		}
+		ltm, scores, finalScores = baseLTM, nil, nil
+	}
+	return &CanonicalContextBundle{SharedSession: stm, SharedPersistent: ltm, SharedPersistentScores: scores, SharedPersistentFinalScores: finalScores}, true, nil
 }
 
 // appendCanonicalContext is the unified memory ingestion path. It appends the

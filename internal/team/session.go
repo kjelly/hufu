@@ -46,6 +46,20 @@ type SessionEntry struct {
 	Timestamp string `json:"timestamp,omitempty"`
 }
 
+// LearningGap records an event-store observation that could not be made
+// durable. It is checkpointed with the session so reducers can be repaired
+// from authoritative task/result/receipt state without replaying a worker or
+// any completed side effect.
+type LearningGap struct {
+	EventType      string    `json:"event_type"`
+	TaskID         string    `json:"task_id,omitempty"`
+	IdempotencyKey string    `json:"idempotency_key,omitempty"`
+	Reason         string    `json:"reason"`
+	ObservedAt     string    `json:"observed_at"`
+	PendingRepair  bool      `json:"pending_reducer_repair"`
+	RepairEvent    *RunEvent `json:"repair_event,omitempty"`
+}
+
 type SessionData struct {
 	CreatedAt                          string              `json:"created_at"`
 	UpdatedAt                          string              `json:"updated_at"`
@@ -79,6 +93,7 @@ type SessionData struct {
 	PhaseResults     map[Phase]PhaseResult `json:"phase_results,omitempty"`
 	RuntimeWorkspace string                `json:"runtime_workspace,omitempty"`
 	RetryState       *RetryState           `json:"retry_state,omitempty"`
+	LearningGaps     []LearningGap         `json:"learning_gaps,omitempty"`
 }
 
 func LoadSession(workspace string) *SessionData {

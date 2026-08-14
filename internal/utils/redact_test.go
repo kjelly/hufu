@@ -96,6 +96,35 @@ func TestRedactJSONPreservesNumericTelemetryWithSecretLikeKey(t *testing.T) {
 	}
 }
 
+func TestRedactJSONPreservesManifestTokenCount(t *testing.T) {
+	// A memory injection manifest's per-item token estimate must survive
+	// session redaction; redacting it corrupts session.json and makes the
+	// manifest unparseable (regression for the token_count false positive).
+	input := []byte(`{"tasks":[{"memory_manifests":[{"retrieval_id":"retrieval-abc","items":[{"context_item_id":"m1","rank":1,"token_count":42,"base_score":0.8}]}]}]}`)
+	got, err := RedactJSON(input)
+	if err != nil {
+		t.Fatalf("RedactJSON: %v", err)
+	}
+	var decoded struct {
+		Tasks []struct {
+			MemoryManifests []struct {
+				Items []struct {
+					TokenCount float64 `json:"token_count"`
+				} `json:"items"`
+			} `json:"memory_manifests"`
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal(got, &decoded); err != nil {
+		t.Fatalf("unmarshal redacted output: %v", err)
+	}
+	if len(decoded.Tasks) != 1 || len(decoded.Tasks[0].MemoryManifests) != 1 || len(decoded.Tasks[0].MemoryManifests[0].Items) != 1 {
+		t.Fatalf("manifest structure lost: %s", got)
+	}
+	if tokenCount := decoded.Tasks[0].MemoryManifests[0].Items[0].TokenCount; tokenCount != 42 {
+		t.Fatalf("token_count = %v, want 42 (redacted output: %s)", tokenCount, string(got))
+	}
+}
+
 func TestRedactJSONRedactsNumericAndBooleanCredentials(t *testing.T) {
 	input := []byte(`{"nested":{"password":123456,"token":9876,"api_key":true,"api_secret":false}}`)
 	got, err := RedactJSON(input)

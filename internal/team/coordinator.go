@@ -318,12 +318,14 @@ type Coordinator struct {
 	cacheGeneration        atomic.Int64 // bumped each time coordinator starts a new delegation round
 	journal                *taskJournal // persistent task-result journal (nil when disabled)
 	noJournal              bool
-	eventStore             *EventStore // append-only session event store
-	emittedTaskTransitions map[string]bool
+	eventStore             *EventStore     // append-only session event store
+	emittedTaskTransitions map[string]bool // all durable event idempotency keys; legacy name retained for compatibility
+	eventOnceMu            sync.Mutex
 	dualWriteFailures      atomic.Int64
 	memoryStore            *memory.MemoryStore
-	contextRepo            contextstore.Repository // Phase 1 shadow store; never read by prompt assembly.
-	workerMemorySvc        WorkerMemoryService     // WP-3 per-worker memory recall service.
+	contextRepo            contextstore.Repository // canonical context store used by prompt assembly and maintenance
+	memoryRankingPolicy    MemoryRuntimeRankingPolicy
+	workerMemorySvc        WorkerMemoryService // WP-3 per-worker memory recall service.
 	skillsMu               sync.RWMutex
 	modelList              []config.ModelEntry
 	sidecarModel           string
@@ -958,6 +960,10 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		return nil, fmt.Errorf("open canonical context store: %w", openErr)
 	}
 	c.contextRepo = repo
+	if err := c.loadAdoptedMemoryPolicy(context.Background()); err != nil {
+		_ = repo.Close()
+		return nil, fmt.Errorf("load adopted memory policy: %w", err)
+	}
 	c.workerMemorySvc = NewWorkerMemoryService(repo, nil)
 	c.workflowEngine = &defaultWorkflowEngine{c: c}
 
