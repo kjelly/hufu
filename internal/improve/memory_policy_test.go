@@ -9,7 +9,7 @@ import (
 func TestMemoryPolicyCandidateCannotAutoAdopt(t *testing.T) {
 	baseline := DefaultMemoryPolicySnapshot("baseline")
 	candidateInput := baseline
-	candidateInput.Retrieval.TopK--
+	candidateInput.Retrieval.CandidateTopK--
 	candidate, err := CreateMemoryPolicyCandidate("candidate", baseline, candidateInput)
 	if err != nil {
 		t.Fatal(err)
@@ -33,6 +33,36 @@ func TestMemoryPolicyCandidateCannotAutoAdopt(t *testing.T) {
 	}
 }
 
+func TestMemoryPolicyCandidateValidatesSplitRetrievalLimits(t *testing.T) {
+	baseline := DefaultMemoryPolicySnapshot("baseline")
+	invalid := baseline
+	invalid.Retrieval.InjectTopK = invalid.Retrieval.CandidateTopK + 1
+	if _, err := CreateMemoryPolicyCandidate("invalid", baseline, invalid); err == nil {
+		t.Fatal("candidate accepted inject_top_k greater than candidate_top_k")
+	}
+	proposal, err := ProposeMemoryPolicyOptimization("proposal", baseline, Metrics{MemoryHarmfulUseRate: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposal.Candidate.Retrieval.TopK != 0 || proposal.Candidate.Retrieval.CandidateTopK != baseline.Retrieval.CandidateTopK-1 || proposal.Candidate.Retrieval.InjectTopK != baseline.Retrieval.InjectTopK {
+		t.Fatalf("split-K proposal = %#v", proposal.Candidate.Retrieval)
+	}
+}
+
+func TestContextPolicyOptimizerOnlyProducesCandidate(t *testing.T) {
+	baseline := DefaultMemoryPolicySnapshot("baseline-context")
+	proposal, err := ProposeContextPolicyOptimization("candidate-context", baseline, ContextOutcomeSummary{Selected: 10, Positive: 1, Negative: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposal.Candidate.Status != "candidate" || proposal.Candidate.PreviousID != baseline.ID {
+		t.Fatalf("optimizer bypassed candidate gate: %#v", proposal.Candidate)
+	}
+	if proposal.Candidate.Retrieval.CandidateTopK >= baseline.Retrieval.CandidateTopK {
+		t.Fatalf("negative observations did not tighten candidate breadth: %#v", proposal.Candidate.Retrieval)
+	}
+}
+
 func TestSideEffectTaskDisablesExploration(t *testing.T) {
 	if ControlledMemoryExplorationAllowed(team.SideEffectExternalWrite, team.RecoveryRetry, []string{"view"}, true) {
 		t.Fatal("external side effect allowed exploration")
@@ -51,7 +81,7 @@ func TestSideEffectTaskDisablesExploration(t *testing.T) {
 func TestProductionRegressionKeepsPreviousPolicyAvailable(t *testing.T) {
 	baseline := DefaultMemoryPolicySnapshot("baseline")
 	candidateInput := baseline
-	candidateInput.Retrieval.TopK--
+	candidateInput.Retrieval.CandidateTopK--
 	candidate, err := CreateMemoryPolicyCandidate("candidate", baseline, candidateInput)
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +107,7 @@ func TestApprovedMemoryPolicyCanRollback(t *testing.T) {
 	workspace := t.TempDir()
 	baseline := DefaultMemoryPolicySnapshot("baseline")
 	input := baseline
-	input.Retrieval.TopK--
+	input.Retrieval.CandidateTopK--
 	candidate, err := CreateMemoryPolicyCandidate("candidate", baseline, input)
 	if err != nil {
 		t.Fatal(err)

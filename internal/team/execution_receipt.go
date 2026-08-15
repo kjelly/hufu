@@ -78,9 +78,12 @@ type StepBudgetUsage struct {
 
 // ExecutionReceipt represents the execution provenance and metadata for a single task run attempt.
 type ExecutionReceipt struct {
-	RunID            string            `json:"run_id"`
-	TaskID           string            `json:"task_id"`
-	Attempt          int               `json:"attempt"`
+	RunID   string `json:"run_id"`
+	TaskID  string `json:"task_id"`
+	Attempt int    `json:"attempt"`
+	// ModelExecutionID is the stable isolated-worker identity. It keeps
+	// concurrent extra-model receipts distinct even though they share a Todo.
+	ModelExecutionID string            `json:"model_execution_id,omitempty"`
 	StartedAt        time.Time         `json:"started_at"`
 	FinishedAt       time.Time         `json:"finished_at,omitempty"`
 	ExitCode         *int              `json:"exit_code,omitempty"`
@@ -94,8 +97,9 @@ type ExecutionReceipt struct {
 	VerifyResult *VerificationResult `json:"verify_result,omitempty"`
 	// StepBudget records this attempt's step consumption, so a truncated attempt
 	// is distinguishable from one that chose to stop.
-	StepBudget     *StepBudgetUsage         `json:"step_budget,omitempty"`
-	MemoryManifest *MemoryInjectionManifest `json:"memory_manifest,omitempty"`
+	StepBudget      *StepBudgetUsage          `json:"step_budget,omitempty"`
+	MemoryManifest  *MemoryInjectionManifest  `json:"memory_manifest,omitempty"`
+	ContextManifest *ContextInjectionManifest `json:"context_manifest,omitempty"`
 }
 
 // ArtifactExpectation describes an expected output artifact and its verification criteria.

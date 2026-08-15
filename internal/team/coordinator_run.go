@@ -303,7 +303,17 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	// resolver used, so RequiresResult/ToolSequence/etc. stay consistent.
 	granted := toolNameSet(exposedToolNames)
 	syntheticTask := TaskDef{Agent: resolvedName, Goal: task, Execution: ExecutionContract{RequiresResult: true}}
-	prompt := c.directAgentWorkflowPrompt(task, agentDef, resolvedName, todoID, granted, syntheticTask)
+	instructions := c.sharedKnowledgeInstructions(granted)
+	if granted["submit_result"] {
+		instructions += resultProtocolInstructions(syntheticTask, granted)
+	}
+	skillContext, skillErr := c.buildSkillContextItems(agentDef, resolvedName, task, todoID, granted)
+	if skillErr != nil {
+		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{todoID: todoID, agent: resolvedName, agentDef: agentDef, task: task, directModel: directModel, attemptStarted: attemptStarted, roundCancel: roundCancel, err: fmt.Errorf("direct-agent skill context preflight failed: %w", skillErr)})
+		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent skill context preflight failed: %w", skillErr)}, nil
+	}
+	request := c.newTaskContextRequest(syntheticTask, todoID, 1, ContextTriggerTaskDispatch, resolvedName, agentDef.Role, nil)
+	prompt := task + "\n\n" + instructions
 
 	// Direct-agent dispatch uses the same canonical compiler as DAG workers.
 	// Historical sources are represented as typed inputs so visibility,
@@ -312,14 +322,15 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	rawSTM, rawLTM := "", ""
 	memoryStore := (*memory.MemoryStore)(nil)
 	var canonicalMemory *CanonicalContextBundle
+	var routeDecisions []ContextRouteDecision
 	canonical := false
 	// The retrieval query is the raw direct-agent goal, not the expanded
 	// prompt. The manifest must hash the same value so explain-memory can bind
 	// the actual retrieval query to its retrieval ID (spec §5.1, §7
 	// HF-MEM4-005).
-	retrievalQuery := task
+	retrievalQuery := request.RetrievalQuery()
 	if !c.ExecutionProfile().DisableHistoricalMemory {
-		bundle, foundCanonical, memoryErr := c.canonicalContextBundleForQuery(taskCtx, retrievalQuery)
+		bundle, decisions, foundCanonical, memoryErr := c.canonicalContextBundleForRequest(taskCtx, request)
 		if memoryErr != nil {
 			// Canonical memory preflight failed before any round was registered
 			// for this path; the failure is still attributable to the direct
@@ -337,21 +348,22 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 			})
 			return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent canonical memory preflight failed: %w", memoryErr)}, nil
 		}
-		canonical, canonicalMemory = foundCanonical, bundle
+		canonical, canonicalMemory, routeDecisions = foundCanonical, bundle, decisions
 	}
 	if !c.ExecutionProfile().DisableHistoricalMemory && !canonical {
 		rawSTM, rawLTM, memoryStore = LoadSTM(c.session.Workspace), LoadLTM(c.session.Workspace, c.session.Config.Name), c.memoryStore
 	}
-	workerInput := WorkerContextInput{TaskGoal: prompt, TaskDef: TaskDef{Agent: resolvedName, Goal: task}, AgentDef: agentDef,
-		RawSTM: rawSTM, RawLTM: rawLTM, MemoryStore: memoryStore, CanonicalMemory: canonicalMemory,
-		ModelContext: globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef)), MaxAuxChars: maxWorkerAuxContextChars,
-		DisableMemory: c.ExecutionProfile().DisableHistoricalMemory}
+	workerInput := buildWorkerContextInput(request, syntheticTask, agentDef, "", instructions, "", "", skillContext)
+	workerInput.RawSTM, workerInput.RawLTM, workerInput.MemoryStore, workerInput.CanonicalMemory = rawSTM, rawLTM, memoryStore, canonicalMemory
+	workerInput.ModelContext = globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef))
+	workerInput.MaxAuxChars = maxWorkerAuxContextChars
+	workerInput.DisableMemory = c.ExecutionProfile().DisableHistoricalMemory
 	// WP-3: recall per-worker private memory before direct-agent dispatch.
-	if memBundle := c.recallWorkerMemory(taskCtx, agentDef, task); memBundle != nil {
+	if memBundle := c.recallWorkerMemory(taskCtx, agentDef, retrievalQuery); memBundle != nil {
 		workerInput.WorkerMemory = memBundle
 	}
 	compiled, compileErr := c.ContextCompiler().CompileWorkerContext(taskCtx, workerInput)
-	c.recordShadowTrace(taskCtx, "direct_worker", prompt, workerInput.ModelContext, compiled, compileErr)
+	c.recordShadowTrace(taskCtx, "direct_worker", prompt, request, routeDecisions, workerInput.ModelContext, compiled, compileErr)
 	if compileErr != nil {
 		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{
 			todoID:         todoID,
@@ -382,11 +394,16 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent context preflight produced an empty prompt")}, nil
 	}
 	prompt = compiled.Prompt
+	contextManifest := BuildContextInjectionManifest(request, compiled, routeDecisions, resolvedName, time.Now().UTC())
+	if manifestErr := c.persistContextManifest(&contextManifest); manifestErr != nil {
+		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{todoID: todoID, agent: resolvedName, agentDef: agentDef, task: task, directModel: directModel, attemptStarted: attemptStarted, roundCancel: roundCancel, err: fmt.Errorf("direct-agent context manifest preflight failed: %w", manifestErr)})
+		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent context manifest preflight failed: %w", manifestErr)}, nil
+	}
 	runID := c.executionRunID
 	if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 		runID = c.taskTracker.TodoList().RunID()
 	}
-	memoryManifest := buildMemoryInjectionManifest(compiled, runID, todoID, 1, resolvedName, retrievalQuery, c.session.Config.MemoryLearning)
+	memoryManifest := buildMemoryInjectionManifestFromContextManifest(compiled, &contextManifest, runID, todoID, 1, resolvedName, retrievalQuery, c.session.Config.MemoryLearning)
 	c.setCurrentTaskAttempt(todoID, 1)
 	if manifestErr := c.persistMemoryManifest(memoryManifest); manifestErr != nil {
 		// The manifest preflight leaves the canonical task in_progress; persist
@@ -413,7 +430,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	directReceipt := ExecutionReceipt{
 		RunID: runID, TaskID: todoID, Attempt: 1, StartedAt: attemptStarted,
 		FinishedAt: time.Now(), ProducerID: resolvedName,
-		MemoryManifest: cloneMemoryInjectionManifest(memoryManifest),
+		ModelExecutionID: contextManifest.ModelExecutionID,
+		MemoryManifest:   cloneMemoryInjectionManifest(memoryManifest),
+		ContextManifest:  cloneContextInjectionManifest(&contextManifest),
 	}
 	if err == nil {
 		zero := 0
@@ -1408,19 +1427,23 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 	rawSTM, rawLTM := "", ""
 	memoryStore := (*memory.MemoryStore)(nil)
 	var canonicalMemory *CanonicalContextBundle
+	var routeDecisions []ContextRouteDecision
+	contextRequest := c.newCoordinatorContextRequest(prompt, isContinuation, c.totalRounds()+1)
 	if allowHistoricalMemory {
-		bundle, canonical, memoryErr := c.canonicalContextBundleForQuery(ctx, prompt)
+		bundle, decisions, canonical, memoryErr := c.canonicalContextBundleForRequest(ctx, contextRequest)
 		if memoryErr != nil {
 			return "", fmt.Errorf("coordinator canonical memory preflight failed: %w", memoryErr)
 		}
 		if canonical {
 			canonicalMemory = bundle
+			routeDecisions = decisions
 		} else {
 			rawSTM, rawLTM = utils.RedactSecrets(LoadSTM(c.session.Workspace)), utils.RedactSecrets(LoadLTM(c.session.Workspace, c.session.Config.Name))
 			memoryStore = c.memoryStore
 		}
 	}
 	coordInput := CoordinatorContextInput{
+		Request:          contextRequest,
 		Goal:             prompt,
 		SessionContext:   contextSummary,
 		RawSTM:           rawSTM,
@@ -1480,16 +1503,20 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 	systemPrompt = utils.RedactSecrets(systemPrompt)
 	coordInput.CorePrompt = utils.RedactSecrets(coreText.String())
 	compiled, compileErr := c.ContextCompiler().CompileCoordinatorContext(ctx, coordInput)
-	c.recordShadowTrace(ctx, "coordinator", systemPrompt, coordInput.ModelContext, compiled, compileErr)
+	c.recordShadowTrace(ctx, "coordinator", systemPrompt, contextRequest, routeDecisions, coordInput.ModelContext, compiled, compileErr)
 	if compileErr != nil {
 		return "", fmt.Errorf("coordinator context preflight failed: %w", compileErr)
 	}
 	if strings.TrimSpace(compiled.Prompt) == "" {
 		return "", fmt.Errorf("coordinator context preflight failed: compiled prompt is empty")
 	}
+	contextManifest := BuildContextInjectionManifest(contextRequest, compiled, routeDecisions, "coordinator", time.Now().UTC())
+	if err := c.persistContextManifest(&contextManifest); err != nil {
+		return "", fmt.Errorf("coordinator context manifest preflight failed: %w", err)
+	}
 	systemPrompt = compiled.Prompt
 	if c.session != nil {
-		manifest := buildMemoryInjectionManifest(compiled, c.executionRunID, "", c.totalRounds()+1, "coordinator", prompt, c.session.Config.MemoryLearning)
+		manifest := buildMemoryInjectionManifestFromContextManifest(compiled, &contextManifest, c.executionRunID, "", c.totalRounds()+1, "coordinator", contextRequest.RetrievalQuery(), c.session.Config.MemoryLearning)
 		c.emitMemoryRetrievalEvents(manifest)
 	}
 

@@ -15,9 +15,9 @@ import (
 // TestWorkerManifestQueryHashMatchesRetrievalQuery is the integration regression
 // for the review finding that worker manifests hashed the expanded prompt while
 // reranking used the raw task goal. With a skill that expands the prompt, the
-// persisted manifest must hash the exact retrieval query (task.Goal), not the
-// expanded prompt, so explain-memory can bind the actual retrieval query to its
-// retrieval ID (spec §5.1, §7 HF-MEM4-005).
+// persisted manifest must hash the exact deterministic ContextRequest query,
+// not the expanded prompt, so explain-memory can bind the actual retrieval
+// state to its retrieval ID.
 func TestWorkerManifestQueryHashMatchesRetrievalQuery(t *testing.T) {
 	workspace := t.TempDir()
 	// executeTask fires autoWriteSTMASync/persistReflexionLessonAsync as
@@ -71,8 +71,8 @@ func TestWorkerManifestQueryHashMatchesRetrievalQuery(t *testing.T) {
 	// Prove the skill actually expands the prompt; otherwise the hash assertions
 	// below would pass trivially even with the bug.
 	expanded := c.appendSkillContext(goal, agentDef, "worker", goal, item.ID)
-	if expanded == goal || !strings.Contains(expanded, "run the deploy steps") {
-		t.Fatalf("test setup: skill did not expand the prompt: %q", expanded)
+	if expanded == goal || strings.Contains(expanded, "run the deploy steps") || !strings.Contains(expanded, "deploy the service") {
+		t.Fatalf("test setup: skill was not summary-disclosed safely: %q", expanded)
 	}
 
 	if _, err := c.executeTask(context.Background(), TaskDef{Agent: "worker", Goal: goal, Recovery: RecoveryRetry}, item.ID); err != nil {
@@ -95,8 +95,9 @@ func TestWorkerManifestQueryHashMatchesRetrievalQuery(t *testing.T) {
 	if manifest == nil {
 		t.Fatal("no memory injection manifest persisted")
 	}
-	if manifest.QueryHash != QueryHash(goal) {
-		t.Fatalf("manifest query hash = %q, want %q (retrieval query %q)", manifest.QueryHash, QueryHash(goal), goal)
+	request := c.newTaskContextRequest(TaskDef{Agent: "worker", Goal: goal, Recovery: RecoveryRetry}, item.ID, 1, ContextTriggerTaskDispatch, "worker", "worker", nil)
+	if manifest.QueryHash != QueryHash(request.RetrievalQuery()) {
+		t.Fatalf("manifest query hash = %q, want %q", manifest.QueryHash, QueryHash(request.RetrievalQuery()))
 	}
 	if manifest.QueryHash == QueryHash(expanded) {
 		t.Fatal("manifest hashed the expanded prompt instead of the retrieval query")

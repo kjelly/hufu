@@ -138,6 +138,17 @@ func (c *Coordinator) canonicalContextBundleForQuery(ctx context.Context, query 
 	return &CanonicalContextBundle{SharedSession: stm, SharedPersistent: ltm, SharedPersistentScores: scores, SharedPersistentFinalScores: finalScores}, true, nil
 }
 
+func (c *Coordinator) canonicalContextBundleForRequest(ctx context.Context, request ContextRequest) (*CanonicalContextBundle, []ContextRouteDecision, bool, error) {
+	if c == nil || c.contextRepo == nil {
+		return nil, nil, false, nil
+	}
+	route, err := c.contextRouter().Route(ctx, request)
+	if err != nil {
+		return nil, nil, true, err
+	}
+	return &route.Bundle, route.Decisions, true, nil
+}
+
 // appendCanonicalContext is the unified memory ingestion path. It appends the
 // canonical record first, then regenerates the legacy prompt files solely as
 // projections. Callers must not write STM/LTM directly after this returns.
@@ -162,6 +173,9 @@ func (c *Coordinator) appendCanonicalContext(ctx context.Context, kind contextst
 	// eligible for extraction.
 	if metadata == nil {
 		metadata = map[string]string{}
+	}
+	if _, err := ParseContextActivation(metadata); err != nil {
+		return fmt.Errorf("invalid context activation metadata: %w", err)
 	}
 	lifecycle := contextstore.LifecycleConfirmed
 	sourceType := "memory"

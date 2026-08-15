@@ -78,6 +78,10 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		}
 		return fantasy.NewTextErrorResponse(denial), nil
 	}
+	if denial := t.coordinator.mandatorySkillLoadDenial(ctx, t.Info().Name, call.Input); denial != "" {
+		t.coordinator.setToolPolicyVerdict(call.ID, "denied")
+		return fantasy.NewTextErrorResponse(denial), nil
+	}
 	sequence := taskToolSequenceFromContext(ctx)
 	reservedSlot, effectiveInput, canonicalized, sequenceDenial := sequence.reserve(t.Info().Name, call.Input, earlyTerminalSubmitResult(t.Info().Name, call))
 	if sequenceDenial != "" {

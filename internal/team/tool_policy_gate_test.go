@@ -80,6 +80,21 @@ func TestPolicyGateDenialIsRecoverable(t *testing.T) {
 	}
 }
 
+func TestContextQueryCannotBypassClosedToolSequence(t *testing.T) {
+	c := gateTestCoordinator()
+	inner := &recordingTool{name: "context_query"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"context_query"})
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, newTaskToolSequence([]string{"bash"}, nil, "", nil))
+	resp, err := gated.Run(ctx, fantasy.ToolCall{ID: "ctx-query", Name: "context_query", Input: `{"query":"help"}`})
+	if err != nil {
+		t.Fatalf("closed-sequence denial should be a model-visible result: %v", err)
+	}
+	if !resp.IsError || inner.ran {
+		t.Fatalf("context_query bypassed closed sequence: response=%+v ran=%v", resp, inner.ran)
+	}
+}
+
 func TestPolicyGateCoordinatorPolicyDenialsAreTerminal(t *testing.T) {
 	tests := []struct {
 		name    string

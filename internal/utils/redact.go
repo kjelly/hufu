@@ -71,6 +71,7 @@ var numericTelemetryKeys = map[string]struct{}{
 	// telemetry, not a credential; redacting it corrupts session.json and
 	// makes the manifest unparseable.
 	"token_count": {},
+	"tokens":      {},
 }
 
 // Safe policy metadata describes how a caller handles credentials; it is not

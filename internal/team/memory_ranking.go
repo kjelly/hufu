@@ -72,7 +72,7 @@ func ExplainMemoryScoreWithPolicy(item contextstore.ContextItem, baseRelevance f
 	if asOf.IsZero() {
 		asOf = contextItemUpdatedAt(item)
 	}
-	parts := MemoryScoreParts{BaseRelevance: baseRelevance, Applicability: memoryApplicabilityAt(baseRelevance, runtime.MinimumRelevance), UtilityLowerBound: utility, Freshness: memoryFreshnessAt(item, asOf), TrustFactor: memoryTrustFactor(item.TrustLevel), HarmfulUsePenalty: aggregate.NegativeWeight / (aggregate.PositiveWeight + aggregate.NegativeWeight + 1), StaleEnvironmentPenalty: staleEnvironmentPenalty(item)}
+	parts := MemoryScoreParts{BaseRelevance: baseRelevance, Applicability: 1, UtilityLowerBound: utility, Freshness: memoryFreshnessAt(item, asOf), TrustFactor: memoryTrustFactor(item.TrustLevel), HarmfulUsePenalty: aggregate.NegativeWeight / (aggregate.PositiveWeight + aggregate.NegativeWeight + 1), StaleEnvironmentPenalty: staleEnvironmentPenalty(item)}
 	return MemoryScoreExplanation{ContextItemID: item.ID, PolicyVersion: policy.PolicyVersion, ScoreParts: parts, FinalScore: reinforcedFinalScoreWithPolicy(parts, runtime), PositiveWeight: aggregate.PositiveWeight, NegativeWeight: aggregate.NegativeWeight, ExposureCount: aggregate.ExposureCount, AppliedCount: aggregate.AppliedCount, VerifiedSupportCount: aggregate.VerifiedSupportCount, CausalFailureCount: aggregate.CausalFailureCount}
 }
 
@@ -85,16 +85,80 @@ func reinforcedFinalScoreWithPolicy(parts MemoryScoreParts, policy MemoryRuntime
 }
 
 func (c *Coordinator) rankSharedPersistentMemory(ctx context.Context, query string, base []contextstore.ContextItem) ([]contextstore.ContextItem, map[string]MemoryScoreParts, map[string]float64, error) {
+	return c.rankSharedPersistentMemoryAllowed(ctx, query, base, nil)
+}
+
+func (c *Coordinator) rankSharedPersistentMemoryAllowed(ctx context.Context, query string, base []contextstore.ContextItem, allowed map[string]bool) ([]contextstore.ContextItem, map[string]MemoryScoreParts, map[string]float64, error) {
 	policy := c.session.Config.MemoryLearning
-	if policy.Mode == agent.MemoryLearningOff || policy.Mode == agent.MemoryLearningObserve || strings.TrimSpace(query) == "" {
-		return base, nil, nil, nil
-	}
 	rankingPolicy := c.effectiveMemoryRankingPolicy()
+	if strings.TrimSpace(query) == "" {
+		mustKeep := make([]contextstore.ContextItem, 0)
+		pinned := make([]contextstore.ContextItem, 0)
+		for _, item := range base {
+			if item.MustKeep {
+				mustKeep = append(mustKeep, item)
+			} else if item.Pinned {
+				pinned = append(pinned, item)
+			}
+		}
+		selected := append([]contextstore.ContextItem(nil), mustKeep...)
+		remaining := rankingPolicy.InjectTopK - len(selected)
+		if remaining > 0 {
+			if len(pinned) > remaining {
+				pinned = pinned[:remaining]
+			}
+			selected = append(selected, pinned...)
+		}
+		return selected, nil, nil, nil
+	}
+	candidateLimit := rankingPolicy.CandidateTopK
+	if allowed != nil && len(base) > candidateLimit {
+		candidateLimit = len(base)
+	}
 	results, _, err := contextstore.HybridRetrieve(ctx, c.contextRepo, nil, contextstore.SearchRequest{
-		Query: query, Scope: persistentContextScope(c.contextScope()), Limit: rankingPolicy.TopK,
+		Query: query, Scope: persistentContextScope(c.contextScope()), Limit: candidateLimit,
 	})
 	if err != nil {
-		return base, nil, nil, err
+		return nil, nil, nil, err
+	}
+	if len(results) == 0 {
+		// ContextRequest queries deliberately carry structured state on separate
+		// lines. Some lexical backends interpret the whole string conjunctively;
+		// fall back to the goal line so state labels cannot suppress an otherwise
+		// relevant candidate. Activation gates still enforce the state contract.
+		if goal, _, found := strings.Cut(query, "\n"); found && strings.TrimSpace(goal) != "" {
+			results, _, err = contextstore.HybridRetrieve(ctx, c.contextRepo, nil, contextstore.SearchRequest{Query: goal, Scope: persistentContextScope(c.contextScope()), Limit: candidateLimit})
+			if err != nil {
+				return nil, nil, nil, err
+			}
+		}
+	}
+	if allowed != nil {
+		filtered := results[:0]
+		for _, result := range results {
+			if allowed[result.Item.ID] {
+				filtered = append(filtered, result)
+			}
+		}
+		results = filtered
+		if len(results) > rankingPolicy.CandidateTopK {
+			results = results[:rankingPolicy.CandidateTopK]
+		}
+	}
+	// HybridRetrieve's RRF scores are reciprocal ranks (the first lexical hit
+	// is about 1/61), while runtime policy relevance is defined on [0,1].
+	// Normalize that fused scale before applying the policy threshold.
+	for i := range results {
+		if results[i].Score > 0 && results[i].Score < 1 {
+			results[i].Score = math.Min(1, results[i].Score*61)
+		}
+	}
+	relevanceEntries, relevanceScores, relevanceFinal := relevanceMemoryEntries(results, rankingPolicy)
+	if policy.Mode == agent.MemoryLearningOff || policy.Mode == agent.MemoryLearningObserve {
+		if policy.Mode == agent.MemoryLearningObserve {
+			c.persistMemoryRankingTrace(memoryRankingTrace(policy, query, results, relevanceEntries))
+		}
+		return selectedMemoryResults(results, relevanceEntries), relevanceScores, relevanceFinal, nil
 	}
 	entries, scores, err := c.reinforceSearchResults(ctx, results, policy)
 	if err != nil {
@@ -103,25 +167,46 @@ func (c *Coordinator) rankSharedPersistentMemory(ctx context.Context, query stri
 	trace := memoryRankingTrace(policy, query, results, entries)
 	c.persistMemoryRankingTrace(trace)
 	if policy.Mode == agent.MemoryLearningShadow {
-		return base, nil, nil, nil
+		return selectedMemoryResults(results, relevanceEntries), relevanceScores, relevanceFinal, nil
 	}
 	finalScores := make(map[string]float64, len(entries))
 	for _, entry := range entries {
 		finalScores[entry.ContextItemID] = entry.FinalScore
 	}
+	return selectedMemoryResults(results, entries), scores, finalScores, nil
+}
+
+func relevanceMemoryEntries(results []contextstore.SearchResult, policy MemoryRuntimeRankingPolicy) ([]MemoryRankingEntry, map[string]MemoryScoreParts, map[string]float64) {
+	entries := make([]MemoryRankingEntry, 0, len(results))
+	scores := make(map[string]MemoryScoreParts, len(results))
+	finalScores := make(map[string]float64, len(results))
+	selected := 0
+	for i, result := range results {
+		parts := MemoryScoreParts{BaseRelevance: result.Score, Applicability: 1, Freshness: 1, TrustFactor: memoryTrustFactor(result.Item.TrustLevel), StaleEnvironmentPenalty: staleEnvironmentPenalty(result.Item)}
+		include := selected < policy.InjectTopK && result.Score >= policy.MinimumRelevance && parts.StaleEnvironmentPenalty == 0
+		entry := MemoryRankingEntry{ContextItemID: result.Item.ID, BaseRank: i + 1, FinalRank: i + 1, Selected: include, ScoreParts: parts, FinalScore: result.Score}
+		if include {
+			selected++
+		}
+		entries = append(entries, entry)
+		scores[result.Item.ID] = parts
+		finalScores[result.Item.ID] = result.Score
+	}
+	return entries, scores, finalScores
+}
+
+func selectedMemoryResults(results []contextstore.SearchResult, entries []MemoryRankingEntry) []contextstore.ContextItem {
+	byID := make(map[string]contextstore.ContextItem, len(results))
+	for _, result := range results {
+		byID[result.Item.ID] = result.Item
+	}
 	selected := make([]contextstore.ContextItem, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.Selected {
-			continue
-		}
-		for _, result := range results {
-			if result.Item.ID == entry.ContextItemID {
-				selected = append(selected, result.Item)
-				break
-			}
+		if entry.Selected {
+			selected = append(selected, byID[entry.ContextItemID])
 		}
 	}
-	return selected, scores, finalScores, nil
+	return selected
 }
 
 func persistentContextScope(scope contextstore.Scope) contextstore.Scope {
@@ -146,7 +231,7 @@ func (c *Coordinator) reinforceSearchResults(ctx context.Context, results []cont
 			}
 		}
 		parts := MemoryScoreParts{
-			BaseRelevance: result.Score, Applicability: memoryApplicabilityAt(result.Score, rankingPolicy.MinimumRelevance),
+			BaseRelevance: result.Score, Applicability: 1,
 			UtilityLowerBound: utility, Freshness: memoryFreshnessAt(result.Item, asOf),
 			TrustFactor:             memoryTrustFactor(result.Item.TrustLevel),
 			HarmfulUsePenalty:       negative / (positive + negative + 1),
@@ -179,9 +264,13 @@ func (c *Coordinator) reinforceSearchResults(ctx context.Context, results []cont
 		}
 		return entries[i].ContextItemID < entries[j].ContextItemID
 	})
+	selected := 0
 	for i := range entries {
 		entries[i].FinalRank = i + 1
-		entries[i].Selected = entries[i].ScoreParts.BaseRelevance >= rankingPolicy.MinimumRelevance && entries[i].ScoreParts.HarmfulUsePenalty == 0 && entries[i].ScoreParts.StaleEnvironmentPenalty == 0 && entries[i].FinalScore > 0
+		entries[i].Selected = selected < rankingPolicy.InjectTopK && entries[i].ScoreParts.BaseRelevance >= rankingPolicy.MinimumRelevance && entries[i].ScoreParts.HarmfulUsePenalty == 0 && entries[i].ScoreParts.StaleEnvironmentPenalty == 0 && entries[i].FinalScore > 0
+		if entries[i].Selected {
+			selected++
+		}
 	}
 	return entries, scores, nil
 }
@@ -193,20 +282,6 @@ func searchItem(results []contextstore.SearchResult, id string) contextstore.Con
 		}
 	}
 	return contextstore.ContextItem{}
-}
-
-func memoryApplicability(relevance float64) float64 {
-	return memoryApplicabilityAt(relevance, minimumMemoryRelevance)
-}
-
-func memoryApplicabilityAt(relevance, minimumRelevance float64) float64 {
-	if relevance < minimumRelevance {
-		return 0
-	}
-	if minimumRelevance <= 0 {
-		return 1
-	}
-	return math.Min(1, relevance/minimumRelevance)
 }
 
 func contextItemUpdatedAt(item contextstore.ContextItem) time.Time {
@@ -371,7 +446,7 @@ func (c *Coordinator) rerankWorkerMemory(ctx context.Context, bundle *WorkerMemo
 	}
 	ranked := make([]WorkerMemoryItem, 0, len(entries))
 	for _, entry := range entries {
-		if len(ranked) >= c.effectiveMemoryRankingPolicy().TopK {
+		if len(ranked) >= c.effectiveMemoryRankingPolicy().InjectTopK {
 			break
 		}
 		if !entry.Selected {

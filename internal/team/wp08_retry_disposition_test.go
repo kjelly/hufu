@@ -333,6 +333,22 @@ func TestWP08_NormalRetry(t *testing.T) {
 	if item.Status != TaskDone {
 		t.Errorf("task status = %s, want done (normal retry should succeed)", item.Status)
 	}
+	if len(item.ContextManifests) != 2 {
+		t.Fatalf("retry context manifests = %#v, want one durable manifest per attempt", item.ContextManifests)
+	}
+	first, second := item.ContextManifests[0], item.ContextManifests[1]
+	if first.Attempt != 1 || first.Trigger != ContextTriggerTaskDispatch || second.Attempt != 2 || second.Trigger != ContextTriggerRetry {
+		t.Fatalf("retry manifest attempt/trigger identity = %#v", item.ContextManifests)
+	}
+	if first.RequestID == second.RequestID || first.RequestHash == second.RequestHash || first.Fingerprint == second.Fingerprint {
+		t.Fatalf("retry reused prior context identity: first=%#v second=%#v", first, second)
+	}
+	if len(item.ExecutionReceipts) < 2 || item.ExecutionReceipts[0].ContextManifest == nil || item.ExecutionReceipts[1].ContextManifest == nil {
+		t.Fatalf("retry receipts missing matching context manifests: %#v", item.ExecutionReceipts)
+	}
+	if item.ExecutionReceipts[0].ContextManifest.RequestID != first.RequestID || item.ExecutionReceipts[1].ContextManifest.RequestID != second.RequestID {
+		t.Fatalf("receipt/manifest identity mismatch: receipts=%#v manifests=%#v", item.ExecutionReceipts, item.ContextManifests)
+	}
 }
 
 // TestWP08_ParentContextCancelled verifies that when the parent context is

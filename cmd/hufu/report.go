@@ -63,6 +63,7 @@ type reportData struct {
 	WorkerMemory        team.WorkerMemoryReport
 	MemoryLearning      team.MemoryLearningReport
 	DeprecatedMemory    []team.DeprecatedMemoryToolUsage
+	ContextRouting      team.ContextManifestSummary
 }
 
 // SkillPatternReport holds detected skill pattern info for reports
@@ -126,6 +127,7 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		}
 		d.MemoryLearning = tc.coordinator.MemoryLearningReport()
 		d.DeprecatedMemory = tc.coordinator.DeprecatedMemoryToolReport()
+		d.ContextRouting = tc.coordinator.ContextManifestReport()
 	}
 	if d.RunResult == nil && d.SessionData != nil {
 		d.RunResult = d.SessionData.RunResult
@@ -295,6 +297,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	writeWorkerMemoryReport(&b, data.WorkerMemory)
 	writeMemoryLearningReport(&b, data.MemoryLearning)
 	writeDeprecatedMemoryToolReport(&b, data.DeprecatedMemory)
+	writeContextRoutingReport(&b, data.ContextRouting)
 
 	if len(data.Todos) > 0 {
 		b.WriteString("## Task Summary\n\n")
@@ -421,6 +424,26 @@ func writeMemoryLearningReport(b *strings.Builder, report team.MemoryLearningRep
 	fmt.Fprintf(b, "- **Retrievals / exposures:** %d / %d\n", report.RetrievalCount, report.ExposureCount)
 	fmt.Fprintf(b, "- **Applied / outcomes:** %d / %d\n", report.AppliedCount, report.OutcomeCount)
 	fmt.Fprintf(b, "- **Pending reducer repairs:** %d\n\n---\n\n", report.PendingRepairGaps)
+}
+
+func writeContextRoutingReport(b *strings.Builder, summary team.ContextManifestSummary) {
+	if summary.Requests == 0 {
+		return
+	}
+	b.WriteString("## Context Routing\n\n")
+	fmt.Fprintf(b, "- **Requests:** %d\n- **Included items:** %d (%d tokens)\n- **Omitted items:** %d (%d tokens)\n", summary.Requests, summary.Included, summary.IncludedTokens, summary.Omitted, summary.OmittedTokens)
+	if len(summary.OmitReasons) > 0 {
+		b.WriteString("- **Omission reasons:**\n")
+		keys := make([]string, 0, len(summary.OmitReasons))
+		for reason := range summary.OmitReasons {
+			keys = append(keys, reason)
+		}
+		sort.Strings(keys)
+		for _, reason := range keys {
+			fmt.Fprintf(b, "  - `%s`: %d\n", reason, summary.OmitReasons[reason])
+		}
+	}
+	b.WriteString("\n---\n\n")
 }
 
 func writeDeprecatedMemoryToolReport(b *strings.Builder, report []team.DeprecatedMemoryToolUsage) {

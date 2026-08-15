@@ -23,6 +23,7 @@ import (
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/memory"
+	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -76,7 +77,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	// Check if agent has extra-models configured
 	if len(agentDef.ExtraModels) > 0 {
-		return c.executeTaskWithExtraModels(parentCtx, agentName, agentDef, taskDesc, todoID, task.Verify, task.AdversarialVerify)
+		return c.executeTaskWithExtraModels(parentCtx, agentName, agentDef, task, todoID)
 	}
 
 	// Model selection is a runtime capability service so workers, local
@@ -176,7 +177,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// tool converts an obedient worker into a dead attempt.
 	granted := toolNameSet(exposedToolNames)
 
-	var prompt string
+	var approvedPlan, instructions string
 	if task.PlanFirst && task.PlanID != "" {
 		c.pendingPlansMu.Lock()
 		entry := c.pendingPlans[task.PlanID]
@@ -187,60 +188,49 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		planText := entry.PlanText
 		c.pendingPlansMu.Unlock()
 
-		prompt = "## Goal\n\n" + task.Goal
-		if task.Constraints != "" {
-			prompt += "\n\n## Constraints\n\n" + task.Constraints
-		}
-		prompt += "\n\n## Approved Plan\n\n" + planText
-		prompt += "\n\n## Instructions\n\nExecute the approved plan above. You have already planned — now implement each step.\n"
-		prompt += c.sharedKnowledgeInstructions(granted)
+		approvedPlan = planText
+		instructions = "Execute the approved plan above. You have already planned — now implement each step.\n" + c.sharedKnowledgeInstructions(granted)
 	} else if task.PlanFirst {
-		prompt = "## Goal\n\n" + task.Goal
-		if task.Constraints != "" {
-			prompt += "\n\n## Constraints\n\n" + task.Constraints
-		}
-		prompt += "\n\n## Instructions\n\nDraft a detailed task execution plan before doing any work. Your plan should be a numbered list of concrete, actionable steps with brief descriptions. Consider your skills, available tools, and the project context. Call `submit_plan` with your complete plan when ready. Do NOT execute any steps yet — only plan."
+		instructions = "Draft a detailed task execution plan before doing any work. Your plan should be a numbered list of concrete, actionable steps with brief descriptions. Consider your skills, available tools, and the project context. Call `submit_plan` with your complete plan when ready. Do NOT execute any steps yet — only plan."
 	} else {
-		prompt = "## Goal\n\n" + task.Goal
-		if task.Constraints != "" {
-			prompt += "\n\n## Constraints\n\n" + task.Constraints
-		}
-		prompt += "\n\n## Instructions\n\nYou are a domain expert. Determine your own implementation approach based on the goal above.\n"
-		prompt += c.sharedKnowledgeInstructions(granted)
+		instructions = "You are a domain expert. Determine your own implementation approach based on the goal above.\n" + c.sharedKnowledgeInstructions(granted)
 	}
-	if task.Verify != "" {
-		prompt += completionVerificationInstructions(task.Verify, c.projectDir)
+	verificationCriteria := ""
+	if task.Verify != "" && (!task.PlanFirst || task.PlanID != "") {
+		verificationCriteria = completionVerificationInstructions(task.Verify, c.projectDir)
 	}
 	// The result protocol is enforced for every non-sidecar task, so it has to
 	// be stated. A worker that ends its turn with prose fails the contract, and
 	// the failure is indistinguishable from real non-completion.
 	if !task.PlanFirst || task.PlanID != "" {
-		prompt += resultProtocolInstructions(task, granted)
+		instructions += resultProtocolInstructions(task, granted)
 	}
 	if taskUsesVerbatimTranscript(task) {
-		prompt += "\n\n## Verbatim Output Contract\n\nhufu captures every tool call and tool result into a complete transcript artifact. Do not reproduce raw command output in your final response. Submit a concise structured result; the runner will attach the authoritative transcript manifest."
+		instructions += "\n\n## Verbatim Output Contract\n\nhufu captures every tool call and tool result into a complete transcript artifact. Do not reproduce raw command output in your final response. Submit a concise structured result; the runner will attach the authoritative transcript manifest."
 	}
 	if agentDef != nil {
 		if note := toolUsageNotes(agentDef.Tools); note != "" {
-			prompt += note
+			instructions += note
 		}
 	}
 
 	// SSH session tracking is handled by the ssh tool's response hint.
 	// No coordinator-level tracking is needed - each SSH call is independent.
 
-	prompt = c.appendSkillContext(prompt, agentDef, agentName, task.Goal, todoID)
-
+	skillContext, skillErr := c.buildSkillContextItems(agentDef, agentName, task.Goal, todoID, granted)
+	if skillErr != nil {
+		return "", fmt.Errorf("worker skill context preflight failed: %w", skillErr)
+	}
+	runtimeContext := ""
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		execCtx := c.phaseWorkflow.executionContext()
-		prompt += "\n\n## Execution Context\n\n"
-		prompt += fmt.Sprintf("- **Phase**: `%s`\n", c.phaseWorkflow.State())
-		prompt += fmt.Sprintf("- **Runtime Workspace**: `%s`\n", execCtx.RuntimeWorkspace.Root)
-		prompt += fmt.Sprintf("- **Artifacts Directory**: `%s/artifacts`\n", execCtx.RuntimeWorkspace.Root)
-		prompt += fmt.Sprintf("- **Receipts Directory**: `%s/receipts`\n", execCtx.RuntimeWorkspace.Root)
-		prompt += "Ensure all durable outputs are written to the artifacts directory, not the project source.\n"
+		runtimeContext += fmt.Sprintf("- **Phase**: `%s`\n", c.phaseWorkflow.State())
+		runtimeContext += fmt.Sprintf("- **Runtime Workspace**: `%s`\n", execCtx.RuntimeWorkspace.Root)
+		runtimeContext += fmt.Sprintf("- **Artifacts Directory**: `%s/artifacts`\n", execCtx.RuntimeWorkspace.Root)
+		runtimeContext += fmt.Sprintf("- **Receipts Directory**: `%s/receipts`\n", execCtx.RuntimeWorkspace.Root)
+		runtimeContext += "Ensure all durable outputs are written to the artifacts directory, not the project source.\n"
 		if len(execCtx.Capabilities.Required) > 0 {
-			prompt += fmt.Sprintf("- **Required Capabilities**: `%s`\n", strings.Join(execCtx.Capabilities.Required, ", "))
+			runtimeContext += fmt.Sprintf("- **Required Capabilities**: `%s`\n", strings.Join(execCtx.Capabilities.Required, ", "))
 		}
 	}
 
@@ -287,56 +277,25 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	memoryStore := (*memory.MemoryStore)(nil)
 	var canonicalMemory *CanonicalContextBundle
 	canonical := false
-	// The retrieval query is the raw task goal, not the expanded prompt. The
-	// manifest must hash the same value so explain-memory can bind the actual
-	// retrieval query to its retrieval ID (spec §5.1, §7 HF-MEM4-005).
-	retrievalQuery := task.Goal
+	request := c.newTaskContextRequest(task, todoID, 1, ContextTriggerTaskDispatch, agentName, agentDef.Role, nil)
 	if !c.ExecutionProfile().DisableHistoricalMemory {
-		bundle, foundCanonical, memoryErr := c.canonicalContextBundleForQuery(parentCtx, retrievalQuery)
-		if memoryErr != nil {
-			return "", fmt.Errorf("worker canonical memory preflight failed: %w", memoryErr)
-		}
-		canonical, canonicalMemory = foundCanonical, bundle
+		canonical = c.contextRepo != nil
 	}
 	if !c.ExecutionProfile().DisableHistoricalMemory && !canonical {
 		rawSTM, rawLTM, memoryStore = LoadSTM(c.session.Workspace), LoadLTM(c.session.Workspace, c.session.Config.Name), c.memoryStore
 	}
-	workerInput := WorkerContextInput{
-		TaskGoal:          prompt,
-		TaskDef:           task,
-		AgentDef:          agentDef,
-		RawSTM:            rawSTM,
-		RawLTM:            rawLTM,
-		ContextFiles:      contextFiles,
-		ConcurrentTasks:   c.buildConcurrentTasksContext(todoID),
-		DependencyResults: depResults,
-		MemoryStore:       memoryStore,
-		CanonicalMemory:   canonicalMemory,
-		ModelContext:      modelSpec,
-		MaxAuxChars:       maxWorkerAuxContextChars,
-		DisableMemory:     c.ExecutionProfile().DisableHistoricalMemory,
-	}
-
-	// WP-3: recall per-worker private memory before dispatch. The bundle is
-	// injected as a typed section in the compiled context, not raw Markdown.
-	if memBundle := c.recallWorkerMemory(parentCtx, agentDef, task.Goal); memBundle != nil {
-		workerInput.WorkerMemory = memBundle
-	}
-
-	// Canonical typed compilation is the only model-visible context assembly.
-	// Context files, STM/LTM, concurrent tasks, memory, and dependency results
-	// are already represented separately in workerInput; duplicating a
-	// char-truncated legacy bundle here would bypass authority/conflict checks.
-	workerInput.TaskGoal = prompt
-	compiled, compileErr := c.ContextCompiler().CompileWorkerContext(parentCtx, workerInput)
-	c.recordShadowTrace(parentCtx, "worker", prompt, workerInput.ModelContext, compiled, compileErr)
-	if compileErr != nil {
-		return "", fmt.Errorf("worker context preflight failed: %w", compileErr)
-	}
-	if strings.TrimSpace(compiled.Prompt) == "" {
-		return "", fmt.Errorf("worker context preflight failed: compiled prompt is empty")
-	}
-	prompt = compiled.Prompt
+	workerInput := buildWorkerContextInput(request, task, agentDef, approvedPlan, instructions, verificationCriteria, runtimeContext, skillContext)
+	workerInput.RawSTM = rawSTM
+	workerInput.RawLTM = rawLTM
+	workerInput.ContextFiles = contextFiles
+	workerInput.ConcurrentTasks = c.buildConcurrentTasksContext(todoID)
+	workerInput.DependencyResults = depResults
+	workerInput.MemoryStore = memoryStore
+	workerInput.CanonicalMemory = canonicalMemory
+	workerInput.ModelContext = modelSpec
+	workerInput.MaxAuxChars = maxWorkerAuxContextChars
+	workerInput.DisableMemory = c.ExecutionProfile().DisableHistoricalMemory
+	legacyPrompt := strings.Join([]string{task.Goal, task.Constraints, approvedPlan, instructions, verificationCriteria, runtimeContext}, "\n\n")
 
 	var conversationHistory []fantasy.Message
 	var transcript *taskTranscript
@@ -453,18 +412,67 @@ retryLoop:
 			// not let it satisfy RequiresResult before the new worker runs.
 			c.clearSubmittedTaskResult(todoID)
 		}
+		trigger := ContextTriggerTaskDispatch
+		var failureContext *ContextFailure
+		if attempt > 1 {
+			trigger = ContextTriggerRetry
+			failureContext = &ContextFailure{Class: lastClass, ErrorClass: string(lastClass), EvidenceRefs: []string{lastTranscriptRef}, ToolName: lastToolCall, ToolInputHash: hashContentKey(utils.RedactSecrets(lastToolInput)), ExitCode: lastExitCode}
+			if lastErr != nil {
+				failureContext.EvidenceRefs = append(failureContext.EvidenceRefs, redactRetryText(lastErr.Error(), 300))
+			}
+		}
+		request = c.newTaskContextRequest(task, todoID, attempt, trigger, agentName, agentDef.Role, failureContext)
+		retrievalQuery := request.RetrievalQuery()
+		attemptInput := workerInput
+		attemptInput.Request = request
+		if attempt > 1 && lastErr != nil {
+			attemptInput.FailureContext = buildRetryContext(lastClass, lastErr, lastTranscriptRef, lastVerifyCmd, lastVerifyExit, lastExitCode, lastToolCall, lastToolInput, lastToolResult, lastToolResultErr, lastPartialOutput, task)
+			failureEvidence := redactRetryText(lastErr.Error(), 500)
+			if hint := c.reflectOnFailure(parentCtx, agentName, task.Goal, failureEvidence); hint != "" {
+				attemptInput.FailureContext += hint
+				appliedHint = strings.TrimPrefix(hint, reflectionHeader)
+				appliedHintTrigger = failureEvidence
+				c.rememberDiagnosticHint(todoID, appliedHint)
+			}
+		}
+		var routeDecisions []ContextRouteDecision
+		if canonical && !c.ExecutionProfile().DisableHistoricalMemory {
+			bundle, decisions, _, routeErr := c.canonicalContextBundleForRequest(parentCtx, request)
+			if routeErr != nil {
+				closeTranscript()
+				return "", fmt.Errorf("worker context routing preflight failed: %w", routeErr)
+			}
+			attemptInput.CanonicalMemory = bundle
+			routeDecisions = decisions
+		}
+		attemptInput.WorkerMemory = c.recallWorkerMemory(parentCtx, agentDef, retrievalQuery)
+		compiled, compileErr := c.ContextCompiler().CompileWorkerContext(parentCtx, attemptInput)
+		c.recordShadowTrace(parentCtx, "worker", legacyPrompt, request, routeDecisions, attemptInput.ModelContext, compiled, compileErr)
+		if compileErr != nil {
+			closeTranscript()
+			return "", fmt.Errorf("worker context preflight failed: %w", compileErr)
+		}
+		if strings.TrimSpace(compiled.Prompt) == "" {
+			closeTranscript()
+			return "", fmt.Errorf("worker context preflight failed: compiled prompt is empty")
+		}
+		contextManifest := BuildContextInjectionManifest(request, compiled, routeDecisions, agentName, time.Now().UTC())
+		if err := c.persistContextManifest(&contextManifest); err != nil {
+			closeTranscript()
+			return "", fmt.Errorf("worker context manifest preflight failed: %w", err)
+		}
 		attemptStarted := time.Now()
 		runID := c.executionRunID
 		if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 			runID = c.taskTracker.TodoList().RunID()
 		}
-		attemptManifest := buildMemoryInjectionManifest(compiled, runID, todoID, attempt, agentName, retrievalQuery, c.session.Config.MemoryLearning)
+		attemptManifest := buildMemoryInjectionManifestFromContextManifest(compiled, &contextManifest, runID, todoID, attempt, agentName, retrievalQuery, c.session.Config.MemoryLearning)
 		if err := c.persistMemoryManifest(attemptManifest); err != nil {
 			closeTranscript()
 			return "", fmt.Errorf("worker memory manifest preflight failed: %w", err)
 		}
 		c.recordExecutionEvent(todoID, agentName, attempt, "in_progress", resolvedModel, 0, ExecutionUsage{})
-		currentPrompt := prompt
+		currentPrompt := compiled.Prompt
 		if attempt > 1 {
 			detail := fmt.Sprintf("retry %d/%d", attempt, maxRetries)
 			if err := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskInProgress, detail, "", nil); err != nil {
@@ -474,21 +482,6 @@ retryLoop:
 			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retry %d/%d — continuing from previous progress", attempt, maxRetries)))
-			// §6.1: Build structured retry context with failure class,
-			// evidence reference, prior command/exit, and explicit mutable
-			// fields. This is appended to the prompt so the worker knows
-			// exactly what failed and what it can change.
-			if lastErr != nil {
-				retryCtx := buildRetryContext(lastClass, lastErr, lastTranscriptRef, lastVerifyCmd, lastVerifyExit, lastExitCode, lastToolCall, lastToolInput, lastToolResult, lastToolResultErr, lastPartialOutput, task)
-				currentPrompt += retryCtx
-				failureEvidence := redactRetryText(lastErr.Error(), 500)
-				if hint := c.reflectOnFailure(parentCtx, agentName, task.Goal, failureEvidence); hint != "" {
-					currentPrompt += hint
-					appliedHint = strings.TrimPrefix(hint, reflectionHeader)
-					appliedHintTrigger = failureEvidence
-					c.rememberDiagnosticHint(todoID, appliedHint)
-				}
-			}
 			if escalate {
 				if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
 					if _, escErr := c.ModelRuntime().ProviderFor(next); escErr == nil {
@@ -651,14 +644,16 @@ retryLoop:
 			}
 		}
 		receipt := ExecutionReceipt{
-			RunID:          runID,
-			TaskID:         todoID,
-			Attempt:        attempt,
-			StartedAt:      attemptStarted,
-			FinishedAt:     time.Now(),
-			ProducerID:     agentName,
-			TranscriptRef:  transcriptRef,
-			MemoryManifest: cloneMemoryInjectionManifest(attemptManifest),
+			RunID:            runID,
+			TaskID:           todoID,
+			Attempt:          attempt,
+			ModelExecutionID: contextManifest.ModelExecutionID,
+			StartedAt:        attemptStarted,
+			FinishedAt:       time.Now(),
+			ProducerID:       agentName,
+			TranscriptRef:    transcriptRef,
+			MemoryManifest:   cloneMemoryInjectionManifest(attemptManifest),
+			ContextManifest:  cloneContextInjectionManifest(&contextManifest),
 			StepBudget: &StepBudgetUsage{
 				Used:      len(steps),
 				Limit:     stepBudget,
@@ -813,7 +808,11 @@ retryLoop:
 						repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, taskDesc)
 						repairCtx = context.WithValue(repairCtx, taskToolSequenceKey{}, attemptSequence.protocolRepairSequence())
 
-						_, repairSteps, _ := c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, prompt, repairHistory, timing, fantasy.StepCountIs(1))
+						preparedPrompt, prepareErr := c.prepareAuxiliaryPrompt(repairCtx, "result_repair", prompt)
+						if prepareErr != nil {
+							return nil
+						}
+						_, repairSteps, _ := c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, preparedPrompt, repairHistory, timing, fantasy.StepCountIs(1))
 						typedRes = c.GetTaskResult(todoID)
 						return repairSteps
 					}
@@ -1640,7 +1639,12 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		if attempt > priorAttempts+1 {
 			repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous result-only repair call did not match the submit_result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work, inspect files, call any other tool, or emit a prose final response. The call must include both required fields: `status` (one of `success`, `completed_with_gaps`, `partial`, `failed`, or `blocked`) and a non-empty `summary`; put any complete textual deliverable in `details`.\n\n## Execution Output\n%s", task.Goal, output)
 		}
-		_, steps, callErr := c.runAgentWithStatusAndHistory(repairCtx, repairAgent, agentName, repairPrompt, nil, timing, fantasy.StepCountIs(1))
+		preparedPrompt, prepareErr := c.prepareAuxiliaryPrompt(repairCtx, "result_repair", repairPrompt)
+		if prepareErr != nil {
+			runErr = prepareErr
+			break
+		}
+		_, steps, callErr := c.runAgentWithStatusAndHistory(repairCtx, repairAgent, agentName, preparedPrompt, nil, timing, fantasy.StepCountIs(1))
 		runErr = callErr
 		typedRes = c.GetTaskResult(item.ID)
 		repairReason, _ = classifyRepairFailure(steps, typedRes)
@@ -1756,8 +1760,12 @@ func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, 
 		history = append(history, step.Messages...)
 	}
 	c.report(c.newEvent("step").withAgent(agentName).withMessage("agent stopped without a final message; requesting a summary turn"))
+	rescuePrompt, prepareErr := c.prepareAuxiliaryPrompt(ctx, "final_summary_repair", "You stopped before writing a final message (the step limit was likely reached). Do NOT call any tools. Based on the work above, write your final report now: what you did, what you found (including partial results and errors), and what remains to be done.")
+	if prepareErr != nil {
+		return ""
+	}
 	summary, _, err := c.runAgentWithStatusAndHistory(ctx, ag, agentName,
-		"You stopped before writing a final message (the step limit was likely reached). Do NOT call any tools. Based on the work above, write your final report now: what you did, what you found (including partial results and errors), and what remains to be done.",
+		rescuePrompt,
 		history, timing, fantasy.StepCountIs(1))
 	if err != nil {
 		return ""
@@ -1775,6 +1783,9 @@ func isTaskTimeout(err error) bool {
 func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todoID string) (string, error) {
 	s := c.AgentPool().Sidecar()
 	if s == nil {
+		if manifestErr := c.recordAuxiliaryFallback(ctx, "sidecar_task", "normal_worker_fallback"); manifestErr != nil {
+			return "", manifestErr
+		}
 		// Sidecar not configured: gracefully fall back to normal agent execution
 		log.Printf("[INFO] sidecar not configured for task %q, falling back to normal agent execution", task.Goal)
 		return c.executeTask(ctx, task, todoID)
@@ -1820,7 +1831,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	sidecarCtx, cancel := context.WithTimeout(ctx, sidecarTimeout)
 	defer cancel()
 
-	result, err := s.Execute(sidecarCtx, taskDesc)
+	result, err := s.Execute(sidecar.WithPurpose(sidecarCtx, "sidecar_task"), taskDesc)
 	if err != nil {
 		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		fmt.Fprintf(os.Stderr, "warning: sidecar execute failed for agent %q: %v\n", task.Agent, err)
@@ -2123,6 +2134,8 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	// plus one failure of input B trip the detector on a first repeat of B.
 	pendingToolInputs := make(map[string]string)
 	pendingToolStarted := make(map[string]time.Time)
+	var recoveryMu sync.Mutex
+	pendingRecovery := ""
 	tp := &ThinkParser{}
 
 	streamCall := fantasy.AgentStreamCall{
@@ -2138,6 +2151,13 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			spec := globalRegistry.GetSpec(modelID).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(c.agentDefByName(agentName)))
 			budget := c.ContextCompiler().CalculateBudget(spec, 0, 0)
 			preparedMessages := opts.Messages
+			recoveryMu.Lock()
+			if pendingRecovery != "" {
+				preparedMessages = append(append([]fantasy.Message(nil), preparedMessages...), fantasy.NewUserMessage(pendingRecovery))
+				pendingRecovery = ""
+			}
+			recoveryMu.Unlock()
+			opts.Messages = preparedMessages
 			messagesCapped := false
 			if capped := CapStepMessagesWithCounter(ctx, defaultCounter, modelID, opts.Messages, budget.Available); capped != nil {
 				opts.Messages = capped
@@ -2242,7 +2262,10 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				c.skillDetector.RecordToolCall(agentName, tc.ToolName, tc.Input, taskDesc)
 			}
 
-			if skillName := c.extractSkillFromToolCall(tc.ToolName, tc.Input); skillName != "" {
+			// load_skill records usage only after its handler successfully
+			// returns full instructions; counting it here would mark a denied or
+			// malformed request as a completed load and double-count success.
+			if skillName := c.extractSkillFromToolCall(tc.ToolName, tc.Input); skillName != "" && tc.ToolName != "load_skill" {
 				c.recordSkillUsage(skillName, agentName)
 			}
 			return nil
@@ -2269,7 +2292,6 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				ev.resultText = utils.TruncateRunes(utils.RedactSecrets(resultPreview), 500)
 				ev.resultErr = isErrResult
 			}
-
 			// 🔁 Track error count for the exact call (tool + input) the
 			// detector is watching; results of other in-flight calls of the
 			// same tool must not inflate the counter.
@@ -2286,6 +2308,17 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				}
 			}
 			loopDetectMu.Unlock()
+			if isErrResult && todoID != CoordTodoID {
+				recovery, recoveryErr := c.prepareToolFailureRecovery(ctx, agentName, tr.ToolCallID, tr.ToolName, callInput)
+				if recoveryErr != nil {
+					return fmt.Errorf("prepare tool-failure recovery context: %w", recoveryErr)
+				}
+				if recovery != "" {
+					recoveryMu.Lock()
+					pendingRecovery = recovery
+					recoveryMu.Unlock()
+				}
+			}
 			attempt, _ := ctx.Value(executionAttemptKey{}).(int)
 			if receiptErr := c.recordActualToolReceipt(todoID, attempt, tr.ToolCallID, tr.ToolName, callInput, resultPreview, isErrResult, callStarted); receiptErr != nil {
 				return fmt.Errorf("record tool execution receipt: %w", receiptErr)
@@ -2727,10 +2760,11 @@ func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, las
 		defer cancel()
 
 		prompt := buildFailureReflectionPrompt(agentName, goal, lastErr)
-		if reflection, err := s.Execute(reflectCtx, prompt); err == nil && strings.TrimSpace(reflection) != "" {
+		if reflection, err := s.Execute(sidecar.WithPurpose(reflectCtx, "reflection"), prompt); err == nil && strings.TrimSpace(reflection) != "" {
 			return reflectionHeader + reflection
 		}
 	}
+	_ = c.recordAuxiliaryFallback(ctx, "reflection", "deterministic_fallback")
 	// Fallback: deterministic, LLM-free hint derived from the error so retries
 	// are never blind even when no sidecar is configured or it is unavailable.
 	if hint := localFailureHint(lastErr); hint != "" {
@@ -2970,8 +3004,8 @@ func computeEvidenceComplete(task TaskDef, transcriptRef string, steps []fantasy
 //     using "unavailable" when no command or exit code was recorded
 //  4. Explicit mutable next-step fields (what the worker can change)
 //
-// This is appended to the retry prompt so the worker knows exactly what
-// failed, what evidence exists, and what it can modify.
+// This becomes a required typed compiler fragment so budgeting and the
+// content-free manifest describe exactly what the retry worker receives.
 func buildRetryContext(class TaskFailureClass, lastErr error, transcriptRef, verifyCmd string, verifyExit int, workerExitCode *int, lastToolCall, lastToolInput, lastToolResult string, lastToolResultErr bool, lastOutput string, task TaskDef) string {
 	b := &strings.Builder{}
 	b.WriteString("\n\n## Retry Context (§6.1)\n\n")

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/fantasy"
+
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/tools"
 )
@@ -33,6 +35,18 @@ func TestTeamToolDenyRemovesAlwaysIncludedStateWriters(t *testing.T) {
 		if slices.Contains(allowed, denied) {
 			t.Fatalf("denied tool %q was retained in runtime allowlist: %v", denied, allowed)
 		}
+	}
+}
+
+func TestContextToolsRequireExplicitDeclarationAndRemainForceMCPCompatible(t *testing.T) {
+	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{}}, forceMCP: true}
+	c.coreTools = []fantasy.AgentTool{&contextQueryTool{coordinator: c}, &contextGetTool{coordinator: c}}
+	if got := agentToolNames(c.selectWorkerTools(&agent.AgentDef{Name: "worker", Tools: "view"})); slices.Contains(got, "context_query") || slices.Contains(got, "context_get") {
+		t.Fatalf("context tools were implicitly exposed: %v", got)
+	}
+	got := agentToolNames(c.selectWorkerTools(&agent.AgentDef{Name: "worker", Tools: "context_query,context_get"}))
+	if !slices.Contains(got, "context_query") || !slices.Contains(got, "context_get") {
+		t.Fatalf("explicit context tools unavailable under force-MCP: %v", got)
 	}
 }
 

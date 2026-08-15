@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -216,7 +218,7 @@ func (c *Coordinator) selectAgentForGoal(ctx context.Context, goal string) (stri
 
 	if s != nil {
 		prompt := fmt.Sprintf("Select the single best agent name for this task:\n\nGoal: %s\n\nAvailable agents:\n%s\nReturn ONLY the agent name.", goal, workersList.String())
-		selection, err := s.Execute(ctx, prompt)
+		selection, err := s.Execute(sidecar.WithPurpose(ctx, "agent_matcher"), prompt)
 		if err == nil {
 			selection = strings.TrimSpace(selection)
 			for _, w := range workers {
@@ -226,6 +228,7 @@ func (c *Coordinator) selectAgentForGoal(ctx context.Context, goal string) (stri
 			}
 		}
 	}
+	_ = c.recordAuxiliaryFallback(ctx, "agent_matcher", "deterministic_fallback")
 
 	for _, w := range workers {
 		if strings.Contains(strings.ToLower(w.Description), "helper") || strings.Contains(strings.ToLower(w.Name), "helper") {
@@ -248,8 +251,6 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		return "", fmt.Errorf("cannot create sub-agent: %w", err)
 	}
 
-	agentDef = c.injectWorkerContext(ctx, agentDef)
-
 	// Derive the sub-agent allowlist from the exact tool slice it receives,
 	// rather than inheriting the caller's permissions or re-selecting later.
 	agentTools := c.selectWorkerTools(agentDef)
@@ -270,12 +271,47 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		return "", fmt.Errorf("failed to create sub-agent %q: %w", name, err)
 	}
 
-	prompt := "## Goal\n\n" + task
-	if constraints != "" {
-		prompt += "\n\n## Constraints\n\n" + constraints
-	}
 	todoID, _ := ctx.Value(todoIDKey{}).(string)
-	prompt = c.appendSkillContext(prompt, agentDef, agentDef.Name, task, todoID)
+	granted := toolNameSet(agentToolNames(agentTools))
+	taskDef := TaskDef{Agent: agentDef.Name, Goal: task, Constraints: constraints}
+	request := c.newTaskContextRequest(taskDef, todoID, 1, ContextTriggerTaskDispatch, agentDef.Name, agentDef.Role, nil)
+	instructions := "Complete the delegated goal and return a concise result to the requesting agent.\n" + c.sharedKnowledgeInstructions(granted)
+	skills, skillErr := c.buildSkillContextItems(agentDef, agentDef.Name, task, todoID, granted)
+	if skillErr != nil {
+		return "", fmt.Errorf("sub-agent skill context preflight failed: %w", skillErr)
+	}
+	workerInput := buildWorkerContextInput(request, taskDef, agentDef, "", instructions, "", "", skills)
+	workerInput.ModelContext = globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef))
+	workerInput.MaxAuxChars = maxWorkerAuxContextChars
+	workerInput.DisableMemory = c.ExecutionProfile().DisableHistoricalMemory
+	var routeDecisions []ContextRouteDecision
+	if !workerInput.DisableMemory {
+		bundle, decisions, canonical, routeErr := c.canonicalContextBundleForRequest(ctx, request)
+		if routeErr != nil {
+			return "", fmt.Errorf("sub-agent context routing preflight failed: %w", routeErr)
+		}
+		if canonical {
+			workerInput.CanonicalMemory = bundle
+			routeDecisions = decisions
+		} else {
+			workerInput.RawSTM = LoadSTM(c.session.Workspace)
+			workerInput.RawLTM = LoadLTM(c.session.Workspace, c.session.Config.Name)
+			workerInput.MemoryStore = c.memoryStore
+		}
+	}
+	workerInput.WorkerMemory = c.recallWorkerMemory(ctx, agentDef, request.RetrievalQuery())
+	compiled, compileErr := c.ContextCompiler().CompileWorkerContext(ctx, workerInput)
+	if compileErr != nil {
+		return "", fmt.Errorf("sub-agent context preflight failed: %w", compileErr)
+	}
+	if strings.TrimSpace(compiled.Prompt) == "" {
+		return "", fmt.Errorf("sub-agent context preflight produced an empty prompt")
+	}
+	manifest := BuildContextInjectionManifest(request, compiled, routeDecisions, agentDef.Name, time.Now().UTC())
+	if err := c.persistContextManifest(&manifest); err != nil {
+		return "", fmt.Errorf("sub-agent context manifest preflight failed: %w", err)
+	}
+	prompt := compiled.Prompt
 
 	timing := &taskTiming{}
 	timing.reset()

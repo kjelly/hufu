@@ -17,20 +17,24 @@ import (
 // ShadowContextTrace contains diagnostics only. It deliberately excludes
 // prompt content, which may contain credentials or other sensitive material.
 type ShadowContextTrace struct {
-	ID                string    `json:"id"`
-	Kind              string    `json:"kind"`
-	CreatedAt         time.Time `json:"created_at"`
-	Fingerprint       string    `json:"fingerprint,omitempty"`
-	LegacyTokens      int       `json:"legacy_tokens"`
-	CanonicalTokens   int       `json:"canonical_tokens"`
-	BudgetTokens      int       `json:"budget_tokens"`
-	SelectedItems     int       `json:"selected_items"`
-	DuplicateRatio    float64   `json:"duplicate_ratio"`
-	MissingAnchors    []string  `json:"missing_anchors,omitempty"`
-	LegacyOnlyData    []string  `json:"legacy_only_data,omitempty"`
-	CanonicalOnlyData []string  `json:"canonical_only_data,omitempty"`
-	CriticalCoverage  []string  `json:"critical_coverage,omitempty"`
-	Error             string    `json:"error,omitempty"`
+	ID                      string         `json:"id"`
+	Kind                    string         `json:"kind"`
+	CreatedAt               time.Time      `json:"created_at"`
+	Fingerprint             string         `json:"fingerprint,omitempty"`
+	RequestFingerprint      string         `json:"request_fingerprint,omitempty"`
+	LegacyTokens            int            `json:"legacy_tokens"`
+	CanonicalTokens         int            `json:"canonical_tokens"`
+	BudgetTokens            int            `json:"budget_tokens"`
+	SelectedItems           int            `json:"selected_items"`
+	OmittedItems            int            `json:"omitted_items"`
+	DuplicateRatio          float64        `json:"duplicate_ratio"`
+	MissingAnchors          []string       `json:"missing_anchors,omitempty"`
+	MissingNormativeAnchors []string       `json:"missing_normative_anchors,omitempty"`
+	EligibilityReasons      map[string]int `json:"eligibility_reasons,omitempty"`
+	LegacyOnlyData          []string       `json:"legacy_only_data,omitempty"`
+	CanonicalOnlyData       []string       `json:"canonical_only_data,omitempty"`
+	CriticalCoverage        []string       `json:"critical_coverage,omitempty"`
+	Error                   string         `json:"error,omitempty"`
 }
 
 var shadowTraceMu sync.Mutex
@@ -38,22 +42,37 @@ var shadowAnchorRE = regexp.MustCompile(`(?i)(?:\b(?:[a-f0-9]{7,40}|[A-Za-z0-9_.
 
 func (c *Coordinator) compileShadowCoordinator(ctx context.Context, input CoordinatorContextInput, legacy string) {
 	compiled, err := c.ContextCompiler().CompileCoordinatorContext(ctx, input)
-	c.recordShadowTrace(ctx, "coordinator", legacy, input.ModelContext, compiled, err)
+	c.recordShadowTrace(ctx, "coordinator", legacy, input.Request, nil, input.ModelContext, compiled, err)
 }
 
 func (c *Coordinator) compileShadowWorker(ctx context.Context, input WorkerContextInput, legacy string) {
 	compiled, err := c.ContextCompiler().CompileWorkerContext(ctx, input)
-	c.recordShadowTrace(ctx, "worker", legacy, input.ModelContext, compiled, err)
+	c.recordShadowTrace(ctx, "worker", legacy, input.Request, nil, input.ModelContext, compiled, err)
 }
 
-func (c *Coordinator) recordShadowTrace(ctx context.Context, kind, legacy string, spec ModelContextSpec, compiled CompiledContext, compileErr error) {
+func (c *Coordinator) recordShadowTrace(ctx context.Context, kind, legacy string, request ContextRequest, decisions []ContextRouteDecision, spec ModelContextSpec, compiled CompiledContext, compileErr error) {
 	legacyTokens, _ := defaultCounter.CountText(ctx, spec.ModelID, legacy)
 	trace := ShadowContextTrace{ID: newShadowTraceID(), Kind: kind, CreatedAt: time.Now().UTC(), LegacyTokens: legacyTokens}
+	if request.SchemaVersion != 0 {
+		trace.RequestFingerprint = request.Fingerprint()
+	}
+	if len(decisions) > 0 {
+		trace.EligibilityReasons = make(map[string]int)
+		for _, decision := range decisions {
+			trace.EligibilityReasons[string(decision.Reason)]++
+		}
+	}
 	if compileErr != nil {
-		trace.Error = compileErr.Error()
+		trace.Error = "context_compile_failed:" + hashContentKey(compileErr.Error())
 	} else {
 		trace.Fingerprint, trace.CanonicalTokens = compiled.Fingerprint, compiled.UsedTokens
 		trace.SelectedItems = len(compiled.IncludedItems)
+		trace.OmittedItems = len(compiled.OmittedItems)
+		for _, item := range compiled.OmittedItems {
+			if item.Required || normalizedContextAuthority(item) == ContextAuthorityNormative {
+				trace.MissingNormativeAnchors = append(trace.MissingNormativeAnchors, item.ID)
+			}
+		}
 		trace.BudgetTokens = CalculateContextBudget(spec, 0, 0).Available
 		if n := len(compiled.IncludedItems) + len(compiled.OmittedItems); n > 0 {
 			trace.DuplicateRatio = float64(n-len(DeduplicateContextItems(append(append([]ContextItem(nil), compiled.IncludedItems...), compiled.OmittedItems...)))) / float64(n)
@@ -63,9 +82,9 @@ func (c *Coordinator) recordShadowTrace(ctx context.Context, kind, legacy string
 		trace.CanonicalOnlyData = shadowOnlyLines(canonical, legacy)
 		for _, anchor := range shadowAnchorRE.FindAllString(legacy, -1) {
 			if !containsAnchor(canonical, anchor) {
-				trace.MissingAnchors = append(trace.MissingAnchors, anchor)
+				trace.MissingAnchors = append(trace.MissingAnchors, hashContentKey(anchor))
 			} else {
-				trace.CriticalCoverage = append(trace.CriticalCoverage, anchor)
+				trace.CriticalCoverage = append(trace.CriticalCoverage, hashContentKey(anchor))
 			}
 		}
 	}
@@ -77,7 +96,7 @@ func shadowOnlyLines(source, other string) []string {
 	for _, line := range strings.Split(source, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" && !strings.Contains(other, line) {
-			only = append(only, line)
+			only = append(only, hashContentKey(line))
 		}
 	}
 	return only

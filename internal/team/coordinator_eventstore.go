@@ -1080,6 +1080,9 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 	if len(item.MemoryManifests) > 0 {
 		payload["memory_manifests"] = item.MemoryManifests
 	}
+	if len(item.ContextManifests) > 0 {
+		payload["context_manifests"] = item.ContextManifests
+	}
 	return payload
 }
 

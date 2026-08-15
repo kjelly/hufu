@@ -415,7 +415,7 @@ func TestWP3_CompileWorkerContextIncludesWorkerMemory(t *testing.T) {
 		},
 	}
 	compiled, err := CompileWorkerContext(context.Background(), WorkerContextInput{
-		TaskGoal:     "do the task",
+		Goal:         "do the task",
 		WorkerMemory: bundle,
 		ModelContext: ModelContextSpec{ModelID: "test", ContextWindow: 4000, MaxOutputTokens: 500, SafetyMarginTokens: 100},
 	})
@@ -435,7 +435,7 @@ func TestWP3_CompileWorkerContextIncludesWorkerMemory(t *testing.T) {
 
 func TestWP3_CompileWorkerContextWithoutWorkerMemory(t *testing.T) {
 	compiled, err := CompileWorkerContext(context.Background(), WorkerContextInput{
-		TaskGoal:     "do the task",
+		Goal:         "do the task",
 		WorkerMemory: nil,
 		ModelContext: ModelContextSpec{ModelID: "test", ContextWindow: 4000, MaxOutputTokens: 500, SafetyMarginTokens: 100},
 	})

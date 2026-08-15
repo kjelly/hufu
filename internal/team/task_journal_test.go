@@ -65,6 +65,9 @@ func TestTerminalTypedResultIsProjectedToJournal(t *testing.T) {
 	if err := tracker.TodoList().SetTypedResult(item.ID, &TaskResult{TaskID: item.ID, Status: TaskResultStatusSuccess, Summary: "done", RawOutputRef: &ArtifactRef{Path: "logs/task-output/1.jsonl", SHA256: "sealed", Bytes: 1}}); err != nil {
 		t.Fatal(err)
 	}
+	if err := tracker.TodoList().SetContextManifest(item.ID, &ContextInjectionManifest{SchemaVersion: 1, RequestID: "request-journal-1", RequestHash: "request-hash", RunID: "run-1", TaskID: item.ID, Attempt: 1, Agent: "runner", Phase: PhaseExecute, Trigger: ContextTriggerTaskDispatch, Fingerprint: "manifest-hash", Items: []ContextManifestItem{{ID: "memory-1", Included: true, Tokens: 4}}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := tracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskDone, "done", "done"); err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +80,7 @@ func TestTerminalTypedResultIsProjectedToJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"op":"result"`, `"task_id":"1"`, `"typed_result"`, `"sha256":"sealed"`} {
+	for _, want := range []string{`"op":"result"`, `"task_id":"1"`, `"typed_result"`, `"sha256":"sealed"`, `"context_manifests"`, `"request_id":"request-journal-1"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("journal omitted %q: %s", want, data)
 		}

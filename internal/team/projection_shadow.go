@@ -89,16 +89,17 @@ func toCanonicalVerifyResult(vr *VerificationResult) *canonicalVerifyResult {
 }
 
 type canonicalReceipt struct {
-	RunID            string                   `json:"run_id,omitempty"`
-	TaskID           string                   `json:"task_id,omitempty"`
-	Attempt          int                      `json:"attempt"`
-	ExitCode         *int                     `json:"exit_code,omitempty"`
-	ProducerID       string                   `json:"producer_id,omitempty"`
-	TranscriptRef    string                   `json:"transcript_ref,omitempty"`
-	RepairProvenance *RepairProvenance        `json:"repair_provenance,omitempty"`
-	VerifyResult     *canonicalVerifyResult   `json:"verify_result,omitempty"`
-	StepBudget       *StepBudgetUsage         `json:"step_budget,omitempty"`
-	MemoryManifest   *MemoryInjectionManifest `json:"memory_manifest,omitempty"`
+	RunID            string                    `json:"run_id,omitempty"`
+	TaskID           string                    `json:"task_id,omitempty"`
+	Attempt          int                       `json:"attempt"`
+	ExitCode         *int                      `json:"exit_code,omitempty"`
+	ProducerID       string                    `json:"producer_id,omitempty"`
+	TranscriptRef    string                    `json:"transcript_ref,omitempty"`
+	RepairProvenance *RepairProvenance         `json:"repair_provenance,omitempty"`
+	VerifyResult     *canonicalVerifyResult    `json:"verify_result,omitempty"`
+	StepBudget       *StepBudgetUsage          `json:"step_budget,omitempty"`
+	MemoryManifest   *MemoryInjectionManifest  `json:"memory_manifest,omitempty"`
+	ContextManifest  *ContextInjectionManifest `json:"context_manifest,omitempty"`
 }
 
 func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) []canonicalReceipt {
@@ -125,6 +126,7 @@ func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) 
 			VerifyResult:     toCanonicalVerifyResult(r.VerifyResult),
 			StepBudget:       r.StepBudget,
 			MemoryManifest:   r.MemoryManifest,
+			ContextManifest:  r.ContextManifest,
 		})
 	}
 	return out
@@ -151,48 +153,56 @@ func normalizeMemoryManifests(mms []MemoryInjectionManifest) []MemoryInjectionMa
 	return append([]MemoryInjectionManifest(nil), mms...)
 }
 
+func normalizeContextManifests(manifests []ContextInjectionManifest) []ContextInjectionManifest {
+	if len(manifests) == 0 {
+		return nil
+	}
+	return append([]ContextInjectionManifest(nil), manifests...)
+}
+
 type canonicalTaskShadow struct {
-	ID                  string                    `json:"id"`
-	Phase               string                    `json:"phase,omitempty"`
-	PlanTaskID          string                    `json:"plan_task_id,omitempty"`
-	ContractID          string                    `json:"contract_id,omitempty"`
-	ContractHash        string                    `json:"contract_hash,omitempty"`
-	ContractRevision    int                       `json:"contract_revision,omitempty"`
-	Agent               string                    `json:"agent"`
-	Desc                string                    `json:"desc"`
-	Status              string                    `json:"status"`
-	Detail              string                    `json:"detail,omitempty"`
-	Output              string                    `json:"output,omitempty"`
-	Model               string                    `json:"model,omitempty"`
-	Skills              []string                  `json:"skills,omitempty"`
-	InjectedSkills      []string                  `json:"injected_skills,omitempty"`
-	LoadedSkills        []string                  `json:"loaded_skills,omitempty"`
-	Source              string                    `json:"source,omitempty"`
-	ParentID            string                    `json:"parent_id,omitempty"`
-	DependsOn           []string                  `json:"depends_on,omitempty"`
-	MaxRetries          int                       `json:"max_retries,omitempty"`
-	Retries             int                       `json:"retries,omitempty"`
-	OnFailure           string                    `json:"on_failure,omitempty"`
-	Verify              string                    `json:"verify,omitempty"`
-	VerifyMode          string                    `json:"verify_mode,omitempty"`
-	VerifySpec          *VerificationSpec         `json:"verify_spec,omitempty"`
-	VerifyResult        *canonicalVerifyResult    `json:"verify_result,omitempty"`
-	ExecutionReceipts   []canonicalReceipt        `json:"execution_receipts,omitempty"`
-	FailureEvent        *FailureEventPayload      `json:"failure_event,omitempty"`
-	FailureFingerprints []FailureFingerprint      `json:"failure_fingerprints,omitempty"`
-	SideEffect          string                    `json:"side_effect,omitempty"`
-	Recovery            string                    `json:"recovery,omitempty"`
-	ReconcileTool       string                    `json:"reconcile_tool,omitempty"`
-	RecoveryState       string                    `json:"recovery_state,omitempty"`
-	TypedResult         *TaskResult               `json:"typed_result,omitempty"`
-	Resolution          *TaskResolution           `json:"resolution,omitempty"`
-	Kind                string                    `json:"kind,omitempty"`
-	Advances            []string                  `json:"advances,omitempty"`
-	ExpectedStateChange string                    `json:"expected_state_change,omitempty"`
-	Progress            string                    `json:"progress,omitempty"`
-	ProgressCriteria    []string                  `json:"progress_criteria,omitempty"`
-	Execution           ExecutionContract         `json:"execution,omitempty"`
-	MemoryManifests     []MemoryInjectionManifest `json:"memory_manifests,omitempty"`
+	ID                  string                     `json:"id"`
+	Phase               string                     `json:"phase,omitempty"`
+	PlanTaskID          string                     `json:"plan_task_id,omitempty"`
+	ContractID          string                     `json:"contract_id,omitempty"`
+	ContractHash        string                     `json:"contract_hash,omitempty"`
+	ContractRevision    int                        `json:"contract_revision,omitempty"`
+	Agent               string                     `json:"agent"`
+	Desc                string                     `json:"desc"`
+	Status              string                     `json:"status"`
+	Detail              string                     `json:"detail,omitempty"`
+	Output              string                     `json:"output,omitempty"`
+	Model               string                     `json:"model,omitempty"`
+	Skills              []string                   `json:"skills,omitempty"`
+	InjectedSkills      []string                   `json:"injected_skills,omitempty"`
+	LoadedSkills        []string                   `json:"loaded_skills,omitempty"`
+	Source              string                     `json:"source,omitempty"`
+	ParentID            string                     `json:"parent_id,omitempty"`
+	DependsOn           []string                   `json:"depends_on,omitempty"`
+	MaxRetries          int                        `json:"max_retries,omitempty"`
+	Retries             int                        `json:"retries,omitempty"`
+	OnFailure           string                     `json:"on_failure,omitempty"`
+	Verify              string                     `json:"verify,omitempty"`
+	VerifyMode          string                     `json:"verify_mode,omitempty"`
+	VerifySpec          *VerificationSpec          `json:"verify_spec,omitempty"`
+	VerifyResult        *canonicalVerifyResult     `json:"verify_result,omitempty"`
+	ExecutionReceipts   []canonicalReceipt         `json:"execution_receipts,omitempty"`
+	FailureEvent        *FailureEventPayload       `json:"failure_event,omitempty"`
+	FailureFingerprints []FailureFingerprint       `json:"failure_fingerprints,omitempty"`
+	SideEffect          string                     `json:"side_effect,omitempty"`
+	Recovery            string                     `json:"recovery,omitempty"`
+	ReconcileTool       string                     `json:"reconcile_tool,omitempty"`
+	RecoveryState       string                     `json:"recovery_state,omitempty"`
+	TypedResult         *TaskResult                `json:"typed_result,omitempty"`
+	Resolution          *TaskResolution            `json:"resolution,omitempty"`
+	Kind                string                     `json:"kind,omitempty"`
+	Advances            []string                   `json:"advances,omitempty"`
+	ExpectedStateChange string                     `json:"expected_state_change,omitempty"`
+	Progress            string                     `json:"progress,omitempty"`
+	ProgressCriteria    []string                   `json:"progress_criteria,omitempty"`
+	Execution           ExecutionContract          `json:"execution,omitempty"`
+	MemoryManifests     []MemoryInjectionManifest  `json:"memory_manifests,omitempty"`
+	ContextManifests    []ContextInjectionManifest `json:"context_manifests,omitempty"`
 }
 
 func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
@@ -241,6 +251,7 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		ProgressCriteria:    normalizeStringSlice(item.ProgressCriteria),
 		Execution:           item.Execution,
 		MemoryManifests:     normalizeMemoryManifests(item.MemoryManifests),
+		ContextManifests:    normalizeContextManifests(item.ContextManifests),
 	}
 }
 

@@ -264,6 +264,7 @@ type Coordinator struct {
 	initialPrompt                     string
 	coordinatorProtocolRepairsAttempt atomic.Int32
 	coordinatorProtocolRepairsSuccess atomic.Int32
+	contextRequestSeq                 atomic.Uint64
 	initialToolCorrections            atomic.Int32
 	projectDir                        string
 	// Context budget reporting (§5.4). Populated by buildSystemPrompt so the
@@ -294,21 +295,24 @@ type Coordinator struct {
 	// Silent-stall watchdog (coordinator_stall_watchdog.go): detects periods
 	// with no forward-progress signal at all, distinct from a single slow
 	// tool call, and leaves a goroutine dump as evidence.
-	stallActivityAt        atomic.Int64 // unix nano, last observed forward-progress signal
-	stallLastDumpAt        atomic.Int64 // unix nano, 0 = no dump yet in the current stall episode
-	stallDumps             atomic.Int32 // total dumps written this run, capped at stallMaxDumps
-	stallThreshold         time.Duration
-	stallMaxDumps          int32
-	stallWatchdogOnce      sync.Once
-	skillUsage             map[string]*skillUsageState
-	skillUsageMu           sync.Mutex
-	delegatedTasks         map[string]int
-	delegatedTasksMu       sync.Mutex
-	taskResultCache        map[string][]cachedTaskEntry // agent → ordered list of past results
-	taskResultCacheMu      sync.RWMutex
-	cachePolicy            CachePolicy
-	cachePolicyMu          sync.RWMutex
-	executionProfile       ExecutionProfile
+	stallActivityAt   atomic.Int64 // unix nano, last observed forward-progress signal
+	stallLastDumpAt   atomic.Int64 // unix nano, 0 = no dump yet in the current stall episode
+	stallDumps        atomic.Int32 // total dumps written this run, capped at stallMaxDumps
+	stallThreshold    time.Duration
+	stallMaxDumps     int32
+	stallWatchdogOnce sync.Once
+	skillUsage        map[string]*skillUsageState
+	skillUsageMu      sync.Mutex
+	delegatedTasks    map[string]int
+	delegatedTasksMu  sync.Mutex
+	taskResultCache   map[string][]cachedTaskEntry // agent → ordered list of past results
+	taskResultCacheMu sync.RWMutex
+	cachePolicy       CachePolicy
+	cachePolicyMu     sync.RWMutex
+	executionProfile  ExecutionProfile
+	// modelExecutionID is set only on an isolated extra-model coordinator.
+	// It disambiguates receipts/manifests that share a Todo attempt.
+	modelExecutionID       string
 	executionProfileMu     sync.RWMutex
 	goalMode               GoalMode
 	goalModeMu             sync.RWMutex
@@ -926,6 +930,10 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		maxDrafts:              maxDraftsPerSession,
 	}
 	coordinator = c
+	// Context lookup is coordinator-owned so it can use the canonical router.
+	// It still enters the exact same selection, policy, unattended, force-MCP,
+	// and closed-sequence gates as every other worker tool.
+	c.coreTools = append(c.coreTools, &contextQueryTool{coordinator: c}, &contextGetTool{coordinator: c})
 	phaseWorkflow, err := newRuntimeWorkflow(session)
 	if err != nil {
 		return nil, err
@@ -1055,13 +1063,16 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		s := c.AgentPool().GuardSidecar()
 		prof := c.ExecutionProfile()
 		if s == nil {
+			if err := c.recordAuxiliaryFallback(ctx, "guard_reviewer", "no_model_fallback"); err != nil {
+				return false, "", err
+			}
 			if prof.PolicyFailureMode == PolicyFailClosed || prof.StrictPolicy {
 				return false, "guard reviewer unavailable under PolicyFailClosed policy", fmt.Errorf("guard reviewer unavailable")
 			}
 			return true, "", nil
 		}
 		agentName, _ := ctx.Value(tools.AgentNameKey).(string)
-		result, err := s.ReviewToolCall(ctx, agentName, toolName, args, rules)
+		result, err := s.ReviewToolCall(sidecar.WithPurpose(ctx, "guard_reviewer"), agentName, toolName, args, rules)
 		if err != nil {
 			if prof.PolicyFailureMode == PolicyFailOpen {
 				return true, "", nil
@@ -1075,9 +1086,12 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	pathReviewer := func(ctx context.Context, command string, path string) (bool, error) {
 		s := c.AgentPool().Sidecar()
 		if s == nil {
+			if err := c.recordAuxiliaryFallback(ctx, "path_reviewer", "no_model_fallback"); err != nil {
+				return false, err
+			}
 			return true, nil
 		}
-		return s.ReviewPathAccess(ctx, command, path)
+		return s.ReviewPathAccess(sidecar.WithPurpose(ctx, "path_reviewer"), command, path)
 	}
 	tools.SetPathReviewer(c.coreTools, pathReviewer)
 

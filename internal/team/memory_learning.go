@@ -261,20 +261,56 @@ type memoryEventPayload struct {
 }
 
 func memoryLearningEnabled(policy agent.MemoryLearningPolicy) bool {
-	return policy.Mode != agent.MemoryLearningOff
+	switch policy.Mode {
+	case agent.MemoryLearningObserve, agent.MemoryLearningShadow, agent.MemoryLearningActive:
+		return true
+	default:
+		return false
+	}
 }
 
 func buildMemoryInjectionManifest(compiled CompiledContext, runID, taskID string, attempt int, agentName, query string, policy agent.MemoryLearningPolicy) *MemoryInjectionManifest {
+	return buildMemoryInjectionManifestFromContextManifest(compiled, nil, runID, taskID, attempt, agentName, query, policy)
+}
+
+// buildMemoryInjectionManifestFromContextManifest preserves the legacy
+// learning/outcome contract while making the general manifest the sole owner
+// of selection and ordering. Compiled items only enrich the selected IDs with
+// score parts required by existing attribution; they cannot add an item.
+func buildMemoryInjectionManifestFromContextManifest(compiled CompiledContext, general *ContextInjectionManifest, runID, taskID string, attempt int, agentName, query string, policy agent.MemoryLearningPolicy) *MemoryInjectionManifest {
 	if !memoryLearningEnabled(policy) {
 		return nil
 	}
+	compiledByID := make(map[string]ContextItem)
+	for _, included := range compiled.IncludedItems {
+		if strings.HasPrefix(included.ID, "context:") {
+			compiledByID[strings.TrimPrefix(included.ID, "context:")] = included
+		}
+	}
+	selectedIDs := make([]string, 0, len(compiledByID))
+	if general != nil {
+		for _, item := range general.Items {
+			if item.Included {
+				if _, ok := compiledByID[item.ID]; ok {
+					selectedIDs = append(selectedIDs, item.ID)
+				}
+			}
+		}
+	} else {
+		for _, included := range compiled.IncludedItems {
+			if strings.HasPrefix(included.ID, "context:") {
+				selectedIDs = append(selectedIDs, strings.TrimPrefix(included.ID, "context:"))
+			}
+		}
+	}
 	items := make([]MemoryInjectionItem, 0)
 	seen := make(map[string]bool)
-	for _, included := range compiled.IncludedItems {
-		if !strings.HasPrefix(included.ID, "context:") || seen[included.ID] {
+	for _, contextItemID := range selectedIDs {
+		if seen[contextItemID] {
 			continue
 		}
-		seen[included.ID] = true
+		seen[contextItemID] = true
+		included := compiledByID[contextItemID]
 		base := included.BaseScore
 		if base == 0 {
 			base = included.Confidence
@@ -292,7 +328,7 @@ func buildMemoryInjectionManifest(compiled CompiledContext, runID, taskID string
 			tokenCount = max(1, len([]rune(included.Content))/4)
 		}
 		items = append(items, MemoryInjectionItem{
-			ContextItemID: strings.TrimPrefix(included.ID, "context:"), Source: included.Source,
+			ContextItemID: contextItemID, Source: included.Source,
 			Rank: len(items) + 1, TokenCount: tokenCount, BaseScore: base, FinalScore: final, ScoreParts: parts,
 		})
 	}

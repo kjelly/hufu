@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"path/filepath"
 	"reflect"
@@ -15,9 +16,13 @@ import (
 )
 
 func TestUtilityCannotOverrideLowRelevance(t *testing.T) {
-	parts := MemoryScoreParts{BaseRelevance: 0.001, Applicability: memoryApplicability(0.001), UtilityLowerBound: 1, Freshness: 1, TrustFactor: 1}
-	if score := reinforcedFinalScore(parts); score != 0 {
-		t.Fatalf("low-relevance score = %f", score)
+	c, _ := rankingTestCoordinator(t, agent.MemoryLearningActive)
+	entries, _, err := c.reinforceSearchResults(context.Background(), []contextstore.SearchResult{{Item: rankingItem("low", 1), Score: .001}}, c.session.Config.MemoryLearning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].ScoreParts.Applicability != 1 || entries[0].Selected {
+		t.Fatalf("low-relevance eligibility/selection = %#v", entries)
 	}
 }
 
@@ -142,7 +147,7 @@ func TestActiveRankingPolicyMatchesCompilerSelection(t *testing.T) {
 		SharedPersistentFinalScores: finalScores,
 	}
 	compiled, err := CompileWorkerContext(context.Background(), WorkerContextInput{
-		TaskGoal:        "goal",
+		Goal:            "goal",
 		CanonicalMemory: bundle,
 		ModelContext:    ModelContextSpec{ModelID: "test", ContextWindow: 10000, MaxOutputTokens: 100, SafetyMarginTokens: 100},
 	})
@@ -162,13 +167,59 @@ func TestActiveRankingPolicyMatchesCompilerSelection(t *testing.T) {
 
 func TestShadowModeDoesNotChangePrompt(t *testing.T) {
 	c, _ := rankingTestCoordinator(t, agent.MemoryLearningShadow)
+	observe, _ := rankingTestCoordinator(t, agent.MemoryLearningObserve)
 	base := []contextstore.ContextItem{rankingItem("base-a", 10), rankingItem("base-b", 20)}
 	got, scores, finalScores, err := c.rankSharedPersistentMemory(context.Background(), "procedure", base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, base) || scores != nil || finalScores != nil {
-		t.Fatalf("shadow changed selection: got=%+v scores=%+v finalScores=%+v", got, scores, finalScores)
+	want, _, _, err := observe.rankSharedPersistentMemory(context.Background(), "procedure", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotIDs, wantIDs := make([]string, len(got)), make([]string, len(want))
+	for i := range got {
+		gotIDs[i] = got[i].ID
+	}
+	for i := range want {
+		wantIDs[i] = want[i].ID
+	}
+	if !reflect.DeepEqual(gotIDs, wantIDs) || scores == nil || finalScores == nil {
+		t.Fatalf("shadow selection differs from observe: got=%+v want=%+v scores=%+v finalScores=%+v", got, want, scores, finalScores)
+	}
+}
+
+func TestDefaultRankingInjectsAtMostFourCandidates(t *testing.T) {
+	results := make([]contextstore.SearchResult, 20)
+	for i := range results {
+		results[i] = contextstore.SearchResult{Item: rankingItem(fmt.Sprintf("item-%02d", i), 10), Score: 1 - float64(i)/100}
+	}
+	entries, _, _ := relevanceMemoryEntries(results, defaultMemoryRuntimeRankingPolicy())
+	selected := 0
+	for _, entry := range entries {
+		if entry.Selected {
+			selected++
+		}
+	}
+	if selected != 4 {
+		t.Fatalf("selected %d candidates, want 4", selected)
+	}
+}
+
+func TestEmptyQueryNeverDropsMustKeepForInjectLimit(t *testing.T) {
+	c, _ := rankingTestCoordinator(t, agent.MemoryLearningOff)
+	c.memoryRankingPolicy = MemoryRuntimeRankingPolicy{CandidateTopK: 2, InjectTopK: 1, MinimumRelevance: .05}
+	base := []contextstore.ContextItem{
+		{ID: "pinned", Pinned: true},
+		{ID: "required-a", MustKeep: true},
+		{ID: "required-b", MustKeep: true},
+	}
+	selected, _, _, err := c.rankSharedPersistentMemory(context.Background(), "", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 2 || selected[0].ID != "required-a" || selected[1].ID != "required-b" {
+		t.Fatalf("empty-query required selection = %#v", selected)
 	}
 }
 

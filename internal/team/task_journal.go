@@ -53,7 +53,8 @@ type journalRecord struct {
 	// TypedResult is a read-only durability projection for stable task_id
 	// lookups. It is deliberately separate from cache "put" records, whose
 	// description-based identity is not authoritative evidence.
-	TypedResult *TaskResult `json:"typed_result,omitempty"`
+	TypedResult      *TaskResult                `json:"typed_result,omitempty"`
+	ContextManifests []ContextInjectionManifest `json:"context_manifests,omitempty"`
 }
 
 type taskJournal struct {
@@ -139,7 +140,7 @@ func (c *Coordinator) recordTerminalTypedTaskResult(todoID string) {
 		if runID == "" {
 			runID = c.taskTracker.TodoList().RunID()
 		}
-		_ = c.journal.append(journalRecord{Op: "result", Agent: item.Agent, TaskID: item.ID, RunID: runID, Desc: item.Desc, TypedResult: &copyResult, TS: time.Now().Format(time.RFC3339)})
+		_ = c.journal.append(journalRecord{Op: "result", Agent: item.Agent, TaskID: item.ID, RunID: runID, Desc: item.Desc, TypedResult: &copyResult, ContextManifests: normalizeContextManifests(item.ContextManifests), TS: time.Now().Format(time.RFC3339)})
 		return
 	}
 }
@@ -163,6 +164,14 @@ func (c *Coordinator) recordTaskFailureWithEventAndOutput(agentName, taskDesc, d
 		FailureEvent:  cloneFailureEventPayload(event),
 		TS:            time.Now().Format(time.RFC3339),
 		Round:         c.round,
+	}
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		for _, item := range c.taskTracker.TodoList().Items() {
+			if item != nil && item.ID == record.TaskID {
+				record.ContextManifests = normalizeContextManifests(item.ContextManifests)
+				break
+			}
+		}
 	}
 	if len(fingerprints) > 0 {
 		record.FailureFingerprints = append([]FailureFingerprint(nil), fingerprints[0]...)

@@ -113,6 +113,9 @@ func composeJudgedOutput(candidates []*agentResult, v judgeVerdict) string {
 func (c *Coordinator) judgeAgentResults(ctx context.Context, goal, todoID string, results []*agentResult) (string, error) {
 	s := c.AgentPool().JudgeSidecar()
 	if s == nil {
+		if err := c.recordAuxiliaryFallback(ctx, "judge", "no_model_fallback"); err != nil {
+			return "", fmt.Errorf("judge fallback manifest: %w", err)
+		}
 		return "", fmt.Errorf("judge agent results: %w", errNoJudgeModel)
 	}
 
@@ -132,7 +135,7 @@ func (c *Coordinator) judgeAgentResults(ctx context.Context, goal, todoID string
 	judgeCtx, cancel := context.WithTimeout(ctx, judgeTimeout)
 	defer cancel()
 	c.report(c.newEvent("sidecar_call").withMessage("judge"))
-	response, err := s.ExecuteProfile(judgeCtx, buildJudgePrompt(goal, valid), sidecar.JudgeProfile)
+	response, err := s.ExecuteProfile(sidecar.WithPurpose(judgeCtx, "judge"), buildJudgePrompt(goal, valid), sidecar.JudgeProfile)
 	if err != nil {
 		return "", fmt.Errorf("judge agent results: %w", err)
 	}

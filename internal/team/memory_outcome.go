@@ -106,6 +106,7 @@ func memoryObservationFromEvent(event RunEvent, policy agent.MemoryLearningPolic
 }
 
 func (c *Coordinator) recordMemoryOutcomeForTask(item *TodoItem, terminalEvent string) {
+	c.recordGeneralContextOutcome(item, terminalEvent)
 	if c == nil || item == nil || item.TypedResult == nil || len(item.TypedResult.MemoryUses) == 0 || !memoryLearningEnabled(c.session.Config.MemoryLearning) {
 		return
 	}
@@ -129,6 +130,52 @@ func (c *Coordinator) recordMemoryOutcomeForTask(item *TodoItem, terminalEvent s
 	c.recordMemoryOutcomeSignal(item, signal, direction, evidenceWeight, causalConfidence)
 	if terminalEvent == "task_completed" && item.Retries > 0 {
 		c.recordMemoryOutcomeSignal(item, "retry_rescued", "positive", 0.5, func(MemoryUseRef) float64 { return 1 })
+	}
+}
+
+func (c *Coordinator) recordGeneralContextOutcome(item *TodoItem, terminalEvent string) {
+	if c == nil || item == nil {
+		return
+	}
+	recorder, ok := c.contextRepo.(contextOutcomeRecorder)
+	if !ok {
+		return
+	}
+	outcome := "failure"
+	if terminalEvent == "task_completed" {
+		outcome = "success"
+	}
+	used := make(map[string]bool)
+	if item.TypedResult != nil {
+		for _, use := range item.TypedResult.MemoryUses {
+			if use.Disposition == MemoryUseApplied || use.Disposition == MemoryUseConsulted {
+				used[use.ContextItemID] = true
+			}
+		}
+	}
+	for _, manifest := range item.ContextManifests {
+		for _, manifestItem := range manifest.Items {
+			if !manifestItem.Included || (manifestItem.Source != "shared_persistent" && manifestItem.Source != "shared_session" && manifestItem.Source != "context_get") {
+				continue
+			}
+			verificationOutcome := "not_assessed"
+			if item.VerifyResult != nil {
+				if isVerifySuccess(item.VerifyResult) {
+					verificationOutcome = "passed"
+				} else {
+					verificationOutcome = "failed"
+				}
+			}
+			base := contextOutcomeObservation(&manifest, manifestItem.ID, outcome, verificationOutcome)
+			base.PolicyRevision = c.session.Config.MemoryLearning.PolicyVersion
+			if used[manifestItem.ID] {
+				useObservation := base
+				useObservation.IdempotencyKey, useObservation.Outcome = manifest.Fingerprint+":"+manifestItem.ID+":used", "used"
+				_, _ = recorder.RecordContextOutcomeObservation(context.Background(), useObservation)
+			}
+			base.IdempotencyKey, base.Outcome = manifest.Fingerprint+":"+manifestItem.ID+":"+terminalEvent, outcome
+			_, _ = recorder.RecordContextOutcomeObservation(context.Background(), base)
+		}
 	}
 }
 

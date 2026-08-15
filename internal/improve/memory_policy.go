@@ -21,7 +21,9 @@ import (
 const memoryPolicySnapshotVersion = 1
 
 type MemoryRetrievalPolicy struct {
-	TopK             int     `json:"top_k"`
+	TopK             int     `json:"top_k,omitempty"`
+	CandidateTopK    int     `json:"candidate_top_k"`
+	InjectTopK       int     `json:"inject_top_k"`
 	MinimumRelevance float64 `json:"minimum_relevance"`
 	UtilityWeight    float64 `json:"utility_weight"`
 	FreshnessWeight  float64 `json:"freshness_weight"`
@@ -67,7 +69,7 @@ type MemoryPolicyAdoption struct {
 func DefaultMemoryPolicySnapshot(id string) MemoryPolicySnapshot {
 	return normalizedMemoryPolicySnapshot(MemoryPolicySnapshot{
 		ID: id, Status: "baseline", Learning: agent.DefaultMemoryLearningPolicy(),
-		Retrieval:     MemoryRetrievalPolicy{TopK: 20, MinimumRelevance: 0.05, UtilityWeight: 0.50, FreshnessWeight: 1, PromptLayout: "canonical-v1"},
+		Retrieval:     MemoryRetrievalPolicy{CandidateTopK: 20, InjectTopK: 4, MinimumRelevance: 0.05, UtilityWeight: 0.50, FreshnessWeight: 1, PromptLayout: "canonical-v1"},
 		Attribution:   MemoryAttributionPolicy{RequireExplicitApplied: true, NegativeCausalMatch: true},
 		Consolidation: MemoryConsolidationPolicy{MinimumSources: 2, RequireCrossTaskEvidence: true, RequireScopeWideningReview: true},
 	})
@@ -77,6 +79,12 @@ func CreateMemoryPolicyCandidate(id string, baseline, candidate MemoryPolicySnap
 	if strings.TrimSpace(id) == "" || baseline.ID == "" {
 		return MemoryPolicySnapshot{}, fmt.Errorf("candidate and baseline IDs are required")
 	}
+	if err := validateMemoryRetrievalPolicy(baseline.Retrieval); err != nil {
+		return MemoryPolicySnapshot{}, fmt.Errorf("baseline retrieval policy: %w", err)
+	}
+	if err := validateMemoryRetrievalPolicy(candidate.Retrieval); err != nil {
+		return MemoryPolicySnapshot{}, fmt.Errorf("candidate retrieval policy: %w", err)
+	}
 	candidate.ID, candidate.PreviousID, candidate.Status = id, baseline.ID, "candidate"
 	candidate.EvaluationGates = nil
 	categories := changedMemoryPolicyCategories(baseline, candidate)
@@ -85,6 +93,22 @@ func CreateMemoryPolicyCandidate(id string, baseline, candidate MemoryPolicySnap
 	}
 	candidate.ChangedCategory = categories[0]
 	return normalizedMemoryPolicySnapshot(candidate), nil
+}
+
+func validateMemoryRetrievalPolicy(policy MemoryRetrievalPolicy) error {
+	if policy.CandidateTopK == 0 && policy.InjectTopK == 0 {
+		if policy.TopK <= 0 {
+			return fmt.Errorf("legacy top_k must be positive")
+		}
+		return nil
+	}
+	if policy.CandidateTopK <= 0 || policy.InjectTopK <= 0 {
+		return fmt.Errorf("candidate_top_k and inject_top_k must both be positive")
+	}
+	if policy.InjectTopK > policy.CandidateTopK {
+		return fmt.Errorf("inject_top_k must not exceed candidate_top_k")
+	}
+	return nil
 }
 
 func changedMemoryPolicyCategories(a, b MemoryPolicySnapshot) []string {
@@ -265,6 +289,9 @@ func ApproveMemoryPolicyCandidate(workspace, id string, explicitApproval bool) (
 	if err := repo.ActivateMemoryPolicy(context.Background(), candidate.ID, previous.ID, "superseded"); err != nil {
 		return candidate, err
 	}
+	if err := appendMemoryPolicyLifecycleEvent(workspace, "memory_policy_adopted", candidate.ID, previous.ID, candidate.RevisionHash); err != nil {
+		return candidate, err
+	}
 	// The JSON pointer is a disposable operator projection. SQLite is the
 	// canonical adoption record used by runtime startup.
 	_ = writeMemoryPolicyAdoption(workspace, adoption)
@@ -296,8 +323,24 @@ func RollbackMemoryPolicy(workspace string, explicitApproval bool) (MemoryPolicy
 	if err := repo.ActivateMemoryPolicy(context.Background(), previous.ID, adoption.ActiveID, "rolled_back"); err != nil {
 		return previous, err
 	}
+	if err := appendMemoryPolicyLifecycleEvent(workspace, "memory_policy_rolled_back", previous.ID, adoption.ActiveID, previous.RevisionHash); err != nil {
+		return previous, err
+	}
 	_ = writeMemoryPolicyAdoption(workspace, rolledBack)
 	return previous, nil
+}
+
+func appendMemoryPolicyLifecycleEvent(workspace, eventType, activeID, previousID, revision string) error {
+	store, err := team.OpenEventStore(workspace)
+	if err != nil {
+		return fmt.Errorf("open memory policy event store: %w", err)
+	}
+	defer func() { _ = store.Close() }()
+	payload, err := json.Marshal(map[string]any{"schema_version": 1, "policy_version": activeID, "previous_policy_version": previousID, "revision_hash": revision})
+	if err != nil {
+		return err
+	}
+	return store.Append(team.RunEvent{Type: eventType, Actor: "improve", IdempotencyKey: "memory:" + eventType + ":" + activeID + ":" + revision, Payload: payload})
 }
 
 func memoryPolicyAdoptionPath(workspace string) string {
@@ -340,6 +383,31 @@ type MemoryOptimizerProposal struct {
 	Reason       string               `json:"reason"`
 }
 
+// ContextOutcomeSummary is a content-free optimizer input aggregated from
+// context_item × phase × trigger × role × environment observations.
+type ContextOutcomeSummary struct {
+	Selected int `json:"selected"`
+	Positive int `json:"positive"`
+	Negative int `json:"negative"`
+}
+
+// ProposeContextPolicyOptimization creates an immutable candidate only. It
+// deliberately reuses the shadow evaluation, explicit approval, adoption,
+// explain, and rollback machinery below; observations can never mutate the
+// active runtime policy directly.
+func ProposeContextPolicyOptimization(id string, baseline MemoryPolicySnapshot, summary ContextOutcomeSummary) (MemoryOptimizerProposal, error) {
+	candidate := baseline
+	reason := "insufficient negative observations; tighten minimum relevance conservatively"
+	if summary.Negative > summary.Positive && candidate.Retrieval.CandidateTopK > candidate.Retrieval.InjectTopK {
+		candidate.Retrieval.CandidateTopK--
+		reason = "reduce candidate breadth after dimensioned negative context outcomes"
+	} else {
+		candidate.Retrieval.MinimumRelevance = min(1, candidate.Retrieval.MinimumRelevance+0.01)
+	}
+	created, err := CreateMemoryPolicyCandidate(id, baseline, candidate)
+	return MemoryOptimizerProposal{BasePolicyID: baseline.ID, Candidate: created, Reason: reason}, err
+}
+
 func MemoryL3BenchmarkFixture(teamName string) BenchmarkFixture {
 	return BenchmarkFixture{
 		Version: benchmarkVersion, Name: "memory-l3", Team: teamName, Category: "outcome-driven-memory",
@@ -356,7 +424,11 @@ func ProposeMemoryPolicyOptimization(id string, baseline MemoryPolicySnapshot, m
 	candidate := baseline
 	reason := "reduce memory retrieval breadth after observed harm or stale recall"
 	if metrics.MemoryHarmfulUseRate > 0 || metrics.MemoryStaleRetrievalRate > 0 {
-		candidate.Retrieval.TopK = max(1, baseline.Retrieval.TopK-1)
+		if baseline.Retrieval.CandidateTopK > baseline.Retrieval.InjectTopK {
+			candidate.Retrieval.CandidateTopK = baseline.Retrieval.CandidateTopK - 1
+		} else {
+			candidate.Retrieval.InjectTopK = max(1, baseline.Retrieval.InjectTopK-1)
+		}
 	} else {
 		candidate.Retrieval.MinimumRelevance = min(1, baseline.Retrieval.MinimumRelevance+0.01)
 		reason = "raise relevance threshold conservatively; proposal only"

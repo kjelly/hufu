@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -104,6 +105,7 @@ func (c *Coordinator) adversarialVerify(parentCtx context.Context, task TaskDef,
 	}
 	s := c.AgentPool().Sidecar()
 	if s == nil {
+		_ = c.recordAuxiliaryFallback(parentCtx, "skeptic", "no_model_fallback")
 		return nil
 	}
 
@@ -116,7 +118,7 @@ func (c *Coordinator) adversarialVerify(parentCtx context.Context, task TaskDef,
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(parentCtx, skepticTimeout)
 			defer cancel()
-			resp, err := s.Execute(ctx, buildSkepticPrompt(lens, task.Goal, task.Constraints, output, task.Verify))
+			resp, err := s.Execute(sidecar.WithPurpose(ctx, "skeptic"), buildSkepticPrompt(lens, task.Goal, task.Constraints, output, task.Verify))
 			if err != nil {
 				return // abstain (zero value = confirm)
 			}

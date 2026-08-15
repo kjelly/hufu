@@ -26,11 +26,10 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	parentCtx context.Context,
 	agentName string,
 	agentDef *agent.AgentDef,
-	taskDesc string,
+	task TaskDef,
 	todoID string,
-	verify string,
-	adversarialVerify int,
 ) (string, error) {
+	taskDesc := task.Goal
 	// Limit concurrent models
 	models := agentDef.ExtraModels
 	if len(models) > maxConcurrentModels-1 { // -1 for main model
@@ -47,19 +46,19 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	mainModel := mainDef.Generation.Model
 
 	go func() {
-		output, err := c.executeSingleAgentWithModel(parentCtx, agentName, mainDef, taskDesc, todoID, verify, adversarialVerify)
+		output, err := c.executeSingleAgentWithModel(parentCtx, agentName, mainDef, task, todoID, "main")
 		results <- &agentResult{model: mainModel, output: output, err: err}
 	}()
 
 	// Execute each extra model with its own deep copy
-	for _, extraModel := range models {
-		go func(model string) {
+	for index, extraModel := range models {
+		go func(model, slot string) {
 			extraDef := cloneAgentDef(agentDef)
 			extraDef.ExtraModels = nil
 			extraDef.Generation.Model = model
-			output, err := c.executeSingleAgentWithModel(parentCtx, agentName, extraDef, taskDesc, todoID, verify, adversarialVerify)
+			output, err := c.executeSingleAgentWithModel(parentCtx, agentName, extraDef, task, todoID, slot)
 			results <- &agentResult{model: model, output: output, err: err}
-		}(extraModel)
+		}(extraModel, fmt.Sprintf("extra-%d", index+1))
 	}
 
 	// Collect all results (continue on error)
@@ -115,18 +114,12 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	parentCtx context.Context,
 	agentName string,
 	agentDef *agent.AgentDef,
-	taskDesc string,
+	task TaskDef,
 	todoID string,
-	verify string,
-	adversarialVerify int,
+	slot string,
 ) (string, error) {
-	task := TaskDef{
-		Agent:             agentDef.Name,
-		Goal:              taskDesc,
-		Model:             agentDef.Generation.Model,
-		Verify:            verify,
-		AdversarialVerify: adversarialVerify,
-	}
+	task.Agent = agentDef.Name
+	task.Model = agentDef.Generation.Model
 
 	// Create isolated workspace for this model to prevent concurrent file conflicts.
 	// Use unique token (timestamp + agentName) to prevent collision when multiple
@@ -156,6 +149,8 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	// execute this function concurrently for different models.
 	isolatedSession := cloneSession(c.session, subWS)
 	isolatedCoord := cloneCoordinator(c, isolatedSession)
+	isolationIdentity := strings.Join([]string{c.contextRunID(), todoID, agentName, agentDef.Generation.Model, slot}, "\x00")
+	isolatedCoord.modelExecutionID = "model-execution-" + hashContentKey(isolationIdentity)
 
 	result, err := isolatedCoord.executeTask(parentCtx, task, todoID)
 
@@ -360,6 +355,14 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 	}
 	orig.workerSummariesMu.Unlock()
 
+	orig.executionProfileMu.RLock()
+	executionProfileCopy := orig.executionProfile
+	orig.executionProfileMu.RUnlock()
+
+	orig.goalModeMu.RLock()
+	goalModeCopy := orig.goalMode
+	orig.goalModeMu.RUnlock()
+
 	orig.sidecarInitMu.Lock()
 	sidecarInitCopy := orig.sidecarInit
 	sidecarInstCopy := orig.sidecarInst
@@ -383,10 +386,11 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 			copy(entriesCopy, orig.sessionData.Entries)
 		}
 		sessionDataClone = &SessionData{
-			CreatedAt: orig.sessionData.CreatedAt,
-			UpdatedAt: orig.sessionData.UpdatedAt,
-			Rounds:    orig.sessionData.Rounds,
-			Entries:   entriesCopy,
+			CreatedAt:                   orig.sessionData.CreatedAt,
+			UpdatedAt:                   orig.sessionData.UpdatedAt,
+			Rounds:                      orig.sessionData.Rounds,
+			Entries:                     entriesCopy,
+			CoordinatorContextManifests: append([]ContextInjectionManifest(nil), orig.sessionData.CoordinatorContextManifests...),
 		}
 	}
 
@@ -450,6 +454,15 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		capabilityCache:                 capabilityCacheClone,
 		capabilityInflight:              make(map[string]chan CapabilityResult),
 		memoryStore:                     orig.memoryStore,
+		contextRepo:                     orig.contextRepo,
+		memoryRankingPolicy:             orig.memoryRankingPolicy,
+		workerMemorySvc:                 orig.workerMemorySvc,
+		sharedMemorySvc:                 orig.sharedMemorySvc,
+		eventStore:                      orig.eventStore,
+		executionRunID:                  orig.executionRunID,
+		executionTeamRevision:           orig.executionTeamRevision,
+		executionProfile:                executionProfileCopy,
+		goalMode:                        goalModeCopy,
 		modelList:                       orig.modelList,
 		sidecarModel:                    orig.sidecarModel,
 		sidecarInst:                     sidecarInstCopy,

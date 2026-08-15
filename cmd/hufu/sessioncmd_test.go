@@ -108,6 +108,8 @@ func TestCLISession_CheckoutRebuildsSession(t *testing.T) {
 	_ = es.Append(team.RunEvent{ID: "evt-1", BranchID: "main", Type: "user_message_added", Payload: msgPayload})
 	_ = es.Append(team.RunEvent{ID: "evt-2", BranchID: "main", Type: "task_completed", TaskID: "1", Payload: mustMarshal(map[string]string{"id": "1", "desc": "task one", "status": "done"})})
 	_ = es.Append(team.RunEvent{ID: "evt-3", BranchID: "main", Type: "task_completed", TaskID: "2", Payload: mustMarshal(map[string]string{"id": "2", "desc": "task two", "status": "done"})})
+	contextManifest := team.ContextInjectionManifest{SchemaVersion: 1, RequestID: "request-main-1", RequestHash: "request-hash", RunID: "run-1", TaskID: "1", Attempt: 1, Agent: "worker", Phase: team.PhaseExecute, Trigger: team.ContextTriggerTaskDispatch, Fingerprint: "manifest-main-1"}
+	_ = es.Append(team.RunEvent{ID: "evt-context-1", BranchID: "main", Type: "task_context_manifest", TaskID: "1", Payload: mustMarshal(map[string]any{"id": "1", "context_manifests": []team.ContextInjectionManifest{contextManifest}})})
 	_ = es.Close()
 
 	// Write session.json to simulate a live main run with tasks 1+2.
@@ -155,6 +157,9 @@ func TestCLISession_CheckoutRebuildsSession(t *testing.T) {
 	}
 	if len(sd.Entries) != 1 || sd.Entries[0].Content != "hello main" {
 		t.Errorf("expected main entries after checkout, got %+v", sd.Entries)
+	}
+	if len(sd.Tasks[0].ContextManifests) != 1 || sd.Tasks[0].ContextManifests[0].RequestID != contextManifest.RequestID || sd.Tasks[0].ContextManifests[0].Fingerprint != contextManifest.Fingerprint {
+		t.Fatalf("checkout changed or lost context manifest identity: %#v", sd.Tasks[0].ContextManifests)
 	}
 }
 

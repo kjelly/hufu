@@ -34,6 +34,9 @@ func (c *Coordinator) FinalizeRun(ctx context.Context, result *RunResult, accept
 	}
 	c.drainAsyncTasks()
 	result.Acceptance = acceptance
+	if err := c.recordContextAcceptanceObservations(acceptance); err != nil {
+		downgradeRunForFinalizationError(result, err)
+	}
 	// Some terminal paths have no finish tool (for example cancellation and
 	// LLM-free unresolved-task fallback). They must still receive the same
 	// immutable evidence boundary before CompletionGate and experience policy.

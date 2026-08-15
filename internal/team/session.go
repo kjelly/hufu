@@ -89,13 +89,14 @@ type SessionData struct {
 	// WorkflowState and PhaseResults are the durable, runtime-owned workflow
 	// state. They are deliberately separate from task prose and conversation
 	// history so a resumed run cannot infer a completed phase from model text.
-	WorkflowState    Phase                 `json:"workflow_state,omitempty"`
-	PhaseResults     map[Phase]PhaseResult `json:"phase_results,omitempty"`
-	RuntimeWorkspace string                `json:"runtime_workspace,omitempty"`
-	RetryState       *RetryState           `json:"retry_state,omitempty"`
-	LearningGaps     []LearningGap         `json:"learning_gaps,omitempty"`
-	RecoveryRequired bool                  `json:"recovery_required,omitempty"`
-	RecoveryReason   string                `json:"recovery_reason,omitempty"`
+	WorkflowState               Phase                      `json:"workflow_state,omitempty"`
+	PhaseResults                map[Phase]PhaseResult      `json:"phase_results,omitempty"`
+	RuntimeWorkspace            string                     `json:"runtime_workspace,omitempty"`
+	RetryState                  *RetryState                `json:"retry_state,omitempty"`
+	LearningGaps                []LearningGap              `json:"learning_gaps,omitempty"`
+	RecoveryRequired            bool                       `json:"recovery_required,omitempty"`
+	RecoveryReason              string                     `json:"recovery_reason,omitempty"`
+	CoordinatorContextManifests []ContextInjectionManifest `json:"coordinator_context_manifests,omitempty"`
 }
 
 func LoadSession(workspace string) *SessionData {

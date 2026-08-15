@@ -210,21 +210,21 @@ func TestContextCompiler_RendersAuthorityLabels(t *testing.T) {
 	}
 }
 
-func TestCompileWorkerContextFailsClosedWhenOptionalContextExceedsBudget(t *testing.T) {
+func TestCompileWorkerContextOmitsOptionalContextWhenItExceedsBudget(t *testing.T) {
 	input := WorkerContextInput{
-		TaskGoal: "required goal",
-		RawSTM:   "# 發現\n- " + strings.Repeat("historical evidence ", 2000),
+		Goal:   "required goal",
+		RawSTM: "# 發現\n- " + strings.Repeat("historical evidence ", 2000),
 		ModelContext: ModelContextSpec{
 			ModelID: "test", ContextWindow: 500, MaxOutputTokens: 100, SafetyMarginTokens: 100,
 		},
 	}
 	compiled, err := CompileWorkerContext(context.Background(), input)
-	if err == nil || !strings.Contains(err.Error(), "exceeds token budget") {
-		t.Fatalf("CompileWorkerContext() compiled=%#v error=%v, want fail-closed overflow", compiled, err)
+	if err != nil || !compiled.OverBudget || len(compiled.OmittedItems) == 0 {
+		t.Fatalf("CompileWorkerContext() compiled=%#v error=%v, want successful optional omission", compiled, err)
 	}
 }
 
-func TestCompileCoordinatorContextFailsClosedWhenOptionalContextExceedsBudget(t *testing.T) {
+func TestCompileCoordinatorContextOmitsOptionalContextWhenItExceedsBudget(t *testing.T) {
 	input := CoordinatorContextInput{
 		CorePrompt: "required coordinator contract",
 		Goal:       "required goal",
@@ -234,8 +234,59 @@ func TestCompileCoordinatorContextFailsClosedWhenOptionalContextExceedsBudget(t 
 		},
 	}
 	compiled, err := CompileCoordinatorContext(context.Background(), input)
-	if err == nil || !strings.Contains(err.Error(), "exceeds token budget") {
-		t.Fatalf("CompileCoordinatorContext() compiled=%#v error=%v, want fail-closed overflow", compiled, err)
+	if err != nil || !compiled.OverBudget {
+		t.Fatalf("CompileCoordinatorContext() compiled=%#v error=%v, want successful optional compression/omission", compiled, err)
+	}
+}
+
+func TestCompileWorkerContextBuildsTypedNormativeFragments(t *testing.T) {
+	compiled, err := CompileWorkerContext(context.Background(), WorkerContextInput{
+		Goal: "ship router", Constraints: "do not leak secrets", ApprovedPlan: "1. implement", AgentInstructions: "use submit_result",
+		VerificationCriteria: "go test ./...", RuntimeContext: "phase=VERIFY", SkillContext: []ContextItem{{ID: "skill:test", Kind: "skill", Content: "skill summary", Priority: PriorityAgentCoreInstructions, Required: true, Authority: ContextAuthorityNormative}},
+		ModelContext: ModelContextSpec{ContextWindow: 4096, MaxOutputTokens: 512},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int{"current_task": PriorityUserGoal, "task_constraints": PriorityHardConstraints, "approved_plan": PriorityApprovedPlan, "agent_instructions": PriorityAgentCoreInstructions, "verification_criteria": PriorityVerificationCriteria, "runtime_context": PriorityVerificationCriteria, "skill:test": PriorityAgentCoreInstructions}
+	for _, item := range compiled.IncludedItems {
+		if priority, ok := want[item.ID]; ok {
+			if item.Priority != priority || !item.Required || normalizedContextAuthority(item) != ContextAuthorityNormative {
+				t.Fatalf("typed item %s = %#v", item.ID, item)
+			}
+			delete(want, item.ID)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing typed fragments: %v", want)
+	}
+}
+
+func TestCompileWorkerContextIncludesRetryFailureAsRequiredTypedFragment(t *testing.T) {
+	request := validTestContextRequest()
+	request.Attempt = 2
+	request.Trigger = ContextTriggerRetry
+	request.Failure = &ContextFailure{Class: FailureExecution, ErrorClass: string(FailureExecution)}
+	request.AssignRequestID()
+	compiled, err := CompileWorkerContext(context.Background(), WorkerContextInput{
+		Request: request, Goal: "repair the task", AgentInstructions: "execute safely",
+		FailureContext: "## Retry Context\n\n**Failure class:** execution",
+		ModelContext:   ModelContextSpec{ContextWindow: 4096, MaxOutputTokens: 512},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, item := range compiled.IncludedItems {
+		if item.ID == "retry_failure_context" {
+			found = true
+			if !item.Required || item.Authority != ContextAuthorityNormative {
+				t.Fatalf("retry fragment contract = %#v", item)
+			}
+		}
+	}
+	if !found || !strings.Contains(compiled.Prompt, "Failure class") {
+		t.Fatalf("compiled retry context missing: %#v", compiled.IncludedItems)
 	}
 }
 
@@ -304,9 +355,16 @@ func TestContextCompiler_FormatDependencyResults(t *testing.T) {
 			Agent:   "researcher",
 			Status:  "done",
 			Summary: "Researched API design",
+			Details: "The typed deliverable is ready.",
 			Artifacts: []ArtifactRef{
 				{Path: "workspace/api_spec.json", Type: "spec", Description: "OpenAPI specification"},
 			},
+			FilesModified: []FileRef{{Path: "api/router.go", Purpose: "implemented routing"}},
+			Commands:      []CommandResult{{Command: "go test ./...", ExitCode: 0, Output: "RAW SHELL TRANSCRIPT"}},
+			Verification:  []VerificationResult{{Command: "go test ./...", ExitCode: 0, Stdout: "RAW VERIFY STDOUT", Fingerprint: "verify-sha"}},
+			ReceiptIDs:    []string{"receipt-1"},
+			RawOutputRef:  &ArtifactRef{Path: "artifacts/transcript.cast"},
+			OpenQuestions: OpenQuestions{"confirm rollout"},
 			Decisions: []Decision{
 				{Topic: "Protocol", Choice: "JSON-RPC", Reason: "Transport safety"},
 			},
@@ -317,11 +375,18 @@ func TestContextCompiler_FormatDependencyResults(t *testing.T) {
 	if !strings.Contains(formatted, "## Task Dependency Results") {
 		t.Errorf("formatted dependency results missing header: %q", formatted)
 	}
-	if !strings.Contains(formatted, "Task [Researched API design]") {
-		t.Errorf("formatted output missing task summary header: %q", formatted)
+	if !strings.Contains(formatted, "Task [task-1]") || !strings.Contains(formatted, "typed deliverable") {
+		t.Errorf("formatted output missing typed task identity/details: %q", formatted)
 	}
-	if !strings.Contains(formatted, "JSON-RPC") {
-		t.Errorf("formatted output missing decision detail: %q", formatted)
+	for _, expected := range []string{"JSON-RPC", "api/router.go", "verify-sha", "receipt-1", "artifacts/transcript.cast", "confirm rollout"} {
+		if !strings.Contains(formatted, expected) {
+			t.Errorf("formatted output missing %q: %q", expected, formatted)
+		}
+	}
+	for _, forbidden := range []string{"RAW SHELL TRANSCRIPT", "RAW VERIFY STDOUT"} {
+		if strings.Contains(formatted, forbidden) {
+			t.Errorf("formatted output leaked raw output %q: %q", forbidden, formatted)
+		}
 	}
 }
 
@@ -429,7 +494,7 @@ func TestContextCompiler_CompileCoordinatorContext_RoleFiltering(t *testing.T) {
 
 	// 3. CompileWorkerContext with researcher role
 	workerInput := WorkerContextInput{
-		TaskGoal:     "Research task",
+		Goal:         "Research task",
 		TaskDef:      TaskDef{Agent: "researcher"},
 		AgentDef:     &agent.AgentDef{Name: "researcher", Role: "researcher"},
 		RawSTM:       rawSTM,
@@ -453,7 +518,7 @@ func TestContextCompiler_CompileCoordinatorContext_RoleFiltering(t *testing.T) {
 func TestContextCompiler_CompileWorkerContext_Deduplication(t *testing.T) {
 	ctx := context.Background()
 	input := WorkerContextInput{
-		TaskGoal:     "Implement worker context pipeline",
+		Goal:         "Implement worker context pipeline",
 		TaskDef:      TaskDef{Agent: "worker"},
 		AgentDef:     &agent.AgentDef{Name: "worker"},
 		RawSTM:       "# 發現\n- Shared convention: use atomic file writes\n",
@@ -477,7 +542,7 @@ func TestContextCompiler_LongBaseWorkerPrompt_PreservesAuxiliaryContext(t *testi
 	longBasePrompt := strings.Repeat("Detailed task instructions and skill context block. ", 200) // ~10,000 chars
 
 	input := WorkerContextInput{
-		TaskGoal:     longBasePrompt,
+		Goal:         longBasePrompt,
 		TaskDef:      TaskDef{Agent: "worker"},
 		AgentDef:     &agent.AgentDef{Name: "worker"},
 		RawSTM:       "# 發現\n- Critical finding: database connection string is postgres://localhost:5432\n",
@@ -592,7 +657,7 @@ func TestWorker_MemoryInjectedExactlyOnce(t *testing.T) {
 
 	// 2. Verify CompileWorkerContext contains STM memory in task prompt
 	workerInput := WorkerContextInput{
-		TaskGoal:     "Implement feature",
+		Goal:         "Implement feature",
 		TaskDef:      TaskDef{Agent: "developer"},
 		AgentDef:     workerDef,
 		RawSTM:       stmContent,
@@ -650,7 +715,7 @@ func TestCompileWorkerContextUsesCanonicalBundleInsteadOfMarkdown(t *testing.T) 
 		ContentHash: "canonical-hash", Lifecycle: contextstore.LifecycleConfirmed, Confidence: .9,
 	}}}
 	compiled, err := CompileWorkerContext(context.Background(), WorkerContextInput{
-		TaskGoal: "use available context", RawSTM: "# 發現\n- stale markdown-only finding", CanonicalMemory: canonical,
+		Goal: "use available context", RawSTM: "# 發現\n- stale markdown-only finding", CanonicalMemory: canonical,
 		ModelContext: ModelContextSpec{ModelID: "test", ContextWindow: 4096, MaxOutputTokens: 512},
 	})
 	if err != nil {
@@ -667,5 +732,36 @@ func TestCompileWorkerContextUsesCanonicalBundleInsteadOfMarkdown(t *testing.T) 
 	}
 	if !found {
 		t.Fatalf("compiled context lost canonical identity: %#v", compiled.IncludedItems)
+	}
+}
+
+func TestCompileWorkerContextVerifyOmitsRawAndGenericHistory(t *testing.T) {
+	request := validTestContextRequest()
+	request.Phase = PhaseVerify
+	request.AssignRequestID()
+	compiled, err := CompileWorkerContext(context.Background(), WorkerContextInput{
+		Request: request, Goal: "verify artifact", VerificationCriteria: "go test ./...", RuntimeContext: "phase=VERIFY",
+		RawSTM: "# Findings\nraw execution chatter\n", RawLTM: "# Long term\nexecute-only memory\n",
+		ConcurrentTasks: "other worker transcript summary", WorkerMemory: &WorkerMemoryBundle{Items: []WorkerMemoryItem{{ContextItem: contextstore.ContextItem{Content: "private execute memory"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"raw execution chatter", "execute-only memory", "other worker transcript summary", "private execute memory"} {
+		if strings.Contains(compiled.Prompt, forbidden) {
+			t.Fatalf("VERIFY prompt leaked generic history %q: %s", forbidden, compiled.Prompt)
+		}
+	}
+	for _, required := range []string{"verify artifact", "go test ./...", "phase=VERIFY"} {
+		if !strings.Contains(compiled.Prompt, required) {
+			t.Fatalf("VERIFY prompt missing required typed evidence %q: %s", required, compiled.Prompt)
+		}
+	}
+}
+
+func TestCanonicalMustKeepMapsToRequiredWithoutAuthorityEscalation(t *testing.T) {
+	items := canonicalCompilerItems([]contextstore.ContextItem{{ID: "must", Content: "historical requirement", ContentHash: "hash", Lifecycle: contextstore.LifecycleConfirmed, MustKeep: true}}, PriorityRelevantLTM, "shared_persistent", false, false)
+	if len(items) != 1 || !items[0].Required || items[0].Authority != ContextAuthorityHistorical {
+		t.Fatalf("canonical must-keep mapping = %#v", items)
 	}
 }

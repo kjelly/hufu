@@ -17,6 +17,23 @@ func TestReportRendersContentFreeDeprecatedMemoryUsage(t *testing.T) {
 	}
 }
 
+func TestReportRendersContentFreeContextRoutingAggregate(t *testing.T) {
+	report := buildReportMD(&reportData{StartedAt: time.Now(), ContextRouting: team.ContextManifestSummary{
+		Requests: 2, Included: 5, Omitted: 3, IncludedTokens: 120, OmittedTokens: 80,
+		OmitReasons: map[string]int{"phase_mismatch": 1, "token_budget": 2},
+	}}, "demo", "")
+	for _, want := range []string{"## Context Routing", "Requests:** 2", "Included items:** 5 (120 tokens)", "Omitted items:** 3 (80 tokens)", "`phase_mismatch`: 1", "`token_budget`: 2"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q: %s", want, report)
+		}
+	}
+	for _, forbidden := range []string{"prompt content", "memory body", "tool input"} {
+		if strings.Contains(report, forbidden) {
+			t.Fatalf("context routing aggregate exposed content %q: %s", forbidden, report)
+		}
+	}
+}
+
 func TestBuildReportMDIncludesVerificationEvidence(t *testing.T) {
 	data := &reportData{
 		StartedAt: time.Now().Add(-2 * time.Minute),

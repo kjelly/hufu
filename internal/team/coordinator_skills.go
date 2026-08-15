@@ -41,6 +41,9 @@ func (c *Coordinator) recordSkillUsage(name, agentName string) {
 	func() {
 		c.skillUsageMu.Lock()
 		defer c.skillUsageMu.Unlock()
+		if c.skillUsage == nil {
+			c.skillUsage = make(map[string]*skillUsageState)
+		}
 		entry, ok := c.skillUsage[key]
 		if !ok {
 			entry = &skillUsageState{
@@ -184,6 +187,73 @@ func (c *Coordinator) appendSkillContext(prompt string, agentDef *agent.AgentDef
 	return prompt
 }
 
+// buildSkillContextItems produces deterministic, typed skill fragments. When
+// load_skill is available, workers receive progressive-disclosure summaries
+// and a mandatory load instruction. Otherwise the full skill is injected as a
+// required fallback so dispatch can never proceed without its instructions.
+func (c *Coordinator) buildSkillContextItems(agentDef *agent.AgentDef, agentName, goal, todoID string, granted map[string]bool) ([]ContextItem, error) {
+	if agentDef == nil {
+		return nil, nil
+	}
+	byName := make(map[string]*skill.SkillDef)
+	for _, definition := range c.getSkills() {
+		byName[strings.ToLower(definition.Name)] = definition
+	}
+	ordered := make([]*skill.SkillDef, 0)
+	seen := make(map[string]bool)
+	appendSkill := func(definition *skill.SkillDef) {
+		if definition == nil || seen[strings.ToLower(definition.Name)] {
+			return
+		}
+		for _, expanded := range skill.ExpandSkillDependencies(definition, c.getSkills()) {
+			key := strings.ToLower(expanded.Name)
+			if !seen[key] {
+				seen[key] = true
+				ordered = append(ordered, expanded)
+			}
+		}
+	}
+	for _, name := range skill.ParseSkillList(agentDef.Skills) {
+		definition := byName[strings.ToLower(strings.TrimSpace(name))]
+		if definition == nil {
+			return nil, fmt.Errorf("assigned skill %q is unavailable after team filtering", name)
+		}
+		appendSkill(definition)
+	}
+	for _, definition := range c.computeRelevantSkills(agentDef, goal) {
+		appendSkill(definition)
+	}
+	items := make([]ContextItem, 0, len(ordered))
+	injectedNames := make([]string, 0, len(ordered))
+	for _, definition := range ordered {
+		if missing := skill.UnresolvedSkillDependencies(definition, c.getSkills()); len(missing) > 0 {
+			return nil, fmt.Errorf("skill %q has unavailable dependencies: %s", definition.Name, strings.Join(missing, ", "))
+		}
+		injectedNames = append(injectedNames, definition.Name)
+		content, level := definition.Content, "full"
+		if granted["load_skill"] {
+			level = "summary"
+			content = fmt.Sprintf("Skill: %s\nSummary: %s\nPath: %s\nMandatory: call `load_skill` for `%s` before doing any task work.", definition.Name, definition.Description, definition.Path, definition.Name)
+		}
+		items = append(items, ContextItem{
+			ID: "skill:" + strings.ToLower(definition.Name), Kind: "skill_" + level, Content: content,
+			Source: definition.Path, Priority: PriorityAgentCoreInstructions, Required: true,
+			Authority: ContextAuthorityNormative, ConflictKey: "skill:" + strings.ToLower(definition.Name), DedupKey: hashContentKey(content),
+		})
+		// A summary is only a selection/disclosure record, never evidence that
+		// the full instructions were loaded. Full fallback is the one case
+		// where dispatch itself completes the load.
+		if !granted["load_skill"] {
+			c.report(c.newEvent("skill_auto_loaded").withAgent(agentName).withSkillName(definition.Name))
+			c.recordSkillUsage(definition.Name, agentName)
+		}
+	}
+	if todoID != "" && len(injectedNames) > 0 {
+		c.taskTracker.TodoList().SetInjectedSkills(todoID, injectedNames)
+	}
+	return items, nil
+}
+
 func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
 	agentSkillNames := skill.ParseSkillList(agentDef.Skills)
 	if len(agentSkillNames) == 0 {
@@ -195,7 +265,10 @@ func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
 	b.WriteString("## Relevant Skills\n\n")
 	for _, s := range skill.SkillsByName(cachedSkills, agentSkillNames) {
 		for _, expanded := range skill.ExpandSkillDependencies(s, cachedSkills) {
-			fmt.Fprintf(&b, "### %s\n*File: %s*\n\n%s\n\n", expanded.Name, expanded.Path, expanded.Content)
+			// This legacy formatter is deliberately level-1 only. Actual
+			// dispatches use buildSkillContextItems, which selects full fallback
+			// only when load_skill is unavailable and otherwise gates task work.
+			fmt.Fprintf(&b, "### %s\n*File: %s*\n\n%s\n\nCall `load_skill` before task work to read the full instructions.\n\n", expanded.Name, expanded.Path, expanded.Description)
 			foundMap[strings.ToLower(expanded.Name)] = true
 		}
 	}
@@ -217,8 +290,6 @@ func (c *Coordinator) buildSuggestedSkillsText(agentDef *agent.AgentDef, agentNa
 	names := make([]string, len(relevant))
 	for i, s := range relevant {
 		names[i] = s.Name
-		c.report(c.newEvent("skill_auto_loaded").withAgent(agentName).withSkillName(s.Name))
-		c.recordSkillUsage(s.Name, agentName)
 	}
 
 	var b strings.Builder
@@ -373,6 +444,60 @@ func (c *Coordinator) extractSkillFromToolCall(toolName, input string) string {
 	return args.Name
 }
 
+// mandatorySkillLoadDenial enforces the progressive-disclosure contract at
+// the same central policy boundary as every other worker tool. Summaries are
+// not evidence of a full skill load: only a successful load_skill call updates
+// TodoItem.LoadedSkills, and task-work tools stay recoverably denied until the
+// next deterministic skill in InjectedSkills has been loaded.
+func (c *Coordinator) mandatorySkillLoadDenial(ctx context.Context, toolName, input string) string {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return ""
+	}
+	todoID, _ := ctx.Value(todoIDKey{}).(string)
+	if todoID == "" || todoID == CoordTodoID {
+		return ""
+	}
+	var injected, loaded []string
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item != nil && item.ID == todoID {
+			injected = append([]string(nil), item.InjectedSkills...)
+			loaded = append([]string(nil), item.LoadedSkills...)
+			break
+		}
+	}
+	if len(injected) == 0 {
+		return ""
+	}
+	loadedSet := make(map[string]bool, len(loaded))
+	for _, name := range loaded {
+		loadedSet[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	mandatory := ""
+	for _, name := range injected {
+		if name = strings.TrimSpace(name); name != "" && !loadedSet[strings.ToLower(name)] {
+			mandatory = name
+			break
+		}
+	}
+	if mandatory == "" {
+		return ""
+	}
+	if toolName == "load_skill" {
+		requested := c.extractSkillFromToolCall(toolName, input)
+		if strings.EqualFold(strings.TrimSpace(requested), mandatory) {
+			return ""
+		}
+		return fmt.Sprintf("mandatory skill %q must be loaded next before %q; load_skill calls follow the declared dependency order", mandatory, strings.TrimSpace(requested))
+	}
+	// Context lookup and ask_user are non-work, recoverable planning aids. All
+	// filesystem/action/result tools remain blocked until the full skill is
+	// explicitly loaded.
+	if toolName == "context_query" || toolName == "context_get" || toolName == "ask_user" {
+		return ""
+	}
+	return fmt.Sprintf("mandatory skill %q is not loaded; call load_skill for it before task-work tool %q", mandatory, toolName)
+}
+
 func (c *Coordinator) matchSkillsForPrompt(prompt string) []*skill.SkillDef {
 	skills := c.getSkills()
 	if len(skills) == 0 {
@@ -444,6 +569,7 @@ func (c *Coordinator) observeSidecarUsage(result *fantasy.AgentResult) {
 func (c *Coordinator) attachSidecarUsageObserver(s *sidecar.Sidecar) *sidecar.Sidecar {
 	if s != nil {
 		s.SetUsageObserver(c.observeSidecarUsage)
+		s.SetPromptPreparer(c.prepareAuxiliaryPrompt)
 	}
 	return s
 }
@@ -534,7 +660,7 @@ func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string)
 		if c.think {
 			c.emitThinkSidecar("MatchSkills", fmt.Sprintf("matching %d skills against prompt", len(allSkills)))
 		}
-		names, err := s.MatchSkills(ctx, prompt, summaries)
+		names, err := s.MatchSkills(sidecar.WithPurpose(ctx, "skill_matcher"), prompt, summaries)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: sidecar skill matching failed, using keyword fallback: %v\n", err)
 		} else if len(names) > 0 {
@@ -563,6 +689,7 @@ func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string)
 			c.report(c.newEvent("sidecar_call").withMessage("match_skills → (no matches)"))
 		}
 	} else {
+		_ = c.recordAuxiliaryFallback(ctx, "skill_matcher", "keyword_fallback")
 		fallback := c.matchSkillsForPrompt(prompt)
 		if len(fallback) > 0 {
 			names := make([]string, len(fallback))

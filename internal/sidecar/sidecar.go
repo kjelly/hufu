@@ -40,6 +40,14 @@ type Profile struct {
 	ReasoningEffort string
 }
 
+type purposeContextKey struct{}
+
+// WithPurpose labels a sidecar call with its narrow review/classification
+// contract so the coordinator can build a purpose-specific request/manifest.
+func WithPurpose(ctx context.Context, purpose string) context.Context {
+	return context.WithValue(ctx, purposeContextKey{}, strings.TrimSpace(purpose))
+}
+
 var (
 	// ClassifierProfile is for short structured-output decisions: route,
 	// skill, and team matching, guard review, dedup, and other calls whose
@@ -70,11 +78,35 @@ func (p Profile) apply(call *fantasy.AgentCall) {
 }
 
 type Sidecar struct {
-	mu            sync.Mutex
-	agent         fantasy.Agent
-	provider      *agent.OllamaProvider
-	modelID       string
-	usageObserver func(*fantasy.AgentResult)
+	mu             sync.Mutex
+	agent          fantasy.Agent
+	provider       *agent.OllamaProvider
+	modelID        string
+	usageObserver  func(*fantasy.AgentResult)
+	promptPreparer func(context.Context, string, string) (string, error)
+}
+
+// SetPromptPreparer installs the coordinator's purpose-aware context
+// compiler/manifest boundary. Every sidecar model call crosses this single
+// chokepoint, including guard, judge, skill matching, and compaction APIs.
+func (s *Sidecar) SetPromptPreparer(preparer func(context.Context, string, string) (string, error)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.promptPreparer = preparer
+	s.mu.Unlock()
+}
+
+func profilePurpose(profile Profile) string {
+	switch profile {
+	case JudgeProfile:
+		return "judge"
+	case CompactorProfile:
+		return "compactor"
+	default:
+		return "classifier"
+	}
 }
 
 func NewSidecar(ctx context.Context, provider *agent.OllamaProvider, modelID string) (*Sidecar, error) {
@@ -127,9 +159,21 @@ func (s *Sidecar) SetUsageObserver(observer func(*fantasy.AgentResult)) {
 func (s *Sidecar) generate(ctx context.Context, prompt string, profile Profile) (string, error) {
 	s.mu.Lock()
 	a := s.agent
+	preparer := s.promptPreparer
 	s.mu.Unlock()
 	if a == nil {
 		return "", fmt.Errorf("sidecar agent not initialized")
+	}
+	if preparer != nil {
+		var err error
+		purpose, _ := ctx.Value(purposeContextKey{}).(string)
+		if purpose == "" {
+			purpose = profilePurpose(profile)
+		}
+		prompt, err = preparer(ctx, purpose, prompt)
+		if err != nil {
+			return "", fmt.Errorf("prepare sidecar context: %w", err)
+		}
 	}
 	call := fantasy.AgentCall{Prompt: prompt}
 	profile.apply(&call)

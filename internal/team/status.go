@@ -238,30 +238,31 @@ type TodoItem struct {
 	VerifyResult     *VerificationResult
 	// RuntimeError preserves a structured runtime/provider failure so phase
 	// aggregation does not degrade it into an unclassified worker error.
-	RuntimeError        *ExecutionError           `json:"runtime_error,omitempty"`
-	ExecutionReceipt    *ExecutionReceipt         `json:"execution_receipt,omitempty"`
-	ExecutionReceipts   []ExecutionReceipt        `json:"execution_receipts,omitempty"`
-	FailureEvent        *FailureEventPayload      `json:"failure_event,omitempty"`
-	MaxRetries          int                       // Maximum number of retries for this task
-	Retries             int                       // Current number of retries
-	OnFailure           string                    // ID of the task to jump back to if this task fails (creates a loop)
-	SideEffect          SideEffectClass           `json:"side_effect,omitempty"`
-	Recovery            RecoveryPolicy            `json:"recovery,omitempty"`
-	ReconcileTool       string                    `json:"reconcile_tool,omitempty"`
-	RecoveryState       string                    `json:"recovery_state,omitempty"`
-	TypedResult         *TaskResult               `json:"typed_result,omitempty"`
-	Resolution          *TaskResolution           `json:"resolution,omitempty"`
-	Kind                TaskKind                  `json:"kind,omitempty"`
-	Advances            []string                  `json:"advances,omitempty"`
-	ExpectedStateChange string                    `json:"expected_state_change,omitempty"`
-	Progress            TaskProgress              `json:"progress,omitempty"`
-	ProgressCriteria    []string                  `json:"progress_criteria,omitempty"`
-	FailureFingerprints []FailureFingerprint      `json:"failure_fingerprints,omitempty"`
-	RecoveryHypothesis  *RecoveryHypothesis       `json:"recovery_hypothesis,omitempty"`
-	DiagnosticHints     []string                  `json:"diagnostic_hints,omitempty"`
-	LastOperation       string                    `json:"last_operation,omitempty"`
-	Execution           ExecutionContract         `json:"execution,omitempty"`
-	MemoryManifests     []MemoryInjectionManifest `json:"memory_manifests,omitempty"`
+	RuntimeError        *ExecutionError            `json:"runtime_error,omitempty"`
+	ExecutionReceipt    *ExecutionReceipt          `json:"execution_receipt,omitempty"`
+	ExecutionReceipts   []ExecutionReceipt         `json:"execution_receipts,omitempty"`
+	FailureEvent        *FailureEventPayload       `json:"failure_event,omitempty"`
+	MaxRetries          int                        // Maximum number of retries for this task
+	Retries             int                        // Current number of retries
+	OnFailure           string                     // ID of the task to jump back to if this task fails (creates a loop)
+	SideEffect          SideEffectClass            `json:"side_effect,omitempty"`
+	Recovery            RecoveryPolicy             `json:"recovery,omitempty"`
+	ReconcileTool       string                     `json:"reconcile_tool,omitempty"`
+	RecoveryState       string                     `json:"recovery_state,omitempty"`
+	TypedResult         *TaskResult                `json:"typed_result,omitempty"`
+	Resolution          *TaskResolution            `json:"resolution,omitempty"`
+	Kind                TaskKind                   `json:"kind,omitempty"`
+	Advances            []string                   `json:"advances,omitempty"`
+	ExpectedStateChange string                     `json:"expected_state_change,omitempty"`
+	Progress            TaskProgress               `json:"progress,omitempty"`
+	ProgressCriteria    []string                   `json:"progress_criteria,omitempty"`
+	FailureFingerprints []FailureFingerprint       `json:"failure_fingerprints,omitempty"`
+	RecoveryHypothesis  *RecoveryHypothesis        `json:"recovery_hypothesis,omitempty"`
+	DiagnosticHints     []string                   `json:"diagnostic_hints,omitempty"`
+	LastOperation       string                     `json:"last_operation,omitempty"`
+	Execution           ExecutionContract          `json:"execution,omitempty"`
+	MemoryManifests     []MemoryInjectionManifest  `json:"memory_manifests,omitempty"`
+	ContextManifests    []ContextInjectionManifest `json:"context_manifests,omitempty"`
 }
 
 type TodoList struct {
@@ -869,6 +870,10 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 	for i := range item.MemoryManifests {
 		memoryManifests[i] = *cloneMemoryInjectionManifest(&item.MemoryManifests[i])
 	}
+	contextManifests := make([]ContextInjectionManifest, len(item.ContextManifests))
+	for i := range item.ContextManifests {
+		contextManifests[i] = *cloneContextInjectionManifest(&item.ContextManifests[i])
+	}
 	return &TodoItem{
 		ID:                  item.ID,
 		Phase:               item.Phase,
@@ -921,7 +926,44 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		LastOperation:       item.LastOperation,
 		Execution:           item.Execution,
 		MemoryManifests:     memoryManifests,
+		ContextManifests:    contextManifests,
 	}
+}
+
+func (tl *TodoList) SetContextManifest(id string, manifest *ContextInjectionManifest) error {
+	if manifest == nil {
+		return errors.New("context manifest is nil")
+	}
+	tl.mu.Lock()
+	updated := false
+	for _, item := range tl.items {
+		if item.ID != id {
+			continue
+		}
+		copyManifest := cloneContextInjectionManifest(manifest)
+		replaced := false
+		for i := range item.ContextManifests {
+			if sameContextManifestIdentity(item.ContextManifests[i], *manifest) {
+				item.ContextManifests[i] = *copyManifest
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			item.ContextManifests = append(item.ContextManifests, *copyManifest)
+		}
+		updated = true
+		break
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
 }
 
 func (tl *TodoList) SetMemoryManifest(id string, manifest *MemoryInjectionManifest) error {
@@ -1012,7 +1054,7 @@ func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) er
 				replaced := false
 				for i := range ti.ExecutionReceipts {
 					existing := &ti.ExecutionReceipts[i]
-					if existing.RunID == copyR.RunID && existing.TaskID == copyR.TaskID && existing.Attempt == copyR.Attempt {
+					if existing.RunID == copyR.RunID && existing.TaskID == copyR.TaskID && existing.Attempt == copyR.Attempt && existing.ModelExecutionID == copyR.ModelExecutionID {
 						ti.ExecutionReceipts[i] = copyR
 						replaced = true
 						break
@@ -1079,6 +1121,7 @@ func (tl *TodoList) UpdateReceiptVerifyResult(runID, taskID string, attempt int,
 func cloneExecutionReceipt(receipt *ExecutionReceipt) ExecutionReceipt {
 	copyR := *receipt
 	copyR.MemoryManifest = cloneMemoryInjectionManifest(receipt.MemoryManifest)
+	copyR.ContextManifest = cloneContextInjectionManifest(receipt.ContextManifest)
 	if receipt.RepairProvenance != nil {
 		copyRP := *receipt.RepairProvenance
 		if receipt.RepairProvenance.SubmittedResult != nil {

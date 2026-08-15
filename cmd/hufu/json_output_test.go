@@ -112,6 +112,40 @@ func TestJSONOutputDoesNotReportAbortedRunAsCompleted(t *testing.T) {
 	}
 }
 
+func TestJSONOutputIncludesContentFreeContextRoutingAggregate(t *testing.T) {
+	c := &team.Coordinator{}
+	c.SetSessionData(&team.SessionData{CoordinatorContextManifests: []team.ContextInjectionManifest{{
+		SchemaVersion: 1, RequestID: "request-1", RequestHash: "hash-1", RunID: "run-1", Attempt: 1,
+		Agent: "coordinator", Phase: team.PhaseInit, Trigger: team.ContextTriggerCoordinatorStart,
+		Items: []team.ContextManifestItem{{ID: "goal", Included: true, Tokens: 12}, {ID: "memory-1", Included: false, Reason: team.ContextOmittedPhase, Tokens: 7}},
+	}}})
+	c.SetLastRunResult(&team.RunResult{Outcome: team.RunOutcomeCompleted, GoalSatisfied: true, Acceptance: &team.AcceptanceResult{Passed: true}})
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	err = printResultJSON("done", map[string]*teamContext{"demo": {teamName: "demo", coordinator: c}}, nil)
+	_ = w.Close()
+	os.Stdout = oldStdout
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out jsonRunOutput
+	if err := json.NewDecoder(r).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Teams) != 1 {
+		t.Fatalf("teams = %#v", out.Teams)
+	}
+	summary := out.Teams[0].ContextRouting
+	if summary.Requests != 1 || summary.Included != 1 || summary.Omitted != 1 || summary.IncludedTokens != 12 || summary.OmittedTokens != 7 || summary.OmitReasons[string(team.ContextOmittedPhase)] != 1 {
+		t.Fatalf("context routing JSON = %#v", summary)
+	}
+}
+
 func TestJSONOutputPreservesAcceptanceNotConfigured(t *testing.T) {
 	tc := &teamContext{teamName: "no-gate", coordinator: &team.Coordinator{}}
 	tc.coordinator.SetLastRunResult(&team.RunResult{

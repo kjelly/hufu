@@ -17,6 +17,21 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			if session.CreatedAt == "" && e.Timestamp != "" {
 				session.CreatedAt = e.Timestamp
 			}
+		case "context_manifest":
+			var manifest ContextInjectionManifest
+			if err := json.Unmarshal(e.Payload, &manifest); err == nil && manifest.RequestID != "" {
+				replaced := false
+				for i := range session.CoordinatorContextManifests {
+					if sameContextManifestIdentity(session.CoordinatorContextManifests[i], manifest) {
+						session.CoordinatorContextManifests[i] = manifest
+						replaced = true
+						break
+					}
+				}
+				if !replaced {
+					session.CoordinatorContextManifests = append(session.CoordinatorContextManifests, manifest)
+				}
+			}
 		case "user_message_added", "assistant_message_added":
 			var payload struct {
 				Role    string `json:"role"`
@@ -269,55 +284,56 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		}
 
 		var payload struct {
-			ID                  string                    `json:"id"`
-			Phase               Phase                     `json:"phase"`
-			Action              *Action                   `json:"action"`
-			PlanTaskID          string                    `json:"plan_task_id"`
-			ContractID          string                    `json:"contract_id"`
-			ContractHash        string                    `json:"contract_hash"`
-			ContractRevision    int                       `json:"contract_revision"`
-			Description         string                    `json:"description"`
-			Desc                string                    `json:"desc"`
-			Status              string                    `json:"status"`
-			Detail              string                    `json:"detail"`
-			MaxRetries          int                       `json:"max_retries"`
-			Retries             int                       `json:"retries"`
-			Output              string                    `json:"output"`
-			Summary             string                    `json:"summary"`
-			Agent               string                    `json:"agent"`
-			Model               string                    `json:"model"`
-			Skills              []string                  `json:"skills"`
-			InjectedSkills      []string                  `json:"injected_skills"`
-			LoadedSkills        []string                  `json:"loaded_skills"`
-			Source              string                    `json:"source"`
-			ParentID            string                    `json:"parent_id"`
-			DependsOn           []string                  `json:"depends_on"`
-			OnFailure           string                    `json:"on_failure"`
-			Verify              string                    `json:"verify"`
-			VerifyMode          string                    `json:"verify_mode"`
-			VerifySpec          *VerificationSpec         `json:"verify_spec"`
-			VerifyResult        *VerificationResult       `json:"verify_result"`
-			TypedResult         *TaskResult               `json:"typed_result"`
-			ExecutionReceipt    *ExecutionReceipt         `json:"execution_receipt"`
-			ExecutionReceipts   []ExecutionReceipt        `json:"execution_receipts"`
-			Kind                TaskKind                  `json:"kind"`
-			Advances            []string                  `json:"advances"`
-			ExpectedStateChange string                    `json:"expected_state_change"`
-			Progress            TaskProgress              `json:"progress"`
-			ProgressCriteria    []string                  `json:"progress_criteria"`
-			FailureFingerprints []FailureFingerprint      `json:"failure_fingerprints"`
-			Execution           ExecutionContract         `json:"execution"`
-			RecoveryHypothesis  *RecoveryHypothesis       `json:"recovery_hypothesis"`
-			SideEffect          SideEffectClass           `json:"side_effect"`
-			Recovery            RecoveryPolicy            `json:"recovery"`
-			ReconcileTool       string                    `json:"reconcile_tool"`
-			RecoveryState       string                    `json:"recovery_state"`
-			RuntimeError        *ExecutionError           `json:"runtime_error"`
-			Resolution          *TaskResolution           `json:"resolution"`
-			DiagnosticHints     []string                  `json:"diagnostic_hints"`
-			LastOperation       string                    `json:"last_operation"`
-			MemoryManifests     []MemoryInjectionManifest `json:"memory_manifests"`
-			ResetForRetry       bool                      `json:"reset_for_retry"`
+			ID                  string                     `json:"id"`
+			Phase               Phase                      `json:"phase"`
+			Action              *Action                    `json:"action"`
+			PlanTaskID          string                     `json:"plan_task_id"`
+			ContractID          string                     `json:"contract_id"`
+			ContractHash        string                     `json:"contract_hash"`
+			ContractRevision    int                        `json:"contract_revision"`
+			Description         string                     `json:"description"`
+			Desc                string                     `json:"desc"`
+			Status              string                     `json:"status"`
+			Detail              string                     `json:"detail"`
+			MaxRetries          int                        `json:"max_retries"`
+			Retries             int                        `json:"retries"`
+			Output              string                     `json:"output"`
+			Summary             string                     `json:"summary"`
+			Agent               string                     `json:"agent"`
+			Model               string                     `json:"model"`
+			Skills              []string                   `json:"skills"`
+			InjectedSkills      []string                   `json:"injected_skills"`
+			LoadedSkills        []string                   `json:"loaded_skills"`
+			Source              string                     `json:"source"`
+			ParentID            string                     `json:"parent_id"`
+			DependsOn           []string                   `json:"depends_on"`
+			OnFailure           string                     `json:"on_failure"`
+			Verify              string                     `json:"verify"`
+			VerifyMode          string                     `json:"verify_mode"`
+			VerifySpec          *VerificationSpec          `json:"verify_spec"`
+			VerifyResult        *VerificationResult        `json:"verify_result"`
+			TypedResult         *TaskResult                `json:"typed_result"`
+			ExecutionReceipt    *ExecutionReceipt          `json:"execution_receipt"`
+			ExecutionReceipts   []ExecutionReceipt         `json:"execution_receipts"`
+			Kind                TaskKind                   `json:"kind"`
+			Advances            []string                   `json:"advances"`
+			ExpectedStateChange string                     `json:"expected_state_change"`
+			Progress            TaskProgress               `json:"progress"`
+			ProgressCriteria    []string                   `json:"progress_criteria"`
+			FailureFingerprints []FailureFingerprint       `json:"failure_fingerprints"`
+			Execution           ExecutionContract          `json:"execution"`
+			RecoveryHypothesis  *RecoveryHypothesis        `json:"recovery_hypothesis"`
+			SideEffect          SideEffectClass            `json:"side_effect"`
+			Recovery            RecoveryPolicy             `json:"recovery"`
+			ReconcileTool       string                     `json:"reconcile_tool"`
+			RecoveryState       string                     `json:"recovery_state"`
+			RuntimeError        *ExecutionError            `json:"runtime_error"`
+			Resolution          *TaskResolution            `json:"resolution"`
+			DiagnosticHints     []string                   `json:"diagnostic_hints"`
+			LastOperation       string                     `json:"last_operation"`
+			MemoryManifests     []MemoryInjectionManifest  `json:"memory_manifests"`
+			ContextManifests    []ContextInjectionManifest `json:"context_manifests"`
+			ResetForRetry       bool                       `json:"reset_for_retry"`
 		}
 		_ = json.Unmarshal(e.Payload, &payload)
 
@@ -532,6 +548,9 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		}
 		if len(payload.MemoryManifests) > 0 {
 			item.MemoryManifests = payload.MemoryManifests
+		}
+		if len(payload.ContextManifests) > 0 {
+			item.ContextManifests = mergeContextInjectionManifests(item.ContextManifests, payload.ContextManifests)
 		}
 
 		switch e.Type {

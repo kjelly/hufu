@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -18,6 +19,43 @@ var skillReferenceRE = regexp.MustCompile(`(?:\$\{HOME\}|\$HOME|~|\.{0,2})?/?(?:
 // were not discovered through the configured skill roots are ignored.
 func ExpandSkillDependencies(root *SkillDef, catalog []*SkillDef) []*SkillDef {
 	return ExpandSkillDependenciesForSet([]*SkillDef{root}, catalog, nil)
+}
+
+// UnresolvedSkillDependencies returns referenced skill paths that cannot be
+// resolved from the already-filtered catalog. The result is deterministic and
+// content-free enough for dispatch preflight errors.
+func UnresolvedSkillDependencies(root *SkillDef, catalog []*SkillDef) []string {
+	seenSkills := make(map[string]bool)
+	seenMissing := make(map[string]bool)
+	var missing []string
+	var visit func(*SkillDef)
+	visit = func(current *SkillDef) {
+		if current == nil {
+			return
+		}
+		key := strings.ToLower(current.Name)
+		if key == "" {
+			key = strings.ToLower(filepath.Clean(current.Path))
+		}
+		if seenSkills[key] {
+			return
+		}
+		seenSkills[key] = true
+		for _, reference := range referencedSkillPaths(current.Content) {
+			dependency := resolveSkillReference(reference, catalog)
+			if dependency == nil {
+				if !seenMissing[reference] {
+					seenMissing[reference] = true
+					missing = append(missing, reference)
+				}
+				continue
+			}
+			visit(dependency)
+		}
+	}
+	visit(root)
+	sort.Strings(missing)
+	return missing
 }
 
 // ExpandSkillDependenciesForSet returns the selected skills plus their

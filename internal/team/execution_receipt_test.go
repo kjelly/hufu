@@ -139,6 +139,23 @@ func TestArtifactVerifierRegistry_DispatchAndDefault(t *testing.T) {
 	}
 }
 
+func TestExecutionReceiptsKeepConcurrentModelExecutionsDistinct(t *testing.T) {
+	tl := &TodoList{items: []*TodoItem{{ID: "task-1"}}}
+	first := ExecutionReceipt{RunID: "run-1", TaskID: "task-1", Attempt: 1, ModelExecutionID: "model-a"}
+	second := first
+	second.ModelExecutionID = "model-b"
+	if err := tl.SetExecutionReceipt("task-1", &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := tl.SetExecutionReceipt("task-1", &second); err != nil {
+		t.Fatal(err)
+	}
+	items := tl.Items()
+	if len(items) != 1 || len(items[0].ExecutionReceipts) != 2 {
+		t.Fatalf("extra-model receipts were overwritten: %#v", items)
+	}
+}
+
 type mockVerifier struct {
 	exitCode int
 	stdout   string

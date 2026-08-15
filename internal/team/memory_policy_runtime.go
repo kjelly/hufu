@@ -17,6 +17,10 @@ import (
 // controls observation/attribution, while these weights control the final
 // score formula (spec §5.4).
 type MemoryRuntimeRankingPolicy struct {
+	CandidateTopK int
+	InjectTopK    int
+	// TopK is a read-only compatibility alias for policy snapshots created
+	// before candidate and injection limits were separated.
 	TopK             int
 	MinimumRelevance float64
 	UtilityWeight    float64
@@ -24,14 +28,21 @@ type MemoryRuntimeRankingPolicy struct {
 }
 
 func defaultMemoryRuntimeRankingPolicy() MemoryRuntimeRankingPolicy {
-	return MemoryRuntimeRankingPolicy{TopK: 20, MinimumRelevance: minimumMemoryRelevance, UtilityWeight: 0.50, FreshnessWeight: 1}
+	return MemoryRuntimeRankingPolicy{CandidateTopK: 20, InjectTopK: 4, TopK: 20, MinimumRelevance: minimumMemoryRelevance, UtilityWeight: 0.50, FreshnessWeight: 1}
 }
 
 func (c *Coordinator) effectiveMemoryRankingPolicy() MemoryRuntimeRankingPolicy {
 	policy := c.memoryRankingPolicy
-	if policy.TopK <= 0 {
+	if policy.CandidateTopK <= 0 {
+		policy.CandidateTopK = policy.TopK
+	}
+	if policy.InjectTopK <= 0 {
+		policy.InjectTopK = policy.TopK
+	}
+	if policy.CandidateTopK <= 0 || policy.InjectTopK <= 0 || policy.InjectTopK > policy.CandidateTopK {
 		return defaultMemoryRuntimeRankingPolicy()
 	}
+	policy.TopK = policy.CandidateTopK
 	return policy
 }
 
@@ -83,6 +94,8 @@ func LoadMemoryPolicy(ctx context.Context, repo contextstore.Repository, policyV
 		Learning     agent.MemoryLearningPolicy `json:"learning"`
 		Retrieval    struct {
 			TopK             int     `json:"top_k"`
+			CandidateTopK    int     `json:"candidate_top_k"`
+			InjectTopK       int     `json:"inject_top_k"`
 			MinimumRelevance float64 `json:"minimum_relevance"`
 			UtilityWeight    float64 `json:"utility_weight"`
 			FreshnessWeight  float64 `json:"freshness_weight"`
@@ -99,11 +112,15 @@ func LoadMemoryPolicy(ctx context.Context, repo contextstore.Repository, policyV
 	case agent.MemoryLearningOff, agent.MemoryLearningObserve, agent.MemoryLearningShadow, agent.MemoryLearningActive:
 		validMode = true
 	}
-	if !validMode || snapshot.Learning.PriorAlpha <= 0 || snapshot.Learning.PriorBeta <= 0 || snapshot.Learning.UtilityPercentile <= 0 || snapshot.Learning.UtilityPercentile >= 1 || snapshot.Learning.MaxCreditPerSignal <= 0 || snapshot.Learning.MinConfirmedSupport < 0 || snapshot.Learning.MinIndependentTasks < 0 || snapshot.Learning.MaxHarmRate < 0 || snapshot.Learning.MaxHarmRate > 1 || snapshot.Retrieval.TopK <= 0 || snapshot.Retrieval.MinimumRelevance < 0 || snapshot.Retrieval.MinimumRelevance > 1 || snapshot.Retrieval.UtilityWeight < 0 || snapshot.Retrieval.FreshnessWeight < 0 {
+	candidateTopK, injectTopK := snapshot.Retrieval.CandidateTopK, snapshot.Retrieval.InjectTopK
+	if candidateTopK == 0 && injectTopK == 0 {
+		candidateTopK, injectTopK = snapshot.Retrieval.TopK, snapshot.Retrieval.TopK
+	}
+	if !validMode || snapshot.Learning.PriorAlpha <= 0 || snapshot.Learning.PriorBeta <= 0 || snapshot.Learning.UtilityPercentile <= 0 || snapshot.Learning.UtilityPercentile >= 1 || snapshot.Learning.MaxCreditPerSignal <= 0 || snapshot.Learning.MinConfirmedSupport < 0 || snapshot.Learning.MinIndependentTasks < 0 || snapshot.Learning.MaxHarmRate < 0 || snapshot.Learning.MaxHarmRate > 1 || candidateTopK <= 0 || injectTopK <= 0 || injectTopK > candidateTopK || snapshot.Retrieval.MinimumRelevance < 0 || snapshot.Retrieval.MinimumRelevance > 1 || snapshot.Retrieval.UtilityWeight < 0 || snapshot.Retrieval.FreshnessWeight < 0 {
 		return learning, runtime, fmt.Errorf("memory policy %q contains invalid runtime parameters", record.PolicyVersion)
 	}
 	snapshot.Learning.PolicyVersion = record.PolicyVersion
-	return snapshot.Learning, MemoryRuntimeRankingPolicy{TopK: snapshot.Retrieval.TopK, MinimumRelevance: snapshot.Retrieval.MinimumRelevance, UtilityWeight: snapshot.Retrieval.UtilityWeight, FreshnessWeight: snapshot.Retrieval.FreshnessWeight}, nil
+	return snapshot.Learning, MemoryRuntimeRankingPolicy{CandidateTopK: candidateTopK, InjectTopK: injectTopK, TopK: candidateTopK, MinimumRelevance: snapshot.Retrieval.MinimumRelevance, UtilityWeight: snapshot.Retrieval.UtilityWeight, FreshnessWeight: snapshot.Retrieval.FreshnessWeight}, nil
 }
 
 func (c *Coordinator) loadAdoptedMemoryPolicy(ctx context.Context) error {

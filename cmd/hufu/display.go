@@ -1361,6 +1361,14 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render(event.Message)})
 			}
 
+		case "context_routed":
+			if event.Message != "" {
+				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render(event.Message)})
+				if event.TodoID != "" {
+					p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: event.Message})
+				}
+			}
+
 		case "terminal_started":
 			if event.TodoID != "" && event.Message != "" {
 				p.Send(tuipkg.TerminalSessionMsg{TodoID: event.TodoID, SessionID: event.Message})
