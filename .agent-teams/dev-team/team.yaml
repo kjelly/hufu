@@ -11,4 +11,3 @@ tools:
     - grep
     - glob
     - ls
-    - stm_write

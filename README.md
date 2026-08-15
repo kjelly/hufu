@@ -896,18 +896,10 @@ workspace/
 
 ### Memory Tools
 
-Agents can use the following two memory tools:
-
-#### `memory_save`
-
-Save knowledge to long-term memory for later retrieval.
-
-```
-memory_save(
-  content: "Important finding or decision",    # required
-  category: "architecture"                     # optional, for categorization
-)
-```
+The default model-facing memory surface is read-only. Workers return findings,
+decisions, open questions, verification, and artifacts through the typed
+`TaskResult` contract; the runtime reduces that evidence into canonical session
+context and proposes persistent candidates when eligible.
 
 #### `memory_query`
 
@@ -1131,7 +1123,6 @@ If the skeptic votes fail, the task is rejected and retried.
 |------|-------------|
 | `agent` | Delegate tasks to other agents |
 | `todo` | Manage task lists |
-| `memory_save` | Save knowledge to long-term memory |
 | `memory_query` | Search long-term memory |
 
 ### Coordinator Tools
@@ -1153,7 +1144,12 @@ tools: view,write,edit,bash,grep,glob,ls
 ---
 ```
 
-> **Note**: Always-included tools (`agent`, `todo`, `memory_save`, `memory_query`) do not need to be specified in `tools`; they are automatically included.
+> **Note**: Always-included tools (`agent`, `todo`, `memory_query`) do not need
+> to be specified in `tools`; they are automatically included. The deprecated
+> `stm_write`, `ltm_update`, and `memory_save` compatibility aliases are
+> canonical-only and default-disabled. A team or one agent must explicitly list
+> an exact alias name to opt in; `tools: all`, an empty list, and template grants
+> do not opt in. Persistent aliases create candidates only, never confirmed truth.
 
 ---
 
