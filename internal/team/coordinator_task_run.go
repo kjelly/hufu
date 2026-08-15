@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1936,13 +1937,8 @@ func (c *Coordinator) withEffectiveToolsAllowedForTask(ctx context.Context, def 
 		return ctx
 	}
 
-	declared := append([]string(nil), c.session.Config.ToolsAllowed...)
+	allowed := append([]string(nil), exposedToolNames...)
 	if def != nil {
-		for _, name := range strings.Split(def.Tools, ",") {
-			if name = strings.TrimSpace(name); name != "" {
-				declared = append(declared, name)
-			}
-		}
 		// Agent-specific MCP tools are a supported frontmatter grant. Keep
 		// the display/tool-call name for the stream gate and add the canonical
 		// agent:tool name for the transport authorizer.
@@ -1950,10 +1946,10 @@ func (c *Coordinator) withEffectiveToolsAllowedForTask(ctx context.Context, def 
 		if mcpAllowed {
 			for name := range def.MCPTools {
 				name = strings.TrimSpace(name)
-				if name == "" {
+				if name == "" || !slices.Contains(exposedToolNames, name) {
 					continue
 				}
-				declared = append(declared, name, strings.ToLower(strings.TrimSpace(def.Name))+":"+name)
+				allowed = append(allowed, strings.ToLower(strings.TrimSpace(def.Name))+":"+name)
 			}
 		} else if c.mcpManager != nil {
 			mcpNames := make(map[string]bool)
@@ -1969,24 +1965,32 @@ func (c *Coordinator) withEffectiveToolsAllowedForTask(ctx context.Context, def 
 				mcpNames[strings.ToLower(strings.TrimSpace(def.Name))+":"+name] = true
 			}
 			var filtered []string
-			for _, name := range declared {
+			for _, name := range allowed {
 				if !mcpNames[name] {
 					filtered = append(filtered, name)
 				}
 			}
-			declared = filtered
+			allowed = filtered
 		}
 	}
-	// Nothing was granted explicitly anywhere. Leave the policy unset: the
-	// stream gate only engages once an allowlist is attached, so attaching one
-	// here — even a protocol-tools-only one — would flip an unconstrained agent
-	// into a deny-all agent.
-	if len(declared) == 0 {
-		return ctx
+	// Runtime authorization is derived from the final concrete model surface.
+	// Empty and "all" declarations are selection inputs, never hidden grants.
+	allowed = c.filterDeniedToolNamesWithGrants(allowed, templateGrantedToolNames(def, task))
+	// The concrete model surface is authoritative for compatibility aliases.
+	// Remove hidden aliases from the declared union so a forged call cannot
+	// invoke a default-disabled implementation through the stream gate.
+	exposed := make(map[string]bool, len(exposedToolNames))
+	for _, name := range exposedToolNames {
+		exposed[strings.TrimSpace(name)] = true
 	}
-	// An allowlist is in force, so it has to cover the final model tool slice.
-	allowed := c.filterDeniedToolNamesWithGrants(append(declared, exposedToolNames...), templateGrantedToolNames(def, task))
-	return context.WithValue(ctx, tools.AgentToolsAllowedKey, dedupeToolNames(allowed))
+	filtered := allowed[:0]
+	for _, name := range allowed {
+		if isLegacyMemoryMutationTool(name) && !exposed[name] {
+			continue
+		}
+		filtered = append(filtered, name)
+	}
+	return context.WithValue(ctx, tools.AgentToolsAllowedKey, dedupeToolNames(filtered))
 }
 
 // stepBudget resolves the per-attempt step budget for def, honouring the agent's
@@ -2633,9 +2637,17 @@ func (c *Coordinator) sharedKnowledgeInstructions(granted map[string]bool) strin
 	fmt.Fprintf(b, "\n- Key knowledge from previous agents is provided below. You do NOT need to read `%s` at the start. Only read it later if you need to check for *new* updates from concurrent agents.\n", stmPath)
 	if c.contextRepo != nil {
 		// Canonical mode: shared memory is captured from structured results.
-		// Never instruct workers to edit the projection file directly; a direct
+		// Workers must never edit the projection file directly; a direct
 		// stm.md write would be discarded on the next projection rebuild.
 		b.WriteString("- Return important findings, decisions, questions, artifacts, and verification in your structured result. The runtime captures shared memory automatically.\n")
+		if granted["stm_write"] {
+			// Composed prompt MUST still mention the deprecated typed-compat
+			// alias when the worker holds an explicit grant, otherwise the
+			// worker gets a runtime-authorized tool with no contract guidance
+			// (HF-MEM5-003). Keep this sentence strictly additive: the
+			// structured-result instruction above is the canonical contract.
+			b.WriteString("- `stm_write` is a deprecated typed compatibility tool; rely on the structured result above for shared memory.\n")
+		}
 		return b.String()
 	}
 	switch {

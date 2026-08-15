@@ -62,6 +62,7 @@ type reportData struct {
 	TerminalSessions    []team.TerminalSession
 	WorkerMemory        team.WorkerMemoryReport
 	MemoryLearning      team.MemoryLearningReport
+	DeprecatedMemory    []team.DeprecatedMemoryToolUsage
 }
 
 // SkillPatternReport holds detected skill pattern info for reports
@@ -124,6 +125,7 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 			d.WorkerMemory = workerMemory
 		}
 		d.MemoryLearning = tc.coordinator.MemoryLearningReport()
+		d.DeprecatedMemory = tc.coordinator.DeprecatedMemoryToolReport()
 	}
 	if d.RunResult == nil && d.SessionData != nil {
 		d.RunResult = d.SessionData.RunResult
@@ -292,6 +294,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	}
 	writeWorkerMemoryReport(&b, data.WorkerMemory)
 	writeMemoryLearningReport(&b, data.MemoryLearning)
+	writeDeprecatedMemoryToolReport(&b, data.DeprecatedMemory)
 
 	if len(data.Todos) > 0 {
 		b.WriteString("## Task Summary\n\n")
@@ -418,6 +421,18 @@ func writeMemoryLearningReport(b *strings.Builder, report team.MemoryLearningRep
 	fmt.Fprintf(b, "- **Retrievals / exposures:** %d / %d\n", report.RetrievalCount, report.ExposureCount)
 	fmt.Fprintf(b, "- **Applied / outcomes:** %d / %d\n", report.AppliedCount, report.OutcomeCount)
 	fmt.Fprintf(b, "- **Pending reducer repairs:** %d\n\n---\n\n", report.PendingRepairGaps)
+}
+
+func writeDeprecatedMemoryToolReport(b *strings.Builder, report []team.DeprecatedMemoryToolUsage) {
+	if len(report) == 0 {
+		return
+	}
+	b.WriteString("## Deprecated Memory Compatibility Usage\n\n")
+	b.WriteString("| Tool | Calls | Success | Fail closed | Denied |\n| --- | ---: | ---: | ---: | ---: |\n")
+	for _, usage := range report {
+		fmt.Fprintf(b, "| `%s` | %d | %d | %d | %d |\n", usage.Tool, usage.Calls, usage.Success, usage.FailClosed, usage.Denied)
+	}
+	b.WriteString("\nOnly content-free lifecycle counts are reported.\n\n---\n\n")
 }
 
 func writeWorkerMemoryReport(b *strings.Builder, report team.WorkerMemoryReport) {

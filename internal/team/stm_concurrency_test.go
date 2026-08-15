@@ -4,11 +4,15 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"charm.land/fantasy"
+
+	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 func TestUpdateSTM_ConcurrencyNoLostUpdates(t *testing.T) {
@@ -81,8 +85,13 @@ func TestSTMWriterConcurrentAppendKeepsParseableDocument(t *testing.T) {
 
 func TestSTMWriteTool_Concurrency(t *testing.T) {
 	tmpDir := t.TempDir()
-	session := &TeamSession{Workspace: tmpDir}
-	c := &Coordinator{session: session}
+	repo, err := contextstore.OpenSQLite(filepath.Join(tmpDir, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	session := &TeamSession{Workspace: tmpDir, Config: agent.TeamConfig{Name: "team"}}
+	c := &Coordinator{session: session, contextRepo: repo, projectDir: "project", executionRunID: "run-1"}
 	tool := &stmWriteTool{coordinator: c}
 
 	const numGoroutines = 30
@@ -105,10 +114,17 @@ func TestSTMWriteTool_Concurrency(t *testing.T) {
 
 	wg.Wait()
 
-	finalContent := LoadSTM(tmpDir)
+	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: c.contextScope(), Visibility: contextstore.VisibilityExact, IncludeCandidates: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalContent := make([]string, 0, len(items))
+	for _, item := range items {
+		finalContent = append(finalContent, item.Content)
+	}
 	for i := 0; i < numGoroutines; i++ {
 		expected := fmt.Sprintf("- task-item-%d", i)
-		if !strings.Contains(finalContent, expected) {
+		if !slices.Contains(finalContent, expected) {
 			t.Errorf("stmWriteTool lost update: final STM missing %q", expected)
 		}
 	}

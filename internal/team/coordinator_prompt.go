@@ -275,15 +275,19 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("### ask_user\n")
 	b.WriteString("Ask the user a question when you need clarification before proceeding.\n\n")
 
-	if !c.coordinatorToolDenied("stm_write") {
+	visibleCoordinatorTools := make(map[string]bool)
+	for _, tool := range c.buildOrchestratorToolsFor(c.GetOrchestratorDef()) {
+		visibleCoordinatorTools[tool.Info().Name] = true
+	}
+	b.WriteString("TaskResult findings, decisions, open questions, verification, and artifacts are captured automatically by the runtime as structured execution evidence.\n\n")
+	if visibleCoordinatorTools["stm_write"] {
 		b.WriteString("### stm_write\n")
 		b.WriteString("Deprecated compatibility tool. Prefer structured task results; if required, append exactly one typed item and never use it as a completion gate.\n")
 		b.WriteString("```json\n{\"content\": \"verified API requires JWT\", \"kind\": \"observation\"}\n```\n\n")
 	}
-	if !c.coordinatorToolDenied("ltm_update") {
+	if visibleCoordinatorTools["ltm_update"] {
 		b.WriteString("### ltm_update\n")
-		b.WriteString("Append to a specific section of long-term memory (ltm.md), a persistent file shared across sessions for this team.\n")
-		b.WriteString("Use ltm_update to save important cross-session knowledge: project conventions, discovered APIs, recurring patterns, architecture decisions, and lessons learned.\n")
+		b.WriteString("Deprecated compatibility tool. Propose persistent shared knowledge as a canonical candidate; it is not persistent truth until accepted runtime evidence confirms it.\n")
 		b.WriteString("Available sections: `# 專案慣例`, `# 架構決策`, `# 常見模式`, `# 已知問題與解法`, `# 關鍵檔案`, `# 工具與指令`\n")
 		b.WriteString("```json\n{\"content\": \"API endpoint /api/v2/users requires JWT in Authorization header\", \"section\": \"# 專案慣例\"}\n```\n\n")
 	}
@@ -295,7 +299,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("- Workers may modify deliverables under the project root only when their task and active tool policy authorize it.\n")
 	fmt.Fprintf(&b, "- Drafts, logs, notes, and other non-deliverable intermediates belong in the control workspace: %s. Use %s for inter-agent handoff.\n", wsPath, sharedPath)
 	b.WriteString("- **Never carry a discovered absolute path across a task boundary as a literal fact another worker must reuse without re-verifying it** — a binary location from `which`, a socket/PID, a generated file path, etc. What one worker discovered in its own execution context is not guaranteed to resolve the same way for a different worker (different sandbox, different session, or the underlying state may simply have changed since). If a later task needs that same fact, let its worker rediscover it itself; never instruct a worker not to verify a path you are handing it. Confirmed live 2026-08-07: a coordinator hardcoded a `trec` binary path an earlier worker had discovered via `which trec` into a later task's goal text and told that worker not to re-run `which trec` — the literal path did not exist in the later worker's execution context (exit 127), failing the task on a stale coordinator-cached fact a 5-second rediscovery would have avoided.\n")
-	if !c.coordinatorToolDenied("ltm_update") {
+	if visibleCoordinatorTools["ltm_update"] {
 		b.WriteString("- Persistent knowledge tools create evidence-gated candidates; they are not required for finish.\n\n")
 	}
 

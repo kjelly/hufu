@@ -132,18 +132,13 @@ func TestCLIProcessExitContract(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			// The coordinator contract requires stm_write immediately before
-			// finish. Make the fixture complete that normal wrap-up sequence so
-			// this test reaches the real acceptance gate rather than testing an
-			// agent/tool-loop failure.
+			// Typed worker results are reduced by the runtime; the coordinator can
+			// proceed directly to finish without a model-owned memory mutation.
 			toolName := "finish"
 			arguments := `{"response":"finish fixture"}`
 			requestIndex := requestNumber.Add(1)
 			if requestIndex == 1 {
 				toolName = ""
-			} else if requestIndex == 2 {
-				toolName = "stm_write"
-				arguments = `{"content":"fixture completed the request","mode":"append"}`
 			}
 			if request.Stream {
 				w.Header().Set("Content-Type", "text/event-stream")

@@ -249,6 +249,15 @@ func (c *Coordinator) beginExecutionRun() func() {
 	c.initEventStore()
 	if c.sessionData != nil && c.sessionData.RecoveryRequired {
 		return func() {
+			// Recovery-required runs never emit new executionEvents but
+			// may still carry a fresh event store; snapshot any prior
+			// per-run compatibility counts before clearing state so
+			// post-run --report visibility remains intact.
+			c.captureCompletedRunDeprecatedReport()
+			if c.eventStore != nil {
+				_ = c.eventStore.Close()
+				c.eventStore = nil
+			}
 			c.executionEventsMu.Lock()
 			c.executionRunID = ""
 			c.executionTeamRevision = ""
@@ -360,6 +369,14 @@ func (c *Coordinator) beginExecutionRun() func() {
 			if readErr != nil {
 				log.Printf("warning: read canonical events for execution-event export: %v", readErr)
 			}
+			// Snapshot the per-run deprecated-aggregate before closing the
+			// event store and clearing the active run ID. The deferred
+			// close runs after every Run / Continue / DryRun / RunDirectAgent
+			// path, so this is the only point where the per-run counts can
+			// be captured for the post-run --report output (HF-MEM5-007
+			// post-run visibility: --report must show the just-completed
+			// run's counts, not always an empty table).
+			c.captureCompletedRunDeprecatedReport()
 			_ = c.eventStore.Close()
 			c.eventStore = nil
 		}

@@ -734,7 +734,7 @@ func TestPhaseCapabilityMCPBlockIntegration(t *testing.T) {
 	}
 
 	w.state = PhaseExecute
-	ctx = c.withEffectiveToolsAllowedForTask(ctx, session.Agents["preparer"], []string{}, TaskDef{})
+	ctx = c.withEffectiveToolsAllowedForTask(ctx, session.Agents["preparer"], []string{"destructive_mcp"}, TaskDef{})
 	allowed = tools.GetToolsAllowed(ctx)
 	if !slices.Contains(allowed, "destructive_mcp") {
 		t.Fatalf("MCP tool was incorrectly blocked in EXECUTE phase runtime allowlist: %v", allowed)

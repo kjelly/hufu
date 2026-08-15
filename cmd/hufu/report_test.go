@@ -8,6 +8,15 @@ import (
 	"github.com/kjelly/hufu/internal/team"
 )
 
+func TestReportRendersContentFreeDeprecatedMemoryUsage(t *testing.T) {
+	report := buildReportMD(&reportData{StartedAt: time.Now(), DeprecatedMemory: []team.DeprecatedMemoryToolUsage{{Tool: "stm_write", Calls: 2, Success: 1, FailClosed: 1, Denied: 3}}}, "demo", "")
+	for _, want := range []string{"## Deprecated Memory Compatibility Usage", "`stm_write`", "| 2 | 1 | 1 | 3 |", "Only content-free lifecycle counts"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q: %s", want, report)
+		}
+	}
+}
+
 func TestBuildReportMDIncludesVerificationEvidence(t *testing.T) {
 	data := &reportData{
 		StartedAt: time.Now().Add(-2 * time.Minute),

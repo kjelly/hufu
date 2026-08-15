@@ -149,6 +149,52 @@ func TestSharedKnowledgeInstructionsOnlyNameGrantedTools(t *testing.T) {
 	}
 }
 
+// TestSharedKnowledgeInstructionsCanonicalModeStmWriteAppendsCompatSentence
+// pins HF-MEM5-003: a canonical-mode worker that holds an explicit stm_write
+// grant must receive the deprecated-compat sentence in addition to the
+// canonical structured-result instruction. Without it, the worker is
+// runtime-authorized for the alias but receives no contract guidance.
+func TestSharedKnowledgeInstructionsCanonicalModeStmWriteAppendsCompatSentence(t *testing.T) {
+	c := &Coordinator{
+		contextRepo: &contextstore.SQLiteRepository{},
+		session: &TeamSession{
+			Config:    agent.TeamConfig{Name: "team"},
+			Workspace: t.TempDir(),
+		},
+	}
+
+	tests := []struct {
+		name        string
+		granted     map[string]bool
+		wantStmTool bool
+	}{
+		{name: "canonical with stm_write grant", granted: map[string]bool{"stm_write": true}, wantStmTool: true},
+		{name: "canonical without stm_write grant", granted: map[string]bool{}, wantStmTool: false},
+		{name: "canonical with file tools only", granted: map[string]bool{"write": true, "edit": true}, wantStmTool: false},
+		{name: "canonical with view only", granted: map[string]bool{"view": true}, wantStmTool: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := c.sharedKnowledgeInstructions(tc.granted)
+			if strings.TrimSpace(got) == "" {
+				t.Fatal("shared knowledge instructions should never be empty")
+			}
+			// Canonical mode must always direct workers to structured results.
+			if !strings.Contains(got, "structured result") {
+				t.Fatalf("canonical-mode instructions did not direct workers to structured results (granted=%v): %q", tc.granted, got)
+			}
+			// Canonical mode must never offer direct stm.md editing.
+			if strings.Contains(got, "append it to") || strings.Contains(got, "do not wait until the end") {
+				t.Fatalf("canonical-mode instructions offered direct stm.md editing (granted=%v): %q", tc.granted, got)
+			}
+			if mentions := strings.Contains(got, "`stm_write`"); mentions != tc.wantStmTool {
+				t.Fatalf("canonical-mode stm_write mention = %t, want %t (granted=%v, got %q)", mentions, tc.wantStmTool, tc.granted, got)
+			}
+		})
+	}
+}
+
 // TestStepBudgetHonoursOverrides pins the precedence the hardcoded
 // AgentConfig.MaxSteps call sites used to bypass. CreateAgent prefers an
 // explicit AgentConfig.MaxSteps over resolveMaxSteps, so passing a non-zero
