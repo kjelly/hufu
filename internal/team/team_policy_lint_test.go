@@ -69,6 +69,11 @@ func TestValidateTeamPolicyContractsFindsStructuralConflicts(t *testing.T) {
 			code: FindingToolPolicyConflict,
 		},
 		{
+			name: "deprecated memory alias explicit opt-in",
+			edit: func(s *TeamSession) { s.Config.ToolsAllowed = []string{"memory_save"} },
+			code: FindingDeprecatedMemoryTool,
+		},
+		{
 			name: "required tool denied",
 			edit: func(s *TeamSession) {
 				s.Config.ToolsDenied = []string{"bash"}

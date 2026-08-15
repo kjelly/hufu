@@ -8,6 +8,74 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
+var legacyMemoryMutationTools = map[string]bool{
+	"stm_write":   true,
+	"ltm_update":  true,
+	"memory_save": true,
+}
+
+func isLegacyMemoryMutationTool(name string) bool {
+	return legacyMemoryMutationTools[strings.TrimSpace(name)]
+}
+
+// explicitlyDeclaresTool accepts only an exact comma-separated literal.
+// Empty and "all" deliberately do not grant deprecated mutation authority.
+func explicitlyDeclaresTool(raw, want string) bool {
+	if strings.TrimSpace(raw) == "" || strings.TrimSpace(raw) == "all" {
+		return false
+	}
+	for _, name := range strings.Split(raw, ",") {
+		if strings.TrimSpace(name) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Coordinator) legacyMemoryToolGranted(def *agent.AgentDef, name string) bool {
+	if !isLegacyMemoryMutationTool(name) || c == nil || c.session == nil || c.toolDeniedByTeam(name) {
+		return false
+	}
+	for _, allowed := range c.session.Config.ToolsAllowed {
+		if strings.TrimSpace(allowed) == name {
+			return true
+		}
+	}
+	return def != nil && explicitlyDeclaresTool(def.Tools, name)
+}
+
+func (c *Coordinator) filterLegacyMemoryMutationTools(def *agent.AgentDef, candidate []fantasy.AgentTool) []fantasy.AgentTool {
+	filtered := make([]fantasy.AgentTool, 0, len(candidate))
+	seen := make(map[string]bool, len(candidate))
+	for _, tool := range candidate {
+		if tool == nil {
+			continue
+		}
+		name := tool.Info().Name
+		if isLegacyMemoryMutationTool(name) && !c.legacyMemoryToolGranted(def, name) {
+			continue
+		}
+		seen[name] = true
+		filtered = append(filtered, tool)
+	}
+	// A team-level literal grant applies to every worker even when an agent's
+	// own list is constrained. Registration stays global; exposure is decided
+	// here per invocation.
+	if c != nil {
+		for _, tool := range c.coreTools {
+			if tool == nil {
+				continue
+			}
+			name := tool.Info().Name
+			if !seen[name] && isLegacyMemoryMutationTool(name) && c.legacyMemoryToolGranted(def, name) {
+				seen[name] = true
+				filtered = append(filtered, tool)
+			}
+		}
+	}
+	return filtered
+}
+
 // selectWorkerTools is the single worker-facing tool boundary. Team-level
 // denials take precedence over both agent frontmatter and alwaysIncludeTools,
 // so a collaboration/memory convenience cannot bypass a read-only contract.
@@ -15,7 +83,7 @@ func (c *Coordinator) selectWorkerTools(def *agent.AgentDef) []fantasy.AgentTool
 	if def == nil {
 		return nil
 	}
-	return c.filterDeniedWorkerTools(agent.SelectTools(c.coreTools, def.Tools))
+	return c.filterDeniedWorkerTools(c.filterLegacyMemoryMutationTools(def, agent.SelectTools(c.coreTools, def.Tools)))
 }
 
 // selectWorkerToolsForTask preserves the team-wide deny list except for a
@@ -26,7 +94,7 @@ func (c *Coordinator) selectWorkerToolsForTask(def *agent.AgentDef, task TaskDef
 	if def == nil {
 		return nil
 	}
-	return c.filterDeniedWorkerToolsWithGrants(agent.SelectTools(c.coreTools, def.Tools), templateGrantedToolNames(def, task))
+	return c.filterDeniedWorkerToolsWithGrants(c.filterLegacyMemoryMutationTools(def, agent.SelectTools(c.coreTools, def.Tools)), templateGrantedToolNames(def, task))
 }
 
 // templateGrantedToolNames returns only a runtime-selected template's narrow
@@ -79,7 +147,7 @@ func (c *Coordinator) filterDeniedWorkerToolsWithGrants(candidate []fantasy.Agen
 			continue
 		}
 		name := tool.Info().Name
-		if denied[name] && !grants[name] {
+		if denied[name] {
 			continue
 		}
 		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.State() != PhaseExecute {
@@ -109,7 +177,7 @@ func (c *Coordinator) filterDeniedToolNamesWithGrants(candidate []string, grants
 		if name == "" {
 			continue
 		}
-		if denied[name] && !grants[name] {
+		if denied[name] {
 			continue
 		}
 		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.State() != PhaseExecute {
@@ -173,6 +241,18 @@ func (c *Coordinator) coordinatorToolDenied(name string) bool {
 		}
 	}
 
+	return false
+}
+
+func (c *Coordinator) toolDeniedByTeam(name string) bool {
+	if c == nil || c.session == nil {
+		return false
+	}
+	for _, denied := range c.session.Config.ToolsDenied {
+		if strings.TrimSpace(denied) == strings.TrimSpace(name) {
+			return true
+		}
+	}
 	return false
 }
 

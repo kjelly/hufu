@@ -916,11 +916,8 @@ var alwaysIncludeTools = map[string]bool{
 	"request_agent": true,
 	"todo":          true,
 	"random":        true,
-	"memory_save":   true,
 	"memory_query":  true,
 	"load_skill":    true,
-	"stm_write":     true,
-	"ltm_update":    true,
 	"team_info":     true,
 }
 

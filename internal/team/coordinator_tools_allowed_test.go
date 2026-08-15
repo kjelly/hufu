@@ -89,6 +89,31 @@ func TestBuildOrchestratorToolsAreRuntimeAllowed(t *testing.T) {
 	}
 }
 
+func TestCoordinatorLegacyMemoryAliasesAreScopedExactOptIn(t *testing.T) {
+	core := workerInvariantCoreTools(t)
+	for _, raw := range []string{"", "all", "ask_user"} {
+		c := &Coordinator{coreTools: core, session: &TeamSession{Agents: map[string]*agent.AgentDef{
+			"coordinator": {Name: "coordinator", Role: "coordinator", Tools: raw},
+		}}}
+		got := agentToolNames(c.buildOrchestratorTools())
+		for _, alias := range []string{"stm_write", "ltm_update", "memory_save"} {
+			if slices.Contains(got, alias) {
+				t.Fatalf("coordinator tools=%q exposed %q: %v", raw, alias, got)
+			}
+		}
+	}
+	c := &Coordinator{coreTools: core, session: &TeamSession{Agents: map[string]*agent.AgentDef{
+		"coordinator": {Name: "coordinator", Role: "coordinator", Tools: "ask_user,ltm_update"},
+		"worker":      {Name: "worker", Role: "worker", Tools: "view,stm_write"},
+	}}}
+	if got := agentToolNames(c.buildOrchestratorTools()); !slices.Contains(got, "ltm_update") || slices.Contains(got, "stm_write") || slices.Contains(got, "memory_save") {
+		t.Fatalf("coordinator scoped opt-in mismatch: %v", got)
+	}
+	if got := agentToolNames(c.selectWorkerTools(c.session.Agents["worker"])); !slices.Contains(got, "stm_write") || slices.Contains(got, "ltm_update") {
+		t.Fatalf("worker scoped opt-in mismatch: %v", got)
+	}
+}
+
 func TestBuildOrchestratorToolsExposeOnlyConfiguredFirstToolBeforeInitialDelegation(t *testing.T) {
 	coreTools := make([]fantasy.AgentTool, 0, len(coordinatorCoreToolNames))
 	for name := range coordinatorCoreToolNames {
@@ -193,7 +218,7 @@ func TestWorkerExposedToolsIncludeResultProtocol(t *testing.T) {
 		t.Fatalf("LoadDefaultTeam: %v", err)
 	}
 	c := &Coordinator{session: session, coreTools: workerInvariantCoreTools(t)}
-	actualTools := append(agent.SelectTools(c.coreTools, session.Agents["helper"].Tools), namedCoordinatorTool("submit_result"))
+	actualTools := append(c.selectWorkerTools(session.Agents["helper"]), namedCoordinatorTool("submit_result"))
 	allowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowed(context.Background(), session.Agents["helper"], agentToolNames(actualTools)))
 
 	for _, want := range []string{"submit_result"} {
@@ -207,30 +232,31 @@ func TestWorkerExposedToolsIncludeResultProtocol(t *testing.T) {
 			t.Errorf("runtime allowlist lost declared tool %q: %v", want, allowed)
 		}
 	}
-	// alwaysIncludeTools reach the model regardless of the declared list.
-	for _, want := range []string{"stm_write", "todo", "team_info"} {
+	// Read-only/runtime collaboration tools still reach the model regardless of
+	// the declared list; deprecated memory mutation aliases do not.
+	for _, want := range []string{"todo", "team_info"} {
 		if !slices.Contains(allowed, want) {
 			t.Errorf("runtime allowlist is missing always-included tool %q: %v", want, allowed)
 		}
 	}
+	for _, forbidden := range []string{"stm_write", "ltm_update", "memory_save"} {
+		if slices.Contains(allowed, forbidden) {
+			t.Errorf("runtime allowlist unexpectedly contains default-disabled alias %q: %v", forbidden, allowed)
+		}
+	}
 }
 
-// TestWithEffectiveToolsAllowed_NoDeclaredGrantsLeavesPolicyUnset guards the
-// fallback the exposed-tools union must not disturb. The stream gate engages
-// only once an allowlist is attached; when a team and agent declare nothing, the
-// tool adapter stays the source of truth. Attaching a protocol-tools-only
-// allowlist here would silently convert an unconstrained agent into a deny-all
-// agent.
-func TestWithEffectiveToolsAllowed_NoDeclaredGrantsLeavesPolicyUnset(t *testing.T) {
+func TestWithEffectiveToolsAllowed_NoDeclaredGrantsMatchesExposedTools(t *testing.T) {
 	session := &TeamSession{
 		Config: agent.TeamConfig{Name: "team"},
 		Agents: map[string]*agent.AgentDef{"worker": {Name: "worker"}},
 	}
 	c := &Coordinator{session: session, coreTools: workerInvariantCoreTools(t)}
 
-	ctx := c.withEffectiveToolsAllowed(context.Background(), session.Agents["worker"], agentToolNames(agent.SelectTools(c.coreTools, session.Agents["worker"].Tools)))
-	if allowed := tools.GetToolsAllowed(ctx); allowed != nil {
-		t.Fatalf("allowlist should stay unset with no declared grants, got %v", allowed)
+	exposed := agentToolNames(c.selectWorkerTools(session.Agents["worker"]))
+	ctx := c.withEffectiveToolsAllowed(context.Background(), session.Agents["worker"], exposed)
+	if allowed := tools.GetToolsAllowed(ctx); !slices.Equal(allowed, exposed) {
+		t.Fatalf("allowlist = %v, want exact exposed tools %v", allowed, exposed)
 	}
 }
 

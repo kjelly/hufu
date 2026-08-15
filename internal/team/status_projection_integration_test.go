@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,16 +179,18 @@ func newDirectTerminationCoordinator(t *testing.T, worker fantasy.Agent) *Coordi
 	t.Helper()
 	workspace := t.TempDir()
 	def := &agent.AgentDef{Name: "worker", Role: "worker"}
-	return &Coordinator{
+	c := &Coordinator{
 		session:      &TeamSession{Dir: workspace, Workspace: workspace, Config: agent.TeamConfig{Name: "test", Timeout: 10}},
 		sessionData:  NewSession(),
 		taskTracker:  NewTaskTracker(),
-		agentCache:   map[string]fantasy.Agent{"worker": worker},
+		agentCache:   make(map[string]fantasy.Agent),
 		agentPool:    &mockAgentPool{resolveDef: def, resolveKey: "worker"},
 		reportStatus: func(StatusEvent) {},
 		projectDir:   workspace,
 		sessionTime:  time.Now(),
 	}
+	c.agentCache[c.policyAgentCacheKey(def, "")] = worker
+	return c
 }
 
 func TestRunDirectAgentFinalizesRunResult(t *testing.T) {
@@ -342,6 +345,30 @@ func TestRunDirectAgentTerminationReconcilesCanonicalTodoAndStatus(t *testing.T)
 	}
 }
 
+func TestRunDirectAgentTerminalFailureReducesCanonicalContextError(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, directTerminationAgent{err: errors.New("worker failed")})
+	repo, err := contextstore.OpenSQLite(filepath.Join(c.session.Workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	c.contextRepo = repo
+	_, _ = c.RunDirectAgent(context.Background(), "worker", "perform direct work")
+	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: c.contextScope(), Visibility: contextstore.VisibilityExact, IncludeCandidates: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.Kind == contextstore.ContextError && item.Metadata["task_id"] != "" && item.Metadata["attempt"] == "1" {
+			if len(item.Evidence) == 0 || item.Evidence[0].Type != "task" {
+				t.Fatalf("direct failure lacks task provenance: %#v", item)
+			}
+			return
+		}
+	}
+	t.Fatalf("direct terminal failure did not produce ContextError: %#v", items)
+}
+
 func TestRunDirectAgentEnforcesNoProgressBudget(t *testing.T) {
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{
 		steps: []fantasy.StepResult{{Response: fantasy.Response{Usage: fantasy.Usage{TotalTokens: 2}}}},
@@ -427,6 +454,12 @@ func TestRunDirectAgentRejectsUnacceptedRun(t *testing.T) {
 
 func TestRunDirectAgentAgentCreationFailureReconcilesCanonicalTodoAndStatus(t *testing.T) {
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
+	repo, err := contextstore.OpenSQLite(filepath.Join(c.session.Workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	c.contextRepo = repo
 	// Empty model configuration makes agent.CreateAgent return its validation
 	// error. An empty cache forces RunDirectAgent through that creation branch.
 	c.agentCache = map[string]fantasy.Agent{}
@@ -451,6 +484,136 @@ func TestRunDirectAgentAgentCreationFailureReconcilesCanonicalTodoAndStatus(t *t
 	if !strings.Contains(status, "status: error") {
 		t.Fatalf("projected status after agent creation failure = %q", status)
 	}
+	// The shared terminal-failure helper must emit a typed ContextError
+	// carrying task provenance, matching the team-worker failure contract.
+	hasError := false
+	for _, it := range mustQueryContextItems(t, c) {
+		if it.Kind == contextstore.ContextError && it.Metadata["task_id"] == items[0].ID && it.Metadata["attempt"] == "1" {
+			if len(it.Evidence) == 0 || it.Evidence[0].Type != "task" {
+				t.Fatalf("agent-creation failure lacks task provenance: %#v", it)
+			}
+			hasError = true
+			break
+		}
+	}
+	if !hasError {
+		t.Fatalf("agent-creation failure did not produce ContextError; got %s", dumpContextItems(c))
+	}
+}
+
+func TestRunDirectAgentContextCompileFailureReconcilesCanonicalTodoAndStatus(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
+	repo, err := contextstore.OpenSQLite(filepath.Join(c.session.Workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	c.contextRepo = repo
+	// Force the worker's canonical context compiler to fail so the
+	// post-CommitTaskCreation terminal-failure helper is exercised.
+	c.SetContextCompiler(&mockContextCompiler{compileWorkerErr: errors.New("compile failure forced by test")})
+
+	result, err := c.RunDirectAgent(context.Background(), "worker", "perform direct work")
+	if err != nil {
+		t.Fatalf("RunDirectAgent top-level err = %v, want nil (terminal failure is reported on result)", err)
+	}
+	if result == nil || result.Error == nil {
+		t.Fatalf("direct compile-failure result = %#v, want non-nil error", result)
+	}
+	items := c.taskTracker.TodoList().Items()
+	if len(items) != 1 || items[0].Status != TaskError {
+		t.Fatalf("canonical task after compile failure = %+v, want error", items)
+	}
+	if items[0].FailureEvent == nil || items[0].FailureEvent.FailureClass != FailureExecution {
+		t.Fatalf("compile failure event = %#v, want execution class", items[0].FailureEvent)
+	}
+	status := readProjectedStatus(t, c.session.Workspace, "worker")
+	if !strings.Contains(status, "status: error") {
+		t.Fatalf("projected status after compile failure = %q", status)
+	}
+	hasError := false
+	for _, it := range mustQueryContextItems(t, c) {
+		if it.Kind == contextstore.ContextError && it.Metadata["task_id"] == items[0].ID {
+			hasError = true
+			break
+		}
+	}
+	if !hasError {
+		t.Fatalf("compile failure did not produce ContextError; got %s", dumpContextItems(c))
+	}
+}
+
+func TestRunDirectAgentManifestPersistenceFailureReconcilesCanonicalTodoAndStatus(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
+	repo, err := contextstore.OpenSQLite(filepath.Join(c.session.Workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	c.contextRepo = repo
+	// Register a direct task in_progress so the manifest-persistence
+	// terminal-failure helper has a real todo to terminalize. The helper
+	// itself is the production path: every post-CommitTaskCreation
+	// failure for a direct agent flows through it.
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "manifest persistence failure"}})
+	todoID := items[0].ID
+	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskInProgress, "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	def := c.taskTracker.TodoList().Items()[0]
+	if def.Status != TaskInProgress {
+		t.Fatalf("setup: expected task in_progress, got %s", def.Status)
+	}
+
+	c.finalizeDirectAgentTerminalFailure(context.Background(), directAgentTerminalFailure{
+		todoID:         todoID,
+		agent:          "worker",
+		agentDef:       &agent.AgentDef{Name: "worker", Role: "worker"},
+		task:           "manifest persistence failure",
+		directModel:    "test",
+		attemptStarted: time.Now(),
+		roundCancel:    nil,
+		steps:          nil,
+		err:            errors.New("manifest persistence forced failure"),
+	})
+
+	final := c.taskTracker.TodoList().Items()
+	if len(final) != 1 || final[0].Status != TaskError {
+		t.Fatalf("canonical task after manifest terminal failure = %+v, want error (no longer in_progress)", final)
+	}
+	if final[0].FailureEvent == nil || final[0].FailureEvent.FailureClass != FailureExecution {
+		t.Fatalf("manifest failure event = %#v, want execution class", final[0].FailureEvent)
+	}
+	hasError := false
+	for _, it := range mustQueryContextItems(t, c) {
+		if it.Kind == contextstore.ContextError && it.Metadata["task_id"] == todoID {
+			hasError = true
+			break
+		}
+	}
+	if !hasError {
+		t.Fatalf("manifest failure helper did not produce ContextError; got %s", dumpContextItems(c))
+	}
+}
+
+func mustQueryContextItems(t *testing.T, c *Coordinator) []contextstore.ContextItem {
+	t.Helper()
+	if c.contextRepo == nil {
+		t.Fatal("context repo not configured for terminal-failure test")
+	}
+	items, err := c.contextRepo.Query(context.Background(), contextstore.RepositoryQuery{Scope: c.contextScope(), Visibility: contextstore.VisibilityExact, IncludeCandidates: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return items
+}
+
+func dumpContextItems(c *Coordinator) string {
+	items, err := c.contextRepo.Query(context.Background(), contextstore.RepositoryQuery{Scope: c.contextScope(), Visibility: contextstore.VisibilityExact, IncludeCandidates: true})
+	if err != nil {
+		return err.Error()
+	}
+	return fmt.Sprintf("%d items", len(items))
 }
 
 func TestCoordinatorAbortTerminationReconcilesCanonicalStateAndStatus(t *testing.T) {

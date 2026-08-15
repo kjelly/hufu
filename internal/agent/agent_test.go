@@ -454,7 +454,7 @@ func TestDefaultProviderURL(t *testing.T) {
 
 // TestAlwaysIncludeTools tests that alwaysIncludeTools contains expected tools
 func TestAlwaysIncludeTools(t *testing.T) {
-	expectedTools := []string{"request_agent", "todo", "random", "stm_write", "ltm_update"}
+	expectedTools := []string{"request_agent", "todo", "random", "memory_query"}
 
 	for _, tool := range expectedTools {
 		if !alwaysIncludeTools[tool] {
@@ -463,7 +463,7 @@ func TestAlwaysIncludeTools(t *testing.T) {
 	}
 
 	// Verify no unexpected tools are always included
-	unexpectedTools := []string{"bash", "grep", "view", "edit"}
+	unexpectedTools := []string{"bash", "grep", "view", "edit", "stm_write", "ltm_update", "memory_save"}
 	for _, tool := range unexpectedTools {
 		if alwaysIncludeTools[tool] {
 			t.Errorf("alwaysIncludeTools contains unexpected tool: %s", tool)

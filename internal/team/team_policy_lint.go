@@ -31,6 +31,23 @@ func ValidateTeamPolicyContracts(session *TeamSession) []ContractFinding {
 	var findings []ContractFinding
 	findings = append(findings, validateDelegationReferences(session)...)
 	findings = append(findings, validateToolPolicy(session.Config.ToolsAllowed, session.Config.ToolsDenied)...)
+	seenDefs := make(map[*agent.AgentDef]bool)
+	for _, def := range session.Agents {
+		if def == nil || seenDefs[def] {
+			continue
+		}
+		seenDefs[def] = true
+		for _, name := range strings.Split(def.Tools, ",") {
+			name = strings.TrimSpace(name)
+			if isLegacyMemoryMutationTool(name) {
+				findings = append(findings, ContractFinding{
+					Severity: FindingSeverityWarning, Code: FindingDeprecatedMemoryTool,
+					Field:   fmt.Sprintf("agents.%s.tools", normalizedName(def.Name)),
+					Message: fmt.Sprintf("tool %q is a deprecated explicit compatibility alias; typed task results are the supported memory input", name),
+				})
+			}
+		}
+	}
 	findings = append(findings, validateRequirements("requires", session.Config.Requirements)...)
 
 	workers := reachableWorkers(session)
@@ -114,6 +131,15 @@ func validateWorkerReference(session *TeamSession, field, name string) []Contrac
 func validateToolPolicy(allowed, denied []string) []ContractFinding {
 	allowedSet := normalizedSet(allowed)
 	var findings []ContractFinding
+	for index, name := range allowed {
+		if isLegacyMemoryMutationTool(strings.TrimSpace(name)) {
+			findings = append(findings, ContractFinding{
+				Severity: FindingSeverityWarning, Code: FindingDeprecatedMemoryTool,
+				Field:   fmt.Sprintf("tools.allowed[%d]", index),
+				Message: fmt.Sprintf("tool %q is a deprecated explicit compatibility alias; typed task results are the supported memory input", name),
+			})
+		}
+	}
 	for index, name := range denied {
 		key := normalizedName(name)
 		if key != "" && allowedSet[key] {

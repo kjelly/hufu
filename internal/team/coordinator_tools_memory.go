@@ -19,43 +19,47 @@ import (
 )
 
 type memorySaveLTMWrapper struct {
-	original    fantasy.AgentTool
+	coordToolBase
 	coordinator *Coordinator
 }
 
 func (t *memorySaveLTMWrapper) Info() fantasy.ToolInfo {
-	info := t.original.Info()
-	if info.Parameters == nil {
-		info.Parameters = make(map[string]any)
+	return fantasy.ToolInfo{
+		Name:        "memory_save",
+		Description: "Deprecated compatibility tool. Propose canonical memory candidates; typed task results are captured automatically.",
+		Parameters: map[string]any{
+			"content":    map[string]any{"type": "string", "description": "Self-contained knowledge to propose."},
+			"confidence": map[string]any{"type": "number", "description": "Optional confidence from 0 to 1."},
+			"file_paths": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"visibility": map[string]any{
+				"type": "string", "enum": []string{"shared", "private"},
+				"description": "Memory visibility. Omit or use shared for the legacy team-visible behavior; private is visible only to the calling worker.",
+			},
+			"tier": map[string]any{
+				"type": "string", "enum": []string{"session", "persistent"},
+				"description": "Private-memory lifetime tier. Defaults to persistent when visibility is private.",
+			},
+			"category": map[string]any{
+				"type": "string", "enum": []string{"decision", "convention", "architecture", "issue", "error", "lesson", "pattern", "observation", "finding", "verification", "artifact", "requirement", "instruction", "summary"},
+				"description": "Optional canonical knowledge category. If omitted, the compatibility section classifier chooses the kind.",
+			},
+			"supersedes": map[string]any{
+				"type": "array", "items": map[string]any{"type": "string"},
+				"description": "Current canonical memory IDs to replace after this candidate is accepted. Targets must be visible in the caller's own memory identity.",
+			},
+		},
+		Required: []string{"content"},
 	}
-	info.Parameters["visibility"] = map[string]any{
-		"type": "string", "enum": []string{"shared", "private"},
-		"description": "Memory visibility. Omit or use shared for the legacy team-visible behavior; private is visible only to the calling worker.",
-	}
-	info.Parameters["tier"] = map[string]any{
-		"type": "string", "enum": []string{"session", "persistent"},
-		"description": "Private-memory lifetime tier. Defaults to persistent when visibility is private.",
-	}
-	info.Parameters["category"] = map[string]any{
-		"type": "string", "enum": []string{"decision", "convention", "architecture", "issue", "error", "lesson", "pattern", "observation", "finding", "verification", "artifact", "requirement", "instruction", "summary"},
-		"description": "Optional canonical knowledge category. If omitted, the compatibility section classifier chooses the kind.",
-	}
-	info.Parameters["supersedes"] = map[string]any{
-		"type": "array", "items": map[string]any{"type": "string"},
-		"description": "Current canonical memory IDs to replace after this candidate is accepted. Targets must be visible in the caller's own memory identity.",
-	}
-	return info
-}
-
-func (t *memorySaveLTMWrapper) ProviderOptions() fantasy.ProviderOptions {
-	return t.original.ProviderOptions()
-}
-
-func (t *memorySaveLTMWrapper) SetProviderOptions(opts fantasy.ProviderOptions) {
-	t.original.SetProviderOptions(opts)
 }
 
 func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	disposition := "failed"
+	visibility, tier := "shared", ""
+	defer func() { t.recordUse(ctx, "memory_save", disposition, visibility, tier) }()
+	if t.coordinator == nil || t.coordinator.session == nil || t.coordinator.contextRepo == nil {
+		disposition = "unavailable"
+		return fantasy.NewTextErrorResponse("canonical context unavailable"), nil
+	}
 	var args struct {
 		Content    string   `json:"content"`
 		Category   string   `json:"category"`
@@ -81,7 +85,7 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 	if section == "" {
 		section = ltmSectionPatterns
 	}
-	visibility := strings.ToLower(strings.TrimSpace(args.Visibility))
+	visibility = strings.ToLower(strings.TrimSpace(args.Visibility))
 	if visibility == "" {
 		visibility = "shared" // backwards-compatible default
 	}
@@ -89,41 +93,55 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 		return fantasy.NewTextErrorResponse("visibility must be shared or private"), nil
 	}
 	if visibility == "private" {
+		tier = strings.ToLower(strings.TrimSpace(args.Tier))
+		if tier == "" {
+			tier = "persistent"
+		}
 		item, err := t.savePrivateCandidate(ctx, args, paths)
 		if err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to save private memory candidate: %v", err)), nil
 		}
-		return fantasy.NewTextResponse(fmt.Sprintf("Saved private %s memory candidate (id: %s); it remains private and is confirmed only after accepted evidence", args.Tier, item.ID)), nil
+		disposition = "success"
+		return fantasy.NewTextResponse(fmt.Sprintf("Saved private %s memory candidate (id: %s); it remains private and is confirmed only after accepted evidence", tier, item.ID)), nil
 	}
-	if t.coordinator.contextRepo != nil {
-		runID := t.coordinator.executionRunID
-		if runID == "" && t.coordinator.taskTracker != nil && t.coordinator.taskTracker.TodoList() != nil {
-			runID = t.coordinator.taskTracker.TodoList().RunID()
-		}
-		taskID, _ := ctx.Value(todoIDKey{}).(string)
-		item, err := t.coordinator.sharedMemoryService().Propose(ctx, SharedMemoryProposal{
-			Scope: t.coordinator.contextScope(), Content: args.Content, Section: section, Category: args.Category,
-			Source: "memory_save", RunID: runID, TaskID: taskID, Confidence: args.Confidence, FilePaths: paths, Supersedes: args.Supersedes,
-		})
-		if err != nil {
-			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to save shared memory candidate: %v", err)), nil
-		}
-		_ = t.coordinator.emitEvent("shared_memory_candidate_saved", "coordinator", taskID, map[string]interface{}{
-			"item_id": item.ID, "run_id": runID, "kind": item.Kind, "lifecycle": item.Lifecycle,
-		})
-		if err := t.coordinator.rebuildLegacyContextProjections(ctx); err != nil {
-			return fantasy.NewTextErrorResponse(fmt.Sprintf("saved canonical candidate but projection rebuild failed: %v", err)), nil
-		}
-		return fantasy.NewTextResponse("Saved as candidate memory; it will be confirmed after acceptance"), nil
+	runID := t.coordinator.executionRunID
+	if runID == "" && t.coordinator.taskTracker != nil && t.coordinator.taskTracker.TodoList() != nil {
+		runID = t.coordinator.taskTracker.TodoList().RunID()
 	}
-	resp, err := t.original.Run(ctx, call)
-	if err != nil || resp.IsError {
-		return resp, err
+	taskID, _ := ctx.Value(todoIDKey{}).(string)
+	item, err := t.coordinator.sharedMemoryService().Propose(ctx, SharedMemoryProposal{
+		Scope: t.coordinator.contextScope(), Content: args.Content, Section: section, Category: args.Category,
+		Source: "memory_save", RunID: runID, TaskID: taskID, Confidence: args.Confidence, FilePaths: paths, Supersedes: args.Supersedes,
+	})
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to save shared memory candidate: %v", err)), nil
 	}
+	_ = t.coordinator.emitEvent("shared_memory_candidate_saved", "coordinator", taskID, map[string]interface{}{
+		"item_id": item.ID, "run_id": runID, "kind": item.Kind, "lifecycle": item.Lifecycle,
+	})
+	if err := t.coordinator.rebuildLegacyContextProjections(ctx); err != nil {
+		// Projection rebuild is a non-authoritative best-effort post-write
+		// action: the canonical candidate is already persisted, so a
+		// duplicate retry would create a second candidate. Surface the
+		// failure as an informational projection warning that does not
+		// fail-closed the call, and keep the successful disposition so
+		// HF-MEM5 telemetry and the model's retry invariant agree with
+		// the actual write.
+		t.coordinator.report(t.coordinator.newEvent("warning").withAgent("shared").
+			withMessage(fmt.Sprintf("memory_save projection rebuild failed for candidate %s; canonical write retained, projections need repair: %v", item.ID, err)).
+			withTodoID(taskID))
+		disposition = "success"
+		return fantasy.NewTextResponse(fmt.Sprintf("Saved canonical memory candidate (id: %s); projection rebuild reported an error, the canonical write is retained and projections can be repaired: %v", item.ID, err)), nil
+	}
+	disposition = "success"
+	return fantasy.NewTextResponse(fmt.Sprintf("Saved canonical memory candidate (id: %s); confirmation requires accepted evidence", item.ID)), nil
+}
 
-	// Legacy-mode fallback when no canonical repository is configured.
-	t.coordinator.persistKnowledgeCandidate(args.Content, section, "memory_save")
-	return resp, nil
+func (t *memorySaveLTMWrapper) recordUse(ctx context.Context, name, disposition, visibility, tier string) {
+	if t == nil || t.coordinator == nil {
+		return
+	}
+	t.coordinator.recordDeprecatedMemoryToolCall(ctx, name, disposition, visibility, tier)
 }
 
 // savePrivateCandidate resolves all scope fields from the execution context.
@@ -215,13 +233,8 @@ func (t *canonicalMemoryQueryTool) Info() fantasy.ToolInfo {
 func (t *canonicalMemoryQueryTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
 func (t *canonicalMemoryQueryTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
 func (t *canonicalMemoryQueryTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	if t.coordinator == nil || t.coordinator.contextRepo == nil {
-		if t.coordinator == nil {
-			return fantasy.NewTextErrorResponse("memory is not available"), nil
-		}
-		// The canonical store is intentionally best-effort during the phased
-		// migration. Preserve the legacy query path when it could not open.
-		return memory.NewMemoryQueryTool(t.coordinator.memoryStore).Run(ctx, call)
+	if t.coordinator == nil || t.coordinator.session == nil || t.coordinator.contextRepo == nil {
+		return fantasy.NewTextErrorResponse("canonical context unavailable"), nil
 	}
 	var args struct {
 		Query         string   `json:"query"`
@@ -319,6 +332,14 @@ func (t *stmWriteTool) Info() fantasy.ToolInfo {
 }
 
 func (t *stmWriteTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	disposition := "failed"
+	defer func() {
+		t.coordinator.recordDeprecatedMemoryToolCall(ctx, "stm_write", disposition, "shared", "session")
+	}()
+	if t.coordinator == nil || t.coordinator.session == nil || t.coordinator.contextRepo == nil {
+		disposition = "unavailable"
+		return fantasy.NewTextErrorResponse("canonical context unavailable"), nil
+	}
 	var args struct {
 		Content string `json:"content"`
 		Kind    string `json:"kind"`
@@ -334,26 +355,11 @@ func (t *stmWriteTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
-	if t.coordinator.contextRepo != nil {
-		if err := t.coordinator.appendCanonicalContext(ctx, kind, args.Content, "stm_write", map[string]string{"legacy_section": stmSectionForKind(kind), "deprecated_tool": "true"}); err != nil {
-			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write canonical STM: %v", err)), nil
-		}
-		return fantasy.NewTextResponse("Appended typed short-term memory"), nil
+	if err := t.coordinator.appendCanonicalContext(ctx, kind, args.Content, "stm_write", map[string]string{"legacy_section": stmSectionForKind(kind), "deprecated_tool": "true"}); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write canonical STM: %v", err)), nil
 	}
-
-	// Legacy-mode fallback when no canonical repository is configured.
-	t.coordinator.shadowContextAppend(kind, args.Content, "stm_write")
-	err = t.coordinator.updateSTM(func(existing string) string {
-		if existing == "" {
-			return TruncateSTM(args.Content)
-		}
-		return TruncateSTM(existing + "\n" + args.Content)
-	})
-	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write stm.md: %v", err)), nil
-	}
-
-	return fantasy.NewTextResponse("Appended typed short-term memory"), nil
+	disposition = "success"
+	return fantasy.NewTextResponse("Appended typed canonical session context; this is not a completion signal"), nil
 }
 
 func stmContextKind(raw string) (contextstore.ContextKind, error) {
@@ -426,6 +432,14 @@ func (t *ltmUpdateTool) Info() fantasy.ToolInfo {
 }
 
 func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	disposition := "failed"
+	defer func() {
+		t.coordinator.recordDeprecatedMemoryToolCall(ctx, "ltm_update", disposition, "shared", "persistent")
+	}()
+	if t.coordinator == nil || t.coordinator.session == nil || t.coordinator.contextRepo == nil {
+		disposition = "unavailable"
+		return fantasy.NewTextErrorResponse("canonical context unavailable"), nil
+	}
 	var args struct {
 		Content string `json:"content"`
 		Section string `json:"section"`
@@ -455,6 +469,34 @@ func (t *ltmUpdateTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 			ltmSectionConventions, ltmSectionArchitecture, ltmSectionPatterns,
 			ltmSectionIssues, ltmSectionFiles, ltmSectionTools)), nil
 	}
-	t.coordinator.persistKnowledgeCandidate(args.Content, args.Section, "ltm_update")
-	return fantasy.NewTextResponse(fmt.Sprintf("Saved to long-term memory section %q as a candidate; it will be confirmed after acceptance", args.Section)), nil
+	runID := t.coordinator.executionRunID
+	if runID == "" && t.coordinator.taskTracker != nil && t.coordinator.taskTracker.TodoList() != nil {
+		runID = t.coordinator.taskTracker.TodoList().RunID()
+	}
+	taskID, _ := ctx.Value(todoIDKey{}).(string)
+	item, err := t.coordinator.sharedMemoryService().Propose(ctx, SharedMemoryProposal{Scope: t.coordinator.contextScope(), Content: args.Content, Section: args.Section, Source: "ltm_update", RunID: runID, TaskID: taskID})
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to propose canonical memory candidate: %v", err)), nil
+	}
+	disposition = "success"
+	return fantasy.NewTextResponse(fmt.Sprintf("Saved canonical persistent candidate %s in section %q; confirmation requires accepted evidence", item.ID, args.Section)), nil
+}
+
+func (c *Coordinator) recordDeprecatedMemoryToolCall(ctx context.Context, toolName, disposition, visibility, tier string) {
+	if c == nil {
+		return
+	}
+	taskID, _ := ctx.Value(todoIDKey{}).(string)
+	actor, _ := ctx.Value(tools.AgentNameKey).(string)
+	if strings.TrimSpace(actor) == "" {
+		actor = "coordinator"
+	}
+	runID := c.executionRunID
+	if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		runID = c.taskTracker.TodoList().RunID()
+	}
+	_ = c.emitEvent("deprecated_memory_tool_called", actor, taskID, map[string]interface{}{
+		"tool_name": toolName, "run_id": runID, "task_id": taskID, "actor": actor,
+		"visibility": visibility, "tier": tier, "disposition": disposition,
+	})
 }

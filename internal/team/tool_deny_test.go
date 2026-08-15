@@ -36,6 +36,57 @@ func TestTeamToolDenyRemovesAlwaysIncludedStateWriters(t *testing.T) {
 	}
 }
 
+func TestLegacyMemoryMutationExposureRequiresExactScopedOptIn(t *testing.T) {
+	aliases := []string{"stm_write", "ltm_update", "memory_save"}
+	base := func(cfg agent.TeamConfig) *Coordinator {
+		return &Coordinator{session: &TeamSession{Config: cfg}, coreTools: workerInvariantCoreTools(t)}
+	}
+	for _, raw := range []string{"", "all", "view"} {
+		c := base(agent.TeamConfig{})
+		got := agentToolNames(c.selectWorkerTools(&agent.AgentDef{Name: "worker", Tools: raw}))
+		for _, alias := range aliases {
+			if slices.Contains(got, alias) {
+				t.Fatalf("tools=%q exposed default-disabled %q: %v", raw, alias, got)
+			}
+		}
+	}
+
+	c := base(agent.TeamConfig{})
+	a := &agent.AgentDef{Name: "a", Tools: "view,stm_write"}
+	b := &agent.AgentDef{Name: "b", Tools: "view"}
+	if got := agentToolNames(c.selectWorkerTools(a)); !slices.Contains(got, "stm_write") || slices.Contains(got, "ltm_update") {
+		t.Fatalf("agent exact opt-in mismatch: %v", got)
+	}
+	if got := agentToolNames(c.selectWorkerTools(b)); slices.Contains(got, "stm_write") {
+		t.Fatalf("worker A opt-in leaked to worker B: %v", got)
+	}
+
+	c = base(agent.TeamConfig{ToolsAllowed: []string{"ltm_update"}})
+	if got := agentToolNames(c.selectWorkerTools(b)); !slices.Contains(got, "ltm_update") || slices.Contains(got, "stm_write") {
+		t.Fatalf("team literal opt-in mismatch: %v", got)
+	}
+
+	c = base(agent.TeamConfig{ToolsAllowed: []string{"memory_save"}, ToolsDenied: []string{"memory_save"}})
+	got := agentToolNames(c.selectWorkerTools(&agent.AgentDef{Name: "worker", Tools: "memory_save"}))
+	if slices.Contains(got, "memory_save") {
+		t.Fatalf("deny did not override explicit grants: %v", got)
+	}
+	allowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowed(t.Context(), &agent.AgentDef{Name: "worker", Tools: "memory_save"}, got))
+	if slices.Contains(allowed, "memory_save") {
+		t.Fatalf("hidden denied alias remained runtime-callable: %v", allowed)
+	}
+}
+
+func TestTemplateGrantCannotEnableLegacyMemoryMutation(t *testing.T) {
+	c := &Coordinator{session: &TeamSession{}, coreTools: workerInvariantCoreTools(t)}
+	def := &agent.AgentDef{Name: "worker", Tools: "view"}
+	task := TaskDef{ContractID: "contract", Execution: ExecutionContract{TemplateToolGrants: []string{"memory_save"}}}
+	got := agentToolNames(c.selectWorkerToolsForTask(def, task))
+	if slices.Contains(got, "memory_save") {
+		t.Fatalf("template grant enabled compatibility alias: %v", got)
+	}
+}
+
 func TestParseTeamToolDeny(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: deny-test\ntools:\n  denied: [stm_write]\n"), 0o600); err != nil {
@@ -66,12 +117,12 @@ func TestTemplateScopedToolGrantDoesNotLoosenTeamDeny(t *testing.T) {
 		TemplateToolGrants: []string{"terminal"},
 	}}
 	granted := agentToolNames(c.selectWorkerToolsForTask(def, task))
-	if !slices.Contains(granted, "terminal") {
-		t.Fatalf("template-scoped terminal grant was not exposed: %v", granted)
+	if slices.Contains(granted, "terminal") {
+		t.Fatalf("template-scoped grant overrode team deny: %v", granted)
 	}
 	allowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowedForTask(t.Context(), def, granted, task))
-	if !slices.Contains(allowed, "terminal") {
-		t.Fatalf("template-scoped terminal grant was not permitted at runtime: %v", allowed)
+	if slices.Contains(allowed, "terminal") {
+		t.Fatalf("template-scoped grant overrode runtime deny: %v", allowed)
 	}
 
 	forged := task

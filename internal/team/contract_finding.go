@@ -60,6 +60,7 @@ const (
 	FindingDelegationWorkerRole    = "delegation_worker_role_invalid"
 	FindingDelegationWorkerDenied  = "delegation_worker_not_allowed"
 	FindingToolPolicyConflict      = "tool_policy_conflict"
+	FindingDeprecatedMemoryTool    = "deprecated_memory_tool"
 	FindingRequiredToolDenied      = "required_tool_denied"
 	FindingRequiredToolUnavailable = "required_tool_unavailable"
 	FindingRequiredEnvMissing      = "required_environment_missing"

@@ -112,8 +112,21 @@ func (c *Coordinator) checkRunAdmission() error {
 	return nil
 }
 
-func (c *Coordinator) directAgentWorkflowPrompt(task string, agentDef *agent.AgentDef, resolvedName, todoID string) string {
+func (c *Coordinator) directAgentWorkflowPrompt(task string, agentDef *agent.AgentDef, resolvedName, todoID string, granted map[string]bool, syntheticTask TaskDef) string {
 	prompt := c.appendSkillContext(task, agentDef, resolvedName, task, todoID)
+	// Direct-agent prompts must use the same final capability result as the
+	// worker prompt (HF-MEM5-003): every tool mentioned here has to exist
+	// in this invocation's exposed tool slice, and `granted` is the single
+	// source for that. Without this, an explicit opt-in would still be
+	// visible model-side but receive no deprecated-compat guidance, and a
+	// default direct agent would never learn the typed-result contract.
+	if c == nil {
+		return prompt
+	}
+	prompt += c.sharedKnowledgeInstructions(granted)
+	if granted["submit_result"] {
+		prompt += resultProtocolInstructions(syntheticTask, granted)
+	}
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		execCtx := c.phaseWorkflow.executionContext()
 		prompt += "\n\n## Execution Context\n\n"
@@ -127,6 +140,58 @@ func (c *Coordinator) directAgentWorkflowPrompt(task string, agentDef *agent.Age
 		}
 	}
 	return prompt
+}
+
+// createDirectAgent is the direct-agent counterpart of
+// createTaskAgentWithResultTool. The fast path used to call getOrCreateAgent,
+// which never appended a todo-bound submitResultTool and never used the
+// final-task resolver — so the agent could not produce a typed TaskResult
+// (HF-MEM5-005). Going through c.ToolResolver().ResolveTaskTools with a
+// synthetic TaskDef that declares RequiresResult:
+//   - applies the same default-disabled compatibility filter as DAG workers;
+//   - appends the todo-bound submitResultTool so the model can call it;
+//   - lets buildDirectAgentTaskContext derive AgentToolsAllowedKey from
+//     the final slice, matching the team path's runtime allowlist.
+//
+// `task` is the raw direct-agent goal; the synthetic TaskDef is only used to
+// drive the resolver, not to alter the retrieval query.
+//
+// Agent-instance reuse: when the policy-keyed agent cache already holds an
+// instance (test stubs or warm starts), this helper reuses it so call sites
+// can keep substituting fantasy.Agent implementations. The exposed tool
+// names, however, always come from the resolver so the prompt and runtime
+// allowlist stay in sync with submit_result and the deprecated-memory filter.
+func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.AgentDef, directModel, todoID, task, resolvedName string) (fantasy.Agent, []string, error) {
+	if c == nil || agentDef == nil {
+		return nil, nil, fmt.Errorf("create direct agent: agent definition is required")
+	}
+	syntheticTask := TaskDef{Agent: resolvedName, Goal: task, Model: directModel, Execution: ExecutionContract{RequiresResult: true}}
+	extras := []fantasy.AgentTool{&submitResultTool{coordinator: c, todoID: todoID}}
+	resolvedTools, err := c.ToolResolver().ResolveTaskTools(ctx, agentDef, syntheticTask, extras)
+	if err != nil {
+		return nil, nil, err
+	}
+	cacheKey := c.policyAgentCacheKey(agentDef, directModel)
+	c.agentCacheMu.RLock()
+	cached, hit := c.agentCache[cacheKey]
+	c.agentCacheMu.RUnlock()
+	if hit {
+		return cached, append([]string(nil), resolvedTools.Names...), nil
+	}
+	provider, err := c.ModelRuntime().ProviderFor(directModel)
+	if err != nil {
+		return nil, nil, err
+	}
+	ag, err := c.createGatedAgent(ctx, provider, agent.AgentConfig{
+		Def:        agentDef,
+		TeamConfig: &c.session.Config,
+		WorkDir:    c.projectDir,
+		MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
+	}, resolvedTools.Tools)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ag, resolvedTools.Names, nil
 }
 
 func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (*DirectAgentResult, error) {
@@ -199,11 +264,24 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = prevTodoID })
 	}()
 
-	ag, exposedToolNames, err := c.getOrCreateAgent(ctx, agentDef, "")
+	ag, exposedToolNames, err := c.createDirectAgent(ctx, agentDef, directModel, todoID, task, resolvedName)
 	if err != nil {
-		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), ExecutionUsage{})
-		c.PersistFailureWithClass(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), RetryNone, FailureExecution)
-		reconcileDirectStatus()
+		// Agent construction happens before the per-task round is registered,
+		// so there is no round to cancel or unregister. The task is already
+		// transitioned to in_progress, so the shared terminal-failure helper
+		// must perform PersistFailure, the canonical ContextError reducer, the
+		// status reconciliation, and the failure event report.
+		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{
+			todoID:         todoID,
+			agent:          resolvedName,
+			agentDef:       agentDef,
+			task:           task,
+			directModel:    directModel,
+			attemptStarted: attemptStarted,
+			roundCancel:    nil,
+			steps:          nil,
+			err:            fmt.Errorf("failed to create agent %q: %w", resolvedName, err),
+		})
 		return nil, fmt.Errorf("failed to create agent %q: %w", resolvedName, err)
 	}
 
@@ -219,7 +297,13 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	reconcileDirectStatus()
 
-	prompt := c.directAgentWorkflowPrompt(task, agentDef, resolvedName, todoID)
+	// The direct prompt must be assembled with the same final capability set
+	// the agent is actually running with. Building a synthetic TaskDef keeps
+	// resultProtocolInstructions grounded in the same execution contract the
+	// resolver used, so RequiresResult/ToolSequence/etc. stay consistent.
+	granted := toolNameSet(exposedToolNames)
+	syntheticTask := TaskDef{Agent: resolvedName, Goal: task, Execution: ExecutionContract{RequiresResult: true}}
+	prompt := c.directAgentWorkflowPrompt(task, agentDef, resolvedName, todoID, granted, syntheticTask)
 
 	// Direct-agent dispatch uses the same canonical compiler as DAG workers.
 	// Historical sources are represented as typed inputs so visibility,
@@ -237,6 +321,20 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if !c.ExecutionProfile().DisableHistoricalMemory {
 		bundle, foundCanonical, memoryErr := c.canonicalContextBundleForQuery(taskCtx, retrievalQuery)
 		if memoryErr != nil {
+			// Canonical memory preflight failed before any round was registered
+			// for this path; the failure is still attributable to the direct
+			// task and must follow the same terminal-failure contract.
+			c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{
+				todoID:         todoID,
+				agent:          resolvedName,
+				agentDef:       agentDef,
+				task:           task,
+				directModel:    directModel,
+				attemptStarted: attemptStarted,
+				roundCancel:    nil,
+				steps:          nil,
+				err:            fmt.Errorf("direct-agent canonical memory preflight failed: %w", memoryErr),
+			})
 			return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent canonical memory preflight failed: %w", memoryErr)}, nil
 		}
 		canonical, canonicalMemory = foundCanonical, bundle
@@ -255,22 +353,33 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	compiled, compileErr := c.ContextCompiler().CompileWorkerContext(taskCtx, workerInput)
 	c.recordShadowTrace(taskCtx, "direct_worker", prompt, workerInput.ModelContext, compiled, compileErr)
 	if compileErr != nil {
-		roundCancel()
-		c.unregisterTerminalRound(todoID)
-		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), ExecutionUsage{})
-		c.PersistFailureWithClass(resolvedName, task, todoID, c.FailureDetail(compileErr, FailureSourceDirectAgentFailed), RetryNone, FailureExecution)
-		c.report(c.newEvent("error").withAgent(resolvedName).withMessage("direct-agent context preflight failed: " + compileErr.Error()).withModel(directModel).withTodoID(todoID))
-		reconcileDirectStatus()
+		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{
+			todoID:         todoID,
+			agent:          resolvedName,
+			agentDef:       agentDef,
+			task:           task,
+			directModel:    directModel,
+			attemptStarted: attemptStarted,
+			roundCancel:    roundCancel,
+			steps:          nil,
+			err:            fmt.Errorf("direct-agent context preflight failed: %w", compileErr),
+			extraReport:    "direct-agent context preflight failed: " + compileErr.Error(),
+		})
 		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent context preflight failed: %w", compileErr)}, nil
 	}
 	if strings.TrimSpace(compiled.Prompt) == "" {
-		roundCancel()
-		c.unregisterTerminalRound(todoID)
-		err := fmt.Errorf("direct-agent context preflight produced an empty prompt")
-		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), ExecutionUsage{})
-		c.PersistFailureWithClass(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), RetryNone, FailureExecution)
-		reconcileDirectStatus()
-		return &DirectAgentResult{AgentName: resolvedName, Error: err}, nil
+		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{
+			todoID:         todoID,
+			agent:          resolvedName,
+			agentDef:       agentDef,
+			task:           task,
+			directModel:    directModel,
+			attemptStarted: attemptStarted,
+			roundCancel:    roundCancel,
+			steps:          nil,
+			err:            fmt.Errorf("direct-agent context preflight produced an empty prompt"),
+		})
+		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent context preflight produced an empty prompt")}, nil
 	}
 	prompt = compiled.Prompt
 	runID := c.executionRunID
@@ -280,8 +389,20 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	memoryManifest := buildMemoryInjectionManifest(compiled, runID, todoID, 1, resolvedName, retrievalQuery, c.session.Config.MemoryLearning)
 	c.setCurrentTaskAttempt(todoID, 1)
 	if manifestErr := c.persistMemoryManifest(memoryManifest); manifestErr != nil {
-		roundCancel()
-		c.unregisterTerminalRound(todoID)
+		// The manifest preflight leaves the canonical task in_progress; persist
+		// the terminal failure and reduce a typed ContextError so the failure
+		// is recoverable/auditable rather than silently in-flight.
+		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{
+			todoID:         todoID,
+			agent:          resolvedName,
+			agentDef:       agentDef,
+			task:           task,
+			directModel:    directModel,
+			attemptStarted: attemptStarted,
+			roundCancel:    roundCancel,
+			steps:          nil,
+			err:            fmt.Errorf("direct-agent memory manifest preflight failed: %w", manifestErr),
+		})
 		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent memory manifest preflight failed: %w", manifestErr)}, nil
 	}
 
@@ -307,6 +428,14 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		} else {
 			c.PersistFailureWithClass(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), RetryNone, FailureExecution)
 		}
+		// The direct path owns the same terminal failure reduction contract as
+		// DAG workers. This happens only after execution began and the canonical
+		// task transition was persisted; earlier preflight failures intentionally
+		// do not manufacture task evidence.
+		c.recordVerificationFailure(ctx, VerificationFailureInput{
+			TodoID: todoID, Agent: agentDef, Attempt: 1, Err: err,
+			Verify: verifyResultForTodo(c, todoID), ReceiptIDs: receiptIDsForTodo(c, todoID), ArtifactIDs: artifactIDsForTodo(c, todoID),
+		})
 		c.updateTodoTiming(todoID, modelTime, toolTime)
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		c.report(c.newEvent("error").withAgent(resolvedName).withMessage(err.Error()).withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
@@ -385,6 +514,74 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return directRunNotAcceptedResult(resolvedName, output, runRes, len(steps)), nil
 	}
 	return &DirectAgentResult{AgentName: resolvedName, Output: output, Steps: len(steps)}, nil
+}
+
+// directAgentTerminalFailure carries the inputs every post-task-creation
+// direct-agent failure path needs in order to honor the same terminal-failure
+// contract as the team-worker path. All fields are required unless documented
+// otherwise; the helper itself fills in duration, event labels, and the
+// verification/receipt/artifact evidence so each call site stays a one-liner.
+type directAgentTerminalFailure struct {
+	todoID         string
+	agent          string
+	agentDef       *agent.AgentDef
+	task           string
+	directModel    string
+	attemptStarted time.Time
+	// roundCancel cancels the registered per-task terminal round; pass nil
+	// when the failure occurred before buildDirectAgentTaskContext (agent
+	// construction, canonical memory preflight) so the helper does not call
+	// a non-existent cancel.
+	roundCancel context.CancelFunc
+	// steps is the worker step slice available at failure time, used to
+	// report accurate token usage in the failure event. May be nil.
+	steps []fantasy.StepResult
+	// extraReport is appended to the "error" event message so callers can
+	// surface failure context the canonical error alone would omit.
+	extraReport string
+	err         error
+}
+
+// finalizeDirectAgentTerminalFailure centralizes the terminal-failure
+// reduction for every direct-agent failure that follows CommitTaskCreation +
+// CommitTaskTransition. It is the direct-path counterpart of the team-worker
+// failure path: round cancel, terminal-round unregister, error execution
+// event, persistent task failure, canonical ContextError reducer, status
+// reconciliation, and a "error" report event. Once the canonical task has
+// transitioned to in_progress, every attributable direct-agent failure must
+// reach a terminal state through this helper so the task is never stranded
+// in_progress between resume replays. Earlier preflight failures that
+// complete before CommitTaskCreation/transition intentionally bypass this
+// helper because no canonical task evidence exists to terminalize.
+func (c *Coordinator) finalizeDirectAgentTerminalFailure(ctx context.Context, in directAgentTerminalFailure) {
+	if c == nil {
+		return
+	}
+	if in.roundCancel != nil {
+		in.roundCancel()
+	}
+	if in.todoID != "" {
+		c.unregisterTerminalRound(in.todoID)
+	}
+	c.recordExecutionEvent(in.todoID, in.agent, 1, "error", in.directModel, time.Since(in.attemptStarted), usageFromSteps(in.steps))
+	c.PersistFailureWithClass(in.agent, in.task, in.todoID, c.FailureDetail(in.err, FailureSourceDirectAgentFailed), RetryNone, FailureExecution)
+	c.recordVerificationFailure(ctx, VerificationFailureInput{
+		TodoID:      in.todoID,
+		Agent:       in.agentDef,
+		Attempt:     1,
+		Err:         in.err,
+		Verify:      verifyResultForTodo(c, in.todoID),
+		ReceiptIDs:  receiptIDsForTodo(c, in.todoID),
+		ArtifactIDs: artifactIDsForTodo(c, in.todoID),
+	})
+	if err := c.reconcileProjectedItems(c.taskTracker.TodoList().Items()); err != nil {
+		log.Printf("warning: direct-agent status projection failed: %v", err)
+	}
+	msg := in.extraReport
+	if msg == "" {
+		msg = in.err.Error()
+	}
+	c.report(c.newEvent("error").withAgent(in.agent).withMessage(msg).withModel(in.directModel).withTodoID(in.todoID))
 }
 
 // directRunNotAcceptedResult builds the DirectAgentResult for a direct run the
@@ -470,8 +667,6 @@ var coordinatorCoreToolNames = map[string]bool{
 	"finish":         true,
 	"load_skill":     true,
 	"save_skill":     true,
-	"stm_write":      true,
-	"ltm_update":     true,
 	"view":           true,
 	"grep":           true,
 	"glob":           true,
@@ -483,8 +678,9 @@ var coordinatorCoreToolNames = map[string]bool{
 	"reject_plan":    true,
 }
 
-// coordinatorAllowedToolNames returns the permission allowlist matching
-// coordinatorCoreToolNames for the orchestrator context.
+// coordinatorAllowedToolNames is retained for policy tests and static
+// validation. Runtime authorization is derived from the concrete tool slice
+// for each invocation in runOrchestrator.
 func coordinatorAllowedToolNames() []string {
 	names := make([]string, 0, len(coordinatorCoreToolNames))
 	for name := range coordinatorCoreToolNames {
@@ -494,6 +690,10 @@ func coordinatorAllowedToolNames() []string {
 }
 
 func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
+	return c.buildOrchestratorToolsFor(c.GetOrchestratorDef())
+}
+
+func (c *Coordinator) buildOrchestratorToolsFor(orchDef *agent.AgentDef) []fantasy.AgentTool {
 	var orchTools []fantasy.AgentTool
 	if c.forcePlanFirst {
 		orchTools = []fantasy.AgentTool{
@@ -503,11 +703,12 @@ func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
 			&saveSkillTool{coordinator: c},
 		}
 		for _, t := range c.coreTools {
-			if t.Info().Name == "stm_write" {
-				orchTools = append(orchTools, &stmWriteTool{coordinator: c})
+			name := t.Info().Name
+			if (name == "stm_write" || name == "ltm_update") && c.legacyMemoryToolGranted(orchDef, name) {
+				orchTools = append(orchTools, t)
 				continue
 			}
-			if coordinatorCoreToolNames[t.Info().Name] {
+			if coordinatorCoreToolNames[name] {
 				orchTools = append(orchTools, t)
 			}
 		}
@@ -523,11 +724,12 @@ func (c *Coordinator) buildOrchestratorTools() []fantasy.AgentTool {
 		&saveSkillTool{coordinator: c},
 	}
 	for _, t := range c.coreTools {
-		if t.Info().Name == "stm_write" {
-			orchTools = append(orchTools, &stmWriteTool{coordinator: c})
+		name := t.Info().Name
+		if (name == "stm_write" || name == "ltm_update") && c.legacyMemoryToolGranted(orchDef, name) {
+			orchTools = append(orchTools, t)
 			continue
 		}
-		if coordinatorCoreToolNames[t.Info().Name] {
+		if coordinatorCoreToolNames[name] {
 			orchTools = append(orchTools, t)
 		}
 	}
@@ -581,7 +783,8 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	// The coordinator's built-in tools are always permitted, independent of
 	// team.yaml: without this the permission gate denies the forced read-only
 	// tools and the coordinator is back to delegating every file read.
-	orchCtx = context.WithValue(orchCtx, tools.AgentToolsAllowedKey, coordinatorAllowedToolNames())
+	orchTools := c.buildOrchestratorToolsFor(orchDef)
+	orchCtx = context.WithValue(orchCtx, tools.AgentToolsAllowedKey, agentToolNames(orchTools))
 	if c.unattended {
 		orchCtx = context.WithValue(orchCtx, tools.UnattendedKey, true)
 		orchCtx = context.WithValue(orchCtx, tools.AskUserChoiceSelectorKey, tools.AskUserChoiceSelector(func(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (tools.AskUserResponse, error) {
@@ -602,7 +805,7 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
 		MaxSteps:   c.stepBudget(orchDef, agent.DefaultCoordinatorMaxSteps),
-	}, c.buildOrchestratorTools())
+	}, orchTools)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}

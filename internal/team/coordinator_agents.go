@@ -14,10 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"charm.land/fantasy"
-
 	"github.com/kjelly/hufu/internal/agent"
-	"github.com/kjelly/hufu/internal/tools"
 )
 
 func agentCacheKey(def *agent.AgentDef, overrideModel string) string {
@@ -27,72 +24,15 @@ func agentCacheKey(def *agent.AgentDef, overrideModel string) string {
 	return def.Name
 }
 
-func (c *Coordinator) getOrCreateAgent(ctx context.Context, def *agent.AgentDef, overrideModel string) (fantasy.Agent, []string, error) {
-	cacheKey := agentCacheKey(def, overrideModel)
-	c.agentCacheMu.RLock()
-	if ag, ok := c.agentCache[cacheKey]; ok {
-		names := append([]string(nil), c.agentToolNameCache[cacheKey]...)
-		c.agentCacheMu.RUnlock()
-		return ag, names, nil
+func (c *Coordinator) policyAgentCacheKey(def *agent.AgentDef, overrideModel string) string {
+	cacheKey := agentCacheKey(def, overrideModel) + "|tools=" + def.Tools
+	if c != nil && c.session != nil {
+		cacheKey += "|allowed=" + strings.Join(c.session.Config.ToolsAllowed, ",") + "|denied=" + strings.Join(c.session.Config.ToolsDenied, ",")
 	}
-	c.agentCacheMu.RUnlock()
-
-	c.agentCacheMu.Lock()
-	defer c.agentCacheMu.Unlock()
-
-	if ag, ok := c.agentCache[cacheKey]; ok {
-		return ag, append([]string(nil), c.agentToolNameCache[cacheKey]...), nil
+	if c != nil && c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+		cacheKey += "|phase=" + string(c.phaseWorkflow.State())
 	}
-
-	agentDef := def
-	if overrideModel != "" {
-		overriddenDef := *def
-		overriddenDef.Generation.Model = overrideModel
-		agentDef = &overriddenDef
-	}
-
-	agentDef = c.injectWorkerContext(ctx, agentDef)
-
-	// Inject SSH session manager into context
-	ctx = tools.SetSSHSessionManager(ctx, c.sshSessionMgr)
-
-	agentTools := c.selectWorkerTools(agentDef)
-	mcpAllowed := c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || c.phaseWorkflow.State() == PhaseExecute
-	if c.mcpManager != nil && mcpAllowed {
-		agentTools = append(agentTools, c.mcpManager.AsAgentTools()...)
-
-		// Load agent-specific MCP tools if defined
-		if len(agentDef.MCPTools) > 0 {
-			err := c.mcpManager.LoadAgentMCPServer(agentDef.Name, agentDef.MCPTools, agentDef.Shell)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to load MCP server for agent %s: %w", agentDef.Name, err)
-			}
-			mcpTools := c.mcpManager.GetAgentMCPTools(agentDef.Name, agentDef.Shell)
-			if len(mcpTools) > 0 {
-				agentTools = append(agentTools, mcpTools...)
-			}
-		}
-	}
-	agentTools = c.filterDeniedWorkerTools(agentTools)
-
-	getAgModelID := c.resolveAgentModel(agentDef, "")
-	ag, err := c.createGatedAgent(ctx, c.providerManager.GetProvider(getAgModelID), agent.AgentConfig{
-		Def:        agentDef,
-		TeamConfig: &c.session.Config,
-		WorkDir:    c.projectDir,
-		MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
-	}, agentTools)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	c.agentCache[cacheKey] = ag
-	if c.agentToolNameCache == nil {
-		c.agentToolNameCache = make(map[string][]string)
-	}
-	names := agentToolNames(agentTools)
-	c.agentToolNameCache[cacheKey] = append([]string(nil), names...)
-	return ag, names, nil
+	return cacheKey
 }
 
 // resolveAgentName resolves an agent name (exact, case-insensitive, or fuzzy match)

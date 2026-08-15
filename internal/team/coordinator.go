@@ -413,6 +413,25 @@ type Coordinator struct {
 	executionRunID        string
 	executionTeamRevision string
 
+	// lastCompletedRunDeprecatedReport snapshots the per-run deprecated
+	// memory-usage aggregate just before beginExecutionRun's deferred close
+	// clears the active event store / executionRunID. Without this, a
+	// post-run --report call would always see an empty executionRunID and
+	// the report would omit the just-completed run's counts (HF-MEM5-007:
+	// per-run aggregate must remain observable after the run finishes).
+	//
+	// lastCompletedRunDeprecatedCaptured is the sentinel for "a completed
+	// run was captured". Its presence is independent of whether the
+	// captured aggregate has entries — a zero-use run captures an empty
+	// slice, and that empty slice is the authoritative answer for that run.
+	// Without this independent flag, DeprecatedMemoryToolReport would
+	// treat an empty captured slice as "no run captured yet" and fall
+	// through to disk rehydration, misreporting the just-finished run as
+	// having inherited the prior run's compatibility counts.
+	lastCompletedRunDeprecatedReport  []DeprecatedMemoryToolUsage
+	lastCompletedRunDeprecatedCapture bool
+	lastCompletedRunDeprecatedMu      sync.RWMutex
+
 	// One-shot startup validation of configured model names.
 	validateModelsOnce sync.Once
 	validateModelsErr  error
@@ -1027,7 +1046,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	// canonical memory must not depend on creating a second record store.
 	if c.contextRepo != nil || c.memoryStore != nil {
 		c.coreTools = append(c.coreTools,
-			&memorySaveLTMWrapper{original: memory.NewMemorySaveTool(c.memoryStore), coordinator: c},
+			&memorySaveLTMWrapper{coordinator: c},
 			&canonicalMemoryQueryTool{coordinator: c},
 		)
 	}
