@@ -156,7 +156,7 @@ func TestPolicyGateInitialCoordinatorToolGetsOneCorrection(t *testing.T) {
 	}
 }
 
-func TestPolicyGateCoordinatorToolErrorResponseIsTerminal(t *testing.T) {
+func TestPolicyGateCoordinatorDispatchErrorResponseIsTerminal(t *testing.T) {
 	c := gateTestCoordinator()
 	c.taskTracker = NewTaskTracker()
 	inner := &recordingTool{name: "agent", resp: fantasy.NewTextErrorResponse("first delegation must contain exactly the configured initial batch")}
@@ -170,6 +170,26 @@ func TestPolicyGateCoordinatorToolErrorResponseIsTerminal(t *testing.T) {
 	}
 	if !inner.ran {
 		t.Fatal("inner tool should have run before its rejected delegation response")
+	}
+}
+
+func TestPolicyGateCoordinatorReadOnlyToolErrorIsRecoverable(t *testing.T) {
+	c := gateTestCoordinator()
+	c.taskTracker = NewTaskTracker()
+	inner := &recordingTool{name: "view", resp: fantasy.NewTextErrorResponse("path is a directory")}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"view"})
+	ctx = context.WithValue(ctx, todoIDKey{}, CoordTodoID)
+
+	response, err := gated.Run(ctx, fantasy.ToolCall{ID: "directory-view", Name: "view", Input: `{"file_path":".git"}`})
+	if err != nil {
+		t.Fatalf("read-only coordinator error should remain model-visible: %v", err)
+	}
+	if !response.IsError || !strings.Contains(response.Content, "directory") {
+		t.Fatalf("response = %+v, want recoverable read-only error", response)
+	}
+	if !inner.ran {
+		t.Fatal("read-only tool should have run")
 	}
 }
 

@@ -124,6 +124,22 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	call.Input = effectiveInput
 	response, err := t.inner.Run(ctx, call)
 	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID && (err != nil || response.IsError) {
+		if isReadOnlyToolCall(t.Info().Name, call.Input) {
+			// A failed observation has no side effect and its error is useful
+			// evidence to the coordinator (for example, view was given a
+			// directory and should be followed by ls). Let the model correct that
+			// bounded mistake. Delegation, finish, writes, policy denials, and any
+			// unknown tool remain hard coordinator boundaries below.
+			if err != nil {
+				detail := strings.TrimSpace(response.Content)
+				if detail != "" {
+					detail += ": "
+				}
+				detail += err.Error()
+				return fantasy.NewTextErrorResponse(detail), nil
+			}
+			return response, nil
+		}
 		detail := strings.TrimSpace(response.Content)
 		if err != nil {
 			if detail != "" {

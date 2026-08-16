@@ -109,7 +109,7 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 			},
 			"risks": map[string]any{
 				"type":        "array",
-				"description": "Identified risks or concerns.",
+				"description": "Identified risks or concerns for the final report. This is a non-blocking handoff field; use status=partial, failed, or blocked when the assigned task itself is incomplete.",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{

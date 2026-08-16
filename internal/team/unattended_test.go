@@ -405,17 +405,17 @@ func TestCoordinatorToolErrorTerminatesOrchestratorStream(t *testing.T) {
 		streamFunc: func(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
 			if err := call.OnToolCall(fantasy.ToolCallContent{
 				ToolCallID: "coordinator-grep-1",
-				ToolName:   "grep",
+				ToolName:   "agent",
 				Input:      `{"pattern":"--invalid"}`,
 			}); err != nil {
 				return nil, err
 			}
 
 			var errRes fantasy.ToolResultOutputContentError
-			errRes.Error = errors.New("rg: unrecognized flag --invalid")
+			errRes.Error = errors.New("delegation policy rejected task")
 			if err := call.OnToolResult(fantasy.ToolResultContent{
 				ToolCallID: "coordinator-grep-1",
-				ToolName:   "grep",
+				ToolName:   "agent",
 				Result:     errRes,
 			}); err != nil {
 				return nil, err
@@ -433,8 +433,83 @@ func TestCoordinatorToolErrorTerminatesOrchestratorStream(t *testing.T) {
 	if !errors.Is(err, errCoordinatorToolFailure) {
 		t.Errorf("expected coordinator tool failure, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), `tool "grep" failed`) {
+	if !strings.Contains(err.Error(), `tool "agent" failed`) {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestCoordinatorReadOnlyToolErrorContinuesOrchestratorStream(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	c.session.Workspace = t.TempDir()
+
+	ag := &mockAgent{streamFunc: func(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+		if err := call.OnToolCall(fantasy.ToolCallContent{
+			ToolCallID: "coordinator-view-1",
+			ToolName:   "view",
+			Input:      `{"file_path":".git"}`,
+		}); err != nil {
+			return nil, err
+		}
+		var errRes fantasy.ToolResultOutputContentError
+		errRes.Error = errors.New(".git is a directory")
+		if err := call.OnToolResult(fantasy.ToolResultContent{
+			ToolCallID: "coordinator-view-1",
+			ToolName:   "view",
+			Result:     errRes,
+		}); err != nil {
+			return nil, err
+		}
+		return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{
+			fantasy.TextContent{Text: "continued after read-only observation failure"},
+		}}}, nil
+	}}
+
+	ctx := context.WithValue(context.Background(), todoIDKey{}, CoordTodoID)
+	result, _, err := c.runAgentWithStatusAndHistory(ctx, ag, "coordinator", "coordinate task", nil, &taskTiming{})
+	if err != nil {
+		t.Fatalf("read-only coordinator error should not terminate stream: %v", err)
+	}
+	if !strings.Contains(result, "continued after read-only") {
+		t.Fatalf("result = %q, want continued response", result)
+	}
+}
+
+func TestCoordinatorTeamInfoErrorContinuesOrchestratorStream(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	c.session.Workspace = t.TempDir()
+
+	ag := &mockAgent{streamFunc: func(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+		if err := call.OnToolCall(fantasy.ToolCallContent{
+			ToolCallID: "coordinator-team-info-1",
+			ToolName:   "team_info",
+			Input:      `{"action":"unknown_action"}`,
+		}); err != nil {
+			return nil, err
+		}
+		var errRes fantasy.ToolResultOutputContentError
+		errRes.Error = errors.New("unknown team_info action: unknown_action")
+		if err := call.OnToolResult(fantasy.ToolResultContent{
+			ToolCallID: "coordinator-team-info-1",
+			ToolName:   "team_info",
+			Result:     errRes,
+		}); err != nil {
+			return nil, err
+		}
+		return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{
+			fantasy.TextContent{Text: "continued after team_info observation failure"},
+		}}}, nil
+	}}
+
+	ctx := context.WithValue(context.Background(), todoIDKey{}, CoordTodoID)
+	result, _, err := c.runAgentWithStatusAndHistory(ctx, ag, "coordinator", "coordinate task", nil, &taskTiming{})
+	if err != nil {
+		t.Fatalf("read-only team_info coordinator error should not terminate stream: %v", err)
+	}
+	if errors.Is(err, errCoordinatorToolFailure) {
+		t.Fatalf("team_info error must not be reported as a coordinator tool failure")
+	}
+	if !strings.Contains(result, "continued after team_info") {
+		t.Fatalf("result = %q, want continued response", result)
 	}
 }
 

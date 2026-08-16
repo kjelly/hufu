@@ -2442,15 +2442,18 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				})
 			}
 			// A worker can use a tool error as evidence and still produce a
-			// typed result for its bounded task. The coordinator has no such
-			// result contract: continuing after an unavailable tool, invalid
-			// arguments, or a failed direct tool call lets it make decisions
-			// from incomplete evidence. Stop this orchestrator turn after the
-			// failing receipt has been persisted instead.
+			// typed result for its bounded task. A coordinator normally cannot
+			// continue after a direct tool error: delegation, completion, writes,
+			// and unknown tools could leave cross-task state incomplete. A failed
+			// read-only observation is the deliberately narrow exception. It has
+			// no side effect and the model receives the error result, so it can
+			// select the correct observation tool (for example ls after view was
+			// given a directory) without restarting an otherwise successful run.
 			if todoID == CoordTodoID && isErrResult {
 				trimmedResult := strings.TrimSpace(resultPreview)
 				if strings.HasPrefix(trimmedResult, "Tool argument schema violation:") ||
-					c.isInitialToolCorrectionResult(tr.ToolName, trimmedResult) {
+					c.isInitialToolCorrectionResult(tr.ToolName, trimmedResult) ||
+					isReadOnlyToolCall(tr.ToolName, callInput) {
 					// Allow protocol repair prompt to reach the model; it is
 					// explicitly formulated as an error result block so the LLM
 					// knows it must retry. Initial-tool correction is likewise a
