@@ -639,6 +639,43 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 	}
 }
 
+func TestReadOnlyFreeTextWorkerCapturesTranscriptEvidence(t *testing.T) {
+	workspace := t.TempDir()
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config: agent.TeamConfig{
+				Name:                 "read-only-free-text",
+				Timeout:              30,
+				MaxRetries:           1,
+				AllowFreeTextResults: true,
+			},
+			Agents: map[string]*agent.AgentDef{
+				"reviewer": {Name: "reviewer", Role: "worker", SideEffect: string(SideEffectNone), Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-read-only-free-text",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "review changes"}})[0]
+	c.workerAgentOverride = &mockWorkerTextAgent{text: "[WARNING] internal/team/example.go:1 — review finding"}
+
+	output, err := c.executeTask(context.Background(), TaskDef{Agent: "reviewer", Goal: "review changes"}, item.ID)
+	if err != nil {
+		t.Fatalf("executeTask returned error: %v", err)
+	}
+	if !strings.Contains(output, "review finding") {
+		t.Fatalf("output = %q, want original free-text result", output)
+	}
+	got := c.taskTracker.TodoList().Items()[0]
+	if got.ExecutionReceipt == nil || got.ExecutionReceipt.TranscriptRef == "" {
+		t.Fatalf("read-only free-text completion must retain transcript evidence: %#v", got.ExecutionReceipt)
+	}
+}
+
 func TestProtocolRepair_StepBudgetExhaustionUsesResultOnlyFinalization(t *testing.T) {
 	workspace := t.TempDir()
 	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })

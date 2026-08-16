@@ -799,6 +799,34 @@ func TestEnsureFinishedTerminalUnresolvedDoesNotSpendAnotherLLMTurn(t *testing.T
 	}
 }
 
+func TestEnsureFinishedCompletesWhenAllTasksDoneButCoordinatorOmitsFinish(t *testing.T) {
+	tracker := NewTaskTracker()
+	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "reader", Desc: "read-only review"}})[0]
+	tracker.TodoList().UpdateStatusAndOutput(item.ID, TaskDone, "summary", "review evidence")
+	c := &Coordinator{
+		session:     &TeamSession{Config: agent.TeamConfig{Name: "deterministic-finish", MaxCoordinatorTurns: 1, AcceptanceSpec: &agent.AcceptanceSpec{RequireNoUnresolvedTasks: true}}},
+		sessionData: NewSession(),
+		taskTracker: tracker,
+		acceptanceSpec: &AcceptanceSpec{
+			RequireNoUnresolvedTasks: true,
+		},
+	}
+	c.runOrchestratorOverride = func(context.Context, *agent.AgentDef, string) (string, []fantasy.StepResult, error) {
+		return "I will call finish now.", nil, nil
+	}
+
+	result, _ := c.ensureFinished(context.Background(), &agent.AgentDef{Name: "coordinator"}, "narration", nil)
+	if !c.finishCalled.Load() {
+		t.Fatal("deterministic completion must mark finish called")
+	}
+	if !strings.Contains(result, "review evidence") {
+		t.Fatalf("result = %q, want durable task output", result)
+	}
+	if run := c.LastRunResult(); run == nil || !IsRunOutcomeSuccess(run.Outcome) {
+		t.Fatalf("run result = %#v, want successful deterministic completion", run)
+	}
+}
+
 func TestAttemptWrapUpRecoveryTerminalUnresolvedDoesNotSpendAnotherLLMTurn(t *testing.T) {
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "blocked checkpoint"}})[0]

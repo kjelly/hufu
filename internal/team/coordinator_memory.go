@@ -47,7 +47,7 @@ func (c *Coordinator) ArchiveSessionSummary(ctx context.Context, entries []memor
 }
 
 func (c *Coordinator) buildMemorySuffixImpl(agentRole string) string {
-	if c.ExecutionProfile().DisableHistoricalMemory {
+	if c.historicalMemoryDisabled() {
 		return ""
 	}
 	// Canonical prompt assembly supplies SQLite-backed STM/LTM separately.
@@ -114,7 +114,7 @@ func (c *Coordinator) buildTaskSTMContext() string {
 }
 
 func (c *Coordinator) buildTaskSTMContextImpl() string {
-	if c.ExecutionProfile().DisableHistoricalMemory {
+	if c.historicalMemoryDisabled() {
 		return ""
 	}
 	rawSTM := LoadSTM(c.session.Workspace)
@@ -150,7 +150,7 @@ func (c *Coordinator) buildLTMContext() string {
 }
 
 func (c *Coordinator) buildLTMContextImpl() string {
-	if c.ExecutionProfile().DisableHistoricalMemory {
+	if c.historicalMemoryDisabled() {
 		return ""
 	}
 	rawLTM := LoadLTM(c.session.Workspace, c.session.Config.Name)

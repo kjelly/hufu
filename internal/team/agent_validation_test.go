@@ -51,6 +51,51 @@ func TestExecuteTasks_AgentValidation(t *testing.T) {
 	}
 }
 
+func TestAllowsFreeTextWorkerResultOnlyForExplicitReadOnlyAgent(t *testing.T) {
+	c := &Coordinator{session: &TeamSession{
+		Config: agent.TeamConfig{AllowFreeTextResults: true},
+		Agents: map[string]*agent.AgentDef{
+			"reader": {Name: "reader", Role: "worker", Tools: "view", SideEffect: "none"},
+			"writer": {Name: "writer", Role: "worker", Tools: "write", SideEffect: "workspace_write"},
+		},
+	}}
+	if !c.allowsFreeTextWorkerResult(TaskDef{Agent: "reader", Goal: "review"}) {
+		t.Fatal("explicit read-only agent should permit free-text result")
+	}
+	if c.allowsFreeTextWorkerResult(TaskDef{Agent: "reader", Goal: "edit", SideEffect: SideEffectWorkspaceWrite}) {
+		t.Fatal("workspace-write task must retain structured result requirement")
+	}
+	if c.allowsFreeTextWorkerResult(TaskDef{Agent: "writer", Goal: "edit"}) {
+		t.Fatal("mutating agent must retain structured result requirement")
+	}
+	c.session.Config.AllowFreeTextResults = false
+	if c.allowsFreeTextWorkerResult(TaskDef{Agent: "reader", Goal: "review"}) {
+		t.Fatal("team opt-in is required for free-text result")
+	}
+}
+
+func TestFreeTextResultNeedsSummaryOnlyForInvalidFinalOutput(t *testing.T) {
+	if !freeTextResultNeedsSummary(TaskDef{}, "Let me inspect one more file") {
+		t.Fatal("unfinished narration should require a summary repair")
+	}
+	if !freeTextResultNeedsSummary(TaskDef{}, "   ") {
+		t.Fatal("empty output should require a summary repair")
+	}
+	if freeTextResultNeedsSummary(TaskDef{}, "### Findings\n\nNo blocking issues identified.") {
+		t.Fatal("a complete review report should not require a summary repair")
+	}
+}
+
+func TestIncompleteReadOnlyReviewSummaryIsExplicitAndComplete(t *testing.T) {
+	summary := incompleteReadOnlyReviewSummary(20)
+	if !strings.Contains(summary, "incomplete") || !strings.Contains(summary, "20 inspection step") {
+		t.Fatalf("summary = %q, want explicit incomplete evidence", summary)
+	}
+	if err := validateTaskOutput(TaskDef{}, summary); err != nil {
+		t.Fatalf("fallback summary must be a valid final output: %v", err)
+	}
+}
+
 func TestExecuteTasks_AcceptanceRecoveryCanDelegateDuringWrapUp(t *testing.T) {
 	c := &Coordinator{
 		session: &TeamSession{Agents: map[string]*agent.AgentDef{}, Config: agent.TeamConfig{}},

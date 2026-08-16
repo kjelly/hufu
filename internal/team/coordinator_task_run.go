@@ -68,6 +68,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		return "", err
 	}
 	agentName := strings.ToLower(agentDef.Name)
+	resolvedSideEffect, _, _ := resolveTaskRecovery(agentDef, task)
 
 	if len(agentDef.MCPTools) > 0 {
 		defer func() {
@@ -278,10 +279,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	var canonicalMemory *CanonicalContextBundle
 	canonical := false
 	request := c.newTaskContextRequest(task, todoID, 1, ContextTriggerTaskDispatch, agentName, agentDef.Role, nil)
-	if !c.ExecutionProfile().DisableHistoricalMemory {
+	if !c.historicalMemoryDisabled() {
 		canonical = c.contextRepo != nil
 	}
-	if !c.ExecutionProfile().DisableHistoricalMemory && !canonical {
+	if !c.historicalMemoryDisabled() && !canonical {
 		rawSTM, rawLTM, memoryStore = LoadSTM(c.session.Workspace), LoadLTM(c.session.Workspace, c.session.Config.Name), c.memoryStore
 	}
 	workerInput := buildWorkerContextInput(request, task, agentDef, approvedPlan, instructions, verificationCriteria, runtimeContext, skillContext)
@@ -294,7 +295,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	workerInput.CanonicalMemory = canonicalMemory
 	workerInput.ModelContext = modelSpec
 	workerInput.MaxAuxChars = maxWorkerAuxContextChars
-	workerInput.DisableMemory = c.ExecutionProfile().DisableHistoricalMemory
+	workerInput.DisableMemory = c.historicalMemoryDisabled()
 	legacyPrompt := strings.Join([]string{task.Goal, task.Constraints, approvedPlan, instructions, verificationCriteria, runtimeContext}, "\n\n")
 
 	var conversationHistory []fantasy.Message
@@ -351,10 +352,13 @@ retryLoop:
 				transcript = nil
 			}
 		}
-		if taskUsesVerbatimTranscript(task) || task.Execution.RequiresResult {
+		if taskUsesVerbatimTranscript(task) || task.Execution.RequiresResult || c.allowsFreeTextWorkerResult(task) {
 			// Each attempt gets its own immutable transcript. The repair agent
 			// is intentionally given no recorder, so it cannot alter this
-			// execution evidence.
+			// execution evidence. Explicitly opted-in read-only free-text workers
+			// need the same runner-owned evidence: their provider may omit
+			// submit_result, but its prose must not become accepted completion
+			// without an auditable record of the inspection that produced it.
 			transcript, err = newTaskTranscriptForAttempt(c.session.Workspace, todoID, c.executionRunID, attempt)
 			if err != nil {
 				return "", err
@@ -436,7 +440,7 @@ retryLoop:
 			}
 		}
 		var routeDecisions []ContextRouteDecision
-		if canonical && !c.ExecutionProfile().DisableHistoricalMemory {
+		if canonical && !c.historicalMemoryDisabled() {
 			bundle, decisions, _, routeErr := c.canonicalContextBundleForRequest(parentCtx, request)
 			if routeErr != nil {
 				closeTranscript()
@@ -545,6 +549,9 @@ retryLoop:
 			if allowedPaths := c.runtimeAllowedPaths(agentDef.AllowedPaths); len(allowedPaths) > 0 {
 				taskCtx = context.WithValue(taskCtx, tools.AgentAllowedPathsKey, allowedPaths)
 			}
+			if resolvedSideEffect == SideEffectNone {
+				taskCtx = context.WithValue(taskCtx, tools.AgentReadOnlyExecutionKey, true)
+			}
 			if writePaths := c.runtimeAllowedWritePaths(); len(writePaths) > 0 {
 				taskCtx = context.WithValue(taskCtx, tools.AgentAllowedWritePathsKey, writePaths)
 			}
@@ -614,15 +621,23 @@ retryLoop:
 					ag = attemptResult.agent
 				}
 			}
-			if err == nil && !task.Execution.RequiresResult && strings.TrimSpace(output) == "" && len(steps) > 0 {
-				// The agent worked but never wrote a final message — almost
-				// always the step cap cutting it off mid-diagnosis. Give it one
-				// tool-free turn to summarize instead of failing the task and
-				// re-running everything from scratch. Requires-result workers
-				// instead receive the dedicated result-only finalization turn
-				// below, where submit_result is the sole exposed tool.
-				if rescued := c.rescueFinalSummary(taskCtx, ag, agentName, steps, timing); rescued != "" {
+			if err == nil && !task.Execution.RequiresResult && len(steps) > 0 &&
+				(strings.TrimSpace(output) == "" || (c.allowsFreeTextWorkerResult(task) && freeTextResultNeedsSummary(task, output))) {
+				// The agent worked but did not produce an acceptable final message.
+				// Give it one genuinely tool-free turn to summarize instead of
+				// accepting a mid-narration fragment or re-running inspection from
+				// scratch. Requires-result workers instead receive the dedicated
+				// result-only finalization turn below, where submit_result is the
+				// sole exposed tool.
+				if rescued := c.rescueFinalSummary(taskCtx, ag, agentName, agentDef, resolvedModel, steps, timing); rescued != "" {
 					output = rescued
+				} else if c.allowsFreeTextWorkerResult(task) {
+					// This is an explicitly opted-in, read-only review task. Its
+					// transcript remains the evidence, while this deterministic
+					// result makes the limitation visible to the coordinator without
+					// inventing a success claim or failing the entire review solely
+					// because a provider returned no final text.
+					output = incompleteReadOnlyReviewSummary(len(steps))
 				}
 			}
 		}()
@@ -1746,16 +1761,48 @@ func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, 
 	return output, nil
 }
 
+// freeTextResultNeedsSummary recognizes the only outputs the opt-in free-text
+// compatibility mode may repair: blank output and a short, unfinished
+// narration. It intentionally does not soften normal completion validation.
+func freeTextResultNeedsSummary(task TaskDef, output string) bool {
+	return validateTaskOutput(task, output) != nil
+}
+
+func incompleteReadOnlyReviewSummary(stepCount int) string {
+	return fmt.Sprintf("Review evidence is incomplete: the read-only worker used %d inspection step(s) but the provider returned no final report. The task transcript preserves the inspected commands and outputs; treat this reviewer as inconclusive rather than as evidence of no findings.", stepCount)
+}
+
 // rescueFinalSummary gives an agent that stopped without a final message one
-// tool-free turn (its full step history attached) to summarize what it did.
-// Returns "" when the rescue itself fails or produces nothing.
-func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, agentName string, steps []fantasy.StepResult, timing *taskTiming) string {
+// genuinely tool-free turn (its full step history attached) to summarize what
+// it did. Returns "" when the rescue itself fails or produces nothing.
+func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, agentName string, agentDef *agent.AgentDef, resolvedModel string, steps []fantasy.StepResult, timing *taskTiming) string {
 	if ctx.Err() != nil {
 		return ""
+	}
+	// Rebuild the agent with no tools. Merely telling the original agent not to
+	// call tools is insufficient: a model that hit its step limit often makes
+	// another tool call instead of writing the requested summary.
+	if c.workerAgentOverride == nil {
+		provider, providerErr := c.ModelRuntime().ProviderFor(resolvedModel)
+		if providerErr != nil || agentDef == nil {
+			return ""
+		}
+		def := c.injectWorkerContext(ctx, agentDef)
+		rescueAgent, createErr := c.createGatedAgent(ctx, provider, agent.AgentConfig{
+			Def:        def,
+			TeamConfig: &c.session.Config,
+			WorkDir:    c.projectDir,
+			MaxSteps:   1,
+		}, nil)
+		if createErr != nil {
+			return ""
+		}
+		ag = rescueAgent
 	}
 	// The rescue stream has no separate execution receipt; account its usage
 	// directly in the no-progress budget.
 	ctx = context.WithValue(ctx, llmUsageReceiptExpectedKey{}, false)
+	ctx = context.WithValue(ctx, tools.AgentToolsAllowedKey, []string{})
 	var history []fantasy.Message
 	for _, step := range steps {
 		history = append(history, step.Messages...)

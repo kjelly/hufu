@@ -119,7 +119,7 @@ func (c *Coordinator) selectTaskModel(task TaskDef, defs ...*agent.AgentDef) str
 			}
 		}
 		contextChars += len(c.loadProjectContext())
-		if !c.ExecutionProfile().DisableHistoricalMemory {
+		if !c.historicalMemoryDisabled() {
 			if bundle, canonical, err := c.canonicalContextBundle(context.Background()); err == nil && canonical {
 				for _, item := range append(bundle.SharedSession, bundle.SharedPersistent...) {
 					contextChars += len(item.Content)

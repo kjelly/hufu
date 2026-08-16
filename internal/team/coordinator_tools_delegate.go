@@ -283,7 +283,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	workerInput := buildWorkerContextInput(request, taskDef, agentDef, "", instructions, "", "", skills)
 	workerInput.ModelContext = globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef))
 	workerInput.MaxAuxChars = maxWorkerAuxContextChars
-	workerInput.DisableMemory = c.ExecutionProfile().DisableHistoricalMemory
+	workerInput.DisableMemory = c.historicalMemoryDisabled()
 	var routeDecisions []ContextRouteDecision
 	if !workerInput.DisableMemory {
 		bundle, decisions, canonical, routeErr := c.canonicalContextBundleForRequest(ctx, request)

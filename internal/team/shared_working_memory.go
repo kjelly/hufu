@@ -45,7 +45,7 @@ type VerificationFailureInput struct {
 // best-effort like the prior STM write: it is observable and queued for
 // repair, but never changes an already-verified task into a failed task.
 func (c *Coordinator) reduceTaskResultToSharedMemory(ctx context.Context, input TaskResultMemoryInput) {
-	if c == nil || c.contextRepo == nil || c.session == nil || c.ExecutionProfile().DisableHistoricalMemory {
+	if c == nil || c.contextRepo == nil || c.session == nil || c.historicalMemoryDisabled() {
 		return
 	}
 	runID := c.executionRunID
@@ -171,7 +171,7 @@ func (c *Coordinator) reduceTaskResultToSharedMemory(ctx context.Context, input 
 // ContextProgress. A repository write failure is observable and queued for
 // repair, but never changes the already-failed task's status.
 func (c *Coordinator) recordVerificationFailure(ctx context.Context, input VerificationFailureInput) {
-	if c == nil || c.contextRepo == nil || c.session == nil || c.ExecutionProfile().DisableHistoricalMemory {
+	if c == nil || c.contextRepo == nil || c.session == nil || c.historicalMemoryDisabled() {
 		return
 	}
 	runID := c.executionRunID

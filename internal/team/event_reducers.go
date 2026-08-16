@@ -538,6 +538,14 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		}
 		if hasFailureEvent {
 			item.FailureEvent, _ = mergeFailureEventJSON(item.FailureEvent, e.Payload)
+			// Older terminal task events may carry the fingerprint in the
+			// canonical fingerprint list but omit it from the nested failure
+			// payload. Preserve the invariant that the projected failure packet
+			// identifies the same durable failure, rather than producing a
+			// checkpoint/event-store divergence on restart.
+			if item.FailureEvent != nil && item.FailureEvent.Fingerprint == "" && len(item.FailureFingerprints) > 0 {
+				item.FailureEvent.Fingerprint = item.FailureFingerprints[len(item.FailureFingerprints)-1].Digest
+			}
 		}
 		if len(payload.ExecutionReceipts) > 0 {
 			item.ExecutionReceipts = mergeExecutionReceipts(item.ExecutionReceipts, payload.ExecutionReceipts)

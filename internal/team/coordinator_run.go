@@ -61,6 +61,9 @@ func (c *Coordinator) buildDirectAgentTaskContext(ctx context.Context, agentDef 
 	if allowedPaths := c.runtimeAllowedPaths(agentDef.AllowedPaths); len(allowedPaths) > 0 {
 		taskCtx = context.WithValue(taskCtx, tools.AgentAllowedPathsKey, allowedPaths)
 	}
+	if strings.EqualFold(strings.TrimSpace(agentDef.SideEffect), string(SideEffectNone)) {
+		taskCtx = context.WithValue(taskCtx, tools.AgentReadOnlyExecutionKey, true)
+	}
 	if writePaths := c.runtimeAllowedWritePaths(); len(writePaths) > 0 {
 		taskCtx = context.WithValue(taskCtx, tools.AgentAllowedWritePathsKey, writePaths)
 	}
@@ -329,7 +332,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	// the actual retrieval query to its retrieval ID (spec §5.1, §7
 	// HF-MEM4-005).
 	retrievalQuery := request.RetrievalQuery()
-	if !c.ExecutionProfile().DisableHistoricalMemory {
+	if !c.historicalMemoryDisabled() {
 		bundle, decisions, foundCanonical, memoryErr := c.canonicalContextBundleForRequest(taskCtx, request)
 		if memoryErr != nil {
 			// Canonical memory preflight failed before any round was registered
@@ -350,14 +353,14 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		}
 		canonical, canonicalMemory, routeDecisions = foundCanonical, bundle, decisions
 	}
-	if !c.ExecutionProfile().DisableHistoricalMemory && !canonical {
+	if !c.historicalMemoryDisabled() && !canonical {
 		rawSTM, rawLTM, memoryStore = LoadSTM(c.session.Workspace), LoadLTM(c.session.Workspace, c.session.Config.Name), c.memoryStore
 	}
 	workerInput := buildWorkerContextInput(request, syntheticTask, agentDef, "", instructions, "", "", skillContext)
 	workerInput.RawSTM, workerInput.RawLTM, workerInput.MemoryStore, workerInput.CanonicalMemory = rawSTM, rawLTM, memoryStore, canonicalMemory
 	workerInput.ModelContext = globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef))
 	workerInput.MaxAuxChars = maxWorkerAuxContextChars
-	workerInput.DisableMemory = c.ExecutionProfile().DisableHistoricalMemory
+	workerInput.DisableMemory = c.historicalMemoryDisabled()
 	// WP-3: recall per-worker private memory before direct-agent dispatch.
 	if memBundle := c.recallWorkerMemory(taskCtx, agentDef, retrievalQuery); memBundle != nil {
 		workerInput.WorkerMemory = memBundle
@@ -980,6 +983,19 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 			}
 		}
 	}
+	if c.canDeterministicallyFinishCompletedTasks(ctx) {
+		// The coordinator has no remaining work to authorize or verify: every
+		// delegated task already reached a successful terminal state. Some
+		// tool-weak models nevertheless keep narrating that they will call
+		// finish without ever emitting the tool call. Finish deterministically
+		// from the durable task outputs rather than reporting a false unresolved
+		// run. Failed, blocked, pending, or in-progress tasks never enter this
+		// path and therefore retain the usual fail-closed behavior.
+		result = c.completedTasksSummary()
+		continuationReason = "coordinator omitted finish after all tasks completed; deterministic summary used"
+		c.finishCalled.Store(true)
+		c.report(c.newEvent("wrap_up_phase").withMessage(continuationReason).withTodoID(CoordTodoID))
+	}
 
 	if c.LastRunResult() == nil {
 		accRes, accErr := c.runAcceptance(ctx)
@@ -1029,6 +1045,45 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 	}
 
 	return result, steps
+}
+
+func (c *Coordinator) allTasksCompletedSuccessfully() bool {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return false
+	}
+	items := c.taskTracker.TodoList().Items()
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		if item == nil || (item.Status != TaskDone && item.Status != TaskSkipped) {
+			return false
+		}
+	}
+	return true
+}
+
+// canDeterministicallyFinishCompletedTasks permits the narrow provider-
+// compatibility completion path only when all durable worker state already
+// proves successful completion. It deliberately excludes failures, blocks,
+// and in-flight work so those cases retain the normal fail-closed outcome.
+func (c *Coordinator) canDeterministicallyFinishCompletedTasks(ctx context.Context) bool {
+	return c != nil && !c.finishCalled.Load() && ctx.Err() == nil && c.allTasksCompletedSuccessfully()
+}
+
+func (c *Coordinator) completedTasksSummary() string {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("All delegated tasks completed. The coordinator did not call finish, so this report was assembled from durable task outputs.\n")
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item == nil || item.Status != TaskDone {
+			continue
+		}
+		fmt.Fprintf(&b, "\n### %s: %s\n%s\n", item.Agent, item.Desc, utils.TruncateRunes(item.Output, summaryMaxRunes))
+	}
+	return b.String()
 }
 
 // canResumeInterruptedWorkflow reports whether a provider interruption can
@@ -1414,7 +1469,7 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 	// historical source out of the coordinator's first-turn context until the
 	// initial batch is accepted; the phase prompt and narrowed agent schema are
 	// then the sole normative dispatch inputs.
-	allowHistoricalMemory := !c.ExecutionProfile().DisableHistoricalMemory && !c.initialDelegationPending()
+	allowHistoricalMemory := !c.historicalMemoryDisabled() && !c.initialDelegationPending()
 	var contextSummary string
 	if !isContinuation && allowHistoricalMemory && c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
 		contextSummary = c.sessionData.ContextSummary()
