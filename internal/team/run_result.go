@@ -578,6 +578,8 @@ type RunMetrics struct {
 	TasksByCriterion                  map[string]int              `json:"tasks_by_criterion,omitempty"`
 	ProtocolRepairsAttempted          int                         `json:"protocol_repairs_attempted,omitempty"`
 	ProtocolRepairsSucceeded          int                         `json:"protocol_repairs_succeeded,omitempty"`
+	CoordinatorPolicyRepairsAttempted int                         `json:"coordinator_policy_repairs_attempted,omitempty"`
+	CoordinatorPolicyRepairsSucceeded int                         `json:"coordinator_policy_repairs_succeeded,omitempty"`
 	ProtocolRepairFailuresByReason    map[RepairFailureReason]int `json:"protocol_repair_failures_by_reason,omitempty"`
 	// StepBudgetExhaustions counts attempts cut off by the step budget. They also
 	// appear as protocol failures (the worker omitted its result), so this

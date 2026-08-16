@@ -48,6 +48,23 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 	if err := c.validateTaskGoalInvariants(tasks); err != nil {
 		return err
 	}
+	if c.coordinatorPolicyRepairsAttempt.Load() > 0 {
+		completed := make(map[string]bool)
+		for _, item := range items {
+			if item != nil && item.Status == TaskDone {
+				completed[strings.ToLower(strings.TrimSpace(item.Agent))] = true
+			}
+		}
+		var duplicates []string
+		for _, task := range tasks {
+			if completed[strings.ToLower(strings.TrimSpace(task.Agent))] {
+				duplicates = append(duplicates, task.Agent)
+			}
+		}
+		if len(duplicates) > 0 {
+			return c.rejectDelegationPolicy(fmt.Sprintf("policy repair may dispatch only unfinished workers; completed workers may not be redispatched: %s", formatAgentNames(duplicates)))
+		}
+	}
 	if len(policy.NoRedispatchAfterSuccess) == 0 {
 		return c.validateContextFilePolicy(tasks)
 	}
@@ -385,7 +402,7 @@ func (c *Coordinator) rejectDelegationPolicy(message string) error {
 	// policy_decision is persisted by the normal event pipeline, providing
 	// terminal evidence without changing prior task state or cancelling work.
 	c.report(c.newEvent("policy_decision").withMessage("delegation rejected: " + message))
-	return fmt.Errorf("delegation policy violation: %s", message)
+	return &delegationPolicyViolation{message: message}
 }
 
 func sameAgentSequence(tasks []TaskDef, want []string) bool {

@@ -202,6 +202,9 @@ func usageWithProgressTokens(steps []fantasy.StepResult, attemptTokens *attemptB
 }
 
 func (c *Coordinator) beginExecutionRun() func() {
+	c.coordinatorPolicyRepairsAttempt.Store(0)
+	c.coordinatorPolicyRepairsSuccess.Store(0)
+	c.coordinatorPolicyRepairPending.Store(false)
 	// A resumed coordinator may hold the previous run's result in memory. It
 	// must never leak that completed outcome into this run's run_finished event
 	// when the new run stops during acceptance or before finish.

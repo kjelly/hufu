@@ -84,7 +84,7 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 			if t.coordinator.initialDelegationPending() {
 				return fmt.Sprintf("Dispatch the required canonical initial batch %s. This is the only valid delegation while phase is initial_pending; malformed or later-worker calls are rejected by policy.", formatAgentNames(t.coordinator.session.Config.Delegation.InitialBatch))
 			}
-			return "Delegate new tasks to team workers. Runs all tasks in parallel and returns structured results. Never redispatch a worker whose task already completed successfully; use team_info with action=task_result to read that task's full result instead. A successful-worker redispatch is rejected by policy and is terminal for the current coordination step."
+			return "Delegate new tasks to team workers. Runs all tasks in parallel and returns structured results. Never redispatch a worker whose task already completed successfully; use team_info with action=task_result to read that task's full result instead. A policy violation receives a deterministic repair instruction: dispatch only unfinished work or call finish."
 		}(),
 		Parameters: map[string]any{
 			"tasks": tasksSchema,
@@ -114,10 +114,18 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 
 	result, err := t.coordinator.ExecuteTasks(ctx, args.Tasks)
 	if err != nil {
+		var violation *delegationPolicyViolation
+		if errors.As(err, &violation) {
+			return t.coordinator.coordinatorPolicyRepairResponse(violation), nil
+		}
 		if t.coordinator.terminalUnresolvedRun() {
 			return terminalUnresolvedWorkerResponse(t.coordinator), nil
 		}
 		return renderRunAgentsToolResponse(result, err), nil
+	}
+	if t.coordinator.coordinatorPolicyRepairPending.Load() {
+		t.coordinator.coordinatorPolicyRepairPending.Store(false)
+		t.coordinator.coordinatorPolicyRepairsSuccess.Add(1)
 	}
 	return fantasy.NewTextResponse(result), nil
 }
@@ -292,6 +300,7 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 			t.coordinator.SetLastRunResult(&preserved)
 		}
 		t.coordinator.finishCalled.Store(true)
+		t.coordinator.coordinatorPolicyRepairPending.Store(false)
 		return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
 	}
 
@@ -370,6 +379,7 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	_ = t.coordinator.FinalizeRun(ctx, &evaluated, accRes)
 
 	t.coordinator.finishCalled.Store(true)
+	t.coordinator.coordinatorPolicyRepairPending.Store(false)
 	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
 }
 

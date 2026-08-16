@@ -68,6 +68,8 @@ func (c *Coordinator) Metrics() RunMetrics {
 		accumulateTodoMetrics(&metrics, c.taskTracker.TodoList().Items())
 		metrics.ProtocolRepairsAttempted += int(c.coordinatorProtocolRepairsAttempt.Load())
 		metrics.ProtocolRepairsSucceeded += int(c.coordinatorProtocolRepairsSuccess.Load())
+		metrics.CoordinatorPolicyRepairsAttempted = int(c.coordinatorPolicyRepairsAttempt.Load())
+		metrics.CoordinatorPolicyRepairsSucceeded = int(c.coordinatorPolicyRepairsSuccess.Load())
 		accumulateFailureEventMetrics(&metrics, c.failureEventsForMetrics(c.taskTracker.TodoList().Items()))
 	}
 	if metrics.TasksWithVerifier > 0 {

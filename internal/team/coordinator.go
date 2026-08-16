@@ -264,6 +264,9 @@ type Coordinator struct {
 	initialPrompt                     string
 	coordinatorProtocolRepairsAttempt atomic.Int32
 	coordinatorProtocolRepairsSuccess atomic.Int32
+	coordinatorPolicyRepairsAttempt   atomic.Int32
+	coordinatorPolicyRepairsSuccess   atomic.Int32
+	coordinatorPolicyRepairPending    atomic.Bool
 	contextRequestSeq                 atomic.Uint64
 	initialToolCorrections            atomic.Int32
 	projectDir                        string

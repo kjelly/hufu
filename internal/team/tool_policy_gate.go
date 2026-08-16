@@ -50,6 +50,13 @@ func (t *policyGatedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
 }
 
 func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	if t.coordinator != nil && t.coordinator.coordinatorPolicyRepairPending.Load() {
+		todoID, _ := ctx.Value(todoIDKey{}).(string)
+		if todoID == CoordTodoID && t.Info().Name != "agent" && t.Info().Name != "finish" {
+			t.coordinator.wrapUp.Store(1)
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("%s only agent (unfinished delegation) or finish is permitted after a policy violation; tool %q was not executed", coordinatorPolicyRepairExhaustedPrefix, t.Info().Name)), nil
+		}
+	}
 	agentName, _ := ctx.Value(tools.AgentNameKey).(string)
 	denial, fatal := t.coordinator.authorizeToolInvocation(ctx, agentName, t.Info().Name)
 	if fatal != nil {

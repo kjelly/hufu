@@ -102,7 +102,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		agentTimeout = 600 * time.Second
 	}
 
-	maxRetries := c.effectiveWorkerMaxAttempts(agentDef)
+	maxAttempts := c.effectiveWorkerMaxAttempts(agentDef)
 
 	if err := c.CommitTaskTransition(parentCtx, todoID, TaskPending, TaskInProgress, "", "", nil); err != nil {
 		return "", fmt.Errorf("mark task started: %w", err)
@@ -348,7 +348,6 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// weaken the normal fail-closed rule for any uncertain or mutating attempt.
 	protocolCapabilityRetryUsed := false
 	protocolFallbackModel := ""
-	maxAttempts := maxRetries
 retryLoop:
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		attemptsMade = attempt
@@ -492,14 +491,14 @@ retryLoop:
 		c.recordExecutionEvent(todoID, agentName, attempt, "in_progress", resolvedModel, 0, ExecutionUsage{})
 		currentPrompt := compiled.Prompt
 		if attempt > 1 {
-			detail := fmt.Sprintf("retry %d/%d", attempt, maxRetries)
+			detail := fmt.Sprintf("attempt %d/%d", attempt, maxAttempts)
 			if err := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskInProgress, detail, "", nil); err != nil {
 				closeTranscript()
 				return "", fmt.Errorf("mark retry task started: %w", err)
 			}
 			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retry %d/%d — continuing from previous progress", attempt, maxRetries)))
+			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d/%d — continuing from previous progress", attempt, maxAttempts)))
 			if protocolFallbackModel != "" {
 				resolvedModel = protocolFallbackModel
 				protocolFallbackModel = ""
@@ -856,6 +855,16 @@ retryLoop:
 					// progress update, not a final outcome) and must not count
 					// toward protocol repair statistics.
 					repairReason, reclassifyExecution := classifyRepairFailure(repairSteps, typedRes)
+					if reclassifyExecution && acceptsIncompleteReadOnlyAnalysis(task, resolvedSideEffect, steps, typedRes) {
+						// A read-only analysis can be a useful handoff even when the
+						// worker honestly reports a remaining verification gap. Preserve
+						// that distinction without ever applying it to a mutating task.
+						typedRes.Status = TaskResultStatusCompletedWithGaps
+						c.storeSubmittedTaskResult(todoID, typedRes)
+						repairSuccess = true
+						repairReason = ""
+						reclassifyExecution = false
+					}
 					repairAttempts = append(repairAttempts, RepairAttemptProvenance{
 						Attempt:         1,
 						Success:         repairSuccess,
@@ -873,6 +882,13 @@ retryLoop:
 						schemaRepairSteps := runRepair(schemaRepairPrompt)
 						repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateSubmittedTaskResult(typedRes) == nil
 						repairReason, reclassifyExecution = classifyRepairFailure(schemaRepairSteps, typedRes)
+						if reclassifyExecution && acceptsIncompleteReadOnlyAnalysis(task, resolvedSideEffect, steps, typedRes) {
+							typedRes.Status = TaskResultStatusCompletedWithGaps
+							c.storeSubmittedTaskResult(todoID, typedRes)
+							repairSuccess = true
+							repairReason = ""
+							reclassifyExecution = false
+						}
 						repairAttempts = append(repairAttempts, RepairAttemptProvenance{
 							Attempt:         2,
 							Success:         repairSuccess,
@@ -1119,7 +1135,7 @@ retryLoop:
 			SideEffect:          task.SideEffect,
 			RecoveryPolicy:      resolvedPolicy,
 			Attempt:             attempt,
-			MaxRetries:          maxRetries,
+			MaxRetries:          maxAttempts,
 			EvidenceComplete:    computeEvidenceComplete(task, transcriptRef, steps, output),
 			FailureFingerprint:  currentFingerprint,
 			PreviousFingerprint: lastFingerprint,
@@ -1147,7 +1163,7 @@ retryLoop:
 		repairDecision := c.RepairController().Decide(RepairRequest{
 			Task:            task,
 			Attempt:         attempt,
-			MaxAttempts:     maxRetries,
+			MaxAttempts:     maxAttempts,
 			BudgetExhausted: parentCtx.Err() != nil,
 		})
 		_ = c.emitEvent("repair_decision", "repair_controller", todoID, map[string]interface{}{
@@ -1267,10 +1283,10 @@ retryLoop:
 			// itself (reviewer P2).
 			prevErr := lastErr
 			lastErr = err
-			if isUnfixableVerifyFailure(err) && attempt < maxRetries {
+			if isUnfixableVerifyFailure(err) && attempt < maxAttempts {
 				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d hit a verify command that cannot be fixed by retrying (wrong exit-code polarity)", attempt)).withTodoID(todoID))
 				c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("verify command has unfixable wrong polarity after %d attempt(s): %w", attempt, err), "error"), ReplanRequired, currentClass)
-			} else if prevErr != nil && sameFailure(prevErr.Error(), err.Error()) && attempt < maxRetries {
+			} else if prevErr != nil && sameFailure(prevErr.Error(), err.Error()) && attempt < maxAttempts {
 				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d repeated the same failure", attempt)).withTodoID(todoID))
 				c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("repeated failure after %d attempts: %w", attempt, err), "error"), ReplanRequired, currentClass)
 			} else {
@@ -1339,7 +1355,7 @@ retryLoop:
 	} else {
 		c.autoWriteSTMASync(agentName, taskDesc, "", lastErr.Error(), false)
 	}
-	if maxRetries > 1 {
+	if maxAttempts > 1 {
 		c.persistReflexionLessonAsync(agentName, todoID, task.Goal, lastErr.Error(), appliedHint, false, isUnfixableVerifyFailure(lastErr))
 	}
 	failErr := fmt.Errorf("agent %q failed after %d attempt(s) (model: %s): %w", agentName, attemptsMade, resolvedModel, lastErr)
@@ -1350,17 +1366,32 @@ retryLoop:
 }
 
 func (c *Coordinator) effectiveWorkerMaxAttempts(agentDef *agent.AgentDef) int {
-	maxRetries := c.session.Config.MaxRetries
+	retries := c.session.Config.MaxRetries
 	if agentDef != nil && agentDef.MaxRetries >= 0 {
-		maxRetries = agentDef.MaxRetries
+		retries = agentDef.MaxRetries
 	}
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.policies.FailFast {
 		return 1
 	}
-	if maxRetries < 1 {
-		return 1
+	if retries < 0 {
+		retries = 0
 	}
-	return maxRetries
+	// max-retries is a retry budget, not a total-attempt budget: a value of
+	// one means the initial attempt plus one replay when recovery permits it.
+	return retries + 1
+}
+
+// acceptsIncompleteReadOnlyAnalysis promotes an evidence-bearing partial
+// handoff only for a task that is provably read-only. Mutating, verified, and
+// action-provider tasks retain the fail-closed partial-result behavior.
+func acceptsIncompleteReadOnlyAnalysis(task TaskDef, sideEffect SideEffectClass, steps []fantasy.StepResult, result *TaskResult) bool {
+	if sideEffect != SideEffectNone || task.Verify != "" || task.VerifySpec != nil || task.Action != nil || result == nil || result.Status != TaskResultStatusPartial {
+		return false
+	}
+	if strings.TrimSpace(result.Details) == "" {
+		return false
+	}
+	return protocolAttemptWasReadOnly(steps)
 }
 
 // executeRuntimeAction gives provider-backed actions the same durable TODO
@@ -2451,7 +2482,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			// given a directory) without restarting an otherwise successful run.
 			if todoID == CoordTodoID && isErrResult {
 				trimmedResult := strings.TrimSpace(resultPreview)
-				if strings.HasPrefix(trimmedResult, "Tool argument schema violation:") ||
+				if strings.HasPrefix(trimmedResult, coordinatorPolicyRepairExhaustedPrefix) {
+					return fmt.Errorf("%w: %s", errCoordinatorPolicyRepairExhausted, trimmedResult)
+				}
+				if isCoordinatorPolicyRepairResult(trimmedResult) ||
+					strings.HasPrefix(trimmedResult, "Tool argument schema violation:") ||
 					c.isInitialToolCorrectionResult(tr.ToolName, trimmedResult) ||
 					isReadOnlyToolCall(tr.ToolName, callInput) {
 					// Allow protocol repair prompt to reach the model; it is

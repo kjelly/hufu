@@ -1157,6 +1157,9 @@ func (c *Coordinator) attemptWrapUpRecovery(ctx context.Context, orchDef *agent.
 		// outcome without exposing any more coordinator tools.
 		return c.finalizeTerminalUnresolvedRun(), nil, true
 	}
+	if errors.Is(runErr, errCoordinatorPolicyRepairExhausted) {
+		return c.finalizeCoordinatorPolicyRepairRun(), nil, true
+	}
 	// Direct coordinator tool failures are a terminal boundary. In particular,
 	// do not convert one into another model turn merely because the error
 	// occurred during wrap-up; that would let the coordinator act after an
