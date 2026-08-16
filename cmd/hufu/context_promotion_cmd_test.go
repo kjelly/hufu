@@ -4,13 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/promotion"
 )
+
+type promotionGeneratorFunc func(context.Context, promotion.DraftRequest) (promotion.DraftResult, error)
+
+func (f promotionGeneratorFunc) Generate(ctx context.Context, request promotion.DraftRequest) (promotion.DraftResult, error) {
+	return f(ctx, request)
+}
 
 func helperSetupTeam(t *testing.T, searchDir, teamName string) string {
 	t.Helper()
@@ -144,6 +152,61 @@ func helperRunCLI(args ...string) (string, error) {
 	root.SetArgs(args)
 	err := root.Execute()
 	return out.String(), err
+}
+
+func TestRunPromotionAnalyzeReleasesGeneratorAfterSuccess(t *testing.T) {
+	workspace := t.TempDir()
+	search := t.TempDir()
+	helperSetupTeam(t, search, "demo")
+
+	original := promotionGeneratorFactory
+	var releaseCalls int
+	promotionGeneratorFactory = func(context.Context, string) (promotion.DraftGenerator, func(), error) {
+		return promotionGeneratorFunc(func(context.Context, promotion.DraftRequest) (promotion.DraftResult, error) {
+			return promotion.DraftResult{}, errors.New("generator should not run without eligible context")
+		}), func() { releaseCalls++ }, nil
+	}
+	t.Cleanup(func() { promotionGeneratorFactory = original })
+
+	if _, err := helperRunCLI("context", "promotion", "analyze",
+		"--workspace", workspace,
+		"--project", "proj1",
+		"--team", "demo",
+		"--team-search-path", search); err != nil {
+		t.Fatalf("analyze error: %v", err)
+	}
+	if releaseCalls != 1 {
+		t.Fatalf("release calls = %d, want 1", releaseCalls)
+	}
+}
+
+func TestRunPromotionAnalyzeReleasesGeneratorAfterFailure(t *testing.T) {
+	workspace := t.TempDir()
+	search := t.TempDir()
+	helperSetupTeam(t, search, "demo")
+	helperSeedEligibleLTM(t, workspace, "proj1", "demo", "source-1", "verified promotion source")
+
+	want := errors.New("generator failure")
+	original := promotionGeneratorFactory
+	var releaseCalls int
+	promotionGeneratorFactory = func(context.Context, string) (promotion.DraftGenerator, func(), error) {
+		return promotionGeneratorFunc(func(context.Context, promotion.DraftRequest) (promotion.DraftResult, error) {
+			return promotion.DraftResult{}, want
+		}), func() { releaseCalls++ }, nil
+	}
+	t.Cleanup(func() { promotionGeneratorFactory = original })
+
+	_, err := helperRunCLI("context", "promotion", "analyze",
+		"--workspace", workspace,
+		"--project", "proj1",
+		"--team", "demo",
+		"--team-search-path", search)
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want generator failure", err)
+	}
+	if releaseCalls != 1 {
+		t.Fatalf("release calls = %d, want 1", releaseCalls)
+	}
 }
 
 func TestCLIAcceptanceCase1_NoSuitableLTM(t *testing.T) {

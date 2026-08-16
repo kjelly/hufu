@@ -68,7 +68,13 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		return "", err
 	}
 	agentName := strings.ToLower(agentDef.Name)
-	resolvedSideEffect, _, _ := resolveTaskRecovery(agentDef, task)
+	resolvedSideEffect, resolvedRecovery, resolvedReconcileTool := resolveTaskRecovery(agentDef, task)
+	// Recovery decisions below operate on TaskDef, not the agent definition.
+	// Materialize the resolved values once so diagnostics and retry policy do
+	// not accidentally treat a workspace-writing worker as side_effect:none.
+	task.SideEffect = resolvedSideEffect
+	task.Recovery = resolvedRecovery
+	task.ReconcileTool = resolvedReconcileTool
 
 	if len(agentDef.MCPTools) > 0 {
 		defer func() {
@@ -335,8 +341,16 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	var lastToolResult string      // previous attempt's last tool result preview
 	var lastToolResultErr bool     // previous attempt's last tool result was an error
 	var lastPartialOutput string   // previous attempt's partial output (evidence)
+	// A model that reaches work execution but cannot honour submit_result is a
+	// capability failure, not evidence that it performed the requested write.
+	// We permit exactly one clean re-dispatch only after every recorded tool
+	// call is independently proven read-only. This path intentionally does not
+	// weaken the normal fail-closed rule for any uncertain or mutating attempt.
+	protocolCapabilityRetryUsed := false
+	protocolFallbackModel := ""
+	maxAttempts := maxRetries
 retryLoop:
-	for attempt := 1; attempt <= maxRetries; attempt++ {
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		attemptsMade = attempt
 		c.setCurrentTaskAttempt(todoID, attempt)
 		// Per-attempt tool call evidence — reset at the start of each
@@ -486,7 +500,11 @@ retryLoop:
 			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retry %d/%d — continuing from previous progress", attempt, maxRetries)))
-			if escalate {
+			if protocolFallbackModel != "" {
+				resolvedModel = protocolFallbackModel
+				protocolFallbackModel = ""
+				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retrying result-contract failure with fallback model %s", resolvedModel)).withTodoID(todoID))
+			} else if escalate {
 				if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
 					if _, escErr := c.ModelRuntime().ProviderFor(next); escErr == nil {
 						c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("escalating model %s → %s (attempt %d)", resolvedModel, next, attempt)).withTodoID(todoID))
@@ -508,6 +526,7 @@ retryLoop:
 		// legitimately does for cost/receipt reporting.
 		var attemptTokens *attemptBudget
 		protocolFailure := false
+		protocolCapabilityFallback := false
 		// A worker that consumed its entire step budget was cut off; it did not
 		// choose to stop. That distinction decides whether the follow-up turn
 		// should ask it to finalize what it has or to change its approach.
@@ -779,18 +798,13 @@ retryLoop:
 					if budgetExhausted {
 						repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The work above is your evidence; this turn is only for reporting it. Call submit_result now, and do NOT call any other tools or emit a prose final response. Put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields.\n\nReport truthfully against the goal: use status `success` only if the goal is fully met without a known target limitation; use `completed_with_gaps` when the assigned work is complete but it discovered such a limitation; otherwise use `partial` (say exactly what is done and what remains) or `blocked`. A truthful `partial` lets the next attempt continue your work; a false completion claim destroys it.", task.Goal, output, len(steps), stepBudget)
 					}
-					// §7 requires the transcript to survive as evidence, and the
-					// finalization turn is where that evidence gets converted into a
-					// result. Handing it only the final prose made it guess; the
-					// attempt's own tool calls and results are what it needs to
-					// report accurately.
-					var repairHistory []fantasy.Message
-					for _, step := range steps {
-						repairHistory = append(repairHistory, step.Messages...)
-					}
-					if len(repairHistory) > 0 {
-						repairHistory = append([]fantasy.Message{fantasy.NewUserMessage(currentPrompt)}, repairHistory...)
-					}
+					// Result-only repair must be a clean tool context. Replaying the
+					// original tool-call messages caused models to repeat a prior
+					// `view`/`grep` call even though only submit_result is exposed.
+					// The prompt already contains the worker's final output; provide
+					// a bounded, text-only evidence summary rather than executable
+					// tool history.
+					repairPrompt += protocolRepairEvidenceSummary(steps, transcriptArtifact)
 					repairAttempts := make([]RepairAttemptProvenance, 0, 2)
 					runRepair := func(prompt string) []fantasy.StepResult {
 						var repairAg fantasy.Agent
@@ -828,7 +842,7 @@ retryLoop:
 						if prepareErr != nil {
 							return nil
 						}
-						_, repairSteps, _ := c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, preparedPrompt, repairHistory, timing, fantasy.StepCountIs(1))
+						_, repairSteps, _ := c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, preparedPrompt, nil, timing, fantasy.StepCountIs(1))
 						typedRes = c.GetTaskResult(todoID)
 						return repairSteps
 					}
@@ -867,7 +881,6 @@ retryLoop:
 							FailureReason:   repairReason,
 						})
 					}
-
 					receipt.FinishedAt = time.Now()
 					receipt.RepairProvenance = &RepairProvenance{
 						Attempted:       true,
@@ -922,6 +935,17 @@ retryLoop:
 								string(FailureProtocol), string(repairReason), todoID, agentName)
 							receipt.RepairProvenance.Error = err.Error()
 						}
+					}
+					if !repairSuccess && repairReason == RepairFailureNoToolCall && !budgetExhausted &&
+						!protocolCapabilityRetryUsed && protocolAttemptWasReadOnly(steps) && parentCtx.Err() == nil {
+						// No state-changing tool ran, so one fresh worker attempt is
+						// safe. Override the provisional protocol error only after the
+						// normal protocol branch has built its evidence; otherwise that
+						// branch would overwrite this execution classification.
+						protocolFailure = false
+						protocolCapabilityFallback = true
+						err = withFailureClassOverride(errors.New("model did not honour the submit_result tool contract after a read-only attempt"), FailureExecution)
+						receipt.RepairProvenance.Error = err.Error()
 					}
 					if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 						_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
@@ -1133,6 +1157,22 @@ retryLoop:
 			disposition = ReconcileOnly
 			reason = repairDecision.Reason
 		}
+		if protocolCapabilityFallback {
+			// This is a bounded pre-mutation capability fallback, not a replay
+			// of an ambiguous worker attempt. It is permitted even when the
+			// normal task recovery policy is manual because the evidence proves
+			// no mutating tool ran.
+			protocolCapabilityRetryUsed = true
+			maxAttempts = max(maxAttempts, attempt+1)
+			conversationHistory = nil
+			if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
+				if _, providerErr := c.ModelRuntime().ProviderFor(next); providerErr == nil {
+					protocolFallbackModel = next
+				}
+			}
+			disposition = RetryWorker
+			reason = "model missed submit_result after a provably read-only attempt; retrying once with a clean tool context"
+		}
 		// Permission/capability denial is a deterministic human gate. Keep this
 		// operational decision ahead of the retry switch; packet persistence must
 		// not merely record a block after a worker has already been re-dispatched.
@@ -1169,13 +1209,17 @@ retryLoop:
 		priorToolResultErr := attemptEvidence.resultErr
 		priorPartialOutput := retryPartialOutput(output, lastOutput)
 
-		// Build conversation history for a potential retry. This is harmless
-		// when the disposition stops the loop; the history is simply unused.
-		if len(conversationHistory) == 0 && len(steps) > 0 {
-			conversationHistory = append(conversationHistory, fantasy.NewUserMessage(currentPrompt))
-		}
-		for _, step := range steps {
-			conversationHistory = append(conversationHistory, step.Messages...)
+		// Build conversation history for a potential retry. The one bounded
+		// result-contract capability fallback is deliberately a clean attempt:
+		// it may not inherit old tool messages that invite the model to repeat
+		// tools unavailable in its repair turn.
+		if !protocolCapabilityFallback {
+			if len(conversationHistory) == 0 && len(steps) > 0 {
+				conversationHistory = append(conversationHistory, fantasy.NewUserMessage(currentPrompt))
+			}
+			for _, step := range steps {
+				conversationHistory = append(conversationHistory, step.Messages...)
+			}
 		}
 
 		switch disposition {

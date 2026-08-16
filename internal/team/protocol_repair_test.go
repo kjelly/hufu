@@ -84,6 +84,40 @@ func TestClassifyTaskFailure_ExplicitOverrideBeatsProtocolText(t *testing.T) {
 	}
 }
 
+func TestProtocolAttemptWasReadOnly(t *testing.T) {
+	readOnly := []fantasy.StepResult{
+		{Response: fantasy.Response{Content: fantasy.ResponseContent{
+			fantasy.ToolCallContent{ToolName: "view", Input: `{"file_path":"internal/team/coordinator.go"}`},
+			fantasy.ToolCallContent{ToolName: "bash", Input: `{"command":"cd internal/team && git diff --stat"}`},
+		}}},
+	}
+	if !protocolAttemptWasReadOnly(readOnly) {
+		t.Fatal("read-only tool sequence must be eligible for the bounded capability fallback")
+	}
+
+	mutating := []fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{
+		fantasy.ToolCallContent{ToolName: "write", Input: `{"file_path":"changed.go"}`},
+	}}}}
+	if protocolAttemptWasReadOnly(mutating) {
+		t.Fatal("mutating tool sequence must never be eligible for worker replay")
+	}
+	if protocolAttemptWasReadOnly(nil) {
+		t.Fatal("an attempt with no recorded tool calls is not sufficient proof for worker replay")
+	}
+}
+
+func TestProtocolRepairEvidenceSummaryDoesNotReplayToolMessages(t *testing.T) {
+	summary := protocolRepairEvidenceSummary([]fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{
+		fantasy.ToolCallContent{ToolName: "view", Input: `{"file_path":"internal/team/agent.go"}`},
+	}}}}, &ArtifactRef{ID: "transcript-1"})
+	if !strings.Contains(summary, "view") || !strings.Contains(summary, "transcript-1") || !strings.Contains(summary, "Only submit_result") {
+		t.Fatalf("evidence summary = %q, want bounded repair guidance", summary)
+	}
+	if strings.Contains(summary, "file_path") {
+		t.Fatalf("evidence summary leaked executable tool input: %q", summary)
+	}
+}
+
 func TestProtocolRepairMetricsExcludeOnlyProgressTurn(t *testing.T) {
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "mixed repair sequence"}})[0]
@@ -379,6 +413,44 @@ type countingTextAgent struct {
 	text  string
 }
 
+// resultContractWorker lets protocol-repair tests model an agent that did
+// useful read-only work but omitted submit_result. Its recorded messages make
+// it possible to prove that a repair/fallback does not replay old tool context.
+type resultContractWorker struct {
+	calls        *int
+	callMessages *[][]fantasy.Message
+	onSecond     func()
+}
+
+func (m *resultContractWorker) response(call fantasy.AgentCall) *fantasy.AgentResult {
+	(*m.calls)++
+	if m.callMessages != nil {
+		*m.callMessages = append(*m.callMessages, append([]fantasy.Message(nil), call.Messages...))
+	}
+	if *m.calls == 2 && m.onSecond != nil {
+		m.onSecond()
+	}
+	return &fantasy.AgentResult{
+		Steps: []fantasy.StepResult{{
+			Messages: []fantasy.Message{fantasy.NewUserMessage("old worker tool history")},
+			Response: fantasy.Response{Content: fantasy.ResponseContent{
+				fantasy.ToolCallContent{ToolName: "view", Input: `{"file_path":"internal/team/coordinator.go"}`},
+			}},
+		}},
+		Response: fantasy.Response{Content: fantasy.ResponseContent{
+			fantasy.TextContent{Text: "read-only inspection completed"},
+		}},
+	}
+}
+
+func (m *resultContractWorker) Generate(_ context.Context, call fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return m.response(call), nil
+}
+
+func (m *resultContractWorker) Stream(_ context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return m.response(fantasy.AgentCall{Prompt: call.Prompt, Messages: call.Messages}), nil
+}
+
 // exhaustedWorkerAgent simulates a worker that has consumed the final allowed
 // execution step without a final response. It lets the test verify that a
 // requires-result task bypasses prose rescue and enters the result-only path.
@@ -441,10 +513,11 @@ type mockRepairAgent struct {
 }
 
 type scriptedRepairAgent struct {
-	calls   *int
-	prompts *[]string
-	onCall  func(int)
-	steps   func(int) []fantasy.StepResult
+	calls    *int
+	prompts  *[]string
+	messages *[][]fantasy.Message
+	onCall   func(int)
+	steps    func(int) []fantasy.StepResult
 }
 
 func invalidSchemaRepairSteps() []fantasy.StepResult {
@@ -463,6 +536,9 @@ func (m *scriptedRepairAgent) result(call fantasy.AgentCall) *fantasy.AgentResul
 	(*m.calls)++
 	if m.prompts != nil {
 		*m.prompts = append(*m.prompts, call.Prompt)
+	}
+	if m.messages != nil {
+		*m.messages = append(*m.messages, append([]fantasy.Message(nil), call.Messages...))
 	}
 	if m.onCall != nil {
 		m.onCall(*m.calls)
@@ -636,6 +712,104 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 	}
 	if len(item.ExecutionReceipts) != 1 {
 		t.Fatalf("execution receipt history length = %d, want one receipt for attempt 1", len(item.ExecutionReceipts))
+	}
+}
+
+func TestProtocolRepair_UsesCleanContextInsteadOfOriginalToolHistory(t *testing.T) {
+	workspace := t.TempDir()
+	workerCalls := 0
+	repairCalls := 0
+	var repairMessages [][]fantasy.Message
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "clean-protocol-repair", Timeout: 30, MaxRetries: 1},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-clean-protocol-repair",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "inspect runtime"}})[0]
+	c.workerAgentOverride = &resultContractWorker{calls: &workerCalls}
+	c.repairAgentOverride = &scriptedRepairAgent{
+		calls:    &repairCalls,
+		messages: &repairMessages,
+		onCall: func(int) {
+			c.storeSubmittedTaskResult(item.ID, &TaskResult{
+				TaskID: item.ID, Agent: "worker", Status: "success", Summary: "inspection finalized", Source: "submitted",
+			})
+		},
+	}
+
+	if _, err := c.executeTask(context.Background(), TaskDef{
+		Agent: "worker", Goal: "inspect runtime", Execution: ExecutionContract{RequiresResult: true},
+	}, item.ID); err != nil {
+		t.Fatalf("executeTask returned error: %v", err)
+	}
+	if workerCalls != 1 {
+		t.Fatalf("worker calls = %d, want 1", workerCalls)
+	}
+	if len(repairMessages) != 1 || len(repairMessages[0]) != 0 {
+		t.Fatalf("repair inherited old tool history: %#v", repairMessages)
+	}
+}
+
+func TestProtocolRepair_ReadOnlyResultContractFailureRetriesOnceCleanly(t *testing.T) {
+	workspace := t.TempDir()
+	workerCalls := 0
+	repairCalls := 0
+	var workerMessages [][]fantasy.Message
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "capability-fallback", Timeout: 30, MaxRetries: 1},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {
+					Name: "worker", Role: "worker", MaxRetries: 1,
+					SideEffect: string(SideEffectWorkspaceWrite), Recovery: string(RecoveryManual),
+					Generation: agent.GenerationParams{Model: "test"},
+				},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-capability-fallback",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "inspect before implementation"}})[0]
+	c.workerAgentOverride = &resultContractWorker{
+		calls:        &workerCalls,
+		callMessages: &workerMessages,
+		onSecond: func() {
+			c.storeSubmittedTaskResult(item.ID, &TaskResult{
+				TaskID: item.ID, Agent: "worker", Status: "success", Summary: "second attempt honoured contract", Source: "submitted",
+			})
+		},
+	}
+	// This repair agent deliberately produces no submit_result call. The first
+	// worker attempt used only view, so the runtime may make one fresh attempt.
+	c.repairAgentOverride = &scriptedRepairAgent{calls: &repairCalls}
+
+	if _, err := c.executeTask(context.Background(), TaskDef{
+		Agent: "worker", Goal: "inspect before implementation", Execution: ExecutionContract{RequiresResult: true},
+	}, item.ID); err != nil {
+		t.Fatalf("read-only result-contract fallback should complete: %v", err)
+	}
+	if workerCalls != 2 {
+		t.Fatalf("worker calls = %d, want exactly 2 (one bounded fallback)", workerCalls)
+	}
+	if len(workerMessages) != 2 || len(workerMessages[1]) != 0 {
+		t.Fatalf("fallback worker attempt inherited old tool history: %#v", workerMessages)
+	}
+	got := c.taskTracker.TodoList().Items()[0]
+	if got.Status != TaskDone || got.TypedResult == nil || got.TypedResult.Status != "success" {
+		t.Fatalf("fallback final state = status %s result %#v, want done/success", got.Status, got.TypedResult)
 	}
 }
 

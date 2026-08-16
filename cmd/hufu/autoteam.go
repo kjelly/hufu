@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 
@@ -14,6 +16,66 @@ import (
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/team"
 )
+
+// contextPreflightCoordinator is the narrow ownership boundary needed by
+// CLI-owned sidecar invocations. It deliberately does not expose ordinary
+// coordinator execution or any tools.
+type contextPreflightCoordinator interface {
+	PrepareContextPreflight() error
+	CloseContextPreflight()
+	Sidecar() *sidecar.Sidecar
+}
+
+// preflightSidecarHandle keeps the coordinator's cleanup reachable for the
+// entire lifetime of a CLI sidecar call. It is intentionally private: callers
+// only need the sidecar for one decision and must not retain it.
+type preflightSidecarHandle struct {
+	sidecar *sidecar.Sidecar
+	close   func()
+	once    sync.Once
+}
+
+func (h *preflightSidecarHandle) Sidecar() *sidecar.Sidecar {
+	if h == nil {
+		return nil
+	}
+	return h.sidecar
+}
+
+func (h *preflightSidecarHandle) Close() {
+	if h == nil {
+		return
+	}
+	h.once.Do(func() {
+		if h.close != nil {
+			h.close()
+		}
+	})
+}
+
+// preparePreflightSidecar establishes the context boundary before returning a
+// sidecar and makes every failure path release the coordinator immediately.
+func preparePreflightSidecar(coordinator contextPreflightCoordinator) (*preflightSidecarHandle, error) {
+	if coordinator == nil {
+		return nil, fmt.Errorf("context preflight coordinator is unavailable")
+	}
+	if err := coordinator.PrepareContextPreflight(); err != nil {
+		coordinator.CloseContextPreflight()
+		return nil, err
+	}
+	s := coordinator.Sidecar()
+	if s == nil {
+		coordinator.CloseContextPreflight()
+		return nil, fmt.Errorf("sidecar is unavailable after context preflight")
+	}
+	return &preflightSidecarHandle{sidecar: s, close: coordinator.CloseContextPreflight}, nil
+}
+
+var selectionSidecarBuilder = buildSelectionSidecar
+
+var matchTeamWithSelectionSidecar = func(ctx context.Context, s *sidecar.Sidecar, prompt string, candidates []sidecar.TeamSummary) (string, error) {
+	return s.MatchTeam(sidecar.WithPurpose(ctx, "team_selection"), prompt, candidates)
+}
 
 // autoSelectTeam picks the team best suited to the prompt. It prefers an LLM
 // match via the sidecar and falls back to keyword scoring. It returns the
@@ -29,9 +91,12 @@ func autoSelectTeam(ctx context.Context, prompt string, registry *team.TeamRegis
 		return candidates[0].Name, "only"
 	}
 
-	if s := buildSelectionSidecar(ctx); s != nil {
-		if picked, err := s.MatchTeam(sidecar.WithPurpose(ctx, "team_selection"), prompt, candidates); err == nil && picked != "" {
-			return picked, "llm"
+	if handle := selectionSidecarBuilder(ctx); handle != nil {
+		defer handle.Close()
+		if s := handle.Sidecar(); s != nil {
+			if picked, err := matchTeamWithSelectionSidecar(ctx, s, prompt, candidates); err == nil && picked != "" {
+				return picked, "llm"
+			}
 		}
 	}
 
@@ -128,7 +193,7 @@ func keywordBestTeam(prompt string, candidates []sidecar.TeamSummary) string {
 // It never returns a raw sidecar: the coordinator opens the explicit workspace
 // repository/event lineage and installs the prompt preparer before a model can
 // be called. Returning nil selects the deterministic keyword fallback.
-func buildSelectionSidecar(ctx context.Context) *sidecar.Sidecar {
+func buildSelectionSidecar(ctx context.Context) *preflightSidecarHandle {
 	_ = ctx // coordinator-sidecar initialization is lazy; generation uses the caller context.
 	cfg := config.LoadConfig()
 	model := firstNonEmpty(opts.sidecarModelOverride, opts.modelOverride, cfg.SidecarModel, cfg.Model)
@@ -143,11 +208,11 @@ func buildSelectionSidecar(ctx context.Context) *sidecar.Sidecar {
 	if err != nil {
 		return nil
 	}
-	if err := coordinator.PrepareContextPreflight(); err != nil {
-		coordinator.CloseContextPreflight()
+	handle, err := preparePreflightSidecar(coordinator)
+	if err != nil {
 		return nil
 	}
-	return coordinator.Sidecar()
+	return handle
 }
 
 var tokenSplitRe = func() func(rune) bool {

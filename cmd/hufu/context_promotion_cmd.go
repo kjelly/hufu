@@ -21,6 +21,8 @@ import (
 var promotionWorkspace, promotionProject, promotionTeam, promotionSearchPath, promotionPolicyVersion, promotionType, promotionAgent, promotionModel, promotionDraftFile, promotionRejectReason string
 var promotionJSON, ltmPromotionDryRun, promotionShowContent bool
 
+var promotionGeneratorFactory = newPromotionGenerator
+
 var contextPromotionCmd = &cobra.Command{Use: "promotion", Short: "Promote proven long-term context through an explicit review workflow"}
 var contextPromotionAnalyzeCmd = &cobra.Command{Use: "analyze", Short: "Analyze eligible LTM and create reviewable proposals", Args: cobra.NoArgs, RunE: runPromotionAnalyze}
 var contextPromotionListCmd = &cobra.Command{Use: "list", Short: "List promotion proposals without draft content", Args: cobra.NoArgs, RunE: runPromotionList}
@@ -108,10 +110,14 @@ func runPromotionAnalyze(cmd *cobra.Command, _ []string) error {
 	}
 	var generator promotion.DraftGenerator
 	if !ltmPromotionDryRun {
-		g, e := newPromotionGenerator(cmd.Context(), dir)
+		g, release, e := promotionGeneratorFactory(cmd.Context(), dir)
 		if e != nil {
 			return e
 		}
+		if release == nil {
+			return fmt.Errorf("promotion draft generator did not provide a preflight release")
+		}
+		defer release()
 		generator = g
 	}
 	analyzer := promotion.Analyzer{Repo: repo, Generator: generator, Policy: agent.DefaultMemoryLearningPolicy()}
@@ -311,15 +317,15 @@ type sidecarTextGenerator struct{ s *sidecar.Sidecar }
 func (g sidecarTextGenerator) GenerateText(ctx context.Context, prompt string) (string, error) {
 	return g.s.ExecuteProfile(sidecar.WithPurpose(ctx, "promotion_draft"), prompt, sidecar.CompactorProfile)
 }
-func newPromotionGenerator(ctx context.Context, teamDir string) (promotion.DraftGenerator, error) {
+func newPromotionGenerator(ctx context.Context, teamDir string) (promotion.DraftGenerator, func(), error) {
 	session, err := team.LoadTeam(teamDir, nil, nil, team.DefaultProviderRegistry)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cfg := config.LoadConfig()
 	model := firstNonEmpty(promotionModel, session.Config.SidecarModel, session.Config.Generation.Model, cfg.SidecarModel, cfg.Model)
 	if model == "" {
-		return nil, fmt.Errorf("promotion analyze requires --model or a team/config sidecar/model")
+		return nil, nil, fmt.Errorf("promotion analyze requires --model or a team/config sidecar/model")
 	}
 	url := config.ResolveProviderURL(opts.providerURL, session.Config.ProviderURL, "")
 	key := config.ResolveProviderAPIKey(opts.providerAPIKey, session.Config.ProviderAPIKey)
@@ -331,17 +337,13 @@ func newPromotionGenerator(ctx context.Context, teamDir string) (promotion.Draft
 	session.Workspace = promotionWorkspacePath()
 	coordinator, err := team.NewCoordinator(session, url, key, nil, nil, nil, team.RoleModels{Sidecar: model}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err := coordinator.PrepareContextPreflight(); err != nil {
-		coordinator.CloseContextPreflight()
-		return nil, err
+	handle, err := preparePreflightSidecar(coordinator)
+	if err != nil {
+		return nil, nil, err
 	}
-	sc := coordinator.Sidecar()
-	if sc == nil {
-		return nil, fmt.Errorf("promotion draft sidecar is unavailable after context preflight")
-	}
-	return promotion.JSONDraftGenerator{Generator: sidecarTextGenerator{s: sc}}, nil
+	return promotion.JSONDraftGenerator{Generator: sidecarTextGenerator{s: handle.Sidecar()}}, handle.Close, nil
 }
 
 func parsePromotionType(v string) (promotion.Type, error) {

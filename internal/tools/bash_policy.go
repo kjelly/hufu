@@ -166,6 +166,22 @@ func checkReadOnlyBashCommand(command string) error {
 	return nil
 }
 
+// IsReadOnlyBashCommand reports whether command is limited to the same narrow,
+// inspection-only grammar enforced for side_effect:none workers. It is an
+// observation helper: callers may use it to prove that an already-completed
+// attempt did not mutate state; it does not grant a command any permission.
+//
+// A leading `cd <dir> &&` is safe for this purpose because it changes only the
+// shell subprocess's current directory. The remainder must still pass the
+// strict read-only grammar.
+func IsReadOnlyBashCommand(command string) bool {
+	if checkReadOnlyBashCommand(command) == nil {
+		return true
+	}
+	_, rest, ok := extractLeadingCD(command)
+	return ok && checkReadOnlyBashCommand(rest) == nil
+}
+
 func checkReadOnlyBashSegment(segment string) error {
 	fields := strings.Fields(segment)
 	if len(fields) == 0 {

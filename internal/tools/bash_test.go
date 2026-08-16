@@ -171,6 +171,23 @@ func TestReadOnlyBashPolicyPermitsQuotedRegexAndEcho(t *testing.T) {
 	}
 }
 
+func TestIsReadOnlyBashCommand(t *testing.T) {
+	tests := []struct {
+		command string
+		want    bool
+	}{
+		{command: `git diff --stat`, want: true},
+		{command: `cd internal/team && grep -rn "submit_result" .`, want: true},
+		{command: `touch unsafe.txt`, want: false},
+		{command: `cd internal/team && rm unsafe.txt`, want: false},
+	}
+	for _, tt := range tests {
+		if got := IsReadOnlyBashCommand(tt.command); got != tt.want {
+			t.Errorf("IsReadOnlyBashCommand(%q) = %t, want %t", tt.command, got, tt.want)
+		}
+	}
+}
+
 func TestRewriteLineRedirects(t *testing.T) {
 	tests := []struct {
 		name  string
