@@ -1117,6 +1117,23 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, reg
 		return nil, fmt.Errorf("failed to read team directory: %w", err)
 	}
 
+	type agentIdentityOwner struct {
+		def  *agent.AgentDef
+		path string
+	}
+	identityOwners := make(map[string]agentIdentityOwner)
+	registerIdentity := func(identity string, def *agent.AgentDef, path string) error {
+		key := normalizedName(identity)
+		if key == "helper" {
+			return fmt.Errorf("agent identity %q is reserved by the built-in Helper (agent %q from %s)", identity, def.Name, path)
+		}
+		if previous, exists := identityOwners[key]; exists && previous.def != def {
+			return fmt.Errorf("agent identity collision for %q: agent %q from %s conflicts with agent %q from %s", key, previous.def.Name, previous.path, def.Name, path)
+		}
+		identityOwners[key] = agentIdentityOwner{def: def, path: path}
+		return nil
+	}
+
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
@@ -1137,8 +1154,14 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, reg
 		}
 		fileAlias := strings.TrimSuffix(entry.Name(), ".md")
 		def.FileAlias = fileAlias
-		fileKey := strings.ToLower(fileAlias)
-		nameKey := strings.ToLower(def.Name)
+		if err := registerIdentity(fileAlias, def, path); err != nil {
+			return nil, err
+		}
+		if err := registerIdentity(def.Name, def, path); err != nil {
+			return nil, err
+		}
+		fileKey := normalizedName(fileAlias)
+		nameKey := normalizedName(def.Name)
 		if _, exists := session.Agents[fileKey]; !exists {
 			session.Agents[fileKey] = def
 		}

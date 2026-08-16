@@ -59,6 +59,59 @@ delegation:
 	}
 }
 
+func writeLoadTeamAgent(t *testing.T, dir, filename, name string) {
+	t.Helper()
+	content := "---\nname: " + name + "\nrole: worker\nmemory:\n  mode: off\n---\nInspect files.\n"
+	if err := os.WriteFile(filepath.Join(dir, filename), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadTeamRejectsCaseInsensitiveAgentNameCollision(t *testing.T) {
+	dir := t.TempDir()
+	writeLoadTeamAgent(t, dir, "reviewer-a.md", "Reviewer")
+	writeLoadTeamAgent(t, dir, "reviewer-b.md", "reviewer")
+
+	_, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err == nil || !strings.Contains(err.Error(), "reviewer-a.md") || !strings.Contains(err.Error(), "reviewer-b.md") {
+		t.Fatalf("LoadTeam error = %v, want collision naming both source files", err)
+	}
+}
+
+func TestLoadTeamRejectsFileAliasCanonicalNameCollision(t *testing.T) {
+	dir := t.TempDir()
+	writeLoadTeamAgent(t, dir, "beta.md", "Alpha")
+	writeLoadTeamAgent(t, dir, "gamma.md", "Beta")
+
+	_, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err == nil || !strings.Contains(err.Error(), "beta.md") || !strings.Contains(err.Error(), "gamma.md") {
+		t.Fatalf("LoadTeam error = %v, want alias/canonical collision", err)
+	}
+}
+
+func TestLoadTeamRejectsReservedHelperIdentity(t *testing.T) {
+	dir := t.TempDir()
+	writeLoadTeamAgent(t, dir, "specialist.md", "Helper")
+
+	_, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "helper") {
+		t.Fatalf("LoadTeam error = %v, want reserved helper identity error", err)
+	}
+}
+
+func TestLoadTeamKeepsBuiltInHelperForValidAgents(t *testing.T) {
+	dir := t.TempDir()
+	writeLoadTeamAgent(t, dir, "specialist.md", "Specialist")
+
+	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err != nil {
+		t.Fatalf("LoadTeam: %v", err)
+	}
+	if got := session.Agents["helper"]; got == nil || got.Name != "Helper" {
+		t.Fatalf("built-in helper = %#v, want registered Helper", got)
+	}
+}
+
 func TestParseTeamRuntimeWorkflowContract(t *testing.T) {
 	tmpDir := t.TempDir()
 	yamlContent := `workflow:
