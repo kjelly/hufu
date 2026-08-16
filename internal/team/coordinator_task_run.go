@@ -518,6 +518,7 @@ retryLoop:
 			taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 			taskCtx = context.WithValue(taskCtx, executionAttemptKey{}, attempt)
 			taskCtx = context.WithValue(taskCtx, modelKey{}, resolvedModel)
+			taskCtx = withInvocationMetadata(taskCtx, invocationMetadataFromRequest(request, contextManifest))
 			// Per-attempt tool call evidence (§6.1, P1b: per-attempt, not
 			// coordinator-global, to prevent cross-task leakage).
 			taskCtx = context.WithValue(taskCtx, toolCallEvidenceKey{}, attemptEvidence)
@@ -982,7 +983,7 @@ retryLoop:
 			// Adversarial verification: skeptic votes try to refute the result.
 			// A refutation flows into the same retry path as a failed verify.
 			if err == nil && task.AdversarialVerify > 0 && c.AgentPool().Sidecar() != nil {
-				if averr := c.adversarialVerify(parentCtx, task, output); averr != nil {
+				if averr := c.adversarialVerify(parentCtx, task, todoID, output); averr != nil {
 					err = averr
 					c.report(c.newEvent("skeptic").withAgent(agentName).withMessage(averr.Error()).withTodoID(todoID))
 				} else {

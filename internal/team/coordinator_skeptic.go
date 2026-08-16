@@ -99,7 +99,7 @@ func tallySkepticVotes(votes []skepticVote) (refuted bool, reason string) {
 // non-nil error when a majority refutes the result. It is a silent no-op when
 // the task does not request it or no sidecar model is configured (the same
 // degradation as reflectOnFailure).
-func (c *Coordinator) adversarialVerify(parentCtx context.Context, task TaskDef, output string) error {
+func (c *Coordinator) adversarialVerify(parentCtx context.Context, task TaskDef, todoID, output string) error {
 	if task.AdversarialVerify <= 0 {
 		return nil
 	}
@@ -132,7 +132,13 @@ func (c *Coordinator) adversarialVerify(parentCtx context.Context, task TaskDef,
 	wg.Wait()
 
 	if refuted, reason := tallySkepticVotes(votes); refuted {
+		if err := c.recordAuxiliaryContextSignal(todoID, "skeptic", "skeptic_signal", "refuted"); err != nil {
+			return err
+		}
 		return fmt.Errorf("adversarial verification refuted the result: %s", utils.TruncateString(reason, 500))
+	}
+	if err := c.recordAuxiliaryContextSignal(todoID, "skeptic", "skeptic_signal", "confirmed"); err != nil {
+		return err
 	}
 	return nil
 }

@@ -143,6 +143,9 @@ func (c *Coordinator) judgeAgentResults(ctx context.Context, goal, todoID string
 	if err != nil {
 		return "", fmt.Errorf("judge agent results: %w", err)
 	}
+	if err := c.recordAuxiliaryContextSignal(todoID, "judge", "judge_signal", "selected_candidate"); err != nil {
+		return "", err
+	}
 	c.report(c.newEvent("judge").withModel(valid[verdict.BestIndex].model).withMessage(verdict.Reason).withTodoID(todoID))
 	return composeJudgedOutput(valid, verdict), nil
 }

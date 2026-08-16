@@ -399,6 +399,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{todoID: todoID, agent: resolvedName, agentDef: agentDef, task: task, directModel: directModel, attemptStarted: attemptStarted, roundCancel: roundCancel, err: fmt.Errorf("direct-agent context manifest preflight failed: %w", manifestErr)})
 		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent context manifest preflight failed: %w", manifestErr)}, nil
 	}
+	taskCtx = withInvocationMetadata(taskCtx, invocationMetadataFromRequest(request, contextManifest))
 	runID := c.executionRunID
 	if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 		runID = c.taskTracker.TodoList().RunID()
