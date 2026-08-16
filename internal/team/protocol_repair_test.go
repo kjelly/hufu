@@ -194,6 +194,59 @@ func TestProtocolRepair_ProgressNotFinalIsExecutionFailure(t *testing.T) {
 	}
 }
 
+func TestProtocolRepair_ReadOnlyPartialWithDetailsCompletesWithGaps(t *testing.T) {
+	workspace := t.TempDir()
+	workerCalls := 0
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "read-only-partial", Timeout: 30, MaxRetries: 0},
+			Agents: map[string]*agent.AgentDef{
+				"reviewer": {Name: "reviewer", Role: "worker", SideEffect: string(SideEffectNone), Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-read-only-partial",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "inspect runtime"}})[0]
+	c.workerAgentOverride = &resultContractWorker{calls: &workerCalls}
+	c.repairAgentOverride = &mockRepairAgent{onSubmit: func() {
+		c.storeSubmittedTaskResult(item.ID, &TaskResult{
+			TaskID: item.ID, Agent: "reviewer", Status: TaskResultStatusPartial, Source: "submitted",
+			Summary: "Inspection is useful but one exact signature remains unchecked.",
+			Details: "Relevant code and findings are recorded here for coordinator follow-up.",
+		})
+	}}
+
+	output, err := c.executeTask(context.Background(), TaskDef{
+		Agent: "reviewer", Goal: "inspect runtime", Recovery: RecoveryRetry,
+		SideEffect: SideEffectNone, Execution: ExecutionContract{RequiresResult: true},
+	}, item.ID)
+	if err != nil {
+		t.Fatalf("read-only partial handoff should complete with gaps: %v", err)
+	}
+	if !strings.Contains(output, "Relevant code") {
+		t.Fatalf("coordinator output = %q, want typed details", output)
+	}
+	got := c.taskTracker.TodoList().Items()[0]
+	if got.Status != TaskDone || got.TypedResult == nil || got.TypedResult.Status != TaskResultStatusCompletedWithGaps {
+		t.Fatalf("task state = status %s result %#v, want done/completed_with_gaps", got.Status, got.TypedResult)
+	}
+}
+
+func TestEffectiveWorkerMaxAttemptsAddsInitialAttempt(t *testing.T) {
+	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{MaxRetries: 1}}}
+	if got := c.effectiveWorkerMaxAttempts(nil); got != 2 {
+		t.Fatalf("team max retries 1 gives %d attempts, want 2", got)
+	}
+	if got := c.effectiveWorkerMaxAttempts(&agent.AgentDef{MaxRetries: 0}); got != 1 {
+		t.Fatalf("agent max retries 0 gives %d attempts, want 1", got)
+	}
+}
+
 func TestProtocolRepair_ProgressNotFinalRetriesAndClearsAttemptResult(t *testing.T) {
 	workspace := t.TempDir()
 	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })

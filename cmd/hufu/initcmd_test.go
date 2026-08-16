@@ -7,7 +7,7 @@ func TestScaffoldTemplatesHaveExpectedAgents(t *testing.T) {
 		name  string
 		files []string
 	}{
-		{name: "default", files: []string{"helper.md"}},
+		{name: "default", files: []string{"worker.md"}},
 		{name: "dev", files: []string{"developer.md", "reviewer.md", "tester.md"}},
 		{name: "research", files: []string{"researcher.md", "writer.md"}},
 		{name: "ops", files: []string{"operator.md", "monitor.md"}},

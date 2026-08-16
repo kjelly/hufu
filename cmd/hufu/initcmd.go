@@ -34,7 +34,7 @@ workspace: workspace
 %[2]s`
 
 const agentMDTemplate = `---
-name: helper
+name: worker
 description: General-purpose worker
 role: worker
 tools: view,write,edit,multiedit,grep,glob,ls,bash
@@ -51,7 +51,7 @@ type scaffoldTemplate struct {
 }
 
 var scaffoldTemplates = map[string]scaffoldTemplate{
-	"default": {agents: map[string]string{"helper.md": agentMDTemplate}},
+	"default": {agents: map[string]string{"worker.md": agentMDTemplate}},
 	"dev": {agents: map[string]string{
 		"developer.md": `---
 name: developer

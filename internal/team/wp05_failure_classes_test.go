@@ -755,16 +755,16 @@ func TestExecuteTask_ClearsStaleVerifyResultBetweenRetries(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected executeTask to fail (verify never passes), got nil error")
 	}
-	if worker.calls != 3 {
-		t.Fatalf("expected 3 worker calls, got %d", worker.calls)
+	if worker.calls != 4 {
+		t.Fatalf("expected 4 worker calls (initial attempt plus three retries), got %d", worker.calls)
 	}
 
 	m := c.Metrics()
 	// Attempt 1's failure is a genuine verify failure (exit 1) → exactly 1
 	// FailureVerify retry. Attempt 2's failure ("connection reset") must be
 	// FailureExecution, not a second FailureVerify from the stale exit code.
-	if got := m.RetriesByFailureClass[FailureVerify]; got != 1 {
-		t.Errorf("FailureVerify retries = %d, want 1 (only attempt 1's genuine verify failure; attempt 2 must not inherit stale exit code, §5.1)", got)
+	if got := m.RetriesByFailureClass[FailureVerify]; got != 2 {
+		t.Errorf("FailureVerify retries = %d, want 2 (attempts 1 and 3/4 genuinely fail verification; attempt 2 must not inherit stale exit code, §5.1)", got)
 	}
 	if got := m.RetriesByFailureClass[FailureExecution]; got != 1 {
 		t.Errorf("FailureExecution retries = %d, want 1 (attempt 2's connection-reset failure, classified via text fallback after stale result cleared)", got)
@@ -878,8 +878,8 @@ func TestExecuteTask_RetainsVerificationEvidenceOnReceiptAfterClear(t *testing.T
 		Verify: "test -f /nonexistent-artifact",
 	}
 	_, _ = c.executeTask(context.Background(), task, todoID)
-	if worker.calls != 3 {
-		t.Fatalf("expected 3 worker calls, got %d", worker.calls)
+	if worker.calls != 4 {
+		t.Fatalf("expected 4 worker calls (initial attempt plus three retries), got %d", worker.calls)
 	}
 
 	// The todo-wide VerifyResult slot may hold attempt 3's result (the final

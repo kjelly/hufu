@@ -333,7 +333,7 @@ func TestOutcomeModeMissingAcceptanceRejected(t *testing.T) {
 
 	// 3. MD-only team directory (no team.yml) also uses the default profile.
 	dir3 := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir3, "helper.md"), []byte("---\nname: helper\nrole: worker\n---\nWorker prompt"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir3, "worker.md"), []byte("---\nname: worker\nrole: worker\n---\nWorker prompt"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadTeam(dir3, nil, nil, DefaultProviderRegistry); err != nil {

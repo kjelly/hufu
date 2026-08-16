@@ -207,7 +207,7 @@ func TestCLIProcessExitContract(t *testing.T) {
 		// Two workers force the CLI through the coordinator path instead of
 		// its single-worker fast path; the fixture then exercises finish and
 		// the acceptance evaluator in the real child process.
-		for _, name := range []string{"helper", "reviewer"} {
+		for _, name := range []string{"worker", "reviewer"} {
 			content := fmt.Sprintf("---\nname: %s\nrole: worker\ntools: ask_user\n---\nReturn a concise completion summary.\n", name)
 			if err := os.WriteFile(filepath.Join(teamDir, name+".md"), []byte(content), 0o644); err != nil {
 				t.Fatal(err)
