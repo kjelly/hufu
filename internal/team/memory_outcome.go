@@ -168,6 +168,19 @@ func (c *Coordinator) recordGeneralContextOutcome(item *TodoItem, terminalEvent 
 			}
 			base := contextOutcomeObservation(&manifest, manifestItem.ID, outcome, verificationOutcome)
 			base.PolicyRevision = c.session.Config.MemoryLearning.PolicyVersion
+			// Objective verification is the only authority permitted to emit a
+			// verification assessment. A terminal model response without a
+			// verifier remains explicitly not_assessed.
+			if item.VerifyResult != nil {
+				verification := base
+				verification.IdempotencyKey, verification.Outcome = manifest.Fingerprint+":"+manifestItem.ID+":verification:"+verificationOutcome, "verification_assessed"
+				_, _ = recorder.RecordContextOutcomeObservation(context.Background(), verification)
+				if verificationOutcome == "failed" {
+					failure := base
+					failure.IdempotencyKey, failure.Outcome = manifest.Fingerprint+":"+manifestItem.ID+":failure_attributed", "failure_attributed"
+					_, _ = recorder.RecordContextOutcomeObservation(context.Background(), failure)
+				}
+			}
 			if used[manifestItem.ID] {
 				useObservation := base
 				useObservation.IdempotencyKey, useObservation.Outcome = manifest.Fingerprint+":"+manifestItem.ID+":used", "used"
