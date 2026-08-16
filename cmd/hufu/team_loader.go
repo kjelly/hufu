@@ -132,9 +132,12 @@ func archivePreviousSession(session *team.TeamSession) error {
 				stderrLog("%s Failed to remove session file: %v\n", errStyle.Render("⚠"), err)
 			}
 		}
-		if err := team.DeleteConversationHistory(session.Workspace); err != nil {
-			stderrLog("%s Failed to delete conversation history: %v\n", errStyle.Render("⚠"), err)
-		}
+	}
+	// session.md and chat_history.md are independent projections. The former
+	// may have been archived through the first branch above, but the latter
+	// still contains model messages and must never survive --new.
+	if err := team.DeleteConversationHistory(session.Workspace); err != nil {
+		stderrLog("%s Failed to delete conversation history: %v\n", errStyle.Render("⚠"), err)
 	}
 	return nil
 }

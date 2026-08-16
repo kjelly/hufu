@@ -228,6 +228,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 
 	coordinator.SetExecutionProfile(execProfile)
 	coordinator.SetSessionData(sessionData)
+	coordinator.SetFreshSession(opts.newSession)
 	if err := applyUnattendedAndBudget(coordinator, session); err != nil {
 		return nil, err
 	}

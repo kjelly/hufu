@@ -16,6 +16,13 @@ func TestContextPurposeRegistryIsClosed(t *testing.T) {
 	if policy.Trigger != ContextTriggerGuardReview || policy.FallbackAllowed {
 		t.Fatalf("guard policy = %#v", policy)
 	}
+	compactor, err := contextPurposePolicy("compactor")
+	if err != nil {
+		t.Fatalf("sidecar compactor purpose rejected: %v", err)
+	}
+	if compactor.Trigger != ContextTriggerSidecarTask || !compactor.FallbackAllowed || compactor.FallbackOutcome != "uncompacted" {
+		t.Fatalf("compactor policy = %#v", compactor)
+	}
 }
 
 func TestAuxiliaryFallbackHonorsPurposePolicy(t *testing.T) {

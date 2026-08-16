@@ -34,7 +34,7 @@ var contextPurposeRegistry = map[string]ContextPurposePolicy{
 	"final_summary_repair":     {Trigger: ContextTriggerRepair, FallbackAllowed: true, FallbackOutcome: "unrepaired_summary"},
 	"protocol_repair":          {Trigger: ContextTriggerRepair, FallbackAllowed: false, FallbackOutcome: "repair_unavailable"},
 	"sidecar_task":             {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "sidecar_unavailable"},
-	"compacter":                {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "uncompacted"},
+	"compactor":                {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "uncompacted"},
 	"team_selection":           {Trigger: ContextTriggerCoordinatorStart, FallbackAllowed: true, FallbackOutcome: "keyword_fallback"},
 	"fix_analysis":             {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "deterministic_analysis"},
 	"promotion_draft":          {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "draft_unavailable"},

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/team"
@@ -144,5 +145,23 @@ func TestPrepareSessionLifecycle_CorruptArchivedSessionStartsInitialPhase(t *tes
 	history, err := filepath.Glob(filepath.Join(workspace, "history", "*.md"))
 	if err != nil || len(history) != 1 {
 		t.Fatalf("archived transcript = %v, err=%v; want one history file", history, err)
+	}
+}
+
+func TestArchivePreviousSessionWithMarkdownClearsConversationHistory(t *testing.T) {
+	workspace := t.TempDir()
+	session := &team.TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "fresh-test"}}
+	if err := team.SaveSessionMD(workspace, "# prior session\n"); err != nil {
+		t.Fatalf("SaveSessionMD: %v", err)
+	}
+	if err := team.SaveConversationHistory(workspace, []fantasy.Message{fantasy.NewUserMessage("stale completed review")}); err != nil {
+		t.Fatalf("SaveConversationHistory: %v", err)
+	}
+
+	if err := archivePreviousSession(session); err != nil {
+		t.Fatalf("archivePreviousSession: %v", err)
+	}
+	if team.HasConversationHistory(workspace) {
+		t.Fatal("--new archive retained chat_history.md after archiving session markdown")
 	}
 }
