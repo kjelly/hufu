@@ -79,6 +79,22 @@ type PatternCandidate struct {
 	SpecificElements     []string // specific values detected
 }
 
+// SkillModelInvoker is the narrow composition boundary for optional
+// skill-learning suggestions. The detector does not own a raw sidecar or any
+// runtime persistence policy; a coordinator-provided invoker supplies both.
+type SkillModelInvoker interface {
+	Invoke(context.Context, string, string) (string, error)
+}
+
+type sidecarSkillModelInvoker struct{ sidecar *sidecar.Sidecar }
+
+func (i sidecarSkillModelInvoker) Invoke(ctx context.Context, purpose, prompt string) (string, error) {
+	if i.sidecar == nil {
+		return "", fmt.Errorf("skill model unavailable")
+	}
+	return i.sidecar.Execute(sidecar.WithPurpose(ctx, purpose), prompt)
+}
+
 // SkillPatternDetector detects repeating tool call patterns
 type SkillPatternDetector struct {
 	mu              sync.RWMutex
@@ -89,7 +105,7 @@ type SkillPatternDetector struct {
 	windowMin       int
 	windowMax       int
 	sidecarEnabled  bool
-	sidecar         *sidecar.Sidecar         // sidecar instance for semantic analysis
+	modelInvoker    SkillModelInvoker
 	clusterCache    map[string]map[int][]int // descriptions hash -> clusters
 	cacheMu         sync.RWMutex
 }
@@ -113,10 +129,16 @@ func NewSkillPatternDetector(minFrequency, windowMin, windowMax int) *SkillPatte
 
 // SetSidecar sets the sidecar instance for semantic analysis
 func (d *SkillPatternDetector) SetSidecar(s *sidecar.Sidecar) {
+	d.SetModelInvoker(sidecarSkillModelInvoker{sidecar: s})
+}
+
+// SetModelInvoker installs a coordinator-owned, context-attributed invoker.
+// A nil invoker selects the deterministic heuristic path.
+func (d *SkillPatternDetector) SetModelInvoker(invoker SkillModelInvoker) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.sidecar = s
-	d.sidecarEnabled = s != nil
+	d.modelInvoker = invoker
+	d.sidecarEnabled = invoker != nil
 }
 
 // RecordToolCall records a tool call for pattern analysis
@@ -349,7 +371,7 @@ func (d *SkillPatternDetector) buildParamGeneralizationPrompt(seq *ToolSequence)
 // evaluateParamGeneralization uses sidecar to evaluate parameter generalization
 // Returns score (0-1), reason, and specific elements list
 func (d *SkillPatternDetector) evaluateParamGeneralization(ctx context.Context, seq *ToolSequence) (float64, string, []string) {
-	if !d.sidecarEnabled || d.sidecar == nil {
+	if !d.sidecarEnabled || d.modelInvoker == nil {
 		return 0, "sidecar unavailable", nil
 	}
 
@@ -358,7 +380,7 @@ func (d *SkillPatternDetector) evaluateParamGeneralization(ctx context.Context, 
 	timeoutCtx, cancel := context.WithTimeout(ctx, llmTimeout)
 	defer cancel()
 
-	result, err := d.sidecar.Execute(timeoutCtx, prompt)
+	result, err := d.modelInvoker.Invoke(timeoutCtx, "skill_learning", prompt)
 	if err != nil {
 		return 0, fmt.Sprintf("sidecar error: %v", err), nil
 	}
@@ -399,7 +421,7 @@ func (d *SkillPatternDetector) calculateQualityScore(candidate PatternCandidate,
 // FindCandidates returns high-quality patterns that repeat at least minFrequency times
 func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCandidate {
 	// Check sidecar availability - skip if unavailable (no fallback)
-	if !d.sidecarEnabled || d.sidecar == nil {
+	if !d.sidecarEnabled || d.modelInvoker == nil {
 		log.Printf("[INFO] Skill generation skipped: sidecar unavailable")
 		return nil
 	}
@@ -438,8 +460,8 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 
 	// Semantic merge: collapse candidates whose task descriptions cluster
 	// together. This is a no-op if the sidecar is unavailable.
-	if d.sidecarEnabled && d.sidecar != nil {
-		candidates = d.analyzeSemanticSimilarity(ctx, d.sidecar, candidates)
+	if d.sidecarEnabled && d.modelInvoker != nil {
+		candidates = d.analyzeSemanticSimilarity(ctx, candidates)
 	}
 
 	// Deduplicate candidates that are strict prefixes of other candidates.
@@ -549,7 +571,7 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 }
 
 // analyzeSemanticSimilarity uses sidecar to analyze and merge similar sequences
-func (d *SkillPatternDetector) analyzeSemanticSimilarity(ctx context.Context, sidecar *sidecar.Sidecar, candidates []PatternCandidate) []PatternCandidate {
+func (d *SkillPatternDetector) analyzeSemanticSimilarity(ctx context.Context, candidates []PatternCandidate) []PatternCandidate {
 	// Collect all task descriptions
 	allDescs := d.collectAllTaskDescriptions(candidates)
 	if len(allDescs) < 2 {
@@ -558,7 +580,7 @@ func (d *SkillPatternDetector) analyzeSemanticSimilarity(ctx context.Context, si
 	}
 
 	// Cluster descriptions using sidecar with context
-	clusters := d.clusterDescriptions(ctx, sidecar, allDescs)
+	clusters := d.clusterDescriptions(ctx, allDescs)
 	if clusters == nil {
 		d.enrichLLMNames(ctx, candidates)
 		return candidates
@@ -576,7 +598,7 @@ func (d *SkillPatternDetector) analyzeSemanticSimilarity(ctx context.Context, si
 // enrichLLMNames generates LLM-based names for each candidate.
 // Falls back to rule-based SuggestedName on error.
 func (d *SkillPatternDetector) enrichLLMNames(ctx context.Context, candidates []PatternCandidate) {
-	if !d.sidecarEnabled || d.sidecar == nil {
+	if !d.sidecarEnabled || d.modelInvoker == nil {
 		return
 	}
 	for i := range candidates {
@@ -605,7 +627,7 @@ func (d *SkillPatternDetector) collectAllTaskDescriptions(candidates []PatternCa
 }
 
 // clusterDescriptions uses sidecar to cluster similar task descriptions
-func (d *SkillPatternDetector) clusterDescriptions(ctx context.Context, sidecar *sidecar.Sidecar, descriptions []string) map[int][]int {
+func (d *SkillPatternDetector) clusterDescriptions(ctx context.Context, descriptions []string) map[int][]int {
 	// Check cache first
 	descHash := d.hashDescriptions(descriptions)
 
@@ -628,7 +650,7 @@ func (d *SkillPatternDetector) clusterDescriptions(ctx context.Context, sidecar 
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	result, err := sidecar.Execute(timeoutCtx, prompt)
+	result, err := d.modelInvoker.Invoke(timeoutCtx, "skill_learning", prompt)
 	if err != nil {
 		// Don't write to stderr - return nil and let caller handle error
 		return nil
@@ -1021,7 +1043,7 @@ func (d *SkillPatternDetector) buildNamingPrompt(seq *ToolSequence) string {
 // generateLLMName uses sidecar to generate a meaningful skill name.
 // Returns empty string on error (caller must fallback to generateSuggestedName).
 func (d *SkillPatternDetector) generateLLMName(ctx context.Context, seq *ToolSequence) (string, error) {
-	if !d.sidecarEnabled || d.sidecar == nil {
+	if !d.sidecarEnabled || d.modelInvoker == nil {
 		return "", fmt.Errorf("sidecar not enabled")
 	}
 
@@ -1030,7 +1052,7 @@ func (d *SkillPatternDetector) generateLLMName(ctx context.Context, seq *ToolSeq
 	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	result, err := d.sidecar.Execute(timeoutCtx, prompt)
+	result, err := d.modelInvoker.Invoke(timeoutCtx, "skill_learning", prompt)
 	if err != nil {
 		return "", fmt.Errorf("sidecar naming failed: %w", err)
 	}
