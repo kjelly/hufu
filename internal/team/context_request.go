@@ -63,16 +63,22 @@ type ContextRequest struct {
 	// ModelExecutionID disambiguates concurrent isolated executions of the
 	// same task/agent/attempt (notably extra-model workers). It is an opaque,
 	// deterministic identity, never a provider request payload.
-	ModelExecutionID       string          `json:"model_execution_id,omitempty"`
-	Capabilities           []string        `json:"capabilities,omitempty"`
-	TouchedPaths           []string        `json:"touched_paths,omitempty"`
-	DependencyIDs          []string        `json:"dependency_ids,omitempty"`
-	VerificationCriteria   string          `json:"verification_criteria,omitempty"`
-	CandidateIDs           []string        `json:"candidate_ids,omitempty"`
-	SelectionContract      string          `json:"selection_contract,omitempty"`
-	RecoveryDisposition    string          `json:"recovery_disposition,omitempty"`
-	EnvironmentFingerprint string          `json:"environment_fingerprint,omitempty"`
-	Failure                *ContextFailure `json:"failure,omitempty"`
+	ModelExecutionID       string   `json:"model_execution_id,omitempty"`
+	Capabilities           []string `json:"capabilities,omitempty"`
+	TouchedPaths           []string `json:"touched_paths,omitempty"`
+	DependencyIDs          []string `json:"dependency_ids,omitempty"`
+	VerificationCriteria   string   `json:"verification_criteria,omitempty"`
+	CandidateIDs           []string `json:"candidate_ids,omitempty"`
+	SelectionContract      string   `json:"selection_contract,omitempty"`
+	RecoveryDisposition    string   `json:"recovery_disposition,omitempty"`
+	EnvironmentFingerprint string   `json:"environment_fingerprint,omitempty"`
+	// Parent identity is runtime-only. It is explicitly included in the
+	// request fingerprint and projected content-free into the manifest, but is
+	// not a prompt fragment or a serialized request payload.
+	ParentTrigger             ContextTrigger  `json:"-"`
+	ParentRequestID           string          `json:"-"`
+	ParentManifestFingerprint string          `json:"-"`
+	Failure                   *ContextFailure `json:"failure,omitempty"`
 }
 
 func (r ContextRequest) Validate() error {
@@ -242,7 +248,19 @@ func (r ContextRequest) Fingerprint() string {
 		failure.EvidenceRefs = nil
 		canonical.Failure = &failure
 	}
-	data, _ := json.Marshal(canonical)
+	// Parent metadata is intentionally not serialized as a request, but must
+	// still separate child invocation identity and replay fingerprints.
+	data, _ := json.Marshal(struct {
+		ContextRequest
+		ParentTrigger             ContextTrigger `json:"parent_trigger,omitempty"`
+		ParentRequestID           string         `json:"parent_request_id,omitempty"`
+		ParentManifestFingerprint string         `json:"parent_manifest_fingerprint,omitempty"`
+	}{
+		ContextRequest:            canonical,
+		ParentTrigger:             canonical.ParentTrigger,
+		ParentRequestID:           canonical.ParentRequestID,
+		ParentManifestFingerprint: canonical.ParentManifestFingerprint,
+	})
 	return hashContentKey(string(data))
 }
 

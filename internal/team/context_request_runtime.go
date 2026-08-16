@@ -63,7 +63,7 @@ func (c *Coordinator) newTaskContextRequest(task TaskDef, todoID string, attempt
 	r := ContextRequest{
 		SchemaVersion: ContextRequestSchemaVersion, RunID: c.contextRunID(), TaskID: todoID, Attempt: attempt,
 		Goal: task.Goal, Constraints: task.Constraints, AgentName: agentName, AgentRole: agentRole,
-		Phase: taskContextPhase(task), Trigger: trigger, ActionType: actionType, Capabilities: capabilities,
+		Phase: taskContextPhase(task), Trigger: trigger, Purpose: contextPurposeForTrigger(trigger), ActionType: actionType, Capabilities: capabilities,
 		DependencyIDs: dependencies, VerificationCriteria: task.Verify, Failure: failure,
 		ModelExecutionID: modelExecutionID,
 	}
@@ -72,6 +72,26 @@ func (c *Coordinator) newTaskContextRequest(task TaskDef, todoID string, attempt
 	}
 	r.AssignRequestID()
 	return r
+}
+
+// contextPurposeForTrigger supplies the closed, content-free attribution
+// label for primary model streams. Auxiliary callers select their more
+// specific purpose directly through the purpose registry.
+func contextPurposeForTrigger(trigger ContextTrigger) string {
+	switch trigger {
+	case ContextTriggerRetry:
+		return "task_retry"
+	case ContextTriggerToolFailure:
+		return "tool_failure_recovery"
+	case ContextTriggerCoordinatorStart:
+		return "coordinator_start"
+	case ContextTriggerContinuation:
+		return "coordinator_continuation"
+	case ContextTriggerAuxiliary:
+		return "context_tool"
+	default:
+		return "task_execution"
+	}
 }
 
 func contextModelExecutionID(todoID, agentName, model string) string {
@@ -87,7 +107,7 @@ func (c *Coordinator) newCoordinatorContextRequest(goal string, continuation boo
 	if continuation {
 		trigger = ContextTriggerContinuation
 	}
-	r := ContextRequest{SchemaVersion: ContextRequestSchemaVersion, RunID: c.contextRunID(), Attempt: attempt, Goal: goal, AgentName: "coordinator", AgentRole: "coordinator", Phase: PhaseInit, Trigger: trigger}
+	r := ContextRequest{SchemaVersion: ContextRequestSchemaVersion, RunID: c.contextRunID(), Attempt: attempt, Goal: goal, AgentName: "coordinator", AgentRole: "coordinator", Phase: PhaseInit, Trigger: trigger, Purpose: contextPurposeForTrigger(trigger)}
 	if c != nil && c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		r.Phase = c.phaseWorkflow.State()
 	}

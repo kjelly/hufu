@@ -62,6 +62,20 @@ func TestContextRequestFingerprintSeparatesModelExecutions(t *testing.T) {
 	}
 }
 
+func TestContextRequestFingerprintSeparatesParentInvocations(t *testing.T) {
+	request := validTestContextRequest()
+	request.ParentTrigger = ContextTriggerRetry
+	request.ParentRequestID = "ctx-parent-a"
+	request.ParentManifestFingerprint = "manifest-parent-a"
+	request.AssignRequestID()
+	other := request
+	other.ParentManifestFingerprint = "manifest-parent-b"
+	other.AssignRequestID()
+	if request.Fingerprint() == other.Fingerprint() || request.RequestID == other.RequestID {
+		t.Fatalf("parent invocation identity did not separate child requests: %#v / %#v", request, other)
+	}
+}
+
 func TestContextRequestJSONNeverPersistsFailureEvidence(t *testing.T) {
 	r := validTestContextRequest()
 	r.Failure = &ContextFailure{ErrorClass: "tool_error", EvidenceRefs: []string{"raw transcript api_key=secret-value"}, ToolInputHash: "opaque-hash"}
@@ -80,8 +94,24 @@ func TestTaskContextRequestUsesIsolatedModelExecutionIdentity(t *testing.T) {
 	if r.ModelExecutionID != "extra-model-slot-2" {
 		t.Fatalf("model execution identity = %q", r.ModelExecutionID)
 	}
+	if r.Purpose != "task_execution" {
+		t.Fatalf("dispatch purpose = %q", r.Purpose)
+	}
+	retry := c.newTaskContextRequest(TaskDef{Goal: "task", Model: "same-model"}, "task-1", 2, ContextTriggerRetry, "worker", "worker", &ContextFailure{ErrorClass: "timeout"})
+	if retry.Purpose != "task_retry" {
+		t.Fatalf("retry purpose = %q", retry.Purpose)
+	}
 	if err := r.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCoordinatorContextRequestUsesExplicitPurpose(t *testing.T) {
+	c := &Coordinator{executionRunID: "run-1"}
+	start := c.newCoordinatorContextRequest("coordinate", false, 1)
+	continuation := c.newCoordinatorContextRequest("continue", true, 2)
+	if start.Purpose != "coordinator_start" || continuation.Purpose != "coordinator_continuation" {
+		t.Fatalf("coordinator purposes = %q / %q", start.Purpose, continuation.Purpose)
 	}
 }
 
