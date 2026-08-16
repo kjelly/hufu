@@ -101,12 +101,12 @@ func TestAdversarialVerifySkipsWithoutSidecar(t *testing.T) {
 		session: &TeamSession{},
 	}
 	task := TaskDef{Agent: "a", Goal: "g", AdversarialVerify: 3}
-	if err := c.adversarialVerify(context.Background(), task, "output"); err != nil {
+	if err := c.adversarialVerify(context.Background(), task, "task-1", "output"); err != nil {
 		t.Errorf("expected silent skip without sidecar, got %v", err)
 	}
 
 	// Disabled tasks are a no-op regardless of sidecar availability.
-	if err := c.adversarialVerify(context.Background(), TaskDef{Agent: "a", Goal: "g"}, "output"); err != nil {
+	if err := c.adversarialVerify(context.Background(), TaskDef{Agent: "a", Goal: "g"}, "task-1", "output"); err != nil {
 		t.Errorf("expected no-op when disabled, got %v", err)
 	}
 }
