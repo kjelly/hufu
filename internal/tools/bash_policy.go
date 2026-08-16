@@ -137,6 +137,206 @@ func normalizeBashCommand(command, workspaceName string) string {
 
 var redirectRe = regexp.MustCompile(`(.+?)\s*(>|>>)\s*(\S+)\s*$`)
 
+// checkReadOnlyBashCommand enforces the side_effect:none execution contract
+// for the intentionally broad bash tool. It deliberately accepts a small,
+// inspection-oriented command set rather than attempting to recognize every
+// possible mutation in shell syntax. Any syntax that can introduce a hidden
+// command, redirect output, or run an unknown executable is denied.
+func checkReadOnlyBashCommand(command string) error {
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return fmt.Errorf("read-only bash policy: command is required")
+	}
+	if hasUnsafeReadOnlyShellSyntax(trimmed) {
+		return fmt.Errorf("read-only bash policy denied shell expansion, control syntax, or output redirection")
+	}
+
+	segments, ok := splitReadOnlyBashSegments(trimmed)
+	if !ok {
+		return fmt.Errorf("read-only bash policy denied malformed shell syntax")
+	}
+	if len(segments) == 0 {
+		return fmt.Errorf("read-only bash policy denied an empty command")
+	}
+	for _, segment := range segments {
+		if err := checkReadOnlyBashSegment(strings.TrimSpace(segment)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkReadOnlyBashSegment(segment string) error {
+	fields := strings.Fields(segment)
+	if len(fields) == 0 {
+		return fmt.Errorf("read-only bash policy denied an empty command segment")
+	}
+	name := fields[0]
+	if name == "git" {
+		if !readOnlyGitCommand(fields[1:]) {
+			return fmt.Errorf("read-only bash policy denied git command %q", segment)
+		}
+		return nil
+	}
+	if name == "go" {
+		if len(fields) < 2 || !map[string]bool{"test": true, "vet": true, "list": true, "env": true, "version": true, "doc": true}[fields[1]] {
+			return fmt.Errorf("read-only bash policy denied go command %q", segment)
+		}
+		return nil
+	}
+	if name == "golangci-lint" {
+		if len(fields) < 2 || fields[1] != "run" || containsField(fields[2:], "--fix") {
+			return fmt.Errorf("read-only bash policy denied golangci-lint command %q", segment)
+		}
+		return nil
+	}
+	if !map[string]bool{
+		"rg": true, "grep": true, "sed": true, "cat": true, "head": true,
+		"tail": true, "find": true, "ls": true, "pwd": true, "wc": true,
+		"sort": true, "uniq": true, "cut": true, "tr": true, "basename": true,
+		"dirname": true, "stat": true, "file": true, "sha256sum": true,
+		"md5sum": true, "diff": true, "echo": true,
+	}[name] {
+		return fmt.Errorf("read-only bash policy denied command %q", name)
+	}
+	if (name == "sed" && containsField(fields[1:], "-i")) ||
+		(name == "find" && containsAnyField(fields[1:], "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fls")) {
+		return fmt.Errorf("read-only bash policy denied potentially mutating command %q", segment)
+	}
+	return nil
+}
+
+// hasUnsafeReadOnlyShellSyntax rejects shell syntax that could alter command
+// execution. Quoted grep/regex patterns are treated as data, so a literal
+// parenthesis or semicolon inside single or double quotes does not trigger a
+// false positive.
+func hasUnsafeReadOnlyShellSyntax(command string) bool {
+	var quote byte
+	for i := 0; i < len(command); i++ {
+		r := command[i]
+		if r == '\\' && quote != '\'' {
+			// A backslash quotes the following byte for the purpose of this
+			// small lexical gate. The subsequent byte is never command syntax.
+			i++
+			continue
+		}
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch r {
+		case '\'', '"':
+			quote = r
+		case '\n', ';', '`', '$', '<', '>', '(', ')', '{', '}':
+			return true
+		}
+	}
+	return quote != 0
+}
+
+// splitReadOnlyBashSegments permits only the ordinary inspection pipelines
+// agents need: commands joined by |, &&, or ||. It recognizes separators only
+// outside quotes and rejects a lone &, so background jobs cannot escape the
+// read-only policy.
+func splitReadOnlyBashSegments(command string) ([]string, bool) {
+	var segments []string
+	start := 0
+	var quote byte
+	for i := 0; i < len(command); i++ {
+		ch := command[i]
+		if ch == '\\' && quote != '\'' {
+			i++
+			continue
+		}
+		if quote != 0 {
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			quote = ch
+			continue
+		}
+		if ch != '|' && ch != '&' {
+			continue
+		}
+		width := 1
+		if ch == '&' {
+			if i+1 >= len(command) || command[i+1] != '&' {
+				return nil, false
+			}
+			width = 2
+		} else if i+1 < len(command) && command[i+1] == '|' {
+			width = 2
+		}
+		segment := strings.TrimSpace(command[start:i])
+		if segment == "" {
+			return nil, false
+		}
+		segments = append(segments, segment)
+		i += width - 1
+		start = i + 1
+	}
+	if quote != 0 {
+		return nil, false
+	}
+	last := strings.TrimSpace(command[start:])
+	if last == "" {
+		return nil, false
+	}
+	return append(segments, last), true
+}
+
+func readOnlyGitCommand(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	idx := 0
+	for idx < len(args) {
+		switch args[idx] {
+		case "--no-pager", "--paginate":
+			idx++
+		case "-C":
+			idx += 2
+		default:
+			goto command
+		}
+	}
+command:
+	if idx >= len(args) {
+		return false
+	}
+	subcommand := args[idx]
+	allowed := map[string]bool{
+		"status": true, "log": true, "show": true, "diff": true,
+		"rev-parse": true, "merge-base": true, "ls-files": true,
+		"ls-tree": true, "cat-file": true, "blame": true,
+		"shortlog": true, "describe": true,
+	}
+	return allowed[subcommand]
+}
+
+func containsField(fields []string, want string) bool {
+	for _, field := range fields {
+		if field == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAnyField(fields []string, wants ...string) bool {
+	for _, want := range wants {
+		if containsField(fields, want) {
+			return true
+		}
+	}
+	return false
+}
+
 func rewriteBashRedirects(command string) string {
 	lines := strings.Split(command, "\n")
 	for i, line := range lines {

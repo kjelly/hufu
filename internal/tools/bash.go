@@ -95,6 +95,16 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		args.Command = rest
 	}
 
+	args.Command = normalizeBashCommand(args.Command, effCfg.WorkspaceName)
+	if readOnly, _ := ctx.Value(AgentReadOnlyExecutionKey).(bool); readOnly {
+		// Enforce the task's capability contract before validating the requested
+		// directory. A denied mutating command must not be reported as a benign
+		// path error merely because it also supplied an unapproved workdir.
+		if err := checkReadOnlyBashCommand(args.Command); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
+	}
+
 	if args.WorkDir != "" {
 		abs, errResp := resolveBashWorkDir(args.WorkDir, effCfg, cfg.ToolName)
 		if errResp != nil {
@@ -103,7 +113,6 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		effCfg.WorkDir = abs
 	}
 
-	args.Command = normalizeBashCommand(args.Command, effCfg.WorkspaceName)
 	if bannedCmdRe.MatchString(args.Command) {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("command '%s' is not allowed", args.Command)), nil
 	}

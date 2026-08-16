@@ -126,6 +126,51 @@ func TestBashAndSudoRuntimeWorkflowWriteIsolation(t *testing.T) {
 	}
 }
 
+func TestBashReadScopeDoesNotEnableWorkflowWriteIsolation(t *testing.T) {
+	workDir := t.TempDir()
+	ctx := context.WithValue(context.Background(), AgentAllowedPathsKey, []string{workDir})
+	resp, err := executeBash(ctx, fantasy.ToolCall{Input: `{"command":"pwd","working_directory":"` + workDir + `"}`}, ToolConfig{})
+	if err != nil {
+		t.Fatalf("executeBash returned system error: %v", err)
+	}
+	if resp.IsError {
+		t.Fatalf("read-scoped bash was incorrectly treated as write-isolated: %s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, workDir) {
+		t.Fatalf("pwd output = %q, want %q", resp.Content, workDir)
+	}
+}
+
+func TestBashReadOnlyExecutionRejectsGitWrites(t *testing.T) {
+	workDir := t.TempDir()
+	ctx := context.WithValue(context.Background(), AgentReadOnlyExecutionKey, true)
+	resp, err := executeBash(ctx, fantasy.ToolCall{Input: `{"command":"git stash push -m blocked","working_directory":"` + workDir + `"}`}, ToolConfig{})
+	if err != nil {
+		t.Fatalf("executeBash returned system error: %v", err)
+	}
+	if !resp.IsError || !strings.Contains(resp.Content, "read-only bash policy denied git command") {
+		t.Fatalf("git stash write was not rejected: %s", resp.Content)
+	}
+}
+
+func TestBashReadOnlyExecutionPermitsGitDiff(t *testing.T) {
+	workDir := t.TempDir()
+	ctx := context.WithValue(context.Background(), AgentReadOnlyExecutionKey, true)
+	resp, err := executeBash(ctx, fantasy.ToolCall{Input: `{"command":"git diff --stat","working_directory":"` + workDir + `"}`}, ToolConfig{})
+	if err != nil {
+		t.Fatalf("executeBash returned system error: %v", err)
+	}
+	if resp.IsError && strings.Contains(resp.Content, "read-only bash policy") {
+		t.Fatalf("read-only git diff was rejected by policy: %s", resp.Content)
+	}
+}
+
+func TestReadOnlyBashPolicyPermitsQuotedRegexAndEcho(t *testing.T) {
+	if err := checkReadOnlyBashCommand(`grep -rn "func (c *Coordinator) Sidecar" internal/team | head -20 && echo done`); err != nil {
+		t.Fatalf("safe inspection command was rejected: %v", err)
+	}
+}
+
 func TestRewriteLineRedirects(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -49,6 +49,13 @@ type agentAllowedWritePathsKeyType struct{}
 
 var AgentAllowedWritePathsKey = agentAllowedWritePathsKeyType{}
 
+// agentReadOnlyExecutionKey marks a task whose declared side-effect contract
+// is none. Tools with broad execution capability must enforce this at runtime;
+// a frontmatter label alone is not an authorization boundary.
+type agentReadOnlyExecutionKeyType struct{}
+
+var AgentReadOnlyExecutionKey = agentReadOnlyExecutionKeyType{}
+
 type agentRestrictedPathKeyType struct{}
 
 var AgentRestrictedPathKey = agentRestrictedPathKeyType{}

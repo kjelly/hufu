@@ -454,10 +454,11 @@ func mergedAllowedWritePaths(cfg ToolConfig, ctx context.Context) []string {
 		}
 		return paths
 	}
-	if len(cfg.AllowedWritePaths) > 0 {
-		return cfg.AllowedWritePaths
-	}
-	return mergedAllowedPaths(cfg, ctx)
+	// Read scopes and write-isolation scopes are different capabilities. A
+	// worker's AgentAllowedPathsKey is installed for ordinary read access and
+	// must not silently turn into an explicit write scope: bash treats a
+	// non-empty AllowedWritePaths as a runtime workflow isolation boundary.
+	return cfg.AllowedWritePaths
 }
 
 func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
