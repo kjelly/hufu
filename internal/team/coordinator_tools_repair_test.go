@@ -14,6 +14,7 @@ import (
 )
 
 type protocolRecordingTool struct {
+	name      string
 	runs      int
 	response  fantasy.ToolResponse
 	err       error
@@ -22,6 +23,9 @@ type protocolRecordingTool struct {
 }
 
 func (m *protocolRecordingTool) Info() fantasy.ToolInfo {
+	if m.name != "" && m.name != "agent" {
+		return fantasy.ToolInfo{Name: m.name}
+	}
 	return fantasy.ToolInfo{
 		Name: "agent",
 		Parameters: map[string]any{
@@ -36,6 +40,49 @@ func (m *protocolRecordingTool) Info() fantasy.ToolInfo {
 			},
 		},
 		Required: []string{"tasks"},
+	}
+}
+
+func TestCoordinatorToolArgumentRepairRedirectsOneWrongToolWithoutExecution(t *testing.T) {
+	c := &Coordinator{}
+	state := &protocolRepairState{}
+	agentTool := &protocolRecordingTool{name: "agent"}
+	strayTool := &protocolRecordingTool{name: "ls"}
+	agentWrapper := &protocolRepairWrapper{base: agentTool, c: c, state: state}
+	strayWrapper := &protocolRepairWrapper{base: strayTool, c: c, state: state}
+
+	first, err := agentWrapper.Run(context.Background(), fantasy.ToolCall{ID: "original", Name: "agent", Input: `{"tasks":"bad"}`})
+	if err != nil || !first.IsError {
+		t.Fatalf("first response=%+v err=%v", first, err)
+	}
+	redirect, err := strayWrapper.Run(context.Background(), fantasy.ToolCall{ID: "stray", Name: "ls", Input: `{}`})
+	if err != nil || !redirect.IsError {
+		t.Fatalf("redirect response=%+v err=%v", redirect, err)
+	}
+	if strayTool.runs != 0 || agentTool.runs != 0 {
+		t.Fatalf("redirect executed a tool: stray=%d agent=%d", strayTool.runs, agentTool.runs)
+	}
+	for _, fragment := range []string{`pending for tool "agent"`, `Do not call "ls"`, `only permitted next call is "agent"`} {
+		if !strings.Contains(redirect.Content, fragment) {
+			t.Fatalf("redirect prompt missing %q: %s", fragment, redirect.Content)
+		}
+	}
+
+	corrected, err := agentWrapper.Run(context.Background(), fantasy.ToolCall{ID: "corrected", Name: "agent", Input: `{"tasks":[{"agent":"worker","goal":"fixed"}]}`})
+	if err != nil || corrected.IsError || agentTool.runs != 1 {
+		t.Fatalf("corrected response=%+v err=%v runs=%d", corrected, err, agentTool.runs)
+	}
+}
+
+func TestCoordinatorToolArgumentRepairFailsClosedAfterSecondWrongTool(t *testing.T) {
+	state := &protocolRepairState{}
+	agentWrapper := &protocolRepairWrapper{base: &protocolRecordingTool{name: "agent"}, c: &Coordinator{}, state: state}
+	strayWrapper := &protocolRepairWrapper{base: &protocolRecordingTool{name: "ls"}, c: &Coordinator{}, state: state}
+	_, _ = agentWrapper.Run(context.Background(), fantasy.ToolCall{ID: "original", Name: "agent", Input: `{"tasks":"bad"}`})
+	_, _ = strayWrapper.Run(context.Background(), fantasy.ToolCall{ID: "first-stray", Name: "ls", Input: `{}`})
+	_, err := strayWrapper.Run(context.Background(), fantasy.ToolCall{ID: "second-stray", Name: "ls", Input: `{}`})
+	if err == nil || !strings.Contains(err.Error(), "repair failed closed") {
+		t.Fatalf("second stray error=%v, want terminal fail-closed error", err)
 	}
 }
 

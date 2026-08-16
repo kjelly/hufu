@@ -28,7 +28,10 @@ type protocolRepairAttempt struct {
 	tool           string
 	originalCallID string
 	original       *toolArgumentSchemaError
+	redirects      int
 }
+
+const maxProtocolRepairRedirects = 1
 
 type protocolRepairWrapper struct {
 	base  fantasy.AgentTool
@@ -62,18 +65,24 @@ func (t *protocolRepairWrapper) Run(ctx context.Context, call fantasy.ToolCall) 
 	pending := t.state.pending
 
 	if pending != nil {
+		if call.Name != pending.tool && t.base.Info().Name != pending.tool {
+			mismatch := &toolArgumentSchemaError{Path: "$", Expected: "complete arguments for tool " + strconv.Quote(pending.tool), Actual: "tool " + strconv.Quote(t.base.Info().Name)}
+			if pending.redirects < maxProtocolRepairRedirects {
+				pending.redirects++
+				t.state.mu.Unlock()
+				t.auditViolation(ctx, call, mismatch, true, "repair_redirected")
+				return fantasy.NewTextErrorResponse(buildProtocolRepairRedirectPrompt(pending, call)), nil
+			}
+			t.state.pending = nil
+			t.state.mu.Unlock()
+			t.auditViolation(ctx, call, mismatch, true, "terminal_failure")
+			return fantasy.ToolResponse{}, t.terminalRepairError(ctx, pending, call, mismatch)
+		}
 		if validationErr != nil {
 			t.state.pending = nil
 			t.state.mu.Unlock()
 			t.auditViolation(ctx, call, validationErr, true, "terminal_failure")
 			return fantasy.ToolResponse{}, t.terminalRepairError(ctx, pending, call, validationErr)
-		}
-		if call.Name != pending.tool && t.base.Info().Name != pending.tool {
-			t.state.pending = nil
-			t.state.mu.Unlock()
-			mismatch := &toolArgumentSchemaError{Path: "$", Expected: "complete arguments for tool " + strconv.Quote(pending.tool), Actual: "tool " + strconv.Quote(t.base.Info().Name)}
-			t.auditViolation(ctx, call, mismatch, true, "terminal_failure")
-			return fantasy.ToolResponse{}, t.terminalRepairError(ctx, pending, call, mismatch)
 		}
 		// A schema-valid regeneration consumes the pending repair before the
 		// policy/tool boundary. Any later policy or execution error is terminal
@@ -109,6 +118,18 @@ func (t *protocolRepairWrapper) Run(ctx context.Context, call fantasy.ToolCall) 
 	// sequence, execution, and non-zero tool results are intentionally outside
 	// the repair protocol.
 	return t.base.Run(ctx, call)
+}
+
+// buildProtocolRepairRedirectPrompt rejects a stray tool call without running
+// it and leaves the original repair pending. This is bounded by
+// maxProtocolRepairRedirects; it gives tool-calling models one clear chance to
+// return to the schema repair without turning an invalid coordinator request
+// into a terminal run failure.
+func buildProtocolRepairRedirectPrompt(pending *protocolRepairAttempt, call fantasy.ToolCall) string {
+	if pending == nil {
+		return "A tool argument repair is pending. Call the required tool with corrected complete arguments."
+	}
+	return fmt.Sprintf("A repair is pending for tool %q. Do not call %q or any other tool. Your only permitted next call is %q with a complete corrected argument object. The original schema error was: %s", pending.tool, call.Name, pending.tool, pending.original.Error())
 }
 
 func (t *protocolRepairWrapper) terminalRepairError(ctx context.Context, original *protocolRepairAttempt, repaired fantasy.ToolCall, repairErr *toolArgumentSchemaError) error {
