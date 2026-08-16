@@ -13,6 +13,10 @@ import (
 const auxiliaryPromptMaxRunes = 24000
 
 func (c *Coordinator) prepareAuxiliaryPrompt(ctx context.Context, purpose, rawPrompt string) (string, error) {
+	purpose = strings.ToLower(strings.TrimSpace(purpose))
+	if _, err := contextPurposePolicy(purpose); err != nil {
+		return "", err
+	}
 	todoID, _ := ctx.Value(todoIDKey{}).(string)
 	attempt, _ := ctx.Value(executionAttemptKey{}).(int)
 	if attempt < 1 {
@@ -26,7 +30,30 @@ func (c *Coordinator) prepareAuxiliaryPrompt(ctx context.Context, purpose, rawPr
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		phase = c.phaseWorkflow.State()
 	}
+	var parent InvocationMetadata
+	if metadata, ok := invocationMetadataFromContext(ctx); ok {
+		parent = metadata
+		if metadata.TaskID != "" {
+			todoID = metadata.TaskID
+		}
+		if metadata.Attempt > 0 {
+			attempt = metadata.Attempt
+		}
+		if metadata.AgentName != "" {
+			agentName = metadata.AgentName
+		}
+		if metadata.Phase != "" {
+			phase = metadata.Phase
+		}
+	}
 	request := c.newAuxiliaryContextRequest(todoID, attempt, agentName, phase, purpose, rawPrompt)
+	if parent.Trigger != "" {
+		request.ParentTrigger = parent.Trigger
+		request.ParentRequestID = parent.ParentRequestID
+		request.ParentManifestFingerprint = parent.ParentManifestFingerprint
+		request.EnvironmentFingerprint = parent.EnvironmentFingerprint
+		request.ModelExecutionID = contextModelExecutionID(request.TaskID, parent.ModelExecutionID, purpose)
+	}
 	request.AssignRequestID()
 	// Auxiliary reviewers are intentionally isolated: they receive only their
 	// purpose contract/candidate evidence, never the worker's STM/LTM or raw
@@ -64,29 +91,29 @@ func (c *Coordinator) newAuxiliaryContextRequest(todoID string, attempt int, age
 		ActionType:       fmt.Sprintf("%s:%d", purpose, c.contextRequestSeq.Add(1)),
 		ModelExecutionID: contextModelExecutionID(todoID, agentName, purpose),
 	}
+	policy, err := contextPurposePolicy(purpose)
+	if err != nil {
+		// Callers use prepareAuxiliaryPrompt, which rejects unsupported purpose
+		// before reaching this constructor. Retain a valid deterministic request
+		// for tests/helpers that construct a fallback directly.
+		policy = ContextPurposePolicy{Trigger: ContextTriggerSidecarTask}
+	}
+	request.Trigger = policy.Trigger
 	switch purpose {
 	case "skill_matcher":
-		request.Trigger = ContextTriggerSkillMatch
 	case "guard_reviewer", "path_reviewer":
-		request.Trigger = ContextTriggerGuardReview
 		request.Failure = &ContextFailure{ToolName: strings.TrimSuffix(purpose, "_reviewer"), ToolInputHash: hashContentKey(utils.RedactSecrets(rawPrompt))}
 	case "plan_reviewer":
-		request.Trigger = ContextTriggerPlanReview
 		request.VerificationCriteria = "review plan against task acceptance criteria"
 	case "judge":
-		request.Trigger = ContextTriggerJudge
 		request.CandidateIDs = []string{"bounded-candidate-set"}
 		request.SelectionContract = "select the best candidate under the provided contract"
 	case "skeptic":
-		request.Trigger = ContextTriggerSkeptic
 		request.CandidateIDs = []string{"bounded-candidate"}
 		request.VerificationCriteria = "challenge the candidate against the provided verification contract"
 	case "reflection", "result_repair", "final_summary_repair", "protocol_repair":
-		request.Trigger = ContextTriggerRepair
 		request.RecoveryDisposition = "approved_recovery_only"
 		request.Failure = &ContextFailure{ErrorClass: "recovery", EvidenceRefs: []string{"opaque-recovery-evidence"}}
-	default:
-		request.Trigger = ContextTriggerSidecarTask
 	}
 	if request.TaskID == "" {
 		switch request.Trigger {
@@ -118,7 +145,25 @@ func (c *Coordinator) recordAuxiliaryFallback(ctx context.Context, purpose, outc
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		phase = c.phaseWorkflow.State()
 	}
+	purpose = strings.ToLower(strings.TrimSpace(purpose))
+	policy, err := contextPurposePolicy(purpose)
+	if err != nil {
+		return err
+	}
+	if !policy.FallbackAllowed {
+		return fmt.Errorf("context purpose %q requires model availability or a fail-closed caller", purpose)
+	}
+	if strings.TrimSpace(outcome) == "" {
+		outcome = policy.FallbackOutcome
+	}
 	request := c.newAuxiliaryContextRequest(todoID, attempt, purpose, phase, purpose, "deterministic auxiliary fallback")
+	if parent, ok := invocationMetadataFromContext(ctx); ok {
+		request.ParentTrigger = parent.Trigger
+		request.ParentRequestID = parent.ParentRequestID
+		request.ParentManifestFingerprint = parent.ParentManifestFingerprint
+		request.EnvironmentFingerprint = parent.EnvironmentFingerprint
+		request.ModelExecutionID = contextModelExecutionID(request.TaskID, parent.ModelExecutionID, purpose)
+	}
 	request.ActionType = fmt.Sprintf("fallback:%s:%d", purpose, c.contextRequestSeq.Add(1))
 	request.AssignRequestID()
 	manifest := BuildContextInjectionManifest(request, CompiledContext{}, nil, purpose, time.Now().UTC())
