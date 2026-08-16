@@ -525,6 +525,7 @@ guard-model: qwen3:8b            # Guard / 審核用模型
 skills: code-review,git-commit  # 要包含的 skills
 skills-exclude: debug            # 要排除的 skills
 auto-skills: false              # 啟用自動技能偵測
+auto-report: false              # 每次 team 執行後寫入 workspace/<team>/report.md
 
 # === 安全性 ===
 allowed-paths: ["/home/user/projects", "/tmp"]  # 允許的檔案路徑

@@ -573,6 +573,7 @@ escalate-on-retry: false        # Escalate to next stronger model on retry (requ
 skills: code-review,git-commit  # Skills to include
 skills-exclude: debug            # Skills to exclude
 auto-skills: false              # Enable automatic skill detection
+auto-report: false              # Always write workspace/<team>/report.md after a team run
 
 # === Outcome-driven Memory ===
 memory-learning:
