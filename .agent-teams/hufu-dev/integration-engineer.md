@@ -2,7 +2,7 @@
 name: integration-engineer
 description: Hufu integration specialist — analyzes CLI, config, tools, MCP, providers, sidecars, TUI, and external boundaries
 role: worker
-tools: view,grep,glob,ls
+tools: view,grep,glob,ls,bash
 temperature: "0.2"
 max-tokens: "8192"
 side_effect: none

@@ -1,7 +1,7 @@
 name: hufu-dev
 description: "Hufu-specific development team with domain analysis, single-writer implementation, and independent verification"
 max-rounds: 14
-max-steps: 50
+max-steps: 100
 timeout: 3300
 max-retries: 1
 max-concurrent: 2

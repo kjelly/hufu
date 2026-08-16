@@ -2,7 +2,7 @@
 name: runtime-engineer
 description: Hufu runtime specialist — analyzes orchestration, workflow, context, state, memory, recovery, and agent-team semantics
 role: worker
-tools: view,grep,glob,ls
+tools: view,grep,glob,ls,bash
 temperature: "0.2"
 max-tokens: "8192"
 side_effect: none
