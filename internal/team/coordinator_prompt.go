@@ -44,9 +44,14 @@ func (c *Coordinator) appendRuntimeWorkflowPrompt(b *strings.Builder) {
 }
 
 func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) string {
-	workerNames, _ := c.buildWorkerNamesAndDescs()
+	// Use the same policy-filtered worker names exposed by the `agent` tool.
+	// LoadTeam always injects a built-in Helper, but teams can deliberately
+	// exclude it through delegation.allowed-workers. Listing that excluded
+	// worker here makes the prompt contradict the tool schema and causes an
+	// avoidable coordinator protocol repair.
+	workerNames := c.workerNameList()
 	initialPending := c.initialDelegationPending()
-	workerDefs := c.uniqueWorkerDefs()
+	workerDefs := c.workerDefsForNames(workerNames)
 	workerNames, workerDefs, initialPending = c.runtimeWorkflowWorkers(workerNames, workerDefs, initialPending)
 	if initialPending {
 		// Do not present later-phase workers as selectable evidence to a fresh
@@ -304,6 +309,23 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	}
 
 	return b.String()
+}
+
+func (c *Coordinator) workerDefsForNames(names []string) []*agent.AgentDef {
+	if len(names) == 0 {
+		return nil
+	}
+	byName := make(map[string]*agent.AgentDef, len(names))
+	for _, def := range c.uniqueWorkerDefs() {
+		byName[strings.ToLower(def.Name)] = def
+	}
+	defs := make([]*agent.AgentDef, 0, len(names))
+	for _, name := range names {
+		if def := byName[strings.ToLower(name)]; def != nil {
+			defs = append(defs, def)
+		}
+	}
+	return defs
 }
 
 // filterDeniedPromptLines removes coordinator instructions for tools that the

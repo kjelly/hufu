@@ -26,6 +26,28 @@ func TestDefaultCoordinatorPromptOmitsMemoryMutationAliases(t *testing.T) {
 	}
 }
 
+func TestCoordinatorPromptMatchesDelegationAllowlist(t *testing.T) {
+	c := &Coordinator{
+		session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{
+			Name:       "review-team",
+			Delegation: agent.DelegationPolicy{AllowedWorkers: []string{"reviewer"}},
+		}, Agents: map[string]*agent.AgentDef{
+			"coordinator": {Name: "coordinator", Role: "coordinator"},
+			"reviewer":    {Name: "reviewer", Role: "worker", Description: "allowed reviewer"},
+			"helper":      {Name: "Helper", Role: "worker", Description: "built-in fallback"},
+		}},
+		coreTools:   workerInvariantCoreTools(t),
+		taskTracker: NewTaskTracker(),
+	}
+	prompt := c.BuildOrchestratorPrompt()
+	if !strings.Contains(prompt, "Valid names: reviewer") || !strings.Contains(prompt, "### reviewer") {
+		t.Fatalf("prompt omitted allowlisted reviewer: %s", prompt)
+	}
+	if strings.Contains(prompt, "Valid names: reviewer, Helper") || strings.Contains(prompt, "### Helper\n") {
+		t.Fatalf("prompt exposed allowlist-excluded helper: %s", prompt)
+	}
+}
+
 func TestCoordinatorPromptDescribesOptedInAliasAsCandidate(t *testing.T) {
 	c := &Coordinator{
 		session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "team"}, Agents: map[string]*agent.AgentDef{
