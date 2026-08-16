@@ -19,22 +19,29 @@ func protocolAttemptWasReadOnly(steps []fantasy.StepResult) bool {
 	for _, step := range steps {
 		for _, call := range step.Content.ToolCalls() {
 			sawCall = true
-			switch strings.TrimSpace(call.ToolName) {
-			case "view", "grep", "glob", "ls", "math", "random":
-				continue
-			case "bash":
-				var input struct {
-					Command string `json:"command"`
-				}
-				if err := json.Unmarshal([]byte(call.Input), &input); err != nil || !tools.IsReadOnlyBashCommand(input.Command) {
-					return false
-				}
-			default:
+			if !isReadOnlyToolCall(call.ToolName, call.Input) {
 				return false
 			}
 		}
 	}
 	return sawCall
+}
+
+// isReadOnlyToolCall is the narrow capability classification shared by retry
+// and coordinator recovery. Unknown tools and malformed bash calls are never
+// treated as safe: callers must preserve their existing fail-closed behavior.
+func isReadOnlyToolCall(toolName, input string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "view", "grep", "glob", "ls", "math", "random", "team_info":
+		return true
+	case "bash":
+		var args struct {
+			Command string `json:"command"`
+		}
+		return json.Unmarshal([]byte(input), &args) == nil && tools.IsReadOnlyBashCommand(args.Command)
+	default:
+		return false
+	}
 }
 
 // protocolRepairEvidenceSummary avoids carrying old fantasy tool messages into

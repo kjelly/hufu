@@ -89,6 +89,7 @@ func TestProtocolAttemptWasReadOnly(t *testing.T) {
 		{Response: fantasy.Response{Content: fantasy.ResponseContent{
 			fantasy.ToolCallContent{ToolName: "view", Input: `{"file_path":"internal/team/coordinator.go"}`},
 			fantasy.ToolCallContent{ToolName: "bash", Input: `{"command":"cd internal/team && git diff --stat"}`},
+			fantasy.ToolCallContent{ToolName: "team_info", Input: `{"action":"task_result","agent":"worker"}`},
 		}}},
 	}
 	if !protocolAttemptWasReadOnly(readOnly) {
