@@ -317,29 +317,20 @@ func (c *Coordinator) runSharedContextCandidateIDs(ctx context.Context, runID st
 	return ids, nil
 }
 
-// completionGateState reads authoritative coordinator state immediately before
-// certification. Observation errors are represented as findings so the gate
-// fails closed rather than treating an unavailable state as clean.
+// completionGateState reads authoritative runtime state immediately before
+// certification. Worker-supplied Risks and OpenQuestions intentionally do not
+// participate here: they are report and handoff data, and the task-result
+// contract explicitly permits them on a successful or completed-with-gaps
+// task. Treating that model-authored prose as a run blocker lets an otherwise
+// verified PASS be downgraded merely for disclosing a non-blocking caveat.
+//
+// Actual incompleteness remains fail-closed through required task status,
+// objective evidence, acceptance, and terminal-leak checks in
+// EvaluateCompletionGate. Those are runtime-owned facts rather than a model's
+// classification of a finding.
 func (c *Coordinator) completionGateState() (risks, terminalLeaks []string) {
 	if c == nil {
 		return []string{"coordinator is unavailable"}, nil
-	}
-	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-		for _, item := range c.taskTracker.TodoList().Items() {
-			if item == nil || item.TypedResult == nil {
-				continue
-			}
-			for _, risk := range item.TypedResult.Risks {
-				if strings.TrimSpace(risk.Description) != "" {
-					risks = append(risks, fmt.Sprintf("task %s: %s", item.ID, strings.TrimSpace(risk.Description)))
-				}
-			}
-			for _, question := range item.TypedResult.OpenQuestions {
-				if strings.TrimSpace(question) != "" {
-					risks = append(risks, fmt.Sprintf("task %s open question: %s", item.ID, strings.TrimSpace(question)))
-				}
-			}
-		}
 	}
 	if c.terminalSessionMgr != nil {
 		// A new run may resume in a workspace containing a child from an older

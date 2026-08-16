@@ -105,20 +105,36 @@ func TestApplyCompletionGateDowngradesMissingEvidence(t *testing.T) {
 	}
 }
 
-func TestApplyCompletionGateReadsActualUnresolvedRisk(t *testing.T) {
+func TestApplyCompletionGateDoesNotDowngradeSuccessfulTaskForReportedRisk(t *testing.T) {
 	ws := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(ws, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
 	c := &Coordinator{
-		session:     &TeamSession{Workspace: ws, Config: agent.TeamConfig{Name: "test"}},
-		taskTracker: NewTaskTracker(), executionRunID: "run-risk",
+		session:        &TeamSession{Workspace: ws, Config: agent.TeamConfig{Name: "test"}},
+		projectDir:     "project",
+		contextRepo:    repo,
+		taskTracker:    NewTaskTracker(),
+		executionRunID: "run-risk",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "task"}})[0]
 	c.taskTracker.TodoList().UpdateStatus(item.ID, TaskDone, "done")
-	item.TypedResult = &TaskResult{Risks: []Risk{{Description: "external state is uncertain"}}}
-	result := &RunResult{Outcome: RunOutcomeCompleted, GoalSatisfied: true, Acceptance: &AcceptanceResult{State: AcceptancePassed}}
-	c.lastEvidenceManifest = &EvidenceManifest{RunID: "run-risk", Status: "accepted", ManifestHash: "hash", EvidenceResults: []EvidenceResult{{RequirementID: "task:1", Status: "passed"}, {RequirementID: "run:acceptance", Status: "passed"}}}
+	item.TypedResult = &TaskResult{
+		Status:        TaskResultStatusSuccess,
+		Risks:         []Risk{{Description: "existing worktree changes must be committed together"}},
+		OpenQuestions: OpenQuestions{"Should the follow-up be scheduled?"},
+	}
+	result := &RunResult{Outcome: RunOutcomeCompleted, GoalSatisfied: true, StopReason: StopReasonCompleted, Acceptance: &AcceptanceResult{State: AcceptancePassed}}
+	manifest := &EvidenceManifest{RunID: "run-risk", Status: "accepted", EvidenceResults: []EvidenceResult{{RequirementID: "task:1", Status: "passed"}, {RequirementID: "run:acceptance", Status: "passed"}}}
+	if err := manifest.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	c.lastEvidenceManifest = manifest
 	got := c.applyCompletionGate(context.Background(), result, result.Acceptance)
-	if got.Outcome != RunOutcomePartial || got.StopReason != StopReasonEvidenceIncomplete || !strings.Contains(got.Reason, "external state is uncertain") {
-		t.Fatalf("risk-gated result = %#v, want actual risk rejection", got)
+	if got.Outcome != RunOutcomeCompleted || !got.GoalSatisfied || got.StopReason != StopReasonCompleted {
+		t.Fatalf("reported-risk result = %#v, want completed result", got)
 	}
 }
 
