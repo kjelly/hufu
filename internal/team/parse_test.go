@@ -143,6 +143,20 @@ func TestParseTeamYMLAutoReport(t *testing.T) {
 	}
 }
 
+func TestParseTeamYMLAllowFreeTextResults(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "team.yaml"), []byte("allow-free-text-results: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(tmpDir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML: %v", err)
+	}
+	if !cfg.AllowFreeTextResults {
+		t.Fatal("AllowFreeTextResults = false, want true")
+	}
+}
+
 func TestMaxStepsParsing(t *testing.T) {
 	tests := []struct {
 		name         string

@@ -132,16 +132,16 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	}
 
 	tasks = expandPipelineDeps(tasks)
-	// A worker must make its terminal outcome explicit. This is independent of
-	// task type and prevents a prose failure report from being recorded as a
-	// completed task. Apply the runtime invariant before structural preflight:
-	// a closed sequence terminating in submit_result is coherent only when the
-	// worker is required to submit that result.
+	// A worker must normally make its terminal outcome explicit. This prevents
+	// a prose failure report from being recorded as a completed task. Apply the
+	// runtime invariant before structural preflight: a closed sequence
+	// terminating in submit_result is coherent only when the worker is required
+	// to submit that result.
 	//
 	// A sidecar is exempt because a tool-less call cannot invoke submit_result;
 	// validateSidecarTaskContracts below rejects an unsafe sidecar contract.
 	for i := range tasks {
-		if !tasks[i].Sidecar {
+		if !tasks[i].Sidecar && !c.allowsFreeTextWorkerResult(tasks[i]) {
 			tasks[i].Execution.RequiresResult = true
 		}
 	}
@@ -490,6 +490,23 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	}
 
 	return formatTaskResults(results, len(tasks), duplicateWarnings)
+}
+
+// allowsFreeTextWorkerResult is an explicit compatibility escape hatch for
+// providers that can reliably return a textual review but cannot invoke the
+// submit_result tool. It is intentionally restricted to teams that opt in and
+// agents which explicitly declare side_effect: none. Any task that may mutate
+// workspace, external, infrastructure, or credential state retains the normal
+// fail-closed structured-result protocol.
+func (c *Coordinator) allowsFreeTextWorkerResult(task TaskDef) bool {
+	if c == nil || c.session == nil || !c.session.Config.AllowFreeTextResults || task.Sidecar {
+		return false
+	}
+	def, _, err := c.AgentPool().ResolveAgentName(task.Agent)
+	if err != nil || def == nil || !strings.EqualFold(strings.TrimSpace(def.SideEffect), string(SideEffectNone)) {
+		return false
+	}
+	return c.effectiveSideEffect(task) == SideEffectNone
 }
 
 // validateObjectiveVerification rejects interactive trec-drive tasks that do

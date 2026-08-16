@@ -260,19 +260,24 @@ type TeamConfig struct {
 	MaxRetries               int
 	// AutoReport writes the execution report after every run for this team,
 	// even when the caller did not pass the global --report flag.
-	AutoReport        bool
-	Generation        GenerationParams
-	Skills            string
-	SkillsExclude     string
-	ProviderURL       string
-	ProviderAPIKey    string
-	Providers         map[string]config.ProviderConfig
-	ModelList         []config.ModelEntry
-	SidecarModel      string
-	GuardModel        string
-	JudgeModel        string
-	PlanReviewerModel string
-	MaxConcurrent     int
+	AutoReport bool
+	// AllowFreeTextResults permits a narrowly scoped compatibility path for
+	// explicitly read-only workers that return a final textual report but do
+	// not support the submit_result tool protocol. It never applies to a task
+	// that can change state.
+	AllowFreeTextResults bool
+	Generation           GenerationParams
+	Skills               string
+	SkillsExclude        string
+	ProviderURL          string
+	ProviderAPIKey       string
+	Providers            map[string]config.ProviderConfig
+	ModelList            []config.ModelEntry
+	SidecarModel         string
+	GuardModel           string
+	JudgeModel           string
+	PlanReviewerModel    string
+	MaxConcurrent        int
 	// MaxCoordinatorTurns bounds automatic continuation turns after a
 	// coordinator step limit. Zero uses the built-in safe default.
 	MaxCoordinatorTurns int
