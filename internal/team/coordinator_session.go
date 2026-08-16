@@ -470,6 +470,39 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	}
 }
 
+// SetFreshSession marks the next execution as a new session rather than a
+// recovery of the active event-store lineage. The marker is consumed when the
+// event store is initialized, where a new root branch is created.
+func (c *Coordinator) SetFreshSession(v bool) {
+	if c == nil {
+		return
+	}
+	c.freshSession.Store(v)
+	c.freshSessionMemory.Store(v)
+	if v {
+		// NewCoordinator can restore chat_history.md before the CLI applies
+		// --new. Clear this in-memory projection defensively as well: a fresh
+		// event-store branch without a fresh coordinator prompt is not a fresh
+		// session from the user's perspective.
+		c.conversationHistoryMu.Lock()
+		c.conversationHistory = nil
+		c.conversationHistorySourceCounts = nil
+		c.conversationHistorySourceOffset = 0
+		if c.sessionData != nil {
+			c.sessionData.ConversationHistorySourceCounts = nil
+			c.sessionData.ConversationHistorySourceOffset = 0
+		}
+		c.conversationHistoryMu.Unlock()
+	}
+}
+
+// historicalMemoryDisabled reports whether this coordinator may consume
+// context from an earlier session. --new retains that session as a durable
+// archive, but it must not influence the fresh run that created the archive.
+func (c *Coordinator) historicalMemoryDisabled() bool {
+	return c == nil || c.ExecutionProfile().DisableHistoricalMemory || c.freshSessionMemory.Load()
+}
+
 func (c *Coordinator) applyLiveTaskProjection(tasks []*TodoItem) {
 	if c == nil {
 		return
@@ -615,13 +648,22 @@ func (c *Coordinator) saveCheckpoint() {
 	if c.sessionData == nil || c.session == nil || c.session.Workspace == "" {
 		return
 	}
-	c.sessionData.Tasks = c.taskTracker.TodoList().Items()
+	// Task state is canonical in the event store.  Commit its complete replay
+	// projection before allowing session.json to advertise the newer state.
+	// In particular, a completed task must never reach the checkpoint unless
+	// its terminal event (including receipt and typed result) is durable.
+	tasks := c.taskTracker.TodoList().Items()
+	c.emitPendingDiagnosticPackets()
+	if err := c.emitTaskEventsFromCheckpoint(tasks); err != nil {
+		log.Printf("warning: checkpoint deferred until canonical task events are durable: %v", err)
+		return
+	}
+
+	c.sessionData.Tasks = tasks
 	if c.phaseWorkflow != nil {
 		c.sessionData.WorkflowState, c.sessionData.PhaseResults, c.sessionData.RuntimeWorkspace, c.sessionData.RetryState = c.phaseWorkflow.snapshot()
 	}
 	_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
-	c.emitPendingDiagnosticPackets()
-	c.emitTaskEventsFromCheckpoint(c.sessionData.Tasks)
 	c.updateBranchState()
 }
 

@@ -270,15 +270,23 @@ type Coordinator struct {
 	// Context budget reporting (§5.4). Populated by buildSystemPrompt so the
 	// execution report can emit a token-usage breakdown without re-deriving the
 	// assembled prompt.
-	ctxReportMu                  sync.RWMutex
-	lastCtxBreakdown             ContextUsageBreakdown
-	lastCtxBudget                ContextBudget
-	lastCtxModel                 string
-	lastCtxReportReady           bool
-	wrapUp                       atomic.Int32
-	initialDelegationAttempted   atomic.Bool
-	finishCalled                 atomic.Bool // set when the finish tool completes; cleared per orchestrator run
-	continuationInterrupted      atomic.Bool // set when a continuation stops before a workflow can safely finish
+	ctxReportMu                sync.RWMutex
+	lastCtxBreakdown           ContextUsageBreakdown
+	lastCtxBudget              ContextBudget
+	lastCtxModel               string
+	lastCtxReportReady         bool
+	wrapUp                     atomic.Int32
+	initialDelegationAttempted atomic.Bool
+	finishCalled               atomic.Bool // set when the finish tool completes; cleared per orchestrator run
+	continuationInterrupted    atomic.Bool // set when a continuation stops before a workflow can safely finish
+	// freshSession requests an event-store root branch on the next run. It is
+	// set by CLI --new so archived events remain auditable without being
+	// replayed into the new session's task projection.
+	freshSession atomic.Bool
+	// freshSessionMemory prevents a --new invocation from injecting a prior
+	// session's archive into its new coordinator or worker prompts. Unlike
+	// freshSession, it remains set for this coordinator's whole lifetime.
+	freshSessionMemory           atomic.Bool
 	current                      atomic.Pointer[currentSnapshot]
 	currentStageStart            time.Time
 	currentStageStartMu          sync.RWMutex

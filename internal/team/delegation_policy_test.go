@@ -316,6 +316,31 @@ func TestSetSessionDataInitialPhaseClearsCoordinatorConversationHistory(t *testi
 	}
 }
 
+func TestFreshSessionDisablesHistoricalMemoryForCoordinatorLifetime(t *testing.T) {
+	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{})
+	if c.historicalMemoryDisabled() {
+		t.Fatal("ordinary coordinator unexpectedly disables historical memory")
+	}
+	c.conversationHistory = []fantasy.Message{fantasy.NewUserMessage("stale completed review")}
+	c.conversationHistorySourceCounts = []int{1}
+
+	c.SetFreshSession(true)
+	if !c.historicalMemoryDisabled() {
+		t.Fatal("fresh session may inject archived historical memory")
+	}
+	if len(c.conversationHistory) != 0 {
+		t.Fatal("fresh session retained coordinator conversation history")
+	}
+
+	// Event-store initialization consumes freshSession, but the fresh run must
+	// continue withholding the archive for its remaining coordinator/worker
+	// prompts.
+	c.freshSession.Store(false)
+	if !c.historicalMemoryDisabled() {
+		t.Fatal("fresh session re-enabled historical memory after branch setup")
+	}
+}
+
 func TestDelegationPhasePersistsWhenInitialBatchIsAccepted(t *testing.T) {
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		InitialBatch:             []string{"surface"},

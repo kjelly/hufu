@@ -138,10 +138,30 @@ func (c *Coordinator) initEventStore() {
 		return
 	}
 	activeBranch := "main"
-	if st != nil && st.ActiveBranch != "" {
+	if c.freshSession.CompareAndSwap(true, false) {
+		branch, branchErr := st.CreateRootBranch(fmt.Sprintf("session-%d", time.Now().UTC().UnixNano()))
+		if branchErr != nil {
+			log.Printf("warning: create fresh event-store branch failed: %v", branchErr)
+			c.sessionData.RecoveryRequired = true
+			c.sessionData.RecoveryReason = "fresh event-store branch creation failed: " + utils.RedactSecrets(branchErr.Error())
+			_ = SaveSession(c.session.Workspace, c.sessionData)
+			_ = es.Close()
+			return
+		}
+		st.ActiveBranch = branch.ID
+		if saveErr := SaveSessionTree(c.session.Workspace, st); saveErr != nil {
+			log.Printf("warning: save fresh event-store branch failed: %v", saveErr)
+			c.sessionData.RecoveryRequired = true
+			c.sessionData.RecoveryReason = "fresh event-store branch save failed: " + utils.RedactSecrets(saveErr.Error())
+			_ = SaveSession(c.session.Workspace, c.sessionData)
+			_ = es.Close()
+			return
+		}
+		activeBranch = branch.ID
+	} else if st != nil && st.ActiveBranch != "" {
 		activeBranch = st.ActiveBranch
-		es.SetBranchID(activeBranch)
 	}
+	es.SetBranchID(activeBranch)
 	c.eventStore = es
 	c.SetEventJournal(eventStoreJournal{store: es})
 	c.hydrateEmittedEventKeys(st, activeBranch)
@@ -494,9 +514,9 @@ func (c *Coordinator) emitEvent(eventType, actor, taskID string, payload interfa
 	return nil
 }
 
-func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
+func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) error {
 	if c == nil || c.eventStore == nil {
-		return
+		return nil
 	}
 	c.eventOnceMu.Lock()
 	if c.emittedTaskTransitions == nil {
@@ -554,15 +574,13 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 		payload := c.taskTransitionPayloadWithCoordinator(item)
 		data, err := json.Marshal(payload)
 		if err != nil {
-			log.Printf("warning: dual-write task event marshal failed for %s (%s): %v", item.ID, eventType, err)
 			c.dualWriteFailures.Add(1)
-			continue
+			return fmt.Errorf("marshal canonical task event for %s (%s): %w", item.ID, eventType, err)
 		}
 		rawPayload := json.RawMessage(data)
 		if IsTerminalEvent(eventType) && IsEmptyPayload(rawPayload) {
-			log.Printf("warning: dual-write task event produced empty payload for %s (%s)", item.ID, eventType)
 			c.dualWriteFailures.Add(1)
-			continue
+			return fmt.Errorf("canonical task event for %s (%s) has an empty payload", item.ID, eventType)
 		}
 
 		if _, err := c.emitEventOnce(transitionKey, RunEvent{
@@ -571,8 +589,7 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 			TaskID:  item.ID,
 			Payload: rawPayload,
 		}); err != nil {
-			log.Printf("warning: dual-write task event emit failed for %s (%s): %v", item.ID, eventType, err)
-			continue
+			return fmt.Errorf("append canonical task event for %s (%s): %w", item.ID, eventType, err)
 		}
 
 		c.emitArtifactEvents(item)
@@ -580,6 +597,7 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) {
 			c.recordMemoryOutcomeForTask(item, eventType)
 		}
 	}
+	return nil
 }
 
 // CommitTaskTransition is the event-first transition boundary for task
@@ -1095,33 +1113,30 @@ func isMemoryOutcomeTerminalEvent(eventType string) bool {
 	}
 }
 
-// taskTransitionEventKey identifies the checkpointed task state that has
-// already been emitted. A verifier is part of that durable state: retaining
-// only ID/status/retry would suppress a changed typed contract and make branch
-// replay restore stale verification requirements. The no-verifier form stays
-// byte-for-byte compatible with existing idempotency keys.
+// taskTransitionEventKey identifies the exact canonical task shadow already
+// emitted. Keeping only ID/status/retry suppresses receipts, typed results,
+// and other same-status projection updates; a later checkpoint would then be
+// ahead of replay after a crash. The digest makes every replay-relevant task
+// mutation a new durable projection event while preserving idempotency for an
+// unchanged shadow.
 func taskTransitionEventKey(item *TodoItem) string {
 	if item == nil {
 		return ""
 	}
 	base := fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)
-	if normalizedVerificationSpecForCache(item.VerifySpec, item.Verify, item.VerifyMode) == nil {
-		if item.FailureEvent == nil {
-			return base
-		}
-		data, _ := json.Marshal(item.FailureEvent)
-		sum := sha256.Sum256(data)
-		return base + ":failure-" + hex.EncodeToString(sum[:8])
+	data, err := json.Marshal(toCanonicalTaskShadow(item))
+	if err != nil {
+		// The payload marshal on the durable path will fail closed immediately
+		// afterwards. Keep this deterministic fallback only so the caller can
+		// surface that original marshal error.
+		return base + ":canonical-unserializable"
 	}
-	contract := taskCacheIdentityWithSpec("", item.VerifySpec, item.Verify, item.VerifyMode)
-	sum := sha256.Sum256([]byte(contract))
-	key := base + ":verify-" + hex.EncodeToString(sum[:8])
-	if item.FailureEvent != nil {
-		data, _ := json.Marshal(item.FailureEvent)
-		failureSum := sha256.Sum256(data)
-		key += ":failure-" + hex.EncodeToString(failureSum[:8])
+	redacted, err := utils.RedactJSON(data)
+	if err != nil {
+		return base + ":canonical-unserializable"
 	}
-	return key
+	sum := sha256.Sum256(redacted)
+	return base + ":canonical-" + hex.EncodeToString(sum[:16])
 }
 
 // emitArtifactEvents dual-writes one artifact_created event per artifact path

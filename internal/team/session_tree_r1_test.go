@@ -77,3 +77,63 @@ func TestCoordinatorInitEventStore_TagsActiveBranch(t *testing.T) {
 		t.Errorf("expected event tagged with active branch %q, got %q", exp.ID, events[0].BranchID)
 	}
 }
+
+func TestCoordinatorInitEventStore_FreshSessionUsesIndependentRootBranch(t *testing.T) {
+	workspace := t.TempDir()
+	st := NewSessionTree()
+	if err := SaveSessionTree(workspace, st); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewEventStore(workspace, "run-old", "session-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendPersisted(RunEvent{
+		Type:    string(EventTaskCompleted),
+		Actor:   "worker",
+		TaskID:  "old-task",
+		Payload: []byte(`{"id":"old-task","status":"done","agent":"worker","desc":"old task"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Coordinator{
+		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team-x"}},
+		sessionData: NewSession(),
+		taskTracker: NewTaskTracker(),
+	}
+	c.SetFreshSession(true)
+	c.initEventStore()
+	if c.eventStore == nil {
+		t.Fatal("expected event store to be initialized")
+	}
+	defer c.eventStore.Close()
+
+	if len(c.sessionData.Tasks) != 0 {
+		t.Fatalf("fresh session replayed prior tasks: %#v", c.sessionData.Tasks)
+	}
+	updatedTree, err := LoadSessionTree(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedTree.ActiveBranch == "main" {
+		t.Fatal("fresh session retained main event-store lineage")
+	}
+	branch := updatedTree.Branches[updatedTree.ActiveBranch]
+	if branch == nil || branch.ParentID != "" || branch.ForkEventID != "" {
+		t.Fatalf("fresh branch = %#v, want independent root", branch)
+	}
+
+	c.emitEvent("run_started", "coordinator", "", map[string]bool{"fresh": true})
+	events, err := c.eventStore.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := events[len(events)-1].BranchID; got != branch.ID {
+		t.Fatalf("fresh event branch = %q, want %q", got, branch.ID)
+	}
+}

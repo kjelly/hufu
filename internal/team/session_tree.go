@@ -242,6 +242,41 @@ func (st *SessionTree) CreateBranch(name string, forkTarget string, es *EventSto
 	return newBranch, nil
 }
 
+// CreateRootBranch creates an independent event-store lineage. Unlike a
+// normal fork it has no parent or fork event, so replay starts empty while
+// prior session evidence remains available on its original branch.
+func (st *SessionTree) CreateRootBranch(name string) (*SessionBranch, error) {
+	if st == nil {
+		return nil, fmt.Errorf("session tree is nil")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("branch name cannot be empty")
+	}
+	if st.Branches == nil {
+		st.Branches = make(map[string]*SessionBranch)
+	}
+	for _, branch := range st.Branches {
+		if branch.Name == name || branch.ID == name {
+			return nil, fmt.Errorf("branch %q already exists", name)
+		}
+	}
+	branchID := slugifyBranchName(name)
+	if _, exists := st.Branches[branchID]; exists {
+		branchID = fmt.Sprintf("%s-%d", branchID, time.Now().UnixNano())
+	}
+	branch := &SessionBranch{
+		ID:        branchID,
+		Name:      name,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		State: BranchState{
+			Labels: make(map[string]string),
+		},
+	}
+	st.Branches[branchID] = branch
+	return branch, nil
+}
+
 // CheckoutBranch switches active branch to target (branch name/ID, label, or event ID).
 func (st *SessionTree) CheckoutBranch(target string, es *EventStore) (*SessionBranch, error) {
 	branchID, eventID := st.ResolveTarget(target, es)
