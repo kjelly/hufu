@@ -1,12 +1,40 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/team"
 )
+
+func TestGenerateRequestedReportsWritesOnlyAutoReportTeams(t *testing.T) {
+	originalReportMode := opts.reportMode
+	opts.reportMode = false
+	t.Cleanup(func() { opts.reportMode = originalReportMode })
+
+	autoWorkspace := t.TempDir()
+	otherWorkspace := t.TempDir()
+	loadedTeams := map[string]*teamContext{
+		"auto": {
+			session: &team.TeamSession{Workspace: autoWorkspace, Config: agent.TeamConfig{AutoReport: true}},
+		},
+		"other": {
+			session: &team.TeamSession{Workspace: otherWorkspace, Config: agent.TeamConfig{}},
+		},
+	}
+
+	generateRequestedReports(loadedTeams, "review complete")
+	if _, err := os.Stat(filepath.Join(autoWorkspace, "report.md")); err != nil {
+		t.Fatalf("auto-report team did not write report.md: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(otherWorkspace, "report.md")); !os.IsNotExist(err) {
+		t.Fatalf("non-auto-report team unexpectedly wrote report.md: %v", err)
+	}
+}
 
 func TestReportRendersContentFreeDeprecatedMemoryUsage(t *testing.T) {
 	report := buildReportMD(&reportData{StartedAt: time.Now(), DeprecatedMemory: []team.DeprecatedMemoryToolUsage{{Tool: "stm_write", Calls: 2, Success: 1, FailClosed: 1, Denied: 3}}}, "demo", "")
@@ -19,10 +47,10 @@ func TestReportRendersContentFreeDeprecatedMemoryUsage(t *testing.T) {
 
 func TestReportRendersContentFreeContextRoutingAggregate(t *testing.T) {
 	report := buildReportMD(&reportData{StartedAt: time.Now(), ContextRouting: team.ContextManifestSummary{
-		Requests: 2, Included: 5, Omitted: 3, IncludedTokens: 120, OmittedTokens: 80,
-		OmitReasons: map[string]int{"phase_mismatch": 1, "token_budget": 2},
+		Requests: 2, ModelCalls: 1, Fallbacks: 1, Included: 5, Omitted: 3, IncludedTokens: 120, OmittedTokens: 80,
+		OmitReasons: map[string]int{"phase_mismatch": 1, "token_budget": 2}, Purposes: map[string]int{"task_execution": 1, "skill_matcher": 1},
 	}}, "demo", "")
-	for _, want := range []string{"## Context Routing", "Requests:** 2", "Included items:** 5 (120 tokens)", "Omitted items:** 3 (80 tokens)", "`phase_mismatch`: 1", "`token_budget`: 2"} {
+	for _, want := range []string{"## Context Routing", "Requests:** 2", "Model calls:** 1", "Deterministic fallbacks:** 1", "Included items:** 5 (120 tokens)", "Omitted items:** 3 (80 tokens)", "`phase_mismatch`: 1", "`token_budget`: 2", "`task_execution`: 1", "`skill_matcher`: 1"} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q: %s", want, report)
 		}

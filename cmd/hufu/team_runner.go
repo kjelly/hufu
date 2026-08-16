@@ -62,9 +62,7 @@ func executeDryRun(ctx context.Context, segments []team.PromptSegment, prompt st
 		return fmt.Errorf("dry-run failed: %w", err)
 	}
 	renderDryRun(result)
-	if opts.reportMode {
-		generateReport(loadedTeams, "(dry-run — no tasks executed)")
-	}
+	generateRequestedReports(loadedTeams, "(dry-run — no tasks executed)")
 	return nil
 }
 
@@ -162,9 +160,7 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 		// Machine-readable callers must receive that result even though the
 		// process returns non-zero; otherwise an abort is indistinguishable from
 		// missing output (and callers may incorrectly treat it as completed).
-		if opts.reportMode {
-			generateReport(loadedTeams, result)
-		}
+		generateRequestedReports(loadedTeams, result)
 		if opts.outputFormat == "json" {
 			if outputErr := printResultJSONWithPrior(result, loadedTeams, nil, priorUnresolved); outputErr != nil {
 				return fmt.Errorf("%w (json output failed: %v)", runErr, outputErr)
@@ -173,9 +169,7 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 		return team.WrapRunOutcomeError(runErr, canonicalNonSuccessfulRunResultWithPrior(loadedTeams, priorResults, priorUnresolved))
 	}
 
-	if opts.reportMode {
-		generateReport(loadedTeams, result)
-	}
+	generateRequestedReports(loadedTeams, result)
 
 	var allSkillUsage []team.SkillUsageEntry
 	seenSkill := map[string]int{}

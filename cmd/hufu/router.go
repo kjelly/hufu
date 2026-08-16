@@ -142,7 +142,7 @@ func (r *ExecutionRouter) Route(ctx context.Context, prompt string, targetTeam s
 
 	// 3. LLM Sidecar Classifier Fallback
 	if r.sidecar != nil {
-		if classification, err := r.sidecar.ClassifyRoute(ctx, prompt); err == nil {
+		if classification, err := r.sidecar.ClassifyRoute(sidecar.WithPurpose(ctx, "team_selection"), prompt); err == nil {
 			route := RouteFast
 			if classification.Route == "team" {
 				route = RouteTeam

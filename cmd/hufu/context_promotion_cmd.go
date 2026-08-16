@@ -309,7 +309,7 @@ func flushPromotionEvents(ctx context.Context, repo *contextstore.SQLiteReposito
 type sidecarTextGenerator struct{ s *sidecar.Sidecar }
 
 func (g sidecarTextGenerator) GenerateText(ctx context.Context, prompt string) (string, error) {
-	return g.s.ExecuteProfile(ctx, prompt, sidecar.CompactorProfile)
+	return g.s.ExecuteProfile(sidecar.WithPurpose(ctx, "promotion_draft"), prompt, sidecar.CompactorProfile)
 }
 func newPromotionGenerator(ctx context.Context, teamDir string) (promotion.DraftGenerator, error) {
 	session, err := team.LoadTeam(teamDir, nil, nil, team.DefaultProviderRegistry)
@@ -321,22 +321,25 @@ func newPromotionGenerator(ctx context.Context, teamDir string) (promotion.Draft
 	if model == "" {
 		return nil, fmt.Errorf("promotion analyze requires --model or a team/config sidecar/model")
 	}
-	providers := make(map[string]config.ProviderConfig, len(cfg.Providers)+len(session.Config.Providers))
-	for k, v := range cfg.Providers {
-		providers[k] = v
-	}
-	for k, v := range session.Config.Providers {
-		providers[k] = v
-	}
 	url := config.ResolveProviderURL(opts.providerURL, session.Config.ProviderURL, "")
 	key := config.ResolveProviderAPIKey(opts.providerAPIKey, session.Config.ProviderAPIKey)
-	pm, err := agent.NewProviderManager(url, key, providers)
+	// Promotion analysis is a CLI model invocation, but it still needs the
+	// same repository, compiler, redaction, manifest, and event boundary as a
+	// coordinator sidecar. Bind this loaded team to the promotion workspace
+	// before constructing the coordinator so the draft lineage is replayable
+	// next to context.sqlite rather than in an ambient project workspace.
+	session.Workspace = promotionWorkspacePath()
+	coordinator, err := team.NewCoordinator(session, url, key, nil, nil, nil, team.RoleModels{Sidecar: model}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		return nil, err
 	}
-	sc, err := sidecar.NewSidecar(ctx, pm.GetProvider(model), model)
-	if err != nil {
+	if err := coordinator.PrepareContextPreflight(); err != nil {
+		coordinator.CloseContextPreflight()
 		return nil, err
+	}
+	sc := coordinator.Sidecar()
+	if sc == nil {
+		return nil, fmt.Errorf("promotion draft sidecar is unavailable after context preflight")
 	}
 	return promotion.JSONDraftGenerator{Generator: sidecarTextGenerator{s: sc}}, nil
 }

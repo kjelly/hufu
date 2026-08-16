@@ -116,7 +116,7 @@ func TestJSONOutputIncludesContentFreeContextRoutingAggregate(t *testing.T) {
 	c := &team.Coordinator{}
 	c.SetSessionData(&team.SessionData{CoordinatorContextManifests: []team.ContextInjectionManifest{{
 		SchemaVersion: 1, RequestID: "request-1", RequestHash: "hash-1", RunID: "run-1", Attempt: 1,
-		Agent: "coordinator", Phase: team.PhaseInit, Trigger: team.ContextTriggerCoordinatorStart,
+		Agent: "coordinator", Phase: team.PhaseInit, Trigger: team.ContextTriggerCoordinatorStart, Purpose: "coordinator_start", ModelCalled: true,
 		Items: []team.ContextManifestItem{{ID: "goal", Included: true, Tokens: 12}, {ID: "memory-1", Included: false, Reason: team.ContextOmittedPhase, Tokens: 7}},
 	}}})
 	c.SetLastRunResult(&team.RunResult{Outcome: team.RunOutcomeCompleted, GoalSatisfied: true, Acceptance: &team.AcceptanceResult{Passed: true}})
@@ -141,7 +141,7 @@ func TestJSONOutputIncludesContentFreeContextRoutingAggregate(t *testing.T) {
 		t.Fatalf("teams = %#v", out.Teams)
 	}
 	summary := out.Teams[0].ContextRouting
-	if summary.Requests != 1 || summary.Included != 1 || summary.Omitted != 1 || summary.IncludedTokens != 12 || summary.OmittedTokens != 7 || summary.OmitReasons[string(team.ContextOmittedPhase)] != 1 {
+	if summary.Requests != 1 || summary.ModelCalls != 1 || summary.Fallbacks != 0 || summary.Purposes["coordinator_start"] != 1 || summary.Included != 1 || summary.Omitted != 1 || summary.IncludedTokens != 12 || summary.OmittedTokens != 7 || summary.OmitReasons[string(team.ContextOmittedPhase)] != 1 {
 		t.Fatalf("context routing JSON = %#v", summary)
 	}
 }

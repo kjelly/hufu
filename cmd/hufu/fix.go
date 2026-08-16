@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
 )
@@ -173,7 +173,7 @@ func runFixAnalysis(ctx context.Context, tc *teamContext, question string, taskD
 	sidecarCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	result, err := s.Execute(sidecarCtx, prompt)
+	result, err := s.Execute(sidecar.WithPurpose(sidecarCtx, "fix_analysis"), prompt)
 	if err != nil {
 		return "", fmt.Errorf("sidecar analysis failed: %w", err)
 	}
@@ -181,20 +181,27 @@ func runFixAnalysis(ctx context.Context, tc *teamContext, question string, taskD
 }
 
 func runFixAnalysisDirect(ctx context.Context, question string, taskDesc string, data *fixData, teamName, sidecarModel string) (string, error) {
-	prompt := buildFixPrompt(question, taskDesc, data)
-	ctx2, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-
-	if sidecarModel == "" {
-		sidecarModel = "qwen3:8b" // last-resort fallback when neither team config nor hufu.yaml specifies one
+	// This command may be reached before a team coordinator (and therefore its
+	// durable context boundary) exists. Never start an un-attributed subprocess
+	// model call from that state. The deterministic result remains useful to an
+	// operator and makes the missing model boundary explicit.
+	_ = ctx
+	_ = teamName
+	_ = sidecarModel
+	var findings []string
+	findings = append(findings, "## Deterministic Fix Analysis")
+	findings = append(findings, "No context-attributed sidecar is available, so no model was called.")
+	if strings.TrimSpace(question) != "" {
+		findings = append(findings, "- Investigate the reported issue against the persisted execution receipts and objective verification results.")
 	}
-	cmd := exec.CommandContext(ctx2, "ollama", "run", "--format", "```", sidecarModel, prompt)
-	cmd.Env = append(os.Environ(), "OLLAMA_NUM_PARALLEL=1")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("ollama analysis failed: %w, output: %s", err, string(out))
+	if strings.TrimSpace(taskDesc) != "" {
+		findings = append(findings, "- Compare the task contract with the latest task journal and context-manifest summaries.")
 	}
-	return string(out), nil
+	if data != nil && strings.TrimSpace(data.Reliability) != "" {
+		findings = append(findings, "- Prioritize the recorded reliability counters, failure classes, and verification outcomes before changing agent prompts.")
+	}
+	findings = append(findings, "- Re-run with a loaded team sidecar to obtain a bounded, manifest-backed model analysis.")
+	return strings.Join(findings, "\n"), nil
 }
 
 func buildFixPrompt(question, taskDesc string, data *fixData) string {

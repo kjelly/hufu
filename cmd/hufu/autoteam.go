@@ -30,7 +30,7 @@ func autoSelectTeam(ctx context.Context, prompt string, registry *team.TeamRegis
 	}
 
 	if s := buildSelectionSidecar(ctx); s != nil {
-		if picked, err := s.MatchTeam(ctx, prompt, candidates); err == nil && picked != "" {
+		if picked, err := s.MatchTeam(sidecar.WithPurpose(ctx, "team_selection"), prompt, candidates); err == nil && picked != "" {
 			return picked, "llm"
 		}
 	}
@@ -124,10 +124,12 @@ func keywordBestTeam(prompt string, candidates []sidecar.TeamSummary) string {
 	return best
 }
 
-// buildSelectionSidecar constructs a best-effort sidecar for team matching from
-// the resolved provider + sidecar/main model. Returns nil when no model can be
-// resolved (then keyword matching is used).
+// buildSelectionSidecar constructs a preflight coordinator for team matching.
+// It never returns a raw sidecar: the coordinator opens the explicit workspace
+// repository/event lineage and installs the prompt preparer before a model can
+// be called. Returning nil selects the deterministic keyword fallback.
 func buildSelectionSidecar(ctx context.Context) *sidecar.Sidecar {
+	_ = ctx // coordinator-sidecar initialization is lazy; generation uses the caller context.
 	cfg := config.LoadConfig()
 	model := firstNonEmpty(opts.sidecarModelOverride, opts.modelOverride, cfg.SidecarModel, cfg.Model)
 	if model == "" {
@@ -135,15 +137,17 @@ func buildSelectionSidecar(ctx context.Context) *sidecar.Sidecar {
 	}
 	url := config.ResolveProviderURL(opts.providerURL, "", "")
 	key := config.ResolveProviderAPIKey(opts.providerAPIKey, "")
-	pm, err := agent.NewProviderManager(url, key, cfg.Providers)
+	workspace := getWorkspace()
+	session := &team.TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "preflight-team-selection", Providers: cfg.Providers}}
+	coordinator, err := team.NewCoordinator(session, url, key, nil, nil, nil, team.RoleModels{Sidecar: model}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		return nil
 	}
-	s, err := sidecar.NewSidecar(ctx, pm.GetProvider(model), model)
-	if err != nil {
+	if err := coordinator.PrepareContextPreflight(); err != nil {
+		coordinator.CloseContextPreflight()
 		return nil
 	}
-	return s
+	return coordinator.Sidecar()
 }
 
 var tokenSplitRe = func() func(rune) bool {

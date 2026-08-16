@@ -23,11 +23,28 @@ var taskStatusIcons = map[team.TaskStatus]string{
 	team.TaskVerifying: "◔",
 }
 
-// generateReport creates a markdown execution report for each loaded team
-// and saves it to the team's workspace directory.
+// generateReport creates a markdown execution report for every loaded team.
+// It is the explicit --report behavior.
 func generateReport(loadedTeams map[string]*teamContext, combinedResult string) {
+	generateReports(loadedTeams, combinedResult, func(*teamContext) bool { return true })
+}
+
+// generateRequestedReports preserves --report's all-team behavior while
+// allowing a team to opt into reports for its own runs with auto-report: true.
+func generateRequestedReports(loadedTeams map[string]*teamContext, combinedResult string) {
+	if opts.reportMode {
+		generateReport(loadedTeams, combinedResult)
+		return
+	}
+	generateReports(loadedTeams, combinedResult, func(tc *teamContext) bool {
+		return tc != nil && tc.session != nil && tc.session.Config.AutoReport
+	})
+}
+
+// generateReports writes reports only for contexts accepted by include.
+func generateReports(loadedTeams map[string]*teamContext, combinedResult string, include func(*teamContext) bool) {
 	for teamName, tc := range loadedTeams {
-		if tc == nil {
+		if tc == nil || !include(tc) {
 			continue
 		}
 
@@ -431,7 +448,7 @@ func writeContextRoutingReport(b *strings.Builder, summary team.ContextManifestS
 		return
 	}
 	b.WriteString("## Context Routing\n\n")
-	fmt.Fprintf(b, "- **Requests:** %d\n- **Included items:** %d (%d tokens)\n- **Omitted items:** %d (%d tokens)\n", summary.Requests, summary.Included, summary.IncludedTokens, summary.Omitted, summary.OmittedTokens)
+	fmt.Fprintf(b, "- **Requests:** %d\n- **Model calls:** %d\n- **Deterministic fallbacks:** %d\n- **Included items:** %d (%d tokens)\n- **Omitted items:** %d (%d tokens)\n", summary.Requests, summary.ModelCalls, summary.Fallbacks, summary.Included, summary.IncludedTokens, summary.Omitted, summary.OmittedTokens)
 	if len(summary.OmitReasons) > 0 {
 		b.WriteString("- **Omission reasons:**\n")
 		keys := make([]string, 0, len(summary.OmitReasons))
@@ -441,6 +458,17 @@ func writeContextRoutingReport(b *strings.Builder, summary team.ContextManifestS
 		sort.Strings(keys)
 		for _, reason := range keys {
 			fmt.Fprintf(b, "  - `%s`: %d\n", reason, summary.OmitReasons[reason])
+		}
+	}
+	if len(summary.Purposes) > 0 {
+		b.WriteString("- **Purposes:**\n")
+		keys := make([]string, 0, len(summary.Purposes))
+		for purpose := range summary.Purposes {
+			keys = append(keys, purpose)
+		}
+		sort.Strings(keys)
+		for _, purpose := range keys {
+			fmt.Fprintf(b, "  - `%s`: %d\n", purpose, summary.Purposes[purpose])
 		}
 	}
 	b.WriteString("\n---\n\n")
