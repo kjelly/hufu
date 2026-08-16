@@ -77,6 +77,7 @@ func ExecutionEventFromRunEvent(event RunEvent) (ExecutionEvent, bool) {
 		Model            string     `json:"model"`
 		Skills           []string   `json:"skills"`
 		Outcome          RunOutcome `json:"outcome"`
+		Retries          int        `json:"retries"`
 	}
 	if json.Unmarshal(event.Payload, &payload) == nil {
 		if payload.Agent != "" {
@@ -84,6 +85,8 @@ func ExecutionEventFromRunEvent(event RunEvent) (ExecutionEvent, bool) {
 		}
 		if payload.Attempt > 0 {
 			out.Attempt = payload.Attempt
+		} else if payload.Retries >= 0 {
+			out.Attempt = payload.Retries + 1
 		}
 		if payload.Phase != "" {
 			out.Phase = payload.Phase
@@ -111,6 +114,29 @@ func ExecutionEventFromRunEvent(event RunEvent) (ExecutionEvent, bool) {
 		out.Attempt = 1
 	}
 	return out, true
+}
+
+// projectedExecutionEvents is the legacy-compatible lifecycle projection.
+// The event store deliberately records every durable state transition, while
+// the legacy execution logger records one lifecycle event per task status and
+// attempt. Collapse duplicate durable transitions before exporting/comparing;
+// keep retries distinct through their projected attempt number.
+func projectedExecutionEvents(events []RunEvent) []ExecutionEvent {
+	projected := make([]ExecutionEvent, 0, len(events))
+	seen := make(map[string]struct{})
+	for _, event := range events {
+		mapped, ok := ExecutionEventFromRunEvent(event)
+		if !ok {
+			continue
+		}
+		key := strings.Join([]string{mapped.RunID, mapped.TaskID, mapped.Status, fmt.Sprintf("%d", mapped.Attempt)}, "\x00")
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		projected = append(projected, mapped)
+	}
+	return projected
 }
 
 // ReadExecutionEvents reads execution events from a JSONL file.
@@ -142,11 +168,7 @@ func ReadExecutionEvents(path string) ([]ExecutionEvent, error) {
 // partially regenerated debug bundle behind.
 func ExportExecutionEvents(workspace string, events []RunEvent) error {
 	var output bytes.Buffer
-	for _, event := range events {
-		mapped, ok := ExecutionEventFromRunEvent(event)
-		if !ok {
-			continue
-		}
+	for _, mapped := range projectedExecutionEvents(events) {
 		line, err := json.Marshal(mapped)
 		if err != nil {
 			return fmt.Errorf("marshal execution-event projection: %w", err)
@@ -175,13 +197,11 @@ func ExportAndVerifyExecutionEvents(workspace, runID string, events []RunEvent) 
 		}
 	}
 	var exportedForRun []ExecutionEvent
-	for _, ev := range events {
-		if runID != "" && ev.RunID != runID {
+	for _, ee := range projectedExecutionEvents(events) {
+		if runID != "" && ee.RunID != runID {
 			continue
 		}
-		if ee, ok := ExecutionEventFromRunEvent(ev); ok {
-			exportedForRun = append(exportedForRun, ee)
-		}
+		exportedForRun = append(exportedForRun, ee)
 	}
 	if err := CompareExecutionEventsParity(legacyForRun, exportedForRun); err != nil {
 		return false, err

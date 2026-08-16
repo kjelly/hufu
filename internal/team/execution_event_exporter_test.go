@@ -37,6 +37,25 @@ func TestExecutionEventExporterMapsCanonicalRunEvents(t *testing.T) {
 	}
 }
 
+func TestProjectedExecutionEventsCollapsesDuplicateDurableTransitions(t *testing.T) {
+	events := []RunEvent{
+		{Type: string(EventRunStarted), RunID: "run-1", Payload: []byte(`{"team":"team"}`)},
+		{Type: string(EventTaskStarted), RunID: "run-1", TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","retries":0}`)},
+		{Type: string(EventTaskStarted), RunID: "run-1", TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","retries":0}`)},
+		{Type: string(EventTaskFailed), RunID: "run-1", TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","retries":0}`)},
+		{Type: string(EventTaskProtocolIncomplete), RunID: "run-1", TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","retries":0}`)},
+		{Type: string(EventTaskStarted), RunID: "run-1", TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","retries":1}`)},
+		{Type: string(EventTaskCompleted), RunID: "run-1", TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","retries":1}`)},
+	}
+	projected := projectedExecutionEvents(events)
+	if got, want := len(projected), 5; got != want {
+		t.Fatalf("projected event count = %d, want %d: %#v", got, want, projected)
+	}
+	if projected[1].Attempt != 1 || projected[3].Attempt != 2 || projected[4].Attempt != 2 {
+		t.Fatalf("retry attempts = %#v, want first attempt 1 and retry attempt 2", projected)
+	}
+}
+
 func TestExecutionEventExporterTerminalOutcomeParity(t *testing.T) {
 	cases := []struct {
 		name       string
