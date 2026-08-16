@@ -75,6 +75,7 @@ type teamConfigYAML struct {
 	Timeout                  int64                            `yaml:"timeout"`
 	VerifyTimeout            int64                            `yaml:"verify-timeout"`
 	MaxRetries               int                              `yaml:"max-retries"`
+	AutoReport               bool                             `yaml:"auto-report"`
 	Model                    string                           `yaml:"model"`
 	Temperature              string                           `yaml:"temperature"`
 	MaxTokens                string                           `yaml:"max-tokens"`
@@ -659,6 +660,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.MaxRetries >= 0 {
 		cfg.MaxRetries = yc.MaxRetries
+	}
+	if yc.AutoReport {
+		cfg.AutoReport = true
 	}
 	if yc.MaxSteps > 0 {
 		cfg.MaxSteps = yc.MaxSteps

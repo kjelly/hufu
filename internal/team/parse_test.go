@@ -129,6 +129,20 @@ func TestParseTeamYMLMinimumCoordinatorRounds(t *testing.T) {
 	}
 }
 
+func TestParseTeamYMLAutoReport(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "team.yaml"), []byte("auto-report: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(tmpDir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML: %v", err)
+	}
+	if !cfg.AutoReport {
+		t.Fatal("AutoReport = false, want true")
+	}
+}
+
 func TestMaxStepsParsing(t *testing.T) {
 	tests := []struct {
 		name         string
