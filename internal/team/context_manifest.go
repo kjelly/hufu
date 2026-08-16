@@ -27,26 +27,29 @@ type ContextManifestItem struct {
 }
 
 type ContextInjectionManifest struct {
-	SchemaVersion    int                   `json:"schema_version"`
-	RequestID        string                `json:"request_id"`
-	RequestHash      string                `json:"request_hash"`
-	RunID            string                `json:"run_id"`
-	TaskID           string                `json:"task_id,omitempty"`
-	Attempt          int                   `json:"attempt"`
-	Agent            string                `json:"agent"`
-	AgentRole        string                `json:"agent_role,omitempty"`
-	ModelExecutionID string                `json:"model_execution_id,omitempty"`
-	Environment      string                `json:"environment,omitempty"`
-	Phase            Phase                 `json:"phase"`
-	Trigger          ContextTrigger        `json:"trigger"`
-	Purpose          string                `json:"purpose,omitempty"`
-	ModelCalled      bool                  `json:"model_called"`
-	Outcome          string                `json:"outcome,omitempty"`
-	ToolCallID       string                `json:"tool_call_id,omitempty"`
-	FailureClass     string                `json:"failure_class,omitempty"`
-	Items            []ContextManifestItem `json:"items"`
-	Fingerprint      string                `json:"fingerprint"`
-	CreatedAt        time.Time             `json:"created_at"`
+	SchemaVersion             int                   `json:"schema_version"`
+	RequestID                 string                `json:"request_id"`
+	RequestHash               string                `json:"request_hash"`
+	RunID                     string                `json:"run_id"`
+	TaskID                    string                `json:"task_id,omitempty"`
+	Attempt                   int                   `json:"attempt"`
+	Agent                     string                `json:"agent"`
+	AgentRole                 string                `json:"agent_role,omitempty"`
+	ModelExecutionID          string                `json:"model_execution_id,omitempty"`
+	Environment               string                `json:"environment,omitempty"`
+	Phase                     Phase                 `json:"phase"`
+	Trigger                   ContextTrigger        `json:"trigger"`
+	Purpose                   string                `json:"purpose,omitempty"`
+	ParentTrigger             ContextTrigger        `json:"parent_trigger,omitempty"`
+	ParentRequestID           string                `json:"parent_request_id,omitempty"`
+	ParentManifestFingerprint string                `json:"parent_manifest_fingerprint,omitempty"`
+	ModelCalled               bool                  `json:"model_called"`
+	Outcome                   string                `json:"outcome,omitempty"`
+	ToolCallID                string                `json:"tool_call_id,omitempty"`
+	FailureClass              string                `json:"failure_class,omitempty"`
+	Items                     []ContextManifestItem `json:"items"`
+	Fingerprint               string                `json:"fingerprint"`
+	CreatedAt                 time.Time             `json:"created_at"`
 }
 
 func manifestItemID(id string) string { return strings.TrimPrefix(id, "context:") }
@@ -93,7 +96,7 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 		}
 		items = append(items, ContextManifestItem{ID: id, Kind: "canonical_memory", Included: decision.Included, Reason: decision.Reason, BaseScore: decision.BaseScore, FinalScore: decision.FinalScore})
 	}
-	manifest := ContextInjectionManifest{SchemaVersion: ContextManifestSchemaVersion, RequestID: request.RequestID, RequestHash: request.Fingerprint(), RunID: request.RunID, TaskID: request.TaskID, Attempt: request.Attempt, Agent: agentName, AgentRole: request.AgentRole, ModelExecutionID: request.ModelExecutionID, Environment: request.EnvironmentFingerprint, Phase: request.Phase, Trigger: request.Trigger, Purpose: request.Purpose, ModelCalled: true, Outcome: "model_call", Items: items, CreatedAt: createdAt.UTC()}
+	manifest := ContextInjectionManifest{SchemaVersion: ContextManifestSchemaVersion, RequestID: request.RequestID, RequestHash: request.Fingerprint(), RunID: request.RunID, TaskID: request.TaskID, Attempt: request.Attempt, Agent: agentName, AgentRole: request.AgentRole, ModelExecutionID: request.ModelExecutionID, Environment: request.EnvironmentFingerprint, Phase: request.Phase, Trigger: request.Trigger, Purpose: request.Purpose, ParentTrigger: request.ParentTrigger, ParentRequestID: request.ParentRequestID, ParentManifestFingerprint: request.ParentManifestFingerprint, ModelCalled: true, Outcome: "model_call", Items: items, CreatedAt: createdAt.UTC()}
 	if request.Failure != nil {
 		if len(request.Failure.EvidenceRefs) > 0 {
 			manifest.ToolCallID = request.Failure.EvidenceRefs[0]
@@ -131,16 +134,27 @@ func contextManifestFingerprint(manifest ContextInjectionManifest) string {
 
 type ContextManifestSummary struct {
 	Requests       int            `json:"requests"`
+	ModelCalls     int            `json:"model_calls"`
+	Fallbacks      int            `json:"fallbacks"`
 	Included       int            `json:"included"`
 	Omitted        int            `json:"omitted"`
 	IncludedTokens int            `json:"included_tokens"`
 	OmittedTokens  int            `json:"omitted_tokens"`
 	OmitReasons    map[string]int `json:"omit_reasons,omitempty"`
+	Purposes       map[string]int `json:"purposes,omitempty"`
 }
 
 func SummarizeContextManifests(manifests []ContextInjectionManifest) ContextManifestSummary {
-	summary := ContextManifestSummary{Requests: len(manifests), OmitReasons: make(map[string]int)}
+	summary := ContextManifestSummary{Requests: len(manifests), OmitReasons: make(map[string]int), Purposes: make(map[string]int)}
 	for _, manifest := range manifests {
+		if manifest.ModelCalled {
+			summary.ModelCalls++
+		} else {
+			summary.Fallbacks++
+		}
+		if manifest.Purpose != "" {
+			summary.Purposes[manifest.Purpose]++
+		}
 		for _, item := range manifest.Items {
 			if item.Included {
 				summary.Included++
@@ -364,6 +378,25 @@ func (c *Coordinator) recordContextSelectionObservations(manifest *ContextInject
 	return nil
 }
 
+// recordContextToolConsulted records an actual context_get disclosure. A
+// selected item is not necessarily read by a worker; this separate event is
+// emitted before the tool response reveals the bounded content.
+func (c *Coordinator) recordContextToolConsulted(manifest *ContextInjectionManifest, contextItemID string) error {
+	recorder, ok := c.contextRepo.(contextOutcomeRecorder)
+	if !ok || manifest == nil || strings.TrimSpace(contextItemID) == "" {
+		return nil
+	}
+	observation := contextOutcomeObservation(manifest, contextItemID, "tool_consulted", "not_assessed")
+	observation.IdempotencyKey = manifest.Fingerprint + ":" + contextItemID + ":tool_consulted"
+	if c.session != nil {
+		observation.PolicyRevision = c.session.Config.MemoryLearning.PolicyVersion
+	}
+	if _, err := recorder.RecordContextOutcomeObservation(context.Background(), observation); err != nil {
+		return fmt.Errorf("record context tool consultation: %w", err)
+	}
+	return nil
+}
+
 // recordContextAcceptanceObservations closes the outcome loop after the sole
 // global acceptance authority has decided. It never reuses raw context
 // content: every row refers back to the exact persisted manifest instead.
@@ -399,6 +432,61 @@ func (c *Coordinator) recordContextAcceptanceObservations(acceptance *Acceptance
 			observation.AcceptanceOutcome = acceptanceOutcome
 			if _, err := recorder.RecordContextOutcomeObservation(context.Background(), observation); err != nil {
 				return fmt.Errorf("record context acceptance observation: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// recordAuxiliaryContextSignal links a judge or skeptic result to only the
+// canonical items that the corresponding invocation actually included. The
+// reviewer prompt normally has no shared memory by design, in which case this
+// deliberately records nothing rather than manufacturing exposure evidence.
+func (c *Coordinator) recordAuxiliaryContextSignal(taskID, purpose, eventKind, signal string) error {
+	if c == nil || c.session == nil {
+		return nil
+	}
+	recorder, ok := c.contextRepo.(contextOutcomeRecorder)
+	if !ok {
+		return nil
+	}
+	var manifests []ContextInjectionManifest
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil && taskID != "" {
+		for _, item := range c.taskTracker.TodoList().Items() {
+			if item != nil && item.ID == taskID {
+				manifests = append(manifests, item.ContextManifests...)
+				break
+			}
+		}
+	}
+	if c.sessionData != nil {
+		for _, manifest := range c.sessionData.CoordinatorContextManifests {
+			if taskID == "" || manifest.TaskID == taskID || manifest.TaskID == "auxiliary-"+purpose {
+				manifests = append(manifests, manifest)
+			}
+		}
+	}
+	policyRevision := c.session.Config.MemoryLearning.PolicyVersion
+	for i := range manifests {
+		manifest := &manifests[i]
+		if manifest.Purpose != purpose || !manifest.ModelCalled {
+			continue
+		}
+		for _, item := range manifest.Items {
+			if !item.Included || item.ID == "" || (item.Source != "shared_persistent" && item.Source != "shared_session" && item.Source != "context_get") {
+				continue
+			}
+			observation := contextOutcomeObservation(manifest, item.ID, eventKind, "not_assessed")
+			observation.IdempotencyKey = manifest.Fingerprint + ":" + item.ID + ":" + eventKind + ":" + signal
+			observation.PolicyRevision = policyRevision
+			switch purpose {
+			case "judge":
+				observation.JudgeOutcome = signal
+			case "skeptic":
+				observation.SkepticOutcome = signal
+			}
+			if _, err := recorder.RecordContextOutcomeObservation(context.Background(), observation); err != nil {
+				return fmt.Errorf("record %s context signal: %w", purpose, err)
 			}
 		}
 	}

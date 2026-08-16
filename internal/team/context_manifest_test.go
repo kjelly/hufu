@@ -82,6 +82,25 @@ func TestContextManifestCompilerOmissionOverridesPriorRouterInclusion(t *testing
 	}
 }
 
+func TestContextManifestProjectsParentInvocationWithoutContent(t *testing.T) {
+	request := validTestContextRequest()
+	request.ParentTrigger = ContextTriggerRetry
+	request.ParentRequestID = "ctx-parent"
+	request.ParentManifestFingerprint = "manifest-parent"
+	request.AssignRequestID()
+	manifest := BuildContextInjectionManifest(request, CompiledContext{}, nil, "worker", time.Unix(100, 0))
+	if manifest.ParentTrigger != ContextTriggerRetry || manifest.ParentRequestID != "ctx-parent" || manifest.ParentManifestFingerprint != "manifest-parent" {
+		t.Fatalf("parent projection = %#v", manifest)
+	}
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), request.Goal) {
+		t.Fatalf("parent projection leaked request content: %s", encoded)
+	}
+}
+
 func TestMemoryManifestIsProjectionOfGeneralManifestSubset(t *testing.T) {
 	request := validTestContextRequest()
 	compiled := CompiledContext{IncludedItems: []ContextItem{{ID: "current_task", Kind: "current_task", Required: true, TokenCount: 3}, {ID: "context:memory-a", Kind: "pattern", Source: "shared_persistent", TokenCount: 7, BaseScore: .8, FinalScore: .9}, {ID: "context:memory-b", Kind: "observation", Source: "worker_long_term", TokenCount: 5, BaseScore: .6, FinalScore: .7}}}
@@ -113,9 +132,9 @@ func TestMemoryManifestIsProjectionOfGeneralManifestSubset(t *testing.T) {
 }
 
 func TestContextManifestSummary(t *testing.T) {
-	manifest := ContextInjectionManifest{Items: []ContextManifestItem{{Included: true, Tokens: 7}, {Reason: ContextOmittedBudget, Tokens: 11}}}
+	manifest := ContextInjectionManifest{ModelCalled: true, Purpose: "task_execution", Items: []ContextManifestItem{{Included: true, Tokens: 7}, {Reason: ContextOmittedBudget, Tokens: 11}}}
 	summary := SummarizeContextManifests([]ContextInjectionManifest{manifest})
-	if summary.Requests != 1 || summary.Included != 1 || summary.Omitted != 1 || summary.IncludedTokens != 7 || summary.OmittedTokens != 11 || summary.OmitReasons[string(ContextOmittedBudget)] != 1 {
+	if summary.Requests != 1 || summary.ModelCalls != 1 || summary.Fallbacks != 0 || summary.Purposes["task_execution"] != 1 || summary.Included != 1 || summary.Omitted != 1 || summary.IncludedTokens != 7 || summary.OmittedTokens != 11 || summary.OmitReasons[string(ContextOmittedBudget)] != 1 {
 		t.Fatalf("summary = %#v", summary)
 	}
 }
@@ -172,6 +191,40 @@ func TestAuxiliaryFallbackManifestDistinguishesNoModel(t *testing.T) {
 	manifest := c.sessionData.CoordinatorContextManifests[0]
 	if manifest.ModelCalled || manifest.Outcome != "keyword_fallback" || manifest.Purpose != "skill_matcher" {
 		t.Fatalf("fallback manifest = %#v", manifest)
+	}
+}
+
+func TestAuxiliaryManifestPreservesParentInvocationIdentity(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
+	c.executionRunID = "run-parent"
+	ctx := withInvocationMetadata(context.Background(), InvocationMetadata{
+		RunID: "run-parent", TaskID: "task-1", AgentName: "worker", AgentRole: "worker", ModelExecutionID: "worker-model",
+		Attempt: 2, Phase: PhaseVerify, Trigger: ContextTriggerRetry, ParentRequestID: "ctx-worker", ParentManifestFingerprint: "worker-manifest",
+	})
+	if _, err := c.prepareAuxiliaryPrompt(ctx, "skeptic", "review candidate"); err != nil {
+		t.Fatal(err)
+	}
+	manifest := c.sessionData.CoordinatorContextManifests[0]
+	if manifest.Phase != PhaseVerify || manifest.Attempt != 2 || manifest.ParentTrigger != ContextTriggerRetry || manifest.ParentRequestID != "ctx-worker" || manifest.ParentManifestFingerprint != "worker-manifest" {
+		t.Fatalf("auxiliary parent projection = %#v", manifest)
+	}
+}
+
+func TestContextToolConsultedObservationIsDistinctAndIdempotent(t *testing.T) {
+	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
+	manifest := ContextInjectionManifest{RequestID: "request-1", RunID: "run-1", TaskID: "task-1", Attempt: 1, AgentRole: "worker", Phase: PhaseExecute, Trigger: ContextTriggerTaskDispatch, Fingerprint: "manifest-1"}
+	if err := c.recordContextToolConsulted(&manifest, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.recordContextToolConsulted(&manifest, "a"); err != nil {
+		t.Fatal(err)
+	}
+	count, err := repo.ContextOutcomeCount(context.Background(), "a", string(PhaseExecute), string(ContextTriggerTaskDispatch), "worker", "", "tool_consulted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("tool consultation count = %d, want 1", count)
 	}
 }
 
