@@ -54,16 +54,70 @@ func gateTestCoordinator() *Coordinator {
 	}
 }
 
-func TestReadOnlyPolicyDeniesEveryExecutionCapability(t *testing.T) {
-	for _, name := range []string{"bash", "write", "edit", "multiedit", "sudo", "ssh", "scp", "fetch", "agentic_fetch", "terminal_write"} {
+func TestReadOnlyPolicyDeniesEveryMutationCapability(t *testing.T) {
+	for _, name := range []string{"write", "edit", "multiedit", "sudo", "ssh", "scp", "fetch", "agentic_fetch", "terminal_write"} {
 		if !readOnlyToolMutation(name) {
 			t.Errorf("readOnlyToolMutation(%q) = false, want true", name)
 		}
 	}
-	for _, name := range []string{"view", "grep", "glob", "ls", "math", "finish"} {
+	for _, name := range []string{"bash", "view", "grep", "glob", "ls", "math", "finish"} {
 		if readOnlyToolMutation(name) {
 			t.Errorf("readOnlyToolMutation(%q) = true, want false", name)
 		}
+	}
+}
+
+func TestPolicyGateReadOnlyBashDelegatesToBashGrammar(t *testing.T) {
+	c := gateTestCoordinator()
+	inner := &recordingTool{name: "bash"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
+	ctx := context.WithValue(tools.SetToolsAllowed(context.Background(), []string{"bash"}), tools.AgentReadOnlyExecutionKey, true)
+
+	response, err := gated.Run(ctx, fantasy.ToolCall{ID: "safe-bash", Name: "bash", Input: `{"command":"git diff --stat"}`})
+	if err != nil || response.IsError {
+		t.Fatalf("safe bash must reach its read-only grammar: response=%+v err=%v", response, err)
+	}
+	if !inner.ran {
+		t.Fatal("safe bash was denied before its read-only grammar could run")
+	}
+}
+
+func TestPolicyGateStepBudgetTerminalOnlyDeniesInspectionWithoutExecution(t *testing.T) {
+	c := gateTestCoordinator()
+	inner := &recordingTool{name: "view"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
+	var dispositions []tools.ToolExecutionDisposition
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"view", submitResultToolName})
+	ctx = context.WithValue(ctx, workerStepBudgetTerminalOnlyKey{}, true)
+	ctx = context.WithValue(ctx, tools.ToolExecutionDispositionReporterKey, tools.ToolExecutionDispositionReporter(func(d tools.ToolExecutionDisposition) {
+		dispositions = append(dispositions, d)
+	}))
+	response, err := gated.Run(ctx, fantasy.ToolCall{ID: "last-inspection", Name: "view", Input: `{"file_path":"spec.md"}`})
+	if err != nil || !response.IsError || inner.ran {
+		t.Fatalf("terminal-only response=%+v err=%v ran=%v", response, err, inner.ran)
+	}
+	if len(dispositions) != 1 || dispositions[0].Kind != string(ToolExecutionBudgetExceeded) || dispositions[0].ReasonCode != "step_budget_wrap_up" || dispositions[0].Executed {
+		t.Fatalf("dispositions = %#v", dispositions)
+	}
+}
+
+func TestDirectAgentContextCarriesPolicyDispositionReporter(t *testing.T) {
+	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{Name: "direct", Timeout: 30}}}
+	def := &agent.AgentDef{Name: "reviewer", Role: "worker", SideEffect: string(SideEffectNone)}
+	collector := &attemptToolDispositions{}
+	ctx, cancel, roundCancel := c.buildDirectAgentTaskContext(context.Background(), def, "reviewer", "inspect", "task-direct", "test", []string{"bash"})
+	defer cancel()
+	defer roundCancel()
+	ctx = context.WithValue(ctx, tools.ToolExecutionDispositionReporterKey, newToolDispositionReporter(collector, SideEffectNone, "run-direct", "task-direct", 1))
+	inner := &recordingTool{name: "write"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
+	response, err := gated.Run(ctx, fantasy.ToolCall{ID: "direct-write", Name: "write", Input: `{}`})
+	if err != nil || !response.IsError || inner.ran {
+		t.Fatalf("direct policy response=%+v err=%v ran=%v", response, err, inner.ran)
+	}
+	items := collector.snapshot()
+	if len(items) != 1 || items[0].TodoID != "task-direct" || items[0].RunID != "run-direct" || items[0].Kind != ToolExecutionPolicyDenied || items[0].Executed {
+		t.Fatalf("direct disposition = %#v", items)
 	}
 }
 

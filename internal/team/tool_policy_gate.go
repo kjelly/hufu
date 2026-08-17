@@ -50,11 +50,28 @@ func (t *policyGatedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
 }
 
 func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	if terminalOnly, _ := ctx.Value(workerStepBudgetTerminalOnlyKey{}).(bool); terminalOnly && t.Info().Name != submitResultToolName {
+		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
+			Kind:       string(ToolExecutionBudgetExceeded),
+			ReasonCode: "step_budget_wrap_up",
+			ToolName:   t.Info().Name,
+			ToolCallID: call.ID,
+			Executed:   false,
+		})
+		return fantasy.NewTextErrorResponse("step_budget_wrap_up: only submit_result is permitted after the terminal step-budget checkpoint"), nil
+	}
 	// side_effect:none is a capability boundary, not merely a task label.
 	// Enforce it before authorization or handler execution so every mutation
 	// capable tool is denied consistently, including handlers that do not
 	// inspect the marker themselves.
 	if readOnly, _ := ctx.Value(tools.AgentReadOnlyExecutionKey).(bool); readOnly && readOnlyToolMutation(t.Info().Name) {
+		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
+			Kind:       "policy_denied",
+			ReasonCode: "read_only_tool_denied",
+			ToolName:   t.Info().Name,
+			ToolCallID: call.ID,
+			Executed:   false,
+		})
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("tool %q is denied for side_effect:none tasks; no mutation-capable tool may run", t.Info().Name)), nil
 	}
 	if t.coordinator != nil && t.coordinator.coordinatorPolicyRepairPending.Load() {
@@ -70,6 +87,13 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		return fantasy.ToolResponse{}, fatal
 	}
 	if denial != "" {
+		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
+			Kind:       "policy_denied",
+			ReasonCode: "tool_authorization_denied",
+			ToolName:   t.Info().Name,
+			ToolCallID: call.ID,
+			Executed:   false,
+		})
 		t.coordinator.setToolPolicyVerdict(call.ID, "denied")
 		if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID {
 			if t.coordinator.allowInitialToolCorrection(agentName, t.Info().Name) {
@@ -93,12 +117,26 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		return fantasy.NewTextErrorResponse(denial), nil
 	}
 	if denial := t.coordinator.mandatorySkillLoadDenial(ctx, t.Info().Name, call.Input); denial != "" {
+		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
+			Kind:       "policy_denied",
+			ReasonCode: "mandatory_skill_load_denied",
+			ToolName:   t.Info().Name,
+			ToolCallID: call.ID,
+			Executed:   false,
+		})
 		t.coordinator.setToolPolicyVerdict(call.ID, "denied")
 		return fantasy.NewTextErrorResponse(denial), nil
 	}
 	sequence := taskToolSequenceFromContext(ctx)
 	reservedSlot, effectiveInput, canonicalized, sequenceDenial := sequence.reserve(t.Info().Name, call.Input, earlyTerminalSubmitResult(t.Info().Name, call))
 	if sequenceDenial != "" {
+		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
+			Kind:       "policy_denied",
+			ReasonCode: "task_sequence_denied",
+			ToolName:   t.Info().Name,
+			ToolCallID: call.ID,
+			Executed:   false,
+		})
 		t.coordinator.setToolPolicyVerdict(call.ID, "denied")
 		if t.coordinator != nil {
 			t.coordinator.report(t.coordinator.newEvent("step").withAgent(agentName).
@@ -180,12 +218,11 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 }
 
 func readOnlyToolMutation(name string) bool {
-	switch strings.TrimSpace(strings.ToLower(name)) {
-	case "bash", "sudo", "ssh", "scp", "write", "edit", "multiedit", "golang", "lua", "download", "fetch", "agentic_fetch", "create_skill", "terminal", "terminal_start", "terminal_write", "terminal_wait", "terminal_close", "terminal_reconcile":
-		return true
-	default:
+	name = strings.TrimSpace(strings.ToLower(name))
+	if tools.IsReadOnlyObservationTool(name) || name == "submit_result" || name == "submit_plan" || name == "finish" {
 		return false
 	}
+	return true
 }
 
 // allowInitialToolCorrection admits exactly one recoverable denial while the
