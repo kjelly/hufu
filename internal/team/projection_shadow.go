@@ -89,17 +89,19 @@ func toCanonicalVerifyResult(vr *VerificationResult) *canonicalVerifyResult {
 }
 
 type canonicalReceipt struct {
-	RunID            string                    `json:"run_id,omitempty"`
-	TaskID           string                    `json:"task_id,omitempty"`
-	Attempt          int                       `json:"attempt"`
-	ExitCode         *int                      `json:"exit_code,omitempty"`
-	ProducerID       string                    `json:"producer_id,omitempty"`
-	TranscriptRef    string                    `json:"transcript_ref,omitempty"`
-	RepairProvenance *RepairProvenance         `json:"repair_provenance,omitempty"`
-	VerifyResult     *canonicalVerifyResult    `json:"verify_result,omitempty"`
-	StepBudget       *StepBudgetUsage          `json:"step_budget,omitempty"`
-	MemoryManifest   *MemoryInjectionManifest  `json:"memory_manifest,omitempty"`
-	ContextManifest  *ContextInjectionManifest `json:"context_manifest,omitempty"`
+	RunID            string                     `json:"run_id,omitempty"`
+	TaskID           string                     `json:"task_id,omitempty"`
+	Attempt          int                        `json:"attempt"`
+	ExitCode         *int                       `json:"exit_code,omitempty"`
+	ProducerID       string                     `json:"producer_id,omitempty"`
+	TranscriptRef    string                     `json:"transcript_ref,omitempty"`
+	RepairProvenance *RepairProvenance          `json:"repair_provenance,omitempty"`
+	VerifyResult     *canonicalVerifyResult     `json:"verify_result,omitempty"`
+	StepBudget       *StepBudgetUsage           `json:"step_budget,omitempty"`
+	ToolDispositions []ToolExecutionDisposition `json:"tool_dispositions,omitempty"`
+	HandoffState     ResultHandoffState         `json:"handoff_state,omitempty"`
+	MemoryManifest   *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
+	ContextManifest  *ContextInjectionManifest  `json:"context_manifest,omitempty"`
 }
 
 func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) []canonicalReceipt {
@@ -125,6 +127,8 @@ func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) 
 			RepairProvenance: r.RepairProvenance,
 			VerifyResult:     toCanonicalVerifyResult(r.VerifyResult),
 			StepBudget:       r.StepBudget,
+			ToolDispositions: append([]ToolExecutionDisposition(nil), r.ToolDispositions...),
+			HandoffState:     r.HandoffState,
 			MemoryManifest:   r.MemoryManifest,
 			ContextManifest:  r.ContextManifest,
 		})

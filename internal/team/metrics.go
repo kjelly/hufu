@@ -66,6 +66,7 @@ func (c *Coordinator) Metrics() RunMetrics {
 	metrics.TasksByCriterion = make(map[string]int)
 	if c.taskTracker != nil {
 		accumulateTodoMetrics(&metrics, c.taskTracker.TodoList().Items())
+		accumulateToolDispositionMetrics(&metrics, c.taskTracker.TodoList().Items(), c.executionRunID)
 		metrics.ProtocolRepairsAttempted += int(c.coordinatorProtocolRepairsAttempt.Load())
 		metrics.ProtocolRepairsSucceeded += int(c.coordinatorProtocolRepairsSuccess.Load())
 		metrics.CoordinatorPolicyRepairsAttempted = int(c.coordinatorPolicyRepairsAttempt.Load())
@@ -81,6 +82,42 @@ func (c *Coordinator) Metrics() RunMetrics {
 		}
 	}
 	return metrics
+}
+
+// accumulateToolDispositionMetrics projects only the active run's structured
+// tool decisions. Historical receipts remain durable evidence but must not
+// inflate a latest-run report or outcome diagnosis.
+func accumulateToolDispositionMetrics(metrics *RunMetrics, items []*TodoItem, runID string) {
+	seenFresh := make(map[string]bool)
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		for _, receipt := range item.ExecutionReceipts {
+			if runID != "" && receipt.RunID != runID {
+				continue
+			}
+			for _, disposition := range receipt.ToolDispositions {
+				switch disposition.Kind {
+				case ToolExecutionPolicyDenied:
+					metrics.PolicyDeniedToolCalls++
+					if disposition.RetrySafety == RetrySafetySafeFreshAttempt {
+						key := receipt.RunID + "\x00" + receipt.TaskID + "\x00" + strconv.Itoa(receipt.Attempt)
+						if !seenFresh[key] {
+							seenFresh[key] = true
+							metrics.SafeFreshAttempts++
+						}
+					}
+				case ToolExecutionSchemaRepair:
+					metrics.SchemaRepairDenials++
+				case ToolExecutionBudgetExceeded:
+					if disposition.ReasonCode == "step_budget_wrap_up" {
+						metrics.StepBudgetWrapUps++
+					}
+				}
+			}
+		}
+	}
 }
 
 func sumRetrySuppressions(byReason map[string]int) int {
