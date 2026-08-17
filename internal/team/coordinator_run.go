@@ -288,7 +288,14 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return nil, fmt.Errorf("failed to create agent %q: %w", resolvedName, err)
 	}
 
+	directDispositions := &attemptToolDispositions{}
+	directSideEffect := SideEffectClass(strings.TrimSpace(agentDef.SideEffect))
+	if directSideEffect == "" {
+		directSideEffect = SideEffectUnknown
+	}
+	directRunID := c.contextRunID()
 	taskCtx, cancel, roundCancel := c.buildDirectAgentTaskContext(ctx, agentDef, resolvedName, task, todoID, directModel, exposedToolNames)
+	taskCtx = context.WithValue(taskCtx, tools.ToolExecutionDispositionReporterKey, newToolDispositionReporter(directDispositions, directSideEffect, directRunID, todoID, 1))
 	defer cancel()
 
 	timing := &taskTiming{}
@@ -437,6 +444,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		ModelExecutionID: contextManifest.ModelExecutionID,
 		MemoryManifest:   cloneMemoryInjectionManifest(memoryManifest),
 		ContextManifest:  cloneContextInjectionManifest(&contextManifest),
+		ToolDispositions: directDispositions.snapshot(),
 	}
 	if err == nil {
 		zero := 0
