@@ -15,11 +15,12 @@ const (
 	SideEffectExternalWrite  SideEffectClass = "external_write"
 	SideEffectInfraMutation  SideEffectClass = "infra_mutation"
 	SideEffectCredential     SideEffectClass = "credential_mutation"
+	SideEffectUnknown        SideEffectClass = "unknown"
 )
 
 func nonReplayableSideEffect(class SideEffectClass) bool {
 	switch class {
-	case SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential:
+	case SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential, SideEffectUnknown:
 		return true
 	default:
 		return false
@@ -147,7 +148,7 @@ func DefaultRecoveryPolicy(class SideEffectClass, isUnattended bool) RecoveryPol
 		return RecoveryReconcile
 	case SideEffectInfraMutation:
 		return RecoveryManual
-	case SideEffectCredential:
+	case SideEffectCredential, SideEffectUnknown:
 		return RecoveryManual
 	default:
 		// Backward compatibility: unspecified/empty side effect maintains existing behavior (retry).
