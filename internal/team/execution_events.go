@@ -93,6 +93,10 @@ type LifecycleEventPayload struct {
 	Team                  string                  `json:"team,omitempty"`
 	Outcome               RunOutcome              `json:"outcome"`
 	GoalSatisfied         bool                    `json:"goal_satisfied"`
+	CompletedReview       bool                    `json:"completed_review,omitempty"`
+	FindingsPresent       bool                    `json:"findings_present,omitempty"`
+	FixedAndVerified      bool                    `json:"fixed_and_verified,omitempty"`
+	AcceptanceAdvisory    bool                    `json:"acceptance_advisory,omitempty"`
 	AcceptanceState       AcceptanceState         `json:"acceptance_state,omitempty"`
 	AcceptancePassed      bool                    `json:"acceptance_passed,omitempty"`
 	Acceptance            *AcceptanceResult       `json:"acceptance,omitempty"`
@@ -347,6 +351,10 @@ func (c *Coordinator) beginExecutionRun() func() {
 		if result := c.LastRunResult(); result != nil {
 			payload.Outcome = result.Outcome
 			payload.GoalSatisfied = result.GoalSatisfied
+			payload.CompletedReview = result.CompletedReview
+			payload.FindingsPresent = result.FindingsPresent
+			payload.FixedAndVerified = result.FixedAndVerified
+			payload.AcceptanceAdvisory = result.AcceptanceAdvisory
 			if result.Acceptance != nil {
 				payload.AcceptanceState = result.Acceptance.EffectiveState()
 				payload.AcceptancePassed = result.Acceptance.IsPassed()

@@ -76,6 +76,50 @@ type StepBudgetUsage struct {
 	Exhausted bool `json:"exhausted,omitempty"`
 }
 
+type ToolExecutionKind string
+
+const (
+	ToolExecutionExecuted       ToolExecutionKind = "executed"
+	ToolExecutionPolicyDenied   ToolExecutionKind = "policy_denied"
+	ToolExecutionSchemaRepair   ToolExecutionKind = "schema_repair"
+	ToolExecutionCancelled      ToolExecutionKind = "cancelled"
+	ToolExecutionBudgetExceeded ToolExecutionKind = "budget_exhausted"
+)
+
+type RetrySafety string
+
+const (
+	RetrySafetySafeFreshAttempt RetrySafety = "safe_fresh_attempt"
+	RetrySafetyReconcileOnly    RetrySafety = "reconcile_only"
+	RetrySafetyNoRetry          RetrySafety = "no_retry"
+)
+
+type ResultHandoffState string
+
+const (
+	ResultHandoffSubmitted                  ResultHandoffState = "submitted"
+	ResultHandoffMissingAfterSafeDenial     ResultHandoffState = "missing_after_safe_denial"
+	ResultHandoffMissingAfterPossibleEffect ResultHandoffState = "missing_after_possible_side_effect"
+	ResultHandoffBudgetExhausted            ResultHandoffState = "budget_exhausted"
+	ResultHandoffCancelled                  ResultHandoffState = "cancelled"
+)
+
+// ToolExecutionDisposition records a tool decision that occurred before the
+// tool could execute. It keeps a policy denial distinct from a failed command
+// whose side effects may need reconciliation.
+type ToolExecutionDisposition struct {
+	Kind        ToolExecutionKind `json:"kind"`
+	Executed    bool              `json:"executed"`
+	SideEffect  SideEffectClass   `json:"side_effect"`
+	RetrySafety RetrySafety       `json:"retry_safety"`
+	ReasonCode  string            `json:"reason_code"`
+	ToolName    string            `json:"tool_name"`
+	ToolCallID  string            `json:"tool_call_id,omitempty"`
+	TodoID      string            `json:"todo_id"`
+	RunID       string            `json:"run_id"`
+	Attempt     int               `json:"attempt"`
+}
+
 // ExecutionReceipt represents the execution provenance and metadata for a single task run attempt.
 type ExecutionReceipt struct {
 	RunID   string `json:"run_id"`
@@ -97,9 +141,11 @@ type ExecutionReceipt struct {
 	VerifyResult *VerificationResult `json:"verify_result,omitempty"`
 	// StepBudget records this attempt's step consumption, so a truncated attempt
 	// is distinguishable from one that chose to stop.
-	StepBudget      *StepBudgetUsage          `json:"step_budget,omitempty"`
-	MemoryManifest  *MemoryInjectionManifest  `json:"memory_manifest,omitempty"`
-	ContextManifest *ContextInjectionManifest `json:"context_manifest,omitempty"`
+	StepBudget       *StepBudgetUsage           `json:"step_budget,omitempty"`
+	ToolDispositions []ToolExecutionDisposition `json:"tool_dispositions,omitempty"`
+	HandoffState     ResultHandoffState         `json:"handoff_state,omitempty"`
+	MemoryManifest   *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
+	ContextManifest  *ContextInjectionManifest  `json:"context_manifest,omitempty"`
 }
 
 // ArtifactExpectation describes an expected output artifact and its verification criteria.

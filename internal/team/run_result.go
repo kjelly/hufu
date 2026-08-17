@@ -242,10 +242,19 @@ func FormatCanonicalStatus(res *RunResult) string {
 		return "All tasks completed"
 	}
 	if res.GoalSatisfied {
+		if res.FixedAndVerified {
+			return "Execution fixed and objectively verified"
+		}
 		return "Execution completed successfully"
 	}
 	switch res.Outcome {
 	case RunOutcomeCompleted:
+		if res.CompletedReview {
+			if res.FindingsPresent {
+				return "Review completed; findings remain"
+			}
+			return "Review completed; findings unverified"
+		}
 		return "Execution completed; goal unverified"
 	case RunOutcomeUnverified:
 		return "Execution completed; goal unverified (no acceptance configured)"
@@ -415,6 +424,9 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 	var foldedStats RunStats
 	failedExitCode := 0
 	cancelledExitCode := 0
+	completedReview := false
+	findingsPresent := false
+	acceptanceAdvisory := false
 	for _, result := range results {
 		if result == nil {
 			continue
@@ -442,6 +454,9 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 		if result.StopReason == StopReasonBudgetExceeded {
 			input.BudgetExceeded = true
 		}
+		completedReview = completedReview || result.CompletedReview
+		findingsPresent = findingsPresent || result.FindingsPresent
+		acceptanceAdvisory = acceptanceAdvisory || result.AcceptanceAdvisory
 
 		if result.Acceptance != nil {
 			switch result.Acceptance.EffectiveState() {
@@ -500,7 +515,14 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 	if partial && len(input.UnresolvedTasks) == 0 && input.Acceptance != AcceptanceFailed {
 		input.BudgetExceeded = true
 	}
-	return EvaluateRunOutcome(input)
+	aggregated := EvaluateRunOutcome(input)
+	aggregated.CompletedReview = completedReview
+	aggregated.FindingsPresent = findingsPresent
+	aggregated.AcceptanceAdvisory = acceptanceAdvisory
+	// A multi-team aggregate can only claim fixed_and_verified when its
+	// canonical outcome is successful and no participating review left findings.
+	aggregated.FixedAndVerified = aggregated.GoalSatisfied && !findingsPresent
+	return aggregated
 }
 
 type TaskReference struct {
@@ -586,6 +608,10 @@ type RunMetrics struct {
 	// counter is what separates "tasks needed more tool calls" from "the model
 	// ignored the result contract".
 	StepBudgetExhaustions              int     `json:"step_budget_exhaustions,omitempty"`
+	PolicyDeniedToolCalls              int     `json:"policy_denied_tool_calls,omitempty"`
+	SafeFreshAttempts                  int     `json:"safe_fresh_attempts,omitempty"`
+	StepBudgetWrapUps                  int     `json:"step_budget_wrap_ups,omitempty"`
+	SchemaRepairDenials                int     `json:"schema_repair_denials,omitempty"`
 	ExecutionReplaysAvoided            int     `json:"execution_replays_avoided,omitempty"`
 	ReplayAttempts                     int     `json:"replay_attempts,omitempty"`
 	UnsafeReplaysDetected              int     `json:"unsafe_replays_detected,omitempty"`
@@ -699,6 +725,13 @@ type RunResult struct {
 	Metrics          RunMetrics        `json:"metrics,omitempty"`
 	EvidenceManifest *EvidenceManifest `json:"evidence_manifest,omitempty"`
 	Telemetry        *RunTelemetry     `json:"telemetry,omitempty"`
+	// Review completion is intentionally separate from an implementation
+	// outcome: a completed exploratory review may surface findings but never
+	// proves they were fixed.
+	CompletedReview    bool `json:"completed_review,omitempty"`
+	FindingsPresent    bool `json:"findings_present,omitempty"`
+	FixedAndVerified   bool `json:"fixed_and_verified,omitempty"`
+	AcceptanceAdvisory bool `json:"acceptance_advisory,omitempty"`
 }
 
 type TaskFailureClass string
