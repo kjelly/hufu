@@ -50,6 +50,13 @@ func (t *policyGatedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
 }
 
 func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	// side_effect:none is a capability boundary, not merely a task label.
+	// Enforce it before authorization or handler execution so every mutation
+	// capable tool is denied consistently, including handlers that do not
+	// inspect the marker themselves.
+	if readOnly, _ := ctx.Value(tools.AgentReadOnlyExecutionKey).(bool); readOnly && readOnlyToolMutation(t.Info().Name) {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("tool %q is denied for side_effect:none tasks; no mutation-capable tool may run", t.Info().Name)), nil
+	}
 	if t.coordinator != nil && t.coordinator.coordinatorPolicyRepairPending.Load() {
 		todoID, _ := ctx.Value(todoIDKey{}).(string)
 		if todoID == CoordTodoID && t.Info().Name != "agent" && t.Info().Name != "finish" {
@@ -170,6 +177,15 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		taskToolSequenceFromContext(ctx).markFailedAt(reservedSlot, t.Info().Name, response.Content)
 	}
 	return response, err
+}
+
+func readOnlyToolMutation(name string) bool {
+	switch strings.TrimSpace(strings.ToLower(name)) {
+	case "bash", "sudo", "ssh", "scp", "write", "edit", "multiedit", "golang", "lua", "download", "fetch", "agentic_fetch", "create_skill", "terminal", "terminal_start", "terminal_write", "terminal_wait", "terminal_close", "terminal_reconcile":
+		return true
+	default:
+		return false
+	}
 }
 
 // allowInitialToolCorrection admits exactly one recoverable denial while the

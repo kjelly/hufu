@@ -52,6 +52,9 @@ func NewWriteTool(opts ...ToolOption) fantasy.AgentTool {
 }
 
 func executeWrite(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fantasy.ToolResponse, error) {
+	if response, denied := ReadOnlyMutationDenied(ctx, "write"); denied {
+		return response, nil
+	}
 	var args writeArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("file_path and content parameters are required"), nil

@@ -198,6 +198,21 @@ func checkReadOnlyBashSegment(segment string) error {
 		if len(fields) < 2 || !map[string]bool{"test": true, "vet": true, "list": true, "env": true, "version": true, "doc": true}[fields[1]] {
 			return fmt.Errorf("read-only bash policy denied go command %q", segment)
 		}
+		// Reject flags that write files or persist configuration state.
+		// `go test -c/-o` emit a compiled binary; `-cover`/`-coverprofile`
+		// emit a coverage file; `go env -w/-u` mutate the persistent go-env
+		// config. Inspection-oriented invocations (no such flags) remain
+		// permitted so the narrow, contract-aligned test pipeline still works.
+		switch fields[1] {
+		case "test":
+			if hasWriteFlag(fields[2:], "-c", "-o") || hasFlagPrefixField(fields[2:], "-cover") {
+				return fmt.Errorf("read-only bash policy denied go test write flag in %q", segment)
+			}
+		case "env":
+			if hasWriteFlag(fields[2:], "-w", "-u") {
+				return fmt.Errorf("read-only bash policy denied go env mutation flag in %q", segment)
+			}
+		}
 		return nil
 	}
 	if name == "golangci-lint" {
@@ -215,8 +230,10 @@ func checkReadOnlyBashSegment(segment string) error {
 	}[name] {
 		return fmt.Errorf("read-only bash policy denied command %q", name)
 	}
-	if (name == "sed" && containsField(fields[1:], "-i")) ||
-		(name == "find" && containsAnyField(fields[1:], "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fls")) {
+	if (name == "sed" && (hasFlagPrefixField(fields[1:], "-i") || hasFlagPrefixField(fields[1:], "--in-place"))) ||
+		(name == "sort" && hasWriteFlag(fields[1:], "-o", "--output")) ||
+		(name == "find" && (hasWriteFlag(fields[1:], "-delete", "-exec", "-execdir", "-ok", "-okdir") ||
+			hasFlagPrefixField(fields[1:], "-fprint", "-fprintf", "-fls"))) {
 		return fmt.Errorf("read-only bash policy denied potentially mutating command %q", segment)
 	}
 	return nil
@@ -311,11 +328,16 @@ func readOnlyGitCommand(args []string) bool {
 		return false
 	}
 	idx := 0
+	// Parse leading global options so a value-taking global such as
+	// `-C <path>` or `-c <name>=<value>` does not get mistaken for the
+	// subcommand. Only a small, read-only-oriented set is recognized; any
+	// other leading token falls through and is treated as the subcommand,
+	// which is rejected if it is not in the read-only allowlist.
 	for idx < len(args) {
 		switch args[idx] {
 		case "--no-pager", "--paginate":
 			idx++
-		case "-C":
+		case "-C", "-c", "--git-dir", "--work-tree", "--namespace":
 			idx += 2
 		default:
 			goto command
@@ -332,7 +354,17 @@ command:
 		"ls-tree": true, "cat-file": true, "blame": true,
 		"shortlog": true, "describe": true,
 	}
-	return allowed[subcommand]
+	if !allowed[subcommand] {
+		return false
+	}
+	// Deny write-oriented flags anywhere in the remaining subcommand
+	// arguments. The allowed subcommands are read-only by nature and do
+	// not accept `-o`/`--output`, so this is defense-in-depth rather than a
+	// behavior change for legitimate inspection pipelines.
+	if hasWriteFlag(args[idx+1:], "-o", "--output") {
+		return false
+	}
+	return true
 }
 
 func containsField(fields []string, want string) bool {
@@ -344,10 +376,30 @@ func containsField(fields []string, want string) bool {
 	return false
 }
 
-func containsAnyField(fields []string, wants ...string) bool {
-	for _, want := range wants {
-		if containsField(fields, want) {
-			return true
+// hasWriteFlag reports whether fields contains any flag in its exact form
+// (`-o`) or `--name=value` form (`-o=x`, `--output=x`). It is used to deny
+// stdout-redirecting output flags such as `go test -o`, `sort -o`, and
+// `git --output` without matching prefix-style tokens by accident.
+func hasWriteFlag(fields []string, flags ...string) bool {
+	for _, f := range fields {
+		for _, fl := range flags {
+			if f == fl || strings.HasPrefix(f, fl+"=") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasFlagPrefixField reports whether any field begins with one of the given
+// prefixes. It catches bundled forms like `sed -i.bak` and `find -fprint0`
+// that an exact-token check would miss.
+func hasFlagPrefixField(fields []string, prefixes ...string) bool {
+	for _, f := range fields {
+		for _, p := range prefixes {
+			if strings.HasPrefix(f, p) {
+				return true
+			}
 		}
 	}
 	return false

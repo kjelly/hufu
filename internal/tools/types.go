@@ -2,8 +2,12 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
+
+	"charm.land/fantasy"
 )
 
 var StdinMu sync.Mutex
@@ -55,6 +59,23 @@ var AgentAllowedWritePathsKey = agentAllowedWritePathsKeyType{}
 type agentReadOnlyExecutionKeyType struct{}
 
 var AgentReadOnlyExecutionKey = agentReadOnlyExecutionKeyType{}
+
+// ReadOnlyMutationDenied is a defense-in-depth check for mutation-capable
+// handlers. The coordinator policy gate performs the same check before tool
+// dispatch, but handlers also enforce it so direct/internal invocation cannot
+// bypass the side_effect:none contract.
+func ReadOnlyMutationDenied(ctx context.Context, toolName string) (fantasy.ToolResponse, bool) {
+	readOnly, _ := ctx.Value(AgentReadOnlyExecutionKey).(bool)
+	if !readOnly {
+		return fantasy.ToolResponse{}, false
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "bash", "sudo", "ssh", "scp", "write", "edit", "multiedit", "golang", "lua", "download", "fetch", "agentic_fetch", "create_skill", "terminal", "terminal_start", "terminal_write", "terminal_wait", "terminal_close", "terminal_reconcile":
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("tool %q is denied for side_effect:none tasks; no mutation-capable tool may run", toolName)), true
+	default:
+		return fantasy.ToolResponse{}, false
+	}
+}
 
 type agentRestrictedPathKeyType struct{}
 

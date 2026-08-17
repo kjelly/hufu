@@ -269,6 +269,8 @@ var executionCapabilityTools = map[string]bool{
 	"create_skill":       true,
 	"wait_for":           true,
 	"download":           true,
+	"fetch":              true,
+	"agentic_fetch":      true,
 	"terminal":           true,
 	"terminal_start":     true,
 	"terminal_write":     true,

@@ -96,6 +96,9 @@ func NewEditTool(opts ...ToolOption) fantasy.AgentTool {
 }
 
 func executeEdit(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fantasy.ToolResponse, error) {
+	if response, denied := ReadOnlyMutationDenied(ctx, "edit"); denied {
+		return response, nil
+	}
 	var args editArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("failed to parse arguments: " + err.Error()), nil

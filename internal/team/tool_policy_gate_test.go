@@ -54,6 +54,19 @@ func gateTestCoordinator() *Coordinator {
 	}
 }
 
+func TestReadOnlyPolicyDeniesEveryExecutionCapability(t *testing.T) {
+	for _, name := range []string{"bash", "write", "edit", "multiedit", "sudo", "ssh", "scp", "fetch", "agentic_fetch", "terminal_write"} {
+		if !readOnlyToolMutation(name) {
+			t.Errorf("readOnlyToolMutation(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"view", "grep", "glob", "ls", "math", "finish"} {
+		if readOnlyToolMutation(name) {
+			t.Errorf("readOnlyToolMutation(%q) = true, want false", name)
+		}
+	}
+}
+
 // TestPolicyGateDenialIsRecoverable is the core of root cause 5: a denial must
 // reach the model as a tool error it can adapt to. Enforcing in OnToolCall could
 // only return an error, and an error there aborts the entire model round —
