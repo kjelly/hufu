@@ -40,6 +40,34 @@ type auditLoggerKeyType struct{}
 
 var AuditLoggerKey = auditLoggerKeyType{}
 
+// ToolExecutionDisposition is emitted by a tool when it intentionally refuses
+// a call before starting any external action.  It is deliberately structured:
+// coordinator recovery must never infer "not executed" from response text.
+type ToolExecutionDisposition struct {
+	Kind       string
+	ReasonCode string
+	ToolName   string
+	ToolCallID string
+	Executed   bool
+}
+
+// ToolExecutionDispositionReporter receives pre-execution tool decisions for
+// the current agent attempt. It is a context value to avoid coupling tools to
+// the coordinator package.
+type ToolExecutionDispositionReporter func(ToolExecutionDisposition)
+
+type toolExecutionDispositionReporterKey struct{}
+
+var ToolExecutionDispositionReporterKey = toolExecutionDispositionReporterKey{}
+
+// ReportToolExecutionDisposition records a best-effort disposition. A missing
+// reporter is valid for standalone tool use and tests.
+func ReportToolExecutionDisposition(ctx context.Context, disposition ToolExecutionDisposition) {
+	if reporter, ok := ctx.Value(ToolExecutionDispositionReporterKey).(ToolExecutionDispositionReporter); ok && reporter != nil {
+		reporter(disposition)
+	}
+}
+
 var onAskUserStart func()
 var onAskUserDone func()
 

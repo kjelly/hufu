@@ -153,6 +153,22 @@ func TestBashReadOnlyExecutionRejectsGitWrites(t *testing.T) {
 	}
 }
 
+func TestBashReadOnlyExecutionReportsPolicyDenialBeforeExecution(t *testing.T) {
+	workDir := t.TempDir()
+	var got []ToolExecutionDisposition
+	ctx := context.WithValue(context.Background(), AgentReadOnlyExecutionKey, true)
+	ctx = context.WithValue(ctx, ToolExecutionDispositionReporterKey, ToolExecutionDispositionReporter(func(disposition ToolExecutionDisposition) {
+		got = append(got, disposition)
+	}))
+	resp, err := executeBash(ctx, fantasy.ToolCall{ID: "unsafe-shell", Input: `{"command":"go test ./... 2>&1","working_directory":"` + workDir + `"}`}, ToolConfig{})
+	if err != nil || !resp.IsError {
+		t.Fatalf("unsafe shell response=%+v err=%v, want policy denial", resp, err)
+	}
+	if len(got) != 1 || got[0].Kind != "policy_denied" || got[0].ReasonCode != "read_only_shell_redirect_denied" || got[0].Executed || got[0].ToolCallID != "unsafe-shell" {
+		t.Fatalf("disposition = %+v, want structured pre-execution policy denial", got)
+	}
+}
+
 func TestBashReadOnlyExecutionPermitsGitDiff(t *testing.T) {
 	workDir := t.TempDir()
 	ctx := context.WithValue(context.Background(), AgentReadOnlyExecutionKey, true)

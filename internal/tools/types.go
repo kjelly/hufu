@@ -70,10 +70,23 @@ func ReadOnlyMutationDenied(ctx context.Context, toolName string) (fantasy.ToolR
 		return fantasy.ToolResponse{}, false
 	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "bash", "sudo", "ssh", "scp", "write", "edit", "multiedit", "golang", "lua", "download", "fetch", "agentic_fetch", "create_skill", "terminal", "terminal_start", "terminal_write", "terminal_wait", "terminal_close", "terminal_reconcile":
+	case "sudo", "ssh", "scp", "write", "edit", "multiedit", "golang", "lua", "download", "fetch", "agentic_fetch", "create_skill", "terminal", "terminal_start", "terminal_write", "terminal_wait", "terminal_close", "terminal_reconcile":
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("tool %q is denied for side_effect:none tasks; no mutation-capable tool may run", toolName)), true
 	default:
 		return fantasy.ToolResponse{}, false
+	}
+}
+
+// IsReadOnlyObservationTool is the closed runtime taxonomy for tools that can
+// observe state without changing it. Unknown names are deliberately denied.
+// Bash is included only as a capability name: callers must additionally use
+// IsReadOnlyBashCommand to validate its input against the strict grammar.
+func IsReadOnlyObservationTool(toolName string) bool {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "bash", "view", "grep", "glob", "ls", "math", "random", "team_info", "context_query":
+		return true
+	default:
+		return false
 	}
 }
 

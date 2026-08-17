@@ -166,6 +166,50 @@ func checkReadOnlyBashCommand(command string) error {
 	return nil
 }
 
+// ReadOnlyBashDenialReason returns a stable, non-sensitive reason code for a
+// command rejected by checkReadOnlyBashCommand. It is intentionally narrower
+// than the user-facing error; coordinator recovery must not parse error prose.
+func ReadOnlyBashDenialReason(command string) string {
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return "read_only_shell_empty_command"
+	}
+	if hasReadOnlyShellRedirect(trimmed) {
+		return "read_only_shell_redirect_denied"
+	}
+	if hasUnsafeReadOnlyShellSyntax(trimmed) {
+		return "read_only_shell_syntax_denied"
+	}
+	if _, ok := splitReadOnlyBashSegments(trimmed); !ok {
+		return "read_only_shell_malformed_syntax"
+	}
+	return "read_only_command_denied"
+}
+
+func hasReadOnlyShellRedirect(command string) bool {
+	var quote byte
+	for i := 0; i < len(command); i++ {
+		ch := command[i]
+		if ch == '\\' && quote != '\'' {
+			i++
+			continue
+		}
+		if quote != 0 {
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch ch {
+		case '\'', '"':
+			quote = ch
+		case '>', '<':
+			return true
+		}
+	}
+	return false
+}
+
 // IsReadOnlyBashCommand reports whether command is limited to the same narrow,
 // inspection-only grammar enforced for side_effect:none workers. It is an
 // observation helper: callers may use it to prove that an already-completed

@@ -101,6 +101,13 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		// directory. A denied mutating command must not be reported as a benign
 		// path error merely because it also supplied an unapproved workdir.
 		if err := checkReadOnlyBashCommand(args.Command); err != nil {
+			ReportToolExecutionDisposition(ctx, ToolExecutionDisposition{
+				Kind:       "policy_denied",
+				ReasonCode: ReadOnlyBashDenialReason(args.Command),
+				ToolName:   "bash",
+				ToolCallID: call.ID,
+				Executed:   false,
+			})
 			return fantasy.NewTextErrorResponse(err.Error()), nil
 		}
 	}
