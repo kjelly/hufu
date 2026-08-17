@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -13,6 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // ShellConfig defines shell behavior
@@ -210,13 +210,19 @@ func (s *AgentMCPServer) executeTool(ctx context.Context, toolName string, cfg a
 		return mcp.NewToolResultError(fmt.Sprintf("shell error: %v", err)), nil
 	}
 
-	// 2. Build environment variables
-	env := make([]string, 0)
-	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "V") || len(e) < 3 || e[1] < '0' || e[1] > '9' {
-			env = append(env, e)
+	// 2. Build environment variables. Start from the sanitized process
+	// environment (Hufu's process-only secret stripped), then drop any
+	// inherited positional V<n> parameters so they are regenerated from
+	// the current inputs below instead of leaking stale values.
+	env := utils.SanitizeSubprocessEnv(nil)
+	kept := make([]string, 0, len(env))
+	for _, e := range env {
+		if strings.HasPrefix(e, "V") && len(e) >= 3 && e[1] >= '0' && e[1] <= '9' {
+			continue
 		}
+		kept = append(kept, e)
 	}
+	env = kept
 
 	for i, input := range cfg.Inputs {
 		val, exists := args[input.Name]
@@ -248,10 +254,13 @@ func (s *AgentMCPServer) executeTool(ctx context.Context, toolName string, cfg a
 		cmd.Dir = cfg.Dir
 	}
 
-	// 4. Execute
+	// 4. Execute. Redact both success and error output through the
+	// subprocess boundary so env-bound secrets (e.g. SSHPASS) and any
+	// learned secret values are not returned to the worker.
 	output, err := cmd.CombinedOutput()
+	redacted := utils.RedactSubprocessOutput(string(output), cmd.Env)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("exit %v: %s", err, string(output))), nil
+		return mcp.NewToolResultError(fmt.Sprintf("exit %v: %s", err, redacted)), nil
 	}
-	return mcp.NewToolResultText(string(output)), nil
+	return mcp.NewToolResultText(redacted), nil
 }

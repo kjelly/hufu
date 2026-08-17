@@ -203,6 +203,10 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		cmd.Env = utils.SanitizeSubprocessEnv(os.Environ())
 	}
 
+	// redactEnv tracks the environment of whichever command produces the
+	// final output, so the sshpass SSHPASS value can be scrubbed from stderr.
+	redactEnv := cmd.Env
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -230,6 +234,7 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 			sshpassCmd := exec.CommandContext(cmdCtx2, "sshpass", "-e", "scp")
 			sshpassCmd.Env = utils.SanitizeSubprocessEnv(append(os.Environ(), "SSHPASS="+password))
 			sshpassCmd.Args = append(sshpassCmd.Args, scpArgList...)
+			redactEnv = sshpassCmd.Env
 
 			_, stderr2, exitCode2 := runCommand(sshpassCmd)
 			stderrStr = stderr2
@@ -274,12 +279,13 @@ func executeSCP(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 			)
 		}
 
-		diagnosedMsg := diagnoseSSHErrors(exitCode, stderrStr)
+		redactedStderr := utils.RedactSubprocessOutput(stderrStr, redactEnv)
+		diagnosedMsg := diagnoseSSHErrors(exitCode, redactedStderr)
 		return fantasy.ToolResponse{
 			Content: fmt.Sprintf(
 				"[SCP Error]\n\n%s\n\nOriginal error: %s",
 				diagnosedMsg,
-				stderrStr,
+				redactedStderr,
 			),
 			IsError: true,
 		}, nil

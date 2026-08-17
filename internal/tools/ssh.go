@@ -354,6 +354,11 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		cmd.Env = utils.SanitizeSubprocessEnv(os.Environ())
 	}
 
+	// redactEnv is the environment of whichever command ends up producing
+	// the final output. It is used to scrub env-bound secrets (notably the
+	// sshpass SSHPASS value) from stdout/stderr before they reach the worker.
+	redactEnv := cmd.Env
+
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return fantasy.NewTextErrorResponse("failed to create stdout pipe"), nil
@@ -404,6 +409,7 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 			sshpassCmd := exec.CommandContext(cmdCtx2, "sshpass", "-e", "ssh")
 			sshpassCmd.Env = utils.SanitizeSubprocessEnv(append(os.Environ(), "SSHPASS="+password))
 			sshpassCmd.Args = append(sshpassCmd.Args, sshArgList...)
+			redactEnv = sshpassCmd.Env
 
 			stdout2, stderr2, exitCode2 := runCommand(sshpassCmd)
 			stderrStr = stderr2
@@ -455,16 +461,22 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 		)
 	}
 
-	response := buildBashResponse(stdout.String(), stderr.String(), exitCode)
+	// Redact env-bound secrets (e.g. SSHPASS) from output before assembling
+	// the response. buildBashResponse applies the text redactor again, which
+	// is idempotent on already-redacted text, so passing pre-redacted strings
+	// is safe and closes the raw-stderr leak in the error branch below.
+	redactedStdout := utils.RedactSubprocessOutput(stdout.String(), redactEnv)
+	redactedStderr := utils.RedactSubprocessOutput(stderr.String(), redactEnv)
+	response := buildBashResponse(redactedStdout, redactedStderr, exitCode)
 
 	// Enhanced error diagnostics
 	if exitCode != 0 {
-		diagnosedMsg := diagnoseSSHErrors(exitCode, stderr.String())
+		diagnosedMsg := diagnoseSSHErrors(exitCode, redactedStderr)
 		response.Content = fmt.Sprintf(
 			"[SSH Error: %s]\n\n%s\n\nOriginal error: %s",
-			getSSHErrorTitle(exitCode, stderr.String()),
+			getSSHErrorTitle(exitCode, redactedStderr),
 			diagnosedMsg,
-			stderr.String(),
+			redactedStderr,
 		)
 		response.IsError = true
 	} else {
