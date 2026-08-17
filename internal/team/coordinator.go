@@ -749,6 +749,9 @@ func (c *Coordinator) LastRunResult() *RunResult {
 
 // SetLastRunResult sets the computed RunResult for this coordinator.
 func (c *Coordinator) SetLastRunResult(res *RunResult) {
+	if res != nil {
+		c.annotateRunCompletionSemantics(res)
+	}
 	c.lastRunResultMu.Lock()
 	c.lastRunResult = res
 	c.lastRunResultMu.Unlock()
@@ -762,6 +765,37 @@ func (c *Coordinator) SetLastRunResult(res *RunResult) {
 			_ = SaveSession(c.session.Workspace, c.sessionData)
 		}
 	}
+}
+
+// annotateRunCompletionSemantics projects canonical task/result evidence onto
+// the terminal result. It never upgrades a review to fixed_and_verified based
+// on prose or advisory acceptance.
+func (c *Coordinator) annotateRunCompletionSemantics(res *RunResult) {
+	if c == nil || res == nil {
+		return
+	}
+	res.AcceptanceAdvisory = c.ExecutionProfile().AcceptanceMode == AcceptanceAdvisory
+	if c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return
+	}
+	items := c.taskTracker.TodoList().Items()
+	if len(items) == 0 || res.GoalMode != GoalModeExploratory {
+		return
+	}
+	allDone := true
+	for _, item := range items {
+		if item == nil || item.Status != TaskDone {
+			allDone = false
+			continue
+		}
+		if item.TypedResult != nil && len(item.TypedResult.Findings) > 0 {
+			res.FindingsPresent = true
+		}
+	}
+	res.CompletedReview = allDone
+	// An exploratory review cannot establish an implementation outcome. This
+	// stays false even if its advisory acceptance command passed.
+	res.FixedAndVerified = false
 }
 
 // SetRollback sets an optional shell command run on acceptance failure in unattended mode.

@@ -105,10 +105,11 @@ type attemptBudgetStreamAgent struct {
 	// stepMessages, when set, supplies a distinct conversation per step so a
 	// growing context can be exercised. Without it every step resends the same
 	// messages, which is deliberately free.
-	stepMessages [][]fantasy.Message
-	usages       []fantasy.Usage
-	prepareCalls int
-	finishCalls  int
+	stepMessages   [][]fantasy.Message
+	usages         []fantasy.Usage
+	prepareCalls   int
+	finishCalls    int
+	prepareResults []fantasy.PrepareStepResult
 }
 
 func (a *attemptBudgetStreamAgent) messagesForStep(step int) []fantasy.Message {
@@ -126,9 +127,11 @@ func (a *attemptBudgetStreamAgent) Stream(ctx context.Context, call fantasy.Agen
 	for step, usage := range a.usages {
 		if call.PrepareStep != nil {
 			a.prepareCalls++
-			if _, _, err := call.PrepareStep(ctx, fantasy.PrepareStepFunctionOptions{Model: attemptBudgetTestModel{}, StepNumber: step, Messages: a.messagesForStep(step)}); err != nil {
+			_, prepared, err := call.PrepareStep(ctx, fantasy.PrepareStepFunctionOptions{Model: attemptBudgetTestModel{}, StepNumber: step, Messages: a.messagesForStep(step)})
+			if err != nil {
 				return a.result(), err
 			}
+			a.prepareResults = append(a.prepareResults, prepared)
 		}
 		if call.OnStreamFinish != nil {
 			a.finishCalls++
@@ -138,6 +141,36 @@ func (a *attemptBudgetStreamAgent) Stream(ctx context.Context, call fantasy.Agen
 		}
 	}
 	return a.result(), nil
+}
+
+func TestWorkerStepBudgetInjectsCheckpointAndTerminalOnlyTools(t *testing.T) {
+	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "step-budget"}}, taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
+	stream := &attemptBudgetStreamAgent{messages: []fantasy.Message{fantasy.NewUserMessage("inspect")}, usages: make([]fantasy.Usage, 10)}
+	ctx := context.WithValue(context.Background(), workerStepBudgetKey{}, 10)
+	_, _, err := c.runAgentWithStatusAndHistory(ctx, stream, "worker", "prompt", nil, &taskTiming{})
+	if err != nil {
+		t.Fatalf("run agent: %v", err)
+	}
+	if len(stream.prepareResults) != 10 {
+		t.Fatalf("prepare results = %d, want 10", len(stream.prepareResults))
+	}
+	checkpoint := stream.prepareResults[8]
+	if len(checkpoint.Messages) == 0 || !messageContains(checkpoint.Messages[len(checkpoint.Messages)-1], "Step Budget Checkpoint") {
+		t.Fatalf("20%% checkpoint = %#v", checkpoint)
+	}
+	wrapUp := stream.prepareResults[9]
+	if len(wrapUp.ActiveTools) != 1 || wrapUp.ActiveTools[0] != submitResultToolName || len(wrapUp.Messages) == 0 || !messageContains(wrapUp.Messages[len(wrapUp.Messages)-1], "step_budget_wrap_up") {
+		t.Fatalf("terminal budget tools = %#v", wrapUp)
+	}
+}
+
+func messageContains(message fantasy.Message, want string) bool {
+	for _, part := range message.Content {
+		if text, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok && strings.Contains(text.Text, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // attemptBudgetTestModel is only passed into PrepareStep so the production

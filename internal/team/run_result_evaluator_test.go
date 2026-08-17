@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestEvaluateRunOutcome(t *testing.T) {
@@ -492,5 +494,24 @@ func TestFormatCanonicalStatus(t *testing.T) {
 				t.Errorf("FormatCanonicalStatus() = %q, want %q", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestSetLastRunResultKeepsReviewCompletionDistinctFromFixedAndVerified(t *testing.T) {
+	c := &Coordinator{
+		session:     &TeamSession{Config: agent.TeamConfig{Name: "review", GoalMode: "exploratory"}},
+		goalMode:    GoalModeExploratory,
+		taskTracker: NewTaskTracker(),
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "review"}})[0]
+	item.Status = TaskDone
+	item.TypedResult = &TaskResult{Status: TaskResultStatusSuccess, Findings: []Finding{{Category: "bug", Summary: "unfixed finding"}}}
+	result := &RunResult{Outcome: RunOutcomeCompleted, GoalMode: GoalModeExploratory}
+	c.SetLastRunResult(result)
+	if !result.CompletedReview || !result.FindingsPresent || result.FixedAndVerified {
+		t.Fatalf("review semantics = %#v, want completed review with findings but no fixed claim", result)
+	}
+	if got := FormatCanonicalStatus(result); got != "Review completed; findings remain" {
+		t.Fatalf("status = %q", got)
 	}
 }
