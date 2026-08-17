@@ -99,6 +99,48 @@ func TestAuditLoggerLogToolCall(t *testing.T) {
 	}
 }
 
+// TestAuditLoggerRedactsSecretsAcrossAllFields asserts the JSON-aware
+// redaction pass in log() scrubs secrets from every field, including those
+// assembled via fmt.Sprintf (e.g. LogAcceptanceChange's embedded spec JSON)
+// where a per-field text redactor would miss an escaped secret.
+func TestAuditLoggerRedactsSecretsAcrossAllFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	logger, err := NewAuditLogger(tmpDir, "test-team")
+	if err != nil {
+		t.Fatalf("NewAuditLogger() error = %v", err)
+	}
+	defer func() { _ = logger.Close() }()
+
+	secret := "audit-secret-7f3c-9a1e"
+	// Embed the secret inside a JSON spec string (escaped when marshaled).
+	specJSON := `{"password":"` + secret + `","other":"ok"}`
+	logger.LogAcceptanceModified("test-agent", specJSON, `{"password":"new"}`, "rotated "+secret)
+
+	auditDir := filepath.Join(tmpDir, "logs", "audit")
+	files, err := os.ReadDir(auditDir)
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no audit log file: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(auditDir, files[0].Name()))
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	if strings.Contains(string(content), secret) {
+		t.Fatalf("audit log persisted secret: %s", content)
+	}
+	// Each line must remain a single JSONL record (redaction must not have
+	// introduced indentation that breaks one-record-per-line framing).
+	for i, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
+		if line == "" {
+			continue
+		}
+		var v map[string]any
+		if err := json.Unmarshal([]byte(line), &v); err != nil {
+			t.Fatalf("audit line %d is not valid JSON (framing broken): %v\n%s", i, err, line)
+		}
+	}
+}
+
 // TestAuditLoggerLogToolResult tests the LogToolResult method
 func TestAuditLoggerLogToolResult(t *testing.T) {
 	tmpDir := t.TempDir()

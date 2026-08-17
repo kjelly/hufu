@@ -174,6 +174,13 @@ func (l *AuditLogger) log(entry ToolAction) {
 	if err != nil {
 		return
 	}
+	// Redact the marshaled entry as JSON before writing. Decoding first means
+	// escaped string values (e.g. a spec JSON embedded in an input field) are
+	// unescaped before redaction, so secrets hidden behind JSON escaping are
+	// caught. The compact re-marshal keeps JSONL one-record-per-line framing.
+	if redacted, rerr := utils.RedactJSONCompact(data); rerr == nil {
+		data = redacted
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.file != nil {

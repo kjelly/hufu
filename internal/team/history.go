@@ -25,7 +25,13 @@ func SaveConversationHistory(workspace string, messages []fantasy.Message) error
 	}
 
 	path := filepath.Join(workspace, historyFile)
-	if err := os.WriteFile(path, []byte(utils.RedactSecrets(string(data))), 0o600); err != nil {
+	redacted, rerr := utils.RedactJSON(data)
+	if rerr != nil {
+		// On redaction failure never persist the unredacted marshaled JSON;
+		// fall back to text redaction so a best-effort scrub still happens.
+		redacted = []byte(utils.RedactSecrets(string(data)))
+	}
+	if err := os.WriteFile(path, redacted, 0o600); err != nil {
 		return fmt.Errorf("write conversation history: %w", err)
 	}
 	return nil

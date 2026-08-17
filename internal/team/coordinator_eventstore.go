@@ -493,7 +493,10 @@ func (c *Coordinator) emitEvent(eventType, actor, taskID string, payload interfa
 	if err != nil {
 		return fmt.Errorf("marshal event payload: %w", err)
 	}
-	rawPayload = json.RawMessage(utils.RedactSecrets(string(data)))
+	// Pass the marshaled payload through directly; AppendPersisted performs
+	// proper JSON-aware redaction (utils.RedactJSON) before persisting. Text
+	// redaction here would both duplicate that pass and miss escaped secrets.
+	rawPayload = json.RawMessage(data)
 	if IsTerminalEvent(eventType) && IsEmptyPayload(rawPayload) {
 		err := fmt.Errorf("terminal event %q produced empty payload after marshal", eventType)
 		log.Printf("error: dual-write event emit failed for type %s: %v", eventType, err)

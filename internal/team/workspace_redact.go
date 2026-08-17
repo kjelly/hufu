@@ -75,7 +75,7 @@ func redactFile(path string) error {
 	if err != nil {
 		return err
 	}
-	redacted := []byte(utils.RedactSecrets(string(data)))
+	redacted := redactFileData(data, strings.ToLower(filepath.Ext(path)))
 	if bytes.Equal(data, redacted) {
 		return nil
 	}
@@ -84,6 +84,21 @@ func redactFile(path string) error {
 		return err
 	}
 	return AtomicWriteFile(path, redacted, info.Mode().Perm())
+}
+
+// redactFileData chooses a redaction strategy by file type. JSON and JSONL
+// content is redacted through the JSON-aware redactor so escaped string
+// values (e.g. a spec JSON embedded in an event payload) are unescaped before
+// redaction; non-JSON content uses the text redactor.
+func redactFileData(data []byte, ext string) []byte {
+	switch ext {
+	case ".json":
+		return utils.RedactJSONFileData(data)
+	case ".jsonl":
+		return utils.RedactJSONLData(data)
+	default:
+		return []byte(utils.RedactSecrets(string(data)))
+	}
 }
 
 func redactEventStore(workspace string) error {
@@ -111,7 +126,13 @@ func redactEventStore(workspace string) error {
 	var previousID, previousHash string
 	for i := range events {
 		e := &events[i]
-		e.Payload = json.RawMessage(utils.RedactSecrets(string(e.Payload)))
+		if len(bytes.TrimSpace(e.Payload)) > 0 {
+			if redacted, rerr := utils.RedactJSONCompact(e.Payload); rerr == nil {
+				e.Payload = redacted
+			} else {
+				e.Payload = []byte(utils.RedactSecrets(string(e.Payload)))
+			}
+		}
 		e.PreviousID, e.PreviousHash = previousID, previousHash
 		e.Hash = ComputeEventHash(e.PreviousHash, e.ID, e.Type, e.Timestamp, e.Payload)
 		line, err := json.Marshal(e)
