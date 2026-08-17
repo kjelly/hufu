@@ -6,7 +6,14 @@ import (
 	"strings"
 )
 
-var sensitiveEnvironmentName = regexp.MustCompile(`(?i)(?:^|_)(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credentials?|authorization)(?:_|$)`)
+var sensitiveEnvironmentName = regexp.MustCompile(`(?i)(?:^|_)(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credentials?|authorization|sshpass)(?:_|$)`)
+
+// nonSecretEnvNames lists environment variable names that look sensitive to
+// the heuristic above but are explicitly not secrets. PWD is the shell's
+// current-directory marker and must remain visible in subprocess output.
+var nonSecretEnvNames = map[string]bool{
+	"PWD": true,
+}
 
 // SanitizeSubprocessEnv strips Hufu's process-only secret from subprocess
 // environments. Application credentials remain available to the subprocess
@@ -31,11 +38,22 @@ func SanitizeSubprocessEnv(env []string) []string {
 // in a tool result. This covers both keyed output ("SECRET=value") and bare
 // output ("printf %s \"$SECRET\"") where the normal text redactor cannot
 // discover the value from the output itself.
+//
+// A sensitive-named variable whose value is very short is still redacted: the
+// boundary is the key/name context, not a minimum-length heuristic, so short
+// passwords or OTPs are not leaked. PWD is kept as an explicit non-secret
+// exception.
 func RedactSubprocessOutput(output string, env []string) string {
 	output = RedactSecrets(output)
 	for _, entry := range env {
 		name, value, ok := strings.Cut(entry, "=")
-		if !ok || value == "" || !sensitiveEnvironmentName.MatchString(name) {
+		if !ok || value == "" {
+			continue
+		}
+		if nonSecretEnvNames[strings.ToUpper(name)] {
+			continue
+		}
+		if !sensitiveEnvironmentName.MatchString(name) {
 			continue
 		}
 		output = strings.ReplaceAll(output, value, "[REDACTED]")

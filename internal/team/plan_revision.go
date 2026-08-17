@@ -499,7 +499,9 @@ func (c *Coordinator) PersistPlanRevision(revision PlanRevision) error {
 	c.planRevisions = append(c.planRevisions, clonePlanRevision(canonical))
 	c.planRevisionsMu.Unlock()
 	if c.sessionData != nil {
+		c.sessionMu.Lock()
 		c.sessionData.PlanRevisions = append(c.sessionData.PlanRevisions, clonePlanRevision(canonical))
+		c.sessionMu.Unlock()
 	}
 	return c.emitEvent("plan_revision", "coordinator", "", map[string]interface{}{"revision": clonePlanRevision(canonical)})
 }

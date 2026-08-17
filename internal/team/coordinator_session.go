@@ -644,6 +644,12 @@ func (c *Coordinator) syncConversationHistoryStateToSessionData() {
 	c.sessionData.ConversationHistorySourceCounts = append([]int(nil), c.conversationHistorySourceCounts...)
 }
 
+// saveCheckpoint commits the durable task projection to the event store and
+// reflects it into session.json. Parallel task goroutines call this
+// concurrently, so the sessionData read-modify-write (Tasks, WorkflowState,
+// PhaseResults, RetryState) and the subsequent SaveSession are serialized
+// through sessionMu: mutate under the write lock, snapshot under the read
+// lock, then persist the snapshot and update the branch state outside the lock.
 func (c *Coordinator) saveCheckpoint() {
 	if c.sessionData == nil || c.session == nil || c.session.Workspace == "" {
 		return
@@ -659,18 +665,27 @@ func (c *Coordinator) saveCheckpoint() {
 		return
 	}
 
+	// Resolve the store before taking sessionMu: SessionStore() acquires c.mu
+	// internally, and nesting it under the sessionMu write lock would deadlock.
+	// Hold sessionMu across the mutate and SaveSession so the marshal cannot
+	// race a concurrent writer.
+	store := c.SessionStore()
+	c.sessionMu.Lock()
 	c.sessionData.Tasks = tasks
 	if c.phaseWorkflow != nil {
 		c.sessionData.WorkflowState, c.sessionData.PhaseResults, c.sessionData.RuntimeWorkspace, c.sessionData.RetryState = c.phaseWorkflow.snapshot()
 	}
-	_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
+	_ = store.SaveSession(c.session.Workspace, c.sessionData)
+	c.sessionMu.Unlock()
 	c.updateBranchState()
 }
 
 // updateBranchState snapshots the coordinator's live state (task plan, active
 // model, selected team, latest compaction summary) into the active session
 // branch, so `hufu session` checkout/time-travel can restore it later (§8).
-// Best-effort: any failure leaves the checkpoint path unaffected.
+// Best-effort: any failure leaves the checkpoint path unaffected. The task
+// plan is read from a session snapshot so a concurrent checkpoint cannot race
+// the read.
 func (c *Coordinator) updateBranchState() {
 	st, err := LoadSessionTree(c.session.Workspace)
 	if err != nil {
@@ -680,13 +695,15 @@ func (c *Coordinator) updateBranchState() {
 	if b == nil {
 		return
 	}
-	if len(c.sessionData.Tasks) > 0 {
-		plan := make([]*TodoItem, len(c.sessionData.Tasks))
-		for i, t := range c.sessionData.Tasks {
-			plan[i] = cloneTodoItem(t)
+	c.viewSessionData(func(sd *SessionData) {
+		if len(sd.Tasks) > 0 {
+			plan := make([]*TodoItem, len(sd.Tasks))
+			for i, t := range sd.Tasks {
+				plan[i] = cloneTodoItem(t)
+			}
+			b.State.TaskPlan = plan
 		}
-		b.State.TaskPlan = plan
-	}
+	})
 	b.State.ActiveModel = c.session.Config.Generation.Model
 	b.State.SelectedTeam = c.session.Config.Name
 	if c.lastCompactionSummary != nil {

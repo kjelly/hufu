@@ -49,13 +49,13 @@ var (
 	// Matches YAML and JSON key/value pairs for the credential names commonly
 	// passed through agent prompts. The value is deliberately limited to one
 	// line: multiline configuration bodies are not credentials by themselves.
-	secretKeyValueRe      = regexp.MustCompile(`(?im)(\b(?:[a-z0-9_.-]*(?:password|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)[a-z0-9_.-]*)\b\s*[:=]\s*)(\\"(?:\\.|[^"\\])*\\"|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,}\]"']+)`)
-	secretJSONRe          = regexp.MustCompile(`(?i)("[a-z0-9_.-]*(?:password|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)[a-z0-9_.-]*"\s*:\s*)("(?:\\.|[^"\\])*")`)
+	secretKeyValueRe      = regexp.MustCompile(`(?im)(\b(?:[a-z0-9_.-]*(?:password|passwd|secret|token|credential|api[_-]?key|access[_-]?key|private[_-]?key)[a-z0-9_.-]*)\b\s*[:=]\s*)(\\"(?:\\.|[^"\\])*\\"|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,}\]"']+)`)
+	secretJSONRe          = regexp.MustCompile(`(?i)("[a-z0-9_.-]*(?:password|passwd|secret|token|credential|api[_-]?key|access[_-]?key|private[_-]?key)[a-z0-9_.-]*"\s*:\s*)("(?:\\.|[^"\\])*")`)
 	secretAuthorizationRe = regexp.MustCompile(`(?im)(\bauthorization\s*:\s*(?:bearer|basic)\s+)([^\s]+)`)
 	privateKeyBlockRe     = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
 	// Environment assignments may use all-caps names and optional export.
-	secretEnvRe     = regexp.MustCompile(`(?m)(\b(?:export\s+)?[A-Z][A-Z0-9_]*(?:PASSWORD|SECRET|TOKEN|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*=)([^\s]+)`)
-	secretKeyNameRe = regexp.MustCompile(`(?i)(?:password|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)`)
+	secretEnvRe     = regexp.MustCompile(`(?m)(\b(?:export\s+)?[A-Z][A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|CREDENTIAL|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*=)([^\s]+)`)
+	secretKeyNameRe = regexp.MustCompile(`(?i)(?:password|passwd|secret|token|credential|api[_-]?key|access[_-]?key|private[_-]?key)`)
 )
 
 // Numeric token counters are telemetry, not credentials. Keep this exception
@@ -310,6 +310,91 @@ func RedactJSON(data []byte) ([]byte, error) {
 	}
 	value = redactJSONValue(value, "")
 	return json.MarshalIndent(value, "", "  ")
+}
+
+// RedactJSONCompact is RedactJSON re-marshaled compactly. It is intended for
+// JSONL records where MarshalIndent's newlines would break the
+// one-record-per-line framing. Like RedactJSON, it decodes the document first
+// so escaped string values are unescaped before redaction, which text redaction
+// applied to the raw marshaled bytes would miss.
+func RedactJSONCompact(data []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var value any
+	if err := dec.Decode(&value); err != nil {
+		return nil, err
+	}
+	value = redactJSONValue(value, "")
+	return json.Marshal(value)
+}
+
+// RedactJSONFileData redacts a single JSON document with JSON-aware redaction.
+// It returns the original bytes unchanged when redaction did not change the
+// content semantically, so files without secrets are not reformatted.
+func RedactJSONFileData(data []byte) []byte {
+	redacted, err := RedactJSON(data)
+	if err != nil {
+		return []byte(RedactSecrets(string(data)))
+	}
+	if jsonSemanticEqual(data, redacted) {
+		return data
+	}
+	return redacted
+}
+
+// RedactJSONLData redacts a JSONL stream line by line with JSON-aware
+// redaction. Lines that do not change semantically are preserved verbatim so
+// records without secrets keep their original formatting; non-JSON lines fall
+// back to text redaction.
+func RedactJSONLData(data []byte) []byte {
+	lines := bytes.Split(data, []byte{'\n'})
+	var out bytes.Buffer
+	changed := false
+	for i, line := range lines {
+		if i > 0 {
+			out.WriteByte('\n')
+		}
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 || trimmed[0] != '{' {
+			r := []byte(RedactSecrets(string(line)))
+			if !bytes.Equal(line, r) {
+				changed = true
+			}
+			out.Write(r)
+			continue
+		}
+		redacted, err := RedactJSONCompact(trimmed)
+		if err != nil {
+			r := []byte(RedactSecrets(string(line)))
+			if !bytes.Equal(line, r) {
+				changed = true
+			}
+			out.Write(r)
+			continue
+		}
+		if !jsonSemanticEqual(trimmed, redacted) {
+			changed = true
+		}
+		out.Write(redacted)
+	}
+	if !changed {
+		return data
+	}
+	return out.Bytes()
+}
+
+// jsonSemanticEqual reports whether two JSON byte sequences decode to the same
+// value, ignoring whitespace and key-ordering differences introduced by
+// re-marshaling.
+func jsonSemanticEqual(a, b []byte) bool {
+	var va, vb any
+	if err := json.Unmarshal(a, &va); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(b, &vb); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(va, vb)
 }
 
 func redactJSONValue(value any, key string) any {

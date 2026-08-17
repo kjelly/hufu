@@ -49,6 +49,7 @@ func (c *Coordinator) recordCriterionCheckpoints(item *TodoItem, results []Crite
 			ReplayPolicy:     item.Recovery,
 			CreatedAt:        time.Now().UTC().Format(time.RFC3339Nano),
 		}
+		c.sessionMu.Lock()
 		filtered := c.sessionData.CriterionCheckpoints[:0]
 		for _, existing := range c.sessionData.CriterionCheckpoints {
 			if existing.CriterionID != id {
@@ -56,6 +57,7 @@ func (c *Coordinator) recordCriterionCheckpoints(item *TodoItem, results []Crite
 			}
 		}
 		c.sessionData.CriterionCheckpoints = append(filtered, checkpoint)
+		c.sessionMu.Unlock()
 		c.emitEvent("criterion_checkpoint_saved", "coordinator", item.ID, map[string]interface{}{"checkpoint": checkpoint})
 	}
 	c.saveCheckpoint()
@@ -80,14 +82,20 @@ func (c *Coordinator) validateCriterionCheckpoint(item *TodoItem) error {
 		return nil
 	}
 	for _, criterionID := range item.Advances {
-		var checkpoint *CriterionCheckpoint
-		for i := range c.sessionData.CriterionCheckpoints {
-			if c.sessionData.CriterionCheckpoints[i].CriterionID == criterionID {
-				checkpoint = &c.sessionData.CriterionCheckpoints[i]
-				break
+		var checkpoint CriterionCheckpoint
+		found := false
+		c.viewSessionData(func(sd *SessionData) {
+			for i := range sd.CriterionCheckpoints {
+				if sd.CriterionCheckpoints[i].CriterionID == criterionID {
+					cp := sd.CriterionCheckpoints[i]
+					cp.Evidence = cloneVerificationResults(cp.Evidence)
+					checkpoint = cp
+					found = true
+					break
+				}
 			}
-		}
-		if checkpoint == nil || !checkpoint.Proven || len(checkpoint.Evidence) == 0 || checkpoint.InputFingerprint == "" {
+		})
+		if !found || !checkpoint.Proven || len(checkpoint.Evidence) == 0 || checkpoint.InputFingerprint == "" {
 			return fmt.Errorf("criterion %q has no proven checkpoint; reconciliation or human review required", criterionID)
 		}
 		var criterion *AcceptanceCriterion
@@ -128,10 +136,12 @@ func (c *Coordinator) revalidateRecoveryCriteria(ctx context.Context, item *Todo
 	if c.acceptanceSpec == nil || c.sessionData == nil {
 		return fmt.Errorf("no acceptance contract/session data available for checkpointed recovery")
 	}
-	before := make(map[string]CriterionState, len(c.sessionData.CriterionResults))
-	for _, result := range c.sessionData.CriterionResults {
-		before[result.ID] = result.State
-	}
+	before := make(map[string]CriterionState)
+	c.viewSessionData(func(sd *SessionData) {
+		for _, result := range sd.CriterionResults {
+			before[result.ID] = result.State
+		}
+	})
 	results, err := c.evaluateCriteria(ctx, c.acceptanceSpec.Criteria)
 	if err != nil {
 		return err
@@ -178,7 +188,9 @@ func (c *Coordinator) revalidateRecoveryCriteria(ctx context.Context, item *Todo
 		c.noProgressStopTripped = false
 		c.reliabilityUsageByAttempt = make(map[string]int)
 		c.metricsMu.Unlock()
+		c.sessionMu.Lock()
 		c.sessionData.LastCriterionProgressAt = progressedAt
+		c.sessionMu.Unlock()
 	}
 	if c.taskTracker != nil {
 		_ = c.taskTracker.TodoList().SetProgress(item.ID, item.Progress, item.ProgressCriteria)

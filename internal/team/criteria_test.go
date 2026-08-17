@@ -523,6 +523,21 @@ func TestAcceptanceAuditDistinguishesUnsetFromExplicitEmpty(t *testing.T) {
 	}
 }
 
+func TestAcceptanceAuditRedactsJSONEmbeddedSecrets(t *testing.T) {
+	workspace := t.TempDir()
+	c := &Coordinator{session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "audit-redaction"}}}
+	c.persistAcceptanceAuditEvent("test", "rejected", AcceptanceContractConfigured,
+		`{"commands":["curl -H \\"Authorization: Bearer sk-live-secret\\""]}`,
+		AcceptanceContractEmpty, `{"commands":[]}`, `reason=credential=short`)
+	data, err := os.ReadFile(filepath.Join(workspace, "logs", "acceptance_audit.jsonl"))
+	if err != nil {
+		t.Fatalf("read acceptance audit: %v", err)
+	}
+	if strings.Contains(string(data), "sk-live-secret") || strings.Contains(string(data), "short") {
+		t.Fatalf("acceptance audit leaked secret: %s", data)
+	}
+}
+
 func TestSetGoalModeRejectsExistingVacuousAcceptance(t *testing.T) {
 	c := &Coordinator{
 		session:     &TeamSession{Config: agent.TeamConfig{Name: "mode-switch", GoalMode: "exploratory"}},

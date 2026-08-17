@@ -178,7 +178,9 @@ func (c *Coordinator) evaluateCriteria(ctx context.Context, criteria []Acceptanc
 		}
 	}
 	if c.sessionData != nil {
+		c.sessionMu.Lock()
 		c.sessionData.CriterionResults = results
+		c.sessionMu.Unlock()
 	}
 	return results, nil
 }
@@ -279,7 +281,9 @@ func (c *Coordinator) reEvaluateAffectedCriteria(ctx context.Context, item *Todo
 		c.metricsMu.Unlock()
 		if c.sessionData != nil {
 			progressedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			c.sessionMu.Lock()
 			c.sessionData.LastCriterionProgressAt = progressedAt
+			c.sessionMu.Unlock()
 		}
 	} else if item.Kind == TaskKindDiagnostic && item.Status == TaskDone {
 		c.recordDiagnosticCompletion(item)

@@ -240,20 +240,27 @@ func (b *coordToolBase) ProviderOptions() fantasy.ProviderOptions        { retur
 func (b *coordToolBase) SetProviderOptions(opts fantasy.ProviderOptions) { b.opts = opts }
 
 type Coordinator struct {
-	mu                                sync.RWMutex
-	session                           *TeamSession
-	providerManager                   *agent.ProviderManager
-	mcpManager                        *mcp.MCPToolManager
-	coreTools                         []fantasy.AgentTool
-	agentCache                        map[string]fantasy.Agent
-	agentToolNameCache                map[string][]string
-	agentCacheMu                      sync.RWMutex
-	round                             int
-	baseRounds                        int // rounds completed before the last round-state reset (resume/continue)
-	verbose                           bool
-	think                             bool
-	reportStatus                      StatusReporter
-	sessionData                       *SessionData
+	mu                 sync.RWMutex
+	session            *TeamSession
+	providerManager    *agent.ProviderManager
+	mcpManager         *mcp.MCPToolManager
+	coreTools          []fantasy.AgentTool
+	agentCache         map[string]fantasy.Agent
+	agentToolNameCache map[string][]string
+	agentCacheMu       sync.RWMutex
+	round              int
+	baseRounds         int // rounds completed before the last round-state reset (resume/continue)
+	verbose            bool
+	think              bool
+	reportStatus       StatusReporter
+	sessionData        *SessionData
+	// sessionMu guards all reads and writes of sessionData. Parallel task
+	// goroutines (dag_scheduler -> executeTask) concurrently mutate the shared
+	// sessionData through persistContextManifest and saveCheckpoint; without
+	// this lock their read-modify-write plus json.Marshal in SaveSession races.
+	// It is distinct from c.mu: c.mu also guards sub-service pointers and is
+	// reentered via SessionStore(), so it cannot be held across SaveSession.
+	sessionMu                         sync.RWMutex
 	taskTracker                       *TaskTracker
 	skills                            []*skill.SkillDef
 	conversationHistory               []fantasy.Message
@@ -717,7 +724,11 @@ func (c *Coordinator) persistAcceptanceAuditEvent(event, status string, oldState
 		"new_spec":  newSpecJSON,
 		"reason":    reason,
 	}
-	b, err := json.Marshal(rec)
+	encoded, err := json.Marshal(rec)
+	if err != nil {
+		return
+	}
+	b, err := utils.RedactJSONCompact(encoded)
 	if err != nil {
 		return
 	}

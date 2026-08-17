@@ -234,6 +234,15 @@ func mergeContextInjectionManifests(existing, incoming []ContextInjectionManifes
 // persistContextManifest checkpoints the content-free attribution boundary
 // before a model call. Task manifests are dual-written to the task event
 // lineage; coordinator manifests are stored on the session and event store.
+// persistContextManifest checkpoints the content-free attribution boundary
+// before a model call. Task manifests are dual-written to the task event
+// lineage; coordinator manifests are stored on the session and event store.
+//
+// Parallel task goroutines invoke this concurrently, so the read-modify-write
+// of sessionData and the subsequent SaveSession are serialized through
+// sessionMu: the mutation happens under the write lock, an independent
+// snapshot is taken under the read lock, and SaveSession/emitEvent run outside
+// the lock so the read lock SessionStore acquires cannot deadlock.
 func (c *Coordinator) persistContextManifest(manifest *ContextInjectionManifest) error {
 	if manifest == nil {
 		return nil
@@ -241,16 +250,47 @@ func (c *Coordinator) persistContextManifest(manifest *ContextInjectionManifest)
 	if c == nil || c.session == nil {
 		return fmt.Errorf("persist context manifest: coordinator session is unavailable")
 	}
-	if c.sessionData == nil {
-		c.sessionData = &SessionData{CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
-	}
+	taskScoped := false
+	// Task-scoped manifests update the todo list first. The todo list's
+	// onChange callback calls saveCheckpoint, which acquires sessionMu, so
+	// SetContextManifest must run OUTSIDE any sessionMu hold to avoid a
+	// self-deadlock (Go's mutex is not reentrant). The coordinator-scoped
+	// branch never touches the todo list, so it mutates under the lock.
 	if manifest.TaskID != "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil && c.taskTracker.TodoList().Has(manifest.TaskID) {
 		if err := c.taskTracker.TodoList().SetContextManifest(manifest.TaskID, manifest); err != nil {
 			return err
 		}
-		c.sessionData.Tasks = c.taskTracker.TodoList().Items()
-		if err := c.SessionStore().SaveSession(c.session.Workspace, c.sessionData); err != nil {
-			return fmt.Errorf("persist context manifest checkpoint: %w", err)
+		taskScoped = true
+		// onChange already checkpointed the todo-list state; mirror the same
+		// items into sessionData under the lock so this manifest's snapshot is
+		// the one persisted below.
+		items := c.taskTracker.TodoList().Items()
+		_ = c.mutateSessionData(func(sd *SessionData) error {
+			sd.Tasks = items
+			return nil
+		})
+	} else if err := c.mutateSessionData(func(sd *SessionData) error {
+		// Auxiliary and task-less recovery calls are durable coordinator-scope
+		// model decisions. They deliberately do not manufacture a Todo item; the
+		// session/event lineage remains their canonical replay projection.
+		replaced := false
+		for i := range sd.CoordinatorContextManifests {
+			if sameContextManifestIdentity(sd.CoordinatorContextManifests[i], *manifest) {
+				sd.CoordinatorContextManifests[i] = *cloneContextInjectionManifest(manifest)
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			sd.CoordinatorContextManifests = append(sd.CoordinatorContextManifests, *cloneContextInjectionManifest(manifest))
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if taskScoped {
+		if err := c.persistSession("persist context manifest checkpoint"); err != nil {
+			return err
 		}
 		payload := map[string]any{"id": manifest.TaskID, "context_manifests": []ContextInjectionManifest{*manifest}}
 		if err := c.emitEvent("task_context_manifest", manifest.Agent, manifest.TaskID, payload); err != nil {
@@ -262,22 +302,8 @@ func (c *Coordinator) persistContextManifest(manifest *ContextInjectionManifest)
 		c.reportContextRouted(manifest)
 		return nil
 	}
-	// Auxiliary and task-less recovery calls are durable coordinator-scope
-	// model decisions. They deliberately do not manufacture a Todo item; the
-	// session/event lineage remains their canonical replay projection.
-	replaced := false
-	for i := range c.sessionData.CoordinatorContextManifests {
-		if sameContextManifestIdentity(c.sessionData.CoordinatorContextManifests[i], *manifest) {
-			c.sessionData.CoordinatorContextManifests[i] = *cloneContextInjectionManifest(manifest)
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		c.sessionData.CoordinatorContextManifests = append(c.sessionData.CoordinatorContextManifests, *cloneContextInjectionManifest(manifest))
-	}
-	if err := c.SessionStore().SaveSession(c.session.Workspace, c.sessionData); err != nil {
-		return fmt.Errorf("persist coordinator context manifest checkpoint: %w", err)
+	if err := c.persistSession("persist coordinator context manifest checkpoint"); err != nil {
+		return err
 	}
 	if err := c.emitEvent("context_manifest", manifest.Agent, "", manifest); err != nil {
 		return fmt.Errorf("persist coordinator context manifest event: %w", err)
@@ -416,9 +442,9 @@ func (c *Coordinator) recordContextAcceptanceObservations(acceptance *Acceptance
 	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 		manifests = append(manifests, ContextManifestsFromTodos(c.taskTracker.TodoList().Items())...)
 	}
-	if c.sessionData != nil {
-		manifests = append(manifests, c.sessionData.CoordinatorContextManifests...)
-	}
+	c.viewSessionData(func(sd *SessionData) {
+		manifests = append(manifests, sd.CoordinatorContextManifests...)
+	})
 	policyRevision := c.session.Config.MemoryLearning.PolicyVersion
 	for i := range manifests {
 		manifest := &manifests[i]
@@ -501,8 +527,8 @@ func (c *Coordinator) ContextManifestReport() ContextManifestSummary {
 	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 		manifests = append(manifests, ContextManifestsFromTodos(c.taskTracker.TodoList().Items())...)
 	}
-	if c.sessionData != nil {
-		manifests = append(manifests, c.sessionData.CoordinatorContextManifests...)
-	}
+	c.viewSessionData(func(sd *SessionData) {
+		manifests = append(manifests, sd.CoordinatorContextManifests...)
+	})
 	return SummarizeContextManifests(manifests)
 }

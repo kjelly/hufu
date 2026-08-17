@@ -436,7 +436,9 @@ func (c *Coordinator) recordDiagnosticPacket(item *TodoItem, class TaskFailureCl
 	c.diagnosticPackets = append(c.diagnosticPackets, packet)
 	c.diagnosticPacketsMu.Unlock()
 	if c.sessionData != nil {
+		c.sessionMu.Lock()
 		c.sessionData.DiagnosticPackets = append(c.sessionData.DiagnosticPackets, packet)
+		c.sessionMu.Unlock()
 	}
 	payload := map[string]interface{}{"packet": packet}
 	if c.eventStore == nil {
