@@ -138,6 +138,14 @@ func mergeAgentStatus(current, next AgentStatus) AgentStatus {
 // files. Existing files for agents no longer present in canonical state are
 // removed, so cancellation and crash-resume cannot leave stale workers.
 func ReconcileAgentStatuses(workspace string, items []*TodoItem, sessions []TerminalSession) error {
+	return ReconcileAgentStatusesForRun(workspace, items, sessions, "", "")
+}
+
+// ReconcileAgentStatusesForRun writes the ordinary per-agent projection plus
+// the run identity and, once known, one canonical terminal aggregate status.
+// The latter prevents a terminal session from presenting coordinator and
+// workers as unrelated outcomes after a restart.
+func ReconcileAgentStatusesForRun(workspace string, items []*TodoItem, sessions []TerminalSession, runID, terminalStatus string) error {
 	statusProjectionMu.Lock()
 	defer statusProjectionMu.Unlock()
 
@@ -153,7 +161,7 @@ func ReconcileAgentStatuses(workspace string, items []*TodoItem, sessions []Term
 	}
 
 	for name, status := range statuses {
-		record := projectedStatusRecord{Status: status}
+		record := projectedStatusRecord{Status: status, RunID: runID, TerminalStatus: terminalStatus}
 		if governing := governingTodoItemForAgent(items, name); governing != nil {
 			record.Detail = utils.RedactSecrets(governing.Detail)
 			// An idle projection is a current success/absence state. Do not
@@ -356,9 +364,11 @@ func validateProjectedStatusName(name string) error {
 }
 
 type projectedStatusRecord struct {
-	Status       AgentStatus          `yaml:"status"`
-	Detail       string               `yaml:"detail,omitempty"`
-	FailureEvent *FailureEventPayload `yaml:"failure_event,omitempty"`
+	Status         AgentStatus          `yaml:"status"`
+	RunID          string               `yaml:"run_id,omitempty"`
+	TerminalStatus string               `yaml:"terminal_status,omitempty"`
+	Detail         string               `yaml:"detail,omitempty"`
+	FailureEvent   *FailureEventPayload `yaml:"failure_event,omitempty"`
 	// UnresolvedFailure is an older failure for this agent that a newer task
 	// has moved past (e.g. replanned rather than retried), kept visible as
 	// durable evidence without letting it override the agent's current
@@ -396,6 +406,10 @@ func (c *Coordinator) reconcileProjectedStatusesWithDetail(coordinatorStatus Age
 }
 
 func (c *Coordinator) reconcileProjectedItems(items []*TodoItem) error {
+	return c.reconcileProjectedItemsForRun(items, "")
+}
+
+func (c *Coordinator) reconcileProjectedItemsForRun(items []*TodoItem, terminalStatus string) error {
 	if c == nil || c.session == nil || c.session.Workspace == "" {
 		return nil
 	}
@@ -426,7 +440,11 @@ func (c *Coordinator) reconcileProjectedItems(items []*TodoItem) error {
 			return fmt.Errorf("list terminal sessions for status projection: %w", err)
 		}
 	}
-	return ReconcileAgentStatuses(c.session.Workspace, items, sessions)
+	runID := c.executionRunID
+	if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		runID = c.taskTracker.TodoList().RunID()
+	}
+	return ReconcileAgentStatusesForRun(c.session.Workspace, items, sessions, runID, terminalStatus)
 }
 
 // reconcileTaskStatusProjection is the best-effort lifecycle hook used after
@@ -438,6 +456,24 @@ func (c *Coordinator) reconcileTaskStatusProjection() {
 	}
 	if err := c.reconcileProjectedItems(c.taskTracker.TodoList().Items()); err != nil {
 		log.Printf("warning: task status projection failed: %v", err)
+	}
+}
+
+// reconcileTerminalStatusProjection is called only after FinalizeRun has
+// established the canonical terminal outcome. It atomically makes every
+// coordinator/worker status file identify that same run and aggregate state.
+func (c *Coordinator) reconcileTerminalStatusProjection(result *RunResult) {
+	if c == nil || result == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return
+	}
+	items := append([]*TodoItem(nil), c.taskTracker.TodoList().Items()...)
+	coordinatorStatus := TaskDone
+	if result.Outcome == RunOutcomeBlocked || result.Outcome == RunOutcomeFailed || result.Outcome == RunOutcomePartial || result.Outcome == RunOutcomeCancelled {
+		coordinatorStatus = TaskError
+	}
+	items = append(items, &TodoItem{ID: CoordTodoID, Agent: "coordinator", Status: coordinatorStatus, Detail: FormatCanonicalStatus(result)})
+	if err := c.reconcileProjectedItemsForRun(items, string(result.Outcome)); err != nil {
+		log.Printf("warning: terminal status projection failed: %v", err)
 	}
 }
 

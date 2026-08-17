@@ -43,6 +43,32 @@ func TestProjectAgentStatusesUsesCanonicalTaskAndTerminalState(t *testing.T) {
 	}
 }
 
+func TestTerminalStatusProjectionWritesOneRunAndAggregateForCoordinatorAndWorkers(t *testing.T) {
+	workspace := t.TempDir()
+	tracker := NewTaskTracker()
+	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "inspect"}})[0]
+	item.Status = TaskError
+	coord := &Coordinator{
+		session:        &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "status"}, Agents: map[string]*agent.AgentDef{"worker": {Name: "worker", Role: "worker"}}},
+		taskTracker:    tracker,
+		executionRunID: "run-terminal-status",
+	}
+	coord.reconcileTerminalStatusProjection(&RunResult{Outcome: RunOutcomeBlocked, StopReason: StopReasonPolicyViolation})
+	for _, name := range []string{"coordinator", "worker"} {
+		data, err := os.ReadFile(filepath.Join(workspace, statusDir, name+".yml"))
+		if err != nil {
+			t.Fatalf("read %s status: %v", name, err)
+		}
+		var record projectedStatusRecord
+		if err := yaml.Unmarshal(data, &record); err != nil {
+			t.Fatalf("decode %s status: %v", name, err)
+		}
+		if record.RunID != "run-terminal-status" || record.TerminalStatus != string(RunOutcomeBlocked) {
+			t.Fatalf("%s terminal projection = %#v", name, record)
+		}
+	}
+}
+
 func TestProjectAgentStatusesDistinguishesContainedAndManualTerminalCleanup(t *testing.T) {
 	items := []*TodoItem{
 		{ID: "contained", Agent: "contained", Status: TaskDone},

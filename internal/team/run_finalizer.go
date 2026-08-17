@@ -61,6 +61,7 @@ func (c *Coordinator) FinalizeRun(ctx context.Context, result *RunResult, accept
 	}
 	result = c.applyCompletionGate(finalCtx, result, acceptance)
 	c.SetLastRunResult(result)
+	c.reconcileTerminalStatusProjection(result)
 	return result
 }
 
