@@ -76,12 +76,11 @@ func (c *Coordinator) addSessionAssistantMessage(content string) {
 }
 
 func (c *Coordinator) recordSessionMessage(content, role string) error {
-	if c == nil || c.sessionData == nil || strings.TrimSpace(content) == "" {
+	if c == nil || strings.TrimSpace(content) == "" {
 		return nil
 	}
 	if !c.hasDurableEventJournal() {
-		c.sessionData.AddEntry(role, content)
-		return nil
+		return c.mutateSessionData(func(sd *SessionData) error { sd.AddEntry(role, content); return nil })
 	}
 	payload, err := json.Marshal(SessionMessageEventPayload{Role: role, Content: utils.RedactSecrets(content)})
 	if err != nil {
@@ -95,8 +94,7 @@ func (c *Coordinator) recordSessionMessage(content, role string) error {
 	if err != nil {
 		return fmt.Errorf("append %s event: %w", eventType, err)
 	}
-	c.sessionData.addEntryAt(role, content, durable.Timestamp)
-	return nil
+	return c.mutateSessionData(func(sd *SessionData) error { sd.addEntryAt(role, content, durable.Timestamp); return nil })
 }
 
 // initEventStore initializes the EventStore on Coordinator.
@@ -104,9 +102,7 @@ func (c *Coordinator) initEventStore() {
 	if c.session == nil || c.session.Workspace == "" {
 		return
 	}
-	if c.sessionData == nil {
-		c.sessionData = NewSession()
-	}
+	_ = c.mutateSessionData(func(*SessionData) error { return nil })
 	runID := c.executionRunID
 	if runID == "" {
 		runID = fmt.Sprintf("run-%d", time.Now().UnixNano())
@@ -115,25 +111,19 @@ func (c *Coordinator) initEventStore() {
 	es, err := NewEventStore(c.session.Workspace, runID, sessionID)
 	if err != nil {
 		log.Printf("warning: init event store failed: %v", err)
-		c.sessionData.RecoveryRequired = true
-		c.sessionData.RecoveryReason = "event-store initialization failed: " + utils.RedactSecrets(err.Error())
-		_ = SaveSession(c.session.Workspace, c.sessionData)
+		c.markSessionRecovery("event-store initialization failed: " + utils.RedactSecrets(err.Error()))
 		return
 	}
 	if err := es.VerifyHashChain(); err != nil {
 		log.Printf("warning: event store hash chain verification failed: %v", err)
-		c.sessionData.RecoveryRequired = true
-		c.sessionData.RecoveryReason = "event-store hash chain invalid: " + utils.RedactSecrets(err.Error())
-		_ = SaveSession(c.session.Workspace, c.sessionData)
+		c.markSessionRecovery("event-store hash chain invalid: " + utils.RedactSecrets(err.Error()))
 		_ = es.Close()
 		return
 	}
 	st, err := LoadSessionTree(c.session.Workspace)
 	if err != nil {
 		log.Printf("warning: load session tree failed: %v", err)
-		c.sessionData.RecoveryRequired = true
-		c.sessionData.RecoveryReason = "session-tree load failed: " + utils.RedactSecrets(err.Error())
-		_ = SaveSession(c.session.Workspace, c.sessionData)
+		c.markSessionRecovery("session-tree load failed: " + utils.RedactSecrets(err.Error()))
 		_ = es.Close()
 		return
 	}
@@ -142,18 +132,14 @@ func (c *Coordinator) initEventStore() {
 		branch, branchErr := st.CreateRootBranch(fmt.Sprintf("session-%d", time.Now().UTC().UnixNano()))
 		if branchErr != nil {
 			log.Printf("warning: create fresh event-store branch failed: %v", branchErr)
-			c.sessionData.RecoveryRequired = true
-			c.sessionData.RecoveryReason = "fresh event-store branch creation failed: " + utils.RedactSecrets(branchErr.Error())
-			_ = SaveSession(c.session.Workspace, c.sessionData)
+			c.markSessionRecovery("fresh event-store branch creation failed: " + utils.RedactSecrets(branchErr.Error()))
 			_ = es.Close()
 			return
 		}
 		st.ActiveBranch = branch.ID
 		if saveErr := SaveSessionTree(c.session.Workspace, st); saveErr != nil {
 			log.Printf("warning: save fresh event-store branch failed: %v", saveErr)
-			c.sessionData.RecoveryRequired = true
-			c.sessionData.RecoveryReason = "fresh event-store branch save failed: " + utils.RedactSecrets(saveErr.Error())
-			_ = SaveSession(c.session.Workspace, c.sessionData)
+			c.markSessionRecovery("fresh event-store branch save failed: " + utils.RedactSecrets(saveErr.Error()))
 			_ = es.Close()
 			return
 		}
@@ -169,8 +155,21 @@ func (c *Coordinator) initEventStore() {
 	c.repairMemoryLearningGaps(st, activeBranch)
 }
 
+func (c *Coordinator) markSessionRecovery(reason string) {
+	if c == nil {
+		return
+	}
+	if err := c.mutateSessionData(func(sd *SessionData) error {
+		sd.RecoveryRequired = true
+		sd.RecoveryReason = reason
+		return nil
+	}); err == nil {
+		_ = c.persistSession("persist recovery state")
+	}
+}
+
 func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBranch string) {
-	if c == nil || c.eventStore == nil || c.sessionData == nil {
+	if c == nil || c.eventStore == nil {
 		return
 	}
 	events, err := c.eventStore.ReadEvents()
@@ -366,16 +365,6 @@ func (c *Coordinator) recordLearningGap(event RunEvent, appendErr error) {
 		return
 	}
 	c.dualWriteFailures.Add(1)
-	if c.sessionData == nil {
-		return
-	}
-	store := c.SessionStore()
-	workspace := ""
-	if c.session != nil {
-		workspace = c.session.Workspace
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	var repairEvent *RunEvent
 	if strings.HasPrefix(event.Type, "memory_") && len(event.Payload) > 0 {
 		copyEvent := event
@@ -384,23 +373,21 @@ func (c *Coordinator) recordLearningGap(event RunEvent, appendErr error) {
 		}
 		repairEvent = &copyEvent
 	}
-	c.sessionData.LearningGaps = append(c.sessionData.LearningGaps, LearningGap{
-		EventType:      event.Type,
-		TaskID:         event.TaskID,
-		IdempotencyKey: event.IdempotencyKey,
-		Reason:         utils.RedactSecrets(appendErr.Error()),
-		ObservedAt:     time.Now().UTC().Format(time.RFC3339Nano),
-		PendingRepair:  true,
-		RepairEvent:    repairEvent,
-	})
-	if workspace == "" {
+	if err := c.mutateSessionData(func(sd *SessionData) error {
+		sd.LearningGaps = append(sd.LearningGaps, LearningGap{
+			EventType: event.Type, TaskID: event.TaskID, IdempotencyKey: event.IdempotencyKey,
+			Reason: utils.RedactSecrets(appendErr.Error()), ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			PendingRepair: true, RepairEvent: repairEvent,
+		})
+		return nil
+	}); err != nil {
 		return
 	}
 	// The gap must be durable before the failed emission path returns: a crash
 	// before the next unrelated checkpoint would otherwise lose the repair
 	// record and its event, leaving no way to rebuild the observation without
 	// re-running the worker (spec §7 HF-MEM4-000 item 4, §9).
-	if err := store.SaveSession(workspace, c.sessionData); err != nil {
+	if err := c.persistSession("persist learning gap"); err != nil {
 		log.Printf("warning: persist learning gap checkpoint failed: %v", err)
 	}
 }
@@ -424,10 +411,9 @@ func (c *Coordinator) repairMemoryLearningGaps(branchOpts ...any) {
 	if st != nil && st.ActiveBranch != "" && len(branchOpts) == 1 {
 		activeBranch = st.ActiveBranch
 	}
-	c.mu.Lock()
-	gaps := append([]LearningGap(nil), c.sessionData.LearningGaps...)
+	var gaps []LearningGap
+	c.viewSessionData(func(sd *SessionData) { gaps = append(gaps, sd.LearningGaps...) })
 	originalGapCount := len(gaps)
-	c.mu.Unlock()
 	changed := false
 	for i := range gaps {
 		gap := &gaps[i]
@@ -472,15 +458,14 @@ func (c *Coordinator) repairMemoryLearningGaps(branchOpts ...any) {
 	if !changed {
 		return
 	}
-	c.mu.Lock()
-	if len(c.sessionData.LearningGaps) > originalGapCount {
-		gaps = append(gaps, c.sessionData.LearningGaps[originalGapCount:]...)
-	}
-	c.sessionData.LearningGaps = gaps
-	c.mu.Unlock()
-	if c.session != nil {
-		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
-	}
+	_ = c.mutateSessionData(func(sd *SessionData) error {
+		if len(sd.LearningGaps) > originalGapCount {
+			gaps = append(gaps, sd.LearningGaps[originalGapCount:]...)
+		}
+		sd.LearningGaps = gaps
+		return nil
+	})
+	_ = c.persistSession("persist repaired learning gaps")
 }
 
 // emitEvent logs a RunEvent to the coordinator's eventStore if initialized.

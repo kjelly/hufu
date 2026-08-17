@@ -18,8 +18,8 @@ func (c *Coordinator) contextRunID() string {
 		}
 	}
 	seed := "local"
-	if c.sessionData != nil && c.sessionData.CreatedAt != "" {
-		seed = c.sessionData.CreatedAt
+	if createdAt := c.sessionCreatedAt(); createdAt != "" {
+		seed = createdAt
 	} else if c.session != nil && c.session.Workspace != "" {
 		seed = c.session.Workspace
 	}

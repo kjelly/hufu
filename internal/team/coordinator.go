@@ -685,11 +685,21 @@ func (c *Coordinator) SetAcceptanceSpecWithReason(spec AcceptanceSpec, reason st
 		NewSpec:   spec,
 		Reason:    reason,
 	}
-	if c.sessionData != nil {
-		c.sessionData.AcceptanceContractRevisions = append(c.sessionData.AcceptanceContractRevisions, revision)
-		if c.session != nil && c.session.Workspace != "" {
-			_ = SaveSession(c.session.Workspace, c.sessionData)
+	if err := c.mutateSessionData(func(sd *SessionData) error {
+		sd.AcceptanceContractRevisions = append(sd.AcceptanceContractRevisions, revision)
+		return nil
+	}); err == nil {
+		// SetAcceptanceSpecWithReason holds c.mu for its whole transaction;
+		// resolving SessionStore here would attempt a nested c.mu.RLock.
+		store := c.sessionStore
+		if store == nil {
+			store = &defaultSessionStore{c: c}
 		}
+		c.sessionMu.Lock()
+		if c.session != nil && c.sessionData != nil {
+			_ = store.SaveSession(c.session.Workspace, c.sessionData)
+		}
+		c.sessionMu.Unlock()
 	}
 	c.emitEvent("acceptance_contract_modified", "coordinator", "", map[string]interface{}{
 		"revision": revision.Revision, "old_spec": oldSpec, "new_spec": spec,
@@ -759,11 +769,11 @@ func (c *Coordinator) SetLastRunResult(res *RunResult) {
 	// effort: the normal checkpoint path still owns task/session durability,
 	// while an outcome must never disappear merely because the process exits
 	// after finish.
-	if c.sessionData != nil {
-		c.sessionData.RunResult = res
-		if c.session != nil && c.session.Workspace != "" {
-			_ = SaveSession(c.session.Workspace, c.sessionData)
-		}
+	if err := c.mutateSessionData(func(sd *SessionData) error {
+		sd.RunResult = res
+		return nil
+	}); err == nil {
+		_ = c.persistSession("persist run result")
 	}
 }
 
@@ -1224,11 +1234,13 @@ func (c *Coordinator) ResetConversation() {
 	c.conversationHistory = nil
 	c.conversationHistorySourceCounts = nil
 	c.conversationHistorySourceOffset = 0
-	if c.sessionData != nil {
-		c.sessionData.ConversationHistorySourceCounts = nil
-		c.sessionData.ConversationHistorySourceOffset = 0
-	}
 	c.conversationHistoryMu.Unlock()
+	_ = c.mutateSessionData(func(sd *SessionData) error {
+		sd.ConversationHistorySourceCounts = nil
+		sd.ConversationHistorySourceOffset = 0
+		return nil
+	})
+	_ = c.persistSession("persist reset conversation")
 
 	c.resetRoundState()
 }

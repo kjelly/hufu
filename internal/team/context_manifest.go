@@ -485,13 +485,13 @@ func (c *Coordinator) recordAuxiliaryContextSignal(taskID, purpose, eventKind, s
 			}
 		}
 	}
-	if c.sessionData != nil {
-		for _, manifest := range c.sessionData.CoordinatorContextManifests {
+	c.viewSessionData(func(sd *SessionData) {
+		for _, manifest := range sd.CoordinatorContextManifests {
 			if taskID == "" || manifest.TaskID == taskID || manifest.TaskID == "auxiliary-"+purpose {
 				manifests = append(manifests, manifest)
 			}
 		}
-	}
+	})
 	policyRevision := c.session.Config.MemoryLearning.PolicyVersion
 	for i := range manifests {
 		manifest := &manifests[i]

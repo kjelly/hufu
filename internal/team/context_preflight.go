@@ -12,9 +12,7 @@ func (c *Coordinator) PrepareContextPreflight() error {
 	if c == nil || c.session == nil || strings.TrimSpace(c.session.Workspace) == "" || c.contextRepo == nil {
 		return fmt.Errorf("context preflight requires a coordinator workspace and canonical repository")
 	}
-	if c.sessionData == nil {
-		c.sessionData = NewSession()
-	}
+	_ = c.mutateSessionData(func(sd *SessionData) error { return nil })
 	// The preflight event-store run ID and every request/manifest must share
 	// one stable identity. Do this before initEventStore rather than letting its
 	// local timestamp fallback diverge from contextRunID().
@@ -24,10 +22,11 @@ func (c *Coordinator) PrepareContextPreflight() error {
 	if c.eventStore == nil {
 		c.initEventStore()
 	}
-	if c.eventStore == nil || c.sessionData.RecoveryRequired {
+	sessionData := c.SessionData()
+	if c.eventStore == nil || (sessionData != nil && sessionData.RecoveryRequired) {
 		reason := "event store unavailable"
-		if c.sessionData.RecoveryReason != "" {
-			reason = c.sessionData.RecoveryReason
+		if sessionData != nil && sessionData.RecoveryReason != "" {
+			reason = sessionData.RecoveryReason
 		}
 		return fmt.Errorf("context preflight failed: %s", reason)
 	}

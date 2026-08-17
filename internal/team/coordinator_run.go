@@ -197,6 +197,7 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 	return ag, resolvedTools.Names, nil
 }
 
+//nolint:gocyclo // direct-agent execution is the canonical closed lifecycle path.
 func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (*DirectAgentResult, error) {
 	endExecutionRun := c.beginExecutionRun()
 	defer endExecutionRun()

@@ -256,6 +256,7 @@ func gatherSkillPatterns(coordinator *team.Coordinator) []SkillPatternReport {
 	return reports
 }
 
+//nolint:gocyclo // report rendering intentionally covers all execution projections.
 func buildReportMD(data *reportData, teamName string, finalResult string) string {
 	var b strings.Builder
 

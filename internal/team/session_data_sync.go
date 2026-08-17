@@ -32,6 +32,15 @@ func (c *Coordinator) viewSessionData(fn func(*SessionData)) {
 	fn(c.sessionData)
 }
 
+// sessionCreatedAt returns the immutable session identity from a synchronized
+// snapshot. SessionData is also written by checkpoint and recovery goroutines,
+// so even this otherwise harmless lookup must not read it directly.
+func (c *Coordinator) sessionCreatedAt() string {
+	var createdAt string
+	c.viewSessionData(func(sd *SessionData) { createdAt = sd.CreatedAt })
+	return createdAt
+}
+
 // persistSession saves the live session state, holding sessionMu for the
 // duration of SaveSession so the json.Marshal inside it cannot race a
 // concurrent writer. The session store is resolved before the lock is taken:

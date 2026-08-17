@@ -20,8 +20,8 @@ func (c *Coordinator) shadowContextAppend(kind contextstore.ContextKind, content
 		return
 	}
 	sessionID := filepath.Base(c.session.Workspace)
-	if c.sessionData != nil && c.sessionData.CreatedAt != "" {
-		sessionID = c.sessionData.CreatedAt
+	if createdAt := c.sessionCreatedAt(); createdAt != "" {
+		sessionID = createdAt
 	}
 	item := contextstore.ContextItem{
 		Kind: kind, Content: content,
@@ -164,8 +164,8 @@ func (c *Coordinator) appendCanonicalContext(ctx context.Context, kind contextst
 		return fmt.Errorf("canonical context repository is unavailable")
 	}
 	sessionID := filepath.Base(c.session.Workspace)
-	if c.sessionData != nil && c.sessionData.CreatedAt != "" {
-		sessionID = c.sessionData.CreatedAt
+	if createdAt := c.sessionCreatedAt(); createdAt != "" {
+		sessionID = createdAt
 	}
 	// Stamp the originating run so run-scoped extraction (autoExtractCanonicalLTM)
 	// never re-proposes knowledge from a previous failed run under a later
@@ -230,8 +230,8 @@ func (c *Coordinator) sharedSessionPromptItems(ctx context.Context, scope contex
 
 func (c *Coordinator) contextScope() contextstore.Scope {
 	sessionID := filepath.Base(c.session.Workspace)
-	if c.sessionData != nil && c.sessionData.CreatedAt != "" {
-		sessionID = c.sessionData.CreatedAt
+	if createdAt := c.sessionCreatedAt(); createdAt != "" {
+		sessionID = createdAt
 	}
 	// Shared canonical context deliberately remains branch-neutral. Branch
 	// isolation is applied only to private worker memory via resolveWorkerScope.

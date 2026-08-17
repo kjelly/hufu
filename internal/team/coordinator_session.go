@@ -388,7 +388,9 @@ func trimMaxInt(a, b int) int {
 }
 
 func (c *Coordinator) SetSessionData(sd *SessionData) {
+	c.sessionMu.Lock()
 	c.sessionData = sd
+	c.sessionMu.Unlock()
 	if sd == nil {
 		return
 	}
@@ -629,19 +631,18 @@ func (c *Coordinator) hydrateConversationHistoryFromSessionData() {
 }
 
 func (c *Coordinator) syncConversationHistoryStateToSessionData() {
-	if c.sessionData == nil {
-		return
-	}
 	if c.conversationHistorySourceOffset < 0 {
 		c.conversationHistorySourceOffset = 0
 	}
-	c.sessionData.ConversationHistorySourceOffset = c.conversationHistorySourceOffset
-
-	if len(c.conversationHistorySourceCounts) == 0 {
-		c.sessionData.ConversationHistorySourceCounts = nil
-		return
-	}
-	c.sessionData.ConversationHistorySourceCounts = append([]int(nil), c.conversationHistorySourceCounts...)
+	_ = c.mutateSessionData(func(sd *SessionData) error {
+		sd.ConversationHistorySourceOffset = c.conversationHistorySourceOffset
+		if len(c.conversationHistorySourceCounts) == 0 {
+			sd.ConversationHistorySourceCounts = nil
+		} else {
+			sd.ConversationHistorySourceCounts = append([]int(nil), c.conversationHistorySourceCounts...)
+		}
+		return nil
+	})
 }
 
 // saveCheckpoint commits the durable task projection to the event store and
@@ -978,7 +979,14 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 }
 
 func (c *Coordinator) SessionData() *SessionData {
-	return c.sessionData
+	var snapshot *SessionData
+	c.viewSessionData(func(sd *SessionData) {
+		copySD := *sd
+		copySD.Entries = append([]SessionEntry(nil), sd.Entries...)
+		copySD.Tasks = append([]*TodoItem(nil), sd.Tasks...)
+		snapshot = &copySD
+	})
+	return snapshot
 }
 
 func (c *Coordinator) saveHistoryAndSession(ctx context.Context, steps []fantasy.StepResult) {
@@ -989,7 +997,5 @@ func (c *Coordinator) saveHistoryAndSession(ctx context.Context, steps []fantasy
 	}
 	c.syncConversationHistoryStateToSessionData()
 	c.conversationHistoryMu.Unlock()
-	if c.sessionData != nil && c.session != nil && c.session.Workspace != "" {
-		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
-	}
+	_ = c.persistSession("persist conversation history")
 }
