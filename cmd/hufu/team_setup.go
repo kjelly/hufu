@@ -29,6 +29,15 @@ type teamContext struct {
 	notifier    *notify.Notifier
 }
 
+var detectOllamaContextLengths = team.DetectAndCacheOllamaContextLengths
+
+func detectContextLengths(ctx context.Context, noNet bool, providerURL, providerAPIKey string, models []string) {
+	if noNet {
+		return
+	}
+	detectOllamaContextLengths(ctx, providerURL, providerAPIKey, models)
+}
+
 // applyUnattendedAndBudget configures the coordinator's unattended mode,
 // run budgets, and acceptance check from the CLI flags and team config.
 // CLI flags take precedence; team.yaml values are the fallback.
@@ -182,7 +191,10 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		return nil, err
 	}
 
-	team.DetectAndCacheOllamaContextLengths(ctx, resolvedProviderURL, resolvedProviderAPIKey, modelsInUse(session, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedModelList))
+	// Context-length detection is an optional cache warm-up. In no-net mode
+	// even this best-effort probe is forbidden: team setup must not contact the
+	// provider before the agent subprocesses run.
+	detectContextLengths(ctx, resolvedNoNet, resolvedProviderURL, resolvedProviderAPIKey, modelsInUse(session, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedModelList))
 
 	if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
 		stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)

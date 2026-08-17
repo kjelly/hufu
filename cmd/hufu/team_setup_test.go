@@ -11,6 +11,28 @@ import (
 	"github.com/kjelly/hufu/internal/team"
 )
 
+func TestDetectContextLengths_NoNetSkipsProviderProbe(t *testing.T) {
+	called := false
+	original := detectOllamaContextLengths
+	detectOllamaContextLengths = func(context.Context, string, string, []string) { called = true }
+	t.Cleanup(func() { detectOllamaContextLengths = original })
+	detectContextLengths(context.Background(), true, "http://provider.invalid/v1", "", []string{"ollama/no-net-regression:latest"})
+	if called {
+		t.Fatal("no-net setup sent a context-length probe to the provider")
+	}
+}
+
+func TestDetectContextLengths_ProbesWhenNetworkAllowed(t *testing.T) {
+	called := false
+	original := detectOllamaContextLengths
+	detectOllamaContextLengths = func(context.Context, string, string, []string) { called = true }
+	t.Cleanup(func() { detectOllamaContextLengths = original })
+	detectContextLengths(context.Background(), false, "http://provider.invalid/v1", "", []string{"ollama/net-regression:latest"})
+	if !called {
+		t.Fatal("network-allowed setup did not perform context-length probe")
+	}
+}
+
 func TestLoadTeamCommon_RejectsStrictWorkspaceBeforeWrite(t *testing.T) {
 	projDir := t.TempDir()
 	origWd, err := os.Getwd()
