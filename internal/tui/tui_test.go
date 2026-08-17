@@ -164,6 +164,11 @@ func TestUpdate_FinishedMsgCanonicalStatus(t *testing.T) {
 			res:        &team.RunResult{Outcome: team.RunOutcomePartial, StopReason: team.StopReasonBudgetExceeded},
 			wantStatus: "Budget exhausted",
 		},
+		{
+			name:       "unknown outcome is not success",
+			res:        &team.RunResult{Outcome: team.RunOutcome("future_outcome")},
+			wantStatus: "Execution future_outcome",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -172,6 +177,9 @@ func TestUpdate_FinishedMsgCanonicalStatus(t *testing.T) {
 			model := updated.(Model)
 			if !strings.Contains(model.statusText, tt.wantStatus) {
 				t.Errorf("statusText = %q, want substring %q", model.statusText, tt.wantStatus)
+			}
+			if tt.name == "unknown outcome is not success" && strings.Contains(model.statusText, "✓") {
+				t.Errorf("unknown outcome must not be rendered as success: %q", model.statusText)
 			}
 		})
 	}

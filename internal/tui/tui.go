@@ -427,7 +427,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.Result != nil && (msg.Result.Outcome == team.RunOutcomeFailed || msg.Result.Outcome == team.RunOutcomeCancelled) {
 			m.statusText = errorIcon.Render("✗") + dimStyle.Render("  "+statusStr)
 		} else {
-			m.statusText = doneIcon.Render("✓") + dimStyle.Render("  "+statusStr)
+			// Unknown outcomes are not evidence of success. Keep the display
+			// fail-safe if a newer/invalid outcome reaches this older TUI.
+			m.statusText = pausedIcon.Render("ℹ") + dimStyle.Render("  "+statusStr)
 		}
 		// The coordinator already called finalizeNormalCompletion() which marks
 		// TaskPending → TaskSkipped and TaskInProgress → TaskDone via a
