@@ -89,3 +89,19 @@ func TestDecisionChainReportsStepBudgetExhaustion(t *testing.T) {
 		}
 	}
 }
+
+func TestToolDispositionMetricsUseOnlyActiveRun(t *testing.T) {
+	items := []*TodoItem{{ExecutionReceipts: []ExecutionReceipt{
+		{RunID: "old", TaskID: "1", Attempt: 1, ToolDispositions: []ToolExecutionDisposition{{Kind: ToolExecutionPolicyDenied, RetrySafety: RetrySafetySafeFreshAttempt}}},
+		{RunID: "active", TaskID: "1", Attempt: 1, ToolDispositions: []ToolExecutionDisposition{
+			{Kind: ToolExecutionPolicyDenied, RetrySafety: RetrySafetySafeFreshAttempt},
+			{Kind: ToolExecutionBudgetExceeded, ReasonCode: "step_budget_wrap_up"},
+			{Kind: ToolExecutionSchemaRepair},
+		}},
+	}}}
+	metrics := RunMetrics{}
+	accumulateToolDispositionMetrics(&metrics, items, "active")
+	if metrics.PolicyDeniedToolCalls != 1 || metrics.SafeFreshAttempts != 1 || metrics.StepBudgetWrapUps != 1 || metrics.SchemaRepairDenials != 1 {
+		t.Fatalf("active disposition metrics = %#v", metrics)
+	}
+}

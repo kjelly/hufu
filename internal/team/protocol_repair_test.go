@@ -11,6 +11,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 func readStoredArtifact(t *testing.T, workspace, id string) []byte {
@@ -104,6 +105,135 @@ func TestProtocolAttemptWasReadOnly(t *testing.T) {
 	}
 	if protocolAttemptWasReadOnly(nil) {
 		t.Fatal("an attempt with no recorded tool calls is not sufficient proof for worker replay")
+	}
+}
+
+func TestReadOnlyCapabilityTaxonomyFailsClosedForUnknownAndMalformedBash(t *testing.T) {
+	if tools.IsReadOnlyObservationTool("unknown_extension") {
+		t.Fatal("unknown tool must not be admitted to the read-only taxonomy")
+	}
+	if isReadOnlyToolCall("unknown_extension", `{}`) {
+		t.Fatal("unknown call must not be replayable")
+	}
+	if isReadOnlyToolCall("bash", `{bad-json`) {
+		t.Fatal("malformed bash input must not be replayable")
+	}
+	for _, name := range []string{"view", "grep", "glob", "ls", "math", "random", "team_info", "context_query"} {
+		if !isReadOnlyToolCall(name, `{}`) {
+			t.Fatalf("known observation tool %q was not admitted", name)
+		}
+	}
+}
+
+func TestToolDispositionReporterEnrichesDirectAndWorkerReceiptsWithoutParsingText(t *testing.T) {
+	collector := &attemptToolDispositions{}
+	reporter := newToolDispositionReporter(collector, SideEffectNone, "run-direct", "task-direct", 1)
+	reporter(tools.ToolExecutionDisposition{Kind: string(ToolExecutionPolicyDenied), ReasonCode: "read_only_shell_redirect_denied", ToolName: "bash", ToolCallID: "call-direct", Executed: false})
+	items := collector.snapshot()
+	if len(items) != 1 {
+		t.Fatalf("dispositions = %#v", items)
+	}
+	got := items[0]
+	if got.RunID != "run-direct" || got.TodoID != "task-direct" || got.Attempt != 1 || got.SideEffect != SideEffectNone || got.RetrySafety != RetrySafetySafeFreshAttempt || got.Executed {
+		t.Fatalf("enriched disposition = %#v", got)
+	}
+}
+
+func TestAttemptToolDispositionsOnlyPermitFreshRetryWhenEveryCallWasDenied(t *testing.T) {
+	steps := []fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{
+		fantasy.ToolCallContent{ToolCallID: "denied-bash", ToolName: "bash", Input: `{"command":"go test ./... 2>&1"}`},
+	}}}}
+	dispositions := &attemptToolDispositions{}
+	dispositions.add(ToolExecutionDisposition{Kind: ToolExecutionPolicyDenied, RetrySafety: RetrySafetySafeFreshAttempt, ReasonCode: "read_only_shell_syntax_denied", ToolName: "bash", ToolCallID: "denied-bash", Executed: false})
+	if !dispositions.onlyPolicyDeniedToolCalls(steps) {
+		t.Fatal("a fully pre-execution policy-denied attempt must allow one clean retry")
+	}
+
+	dispositions.add(ToolExecutionDisposition{Kind: ToolExecutionPolicyDenied, RetrySafety: RetrySafetySafeFreshAttempt, ReasonCode: "read_only_shell_syntax_denied", ToolName: "bash", ToolCallID: "other", Executed: false})
+	steps[0].Response.Content = append(steps[0].Response.Content, fantasy.ToolCallContent{ToolCallID: "executed-view", ToolName: "view", Input: `{"file_path":"spec.md"}`})
+	if dispositions.onlyPolicyDeniedToolCalls(steps) {
+		t.Fatal("an unaccounted tool call must remain fail-closed")
+	}
+}
+
+func TestBuildPolicyDeniedRetryContextIsDeterministicAndDoesNotExposeCallInput(t *testing.T) {
+	context := buildPolicyDeniedRetryContext([]ToolExecutionDisposition{{
+		Kind: ToolExecutionPolicyDenied, ReasonCode: "read_only_shell_syntax_denied", ToolName: "bash", ToolCallID: "call-1",
+	}})
+	if !strings.Contains(context, "Deterministic Policy Repair") || !strings.Contains(context, "read_only_shell_syntax_denied") || !strings.Contains(context, "submit_result exactly once") || !strings.Contains(context, "2>&1") {
+		t.Fatalf("policy repair context = %q", context)
+	}
+	if strings.Contains(context, "call-1") {
+		t.Fatalf("policy repair context leaked opaque call ID: %q", context)
+	}
+}
+
+func TestPolicyDeniedAttemptGetsOneCleanWorkerRetryWithoutResultOnlyRepair(t *testing.T) {
+	workspace := t.TempDir()
+	workerCalls := 0
+	var prompts []string
+	c := &Coordinator{
+		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "policy-retry", Timeout: 30, MaxRetries: 1}, Agents: map[string]*agent.AgentDef{
+			"reviewer": {Name: "reviewer", Role: "worker", SideEffect: string(SideEffectNone), MaxRetries: 1, Generation: agent.GenerationParams{Model: "test"}},
+		}},
+		sessionTime: time.Now(), taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry), executionRunID: "run-policy-retry",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "run bounded inspection"}})[0]
+	c.workerAgentOverride = &policyDeniedThenSubmittedWorker{calls: &workerCalls, prompts: &prompts, onSecond: func() {
+		c.storeSubmittedTaskResult(item.ID, &TaskResult{TaskID: item.ID, Agent: "reviewer", Status: TaskResultStatusSuccess, Summary: "safe test completed", Source: "submitted"})
+	}}
+	repairCalls := 0
+	c.repairAgentOverride = &mockRepairAgent{onSubmit: func() { repairCalls++ }}
+
+	_, err := c.executeTask(context.Background(), TaskDef{Agent: "reviewer", Goal: "run bounded inspection", Recovery: RecoveryRetry, SideEffect: SideEffectNone, Execution: ExecutionContract{RequiresResult: true}}, item.ID)
+	if err != nil {
+		t.Fatalf("executeTask: %v", err)
+	}
+	if workerCalls != 2 || repairCalls != 0 {
+		t.Fatalf("worker/repair calls = %d/%d, want clean worker retry and no result-only repair", workerCalls, repairCalls)
+	}
+	if len(prompts) != 2 || !strings.Contains(prompts[1], "Deterministic Policy Repair") || !strings.Contains(prompts[1], "2>&1") {
+		t.Fatalf("retry prompts = %#v, want deterministic policy repair", prompts)
+	}
+	got := c.taskTracker.TodoList().Items()[0]
+	if got.Status != TaskDone || len(got.ExecutionReceipts) != 2 {
+		t.Fatalf("task projection = status %s receipts %#v", got.Status, got.ExecutionReceipts)
+	}
+	first := got.ExecutionReceipts[0]
+	if first.HandoffState != ResultHandoffMissingAfterSafeDenial || len(first.ToolDispositions) != 1 {
+		t.Fatalf("first receipt = %#v, want safe-denial handoff evidence", first)
+	}
+	denial := first.ToolDispositions[0]
+	if denial.Kind != ToolExecutionPolicyDenied || denial.Executed || denial.RetrySafety != RetrySafetySafeFreshAttempt || denial.SideEffect != SideEffectNone || denial.RunID != "run-policy-retry" || denial.TodoID != item.ID || denial.Attempt != 1 {
+		t.Fatalf("denial disposition = %#v", denial)
+	}
+}
+
+func TestSecondPolicyDenialDoesNotCallWorkerOrRepairAgain(t *testing.T) {
+	workspace := t.TempDir()
+	workerCalls := 0
+	c := &Coordinator{
+		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "policy-terminal", Timeout: 30, MaxRetries: 3}, Agents: map[string]*agent.AgentDef{
+			"reviewer": {Name: "reviewer", Role: "worker", SideEffect: string(SideEffectNone), MaxRetries: 3, Generation: agent.GenerationParams{Model: "test"}},
+		}},
+		sessionTime: time.Now(), taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}, taskResultCache: make(map[string][]cachedTaskEntry), executionRunID: "run-policy-terminal",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "run bounded inspection"}})[0]
+	c.workerAgentOverride = &policyDeniedThenSubmittedWorker{calls: &workerCalls, prompts: new([]string)}
+	repairCalls := 0
+	c.repairAgentOverride = &mockRepairAgent{onSubmit: func() { repairCalls++ }}
+
+	_, err := c.executeTask(context.Background(), TaskDef{Agent: "reviewer", Goal: "run bounded inspection", Recovery: RecoveryRetry, SideEffect: SideEffectNone, Execution: ExecutionContract{RequiresResult: true}}, item.ID)
+	if err == nil || !strings.Contains(err.Error(), "policy-denied") {
+		t.Fatalf("error = %v, want terminal second policy denial", err)
+	}
+	if workerCalls != 2 || repairCalls != 0 {
+		t.Fatalf("worker/repair calls = %d/%d, want exactly two worker attempts and zero repair calls", workerCalls, repairCalls)
+	}
+	got := c.taskTracker.TodoList().Items()[0]
+	if got.Status != TaskBlocked || len(got.ExecutionReceipts) != 2 || got.ExecutionReceipts[1].HandoffState != ResultHandoffMissingAfterSafeDenial {
+		t.Fatalf("terminal policy denial projection = status %s receipts %#v", got.Status, got.ExecutionReceipts)
 	}
 }
 
@@ -474,6 +604,35 @@ type resultContractWorker struct {
 	calls        *int
 	callMessages *[][]fantasy.Message
 	onSecond     func()
+}
+
+type policyDeniedThenSubmittedWorker struct {
+	calls    *int
+	prompts  *[]string
+	onSecond func()
+}
+
+func (m *policyDeniedThenSubmittedWorker) response(ctx context.Context, call fantasy.AgentCall) *fantasy.AgentResult {
+	*m.calls++
+	*m.prompts = append(*m.prompts, call.Prompt)
+	if *m.calls == 1 || (*m.calls == 2 && m.onSecond == nil) {
+		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{Kind: string(ToolExecutionPolicyDenied), ReasonCode: "read_only_shell_redirect_denied", ToolName: "bash", ToolCallID: "policy-denied-call", Executed: false})
+		return &fantasy.AgentResult{Steps: []fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{
+			fantasy.ToolCallContent{ToolCallID: "policy-denied-call", ToolName: "bash", Input: `{"command":"go test ./internal/team 2>&1"}`},
+		}}}}}
+	}
+	if m.onSecond != nil {
+		m.onSecond()
+	}
+	return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{fantasy.TextContent{Text: "submitted"}}}}
+}
+
+func (m *policyDeniedThenSubmittedWorker) Generate(ctx context.Context, call fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return m.response(ctx, call), nil
+}
+
+func (m *policyDeniedThenSubmittedWorker) Stream(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return m.response(ctx, fantasy.AgentCall{Prompt: call.Prompt, Messages: call.Messages}), nil
 }
 
 func (m *resultContractWorker) response(call fantasy.AgentCall) *fantasy.AgentResult {
