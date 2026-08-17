@@ -11,19 +11,23 @@ import (
 
 // jsonRunOutput is the machine-readable shape emitted by --output json.
 type jsonRunOutput struct {
-	Outcome         string                     `json:"outcome"`
-	GoalSatisfied   bool                       `json:"goal_satisfied"`
-	GoalMode        string                     `json:"goal_mode,omitempty"`
-	Result          string                     `json:"result"`
-	Reason          string                     `json:"reason,omitempty"`
-	StopReason      string                     `json:"stop_reason,omitempty"`
-	ExitCode        int                        `json:"exit_code,omitempty"`
-	Acceptance      *team.AcceptanceResult     `json:"acceptance,omitempty"`
-	UnresolvedTasks []team.TaskReference       `json:"unresolved_tasks,omitempty"`
-	Stats           team.RunStats              `json:"stats"`
-	Teams           []jsonRunTeam              `json:"teams"`
-	Skills          []jsonRunSkill             `json:"skills,omitempty"`
-	Failures        []team.FailureEventPayload `json:"failures,omitempty"`
+	Outcome            string                     `json:"outcome"`
+	GoalSatisfied      bool                       `json:"goal_satisfied"`
+	GoalMode           string                     `json:"goal_mode,omitempty"`
+	Result             string                     `json:"result"`
+	Reason             string                     `json:"reason,omitempty"`
+	StopReason         string                     `json:"stop_reason,omitempty"`
+	ExitCode           int                        `json:"exit_code,omitempty"`
+	Acceptance         *team.AcceptanceResult     `json:"acceptance,omitempty"`
+	CompletedReview    bool                       `json:"completed_review,omitempty"`
+	FindingsPresent    bool                       `json:"findings_present,omitempty"`
+	FixedAndVerified   bool                       `json:"fixed_and_verified,omitempty"`
+	AcceptanceAdvisory bool                       `json:"acceptance_advisory,omitempty"`
+	UnresolvedTasks    []team.TaskReference       `json:"unresolved_tasks,omitempty"`
+	Stats              team.RunStats              `json:"stats"`
+	Teams              []jsonRunTeam              `json:"teams"`
+	Skills             []jsonRunSkill             `json:"skills,omitempty"`
+	Failures           []team.FailureEventPayload `json:"failures,omitempty"`
 }
 
 type jsonRunTeam struct {
@@ -36,10 +40,13 @@ type jsonRunTeam struct {
 }
 
 type jsonRunTask struct {
-	ID     string `json:"id"`
-	Agent  string `json:"agent"`
-	Desc   string `json:"desc"`
-	Status string `json:"status"`
+	ID                  string `json:"id"`
+	Agent               string `json:"agent"`
+	Desc                string `json:"desc"`
+	Status              string `json:"status"`
+	NoObjectiveVerifier bool   `json:"no_objective_verifier,omitempty"`
+	CompletedReview     bool   `json:"completed_review,omitempty"`
+	FindingsPresent     bool   `json:"findings_present,omitempty"`
 }
 
 type jsonRunSkill struct {
@@ -81,6 +88,9 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 		if tracker := tc.coordinator.TaskTracker(); tracker != nil && tracker.TodoList() != nil {
 			items = tracker.TodoList().Items()
 		}
+		if lastRes := tc.coordinator.LastRunResult(); lastRes != nil && lastRes.EvidenceManifest != nil && lastRes.EvidenceManifest.RunID != "" {
+			items, _ = latestRunTodos(items, lastRes.EvidenceManifest.RunID)
+		}
 		allItems = append(allItems, items...)
 		for _, item := range items {
 			if item == nil || !isHistoricalUnresolvedTask(name, item, priorUnresolved) {
@@ -92,10 +102,10 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 				out.Failures = append(out.Failures, team.FailureEventsFromTodos([]*team.TodoItem{it})...)
 			}
 			jt.Tasks = append(jt.Tasks, jsonRunTask{
-				ID:     it.ID,
-				Agent:  it.Agent,
-				Desc:   it.Desc,
-				Status: string(it.Status),
+				ID: it.ID, Agent: it.Agent, Desc: it.Desc, Status: string(it.Status),
+				NoObjectiveVerifier: it.Status == team.TaskDone && it.Verify == "" && it.VerifySpec == nil,
+				CompletedReview:     it.Kind == team.TaskKindDiagnostic && it.Status == team.TaskDone,
+				FindingsPresent:     it.TypedResult != nil && len(it.TypedResult.Findings) > 0,
 			})
 		}
 		out.Teams = append(out.Teams, jt)
@@ -111,6 +121,10 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 	out.Reason = canonical.Reason
 	out.StopReason = string(canonical.StopReason)
 	out.ExitCode = canonical.ExitCode
+	out.CompletedReview = canonical.CompletedReview
+	out.FindingsPresent = canonical.FindingsPresent
+	out.FixedAndVerified = canonical.FixedAndVerified
+	out.AcceptanceAdvisory = canonical.AcceptanceAdvisory
 	if canonical.Acceptance != nil {
 		acceptance := *canonical.Acceptance
 		acceptance.State = acceptance.EffectiveState()

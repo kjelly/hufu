@@ -198,3 +198,17 @@ func TestBuildReportMDIncludesWorkerMemoryStatsAndIDsWithoutContent(t *testing.T
 		t.Fatalf("report leaked worker-memory content:\n%s", report)
 	}
 }
+
+func TestLatestRunTodosExcludesOnlyReceiptProvenHistoricalTasks(t *testing.T) {
+	current := &team.TodoItem{ID: "current", ExecutionReceipts: []team.ExecutionReceipt{{RunID: "run-current"}}}
+	historical := &team.TodoItem{ID: "historical", ExecutionReceipts: []team.ExecutionReceipt{{RunID: "run-old"}}}
+	unknown := &team.TodoItem{ID: "unknown"}
+	got, historicalCount := latestRunTodos([]*team.TodoItem{current, historical, unknown}, "run-current")
+	if historicalCount != 1 || len(got) != 2 || got[0].ID != "current" || got[1].ID != "unknown" {
+		t.Fatalf("latest tasks=%#v historical=%d", got, historicalCount)
+	}
+	report := buildReportMD(&reportData{StartedAt: time.Now(), Todos: got, HistoricalTodoCount: historicalCount}, "demo", "")
+	if !strings.Contains(report, "## Historical Runs") || strings.Contains(report, "historical |") {
+		t.Fatalf("latest-run report separation failed:\n%s", report)
+	}
+}

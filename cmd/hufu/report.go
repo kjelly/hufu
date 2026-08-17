@@ -81,6 +81,7 @@ type reportData struct {
 	MemoryLearning      team.MemoryLearningReport
 	DeprecatedMemory    []team.DeprecatedMemoryToolUsage
 	ContextRouting      team.ContextManifestSummary
+	HistoricalTodoCount int
 }
 
 // SkillPatternReport holds detected skill pattern info for reports
@@ -99,7 +100,7 @@ func formatVerificationSummary(item *team.TodoItem) string {
 	cmd := strings.TrimSpace(item.Verify)
 	if item.VerifyResult == nil {
 		if cmd == "" {
-			return ""
+			return "no_objective_verifier"
 		}
 		return "pending: " + limitStr(cmd, 120)
 	}
@@ -149,6 +150,9 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 	if d.RunResult == nil && d.SessionData != nil {
 		d.RunResult = d.SessionData.RunResult
 	}
+	if d.RunResult != nil && d.RunResult.EvidenceManifest != nil && d.RunResult.EvidenceManifest.RunID != "" {
+		d.Todos, d.HistoricalTodoCount = latestRunTodos(d.Todos, d.RunResult.EvidenceManifest.RunID)
+	}
 
 	if tc.session != nil {
 		d.STM = team.LoadSTM(tc.session.Workspace)
@@ -197,6 +201,39 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 	}
 
 	return d
+}
+
+// latestRunTodos excludes only tasks whose durable receipts positively bind
+// them to another run. Tasks without a receipt remain visible: guessing they
+// are historical would hide an unfinished/recovered task from operators.
+func latestRunTodos(items []*team.TodoItem, runID string) ([]*team.TodoItem, int) {
+	if runID == "" {
+		return items, 0
+	}
+	current := make([]*team.TodoItem, 0, len(items))
+	historical := 0
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		hasReceipt := false
+		hasCurrentReceipt := false
+		for _, receipt := range item.ExecutionReceipts {
+			if receipt.RunID == "" {
+				continue
+			}
+			hasReceipt = true
+			if receipt.RunID == runID {
+				hasCurrentReceipt = true
+			}
+		}
+		if hasReceipt && !hasCurrentReceipt {
+			historical++
+			continue
+		}
+		current = append(current, item)
+	}
+	return current, historical
 }
 
 // gatherSkillPatterns extracts detected skill patterns from coordinator
@@ -252,6 +289,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		b.WriteString("\n### Reliability Metrics\n\n")
 		fmt.Fprintf(&b, "- **Acceptance criteria passed:** %d\n", metrics.AcceptanceCriteriaPassed)
 		fmt.Fprintf(&b, "- **Protocol repairs:** %d attempted, %d succeeded\n", metrics.ProtocolRepairsAttempted, metrics.ProtocolRepairsSucceeded)
+		fmt.Fprintf(&b, "- **Policy-denied tool calls:** %d (safe fresh attempts: %d; schema repairs: %d; budget wrap-ups: %d)\n", metrics.PolicyDeniedToolCalls, metrics.SafeFreshAttempts, metrics.SchemaRepairDenials, metrics.StepBudgetWrapUps)
 		fmt.Fprintf(&b, "- **Worker success claims rejected by verification:** %d\n", metrics.WorkerSuccessRejected)
 		fmt.Fprintf(&b, "- **Weak verifier warnings:** %d\n", metrics.WeakVerifierWarnings)
 		fmt.Fprintf(&b, "- **Preflight failures caught:** %d (non-asserting verifiers: %d)\n", metrics.PreflightFailuresCaught, metrics.NonAssertingVerifiersRejected)
@@ -302,10 +340,22 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		fmt.Fprintf(&b, "- **Strict Policy:** %t\n", data.ResolvedProfile.StrictPolicy)
 		fmt.Fprintf(&b, "- **Policy Failure Mode:** `%s`\n", data.ResolvedProfile.PolicyFailureMode)
 		fmt.Fprintf(&b, "- **Acceptance Mode:** `%s`\n", data.ResolvedProfile.AcceptanceMode)
+		if data.ResolvedProfile.AcceptanceMode == team.AcceptanceAdvisory {
+			b.WriteString("- **Acceptance Notice:** Acceptance is advisory; it does not prove findings are fixed.\n")
+		}
 		fmt.Fprintf(&b, "- **Default Cache Policy:** `%s`\n", data.ResolvedProfile.DefaultCachePolicy)
 		fmt.Fprintf(&b, "- **Default Recovery Policy:** `%s`\n", data.ResolvedProfile.DefaultRecoveryPolicy)
 		fmt.Fprintf(&b, "- **Disable Historical Memory:** %t\n", data.ResolvedProfile.DisableHistoricalMemory)
 		fmt.Fprintf(&b, "- **Disable Task Cache:** %t\n\n---\n\n", data.ResolvedProfile.DisableTaskCache)
+	}
+
+	if data.RunResult != nil && data.RunResult.CompletedReview {
+		b.WriteString("## Review Outcome\n\n")
+		if data.RunResult.FindingsPresent {
+			b.WriteString("Review artifact completed; findings are present and have not been represented as fixed.\n\n")
+		} else {
+			b.WriteString("Review artifact completed; no objective implementation verification was implied.\n\n")
+		}
 	}
 
 	if data.ContextUsageSection != "" {
@@ -335,6 +385,9 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 				t.ID, statusIcon, t.Agent, t.Desc, detail, verify, dur)
 		}
 		b.WriteString("\n---\n\n")
+	}
+	if data.HistoricalTodoCount > 0 {
+		fmt.Fprintf(&b, "## Historical Runs\n\n%d task projection(s) with receipts from earlier runs were excluded from this latest-run task table.\n\n---\n\n", data.HistoricalTodoCount)
 	}
 
 	writeTerminalSessionCleanup(&b, data.TerminalSessions)
