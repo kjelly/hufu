@@ -180,7 +180,7 @@ var debugCmd = &cobra.Command{
 				if err := scanner.Err(); err != nil {
 					inclusions[relPath] = fmt.Sprintf("error parsing: %v", err)
 				} else if len(filtered) > 0 {
-					filtered = []byte(utils.RedactSecrets(string(filtered)))
+					filtered = utils.RedactJSONLData(filtered)
 					if err := addBytesToTar(tw, filtered, relPath); err != nil {
 						inclusions[relPath] = fmt.Sprintf("error writing to tar: %v", err)
 					} else {
@@ -471,7 +471,7 @@ func addRedactedFileToTar(tw *tar.Writer, path, name string) (string, error) {
 	if !isDebugText(data) {
 		return "omitted (binary/unknown content)", nil
 	}
-	redacted := []byte(utils.RedactSecrets(string(data)))
+	redacted := redactDebugFileData(data, filepath.Ext(name))
 	if err := addBytesToTar(tw, redacted, filepath.ToSlash(name)); err != nil {
 		return "", err
 	}
@@ -479,6 +479,20 @@ func addRedactedFileToTar(tw *tar.Writer, path, name string) (string, error) {
 		return "included (redacted)", nil
 	}
 	return "included", nil
+}
+
+// redactDebugFileData redacts file content being added to a debug export tar.
+// JSON and JSONL content uses the JSON-aware redactor so escaped string
+// values are unescaped before redaction; other content uses the text redactor.
+func redactDebugFileData(data []byte, ext string) []byte {
+	switch strings.ToLower(ext) {
+	case ".json":
+		return utils.RedactJSONFileData(data)
+	case ".jsonl":
+		return utils.RedactJSONLData(data)
+	default:
+		return []byte(utils.RedactSecrets(string(data)))
+	}
 }
 
 // isDebugText is deliberately conservative. Valid UTF-8 is not sufficient to
@@ -504,6 +518,7 @@ func isDebugSensitivePath(rel string) bool {
 		name := strings.ToLower(strings.TrimSpace(part))
 		if name == ".env" || strings.HasPrefix(name, ".env.") ||
 			name == "session.json" || name == "stm.md" || name == "ltm.md" ||
+			name == "acceptance_audit.jsonl" ||
 			name == "evidence_manifest.json" || name == "credentials" ||
 			name == "secrets" || strings.Contains(name, "credential") ||
 			strings.Contains(name, "secret") || strings.Contains(name, "private-key") ||

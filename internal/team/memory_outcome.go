@@ -120,12 +120,11 @@ func (c *Coordinator) recordMemoryOutcomeForTask(item *TodoItem, terminalEvent s
 		}
 	} else if item.VerifyResult != nil && !isVerifySuccess(item.VerifyResult) {
 		signal, direction, evidenceWeight = "verification_failed", "negative", 1
-		causalConfidence = func(use MemoryUseRef) float64 {
-			if c.memoryActionMatches(use.ContextItemID, item) {
-				return 1
-			}
-			return 0
-		}
+		// A failed objective verifier is evidence against every memory the
+		// task actually applied. Restricting this to procedural command
+		// matches lets harmful guidance escape negative credit by being stored
+		// under another memory kind.
+		causalConfidence = func(MemoryUseRef) float64 { return 1 }
 	}
 	c.recordMemoryOutcomeSignal(item, signal, direction, evidenceWeight, causalConfidence)
 	if terminalEvent == "task_completed" && item.Retries > 0 {
