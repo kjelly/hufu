@@ -82,6 +82,18 @@ func (r *ExecutionRouter) Route(ctx context.Context, prompt string, targetTeam s
 		}
 	}
 
+	// A named non-default team is an explicit request for that team's
+	// coordinator and workflow. Do not silently collapse it to its primary
+	// worker based on the wording of a short prompt.
+	if targetTeam != "" && targetTeam != "default" {
+		return RouteDecision{
+			Route:      RouteTeam,
+			Team:       targetTeam,
+			Confidence: 1.0,
+			Reasons:    []string{"explicit non-default agent team requested"},
+		}
+	}
+
 	// 1. Explicit default team requested (--default)
 	if opts.defaultTeam || targetTeam == "default" {
 		teamSignals, tReasons := analyzeTeamSignals(prompt)

@@ -97,6 +97,23 @@ func TestRoute_DefaultTeamHandling(t *testing.T) {
 	}
 }
 
+func TestRoute_ExplicitNonDefaultTeamUsesCoordinator(t *testing.T) {
+	router := NewExecutionRouter(nil, nil)
+	ctx := context.Background()
+
+	origRoute := opts.routeMode
+	defer func() { opts.routeMode = origRoute }()
+	opts.routeMode = "auto"
+
+	dec := router.Route(ctx, "review recent commits", "hufu-code-review")
+	if dec.Route != RouteTeam {
+		t.Fatalf("explicit non-default team route = %s, want %s (reasons: %v)", dec.Route, RouteTeam, dec.Reasons)
+	}
+	if dec.Team != "hufu-code-review" {
+		t.Fatalf("explicit non-default team = %q, want hufu-code-review", dec.Team)
+	}
+}
+
 func TestRoute_CanEscalateToTeam(t *testing.T) {
 	router := NewExecutionRouter(nil, nil)
 	fastDec := RouteDecision{Route: RouteFast, Team: "default"}
