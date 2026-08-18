@@ -129,7 +129,7 @@ func TestPrepareSessionLifecycle_CorruptArchivedSessionStartsInitialPhase(t *tes
 	opts.newSession = true
 	t.Cleanup(func() { opts = original })
 
-	sd, archived, err := prepareSessionLifecycle(session)
+	sd, archived, err := prepareSessionLifecycle(session, false)
 	if err != nil {
 		t.Fatalf("prepare lifecycle: %v", err)
 	}
@@ -145,6 +145,28 @@ func TestPrepareSessionLifecycle_CorruptArchivedSessionStartsInitialPhase(t *tes
 	history, err := filepath.Glob(filepath.Join(workspace, "history", "*.md"))
 	if err != nil || len(history) != 1 {
 		t.Fatalf("archived transcript = %v, err=%v; want one history file", history, err)
+	}
+}
+
+func TestPrepareSessionLifecycle_ForcedFreshDoesNotReuseCheckpoint(t *testing.T) {
+	workspace := t.TempDir()
+	session := &team.TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "fresh-profile-test"}}
+	if err := team.SaveSession(workspace, &team.SessionData{
+		Tasks: []*team.TodoItem{{ID: "old", Agent: "reviewer", Status: team.TaskDone, Output: "old result"}},
+	}); err != nil {
+		t.Fatalf("save prior session: %v", err)
+	}
+
+	original := opts
+	opts.newSession = false
+	t.Cleanup(func() { opts = original })
+
+	sd, _, err := prepareSessionLifecycle(session, true)
+	if err != nil {
+		t.Fatalf("prepare forced-fresh lifecycle: %v", err)
+	}
+	if sd == nil || len(sd.Tasks) != 0 || sd.DelegationPhase != team.DelegationPhaseInitialPending {
+		t.Fatalf("forced-fresh lifecycle reused checkpoint: %#v", sd)
 	}
 }
 

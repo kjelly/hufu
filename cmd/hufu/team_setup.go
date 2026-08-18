@@ -210,7 +210,11 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		team.PruneSessionHistory(session.Workspace, team.MaxSessionHistoryFiles)
 	}
 
-	sessionData, oldSessionEntries, err := prepareSessionLifecycle(session)
+	// A profile that forbids historical task reuse must start from an empty
+	// checkpoint and a new event-store root as well. Otherwise the event-store
+	// projection checker compares this run against an unrelated prior run.
+	profileStartsFreshSession := execProfile.DisableHistoricalTaskReuse
+	sessionData, oldSessionEntries, err := prepareSessionLifecycle(session, profileStartsFreshSession)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +244,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 
 	coordinator.SetExecutionProfile(execProfile)
 	coordinator.SetSessionData(sessionData)
-	coordinator.SetFreshSession(opts.newSession)
+	coordinator.SetFreshSession(opts.newSession || profileStartsFreshSession)
 	if err := applyUnattendedAndBudget(coordinator, session); err != nil {
 		return nil, err
 	}

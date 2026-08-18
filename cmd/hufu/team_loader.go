@@ -52,8 +52,8 @@ func resolveTeamWorkspacePath(teamName string, session *team.TeamSession) error 
 // On success, it returns the SessionData to attach to the coordinator
 // and the (possibly empty) list of old session entries to archive to
 // memory.
-func prepareSessionLifecycle(session *team.TeamSession) (*team.SessionData, []memory.SessionSummaryEntry, error) {
-	if opts.newSession {
+func prepareSessionLifecycle(session *team.TeamSession, forceFresh bool) (*team.SessionData, []memory.SessionSummaryEntry, error) {
+	if opts.newSession || forceFresh {
 		oldSessionEntries := loadOldSessionEntries(session.Workspace)
 		if err := archivePreviousSession(session); err != nil {
 			// Archive failures are non-fatal — the user already gets a warning
