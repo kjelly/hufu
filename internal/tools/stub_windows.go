@@ -3,6 +3,8 @@
 
 package tools
 
+import "charm.land/fantasy"
+
 // Stub implementations for non-Linux/Darwin platforms.
 // Type definitions are in types_common.go shared across all platforms.
 
@@ -64,3 +66,8 @@ func ApplyOptions(opts []ToolOption) ToolConfig {
 	}
 	return cfg
 }
+
+// AllTools is unavailable on platforms without the supported terminal and
+// filesystem implementation. Returning an empty set keeps discovery and
+// cross-platform builds explicit rather than exposing non-functional tools.
+func AllTools(opts ...ToolOption) []fantasy.AgentTool { return nil }
