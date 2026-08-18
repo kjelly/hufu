@@ -45,6 +45,5 @@ func validateTaskOutput(task TaskDef, output string) error {
 			}
 		}
 	}
-
 	return nil
 }
