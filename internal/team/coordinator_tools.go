@@ -204,7 +204,11 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		}
 	}
 	failedTasks := failedTodoItems(todoList.Items())
+	pendingTasks := pendingTodoItems(todoList.Items())
 	prof := t.coordinator.ExecutionProfile()
+	if len(pendingTasks) > 0 {
+		return fantasy.NewTextErrorResponse("cannot finish while worker tasks are unresolved or still running:\n" + formatPendingTasks(pendingTasks) + "\nWait for the workers to reach a terminal state before calling finish."), nil
+	}
 
 	if len(failedTasks) > 0 {
 		if prof.RequireEvidenceManifest || prof.StrictPolicy {
@@ -367,7 +371,7 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	evaluated := EvaluateRunOutcome(RunEvaluationInput{
 		UnresolvedTasks: toTaskReferences(allUnresolved),
 		Acceptance:      acceptanceState,
-		Response:        args.Response,
+		Response:        response,
 		Stats:           SummarizeRunStats(todoList.Items()),
 		Metrics:         t.coordinator.Metrics(),
 		GoalMode:        t.coordinator.GoalMode(),
@@ -381,6 +385,22 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	t.coordinator.finishCalled.Store(true)
 	t.coordinator.coordinatorPolicyRepairPending.Store(false)
 	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
+}
+
+// canonicalFinishedResponse returns the response sealed by finish rather than
+// any prose the model emitted after its successful finish call. Providers may
+// keep streaming a conversational summary after a tool result; that prose is
+// not the coordinator's accepted deliverable and must not replace it in the
+// CLI, persisted conversation, JSON output, or execution report.
+func (c *Coordinator) canonicalFinishedResponse(fallback string) string {
+	fallback = strings.TrimPrefix(fallback, "FINISHED:")
+	if c == nil || !c.finishCalled.Load() {
+		return fallback
+	}
+	if last := c.LastRunResult(); last != nil && strings.TrimSpace(last.Response) != "" {
+		return last.Response
+	}
+	return fallback
 }
 
 func failedTodoItems(items []*TodoItem) []*TodoItem {
@@ -417,6 +437,17 @@ func formatFailedTasks(items []*TodoItem) string {
 			detail = "no failure detail recorded"
 		}
 		fmt.Fprintf(&b, "- Task %s (%s, %s): %s\n", item.ID, item.Agent, item.Status, utils.TruncateString(detail, 1500))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func formatPendingTasks(items []*TodoItem) string {
+	var b strings.Builder
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		fmt.Fprintf(&b, "- Task %s (%s, %s)\n", item.ID, item.Agent, item.Status)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

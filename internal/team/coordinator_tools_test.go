@@ -14,6 +14,21 @@ import (
 	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
+func TestFinishRejectsUnresolvedPendingTasks(t *testing.T) {
+	c := &Coordinator{taskTracker: NewTaskTracker(), sessionData: NewSession(), session: &TeamSession{Config: agent.TeamConfig{Name: "pending-finish"}}}
+	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "still running"}})
+	response, err := (&finishTool{coordinator: c}).Run(context.Background(), fantasy.ToolCall{Input: `{"response":"done"}`})
+	if err != nil {
+		t.Fatalf("finish tool error: %v", err)
+	}
+	if !response.IsError || !strings.Contains(response.Content, "unresolved or still running") {
+		t.Fatalf("finish response = %#v, want pending-task rejection", response)
+	}
+	if c.finishCalled.Load() {
+		t.Fatal("finish marked the run complete despite a pending task")
+	}
+}
+
 func TestFinishWritesCanonicalSessionItemNotSTMInCanonicalMode(t *testing.T) {
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
@@ -53,6 +68,21 @@ func TestFinishWritesCanonicalSessionItemNotSTMInCanonicalMode(t *testing.T) {
 	}
 	if !foundProgress {
 		t.Fatalf("finish did not write a canonical session progress item: %#v", items)
+	}
+}
+
+func TestCanonicalFinishedResponsePrefersSealedFinishResponse(t *testing.T) {
+	c := &Coordinator{}
+	c.finishCalled.Store(true)
+	c.SetLastRunResult(&RunResult{Response: "# Evidence-backed final review"})
+
+	if got := c.canonicalFinishedResponse("FINISHED:brief post-finish narration"); got != "# Evidence-backed final review" {
+		t.Fatalf("canonical finished response = %q, want sealed finish response", got)
+	}
+
+	c.finishCalled.Store(false)
+	if got := c.canonicalFinishedResponse("FINISHED:ordinary result"); got != "ordinary result" {
+		t.Fatalf("unfinished response = %q, want fallback", got)
 	}
 }
 
