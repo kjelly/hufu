@@ -2017,7 +2017,7 @@ func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, 
 func buildRescueFinalSummaryInstruction(task TaskDef) string {
 	var b strings.Builder
 	b.WriteString("You stopped before writing a final message. Do NOT call any tools. ")
-	b.WriteString("Write the complete Markdown final report now. State only findings you can support from the evidence already collected; otherwise explicitly state the coverage limit. Include what you inspected, what you found, and what remains to be done.\n\n")
+	b.WriteString("Write the complete Markdown final report now. Preserve literal range, batch ID, artifact paths, and other task-specific identifiers from the assigned contract. State only findings you can support from the evidence already collected; otherwise explicitly state the coverage limit. Include what you inspected, what you found, and what remains to be done.\n\n")
 	b.WriteString("## Authoritative assigned task contract\n")
 	b.WriteString("The following goal and constraints are the original assignment and must be retained verbatim in the handoff:\n")
 	b.WriteString("Goal: ")
