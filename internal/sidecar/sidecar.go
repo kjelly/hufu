@@ -136,6 +136,11 @@ func (s *Sidecar) init(ctx context.Context) error {
 	s.agent = fantasy.NewAgent(lm,
 		fantasy.WithSystemPrompt(sidecarSystemPrompt),
 		fantasy.WithStopConditions(fantasy.StepCountIs(sidecarMaxSteps)),
+		// Coordinator-owned budgets and recovery policy account for every
+		// sidecar call. Disable Fantasy's transport retries for the same reason
+		// as worker agents: its default exponential backoff can outlive the
+		// enclosing Hufu deadline and hides attempts from that accounting.
+		fantasy.WithMaxRetries(0),
 	)
 	return nil
 }

@@ -870,6 +870,12 @@ func CreateAgent(ctx context.Context, ollama *OllamaProvider, cfg AgentConfig, a
 	opts := []fantasy.AgentOption{
 		fantasy.WithSystemPrompt(cfg.Def.System),
 		fantasy.WithTools(agentTools...),
+		// Hufu owns retries at the task level so it can apply the configured
+		// attempt budget, recovery policy, escalation, and reporting. Fantasy
+		// 0.41 retries failed transports by default with multi-second backoff;
+		// leaving that enabled would hide those attempts and can exceed Hufu's
+		// deadline before the coordinator receives the failure.
+		fantasy.WithMaxRetries(0),
 	}
 
 	if maxTokens := parseModelInt(cfg.Def.Generation.MaxTokens, cfg.TeamConfig.Generation.MaxTokens); maxTokens > 0 {
