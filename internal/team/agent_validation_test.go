@@ -86,6 +86,17 @@ func TestFreeTextResultNeedsSummaryOnlyForInvalidFinalOutput(t *testing.T) {
 	}
 }
 
+func TestPromoteValidatedReadOnlyHandoffRequiresFinalOutput(t *testing.T) {
+	complete := "Read-only task completed with no blocking issue."
+	got := promoteValidatedReadOnlyHandoff(TaskDef{}, "task-7", "reader", complete)
+	if got == nil || got.Status != TaskResultStatusSuccess || got.Source != "promoted_free_text" || got.Details != complete {
+		t.Fatalf("promoted result = %#v, want validated free-text handoff", got)
+	}
+	if got := promoteValidatedReadOnlyHandoff(TaskDef{}, "task-7", "reader", "Let me inspect one more file"); got != nil {
+		t.Fatalf("unfinished output was promoted: %#v", got)
+	}
+}
+
 func TestIncompleteReadOnlyReviewSummaryIsExplicitAndComplete(t *testing.T) {
 	summary := incompleteReadOnlyReviewSummary(20)
 	if !strings.Contains(summary, "incomplete") || !strings.Contains(summary, "20 inspection step") {
