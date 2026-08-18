@@ -1012,7 +1012,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	phaseWorkflow.setRepositoryRoot(c.projectDir)
 	c.phaseWorkflow = phaseWorkflow
 
-	if len(session.Config.Workflow.Phases) == 0 {
+	if shouldWarnPromptWorkflowDeprecation(session) {
 		fmt.Fprintln(os.Stderr, "Warning: prompt-defined workflow constraints are deprecated and will be removed in a future release. Please migrate to runtime-enforced Workflow ExecutionContext.")
 	}
 
@@ -1900,11 +1900,19 @@ func (c *Coordinator) SetExecutionProfile(profile ExecutionProfile) {
 	if c == nil {
 		return
 	}
-	if profile.Name == ProfileDefault && c.session != nil {
+	// A team-level acceptance mode is an explicit contract and must remain
+	// effective even when the team also selects a cache/session profile such as
+	// fresh-session. Previously it only overrode the default profile, so a
+	// blocking acceptance gate silently became advisory under a fresh profile.
+	if c.session != nil {
 		if mode := strings.ToLower(strings.TrimSpace(c.session.Config.AcceptanceMode)); mode != "" {
 			switch AcceptanceMode(mode) {
 			case AcceptanceAdvisory, AcceptanceBlocking:
-				profile.AcceptanceMode = AcceptanceMode(mode)
+				// A strict/unattended profile's blocking default is a safety
+				// floor; a weaker team advisory setting must not downgrade it.
+				if !(AcceptanceMode(mode) == AcceptanceAdvisory && profile.AcceptanceMode == AcceptanceBlocking) {
+					profile.AcceptanceMode = AcceptanceMode(mode)
+				}
 			}
 		}
 	}
