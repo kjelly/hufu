@@ -891,6 +891,10 @@ execution contracts that are easy to break with an apparently local change.
 - **Keep Hufu core integration-independent.** Do not hardcode Pilot paths,
   commands, inventory names, action schemas, or consumer-specific worker names
   in `internal/`. Use generic workflow and `ActionProvider` interfaces.
+- **Keep Hufu core consumer/team-independent.** Put a specific team's prompts,
+  output formats, commands, acceptance criteria, and workflow rules in team
+  configuration or its `verify`/`acceptance` contract. Modify runtime only
+  when the same issue is demonstrably shared by multiple independent consumers.
 - **Protect persistence and artifacts.** Use atomic persistence and existing
   locking mechanisms. Artifact references are opaque/content-addressed IDs,
   not Todo IDs or arbitrary filesystem paths. Redact secrets before writing
