@@ -22,27 +22,6 @@ import (
 	"github.com/kjelly/hufu/internal/utils"
 )
 
-type ConsentResult int
-
-const (
-	ConsentDenied ConsentResult = iota
-	ConsentOnce
-	ConsentAlways
-)
-
-type AgentInfo struct {
-	Name string
-	Task string
-}
-
-type PathConsent struct {
-	mu           sync.Mutex
-	remembered   []string
-	denied       []string
-	currentAgent func() AgentInfo
-	persistPath  string
-}
-
 func NewPathConsent() *PathConsent {
 	return &PathConsent{
 		currentAgent: func() AgentInfo { return AgentInfo{} },
