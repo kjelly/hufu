@@ -459,7 +459,8 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 
 	// A resumed session carries rounds from earlier runs; without this the
 	// saved count restarts at this run's round and understates the session.
-	// When DisableHistoricalTaskReuse is enabled (e.g. fresh-verification),
+	// When DisableHistoricalTaskReuse is enabled (e.g. fresh-session or
+	// fresh-verification),
 	// prior rounds are not inherited so execution starts fresh at round 0.
 	if !prof.DisableHistoricalTaskReuse {
 		c.baseRounds = sd.Rounds
