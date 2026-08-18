@@ -94,22 +94,35 @@ func (c *Coordinator) selectWorkerToolsForTask(def *agent.AgentDef, task TaskDef
 	if def == nil {
 		return nil
 	}
-	return c.filterDeniedWorkerToolsWithGrants(c.filterLegacyMemoryMutationTools(def, agent.SelectTools(c.coreTools, def.Tools)), templateGrantedToolNames(def, task))
+	return c.filterDeniedWorkerToolsWithGrants(c.filterLegacyMemoryMutationTools(def, agent.SelectTools(c.coreTools, def.Tools)), c.taskToolGrants(def, task))
 }
 
-// templateGrantedToolNames returns only a runtime-selected template's narrow
-// grants. A model-supplied execution object has no ContractID and therefore
-// cannot bypass the team deny policy.
-func templateGrantedToolNames(def *agent.AgentDef, task TaskDef) map[string]bool {
-	grants := make(map[string]bool, len(task.Execution.TemplateToolGrants))
-	if def == nil || task.ContractID == "" {
+// taskToolGrants returns only capabilities authorized by a trusted static task
+// contract. Workflow phases normally hide execution tools outside EXECUTE;
+// a bounded contract such as a PREPARE inventory may explicitly require bash
+// to produce a run-scoped artifact. The coordinator cannot forge this grant:
+// the contract ID and agent must match the loaded team definition, and the
+// granted names come from that definition rather than model-authored input.
+func (c *Coordinator) taskToolGrants(def *agent.AgentDef, task TaskDef) map[string]bool {
+	grants := make(map[string]bool)
+	if c == nil || c.session == nil || strings.TrimSpace(task.ContractID) == "" {
 		return grants
 	}
-	for _, name := range task.Execution.TemplateToolGrants {
-		name = strings.TrimSpace(name)
-		if name != "" && agentDeclaresTool(def, name) {
-			grants[name] = true
+	for _, contract := range c.session.ContractTasks {
+		if contract.ID != task.ContractID || !strings.EqualFold(strings.TrimSpace(contract.Agent), strings.TrimSpace(task.Agent)) {
+			continue
 		}
+		// Only a loaded, agent-bound static contract may grant a capability
+		// during PREPARE/AUDIT/VERIFY. A model-authored ContractID or template
+		// grant is otherwise just untrusted task input and must not bypass the
+		// phase gate.
+		for _, name := range contract.Execution.TemplateToolGrants {
+			name = strings.TrimSpace(name)
+			if name != "" && agentDeclaresTool(def, name) {
+				grants[name] = true
+			}
+		}
+		break
 	}
 	return grants
 }
@@ -151,7 +164,7 @@ func (c *Coordinator) filterDeniedWorkerToolsWithGrants(candidate []fantasy.Agen
 			continue
 		}
 		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.State() != PhaseExecute {
-			if executionCapabilityTools[name] {
+			if executionCapabilityTools[name] && !grants[name] {
 				continue
 			}
 		}
@@ -181,7 +194,7 @@ func (c *Coordinator) filterDeniedToolNamesWithGrants(candidate []string, grants
 			continue
 		}
 		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.State() != PhaseExecute {
-			if executionCapabilityTools[name] {
+			if executionCapabilityTools[name] && !grants[name] {
 				continue
 			}
 		}

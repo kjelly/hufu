@@ -1,9 +1,11 @@
 package team
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,9 +17,10 @@ import (
 )
 
 const (
-	taskTranscriptMediaType = "application/x-ndjson"
-	taskTranscriptDir       = "task-output"
-	rawTranscriptOutputName = "raw_transcript"
+	taskTranscriptMediaType  = "application/x-ndjson"
+	taskTranscriptDir        = "task-output"
+	rawTranscriptOutputName  = "raw_transcript"
+	compactEvidenceReadLimit = 64 * 1024
 )
 
 const (
@@ -73,6 +76,77 @@ type taskTranscriptRecord struct {
 	Output     string `json:"output,omitempty"`
 	Error      bool   `json:"error,omitempty"`
 	ExitCode   *int   `json:"exit_code,omitempty"`
+}
+
+// CompactEvidence returns a bounded, redacted text view for a text-only
+// finalization turn.  It never grants transcript access to a worker; the
+// coordinator injects this small excerpt only after the original read-only
+// attempt stopped without a final response.  Keeping the excerpt bounded is
+// essential because replaying a large git diff is exactly what caused the
+// recovery turn to exhaust its context before it could write a report.
+func (t *taskTranscript) CompactEvidence(maxRecords, maxRunes int) string {
+	if t == nil || maxRecords <= 0 || maxRunes <= 0 {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.f != nil {
+		_ = t.f.Sync()
+	}
+	data, err := readTranscriptTail(t.path, compactEvidenceReadLimit)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	type entry struct{ text string }
+	entries := make([]entry, 0, len(lines))
+	for _, line := range lines {
+		var record taskTranscriptRecord
+		if json.Unmarshal([]byte(line), &record) != nil || record.Event != "tool_result" {
+			continue
+		}
+		output := strings.TrimSpace(utils.TruncateRunes(utils.RedactSecrets(record.Output), maxRunes))
+		if output == "" {
+			continue
+		}
+		entries = append(entries, entry{text: fmt.Sprintf("- %s result%s: %s", record.Tool, map[bool]string{true: " (error)"}[record.Error], output)})
+	}
+	if len(entries) > maxRecords {
+		entries = entries[len(entries)-maxRecords:]
+	}
+	var b strings.Builder
+	for _, entry := range entries {
+		b.WriteString(entry.text)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// readTranscriptTail bounds memory used by recovery helpers. NDJSON records
+// are line-oriented, so discard a partial first record after seeking to the
+// requested tail window.
+func readTranscriptTail(path string, limit int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	start := max(int64(0), info.Size()-limit)
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit))
+	if err != nil || start == 0 {
+		return data, err
+	}
+	if newline := bytes.IndexByte(data, '\n'); newline >= 0 {
+		return data[newline+1:], nil
+	}
+	return nil, nil
 }
 
 func newTaskTranscript(workspace, todoID, runID string) (*taskTranscript, error) {

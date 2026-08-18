@@ -109,6 +109,11 @@ type RecoveryDecisionInput struct {
 	// true — the resolved recovery policy permits retrying after a protocol
 	// repair failure (path 2).
 	ProtocolRepairRetry bool
+	// ProtocolRetrySafe is true only when the failed protocol attempt is
+	// independently proven to have used observation-only tools. It permits a
+	// normal bounded worker retry after result-only repair fails without
+	// weakening the default fail-closed protocol disposition.
+	ProtocolRetrySafe bool
 }
 
 // isRepeatedFailure derives repeat detection from the fingerprint inputs
@@ -185,6 +190,9 @@ func DecideRecovery(in RecoveryDecisionInput) (RetryDisposition, string) {
 	case FailurePolicy:
 		return ReplanRequired, "policy failure requires replan"
 	case FailureProtocol:
+		if in.ProtocolRetrySafe && in.Replayable && in.ProtocolRepairRetry {
+			break
+		}
 		return ReconcileOnly, "protocol failure requires result-only repair; worker tools must not be replayed"
 	case FailureTimeout:
 		if nonReplayableSideEffect(in.SideEffect) {

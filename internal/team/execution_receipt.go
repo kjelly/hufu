@@ -98,6 +98,7 @@ type ResultHandoffState string
 
 const (
 	ResultHandoffSubmitted                  ResultHandoffState = "submitted"
+	ResultHandoffPromotedFreeText           ResultHandoffState = "promoted_free_text"
 	ResultHandoffMissingAfterSafeDenial     ResultHandoffState = "missing_after_safe_denial"
 	ResultHandoffMissingAfterPossibleEffect ResultHandoffState = "missing_after_possible_side_effect"
 	ResultHandoffBudgetExhausted            ResultHandoffState = "budget_exhausted"

@@ -562,6 +562,14 @@ retryLoop:
 			taskCtx = context.WithValue(taskCtx, attemptBudgetKey{}, attemptTokens)
 			taskCtx = context.WithValue(taskCtx, tools.AgentNameKey, agentName)
 			taskCtx = context.WithValue(taskCtx, workerStepBudgetKey{}, stepBudget)
+			// Read-only teams that explicitly opt into free-text handoffs must
+			// still get a usable final budget step.  Their contract deliberately
+			// has no submit_result tool, so the terminal step below closes every
+			// tool and asks for Markdown rather than exposing an impossible
+			// submit_result-only interface.
+			if c.allowsFreeTextWorkerResult(task) {
+				taskCtx = context.WithValue(taskCtx, workerFreeTextFinalizationKey{}, true)
+			}
 			taskCtx = context.WithValue(taskCtx, tools.ToolExecutionDispositionReporterKey, newToolDispositionReporter(attemptDispositions, resolvedSideEffect, runID, todoID, attempt))
 			// Let a poller see whether the process it is waiting on is still
 			// alive. Without this a wait on a terminal that has already exited
@@ -659,15 +667,22 @@ retryLoop:
 				// scratch. Requires-result workers instead receive the dedicated
 				// result-only finalization turn below, where submit_result is the
 				// sole exposed tool.
-				if rescued := c.rescueFinalSummary(taskCtx, ag, agentName, agentDef, resolvedModel, steps, timing); rescued != "" {
+				if rescued := c.rescueFinalSummary(taskCtx, ag, agentName, agentDef, resolvedModel, task, steps, timing); rescued != "" && validateTaskOutput(task, rescued) == nil {
 					output = rescued
 				} else if c.allowsFreeTextWorkerResult(task) {
 					// This is an explicitly opted-in, read-only review task. Its
 					// transcript remains the evidence, while this deterministic
 					// result makes the limitation visible to the coordinator without
-					// inventing a success claim or failing the entire review solely
-					// because a provider returned no final text.
+					// inventing a success claim. It is deliberately still a failed
+					// attempt: a coverage-limited handoff cannot be marked done or
+					// become eligible for the coordinator's success-only dispatch
+					// protections. The normal retry policy decides whether the worker
+					// gets another attempt.
 					output = incompleteReadOnlyReviewSummary(len(steps))
+					err = withFailureClassOverride(
+						errors.New("free-text worker produced an incomplete review handoff; retry is required before accepting the task"),
+						FailureExecution,
+					)
 				}
 			}
 		}()
@@ -927,6 +942,25 @@ retryLoop:
 								FailureReason:   repairReason,
 							})
 						}
+						// A read-only worker may produce a complete Markdown handoff in
+						// its final assistant message but omit the typed tool call. Promote
+						// only when the runtime can prove the attempt used observation-only
+						// tools and the declared evidence contract validates the full text.
+						// This preserves the typed-result/report pipeline without allowing
+						// an incomplete or mutating free-text claim to become success.
+						if !repairSuccess && !reclassifyExecution && typedRes == nil &&
+							resolvedSideEffect == SideEffectNone && protocolAttemptWasReadOnly(steps) {
+							if promoted := promoteValidatedReadOnlyHandoff(task, todoID, agentName, output); promoted != nil {
+								c.storeSubmittedTaskResult(todoID, promoted)
+								typedRes = promoted
+								repairSuccess = true
+								repairReason = ""
+								last := &repairAttempts[len(repairAttempts)-1]
+								last.Success = true
+								last.FailureReason = ""
+								last.SubmittedResult = promoted
+							}
+						}
 						receipt.FinishedAt = time.Now()
 						receipt.RepairProvenance = &RepairProvenance{
 							Attempted:       true,
@@ -937,7 +971,11 @@ retryLoop:
 							History:         repairAttempts,
 						}
 						if repairSuccess {
-							receipt.HandoffState = ResultHandoffSubmitted
+							if typedRes != nil && typedRes.Source == "promoted_free_text" {
+								receipt.HandoffState = ResultHandoffPromotedFreeText
+							} else {
+								receipt.HandoffState = ResultHandoffSubmitted
+							}
 							c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("protocol repair succeeded for task %s after %d attempt(s)", todoID, len(repairAttempts))).withTodoID(todoID))
 						} else {
 							receipt.RepairProvenance.FailureReason = repairReason
@@ -1184,6 +1222,7 @@ retryLoop:
 			ContextCancelled:    parentCtx.Err() != nil,
 			Replayable:          CanAutomaticallyReplay(task),
 			ProtocolRepairRetry: c.protocolRepairAllowsRetry(task),
+			ProtocolRetrySafe:   protocolFailure && resolvedSideEffect == SideEffectNone && protocolAttemptWasReadOnly(steps),
 		}
 		disposition, reason := DecideRecovery(recoveryInput)
 		if policyDenialRepairExhausted {
@@ -1439,6 +1478,27 @@ func acceptsIncompleteReadOnlyAnalysis(task TaskDef, sideEffect SideEffectClass,
 		return false
 	}
 	return protocolAttemptWasReadOnly(steps)
+}
+
+// promoteValidatedReadOnlyHandoff turns a complete final assistant message
+// into a typed result only at the protocol boundary. It is deliberately
+// limited to callers that already proved every worker tool was read-only; a
+// mutating task must never get a success result merely because its prose looks
+// complete. validateTaskOutput enforces the task-declared scope/evidence
+// contract, including literal review range, batch, and required sections.
+func promoteValidatedReadOnlyHandoff(task TaskDef, todoID, agentName, output string) *TaskResult {
+	if strings.TrimSpace(output) == "" || validateTaskOutput(task, output) != nil {
+		return nil
+	}
+	result := ParseFreeTextResult(output)
+	result.TaskID = todoID
+	result.Agent = agentName
+	result.Status = TaskResultStatusSuccess
+	result.Source = "promoted_free_text"
+	result.Confidence = 0.75
+	result.Summary = "Validated read-only Markdown handoff promoted by runtime."
+	result.Details = output
+	return result
 }
 
 // executeRuntimeAction gives provider-backed actions the same durable TODO
@@ -1891,13 +1951,17 @@ func freeTextResultNeedsSummary(task TaskDef, output string) bool {
 }
 
 func incompleteReadOnlyReviewSummary(stepCount int) string {
-	return fmt.Sprintf("Review evidence is incomplete: the read-only worker used %d inspection step(s) but the provider returned no final report. The task transcript preserves the inspected commands and outputs; treat this reviewer as inconclusive rather than as evidence of no findings.", stepCount)
+	return fmt.Sprintf("Task evidence is incomplete: the read-only worker used %d inspection step(s) but the provider returned no final report. The task transcript preserves the inspected commands and outputs; treat this task as inconclusive rather than as a successful result.", stepCount)
 }
 
 // rescueFinalSummary gives an agent that stopped without a final message one
-// genuinely tool-free turn (its full step history attached) to summarize what
-// it did. Returns "" when the rescue itself fails or produces nothing.
-func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, agentName string, agentDef *agent.AgentDef, resolvedModel string, steps []fantasy.StepResult, timing *taskTiming) string {
+// genuinely tool-free turn to summarize what it did.  It deliberately does
+// not replay the full step history: a large diff can consume the entire
+// context window before the model sees the final-report instruction, and old
+// tool-call messages can tempt it to call tools that this rescue does not
+// expose.  The compact tool inventory preserves an honest coverage boundary
+// without turning the recovery turn into another inspection round.
+func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, agentName string, agentDef *agent.AgentDef, resolvedModel string, task TaskDef, steps []fantasy.StepResult, timing *taskTiming) string {
 	if ctx.Err() != nil {
 		return ""
 	}
@@ -1925,22 +1989,62 @@ func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, 
 	// directly in the no-progress budget.
 	ctx = context.WithValue(ctx, llmUsageReceiptExpectedKey{}, false)
 	ctx = context.WithValue(ctx, tools.AgentToolsAllowedKey, []string{})
-	var history []fantasy.Message
-	for _, step := range steps {
-		history = append(history, step.Messages...)
-	}
 	c.report(c.newEvent("step").withAgent(agentName).withMessage("agent stopped without a final message; requesting a summary turn"))
-	rescuePrompt, prepareErr := c.prepareAuxiliaryPrompt(ctx, "final_summary_repair", "You stopped before writing a final message (the step limit was likely reached). Do NOT call any tools. Based on the work above, write your final report now: what you did, what you found (including partial results and errors), and what remains to be done.")
+	rescuePrompt, prepareErr := c.prepareAuxiliaryPrompt(ctx, "final_summary_repair", buildRescueFinalSummaryInstruction(task))
 	if prepareErr != nil {
 		return ""
 	}
+	rescuePrompt += freeTextFinalSummaryEvidence(steps)
+	if transcript, _ := ctx.Value(taskTranscriptKey{}).(*taskTranscript); transcript != nil {
+		if excerpt := transcript.CompactEvidence(8, 500); excerpt != "" {
+			rescuePrompt += "\n## Bounded transcript excerpts\nUse these as concrete evidence where applicable; do not invent details beyond them.\n" + excerpt
+		}
+	}
 	summary, _, err := c.runAgentWithStatusAndHistory(ctx, ag, agentName,
 		rescuePrompt,
-		history, timing, fantasy.StepCountIs(1))
+		nil, timing, fantasy.StepCountIs(1))
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(summary)
+}
+
+// buildRescueFinalSummaryInstruction preserves the task contract when a
+// worker reaches its step budget and is moved to the tool-free rescue turn.
+// The normal conversation may have been compacted by then; omitting this
+// contract makes the rescue model unable to identify the assigned batch or
+// literal range and it will (correctly) report that its evidence is unusable.
+func buildRescueFinalSummaryInstruction(task TaskDef) string {
+	var b strings.Builder
+	b.WriteString("You stopped before writing a final message. Do NOT call any tools. ")
+	b.WriteString("Write the complete Markdown final report now. State only findings you can support from the evidence already collected; otherwise explicitly state the coverage limit. Include what you inspected, what you found, and what remains to be done.\n\n")
+	b.WriteString("## Authoritative assigned task contract\n")
+	b.WriteString("The following goal and constraints are the original assignment and must be retained verbatim in the handoff:\n")
+	b.WriteString("Goal: ")
+	b.WriteString(strings.TrimSpace(task.Goal))
+	b.WriteByte('\n')
+	if constraints := strings.TrimSpace(task.Constraints); constraints != "" {
+		b.WriteString("Constraints: ")
+		b.WriteString(constraints)
+		b.WriteByte('\n')
+	}
+	b.WriteString("Respect any output requirements declared by that contract. Do not replace task-specific details with a generic summary.\n")
+	return b.String()
+}
+
+func freeTextFinalSummaryEvidence(steps []fantasy.StepResult) string {
+	var names []string
+	for _, step := range steps {
+		for _, call := range step.Content.ToolCalls() {
+			if name := strings.TrimSpace(call.ToolName); name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	if len(names) == 0 {
+		return "\n\n## Bounded execution evidence\nNo tool calls were recorded. Do not claim that the assigned review was completed.\n"
+	}
+	return "\n\n## Bounded execution evidence\nThe earlier read-only attempt used these tools: " + strings.Join(names, ", ") + ". Raw calls and outputs remain in the task transcript; they are not available tools in this final response.\n"
 }
 
 func isTaskTimeout(err error) bool {
@@ -2086,6 +2190,12 @@ type workerStepBudgetKey struct{}
 
 type workerStepBudgetTerminalOnlyKey struct{}
 
+// workerFreeTextFinalizationKey marks the narrow compatibility mode in which
+// a read-only worker is expected to finish in prose rather than submit a typed
+// result.  It is set only after allowsFreeTextWorkerResult verifies both the
+// team opt-in and side_effect:none boundary.
+type workerFreeTextFinalizationKey struct{}
+
 // agentToolNames returns the concrete names in the exact tool slice handed to
 // a model. It deliberately does not call SelectTools or consult frontmatter:
 // callers must pass the completed invocation slice, after MCP and protocol
@@ -2163,7 +2273,7 @@ func (c *Coordinator) withEffectiveToolsAllowedForTask(ctx context.Context, def 
 	}
 	// Runtime authorization is derived from the final concrete model surface.
 	// Empty and "all" declarations are selection inputs, never hidden grants.
-	allowed = c.filterDeniedToolNamesWithGrants(allowed, templateGrantedToolNames(def, task))
+	allowed = c.filterDeniedToolNamesWithGrants(allowed, c.taskToolGrants(def, task))
 	// The concrete model surface is authoritative for compatibility aliases.
 	// Remove hidden aliases from the declared union so a forged call cannot
 	// invoke a default-disabled implementation through the stream gate.
@@ -2329,18 +2439,32 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			budget := c.ContextCompiler().CalculateBudget(spec, 0, 0)
 			preparedMessages := opts.Messages
 			stepBudget, hasStepBudget := ctx.Value(workerStepBudgetKey{}).(int)
+			freeTextFinalization, _ := ctx.Value(workerFreeTextFinalizationKey{}).(bool)
 			stepBudgetCheckpoint := ""
 			terminalOnly := false
 			if hasStepBudget && stepBudget > 0 {
 				remaining := stepBudget - opts.StepNumber
+				// Reserve the same final 20% window used for the checkpoint as a
+				// genuine finalization grace period.  A three-step tail on a
+				// forty-step review is too small for a model to stop exploring,
+				// consolidate evidence, and emit a Markdown handoff; in practice
+				// workers reached the cap and rescue lost the task contract.
 				checkpointAt := max(1, (stepBudget+4)/5)
-				wrapUpAt := max(1, (stepBudget+19)/20)
+				wrapUpAt := checkpointAt
 				if remaining == checkpointAt {
-					stepBudgetCheckpoint = "\n\n## Step Budget Checkpoint\nYou have reached the final 20% of the tool-step budget. Stop expanding exploration, consolidate the evidence you already have, and prepare an accurate submit_result.\n"
+					if freeTextFinalization {
+						stepBudgetCheckpoint = "\n\n## Step Budget Checkpoint\nYou have reached the final 20% of the tool-step budget. Stop expanding exploration, consolidate the evidence you already have, and prepare your complete Markdown final response.\n"
+					} else {
+						stepBudgetCheckpoint = "\n\n## Step Budget Checkpoint\nYou have reached the final 20% of the tool-step budget. Stop expanding exploration, consolidate the evidence you already have, and prepare an accurate submit_result.\n"
+					}
 				}
 				if remaining <= wrapUpAt {
 					terminalOnly = true
-					stepBudgetCheckpoint = "\n\n## Step Budget Wrap-up\nReason code: step_budget_wrap_up. Do not make any new inspection calls. Call submit_result now with the evidence already collected.\n"
+					if freeTextFinalization {
+						stepBudgetCheckpoint = "\n\n## Step Budget Wrap-up\nReason code: step_budget_wrap_up. Do not make any new inspection calls. Write your complete Markdown final response now using the evidence already collected.\n"
+					} else {
+						stepBudgetCheckpoint = "\n\n## Step Budget Wrap-up\nReason code: step_budget_wrap_up. Do not make any new inspection calls. Call submit_result now with the evidence already collected.\n"
+					}
 				}
 			}
 			if stepBudgetCheckpoint != "" {
@@ -2373,9 +2497,17 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			if messagesCapped || terminalOnly || stepBudgetCheckpoint != "" {
 				result := fantasy.PrepareStepResult{Messages: preparedMessages}
 				if terminalOnly {
-					ctx = context.WithValue(ctx, workerStepBudgetTerminalOnlyKey{}, true)
-					result.ActiveTools = []string{submitResultToolName}
-					c.report(c.newEvent("step").withAgent(agentName).withTodoID(todoID).withMessage("step_budget_wrap_up: terminal handoff tools only"))
+					if freeTextFinalization {
+						// An empty active-tool set is intentional: it gives the model a
+						// final text-only turn without advertising a result tool that
+						// this compatibility mode does not expose.
+						result.ActiveTools = []string{}
+						c.report(c.newEvent("step").withAgent(agentName).withTodoID(todoID).withMessage("step_budget_wrap_up: final Markdown response only"))
+					} else {
+						ctx = context.WithValue(ctx, workerStepBudgetTerminalOnlyKey{}, true)
+						result.ActiveTools = []string{submitResultToolName}
+						c.report(c.newEvent("step").withAgent(agentName).withTodoID(todoID).withMessage("step_budget_wrap_up: terminal handoff tools only"))
+					}
 				}
 				return ctx, result, nil
 			}
@@ -2560,10 +2692,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			// given a directory) without restarting an otherwise successful run.
 			if todoID == CoordTodoID && isErrResult {
 				trimmedResult := strings.TrimSpace(resultPreview)
-				if strings.HasPrefix(trimmedResult, coordinatorPolicyRepairExhaustedPrefix) {
+				if strings.Contains(trimmedResult, coordinatorPolicyRepairExhaustedPrefix) {
 					return fmt.Errorf("%w: %s", errCoordinatorPolicyRepairExhausted, trimmedResult)
 				}
-				if isCoordinatorPolicyRepairResult(trimmedResult) ||
+				if c.coordinatorPolicyRepairPending.Load() ||
+					isCoordinatorPolicyRepairResult(trimmedResult) ||
 					strings.HasPrefix(trimmedResult, "Tool argument schema violation:") ||
 					c.isInitialToolCorrectionResult(tr.ToolName, trimmedResult) ||
 					isReadOnlyToolCall(tr.ToolName, callInput) {

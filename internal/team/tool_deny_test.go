@@ -38,6 +38,28 @@ func TestTeamToolDenyRemovesAlwaysIncludedStateWriters(t *testing.T) {
 	}
 }
 
+func TestStaticPhaseContractCanGrantDeclaredPrepareTool(t *testing.T) {
+	def := &agent.AgentDef{Name: "inventory", Tools: "view,bash"}
+	task := TaskDef{Agent: "inventory", ContractID: "inventory", Execution: ExecutionContract{ToolSequence: []string{"bash", "submit_result"}, TemplateToolGrants: []string{"bash"}}}
+	session := &TeamSession{ContractTasks: []TaskDef{{ID: "inventory", Agent: "inventory", Execution: task.Execution}}}
+	workflow := &runtimeWorkflow{enabled: true, state: PhasePrepare}
+	c := &Coordinator{session: session, phaseWorkflow: workflow, coreTools: agent.BuildAllAgentTools(t.TempDir())}
+
+	toolsForTask := agentToolNames(c.selectWorkerToolsForTask(def, task))
+	if !slices.Contains(toolsForTask, "bash") {
+		t.Fatalf("trusted prepare contract lost declared bash capability: %v", toolsForTask)
+	}
+	allowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowedForTask(t.Context(), def, toolsForTask, task))
+	if !slices.Contains(allowed, "bash") {
+		t.Fatalf("trusted prepare contract was not reflected in runtime allowlist: %v", allowed)
+	}
+
+	forged := TaskDef{Agent: "inventory", ContractID: "forged", Execution: task.Execution}
+	if got := agentToolNames(c.selectWorkerToolsForTask(def, forged)); slices.Contains(got, "bash") {
+		t.Fatalf("untrusted contract bypassed phase capability gate: %v", got)
+	}
+}
+
 func TestContextToolsRequireExplicitDeclarationAndRemainForceMCPCompatible(t *testing.T) {
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{}}, forceMCP: true}
 	c.coreTools = []fantasy.AgentTool{&contextQueryTool{coordinator: c}, &contextGetTool{coordinator: c}}
