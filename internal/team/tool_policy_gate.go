@@ -64,7 +64,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	// Enforce it before authorization or handler execution so every mutation
 	// capable tool is denied consistently, including handlers that do not
 	// inspect the marker themselves.
-	if readOnly, _ := ctx.Value(tools.AgentReadOnlyExecutionKey).(bool); readOnly && readOnlyToolMutation(t.Info().Name) {
+	if readOnly, _ := ctx.Value(tools.AgentReadOnlyExecutionKey).(bool); readOnly && readOnlyToolMutation(t.Info().Name, call.Input) {
 		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
 			Kind:       "policy_denied",
 			ReasonCode: "read_only_tool_denied",
@@ -176,6 +176,13 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	call.Input = effectiveInput
 	response, err := t.inner.Run(ctx, call)
 	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID && (err != nil || response.IsError) {
+		// A rejected delegation is deliberately returned as an error response so
+		// the model sees the violation.  The coordinator owns the pending bit;
+		// preserve this one runtime-issued recovery path instead of turning it
+		// back into a terminal transport error before the stream can consume it.
+		if t.Info().Name == "agent" && t.coordinator != nil && t.coordinator.coordinatorPolicyRepairPending.Load() && err == nil {
+			return response, nil
+		}
 		if isReadOnlyToolCall(t.Info().Name, call.Input) {
 			// A failed observation has no side effect and its error is useful
 			// evidence to the coordinator (for example, view was given a
@@ -217,9 +224,17 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	return response, err
 }
 
-func readOnlyToolMutation(name string) bool {
+func readOnlyToolMutation(name, input string) bool {
 	name = strings.TrimSpace(strings.ToLower(name))
-	if tools.IsReadOnlyObservationTool(name) || name == "submit_result" || name == "submit_plan" || name == "finish" {
+	if name == "bash" {
+		var args struct {
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal([]byte(input), &args); err == nil && tools.IsReadOnlyBashCommand(args.Command) {
+			return false
+		}
+	}
+	if (tools.IsReadOnlyObservationTool(name) && name != "bash") || name == "submit_result" || name == "submit_plan" || name == "finish" {
 		return false
 	}
 	return true

@@ -56,14 +56,20 @@ func gateTestCoordinator() *Coordinator {
 
 func TestReadOnlyPolicyDeniesEveryMutationCapability(t *testing.T) {
 	for _, name := range []string{"write", "edit", "multiedit", "sudo", "ssh", "scp", "fetch", "agentic_fetch", "terminal_write"} {
-		if !readOnlyToolMutation(name) {
+		if !readOnlyToolMutation(name, "") {
 			t.Errorf("readOnlyToolMutation(%q) = false, want true", name)
 		}
 	}
-	for _, name := range []string{"bash", "view", "grep", "glob", "ls", "math", "finish"} {
-		if readOnlyToolMutation(name) {
+	for _, name := range []string{"view", "grep", "glob", "ls", "math", "finish"} {
+		if readOnlyToolMutation(name, "") {
 			t.Errorf("readOnlyToolMutation(%q) = true, want false", name)
 		}
+	}
+	if !readOnlyToolMutation("bash", `{"command":"git diff --stat > out"}`) {
+		t.Fatal("malformed/unknown bash input must remain mutation-capable until its command is validated")
+	}
+	if readOnlyToolMutation("bash", `{"command":"sed -n '1,20p' internal/team/coordinator.go"}`) {
+		t.Fatal("read-only bash inspection must be allowed for side_effect:none tasks")
 	}
 }
 
@@ -237,6 +243,21 @@ func TestPolicyGateCoordinatorDispatchErrorResponseIsTerminal(t *testing.T) {
 	}
 	if !inner.ran {
 		t.Fatal("inner tool should have run before its rejected delegation response")
+	}
+}
+
+func TestPolicyGateCoordinatorPolicyRepairResponseIsRecoverable(t *testing.T) {
+	c := gateTestCoordinator()
+	c.taskTracker = NewTaskTracker()
+	c.coordinatorPolicyRepairPending.Store(true)
+	inner := &recordingTool{name: "agent", resp: fantasy.NewTextErrorResponse(coordinatorPolicyRepairPrefix + "\nAttempt 1/2")}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"agent"})
+	ctx = context.WithValue(ctx, todoIDKey{}, CoordTodoID)
+
+	response, err := gated.Run(ctx, fantasy.ToolCall{ID: "policy-repair", Name: "agent"})
+	if err != nil || !response.IsError || !strings.Contains(response.Content, coordinatorPolicyRepairPrefix) {
+		t.Fatalf("policy repair response = %#v, err=%v; want recoverable error response", response, err)
 	}
 }
 
