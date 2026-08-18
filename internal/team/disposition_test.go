@@ -91,6 +91,28 @@ func TestDecideRecovery_FiveEarlyBreakPaths(t *testing.T) {
 	}
 }
 
+func TestDecideRecovery_AllowsBoundedReplayAfterProvenReadOnlyProtocolFailure(t *testing.T) {
+	in := RecoveryDecisionInput{
+		FailureClass:        FailureProtocol,
+		ProtocolFailure:     true,
+		ProtocolRetrySafe:   true,
+		Replayable:          true,
+		ProtocolRepairRetry: true,
+		EvidenceComplete:    true,
+		RecoveryPolicy:      RecoveryRetry,
+		Attempt:             1,
+		MaxRetries:          3,
+	}
+	if got, reason := DecideRecovery(in); got != RetryWorker || reason == "" {
+		t.Fatalf("safe protocol recovery = (%q, %q), want RetryWorker with reason", got, reason)
+	}
+
+	in.ProtocolRetrySafe = false
+	if got, _ := DecideRecovery(in); got != ReconcileOnly {
+		t.Fatalf("unproven protocol recovery = %q, want ReconcileOnly", got)
+	}
+}
+
 // TestDecideRecovery_ClassBasedDisposition verifies the §5 failure-class →
 // disposition mapping for replayable tasks where none of the five early-break
 // paths trigger.
