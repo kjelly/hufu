@@ -28,7 +28,12 @@ func (c *Coordinator) contextRunID() string {
 
 func taskContextPhase(task TaskDef) Phase {
 	if task.Phase != "" {
-		return task.Phase
+		// Task phases originate in team YAML and may be lower-case even when
+		// no runtime workflow is enabled to normalize the task first. Context
+		// requests use the canonical Phase enum (upper-case); passing the raw
+		// YAML value makes an otherwise valid prepare/audit task fail preflight
+		// with "invalid context phase" before the worker can run.
+		return Phase(strings.ToUpper(strings.TrimSpace(string(task.Phase))))
 	}
 	return PhaseExecute
 }

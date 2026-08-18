@@ -106,6 +106,17 @@ func TestTaskContextRequestUsesIsolatedModelExecutionIdentity(t *testing.T) {
 	}
 }
 
+func TestTaskContextRequestNormalizesConfigPhase(t *testing.T) {
+	c := &Coordinator{executionRunID: "run-1"}
+	r := c.newTaskContextRequest(TaskDef{Agent: "inventory", Goal: "prepare", Phase: Phase("prepare")}, "task-1", 1, ContextTriggerTaskDispatch, "inventory", "worker", nil)
+	if r.Phase != PhasePrepare {
+		t.Fatalf("context phase = %q, want %q", r.Phase, PhasePrepare)
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("normalized prepare context request should validate: %v", err)
+	}
+}
+
 func TestCoordinatorContextRequestUsesExplicitPurpose(t *testing.T) {
 	c := &Coordinator{executionRunID: "run-1"}
 	start := c.newCoordinatorContextRequest("coordinate", false, 1)
