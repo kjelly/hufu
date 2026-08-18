@@ -283,7 +283,7 @@ type TaskResult struct {
 	MemoryUses         []MemoryUseRef                   `json:"memory_uses,omitempty"`
 
 	Confidence float64 `json:"confidence"`
-	Source     string  `json:"source"` // "submitted" or "parsed_free_text"
+	Source     string  `json:"source"` // "submitted", "promoted_free_text", or "parsed_free_text"
 }
 
 const (
