@@ -212,3 +212,29 @@ func TestLatestRunTodosExcludesOnlyReceiptProvenHistoricalTasks(t *testing.T) {
 		t.Fatalf("latest-run report separation failed:\n%s", report)
 	}
 }
+
+func TestBuildReviewReportMovesDiagnosticsToAppendix(t *testing.T) {
+	report := buildReportMD(&reportData{
+		StartedAt:   time.Now(),
+		STM:         "stale model observation",
+		TaskHistory: map[string]string{"reviewer": "transcript"},
+		RunResult:   &team.RunResult{CompletedReview: true},
+	}, "review", "VERDICT: PASS")
+	for _, want := range []string{"## Appendix: Session Context (STM)", "## Appendix: Agent Task Transcripts"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("review report missing %q:\n%s", want, report)
+		}
+	}
+}
+
+func TestBuildReviewReportFreshSessionOmitsHistoricalTaskTranscripts(t *testing.T) {
+	report := buildReportMD(&reportData{
+		StartedAt:       time.Now(),
+		TaskHistory:     map[string]string{"reviewer": "old policy repair failure"},
+		ResolvedProfile: team.ExecutionProfile{DisableHistoricalTaskReuse: true},
+		RunResult:       &team.RunResult{CompletedReview: true},
+	}, "review", "VERDICT: PASS")
+	if strings.Contains(report, "## Appendix: Agent Task Transcripts") || strings.Contains(report, "old policy repair failure") {
+		t.Fatalf("fresh-session report included historical task transcript:\n%s", report)
+	}
+}

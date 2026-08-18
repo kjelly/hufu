@@ -464,13 +464,24 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	}
 
 	if data.STM != "" {
-		b.WriteString("## Session Context (STM)\n\n")
+		if data.RunResult != nil && data.RunResult.CompletedReview {
+			b.WriteString("## Appendix: Session Context (STM)\n\n")
+		} else {
+			b.WriteString("## Session Context (STM)\n\n")
+		}
 		b.WriteString(data.STM)
 		b.WriteString("\n\n---\n\n")
 	}
 
-	if len(data.TaskHistory) > 0 {
-		b.WriteString("## Agent Task Details\n\n")
+	// A fresh session must not reintroduce prior-run diagnostics through the
+	// report appendix. The current run is represented by its task summary and
+	// sealed final result; task transcripts on disk are not run-scoped.
+	if len(data.TaskHistory) > 0 && !data.ResolvedProfile.DisableHistoricalTaskReuse {
+		if data.RunResult != nil && data.RunResult.CompletedReview {
+			b.WriteString("## Appendix: Agent Task Transcripts\n\n")
+		} else {
+			b.WriteString("## Agent Task Details\n\n")
+		}
 		agentNames := make([]string, 0, len(data.TaskHistory))
 		for name := range data.TaskHistory {
 			agentNames = append(agentNames, name)
