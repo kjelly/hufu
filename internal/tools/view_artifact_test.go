@@ -56,3 +56,24 @@ func TestViewRequiresExactlyOneSource(t *testing.T) {
 		}
 	}
 }
+
+func TestViewArtifactAcceptsBoundedReviewDiff(t *testing.T) {
+	const payloadSize = 200 * 1024
+	payload := strings.Repeat("diff --git a/file.go b/file.go\n", payloadSize/30)
+	response, err := executeView(context.Background(), fantasy.ToolCall{
+		Input: `{"artifact_ref":"review-diff"}`,
+	}, t.TempDir(), ToolConfig{
+		ArtifactOpener: func(_ context.Context, ref string) (io.ReadCloser, error) {
+			if ref != "review-diff" {
+				t.Fatalf("artifact ref=%q", ref)
+			}
+			return io.NopCloser(strings.NewReader(payload)), nil
+		},
+	})
+	if err != nil || response.IsError {
+		t.Fatalf("bounded review diff was rejected: response=%#v err=%v", response, err)
+	}
+	if !strings.Contains(response.Content, "diff --git") {
+		t.Fatalf("review diff content missing: %q", response.Content[:min(len(response.Content), 80)])
+	}
+}

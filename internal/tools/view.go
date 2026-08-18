@@ -16,7 +16,10 @@ import (
 	"charm.land/fantasy"
 )
 
-const maxViewSize = 100 * 1024
+// maxViewSize bounds a single artifact/file read while allowing the review
+// runtime's bounded diff partitions to be consumed as one complete evidence
+// object. Callers can still use offset/limit for larger files.
+const maxViewSize = 512 * 1024
 const defaultViewLimit = 2000
 const maxLineLength = 2000
 
