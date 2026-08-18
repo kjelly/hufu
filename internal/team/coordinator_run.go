@@ -782,15 +782,48 @@ func (c *Coordinator) buildOrchestratorToolsFor(orchDef *agent.AgentDef) []fanta
 // the diagnostic boundary.
 func (c *Coordinator) restrictInitialCoordinatorTools(candidate []fantasy.AgentTool) []fantasy.AgentTool {
 	want := c.initialCoordinatorToolName()
-	if want == "" {
+	if want == "" || c.hasCoordinatorTasks() {
 		return candidate
 	}
+
+	// A coordinator model stream can continue after the initial agent call;
+	// Fantasy does not replace its tool schema mid-stream. Keep the required
+	// first tool plus harmless observation tools exposed from the start so the
+	// coordinator can inspect the run-scoped handoff immediately after the
+	// initial worker returns. initialCoordinatorToolDenial still rejects every
+	// non-first call while the task list is empty, so exposure does not weaken
+	// the ordering contract.
+	filtered := make([]fantasy.AgentTool, 0, len(candidate))
 	for _, tool := range candidate {
-		if tool != nil && tool.Info().Name == want {
-			return []fantasy.AgentTool{tool}
+		if tool == nil {
+			continue
+		}
+		name := tool.Info().Name
+		if name == want || coordinatorInitialReadOnlyTools[name] {
+			filtered = append(filtered, tool)
 		}
 	}
-	return nil
+	return filtered
+}
+
+// hasCoordinatorTasks reports whether the initial delegation has already
+// created a canonical TODO. Tool schemas are fixed for a model stream, so the
+// initial first-tool restriction must be removed when the stream continues
+// after that delegation; otherwise terminal tools such as finish remain
+// invisible and the coordinator can never close the run.
+func (c *Coordinator) hasCoordinatorTasks() bool {
+	return c != nil && c.taskTracker != nil && c.taskTracker.TodoList() != nil && len(c.taskTracker.TodoList().Items()) > 0
+}
+
+// coordinatorInitialReadOnlyTools are safe to expose alongside the required
+// first delegation tool. They are still runtime-denied until the initial task
+// exists; this set only keeps a single model stream usable after delegation.
+var coordinatorInitialReadOnlyTools = map[string]bool{
+	"view":      true,
+	"grep":      true,
+	"glob":      true,
+	"ls":        true,
+	"team_info": true,
 }
 
 func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentDef, prompt string) (string, []fantasy.StepResult, error) {
@@ -1741,7 +1774,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	c.saveHistoryAndSession(ctx, steps)
 
-	finalResult := strings.TrimPrefix(result, "FINISHED:")
+	finalResult := c.canonicalFinishedResponse(result)
 
 	c.addSessionAssistantMessage(finalResult)
 	if c.sessionData != nil && c.session != nil && c.session.Workspace != "" {
@@ -1831,7 +1864,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 
 	c.saveHistoryAndSession(ctx, steps)
 
-	finalResult := strings.TrimPrefix(result, "FINISHED:")
+	finalResult := c.canonicalFinishedResponse(result)
 
 	c.addSessionAssistantMessage(finalResult)
 	if c.sessionData != nil && c.session != nil && c.session.Workspace != "" {
@@ -1851,7 +1884,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 // leaving task and workflow state untouched for the next coordinator run.
 func (c *Coordinator) returnResumableContinuation(ctx context.Context, result string, steps []fantasy.StepResult, message string) (string, error) {
 	c.saveHistoryAndSession(ctx, steps)
-	finalResult := strings.TrimPrefix(result, "FINISHED:")
+	finalResult := c.canonicalFinishedResponse(result)
 	c.addSessionAssistantMessage(finalResult)
 	if c.sessionData != nil && c.session != nil && c.session.Workspace != "" {
 		c.sessionData.Rounds = c.totalRounds()
