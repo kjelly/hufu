@@ -12,7 +12,11 @@ const (
 	ProfileDefault            ExecutionProfileName = "default"
 	ProfileUnattended         ExecutionProfileName = "unattended"
 	ProfileStrictVerification ExecutionProfileName = "strict-verification"
-	ProfileFreshVerification  ExecutionProfileName = "fresh-verification"
+	// ProfileFreshSession starts each invocation without historical task,
+	// transcript, cache, journal, or memory reuse while preserving the team's
+	// normal workspace and exploratory/outcome semantics.
+	ProfileFreshSession      ExecutionProfileName = "fresh-session"
+	ProfileFreshVerification ExecutionProfileName = "fresh-verification"
 )
 
 // PolicyFailureMode determines how policy checks (guards, hooks) behave on failure/error.
@@ -135,6 +139,28 @@ func BuiltinProfiles() map[ExecutionProfileName]ExecutionProfile {
 			FailOnUnknownState:         true,
 			AntiThrashingEnforced:      true,
 		},
+		ProfileFreshSession: {
+			SchemaVersion:              1,
+			Name:                       ProfileFreshSession,
+			StrictPolicy:               false,
+			PolicyFailureMode:          PolicyFailOpen,
+			HookFailureMode:            PolicyFailOpen,
+			AcceptanceMode:             AcceptanceAdvisory,
+			DefaultGoalMode:            GoalModeExploratory,
+			RequireLockedResources:     false,
+			RequireEvidenceManifest:    false,
+			RequireClosedTerminals:     false,
+			RequireWorkspaceIsolation:  false,
+			DefaultCachePolicy:         CacheBypass,
+			DefaultRecoveryPolicy:      RecoveryRetry,
+			DisableHistoricalTaskReuse: true,
+			DisableHistoricalMemory:    true,
+			DisableSemanticDedup:       true,
+			DisableTaskCache:           true,
+			DisableJournalRestore:      true,
+			FailOnUnknownState:         false,
+			AntiThrashingEnforced:      false,
+		},
 		ProfileFreshVerification: {
 			SchemaVersion:              1,
 			Name:                       ProfileFreshVerification,
@@ -192,7 +218,7 @@ func ResolveExecutionProfile(cliProfile, teamProfile string) (ExecutionProfile, 
 
 	p, ok := GetBuiltinProfile(chosen)
 	if !ok {
-		return ExecutionProfile{}, fmt.Errorf("unknown execution profile %q specified via %s (available: default, unattended, strict-verification, fresh-verification)", chosen, source)
+		return ExecutionProfile{}, fmt.Errorf("unknown execution profile %q specified via %s (available: default, unattended, strict-verification, fresh-session, fresh-verification)", chosen, source)
 	}
 	return p, nil
 }

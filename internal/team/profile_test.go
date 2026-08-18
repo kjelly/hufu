@@ -24,6 +24,7 @@ func TestProfile_BuiltinProfiles(t *testing.T) {
 		ProfileDefault,
 		ProfileUnattended,
 		ProfileStrictVerification,
+		ProfileFreshSession,
 		ProfileFreshVerification,
 	}
 
@@ -52,6 +53,17 @@ func TestProfile_BuiltinProfiles(t *testing.T) {
 	}
 	if strict.DisableHistoricalMemory || strict.DisableHistoricalTaskReuse {
 		t.Error("strict-verification allows historical memory and task reuse on active session")
+	}
+
+	freshSession := profiles[ProfileFreshSession]
+	if freshSession.StrictPolicy || freshSession.RequireWorkspaceIsolation {
+		t.Error("fresh-session must isolate history without requiring strict workspace isolation")
+	}
+	if freshSession.DefaultGoalMode != GoalModeExploratory {
+		t.Errorf("fresh-session DefaultGoalMode = %q, want exploratory", freshSession.DefaultGoalMode)
+	}
+	if !freshSession.DisableHistoricalMemory || !freshSession.DisableHistoricalTaskReuse || !freshSession.DisableJournalRestore || !freshSession.DisableTaskCache {
+		t.Error("fresh-session must disable historical memory, task reuse, journal restore, and task cache")
 	}
 
 	fresh := profiles[ProfileFreshVerification]
@@ -91,6 +103,12 @@ func TestProfile_ResolutionPrecedence(t *testing.T) {
 			cli:      "",
 			team:     "",
 			wantName: ProfileDefault,
+		},
+		{
+			name:     "fresh-session via CLI",
+			cli:      "fresh-session",
+			team:     "",
+			wantName: ProfileFreshSession,
 		},
 		{
 			name:     "fresh-verification via CLI",
@@ -224,6 +242,34 @@ func TestProfile_AcceptanceModeBlocking(t *testing.T) {
 	}
 	if !strings.Contains(textResp, "Acceptance check failed") {
 		t.Errorf("expected acceptance failure error in response, got %q", textResp)
+	}
+}
+
+func TestProfile_TeamAcceptanceModeOverridesFreshSession(t *testing.T) {
+	tmpDir := t.TempDir()
+	session := &TeamSession{
+		Workspace: tmpDir,
+		Dir:       tmpDir,
+		Config: agent.TeamConfig{
+			Name:           "fresh-review",
+			Acceptance:     "true",
+			AcceptanceMode: string(AcceptanceBlocking),
+		},
+	}
+	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatalf("NewCoordinator failed: %v", err)
+	}
+	fresh, _ := GetBuiltinProfile(string(ProfileFreshSession))
+	c.SetExecutionProfile(fresh)
+	if got := c.ExecutionProfile().AcceptanceMode; got != AcceptanceBlocking {
+		t.Fatalf("fresh-session acceptance mode = %q, want %q", got, AcceptanceBlocking)
+	}
+	session.Config.AcceptanceMode = string(AcceptanceAdvisory)
+	strict, _ := GetBuiltinProfile(string(ProfileStrictVerification))
+	c.SetExecutionProfile(strict)
+	if got := c.ExecutionProfile().AcceptanceMode; got != AcceptanceBlocking {
+		t.Fatalf("strict profile was downgraded by advisory team mode: %q", got)
 	}
 }
 
