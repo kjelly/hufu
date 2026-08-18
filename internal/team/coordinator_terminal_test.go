@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,6 +50,26 @@ func TestTerminalHandoffPausesAndResumesTaskRound(t *testing.T) {
 	}
 	if got := tracker.TodoList().Items()[0].Status; got != TaskInProgress {
 		t.Fatalf("status after release = %s, want %s", got, TaskInProgress)
+	}
+}
+
+func TestCancelStalledRoundCancelsOnlyCurrentRound(t *testing.T) {
+	coord := &Coordinator{current: atomic.Pointer[currentSnapshot]{}}
+	coord.current.Store(&currentSnapshot{TodoID: "stalled"})
+	stalled := make(chan struct{})
+	other := make(chan struct{})
+	coord.registerTerminalRound("stalled", func() { close(stalled) })
+	coord.registerTerminalRound("other", func() { close(other) })
+	coord.cancelStalledRound()
+	select {
+	case <-stalled:
+	case <-time.After(time.Second):
+		t.Fatal("stalled round was not cancelled")
+	}
+	select {
+	case <-other:
+		t.Fatal("non-current round was cancelled")
+	default:
 	}
 }
 

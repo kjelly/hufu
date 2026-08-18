@@ -13,8 +13,7 @@ import (
 const stallLogsDir = "logs/stall"
 
 // runStallEventType is reported and journaled when the coordinator observes
-// no forward-progress signal for longer than the configured threshold. It is
-// diagnostic only: nothing is aborted or retried because of it.
+// no forward-progress signal for longer than the configured threshold.
 const runStallEventType = "run_stall_detected"
 
 const (
@@ -101,7 +100,35 @@ func (c *Coordinator) runStallWatchdog(ctx context.Context) {
 			c.stallLastDumpAt.Store(now.UnixNano())
 			n := c.stallDumps.Add(1)
 			c.reportStall(idle, n, maxDumps)
+			// A silent model round has neither executed a new tool nor emitted a
+			// result during the entire threshold.  Cancel only that model round:
+			// its normal task owner records the cancellation, preserves the
+			// transcript/receipt, and applies the existing recovery policy. This
+			// avoids turning a provider hang into an unbounded coordinator hang.
+			if n == 1 {
+				c.cancelStalledRound()
+			}
 		}
+	}
+}
+
+func (c *Coordinator) cancelStalledRound() {
+	if c == nil {
+		return
+	}
+	todoID := ""
+	if current := c.current.Load(); current != nil {
+		todoID = current.TodoID
+	}
+	if todoID == "" {
+		return
+	}
+	c.terminalControlMu.Lock()
+	cancel := c.terminalRoundCancels[todoID]
+	c.terminalControlMu.Unlock()
+	if cancel != nil {
+		cancel()
+		c.report(c.newEvent("step").withTodoID(todoID).withMessage("silent model round cancelled by stall watchdog; preserving evidence for recovery"))
 	}
 }
 
