@@ -28,6 +28,23 @@ func TestCoordinatorPolicyRepairIsDeterministicAndBounded(t *testing.T) {
 	}
 }
 
+func TestCoordinatorPolicyRepairRecognizesProviderWrappedError(t *testing.T) {
+	if !isCoordinatorPolicyRepairResult("Error: " + coordinatorPolicyRepairPrefix + "\nAttempt 1/2") {
+		t.Fatal("provider-wrapped repair marker was not recognized")
+	}
+}
+
+func TestCoordinatorPolicyRepairResponseSetsPendingState(t *testing.T) {
+	c := &Coordinator{taskTracker: NewTaskTracker()}
+	response := c.coordinatorPolicyRepairResponse(&delegationPolicyViolation{message: "invalid delegation"})
+	if !c.coordinatorPolicyRepairPending.Load() {
+		t.Fatal("policy repair response did not set pending state")
+	}
+	if !isCoordinatorPolicyRepairResult(response.Content) {
+		t.Fatalf("repair response = %q, want recognizable marker", response.Content)
+	}
+}
+
 func TestCoordinatorPolicyRepairNeverRedispatchesCompletedWorker(t *testing.T) {
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "completed work"}})[0]

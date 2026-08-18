@@ -31,7 +31,11 @@ func (e *delegationPolicyViolation) Error() string {
 
 func isCoordinatorPolicyRepairResult(result string) bool {
 	trimmed := strings.TrimSpace(result)
-	return strings.HasPrefix(trimmed, coordinatorPolicyRepairPrefix) || strings.HasPrefix(trimmed, coordinatorPolicyRepairExhaustedPrefix)
+	// Providers are allowed to wrap tool-error text (for example with an
+	// "Error:" label). Match the runtime-owned marker anywhere in the rendered
+	// error so an otherwise recoverable policy rejection is not upgraded to a
+	// terminal coordinator-tool failure.
+	return strings.Contains(trimmed, coordinatorPolicyRepairPrefix) || strings.Contains(trimmed, coordinatorPolicyRepairExhaustedPrefix)
 }
 
 // coordinatorPolicyRepairPrompt returns a deterministic, bounded correction
