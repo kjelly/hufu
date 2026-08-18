@@ -130,14 +130,22 @@ func TestBuildOrchestratorToolsExposeOnlyConfiguredFirstToolBeforeInitialDelegat
 		sessionData: NewSession(),
 	}
 
-	if got := agentToolNames(c.buildOrchestratorTools()); !slices.Equal(got, []string{"agent"}) {
-		t.Fatalf("fresh initial tools = %v, want only agent", got)
+	got := agentToolNames(c.buildOrchestratorTools())
+	if !slices.Contains(got, "agent") || !slices.Contains(got, "view") || !slices.Contains(got, "ls") {
+		t.Fatalf("fresh initial tools = %v, want agent plus read-only observation tools", got)
+	}
+	for _, forbidden := range []string{"finish", "bash", "write", "edit"} {
+		if slices.Contains(got, forbidden) {
+			t.Fatalf("fresh initial tools expose unsafe/non-observation tool %q: %v", forbidden, got)
+		}
 	}
 
 	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reader", Desc: "initial task"}})
 	activeTools := agentToolNames(c.buildOrchestratorTools())
-	if !slices.Contains(activeTools, "team_info") {
-		t.Fatalf("tools after initial delegation = %v, want team_info restored", activeTools)
+	for _, restored := range []string{"finish", "ask_user", "team_info", "agent"} {
+		if !slices.Contains(activeTools, restored) {
+			t.Fatalf("tools after initial delegation = %v, want %q restored", activeTools, restored)
+		}
 	}
 }
 
