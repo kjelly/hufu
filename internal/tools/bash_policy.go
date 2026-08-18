@@ -189,6 +189,10 @@ func ReadOnlyBashDenialReason(command string) string {
 func hasReadOnlyShellRedirect(command string) bool {
 	var quote byte
 	for i := 0; i < len(command); i++ {
+		if quote == 0 && hasReadOnlyStderrDiscardAt(command, i) {
+			i += len("2>/dev/null") - 1
+			continue
+		}
 		ch := command[i]
 		if ch == '\\' && quote != '\'' {
 			i++
@@ -290,6 +294,10 @@ func checkReadOnlyBashSegment(segment string) error {
 func hasUnsafeReadOnlyShellSyntax(command string) bool {
 	var quote byte
 	for i := 0; i < len(command); i++ {
+		if quote == 0 && hasReadOnlyStderrDiscardAt(command, i) {
+			i += len("2>/dev/null") - 1
+			continue
+		}
 		r := command[i]
 		if r == '\\' && quote != '\'' {
 			// A backslash quotes the following byte for the purpose of this
@@ -311,6 +319,20 @@ func hasUnsafeReadOnlyShellSyntax(command string) bool {
 		}
 	}
 	return quote != 0
+}
+
+// hasReadOnlyStderrDiscardAt recognizes the sole redirection admitted by the
+// read-only grammar. Discarding stderr to the system null device cannot write
+// project state and lets inspection commands suppress expected "not found"
+// noise. All other redirection remains denied, including stdout suppression
+// and paths that could be regular files.
+func hasReadOnlyStderrDiscardAt(command string, index int) bool {
+	const discard = "2>/dev/null"
+	if !strings.HasPrefix(command[index:], discard) {
+		return false
+	}
+	next := index + len(discard)
+	return next == len(command) || strings.ContainsRune(" \t|&", rune(command[next]))
 }
 
 // splitReadOnlyBashSegments permits only the ordinary inspection pipelines
@@ -392,6 +414,9 @@ command:
 		return false
 	}
 	subcommand := args[idx]
+	if subcommand == "rev-list" {
+		return readOnlyGitRevListCommand(args[idx+1:])
+	}
 	allowed := map[string]bool{
 		"status": true, "log": true, "show": true, "diff": true,
 		"rev-parse": true, "merge-base": true, "ls-files": true,
@@ -409,6 +434,38 @@ command:
 		return false
 	}
 	return true
+}
+
+// readOnlyGitRevListCommand permits non-mutating commit-count probes used to
+// bound a review range. Date-bounded discovery needs `--since=<date> HEAD`;
+// a literal range is not sufficient because the range is what discovery must
+// derive. Keep it separate from the general Git allowlist: rev-list has a
+// broad option surface, while count-only output cannot expose object contents
+// or mutate the repository.
+func readOnlyGitRevListCommand(args []string) bool {
+	if len(args) < 2 || args[0] != "--count" {
+		return false
+	}
+	hasDateBound := false
+	revisions := make([]string, 0, 1)
+	for _, arg := range args[1:] {
+		if strings.HasPrefix(arg, "--since=") || strings.HasPrefix(arg, "--after=") || strings.HasPrefix(arg, "--before=") {
+			hasDateBound = true
+			continue
+		}
+		if strings.HasPrefix(arg, "-") || arg == "--stdin" || arg == "--objects" || arg == "--all" || hasWriteFlag([]string{arg}, "-o", "--output") {
+			return false
+		}
+		revisions = append(revisions, arg)
+	}
+	if hasDateBound {
+		return len(revisions) == 1
+	}
+	if len(revisions) != 1 || strings.Count(revisions[0], "..") != 1 {
+		return false
+	}
+	start, end, ok := strings.Cut(revisions[0], "..")
+	return ok && start != "" && end != ""
 }
 
 func containsField(fields []string, want string) bool {

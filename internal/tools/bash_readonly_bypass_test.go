@@ -67,6 +67,9 @@ func TestReadOnlyBashGrammarPermitsInspectionPipelines(t *testing.T) {
 		"git -C /repo log --oneline",
 		"git diff --stat",
 		"git log --oneline -5",
+		"git rev-list --count abcdef..123456",
+		"git rev-list --count --since=2.weeks.ago HEAD",
+		"grep -rn needle missing-path 2>/dev/null",
 	}
 	for _, cmd := range allowed {
 		if err := checkReadOnlyBashCommand(cmd); err != nil {
@@ -75,5 +78,41 @@ func TestReadOnlyBashGrammarPermitsInspectionPipelines(t *testing.T) {
 		if !IsReadOnlyBashCommand(cmd) {
 			t.Errorf("IsReadOnlyBashCommand(%q) = false, want true", cmd)
 		}
+	}
+}
+
+func TestReadOnlyBashGrammarRestrictsGitRevList(t *testing.T) {
+	denied := []string{
+		"git rev-list abcdef..123456",
+		"git rev-list --all",
+		"git rev-list --objects abcdef..123456",
+		"git rev-list --count --stdin",
+		"git rev-list --count --output=out.txt abcdef..123456",
+		"git rev-list --count abcdef",
+	}
+	for _, command := range denied {
+		t.Run(command, func(t *testing.T) {
+			if err := checkReadOnlyBashCommand(command); err == nil {
+				t.Fatalf("checkReadOnlyBashCommand(%q) = nil, want error", command)
+			}
+			if IsReadOnlyBashCommand(command) {
+				t.Fatalf("IsReadOnlyBashCommand(%q) = true, want false", command)
+			}
+		})
+	}
+}
+
+func TestReadOnlyBashGrammarRestrictsRedirectionToStderrNullDiscard(t *testing.T) {
+	for _, command := range []string{
+		"grep -rn needle missing-path >out.txt",
+		"grep -rn needle missing-path 2>errors.txt",
+		"grep -rn needle missing-path 2>/tmp/errors.txt",
+		"grep -rn needle missing-path 1>/dev/null",
+	} {
+		t.Run(command, func(t *testing.T) {
+			if err := checkReadOnlyBashCommand(command); err == nil {
+				t.Fatalf("checkReadOnlyBashCommand(%q) = nil, want error", command)
+			}
+		})
 	}
 }
