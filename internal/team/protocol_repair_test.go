@@ -592,6 +592,32 @@ type mockWorkerTextAgent struct {
 	text string
 }
 
+type incompleteFreeTextWorker struct {
+	calls *int
+}
+
+func (m *incompleteFreeTextWorker) result() *fantasy.AgentResult {
+	*m.calls++
+	return &fantasy.AgentResult{
+		Steps: []fantasy.StepResult{
+			{Response: fantasy.Response{Content: fantasy.ResponseContent{
+				fantasy.ToolCallContent{ToolName: "view", Input: `{"file_path":"internal/team/coordinator.go"}`},
+			}}},
+		},
+		Response: fantasy.Response{Content: fantasy.ResponseContent{
+			fantasy.TextContent{Text: "Let me inspect more files"},
+		}},
+	}
+}
+
+func (m *incompleteFreeTextWorker) Generate(context.Context, fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return m.result(), nil
+}
+
+func (m *incompleteFreeTextWorker) Stream(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return m.result(), nil
+}
+
 type countingTextAgent struct {
 	calls *int
 	text  string
@@ -1060,6 +1086,52 @@ func TestReadOnlyFreeTextWorkerCapturesTranscriptEvidence(t *testing.T) {
 	got := c.taskTracker.TodoList().Items()[0]
 	if got.ExecutionReceipt == nil || got.ExecutionReceipt.TranscriptRef == "" {
 		t.Fatalf("read-only free-text completion must retain transcript evidence: %#v", got.ExecutionReceipt)
+	}
+}
+
+func TestReadOnlyFreeTextIncompleteHandoffIsRetryableNotDone(t *testing.T) {
+	workspace := t.TempDir()
+	workerCalls := 0
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config: agent.TeamConfig{
+				Name:                 "read-only-free-text-incomplete",
+				Timeout:              30,
+				MaxRetries:           1,
+				AllowFreeTextResults: true,
+			},
+			Agents: map[string]*agent.AgentDef{
+				"reviewer": {Name: "reviewer", Role: "worker", SideEffect: string(SideEffectNone), Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-read-only-free-text-incomplete",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "review changes"}})[0]
+	c.workerAgentOverride = &incompleteFreeTextWorker{calls: &workerCalls}
+
+	_, err := c.executeTask(context.Background(), TaskDef{
+		Agent: "reviewer", Goal: "review changes", Recovery: RecoveryRetry, SideEffect: SideEffectNone,
+	}, item.ID)
+	if err == nil {
+		t.Fatal("incomplete free-text handoff must fail after its retry budget is exhausted")
+	}
+	got := c.taskTracker.TodoList().Items()[0]
+	if got.Status == TaskDone {
+		t.Fatalf("incomplete free-text handoff was incorrectly marked done: %#v", got)
+	}
+	if got.Status != TaskError {
+		t.Fatalf("incomplete free-text handoff status = %s, want task_error", got.Status)
+	}
+	if workerCalls < 2 {
+		t.Fatalf("worker calls = %d, want an actual retry after the incomplete handoff", workerCalls)
+	}
+	if !strings.Contains(got.Detail, "incomplete review handoff") {
+		t.Fatalf("failure detail = %q, want explicit incomplete-handoff cause", got.Detail)
 	}
 }
 
