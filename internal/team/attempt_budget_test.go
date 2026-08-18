@@ -155,12 +155,64 @@ func TestWorkerStepBudgetInjectsCheckpointAndTerminalOnlyTools(t *testing.T) {
 		t.Fatalf("prepare results = %d, want 10", len(stream.prepareResults))
 	}
 	checkpoint := stream.prepareResults[8]
-	if len(checkpoint.Messages) == 0 || !messageContains(checkpoint.Messages[len(checkpoint.Messages)-1], "Step Budget Checkpoint") {
+	if len(checkpoint.Messages) == 0 || !messageContains(checkpoint.Messages[len(checkpoint.Messages)-1], "Step Budget") {
 		t.Fatalf("20%% checkpoint = %#v", checkpoint)
 	}
 	wrapUp := stream.prepareResults[9]
 	if len(wrapUp.ActiveTools) != 1 || wrapUp.ActiveTools[0] != submitResultToolName || len(wrapUp.Messages) == 0 || !messageContains(wrapUp.Messages[len(wrapUp.Messages)-1], "step_budget_wrap_up") {
 		t.Fatalf("terminal budget tools = %#v", wrapUp)
+	}
+}
+
+func TestWorkerStepBudgetFreeTextFinalizationDisablesTools(t *testing.T) {
+	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "step-budget"}}, taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
+	stream := &attemptBudgetStreamAgent{messages: []fantasy.Message{fantasy.NewUserMessage("inspect")}, usages: make([]fantasy.Usage, 10)}
+	ctx := context.WithValue(context.Background(), workerStepBudgetKey{}, 10)
+	ctx = context.WithValue(ctx, workerFreeTextFinalizationKey{}, true)
+	_, _, err := c.runAgentWithStatusAndHistory(ctx, stream, "worker", "prompt", nil, &taskTiming{})
+	if err != nil {
+		t.Fatalf("run agent: %v", err)
+	}
+	checkpoint := stream.prepareResults[8]
+	if len(checkpoint.Messages) == 0 || !messageContains(checkpoint.Messages[len(checkpoint.Messages)-1], "Markdown final response") {
+		t.Fatalf("free-text checkpoint = %#v", checkpoint)
+	}
+	wrapUp := stream.prepareResults[9]
+	if len(wrapUp.ActiveTools) != 0 {
+		t.Fatalf("free-text wrap-up tools = %#v, want none", wrapUp.ActiveTools)
+	}
+	if len(wrapUp.Messages) == 0 || !messageContains(wrapUp.Messages[len(wrapUp.Messages)-1], "Write your complete Markdown final response") {
+		t.Fatalf("free-text wrap-up = %#v", wrapUp)
+	}
+}
+
+func TestFreeTextFinalSummaryEvidenceIsBounded(t *testing.T) {
+	evidence := freeTextFinalSummaryEvidence([]fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{
+		fantasy.ToolCallContent{ToolName: "bash", Input: `{"command":"git diff --very-large-output"}`},
+	}}}})
+	if !strings.Contains(evidence, "bash") {
+		t.Fatalf("evidence = %q, want tool name", evidence)
+	}
+	if strings.Contains(evidence, "very-large-output") {
+		t.Fatalf("evidence leaked executable tool input: %q", evidence)
+	}
+}
+
+func TestBuildRescueFinalSummaryInstructionPreservesTaskContract(t *testing.T) {
+	task := TaskDef{
+		Goal:        "Review batch-0042 using range abcdef0123456789abcdef0123456789abcdef01..fedcba9876543210fedcba9876543210fedcba98.",
+		Constraints: "Use /workspace/coverage/batches/batch-0042 and its matching .diff; include ### Findings and ### Coverage gaps.",
+	}
+	prompt := buildRescueFinalSummaryInstruction(task)
+	for _, want := range []string{
+		task.Goal,
+		task.Constraints,
+		"Authoritative assigned task contract",
+		"literal range, batch ID, artifact paths",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("rescue prompt missing %q: %s", want, prompt)
+		}
 	}
 }
 
