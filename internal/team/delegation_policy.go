@@ -101,17 +101,26 @@ func (c *Coordinator) validateTaskGoalInvariants(tasks []TaskDef) error {
 	}
 	for taskIndex, task := range tasks {
 		agentName := strings.ToLower(strings.TrimSpace(task.Agent))
+		// Coordinators commonly keep the literal artifact/range contract in
+		// Constraints to avoid bloating the human-readable goal. Invariants must
+		// validate the complete delegated payload, not just its selector text;
+		// otherwise a valid task is rejected while an unconstrained paraphrase can
+		// slip through the same policy.
+		goalPayload := task.Goal
+		if strings.TrimSpace(task.Constraints) != "" {
+			goalPayload += "\n" + task.Constraints
+		}
 		for invariantIndex, invariant := range c.session.Config.Delegation.TaskGoalInvariants {
 			if agentName != strings.ToLower(strings.TrimSpace(invariant.Agent)) || !strings.Contains(task.Goal, invariant.WhenGoalContains) {
 				continue
 			}
 			for _, required := range invariant.RequiredLiterals {
-				if !strings.Contains(task.Goal, required) {
+				if !strings.Contains(goalPayload, required) {
 					return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].goal violates task-goal-invariants[%d]: required literal is missing", taskIndex, invariantIndex))
 				}
 			}
 			for _, forbidden := range invariant.ForbiddenLiterals {
-				if strings.Contains(task.Goal, forbidden) {
+				if strings.Contains(goalPayload, forbidden) {
 					return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].goal violates task-goal-invariants[%d]: forbidden literal is present", taskIndex, invariantIndex))
 				}
 			}

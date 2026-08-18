@@ -77,6 +77,38 @@ func TestDelegationPolicyRejectsGoalInvariantBeforeTodoCreation(t *testing.T) {
 	}
 }
 
+func TestDelegationPolicyChecksInvariantLiteralsInConstraints(t *testing.T) {
+	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
+		Agent: "worker", WhenGoalContains: "batch-", RequiredLiterals: []string{"literal-range"}, ForbiddenLiterals: []string{"sizing"},
+	}}})
+	task := TaskDef{Agent: "worker", Goal: "Review batch-0001", Constraints: "literal-range: abc..def"}
+	if err := c.validateDelegationPolicy([]TaskDef{task}); err != nil {
+		t.Fatalf("constraint-carried invariant literal rejected: %v", err)
+	}
+	bad := task
+	bad.Constraints = "literal-range: abc..def; sizing probe"
+	if err := c.validateDelegationPolicy([]TaskDef{bad}); err == nil || !strings.Contains(err.Error(), "task-goal-invariants") {
+		t.Fatalf("forbidden constraint literal error = %v, want invariant rejection", err)
+	}
+}
+
+func TestDelegationPolicyRejectsRawRangeDiscoveryBeforeTodoCreation(t *testing.T) {
+	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
+		Agent: "worker", WhenGoalContains: "git log", RequiredLiterals: []string{"summary"}, ForbiddenLiterals: []string{"raw output"},
+	}}})
+	for _, goal := range []string{
+		"Run git log and return raw output as a summary",
+		"Run git log and return the result",
+	} {
+		if err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", Goal: goal}}); err == nil || !strings.Contains(err.Error(), "task-goal-invariants") {
+			t.Fatalf("goal %q error = %v, want invariant rejection", goal, err)
+		}
+	}
+	if err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", Goal: "Run git log and return a compact summary"}}); err != nil {
+		t.Fatalf("compact discovery goal rejected: %v", err)
+	}
+}
+
 func TestDelegationPolicyRejectsExecutionInvariantBeforeTodoCreation(t *testing.T) {
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
 		Agent:                    "worker",
