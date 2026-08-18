@@ -2,10 +2,14 @@ package team
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"charm.land/fantasy"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestTeamInfoTaskResultSelectorDisambiguatesCompletedTasks(t *testing.T) {
@@ -62,6 +66,43 @@ func TestTaskResultByIDSurvivesSessionReplayWithSealedManifest(t *testing.T) {
 	response, err = tool.Run(context.Background(), fantasy.ToolCall{Input: `{"action":"task_result","task_id":"1"}`})
 	if err != nil || response.IsError || !strings.Contains(response.Content, "Completed task 1") {
 		t.Fatalf("public task_id lookup = %#v err=%v", response, err)
+	}
+}
+
+func TestTeamInfoFreshVerificationDoesNotReadHistoricalTaskTranscript(t *testing.T) {
+	workspace := t.TempDir()
+	transcriptDir := filepath.Join(workspace, "tasks", "fresh-team", "reviewer")
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatalf("create historical task directory: %v", err)
+	}
+	historical := "# Agent Task: reviewer\n\n**Status:** done\n\n## Task Description\nold review\n\n## Result\nold evidence"
+	if err := os.WriteFile(filepath.Join(transcriptDir, "old.md"), []byte(historical), 0o644); err != nil {
+		t.Fatalf("write historical task transcript: %v", err)
+	}
+
+	fresh, _ := GetBuiltinProfile(string(ProfileFreshSession))
+	coord := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "fresh-team"},
+			Agents:    map[string]*agent.AgentDef{"reviewer": {Name: "reviewer", Role: "worker"}},
+		},
+		taskTracker: NewTaskTracker(),
+	}
+	coord.SetExecutionProfile(fresh)
+	tool := &teamInfoTool{coordinator: coord}
+
+	response, err := tool.Run(context.Background(), fantasy.ToolCall{Input: `{"action":"task_result","agent":"reviewer","task_contains":"old review"}`})
+	if err != nil || response.IsError {
+		t.Fatalf("fresh task_result = %#v, err=%v", response, err)
+	}
+	if strings.Contains(response.Content, "old evidence") || !strings.Contains(response.Content, "Historical task transcripts are disabled") {
+		t.Fatalf("fresh task_result exposed historical transcript: %s", response.Content)
+	}
+
+	response, err = tool.Run(context.Background(), fantasy.ToolCall{Input: `{"action":"task_history","agent":"reviewer"}`})
+	if err != nil || response.IsError || !strings.Contains(response.Content, "Historical task inspection is disabled") {
+		t.Fatalf("fresh task_history = %#v, err=%v", response, err)
 	}
 }
 

@@ -79,12 +79,15 @@ func (t *teamInfoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 		if args.Agent == "" {
 			return fantasy.NewTextErrorResponse("agent name is required for task_history action"), nil
 		}
+		if c.ExecutionProfile().DisableHistoricalTaskReuse {
+			return fantasy.NewTextResponse("Historical task inspection is disabled by the active execution profile. Use todo_status or task_result for tasks created in this run."), nil
+		}
 		return t.handleTaskHistory(workspace, teamName, args.Agent, args.Limit)
 	case "task_result":
 		if args.Agent == "" && args.TaskID == "" {
 			return fantasy.NewTextErrorResponse("agent or task_id is required for task_result action"), nil
 		}
-		return t.handleTaskResult(c, workspace, teamName, args.Agent, args.TaskContains, args.TaskID)
+		return t.handleTaskResult(c, workspace, teamName, args.Agent, args.TaskContains, args.TaskID, c.ExecutionProfile().DisableHistoricalTaskReuse)
 	case "todo_status":
 		if args.Agent == "" {
 			return fantasy.NewTextErrorResponse("agent name is required for todo_status action"), nil
@@ -214,7 +217,7 @@ func (t *teamInfoTool) handleTaskHistory(workspace, teamName, agentName string, 
 	return fantasy.NewTextResponse(b.String()), nil
 }
 
-func (t *teamInfoTool) handleTaskResult(c *Coordinator, workspace, teamName, name, taskContains, taskID string) (fantasy.ToolResponse, error) {
+func (t *teamInfoTool) handleTaskResult(c *Coordinator, workspace, teamName, name, taskContains, taskID string, disableHistoricalFallback bool) (fantasy.ToolResponse, error) {
 	if taskID != "" {
 		return taskResultByID(c, taskID)
 	}
@@ -231,6 +234,9 @@ func (t *teamInfoTool) handleTaskResult(c *Coordinator, workspace, teamName, nam
 		return fantasy.NewTextResponse(response), nil
 	} else if taskContains != "" && len(candidates) > 1 {
 		return fantasy.NewTextResponse(fmt.Sprintf("task_result selector is ambiguous for agent %q; matching task IDs: %s. Retry with task_id.", resolvedName, strings.Join(candidates, ", "))), nil
+	}
+	if disableHistoricalFallback {
+		return fantasy.NewTextResponse(fmt.Sprintf("No completed task matched agent %q and selector %q in this run. Historical task transcripts are disabled by the active execution profile.", resolvedName, taskContains)), nil
 	}
 
 	entries, err := taskHistoryEntries(workspace, teamName, resolvedName)
