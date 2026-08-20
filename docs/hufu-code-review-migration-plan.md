@@ -5,6 +5,10 @@
 > Runtime 前置計畫：[hufu-generic-workset-evidence-plan.md](hufu-generic-workset-evidence-plan.md)
 > 邊界：本文件可以描述 Git、diff、review roles、finding severity 與 report 格式；這些內容不得進入 Hufu core。
 
+> WP-6 contract status：generic contract mapping and migration gates are
+> published below. Legacy cleanup remains gated by the WP-7 shadow/E2E
+> comparison and the one-release compatibility window.
+
 ## 1. 目的
 
 將 `hufu-code-review` 從以多個 agent prompt、Bash marker、task transcript parsing 維持 coverage 的設計，遷移到 Hufu 的通用 artifact-backed workset、typed-result assertion 與 aggregate completion contract。
@@ -453,3 +457,48 @@ go test -race ./internal/team/...
 - 代表性read-only E2E完成且report品質人工檢查通過；
 - metrics達標或差異有可驗證、非workaround的原因；
 - Hufu core diff中搜尋不到team名稱、consumer檔名、severity或Markdown heading特例。
+
+## 15. WP-6 Consumer contract binding
+
+This section is the consumer-owned contract for the migration. It names the
+consumer's domain adapter and presentation choices, but it does not add any
+of them to Hufu core.
+
+| Consumer responsibility | Generic runtime contract | Required evidence |
+|---|---|---|
+| deterministic inventory producer | configured `ActionProvider` returning `ActionResult` | provider artifact is registered and runtime-computed digest is present |
+| one bounded review unit | `FanOutSpec.source_artifact` plus scalar `goal-template` bindings | immutable `WorksetBinding` and `WorksetExpansionReceipt` |
+| reviewer handoff | canonical `TaskResult` with `task_result_assert` | required result fields and RFC 6901 assertions pass |
+| complete review set | blocking `workset_complete` acceptance | every receipt item has one terminal, verified child |
+| review evidence | opaque artifact references and tool receipts | no transcript, marker, or rendered Markdown parser is an acceptance input |
+
+The adapter may continue to understand repository ranges, hunk routing and
+review lenses. Those values are emitted as bounded scalar bindings or opaque
+artifacts. The coordinator must not count rows, reconstruct paths, create
+markers, or reinterpret the adapter's manifest.
+
+### Migration gates
+
+1. **Shadow** — run the adapter output through both the legacy reader and the
+   generic contract; compare item keys, ordering, binding values and artifact
+   digests. A mismatch is diagnostic and does not select the more permissive
+   result.
+2. **Enforce** — use the artifact-backed receipt, typed result assertions and
+   `workset_complete` as the blocking outcome gate for the migrated team.
+3. **Cleanup** — after a representative E2E and one compatibility release
+   window, remove the legacy scripts and marker consumers under WP-7.
+
+The two consumer-neutral migration fixtures are executable evidence for the
+generic boundary before this consumer is enabled: `transform` checks three
+scalar input bindings, while `probe` checks three opaque input artifacts and
+an individual verification failure. They run through:
+
+```bash
+go test ./internal/team -run TestWP06GenericWorksetFixtures -count=1
+```
+
+The consumer-specific E2E must additionally verify normal, partial, stale
+artifact, retry, cancel, resume and report replay behavior. Rollback is a
+team-owned config/adapter rollback to the previous contract version; it must
+not bypass the runtime verifier or restore transcript parsing as an outcome
+gate.
