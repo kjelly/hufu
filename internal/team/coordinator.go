@@ -62,6 +62,14 @@ type taskTranscriptKey struct{}
 // exact task attempt that produced them.
 type executionAttemptKey struct{}
 
+// taskRequiresResultKey carries task.Execution.RequiresResult down through
+// executeTask → runAgentWithStatusAndHistory. That layer knows only the
+// agent/prompt/history, not the task's own contract, but the same-turn stall
+// nudge must fire only for tasks whose protocol actually needs submit_result
+// -- a read-only worker that legitimately answers in plain text after one
+// inspection is a normal completion, not a stall, and must never be nudged.
+type taskRequiresResultKey struct{}
+
 // delegationChainKey carries the "/"-joined chain of agent names that led to
 // the current request_agent call, propagated through the context (the same
 // way todoIDKey is) since the coordinator's mutable snapshot only ever holds
@@ -135,6 +143,45 @@ type TaskDef struct {
 	RecoveryHypothesis  *RecoveryHypothesis `json:"recovery_hypothesis,omitempty" yaml:"recovery_hypothesis,omitempty"`
 	ResourceClaims      []string            `json:"resource_claims,omitempty" yaml:"resource_claims,omitempty"`
 	Resources           []ResourceClaim     `json:"resources,omitempty" yaml:"resources,omitempty"`
+	// FactRefs substitutes {name} in this task's Goal and Constraints with a
+	// named fact or artifact an EARLIER task already declared in its own
+	// submit_result, resolved by the runtime before dispatch. This exists so
+	// a coordinator never retypes a value another task already discovered
+	// (a list, a computed count, a resolved path) into a later task's prose.
+	FactRefs []FactRef `json:"fact_refs,omitempty"`
+	// FanOut, when set, replaces this single submitted task with one task per
+	// data row of a TSV file, entirely inside the runtime: Goal is ignored and
+	// GoalTemplate's {column} placeholders are substituted from that row by
+	// Hufu itself. This exists so a coordinator never has to retype the same
+	// data-derived literal (a commit SHA, a generated batch ID, a file path)
+	// into many near-identical dispatches by hand -- exactly how a long
+	// low-temperature generation drops or merges a character deep in a hex
+	// string. See expandFanOutTasks.
+	FanOut *FanOutSpec `json:"fan_out,omitempty"`
+}
+
+// FactRef names one substitution: {Name} in the consuming task's Goal and
+// Constraints is replaced with either the named Fact (task_result.Facts[Fact]
+// from the task TaskID already submitted, JSON-encoded unless it is already a
+// plain string) or the named Artifact (matched by exact Description against
+// that task's own submit_result artifacts, resolved to its Path). Exactly one
+// of Fact or Artifact must be set.
+type FactRef struct {
+	Name     string `json:"name"`
+	TaskID   string `json:"task_id"`
+	Fact     string `json:"fact,omitempty"`
+	Artifact string `json:"artifact,omitempty"`
+}
+
+// FanOutSpec names a TSV data source and a Goal template. Source must be a
+// relative path resolving inside the team workspace (the same sandbox rule as
+// context_files); GoalTemplate's {column_name} placeholders must all match an
+// actual header column in Source, checked once before any row is expanded so
+// a typo fails the whole dispatch instead of silently producing one wrong
+// task among many correct ones.
+type FanOutSpec struct {
+	Source       string `json:"source"`
+	GoalTemplate string `json:"goal_template"`
 }
 
 // ResourceClaimMode describes how a task uses a shared resource.
@@ -1524,6 +1571,29 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 				},
 			},
 		},
+	}
+	props["fact_refs"] = map[string]any{
+		"type":        "array",
+		"description": "Substitute {name} placeholders in THIS task's goal and constraints with a named fact or artifact an earlier task (in this run) already declared in its own submit_result — resolved by the runtime, not retyped by you. Use this to pass a value one task discovered (a list, a computed count, a resolved path) into a later task's prose exactly, instead of copying it by hand.",
+		"items": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":     map[string]any{"type": "string", "description": "Placeholder token substituted wherever {name} appears in this task's goal or constraints."},
+				"task_id":  map[string]any{"type": "string", "description": "ID of the earlier task in this run that already submitted the value."},
+				"fact":     map[string]any{"type": "string", "description": "Name of a fact that task declared in its own submit_result 'facts'. Set exactly one of fact or artifact."},
+				"artifact": map[string]any{"type": "string", "description": "Description of an artifact that task declared in its own submit_result 'artifacts' (matched by exact description text), resolved to that artifact's path. Set exactly one of fact or artifact."},
+			},
+			"required": []string{"name", "task_id"},
+		},
+	}
+	props["fan_out"] = map[string]any{
+		"type":        "object",
+		"description": "Expand this ONE task into one task per data row of a TSV file; the runtime substitutes columns into goal_template itself. Use this instead of composing many near-identical per-row dispatches by hand: retyping the same data-derived literal (a commit SHA, a generated batch/row ID, a file path) into many similar goals is exactly how a character gets dropped or merged. When fan_out is set, the goal field is ignored (still required by the schema; any placeholder text satisfies it) and this task's other fields (agent, constraints, execution, verify_spec, ...) apply unchanged to every expanded task.",
+		"properties": map[string]any{
+			"source":        map[string]any{"type": "string", "description": "Path to a TSV file with a header row, relative to the team workspace (e.g. \"hufu-code-review/coverage/batches.tsv\"). A leading '#' on the header's first column is stripped automatically."},
+			"goal_template": map[string]any{"type": "string", "description": "Goal text with {column_name} placeholders, one per TSV header column you reference. Every placeholder must match an actual header column name exactly; an unmatched placeholder fails the entire dispatch before any task is created, rather than silently expanding a wrong goal."},
+		},
+		"required": []string{"source", "goal_template"},
 	}
 	if len(capabilityNames) > 0 {
 		props["requires"] = map[string]any{

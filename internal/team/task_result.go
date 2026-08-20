@@ -281,6 +281,14 @@ type TaskResult struct {
 	ReceiptIDs         []string                         `json:"receipt_ids,omitempty"`
 	Outputs            map[string]StructuredOutputValue `json:"outputs,omitempty"`
 	MemoryUses         []MemoryUseRef                   `json:"memory_uses,omitempty"`
+	// Facts are named JSON values a plain (non-steps) task result declares for
+	// a later flat task to reference by name via TaskDef.FactRefs, instead of
+	// a coordinator retyping this task's own discovered value (a list, a
+	// computed count, a resolved path) into a later dispatch's goal text.
+	// This is deliberately separate from the steps-DAG's Outputs/StructuredFact
+	// machinery (which needs schema/SHA256/scope for its own repair and
+	// receipt semantics): an ordinary worker just names a value.
+	Facts map[string]any `json:"facts,omitempty"`
 
 	Confidence float64 `json:"confidence"`
 	Source     string  `json:"source"` // "submitted", "promoted_free_text", or "parsed_free_text"
@@ -311,24 +319,22 @@ func ParseFreeTextResult(text string) *TaskResult {
 	}
 }
 
-// validateSubmittedTaskResult makes the worker's terminal state explicit.
-// A completed_with_gaps result is a completed task with an explicit target
-// limitation. In contrast, partial, failed, and blocked are useful evidence
-// that must flow through retries and error handling rather than silently
-// becoming a completed Todo item.
+// validateSubmittedTaskResult validates the submitted-result schema boundary.
+// partial, failed, and blocked are honest progress/failure reports, not
+// malformed protocol calls.
 func validateSubmittedTaskResult(result *TaskResult) error {
 	if result == nil {
 		return fmt.Errorf("missing structured task result")
 	}
 	switch result.Status {
-	case TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps:
+	case TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps,
+		TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked:
 		return nil
-	case TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked:
-		return fmt.Errorf("worker reported task status %q: %s", result.Status, strings.TrimSpace(result.Summary))
 	default:
 		return fmt.Errorf("invalid task result status %q; expected success, completed_with_gaps, partial, failed, or blocked", result.Status)
 	}
 }
+
 
 // FormatForContext formats the typed result into a human-readable string suitable
 // for passing as context to downstream agents or dependencies.
