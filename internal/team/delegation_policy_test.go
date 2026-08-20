@@ -170,6 +170,31 @@ func TestDelegationPolicyValidatesCompletedTaskReferenceBeforeTodoCreation(t *te
 	}
 }
 
+// TestDelegationPolicyChecksTaskReferenceInConstraints guards against a real
+// inconsistency: RequiredLiterals/ForbiddenLiterals validate goal+Constraints
+// (goalPayload) so a Coordinator may keep the literal contract in Constraints
+// without bloating the human-readable goal, but RequiredTaskReference and
+// RequiredTaskReferences validated only task.Goal. A dependent Todo ID kept in
+// Constraints -- the same recommended practice as literals -- was therefore
+// rejected as a missing task reference even though it was present.
+func TestDelegationPolicyChecksTaskReferenceInConstraints(t *testing.T) {
+	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
+		Agent: "auditor", WhenGoalContains: "freeze audit",
+		RequiredTaskReference: &agent.TaskGoalReference{
+			GoalPrefix: "runner_task_id=", Agent: "runner", TaskContains: "§3.1 candidate-freeze",
+		},
+	}}})
+	runner := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "runner", Desc: "§3.1 candidate-freeze"}})[0]
+	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(runner.ID, TaskDone, "", "done"); err != nil {
+		t.Fatal(err)
+	}
+
+	task := TaskDef{Agent: "auditor", Goal: "freeze audit", Constraints: "runner_task_id=" + runner.ID}
+	if err := c.validateDelegationPolicy([]TaskDef{task}); err != nil {
+		t.Fatalf("constraint-carried task reference rejected: %v", err)
+	}
+}
+
 func TestDelegationPolicyValidatesDistinctCompletedProducerSetBeforeTodoCreation(t *testing.T) {
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
 		Agent: "consumer", WhenGoalContains: "consensus",

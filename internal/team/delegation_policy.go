@@ -49,15 +49,22 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 		return err
 	}
 	if c.coordinatorPolicyRepairsAttempt.Load() > 0 {
-		completed := make(map[string]bool)
+		hasDone := make(map[string]bool)
+		hasUnfinished := make(map[string]bool)
 		for _, item := range items {
-			if item != nil && item.Status == TaskDone {
-				completed[strings.ToLower(strings.TrimSpace(item.Agent))] = true
+			if item != nil {
+				agentName := strings.ToLower(strings.TrimSpace(item.Agent))
+				if item.Status == TaskDone || item.Status == TaskSkipped || (item.Resolution != nil && (item.Resolution.Status == "superseded" || item.Resolution.Status == "reconciled" || item.Resolution.Status == "waived")) {
+					hasDone[agentName] = true
+				} else {
+					hasUnfinished[agentName] = true
+				}
 			}
 		}
 		var duplicates []string
 		for _, task := range tasks {
-			if completed[strings.ToLower(strings.TrimSpace(task.Agent))] {
+			agentName := strings.ToLower(strings.TrimSpace(task.Agent))
+			if hasDone[agentName] && !hasUnfinished[agentName] {
 				duplicates = append(duplicates, task.Agent)
 			}
 		}
@@ -125,16 +132,16 @@ func (c *Coordinator) validateTaskGoalInvariants(tasks []TaskDef) error {
 				}
 			}
 			if invariant.RequiredTaskReference != nil {
-				if err := c.validateTaskGoalReference(task.Goal, *invariant.RequiredTaskReference); err != nil {
+				if err := c.validateTaskGoalReference(goalPayload, *invariant.RequiredTaskReference); err != nil {
 					return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].goal violates task-goal-invariants[%d]: %v", taskIndex, invariantIndex, err))
 				}
 			}
 			seenReferences := make(map[string]bool, len(invariant.RequiredTaskReferences))
 			for _, reference := range invariant.RequiredTaskReferences {
-				if err := c.validateTaskGoalReference(task.Goal, reference); err != nil {
+				if err := c.validateTaskGoalReference(goalPayload, reference); err != nil {
 					return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].goal violates task-goal-invariants[%d]: %v", taskIndex, invariantIndex, err))
 				}
-				id := taskGoalReferenceValue(task.Goal, reference.GoalPrefix)
+				id := taskGoalReferenceValue(goalPayload, reference.GoalPrefix)
 				if seenReferences[id] {
 					return c.rejectDelegationPolicy(fmt.Sprintf("tasks[%d].goal violates task-goal-invariants[%d]: required task references must name distinct completed Todos", taskIndex, invariantIndex))
 				}

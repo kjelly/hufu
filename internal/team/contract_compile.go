@@ -146,11 +146,21 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 	return bound, effective, nil
 }
 
-// applyStaticVerificationContract makes verification fields authoritative for
-// a statically selected task contract. A coordinator may include generic
-// verify_spec defaults in its delegation call, but those defaults must not
-// silently add a worker-side tool call when the team contract deliberately
-// declares requires-verification=false (or vice versa).
+// applyStaticVerificationContract makes verification and progress-criterion
+// fields authoritative for a statically selected task contract. A coordinator
+// may include generic verify_spec defaults in its delegation call, but those
+// defaults must not silently add a worker-side tool call when the team
+// contract deliberately declares requires-verification=false (or vice versa).
+//
+// Kind and Advances are included here rather than left to whatever the live
+// dispatch schema happens to accept: the goal-selector `agent` tool schema
+// (buildAgentTaskProperties) never exposes either field to the model, so a
+// team's static task contract is the only place they can originate from.
+// Without this, a team that declares acceptance criteria and wires
+// `advances:` on its task contracts would still see those criteria never
+// resettable, because the live task the coordinator actually dispatches would
+// always carry a zero-value Kind/Advances regardless of what the contract
+// says.
 func applyStaticVerificationContract(bound *TaskDef, contract TaskDef) {
 	if bound == nil {
 		return
@@ -158,6 +168,8 @@ func applyStaticVerificationContract(bound *TaskDef, contract TaskDef) {
 	bound.Verify = contract.Verify
 	bound.VerifyMode = contract.VerifyMode
 	bound.VerifySpec = cloneVerificationSpecPtr(contract.VerifySpec)
+	bound.Kind = contract.Kind
+	bound.Advances = append([]string(nil), contract.Advances...)
 }
 
 func matchesInitialContractBatch(tasks []TaskDef, policy agent.DelegationPolicy) bool {

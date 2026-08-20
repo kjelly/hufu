@@ -149,6 +149,74 @@ func TestCompileTaskGoalContractsReplacesCoordinatorVerificationFields(t *testin
 	}
 }
 
+// TestCompileTaskGoalContractsBindsStaticProgressCriterionFields guards
+// against a gap where a static task contract's Kind/Advances (progress-
+// criterion linkage, §8.1) never reached the live dispatched task: the
+// goal-selector `agent` tool schema never exposes either field to the model,
+// so the static contract is the only place they can originate from. Without
+// this, a team that wires acceptance criteria via `advances:` on its task
+// contracts would see the no-progress budget's counters never reset, because
+// the dispatched task would always carry a zero-value Kind/Advances
+// regardless of what the contract declared.
+func TestCompileTaskGoalContractsBindsStaticProgressCriterionFields(t *testing.T) {
+	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
+		BindTaskGoalContracts: true,
+	}}, ContractTasks: []TaskDef{{
+		Agent:            "go-reviewer",
+		WhenGoalContains: "review batch",
+		Execution:        ExecutionContract{ToolSequence: []string{"view", "submit_result"}},
+		Kind:             TaskKindOutcome,
+		Advances:         []string{"all-batches-reviewed"},
+	}}}
+	requested := TaskDef{Agent: "go-reviewer", Goal: "review batch-0000"}
+
+	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{requested})
+	if err != nil {
+		t.Fatalf("compile goal contract: %v", err)
+	}
+	if bound[0].Kind != TaskKindOutcome {
+		t.Fatalf("bound Kind = %q, want the static contract's %q", bound[0].Kind, TaskKindOutcome)
+	}
+	if !reflect.DeepEqual(bound[0].Advances, []string{"all-batches-reviewed"}) {
+		t.Fatalf("bound Advances = %#v, want the static contract's criterion list", bound[0].Advances)
+	}
+
+	// The bound slice must not alias the team's own contract, or a later
+	// mutation of the dispatched task would corrupt the reusable template.
+	bound[0].Advances[0] = "mutated"
+	if session.ContractTasks[0].Advances[0] != "all-batches-reviewed" {
+		t.Fatalf("bound Advances aliases the team contract: %#v", session.ContractTasks[0].Advances)
+	}
+}
+
+// TestCompileTaskGoalContractsReplacesCoordinatorProgressCriterionFields
+// mirrors TestCompileTaskGoalContractsReplacesCoordinatorVerificationFields
+// for Kind/Advances: a static contract that declares neither must clear
+// whatever a model-authored task guessed, the same way it already does for
+// Verify/VerifySpec.
+func TestCompileTaskGoalContractsReplacesCoordinatorProgressCriterionFields(t *testing.T) {
+	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
+		BindTaskGoalContracts: true,
+	}}, ContractTasks: []TaskDef{{
+		Agent:            "topology-preparer",
+		WhenGoalContains: "topology",
+		Execution:        ExecutionContract{ToolSequence: []string{"bash", "submit_result"}},
+	}}}
+	requested := TaskDef{
+		Agent:    "topology-preparer",
+		Goal:     "rebuild topology",
+		Kind:     TaskKindRepair,
+		Advances: []string{"invented-criterion"},
+	}
+	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{requested})
+	if err != nil {
+		t.Fatalf("compile goal contract: %v", err)
+	}
+	if bound[0].Kind != "" || bound[0].Advances != nil {
+		t.Fatalf("coordinator progress-criterion fields survived static contract: %#v", bound[0])
+	}
+}
+
 func TestCompileTaskGoalContractsMatchesGoalSelectorCaseInsensitively(t *testing.T) {
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
