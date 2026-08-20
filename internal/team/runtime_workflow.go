@@ -108,7 +108,7 @@ func newRuntimeWorkflow(session *TeamSession) (*runtimeWorkflow, error) {
 // executeAction invokes a provider selected by a static action contract. The
 // runtime owns this boundary: a coordinator cannot supply an action through
 // its tool schema, and actions are permitted only during EXECUTE.
-func (w *runtimeWorkflow) executeAction(ctx context.Context, action Action) (string, error) {
+func (w *runtimeWorkflow) executeActionValue(ctx context.Context, action Action) (interface{}, error) {
 	if !w.Enabled() {
 		return "", fmt.Errorf("structured actions require an enabled runtime workflow")
 	}
@@ -137,6 +137,14 @@ func (w *runtimeWorkflow) executeAction(ctx context.Context, action Action) (str
 	if err != nil {
 		return "", ActionProviderError{Capability: capability, Cause: err}
 	}
+	return result, nil
+}
+
+func (w *runtimeWorkflow) executeAction(ctx context.Context, action Action) (string, error) {
+	result, err := w.executeActionValue(ctx, action)
+	if err != nil {
+		return "", err
+	}
 	if result == nil {
 		return "structured action completed", nil
 	}
@@ -145,7 +153,7 @@ func (w *runtimeWorkflow) executeAction(ctx context.Context, action Action) (str
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil {
-		return "", ActionProviderError{Capability: capability, Cause: fmt.Errorf("encode provider result: %w", err)}
+		return "", ActionProviderError{Capability: normalizeCapability(action.Capability), Cause: fmt.Errorf("encode provider result: %w", err)}
 	}
 	return string(encoded), nil
 }

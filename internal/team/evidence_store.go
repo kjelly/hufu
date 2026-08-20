@@ -19,12 +19,12 @@ import (
 // PutArtifactRequest describes an immutable artifact to persist. Content is
 // preferred for generated data; SourcePath supports artifacts already on disk.
 type PutArtifactRequest struct {
-	ID, Kind, Path, Description, MediaType string
-	Content                                []byte
-	SourcePath                             string
-	RunID, TaskID, Agent, ToolCallID       string
-	Attempt                                int
-	CreatedAt                              time.Time
+	ID, Kind, Path, Description, MediaType     string
+	Content                                    []byte
+	SourcePath                                 string
+	RunID, TaskID, Agent, Provider, ToolCallID string
+	Attempt                                    int
+	CreatedAt                                  time.Time
 }
 
 type ArtifactStore interface {
@@ -87,7 +87,7 @@ func (s *FileArtifactStore) Put(_ context.Context, req PutArtifactRequest) (Arti
 	ref := ArtifactRef{ID: id, Kind: req.Kind, Path: req.Path, Description: req.Description,
 		Type: req.Kind, SHA256: digest, Bytes: int64(len(data)), ByteSize: int64(len(data)),
 		MediaType: req.MediaType, RunID: req.RunID, TaskID: req.TaskID, Attempt: req.Attempt,
-		Agent: req.Agent, ToolCallID: req.ToolCallID, CreatedAt: req.CreatedAt}
+		Agent: req.Agent, Provider: req.Provider, ToolCallID: req.ToolCallID, CreatedAt: req.CreatedAt}
 	if ref.CreatedAt.IsZero() {
 		ref.CreatedAt = time.Now().UTC()
 	}

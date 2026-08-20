@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // Action represents a generic structured action intent.
@@ -20,6 +21,65 @@ type Action struct {
 	Capability string `json:"capability" yaml:"capability"`
 	Type       string `json:"type" yaml:"type"`
 	Payload    string `json:"payload" yaml:"payload"`
+}
+
+// ActionResult is the provider-neutral result envelope. Artifact identity and
+// provenance are rewritten by the coordinator after the provider returns; a
+// provider must never be able to smuggle an already trusted reference through
+// this boundary.
+type ActionResult struct {
+	Outputs   map[string]any `json:"outputs,omitempty"`
+	Artifacts []ArtifactRef  `json:"artifacts,omitempty"`
+}
+
+func decodeActionResult(value interface{}) (ActionResult, error) {
+	if value == nil {
+		return ActionResult{}, nil
+	}
+	if result, ok := value.(ActionResult); ok {
+		return result, nil
+	}
+	if result, ok := value.(*ActionResult); ok {
+		if result == nil {
+			return ActionResult{}, nil
+		}
+		return *result, nil
+	}
+	// Preserve the pre-envelope scalar adapter behavior while all structured
+	// results use the bounded JSON envelope below. Existing providers can adopt
+	// the envelope incrementally without changing the execution boundary.
+	if text, ok := value.(string); ok {
+		return ActionResult{Outputs: map[string]any{"result": text}}, nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return ActionResult{}, fmt.Errorf("encode action result: %w", err)
+	}
+	var result ActionResult
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&result); err != nil {
+		return ActionResult{}, fmt.Errorf("decode action result envelope: %w", err)
+	}
+	if result.Outputs != nil {
+		for name, output := range result.Outputs {
+			if strings.TrimSpace(name) == "" {
+				return ActionResult{}, fmt.Errorf("action result contains an empty output name")
+			}
+			if _, err := json.Marshal(output); err != nil {
+				return ActionResult{}, fmt.Errorf("action result output %q is not JSON-serializable: %w", name, err)
+			}
+		}
+	}
+	return result, nil
+}
+
+func encodeActionResult(result ActionResult) string {
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
 }
 
 // ActionProvider defines the generic mechanism to validate and execute actions.
@@ -208,7 +268,7 @@ func (p *commandActionProvider) Execute(ctx context.Context, action Action) (int
 		if detail == "" {
 			detail = err.Error()
 		}
-		return nil, fmt.Errorf("adapter command failed: %s", detail)
+		return nil, fmt.Errorf("adapter command failed: %s", utils.RedactSecrets(detail))
 	}
 	var result interface{}
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {

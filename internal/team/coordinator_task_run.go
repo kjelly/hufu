@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -1520,7 +1521,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		return "", fmt.Errorf("mark structured action in progress: %w", err)
 	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	output, err := c.phaseWorkflow.executeAction(ctx, *task.Action)
+	rawResult, err := c.phaseWorkflow.executeActionValue(ctx, *task.Action)
 	if err != nil {
 		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
 		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
@@ -1528,6 +1529,26 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", err
 	}
+	actionResult, err := decodeActionResult(rawResult)
+	if err != nil {
+		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
+		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
+		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
+		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
+		return "", err
+	}
+	attempt := c.currentTaskAttempt(todoID) + 1
+	c.setCurrentTaskAttempt(todoID, attempt)
+	providerArtifacts, err := c.ingestActionProviderArtifacts(ctx, task, todoID, attempt, actionResult.Artifacts)
+	if err != nil {
+		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
+		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
+		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
+		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
+		return "", err
+	}
+	actionResult.Artifacts = providerArtifacts
+	output := actionResultDisplay(rawResult, actionResult)
 	if task.Verify != "" || task.VerifySpec != nil {
 		if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskVerifying, "running objective verification", output, nil); err != nil {
 			c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
@@ -1544,6 +1565,15 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 			return "", err
 		}
 	}
+	typedResult := &TaskResult{
+		TaskID: todoID, Agent: task.Agent, Attempt: attempt, Status: TaskResultStatusSuccess,
+		Summary: output, Details: output, Source: "runtime", Artifacts: providerArtifacts,
+		Facts: actionResult.Outputs, Confidence: 1,
+	}
+	c.storeSubmittedTaskResult(todoID, typedResult)
+	if item := c.todoItemByID(todoID); item != nil {
+		c.emitArtifactEvents(item)
+	}
 	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output, nil); err != nil {
 		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("mark structured action done: %w", err)
@@ -1551,8 +1581,88 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 	c.reconcileTaskStatusProjection()
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(output).withMessage("structured action completed").withTodoID(todoID))
-	c.emitRuntimeActionEvent("action_completed", task, todoID, "success", startedAt, time.Now().UTC(), output, nil)
+	c.emitRuntimeActionEvent("action_completed", task, todoID, "success", startedAt, time.Now().UTC(), output, nil, providerArtifacts)
 	return output, nil
+}
+
+func actionResultDisplay(raw interface{}, result ActionResult) string {
+	if raw == nil {
+		return "structured action completed"
+	}
+	if text, ok := raw.(string); ok {
+		return text
+	}
+	return encodeActionResult(result)
+}
+
+func (c *Coordinator) ingestActionProviderArtifacts(ctx context.Context, task TaskDef, todoID string, attempt int, declared []ArtifactRef) ([]ArtifactRef, error) {
+	if len(declared) == 0 {
+		return nil, nil
+	}
+	if c == nil || c.session == nil || strings.TrimSpace(c.session.Workspace) == "" {
+		return nil, fmt.Errorf("action artifacts require a workspace")
+	}
+	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	type pendingArtifact struct {
+		request PutArtifactRequest
+	}
+	pending := make([]pendingArtifact, 0, len(declared))
+	providerName := ""
+	if c.phaseWorkflow != nil && task.Action != nil {
+		providerName = c.phaseWorkflow.providerName(normalizeCapability(task.Action.Capability))
+	}
+	for index, artifact := range declared {
+		if strings.TrimSpace(artifact.Path) == "" {
+			return nil, fmt.Errorf("action artifacts[%d] path is required", index)
+		}
+		resolved, resolveErr := resolveArtifactSourcePath(c.session.Workspace, artifact.Path)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("action artifacts[%d] %q: %w", index, artifact.Path, resolveErr)
+		}
+		info, statErr := os.Stat(resolved)
+		if statErr != nil {
+			return nil, fmt.Errorf("action artifacts[%d] %q: %w", index, artifact.Path, statErr)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("action artifacts[%d] %q must be a regular file", index, artifact.Path)
+		}
+		file, openErr := os.Open(resolved)
+		if openErr != nil {
+			return nil, fmt.Errorf("action artifacts[%d] %q: %w", index, artifact.Path, openErr)
+		}
+		content, readErr := io.ReadAll(file)
+		closeErr := file.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("action artifacts[%d] %q: %w", index, artifact.Path, readErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("action artifacts[%d] %q: %w", index, artifact.Path, closeErr)
+		}
+		relative, relErr := filepath.Rel(c.session.Workspace, resolved)
+		if relErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("action artifact %q escapes workspace", artifact.Path)
+		}
+		pending = append(pending, pendingArtifact{request: PutArtifactRequest{
+			Content: content, Kind: artifact.Kind, Path: filepath.ToSlash(relative), Description: artifact.Description,
+			MediaType: artifact.MediaType, RunID: c.executionRunID, TaskID: todoID, Agent: task.Agent,
+			Provider: providerName, Attempt: attempt,
+		}})
+	}
+	refs := make([]ArtifactRef, 0, len(pending))
+	for _, item := range pending {
+		ref, putErr := store.Put(ctx, item.request)
+		if putErr != nil {
+			return nil, putErr
+		}
+		if verifyErr := store.Verify(ctx, ref); verifyErr != nil {
+			return nil, verifyErr
+		}
+		refs = append(refs, ref)
+	}
+	return refs, nil
 }
 
 type runtimeActionReceipt struct {
@@ -1570,7 +1680,7 @@ type runtimeActionReceipt struct {
 	Error      string    `json:"error,omitempty"`
 }
 
-func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, todoID, status string, startedAt, finishedAt time.Time, output string, actionErr error) {
+func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, todoID, status string, startedAt, finishedAt time.Time, output string, actionErr error, providerArtifacts ...[]ArtifactRef) {
 	if c == nil || c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || task.Action == nil {
 		return
 	}
@@ -1608,6 +1718,9 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 		} else {
 			refs = append(refs, ref)
 		}
+	}
+	for _, artifacts := range providerArtifacts {
+		refs = append(refs, artifacts...)
 	}
 	_ = c.emitEvent(eventType, "runtime", todoID, LifecycleEventPayload{
 		Phase: string(c.phaseWorkflow.State()), Agent: task.Agent, Provider: providerName,

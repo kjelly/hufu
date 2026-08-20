@@ -29,6 +29,7 @@ type ArtifactRef struct {
 	TaskID      string    `json:"task_id,omitempty"`
 	Attempt     int       `json:"attempt,omitempty"`
 	Agent       string    `json:"agent,omitempty"`
+	Provider    string    `json:"provider,omitempty"`
 	ToolCallID  string    `json:"tool_call_id,omitempty"`
 	CreatedAt   time.Time `json:"created_at,omitempty"`
 }
