@@ -575,23 +575,41 @@ func NormalizeVerifierLintMode(mode string) string {
 type VerificationType string
 
 const (
-	VerifyCommandExit VerificationType = "command_exit"
-	VerifyFileExists  VerificationType = "file_exists"
-	VerifyFileAbsent  VerificationType = "file_absent"
-	VerifyJSONAssert  VerificationType = "json_assert"
+	VerifyCommandExit    VerificationType = "command_exit"
+	VerifyFileExists     VerificationType = "file_exists"
+	VerifyFileAbsent     VerificationType = "file_absent"
+	VerifyJSONAssert     VerificationType = "json_assert"
+	VerifyToolCallAssert VerificationType = "tool_call_assert"
 )
 
 type VerificationSpec struct {
-	Type       VerificationType `json:"type,omitempty" yaml:"type,omitempty"`
-	Mode       string           `json:"mode,omitempty" yaml:"mode,omitempty"`
-	Command    string           `json:"command,omitempty" yaml:"command,omitempty"`
-	Path       string           `json:"path,omitempty" yaml:"path,omitempty"`
-	Assertions []JSONAssertion  `json:"assertions,omitempty" yaml:"assertions,omitempty"`
+	Type               VerificationType    `json:"type,omitempty" yaml:"type,omitempty"`
+	Mode               string              `json:"mode,omitempty" yaml:"mode,omitempty"`
+	Command            string              `json:"command,omitempty" yaml:"command,omitempty"`
+	Path               string              `json:"path,omitempty" yaml:"path,omitempty"`
+	Assertions         []JSONAssertion     `json:"assertions,omitempty" yaml:"assertions,omitempty"`
+	ToolCallAssertions []ToolCallAssertion `json:"tool_call_assertions,omitempty" yaml:"tool-call-assertions,omitempty"`
 }
 
 type JSONAssertion struct {
 	Path   string `json:"path" yaml:"path"`
 	Equals any    `json:"equals" yaml:"equals"`
+}
+
+// ToolCallAssertion declares a runtime-native assertion against the tool
+// calls and results Fantasy already recorded for the current task attempt --
+// no team-owned script parsing a serialized transcript. Tool is required;
+// InputContains and ResultContains are plain substring matches (not regex) to
+// keep the assertion language small and its failure mode predictable. A tool
+// call whose Input contains InputContains counts toward MinCount; when
+// ResultContains is also set, a matching tool _result_ for the same tool must
+// separately reach MinCount too, mirroring "the call happened AND it returned
+// what was expected."
+type ToolCallAssertion struct {
+	Tool           string `json:"tool" yaml:"tool"`
+	InputContains  string `json:"input_contains,omitempty" yaml:"input-contains,omitempty"`
+	ResultContains string `json:"result_contains,omitempty" yaml:"result-contains,omitempty"`
+	MinCount       int    `json:"min_count,omitempty" yaml:"min-count,omitempty"`
 }
 
 type AcceptanceSpec struct {
@@ -876,6 +894,14 @@ func CreateAgent(ctx context.Context, ollama *OllamaProvider, cfg AgentConfig, a
 		// leaving that enabled would hide those attempts and can exceed Hufu's
 		// deadline before the coordinator receives the failure.
 		fantasy.WithMaxRetries(0),
+		// Recovers tool calls whose arguments got corrupted by a streaming
+		// provider concatenating two parallel tool calls' JSON deltas into one
+		// buffer. Only takes effect for agent.Generate() callers (RunAgent,
+		// sidecar) — the coordinator's streaming tool-call loop sets this same
+		// function directly on its AgentStreamCall instead, since fantasy 0.41
+		// reads AgentStreamCall.RepairToolCall there, not this agent-level
+		// default. See internal/team/coordinator_task_run.go.
+		fantasy.WithRepairToolCall(RepairConcatenatedToolCall),
 	}
 
 	if maxTokens := parseModelInt(cfg.Def.Generation.MaxTokens, cfg.TeamConfig.Generation.MaxTokens); maxTokens > 0 {

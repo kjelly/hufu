@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/fantasy"
+
 	"github.com/kjelly/hufu/internal/agent"
 )
 
@@ -33,6 +35,31 @@ func TestVerification_JSONAssert_WorkerSuccessValueFailed(t *testing.T) {
 	}
 	if res == nil || res.ExitCode == 0 {
 		t.Fatalf("expected non-zero exit code for failed json_assert, got %#v", res)
+	}
+}
+
+// WP-0 keeps a consumer-neutral failure fixture at the verifier boundary:
+// a worker may claim it processed gamma, but a typed assertion over its
+// declared output remains authoritative. The expected value is scalar so a
+// missing-key failure is distinguished from a malformed-spec failure.
+func TestCharacterizationTypedVerificationRejectsMissingGenericItem(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "result.json"), []byte(`{"items":{"alpha":true,"beta":true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ExecuteVerificationSpec(context.Background(), "sh", dir, VerificationSpec{
+		Type: VerifyJSONAssert,
+		Path: "result.json",
+		Assertions: []JSONAssertion{
+			{Path: "items.gamma", Equals: true},
+		},
+	})
+	if err == nil || result == nil || result.ExitCode == 0 {
+		t.Fatalf("missing gamma passed typed verification: result=%#v err=%v", result, err)
+	}
+	if strings.Contains(err.Error(), "malformed verification spec") || !strings.Contains(err.Error(), `key "gamma" not found`) {
+		t.Fatalf("missing gamma did not produce a missing-key assertion failure: %v", err)
 	}
 }
 
@@ -474,6 +501,125 @@ func TestVerification_FileExistsAndAbsent_RelativeAndAbsolute(t *testing.T) {
 	}
 }
 
+func toolCallStep(toolName, input string) fantasy.StepResult {
+	return fantasy.StepResult{
+		Response: fantasy.Response{Content: fantasy.ResponseContent{
+			fantasy.ToolCallContent{ToolCallID: "call_1", ToolName: toolName, Input: input},
+		}},
+	}
+}
+
+func toolResultStep(toolName, text string) fantasy.StepResult {
+	return fantasy.StepResult{
+		Response: fantasy.Response{Content: fantasy.ResponseContent{
+			fantasy.ToolResultContent{ToolCallID: "call_1", ToolName: toolName, Result: fantasy.ToolResultOutputContentText{Text: text}},
+		}},
+	}
+}
+
+// TestVerification_ToolCallAssert_PassesOnGenuineCallAndResult proves the
+// runtime-native typed assertion over a generic input/observation pair: the
+// assertion reads the already-typed StepResult history directly, with no
+// text-escaping or SIGPIPE-under-pipefail failure mode to get wrong.
+func TestVerification_ToolCallAssert_PassesOnGenuineCallAndResult(t *testing.T) {
+	steps := []fantasy.StepResult{
+		toolCallStep("inspect", `{"file_path":"inputs/items.tsv","purpose":"input"}`),
+		toolResultStep("inspect", "observed: alpha"),
+	}
+	spec := VerificationSpec{
+		Type: VerifyToolCallAssert,
+		ToolCallAssertions: []ToolCallAssertion{
+			{Tool: "inspect", InputContains: `"purpose":"input"`, ResultContains: "observed: alpha"},
+		},
+	}
+	res, err := ExecuteVerificationSpecWithSteps(context.Background(), "sh", t.TempDir(), spec, steps)
+	if err != nil || res == nil || res.ExitCode != 0 {
+		t.Fatalf("expected pass, got err=%v res=%#v", err, res)
+	}
+}
+
+// TestVerification_ToolCallAssert_FailsWhenCallMissing proves a task that
+// never made the required tool call is rejected -- the exact failure mode
+// this type exists to catch (a worker that claims completion without the
+// evidence to back it).
+func TestVerification_ToolCallAssert_FailsWhenCallMissing(t *testing.T) {
+	steps := []fantasy.StepResult{
+		toolCallStep("inspect", `{"file_path":"inputs/other.tsv"}`),
+	}
+	spec := VerificationSpec{
+		Type: VerifyToolCallAssert,
+		ToolCallAssertions: []ToolCallAssertion{
+			{Tool: "inspect", InputContains: "inputs/items.tsv"},
+		},
+	}
+	res, err := ExecuteVerificationSpecWithSteps(context.Background(), "sh", t.TempDir(), spec, steps)
+	if err == nil || res == nil || res.ExitCode == 0 {
+		t.Fatalf("expected failure when the required tool call never happened, got err=%v res=%#v", err, res)
+	}
+}
+
+// TestVerification_ToolCallAssert_FailsWhenResultMissing proves that a
+// matching call alone is not enough when ResultContains is set: the call
+// could still have errored or returned something else.
+func TestVerification_ToolCallAssert_FailsWhenResultMissing(t *testing.T) {
+	steps := []fantasy.StepResult{
+		toolCallStep("inspect", `{"file_path":"inputs/items.tsv"}`),
+		toolResultStep("inspect", "observation unavailable"),
+	}
+	spec := VerificationSpec{
+		Type: VerifyToolCallAssert,
+		ToolCallAssertions: []ToolCallAssertion{
+			{Tool: "inspect", InputContains: "inputs/items.tsv", ResultContains: "observed: alpha"},
+		},
+	}
+	res, err := ExecuteVerificationSpecWithSteps(context.Background(), "sh", t.TempDir(), spec, steps)
+	if err == nil || res == nil || res.ExitCode == 0 {
+		t.Fatalf("expected failure when the tool result never contained the required text, got err=%v res=%#v", err, res)
+	}
+}
+
+// TestVerification_ToolCallAssert_MinCountAndMultipleAssertions proves
+// min_count is enforced per assertion and that every assertion in the list
+// must independently pass.
+func TestVerification_ToolCallAssert_MinCountAndMultipleAssertions(t *testing.T) {
+	steps := []fantasy.StepResult{
+		toolCallStep("view", `{"file_path":"a.txt"}`),
+		toolCallStep("view", `{"file_path":"b.txt"}`),
+		toolCallStep("grep", `{"pattern":"TODO"}`),
+	}
+	spec := VerificationSpec{
+		Type: VerifyToolCallAssert,
+		ToolCallAssertions: []ToolCallAssertion{
+			{Tool: "view", MinCount: 2},
+			{Tool: "grep", MinCount: 1},
+		},
+	}
+	if res, err := ExecuteVerificationSpecWithSteps(context.Background(), "sh", t.TempDir(), spec, steps); err != nil || res.ExitCode != 0 {
+		t.Fatalf("expected pass with min_count satisfied, got err=%v res=%#v", err, res)
+	}
+
+	spec.ToolCallAssertions[0].MinCount = 3
+	if res, err := ExecuteVerificationSpecWithSteps(context.Background(), "sh", t.TempDir(), spec, steps); err == nil || res.ExitCode == 0 {
+		t.Fatalf("expected failure when min_count is not met, got err=%v res=%#v", err, res)
+	}
+}
+
+// TestVerification_ToolCallAssert_NilStepsFailsClosed proves that a caller
+// with no per-attempt step history (acceptance/criteria verification, or a
+// non-agent task kind) never gets a silent pass -- it must fail closed with
+// a clear "not supported here" reason rather than treating absent evidence
+// as satisfied.
+func TestVerification_ToolCallAssert_NilStepsFailsClosed(t *testing.T) {
+	spec := VerificationSpec{
+		Type:               VerifyToolCallAssert,
+		ToolCallAssertions: []ToolCallAssertion{{Tool: "view"}},
+	}
+	res, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), spec)
+	if err == nil || res == nil || res.ExitCode == 0 {
+		t.Fatalf("expected fail-closed with no step history, got err=%v res=%#v", err, res)
+	}
+}
+
 // Minimum Test Matrix Item 9: malformed typed verification fails closed
 func TestVerification_Malformed_FailsClosed(t *testing.T) {
 	dir := t.TempDir()
@@ -513,6 +659,29 @@ func TestVerification_Malformed_FailsClosed(t *testing.T) {
 	}
 	if res3 == nil || res3.ExitCode != -1 {
 		t.Fatalf("expected exit code -1 for file_exists missing path, got %#v", res3)
+	}
+
+	// 4. tool_call_assert with no assertions
+	res4, err4 := ExecuteVerificationSpec(context.Background(), "sh", dir, VerificationSpec{
+		Type: VerifyToolCallAssert,
+	})
+	if err4 == nil {
+		t.Fatalf("expected error for tool_call_assert with no assertions")
+	}
+	if res4 == nil || res4.ExitCode != -1 {
+		t.Fatalf("expected exit code -1 for malformed tool_call_assert, got %#v", res4)
+	}
+
+	// 5. tool_call_assert with an assertion missing a tool name
+	res5, err5 := ExecuteVerificationSpec(context.Background(), "sh", dir, VerificationSpec{
+		Type:               VerifyToolCallAssert,
+		ToolCallAssertions: []ToolCallAssertion{{InputContains: "x"}},
+	})
+	if err5 == nil {
+		t.Fatalf("expected error for tool_call_assert assertion missing a tool name")
+	}
+	if res5 == nil || res5.ExitCode != -1 {
+		t.Fatalf("expected exit code -1 for malformed tool_call_assert assertion, got %#v", res5)
 	}
 }
 

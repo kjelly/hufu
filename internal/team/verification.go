@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/fantasy"
+
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -313,6 +315,16 @@ func toExactJSONNumber(v any) (*big.Rat, bool) {
 
 // ExecuteVerificationSpec executes a typed verification specification.
 func ExecuteVerificationSpec(parentCtx context.Context, shell, workDir string, spec VerificationSpec) (result *VerificationResult, err error) {
+	return ExecuteVerificationSpecWithSteps(parentCtx, shell, workDir, spec, nil)
+}
+
+// ExecuteVerificationSpecWithSteps is ExecuteVerificationSpec plus the
+// current task attempt's own tool-call/tool-result history, needed only by
+// VerifyToolCallAssert. steps is nil for every non-task-attempt caller
+// (acceptance/criteria verification, or a runtime-action task kind that
+// never ran an agent conversation); VerifyToolCallAssert fails closed in that
+// case rather than silently passing.
+func ExecuteVerificationSpecWithSteps(parentCtx context.Context, shell, workDir string, spec VerificationSpec, steps []fantasy.StepResult) (result *VerificationResult, err error) {
 	defer func() {
 		if result != nil && result.EvaluatedAt.IsZero() {
 			result.EvaluatedAt = time.Now().UTC()
@@ -360,6 +372,13 @@ func ExecuteVerificationSpec(parentCtx context.Context, shell, workDir string, s
 		}
 		return res, err
 
+	case VerifyToolCallAssert:
+		res, err := executeToolCallAssertVerification(workDir, spec, steps)
+		if res != nil {
+			res.Fingerprint = ComputeVerificationFingerprint(spec, res, workDir)
+		}
+		return res, err
+
 	default:
 		res.ExitCode = -1
 		res.Fingerprint = ComputeVerificationFingerprint(spec, res, workDir)
@@ -390,6 +409,18 @@ func validateVerificationSpec(spec VerificationSpec) error {
 		for i, assertion := range spec.Assertions {
 			if !isJSONScalar(assertion.Equals) {
 				return fmt.Errorf("json_assert assertion %d requires a scalar equals value", i)
+			}
+		}
+	case VerifyToolCallAssert:
+		if len(spec.ToolCallAssertions) == 0 {
+			return errors.New("tool_call_assert verification requires at least one assertion")
+		}
+		for i, assertion := range spec.ToolCallAssertions {
+			if strings.TrimSpace(assertion.Tool) == "" {
+				return fmt.Errorf("tool_call_assert assertion %d requires a non-empty tool name", i)
+			}
+			if assertion.MinCount < 0 {
+				return fmt.Errorf("tool_call_assert assertion %d has a negative min_count", i)
 			}
 		}
 	default:
@@ -701,5 +732,73 @@ func executeJSONAssertVerification(parentCtx context.Context, shell, workDir str
 
 	res.ExitCode = 0
 	res.Stdout = fmt.Sprintf("json_assert passed (%d assertion(s))", len(spec.Assertions))
+	return applyVerificationMode(res, nil, spec.Mode)
+}
+
+// executeToolCallAssertVerification asserts directly against the current
+// task attempt's own already-parsed tool-call/tool-result history -- no
+// team-owned script re-parsing a serialized NDJSON transcript, and none of
+// the JSON-escaping or SIGPIPE-under-pipefail failure modes that come with
+// doing this in bash. steps is nil for every caller that has no per-attempt
+// agent conversation (acceptance/criteria verification, non-agent task
+// kinds); that fails closed below rather than silently passing.
+func executeToolCallAssertVerification(workDir string, spec VerificationSpec, steps []fantasy.StepResult) (*VerificationResult, error) {
+	res := &VerificationResult{
+		WorkDir: workDir,
+		Spec:    &spec,
+	}
+
+	if steps == nil {
+		res.ExitCode = 1
+		res.Stderr = "tool_call_assert failed: no task-attempt tool-call history is available in this verification context (acceptance/criteria and non-agent task kinds are not supported)"
+		return applyVerificationMode(res, errors.New("tool_call_assert requires per-attempt tool-call history, which this verification context does not have"), spec.Mode)
+	}
+
+	var failures []string
+	for i, assertion := range spec.ToolCallAssertions {
+		minCount := assertion.MinCount
+		if minCount <= 0 {
+			minCount = 1
+		}
+		callCount := 0
+		resultCount := 0
+		for _, step := range steps {
+			for _, call := range step.Content.ToolCalls() {
+				if call.ToolName != assertion.Tool {
+					continue
+				}
+				if assertion.InputContains == "" || strings.Contains(call.Input, assertion.InputContains) {
+					callCount++
+				}
+			}
+			if assertion.ResultContains != "" {
+				for _, tr := range step.Content.ToolResults() {
+					if tr.ToolName != assertion.Tool {
+						continue
+					}
+					text, _ := toolResultOutputText(tr.Result)
+					if strings.Contains(text, assertion.ResultContains) {
+						resultCount++
+					}
+				}
+			}
+		}
+		if callCount < minCount {
+			failures = append(failures, fmt.Sprintf("assertion %d: tool %q with input containing %q called %d time(s), want at least %d", i, assertion.Tool, assertion.InputContains, callCount, minCount))
+			continue
+		}
+		if assertion.ResultContains != "" && resultCount < minCount {
+			failures = append(failures, fmt.Sprintf("assertion %d: tool %q result containing %q matched %d time(s), want at least %d", i, assertion.Tool, assertion.ResultContains, resultCount, minCount))
+		}
+	}
+
+	if len(failures) > 0 {
+		res.ExitCode = 1
+		res.Stderr = "tool_call_assert failed: " + strings.Join(failures, "; ")
+		return applyVerificationMode(res, fmt.Errorf("tool_call_assert failed: %s", strings.Join(failures, "; ")), spec.Mode)
+	}
+
+	res.ExitCode = 0
+	res.Stdout = fmt.Sprintf("tool_call_assert passed (%d assertion(s))", len(spec.ToolCallAssertions))
 	return applyVerificationMode(res, nil, spec.Mode)
 }

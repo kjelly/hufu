@@ -41,7 +41,7 @@ func TestVerifySpecLegacyModePopulatesMixedTypedTask(t *testing.T) {
 		Verify:     "exit 1",
 		VerifyMode: "observation",
 		VerifySpec: &VerificationSpec{Type: VerifyCommandExit},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("legacy verify_mode must populate a typed spec with no mode: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestLegacyTestExistsExecutionUsesTypedFileExists(t *testing.T) {
 	c := &Coordinator{projectDir: workspace}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			verification, err := c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -e " + tt.target})
+			verification, err := c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -e " + tt.target}, nil)
 			if verification == nil || verification.Spec == nil {
 				t.Fatalf("test -e produced no typed evidence: verification=%#v err=%v", verification, err)
 			}
@@ -148,7 +148,7 @@ func TestLegacyFileAndDirectoryChecksPreserveShellSemantics(t *testing.T) {
 	}
 	c := &Coordinator{projectDir: workspace}
 
-	verification, err := c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -f target"})
+	verification, err := c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -f target"}, nil)
 	if err == nil || verification == nil || verification.ExitCode == 0 {
 		t.Fatalf("test -f must reject a directory: verification=%#v err=%v", verification, err)
 	}
@@ -156,7 +156,7 @@ func TestLegacyFileAndDirectoryChecksPreserveShellSemantics(t *testing.T) {
 		t.Fatalf("test -f must retain command_exit semantics: %#v", verification.Spec)
 	}
 
-	verification, err = c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -d target"})
+	verification, err = c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -d target"}, nil)
 	if err != nil || verification == nil || verification.ExitCode != 0 {
 		t.Fatalf("test -d must accept a directory: verification=%#v err=%v", verification, err)
 	}
@@ -167,11 +167,11 @@ func TestLegacyFileAndDirectoryChecksPreserveShellSemantics(t *testing.T) {
 	if err := os.WriteFile(target, []byte("ok"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	verification, err = c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -f target"})
+	verification, err = c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -f target"}, nil)
 	if err != nil || verification == nil || verification.ExitCode != 0 {
 		t.Fatalf("test -f must accept a regular file: verification=%#v err=%v", verification, err)
 	}
-	verification, err = c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -d target"})
+	verification, err = c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{Verify: "test -d target"}, nil)
 	if err == nil || verification == nil || verification.ExitCode == 0 {
 		t.Fatalf("test -d must reject a regular file: verification=%#v err=%v", verification, err)
 	}
