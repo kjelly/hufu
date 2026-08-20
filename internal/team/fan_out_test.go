@@ -75,6 +75,14 @@ func TestCharacterizationFanOutPermitsMissingItem(t *testing.T) {
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("missing source row was not reproduced: got %v, want %v", got, want)
 	}
+	if len(expanded) == len(characterizationWorksetItems) {
+		t.Fatal("legacy fan-out unexpectedly proved completeness against the expected fixture")
+	}
+	for _, item := range expanded {
+		if strings.Contains(item.Goal, "gamma") {
+			t.Fatalf("legacy fan-out unexpectedly reconstructed omitted item: %#v", item)
+		}
+	}
 }
 
 func TestCharacterizationFanOutPermitsDuplicateItem(t *testing.T) {

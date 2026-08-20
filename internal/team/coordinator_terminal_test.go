@@ -661,6 +661,7 @@ func TestCharacterizationChildVerificationFailurePreservesTheSubmittedResult(t *
 func TestCharacterizationBudgetCancellationCreatesNoGenericChildren(t *testing.T) {
 	workspace := t.TempDir()
 	writeCharacterizationWorkset(t, workspace, characterizationWorksetItems)
+	var budgetEvents []StatusEvent
 	c := &Coordinator{
 		session: &TeamSession{
 			Workspace: workspace,
@@ -669,10 +670,12 @@ func TestCharacterizationBudgetCancellationCreatesNoGenericChildren(t *testing.T
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		projectDir:   workspace,
-		sessionTime:  time.Now().Add(-2 * time.Second),
-		taskTracker:  NewTaskTracker(),
-		reportStatus: func(StatusEvent) {},
+		projectDir:  workspace,
+		sessionTime: time.Now().Add(-2 * time.Second),
+		taskTracker: NewTaskTracker(),
+		reportStatus: func(event StatusEvent) {
+			budgetEvents = append(budgetEvents, event)
+		},
 	}
 	var calls int
 	c.workerAgentOverride = &submittingWorkerAgent{calls: &calls}
@@ -691,6 +694,12 @@ func TestCharacterizationBudgetCancellationCreatesNoGenericChildren(t *testing.T
 	if calls != 0 {
 		t.Fatalf("budget-cancelled dispatch invoked the worker %d times, want zero", calls)
 	}
+	for _, event := range budgetEvents {
+		if event.Type == "budget_exceeded" {
+			return
+		}
+	}
+	t.Fatalf("budget cancellation emitted no budget_exceeded event: %#v", budgetEvents)
 }
 
 // Crash-resume keeps the original Todo identity and re-drives the unfinished
