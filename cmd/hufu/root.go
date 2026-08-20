@@ -31,9 +31,10 @@ Specify the team with --agent-team <name> or by writing @<team-name> in the prom
 Within a team, target a specific agent with @<agent-name> <task>.
 
 Set the model with --model <name> (highest priority), in team.yaml, or in hufu.yaml.`,
-		Args:    cobra.MaximumNArgs(1),
-		RunE:    runTeam,
-		Version: version,
+		Args:         cobra.MaximumNArgs(1),
+		RunE:         runTeam,
+		Version:      version,
+		SilenceUsage: true,
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {
 			configureOutputRendering()
 		},

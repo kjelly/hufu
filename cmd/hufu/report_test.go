@@ -104,6 +104,173 @@ func TestBuildReportMDIncludesVerificationEvidence(t *testing.T) {
 	}
 }
 
+// WP-0 fixes the baseline report projection for a generic batch. It must show
+// individual child state and failed objective evidence without depending on a
+// consumer-specific item name or presentation format.
+func TestCharacterizationReportProjectsGenericChildStates(t *testing.T) {
+	data := &reportData{
+		StartedAt: time.Now().Add(-time.Minute),
+		Todos: []*team.TodoItem{
+			{ID: "1", Agent: "worker", Desc: "process alpha", Status: team.TaskDone},
+			{ID: "2", Agent: "worker", Desc: "process beta", Status: team.TaskError, VerifyResult: &team.VerificationResult{
+				Spec: &team.VerificationSpec{Type: team.VerifyFileExists, Path: "outputs/beta.txt"}, Command: "test -e outputs/beta.txt", ExitCode: 1, Stderr: "missing output",
+			}},
+			{ID: "3", Agent: "worker", Desc: "process gamma", Status: team.TaskPending},
+		},
+	}
+	report := buildReportMD(data, "", "")
+
+	taskSummaryStart := strings.Index(report, "## Task Summary\n")
+	if taskSummaryStart < 0 {
+		t.Fatalf("report missing task summary:\n%s", report)
+	}
+	taskSummaryEnd := strings.Index(report[taskSummaryStart:], "\n---\n\n")
+	if taskSummaryEnd < 0 {
+		t.Fatalf("task summary has no stable end boundary:\n%s", report)
+	}
+	taskSummary := report[taskSummaryStart : taskSummaryStart+taskSummaryEnd]
+	for _, want := range []string{
+		"| 1 | ● | worker | process alpha |",
+		"| 2 | ✗ | worker | process beta |",
+		"| 3 | ○ | worker | process gamma |",
+	} {
+		if !strings.Contains(taskSummary, want) {
+			t.Fatalf("task summary missing canonical task state/description %q:\n%s", want, taskSummary)
+		}
+	}
+
+	rowFor := func(id string) string {
+		marker := "| " + id + " |"
+		rowStart := strings.Index(taskSummary, marker)
+		if rowStart < 0 {
+			return ""
+		}
+		rowEnd := strings.IndexByte(taskSummary[rowStart:], '\n')
+		if rowEnd < 0 {
+			return taskSummary[rowStart:]
+		}
+		return taskSummary[rowStart : rowStart+rowEnd]
+	}
+	for _, id := range []string{"1", "3"} {
+		row := rowFor(id)
+		if strings.Contains(row, "outputs/beta.txt") || strings.Contains(row, "missing output") {
+			t.Fatalf("task %s row contains beta verification evidence: %s", id, row)
+		}
+	}
+
+	evidenceStart := strings.Index(report, "## Verification Evidence\n")
+	if evidenceStart < 0 {
+		t.Fatalf("report missing verification evidence section:\n%s", report)
+	}
+	betaMarker := "### Task 2: process beta\n"
+	betaStartRel := strings.Index(report[evidenceStart:], betaMarker)
+	if betaStartRel < 0 {
+		t.Fatalf("verification evidence missing beta task block:\n%s", report[evidenceStart:])
+	}
+	betaStart := evidenceStart + betaStartRel
+	betaEndRel := strings.Index(report[betaStart+len(betaMarker):], "\n---\n\n")
+	if betaEndRel < 0 {
+		t.Fatalf("beta verification block has no stable end boundary:\n%s", report[betaStart:])
+	}
+	betaBlock := report[betaStart : betaStart+len(betaMarker)+betaEndRel]
+	for _, want := range []string{"outputs/beta.txt", "missing output"} {
+		if !strings.Contains(betaBlock, want) {
+			t.Fatalf("beta verification block missing %q:\n%s", want, betaBlock)
+		}
+	}
+}
+
+func TestCharacterizationReportProjectsCancelledBudgetRunResult(t *testing.T) {
+	data := &reportData{
+		StartedAt: time.Now(),
+		RunResult: &team.RunResult{
+			Outcome:       team.RunOutcomeCancelled,
+			GoalSatisfied: false,
+			GoalMode:      team.GoalModeOutcome,
+			StopReason:    team.StopReasonBudgetExceeded,
+			Stats:         team.RunStats{TasksUnresolved: 3},
+		},
+	}
+
+	report := buildReportMD(data, "", "")
+	for _, want := range []string{"`cancelled`", "Goal satisfied:** `false`", "Stop reason:** `budget_exceeded`", "Tasks unresolved:** 3"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing canonical cancelled/budget projection %q:\n%s", want, report)
+		}
+	}
+}
+
+// TestBuildReportMDAggregatesTaskFindings guards against a real reporting
+// gap: submit_result's structured findings were persisted to
+// session.json/JSONL but never rendered into report.md, which only ever
+// showed a boolean "findings are present" line. A reader had no way to see
+// what was actually found without opening the raw session/task-output files.
+func TestBuildReportMDAggregatesTaskFindings(t *testing.T) {
+	data := &reportData{
+		StartedAt: time.Now().Add(-1 * time.Minute),
+		Todos: []*team.TodoItem{
+			{
+				ID:     "2",
+				Agent:  "go-reviewer",
+				Desc:   "Review batch-0000",
+				Status: team.TaskDone,
+				TypedResult: &team.TaskResult{
+					Status:  "completed_with_gaps",
+					Summary: "reviewed batch-0000",
+					Findings: []team.Finding{
+						{Category: "WARNING", Summary: "unsynchronized map access", Detail: "coordinator_eventstore.go:42"},
+						{Category: "NOTE", Summary: "missing doc comment"},
+					},
+				},
+			},
+			{
+				ID:     "1",
+				Agent:  "inventory",
+				Desc:   "inventory",
+				Status: team.TaskDone,
+				TypedResult: &team.TaskResult{
+					Status:   "success",
+					Summary:  "inventory done",
+					Findings: []team.Finding{{Summary: "review range covers 32 commits"}},
+				},
+			},
+		},
+	}
+
+	report := buildReportMD(data, "demo", "finished")
+
+	if !strings.Contains(report, "## Review Findings") {
+		t.Fatalf("report missing findings section:\n%s", report)
+	}
+	if !strings.Contains(report, "[WARNING]") || !strings.Contains(report, "unsynchronized map access") || !strings.Contains(report, "coordinator_eventstore.go:42") {
+		t.Fatalf("report missing detailed finding content:\n%s", report)
+	}
+	if !strings.Contains(report, "[NOTE]") || !strings.Contains(report, "missing doc comment") {
+		t.Fatalf("report missing finding without detail:\n%s", report)
+	}
+	if strings.Contains(report, "[]") {
+		t.Fatalf("report rendered an empty category label:\n%s", report)
+	}
+	if !strings.Contains(report, "- review range covers 32 commits") {
+		t.Fatalf("report missing uncategorized finding:\n%s", report)
+	}
+}
+
+func TestBuildReportMDOmitsFindingsSectionWhenNoTaskHasFindings(t *testing.T) {
+	data := &reportData{
+		StartedAt: time.Now().Add(-1 * time.Minute),
+		Todos: []*team.TodoItem{
+			{ID: "1", Agent: "inventory", Desc: "inventory", Status: team.TaskDone},
+		},
+	}
+
+	report := buildReportMD(data, "demo", "finished")
+
+	if strings.Contains(report, "## Review Findings") {
+		t.Fatalf("report rendered an empty findings section:\n%s", report)
+	}
+}
+
 func TestBuildReportMDIncludesCanonicalRunOutcome(t *testing.T) {
 	data := &reportData{
 		StartedAt: time.Now(),

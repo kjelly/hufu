@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/config"
@@ -80,3 +81,27 @@ func TestCompleteAtNames(t *testing.T) {
 		}
 	})
 }
+
+func TestRootCommandSilencesUsageOnError(t *testing.T) {
+	cmd := newRootCommand()
+	if !cmd.SilenceUsage {
+		t.Fatal("rootCommand.SilenceUsage must be true to avoid printing usage on error exit")
+	}
+}
+
+func TestCommandErrorDoesNotPrintUsage(t *testing.T) {
+	cmd := newRootCommand()
+	var buf strings.Builder
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{"--invalid-test-flag"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for invalid flag")
+	}
+	output := buf.String()
+	if strings.Contains(output, "Usage:") {
+		t.Fatalf("expected output not to contain Usage: on error, got:\n%s", output)
+	}
+}
+

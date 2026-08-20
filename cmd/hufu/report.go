@@ -23,6 +23,19 @@ var taskStatusIcons = map[team.TaskStatus]string{
 	team.TaskVerifying: "◔",
 }
 
+// hasReportFindings reports whether any task carries a structured Finding.
+// The boolean "findings are present" line in Review Outcome tells the reader
+// something exists without saying what; the per-task detail lived only in
+// session.json/JSONL, never in report.md itself.
+func hasReportFindings(todos []*team.TodoItem) bool {
+	for _, t := range todos {
+		if t != nil && t.TypedResult != nil && len(t.TypedResult.Findings) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // generateReport creates a markdown execution report for every loaded team.
 // It is the explicit --report behavior.
 func generateReport(loadedTeams map[string]*teamContext, combinedResult string) {
@@ -386,6 +399,28 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 				t.ID, statusIcon, t.Agent, t.Desc, detail, verify, dur)
 		}
 		b.WriteString("\n---\n\n")
+	}
+	if hasReportFindings(data.Todos) {
+		b.WriteString("## Review Findings\n\n")
+		for _, t := range data.Todos {
+			if t == nil || t.TypedResult == nil || len(t.TypedResult.Findings) == 0 {
+				continue
+			}
+			fmt.Fprintf(&b, "### %s (%s)\n\n", t.ID, t.Agent)
+			for _, f := range t.TypedResult.Findings {
+				label := ""
+				if category := strings.TrimSpace(f.Category); category != "" {
+					label = fmt.Sprintf("**[%s]** ", category)
+				}
+				if strings.TrimSpace(f.Detail) != "" {
+					fmt.Fprintf(&b, "- %s%s — %s\n", label, f.Summary, f.Detail)
+				} else {
+					fmt.Fprintf(&b, "- %s%s\n", label, f.Summary)
+				}
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("---\n\n")
 	}
 	if data.HistoricalTodoCount > 0 {
 		fmt.Fprintf(&b, "## Historical Runs\n\n%d task projection(s) with receipts from earlier runs were excluded from this latest-run task table.\n\n---\n\n", data.HistoricalTodoCount)
