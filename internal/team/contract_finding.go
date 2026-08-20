@@ -42,6 +42,9 @@ const (
 	// it can never fail, regardless of task outcome.
 	// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3
 	FindingVerifierNotAsserting = "verifier_not_asserting"
+	// FindingVerifierInvalid indicates a malformed typed verifier contract that
+	// must fail closed before any worker is dispatched.
+	FindingVerifierInvalid = "verifier_invalid"
 
 	// FindingExecutableUnresolved indicates that one or more pipeline stage
 	// executables could not be resolved via PATH or project-local lookup.

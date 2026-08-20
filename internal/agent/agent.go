@@ -577,20 +577,22 @@ func NormalizeVerifierLintMode(mode string) string {
 type VerificationType string
 
 const (
-	VerifyCommandExit    VerificationType = "command_exit"
-	VerifyFileExists     VerificationType = "file_exists"
-	VerifyFileAbsent     VerificationType = "file_absent"
-	VerifyJSONAssert     VerificationType = "json_assert"
-	VerifyToolCallAssert VerificationType = "tool_call_assert"
+	VerifyCommandExit      VerificationType = "command_exit"
+	VerifyFileExists       VerificationType = "file_exists"
+	VerifyFileAbsent       VerificationType = "file_absent"
+	VerifyJSONAssert       VerificationType = "json_assert"
+	VerifyToolCallAssert   VerificationType = "tool_call_assert"
+	VerifyTaskResultAssert VerificationType = "task_result_assert"
 )
 
 type VerificationSpec struct {
-	Type               VerificationType    `json:"type,omitempty" yaml:"type,omitempty"`
-	Mode               string              `json:"mode,omitempty" yaml:"mode,omitempty"`
-	Command            string              `json:"command,omitempty" yaml:"command,omitempty"`
-	Path               string              `json:"path,omitempty" yaml:"path,omitempty"`
-	Assertions         []JSONAssertion     `json:"assertions,omitempty" yaml:"assertions,omitempty"`
-	ToolCallAssertions []ToolCallAssertion `json:"tool_call_assertions,omitempty" yaml:"tool-call-assertions,omitempty"`
+	Type                 VerificationType      `json:"type,omitempty" yaml:"type,omitempty"`
+	Mode                 string                `json:"mode,omitempty" yaml:"mode,omitempty"`
+	Command              string                `json:"command,omitempty" yaml:"command,omitempty"`
+	Path                 string                `json:"path,omitempty" yaml:"path,omitempty"`
+	Assertions           []JSONAssertion       `json:"assertions,omitempty" yaml:"assertions,omitempty"`
+	ToolCallAssertions   []ToolCallAssertion   `json:"tool_call_assertions,omitempty" yaml:"tool-call-assertions,omitempty"`
+	TaskResultAssertions []TaskResultAssertion `json:"task_result_assertions,omitempty" yaml:"task-result-assertions,omitempty"`
 }
 
 type JSONAssertion struct {
@@ -612,6 +614,16 @@ type ToolCallAssertion struct {
 	InputContains  string `json:"input_contains,omitempty" yaml:"input-contains,omitempty"`
 	ResultContains string `json:"result_contains,omitempty" yaml:"result-contains,omitempty"`
 	MinCount       int    `json:"min_count,omitempty" yaml:"min-count,omitempty"`
+}
+
+// TaskResultAssertion declares a bounded assertion against the canonical
+// structured TaskResult produced by the worker. Pointer uses RFC 6901 JSON
+// Pointer syntax; Op is one of exists, non_empty, equals, min_items, or
+// contains_scalar.
+type TaskResultAssertion struct {
+	Pointer string `json:"pointer" yaml:"pointer"`
+	Op      string `json:"op" yaml:"op"`
+	Value   any    `json:"value,omitempty" yaml:"value,omitempty"`
 }
 
 type AcceptanceSpec struct {

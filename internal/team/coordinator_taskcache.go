@@ -97,9 +97,18 @@ func verificationSpecCacheKey(vs *VerificationSpec) string {
 	for _, a := range assertions {
 		assertionKey += fmt.Sprintf("%s=%s;", a.Path, canonicalJSONAssertionValue(a.Equals))
 	}
-	return fmt.Sprintf("type:%s|mode:%s|cmd:%s|path:%s|assertions:%s",
+	taskResultAssertions := canonicalTaskResultAssertions(vs.TaskResultAssertions)
+	taskResultAssertionKey := ""
+	for _, a := range taskResultAssertions {
+		taskResultAssertionKey += fmt.Sprintf("%s:%s=%s;", a.Pointer, a.Op, canonicalJSONAssertionValue(a.Value))
+	}
+	return fmt.Sprintf("type:%s|mode:%s|cmd:%s|path:%s|assertions:%s|task_result_assertions:%s",
 		string(vs.Type), normalizeVerifyMode(vs.Mode), normalizeTaskCacheKey(vs.Command),
-		normalizeTaskCacheKey(vs.Path), assertionKey)
+		normalizeTaskCacheKey(vs.Path), assertionKey, taskResultAssertionKey)
+}
+
+func isTaskResultVerificationSpec(spec *VerificationSpec) bool {
+	return spec != nil && spec.Type == VerifyTaskResultAssert
 }
 
 func taskCacheIdentity(taskDesc, verify, verifyMode string) string {
@@ -221,6 +230,11 @@ func (c *Coordinator) lookupTaskCacheWithTypedVerification(ctx context.Context, 
 		return "", false
 	}
 	normalized := normalizedVerificationSpecForCache(verifySpec, verify, verifyMode)
+	// A task_result_assert is bound to the current attempt's canonical result;
+	// cached entries do not carry that result and therefore cannot be reused.
+	if isTaskResultVerificationSpec(normalized) {
+		return "", false
+	}
 	// Legacy verify commands retain their historical cache policy for backward
 	// compatibility. Explicit verify_spec entries require fresh typed evidence;
 	// this distinction prevents the conservative legacy translation from making
@@ -368,6 +382,9 @@ func (c *Coordinator) lookupTaskCacheInWithTypedVerification(ctx context.Context
 		return "", "", false
 	}
 	normalizedSpec := normalizedVerificationSpecForCache(verifySpec, verify, verifyMode)
+	if isTaskResultVerificationSpec(normalizedSpec) {
+		return "", "", false
+	}
 	evidenceSpec := normalizedSpec
 	if verifySpec == nil {
 		evidenceSpec = nil
@@ -459,6 +476,9 @@ func (c *Coordinator) storeTaskCacheWithTypedVerificationEvidence(agentKey, task
 	// translation as execution so a mixed typed/legacy definition cannot lose
 	// its observation mode at the cache boundary.
 	if normalizedSpec != nil && normalizeVerifyMode(normalizedSpec.Mode) == "observation" {
+		return
+	}
+	if isTaskResultVerificationSpec(normalizedSpec) {
 		return
 	}
 	if verifySpec != nil && requiresFreshVerificationEvidence(normalizedSpec) && (verification == nil || verification.ExitCode != 0 || verification.EvaluatedAt.IsZero() || verification.Fingerprint == "") {

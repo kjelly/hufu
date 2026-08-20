@@ -24,6 +24,13 @@ import (
 	"github.com/kjelly/hufu/internal/utils"
 )
 
+const (
+	maxTaskResultAssertions     = 32
+	maxTaskResultPointerBytes   = 512
+	maxTaskResultValueBytes     = 4096
+	maxTaskResultAssertionItems = 100000
+)
+
 // TranslateLegacyVerification converts only legacy commands whose assertion
 // semantics are unambiguous in the typed verifier model. The typed
 // file_exists verifier means "any existing file or directory", so only test
@@ -61,13 +68,15 @@ func NormalizeVerificationSpec(spec VerificationSpec, legacyCommand, legacyMode 
 	if normalized.Type == "" {
 		// An explicit typed shape wins. Only an otherwise untyped legacy command
 		// is eligible for conservative migration.
-		if normalized.Path == "" && len(normalized.Assertions) == 0 {
+		if normalized.Path == "" && len(normalized.Assertions) == 0 && len(normalized.TaskResultAssertions) == 0 {
 			if translated, ok := TranslateLegacyVerification(legacyCommand); ok {
 				normalized.Type = translated.Type
 				normalized.Path = translated.Path
 			}
 		}
-		if normalized.Type == "" && normalized.Path != "" {
+		if normalized.Type == "" && len(normalized.TaskResultAssertions) > 0 {
+			normalized.Type = VerifyTaskResultAssert
+		} else if normalized.Type == "" && normalized.Path != "" {
 			if len(normalized.Assertions) > 0 {
 				normalized.Type = VerifyJSONAssert
 			} else {
@@ -115,6 +124,20 @@ func canonicalJSONAssertionValue(value any) string {
 	return string(encoded)
 }
 
+func canonicalTaskResultAssertions(assertions []TaskResultAssertion) []TaskResultAssertion {
+	canonical := append([]TaskResultAssertion(nil), assertions...)
+	sort.SliceStable(canonical, func(i, j int) bool {
+		if canonical[i].Pointer != canonical[j].Pointer {
+			return canonical[i].Pointer < canonical[j].Pointer
+		}
+		if canonical[i].Op != canonical[j].Op {
+			return canonical[i].Op < canonical[j].Op
+		}
+		return canonicalJSONAssertionValue(canonical[i].Value) < canonicalJSONAssertionValue(canonical[j].Value)
+	})
+	return canonical
+}
+
 // ComputeVerificationFingerprint generates a deterministic evidence fingerprint.
 // revision is the acceptance contract revision (empty for task-level verifications).
 // securityMode is the execution security mode (e.g. "", "rbash", "no-net").
@@ -144,6 +167,9 @@ func ComputeVerificationFingerprintFull(spec VerificationSpec, result *Verificat
 	assertions := canonicalJSONAssertions(spec.Assertions)
 	for _, a := range assertions {
 		_, _ = fmt.Fprintf(h, "a:%s=%s|", a.Path, canonicalJSONAssertionValue(a.Equals))
+	}
+	for _, a := range canonicalTaskResultAssertions(spec.TaskResultAssertions) {
+		_, _ = fmt.Fprintf(h, "tra:%s:%s=%s|", a.Pointer, a.Op, canonicalJSONAssertionValue(a.Value))
 	}
 
 	targetPath := spec.Path
@@ -315,7 +341,7 @@ func toExactJSONNumber(v any) (*big.Rat, bool) {
 
 // ExecuteVerificationSpec executes a typed verification specification.
 func ExecuteVerificationSpec(parentCtx context.Context, shell, workDir string, spec VerificationSpec) (result *VerificationResult, err error) {
-	return ExecuteVerificationSpecWithSteps(parentCtx, shell, workDir, spec, nil)
+	return ExecuteVerificationSpecWithStepsAndTaskResult(parentCtx, shell, workDir, spec, nil, nil)
 }
 
 // ExecuteVerificationSpecWithSteps is ExecuteVerificationSpec plus the
@@ -325,6 +351,20 @@ func ExecuteVerificationSpec(parentCtx context.Context, shell, workDir string, s
 // never ran an agent conversation); VerifyToolCallAssert fails closed in that
 // case rather than silently passing.
 func ExecuteVerificationSpecWithSteps(parentCtx context.Context, shell, workDir string, spec VerificationSpec, steps []fantasy.StepResult) (result *VerificationResult, err error) {
+	return ExecuteVerificationSpecWithStepsAndTaskResult(parentCtx, shell, workDir, spec, steps, nil)
+}
+
+// ExecuteVerificationSpecWithTaskResult evaluates a task-result assertion
+// against the worker's canonical structured result. Other verifier types keep
+// the same behaviour as ExecuteVerificationSpec.
+func ExecuteVerificationSpecWithTaskResult(parentCtx context.Context, shell, workDir string, spec VerificationSpec, taskResult *TaskResult) (result *VerificationResult, err error) {
+	return ExecuteVerificationSpecWithStepsAndTaskResult(parentCtx, shell, workDir, spec, nil, taskResult)
+}
+
+// ExecuteVerificationSpecWithStepsAndTaskResult is the full verifier entry
+// point. The task result is intentionally explicit: acceptance and criteria
+// callers pass nil and task_result_assert therefore fails closed.
+func ExecuteVerificationSpecWithStepsAndTaskResult(parentCtx context.Context, shell, workDir string, spec VerificationSpec, steps []fantasy.StepResult, taskResult *TaskResult) (result *VerificationResult, err error) {
 	defer func() {
 		if result != nil && result.EvaluatedAt.IsZero() {
 			result.EvaluatedAt = time.Now().UTC()
@@ -379,6 +419,13 @@ func ExecuteVerificationSpecWithSteps(parentCtx context.Context, shell, workDir 
 		}
 		return res, err
 
+	case VerifyTaskResultAssert:
+		res, err := executeTaskResultAssertVerification(workDir, spec, taskResult)
+		if res != nil {
+			res.Fingerprint = ComputeVerificationFingerprint(spec, res, workDir)
+		}
+		return res, err
+
 	default:
 		res.ExitCode = -1
 		res.Fingerprint = ComputeVerificationFingerprint(spec, res, workDir)
@@ -423,6 +470,21 @@ func validateVerificationSpec(spec VerificationSpec) error {
 				return fmt.Errorf("tool_call_assert assertion %d has a negative min_count", i)
 			}
 		}
+	case VerifyTaskResultAssert:
+		if len(spec.TaskResultAssertions) == 0 {
+			return errors.New("task_result_assert verification requires at least one assertion")
+		}
+		if strings.TrimSpace(spec.Command) != "" || strings.TrimSpace(spec.Path) != "" || len(spec.Assertions) > 0 || len(spec.ToolCallAssertions) > 0 {
+			return errors.New("task_result_assert verification cannot combine command, path, JSON, or tool-call assertions")
+		}
+		if len(spec.TaskResultAssertions) > maxTaskResultAssertions {
+			return fmt.Errorf("task_result_assert verification has too many assertions: %d (maximum %d)", len(spec.TaskResultAssertions), maxTaskResultAssertions)
+		}
+		for i, assertion := range spec.TaskResultAssertions {
+			if err := validateTaskResultAssertion(i, assertion); err != nil {
+				return err
+			}
+		}
 	default:
 		return fmt.Errorf("unsupported verification type %q", spec.Type)
 	}
@@ -457,6 +519,79 @@ func isJSONScalar(value any) bool {
 	default:
 		return false
 	}
+}
+
+func validateTaskResultAssertion(index int, assertion TaskResultAssertion) error {
+	if len(assertion.Pointer) > maxTaskResultPointerBytes {
+		return fmt.Errorf("task_result_assert assertion %d pointer exceeds %d bytes", index, maxTaskResultPointerBytes)
+	}
+	if err := validateJSONPointer(assertion.Pointer); err != nil {
+		return fmt.Errorf("task_result_assert assertion %d has invalid pointer: %w", index, err)
+	}
+	if strings.TrimSpace(assertion.Op) == "" {
+		return fmt.Errorf("task_result_assert assertion %d requires a non-empty op", index)
+	}
+	if assertion.Value != nil {
+		if !isJSONScalar(assertion.Value) {
+			return fmt.Errorf("task_result_assert assertion %d value must be a scalar", index)
+		}
+		encoded, err := json.Marshal(assertion.Value)
+		if err != nil || len(encoded) > maxTaskResultValueBytes {
+			return fmt.Errorf("task_result_assert assertion %d value exceeds %d bytes", index, maxTaskResultValueBytes)
+		}
+	}
+	switch assertion.Op {
+	case "exists", "non_empty":
+		if assertion.Value != nil {
+			return fmt.Errorf("task_result_assert assertion %d op %q does not accept value", index, assertion.Op)
+		}
+	case "equals", "contains_scalar":
+		if assertion.Value == nil && assertion.Op == "equals" {
+			return nil
+		}
+		if assertion.Value == nil && assertion.Op == "contains_scalar" {
+			return nil
+		}
+	case "min_items":
+		count, ok := taskResultAssertionInt(assertion.Value)
+		if !ok || count < 0 || count > maxTaskResultAssertionItems {
+			return fmt.Errorf("task_result_assert assertion %d min_items value must be an integer from 0 to %d", index, maxTaskResultAssertionItems)
+		}
+	default:
+		return fmt.Errorf("task_result_assert assertion %d uses unsupported op %q", index, assertion.Op)
+	}
+	return nil
+}
+
+func taskResultAssertionInt(value any) (int, bool) {
+	number, ok := toExactJSONNumber(value)
+	if !ok || !number.IsInt() || !number.Num().IsInt64() {
+		return 0, false
+	}
+	count := number.Num().Int64()
+	if count < 0 || count > int64(maxTaskResultAssertionItems) {
+		return 0, false
+	}
+	return int(count), true
+}
+
+func validateJSONPointer(pointer string) error {
+	if pointer == "" {
+		return nil
+	}
+	if pointer[0] != '/' {
+		return errors.New("must be empty or start with '/'")
+	}
+	for i := 0; i < len(pointer); i++ {
+		if pointer[i] != '~' {
+			continue
+		}
+		if i+1 >= len(pointer) || (pointer[i+1] != '0' && pointer[i+1] != '1') {
+			return errors.New("'~' must be followed by '0' or '1'")
+		}
+		i++
+	}
+	return nil
 }
 
 func isExpectedVerificationExit(err error, result *VerificationResult) bool {
@@ -801,4 +936,147 @@ func executeToolCallAssertVerification(workDir string, spec VerificationSpec, st
 	res.ExitCode = 0
 	res.Stdout = fmt.Sprintf("tool_call_assert passed (%d assertion(s))", len(spec.ToolCallAssertions))
 	return applyVerificationMode(res, nil, spec.Mode)
+}
+
+func executeTaskResultAssertVerification(workDir string, spec VerificationSpec, taskResult *TaskResult) (*VerificationResult, error) {
+	res := &VerificationResult{WorkDir: workDir, Spec: &spec}
+	if taskResult == nil {
+		res.ExitCode = 1
+		res.Stderr = "task_result_assert failed: no canonical task result is available in this verification context"
+		return applyVerificationMode(res, errors.New("task_result_assert requires a canonical task result"), spec.Mode)
+	}
+	if err := validateSubmittedTaskResult(taskResult); err != nil {
+		res.ExitCode = 1
+		res.Stderr = "task_result_assert failed: " + err.Error()
+		return applyVerificationMode(res, fmt.Errorf("task_result_assert task result is invalid: %w", err), spec.Mode)
+	}
+
+	var document any
+	encoded, err := json.Marshal(taskResult)
+	if err == nil {
+		decoder := json.NewDecoder(bytes.NewReader(encoded))
+		decoder.UseNumber()
+		err = decoder.Decode(&document)
+		if err == nil {
+			var extra any
+			if trailingErr := decoder.Decode(&extra); trailingErr != io.EOF {
+				err = errors.New("canonical task result encoded more than one JSON document")
+			}
+		}
+	}
+	if err != nil {
+		res.ExitCode = 1
+		res.Stderr = "task_result_assert failed to canonicalize task result: " + utils.TruncateString(err.Error(), 500)
+		return applyVerificationMode(res, fmt.Errorf("task_result_assert cannot canonicalize task result: %w", err), spec.Mode)
+	}
+
+	var failures []string
+	for i, assertion := range spec.TaskResultAssertions {
+		value, resolveErr := resolveJSONPointer(document, assertion.Pointer)
+		if resolveErr != nil {
+			if assertion.Op == "exists" {
+				failures = append(failures, fmt.Sprintf("assertion %d: pointer %q does not exist: %v", i, assertion.Pointer, resolveErr))
+			} else {
+				failures = append(failures, fmt.Sprintf("assertion %d: pointer %q could not be resolved: %v", i, assertion.Pointer, resolveErr))
+			}
+			continue
+		}
+		switch assertion.Op {
+		case "exists":
+			// Resolution itself proves existence, including a JSON null value.
+		case "non_empty":
+			if !taskResultValueNonEmpty(value) {
+				failures = append(failures, fmt.Sprintf("assertion %d: pointer %q is empty", i, assertion.Pointer))
+			}
+		case "equals":
+			if !equalJSONValues(value, assertion.Value) {
+				failures = append(failures, fmt.Sprintf("assertion %d: pointer %q expected %v (%T), got %v (%T)", i, assertion.Pointer, assertion.Value, assertion.Value, value, value))
+			}
+		case "min_items":
+			want, _ := taskResultAssertionInt(assertion.Value)
+			count, ok := taskResultValueItemCount(value)
+			if !ok || count < want {
+				failures = append(failures, fmt.Sprintf("assertion %d: pointer %q has %d item(s), want at least %d", i, assertion.Pointer, count, want))
+			}
+		case "contains_scalar":
+			items, ok := value.([]any)
+			found := false
+			if ok {
+				for _, item := range items {
+					if equalJSONValues(item, assertion.Value) {
+						found = true
+						break
+					}
+				}
+			}
+			if !found {
+				failures = append(failures, fmt.Sprintf("assertion %d: pointer %q does not contain scalar %v", i, assertion.Pointer, assertion.Value))
+			}
+		}
+	}
+	if len(failures) > 0 {
+		res.ExitCode = 1
+		res.Stderr = "task_result_assert failed: " + strings.Join(failures, "; ")
+		return applyVerificationMode(res, errors.New(res.Stderr), spec.Mode)
+	}
+	res.ExitCode = 0
+	res.Stdout = fmt.Sprintf("task_result_assert passed (%d assertion(s))", len(spec.TaskResultAssertions))
+	return applyVerificationMode(res, nil, spec.Mode)
+}
+
+func taskResultValueNonEmpty(value any) bool {
+	switch typed := value.(type) {
+	case string:
+		return typed != ""
+	case []any:
+		return len(typed) > 0
+	case map[string]any:
+		return len(typed) > 0
+	default:
+		return false
+	}
+}
+
+func taskResultValueItemCount(value any) (int, bool) {
+	switch typed := value.(type) {
+	case []any:
+		return len(typed), true
+	case map[string]any:
+		return len(typed), true
+	default:
+		return 0, false
+	}
+}
+
+func resolveJSONPointer(document any, pointer string) (any, error) {
+	if err := validateJSONPointer(pointer); err != nil {
+		return nil, err
+	}
+	if pointer == "" {
+		return document, nil
+	}
+	current := document
+	for _, rawToken := range strings.Split(pointer[1:], "/") {
+		token := strings.ReplaceAll(strings.ReplaceAll(rawToken, "~1", "/"), "~0", "~")
+		switch typed := current.(type) {
+		case map[string]any:
+			value, ok := typed[token]
+			if !ok {
+				return nil, fmt.Errorf("key %q not found", token)
+			}
+			current = value
+		case []any:
+			if token == "" || (len(token) > 1 && token[0] == '0') {
+				return nil, fmt.Errorf("array index %q is invalid", token)
+			}
+			index, err := strconv.Atoi(token)
+			if err != nil || index < 0 || index >= len(typed) {
+				return nil, fmt.Errorf("array index %q is out of bounds", token)
+			}
+			current = typed[index]
+		default:
+			return nil, fmt.Errorf("cannot dereference %q on %T", token, current)
+		}
+	}
+	return current, nil
 }

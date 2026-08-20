@@ -131,15 +131,17 @@ type VerificationSpec = agent.VerificationSpec
 type VerificationType = agent.VerificationType
 type JSONAssertion = agent.JSONAssertion
 type ToolCallAssertion = agent.ToolCallAssertion
+type TaskResultAssertion = agent.TaskResultAssertion
 type AcceptanceCriterion = agent.AcceptanceCriterion
 type ReliabilityConfig = agent.ReliabilityConfig
 
 const (
-	VerifyCommandExit    = agent.VerifyCommandExit
-	VerifyFileExists     = agent.VerifyFileExists
-	VerifyFileAbsent     = agent.VerifyFileAbsent
-	VerifyJSONAssert     = agent.VerifyJSONAssert
-	VerifyToolCallAssert = agent.VerifyToolCallAssert
+	VerifyCommandExit      = agent.VerifyCommandExit
+	VerifyFileExists       = agent.VerifyFileExists
+	VerifyFileAbsent       = agent.VerifyFileAbsent
+	VerifyJSONAssert       = agent.VerifyJSONAssert
+	VerifyToolCallAssert   = agent.VerifyToolCallAssert
+	VerifyTaskResultAssert = agent.VerifyTaskResultAssert
 )
 
 // AcceptanceState describes whether an acceptance gate was configured and,
@@ -160,6 +162,9 @@ func cloneVerificationSpec(v VerificationSpec) VerificationSpec {
 	}
 	if v.ToolCallAssertions != nil {
 		c.ToolCallAssertions = append([]ToolCallAssertion(nil), v.ToolCallAssertions...)
+	}
+	if v.TaskResultAssertions != nil {
+		c.TaskResultAssertions = append([]TaskResultAssertion(nil), v.TaskResultAssertions...)
 	}
 	return c
 }

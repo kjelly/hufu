@@ -1098,7 +1098,7 @@ retryLoop:
 					c.report(c.newEvent("verify_start").withAgent(agentName).withMessage(vMsg).withTodoID(todoID))
 				}
 				if err == nil {
-					verification, verr := c.verifyTaskDeliverableWithSpec(parentCtx, agentDef, task, steps)
+					verification, verr := c.verifyTaskDeliverableWithSpecAndResult(parentCtx, agentDef, task, steps, typedRes)
 					if verification != nil {
 						c.noteObjectiveVerifierResult(todoID, verr == nil && isVerifySuccess(verification))
 						_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
@@ -1923,7 +1923,7 @@ func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, 
 		if err := c.commitTaskTransitionFromCurrent(ctx, item.ID, TaskVerifying, "running objective verification", output, nil); err != nil {
 			return "", err
 		}
-		verification, err := c.verifyTaskDeliverableWithSpec(ctx, nil, task, nil)
+		verification, err := c.verifyTaskDeliverableWithSpecAndResult(ctx, nil, task, nil, result)
 		if verification != nil {
 			_ = c.taskTracker.TodoList().SetVerificationResult(item.ID, verification)
 		}
@@ -2961,6 +2961,10 @@ func (c *Coordinator) buildConcurrentTasksContext(excludeID string) string {
 }
 
 func (c *Coordinator) verifyTaskDeliverableWithSpec(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef, steps []fantasy.StepResult) (*VerificationResult, error) {
+	return c.verifyTaskDeliverableWithSpecAndResult(parentCtx, agentDef, task, steps, nil)
+}
+
+func (c *Coordinator) verifyTaskDeliverableWithSpecAndResult(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef, steps []fantasy.StepResult, taskResult *TaskResult) (*VerificationResult, error) {
 	spec := task.VerifySpec
 	if spec == nil && task.Verify != "" {
 		spec = &agent.VerificationSpec{
@@ -2985,7 +2989,7 @@ func (c *Coordinator) verifyTaskDeliverableWithSpec(parentCtx context.Context, a
 	timeout := c.verifyTaskTimeout()
 	verifyCtx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
-	return ExecuteVerificationSpecWithSteps(verifyCtx, shell, workDir, normalizedSpec, steps)
+	return ExecuteVerificationSpecWithStepsAndTaskResult(verifyCtx, shell, workDir, normalizedSpec, steps, taskResult)
 }
 
 // verifyTaskDeliverable runs the task's optional verify command and returns a
