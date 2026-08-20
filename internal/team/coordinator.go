@@ -152,13 +152,12 @@ type TaskDef struct {
 	WorksetBinding *WorksetBinding          `json:"workset_binding,omitempty"`
 	WorksetReceipt *WorksetExpansionReceipt `json:"workset_receipt,omitempty"`
 	// FanOut, when set, replaces this single submitted task with one task per
-	// data row of a TSV file, entirely inside the runtime: Goal is ignored and
-	// GoalTemplate's {column} placeholders are substituted from that row by
-	// Hufu itself. This exists so a coordinator never has to retype the same
-	// data-derived literal (a commit SHA, a generated batch ID, a file path)
-	// into many near-identical dispatches by hand -- exactly how a long
-	// low-temperature generation drops or merges a character deep in a hex
-	// string. See expandFanOutTasks.
+	// workset item entirely inside the runtime. Artifact-backed manifests are
+	// the supported contract. Source is the deprecated path-based TSV
+	// compatibility input and is retained for one release cycle; Goal is
+	// ignored and GoalTemplate's scalar placeholders are substituted by Hufu.
+	// This exists so a coordinator never has to retype data-derived literals
+	// into many near-identical dispatches. See expandFanOutTasks.
 	FanOut *FanOutSpec `json:"fan_out,omitempty"`
 }
 
@@ -175,12 +174,11 @@ type FactRef struct {
 	Artifact string `json:"artifact,omitempty"`
 }
 
-// FanOutSpec names a TSV data source and a Goal template. Source must be a
-// relative path resolving inside the team workspace (the same sandbox rule as
-// context_files); GoalTemplate's {column_name} placeholders must all match an
-// actual header column in Source, checked once before any row is expanded so
-// a typo fails the whole dispatch instead of silently producing one wrong
-// task among many correct ones.
+// FanOutSpec names an artifact-backed workset source and a goal template.
+// Source is retained as a deprecated relative TSV compatibility path; new
+// contracts should use SourceArtifact so source identity and digest survive
+// retry/resume. GoalTemplate placeholders must match bounded workset
+// bindings, checked before any child is expanded.
 type FanOutSpec struct {
 	Source         string  `json:"source" yaml:"source,omitempty"`
 	SourceArtifact FactRef `json:"source_artifact,omitempty" yaml:"source-artifact,omitempty"`

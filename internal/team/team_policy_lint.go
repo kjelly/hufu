@@ -106,6 +106,15 @@ func validateFanOutTaskContract(field string, task TaskDef) []ContractFinding {
 	if strings.TrimSpace(fanOut.GoalTemplate) == "" {
 		findings = append(findings, errorFinding(field+".fan-out.goal-template", FindingWorksetReceiptSource, "fan-out requires goal-template"))
 	}
+	if hasSource && !hasArtifact && strings.EqualFold(filepath.Ext(strings.TrimSpace(fanOut.Source)), ".tsv") {
+		findings = append(findings, ContractFinding{
+			Severity: FindingSeverityWarning,
+			Code:     FindingLegacyFanOutDeprecated,
+			Field:    field + ".fan-out.source",
+			Message:  "path-based TSV fan-out is deprecated and retained for one release cycle; migrate to source-artifact",
+			Hint:     "publish the manifest as an artifact and bind it with source-artifact",
+		})
+	}
 	if strings.Contains(task.Verify, "{") || task.VerifySpec != nil && strings.Contains(task.VerifySpec.Command, "{") {
 		findings = append(findings, errorFinding(field+".verify", FindingWorksetCommandBinding, "workset bindings must not be interpolated into verifier command strings"))
 	}

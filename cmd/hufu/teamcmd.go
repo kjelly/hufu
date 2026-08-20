@@ -96,6 +96,9 @@ func runTeamValidate(_ *cobra.Command, args []string) error {
 		if finding.Severity == internalteam.FindingSeverityError {
 			return fmt.Errorf("%s: %s (%s)", finding.Field, finding.Message, finding.Code)
 		}
+		if finding.Severity == internalteam.FindingSeverityWarning {
+			_, _ = fmt.Fprintf(os.Stderr, "warning: %s: %s (%s)\n", finding.Field, finding.Message, finding.Code)
+		}
 	}
 	_, err = fmt.Fprintf(os.Stdout, "team %s: contracts valid\n", session.Config.Name)
 	return err

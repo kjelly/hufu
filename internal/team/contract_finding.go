@@ -80,6 +80,7 @@ const (
 	FindingUnattendedWorksetBudget = "unattended_workset_budget_missing"
 	FindingUnattendedAcceptance    = "unattended_workset_acceptance_missing"
 	FindingWorksetCommandBinding   = "workset_binding_command_injection"
+	FindingLegacyFanOutDeprecated  = "legacy_fanout_deprecated"
 
 	// FindingDeadlineConflict indicates that a child deadline equals or exceeds
 	// its parent deadline, leaving no room for result finalisation.
