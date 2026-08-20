@@ -69,6 +69,11 @@ func TestReadOnlyBashGrammarPermitsInspectionPipelines(t *testing.T) {
 		"git log --oneline -5",
 		"git rev-list --count abcdef..123456",
 		"git rev-list --count --since=2.weeks.ago HEAD",
+		// --count is not required to be the first argument: git accepts it in
+		// any position, so the read-only classifier must not be more rigid
+		// than git itself about where the flag appears.
+		"git rev-list --since=2.weeks.ago HEAD --count",
+		"git rev-list abcdef..123456 --count",
 		"grep -rn needle missing-path 2>/dev/null",
 	}
 	for _, cmd := range allowed {

@@ -443,12 +443,17 @@ command:
 // broad option surface, while count-only output cannot expose object contents
 // or mutate the repository.
 func readOnlyGitRevListCommand(args []string) bool {
-	if len(args) < 2 || args[0] != "--count" {
+	if len(args) < 2 {
 		return false
 	}
+	hasCount := false
 	hasDateBound := false
 	revisions := make([]string, 0, 1)
-	for _, arg := range args[1:] {
+	for _, arg := range args {
+		if arg == "--count" {
+			hasCount = true
+			continue
+		}
 		if strings.HasPrefix(arg, "--since=") || strings.HasPrefix(arg, "--after=") || strings.HasPrefix(arg, "--before=") {
 			hasDateBound = true
 			continue
@@ -457,6 +462,9 @@ func readOnlyGitRevListCommand(args []string) bool {
 			return false
 		}
 		revisions = append(revisions, arg)
+	}
+	if !hasCount {
+		return false
 	}
 	if hasDateBound {
 		return len(revisions) == 1

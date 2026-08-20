@@ -68,10 +68,6 @@ func NewBashTool(opts ...ToolOption) fantasy.AgentTool {
 func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fantasy.ToolResponse, error) {
 	effCfg := cfgWithMergedPaths(cfg, ctx)
 
-	if len(effCfg.AllowedWritePaths) > 0 {
-		return fantasy.NewTextErrorResponse("bash tool is disabled in this runtime workflow to enforce write isolation — use structured write/edit tools instead"), nil
-	}
-
 	var args bashArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("command parameter is required"), nil
@@ -96,6 +92,12 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 	}
 
 	args.Command = normalizeBashCommand(args.Command, effCfg.WorkspaceName)
+	if len(effCfg.AllowedWritePaths) > 0 {
+		bounded, ok := ctx.Value(WorkflowBoundedBashKey).(WorkflowBoundedBash)
+		if !ok || bounded.Command == "" || args.Command != bounded.Command {
+			return fantasy.NewTextErrorResponse("bash tool is disabled in this runtime workflow to enforce write isolation — use structured write/edit tools instead"), nil
+		}
+	}
 	if readOnly, _ := ctx.Value(AgentReadOnlyExecutionKey).(bool); readOnly {
 		// Enforce the task's capability contract before validating the requested
 		// directory. A denied mutating command must not be reported as a benign

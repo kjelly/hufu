@@ -42,7 +42,7 @@ const submitResultToolName = "submit_result"
 // Refs: docs/hufu-generic-task-reliability-mechanisms.md §7
 func classifyRepairFailure(steps []fantasy.StepResult, typedRes *TaskResult) (reason RepairFailureReason, reclassifyExecution bool) {
 	// A successful repair produces a valid submitted result; nothing to classify.
-	if typedRes != nil && typedRes.Source == "submitted" && validateSubmittedTaskResult(typedRes) == nil {
+	if typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil {
 		return "", false
 	}
 

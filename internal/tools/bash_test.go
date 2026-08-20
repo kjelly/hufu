@@ -126,6 +126,21 @@ func TestBashAndSudoRuntimeWorkflowWriteIsolation(t *testing.T) {
 	}
 }
 
+func TestBashRuntimeWorkflowAllowsOnlyCanonicalBoundedCommand(t *testing.T) {
+	ctx := context.WithValue(context.Background(), AgentAllowedWritePathsKey, []string{t.TempDir()})
+	ctx = context.WithValue(ctx, WorkflowBoundedBashKey, WorkflowBoundedBash{Command: "printf bounded"})
+
+	resp, err := executeBash(ctx, fantasy.ToolCall{Input: `{"command":"printf bounded"}`}, ToolConfig{})
+	if err != nil || resp.IsError || !strings.Contains(resp.Content, "bounded") {
+		t.Fatalf("canonical bounded command response=%+v err=%v, want successful bounded output", resp, err)
+	}
+
+	resp, err = executeBash(ctx, fantasy.ToolCall{Input: `{"command":"printf escaped"}`}, ToolConfig{})
+	if err != nil || !resp.IsError || !strings.Contains(resp.Content, "disabled in this runtime workflow") {
+		t.Fatalf("non-canonical bounded command response=%+v err=%v, want workflow isolation denial", resp, err)
+	}
+}
+
 func TestBashReadScopeDoesNotEnableWorkflowWriteIsolation(t *testing.T) {
 	workDir := t.TempDir()
 	ctx := context.WithValue(context.Background(), AgentAllowedPathsKey, []string{workDir})

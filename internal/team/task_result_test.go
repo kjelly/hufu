@@ -69,20 +69,21 @@ func TestTaskResultContextUsesOpaqueTranscriptRefInsteadOfPath(t *testing.T) {
 	}
 }
 
-func TestValidateSubmittedTaskResultCompletionStates(t *testing.T) {
-	for _, status := range []string{TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps} {
+func TestValidateSubmittedTaskResultSeparatesSchemaFromCompletion(t *testing.T) {
+	for _, status := range []string{TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps, TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked} {
 		t.Run(status, func(t *testing.T) {
-			if err := validateSubmittedTaskResult(&TaskResult{Status: status, Summary: "done"}); err != nil {
-				t.Fatalf("completion status %q rejected: %v", status, err)
+			result := &TaskResult{Status: status, Summary: "work status"}
+			if err := validateSubmittedTaskResult(result); err != nil {
+				t.Fatalf("documented status %q rejected as malformed: %v", status, err)
+			}
+			wantComplete := status == TaskResultStatusSuccess || status == TaskResultStatusCompletedWithGaps
+			if err := validateCompletedTaskResult(result); (err == nil) != wantComplete {
+				t.Fatalf("terminal validation for %q = %v, want completion=%t", status, err, wantComplete)
 			}
 		})
 	}
-	for _, status := range []string{TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked} {
-		t.Run(status, func(t *testing.T) {
-			if err := validateSubmittedTaskResult(&TaskResult{Status: status, Summary: "work remains"}); err == nil {
-				t.Fatalf("status %q unexpectedly accepted", status)
-			}
-		})
+	if err := validateSubmittedTaskResult(&TaskResult{Status: "unknown", Summary: "bad"}); err == nil {
+		t.Fatal("unknown status unexpectedly accepted")
 	}
 }
 

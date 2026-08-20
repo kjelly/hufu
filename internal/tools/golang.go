@@ -30,7 +30,7 @@ func NewGolangTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
 		info: fantasy.ToolInfo{
 			Name:        "golang",
-			Description: "Execute Go code using the yaegi interpreter. Returns stdout output. Dangerous packages (os, os/exec, net, net/http, syscall, unsafe, plugin, reflect, runtime, debug) are blocked. Code must include package declaration and import statements.",
+			Description: "Execute Go code using the yaegi interpreter. Returns stdout output. Dangerous packages (os, os/exec, net, net/http, syscall, unsafe, plugin, reflect, runtime, debug) are blocked. Code must include package declaration and import statements. Prefer this over a multi-line bash pipeline (grep/awk/sed chains) for parsing, counting, or aggregating command output into a report: it has no pipefail/exit-code pitfalls and gives real typed data structures.",
 			Parameters: map[string]any{
 				"code": map[string]any{
 					"type":        "string",

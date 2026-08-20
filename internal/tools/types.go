@@ -53,6 +53,18 @@ type agentAllowedWritePathsKeyType struct{}
 
 var AgentAllowedWritePathsKey = agentAllowedWritePathsKeyType{}
 
+// workflowBoundedBashKey carries the one canonical bash command admitted by a
+// statically bound workflow task. It is set only by the coordinator after it
+// validates the task contract; a workflow write scope alone never enables the
+// broad bash tool.
+type workflowBoundedBashKeyType struct{}
+
+type WorkflowBoundedBash struct {
+	Command string
+}
+
+var WorkflowBoundedBashKey = workflowBoundedBashKeyType{}
+
 // agentReadOnlyExecutionKey marks a task whose declared side-effect contract
 // is none. Tools with broad execution capability must enforce this at runtime;
 // a frontmatter label alone is not an authorization boundary.
