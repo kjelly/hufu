@@ -468,7 +468,7 @@ func (c *Coordinator) reconcileTerminalStatusProjection(result *RunResult) {
 	}
 	items := append([]*TodoItem(nil), c.taskTracker.TodoList().Items()...)
 	coordinatorStatus := TaskDone
-	if result.Outcome == RunOutcomeBlocked || result.Outcome == RunOutcomeFailed || result.Outcome == RunOutcomePartial || result.Outcome == RunOutcomeCancelled {
+	if result.Outcome == RunOutcomeBlocked || result.Outcome == RunOutcomeFailed || result.Outcome == RunOutcomePartial || result.Outcome == RunOutcomeCancelled || result.Outcome == RunOutcomeStalled {
 		coordinatorStatus = TaskError
 	}
 	items = append(items, &TodoItem{ID: CoordTodoID, Agent: "coordinator", Status: coordinatorStatus, Detail: FormatCanonicalStatus(result)})

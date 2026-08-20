@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestFixDirectAnalysisIsDeterministicWithoutSidecar(t *testing.T) {
@@ -15,5 +18,15 @@ func TestFixDirectAnalysisIsDeterministicWithoutSidecar(t *testing.T) {
 		if !strings.Contains(result, want) {
 			t.Fatalf("deterministic result missing %q: %s", want, result)
 		}
+	}
+}
+
+func TestFixAnalysisFailsClosedWithoutContextBoundary(t *testing.T) {
+	_, err := runFixAnalysis(context.Background(), &teamContext{
+		coordinator: &team.Coordinator{},
+		session:     &team.TeamSession{Config: agent.TeamConfig{Name: "fix-test"}},
+	}, "why", "task", nil)
+	if err == nil || !strings.Contains(err.Error(), "provider boundary") {
+		t.Fatalf("fix analysis error = %v, want explicit provider-boundary failure", err)
 	}
 }

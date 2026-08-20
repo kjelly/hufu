@@ -574,8 +574,24 @@ func (c *Coordinator) attachSidecarUsageObserver(s *sidecar.Sidecar) *sidecar.Si
 	return s
 }
 
+// providerInvocationContext is the construction context for Hufu-owned
+// auxiliary models. Public runs and CLI preflight both install an invocation
+// watchdog; using its context prevents sidecar construction from escaping the
+// owner that can abort the provider proxy.
+func (c *Coordinator) providerInvocationContext() context.Context {
+	if c != nil {
+		if watchdog := c.invocationWatchdog.Load(); watchdog != nil {
+			return watchdog.ctx
+		}
+	}
+	return context.Background()
+}
+
 func (c *Coordinator) Sidecar() *sidecar.Sidecar {
 	if c.sidecarModel == "" {
+		return nil
+	}
+	if !c.providerBoundaryReady() {
 		return nil
 	}
 	c.sidecarInitMu.Lock()
@@ -583,7 +599,7 @@ func (c *Coordinator) Sidecar() *sidecar.Sidecar {
 	if c.sidecarInit {
 		return c.sidecarInst
 	}
-	ctx := context.Background()
+	ctx := c.providerInvocationContext()
 	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.sidecarModel), c.sidecarModel)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ sidecar model %q unavailable: %v (auto-skills and skill matching disabled — set --sidecar-model to a working model to enable)\n", c.sidecarModel, err)
@@ -598,12 +614,15 @@ func (c *Coordinator) GuardSidecar() *sidecar.Sidecar {
 	if c.guardModel == "" {
 		return nil
 	}
+	if !c.providerBoundaryReady() {
+		return nil
+	}
 	c.guardInitMu.Lock()
 	defer c.guardInitMu.Unlock()
 	if c.guardInit {
 		return c.guardInst
 	}
-	ctx := context.Background()
+	ctx := c.providerInvocationContext()
 	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.guardModel), c.guardModel)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ guard model %q unavailable: %v (guard review disabled — tool calls will be denied until a working model is configured)\n", c.guardModel, err)
@@ -621,12 +640,15 @@ func (c *Coordinator) JudgeSidecar() *sidecar.Sidecar {
 	if c.judgeModel == "" {
 		return nil
 	}
+	if !c.providerBoundaryReady() {
+		return nil
+	}
 	c.judgeInitMu.Lock()
 	defer c.judgeInitMu.Unlock()
 	if c.judgeInit {
 		return c.judgeInst
 	}
-	ctx := context.Background()
+	ctx := c.providerInvocationContext()
 	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.judgeModel), c.judgeModel)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ judge model %q unavailable: %v (multi-model results fall back to concatenation merge)\n", c.judgeModel, err)

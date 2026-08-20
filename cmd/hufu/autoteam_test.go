@@ -18,9 +18,11 @@ type fakePreflightCoordinator struct {
 	closeCalls int
 }
 
-func (f *fakePreflightCoordinator) PrepareContextPreflight() error { return f.prepareErr }
-func (f *fakePreflightCoordinator) CloseContextPreflight()         { f.closeCalls++ }
-func (f *fakePreflightCoordinator) Sidecar() *sidecar.Sidecar      { return f.sidecar }
+func (f *fakePreflightCoordinator) PrepareContextPreflight() error {
+	return f.prepareErr
+}
+func (f *fakePreflightCoordinator) CloseContextPreflight()    { f.closeCalls++ }
+func (f *fakePreflightCoordinator) Sidecar() *sidecar.Sidecar { return f.sidecar }
 
 func TestPreparePreflightSidecarOwnership(t *testing.T) {
 	t.Run("successful handle releases exactly once", func(t *testing.T) {

@@ -127,7 +127,20 @@ func TestApplyCompletionGateDoesNotDowngradeSuccessfulTaskForReportedRisk(t *tes
 		OpenQuestions: OpenQuestions{"Should the follow-up be scheduled?"},
 	}
 	result := &RunResult{Outcome: RunOutcomeCompleted, GoalSatisfied: true, StopReason: StopReasonCompleted, Acceptance: &AcceptanceResult{State: AcceptancePassed}}
-	manifest := &EvidenceManifest{RunID: "run-risk", Status: "accepted", EvidenceResults: []EvidenceResult{{RequirementID: "task:1", Status: "passed"}, {RequirementID: "run:acceptance", Status: "passed"}}}
+	store, err := NewFileArtifactStore(ws, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := store.Put(context.Background(), PutArtifactRequest{Kind: "task_transcript", Path: "task.txt", Content: []byte("done"), RunID: "run-risk", TaskID: item.ID, Attempt: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := &EvidenceManifest{RunID: "run-risk", Status: "accepted", ArtifactRefs: []ArtifactRef{artifact}, EvidenceResults: []EvidenceResult{
+		{RequirementID: "task:" + item.ID, Status: "passed", ArtifactRefs: []ArtifactRef{artifact}, Binding: &EvidenceBinding{
+			RunID: "run-risk", TaskID: item.ID, Attempt: 1, ModelExecutionID: "exec-risk", ProducerID: "worker", TranscriptRef: artifact.ID, ArtifactIDs: []string{artifact.ID},
+		}},
+		{RequirementID: "run:acceptance", Status: "passed"},
+	}}
 	if err := manifest.Seal(); err != nil {
 		t.Fatal(err)
 	}

@@ -157,6 +157,16 @@ func TestPhase0FinalManifestPersistsForAdvisoryAndPartialRuns(t *testing.T) {
 	done := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "verified"}})[0]
 	c.taskTracker.TodoList().UpdateStatus(done.ID, TaskDone, "done")
 	done.VerifyResult = &VerificationResult{ExitCode: 0}
+	transcript := filepath.Join(dir, logsDir, "task-output", "verified-task.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte(`{"event":"tool_result","exit_code":0}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exitCode := 0
+	done.ExecutionReceipt = &ExecutionReceipt{RunID: c.executionRunID, TaskID: done.ID, Attempt: 1, ExitCode: &exitCode, ProducerID: "worker", ModelExecutionID: "model-execution-1", TranscriptRef: transcript}
+	done.ExecutionReceipts = []ExecutionReceipt{*done.ExecutionReceipt}
 	manifest, err := c.buildEvidenceManifest(context.Background(), false)
 	if err != nil || manifest.Status != "accepted" {
 		t.Fatalf("advisory manifest = %#v, err=%v", manifest, err)
@@ -226,7 +236,7 @@ func TestPhase0ManifestUsesSuccessfulExecutionTranscriptAsEvidence(t *testing.T)
 	item.TypedResult = &TaskResult{Status: "success", Summary: "completed"}
 	item.ExecutionReceipt = &ExecutionReceipt{
 		RunID: "run-transcript-evidence", TaskID: item.ID, Attempt: 1,
-		ExitCode: &exitCode, TranscriptRef: transcript,
+		ExitCode: &exitCode, TranscriptRef: transcript, ProducerID: "worker", ModelExecutionID: "model-execution-1",
 	}
 
 	manifest, err := c.buildEvidenceManifest(context.Background(), true)
@@ -269,7 +279,7 @@ func TestPhase0ManifestResolvesOpaqueExecutionTranscriptArtifact(t *testing.T) {
 	}
 	c.taskTracker.TodoList().UpdateStatus(item.ID, TaskDone, "success")
 	item.TypedResult = &TaskResult{Status: "success", Summary: "completed"}
-	item.ExecutionReceipt = &ExecutionReceipt{RunID: "run-opaque-transcript", TaskID: item.ID, Attempt: 1, ExitCode: &exitCode, TranscriptRef: ref.ID}
+	item.ExecutionReceipt = &ExecutionReceipt{RunID: "run-opaque-transcript", TaskID: item.ID, Attempt: 1, ExitCode: &exitCode, TranscriptRef: ref.ID, ProducerID: "worker", ModelExecutionID: "model-execution-1"}
 
 	manifest, err := c.buildEvidenceManifest(context.Background(), true)
 	if err != nil {
@@ -277,6 +287,28 @@ func TestPhase0ManifestResolvesOpaqueExecutionTranscriptArtifact(t *testing.T) {
 	}
 	if manifest.Status != "accepted" || len(manifest.ArtifactRefs) != 1 || manifest.ArtifactRefs[0].ID != ref.ID {
 		t.Fatalf("manifest = %#v, want existing opaque transcript artifact", manifest)
+	}
+	if manifest.ArtifactRefs[0].RunID != ref.RunID || manifest.ArtifactRefs[0].TaskID != ref.TaskID || manifest.ArtifactRefs[0].Attempt != ref.Attempt || manifest.ArtifactRefs[0].Agent != ref.Agent {
+		t.Fatalf("opaque artifact metadata changed: got=%#v want=%#v", manifest.ArtifactRefs[0], ref)
+	}
+}
+
+func TestPhase0ManifestDoesNotReuseReceiptFromAnotherRun(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, logsDir, "task-output", "old.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte(`{"event":"tool_result","exit_code":0}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exitCode := 0
+	c := &Coordinator{session: &TeamSession{Workspace: dir}, taskTracker: NewTaskTracker(), executionRunID: "run-current"}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "must not reuse old receipt"}})[0]
+	c.taskTracker.TodoList().UpdateStatus(item.ID, TaskDone, "success")
+	item.ExecutionReceipt = &ExecutionReceipt{RunID: "run-old", TaskID: item.ID, Attempt: 1, ExitCode: &exitCode, TranscriptRef: transcript}
+	if _, err := c.buildEvidenceManifest(context.Background(), true); err == nil {
+		t.Fatal("manifest reused a receipt from another run")
 	}
 }
 

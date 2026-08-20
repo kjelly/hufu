@@ -205,18 +205,21 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err := team.InitSTM(session.Workspace); err != nil {
 		stderrLog("%s Failed to init stm.md: %v\n", errStyle.Render("⚠"), err)
 	}
-	if opts.newSession {
-		team.ExtractLTMFromHistory(session.Workspace, session.Config.Name)
-		team.PruneSessionHistory(session.Workspace, team.MaxSessionHistoryFiles)
-	}
-
+	// Resolve this once so lifecycle reset, historical extraction, pruning, and
+	// coordinator visibility all agree on what "fresh" means.
+	startsFresh := opts.newSession || execProfile.DisableHistoricalTaskReuse
 	// A profile that forbids historical task reuse must start from an empty
 	// checkpoint and a new event-store root as well. Otherwise the event-store
 	// projection checker compares this run against an unrelated prior run.
-	profileStartsFreshSession := execProfile.DisableHistoricalTaskReuse
-	sessionData, oldSessionEntries, err := prepareSessionLifecycle(session, profileStartsFreshSession)
+	sessionData, oldSessionEntries, err := prepareSessionLifecycle(session, startsFresh)
 	if err != nil {
 		return nil, err
+	}
+	// Archive first, then extract from the archived history, and only then
+	// prune old archives. This preserves the just-archived source for LTM.
+	if startsFresh {
+		team.ExtractLTMFromHistory(session.Workspace, session.Config.Name)
+		team.PruneSessionHistory(session.Workspace, team.MaxSessionHistoryFiles)
 	}
 
 	hookRegistry := registerHooks(cfg)
@@ -244,7 +247,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 
 	coordinator.SetExecutionProfile(execProfile)
 	coordinator.SetSessionData(sessionData)
-	coordinator.SetFreshSession(opts.newSession || profileStartsFreshSession)
+	coordinator.SetFreshSession(startsFresh)
 	if err := applyUnattendedAndBudget(coordinator, session); err != nil {
 		return nil, err
 	}

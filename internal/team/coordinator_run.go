@@ -98,21 +98,91 @@ const (
 	directRunReplanPending
 )
 
+type recoveryAdmissionError struct {
+	reason         string
+	blockedTaskRef TaskReference
+}
+
+func (e *recoveryAdmissionError) Error() string {
+	if e == nil {
+		return "recovery required"
+	}
+	return fmt.Sprintf("recovery required: %s", e.reason)
+}
+
 func (c *Coordinator) checkRunAdmission() error {
 	if c.sessionData != nil && c.sessionData.RecoveryRequired {
 		reason := c.sessionData.RecoveryReason
 		if reason == "" {
 			reason = "session recovery required"
 		}
-		c.SetLastRunResult(&RunResult{
-			Outcome:       RunOutcomeBlocked,
-			GoalSatisfied: false,
-			Reason:        reason,
-			Response:      reason,
-		})
-		return fmt.Errorf("recovery required: %s", reason)
+		return &recoveryAdmissionError{
+			reason: reason,
+			blockedTaskRef: TaskReference{
+				ID:           "<invocation>",
+				Agent:        "coordinator",
+				Desc:         "recover session before invocation",
+				Status:       string(TaskBlocked),
+				Error:        reason,
+				FailureClass: FailurePolicy,
+			},
+		}
 	}
 	return nil
+}
+
+// finalizePublicInvocationFailure is the shared terminal owner for failures
+// discovered before a public invocation owns a task. The deferred invocation
+// lifecycle emits the single run_finished event; this helper makes sure its
+// payload, LastRunResult, and session are canonical before that defer runs.
+// Admission failures are retried by a few public entry points, so the
+// operation is explicitly idempotent.
+func (c *Coordinator) finalizePublicInvocationFailure(runErr error) {
+	if c == nil || runErr == nil || !c.invocationFailureFinalized.CompareAndSwap(false, true) {
+		return
+	}
+	var recoveryErr *recoveryAdmissionError
+	if errors.As(runErr, &recoveryErr) {
+		reason := recoveryErr.reason
+		if reason == "" {
+			reason = "session recovery required"
+		}
+		taskRef := recoveryErr.blockedTaskRef
+		if taskRef.ID == "" {
+			taskRef = TaskReference{
+				ID:           "<invocation>",
+				Agent:        "coordinator",
+				Desc:         "recover session before invocation",
+				Status:       string(TaskBlocked),
+				Error:        reason,
+				FailureClass: FailurePolicy,
+			}
+		}
+		evaluated := EvaluateRunOutcome(RunEvaluationInput{
+			UnresolvedTasks: []TaskReference{taskRef},
+			Response:        runErr.Error(),
+			Reason:          reason,
+			Stats:           SummarizeRunStats(nil),
+			Metrics:         c.Metrics(),
+			GoalMode:        c.GoalMode(),
+		})
+		c.FinalizeRun(context.Background(), &evaluated, nil)
+		return
+	}
+	c.recordRunAborted(runErr)
+}
+
+// finalizePublicInvocationFailureError preserves the public error cause while
+// attaching the canonical evaluator result for recovery admission failures.
+// The evaluator remains the sole owner of outcome, stop-reason, and exit-code
+// semantics; this helper only carries that result across the API boundary.
+func (c *Coordinator) finalizePublicInvocationFailureError(runErr error) error {
+	c.finalizePublicInvocationFailure(runErr)
+	var recoveryErr *recoveryAdmissionError
+	if errors.As(runErr, &recoveryErr) {
+		return WrapRunOutcomeError(runErr, c.LastRunResult())
+	}
+	return runErr
 }
 
 func (c *Coordinator) directAgentWorkflowPrompt(task string, agentDef *agent.AgentDef, resolvedName, todoID string, granted map[string]bool, syntheticTask TaskDef) string {
@@ -198,36 +268,71 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 }
 
 //nolint:gocyclo // direct-agent execution is the canonical closed lifecycle path.
-func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (*DirectAgentResult, error) {
-	endExecutionRun := c.beginExecutionRun()
+func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (directResult *DirectAgentResult, err error) {
+	ctx, endExecutionRun := c.beginInvocationExecutionRun(ctx)
 	defer endExecutionRun()
+	defer func() {
+		if errors.Is(context.Cause(ctx), ErrInvocationStalled) {
+			err = ErrInvocationStalled
+			if directResult != nil {
+				directResult.Error = ErrInvocationStalled
+			}
+		}
+	}()
 	if err := c.checkRunAdmission(); err != nil {
-		return nil, err
+		return nil, c.finalizePublicInvocationFailureError(err)
 	}
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
-		return nil, fmt.Errorf("direct agent invocation is disabled for runtime workflows; dispatch the active phase through the coordinator")
+		err := fmt.Errorf("direct agent invocation is disabled for runtime workflows; dispatch the active phase through the coordinator")
+		c.finalizePublicInvocationFailure(err)
+		return nil, err
 	}
 	if err := c.ValidateWorkspaceIsolation(); err != nil {
+		c.finalizePublicInvocationFailure(err)
 		return nil, err
 	}
 	if err := c.ValidateResourceLocks(ctx); err != nil {
+		c.finalizePublicInvocationFailure(err)
 		return nil, err
 	}
 	agentDef, _, err := c.AgentPool().ResolveAgentName(agentName)
 	if err != nil {
+		c.finalizePublicInvocationFailure(err)
 		return nil, err
 	}
-
-	c.setAutoLoadedSkills(c.matchSkillsWithSidecar(ctx, task))
 
 	resolvedName := strings.ToLower(agentDef.Name)
 	directModel, err := c.ModelRuntime().ResolveTaskModel(agentDef, TaskDef{Agent: resolvedName, Goal: task})
 	if err != nil {
+		c.finalizePublicInvocationFailure(err)
 		return nil, err
 	}
-
+	cacheKey := c.policyAgentCacheKey(agentDef, directModel)
+	c.agentCacheMu.RLock()
+	_, cachedAgent := c.agentCache[cacheKey]
+	if !cachedAgent {
+		// Test and embedded callers may inject a model-agnostic fantasy agent
+		// under the legacy cache key. It cannot make a provider call, so do not
+		// require the subprocess boundary merely to discover that the real
+		// construction path is unavailable after task creation.
+		_, cachedAgent = c.agentCache[c.policyAgentCacheKey(agentDef, "")]
+	}
+	c.agentCacheMu.RUnlock()
+	needsProviderBoundary := directModel != "" && (!cachedAgent || c.autoSkillsEnabled && c.sidecarModel != "" && len(c.getSkills()) > 0)
+	if needsProviderBoundary {
+		if err := c.startProviderExecutionBoundary(ctx); err != nil {
+			c.finalizePublicInvocationFailure(err)
+			return nil, err
+		}
+	}
+	if c.autoSkillsEnabled && c.sidecarModel != "" && len(c.getSkills()) > 0 {
+		c.setAutoLoadedSkills(c.matchSkillsWithSidecar(ctx, task))
+	}
 	todoItems, err := c.CommitTaskCreation(ctx, []TodoSpec{{Agent: resolvedName, Desc: task, Model: directModel, Source: TaskSourceCoordinator, ParentID: ""}})
 	if err != nil {
+		if len(todoItems) == 0 {
+			c.finalizePublicInvocationFailure(err)
+		}
 		return nil, err
 	}
 	// Direct-agent invocation creates a real task and must participate in the
@@ -647,10 +752,17 @@ func (c *Coordinator) finalizeDirectRun(ctx context.Context, todoID string, succ
 	if c == nil || c.session == nil {
 		return nil
 	}
+	if errors.Is(context.Cause(ctx), ErrInvocationStalled) {
+		success = false
+		response = ErrInvocationStalled.Error()
+	}
 	if !success {
 		items := c.taskTracker.TodoList().Items()
+		stalled := errors.Is(context.Cause(ctx), ErrInvocationStalled)
 		evaluated := EvaluateRunOutcome(RunEvaluationInput{
 			UnresolvedTasks: UnresolvedTaskReferences(items),
+			Stalled:         stalled,
+			Cancelled:       !stalled && errors.Is(context.Cause(ctx), context.Canceled),
 			Acceptance:      AcceptanceNotConfigured,
 			Response:        response,
 			Reason:          "direct agent run did not complete successfully",
@@ -1294,6 +1406,9 @@ func (c *Coordinator) finalizeTerminalUnresolvedRun() string {
 // summaryFromTodos builds an LLM-free run summary from the todo list. Used as
 // the last-resort wrap-up when the coordinator model cannot produce one.
 func (c *Coordinator) summaryFromTodos(runErr error) string {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return ""
+	}
 	items := c.taskTracker.TodoList().Items()
 	if len(items) == 0 {
 		return ""
@@ -1327,6 +1442,9 @@ func (c *Coordinator) recordRunAborted(runErr error) {
 	reason := "run ended before completion"
 	exitCode := 1
 	switch {
+	case errors.Is(runErr, ErrInvocationStalled):
+		reason = "run aborted (invocation stalled)"
+		exitCode = 124
 	case errors.Is(runErr, context.Canceled):
 		reason = "run aborted (cancelled by user)"
 		exitCode = 130
@@ -1342,6 +1460,7 @@ func (c *Coordinator) recordRunAborted(runErr error) {
 	response := fmt.Sprintf("%s: %v", reason, runErr)
 	evaluated := EvaluateRunOutcome(RunEvaluationInput{
 		UnresolvedTasks: toTaskReferences(unresolved),
+		Stalled:         errors.Is(runErr, ErrInvocationStalled),
 		Cancelled:       errors.Is(runErr, context.Canceled),
 		RunFailed:       !errors.Is(runErr, context.Canceled),
 		ExitCode:        exitCode,
@@ -1654,16 +1773,22 @@ func compactLegacyProjectContext(ctx context.Context, compacter textCompacter, p
 }
 
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
-	endExecutionRun := c.beginExecutionRun()
+	ctx, endExecutionRun := c.beginInvocationExecutionRun(ctx)
 	defer endExecutionRun()
 	defer func() { c.continuationResume = nil }()
 	if err := c.checkRunAdmission(); err != nil {
-		return "", err
+		return "", c.finalizePublicInvocationFailureError(err)
 	}
 	if err := c.ValidateWorkspaceIsolation(); err != nil {
+		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
 	if err := c.ValidateResourceLocks(ctx); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return "", err
+	}
+	if err := c.startProviderExecutionBoundary(ctx); err != nil {
+		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
 	c.resetRoundState()
@@ -1686,21 +1811,18 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		c.sshSessionMgr.StartCleanupDaemon(ctx, 5*time.Minute, 30*time.Minute)
 	}
 
-	// Start the silent-stall watchdog: a run that goes quiet — no step, tool,
-	// or output event at all — for the configured threshold gets a goroutine
-	// dump and a run_stall_detected event, so a stall like a sidecar/LLM call
-	// with no deadline is visible instead of showing up only as elapsed time.
-	c.startStallWatchdog(ctx)
-
 	orchDef := c.GetOrchestratorDef()
 	if orchDef == nil {
-		return "", fmt.Errorf("no coordinator agent found in team")
+		err := fmt.Errorf("no coordinator agent found in team")
+		c.finalizePublicInvocationFailure(err)
+		return "", err
 	}
 
 	_ = EnsureWorkspaceDirs(c.session.Workspace)
 	if c.phaseWorkflow != nil {
 		if err := c.phaseWorkflow.Start(); err != nil {
 			c.saveCheckpoint()
+			c.finalizePublicInvocationFailure(err)
 			return "", err
 		}
 		c.saveCheckpoint()
@@ -1733,7 +1855,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	systemPrompt, promptErr := c.buildSystemPrompt(ctx, orchDef, userPrompt, false)
 	if promptErr != nil {
-		c.recordRunAborted(promptErr)
+		c.finalizePublicInvocationFailure(promptErr)
 		return "", promptErr
 	}
 
@@ -1744,20 +1866,31 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("coordinator starting").withModel(c.resolveAgentModel(orchDef, "")).withTodoID(CoordTodoID))
 
 	result, steps, err := c.runOrchestratorWithNoProgressGuard(ctx, &orchDefCopy, userPrompt)
+	if err != nil && errors.Is(context.Cause(ctx), ErrInvocationStalled) {
+		err = ErrInvocationStalled
+	}
 	if err != nil {
-		if recovered, recoveredSteps, ok := c.attemptWrapUpRecovery(ctx, &orchDefCopy, err); ok {
-			result = recovered
-			steps = append(steps, recoveredSteps...)
-		} else {
-			if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunShutdown); cleanupErr != nil {
-				err = errors.Join(err, cleanupErr)
+		if !errors.Is(err, ErrInvocationStalled) {
+			if recovered, recoveredSteps, ok := c.attemptWrapUpRecovery(ctx, &orchDefCopy, err); ok {
+				result = recovered
+				steps = append(steps, recoveredSteps...)
+			} else {
+				if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunShutdown); cleanupErr != nil {
+					err = errors.Join(err, cleanupErr)
+				}
+				c.finalizeRemainingTasks()
+				c.saveHistoryAndSession(ctx, steps)
+				c.recordRunAborted(err)
+				orchModel := c.resolveAgentModel(orchDef, "")
+				c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator failed").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
+				return "", fmt.Errorf("coordinator failed (model: %s): %w", orchModel, err)
 			}
+		} else {
 			c.finalizeRemainingTasks()
 			c.saveHistoryAndSession(ctx, steps)
 			c.recordRunAborted(err)
-			orchModel := c.resolveAgentModel(orchDef, "")
-			c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator failed").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
-			return "", fmt.Errorf("coordinator failed (model: %s): %w", orchModel, err)
+			c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator stalled").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
+			return "", err
 		}
 	}
 
@@ -1765,14 +1898,14 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	if c.continuationInterrupted.Load() {
 		return c.returnResumableContinuation(ctx, result, steps, "coordinator continuation interrupted; workflow checkpointed for resume")
 	}
-	if ctx.Err() != nil && !c.finishCalled.Load() {
+	if invocationErr := context.Cause(ctx); invocationErr != nil && (!c.finishCalled.Load() || errors.Is(invocationErr, ErrInvocationStalled)) {
 		if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunCancelled); cleanupErr != nil {
 			c.report(c.newEvent("error").withMessage("terminal cleanup error: " + cleanupErr.Error()))
 		}
 		c.finalizeRemainingTasks()
 		c.saveHistoryAndSession(ctx, steps)
-		c.recordRunAborted(ctx.Err())
-		return "", ctx.Err()
+		c.recordRunAborted(invocationErr)
+		return "", invocationErr
 	}
 
 	c.saveHistoryAndSession(ctx, steps)
@@ -1792,20 +1925,26 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 }
 
 func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt string) (string, error) {
-	endExecutionRun := c.beginExecutionRun()
+	ctx, endExecutionRun := c.beginInvocationExecutionRun(ctx)
 	defer endExecutionRun()
 	if err := c.checkRunAdmission(); err != nil {
-		return "", err
+		return "", c.finalizePublicInvocationFailureError(err)
 	}
 	// Capture before resetRoundState clears the flag, or the wrap-up branch
 	// below can never trigger and wrap-up requests silently degrade into an
 	// ordinary (empty-prompt) continuation turn.
 	wasWrapUp := c.IsWrapUp()
 	c.resetRoundState()
+	if err := c.startProviderExecutionBoundary(ctx); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return "", err
+	}
 
 	orchDef := c.GetOrchestratorDef()
 	if orchDef == nil {
-		return "", fmt.Errorf("no coordinator agent found in team")
+		err := fmt.Errorf("no coordinator agent found in team")
+		c.finalizePublicInvocationFailure(err)
+		return "", err
 	}
 
 	var continuationPrompt string
@@ -1820,7 +1959,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 
 	systemPrompt, promptErr := c.buildSystemPrompt(ctx, orchDef, additionalPrompt, true)
 	if promptErr != nil {
-		c.recordRunAborted(promptErr)
+		c.finalizePublicInvocationFailure(promptErr)
 		return "", promptErr
 	}
 	orchDefCopy := *orchDef
@@ -1831,20 +1970,31 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("continuing with additional input").withModel(c.resolveAgentModel(orchDef, "")).withTodoID(CoordTodoID))
 
 	result, steps, err := c.runOrchestratorWithNoProgressGuard(ctx, &orchDefCopy, continuationPrompt)
+	if err != nil && errors.Is(context.Cause(ctx), ErrInvocationStalled) {
+		err = ErrInvocationStalled
+	}
 	if err != nil {
-		if recovered, recoveredSteps, ok := c.attemptWrapUpRecovery(ctx, &orchDefCopy, err); ok {
-			result = recovered
-			steps = append(steps, recoveredSteps...)
-		} else {
-			if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunShutdown); cleanupErr != nil {
-				err = errors.Join(err, cleanupErr)
+		if !errors.Is(err, ErrInvocationStalled) {
+			if recovered, recoveredSteps, ok := c.attemptWrapUpRecovery(ctx, &orchDefCopy, err); ok {
+				result = recovered
+				steps = append(steps, recoveredSteps...)
+			} else {
+				if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunShutdown); cleanupErr != nil {
+					err = errors.Join(err, cleanupErr)
+				}
+				c.finalizeRemainingTasks()
+				c.saveHistoryAndSession(ctx, steps)
+				c.recordRunAborted(err)
+				orchModel := c.resolveAgentModel(orchDef, "")
+				c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator continuation failed").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
+				return "", fmt.Errorf("coordinator continuation failed (model: %s): %w", orchModel, err)
 			}
+		} else {
 			c.finalizeRemainingTasks()
 			c.saveHistoryAndSession(ctx, steps)
 			c.recordRunAborted(err)
-			orchModel := c.resolveAgentModel(orchDef, "")
-			c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator continuation failed").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
-			return "", fmt.Errorf("coordinator continuation failed (model: %s): %w", orchModel, err)
+			c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator continuation stalled").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
+			return "", err
 		}
 	}
 
@@ -1852,14 +2002,14 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	if c.continuationInterrupted.Load() {
 		return c.returnResumableContinuation(ctx, result, steps, "coordinator continuation interrupted; workflow checkpointed for resume")
 	}
-	if ctx.Err() != nil && !c.finishCalled.Load() {
+	if invocationErr := context.Cause(ctx); invocationErr != nil && (!c.finishCalled.Load() || errors.Is(invocationErr, ErrInvocationStalled)) {
 		if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunCancelled); cleanupErr != nil {
 			c.report(c.newEvent("error").withMessage("terminal cleanup error: " + cleanupErr.Error()))
 		}
 		c.finalizeRemainingTasks()
 		c.saveHistoryAndSession(ctx, steps)
-		c.recordRunAborted(ctx.Err())
-		return "", ctx.Err()
+		c.recordRunAborted(invocationErr)
+		return "", invocationErr
 	}
 
 	c.saveHistoryAndSession(ctx, steps)

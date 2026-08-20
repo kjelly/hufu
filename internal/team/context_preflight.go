@@ -1,16 +1,30 @@
 package team
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"strings"
 )
 
-// PrepareContextPreflight makes a coordinator safe for a CLI-owned model
-// invocation. It establishes the same session and event lineage used by a
-// normal run before a sidecar can prepare/persist a manifest.
+// PrepareContextPreflight preserves the context-free API for callers that do
+// not have a cancellation scope. CLI-owned callers should use
+// PrepareContextPreflightContext so cancellation owns the provider boundary.
 func (c *Coordinator) PrepareContextPreflight() error {
+	return c.PrepareContextPreflightContext(context.Background())
+}
+
+// PrepareContextPreflightContext makes a coordinator safe for a CLI-owned model
+// invocation. It establishes the same session and event lineage used by a
+// normal run before a sidecar can prepare/persist a manifest. When a sidecar
+// is configured, parent owns the cancellation of a scoped provider boundary;
+// cancellation aborts and reaps the proxy even if the model ignores context.
+func (c *Coordinator) PrepareContextPreflightContext(parent context.Context) error {
 	if c == nil || c.session == nil || strings.TrimSpace(c.session.Workspace) == "" || c.contextRepo == nil {
 		return fmt.Errorf("context preflight requires a coordinator workspace and canonical repository")
+	}
+	if parent == nil {
+		parent = context.Background()
 	}
 	_ = c.mutateSessionData(func(sd *SessionData) error { return nil })
 	// The preflight event-store run ID and every request/manifest must share
@@ -30,6 +44,21 @@ func (c *Coordinator) PrepareContextPreflight() error {
 		}
 		return fmt.Errorf("context preflight failed: %s", reason)
 	}
+	// A preflight sidecar is still a Hufu-owned model invocation. Establish a
+	// scoped provider owner before callers can resolve the shared sidecar. Teams
+	// without a configured sidecar do not need to start a provider boundary and
+	// retain the deterministic fallback paths used by the CLI.
+	if c.sidecarModel != "" {
+		invocationCtx := c.beginContextPreflight(parent)
+		if err := c.startProviderExecutionBoundary(invocationCtx); err != nil {
+			c.CloseContextPreflight()
+			return fmt.Errorf("context preflight provider boundary unavailable: %w", err)
+		}
+		if err := invocationCtx.Err(); err != nil {
+			c.CloseContextPreflight()
+			return fmt.Errorf("context preflight cancelled: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -39,6 +68,25 @@ func (c *Coordinator) CloseContextPreflight() {
 	if c == nil {
 		return
 	}
+	c.preflightMu.Lock()
+	c.preflightContext = nil
+	owner := c.preflightOwner
+	c.preflightOwner = nil
+	c.preflightMu.Unlock()
+	if owner != nil {
+		if err := owner.close(); err != nil {
+			log.Printf("warning: close context preflight provider boundary: %v", err)
+		}
+		if owner.watchdog != nil {
+			owner.watchdog.wait()
+			c.invocationWatchdog.CompareAndSwap(owner.watchdog, nil)
+		}
+	}
+	if owner == nil {
+		if err := c.abortProviderExecutionBoundary(); err != nil {
+			log.Printf("warning: close context preflight provider boundary: %v", err)
+		}
+	}
 	if c.eventStore != nil {
 		_ = c.eventStore.Close()
 		c.eventStore = nil
@@ -46,4 +94,38 @@ func (c *Coordinator) CloseContextPreflight() {
 	if closer, ok := c.contextRepo.(interface{ Close() error }); ok {
 		_ = closer.Close()
 	}
+}
+
+// ContextPreflight returns the live context owned by the current CLI
+// preflight scope. Callers use it for the actual sidecar operation so watchdog
+// cancellation and caller cancellation share one context boundary.
+func (c *Coordinator) ContextPreflight() context.Context {
+	if c == nil {
+		return context.Background()
+	}
+	c.preflightMu.Lock()
+	ctx := c.preflightContext
+	c.preflightMu.Unlock()
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+// beginContextPreflight installs a Hufu-owned cancellation scope around a
+// CLI sidecar call. The owner goroutine is joined by CloseContextPreflight;
+// it is not a detached timeout or cleanup fallback.
+func (c *Coordinator) beginContextPreflight(parent context.Context) context.Context {
+	owner := newInvocationOwner(c, parent)
+	watchdog := c.newInvocationWatchdog(owner.ctx, owner.cancel)
+	watchdog.owner = owner
+	owner.watchdog = watchdog
+	c.preflightMu.Lock()
+	c.preflightContext = owner.ctx
+	c.preflightOwner = owner
+	c.preflightMu.Unlock()
+	c.setInvocationWatchdog(watchdog)
+	owner.start()
+	watchdog.start()
+	return owner.ctx
 }

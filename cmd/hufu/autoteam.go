@@ -26,13 +26,26 @@ type contextPreflightCoordinator interface {
 	Sidecar() *sidecar.Sidecar
 }
 
+type contextPreflightContextCoordinator interface {
+	PrepareContextPreflightContext(context.Context) error
+	ContextPreflight() context.Context
+}
+
 // preflightSidecarHandle keeps the coordinator's cleanup reachable for the
 // entire lifetime of a CLI sidecar call. It is intentionally private: callers
 // only need the sidecar for one decision and must not retain it.
 type preflightSidecarHandle struct {
 	sidecar *sidecar.Sidecar
+	ctx     context.Context
 	close   func()
 	once    sync.Once
+}
+
+func (h *preflightSidecarHandle) Context() context.Context {
+	if h == nil || h.ctx == nil {
+		return context.Background()
+	}
+	return h.ctx
 }
 
 func (h *preflightSidecarHandle) Sidecar() *sidecar.Sidecar {
@@ -56,10 +69,22 @@ func (h *preflightSidecarHandle) Close() {
 // preparePreflightSidecar establishes the context boundary before returning a
 // sidecar and makes every failure path release the coordinator immediately.
 func preparePreflightSidecar(coordinator contextPreflightCoordinator) (*preflightSidecarHandle, error) {
+	return preparePreflightSidecarContext(context.Background(), coordinator)
+}
+
+func preparePreflightSidecarContext(ctx context.Context, coordinator contextPreflightCoordinator) (*preflightSidecarHandle, error) {
 	if coordinator == nil {
 		return nil, fmt.Errorf("context preflight coordinator is unavailable")
 	}
-	if err := coordinator.PrepareContextPreflight(); err != nil {
+	var err error
+	callCtx := ctx
+	if scoped, ok := coordinator.(contextPreflightContextCoordinator); ok {
+		err = scoped.PrepareContextPreflightContext(ctx)
+		callCtx = scoped.ContextPreflight()
+	} else {
+		err = coordinator.PrepareContextPreflight()
+	}
+	if err != nil {
 		coordinator.CloseContextPreflight()
 		return nil, err
 	}
@@ -68,7 +93,7 @@ func preparePreflightSidecar(coordinator contextPreflightCoordinator) (*prefligh
 		coordinator.CloseContextPreflight()
 		return nil, fmt.Errorf("sidecar is unavailable after context preflight")
 	}
-	return &preflightSidecarHandle{sidecar: s, close: coordinator.CloseContextPreflight}, nil
+	return &preflightSidecarHandle{sidecar: s, ctx: callCtx, close: coordinator.CloseContextPreflight}, nil
 }
 
 var selectionSidecarBuilder = buildSelectionSidecar
@@ -94,7 +119,7 @@ func autoSelectTeam(ctx context.Context, prompt string, registry *team.TeamRegis
 	if handle := selectionSidecarBuilder(ctx); handle != nil {
 		defer handle.Close()
 		if s := handle.Sidecar(); s != nil {
-			if picked, err := matchTeamWithSelectionSidecar(ctx, s, prompt, candidates); err == nil && picked != "" {
+			if picked, err := matchTeamWithSelectionSidecar(handle.Context(), s, prompt, candidates); err == nil && picked != "" {
 				return picked, "llm"
 			}
 		}
@@ -208,7 +233,7 @@ func buildSelectionSidecar(ctx context.Context) *preflightSidecarHandle {
 	if err != nil {
 		return nil
 	}
-	handle, err := preparePreflightSidecar(coordinator)
+	handle, err := preparePreflightSidecarContext(ctx, coordinator)
 	if err != nil {
 		return nil
 	}

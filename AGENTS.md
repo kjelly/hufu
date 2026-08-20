@@ -7,7 +7,8 @@
 **hufu** is a Go CLI tool that orchestrates teams of LLM agents (via Ollama) to collaboratively accomplish tasks. Teams are discovered by name from configured search paths, and a single prompt can switch between multiple teams or invoke specific agents directly.
 
 - **Module**: `github.com/kjelly/hufu`
-- **Go version**: 1.26.5
+- **Go language version**: 1.26.5
+- **Go toolchain**: 1.26.6
 - **CLI framework**: cobra
 - **LLM framework**: `charm.land/fantasy` (Charm's agent/LLM abstraction)
 - **MCP client**: `github.com/mark3labs/mcp-go`

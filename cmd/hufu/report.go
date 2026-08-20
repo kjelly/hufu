@@ -79,22 +79,23 @@ func generateReports(loadedTeams map[string]*teamContext, combinedResult string,
 }
 
 type reportData struct {
-	Todos               []*team.TodoItem
-	STM                 string
-	Skills              []team.SkillUsageEntry
-	SessionData         *team.SessionData
-	TaskHistory         map[string]string
-	StartedAt           time.Time
-	SkillPatterns       []SkillPatternReport
-	ContextUsageSection string
-	ResolvedProfile     team.ExecutionProfile
-	RunResult           *team.RunResult
-	TerminalSessions    []team.TerminalSession
-	WorkerMemory        team.WorkerMemoryReport
-	MemoryLearning      team.MemoryLearningReport
-	DeprecatedMemory    []team.DeprecatedMemoryToolUsage
-	ContextRouting      team.ContextManifestSummary
-	HistoricalTodoCount int
+	Todos                 []*team.TodoItem
+	STM                   string
+	Skills                []team.SkillUsageEntry
+	SessionData           *team.SessionData
+	TaskHistory           map[string]string
+	CurrentRunDiagnostics map[string]string
+	StartedAt             time.Time
+	SkillPatterns         []SkillPatternReport
+	ContextUsageSection   string
+	ResolvedProfile       team.ExecutionProfile
+	RunResult             *team.RunResult
+	TerminalSessions      []team.TerminalSession
+	WorkerMemory          team.WorkerMemoryReport
+	MemoryLearning        team.MemoryLearningReport
+	DeprecatedMemory      []team.DeprecatedMemoryToolUsage
+	ContextRouting        team.ContextManifestSummary
+	HistoricalTodoCount   int
 }
 
 // SkillPatternReport holds detected skill pattern info for reports
@@ -132,8 +133,9 @@ func formatVerificationSummary(item *team.TodoItem) string {
 
 func gatherReportData(tc *teamContext, teamName string) *reportData {
 	d := &reportData{
-		TaskHistory: make(map[string]string),
-		StartedAt:   time.Now(),
+		TaskHistory:           make(map[string]string),
+		CurrentRunDiagnostics: make(map[string]string),
+		StartedAt:             time.Now(),
 	}
 
 	if tc.sessionData != nil {
@@ -163,51 +165,57 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 	if d.RunResult == nil && d.SessionData != nil {
 		d.RunResult = d.SessionData.RunResult
 	}
-	if d.RunResult != nil && d.RunResult.EvidenceManifest != nil && d.RunResult.EvidenceManifest.RunID != "" {
-		d.Todos, d.HistoricalTodoCount = latestRunTodos(d.Todos, d.RunResult.EvidenceManifest.RunID)
-	}
-
 	if tc.session != nil {
+		verifiedManifest, verified := verifiedEvidenceManifest(tc.session.Workspace, d.RunResult)
+		if verified {
+			d.Todos, d.HistoricalTodoCount = latestRunTodos(d.Todos, verifiedManifest)
+		}
 		d.STM = team.LoadSTM(tc.session.Workspace)
 
-		tasksDir := filepath.Join(tc.session.Workspace, "tasks", teamName)
-		entries, err := os.ReadDir(tasksDir)
-		if err == nil {
-			for _, entry := range entries {
-				if !entry.IsDir() {
-					continue
-				}
-				agentDir := filepath.Join(tasksDir, entry.Name())
-				taskEntries, err := os.ReadDir(agentDir)
-				if err != nil {
-					continue
-				}
-				var mdEntries []os.DirEntry
-				for _, te := range taskEntries {
-					if strings.HasSuffix(te.Name(), ".md") {
-						mdEntries = append(mdEntries, te)
+		if d.ResolvedProfile.DisableHistoricalTaskReuse {
+			if verified {
+				d.CurrentRunDiagnostics = currentRunReportDiagnostics(d.Todos, verifiedManifest)
+			}
+		} else {
+			tasksDir := filepath.Join(tc.session.Workspace, "tasks", teamName)
+			entries, err := os.ReadDir(tasksDir)
+			if err == nil {
+				for _, entry := range entries {
+					if !entry.IsDir() {
+						continue
 					}
-				}
-				sort.Slice(mdEntries, func(i, j int) bool {
-					return mdEntries[i].Name() > mdEntries[j].Name()
-				})
-				var b strings.Builder
-				count := 0
-				for _, te := range mdEntries {
-					if count >= 10 {
-						break
-					}
-					data, err := os.ReadFile(filepath.Join(agentDir, te.Name()))
+					agentDir := filepath.Join(tasksDir, entry.Name())
+					taskEntries, err := os.ReadDir(agentDir)
 					if err != nil {
 						continue
 					}
-					fmt.Fprintf(&b, "### %s\n```\n%s\n```\n\n",
-						strings.TrimSuffix(te.Name(), ".md"),
-						limitStr(string(data), 1500))
-					count++
-				}
-				if count > 0 {
-					d.TaskHistory[entry.Name()] = b.String()
+					var mdEntries []os.DirEntry
+					for _, te := range taskEntries {
+						if strings.HasSuffix(te.Name(), ".md") {
+							mdEntries = append(mdEntries, te)
+						}
+					}
+					sort.Slice(mdEntries, func(i, j int) bool {
+						return mdEntries[i].Name() > mdEntries[j].Name()
+					})
+					var b strings.Builder
+					count := 0
+					for _, te := range mdEntries {
+						if count >= 10 {
+							break
+						}
+						data, err := os.ReadFile(filepath.Join(agentDir, te.Name()))
+						if err != nil {
+							continue
+						}
+						fmt.Fprintf(&b, "### %s\n```\n%s\n```\n\n",
+							strings.TrimSuffix(te.Name(), ".md"),
+							limitStr(string(data), 1500))
+						count++
+					}
+					if count > 0 {
+						d.TaskHistory[entry.Name()] = b.String()
+					}
 				}
 			}
 		}
@@ -216,11 +224,67 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 	return d
 }
 
+func verifiedEvidenceManifest(workspace string, result *team.RunResult) (*team.EvidenceManifest, bool) {
+	if result == nil || result.EvidenceManifest == nil || result.EvidenceManifest.RunID == "" {
+		return nil, false
+	}
+	store, err := team.NewFileArtifactStore(workspace, workspace)
+	if err != nil || result.EvidenceManifest.Verify(context.Background(), store) != nil {
+		return nil, false
+	}
+	return result.EvidenceManifest, true
+}
+
+// currentRunReportDiagnostics is built only from canonical task receipts and
+// the sealed evidence manifest. It intentionally never opens workspace/tasks
+// markdown, whose filenames and contents are not run-scoped.
+func currentRunReportDiagnostics(todos []*team.TodoItem, manifest *team.EvidenceManifest) map[string]string {
+	diagnostics := make(map[string]string)
+	if manifest == nil || manifest.RunID == "" {
+		return diagnostics
+	}
+	runID := manifest.RunID
+	for _, item := range todos {
+		if item == nil {
+			continue
+		}
+		binding, ok := manifest.VerifiedTaskBinding(item.ID)
+		if !ok || binding.RunID != runID {
+			continue
+		}
+		// Extra-model candidates can share one Todo attempt. Completion order
+		// does not prove which candidate produced the merged/judged output, so
+		// do not publish a transcript or winner claim without an explicit
+		// output-to-receipt binding.
+		if itemHasAmbiguousCurrentRunReceipts(item, runID) {
+			continue
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "- run_id: `%s`\n- task_id: `%s`\n- attempt: `%d`\n- model_execution_id: `%s`\n- producer: `%s`\n",
+			reportSafeMetadata(binding.RunID, 120), reportSafeMetadata(binding.TaskID, 120), binding.Attempt, reportSafeMetadata(binding.ModelExecutionID, 160), reportSafeMetadata(binding.ProducerID, 120))
+		fmt.Fprintf(&b, "- transcript_ref: `%s`\n- artifact_membership: `%d`\n- artifact_verification: `verified`\n", reportSafeMetadata(binding.TranscriptRef, 240), len(binding.ArtifactIDs))
+		diagnostics[item.Agent] += fmt.Sprintf("### Task %s\n%s\n", reportSafeMetadata(item.ID, 120), b.String())
+	}
+	return diagnostics
+}
+
+func reportSafeMetadata(value string, max int) string {
+	value = utils.RedactSecrets(value)
+	value = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, value)
+	value = strings.ReplaceAll(value, "`", "'")
+	return limitStr(strings.TrimSpace(value), max)
+}
+
 // latestRunTodos excludes only tasks whose durable receipts positively bind
 // them to another run. Tasks without a receipt remain visible: guessing they
 // are historical would hide an unfinished/recovered task from operators.
-func latestRunTodos(items []*team.TodoItem, runID string) ([]*team.TodoItem, int) {
-	if runID == "" {
+func latestRunTodos(items []*team.TodoItem, manifest *team.EvidenceManifest) ([]*team.TodoItem, int) {
+	if manifest == nil || manifest.RunID == "" {
 		return items, 0
 	}
 	current := make([]*team.TodoItem, 0, len(items))
@@ -229,24 +293,62 @@ func latestRunTodos(items []*team.TodoItem, runID string) ([]*team.TodoItem, int
 		if item == nil {
 			continue
 		}
-		hasReceipt := false
-		hasCurrentReceipt := false
-		for _, receipt := range item.ExecutionReceipts {
-			if receipt.RunID == "" {
-				continue
-			}
-			hasReceipt = true
-			if receipt.RunID == runID {
-				hasCurrentReceipt = true
-			}
-		}
-		if hasReceipt && !hasCurrentReceipt {
+		if itemHasReceiptsFromAnotherRun(item, manifest.RunID) && !itemHasCurrentRunReceipt(item, manifest.RunID) {
 			historical++
 			continue
 		}
 		current = append(current, item)
 	}
 	return current, historical
+}
+
+func itemHasCurrentRunReceipt(item *team.TodoItem, runID string) bool {
+	if item == nil || runID == "" {
+		return false
+	}
+	for _, receipt := range item.ExecutionReceipts {
+		if receipt.RunID == runID {
+			return true
+		}
+	}
+	return item.ExecutionReceipt != nil && item.ExecutionReceipt.RunID == runID
+}
+
+func itemHasReceiptsFromAnotherRun(item *team.TodoItem, runID string) bool {
+	if item == nil {
+		return false
+	}
+	for _, receipt := range item.ExecutionReceipts {
+		if receipt.RunID != "" && receipt.RunID != runID {
+			return true
+		}
+	}
+	return item.ExecutionReceipt != nil && item.ExecutionReceipt.RunID != "" && item.ExecutionReceipt.RunID != runID
+}
+
+func itemHasAmbiguousCurrentRunReceipts(item *team.TodoItem, runID string) bool {
+	if item == nil || runID == "" {
+		return false
+	}
+	seen := make(map[string]bool)
+	count := 0
+	for _, receipt := range item.ExecutionReceipts {
+		if receipt.RunID != runID || receipt.ExitCode != nil && *receipt.ExitCode != 0 {
+			continue
+		}
+		identity := receipt.ModelExecutionID + "\x00" + receipt.TranscriptRef
+		if !seen[identity] {
+			seen[identity] = true
+			count++
+		}
+	}
+	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RunID == runID && (item.ExecutionReceipt.ExitCode == nil || *item.ExecutionReceipt.ExitCode == 0) {
+		identity := item.ExecutionReceipt.ModelExecutionID + "\x00" + item.ExecutionReceipt.TranscriptRef
+		if !seen[identity] {
+			count++
+		}
+	}
+	return count > 1
 }
 
 // gatherSkillPatterns extracts detected skill patterns from coordinator
@@ -525,6 +627,17 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		for _, name := range agentNames {
 			fmt.Fprintf(&b, "### %s\n\n", name)
 			b.WriteString(data.TaskHistory[name])
+		}
+	}
+	if len(data.CurrentRunDiagnostics) > 0 {
+		b.WriteString("## Current-Run Evidence Diagnostics\n\n")
+		agents := make([]string, 0, len(data.CurrentRunDiagnostics))
+		for agentName := range data.CurrentRunDiagnostics {
+			agents = append(agents, agentName)
+		}
+		sort.Strings(agents)
+		for _, agentName := range agents {
+			fmt.Fprintf(&b, "### %s\n\n%s\n", reportSafeMetadata(agentName, 120), data.CurrentRunDiagnostics[agentName])
 		}
 	}
 

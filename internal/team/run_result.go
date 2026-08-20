@@ -2,6 +2,7 @@ package team
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,11 @@ import (
 
 type RunOutcome string
 
+// ErrInvocationStalled is the stable cancellation cause used when an
+// invocation-owned watchdog observes that its provider has stopped making
+// progress. It is deliberately distinct from user cancellation.
+var ErrInvocationStalled = errors.New("invocation stalled")
+
 const (
 	RunOutcomeCompleted  RunOutcome = "completed"
 	RunOutcomeUnverified RunOutcome = "unverified"
@@ -17,6 +23,7 @@ const (
 	RunOutcomeBlocked    RunOutcome = "blocked"
 	RunOutcomeFailed     RunOutcome = "failed"
 	RunOutcomeCancelled  RunOutcome = "cancelled"
+	RunOutcomeStalled    RunOutcome = "stalled"
 )
 
 type GoalMode string
@@ -64,6 +71,7 @@ const (
 	StopReasonCancelled              StopReason = "cancelled"
 	StopReasonRunFailed              StopReason = "run_failed"
 	StopReasonEvidenceIncomplete     StopReason = "evidence_incomplete"
+	StopReasonInvocationStalled      StopReason = "invocation_stalled"
 )
 
 func (r RunOutcome) String() string {
@@ -267,6 +275,8 @@ func FormatCanonicalStatus(res *RunResult) string {
 		return "Execution blocked"
 	case RunOutcomeCancelled:
 		return "Execution cancelled"
+	case RunOutcomeStalled:
+		return "Execution stalled"
 	case RunOutcomeFailed:
 		return "Execution failed"
 	case RunOutcomePartial:
@@ -293,6 +303,7 @@ type RunEvaluationInput struct {
 	UnresolvedTasks        []TaskReference
 	Acceptance             AcceptanceState
 	Cancelled              bool
+	Stalled                bool
 	BudgetExceeded         bool
 	CoordinatorInterrupted bool
 	RunFailed              bool
@@ -333,6 +344,12 @@ func EvaluateRunOutcome(input RunEvaluationInput) RunResult {
 		Metrics:         input.Metrics,
 	}
 
+	if input.Stalled {
+		result.Outcome = RunOutcomeStalled
+		result.StopReason = StopReasonInvocationStalled
+		result.ExitCode = 124
+		return result
+	}
 	if input.Cancelled {
 		result.Outcome = RunOutcomeCancelled
 		result.StopReason = StopReasonCancelled
@@ -485,6 +502,8 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 			if result.ExitCode > cancelledExitCode {
 				cancelledExitCode = result.ExitCode
 			}
+		case RunOutcomeStalled:
+			input.Stalled = true
 		case RunOutcomeFailed:
 			input.RunFailed = true
 			if result.ExitCode > failedExitCode {

@@ -2852,6 +2852,13 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			}
 		}
 	}
+	// Fantasy may surface the transport error from the proxy after the
+	// invocation context has already been cancelled. The invocation cause is
+	// authoritative; a connection reset is only a consequence of the hard
+	// abort and must not become the provider failure classification.
+	if cause := context.Cause(ctx); cause != nil {
+		err = cause
+	}
 	c.SetCurrentStage("idle")
 	if result != nil {
 		accountedTokens := c.addStepTokens(result.Steps)

@@ -164,13 +164,21 @@ func collectFixData(session *team.TeamSession, taskDesc string) *fixData {
 }
 
 func runFixAnalysis(ctx context.Context, tc *teamContext, question string, taskDesc string, data *fixData) (string, error) {
+	if tc == nil || tc.coordinator == nil || tc.session == nil {
+		return "", fmt.Errorf("fix analysis requires a coordinator")
+	}
+	if err := tc.coordinator.PrepareContextPreflightContext(ctx); err != nil {
+		return "", fmt.Errorf("fix analysis provider boundary unavailable: %w", err)
+	}
+	defer tc.coordinator.CloseContextPreflight()
+
 	s := tc.coordinator.Sidecar()
 	if s == nil {
 		return runFixAnalysisDirect(ctx, question, taskDesc, data, tc.session.Config.Name, tc.session.Config.SidecarModel)
 	}
 
 	prompt := buildFixPrompt(question, taskDesc, data)
-	sidecarCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	sidecarCtx, cancel := context.WithTimeout(tc.coordinator.ContextPreflight(), 90*time.Second)
 	defer cancel()
 
 	result, err := s.Execute(sidecar.WithPurpose(sidecarCtx, "fix_analysis"), prompt)

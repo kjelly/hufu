@@ -93,6 +93,12 @@ type LifecycleEventPayload struct {
 	Team                  string                  `json:"team,omitempty"`
 	Outcome               RunOutcome              `json:"outcome"`
 	GoalSatisfied         bool                    `json:"goal_satisfied"`
+	GoalMode              GoalMode                `json:"goal_mode,omitempty"`
+	StopReason            StopReason              `json:"stop_reason,omitempty"`
+	ExitCode              int                     `json:"exit_code,omitempty"`
+	Reason                string                  `json:"reason,omitempty"`
+	Response              string                  `json:"response,omitempty"`
+	UnresolvedTasks       []TaskReference         `json:"unresolved_tasks,omitempty"`
 	CompletedReview       bool                    `json:"completed_review,omitempty"`
 	FindingsPresent       bool                    `json:"findings_present,omitempty"`
 	FixedAndVerified      bool                    `json:"fixed_and_verified,omitempty"`
@@ -205,10 +211,16 @@ func usageWithProgressTokens(steps []fantasy.StepResult, attemptTokens *attemptB
 	return usage
 }
 
-func (c *Coordinator) beginExecutionRun() func() {
+func (c *Coordinator) beginInvocationExecutionRun(parent context.Context) (context.Context, func()) {
+	owner := newInvocationOwner(c, parent)
+	invocationCtx := owner.ctx
+	watchdog := c.newInvocationWatchdog(invocationCtx, owner.cancel)
+	watchdog.owner = owner
+	owner.start()
 	c.coordinatorPolicyRepairsAttempt.Store(0)
 	c.coordinatorPolicyRepairsSuccess.Store(0)
 	c.coordinatorPolicyRepairPending.Store(false)
+	c.invocationFailureFinalized.Store(false)
 	// A resumed coordinator may hold the previous run's result in memory. It
 	// must never leak that completed outcome into this run's run_finished event
 	// when the new run stops during acceptance or before finish.
@@ -254,23 +266,6 @@ func (c *Coordinator) beginExecutionRun() func() {
 	}
 
 	c.initEventStore()
-	if c.sessionData != nil && c.sessionData.RecoveryRequired {
-		return func() {
-			// Recovery-required runs never emit new executionEvents but
-			// may still carry a fresh event store; snapshot any prior
-			// per-run compatibility counts before clearing state so
-			// post-run --report visibility remains intact.
-			c.captureCompletedRunDeprecatedReport()
-			if c.eventStore != nil {
-				_ = c.eventStore.Close()
-				c.eventStore = nil
-			}
-			c.executionEventsMu.Lock()
-			c.executionRunID = ""
-			c.executionTeamRevision = ""
-			c.executionEventsMu.Unlock()
-		}
-	}
 
 	var logger *executionEventLogger
 	if workspace != "" {
@@ -312,7 +307,23 @@ func (c *Coordinator) beginExecutionRun() func() {
 		c.persistRuntimeContextSnapshot(c.phaseWorkflow.State())
 	}
 
-	return func() {
+	// Admit the stall watchdog only after the run identity, durable event store,
+	// logger, run_started event, and startup snapshot are initialized. The
+	// parent watcher above remains active throughout startup so cancellation can
+	// still abort and reap the provider boundary immediately.
+	watchdog.touch()
+	c.setInvocationWatchdog(watchdog)
+	watchdog.start()
+
+	return invocationCtx, func() {
+		// End the watchdog first and join it. Provider/process/IPC owners are
+		// then stopped before terminal evidence and run_finished are projected,
+		// preventing late stall/error events from racing durable finalization.
+		if err := owner.close(); err != nil {
+			log.Printf("warning: stop provider hard-abort boundary: %v", err)
+		}
+		watchdog.wait()
+		c.invocationWatchdog.CompareAndSwap(watchdog, nil)
 		c.drainAsyncTasks()
 		// Every terminal result, including no-progress and coordinator-fallback
 		// exits, must carry the final evidence chain before run_finished is
@@ -351,6 +362,12 @@ func (c *Coordinator) beginExecutionRun() func() {
 		if result := c.LastRunResult(); result != nil {
 			payload.Outcome = result.Outcome
 			payload.GoalSatisfied = result.GoalSatisfied
+			payload.GoalMode = result.GoalMode
+			payload.StopReason = result.StopReason
+			payload.ExitCode = result.ExitCode
+			payload.Reason = result.Reason
+			payload.Response = result.Response
+			payload.UnresolvedTasks = result.UnresolvedTasks
 			payload.CompletedReview = result.CompletedReview
 			payload.FindingsPresent = result.FindingsPresent
 			payload.FixedAndVerified = result.FixedAndVerified
@@ -370,8 +387,12 @@ func (c *Coordinator) beginExecutionRun() func() {
 			payload.Outcome = RunOutcomeFailed
 			payload.GoalSatisfied = false
 		}
-		if err := c.emitEvent("run_finished", "coordinator", "", payload); err != nil {
-			log.Printf("error: failed to write run_finished event: %v", err)
+		if c.eventStore == nil {
+			if c.sessionData != nil && c.sessionData.RecoveryRequired {
+				log.Printf("error: terminal persistence unavailable: recovery event journal is not writable; refusing unsafe run_finished append")
+			}
+		} else if err := c.emitEvent("run_finished", "coordinator", "", payload); err != nil {
+			log.Printf("error: terminal persistence unavailable: failed to write run_finished event: %v", err)
 		}
 		var canonicalEvents []RunEvent
 		if c.eventStore != nil {
@@ -408,6 +429,14 @@ func (c *Coordinator) beginExecutionRun() func() {
 			}
 		}
 	}
+}
+
+// beginExecutionRun preserves the internal test/helper seam for callers that
+// only need the durable run lifecycle. Public invocation paths use
+// beginInvocationExecutionRun so their provider context is watchdog-owned.
+func (c *Coordinator) beginExecutionRun() func() {
+	_, end := c.beginInvocationExecutionRun(context.Background())
+	return end
 }
 
 func (c *Coordinator) persistRuntimeContextSnapshot(phase Phase) {

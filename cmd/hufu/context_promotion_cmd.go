@@ -312,9 +312,15 @@ func flushPromotionEvents(ctx context.Context, repo *contextstore.SQLiteReposito
 	return nil
 }
 
-type sidecarTextGenerator struct{ s *sidecar.Sidecar }
+type sidecarTextGenerator struct {
+	s   *sidecar.Sidecar
+	ctx context.Context
+}
 
 func (g sidecarTextGenerator) GenerateText(ctx context.Context, prompt string) (string, error) {
+	if g.ctx != nil {
+		ctx = g.ctx
+	}
 	return g.s.ExecuteProfile(sidecar.WithPurpose(ctx, "promotion_draft"), prompt, sidecar.CompactorProfile)
 }
 func newPromotionGenerator(ctx context.Context, teamDir string) (promotion.DraftGenerator, func(), error) {
@@ -339,11 +345,11 @@ func newPromotionGenerator(ctx context.Context, teamDir string) (promotion.Draft
 	if err != nil {
 		return nil, nil, err
 	}
-	handle, err := preparePreflightSidecar(coordinator)
+	handle, err := preparePreflightSidecarContext(ctx, coordinator)
 	if err != nil {
 		return nil, nil, err
 	}
-	return promotion.JSONDraftGenerator{Generator: sidecarTextGenerator{s: handle.Sidecar()}}, handle.Close, nil
+	return promotion.JSONDraftGenerator{Generator: sidecarTextGenerator{s: handle.Sidecar(), ctx: handle.Context()}}, handle.Close, nil
 }
 
 func parsePromotionType(v string) (promotion.Type, error) {

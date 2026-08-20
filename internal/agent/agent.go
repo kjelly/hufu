@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/notify"
+	"github.com/kjelly/hufu/internal/providerproxy"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -636,6 +638,8 @@ type OllamaProvider struct {
 	baseURL  string
 	apiKey   string
 	name     string
+	proxyURL string
+	proxyMu  sync.RWMutex
 }
 
 func NewOllamaProvider(baseURL, apiKey, name string) (*OllamaProvider, error) {
@@ -661,7 +665,40 @@ func NewOllamaProvider(baseURL, apiKey, name string) (*OllamaProvider, error) {
 
 func (p *OllamaProvider) LanguageModel(ctx context.Context, modelID string) (fantasy.LanguageModel, error) {
 	model := strings.TrimPrefix(modelID, p.name+"/")
-	return p.provider.LanguageModel(ctx, model)
+	baseURL, proxied := p.effectiveBaseURL()
+	if !proxied {
+		return p.provider.LanguageModel(ctx, model)
+	}
+	proxyProvider, err := NewOllamaProvider(baseURL, p.apiKey, p.name)
+	if err != nil {
+		return nil, err
+	}
+	return proxyProvider.provider.LanguageModel(ctx, model)
+}
+
+// effectiveBaseURL snapshots the endpoint owned by this provider. The
+// invocation proxy is selected while active; otherwise requests use the
+// provider's configured endpoint. baseURL is never mutated when the proxy
+// lifecycle changes.
+func (p *OllamaProvider) effectiveBaseURL() (string, bool) {
+	if p == nil {
+		return "", false
+	}
+	p.proxyMu.RLock()
+	defer p.proxyMu.RUnlock()
+	if p.proxyURL != "" {
+		return p.proxyURL, true
+	}
+	return p.baseURL, false
+}
+
+func (p *OllamaProvider) setProxyURL(proxyURL string) {
+	if p == nil {
+		return
+	}
+	p.proxyMu.Lock()
+	p.proxyURL = proxyURL
+	p.proxyMu.Unlock()
 }
 
 // ListModelNames queries the provider's OpenAI-compatible /models endpoint
@@ -669,7 +706,8 @@ func (p *OllamaProvider) LanguageModel(ctx context.Context, modelID string) (fan
 // error when the endpoint is unreachable or unsupported; callers should treat
 // that as "cannot validate", not as "model missing".
 func (p *OllamaProvider) ListModelNames(ctx context.Context) ([]string, error) {
-	url := strings.TrimRight(p.baseURL, "/") + "/models"
+	baseURL, _ := p.effectiveBaseURL()
+	url := strings.TrimRight(baseURL, "/") + "/models"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build models request: %w", err)
@@ -776,10 +814,12 @@ func ParseModelProvider(modelID string) (provider, modelName string) {
 // ProviderManager manages multiple OllamaProviders, one per provider prefix.
 // It lazy-initializes providers on first use based on the model ID prefix.
 type ProviderManager struct {
-	defaultProvider *OllamaProvider
-	providers       map[string]*OllamaProvider
-	configs         map[string]config.ProviderConfig
-	mu              sync.RWMutex
+	defaultProvider            *OllamaProvider
+	providers                  map[string]*OllamaProvider
+	configs                    map[string]config.ProviderConfig
+	mu                         sync.RWMutex
+	invocationProxyLifecycleMu sync.Mutex
+	invocationProxies          map[string]*providerproxy.Proxy
 }
 
 func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[string]config.ProviderConfig) (*ProviderManager, error) {
@@ -791,11 +831,116 @@ func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[strin
 		providerConfigs = make(map[string]config.ProviderConfig)
 	}
 	return &ProviderManager{
-		defaultProvider: defaultProv,
-		providers:       make(map[string]*OllamaProvider),
-		configs:         providerConfigs,
+		defaultProvider:   defaultProv,
+		providers:         make(map[string]*OllamaProvider),
+		configs:           providerConfigs,
+		invocationProxies: make(map[string]*providerproxy.Proxy),
 	}, nil
 }
+
+// StartInvocationProxy starts one Hufu-owned proxy per configured provider.
+// Fantasy clients created after this call connect only to the proxy, so the
+// coordinator can kill and reap the process group when a provider ignores
+// context cancellation. Startup is fail-closed: callers must not run a
+// provider invocation without this ownership boundary.
+func (pm *ProviderManager) StartInvocationProxy(ctx context.Context, executable string) error {
+	if pm == nil {
+		return fmt.Errorf("provider manager unavailable")
+	}
+	// Serialize the complete start/abort lifecycle, including synchronous
+	// proxy Close/Wait. Clearing the map before Wait is not sufficient: a new
+	// invocation must not start while the previous process group is still
+	// being reaped.
+	pm.invocationProxyLifecycleMu.Lock()
+	defer pm.invocationProxyLifecycleMu.Unlock()
+	pm.mu.Lock()
+	if len(pm.invocationProxies) > 0 {
+		pm.mu.Unlock()
+		return nil
+	}
+	configs := make(map[string]config.ProviderConfig, len(pm.configs))
+	for name, cfg := range pm.configs {
+		configs[name] = cfg
+	}
+	defaultURL, defaultKey := pm.defaultProvider.baseURL, pm.defaultProvider.apiKey
+	pm.mu.Unlock()
+
+	created := make(map[string]*providerproxy.Proxy)
+	start := func(name, rawURL, key string) error {
+		proxy, err := providerproxy.Start(ctx, executable, providerproxy.Config{UpstreamURL: rawURL, APIKey: key})
+		if err != nil {
+			return fmt.Errorf("provider %q hard-abort proxy: %w", name, err)
+		}
+		created[name] = proxy
+		return nil
+	}
+	if err := start("ollama", defaultURL, defaultKey); err != nil {
+		for _, proxy := range created {
+			_ = proxy.Close()
+		}
+		return err
+	}
+	for name, cfg := range configs {
+		if name == "ollama" {
+			continue
+		}
+		url := cfg.ProviderURL
+		if url == "" {
+			url = defaultURL
+		}
+		key := cfg.ProviderAPIKey
+		if key == "" {
+			key = defaultKey
+		}
+		if err := start(name, url, key); err != nil {
+			for _, proxy := range created {
+				_ = proxy.Close()
+			}
+			return err
+		}
+	}
+	pm.mu.Lock()
+	pm.invocationProxies = created
+	for name, proxy := range created {
+		if name == "ollama" {
+			pm.defaultProvider.setProxyURL(proxy.URL())
+			continue
+		}
+		if p, ok := pm.providers[name]; ok {
+			p.setProxyURL(proxy.URL())
+		}
+	}
+	pm.mu.Unlock()
+	return nil
+}
+
+// AbortInvocationProxy synchronously kills and reaps every proxy owner. It
+// is safe to call more than once and is the watchdog's hard-abort operation.
+func (pm *ProviderManager) AbortInvocationProxy() error {
+	if pm == nil {
+		return nil
+	}
+	pm.invocationProxyLifecycleMu.Lock()
+	defer pm.invocationProxyLifecycleMu.Unlock()
+	pm.mu.Lock()
+	proxies := make(map[string]*providerproxy.Proxy, len(pm.invocationProxies))
+	for name, proxy := range pm.invocationProxies {
+		proxies[name] = proxy
+	}
+	pm.invocationProxies = make(map[string]*providerproxy.Proxy)
+	pm.defaultProvider.setProxyURL("")
+	for _, p := range pm.providers {
+		p.setProxyURL("")
+	}
+	pm.mu.Unlock()
+	var joined error
+	for _, proxy := range proxies {
+		joined = errors.Join(joined, proxy.Close())
+	}
+	return joined
+}
+
+func (pm *ProviderManager) StopInvocationProxy() error { return pm.AbortInvocationProxy() }
 
 // GetProvider returns the OllamaProvider for the given modelID, and the
 // stripped model name (without the provider prefix). Unknown providers
@@ -836,11 +981,17 @@ func (pm *ProviderManager) GetProvider(modelID string) *OllamaProvider {
 		}
 		p, err := NewOllamaProvider(url, key, name)
 		if err == nil {
+			if proxy, ok := pm.invocationProxies[name]; ok {
+				p.setProxyURL(proxy.URL())
+			}
 			pm.providers[name] = p
 			return p
 		}
 	}
 	// Fall back to default provider
+	if proxy, ok := pm.invocationProxies["ollama"]; ok {
+		pm.defaultProvider.setProxyURL(proxy.URL())
+	}
 	return pm.defaultProvider
 }
 

@@ -16,7 +16,7 @@ concurrency:
 
 env:
   # Pinned. Bump via PR when intentionally upgrading.
-  GO_VERSION: "1.26.2"
+  GO_VERSION: "1.26.6"
   GORELEASER_VERSION: "v2.7.0"
 
 jobs:

@@ -335,7 +335,6 @@ func validateSubmittedTaskResult(result *TaskResult) error {
 	}
 }
 
-
 // validateCompletedTaskResult validates a structured result for terminal Todo
 // completion. It deliberately keeps schema validity separate from semantics:
 // an honest partial/failed/blocked result is retained as evidence and routed

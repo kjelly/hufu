@@ -109,7 +109,11 @@ func (t *taskTranscript) CompactEvidence(maxRecords, maxRunes int) string {
 		if output == "" {
 			continue
 		}
-		entries = append(entries, entry{text: fmt.Sprintf("- %s result%s: %s", record.Tool, map[bool]string{true: " (error)"}[record.Error], output)})
+		suffix := ""
+		if record.Error {
+			suffix = " (error)"
+		}
+		entries = append(entries, entry{text: fmt.Sprintf("- %s result%s: %s", record.Tool, suffix, output)})
 	}
 	if len(entries) > maxRecords {
 		entries = entries[len(entries)-maxRecords:]

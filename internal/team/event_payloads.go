@@ -21,7 +21,17 @@ type TaskTransitionEventPayload struct {
 }
 
 type RunFinishedEventPayload struct {
-	Outcome RunOutcome `json:"outcome"`
+	Outcome         RunOutcome        `json:"outcome"`
+	GoalSatisfied   bool              `json:"goal_satisfied,omitempty"`
+	GoalMode        GoalMode          `json:"goal_mode,omitempty"`
+	Response        string            `json:"response,omitempty"`
+	Reason          string            `json:"reason,omitempty"`
+	StopReason      StopReason        `json:"stop_reason,omitempty"`
+	ExitCode        int               `json:"exit_code,omitempty"`
+	UnresolvedTasks []TaskReference   `json:"unresolved_tasks,omitempty"`
+	Acceptance      *AcceptanceResult `json:"acceptance,omitempty"`
+	Stats           *RunStats         `json:"stats,omitempty"`
+	Metrics         *RunMetrics       `json:"metrics,omitempty"`
 }
 
 // ValidateEventPayload validates an event after EventStore has filled its

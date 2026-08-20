@@ -709,8 +709,12 @@ func passedManifestTasks(manifest *EvidenceManifest) map[string]bool {
 		return passed
 	}
 	for _, evidence := range manifest.EvidenceResults {
-		if evidence.Status == "passed" && strings.HasPrefix(evidence.RequirementID, "task:") {
-			passed[strings.TrimPrefix(evidence.RequirementID, "task:")] = true
+		if evidence.Status != "passed" || !strings.HasPrefix(evidence.RequirementID, "task:") {
+			continue
+		}
+		taskID := strings.TrimPrefix(evidence.RequirementID, "task:")
+		if _, ok := manifest.VerifiedTaskBinding(taskID); ok {
+			passed[taskID] = true
 		}
 	}
 	return passed

@@ -370,13 +370,55 @@ func TestLatestRunTodosExcludesOnlyReceiptProvenHistoricalTasks(t *testing.T) {
 	current := &team.TodoItem{ID: "current", ExecutionReceipts: []team.ExecutionReceipt{{RunID: "run-current"}}}
 	historical := &team.TodoItem{ID: "historical", ExecutionReceipts: []team.ExecutionReceipt{{RunID: "run-old"}}}
 	unknown := &team.TodoItem{ID: "unknown"}
-	got, historicalCount := latestRunTodos([]*team.TodoItem{current, historical, unknown}, "run-current")
+	artifact := team.ArtifactRef{ID: "sha256-transcript", RunID: "run-current", TaskID: "current", Attempt: 1}
+	manifest := &team.EvidenceManifest{RunID: "run-current", ArtifactRefs: []team.ArtifactRef{artifact}, EvidenceResults: []team.EvidenceResult{{
+		RequirementID: "task:current", Status: "passed", ArtifactRefs: []team.ArtifactRef{artifact}, Binding: &team.EvidenceBinding{
+			RunID: "run-current", TaskID: "current", Attempt: 1, ModelExecutionID: "model-1", ProducerID: "worker", TranscriptRef: "sha256-transcript", ArtifactIDs: []string{"sha256-transcript"},
+		},
+	}}}
+	got, historicalCount := latestRunTodos([]*team.TodoItem{current, historical, unknown}, manifest)
 	if historicalCount != 1 || len(got) != 2 || got[0].ID != "current" || got[1].ID != "unknown" {
 		t.Fatalf("latest tasks=%#v historical=%d", got, historicalCount)
 	}
 	report := buildReportMD(&reportData{StartedAt: time.Now(), Todos: got, HistoricalTodoCount: historicalCount}, "demo", "")
 	if !strings.Contains(report, "## Historical Runs") || strings.Contains(report, "historical |") {
 		t.Fatalf("latest-run report separation failed:\n%s", report)
+	}
+}
+
+func TestLatestRunTodosRetainsCurrentFailedTaskWithoutVerifiedBinding(t *testing.T) {
+	currentFailed := &team.TodoItem{
+		ID:     "failed-current",
+		Status: team.TaskError,
+		ExecutionReceipts: []team.ExecutionReceipt{{
+			RunID: "run-current", TaskID: "failed-current", Attempt: 1,
+		}},
+	}
+	historical := &team.TodoItem{
+		ID: "old",
+		ExecutionReceipts: []team.ExecutionReceipt{{
+			RunID: "run-old", TaskID: "old", Attempt: 1,
+		}},
+	}
+	manifest := &team.EvidenceManifest{RunID: "run-current"}
+	got, historicalCount := latestRunTodos([]*team.TodoItem{currentFailed, historical}, manifest)
+	if historicalCount != 1 || len(got) != 1 || got[0].ID != currentFailed.ID {
+		t.Fatalf("current failed task was filtered: tasks=%#v historical=%d", got, historicalCount)
+	}
+}
+
+func TestCurrentRunDiagnosticsOmitsAmbiguousWinnerBinding(t *testing.T) {
+	item := &team.TodoItem{ID: "task-1", Agent: "worker", ExecutionReceipts: []team.ExecutionReceipt{
+		{RunID: "run-current", TaskID: "task-1", Attempt: 1, ModelExecutionID: "model-a", TranscriptRef: "sha256-a"},
+		{RunID: "run-current", TaskID: "task-1", Attempt: 1, ModelExecutionID: "model-b", TranscriptRef: "sha256-b"},
+	}}
+	manifest := &team.EvidenceManifest{RunID: "run-current", EvidenceResults: []team.EvidenceResult{{
+		RequirementID: "task:task-1", Status: "passed", Binding: &team.EvidenceBinding{
+			RunID: "run-current", TaskID: "task-1", Attempt: 1, ModelExecutionID: "model-a", ProducerID: "worker", TranscriptRef: "sha256-a", ArtifactIDs: []string{"sha256-a"},
+		},
+	}}}
+	if diagnostics := currentRunReportDiagnostics([]*team.TodoItem{item}, manifest); len(diagnostics) != 0 {
+		t.Fatalf("ambiguous winner produced diagnostics: %#v", diagnostics)
 	}
 }
 
@@ -403,5 +445,99 @@ func TestBuildReviewReportFreshSessionOmitsHistoricalTaskTranscripts(t *testing.
 	}, "review", "VERDICT: PASS")
 	if strings.Contains(report, "## Appendix: Agent Task Transcripts") || strings.Contains(report, "old policy repair failure") {
 		t.Fatalf("fresh-session report included historical task transcript:\n%s", report)
+	}
+}
+
+func TestGatherReportDataFreshDoesNotReadTaskMarkdown(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "tasks", "review", "worker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "tasks", "review", "worker", "old.md"), []byte("historical secret diagnostic"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := &team.EvidenceManifest{RunID: "run-current", Status: "accepted"}
+	if err := manifest.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	coordinator := &team.Coordinator{}
+	coordinator.SetTaskTracker(team.NewTaskTracker())
+	coordinator.SetExecutionProfile(team.ExecutionProfile{Name: team.ProfileFreshSession, DisableHistoricalTaskReuse: true})
+	coordinator.SetLastRunResult(&team.RunResult{EvidenceManifest: manifest})
+	data := gatherReportData(&teamContext{
+		teamName:    "review",
+		session:     &team.TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "review"}},
+		coordinator: coordinator,
+	}, "review")
+	if len(data.TaskHistory) != 0 || strings.Contains(data.STM, "historical secret diagnostic") {
+		t.Fatalf("fresh report read historical task markdown: %#v", data.TaskHistory)
+	}
+}
+
+func TestGatherReportDataFreshIgnoresUnverifiedManifestRunID(t *testing.T) {
+	tests := []struct {
+		name     string
+		manifest func() *team.EvidenceManifest
+	}{
+		{
+			name: "unsealed",
+			manifest: func() *team.EvidenceManifest {
+				return &team.EvidenceManifest{RunID: "run-current", Status: "accepted"}
+			},
+		},
+		{
+			name: "hash-invalid",
+			manifest: func() *team.EvidenceManifest {
+				manifest := &team.EvidenceManifest{RunID: "run-current", Status: "accepted"}
+				if err := manifest.Seal(); err != nil {
+					t.Fatalf("seal manifest: %v", err)
+				}
+				manifest.ManifestHash = "invalid"
+				return manifest
+			},
+		},
+		{
+			name: "artifact-invalid",
+			manifest: func() *team.EvidenceManifest {
+				manifest := &team.EvidenceManifest{
+					RunID: "run-current", Status: "accepted",
+					ArtifactRefs: []team.ArtifactRef{{ID: "sha256-missing", SHA256: strings.Repeat("0", 64), ByteSize: 1}},
+				}
+				if err := manifest.Seal(); err != nil {
+					t.Fatalf("seal manifest: %v", err)
+				}
+				return manifest
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			tracker := team.NewTaskTracker()
+			items := tracker.TodoList().AddBatch([]team.TodoSpec{
+				{Agent: "worker", Desc: "current task"},
+				{Agent: "worker", Desc: "historical task"},
+			})
+			items[0].ExecutionReceipts = []team.ExecutionReceipt{{RunID: "run-current"}}
+			items[1].ExecutionReceipts = []team.ExecutionReceipt{{RunID: "run-old"}}
+
+			coordinator := &team.Coordinator{}
+			coordinator.SetTaskTracker(tracker)
+			coordinator.SetExecutionProfile(team.ExecutionProfile{Name: team.ProfileFreshSession, DisableHistoricalTaskReuse: true})
+			coordinator.SetLastRunResult(&team.RunResult{EvidenceManifest: tt.manifest()})
+			data := gatherReportData(&teamContext{
+				teamName:    "review",
+				session:     &team.TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "review"}},
+				coordinator: coordinator,
+			}, "review")
+
+			if len(data.Todos) != 2 || data.HistoricalTodoCount != 0 {
+				t.Fatalf("unverified manifest was used for task filtering: todos=%d historical=%d", len(data.Todos), data.HistoricalTodoCount)
+			}
+			if len(data.CurrentRunDiagnostics) != 0 {
+				t.Fatalf("unverified manifest produced current-run diagnostics: %#v", data.CurrentRunDiagnostics)
+			}
+		})
 	}
 }

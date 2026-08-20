@@ -531,8 +531,8 @@ func TestBeginExecutionRun_InvalidWorkspaceMarksRecoveryRequiredAndDeniesAdmissi
 		t.Fatal("expected RecoveryRequired to be set on coordinator sessionData")
 	}
 	lastResult := c.LastRunResult()
-	if lastResult == nil || lastResult.Outcome != RunOutcomeBlocked || lastResult.GoalSatisfied {
-		t.Fatalf("expected blocked run result, got %#v", lastResult)
+	if lastResult == nil || IsRunOutcomeSuccess(lastResult.Outcome) || lastResult.ExitCode == 0 {
+		t.Fatalf("expected non-success result when terminal persistence is unavailable, got %#v", lastResult)
 	}
 }
 

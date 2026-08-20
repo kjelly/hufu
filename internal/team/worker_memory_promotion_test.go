@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
@@ -27,7 +28,11 @@ func wp5Candidate(t *testing.T, svc WorkerMemoryService, worker, task, run, cont
 func wp5AcceptedManifest(run string, tasks ...string) *EvidenceManifest {
 	m := &EvidenceManifest{RunID: run, Status: "accepted", ManifestHash: "sealed-" + run}
 	for _, task := range tasks {
-		m.EvidenceResults = append(m.EvidenceResults, EvidenceResult{RequirementID: "task:" + task, Status: "passed"})
+		artifact := ArtifactRef{ID: "sha256-" + strings.Repeat("a", 64), RunID: run, TaskID: task, Attempt: 1}
+		m.ArtifactRefs = append(m.ArtifactRefs, artifact)
+		m.EvidenceResults = append(m.EvidenceResults, EvidenceResult{RequirementID: "task:" + task, Status: "passed", ArtifactRefs: []ArtifactRef{artifact}, Binding: &EvidenceBinding{
+			RunID: run, TaskID: task, Attempt: 1, ModelExecutionID: "exec-" + task, ProducerID: "worker", TranscriptRef: artifact.ID, ArtifactIDs: []string{artifact.ID},
+		}})
 	}
 	return m
 }

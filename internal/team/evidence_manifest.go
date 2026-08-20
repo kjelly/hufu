@@ -28,99 +28,19 @@ func (c *Coordinator) buildEvidenceManifest(ctx context.Context, strict bool) (*
 		if item == nil {
 			continue
 		}
+		result, refs, failed, err := c.buildTaskEvidence(ctx, store, runID, item, strict)
+		if err != nil {
+			return nil, err
+		}
 		if item.Status != TaskDone {
 			manifest.Status = "failed"
-			// A terminal failure must remain auditable even though it cannot
-			// satisfy the task requirement. Preserve its immutable transcript in
-			// the manifest instead of dropping the most useful failure evidence.
-			result := EvidenceResult{RequirementID: "task:" + item.ID, Status: "failed", Validator: "task-verification", CheckedAt: nowUTC()}
-			if receipt := latestExecutionReceiptWithTranscript(item); receipt != nil {
-				ref, refErr := transcriptEvidenceRef(ctx, store, item, receipt, runID)
-				if refErr != nil {
-					if strict {
-						return nil, fmt.Errorf("failed task %q transcript evidence: %w", item.ID, refErr)
-					}
-				} else {
-					manifest.ArtifactRefs = append(manifest.ArtifactRefs, ref)
-					result.ArtifactRefs = append(result.ArtifactRefs, ref)
-				}
-			}
-			manifest.EvidenceResults = append(manifest.EvidenceResults, result)
-			continue
-		}
-		completedCount++
-		result := EvidenceResult{RequirementID: "task:" + item.ID, Validator: "task-verification", CheckedAt: nowUTC()}
-		if item.VerifyResult != nil && item.VerifyResult.ExitCode == 0 {
-			result.Status = "passed"
-		} else if item.TypedResult != nil && len(item.TypedResult.Evidence) > 0 {
-			result.Status = "passed"
 		} else {
-			// A successful worker execution always has a runner-owned transcript.
-			// Treat that immutable transcript as evidence when the worker did not
-			// provide a separate verify command or signed evidence reference. The
-			// submit_result schema permits summary/findings-only results, so waiting
-			// until finalization to reject those results made the task contract
-			// internally inconsistent and marked otherwise successful tool tasks as
-			// failed. A non-zero worker exit remains insufficient evidence.
-			receipt := latestSuccessfulExecutionReceipt(item)
-			if receipt != nil && strings.TrimSpace(receipt.TranscriptRef) != "" {
-				ref, putErr := transcriptEvidenceRef(ctx, store, item, receipt, runID)
-				if putErr == nil {
-					result.Status = "passed"
-					manifest.ArtifactRefs = append(manifest.ArtifactRefs, ref)
-					result.ArtifactRefs = append(result.ArtifactRefs, ref)
-				} else {
-					manifest.Status = "failed"
-					result.Status = "failed"
-					if strict {
-						return nil, fmt.Errorf("task %q transcript evidence: %w", item.ID, putErr)
-					}
-				}
-			} else {
-				manifest.Status = "failed"
-				result.Status = "failed"
-				if strict {
-					return nil, fmt.Errorf("completed task %q (%s) is missing verification evidence", item.ID, item.Desc)
-				}
-			}
+			completedCount++
 		}
-		if item.TypedResult != nil {
-			for _, artifact := range item.TypedResult.Artifacts {
-				if artifact.ID != "" {
-					if err := store.Verify(ctx, artifact); err != nil {
-						manifest.Status = "failed"
-						if strict {
-							return nil, fmt.Errorf("task %q artifact %q: %w", item.ID, artifact.ID, err)
-						}
-						result.Status = "failed"
-						continue
-					}
-					manifest.ArtifactRefs = append(manifest.ArtifactRefs, artifact)
-					result.ArtifactRefs = append(result.ArtifactRefs, artifact)
-					continue
-				}
-				if strings.TrimSpace(artifact.Path) == "" {
-					manifest.Status = "failed"
-					if strict {
-						return nil, fmt.Errorf("task %q has artifact without path or id", item.ID)
-					}
-					result.Status = "failed"
-					continue
-				}
-				ref, putErr := store.Put(ctx, PutArtifactRequest{Kind: artifact.Kind, Path: artifact.Path, Description: artifact.Description,
-					SourcePath: artifact.Path, RunID: runID, TaskID: item.ID, Attempt: item.Retries + 1, Agent: item.Agent})
-				if putErr != nil {
-					manifest.Status = "failed"
-					if strict {
-						return nil, putErr
-					}
-					result.Status = "failed"
-					continue
-				}
-				manifest.ArtifactRefs = append(manifest.ArtifactRefs, ref)
-				result.ArtifactRefs = append(result.ArtifactRefs, ref)
-			}
+		if failed {
+			manifest.Status = "failed"
 		}
+		manifest.ArtifactRefs = append(manifest.ArtifactRefs, refs...)
 		manifest.EvidenceResults = append(manifest.EvidenceResults, result)
 	}
 	if completedCount == 0 && len(c.taskTracker.TodoList().Items()) > 0 {
@@ -151,29 +71,199 @@ func (c *Coordinator) buildEvidenceManifest(ctx context.Context, strict bool) (*
 	return manifest, nil
 }
 
+func (c *Coordinator) buildTaskEvidence(ctx context.Context, store *FileArtifactStore, runID string, item *TodoItem, strict bool) (EvidenceResult, []ArtifactRef, bool, error) {
+	result := EvidenceResult{RequirementID: "task:" + item.ID, Validator: "task-verification", CheckedAt: nowUTC()}
+	if item.Status != TaskDone {
+		result.Status = "failed"
+		var refs []ArtifactRef
+		if receipt := latestExecutionReceiptWithTranscript(item, runID); receipt != nil {
+			ref, err := transcriptEvidenceRef(ctx, store, item, receipt, runID)
+			if err != nil {
+				if strict {
+					return EvidenceResult{}, nil, true, fmt.Errorf("failed task %q transcript evidence: %w", item.ID, err)
+				}
+			} else {
+				refs = append(refs, ref)
+				result.ArtifactRefs = append(result.ArtifactRefs, ref)
+			}
+		}
+		return result, refs, true, nil
+	}
+
+	var refs []ArtifactRef
+	if item.VerifyResult != nil && item.VerifyResult.ExitCode == 0 {
+		result.Status = "passed"
+	} else if item.TypedResult != nil && len(item.TypedResult.Evidence) > 0 {
+		result.Status = "passed"
+	} else {
+		receipt := latestSuccessfulExecutionReceipt(item, runID)
+		if receipt == nil || strings.TrimSpace(receipt.TranscriptRef) == "" {
+			result.Status = "failed"
+			if strict {
+				return EvidenceResult{}, nil, true, fmt.Errorf("completed task %q (%s) is missing verification evidence", item.ID, item.Desc)
+			}
+		} else if ref, err := transcriptEvidenceRef(ctx, store, item, receipt, runID); err != nil {
+			result.Status = "failed"
+			if strict {
+				return EvidenceResult{}, nil, true, fmt.Errorf("task %q transcript evidence: %w", item.ID, err)
+			}
+		} else {
+			result.Status = "passed"
+			refs = append(refs, ref)
+			result.ArtifactRefs = append(result.ArtifactRefs, ref)
+		}
+	}
+	// A successful verifier or typed result still needs the runner-owned
+	// transcript in the exact task membership. Without this canonical addition,
+	// a receipt-backed task with no separately declared artifacts reaches
+	// binding with an empty ArtifactRefs set and is rejected as incomplete.
+	if result.Status == "passed" {
+		if receipt := latestSuccessfulExecutionReceipt(item, runID); receipt != nil {
+			ref, err := transcriptEvidenceRef(ctx, store, item, receipt, runID)
+			if err != nil {
+				result.Status = "failed"
+				if strict {
+					return EvidenceResult{}, nil, true, fmt.Errorf("task %q transcript evidence: %w", item.ID, err)
+				}
+			} else if !containsArtifactID(refs, ref.ID) {
+				refs = append(refs, ref)
+				result.ArtifactRefs = append(result.ArtifactRefs, ref)
+			}
+		}
+	}
+
+	failed := false
+	artifactRefs, artifactFailed, err := taskArtifactRefs(ctx, store, runID, item, strict)
+	if err != nil {
+		return EvidenceResult{}, nil, true, err
+	}
+	existingRefs := append([]ArtifactRef(nil), refs...)
+	for _, ref := range artifactRefs {
+		if containsArtifactID(existingRefs, ref.ID) {
+			continue
+		}
+		refs = append(refs, ref)
+		existingRefs = append(existingRefs, ref)
+		result.ArtifactRefs = append(result.ArtifactRefs, ref)
+	}
+	if artifactFailed {
+		result.Status = "failed"
+	}
+	failed = artifactFailed || result.Status == "failed"
+	if result.Status == "passed" {
+		if err := bindEvidenceResult(runID, item, latestSuccessfulExecutionReceipt(item, runID), &result); err != nil {
+			// Binding corruption is a terminal evidence failure even in the
+			// non-strict/report path. "unverified" is reserved for an otherwise
+			// successful run whose acceptance gate was not configured.
+			result.Status = "failed"
+			failed = true
+			if strict {
+				return EvidenceResult{}, nil, true, fmt.Errorf("task %q execution binding: %w", item.ID, err)
+			}
+		}
+	}
+	return result, refs, failed, nil
+}
+
+func containsArtifactID(refs []ArtifactRef, id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, ref := range refs {
+		if ref.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func taskArtifactRefs(ctx context.Context, store *FileArtifactStore, runID string, item *TodoItem, strict bool) ([]ArtifactRef, bool, error) {
+	if item.TypedResult == nil {
+		return nil, false, nil
+	}
+	var refs []ArtifactRef
+	failed := false
+	attempt := item.Retries + 1
+	if receipt := latestSuccessfulExecutionReceipt(item, runID); receipt != nil && receipt.Attempt > 0 {
+		attempt = receipt.Attempt
+	}
+	for _, artifact := range item.TypedResult.Artifacts {
+		if artifact.ID != "" {
+			occurrence, err := projectArtifactOccurrence(ctx, store, artifact, runID, item.ID, attempt, item.Agent)
+			if err != nil {
+				if strict {
+					return nil, true, fmt.Errorf("task %q artifact %q: %w", item.ID, artifact.ID, err)
+				}
+				failed = true
+				continue
+			}
+			refs = append(refs, occurrence)
+			continue
+		}
+		if strings.TrimSpace(artifact.Path) == "" {
+			if strict {
+				return nil, true, fmt.Errorf("task %q has artifact without path or id", item.ID)
+			}
+			failed = true
+			continue
+		}
+		ref, err := store.Put(ctx, PutArtifactRequest{Kind: artifact.Kind, Path: artifact.Path, Description: artifact.Description,
+			SourcePath: artifact.Path, RunID: runID, TaskID: item.ID, Attempt: item.Retries + 1, Agent: item.Agent})
+		if err != nil {
+			if strict {
+				return nil, true, err
+			}
+			failed = true
+			continue
+		}
+		occurrence, err := projectArtifactOccurrence(ctx, store, ref, runID, item.ID, attempt, item.Agent)
+		if err != nil {
+			if strict {
+				return nil, true, fmt.Errorf("task %q artifact %q: %w", item.ID, ref.ID, err)
+			}
+			failed = true
+			continue
+		}
+		refs = append(refs, occurrence)
+	}
+	return refs, failed, nil
+}
+
+func bindEvidenceResult(runID string, item *TodoItem, receipt *ExecutionReceipt, result *EvidenceResult) error {
+	if item == nil || receipt == nil || result == nil {
+		return fmt.Errorf("missing execution receipt")
+	}
+	if receipt.RunID != runID || receipt.TaskID != item.ID || receipt.Attempt <= 0 || receipt.ModelExecutionID == "" || receipt.ProducerID == "" || strings.TrimSpace(receipt.TranscriptRef) == "" {
+		return fmt.Errorf("receipt is not fully bound to run, task, attempt, producer, and transcript")
+	}
+	ids := make([]string, 0, len(result.ArtifactRefs))
+	for _, ref := range result.ArtifactRefs {
+		if ref.ID == "" {
+			return fmt.Errorf("artifact membership contains an unsealed reference")
+		}
+		ids = append(ids, ref.ID)
+	}
+	result.Binding = &EvidenceBinding{
+		RunID: runID, TaskID: item.ID, Attempt: receipt.Attempt,
+		ModelExecutionID: receipt.ModelExecutionID, ProducerID: receipt.ProducerID,
+		TranscriptRef: receipt.TranscriptRef, ArtifactIDs: ids,
+	}
+	return nil
+}
+
 // transcriptEvidenceRef resolves current opaque transcript references from the
 // artifact store. Filesystem paths remain supported for legacy receipts, but an
 // opaque ID is never reinterpreted as a path.
 func transcriptEvidenceRef(ctx context.Context, store *FileArtifactStore, item *TodoItem, receipt *ExecutionReceipt, runID string) (ArtifactRef, error) {
 	transcriptRef := strings.TrimSpace(receipt.TranscriptRef)
 	if strings.HasPrefix(transcriptRef, "sha256-") && validArtifactID(transcriptRef) {
-		ref, err := store.Get(ctx, transcriptRef)
+		ref, err := projectArtifactOccurrence(ctx, store, ArtifactRef{ID: transcriptRef}, runID, item.ID, receipt.Attempt, item.Agent)
 		if err != nil {
 			return ArtifactRef{}, fmt.Errorf("resolve transcript artifact for task %s: %w", item.ID, err)
 		}
-		if err := store.Verify(ctx, ref); err != nil {
-			return ArtifactRef{}, err
-		}
-		// Content addressing can legitimately deduplicate identical transcripts.
-		// Bind this manifest entry to the current receipt without mutating the
-		// immutable store metadata first written for that content.
-		ref.RunID = runID
-		ref.TaskID = item.ID
-		ref.Attempt = receipt.Attempt
-		ref.Agent = item.Agent
 		return ref, nil
 	}
-	return store.Put(ctx, PutArtifactRequest{
+	ref, err := store.Put(ctx, PutArtifactRequest{
 		Kind:        "task_transcript",
 		Path:        transcriptRef,
 		Description: fmt.Sprintf("runner transcript for task %s", item.ID),
@@ -183,17 +273,59 @@ func transcriptEvidenceRef(ctx context.Context, store *FileArtifactStore, item *
 		Attempt:     receipt.Attempt,
 		Agent:       item.Agent,
 	})
+	if err != nil {
+		return ArtifactRef{}, err
+	}
+	return projectArtifactOccurrence(ctx, store, ref, runID, item.ID, receipt.Attempt, item.Agent)
+}
+
+// projectArtifactOccurrence validates the immutable content-addressed record
+// and returns a manifest-local occurrence. The store metadata is first-write
+// immutable; run/task/attempt/agent belong to this occurrence and must never
+// be written back to the store.
+func projectArtifactOccurrence(ctx context.Context, store *FileArtifactStore, source ArtifactRef, runID, taskID string, attempt int, agentName string) (ArtifactRef, error) {
+	if store == nil || !validArtifactID(source.ID) {
+		return ArtifactRef{}, fmt.Errorf("artifact reference has no valid id")
+	}
+	immutable, err := store.Get(ctx, source.ID)
+	if err != nil {
+		return ArtifactRef{}, err
+	}
+	if source.SHA256 != "" && source.SHA256 != immutable.SHA256 {
+		return ArtifactRef{}, fmt.Errorf("artifact %q digest conflicts with immutable metadata", source.ID)
+	}
+	if source.ByteSize != 0 && source.ByteSize != immutable.ByteSize {
+		return ArtifactRef{}, fmt.Errorf("artifact %q size conflicts with immutable metadata", source.ID)
+	}
+	if source.Bytes != 0 && source.Bytes != immutable.Bytes {
+		return ArtifactRef{}, fmt.Errorf("artifact %q byte count conflicts with immutable metadata", source.ID)
+	}
+	if immutable.SHA256 == "" || immutable.ByteSize < 0 || immutable.Bytes != 0 && immutable.Bytes != immutable.ByteSize {
+		return ArtifactRef{}, fmt.Errorf("artifact %q has invalid immutable metadata", source.ID)
+	}
+	if err := store.Verify(ctx, immutable); err != nil {
+		return ArtifactRef{}, err
+	}
+	occurrence := immutable
+	occurrence.RunID = runID
+	occurrence.TaskID = taskID
+	occurrence.Attempt = attempt
+	occurrence.Agent = agentName
+	return occurrence, nil
 }
 
 // latestSuccessfulExecutionReceipt returns runner-owned transcript evidence for
 // a completed task. Retries are searched newest-first so a stale failed attempt
 // cannot satisfy the final task evidence requirement.
-func latestSuccessfulExecutionReceipt(item *TodoItem) *ExecutionReceipt {
+func latestSuccessfulExecutionReceipt(item *TodoItem, runID string) *ExecutionReceipt {
 	if item == nil {
 		return nil
 	}
 	for i := len(item.ExecutionReceipts) - 1; i >= 0; i-- {
 		receipt := &item.ExecutionReceipts[i]
+		if receipt.RunID != runID {
+			continue
+		}
 		if receipt.ExitCode != nil && *receipt.ExitCode != 0 {
 			continue
 		}
@@ -202,6 +334,9 @@ func latestSuccessfulExecutionReceipt(item *TodoItem) *ExecutionReceipt {
 		}
 	}
 	if item.ExecutionReceipt != nil {
+		if item.ExecutionReceipt.RunID != runID {
+			return nil
+		}
 		if item.ExecutionReceipt.ExitCode == nil || *item.ExecutionReceipt.ExitCode == 0 {
 			if strings.TrimSpace(item.ExecutionReceipt.TranscriptRef) != "" {
 				return item.ExecutionReceipt
@@ -214,17 +349,20 @@ func latestSuccessfulExecutionReceipt(item *TodoItem) *ExecutionReceipt {
 // latestExecutionReceiptWithTranscript returns forensic evidence regardless of
 // exit status. It is used only for failed task manifest entries; successful
 // requirements continue to require latestSuccessfulExecutionReceipt.
-func latestExecutionReceiptWithTranscript(item *TodoItem) *ExecutionReceipt {
+func latestExecutionReceiptWithTranscript(item *TodoItem, runID string) *ExecutionReceipt {
 	if item == nil {
 		return nil
 	}
 	for i := len(item.ExecutionReceipts) - 1; i >= 0; i-- {
 		receipt := &item.ExecutionReceipts[i]
+		if receipt.RunID != runID {
+			continue
+		}
 		if strings.TrimSpace(receipt.TranscriptRef) != "" {
 			return receipt
 		}
 	}
-	if item.ExecutionReceipt != nil && strings.TrimSpace(item.ExecutionReceipt.TranscriptRef) != "" {
+	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RunID == runID && strings.TrimSpace(item.ExecutionReceipt.TranscriptRef) != "" {
 		return item.ExecutionReceipt
 	}
 	return nil

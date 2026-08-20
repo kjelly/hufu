@@ -5,6 +5,7 @@ import (
 	"os"
 	"sync/atomic"
 
+	"github.com/kjelly/hufu/internal/providerproxy"
 	"github.com/kjelly/hufu/internal/readline"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
@@ -21,6 +22,9 @@ func (errInterrupted) Error() string { return "interrupted" }
 var version = "dev"
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == providerproxy.ChildArg {
+		os.Exit(providerproxy.RunChild(os.Stdin, os.Stdout))
+	}
 	// Pin the interactivity decision before any prompt widget can take over
 	// stdin; a live per-call probe would flip tool permissions mid-session.
 	tools.CaptureInteractiveEnvironment()

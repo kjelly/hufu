@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -257,12 +258,26 @@ type EvidenceRequirement struct {
 }
 
 type EvidenceResult struct {
-	RequirementID string        `json:"requirement_id"`
-	Status        string        `json:"status"`
-	Validator     string        `json:"validator,omitempty"`
-	ArtifactRefs  []ArtifactRef `json:"artifact_refs,omitempty"`
-	Assertions    []string      `json:"assertions,omitempty"`
-	CheckedAt     time.Time     `json:"checked_at"`
+	RequirementID string           `json:"requirement_id"`
+	Status        string           `json:"status"`
+	Validator     string           `json:"validator,omitempty"`
+	ArtifactRefs  []ArtifactRef    `json:"artifact_refs,omitempty"`
+	Binding       *EvidenceBinding `json:"binding,omitempty"`
+	Assertions    []string         `json:"assertions,omitempty"`
+	CheckedAt     time.Time        `json:"checked_at"`
+}
+
+// EvidenceBinding seals the exact execution provenance behind one task
+// requirement. Reports may project this binding, but may not reconstruct it
+// by joining a run ID to an arbitrary receipt.
+type EvidenceBinding struct {
+	RunID            string   `json:"run_id"`
+	TaskID           string   `json:"task_id"`
+	Attempt          int      `json:"attempt"`
+	ModelExecutionID string   `json:"model_execution_id"`
+	ProducerID       string   `json:"producer_id"`
+	TranscriptRef    string   `json:"transcript_ref"`
+	ArtifactIDs      []string `json:"artifact_ids"`
 }
 
 type EvidenceManifest struct {
@@ -317,9 +332,77 @@ func (m EvidenceManifest) Verify(ctx context.Context, store ArtifactStore) error
 		}
 	}
 	for _, result := range m.EvidenceResults {
+		if strings.HasPrefix(result.RequirementID, "task:") && strings.EqualFold(result.Status, "passed") {
+			if err := verifyEvidenceBinding(m, result); err != nil {
+				return err
+			}
+		}
 		if strings.EqualFold(result.Status, "error") || (strings.EqualFold(result.Status, "failed") && strings.EqualFold(m.Status, "accepted")) {
 			return fmt.Errorf("evidence requirement %q failed", result.RequirementID)
 		}
 	}
 	return nil
+}
+
+func verifyEvidenceBinding(manifest EvidenceManifest, result EvidenceResult) error {
+	if result.Binding == nil {
+		return fmt.Errorf("evidence requirement %q has no sealed execution binding", result.RequirementID)
+	}
+	b := result.Binding
+	wantTask := strings.TrimPrefix(result.RequirementID, "task:")
+	if b.RunID != manifest.RunID || b.TaskID == "" || b.TaskID != wantTask || b.Attempt <= 0 || b.ModelExecutionID == "" || b.ProducerID == "" || b.TranscriptRef == "" {
+		return fmt.Errorf("evidence requirement %q has conflicting execution binding", result.RequirementID)
+	}
+	if strings.HasPrefix(b.TranscriptRef, "sha256-") && !slices.Contains(b.ArtifactIDs, b.TranscriptRef) {
+		return fmt.Errorf("evidence requirement %q transcript is outside artifact membership", result.RequirementID)
+	}
+	wantIDs := make([]string, 0, len(result.ArtifactRefs))
+	if len(result.ArtifactRefs) == 0 {
+		return fmt.Errorf("evidence requirement %q has no transcript/artifact membership", result.RequirementID)
+	}
+	seen := make(map[string]bool, len(result.ArtifactRefs))
+	for _, ref := range result.ArtifactRefs {
+		if ref.ID == "" || seen[ref.ID] {
+			return fmt.Errorf("evidence requirement %q has invalid artifact membership", result.RequirementID)
+		}
+		seen[ref.ID] = true
+		wantIDs = append(wantIDs, ref.ID)
+		found := false
+		for _, manifestRef := range manifest.ArtifactRefs {
+			if manifestRef.ID == ref.ID && manifestRef.RunID == b.RunID && manifestRef.TaskID == b.TaskID && manifestRef.Attempt == b.Attempt && (manifestRef.Agent == "" || manifestRef.Agent == b.ProducerID) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("evidence requirement %q references artifact outside manifest", result.RequirementID)
+		}
+	}
+	gotIDs := append([]string(nil), b.ArtifactIDs...)
+	sort.Strings(wantIDs)
+	sort.Strings(gotIDs)
+	if !slices.Equal(wantIDs, gotIDs) {
+		return fmt.Errorf("evidence requirement %q has incomplete artifact membership", result.RequirementID)
+	}
+	return nil
+}
+
+// VerifiedTaskBinding returns only a binding that passed the manifest's
+// structural checks. It is the sole report-facing task identity accessor.
+func (m EvidenceManifest) VerifiedTaskBinding(taskID string) (*EvidenceBinding, bool) {
+	if taskID == "" {
+		return nil, false
+	}
+	for _, result := range m.EvidenceResults {
+		if result.RequirementID != "task:"+taskID || !strings.EqualFold(result.Status, "passed") || result.Binding == nil {
+			continue
+		}
+		if verifyEvidenceBinding(m, result) != nil {
+			return nil, false
+		}
+		binding := *result.Binding
+		binding.ArtifactIDs = append([]string(nil), result.Binding.ArtifactIDs...)
+		return &binding, true
+	}
+	return nil, false
 }

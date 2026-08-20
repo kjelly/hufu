@@ -89,7 +89,7 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 			items = tracker.TodoList().Items()
 		}
 		if lastRes := tc.coordinator.LastRunResult(); lastRes != nil && lastRes.EvidenceManifest != nil && lastRes.EvidenceManifest.RunID != "" {
-			items, _ = latestRunTodos(items, lastRes.EvidenceManifest.RunID)
+			items, _ = latestRunTodos(items, lastRes.EvidenceManifest)
 		}
 		allItems = append(allItems, items...)
 		for _, item := range items {

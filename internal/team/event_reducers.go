@@ -84,6 +84,12 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			var payload struct {
 				Outcome            RunOutcome        `json:"outcome"`
 				GoalSatisfied      bool              `json:"goal_satisfied"`
+				GoalMode           GoalMode          `json:"goal_mode"`
+				Response           string            `json:"response"`
+				Reason             string            `json:"reason"`
+				StopReason         StopReason        `json:"stop_reason"`
+				ExitCode           int               `json:"exit_code"`
+				UnresolvedTasks    []TaskReference   `json:"unresolved_tasks"`
 				CompletedReview    bool              `json:"completed_review,omitempty"`
 				FindingsPresent    bool              `json:"findings_present,omitempty"`
 				FixedAndVerified   bool              `json:"fixed_and_verified,omitempty"`
@@ -96,6 +102,9 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Outcome != "" {
 				session.RunResult = &RunResult{
 					Outcome: payload.Outcome, GoalSatisfied: payload.GoalSatisfied,
+					GoalMode: payload.GoalMode, Response: payload.Response, Reason: payload.Reason,
+					StopReason: payload.StopReason, ExitCode: payload.ExitCode,
+					UnresolvedTasks: payload.UnresolvedTasks,
 					CompletedReview: payload.CompletedReview, FindingsPresent: payload.FindingsPresent,
 					FixedAndVerified: payload.FixedAndVerified, AcceptanceAdvisory: payload.AcceptanceAdvisory,
 					Acceptance: payload.Acceptance, Stats: payload.Stats,

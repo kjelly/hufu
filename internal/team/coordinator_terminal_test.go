@@ -73,6 +73,72 @@ func TestCancelStalledRoundCancelsOnlyCurrentRound(t *testing.T) {
 	}
 }
 
+func TestInvocationWatchdogCancelsWholeInvocationWithStableCause(t *testing.T) {
+	coord := &Coordinator{
+		session:           &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "watchdog"}},
+		stallThreshold:    10 * time.Millisecond,
+		stallPollInterval: time.Millisecond,
+		reportStatus:      func(StatusEvent) {},
+	}
+	ctx, end := coord.beginInvocationExecutionRun(context.Background())
+	defer end()
+	select {
+	case <-ctx.Done():
+		if !errors.Is(context.Cause(ctx), ErrInvocationStalled) {
+			t.Fatalf("watchdog cause = %v, want %v", context.Cause(ctx), ErrInvocationStalled)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("invocation watchdog did not cancel stalled invocation")
+	}
+}
+
+func TestAgentStreamUsesInvocationCauseOverConnectionReset(t *testing.T) {
+	coord := &Coordinator{
+		session:      &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "cause-authority"}},
+		reportStatus: func(StatusEvent) {},
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(context.Canceled)
+	_, _, err := coord.runAgentWithStatusAndHistory(ctx, connectionResetAgent{}, "worker", "prompt", nil, &taskTiming{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("stream error = %v, want context.Canceled", err)
+	}
+	if strings.Contains(err.Error(), "connection reset") {
+		t.Fatalf("transport error replaced authoritative cancellation: %v", err)
+	}
+}
+
+func TestInvocationWatchdogStateIsIndependentPerRun(t *testing.T) {
+	coord := &Coordinator{stallThreshold: time.Hour, stallPollInterval: time.Millisecond}
+	first, endFirst := coord.beginInvocationExecutionRun(context.Background())
+	firstWatchdog := coord.invocationWatchdog.Load()
+	endFirst()
+	second, endSecond := coord.beginInvocationExecutionRun(context.Background())
+	defer endSecond()
+	secondWatchdog := coord.invocationWatchdog.Load()
+	if first == second || firstWatchdog == secondWatchdog || firstWatchdog == nil || secondWatchdog == nil {
+		t.Fatal("invocation watchdog state was reused across runs")
+	}
+}
+
+func TestInvocationWatchdogIsJoinedBeforeInvocationEndReturns(t *testing.T) {
+	coord := &Coordinator{stallThreshold: time.Hour, stallPollInterval: time.Millisecond}
+	_, end := coord.beginInvocationExecutionRun(context.Background())
+	watchdog := coord.invocationWatchdog.Load()
+	if watchdog == nil {
+		t.Fatal("invocation watchdog was not installed")
+	}
+	end()
+	select {
+	case <-watchdog.done:
+	default:
+		t.Fatal("invocation returned before watchdog completion")
+	}
+	if coord.invocationWatchdog.Load() != nil {
+		t.Fatal("watchdog pointer remained installed after invocation end")
+	}
+}
+
 func TestCoordinatorFinalizeTaskTerminalResourcesContainsLeakAndPreservesTaskError(t *testing.T) {
 	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
 	if err != nil {
@@ -352,6 +418,16 @@ func managerSessionID(t *testing.T, manager *TerminalSessionManager, runID strin
 type submittingWorkerAgent struct {
 	onSubmit func()
 	calls    *int
+}
+
+type connectionResetAgent struct{}
+
+func (connectionResetAgent) Generate(context.Context, fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return nil, errors.New("connection reset by peer")
+}
+
+func (connectionResetAgent) Stream(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return nil, errors.New("connection reset by peer")
 }
 
 func (m *submittingWorkerAgent) result() *fantasy.AgentResult {

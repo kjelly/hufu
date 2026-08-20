@@ -39,6 +39,30 @@ type policyGatedTool struct {
 	coordinator *Coordinator
 }
 
+type bashInputClass uint8
+
+const (
+	bashInputReadOnly bashInputClass = iota
+	bashInputMutationOrUnknown
+	bashInputInvalid
+)
+
+func classifyBashInput(input string) (bashInputClass, string) {
+	var args struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return bashInputInvalid, "bash input must be valid JSON with a string command"
+	}
+	if strings.TrimSpace(args.Command) == "" {
+		return bashInputInvalid, "bash input requires a non-blank command"
+	}
+	if tools.IsReadOnlyBashCommand(args.Command) {
+		return bashInputReadOnly, ""
+	}
+	return bashInputMutationOrUnknown, ""
+}
+
 func (t *policyGatedTool) Info() fantasy.ToolInfo { return t.inner.Info() }
 
 func (t *policyGatedTool) ProviderOptions() fantasy.ProviderOptions {
@@ -49,7 +73,35 @@ func (t *policyGatedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
 	t.inner.SetProviderOptions(opts)
 }
 
+func (t *policyGatedTool) invalidBashInputResponse(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, bool) {
+	if t.Info().Name != "bash" {
+		return fantasy.ToolResponse{}, false
+	}
+	readOnly, _ := ctx.Value(tools.AgentReadOnlyExecutionKey).(bool)
+	if !readOnly {
+		return fantasy.ToolResponse{}, false
+	}
+	if _, reason := classifyBashInput(call.Input); reason != "" {
+		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
+			Kind:       "policy_denied",
+			ReasonCode: "invalid_bash_input",
+			ToolName:   t.Info().Name,
+			ToolCallID: call.ID,
+			Executed:   false,
+		})
+		if t.coordinator != nil {
+			t.coordinator.setToolPolicyVerdict(call.ID, "denied")
+		}
+		return fantasy.NewTextErrorResponse("invalid bash input: " + reason + "; this call was not executed"), true
+	}
+	return fantasy.ToolResponse{}, false
+}
+
+//nolint:gocyclo // this is the single ordered policy/sequence/receipt gate.
 func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return fantasy.ToolResponse{}, err
+	}
 	if terminalOnly, _ := ctx.Value(workerStepBudgetTerminalOnlyKey{}).(bool); terminalOnly && t.Info().Name != submitResultToolName {
 		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
 			Kind:       string(ToolExecutionBudgetExceeded),
@@ -59,6 +111,9 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 			Executed:   false,
 		})
 		return fantasy.NewTextErrorResponse("step_budget_wrap_up: only submit_result is permitted after the terminal step-budget checkpoint"), nil
+	}
+	if response, invalid := t.invalidBashInputResponse(ctx, call); invalid {
+		return response, nil
 	}
 	// side_effect:none is a capability boundary, not merely a task label.
 	// Enforce it before authorization or handler execution so every mutation
@@ -227,10 +282,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 func readOnlyToolMutation(name, input string) bool {
 	name = strings.TrimSpace(strings.ToLower(name))
 	if name == "bash" {
-		var args struct {
-			Command string `json:"command"`
-		}
-		if err := json.Unmarshal([]byte(input), &args); err == nil && tools.IsReadOnlyBashCommand(args.Command) {
+		if class, _ := classifyBashInput(input); class == bashInputReadOnly {
 			return false
 		}
 	}
@@ -315,6 +367,15 @@ func (c *Coordinator) gatePolicyTools(agentTools []fantasy.AgentTool) []fantasy.
 // authorization boundary at all now that OnToolCall no longer aborts.
 // TestAgentsAreCreatedThroughTheGatedConstructor enforces the funnel.
 func (c *Coordinator) createGatedAgent(ctx context.Context, provider *agent.OllamaProvider, cfg agent.AgentConfig, agentTools []fantasy.AgentTool) (fantasy.Agent, error) {
+	modelConfigured := cfg.Def != nil && cfg.Def.Generation.Model != ""
+	if !modelConfigured && cfg.TeamConfig != nil {
+		modelConfigured = cfg.TeamConfig.Generation.Model != ""
+	}
+	if modelConfigured {
+		if err := c.providerBoundaryRequired(ctx); err != nil {
+			return nil, err
+		}
+	}
 	gated := c.gatePolicyTools(agentTools)
 	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID {
 		// Schema validation must be the outermost coordinator boundary: malformed

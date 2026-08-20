@@ -653,7 +653,11 @@ func (c *Coordinator) syncConversationHistoryStateToSessionData() {
 // through sessionMu: mutate under the write lock, snapshot under the read
 // lock, then persist the snapshot and update the branch state outside the lock.
 func (c *Coordinator) saveCheckpoint() {
-	if c.sessionData == nil || c.session == nil || c.session.Workspace == "" {
+	var hasSessionData bool
+	c.viewSessionData(func(*SessionData) {
+		hasSessionData = true
+	})
+	if !hasSessionData || c.session == nil || c.session.Workspace == "" {
 		return
 	}
 	// Task state is canonical in the event store.  Commit its complete replay

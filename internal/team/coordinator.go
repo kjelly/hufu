@@ -336,6 +336,7 @@ type Coordinator struct {
 	initialDelegationAttempted atomic.Bool
 	finishCalled               atomic.Bool // set when the finish tool completes; cleared per orchestrator run
 	continuationInterrupted    atomic.Bool // set when a continuation stops before a workflow can safely finish
+	invocationFailureFinalized atomic.Bool // idempotence guard for public admission failures
 	// freshSession requests an event-store root branch on the next run. It is
 	// set by CLI --new so archived events remain auditable without being
 	// replayed into the new session's task projection.
@@ -360,21 +361,30 @@ type Coordinator struct {
 	// Silent-stall watchdog (coordinator_stall_watchdog.go): detects periods
 	// with no forward-progress signal at all, distinct from a single slow
 	// tool call, and leaves a goroutine dump as evidence.
-	stallActivityAt   atomic.Int64 // unix nano, last observed forward-progress signal
-	stallLastDumpAt   atomic.Int64 // unix nano, 0 = no dump yet in the current stall episode
-	stallDumps        atomic.Int32 // total dumps written this run, capped at stallMaxDumps
-	stallThreshold    time.Duration
-	stallMaxDumps     int32
-	stallWatchdogOnce sync.Once
-	skillUsage        map[string]*skillUsageState
-	skillUsageMu      sync.Mutex
-	delegatedTasks    map[string]int
-	delegatedTasksMu  sync.Mutex
-	taskResultCache   map[string][]cachedTaskEntry // agent → ordered list of past results
-	taskResultCacheMu sync.RWMutex
-	cachePolicy       CachePolicy
-	cachePolicyMu     sync.RWMutex
-	executionProfile  ExecutionProfile
+	stallThreshold              time.Duration
+	stallMaxDumps               int32
+	stallPollInterval           time.Duration
+	invocationWatchdog          atomic.Pointer[invocationWatchdog]
+	providerBoundaryMu          sync.Mutex
+	providerBoundaryLifecycleMu sync.Mutex
+	providerBoundaryStarted     bool
+	providerBoundaryErr         error
+	preflightMu                 sync.Mutex
+	preflightContext            context.Context
+	preflightOwner              *invocationOwner
+	// providerBoundaryStart is a deterministic test seam for startup-admission
+	// tests. Production always uses ProviderManager.StartInvocationProxy.
+	providerBoundaryStart func(context.Context, string) error
+	providerBoundaryAbort func() error
+	skillUsage            map[string]*skillUsageState
+	skillUsageMu          sync.Mutex
+	delegatedTasks        map[string]int
+	delegatedTasksMu      sync.Mutex
+	taskResultCache       map[string][]cachedTaskEntry // agent → ordered list of past results
+	taskResultCacheMu     sync.RWMutex
+	cachePolicy           CachePolicy
+	cachePolicyMu         sync.RWMutex
+	executionProfile      ExecutionProfile
 	// modelExecutionID is set only on an isolated extra-model coordinator.
 	// It disambiguates receipts/manifests that share a Todo attempt.
 	modelExecutionID       string
@@ -1119,11 +1129,6 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	c.modelRuntime = &defaultModelRuntime{c: c}
 	c.subagentRegistry = NewSubagentRegistry(NewHufuLocalSubagentProvider(c))
 	c.experienceProcessor = &defaultExperienceProcessor{c: c}
-
-	// Enable sidecar for skill pattern detection
-	if s := c.AgentPool().Sidecar(); s != nil {
-		c.skillDetector.SetSidecar(s)
-	}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
 	if err == nil {

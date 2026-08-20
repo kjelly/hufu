@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/pprof"
+	"sync/atomic"
 	"time"
 )
 
@@ -40,6 +41,49 @@ func (c *Coordinator) SetStallWatchdog(threshold time.Duration, maxDumps int) {
 	}
 }
 
+// invocationWatchdog owns all mutable watchdog state for one public
+// coordinator invocation. The coordinator only holds a pointer to route
+// status events to the currently running invocation; counters and cancellation
+// belong to this value and are discarded with it.
+type invocationWatchdog struct {
+	coordinator *Coordinator
+	ctx         context.Context
+	cancel      context.CancelCauseFunc
+	owner       *invocationOwner
+	threshold   time.Duration
+	maxDumps    int32
+	poll        time.Duration
+	activityAt  atomic.Int64
+	lastDumpAt  atomic.Int64
+	dumps       atomic.Int32
+	stalled     atomic.Bool
+	done        chan struct{}
+}
+
+func (c *Coordinator) newInvocationWatchdog(ctx context.Context, cancel context.CancelCauseFunc) *invocationWatchdog {
+	threshold := c.stallThreshold
+	if threshold <= 0 {
+		threshold = defaultStallThreshold
+	}
+	maxDumps := c.stallMaxDumps
+	if maxDumps <= 0 {
+		maxDumps = defaultStallMaxDumps
+	}
+	poll := c.stallPollInterval
+	if poll <= 0 {
+		poll = defaultStallPollInterval
+	}
+	w := &invocationWatchdog{coordinator: c, ctx: ctx, cancel: cancel, threshold: threshold, maxDumps: maxDumps, poll: poll, done: make(chan struct{})}
+	w.touch()
+	return w
+}
+
+func (c *Coordinator) setInvocationWatchdog(w *invocationWatchdog) {
+	if c != nil {
+		c.invocationWatchdog.Store(w)
+	}
+}
+
 // touchActivity records that a forward-progress signal was just observed. It
 // is called from the single StatusEvent delivery path (see
 // SetStatusReporter), so it covers every reporting call site — c.report,
@@ -49,64 +93,63 @@ func (c *Coordinator) touchActivity() {
 	if c == nil {
 		return
 	}
-	c.stallActivityAt.Store(time.Now().UnixNano())
+	if w := c.invocationWatchdog.Load(); w != nil {
+		w.touch()
+	}
 }
 
-// startStallWatchdog begins polling for silent stalls: periods with no
-// forward-progress signal at all, as opposed to a single slow tool call
-// (which itself reports a tool_call event before it blocks). It self-starts
-// at most once per coordinator and stops when ctx is done.
-func (c *Coordinator) startStallWatchdog(ctx context.Context) {
-	if c == nil {
+func (w *invocationWatchdog) touch() {
+	w.activityAt.Store(time.Now().UnixNano())
+}
+
+func (w *invocationWatchdog) start() {
+	go func() {
+		defer close(w.done)
+		w.run()
+	}()
+}
+
+func (w *invocationWatchdog) wait() {
+	if w == nil || w.done == nil {
 		return
 	}
-	c.stallWatchdogOnce.Do(func() {
-		c.touchActivity()
-		go c.runStallWatchdog(ctx)
-	})
+	<-w.done
 }
 
-func (c *Coordinator) runStallWatchdog(ctx context.Context) {
-	threshold := c.stallThreshold
-	if threshold <= 0 {
-		threshold = defaultStallThreshold
-	}
-	maxDumps := c.stallMaxDumps
-	if maxDumps <= 0 {
-		maxDumps = defaultStallMaxDumps
-	}
-	ticker := time.NewTicker(defaultStallPollInterval)
+func (w *invocationWatchdog) run() {
+	ticker := time.NewTicker(w.poll)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-ctx.Done():
+		case <-w.ctx.Done():
 			return
 		case <-ticker.C:
 			now := time.Now()
-			idle := now.Sub(time.Unix(0, c.stallActivityAt.Load()))
-			if idle < threshold {
+			idle := now.Sub(time.Unix(0, w.activityAt.Load()))
+			if idle < w.threshold {
 				// Activity resumed; a future stall should be reported
 				// immediately rather than waiting out a stale dump timer.
-				c.stallLastDumpAt.Store(0)
+				w.lastDumpAt.Store(0)
 				continue
 			}
-			if c.stallDumps.Load() >= maxDumps {
+			if w.dumps.Load() >= w.maxDumps {
 				continue
 			}
-			lastDump := c.stallLastDumpAt.Load()
-			if lastDump != 0 && now.Sub(time.Unix(0, lastDump)) < threshold {
+			lastDump := w.lastDumpAt.Load()
+			if lastDump != 0 && now.Sub(time.Unix(0, lastDump)) < w.threshold {
 				continue
 			}
-			c.stallLastDumpAt.Store(now.UnixNano())
-			n := c.stallDumps.Add(1)
-			c.reportStall(idle, n, maxDumps)
-			// A silent model round has neither executed a new tool nor emitted a
-			// result during the entire threshold.  Cancel only that model round:
-			// its normal task owner records the cancellation, preserves the
-			// transcript/receipt, and applies the existing recovery policy. This
-			// avoids turning a provider hang into an unbounded coordinator hang.
-			if n == 1 {
-				c.cancelStalledRound()
+			w.lastDumpAt.Store(now.UnixNano())
+			n := w.dumps.Add(1)
+			w.coordinator.reportStall(idle, n, w.maxDumps)
+			// Context cancellation alone is not a hard abort for Fantasy. Kill
+			// and reap the Hufu-owned provider proxy first; closing its socket is
+			// what releases a provider call that ignores context.
+			if w.stalled.CompareAndSwap(false, true) {
+				if err := w.owner.abortProviderBoundary(); err != nil {
+					w.coordinator.report(w.coordinator.newEvent("error").withMessage("provider hard-abort cleanup failed: " + err.Error()))
+				}
+				w.cancel(ErrInvocationStalled)
 			}
 		}
 	}
