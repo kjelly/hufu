@@ -331,16 +331,17 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	var lastFingerprint string
 	// Retry-context tracking (§6.1: retry prompt must include class,
 	// evidence, prior command/exit, and explicit mutable fields).
-	var lastClass TaskFailureClass // previous attempt's failure class
-	var lastTranscriptRef string   // previous attempt's opaque transcript artifact reference
-	var lastVerifyCmd string       // previous attempt's verify command
-	var lastVerifyExit int         // previous attempt's verify exit code (-1 = unknown)
-	var lastExitCode *int          // previous attempt's worker exit code (nil = errored)
-	var lastToolCall string        // previous attempt's last tool call name (if any)
-	var lastToolInput string       // previous attempt's last tool call input (actual command)
-	var lastToolResult string      // previous attempt's last tool result preview
-	var lastToolResultErr bool     // previous attempt's last tool result was an error
-	var lastPartialOutput string   // previous attempt's partial output (evidence)
+	var lastClass TaskFailureClass      // previous attempt's failure class
+	var lastTranscriptRef string        // previous attempt's opaque transcript artifact reference
+	var lastVerifyCmd string            // previous attempt's verify command
+	var lastVerifyExit int              // previous attempt's verify exit code (-1 = unknown)
+	var lastExitCode *int               // previous attempt's worker exit code (nil = errored)
+	var lastToolCall string             // previous attempt's last tool call name (if any)
+	var lastToolInput string            // previous attempt's last tool call input (actual command)
+	var lastToolResult string           // previous attempt's last tool result preview
+	var lastToolResultErr bool          // previous attempt's last tool result was an error
+	var lastPartialOutput string        // previous attempt's partial output (evidence)
+	var lastSubmittedResult *TaskResult // previous structurally valid non-terminal handoff
 	// A model that reaches work execution but cannot honour submit_result is a
 	// capability failure, not evidence that it performed the requested write.
 	// We permit exactly one clean re-dispatch only after every recorded tool
@@ -450,7 +451,7 @@ retryLoop:
 			if len(lastPolicyDeniedDispositions) > 0 {
 				attemptInput.FailureContext = buildPolicyDeniedRetryContext(lastPolicyDeniedDispositions)
 			} else {
-				attemptInput.FailureContext = buildRetryContext(lastClass, lastErr, lastTranscriptRef, lastVerifyCmd, lastVerifyExit, lastExitCode, lastToolCall, lastToolInput, lastToolResult, lastToolResultErr, lastPartialOutput, task)
+				attemptInput.FailureContext = buildRetryContextWithSubmittedResult(lastClass, lastErr, lastTranscriptRef, lastVerifyCmd, lastVerifyExit, lastExitCode, lastToolCall, lastToolInput, lastToolResult, lastToolResultErr, lastPartialOutput, lastSubmittedResult, task)
 				failureEvidence := redactRetryText(lastErr.Error(), 500)
 				if hint := c.reflectOnFailure(parentCtx, agentName, task.Goal, failureEvidence); hint != "" {
 					attemptInput.FailureContext += hint
@@ -550,6 +551,7 @@ retryLoop:
 			taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 			taskCtx = context.WithValue(taskCtx, executionAttemptKey{}, attempt)
 			taskCtx = context.WithValue(taskCtx, modelKey{}, resolvedModel)
+			taskCtx = context.WithValue(taskCtx, taskRequiresResultKey{}, task.Execution.RequiresResult)
 			taskCtx = withInvocationMetadata(taskCtx, invocationMetadataFromRequest(request, contextManifest))
 			// Per-attempt tool call evidence (§6.1, P1b: per-attempt, not
 			// coordinator-global, to prevent cross-task leakage).
@@ -592,6 +594,9 @@ retryLoop:
 			}
 			if writePaths := c.runtimeAllowedWritePaths(); len(writePaths) > 0 {
 				taskCtx = context.WithValue(taskCtx, tools.AgentAllowedWritePathsKey, writePaths)
+				if command := c.boundedWorkflowBashCommand(task); command != "" {
+					taskCtx = context.WithValue(taskCtx, tools.WorkflowBoundedBashKey, tools.WorkflowBoundedBash{Command: command})
+				}
 			}
 			if agentDef.RestrictedPath != "" {
 				taskCtx = context.WithValue(taskCtx, tools.AgentRestrictedPathKey, agentDef.RestrictedPath)
@@ -775,19 +780,22 @@ retryLoop:
 				return planEntry.PlanText, nil
 			}
 			typedRes = c.GetTaskResult(todoID)
-			// A worker that already reported partial/failed/blocked via
-			// submit_result has nothing left for the checks below to
-			// contradict — it already told us the task is not complete. Fail
-			// the attempt on that honest report now, before validateTaskOutput,
-			// deliverable/adversarial verification, or terminalTaskFailure run,
-			// so the retry hint reflects what the worker actually said instead
-			// of whichever unrelated check happens to trip first. This mirrors
-			// the check the protocol-repair recovery paths below already apply
-			// to a recovered result; only the plain submit_result path lacked it.
+			// A worker that reports partial/failed/blocked has made a valid typed
+			// handoff, but not a terminal completion. Preserve it on this exact
+			// receipt and route it through normal recovery as an execution
+			// failure; malformed submit_result data remains a protocol failure.
 			if typedRes != nil && typedRes.Source == "submitted" {
 				receipt.HandoffState = ResultHandoffSubmitted
-				if resultErr := validateSubmittedTaskResult(typedRes); resultErr != nil {
-					err = resultErr
+				if schemaErr := validateSubmittedTaskResult(typedRes); schemaErr != nil {
+					err = withFailureClassOverride(schemaErr, FailureProtocol)
+					failedExit := 1
+					receipt.ExitCode = &failedExit
+					if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+						_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+					}
+				} else if resultErr := validateCompletedTaskResult(typedRes); resultErr != nil {
+					receipt.SubmittedResult = typedRes
+					err = withFailureClassOverride(resultErr, FailureExecution)
 					failedExit := 1
 					receipt.ExitCode = &failedExit
 					if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
@@ -837,203 +845,201 @@ retryLoop:
 						c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 						c.report(c.newEvent("step").withAgent(agentName).withMessage(protocolErrMsg).withTodoID(todoID))
 
-						repairResultTool := &submitResultTool{coordinator: c, todoID: todoID}
-						repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using the output above to supply the required structured result. Include a concise summary and put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields. Do NOT call any other tools or emit a prose final response.\n", task.Goal, output)
-						if budgetExhausted {
-							repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The work above is your evidence; this turn is only for reporting it. Call submit_result now, and do NOT call any other tools or emit a prose final response. Put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields.\n\nReport truthfully against the goal: use status `success` only if the goal is fully met without a known target limitation; use `completed_with_gaps` when the assigned work is complete but it discovered such a limitation; otherwise use `partial` (say exactly what is done and what remains) or `blocked`. A truthful `partial` lets the next attempt continue your work; a false completion claim destroys it.", task.Goal, output, len(steps), stepBudget)
-						}
-						// Result-only repair must be a clean tool context. Replaying the
-						// original tool-call messages caused models to repeat a prior
-						// `view`/`grep` call even though only submit_result is exposed.
-						// The prompt already contains the worker's final output; provide
-						// a bounded, text-only evidence summary rather than executable
-						// tool history.
-						repairPrompt += protocolRepairEvidenceSummary(steps, transcriptArtifact)
-						repairAttempts := make([]RepairAttemptProvenance, 0, 2)
-						runRepair := func(prompt string) []fantasy.StepResult {
-							var repairAg fantasy.Agent
-							if c.repairAgentOverride != nil {
-								repairAg = c.repairAgentOverride
-							} else if c.providerManager != nil {
-								var rErr error
-								repairAg, rErr = c.createGatedAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
-									Def:        agentDef,
-									TeamConfig: &c.session.Config,
-									WorkDir:    c.projectDir,
-									MaxSteps:   1,
-								}, []fantasy.AgentTool{repairResultTool})
-								if rErr != nil {
-									c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to create protocol repair agent: %v", rErr)).withTodoID(todoID))
+						if task.Execution.RequiresGroundedResult {
+							// Tool-free repair (and the free-text promotion below) can only
+							// produce a result from a bounded summary of what already
+							// happened; the repair agent is deliberately given no transcript
+							// recorder so a guess made without re-reading the assigned
+							// evidence can never masquerade as this worker's own grounded
+							// completion. A grounded-result task must reject that substitute
+							// outright rather than accept it as done: skip repair entirely and
+							// let the normal retry policy give this same task a fresh attempt
+							// with a new transcript and full budget instead.
+							protocolFailure = false
+							err = withFailureClassOverride(errors.New("worker omitted submit_result; task requires a grounded result, so tool-free protocol repair is not accepted as a substitute"), FailureExecution)
+						} else {
+							repairResultTool := &submitResultTool{coordinator: c, todoID: todoID}
+							repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using the output above to supply the required structured result. Include a concise summary and put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields. Do NOT call any other tools or emit a prose final response.\n", task.Goal, output)
+							if budgetExhausted {
+								repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The work above is your evidence; this turn is only for reporting it. Call submit_result now, and do NOT call any other tools or emit a prose final response. Put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields.\n\nReport truthfully against the goal: use status `success` only if the goal is fully met without a known target limitation; use `completed_with_gaps` when the assigned work is complete but it discovered such a limitation; otherwise use `partial` (say exactly what is done and what remains) or `blocked`. A truthful `partial` lets the next attempt continue your work; a false completion claim destroys it.", task.Goal, output, len(steps), stepBudget)
+							}
+							// Result-only repair must be a clean tool context. Replaying the
+							// original tool-call messages caused models to repeat a prior
+							// `view`/`grep` call even though only submit_result is exposed.
+							// The prompt already contains the worker's final output; provide
+							// a bounded, text-only evidence summary rather than executable
+							// tool history.
+							repairPrompt += protocolRepairEvidenceSummary(steps, transcriptArtifact)
+							repairAttempts := make([]RepairAttemptProvenance, 0, 2)
+							runRepair := func(prompt string) []fantasy.StepResult {
+								var repairAg fantasy.Agent
+								if c.repairAgentOverride != nil {
+									repairAg = c.repairAgentOverride
+								} else if c.providerManager != nil {
+									var rErr error
+									repairAg, rErr = c.createGatedAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
+										Def:        agentDef,
+										TeamConfig: &c.session.Config,
+										WorkDir:    c.projectDir,
+										MaxSteps:   1,
+									}, []fantasy.AgentTool{repairResultTool})
+									if rErr != nil {
+										c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to create protocol repair agent: %v", rErr)).withTodoID(todoID))
+									}
 								}
-							}
-							if repairAg == nil {
-								return nil
-							}
-							repairCtx := context.WithValue(parentCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
-							// Protocol repair has no separate execution receipt. The
-							// parent worker context is receipt-backed, so override its
-							// marker before accounting this auxiliary LLM stream.
-							repairCtx = context.WithValue(repairCtx, llmUsageReceiptExpectedKey{}, false)
-							repairCtx = context.WithValue(repairCtx, todoIDKey{}, todoID)
-							repairCtx = context.WithValue(repairCtx, modelKey{}, resolvedModel)
-							repairCtx = context.WithValue(repairCtx, tools.AgentNameKey, agentName)
-							repairCtx = context.WithValue(repairCtx, hooks.AgentNameKey, agentName)
-							repairCtx = context.WithValue(repairCtx, hooks.TeamNameKey, c.session.Config.Name)
-							repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, taskDesc)
-							repairCtx = context.WithValue(repairCtx, taskToolSequenceKey{}, attemptSequence.protocolRepairSequence())
+								if repairAg == nil {
+									return nil
+								}
+								repairCtx := context.WithValue(parentCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
+								// Protocol repair has no separate execution receipt. The
+								// parent worker context is receipt-backed, so override its
+								// marker before accounting this auxiliary LLM stream.
+								repairCtx = context.WithValue(repairCtx, llmUsageReceiptExpectedKey{}, false)
+								repairCtx = context.WithValue(repairCtx, todoIDKey{}, todoID)
+								repairCtx = context.WithValue(repairCtx, modelKey{}, resolvedModel)
+								repairCtx = context.WithValue(repairCtx, tools.AgentNameKey, agentName)
+								repairCtx = context.WithValue(repairCtx, hooks.AgentNameKey, agentName)
+								repairCtx = context.WithValue(repairCtx, hooks.TeamNameKey, c.session.Config.Name)
+								repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, taskDesc)
+								repairCtx = context.WithValue(repairCtx, taskToolSequenceKey{}, attemptSequence.protocolRepairSequence())
 
-							preparedPrompt, prepareErr := c.prepareAuxiliaryPrompt(repairCtx, "result_repair", prompt)
-							if prepareErr != nil {
-								return nil
+								preparedPrompt, prepareErr := c.prepareAuxiliaryPrompt(repairCtx, "result_repair", prompt)
+								if prepareErr != nil {
+									return nil
+								}
+								_, repairSteps, _ := c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, preparedPrompt, nil, timing, fantasy.StepCountIs(1))
+								typedRes = c.GetTaskResult(todoID)
+								return repairSteps
 							}
-							_, repairSteps, _ := c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, preparedPrompt, nil, timing, fantasy.StepCountIs(1))
-							typedRes = c.GetTaskResult(todoID)
-							return repairSteps
-						}
 
-						repairSteps := runRepair(repairPrompt)
-						repairSuccess := typedRes != nil && typedRes.Source == "submitted" && validateSubmittedTaskResult(typedRes) == nil
-						// §7: classify the repair failure sub-reason so the next-step
-						// disposition is driven by evidence rather than a generic
-						// "protocol failed" message. progress_not_final reclassifies
-						// the task as an execution failure (the worker reported a
-						// progress update, not a final outcome) and must not count
-						// toward protocol repair statistics.
-						repairReason, reclassifyExecution := classifyRepairFailure(repairSteps, typedRes)
-						if reclassifyExecution && acceptsIncompleteReadOnlyAnalysis(task, resolvedSideEffect, steps, typedRes) {
-							// A read-only analysis can be a useful handoff even when the
-							// worker honestly reports a remaining verification gap. Preserve
-							// that distinction without ever applying it to a mutating task.
-							typedRes.Status = TaskResultStatusCompletedWithGaps
-							c.storeSubmittedTaskResult(todoID, typedRes)
-							repairSuccess = true
-							repairReason = ""
-							reclassifyExecution = false
-						}
-						repairAttempts = append(repairAttempts, RepairAttemptProvenance{
-							Attempt:         1,
-							Success:         repairSuccess,
-							Prompt:          repairPrompt,
-							SubmittedResult: typedRes,
-							FailureReason:   repairReason,
-						})
-
-						// An invalid schema is the one protocol failure allowed a second
-						// time. This turn is schema-only, still allows only submit_result,
-						// and never replays the worker execution (§7).
-						if !repairSuccess && repairReason == RepairFailureInvalidSchema {
-							typedRes = nil
-							schemaRepairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous submit_result call was rejected because its arguments did not match the result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work, call any other tools, or emit a prose final response. The call must include both required fields: `status` (one of `success`, `completed_with_gaps`, `partial`, `failed`, or `blocked`) and a non-empty `summary`; put any complete textual deliverable in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields.\n\n## Execution Output\n%s", task.Goal, output)
-							schemaRepairSteps := runRepair(schemaRepairPrompt)
-							repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateSubmittedTaskResult(typedRes) == nil
-							repairReason, reclassifyExecution = classifyRepairFailure(schemaRepairSteps, typedRes)
-							if reclassifyExecution && acceptsIncompleteReadOnlyAnalysis(task, resolvedSideEffect, steps, typedRes) {
-								typedRes.Status = TaskResultStatusCompletedWithGaps
-								c.storeSubmittedTaskResult(todoID, typedRes)
-								repairSuccess = true
-								repairReason = ""
-								reclassifyExecution = false
-							}
+							repairSteps := runRepair(repairPrompt)
+							repairSuccess := typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil
+							// §7: classify the repair failure sub-reason so the next-step
+							// disposition is driven by evidence rather than a generic
+							// "protocol failed" message. progress_not_final reclassifies
+							// the task as an execution failure (the worker reported a
+							// progress update, not a final outcome) and must not count
+							// toward protocol repair statistics.
+							repairReason, reclassifyExecution := classifyRepairFailure(repairSteps, typedRes)
 							repairAttempts = append(repairAttempts, RepairAttemptProvenance{
-								Attempt:         2,
+								Attempt:         1,
 								Success:         repairSuccess,
-								Prompt:          schemaRepairPrompt,
+								Prompt:          repairPrompt,
 								SubmittedResult: typedRes,
 								FailureReason:   repairReason,
 							})
-						}
-						// A read-only worker may produce a complete Markdown handoff in
-						// its final assistant message but omit the typed tool call. Promote
-						// only when the runtime can prove the attempt used observation-only
-						// tools and the declared evidence contract validates the full text.
-						// This preserves the typed-result/report pipeline without allowing
-						// an incomplete or mutating free-text claim to become success.
-						if !repairSuccess && !reclassifyExecution && typedRes == nil &&
-							resolvedSideEffect == SideEffectNone && protocolAttemptWasReadOnly(steps) {
-							if promoted := promoteValidatedReadOnlyHandoff(task, todoID, agentName, output); promoted != nil {
-								c.storeSubmittedTaskResult(todoID, promoted)
-								typedRes = promoted
-								repairSuccess = true
-								repairReason = ""
-								last := &repairAttempts[len(repairAttempts)-1]
-								last.Success = true
-								last.FailureReason = ""
-								last.SubmittedResult = promoted
+
+							// An invalid schema is the one protocol failure allowed a second
+							// time. This turn is schema-only, still allows only submit_result,
+							// and never replays the worker execution (§7).
+							if !repairSuccess && repairReason == RepairFailureInvalidSchema {
+								typedRes = nil
+								schemaRepairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous submit_result call was rejected because its arguments did not match the result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work, call any other tools, or emit a prose final response. The call must include both required fields: `status` (one of `success`, `completed_with_gaps`, `partial`, `failed`, or `blocked`) and a non-empty `summary`; put any complete textual deliverable in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields.\n\n## Execution Output\n%s", task.Goal, output)
+								schemaRepairSteps := runRepair(schemaRepairPrompt)
+								repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil
+								repairReason, reclassifyExecution = classifyRepairFailure(schemaRepairSteps, typedRes)
+								repairAttempts = append(repairAttempts, RepairAttemptProvenance{
+									Attempt:         2,
+									Success:         repairSuccess,
+									Prompt:          schemaRepairPrompt,
+									SubmittedResult: typedRes,
+									FailureReason:   repairReason,
+								})
 							}
-						}
-						receipt.FinishedAt = time.Now()
-						receipt.RepairProvenance = &RepairProvenance{
-							Attempted:       true,
-							Success:         repairSuccess,
-							Prompt:          repairAttempts[len(repairAttempts)-1].Prompt,
-							SubmittedResult: typedRes,
-							RepairAttempts:  len(repairAttempts),
-							History:         repairAttempts,
-						}
-						if repairSuccess {
-							if typedRes != nil && typedRes.Source == "promoted_free_text" {
-								receipt.HandoffState = ResultHandoffPromotedFreeText
+							// A read-only worker may produce a complete Markdown handoff in
+							// its final assistant message but omit the typed tool call. Promote
+							// only when the runtime can prove the attempt used observation-only
+							// tools and the declared evidence contract validates the full text.
+							// This preserves the typed-result/report pipeline without allowing
+							// an incomplete or mutating free-text claim to become success.
+							if !repairSuccess && !reclassifyExecution && typedRes == nil &&
+								resolvedSideEffect == SideEffectNone && protocolAttemptWasReadOnly(steps) {
+								if promoted := promoteValidatedReadOnlyHandoff(task, todoID, agentName, output); promoted != nil {
+									c.storeSubmittedTaskResult(todoID, promoted)
+									typedRes = promoted
+									repairSuccess = true
+									repairReason = ""
+									last := &repairAttempts[len(repairAttempts)-1]
+									last.Success = true
+									last.FailureReason = ""
+									last.SubmittedResult = promoted
+								}
+							}
+							receipt.FinishedAt = time.Now()
+							receipt.RepairProvenance = &RepairProvenance{
+								Attempted:       true,
+								Success:         repairSuccess,
+								Prompt:          repairAttempts[len(repairAttempts)-1].Prompt,
+								SubmittedResult: typedRes,
+								RepairAttempts:  len(repairAttempts),
+								History:         repairAttempts,
+							}
+							if repairSuccess {
+								if typedRes != nil && typedRes.Source == "promoted_free_text" {
+									receipt.HandoffState = ResultHandoffPromotedFreeText
+								} else {
+									receipt.HandoffState = ResultHandoffSubmitted
+								}
+								c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("protocol repair succeeded for task %s after %d attempt(s)", todoID, len(repairAttempts))).withTodoID(todoID))
 							} else {
-								receipt.HandoffState = ResultHandoffSubmitted
+								receipt.RepairProvenance.FailureReason = repairReason
+								// Capture the submitted status (if any) before preserving the
+								// result as evidence for the error message.
+								submittedStatus := ""
+								if typedRes != nil {
+									submittedStatus = typedRes.Status
+								}
+								if reclassifyExecution {
+									// §7: progress_not_final — the submitted result was a
+									// progress update (partial/failed/blocked), not a final
+									// outcome. Reclassify as FailureExecution so the retry
+									// loop may re-dispatch the worker (subject to the
+									// replay policy), and do not count this attempt toward
+									// protocol repair statistics.
+									protocolFailure = false
+									receipt.SubmittedResult = typedRes
+									err = withFailureClassOverride(
+										fmt.Errorf("execution failure (reclassified from protocol repair: worker reported status %q via submit_result; task is not complete) for task %s (%s)", submittedStatus, todoID, agentName),
+										FailureExecution,
+									)
+									receipt.RepairProvenance.Error = err.Error()
+								} else {
+									// Preserve the worker's original output as a low-confidence,
+									// provisional result. It is evidence for reconciliation, not
+									// a successful terminal result and never marks the task done.
+									recovered := ParseFreeTextResult(output)
+									if strings.TrimSpace(recovered.Summary) == "" {
+										recovered.Summary = "No final worker output was available; reconcile using the execution transcript."
+									}
+									recovered.TaskID = todoID
+									recovered.Agent = agentName
+									recovered.Source = "recovered_protocol"
+									if transcriptArtifact != nil {
+										copyRef := *transcriptArtifact
+										recovered.RawOutputRef = &copyRef
+									}
+									c.storeSubmittedTaskResult(todoID, recovered)
+									typedRes = recovered
+									receipt.RepairProvenance.SubmittedResult = recovered
+									err = fmt.Errorf("protocol failure (class: %s, reason: %s) for task %s (%s): agent produced output but failed protocol repair to submit_result",
+										string(FailureProtocol), string(repairReason), todoID, agentName)
+									receipt.RepairProvenance.Error = err.Error()
+								}
 							}
-							c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("protocol repair succeeded for task %s after %d attempt(s)", todoID, len(repairAttempts))).withTodoID(todoID))
-						} else {
-							receipt.RepairProvenance.FailureReason = repairReason
-							// Capture the submitted status (if any) before preserving the
-							// result as evidence for the error message.
-							submittedStatus := ""
-							if typedRes != nil {
-								submittedStatus = typedRes.Status
-							}
-							if reclassifyExecution {
-								// §7: progress_not_final — the submitted result was a
-								// progress update (partial/failed/blocked), not a final
-								// outcome. Reclassify as FailureExecution so the retry
-								// loop may re-dispatch the worker (subject to the
-								// replay policy), and do not count this attempt toward
-								// protocol repair statistics.
+							if !repairSuccess && repairReason == RepairFailureNoToolCall && !budgetExhausted &&
+								!protocolCapabilityRetryUsed && (protocolAttemptWasReadOnly(steps) || attemptDispositions.onlyPolicyDeniedToolCalls(steps)) && parentCtx.Err() == nil {
+								// No state-changing tool ran, so one fresh worker attempt is
+								// safe. Override the provisional protocol error only after the
+								// normal protocol branch has built its evidence; otherwise that
+								// branch would overwrite this execution classification.
 								protocolFailure = false
-								err = withFailureClassOverride(
-									fmt.Errorf("execution failure (reclassified from protocol repair: worker reported status %q via submit_result; task is not complete) for task %s (%s)", submittedStatus, todoID, agentName),
-									FailureExecution,
-								)
-								receipt.RepairProvenance.Error = err.Error()
-							} else {
-								// Preserve the worker's original output as a low-confidence,
-								// provisional result. It is evidence for reconciliation, not
-								// a successful terminal result and never marks the task done.
-								recovered := ParseFreeTextResult(output)
-								if strings.TrimSpace(recovered.Summary) == "" {
-									recovered.Summary = "No final worker output was available; reconcile using the execution transcript."
-								}
-								recovered.TaskID = todoID
-								recovered.Agent = agentName
-								recovered.Source = "recovered_protocol"
-								if transcriptArtifact != nil {
-									copyRef := *transcriptArtifact
-									recovered.RawOutputRef = &copyRef
-								}
-								c.storeSubmittedTaskResult(todoID, recovered)
-								typedRes = recovered
-								receipt.RepairProvenance.SubmittedResult = recovered
-								err = fmt.Errorf("protocol failure (class: %s, reason: %s) for task %s (%s): agent produced output but failed protocol repair to submit_result",
-									string(FailureProtocol), string(repairReason), todoID, agentName)
+								protocolCapabilityFallback = true
+								err = withFailureClassOverride(errors.New("model did not honour the submit_result tool contract after a read-only attempt"), FailureExecution)
 								receipt.RepairProvenance.Error = err.Error()
 							}
-						}
-						if !repairSuccess && repairReason == RepairFailureNoToolCall && !budgetExhausted &&
-							!protocolCapabilityRetryUsed && (protocolAttemptWasReadOnly(steps) || attemptDispositions.onlyPolicyDeniedToolCalls(steps)) && parentCtx.Err() == nil {
-							// No state-changing tool ran, so one fresh worker attempt is
-							// safe. Override the provisional protocol error only after the
-							// normal protocol branch has built its evidence; otherwise that
-							// branch would overwrite this execution classification.
-							protocolFailure = false
-							protocolCapabilityFallback = true
-							err = withFailureClassOverride(errors.New("model did not honour the submit_result tool contract after a read-only attempt"), FailureExecution)
-							receipt.RepairProvenance.Error = err.Error()
-						}
-						if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-							_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+							if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+								_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+							}
 						}
 					}
 				} else if strings.TrimSpace(output) != "" {
@@ -1046,8 +1052,8 @@ retryLoop:
 					typedRes = recovered
 				}
 				if err == nil && typedRes != nil && typedRes.Source == "submitted" {
-					if resultErr := validateSubmittedTaskResult(typedRes); resultErr != nil {
-						err = resultErr
+					if resultErr := validateCompletedTaskResult(typedRes); resultErr != nil {
+						err = withFailureClassOverride(resultErr, FailureExecution)
 					}
 				}
 			}
@@ -1092,7 +1098,7 @@ retryLoop:
 					c.report(c.newEvent("verify_start").withAgent(agentName).withMessage(vMsg).withTodoID(todoID))
 				}
 				if err == nil {
-					verification, verr := c.verifyTaskDeliverableWithSpec(parentCtx, agentDef, task)
+					verification, verr := c.verifyTaskDeliverableWithSpec(parentCtx, agentDef, task, steps)
 					if verification != nil {
 						c.noteObjectiveVerifierResult(todoID, verr == nil && isVerifySuccess(verification))
 						_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
@@ -1305,12 +1311,22 @@ retryLoop:
 		priorToolResult := attemptEvidence.resultText
 		priorToolResultErr := attemptEvidence.resultErr
 		priorPartialOutput := retryPartialOutput(output, lastOutput)
+		priorSubmittedResult := receipt.SubmittedResult
+		if priorSubmittedResult != nil {
+			priorPartialOutput = retryPartialOutput(priorSubmittedResult.FormatForContext(), priorPartialOutput)
+		}
 
 		// Build conversation history for a potential retry. The one bounded
 		// result-contract capability fallback is deliberately a clean attempt:
 		// it may not inherit old tool messages that invite the model to repeat
 		// tools unavailable in its repair turn.
-		if !protocolCapabilityFallback {
+		if receipt.SubmittedResult != nil {
+			// A semantic incomplete handoff is a finalization retry, not a
+			// continuation of the old tool conversation. The typed evidence is
+			// injected explicitly below, so clearing history prevents the model
+			// from blindly repeating a prior inspection sequence.
+			conversationHistory = nil
+		} else if !protocolCapabilityFallback {
 			if len(conversationHistory) == 0 && len(steps) > 0 {
 				conversationHistory = append(conversationHistory, fantasy.NewUserMessage(currentPrompt))
 			}
@@ -1400,6 +1416,7 @@ retryLoop:
 			lastClass = currentClass // nolint:staticcheck,ineffassign
 			// lastTranscriptRef is consumed via buildRetryContext → currentPrompt → ag.Generate
 			lastTranscriptRef, lastVerifyCmd, lastVerifyExit, lastExitCode, lastToolCall, lastToolInput, lastToolResult, lastToolResultErr, lastPartialOutput = priorTranscriptRef, priorVerifyCmd, priorVerifyExit, priorExitCode, priorToolCall, priorToolInput, priorToolResult, priorToolResultErr, priorPartialOutput //nolint:staticcheck
+			lastSubmittedResult = priorSubmittedResult
 			if protocolCapabilityFallback {
 				lastPolicyDeniedDispositions = attemptDispositions.snapshot()
 			} else {
@@ -1467,19 +1484,6 @@ func (c *Coordinator) effectiveWorkerMaxAttempts(agentDef *agent.AgentDef) int {
 	return retries + 1
 }
 
-// acceptsIncompleteReadOnlyAnalysis promotes an evidence-bearing partial
-// handoff only for a task that is provably read-only. Mutating, verified, and
-// action-provider tasks retain the fail-closed partial-result behavior.
-func acceptsIncompleteReadOnlyAnalysis(task TaskDef, sideEffect SideEffectClass, steps []fantasy.StepResult, result *TaskResult) bool {
-	if sideEffect != SideEffectNone || task.Verify != "" || task.VerifySpec != nil || task.Action != nil || result == nil || result.Status != TaskResultStatusPartial {
-		return false
-	}
-	if strings.TrimSpace(result.Details) == "" {
-		return false
-	}
-	return protocolAttemptWasReadOnly(steps)
-}
-
 // promoteValidatedReadOnlyHandoff turns a complete final assistant message
 // into a typed result only at the protocol boundary. It is deliberately
 // limited to callers that already proved every worker tool was read-only; a
@@ -1529,7 +1533,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 			c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
 			return "", fmt.Errorf("enter structured action verification: %w", err)
 		}
-		verification, verifyErr := c.verifyTaskDeliverableWithSpec(ctx, nil, task)
+		verification, verifyErr := c.verifyTaskDeliverableWithSpec(ctx, nil, task, nil)
 		if verification != nil {
 			_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
 		}
@@ -1692,7 +1696,7 @@ func (c *Coordinator) materializeCheckpointedProtocolRepair(item *TodoItem, agen
 				provenance.RepairAttempts = attempt.Attempt
 			}
 		}
-		if prior.Success && prior.SubmittedResult != nil && validateSubmittedTaskResult(prior.SubmittedResult) == nil {
+		if prior.Success && prior.SubmittedResult != nil && validateCompletedTaskResult(prior.SubmittedResult) == nil {
 			provenance.Prompt = prior.Prompt
 		}
 	}
@@ -1735,7 +1739,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	// protocol_incomplete task with a valid result but no provenance. Treat
 	// that result as the durable repair boundary: record the missing receipt and
 	// finish locally, without clearing it or making another repair-agent call.
-	if item.TypedResult != nil && item.TypedResult.Source == "submitted" && validateSubmittedTaskResult(item.TypedResult) == nil {
+	if item.TypedResult != nil && item.TypedResult.Source == "submitted" && validateCompletedTaskResult(item.TypedResult) == nil {
 		agentName := strings.ToLower(strings.TrimSpace(item.Agent))
 		if agentName == "" {
 			agentName = strings.ToLower(strings.TrimSpace(task.Agent))
@@ -1769,7 +1773,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	// never replays worker execution.
 	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RepairProvenance != nil {
 		provenance := item.ExecutionReceipt.RepairProvenance
-		if provenance.Success && provenance.SubmittedResult != nil && validateSubmittedTaskResult(provenance.SubmittedResult) == nil {
+		if provenance.Success && provenance.SubmittedResult != nil && validateCompletedTaskResult(provenance.SubmittedResult) == nil {
 			c.storeSubmittedTaskResult(item.ID, provenance.SubmittedResult)
 			return c.finishProtocolRepair(parentCtx, item, task, agentName, resolvedModel, provenance.SubmittedResult, output)
 		}
@@ -1846,7 +1850,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		runErr = callErr
 		typedRes = c.GetTaskResult(item.ID)
 		repairReason, _ = classifyRepairFailure(steps, typedRes)
-		repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateSubmittedTaskResult(typedRes) == nil
+		repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil
 		repairHistory = append(repairHistory, RepairAttemptProvenance{
 			Attempt:         attempt,
 			Success:         repairSuccess,
@@ -1919,7 +1923,7 @@ func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, 
 		if err := c.commitTaskTransitionFromCurrent(ctx, item.ID, TaskVerifying, "running objective verification", output, nil); err != nil {
 			return "", err
 		}
-		verification, err := c.verifyTaskDeliverableWithSpec(ctx, nil, task)
+		verification, err := c.verifyTaskDeliverableWithSpec(ctx, nil, task, nil)
 		if verification != nil {
 			_ = c.taskTracker.TodoList().SetVerificationResult(item.ID, verification)
 		}
@@ -2127,7 +2131,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 			vMsg = string(task.VerifySpec.Type)
 		}
 		c.report(c.newEvent("verify_start").withAgent(task.Agent).withMessage(vMsg).withTodoID(todoID))
-		verification, verifyErr := c.verifyTaskDeliverableWithSpec(ctx, nil, task)
+		verification, verifyErr := c.verifyTaskDeliverableWithSpec(ctx, nil, task, nil)
 		if verification != nil {
 			c.noteObjectiveVerifierResult(todoID, verifyErr == nil && isVerifySuccess(verification))
 			_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
@@ -2429,6 +2433,10 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		Prompt:   prompt,
 		Messages: history,
 		StopWhen: extraStop,
+		// Fantasy's streaming loop reads this field directly, not the
+		// agent-level default set via fantasy.WithRepairToolCall in
+		// agent.CreateAgent — see internal/agent/toolcall_repair.go.
+		RepairToolCall: agent.RepairConcatenatedToolCall,
 		PrepareStep: func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
 			// Keep this request within the context model token budget.
 			modelID := ""
@@ -2802,6 +2810,48 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		}
 		result, err = ag.Stream(ctx, streamCall)
 	}
+	// A task that requires a result but stopped without a tool call has
+	// stalled, not finished: Fantasy's loop correctly ends a turn once a step
+	// requests no tools, but Hufu's protocol for this task still needs either
+	// more evidence-gathering or a submit_result. Ask for exactly one bounded
+	// continuation in the SAME turn -- cheap compared to the fresh attempt
+	// (new transcript, redo every tool call) that protocol failure would
+	// otherwise require. Gated on RequiresResult: a task that is happy with a
+	// plain-text answer ending a turn with no tool call is simply done, not
+	// stalled, and must never be nudged.
+	requiresResult, _ := ctx.Value(taskRequiresResultKey{}).(bool)
+	if err == nil && result != nil && todoID != "" && requiresResult && c.GetTaskResult(todoID) == nil && stalledWithoutToolCall(result.Steps) {
+		// A worker that already exhausted its step budget is handled by the
+		// existing wrap-up/finalization path (PrepareStep's stepBudgetCheckpoint
+		// above); nudging here would just add steps beyond the budget it was
+		// given instead of letting that mechanism run its course.
+		stepBudget, hasStepBudget := ctx.Value(workerStepBudgetKey{}).(int)
+		budgetExhausted := hasStepBudget && stepBudget > 0 && len(result.Steps) >= stepBudget
+		if !budgetExhausted {
+			reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage("model stopped without a tool call or submit_result on a task that requires one; requesting one same-turn continuation before falling back to a fresh attempt"))
+			continuationMessages := append([]fantasy.Message(nil), history...)
+			if strings.TrimSpace(prompt) != "" {
+				continuationMessages = append(continuationMessages, fantasy.NewUserMessage(prompt))
+			}
+			for _, step := range result.Steps {
+				continuationMessages = append(continuationMessages, step.Messages...)
+			}
+			continuationMessages = append(continuationMessages, fantasy.NewUserMessage(
+				"You stopped without calling a tool or submit_result. If you are not finished, make your next tool call now. If you have gathered enough evidence, call submit_result now. Do not just describe what you plan to do next.",
+			))
+			nudgeCall := streamCall
+			nudgeCall.Prompt = ""
+			nudgeCall.Messages = continuationMessages
+			nudgeCall.StopWhen = append(append([]fantasy.StopCondition(nil), streamCall.StopWhen...), fantasy.StepCountIs(2))
+			if nudgeResult, nudgeErr := ag.Stream(ctx, nudgeCall); nudgeErr == nil && nudgeResult != nil && len(nudgeResult.Steps) > 0 {
+				result.Steps = append(result.Steps, nudgeResult.Steps...)
+				last := nudgeResult.Steps[len(nudgeResult.Steps)-1]
+				if strings.TrimSpace(nudgeResult.Response.Content.Text()) != "" || len(last.Content.ToolCalls()) > 0 {
+					result.Response = nudgeResult.Response
+				}
+			}
+		}
+	}
 	c.SetCurrentStage("idle")
 	if result != nil {
 		accountedTokens := c.addStepTokens(result.Steps)
@@ -2903,7 +2953,7 @@ func (c *Coordinator) buildConcurrentTasksContext(excludeID string) string {
 	return "## Concurrent Tasks\n\nThe following agents are running in parallel with you. Avoid overlapping with their work:\n\n" + strings.Join(running, "\n")
 }
 
-func (c *Coordinator) verifyTaskDeliverableWithSpec(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef) (*VerificationResult, error) {
+func (c *Coordinator) verifyTaskDeliverableWithSpec(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef, steps []fantasy.StepResult) (*VerificationResult, error) {
 	spec := task.VerifySpec
 	if spec == nil && task.Verify != "" {
 		spec = &agent.VerificationSpec{
@@ -2928,7 +2978,7 @@ func (c *Coordinator) verifyTaskDeliverableWithSpec(parentCtx context.Context, a
 	timeout := c.verifyTaskTimeout()
 	verifyCtx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
-	return ExecuteVerificationSpec(verifyCtx, shell, workDir, normalizedSpec)
+	return ExecuteVerificationSpecWithSteps(verifyCtx, shell, workDir, normalizedSpec, steps)
 }
 
 // verifyTaskDeliverable runs the task's optional verify command and returns a
@@ -3348,6 +3398,14 @@ func computeEvidenceComplete(task TaskDef, transcriptRef string, steps []fantasy
 // This becomes a required typed compiler fragment so budgeting and the
 // content-free manifest describe exactly what the retry worker receives.
 func buildRetryContext(class TaskFailureClass, lastErr error, transcriptRef, verifyCmd string, verifyExit int, workerExitCode *int, lastToolCall, lastToolInput, lastToolResult string, lastToolResultErr bool, lastOutput string, task TaskDef) string {
+	return buildRetryContextWithSubmittedResult(class, lastErr, transcriptRef, verifyCmd, verifyExit, workerExitCode, lastToolCall, lastToolInput, lastToolResult, lastToolResultErr, lastOutput, nil, task)
+}
+
+// buildRetryContextWithSubmittedResult extends the generic retry context with
+// the prior typed handoff when the worker reported an honest non-terminal
+// state. The evidence is bounded and redacted, and is only available to the
+// next attempt of the same Todo; it is never historical cross-run context.
+func buildRetryContextWithSubmittedResult(class TaskFailureClass, lastErr error, transcriptRef, verifyCmd string, verifyExit int, workerExitCode *int, lastToolCall, lastToolInput, lastToolResult string, lastToolResultErr bool, lastOutput string, submitted *TaskResult, task TaskDef) string {
 	b := &strings.Builder{}
 	b.WriteString("\n\n## Retry Context (§6.1)\n\n")
 	if lastErr == nil {
@@ -3374,6 +3432,7 @@ func buildRetryContext(class TaskFailureClass, lastErr error, transcriptRef, ver
 		fmt.Fprintf(b, "partial output: %s; ", lastOutput)
 	}
 	fmt.Fprintf(b, "error: %s\n", lastFailure)
+	appendSubmittedResultRetryEvidence(b, submitted)
 
 	// 3. Previous command and exit/verification result — always rendered
 	// with the actual command/input when available (§6.1).
@@ -3430,4 +3489,60 @@ func buildRetryContext(class TaskFailureClass, lastErr error, transcriptRef, ver
 	}
 
 	return b.String()
+}
+
+// appendSubmittedResultRetryEvidence preserves the useful structured facts
+// from an incomplete handoff without treating them as completion. Its bounded
+// form is intentionally generic: any replayable read-only analysis can use it
+// to finish missing evidence rather than repeat already-recorded work.
+func appendSubmittedResultRetryEvidence(b *strings.Builder, result *TaskResult) {
+	if b == nil || result == nil {
+		return
+	}
+	b.WriteString("**Prior typed handoff (preserved evidence):**\n")
+	fmt.Fprintf(b, "- status: %s\n", redactRetryText(result.Status, 80))
+	if summary := redactRetryText(result.Summary, 500); summary != "" {
+		fmt.Fprintf(b, "- summary: %s\n", summary)
+	}
+	if details := redactRetryText(result.Details, 1800); details != "" {
+		fmt.Fprintf(b, "- details: %s\n", details)
+	}
+	if len(result.Findings) > 0 {
+		b.WriteString("- findings:\n")
+		for i, finding := range result.Findings {
+			if i == 8 {
+				b.WriteString("  - additional findings omitted from retry context\n")
+				break
+			}
+			text := strings.TrimSpace(strings.Join([]string{finding.Category, finding.Summary, finding.Detail}, ": "))
+			fmt.Fprintf(b, "  - %s\n", redactRetryText(text, 500))
+		}
+	}
+	if len(result.FilesRead) > 0 {
+		b.WriteString("- files_read:\n")
+		for i, file := range result.FilesRead {
+			if i == 16 {
+				b.WriteString("  - additional files omitted from retry context\n")
+				break
+			}
+			fmt.Fprintf(b, "  - %s (%s)\n", redactRetryText(file.Path, 500), redactRetryText(file.Purpose, 120))
+		}
+	}
+	b.WriteString("- missing evidence: ")
+	missing := make([]string, 0, len(result.OpenQuestions)+1)
+	for _, question := range result.OpenQuestions {
+		if question = redactRetryText(question, 400); question != "" {
+			missing = append(missing, question)
+		}
+	}
+	if hint := redactRetryText(result.RetryHint, 400); hint != "" {
+		missing = append(missing, hint)
+	}
+	if len(missing) == 0 {
+		b.WriteString("not explicitly reported; compare files_read with the assigned evidence contract.\n")
+	} else {
+		b.WriteString(strings.Join(missing, "; "))
+		b.WriteString("\n")
+	}
+	b.WriteString("This is an evidence-aware finalization retry: retain verified facts, inspect only missing required evidence, then submit success or completed_with_gaps only when the full task contract is satisfied.\n")
 }

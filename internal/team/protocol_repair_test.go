@@ -324,15 +324,17 @@ func TestProtocolRepair_ProgressNotFinalIsExecutionFailure(t *testing.T) {
 	}
 }
 
-func TestProtocolRepair_ReadOnlyPartialWithDetailsCompletesWithGaps(t *testing.T) {
+func TestSubmittedPartialReadOnlyRetriesWithEvidenceContext(t *testing.T) {
 	workspace := t.TempDir()
 	workerCalls := 0
+	var prompts []string
+	resultClearedBeforeRetry := false
 	c := &Coordinator{
 		session: &TeamSession{
 			Workspace: workspace,
-			Config:    agent.TeamConfig{Name: "read-only-partial", Timeout: 30, MaxRetries: 0},
+			Config:    agent.TeamConfig{Name: "read-only-partial", Timeout: 30, MaxRetries: 1},
 			Agents: map[string]*agent.AgentDef{
-				"reviewer": {Name: "reviewer", Role: "worker", SideEffect: string(SideEffectNone), Generation: agent.GenerationParams{Model: "test"}},
+				"reviewer": {Name: "reviewer", Role: "worker", SideEffect: string(SideEffectNone), MaxRetries: 1, Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
 		sessionTime:     time.Now(),
@@ -342,28 +344,51 @@ func TestProtocolRepair_ReadOnlyPartialWithDetailsCompletesWithGaps(t *testing.T
 		executionRunID:  "run-read-only-partial",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "inspect runtime"}})[0]
-	c.workerAgentOverride = &resultContractWorker{calls: &workerCalls}
-	c.repairAgentOverride = &mockRepairAgent{onSubmit: func() {
-		c.storeSubmittedTaskResult(item.ID, &TaskResult{
-			TaskID: item.ID, Agent: "reviewer", Status: TaskResultStatusPartial, Source: "submitted",
-			Summary: "Inspection is useful but one exact signature remains unchecked.",
-			Details: "Relevant code and findings are recorded here for coordinator follow-up.",
-		})
-	}}
+	c.workerAgentOverride = &submittedPartialThenSuccessWorker{calls: &workerCalls, prompts: &prompts,
+		onFirst: func() {
+			c.storeSubmittedTaskResult(item.ID, &TaskResult{
+				TaskID: item.ID, Agent: "reviewer", Status: TaskResultStatusPartial, Source: "submitted",
+				Summary:       "Inspection found a limitation before finalizing.",
+				Details:       "Relevant code and findings are recorded here for coordinator follow-up.",
+				Findings:      []Finding{{Category: "coverage", Summary: "caller context needs confirmation", Detail: "one candidate remains"}},
+				FilesRead:     []FileRef{{Path: "coverage/batches/batch-0006/diff.patch", Purpose: "diff"}},
+				OpenQuestions: OpenQuestions{"Read caller context before finalizing."},
+				RetryHint:     "Preserve the diff evidence and inspect the missing caller context.",
+			})
+		},
+		onSecond: func() {
+			resultClearedBeforeRetry = c.GetTaskResult(item.ID) == nil
+			c.storeSubmittedTaskResult(item.ID, &TaskResult{TaskID: item.ID, Agent: "reviewer", Status: TaskResultStatusCompletedWithGaps, Source: "submitted", Summary: "complete review with an explicit limitation", Details: "all required evidence was reviewed"})
+		},
+	}
 
 	output, err := c.executeTask(context.Background(), TaskDef{
 		Agent: "reviewer", Goal: "inspect runtime", Recovery: RecoveryRetry,
 		SideEffect: SideEffectNone, Execution: ExecutionContract{RequiresResult: true},
 	}, item.ID)
 	if err != nil {
-		t.Fatalf("read-only partial handoff should complete with gaps: %v", err)
+		t.Fatalf("read-only partial handoff should retry and complete: %v", err)
 	}
-	if !strings.Contains(output, "Relevant code") {
-		t.Fatalf("coordinator output = %q, want typed details", output)
+	if !strings.Contains(output, "all required evidence") {
+		t.Fatalf("coordinator output = %q, want final typed details", output)
+	}
+	if workerCalls != 2 || !resultClearedBeforeRetry {
+		t.Fatalf("worker calls/result clearing = %d/%t, want 2/true", workerCalls, resultClearedBeforeRetry)
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("worker prompts = %#v, want two attempts", prompts)
+	}
+	for _, want := range []string{"Failure class:** execution", "Inspection found a limitation", "Relevant code and findings", "caller context needs confirmation", "batch-0006/diff.patch", "Read caller context", "Preserve the diff evidence", "evidence-aware finalization retry"} {
+		if !strings.Contains(prompts[1], want) {
+			t.Fatalf("retry prompt missing %q:\n%s", want, prompts[1])
+		}
 	}
 	got := c.taskTracker.TodoList().Items()[0]
 	if got.Status != TaskDone || got.TypedResult == nil || got.TypedResult.Status != TaskResultStatusCompletedWithGaps {
 		t.Fatalf("task state = status %s result %#v, want done/completed_with_gaps", got.Status, got.TypedResult)
+	}
+	if len(got.ExecutionReceipts) != 2 || got.ExecutionReceipts[0].SubmittedResult == nil || got.ExecutionReceipts[0].SubmittedResult.Status != TaskResultStatusPartial {
+		t.Fatalf("first attempt did not retain partial handoff: %#v", got.ExecutionReceipts)
 	}
 }
 
@@ -636,6 +661,37 @@ type policyDeniedThenSubmittedWorker struct {
 	calls    *int
 	prompts  *[]string
 	onSecond func()
+}
+
+type submittedPartialThenSuccessWorker struct {
+	calls    *int
+	prompts  *[]string
+	onFirst  func()
+	onSecond func()
+}
+
+func (m *submittedPartialThenSuccessWorker) response(call fantasy.AgentCall) *fantasy.AgentResult {
+	*m.calls++
+	if m.prompts != nil {
+		*m.prompts = append(*m.prompts, call.Prompt)
+	}
+	if *m.calls == 1 && m.onFirst != nil {
+		m.onFirst()
+	}
+	if *m.calls == 2 && m.onSecond != nil {
+		m.onSecond()
+	}
+	return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{
+		fantasy.TextContent{Text: "submitted typed handoff"},
+	}}}
+}
+
+func (m *submittedPartialThenSuccessWorker) Generate(_ context.Context, call fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return m.response(call), nil
+}
+
+func (m *submittedPartialThenSuccessWorker) Stream(_ context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return m.response(fantasy.AgentCall{Prompt: call.Prompt, Messages: call.Messages}), nil
 }
 
 func (m *policyDeniedThenSubmittedWorker) response(ctx context.Context, call fantasy.AgentCall) *fantasy.AgentResult {
@@ -951,6 +1007,70 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 	}
 	if len(item.ExecutionReceipts) != 1 {
 		t.Fatalf("execution receipt history length = %d, want one receipt for attempt 1", len(item.ExecutionReceipts))
+	}
+}
+
+// TestProtocolRepair_GroundedResultRejectsRepairAndRetriesInstead proves that
+// a task requiring a grounded result never accepts a tool-free repair
+// completion: the repair agent must not even be invoked, and the coordinator
+// must give the worker a genuinely fresh attempt instead of marking the task
+// done from an unverifiable guess.
+func TestProtocolRepair_GroundedResultRejectsRepairAndRetriesInstead(t *testing.T) {
+	workspace := t.TempDir()
+	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
+
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "protocol-repair", Timeout: 30, MaxRetries: 1},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", MaxRetries: 1, Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-protocol-grounded-101",
+	}
+
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
+		Agent: "worker",
+		Desc:  "data processing task",
+	}})
+	todoID := items[0].ID
+
+	// The worker always omits submit_result, on every attempt.
+	workerCalls := 0
+	c.workerAgentOverride = &countingTextAgent{calls: &workerCalls, text: "Processed input data successfully."}
+
+	// If invoked at all, this repair agent would happily complete the task.
+	// A grounded-result task must never reach it.
+	repairCalls := 0
+	c.repairAgentOverride = &mockRepairAgent{onSubmit: func() { repairCalls++ }}
+
+	_, err := c.executeTask(context.Background(), TaskDef{
+		Agent: "worker",
+		Goal:  "data processing task",
+		Execution: ExecutionContract{
+			RequiresResult:         true,
+			RequiresGroundedResult: true,
+		},
+	}, todoID)
+
+	if err == nil {
+		t.Fatal("expected an error: a grounded-result task must not be marked done from a tool-free repair completion")
+	}
+	if repairCalls != 0 {
+		t.Fatalf("repair agent was invoked %d time(s); a grounded-result task must skip repair entirely", repairCalls)
+	}
+	if workerCalls < 2 {
+		t.Fatalf("worker was invoked %d time(s), want at least 2: the task must retry with a fresh attempt instead of accepting repair", workerCalls)
+	}
+
+	item := c.taskTracker.TodoList().Items()[0]
+	if item.Status == TaskDone {
+		t.Fatal("task status = done, want a failure status: an ungrounded result must never be accepted as done")
 	}
 }
 

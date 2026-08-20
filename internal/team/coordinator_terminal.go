@@ -53,7 +53,7 @@ func (c *Coordinator) TerminalSessions(ctx context.Context) ([]TerminalSession, 
 // allowed to erase this evidence: terminal lifecycle events are facts about
 // the child process, not claims made by the model. Callers must only invoke
 // this against a result that actually claims success (see
-// validateSubmittedTaskResult) — a worker that already reported partial,
+// validateCompletedTaskResult) — a worker that already reported partial,
 // failed, or blocked has nothing left for terminal evidence to contradict.
 //
 // Only the most recently started session for this task is treated as live

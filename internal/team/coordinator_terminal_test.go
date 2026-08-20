@@ -351,9 +351,13 @@ func managerSessionID(t *testing.T, manager *TerminalSessionManager, runID strin
 // for the plain worker path instead of the protocol-repair path.
 type submittingWorkerAgent struct {
 	onSubmit func()
+	calls    *int
 }
 
 func (m *submittingWorkerAgent) result() *fantasy.AgentResult {
+	if m.calls != nil {
+		*m.calls++
+	}
 	if m.onSubmit != nil {
 		m.onSubmit()
 	}
@@ -370,15 +374,12 @@ func (m *submittingWorkerAgent) Stream(context.Context, fantasy.AgentStreamCall)
 	return m.result(), nil
 }
 
-// TestExecuteTaskFailsOnPartialSubmittedResultWithoutConsultingTerminalEvidence
-// pins the claim-aware fix: a worker that submits status="partial" has
-// already told the coordinator the task is not complete, so the attempt must
-// fail on that honest report — not on an unrelated, superseded terminal
-// session that happens to have a non-zero exit code. Before this fix,
-// terminalTaskFailure ran unconditionally at round end and produced a
-// misleading "terminal command ... exited with status N" error instead of
-// surfacing what the worker actually said.
-func TestExecuteTaskFailsOnPartialSubmittedResultWithoutConsultingTerminalEvidence(t *testing.T) {
+// TestExecuteTaskRetainsPartialSubmittedResultWithoutConsultingTerminalEvidence
+// pins the semantic-status boundary: partial is a valid typed handoff but not
+// terminal success. A non-replayable task must retain that handoff and stop
+// through normal recovery, rather than letting unrelated terminal evidence
+// replace the worker's honest report.
+func TestExecuteTaskRetainsPartialSubmittedResultWithoutConsultingTerminalEvidence(t *testing.T) {
 	workspace := t.TempDir()
 	// executeTask fires autoWriteSTMASync/persistReflexionLessonAsync as
 	// fire-and-forget goroutines that write into workspace; give them a beat
@@ -446,15 +447,24 @@ func TestExecuteTaskFailsOnPartialSubmittedResultWithoutConsultingTerminalEviden
 	if err == nil {
 		t.Fatal("expected the attempt to fail on the worker's own partial report")
 	}
-	if !strings.Contains(err.Error(), `worker reported task status "partial"`) {
+	if !strings.Contains(err.Error(), `worker reported incomplete task status "partial"`) {
 		t.Fatalf("error = %q, want the worker's own reported status, not terminal evidence", err)
 	}
 	if strings.Contains(err.Error(), "terminal command") {
 		t.Fatalf("error = %q, must not consult unrelated terminal evidence for a non-success claim", err)
 	}
 	updated := c.taskTracker.TodoList().Items()[0]
+	if updated.Status == TaskDone || (updated.TypedResult != nil && (updated.TypedResult.Status == TaskResultStatusSuccess || updated.TypedResult.Status == TaskResultStatusCompletedWithGaps)) {
+		t.Fatalf("partial handoff became terminal success: status=%s result=%#v", updated.Status, updated.TypedResult)
+	}
 	if updated.ExecutionReceipt == nil || updated.ExecutionReceipt.ExitCode == nil || *updated.ExecutionReceipt.ExitCode == 0 {
 		t.Fatalf("partial task receipt = %#v, want non-zero runtime-owned exit code", updated.ExecutionReceipt)
+	}
+	if updated.ExecutionReceipt.SubmittedResult == nil || updated.ExecutionReceipt.SubmittedResult.Status != TaskResultStatusPartial {
+		t.Fatalf("partial task receipt did not retain the typed handoff: %#v", updated.ExecutionReceipt)
+	}
+	if len(updated.ExecutionReceipts) != 1 {
+		t.Fatalf("non-replayable partial task ran %d attempts, want 1", len(updated.ExecutionReceipts))
 	}
 }
 
@@ -496,5 +506,177 @@ func TestExecuteTaskAcceptsCompletedWithGaps(t *testing.T) {
 	}
 	if got := LoadSTM(workspace); !strings.Contains(got, "submitted a result") {
 		t.Fatalf("completed task returned before its STM receipt was durable: %q", got)
+	}
+}
+
+// TestCharacterizationChildVerificationFailurePreservesTheSubmittedResult
+// uses the in-process worker seam rather than a live model. It fixes the
+// current ordering at the protocol boundary: a child can submit a valid
+// success result, yet its objective verifier still prevents task completion.
+func TestCharacterizationChildVerificationFailurePreservesTheSubmittedResult(t *testing.T) {
+	workspace := t.TempDir()
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Timeout: 30, MaxRetries: 1},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", MaxRetries: 1, Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		projectDir:      workspace,
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-characterization",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "process gamma"}})[0]
+	var calls int
+	c.workerAgentOverride = &submittingWorkerAgent{calls: &calls, onSubmit: func() {
+		c.storeSubmittedTaskResult(item.ID, &TaskResult{
+			TaskID: item.ID, Agent: "worker", Status: TaskResultStatusSuccess,
+			Summary: "processed gamma", Source: "submitted",
+		})
+	}}
+
+	_, err := c.executeTask(context.Background(), TaskDef{
+		Agent: "worker", Goal: "process gamma", Recovery: RecoveryRetry,
+		VerifySpec: &VerificationSpec{Type: VerifyFileExists, Path: "outputs/gamma.txt"},
+	}, item.ID)
+	if err == nil {
+		t.Fatal("missing child artifact unexpectedly passed verification")
+	}
+	if calls != 2 {
+		t.Fatalf("worker calls = %d, want initial attempt plus MaxRetries retry", calls)
+	}
+	updated := c.taskTracker.TodoList().Items()[0]
+	if updated.Status == TaskDone {
+		t.Fatalf("failed verification marked child done: %#v", updated)
+	}
+	if updated.TypedResult == nil || updated.TypedResult.Status != TaskResultStatusSuccess {
+		t.Fatalf("submitted result was not retained for retry/diagnosis: %#v", updated.TypedResult)
+	}
+	if updated.VerifyResult == nil || updated.VerifyResult.ExitCode == 0 {
+		t.Fatalf("failed verification evidence missing: %#v", updated.VerifyResult)
+	}
+	if len(updated.ExecutionReceipts) != calls {
+		t.Fatalf("execution receipts = %d, want one per attempt (%d)", len(updated.ExecutionReceipts), calls)
+	}
+	verifiedReceipts := 0
+	for _, receipt := range updated.ExecutionReceipts {
+		if receipt.TaskID != item.ID {
+			t.Fatalf("retry changed receipt task ID: %#v", receipt)
+		}
+		if receipt.VerifyResult != nil {
+			if receipt.VerifyResult.ExitCode == 0 {
+				t.Fatalf("receipt contains successful verification evidence for a failed task: %#v", receipt)
+			}
+			verifiedReceipts++
+		}
+	}
+	if verifiedReceipts == 0 {
+		t.Fatalf("failed verification evidence missing from all attempt receipts: %#v", updated.ExecutionReceipts)
+	}
+}
+
+// Budget rejection is intentionally checked before Todo creation. The items
+// are generic so this remains a runtime characterization, not a consumer
+// fixture.
+func TestCharacterizationBudgetCancellationCreatesNoGenericChildren(t *testing.T) {
+	workspace := t.TempDir()
+	writeCharacterizationWorkset(t, workspace, characterizationWorksetItems)
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		projectDir:   workspace,
+		sessionTime:  time.Now().Add(-2 * time.Second),
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+	}
+	var calls int
+	c.workerAgentOverride = &submittingWorkerAgent{calls: &calls}
+	c.SetBudget(1, 0)
+
+	_, err := c.ExecuteTasks(context.Background(), []TaskDef{{
+		Agent:  "worker",
+		FanOut: &FanOutSpec{Source: "inputs/items.tsv", GoalTemplate: "process {item}"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "budget exceeded") {
+		t.Fatalf("budget cancellation error = %v", err)
+	}
+	if got := len(c.taskTracker.TodoList().Items()); got != 0 {
+		t.Fatalf("budget-cancelled dispatch created %d children, want none", got)
+	}
+	if calls != 0 {
+		t.Fatalf("budget-cancelled dispatch invoked the worker %d times, want zero", calls)
+	}
+}
+
+// Crash-resume keeps the original Todo identity and re-drives the unfinished
+// generic item. WP-0 records this baseline before workset bindings introduce
+// an additional parent/item identity to preserve.
+func TestCharacterizationResumeReusesGenericChildIdentity(t *testing.T) {
+	workspace := t.TempDir()
+	first := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Timeout: 30, MaxRetries: 1},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", MaxRetries: 1, Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		projectDir:      workspace,
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-resume-before-checkpoint",
+	}
+	items := first.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "worker", Desc: "process alpha", Recovery: RecoveryRetry},
+		{Agent: "worker", Desc: "process beta", Recovery: RecoveryRetry},
+	})
+	first.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskDone, "completed before interruption")
+	first.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskInProgress, "interrupted")
+	if err := SaveSession(workspace, &SessionData{Tasks: first.taskTracker.TodoList().Items()}); err != nil {
+		t.Fatalf("save checkpoint: %v", err)
+	}
+
+	second := &Coordinator{
+		session:         first.session,
+		projectDir:      workspace,
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-resume-after-checkpoint",
+	}
+	second.SetSessionData(LoadSession(workspace))
+	var calls int
+	second.workerAgentOverride = &submittingWorkerAgent{calls: &calls, onSubmit: func() {
+		second.storeSubmittedTaskResult(items[1].ID, &TaskResult{
+			TaskID: items[1].ID, Agent: "worker", Status: TaskResultStatusSuccess,
+			Summary: "processed beta", Source: "submitted",
+		})
+	}}
+
+	resumed, err := second.ResumeInterruptedTasks(context.Background())
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if resumed != 1 {
+		t.Fatalf("resumed = %d, want 1", resumed)
+	}
+	if calls != 1 {
+		t.Fatalf("durable resume replayed %d workers, want only the interrupted child", calls)
+	}
+	updated := second.taskTracker.TodoList().Items()
+	if len(updated) != 2 || updated[0].ID != items[0].ID || updated[0].Status != TaskDone || updated[1].ID != items[1].ID || updated[1].Status != TaskDone {
+		t.Fatalf("resume did not preserve sibling state and original child identity: %#v", updated)
 	}
 }

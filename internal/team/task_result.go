@@ -336,6 +336,22 @@ func validateSubmittedTaskResult(result *TaskResult) error {
 }
 
 
+// validateCompletedTaskResult validates a structured result for terminal Todo
+// completion. It deliberately keeps schema validity separate from semantics:
+// an honest partial/failed/blocked result is retained as evidence and routed
+// through the task's recovery policy rather than treated as a protocol error.
+func validateCompletedTaskResult(result *TaskResult) error {
+	if err := validateSubmittedTaskResult(result); err != nil {
+		return err
+	}
+	switch result.Status {
+	case TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps:
+		return nil
+	default:
+		return fmt.Errorf("worker reported incomplete task status %q: %s", result.Status, strings.TrimSpace(result.Summary))
+	}
+}
+
 // FormatForContext formats the typed result into a human-readable string suitable
 // for passing as context to downstream agents or dependencies.
 func (tr *TaskResult) FormatForContext() string {

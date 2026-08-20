@@ -128,6 +128,22 @@ func protocolAttemptWasReadOnly(steps []fantasy.StepResult) bool {
 	return sawCall
 }
 
+// stalledWithoutToolCall reports whether a turn's last step made no tool
+// call. Fantasy's own continuation loop correctly stops as soon as a step
+// requests no tools -- it has no way to know a caller's task still requires
+// either more tool calls or a submit_result; that is Hufu's protocol, not
+// Fantasy's. Callers must gate this on the task actually requiring a result
+// (task.Execution.RequiresResult): for any other caller, ending a turn on
+// plain text with no further tool call is a normal, complete response, not a
+// stall, and must never be nudged.
+func stalledWithoutToolCall(steps []fantasy.StepResult) bool {
+	if len(steps) == 0 {
+		return false
+	}
+	last := steps[len(steps)-1]
+	return len(last.Content.ToolCalls()) == 0
+}
+
 // isReadOnlyToolCall is the narrow capability classification shared by retry
 // and coordinator recovery. Unknown tools and malformed bash calls are never
 // treated as safe: callers must preserve their existing fail-closed behavior.

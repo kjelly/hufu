@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -120,6 +121,46 @@ func TestExecuteTasks_AcceptanceRecoveryCanDelegateDuringWrapUp(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "wrap-up in progress") {
 		t.Fatalf("acceptance recovery was still blocked by wrap-up: %v", err)
+	}
+}
+
+// TestExecuteTasks_WrapUpRejectionIsRecoverableNotTerminal guards against a
+// real production failure: a bare error from the wrap-up delegation rejection
+// becomes errCoordinatorToolFailure in the OnToolResult callback (no
+// isReadOnlyToolCall/policy-repair exemption applies to the "agent" tool), so
+// the model never sees "call finish immediately" and the whole run hard-fails
+// as coordinator failed -- even when every dispatched task already succeeded.
+// The rejection must instead be a *delegationPolicyViolation so it flows
+// through the same bounded, model-facing repair path as any other rejected
+// delegation.
+func TestExecuteTasks_WrapUpRejectionIsRecoverableNotTerminal(t *testing.T) {
+	c := &Coordinator{
+		session: &TeamSession{Agents: map[string]*agent.AgentDef{}, Config: agent.TeamConfig{}},
+	}
+	c.SetWrapUp()
+
+	_, err := c.ExecuteTasks(context.Background(), []TaskDef{{Agent: "missing", Goal: "keep working"}})
+	if err == nil {
+		t.Fatal("expected a wrap-up rejection error")
+	}
+	var violation *delegationPolicyViolation
+	if !errors.As(err, &violation) {
+		t.Fatalf("wrap-up rejection = %v (%T), want a *delegationPolicyViolation so the model gets a bounded chance to call finish instead of a hard coordinator failure", err, err)
+	}
+	if !strings.Contains(err.Error(), "wrap-up in progress") || !strings.Contains(err.Error(), "Call finish immediately") {
+		t.Fatalf("wrap-up rejection lost its instruction to the model: %v", err)
+	}
+
+	// The real "agent" tool wrapper (runAgentsTool.Run) applies this exact
+	// conversion on errors.As success; reproduce it here to confirm the
+	// rejection actually reaches the model as a recoverable, bounded prompt
+	// instead of the hard errCoordinatorToolFailure boundary.
+	response := c.coordinatorPolicyRepairResponse(violation)
+	if !isCoordinatorPolicyRepairResult(response.Content) {
+		t.Fatalf("wrap-up rejection response = %q, want a recognizable repair marker", response.Content)
+	}
+	if !c.coordinatorPolicyRepairPending.Load() {
+		t.Fatal("wrap-up rejection did not set policy-repair-pending state")
 	}
 }
 

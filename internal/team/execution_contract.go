@@ -102,8 +102,15 @@ type ExecutionContract struct {
 	Kind                 ExecutionKind `json:"kind,omitempty" yaml:"kind,omitempty"`
 	RequiresResult       bool          `json:"requires_result,omitempty" yaml:"requires-result,omitempty"`
 	RequiresVerification bool          `json:"requires_verification,omitempty" yaml:"requires-verification,omitempty"`
-	AllowsReplay         *bool         `json:"allows_replay,omitempty" yaml:"allows-replay,omitempty"`
-	ForbidArtifacts      bool          `json:"forbid_artifacts,omitempty" yaml:"forbid-artifacts,omitempty"`
+	// RequiresGroundedResult tightens RequiresResult: a submit_result obtained
+	// through tool-free protocol repair, or promoted from free text, is never
+	// accepted as this task's completion, because neither path re-reads the
+	// evidence the worker was assigned. When the worker itself omits
+	// submit_result, the task is instead retried fresh (subject to the
+	// team's normal retry policy) rather than finished from a guess.
+	RequiresGroundedResult bool  `json:"requires_grounded_result,omitempty" yaml:"requires-grounded-result,omitempty"`
+	AllowsReplay           *bool `json:"allows_replay,omitempty" yaml:"allows-replay,omitempty"`
+	ForbidArtifacts        bool  `json:"forbid_artifacts,omitempty" yaml:"forbid-artifacts,omitempty"`
 	// Steps is the structured execution contract for workflows that need
 	// artifact/validator dataflow and bounded repair. It is mutually exclusive
 	// with the legacy ToolSequence, which remains supported for existing

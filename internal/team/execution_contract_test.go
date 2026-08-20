@@ -632,6 +632,7 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 	expectedFields := map[string]bool{
 		"Kind":                       true,
 		"RequiresResult":             true,
+		"RequiresGroundedResult":     true,
 		"RequiresVerification":       true,
 		"AllowsReplay":               true,
 		"ToolSequence":               true,
