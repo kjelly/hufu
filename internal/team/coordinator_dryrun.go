@@ -33,6 +33,7 @@ type DryRunResult struct {
 	MatchedSkillNames  []string
 	OrchestratorPrompt string
 	FirstRoundTasks    []TaskDef
+	ContractFindings   []ContractFinding
 	Error              string
 }
 
@@ -53,6 +54,7 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 	}
 
 	if c.session != nil {
+		result.ContractFindings = LintTeamContracts(c.session)
 		if c.session.Config.SidecarModel != "" {
 			result.SidecarModel = c.session.Config.SidecarModel
 		}

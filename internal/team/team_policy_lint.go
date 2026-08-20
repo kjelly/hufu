@@ -49,6 +49,7 @@ func ValidateTeamPolicyContracts(session *TeamSession) []ContractFinding {
 		}
 	}
 	findings = append(findings, validateRequirements("requires", session.Config.Requirements)...)
+	findings = append(findings, validateWorksetAndActionContracts(session)...)
 
 	workers := reachableWorkers(session)
 	for _, def := range workers {
@@ -57,6 +58,129 @@ func ValidateTeamPolicyContracts(session *TeamSession) []ContractFinding {
 		findings = append(findings, validateRequiredTools(field, def.Requirements.Tools, def, session.Config)...)
 	}
 	findings = append(findings, validateTeamRequiredTools(session.Config.Requirements.Tools, workers, session.Config)...)
+	return findings
+}
+
+func validateWorksetAndActionContracts(session *TeamSession) []ContractFinding {
+	if session == nil {
+		return nil
+	}
+	var findings []ContractFinding
+	fanOutTasks := make(map[string]TaskDef)
+	hasWorkset := false
+	for index, task := range session.ContractTasks {
+		field := fmt.Sprintf("tasks[%d]", index)
+		if task.FanOut != nil {
+			hasWorkset = true
+			findings = append(findings, validateFanOutTaskContract(field, task)...)
+			id := strings.TrimSpace(task.ID)
+			if id != "" {
+				fanOutTasks[id] = task
+			}
+		}
+		if task.Action != nil {
+			findings = append(findings, validateActionTaskContract(field, task, session)...)
+		}
+	}
+	findings = append(findings, validateWorksetVerificationContracts(session, fanOutTasks)...)
+	if session.Config.Unattended && hasWorkset {
+		findings = append(findings, validateUnattendedWorksetContract(session)...)
+	}
+	return findings
+}
+
+func validateFanOutTaskContract(field string, task TaskDef) []ContractFinding {
+	fanOut := task.FanOut
+	if fanOut == nil {
+		return nil
+	}
+	var findings []ContractFinding
+	hasSource := strings.TrimSpace(fanOut.Source) != ""
+	hasArtifact := strings.TrimSpace(fanOut.SourceArtifact.TaskID) != "" || strings.TrimSpace(fanOut.SourceArtifact.Artifact) != ""
+	if hasSource && hasArtifact {
+		findings = append(findings, errorFinding(field+".fan-out", FindingWorksetSourceConflict, "fan-out source and source-artifact are mutually exclusive"))
+	}
+	if !hasSource && !hasArtifact {
+		findings = append(findings, errorFinding(field+".fan-out", FindingWorksetReceiptSource, "fan-out requires source or source-artifact"))
+	}
+	if strings.TrimSpace(fanOut.GoalTemplate) == "" {
+		findings = append(findings, errorFinding(field+".fan-out.goal-template", FindingWorksetReceiptSource, "fan-out requires goal-template"))
+	}
+	if strings.Contains(task.Verify, "{") || task.VerifySpec != nil && strings.Contains(task.VerifySpec.Command, "{") {
+		findings = append(findings, errorFinding(field+".verify", FindingWorksetCommandBinding, "workset bindings must not be interpolated into verifier command strings"))
+	}
+	return findings
+}
+
+func validateActionTaskContract(field string, task TaskDef, session *TeamSession) []ContractFinding {
+	if task.Action == nil {
+		return nil
+	}
+	capability := normalizedName(task.Action.Capability)
+	registered := session.ProviderRegistry != nil && session.ProviderRegistry.Has(capability)
+	if !registered {
+		for configured := range session.Config.ActionProviders {
+			if normalizedName(configured) == capability {
+				registered = true
+				break
+			}
+		}
+	}
+	var findings []ContractFinding
+	if !registered {
+		findings = append(findings, errorFinding(field+".action.capability", FindingActionProviderMissing, fmt.Sprintf("action provider capability %q is not registered", task.Action.Capability)))
+	}
+	if nonReplayableSideEffect(task.SideEffect) && task.Recovery == RecoveryRetry {
+		findings = append(findings, errorFinding(field+".action.recovery", FindingActionRecoveryConflict, "non-replayable action provider task cannot use retry recovery without reconciliation"))
+	}
+	return findings
+}
+
+func validateWorksetVerificationContracts(session *TeamSession, fanOutTasks map[string]TaskDef) []ContractFinding {
+	check := func(field string, spec VerificationSpec) []ContractFinding {
+		normalized := NormalizeVerificationSpec(spec, "", "")
+		if normalized.Type != VerifyWorksetComplete {
+			return nil
+		}
+		source := strings.TrimSpace(normalized.WorksetSourceTask)
+		producer, ok := fanOutTasks[source]
+		if !ok {
+			return []ContractFinding{errorFinding(field+".source-task", FindingWorksetReceiptSource, fmt.Sprintf("workset_complete source-task %q does not identify a fan-out task", source))}
+		}
+		if normalized.WorksetRequireVerified && producer.VerifySpec == nil && strings.TrimSpace(producer.Verify) == "" {
+			return []ContractFinding{errorFinding(field, FindingWorksetChildVerify, fmt.Sprintf("fan-out task %q must declare child verification when require-all-verified is enabled", source))}
+		}
+		return nil
+	}
+	var findings []ContractFinding
+	for index, task := range session.ContractTasks {
+		if task.VerifySpec != nil {
+			findings = append(findings, check(fmt.Sprintf("tasks[%d].verify-spec", index), *task.VerifySpec)...)
+		}
+	}
+	if spec := session.Config.AcceptanceSpec; spec != nil {
+		for index, verification := range spec.Verifications {
+			findings = append(findings, check(fmt.Sprintf("acceptance.verifications[%d]", index), verification)...)
+		}
+		for index, criterion := range spec.Criteria {
+			findings = append(findings, check(fmt.Sprintf("acceptance.criteria[%d]", index), criterion.Verify)...)
+		}
+	}
+	return findings
+}
+
+func validateUnattendedWorksetContract(session *TeamSession) []ContractFinding {
+	var findings []ContractFinding
+	if session.Config.MaxWallClock <= 0 && session.Config.MaxTotalTokens <= 0 {
+		findings = append(findings, errorFinding("unattended", FindingUnattendedWorksetBudget, "unattended workset execution requires max-duration or max-total-tokens"))
+	}
+	blockingAcceptance := session.Config.AcceptanceMode != string(AcceptanceAdvisory) && strings.TrimSpace(session.Config.Acceptance) != ""
+	if session.Config.AcceptanceSpec != nil && AcceptanceSpecHasChecks(*session.Config.AcceptanceSpec) && session.Config.AcceptanceSpec.Mode != string(AcceptanceAdvisory) {
+		blockingAcceptance = true
+	}
+	if !blockingAcceptance {
+		findings = append(findings, errorFinding("unattended.acceptance", FindingUnattendedAcceptance, "unattended workset execution requires a non-empty blocking acceptance contract"))
+	}
 	return findings
 }
 

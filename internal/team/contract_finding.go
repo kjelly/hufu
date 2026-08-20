@@ -72,6 +72,14 @@ const (
 	FindingNetworkDisabled         = "network_requirement_disabled"
 	FindingPlanFirstRequired       = "plan_first_required"
 	FindingRequirementInvalid      = "requirement_invalid"
+	FindingWorksetSourceConflict   = "workset_source_conflict"
+	FindingWorksetReceiptSource    = "workset_receipt_source_invalid"
+	FindingWorksetChildVerify      = "workset_child_verification_missing"
+	FindingActionProviderMissing   = "action_provider_missing"
+	FindingActionRecoveryConflict  = "action_recovery_incompatible"
+	FindingUnattendedWorksetBudget = "unattended_workset_budget_missing"
+	FindingUnattendedAcceptance    = "unattended_workset_acceptance_missing"
+	FindingWorksetCommandBinding   = "workset_binding_command_injection"
 
 	// FindingDeadlineConflict indicates that a child deadline equals or exceeds
 	// its parent deadline, leaving no room for result finalisation.

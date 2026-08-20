@@ -1784,6 +1784,19 @@ func renderDryRun(result *team.DryRunResult) {
 		fmt.Fprintf(&b, "  Matched: %s\n", strings.Join(matchedDisplay, ", "))
 	}
 
+	if len(result.ContractFindings) > 0 {
+		b.WriteString("\n")
+		b.WriteString(headerStyle.Render("─── Contract Findings ───"))
+		b.WriteString("\n")
+		for _, finding := range result.ContractFindings {
+			severity := finding.Severity
+			if severity == "" {
+				severity = "info"
+			}
+			fmt.Fprintf(&b, "  [%s] %s: %s (%s)\n", severity, finding.Field, finding.Message, finding.Code)
+		}
+	}
+
 	if len(result.FirstRoundTasks) > 0 {
 		b.WriteString("\n")
 		b.WriteString(headerStyle.Render("─── Coordinator Plan ───"))
