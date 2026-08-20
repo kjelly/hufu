@@ -57,6 +57,8 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 			delete(taskProperties, "execution")
 			delete(taskProperties, "output_mode")
 			delete(taskProperties, "context_files")
+			delete(taskProperties, "fan_out")
+			delete(taskProperties, "fact_refs")
 		}
 		taskSchema["required"] = []string{"agent", "goal"}
 		tasksSchema["minItems"] = len(initial)

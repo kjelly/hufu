@@ -164,6 +164,10 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 					"additionalProperties": false,
 				},
 			},
+			"facts": map[string]any{
+				"type":        "object",
+				"description": "Named JSON values a later task can reference by name via its own fact_refs, instead of a coordinator retyping a value this task already discovered (a list, a computed count, a resolved path) into a later dispatch's goal or constraints. Keys are fact names; values may be any JSON type.",
+			},
 		},
 		Required: []string{"status", "summary"},
 	}
