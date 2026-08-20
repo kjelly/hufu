@@ -538,7 +538,13 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 		// make an otherwise passing acceptance contract appear satisfied.
 		validationErr := validateVerificationSpec(normalizedSpec)
 		verifyCtx, verifyCancel := context.WithTimeout(parentCtx, acceptanceTimeout)
-		vRes, vErr := ExecuteVerificationSpec(verifyCtx, shell, workDir, vSpec)
+		var vRes *VerificationResult
+		var vErr error
+		if normalizedSpec.Type == VerifyWorksetComplete {
+			vRes, vErr = c.executeWorksetCompleteVerification(verifyCtx, normalizedSpec)
+		} else {
+			vRes, vErr = ExecuteVerificationSpec(verifyCtx, shell, workDir, vSpec)
+		}
 		verifyCancel()
 		// Always collect evidence for durable inspection
 		if vRes != nil {

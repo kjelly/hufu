@@ -102,9 +102,9 @@ func verificationSpecCacheKey(vs *VerificationSpec) string {
 	for _, a := range taskResultAssertions {
 		taskResultAssertionKey += fmt.Sprintf("%s:%s=%s;", a.Pointer, a.Op, canonicalJSONAssertionValue(a.Value))
 	}
-	return fmt.Sprintf("type:%s|mode:%s|cmd:%s|path:%s|assertions:%s|task_result_assertions:%s",
+	return fmt.Sprintf("type:%s|mode:%s|cmd:%s|path:%s|assertions:%s|task_result_assertions:%s|workset:%s|terminal:%t|verified:%t|statuses:%s",
 		string(vs.Type), normalizeVerifyMode(vs.Mode), normalizeTaskCacheKey(vs.Command),
-		normalizeTaskCacheKey(vs.Path), assertionKey, taskResultAssertionKey)
+		normalizeTaskCacheKey(vs.Path), assertionKey, taskResultAssertionKey, normalizeTaskCacheKey(vs.WorksetSourceTask), vs.WorksetRequireTerminal, vs.WorksetRequireVerified, strings.Join(vs.WorksetAcceptedStatuses, ","))
 }
 
 func isTaskResultVerificationSpec(spec *VerificationSpec) bool {
@@ -181,12 +181,17 @@ func (e cachedTaskEntry) matchesWithSpec(taskDesc string, verifySpec *Verificati
 }
 
 func requiresFreshVerificationEvidence(spec *VerificationSpec) bool {
-	return spec != nil && (spec.Type == VerifyFileExists || spec.Type == VerifyFileAbsent || spec.Type == VerifyJSONAssert)
+	return spec != nil && (spec.Type == VerifyFileExists || spec.Type == VerifyFileAbsent || spec.Type == VerifyJSONAssert || spec.Type == VerifyWorksetComplete)
 }
 
 func (e cachedTaskEntry) verificationEvidenceFresh(spec *VerificationSpec) bool {
 	if !requiresFreshVerificationEvidence(spec) {
 		return true
+	}
+	if spec.Type == VerifyWorksetComplete {
+		// Group completeness depends on live child states and the registered
+		// source artifact, so a prior verifier result is never reusable.
+		return false
 	}
 	// JSON produced by a command has no stable local artifact to fingerprint;
 	// fail closed rather than treating old command output as current evidence.

@@ -3102,6 +3102,13 @@ func (c *Coordinator) verifyTaskDeliverableWithSpecAndResult(parentCtx context.C
 	timeout := c.verifyTaskTimeout()
 	verifyCtx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
+	if normalizedSpec.Type == VerifyWorksetComplete {
+		verification, verifyErr := c.executeWorksetCompleteVerification(verifyCtx, normalizedSpec)
+		if verification != nil {
+			verification.Fingerprint = ComputeVerificationFingerprintFull(normalizedSpec, verification, workDir, "", c.verificationSecurityMode(shell))
+		}
+		return verification, verifyErr
+	}
 	return ExecuteVerificationSpecWithStepsAndTaskResult(verifyCtx, shell, workDir, normalizedSpec, steps, taskResult)
 }
 

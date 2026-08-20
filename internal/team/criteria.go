@@ -151,7 +151,13 @@ func (c *Coordinator) evaluateCriteria(ctx context.Context, criteria []Acceptanc
 				spec := NormalizeVerificationSpec(criterion.Verify, "", "")
 				shell := c.verificationShell()
 				workDir := c.verificationWorkDir()
-				vr, err := ExecuteVerificationSpec(ctx, shell, workDir, spec)
+				var vr *VerificationResult
+				var err error
+				if spec.Type == VerifyWorksetComplete {
+					vr, err = c.executeWorksetCompleteVerification(ctx, spec)
+				} else {
+					vr, err = ExecuteVerificationSpec(ctx, shell, workDir, spec)
+				}
 				if vr != nil {
 					result.Evidence = []*VerificationResult{vr}
 					vr.Fingerprint = ComputeVerificationFingerprintFull(spec, vr, workDir,

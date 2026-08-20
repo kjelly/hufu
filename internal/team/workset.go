@@ -59,6 +59,21 @@ type WorksetBinding struct {
 	SourceSHA256     string            `json:"source_sha256"`
 }
 
+// WorksetGroupState is the bounded, content-free projection used by
+// verification, resume, reports, and machine-readable output. It never
+// embeds the manifest or worker output.
+type WorksetGroupState struct {
+	WorksetID        string `json:"workset_id"`
+	ParentTaskID     string `json:"parent_task_id"`
+	SourceArtifactID string `json:"source_artifact_id"`
+	SourceSHA256     string `json:"source_sha256"`
+	Expected         int    `json:"expected"`
+	Completed        int    `json:"completed"`
+	Verified         int    `json:"verified"`
+	Failed           int    `json:"failed"`
+	State            string `json:"state"`
+}
+
 func cloneWorksetBinding(src *WorksetBinding) *WorksetBinding {
 	if src == nil {
 		return nil

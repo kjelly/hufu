@@ -106,6 +106,7 @@ type LifecycleEventPayload struct {
 	AcceptanceState       AcceptanceState         `json:"acceptance_state,omitempty"`
 	AcceptancePassed      bool                    `json:"acceptance_passed,omitempty"`
 	Acceptance            *AcceptanceResult       `json:"acceptance,omitempty"`
+	Worksets              []WorksetGroupState     `json:"worksets,omitempty"`
 	Stats                 *RunStats               `json:"stats,omitempty"`
 	Metrics               *RunMetrics             `json:"metrics,omitempty"`
 	Telemetry             *RunTelemetry           `json:"telemetry,omitempty"`
@@ -377,6 +378,7 @@ func (c *Coordinator) beginInvocationExecutionRun(parent context.Context) (conte
 				payload.AcceptancePassed = result.Acceptance.IsPassed()
 				payload.Acceptance = result.Acceptance
 			}
+			payload.Worksets = append([]WorksetGroupState(nil), result.Worksets...)
 			payload.Stats = &result.Stats
 			payload.Metrics = &result.Metrics
 			payload.Telemetry = result.Telemetry

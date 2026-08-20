@@ -19,6 +19,7 @@ type jsonRunOutput struct {
 	StopReason         string                     `json:"stop_reason,omitempty"`
 	ExitCode           int                        `json:"exit_code,omitempty"`
 	Acceptance         *team.AcceptanceResult     `json:"acceptance,omitempty"`
+	Worksets           []team.WorksetGroupState   `json:"worksets,omitempty"`
 	CompletedReview    bool                       `json:"completed_review,omitempty"`
 	FindingsPresent    bool                       `json:"findings_present,omitempty"`
 	FixedAndVerified   bool                       `json:"fixed_and_verified,omitempty"`
@@ -130,6 +131,7 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 		acceptance.State = acceptance.EffectiveState()
 		out.Acceptance = &acceptance
 	}
+	out.Worksets = append([]team.WorksetGroupState(nil), canonical.Worksets...)
 
 	for _, s := range skills {
 		out.Skills = append(out.Skills, jsonRunSkill{Name: s.Name, Count: s.Count, Agents: s.Agents})

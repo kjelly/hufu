@@ -26,7 +26,7 @@ func LintVerifier(spec VerificationSpec, legacyCommand string) []ContractFinding
 // LintVerifierWithMode is like LintVerifier, but accepts an explicit legacyMode.
 func LintVerifierWithMode(spec VerificationSpec, legacyCommand, legacyMode string) []ContractFinding {
 	normalized := NormalizeVerificationSpec(spec, legacyCommand, legacyMode)
-	if normalized.Type == VerifyTaskResultAssert {
+	if normalized.Type == VerifyTaskResultAssert || normalized.Type == VerifyWorksetComplete {
 		if err := validateVerificationSpec(normalized); err != nil {
 			return []ContractFinding{{
 				Severity: FindingSeverityError,
@@ -45,7 +45,7 @@ func LintVerifierWithMode(spec VerificationSpec, legacyCommand, legacyMode strin
 	}
 
 	// Typed non-command verifiers (file_exists, file_absent, json_assert,
-	// task_result_assert) are structurally asserting; they do not need
+	// task_result_assert, workset_complete) are structurally asserting; they do not need
 	// shell-pipeline analysis.
 	if normalized.Type != VerifyCommandExit {
 		return nil

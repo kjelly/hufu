@@ -583,16 +583,21 @@ const (
 	VerifyJSONAssert       VerificationType = "json_assert"
 	VerifyToolCallAssert   VerificationType = "tool_call_assert"
 	VerifyTaskResultAssert VerificationType = "task_result_assert"
+	VerifyWorksetComplete  VerificationType = "workset_complete"
 )
 
 type VerificationSpec struct {
-	Type                 VerificationType      `json:"type,omitempty" yaml:"type,omitempty"`
-	Mode                 string                `json:"mode,omitempty" yaml:"mode,omitempty"`
-	Command              string                `json:"command,omitempty" yaml:"command,omitempty"`
-	Path                 string                `json:"path,omitempty" yaml:"path,omitempty"`
-	Assertions           []JSONAssertion       `json:"assertions,omitempty" yaml:"assertions,omitempty"`
-	ToolCallAssertions   []ToolCallAssertion   `json:"tool_call_assertions,omitempty" yaml:"tool-call-assertions,omitempty"`
-	TaskResultAssertions []TaskResultAssertion `json:"task_result_assertions,omitempty" yaml:"task-result-assertions,omitempty"`
+	Type                    VerificationType      `json:"type,omitempty" yaml:"type,omitempty"`
+	Mode                    string                `json:"mode,omitempty" yaml:"mode,omitempty"`
+	Command                 string                `json:"command,omitempty" yaml:"command,omitempty"`
+	Path                    string                `json:"path,omitempty" yaml:"path,omitempty"`
+	Assertions              []JSONAssertion       `json:"assertions,omitempty" yaml:"assertions,omitempty"`
+	ToolCallAssertions      []ToolCallAssertion   `json:"tool_call_assertions,omitempty" yaml:"tool-call-assertions,omitempty"`
+	TaskResultAssertions    []TaskResultAssertion `json:"task_result_assertions,omitempty" yaml:"task-result-assertions,omitempty"`
+	WorksetSourceTask       string                `json:"source_task,omitempty" yaml:"source-task,omitempty"`
+	WorksetRequireTerminal  bool                  `json:"require_all_terminal,omitempty" yaml:"require-all-terminal,omitempty"`
+	WorksetRequireVerified  bool                  `json:"require_all_verified,omitempty" yaml:"require-all-verified,omitempty"`
+	WorksetAcceptedStatuses []string              `json:"accepted_statuses,omitempty" yaml:"accepted-statuses,omitempty"`
 }
 
 type JSONAssertion struct {

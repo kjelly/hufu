@@ -820,6 +820,7 @@ func (c *Coordinator) LastRunResult() *RunResult {
 // SetLastRunResult sets the computed RunResult for this coordinator.
 func (c *Coordinator) SetLastRunResult(res *RunResult) {
 	if res != nil {
+		res.Worksets = c.WorksetGroupStates()
 		c.annotateRunCompletionSemantics(res)
 	}
 	c.lastRunResultMu.Lock()

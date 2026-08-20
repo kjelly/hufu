@@ -71,6 +71,7 @@ type SessionData struct {
 	Entries                            []SessionEntry            `json:"entries"`
 	Tasks                              []*TodoItem               `json:"tasks,omitempty"`
 	WorksetReceipts                    []WorksetExpansionReceipt `json:"workset_receipts,omitempty"`
+	WorksetStates                      []WorksetGroupState       `json:"workset_states,omitempty"`
 	// DelegationPhase records whether a strict initial delegation remains due.
 	// Older session files omit it; SetSessionData derives their phase from the
 	// restored canonical task list for backward compatibility.

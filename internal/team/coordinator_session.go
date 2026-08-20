@@ -679,6 +679,7 @@ func (c *Coordinator) saveCheckpoint() {
 	c.sessionMu.Lock()
 	c.sessionData.Tasks = tasks
 	c.sessionData.WorksetReceipts = c.worksetReceiptsFromTasks(tasks)
+	c.sessionData.WorksetStates = c.WorksetGroupStates()
 	if c.phaseWorkflow != nil {
 		c.sessionData.WorkflowState, c.sessionData.PhaseResults, c.sessionData.RuntimeWorkspace, c.sessionData.RetryState = c.phaseWorkflow.snapshot()
 	}

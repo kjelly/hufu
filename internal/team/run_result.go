@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -142,6 +143,7 @@ const (
 	VerifyJSONAssert       = agent.VerifyJSONAssert
 	VerifyToolCallAssert   = agent.VerifyToolCallAssert
 	VerifyTaskResultAssert = agent.VerifyTaskResultAssert
+	VerifyWorksetComplete  = agent.VerifyWorksetComplete
 )
 
 // AcceptanceState describes whether an acceptance gate was configured and,
@@ -166,6 +168,10 @@ func cloneVerificationSpec(v VerificationSpec) VerificationSpec {
 	if v.TaskResultAssertions != nil {
 		c.TaskResultAssertions = append([]TaskResultAssertion(nil), v.TaskResultAssertions...)
 	}
+	c.WorksetSourceTask = v.WorksetSourceTask
+	c.WorksetRequireTerminal = v.WorksetRequireTerminal
+	c.WorksetRequireVerified = v.WorksetRequireVerified
+	c.WorksetAcceptedStatuses = append([]string(nil), v.WorksetAcceptedStatuses...)
 	return c
 }
 
@@ -454,6 +460,7 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 	completedReview := false
 	findingsPresent := false
 	acceptanceAdvisory := false
+	worksets := make(map[string]WorksetGroupState)
 	for _, result := range results {
 		if result == nil {
 			continue
@@ -484,6 +491,7 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 		completedReview = completedReview || result.CompletedReview
 		findingsPresent = findingsPresent || result.FindingsPresent
 		acceptanceAdvisory = acceptanceAdvisory || result.AcceptanceAdvisory
+		mergeWorksetStates(worksets, result.Worksets)
 
 		if result.Acceptance != nil {
 			switch result.Acceptance.EffectiveState() {
@@ -548,10 +556,23 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 	aggregated.CompletedReview = completedReview
 	aggregated.FindingsPresent = findingsPresent
 	aggregated.AcceptanceAdvisory = acceptanceAdvisory
+	if len(worksets) > 0 {
+		aggregated.Worksets = make([]WorksetGroupState, 0, len(worksets))
+		for _, workset := range worksets {
+			aggregated.Worksets = append(aggregated.Worksets, workset)
+		}
+		sort.Slice(aggregated.Worksets, func(i, j int) bool { return aggregated.Worksets[i].WorksetID < aggregated.Worksets[j].WorksetID })
+	}
 	// A multi-team aggregate can only claim fixed_and_verified when its
 	// canonical outcome is successful and no participating review left findings.
 	aggregated.FixedAndVerified = aggregated.GoalSatisfied && !findingsPresent
 	return aggregated
+}
+
+func mergeWorksetStates(dst map[string]WorksetGroupState, states []WorksetGroupState) {
+	for _, state := range states {
+		dst[state.WorksetID] = state
+	}
 }
 
 type TaskReference struct {
@@ -740,20 +761,21 @@ func (s RunStats) IsZero() bool {
 }
 
 type RunResult struct {
-	Outcome          RunOutcome        `json:"outcome"`
-	GoalSatisfied    bool              `json:"goal_satisfied"`
-	GoalMode         GoalMode          `json:"goal_mode,omitempty"`
-	Response         string            `json:"response"`
-	Reason           string            `json:"reason,omitempty"`
-	StopReason       StopReason        `json:"stop_reason,omitempty"`
-	ExitCode         int               `json:"exit_code,omitempty"`
-	Acceptance       *AcceptanceResult `json:"acceptance,omitempty"`
-	UnresolvedTasks  []TaskReference   `json:"unresolved_tasks,omitempty"`
-	Continuation     *ContinuationInfo `json:"continuation,omitempty"`
-	Stats            RunStats          `json:"stats"`
-	Metrics          RunMetrics        `json:"metrics,omitempty"`
-	EvidenceManifest *EvidenceManifest `json:"evidence_manifest,omitempty"`
-	Telemetry        *RunTelemetry     `json:"telemetry,omitempty"`
+	Outcome          RunOutcome          `json:"outcome"`
+	GoalSatisfied    bool                `json:"goal_satisfied"`
+	GoalMode         GoalMode            `json:"goal_mode,omitempty"`
+	Response         string              `json:"response"`
+	Reason           string              `json:"reason,omitempty"`
+	StopReason       StopReason          `json:"stop_reason,omitempty"`
+	ExitCode         int                 `json:"exit_code,omitempty"`
+	Acceptance       *AcceptanceResult   `json:"acceptance,omitempty"`
+	Worksets         []WorksetGroupState `json:"worksets,omitempty"`
+	UnresolvedTasks  []TaskReference     `json:"unresolved_tasks,omitempty"`
+	Continuation     *ContinuationInfo   `json:"continuation,omitempty"`
+	Stats            RunStats            `json:"stats"`
+	Metrics          RunMetrics          `json:"metrics,omitempty"`
+	EvidenceManifest *EvidenceManifest   `json:"evidence_manifest,omitempty"`
+	Telemetry        *RunTelemetry       `json:"telemetry,omitempty"`
 	// Review completion is intentionally separate from an implementation
 	// outcome: a completed exploratory review may surface findings but never
 	// proves they were fixed.

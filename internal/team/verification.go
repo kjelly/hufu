@@ -97,6 +97,9 @@ func NormalizeVerificationSpec(spec VerificationSpec, legacyCommand, legacyMode 
 	if normalized.Mode == "" {
 		normalized.Mode = "success"
 	}
+	if normalized.Type == VerifyWorksetComplete && len(normalized.WorksetAcceptedStatuses) == 0 {
+		normalized.WorksetAcceptedStatuses = []string{TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps}
+	}
 	return normalized
 }
 
@@ -171,6 +174,7 @@ func ComputeVerificationFingerprintFull(spec VerificationSpec, result *Verificat
 	for _, a := range canonicalTaskResultAssertions(spec.TaskResultAssertions) {
 		_, _ = fmt.Fprintf(h, "tra:%s:%s=%s|", a.Pointer, a.Op, canonicalJSONAssertionValue(a.Value))
 	}
+	_, _ = fmt.Fprintf(h, "workset:%s|terminal:%t|verified:%t|statuses:%s|", spec.WorksetSourceTask, spec.WorksetRequireTerminal, spec.WorksetRequireVerified, strings.Join(spec.WorksetAcceptedStatuses, ","))
 
 	targetPath := spec.Path
 	if targetPath != "" {
@@ -426,6 +430,12 @@ func ExecuteVerificationSpecWithStepsAndTaskResult(parentCtx context.Context, sh
 		}
 		return res, err
 
+	case VerifyWorksetComplete:
+		res.ExitCode = 1
+		res.Stderr = "workset_complete requires coordinator canonical group state"
+		res.Fingerprint = ComputeVerificationFingerprint(spec, res, workDir)
+		return res, errors.New("workset_complete requires coordinator canonical group state")
+
 	default:
 		res.ExitCode = -1
 		res.Fingerprint = ComputeVerificationFingerprint(spec, res, workDir)
@@ -484,6 +494,24 @@ func validateVerificationSpec(spec VerificationSpec) error {
 			if err := validateTaskResultAssertion(i, assertion); err != nil {
 				return err
 			}
+		}
+	case VerifyWorksetComplete:
+		if strings.TrimSpace(spec.WorksetSourceTask) == "" {
+			return errors.New("workset_complete verification requires source-task")
+		}
+		if strings.TrimSpace(spec.Command) != "" || strings.TrimSpace(spec.Path) != "" || len(spec.Assertions) > 0 || len(spec.ToolCallAssertions) > 0 || len(spec.TaskResultAssertions) > 0 {
+			return errors.New("workset_complete verification cannot combine command, path, or other assertions")
+		}
+		seen := make(map[string]struct{}, len(spec.WorksetAcceptedStatuses))
+		for _, status := range spec.WorksetAcceptedStatuses {
+			status = strings.TrimSpace(status)
+			if status == "" {
+				return errors.New("workset_complete accepted-statuses cannot contain an empty value")
+			}
+			if _, ok := seen[status]; ok {
+				return fmt.Errorf("workset_complete accepted-statuses contains duplicate %q", status)
+			}
+			seen[status] = struct{}{}
 		}
 	default:
 		return fmt.Errorf("unsupported verification type %q", spec.Type)

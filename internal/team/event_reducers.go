@@ -82,22 +82,23 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			}
 		case "run_finished":
 			var payload struct {
-				Outcome            RunOutcome        `json:"outcome"`
-				GoalSatisfied      bool              `json:"goal_satisfied"`
-				GoalMode           GoalMode          `json:"goal_mode"`
-				Response           string            `json:"response"`
-				Reason             string            `json:"reason"`
-				StopReason         StopReason        `json:"stop_reason"`
-				ExitCode           int               `json:"exit_code"`
-				UnresolvedTasks    []TaskReference   `json:"unresolved_tasks"`
-				CompletedReview    bool              `json:"completed_review,omitempty"`
-				FindingsPresent    bool              `json:"findings_present,omitempty"`
-				FixedAndVerified   bool              `json:"fixed_and_verified,omitempty"`
-				AcceptanceAdvisory bool              `json:"acceptance_advisory,omitempty"`
-				Acceptance         *AcceptanceResult `json:"acceptance"`
-				Stats              RunStats          `json:"stats"`
-				Metrics            RunMetrics        `json:"metrics"`
-				EvidenceManifest   *EvidenceManifest `json:"evidence_manifest"`
+				Outcome            RunOutcome          `json:"outcome"`
+				GoalSatisfied      bool                `json:"goal_satisfied"`
+				GoalMode           GoalMode            `json:"goal_mode"`
+				Response           string              `json:"response"`
+				Reason             string              `json:"reason"`
+				StopReason         StopReason          `json:"stop_reason"`
+				ExitCode           int                 `json:"exit_code"`
+				UnresolvedTasks    []TaskReference     `json:"unresolved_tasks"`
+				CompletedReview    bool                `json:"completed_review,omitempty"`
+				FindingsPresent    bool                `json:"findings_present,omitempty"`
+				FixedAndVerified   bool                `json:"fixed_and_verified,omitempty"`
+				AcceptanceAdvisory bool                `json:"acceptance_advisory,omitempty"`
+				Acceptance         *AcceptanceResult   `json:"acceptance"`
+				Worksets           []WorksetGroupState `json:"worksets"`
+				Stats              RunStats            `json:"stats"`
+				Metrics            RunMetrics          `json:"metrics"`
+				EvidenceManifest   *EvidenceManifest   `json:"evidence_manifest"`
 			}
 			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Outcome != "" {
 				session.RunResult = &RunResult{
@@ -107,9 +108,10 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 					UnresolvedTasks: payload.UnresolvedTasks,
 					CompletedReview: payload.CompletedReview, FindingsPresent: payload.FindingsPresent,
 					FixedAndVerified: payload.FixedAndVerified, AcceptanceAdvisory: payload.AcceptanceAdvisory,
-					Acceptance: payload.Acceptance, Stats: payload.Stats,
+					Acceptance: payload.Acceptance, Stats: payload.Stats, Worksets: payload.Worksets,
 					Metrics: payload.Metrics, EvidenceManifest: payload.EvidenceManifest,
 				}
+				session.WorksetStates = append([]WorksetGroupState(nil), payload.Worksets...)
 			}
 		case "diagnostic_packet":
 			var payload struct {

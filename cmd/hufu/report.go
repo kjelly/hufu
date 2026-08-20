@@ -401,6 +401,14 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		if data.RunResult.Acceptance != nil {
 			fmt.Fprintf(&b, "- **Acceptance:** `%s`\n", data.RunResult.Acceptance.EffectiveState())
 		}
+		if len(data.RunResult.Worksets) > 0 {
+			b.WriteString("\n### Workset Groups\n\n")
+			b.WriteString("| Workset | Source artifact | Expected | Completed | Verified | Failed | State |\n")
+			b.WriteString("|---|---|---:|---:|---:|---:|---|\n")
+			for _, workset := range data.RunResult.Worksets {
+				fmt.Fprintf(&b, "| `%s` | `%s` | %d | %d | %d | %d | `%s` |\n", reportSafeMetadata(workset.WorksetID, 120), reportSafeMetadata(workset.SourceArtifactID, 120), workset.Expected, workset.Completed, workset.Verified, workset.Failed, reportSafeMetadata(workset.State, 40))
+			}
+		}
 		metrics := data.RunResult.Metrics
 		b.WriteString("\n### Reliability Metrics\n\n")
 		fmt.Fprintf(&b, "- **Acceptance criteria passed:** %d\n", metrics.AcceptanceCriteriaPassed)
