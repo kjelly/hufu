@@ -261,6 +261,52 @@ func TestPolicyGateCoordinatorPolicyRepairResponseIsRecoverable(t *testing.T) {
 	}
 }
 
+func TestPolicyGateCoordinatorPolicyRepairDisallowedToolUsesBoundedPrompt(t *testing.T) {
+	c := gateTestCoordinator()
+	c.taskTracker = NewTaskTracker()
+	c.coordinatorPolicyRepairPending.Store(true)
+	inner := &recordingTool{name: "view", resp: fantasy.NewTextResponse("file content")}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
+	ctx := tools.SetToolsAllowed(context.Background(), []string{"view"})
+	ctx = context.WithValue(ctx, todoIDKey{}, CoordTodoID)
+
+	// First disallowed tool call should issue Attempt 1/2 without immediately setting wrapUp
+	response, err := gated.Run(ctx, fantasy.ToolCall{ID: "disallowed-call-1", Name: "view"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !response.IsError || !strings.Contains(response.Content, coordinatorPolicyRepairPrefix) || !strings.Contains(response.Content, "Attempt 1/2") {
+		t.Fatalf("response = %#v, want Attempt 1/2 repair prompt", response)
+	}
+	if c.IsWrapUp() {
+		t.Fatal("first disallowed tool call must not enter wrap-up immediately")
+	}
+
+	// Second disallowed tool call should issue Attempt 2/2
+	response, err = gated.Run(ctx, fantasy.ToolCall{ID: "disallowed-call-2", Name: "view"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !response.IsError || !strings.Contains(response.Content, "Attempt 2/2") {
+		t.Fatalf("response = %#v, want Attempt 2/2 repair prompt", response)
+	}
+	if c.IsWrapUp() {
+		t.Fatal("second disallowed tool call must not enter wrap-up before attempt budget exhaustion")
+	}
+
+	// Third disallowed tool call should exhaust and enter wrap-up
+	response, err = gated.Run(ctx, fantasy.ToolCall{ID: "disallowed-call-3", Name: "view"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !response.IsError || !strings.Contains(response.Content, coordinatorPolicyRepairExhaustedPrefix) {
+		t.Fatalf("response = %#v, want exhausted repair prompt", response)
+	}
+	if !c.IsWrapUp() {
+		t.Fatal("third disallowed tool call must enter wrap-up after attempt budget exhaustion")
+	}
+}
+
 func TestPolicyGateCoordinatorReadOnlyToolErrorIsRecoverable(t *testing.T) {
 	c := gateTestCoordinator()
 	c.taskTracker = NewTaskTracker()

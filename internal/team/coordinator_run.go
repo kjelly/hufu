@@ -1202,17 +1202,16 @@ func (c *Coordinator) attemptWrapUpRecovery(ctx context.Context, orchDef *agent.
 	if errors.Is(runErr, errCoordinatorPolicyRepairExhausted) {
 		return c.finalizeCoordinatorPolicyRepairRun(), nil, true
 	}
-	// Direct coordinator tool failures are a terminal boundary. In particular,
-	// do not convert one into another model turn merely because the error
-	// occurred during wrap-up; that would let the coordinator act after an
-	// unavailable or failed tool call.
-	if errors.Is(runErr, errCoordinatorToolFailure) {
-		return "", nil, false
-	}
 	if c.noProgressStopPending() {
-		// ExecuteTasks can surface a no-progress hard stop as an error while
-		// the coordinator is already in wrap-up. Return the existing partial
-		// evidence without invoking another model turn.
+		// ExecuteTasks surfaces a no-progress hard stop as an error while the
+		// coordinator is already in wrap-up, and tool_policy_gate wraps that
+		// error as errCoordinatorToolFailure just like any other coordinator
+		// tool error. This check must come before the generic
+		// errCoordinatorToolFailure short-circuit below: stopForNoProgress
+		// already computed and saved the correct partial/budget-exceeded
+		// outcome, and if the generic check ran first it would discard that
+		// outcome and reclassify the run as a hard failure instead. Return
+		// the existing partial evidence without invoking another model turn.
 		if summary := c.summaryFromTodos(runErr); summary != "" {
 			return summary, nil, true
 		}
@@ -1220,6 +1219,13 @@ func (c *Coordinator) attemptWrapUpRecovery(ctx context.Context, orchDef *agent.
 			return last.Response, nil, true
 		}
 		return "no-progress budget exhausted; no further LLM turn is permitted", nil, true
+	}
+	// Direct coordinator tool failures are a terminal boundary. In particular,
+	// do not convert one into another model turn merely because the error
+	// occurred during wrap-up; that would let the coordinator act after an
+	// unavailable or failed tool call.
+	if errors.Is(runErr, errCoordinatorToolFailure) {
+		return "", nil, false
 	}
 	c.report(c.newEvent("wrap_up_phase").withMessage(fmt.Sprintf("coordinator stopped before finishing (%v); forcing a final summary turn", runErr)).withTodoID(CoordTodoID))
 	result, steps, err := c.runOrchestrator(ctx, orchDef, wrapUpPromptTemplate)
@@ -1365,10 +1371,7 @@ func (c *Coordinator) recordRunAborted(runErr error) {
 		entry += "\n\n" + summary
 	}
 	c.addSessionAssistantMessage(entry)
-	if c.sessionData != nil && c.session != nil && c.session.Workspace != "" {
-		c.sessionData.Rounds = c.totalRounds()
-		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
-	}
+	c.persistSessionRounds()
 }
 
 func (c *Coordinator) finalizeRemainingTasks() {
@@ -1777,10 +1780,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	finalResult := c.canonicalFinishedResponse(result)
 
 	c.addSessionAssistantMessage(finalResult)
-	if c.sessionData != nil && c.session != nil && c.session.Workspace != "" {
-		c.sessionData.Rounds = c.totalRounds()
-		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
-	}
+	c.persistSessionRounds()
 
 	c.finalizeNormalCompletion()
 	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator finished").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
@@ -1867,10 +1867,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	finalResult := c.canonicalFinishedResponse(result)
 
 	c.addSessionAssistantMessage(finalResult)
-	if c.sessionData != nil && c.session != nil && c.session.Workspace != "" {
-		c.sessionData.Rounds = c.totalRounds()
-		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
-	}
+	c.persistSessionRounds()
 
 	c.finalizeNormalCompletion()
 	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("continuation finished").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
@@ -1886,10 +1883,7 @@ func (c *Coordinator) returnResumableContinuation(ctx context.Context, result st
 	c.saveHistoryAndSession(ctx, steps)
 	finalResult := c.canonicalFinishedResponse(result)
 	c.addSessionAssistantMessage(finalResult)
-	if c.sessionData != nil && c.session != nil && c.session.Workspace != "" {
-		c.sessionData.Rounds = c.totalRounds()
-		_ = c.SessionStore().SaveSession(c.session.Workspace, c.sessionData)
-	}
+	c.persistSessionRounds()
 	c.report(c.newEvent("done").withAgent(c.GetOrchestratorDef().Name).withMessage(message).withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
 	if lastRes := c.LastRunResult(); lastRes != nil {
 		return finalResult, fmt.Errorf("%w: %s", ErrTasksUnresolved, lastRes.Response)

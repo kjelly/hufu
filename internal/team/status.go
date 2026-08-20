@@ -1122,6 +1122,10 @@ func cloneExecutionReceipt(receipt *ExecutionReceipt) ExecutionReceipt {
 	copyR := *receipt
 	copyR.MemoryManifest = cloneMemoryInjectionManifest(receipt.MemoryManifest)
 	copyR.ContextManifest = cloneContextInjectionManifest(receipt.ContextManifest)
+	if receipt.SubmittedResult != nil {
+		copyResult := *receipt.SubmittedResult
+		copyR.SubmittedResult = &copyResult
+	}
 	if receipt.RepairProvenance != nil {
 		copyRP := *receipt.RepairProvenance
 		if receipt.RepairProvenance.SubmittedResult != nil {

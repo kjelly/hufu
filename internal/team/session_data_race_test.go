@@ -29,11 +29,11 @@ func newSessionRaceCoordinator(t *testing.T) *Coordinator {
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:    time.Now(),
-		taskTracker:    NewTaskTracker(),
-		reportStatus:   func(StatusEvent) {},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
 		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID: "run-race",
+		executionRunID:  "run-race",
 	}
 	return c
 }
@@ -153,4 +153,43 @@ func TestSessionDataConcurrentReadWhileWrite(t *testing.T) {
 	}()
 	wg.Wait()
 	_ = context.Background()
+}
+
+func TestPersistSessionRoundsUsesSynchronizedPersistence(t *testing.T) {
+	c := newSessionRaceCoordinator(t)
+	c.baseRounds = 2
+	c.round = 3
+
+	c.persistSessionRounds()
+
+	saved := LoadSession(c.session.Workspace)
+	if saved == nil || saved.Rounds != 5 {
+		t.Fatalf("persisted rounds = %#v, want 5", saved)
+	}
+}
+
+func TestPersistSessionRoundsConcurrentWithCheckpointNoRace(t *testing.T) {
+	c := newSessionRaceCoordinator(t)
+	c.round = 1
+	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "checkpoint"}})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range 20 {
+			c.persistSessionRounds()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 20 {
+			c.saveCheckpoint()
+		}
+	}()
+	wg.Wait()
+
+	if saved := LoadSession(c.session.Workspace); saved == nil || saved.Rounds != 1 {
+		t.Fatalf("persisted rounds = %#v, want 1", saved)
+	}
 }

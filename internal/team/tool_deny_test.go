@@ -60,6 +60,28 @@ func TestStaticPhaseContractCanGrantDeclaredPrepareTool(t *testing.T) {
 	}
 }
 
+func TestBoundedWorkflowBashCommandRequiresVerifiedCanonicalStaticContract(t *testing.T) {
+	contract := TaskDef{ID: "inventory", Agent: "inventory", OutputMode: TaskOutputModeSummary, Execution: ExecutionContract{
+		ToolSequence:               []string{"bash", "submit_result"},
+		ToolInputSequence:          []map[string]any{{"command": "printf bounded"}, {}},
+		ToolInputCanonicalSequence: []bool{true, false},
+		TemplateToolGrants:         []string{"bash"},
+	}}
+	hash, err := effectiveContractHash(contract.ID, contract.Agent, contract.Execution, contract.OutputMode, contract.Action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{session: &TeamSession{ContractTasks: []TaskDef{contract}}, phaseWorkflow: &runtimeWorkflow{enabled: true}}
+	task := TaskDef{Agent: "inventory", ContractID: "inventory", ContractHash: hash}
+	if got := c.boundedWorkflowBashCommand(task); got != "printf bounded" {
+		t.Fatalf("bounded command = %q, want canonical command", got)
+	}
+	task.ContractHash = "tampered"
+	if got := c.boundedWorkflowBashCommand(task); got != "" {
+		t.Fatalf("tampered contract enabled bounded bash command %q", got)
+	}
+}
+
 func TestContextToolsRequireExplicitDeclarationAndRemainForceMCPCompatible(t *testing.T) {
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{}}, forceMCP: true}
 	c.coreTools = []fantasy.AgentTool{&contextQueryTool{coordinator: c}, &contextGetTool{coordinator: c}}

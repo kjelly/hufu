@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -848,6 +849,51 @@ func TestAttemptWrapUpRecoveryTerminalUnresolvedDoesNotSpendAnotherLLMTurn(t *te
 	}
 	if run := c.LastRunResult(); run == nil || IsRunOutcomeSuccess(run.Outcome) || run.ExitCode == 0 {
 		t.Fatalf("run result = %#v, want nonzero unresolved outcome", run)
+	}
+}
+
+// TestAttemptWrapUpRecoveryRecoversNoProgressStopWrappedAsToolFailure guards
+// against a regression where a no-progress hard stop's already-correct
+// partial/budget-exceeded outcome (computed by stopForNoProgress) was
+// silently discarded and reclassified as a hard run failure. ExecuteTasks
+// surfaces the stop as a plain error, and tool_policy_gate.go wraps every
+// coordinator tool error (including this one) as errCoordinatorToolFailure
+// before it reaches attemptWrapUpRecovery — so the noProgressStopPending
+// check must run before the generic errCoordinatorToolFailure short-circuit,
+// or this exact wrapped shape falls into the hard-failure path instead of the
+// graceful one.
+func TestAttemptWrapUpRecoveryRecoversNoProgressStopWrappedAsToolFailure(t *testing.T) {
+	tracker := NewTaskTracker()
+	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "go-reviewer", Desc: "review batch-0000"}})[0]
+	tracker.TodoList().UpdateStatusAndOutput(item.ID, TaskDone, "summary", "batch-0000 reviewed: no blockers")
+	c := &Coordinator{
+		session:     &TeamSession{Config: agent.TeamConfig{Name: "no-progress-tool-failure-recovery"}},
+		sessionData: NewSession(),
+		taskTracker: tracker,
+	}
+
+	// Simulate a real no-progress hard stop the same way enforceNoProgressBudget
+	// does, so LastRunResult is populated exactly as it would be in production.
+	c.stopForNoProgress("tasks since progress reached the limit")
+
+	// Mirror tool_policy_gate.go's wrapping of a coordinator direct tool
+	// failure verbatim: this is the exact error shape ExecuteTasks's no-progress
+	// stop actually surfaces as, not a bare unwrapped error.
+	wrapped := fmt.Errorf("%w: tool %q failed: %s", errCoordinatorToolFailure, "agent",
+		"tasks since progress reached the limit after replan: call finish immediately with your best summary of work completed so far")
+
+	result, steps, recovered := c.attemptWrapUpRecovery(context.Background(), &agent.AgentDef{Name: "coordinator"}, wrapped)
+	if !recovered {
+		t.Fatalf("attemptWrapUpRecovery recovered=%v, want true: a no-progress stop must take the graceful partial path even when wrapped as errCoordinatorToolFailure", recovered)
+	}
+	if len(steps) != 0 {
+		t.Fatalf("no-progress recovery spent %d model steps, want 0 (no further LLM turn permitted)", len(steps))
+	}
+	if strings.TrimSpace(result) == "" {
+		t.Fatal("no-progress recovery returned an empty result; want the preserved partial summary")
+	}
+	if run := c.LastRunResult(); run == nil || run.Outcome != RunOutcomePartial {
+		t.Fatalf("run result = %#v, want the partial outcome stopForNoProgress already computed, not overwritten by a hard failure", run)
 	}
 }
 

@@ -77,8 +77,8 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	if t.coordinator != nil && t.coordinator.coordinatorPolicyRepairPending.Load() {
 		todoID, _ := ctx.Value(todoIDKey{}).(string)
 		if todoID == CoordTodoID && t.Info().Name != "agent" && t.Info().Name != "finish" {
-			t.coordinator.wrapUp.Store(1)
-			return fantasy.NewTextErrorResponse(fmt.Sprintf("%s only agent (unfinished delegation) or finish is permitted after a policy violation; tool %q was not executed", coordinatorPolicyRepairExhaustedPrefix, t.Info().Name)), nil
+			prompt, _ := t.coordinator.coordinatorPolicyRepairPrompt(fmt.Errorf("only agent (unfinished delegation) or finish is permitted after a policy violation; tool %q was not executed", t.Info().Name))
+			return fantasy.NewTextErrorResponse(prompt), nil
 		}
 	}
 	agentName, _ := ctx.Value(tools.AgentNameKey).(string)

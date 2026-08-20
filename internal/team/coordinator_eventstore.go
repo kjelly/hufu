@@ -174,9 +174,7 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 	}
 	events, err := c.eventStore.ReadEvents()
 	if err != nil {
-		c.sessionData.RecoveryRequired = true
-		c.sessionData.RecoveryReason = "event-store read failed: " + utils.RedactSecrets(err.Error())
-		_ = SaveSession(c.session.Workspace, c.sessionData)
+		c.markSessionRecovery("event-store read failed: " + utils.RedactSecrets(err.Error()))
 		return
 	}
 	lineage := FilterEventsForBranch(events, st, activeBranch)
@@ -187,17 +185,12 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 	replayedSD := ReduceToSessionData(lineage)
 	replayedTasks := ReduceToTodoList(lineage)
 
-	if len(c.sessionData.Entries) == 0 && len(c.sessionData.Tasks) == 0 {
-		c.sessionData.Entries = replayedSD.Entries
-		c.sessionData.Tasks = replayedTasks
-		c.sessionData.CriterionResults = replayedSD.CriterionResults
-		c.sessionData.CriterionCheckpoints = replayedSD.CriterionCheckpoints
-		c.sessionData.LastCriterionProgressAt = replayedSD.LastCriterionProgressAt
-		if len(replayedTasks) > 0 {
-			c.sessionData.DelegationPhase = DelegationPhaseActive
-		} else if replayedSD.DelegationPhase != "" {
-			c.sessionData.DelegationPhase = replayedSD.DelegationPhase
-		}
+	var emptyProjection bool
+	c.viewSessionData(func(sd *SessionData) {
+		emptyProjection = len(sd.Entries) == 0 && len(sd.Tasks) == 0
+	})
+	if emptyProjection {
+		c.replaceCanonicalProjection(replayedSD, replayedTasks)
 		c.applyLiveTaskProjection(replayedTasks)
 		prof := c.ExecutionProfile()
 		if !prof.DisableHistoricalMemory {
@@ -210,31 +203,32 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 			c.conversationHistorySourceOffset = 0
 			c.conversationHistoryMu.Unlock()
 		}
-		_ = SaveSession(c.session.Workspace, c.sessionData)
+		_ = c.persistSession("persist rebuilt canonical projection")
 		_ = c.emitEvent("projection_rebuilt", "coordinator", "", map[string]string{"source": "event_store", "status": "rebuilt"})
 		return
 	}
 
-	if err := CompareCanonicalProjection(c.sessionData, lineage); err == nil {
-		if len(c.sessionData.Tasks) > 0 && (c.taskTracker == nil || len(c.taskTracker.TodoList().Items()) == 0) {
-			c.applyLiveTaskProjection(c.sessionData.Tasks)
+	var comparisonErr error
+	var liveTasks []*TodoItem
+	c.viewSessionData(func(sd *SessionData) {
+		comparisonErr = CompareCanonicalProjection(sd, lineage)
+		liveTasks = append([]*TodoItem(nil), sd.Tasks...)
+	})
+	if comparisonErr == nil {
+		if len(liveTasks) > 0 && (c.taskTracker == nil || len(c.taskTracker.TodoList().Items()) == 0) {
+			c.applyLiveTaskProjection(liveTasks)
 		}
 		_ = c.emitEvent("projection_rebuilt", "coordinator", "", map[string]string{"source": "event_store", "status": "matched"})
-		_ = SaveSession(c.session.Workspace, c.sessionData)
+		_ = c.persistSession("persist matched canonical projection")
 		return
 	}
 
-	if isProjectionPrefixOrRecoverable(c.sessionData, replayedSD, replayedTasks) {
-		c.sessionData.Entries = replayedSD.Entries
-		c.sessionData.Tasks = replayedTasks
-		c.sessionData.CriterionResults = replayedSD.CriterionResults
-		c.sessionData.CriterionCheckpoints = replayedSD.CriterionCheckpoints
-		c.sessionData.LastCriterionProgressAt = replayedSD.LastCriterionProgressAt
-		if len(replayedTasks) > 0 {
-			c.sessionData.DelegationPhase = DelegationPhaseActive
-		} else if replayedSD.DelegationPhase != "" {
-			c.sessionData.DelegationPhase = replayedSD.DelegationPhase
-		}
+	var recoverable bool
+	c.viewSessionData(func(sd *SessionData) {
+		recoverable = isProjectionPrefixOrRecoverable(sd, replayedSD, replayedTasks)
+	})
+	if recoverable {
+		c.replaceCanonicalProjection(replayedSD, replayedTasks)
 		c.applyLiveTaskProjection(replayedTasks)
 		prof := c.ExecutionProfile()
 		if !prof.DisableHistoricalMemory {
@@ -247,17 +241,43 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 			c.conversationHistorySourceOffset = 0
 			c.conversationHistoryMu.Unlock()
 		}
-		_ = SaveSession(c.session.Workspace, c.sessionData)
+		_ = c.persistSession("persist repaired canonical projection")
 		_ = c.emitEvent("projection_rebuilt", "coordinator", "", map[string]string{"source": "event_store", "status": "repaired"})
 		return
 	}
 
-	c.sessionData.RecoveryRequired = true
-	c.sessionData.RecoveryReason = "event-store projection mismatch: " + utils.RedactSecrets(CompareCanonicalProjection(c.sessionData, lineage).Error())
-	_ = c.emitEvent("projection_mismatch", "coordinator", "", map[string]string{"reason": c.sessionData.RecoveryReason})
-	if saveErr := SaveSession(c.session.Workspace, c.sessionData); saveErr != nil {
+	reason := "event-store projection mismatch: " + utils.RedactSecrets(comparisonErr.Error())
+	_ = c.mutateSessionData(func(sd *SessionData) error {
+		sd.RecoveryRequired = true
+		sd.RecoveryReason = reason
+		return nil
+	})
+	_ = c.emitEvent("projection_mismatch", "coordinator", "", map[string]string{"reason": reason})
+	if saveErr := c.persistSession("persist projection mismatch"); saveErr != nil {
 		_ = c.emitEvent("projection_write_failed", "coordinator", "", map[string]string{"reason": utils.RedactSecrets(saveErr.Error())})
 	}
+}
+
+// replaceCanonicalProjection updates only the session projection. Its callers
+// rebuild task and conversation projections after releasing sessionMu, because
+// those operations may re-enter checkpointing paths that also acquire it.
+func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replayedTasks []*TodoItem) {
+	if replayedSD == nil {
+		return
+	}
+	_ = c.mutateSessionData(func(sd *SessionData) error {
+		sd.Entries = replayedSD.Entries
+		sd.Tasks = replayedTasks
+		sd.CriterionResults = replayedSD.CriterionResults
+		sd.CriterionCheckpoints = replayedSD.CriterionCheckpoints
+		sd.LastCriterionProgressAt = replayedSD.LastCriterionProgressAt
+		if len(replayedTasks) > 0 {
+			sd.DelegationPhase = DelegationPhaseActive
+		} else if replayedSD.DelegationPhase != "" {
+			sd.DelegationPhase = replayedSD.DelegationPhase
+		}
+		return nil
+	})
 }
 
 func isProjectionPrefixOrRecoverable(live, replayedSD *SessionData, replayedTasks []*TodoItem) bool {

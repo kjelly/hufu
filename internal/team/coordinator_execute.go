@@ -86,6 +86,24 @@ func expandPipelineDeps(tasks []TaskDef) []TaskDef {
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
 	var err error
+	// Fan-out must expand before any goal-contract binding below: binding
+	// matches against the real, substituted Goal text, never the coordinator's
+	// original (and, for a fan_out task, ignored) goal field.
+	tasks, err = c.expandFanOutTasks(tasks)
+	if err != nil {
+		// A malformed fan-out spec is a configuration/authoring error, not a
+		// worker failure: fail the whole dispatch before any TODO/model call so
+		// a coordinator mistake never produces some correct and some silently
+		// wrong tasks.
+		return "", c.rejectDelegationPolicy(err.Error())
+	}
+	// fact_refs resolves against each (possibly fan_out-expanded) task's own
+	// Goal/Constraints text, so it must run after expansion and, like
+	// expansion, before any goal-contract binding.
+	tasks, err = c.resolveFactRefs(tasks)
+	if err != nil {
+		return "", c.rejectDelegationPolicy(err.Error())
+	}
 	tasks, err = c.bindInitialTaskContracts(tasks)
 	if err != nil {
 		// This is a compile-time configuration conflict, not a worker failure:
@@ -128,7 +146,14 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	}
 	if c.IsWrapUp() && !c.acceptanceRecovery.Load() {
 		c.report(c.newEvent("step").withMessage("Wrap-up: refusing to start new tasks"))
-		return "", fmt.Errorf("wrap-up in progress: refusing to delegate new tasks. Call finish immediately with your best summary of work completed so far")
+		// A bare error here becomes errCoordinatorToolFailure (coordinator_task_run.go
+		// OnToolResult): the model never sees "call finish immediately" and the run
+		// hard-fails even when every dispatched task already succeeded. Route this
+		// through the same bounded delegation-policy-repair path as any other
+		// rejected delegation so the model gets a real, bounded chance to call
+		// finish; if it still does not, the run self-finalizes gracefully with the
+		// evidence already collected instead of terminating as coordinator failed.
+		return "", c.rejectDelegationPolicy("wrap-up in progress: refusing to delegate new tasks. Call finish immediately with your best summary of work completed so far")
 	}
 
 	tasks = expandPipelineDeps(tasks)

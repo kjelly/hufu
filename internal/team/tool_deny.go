@@ -1,6 +1,7 @@
 package team
 
 import (
+	"slices"
 	"strings"
 
 	"charm.land/fantasy"
@@ -125,6 +126,46 @@ func (c *Coordinator) taskToolGrants(def *agent.AgentDef, task TaskDef) map[stri
 		break
 	}
 	return grants
+}
+
+// boundedWorkflowBashCommand returns the sole bash command a static workflow
+// contract may run while the workflow's write isolation is active. A workflow
+// write scope is deliberately insufficient: the command must be a canonical
+// input at exactly one bash slot in a loaded, hash-verified contract that also
+// grants bash. This keeps arbitrary worker/authored shell input out of the
+// exception and leaves all source writes outside the runtime workspace denied.
+func (c *Coordinator) boundedWorkflowBashCommand(task TaskDef) string {
+	if c == nil || c.session == nil || c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || strings.TrimSpace(task.ContractID) == "" || strings.TrimSpace(task.ContractHash) == "" {
+		return ""
+	}
+	for _, contract := range c.session.ContractTasks {
+		if contract.ID != task.ContractID || !strings.EqualFold(strings.TrimSpace(contract.Agent), strings.TrimSpace(task.Agent)) {
+			continue
+		}
+		expectedHash, err := effectiveContractHash(task.ContractID, strings.ToLower(strings.TrimSpace(contract.Agent)), contract.Execution, contract.OutputMode, contract.Action)
+		if err != nil || task.ContractHash != expectedHash || !slices.Contains(contract.Execution.TemplateToolGrants, "bash") {
+			return ""
+		}
+		sequence := contract.Execution.ToolSequence
+		inputs := contract.Execution.ToolInputSequence
+		canonical := contract.Execution.ToolInputCanonicalSequence
+		if len(inputs) != len(sequence) || len(canonical) != len(sequence) {
+			return ""
+		}
+		command := ""
+		for i, tool := range sequence {
+			if tool != "bash" {
+				continue
+			}
+			value, ok := inputs[i]["command"].(string)
+			if !ok || strings.TrimSpace(value) == "" || !canonical[i] || command != "" {
+				return ""
+			}
+			command = value
+		}
+		return command
+	}
+	return ""
 }
 
 func agentDeclaresTool(def *agent.AgentDef, want string) bool {

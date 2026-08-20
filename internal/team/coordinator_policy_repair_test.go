@@ -62,6 +62,26 @@ func TestCoordinatorPolicyRepairNeverRedispatchesCompletedWorker(t *testing.T) {
 	}
 }
 
+func TestCoordinatorPolicyRepairAllowsRedispatchWhenAgentHasUnfinishedWork(t *testing.T) {
+	tracker := NewTaskTracker()
+	items := tracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "go-reviewer", Desc: "batch 1 (done)"},
+		{Agent: "go-reviewer", Desc: "batch 2 (failed)"},
+	})
+	if err := tracker.TodoList().TryUpdateStatusAndOutput(items[0].ID, TaskDone, "done", "batch 1 result"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tracker.TodoList().TryUpdateStatusAndOutput(items[1].ID, TaskError, "failed", "worker omitted submit_result"); err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{taskTracker: tracker, session: &TeamSession{Config: agent.TeamConfig{}}}
+	c.coordinatorPolicyRepairsAttempt.Store(1)
+	err := c.validateDelegationPolicy([]TaskDef{{Agent: "go-reviewer", Goal: "review batch 2 retry"}})
+	if err != nil {
+		t.Fatalf("validateDelegationPolicy failed unexpectedly for agent with unfinished work: %v", err)
+	}
+}
+
 func TestCoordinatorPolicyRepairFinalSummaryUsesTodoEvidence(t *testing.T) {
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "completed work"}})[0]

@@ -95,6 +95,7 @@ type canonicalReceipt struct {
 	ExitCode         *int                       `json:"exit_code,omitempty"`
 	ProducerID       string                     `json:"producer_id,omitempty"`
 	TranscriptRef    string                     `json:"transcript_ref,omitempty"`
+	SubmittedResult  *TaskResult                `json:"submitted_result,omitempty"`
 	RepairProvenance *RepairProvenance          `json:"repair_provenance,omitempty"`
 	VerifyResult     *canonicalVerifyResult     `json:"verify_result,omitempty"`
 	StepBudget       *StepBudgetUsage           `json:"step_budget,omitempty"`
@@ -124,6 +125,7 @@ func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) 
 			ExitCode:         r.ExitCode,
 			ProducerID:       r.ProducerID,
 			TranscriptRef:    r.TranscriptRef,
+			SubmittedResult:  r.SubmittedResult,
 			RepairProvenance: r.RepairProvenance,
 			VerifyResult:     toCanonicalVerifyResult(r.VerifyResult),
 			StepBudget:       r.StepBudget,

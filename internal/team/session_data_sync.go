@@ -62,3 +62,21 @@ func (c *Coordinator) persistSession(wrap string) error {
 	}
 	return nil
 }
+
+// persistSessionRounds records the completed round count through the same
+// synchronized mutation and persistence boundary as other session updates.
+// Run completion and abort paths can overlap a final checkpoint, so they must
+// not write sessionData directly.
+func (c *Coordinator) persistSessionRounds() {
+	if c == nil || c.session == nil || c.session.Workspace == "" {
+		return
+	}
+	rounds := c.totalRounds()
+	if err := c.mutateSessionData(func(sd *SessionData) error {
+		sd.Rounds = rounds
+		return nil
+	}); err != nil {
+		return
+	}
+	_ = c.persistSession("persist session rounds")
+}
