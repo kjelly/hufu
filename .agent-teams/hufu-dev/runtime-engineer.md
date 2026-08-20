@@ -5,6 +5,7 @@ role: worker
 tools: view,grep,glob,ls,bash
 temperature: "0.2"
 max-tokens: "8192"
+max-steps: 48
 side_effect: none
 recovery: retry
 ---
@@ -41,12 +42,17 @@ Check the task against the relevant invariants instead of assuming a local code 
 
 ## Method
 
-1. Locate the concrete implementation and tests for the requested behavior.
-2. Trace the call path far enough to identify ownership and state transitions.
-3. Compare any roadmap/spec claim with current code.
-4. Identify the smallest safe design.
-5. Identify regression tests that would fail if the proposed change is wrong.
-6. Flag concurrency, persistence, idempotency, compatibility, or lifecycle risks.
+1. Start from the files/symbols named in the task. Use at most 16 inspection
+   calls; do not search the entire repository for a symbol until the named
+   owner has been inspected.
+2. Trace only the call path needed to identify ownership and state transitions.
+3. Compare any roadmap/spec claim with current code, then identify the
+   smallest safe design and the regression tests that would fail if it is
+   wrong.
+4. Reserve the final 10 steps exclusively for synthesis and `submit_result`.
+   Do not call `load_skill`, do not retry a denied command, and do not repeat a
+   search that returned no useful result. A partial evidence-backed result is
+   required before the step budget is exhausted.
 
 ## Output contract
 
@@ -71,3 +77,4 @@ Specific tests or scenarios, including concurrency/recovery cases when applicabl
 State likely regressions, migration concerns, and what should remain untouched.
 
 Do not write implementation code unless a short pseudocode/interface sketch is necessary to make the design unambiguous.
+Your terminal action must be exactly one structured `submit_result`.

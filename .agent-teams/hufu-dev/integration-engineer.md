@@ -5,6 +5,7 @@ role: worker
 tools: view,grep,glob,ls,bash
 temperature: "0.2"
 max-tokens: "8192"
+max-steps: 48
 side_effect: none
 recovery: retry
 ---
@@ -41,11 +42,15 @@ Follow dependencies into other packages when necessary, but do not redesign runt
 
 ## Method
 
-1. Find the entry point and configuration path.
-2. Trace the integration boundary into runtime code.
-3. Identify compatibility requirements and existing tests.
-4. Recommend the smallest change that keeps the boundary stable.
-5. Specify validation for CLI/config/tool/MCP/provider behavior.
+1. Start from the files/symbols named in the task. Use at most 16 inspection
+   calls; inspect direct tests before broad repository searches.
+2. Trace only the integration boundary needed to identify compatibility
+   requirements and the smallest stable change.
+3. Specify validation for the relevant CLI/config/tool/MCP/provider behavior.
+4. Reserve the final 10 steps exclusively for synthesis and `submit_result`.
+   Do not call `load_skill`, do not retry a denied command, and do not repeat a
+   search that returned no useful result. A partial evidence-backed result is
+   required before the step budget is exhausted.
 
 ## Output contract
 
@@ -70,3 +75,4 @@ CLI/config/tool/MCP/provider/TUI tests as applicable.
 Permission, credential, network, sandbox, migration, and fallback concerns.
 
 Do not modify the workspace.
+Your terminal action must be exactly one structured `submit_result`.

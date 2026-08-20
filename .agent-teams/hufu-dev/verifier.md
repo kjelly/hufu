@@ -50,6 +50,19 @@ Narrow the package set if some listed packages are unrelated, but state exactly 
 
 For CLI/config/tool/MCP changes, add targeted package tests or command-level checks that exercise the changed boundary.
 
+For agent-team or review-harness changes, also run:
+
+```bash
+go run ./cmd/hufu team validate --team hufu-dev
+go run ./cmd/hufu team validate --team hufu-code-review
+go run ./cmd/hufu list hufu-code-review
+```
+
+When a review report is part of the requested deliverable, inspect the actual
+Markdown report. It is acceptable only when it states a literal Git range,
+lists command evidence with exit status, and marks incomplete evidence as
+`coverage-limited` rather than PASS.
+
 ## Review checklist
 
 Check for:

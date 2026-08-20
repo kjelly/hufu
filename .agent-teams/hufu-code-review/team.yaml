@@ -1,0 +1,117 @@
+name: hufu-code-review
+description: "Read-only, risk-layered review team for changes to the Hufu Go codebase"
+max-rounds: 500
+# Large review ranges need enough budget to trace changed code into callers and
+# tests. The runtime reserves terminal steps for a tool-free Markdown handoff.
+# A reviewer must inspect zero-context diff hunks and bounded source/test
+# excerpts before it can raise a severity.  Leave enough calls for that
+# evidence chain instead of accepting a summary after a truncated mega-diff.
+max-steps: 500
+timeout: 3600
+max-retries: 2
+# This provider shares one worker conversation per agent name. Serial review
+# prevents concurrently dispatched batches from interleaving tool arguments or
+# evidence between units; every batch remains independently retriable.
+max-concurrent: 1
+workspace: workspace
+# Source inspection is read-only; inventory and coverage markers write
+# run-scoped artifacts under the workspace. Acceptance remains the objective whole-run gate.
+# Review handoffs use submit_result so the runtime can persist and project
+# the complete evidence-bearing Markdown details without accepting free prose.
+allow-free-text-results: false
+# A source review must be grounded in this invocation's repository state.
+# Reusing an older task transcript can conceal a changed range, so use the
+# generic runtime profile that disables historical task and memory reuse.
+execution-profile: fresh-session
+goal-mode: exploratory
+retry:
+  transient:
+    max_attempts: 1
+  repair:
+    max_attempts_per_failure_signature: 1
+# The Markdown report is rendered after the coordinator completes. Coverage is
+# accepted only after every deterministic batch has a reviewer marker.
+acceptance:
+  mode: blocking
+  require-no-unresolved-tasks: true
+  commands:
+    - bash .agent-teams/hufu-code-review/verify-coverage.sh
+  required-artifacts:
+    - workspace/hufu-code-review/coverage/review-manifest.tsv
+    - workspace/hufu-code-review/coverage/batches.tsv
+# AUDIT dispatches one reviewer task per generated batch (batch_size=24000
+# bytes), so a healthy run's task count scales with how much changed in the
+# requested window rather than with any fixed number of coordinator turns.
+# None of these tasks carry a typed acceptance criterion the no-progress
+# counter can reset on (goal-mode is exploratory and review findings are not
+# expressed as a pass/fail verifier), so the generic "tasks since progress"
+# budget would otherwise count ordinary successful batch fan-out as
+# thrashing. Raise it well above any realistic two-day diff's batch count;
+# genuine no-progress loops (repeated retries within one batch) still hit
+# this far sooner than legitimate one-shot-per-batch dispatch does.
+reliability:
+  max-tasks-without-progress: 50
+  max-tokens-without-progress: 0
+  max-turns-without-progress: 50
+temperature: "0.1"
+max-tokens: "65536"
+reasoning-effort: high
+no-net: true
+# Code review is a bounded, read-only batch job.  Deny path-consent prompts
+# instead of blocking the run when a reviewer probes outside the repository;
+# --auto-approve does not answer path-consent dialogs.
+unattended: true
+tools:
+  allowed:
+    - view
+    - bash
+    - grep
+    - glob
+    - ls
+delegation:
+  # Binds only the verify-spec below onto each reviewer's dispatch by goal
+  # text/agent identity; it does not restore the execution/tool-sequence
+  # contracts this team's prose-based protocol requirements replaced.
+  bind-task-goal-contracts: true
+  allowed-workers:
+    - inventory
+    - go-reviewer
+    - runtime-integrity-reviewer
+    - boundary-tui-reviewer
+    - security-tool-reviewer
+    - coverage-verifier
+  no-redispatch-after-success:
+    - inventory
+    - coverage-verifier
+# Each reviewer's own prose already requires reading all five evidence files;
+# this static contract makes that an objective, runtime-checked gate against
+# the task's own recorded tool calls (fantasy.StepResult), instead of relying
+# solely on the model following instructions. A worker that skips a required
+# view call fails this task immediately and retries, rather than only being
+# caught later by verify-coverage.sh's whole-run coverage gate -- that gate
+# still runs unchanged as the final backstop.
+tasks:
+  - id: go-reviewer-verify
+    agent: go-reviewer
+    when-goal-contains: "review"
+    verify-spec: &review-evidence-assert
+      type: tool_call_assert
+      tool-call-assertions:
+        - {tool: view, input-contains: "review-manifest.tsv"}
+        - {tool: view, input-contains: "diff.patch"}
+        - {tool: view, input-contains: "source-context.txt"}
+        - {tool: view, input-contains: "caller-context.txt"}
+        - {tool: view, input-contains: "test-context.txt"}
+  - id: runtime-reviewer-verify
+    agent: runtime-integrity-reviewer
+    when-goal-contains: "review"
+    verify-spec: *review-evidence-assert
+  - id: tui-reviewer-verify
+    agent: boundary-tui-reviewer
+    when-goal-contains: "review"
+    verify-spec: *review-evidence-assert
+  - id: security-reviewer-verify
+    agent: security-tool-reviewer
+    when-goal-contains: "review"
+    verify-spec: *review-evidence-assert
+

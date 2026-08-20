@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-20T02:49:27Z",
+  "source_report": "workspace/hufu-code-review/report.md",
+  "scope": {
+    "since": "2.days.ago",
+    "commit_count": 32,
+    "changed_files": 53,
+    "legacy_batch_count": 5
+  },
+  "run": {
+    "duration_seconds": 5015,
+    "outcome": "partial",
+    "stop_reason": "budget_exceeded",
+    "model_calls": 125,
+    "task_execution_calls": 15,
+    "protocol_failures": 25,
+    "protocol_repairs": 6,
+    "tokens": 2448072
+  },
+  "purpose": "Phase A comparison baseline. This record is observational and is not consumed by the runtime."
+}

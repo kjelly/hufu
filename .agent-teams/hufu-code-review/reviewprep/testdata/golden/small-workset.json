@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "commit_count": 3,
+  "changed_files": 3,
+  "items": [
+    {
+      "key": "unit-0000",
+      "lens": "boundary-tui",
+      "paths": ["cmd/hufu/main.go"],
+      "diff_path": "batches/unit-0000/diff.patch"
+    },
+    {
+      "key": "unit-0001",
+      "lens": "runtime-integrity",
+      "paths": ["internal/team/runtime.go"],
+      "diff_path": "batches/unit-0001/diff.patch"
+    },
+    {
+      "key": "unit-0002",
+      "lens": "security-tool",
+      "paths": ["internal/tools/bash.go"],
+      "diff_path": "batches/unit-0002/diff.patch"
+    }
+  ]
+}
