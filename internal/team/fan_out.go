@@ -45,6 +45,14 @@ func (c *Coordinator) expandFanOutTasks(tasks []TaskDef) ([]TaskDef, error) {
 			expanded = append(expanded, t)
 			continue
 		}
+		if usesStructuredWorkset(t) {
+			rows, err := c.expandStructuredFanOutTask(t)
+			if err != nil {
+				return nil, fmt.Errorf("tasks[%d].fan_out: %w", i, err)
+			}
+			expanded = append(expanded, rows...)
+			continue
+		}
 		rows, err := expandFanOutTask(workspace, t)
 		if err != nil {
 			return nil, fmt.Errorf("tasks[%d].fan_out: %w", i, err)

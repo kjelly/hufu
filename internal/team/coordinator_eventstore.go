@@ -1091,6 +1091,12 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 	if item.VerifySpec != nil {
 		payload["verify_spec"] = item.VerifySpec
 	}
+	if item.WorksetBinding != nil {
+		payload["workset_binding"] = item.WorksetBinding
+	}
+	if item.WorksetReceipt != nil {
+		payload["workset_receipt"] = item.WorksetReceipt
+	}
 	if item.VerifyResult != nil {
 		payload["verify_result"] = item.VerifyResult
 	}

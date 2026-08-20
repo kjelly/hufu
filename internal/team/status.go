@@ -231,10 +231,12 @@ type TodoItem struct {
 	ToolTime         time.Duration
 	Source           string
 	ParentID         string
-	DependsOn        []string          // IDs of tasks that must complete before this one starts
-	Verify           string            // Command to run to verify the task
-	VerifyMode       string            // success, expected_failure, or observation
-	VerifySpec       *VerificationSpec `json:"verify_spec,omitempty"`
+	DependsOn        []string                 // IDs of tasks that must complete before this one starts
+	Verify           string                   // Command to run to verify the task
+	VerifyMode       string                   // success, expected_failure, or observation
+	VerifySpec       *VerificationSpec        `json:"verify_spec,omitempty"`
+	WorksetBinding   *WorksetBinding          `json:"workset_binding,omitempty"`
+	WorksetReceipt   *WorksetExpansionReceipt `json:"workset_receipt,omitempty"`
 	VerifyResult     *VerificationResult
 	// RuntimeError preserves a structured runtime/provider failure so phase
 	// aggregation does not degrade it into an unclassified worker error.
@@ -301,6 +303,8 @@ type TodoSpec struct {
 	Verify              string
 	VerifyMode          string
 	VerifySpec          *VerificationSpec
+	WorksetBinding      *WorksetBinding
+	WorksetReceipt      *WorksetExpansionReceipt
 	MaxRetries          int
 	OnFailure           string
 	DependsOn           []string
@@ -335,6 +339,8 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		Verify:              item.Verify,
 		VerifyMode:          item.VerifyMode,
 		VerifySpec:          item.VerifySpec,
+		WorksetBinding:      cloneWorksetBinding(item.WorksetBinding),
+		WorksetReceipt:      cloneWorksetReceipt(item.WorksetReceipt),
 		MaxRetries:          item.MaxRetries,
 		OnFailure:           item.OnFailure,
 		DependsOn:           append([]string(nil), item.DependsOn...),
@@ -901,6 +907,8 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		Verify:              item.Verify,
 		VerifyMode:          item.VerifyMode,
 		VerifySpec:          verifySpec,
+		WorksetBinding:      cloneWorksetBinding(item.WorksetBinding),
+		WorksetReceipt:      cloneWorksetReceipt(item.WorksetReceipt),
 		VerifyResult:        verifyResult,
 		RuntimeError:        runtimeErr,
 		ExecutionReceipt:    execReceipt,

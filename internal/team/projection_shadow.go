@@ -192,6 +192,8 @@ type canonicalTaskShadow struct {
 	VerifyMode          string                     `json:"verify_mode,omitempty"`
 	VerifySpec          *VerificationSpec          `json:"verify_spec,omitempty"`
 	VerifyResult        *canonicalVerifyResult     `json:"verify_result,omitempty"`
+	WorksetBinding      *WorksetBinding            `json:"workset_binding,omitempty"`
+	WorksetReceipt      *WorksetExpansionReceipt   `json:"workset_receipt,omitempty"`
 	ExecutionReceipts   []canonicalReceipt         `json:"execution_receipts,omitempty"`
 	FailureEvent        *FailureEventPayload       `json:"failure_event,omitempty"`
 	FailureFingerprints []FailureFingerprint       `json:"failure_fingerprints,omitempty"`
@@ -241,6 +243,8 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		VerifyMode:          item.VerifyMode,
 		VerifySpec:          cloneVerificationSpecPtr(item.VerifySpec),
 		VerifyResult:        toCanonicalVerifyResult(item.VerifyResult),
+		WorksetBinding:      cloneWorksetBinding(item.WorksetBinding),
+		WorksetReceipt:      cloneWorksetReceipt(item.WorksetReceipt),
 		ExecutionReceipts:   toCanonicalReceipts(item.ExecutionReceipts, item.ExecutionReceipt),
 		FailureEvent:        RedactedFailureEvent(item.FailureEvent),
 		FailureFingerprints: normalizeFingerprints(item.FailureFingerprints),

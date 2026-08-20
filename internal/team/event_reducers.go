@@ -164,6 +164,17 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 		}
 	}
 	session.Tasks = ReduceToTodoList(events)
+	seenWorksets := make(map[string]struct{})
+	for _, item := range session.Tasks {
+		if item == nil || item.WorksetReceipt == nil {
+			continue
+		}
+		if _, seen := seenWorksets[item.WorksetReceipt.WorksetID]; seen {
+			continue
+		}
+		seenWorksets[item.WorksetReceipt.WorksetID] = struct{}{}
+		session.WorksetReceipts = append(session.WorksetReceipts, *cloneWorksetReceipt(item.WorksetReceipt))
+	}
 	if len(session.Tasks) > 0 {
 		session.DelegationPhase = DelegationPhaseActive
 	} else {
@@ -327,6 +338,8 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 			VerifyMode          string                     `json:"verify_mode"`
 			VerifySpec          *VerificationSpec          `json:"verify_spec"`
 			VerifyResult        *VerificationResult        `json:"verify_result"`
+			WorksetBinding      *WorksetBinding            `json:"workset_binding"`
+			WorksetReceipt      *WorksetExpansionReceipt   `json:"workset_receipt"`
 			TypedResult         *TaskResult                `json:"typed_result"`
 			ExecutionReceipt    *ExecutionReceipt          `json:"execution_receipt"`
 			ExecutionReceipts   []ExecutionReceipt         `json:"execution_receipts"`
@@ -406,6 +419,8 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 				DiagnosticHints:     append([]string(nil), payload.DiagnosticHints...),
 				LastOperation:       payload.LastOperation,
 				TypedResult:         payload.TypedResult,
+				WorksetBinding:      cloneWorksetBinding(payload.WorksetBinding),
+				WorksetReceipt:      cloneWorksetReceipt(payload.WorksetReceipt),
 				FailureEvent:        failureEvent,
 			}
 			taskMap[taskID] = item
@@ -541,6 +556,12 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		}
 		if payload.VerifySpec != nil {
 			item.VerifySpec = cloneVerificationSpecPtr(payload.VerifySpec)
+		}
+		if payload.WorksetBinding != nil {
+			item.WorksetBinding = cloneWorksetBinding(payload.WorksetBinding)
+		}
+		if payload.WorksetReceipt != nil {
+			item.WorksetReceipt = cloneWorksetReceipt(payload.WorksetReceipt)
 		}
 		if payload.VerifyResult != nil {
 			item.VerifyResult = payload.VerifyResult

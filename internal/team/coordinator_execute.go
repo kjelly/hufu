@@ -334,6 +334,8 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			Verify:              t.Verify,
 			VerifyMode:          t.VerifyMode,
 			VerifySpec:          cloneVerificationSpecPtr(t.VerifySpec),
+			WorksetBinding:      cloneWorksetBinding(t.WorksetBinding),
+			WorksetReceipt:      cloneWorksetReceipt(t.WorksetReceipt),
 			MaxRetries:          t.MaxRetries,
 			SideEffect:          sideEffect,
 			Recovery:            recovery,
@@ -358,6 +360,14 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	// dependent task must not be replayed as independent pending work, and an
 	// on_failure loop must not be lost on restart or branch replay.
 	ids := c.taskTracker.TodoList().ReserveIDs(len(todoBatch))
+	worksetReceipts, receiptErr := buildWorksetReceipts(tasks, ids, c.executionRunID)
+	if receiptErr != nil {
+		if advancedPhase && c.sessionData != nil {
+			c.sessionData.DelegationPhase = DelegationPhaseInitialPending
+		}
+		return "", c.rejectDelegationPolicy(receiptErr.Error())
+	}
+	firstReceipt := make(map[string]bool, len(worksetReceipts))
 	for i, t := range tasks {
 		if t.OnFailure != nil && *t.OnFailure >= 0 && *t.OnFailure < len(ids) {
 			todoBatch[i].OnFailure = ids[*t.OnFailure]
@@ -370,6 +380,10 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				}
 			}
 			todoBatch[i].DependsOn = depIDs
+		}
+		if t.WorksetBinding != nil && !firstReceipt[t.WorksetBinding.WorksetID] {
+			todoBatch[i].WorksetReceipt = cloneWorksetReceipt(worksetReceipts[t.WorksetBinding.WorksetID])
+			firstReceipt[t.WorksetBinding.WorksetID] = true
 		}
 	}
 	todoItems, err := c.CommitTaskCreationResolved(ctx, todoBatch, ids)

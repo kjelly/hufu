@@ -148,7 +148,9 @@ type TaskDef struct {
 	// submit_result, resolved by the runtime before dispatch. This exists so
 	// a coordinator never retypes a value another task already discovered
 	// (a list, a computed count, a resolved path) into a later task's prose.
-	FactRefs []FactRef `json:"fact_refs,omitempty"`
+	FactRefs       []FactRef                `json:"fact_refs,omitempty"`
+	WorksetBinding *WorksetBinding          `json:"workset_binding,omitempty"`
+	WorksetReceipt *WorksetExpansionReceipt `json:"workset_receipt,omitempty"`
 	// FanOut, when set, replaces this single submitted task with one task per
 	// data row of a TSV file, entirely inside the runtime: Goal is ignored and
 	// GoalTemplate's {column} placeholders are substituted from that row by
@@ -180,8 +182,9 @@ type FactRef struct {
 // a typo fails the whole dispatch instead of silently producing one wrong
 // task among many correct ones.
 type FanOutSpec struct {
-	Source       string `json:"source"`
-	GoalTemplate string `json:"goal_template"`
+	Source         string  `json:"source" yaml:"source,omitempty"`
+	SourceArtifact FactRef `json:"source_artifact,omitempty" yaml:"source-artifact,omitempty"`
+	GoalTemplate   string  `json:"goal_template" yaml:"goal-template"`
 }
 
 // ResourceClaimMode describes how a task uses a shared resource.

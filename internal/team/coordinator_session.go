@@ -678,12 +678,29 @@ func (c *Coordinator) saveCheckpoint() {
 	store := c.SessionStore()
 	c.sessionMu.Lock()
 	c.sessionData.Tasks = tasks
+	c.sessionData.WorksetReceipts = c.worksetReceiptsFromTasks(tasks)
 	if c.phaseWorkflow != nil {
 		c.sessionData.WorkflowState, c.sessionData.PhaseResults, c.sessionData.RuntimeWorkspace, c.sessionData.RetryState = c.phaseWorkflow.snapshot()
 	}
 	_ = store.SaveSession(c.session.Workspace, c.sessionData)
 	c.sessionMu.Unlock()
 	c.updateBranchState()
+}
+
+func (c *Coordinator) worksetReceiptsFromTasks(tasks []*TodoItem) []WorksetExpansionReceipt {
+	seen := make(map[string]struct{})
+	var receipts []WorksetExpansionReceipt
+	for _, item := range tasks {
+		if item == nil || item.WorksetReceipt == nil || item.WorksetReceipt.WorksetID == "" {
+			continue
+		}
+		if _, ok := seen[item.WorksetReceipt.WorksetID]; ok {
+			continue
+		}
+		seen[item.WorksetReceipt.WorksetID] = struct{}{}
+		receipts = append(receipts, *cloneWorksetReceipt(item.WorksetReceipt))
+	}
+	return receipts
 }
 
 // updateBranchState snapshots the coordinator's live state (task plan, active
