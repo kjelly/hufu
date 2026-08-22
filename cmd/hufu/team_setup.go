@@ -29,7 +29,9 @@ type teamContext struct {
 	notifier    *notify.Notifier
 }
 
-var detectOllamaContextLengths = team.DetectAndCacheOllamaContextLengths
+// Kept as a test seam name for compatibility; the implementation uses the
+// provider-neutral OpenAI-compatible /models metadata endpoint.
+var detectOllamaContextLengths = team.DetectAndCacheProviderContextLengths
 
 func detectContextLengths(ctx context.Context, noNet bool, providerURL, providerAPIKey string, models []string) {
 	if noNet {
@@ -86,7 +88,7 @@ func applyUnattendedAndBudget(coordinator *team.Coordinator, session *team.TeamS
 
 // modelsInUse collects the distinct model IDs this run may dispatch to: every
 // agent's own model, the team default, and each named role model. Used to
-// scope the Ollama context-length probe (team.DetectAndCacheOllamaContextLengths)
+// scope the provider context-length metadata probe
 // to models actually in play instead of guessing.
 func modelsInUse(session *team.TeamSession, sidecarModel, guardModel, judgeModel, planReviewerModel string, modelList []config.ModelEntry) []string {
 	seen := map[string]bool{}

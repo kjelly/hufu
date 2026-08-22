@@ -60,10 +60,10 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		ok = false
 		fmt.Fprintf(os.Stderr, "  %s unreachable: %v\n", fail, err)
-		fmt.Fprintf(os.Stderr, "    %s\n", dimStyle.Render("Is the server running? For Ollama: `ollama serve`. Check --provider-url / hufu.yaml."))
+		fmt.Fprintf(os.Stderr, "    %s\n", dimStyle.Render("Is the configured local OpenAI-compatible server running? Check --provider-url / hufu.yaml."))
 	} else if len(models) == 0 {
 		fmt.Fprintf(os.Stderr, "  %s reachable, but it reports no models\n", warn)
-		fmt.Fprintf(os.Stderr, "    %s\n", dimStyle.Render("For Ollama, pull one: `ollama pull qwen3:8b`."))
+		fmt.Fprintf(os.Stderr, "    %s\n", dimStyle.Render("Install or download a model in the configured local LLM server, then rerun doctor."))
 	} else {
 		fmt.Fprintf(os.Stderr, "  %s reachable — %d model(s) available:\n", pass, len(models))
 		sort.Strings(models)
@@ -227,7 +227,7 @@ func printRole(w *os.File, role, model string, available []string, failPtr *bool
 		_, _ = fmt.Fprintf(w, "  %-9s %s\n", role+":", dimStyle.Render("(not set — must be supplied via --model, team.yaml, or agent .md)"))
 		return
 	}
-	bare := strings.TrimPrefix(model, "ollama/")
+	bare := providerModelName(model)
 	if len(available) > 0 && !modelAvailable(bare, available) {
 		_, _ = fmt.Fprintf(w, "  %-9s %s  %s\n", role+":", model, errStyle.Render("⚠ not in provider's model list"))
 		if failPtr != nil {
@@ -240,11 +240,18 @@ func printRole(w *os.File, role, model string, available []string, failPtr *bool
 
 func modelAvailable(bare string, available []string) bool {
 	for _, a := range available {
-		if a == bare || strings.TrimPrefix(a, "ollama/") == bare {
+		if a == bare || providerModelName(a) == bare {
 			return true
 		}
 	}
 	return false
+}
+
+func providerModelName(model string) string {
+	if idx := strings.IndexByte(model, '/'); idx >= 0 {
+		return model[idx+1:]
+	}
+	return model
 }
 
 func checkWritable(dir string) error {

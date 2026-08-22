@@ -62,7 +62,7 @@ func offerFirstTimeWizard(searchPaths []string) error {
 		return fmt.Errorf("no team configured; user cancelled first-time wizard")
 	default: // index == 0
 		fmt.Fprintf(os.Stderr, "%s Re-run with --default (and --model <name> if you want a specific LLM):\n", doneStyle.Render("→"))
-		fmt.Fprintf(os.Stderr, "    hufu --default --model ollama/qwen3:8b \"your task here\"\n")
+		fmt.Fprintf(os.Stderr, "    hufu --default --model local-model \"your task here\"\n")
 		return fmt.Errorf("no team configured; run with --default")
 	}
 }

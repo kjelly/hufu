@@ -21,9 +21,9 @@ func newRootCommand() *cobra.Command {
 
 Quick start:
   hufu doctor                                # preflight: check provider + teams
-  hufu init my-team --model ollama/qwen3:8b  # scaffold a team
+  hufu init my-team --model local-model  # scaffold a team
   hufu @my-team "explain this codebase"      # run a team
-  hufu --default --model ollama/qwen3:8b "hello"  # use built-in team (no config)
+  hufu --default --model local-model "hello"  # use built-in team (no config)
   hufu chat --agent-team my-team             # interactive REPL
   hufu list                                  # show all teams
 
@@ -97,16 +97,16 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringVar(&opts.helperTools, "helper-tools", "", "Comma-separated extra tools to enable for the default Helper worker when --default is set (e.g. 'bash' or 'bash,sudo,ssh'). Whitespace is trimmed.")
 	rootCmd.Flags().StringSliceVar(&opts.allowPaths, "allow-path", nil, "Additional filesystem paths to allow for the active team; can be repeated.")
 	rootCmd.Flags().BoolVar(&opts.autoApprove, "auto-approve", false, "Automatically choose clearly safe ask_user options; dangerous or ambiguous choices still prompt the user")
-	rootCmd.Flags().StringVar(&opts.modelOverride, "model", "", "Override default model for the active team (e.g. ollama/qwen3:8b)")
+	rootCmd.Flags().StringVar(&opts.modelOverride, "model", "", "Override default model for the active team (e.g. local-model or lemonade/model)")
 	rootCmd.Flags().StringVar(&opts.temperatureOverride, "temperature", "", "Override sampling temperature (e.g. 0.2)")
 	rootCmd.Flags().StringVar(&opts.maxTokensOverride, "max-tokens", "", "Override max output tokens (e.g. 4096)")
 	rootCmd.Flags().StringVar(&opts.topPOverride, "top-p", "", "Override top-p value (e.g. 0.9)")
 	rootCmd.Flags().StringVar(&opts.topKOverride, "top-k", "", "Override top-k value (e.g. 40)")
 	rootCmd.Flags().StringVar(&opts.reasoningEffortOverride, "reasoning-effort", "", "Override reasoning effort: high, medium, low, or none")
-	rootCmd.Flags().StringVar(&opts.sidecarModelOverride, "sidecar-model", "", "Override sidecar model used for skill matching (e.g. ollama/qwen3:1b); falls back to --model when not set")
-	rootCmd.Flags().StringVar(&opts.guardModelOverride, "guard-model", "", "Override guard model used for output review (e.g. ollama/qwen3:8b); falls back to --model when not set")
-	rootCmd.Flags().StringVar(&opts.judgeModelOverride, "judge-model", "", "Override judge model used to pick the best multi-model result (e.g. ollama/qwen3:8b); falls back to the sidecar model when not set")
-	rootCmd.Flags().StringVar(&opts.planReviewerModelOverride, "plan-reviewer-model", "", "Override plan reviewer model used for plan review (e.g. ollama/qwen3:8b); falls back to --model when not set")
+	rootCmd.Flags().StringVar(&opts.sidecarModelOverride, "sidecar-model", "", "Override sidecar model used for skill matching (e.g. local-small-model); falls back to --model when not set")
+	rootCmd.Flags().StringVar(&opts.guardModelOverride, "guard-model", "", "Override guard model used for output review (e.g. local-model); falls back to --model when not set")
+	rootCmd.Flags().StringVar(&opts.judgeModelOverride, "judge-model", "", "Override judge model used to pick the best multi-model result (e.g. local-model); falls back to the sidecar model when not set")
+	rootCmd.Flags().StringVar(&opts.planReviewerModelOverride, "plan-reviewer-model", "", "Override plan reviewer model used for plan review (e.g. local-model); falls back to --model when not set")
 	rootCmd.Flags().Int64Var(&opts.timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds (e.g. 1800 for 30 min). 0 = use team/agent default.")
 	rootCmd.Flags().Int64Var(&opts.verifyTimeoutOverride, "verify-timeout", 0, "Override deliverable verification timeout in seconds (e.g. 120). 0 = use team default.")
 	rootCmd.Flags().IntVar(&opts.maxRoundsOverride, "max-rounds", 0, "Override team.yaml max-rounds (coordinator round limit). 0 = use team default.")
@@ -135,7 +135,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	// init scaffolding flags (consumed by initcmd.go).
 	if initCmd.Flags().Lookup("template") == nil {
 		initCmd.Flags().StringVar(&opts.initTemplateName, "template", "default", "Scaffold template: default, dev, research, ops, or minimal")
-		initCmd.Flags().StringVar(&opts.modelOverride, "model", "", "Pin a model in the scaffolded team.yaml (e.g. ollama/qwen3:8b)")
+		initCmd.Flags().StringVar(&opts.modelOverride, "model", "", "Pin a model in the scaffolded team.yaml (e.g. local-model or lemonade/model)")
 	}
 
 	if improveCmd.PersistentFlags().Lookup("workspace") == nil {

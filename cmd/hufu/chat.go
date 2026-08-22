@@ -50,7 +50,7 @@ func init() {
 	f.BoolVar(&opts.autoApprove, "auto-approve", false, "Automatically choose clearly safe ask_user options; dangerous or ambiguous choices still prompt the user")
 	f.StringVar(&opts.providerURL, "provider-url", "", "Provider API base URL")
 	f.StringVar(&opts.providerAPIKey, "provider-api-key", "", "Provider API key")
-	f.StringVar(&opts.modelOverride, "model", "", "Override default model (e.g. ollama/qwen3:8b)")
+	f.StringVar(&opts.modelOverride, "model", "", "Override default model (e.g. local-model or lemonade/model)")
 	f.StringVarP(&opts.workspace, "workspace", "w", "", "Workspace directory")
 	f.BoolVarP(&opts.newSession, "new", "n", false, "Archive old session and start fresh")
 	f.BoolVarP(&opts.verbose, "verbose", "v", false, "Show full agent text output in real-time")

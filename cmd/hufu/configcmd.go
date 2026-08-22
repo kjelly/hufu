@@ -175,5 +175,5 @@ func runConfigInit(_ *cobra.Command, _ []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte("# hufu configuration\n# model: ollama/qwen3:8b\n"), 0o600)
+	return os.WriteFile(path, []byte("# hufu configuration\n# model: local-model\n# provider-url: http://127.0.0.1:8080/v1\n"), 0o600)
 }

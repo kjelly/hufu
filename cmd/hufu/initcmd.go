@@ -20,7 +20,7 @@ Existing files are never overwritten.
 
 Examples:
   hufu init dev-team
-  hufu init dev-team --model ollama/qwen3:8b`,
+  hufu init dev-team --model local-model`,
 	Args: cobra.ExactArgs(1),
 	RunE: runInit,
 }
