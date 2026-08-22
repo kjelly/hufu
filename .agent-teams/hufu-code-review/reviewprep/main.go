@@ -1,5 +1,4 @@
-// reviewprep is a team-owned, deterministic inventory producer. It is not
-// wired into Hufu's runtime until the generic workset contract exists.
+// reviewprep is a team-owned, deterministic workset producer.
 package main
 
 import (
@@ -25,11 +24,12 @@ type actionRequest struct {
 	Payload string `json:"payload"`
 }
 
-// Config intentionally contains only team-owned inventory semantics. Hufu
+// Config intentionally contains only team-owned workset semantics. Hufu
 // passes it as an opaque Action payload and does not interpret these fields.
 type Config struct {
 	Repository   string `json:"repository"`
 	OutputDir    string `json:"output_dir"`
+	ArtifactRoot string `json:"artifact_root"`
 	Since        string `json:"since"`
 	MaxDiffBytes int    `json:"max_diff_bytes"`
 	MaxDiffLines int    `json:"max_diff_lines"`
@@ -42,10 +42,12 @@ type actionResult struct {
 }
 
 type artifact struct {
-	Path   string `json:"path"`
-	Kind   string `json:"kind"`
-	SHA256 string `json:"sha256"`
-	Bytes  int64  `json:"bytes"`
+	ID          string `json:"id"`
+	Path        string `json:"path"`
+	Kind        string `json:"kind"`
+	Description string `json:"description,omitempty"`
+	SHA256      string `json:"sha256"`
+	Bytes       int64  `json:"bytes"`
 }
 
 type manifest struct {
@@ -63,13 +65,15 @@ type reviewRange struct {
 }
 
 type item struct {
-	Key       string   `json:"key"`
-	Lens      string   `json:"lens"`
-	Paths     []string `json:"paths"`
-	DiffPath  string   `json:"diff_path"`
-	DiffSHA   string   `json:"diff_sha256"`
-	DiffBytes int      `json:"diff_bytes"`
-	DiffLines int      `json:"diff_lines"`
+	Key       string            `json:"key"`
+	Lens      string            `json:"lens"`
+	Bindings  map[string]string `json:"bindings"`
+	Paths     []string          `json:"paths"`
+	Inputs    []artifact        `json:"inputs,omitempty"`
+	DiffPath  string            `json:"diff_path"`
+	DiffSHA   string            `json:"diff_sha256"`
+	DiffBytes int               `json:"diff_bytes"`
+	DiffLines int               `json:"diff_lines"`
 }
 
 type batch struct {
@@ -92,7 +96,7 @@ func run(ctx context.Context, in io.Reader, out io.Writer) error {
 	if err := json.NewDecoder(in).Decode(&request); err != nil {
 		return fmt.Errorf("decode action request: %w", err)
 	}
-	if request.Type != "prepare_review_workset" {
+	if request.Type != "prepare_review_workset" && request.Type != "prepare" {
 		return fmt.Errorf("unsupported action type %q", request.Type)
 	}
 	var config Config
@@ -110,10 +114,15 @@ func run(ctx context.Context, in io.Reader, out io.Writer) error {
 // reads the working tree: every path and patch comes from the selected commit
 // range. OutputDir must be new or empty to avoid replacing another run's data.
 func Prepare(ctx context.Context, config Config) (actionResult, error) {
+	applyConfigDefaults(&config)
 	if err := validateConfig(config); err != nil {
 		return actionResult{}, err
 	}
 	repo, err := resolveRepository(ctx, config.Repository)
+	if err != nil {
+		return actionResult{}, err
+	}
+	artifactRoot, err := resolveArtifactRoot(repo, config.ArtifactRoot)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -123,6 +132,9 @@ func Prepare(ctx context.Context, config Config) (actionResult, error) {
 	}
 	if err := ensureEmptyOutputDir(outputDir); err != nil {
 		return actionResult{}, err
+	}
+	if rel, relErr := filepath.Rel(artifactRoot, outputDir); relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return actionResult{}, fmt.Errorf("output_dir %q must be beneath artifact_root %q", config.OutputDir, config.ArtifactRoot)
 	}
 
 	reviewRangeValue, err := resolveRange(ctx, repo, config.Since)
@@ -137,7 +149,7 @@ func Prepare(ctx context.Context, config Config) (actionResult, error) {
 		return actionResult{}, fmt.Errorf("create output directory: %w", err)
 	}
 
-	items, err := buildItems(ctx, repo, outputDir, reviewRangeValue, paths, config)
+	items, err := buildItems(ctx, repo, artifactRoot, outputDir, reviewRangeValue, paths, config)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -152,17 +164,19 @@ func Prepare(ctx context.Context, config Config) (actionResult, error) {
 		return actionResult{}, fmt.Errorf("write manifest: %w", err)
 	}
 
-	manifestArtifact, err := fileArtifact(outputDir, manifestPath, "workset_manifest")
+	manifestArtifact, err := fileArtifact(artifactRoot, manifestPath, "workset_manifest")
 	if err != nil {
 		return actionResult{}, err
 	}
+	manifestArtifact.Description = "workset manifest"
 	artifacts := []artifact{manifestArtifact}
 	for _, entry := range items {
 		path := filepath.Join(outputDir, filepath.FromSlash(entry.DiffPath))
-		diffArtifact, err := fileArtifact(outputDir, path, "review_diff")
+		diffArtifact, err := fileArtifact(artifactRoot, path, "review_diff")
 		if err != nil {
 			return actionResult{}, err
 		}
+		diffArtifact.Description = "bounded workset diff"
 		artifacts = append(artifacts, diffArtifact)
 	}
 	return actionResult{Outputs: map[string]any{
@@ -173,6 +187,34 @@ func Prepare(ctx context.Context, config Config) (actionResult, error) {
 		"changed_files": len(paths),
 		"item_count":    len(items),
 	}, Artifacts: artifacts}, nil
+}
+
+func applyConfigDefaults(config *Config) {
+	if strings.TrimSpace(config.Repository) == "" {
+		if repo := os.Getenv("HUFU_REPOSITORY"); repo != "" {
+			config.Repository = repo
+		} else {
+			config.Repository = "."
+		}
+	}
+	if strings.TrimSpace(config.ArtifactRoot) == "" {
+		if ws := os.Getenv("HUFU_WORKSPACE"); ws != "" {
+			config.ArtifactRoot = ws
+		}
+	}
+	if strings.TrimSpace(config.OutputDir) == "" {
+		if config.ArtifactRoot != "" {
+			config.OutputDir = filepath.Join(config.ArtifactRoot, "workset")
+		}
+	}
+	if strings.TrimSpace(config.Since) == "" {
+		config.Since = "2.days.ago"
+	}
+	if config.MaxDiffBytes == 0 && config.MaxDiffLines == 0 && config.MaxPaths == 0 {
+		config.MaxDiffBytes = 24000
+		config.MaxDiffLines = 600
+		config.MaxPaths = 16
+	}
 }
 
 func validateConfig(config Config) error {
@@ -209,6 +251,25 @@ func resolveOutputDir(repo, output string) (string, error) {
 		return "", fmt.Errorf("output_dir %q must be inside repository", output)
 	}
 	return output, nil
+}
+
+func resolveArtifactRoot(repo, root string) (string, error) {
+	if strings.TrimSpace(root) == "" {
+		if ws := os.Getenv("HUFU_WORKSPACE"); ws != "" {
+			root = ws
+		} else {
+			return repo, nil
+		}
+	}
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(repo, root)
+	}
+	root = filepath.Clean(root)
+	rel, err := filepath.Rel(repo, root)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("artifact_root %q must be inside repository", root)
+	}
+	return root, nil
 }
 
 func ensureEmptyOutputDir(path string) error {
@@ -287,7 +348,7 @@ func changedPaths(ctx context.Context, repo string, r reviewRange) ([]string, er
 	return paths, nil
 }
 
-func buildItems(ctx context.Context, repo, outputDir string, r reviewRange, paths []string, config Config) ([]item, error) {
+func buildItems(ctx context.Context, repo, artifactRoot, outputDir string, r reviewRange, paths []string, config Config) ([]item, error) {
 	var batches []*batch
 	for _, path := range paths {
 		diff, err := git(ctx, repo, "diff", "--no-renames", "--unified=0", r.Start+".."+r.End, "--", path)
@@ -325,8 +386,16 @@ func buildItems(ctx context.Context, repo, outputDir string, r reviewRange, path
 		if err := os.WriteFile(pathsPath, []byte(strings.Join(current.paths, "\n")+"\n"), 0o644); err != nil {
 			return nil, fmt.Errorf("write batch paths %q: %w", key, err)
 		}
+		diffArtifact, err := fileArtifact(artifactRoot, diffPath, "review_diff")
+		if err != nil {
+			return nil, fmt.Errorf("describe batch diff %q: %w", key, err)
+		}
+		diffArtifact.Description = "bounded workset diff"
 		items = append(items, item{
-			Key: key, Lens: current.lens, Paths: append([]string(nil), current.paths...),
+			Key: key, Lens: current.lens,
+			Bindings: map[string]string{"key": key, "lens": current.lens},
+			Paths:    append([]string(nil), current.paths...),
+			Inputs:   []artifact{diffArtifact},
 			DiffPath: filepath.ToSlash(filepath.Join("batches", key, "diff.patch")),
 			DiffSHA:  sha256Hex(current.diff.Bytes()), DiffBytes: current.diff.Len(), DiffLines: current.lines,
 		})
@@ -418,7 +487,8 @@ func fileArtifact(root, path, kind string) (artifact, error) {
 	if err != nil {
 		return artifact{}, fmt.Errorf("make artifact path relative: %w", err)
 	}
-	return artifact{Path: filepath.ToSlash(rel), Kind: kind, SHA256: sha256Hex(data), Bytes: int64(len(data))}, nil
+	digest := sha256Hex(data)
+	return artifact{ID: "sha256-" + digest, Path: filepath.ToSlash(rel), Kind: kind, SHA256: digest, Bytes: int64(len(data))}, nil
 }
 
 func sha256Hex(data []byte) string {

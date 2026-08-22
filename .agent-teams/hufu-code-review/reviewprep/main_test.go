@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -9,6 +10,50 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
+	repo := newFixtureRepo(t)
+	config := fixtureConfig(repo, "out")
+	payload, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(actionRequest{Type: "prepare_review_workset", Payload: string(payload)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := run(context.Background(), bytes.NewReader(request), &output); err != nil {
+		t.Fatalf("run canonical action: %v", err)
+	}
+	var result actionResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatalf("decode action result: %v", err)
+	}
+	if result.Outputs["manifest_path"] == nil {
+		t.Fatalf("action result omitted manifest_path: %#v", result)
+	}
+}
+
+func TestReviewerPromptMatchesSubmitResultContract(t *testing.T) {
+	prompt, err := os.ReadFile(filepath.Join("..", "reviewer.md"))
+	if err != nil {
+		t.Fatalf("read reviewer prompt: %v", err)
+	}
+	text := string(prompt)
+	if strings.Contains(text, "The only legal top-level `submit_result` fields are:") {
+		t.Fatal("reviewer prompt contains a duplicated static submit_result field list")
+	}
+	for _, required := range []string{
+		"runtime-provided `submit_result` schema",
+		"`files_read` is required",
+		"`evidence` and `artifacts` are not legal",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("reviewer prompt omitted %q", required)
+		}
+	}
+}
 
 func TestPrepareProducesGoldenManifestAndDiffs(t *testing.T) {
 	repo := newFixtureRepo(t)
@@ -26,6 +71,9 @@ func TestPrepareProducesGoldenManifestAndDiffs(t *testing.T) {
 	manifest := readManifest(t, filepath.Join(repo, "out", "workset-manifest.json"))
 	got := goldenSummary{SchemaVersion: manifest.SchemaVersion, CommitCount: manifest.Range.CommitCount, ChangedFiles: manifest.ChangedFiles}
 	for _, entry := range manifest.Items {
+		if len(entry.Inputs) != 1 || !strings.HasPrefix(entry.Inputs[0].ID, "sha256-") || entry.Inputs[0].Description != "bounded workset diff" {
+			t.Fatalf("item %s lacks opaque diff input artifact: %#v", entry.Key, entry.Inputs)
+		}
 		got.Items = append(got.Items, goldenItem{Key: entry.Key, Lens: entry.Lens, Paths: entry.Paths, DiffPath: entry.DiffPath})
 		patch, err := os.ReadFile(filepath.Join(repo, "out", filepath.FromSlash(entry.DiffPath)))
 		if err != nil {
@@ -52,6 +100,63 @@ func TestPrepareDoesNotIncludeDirtyWorkingTree(t *testing.T) {
 	manifest := readManifest(t, filepath.Join(repo, "out", "workset-manifest.json"))
 	if manifest.ChangedFiles != 1 || manifest.Items[0].Paths[0] != "internal/team/committed.go" {
 		t.Fatalf("manifest included dirty working tree: %#v", manifest)
+	}
+}
+
+func TestGenericWorksetShadowProjectionPreservesKeysDigestsAndOrdering(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/team/one.go", "package team\n\nfunc One() {}\n", "one", "2025-01-02T00:00:00Z")
+	writeAndCommit(t, repo, "internal/tools/two.go", "package tools\n\nfunc Two() {}\n", "two", "2025-01-03T00:00:00Z")
+	if _, err := Prepare(context.Background(), fixtureConfig(repo, "out")); err != nil {
+		t.Fatal(err)
+	}
+	manifest := readManifest(t, filepath.Join(repo, "out", "workset-manifest.json"))
+
+	// Phase B's shadow comparison is deliberately an adapter characterization:
+	// it compares the old row-shaped view with the normalized generic view,
+	// without making either presentation a runtime acceptance input.
+	type shadowRow struct {
+		Key    string
+		Lens   string
+		Digest string
+	}
+	rows := make([]shadowRow, 0, len(manifest.Items))
+	for _, entry := range manifest.Items {
+		if len(entry.Inputs) != 1 {
+			t.Fatalf("item %s has %d inputs, want one", entry.Key, len(entry.Inputs))
+		}
+		rows = append(rows, shadowRow{Key: entry.Key, Lens: entry.Lens, Digest: entry.Inputs[0].SHA256})
+	}
+	if len(rows) != len(manifest.Items) {
+		t.Fatalf("shadow item count = %d, generic count = %d", len(rows), len(manifest.Items))
+	}
+	for index, row := range rows {
+		entry := manifest.Items[index]
+		if row.Key != entry.Key || row.Lens != entry.Bindings["lens"] || row.Digest != entry.Inputs[0].SHA256 {
+			t.Fatalf("shadow mismatch at %d: row=%#v generic=%#v", index, row, entry)
+		}
+	}
+}
+
+func TestPrepareArtifactRootMatchesRuntimeWorkspace(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/team/runtime.go", "package team\n\nfunc Run() {}\n", "runtime change", "2025-01-02T00:00:00Z")
+	config := fixtureConfig(repo, "workspace/hufu-code-review/workset")
+	config.ArtifactRoot = "workspace"
+	result, err := Prepare(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath, ok := result.Outputs["manifest_path"].(string)
+	if !ok || manifestPath != "hufu-code-review/workset/workset-manifest.json" {
+		t.Fatalf("manifest_path = %v, want runtime-workspace-relative path", result.Outputs["manifest_path"])
+	}
+	manifest := readManifest(t, filepath.Join(repo, "workspace", filepath.FromSlash(manifestPath)))
+	if len(manifest.Items) != 1 || len(manifest.Items[0].Inputs) != 1 {
+		t.Fatalf("manifest items = %#v, want one opaque input", manifest.Items)
+	}
+	if got := manifest.Items[0].Inputs[0].Path; got != "hufu-code-review/workset/batches/unit-0000/diff.patch" {
+		t.Fatalf("input artifact path = %q, want path relative to runtime workspace", got)
 	}
 }
 
@@ -148,6 +253,33 @@ func TestPrepareRejectsInvalidConfigAndNonEmptyOutput(t *testing.T) {
 	writeFile(t, filepath.Join(repo, "out", "previous-run"), "keep")
 	if _, err := Prepare(context.Background(), fixtureConfig(repo, "out")); err == nil {
 		t.Fatal("Prepare() replaced a non-empty output directory")
+	}
+}
+
+func TestPrepareUsesHufuEnvironmentVariables(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/team/foo.go", "package team\n", "foo change", "2025-01-02T00:00:00Z")
+	ws := filepath.Join(repo, "workspace", "hufu-code-review")
+	t.Setenv("HUFU_REPOSITORY", repo)
+	t.Setenv("HUFU_WORKSPACE", ws)
+
+	result, err := Prepare(context.Background(), Config{Since: "2025-01-01T12:00:00Z"})
+	if err != nil {
+		t.Fatalf("Prepare with env vars error = %v", err)
+	}
+	if result.Outputs["item_count"] != 1 {
+		t.Fatalf("item_count = %v, want 1", result.Outputs["item_count"])
+	}
+	if len(result.Artifacts) == 0 {
+		t.Fatalf("no artifacts produced")
+	}
+	// Artifact paths must be relative to HUFU_WORKSPACE (e.g. "workset/workset-manifest.json")
+	if result.Artifacts[0].Path != "workset/workset-manifest.json" {
+		t.Fatalf("manifest artifact path = %q, want %q", result.Artifacts[0].Path, "workset/workset-manifest.json")
+	}
+	manifestFile := filepath.Join(ws, "workset", "workset-manifest.json")
+	if _, err := os.Stat(manifestFile); err != nil {
+		t.Fatalf("manifest file does not exist at %s: %v", manifestFile, err)
 	}
 }
 
