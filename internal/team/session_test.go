@@ -11,11 +11,46 @@ import (
 
 func TestBudgetSnapshotLoadsLegacyRedactedTokenCounter(t *testing.T) {
 	var snapshot BudgetSnapshot
-	if err := json.Unmarshal([]byte(`{"tokens_used":"[REDACTED]","attempt":2}`), &snapshot); err != nil {
+	if err := json.Unmarshal([]byte(`{"max_tokens":"[REDACTED]","tokens_used":"[REDACTED]","attempt":2}`), &snapshot); err != nil {
 		t.Fatalf("legacy budget snapshot should remain loadable: %v", err)
 	}
-	if snapshot.TokensUsed != 0 || snapshot.Attempt != 2 {
-		t.Fatalf("legacy budget snapshot = %#v, want tokens_used=0 attempt=2", snapshot)
+	if snapshot.MaxTokens != 0 || snapshot.TokensUsed != 0 || snapshot.Attempt != 2 {
+		t.Fatalf("legacy budget snapshot = %#v, want max_tokens=0 tokens_used=0 attempt=2", snapshot)
+	}
+}
+
+func TestLoadSessionLoadsLegacyRedactedDiagnosticBudget(t *testing.T) {
+	workspace := t.TempDir()
+	sessionData := `{
+		"created_at": "2026-08-11T00:00:00Z",
+		"updated_at": "2026-08-11T00:00:00Z",
+		"rounds": 0,
+		"entries": [],
+		"diagnostic_packets": [{
+			"id": "diag-legacy",
+			"run_id": "run-legacy",
+			"task_id": "task-legacy",
+			"attempt": 1,
+			"failure_class": "execution",
+			"disposition": "retry",
+			"budget_snapshot": {"max_tokens": "[REDACTED]", "tokens_used": "[REDACTED]"},
+			"created_at": "2026-08-11T00:00:00Z"
+		}]
+	}`
+	if err := os.WriteFile(filepath.Join(workspace, sessionFile), []byte(sessionData), 0o644); err != nil {
+		t.Fatalf("write legacy session: %v", err)
+	}
+
+	loaded, err := loadSessionQuiet(workspace)
+	if err != nil {
+		t.Fatalf("legacy redacted diagnostic budget must remain loadable: %v", err)
+	}
+	if loaded == nil || len(loaded.DiagnosticPackets) != 1 {
+		t.Fatalf("loaded diagnostic packets = %#v", loaded)
+	}
+	budget := loaded.DiagnosticPackets[0].BudgetSnapshot
+	if budget.MaxTokens != 0 || budget.TokensUsed != 0 {
+		t.Fatalf("loaded diagnostic budget = %#v, want max_tokens=0 tokens_used=0", budget)
 	}
 }
 

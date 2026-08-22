@@ -19,23 +19,24 @@ import (
 // agent-team template. Coordinator prose may request work, but it cannot move
 // this state machine or select a worker from another phase.
 type runtimeWorkflow struct {
-	mu                   sync.RWMutex
-	enabled              bool
-	team                 string
-	phases               []Phase
-	state                Phase
-	policies             Policies
-	capabilities         Capabilities
-	workspace            RuntimeWorkspace
-	phaseAgents          map[Phase]map[string]bool
-	phaseContracts       map[Phase]map[string]bool
-	results              map[Phase]PhaseResult
-	retryState           *RetryState
-	retryPolicy          agent.RetryConfig
-	registry             *ProviderRegistry
-	verificationRequired bool
-	repositoryRoot       string
-	emitEvent            func(eventType string, phase Phase, details LifecycleEventPayload)
+	mu                     sync.RWMutex
+	enabled                bool
+	team                   string
+	phases                 []Phase
+	state                  Phase
+	policies               Policies
+	capabilities           Capabilities
+	workspace              RuntimeWorkspace
+	phaseAgents            map[Phase]map[string]bool
+	phaseContracts         map[Phase]map[string]bool
+	phaseOptionalContracts map[Phase]map[string]bool
+	results                map[Phase]PhaseResult
+	retryState             *RetryState
+	retryPolicy            agent.RetryConfig
+	registry               *ProviderRegistry
+	verificationRequired   bool
+	repositoryRoot         string
+	emitEvent              func(eventType string, phase Phase, details LifecycleEventPayload)
 }
 
 func newRuntimeWorkflow(session *TeamSession) (*runtimeWorkflow, error) {
@@ -89,6 +90,7 @@ func newRuntimeWorkflow(session *TeamSession) (*runtimeWorkflow, error) {
 	w.verificationRequired = session.Config.Verification.Required
 	w.phaseAgents = make(map[Phase]map[string]bool, len(phases))
 	w.phaseContracts = make(map[Phase]map[string]bool, len(phases))
+	w.phaseOptionalContracts = make(map[Phase]map[string]bool, len(phases))
 	for _, task := range session.ContractTasks {
 		if task.Phase == "" {
 			continue
@@ -97,18 +99,31 @@ func newRuntimeWorkflow(session *TeamSession) (*runtimeWorkflow, error) {
 			w.phaseAgents[task.Phase] = make(map[string]bool)
 		}
 		w.phaseAgents[task.Phase][strings.ToLower(strings.TrimSpace(task.Agent))] = true
-		if w.phaseContracts[task.Phase] == nil {
-			w.phaseContracts[task.Phase] = make(map[string]bool)
+		if task.Optional {
+			if w.phaseOptionalContracts[task.Phase] == nil {
+				w.phaseOptionalContracts[task.Phase] = make(map[string]bool)
+			}
+			w.phaseOptionalContracts[task.Phase][runtimeContractID(task)] = true
+		} else {
+			if w.phaseContracts[task.Phase] == nil {
+				w.phaseContracts[task.Phase] = make(map[string]bool)
+			}
+			w.phaseContracts[task.Phase][runtimeContractID(task)] = true
 		}
-		w.phaseContracts[task.Phase][runtimeContractID(task)] = true
 	}
 	return w, nil
 }
 
 // executeAction invokes a provider selected by a static action contract. The
 // runtime owns this boundary: a coordinator cannot supply an action through
-// its tool schema, and actions are permitted only during EXECUTE.
+// its tool schema. Mutating actions are permitted only during EXECUTE; a
+// statically declared side-effect-free action may also run during PREPARE so
+// deterministic discovery can produce the inputs for later phases.
 func (w *runtimeWorkflow) executeActionValue(ctx context.Context, action Action) (interface{}, error) {
+	return w.executeActionValueForTask(ctx, action, "")
+}
+
+func (w *runtimeWorkflow) executeActionValueForTask(ctx context.Context, action Action, sideEffect string) (interface{}, error) {
 	if !w.Enabled() {
 		return "", fmt.Errorf("structured actions require an enabled runtime workflow")
 	}
@@ -116,8 +131,9 @@ func (w *runtimeWorkflow) executeActionValue(ctx context.Context, action Action)
 	phase := w.state
 	registry := w.registry
 	w.mu.RUnlock()
-	if phase != PhaseExecute {
-		return "", fmt.Errorf("structured action %q is only allowed during execute phase", action.Type)
+	prepareReadOnly := phase == PhasePrepare && strings.EqualFold(strings.TrimSpace(sideEffect), "none")
+	if phase != PhaseExecute && !prepareReadOnly {
+		return "", fmt.Errorf("structured action %q is only allowed during execute phase or side-effect-free prepare", action.Type)
 	}
 	capability := normalizeCapability(action.Capability)
 	if capability == "" {
@@ -133,6 +149,17 @@ func (w *runtimeWorkflow) executeActionValue(ctx context.Context, action Action)
 	if err := provider.Validate(action); err != nil {
 		return "", ActionValidationError{Capability: capability, Cause: err}
 	}
+	env := ActionEnvironmentFromContext(ctx)
+	if strings.TrimSpace(env.Workspace) == "" {
+		return "", ActionValidationError{Capability: capability, Cause: fmt.Errorf("action invocation workspace is required")}
+	}
+	if env.TeamName == "" {
+		env.TeamName = w.team
+	}
+	if env.Repository == "" {
+		env.Repository = w.repositoryRoot
+	}
+	ctx = WithActionEnvironment(ctx, env)
 	result, err := provider.Execute(ctx, action)
 	if err != nil {
 		return "", ActionProviderError{Capability: capability, Cause: err}
@@ -432,6 +459,7 @@ func (w *runtimeWorkflow) validateTasks(tasks []TaskDef) error {
 	}
 	allowed := w.phaseAgents[w.state]
 	expectedContracts := w.phaseContracts[w.state]
+	optionalContracts := w.phaseOptionalContracts[w.state]
 	providedContracts := make(map[string]bool, len(tasks))
 	for _, task := range tasks {
 		if task.Phase != w.state {
@@ -440,16 +468,19 @@ func (w *runtimeWorkflow) validateTasks(tasks []TaskDef) error {
 		if !allowed[strings.ToLower(strings.TrimSpace(task.Agent))] {
 			return fmt.Errorf("agent %q is not authorized for workflow phase %s", task.Agent, w.state)
 		}
-		if !expectedContracts[task.ContractID] {
+		if !expectedContracts[task.ContractID] && !optionalContracts[task.ContractID] {
 			return fmt.Errorf("task for agent %q is not bound to a static contract for workflow phase %s", task.Agent, w.state)
 		}
-		if providedContracts[task.ContractID] {
+		// Fan-out creates one child per workset item under one static contract.
+		// Keep rejecting duplicate ordinary dispatches while allowing those
+		// immutable, item-bound children.
+		if providedContracts[task.ContractID] && task.WorksetBinding == nil {
 			return fmt.Errorf("workflow contract %q was dispatched more than once in phase %s", task.ContractID, w.state)
 		}
 		providedContracts[task.ContractID] = true
 	}
 	for contractID := range expectedContracts {
-		if !providedContracts[contractID] {
+		if !providedContracts[contractID] && w.results[w.state].Status != PhaseStatusSuccess {
 			return fmt.Errorf("workflow phase %s must dispatch static contract %q", w.state, contractID)
 		}
 	}
@@ -469,13 +500,14 @@ func (w *runtimeWorkflow) observe(items []*TodoItem) error {
 		return fmt.Errorf("workflow failed: %s", w.results[w.state].Summary)
 	}
 	expectedContracts := w.phaseContracts[w.state]
+	optionalContracts := w.phaseOptionalContracts[w.state]
 	if len(expectedContracts) == 0 {
 		return w.failLocked("workflow", "workflow", "CONFIGURATION", fmt.Sprintf("no static task contract is configured for phase %s", w.state), false, PhaseStatusFailure)
 	}
 	completed := make(map[string]bool, len(expectedContracts))
 	var evidence []ArtifactRef
 	for _, item := range items {
-		if item.Phase != w.state || !expectedContracts[item.ContractID] {
+		if item.Phase != w.state || (!expectedContracts[item.ContractID] && !optionalContracts[item.ContractID]) {
 			continue
 		}
 		switch item.Status {
@@ -488,11 +520,17 @@ func (w *runtimeWorkflow) observe(items []*TodoItem) error {
 				evidence = append(evidence, item.TypedResult.Artifacts...)
 			}
 		case TaskError, TaskProtocolIncomplete:
+			if optionalContracts[item.ContractID] {
+				return w.failLocked(item.Agent, item.Agent, "OPTIONAL_TASK_FAILURE", item.Detail, false, PhaseStatusFailure)
+			}
 			if item.RuntimeError != nil {
 				return w.failExecutionErrorLocked(*item.RuntimeError, PhaseStatusFailure)
 			}
 			return w.failLocked(item.Agent, item.Agent, "TASK_FAILURE", item.Detail, false, PhaseStatusFailure)
 		case TaskBlocked:
+			if optionalContracts[item.ContractID] {
+				return w.failLocked(item.Agent, item.Agent, "OPTIONAL_TASK_BLOCKED", item.Detail, false, PhaseStatusBlocked)
+			}
 			return w.failLocked(item.Agent, item.Agent, "TASK_BLOCKED", item.Detail, false, PhaseStatusBlocked)
 		}
 	}
@@ -505,6 +543,11 @@ func (w *runtimeWorkflow) observe(items []*TodoItem) error {
 	w.emit("phase_succeeded", w.state, LifecycleEventPayload{
 		Agent: "", Provider: "", FailureSignature: "", Artifacts: evidence,
 	})
+	// Keep VERIFY open after its required contracts succeed so the coordinator
+	// can dispatch an authorized optional critic based on typed results.
+	if w.state == PhaseVerify && len(w.phaseOptionalContracts[w.state]) > 0 {
+		return nil
+	}
 	next := nextWorkflowPhase(w.phases, w.state)
 	if next == "" {
 		return w.failLocked("workflow", "workflow", "CONFIGURATION", "verify must be the final configured workflow phase", false, PhaseStatusFailure)
@@ -592,8 +635,11 @@ func (w *runtimeWorkflow) requireFinished() error {
 	if !w.Enabled() {
 		return nil
 	}
-	w.mu.RLock()
-	defer w.mu.RUnlock()
+	w.mu.Lock()
+	if w.state == PhaseVerify && w.results[PhaseVerify].Status == PhaseStatusSuccess {
+		w.state = PhaseDone
+	}
+	defer w.mu.Unlock()
 	if w.state != PhaseDone {
 		return fmt.Errorf("workflow verification gate is not satisfied: current phase is %s", w.state)
 	}
@@ -779,8 +825,9 @@ func validateRuntimeWorkflowTeam(session *TeamSession, registry *ProviderRegistr
 			return fmt.Errorf("workflow task %q references unknown agent %q", task.ID, task.Agent)
 		}
 		if task.Action != nil {
-			if phase != PhaseExecute {
-				return fmt.Errorf("workflow task %q declares an action outside execute phase", task.ID)
+			prepareReadOnly := phase == PhasePrepare && strings.EqualFold(strings.TrimSpace(string(task.SideEffect)), "none")
+			if phase != PhaseExecute && !prepareReadOnly {
+				return fmt.Errorf("workflow task %q declares a mutating action outside execute phase", task.ID)
 			}
 			capability := normalizeCapability(task.Action.Capability)
 			if capability == "" || strings.TrimSpace(task.Action.Type) == "" {
@@ -799,7 +846,9 @@ func validateRuntimeWorkflowTeam(session *TeamSession, registry *ProviderRegistr
 			return fmt.Errorf("workflow task contract ID %q is duplicated", contractID)
 		}
 		contractIDs[contractID] = true
-		seen[phase] = true
+		if !task.Optional {
+			seen[phase] = true
+		}
 	}
 	for _, phase := range phases {
 		if !seen[phase] {

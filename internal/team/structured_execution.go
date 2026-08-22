@@ -85,6 +85,12 @@ type ExecutionStepResult struct {
 	Facts         map[string]any         `json:"facts,omitempty"`
 }
 
+// StructuredArtifactPublisher is the coordinator-owned publication boundary
+// for artifacts returned by a structured step runner. The runner may identify
+// an existing CAS object or a workspace source path, but it cannot publish a
+// canonical output without coordinator attestation.
+type StructuredArtifactPublisher func(context.Context, ArtifactRef) (ArtifactRef, error)
+
 // StructuredStepRequest is supplied to a runner for one actual step. Repair
 // attempts expose only declared produce steps, never validate/mutate tools.
 type StructuredStepRequest struct {
@@ -131,6 +137,7 @@ type StructuredExecutionRequest struct {
 	Registry        *ExecutionStepReceiptRegistry
 	UpstreamOutputs map[string]map[string]StructuredOutputValue
 	SelectModel     func(ExecutionStep, int) string
+	PublishArtifact StructuredArtifactPublisher
 }
 
 // StructuredExecutionResult contains the final lifecycle state, frozen

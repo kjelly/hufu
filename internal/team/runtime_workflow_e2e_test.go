@@ -116,7 +116,8 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 		projectDir:      tmpDir,
 		providerManager: pm,
 		coreTools:       agent.BuildAllAgentTools(tmpDir, tools.WithAllowedPaths([]string{tmpDir})),
-		taskTracker:     NewTaskTracker(),
+		taskTracker:           NewTaskTracker(),
+		providerBoundaryStart: func(context.Context, string) error { return nil },
 	}
 	es, err := NewEventStore(tmpDir, "run-e2e", "session-e2e")
 	if err != nil {

@@ -295,7 +295,12 @@ func TestCoordinatorStructuredLifecycleAcceptsOnlyReceiptCompleteSuccess(t *test
 		{ID: "mutate", Tool: "mutator", Effect: ExecutionEffectMutate, DependsOn: []string{"validate"}, Consumes: []string{"draft"}},
 		{ID: "verify", Tool: "verifier", Effect: ExecutionEffectVerify, DependsOn: []string{"mutate"}},
 	}}
-	c := &Coordinator{taskTracker: NewTaskTracker()}
+	workspace := t.TempDir()
+	store, err := NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{session: &TeamSession{Workspace: workspace}, executionRunID: "run-structured-lifecycle", taskTracker: NewTaskTracker()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "structured lifecycle", Execution: contract}})[0]
 	runner := StructuredStepRunnerFunc(func(_ context.Context, request StructuredStepRequest) (ExecutionStepResult, error) {
 		switch request.Step.ID {
@@ -304,9 +309,16 @@ func TestCoordinatorStructuredLifecycleAcceptsOnlyReceiptCompleteSuccess(t *test
 			if request.RepairAttempt == 1 {
 				digest = "valid"
 			}
-			return ExecutionStepResult{Artifacts: map[string]ArtifactRef{"draft": {ID: "draft-" + digest, SHA256: digest}}}, nil
+			ref, putErr := store.Put(context.Background(), PutArtifactRequest{
+				Content: []byte(digest), Path: "draft-" + digest, Kind: string(ExecutionOutputArtifact),
+				RunID: c.executionRunID, TaskID: request.TaskID, Attempt: request.Attempt, Agent: item.Agent,
+			})
+			if putErr != nil {
+				return ExecutionStepResult{}, putErr
+			}
+			return ExecutionStepResult{Artifacts: map[string]ArtifactRef{"draft": ref.ArtifactRef}}, nil
 		case "validate":
-			if request.Artifacts["draft"].SHA256 != "valid" {
+			if request.Artifacts["draft"].Path != "draft-valid" {
 				return ExecutionStepResult{ExitCode: 1, Stderr: "invalid draft"}, nil
 			}
 			return ExecutionStepResult{}, nil
@@ -328,7 +340,7 @@ func TestCoordinatorStructuredLifecycleAcceptsOnlyReceiptCompleteSuccess(t *test
 	if err != nil {
 		t.Fatalf("marshal submit_result: %v", err)
 	}
-	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(context.Background(), fantasy.ToolCall{Name: "submit_result", Input: string(payload)})
+	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(occurrenceTestContext(c, item.ID, 1), fantasy.ToolCall{Name: "submit_result", Input: string(payload)})
 	if err != nil || response.IsError {
 		t.Fatalf("receipt-complete submit_result rejected: response=%#v err=%v", response, err)
 	}
@@ -345,18 +357,31 @@ func TestExecuteTaskRoutesStructuredContractThroughCoordinatorRunner(t *testing.
 		{ID: "mutate", Tool: "mutator", Effect: ExecutionEffectMutate, DependsOn: []string{"validate"}, Consumes: []string{"draft"}},
 		{ID: "verify", Tool: "verifier", Effect: ExecutionEffectVerify, DependsOn: []string{"mutate"}},
 	}}
+	workspace := t.TempDir()
+	store, err := NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
 	c := &Coordinator{
-		session:      &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "structured-dispatch"}},
-		taskTracker:  NewTaskTracker(),
-		reportStatus: func(StatusEvent) {},
-		taskResults:  make(map[string]*TaskResult),
-		taskAttempts: make(map[string]int),
-		stepReceipts: NewExecutionStepReceiptRegistry(),
+		session:        &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "structured-dispatch"}},
+		executionRunID: "run-structured-dispatch",
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskResults:    make(map[string]*TaskResult),
+		taskAttempts:   make(map[string]int),
+		stepReceipts:   NewExecutionStepReceiptRegistry(),
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "structured dispatch", Execution: contract}})[0]
 	c.SetStructuredStepRunner(StructuredStepRunnerFunc(func(_ context.Context, request StructuredStepRequest) (ExecutionStepResult, error) {
 		if request.Step.Effect == ExecutionEffectProduce {
-			return ExecutionStepResult{Artifacts: map[string]ArtifactRef{"draft": {ID: "draft", SHA256: "approved"}}}, nil
+			ref, putErr := store.Put(context.Background(), PutArtifactRequest{
+				Content: []byte("approved"), Path: "draft.txt", Kind: string(ExecutionOutputArtifact),
+				RunID: c.executionRunID, TaskID: request.TaskID, Attempt: request.Attempt, Agent: item.Agent,
+			})
+			if putErr != nil {
+				return ExecutionStepResult{}, putErr
+			}
+			return ExecutionStepResult{Artifacts: map[string]ArtifactRef{"draft": ref.ArtifactRef}}, nil
 		}
 		return ExecutionStepResult{}, nil
 	}))
@@ -419,6 +444,10 @@ func TestCoordinatorDeclaredToolRunnerExecutesTypedInputAndRehashesArtifact(t *t
 	}
 	if result.FrozenArtifacts["draft"].SHA256 == "" || result.Receipts[2].ConsumedDigests["draft"] != result.FrozenArtifacts["draft"].SHA256 {
 		t.Fatalf("declared runner digest evidence = frozen %#v mutate %#v", result.FrozenArtifacts, result.Receipts[2])
+	}
+	ref, ok := result.Artifacts["draft"]
+	if !ok || ref.RunID == "" || ref.TaskID != item.ID || ref.Attempt != 1 || ref.Agent != item.Agent || ref.Bytes != ref.ByteSize {
+		t.Fatalf("declared publisher occurrence = %#v, want current run/task/attempt/agent and exact sizes", ref)
 	}
 }
 

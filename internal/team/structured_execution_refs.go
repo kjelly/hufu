@@ -64,6 +64,7 @@ func normalizedExecutionFailureClass(class string) string {
 func cloneStructuredFacts(values map[string]StructuredFact) map[string]StructuredFact {
 	clone := make(map[string]StructuredFact, len(values))
 	for key, value := range values {
+		value.Value = cloneTaskResultValue(value.Value)
 		clone[key] = value
 	}
 	return clone
@@ -147,7 +148,16 @@ func (e *structuredExecutionRun) recordDeclaredOutputs(step ExecutionStep, stepR
 		switch normalizedExecutionOutputKind(output.Kind) {
 		case ExecutionOutputArtifact:
 			artifact, ok := stepResult.Artifacts[output.Name]
-			if !ok || strings.TrimSpace(artifact.SHA256) == "" {
+			if !ok {
+				return e.outputError(receipt, step, output, "immutable artifact")
+			}
+			if e.request.PublishArtifact != nil {
+				published, err := e.request.PublishArtifact(e.ctx, artifact)
+				if err != nil {
+					return e.outputErrorCause(receipt, step, output, "coordinator-attested artifact", err)
+				}
+				artifact = published
+			} else if strings.TrimSpace(artifact.SHA256) == "" {
 				return e.outputError(receipt, step, output, "immutable artifact")
 			}
 			if artifact.Kind == "" {
@@ -182,6 +192,15 @@ func (e *structuredExecutionRun) recordDeclaredOutputs(step ExecutionStep, stepR
 
 func (e *structuredExecutionRun) outputError(receipt *ExecutionStepReceipt, step ExecutionStep, output ExecutionStepOutput, want string) error {
 	err := fmt.Errorf("step %q did not return declared %s output %q", step.ID, want, output.Name)
+	return e.outputErrorValue(receipt, err)
+}
+
+func (e *structuredExecutionRun) outputErrorCause(receipt *ExecutionStepReceipt, step ExecutionStep, output ExecutionStepOutput, want string, cause error) error {
+	err := fmt.Errorf("step %q did not return declared %s output %q: %w", step.ID, want, output.Name, cause)
+	return e.outputErrorValue(receipt, err)
+}
+
+func (e *structuredExecutionRun) outputErrorValue(receipt *ExecutionStepReceipt, err error) error {
 	receipt.ExitCode = 1
 	receipt.Stderr = err.Error()
 	receipt.FailureClass = "execution"

@@ -43,6 +43,12 @@ func workflowTestSession(t *testing.T) *TeamSession {
 	}
 }
 
+func explicitActionTestContext(session *TeamSession) context.Context {
+	return WithActionEnvironment(context.Background(), ActionEnvironment{
+		Workspace: filepath.Join(session.Workspace, "runtime", "runs", "test", "actions", "unit"),
+	})
+}
+
 type mockProvider struct{}
 
 func (mockProvider) Validate(action Action) error { return nil }
@@ -198,8 +204,20 @@ func (p *recordingActionProvider) Validate(action Action) error {
 	return nil
 }
 
-func (p *recordingActionProvider) Execute(context.Context, Action) (interface{}, error) {
+func (p *recordingActionProvider) Execute(ctx context.Context, _ Action) (interface{}, error) {
 	p.executed++
+	if result, ok := p.result.(ActionResult); ok {
+		env := ActionEnvironmentFromContext(ctx)
+		for _, artifact := range result.Artifacts {
+			path := filepath.Join(env.Workspace, artifact.Path)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(path, []byte(`{"provider":true}`), 0o644); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return p.result, p.err
 }
 
@@ -217,7 +235,7 @@ func TestRuntimeWorkflowExecutesStaticActionOnlyInExecutePhase(t *testing.T) {
 		t.Fatal(err)
 	}
 	action := Action{Capability: "structured-actions", Type: "apply", Payload: `{"target":"example"}`}
-	if _, err := w.executeAction(context.Background(), action); err == nil {
+	if _, err := w.executeAction(explicitActionTestContext(session), action); err == nil {
 		t.Fatal("action before EXECUTE phase unexpectedly succeeded")
 	}
 	if provider.executed != 0 {
@@ -230,12 +248,62 @@ func TestRuntimeWorkflowExecutesStaticActionOnlyInExecutePhase(t *testing.T) {
 	if err := w.observe([]*TodoItem{{Agent: "auditor", ContractID: "audit", Phase: PhaseAudit, Status: TaskDone}}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := w.executeAction(context.Background(), action)
+	got, err := w.executeAction(explicitActionTestContext(session), action)
 	if err != nil {
 		t.Fatalf("executeAction: %v", err)
 	}
 	if got != `{"status":"ok"}` || provider.validated != 1 || provider.executed != 1 {
 		t.Fatalf("action result/calls = %q, validate=%d execute=%d", got, provider.validated, provider.executed)
+	}
+}
+
+func TestRuntimeWorkflowAllowsSideEffectFreePrepareAction(t *testing.T) {
+	session := &TeamSession{
+		Workspace: t.TempDir(),
+		Config: agent.TeamConfig{
+			Name:         "prepare-action-workflow",
+			Workflow:     agent.WorkflowConfig{Phases: []string{"prepare", "verify"}},
+			Policies:     agent.WorkflowPolicies{AllowPhaseSkip: true},
+			Capabilities: agent.CapabilityConfig{Required: []string{"structured-actions"}},
+			Delegation:   agent.DelegationPolicy{BindTaskGoalContracts: true},
+		},
+		Agents: map[string]*agent.AgentDef{
+			"producer": {Name: "producer", Role: "worker"},
+			"verifier": {Name: "verifier", Role: "worker"},
+		},
+		ContractTasks: []TaskDef{
+			{ID: "produce", Agent: "producer", WhenGoalContains: "produce", Phase: PhasePrepare, SideEffect: "none", Action: &Action{Capability: "structured-actions", Type: "prepare"}},
+			{ID: "verify", Agent: "verifier", WhenGoalContains: "verify", Phase: PhaseVerify, VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{{Pointer: "/summary", Op: "non_empty"}}}},
+		},
+	}
+	provider := &recordingActionProvider{result: "prepared"}
+	registry := NewProviderRegistry()
+	registry.Register("structured-actions", provider)
+	session.ProviderRegistry = registry
+	w, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRuntimeWorkflowTeam(session, registry); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.executeActionValueForTask(explicitActionTestContext(session), *session.ContractTasks[0].Action, "none"); err != nil {
+		t.Fatalf("side-effect-free prepare action failed: %v", err)
+	}
+	if provider.executed != 1 {
+		t.Fatalf("provider executed %d times, want 1", provider.executed)
+	}
+	if err := w.observe([]*TodoItem{{Agent: "producer", ContractID: "produce", Phase: PhasePrepare, Status: TaskDone}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.State(); got != PhaseVerify {
+		t.Fatalf("state after prepare action = %s, want VERIFY", got)
+	}
+	if _, err := w.executeActionValueForTask(explicitActionTestContext(session), *session.ContractTasks[0].Action, "workspace_write"); err == nil {
+		t.Fatal("mutating prepare action unexpectedly succeeded")
 	}
 }
 
