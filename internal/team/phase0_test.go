@@ -86,7 +86,7 @@ func TestPhase0ArtifactStoreAndManifestFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest := EvidenceManifest{RunID: "run-1", ArtifactRefs: []ArtifactRef{ref}, EvidenceResults: []EvidenceResult{{RequirementID: "report", Status: "passed"}}}
+	manifest := EvidenceManifest{RunID: "run-1", ArtifactRefs: []ArtifactRef{ref.ArtifactRef}, EvidenceResults: []EvidenceResult{{RequirementID: "report", Status: "passed"}}}
 	if err := manifest.Seal(); err != nil {
 		t.Fatal(err)
 	}

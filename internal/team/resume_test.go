@@ -2,8 +2,12 @@ package team
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
 )
 
@@ -66,6 +70,10 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 
 	workerCalls := 0
 	repairCalls := 0
+	if err := os.WriteFile(filepath.Join(workspace, "resume-repair-artifact.txt"), []byte("repair evidence"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repairArtifactRejected := false
 	second := &Coordinator{
 		session:             &TeamSession{Workspace: workspace, Config: config, Agents: agents},
 		sessionData:         NewSession(),
@@ -79,6 +87,13 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 	second.SetSessionData(checkpoint)
 	second.repairAgentOverride = &scriptedRepairAgent{
 		calls: &repairCalls,
+		onContext: func(ctx context.Context) {
+			response, runErr := (&submitResultTool{coordinator: second, todoID: item.ID}).Run(ctx, fantasy.ToolCall{
+				Name:  submitResultToolName,
+				Input: `{"status":"success","summary":"repair","artifacts":[{"path":"resume-repair-artifact.txt"}]}`,
+			})
+			repairArtifactRejected = runErr == nil && response.IsError && strings.Contains(response.Content, "cannot add artifact evidence")
+		},
 		onCall: func(int) {
 			second.storeSubmittedTaskResult(item.ID, &TaskResult{
 				TaskID: item.ID, Agent: "worker", Status: "success",
@@ -99,6 +114,9 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 	}
 	if repairCalls != 1 {
 		t.Fatalf("result-only repair calls = %d, want 1", repairCalls)
+	}
+	if !repairArtifactRejected {
+		t.Fatal("resumed result-only repair accepted artifact evidence")
 	}
 	updated := second.taskTracker.TodoList().Items()[0]
 	if updated.Status != TaskDone || updated.TypedResult == nil || updated.TypedResult.Source != "submitted" {

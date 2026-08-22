@@ -135,8 +135,8 @@ func TestApplyCompletionGateDoesNotDowngradeSuccessfulTaskForReportedRisk(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest := &EvidenceManifest{RunID: "run-risk", Status: "accepted", ArtifactRefs: []ArtifactRef{artifact}, EvidenceResults: []EvidenceResult{
-		{RequirementID: "task:" + item.ID, Status: "passed", ArtifactRefs: []ArtifactRef{artifact}, Binding: &EvidenceBinding{
+	manifest := &EvidenceManifest{RunID: "run-risk", Status: "accepted", ArtifactRefs: []ArtifactRef{artifact.ArtifactRef}, EvidenceResults: []EvidenceResult{
+		{RequirementID: "task:" + item.ID, Status: "passed", ArtifactRefs: []ArtifactRef{artifact.ArtifactRef}, Binding: &EvidenceBinding{
 			RunID: "run-risk", TaskID: item.ID, Attempt: 1, ModelExecutionID: "exec-risk", ProducerID: "worker", TranscriptRef: artifact.ID, ArtifactIDs: []string{artifact.ID},
 		}},
 		{RequirementID: "run:acceptance", Status: "passed"},

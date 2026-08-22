@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -804,15 +806,17 @@ func (m *mockWorkerTextAgent) Stream(ctx context.Context, call fantasy.AgentStre
 }
 
 type mockRepairAgent struct {
-	onSubmit func()
+	onSubmit  func()
+	onContext func(context.Context)
 }
 
 type scriptedRepairAgent struct {
-	calls    *int
-	prompts  *[]string
-	messages *[][]fantasy.Message
-	onCall   func(int)
-	steps    func(int) []fantasy.StepResult
+	calls     *int
+	prompts   *[]string
+	messages  *[][]fantasy.Message
+	onCall    func(int)
+	onContext func(context.Context)
+	steps     func(int) []fantasy.StepResult
 }
 
 func invalidSchemaRepairSteps() []fantasy.StepResult {
@@ -827,8 +831,11 @@ func invalidSchemaRepairSteps() []fantasy.StepResult {
 	}}}
 }
 
-func (m *scriptedRepairAgent) result(call fantasy.AgentCall) *fantasy.AgentResult {
+func (m *scriptedRepairAgent) result(ctx context.Context, call fantasy.AgentCall) *fantasy.AgentResult {
 	(*m.calls)++
+	if m.onContext != nil {
+		m.onContext(ctx)
+	}
 	if m.prompts != nil {
 		*m.prompts = append(*m.prompts, call.Prompt)
 	}
@@ -847,12 +854,12 @@ func (m *scriptedRepairAgent) result(call fantasy.AgentCall) *fantasy.AgentResul
 	}}}
 }
 
-func (m *scriptedRepairAgent) Generate(_ context.Context, call fantasy.AgentCall) (*fantasy.AgentResult, error) {
-	return m.result(call), nil
+func (m *scriptedRepairAgent) Generate(ctx context.Context, call fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return m.result(ctx, call), nil
 }
 
-func (m *scriptedRepairAgent) Stream(_ context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
-	return m.result(fantasy.AgentCall{Prompt: call.Prompt, Messages: call.Messages}), nil
+func (m *scriptedRepairAgent) Stream(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return m.result(ctx, fantasy.AgentCall{Prompt: call.Prompt, Messages: call.Messages}), nil
 }
 
 type replayableWorkerAgent struct {
@@ -883,6 +890,9 @@ func (m *replayableWorkerAgent) Stream(context.Context, fantasy.AgentStreamCall)
 }
 
 func (m *mockRepairAgent) Generate(ctx context.Context, call fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	if m.onContext != nil {
+		m.onContext(ctx)
+	}
 	if m.onSubmit != nil {
 		m.onSubmit()
 	}
@@ -896,6 +906,9 @@ func (m *mockRepairAgent) Generate(ctx context.Context, call fantasy.AgentCall) 
 }
 
 func (m *mockRepairAgent) Stream(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	if m.onContext != nil {
+		m.onContext(ctx)
+	}
 	if m.onSubmit != nil {
 		m.onSubmit()
 	}
@@ -932,12 +945,23 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 		Desc:  "data processing task",
 	}})
 	todoID := items[0].ID
+	if err := os.WriteFile(filepath.Join(workspace, "repair-artifact.txt"), []byte("repair evidence"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repairArtifactRejected := false
 
 	// First agent run produces output but omits submit_result.
 	c.workerAgentOverride = &mockWorkerTextAgent{text: "Processed input data successfully."}
 
 	// We inject a mock repair agent that calls submit_result when invoked during repair.
 	c.repairAgentOverride = &mockRepairAgent{
+		onContext: func(ctx context.Context) {
+			response, runErr := (&submitResultTool{coordinator: c, todoID: todoID}).Run(ctx, fantasy.ToolCall{
+				Name:  submitResultToolName,
+				Input: `{"status":"success","summary":"repair","artifacts":[{"path":"repair-artifact.txt"}]}`,
+			})
+			repairArtifactRejected = runErr == nil && response.IsError && strings.Contains(response.Content, "cannot add artifact evidence")
+		},
 		onSubmit: func() {
 			c.storeSubmittedTaskResult(todoID, &TaskResult{
 				TaskID:   todoID,
@@ -960,6 +984,9 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 
 	if err != nil {
 		t.Fatalf("expected protocol repair to succeed, got error: %v", err)
+	}
+	if !repairArtifactRejected {
+		t.Fatal("live result-only repair accepted artifact evidence")
 	}
 	if out == "" {
 		t.Error("expected non-empty task output")

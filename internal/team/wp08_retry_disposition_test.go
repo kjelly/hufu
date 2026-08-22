@@ -184,8 +184,8 @@ func TestWP08_Path1_TerminalBlocked(t *testing.T) {
 	if listErr != nil || len(sessions) != 1 {
 		t.Fatalf("persisted terminal sessions = %#v, err=%v", sessions, listErr)
 	}
-	if sessions[0].CleanupState != TerminalCleanupManual || !strings.Contains(sessions[0].CleanupError, "identity mismatch") {
-		t.Fatalf("persisted terminal cleanup disposition = %#v, want manual identity-mismatch intervention", sessions[0])
+	if sessions[0].CleanupState != TerminalCleanupManual || !strings.Contains(sessions[0].CleanupError, "manual custody") {
+		t.Fatalf("persisted terminal cleanup disposition = %#v, want manual custody intervention", sessions[0])
 	}
 	restored, restoreErr := NewTerminalSessionManager(c.session.Workspace, nil)
 	if restoreErr != nil {

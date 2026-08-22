@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func writeWorksetManifest(t *testing.T, workspace string, content string) string {
@@ -46,11 +48,29 @@ func TestStructuredFanOutUsesValidatedManifestBindings(t *testing.T) {
 	}
 }
 
+func TestTaskGoalContractCarriesArtifactFanOutBeforeExpansion(t *testing.T) {
+	session := &TeamSession{
+		Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{BindTaskGoalContracts: true}},
+		ContractTasks: []TaskDef{{
+			ID: "review-workset", Agent: "reviewer", WhenGoalContains: "review workset",
+			FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "producer", Artifact: "manifest"}, GoalTemplate: "review {key}"},
+		}},
+	}
+	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "reviewer", Goal: "review workset"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bound) != 1 || bound[0].FanOut == nil || bound[0].FanOut.SourceArtifact.Artifact != "manifest" {
+		t.Fatalf("static contract did not carry fan-out: %#v", bound)
+	}
+}
+
 func TestStructuredFanOutRejectsInvalidManifestAtomically(t *testing.T) {
 	for name, content := range map[string]string{
-		"duplicate key": `{"schema_version":1,"items":[{"key":"same","bindings":{"x":"1"}},{"key":"same","bindings":{"x":"2"}}]}`,
-		"empty key":     `{"schema_version":1,"items":[{"key":"","bindings":{"x":"1"}}]}`,
-		"bad schema":    `{"schema_version":2,"items":[{"key":"one","bindings":{"x":"1"}}]}`,
+		"zero-byte source": "",
+		"duplicate key":    `{"schema_version":1,"items":[{"key":"same","bindings":{"x":"1"}},{"key":"same","bindings":{"x":"2"}}]}`,
+		"empty key":        `{"schema_version":1,"items":[{"key":"","bindings":{"x":"1"}}]}`,
+		"bad schema":       `{"schema_version":2,"items":[{"key":"one","bindings":{"x":"1"}}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -72,19 +92,23 @@ func TestStructuredFanOutResolvesOpaqueSourceArtifactAndInputIntegrity(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	input, err := store.Put(context.Background(), PutArtifactRequest{Content: []byte("input"), Path: "inputs/input.txt", Kind: "input", RunID: "run-1", TaskID: "producer"})
+	tracker := NewTaskTracker()
+	producer := tracker.TodoList().AddBatch([]TodoSpec{{PlanTaskID: "producer", Agent: "producer", Desc: "produce manifest"}})[0]
+	producer.Status = TaskDone
+	input, err := store.Put(context.Background(), PutArtifactRequest{Content: []byte("input"), Path: "inputs/input.txt", Kind: "input", RunID: "run-1", TaskID: producer.ID, Attempt: 1, Agent: "producer"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifestBytes, _ := json.Marshal(WorksetManifest{SchemaVersion: 1, Items: []WorksetItem{{Key: "one", Bindings: map[string]string{"name": "one"}, Inputs: []ArtifactRef{input}}}})
-	manifest, err := store.Put(context.Background(), PutArtifactRequest{Content: manifestBytes, Path: "manifests/workset.json", Kind: "workset_manifest", RunID: "run-1", TaskID: "producer"})
+	manifestBytes, _ := json.Marshal(WorksetManifest{SchemaVersion: 1, Items: []WorksetItem{{Key: "one", Bindings: map[string]string{"name": "one"}, Inputs: []ArtifactRef{input.ArtifactRef}}}})
+	manifest, err := store.Put(context.Background(), PutArtifactRequest{Content: manifestBytes, Path: "manifests/workset.json", Kind: "workset_manifest", RunID: "run-1", TaskID: producer.ID, Attempt: 1, Agent: "producer"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	c := &Coordinator{
 		session:        &TeamSession{Workspace: workspace},
 		executionRunID: "run-1",
-		taskResults:    map[string]*TaskResult{"producer": {TaskID: "producer", Status: TaskResultStatusSuccess, Artifacts: []ArtifactRef{manifest}}},
+		taskTracker:    tracker,
+		taskResults:    map[string]*TaskResult{producer.ID: {TaskID: producer.ID, Attempt: 1, Agent: "producer", Status: TaskResultStatusSuccess, Artifacts: []ArtifactRef{manifest.ArtifactRef, input.ArtifactRef}}},
 	}
 	tasks, err := c.expandFanOutTasks([]TaskDef{{Agent: "worker", FanOut: &FanOutSpec{
 		SourceArtifact: FactRef{TaskID: "producer", Artifact: manifest.ID}, GoalTemplate: "process {name}",
@@ -95,9 +119,10 @@ func TestStructuredFanOutResolvesOpaqueSourceArtifactAndInputIntegrity(t *testin
 }
 
 func TestWorksetReceiptBindsEveryChildAndReplays(t *testing.T) {
+	source := ArtifactRef{ID: "artifact-1", SHA256: strings.Repeat("a", 64), RunID: "run-1", TaskID: "prepare", Attempt: 1, Agent: "producer"}
 	tasks := []TaskDef{
-		{WorksetBinding: &WorksetBinding{WorksetID: "workset-1", ParentTaskID: "prepare", ItemKey: "a", SourceArtifactID: "artifact-1", SourceSHA256: strings.Repeat("a", 64)}},
-		{WorksetBinding: &WorksetBinding{WorksetID: "workset-1", ParentTaskID: "prepare", ItemKey: "b", SourceArtifactID: "artifact-1", SourceSHA256: strings.Repeat("a", 64)}},
+		{WorksetBinding: &WorksetBinding{WorksetID: "workset-1", ParentTaskID: "prepare", ItemKey: "a", SourceArtifactID: source.ID, SourceSHA256: source.SHA256, SourceArtifact: source}},
+		{WorksetBinding: &WorksetBinding{WorksetID: "workset-1", ParentTaskID: "prepare", ItemKey: "b", SourceArtifactID: source.ID, SourceSHA256: source.SHA256, SourceArtifact: source}},
 	}
 	receipts, err := buildWorksetReceipts(tasks, []string{"11", "12"}, "run-1")
 	if err != nil {

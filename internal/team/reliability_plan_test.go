@@ -613,7 +613,7 @@ func TestReplayPreventionAcrossTasksAndRuns(t *testing.T) {
 	submitTool := &submitResultTool{coordinator: c, todoID: task1.ID}
 	forgedMAC := fmt.Sprintf("%x", sha256.Sum256([]byte("forged")))
 	submitInput := `{"status":"success", "summary":"done", "evidence":[{"task_id":"` + task1.ID + `", "type":"claim", "value":"proof", "system_hmac":"` + forgedMAC + `"}]}`
-	_, submitErr := submitTool.Run(context.Background(), fantasy.ToolCall{Input: submitInput})
+	_, submitErr := submitTool.Run(occurrenceTestContext(c, task1.ID, 1), fantasy.ToolCall{Input: submitInput})
 	if submitErr != nil {
 		t.Fatalf("submit_result unexpected error: %v", submitErr)
 	}

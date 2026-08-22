@@ -43,12 +43,12 @@ func TestWP06GenericWorksetFixtures(t *testing.T) {
 		for _, key := range []string{"alpha", "beta", "gamma"} {
 			input, putErr := store.Put(context.Background(), PutArtifactRequest{
 				Content: []byte("read-only target " + key), Path: "inputs/" + key + ".txt", Kind: "probe_input",
-				RunID: "fixture-probe", TaskID: "producer",
+				RunID: "fixture-probe", TaskID: "producer", Attempt: 1, Agent: "worker",
 			})
 			if putErr != nil {
 				t.Fatal(putErr)
 			}
-			inputs = append(inputs, input)
+			inputs = append(inputs, input.ArtifactRef)
 		}
 		manifest := WorksetManifest{SchemaVersion: WorksetSchemaVersion, Items: make([]WorksetItem, 0, len(inputs))}
 		for index, input := range inputs {
@@ -63,14 +63,14 @@ func TestWP06GenericWorksetFixtures(t *testing.T) {
 		}
 		manifestRef, err := store.Put(context.Background(), PutArtifactRequest{
 			Content: manifestBytes, Path: "manifests/probe.json", Kind: "workset_manifest",
-			RunID: "fixture-probe", TaskID: "producer",
+			RunID: "fixture-probe", TaskID: "producer", Attempt: 1, Agent: "worker",
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		c := &Coordinator{
 			session: &TeamSession{Workspace: workspace}, executionRunID: "fixture-probe",
-			taskResults: map[string]*TaskResult{"producer": {TaskID: "producer", Status: TaskResultStatusSuccess, Artifacts: []ArtifactRef{manifestRef}}},
+			taskResults: map[string]*TaskResult{"producer": {TaskID: "producer", Attempt: 1, Agent: "worker", Status: TaskResultStatusSuccess, Artifacts: append([]ArtifactRef{manifestRef.ArtifactRef}, inputs...)}},
 		}
 		expanded, err := c.expandFanOutTasks([]TaskDef{{ID: "producer", Agent: "worker", FanOut: &FanOutSpec{
 			SourceArtifact: FactRef{TaskID: "producer", Artifact: manifestRef.ID}, GoalTemplate: "probe {target}",
