@@ -36,6 +36,22 @@ func getProcessIdentity(pid int) (*ProcessIdentity, error) {
 	}, nil
 }
 
+// getTerminalLaunchIdentity captures only the process-group ownership needed
+// for immediate launch custody. Durable identity validation remains separate.
+func getTerminalLaunchIdentity(pid int) (*ProcessIdentity, error) {
+	if pid <= 0 {
+		return nil, fmt.Errorf("invalid pid: %d", pid)
+	}
+	pgid, err := syscall.Getpgid(pid)
+	if err != nil {
+		return nil, err
+	}
+	if pgid != pid {
+		return nil, fmt.Errorf("leader PID %d does not own process group %d", pid, pgid)
+	}
+	return &ProcessIdentity{PID: pid, PGID: pgid}, nil
+}
+
 func verifyProcessIdentity(expected *ProcessIdentity) (bool, error) {
 	if expected == nil || expected.PID <= 0 || expected.PGID <= 0 || expected.StartStr == "" {
 		return false, nil
