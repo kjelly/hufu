@@ -178,9 +178,8 @@ func (c *Coordinator) finalizePublicInvocationFailure(runErr error) {
 // semantics; this helper only carries that result across the API boundary.
 func (c *Coordinator) finalizePublicInvocationFailureError(runErr error) error {
 	c.finalizePublicInvocationFailure(runErr)
-	var recoveryErr *recoveryAdmissionError
-	if errors.As(runErr, &recoveryErr) {
-		return WrapRunOutcomeError(runErr, c.LastRunResult())
+	if result := c.LastRunResult(); result != nil {
+		return WrapRunOutcomeError(runErr, result)
 	}
 	return runErr
 }
@@ -1185,13 +1184,13 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 		c.lastEvidenceManifestMu.RLock()
 		evaluated.EvidenceManifest = c.lastEvidenceManifest
 		c.lastEvidenceManifestMu.RUnlock()
-		evaluatedPtr := c.FinalizeRun(ctx, &evaluated, accRes)
-		if evaluatedPtr != nil {
-			evaluated = *evaluatedPtr
-		}
 		progress := c.noProgressCounters()
 		evaluated.Continuation = &ContinuationInfo{TurnCount: continuationTurns, MaxTurns: maxContinuationTurns, Reason: continuationReason, NoProgress: &progress, NoProgressReplanPending: c.noProgressReplanPending()}
-		c.SetLastRunResult(&evaluated)
+		// The finalizer owns the elected business pointer. Do not copy its return
+		// value back into this stack object and project that clone as LastRunResult;
+		// continuation metadata must be part of the immutable snapshot before the
+		// event-first commit.
+		c.FinalizeRun(ctx, &evaluated, accRes)
 	}
 	if continuationTurns > 0 {
 		status := "completed"
@@ -1481,8 +1480,15 @@ func (c *Coordinator) recordRunAborted(runErr error) {
 		c.saveContinuationCheckpoint(checkpoint.TurnCount, checkpoint.MaxTurns, reason, "aborted")
 	}
 
-	if err := c.reconcileProjectedStatusesWithDetail(AgentStatusError, fmt.Sprintf("%s; error=%v", reason, runErr)); err != nil {
-		log.Printf("warning: aborted-run status projection failed: %v", err)
+	if c.TerminalLifecycleConfirmed() {
+		if err := c.reconcileProjectedStatusesWithDetail(AgentStatusError, fmt.Sprintf("%s; error=%v", reason, runErr)); err != nil {
+			log.Printf("warning: aborted-run status projection failed: %v", err)
+		}
+	} else {
+		// The terminal event was not confirmed. Recovery state is the only
+		// allowed durable advancement; do not write status or session answer
+		// projections that could make an uncommitted run appear complete.
+		return
 	}
 
 	if c.sessionData == nil {

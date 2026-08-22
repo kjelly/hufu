@@ -147,9 +147,122 @@ func (c *Coordinator) initEventStore() {
 	es.SetBranchID(activeBranch)
 	c.eventStore = es
 	c.SetEventJournal(eventStoreJournal{store: es})
+	pending, reconciled := c.reconcilePendingTerminalCommit(st, activeBranch)
+	if pending && !reconciled {
+		// A pending terminal append is an admission barrier. Do not let the
+		// general projection shadow repair overwrite its recovery state.
+		return
+	}
 	c.hydrateEmittedEventKeys(st, activeBranch)
 	c.checkCanonicalProjectionShadow(st, activeBranch)
 	c.repairMemoryLearningGaps(st, activeBranch)
+}
+
+// reconcilePendingTerminalCommit is the only restart repair for an uncertain
+// terminal append. It accepts exactly one matching run_finished event from the
+// active branch lineage, reduces that lineage, and then advances projections.
+// It never appends or replays the terminal side effect.
+func (c *Coordinator) reconcilePendingTerminalCommit(st *SessionTree, activeBranch string) (present, reconciled bool) {
+	if c == nil || c.eventStore == nil {
+		return false, false
+	}
+	var pending *PendingTerminalCommit
+	c.viewSessionData(func(sd *SessionData) {
+		if sd.PendingTerminalCommit != nil {
+			copyPending := *sd.PendingTerminalCommit
+			pending = &copyPending
+		}
+	})
+	if pending == nil {
+		return false, false
+	}
+	invalid := func(reason string) (bool, bool) {
+		c.markTerminalRecoveryPending(reason, pending)
+		return true, false
+	}
+	if strings.TrimSpace(pending.RunID) == "" || strings.TrimSpace(pending.IdempotencyKey) == "" || strings.TrimSpace(pending.BranchID) == "" {
+		return invalid("pending terminal commit identity is incomplete")
+	}
+	events, err := c.eventStore.ReadEvents()
+	if err != nil {
+		return invalid("pending terminal commit reconciliation read failed: " + utils.RedactSecrets(err.Error()))
+	}
+	lineage := FilterEventsForBranch(events, st, activeBranch)
+	matchIndex := -1
+	for index, event := range lineage {
+		if event.Type != "run_finished" || event.RunID != pending.RunID || event.IdempotencyKey != pending.IdempotencyKey || event.BranchID != pending.BranchID {
+			continue
+		}
+		if matchIndex != -1 {
+			return invalid("pending terminal commit matched multiple run_finished events")
+		}
+		matchIndex = index
+	}
+	if matchIndex == -1 {
+		return invalid("pending terminal commit has no matching run_finished event")
+	}
+	projected := ReduceToSessionData(lineage[:matchIndex+1])
+	if projected == nil || projected.RunResult == nil || projected.RunResult.RunID != pending.RunID {
+		return invalid("pending terminal commit run_finished result identity is invalid")
+	}
+	result := projected.RunResult
+	if err := c.mutateSessionData(func(sd *SessionData) error {
+		sd.RunResult = result
+		sd.PendingTerminalCommit = nil
+		sd.RecoveryRequired = false
+		sd.RecoveryReason = ""
+		return nil
+	}); err != nil {
+		return invalid("persist reconciled terminal result failed: " + utils.RedactSecrets(err.Error()))
+	}
+	if err := c.persistSession("persist reconciled terminal result"); err != nil {
+		return invalid("persist reconciled terminal result failed: " + utils.RedactSecrets(err.Error()))
+	}
+	c.setLastRunResultInMemory(result)
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		c.taskTracker.TodoList().SetRunID(result.RunID)
+	}
+	c.reconcileTerminalStatusProjection(result)
+	return true, true
+}
+
+// clearTerminalRecoveryAfterCommit advances only canonical projections after
+// the matching run_finished event has been durably appended. Recovery is
+// cleared only when the pending marker belongs to this exact run, idempotency
+// key, and branch; unrelated recovery state remains an admission barrier.
+func (c *Coordinator) clearTerminalRecoveryAfterCommit(result *RunResult, committed *PendingTerminalCommit) {
+	if c == nil || result == nil || committed == nil {
+		return
+	}
+	store := c.SessionStore()
+	c.sessionMu.Lock()
+	defer c.sessionMu.Unlock()
+	c.terminalLifecycleMu.Lock()
+	if c.terminalLifecycleRunID != committed.RunID {
+		c.terminalLifecycleMu.Unlock()
+		return
+	}
+	if c.sessionData == nil {
+		c.sessionData = NewSession()
+	}
+	if pending := c.sessionData.PendingTerminalCommit; pending != nil &&
+		pending.RunID == committed.RunID &&
+		pending.IdempotencyKey == committed.IdempotencyKey &&
+		pending.BranchID == committed.BranchID {
+		c.sessionData.PendingTerminalCommit = nil
+		c.sessionData.RecoveryRequired = false
+		c.sessionData.RecoveryReason = ""
+	}
+	// The event is now canonical, so publishing this detached snapshot into the
+	// session projection is event-first and safe even when no recovery marker
+	// was present.
+	c.sessionData.RunResult = result
+	c.terminalLifecycleMu.Unlock()
+	if c.session != nil && c.session.Workspace != "" {
+		if err := store.SaveSession(c.session.Workspace, c.sessionData); err != nil {
+			log.Printf("warning: persist canonical terminal projection failed: %v", err)
+		}
+	}
 }
 
 func (c *Coordinator) markSessionRecovery(reason string) {

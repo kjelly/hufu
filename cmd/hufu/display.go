@@ -1679,7 +1679,10 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 
 	if _, err := p.Run(); err != nil {
 		cancel()
-		waitWithTimeout(finished)
+		waitWithTimeoutAndFinalize(finished, func() {
+			emergencyFinalizeCoordinator(activeCoord)
+			generateRequestedReports(loadedTeams, "(emergency finalization)")
+		}, processExit)
 		return "", fmt.Errorf("TUI error: %w", err)
 	}
 
@@ -1687,7 +1690,10 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 	case <-finished:
 	default:
 		cancel()
-		waitWithTimeout(finished)
+		waitWithTimeoutAndFinalize(finished, func() {
+			emergencyFinalizeCoordinator(activeCoord)
+			generateRequestedReports(loadedTeams, "(emergency finalization)")
+		}, processExit)
 	}
 
 	if execErr != nil && ctx.Err() == context.Canceled {
@@ -1696,11 +1702,16 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 	return execResult, execErr
 }
 
-func waitWithTimeout(finished chan struct{}) {
+func waitWithTimeoutAndFinalize(finished chan struct{}, emergencyFinalize func(), exit func(int)) {
 	select {
 	case <-finished:
 	case <-time.After(5 * time.Second):
-		os.Exit(130)
+		if emergencyFinalize != nil {
+			emergencyFinalize()
+		}
+		if exit != nil {
+			exit(130)
+		}
 	}
 }
 

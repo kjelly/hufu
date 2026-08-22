@@ -18,6 +18,7 @@ import (
 type ArtifactRef struct {
 	ID          string    `json:"id,omitempty"`
 	Kind        string    `json:"kind,omitempty"`
+	Role        string    `json:"role,omitempty"`
 	Path        string    `json:"path"`
 	Description string    `json:"description,omitempty"`
 	Type        string    `json:"type,omitempty"`

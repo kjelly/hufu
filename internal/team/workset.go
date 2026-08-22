@@ -77,6 +77,20 @@ type WorksetGroupState struct {
 	State            string `json:"state"`
 }
 
+// RuntimeWorksetPointer is the generic current-run projection for an
+// action-produced workset. It points only to the immutable runtime artifact;
+// consumer-specific meaning remains behind the ActionProvider boundary.
+type RuntimeWorksetPointer struct {
+	SchemaVersion      int    `json:"schema_version"`
+	RunID              string `json:"run_id"`
+	ActionInvocationID string `json:"action_invocation_id"`
+	ManifestArtifactID string `json:"manifest_artifact_id"`
+	ManifestSHA256     string `json:"manifest_sha256"`
+	RuntimePath        string `json:"runtime_path"`
+	ManifestPath       string `json:"manifest_path"`
+	ItemCount          int    `json:"item_count"`
+}
+
 func cloneWorksetBinding(src *WorksetBinding) *WorksetBinding {
 	if src == nil {
 		return nil

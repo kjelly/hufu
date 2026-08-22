@@ -1724,7 +1724,8 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", err
 	}
-	providerArtifacts, err := c.ingestActionProviderArtifacts(ctx, actionRoot, task, todoID, attempt, actionResult.Artifacts)
+	declaredArtifacts := append([]ArtifactRef(nil), actionResult.Artifacts...)
+	providerArtifacts, err := c.ingestActionProviderArtifacts(ctx, actionRoot, task, todoID, attempt, declaredArtifacts)
 	if err != nil {
 		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
 		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
@@ -1733,6 +1734,13 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		return "", err
 	}
 	actionResult.Artifacts = providerArtifacts
+	if err := c.publishRuntimeWorksetProjection(actionRoot, actionID, declaredArtifacts, providerArtifacts); err != nil {
+		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
+		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
+		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
+		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
+		return "", err
+	}
 	output := actionResultDisplay(rawResult, actionResult)
 	if task.Verify != "" || task.VerifySpec != nil {
 		if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskVerifying, "running objective verification", output, nil); err != nil {
@@ -1861,7 +1869,7 @@ func (c *Coordinator) ingestActionProviderArtifacts(ctx context.Context, actionR
 			return nil, fmt.Errorf("action artifact %q escapes workspace", artifact.Path)
 		}
 		pending = append(pending, pendingArtifact{request: PutArtifactRequest{
-			Content: content, Kind: artifact.Kind, Path: filepath.ToSlash(relative), Description: artifact.Description,
+			Content: content, Kind: artifact.Kind, Role: artifact.Role, Path: filepath.ToSlash(relative), Description: artifact.Description,
 			MediaType: artifact.MediaType, RunID: coordinatorRuntimeRunID(c), TaskID: todoID, Agent: task.Agent,
 			Provider: providerName, Attempt: attempt,
 		}})

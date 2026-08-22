@@ -129,6 +129,7 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			}
 		case "run_finished":
 			var payload struct {
+				RunID              string              `json:"run_id"`
 				Outcome            RunOutcome          `json:"outcome"`
 				GoalSatisfied      bool                `json:"goal_satisfied"`
 				GoalMode           GoalMode            `json:"goal_mode"`
@@ -145,18 +146,23 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 				Worksets           []WorksetGroupState `json:"worksets"`
 				Stats              RunStats            `json:"stats"`
 				Metrics            RunMetrics          `json:"metrics"`
+				Telemetry          *RunTelemetry       `json:"telemetry"`
 				EvidenceManifest   *EvidenceManifest   `json:"evidence_manifest"`
 			}
 			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Outcome != "" {
+				runID := payload.RunID
+				if runID == "" {
+					runID = e.RunID
+				}
 				session.RunResult = &RunResult{
-					Outcome: payload.Outcome, GoalSatisfied: payload.GoalSatisfied,
+					RunID: runID, Outcome: payload.Outcome, GoalSatisfied: payload.GoalSatisfied,
 					GoalMode: payload.GoalMode, Response: payload.Response, Reason: payload.Reason,
 					StopReason: payload.StopReason, ExitCode: payload.ExitCode,
 					UnresolvedTasks: payload.UnresolvedTasks,
 					CompletedReview: payload.CompletedReview, FindingsPresent: payload.FindingsPresent,
 					FixedAndVerified: payload.FixedAndVerified, AcceptanceAdvisory: payload.AcceptanceAdvisory,
 					Acceptance: payload.Acceptance, Stats: payload.Stats, Worksets: payload.Worksets,
-					Metrics: payload.Metrics, EvidenceManifest: payload.EvidenceManifest,
+					Metrics: payload.Metrics, Telemetry: payload.Telemetry, EvidenceManifest: payload.EvidenceManifest,
 				}
 				session.WorksetStates = append([]WorksetGroupState(nil), payload.Worksets...)
 			}

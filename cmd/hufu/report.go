@@ -60,6 +60,10 @@ func generateReports(loadedTeams map[string]*teamContext, combinedResult string,
 		if tc == nil || !include(tc) {
 			continue
 		}
+		if tc.coordinator != nil && !tc.coordinator.TerminalLifecycleConfirmed() {
+			fmt.Fprintf(os.Stderr, "%s Report deferred for team %q: canonical run_finished is not confirmed\n", errStyle.Render("⚠"), teamName)
+			continue
+		}
 
 		data := gatherReportData(tc, teamName)
 		content := buildReportMD(data, teamName, combinedResult)
@@ -90,11 +94,16 @@ type reportData struct {
 	ContextUsageSection   string
 	ResolvedProfile       team.ExecutionProfile
 	RunResult             *team.RunResult
+	SourceRunID           string
+	EvidenceIdentity      string
 	TerminalSessions      []team.TerminalSession
 	WorkerMemory          team.WorkerMemoryReport
 	MemoryLearning        team.MemoryLearningReport
 	DeprecatedMemory      []team.DeprecatedMemoryToolUsage
 	ContextRouting        team.ContextManifestSummary
+	RuntimeWorksets       *team.RuntimeWorksetProjection
+	RuntimeWorksetError   string
+	CanonicalRunError     string
 	HistoricalTodoCount   int
 }
 
@@ -151,7 +160,6 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		d.SkillPatterns = gatherSkillPatterns(tc.coordinator)
 		d.ContextUsageSection = tc.coordinator.RenderContextUsageSection()
 		d.ResolvedProfile = tc.coordinator.ExecutionProfile()
-		d.RunResult = tc.coordinator.LastRunResult()
 		if sessions, err := tc.coordinator.TerminalSessions(context.Background()); err == nil {
 			d.TerminalSessions = sessions
 		}
@@ -162,10 +170,39 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		d.DeprecatedMemory = tc.coordinator.DeprecatedMemoryToolReport()
 		d.ContextRouting = tc.coordinator.ContextManifestReport()
 	}
-	if d.RunResult == nil && d.SessionData != nil {
-		d.RunResult = d.SessionData.RunResult
+	if tc.session != nil {
+		canonical, err := team.LoadCanonicalRunFinishedSnapshot(tc.session.Workspace, "")
+		if err != nil {
+			d.CanonicalRunError = err.Error()
+		} else {
+			d.RunResult = canonical
+		}
+	}
+	if d.RunResult != nil {
+		d.SourceRunID = d.RunResult.RunID
+		if d.RunResult.EvidenceManifest != nil {
+			if d.SourceRunID == "" {
+				d.SourceRunID = d.RunResult.EvidenceManifest.RunID
+			}
+			d.EvidenceIdentity = d.RunResult.EvidenceManifest.ManifestHash
+		}
+	}
+	if d.SourceRunID == "" {
+		d.SourceRunID = "run-unavailable"
+	}
+	if d.EvidenceIdentity == "" {
+		d.EvidenceIdentity = "unavailable"
 	}
 	if tc.session != nil {
+		if d.RunResult == nil {
+			// A workset pointer without a confirmed run_finished snapshot is only
+			// an uncommitted filesystem projection and must not enter the report.
+			d.RuntimeWorksetError = "canonical run_finished snapshot is unavailable"
+		} else if projection, err := team.LoadRuntimeWorksetProjection(tc.session.Workspace, d.RunResult); err != nil {
+			d.RuntimeWorksetError = err.Error()
+		} else {
+			d.RuntimeWorksets = projection
+		}
 		verifiedManifest, verified := verifiedEvidenceManifest(tc.session.Workspace, d.RunResult)
 		if verified {
 			d.Todos, d.HistoricalTodoCount = latestRunTodos(d.Todos, verifiedManifest)
@@ -380,6 +417,17 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 
 	duration := time.Since(data.StartedAt).Round(time.Second)
 	fmt.Fprintf(&b, "**Duration:** %s\n\n", duration)
+	snapshotState := "unavailable"
+	if data.RunResult != nil {
+		snapshotState = "confirmed"
+	}
+	b.WriteString("## Run Snapshot\n\n")
+	fmt.Fprintf(&b, "- **Source run_id:** `%s`\n", reportSafeMetadata(data.SourceRunID, 160))
+	fmt.Fprintf(&b, "- **Snapshot:** `%s` (canonical run_finished reducer snapshot)\n", snapshotState)
+	fmt.Fprintf(&b, "- **Evidence identity:** `%s`\n\n", reportSafeMetadata(data.EvidenceIdentity, 160))
+	if data.CanonicalRunError != "" {
+		fmt.Fprintf(&b, "> ⚠️ Canonical run snapshot was not accepted: %s\n\n", reportSafeMetadata(data.CanonicalRunError, 240))
+	}
 	if data.RunResult != nil {
 		b.WriteString("## Run Outcome\n\n")
 		fmt.Fprintf(&b, "- **Outcome:** `%s`\n", data.RunResult.Outcome)
@@ -408,6 +456,16 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 			for _, workset := range data.RunResult.Worksets {
 				fmt.Fprintf(&b, "| `%s` | `%s` | %d | %d | %d | %d | `%s` |\n", reportSafeMetadata(workset.WorksetID, 120), reportSafeMetadata(workset.SourceArtifactID, 120), workset.Expected, workset.Completed, workset.Verified, workset.Failed, reportSafeMetadata(workset.State, 40))
 			}
+		}
+		if data.RuntimeWorksets != nil {
+			b.WriteString("\n### Runtime Workset Artifacts\n\n")
+			fmt.Fprintf(&b, "- **Projection run_id:** `%s`\n", reportSafeMetadata(data.RuntimeWorksets.RunID, 160))
+			fmt.Fprintf(&b, "- **Verified action manifests:** %d\n", len(data.RuntimeWorksets.Pointers))
+			for _, pointer := range data.RuntimeWorksets.Pointers {
+				fmt.Fprintf(&b, "- `%s` — sha256 `%s`\n", reportSafeMetadata(pointer.ManifestArtifactID, 160), reportSafeMetadata(pointer.ManifestSHA256, 160))
+			}
+		} else if data.RuntimeWorksetError != "" {
+			fmt.Fprintf(&b, "\n> ⚠️ Runtime workset projection was not accepted for run `%s`: %s\n", reportSafeMetadata(data.SourceRunID, 160), reportSafeMetadata(data.RuntimeWorksetError, 240))
 		}
 		metrics := data.RunResult.Metrics
 		b.WriteString("\n### Reliability Metrics\n\n")

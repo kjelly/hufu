@@ -60,6 +60,16 @@ type LearningGap struct {
 	RepairEvent    *RunEvent `json:"repair_event,omitempty"`
 }
 
+// PendingTerminalCommit records the identity of a run_finished append whose
+// caller stopped waiting before durability was known. It is deliberately
+// limited to the event identity needed for restart reconciliation; the event
+// store remains the source of the terminal result.
+type PendingTerminalCommit struct {
+	RunID          string `json:"run_id"`
+	IdempotencyKey string `json:"idempotency_key"`
+	BranchID       string `json:"branch_id"`
+}
+
 type SessionData struct {
 	CreatedAt                          string                    `json:"created_at"`
 	UpdatedAt                          string                    `json:"updated_at"`
@@ -98,6 +108,7 @@ type SessionData struct {
 	LearningGaps                []LearningGap              `json:"learning_gaps,omitempty"`
 	RecoveryRequired            bool                       `json:"recovery_required,omitempty"`
 	RecoveryReason              string                     `json:"recovery_reason,omitempty"`
+	PendingTerminalCommit       *PendingTerminalCommit     `json:"pending_terminal_commit,omitempty"`
 	CoordinatorContextManifests []ContextInjectionManifest `json:"coordinator_context_manifests,omitempty"`
 }
 

@@ -311,32 +311,39 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	// result and continuation have been persisted by stopForNoProgress.
 	if t.coordinator.noProgressStopPending() {
 		existing := t.coordinator.LastRunResult()
-		var acceptance *AcceptanceResult
-		if existing != nil {
-			acceptance = existing.Acceptance
+		if existing == nil {
+			return fantasy.NewTextErrorResponse("no-progress budget exhausted; partial run result is not available"), nil
+		}
+		// The no-progress disposition is decided before this finish side effect.
+		// Finish still gets a fresh acceptance/artifact observation so a second
+		// finish cannot silently reuse the first snapshot, but it must preserve
+		// the already-authoritative partial disposition.
+		acceptance, acceptanceErr := t.coordinator.runAcceptance(ctx)
+		if acceptanceErr != nil {
+			t.coordinator.report(t.coordinator.newEvent("error").withMessage("acceptance check after no-progress stop failed: " + acceptanceErr.Error()))
 		}
 		if manifestErr := t.coordinator.finalizeEvidenceManifest(ctx, acceptance); manifestErr != nil {
 			t.coordinator.report(t.coordinator.newEvent("error").withMessage("evidence manifest finalization failed: " + manifestErr.Error()))
 		}
-		if existing == nil {
-			return fantasy.NewTextErrorResponse("no-progress budget exhausted; partial run result is not available"), nil
+		t.coordinator.terminalLifecycleMu.Lock()
+		activeLifecycle := t.coordinator.terminalLifecycleRunID != ""
+		t.coordinator.terminalLifecycleMu.Unlock()
+		preserved := existing
+		if !activeLifecycle {
+			copyResult := *existing
+			preserved = &copyResult
 		}
-		preserved := *existing
 		preserved.Response = response
 		preserved.Stats = SummarizeRunStats(todoList.Items())
 		preserved.Metrics = t.coordinator.Metrics()
+		preserved.Acceptance = acceptance
 		t.coordinator.lastEvidenceManifestMu.RLock()
 		preserved.EvidenceManifest = t.coordinator.lastEvidenceManifest
 		t.coordinator.lastEvidenceManifestMu.RUnlock()
-		finalized := t.coordinator.FinalizeRun(ctx, &preserved, acceptance)
-		if finalized != nil {
-			if finalized.Continuation == nil {
-				finalized.Continuation = preserved.Continuation
-			}
-			t.coordinator.SetLastRunResult(finalized)
-		} else {
-			t.coordinator.SetLastRunResult(&preserved)
-		}
+		// Preserve the elected business pointer. In the active path this is the
+		// pending no-progress candidate; in compatibility mode this is a fresh
+		// compatibility candidate. FinalizeRun owns the only terminal projection.
+		t.coordinator.FinalizeRun(ctx, preserved, acceptance)
 		t.coordinator.finishCalled.Store(true)
 		t.coordinator.coordinatorPolicyRepairPending.Store(false)
 		return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil

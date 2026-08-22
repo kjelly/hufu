@@ -574,21 +574,34 @@ type Coordinator struct {
 	// round/budget circuit breaker fired; refusing every new delegation there
 	// makes acceptance self-healing impossible.  The flag is cleared when the
 	// run is reset or a finish succeeds.
-	acceptanceRecovery       atomic.Bool
-	budgetTripped            atomic.Bool
-	lastRunResult            *RunResult
-	lastRunResultMu          sync.RWMutex
-	lastEvidenceManifest     *EvidenceManifest
-	lastEvidenceManifestMu   sync.RWMutex
-	diagnosticPackets        []DiagnosticPacket
-	diagnosticPacketsMu      sync.RWMutex
-	pendingDiagnosticPackets map[string]DiagnosticPacket
-	planRevisions            []PlanRevision
-	planRevisionsMu          sync.RWMutex
-	planMaxTasks             int
-	planMaxAttempts          int
-	planReviews              map[string]PlanReviewResult
-	planReviewsMu            sync.RWMutex
+	acceptanceRecovery atomic.Bool
+	budgetTripped      atomic.Bool
+	lastRunResult      *RunResult
+	lastRunResultMu    sync.RWMutex
+	// terminalLifecycleMu protects only the terminal state transition and
+	// candidate pointer. It must never be held across event-store or session
+	// disk I/O.
+	terminalLifecycleMu           sync.Mutex
+	terminalLifecycleRunID        string
+	terminalLifecycleState        terminalLifecycleState
+	terminalLifecycleCandidate    *RunResult
+	terminalLifecycleSnapshot     *RunResult
+	terminalLifecycleDone         chan struct{}
+	terminalLifecyclePrepareDone  chan struct{}
+	terminalLifecyclePrepared     bool
+	terminalLifecycleErr          error
+	terminalLifecycleWaitTimedOut bool
+	lastEvidenceManifest          *EvidenceManifest
+	lastEvidenceManifestMu        sync.RWMutex
+	diagnosticPackets             []DiagnosticPacket
+	diagnosticPacketsMu           sync.RWMutex
+	pendingDiagnosticPackets      map[string]DiagnosticPacket
+	planRevisions                 []PlanRevision
+	planRevisionsMu               sync.RWMutex
+	planMaxTasks                  int
+	planMaxAttempts               int
+	planReviews                   map[string]PlanReviewResult
+	planReviewsMu                 sync.RWMutex
 	// contractWarnings deduplicates contract_warning events per
 	// (todoID, code, message) within a single dispatch cycle, so that both
 	// the ExecuteTasks preflight and the executeTask execution-path check
@@ -835,23 +848,42 @@ func (c *Coordinator) LastRunResult() *RunResult {
 
 // SetLastRunResult sets the computed RunResult for this coordinator.
 func (c *Coordinator) SetLastRunResult(res *RunResult) {
-	if res != nil {
+	if c == nil {
+		return
+	}
+	// This method is deliberately a projection seam, never a terminal
+	// decision point. In particular it must not elect a candidate or prepare a
+	// terminal result: an active invocation may still be before its acceptance,
+	// evidence, and reliability boundaries.
+	c.setLastRunResultInMemory(res)
+	c.terminalLifecycleMu.Lock()
+	active := c.terminalLifecycleRunID != ""
+	confirmed := c.terminalLifecycleState == terminalLifecycleCommitted
+	c.terminalLifecycleMu.Unlock()
+	if res != nil && (!active || confirmed) {
+		// Compatibility callers may use this API outside an invocation. These
+		// are ordinary in-memory result annotations, not terminal election.
 		res.Worksets = c.WorksetGroupStates()
 		c.annotateRunCompletionSemantics(res)
 	}
-	c.lastRunResultMu.Lock()
-	c.lastRunResult = res
-	c.lastRunResultMu.Unlock()
-	// Persist the canonical result immediately. This is intentionally best
-	// effort: the normal checkpoint path still owns task/session durability,
-	// while an outcome must never disappear merely because the process exits
-	// after finish.
+	if active && !confirmed {
+		// Keep an ephemeral in-memory value available to the terminal owner and
+		// defer path, but never let an unconfirmed result enter session.json.
+		return
+	}
 	if err := c.mutateSessionData(func(sd *SessionData) error {
 		sd.RunResult = res
 		return nil
-	}); err == nil {
-		_ = c.persistSession("persist run result")
+	}); err != nil {
+		return
 	}
+	_ = c.persistSession("persist confirmed run result")
+}
+
+func (c *Coordinator) setLastRunResultInMemory(res *RunResult) {
+	c.lastRunResultMu.Lock()
+	c.lastRunResult = res
+	c.lastRunResultMu.Unlock()
 }
 
 // annotateRunCompletionSemantics projects canonical task/result evidence onto

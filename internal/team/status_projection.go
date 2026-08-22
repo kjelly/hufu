@@ -466,6 +466,12 @@ func (c *Coordinator) reconcileTerminalStatusProjection(result *RunResult) {
 	if c == nil || result == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return
 	}
+	// Terminal status and completed workset files are projections of the
+	// confirmed immutable run_finished snapshot. Never advance either one for
+	// an append failure or a recovery-required lifecycle.
+	if !c.TerminalLifecycleConfirmed() {
+		return
+	}
 	items := append([]*TodoItem(nil), c.taskTracker.TodoList().Items()...)
 	coordinatorStatus := TaskDone
 	if result.Outcome == RunOutcomeBlocked || result.Outcome == RunOutcomeFailed || result.Outcome == RunOutcomePartial || result.Outcome == RunOutcomeCancelled || result.Outcome == RunOutcomeStalled {
@@ -474,6 +480,9 @@ func (c *Coordinator) reconcileTerminalStatusProjection(result *RunResult) {
 	items = append(items, &TodoItem{ID: CoordTodoID, Agent: "coordinator", Status: coordinatorStatus, Detail: FormatCanonicalStatus(result)})
 	if err := c.reconcileProjectedItemsForRun(items, string(result.Outcome)); err != nil {
 		log.Printf("warning: terminal status projection failed: %v", err)
+	}
+	if err := c.publishCompletedRuntimeWorksetProjection(result); err != nil {
+		log.Printf("warning: completed workset projection failed: %v", err)
 	}
 }
 

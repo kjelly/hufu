@@ -30,7 +30,7 @@ func (j eventStoreJournal) Append(ctx context.Context, event RunEvent) (RunEvent
 	if j.store == nil {
 		return RunEvent{}, fmt.Errorf("event journal is unavailable")
 	}
-	return j.store.AppendPersisted(event)
+	return j.store.AppendPersistedContext(ctx, event)
 }
 
 func (j eventStoreJournal) ReadEvents(ctx context.Context) ([]RunEvent, error) {

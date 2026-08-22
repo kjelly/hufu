@@ -359,14 +359,19 @@ func (c *Coordinator) stopForNoProgress(reason string) (bool, string) {
 		NoProgress:              &counters,
 		NoProgressReplanPending: c.noProgressReplanPending(),
 	}
-	finalized := c.FinalizeRun(context.Background(), &evaluated, nil)
-	if finalized != nil {
-		if finalized.Continuation == nil {
-			finalized.Continuation = evaluated.Continuation
-		}
-		c.SetLastRunResult(finalized)
-	} else {
+	// An active invocation has not reached its terminal event boundary yet.
+	// Keep the no-progress disposition as the pending business result so the
+	// finish tool/deferred owner can add its final acceptance and evidence facts
+	// before the one immutable run_finished snapshot is appended. Compatibility
+	// callers without an active invocation retain the historical direct
+	// finalization behavior.
+	c.terminalLifecycleMu.Lock()
+	activeLifecycle := c.terminalLifecycleRunID != ""
+	c.terminalLifecycleMu.Unlock()
+	if activeLifecycle {
 		c.SetLastRunResult(&evaluated)
+	} else {
+		c.FinalizeRun(context.Background(), &evaluated, nil)
 	}
 	// Preserve a durable resume handoff even when the stop is observed at a
 	// task boundary before ensureFinished has entered its continuation loop.

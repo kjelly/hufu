@@ -3,6 +3,7 @@ package team
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -47,7 +48,9 @@ type RunEvent struct {
 
 // EventStore manages durable append-only event logging with hash chain verification.
 type EventStore struct {
-	mu              sync.Mutex
+	// mu is a one-token semaphore so emergency callers can cancel lock
+	// acquisition. Once acquired, kernel write/sync calls are not cancellable.
+	mu              chan struct{}
 	f               *os.File
 	path            string
 	runID           string
@@ -71,8 +74,8 @@ type EventStore struct {
 // without an explicit BranchID are stamped with it. Empty means no stamping
 // (events then fall back to the implicit main lineage).
 func (es *EventStore) SetBranchID(branchID string) {
-	es.mu.Lock()
-	defer es.mu.Unlock()
+	es.lock()
+	defer es.release()
 	es.branchID = branchID
 }
 
@@ -102,6 +105,7 @@ func NewEventStore(workspace, runID, sessionID string) (*EventStore, error) {
 	}
 
 	es := &EventStore{
+		mu:              make(chan struct{}, 1),
 		f:               f,
 		path:            path,
 		runID:           runID,
@@ -109,6 +113,7 @@ func NewEventStore(workspace, runID, sessionID string) (*EventStore, error) {
 		syncFile:        f.Sync,
 		idempotencyKeys: make(map[string]RunEvent),
 	}
+	es.mu <- struct{}{}
 
 	if err := es.rescan(); err != nil {
 		_ = f.Close()
@@ -183,8 +188,63 @@ func (es *EventStore) Append(event RunEvent) error {
 // hash-chained record that reached the durability boundary. It is the commit
 // primitive used by EventJournal and event-first projections.
 func (es *EventStore) AppendPersisted(event RunEvent) (RunEvent, error) {
-	es.mu.Lock()
-	defer es.mu.Unlock()
+	return es.AppendPersistedContext(context.Background(), event)
+}
+
+// AppendPersistedBoundedContext bounds the caller's wait even when the event
+// store has already admitted an append and the underlying Write/Sync syscall
+// cannot be cancelled. The append remains owned by EventStore until the
+// syscall returns; a caller timeout is durability-unknown, never success.
+// Close acquires the same semaphore and therefore waits for an owned append
+// before closing the file rather than leaking an append worker against a
+// released file descriptor.
+func (es *EventStore) AppendPersistedBoundedContext(ctx context.Context, event RunEvent) (RunEvent, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return RunEvent{}, err
+	}
+	if ctx.Done() == nil {
+		return es.AppendPersistedContext(ctx, event)
+	}
+	type appendResult struct {
+		event RunEvent
+		err   error
+	}
+	resultCh := make(chan appendResult, 1)
+	var worker sync.WaitGroup
+	worker.Add(1)
+	go func() {
+		defer worker.Done()
+		persisted, err := es.AppendPersistedContext(context.Background(), event)
+		resultCh <- appendResult{event: persisted, err: err}
+	}()
+	select {
+	case result := <-resultCh:
+		worker.Wait()
+		return result.event, result.err
+	case <-ctx.Done():
+		// The worker is deliberately not detached from EventStore ownership:
+		// its result channel is buffered and Close waits on the store semaphore.
+		// The caller must enter recovery and must not publish projections.
+		return RunEvent{}, fmt.Errorf("event durability unknown: %w", ctx.Err())
+	}
+}
+
+// AppendPersistedContext is the cancellable append boundary. Context
+// cancellation applies to admission and lock acquisition. After admission,
+// kernel write/sync calls may still run to completion; callers must treat a
+// deadline that expires in that window as durability-unknown and reconcile by
+// idempotency key on restart.
+func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent) (RunEvent, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := es.acquire(ctx); err != nil {
+		return RunEvent{}, err
+	}
+	defer es.release()
 
 	if es.closed {
 		return RunEvent{}, fmt.Errorf("event store closed")
@@ -287,6 +347,24 @@ func (es *EventStore) AppendPersisted(event RunEvent) (RunEvent, error) {
 	}
 	es.cachedEvents = append(es.cachedEvents, cloneRunEvent(event))
 	return event, nil
+}
+
+func (es *EventStore) acquire(ctx context.Context) error {
+	if es == nil || es.mu == nil {
+		return fmt.Errorf("event store lock is unavailable")
+	}
+	select {
+	case <-es.mu:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (es *EventStore) release() {
+	if es != nil && es.mu != nil {
+		es.mu <- struct{}{}
+	}
 }
 
 // reopenAndRescan closes the file whose durable state is uncertain, reopens
@@ -439,8 +517,8 @@ func (es *EventStore) invalidateState(err error) {
 // rescan and maintained after each durable append. Callers may safely mutate
 // returned payloads without changing the store's canonical records.
 func (es *EventStore) ReadEvents() ([]RunEvent, error) {
-	es.mu.Lock()
-	defer es.mu.Unlock()
+	es.lock()
+	defer es.release()
 	if es.path == "" {
 		return nil, nil
 	}
@@ -476,8 +554,8 @@ func cloneRunEvents(events []RunEvent) []RunEvent {
 
 // VerifyHashChain validates that all events form an unbroken cryptographic hash chain.
 func (es *EventStore) VerifyHashChain() error {
-	es.mu.Lock()
-	defer es.mu.Unlock()
+	es.lock()
+	defer es.release()
 	if es.closed {
 		return fmt.Errorf("event store closed")
 	}
@@ -489,8 +567,8 @@ func (es *EventStore) VerifyHashChain() error {
 
 // Close closes the underlying log file.
 func (es *EventStore) Close() error {
-	es.mu.Lock()
-	defer es.mu.Unlock()
+	es.lock()
+	defer es.release()
 	if es.f != nil {
 		err := es.f.Close()
 		es.f = nil
@@ -499,4 +577,11 @@ func (es *EventStore) Close() error {
 	}
 	es.closed = true
 	return nil
+}
+
+func (es *EventStore) lock() {
+	if es == nil || es.mu == nil {
+		return
+	}
+	<-es.mu
 }

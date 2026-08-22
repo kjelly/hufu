@@ -513,7 +513,21 @@ func downgradeReliabilityResult(result *RunResult, violation *ReliabilityRollout
 }
 
 func downgradeReliabilityResultForError(result *RunResult, cause error) {
-	if result == nil || cause == nil || result.Outcome != RunOutcomeCompleted || !result.GoalSatisfied {
+	if result == nil || cause == nil {
+		return
+	}
+	// A corrupt historical reliability record is a blocked terminal truth even
+	// when another preparation fact is already incomplete. Keeping it merely
+	// partial would hide the finite recovery boundary on restart.
+	if strings.Contains(cause.Error(), "load historical reliability report") {
+		result.Outcome = RunOutcomeBlocked
+		result.GoalSatisfied = false
+		result.StopReason = StopReasonExternalBlockage
+		result.ExitCode = 7
+		result.Reason = cause.Error()
+		return
+	}
+	if result.Outcome != RunOutcomeCompleted || !result.GoalSatisfied {
 		return
 	}
 	result.Outcome = RunOutcomeBlocked

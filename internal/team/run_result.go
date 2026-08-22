@@ -769,6 +769,7 @@ func (s RunStats) IsZero() bool {
 }
 
 type RunResult struct {
+	RunID            string              `json:"run_id,omitempty"`
 	Outcome          RunOutcome          `json:"outcome"`
 	GoalSatisfied    bool                `json:"goal_satisfied"`
 	GoalMode         GoalMode            `json:"goal_mode,omitempty"`

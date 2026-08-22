@@ -7,16 +7,31 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
 	tuipkg "github.com/kjelly/hufu/internal/tui"
 )
+
+const emergencyFinalizationTimeout = 1500 * time.Millisecond
+
+// processExit is an injectable seam for shutdown tests. Production retains
+// the historical os.Exit behavior.
+var processExit = os.Exit
 
 // setupInterruptHandler installs the SIGINT / Ctrl+C handler that
 // drives the wrap-up / force-quit two-stage shutdown. Returns a
 // cleanup function that tears down the signal handler. The signal
 // goroutine calls cancelFn on the second Ctrl+C to stop in-flight work.
 func setupInterruptHandler(injector *promptInjector, activeCoord *activeCoordinator, loadedTeamsPointer *map[string]*teamContext, cancelFn context.CancelFunc) func() {
+	return setupInterruptHandlerWithHooks(injector, activeCoord, loadedTeamsPointer, cancelFn, func() {
+		emergencyFinalizeCoordinator(activeCoord)
+	}, processExit)
+}
+
+func setupInterruptHandlerWithHooks(injector *promptInjector, activeCoord *activeCoordinator, loadedTeamsPointer *map[string]*teamContext, cancelFn context.CancelFunc, emergencyFinalize func(), exit func(int)) func() {
+	// The map is intentionally retained in the compatibility signature, but
+	// emergency shutdown must never iterate it while segment loading may still
+	// be publishing teams. The atomic active coordinator is the stable snapshot.
+	_ = loadedTeamsPointer
 	sigIntCh := make(chan os.Signal, 1)
 	signal.Notify(sigIntCh, os.Interrupt)
 	sigIntDone := make(chan struct{})
@@ -62,19 +77,12 @@ func setupInterruptHandler(injector *promptInjector, activeCoord *activeCoordina
 				watchdog = time.AfterFunc(8*time.Second, func() {
 					fmt.Fprintf(os.Stderr, "\n%s Operations did not cancel within 8s. Forcing exit.\n",
 						errStyle.Render("⚠"))
-					for _, tc := range *loadedTeamsPointer {
-						if tc == nil {
-							continue
-						}
-						if tc.session != nil && tc.session.Workspace != "" {
-							fmt.Fprintf(os.Stderr, "  Session: %s\n", tc.session.Workspace)
-							if tc.sessionData != nil {
-								_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
-								_ = team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
-							}
-						}
+					if emergencyFinalize != nil {
+						emergencyFinalize()
 					}
-					os.Exit(130)
+					if exit != nil {
+						exit(130)
+					}
 				})
 				cancelFn()
 			}
@@ -86,6 +94,21 @@ func setupInterruptHandler(injector *promptInjector, activeCoord *activeCoordina
 		signal.Stop(sigIntCh)
 		close(sigIntCh)
 		<-sigIntDone
+	}
+}
+
+func emergencyFinalizeCoordinator(activeCoord *activeCoordinator) {
+	if activeCoord == nil {
+		return
+	}
+	c := activeCoord.Load()
+	if c == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), emergencyFinalizationTimeout)
+	defer cancel()
+	if err := c.EmergencyFinalizeRun(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "\n%s Emergency terminal persistence failed: %v\n", errStyle.Render("⚠"), err)
 	}
 }
 

@@ -83,6 +83,7 @@ type ExecutionEvent struct {
 // LifecycleEventPayload defines the canonical observability envelope required for all
 // run and phase events to guarantee a consistent schema for telemetry.
 type LifecycleEventPayload struct {
+	RunID            string        `json:"run_id,omitempty"`
 	Phase            string        `json:"phase"`
 	Agent            string        `json:"agent"`
 	Provider         string        `json:"provider"`
@@ -260,6 +261,17 @@ func (c *Coordinator) beginInvocationExecutionRun(parent context.Context) (conte
 		c.taskTracker.TodoList().SetRunID(runID)
 	}
 	c.executionEventsMu.Unlock()
+	c.terminalLifecycleMu.Lock()
+	c.terminalLifecycleRunID = runID
+	c.terminalLifecycleState = terminalLifecycleOpen
+	c.terminalLifecycleCandidate = nil
+	c.terminalLifecycleSnapshot = nil
+	c.terminalLifecycleDone = make(chan struct{})
+	c.terminalLifecyclePrepareDone = make(chan struct{})
+	c.terminalLifecyclePrepared = false
+	c.terminalLifecycleErr = nil
+	c.terminalLifecycleWaitTimedOut = false
+	c.terminalLifecycleMu.Unlock()
 
 	workspace := ""
 	if c.session != nil {
@@ -318,7 +330,7 @@ func (c *Coordinator) beginInvocationExecutionRun(parent context.Context) (conte
 
 	return invocationCtx, func() {
 		// End the watchdog first and join it. Provider/process/IPC owners are
-		// then stopped before terminal evidence and run_finished are projected,
+		// then stopped before terminal shadow projections are exported,
 		// preventing late stall/error events from racing durable finalization.
 		if err := owner.close(); err != nil {
 			log.Printf("warning: stop provider hard-abort boundary: %v", err)
@@ -326,76 +338,29 @@ func (c *Coordinator) beginInvocationExecutionRun(parent context.Context) (conte
 		watchdog.wait()
 		c.invocationWatchdog.CompareAndSwap(watchdog, nil)
 		c.drainAsyncTasks()
-		// Every terminal result, including no-progress and coordinator-fallback
-		// exits, must carry the final evidence chain before run_finished is
-		// published. The finish tool also performs this work earlier so policy
-		// failures can be surfaced interactively; this deferred gate covers all
-		// non-tool terminal paths.
-		if result := c.LastRunResult(); result != nil && result.EvidenceManifest == nil {
-			if err := c.finalizeEvidenceManifest(context.Background(), result.Acceptance); err != nil {
-				log.Printf("warning: final evidence manifest before run_finished failed: %v", err)
+		// The defer is only a last owner handoff. It must not assemble a partial
+		// payload, patch evidence, or publish a compatibility projection. The
+		// canonical finalizer owns the complete immutable snapshot; if it cannot
+		// finish within this bounded handoff, it records recovery-required and
+		// leaves terminal projections untouched.
+		c.terminalLifecycleMu.Lock()
+		terminalActive := c.terminalLifecycleRunID != ""
+		terminalState := c.terminalLifecycleState
+		c.terminalLifecycleMu.Unlock()
+		if terminalActive && terminalState != terminalLifecycleCommitted && terminalState != terminalLifecycleRecoveryRequired {
+			result := c.LastRunResult()
+			if result == nil {
+				c.markTerminalRecovery("invocation ended without a terminal result")
 			} else {
-				c.lastEvidenceManifestMu.RLock()
-				result.EvidenceManifest = c.lastEvidenceManifest
-				c.lastEvidenceManifestMu.RUnlock()
-				c.SetLastRunResult(result)
-			}
-		}
-		if result := c.LastRunResult(); result != nil {
-			if evalReport, err := c.PersistReliabilityEvaluation(result); err != nil {
-				log.Printf("warning: persist reliability evaluation failed: %v", err)
-				// Reliability-report read/write failures are terminal safety
-				// failures too. Publishing a completed result without a valid
-				// historical metrics report would make the run unverifiable.
-				downgradeReliabilityResultForError(result, err)
-				c.SetLastRunResult(result)
-			} else {
-				// Keep the quantitative production metrics visible in the durable
-				// event-store terminal record as well as in the JSON report.
-				_ = c.emitEvent("reliability_eval", "coordinator", "", LifecycleEventPayload{
-					ReliabilityMetrics:    &evalReport.Metrics,
-					ProductionObservation: evalReport.ProductionObservation,
-				})
+				finalizeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				final := c.FinalizeRun(finalizeCtx, result, result.Acceptance)
+				cancel()
+				if final == nil || !c.TerminalLifecycleConfirmed() {
+					c.markTerminalRecovery("deferred terminal finalization did not confirm run_finished")
+				}
 			}
 		}
 		c.recordRunTelemetry(c.LastRunResult())
-		payload := LifecycleEventPayload{}
-		if result := c.LastRunResult(); result != nil {
-			payload.Outcome = result.Outcome
-			payload.GoalSatisfied = result.GoalSatisfied
-			payload.GoalMode = result.GoalMode
-			payload.StopReason = result.StopReason
-			payload.ExitCode = result.ExitCode
-			payload.Reason = result.Reason
-			payload.Response = result.Response
-			payload.UnresolvedTasks = result.UnresolvedTasks
-			payload.CompletedReview = result.CompletedReview
-			payload.FindingsPresent = result.FindingsPresent
-			payload.FixedAndVerified = result.FixedAndVerified
-			payload.AcceptanceAdvisory = result.AcceptanceAdvisory
-			if result.Acceptance != nil {
-				payload.AcceptanceState = result.Acceptance.EffectiveState()
-				payload.AcceptancePassed = result.Acceptance.IsPassed()
-				payload.Acceptance = result.Acceptance
-			}
-			payload.Worksets = append([]WorksetGroupState(nil), result.Worksets...)
-			payload.Stats = &result.Stats
-			payload.Metrics = &result.Metrics
-			payload.Telemetry = result.Telemetry
-			if result.EvidenceManifest != nil {
-				payload.EvidenceManifest = result.EvidenceManifest
-			}
-		} else {
-			payload.Outcome = RunOutcomeFailed
-			payload.GoalSatisfied = false
-		}
-		if c.eventStore == nil {
-			if c.sessionData != nil && c.sessionData.RecoveryRequired {
-				log.Printf("error: terminal persistence unavailable: recovery event journal is not writable; refusing unsafe run_finished append")
-			}
-		} else if err := c.emitEvent("run_finished", "coordinator", "", payload); err != nil {
-			log.Printf("error: terminal persistence unavailable: failed to write run_finished event: %v", err)
-		}
 		var canonicalEvents []RunEvent
 		if c.eventStore != nil {
 			var readErr error
@@ -410,7 +375,9 @@ func (c *Coordinator) beginInvocationExecutionRun(parent context.Context) (conte
 			// be captured for the post-run --report output (HF-MEM5-007
 			// post-run visibility: --report must show the just-completed
 			// run's counts, not always an empty table).
-			c.captureCompletedRunDeprecatedReport()
+			if c.TerminalLifecycleConfirmed() {
+				c.captureCompletedRunDeprecatedReport()
+			}
 			_ = c.eventStore.Close()
 			c.eventStore = nil
 		}
@@ -430,6 +397,21 @@ func (c *Coordinator) beginInvocationExecutionRun(parent context.Context) (conte
 				c.dualWriteFailures.Add(1)
 			}
 		}
+		// The invocation is no longer active once all terminal projections and
+		// shadow export work have completed. Clearing the active marker keeps
+		// later compatibility callers from being mistaken for a second active
+		// terminal owner while preserving the confirmed result in memory/session.
+		c.terminalLifecycleMu.Lock()
+		if c.terminalLifecycleState == terminalLifecycleCommitted {
+			c.terminalLifecycleRunID = ""
+			c.terminalLifecycleState = terminalLifecycleOpen
+			c.terminalLifecycleCandidate = nil
+			c.terminalLifecycleSnapshot = nil
+			c.terminalLifecyclePrepared = false
+			c.terminalLifecycleErr = nil
+			c.terminalLifecycleWaitTimedOut = false
+		}
+		c.terminalLifecycleMu.Unlock()
 	}
 }
 
@@ -482,9 +464,16 @@ func (c *Coordinator) recordRunTelemetry(result *RunResult) {
 	if c == nil || result == nil {
 		return
 	}
+	// The normal finalizer already attached telemetry before committing the
+	// canonical snapshot. Deferred telemetry is a projection only: it must not
+	// replace LastRunResult with another clone or mutate the committed result.
 	telemetry := c.buildRunTelemetry(result)
-	result.Telemetry = &telemetry
-	c.SetLastRunResult(result)
+	c.terminalLifecycleMu.Lock()
+	committed := c.terminalLifecycleState == terminalLifecycleCommitted
+	c.terminalLifecycleMu.Unlock()
+	if !committed {
+		return
+	}
 	c.executionEventsMu.RLock()
 	logger, runID, revision := c.executionEvents, c.executionRunID, c.executionTeamRevision
 	c.executionEventsMu.RUnlock()
