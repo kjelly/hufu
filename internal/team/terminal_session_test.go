@@ -7,9 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -17,6 +19,27 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/tools"
 )
+
+func TestConfigureTerminalProcessGroupIsModeSpecific(t *testing.T) {
+	pipeCmd := exec.Command("true")
+	configureTerminalProcessGroup(pipeCmd, TerminalModePipe)
+	if pipeCmd.SysProcAttr == nil || !pipeCmd.SysProcAttr.Setpgid {
+		t.Fatal("pipe launch must request a dedicated process group")
+	}
+
+	ptyCmd := exec.Command("true")
+	configureTerminalProcessGroup(ptyCmd, TerminalModePTY)
+	if ptyCmd.SysProcAttr != nil {
+		t.Fatalf("PTY launch unexpectedly configured pipe process-group attributes: %#v", ptyCmd.SysProcAttr)
+	}
+
+	preservedCmd := exec.Command("true")
+	preservedCmd.SysProcAttr = &syscall.SysProcAttr{}
+	configureTerminalProcessGroup(preservedCmd, TerminalModePipe)
+	if !preservedCmd.SysProcAttr.Setpgid {
+		t.Fatal("pipe launch did not mutate existing process attributes")
+	}
+}
 
 func TestTerminalSessionManager_OwnerLifecycleAndOutputArtifact(t *testing.T) {
 	workspace := t.TempDir()
@@ -148,6 +171,86 @@ func TestTerminalSessionLifecycleFactsAndExplicitWaitTargets(t *testing.T) {
 			t.Fatalf("lifecycle event %q missing or out of order in %v", event, events)
 		}
 		last = index
+	}
+}
+
+func TestTerminalCloseAfterNaturalFinalizationIsIdempotent(t *testing.T) {
+	for _, mode := range []TerminalMode{TerminalModePipe, TerminalModePTY} {
+		t.Run(string(mode), func(t *testing.T) {
+			if mode == TerminalModePTY && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+				t.Skip("PTY terminal sessions are unsupported on this platform")
+			}
+			workspace := t.TempDir()
+			var eventsMu sync.Mutex
+			var events []string
+			manager, err := NewTerminalSessionManager(workspace, func(eventType, _ string, _ map[string]interface{}) {
+				eventsMu.Lock()
+				defer eventsMu.Unlock()
+				events = append(events, eventType)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := WithTerminalTaskID(context.Background(), "task-close-after-exit")
+			session, err := manager.Start(ctx, TerminalStartRequest{
+				RunID: "run-close-after-exit", OwnerTaskID: "task-close-after-exit", Mode: mode,
+				Command: []string{"sh", "-c", "printf natural-exit"},
+			})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			completed := waitForTerminal(t, manager, session.ID, 2*time.Second)
+			if completed.State != TerminalSessionExited || completed.Running || completed.CleanupState == TerminalCleanupManual {
+				t.Fatalf("natural finalization = %+v", completed)
+			}
+
+			if err := manager.Close(ctx, session.ID); err != nil {
+				t.Fatalf("Close after natural finalization: %v", err)
+			}
+			if err := manager.Close(ctx, session.ID); err != nil {
+				t.Fatalf("second Close after natural finalization: %v", err)
+			}
+			listed, err := manager.List(context.Background(), session.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(listed) != 1 || listed[0].State != TerminalSessionClosed || listed[0].Running || listed[0].CleanupState == TerminalCleanupManual || listed[0].CleanupCompletedAt.IsZero() {
+				t.Fatalf("listed closed session = %+v", listed)
+			}
+			persisted, err := LoadTerminalSessions(workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(persisted) != 1 || persisted[0].State != TerminalSessionClosed || persisted[0].Running || persisted[0].CleanupState == TerminalCleanupManual {
+				t.Fatalf("persisted closed session = %+v", persisted)
+			}
+			if err := manager.RequireTaskClosed(session.OwnerTaskID); err != nil {
+				t.Fatalf("RequireTaskClosed after Close: %v", err)
+			}
+			if err := manager.RequireNoLeaks(session.RunID); err != nil {
+				t.Fatalf("RequireNoLeaks after Close: %v", err)
+			}
+
+			eventsMu.Lock()
+			defer eventsMu.Unlock()
+			count := func(want string) int {
+				got := 0
+				for _, event := range events {
+					if event == want {
+						got++
+					}
+				}
+				return got
+			}
+			for _, event := range []string{string(TerminalProcessStarted), "terminal_session_started", string(TerminalProcessExited), string(TerminalResourceReleased), "terminal_session_exited", "terminal_session_closed"} {
+				if count(event) != 1 {
+					t.Fatalf("event %q count = %d, events = %v", event, count(event), events)
+				}
+			}
+			if count(string(TerminalCleanupManualEvent)) != 0 {
+				t.Fatalf("natural finalized Close emitted manual custody: %v", events)
+			}
+		})
 	}
 }
 
@@ -301,7 +404,7 @@ func TestTerminalSessionManager_ResumeMarksRunningSessionUnknownAndBlocksGates(t
 	}
 }
 
-func TestTerminalSessionManager_ReconcileRestoredDeadProcessRecordsExitBeforeReconciliation(t *testing.T) {
+func TestTerminalSessionManager_ReconcileRestoredDeadProcessRetainsManualCustodyWhenContainmentIsUnproven(t *testing.T) {
 	workspace := t.TempDir()
 	logsPath := filepath.Join(workspace, logsDir)
 	if err := os.MkdirAll(logsPath, 0o755); err != nil {
@@ -339,18 +442,18 @@ func TestTerminalSessionManager_ReconcileRestoredDeadProcessRecordsExitBeforeRec
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.State != TerminalSessionExited || got.ExitedAt.IsZero() || got.ReleasedAt.IsZero() || got.ReconciledAt.IsZero() {
-		t.Fatalf("reconciled session = %+v, want exited lifecycle timestamps", got)
+	if got.State != TerminalSessionUnknown || got.Custodian != TerminalCustodianCoordinator || got.CleanupState != TerminalCleanupManual || got.ReconciledAt.IsZero() {
+		t.Fatalf("reconciled session = %+v, want manual custody", got)
 	}
-	assertTerminalEventOrder(t, events, []string{
-		"terminal_session_unknown",
-		string(TerminalProcessExited),
-		string(TerminalResourceReleased),
-		string(TerminalProcessReconciled),
-	})
+	if containsTerminalEvent(events, string(TerminalProcessExited)) || containsTerminalEvent(events, string(TerminalResourceReleased)) {
+		t.Fatalf("unproven restored session emitted release events: %v", events)
+	}
+	if !containsTerminalEvent(events, string(TerminalProcessReconciled)) {
+		t.Fatalf("reconciliation event missing: %v", events)
+	}
 }
 
-func TestTerminalSessionManager_CloseRestoredSessionEstablishesExitFact(t *testing.T) {
+func TestTerminalSessionManager_CloseRestoredSessionRetainsManualCustodyWithoutWaitableLeader(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		live bool
@@ -413,16 +516,16 @@ func TestTerminalSessionManager_CloseRestoredSessionEstablishesExitFact(t *testi
 				t.Fatal(err)
 			}
 			ctx := WithTerminalTaskID(context.Background(), "task-restored-close")
-			if err := manager.Close(ctx, "restored-close"); err != nil {
-				t.Fatal(err)
+			if err := manager.Close(ctx, "restored-close"); err == nil {
+				t.Fatal("Close unexpectedly released restored custody")
 			}
-			waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			result, err := NewTerminalSessionWaiter(manager).Wait(waitCtx, TerminalWaitRequest{SessionID: "restored-close", Target: TerminalWaitExit})
-			if err != nil || result.Session.ExitedAt.IsZero() {
-				t.Fatalf("exit wait after restored close = %+v, %v", result, err)
+			listed, err := manager.List(context.Background(), "run-restored-close")
+			if err != nil || len(listed) != 1 || listed[0].CleanupState != TerminalCleanupManual || listed[0].Custodian != TerminalCustodianCoordinator {
+				t.Fatalf("restored close state = %+v, %v; want manual custody", listed, err)
 			}
-			assertTerminalEventOrder(t, events, []string{string(TerminalProcessExited), string(TerminalResourceReleased)})
+			if containsTerminalEvent(events, string(TerminalProcessExited)) || containsTerminalEvent(events, string(TerminalResourceReleased)) {
+				t.Fatalf("restored close emitted release events: %v", events)
+			}
 		})
 	}
 }
@@ -711,6 +814,7 @@ func TestTerminalSession_RestoredUnknownCloseGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	defer func() { _ = manager.Close(ctx, session.ID) }()
 
 	// Restore manager state to simulate restart (session -> state unknown)
 	var events []map[string]interface{}
@@ -733,19 +837,13 @@ func TestTerminalSession_RestoredUnknownCloseGate(t *testing.T) {
 		t.Fatalf("restored session state = %s, want unknown while process alive", reconciled.State)
 	}
 
-	// Calling Close on restored unknown session should verify PID, terminate process, and record evidence
-	if err := restored.Close(ctx, session.ID); err != nil {
-		t.Fatalf("Close on restored unknown session: %v", err)
+	// A restarted manager cannot prove that the live leader remains waitable;
+	// it must retain manual custody rather than signal a recycled numeric ID.
+	if err := restored.Close(ctx, session.ID); err == nil {
+		t.Fatal("Close on restored unknown session unexpectedly released custody")
 	}
-
-	// Process must be dead
-	if isPIDAlive(session.PID) {
-		t.Fatalf("restored process %d is still alive after Close", session.PID)
-	}
-
-	// Task closed gate must now pass
-	if err := restored.RequireTaskClosed("task-unknown"); err != nil {
-		t.Fatalf("RequireTaskClosed failed after restored session closed: %v", err)
+	if err := restored.RequireTaskClosed("task-unknown"); err == nil {
+		t.Fatal("RequireTaskClosed passed while restored custody is manual")
 	}
 
 	eventsMu.Lock()
@@ -757,8 +855,8 @@ func TestTerminalSession_RestoredUnknownCloseGate(t *testing.T) {
 			break
 		}
 	}
-	if !foundCloseEvidence {
-		t.Fatalf("expected evidence payload in close event for restored session, got events: %+v", events)
+	if foundCloseEvidence {
+		t.Fatalf("restored manual custody emitted close evidence: %+v", events)
 	}
 }
 
@@ -1128,8 +1226,8 @@ func TestTerminalSession_PIDIdentityMismatch(t *testing.T) {
 
 	// Close should reject terminating the mismatched process and return error
 	err = restored.Close(ctx, session.ID)
-	if err == nil || !strings.Contains(err.Error(), "identity mismatch") {
-		t.Fatalf("Close on identity mismatch error = %v, want identity mismatch rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "coordinator_cleanup") {
+		t.Fatalf("Close on identity mismatch error = %v, want manual-custody rejection", err)
 	}
 
 	// Session must remain in unknown state
@@ -1259,5 +1357,638 @@ func TestPTYReadReturnsNormalizedBoundedScreen(t *testing.T) {
 	}
 	if strings.Contains(read.Screen, "\x1b[") || !strings.Contains(read.Screen, "hello") {
 		t.Fatalf("screen = %q, want ANSI-free hello", read.Screen)
+	}
+}
+
+func TestPTYExitPublishesOnlyAfterCopierDrainAndFlush(t *testing.T) {
+	workspace := t.TempDir()
+	var eventsMu sync.Mutex
+	var events []string
+	manager, err := NewTerminalSessionManager(workspace, func(eventType, _ string, _ map[string]interface{}) {
+		eventsMu.Lock()
+		defer eventsMu.Unlock()
+		events = append(events, eventType)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	copyGate := make(chan struct{})
+	manager.ptyCopyStartGate = copyGate
+	releaseCopy := func() {
+		select {
+		case <-copyGate:
+		default:
+			close(copyGate)
+		}
+	}
+	defer releaseCopy()
+
+	ctx := WithTerminalTaskID(context.Background(), "task-pty-order")
+	session, err := manager.Start(ctx, TerminalStartRequest{
+		RunID: "run-pty-order", OwnerTaskID: "task-pty-order", Mode: TerminalModePTY,
+		Command: []string{"sh", "-c", "printf hello"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.RLock()
+	managed := manager.sessions[session.ID]
+	if managed == nil || managed.processWaitDone == nil {
+		manager.mu.RUnlock()
+		t.Fatal("PTY session did not expose process wait synchronization")
+	}
+	processWaitDone := managed.processWaitDone
+	manager.mu.RUnlock()
+
+	select {
+	case <-processWaitDone:
+	case <-time.After(time.Second):
+		t.Fatal("child did not exit while PTY copier was gated")
+	}
+
+	persisted, err := LoadTerminalSessions(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 1 || persisted[0].State != TerminalSessionRunning || !persisted[0].Running {
+		t.Fatalf("session was published before PTY drain: %+v", persisted)
+	}
+	artifact, err := os.ReadFile(filepath.Join(workspace, persisted[0].OutputRefs[0].Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifact) != 0 {
+		t.Fatalf("artifact received output before copier release: %q", artifact)
+	}
+	eventsMu.Lock()
+	if containsTerminalEvent(events, string(TerminalProcessExited)) {
+		eventsMu.Unlock()
+		t.Fatalf("exit event published before PTY drain: %v", events)
+	}
+	eventsMu.Unlock()
+
+	releaseCopy()
+	completed := waitForTerminal(t, manager, session.ID, time.Second)
+	read, err := manager.Read(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.State != TerminalSessionExited || !strings.Contains(string(read.Output), "hello") || !strings.Contains(read.Screen, "hello") {
+		t.Fatalf("finalized PTY session = %+v, output=%q, screen=%q", completed, read.Output, read.Screen)
+	}
+	artifact, err = os.ReadFile(filepath.Join(workspace, completed.OutputRefs[0].Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(artifact) != "hello" {
+		t.Fatalf("flushed artifact = %q, want hello", artifact)
+	}
+}
+
+func TestPTYCloseWaitsForFinalizationAndPublishesClosedOnlyAfterRelease(t *testing.T) {
+	workspace := t.TempDir()
+	var eventsMu sync.Mutex
+	var events []string
+	manager, err := NewTerminalSessionManager(workspace, func(eventType, _ string, _ map[string]interface{}) {
+		eventsMu.Lock()
+		defer eventsMu.Unlock()
+		events = append(events, eventType)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	copyGate := make(chan struct{})
+	manager.ptyCopyStartGate = copyGate
+	var releaseOnce sync.Once
+	releaseCopy := func() { releaseOnce.Do(func() { close(copyGate) }) }
+	defer releaseCopy()
+
+	ctx := WithTerminalTaskID(context.Background(), "task-pty-close-order")
+	readyPath := filepath.Join(workspace, "pty-close-ready")
+	session, err := manager.Start(ctx, TerminalStartRequest{
+		RunID: "run-pty-close-order", OwnerTaskID: "task-pty-close-order", Mode: TerminalModePTY,
+		Command: []string{"sh", "-c", fmt.Sprintf("printf close-marker; touch %s; sleep 30", readyPath)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		if _, statErr := os.Stat(readyPath); statErr == nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+		if i == 99 {
+			t.Fatal("PTY close command did not reach its ready marker")
+		}
+	}
+	manager.mu.RLock()
+	managed := manager.sessions[session.ID]
+	processWaitDone := managed.processWaitDone
+	manager.mu.RUnlock()
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- manager.Close(ctx, session.ID) }()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before copier release: %v", err)
+	case <-processWaitDone:
+	}
+
+	persisted, err := LoadTerminalSessions(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 1 || !persisted[0].Running || persisted[0].State != TerminalSessionRunning || persisted[0].Custodian != TerminalCustodianCoordinator {
+		t.Fatalf("close published a released state before finalization: %+v", persisted)
+	}
+	if err := manager.RequireTaskClosed(session.OwnerTaskID); err == nil {
+		t.Fatal("task gate passed while PTY copier was still held")
+	}
+	if err := manager.RequireNoLeaks(session.RunID); err == nil {
+		t.Fatal("leak gate passed while PTY copier was still held")
+	}
+	eventsMu.Lock()
+	for _, event := range events {
+		if event == "terminal_session_closed" || event == string(TerminalResourceReleased) {
+			eventsMu.Unlock()
+			t.Fatalf("released event published before copier release: %v", events)
+		}
+	}
+	eventsMu.Unlock()
+
+	releaseCopy()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close after copier release: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not wait for PTY finalization")
+	}
+
+	final, err := LoadTerminalSessions(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(final) != 1 || final[0].State != TerminalSessionClosed || final[0].Running || final[0].ReleasedAt.IsZero() {
+		t.Fatalf("final closed session = %+v", final)
+	}
+	artifact, err := os.ReadFile(filepath.Join(workspace, final[0].OutputRefs[0].Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(artifact) != "close-marker" {
+		t.Fatalf("durable PTY marker = %q", artifact)
+	}
+	if final[0].ProcessIdentity != nil && terminalProcessGroupAlive(final[0].ProcessIdentity.PGID) {
+		t.Fatalf("process group %d remains alive after Close", final[0].ProcessIdentity.PGID)
+	}
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	if !containsTerminalEvent(events, "terminal_session_closed") || !containsTerminalEvent(events, string(TerminalResourceReleased)) {
+		t.Fatalf("final lifecycle events = %v", events)
+	}
+}
+
+func TestTerminalClosePersistenceFailureRetainsCustodyAndSuppressesReleaseEvents(t *testing.T) {
+	workspace := t.TempDir()
+	var events []string
+	manager, err := NewTerminalSessionManager(workspace, func(eventType, _ string, _ map[string]interface{}) {
+		events = append(events, eventType)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithTerminalTaskID(context.Background(), "task-close-persist")
+	session, err := manager.Start(ctx, TerminalStartRequest{
+		RunID: "run-close-persist", OwnerTaskID: "task-close-persist", Command: []string{"sh", "-c", "sleep 30"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writes := 0
+	manager.persistFile = func(path string, data []byte, mode os.FileMode) error {
+		writes++
+		if writes == 2 {
+			return fmt.Errorf("injected terminal finalization persistence failure")
+		}
+		return AtomicWriteFile(path, data, mode)
+	}
+
+	if err := manager.Close(ctx, session.ID); err == nil || !strings.Contains(err.Error(), "injected terminal finalization persistence failure") {
+		t.Fatalf("Close error = %v, want finalization persistence failure", err)
+	}
+	got, err := LoadTerminalSessions(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].Running || got[0].State != TerminalSessionRunning || got[0].Custodian != TerminalCustodianCoordinator || got[0].CleanupState != TerminalCleanupManual {
+		t.Fatalf("persistence failure released custody: %+v", got)
+	}
+	for _, event := range events {
+		if event == string(TerminalProcessExited) || event == string(TerminalResourceReleased) || event == "terminal_session_closed" {
+			t.Fatalf("release event published after persistence failure: %v", events)
+		}
+	}
+	if err := manager.RequireTaskClosed(session.OwnerTaskID); err == nil {
+		t.Fatal("task gate passed after persistence failure")
+	}
+	if err := manager.RequireNoLeaks(session.RunID); err == nil {
+		t.Fatal("leak gate passed after persistence failure")
+	}
+}
+
+func TestPTYExitCleansDescendantHoldingSlaveBeforeRelease(t *testing.T) {
+	workspace := t.TempDir()
+	var eventsMu sync.Mutex
+	var events []string
+	manager, err := NewTerminalSessionManager(workspace, func(eventType, _ string, _ map[string]interface{}) {
+		eventsMu.Lock()
+		defer eventsMu.Unlock()
+		events = append(events, eventType)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyGate := make(chan struct{})
+	manager.ptyCopyStartGate = copyGate
+	releaseCopy := func() {
+		select {
+		case <-copyGate:
+		default:
+			close(copyGate)
+		}
+	}
+	defer releaseCopy()
+
+	childPIDPath := filepath.Join(workspace, "pty-descendant.pid")
+	ctx := WithTerminalTaskID(context.Background(), "task-pty-descendant")
+	session, err := manager.Start(ctx, TerminalStartRequest{
+		RunID: "run-pty-descendant", OwnerTaskID: "task-pty-descendant", Mode: TerminalModePTY,
+		Command: []string{"sh", "-c", fmt.Sprintf("printf pty-artifact-marker; trap '' HUP; sleep 10 & echo $! > %s; exit 0", childPIDPath)},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	var childPID int
+	for i := 0; i < 50; i++ {
+		data, readErr := os.ReadFile(childPIDPath)
+		if readErr == nil {
+			childPID, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+			if childPID > 0 {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if childPID <= 0 {
+		t.Fatalf("PTY descendant PID was not written in time")
+	}
+	if !isPIDAlive(childPID) {
+		t.Fatalf("PTY descendant process %d should be alive before parent finalization", childPID)
+	}
+	manager.mu.RLock()
+	managed := manager.sessions[session.ID]
+	if managed == nil || managed.processWaitDone == nil {
+		manager.mu.RUnlock()
+		t.Fatal("PTY session did not expose process wait synchronization")
+	}
+	processWaitDone := managed.processWaitDone
+	manager.mu.RUnlock()
+	select {
+	case <-processWaitDone:
+	case <-time.After(time.Second):
+		t.Fatal("PTY parent did not exit in time")
+	}
+	persisted, err := LoadTerminalSessions(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 1 || !persisted[0].Running || persisted[0].State != TerminalSessionRunning {
+		t.Fatalf("session was published before descendant cleanup: %+v", persisted)
+	}
+	// Let the copier start before the initial drain deadline, then keep the
+	// descendant-held slave in place long enough to require escalation.
+	time.Sleep(terminalPTYDrainTimeout - 50*time.Millisecond)
+	releaseCopy()
+
+	var completed TerminalSession
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		sessions, listErr := manager.List(context.Background(), session.RunID)
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		if len(sessions) == 1 && sessions[0].State == TerminalSessionExited {
+			completed = sessions[0]
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if completed.ID == "" {
+		t.Fatal("PTY session did not complete after process-group escalation")
+	}
+	if isPIDAlive(childPID) {
+		t.Fatalf("PTY descendant process %d survived process-group finalization", childPID)
+	}
+	if completed.Running || completed.ReleasedAt.IsZero() || completed.Custodian == TerminalCustodianCoordinator || completed.CleanupState == TerminalCleanupManual || completed.CleanupError != "" {
+		t.Fatalf("completed PTY session retained cleanup custody: %+v", completed)
+	}
+	if completed.ProcessIdentity != nil && terminalProcessGroupAlive(completed.ProcessIdentity.PGID) {
+		t.Fatalf("PTY process group %d survived session finalization", completed.ProcessIdentity.PGID)
+	}
+	artifact, err := os.ReadFile(filepath.Join(workspace, completed.OutputRefs[0].Path))
+	if err != nil {
+		t.Fatalf("read PTY output artifact: %v", err)
+	}
+	if !strings.Contains(string(artifact), "pty-artifact-marker") {
+		t.Fatalf("PTY output artifact = %q, want marker", artifact)
+	}
+	if err := manager.RequireNoLeaks(session.RunID); err != nil {
+		t.Fatalf("RequireNoLeaks: %v", err)
+	}
+	if err := manager.RequireTaskClosed(session.OwnerTaskID); err != nil {
+		t.Fatalf("RequireTaskClosed: %v", err)
+	}
+	eventDeadline := time.Now().Add(time.Second)
+	for time.Now().Before(eventDeadline) {
+		eventsMu.Lock()
+		hasExit := containsTerminalEvent(events, string(TerminalProcessExited))
+		hasRelease := containsTerminalEvent(events, string(TerminalResourceReleased))
+		hasSessionExit := containsTerminalEvent(events, "terminal_session_exited")
+		eventsMu.Unlock()
+		if hasExit && hasRelease && hasSessionExit {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	t.Fatalf("PTY lifecycle events = %v", events)
+}
+
+func TestFinalizeTerminalPTYCopyRetainsNonBenignCopierError(t *testing.T) {
+	master, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyDone := make(chan struct{})
+	close(copyDone)
+	copyErr := make(chan error, 1)
+	copyErr <- fmt.Errorf("injected copier failure")
+	managed := &managedTerminalSession{
+		session:     TerminalSession{ProcessIdentity: &ProcessIdentity{PGID: 99999999}},
+		ptyMaster:   master,
+		ptyCopyDone: copyDone,
+		ptyCopyErr:  copyErr,
+	}
+
+	finalErr, ready := finalizeTerminalPTYCopy(managed)
+	if ready {
+		t.Fatal("non-benign copier error was classified as successful finalization")
+	}
+	if finalErr == nil || !strings.Contains(finalErr.Error(), "injected copier failure") {
+		t.Fatalf("finalizer error = %v, want injected copier failure", finalErr)
+	}
+}
+
+func TestTerminalContainmentRefusesReapedOrUnprovenLeader(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state terminalLeaderObservation
+	}{
+		{name: "reaped", state: terminalLeaderReaped},
+		{name: "unproven", state: terminalLeaderUnknown},
+	} {
+		for _, mode := range []TerminalMode{TerminalModePipe, TerminalModePTY} {
+			t.Run(tc.name+"/"+string(mode), func(t *testing.T) {
+				cmd := exec.Command("sleep", "30")
+				if err := cmd.Start(); err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					_ = signalTerminalLeader(cmd.Process.Pid, syscall.SIGKILL)
+					_ = cmd.Wait()
+				}()
+				identity, err := getProcessIdentity(cmd.Process.Pid)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var groupSignals []syscall.Signal
+				managed := &managedTerminalSession{
+					cmd:           cmd,
+					session:       TerminalSession{Mode: mode, ProcessIdentity: identity},
+					leaderObserve: func(int) (terminalLeaderObservation, error) { return tc.state, nil },
+					groupSignal: func(_ int, signal syscall.Signal) error {
+						groupSignals = append(groupSignals, signal)
+						return nil
+					},
+					groupContained: func(int, int) (bool, error) { return false, nil },
+				}
+				if err := containTerminalProcessGroup(managed, syscall.SIGKILL); err == nil {
+					t.Fatal("unproven custody unexpectedly contained the process group")
+				}
+				if len(groupSignals) != 0 {
+					t.Fatalf("group signals = %v, want none for %s leader", groupSignals, tc.name)
+				}
+			})
+		}
+	}
+}
+
+func TestTerminalPipeNaturalExitContainsDescendantsBeforeReap(t *testing.T) {
+	workspace := t.TempDir()
+	manager, err := NewTerminalSessionManager(workspace, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childPIDPath := filepath.Join(workspace, "pipe-descendant.pid")
+	ctx := WithTerminalTaskID(context.Background(), "task-pipe-descendant")
+	session, err := manager.Start(ctx, TerminalStartRequest{
+		RunID: "run-pipe-descendant", OwnerTaskID: "task-pipe-descendant", Mode: TerminalModePipe,
+		Command: []string{"sh", "-c", fmt.Sprintf("sleep 30 & echo $! > %s; exit 0", childPIDPath)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var childPID int
+	for i := 0; i < 100; i++ {
+		data, readErr := os.ReadFile(childPIDPath)
+		if readErr == nil {
+			childPID, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+			if childPID > 0 {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if childPID <= 0 {
+		t.Fatal("pipe descendant PID was not written in time")
+	}
+	if !isPIDAlive(childPID) {
+		t.Fatalf("pipe descendant process %d should be alive before parent finalization", childPID)
+	}
+	completed := waitForTerminal(t, manager, session.ID, 3*time.Second)
+	if completed.State != TerminalSessionExited || completed.Running {
+		t.Fatalf("pipe finalization = %+v, want released exited session", completed)
+	}
+	if isPIDAlive(childPID) {
+		t.Fatalf("pipe descendant process %d survived process-group containment", childPID)
+	}
+}
+
+func TestTerminalStartFailureAbortsWholeLaunchCustodyBeforeReturning(t *testing.T) {
+	for _, mode := range []TerminalMode{TerminalModePipe, TerminalModePTY} {
+		for _, failure := range []string{"identity", "initial persistence"} {
+			name := string(mode) + "/" + strings.ReplaceAll(failure, " ", "_")
+			t.Run(name, func(t *testing.T) {
+				if mode == TerminalModePTY && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+					t.Skip("PTY launch is unsupported on this platform")
+				}
+				workspace := t.TempDir()
+				markerPath := filepath.Join(workspace, "descendant.pid")
+				command := fmt.Sprintf("trap '' HUP TERM; sleep 30 & child=$!; echo $child > %q; printf launch-marker; wait $child", markerPath)
+				waitForMarker := func() error {
+					deadline := time.Now().Add(2 * time.Second)
+					for time.Now().Before(deadline) {
+						if data, err := os.ReadFile(markerPath); err == nil && strings.TrimSpace(string(data)) != "" {
+							return nil
+						}
+						time.Sleep(5 * time.Millisecond)
+					}
+					return fmt.Errorf("descendant marker %q was not written", markerPath)
+				}
+
+				var eventsMu sync.Mutex
+				var events []string
+				manager, err := NewTerminalSessionManager(workspace, func(eventType, _ string, _ map[string]interface{}) {
+					eventsMu.Lock()
+					defer eventsMu.Unlock()
+					events = append(events, eventType)
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if failure == "identity" {
+					manager.processIdentity = func(int) (*ProcessIdentity, error) {
+						if err := waitForMarker(); err != nil {
+							return nil, err
+						}
+						return nil, fmt.Errorf("injected identity validation failure")
+					}
+				} else {
+					persistCalls := 0
+					manager.persistFile = func(path string, data []byte, mode os.FileMode) error {
+						persistCalls++
+						if persistCalls > 1 {
+							return AtomicWriteFile(path, data, mode)
+						}
+						if err := waitForMarker(); err != nil {
+							return err
+						}
+						return fmt.Errorf("injected initial persistence failure")
+					}
+				}
+
+				_, err = manager.Start(WithTerminalTaskID(context.Background(), "task-start-failure"), TerminalStartRequest{
+					RunID: "run-start-failure", OwnerTaskID: "task-start-failure", Mode: mode,
+					Command: []string{"sh", "-c", command},
+				})
+				if failure == "identity" && (err == nil || !strings.Contains(err.Error(), "injected identity validation failure")) {
+					t.Fatalf("Start error = %v, want injected identity failure", err)
+				}
+				if failure == "initial persistence" && (err == nil || !strings.Contains(err.Error(), "injected initial persistence failure")) {
+					t.Fatalf("Start error = %v, want injected initial persistence failure", err)
+				}
+
+				if data, readErr := os.ReadFile(markerPath); readErr != nil || strings.TrimSpace(string(data)) == "" {
+					t.Fatalf("descendant marker after Start failure = %q, err=%v", data, readErr)
+				}
+				deadline := time.Now().Add(2 * time.Second)
+				for time.Now().Before(deadline) {
+					sessions, listErr := manager.List(context.Background(), "run-start-failure")
+					if listErr != nil {
+						t.Fatal(listErr)
+					}
+					if len(sessions) == 0 {
+						break
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+				if sessions, _ := manager.List(context.Background(), "run-start-failure"); len(sessions) != 0 {
+					t.Fatalf("successful rollback retained unexpected sessions: %+v", sessions)
+				}
+				if entries, readErr := os.ReadDir(filepath.Join(workspace, logsDir, "terminal")); readErr == nil && len(entries) != 0 {
+					t.Fatalf("successful rollback retained output artifacts: %v", entries)
+				}
+				eventsMu.Lock()
+				defer eventsMu.Unlock()
+				for _, event := range events {
+					if event == string(TerminalProcessStarted) || event == string(TerminalProcessExited) || event == string(TerminalResourceReleased) {
+						t.Fatalf("false lifecycle event after Start failure: %v", events)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestAbortStartedTerminalRetainsManualCustodyWhenContainmentFails(t *testing.T) {
+	workspace := t.TempDir()
+	outputPath := filepath.Join(workspace, "terminal.log")
+	outputFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", "sleep 30")
+	cmd.Stdout = outputFile
+	cmd.Stderr = outputFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		_ = outputFile.Close()
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		_ = outputFile.Close()
+	}()
+	identity, err := getProcessIdentity(cmd.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewTerminalSessionManager(workspace, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managed := &managedTerminalSession{
+		session:        TerminalSession{ID: "manual-abort", RunID: "run-manual-abort", OwnerTaskID: "task-manual-abort", State: TerminalSessionRunning, Running: true, Mode: TerminalModePipe, ProcessIdentity: identity},
+		launchIdentity: identity, cmd: cmd, outputPath: outputPath, outputFile: outputFile,
+		leaderObserve:  func(int) (terminalLeaderObservation, error) { return terminalLeaderExited, nil },
+		groupSignal:    func(int, syscall.Signal) error { return nil },
+		groupContained: func(int, int) (bool, error) { return false, nil },
+	}
+	manager.sessions[managed.session.ID] = managed
+	startErr := fmt.Errorf("injected start failure")
+	err = manager.abortStartedTerminal(managed, startErr)
+	if err == nil || !strings.Contains(err.Error(), "injected start failure") || !strings.Contains(err.Error(), "containment unresolved") {
+		t.Fatalf("abort error = %v, want retained containment failure", err)
+	}
+	got, err := manager.List(context.Background(), managed.session.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Custodian != TerminalCustodianCoordinator || got[0].CleanupState != TerminalCleanupManual || !got[0].Running {
+		t.Fatalf("manual custody record = %+v", got)
+	}
+	if _, err := os.Stat(outputPath); err != nil {
+		t.Fatalf("manual custody output artifact missing: %v", err)
+	}
+	if cmd.ProcessState != nil {
+		t.Fatal("containment failure reaped the leader")
 	}
 }

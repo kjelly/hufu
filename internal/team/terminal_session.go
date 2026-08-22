@@ -300,26 +300,70 @@ func terminalTaskID(ctx context.Context) string {
 }
 
 type managedTerminalSession struct {
-	session           TerminalSession
+	session TerminalSession
+	// launchIdentity is the ephemeral custody proof established from the
+	// process handle immediately after launch. It is deliberately separate
+	// from session.ProcessIdentity: durable identity validation may fail after
+	// the OS has already handed us a live process group.
+	launchIdentity    *ProcessIdentity
+	launchCustodySeen bool
 	cmd               *exec.Cmd
 	stdin             io.WriteCloser
 	outputPath        string
 	outputFile        *os.File
 	done              chan struct{}
+	processWaitDone   chan struct{}
 	readOffset        int64
 	ptyMaster         *os.File
 	ptyCopyDone       chan struct{}
+	ptyCopyErr        chan error
+	ptyCopyErrRead    bool
 	cleanupInProgress bool
+	closeRequested    bool
+	closeEventEmitted bool
+	finalized         chan error
+	groupSignal       func(int, syscall.Signal) error
+	leaderObserve     func(int) (terminalLeaderObservation, error)
+	groupContained    func(int, int) (bool, error)
+}
+
+type terminalLeaderObservation uint8
+
+var errTerminalLeaderStillRunning = errors.New("terminal leader remained running after termination signal")
+
+const (
+	terminalLeaderRunning terminalLeaderObservation = iota + 1
+	terminalLeaderExited
+	terminalLeaderReaped
+	terminalLeaderUnknown
+)
+
+func (o terminalLeaderObservation) String() string {
+	switch o {
+	case terminalLeaderRunning:
+		return "running"
+	case terminalLeaderExited:
+		return "exited_waitable"
+	case terminalLeaderReaped:
+		return "reaped"
+	default:
+		return "unknown"
+	}
 }
 
 // TerminalSessionManager owns live child handles and persists lifecycle state.
 type TerminalSessionManager struct {
-	mu              sync.RWMutex
-	workspace       string
-	path            string
-	sessions        map[string]*managedTerminalSession
-	eventSink       TerminalEventSink
-	activeTaskRound func(string) bool
+	mu               sync.RWMutex
+	workspace        string
+	path             string
+	sessions         map[string]*managedTerminalSession
+	eventSink        TerminalEventSink
+	activeTaskRound  func(string) bool
+	ptyCopyStartGate <-chan struct{}
+	persistFile      func(string, []byte, os.FileMode) error
+	// processIdentity is a package-private seam for testing the post-launch
+	// durable identity validation failure without changing process state.
+	processIdentity func(int) (*ProcessIdentity, error)
 }
 
 // NewTerminalSessionManager restores durable records. Previously running
@@ -632,8 +676,11 @@ func (m *TerminalSessionManager) cleanupOne(ctx context.Context, id string, req 
 	if stdin != nil {
 		_ = stdin.Close()
 	}
-	_ = signalProcessGroup(cmd.Process.Pid, syscall.SIGTERM)
-	if waitTerminalDone(ctx, done, req.GracePeriod) {
+	containErr := containTerminalProcessGroup(managed, syscall.SIGTERM)
+	if containErr != nil && !errors.Is(containErr, errTerminalLeaderStillRunning) {
+		return m.markCleanupManual(id, fmt.Sprintf("terminal group containment unavailable: %v", containErr))
+	}
+	if waitTerminalDone(ctx, done, req.GracePeriod) && m.terminalCleanupResolved(managed, ctx, req.GracePeriod) {
 		return m.finishCleanup(id, true, false, "graceful termination")
 	}
 
@@ -650,11 +697,27 @@ func (m *TerminalSessionManager) cleanupOne(ctx context.Context, id string, req 
 	if forcedPersistErr != nil {
 		return TerminalCleanupResult{}, fmt.Errorf("persist forced terminal cleanup state: %w", forcedPersistErr)
 	}
-	_ = signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL)
-	if waitTerminalDone(ctx, done, req.ForceAfter) {
+	if err := containTerminalProcessGroup(managed, syscall.SIGKILL); err != nil {
+		return m.markCleanupManual(id, fmt.Sprintf("terminal group containment unavailable after escalation: %v", err))
+	}
+	if waitTerminalDone(ctx, done, req.ForceAfter) && m.terminalCleanupResolved(managed, ctx, req.ForceAfter) {
 		return m.finishCleanup(id, false, true, "forced termination")
 	}
 	return m.markCleanupManual(id, "process survived forced termination")
+}
+
+// terminalCleanupResolved verifies the process-group ownership boundary after
+// the command's direct process has exited. A PTY descendant can outlive that
+// process while retaining the slave, so cmd.Wait alone is not sufficient
+// evidence that terminal custody can be released.
+func (m *TerminalSessionManager) terminalCleanupResolved(managed *managedTerminalSession, _ context.Context, _ time.Duration) bool {
+	if managed == nil || !terminalDoneClosed(managed.done) {
+		return false
+	}
+	if managed.session.Running || managed.session.State == TerminalSessionRunning || managed.session.State == TerminalSessionUnknown || managed.session.CleanupState == TerminalCleanupManual {
+		return false
+	}
+	return true
 }
 
 func (m *TerminalSessionManager) cleanupRestored(ctx context.Context, id string, req TerminalCleanupRequest) (TerminalCleanupResult, error) {
@@ -664,24 +727,19 @@ func (m *TerminalSessionManager) cleanupRestored(ctx context.Context, id string,
 		m.mu.RUnlock()
 		return TerminalCleanupResult{}, fmt.Errorf("cleanup terminal session %q: session not found", id)
 	}
-	pid, identity := managed.session.PID, managed.session.ProcessIdentity
+	pid := managed.session.PID
 	m.mu.RUnlock()
-	if pid <= 0 || !isPIDAlive(pid) {
-		return m.finishRestoredCleanup(id, true, false, "verified process is already gone")
+	if pid > 0 && isPIDAlive(pid) {
+		return m.markCleanupManual(id, "restored live process is not waitable by this manager; manual custody required")
 	}
-	valid, _ := verifyProcessIdentity(identity)
-	if !valid {
-		return m.markCleanupManual(id, "process identity mismatch; PID may have been reused")
+	contained, containmentErr := restoredTerminalGroupContained(managed)
+	if containmentErr != nil || !contained {
+		if containmentErr == nil {
+			containmentErr = errors.New("owned process group containment is unproven")
+		}
+		return m.markCleanupManual(id, containmentErr.Error())
 	}
-	_ = signalProcessGroup(pid, syscall.SIGTERM)
-	if waitPIDGone(ctx, pid, req.GracePeriod) {
-		return m.finishRestoredCleanup(id, true, false, "graceful termination")
-	}
-	_ = signalProcessGroup(pid, syscall.SIGKILL)
-	if waitPIDGone(ctx, pid, req.ForceAfter) {
-		return m.finishRestoredCleanup(id, false, true, "forced termination")
-	}
-	return m.markCleanupManual(id, "restored process survived forced termination")
+	return m.finishRestoredCleanup(id, true, false, "verified process group is contained")
 }
 
 func (m *TerminalSessionManager) finishCleanup(id string, graceful, forced bool, reason string) (TerminalCleanupResult, error) {
@@ -699,6 +757,17 @@ func (m *TerminalSessionManager) finishCleanup(id string, graceful, forced bool,
 		gracefulCopy := deepCopyTerminalSession(managed.session)
 		m.emit(string(TerminalCleanupGracefulEvent), gracefulCopy, map[string]interface{}{"reason": reason})
 	}
+	if managed.session.Running && terminalDoneClosed(managed.done) {
+		now := time.Now().UTC()
+		managed.session.Running = false
+		if managed.session.State != TerminalSessionClosed {
+			managed.session.State = TerminalSessionExited
+		}
+		if managed.session.ExitedAt.IsZero() {
+			managed.session.ExitedAt = now
+		}
+		managed.session.ReleasedAt = now
+	}
 	managed.session.CleanupState = TerminalCleanupCompleted
 	managed.session.CleanupCompletedAt = time.Now().UTC()
 	managed.session.CleanupError = ""
@@ -708,6 +777,18 @@ func (m *TerminalSessionManager) finishCleanup(id string, graceful, forced bool,
 	copy := deepCopyTerminalSession(managed.session)
 	m.emit(string(TerminalCleanupCompletedEvent), copy, map[string]interface{}{"reason": reason, "forced": forced})
 	return TerminalCleanupResult{Session: copy, Graceful: graceful, Forced: forced}, nil
+}
+
+func terminalDoneClosed(done <-chan struct{}) bool {
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *TerminalSessionManager) finishRestoredCleanup(id string, graceful, forced bool, reason string) (TerminalCleanupResult, error) {
@@ -780,33 +861,28 @@ func waitTerminalDone(ctx context.Context, done <-chan struct{}, timeout time.Du
 	}
 }
 
-func waitPIDGone(ctx context.Context, pid int, timeout time.Duration) bool {
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if !isPIDAlive(pid) {
-			return true
-		}
-		select {
-		case <-deadline.C:
-			return false
-		case <-ticker.C:
-		case <-ctx.Done():
-			return false
-		}
+func signalProcessGroup(pgid int, signal syscall.Signal) error {
+	if pgid <= 0 {
+		return errors.New("invalid process-group ID")
 	}
+	return syscall.Kill(-pgid, signal)
 }
 
-func signalProcessGroup(pid int, signal syscall.Signal) error {
+func signalTerminalLeader(pid int, signal syscall.Signal) error {
 	if pid <= 0 {
 		return errors.New("invalid process ID")
 	}
-	if err := syscall.Kill(-pid, signal); err != nil {
-		return syscall.Kill(pid, signal)
+	return syscall.Kill(pid, signal)
+}
+
+func configureTerminalProcessGroup(cmd *exec.Cmd, mode TerminalMode) {
+	if mode != TerminalModePipe {
+		return
 	}
-	return nil
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
 }
 
 func (m *TerminalSessionManager) Start(ctx context.Context, req TerminalStartRequest) (*TerminalSession, error) {
@@ -841,7 +917,6 @@ func (m *TerminalSessionManager) Start(ctx context.Context, req TerminalStartReq
 
 	cmd := exec.Command(req.Command[0], req.Command[1:]...)
 	cmd.Dir = req.WorkingDir
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if req.NetworkBlock {
 		if err := tools.SetNetNamespace(cmd); err != nil {
 			_ = outputFile.Close()
@@ -851,6 +926,7 @@ func (m *TerminalSessionManager) Start(ctx context.Context, req TerminalStartReq
 	var stdin io.WriteCloser
 	var ptyMaster *os.File
 	var ptyCopyDone chan struct{}
+	var ptyCopyErr chan error
 	if req.Mode == TerminalModePTY {
 		ptyMaster, err = startTerminalPTY(cmd, req.Rows, req.Cols)
 		if err != nil {
@@ -859,11 +935,9 @@ func (m *TerminalSessionManager) Start(ctx context.Context, req TerminalStartReq
 		}
 		stdin = ptyMaster
 		ptyCopyDone = make(chan struct{})
-		go func() {
-			_, _ = io.Copy(outputFile, ptyMaster)
-			close(ptyCopyDone)
-		}()
+		ptyCopyErr = make(chan error, 1)
 	} else {
+		configureTerminalProcessGroup(cmd, req.Mode)
 		cmd.Stdout = outputFile
 		cmd.Stderr = outputFile
 		stdin, err = cmd.StdinPipe()
@@ -879,31 +953,66 @@ func (m *TerminalSessionManager) Start(ctx context.Context, req TerminalStartReq
 
 	relOutput, _ := filepath.Rel(m.workspace, outputPath)
 	now := time.Now().UTC()
-	identity, _ := getProcessIdentity(cmd.Process.Pid)
+	launchIdentity, launchErr := getTerminalLaunchIdentity(cmd.Process.Pid)
+	identityFn := m.processIdentity
+	if identityFn == nil {
+		identityFn = getProcessIdentity
+	}
+	identity, identityErr := identityFn(cmd.Process.Pid)
+	identityValid := identityErr == nil && identity != nil && identity.PID == cmd.Process.Pid && identity.PGID == cmd.Process.Pid
+	if !identityValid && identityErr == nil {
+		identityErr = fmt.Errorf("leader PID %d does not own an equal process group", cmd.Process.Pid)
+	}
+	if launchErr != nil {
+		identityErr = errors.Join(identityErr, fmt.Errorf("establish launch process-group custody: %w", launchErr))
+	}
+	if identityErr == nil && !identityValid {
+		identityErr = fmt.Errorf("could not validate terminal leader identity")
+	}
+
 	managed := &managedTerminalSession{session: TerminalSession{
 		ID: id, RunID: req.RunID, OwnerTaskID: req.OwnerTaskID, ControllerTaskID: req.OwnerTaskID, Agent: req.Agent,
 		Command: append([]string(nil), req.Command...), WorkingDir: req.WorkingDir,
 		StartedAt: now, Running: true, State: TerminalSessionRunning, PID: cmd.Process.Pid,
 		ProcessIdentity: identity, Mode: req.Mode, Controller: TerminalControllerAgent, Rows: req.Rows, Cols: req.Cols,
 		OutputRefs: []ArtifactRef{{Path: relOutput, Type: "terminal_output", Description: "complete terminal session output"}},
-		Custodian:  TerminalCustodianOwner, CleanupState: TerminalCleanupNone,
-	}, cmd: cmd, stdin: stdin, outputPath: outputPath, outputFile: outputFile, done: make(chan struct{}), ptyMaster: ptyMaster, ptyCopyDone: ptyCopyDone}
+		Custodian:  TerminalCustodianCoordinator, CleanupState: TerminalCleanupRequested,
+	}, launchIdentity: launchIdentity, launchCustodySeen: true, cmd: cmd, stdin: stdin, outputPath: outputPath, outputFile: outputFile, done: make(chan struct{}), processWaitDone: make(chan struct{}), finalized: make(chan error, 1), ptyMaster: ptyMaster, ptyCopyDone: ptyCopyDone, ptyCopyErr: ptyCopyErr}
+
+	// The PTY copier is started only after managed custody exists. If identity
+	// validation or initial persistence fails, the same managed record owns the
+	// copier and output artifact during rollback.
+	if req.Mode == TerminalModePTY {
+		m.mu.RLock()
+		copyStartGate := m.ptyCopyStartGate
+		m.mu.RUnlock()
+		go func() {
+			if copyStartGate != nil {
+				<-copyStartGate
+			}
+			_, copyErr := io.Copy(outputFile, ptyMaster)
+			ptyCopyErr <- copyErr
+			close(ptyCopyDone)
+		}()
+	}
 
 	m.mu.Lock()
 	m.sessions[id] = managed
-	err = m.persistLocked()
-	if err != nil {
-		delete(m.sessions, id)
+	if identityErr == nil {
+		managed.session.Custodian = TerminalCustodianOwner
+		managed.session.CleanupState = TerminalCleanupNone
+		err = m.persistLocked()
+	} else {
+		err = identityErr
 	}
-	copy := deepCopyTerminalSession(managed.session)
 	m.mu.Unlock()
 	if err != nil {
-		killProcessGroup(cmd)
-		_ = cmd.Wait()
-		_ = outputFile.Close()
-		_ = os.Remove(outputPath)
-		return nil, err
+		if identityErr != nil {
+			err = fmt.Errorf("start terminal session: could not establish leader process-group identity: %w", err)
+		}
+		return nil, m.abortStartedTerminal(managed, err)
 	}
+	copy := deepCopyTerminalSession(managed.session)
 	m.emit(string(TerminalProcessStarted), copy, map[string]interface{}{"command": req.Command, "pid": copy.PID})
 	// Keep the old event spelling during the migration to the process lifecycle
 	// contract so existing event-store readers remain compatible.
@@ -913,76 +1022,447 @@ func (m *TerminalSessionManager) Start(ctx context.Context, req TerminalStartReq
 	return &copy, nil
 }
 
-func (m *TerminalSessionManager) waitForExit(managed *managedTerminalSession, timeout time.Duration) {
-	defer close(managed.done)
-	var timer <-chan time.Time
-	var stopTimer func()
-	if timeout > 0 {
-		t := time.NewTimer(timeout)
-		timer = t.C
-		stopTimer = func() {
-			if !t.Stop() {
-				select {
-				case <-t.C:
-				default:
-				}
-			}
-		}
-	}
-	done := make(chan error, 1)
-	go func() { done <- managed.cmd.Wait() }()
-	var err error
-	if timer == nil {
-		err = <-done
-	} else {
-		select {
-		case err = <-done:
-		case <-timer:
-			killProcessGroup(managed.cmd)
-			err = <-done
-		}
-		stopTimer()
+// abortStartedTerminal is the single rollback path for failures after the OS
+// has launched a terminal leader. It never uses a leader-only signal: the
+// launch process group must be contained before the one and only cmd.Wait.
+// Until containment and output finalization succeed, the managed session and
+// artifact remain owned by the coordinator for manual recovery.
+func (m *TerminalSessionManager) abortStartedTerminal(managed *managedTerminalSession, startErr error) error {
+	if managed == nil {
+		return startErr
 	}
 
 	m.mu.Lock()
 	if current := m.sessions[managed.session.ID]; current == managed {
-		var ioErr error
-		if managed.ptyMaster != nil {
-			_ = managed.ptyMaster.Close()
-			if managed.ptyCopyDone != nil {
-				<-managed.ptyCopyDone
-			}
+		managed.session.Custodian = TerminalCustodianCoordinator
+		managed.session.CleanupState = TerminalCleanupRequested
+		managed.session.CleanupReason = TerminalCleanupTaskFailed
+		managed.session.CleanupRequestedAt = time.Now().UTC()
+		managed.session.CleanupError = startErr.Error()
+		managed.cleanupInProgress = true
+		// A failed initial persist may have left no durable record. Best effort
+		// persistence here establishes coordinator custody before any recovery
+		// decision; the in-memory record is retained if persistence is unavailable.
+		_ = m.persistLocked()
+	}
+	m.mu.Unlock()
+
+	containErr := containTerminalProcessGroup(managed, syscall.SIGKILL)
+	if containErr != nil {
+		return m.retainStartedTerminalCustody(managed, errors.Join(startErr, fmt.Errorf("abort terminal session: %w", containErr)))
+	}
+
+	// Finalize output while the leader is still waitable. If PTY/output
+	// finalization is unresolved, do not reap the leader and retain the record.
+	finalErr := finalizeStartedTerminalOutput(managed)
+	if finalErr != nil {
+		return m.retainStartedTerminalCustody(managed, errors.Join(startErr, fmt.Errorf("abort terminal session finalization: %w", finalErr)))
+	}
+
+	// Containment and finalization are proven; this is the sole rollback reap.
+	waitErr := managed.cmd.Wait()
+	if managed.processWaitDone != nil {
+		close(managed.processWaitDone)
+	}
+	if waitErr != nil {
+		// A SIGKILL-induced exit is expected, but preserve it in diagnostics
+		// without changing the caller-visible injected/start failure.
+		startErr = errors.Join(startErr, fmt.Errorf("wait aborted terminal session: %w", waitErr))
+	}
+
+	m.mu.Lock()
+	if current := m.sessions[managed.session.ID]; current == managed {
+		delete(m.sessions, managed.session.ID)
+		if persistErr := m.persistLocked(); persistErr != nil {
+			m.sessions[managed.session.ID] = managed
+			m.mu.Unlock()
+			return m.retainStartedTerminalCustody(managed, errors.Join(startErr, fmt.Errorf("remove aborted terminal session record: %w", persistErr)))
 		}
-		if managed.outputFile != nil {
-			if sErr := managed.outputFile.Sync(); sErr != nil && ioErr == nil {
-				ioErr = sErr
-			}
-			if cErr := managed.outputFile.Close(); cErr != nil && ioErr == nil {
-				ioErr = cErr
-			}
+	}
+	m.mu.Unlock()
+	if removeErr := os.Remove(managed.outputPath); removeErr != nil && !os.IsNotExist(removeErr) {
+		m.mu.Lock()
+		if _, exists := m.sessions[managed.session.ID]; !exists {
+			m.sessions[managed.session.ID] = managed
+		}
+		m.mu.Unlock()
+		return m.retainStartedTerminalCustody(managed, errors.Join(startErr, fmt.Errorf("remove aborted terminal output: %w", removeErr)))
+	}
+	return startErr
+}
+
+func finalizeStartedTerminalOutput(managed *managedTerminalSession) error {
+	if managed == nil {
+		return errors.New("terminal session is unavailable during abort")
+	}
+	var finalErr error
+	if managed.session.Mode == TerminalModePTY {
+		ioErr, ready := finalizeTerminalPTYCopy(managed)
+		if !ready && ioErr == nil {
+			ioErr = errors.New("terminal PTY output finalization unresolved")
+		}
+		finalErr = errors.Join(finalErr, ioErr)
+	}
+	if managed.outputFile != nil {
+		if err := managed.outputFile.Sync(); err != nil {
+			finalErr = errors.Join(finalErr, fmt.Errorf("sync terminal output: %w", err))
+		}
+		if err := managed.outputFile.Close(); err != nil {
+			finalErr = errors.Join(finalErr, fmt.Errorf("close terminal output: %w", err))
+		}
+		if finalErr == nil {
 			managed.outputFile = nil
 		}
+	}
+	return finalErr
+}
+
+func (m *TerminalSessionManager) retainStartedTerminalCustody(managed *managedTerminalSession, cause error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if current := m.sessions[managed.session.ID]; current == managed {
+		// Preserve the launch proof in the durable record without treating it as
+		// successful durable identity validation. Restored cleanup remains
+		// fail-closed because this proof has no start-time component.
+		if managed.session.ProcessIdentity == nil && managed.launchIdentity != nil {
+			identityCopy := *managed.launchIdentity
+			managed.session.ProcessIdentity = &identityCopy
+		}
+		managed.session.Running = true
+		managed.session.State = TerminalSessionRunning
+		managed.session.Custodian = TerminalCustodianCoordinator
+		managed.session.CleanupState = TerminalCleanupManual
+		managed.session.CleanupError = cause.Error()
+		managed.cleanupInProgress = false
+		if err := m.persistLocked(); err != nil {
+			return errors.Join(cause, fmt.Errorf("persist aborted terminal custody: %w", err))
+		}
+		copy := deepCopyTerminalSession(managed.session)
+		m.emit(string(TerminalCleanupManualEvent), copy, map[string]interface{}{"reason": cause.Error()})
+		return cause
+	}
+	return cause
+}
+
+func (m *TerminalSessionManager) waitForExit(managed *managedTerminalSession, timeout time.Duration) {
+	var finalErr error
+	defer func() {
+		managed.finalized <- finalErr
+		close(managed.done)
+	}()
+	leaderState, observeErr := waitTerminalLeaderExit(managed, timeout)
+	var containmentErr error
+	if observeErr == nil && leaderState == terminalLeaderExited {
+		containmentErr = containTerminalProcessGroup(managed, 0)
+	} else if observeErr == nil && leaderState == terminalLeaderRunning {
+		containmentErr = containTerminalProcessGroup(managed, syscall.SIGTERM)
+		if errors.Is(containmentErr, errTerminalLeaderStillRunning) {
+			containmentErr = containTerminalProcessGroup(managed, syscall.SIGKILL)
+		}
+	} else if observeErr == nil {
+		containmentErr = fmt.Errorf("leader observation is not waitable: %s", leaderState)
+	} else {
+		containmentErr = observeErr
+	}
+
+	if containmentErr != nil {
+		m.mu.Lock()
+		if current := m.sessions[managed.session.ID]; current == managed {
+			finalErr = m.retainTerminalCustodyLocked(managed, containmentErr)
+		}
+		m.mu.Unlock()
+		return
+	}
+
+	// The group was contained while the leader remained waitable. This is the
+	// only point at which the manager may reap the leader, and cmd.Wait is
+	// called exactly once.
+	err := managed.cmd.Wait()
+	if managed.processWaitDone != nil {
+		close(managed.processWaitDone)
+	}
+
+	ioErr, terminalReady := finalizeTerminalPTYCopy(managed)
+	if managed.session.Mode != TerminalModePTY {
+		terminalReady = true
+	}
+	if !terminalReady && ioErr == nil {
+		ioErr = errors.New("terminal output finalization unresolved")
+	}
+	copyDrained := terminalReady || terminalPTYCopyDrained(managed)
+	if managed.outputFile != nil && copyDrained {
+		if sErr := managed.outputFile.Sync(); sErr != nil && ioErr == nil {
+			ioErr = sErr
+		}
+		if cErr := managed.outputFile.Close(); cErr != nil && ioErr == nil {
+			ioErr = cErr
+		}
+		managed.outputFile = nil
+	}
+
+	m.mu.Lock()
+	if current := m.sessions[managed.session.ID]; current == managed {
+		if !terminalReady || ioErr != nil {
+			if ioErr == nil {
+				ioErr = errors.New("terminal finalization unresolved")
+			}
+			finalErr = m.retainTerminalCustodyLocked(managed, ioErr)
+			m.mu.Unlock()
+			return
+		}
+
 		code := exitCode(err)
+		managed.cleanupInProgress = false
 		managed.session.ExitCode = &code
 		managed.session.Running = false
 		managed.session.ExitedAt = time.Now().UTC()
 		managed.session.ReleasedAt = managed.session.ExitedAt
-		if managed.session.State != TerminalSessionClosed {
+		if managed.closeRequested {
+			managed.session.State = TerminalSessionClosed
+			managed.session.CleanupState = TerminalCleanupCompleted
+			managed.session.CleanupCompletedAt = managed.session.ExitedAt
+			managed.session.CleanupError = ""
+		} else {
 			managed.session.State = TerminalSessionExited
 		}
 		pErr := m.persistLocked()
-		payload := map[string]interface{}{"exit_code": code}
-		if ioErr != nil {
-			payload["io_error"] = ioErr.Error()
-		}
 		if pErr != nil {
-			payload["persist_error"] = pErr.Error()
+			finalErr = m.retainTerminalCustodyLocked(managed, fmt.Errorf("persist terminal finalization: %w", pErr))
+			m.mu.Unlock()
+			return
 		}
+		payload := map[string]interface{}{"exit_code": code}
 		m.emit(string(TerminalProcessExited), managed.session, payload)
 		m.emit(string(TerminalResourceReleased), managed.session, map[string]interface{}{"reason": "process_output_closed"})
 		m.emit("terminal_session_exited", managed.session, payload)
+		if managed.closeRequested {
+			m.emit("terminal_session_closed", managed.session, map[string]interface{}{"reason": "close finalized"})
+		}
 	}
 	m.mu.Unlock()
+}
+
+func waitTerminalLeaderExit(managed *managedTerminalSession, timeout time.Duration) (terminalLeaderObservation, error) {
+	if managed == nil || managed.cmd == nil || managed.cmd.Process == nil {
+		return terminalLeaderUnknown, errors.New("terminal leader handle is unavailable")
+	}
+	observe := managed.leaderObserve
+	if observe == nil {
+		observe = observeTerminalLeader
+	}
+	deadline := time.Time{}
+	if timeout > 0 {
+		deadline = time.Now().Add(timeout)
+	}
+	for {
+		state, err := observe(managed.cmd.Process.Pid)
+		if err != nil || state == terminalLeaderUnknown || state == terminalLeaderReaped {
+			return state, err
+		}
+		if state == terminalLeaderExited {
+			return state, nil
+		}
+		if !deadline.IsZero() && !time.Now().Before(deadline) {
+			return terminalLeaderRunning, nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func containTerminalProcessGroup(managed *managedTerminalSession, initialSignal syscall.Signal) error {
+	if managed == nil || managed.cmd == nil || managed.cmd.Process == nil {
+		return errors.New("terminal leader handle is unavailable")
+	}
+	identity := managed.launchIdentity
+	if !managed.launchCustodySeen {
+		identity = managed.session.ProcessIdentity
+	}
+	if identity == nil || identity.PID <= 0 || identity.PGID <= 0 || identity.PID != managed.cmd.Process.Pid || identity.PGID != identity.PID {
+		return errors.New("terminal leader/group ownership is unproven")
+	}
+	observe := managed.leaderObserve
+	if observe == nil {
+		observe = observeTerminalLeader
+	}
+	signalGroup := managed.groupSignal
+	if signalGroup == nil {
+		signalGroup = signalProcessGroup
+	}
+	contained := managed.groupContained
+	if contained == nil {
+		contained = terminalProcessGroupContained
+	}
+
+	state, err := observe(identity.PID)
+	if err != nil {
+		return fmt.Errorf("observe terminal leader: %w", err)
+	}
+	if state != terminalLeaderRunning && state != terminalLeaderExited {
+		return fmt.Errorf("terminal leader is not waitable: %s", state)
+	}
+	if initialSignal != 0 {
+		if err := signalGroup(identity.PGID, initialSignal); err != nil && !errors.Is(err, syscall.ESRCH) {
+			return fmt.Errorf("signal owned terminal group: %w", err)
+		}
+	}
+	if initialSignal != 0 && state == terminalLeaderRunning {
+		state, err = waitTerminalLeaderExitWithObserver(identity.PID, observe, terminalPTYDrainTimeout)
+		if err != nil || state != terminalLeaderExited {
+			if err == nil {
+				err = fmt.Errorf("%w: leader did not become waitable after termination", errTerminalLeaderStillRunning)
+			}
+			return err
+		}
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		ok, checkErr := contained(identity.PGID, identity.PID)
+		if checkErr != nil {
+			return fmt.Errorf("verify terminal group containment: %w", checkErr)
+		}
+		if ok {
+			return nil
+		}
+		// The leader is observed exited but remains waitable, so its PID/PGID
+		// cannot be recycled. Escalation is therefore still safe here.
+		if err := signalGroup(identity.PGID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			return fmt.Errorf("escalate owned terminal group: %w", err)
+		}
+		if attempt == 0 {
+			time.Sleep(terminalPTYDrainTimeout)
+		}
+	}
+	return errors.New("terminal process-group containment unresolved")
+}
+
+func waitTerminalLeaderExitWithObserver(pid int, observe func(int) (terminalLeaderObservation, error), timeout time.Duration) (terminalLeaderObservation, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		state, err := observe(pid)
+		if err != nil || state != terminalLeaderRunning {
+			return state, err
+		}
+		if !time.Now().Before(deadline) {
+			return state, nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// retainTerminalCustodyLocked converts any finalization or persistence failure
+// into a durable, fail-closed state. The process may be dead, but the manager
+// has not established that all owned resources were safely released.
+func (m *TerminalSessionManager) retainTerminalCustodyLocked(managed *managedTerminalSession, cause error) error {
+	managed.session.Running = true
+	managed.session.State = TerminalSessionRunning
+	managed.session.Custodian = TerminalCustodianCoordinator
+	managed.session.CleanupState = TerminalCleanupManual
+	managed.session.CleanupError = cause.Error()
+	managed.cleanupInProgress = false
+	if err := m.persistLocked(); err != nil {
+		return errors.Join(cause, fmt.Errorf("persist terminal custody state: %w", err))
+	}
+	copy := deepCopyTerminalSession(managed.session)
+	m.emit(string(TerminalCleanupManualEvent), copy, map[string]interface{}{"reason": cause.Error()})
+	return cause
+}
+
+const terminalPTYDrainTimeout = 500 * time.Millisecond
+
+func finalizeTerminalPTYCopy(managed *managedTerminalSession) (error, bool) {
+	if managed == nil || managed.ptyMaster == nil {
+		return nil, true
+	}
+	var errs []error
+	copyDrained := managed.ptyCopyDone == nil
+	if managed.ptyCopyDone != nil {
+		timer := time.NewTimer(terminalPTYDrainTimeout)
+		select {
+		case <-managed.ptyCopyDone:
+			copyDrained = true
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		case <-timer.C:
+			// A descendant retaining the slave can prevent the PTY reader from
+			// seeing EOF. This timeout is diagnostic: terminate the owned
+			// process group before closing the master, then classify the final
+			// group and copier evidence below. Otherwise the descendant remains
+			// live after the session is reported as exited.
+		}
+	}
+
+	if !copyDrained {
+		// The process group has already been contained by the custody protocol;
+		// closing the master now releases a reader blocked behind a
+		// descendant-owned slave. Keep
+		// the wait bounded so a broken PTY implementation cannot deadlock the
+		// coordinator.
+		if closeErr := managed.ptyMaster.Close(); closeErr != nil && !errors.Is(closeErr, os.ErrInvalid) {
+			errs = append(errs, fmt.Errorf("close PTY master during drain escalation: %w", closeErr))
+		}
+		managed.ptyMaster = nil
+		timer := time.NewTimer(terminalPTYDrainTimeout)
+		select {
+		case <-managed.ptyCopyDone:
+			copyDrained = true
+		case <-timer.C:
+			errs = append(errs, errors.New("PTY output copier did not stop after master close"))
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}
+	if copyDrained && managed.ptyCopyErr != nil && !managed.ptyCopyErrRead {
+		managed.ptyCopyErrRead = true
+		if copyErr := <-managed.ptyCopyErr; copyErr != nil && !errors.Is(copyErr, io.EOF) && !errors.Is(copyErr, syscall.EIO) {
+			errs = append(errs, fmt.Errorf("copy PTY output: %w", copyErr))
+		}
+	}
+	if managed.ptyMaster != nil {
+		if closeErr := managed.ptyMaster.Close(); closeErr != nil && !errors.Is(closeErr, os.ErrInvalid) {
+			errs = append(errs, fmt.Errorf("close PTY master: %w", closeErr))
+		}
+	}
+	fatalErr := errors.Join(errs...)
+	return fatalErr, copyDrained && fatalErr == nil
+}
+
+func terminalPTYCopyDrained(managed *managedTerminalSession) bool {
+	if managed == nil || managed.ptyCopyDone == nil {
+		return true
+	}
+	select {
+	case <-managed.ptyCopyDone:
+		return true
+	default:
+		return false
+	}
+}
+
+func restoredTerminalGroupContained(managed *managedTerminalSession) (bool, error) {
+	if managed == nil || managed.session.ProcessIdentity == nil {
+		return false, errors.New("restored terminal process identity is unavailable")
+	}
+	identity := managed.session.ProcessIdentity
+	if identity.PID <= 0 || identity.PGID <= 0 || identity.PID != identity.PGID {
+		return false, errors.New("restored terminal leader/group ownership is unproven")
+	}
+	return terminalProcessGroupContained(identity.PGID, identity.PID)
+}
+
+func terminalProcessGroupAlive(pgid int) bool {
+	if pgid <= 0 {
+		return false
+	}
+	err := syscall.Kill(-pgid, syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // AcquireUserLease grants exclusive terminal input to a local human operator.
@@ -1176,54 +1656,144 @@ func (m *TerminalSessionManager) Read(ctx context.Context, id string) (TerminalR
 }
 
 func (m *TerminalSessionManager) Close(ctx context.Context, id string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	m.mu.Lock()
+	if finalized, ok := m.sessions[id]; ok {
+		normalizeTerminalSessionDefaults(&finalized.session)
+		controller := terminalTaskID(ctx)
+		if !finalized.session.Running && finalized.session.State == TerminalSessionClosed && finalized.session.CleanupState == TerminalCleanupCompleted {
+			if controller == "" || controller != finalized.session.ControllerTaskID {
+				m.mu.Unlock()
+				return fmt.Errorf("terminal session %q belongs to task %q (currently controlled by task %q)", id, finalized.session.OwnerTaskID, finalized.session.ControllerTaskID)
+			}
+			m.mu.Unlock()
+			return nil
+		}
+	}
 	managed, err := m.ownerSessionLocked(ctx, id, "")
 	if err != nil {
 		m.mu.Unlock()
 		return err
 	}
 
-	if managed.cmd != nil && managed.cmd.Process != nil {
-		if managed.session.Running {
-			if managed.stdin != nil {
-				_ = managed.stdin.Close()
-			}
-			killProcessGroup(managed.cmd)
-		}
-		managed.session.Running = false
+	// cmd.Process remains non-nil after the manager's sole cmd.Wait. A
+	// naturally finalized session is already contained and released; do not
+	// re-enter live cleanup, signal a reaped leader, or manufacture manual
+	// custody. Close promotes the durable lifecycle fact to closed and is
+	// idempotent thereafter.
+	if !managed.session.Running && managed.session.State == TerminalSessionExited {
+		previousState := managed.session.State
+		previousCleanup := managed.session.CleanupState
+		previousCompletedAt := managed.session.CleanupCompletedAt
 		managed.session.State = TerminalSessionClosed
-		err = m.persistLocked()
-		copy := deepCopyTerminalSession(managed.session)
-		m.mu.Unlock()
-		if err != nil {
+		managed.session.CleanupState = TerminalCleanupCompleted
+		managed.session.CleanupCompletedAt = time.Now().UTC()
+		managed.session.CleanupError = ""
+		managed.closeRequested = true
+		if err := m.persistLocked(); err != nil {
+			managed.session.State = previousState
+			managed.session.CleanupState = previousCleanup
+			managed.session.CleanupCompletedAt = previousCompletedAt
+			managed.closeRequested = false
+			m.mu.Unlock()
 			return err
 		}
-		if managed.done != nil {
-			<-managed.done
+		emitClose := !managed.closeEventEmitted
+		managed.closeEventEmitted = true
+		copy := deepCopyTerminalSession(managed.session)
+		m.mu.Unlock()
+		if emitClose {
+			m.emit("terminal_session_closed", copy, map[string]interface{}{"reason": "already finalized"})
 		}
-		m.emit("terminal_session_closed", copy, nil)
 		return nil
+	}
+	if !managed.session.Running && managed.session.State == TerminalSessionClosed {
+		m.mu.Unlock()
+		return nil
+	}
+
+	if managed.cmd != nil && managed.cmd.Process != nil {
+		if !managed.closeRequested {
+			managed.closeRequested = true
+			managed.cleanupInProgress = true
+			managed.session.Custodian = TerminalCustodianCoordinator
+			managed.session.CleanupState = TerminalCleanupRequested
+			managed.session.CleanupReason = TerminalCleanupTaskCancelled
+			managed.session.CleanupRequestedAt = time.Now().UTC()
+			managed.session.CleanupError = ""
+			err = m.persistLocked()
+			if err != nil {
+				managed.closeRequested = false
+				managed.cleanupInProgress = false
+				m.mu.Unlock()
+				return err
+			}
+			snapshot := deepCopyTerminalSession(managed.session)
+			m.emit(string(TerminalCustodyTransferred), snapshot, map[string]interface{}{"from": TerminalCustodianOwner, "to": TerminalCustodianCoordinator})
+			m.emit(string(TerminalCleanupRequestedEvent), snapshot, map[string]interface{}{"reason": TerminalCleanupTaskCancelled})
+		}
+		finalized := managed.finalized
+		m.mu.Unlock()
+		if managed.session.Mode != TerminalModePTY && managed.stdin != nil {
+			_ = managed.stdin.Close()
+		}
+		if err := containTerminalProcessGroup(managed, syscall.SIGKILL); err != nil {
+			_, _ = m.markCleanupManual(id, fmt.Sprintf("terminal group containment unavailable during close: %v", err))
+			return err
+		}
+		if finalized == nil {
+			return errors.New("terminal session finalization is unavailable")
+		}
+		select {
+		case err := <-finalized:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 
 	// For restored sessions without a live cmd handle (e.g. unknown state)
 	pid := managed.session.PID
+	managed.closeRequested = true
+	managed.cleanupInProgress = true
+	managed.session.Custodian = TerminalCustodianCoordinator
+	managed.session.CleanupState = TerminalCleanupRequested
+	managed.session.CleanupReason = TerminalCleanupTaskCancelled
+	managed.session.CleanupRequestedAt = time.Now().UTC()
+	managed.session.CleanupError = ""
+	if err := m.persistLocked(); err != nil {
+		managed.closeRequested = false
+		managed.cleanupInProgress = false
+		m.mu.Unlock()
+		return err
+	}
 	if pid > 0 && isPIDAlive(pid) {
-		valid, _ := verifyProcessIdentity(managed.session.ProcessIdentity)
-		if !valid {
-			m.mu.Unlock()
-			return fmt.Errorf("cannot close restored terminal session %q: process %d identity mismatch (PID may have been reused); state remains unknown and requires manual intervention", id, pid)
-		}
-		_ = killPIDGroup(pid)
-		time.Sleep(50 * time.Millisecond)
-		if isPIDAlive(pid) {
-			m.mu.Unlock()
-			return fmt.Errorf("cannot close restored terminal session %q: process %d is still running and could not be terminated", id, pid)
-		}
+		managed.session.CleanupState = TerminalCleanupManual
+		managed.session.CleanupError = "restored process is not waitable by this manager; manual custody required"
+		managed.cleanupInProgress = false
+		_ = m.persistLocked()
+		m.mu.Unlock()
+		return fmt.Errorf("cannot close restored terminal session %q: process %d is not waitable by this manager; manual custody required", id, pid)
 	}
 
-	// Reaching this path proves the restored child is already gone or was
-	// terminated after its identity was verified. Persist an exit fact as well
-	// as resource release so an explicit exit waiter cannot wait forever.
+	contained, containmentErr := restoredTerminalGroupContained(managed)
+	if !contained || containmentErr != nil {
+		if containmentErr == nil {
+			containmentErr = errors.New("owned process group containment is unproven")
+		}
+		managed.session.CleanupState = TerminalCleanupManual
+		managed.session.CleanupError = containmentErr.Error()
+		managed.cleanupInProgress = false
+		_ = m.persistLocked()
+		m.mu.Unlock()
+		return fmt.Errorf("cannot close restored terminal session %q: %v", id, containmentErr)
+	}
+
+	// Reaching this path proves the restored child is already gone and its
+	// original process group contains no live descendants. Persist an exit fact
+	// as well as resource release so an explicit exit waiter cannot wait forever.
 	now := time.Now().UTC()
 	managed.session.Running = false
 	managed.session.State = TerminalSessionClosed
@@ -1231,21 +1801,31 @@ func (m *TerminalSessionManager) Close(ctx context.Context, id string) error {
 		managed.session.ExitedAt = now
 	}
 	managed.session.ReleasedAt = now
+	managed.session.CleanupState = TerminalCleanupCompleted
+	managed.session.CleanupCompletedAt = now
+	managed.session.CleanupError = ""
 	err = m.persistLocked()
-	copy := deepCopyTerminalSession(managed.session)
-	m.mu.Unlock()
 	if err != nil {
+		managed.session.Running = true
+		managed.session.State = TerminalSessionRunning
+		managed.session.CleanupState = TerminalCleanupManual
+		managed.session.CleanupError = err.Error()
+		managed.cleanupInProgress = false
+		_ = m.persistLocked()
+		m.mu.Unlock()
 		return err
 	}
-	m.emit("terminal_session_closed", copy, map[string]interface{}{
-		"reconciled": true,
-		"evidence":   "process_terminated_or_dead",
-	})
+	copy := deepCopyTerminalSession(managed.session)
+	m.mu.Unlock()
 	m.emit(string(TerminalProcessExited), copy, map[string]interface{}{
 		"reason": "restored_process_terminated_or_dead",
 	})
 	m.emit(string(TerminalResourceReleased), copy, map[string]interface{}{
 		"reason": "restored_process_terminated_or_dead",
+	})
+	m.emit("terminal_session_closed", copy, map[string]interface{}{
+		"reconciled": true,
+		"evidence":   "process_terminated_or_dead",
 	})
 	return nil
 }
@@ -1276,17 +1856,24 @@ func (m *TerminalSessionManager) Reconcile(_ context.Context, id string) (Termin
 	if managed.session.State == TerminalSessionUnknown || !managed.session.Running {
 		pid := managed.session.PID
 		if pid > 0 && !isPIDAlive(pid) {
-			managed.session.State = TerminalSessionExited
-			managed.session.Running = false
-			if managed.session.ExitedAt.IsZero() {
-				managed.session.ExitedAt = time.Now().UTC()
+			contained, containmentErr := restoredTerminalGroupContained(managed)
+			if contained && containmentErr == nil {
+				managed.session.State = TerminalSessionExited
+				managed.session.Running = false
+				if managed.session.ExitedAt.IsZero() {
+					managed.session.ExitedAt = time.Now().UTC()
+				}
+				if managed.session.ReleasedAt.IsZero() {
+					managed.session.ReleasedAt = managed.session.ExitedAt
+				}
+				reconciled = true
+				processExited = true
+				reason = "pid_not_running_group_contained"
+			} else if containmentErr != nil {
+				reason = "pid_not_running_containment_unproven: " + containmentErr.Error()
+			} else {
+				reason = "pid_not_running_containment_unproven"
 			}
-			if managed.session.ReleasedAt.IsZero() {
-				managed.session.ReleasedAt = managed.session.ExitedAt
-			}
-			reconciled = true
-			processExited = true
-			reason = "pid_not_running"
 		} else if pid > 0 && isPIDAlive(pid) {
 			valid, _ := verifyProcessIdentity(managed.session.ProcessIdentity)
 			if !valid {
@@ -1295,6 +1882,11 @@ func (m *TerminalSessionManager) Reconcile(_ context.Context, id string) (Termin
 				reason = "pid_still_running"
 			}
 		}
+	}
+	if prevState == TerminalSessionUnknown && !processExited {
+		managed.session.Custodian = TerminalCustodianCoordinator
+		managed.session.CleanupState = TerminalCleanupManual
+		managed.session.CleanupError = reason
 	}
 	managed.session.ReconciledAt = time.Now().UTC()
 	if err := m.persistLocked(); err != nil {
@@ -1391,7 +1983,11 @@ func (m *TerminalSessionManager) persistLocked() error {
 	if err != nil {
 		return fmt.Errorf("encode terminal sessions: %w", err)
 	}
-	if err := AtomicWriteFile(m.path, data, 0o644); err != nil {
+	writeFile := AtomicWriteFile
+	if m.persistFile != nil {
+		writeFile = m.persistFile
+	}
+	if err := writeFile(m.path, data, 0o644); err != nil {
 		return fmt.Errorf("persist terminal sessions: %w", err)
 	}
 	return nil
@@ -1440,27 +2036,6 @@ func exitCode(err error) int {
 		return exitErr.ExitCode()
 	}
 	return -1
-}
-
-func killProcessGroup(cmd *exec.Cmd) {
-	if cmd == nil || cmd.Process == nil || cmd.Process.Pid <= 0 {
-		return
-	}
-	pid := cmd.Process.Pid
-	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
-		_ = cmd.Process.Kill()
-	}
-}
-
-func killPIDGroup(pid int) error {
-	if pid <= 0 {
-		return nil
-	}
-	err := syscall.Kill(-pid, syscall.SIGKILL)
-	if err != nil {
-		err = syscall.Kill(pid, syscall.SIGKILL)
-	}
-	return err
 }
 
 func isPIDAlive(pid int) bool {
