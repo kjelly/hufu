@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -37,6 +36,7 @@ const CoordTodoID = "__coord__"
 var skillSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
 var taskStatusRe = regexp.MustCompile(`\*\*Status:\*\*\s*(\S+)`)
 var extraWSSeq atomic.Uint64
+var actionWorkspaceSeq atomic.Uint64
 
 // todoIDKey is a context key used to pass the current task's TodoItem ID
 // down through executeTask → runAgentWithStatusAndHistory so that emitted
@@ -119,8 +119,8 @@ type TaskDef struct {
 	VerifyMode string            `json:"verify_mode,omitempty" yaml:"verify-mode,omitempty"`
 	VerifySpec *VerificationSpec `json:"verify_spec,omitempty" yaml:"verify-spec,omitempty"`
 	Requires   []string          `json:"requires,omitempty"`
-	MaxRetries int               `json:"max_retries,omitempty"` // Maximum number of retries if verify fails
-	OnFailure  *int              `json:"on_failure,omitempty"`  // 0-based index of the task to jump back to if verify fails
+	MaxRetries int               `json:"max_retries,omitempty" yaml:"max_retries,omitempty"` // Maximum number of retries if verify fails
+	OnFailure  *int              `json:"on_failure,omitempty"`                               // 0-based index of the task to jump back to if verify fails
 	// Escalate makes each retry after a failure re-run the task on the next
 	// stronger model in the model-list (ordered weakest→strongest).
 	Escalate bool `json:"escalate,omitempty"`
@@ -130,25 +130,28 @@ type TaskDef struct {
 	// path with the refutation as feedback.
 	AdversarialVerify int `json:"adversarial_verify,omitempty"`
 	// SideEffect classifies the task's side-effect risk (none, workspace_write, external_write, infra_mutation, credential_mutation).
-	SideEffect SideEffectClass `json:"side_effect,omitempty"`
+	SideEffect SideEffectClass `json:"side_effect,omitempty" yaml:"side_effect,omitempty"`
 	// Recovery controls interrupted task recovery behavior (retry, reconcile, manual, never).
-	Recovery RecoveryPolicy `json:"recovery,omitempty"`
+	Recovery RecoveryPolicy `json:"recovery,omitempty" yaml:"recovery,omitempty"`
 	// ReconcileTool specifies an optional read-only probe command to verify state during crash recovery.
 	ReconcileTool string `json:"reconcile_tool,omitempty"`
 	// Execution encapsulates execution contract semantics (kind, requires_result, requires_verification, allows_replay).
-	Execution           ExecutionContract   `json:"execution,omitempty" yaml:"execution,omitempty"`
-	Kind                TaskKind            `json:"kind,omitempty" yaml:"kind,omitempty"`
-	Advances            []string            `json:"advances,omitempty" yaml:"advances,omitempty"`
-	ExpectedStateChange string              `json:"expected_state_change,omitempty" yaml:"expected_state_change,omitempty"`
-	RecoveryHypothesis  *RecoveryHypothesis `json:"recovery_hypothesis,omitempty" yaml:"recovery_hypothesis,omitempty"`
-	ResourceClaims      []string            `json:"resource_claims,omitempty" yaml:"resource_claims,omitempty"`
-	Resources           []ResourceClaim     `json:"resources,omitempty" yaml:"resources,omitempty"`
+	Execution           ExecutionContract `json:"execution,omitempty" yaml:"execution,omitempty"`
+	Kind                TaskKind          `json:"kind,omitempty" yaml:"kind,omitempty"`
+	Advances            []string          `json:"advances,omitempty" yaml:"advances,omitempty"`
+	ExpectedStateChange string            `json:"expected_state_change,omitempty" yaml:"expected_state_change,omitempty"`
+	// Optional contracts are authorized for the active workflow phase but do
+	// not have to be dispatched for that phase to advance.
+	Optional           bool                `json:"optional,omitempty" yaml:"optional,omitempty"`
+	RecoveryHypothesis *RecoveryHypothesis `json:"recovery_hypothesis,omitempty" yaml:"recovery_hypothesis,omitempty"`
+	ResourceClaims     []string            `json:"resource_claims,omitempty" yaml:"resource_claims,omitempty"`
+	Resources          []ResourceClaim     `json:"resources,omitempty" yaml:"resources,omitempty"`
 	// FactRefs substitutes {name} in this task's Goal and Constraints with a
 	// named fact or artifact an EARLIER task already declared in its own
 	// submit_result, resolved by the runtime before dispatch. This exists so
 	// a coordinator never retypes a value another task already discovered
 	// (a list, a computed count, a resolved path) into a later task's prose.
-	FactRefs       []FactRef                `json:"fact_refs,omitempty"`
+	FactRefs       []FactRef                `json:"fact_refs,omitempty" yaml:"fact_refs,omitempty"`
 	WorksetBinding *WorksetBinding          `json:"workset_binding,omitempty"`
 	WorksetReceipt *WorksetExpansionReceipt `json:"workset_receipt,omitempty"`
 	// FanOut, when set, replaces this single submitted task with one task per
@@ -158,7 +161,7 @@ type TaskDef struct {
 	// ignored and GoalTemplate's scalar placeholders are substituted by Hufu.
 	// This exists so a coordinator never has to retype data-derived literals
 	// into many near-identical dispatches. See expandFanOutTasks.
-	FanOut *FanOutSpec `json:"fan_out,omitempty"`
+	FanOut *FanOutSpec `json:"fan_out,omitempty" yaml:"fan_out,omitempty"`
 }
 
 // FactRef names one substitution: {Name} in the consuming task's Goal and
@@ -168,10 +171,10 @@ type TaskDef struct {
 // that task's own submit_result artifacts, resolved to its Path). Exactly one
 // of Fact or Artifact must be set.
 type FactRef struct {
-	Name     string `json:"name"`
-	TaskID   string `json:"task_id"`
-	Fact     string `json:"fact,omitempty"`
-	Artifact string `json:"artifact,omitempty"`
+	Name     string `json:"name" yaml:"name"`
+	TaskID   string `json:"task_id" yaml:"task_id"`
+	Fact     string `json:"fact,omitempty" yaml:"fact,omitempty"`
+	Artifact string `json:"artifact,omitempty" yaml:"artifact,omitempty"`
 }
 
 // FanOutSpec names an artifact-backed workset source and a goal template.
@@ -477,14 +480,20 @@ type Coordinator struct {
 	sessionToolPermissions   map[string]bool // toolName -> allowed (permanent session decision)
 	sessionToolPermissionsMu sync.RWMutex
 
-	taskResults          map[string]*TaskResult
-	taskResultsMu        sync.RWMutex
-	stepReceipts         *ExecutionStepReceiptRegistry
-	taskAttempts         map[string]int
-	taskAttemptsMu       sync.RWMutex
-	toolPolicyVerdicts   map[string]string
-	toolPolicyVerdictsMu sync.Mutex
-	structuredStepRunner StructuredStepRunner
+	taskResults   map[string]*TaskResult
+	taskResultsMu sync.RWMutex
+	// occurrenceControllers are the sole owner of per-todo attempt identity,
+	// result latching, reservation, and pending submission state. taskResults is
+	// retained as a compatibility projection for trusted coordinator lookups and
+	// older test fixtures; it is never consulted to authorize submit_result.
+	occurrenceControllersMu sync.Mutex
+	occurrenceControllers   map[string]*taskOccurrenceController
+	stepReceipts            *ExecutionStepReceiptRegistry
+	taskAttempts            map[string]int
+	taskAttemptsMu          sync.RWMutex
+	toolPolicyVerdicts      map[string]string
+	toolPolicyVerdictsMu    sync.Mutex
+	structuredStepRunner    StructuredStepRunner
 
 	// executionEvents is initialized for each top-level Run/Continue call and
 	// receives attempt-level telemetry for `hufu improve`.
@@ -522,6 +531,9 @@ type Coordinator struct {
 	maxWallClock                  time.Duration // 0 = unlimited
 	tokenBudget                   int64         // 0 = unlimited; cumulative LLM tokens
 	tokensUsed                    atomic.Int64
+	tokenBudgetMu                 sync.Mutex
+	tokenReservations             int64
+	tokenBudgetOwner              *Coordinator
 	acceptanceCmd                 string // optional shell command run at finish
 	acceptanceSpec                *AcceptanceSpec
 	acceptanceContractFixed       bool
@@ -641,11 +653,17 @@ func (c *Coordinator) IsAutoApprove() bool { return c.autoApprove }
 // SetBudget configures the run's wall-clock and cumulative-token ceilings.
 // Zero values mean unlimited.
 func (c *Coordinator) SetBudget(maxWallClockSeconds, maxTotalTokens int64) {
+	owner := c.tokenBudgetRoot()
+	if owner == nil {
+		return
+	}
+	owner.tokenBudgetMu.Lock()
+	defer owner.tokenBudgetMu.Unlock()
 	if maxWallClockSeconds > 0 {
-		c.maxWallClock = time.Duration(maxWallClockSeconds) * time.Second
+		owner.maxWallClock = time.Duration(maxWallClockSeconds) * time.Second
 	}
 	if maxTotalTokens > 0 {
-		c.tokenBudget = maxTotalTokens
+		owner.tokenBudget = maxTotalTokens
 	}
 }
 
@@ -878,14 +896,37 @@ func (c *Coordinator) chooseAskUserResponse(ctx context.Context, question, qtype
 	return s.ChooseAskUserResponse(ctx, question, qtype, opts, allowAny)
 }
 
+// tokenBudgetRoot returns the coordinator that owns the run-wide token ledger.
+// Extra-model coordinators share the parent run's budget, while ordinary test
+// and direct coordinators remain self-owned.
+func (c *Coordinator) tokenBudgetRoot() *Coordinator {
+	if c == nil {
+		return nil
+	}
+	root := c
+	for root.tokenBudgetOwner != nil && root.tokenBudgetOwner != root {
+		root = root.tokenBudgetOwner
+	}
+	return root
+}
+
 // TokensUsed returns the cumulative LLM token count observed so far.
-func (c *Coordinator) TokensUsed() int64 { return c.tokensUsed.Load() }
+func (c *Coordinator) TokensUsed() int64 {
+	if root := c.tokenBudgetRoot(); root != nil {
+		return root.tokensUsed.Load()
+	}
+	return 0
+}
 
 // addStepTokens accumulates token usage from a set of agent steps. Some
 // providers report no usage at all (observed: minimax via ollama returned
 // tokens_in/out=0 for every response); estimate from message bytes in that
 // case so token budgets are not silently blind for most of a run.
 func (c *Coordinator) addStepTokens(steps []fantasy.StepResult) int64 {
+	owner := c.tokenBudgetRoot()
+	if owner == nil {
+		return 0
+	}
 	var total int64
 	for _, s := range steps {
 		if s.Usage.TotalTokens > 0 {
@@ -899,7 +940,7 @@ func (c *Coordinator) addStepTokens(steps []fantasy.StepResult) int64 {
 		total += int64(est / 4)
 	}
 	if total > 0 {
-		c.tokensUsed.Add(total)
+		owner.tokensUsed.Add(total)
 	}
 	return total
 }
@@ -907,14 +948,24 @@ func (c *Coordinator) addStepTokens(steps []fantasy.StepResult) int64 {
 // budgetExceeded reports whether any configured budget (wall-clock or tokens)
 // has been exceeded, along with a human-readable reason.
 func (c *Coordinator) budgetExceeded() (bool, string) {
-	if c.maxWallClock > 0 {
-		if elapsed := time.Since(c.sessionTime); elapsed > c.maxWallClock {
-			return true, fmt.Sprintf("wall-clock budget exceeded (%s > %s)", elapsed.Round(time.Second), c.maxWallClock)
+	owner := c.tokenBudgetRoot()
+	if owner == nil {
+		return false, ""
+	}
+	owner.tokenBudgetMu.Lock()
+	maxWallClock := owner.maxWallClock
+	tokenBudget := owner.tokenBudget
+	reservations := owner.tokenReservations
+	used := owner.tokensUsed.Load()
+	owner.tokenBudgetMu.Unlock()
+	if maxWallClock > 0 {
+		if elapsed := time.Since(owner.sessionTime); elapsed > maxWallClock {
+			return true, fmt.Sprintf("wall-clock budget exceeded (%s > %s)", elapsed.Round(time.Second), maxWallClock)
 		}
 	}
-	if c.tokenBudget > 0 {
-		if used := c.tokensUsed.Load(); used >= c.tokenBudget {
-			return true, fmt.Sprintf("token budget exceeded (%d >= %d)", used, c.tokenBudget)
+	if tokenBudget > 0 {
+		if used+reservations >= tokenBudget {
+			return true, fmt.Sprintf("token budget exceeded (%d >= %d)", used+reservations, tokenBudget)
 		}
 	}
 	return false, ""
@@ -1016,6 +1067,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		approvedOutputs:           make(map[string]string),
 		approvedErrors:            make(map[string]error),
 		taskResults:               make(map[string]*TaskResult),
+		occurrenceControllers:     make(map[string]*taskOccurrenceController),
 		stepReceipts:              NewExecutionStepReceiptRegistry(),
 		taskAttempts:              make(map[string]int),
 		toolPolicyVerdicts:        make(map[string]string),
@@ -1106,11 +1158,6 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	c.contextCompiler = &defaultContextCompiler{c: c}
 	c.agentPool = &defaultAgentPool{c: c}
 	c.structuredStepRunner = &coordinatorDeclaredToolRunner{c: c}
-	// Scrub legacy hufu-managed records before they are reloaded into prompts or
-	// opened for append. User workspace artifacts are deliberately excluded.
-	if redactErr := RedactWorkspaceManagedRecords(session.Workspace); redactErr != nil {
-		log.Printf("warning: could not redact managed workspace records: %v", redactErr)
-	}
 	// Canonical context is now required for every coordinator. Refusing to run
 	// without it prevents a fallback to legacy Markdown/JSONL truth after the
 	// cutover; callers can repair workspace permissions and retry safely.
@@ -1595,12 +1642,15 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 	}
 	props["fan_out"] = map[string]any{
 		"type":        "object",
-		"description": "Expand this ONE task into one task per data row of a TSV file; the runtime substitutes columns into goal_template itself. Use this instead of composing many near-identical per-row dispatches by hand: retyping the same data-derived literal (a commit SHA, a generated batch/row ID, a file path) into many similar goals is exactly how a character gets dropped or merged. When fan_out is set, the goal field is ignored (still required by the schema; any placeholder text satisfies it) and this task's other fields (agent, constraints, execution, verify_spec, ...) apply unchanged to every expanded task.",
+		"description": "Expand this ONE task from an immutable workset artifact (or deprecated TSV compatibility source); the runtime substitutes bounded scalar bindings into goal_template itself. When fan_out is set, the goal field is ignored and the task's other fields apply unchanged to every expanded child.",
 		"properties": map[string]any{
-			"source":        map[string]any{"type": "string", "description": "Path to a TSV file with a header row, relative to the team workspace (e.g. \"hufu-code-review/coverage/batches.tsv\"). A leading '#' on the header's first column is stripped automatically."},
-			"goal_template": map[string]any{"type": "string", "description": "Goal text with {column_name} placeholders, one per TSV header column you reference. Every placeholder must match an actual header column name exactly; an unmatched placeholder fails the entire dispatch before any task is created, rather than silently expanding a wrong goal."},
+			"source": map[string]any{"type": "string", "description": "Deprecated workspace-relative TSV compatibility source."},
+			"source_artifact": map[string]any{"type": "object", "description": "Immutable artifact declared by an earlier task.", "properties": map[string]any{
+				"task_id": map[string]any{"type": "string"}, "artifact": map[string]any{"type": "string"},
+			}, "required": []string{"task_id", "artifact"}},
+			"goal_template": map[string]any{"type": "string", "description": "Goal text with bounded scalar binding placeholders. An unmatched placeholder fails before any child task is created."},
 		},
-		"required": []string{"source", "goal_template"},
+		"required": []string{"goal_template"},
 	}
 	if len(capabilityNames) > 0 {
 		props["requires"] = map[string]any{
@@ -1922,42 +1972,150 @@ func (c *Coordinator) setRuntimeServices(services RuntimeServices) {
 }
 
 func (c *Coordinator) storeSubmittedTaskResult(todoID string, res *TaskResult) {
+	if c == nil || todoID == "" || res == nil {
+		return
+	}
+	identity, ok := c.activeTaskResultOccurrence(todoID)
+	if !ok {
+		identity, ok = c.deriveTrustedTaskResultOccurrence(todoID, res)
+		if !ok {
+			c.storeTrustedTaskResultSeed(todoID, res)
+			return
+		}
+		c.openTaskOccurrence(identity)
+	}
+	if res.TaskID != "" && res.TaskID != identity.TaskID ||
+		res.Attempt > 0 && res.Attempt != identity.Attempt ||
+		res.Agent != "" && !strings.EqualFold(res.Agent, identity.Agent) {
+		return
+	}
+	controller := c.occurrenceController(todoID)
+	controller.mu.Lock()
+	if controller.result == nil && !controller.reserved {
+		controller.result = cloneTaskResult(res)
+		controller.result.TaskID = identity.TaskID
+		controller.result.Attempt = identity.Attempt
+		controller.result.Agent = identity.Agent
+		c.publishTaskResultProjection(todoID, controller.result)
+	}
+	controller.mu.Unlock()
+}
+
+func (c *Coordinator) storeTrustedTaskResultSeed(todoID string, res *TaskResult) {
 	c.taskResultsMu.Lock()
+	defer c.taskResultsMu.Unlock()
 	if c.taskResults == nil {
 		c.taskResults = make(map[string]*TaskResult)
 	}
-	c.taskResults[todoID] = res
-	c.taskResultsMu.Unlock()
-
+	if _, exists := c.taskResults[todoID]; exists {
+		return
+	}
+	stored := cloneTaskResult(res)
+	c.taskResults[todoID] = stored
 	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-		_ = c.taskTracker.TodoList().SetTypedResult(todoID, res)
+		_ = c.taskTracker.TodoList().SetTypedResult(todoID, stored)
 	}
 }
 
-// clearSubmittedTaskResult removes the attempt-scoped result before an
-// execution retry. The prior attempt's result remains in its execution
-// receipt, but must not satisfy RequiresResult for the new worker attempt.
+func (c *Coordinator) activeTaskResultOccurrence(todoID string) (submitResultRuntimeIdentity, bool) {
+	controller := c.occurrenceController(todoID)
+	if controller == nil {
+		return submitResultRuntimeIdentity{}, false
+	}
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	return controller.identity, controller.opened
+}
+
+func sameTaskResultOccurrence(a, b submitResultRuntimeIdentity) bool {
+	return a.RunID == b.RunID && a.TaskID == b.TaskID && a.Attempt == b.Attempt && strings.EqualFold(a.Agent, b.Agent)
+}
+
+// openSubmittedTaskResult atomically closes the prior occurrence and opens a
+// fresh first-valid-result latch for the supplied runtime occurrence.
+func (c *Coordinator) openSubmittedTaskResult(identity submitResultRuntimeIdentity) {
+	c.openTaskOccurrence(identity)
+}
+
+// storeSubmittedTaskResultForOccurrence is the only ingress used by the
+// result sink. The occurrence comparison and first-result latch are one
+// critical section; a retry cannot race a delayed prior-attempt submission.
+func (c *Coordinator) storeSubmittedTaskResultForOccurrence(identity submitResultRuntimeIdentity, res *TaskResult) bool {
+	if c == nil || res == nil || !validSubmitResultIdentity(identity) {
+		return false
+	}
+	controller := c.occurrenceController(identity.TaskID)
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if !controller.opened || !sameTaskResultOccurrence(controller.identity, identity) || controller.result != nil || controller.reserved {
+		return false
+	}
+	stored := cloneTaskResult(res)
+	stored.TaskID = identity.TaskID
+	stored.Attempt = identity.Attempt
+	stored.Agent = identity.Agent
+	controller.result = stored
+	c.publishTaskResultProjection(identity.TaskID, stored)
+	return true
+}
+
+func (c *Coordinator) deriveTrustedTaskResultOccurrence(todoID string, res *TaskResult) (submitResultRuntimeIdentity, bool) {
+	if c == nil || res == nil {
+		return submitResultRuntimeIdentity{}, false
+	}
+	runID := strings.TrimSpace(c.executionRunID)
+	if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		runID = strings.TrimSpace(c.taskTracker.TodoList().RunID())
+	}
+	if runID == "" {
+		runID = "direct-" + todoID
+	}
+	attempt := res.Attempt
+	if attempt <= 0 {
+		attempt = c.currentTaskAttempt(todoID)
+	}
+	if attempt <= 0 {
+		attempt = 1
+	}
+	agentName := strings.TrimSpace(res.Agent)
+	if agentName == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		for _, item := range c.taskTracker.TodoList().Items() {
+			if item != nil && item.ID == todoID {
+				agentName = strings.TrimSpace(item.Agent)
+				break
+			}
+		}
+	}
+	return submitResultRuntimeIdentity{RunID: runID, TaskID: todoID, Attempt: attempt, Agent: agentName}, runID != "" && agentName != ""
+}
+
+// clearSubmittedTaskResult removes the currently latched result. Retry setup
+// must use openSubmittedTaskResult, which changes ownership and clears the
+// slot atomically; clearing alone preserves the active occurrence so an old
+// submission cannot become authoritative.
 func (c *Coordinator) clearSubmittedTaskResult(todoID string) {
-	if c == nil || todoID == "" {
+	controller := c.occurrenceController(todoID)
+	if controller == nil {
 		return
 	}
-	c.taskResultsMu.Lock()
-	if c.taskResults != nil {
-		delete(c.taskResults, todoID)
-	}
-	c.taskResultsMu.Unlock()
-
-	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-		_ = c.taskTracker.TodoList().SetTypedResult(todoID, nil)
-	}
+	controller.mu.Lock()
+	controller.result = nil
+	controller.pending = nil
+	controller.mu.Unlock()
+	c.clearTaskResultProjection(todoID)
 }
 
 func (c *Coordinator) GetTaskResult(todoID string) *TaskResult {
-	c.taskResultsMu.RLock()
-	var res *TaskResult
-	if c.taskResults != nil {
-		res = c.taskResults[todoID]
+	if controller := c.occurrenceController(todoID); controller != nil {
+		controller.mu.Lock()
+		result := cloneTaskResult(controller.result)
+		controller.mu.Unlock()
+		if result != nil {
+			return result
+		}
 	}
+	c.taskResultsMu.RLock()
+	res := cloneTaskResult(c.taskResults[todoID])
 	c.taskResultsMu.RUnlock()
 	if res != nil {
 		return res
@@ -1965,7 +2123,7 @@ func (c *Coordinator) GetTaskResult(todoID string) *TaskResult {
 	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 		for _, item := range c.taskTracker.TodoList().Items() {
 			if item.ID == todoID && item.TypedResult != nil {
-				return item.TypedResult
+				return cloneTaskResult(item.TypedResult)
 			}
 		}
 	}

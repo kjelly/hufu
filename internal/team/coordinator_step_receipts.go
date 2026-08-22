@@ -12,6 +12,14 @@ func (c *Coordinator) setCurrentTaskAttempt(todoID string, attempt int) {
 	if c == nil || strings.TrimSpace(todoID) == "" || attempt <= 0 {
 		return
 	}
+	identity, ok := c.taskResultOccurrenceForAttempt(todoID, attempt)
+	if !ok {
+		return
+	}
+	// The occurrence controller publishes the attempt, identity, latch, and
+	// pending state under one per-todo gate. taskAttempts is only a legacy
+	// snapshot for receipt-related fixtures; it is not an authorization source.
+	c.openTaskOccurrence(identity)
 	c.taskAttemptsMu.Lock()
 	if c.taskAttempts == nil {
 		c.taskAttempts = make(map[string]int)
@@ -20,9 +28,32 @@ func (c *Coordinator) setCurrentTaskAttempt(todoID string, attempt int) {
 	c.taskAttemptsMu.Unlock()
 }
 
+func (c *Coordinator) taskResultOccurrenceForAttempt(todoID string, attempt int) (submitResultRuntimeIdentity, bool) {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return submitResultRuntimeIdentity{}, false
+	}
+	runID := strings.TrimSpace(c.executionRunID)
+	if runID == "" {
+		runID = strings.TrimSpace(c.taskTracker.TodoList().RunID())
+	}
+	if runID == "" {
+		runID = "direct-" + todoID
+	}
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item != nil && item.ID == todoID {
+			agentName := strings.ToLower(strings.TrimSpace(item.Agent))
+			return submitResultRuntimeIdentity{RunID: runID, TaskID: todoID, Attempt: attempt, Agent: agentName}, runID != "" && agentName != ""
+		}
+	}
+	return submitResultRuntimeIdentity{}, false
+}
+
 func (c *Coordinator) currentTaskAttempt(todoID string) int {
 	if c == nil {
 		return 0
+	}
+	if identity, ok := c.activeTaskResultOccurrence(todoID); ok {
+		return identity.Attempt
 	}
 	c.taskAttemptsMu.RLock()
 	attempt := c.taskAttempts[todoID]

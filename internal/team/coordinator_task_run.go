@@ -35,7 +35,50 @@ import (
 // evidence, while coordinators must not continue making decisions from it.
 var errCoordinatorToolFailure = errors.New("coordinator direct tool failure")
 
-func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (string, error) {
+// acceptedTerminalResultStop is scoped to one worker stream invocation. The
+// result tool flips it only after the occurrence transaction commits; the
+// stream boundary then stops before Fantasy asks the model for another step.
+// Keeping the occurrence identity here prevents a delayed or stale result
+// from stopping a different retry or task.
+type acceptedTerminalResultStop struct {
+	mu       sync.Mutex
+	identity submitResultRuntimeIdentity
+	accepted bool
+}
+
+type acceptedTerminalResultStopKey struct{}
+
+func (s *acceptedTerminalResultStop) markAccepted(identity submitResultRuntimeIdentity) {
+	if s == nil || !validSubmitResultIdentity(identity) {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.accepted {
+		return
+	}
+	if validSubmitResultIdentity(s.identity) && !sameTaskResultOccurrence(s.identity, identity) {
+		return
+	}
+	s.identity = identity
+	s.accepted = true
+}
+
+func (s *acceptedTerminalResultStop) isAcceptedFor(c *Coordinator, todoID string) bool {
+	if s == nil || c == nil || strings.TrimSpace(todoID) == "" {
+		return false
+	}
+	s.mu.Lock()
+	identity, accepted := s.identity, s.accepted
+	s.mu.Unlock()
+	if !accepted || identity.TaskID != todoID {
+		return false
+	}
+	active, ok := c.activeTaskResultOccurrence(todoID)
+	return ok && sameTaskResultOccurrence(identity, active)
+}
+
+func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (result string, returnErr error) {
 	// A checkpointed protocol-incomplete task has already run its worker. It
 	// may only re-enter through the result-only repair gate; never recreate the
 	// worker agent or replay its tools from this status.
@@ -108,6 +151,15 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if err := c.CommitTaskTransition(parentCtx, todoID, TaskPending, TaskInProgress, "", "", nil); err != nil {
 		return "", fmt.Errorf("mark task started: %w", err)
 	}
+	// Every path after admission must leave canonical lifecycle state terminal
+	// when it returns an error. The normal retry loop already persists its
+	// classified decision; this postcondition covers deterministic pre-model
+	// failures such as tool, context, and artifact preflight errors.
+	defer func() {
+		if returnErr != nil {
+			c.terminalizeTaskErrorIfUnresolved(todoID, returnErr)
+		}
+	}()
 	c.reconcileTaskStatusProjection()
 	if agentDef.Skills != "" {
 		skills := strings.Split(agentDef.Skills, ",")
@@ -241,6 +293,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			runtimeContext += fmt.Sprintf("- **Required Capabilities**: `%s`\n", strings.Join(execCtx.Capabilities.Required, ", "))
 		}
 	}
+	if item := c.todoItemByID(todoID); item != nil && item.WorksetBinding != nil {
+		runtimeContext = appendWorksetWorkerRuntimeContext(runtimeContext, item.WorksetBinding)
+	}
 
 	contextFiles := make(map[string]string)
 	if len(task.ContextFiles) > 0 {
@@ -269,7 +324,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			for _, item := range c.taskTracker.TodoList().Items() {
 				if depSet[item.ID] && item.Status == TaskDone {
 					if res := c.GetTaskResult(item.ID); res != nil {
-						depResults = append(depResults, *res)
+						depResults = append(depResults, projectDependencyResultForWorker(res, currentTodo.WorksetBinding))
 					}
 				}
 			}
@@ -358,6 +413,7 @@ retryLoop:
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		attemptsMade = attempt
 		c.setCurrentTaskAttempt(todoID, attempt)
+		attemptIdentity, attemptIdentityOK := c.activeTaskResultOccurrence(todoID)
 		// Per-attempt tool call evidence — reset at the start of each
 		// attempt to prevent stale data from a prior attempt or task.
 		attemptEvidence := &toolCallEvidence{}
@@ -433,7 +489,10 @@ retryLoop:
 			// A submitted partial/failed/blocked result belongs to the prior
 			// execution attempt. Preserve it in that attempt's receipt, but do
 			// not let it satisfy RequiresResult before the new worker runs.
-			c.clearSubmittedTaskResult(todoID)
+			// setCurrentTaskAttempt above atomically opened and cleared the new
+			// occurrence. Do not clear again: a delayed old submission must be
+			// rejected against the new owner, and a new submission must not be
+			// erased between opening and execution.
 		}
 		trigger := ContextTriggerTaskDispatch
 		var failureContext *ContextFailure
@@ -445,6 +504,17 @@ retryLoop:
 			}
 		}
 		request = c.newTaskContextRequest(task, todoID, attempt, trigger, agentName, agentDef.Role, failureContext)
+		attemptArtifactScope, scopeErr := c.buildArtifactAccessScope(todoID, attempt)
+		if scopeErr != nil {
+			closeTranscript()
+			return "", fmt.Errorf("artifact scope preflight failed: %w", scopeErr)
+		}
+		if c.workerAgentOverride == nil {
+			if err := c.validateBoundWorkerToolPolicy(resolvedTools, task, todoID, attemptArtifactScope); err != nil {
+				closeTranscript()
+				return "", fmt.Errorf("worker tool policy preflight failed: %w", err)
+			}
+		}
 		retrievalQuery := request.RetrievalQuery()
 		attemptInput := workerInput
 		attemptInput.Request = request
@@ -499,6 +569,16 @@ retryLoop:
 			return "", fmt.Errorf("worker memory manifest preflight failed: %w", err)
 		}
 		c.recordExecutionEvent(todoID, agentName, attempt, "in_progress", resolvedModel, 0, ExecutionUsage{})
+		if attemptArtifactScope != nil {
+			committedScopeReceipt := &ExecutionReceipt{
+				RunID: runID, TaskID: todoID, Attempt: attempt, ProducerID: agentName,
+				ArtifactScope: cloneArtifactAccessScope(attemptArtifactScope),
+			}
+			if err := c.taskTracker.TodoList().SetExecutionReceipt(todoID, committedScopeReceipt); err != nil {
+				closeTranscript()
+				return "", fmt.Errorf("commit artifact scope receipt: %w", err)
+			}
+		}
 		currentPrompt := compiled.Prompt
 		if attempt > 1 {
 			detail := fmt.Sprintf("attempt %d/%d", attempt, maxAttempts)
@@ -554,6 +634,9 @@ retryLoop:
 			taskCtx = context.WithValue(taskCtx, modelKey{}, resolvedModel)
 			taskCtx = context.WithValue(taskCtx, taskRequiresResultKey{}, task.Execution.RequiresResult)
 			taskCtx = withInvocationMetadata(taskCtx, invocationMetadataFromRequest(request, contextManifest))
+			if identity, ok := c.activeTaskResultOccurrence(todoID); ok {
+				taskCtx = withSubmitResultRuntimeIdentity(taskCtx, identity)
+			}
 			// Per-attempt tool call evidence (§6.1, P1b: per-attempt, not
 			// coordinator-global, to prevent cross-task leakage).
 			taskCtx = context.WithValue(taskCtx, toolCallEvidenceKey{}, attemptEvidence)
@@ -616,6 +699,13 @@ retryLoop:
 			}
 			if c.autoApprove {
 				taskCtx = context.WithValue(taskCtx, tools.AutoApproveKey, true)
+			}
+			if attemptArtifactScope != nil {
+				taskCtx = context.WithValue(taskCtx, artifactAccessScopeKey, cloneArtifactAccessScope(attemptArtifactScope))
+				taskCtx = context.WithValue(taskCtx, tools.ArtifactPathPolicyKey, tools.ArtifactPathPolicy{
+					BlockedPaths:             c.artifactScopePathCandidates(attemptArtifactScope),
+					FailClosedForUnsupported: c.todoItemByID(todoID) != nil && c.todoItemByID(todoID).WorksetBinding != nil,
+				})
 			}
 
 			taskCtx = c.withEffectiveToolsAllowedForTask(taskCtx, agentDef, exposedToolNames, task)
@@ -718,6 +808,7 @@ retryLoop:
 			StartedAt:        attemptStarted,
 			FinishedAt:       time.Now(),
 			ProducerID:       agentName,
+			ArtifactScope:    cloneArtifactAccessScope(attemptArtifactScope),
 			TranscriptRef:    transcriptRef,
 			MemoryManifest:   cloneMemoryInjectionManifest(attemptManifest),
 			ContextManifest:  cloneContextInjectionManifest(&contextManifest),
@@ -892,6 +983,7 @@ retryLoop:
 									return nil
 								}
 								repairCtx := context.WithValue(parentCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
+								repairCtx = context.WithValue(repairCtx, protocolRepairExecutionKey{}, true)
 								// Protocol repair has no separate execution receipt. The
 								// parent worker context is receipt-backed, so override its
 								// marker before accounting this auxiliary LLM stream.
@@ -899,6 +991,9 @@ retryLoop:
 								repairCtx = context.WithValue(repairCtx, todoIDKey{}, todoID)
 								repairCtx = context.WithValue(repairCtx, modelKey{}, resolvedModel)
 								repairCtx = context.WithValue(repairCtx, tools.AgentNameKey, agentName)
+								if identity, ok := c.activeTaskResultOccurrence(todoID); ok {
+									repairCtx = withSubmitResultRuntimeIdentity(repairCtx, identity)
+								}
 								repairCtx = context.WithValue(repairCtx, hooks.AgentNameKey, agentName)
 								repairCtx = context.WithValue(repairCtx, hooks.TeamNameKey, c.session.Config.Name)
 								repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, taskDesc)
@@ -1077,11 +1172,21 @@ retryLoop:
 			// require a typed result, but that must not change the task's output
 			// contract. Only an explicit verbatim task is reduced to a manifest.
 			if err == nil && taskUsesVerbatimTranscript(task) && transcript != nil {
-				coordinatorOutput, err = finalizeVerbatimTaskResult(transcript, typedRes)
-				if err != nil {
-					err = fmt.Errorf("verbatim transcript validation failed: %w", err)
-				} else if typedRes != nil {
-					c.storeSubmittedTaskResult(todoID, typedRes)
+				if !attemptIdentityOK {
+					err = fmt.Errorf("verbatim transcript finalization failed: no captured task result occurrence")
+				} else {
+					contract := taskResultSubmissionContractForTask(task)
+					coordinatorOutput, err = c.finalizeTaskResultOccurrence(attemptIdentity, transcript, contract)
+					if err != nil {
+						err = fmt.Errorf("verbatim transcript finalization failed: %w", err)
+					} else {
+						// Verification and TaskDone must consume the same canonical
+						// candidate that received the sealed transcript fields.
+						typedRes = c.GetTaskResult(todoID)
+						if typedRes == nil {
+							err = fmt.Errorf("verbatim transcript finalization failed: canonical task result disappeared")
+						}
+					}
 				}
 			}
 			// Deliverable verification: run an objective check before accepting
@@ -1469,6 +1574,25 @@ retryLoop:
 	return "", failErr
 }
 
+// appendWorksetWorkerRuntimeContext projects only the child task's assigned
+// inputs. The source manifest and its lineage identity authorize expansion in
+// the coordinator, but are not a worker capability and must stay private to
+// prevent the model from guessing an unauthorized artifact reference.
+func appendWorksetWorkerRuntimeContext(runtimeContext string, binding *WorksetBinding) string {
+	if binding == nil {
+		return runtimeContext
+	}
+	runtimeContext += fmt.Sprintf("- **Workset item**: `%s` (workset `%s`)\n", binding.ItemKey, binding.WorksetID)
+	if len(binding.Inputs) == 0 {
+		return runtimeContext
+	}
+	runtimeContext += "- **Assigned input artifacts** (opaque refs; pass unchanged to artifact-aware tools):\n"
+	for _, input := range binding.Inputs {
+		runtimeContext += fmt.Sprintf("  - `%s` (sha256 `%s`)\n", input.ID, input.SHA256)
+	}
+	return runtimeContext
+}
+
 func (c *Coordinator) effectiveWorkerMaxAttempts(agentDef *agent.AgentDef) int {
 	retries := c.session.Config.MaxRetries
 	if agentDef != nil && agentDef.MaxRetries >= 0 {
@@ -1509,24 +1633,87 @@ func promoteValidatedReadOnlyHandoff(task TaskDef, todoID, agentName, output str
 // executeRuntimeAction gives provider-backed actions the same durable TODO
 // lifecycle as worker tasks. In particular, a successful provider response
 // must mark its static contract done so the phase state machine can advance.
+func coordinatorRuntimeRunID(c *Coordinator) string {
+	if c == nil {
+		return "run-unknown"
+	}
+	if runID := strings.TrimSpace(c.executionRunID); runID != "" {
+		return runID
+	}
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		if runID := strings.TrimSpace(c.taskTracker.TodoList().RunID()); runID != "" {
+			return runID
+		}
+	}
+	return "run-unknown"
+}
+
+func (c *Coordinator) allocateRuntimeActionWorkspace(todoID string, startedAt time.Time) (string, string, error) {
+	if c == nil || c.session == nil || strings.TrimSpace(c.session.Workspace) == "" {
+		return "", "", fmt.Errorf("action invocation requires a workspace")
+	}
+	if c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() {
+		return "", "", fmt.Errorf("action invocation requires an enabled runtime workflow")
+	}
+	runID := coordinatorRuntimeRunID(c)
+	runName := safeNameRegex.ReplaceAllString(runID, "-")
+	taskName := safeNameRegex.ReplaceAllString(strings.TrimSpace(todoID), "-")
+	if taskName == "" {
+		taskName = "unknown"
+	}
+	parent, err := c.phaseWorkflow.executionContext().RuntimeWorkspace.Resolve(filepath.Join("runs", runName, "actions"))
+	if err != nil {
+		return "", "", fmt.Errorf("resolve action staging parent: %w", err)
+	}
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "", "", fmt.Errorf("create action staging parent: %w", err)
+	}
+	for range 8 {
+		seq := actionWorkspaceSeq.Add(1)
+		actionID := fmt.Sprintf("structured-action-%s-%d-%d", taskName, startedAt.UnixNano(), seq)
+		actionRoot := filepath.Join(parent, actionID)
+		if err := os.Mkdir(actionRoot, 0o755); err == nil {
+			return actionID, actionRoot, nil
+		} else if !os.IsExist(err) {
+			return "", "", fmt.Errorf("create action staging directory: %w", err)
+		}
+	}
+	return "", "", fmt.Errorf("allocate unique action staging directory")
+}
+
 func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, todoID string) (string, error) {
 	startedAt := time.Now().UTC()
-	c.emitRuntimeActionEvent("action_started", task, todoID, "started", startedAt, time.Time{}, "", nil)
+	actionID, actionRoot, err := c.allocateRuntimeActionWorkspace(todoID, startedAt)
+	if err != nil {
+		c.emitRuntimeActionEvent("action_failed", task, todoID, "", "failure", startedAt, time.Now().UTC(), "", err)
+		return "", err
+	}
+	attempt := c.currentTaskAttempt(todoID) + 1
+	c.setCurrentTaskAttempt(todoID, attempt)
+	c.emitRuntimeActionEvent("action_started", task, todoID, actionID, "started", startedAt, time.Time{}, "", nil)
 	if err := c.taskTracker.TodoList().SetRuntimeError(todoID, nil); err != nil {
-		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
+		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("clear structured action error: %w", err)
 	}
 	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskInProgress, "executing structured action", "", nil); err != nil {
-		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
+		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("mark structured action in progress: %w", err)
 	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	rawResult, err := c.phaseWorkflow.executeActionValue(ctx, *task.Action)
+	actionEnv := ActionEnvironment{
+		Workspace: actionRoot, Repository: c.projectDir, RunID: coordinatorRuntimeRunID(c),
+		TaskID: todoID, Attempt: attempt, ActionInvocationID: actionID,
+	}
+	if c.session != nil {
+		actionEnv.TeamName = c.session.Config.Name
+	}
+	actionCtx := WithActionEnvironment(ctx, actionEnv)
+	rawResult, err := c.phaseWorkflow.executeActionValueForTask(actionCtx, *task.Action, string(task.SideEffect))
 	if err != nil {
 		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
 		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
 		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
-		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
+		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", err
 	}
 	actionResult, err := decodeActionResult(rawResult)
@@ -1534,24 +1721,22 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
 		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
 		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
-		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
+		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", err
 	}
-	attempt := c.currentTaskAttempt(todoID) + 1
-	c.setCurrentTaskAttempt(todoID, attempt)
-	providerArtifacts, err := c.ingestActionProviderArtifacts(ctx, task, todoID, attempt, actionResult.Artifacts)
+	providerArtifacts, err := c.ingestActionProviderArtifacts(ctx, actionRoot, task, todoID, attempt, actionResult.Artifacts)
 	if err != nil {
 		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
 		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
 		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
-		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
+		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", err
 	}
 	actionResult.Artifacts = providerArtifacts
 	output := actionResultDisplay(rawResult, actionResult)
 	if task.Verify != "" || task.VerifySpec != nil {
 		if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskVerifying, "running objective verification", output, nil); err != nil {
-			c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
+			c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 			return "", fmt.Errorf("enter structured action verification: %w", err)
 		}
 		verification, verifyErr := c.verifyTaskDeliverableWithSpec(ctx, nil, task, nil)
@@ -1561,7 +1746,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		if verifyErr != nil {
 			err := fmt.Errorf("structured action verification failed: %w", verifyErr)
 			c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
-			c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
+			c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 			return "", err
 		}
 	}
@@ -1574,14 +1759,21 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 	if item := c.todoItemByID(todoID); item != nil {
 		c.emitArtifactEvents(item)
 	}
+	if err := c.persistSuccessfulCoordinatorTaskReceipt(todoID, task.Agent, attempt, startedAt, output); err != nil {
+		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
+		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
+		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
+		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
+		return "", fmt.Errorf("persist structured action receipt: %w", err)
+	}
 	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output, nil); err != nil {
-		c.emitRuntimeActionEvent("action_failed", task, todoID, "failure", startedAt, time.Now().UTC(), "", err)
+		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("mark structured action done: %w", err)
 	}
 	c.reconcileTaskStatusProjection()
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(output).withMessage("structured action completed").withTodoID(todoID))
-	c.emitRuntimeActionEvent("action_completed", task, todoID, "success", startedAt, time.Now().UTC(), output, nil, providerArtifacts)
+	c.emitRuntimeActionEvent("action_completed", task, todoID, actionID, "success", startedAt, time.Now().UTC(), output, nil, providerArtifacts)
 	return output, nil
 }
 
@@ -1595,12 +1787,35 @@ func actionResultDisplay(raw interface{}, result ActionResult) string {
 	return encodeActionResult(result)
 }
 
-func (c *Coordinator) ingestActionProviderArtifacts(ctx context.Context, task TaskDef, todoID string, attempt int, declared []ArtifactRef) ([]ArtifactRef, error) {
+func (c *Coordinator) ingestActionProviderArtifacts(ctx context.Context, actionRoot string, task TaskDef, todoID string, attempt int, declared []ArtifactRef) ([]ArtifactRef, error) {
 	if len(declared) == 0 {
 		return nil, nil
 	}
 	if c == nil || c.session == nil || strings.TrimSpace(c.session.Workspace) == "" {
 		return nil, fmt.Errorf("action artifacts require a workspace")
+	}
+	if strings.TrimSpace(actionRoot) == "" {
+		return nil, fmt.Errorf("action artifacts require an invocation workspace")
+	}
+	workspaceRoot, err := filepath.Abs(c.session.Workspace)
+	if err != nil {
+		return nil, fmt.Errorf("resolve session workspace: %w", err)
+	}
+	workspaceRoot, err = filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve session workspace: %w", err)
+	}
+	actionRoot, err = filepath.Abs(actionRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve action invocation workspace: %w", err)
+	}
+	actionRoot, err = filepath.EvalSymlinks(actionRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve action invocation workspace: %w", err)
+	}
+	actionRel, err := filepath.Rel(workspaceRoot, actionRoot)
+	if err != nil || actionRel == ".." || strings.HasPrefix(actionRel, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("action invocation workspace escapes session workspace")
 	}
 	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
 	if err != nil {
@@ -1618,7 +1833,7 @@ func (c *Coordinator) ingestActionProviderArtifacts(ctx context.Context, task Ta
 		if strings.TrimSpace(artifact.Path) == "" {
 			return nil, fmt.Errorf("action artifacts[%d] path is required", index)
 		}
-		resolved, resolveErr := resolveArtifactSourcePath(c.session.Workspace, artifact.Path)
+		resolved, resolveErr := resolveArtifactSourcePath(actionRoot, artifact.Path)
 		if resolveErr != nil {
 			return nil, fmt.Errorf("action artifacts[%d] %q: %w", index, artifact.Path, resolveErr)
 		}
@@ -1641,26 +1856,26 @@ func (c *Coordinator) ingestActionProviderArtifacts(ctx context.Context, task Ta
 		if closeErr != nil {
 			return nil, fmt.Errorf("action artifacts[%d] %q: %w", index, artifact.Path, closeErr)
 		}
-		relative, relErr := filepath.Rel(c.session.Workspace, resolved)
+		relative, relErr := filepath.Rel(workspaceRoot, resolved)
 		if relErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("action artifact %q escapes workspace", artifact.Path)
 		}
 		pending = append(pending, pendingArtifact{request: PutArtifactRequest{
 			Content: content, Kind: artifact.Kind, Path: filepath.ToSlash(relative), Description: artifact.Description,
-			MediaType: artifact.MediaType, RunID: c.executionRunID, TaskID: todoID, Agent: task.Agent,
+			MediaType: artifact.MediaType, RunID: coordinatorRuntimeRunID(c), TaskID: todoID, Agent: task.Agent,
 			Provider: providerName, Attempt: attempt,
 		}})
 	}
 	refs := make([]ArtifactRef, 0, len(pending))
 	for _, item := range pending {
-		ref, putErr := store.Put(ctx, item.request)
+		putResult, putErr := store.Put(ctx, item.request)
 		if putErr != nil {
 			return nil, putErr
 		}
-		if verifyErr := store.Verify(ctx, ref); verifyErr != nil {
+		if verifyErr := store.Verify(ctx, putResult.ArtifactRef); verifyErr != nil {
 			return nil, verifyErr
 		}
-		refs = append(refs, ref)
+		refs = append(refs, putResult.ArtifactRef)
 	}
 	return refs, nil
 }
@@ -1680,13 +1895,15 @@ type runtimeActionReceipt struct {
 	Error      string    `json:"error,omitempty"`
 }
 
-func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, todoID, status string, startedAt, finishedAt time.Time, output string, actionErr error, providerArtifacts ...[]ArtifactRef) {
+func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, todoID, actionID, status string, startedAt, finishedAt time.Time, output string, actionErr error, providerArtifacts ...[]ArtifactRef) {
 	if c == nil || c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || task.Action == nil {
 		return
 	}
-	actionID := "structured-action-" + safeNameRegex.ReplaceAllString(todoID, "-") + "-" + fmt.Sprintf("%d", startedAt.UnixNano())
-	if strings.TrimSpace(todoID) == "" {
-		actionID = "structured-action-unknown-" + fmt.Sprintf("%d", startedAt.UnixNano())
+	if strings.TrimSpace(actionID) == "" {
+		actionID = "structured-action-" + safeNameRegex.ReplaceAllString(todoID, "-") + "-" + fmt.Sprintf("%d", startedAt.UnixNano())
+		if strings.TrimSpace(todoID) == "" {
+			actionID = "structured-action-unknown-" + fmt.Sprintf("%d", startedAt.UnixNano())
+		}
 	}
 	capability := normalizeCapability(task.Action.Capability)
 	providerName := c.phaseWorkflow.providerName(capability)
@@ -1697,7 +1914,7 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 	}
 	if eventType != "action_started" {
 		ref, err := c.writeRuntimeActionReceipt(runtimeActionReceipt{
-			Version: 1, RunID: c.executionRunID, TaskID: todoID, Agent: task.Agent, ActionID: actionID,
+			Version: 1, RunID: coordinatorRuntimeRunID(c), TaskID: todoID, Agent: task.Agent, ActionID: actionID,
 			Capability: capability, Type: task.Action.Type, Status: status,
 			StartedAt: startedAt, FinishedAt: finishedAt,
 			Output: utils.TruncateString(utils.RedactSecrets(output), 1000),
@@ -1930,6 +2147,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		priorAttempts = item.ExecutionReceipt.RepairProvenance.RepairAttempts
 	}
 	repairCtx := context.WithValue(parentCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
+	repairCtx = context.WithValue(repairCtx, protocolRepairExecutionKey{}, true)
 	repairCtx = context.WithValue(repairCtx, llmUsageReceiptExpectedKey{}, false)
 	repairCtx = context.WithValue(repairCtx, todoIDKey{}, item.ID)
 	repairCtx = context.WithValue(repairCtx, modelKey{}, resolvedModel)
@@ -1950,7 +2168,11 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		repairHistory = append(repairHistory, item.ExecutionReceipt.RepairProvenance.History...)
 	}
 	for attempt := priorAttempts + 1; attempt <= 2; attempt++ {
-		c.clearSubmittedTaskResult(item.ID)
+		c.setCurrentTaskAttempt(item.ID, attempt)
+		attemptCtx := context.WithValue(repairCtx, executionAttemptKey{}, attempt)
+		if identity, ok := c.activeTaskResultOccurrence(item.ID); ok {
+			attemptCtx = withSubmitResultRuntimeIdentity(attemptCtx, identity)
+		}
 		if attempt > priorAttempts+1 {
 			repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous result-only repair call did not match the submit_result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work, inspect files, call any other tool, or emit a prose final response. The call must include both required fields: `status` (one of `success`, `completed_with_gaps`, `partial`, `failed`, or `blocked`) and a non-empty `summary`; put any complete textual deliverable in `details`.\n\n## Execution Output\n%s", task.Goal, output)
 		}
@@ -1959,7 +2181,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 			runErr = prepareErr
 			break
 		}
-		_, steps, callErr := c.runAgentWithStatusAndHistory(repairCtx, repairAgent, agentName, preparedPrompt, nil, timing, fantasy.StepCountIs(1))
+		_, steps, callErr := c.runAgentWithStatusAndHistory(attemptCtx, repairAgent, agentName, preparedPrompt, nil, timing, fantasy.StepCountIs(1))
 		runErr = callErr
 		typedRes = c.GetTaskResult(item.ID)
 		repairReason, _ = classifyRepairFailure(steps, typedRes)
@@ -2487,6 +2709,8 @@ func (c *Coordinator) protocolRepairAllowsRetry(task TaskDef) bool {
 }
 
 func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message, timing *taskTiming, extraStop ...fantasy.StopCondition) (string, []fantasy.StepResult, error) {
+	acceptedTerminalResult := &acceptedTerminalResultStop{}
+	ctx = context.WithValue(ctx, acceptedTerminalResultStopKey{}, acceptedTerminalResult)
 	ctx = mcp.WithToolAuthorizer(ctx, func(callCtx context.Context, server, tool, _ string) error {
 		allowed := make(map[string]bool)
 		for _, name := range tools.GetToolsAllowed(callCtx) {
@@ -2523,9 +2747,35 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	// Pick up the TodoItem ID injected by executeTask so events can be attributed to a task.
 	todoID, _ := ctx.Value(todoIDKey{}).(string)
 	attemptTokens, _ := ctx.Value(attemptBudgetKey{}).(*attemptBudget)
+	var tokenStateMu sync.Mutex
+	var tokenSteps []*tokenStepAdmission
+	var activeTokenStep *tokenStepAdmission
+	newTokenStepSettlement := func(requestTokens int64) *tokenStepAdmission {
+		if requestTokens <= 0 {
+			requestTokens = 1
+		}
+		// This path runs only after the provider has already returned usage.
+		// Settlement must not attempt a second admission: admission belongs to
+		// PrepareStep, while observed usage is always charged, including when it
+		// takes the ledger beyond the configured cap.
+		admission := &tokenStepAdmission{requestTokens: requestTokens}
+		tokenStateMu.Lock()
+		tokenSteps = append(tokenSteps, admission)
+		tokenStateMu.Unlock()
+		return admission
+	}
 
 	var loopDetectMu sync.Mutex
 	var lastToolCall *lastToolCallEntry
+	normalizeUsageTokens := func(usage fantasy.Usage) int64 {
+		if usage.TotalTokens > 0 {
+			return usage.TotalTokens
+		}
+		return usage.InputTokens + usage.OutputTokens
+	}
+	var observedStreamUsageMu sync.Mutex
+	var observedStreamUsage int64
+	var directStreamUsageRecorded bool
 	// Delta-logging state for llm.log: how many messages this stream has
 	// already logged, and the approximate size of the latest request (used to
 	// estimate tokens when the provider reports none).
@@ -2542,10 +2792,14 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	pendingRecovery := ""
 	tp := &ThinkParser{}
 
+	stopWhen := append([]fantasy.StopCondition(nil), extraStop...)
+	stopWhen = append(stopWhen, func([]fantasy.StepResult) bool {
+		return acceptedTerminalResult.isAcceptedFor(c, todoID)
+	})
 	streamCall := fantasy.AgentStreamCall{
 		Prompt:   prompt,
 		Messages: history,
-		StopWhen: extraStop,
+		StopWhen: stopWhen,
 		// Fantasy's streaming loop reads this field directly, not the
 		// agent-level default set via fantasy.WithRepairToolCall in
 		// agent.CreateAgent — see internal/agent/toolcall_repair.go.
@@ -2609,6 +2863,20 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					return ctx, fantasy.PrepareStepResult{}, err
 				}
 			}
+			requestTokens := estimateStepRequestTokens(preparedMessages, prompt)
+			admissionTokens := requestTokens + int64(spec.MaxOutputTokens)
+			if admissionTokens <= 0 {
+				admissionTokens = 1
+			}
+			reserved, err := c.reserveTokenStep(admissionTokens)
+			if err != nil {
+				return ctx, fantasy.PrepareStepResult{}, err
+			}
+			admission := &tokenStepAdmission{reservation: reserved, requestTokens: requestTokens}
+			tokenStateMu.Lock()
+			tokenSteps = append(tokenSteps, admission)
+			activeTokenStep = admission
+			tokenStateMu.Unlock()
 			// Log only requests that cleared the circuit breaker; a rejected
 			// request was never sent to the provider and must not look like an
 			// attempted model call in the task evidence.
@@ -2861,6 +3129,39 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			reqBytes := lastReqBytes
 			llmLogMu.Unlock()
 			llmLogStreamFinish(logWrite, finishReason, usage, reqBytes)
+			totalTokens := normalizeUsageTokens(usage)
+			tokenStateMu.Lock()
+			admission := activeTokenStep
+			if totalTokens <= 0 && admission != nil {
+				totalTokens = admission.requestTokens
+			}
+			tokenStateMu.Unlock()
+			if admission == nil {
+				requestTokens := int64((reqBytes + 3) / 4)
+				if requestTokens <= 0 {
+					requestTokens = 1
+				}
+				admission = newTokenStepSettlement(requestTokens)
+				if totalTokens <= 0 {
+					totalTokens = admission.requestTokens
+				}
+				tokenStateMu.Lock()
+				activeTokenStep = admission
+				tokenStateMu.Unlock()
+			}
+			observedStreamUsageMu.Lock()
+			if totalTokens > observedStreamUsage {
+				observedStreamUsage = totalTokens
+			}
+			newDirectUsage := llmUsageNeedsDirectNoProgressAccounting(ctx) && !directStreamUsageRecorded
+			if newDirectUsage {
+				directStreamUsageRecorded = true
+			}
+			observedStreamUsageMu.Unlock()
+			settled := c.commitTokenStep(&admission.reservation, totalTokens)
+			if settled && newDirectUsage {
+				c.recordNoProgressTokens(totalTokens)
+			}
 			if attemptTokens != nil {
 				// Only generated output is charged here. Input tokens are the
 				// resent conversation, which reserveContext already accounted
@@ -2914,14 +3215,141 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		c.SetCurrentModel(resolvedModel)
 	}
 
-	result, err := ag.Stream(ctx, streamCall)
+	stepFallbackTokens := func(admission *tokenStepAdmission, step fantasy.StepResult) int64 {
+		if step.Usage.TotalTokens > 0 {
+			return step.Usage.TotalTokens
+		}
+		if total := step.Usage.InputTokens + step.Usage.OutputTokens; total > 0 {
+			return total
+		}
+		return admission.requestTokens
+	}
+	reconcileTokenStream := func(start int, streamResult *fantasy.AgentResult) (int64, error) {
+		tokenStateMu.Lock()
+		if start > len(tokenSteps) {
+			start = len(tokenSteps)
+		}
+		admissions := append([]*tokenStepAdmission(nil), tokenSteps[start:]...)
+		tokenStateMu.Unlock()
+
+		var accounted int64
+		if streamResult != nil {
+			if len(streamResult.Steps) > 0 {
+				for index, step := range streamResult.Steps {
+					var admission *tokenStepAdmission
+					if index < len(admissions) {
+						admission = admissions[index]
+					} else {
+						requestTokens := estimateStepRequestTokens(step.Messages, "")
+						// The result is already an observation from a provider call, so
+						// settle it without a new reservation. Any admission was made
+						// before the call by PrepareStep and is released by commit.
+						admission = newTokenStepSettlement(requestTokens)
+					}
+					total := stepFallbackTokens(admission, step)
+					if c.commitTokenStep(&admission.reservation, total) {
+						accounted += total
+					}
+				}
+			} else {
+				var admission *tokenStepAdmission
+				for _, candidate := range admissions {
+					if !candidate.reservation.settled {
+						admission = candidate
+						break
+					}
+				}
+				if admission == nil && len(admissions) == 0 {
+					// Some custom agents return only the final response and do not
+					// emit Steps or invoke OnStreamFinish. This result is already an
+					// observation from a provider call, so charge it through a
+					// synthetic settlement without attempting a new admission.
+					admission = newTokenStepSettlement(1)
+				}
+				if admission != nil {
+					total := normalizeUsageTokens(streamResult.TotalUsage)
+					if total <= 0 {
+						total = normalizeUsageTokens(streamResult.Response.Usage)
+					}
+					if total <= 0 {
+						total = admission.requestTokens
+					}
+					if c.commitTokenStep(&admission.reservation, total) {
+						accounted += total
+					}
+				}
+			}
+		}
+		// A provider may fail or cancel after PrepareStep and before emitting a
+		// finish part. Releasing every still-open admission here also retires the
+		// failed stream before an independent context-overflow retry reserves its
+		// own capacity.
+		for _, admission := range admissions {
+			c.releaseTokenStep(&admission.reservation)
+		}
+		return accounted, nil
+	}
+	var receiptResponseUsage int64
+	recordResponseOnlyReceiptUsage := func(delta int64) {
+		if delta <= 0 || todoID == "" || llmUsageNeedsDirectNoProgressAccounting(ctx) {
+			return
+		}
+		attempt, _ := ctx.Value(executionAttemptKey{}).(int)
+		if attempt < 1 {
+			// Direct-agent invocations have a real execution receipt but do not
+			// need the task-run attempt context for tool authorization.
+			attempt = 1
+		}
+		receiptResponseUsage += delta
+		// Keep this on the same cumulative receipt projection as the later
+		// execution event. recordReliabilityUsage's per-attempt maximum makes
+		// the response-only reconciliation idempotent if that event is emitted.
+		c.recordReliabilityUsage(todoID, attempt, int(receiptResponseUsage))
+	}
+	runStream := func(call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+		tokenStateMu.Lock()
+		start := len(tokenSteps)
+		activeTokenStep = nil
+		tokenStateMu.Unlock()
+		observedStreamUsageMu.Lock()
+		observedStreamUsage = 0
+		directStreamUsageRecorded = false
+		observedStreamUsageMu.Unlock()
+		streamResult, streamErr := ag.Stream(ctx, call)
+		accounted, reconcileErr := reconcileTokenStream(start, streamResult)
+		if llmUsageNeedsDirectNoProgressAccounting(ctx) {
+			if accounted > 0 {
+				c.recordNoProgressTokens(accounted)
+			}
+		} else if streamResult == nil || len(streamResult.Steps) == 0 {
+			observedStreamUsageMu.Lock()
+			observed := observedStreamUsage
+			observedStreamUsageMu.Unlock()
+			if observed <= 0 {
+				observed = accounted
+			}
+			if observed <= 0 && streamResult != nil {
+				observed = normalizeUsageTokens(streamResult.TotalUsage)
+				if observed <= 0 {
+					observed = normalizeUsageTokens(streamResult.Response.Usage)
+				}
+			}
+			recordResponseOnlyReceiptUsage(observed)
+		}
+		if streamErr == nil {
+			streamErr = reconcileErr
+		}
+		return streamResult, streamErr
+	}
+
+	result, err := runStream(streamCall)
 	if err != nil && IsContextOverflowError(err) {
 		reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage("context overflow detected; triggering emergency history compaction and retrying step"))
 		modelID, _ := ctx.Value(modelKey{}).(string)
 		if capped := CapStepMessagesWithCounter(ctx, defaultCounter, modelID, streamCall.Messages, 15000); capped != nil {
 			streamCall.Messages = capped
 		}
-		result, err = ag.Stream(ctx, streamCall)
+		result, err = runStream(streamCall)
 	}
 	// A task that requires a result but stopped without a tool call has
 	// stalled, not finished: Fantasy's loop correctly ends a turn once a step
@@ -2956,7 +3384,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			nudgeCall.Prompt = ""
 			nudgeCall.Messages = continuationMessages
 			nudgeCall.StopWhen = append(append([]fantasy.StopCondition(nil), streamCall.StopWhen...), fantasy.StepCountIs(2))
-			if nudgeResult, nudgeErr := ag.Stream(ctx, nudgeCall); nudgeErr == nil && nudgeResult != nil && len(nudgeResult.Steps) > 0 {
+			if nudgeResult, nudgeErr := runStream(nudgeCall); nudgeErr == nil && nudgeResult != nil && len(nudgeResult.Steps) > 0 {
 				result.Steps = append(result.Steps, nudgeResult.Steps...)
 				last := nudgeResult.Steps[len(nudgeResult.Steps)-1]
 				if strings.TrimSpace(nudgeResult.Response.Content.Text()) != "" || len(last.Content.ToolCalls()) > 0 {
@@ -2972,18 +3400,9 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	if cause := context.Cause(ctx); cause != nil {
 		err = cause
 	}
+	modelID, _ := ctx.Value(modelKey{}).(string)
+	err = annotateProviderModelFailure(err, modelID)
 	c.SetCurrentStage("idle")
-	if result != nil {
-		accountedTokens := c.addStepTokens(result.Steps)
-		// Coordinator and auxiliary streams do not emit worker execution
-		// receipts, so add their usage directly to the no-progress budget.
-		// Worker/direct-agent streams are accounted by the cumulative receipt
-		// path. The context marker, rather than todo ID shape, is authoritative
-		// because repairs, rescues, sub-agents, and plan reviewers can share IDs.
-		if llmUsageNeedsDirectNoProgressAccounting(ctx) {
-			c.recordNoProgressTokens(accountedTokens)
-		}
-	}
 	if err != nil {
 		// Preserve any partial output and steps even when the agent errored,
 		// so the retry prompt can include evidence of what was attempted
@@ -3235,6 +3654,25 @@ func resultProtocolInstructions(task TaskDef, granted map[string]bool) string {
 	b.WriteString("- Set `status` truthfully: use `success` when the goal is fully met without a known target limitation; use `completed_with_gaps` when the assigned work is complete but it discovered a target limitation, and record that limitation in findings/risks/open questions; otherwise use `partial`, `failed`, or `blocked`. A truthful `partial` is far more useful than an optimistic completion claim.\n")
 	b.WriteString("- Put the facts a later agent needs into `summary`, `details`, `findings`, and `decisions`. Use `details` for the complete textual plan, analysis, review, or handoff; do not create a report file merely to make that content available.\n")
 	b.WriteString("- `open_questions` accepts strings, or structured objects with required string `question` and optional string `context` and `detail`; do not send arbitrary object shapes.\n")
+	contract := taskResultSubmissionContractForTask(task)
+	info := submitResultToolInfo(contract)
+	fields := make([]string, 0, len(info.Parameters))
+	for field := range info.Parameters {
+		fields = append(fields, field)
+	}
+	slices.Sort(fields)
+	fmt.Fprintf(b, "- Legal top-level submit_result fields for this task: `%s`. The runtime rejects fields outside this list.\n", strings.Join(fields, "`, `"))
+	if len(info.Required) > 0 {
+		required := append([]string(nil), info.Required...)
+		slices.Sort(required)
+		fmt.Fprintf(b, "- Required submit_result fields for this task: `%s`.\n", strings.Join(required, "`, `"))
+	}
+	if contract.FilesReadMinItems > 0 {
+		fmt.Fprintf(b, "- A successful result must include `files_read` with at least %d object(s), each containing a non-empty `path`; use `files_read`, not evidence, for observed inputs.\n", contract.FilesReadMinItems)
+	}
+	if !contract.AllowEvidence {
+		b.WriteString("- `evidence` is not a legal field for this task. Do not submit it; use the documented `files_read` entries instead.\n")
+	}
 	b.WriteString("- Reserve your final model step for `submit_result`. Once you have enough evidence, stop writing prose or making new tool calls and submit the result; if you are running out of steps, submit what you have.\n")
 	if len(task.Execution.ToolSequence) > 0 {
 		b.WriteString("- This is a closed tool sequence. The runtime permits only this order: `")

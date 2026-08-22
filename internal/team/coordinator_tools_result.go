@@ -1,14 +1,116 @@
 package team
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/tools"
 )
+
+// SubmitArtifactInput is the public, model-authored artifact declaration.
+// Artifact identity and occurrence provenance are deliberately absent: those
+// fields are issued by the runtime after the source file is snapshotted.
+type SubmitArtifactInput struct {
+	Path        string `json:"path"`
+	Description string `json:"description,omitempty"`
+	Type        string `json:"type,omitempty"`
+}
+
+// SubmitResultInput is the public submit_result DTO. It contains only model
+// claims and descriptive handoff data; runtime-owned TaskResult identity,
+// outputs, and transcript references cannot be decoded through this boundary.
+type SubmitResultInput struct {
+	Status             string                `json:"status"`
+	Summary            string                `json:"summary"`
+	Details            string                `json:"details,omitempty"`
+	Artifacts          []SubmitArtifactInput `json:"artifacts,omitempty"`
+	Evidence           []EvidenceRef         `json:"evidence,omitempty"`
+	FilesRead          []FileRef             `json:"files_read,omitempty"`
+	FilesModified      []FileRef             `json:"files_modified,omitempty"`
+	Commands           []CommandResult       `json:"commands,omitempty"`
+	Verification       []VerificationResult  `json:"verification,omitempty"`
+	Decisions          []Decision            `json:"decisions,omitempty"`
+	Findings           []Finding             `json:"findings,omitempty"`
+	Risks              []Risk                `json:"risks,omitempty"`
+	OpenQuestions      OpenQuestions         `json:"open_questions,omitempty"`
+	SuggestedNextTasks []TaskProposal        `json:"suggested_next_tasks,omitempty"`
+	RetryHint          string                `json:"retry_hint,omitempty"`
+	ReceiptIDs         []string              `json:"receipt_ids,omitempty"`
+	MemoryUses         []MemoryUseRef        `json:"memory_uses,omitempty"`
+	Facts              map[string]any        `json:"facts,omitempty"`
+	Confidence         float64               `json:"confidence"`
+}
+
+func (input SubmitResultInput) taskResult() TaskResult {
+	artifacts := make([]ArtifactRef, len(input.Artifacts))
+	for i, artifact := range input.Artifacts {
+		artifacts[i] = ArtifactRef{
+			Path:        artifact.Path,
+			Description: artifact.Description,
+			Type:        artifact.Type,
+			Kind:        artifact.Type,
+		}
+	}
+	return TaskResult{
+		Status:             input.Status,
+		Summary:            input.Summary,
+		Details:            input.Details,
+		Artifacts:          artifacts,
+		Evidence:           input.Evidence,
+		FilesRead:          input.FilesRead,
+		FilesModified:      input.FilesModified,
+		Commands:           input.Commands,
+		Verification:       input.Verification,
+		Decisions:          input.Decisions,
+		Findings:           input.Findings,
+		Risks:              input.Risks,
+		OpenQuestions:      input.OpenQuestions,
+		SuggestedNextTasks: input.SuggestedNextTasks,
+		RetryHint:          input.RetryHint,
+		ReceiptIDs:         input.ReceiptIDs,
+		MemoryUses:         input.MemoryUses,
+		Facts:              input.Facts,
+		Confidence:         input.Confidence,
+	}
+}
+
+func decodeSubmitResultInput(raw []byte, contract taskResultSubmissionContract) (SubmitResultInput, error) {
+	var input SubmitResultInput
+	normalized := normalizeSubmitResultInput(raw)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(normalized, &fields); err == nil {
+		if !contract.AllowEvidence {
+			if _, ok := fields["evidence"]; ok {
+				return SubmitResultInput{}, fmt.Errorf("evidence is not a legal field for this task; report observed files in files_read")
+			}
+		}
+		if !contract.AllowArtifacts {
+			if _, ok := fields["artifacts"]; ok {
+				return SubmitResultInput{}, fmt.Errorf("artifacts are forbidden by this task's execution contract; omit the artifacts field")
+			}
+		}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(normalized))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return SubmitResultInput{}, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return SubmitResultInput{}, fmt.Errorf("trailing JSON value")
+		}
+		return SubmitResultInput{}, err
+	}
+	return input, nil
+}
 
 type submitResultTool struct {
 	coordinator *Coordinator
@@ -22,7 +124,28 @@ func (t *submitResultTool) ProviderOptions() fantasy.ProviderOptions {
 func (t *submitResultTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
 
 func (t *submitResultTool) Info() fantasy.ToolInfo {
-	return fantasy.ToolInfo{
+	return submitResultToolInfo(t.submissionContract())
+}
+
+func (t *submitResultTool) submissionContract() taskResultSubmissionContract {
+	if t == nil || t.coordinator == nil {
+		return taskResultSubmissionContract{AllowEvidence: true, AllowArtifacts: true}
+	}
+	item := t.coordinator.todoItemByID(t.todoID)
+	if item == nil {
+		return taskResultSubmissionContract{AllowEvidence: true, AllowArtifacts: true}
+	}
+	return taskResultSubmissionContractForTask(TaskDef{
+		ID:         item.ID,
+		Verify:     item.Verify,
+		VerifyMode: item.VerifyMode,
+		VerifySpec: item.VerifySpec,
+		Execution:  item.Execution,
+	})
+}
+
+func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInfo {
+	info := fantasy.ToolInfo{
 		Name:        "submit_result",
 		Description: "Submit the terminal structured result for your assigned task. Call exactly once when finished. status=success or completed_with_gaps marks the task done; completed_with_gaps means the assigned work is complete but it discovered a target-system limitation. Use partial, failed, or blocked when the assigned work itself was not completed.",
 		Parameters: map[string]any{
@@ -48,7 +171,8 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 						"description": map[string]any{"type": "string"},
 						"type":        map[string]any{"type": "string"},
 					},
-					"required": []string{"path"},
+					"required":             []string{"path"},
+					"additionalProperties": false,
 				},
 			},
 			"files_read": map[string]any{
@@ -62,7 +186,7 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 							"path":    map[string]any{"type": "string"},
 							"purpose": map[string]any{"type": "string"},
 						},
-						"required": []string{"path"},
+						"required": []string{"path"}, "additionalProperties": false,
 					},
 				}},
 			},
@@ -77,7 +201,7 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 							"path":    map[string]any{"type": "string"},
 							"purpose": map[string]any{"type": "string"},
 						},
-						"required": []string{"path"},
+						"required": []string{"path"}, "additionalProperties": false,
 					},
 				}},
 			},
@@ -92,6 +216,49 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 						"reason": map[string]any{"type": "string"},
 					},
 					"required": []string{"topic", "choice"},
+				},
+			},
+			"evidence": map[string]any{
+				"type":        "array",
+				"description": "Optional structured evidence references for generic tasks. Do not use this as a substitute for files_read when the task requires observed files.",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"task_id":     map[string]any{"type": "string"},
+						"run_id":      map[string]any{"type": "string"},
+						"type":        map[string]any{"type": "string"},
+						"description": map[string]any{"type": "string"},
+						"value":       map[string]any{"type": "string"},
+						"system_hmac": map[string]any{"type": "string", "description": "Compatibility field ignored by the runtime; workers cannot authorize evidence with it."},
+					},
+					"required":             []string{"type", "description"},
+					"additionalProperties": false,
+				},
+			},
+			"commands": map[string]any{
+				"type": "array", "items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"command":   map[string]any{"type": "string"},
+						"exit_code": map[string]any{"type": "integer"},
+						"output":    map[string]any{"type": "string"},
+					},
+					"required": []string{"command", "exit_code"}, "additionalProperties": false,
+				},
+			},
+			"verification": map[string]any{
+				"type": "array", "items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"command": map[string]any{"type": "string"}, "work_dir": map[string]any{"type": "string"},
+						"exit_code": map[string]any{"type": "integer"}, "stdout": map[string]any{"type": "string"},
+						"stderr": map[string]any{"type": "string"}, "duration": map[string]any{"type": "integer"},
+						"timed_out": map[string]any{"type": "boolean"}, "weak_warning": map[string]any{"type": "boolean"},
+						"weak_reason": map[string]any{"type": "string"}, "overturned": map[string]any{"type": "boolean"},
+						"overturn_reason": map[string]any{"type": "string"}, "fingerprint": map[string]any{"type": "string"},
+						"evaluated_at": map[string]any{"type": "string"},
+					},
+					"additionalProperties": false,
 				},
 			},
 			"findings": map[string]any{
@@ -118,6 +285,15 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 						"mitigation":  map[string]any{"type": "string"},
 					},
 					"required": []string{"description"},
+				},
+			},
+			"suggested_next_tasks": map[string]any{
+				"type": "array", "items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"goal": map[string]any{"type": "string"}, "agent": map[string]any{"type": "string"}, "reason": map[string]any{"type": "string"},
+					},
+					"required": []string{"goal"}, "additionalProperties": false,
 				},
 			},
 			"open_questions": map[string]any{
@@ -171,14 +347,40 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 		},
 		Required: []string{"status", "summary"},
 	}
+	if !contract.AllowEvidence {
+		delete(info.Parameters, "evidence")
+	}
+	if !contract.AllowArtifacts {
+		delete(info.Parameters, "artifacts")
+	}
+	if contract.FilesReadMinItems > 0 {
+		filesRead, ok := info.Parameters["files_read"].(map[string]any)
+		if ok {
+			filesRead["minItems"] = contract.FilesReadMinItems
+		}
+	}
+	for _, field := range contract.RequiredFields {
+		if _, ok := info.Parameters[field]; !ok || slices.Contains(info.Required, field) {
+			continue
+		}
+		info.Required = append(info.Required, field)
+	}
+	return info
 }
 
 func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	var res TaskResult
-	input := normalizeSubmitResultInput([]byte(call.Input))
-	if err := json.Unmarshal(input, &res); err != nil {
+	contract := t.submissionContract()
+	input, err := decodeSubmitResultInput([]byte(call.Input), contract)
+	if err != nil {
+		if strings.Contains(err.Error(), `unknown field "raw_output_ref"`) {
+			return fantasy.NewTextErrorResponse("raw_output_ref is runtime-owned; workers cannot declare or copy transcript references"), nil
+		}
+		if strings.Contains(err.Error(), `unknown field "outputs"`) {
+			return fantasy.NewTextErrorResponse("outputs are runtime-owned; cite execution receipt_ids instead of declaring task outputs"), nil
+		}
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v", err)), nil
 	}
+	res := input.taskResult()
 	if res.Summary == "" {
 		return fantasy.NewTextErrorResponse("summary is required"), nil
 	}
@@ -188,28 +390,22 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	default:
 		return fantasy.NewTextErrorResponse("status must be success, completed_with_gaps, partial, failed, or blocked"), nil
 	}
+	if err := contract.validateWorkerClaims(&res); err != nil {
+		return fantasy.NewTextErrorResponse("submit_result contract violation: " + err.Error()), nil
+	}
 
-	res.TaskID = t.todoID
-	res.Source = "submitted"
+	var identity submitResultRuntimeIdentity
+	if protocolRepairExecution(ctx) && len(res.Artifacts) > 0 {
+		return fantasy.NewTextErrorResponse("protocol repair cannot add artifact evidence; submit the corrected result without artifacts"), nil
+	}
 	if len(res.Outputs) > 0 {
 		return fantasy.NewTextErrorResponse("outputs are runtime-owned; cite execution receipt_ids instead of declaring task outputs"), nil
 	}
 	if res.RawOutputRef != nil {
 		return fantasy.NewTextErrorResponse("raw_output_ref is runtime-owned; workers cannot declare or copy transcript references"), nil
 	}
-	if res.Confidence == 0 {
-		res.Confidence = 1.0
-	}
 	if t.forbidsArtifacts() && len(res.Artifacts) > 0 {
 		return fantasy.NewTextErrorResponse("artifacts are forbidden by this task's execution contract; omit the artifacts field and submit the result again"), nil
-	}
-	if t.coordinator != nil {
-		if err := t.coordinator.validateTaskResultReceiptClaims(t.todoID, &res); err != nil {
-			return fantasy.NewTextErrorResponse(err.Error()), nil
-		}
-		if err := t.coordinator.validateMemoryUseClaims(ctx, t.todoID, &res); err != nil {
-			return fantasy.NewTextErrorResponse(err.Error()), nil
-		}
 	}
 	// A model-authored failure summary is useful context, but it is not the
 	// canonical execution record. Prefix non-success results with the first
@@ -229,40 +425,94 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 			})
 		}
 	}
-	// Only a success claim can be mechanically contradicted by terminal
-	// evidence — completed_with_gaps reports a target limitation rather than a
-	// failed task, while partial/failed/blocked already say the task itself is
-	// not done, so
-	// there is nothing here for terminal evidence to override. Rejecting the
-	// claim in the tool response (rather than only at round-end) lets the
-	// model see the contradiction immediately and reconsider within the same
-	// round instead of finding out only after it believed it had succeeded.
-	if res.Status == "success" && t.coordinator != nil {
-		if err := t.coordinator.terminalTaskFailure(ctx, t.todoID); err != nil {
-			return fantasy.NewTextErrorResponse("success rejected: " + err.Error()), nil
-		}
-	}
 	// Security: strip model-injected HMAC signatures from submit_result tool input
 	for i := range res.Evidence {
 		res.Evidence[i].SystemHMAC = ""
 	}
 
-	if t.coordinator != nil {
-		if err := t.materializeSubmittedArtifacts(ctx, &res); err != nil {
-			return fantasy.NewTextErrorResponse("invalid artifact declaration: " + err.Error()), nil
-		}
-	}
 	sink := t.sink
 	if sink == nil && t.coordinator != nil {
 		sink = coordinatorTaskResultSink{coordinator: t.coordinator}
 	}
-	if sink != nil {
+	if t.coordinator != nil {
+		identity, err = submitResultRuntimeIdentityFromContext(ctx, t.coordinator, t.todoID)
+		if err != nil {
+			return fantasy.NewTextErrorResponse("invalid submit_result runtime identity: " + err.Error()), nil
+		}
+		// Receipt admission still needs the active occurrence, but it must run
+		// before the transaction mutex is held because that validator reads the
+		// occurrence through the public snapshot helper. The attempt is runtime
+		// supplied here, never worker-authored.
+		receiptCandidate := res
+		receiptCandidate.Attempt = identity.Attempt
+		if err := t.coordinator.validateTaskResultReceiptClaims(t.todoID, &receiptCandidate); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
+		tx, txErr := t.coordinator.beginTaskResultSubmission(identity)
+		if txErr != nil {
+			return fantasy.NewTextErrorResponse("store submitted result: " + txErr.Error()), nil
+		}
+		// Runtime ownership begins only after the occurrence is reserved. The
+		// candidate now contains the values that worker-independent assertions
+		// are allowed to inspect.
+		res.TaskID = identity.TaskID
+		res.Attempt = identity.Attempt
+		res.Agent = identity.Agent
+		res.Source = "submitted"
+		if res.Confidence == 0 {
+			res.Confidence = 1.0
+		}
+		rollback := func(prefix string) fantasy.ToolResponse {
+			if rollbackErr := tx.rollback(); rollbackErr != nil {
+				prefix += "; rollback: " + rollbackErr.Error()
+			}
+			return fantasy.NewTextErrorResponse(prefix)
+		}
+		if err := t.coordinator.validateMemoryUseClaims(ctx, t.todoID, &res); err != nil {
+			return rollback(err.Error()), nil
+		}
+		// Only a success claim can be mechanically contradicted by terminal
+		// evidence. Check it while the occurrence is reserved so no projection
+		// can be published before the result is accepted.
+		if res.Status == "success" {
+			if err := t.coordinator.terminalTaskFailure(ctx, t.todoID); err != nil {
+				return rollback("success rejected: " + err.Error()), nil
+			}
+		}
+		if err := t.materializeSubmittedArtifacts(ctx, &res, tx); err != nil {
+			return rollback("invalid artifact declaration: " + err.Error()), nil
+		}
+		if err := contract.validateFinalizableResult(&res); err != nil {
+			return rollback("submit_result contract violation: " + err.Error()), nil
+		}
+		if _, isCoordinatorSink := sink.(coordinatorTaskResultSink); isCoordinatorSink {
+			// The coordinator sink is represented by this transaction; invoking it
+			// again would attempt a second reservation while this gate is held.
+		} else if sink != nil {
+			if err := sink.Submit(ctx, t.todoID, res); err != nil {
+				return rollback("store submitted result: " + err.Error()), nil
+			}
+		}
+		if err := tx.commit(&res); err != nil {
+			return rollback("store submitted result: " + err.Error()), nil
+		}
+		if stop, ok := ctx.Value(acceptedTerminalResultStopKey{}).(*acceptedTerminalResultStop); ok {
+			stop.markAccepted(identity)
+		}
+		t.coordinator.emitMemoryUsageEvents(&res)
+		tx.finish()
+	} else if sink != nil {
+		res.TaskID = t.todoID
+		res.Source = "submitted"
+		if res.Confidence == 0 {
+			res.Confidence = 1.0
+		}
+		if err := contract.validateFinalizableResult(&res); err != nil {
+			return fantasy.NewTextErrorResponse("submit_result contract violation: " + err.Error()), nil
+		}
 		if err := sink.Submit(ctx, t.todoID, res); err != nil {
 			return fantasy.NewTextErrorResponse("store submitted result: " + err.Error()), nil
 		}
-	}
-	if t.coordinator != nil {
-		t.coordinator.emitMemoryUsageEvents(&res)
 	}
 	return fantasy.NewTextResponse("Task result submitted successfully."), nil
 }
@@ -357,13 +607,32 @@ func normalizedStringEntries(raw json.RawMessage) ([]json.RawMessage, bool) {
 	return []json.RawMessage{encoded}, true
 }
 
+type submitResultRuntimeIdentity struct {
+	RunID   string
+	TaskID  string
+	Attempt int
+	Agent   string
+}
+
+func (c *Coordinator) stageSubmittedArtifacts(identity submitResultRuntimeIdentity, refs []ArtifactRef) {
+	if c == nil || len(refs) == 0 || !validSubmitResultIdentity(identity) {
+		return
+	}
+	controller := c.occurrenceController(identity.TaskID)
+	controller.mu.Lock()
+	if controller.opened && sameTaskResultOccurrence(controller.identity, identity) && !controller.reserved && controller.result == nil {
+		controller.pending = append([]ArtifactRef(nil), refs...)
+	}
+	controller.mu.Unlock()
+}
+
 // materializeSubmittedArtifacts makes a worker's artifact claim durable before
 // accepting its terminal result. Previously a model could declare a missing
 // path, receive a successful submit_result response, and leave the evidence
 // manifest to fail only at run finalization. Artifacts are workspace-contained
 // evidence, so snapshot them here or reject the result while the worker can
 // still correct its claim.
-func (t *submitResultTool) materializeSubmittedArtifacts(ctx context.Context, res *TaskResult) error {
+func (t *submitResultTool) materializeSubmittedArtifacts(ctx context.Context, res *TaskResult, tx *taskResultOccurrenceTransaction) error {
 	if res == nil || len(res.Artifacts) == 0 {
 		return nil
 	}
@@ -375,18 +644,39 @@ func (t *submitResultTool) materializeSubmittedArtifacts(ctx context.Context, re
 	if err != nil {
 		return err
 	}
-	runID := t.coordinator.executionRunID
-	if runID == "" {
-		runID = "run-unknown"
+	identity, err := submitResultRuntimeIdentityFromContext(ctx, t.coordinator, t.todoID)
+	if err != nil {
+		return err
 	}
-	// Validate the complete declaration before snapshotting any files, so a bad
-	// later artifact cannot leave an accepted result with a partial artifact set.
+	if res.TaskID != identity.TaskID || res.Attempt != identity.Attempt || res.Agent != identity.Agent {
+		return fmt.Errorf("result provenance does not match runtime occurrence")
+	}
+	if err := validateSubmittedArtifactClaims(ctx, workspace, res.Artifacts); err != nil {
+		return err
+	}
 	for i, artifact := range res.Artifacts {
-		if artifact.ID != "" {
-			if err := store.Verify(ctx, artifact); err != nil {
-				return fmt.Errorf("artifacts[%d] %q: %w", i, artifact.Path, err)
+		ref, err := putSubmittedArtifact(ctx, store, identity, artifact)
+		if err != nil {
+			if tx != nil {
+				tx.addMaterialized(nil)
 			}
-			continue
+			return fmt.Errorf("artifacts[%d] %q: %w", i, artifact.Path, err)
+		}
+		res.Artifacts[i] = ref
+	}
+	if tx != nil {
+		tx.addMaterialized(res.Artifacts)
+	}
+	return nil
+}
+
+func validateSubmittedArtifactClaims(ctx context.Context, workspace string, artifacts []ArtifactRef) error {
+	for i, artifact := range artifacts {
+		if artifact.ID != "" {
+			return fmt.Errorf("artifacts[%d] %q: artifact ids are runtime-owned", i, artifact.Path)
+		}
+		if artifact.SHA256 != "" || artifact.Bytes != 0 || artifact.ByteSize != 0 || artifact.RunID != "" || artifact.TaskID != "" || artifact.Attempt != 0 || artifact.Agent != "" || artifact.Provider != "" || artifact.ToolCallID != "" || !artifact.CreatedAt.IsZero() {
+			return fmt.Errorf("artifacts[%d] %q: artifact provenance is runtime-owned", i, artifact.Path)
 		}
 		if strings.TrimSpace(artifact.Path) == "" {
 			return fmt.Errorf("artifacts[%d] path is required", i)
@@ -394,6 +684,11 @@ func (t *submitResultTool) materializeSubmittedArtifacts(ctx context.Context, re
 		path, err := resolveArtifactSourcePath(workspace, artifact.Path)
 		if err != nil {
 			return fmt.Errorf("artifacts[%d] %q: %w", i, artifact.Path, err)
+		}
+		if policy, ok := ctx.Value(tools.ArtifactPathPolicyKey).(tools.ArtifactPathPolicy); ok {
+			if err := tools.EnforceArtifactPathPolicy(path, &policy); err != nil {
+				return fmt.Errorf("artifacts[%d] %q: %w", i, artifact.Path, err)
+			}
 		}
 		info, err := os.Stat(path)
 		if err != nil {
@@ -403,25 +698,17 @@ func (t *submitResultTool) materializeSubmittedArtifacts(ctx context.Context, re
 			return fmt.Errorf("artifacts[%d] %q must be a regular file", i, artifact.Path)
 		}
 	}
-	for i, artifact := range res.Artifacts {
-		if artifact.ID != "" {
-			continue
-		}
-		ref, err := store.Put(ctx, PutArtifactRequest{
-			Kind:        artifact.Kind,
-			Path:        artifact.Path,
-			Description: artifact.Description,
-			MediaType:   artifact.MediaType,
-			SourcePath:  artifact.Path,
-			RunID:       runID,
-			TaskID:      t.todoID,
-			Attempt:     1,
-			Agent:       res.Agent,
-		})
-		if err != nil {
-			return fmt.Errorf("artifacts[%d] %q: %w", i, artifact.Path, err)
-		}
-		res.Artifacts[i] = ref
-	}
 	return nil
+}
+
+func putSubmittedArtifact(ctx context.Context, store *FileArtifactStore, identity submitResultRuntimeIdentity, artifact ArtifactRef) (ArtifactRef, error) {
+	_, err := resolveArtifactSourcePath(store.sourceDir, artifact.Path)
+	if err != nil {
+		return ArtifactRef{}, err
+	}
+	putResult, err := store.Put(ctx, PutArtifactRequest{
+		Kind: artifact.Kind, Path: artifact.Path, Description: artifact.Description, MediaType: artifact.MediaType,
+		SourcePath: artifact.Path, RunID: identity.RunID, TaskID: identity.TaskID, Attempt: identity.Attempt, Agent: identity.Agent,
+	})
+	return putResult.ArtifactRef, err
 }
