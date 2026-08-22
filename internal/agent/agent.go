@@ -1129,6 +1129,13 @@ var alwaysIncludeTools = map[string]bool{
 	"team_info":     true,
 }
 
+// IsAlwaysIncludedTool reports whether SelectTools may add name even when an
+// agent did not declare it. Coordinators use this at stricter task contract
+// boundaries to distinguish an implicit convenience from an explicit grant.
+func IsAlwaysIncludedTool(name string) bool {
+	return alwaysIncludeTools[strings.TrimSpace(name)]
+}
+
 // impliedTools maps a tool to companions that should be granted alongside it
 // automatically. wait_for runs the exact same command through the exact same
 // consent check and sudo allowlist as bash/sudo — it is a single tool call

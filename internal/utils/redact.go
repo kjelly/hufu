@@ -62,6 +62,7 @@ var (
 // explicit: every other scalar below a secret-looking key is redacted,
 // regardless of its JSON type.
 var numericTelemetryKeys = map[string]struct{}{
+	"max_tokens":                      {},
 	"tokens_used":                     {},
 	"tokens_since_progress":           {},
 	"tokens_since_criterion_progress": {},
@@ -308,6 +309,7 @@ func RedactJSON(data []byte) ([]byte, error) {
 	if err := dec.Decode(&value); err != nil {
 		return nil, err
 	}
+	discoverJSONSecrets(value, "")
 	value = redactJSONValue(value, "")
 	return json.MarshalIndent(value, "", "  ")
 }
@@ -324,6 +326,7 @@ func RedactJSONCompact(data []byte) ([]byte, error) {
 	if err := dec.Decode(&value); err != nil {
 		return nil, err
 	}
+	discoverJSONSecrets(value, "")
 	value = redactJSONValue(value, "")
 	return json.Marshal(value)
 }
@@ -395,6 +398,39 @@ func jsonSemanticEqual(a, b []byte) bool {
 		return false
 	}
 	return reflect.DeepEqual(va, vb)
+}
+
+// discoverJSONSecrets completes the credential-key discovery pass before any
+// string values are redacted. This keeps learned-secret behavior independent
+// of the unspecified iteration order of decoded JSON objects.
+func discoverJSONSecrets(value any, key string) {
+	if key != "" && secretKeyNameRe.MatchString(key) {
+		if safeSecretMetadataValue(key, value) {
+			return
+		}
+		_, telemetry := numericTelemetryKeys[strings.ToLower(key)]
+		if !telemetry {
+			if text, ok := value.(string); ok {
+				learnSecretValue(text)
+			}
+			return
+		}
+		if _, numeric := value.(json.Number); !numeric {
+			return
+		}
+	}
+	switch v := value.(type) {
+	case string:
+		learnSecretsFrom(v)
+	case []any:
+		for _, item := range v {
+			discoverJSONSecrets(item, "")
+		}
+	case map[string]any:
+		for k, item := range v {
+			discoverJSONSecrets(item, k)
+		}
+	}
 }
 
 func redactJSONValue(value any, key string) any {

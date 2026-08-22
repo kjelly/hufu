@@ -62,8 +62,35 @@ func TestRedactJSONPreservesEscapedContent(t *testing.T) {
 	}
 }
 
+func TestRedactJSONDiscoversLearnedSecretsBeforeReplacement(t *testing.T) {
+	const secret = "audit-secret-7f3c-9a1e"
+	input := []byte(`["reason=rotated ` + secret + `",{"password":"` + secret + `"}]`)
+
+	for _, redact := range []struct {
+		name string
+		fn   func([]byte) ([]byte, error)
+	}{
+		{name: "indented", fn: RedactJSON},
+		{name: "compact", fn: RedactJSONCompact},
+	} {
+		t.Run(redact.name, func(t *testing.T) {
+			resetLearnedSecrets(t)
+			got, err := redact.fn(input)
+			if err != nil {
+				t.Fatalf("redact JSON: %v", err)
+			}
+			if strings.Contains(string(got), secret) {
+				t.Fatalf("learned secret leaked: %s", got)
+			}
+			if strings.Count(string(got), redactedSecret) != 2 {
+				t.Fatalf("redacted occurrence count = %d, want 2: %s", strings.Count(string(got), redactedSecret), got)
+			}
+		})
+	}
+}
+
 func TestRedactJSONPreservesNumericTelemetryWithSecretLikeKey(t *testing.T) {
-	input := []byte(`{"tokens_used":1234,"max_tokens_without_progress":2000000,"tokens_since_criterion_progress":42,"tokens_since_progress":"credential-like","nested":{"max_tokens_without_progress":true},"api_token":"secret"}`)
+	input := []byte(`{"max_tokens":8192,"tokens_used":1234,"max_tokens_without_progress":2000000,"tokens_since_criterion_progress":42,"tokens_since_progress":"credential-like","nested":{"max_tokens_without_progress":true},"api_token":"secret"}`)
 	got, err := RedactJSON(input)
 	if err != nil {
 		t.Fatalf("RedactJSON: %v", err)
@@ -71,6 +98,12 @@ func TestRedactJSONPreservesNumericTelemetryWithSecretLikeKey(t *testing.T) {
 	var decoded map[string]any
 	if err := json.Unmarshal(got, &decoded); err != nil {
 		t.Fatalf("unmarshal redacted output: %v", err)
+	}
+	if _, ok := decoded["max_tokens"].(float64); !ok {
+		t.Fatalf("max_tokens changed type: %#v", decoded["max_tokens"])
+	}
+	if decoded["max_tokens"] != float64(8192) {
+		t.Fatalf("max_tokens changed value: %#v", decoded["max_tokens"])
 	}
 	if _, ok := decoded["tokens_used"].(float64); !ok {
 		t.Fatalf("tokens_used changed type: %#v", decoded["tokens_used"])
