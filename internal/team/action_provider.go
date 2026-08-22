@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -241,6 +242,33 @@ func (p *commandActionProvider) Validate(action Action) error {
 	return nil
 }
 
+type actionEnvironmentKey struct{}
+
+// ActionEnvironment encapsulates runtime paths and identity passed to action provider adapters.
+type ActionEnvironment struct {
+	Workspace          string
+	Repository         string
+	TeamName           string
+	RunID              string
+	TaskID             string
+	Attempt            int
+	ActionInvocationID string
+}
+
+// WithActionEnvironment attaches ActionEnvironment to a context.
+func WithActionEnvironment(ctx context.Context, env ActionEnvironment) context.Context {
+	return context.WithValue(ctx, actionEnvironmentKey{}, env)
+}
+
+// ActionEnvironmentFromContext extracts ActionEnvironment from a context.
+func ActionEnvironmentFromContext(ctx context.Context) ActionEnvironment {
+	if ctx == nil {
+		return ActionEnvironment{}
+	}
+	val, _ := ctx.Value(actionEnvironmentKey{}).(ActionEnvironment)
+	return val
+}
+
 func (p *commandActionProvider) Execute(ctx context.Context, action Action) (interface{}, error) {
 	if err := p.Validate(action); err != nil {
 		return nil, err
@@ -257,6 +285,31 @@ func (p *commandActionProvider) Execute(ctx context.Context, action Action) (int
 	cmd := exec.CommandContext(ctx, p.command[0], p.command[1:]...)
 	cmd.Dir = p.dir
 	cmd.Stdin = bytes.NewReader(payload)
+	env := os.Environ()
+	if actionEnv := ActionEnvironmentFromContext(ctx); actionEnv.Workspace != "" || actionEnv.Repository != "" || actionEnv.TeamName != "" || actionEnv.RunID != "" || actionEnv.TaskID != "" || actionEnv.Attempt > 0 || actionEnv.ActionInvocationID != "" {
+		if actionEnv.Workspace != "" {
+			env = append(env, "HUFU_WORKSPACE="+actionEnv.Workspace)
+		}
+		if actionEnv.Repository != "" {
+			env = append(env, "HUFU_REPOSITORY="+actionEnv.Repository)
+		}
+		if actionEnv.TeamName != "" {
+			env = append(env, "HUFU_TEAM="+actionEnv.TeamName)
+		}
+		if actionEnv.RunID != "" {
+			env = append(env, "HUFU_RUN_ID="+actionEnv.RunID)
+		}
+		if actionEnv.TaskID != "" {
+			env = append(env, "HUFU_TASK_ID="+actionEnv.TaskID)
+		}
+		if actionEnv.Attempt > 0 {
+			env = append(env, fmt.Sprintf("HUFU_ATTEMPT=%d", actionEnv.Attempt))
+		}
+		if actionEnv.ActionInvocationID != "" {
+			env = append(env, "HUFU_ACTION_INVOCATION_ID="+actionEnv.ActionInvocationID)
+		}
+	}
+	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

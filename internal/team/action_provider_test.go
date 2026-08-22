@@ -86,3 +86,26 @@ func TestCommandActionProviderHonorsContextDeadline(t *testing.T) {
 		t.Fatalf("Execute error = %v, want context deadline exceeded", err)
 	}
 }
+
+func TestCommandActionProviderInjectsEnvironment(t *testing.T) {
+	provider := &commandActionProvider{
+		capability: "structured-actions",
+		command:    []string{"/bin/sh", "-c", `cat >/dev/null; printf '{"workspace":"%s","repo":"%s","team":"%s"}' "$HUFU_WORKSPACE" "$HUFU_REPOSITORY" "$HUFU_TEAM"`},
+	}
+	ctx := WithActionEnvironment(context.Background(), ActionEnvironment{
+		Workspace:  "/test/workspace/my-team",
+		Repository: "/test/repo",
+		TeamName:   "my-team",
+	})
+	result, err := provider.Execute(ctx, Action{Capability: "structured-actions", Type: "apply"})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	resMap, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result is not map: %#v", result)
+	}
+	if resMap["workspace"] != "/test/workspace/my-team" || resMap["repo"] != "/test/repo" || resMap["team"] != "my-team" {
+		t.Fatalf("injected environment mismatch: %#v", resMap)
+	}
+}

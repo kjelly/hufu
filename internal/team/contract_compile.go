@@ -21,7 +21,12 @@ type EffectiveTaskContract struct {
 	Agent      string            `json:"agent"`
 	Execution  ExecutionContract `json:"execution"`
 	OutputMode string            `json:"output_mode"`
+	SideEffect SideEffectClass   `json:"side_effect,omitempty"`
+	Recovery   RecoveryPolicy    `json:"recovery,omitempty"`
+	MaxRetries int               `json:"max_retries,omitempty"`
 	Action     *Action           `json:"action,omitempty"`
+	FanOut     *FanOutSpec       `json:"fan_out,omitempty"`
+	Optional   bool              `json:"optional,omitempty"`
 }
 
 const effectiveTaskContractRevision = 1
@@ -66,19 +71,25 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 		if contractID == "" {
 			contractID = name
 		}
-		hash, err := effectiveContractHash(contractID, name, contract.Execution, contract.OutputMode, contract.Action)
+		hash, err := effectiveContractHash(contractID, name, contract.Execution, contract.OutputMode, contract.SideEffect, contract.Recovery, contract.MaxRetries, contract.Action, contract.FanOut, contract.Optional)
 		if err != nil {
 			return nil, nil, fmt.Errorf("hash initial task contract %q: %w", contractID, err)
 		}
 		bound[i].Execution = contract.Execution
 		bound[i].OutputMode = contract.OutputMode
+		bound[i].SideEffect = contract.SideEffect
+		bound[i].Recovery = contract.Recovery
+		bound[i].MaxRetries = contract.MaxRetries
 		bound[i].Phase = contract.Phase
 		bound[i].Action = cloneActionPtr(contract.Action)
+		bound[i].FanOut = cloneFanOutSpec(contract.FanOut)
+		bound[i].Optional = contract.Optional
 		applyStaticVerificationContract(&bound[i], contract)
+		bound[i].ID = contractID
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: contract.Execution, OutputMode: contract.OutputMode, Action: cloneActionPtr(contract.Action)})
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: contract.Execution, OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional})
 	}
 	return bound, effective, nil
 }
@@ -129,19 +140,25 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 		if contractID == "" {
 			contractID = strings.ToLower(strings.TrimSpace(contract.Agent)) + ":" + contract.WhenGoalContains
 		}
-		hash, err := effectiveContractHash(contractID, strings.ToLower(strings.TrimSpace(contract.Agent)), contract.Execution, contract.OutputMode, contract.Action)
+		hash, err := effectiveContractHash(contractID, strings.ToLower(strings.TrimSpace(contract.Agent)), contract.Execution, contract.OutputMode, contract.SideEffect, contract.Recovery, contract.MaxRetries, contract.Action, contract.FanOut, contract.Optional)
 		if err != nil {
 			return nil, nil, fmt.Errorf("hash task goal contract %q: %w", contractID, err)
 		}
 		bound[i].Execution = contract.Execution
 		bound[i].OutputMode = contract.OutputMode
+		bound[i].SideEffect = contract.SideEffect
+		bound[i].Recovery = contract.Recovery
+		bound[i].MaxRetries = contract.MaxRetries
 		bound[i].Phase = contract.Phase
 		bound[i].Action = cloneActionPtr(contract.Action)
+		bound[i].FanOut = cloneFanOutSpec(contract.FanOut)
+		bound[i].Optional = contract.Optional
 		applyStaticVerificationContract(&bound[i], contract)
+		bound[i].ID = contractID
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: contract.Execution, OutputMode: contract.OutputMode, Action: cloneActionPtr(contract.Action)})
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: contract.Execution, OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional})
 	}
 	return bound, effective, nil
 }
@@ -170,6 +187,14 @@ func applyStaticVerificationContract(bound *TaskDef, contract TaskDef) {
 	bound.VerifySpec = cloneVerificationSpecPtr(contract.VerifySpec)
 	bound.Kind = contract.Kind
 	bound.Advances = append([]string(nil), contract.Advances...)
+}
+
+func cloneFanOutSpec(src *FanOutSpec) *FanOutSpec {
+	if src == nil {
+		return nil
+	}
+	copySpec := *src
+	return &copySpec
 }
 
 func matchesInitialContractBatch(tasks []TaskDef, policy agent.DelegationPolicy) bool {
@@ -203,15 +228,20 @@ func executionContractsEqualOrEmpty(got, want ExecutionContract) bool {
 	return leftErr == nil && rightErr == nil && string(left) == string(right)
 }
 
-func effectiveContractHash(id, agent string, execution ExecutionContract, outputMode string, action *Action) (string, error) {
+func effectiveContractHash(id, agent string, execution ExecutionContract, outputMode string, sideEffect SideEffectClass, recovery RecoveryPolicy, maxRetries int, action *Action, fanOut *FanOutSpec, optional bool) (string, error) {
 	payload := struct {
 		ID         string            `json:"id"`
 		Revision   int               `json:"revision"`
 		Agent      string            `json:"agent"`
 		Execution  ExecutionContract `json:"execution"`
 		OutputMode string            `json:"output_mode"`
+		SideEffect SideEffectClass   `json:"side_effect,omitempty"`
+		Recovery   RecoveryPolicy    `json:"recovery,omitempty"`
+		MaxRetries int               `json:"max_retries,omitempty"`
 		Action     *Action           `json:"action,omitempty"`
-	}{id, effectiveTaskContractRevision, agent, execution, outputMode, cloneActionPtr(action)}
+		FanOut     *FanOutSpec       `json:"fan_out,omitempty"`
+		Optional   bool              `json:"optional,omitempty"`
+	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, cloneActionPtr(action), cloneFanOutSpec(fanOut), optional}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return "", err

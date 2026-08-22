@@ -524,7 +524,7 @@ func FormatDependencyResults(results []TaskResult) string {
 		if len(res.Artifacts) > 0 {
 			sb.WriteString("\n**Artifacts:**\n")
 			for _, art := range res.Artifacts {
-				fmt.Fprintf(&sb, "- `%s` (%s): %s\n", art.Path, art.Type, art.Description)
+				fmt.Fprintf(&sb, "- `%s` (sha256 `%s`, bytes %d, kind `%s`, type `%s`): %s\n", opaqueArtifactID(art.ID), art.SHA256, art.Bytes, art.Kind, art.Type, art.Description)
 			}
 		}
 		if len(res.FilesModified) > 0 {
@@ -562,7 +562,7 @@ func FormatDependencyResults(results []TaskResult) string {
 			}
 		}
 		if res.RawOutputRef != nil {
-			fmt.Fprintf(&sb, "\n**Raw Output Reference:** `%s`\n", res.RawOutputRef.Path)
+			fmt.Fprintf(&sb, "\n**Raw Output Reference:** `%s` (sha256 `%s`, bytes %d)\n", opaqueArtifactID(res.RawOutputRef.ID), res.RawOutputRef.SHA256, res.RawOutputRef.Bytes)
 		}
 		if len(res.Findings) > 0 {
 			sb.WriteString("\n**Findings:**\n")
@@ -595,6 +595,13 @@ func FormatDependencyResults(results []TaskResult) string {
 		}
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+func opaqueArtifactID(id string) string {
+	if strings.TrimSpace(id) == "" {
+		return "<opaque-reference-unavailable>"
+	}
+	return id
 }
 
 // CompileCoordinatorContext collects all coordinator context sources and executes the pipeline.

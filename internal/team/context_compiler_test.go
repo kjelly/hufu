@@ -357,13 +357,13 @@ func TestContextCompiler_FormatDependencyResults(t *testing.T) {
 			Summary: "Researched API design",
 			Details: "The typed deliverable is ready.",
 			Artifacts: []ArtifactRef{
-				{Path: "workspace/api_spec.json", Type: "spec", Description: "OpenAPI specification"},
+				{ID: "artifact-api-spec", SHA256: "digest-api-spec", Bytes: 42, Kind: "document", Type: "spec", Description: "OpenAPI specification"},
 			},
 			FilesModified: []FileRef{{Path: "api/router.go", Purpose: "implemented routing"}},
 			Commands:      []CommandResult{{Command: "go test ./...", ExitCode: 0, Output: "RAW SHELL TRANSCRIPT"}},
 			Verification:  []VerificationResult{{Command: "go test ./...", ExitCode: 0, Stdout: "RAW VERIFY STDOUT", Fingerprint: "verify-sha"}},
 			ReceiptIDs:    []string{"receipt-1"},
-			RawOutputRef:  &ArtifactRef{Path: "artifacts/transcript.cast"},
+			RawOutputRef:  &ArtifactRef{ID: "artifact-transcript", SHA256: "digest-transcript", Bytes: 99},
 			OpenQuestions: OpenQuestions{"confirm rollout"},
 			Decisions: []Decision{
 				{Topic: "Protocol", Choice: "JSON-RPC", Reason: "Transport safety"},
@@ -378,9 +378,14 @@ func TestContextCompiler_FormatDependencyResults(t *testing.T) {
 	if !strings.Contains(formatted, "Task [task-1]") || !strings.Contains(formatted, "typed deliverable") {
 		t.Errorf("formatted output missing typed task identity/details: %q", formatted)
 	}
-	for _, expected := range []string{"JSON-RPC", "api/router.go", "verify-sha", "receipt-1", "artifacts/transcript.cast", "confirm rollout"} {
+	for _, expected := range []string{"JSON-RPC", "api/router.go", "verify-sha", "receipt-1", "artifact-api-spec", "artifact-transcript", "confirm rollout"} {
 		if !strings.Contains(formatted, expected) {
 			t.Errorf("formatted output missing %q: %q", expected, formatted)
+		}
+	}
+	for _, forbidden := range []string{"workspace/api_spec.json", "artifacts/transcript.cast"} {
+		if strings.Contains(formatted, forbidden) {
+			t.Errorf("formatted output leaked artifact path %q: %q", forbidden, formatted)
 		}
 	}
 	for _, forbidden := range []string{"RAW SHELL TRANSCRIPT", "RAW VERIFY STDOUT"} {

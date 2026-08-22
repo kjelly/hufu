@@ -6,7 +6,44 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"gopkg.in/yaml.v3"
 )
+
+func TestTaskDefContractSafetyFieldsDecodeFromYAML(t *testing.T) {
+	var task TaskDef
+	if err := yaml.Unmarshal([]byte("side_effect: none\nrecovery: reconcile\nmax_retries: 3\n"), &task); err != nil {
+		t.Fatalf("decode task contract: %v", err)
+	}
+	if task.SideEffect != SideEffectNone || task.Recovery != RecoveryReconcile || task.MaxRetries != 3 {
+		t.Fatalf("decoded task contract safety fields = %#v", task)
+	}
+}
+
+func TestFanOutSourceArtifactNestedYAMLPreservesReference(t *testing.T) {
+	var config struct {
+		Tasks []TaskDef `yaml:"tasks"`
+	}
+	input := `tasks:
+  - id: consume-workset
+    agent: reviewer
+    goal: consume
+    fan_out:
+      source-artifact:
+        task_id: produce-workset
+        artifact: workset-manifest
+      goal-template: review {item}
+`
+	if err := yaml.Unmarshal([]byte(input), &config); err != nil {
+		t.Fatalf("decode nested source-artifact: %v", err)
+	}
+	if len(config.Tasks) != 1 || config.Tasks[0].FanOut == nil {
+		t.Fatalf("decoded tasks = %#v", config.Tasks)
+	}
+	ref := config.Tasks[0].FanOut.SourceArtifact
+	if ref.TaskID != "produce-workset" || ref.Artifact != "workset-manifest" {
+		t.Fatalf("decoded source-artifact = %#v", ref)
+	}
+}
 
 func TestCompileInitialTaskContractsPublishesStableEffectiveIdentity(t *testing.T) {
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
@@ -14,6 +51,7 @@ func TestCompileInitialTaskContractsPublishesStableEffectiveIdentity(t *testing.
 		InitialBatch:             []string{"reader"},
 	}}, ContractTasks: []TaskDef{{
 		ID: "reader-ack-v1", Agent: "reader", OutputMode: TaskOutputModeVerbatim,
+		SideEffect: SideEffectNone, Recovery: RecoveryRetry, MaxRetries: 3,
 		Execution: ExecutionContract{ToolSequence: []string{"submit_result"}},
 	}}}
 	bound, effective, err := CompileInitialTaskContracts(session, []TaskDef{{Agent: "reader", Goal: "acknowledge"}})
@@ -23,8 +61,14 @@ func TestCompileInitialTaskContractsPublishesStableEffectiveIdentity(t *testing.
 	if len(effective) != 1 || effective[0].Hash == "" || effective[0].ID != "reader-ack-v1" {
 		t.Fatalf("effective contract = %#v", effective)
 	}
-	if bound[0].ContractHash != effective[0].Hash || bound[0].ContractID != effective[0].ID || bound[0].ContractRevision != effectiveTaskContractRevision {
+	if bound[0].ID != effective[0].ID || bound[0].ContractHash != effective[0].Hash || bound[0].ContractID != effective[0].ID || bound[0].ContractRevision != effectiveTaskContractRevision {
 		t.Fatalf("bound task did not retain effective identity: %#v", bound[0])
+	}
+	if bound[0].SideEffect != SideEffectNone || bound[0].Recovery != RecoveryRetry || bound[0].MaxRetries != 3 {
+		t.Fatalf("initial contract safety/recovery fields were not bound: %#v", bound[0])
+	}
+	if effective[0].SideEffect != SideEffectNone || effective[0].Recovery != RecoveryRetry || effective[0].MaxRetries != 3 {
+		t.Fatalf("effective contract safety/recovery fields were not published: %#v", effective[0])
 	}
 
 	again, secondEffective, err := CompileInitialTaskContracts(session, []TaskDef{{Agent: "reader", Goal: "different prose is allowed"}})
@@ -57,7 +101,8 @@ func TestCompileTaskGoalContractsReplacesCoordinatorExecutionFields(t *testing.T
 	}}, ContractTasks: []TaskDef{{
 		ID: "freeze-v1", Agent: "runner", WhenGoalContains: "candidate-freeze",
 		OutputMode: TaskOutputModeVerbatim,
-		Execution:  ExecutionContract{ForbidArtifacts: true, ToolSequence: []string{"bash", "bash", "submit_result"}},
+		SideEffect: SideEffectWorkspaceWrite, Recovery: RecoveryReconcile, MaxRetries: 2,
+		Execution: ExecutionContract{ForbidArtifacts: true, ToolSequence: []string{"bash", "bash", "submit_result"}},
 	}}}
 	requested := TaskDef{
 		Agent: "runner", Goal: "§3.1 candidate-freeze",
@@ -78,6 +123,12 @@ func TestCompileTaskGoalContractsReplacesCoordinatorExecutionFields(t *testing.T
 	}
 	if !bound[0].Execution.ForbidArtifacts || !reflect.DeepEqual(bound[0].Execution.ToolSequence, []string{"bash", "bash", "submit_result"}) || bound[0].OutputMode != TaskOutputModeVerbatim {
 		t.Fatalf("static goal contract was not authoritative: %#v", bound[0])
+	}
+	if bound[0].SideEffect != SideEffectWorkspaceWrite || bound[0].Recovery != RecoveryReconcile || bound[0].MaxRetries != 2 {
+		t.Fatalf("goal contract safety/recovery fields were not bound: %#v", bound[0])
+	}
+	if effective[0].SideEffect != SideEffectWorkspaceWrite || effective[0].Recovery != RecoveryReconcile || effective[0].MaxRetries != 2 {
+		t.Fatalf("effective goal contract safety/recovery fields were not published: %#v", effective[0])
 	}
 }
 
