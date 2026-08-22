@@ -66,6 +66,7 @@ func validateWorksetAndActionContracts(session *TeamSession) []ContractFinding {
 		return nil
 	}
 	var findings []ContractFinding
+	findings = append(findings, validateStaticTaskReferences(session.ContractTasks)...)
 	fanOutTasks := make(map[string]TaskDef)
 	hasWorkset := false
 	for index, task := range session.ContractTasks {
@@ -75,7 +76,7 @@ func validateWorksetAndActionContracts(session *TeamSession) []ContractFinding {
 			findings = append(findings, validateFanOutTaskContract(field, task)...)
 			id := strings.TrimSpace(task.ID)
 			if id != "" {
-				fanOutTasks[id] = task
+				fanOutTasks[normalizeTaskReferenceID(id)] = task
 			}
 		}
 		if task.Action != nil {
@@ -96,12 +97,20 @@ func validateFanOutTaskContract(field string, task TaskDef) []ContractFinding {
 	}
 	var findings []ContractFinding
 	hasSource := strings.TrimSpace(fanOut.Source) != ""
-	hasArtifact := strings.TrimSpace(fanOut.SourceArtifact.TaskID) != "" || strings.TrimSpace(fanOut.SourceArtifact.Artifact) != ""
+	sourceTaskID := strings.TrimSpace(fanOut.SourceArtifact.TaskID)
+	artifactName := strings.TrimSpace(fanOut.SourceArtifact.Artifact)
+	hasArtifact := sourceTaskID != "" || artifactName != ""
 	if hasSource && hasArtifact {
 		findings = append(findings, errorFinding(field+".fan-out", FindingWorksetSourceConflict, "fan-out source and source-artifact are mutually exclusive"))
 	}
 	if !hasSource && !hasArtifact {
 		findings = append(findings, errorFinding(field+".fan-out", FindingWorksetReceiptSource, "fan-out requires source or source-artifact"))
+	}
+	if hasArtifact && (sourceTaskID == "" || artifactName == "") {
+		findings = append(findings, errorFinding(field+".fan-out.source-artifact", FindingWorksetReceiptSource, "source-artifact requires both task_id and artifact"))
+	}
+	if hasArtifact && strings.TrimSpace(fanOut.SourceArtifact.Fact) != "" {
+		findings = append(findings, errorFinding(field+".fan-out.source-artifact.fact", FindingWorksetReceiptSource, "source-artifact may reference an artifact only, not a fact"))
 	}
 	if strings.TrimSpace(fanOut.GoalTemplate) == "" {
 		findings = append(findings, errorFinding(field+".fan-out.goal-template", FindingWorksetReceiptSource, "fan-out requires goal-template"))
@@ -117,6 +126,74 @@ func validateFanOutTaskContract(field string, task TaskDef) []ContractFinding {
 	}
 	if strings.Contains(task.Verify, "{") || task.VerifySpec != nil && strings.Contains(task.VerifySpec.Command, "{") {
 		findings = append(findings, errorFinding(field+".verify", FindingWorksetCommandBinding, "workset bindings must not be interpolated into verifier command strings"))
+	}
+	return findings
+}
+
+// validateStaticTaskReferences validates references that are declared in the
+// team contract itself. These checks run while loading the team, before a
+// coordinator or worker can create a TODO or call a provider.
+func validateStaticTaskReferences(tasks []TaskDef) []ContractFinding {
+	indexes := make(map[string][]int, len(tasks))
+	var findings []ContractFinding
+	for index, task := range tasks {
+		if id := strings.TrimSpace(task.ID); id != "" {
+			key := normalizeTaskReferenceID(id)
+			indexes[key] = append(indexes[key], index)
+		}
+	}
+	for id, positions := range indexes {
+		if len(positions) > 1 {
+			findings = append(findings, errorFinding("tasks", FindingWorksetReceiptSource, fmt.Sprintf("task ID %q is ambiguous at indexes %v", id, positions)))
+		}
+	}
+	for index, task := range tasks {
+		field := fmt.Sprintf("tasks[%d]", index)
+		for refIndex, ref := range task.FactRefs {
+			findings = append(findings, validateStaticFactRef(fmt.Sprintf("%s.fact-refs[%d]", field, refIndex), ref, index, indexes, false)...)
+		}
+		if task.FanOut != nil {
+			ref := task.FanOut.SourceArtifact
+			if strings.TrimSpace(ref.TaskID) != "" || strings.TrimSpace(ref.Artifact) != "" || strings.TrimSpace(ref.Fact) != "" {
+				findings = append(findings, validateStaticFactRef(field+".fan-out.source-artifact", ref, index, indexes, true)...)
+			}
+		}
+	}
+	return findings
+}
+
+func validateStaticFactRef(field string, ref FactRef, consumerIndex int, indexes map[string][]int, artifactOnly bool) []ContractFinding {
+	var findings []ContractFinding
+	if !artifactOnly && strings.TrimSpace(ref.Name) == "" {
+		findings = append(findings, errorFinding(field+".name", FindingWorksetReceiptSource, "fact reference requires name"))
+	}
+	taskID := strings.TrimSpace(ref.TaskID)
+	artifact := strings.TrimSpace(ref.Artifact)
+	fact := strings.TrimSpace(ref.Fact)
+	if taskID == "" {
+		findings = append(findings, errorFinding(field+".task-id", FindingWorksetReceiptSource, "fact reference requires task_id"))
+	} else {
+		positions := indexes[normalizeTaskReferenceID(taskID)]
+		switch len(positions) {
+		case 0:
+			findings = append(findings, errorFinding(field+".task-id", FindingWorksetReceiptSource, fmt.Sprintf("task_id %q does not identify a declared task", taskID)))
+		case 1:
+			if positions[0] >= consumerIndex {
+				findings = append(findings, errorFinding(field+".task-id", FindingWorksetReceiptSource, fmt.Sprintf("task_id %q must identify an earlier task", taskID)))
+			}
+		}
+	}
+	if artifactOnly {
+		if artifact == "" {
+			findings = append(findings, errorFinding(field+".artifact", FindingWorksetReceiptSource, "source-artifact requires artifact"))
+		}
+		if fact != "" {
+			findings = append(findings, errorFinding(field+".fact", FindingWorksetReceiptSource, "source-artifact cannot name a fact"))
+		}
+		return findings
+	}
+	if (fact == "") == (artifact == "") {
+		findings = append(findings, errorFinding(field, FindingWorksetReceiptSource, "fact reference requires exactly one of fact or artifact"))
 	}
 	return findings
 }
@@ -152,7 +229,7 @@ func validateWorksetVerificationContracts(session *TeamSession, fanOutTasks map[
 			return nil
 		}
 		source := strings.TrimSpace(normalized.WorksetSourceTask)
-		producer, ok := fanOutTasks[source]
+		producer, ok := fanOutTasks[normalizeTaskReferenceID(source)]
 		if !ok {
 			return []ContractFinding{errorFinding(field+".source-task", FindingWorksetReceiptSource, fmt.Sprintf("workset_complete source-task %q does not identify a fan-out task", source))}
 		}

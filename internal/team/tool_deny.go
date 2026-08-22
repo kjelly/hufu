@@ -1,12 +1,14 @@
 package team
 
 import (
+	"context"
 	"slices"
 	"strings"
 
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 var legacyMemoryMutationTools = map[string]bool{
@@ -95,7 +97,54 @@ func (c *Coordinator) selectWorkerToolsForTask(def *agent.AgentDef, task TaskDef
 	if def == nil {
 		return nil
 	}
-	return c.filterDeniedWorkerToolsWithGrants(c.filterLegacyMemoryMutationTools(def, agent.SelectTools(c.coreTools, def.Tools)), c.taskToolGrants(def, task))
+	candidate := agent.SelectTools(c.coreTools, def.Tools)
+	if task.WorksetBinding != nil {
+		candidate = filterImplicitIncompatibleBoundTools(def, candidate)
+	}
+	return c.filterDeniedWorkerToolsWithGrants(c.filterLegacyMemoryMutationTools(def, candidate), c.taskToolGrants(def, task))
+}
+
+// filterImplicitIncompatibleBoundTools removes only convenience tools that
+// SelectTools injected implicitly and that the bound artifact policy would
+// reject. Explicitly declared tools remain in the surface so the fail-closed
+// preflight reports the contract error instead of silently changing the
+// worker's declared capability. This keeps ordinary, unbound agents' tool
+// behavior unchanged.
+func filterImplicitIncompatibleBoundTools(def *agent.AgentDef, candidate []fantasy.AgentTool) []fantasy.AgentTool {
+	if def == nil {
+		return candidate
+	}
+	policyCtx := context.WithValue(context.Background(), tools.ArtifactPathPolicyKey, tools.ArtifactPathPolicy{
+		FailClosedForUnsupported: true,
+	})
+	filtered := make([]fantasy.AgentTool, 0, len(candidate))
+	for _, tool := range candidate {
+		if tool == nil || !agent.IsAlwaysIncludedTool(tool.Info().Name) || agentDeclaresToolOrAlias(def.Tools, tool.Info().Name) {
+			filtered = append(filtered, tool)
+			continue
+		}
+		if artifactScopeToolDenial(policyCtx, tool.Info().Name, tool) == "" {
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered
+}
+
+func agentDeclaresToolOrAlias(raw, name string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "all" {
+		// SelectTools treats both forms as an explicit request for the full
+		// surface, so incompatible tools must remain visible for fail-closed
+		// diagnostics at a bound boundary.
+		return true
+	}
+	for _, declared := range strings.Split(raw, ",") {
+		declared = strings.TrimSpace(declared)
+		if declared == name || (declared == "read" && name == "view") || (declared == "find" && name == "glob") {
+			return true
+		}
+	}
+	return false
 }
 
 // taskToolGrants returns only capabilities authorized by a trusted static task
@@ -142,7 +191,7 @@ func (c *Coordinator) boundedWorkflowBashCommand(task TaskDef) string {
 		if contract.ID != task.ContractID || !strings.EqualFold(strings.TrimSpace(contract.Agent), strings.TrimSpace(task.Agent)) {
 			continue
 		}
-		expectedHash, err := effectiveContractHash(task.ContractID, strings.ToLower(strings.TrimSpace(contract.Agent)), contract.Execution, contract.OutputMode, contract.Action)
+		expectedHash, err := effectiveContractHash(task.ContractID, strings.ToLower(strings.TrimSpace(contract.Agent)), contract.Execution, contract.OutputMode, contract.SideEffect, contract.Recovery, contract.MaxRetries, contract.Action, contract.FanOut, contract.Optional)
 		if err != nil || task.ContractHash != expectedHash || !slices.Contains(contract.Execution.TemplateToolGrants, "bash") {
 			return ""
 		}

@@ -67,7 +67,7 @@ func TestBoundedWorkflowBashCommandRequiresVerifiedCanonicalStaticContract(t *te
 		ToolInputCanonicalSequence: []bool{true, false},
 		TemplateToolGrants:         []string{"bash"},
 	}}
-	hash, err := effectiveContractHash(contract.ID, contract.Agent, contract.Execution, contract.OutputMode, contract.Action)
+	hash, err := effectiveContractHash(contract.ID, contract.Agent, contract.Execution, contract.OutputMode, contract.SideEffect, contract.Recovery, contract.MaxRetries, contract.Action, contract.FanOut, contract.Optional)
 	if err != nil {
 		t.Fatal(err)
 	}
