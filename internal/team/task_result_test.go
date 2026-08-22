@@ -87,6 +87,95 @@ func TestValidateSubmittedTaskResultSeparatesSchemaFromCompletion(t *testing.T) 
 	}
 }
 
+func TestTaskResultSinkLatchesFirstResultUntilRetryClear(t *testing.T) {
+	c := &Coordinator{taskTracker: NewTaskTracker(), executionRunID: "run-latch"}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "review assigned files"}})[0]
+	sink := coordinatorTaskResultSink{coordinator: c}
+	resultContext := func(attempt int) context.Context {
+		return occurrenceTestContext(c, item.ID, attempt)
+	}
+
+	first := TaskResult{
+		TaskID: item.ID, Attempt: 1, Agent: "reviewer", Status: TaskResultStatusSuccess,
+		Summary: "complete review", FilesRead: []FileRef{{Path: "assigned.md"}}, Source: "submitted",
+	}
+	if err := sink.Submit(resultContext(1), item.ID, first); err != nil {
+		t.Fatalf("first result submission: %v", err)
+	}
+	if err := sink.Submit(resultContext(1), item.ID, TaskResult{
+		TaskID: item.ID, Attempt: 1, Agent: "reviewer", Status: TaskResultStatusSuccess,
+		Summary: "degraded repeated review", Source: "submitted",
+	}); err != nil {
+		t.Fatalf("repeated result submission: %v", err)
+	}
+
+	stored := c.GetTaskResult(item.ID)
+	if stored == nil || stored.Summary != first.Summary || len(stored.FilesRead) != 1 {
+		t.Fatalf("same-attempt result was replaced: %#v", stored)
+	}
+	verification, err := c.verifyTaskDeliverableWithSpecAndResult(context.Background(), nil, TaskDef{
+		VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{
+			{Pointer: "/files_read", Op: "min_items", Value: 1},
+		}},
+	}, nil, stored)
+	if err != nil || verification == nil || verification.ExitCode != 0 {
+		t.Fatalf("latched result verification = %#v, err=%v", verification, err)
+	}
+
+	c.clearSubmittedTaskResult(item.ID)
+	c.setCurrentTaskAttempt(item.ID, 2)
+	if err := sink.Submit(resultContext(2), item.ID, TaskResult{
+		TaskID: item.ID, Attempt: 2, Agent: "reviewer", Status: TaskResultStatusSuccess,
+		Summary: "fresh retry review", Source: "submitted",
+	}); err != nil {
+		t.Fatalf("new-attempt result submission: %v", err)
+	}
+	if stored = c.GetTaskResult(item.ID); stored == nil || stored.Attempt != 2 || stored.Summary != "fresh retry review" {
+		t.Fatalf("new attempt did not open a result slot: %#v", stored)
+	}
+}
+
+func TestTaskResultSinkRejectsDelayedPriorAttemptBeforeCurrentResult(t *testing.T) {
+	c := &Coordinator{taskTracker: NewTaskTracker(), executionRunID: "run-occurrence"}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "occurrence ownership"}})[0]
+	sink := coordinatorTaskResultSink{coordinator: c}
+	ctx := func(attempt int) context.Context {
+		return occurrenceTestContext(c, item.ID, attempt)
+	}
+
+	c.setCurrentTaskAttempt(item.ID, 1)
+	if err := sink.Submit(ctx(1), item.ID, TaskResult{Status: TaskResultStatusSuccess, Summary: "attempt one", Source: "submitted"}); err != nil {
+		t.Fatalf("attempt-1 result submission: %v", err)
+	}
+
+	// Opening attempt 2 clears the old latch and changes ownership in one
+	// critical section. Both a plain result and an artifact-bearing result from
+	// attempt 1 arrive before attempt 2 submits.
+	c.setCurrentTaskAttempt(item.ID, 2)
+	stale := TaskResult{TaskID: item.ID, Attempt: 1, Agent: "reviewer", Status: TaskResultStatusSuccess, Summary: "stale attempt one", Source: "submitted"}
+	if err := sink.Submit(ctx(1), item.ID, stale); err == nil {
+		t.Fatal("delayed plain attempt-1 result was accepted after attempt 2 opened")
+	}
+	oldRef := ArtifactRef{ID: "old-artifact", Path: "old.txt", RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, Agent: "reviewer"}
+	c.stageSubmittedArtifacts(submitResultRuntimeIdentity{RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, Agent: "reviewer"}, []ArtifactRef{oldRef})
+	stale.Artifacts = []ArtifactRef{oldRef}
+	if err := sink.Submit(ctx(1), item.ID, stale); err == nil {
+		t.Fatal("delayed artifact-bearing attempt-1 result was accepted after attempt 2 opened")
+	}
+
+	current := TaskResult{TaskID: item.ID, Attempt: 2, Agent: "reviewer", Status: TaskResultStatusSuccess, Summary: "authoritative attempt two", Source: "submitted"}
+	newRef := ArtifactRef{ID: "new-artifact", Path: "new.txt", RunID: c.executionRunID, TaskID: item.ID, Attempt: 2, Agent: "reviewer"}
+	c.stageSubmittedArtifacts(submitResultRuntimeIdentity{RunID: c.executionRunID, TaskID: item.ID, Attempt: 2, Agent: "reviewer"}, []ArtifactRef{newRef})
+	current.Artifacts = []ArtifactRef{newRef}
+	if err := sink.Submit(ctx(2), item.ID, current); err != nil {
+		t.Fatalf("attempt-2 result submission: %v", err)
+	}
+	stored := c.GetTaskResult(item.ID)
+	if stored == nil || stored.Attempt != 2 || stored.Summary != "authoritative attempt two" {
+		t.Fatalf("authoritative result = %#v", stored)
+	}
+}
+
 func TestParseFreeTextResult(t *testing.T) {
 	text := "Done with the task. All tests passed."
 	tr := ParseFreeTextResult(text)
@@ -108,8 +197,9 @@ func TestSubmitResultTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &Coordinator{
-		session:     &TeamSession{Workspace: workspace},
-		taskTracker: NewTaskTracker(),
+		session:        &TeamSession{Workspace: workspace},
+		taskTracker:    NewTaskTracker(),
+		executionRunID: "run-submit-result",
 	}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "test goal", Model: "m1", Source: "src"}})
 	todoID := items[0].ID
@@ -162,7 +252,8 @@ func TestSubmitResultTool(t *testing.T) {
 		t.Fatalf("failed to marshal tool input: %v", err)
 	}
 
-	resp, err := tool.Run(context.Background(), fantasy.ToolCall{Input: string(inputBytes)})
+	ctx := occurrenceTestContext(c, todoID, 2)
+	resp, err := tool.Run(ctx, fantasy.ToolCall{Input: string(inputBytes)})
 	if err != nil {
 		t.Fatalf("tool.Run unexpected error: %v", err)
 	}
@@ -205,6 +296,14 @@ func TestSubmitResultTool(t *testing.T) {
 	if len(updatedItem.TypedResult.Artifacts) != 1 || updatedItem.TypedResult.Artifacts[0].ID == "" {
 		t.Fatalf("submitted artifact was not materialized: %#v", updatedItem.TypedResult.Artifacts)
 	}
+	got := updatedItem.TypedResult
+	if got.TaskID != todoID || got.Attempt != 2 || got.Agent != "worker" {
+		t.Fatalf("runtime-stamped result identity = %#v", got)
+	}
+	artifact := got.Artifacts[0]
+	if artifact.RunID != "run-submit-result" || artifact.TaskID != todoID || artifact.Attempt != 2 || artifact.Agent != "worker" {
+		t.Fatalf("runtime-stamped artifact provenance = %#v", artifact)
+	}
 }
 
 func TestSubmitResultToolRejectsModelDeclaredRawOutputRef(t *testing.T) {
@@ -225,12 +324,31 @@ func TestSubmitResultToolRejectsModelDeclaredRawOutputRef(t *testing.T) {
 	}
 }
 
+func TestSubmitResultToolRejectsUnknownArtifactRef(t *testing.T) {
+	c := &Coordinator{taskTracker: NewTaskTracker()}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "strict result schema"}})[0]
+	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(context.Background(), fantasy.ToolCall{
+		Name:  "submit_result",
+		Input: `{"status":"success","summary":"review complete","artifact_ref":"opaque:assigned-input"}`,
+	})
+	if err != nil {
+		t.Fatalf("submit_result error = %v", err)
+	}
+	if !response.IsError || !strings.Contains(response.Content, `unknown field "artifact_ref"`) {
+		t.Fatalf("unknown artifact_ref response = %#v", response)
+	}
+	if got := c.GetTaskResult(item.ID); got != nil {
+		t.Fatalf("result with unknown artifact_ref was stored: %#v", got)
+	}
+}
+
 func TestSubmitResultToolPrefixesRuntimeClosedSequenceFailure(t *testing.T) {
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "run fixed sequence"}})[0]
 	sequence := newTaskToolSequence([]string{"bash", "submit_result"}, nil, "", nil)
 	sequence.markFailedAt(0, "bash", "STDERR:\nprobe failed\n\nExit code: 23")
-	ctx := context.WithValue(context.Background(), taskToolSequenceKey{}, sequence)
+	ctx := occurrenceTestContext(c, item.ID, 1)
+	ctx = context.WithValue(ctx, taskToolSequenceKey{}, sequence)
 
 	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(ctx, fantasy.ToolCall{
 		Name:  "submit_result",
@@ -278,7 +396,7 @@ func TestSubmitResultToolPromotesStringFileRefs(t *testing.T) {
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "test goal", Model: "m1", Source: "src"}})
 	tool := &submitResultTool{coordinator: c, todoID: items[0].ID}
 
-	resp, err := tool.Run(context.Background(), fantasy.ToolCall{
+	resp, err := tool.Run(occurrenceTestContext(c, items[0].ID, 1), fantasy.ToolCall{
 		Name:  "submit_result",
 		Input: `{"status":"success","summary":"done","files_read":["docs/runbook.md"],"files_modified":["tmp/result.txt"]}`,
 	})
@@ -302,7 +420,7 @@ func TestSubmitResultToolPromotesScalarFileRef(t *testing.T) {
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "scalar file ref"}})
 	tool := &submitResultTool{coordinator: c, todoID: items[0].ID}
 
-	resp, err := tool.Run(context.Background(), fantasy.ToolCall{
+	resp, err := tool.Run(occurrenceTestContext(c, items[0].ID, 1), fantasy.ToolCall{
 		Name:  "submit_result",
 		Input: `{"status":"success","summary":"done","files_read":"docs/runbook.md"}`,
 	})
@@ -316,7 +434,7 @@ func TestSubmitResultToolPromotesScalarDescriptiveArrays(t *testing.T) {
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "scalar findings"}})
 	tool := &submitResultTool{coordinator: c, todoID: items[0].ID}
 
-	resp, err := tool.Run(context.Background(), fantasy.ToolCall{
+	resp, err := tool.Run(occurrenceTestContext(c, items[0].ID, 1), fantasy.ToolCall{
 		Name:  "submit_result",
 		Input: `{"status":"success","summary":"done","findings":"one finding","open_questions":"one question"}`,
 	})
@@ -334,7 +452,7 @@ func TestSubmitResultToolAcceptsStructuredOpenQuestions(t *testing.T) {
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "structured questions"}})[0]
 	tool := &submitResultTool{coordinator: c, todoID: item.ID}
 
-	response, err := tool.Run(context.Background(), fantasy.ToolCall{
+	response, err := tool.Run(occurrenceTestContext(c, item.ID, 1), fantasy.ToolCall{
 		Name:  "submit_result",
 		Input: `{"status":"success","summary":"done","open_questions":[{"question":"Which target owns the decision?","context":"The configuration has no default.","detail":"Confirm before deployment."}]}`,
 	})
@@ -397,7 +515,7 @@ func TestSubmitResultToolRejectsForbiddenArtifacts(t *testing.T) {
 	})
 	tool := &submitResultTool{coordinator: c, todoID: items[0].ID}
 
-	response, err := tool.Run(context.Background(), fantasy.ToolCall{Input: `{"status":"success","summary":"done","artifacts":[{"path":"report.md"}]}`})
+	response, err := tool.Run(occurrenceTestContext(c, items[0].ID, 1), fantasy.ToolCall{Input: `{"status":"success","summary":"done","artifacts":[{"path":"report.md"}]}`})
 	if err != nil {
 		t.Fatalf("tool.Run unexpected error: %v", err)
 	}
@@ -436,6 +554,7 @@ func TestSubmitResultToolRequiresCurrentAttemptReceiptsForStructuredExecution(t 
 	}})
 	todoID := items[0].ID
 	c.setCurrentTaskAttempt(todoID, 2)
+	resultCtx := occurrenceTestContext(c, todoID, 2)
 	registry := c.executionStepReceiptRegistry()
 	started := time.Now().UTC()
 	if err := registry.Record(ExecutionStepReceipt{
@@ -466,7 +585,7 @@ func TestSubmitResultToolRequiresCurrentAttemptReceiptsForStructuredExecution(t 
 		{name: "incomplete success claims", input: `{"status":"success","summary":"done","receipt_ids":["receipt-current"]}`, wantErr: "omits execution receipt"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			response, err := tool.Run(context.Background(), fantasy.ToolCall{Name: "submit_result", Input: tc.input})
+			response, err := tool.Run(resultCtx, fantasy.ToolCall{Name: "submit_result", Input: tc.input})
 			if err != nil {
 				t.Fatalf("tool.Run error = %v", err)
 			}
@@ -476,7 +595,7 @@ func TestSubmitResultToolRequiresCurrentAttemptReceiptsForStructuredExecution(t 
 		})
 	}
 
-	response, err := tool.Run(context.Background(), fantasy.ToolCall{
+	response, err := tool.Run(resultCtx, fantasy.ToolCall{
 		Name: "submit_result", Input: `{"status":"success","summary":"done","receipt_ids":["receipt-current","receipt-current-verify"]}`,
 	})
 	if err != nil || response.IsError {
@@ -493,7 +612,7 @@ func TestSubmitResultToolAcceptsCompletedWithGaps(t *testing.T) {
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "analyst", Desc: "survey target capability"}})
 	tool := &submitResultTool{coordinator: c, todoID: items[0].ID}
 
-	response, err := tool.Run(context.Background(), fantasy.ToolCall{Input: `{"status":"completed_with_gaps","summary":"Survey complete; the target has no structured roster action.","findings":[{"category":"capability_gap","summary":"roster workflow is interactive only"}]}`})
+	response, err := tool.Run(occurrenceTestContext(c, items[0].ID, 1), fantasy.ToolCall{Input: `{"status":"completed_with_gaps","summary":"Survey complete; the target has no structured roster action.","findings":[{"category":"capability_gap","summary":"roster workflow is interactive only"}]}`})
 	if err != nil {
 		t.Fatalf("tool.Run unexpected error: %v", err)
 	}
@@ -509,14 +628,16 @@ func TestSubmitResultToolAcceptsCompletedWithGaps(t *testing.T) {
 func TestSubmitResultToolRejectsMissingArtifactBeforeStoringResult(t *testing.T) {
 	workspace := t.TempDir()
 	c := &Coordinator{
-		session:     &TeamSession{Workspace: workspace},
-		taskTracker: NewTaskTracker(),
+		session:        &TeamSession{Workspace: workspace},
+		taskTracker:    NewTaskTracker(),
+		executionRunID: "run-missing-artifact",
 	}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "test goal"}})
 	tool := &submitResultTool{coordinator: c, todoID: items[0].ID}
 
 	input := `{"status":"success","summary":"done","artifacts":[{"path":"missing-report.txt"}]}`
-	response, err := tool.Run(context.Background(), fantasy.ToolCall{Input: input})
+	ctx := occurrenceTestContext(c, items[0].ID, 2)
+	response, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("tool.Run unexpected error: %v", err)
 	}

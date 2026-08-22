@@ -979,27 +979,27 @@ func executeTaskResultAssertVerification(workDir string, spec VerificationSpec, 
 		return applyVerificationMode(res, fmt.Errorf("task_result_assert task result is invalid: %w", err), spec.Mode)
 	}
 
-	var document any
-	encoded, err := json.Marshal(taskResult)
-	if err == nil {
-		decoder := json.NewDecoder(bytes.NewReader(encoded))
-		decoder.UseNumber()
-		err = decoder.Decode(&document)
-		if err == nil {
-			var extra any
-			if trailingErr := decoder.Decode(&extra); trailingErr != io.EOF {
-				err = errors.New("canonical task result encoded more than one JSON document")
-			}
-		}
-	}
+	document, err := canonicalTaskResultDocument(taskResult)
 	if err != nil {
 		res.ExitCode = 1
 		res.Stderr = "task_result_assert failed to canonicalize task result: " + utils.TruncateString(err.Error(), 500)
 		return applyVerificationMode(res, fmt.Errorf("task_result_assert cannot canonicalize task result: %w", err), spec.Mode)
 	}
 
+	failures := evaluateTaskResultAssertions(document, spec.TaskResultAssertions)
+	if len(failures) > 0 {
+		res.ExitCode = 1
+		res.Stderr = "task_result_assert failed: " + strings.Join(failures, "; ")
+		return applyVerificationMode(res, errors.New(res.Stderr), spec.Mode)
+	}
+	res.ExitCode = 0
+	res.Stdout = fmt.Sprintf("task_result_assert passed (%d assertion(s))", len(spec.TaskResultAssertions))
+	return applyVerificationMode(res, nil, spec.Mode)
+}
+
+func evaluateTaskResultAssertions(document any, assertions []TaskResultAssertion) []string {
 	var failures []string
-	for i, assertion := range spec.TaskResultAssertions {
+	for i, assertion := range assertions {
 		value, resolveErr := resolveJSONPointer(document, assertion.Pointer)
 		if resolveErr != nil {
 			if assertion.Op == "exists" {
@@ -1042,14 +1042,7 @@ func executeTaskResultAssertVerification(workDir string, spec VerificationSpec, 
 			}
 		}
 	}
-	if len(failures) > 0 {
-		res.ExitCode = 1
-		res.Stderr = "task_result_assert failed: " + strings.Join(failures, "; ")
-		return applyVerificationMode(res, errors.New(res.Stderr), spec.Mode)
-	}
-	res.ExitCode = 0
-	res.Stdout = fmt.Sprintf("task_result_assert passed (%d assertion(s))", len(spec.TaskResultAssertions))
-	return applyVerificationMode(res, nil, spec.Mode)
+	return failures
 }
 
 func taskResultValueNonEmpty(value any) bool {

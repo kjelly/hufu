@@ -130,17 +130,17 @@ func (c *Coordinator) recordTerminalTypedTaskResult(todoID string) {
 		if item == nil || item.ID != todoID || item.Status != TaskDone || item.TypedResult == nil {
 			continue
 		}
-		copyResult := *item.TypedResult
+		copyResult := cloneTaskResult(item.TypedResult)
 		if data, err := json.Marshal(copyResult); err == nil {
 			if redacted, err := utils.RedactJSON(data); err == nil {
-				_ = json.Unmarshal(redacted, &copyResult)
+				_ = json.Unmarshal(redacted, copyResult)
 			}
 		}
 		runID := c.executionRunID
 		if runID == "" {
 			runID = c.taskTracker.TodoList().RunID()
 		}
-		_ = c.journal.append(journalRecord{Op: "result", Agent: item.Agent, TaskID: item.ID, RunID: runID, Desc: item.Desc, TypedResult: &copyResult, ContextManifests: normalizeContextManifests(item.ContextManifests), TS: time.Now().Format(time.RFC3339)})
+		_ = c.journal.append(journalRecord{Op: "result", Agent: item.Agent, TaskID: item.ID, RunID: runID, Desc: item.Desc, TypedResult: copyResult, ContextManifests: normalizeContextManifests(item.ContextManifests), TS: time.Now().Format(time.RFC3339)})
 		return
 	}
 }

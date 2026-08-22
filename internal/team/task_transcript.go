@@ -289,7 +289,7 @@ func (t *taskTranscript) Manifest() (*ArtifactRef, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open task transcript artifact store: %w", err)
 	}
-	ref, err := store.Put(context.Background(), PutArtifactRequest{
+	putResult, err := store.Put(context.Background(), PutArtifactRequest{
 		Kind:        taskTranscriptMediaType,
 		Path:        t.path,
 		Description: "Complete tool-call transcript captured by hufu",
@@ -302,7 +302,7 @@ func (t *taskTranscript) Manifest() (*ArtifactRef, error) {
 	if err != nil {
 		return nil, fmt.Errorf("snapshot task transcript: %w", err)
 	}
-	return &ref, nil
+	return &putResult.ArtifactRef, nil
 }
 
 func (t *taskTranscript) Close() error {
@@ -329,44 +329,62 @@ func formatVerbatimTranscriptManifest(ref *ArtifactRef) string {
 	return fmt.Sprintf("VERBATIM TRANSCRIPT CAPTURED\nartifact_ref=%s\nsha256=%s\nbytes=%d\n\nThis is an artifact ID, not a Todo ID. Use artifact_ref exactly as issued only where an artifact reference is requested. Do not reconstruct or copy a filesystem path.", ref.ID, ref.SHA256, ref.Bytes)
 }
 
-// finalizeVerbatimTaskResult associates runner-owned evidence with the typed
-// result and returns the only text safe to pass back into coordinator context.
-func finalizeVerbatimTaskResult(transcript *taskTranscript, result *TaskResult) (string, error) {
+func sealVerbatimTaskTranscript(transcript *taskTranscript) (*ArtifactRef, error) {
 	if transcript == nil {
-		return "", fmt.Errorf("verbatim task transcript was not initialized")
+		return nil, fmt.Errorf("verbatim task transcript was not initialized")
 	}
 	ref, err := transcript.Manifest()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	// A terminal result may only publish a manifest after its writer is closed.
 	// This makes the path/hash/bytes stable across the done event and a process
 	// restart; callers can no longer observe a "done" task whose transcript is
 	// still appendable.
 	if err := transcript.Close(); err != nil {
-		return "", fmt.Errorf("seal task transcript: %w", err)
+		return nil, fmt.Errorf("seal task transcript: %w", err)
 	}
-	if result != nil {
-		result.RawOutputRef = ref
-		if result.Outputs == nil {
-			result.Outputs = make(map[string]StructuredOutputValue)
-		}
-		copyRef := *ref
-		result.Outputs[rawTranscriptOutputName] = StructuredOutputValue{
-			Kind: ExecutionOutputArtifact, Schema: taskTranscriptMediaType, Scope: "task", Artifact: &copyRef,
-		}
-		sec, err := GetSystemSecret()
-		if err != nil {
-			return "", fmt.Errorf("failed to obtain system secret for transcript signing: %w", err)
-		}
-		ev := EvidenceRef{
-			TaskID:      transcript.todoID,
-			RunID:       transcript.runID,
-			Type:        "task_transcript",
-			Description: "Complete runner-captured tool transcript",
-			Value:       ref.ID,
-		}
-		result.Evidence = append(result.Evidence, SignEvidence(ev, sec))
+	return ref, nil
+}
+
+func attachVerbatimTaskResult(ref *ArtifactRef, transcript *taskTranscript, result *TaskResult) error {
+	if ref == nil || transcript == nil || result == nil {
+		return nil
+	}
+	result.RawOutputRef = ref
+	if result.Outputs == nil {
+		result.Outputs = make(map[string]StructuredOutputValue)
+	}
+	copyRef := *ref
+	result.Outputs[rawTranscriptOutputName] = StructuredOutputValue{
+		Kind: ExecutionOutputArtifact, Schema: taskTranscriptMediaType, Scope: "task", Artifact: &copyRef,
+	}
+	sec, err := GetSystemSecret()
+	if err != nil {
+		return fmt.Errorf("failed to obtain system secret for transcript signing: %w", err)
+	}
+	ev := EvidenceRef{
+		TaskID:      transcript.todoID,
+		RunID:       transcript.runID,
+		Type:        "task_transcript",
+		Description: "Complete runner-captured tool transcript",
+		Value:       ref.ID,
+	}
+	result.Evidence = append(result.Evidence, SignEvidence(ev, sec))
+	return nil
+}
+
+// finalizeVerbatimTaskResult associates runner-owned evidence with the typed
+// result and returns the only text safe to pass back into coordinator context.
+// Persisted execution uses the occurrence transaction, which passes this
+// helper a deep-cloned canonical candidate.
+func finalizeVerbatimTaskResult(transcript *taskTranscript, result *TaskResult) (string, error) {
+	ref, err := sealVerbatimTaskTranscript(transcript)
+	if err != nil {
+		return "", err
+	}
+	if err := attachVerbatimTaskResult(ref, transcript, result); err != nil {
+		return "", err
 	}
 	return formatVerbatimTranscriptManifest(ref), nil
 }

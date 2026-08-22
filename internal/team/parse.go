@@ -944,12 +944,16 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		cfg.Capabilities = agent.CapabilityConfig{Required: append([]string(nil), yc.Capabilities.Required...)}
 		cfg.Verification = yc.Verification
 		cfg.Retry = yc.Retry
-		if len(yc.ActionProviders) > 0 {
-			cfg.ActionProviders = make(map[string]agent.ActionProviderConfig, len(yc.ActionProviders))
-			for capability, provider := range yc.ActionProviders {
-				cfg.ActionProviders[capability] = agent.ActionProviderConfig{
-					Command: append([]string(nil), provider.Command...), Dir: provider.Dir, Timeout: provider.Timeout,
-				}
+	}
+	// Action providers are independent of whether the optional phase workflow
+	// is enabled. Keeping this outside the workflow block ensures configured
+	// providers are available to static validation and runtime action tasks in
+	// every supported team shape.
+	if len(yc.ActionProviders) > 0 {
+		cfg.ActionProviders = make(map[string]agent.ActionProviderConfig, len(yc.ActionProviders))
+		for capability, provider := range yc.ActionProviders {
+			cfg.ActionProviders[capability] = agent.ActionProviderConfig{
+				Command: append([]string(nil), provider.Command...), Dir: provider.Dir, Timeout: provider.Timeout,
 			}
 		}
 	}
