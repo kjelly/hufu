@@ -29,6 +29,26 @@ func TestFinishRejectsUnresolvedPendingTasks(t *testing.T) {
 	}
 }
 
+func TestRunAgentsRejectsProviderWorksetStateBeforeTodoCreation(t *testing.T) {
+	for _, field := range []string{"workset_binding", "workset_receipt"} {
+		t.Run(field, func(t *testing.T) {
+			c := &Coordinator{taskTracker: NewTaskTracker()}
+			tool := &runAgentsTool{coordinator: c}
+			input := `{"tasks":[{"agent":"worker","goal":"inspect","` + field + `":{}}]}`
+			response, err := tool.Run(context.Background(), fantasy.ToolCall{Input: input})
+			if err != nil {
+				t.Fatalf("run_agents error: %v", err)
+			}
+			if !response.IsError || !strings.Contains(response.Content, "runtime-owned") {
+				t.Fatalf("run_agents response = %#v, want runtime-owned rejection", response)
+			}
+			if got := len(c.taskTracker.TodoList().Items()); got != 0 {
+				t.Fatalf("provider-authored %s created %d Todo items", field, got)
+			}
+		})
+	}
+}
+
 func TestFinishWritesCanonicalSessionItemNotSTMInCanonicalMode(t *testing.T) {
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))

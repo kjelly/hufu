@@ -479,6 +479,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		forcedSkillNames:                forcedSkillNamesClone,
 		maxConcurrent:                   orig.maxConcurrent,
 		sessionTime:                     orig.sessionTime,
+		tokenBudgetOwner:                orig.tokenBudgetRoot(),
 		skillDetector:                   orig.skillDetector,
 		skillGenerator:                  orig.skillGenerator,
 		skillPatternsDetected:           orig.skillPatternsDetected,

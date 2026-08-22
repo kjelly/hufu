@@ -86,9 +86,16 @@ func expandPipelineDeps(tasks []TaskDef) []TaskDef {
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
 	var err error
-	// Fan-out must expand before any goal-contract binding below: binding
-	// matches against the real, substituted Goal text, never the coordinator's
-	// original (and, for a fan_out task, ignored) goal field.
+	// Bind once before expansion so a static contract can contribute its
+	// artifact-backed FanOut definition to the coordinator's minimal goal
+	// request. A second binding pass below preserves the historical behavior of
+	// matching against the substituted child goal as well.
+	tasks, err = c.bindTaskGoalContracts(tasks)
+	if err != nil {
+		return "", c.rejectDelegationPolicy(err.Error())
+	}
+	// Fan-out must expand before the final goal-contract binding: the final
+	// pass matches against the real, substituted Goal text.
 	tasks, err = c.expandFanOutTasks(tasks)
 	if err != nil {
 		// A malformed fan-out spec is a configuration/authoring error, not a
@@ -393,10 +400,10 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		}
 		return "", err
 	}
-	// No-progress budget (§8.1, WP-12): each newly created task is one unit
-	// of "tasks since last objective progress". Increment here at creation;
-	// reset only by criterion advancement (criteria.go).
-	c.recordNoProgressTasks(len(todoItems))
+	// No-progress budget (§8.1, WP-12): ordinary newly created tasks are one
+	// unit, while one validated artifact-backed workset expansion is one
+	// bounded delegation unit rather than one unit per child.
+	c.recordNoProgressTaskBatch(tasks)
 	if len(c.session.Config.Preflight) > 0 {
 		if _, err := c.checkCapabilityRequirements(ctx, c.session.Config.Preflight); err != nil {
 			if blocked, ok := isCapabilityBlockedError(err); ok {

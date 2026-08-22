@@ -65,6 +65,17 @@ func (r *coordinatorDeclaredToolRunner) RunStructuredStep(ctx context.Context, r
 	stepCtx = context.WithValue(stepCtx, tools.AgentNameKey, strings.ToLower(agentDef.Name))
 	stepCtx = tools.SetSSHSessionManager(stepCtx, r.c.sshSessionMgr)
 	stepCtx = r.c.withEffectiveToolsAllowed(stepCtx, agentDef, exposed)
+	artifactScope, scopeErr := r.c.buildArtifactAccessScope(request.TaskID, request.Attempt)
+	if scopeErr != nil {
+		return ExecutionStepResult{}, fmt.Errorf("artifact scope preflight failed: %w", scopeErr)
+	}
+	if artifactScope != nil {
+		stepCtx = context.WithValue(stepCtx, artifactAccessScopeKey, cloneArtifactAccessScope(artifactScope))
+		stepCtx = context.WithValue(stepCtx, tools.ArtifactPathPolicyKey, tools.ArtifactPathPolicy{
+			BlockedPaths:             r.c.artifactScopePathCandidates(artifactScope),
+			FailClosedForUnsupported: item.WorksetBinding != nil,
+		})
+	}
 	if len(agentDef.Guard) > 0 {
 		stepCtx = context.WithValue(stepCtx, tools.GuardRulesKey, agentDef.Guard)
 	}
@@ -184,6 +195,10 @@ func (r *coordinatorDeclaredToolRunner) fileArtifactRef(request StructuredStepRe
 	if strings.TrimSpace(path) == "" {
 		return ArtifactRef{}, fmt.Errorf("structured artifact output %q must declare path or use input.path", name)
 	}
+	item := r.c.todoItemByID(request.TaskID)
+	if item == nil {
+		return ArtifactRef{}, fmt.Errorf("structured task %q does not exist", request.TaskID)
+	}
 	base := r.c.projectDir
 	if strings.TrimSpace(base) == "" && r.c.session != nil {
 		base = r.c.session.Workspace
@@ -196,17 +211,19 @@ func (r *coordinatorDeclaredToolRunner) fileArtifactRef(request StructuredStepRe
 	if err != nil {
 		return ArtifactRef{}, fmt.Errorf("open structured artifact store: %w", err)
 	}
-	ref, err := store.Put(context.Background(), PutArtifactRequest{
+	putResult, err := store.Put(context.Background(), PutArtifactRequest{
 		Kind:       string(ExecutionOutputArtifact),
 		Path:       path,
 		SourcePath: path,
+		RunID:      r.c.contextRunID(),
 		TaskID:     request.TaskID,
 		Attempt:    request.Attempt,
+		Agent:      item.Agent,
 	})
 	if err != nil {
 		return ArtifactRef{}, fmt.Errorf("snapshot structured artifact %q: %w", name, err)
 	}
-	return ref, nil
+	return putResult.ArtifactRef, nil
 }
 
 // InspectStructuredArtifact re-hashes workspace-backed artifacts immediately

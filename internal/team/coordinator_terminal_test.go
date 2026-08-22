@@ -585,6 +585,66 @@ func TestExecuteTaskAcceptsCompletedWithGaps(t *testing.T) {
 	}
 }
 
+func TestExecuteTaskVerbatimFinalizationUpdatesCanonicalResult(t *testing.T) {
+	workspace := t.TempDir()
+	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "verbatim-finalization", Timeout: 30, MaxRetries: 0},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-verbatim-finalization",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "capture complete transcript"}})[0]
+	c.workerAgentOverride = &submittingWorkerAgent{onSubmit: func() {
+		c.storeSubmittedTaskResult(item.ID, &TaskResult{
+			TaskID: item.ID, Agent: "worker", Status: TaskResultStatusSuccess, Source: "submitted",
+			Summary: "transcript captured",
+		})
+	}}
+	task := TaskDef{
+		Agent: "worker", Goal: "capture complete transcript", OutputMode: TaskOutputModeVerbatim,
+		Execution: ExecutionContract{RequiresResult: true},
+		VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{
+			{Pointer: "/raw_output_ref/id", Op: "exists"},
+			{Pointer: "/outputs/raw_transcript/artifact/id", Op: "exists"},
+			{Pointer: "/evidence", Op: "min_items", Value: 1},
+		}},
+	}
+
+	if _, err := c.executeTask(context.Background(), task, item.ID); err != nil {
+		t.Fatalf("verbatim task execution: %v", err)
+	}
+	if item.Status != TaskDone {
+		t.Fatalf("task status = %s, want %s", item.Status, TaskDone)
+	}
+	canonical := c.GetTaskResult(item.ID)
+	hasTranscriptEvidence := func(result *TaskResult) bool {
+		if result == nil || result.RawOutputRef == nil {
+			return false
+		}
+		for _, evidence := range result.Evidence {
+			if evidence.Type == "task_transcript" && evidence.Value == result.RawOutputRef.ID {
+				return true
+			}
+		}
+		return false
+	}
+	if canonical == nil || canonical.RawOutputRef == nil || canonical.RawOutputRef.ID == "" || canonical.Outputs[rawTranscriptOutputName].Artifact == nil || !hasTranscriptEvidence(canonical) {
+		t.Fatalf("canonical verbatim result = %#v, want sealed transcript fields", canonical)
+	}
+	if item.TypedResult == nil || item.TypedResult.RawOutputRef == nil || item.TypedResult.RawOutputRef.ID == "" || item.TypedResult.Outputs[rawTranscriptOutputName].Artifact == nil || !hasTranscriptEvidence(item.TypedResult) {
+		t.Fatalf("todo typed result = %#v, want sealed transcript fields", item.TypedResult)
+	}
+}
+
 // TestCharacterizationChildVerificationFailurePreservesTheSubmittedResult
 // uses the in-process worker seam rather than a live model. It fixes the
 // current ordering at the protocol boundary: a child can submit a valid

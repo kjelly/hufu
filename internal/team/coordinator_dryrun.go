@@ -136,6 +136,7 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 func cloneTaskDef(td TaskDef) TaskDef {
 	clone := td
 	clone.Action = cloneActionPtr(td.Action)
+	clone.FanOut = cloneFanOutSpec(td.FanOut)
 	if td.ContextFiles != nil {
 		clone.ContextFiles = make([]string, len(td.ContextFiles))
 		copy(clone.ContextFiles, td.ContextFiles)

@@ -28,8 +28,8 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
-	"github.com/kjelly/hufu/internal/tools"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 // newDirectTypedCoordinator builds the minimal coordinator state required
@@ -51,14 +51,15 @@ func newDirectTypedCoordinator(t *testing.T, agentTools string, allowed, denied 
 			},
 			Agents: map[string]*agent.AgentDef{"worker": def},
 		},
-		sessionData:  NewSession(),
-		taskTracker:  NewTaskTracker(),
-		agentCache:   map[string]fantasy.Agent{},
-		agentPool:    &mockAgentPool{resolveDef: def, resolveKey: "worker"},
-		reportStatus: func(StatusEvent) {},
-		projectDir:   workspace,
-		sessionTime:  time.Now(),
-		coreTools:    workerInvariantCoreTools(t),
+		sessionData:    NewSession(),
+		taskTracker:    NewTaskTracker(),
+		agentCache:     map[string]fantasy.Agent{},
+		agentPool:      &mockAgentPool{resolveDef: def, resolveKey: "worker"},
+		reportStatus:   func(StatusEvent) {},
+		projectDir:     workspace,
+		sessionTime:    time.Now(),
+		executionRunID: "run-direct-typed",
+		coreTools:      workerInvariantCoreTools(t),
 	}
 	return c
 }
@@ -187,7 +188,8 @@ func TestDirectAgentTypedSubmitReducesContextItems(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := &submitResultTool{coordinator: c, todoID: todoID}
-	response, err := tool.Run(context.Background(), fantasy.ToolCall{Name: "submit_result", Input: string(payloadJSON)})
+	ctx := occurrenceTestContext(c, todoID, 1)
+	response, err := tool.Run(ctx, fantasy.ToolCall{Name: "submit_result", Input: string(payloadJSON)})
 	if err != nil || response.IsError {
 		t.Fatalf("submit_result Run response=%+v err=%v content=%q", response, err, response.Content)
 	}

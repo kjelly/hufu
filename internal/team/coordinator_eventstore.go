@@ -114,12 +114,9 @@ func (c *Coordinator) initEventStore() {
 		c.markSessionRecovery("event-store initialization failed: " + utils.RedactSecrets(err.Error()))
 		return
 	}
-	if err := es.VerifyHashChain(); err != nil {
-		log.Printf("warning: event store hash chain verification failed: %v", err)
-		c.markSessionRecovery("event-store hash chain invalid: " + utils.RedactSecrets(err.Error()))
-		_ = es.Close()
-		return
-	}
+	// NewEventStore's strict rescan already validates every persisted record and
+	// restores the durable chain head. Do not replay the complete history a
+	// second time through VerifyHashChain during coordinator startup.
 	st, err := LoadSessionTree(c.session.Workspace)
 	if err != nil {
 		log.Printf("warning: load session tree failed: %v", err)
@@ -268,6 +265,10 @@ func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replay
 	_ = c.mutateSessionData(func(sd *SessionData) error {
 		sd.Entries = replayedSD.Entries
 		sd.Tasks = replayedTasks
+		sd.WorksetReceipts = append([]WorksetExpansionReceipt(nil), replayedSD.WorksetReceipts...)
+		sd.WorksetStates = append([]WorksetGroupState(nil), replayedSD.WorksetStates...)
+		sd.RecoveryRequired = replayedSD.RecoveryRequired
+		sd.RecoveryReason = replayedSD.RecoveryReason
 		sd.CriterionResults = replayedSD.CriterionResults
 		sd.CriterionCheckpoints = replayedSD.CriterionCheckpoints
 		sd.LastCriterionProgressAt = replayedSD.LastCriterionProgressAt

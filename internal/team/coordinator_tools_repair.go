@@ -33,6 +33,16 @@ type protocolRepairAttempt struct {
 
 const maxProtocolRepairRedirects = 1
 
+// protocolRepairExecutionKey marks the one regenerated tool call after a
+// schema violation. Ingress handlers use it to prevent a repair turn from
+// creating new evidence that was not accepted by the original invocation.
+type protocolRepairExecutionKey struct{}
+
+func protocolRepairExecution(ctx context.Context) bool {
+	value, _ := ctx.Value(protocolRepairExecutionKey{}).(bool)
+	return value
+}
+
 type protocolRepairWrapper struct {
 	base  fantasy.AgentTool
 	c     *Coordinator
@@ -93,7 +103,8 @@ func (t *protocolRepairWrapper) Run(ctx context.Context, call fantasy.ToolCall) 
 			t.auditViolation(ctx, call, pending.original, true, "cancelled")
 			return fantasy.ToolResponse{}, err
 		}
-		resp, err := t.base.Run(ctx, call)
+		repairCtx := context.WithValue(ctx, protocolRepairExecutionKey{}, true)
+		resp, err := t.base.Run(repairCtx, call)
 		if err == nil && !resp.IsError {
 			t.c.coordinatorProtocolRepairsSuccess.Add(1)
 			t.auditViolation(ctx, call, pending.original, true, "repaired_and_executed")

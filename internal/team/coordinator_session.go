@@ -678,7 +678,14 @@ func (c *Coordinator) saveCheckpoint() {
 	store := c.SessionStore()
 	c.sessionMu.Lock()
 	c.sessionData.Tasks = tasks
-	c.sessionData.WorksetReceipts = c.worksetReceiptsFromTasks(tasks)
+	worksetReceipts, receiptErr := c.worksetReceiptsFromTasks(tasks)
+	if receiptErr != nil {
+		c.sessionData.WorksetReceipts = nil
+		c.sessionData.RecoveryRequired = true
+		c.sessionData.RecoveryReason = receiptErr.Error()
+	} else {
+		c.sessionData.WorksetReceipts = worksetReceipts
+	}
 	c.sessionData.WorksetStates = c.WorksetGroupStates()
 	if c.phaseWorkflow != nil {
 		c.sessionData.WorkflowState, c.sessionData.PhaseResults, c.sessionData.RuntimeWorkspace, c.sessionData.RetryState = c.phaseWorkflow.snapshot()
@@ -688,20 +695,32 @@ func (c *Coordinator) saveCheckpoint() {
 	c.updateBranchState()
 }
 
-func (c *Coordinator) worksetReceiptsFromTasks(tasks []*TodoItem) []WorksetExpansionReceipt {
-	seen := make(map[string]struct{})
-	var receipts []WorksetExpansionReceipt
+func (c *Coordinator) worksetReceiptsFromTasks(tasks []*TodoItem) ([]WorksetExpansionReceipt, error) {
+	visible := make([]*WorksetExpansionReceipt, 0, len(tasks))
 	for _, item := range tasks {
-		if item == nil || item.WorksetReceipt == nil || item.WorksetReceipt.WorksetID == "" {
+		if item == nil || item.WorksetReceipt == nil {
 			continue
 		}
-		if _, ok := seen[item.WorksetReceipt.WorksetID]; ok {
-			continue
-		}
-		seen[item.WorksetReceipt.WorksetID] = struct{}{}
-		receipts = append(receipts, *cloneWorksetReceipt(item.WorksetReceipt))
+		visible = append(visible, item.WorksetReceipt)
 	}
-	return receipts
+	indexed, conflicts := collectWorksetReceipts(visible)
+	if err := worksetReceiptConflictError(conflicts); err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(indexed))
+	receipts := make([]WorksetExpansionReceipt, 0, len(indexed))
+	for _, item := range tasks {
+		if item == nil || item.WorksetReceipt == nil {
+			continue
+		}
+		id := item.WorksetReceipt.WorksetID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		receipts = append(receipts, *cloneWorksetReceipt(indexed[id]))
+	}
+	return receipts, nil
 }
 
 // updateBranchState snapshots the coordinator's live state (task plan, active

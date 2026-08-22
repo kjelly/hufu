@@ -63,6 +63,10 @@ func (c *Coordinator) rememberDiagnosticHint(todoID, hint string) {
 // FailureDetail returns the structured failure detail string used across task,
 // coordinator, and CLI failure paths.
 func (c *Coordinator) FailureDetail(err error, source string) string {
+	providerFailure := providerModelFailureFrom(err)
+	if providerFailure != nil {
+		source = FailureSourceProviderModel
+	}
 	if source == "" {
 		source = detectFailureSource(err)
 	}
@@ -70,11 +74,28 @@ func (c *Coordinator) FailureDetail(err error, source string) string {
 	if status := c.GetCurrentStatus(); status != "" && status != "idle" {
 		parts = append(parts, "current="+status)
 	}
-	if tool := c.GetCurrentTool(); tool != "" {
+	if providerFailure != nil {
+		if providerFailure.provider != "" {
+			parts = append(parts, "provider="+providerFailure.provider)
+		}
+		if providerFailure.model != "" {
+			parts = append(parts, "model="+providerFailure.model)
+		}
+		if providerFailure.statusCode != 0 {
+			parts = append(parts, fmt.Sprintf("status_code=%d", providerFailure.statusCode))
+		}
+		if providerFailure.response != "" {
+			parts = append(parts, "provider_response="+utils.TruncateString(utils.RedactSecrets(providerFailure.response), 500))
+		}
+	} else if tool := c.GetCurrentTool(); tool != "" {
 		parts = append(parts, "last_tool="+tool)
 	}
 	if err != nil {
-		parts = append(parts, "error="+utils.TruncateString(err.Error(), 500))
+		errorText := err.Error()
+		if providerFailure != nil && providerFailure.err != nil {
+			errorText = providerFailure.err.Error()
+		}
+		parts = append(parts, "error="+utils.TruncateString(errorText, 500))
 	}
 	return strings.Join(parts, " | ")
 }
@@ -98,6 +119,35 @@ func (c *Coordinator) PersistFailureWithDisposition(agentName, taskDesc, todoID,
 // never used to override this class when building fingerprints or events.
 func (c *Coordinator) PersistFailureWithClass(agentName, taskDesc, todoID, detail string, disposition RetryDisposition, class TaskFailureClass) {
 	c.persistFailure(agentName, taskDesc, todoID, detail, disposition, class, nil)
+}
+
+// terminalizeTaskErrorIfUnresolved is the scheduler/worker error postcondition.
+// A scheduler result is not authoritative lifecycle state: any error returned
+// after a task was admitted must leave the canonical todo terminal with the
+// original diagnostic, even when the failing path occurred before the normal
+// worker retry loop could persist its decision.
+func (c *Coordinator) terminalizeTaskErrorIfUnresolved(todoID string, err error) {
+	if c == nil || err == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil || todoID == "" {
+		return
+	}
+	item := c.todoItemByID(todoID)
+	if item == nil || isTerminalTaskStatus(item.Status) {
+		return
+	}
+	if isBudgetAdmissionError(err) {
+		detail := c.FailureDetail(err, FailureSourceBudgetExceeded)
+		c.PersistFailureWithClassAndStatus(item.Agent, item.Desc, todoID, detail, RetryNone, FailureExecution, TaskError)
+		return
+	}
+	status := TaskError
+	class := classifyTaskFailure(err)
+	disposition := RetryNone
+	if _, blocked := isCapabilityBlockedError(err); blocked {
+		status = TaskBlocked
+		class = FailurePolicy
+		disposition = NeedsHuman
+	}
+	c.PersistFailureWithClassAndStatus(item.Agent, item.Desc, todoID, err.Error(), disposition, class, status)
 }
 
 // PersistFailureWithClassAndStatusAndOutput records structured failure

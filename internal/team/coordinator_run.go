@@ -522,6 +522,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	memoryManifest := buildMemoryInjectionManifestFromContextManifest(compiled, &contextManifest, runID, todoID, 1, resolvedName, retrievalQuery, c.session.Config.MemoryLearning)
 	c.setCurrentTaskAttempt(todoID, 1)
+	if identity, ok := c.activeTaskResultOccurrence(todoID); ok {
+		taskCtx = withSubmitResultRuntimeIdentity(taskCtx, identity)
+	}
 	if manifestErr := c.persistMemoryManifest(memoryManifest); manifestErr != nil {
 		// The manifest preflight leaves the canonical task in_progress; persist
 		// the terminal failure and reduce a typed ContextError so the failure

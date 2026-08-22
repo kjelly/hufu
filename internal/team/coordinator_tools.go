@@ -96,25 +96,23 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 }
 
 func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	var args struct {
-		Tasks []TaskDef `json:"tasks"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+	tasks, err := decodeModelTaskDefs([]byte(call.Input))
+	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
 	}
-	if len(args.Tasks) == 0 {
+	if len(tasks) == 0 {
 		return fantasy.NewTextErrorResponse("no tasks provided"), nil
 	}
-	for _, t := range args.Tasks {
+	for _, t := range tasks {
 		if t.Goal == "" {
 			return fantasy.NewTextErrorResponse("each task requires 'goal'"), nil
 		}
 	}
-	if err := t.coordinator.validateDelegatedTaskCapabilities(args.Tasks); err != nil {
+	if err := t.coordinator.validateDelegatedTaskCapabilities(tasks); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 
-	result, err := t.coordinator.ExecuteTasks(ctx, args.Tasks)
+	result, err := t.coordinator.ExecuteTasks(ctx, tasks)
 	if err != nil {
 		var violation *delegationPolicyViolation
 		if errors.As(err, &violation) {
@@ -130,6 +128,40 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 		t.coordinator.coordinatorPolicyRepairsSuccess.Add(1)
 	}
 	return fantasy.NewTextResponse(result), nil
+}
+
+// decodeModelTaskDefs is the model-facing task ingress boundary. Runtime
+// workset bindings and receipts are produced only by fan-out expansion and
+// committed by ExecuteTasks; they are not provider-authored task fields.
+// Inspecting the raw task objects before decoding into TaskDef prevents a
+// provider from smuggling those runtime-owned fields into Todo creation.
+func decodeModelTaskDefs(data []byte) ([]TaskDef, error) {
+	var envelope struct {
+		Tasks []json.RawMessage `json:"tasks"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, err
+	}
+	tasks := make([]TaskDef, 0, len(envelope.Tasks))
+	for index, rawTask := range envelope.Tasks {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(rawTask, &fields); err != nil {
+			return nil, fmt.Errorf("tasks[%d]: %w", index, err)
+		}
+		for key := range fields {
+			for _, field := range []string{"workset_binding", "workset_receipt"} {
+				if strings.EqualFold(key, field) {
+					return nil, fmt.Errorf("tasks[%d] cannot provide runtime-owned %s", index, field)
+				}
+			}
+		}
+		var task TaskDef
+		if err := json.Unmarshal(rawTask, &task); err != nil {
+			return nil, fmt.Errorf("tasks[%d]: %w", index, err)
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
 }
 
 // renderRunAgentsToolResponse keeps a completed worker batch's sealed failure
