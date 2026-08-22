@@ -269,11 +269,8 @@ func runWithInjection(ctx context.Context, tc *teamContext, initialResult string
 // to pick the route (fast vs team) and appropriate team, and returns the full
 // RouteDecision so the caller can thread the chosen route into execution.
 func maybeAutoSelectTeam(ctx context.Context, prompt, initialTeam string, registry *team.TeamRegistry) RouteDecision {
-	handle := selectionSidecarBuilder(ctx)
-	if handle != nil {
-		defer handle.Close()
-	}
-	router := NewExecutionRouter(registry, handle.Sidecar())
+	router := NewExecutionRouter(registry, nil)
+	router.sidecarBuilder = selectionSidecarBuilder
 	decision := router.Route(ctx, prompt, initialTeam)
 
 	if decision.Team != "" && (opts.autoTeam || opts.routeMode != "auto" || opts.defaultTeam || initialTeam != "") {

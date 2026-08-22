@@ -139,24 +139,51 @@ func TestAutoSelectTeamLLMSuccessReleasesPreflightHandle(t *testing.T) {
 	}
 }
 
-func TestMaybeAutoSelectTeamEarlyRouteReleasesPreflightHandle(t *testing.T) {
+func TestMaybeAutoSelectTeamExplicitNonDefaultRouteSkipsSelectionPreflight(t *testing.T) {
 	originalBuilder, originalOpts := selectionSidecarBuilder, opts
+	var buildCalls int
 	var closeCalls int
 	selectionSidecarBuilder = func(context.Context) *preflightSidecarHandle {
+		buildCalls++
 		return &preflightSidecarHandle{sidecar: &sidecar.Sidecar{}, close: func() { closeCalls++ }}
 	}
-	opts = runOptions{defaultTeam: true}
+	opts = runOptions{routeMode: "auto"}
 	t.Cleanup(func() {
 		selectionSidecarBuilder = originalBuilder
 		opts = originalOpts
 	})
 
-	decision := maybeAutoSelectTeam(context.Background(), "explain the coordinator", "default", nil)
-	if decision.Route != RouteFast || decision.Team != "default" {
-		t.Fatalf("decision = %#v, want default fast route", decision)
+	decision := maybeAutoSelectTeam(context.Background(), "review recent commits", "hufu-code-review", nil)
+	if decision.Route != RouteTeam || decision.Team != "hufu-code-review" {
+		t.Fatalf("decision = %#v, want explicit named team route", decision)
 	}
-	if closeCalls != 1 {
-		t.Fatalf("close calls = %d, want 1", closeCalls)
+	if closeCalls != 0 {
+		t.Fatalf("selection preflight close calls = %d, want 0", closeCalls)
+	}
+	if buildCalls != 0 {
+		t.Fatalf("selection preflight builds = %d, want 0", buildCalls)
+	}
+}
+
+func TestMaybeAutoSelectTeamClassifierFallbackBuildsSelectionPreflightLazily(t *testing.T) {
+	originalBuilder, originalOpts := selectionSidecarBuilder, opts
+	var buildCalls int
+	selectionSidecarBuilder = func(context.Context) *preflightSidecarHandle {
+		buildCalls++
+		return &preflightSidecarHandle{close: func() {}}
+	}
+	opts = runOptions{routeMode: "auto", autoTeam: true}
+	t.Cleanup(func() {
+		selectionSidecarBuilder = originalBuilder
+		opts = originalOpts
+	})
+
+	decision := maybeAutoSelectTeam(context.Background(), strings.Repeat("tell me something ", 5), "", nil)
+	if decision.Route != RouteFast || decision.Team != "default" {
+		t.Fatalf("decision = %#v, want concise default fallback route", decision)
+	}
+	if buildCalls != 1 {
+		t.Fatalf("selection preflight builds = %d, want 1 for classifier fallback", buildCalls)
 	}
 }
 

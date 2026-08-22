@@ -28,8 +28,9 @@ type RouteDecision struct {
 // ExecutionRouter routes prompts to either a fast path (single agent execution)
 // or a team path (multi-agent coordinator workflow), prioritizing deterministic signals.
 type ExecutionRouter struct {
-	registry *team.TeamRegistry
-	sidecar  *sidecar.Sidecar
+	registry       *team.TeamRegistry
+	sidecar        *sidecar.Sidecar
+	sidecarBuilder func(context.Context) *preflightSidecarHandle
 }
 
 // NewExecutionRouter constructs a new ExecutionRouter instance.
@@ -38,6 +39,21 @@ func NewExecutionRouter(registry *team.TeamRegistry, sidecar *sidecar.Sidecar) *
 		registry: registry,
 		sidecar:  sidecar,
 	}
+}
+
+func (r *ExecutionRouter) selectionSidecar(ctx context.Context) (*sidecar.Sidecar, context.Context, func()) {
+	if r.sidecar != nil || r.sidecarBuilder == nil {
+		return r.sidecar, ctx, func() {}
+	}
+	handle := r.sidecarBuilder(ctx)
+	if handle == nil {
+		return nil, ctx, func() {}
+	}
+	return handle.Sidecar(), handle.Context(), handle.Close
+}
+
+var classifyRouteWithSelectionSidecar = func(ctx context.Context, s *sidecar.Sidecar, prompt string) (sidecar.RouteClassification, error) {
+	return s.ClassifyRoute(ctx, prompt)
 }
 
 // Deterministic signal patterns
@@ -152,9 +168,13 @@ func (r *ExecutionRouter) Route(ctx context.Context, prompt string, targetTeam s
 		}
 	}
 
-	// 3. LLM Sidecar Classifier Fallback
-	if r.sidecar != nil {
-		if classification, err := r.sidecar.ClassifyRoute(sidecar.WithPurpose(ctx, "team_selection"), prompt); err == nil {
+	// 3. LLM Sidecar Classifier Fallback. Construction is deferred until the
+	// deterministic routes above have all declined the prompt. In particular,
+	// an explicit non-default team never needs a selection preflight.
+	selectionSidecar, selectionContext, closeSelectionSidecar := r.selectionSidecar(ctx)
+	defer closeSelectionSidecar()
+	if selectionSidecar != nil {
+		if classification, err := classifyRouteWithSelectionSidecar(sidecar.WithPurpose(selectionContext, "team_selection"), selectionSidecar, prompt); err == nil {
 			route := RouteFast
 			if classification.Route == "team" {
 				route = RouteTeam

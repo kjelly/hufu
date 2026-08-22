@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/sidecar"
 )
 
 func TestRoute_DeterministicFastSignals(t *testing.T) {
@@ -111,6 +113,39 @@ func TestRoute_ExplicitNonDefaultTeamUsesCoordinator(t *testing.T) {
 	}
 	if dec.Team != "hufu-code-review" {
 		t.Fatalf("explicit non-default team = %q, want hufu-code-review", dec.Team)
+	}
+}
+
+func TestRoute_SelectionPreflightContextAndCloseEncloseClassifier(t *testing.T) {
+	type contextKey string
+	const key contextKey = "preflight"
+	wantContext := context.WithValue(context.Background(), key, "builder-context")
+	var calls []string
+
+	router := NewExecutionRouter(nil, nil)
+	router.sidecarBuilder = func(context.Context) *preflightSidecarHandle {
+		return &preflightSidecarHandle{
+			sidecar: &sidecar.Sidecar{},
+			ctx:     wantContext,
+			close:   func() { calls = append(calls, "close") },
+		}
+	}
+	originalClassifier := classifyRouteWithSelectionSidecar
+	classifyRouteWithSelectionSidecar = func(ctx context.Context, _ *sidecar.Sidecar, _ string) (sidecar.RouteClassification, error) {
+		if ctx.Value(key) != "builder-context" {
+			t.Fatalf("classifier context value = %v, want builder context", ctx.Value(key))
+		}
+		calls = append(calls, "classify")
+		return sidecar.RouteClassification{Route: "fast", Reason: "test"}, nil
+	}
+	t.Cleanup(func() { classifyRouteWithSelectionSidecar = originalClassifier })
+
+	decision := router.Route(context.Background(), "consider the implications of this request carefully before choosing the appropriate execution path for the work", "")
+	if decision.Route != RouteFast {
+		t.Fatalf("route = %s, want %s", decision.Route, RouteFast)
+	}
+	if got, want := len(calls), 2; got != want || calls[0] != "classify" || calls[1] != "close" {
+		t.Fatalf("classifier/close order = %v, want [classify close]", calls)
 	}
 }
 

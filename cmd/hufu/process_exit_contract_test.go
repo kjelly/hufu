@@ -75,6 +75,53 @@ func runProcessContract(t *testing.T, binary string, args ...string) (int, []byt
 	return exitErr.ExitCode(), stdout.Bytes(), stderr.Bytes()
 }
 
+type contractChatRequest struct {
+	Stream   bool `json:"stream"`
+	Messages []struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	} `json:"messages"`
+	Tools []struct {
+		Name     string `json:"name"`
+		Function struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	} `json:"tools"`
+}
+
+type contractRequestPurpose string
+
+const (
+	contractPurposeWorker      contractRequestPurpose = "worker"
+	contractPurposeAuxiliary   contractRequestPurpose = "auxiliary"
+	contractPurposeCoordinator contractRequestPurpose = "coordinator"
+)
+
+func classifyContractRequest(request contractChatRequest) contractRequestPurpose {
+	for _, tool := range request.Tools {
+		name := tool.Name
+		if name == "" {
+			name = tool.Function.Name
+		}
+		if name == "finish" {
+			return contractPurposeCoordinator
+		}
+	}
+
+	var content strings.Builder
+	for _, message := range request.Messages {
+		content.WriteString(message.Role)
+		content.WriteByte(' ')
+		content.Write(message.Content)
+		content.WriteByte('\n')
+	}
+	text := strings.ToLower(content.String())
+	if strings.Contains(text, "compactor") || strings.Contains(text, "compress") || strings.Contains(text, "context") {
+		return contractPurposeAuxiliary
+	}
+	return contractPurposeWorker
+}
+
 func TestCLIProcessExitContract(t *testing.T) {
 	binary := buildProcessContractBinary(t)
 
@@ -119,26 +166,23 @@ func TestCLIProcessExitContract(t *testing.T) {
 	})
 
 	t.Run("acceptance failure emits partial JSON and exit 7", func(t *testing.T) {
-		var requestNumber atomic.Int32
+		var coordinatorResponseSent atomic.Bool
 		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/v1/chat/completions" {
 				http.NotFound(w, r)
 				return
 			}
-			var request struct {
-				Stream bool `json:"stream"`
-			}
+			var request contractChatRequest
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			// Typed worker results are reduced by the runtime; the coordinator can
 			// proceed directly to finish without a model-owned memory mutation.
-			toolName := "finish"
+			toolName := ""
 			arguments := `{"response":"finish fixture"}`
-			requestIndex := requestNumber.Add(1)
-			if requestIndex == 1 {
-				toolName = ""
+			if classifyContractRequest(request) == contractPurposeCoordinator && !coordinatorResponseSent.Swap(true) {
+				toolName = "finish"
 			}
 			if request.Stream {
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -192,6 +236,29 @@ func TestCLIProcessExitContract(t *testing.T) {
 		server.Listener = listener
 		server.Start()
 		defer server.Close()
+
+		// Auxiliary model calls may occur before coordinator execution. They must
+		// receive a deterministic non-terminal response without consuming the
+		// coordinator's one-shot finish response.
+		auxiliaryResponse, err := http.Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"test","stream":false,"messages":[{"role":"system","content":"compactor"},{"role":"user","content":"Compress this context."}]}`))
+		if err != nil {
+			t.Fatalf("make auxiliary fixture request: %v", err)
+		}
+		defer auxiliaryResponse.Body.Close()
+		if auxiliaryResponse.StatusCode != http.StatusOK {
+			t.Fatalf("auxiliary fixture status = %d, want 200", auxiliaryResponse.StatusCode)
+		}
+		var auxiliaryCompletion struct {
+			Choices []struct {
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+		}
+		if err := json.NewDecoder(auxiliaryResponse.Body).Decode(&auxiliaryCompletion); err != nil {
+			t.Fatalf("decode auxiliary fixture response: %v", err)
+		}
+		if len(auxiliaryCompletion.Choices) != 1 || auxiliaryCompletion.Choices[0].FinishReason != "stop" {
+			t.Fatalf("auxiliary fixture response = %#v, want one stop completion", auxiliaryCompletion)
+		}
 
 		teamRoot := t.TempDir()
 		teamDir := filepath.Join(teamRoot, "acceptance-fixture")
