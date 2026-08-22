@@ -34,6 +34,7 @@ func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "view"
 	return &coreTool{
+		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "view",
 			Description: "Read a file by either a user-supplied file_path or a runtime-issued opaque artifact_ref. Use artifact_ref for worker/task outputs; never copy their display path into file_path. Artifact references are resolved and authorized by hufu without path consent. Exactly one source is required.",

@@ -27,6 +27,7 @@ func NewGlobTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "glob"
 	return &coreTool{
+		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "glob",
 			Description: "Search for files by glob pattern. Returns matching file paths. Uses ripgrep (rg) if available, falls back to Go implementation. Respects .gitignore. Hufu workspace execution records (session/journal files and logs under the workspace directory) are excluded unless the search path points inside the workspace. Limited to 100 results.",
@@ -58,15 +59,10 @@ func executeGlob(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 		return fantasy.NewTextErrorResponse("pattern parameter is required"), nil
 	}
 
-	searchPath := "."
-	if args.Path != "" {
-		resolved, err := checkPathOrConsent(args.Path, workDir, "search", cfgWithMergedPaths(cfg, ctx))
-		if err != nil {
-			return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
-		}
-		searchPath = resolved
-	} else if workDir != "" {
-		searchPath = workDir
+	effectiveCfg := cfgWithMergedPaths(cfg, ctx)
+	searchPath, err := resolveSearchRoot(args.Path, workDir, "search", effectiveCfg)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 	}
 
 	// Exclude hufu workspace execution records by default; searching with a
@@ -74,7 +70,7 @@ func executeGlob(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 	wsName := workspaceDirName(cfg)
 	excludeRecords := !pathHasComponent(searchPath, wsName)
 
-	paths, truncated, err := globFiles(ctx, args.Pattern, searchPath, defaultGlobLimit, wsName, excludeRecords)
+	paths, truncated, err := globFilesWithPolicy(ctx, args.Pattern, searchPath, defaultGlobLimit, wsName, excludeRecords, effectiveCfg.ArtifactPathPolicy)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("glob failed: %v", err)), nil
 	}
@@ -108,16 +104,16 @@ func executeGlob(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 	return fantasy.NewTextResponse(strings.TrimRight(b.String(), "\n")), nil
 }
 
-func globFiles(ctx context.Context, pattern, searchPath string, limit int, wsName string, excludeRecords bool) ([]string, bool, error) {
-	paths, err := globWithRg(ctx, pattern, searchPath, limit, wsName, excludeRecords)
+func globFilesWithPolicy(ctx context.Context, pattern, searchPath string, limit int, wsName string, excludeRecords bool, policy *ArtifactPathPolicy) ([]string, bool, error) {
+	paths, err := globWithRgPolicy(ctx, pattern, searchPath, limit, wsName, excludeRecords, policy)
 	if err == nil && len(paths) > 0 {
 		return paths, len(paths) >= limit, nil
 	}
 
-	return globWithWalk(pattern, searchPath, limit, wsName, excludeRecords)
+	return globWithWalkPolicy(pattern, searchPath, limit, wsName, excludeRecords, policy)
 }
 
-func globWithRg(ctx context.Context, pattern, searchPath string, limit int, wsName string, excludeRecords bool) ([]string, error) {
+func globWithRgPolicy(ctx context.Context, pattern, searchPath string, limit int, wsName string, excludeRecords bool, policy *ArtifactPathPolicy) ([]string, error) {
 	rgArgs := []string{
 		"--files",
 		"-L",
@@ -152,7 +148,11 @@ func globWithRg(ctx context.Context, pattern, searchPath string, limit int, wsNa
 		if line == "" {
 			continue
 		}
-		paths = append(paths, filepath.Join(searchPath, line))
+		candidate := filepath.Join(searchPath, line)
+		if _, allowed := artifactTraversalCandidate(candidate, searchPath, policy); !allowed {
+			continue
+		}
+		paths = append(paths, canonicalPathForAuthorization(candidate))
 		if len(paths) >= limit {
 			break
 		}
@@ -162,6 +162,10 @@ func globWithRg(ctx context.Context, pattern, searchPath string, limit int, wsNa
 }
 
 func globWithWalk(pattern, searchPath string, limit int, wsName string, excludeRecords bool) ([]string, bool, error) {
+	return globWithWalkPolicy(pattern, searchPath, limit, wsName, excludeRecords, nil)
+}
+
+func globWithWalkPolicy(pattern, searchPath string, limit int, wsName string, excludeRecords bool, policy *ArtifactPathPolicy) ([]string, bool, error) {
 	var paths []string
 	truncated := false
 
@@ -172,6 +176,13 @@ func globWithWalk(pattern, searchPath string, limit int, wsName string, excludeR
 			return nil
 		}
 		if info.IsDir() {
+			if _, allowed := artifactTraversalCandidate(path, searchPath, policy); !allowed {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		canonical, allowed := artifactTraversalCandidate(path, searchPath, policy)
+		if !allowed {
 			return nil
 		}
 		if excludeRecords && isWorkspaceRecordPath(path, wsName) {
@@ -182,7 +193,7 @@ func globWithWalk(pattern, searchPath string, limit int, wsName string, excludeR
 			return nil
 		}
 		if matcher(rel) {
-			paths = append(paths, path)
+			paths = append(paths, canonical)
 			if len(paths) >= limit {
 				truncated = true
 				return fmt.Errorf("limit reached")

@@ -506,6 +506,9 @@ func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
 	if fm, ok := ctx.Value(AgentForceMCPKey).(bool); ok && fm {
 		needMerge = true
 	}
+	if _, ok := ctx.Value(ArtifactPathPolicyKey).(ArtifactPathPolicy); ok {
+		needMerge = true
+	}
 	if !needMerge {
 		return cfg
 	}
@@ -515,6 +518,11 @@ func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
 	merged.RestrictedPath = mergedRestrictedPath(cfg, ctx)
 	merged.NetworkBlock = mergedNetworkBlock(cfg, ctx)
 	merged.ForceMCP = mergedForceMCP(cfg, ctx)
+	if policy, ok := ctx.Value(ArtifactPathPolicyKey).(ArtifactPathPolicy); ok {
+		copyPolicy := policy
+		copyPolicy.BlockedPaths = append([]string(nil), policy.BlockedPaths...)
+		merged.ArtifactPathPolicy = &copyPolicy
+	}
 	return merged
 }
 
@@ -546,17 +554,25 @@ func mergedForceMCP(cfg ToolConfig, ctx context.Context) bool {
 }
 
 type coreTool struct {
-	info          fantasy.ToolInfo
-	handler       func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error)
-	pOpts         fantasy.ProviderOptions
-	hooks         *hooks.HookRegistry
-	guardReviewer GuardReviewFn
-	pathReviewer  PathReviewer
+	info                   fantasy.ToolInfo
+	handler                func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error)
+	pOpts                  fantasy.ProviderOptions
+	hooks                  *hooks.HookRegistry
+	guardReviewer          GuardReviewFn
+	pathReviewer           PathReviewer
+	artifactPathPolicySafe bool
 }
 
 func (t *coreTool) Info() fantasy.ToolInfo                          { return t.info }
 func (t *coreTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
 func (t *coreTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
+
+// IsTrustedArtifactPathTool reports whether a concrete built-in tool has opted
+// into the shared artifact-path policy. Being a coreTool is not sufficient.
+func IsTrustedArtifactPathTool(tool fantasy.AgentTool) bool {
+	core, ok := tool.(*coreTool)
+	return ok && core.artifactPathPolicySafe
+}
 
 func SetGuardReviewer(tools []fantasy.AgentTool, fn GuardReviewFn) {
 	for _, t := range tools {
@@ -1018,8 +1034,12 @@ func checkPathOrConsent(path, workDir, operation string, cfg ToolConfig) (string
 	if err != nil {
 		return "", err
 	}
+	canonicalPath := canonicalPathForAuthorization(absPath)
+	if err := enforceArtifactPathPolicy(canonicalPath, cfg); err != nil {
+		return "", err
+	}
 
-	if isPathAllowed(absPath, cfg.AllowedPaths) {
+	if isPathAllowed(canonicalPath, cfg.AllowedPaths) {
 		return absPath, nil
 	}
 
@@ -1052,8 +1072,12 @@ func resolveAndValidatePathWithConsent(path string, cfg ToolConfig) (string, err
 	if err != nil {
 		return "", err
 	}
+	canonicalPath := canonicalPathForAuthorization(absPath)
+	if err := enforceArtifactPathPolicy(canonicalPath, cfg); err != nil {
+		return "", err
+	}
 
-	if isPathAllowed(absPath, cfg.AllowedPaths) {
+	if isPathAllowed(canonicalPath, cfg.AllowedPaths) {
 		// resolveAndValidatePath only knows about cfg.WorkDir (the project
 		// directory) — calling it here silently discarded the AllowedPaths
 		// check that just passed, rejecting any agent-level allowed-paths
@@ -1088,6 +1112,55 @@ func resolveAndValidatePathWithConsent(path string, cfg ToolConfig) (string, err
 	}
 
 	return "", fmt.Errorf("path '%s' is outside allowed paths", path)
+}
+
+// canonicalPathForAuthorization resolves the target itself when it exists and
+// otherwise resolves its parent. This gives path policy one canonical value
+// for ordinary files, symlinks, and new write targets.
+func canonicalPathForAuthorization(path string) string {
+	path = filepath.Clean(path)
+	if evaluated, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(evaluated)
+	}
+	if parent, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		return filepath.Join(filepath.Clean(parent), filepath.Base(path))
+	}
+	return path
+}
+
+func enforceArtifactPathPolicy(canonicalPath string, cfg ToolConfig) error {
+	if isArtifactPathBlocked(canonicalPath, cfg.ArtifactPathPolicy) {
+		return fmt.Errorf("path %q is a runtime-managed artifact path; use the authorized opaque artifact_ref instead", canonicalPath)
+	}
+	return nil
+}
+
+// EnforceArtifactPathPolicy applies the shared canonical path check to a
+// runtime-owned path operation outside a built-in tool. Callers must invoke it
+// before inspecting or materializing the path; opaque artifact_ref resolution
+// remains a separate capability.
+func EnforceArtifactPathPolicy(path string, policy *ArtifactPathPolicy) error {
+	if policy == nil {
+		return nil
+	}
+	return enforceArtifactPathPolicy(canonicalPathForAuthorization(path), ToolConfig{ArtifactPathPolicy: policy})
+}
+
+// isArtifactPathBlocked is shared by direct path authorization and recursive
+// traversal. Canonicalizing both sides prevents symlink aliases from exposing
+// a blocked artifact root or descendant.
+func isArtifactPathBlocked(path string, policy *ArtifactPathPolicy) bool {
+	if policy == nil {
+		return false
+	}
+	canonicalPath := canonicalPathForAuthorization(path)
+	for _, blocked := range policy.BlockedPaths {
+		blocked = canonicalPathForAuthorization(blocked)
+		if canonicalPath == blocked || strings.HasPrefix(canonicalPath, blocked+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveAndValidateWritePathWithConsent(path string, cfg ToolConfig) (string, error) {

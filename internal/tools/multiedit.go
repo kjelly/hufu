@@ -34,6 +34,7 @@ func NewMultiEditTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "multiedit"
 	return &coreTool{
+		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "multiedit",
 			Description: "Apply multiple edit operations to a single file in one atomic write. Each edit finds and replaces text independently. Supports replace_all for each edit. Partial success: applied edits are kept, failed edits are reported.",

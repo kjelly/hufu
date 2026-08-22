@@ -36,6 +36,7 @@ func NewEditTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "edit"
 	return &coreTool{
+		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "edit",
 			Description: "Edit a file by replacing exact text. Supports single edit via old_string/new_text, or multiple edits via the edits array. All edits are matched against the original file content and must be non-overlapping. Use replace_all to replace all occurrences of old_string.",

@@ -53,6 +53,10 @@ type agentAllowedWritePathsKeyType struct{}
 
 var AgentAllowedWritePathsKey = agentAllowedWritePathsKeyType{}
 
+type artifactPathPolicyKeyType struct{}
+
+var ArtifactPathPolicyKey = artifactPathPolicyKeyType{}
+
 // workflowBoundedBashKey carries the one canonical bash command admitted by a
 // statically bound workflow task. It is set only by the coordinator after it
 // validates the task contract; a workflow write scope alone never enables the

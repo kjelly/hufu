@@ -26,6 +26,7 @@ func NewWriteTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "write"
 	return &coreTool{
+		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "write",
 			Description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories. Returns a diff if the file already exists.",

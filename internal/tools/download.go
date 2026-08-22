@@ -29,6 +29,7 @@ func NewDownloadTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "download"
 	return &coreTool{
+		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "download",
 			Description: "Download a file from a URL and save it to a local path. Supports HTTP and HTTPS URLs. Creates parent directories if needed.",

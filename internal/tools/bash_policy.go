@@ -540,6 +540,9 @@ func rewriteLineRedirects(line string) string {
 }
 
 func checkBashPathConsent(ctx context.Context, command string, cfg ToolConfig) error {
+	if err := enforceArtifactPathsInCommand(command, cfg); err != nil {
+		return err
+	}
 	pathsToCheck := extractPathsFromCommand(command, cfg.WorkDir)
 	seen := make(map[string]bool)
 	var candidatePaths []string
@@ -553,11 +556,14 @@ func checkBashPathConsent(ctx context.Context, command string, cfg ToolConfig) e
 			continue
 		}
 
-		absPath, err := filepath.Abs(p)
+		absPath, err := resolvePathWithWorkDir(p, cfg.WorkDir)
 		if err != nil {
 			continue
 		}
 		absPath = filepath.Clean(absPath)
+		if err := enforceArtifactPathPolicy(canonicalPathForAuthorization(absPath), cfg); err != nil {
+			return err
+		}
 
 		if isPathAllowed(absPath, cfg.AllowedPaths) {
 			continue
@@ -591,7 +597,7 @@ func checkBashPathConsent(ctx context.Context, command string, cfg ToolConfig) e
 	}
 
 	for _, p := range candidatePaths {
-		absPath, err := filepath.Abs(p)
+		absPath, err := resolvePathWithWorkDir(p, cfg.WorkDir)
 		if err != nil {
 			continue
 		}
@@ -614,6 +620,74 @@ func checkBashPathConsent(ctx context.Context, command string, cfg ToolConfig) e
 		}
 	}
 	return nil
+}
+
+// enforceArtifactPathsInCommand is the bound-task path capability guard. It
+// resolves every concrete shell token against the tool workdir and compares
+// its canonical target to the coordinator-owned artifact policy. This is
+// intentionally independent of the generic consent scanner: relative paths,
+// symlink aliases, and artifact-store paths must not become authorized merely
+// because they were not written as absolute paths.
+func enforceArtifactPathsInCommand(command string, cfg ToolConfig) error {
+	if cfg.ArtifactPathPolicy == nil || len(cfg.ArtifactPathPolicy.BlockedPaths) == 0 {
+		return nil
+	}
+	for _, token := range shellCommandTokens(command) {
+		token = strings.TrimSpace(strings.Trim(token, "(){}[];,|&<>\"'"))
+		if token == "" || strings.HasPrefix(token, "-") || strings.Contains(token, "$") || strings.Contains(token, "://") || strings.Contains(token, "=") {
+			continue
+		}
+		resolved, err := resolvePathWithWorkDir(token, cfg.WorkDir)
+		if err != nil {
+			continue
+		}
+		if err := enforceArtifactPathPolicy(canonicalPathForAuthorization(resolved), cfg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func shellCommandTokens(command string) []string {
+	var tokens []string
+	var current strings.Builder
+	var quote rune
+	escaped := false
+	flush := func() {
+		if current.Len() > 0 {
+			tokens = append(tokens, current.String())
+			current.Reset()
+		}
+	}
+	for _, ch := range command {
+		if escaped {
+			current.WriteRune(ch)
+			escaped = false
+			continue
+		}
+		if ch == '\\' && quote != '\'' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if ch == quote {
+				quote = 0
+			} else {
+				current.WriteRune(ch)
+			}
+			continue
+		}
+		switch ch {
+		case '\'', '"':
+			quote = ch
+		case ' ', '\t', '\n', ';', '|', '&', '>', '<', '(', ')':
+			flush()
+		default:
+			current.WriteRune(ch)
+		}
+	}
+	flush()
+	return tokens
 }
 
 func extractPathsFromCommand(command, workDir string) []string {
@@ -894,6 +968,9 @@ func resolveBashWorkDir(workDir string, cfg ToolConfig, toolName string) (string
 		return errResp(fmt.Sprintf("invalid working_directory: %v", err))
 	}
 	abs = filepath.Clean(abs)
+	if err := enforceArtifactPathPolicy(canonicalPathForAuthorization(abs), cfg); err != nil {
+		return errResp(err.Error())
+	}
 	info, err := os.Stat(abs)
 	if err != nil || !info.IsDir() {
 		return errResp("working_directory does not exist or is not a directory")

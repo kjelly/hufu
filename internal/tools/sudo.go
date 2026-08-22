@@ -77,6 +77,9 @@ func executeSudo(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid working_directory: %v", err)), nil
 		}
 		abs = filepath.Clean(abs)
+		if err := enforceArtifactPathPolicy(canonicalPathForAuthorization(abs), effCfg); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
 		info, err := os.Stat(abs)
 		if err != nil || !info.IsDir() {
 			return fantasy.NewTextErrorResponse("working_directory does not exist or is not a directory"), nil

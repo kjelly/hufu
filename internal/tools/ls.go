@@ -26,6 +26,7 @@ func NewLsTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "ls"
 	return &coreTool{
+		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "ls",
 			Description: "List directory contents as an indented tree. Shows file and directory names with proper nesting. Includes dotfiles. Limited to 1000 entries.",
@@ -65,15 +66,10 @@ func executeLs(ctx context.Context, call fantasy.ToolCall, workDir string, cfg T
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
 	}
 
-	dirPath := "."
-	if args.Path != "" {
-		resolved, err := checkPathOrConsent(args.Path, workDir, "list", cfgWithMergedPaths(cfg, ctx))
-		if err != nil {
-			return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
-		}
-		dirPath = resolved
-	} else if workDir != "" {
-		dirPath = workDir
+	effectiveCfg := cfgWithMergedPaths(cfg, ctx)
+	dirPath, err := resolveSearchRoot(args.Path, workDir, "list", effectiveCfg)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 	}
 
 	info, err := os.Stat(dirPath)
@@ -94,7 +90,7 @@ func executeLs(ctx context.Context, call fantasy.ToolCall, workDir string, cfg T
 		maxDepth = -1
 	}
 
-	entries, truncated, err := listDirectoryTree(dirPath, ignorePatterns, maxDepth, maxLSFiles)
+	entries, truncated, err := listDirectoryTreeWithPolicy(dirPath, ignorePatterns, maxDepth, maxLSFiles, effectiveCfg.ArtifactPathPolicy)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to list directory: %v", err)), nil
 	}
@@ -118,7 +114,7 @@ type fileEntry struct {
 	depth   int
 }
 
-func listDirectoryTree(root string, ignore []string, maxDepth, maxFiles int) ([]fileEntry, bool, error) {
+func listDirectoryTreeWithPolicy(root string, ignore []string, maxDepth, maxFiles int, policy *ArtifactPathPolicy) ([]fileEntry, bool, error) {
 	ignoreMap := make(map[string]bool)
 	for _, p := range ignore {
 		ignoreMap[p] = true
@@ -137,6 +133,12 @@ func listDirectoryTree(root string, ignore []string, maxDepth, maxFiles int) ([]
 			return nil
 		}
 		if rel == "." {
+			return nil
+		}
+		if _, allowed := artifactTraversalCandidate(path, root, policy); !allowed {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 

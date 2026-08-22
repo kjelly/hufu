@@ -44,19 +44,30 @@ type PathConsent struct {
 // reinterpret the reference as a path or send it through path consent.
 type ArtifactOpener func(ctx context.Context, ref string) (io.ReadCloser, error)
 
+// ArtifactPathPolicy is installed by the coordinator for an attempt that has
+// runtime-managed artifacts in scope. BlockedPaths are checked after a tool
+// argument has been resolved to its canonical filesystem path and before the
+// ordinary allowlist or consent policy. A path is never an alternate way to
+// authorize an artifact; only ArtifactOpener handles opaque artifact_ref IDs.
+type ArtifactPathPolicy struct {
+	BlockedPaths             []string
+	FailClosedForUnsupported bool
+}
+
 type ToolConfig struct {
-	WorkDir           string
-	AllowedPaths      []string
-	AllowedWritePaths []string
-	PathConsent       *PathConsent
-	PathReviewer      PathReviewer
-	ArtifactOpener    ArtifactOpener
-	ToolName          string
-	WorkspaceName     string
-	Hooks             *hooks.HookRegistry
-	RestrictedBash    bool
-	RestrictedPath    string
-	NetworkBlock      bool
-	Direnv            bool
-	ForceMCP          bool
+	WorkDir            string
+	AllowedPaths       []string
+	AllowedWritePaths  []string
+	PathConsent        *PathConsent
+	PathReviewer       PathReviewer
+	ArtifactOpener     ArtifactOpener
+	ToolName           string
+	WorkspaceName      string
+	Hooks              *hooks.HookRegistry
+	RestrictedBash     bool
+	RestrictedPath     string
+	NetworkBlock       bool
+	Direnv             bool
+	ForceMCP           bool
+	ArtifactPathPolicy *ArtifactPathPolicy
 }
