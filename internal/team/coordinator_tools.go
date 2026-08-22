@@ -31,6 +31,16 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 	workerNames := t.coordinator.workerNameList()
 	allowContextFiles := !t.coordinator.session.Config.Delegation.ForbidContextFiles
 	taskProperties := buildAgentTaskProperties(workerNames, len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir), t.coordinator.taskCapabilityNames(), allowContextFiles)
+	if t.coordinator.phaseWorkflow != nil && t.coordinator.phaseWorkflow.Enabled() {
+		// Runtime workflows own execution, verification, artifact, and
+		// workset contracts. Exposing their full recursive JSON schema to a
+		// local model makes llama.cpp-compatible grammar compilers reject the
+		// request before the model can call the tool. Keep the provider-facing
+		// schema small; decodeModelTaskDefs and the runtime policy remain the
+		// authoritative validation boundary for fields a provider may still
+		// send.
+		taskProperties = providerSafeWorkflowTaskProperties(taskProperties)
+	}
 	taskSchema := map[string]any{
 		"type":                 "object",
 		"properties":           taskProperties,
@@ -93,6 +103,16 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 		},
 		Required: []string{"tasks"},
 	}
+}
+
+func providerSafeWorkflowTaskProperties(properties map[string]any) map[string]any {
+	compact := make(map[string]any, 3)
+	for _, name := range []string{"agent", "goal", "constraints"} {
+		if value, ok := properties[name]; ok {
+			compact[name] = value
+		}
+	}
+	return compact
 }
 
 func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {

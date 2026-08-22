@@ -5,7 +5,7 @@ max-steps: 80
 timeout: 1800
 verify-timeout: 120
 max-retries: 1
-max-concurrent: 4
+max-concurrent: 1
 workspace: workspace
 goal-mode: outcome
 execution-profile: fresh-session
@@ -86,8 +86,8 @@ tasks:
     verify-spec:
       type: task_result_assert
       task-result-assertions:
-        - {pointer: /summary, op: non_empty}
-        - {pointer: /files_read, op: min_items, value: 1}
+        - { pointer: /summary, op: non_empty }
+        - { pointer: /files_read, op: min_items, value: 1 }
 
   - id: critic-review
     agent: critic
@@ -100,4 +100,4 @@ tasks:
     verify-spec:
       type: task_result_assert
       task-result-assertions:
-        - {pointer: /summary, op: non_empty}
+        - { pointer: /summary, op: non_empty }

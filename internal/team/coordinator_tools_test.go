@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -242,6 +243,39 @@ func TestRunAgentsToolInfoPinsFreshInitialDelegationSchema(t *testing.T) {
 	}
 	if !strings.Contains(info.Description, "initial_pending") {
 		t.Fatalf("fresh initial agent tool description omitted canonical phase: %q", info.Description)
+	}
+}
+
+func TestRunAgentsToolInfoCompactsRuntimeWorkflowSchema(t *testing.T) {
+	c := &Coordinator{
+		session: &TeamSession{Config: agent.TeamConfig{}, Agents: map[string]*agent.AgentDef{
+			"reviewer": {Name: "reviewer", Role: "worker"},
+		}},
+		taskTracker:   NewTaskTracker(),
+		sessionData:   NewSession(),
+		phaseWorkflow: &runtimeWorkflow{enabled: true},
+	}
+
+	info := (&runAgentsTool{coordinator: c}).Info()
+	tasks := info.Parameters["tasks"].(map[string]any)
+	items := tasks["items"].(map[string]any)
+	properties := items["properties"].(map[string]any)
+	for _, required := range []string{"agent", "goal"} {
+		if _, exists := properties[required]; !exists {
+			t.Fatalf("workflow schema omitted required field %q", required)
+		}
+	}
+	for _, forbidden := range []string{"execution", "verify_spec", "fan_out", "fact_refs", "context_files"} {
+		if _, exists := properties[forbidden]; exists {
+			t.Fatalf("workflow schema exposed recursive runtime field %q", forbidden)
+		}
+	}
+	encoded, err := json.Marshal(info.Parameters)
+	if err != nil {
+		t.Fatalf("marshal workflow tool schema: %v", err)
+	}
+	if len(encoded) >= 12000 {
+		t.Fatalf("workflow tool schema = %d bytes, want compact provider-facing schema", len(encoded))
 	}
 }
 

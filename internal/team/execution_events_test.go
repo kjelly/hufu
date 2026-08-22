@@ -191,8 +191,8 @@ func TestExecutionEvent_ModelProviderAndArtifacts(t *testing.T) {
 	}
 	var ev2 ExecutionEvent
 	json.Unmarshal(scanner.Bytes(), &ev2)
-	if ev2.Provider != "ollama" { // assuming unqualified defaults to ollama
-		t.Errorf("expected ollama, got %v", ev2.Provider)
+	if ev2.Provider != "local" { // unqualified models use the generic default provider
+		t.Errorf("expected local, got %v", ev2.Provider)
 	}
 }
 
