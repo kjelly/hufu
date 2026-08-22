@@ -137,6 +137,27 @@ func (c *Coordinator) recordNoProgressTasks(count int) {
 	c.metricsMu.Unlock()
 }
 
+// recordNoProgressTaskBatch accounts one validated artifact-backed workset
+// expansion as one bounded delegation unit. Its children are already covered
+// by the manifest/receipt contract; charging each child against the generic
+// blind-delegation limit turns a successful fanout into a false no-progress
+// stop. Unbound tasks retain one unit each.
+func (c *Coordinator) recordNoProgressTaskBatch(tasks []TaskDef) {
+	if c == nil || len(tasks) == 0 {
+		return
+	}
+	worksets := make(map[string]struct{})
+	units := 0
+	for _, task := range tasks {
+		if task.WorksetBinding != nil && task.WorksetBinding.WorksetID != "" {
+			worksets[task.WorksetBinding.WorksetID] = struct{}{}
+			continue
+		}
+		units++
+	}
+	c.recordNoProgressTasks(units + len(worksets))
+}
+
 // noteObjectiveVerifierResult records objective progress when a task verifier
 // transitions from a recorded failure to a pass. A first-ever pass is not a
 // fail→pass transition, and a pass after a pass must not repeatedly extend the

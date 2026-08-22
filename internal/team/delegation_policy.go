@@ -52,13 +52,14 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 		hasDone := make(map[string]bool)
 		hasUnfinished := make(map[string]bool)
 		for _, item := range items {
-			if item != nil {
-				agentName := strings.ToLower(strings.TrimSpace(item.Agent))
-				if item.Status == TaskDone || item.Status == TaskSkipped || (item.Resolution != nil && (item.Resolution.Status == "superseded" || item.Resolution.Status == "reconciled" || item.Resolution.Status == "waived")) {
-					hasDone[agentName] = true
-				} else {
-					hasUnfinished[agentName] = true
-				}
+			if !isPersistedModelWorkerTask(item) {
+				continue
+			}
+			agentName := strings.ToLower(strings.TrimSpace(item.Agent))
+			if isSuccessfulWorkerExecution(item) || item.Status == TaskSkipped || (item.Resolution != nil && (item.Resolution.Status == "superseded" || item.Resolution.Status == "reconciled" || item.Resolution.Status == "waived")) {
+				hasDone[agentName] = true
+			} else {
+				hasUnfinished[agentName] = true
 			}
 		}
 		var duplicates []string
@@ -81,7 +82,7 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 		protected[strings.ToLower(strings.TrimSpace(name))] = true
 	}
 	for _, item := range items {
-		if item != nil && item.Status == TaskDone && protected[strings.ToLower(item.Agent)] {
+		if isSuccessfulWorkerExecution(item) && protected[strings.ToLower(item.Agent)] {
 			successful[strings.ToLower(item.Agent)] = true
 		}
 	}
@@ -97,6 +98,31 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 			formatAgentNames(duplicates)))
 	}
 	return c.validateContextFilePolicy(tasks)
+}
+
+// isSuccessfulWorkerExecution identifies the persisted task shape that owns a
+// protected worker's one-shot delegation slot. Runtime-owned action and
+// structured coordinator tasks may be assigned the same nominal agent, but
+// they do not execute that worker model and therefore must not consume its
+// slot. The shape checks are intentionally based only on durable Todo fields so
+// replay and resume make the same policy decision as the original run.
+func isSuccessfulWorkerExecution(item *TodoItem) bool {
+	if !isPersistedModelWorkerTask(item) || item.Status != TaskDone {
+		return false
+	}
+	return true
+}
+
+// isPersistedModelWorkerTask identifies the durable Todo shape that represents
+// an actual model-worker execution. Runtime-owned actions, structured
+// coordinator tasks, and runtime-sourced typed results may share a nominal
+// agent with a worker, but their statuses and resolutions must not affect
+// worker delegation policy decisions.
+func isPersistedModelWorkerTask(item *TodoItem) bool {
+	if item == nil || item.Action != nil || len(item.Execution.Steps) > 0 {
+		return false
+	}
+	return item.TypedResult == nil || !strings.EqualFold(strings.TrimSpace(item.TypedResult.Source), "runtime")
 }
 
 // validateTaskGoalInvariants rejects a selected task goal before TODO creation

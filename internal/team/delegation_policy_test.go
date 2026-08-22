@@ -2,6 +2,9 @@ package team
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -453,6 +456,306 @@ func TestDelegationPolicyRejectsRedispatchAfterSuccessfulTerminalResult(t *testi
 	}
 	if got := c.taskTracker.TodoList().Items()[0].Status; got != TaskDone {
 		t.Fatalf("successful task status changed to %s", got)
+	}
+}
+
+func TestDelegationPolicyTaskDoneRealWorkerConsumesSlotWithoutTypedResultStatus(t *testing.T) {
+	cases := map[string]func(*TodoItem){
+		"nil typed result": func(*TodoItem) {},
+		"recovered protocol with empty status": func(item *TodoItem) {
+			item.TypedResult = &TaskResult{Agent: item.Agent, Source: "recovered_protocol"}
+		},
+	}
+
+	for name, configure := range cases {
+		t.Run(name, func(t *testing.T) {
+			for _, policyRepair := range []bool{false, true} {
+				t.Run(fmt.Sprintf("policy_repair=%t", policyRepair), func(t *testing.T) {
+					tracker := NewTaskTracker()
+					item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "completed review"}})[0]
+					configure(item)
+					tracker.TodoList().UpdateStatus(item.ID, TaskDone, "worker completed")
+
+					c := &Coordinator{
+						taskTracker: tracker,
+						session: &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
+							NoRedispatchAfterSuccess: []string{"reviewer"},
+						}}},
+					}
+					if policyRepair {
+						c.coordinatorPolicyRepairsAttempt.Store(1)
+					}
+
+					_, err := c.ExecuteTasks(context.Background(), []TaskDef{{Agent: "reviewer", Goal: "duplicate review"}})
+					if err == nil {
+						t.Fatal("duplicate dispatch was accepted")
+					}
+					if got := len(tracker.TodoList().Items()); got != 1 {
+						t.Fatalf("duplicate dispatch created %d TODOs, want 1", got)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestDelegationPolicyRuntimeOwnedSuccessDoesNotConsumeProtectedWorkerSlot(t *testing.T) {
+	cases := map[string]func(*TodoItem){
+		"action": func(item *TodoItem) {
+			item.Action = &Action{Capability: "structured-actions", Type: "produce-workset"}
+		},
+		"structured coordinator": func(item *TodoItem) {
+			item.Execution.Steps = []ExecutionStep{{ID: "produce", Tool: "producer", Effect: ExecutionEffectProduce}}
+		},
+		"runtime result": func(item *TodoItem) {
+			item.TypedResult.Source = "runtime"
+		},
+	}
+
+	for name, configure := range cases {
+		t.Run(name, func(t *testing.T) {
+			for _, policyRepair := range []bool{false, true} {
+				t.Run(fmt.Sprintf("policy_repair=%t", policyRepair), func(t *testing.T) {
+					tracker := NewTaskTracker()
+					item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "produce workset"}})[0]
+					item.TypedResult = &TaskResult{Agent: "reviewer", Status: TaskResultStatusSuccess, Source: "submitted"}
+					configure(item)
+					tracker.TodoList().UpdateStatus(item.ID, TaskDone, "runtime completed")
+					c := &Coordinator{
+						taskTracker: tracker,
+						session:     &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{NoRedispatchAfterSuccess: []string{"reviewer"}}}},
+					}
+					if policyRepair {
+						c.coordinatorPolicyRepairsAttempt.Store(1)
+					}
+					if err := c.validateDelegationPolicy([]TaskDef{{Agent: "reviewer", Goal: "review workset"}}); err != nil {
+						t.Fatalf("runtime-owned task consumed protected worker slot: %v", err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestDelegationPolicyRepairIgnoresRuntimeOwnedTaskStates(t *testing.T) {
+	resolutionStatuses := map[string]TaskStatus{
+		"done":       TaskDone,
+		"skipped":    TaskSkipped,
+		"failed":     TaskError,
+		"superseded": TaskError,
+		"reconciled": TaskError,
+		"waived":     TaskError,
+	}
+	shapes := map[string]func(*TodoItem){
+		"action": func(item *TodoItem) {
+			item.Action = &Action{Capability: "structured-actions", Type: "produce-workset"}
+		},
+		"structured coordinator": func(item *TodoItem) {
+			item.Execution.Steps = []ExecutionStep{{ID: "produce", Tool: "producer", Effect: ExecutionEffectProduce}}
+		},
+		"runtime result": func(item *TodoItem) {
+			item.TypedResult = &TaskResult{Agent: item.Agent, Status: TaskResultStatusFailed, Source: "runtime"}
+		},
+	}
+
+	for shape, configure := range shapes {
+		for resolution, status := range resolutionStatuses {
+			t.Run(fmt.Sprintf("%s/%s", shape, resolution), func(t *testing.T) {
+				tracker := NewTaskTracker()
+				item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "runtime task"}})[0]
+				configure(item)
+				item.PlanTaskID = "produce-workset"
+				item.ContractID = "produce-workset"
+				item.ParentID = "workflow-parent"
+				item.Status = status
+				if resolution != "done" && resolution != "skipped" && resolution != "failed" {
+					item.Resolution = &TaskResolution{Status: resolution, ResolvedBy: "runtime"}
+				}
+
+				c := &Coordinator{
+					taskTracker: tracker,
+					session:     &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{NoRedispatchAfterSuccess: []string{"reviewer"}}}},
+				}
+				c.coordinatorPolicyRepairsAttempt.Store(1)
+				if err := c.validateDelegationPolicy([]TaskDef{{Agent: "reviewer", Goal: "review workset"}}); err != nil {
+					t.Fatalf("runtime-owned %s task affected policy repair: %v", shape, err)
+				}
+			})
+		}
+	}
+}
+
+func TestDelegationPolicyRepairRealWorkerStillBlocksRuntimeMixedRedispatch(t *testing.T) {
+	tracker := NewTaskTracker()
+	worker := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "completed review"}})[0]
+	worker.TypedResult = &TaskResult{Agent: worker.Agent, Status: TaskResultStatusSuccess, Source: "submitted"}
+	tracker.TodoList().UpdateStatus(worker.ID, TaskDone, "worker completed")
+
+	runtimeItem := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "runtime follow-up"}})[0]
+	runtimeItem.Execution.Steps = []ExecutionStep{{ID: "produce", Tool: "producer", Effect: ExecutionEffectProduce}}
+	runtimeItem.Status = TaskError
+
+	c := &Coordinator{
+		taskTracker: tracker,
+		session:     &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{NoRedispatchAfterSuccess: []string{"reviewer"}}}},
+	}
+	c.coordinatorPolicyRepairsAttempt.Store(1)
+	if err := c.validateDelegationPolicy([]TaskDef{{Agent: "reviewer", Goal: "redispatch review"}}); err == nil || !strings.Contains(err.Error(), "completed workers may not be redispatched") {
+		t.Fatalf("mixed worker/runtime redispatch error = %v, want completed-worker rejection", err)
+	}
+}
+
+type delegationWorksetActionProvider struct{}
+
+func (delegationWorksetActionProvider) Validate(Action) error { return nil }
+
+func (delegationWorksetActionProvider) Execute(ctx context.Context, _ Action) (interface{}, error) {
+	env := ActionEnvironmentFromContext(ctx)
+	if err := os.WriteFile(filepath.Join(env.Workspace, "workset.json"), []byte(`{"schema_version":1,"items":[{"key":"one","bindings":{"name":"one"}},{"key":"two","bindings":{"name":"two"}},{"key":"three","bindings":{"name":"three"}}]}`), 0o644); err != nil {
+		return nil, err
+	}
+	return ActionResult{Artifacts: []ArtifactRef{{Path: "workset.json", Kind: "workset_manifest", Description: "workset-manifest"}}}, nil
+}
+
+func TestDelegationPolicyAdmitsRuntimeProducerFanOutAndPreservesFinish(t *testing.T) {
+	const worksetSize = 3
+	session := &TeamSession{
+		Workspace: t.TempDir(),
+		Config: agent.TeamConfig{
+			Name:         "delegation-workset-policy",
+			Workflow:     agent.WorkflowConfig{Phases: []string{"prepare", "audit", "execute", "verify"}},
+			Capabilities: agent.CapabilityConfig{Required: []string{"structured-actions"}},
+			Delegation:   agent.DelegationPolicy{NoRedispatchAfterSuccess: []string{"reviewer"}},
+			Verification: agent.VerificationConfig{Required: true},
+		},
+		Agents: map[string]*agent.AgentDef{
+			"preparer": {Name: "preparer", Role: "worker"},
+			"auditor":  {Name: "auditor", Role: "worker"},
+			"reviewer": {Name: "reviewer", Role: "worker"},
+			"verifier": {Name: "verifier", Role: "worker"},
+		},
+	}
+	session.ProviderRegistry = NewProviderRegistry()
+	session.ProviderRegistry.Register("structured-actions", delegationWorksetActionProvider{})
+	session.ContractTasks = []TaskDef{
+		{ID: "prepare", Agent: "preparer", Phase: PhasePrepare},
+		{ID: "audit", Agent: "auditor", Phase: PhaseAudit},
+		{ID: "produce-workset", Agent: "reviewer", Phase: PhaseExecute, Optional: true, Action: &Action{Capability: "structured-actions", Type: "produce-workset"}},
+		{ID: "review-workset", Agent: "reviewer", Phase: PhaseExecute, VerifySpec: &VerificationSpec{Type: VerifyCommandExit, Command: "true"}},
+		{ID: "verify", Agent: "verifier", Phase: PhaseVerify, VerifySpec: &VerificationSpec{Type: VerifyCommandExit, Command: "true"}},
+	}
+	w, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.observe([]*TodoItem{{Agent: "preparer", ContractID: "prepare", Phase: PhasePrepare, Status: TaskDone}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.observe([]*TodoItem{{Agent: "auditor", ContractID: "audit", Phase: PhaseAudit, Status: TaskDone}}); err != nil {
+		t.Fatal(err)
+	}
+
+	tracker := NewTaskTracker()
+	c := &Coordinator{session: session, taskTracker: tracker, phaseWorkflow: w, executionRunID: "run-delegation-policy", sessionData: NewSession()}
+	producer := TaskDef{ID: "produce-workset", Agent: "reviewer", Goal: "produce workset", Phase: PhaseExecute, ContractID: "produce-workset", Action: session.ContractTasks[2].Action}
+	producerItem := tracker.TodoList().AddBatch([]TodoSpec{{PlanTaskID: producer.ID, Phase: producer.Phase, ContractID: producer.ContractID, Action: producer.Action, Agent: producer.Agent, Desc: producer.Goal}})[0]
+	if _, err := c.executeTask(context.Background(), producer, producerItem.ID); err != nil {
+		t.Fatalf("runtime producer action failed: %v", err)
+	}
+	if producerItem.TypedResult == nil || producerItem.TypedResult.Source != "runtime" {
+		t.Fatalf("producer result = %#v, want runtime-owned result", producerItem.TypedResult)
+	}
+	if err := w.observe([]*TodoItem{producerItem}); err != nil {
+		t.Fatal(err)
+	}
+
+	review := TaskDef{
+		ID: "review-workset", Agent: "reviewer", Goal: "review workset", Phase: PhaseExecute, ContractID: "review-workset",
+		FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "produce-workset", Artifact: "workset-manifest"}, GoalTemplate: "review {name}"},
+	}
+	expanded, err := c.expandFanOutTasks([]TaskDef{review})
+	if err != nil {
+		t.Fatalf("expand review workset: %v", err)
+	}
+	if len(expanded) != worksetSize {
+		t.Fatalf("expanded children = %d, want %d", len(expanded), worksetSize)
+	}
+	if err := c.validateDelegationPolicy(expanded); err != nil {
+		t.Fatalf("first review dispatch rejected after runtime producer: %v", err)
+	}
+	for _, child := range expanded {
+		if child.WorksetBinding == nil || child.WorksetBinding.ParentTaskID != review.ID {
+			t.Fatalf("child binding = %#v, want parent %q", child.WorksetBinding, review.ID)
+		}
+	}
+
+	ids := tracker.TodoList().ReserveIDs(len(expanded))
+	receipts, err := buildWorksetReceipts(expanded, ids, c.executionRunID)
+	if err != nil {
+		t.Fatalf("build workset receipt: %v", err)
+	}
+	worksetReceipt := receipts[expanded[0].WorksetBinding.WorksetID]
+	childItems := make([]*TodoItem, 0, len(expanded))
+	for index, child := range expanded {
+		item := todoItemFromSpec(TodoSpec{
+			PlanTaskID: child.ID, Phase: child.Phase, ContractID: child.ContractID, Agent: child.Agent, Desc: child.Goal,
+			WorksetBinding: child.WorksetBinding, VerifySpec: child.VerifySpec,
+		}, ids[index])
+		childItems = append(childItems, item)
+	}
+	tracker.TodoList().AddReserved(childItems)
+	for index, item := range childItems {
+		if item.ID != ids[index] {
+			t.Fatalf("child ID = %q, want reserved %q", item.ID, ids[index])
+		}
+		if index == 0 {
+			item.WorksetReceipt = worksetReceipt
+		}
+		item.TypedResult = &TaskResult{TaskID: item.ID, Agent: item.Agent, Status: TaskResultStatusSuccess, Source: "submitted", Summary: "review complete"}
+		item.VerifyResult = &VerificationResult{ExitCode: 0}
+		tracker.TodoList().UpdateStatus(item.ID, TaskDone, "review complete")
+	}
+	if states := c.WorksetGroupStates(); len(states) != 1 || states[0].Expected != worksetSize || states[0].Completed != worksetSize || states[0].Verified != worksetSize || states[0].State != "complete" {
+		t.Fatalf("workset state = %#v, want %d/%d verified complete", states, worksetSize, worksetSize)
+	}
+	if err := w.observe(childItems); err != nil {
+		t.Fatalf("workflow execute/verify transition: %v", err)
+	}
+	if got := w.State(); got != PhaseVerify {
+		t.Fatalf("workflow state after fan-out = %s, want VERIFY", got)
+	}
+	acceptance := VerificationSpec{Type: VerifyWorksetComplete, WorksetSourceTask: review.ID, WorksetRequireTerminal: true, WorksetRequireVerified: true, WorksetAcceptedStatuses: []string{TaskResultStatusSuccess}}
+	c.acceptanceSpec = &AcceptanceSpec{Verifications: []VerificationSpec{acceptance}}
+	verified, err := c.executeWorksetCompleteVerification(context.Background(), acceptance)
+	if err != nil || verified == nil || verified.ExitCode != 0 {
+		t.Fatalf("workset acceptance verification = %#v, err=%v", verified, err)
+	}
+
+	verifyItem := tracker.TodoList().AddBatch([]TodoSpec{{PlanTaskID: "verify", Phase: PhaseVerify, ContractID: "verify", Agent: "verifier", Desc: "verify workset", VerifySpec: session.ContractTasks[4].VerifySpec}})[0]
+	verifyItem.TypedResult = &TaskResult{TaskID: verifyItem.ID, Agent: verifyItem.Agent, Status: TaskResultStatusSuccess, Source: "submitted", Summary: "verified"}
+	verifyItem.VerifyResult = &VerificationResult{ExitCode: 0}
+	tracker.TodoList().UpdateStatus(verifyItem.ID, TaskDone, "verified")
+	if err := w.observe([]*TodoItem{verifyItem}); err != nil {
+		t.Fatalf("workflow verify success: %v", err)
+	}
+
+	beforeSecondDispatch := len(tracker.TodoList().Items())
+	expandedAgain, err := c.expandFanOutTasks([]TaskDef{review})
+	if err != nil {
+		t.Fatalf("re-expand review workset: %v", err)
+	}
+	if err := c.validateDelegationPolicy(expandedAgain); err == nil || !strings.Contains(err.Error(), "may not be redispatched") {
+		t.Fatalf("second review dispatch error = %v, want no-redispatch rejection", err)
+	}
+	if got := len(tracker.TodoList().Items()); got != beforeSecondDispatch {
+		t.Fatalf("rejected second review dispatch created %d new TODOs", got-beforeSecondDispatch)
+	}
+	response, err := (&finishTool{coordinator: c}).Run(context.Background(), fantasy.ToolCall{Input: `{"response":"workset reviewed"}`})
+	if err != nil || response.IsError || !c.finishCalled.Load() {
+		t.Fatalf("finish response = %#v, err=%v, finish_called=%v", response, err, c.finishCalled.Load())
 	}
 }
 

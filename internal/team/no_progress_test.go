@@ -598,6 +598,61 @@ func TestNoProgressAccountingBoundaries(t *testing.T) {
 	}
 }
 
+func TestNoProgressAccountingTreatsValidatedWorksetAsOneBoundedUnit(t *testing.T) {
+	c := &Coordinator{}
+	children := make([]TaskDef, 52)
+	for i := range children {
+		children[i] = TaskDef{Agent: "reviewer", WorksetBinding: &WorksetBinding{WorksetID: "workset-52", ItemKey: fmt.Sprintf("item-%d", i)}}
+	}
+	c.recordNoProgressTaskBatch(children)
+	if got := c.noProgressCounters().Tasks; got != 1 {
+		t.Fatalf("validated workset task count = %d, want one bounded expansion unit", got)
+	}
+	if disposition, reason := decideNoProgress(c.noProgressCounters(), NoProgressLimits{MaxTasks: 12}, true); disposition != NoProgressContinue || reason != "" {
+		t.Fatalf("validated workset triggered no-progress: disposition=%s reason=%q", disposition, reason)
+	}
+
+	c = &Coordinator{}
+	blind := make([]TaskDef, 25)
+	for i := range blind {
+		blind[i] = TaskDef{Agent: "reviewer", Goal: fmt.Sprintf("unrelated delegation %d", i)}
+	}
+	c.recordNoProgressTaskBatch(blind)
+	if got := c.noProgressCounters().Tasks; got != len(blind) {
+		t.Fatalf("blind delegation task count = %d, want %d", got, len(blind))
+	}
+	if disposition, reason := decideNoProgress(c.noProgressCounters(), NoProgressLimits{MaxTasks: 12}, true); disposition != NoProgressStop || reason == "" {
+		t.Fatalf("repeated blind delegation lost protection: disposition=%s reason=%q", disposition, reason)
+	}
+}
+
+func TestSchedulerErrorPostconditionPreservesCanonicalDiagnostic(t *testing.T) {
+	c := newNoProgressTestCoordinator(t)
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "bound preflight"}})[0]
+	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskInProgress, "running", ""); err != nil {
+		t.Fatalf("setup task: %v", err)
+	}
+	original := errors.New(`worker tool policy preflight failed: resolved tool "random" is incompatible with the bound artifact policy`)
+	scheduler := newDAGScheduler(c, []TaskDef{{Agent: item.Agent, Goal: item.Desc}}, []*TodoItem{item}, nil)
+	scheduler.states[0] = TaskInProgress
+	scheduler.inProgress = 1
+	scheduler.handleEvent(context.Background(), agentTaskResult{idx: 0, todoID: item.ID, err: original})
+	current := c.taskTracker.TodoList().Items()[0]
+	if current.Status != TaskError {
+		t.Fatalf("canonical status = %s, want error", current.Status)
+	}
+	if scheduler.states[0] != TaskError {
+		t.Fatalf("scheduler status = %s, want error", scheduler.states[0])
+	}
+	if !strings.Contains(current.Detail, original.Error()) {
+		t.Fatalf("canonical detail = %q, want original diagnostic %q", current.Detail, original)
+	}
+	c.finalizeNormalCompletion()
+	if final := c.taskTracker.TodoList().Items()[0]; final.Status != TaskError || !strings.Contains(final.Detail, original.Error()) {
+		t.Fatalf("finalizer replaced canonical diagnostic: %+v", final)
+	}
+}
+
 func TestAuxiliaryLLMStreamsOverrideWorkerReceiptMarker(t *testing.T) {
 	workerCtx := context.WithValue(context.Background(), llmUsageReceiptExpectedKey{}, true)
 	if llmUsageNeedsDirectNoProgressAccounting(workerCtx) {

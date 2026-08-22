@@ -21,6 +21,33 @@ type semSlot struct {
 	released bool
 }
 
+// budgetAdmissionError is emitted when a task was queued behind a concurrency
+// permit and the run budget expired before that permit became available. It is
+// distinct from a provider or local tool failure: the task was never invoked.
+type budgetAdmissionError struct{ reason string }
+
+func (e budgetAdmissionError) Error() string {
+	if e.reason == "" {
+		return "task admission refused after run budget was exhausted"
+	}
+	return "task admission refused after run budget was exhausted: " + e.reason
+}
+
+func isBudgetAdmissionError(err error) bool {
+	_, ok := err.(budgetAdmissionError)
+	return ok
+}
+
+func budgetAdmissionErrorFor(c *Coordinator) error {
+	if c == nil {
+		return nil
+	}
+	if exceeded, reason := c.budgetExceeded(); exceeded {
+		return budgetAdmissionError{reason: reason}
+	}
+	return nil
+}
+
 // acquireSem blocks until a slot on ch is available or ctx is done. A nil ch
 // (no limit configured) is always immediately available.
 func acquireSem(ctx context.Context, ch chan struct{}) (semSlot, error) {
@@ -196,6 +223,21 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 			return
 		}
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+		s.launchReady(ctx)
+		return
+	}
+	if res.err != nil {
+		// The scheduler's result is local coordination state. Reconcile every
+		// non-stale error with the canonical todo before applying DAG routing so
+		// early failures (semaphore/provider/preflight) cannot strand an
+		// in_progress task for the finalizer to overwrite synthetically.
+		c.terminalizeTaskErrorIfUnresolved(res.todoID, res.err)
+	}
+	if isBudgetAdmissionError(res.err) {
+		s.results[idx] = res
+		s.states[idx] = TaskError
+		// Continue draining pending siblings so each is explicitly accounted
+		// for by the same budget boundary; none may reach executeTask.
 		s.launchReady(ctx)
 		return
 	}
@@ -571,6 +613,10 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		return
 	}
 	defer teamSlot.release()
+	if err := budgetAdmissionErrorFor(c); err != nil {
+		s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: err, idx: idx}
+		return
+	}
 
 	// Provider-scoped concurrency limit, in addition to the team-wide one
 	// above: a local Ollama model dispatched by many workers is not the same
@@ -595,6 +641,10 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		return
 	}
 	defer provSlot.release()
+	if err := budgetAdmissionErrorFor(c); err != nil {
+		s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: err, idx: idx}
+		return
+	}
 
 	// In-flight dedup: the first task with a given key runs; identical
 	// concurrent tasks release their slot and wait to share its result.
