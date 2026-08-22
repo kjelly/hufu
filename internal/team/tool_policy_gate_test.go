@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -28,6 +30,12 @@ type recordingTool struct {
 	lastInput string
 	resp      fantasy.ToolResponse
 }
+
+type spoofedArtifactPolicyTool struct {
+	recordingTool
+}
+
+func (t *spoofedArtifactPolicyTool) ArtifactPathPolicyAware() bool { return true }
 
 func (t *recordingTool) Info() fantasy.ToolInfo { return fantasy.ToolInfo{Name: t.name} }
 
@@ -150,6 +158,206 @@ func TestPolicyGateDenialIsRecoverable(t *testing.T) {
 	}
 	if inner.ran {
 		t.Error("denied tool must not execute")
+	}
+}
+
+func TestBoundArtifactScopeFailsClosedForConfiguredExternalTool(t *testing.T) {
+	for _, name := range []string{"filesystem__read_file", "declared_file_read"} {
+		t.Run(name, func(t *testing.T) {
+			c := gateTestCoordinator()
+			inner := &recordingTool{name: name}
+			gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
+			ctx := tools.SetToolsAllowed(context.Background(), []string{name})
+			ctx = context.WithValue(ctx, tools.ArtifactPathPolicyKey, tools.ArtifactPathPolicy{
+				FailClosedForUnsupported: true,
+			})
+			response, err := gated.Run(ctx, fantasy.ToolCall{
+				Name:  name,
+				Input: `{"file_path":"logs/artifacts/data/opaque-id"}`,
+			})
+			if err != nil || !response.IsError || inner.ran {
+				t.Fatalf("external tool response=%+v err=%v ran=%v, want fail-closed denial", response, err, inner.ran)
+			}
+			if !strings.Contains(response.Content, "centralized artifact-path enforcement") {
+				t.Fatalf("external tool denial=%q", response.Content)
+			}
+		})
+	}
+}
+
+func TestBoundArtifactScopeDeniesShellToolsBeforeExecution(t *testing.T) {
+	for _, name := range []string{"bash", "sudo", "wait_for"} {
+		t.Run(name, func(t *testing.T) {
+			c := gateTestCoordinator()
+			inner := &recordingTool{name: name}
+			gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
+			ctx := tools.SetToolsAllowed(context.Background(), []string{name})
+			ctx = context.WithValue(ctx, tools.ArtifactPathPolicyKey, tools.ArtifactPathPolicy{
+				FailClosedForUnsupported: true,
+			})
+			response, err := gated.Run(ctx, fantasy.ToolCall{
+				Name:  name,
+				Input: `{"command":"artifact=logs/artifacts/data/sibling; cat \"$artifact\""}`,
+			})
+			if err != nil || !response.IsError || inner.ran {
+				t.Fatalf("shell tool response=%+v err=%v ran=%v, want fail-closed denial", response, err, inner.ran)
+			}
+			if !strings.Contains(response.Content, "centralized artifact-path enforcement") {
+				t.Fatalf("shell tool denial=%q", response.Content)
+			}
+		})
+	}
+}
+
+func TestBoundArtifactScopeRequiresConcreteToolCapability(t *testing.T) {
+	ctx := context.WithValue(context.Background(), tools.ArtifactPathPolicyKey, tools.ArtifactPathPolicy{
+		FailClosedForUnsupported: true,
+	})
+	for _, name := range []string{"view", "grep", "ls"} {
+		t.Run(name, func(t *testing.T) {
+			inner := &recordingTool{name: name}
+			if denial := artifactScopeToolDenial(ctx, name, inner); denial == "" {
+				t.Fatalf("arbitrary tool named %q was treated as artifact-policy-aware", name)
+			}
+		})
+	}
+	for _, tool := range []fantasy.AgentTool{tools.NewViewTool(), tools.NewGrepTool(), tools.NewGlobTool(), tools.NewLsTool()} {
+		if denial := artifactScopeToolDenial(ctx, tool.Info().Name, tool); denial != "" {
+			t.Fatalf("trusted built-in %q was denied: %s", tool.Info().Name, denial)
+		}
+	}
+	mcpServer := mcp.NewAgentMCPServer("worker", map[string]agent.MCPToolConfig{
+		"view": {Cmd: "cat", Desc: "read a file"},
+	}, "bash")
+	mcpTools := mcpServer.RegisterTools("bash", "bash", "bash")
+	if len(mcpTools) != 1 {
+		t.Fatalf("MCP test setup returned %d tools, want 1", len(mcpTools))
+	}
+	if denial := artifactScopeToolDenial(ctx, "view", mcpTools[0]); denial == "" {
+		t.Fatal("MCP tool named view was treated as artifact-policy-aware")
+	}
+}
+
+func TestBoundArtifactScopeDeniesSpoofedPublicCapability(t *testing.T) {
+	c := gateTestCoordinator()
+	inner := &spoofedArtifactPolicyTool{recordingTool: recordingTool{name: "view"}}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
+	ctx := context.WithValue(context.Background(), tools.ArtifactPathPolicyKey, tools.ArtifactPathPolicy{
+		FailClosedForUnsupported: true,
+	})
+	response, err := gated.Run(ctx, fantasy.ToolCall{
+		Name:  "view",
+		Input: `{"file_path":"logs/artifacts/data/opaque-id"}`,
+	})
+	if err != nil || !response.IsError || inner.ran {
+		t.Fatalf("spoofed capability response=%+v err=%v ran=%v, want fail-closed denial", response, err, inner.ran)
+	}
+}
+
+func TestBoundArtifactScopeAllowsAuthenticRuntimeProtocolResult(t *testing.T) {
+	c := gateTestCoordinator()
+	c.session.Workspace = t.TempDir()
+	c.executionRunID = "run-bound-result"
+	c.taskTracker = NewTaskTracker()
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer"}})[0]
+	resultTool := &submitResultTool{coordinator: c, todoID: item.ID}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{resultTool})[0]
+	ctx := occurrenceTestContext(c, item.ID, 1)
+	ctx = context.WithValue(ctx, todoIDKey{}, item.ID)
+	ctx = tools.SetToolsAllowed(ctx, []string{submitResultToolName})
+	ctx = context.WithValue(ctx, tools.ArtifactPathPolicyKey, tools.ArtifactPathPolicy{FailClosedForUnsupported: true})
+	response, err := gated.Run(ctx, fantasy.ToolCall{
+		Name:  submitResultToolName,
+		Input: `{"status":"success","summary":"review complete","files_read":[{"path":"internal/team/tool_policy_gate.go","purpose":"policy"}],"findings":[{"category":"runtime","summary":"bounded result accepted"}]}`,
+	})
+	if err != nil || response.IsError {
+		t.Fatalf("authentic bound submit_result response=%#v err=%v", response, err)
+	}
+	stored := c.GetTaskResult(item.ID)
+	if stored == nil || stored.Summary != "review complete" || len(stored.FilesRead) != 1 || len(stored.Findings) != 1 {
+		t.Fatalf("stored bound result=%#v", stored)
+	}
+}
+
+func TestBoundArtifactScopeAllowsAuthenticRuntimeSubmitPlan(t *testing.T) {
+	c := gateTestCoordinator()
+	c.taskTracker = NewTaskTracker()
+	c.pendingPlans = make(map[string]*PlanEntry)
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer"}})[0]
+	planTool := &submitPlanTool{coordinator: c, todoID: item.ID}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{planTool})[0]
+	ctx := context.WithValue(context.Background(), todoIDKey{}, item.ID)
+	ctx = context.WithValue(ctx, tools.AgentNameKey, "reviewer")
+	ctx = tools.SetToolsAllowed(ctx, []string{"submit_plan"})
+	ctx = context.WithValue(ctx, tools.ArtifactPathPolicyKey, tools.ArtifactPathPolicy{FailClosedForUnsupported: true})
+	response, err := gated.Run(ctx, fantasy.ToolCall{Name: "submit_plan", Input: `{"plan":"inspect assigned evidence"}`})
+	if err != nil || response.IsError {
+		t.Fatalf("authentic bound submit_plan response=%#v err=%v", response, err)
+	}
+}
+
+func TestBoundArtifactPolicyPreflightRejectsIncompatibleRequiredProtocolTool(t *testing.T) {
+	c := gateTestCoordinator()
+	c.session.Workspace = t.TempDir()
+	c.taskTracker = NewTaskTracker()
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer"}})[0]
+	item.WorksetBinding = &WorksetBinding{WorksetID: "workset-1", ItemKey: "one"}
+	scope := &ArtifactAccessScope{TaskID: item.ID, Attempt: 1}
+	err := c.validateBoundWorkerToolPolicy(ResolvedWorkerTools{
+		Tools: []fantasy.AgentTool{&recordingTool{name: submitResultToolName}},
+	}, TaskDef{Execution: ExecutionContract{RequiresResult: true}}, item.ID, scope)
+	if err == nil || !strings.Contains(err.Error(), "incompatible with the bound artifact policy") {
+		t.Fatalf("incompatible required protocol tool error=%v", err)
+	}
+}
+
+func TestBoundWorksetToolResolutionFiltersOnlyImplicitIncompatibleTools(t *testing.T) {
+	c := &Coordinator{
+		session:     &TeamSession{Config: agent.TeamConfig{Name: "bound-tools"}},
+		coreTools:   agent.BuildAllAgentTools(t.TempDir()),
+		taskTracker: NewTaskTracker(),
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer"}})[0]
+	item.WorksetBinding = &WorksetBinding{WorksetID: "workset-1", ItemKey: "one"}
+	binding := cloneWorksetBinding(item.WorksetBinding)
+	def := &agent.AgentDef{Name: "reviewer", Tools: "view,grep,glob,ls"}
+	task := TaskDef{Agent: def.Name, WorksetBinding: binding, Execution: ExecutionContract{RequiresResult: true}}
+	resultTool := &submitResultTool{coordinator: c, todoID: item.ID}
+
+	resolved, err := (&defaultToolResolver{c: c}).ResolveTaskTools(context.Background(), def, task, []fantasy.AgentTool{resultTool})
+	if err != nil {
+		t.Fatalf("resolve bound reviewer tools: %v", err)
+	}
+	if slices.Contains(resolved.Names, "random") {
+		t.Fatalf("bound reviewer surface includes implicit random: %v", resolved.Names)
+	}
+	if !slices.Contains(resolved.Names, submitResultToolName) {
+		t.Fatalf("bound reviewer surface lost authentic submit_result: %v", resolved.Names)
+	}
+	if err := c.validateBoundWorkerToolPolicy(resolved, task, item.ID, &ArtifactAccessScope{TaskID: item.ID, Attempt: 1}); err != nil {
+		t.Fatalf("bound reviewer surface failed preflight: %v", err)
+	}
+
+	def.Tools = "view,grep,glob,ls,random"
+	explicit, err := (&defaultToolResolver{c: c}).ResolveTaskTools(context.Background(), def, task, []fantasy.AgentTool{resultTool})
+	if err != nil {
+		t.Fatalf("resolve explicit random tools: %v", err)
+	}
+	if !slices.Contains(explicit.Names, "random") {
+		t.Fatalf("explicit random was silently removed: %v", explicit.Names)
+	}
+	if err := c.validateBoundWorkerToolPolicy(explicit, task, item.ID, &ArtifactAccessScope{TaskID: item.ID, Attempt: 1}); err == nil || !strings.Contains(err.Error(), `resolved tool "random" is incompatible`) {
+		t.Fatalf("explicit random preflight error = %v, want fail-closed diagnostic", err)
+	}
+
+	unbound := task
+	unbound.WorksetBinding = nil
+	ordinary, err := (&defaultToolResolver{c: c}).ResolveTaskTools(context.Background(), def, unbound, []fantasy.AgentTool{resultTool})
+	if err != nil {
+		t.Fatalf("resolve unbound reviewer tools: %v", err)
+	}
+	if !slices.Contains(ordinary.Names, "random") {
+		t.Fatalf("unbound reviewer lost convenience random: %v", ordinary.Names)
 	}
 }
 

@@ -97,10 +97,94 @@ func (t *policyGatedTool) invalidBashInputResponse(ctx context.Context, call fan
 	return fantasy.ToolResponse{}, false
 }
 
+func artifactScopeUnsupportedTool(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "bash", "sudo", "wait_for", "lua", "golang", "terminal", "terminal_start", "terminal_write", "terminal_wait", "terminal_reconcile", "ssh", "scp", "create_skill":
+		return true
+	default:
+		return false
+	}
+}
+
+func artifactScopeToolTrusted(inner fantasy.AgentTool) bool {
+	if tools.IsTrustedArtifactPathTool(inner) {
+		return true
+	}
+	// Runtime-owned protocol tools are not internal/tools coreTool values, but
+	// they are still safe to expose under a bound artifact policy: they do not
+	// resolve model paths themselves and their handlers retain their normal
+	// schema, sequence, sink, and provenance checks. The unexported method is a
+	// package-private capability; a caller cannot spoof it from another package.
+	_, ok := inner.(boundArtifactPolicyTool)
+	return ok
+}
+
+// boundArtifactPolicyTool is deliberately sealed to this package. Do not
+// replace it with a public marker or a name check: the bound policy must admit
+// only authentic Hufu-owned protocol handlers alongside trusted core tools.
+type boundArtifactPolicyTool interface {
+	boundArtifactPolicyTool()
+}
+
+func (*submitResultTool) boundArtifactPolicyTool() {}
+func (*submitPlanTool) boundArtifactPolicyTool()   {}
+
+func artifactScopeToolDenial(ctx context.Context, name string, inner fantasy.AgentTool) string {
+	policy, ok := ctx.Value(tools.ArtifactPathPolicyKey).(tools.ArtifactPathPolicy)
+	if !ok || !policy.FailClosedForUnsupported {
+		return ""
+	}
+	// Shell tools remain denied even when their concrete implementation is an
+	// internal core tool: arbitrary shell syntax cannot be safely proven to
+	// respect the artifact boundary.
+	if !artifactScopeUnsupportedTool(name) && artifactScopeToolTrusted(inner) {
+		return ""
+	}
+	return fmt.Sprintf("tool %q is unavailable for a bound workset task because it does not implement centralized artifact-path enforcement; use artifact_ref-aware tools", name)
+}
+
+// validateBoundWorkerToolPolicy checks the concrete final worker surface
+// against the same policy that will be installed for the attempt. This keeps
+// a custom resolver or future tool assembly from handing a bound worker an
+// exposed-but-uncallable required protocol tool.
+func (c *Coordinator) validateBoundWorkerToolPolicy(resolved ResolvedWorkerTools, task TaskDef, todoID string, scope *ArtifactAccessScope) error {
+	if c == nil || scope == nil || c.todoItemByID(todoID) == nil || c.todoItemByID(todoID).WorksetBinding == nil {
+		return nil
+	}
+	policy := tools.ArtifactPathPolicy{
+		BlockedPaths:             c.artifactScopePathCandidates(scope),
+		FailClosedForUnsupported: true,
+	}
+	policyCtx := context.WithValue(context.Background(), tools.ArtifactPathPolicyKey, policy)
+	resultToolPresent := false
+	for _, candidate := range resolved.Tools {
+		if candidate == nil {
+			continue
+		}
+		if resultTool, ok := candidate.(*submitResultTool); ok && resultTool != nil && resultTool.coordinator == c && resultTool.todoID == todoID {
+			resultToolPresent = true
+		}
+		if denial := artifactScopeToolDenial(policyCtx, candidate.Info().Name, candidate); denial != "" {
+			return fmt.Errorf("resolved tool %q is incompatible with the bound artifact policy: %s", candidate.Info().Name, denial)
+		}
+	}
+	if task.Execution.RequiresResult && !resultToolPresent {
+		return fmt.Errorf("required protocol tool %q is missing from the final resolved worker surface", submitResultToolName)
+	}
+	return nil
+}
+
 //nolint:gocyclo // this is the single ordered policy/sequence/receipt gate.
 func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return fantasy.ToolResponse{}, err
+	}
+	if denial := artifactScopeToolDenial(ctx, t.Info().Name, t.inner); denial != "" {
+		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
+			Kind: "policy_denied", ReasonCode: "artifact_scope_unsupported",
+			ToolName: t.Info().Name, ToolCallID: call.ID, Executed: false,
+		})
+		return fantasy.NewTextErrorResponse(denial), nil
 	}
 	if terminalOnly, _ := ctx.Value(workerStepBudgetTerminalOnlyKey{}).(bool); terminalOnly && t.Info().Name != submitResultToolName {
 		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
