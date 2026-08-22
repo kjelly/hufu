@@ -153,25 +153,25 @@ func (r *ModelSpecRegistry) initDefaults() {
 // GlobalModelSpecRegistry returns the process-wide model spec registry used
 // by CalculateContextBudget's callers throughout this package. Exposed so
 // callers outside internal/team (team setup in cmd/hufu) can register
-// runtime-detected specs, e.g. from DetectAndCacheOllamaContextLengths.
+// runtime-detected specs from a provider's model metadata.
 func GlobalModelSpecRegistry() *ModelSpecRegistry {
 	return globalRegistry
 }
 
-// DetectAndCacheOllamaContextLengths probes baseURL's Ollama-native
-// /api/show endpoint for each model in modelIDs and registers its real
+// DetectAndCacheProviderContextLengths probes baseURL's OpenAI-compatible
+// /models endpoint for each model in modelIDs and registers its advertised
 // context length as an override in the global model spec registry, so
 // context-budget accounting reflects the model actually being talked to
 // instead of Hufu's static per-family fallback (spec.md item 2). Only
 // models whose current spec is already flagged estimated are probed —
 // models with an exact hardcoded entry (e.g. "gpt-4o", "claude-3-5-sonnet")
 // are skipped, since those specs are already accurate and probing them
-// would just be a wasted round-trip to a non-Ollama endpoint.
+// would just be a wasted round-trip to the provider.
 //
 // Best-effort and bounded: each probe races against its own timeout, probes
-// run concurrently, and a failed/unreachable/non-Ollama endpoint is silently
+// run concurrently, and a failed or unreachable endpoint is silently
 // skipped per model rather than treated as an error.
-func DetectAndCacheOllamaContextLengths(ctx context.Context, baseURL, apiKey string, modelIDs []string) {
+func DetectAndCacheProviderContextLengths(ctx context.Context, baseURL, apiKey string, modelIDs []string) {
 	seen := make(map[string]bool, len(modelIDs))
 	var wg sync.WaitGroup
 	for _, modelID := range modelIDs {
@@ -186,9 +186,9 @@ func DetectAndCacheOllamaContextLengths(ctx context.Context, baseURL, apiKey str
 		go func(modelID string) {
 			defer wg.Done()
 			_, name := agent.ParseModelProvider(modelID)
-			probeCtx, cancel := context.WithTimeout(ctx, agent.OllamaShowContextTimeout)
+			probeCtx, cancel := context.WithTimeout(ctx, agent.ProviderContextProbeTimeout)
 			defer cancel()
-			length, err := agent.DetectOllamaContextLength(probeCtx, baseURL, apiKey, name)
+			length, err := agent.DetectProviderContextLength(probeCtx, baseURL, apiKey, name)
 			if err != nil || length <= 0 {
 				return
 			}
@@ -199,6 +199,11 @@ func DetectAndCacheOllamaContextLengths(ctx context.Context, baseURL, apiKey str
 		}(modelID)
 	}
 	wg.Wait()
+}
+
+// DetectAndCacheOllamaContextLengths is retained for source compatibility.
+func DetectAndCacheOllamaContextLengths(ctx context.Context, baseURL, apiKey string, modelIDs []string) {
+	DetectAndCacheProviderContextLengths(ctx, baseURL, apiKey, modelIDs)
 }
 
 func (r *ModelSpecRegistry) RegisterSpec(spec ModelContextSpec) {

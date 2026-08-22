@@ -80,7 +80,7 @@ func (p Profile) apply(call *fantasy.AgentCall) {
 type Sidecar struct {
 	mu             sync.Mutex
 	agent          fantasy.Agent
-	provider       *agent.OllamaProvider
+	provider       *agent.OpenAICompatibleProvider
 	modelID        string
 	usageObserver  func(*fantasy.AgentResult)
 	promptPreparer func(context.Context, string, string) (string, error)
@@ -109,7 +109,7 @@ func profilePurpose(profile Profile) string {
 	}
 }
 
-func NewSidecar(ctx context.Context, provider *agent.OllamaProvider, modelID string) (*Sidecar, error) {
+func NewSidecar(ctx context.Context, provider *agent.OpenAICompatibleProvider, modelID string) (*Sidecar, error) {
 	if modelID == "" {
 		return nil, fmt.Errorf("sidecar model ID is empty")
 	}

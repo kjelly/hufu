@@ -125,7 +125,7 @@ type ToolResolver interface {
 
 type ModelRuntime interface {
 	ResolveTaskModel(*agent.AgentDef, TaskDef) (string, error)
-	ProviderFor(string) (*agent.OllamaProvider, error)
+	ProviderFor(string) (*agent.OpenAICompatibleProvider, error)
 }
 
 // RuntimeServices is the constructor-injected bundle for coordinator runtime
@@ -347,7 +347,7 @@ func (r *defaultModelRuntime) ResolveTaskModel(def *agent.AgentDef, task TaskDef
 	return r.c.resolveAgentModel(def, copyTask.Model), nil
 }
 
-func (r *defaultModelRuntime) ProviderFor(modelID string) (*agent.OllamaProvider, error) {
+func (r *defaultModelRuntime) ProviderFor(modelID string) (*agent.OpenAICompatibleProvider, error) {
 	if r == nil || r.c == nil || r.c.providerManager == nil {
 		return nil, fmt.Errorf("model runtime provider is unavailable")
 	}

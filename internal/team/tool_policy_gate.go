@@ -450,7 +450,7 @@ func (c *Coordinator) gatePolicyTools(agentTools []fantasy.AgentTool) []fantasy.
 // tool set assembled somewhere that skipped gatePolicyTools would have no
 // authorization boundary at all now that OnToolCall no longer aborts.
 // TestAgentsAreCreatedThroughTheGatedConstructor enforces the funnel.
-func (c *Coordinator) createGatedAgent(ctx context.Context, provider *agent.OllamaProvider, cfg agent.AgentConfig, agentTools []fantasy.AgentTool) (fantasy.Agent, error) {
+func (c *Coordinator) createGatedAgent(ctx context.Context, provider *agent.OpenAICompatibleProvider, cfg agent.AgentConfig, agentTools []fantasy.AgentTool) (fantasy.Agent, error) {
 	modelConfigured := cfg.Def != nil && cfg.Def.Generation.Model != ""
 	if !modelConfigured && cfg.TeamConfig != nil {
 		modelConfigured = cfg.TeamConfig.Generation.Model != ""

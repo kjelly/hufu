@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,13 +40,13 @@ type GenerationParams struct {
 	TopP        string
 	TopK        string
 	// ReasoningEffort controls how much a reasoning-capable model "thinks"
-	// before answering: high, medium, low, or none. Passed through to
-	// Ollama's OpenAI-compatible reasoning_effort request field.
+	// before answering: high, medium, low, or none. Passed through to the
+	// OpenAI-compatible reasoning_effort request field.
 	ReasoningEffort string
 }
 
-// ValidReasoningEfforts are the reasoning_effort values Ollama's
-// OpenAI-compatible endpoint accepts.
+// ValidReasoningEfforts are the common reasoning_effort values accepted by
+// OpenAI-compatible reasoning endpoints.
 var ValidReasoningEfforts = map[string]bool{
 	"high":   true,
 	"medium": true,
@@ -65,11 +64,10 @@ type ProviderCapabilities struct {
 	ReasoningEffort bool
 }
 
-// OpenAICompatCapabilities describes what OllamaProvider (backed by
-// Fantasy's openaicompat provider, the only wire protocol Hufu currently
-// speaks — see NewOllamaProvider) actually forwards. Ollama's
-// OpenAI-compatible /v1/chat/completions endpoint has no top_k field but
-// does support reasoning_effort.
+// OpenAICompatCapabilities describes the parameters Hufu forwards through
+// Fantasy's OpenAI-compatible provider. OpenAI-compatible local servers
+// commonly accept reasoning_effort, but top_k is not part of the shared
+// chat-completions request contract.
 var OpenAICompatCapabilities = ProviderCapabilities{TopK: false, ReasoningEffort: true}
 
 var unsupportedSamplerWarnSeen sync.Map
@@ -82,7 +80,7 @@ func warnUnsupportedSamplerOnce(agentName, param string) {
 	if _, loaded := unsupportedSamplerWarnSeen.LoadOrStore(key, struct{}{}); loaded {
 		return
 	}
-	log.Printf("warning: agent %q configures %s, but Hufu's OpenAI-compatible provider (Ollama) does not forward it to the backend — the setting has no effect", agentName, param)
+	log.Printf("warning: agent %q configures %s, but Hufu's OpenAI-compatible provider does not forward it to the backend — the setting has no effect", agentName, param)
 }
 
 type MCPInputConfig struct {
@@ -650,54 +648,81 @@ type AcceptanceCriterion struct {
 	Verify    VerificationSpec `yaml:"verify" json:"verify"`
 }
 
-type OllamaProvider struct {
-	provider fantasy.Provider
-	baseURL  string
-	apiKey   string
-	name     string
-	proxyURL string
-	proxyMu  sync.RWMutex
+// OpenAICompatibleProvider is a provider backed by an OpenAI-compatible
+// /v1/chat/completions endpoint. It deliberately has no vendor-specific
+// behavior, so it can connect to Ollama, Lemonade, llama.cpp, LM Studio,
+// vLLM, or another compatible local server.
+type OpenAICompatibleProvider struct {
+	provider        fantasy.Provider
+	baseURL         string
+	apiKey          string
+	name            string
+	defaultProvider bool
+	proxyURL        string
+	proxyMu         sync.RWMutex
 }
 
-func NewOllamaProvider(baseURL, apiKey, name string) (*OllamaProvider, error) {
+func NewOpenAICompatibleProvider(baseURL, apiKey, name string) (*OpenAICompatibleProvider, error) {
 	if baseURL == "" {
 		baseURL = config.DefaultProviderURL
 	}
-	if apiKey == "" {
-		apiKey = "ollama"
-	}
 	if name == "" {
-		name = "ollama"
+		name = "local"
 	}
-	provider, err := openaicompat.New(
+	providerOptions := []openaicompat.Option{
 		openaicompat.WithBaseURL(baseURL),
-		openaicompat.WithAPIKey(apiKey),
 		openaicompat.WithName(name),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Ollama provider: %w", err)
 	}
-	return &OllamaProvider{provider: provider, baseURL: baseURL, apiKey: apiKey, name: name}, nil
+	if apiKey != "" {
+		providerOptions = append(providerOptions, openaicompat.WithAPIKey(apiKey))
+	}
+	provider, err := openaicompat.New(providerOptions...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create OpenAI-compatible provider: %w", err)
+	}
+	return &OpenAICompatibleProvider{provider: provider, baseURL: baseURL, apiKey: apiKey, name: name}, nil
 }
 
-func (p *OllamaProvider) LanguageModel(ctx context.Context, modelID string) (fantasy.LanguageModel, error) {
-	model := strings.TrimPrefix(modelID, p.name+"/")
+// OllamaProvider is retained as a source-compatible alias for integrations
+// that used the old exported name. New code should use
+// OpenAICompatibleProvider.
+type OllamaProvider = OpenAICompatibleProvider
+
+// NewOllamaProvider is retained for source compatibility. It now creates the
+// same vendor-neutral OpenAI-compatible provider as NewOpenAICompatibleProvider.
+func NewOllamaProvider(baseURL, apiKey, name string) (*OpenAICompatibleProvider, error) {
+	return NewOpenAICompatibleProvider(baseURL, apiKey, name)
+}
+
+func (p *OpenAICompatibleProvider) LanguageModel(ctx context.Context, modelID string) (fantasy.LanguageModel, error) {
+	model := p.modelName(modelID)
 	baseURL, proxied := p.effectiveBaseURL()
 	if !proxied {
 		return p.provider.LanguageModel(ctx, model)
 	}
-	proxyProvider, err := NewOllamaProvider(baseURL, p.apiKey, p.name)
+	proxyProvider, err := NewOpenAICompatibleProvider(baseURL, p.apiKey, p.name)
 	if err != nil {
 		return nil, err
 	}
 	return proxyProvider.provider.LanguageModel(ctx, model)
 }
 
+func (p *OpenAICompatibleProvider) modelName(modelID string) string {
+	prefix, model := ParseModelProvider(modelID)
+	if prefix == "" || prefix == p.name || p.defaultProvider {
+		if prefix == "" {
+			return modelID
+		}
+		return model
+	}
+	return modelID
+}
+
 // effectiveBaseURL snapshots the endpoint owned by this provider. The
 // invocation proxy is selected while active; otherwise requests use the
 // provider's configured endpoint. baseURL is never mutated when the proxy
 // lifecycle changes.
-func (p *OllamaProvider) effectiveBaseURL() (string, bool) {
+func (p *OpenAICompatibleProvider) effectiveBaseURL() (string, bool) {
 	if p == nil {
 		return "", false
 	}
@@ -709,7 +734,7 @@ func (p *OllamaProvider) effectiveBaseURL() (string, bool) {
 	return p.baseURL, false
 }
 
-func (p *OllamaProvider) setProxyURL(proxyURL string) {
+func (p *OpenAICompatibleProvider) setProxyURL(proxyURL string) {
 	if p == nil {
 		return
 	}
@@ -722,7 +747,7 @@ func (p *OllamaProvider) setProxyURL(proxyURL string) {
 // and returns the available model names (without provider prefix). Returns an
 // error when the endpoint is unreachable or unsupported; callers should treat
 // that as "cannot validate", not as "model missing".
-func (p *OllamaProvider) ListModelNames(ctx context.Context) ([]string, error) {
+func (p *OpenAICompatibleProvider) ListModelNames(ctx context.Context) ([]string, error) {
 	baseURL, _ := p.effectiveBaseURL()
 	url := strings.TrimRight(baseURL, "/") + "/models"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -758,64 +783,63 @@ func (p *OllamaProvider) ListModelNames(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-// OllamaShowContextTimeout bounds a single /api/show probe so an unreachable
-// or slow endpoint cannot stall team startup; callers still control overall
-// deadline via ctx.
-const OllamaShowContextTimeout = 3 * time.Second
+// ProviderContextProbeTimeout bounds a single model metadata probe so an
+// unreachable or slow endpoint cannot stall team startup; callers still
+// control the overall deadline via ctx.
+const ProviderContextProbeTimeout = 3 * time.Second
 
-// DetectOllamaContextLength queries Ollama's native /api/show endpoint (not
-// the OpenAI-compatible /v1 surface most of this package talks to) for
-// modelName's configured context length. baseURL is the OpenAI-compatible
-// base (e.g. "http://localhost:11434/v1"); the trailing /v1 is stripped to
-// reach Ollama's native API root.
-//
-// Ollama reports context length as one of several architecture-prefixed
-// model_info keys (e.g. "qwen2.context_length", "llama.context_length")
-// rather than a single stable field, so this scans for any key ending in
-// ".context_length" and returns the largest value found.
-//
-// Returns 0 with a nil error when no such key is present (e.g. talking to a
-// non-Ollama OpenAI-compatible endpoint) — callers should treat that as "fall
-// back to the static registry", not as failure.
-func DetectOllamaContextLength(ctx context.Context, baseURL, apiKey, modelName string) (int, error) {
-	root := strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/v1")
-	reqBody, err := json.Marshal(map[string]string{"model": modelName})
+// OllamaShowContextTimeout is retained for source compatibility. Context
+// discovery now uses the provider-neutral OpenAI-compatible /models endpoint.
+const OllamaShowContextTimeout = ProviderContextProbeTimeout
+
+// DetectProviderContextLength queries the OpenAI-compatible /models endpoint
+// for modelName's advertised context length. Providers may expose the field
+// as max_context_window (used by Lemonade) or context_length. A provider that
+// omits metadata returns 0, allowing callers to use the static registry.
+func DetectProviderContextLength(ctx context.Context, baseURL, apiKey, modelName string) (int, error) {
+	url := strings.TrimRight(baseURL, "/") + "/models"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return 0, fmt.Errorf("encode /api/show request: %w", err)
+		return 0, fmt.Errorf("build /models request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, root+"/api/show", bytes.NewReader(reqBody))
-	if err != nil {
-		return 0, fmt.Errorf("build /api/show request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	client := &http.Client{Timeout: OllamaShowContextTimeout}
+	client := &http.Client{Timeout: ProviderContextProbeTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("query %s/api/show: %w", root, err)
+		return 0, fmt.Errorf("query %s: %w", url, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("query %s/api/show: status %s", root, resp.Status)
+		return 0, fmt.Errorf("query %s: status %s", url, resp.Status)
 	}
 	var payload struct {
-		ModelInfo map[string]any `json:"model_info"`
+		Data []struct {
+			ID               string `json:"id"`
+			MaxContextWindow int    `json:"max_context_window"`
+			ContextLength    int    `json:"context_length"`
+		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return 0, fmt.Errorf("decode /api/show response: %w", err)
+		return 0, fmt.Errorf("decode /models response: %w", err)
 	}
-	best := 0
-	for key, v := range payload.ModelInfo {
-		if !strings.HasSuffix(key, ".context_length") {
+	for _, model := range payload.Data {
+		if model.ID != modelName {
 			continue
 		}
-		if f, ok := v.(float64); ok && int(f) > best {
-			best = int(f)
+		if model.MaxContextWindow > 0 {
+			return model.MaxContextWindow, nil
 		}
+		return model.ContextLength, nil
 	}
-	return best, nil
+	return 0, nil
+}
+
+// DetectOllamaContextLength is retained for compatibility and now delegates
+// to the provider-neutral /models metadata probe.
+func DetectOllamaContextLength(ctx context.Context, baseURL, apiKey, modelName string) (int, error) {
+	return DetectProviderContextLength(ctx, baseURL, apiKey, modelName)
 }
 
 // ParseModelProvider extracts the provider prefix and model name from a model ID.
@@ -828,11 +852,12 @@ func ParseModelProvider(modelID string) (provider, modelName string) {
 	return "", modelID
 }
 
-// ProviderManager manages multiple OllamaProviders, one per provider prefix.
+// ProviderManager manages multiple OpenAI-compatible providers, one per
+// provider prefix.
 // It lazy-initializes providers on first use based on the model ID prefix.
 type ProviderManager struct {
-	defaultProvider            *OllamaProvider
-	providers                  map[string]*OllamaProvider
+	defaultProvider            *OpenAICompatibleProvider
+	providers                  map[string]*OpenAICompatibleProvider
 	configs                    map[string]config.ProviderConfig
 	mu                         sync.RWMutex
 	invocationProxyLifecycleMu sync.Mutex
@@ -840,16 +865,17 @@ type ProviderManager struct {
 }
 
 func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[string]config.ProviderConfig) (*ProviderManager, error) {
-	defaultProv, err := NewOllamaProvider(defaultURL, defaultKey, "ollama")
+	defaultProv, err := NewOpenAICompatibleProvider(defaultURL, defaultKey, "local")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create default provider: %w", err)
 	}
+	defaultProv.defaultProvider = true
 	if providerConfigs == nil {
 		providerConfigs = make(map[string]config.ProviderConfig)
 	}
 	return &ProviderManager{
 		defaultProvider:   defaultProv,
-		providers:         make(map[string]*OllamaProvider),
+		providers:         make(map[string]*OpenAICompatibleProvider),
 		configs:           providerConfigs,
 		invocationProxies: make(map[string]*providerproxy.Proxy),
 	}, nil
@@ -891,14 +917,14 @@ func (pm *ProviderManager) StartInvocationProxy(ctx context.Context, executable 
 		created[name] = proxy
 		return nil
 	}
-	if err := start("ollama", defaultURL, defaultKey); err != nil {
+	if err := start("local", defaultURL, defaultKey); err != nil {
 		for _, proxy := range created {
 			_ = proxy.Close()
 		}
 		return err
 	}
 	for name, cfg := range configs {
-		if name == "ollama" {
+		if name == "local" || name == "ollama" {
 			continue
 		}
 		url := cfg.ProviderURL
@@ -919,7 +945,7 @@ func (pm *ProviderManager) StartInvocationProxy(ctx context.Context, executable 
 	pm.mu.Lock()
 	pm.invocationProxies = created
 	for name, proxy := range created {
-		if name == "ollama" {
+		if name == "local" {
 			pm.defaultProvider.setProxyURL(proxy.URL())
 			continue
 		}
@@ -959,14 +985,19 @@ func (pm *ProviderManager) AbortInvocationProxy() error {
 
 func (pm *ProviderManager) StopInvocationProxy() error { return pm.AbortInvocationProxy() }
 
-// GetProvider returns the OllamaProvider for the given modelID, and the
+// GetProvider returns the OpenAI-compatible provider for the given modelID, and the
 // stripped model name (without the provider prefix). Unknown providers
-// fall back to the default (ollama) provider.
-func (pm *ProviderManager) GetProvider(modelID string) *OllamaProvider {
+// fall back to the configured default local provider.
+func (pm *ProviderManager) GetProvider(modelID string) *OpenAICompatibleProvider {
 	prefix, _ := ParseModelProvider(modelID)
 	name := prefix
 	if name == "" {
-		name = "ollama"
+		name = "local"
+	}
+	if name == "ollama" {
+		// Compatibility alias for configurations written before the provider
+		// was made vendor-neutral.
+		name = "local"
 	}
 
 	// Fast path: check cache with read lock
@@ -996,7 +1027,7 @@ func (pm *ProviderManager) GetProvider(modelID string) *OllamaProvider {
 		if key == "" {
 			key = pm.defaultProvider.apiKey
 		}
-		p, err := NewOllamaProvider(url, key, name)
+		p, err := NewOpenAICompatibleProvider(url, key, name)
 		if err == nil {
 			if proxy, ok := pm.invocationProxies[name]; ok {
 				p.setProxyURL(proxy.URL())
@@ -1006,19 +1037,20 @@ func (pm *ProviderManager) GetProvider(modelID string) *OllamaProvider {
 		}
 	}
 	// Fall back to default provider
-	if proxy, ok := pm.invocationProxies["ollama"]; ok {
+	if proxy, ok := pm.invocationProxies["local"]; ok {
 		pm.defaultProvider.setProxyURL(proxy.URL())
 	}
 	return pm.defaultProvider
 }
 
-// DefaultProvider returns the default (ollama) provider.
-func (pm *ProviderManager) DefaultProvider() *OllamaProvider {
+// DefaultProvider returns the configured default local provider.
+func (pm *ProviderManager) DefaultProvider() *OpenAICompatibleProvider {
 	return pm.defaultProvider
 }
 
-// Name returns the provider's prefix name (e.g. "ollama").
-func (p *OllamaProvider) Name() string {
+// Name returns the provider's configured prefix name (for example
+// "local" or "lemonade").
+func (p *OpenAICompatibleProvider) Name() string {
 	return p.name
 }
 
@@ -1039,7 +1071,7 @@ func resolveMaxSteps(agentSteps, teamSteps int) int {
 	return DefaultMaxSteps
 }
 
-func CreateAgent(ctx context.Context, ollama *OllamaProvider, cfg AgentConfig, agentTools []fantasy.AgentTool) (fantasy.Agent, error) {
+func CreateAgent(ctx context.Context, provider *OpenAICompatibleProvider, cfg AgentConfig, agentTools []fantasy.AgentTool) (fantasy.Agent, error) {
 	modelStr := cfg.Def.Generation.Model
 	if modelStr == "" {
 		modelStr = cfg.TeamConfig.Generation.Model
@@ -1048,7 +1080,7 @@ func CreateAgent(ctx context.Context, ollama *OllamaProvider, cfg AgentConfig, a
 		return nil, fmt.Errorf("no model specified for agent %q\n  Set --model <name>, add 'model:' to your team's team.yaml, or add 'model:' to ~/.config/hufu/hufu.yaml\n  Run 'hufu doctor' to see which model is currently resolved", cfg.Def.Name)
 	}
 
-	lm, err := ollama.LanguageModel(ctx, modelStr)
+	lm, err := provider.LanguageModel(ctx, modelStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create language model for %q: %w", cfg.Def.Name, err)
 	}

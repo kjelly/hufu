@@ -12,7 +12,13 @@ import (
 	"github.com/kjelly/hufu/internal/yamlutil"
 )
 
-const DefaultProviderURL = "http://localhost:11434/v1"
+// DefaultLocalProviderURL preserves the historical localhost endpoint while
+// keeping the provider contract vendor-neutral. Configure this when the local
+// server is not listening on the default address.
+const DefaultLocalProviderURL = "http://localhost:11434/v1"
+
+// DefaultProviderURL is retained for compatibility with existing callers.
+const DefaultProviderURL = DefaultLocalProviderURL
 const DefaultEmbeddingModel = "ollama/nomic-embed-text:latest"
 const DefaultOllamaAPIURL = "http://localhost:11434/api"
 
@@ -26,11 +32,10 @@ type ProviderConfig struct {
 	ProviderAPIKey string `yaml:"provider-api-key"`
 	Insecure       bool   `yaml:"insecure"`
 	// MaxConcurrent bounds how many tasks may run concurrently against this
-	// specific provider, independent of the team-wide max-concurrent. A
-	// local Ollama model dispatched by many workers is not the same as many
-	// workers able to usefully run concurrent inference — see spec.md item
-	// 5. Zero (the default) means "no additional limit beyond the team-wide
-	// one".
+	// specific provider, independent of the team-wide max-concurrent. A local
+	// model dispatched by many workers is not the same as many workers able to
+	// usefully run concurrent inference. Zero (the default) means "no
+	// additional limit beyond the team-wide one".
 	MaxConcurrent int `yaml:"max-concurrent"`
 }
 
@@ -235,7 +240,8 @@ func ResolveProviderURL(cliFlag string, teamCfgProviderURL string, agentProvider
 // 2. team config (passed as parameter)
 // 3. hufu.yaml in current directory or ~/.config/hufu/hufu.yaml
 // 4. HUFU_PROVIDER_API_KEY environment variable
-// 5. default (empty string, NewOllamaProvider will use "ollama" as fallback)
+// 5. default (empty string; the OpenAI-compatible local provider decides
+// whether an Authorization header is needed)
 func ResolveProviderAPIKey(cliFlag string, teamCfgAPIKey string) string {
 	if cliFlag != "" {
 		return cliFlag

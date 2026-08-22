@@ -171,21 +171,12 @@ func TestResolveAgentMaxOutputTokens(t *testing.T) {
 
 func TestDetectAndCacheOllamaContextLengths(t *testing.T) {
 	srv := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/show" {
+		if r.URL.Path != "/v1/models" {
 			http.NotFound(w, r)
 			return
 		}
-		var body struct{ Model string }
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body.Model != "gemma4:31b" {
-			http.Error(w, "unknown model", http.StatusNotFound)
-			return
-		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"model_info": map[string]any{
-				"general.architecture":  "gemma3",
-				"gemma3.context_length": 131072,
-			},
+			"data": []map[string]any{{"id": "gemma4:31b", "max_context_window": 131072}},
 		})
 	}))
 	defer srv.Close()
@@ -195,7 +186,7 @@ func TestDetectAndCacheOllamaContextLengths(t *testing.T) {
 
 	spec := globalRegistry.GetSpec(modelID)
 	if spec.ContextWindow != 131072 {
-		t.Errorf("ContextWindow = %d, want 131072 (detected from Ollama /api/show)", spec.ContextWindow)
+		t.Errorf("ContextWindow = %d, want 131072 (detected from OpenAI-compatible /models)", spec.ContextWindow)
 	}
 }
 
