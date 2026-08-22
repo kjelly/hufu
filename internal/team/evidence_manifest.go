@@ -207,7 +207,7 @@ func taskArtifactRefs(ctx context.Context, store *FileArtifactStore, runID strin
 			failed = true
 			continue
 		}
-		ref, err := store.Put(ctx, PutArtifactRequest{Kind: artifact.Kind, Path: artifact.Path, Description: artifact.Description,
+		putResult, err := store.Put(ctx, PutArtifactRequest{Kind: artifact.Kind, Path: artifact.Path, Description: artifact.Description,
 			SourcePath: artifact.Path, RunID: runID, TaskID: item.ID, Attempt: item.Retries + 1, Agent: item.Agent})
 		if err != nil {
 			if strict {
@@ -216,10 +216,10 @@ func taskArtifactRefs(ctx context.Context, store *FileArtifactStore, runID strin
 			failed = true
 			continue
 		}
-		occurrence, err := projectArtifactOccurrence(ctx, store, ref, runID, item.ID, attempt, item.Agent)
+		occurrence, err := projectArtifactOccurrence(ctx, store, putResult.ArtifactRef, runID, item.ID, attempt, item.Agent)
 		if err != nil {
 			if strict {
-				return nil, true, fmt.Errorf("task %q artifact %q: %w", item.ID, ref.ID, err)
+				return nil, true, fmt.Errorf("task %q artifact %q: %w", item.ID, putResult.ID, err)
 			}
 			failed = true
 			continue
@@ -263,7 +263,7 @@ func transcriptEvidenceRef(ctx context.Context, store *FileArtifactStore, item *
 		}
 		return ref, nil
 	}
-	ref, err := store.Put(ctx, PutArtifactRequest{
+	putResult, err := store.Put(ctx, PutArtifactRequest{
 		Kind:        "task_transcript",
 		Path:        transcriptRef,
 		Description: fmt.Sprintf("runner transcript for task %s", item.ID),
@@ -276,7 +276,7 @@ func transcriptEvidenceRef(ctx context.Context, store *FileArtifactStore, item *
 	if err != nil {
 		return ArtifactRef{}, err
 	}
-	return projectArtifactOccurrence(ctx, store, ref, runID, item.ID, receipt.Attempt, item.Agent)
+	return projectArtifactOccurrence(ctx, store, putResult.ArtifactRef, runID, item.ID, receipt.Attempt, item.Agent)
 }
 
 // projectArtifactOccurrence validates the immutable content-addressed record

@@ -180,7 +180,7 @@ func TestSubmitResultTool_StoresFacts(t *testing.T) {
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "discover targets"}})[0]
 
-	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(context.Background(), fantasy.ToolCall{
+	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(occurrenceTestContext(c, item.ID, 1), fantasy.ToolCall{
 		Name:  "submit_result",
 		Input: `{"status":"success","summary":"done","facts":{"container_ids":["c1","c2"],"count":2}}`,
 	})

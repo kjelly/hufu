@@ -156,6 +156,110 @@ func TestExecutionReceiptsKeepConcurrentModelExecutionsDistinct(t *testing.T) {
 	}
 }
 
+func TestExecutionReceiptSnapshotsIsolateRepairHistoryAndMutableChildren(t *testing.T) {
+	tl := &TodoList{items: []*TodoItem{{ID: "task-1"}}}
+
+	historyResult := &TaskResult{
+		Outputs: map[string]StructuredOutputValue{
+			"fact": {Fact: &StructuredFact{Value: map[string]any{"key": "original-output"}}},
+		},
+		Facts:        map[string]any{"items": []any{"original-fact"}},
+		RawOutputRef: &ArtifactRef{Path: "raw/original"},
+	}
+	history := []RepairAttemptProvenance{{
+		Attempt:         1,
+		Prompt:          "original-prompt",
+		SubmittedResult: historyResult,
+	}}
+	exitCode := 7
+	receipt := &ExecutionReceipt{
+		RunID:      "run-1",
+		TaskID:     "task-1",
+		Attempt:    1,
+		ExitCode:   &exitCode,
+		StepBudget: &StepBudgetUsage{Used: 2, Limit: 3},
+		ToolDispositions: []ToolExecutionDisposition{{
+			Kind:     ToolExecutionPolicyDenied,
+			ToolName: "view",
+		}},
+		RepairProvenance: &RepairProvenance{History: history},
+	}
+
+	if err := tl.SetExecutionReceipt("task-1", receipt); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mutating the caller's receipt after ingress must not mutate either
+	// canonical receipt projection.
+	history[0].Prompt = "mutated-ingress-prompt"
+	historyResult.Outputs["fact"].Fact.Value.(map[string]any)["key"] = "mutated-ingress-output"
+	historyResult.Facts["items"].([]any)[0] = "mutated-ingress-fact"
+	historyResult.RawOutputRef.Path = "raw/mutated-ingress"
+	*receipt.ExitCode = 99
+	receipt.StepBudget.Used = 99
+	receipt.ToolDispositions[0].ToolName = "mutated-ingress-tool"
+
+	assertReceipt := func(label string, got *ExecutionReceipt) {
+		t.Helper()
+		if got == nil || got.RepairProvenance == nil || len(got.RepairProvenance.History) != 1 {
+			t.Fatalf("%s missing repair history: %#v", label, got)
+		}
+		attempt := got.RepairProvenance.History[0]
+		if attempt.Prompt != "original-prompt" {
+			t.Errorf("%s history prompt = %q, want original-prompt", label, attempt.Prompt)
+		}
+		if attempt.SubmittedResult == nil {
+			t.Fatalf("%s missing history submitted result", label)
+		}
+		output := attempt.SubmittedResult.Outputs["fact"]
+		if output.Fact == nil || output.Fact.Value.(map[string]any)["key"] != "original-output" {
+			t.Errorf("%s history output was mutated: %#v", label, output)
+		}
+		if gotFact := attempt.SubmittedResult.Facts["items"].([]any)[0]; gotFact != "original-fact" {
+			t.Errorf("%s history fact = %v, want original-fact", label, gotFact)
+		}
+		if attempt.SubmittedResult.RawOutputRef == nil || attempt.SubmittedResult.RawOutputRef.Path != "raw/original" {
+			t.Errorf("%s history raw output ref = %#v, want raw/original", label, attempt.SubmittedResult.RawOutputRef)
+		}
+		if got.ExitCode == nil || *got.ExitCode != 7 {
+			t.Errorf("%s exit code = %v, want 7", label, got.ExitCode)
+		}
+		if got.StepBudget == nil || got.StepBudget.Used != 2 {
+			t.Errorf("%s step budget = %#v, want used 2", label, got.StepBudget)
+		}
+		if len(got.ToolDispositions) != 1 || got.ToolDispositions[0].ToolName != "view" {
+			t.Errorf("%s tool dispositions = %#v, want view", label, got.ToolDispositions)
+		}
+	}
+
+	items := tl.Items()
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	assertReceipt("ingress ExecutionReceipt", items[0].ExecutionReceipt)
+	if len(items[0].ExecutionReceipts) != 1 {
+		t.Fatalf("got %d execution receipts, want 1", len(items[0].ExecutionReceipts))
+	}
+	assertReceipt("ingress ExecutionReceipts", &items[0].ExecutionReceipts[0])
+
+	// Mutating either returned projection must not mutate the canonical
+	// receipt used by a later snapshot.
+	items[0].ExecutionReceipt.RepairProvenance.History[0].Prompt = "mutated-egress-single"
+	items[0].ExecutionReceipt.RepairProvenance.History[0].SubmittedResult.Outputs["fact"].Fact.Value.(map[string]any)["key"] = "mutated-egress-single-output"
+	items[0].ExecutionReceipts[0].RepairProvenance.History[0].SubmittedResult.Facts["items"].([]any)[0] = "mutated-egress-history-fact"
+	items[0].ExecutionReceipts[0].RepairProvenance.History[0].SubmittedResult.RawOutputRef.Path = "raw/mutated-egress"
+
+	fresh := tl.Items()
+	if len(fresh) != 1 {
+		t.Fatalf("got %d fresh items, want 1", len(fresh))
+	}
+	assertReceipt("egress ExecutionReceipt", fresh[0].ExecutionReceipt)
+	if len(fresh[0].ExecutionReceipts) != 1 {
+		t.Fatalf("got %d fresh execution receipts, want 1", len(fresh[0].ExecutionReceipts))
+	}
+	assertReceipt("egress ExecutionReceipts", &fresh[0].ExecutionReceipts[0])
+}
+
 type mockVerifier struct {
 	exitCode int
 	stdout   string

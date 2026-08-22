@@ -128,12 +128,13 @@ type ExecutionReceipt struct {
 	Attempt int    `json:"attempt"`
 	// ModelExecutionID is the stable isolated-worker identity. It keeps
 	// concurrent extra-model receipts distinct even though they share a Todo.
-	ModelExecutionID string    `json:"model_execution_id,omitempty"`
-	StartedAt        time.Time `json:"started_at"`
-	FinishedAt       time.Time `json:"finished_at,omitempty"`
-	ExitCode         *int      `json:"exit_code,omitempty"`
-	ProducerID       string    `json:"producer_id,omitempty"`
-	TranscriptRef    string    `json:"transcript_ref,omitempty"`
+	ModelExecutionID string               `json:"model_execution_id,omitempty"`
+	StartedAt        time.Time            `json:"started_at"`
+	FinishedAt       time.Time            `json:"finished_at,omitempty"`
+	ExitCode         *int                 `json:"exit_code,omitempty"`
+	ProducerID       string               `json:"producer_id,omitempty"`
+	ArtifactScope    *ArtifactAccessScope `json:"artifact_scope,omitempty"`
+	TranscriptRef    string               `json:"transcript_ref,omitempty"`
 	// SubmittedResult retains a structurally valid but non-terminal worker
 	// handoff for this exact attempt. It is evidence for a bounded replay and
 	// must never satisfy the next attempt's requires-result contract.

@@ -54,7 +54,11 @@ func (c *Coordinator) resolveFactRef(ref FactRef) (string, error) {
 		return "", fmt.Errorf("fact_ref %q must set exactly one of fact or artifact", name)
 	}
 
-	result := c.GetTaskResult(taskID)
+	runtimeTaskID, err := c.resolveTaskReference(taskID)
+	if err != nil {
+		return "", fmt.Errorf("fact_ref %q: task %q has no submitted result yet: %w", name, taskID, err)
+	}
+	result := c.GetTaskResult(runtimeTaskID)
 	if result == nil {
 		return "", fmt.Errorf("fact_ref %q: task %q has no submitted result yet", name, taskID)
 	}

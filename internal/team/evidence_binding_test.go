@@ -10,8 +10,8 @@ import (
 
 type bindingTestStore struct{}
 
-func (bindingTestStore) Put(context.Context, PutArtifactRequest) (ArtifactRef, error) {
-	return ArtifactRef{}, nil
+func (bindingTestStore) Put(context.Context, PutArtifactRequest) (ArtifactPutResult, error) {
+	return ArtifactPutResult{}, nil
 }
 func (bindingTestStore) Verify(context.Context, ArtifactRef) error                 { return nil }
 func (bindingTestStore) Open(context.Context, string) (io.ReadCloser, error)       { return nil, nil }
@@ -177,7 +177,7 @@ func TestEvidenceManifestVerifiesTwoCurrentOccurrencesWithOneArtifactID(t *testi
 			ProducerID: item.Agent, TranscriptRef: artifact.ID, ExitCode: evidenceIntPtr(0),
 		}}
 		if i == 0 {
-			item.TypedResult = &TaskResult{Status: "success", Artifacts: []ArtifactRef{artifact}}
+			item.TypedResult = &TaskResult{Status: "success", Artifacts: []ArtifactRef{artifact.ArtifactRef}}
 		}
 	}
 
