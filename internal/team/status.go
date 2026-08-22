@@ -658,7 +658,7 @@ func (tl *TodoList) SetTypedResult(id string, result *TaskResult) error {
 				updated = true
 				break
 			}
-			copyResult := *result
+			copyResult := cloneTaskResult(result)
 			if len(copyResult.Evidence) > 0 {
 				cleanEv := make([]EvidenceRef, len(copyResult.Evidence))
 				for i, ev := range copyResult.Evidence {
@@ -675,7 +675,7 @@ func (tl *TodoList) SetTypedResult(id string, result *TaskResult) error {
 				}
 				copyResult.Evidence = cleanEv
 			}
-			ti.TypedResult = &copyResult
+			ti.TypedResult = copyResult
 			updated = true
 			break
 		}
@@ -833,9 +833,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 	}
 	var verifyResult *VerificationResult
 	if item.VerifyResult != nil {
-		copyResult := *item.VerifyResult
-		copyResult.Spec = cloneVerificationSpecPtr(item.VerifyResult.Spec)
-		verifyResult = &copyResult
+		verifyResult = cloneVerificationResult(item.VerifyResult)
 	}
 	var runtimeErr *ExecutionError
 	if item.RuntimeError != nil {
@@ -845,8 +843,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 	}
 	var typedResult *TaskResult
 	if item.TypedResult != nil {
-		copyTR := *item.TypedResult
-		typedResult = &copyTR
+		typedResult = cloneTaskResult(item.TypedResult)
 	}
 	failureEvent := cloneFailureEventPayload(item.FailureEvent)
 	var resolution *TaskResolution
@@ -1128,24 +1125,37 @@ func (tl *TodoList) UpdateReceiptVerifyResult(runID, taskID string, attempt int,
 
 func cloneExecutionReceipt(receipt *ExecutionReceipt) ExecutionReceipt {
 	copyR := *receipt
+	if receipt.ExitCode != nil {
+		exitCode := *receipt.ExitCode
+		copyR.ExitCode = &exitCode
+	}
+	copyR.ArtifactScope = cloneArtifactAccessScope(receipt.ArtifactScope)
 	copyR.MemoryManifest = cloneMemoryInjectionManifest(receipt.MemoryManifest)
 	copyR.ContextManifest = cloneContextInjectionManifest(receipt.ContextManifest)
+	copyR.ToolDispositions = append([]ToolExecutionDisposition(nil), receipt.ToolDispositions...)
+	if receipt.StepBudget != nil {
+		stepBudget := *receipt.StepBudget
+		copyR.StepBudget = &stepBudget
+	}
 	if receipt.SubmittedResult != nil {
-		copyResult := *receipt.SubmittedResult
-		copyR.SubmittedResult = &copyResult
+		copyR.SubmittedResult = cloneTaskResult(receipt.SubmittedResult)
 	}
 	if receipt.RepairProvenance != nil {
 		copyRP := *receipt.RepairProvenance
 		if receipt.RepairProvenance.SubmittedResult != nil {
-			copyResult := *receipt.RepairProvenance.SubmittedResult
-			copyRP.SubmittedResult = &copyResult
+			copyRP.SubmittedResult = cloneTaskResult(receipt.RepairProvenance.SubmittedResult)
+		}
+		if receipt.RepairProvenance.History != nil {
+			copyRP.History = make([]RepairAttemptProvenance, len(receipt.RepairProvenance.History))
+			for i, attempt := range receipt.RepairProvenance.History {
+				copyRP.History[i] = attempt
+				copyRP.History[i].SubmittedResult = cloneTaskResult(attempt.SubmittedResult)
+			}
 		}
 		copyR.RepairProvenance = &copyRP
 	}
 	if receipt.VerifyResult != nil {
-		copyVR := *receipt.VerifyResult
-		copyVR.Spec = cloneVerificationSpecPtr(receipt.VerifyResult.Spec)
-		copyR.VerifyResult = &copyVR
+		copyR.VerifyResult = cloneVerificationResult(receipt.VerifyResult)
 	}
 	return copyR
 }

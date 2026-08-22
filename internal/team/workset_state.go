@@ -9,12 +9,13 @@ func (c *Coordinator) WorksetGroupStates() []WorksetGroupState {
 		return nil
 	}
 	items := c.taskTracker.TodoList().Items()
-	receipts := make(map[string]WorksetExpansionReceipt)
+	visible := make([]*WorksetExpansionReceipt, 0, len(items))
 	for _, item := range items {
 		if item != nil && item.WorksetReceipt != nil {
-			receipts[item.WorksetReceipt.WorksetID] = *cloneWorksetReceipt(item.WorksetReceipt)
+			visible = append(visible, item.WorksetReceipt)
 		}
 	}
+	receipts, conflicts := collectWorksetReceipts(visible)
 	ids := make([]string, 0, len(receipts))
 	for id := range receipts {
 		ids = append(ids, id)
@@ -27,6 +28,12 @@ func (c *Coordinator) WorksetGroupStates() []WorksetGroupState {
 			WorksetID: receipt.WorksetID, ParentTaskID: receipt.ParentTaskID,
 			SourceArtifactID: receipt.SourceArtifactID, SourceSHA256: receipt.SourceSHA256,
 			Expected: receipt.ItemCount,
+		}
+		if _, conflicted := conflicts[id]; conflicted {
+			state.Failed = 1
+			state.State = "failed"
+			states = append(states, state)
+			continue
 		}
 		if len(receipt.Children) != receipt.ItemCount {
 			state.Failed++

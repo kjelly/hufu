@@ -28,14 +28,24 @@ type PutArtifactRequest struct {
 }
 
 type ArtifactStore interface {
-	Put(context.Context, PutArtifactRequest) (ArtifactRef, error)
+	Put(context.Context, PutArtifactRequest) (ArtifactPutResult, error)
 	Verify(context.Context, ArtifactRef) error
 	Open(context.Context, string) (io.ReadCloser, error)
 	ListByTask(context.Context, string) ([]ArtifactRef, error)
 }
 
+// ArtifactPutResult contains the immutable reference plus diagnostic creation
+// flags from the atomic content-addressed writes. The flags never authorize
+// deletion; data and metadata are retained even when a submission fails.
+type ArtifactPutResult struct {
+	ArtifactRef
+	CreatedData     bool
+	CreatedMetadata bool
+}
+
 // FileArtifactStore stores content and metadata under workspace/logs/artifacts.
-// Artifact data is content-addressed and never overwritten.
+// Artifact data and metadata are content-addressed, never overwritten, and
+// append-only. Retention is independent of task-occurrence rollback.
 type FileArtifactStore struct {
 	root      string
 	sourceDir string
@@ -54,26 +64,26 @@ func NewFileArtifactStore(workspace, sourceDir string) (*FileArtifactStore, erro
 	return &FileArtifactStore{root: root, sourceDir: sourceDir}, nil
 }
 
-func (s *FileArtifactStore) Put(_ context.Context, req PutArtifactRequest) (ArtifactRef, error) {
+func (s *FileArtifactStore) Put(_ context.Context, req PutArtifactRequest) (ArtifactPutResult, error) {
 	if s == nil {
-		return ArtifactRef{}, fmt.Errorf("artifact store is nil")
+		return ArtifactPutResult{}, fmt.Errorf("artifact store is nil")
 	}
 	data := req.Content
 	if req.SourcePath != "" {
 		path, err := resolveArtifactSourcePath(s.sourceDir, req.SourcePath)
 		if err != nil {
-			return ArtifactRef{}, err
+			return ArtifactPutResult{}, err
 		}
 		data, err = os.ReadFile(path)
 		if err != nil {
-			return ArtifactRef{}, fmt.Errorf("read artifact %q: %w", req.SourcePath, err)
+			return ArtifactPutResult{}, fmt.Errorf("read artifact %q: %w", req.SourcePath, err)
 		}
 	}
 	if req.Path == "" && req.SourcePath != "" {
 		req.Path = req.SourcePath
 	}
 	if req.Path == "" {
-		return ArtifactRef{}, fmt.Errorf("artifact path is required")
+		return ArtifactPutResult{}, fmt.Errorf("artifact path is required")
 	}
 	hash := sha256.Sum256(data)
 	digest := hex.EncodeToString(hash[:])
@@ -82,7 +92,7 @@ func (s *FileArtifactStore) Put(_ context.Context, req PutArtifactRequest) (Arti
 		id = "sha256-" + digest
 	}
 	if !validArtifactID(id) {
-		return ArtifactRef{}, fmt.Errorf("invalid artifact id %q", id)
+		return ArtifactPutResult{}, fmt.Errorf("invalid artifact id %q", id)
 	}
 	ref := ArtifactRef{ID: id, Kind: req.Kind, Path: req.Path, Description: req.Description,
 		Type: req.Kind, SHA256: digest, Bytes: int64(len(data)), ByteSize: int64(len(data)),
@@ -92,51 +102,84 @@ func (s *FileArtifactStore) Put(_ context.Context, req PutArtifactRequest) (Arti
 		ref.CreatedAt = time.Now().UTC()
 	}
 	dataPath := filepath.Join(s.root, "data", id)
-	if existing, err := os.ReadFile(dataPath); err == nil {
-		if !bytes.Equal(existing, data) {
-			return ArtifactRef{}, fmt.Errorf("artifact %q already exists with different content", id)
-		}
-	} else if os.IsNotExist(err) {
-		f, createErr := os.OpenFile(dataPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if createErr != nil {
-			return ArtifactRef{}, fmt.Errorf("create artifact %q: %w", id, createErr)
-		}
-		if _, writeErr := f.Write(data); writeErr != nil {
-			_ = f.Close()
-			return ArtifactRef{}, fmt.Errorf("write artifact %q: %w", id, writeErr)
-		}
-		if closeErr := f.Close(); closeErr != nil {
-			return ArtifactRef{}, fmt.Errorf("close artifact %q: %w", id, closeErr)
-		}
-	} else {
-		return ArtifactRef{}, fmt.Errorf("inspect artifact %q: %w", id, err)
+	createdData, err := s.createData(dataPath, data)
+	result := ArtifactPutResult{ArtifactRef: ref, CreatedData: createdData}
+	if err != nil {
+		return result, err
 	}
 	metaPath := filepath.Join(s.root, "meta", id+".json")
 	encoded, err := json.Marshal(ref)
 	if err != nil {
-		return ArtifactRef{}, fmt.Errorf("marshal artifact metadata: %w", err)
+		return result, fmt.Errorf("marshal artifact metadata: %w", err)
 	}
-	if existing, readErr := os.ReadFile(metaPath); readErr == nil {
-		var old ArtifactRef
-		if json.Unmarshal(existing, &old) != nil || old.SHA256 != ref.SHA256 || old.ByteSize != ref.ByteSize {
-			return ArtifactRef{}, fmt.Errorf("artifact %q metadata conflicts", id)
-		}
-	} else if os.IsNotExist(readErr) {
-		f, createErr := os.OpenFile(metaPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if createErr != nil {
-			return ArtifactRef{}, fmt.Errorf("create artifact metadata %q: %w", id, createErr)
-		}
-		if _, writeErr := f.Write(encoded); writeErr != nil {
+	createdMetadata, err := s.createMetadata(metaPath, encoded, ref)
+	result.CreatedMetadata = createdMetadata
+	if err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func (s *FileArtifactStore) createData(path string, data []byte) (bool, error) {
+	return createOrVerifyArtifactFile(path, data)
+}
+
+func (s *FileArtifactStore) createMetadata(path string, encoded []byte, ref ArtifactRef) (bool, error) {
+	return createOrVerifyArtifactMetadata(path, encoded, ref)
+}
+
+// createOrVerifyArtifactFile makes the O_EXCL result authoritative. A failed
+// create due to EEXIST is an existing shared object, not an error and never
+// grants ownership to this Put call.
+func createOrVerifyArtifactFile(path string, data []byte) (bool, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err == nil {
+		if _, writeErr := f.Write(data); writeErr != nil {
 			_ = f.Close()
-			return ArtifactRef{}, fmt.Errorf("write artifact metadata %q: %w", id, writeErr)
+			return true, fmt.Errorf("write artifact %q: %w", filepath.Base(path), writeErr)
 		}
 		if closeErr := f.Close(); closeErr != nil {
-			return ArtifactRef{}, closeErr
+			return true, fmt.Errorf("close artifact %q: %w", filepath.Base(path), closeErr)
 		}
-	} else {
-		return ArtifactRef{}, fmt.Errorf("inspect artifact metadata %q: %w", id, readErr)
+		return true, nil
 	}
-	return ref, nil
+	if !os.IsExist(err) {
+		return false, fmt.Errorf("create artifact %q: %w", filepath.Base(path), err)
+	}
+	existing, readErr := os.ReadFile(path)
+	if readErr != nil {
+		return false, fmt.Errorf("read existing artifact %q: %w", filepath.Base(path), readErr)
+	}
+	if !bytes.Equal(existing, data) {
+		return false, fmt.Errorf("artifact %q already exists with different content", filepath.Base(path))
+	}
+	return false, nil
+}
+
+func createOrVerifyArtifactMetadata(path string, encoded []byte, ref ArtifactRef) (bool, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err == nil {
+		if _, writeErr := f.Write(encoded); writeErr != nil {
+			_ = f.Close()
+			return true, fmt.Errorf("write artifact metadata %q: %w", ref.ID, writeErr)
+		}
+		if closeErr := f.Close(); closeErr != nil {
+			return true, closeErr
+		}
+		return true, nil
+	}
+	if !os.IsExist(err) {
+		return false, fmt.Errorf("create artifact metadata %q: %w", ref.ID, err)
+	}
+	existing, readErr := os.ReadFile(path)
+	if readErr != nil {
+		return false, fmt.Errorf("read existing artifact metadata %q: %w", ref.ID, readErr)
+	}
+	var old ArtifactRef
+	if json.Unmarshal(existing, &old) != nil || old.SHA256 != ref.SHA256 || old.ByteSize != ref.ByteSize {
+		return false, fmt.Errorf("artifact %q metadata conflicts", ref.ID)
+	}
+	return false, nil
 }
 
 func (s *FileArtifactStore) Verify(_ context.Context, ref ArtifactRef) error {
@@ -180,6 +223,35 @@ func (s *FileArtifactStore) Get(_ context.Context, id string) (ArtifactRef, erro
 		return ArtifactRef{}, fmt.Errorf("artifact metadata %q has mismatched id %q", id, ref.ID)
 	}
 	return ref, nil
+}
+
+// Resolve returns the immutable, fully populated reference for an opaque
+// artifact ID. Non-zero claims supplied by a caller are checked against the
+// store metadata before the canonical bytes are verified.
+func (s *FileArtifactStore) Resolve(ctx context.Context, supplied ArtifactRef) (ArtifactRef, error) {
+	if s == nil || !validArtifactID(supplied.ID) {
+		return ArtifactRef{}, fmt.Errorf("artifact reference has no id")
+	}
+	canonical, err := s.Get(ctx, supplied.ID)
+	if err != nil {
+		return ArtifactRef{}, err
+	}
+	if supplied.SHA256 != "" && supplied.SHA256 != canonical.SHA256 {
+		return ArtifactRef{}, fmt.Errorf("artifact %q digest conflicts with immutable metadata", supplied.ID)
+	}
+	if supplied.Bytes != 0 && supplied.Bytes != canonical.Bytes {
+		return ArtifactRef{}, fmt.Errorf("artifact %q byte count conflicts with immutable metadata", supplied.ID)
+	}
+	if supplied.ByteSize != 0 && supplied.ByteSize != canonical.ByteSize {
+		return ArtifactRef{}, fmt.Errorf("artifact %q size conflicts with immutable metadata", supplied.ID)
+	}
+	if canonical.SHA256 == "" || canonical.Bytes < 0 || canonical.ByteSize < 0 || canonical.Bytes != canonical.ByteSize {
+		return ArtifactRef{}, fmt.Errorf("artifact %q has invalid immutable metadata", supplied.ID)
+	}
+	if err := s.Verify(ctx, canonical); err != nil {
+		return ArtifactRef{}, err
+	}
+	return canonical, nil
 }
 
 func validArtifactID(id string) bool {

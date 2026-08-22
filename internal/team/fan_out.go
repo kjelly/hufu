@@ -10,8 +10,8 @@ import (
 )
 
 // maxFanOutRows is a hard safety valve against a malformed or unexpectedly
-// huge TSV turning one dispatch into an unbounded number of tasks. Any real
-// team's batch/row count is expected to stay far below this.
+// huge TSV turning one dispatch into an unbounded number of tasks. A normal
+// workset item count is expected to stay far below this.
 const maxFanOutRows = 2000
 
 var fanOutPlaceholderPattern = regexp.MustCompile(`\{([a-zA-Z0-9_]+)\}`)
@@ -139,11 +139,11 @@ func resolveWorkspaceRelativePath(workspace, rel string) (string, error) {
 }
 
 // readFanOutTSV reads a tab-separated file whose first non-blank line is a
-// header (an optional leading '#' on the first column is stripped, matching
-// how verify-coverage.sh already recognizes a deterministic manifest
-// header). Every other non-blank line must have the same field count as the
-// header; readFanOutTSV does not skip further '#'-prefixed lines, since a
-// real generated manifest's only comment line is the header itself.
+// header (an optional leading '#' on the first column is stripped for
+// compatibility with older deterministic manifests). Every other non-blank
+// line must have the same field count as the header; readFanOutTSV does not
+// skip further '#'-prefixed lines, since a generated manifest's only comment
+// line is the header itself.
 func readFanOutTSV(path string) (header []string, rows [][]string, err error) {
 	f, err := os.Open(path)
 	if err != nil {

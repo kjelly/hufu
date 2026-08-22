@@ -160,13 +160,21 @@ const (
 func cloneVerificationSpec(v VerificationSpec) VerificationSpec {
 	c := v
 	if v.Assertions != nil {
-		c.Assertions = append([]JSONAssertion(nil), v.Assertions...)
+		c.Assertions = make([]JSONAssertion, len(v.Assertions))
+		for i, assertion := range v.Assertions {
+			c.Assertions[i] = assertion
+			c.Assertions[i].Equals = cloneTaskResultValue(assertion.Equals)
+		}
 	}
 	if v.ToolCallAssertions != nil {
 		c.ToolCallAssertions = append([]ToolCallAssertion(nil), v.ToolCallAssertions...)
 	}
 	if v.TaskResultAssertions != nil {
-		c.TaskResultAssertions = append([]TaskResultAssertion(nil), v.TaskResultAssertions...)
+		c.TaskResultAssertions = make([]TaskResultAssertion, len(v.TaskResultAssertions))
+		for i, assertion := range v.TaskResultAssertions {
+			c.TaskResultAssertions[i] = assertion
+			c.TaskResultAssertions[i].Value = cloneTaskResultValue(assertion.Value)
+		}
 	}
 	c.WorksetSourceTask = v.WorksetSourceTask
 	c.WorksetRequireTerminal = v.WorksetRequireTerminal

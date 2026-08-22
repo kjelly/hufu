@@ -98,14 +98,34 @@ func (c *Coordinator) findWorksetReceipt(sourceTask string) (*WorksetExpansionRe
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return nil, errors.New("coordinator task state is unavailable")
 	}
+	logicalSourceID := normalizeTaskReferenceID(sourceTask)
+	if logicalSourceID == "" {
+		return nil, fmt.Errorf("no expansion receipt found for source-task %q", sourceTask)
+	}
+	visible := make([]*WorksetExpansionReceipt, 0)
 	for _, item := range c.taskTracker.TodoList().Items() {
-		if item == nil || item.WorksetReceipt == nil {
+		if item != nil && item.WorksetReceipt != nil {
+			visible = append(visible, item.WorksetReceipt)
+		}
+	}
+	receipts, conflicts := collectWorksetReceipts(visible)
+	if err := worksetReceiptConflictError(conflicts); err != nil {
+		return nil, err
+	}
+	matches := make(map[string]*WorksetExpansionReceipt)
+	for worksetID, receipt := range receipts {
+		if normalizeTaskReferenceID(receipt.ParentTaskID) != logicalSourceID {
 			continue
 		}
-		receipt := item.WorksetReceipt
-		if receipt.ParentTaskID == sourceTask || item.ID == sourceTask || item.PlanTaskID == sourceTask {
+		matches[worksetID] = receipt
+	}
+	if len(matches) == 1 {
+		for _, receipt := range matches {
 			return cloneWorksetReceipt(receipt), nil
 		}
+	}
+	if len(matches) > 1 {
+		return nil, fmt.Errorf("source-task %q resolves to ambiguous workset receipts", sourceTask)
 	}
 	return nil, fmt.Errorf("no expansion receipt found for source-task %q", sourceTask)
 }
@@ -117,19 +137,105 @@ func (c *Coordinator) verifyWorksetSource(ctx context.Context, receipt *WorksetE
 	if c == nil || c.session == nil {
 		return errors.New("coordinator workspace is unavailable")
 	}
+	if strings.TrimSpace(receipt.RunID) == "" || strings.TrimSpace(c.executionRunID) == "" || receipt.RunID != c.executionRunID {
+		return fmt.Errorf("workset receipt belongs to run %q, want current run %q", receipt.RunID, c.executionRunID)
+	}
+	producerRef, _, err := c.currentWorksetSourceOccurrence(receipt)
+	if err != nil {
+		return err
+	}
 	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
 	if err != nil {
 		return err
 	}
-	ref, err := store.Get(ctx, receipt.SourceArtifactID)
+	// CAS metadata is immutable first-writer content metadata. It is not the
+	// authority for producer occurrence provenance, which was validated above
+	// from the current canonical typed result.
+	ref, err := store.Resolve(ctx, producerRef)
 	if err != nil {
 		return fmt.Errorf("source artifact %q is not registered: %w", receipt.SourceArtifactID, err)
 	}
-	if ref.SHA256 != receipt.SourceSHA256 {
-		return fmt.Errorf("source artifact %q digest changed", receipt.SourceArtifactID)
+	if ref.ID != receipt.SourceArtifactID || ref.SHA256 != receipt.SourceSHA256 {
+		return fmt.Errorf("source artifact %q immutable identity changed", receipt.SourceArtifactID)
 	}
-	if receipt.RunID != "" && ref.RunID != "" && ref.RunID != receipt.RunID {
-		return fmt.Errorf("source artifact %q belongs to run %q, want %q", receipt.SourceArtifactID, ref.RunID, receipt.RunID)
+	return nil
+}
+
+// currentWorksetSourceOccurrence resolves occurrence authority from the
+// canonical producer result, not from the workset receipt's parent task. The
+// parent identifies the expansion group; the source artifact's committed
+// reference identifies the producer task. This also supports replay seams
+// where the canonical result is present in the coordinator cache without a
+// corresponding Todo projection.
+func (c *Coordinator) currentWorksetSourceOccurrence(receipt *WorksetExpansionReceipt) (ArtifactRef, string, error) {
+	if c == nil || receipt == nil {
+		return ArtifactRef{}, "", errors.New("workset source occurrence is unavailable")
 	}
-	return store.Verify(ctx, ref)
+	if err := validateWorksetSourceOccurrence(receipt.SourceArtifact, receipt.SourceArtifactID, receipt.SourceSHA256, true); err != nil {
+		return ArtifactRef{}, "", fmt.Errorf("source artifact %q has invalid persisted occurrence: %w", receipt.SourceArtifactID, err)
+	}
+	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
+	if err != nil {
+		return ArtifactRef{}, "", err
+	}
+	if _, err := resolveWorksetArtifactContent(context.Background(), store, receipt.SourceArtifact); err != nil {
+		return ArtifactRef{}, "", fmt.Errorf("source artifact %q has invalid persisted content claims: %w", receipt.SourceArtifactID, err)
+	}
+	producerTaskID := receipt.SourceArtifact.TaskID
+	result := c.GetTaskResult(producerTaskID)
+	ref, err := resolveTaskResultArtifact(result, receipt.SourceArtifactID)
+	if err != nil {
+		return ArtifactRef{}, "", fmt.Errorf("source artifact %q is not declared by its intended canonical producer task %q: %w", receipt.SourceArtifactID, producerTaskID, err)
+	}
+	if err := c.validateCurrentProducerArtifactOccurrence(ref, producerTaskID, result); err != nil {
+		return ArtifactRef{}, "", fmt.Errorf("source artifact %q has invalid current producer occurrence: %w", receipt.SourceArtifactID, err)
+	}
+	if _, err := resolveWorksetArtifactContent(context.Background(), store, ref); err != nil {
+		return ArtifactRef{}, "", fmt.Errorf("source artifact %q has invalid current producer content claims: %w", receipt.SourceArtifactID, err)
+	}
+	if !sameArtifactOccurrence(ref, receipt.SourceArtifact) {
+		return ArtifactRef{}, "", fmt.Errorf("source artifact %q current producer occurrence does not match expansion receipt", receipt.SourceArtifactID)
+	}
+	return ref, producerTaskID, nil
+}
+
+func validateWorksetSourceOccurrence(ref ArtifactRef, artifactID, digest string, requireProducer bool) error {
+	if strings.TrimSpace(ref.ID) == "" || ref.ID != artifactID {
+		return fmt.Errorf("artifact id does not match persisted identity")
+	}
+	if strings.TrimSpace(ref.SHA256) == "" || ref.SHA256 != digest {
+		return fmt.Errorf("artifact digest does not match persisted identity")
+	}
+	if requireProducer && (strings.TrimSpace(ref.RunID) == "" || strings.TrimSpace(ref.TaskID) == "" || ref.Attempt <= 0 || strings.TrimSpace(ref.Agent) == "") {
+		return fmt.Errorf("producer run, task, attempt, and agent are required")
+	}
+	if ref.Bytes < 0 || ref.ByteSize < 0 || ref.Bytes != ref.ByteSize {
+		return fmt.Errorf("artifact byte counts are inconsistent")
+	}
+	return nil
+}
+
+// resolveWorksetArtifactContent applies the workset-only closed content claim
+// contract. FileArtifactStore.Resolve intentionally treats zero values as
+// omitted claims for unrelated consumers; workset sources must distinguish a
+// verified zero-byte object from a missing claim and therefore compare both
+// size fields exactly after immutable CAS verification.
+func resolveWorksetArtifactContent(ctx context.Context, store *FileArtifactStore, supplied ArtifactRef) (ArtifactRef, error) {
+	if store == nil {
+		return ArtifactRef{}, errors.New("workset artifact store is unavailable")
+	}
+	if strings.TrimSpace(supplied.ID) == "" || strings.TrimSpace(supplied.SHA256) == "" {
+		return ArtifactRef{}, errors.New("workset artifact requires immutable id and sha256")
+	}
+	if supplied.Bytes < 0 || supplied.ByteSize < 0 || supplied.Bytes != supplied.ByteSize {
+		return ArtifactRef{}, errors.New("workset artifact byte counts are inconsistent")
+	}
+	canonical, err := store.Resolve(ctx, supplied)
+	if err != nil {
+		return ArtifactRef{}, err
+	}
+	if supplied.Bytes != canonical.Bytes || supplied.ByteSize != canonical.ByteSize {
+		return ArtifactRef{}, fmt.Errorf("workset artifact byte count claims (%d/%d) do not match verified CAS metadata (%d/%d)", supplied.Bytes, supplied.ByteSize, canonical.Bytes, canonical.ByteSize)
+	}
+	return canonical, nil
 }

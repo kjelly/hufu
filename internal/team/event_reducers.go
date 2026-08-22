@@ -2,10 +2,57 @@ package team
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
 )
+
+type todoReplayWorksetConflicts struct {
+	taskIDs    map[string]struct{}
+	worksetIDs map[string]struct{}
+}
+
+type todoReplayResult struct {
+	tasks            []*TodoItem
+	worksetReceipts  map[string]*WorksetExpansionReceipt
+	worksetConflicts todoReplayWorksetConflicts
+}
+
+func newTodoReplayResult() todoReplayResult {
+	return todoReplayResult{
+		worksetConflicts: todoReplayWorksetConflicts{
+			taskIDs:    make(map[string]struct{}),
+			worksetIDs: make(map[string]struct{}),
+		},
+	}
+}
+
+func recordTodoReplayWorksetConflict(conflicts *todoReplayWorksetConflicts, taskID string, receipts ...*WorksetExpansionReceipt) {
+	if taskID != "" {
+		conflicts.taskIDs[taskID] = struct{}{}
+	}
+	for _, receipt := range receipts {
+		if receipt != nil && receipt.WorksetID != "" {
+			conflicts.worksetIDs[receipt.WorksetID] = struct{}{}
+		}
+	}
+}
+
+func todoReplayWorksetConflictError(conflicts todoReplayWorksetConflicts) error {
+	if err := worksetReceiptConflictError(conflicts.worksetIDs); err != nil {
+		return err
+	}
+	if len(conflicts.taskIDs) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(conflicts.taskIDs))
+	for id := range conflicts.taskIDs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return fmt.Errorf("conflicting workset receipts for runtime task %q", ids[0])
+}
 
 // ReduceToSessionData replays a sequence of RunEvents to reconstruct a SessionData projection.
 func ReduceToSessionData(events []RunEvent) *SessionData {
@@ -165,17 +212,29 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			}
 		}
 	}
-	session.Tasks = ReduceToTodoList(events)
+	replay := reduceToTodoList(events)
+	session.Tasks = replay.tasks
+	if err := todoReplayWorksetConflictError(replay.worksetConflicts); err != nil {
+		session.RecoveryRequired = true
+		session.RecoveryReason = err.Error()
+	}
 	seenWorksets := make(map[string]struct{})
 	for _, item := range session.Tasks {
 		if item == nil || item.WorksetReceipt == nil {
 			continue
 		}
-		if _, seen := seenWorksets[item.WorksetReceipt.WorksetID]; seen {
+		id := item.WorksetReceipt.WorksetID
+		if _, conflicted := replay.worksetConflicts.taskIDs[item.ID]; conflicted {
 			continue
 		}
-		seenWorksets[item.WorksetReceipt.WorksetID] = struct{}{}
-		session.WorksetReceipts = append(session.WorksetReceipts, *cloneWorksetReceipt(item.WorksetReceipt))
+		if _, conflicted := replay.worksetConflicts.worksetIDs[id]; conflicted {
+			continue
+		}
+		if _, seen := seenWorksets[id]; seen {
+			continue
+		}
+		seenWorksets[id] = struct{}{}
+		session.WorksetReceipts = append(session.WorksetReceipts, *cloneWorksetReceipt(replay.worksetReceipts[id]))
 	}
 	if len(session.Tasks) > 0 {
 		session.DelegationPhase = DelegationPhaseActive
@@ -187,9 +246,15 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 
 // ReduceToTodoList replays a sequence of RunEvents to reconstruct a TodoItem slice projection.
 func ReduceToTodoList(events []RunEvent) []*TodoItem {
+	return reduceToTodoList(events).tasks
+}
+
+func reduceToTodoList(events []RunEvent) todoReplayResult {
 	events = normalizeReplayEvents(events)
 	taskMap := make(map[string]*TodoItem)
 	var taskOrder []string
+	result := newTodoReplayResult()
+	receiptObservations := make(map[string]*WorksetExpansionReceipt)
 
 	for _, e := range events {
 		if e.Type == "criterion_re_evaluated" && e.TaskID != "" {
@@ -373,6 +438,15 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		}
 		if taskID == "" {
 			continue
+		}
+		if payload.WorksetReceipt != nil {
+			if observed, exists := receiptObservations[taskID]; exists {
+				if !equivalentWorksetReceipts(observed, payload.WorksetReceipt) {
+					recordTodoReplayWorksetConflict(&result.worksetConflicts, taskID, observed, payload.WorksetReceipt)
+				}
+			} else {
+				receiptObservations[taskID] = cloneWorksetReceipt(payload.WorksetReceipt)
+			}
 		}
 
 		desc := payload.Desc
@@ -563,13 +637,17 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 			item.WorksetBinding = cloneWorksetBinding(payload.WorksetBinding)
 		}
 		if payload.WorksetReceipt != nil {
-			item.WorksetReceipt = cloneWorksetReceipt(payload.WorksetReceipt)
+			if item.WorksetReceipt != nil && !equivalentWorksetReceipts(item.WorksetReceipt, payload.WorksetReceipt) {
+				recordTodoReplayWorksetConflict(&result.worksetConflicts, taskID, item.WorksetReceipt, payload.WorksetReceipt)
+			} else {
+				item.WorksetReceipt = cloneWorksetReceipt(payload.WorksetReceipt)
+			}
 		}
 		if payload.VerifyResult != nil {
 			item.VerifyResult = payload.VerifyResult
 		}
 		if payload.TypedResult != nil {
-			item.TypedResult = payload.TypedResult
+			item.TypedResult = cloneTaskResult(payload.TypedResult)
 		}
 		if payload.Detail != "" {
 			item.Detail = payload.Detail
@@ -670,10 +748,48 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 		}
 	}
 
-	result := make([]*TodoItem, 0, len(taskOrder))
+	visibleReceipts := make([]*WorksetExpansionReceipt, 0, len(taskOrder))
 	for _, id := range taskOrder {
-		result = append(result, taskMap[id])
+		if item := taskMap[id]; item != nil && item.WorksetReceipt != nil {
+			visibleReceipts = append(visibleReceipts, item.WorksetReceipt)
+		}
 	}
+	receipts, projectedConflicts := collectWorksetReceipts(visibleReceipts)
+	for id := range projectedConflicts {
+		result.worksetConflicts.worksetIDs[id] = struct{}{}
+	}
+	for _, id := range taskOrder {
+		item := taskMap[id]
+		if item == nil {
+			continue
+		}
+		if item.WorksetReceipt != nil {
+			if _, conflicted := result.worksetConflicts.worksetIDs[item.WorksetReceipt.WorksetID]; conflicted {
+				recordTodoReplayWorksetConflict(&result.worksetConflicts, item.ID, item.WorksetReceipt)
+			}
+		}
+	}
+	conflictErr := todoReplayWorksetConflictError(result.worksetConflicts)
+	for _, id := range taskOrder {
+		item := taskMap[id]
+		if item == nil {
+			continue
+		}
+		if _, conflicted := result.worksetConflicts.taskIDs[item.ID]; conflicted {
+			item.Status = TaskError
+			item.RuntimeError = &ExecutionError{
+				Category: CategoryValidationFailed,
+				Source:   "workset_receipt",
+				Message:  conflictErr.Error(),
+			}
+		}
+	}
+
+	result.tasks = make([]*TodoItem, 0, len(taskOrder))
+	for _, id := range taskOrder {
+		result.tasks = append(result.tasks, taskMap[id])
+	}
+	result.worksetReceipts = receipts
 	return result
 }
 

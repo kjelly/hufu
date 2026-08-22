@@ -57,6 +57,12 @@ type EventStore struct {
 	lastHash        string
 	sequence        int
 	degraded        bool
+	stateValid      bool
+	stateErr        error
+	closed          bool
+	scanCount       int
+	cacheHitCount   int
+	cachedEvents    []RunEvent
 	syncFile        func() error
 	idempotencyKeys map[string]RunEvent
 }
@@ -180,10 +186,10 @@ func (es *EventStore) AppendPersisted(event RunEvent) (RunEvent, error) {
 	es.mu.Lock()
 	defer es.mu.Unlock()
 
-	if es.f == nil {
+	if es.closed {
 		return RunEvent{}, fmt.Errorf("event store closed")
 	}
-	if es.degraded {
+	if es.f == nil || es.degraded || !es.stateValid {
 		if err := es.reopenAndRescan(); err != nil {
 			return RunEvent{}, fmt.Errorf("recover degraded event store: %w", err)
 		}
@@ -196,7 +202,7 @@ func (es *EventStore) AppendPersisted(event RunEvent) (RunEvent, error) {
 			// The event was already acknowledged as durable. Callers may safely
 			// apply their idempotent projection using its original identity; no
 			// second transition is written.
-			return durable, nil
+			return cloneRunEvent(durable), nil
 		}
 	}
 
@@ -217,7 +223,6 @@ func (es *EventStore) AppendPersisted(event RunEvent) (RunEvent, error) {
 		event.Payload = compact.Bytes()
 	}
 
-	es.sequence++
 	if event.SchemaVersion == 0 {
 		event.SchemaVersion = eventStoreSchemaVersion
 	}
@@ -261,24 +266,26 @@ func (es *EventStore) AppendPersisted(event RunEvent) (RunEvent, error) {
 	line := append(data, '\n')
 	n, err := es.f.Write(line)
 	if err != nil {
-		es.degraded = true
+		es.invalidateState(fmt.Errorf("write run event: %w", err))
 		return RunEvent{}, fmt.Errorf("write run event: %w", err)
 	}
 	if n != len(line) {
-		es.degraded = true
+		es.invalidateState(io.ErrShortWrite)
 		return RunEvent{}, fmt.Errorf("write run event: %w", io.ErrShortWrite)
 	}
 
 	if err := es.syncFile(); err != nil {
-		es.degraded = true
+		es.invalidateState(fmt.Errorf("sync run event: %w", err))
 		return RunEvent{}, fmt.Errorf("sync run event: %w", err)
 	}
 
+	es.sequence++
 	es.lastEventID = event.ID
 	es.lastHash = event.Hash
 	if event.IdempotencyKey != "" {
-		es.idempotencyKeys[event.IdempotencyKey] = event
+		es.idempotencyKeys[event.IdempotencyKey] = cloneRunEvent(event)
 	}
+	es.cachedEvents = append(es.cachedEvents, cloneRunEvent(event))
 	return event, nil
 }
 
@@ -287,22 +294,26 @@ func (es *EventStore) AppendPersisted(event RunEvent) (RunEvent, error) {
 // event log. It deliberately refuses a malformed or broken chain instead of
 // appending from a guessed last hash.
 func (es *EventStore) reopenAndRescan() error {
-	if es.f != nil {
-		_ = es.f.Close()
+	if es.closed {
+		return fmt.Errorf("event store closed")
 	}
 	f, err := os.OpenFile(es.path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		es.f = nil
+		es.invalidateState(err)
 		return err
 	}
-	es.f = f
-	es.syncFile = f.Sync
-	if err := es.rescan(); err != nil {
+	state, err := es.scanFile(f)
+	if err != nil {
 		_ = f.Close()
-		es.f = nil
+		es.invalidateState(err)
 		return err
 	}
-	es.degraded = false
+
+	old := es.f
+	es.publishState(state, f)
+	if old != nil && old != f {
+		_ = old.Close()
+	}
 	return nil
 }
 
@@ -311,19 +322,41 @@ func (es *EventStore) reopenAndRescan() error {
 // recovery must be strict because silently skipping a line would fork the
 // hash chain.
 func (es *EventStore) rescan() error {
-	f, err := os.Open(es.path)
+	state, err := es.scanFile(es.f)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
+		es.invalidateState(err)
 		return err
 	}
-	defer func() { _ = f.Close() }()
+	es.publishState(state, es.f)
+	return nil
+}
 
-	es.lastEventID = ""
-	es.lastHash = ""
-	es.sequence = 0
-	es.idempotencyKeys = make(map[string]RunEvent)
+type eventStoreState struct {
+	lastEventID     string
+	lastHash        string
+	sequence        int
+	runID           string
+	sessionID       string
+	events          []RunEvent
+	idempotencyKeys map[string]RunEvent
+}
+
+// scanFile is the one strict durable scanner. It never mutates EventStore;
+// callers publish its complete state only after the entire file validates.
+func (es *EventStore) scanFile(f *os.File) (eventStoreState, error) {
+	es.scanCount++
+	state := eventStoreState{
+		runID:           es.runID,
+		sessionID:       es.sessionID,
+		idempotencyKeys: make(map[string]RunEvent),
+	}
+	if f == nil {
+		return eventStoreState{}, fmt.Errorf("event store file is unavailable")
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return eventStoreState{}, fmt.Errorf("seek event store: %w", err)
+	}
+
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
@@ -333,87 +366,123 @@ func (es *EventStore) rescan() error {
 		}
 		var event RunEvent
 		if err := json.Unmarshal(line, &event); err != nil {
-			return fmt.Errorf("decode event %d: %w", es.sequence+1, err)
+			return eventStoreState{}, fmt.Errorf("decode event %d: %w", state.sequence+1, err)
 		}
-		if event.PreviousID != es.lastEventID || event.PreviousHash != es.lastHash {
-			return fmt.Errorf("event %d (%s) does not continue hash chain", es.sequence, event.ID)
+		if state.sequence == 0 {
+			if event.PreviousID != "" || event.PreviousHash != "" {
+				return eventStoreState{}, fmt.Errorf("first event (%s) must have empty previous_id and previous_hash", event.ID)
+			}
+		} else if event.PreviousID != state.lastEventID || event.PreviousHash != state.lastHash {
+			return eventStoreState{}, fmt.Errorf("event %d (%s) does not continue hash chain", state.sequence, event.ID)
 		}
 		expected := ComputeEventHash(event.PreviousHash, event.ID, event.Type, event.Timestamp, event.Payload)
 		if event.Hash != expected {
-			return fmt.Errorf("event %d (%s) hash invalid", es.sequence, event.ID)
+			return eventStoreState{}, fmt.Errorf("event %d (%s) hash invalid", state.sequence, event.ID)
 		}
-		es.lastEventID = event.ID
-		es.lastHash = event.Hash
+		state.events = append(state.events, cloneRunEvent(event))
+		state.lastEventID = event.ID
+		state.lastHash = event.Hash
 		if event.IdempotencyKey != "" {
-			es.idempotencyKeys[event.IdempotencyKey] = event
+			state.idempotencyKeys[event.IdempotencyKey] = cloneRunEvent(event)
 		}
-		es.sequence++
-		if es.runID == "" && event.RunID != "" {
-			es.runID = event.RunID
+		state.sequence++
+		if state.runID == "" && event.RunID != "" {
+			state.runID = event.RunID
 		}
-		if es.sessionID == "" && event.SessionID != "" {
-			es.sessionID = event.SessionID
+		if state.sessionID == "" && event.SessionID != "" {
+			state.sessionID = event.SessionID
 		}
 	}
-	return sc.Err()
+	if err := sc.Err(); err != nil {
+		return eventStoreState{}, fmt.Errorf("scan event store: %w", err)
+	}
+	return state, nil
 }
 
-// ReadEvents reads all valid events from the event store file.
+func (es *EventStore) publishState(state eventStoreState, f *os.File) {
+	es.lastEventID = state.lastEventID
+	es.lastHash = state.lastHash
+	es.sequence = state.sequence
+	es.runID = state.runID
+	es.sessionID = state.sessionID
+	es.cachedEvents = state.events
+	es.idempotencyKeys = state.idempotencyKeys
+	es.f = f
+	if f != nil {
+		es.syncFile = f.Sync
+	}
+	es.stateErr = nil
+	es.stateValid = true
+	es.degraded = false
+}
+
+// invalidateState removes every derived value that could permit a caller to
+// continue from an unvalidated file. The configured run/session identity is
+// retained as an append default, while chain/cache/idempotency state is not.
+func (es *EventStore) invalidateState(err error) {
+	if es.f != nil {
+		_ = es.f.Close()
+	}
+	es.f = nil
+	es.syncFile = nil
+	es.lastEventID = ""
+	es.lastHash = ""
+	es.sequence = 0
+	es.cachedEvents = nil
+	es.idempotencyKeys = nil
+	es.stateErr = err
+	es.stateValid = false
+	es.degraded = true
+}
+
+// ReadEvents returns a copy of the strictly validated event cache populated by
+// rescan and maintained after each durable append. Callers may safely mutate
+// returned payloads without changing the store's canonical records.
 func (es *EventStore) ReadEvents() ([]RunEvent, error) {
 	es.mu.Lock()
 	defer es.mu.Unlock()
 	if es.path == "" {
 		return nil, nil
 	}
-	f, err := os.Open(es.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+	if !es.stateValid {
+		if es.stateErr != nil {
+			return nil, fmt.Errorf("event store state invalid: %w", es.stateErr)
 		}
-		return nil, err
+		return nil, fmt.Errorf("event store state invalid")
 	}
-	defer func() { _ = f.Close() }()
+	es.cacheHitCount++
+	return cloneRunEvents(es.cachedEvents), nil
+}
 
-	var events []RunEvent
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := bytes.TrimSpace(sc.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		var e RunEvent
-		if err := json.Unmarshal(line, &e); err != nil {
-			continue
-		}
-		events = append(events, e)
+func cloneRunEvent(event RunEvent) RunEvent {
+	clone := event
+	if event.Payload != nil {
+		clone.Payload = make(json.RawMessage, len(event.Payload))
+		copy(clone.Payload, event.Payload)
 	}
-	return events, sc.Err()
+	return clone
+}
+
+func cloneRunEvents(events []RunEvent) []RunEvent {
+	if events == nil {
+		return nil
+	}
+	clones := make([]RunEvent, len(events))
+	for i, event := range events {
+		clones[i] = cloneRunEvent(event)
+	}
+	return clones
 }
 
 // VerifyHashChain validates that all events form an unbroken cryptographic hash chain.
 func (es *EventStore) VerifyHashChain() error {
-	events, err := es.ReadEvents()
-	if err != nil {
-		return fmt.Errorf("read events for verification: %w", err)
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	if es.closed {
+		return fmt.Errorf("event store closed")
 	}
-	var prevHash string
-	var prevID string
-	for i, e := range events {
-		if i > 0 {
-			if e.PreviousID != prevID {
-				return fmt.Errorf("event %d (%s) previous_id mismatch: got %s, want %s", i, e.ID, e.PreviousID, prevID)
-			}
-			if e.PreviousHash != prevHash {
-				return fmt.Errorf("event %d (%s) previous_hash mismatch: got %s, want %s", i, e.ID, e.PreviousHash, prevHash)
-			}
-		}
-		expectedHash := ComputeEventHash(e.PreviousHash, e.ID, e.Type, e.Timestamp, e.Payload)
-		if e.Hash != expectedHash {
-			return fmt.Errorf("event %d (%s) hash invalid: got %s, calculated %s", i, e.ID, e.Hash, expectedHash)
-		}
-		prevHash = e.Hash
-		prevID = e.ID
+	if err := es.reopenAndRescan(); err != nil {
+		return fmt.Errorf("refresh event store for verification: %w", err)
 	}
 	return nil
 }
@@ -425,7 +494,9 @@ func (es *EventStore) Close() error {
 	if es.f != nil {
 		err := es.f.Close()
 		es.f = nil
+		es.closed = true
 		return err
 	}
+	es.closed = true
 	return nil
 }

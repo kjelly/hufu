@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
 
@@ -41,6 +42,7 @@ type WorksetExpansionReceipt struct {
 	ParentTaskID     string            `json:"parent_task_id"`
 	SourceArtifactID string            `json:"source_artifact_id"`
 	SourceSHA256     string            `json:"source_sha256"`
+	SourceArtifact   ArtifactRef       `json:"source_artifact"`
 	ItemCount        int               `json:"item_count"`
 	ItemKeysSHA256   string            `json:"item_keys_sha256"`
 	Children         map[string]string `json:"children"`
@@ -57,6 +59,7 @@ type WorksetBinding struct {
 	Inputs           []ArtifactRef     `json:"inputs,omitempty"`
 	SourceArtifactID string            `json:"source_artifact_id"`
 	SourceSHA256     string            `json:"source_sha256"`
+	SourceArtifact   ArtifactRef       `json:"source_artifact"`
 }
 
 // WorksetGroupState is the bounded, content-free projection used by
@@ -99,6 +102,63 @@ func cloneWorksetReceipt(src *WorksetExpansionReceipt) *WorksetExpansionReceipt 
 		copyReceipt.Children[key] = taskID
 	}
 	return &copyReceipt
+}
+
+// collectWorksetReceipts indexes every visible receipt by its immutable
+// WorksetID. Equivalent replay copies are deduplicated; a differing copy is
+// retained as a conflict instead of replacing the first observation.
+func collectWorksetReceipts(receipts []*WorksetExpansionReceipt) (map[string]*WorksetExpansionReceipt, map[string]struct{}) {
+	indexed := make(map[string]*WorksetExpansionReceipt)
+	conflicts := make(map[string]struct{})
+	for _, receipt := range receipts {
+		if receipt == nil {
+			continue
+		}
+		if existing, ok := indexed[receipt.WorksetID]; ok {
+			if !equivalentWorksetReceipts(existing, receipt) {
+				conflicts[receipt.WorksetID] = struct{}{}
+			}
+			continue
+		}
+		indexed[receipt.WorksetID] = cloneWorksetReceipt(receipt)
+	}
+	return indexed, conflicts
+}
+
+func worksetReceiptConflictError(conflicts map[string]struct{}) error {
+	if len(conflicts) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(conflicts))
+	for id := range conflicts {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return fmt.Errorf("conflicting workset receipts for workset %q", ids[0])
+}
+
+func equivalentWorksetReceipts(first, second *WorksetExpansionReceipt) bool {
+	if first == nil || second == nil {
+		return first == second
+	}
+	if first.WorksetID != second.WorksetID ||
+		first.RunID != second.RunID ||
+		normalizeTaskReferenceID(first.ParentTaskID) != normalizeTaskReferenceID(second.ParentTaskID) ||
+		first.SourceArtifactID != second.SourceArtifactID ||
+		first.SourceSHA256 != second.SourceSHA256 ||
+		!sameArtifactOccurrence(first.SourceArtifact, second.SourceArtifact) ||
+		first.ItemCount != second.ItemCount ||
+		first.ItemKeysSHA256 != second.ItemKeysSHA256 ||
+		len(first.Children) != len(second.Children) {
+		return false
+	}
+	for key, childID := range first.Children {
+		secondChildID, exists := second.Children[key]
+		if !exists || secondChildID != childID {
+			return false
+		}
+	}
+	return true
 }
 
 func validateWorksetManifest(manifest WorksetManifest) error {

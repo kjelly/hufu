@@ -1,6 +1,11 @@
 package team
 
-import "strings"
+import (
+	"errors"
+	"strings"
+
+	"charm.land/fantasy"
+)
 
 const (
 	FailureSourceError                       = "error"
@@ -17,7 +22,73 @@ const (
 	FailureSourceSynthesisFailed             = "synthesis_failed"
 	FailureSourceSynthesisContinuationFailed = "synthesis_continuation_failed"
 	FailureSourceSegmentFailed               = "segment_failed"
+	FailureSourceProviderModel               = "provider/model"
 )
+
+// providerModelFailure preserves the provider's original error while adding
+// typed ownership metadata. In particular, it prevents a stale task snapshot
+// (for example, the last successful grep call) from being mistaken for the
+// source of a later provider-stream failure.
+type providerModelFailure struct {
+	err        error
+	model      string
+	provider   string
+	statusCode int
+	response   string
+}
+
+func (e *providerModelFailure) Error() string {
+	if e == nil || e.err == nil {
+		return "provider/model failure"
+	}
+	return e.err.Error()
+}
+
+func (e *providerModelFailure) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func providerModelFailureFrom(err error) *providerModelFailure {
+	if err == nil {
+		return nil
+	}
+	var typed *providerModelFailure
+	if errors.As(err, &typed) {
+		return typed
+	}
+	return nil
+}
+
+// annotateProviderModelFailure wraps only Fantasy's provider-stream error
+// type. Local tool errors remain ordinary execution failures and retain their
+// normal tool attribution.
+func annotateProviderModelFailure(err error, modelID string) error {
+	if err == nil || providerModelFailureFrom(err) != nil {
+		return err
+	}
+	var providerErr *fantasy.ProviderError
+	if !errors.As(err, &providerErr) || providerErr == nil {
+		return err
+	}
+	provider := ""
+	if modelID != "" {
+		provider, _, _ = strings.Cut(modelID, "/")
+	}
+	response := strings.TrimSpace(string(providerErr.ResponseBody))
+	if response == strings.TrimSpace(providerErr.Message) {
+		response = ""
+	}
+	return &providerModelFailure{
+		err:        err,
+		model:      modelID,
+		provider:   provider,
+		statusCode: providerErr.StatusCode,
+		response:   response,
+	}
+}
 
 // FailureSource* values are the stable labels written into structured failure
 // detail, workspace artifacts, and logs. SegmentFailureSource maps the

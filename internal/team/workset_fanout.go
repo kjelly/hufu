@@ -37,7 +37,8 @@ func (c *Coordinator) expandStructuredFanOutTask(task TaskDef) ([]TaskDef, error
 	if err != nil {
 		return nil, err
 	}
-	if err := c.validateWorksetInputs(manifest); err != nil {
+	manifest, err = c.validateWorksetInputs(manifest, spec.SourceArtifact.TaskID)
+	if err != nil {
 		return nil, err
 	}
 	workset := worksetID(source.ID, source.SHA256, manifest.Items)
@@ -62,6 +63,7 @@ func (c *Coordinator) expandStructuredFanOutTask(task TaskDef) ([]TaskDef, error
 			Inputs:           append([]ArtifactRef(nil), item.Inputs...),
 			SourceArtifactID: source.ID,
 			SourceSHA256:     source.SHA256,
+			SourceArtifact:   source,
 		}
 		expanded = append(expanded, rowTask)
 	}
@@ -74,30 +76,36 @@ func (c *Coordinator) readStructuredWorksetSource(task TaskDef) ([]byte, Artifac
 		if c == nil || c.session == nil {
 			return nil, ArtifactRef{}, fmt.Errorf("source_artifact requires a coordinator workspace")
 		}
-		result := c.GetTaskResult(strings.TrimSpace(spec.SourceArtifact.TaskID))
+		logicalTaskID := strings.TrimSpace(spec.SourceArtifact.TaskID)
+		runtimeTaskID, resolveErr := c.resolveTaskReference(logicalTaskID)
+		if resolveErr != nil {
+			return nil, ArtifactRef{}, fmt.Errorf("source_artifact producer task %q: %w", logicalTaskID, resolveErr)
+		}
+		result := c.GetTaskResult(runtimeTaskID)
 		if result == nil {
-			return nil, ArtifactRef{}, fmt.Errorf("source_artifact producer task %q has no typed result", spec.SourceArtifact.TaskID)
+			return nil, ArtifactRef{}, fmt.Errorf("source_artifact producer task %q has no typed result", logicalTaskID)
 		}
-		var ref ArtifactRef
-		for _, candidate := range result.Artifacts {
-			if candidate.ID == spec.SourceArtifact.Artifact || candidate.Description == spec.SourceArtifact.Artifact {
-				ref = candidate
-				break
-			}
+		ref, resolveErr := resolveTaskResultArtifact(result, spec.SourceArtifact.Artifact)
+		if resolveErr != nil {
+			return nil, ArtifactRef{}, fmt.Errorf("source_artifact %q in task %q: %w", spec.SourceArtifact.Artifact, spec.SourceArtifact.TaskID, resolveErr)
 		}
-		if ref.ID == "" {
-			return nil, ArtifactRef{}, fmt.Errorf("source_artifact %q was not declared by task %q", spec.SourceArtifact.Artifact, spec.SourceArtifact.TaskID)
-		}
-		if ref.TaskID != "" && ref.TaskID != spec.SourceArtifact.TaskID {
+		if ref.TaskID != "" && ref.TaskID != runtimeTaskID {
 			return nil, ArtifactRef{}, fmt.Errorf("source_artifact %q has mismatched producer task", ref.ID)
 		}
+		if err := c.validateCurrentProducerArtifactOccurrence(ref, runtimeTaskID, result); err != nil {
+			return nil, ArtifactRef{}, fmt.Errorf("source_artifact %q has invalid current producer occurrence: %w", ref.ID, err)
+		}
+		currentOccurrence := ref
 		store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
 		if err != nil {
 			return nil, ArtifactRef{}, err
 		}
-		if err := store.Verify(context.Background(), ref); err != nil {
-			return nil, ArtifactRef{}, fmt.Errorf("source_artifact %q failed integrity verification: %w", ref.ID, err)
+		sourceID := ref.ID
+		ref, err = resolveWorksetArtifactContent(context.Background(), store, ref)
+		if err != nil {
+			return nil, ArtifactRef{}, fmt.Errorf("source_artifact %q failed integrity verification: %w", sourceID, err)
 		}
+		ref = artifactContentWithCurrentOccurrence(ref, currentOccurrence)
 		reader, err := store.Open(context.Background(), ref.ID)
 		if err != nil {
 			return nil, ArtifactRef{}, err
@@ -134,17 +142,20 @@ func (c *Coordinator) readStructuredWorksetSource(task TaskDef) ([]byte, Artifac
 		if storeErr != nil {
 			return nil, ArtifactRef{}, storeErr
 		}
-		stored, putErr := store.Put(context.Background(), PutArtifactRequest{SourcePath: spec.Source, Path: spec.Source, Kind: "workset_manifest", RunID: c.executionRunID, TaskID: task.ID})
+		putResult, putErr := store.Put(context.Background(), PutArtifactRequest{SourcePath: spec.Source, Path: spec.Source, Kind: "workset_manifest", RunID: c.executionRunID, TaskID: task.ID})
 		if putErr != nil {
 			return nil, ArtifactRef{}, fmt.Errorf("snapshot workset source: %w", putErr)
 		}
-		ref = stored
+		ref = putResult.ArtifactRef
 	}
 	return data, ref, nil
 }
 
 func normalizeStructuredWorkset(data []byte) (WorksetManifest, error) {
 	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return WorksetManifest{}, fmt.Errorf("workset manifest must not be empty")
+	}
 	if len(trimmed) > 0 && trimmed[0] == '{' {
 		return decodeWorksetManifest(trimmed)
 	}
@@ -184,25 +195,112 @@ func normalizeStructuredWorkset(data []byte) (WorksetManifest, error) {
 	return manifest, nil
 }
 
-func (c *Coordinator) validateWorksetInputs(manifest WorksetManifest) error {
+func (c *Coordinator) validateWorksetInputs(manifest WorksetManifest, producerTaskReference string) (WorksetManifest, error) {
 	if c == nil || c.session == nil {
-		return nil
+		return manifest, nil
 	}
 	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
 	if err != nil {
-		return err
+		return WorksetManifest{}, err
 	}
-	for _, item := range manifest.Items {
-		for _, input := range item.Inputs {
-			if err := store.Verify(context.Background(), input); err != nil {
-				return fmt.Errorf("workset item %q input %q failed integrity verification: %w", item.Key, input.ID, err)
-			}
-			if c.executionRunID != "" && input.RunID != "" && input.RunID != c.executionRunID {
-				return fmt.Errorf("workset item %q input %q belongs to run %q, want %q", item.Key, input.ID, input.RunID, c.executionRunID)
-			}
+	producerTaskID := ""
+	var producerResult *TaskResult
+	if strings.TrimSpace(producerTaskReference) != "" {
+		producerTaskID, err = c.resolveTaskReference(producerTaskReference)
+		if err != nil {
+			return WorksetManifest{}, fmt.Errorf("workset input producer task %q: %w", producerTaskReference, err)
+		}
+		producerResult = c.GetTaskResult(producerTaskID)
+		if producerResult == nil {
+			return WorksetManifest{}, fmt.Errorf("workset input producer task %q has no typed result", producerTaskReference)
 		}
 	}
+	for itemIndex := range manifest.Items {
+		for inputIndex := range manifest.Items[itemIndex].Inputs {
+			input := manifest.Items[itemIndex].Inputs[inputIndex]
+			if producerResult != nil {
+				declaredRef, declared := artifactRefByID(producerResult, input.ID)
+				if !declared {
+					return WorksetManifest{}, fmt.Errorf("workset item %q input %q was not declared by producer task %q", manifest.Items[itemIndex].Key, input.ID, producerTaskReference)
+				}
+				if occurrenceErr := c.validateCurrentProducerArtifactOccurrence(declaredRef, producerTaskID, producerResult); occurrenceErr != nil {
+					return WorksetManifest{}, fmt.Errorf("workset item %q input %q declaration has invalid current producer occurrence: %w", manifest.Items[itemIndex].Key, input.ID, occurrenceErr)
+				}
+				if occurrenceErr := validateSuppliedArtifactOccurrence(input, declaredRef); occurrenceErr != nil {
+					return WorksetManifest{}, fmt.Errorf("workset item %q input %q has mismatched producer occurrence: %w", manifest.Items[itemIndex].Key, input.ID, occurrenceErr)
+				}
+			}
+			resolved, resolveErr := store.Resolve(context.Background(), input)
+			if resolveErr != nil {
+				return WorksetManifest{}, fmt.Errorf("workset item %q input %q failed integrity verification: %w", manifest.Items[itemIndex].Key, input.ID, resolveErr)
+			}
+			if producerResult != nil {
+				declaredRef, _ := artifactRefByID(producerResult, input.ID)
+				resolved = artifactContentWithCurrentOccurrence(resolved, declaredRef)
+			}
+			manifest.Items[itemIndex].Inputs[inputIndex] = resolved
+		}
+	}
+	return manifest, nil
+}
+
+// validateCurrentProducerArtifactOccurrence accepts only the occurrence that
+// the current producer typed result committed. Content-addressed metadata may
+// be resolved separately, but missing provenance is never repaired from
+// coordinator state.
+func (c *Coordinator) validateCurrentProducerArtifactOccurrence(ref ArtifactRef, producerTaskID string, result *TaskResult) error {
+	if c == nil || result == nil {
+		return fmt.Errorf("producer typed result is missing")
+	}
+	if strings.TrimSpace(ref.ID) == "" {
+		return fmt.Errorf("artifact id is missing")
+	}
+	if strings.TrimSpace(result.TaskID) == "" || result.TaskID != producerTaskID {
+		return fmt.Errorf("typed result task %q does not match producer task %q", result.TaskID, producerTaskID)
+	}
+	if strings.TrimSpace(ref.RunID) == "" || strings.TrimSpace(c.executionRunID) == "" || ref.RunID != c.executionRunID {
+		return fmt.Errorf("belongs to run %q, want current run %q", ref.RunID, c.executionRunID)
+	}
+	if strings.TrimSpace(ref.TaskID) == "" || ref.TaskID != producerTaskID {
+		return fmt.Errorf("belongs to task %q, want %q", ref.TaskID, producerTaskID)
+	}
+	if result.Attempt <= 0 || ref.Attempt <= 0 || ref.Attempt != result.Attempt {
+		return fmt.Errorf("belongs to attempt %d, want current attempt %d", ref.Attempt, result.Attempt)
+	}
+	if strings.TrimSpace(result.Agent) == "" || strings.TrimSpace(ref.Agent) == "" || ref.Agent != result.Agent {
+		return fmt.Errorf("belongs to agent %q, want current agent %q", ref.Agent, result.Agent)
+	}
 	return nil
+}
+
+func validateSuppliedArtifactOccurrence(supplied, current ArtifactRef) error {
+	if supplied.RunID != "" && supplied.RunID != current.RunID {
+		return fmt.Errorf("belongs to run %q, want %q", supplied.RunID, current.RunID)
+	}
+	if supplied.TaskID != "" && supplied.TaskID != current.TaskID {
+		return fmt.Errorf("belongs to task %q, want %q", supplied.TaskID, current.TaskID)
+	}
+	if supplied.Attempt != 0 && supplied.Attempt != current.Attempt {
+		return fmt.Errorf("belongs to attempt %d, want %d", supplied.Attempt, current.Attempt)
+	}
+	if supplied.Agent != "" && supplied.Agent != current.Agent {
+		return fmt.Errorf("belongs to agent %q, want %q", supplied.Agent, current.Agent)
+	}
+	return nil
+}
+
+// artifactContentWithCurrentOccurrence combines immutable content metadata
+// resolved from the store with the already-validated occurrence committed by
+// the producer typed result. It does not manufacture any provenance.
+func artifactContentWithCurrentOccurrence(content, occurrence ArtifactRef) ArtifactRef {
+	content.RunID = occurrence.RunID
+	content.TaskID = occurrence.TaskID
+	content.Attempt = occurrence.Attempt
+	content.Agent = occurrence.Agent
+	content.Provider = occurrence.Provider
+	content.ToolCallID = occurrence.ToolCallID
+	content.CreatedAt = occurrence.CreatedAt
+	return content
 }
 
 func buildWorksetReceipts(tasks []TaskDef, ids []string, runID string) (map[string]*WorksetExpansionReceipt, error) {
@@ -218,10 +316,15 @@ func buildWorksetReceipts(tasks []TaskDef, ids []string, runID string) (map[stri
 		if strings.TrimSpace(binding.SourceArtifactID) == "" || strings.TrimSpace(binding.SourceSHA256) == "" {
 			return nil, fmt.Errorf("task %d has incomplete workset source reference", index)
 		}
+		if err := validateWorksetSourceOccurrence(binding.SourceArtifact, binding.SourceArtifactID, binding.SourceSHA256, false); err != nil {
+			return nil, fmt.Errorf("task %d has invalid workset source occurrence: %w", index, err)
+		}
 		receipt := receipts[binding.WorksetID]
 		if receipt == nil {
-			receipt = &WorksetExpansionReceipt{WorksetID: binding.WorksetID, RunID: runID, ParentTaskID: binding.ParentTaskID, SourceArtifactID: binding.SourceArtifactID, SourceSHA256: binding.SourceSHA256, Children: make(map[string]string)}
+			receipt = &WorksetExpansionReceipt{WorksetID: binding.WorksetID, RunID: runID, ParentTaskID: binding.ParentTaskID, SourceArtifactID: binding.SourceArtifactID, SourceSHA256: binding.SourceSHA256, SourceArtifact: binding.SourceArtifact, Children: make(map[string]string)}
 			receipts[binding.WorksetID] = receipt
+		} else if receipt.RunID != runID || receipt.ParentTaskID != binding.ParentTaskID || receipt.SourceArtifactID != binding.SourceArtifactID || receipt.SourceSHA256 != binding.SourceSHA256 || !sameArtifactOccurrence(receipt.SourceArtifact, binding.SourceArtifact) {
+			return nil, fmt.Errorf("workset %q has inconsistent runtime binding metadata", binding.WorksetID)
 		}
 		if _, exists := receipt.Children[binding.ItemKey]; exists {
 			return nil, fmt.Errorf("workset %q has duplicate child key %q", binding.WorksetID, binding.ItemKey)

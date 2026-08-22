@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -263,6 +265,322 @@ func TestEventStoreTamperDetection(t *testing.T) {
 		if err := es2.VerifyHashChain(); err == nil {
 			t.Errorf("expected hash chain error on tampered file, got nil")
 		}
+	}
+}
+
+func TestCoordinatorStartupUsesSingleStrictEventStoreScan(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-history", "session-history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 512; i++ {
+		if err := store.Append(RunEvent{
+			Type:    "task_progress",
+			Actor:   "worker",
+			TaskID:  fmt.Sprintf("task-%d", i),
+			Payload: []byte(`{"progress":"` + strings.Repeat("x", 1024) + `"}`),
+		}); err != nil {
+			t.Fatalf("append history event %d: %v", i, err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := NewCoordinator(&TeamSession{
+		Workspace: workspace,
+		Config:    agent.TeamConfig{Name: "named-team"},
+	}, "", "", nil, nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PrepareContextPreflight(); err != nil {
+		t.Fatal(err)
+	}
+	defer c.CloseContextPreflight()
+	if c.eventStore == nil {
+		t.Fatal("startup did not initialize the event store")
+	}
+	if c.eventStore.scanCount != 1 {
+		t.Fatalf("event-store scans during startup = %d, want 1", c.eventStore.scanCount)
+	}
+	if c.eventStore.cacheHitCount == 0 {
+		t.Fatal("coordinator startup did not read the validated event cache")
+	}
+}
+
+func TestEventStoreReadEventsUsesValidatedCacheAndCopiesPayload(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-cache", "session-cache")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.Append(RunEvent{Type: "task_progress", Actor: "worker", Payload: []byte(`{"status":"original"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if store.scanCount != 1 {
+		t.Fatalf("initial scans = %d, want 1", store.scanCount)
+	}
+
+	first, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 {
+		t.Fatalf("cached event count = %d, want 1", len(first))
+	}
+	first[0].Payload[0] = 'X'
+	if store.scanCount != 1 {
+		t.Fatalf("ReadEvents triggered a rescan: %d scans", store.scanCount)
+	}
+	if store.cacheHitCount != 1 {
+		t.Fatalf("cache hits = %d, want 1", store.cacheHitCount)
+	}
+
+	second, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(second[0].Payload); got != `{"status":"original"}` {
+		t.Fatalf("cached payload = %s, want original payload", got)
+	}
+	if store.cacheHitCount != 2 {
+		t.Fatalf("cache hits after second read = %d, want 2", store.cacheHitCount)
+	}
+}
+
+func TestEventStoreVerifyRefreshDetectsTamperAfterOpen(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-refresh", "session-refresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.Append(RunEvent{Type: "task_progress", Actor: "worker", Payload: []byte(`{"status":"original"}`)}); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(workspace, logsDir, eventStoreFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte("task_progress"), []byte("task_tampered"), 1)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.VerifyHashChain(); err == nil {
+		t.Fatal("VerifyHashChain accepted tampered durable JSONL")
+	}
+	if _, err := store.ReadEvents(); err == nil {
+		t.Fatal("ReadEvents exposed the pre-tamper cache after failed refresh")
+	}
+}
+
+func TestEventStoreFailedRefreshInvalidatesStateAndBlocksAppend(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-refresh-failure", "session-refresh-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.Append(RunEvent{Type: "run_started", Actor: "user", IdempotencyKey: "started"}); err != nil {
+		t.Fatal(err)
+	}
+	originalPath := store.path
+	store.path = filepath.Join(workspace, "missing-parent", eventStoreFile)
+
+	if err := store.VerifyHashChain(); err == nil {
+		t.Fatal("VerifyHashChain unexpectedly recovered a missing refresh path")
+	}
+	if _, err := store.ReadEvents(); err == nil {
+		t.Fatal("ReadEvents exposed stale cache after refresh failure")
+	}
+	if err := store.Append(RunEvent{Type: "task_created", Actor: "coordinator"}); err == nil {
+		t.Fatal("Append used stale chain state after refresh failure")
+	}
+
+	data, err := os.ReadFile(originalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := bytes.Count(data, []byte("\n")); count != 1 {
+		t.Fatalf("original durable log gained an append after refresh failure: %d lines", count)
+	}
+}
+
+func TestEventStoreFailedRefreshDoesNotPublishPartialState(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-partial", "session-partial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.Append(RunEvent{Type: "run_started", Actor: "user", IdempotencyKey: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(RunEvent{Type: "task_created", Actor: "coordinator", IdempotencyKey: "second"}); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(workspace, logsDir, eventStoreFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte("task_created"), []byte("task_corrupt"), 1)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.VerifyHashChain(); err == nil {
+		t.Fatal("VerifyHashChain accepted corruption after a valid prefix")
+	}
+	if store.lastEventID != "" || store.lastHash != "" || store.sequence != 0 || len(store.cachedEvents) != 0 || len(store.idempotencyKeys) != 0 {
+		t.Fatalf("failed refresh published partial state: head=%q/%q sequence=%d events=%d keys=%d", store.lastEventID, store.lastHash, store.sequence, len(store.cachedEvents), len(store.idempotencyKeys))
+	}
+}
+
+func TestEventStoreSuccessfulRefreshSwapsCacheAndAppendHandle(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-replacement", "session-replacement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.Append(RunEvent{ID: "old-event", Type: "run_started", Actor: "user"}); err != nil {
+		t.Fatal(err)
+	}
+
+	replacementWorkspace := t.TempDir()
+	replacement, err := NewEventStore(replacementWorkspace, "run-replacement", "session-replacement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replacement.Append(RunEvent{ID: "new-event", Type: "run_started", Actor: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := replacement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	replacementPath := filepath.Join(replacementWorkspace, logsDir, eventStoreFile)
+	targetPath := filepath.Join(workspace, logsDir, eventStoreFile)
+	if err := os.Rename(replacementPath, targetPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.VerifyHashChain(); err != nil {
+		t.Fatalf("refresh replacement: %v", err)
+	}
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].ID != "new-event" {
+		t.Fatalf("refreshed cache = %#v, want replacement event", events)
+	}
+
+	durable, err := store.AppendPersisted(RunEvent{ID: "after-refresh", Type: "task_progress", Actor: "worker", TaskID: "task-after-refresh", Payload: []byte(`{"progress":"after refresh"}`)})
+	if err != nil {
+		t.Fatalf("append after refresh: %v", err)
+	}
+	if durable.PreviousID != "new-event" {
+		t.Fatalf("append previous_id = %q, want refreshed chain head", durable.PreviousID)
+	}
+	if err := store.VerifyHashChain(); err != nil {
+		t.Fatalf("verify appended refreshed chain: %v", err)
+	}
+	events, err = store.ReadEvents()
+	if err != nil {
+		t.Fatalf("read appended refreshed chain: %v", err)
+	}
+	if len(events) != 2 || events[0].ID != "new-event" || events[1].ID != "after-refresh" {
+		t.Fatalf("durable refreshed events = %#v, want new-event followed by after-refresh", events)
+	}
+}
+
+func TestEventStoreRejectsNonEmptyFirstLink(t *testing.T) {
+	cases := []struct {
+		name  string
+		event RunEvent
+	}{
+		{name: "previous_id", event: RunEvent{PreviousID: "prior-event"}},
+		{name: "previous_hash", event: RunEvent{PreviousHash: "prior-hash"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			event := tc.event
+			event.SchemaVersion = eventStoreSchemaVersion
+			event.ID = "first-event"
+			event.RunID = "run-first-link"
+			event.SessionID = "session-first-link"
+			event.Type = "run_started"
+			event.Actor = "user"
+			event.Timestamp = "2026-01-01T00:00:00Z"
+			event.Payload = json.RawMessage(`{"started":true}`)
+			event.Hash = ComputeEventHash(event.PreviousHash, event.ID, event.Type, event.Timestamp, event.Payload)
+			path := filepath.Join(workspace, logsDir, eventStoreFile)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewEventStore(workspace, "run-first-link", "session-first-link"); err == nil {
+				t.Fatal("NewEventStore accepted a non-empty first link")
+			}
+		})
+	}
+}
+
+func TestCoordinatorStartupMarksCorruptEventStoreForRecovery(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-corrupt", "session-corrupt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(RunEvent{Type: "run_started", Actor: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(workspace, logsDir, eventStoreFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte("run_started"), []byte("run_tampered"), 1)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := NewCoordinator(&TeamSession{
+		Workspace: workspace,
+		Config:    agent.TeamConfig{Name: "named-team"},
+	}, "", "", nil, nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PrepareContextPreflight(); err == nil {
+		t.Fatal("corrupt event store was accepted during startup")
+	}
+	if c.eventStore != nil {
+		t.Fatal("corrupt event store remained attached")
+	}
+	if c.SessionData() == nil || !c.SessionData().RecoveryRequired {
+		t.Fatalf("corrupt event store did not mark recovery required: %#v", c.SessionData())
+	}
+	if c.contextRepo != nil {
+		_ = c.contextRepo.Close()
 	}
 }
 

@@ -64,10 +64,12 @@ func (b *BudgetSnapshot) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	if raw, ok := fields["tokens_used"]; ok {
-		var marker string
-		if err := json.Unmarshal(raw, &marker); err == nil && marker == "[REDACTED]" {
-			fields["tokens_used"] = json.RawMessage("0")
+	for _, name := range []string{"max_tokens", "tokens_used"} {
+		if raw, ok := fields[name]; ok {
+			var marker string
+			if err := json.Unmarshal(raw, &marker); err == nil && marker == "[REDACTED]" {
+				fields[name] = json.RawMessage("0")
+			}
 		}
 	}
 	normalized, err := json.Marshal(fields)

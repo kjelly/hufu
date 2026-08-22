@@ -2,6 +2,7 @@ package team
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -116,6 +117,128 @@ func TestReducersRestoreVerifyingTask(t *testing.T) {
 	todos := ReduceToTodoList(events)
 	if len(todos) != 1 || todos[0].Status != TaskVerifying {
 		t.Fatalf("verifying state was not replayed: %#v", todos)
+	}
+}
+
+func TestReduceReplayWorksetReceiptConflictByRuntimeTaskID(t *testing.T) {
+	receiptA := &WorksetExpansionReceipt{
+		WorksetID: "workset-a", RunID: "run-1", ParentTaskID: "prepare", SourceArtifactID: "artifact-a",
+		SourceSHA256: "sha-a", ItemCount: 1, Children: map[string]string{"item": "runtime-1"},
+	}
+	receiptB := cloneWorksetReceipt(receiptA)
+	receiptB.WorksetID = "workset-b"
+	receiptB.SourceArtifactID = "artifact-b"
+
+	payload := func(status string, receipt *WorksetExpansionReceipt) []byte {
+		t.Helper()
+		data, err := json.Marshal(map[string]any{
+			"id": "runtime-1", "status": status, "workset_receipt": receipt,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	events := []RunEvent{
+		{Type: string(EventTaskCreated), TaskID: "runtime-1", Payload: payload("pending", receiptA)},
+		{Type: string(EventTaskStarted), TaskID: "runtime-1", Payload: payload("in_progress", receiptB)},
+	}
+
+	replayed := ReduceToTodoList(events)
+	if len(replayed) != 1 {
+		t.Fatalf("replayed task count = %d, want 1", len(replayed))
+	}
+	if replayed[0].Status != TaskError {
+		t.Fatalf("replayed task status = %s, want error", replayed[0].Status)
+	}
+	if replayed[0].RuntimeError == nil || replayed[0].RuntimeError.Source != "workset_receipt" {
+		t.Fatalf("replayed runtime error = %#v, want workset_receipt source", replayed[0].RuntimeError)
+	}
+
+	projected := ReduceToSessionData(events)
+	if !projected.RecoveryRequired || !strings.Contains(projected.RecoveryReason, "conflicting workset receipts") {
+		t.Fatalf("replayed session recovery = required:%v reason:%q", projected.RecoveryRequired, projected.RecoveryReason)
+	}
+	for _, receipt := range projected.WorksetReceipts {
+		if receipt.WorksetID == receiptA.WorksetID || receipt.WorksetID == receiptB.WorksetID {
+			t.Fatalf("conflicting session projection retained receipt: %#v", receipt)
+		}
+	}
+}
+
+func TestReduceReplayWorksetReceiptConflictAfterTaskRemoval(t *testing.T) {
+	receiptA := &WorksetExpansionReceipt{
+		WorksetID: "workset-a", RunID: "run-1", ParentTaskID: "prepare", SourceArtifactID: "artifact",
+		SourceSHA256: "sha", ItemCount: 1, Children: map[string]string{"item": "runtime-1"},
+	}
+	receiptB := cloneWorksetReceipt(receiptA)
+	receiptB.WorksetID = "workset-b"
+
+	payload := func(receipt *WorksetExpansionReceipt) []byte {
+		t.Helper()
+		data, err := json.Marshal(map[string]any{
+			"id": "runtime-1", "status": "pending", "workset_receipt": receipt,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	events := []RunEvent{
+		{Type: string(EventTaskCreated), TaskID: "runtime-1", Payload: payload(receiptA)},
+		{Type: string(EventTaskRemoved), TaskID: "runtime-1", Payload: []byte(`{"id":"runtime-1"}`)},
+		{Type: string(EventTaskCreated), TaskID: "runtime-1", Payload: payload(receiptB)},
+	}
+	removed := ReduceToTodoList(events[:2])
+	if len(removed) != 0 {
+		t.Fatalf("task removal projected %d tasks, want none", len(removed))
+	}
+	if session := ReduceToSessionData(events[:2]); session.RecoveryRequired {
+		t.Fatalf("task removal unexpectedly required recovery: %q", session.RecoveryReason)
+	}
+
+	replayed := ReduceToTodoList(events)
+	if len(replayed) != 1 {
+		t.Fatalf("replayed task count = %d, want 1", len(replayed))
+	}
+	if replayed[0].Status != TaskError {
+		t.Fatalf("replayed task status = %s, want error", replayed[0].Status)
+	}
+	if replayed[0].RuntimeError == nil || replayed[0].RuntimeError.Source != "workset_receipt" {
+		t.Fatalf("replayed runtime error = %#v, want workset_receipt source", replayed[0].RuntimeError)
+	}
+
+	projected := ReduceToSessionData(events)
+	if !projected.RecoveryRequired || !strings.Contains(projected.RecoveryReason, "conflicting workset receipts") {
+		t.Fatalf("replayed session recovery = required:%v reason:%q", projected.RecoveryRequired, projected.RecoveryReason)
+	}
+	if len(projected.WorksetReceipts) != 0 {
+		t.Fatalf("conflicting session projection retained receipts: %#v", projected.WorksetReceipts)
+	}
+}
+
+func TestReduceReplayEquivalentWorksetReceiptsRemainHealthy(t *testing.T) {
+	receipt := &WorksetExpansionReceipt{
+		WorksetID: "workset-equivalent", RunID: "run-1", ParentTaskID: "prepare", SourceArtifactID: "artifact",
+		SourceSHA256: "sha", ItemCount: 1, Children: map[string]string{"item": "runtime-1"},
+	}
+	payload, err := json.Marshal(map[string]any{
+		"id": "runtime-1", "status": "pending", "workset_receipt": receipt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []RunEvent{
+		{Type: string(EventTaskCreated), TaskID: "runtime-1", Payload: payload},
+		{Type: string(EventTaskStarted), TaskID: "runtime-1", Payload: payload},
+	}
+	replayed := ReduceToTodoList(events)
+	if len(replayed) != 1 || replayed[0].Status != TaskInProgress || replayed[0].RuntimeError != nil {
+		t.Fatalf("equivalent replay = %#v, want one healthy in-progress task", replayed)
+	}
+	projected := ReduceToSessionData(events)
+	if projected.RecoveryRequired || len(projected.WorksetReceipts) != 1 || projected.WorksetReceipts[0].WorksetID != receipt.WorksetID {
+		t.Fatalf("equivalent replay session = %#v, want one clean receipt", projected)
 	}
 }
 
