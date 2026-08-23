@@ -73,22 +73,7 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 		taskSchema["required"] = []string{"agent", "goal"}
 		tasksSchema["minItems"] = len(initial)
 		tasksSchema["maxItems"] = len(initial)
-		tasksSchema["description"] = fmt.Sprintf("Canonical initial delegation: exactly one ordered task for each worker %s. Later workers are unavailable until this batch succeeds policy validation.", formatAgentNames(initial))
-		prefixItems := make([]map[string]any, 0, len(initial))
-		for _, name := range initial {
-			properties := make(map[string]any, len(taskProperties))
-			for key, value := range taskProperties {
-				properties[key] = value
-			}
-			properties["agent"] = map[string]any{"type": "string", "enum": []string{name}}
-			prefixItems = append(prefixItems, map[string]any{
-				"type":                 "object",
-				"properties":           properties,
-				"required":             []string{"agent", "goal"},
-				"additionalProperties": false,
-			})
-		}
-		tasksSchema["prefixItems"] = prefixItems
+		tasksSchema["description"] = fmt.Sprintf("Canonical initial delegation: exactly one ordered task for each worker %s. The agent sequence is enforced by Hufu before any task is created; later workers are unavailable until this batch succeeds policy validation.", formatAgentNames(initial))
 	}
 	return fantasy.ToolInfo{
 		Name: "agent",

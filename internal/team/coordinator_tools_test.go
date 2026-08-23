@@ -237,9 +237,11 @@ func TestRunAgentsToolInfoPinsFreshInitialDelegationSchema(t *testing.T) {
 			t.Fatalf("fresh initial task schema exposed runtime-bound field %q", forbidden)
 		}
 	}
-	prefix, ok := tasks["prefixItems"].([]map[string]any)
-	if !ok || len(prefix) != 2 {
-		t.Fatalf("prefixItems = %#v, want ordered schemas for both initial workers", tasks["prefixItems"])
+	if _, exists := tasks["prefixItems"]; exists {
+		t.Fatal("provider-facing initial schema must not expose prefixItems")
+	}
+	if !strings.Contains(tasks["description"].(string), "agent sequence is enforced by Hufu") {
+		t.Fatalf("initial schema description omitted runtime ordering authority: %q", tasks["description"])
 	}
 	if !strings.Contains(info.Description, "initial_pending") {
 		t.Fatalf("fresh initial agent tool description omitted canonical phase: %q", info.Description)
