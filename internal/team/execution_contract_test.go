@@ -701,8 +701,11 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 		}
 	}
 	toolSequenceItems := execSubProps["tool_sequence"].(map[string]any)["items"].(map[string]any)
-	if got := toolSequenceItems["pattern"]; got != `^\S+$` {
-		t.Errorf("tool_sequence item pattern = %#v, want non-whitespace tool name", got)
+	if _, exists := toolSequenceItems["pattern"]; exists {
+		t.Error("tool_sequence item must not expose provider-specific regex constraints")
+	}
+	if !strings.Contains(toolSequenceItems["description"].(string), "whitespace") {
+		t.Errorf("tool_sequence item description omitted whitespace constraint: %#v", toolSequenceItems["description"])
 	}
 	toolInputSequenceDescription := execSubProps["tool_input_sequence"].(map[string]any)["description"].(string)
 	for _, requiredPhrase := range []string{"same length", "empty object", "declared field"} {
@@ -716,12 +719,8 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 			t.Errorf("tool_input_value_sequence schema description missing %q: %s", requiredPhrase, toolInputValueSequenceDescription)
 		}
 	}
-	dependentRequired := execProp["dependentRequired"].(map[string]any)
-	if got := dependentRequired["tool_input_field"]; !reflect.DeepEqual(got, []string{"tool_input_value_sequence"}) {
-		t.Errorf("tool_input_field dependentRequired = %#v, want tool_input_value_sequence", got)
-	}
-	if got := dependentRequired["tool_input_value_sequence"]; !reflect.DeepEqual(got, []string{"tool_input_field"}) {
-		t.Errorf("tool_input_value_sequence dependentRequired = %#v, want tool_input_field", got)
+	if _, exists := execProp["dependentRequired"]; exists {
+		t.Error("execution schema must not expose dependentRequired to the provider")
 	}
 	toolExpectedExitCodesDescription := execSubProps["tool_expected_exit_codes"].(map[string]any)["description"].(string)
 	for _, requiredPhrase := range []string{"non-zero", "one integer array per tool_sequence slot", "timeout exit 124"} {
@@ -730,8 +729,11 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 		}
 	}
 	expectedCodeItems := execSubProps["tool_expected_exit_codes"].(map[string]any)["items"].(map[string]any)["items"].(map[string]any)
-	if got := expectedCodeItems["not"]; !reflect.DeepEqual(got, map[string]any{"const": 0}) {
-		t.Errorf("tool_expected_exit_codes item zero guard = %#v", got)
+	if _, exists := expectedCodeItems["not"]; exists {
+		t.Error("expected exit code schema must not expose not/const grammar constraint")
+	}
+	if !strings.Contains(expectedCodeItems["description"].(string), "Non-zero") {
+		t.Errorf("expected exit code description omitted non-zero guidance: %#v", expectedCodeItems["description"])
 	}
 
 	// 3. Verify buildAgentTaskProperties top-level map does NOT expose non-spec strict_result key
