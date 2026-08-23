@@ -2799,6 +2799,8 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	var recoveryMu sync.Mutex
 	pendingRecovery := ""
 	tp := &ThinkParser{}
+	textRepetitionDetector := NewStreamRepetitionDetector()
+	reasoningRepetitionDetector := NewStreamRepetitionDetector()
 
 	stopWhen := append([]fantasy.StopCondition(nil), extraStop...)
 	stopWhen = append(stopWhen, func([]fantasy.StepResult) bool {
@@ -3111,6 +3113,10 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			return nil
 		},
 		OnTextDelta: func(id, text string) error {
+			if err := textRepetitionDetector.Process(text); err != nil {
+				reportFn(c.newEvent("error").withAgent(agentName).withTodoID(todoID).withMessage(err.Error()))
+				return err
+			}
 			tp.Process(text, func(txt string) {
 				reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage(txt))
 				logWrite(txt)
@@ -3121,6 +3127,10 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			return nil
 		},
 		OnReasoningDelta: func(id, text string) error {
+			if err := reasoningRepetitionDetector.Process(text); err != nil {
+				reportFn(c.newEvent("error").withAgent(agentName).withTodoID(todoID).withMessage(err.Error()))
+				return err
+			}
 			reportFn(c.newEvent("reasoning").withAgent(agentName).withTodoID(todoID).withMessage(text))
 			logWrite(text)
 			return nil
