@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func isolateHome(t *testing.T) string {
@@ -626,5 +627,74 @@ func TestMergeFromFileVarsMerge(t *testing.T) {
 	}
 	if vars["timeout"] != "300" {
 		t.Errorf("vars[timeout] = %q, want %q", vars["timeout"], "300")
+	}
+}
+
+func TestResolveStallThreshold(t *testing.T) {
+	tests := []struct {
+		name      string
+		cfgStall  string
+		teamStall string
+		want      time.Duration
+	}{
+		{
+			name:      "team config takes precedence",
+			cfgStall:  "30m",
+			teamStall: "15m",
+			want:      15 * time.Minute,
+		},
+		{
+			name:      "falls back to config file duration string",
+			cfgStall:  "30m",
+			teamStall: "",
+			want:      30 * time.Minute,
+		},
+		{
+			name:      "supports seconds as integer string",
+			cfgStall:  "1800",
+			teamStall: "",
+			want:      30 * time.Minute,
+		},
+		{
+			name:      "both empty returns 0",
+			cfgStall:  "",
+			teamStall: "",
+			want:      0,
+		},
+		{
+			name:      "invalid format returns 0",
+			cfgStall:  "not-a-duration",
+			teamStall: "",
+			want:      0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{StallThreshold: tt.cfgStall}
+			got := cfg.ResolveStallThreshold(tt.teamStall)
+			if got != tt.want {
+				t.Errorf("ResolveStallThreshold(%q) with cfg.StallThreshold=%q = %v, want %v",
+					tt.teamStall, tt.cfgStall, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStallThresholdMergeFromFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	configContent := `provider-url: http://test:11434/v1
+stall-threshold: 30m
+`
+	configPath := filepath.Join(tmpDir, "hufu.yaml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	cfg := &Config{}
+	cfg.mergeFromFile(configPath)
+
+	if cfg.StallThreshold != "30m" {
+		t.Errorf("StallThreshold = %q, want %q", cfg.StallThreshold, "30m")
 	}
 }

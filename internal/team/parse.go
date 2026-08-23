@@ -94,6 +94,7 @@ type teamConfigYAML struct {
 	JudgeModel               string                           `yaml:"judge-model"`
 	PlanReviewerModel        string                           `yaml:"plan-reviewer-model"`
 	MaxConcurrent            int                              `yaml:"max-concurrent"`
+	StallThreshold           string                           `yaml:"stall-threshold"`
 	MaxCoordinatorTurns      int                              `yaml:"max-coordinator-turns"`
 	EscalateOnRetry          bool                             `yaml:"escalate-on-retry"`
 	AutoSkills               bool                             `yaml:"auto-skills"`
@@ -749,6 +750,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.ProjectContext {
 		cfg.ProjectContext = true
+	}
+	if yc.StallThreshold != "" {
+		cfg.StallThreshold = yc.StallThreshold
 	}
 	if yc.Unattended {
 		cfg.Unattended = true

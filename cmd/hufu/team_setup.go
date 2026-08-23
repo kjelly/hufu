@@ -250,6 +250,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	coordinator.SetExecutionProfile(execProfile)
 	coordinator.SetSessionData(sessionData)
 	coordinator.SetFreshSession(startsFresh)
+	if stallThreshold := cfg.ResolveStallThreshold(session.Config.StallThreshold); stallThreshold > 0 {
+		coordinator.SetStallWatchdog(stallThreshold, 0)
+	}
 	if err := applyUnattendedAndBudget(coordinator, session); err != nil {
 		return nil, err
 	}

@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -51,6 +53,7 @@ type Config struct {
 	JudgeModel        string                    `yaml:"judge-model"`
 	PlanReviewerModel string                    `yaml:"plan-reviewer-model"`
 	MaxConcurrent     int                       `yaml:"max-concurrent"`
+	StallThreshold    string                    `yaml:"stall-threshold"`
 	AllowedPaths      []string                  `yaml:"allowed-paths"`
 	RestrictedPath    string                    `yaml:"restricted-path"`
 	NoNet             bool                      `yaml:"no-net"`
@@ -139,6 +142,9 @@ func (c *Config) mergeFromFile(path string) {
 	}
 	if fileCfg.MaxConcurrent > 0 {
 		c.MaxConcurrent = fileCfg.MaxConcurrent
+	}
+	if fileCfg.StallThreshold != "" {
+		c.StallThreshold = fileCfg.StallThreshold
 	}
 	if len(fileCfg.AllowedPaths) > 0 {
 		c.AllowedPaths = fileCfg.AllowedPaths
@@ -290,6 +296,26 @@ func (c *Config) ResolveMaxConcurrent(teamMax int) int {
 	}
 	if c.MaxConcurrent > 0 {
 		return c.MaxConcurrent
+	}
+	return 0
+}
+
+// ResolveStallThreshold parses the stall-threshold duration string (e.g. "30m", "1800s", "1800")
+// following priority: team.yaml stall-threshold > hufu.yaml stall-threshold.
+// Returns 0 if none is configured or if parsing fails.
+func (c *Config) ResolveStallThreshold(teamStall string) time.Duration {
+	val := strings.TrimSpace(teamStall)
+	if val == "" {
+		val = strings.TrimSpace(c.StallThreshold)
+	}
+	if val == "" {
+		return 0
+	}
+	if d, err := time.ParseDuration(val); err == nil && d > 0 {
+		return d
+	}
+	if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
 	}
 	return 0
 }

@@ -278,6 +278,7 @@ type TeamConfig struct {
 	JudgeModel           string
 	PlanReviewerModel    string
 	MaxConcurrent        int
+	StallThreshold       string
 	// MaxCoordinatorTurns bounds automatic continuation turns after a
 	// coordinator step limit. Zero uses the built-in safe default.
 	MaxCoordinatorTurns int
