@@ -1546,10 +1546,6 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 		"execution": map[string]any{
 			"type":        "object",
 			"description": "Execution contract. Use steps for artifact-producing workflows that require validator receipts, bounded pre-mutation repair, digest freeze, mutation, and verification. tool_sequence remains the legacy exact call budget for atomic tasks and cannot be combined with steps. tool_input_sequence can require JSON input fields. tool_input_field and tool_input_value_sequence are a paired scalar form permitted only for homogeneous tool sequences; for any mixed sequence (including a non-submit tool followed by submit_result), use tool_input_sequence or omit all input constraints. tool_expected_exit_codes declares expected non-zero observation outcomes such as timeout exit 124, so bounded discovery can continue without weakening other failures.",
-			"dependentRequired": map[string]any{
-				"tool_input_field":          []string{"tool_input_value_sequence"},
-				"tool_input_value_sequence": []string{"tool_input_field"},
-			},
 			"properties": map[string]any{
 				"kind": map[string]any{
 					"type":        "string",
@@ -1574,8 +1570,8 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 				},
 				"tool_sequence": map[string]any{
 					"type":        "array",
-					"items":       map[string]any{"type": "string", "pattern": `^\S+$`},
-					"description": "Optional exact tool-call sequence for an atomic task. It is the complete call budget, not a tool-type summary: include one entry per call in order (repeat bash for every bash call and include write when the task writes a file), then end with submit_result. Hufu exposes only these tools and rejects out-of-order or extra calls.",
+					"items":       map[string]any{"type": "string", "description": "Tool name only; do not include whitespace or shell command text."},
+					"description": "Optional exact tool-call sequence for an atomic task. It is the complete call budget, not a tool-type summary: include one entry per call in order (repeat bash for every bash call and include write when the task writes a file), then end with submit_result. Hufu exposes only these tools and rejects empty or whitespace-containing names, out-of-order calls, and extra calls.",
 				},
 				"tool_input_sequence": map[string]any{
 					"type":        "array",
@@ -1603,7 +1599,7 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 				},
 				"tool_expected_exit_codes": map[string]any{
 					"type":        "array",
-					"items":       map[string]any{"type": "array", "items": map[string]any{"type": "integer", "not": map[string]any{"const": 0}}},
+					"items":       map[string]any{"type": "array", "items": map[string]any{"type": "integer", "description": "Non-zero process exit code."}},
 					"description": "Optional expected non-zero process exit codes, one integer array per tool_sequence slot. Use an empty array when normal success-only handling is required. A declared code (for example timeout exit 124) is returned as normal observation evidence and the sequence continues.",
 				},
 				"steps": map[string]any{
