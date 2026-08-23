@@ -30,7 +30,7 @@ type runAgentsTool struct {
 func (t *runAgentsTool) Info() fantasy.ToolInfo {
 	workerNames := t.coordinator.workerNameList()
 	allowContextFiles := !t.coordinator.session.Config.Delegation.ForbidContextFiles
-	taskProperties := buildAgentTaskProperties(workerNames, len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir), t.coordinator.taskCapabilityNames(), allowContextFiles)
+	taskProperties := portableProviderTaskProperties(buildAgentTaskProperties(workerNames, len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir), t.coordinator.taskCapabilityNames(), allowContextFiles))
 	if t.coordinator.phaseWorkflow != nil && t.coordinator.phaseWorkflow.Enabled() {
 		// Runtime workflows own execution, verification, artifact, and
 		// workset contracts. Exposing their full recursive JSON schema to a
@@ -98,6 +98,47 @@ func providerSafeWorkflowTaskProperties(properties map[string]any) map[string]an
 		}
 	}
 	return compact
+}
+
+// portableProviderTaskProperties projects the complete internal task schema
+// into the provider-facing schema used by the coordinator model. The full
+// schema remains available to runtime contract compilation and decoding, but
+// model-authored delegation only needs common, shallow task controls. Complex
+// execution/workset contracts are static-team/runtime concerns: exposing
+// their recursive JSON schema makes local grammar compilers reject the whole
+// request before a model can call the agent tool.
+//
+// This projection is intentionally structural rather than a post-hoc string
+// truncation. It keeps the model-visible contract valid JSON Schema while
+// leaving decodeModelTaskDefs and the runtime policy as the authoritative
+// boundary for callers that provide a complete internal TaskDef.
+func portableProviderTaskProperties(properties map[string]any) map[string]any {
+	compact := make(map[string]any, len(portableProviderTaskFields))
+	for _, name := range portableProviderTaskFields {
+		if value, ok := properties[name]; ok {
+			compact[name] = value
+		}
+	}
+	return compact
+}
+
+var portableProviderTaskFields = []string{
+	"agent",
+	"goal",
+	"constraints",
+	"plan_first",
+	"summarize",
+	"output_mode",
+	"sidecar",
+	"context_files",
+	"depends_on",
+	"pipeline",
+	"verify",
+	"verify_mode",
+	"adversarial_verify",
+	"requires",
+	"model",
+	"escalate",
 }
 
 func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {

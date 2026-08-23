@@ -281,6 +281,55 @@ func TestRunAgentsToolInfoCompactsRuntimeWorkflowSchema(t *testing.T) {
 	}
 }
 
+func TestPortableProviderTaskPropertiesHidesComplexContractsOnlyFromModelSchema(t *testing.T) {
+	full := buildAgentTaskProperties([]string{"worker"}, true, "/tmp/shared", []string{"network"}, true)
+	portable := portableProviderTaskProperties(full)
+
+	for _, field := range []string{"agent", "goal", "constraints", "depends_on", "pipeline", "verify", "verify_mode", "requires", "model", "escalate"} {
+		if _, exists := portable[field]; !exists {
+			t.Fatalf("portable schema omitted common task field %q", field)
+		}
+	}
+	for _, field := range []string{"verify_spec", "execution", "fact_refs", "fan_out"} {
+		if _, exists := full[field]; !exists {
+			t.Fatalf("full schema unexpectedly omitted runtime contract field %q", field)
+		}
+		if _, exists := portable[field]; exists {
+			t.Fatalf("portable schema exposed complex runtime contract field %q", field)
+		}
+	}
+}
+
+func TestRunAgentsToolInfoUsesPortableProviderProjection(t *testing.T) {
+	c := &Coordinator{
+		session: &TeamSession{Agents: map[string]*agent.AgentDef{
+			"worker": {Name: "worker", Role: "worker"},
+		}},
+		taskTracker: NewTaskTracker(),
+		sessionData: NewSession(),
+	}
+
+	info := (&runAgentsTool{coordinator: c}).Info()
+	tasks := info.Parameters["tasks"].(map[string]any)
+	items := tasks["items"].(map[string]any)
+	properties := items["properties"].(map[string]any)
+	for _, field := range []string{"execution", "verify_spec", "fact_refs", "fan_out"} {
+		if _, exists := properties[field]; exists {
+			t.Fatalf("provider-facing agent schema exposed complex field %q", field)
+		}
+	}
+}
+
+func TestDecodeModelTaskDefsRetainsRuntimeContractFieldsOutsideProviderSchema(t *testing.T) {
+	tasks, err := decodeModelTaskDefs([]byte(`{"tasks":[{"agent":"worker","goal":"run the bounded check","execution":{"tool_sequence":["bash","submit_result"]},"fan_out":{"goal_template":"check {name}"}}]}`))
+	if err != nil {
+		t.Fatalf("decodeModelTaskDefs rejected a complete internal task: %v", err)
+	}
+	if len(tasks) != 1 || len(tasks[0].Execution.ToolSequence) != 2 || tasks[0].FanOut == nil {
+		t.Fatalf("runtime contract fields were lost during decode: %#v", tasks)
+	}
+}
+
 func TestRunAgentsToolInfoHidesForbiddenContextFiles(t *testing.T) {
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
