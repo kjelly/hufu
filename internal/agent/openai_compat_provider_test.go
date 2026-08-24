@@ -43,6 +43,24 @@ func TestDetectProviderContextLengthUsesModelsMetadata(t *testing.T) {
 	}
 }
 
+func TestDetectProviderContextCapacityAcceptsMaxInputTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("request path = %q, want /v1/models", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"local-model","max_input_tokens":39936}]}`))
+	}))
+	defer server.Close()
+
+	capacity, err := DetectProviderContextCapacity(context.Background(), server.URL+"/v1", "", "local-model")
+	if err != nil {
+		t.Fatalf("DetectProviderContextCapacity() error = %v", err)
+	}
+	if capacity.ContextWindow != 39936 || capacity.Source != ContextCapacitySourceMetadata {
+		t.Fatalf("capacity = %#v, want window 39936 from provider metadata", capacity)
+	}
+}
+
 func strIndexAfterSlash(modelID string) int {
 	for i := len(modelID) - 1; i >= 0; i-- {
 		if modelID[i] == '/' {

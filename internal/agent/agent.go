@@ -793,15 +793,31 @@ const ProviderContextProbeTimeout = 3 * time.Second
 // discovery now uses the provider-neutral OpenAI-compatible /models endpoint.
 const OllamaShowContextTimeout = ProviderContextProbeTimeout
 
-// DetectProviderContextLength queries the OpenAI-compatible /models endpoint
-// for modelName's advertised context length. Providers may expose the field
-// as max_context_window (used by Lemonade) or context_length. A provider that
-// omits metadata returns 0, allowing callers to use the static registry.
-func DetectProviderContextLength(ctx context.Context, baseURL, apiKey, modelName string) (int, error) {
+// ContextCapacity is the provider-neutral context capacity advertised for one
+// model. Advertised is deliberately distinct from an observed runtime limit:
+// local servers may expose a hardware-dependent effective window that is
+// smaller than their model metadata.
+type ContextCapacity struct {
+	ModelID       string
+	ContextWindow int
+	Source        string
+}
+
+const (
+	ContextCapacitySourceMetadata = "provider_metadata"
+	ContextCapacitySourceObserved = "provider_observed"
+)
+
+// DetectProviderContextCapacity queries the OpenAI-compatible /models endpoint
+// for modelName's advertised context capacity. Providers may expose the field
+// as max_context_window (used by Lemonade), context_length, or
+// max_input_tokens. A provider that omits metadata returns a zero capacity,
+// allowing callers to use a static or learned runtime fallback.
+func DetectProviderContextCapacity(ctx context.Context, baseURL, apiKey, modelName string) (ContextCapacity, error) {
 	url := strings.TrimRight(baseURL, "/") + "/models"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return 0, fmt.Errorf("build /models request: %w", err)
+		return ContextCapacity{}, fmt.Errorf("build /models request: %w", err)
 	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
@@ -809,32 +825,50 @@ func DetectProviderContextLength(ctx context.Context, baseURL, apiKey, modelName
 	client := &http.Client{Timeout: ProviderContextProbeTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("query %s: %w", url, err)
+		return ContextCapacity{}, fmt.Errorf("query %s: %w", url, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("query %s: status %s", url, resp.Status)
+		return ContextCapacity{}, fmt.Errorf("query %s: status %s", url, resp.Status)
 	}
 	var payload struct {
 		Data []struct {
 			ID               string `json:"id"`
 			MaxContextWindow int    `json:"max_context_window"`
 			ContextLength    int    `json:"context_length"`
+			MaxInputTokens   int    `json:"max_input_tokens"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return 0, fmt.Errorf("decode /models response: %w", err)
+		return ContextCapacity{}, fmt.Errorf("decode /models response: %w", err)
 	}
 	for _, model := range payload.Data {
 		if model.ID != modelName {
 			continue
 		}
-		if model.MaxContextWindow > 0 {
-			return model.MaxContextWindow, nil
+		window := model.MaxContextWindow
+		if window <= 0 {
+			window = model.ContextLength
 		}
-		return model.ContextLength, nil
+		if window <= 0 {
+			window = model.MaxInputTokens
+		}
+		if window <= 0 {
+			return ContextCapacity{ModelID: modelName}, nil
+		}
+		return ContextCapacity{ModelID: modelName, ContextWindow: window, Source: ContextCapacitySourceMetadata}, nil
 	}
-	return 0, nil
+	return ContextCapacity{ModelID: modelName}, nil
+}
+
+// DetectProviderContextLength is retained for callers that only need the
+// numeric advertised window.
+func DetectProviderContextLength(ctx context.Context, baseURL, apiKey, modelName string) (int, error) {
+	capacity, err := DetectProviderContextCapacity(ctx, baseURL, apiKey, modelName)
+	if err != nil {
+		return 0, err
+	}
+	return capacity.ContextWindow, nil
 }
 
 // DetectOllamaContextLength is retained for compatibility and now delegates
