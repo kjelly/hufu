@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"sync"
 	"unicode"
@@ -22,12 +23,13 @@ type TokenCounter interface {
 
 // ModelContextSpec defines context limits and estimation parameters for a model.
 type ModelContextSpec struct {
-	ModelID            string `json:"model_id"`
-	ContextWindow      int    `json:"context_window"`
-	MaxOutputTokens    int    `json:"max_output_tokens"`
-	SafetyMarginTokens int    `json:"safety_margin_tokens"`
-	Estimator          string `json:"estimator"` // e.g. "tiktoken", "claude", "qwen", "llama", "estimated"
-	IsEstimated        bool   `json:"is_estimated"`
+	ModelID             string `json:"model_id"`
+	ContextWindow       int    `json:"context_window"`
+	ContextWindowSource string `json:"context_window_source,omitempty"`
+	MaxOutputTokens     int    `json:"max_output_tokens"`
+	SafetyMarginTokens  int    `json:"safety_margin_tokens"`
+	Estimator           string `json:"estimator"` // e.g. "tiktoken", "claude", "qwen", "llama", "estimated"
+	IsEstimated         bool   `json:"is_estimated"`
 }
 
 // WithEffectiveMaxOutputTokens returns a copy of spec whose MaxOutputTokens
@@ -103,6 +105,8 @@ type ModelSpecRegistry struct {
 }
 
 var globalRegistry = NewModelSpecRegistry()
+
+var observedContextCapacityRE = regexp.MustCompile(`(?i)(?:available context size|context window|context length|context size|max(?:imum)? context(?: size)?)\D+(\d+)`)
 
 // estimatedModelLogger is invoked once per process for each model whose spec is
 // derived from a fallback estimator rather than a known registry entry (§5.3:
@@ -188,13 +192,16 @@ func DetectAndCacheProviderContextLengths(ctx context.Context, baseURL, apiKey s
 			_, name := agent.ParseModelProvider(modelID)
 			probeCtx, cancel := context.WithTimeout(ctx, agent.ProviderContextProbeTimeout)
 			defer cancel()
-			length, err := agent.DetectProviderContextLength(probeCtx, baseURL, apiKey, name)
+			capacity, err := agent.DetectProviderContextCapacity(probeCtx, baseURL, apiKey, name)
+			length := capacity.ContextWindow
 			if err != nil || length <= 0 {
 				return
 			}
 			spec := globalRegistry.GetSpec(modelID)
 			spec.ModelID = strings.ToLower(modelID)
 			spec.ContextWindow = length
+			spec.ContextWindowSource = capacity.Source
+			spec.IsEstimated = false
 			globalRegistry.RegisterSpec(spec)
 		}(modelID)
 	}
@@ -210,6 +217,43 @@ func (r *ModelSpecRegistry) RegisterSpec(spec ModelContextSpec) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.specs[strings.ToLower(spec.ModelID)] = spec
+}
+
+// RegisterObservedContextWindow records a runtime limit reported by a
+// provider. Runtime observations are authoritative for the current process,
+// but never persisted as model metadata: another local server may expose a
+// different hardware-dependent window on the next run.
+func (r *ModelSpecRegistry) RegisterObservedContextWindow(modelID string, window int) {
+	if r == nil || window <= 0 || strings.TrimSpace(modelID) == "" {
+		return
+	}
+	spec := r.GetSpec(modelID)
+	if spec.ContextWindow > 0 && spec.ContextWindow <= window && spec.ContextWindowSource == agent.ContextCapacitySourceObserved {
+		return
+	}
+	spec.ModelID = strings.ToLower(modelID)
+	spec.ContextWindow = window
+	spec.ContextWindowSource = agent.ContextCapacitySourceObserved
+	spec.IsEstimated = false
+	r.RegisterSpec(spec)
+}
+
+// ParseObservedContextWindow extracts a provider-reported effective context
+// size from a context overflow error. The parser is intentionally generic and
+// does not name Lemonade, llama.cpp, Ollama, or any other vendor.
+func ParseObservedContextWindow(err error) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+	matches := observedContextCapacityRE.FindStringSubmatch(err.Error())
+	if len(matches) != 2 {
+		return 0, false
+	}
+	var window int
+	if _, scanErr := fmt.Sscanf(matches[1], "%d", &window); scanErr != nil || window <= 0 {
+		return 0, false
+	}
+	return window, true
 }
 
 func (r *ModelSpecRegistry) GetSpec(modelID string) ModelContextSpec {

@@ -188,6 +188,9 @@ func TestDetectAndCacheOllamaContextLengths(t *testing.T) {
 	if spec.ContextWindow != 131072 {
 		t.Errorf("ContextWindow = %d, want 131072 (detected from OpenAI-compatible /models)", spec.ContextWindow)
 	}
+	if spec.IsEstimated {
+		t.Error("provider metadata context window should not remain marked as estimated")
+	}
 }
 
 func TestDetectAndCacheOllamaContextLengths_SkipsKnownModels(t *testing.T) {
@@ -204,6 +207,27 @@ func TestDetectAndCacheOllamaContextLengths_SkipsKnownModels(t *testing.T) {
 
 	if called {
 		t.Error("probed a model with an exact (non-estimated) registry entry; should have been skipped")
+	}
+}
+
+func TestParseObservedContextWindow(t *testing.T) {
+	tests := []struct {
+		name string
+		err  string
+		want int
+		ok   bool
+	}{
+		{name: "provider available context", err: "request (40428 tokens) exceeds the available context size (39936 tokens)", want: 39936, ok: true},
+		{name: "generic context window", err: "context window 8192 exceeded", want: 8192, ok: true},
+		{name: "unrelated error", err: "failed to initialize samplers", want: 0, ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ParseObservedContextWindow(errors.New(tt.err))
+			if got != tt.want || ok != tt.ok {
+				t.Fatalf("ParseObservedContextWindow() = (%d, %v), want (%d, %v)", got, ok, tt.want, tt.ok)
+			}
+		})
 	}
 }
 
