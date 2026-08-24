@@ -2868,6 +2868,16 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				preparedMessages = capped
 				messagesCapped = true
 			}
+			var preflightSystem string
+			var preflightTools []fantasy.AgentTool
+			preflightApplied := false
+			if preflight := coordinatorRequestPreflightFromContext(ctx); preflight != nil {
+				var preflightErr error
+				preflightSystem, preflightTools, preflightApplied, preflightErr = preflight.prepare(ctx, preparedMessages, prompt, spec.MaxOutputTokens, opts.StepNumber)
+				if preflightErr != nil {
+					return ctx, fantasy.PrepareStepResult{}, preflightErr
+				}
+			}
 			if attemptTokens != nil {
 				if err := attemptTokens.reserveContext(estimateStepRequestTokens(preparedMessages, prompt)); err != nil {
 					return ctx, fantasy.PrepareStepResult{}, err
@@ -2893,8 +2903,12 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			llmLogMu.Lock()
 			loggedMsgs, lastReqBytes = llmLogRequest(logWrite, opts, preparedMessages, loggedMsgs)
 			llmLogMu.Unlock()
-			if messagesCapped || terminalOnly || stepBudgetCheckpoint != "" {
+			if messagesCapped || terminalOnly || stepBudgetCheckpoint != "" || preflightApplied {
 				result := fantasy.PrepareStepResult{Messages: preparedMessages}
+				if preflightApplied {
+					result.System = &preflightSystem
+					result.Tools = preflightTools
+				}
 				if terminalOnly {
 					if freeTextFinalization {
 						// An empty active-tool set is intentional: it gives the model a
@@ -3364,6 +3378,13 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	if err != nil && IsContextOverflowError(err) {
 		reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage("context overflow detected; triggering emergency history compaction and retrying step"))
 		modelID, _ := ctx.Value(modelKey{}).(string)
+		if observedWindow, ok := ParseObservedContextWindow(err); ok {
+			GlobalModelSpecRegistry().RegisterObservedContextWindow(modelID, observedWindow)
+			if preflight := coordinatorRequestPreflightFromContext(ctx); preflight != nil {
+				preflight.observeWindow(observedWindow)
+			}
+			reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage(fmt.Sprintf("provider reported effective context window %d; coordinator request will be reshaped before retry", observedWindow)))
+		}
 		if capped := CapStepMessagesWithCounter(ctx, defaultCounter, modelID, streamCall.Messages, 15000); capped != nil {
 			streamCall.Messages = capped
 		}

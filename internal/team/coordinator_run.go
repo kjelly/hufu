@@ -979,6 +979,16 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	if c.providerManager == nil {
 		return "", nil, fmt.Errorf("provider manager unavailable")
 	}
+	c.conversationHistoryMu.Lock()
+	historySnapshot := make([]fantasy.Message, len(c.conversationHistory))
+	copy(historySnapshot, c.conversationHistory)
+	c.conversationHistoryMu.Unlock()
+	// Keep the full tool set attached to the agent so the runtime retains its
+	// normal authorization contract. PrepareStep may project the model-visible
+	// set for an oversized request, and restores the full set when a later
+	// request fits; the source tool definitions are never mutated.
+	preflight := newCoordinatorRequestPreflight(orchModelID, prompt, orchDef.System, orchTools)
+	orchCtx = withCoordinatorRequestPreflight(orchCtx, preflight)
 	orch, err := c.createGatedAgent(orchCtx, c.providerManager.GetProvider(orchModelID), agent.AgentConfig{
 		Def:        orchDef,
 		TeamConfig: &c.session.Config,
@@ -988,11 +998,6 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
-
-	c.conversationHistoryMu.Lock()
-	historySnapshot := make([]fantasy.Message, len(c.conversationHistory))
-	copy(historySnapshot, c.conversationHistory)
-	c.conversationHistoryMu.Unlock()
 
 	return c.runAgentWithStatusAndHistory(orchCtx, orch, orchDef.Name, prompt, historySnapshot, &taskTiming{})
 }
