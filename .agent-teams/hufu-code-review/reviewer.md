@@ -3,7 +3,7 @@ name: reviewer
 description: Read-only reviewer for every bounded workset item across runtime, CLI, TUI, and security lenses
 role: worker
 tools: view,grep,glob,ls
-temperature: "0.05"
+temperature: "0.15"
 max-tokens: "32768"
 reasoning-effort: high
 max-steps: 64

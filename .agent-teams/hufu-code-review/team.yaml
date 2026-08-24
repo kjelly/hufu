@@ -2,7 +2,7 @@ name: hufu-code-review
 description: "Read-only, artifact-backed review of the Hufu Go codebase"
 max-rounds: 12
 max-steps: 80
-timeout: 1800
+timeout: 3600
 verify-timeout: 120
 max-retries: 1
 max-concurrent: 1
@@ -10,12 +10,8 @@ workspace: workspace
 goal-mode: outcome
 execution-profile: fresh-session
 unattended: true
-# The five-day fixture expands to 52 review items. The confirmed run measured
-# 1,997,346 raw tokens across its first two completed worker attempts (998,673
-# per item on average); 52 * that baseline is 51,930,996. Keep a bounded 25%
-# headroom for item variance, coordinator turns, and retries.
-max-duration: 3600
-max-total-tokens: 65000000
+max-duration: 86400
+max-total-tokens: 0
 no-net: true
 allow-free-text-results: false
 

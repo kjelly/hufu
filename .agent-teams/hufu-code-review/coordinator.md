@@ -3,7 +3,7 @@ name: coordinator
 description: Review lead for deterministic workset preparation and evidence-backed synthesis
 role: coordinator
 tools: ask_user,view
-temperature: "0.05"
+temperature: "0.15"
 max-tokens: "16384"
 reasoning-effort: high
 max-steps: 80
