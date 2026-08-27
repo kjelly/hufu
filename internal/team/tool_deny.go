@@ -17,6 +17,26 @@ var legacyMemoryMutationTools = map[string]bool{
 	"memory_save": true,
 }
 
+// coordinatorOnlyWorkerTools are orchestration capabilities. They may be
+// present in the global tool registry because the coordinator needs them, but
+// they are never part of an ordinary worker's model-visible surface. Keeping
+// this boundary in team runtime (rather than in a team definition) also
+// protects dynamically loaded and direct-invocation workers.
+var coordinatorOnlyWorkerTools = map[string]bool{
+	"agent":          true,
+	"request_agent":  true,
+	"finish":         true,
+	"approve_plan":   true,
+	"modify_plan":    true,
+	"reject_plan":    true,
+	"team_info":      true,
+	"reconcile_task": true,
+}
+
+func isCoordinatorOnlyWorkerTool(name string) bool {
+	return coordinatorOnlyWorkerTools[strings.TrimSpace(name)]
+}
+
 func isLegacyMemoryMutationTool(name string) bool {
 	return legacyMemoryMutationTools[strings.TrimSpace(name)]
 }
@@ -86,7 +106,7 @@ func (c *Coordinator) selectWorkerTools(def *agent.AgentDef) []fantasy.AgentTool
 	if def == nil {
 		return nil
 	}
-	return c.filterDeniedWorkerTools(c.filterLegacyMemoryMutationTools(def, agent.SelectTools(c.coreTools, def.Tools)))
+	return c.filterCoordinatorOnlyWorkerTools(c.filterDeniedWorkerTools(c.filterLegacyMemoryMutationTools(def, agent.SelectTools(c.coreTools, def.Tools))))
 }
 
 // selectWorkerToolsForTask preserves the team-wide deny list except for a
@@ -101,7 +121,18 @@ func (c *Coordinator) selectWorkerToolsForTask(def *agent.AgentDef, task TaskDef
 	if task.WorksetBinding != nil {
 		candidate = filterImplicitIncompatibleBoundTools(def, candidate)
 	}
-	return c.filterDeniedWorkerToolsWithGrants(c.filterLegacyMemoryMutationTools(def, candidate), c.taskToolGrants(def, task))
+	return c.filterCoordinatorOnlyWorkerTools(c.filterDeniedWorkerToolsWithGrants(c.filterLegacyMemoryMutationTools(def, candidate), c.taskToolGrants(def, task)))
+}
+
+func (c *Coordinator) filterCoordinatorOnlyWorkerTools(candidate []fantasy.AgentTool) []fantasy.AgentTool {
+	filtered := make([]fantasy.AgentTool, 0, len(candidate))
+	for _, tool := range candidate {
+		if tool == nil || isCoordinatorOnlyWorkerTool(tool.Info().Name) {
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+	return filtered
 }
 
 // filterImplicitIncompatibleBoundTools removes only convenience tools that

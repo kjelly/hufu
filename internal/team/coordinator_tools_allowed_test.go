@@ -240,11 +240,11 @@ func TestWorkerExposedToolsIncludeResultProtocol(t *testing.T) {
 			t.Errorf("runtime allowlist lost declared tool %q: %v", want, allowed)
 		}
 	}
-	// Read-only/runtime collaboration tools still reach the model regardless of
-	// the declared list; deprecated memory mutation aliases do not.
-	for _, want := range []string{"todo", "team_info"} {
-		if !slices.Contains(allowed, want) {
-			t.Errorf("runtime allowlist is missing always-included tool %q: %v", want, allowed)
+	// Worker-visible orchestration tools are removed at the runtime boundary;
+	// deprecated memory mutation aliases remain disabled as well.
+	for _, forbidden := range []string{"agent", "finish", "team_info", "request_agent", "reconcile_task"} {
+		if slices.Contains(allowed, forbidden) {
+			t.Errorf("runtime allowlist exposed coordinator-only tool %q: %v", forbidden, allowed)
 		}
 	}
 	for _, forbidden := range []string{"stm_write", "ltm_update", "memory_save"} {

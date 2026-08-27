@@ -38,6 +38,25 @@ func TestTeamToolDenyRemovesAlwaysIncludedStateWriters(t *testing.T) {
 	}
 }
 
+func TestWorkerSurfaceRemovesCoordinatorOnlyTools(t *testing.T) {
+	c := &Coordinator{
+		session:   &TeamSession{Config: agent.TeamConfig{}},
+		coreTools: workerInvariantCoreTools(t),
+	}
+	def := &agent.AgentDef{Name: "worker", Role: "worker", Tools: "view,grep,team_info,finish,agent"}
+	got := agentToolNames(c.selectWorkerTools(def))
+	for _, name := range []string{"agent", "finish", "team_info", "request_agent", "reconcile_task"} {
+		if slices.Contains(got, name) {
+			t.Fatalf("coordinator-only tool %q exposed to worker: %v", name, got)
+		}
+	}
+	for _, name := range []string{"view", "grep"} {
+		if !slices.Contains(got, name) {
+			t.Fatalf("ordinary worker tool %q was removed: %v", name, got)
+		}
+	}
+}
+
 func TestStaticPhaseContractCanGrantDeclaredPrepareTool(t *testing.T) {
 	def := &agent.AgentDef{Name: "inventory", Tools: "view,bash"}
 	task := TaskDef{Agent: "inventory", ContractID: "inventory", Execution: ExecutionContract{ToolSequence: []string{"bash", "submit_result"}, TemplateToolGrants: []string{"bash"}}}

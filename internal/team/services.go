@@ -325,6 +325,11 @@ func (r *defaultToolResolver) ResolveTaskTools(_ context.Context, def *agent.Age
 			tools = append(tools, r.c.mcpManager.GetAgentMCPTools(def.Name, def.Shell)...)
 		}
 	}
+	// MCP and custom registries are also untrusted sources for a worker
+	// surface. Apply the same final boundary after all providers have been
+	// merged; filtering only the built-in core would still expose a
+	// coordinator capability under an MCP/custom tool implementation.
+	tools = r.c.filterCoordinatorOnlyWorkerTools(tools)
 	if missing := missingExecutionTools(append(append([]fantasy.AgentTool(nil), tools...), extras...), task.Execution.ToolSequence); len(missing) > 0 {
 		return ResolvedWorkerTools{}, fmt.Errorf("execution tool_sequence requires unavailable tool(s) for agent %q: %s", def.Name, strings.Join(missing, ", "))
 	}
