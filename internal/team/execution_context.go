@@ -74,7 +74,9 @@ func (w RuntimeWorkspace) Resolve(relative string) (string, error) {
 	return path, nil
 }
 
-// ArtifactPath resolves a durable artifact location under runtime/artifacts.
+// ArtifactPath resolves an output-staging path under runtime/artifacts for
+// runtime workflow compatibility. It does not resolve opaque artifact IDs;
+// those are opened through the canonical artifact store bridge.
 func (w RuntimeWorkspace) ArtifactPath(name string) (string, error) {
 	clean := filepath.Clean(name)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.IsAbs(name) {

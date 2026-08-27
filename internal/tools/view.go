@@ -37,15 +37,15 @@ func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
 		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "view",
-			Description: "Read a file by either a user-supplied file_path or a runtime-issued opaque artifact_ref. Use artifact_ref for worker/task outputs; never copy their display path into file_path. Artifact references are resolved and authorized by hufu without path consent. Exactly one source is required.",
+			Description: "Read a file by either a filesystem file_path or a runtime-issued opaque artifact_ref. Use artifact_ref for worker/task outputs; never copy their display path or opaque ID into file_path, including under runtime/artifacts. Artifact references are resolved and authorized by hufu without path consent. Exactly one source is required.",
 			Parameters: map[string]any{
 				"file_path": map[string]any{
 					"type":        "string",
-					"description": "The path to the file to read (relative or absolute)",
+					"description": "Filesystem path to the file to read (relative or absolute). Do not put an opaque artifact ID here; use artifact_ref instead.",
 				},
 				"artifact_ref": map[string]any{
 					"type":        "string",
-					"description": "Opaque runtime-issued artifact reference. Do not alter it or replace it with a displayed path.",
+					"description": "Opaque runtime-issued artifact reference. Pass the ID unchanged; do not alter it, replace it with a displayed path, or turn it into runtime/artifacts/<id>.",
 				},
 				"offset": map[string]any{
 					"type":        "number",

@@ -13,6 +13,15 @@ import (
 	"github.com/kjelly/hufu/internal/skill"
 )
 
+// runtimeArtifactStorageGuidance is shared by coordinator and worker prompts.
+// Runtime artifacts are an output-staging projection; artifact IDs are
+// resolved through the canonical evidence store by the artifact-aware view
+// bridge and must never be reconstructed as filesystem paths.
+func runtimeArtifactStorageGuidance(runtimeRoot string) string {
+	artifactsPath := filepath.Join(runtimeRoot, "artifacts")
+	return fmt.Sprintf("Runtime artifact storage semantics: `%s` is output staging only, not an opaque artifact-ID lookup directory. Artifact IDs are opaque and must not be put in `file_path` or resolved by constructing a filesystem path. Pass each issued ID unchanged as `view.artifact_ref`; hufu resolves and authorizes it through the canonical artifact store under `workspace/logs/artifacts/{data,meta}`.", artifactsPath)
+}
+
 func (c *Coordinator) runtimeWorkflowWorkers(workerNames []string, workerDefs []*agent.AgentDef, initialPending bool) ([]string, []*agent.AgentDef, bool) {
 	if c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() {
 		return workerNames, workerDefs, initialPending
@@ -37,7 +46,9 @@ func (c *Coordinator) appendRuntimeWorkflowPrompt(b *strings.Builder) {
 		return
 	}
 	ctx := c.phaseWorkflow.executionContext()
-	fmt.Fprintf(b, "## Runtime Workflow\n\nCurrent runtime-owned phase: `%s`. Only the listed phase workers may be dispatched. Record durable artifacts under `%s` (artifacts: `%s`, receipts: `%s`). A phase advances only after every static task contract for that phase succeeds; `finish` remains unavailable until VERIFY succeeds.\n\n", c.phaseWorkflow.State(), ctx.RuntimeWorkspace.Root, filepath.Join(ctx.RuntimeWorkspace.Root, "artifacts"), filepath.Join(ctx.RuntimeWorkspace.Root, "receipts"))
+	fmt.Fprintf(b, "## Runtime Workflow\n\nCurrent runtime-owned phase: `%s`. Only the listed phase workers may be dispatched. Stage runtime outputs under `%s` (artifacts: `%s`, receipts: `%s`). A phase advances only after every static task contract for that phase succeeds; `finish` remains unavailable until VERIFY succeeds.\n\n", c.phaseWorkflow.State(), ctx.RuntimeWorkspace.Root, filepath.Join(ctx.RuntimeWorkspace.Root, "artifacts"), filepath.Join(ctx.RuntimeWorkspace.Root, "receipts"))
+	b.WriteString(runtimeArtifactStorageGuidance(ctx.RuntimeWorkspace.Root))
+	b.WriteString("\n\n")
 	if len(ctx.Capabilities.Required) > 0 {
 		fmt.Fprintf(b, "Required runtime capabilities: %s.\n\n", strings.Join(ctx.Capabilities.Required, ", "))
 	}

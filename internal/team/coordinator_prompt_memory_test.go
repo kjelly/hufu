@@ -3,6 +3,7 @@ package team
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
 )
@@ -23,6 +24,51 @@ func TestDefaultCoordinatorPromptOmitsMemoryMutationAliases(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "structured") {
 		t.Fatal("default prompt does not describe runtime structured-result capture")
+	}
+}
+
+func TestCoordinatorRuntimeGuidanceTreatsArtifactsAsOutputStaging(t *testing.T) {
+	workspace := t.TempDir()
+	session := &TeamSession{
+		Workspace: workspace,
+		Config: agent.TeamConfig{
+			Name:     "runtime-guidance",
+			Workflow: agent.WorkflowConfig{Phases: []string{"prepare", "audit", "execute", "verify"}},
+		},
+		Agents: map[string]*agent.AgentDef{
+			"coordinator": {Name: "coordinator", Role: "coordinator"},
+			"worker":      {Name: "worker", Role: "worker"},
+		},
+		ContractTasks: []TaskDef{{Agent: "worker", Phase: PhasePrepare}},
+	}
+	w, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatalf("newRuntimeWorkflow: %v", err)
+	}
+	if err := w.Start(); err != nil {
+		t.Fatalf("start runtime workflow: %v", err)
+	}
+	c := &Coordinator{
+		session:       session,
+		phaseWorkflow: w,
+		taskTracker:   NewTaskTracker(),
+		projectDir:    workspace,
+		sessionTime:   time.Now(),
+	}
+	prompt := c.BuildOrchestratorPrompt()
+	for _, fragment := range []string{
+		"runtime/artifacts",
+		"output staging only",
+		"not an opaque artifact-ID lookup directory",
+		"Pass each issued ID unchanged as `view.artifact_ref`",
+		"canonical artifact store under `workspace/logs/artifacts/{data,meta}`",
+	} {
+		if !strings.Contains(prompt, fragment) {
+			t.Errorf("coordinator prompt missing artifact guidance %q:\n%s", fragment, prompt)
+		}
+	}
+	if strings.Contains(prompt, "Ensure all durable outputs are written to the artifacts directory") {
+		t.Fatal("coordinator prompt still presents runtime artifacts as the durable artifact store")
 	}
 }
 

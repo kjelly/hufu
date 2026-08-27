@@ -203,14 +203,7 @@ func (c *Coordinator) directAgentWorkflowPrompt(task string, agentDef *agent.Age
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		execCtx := c.phaseWorkflow.executionContext()
 		prompt += "\n\n## Execution Context\n\n"
-		prompt += fmt.Sprintf("- **Phase**: `%s`\n", c.phaseWorkflow.State())
-		prompt += fmt.Sprintf("- **Runtime Workspace**: `%s`\n", execCtx.RuntimeWorkspace.Root)
-		prompt += fmt.Sprintf("- **Artifacts Directory**: `%s/artifacts`\n", execCtx.RuntimeWorkspace.Root)
-		prompt += fmt.Sprintf("- **Receipts Directory**: `%s/receipts`\n", execCtx.RuntimeWorkspace.Root)
-		prompt += "Ensure all durable outputs are written to the artifacts directory, not the project source.\n"
-		if len(execCtx.Capabilities.Required) > 0 {
-			prompt += fmt.Sprintf("- **Required Capabilities**: `%s`\n", strings.Join(execCtx.Capabilities.Required, ", "))
-		}
+		prompt += formatRuntimeWorkflowContext(c.phaseWorkflow.State(), execCtx)
 	}
 	return prompt
 }

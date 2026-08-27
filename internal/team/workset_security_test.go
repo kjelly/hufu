@@ -51,6 +51,10 @@ func TestWorksetArtifactAuthorizationRequiresExactCommittedReceipt(t *testing.T)
 func TestLegitimateWorksetChildCanViewAssignedInputWithCommittedReceipt(t *testing.T) {
 	c, _, child, ref, receipt := newWorksetAuthorizationFixture(t)
 	child.WorksetReceipt = cloneWorksetReceipt(receipt)
+	runtimeArtifactPath := filepath.Join(c.session.Workspace, "runtime", "artifacts", ref.ID)
+	if _, err := os.Stat(runtimeArtifactPath); !os.IsNotExist(err) {
+		t.Fatalf("runtime artifact-ID lookup path unexpectedly exists: %s (err=%v)", runtimeArtifactPath, err)
+	}
 	ctx := context.WithValue(context.Background(), todoIDKey{}, child.ID)
 	ctx = runtimeTools.SetToolsAllowed(ctx, []string{"view"})
 	view := runtimeTools.NewViewTool(runtimeTools.WithArtifactOpener(c.openArtifactRef))
@@ -65,8 +69,11 @@ func TestWorksetWorkerContextProjectsOnlyAssignedArtifactRefs(t *testing.T) {
 	child.WorksetBinding.SourceArtifactID = "sha256-lineage-only-source"
 	child.WorksetBinding.SourceSHA256 = strings.Repeat("s", 64)
 	context := appendWorksetWorkerRuntimeContext("", child.WorksetBinding)
-	if !strings.Contains(context, assigned.ID) {
+	if !strings.Contains(context, assigned.ID) || !strings.Contains(context, "opaque `artifact_ref`") || !strings.Contains(context, "view.artifact_ref") {
 		t.Fatalf("worker context omitted assigned artifact %q: %s", assigned.ID, context)
+	}
+	if strings.Contains(context, "runtime/artifacts/"+assigned.ID) {
+		t.Fatalf("worker context suggested filesystem lookup for opaque artifact %q: %s", assigned.ID, context)
 	}
 	if strings.Contains(context, child.WorksetBinding.SourceArtifactID) || strings.Contains(context, child.WorksetBinding.SourceSHA256) {
 		t.Fatalf("worker context exposed lineage-only source manifest: %s", context)

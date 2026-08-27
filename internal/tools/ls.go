@@ -29,11 +29,11 @@ func NewLsTool(opts ...ToolOption) fantasy.AgentTool {
 		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "ls",
-			Description: "List directory contents as an indented tree. Shows file and directory names with proper nesting. Includes dotfiles. Limited to 1000 entries.",
+			Description: "List filesystem directory contents as an indented tree. Shows file and directory names with proper nesting. Includes dotfiles. This tool cannot resolve opaque artifact IDs; use view with artifact_ref to read a worker/task output. Limited to 1000 entries.",
 			Parameters: map[string]any{
 				"path": map[string]any{
 					"type":        "string",
-					"description": "The path to the directory to list (default: current directory)",
+					"description": "Filesystem directory path to list (default: current directory). This does not resolve opaque artifact IDs.",
 				},
 				"ignore": map[string]any{
 					"type":        "array",

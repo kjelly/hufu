@@ -284,14 +284,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	runtimeContext := ""
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		execCtx := c.phaseWorkflow.executionContext()
-		runtimeContext += fmt.Sprintf("- **Phase**: `%s`\n", c.phaseWorkflow.State())
-		runtimeContext += fmt.Sprintf("- **Runtime Workspace**: `%s`\n", execCtx.RuntimeWorkspace.Root)
-		runtimeContext += fmt.Sprintf("- **Artifacts Directory**: `%s/artifacts`\n", execCtx.RuntimeWorkspace.Root)
-		runtimeContext += fmt.Sprintf("- **Receipts Directory**: `%s/receipts`\n", execCtx.RuntimeWorkspace.Root)
-		runtimeContext += "Ensure all durable outputs are written to the artifacts directory, not the project source.\n"
-		if len(execCtx.Capabilities.Required) > 0 {
-			runtimeContext += fmt.Sprintf("- **Required Capabilities**: `%s`\n", strings.Join(execCtx.Capabilities.Required, ", "))
-		}
+		runtimeContext = formatRuntimeWorkflowContext(c.phaseWorkflow.State(), execCtx)
 	}
 	if item := c.todoItemByID(todoID); item != nil && item.WorksetBinding != nil {
 		runtimeContext = appendWorksetWorkerRuntimeContext(runtimeContext, item.WorksetBinding)
@@ -1579,6 +1572,20 @@ retryLoop:
 	return "", failErr
 }
 
+func formatRuntimeWorkflowContext(phase Phase, execCtx ExecutionContext) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "- **Phase**: `%s`\n", phase)
+	fmt.Fprintf(&b, "- **Runtime Workspace**: `%s`\n", execCtx.RuntimeWorkspace.Root)
+	fmt.Fprintf(&b, "- **Artifacts Directory (output staging only)**: `%s/artifacts`\n", execCtx.RuntimeWorkspace.Root)
+	fmt.Fprintf(&b, "- **Receipts Directory**: `%s/receipts`\n", execCtx.RuntimeWorkspace.Root)
+	b.WriteString(runtimeArtifactStorageGuidance(execCtx.RuntimeWorkspace.Root))
+	b.WriteByte('\n')
+	if len(execCtx.Capabilities.Required) > 0 {
+		fmt.Fprintf(&b, "- **Required Capabilities**: `%s`\n", strings.Join(execCtx.Capabilities.Required, ", "))
+	}
+	return b.String()
+}
+
 // appendWorksetWorkerRuntimeContext projects only the child task's assigned
 // inputs. The source manifest and its lineage identity authorize expansion in
 // the coordinator, but are not a worker capability and must stay private to
@@ -1591,7 +1598,7 @@ func appendWorksetWorkerRuntimeContext(runtimeContext string, binding *WorksetBi
 	if len(binding.Inputs) == 0 {
 		return runtimeContext
 	}
-	runtimeContext += "- **Assigned input artifacts** (opaque refs; pass unchanged to artifact-aware tools):\n"
+	runtimeContext += "- **Assigned input artifacts** (opaque `artifact_ref` values; pass each ID unchanged to `view.artifact_ref`, never as `file_path`):\n"
 	for _, input := range binding.Inputs {
 		runtimeContext += fmt.Sprintf("  - `%s` (sha256 `%s`)\n", input.ID, input.SHA256)
 	}
