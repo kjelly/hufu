@@ -1037,11 +1037,9 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 	}
 }
 
-// TestProtocolRepair_GroundedResultRejectsRepairAndRetriesInstead proves that
-// a task requiring a grounded result never accepts a tool-free repair
-// completion: the repair agent must not even be invoked, and the coordinator
-// must give the worker a genuinely fresh attempt instead of marking the task
-// done from an unverifiable guess.
+// TestProtocolRepair_GroundedResultUsesTheSameResultOnlyRepair proves that
+// grounded tasks use the generic finalization protocol too, while never
+// accepting an unverifiable prose response as a completed result.
 func TestProtocolRepair_GroundedResultRejectsRepairAndRetriesInstead(t *testing.T) {
 	workspace := t.TempDir()
 	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
@@ -1071,8 +1069,8 @@ func TestProtocolRepair_GroundedResultRejectsRepairAndRetriesInstead(t *testing.
 	workerCalls := 0
 	c.workerAgentOverride = &countingTextAgent{calls: &workerCalls, text: "Processed input data successfully."}
 
-	// If invoked at all, this repair agent would happily complete the task.
-	// A grounded-result task must never reach it.
+	// The repair agent still cannot complete the task without a real typed
+	// submission, but the runtime must give it the result-only slot.
 	repairCalls := 0
 	c.repairAgentOverride = &mockRepairAgent{onSubmit: func() { repairCalls++ }}
 
@@ -1088,11 +1086,11 @@ func TestProtocolRepair_GroundedResultRejectsRepairAndRetriesInstead(t *testing.
 	if err == nil {
 		t.Fatal("expected an error: a grounded-result task must not be marked done from a tool-free repair completion")
 	}
-	if repairCalls != 0 {
-		t.Fatalf("repair agent was invoked %d time(s); a grounded-result task must skip repair entirely", repairCalls)
+	if repairCalls == 0 {
+		t.Fatal("grounded-result task skipped the generic result-only repair")
 	}
-	if workerCalls < 2 {
-		t.Fatalf("worker was invoked %d time(s), want at least 2: the task must retry with a fresh attempt instead of accepting repair", workerCalls)
+	if workerCalls != 1 {
+		t.Fatalf("worker was invoked %d time(s), want 1: result-only repair must not replay the worker", workerCalls)
 	}
 
 	item := c.taskTracker.TodoList().Items()[0]
