@@ -659,7 +659,8 @@ type OpenAICompatibleProvider struct {
 	apiKey          string
 	name            string
 	defaultProvider bool
-	proxyURL        string
+	boundaryURL     string
+	boundaryClient  *http.Client
 	proxyMu         sync.RWMutex
 }
 
@@ -670,6 +671,14 @@ func NewOpenAICompatibleProvider(baseURL, apiKey, name string) (*OpenAICompatibl
 	if name == "" {
 		name = "local"
 	}
+	provider, err := newOpenAICompatProvider(baseURL, apiKey, name, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create OpenAI-compatible provider: %w", err)
+	}
+	return &OpenAICompatibleProvider{provider: provider, baseURL: baseURL, apiKey: apiKey, name: name}, nil
+}
+
+func newOpenAICompatProvider(baseURL, apiKey, name string, client *http.Client) (fantasy.Provider, error) {
 	providerOptions := []openaicompat.Option{
 		openaicompat.WithBaseURL(baseURL),
 		openaicompat.WithName(name),
@@ -677,11 +686,10 @@ func NewOpenAICompatibleProvider(baseURL, apiKey, name string) (*OpenAICompatibl
 	if apiKey != "" {
 		providerOptions = append(providerOptions, openaicompat.WithAPIKey(apiKey))
 	}
-	provider, err := openaicompat.New(providerOptions...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OpenAI-compatible provider: %w", err)
+	if client != nil {
+		providerOptions = append(providerOptions, openaicompat.WithHTTPClient(client))
 	}
-	return &OpenAICompatibleProvider{provider: provider, baseURL: baseURL, apiKey: apiKey, name: name}, nil
+	return openaicompat.New(providerOptions...)
 }
 
 // OllamaProvider is retained as a source-compatible alias for integrations
@@ -697,15 +705,15 @@ func NewOllamaProvider(baseURL, apiKey, name string) (*OpenAICompatibleProvider,
 
 func (p *OpenAICompatibleProvider) LanguageModel(ctx context.Context, modelID string) (fantasy.LanguageModel, error) {
 	model := p.modelName(modelID)
-	baseURL, proxied := p.effectiveBaseURL()
-	if !proxied {
+	baseURL, client, boundary := p.effectiveBaseURL()
+	if !boundary {
 		return p.provider.LanguageModel(ctx, model)
 	}
-	proxyProvider, err := NewOpenAICompatibleProvider(baseURL, p.apiKey, p.name)
+	proxyProvider, err := newOpenAICompatProvider(baseURL, p.apiKey, p.name, client)
 	if err != nil {
 		return nil, err
 	}
-	return proxyProvider.provider.LanguageModel(ctx, model)
+	return proxyProvider.LanguageModel(ctx, model)
 }
 
 func (p *OpenAICompatibleProvider) modelName(modelID string) string {
@@ -723,24 +731,29 @@ func (p *OpenAICompatibleProvider) modelName(modelID string) string {
 // invocation proxy is selected while active; otherwise requests use the
 // provider's configured endpoint. baseURL is never mutated when the proxy
 // lifecycle changes.
-func (p *OpenAICompatibleProvider) effectiveBaseURL() (string, bool) {
+func (p *OpenAICompatibleProvider) effectiveBaseURL() (string, *http.Client, bool) {
 	if p == nil {
-		return "", false
+		return "", nil, false
 	}
 	p.proxyMu.RLock()
 	defer p.proxyMu.RUnlock()
-	if p.proxyURL != "" {
-		return p.proxyURL, true
+	if p.boundaryURL != "" {
+		return p.boundaryURL, p.boundaryClient, true
 	}
-	return p.baseURL, false
+	return p.baseURL, nil, false
 }
 
 func (p *OpenAICompatibleProvider) setProxyURL(proxyURL string) {
+	p.setBoundary(proxyURL, nil)
+}
+
+func (p *OpenAICompatibleProvider) setBoundary(endpoint string, client *http.Client) {
 	if p == nil {
 		return
 	}
 	p.proxyMu.Lock()
-	p.proxyURL = proxyURL
+	p.boundaryURL = endpoint
+	p.boundaryClient = client
 	p.proxyMu.Unlock()
 }
 
@@ -749,7 +762,7 @@ func (p *OpenAICompatibleProvider) setProxyURL(proxyURL string) {
 // error when the endpoint is unreachable or unsupported; callers should treat
 // that as "cannot validate", not as "model missing".
 func (p *OpenAICompatibleProvider) ListModelNames(ctx context.Context) ([]string, error) {
-	baseURL, _ := p.effectiveBaseURL()
+	baseURL, boundaryClient, _ := p.effectiveBaseURL()
 	url := strings.TrimRight(baseURL, "/") + "/models"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -758,7 +771,10 @@ func (p *OpenAICompatibleProvider) ListModelNames(ctx context.Context) ([]string
 	if p.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := boundaryClient
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Second}
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", url, err)
@@ -896,7 +912,10 @@ type ProviderManager struct {
 	configs                    map[string]config.ProviderConfig
 	mu                         sync.RWMutex
 	invocationProxyLifecycleMu sync.Mutex
-	invocationProxies          map[string]*providerproxy.Proxy
+	invocationProxies          map[string]providerproxy.Boundary
+	invocationReleased         chan struct{}
+	startProcessBoundary       func(context.Context, string, providerproxy.Config) (providerproxy.Boundary, error)
+	startInProcessBoundary     func(context.Context, providerproxy.Config) (providerproxy.Boundary, error)
 }
 
 func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[string]config.ProviderConfig) (*ProviderManager, error) {
@@ -912,7 +931,13 @@ func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[strin
 		defaultProvider:   defaultProv,
 		providers:         make(map[string]*OpenAICompatibleProvider),
 		configs:           providerConfigs,
-		invocationProxies: make(map[string]*providerproxy.Proxy),
+		invocationProxies: make(map[string]providerproxy.Boundary),
+		startProcessBoundary: func(ctx context.Context, executable string, cfg providerproxy.Config) (providerproxy.Boundary, error) {
+			return providerproxy.Start(ctx, executable, cfg)
+		},
+		startInProcessBoundary: func(ctx context.Context, cfg providerproxy.Config) (providerproxy.Boundary, error) {
+			return providerproxy.StartInProcess(ctx, cfg)
+		},
 	}, nil
 }
 
@@ -925,17 +950,33 @@ func (pm *ProviderManager) StartInvocationProxy(ctx context.Context, executable 
 	if pm == nil {
 		return fmt.Errorf("provider manager unavailable")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Serialize the complete start/abort lifecycle, including synchronous
 	// proxy Close/Wait. Clearing the map before Wait is not sufficient: a new
 	// invocation must not start while the previous process group is still
 	// being reaped.
 	pm.invocationProxyLifecycleMu.Lock()
 	defer pm.invocationProxyLifecycleMu.Unlock()
-	pm.mu.Lock()
-	if len(pm.invocationProxies) > 0 {
-		pm.mu.Unlock()
-		return nil
+	for {
+		pm.mu.RLock()
+		active := len(pm.invocationProxies) > 0
+		released := pm.invocationReleased
+		pm.mu.RUnlock()
+		if !active {
+			break
+		}
+		pm.invocationProxyLifecycleMu.Unlock()
+		select {
+		case <-ctx.Done():
+			pm.invocationProxyLifecycleMu.Lock()
+			return fmt.Errorf("wait for provider boundary ownership: %w", ctx.Err())
+		case <-released:
+			pm.invocationProxyLifecycleMu.Lock()
+		}
 	}
+	pm.mu.Lock()
 	configs := make(map[string]config.ProviderConfig, len(pm.configs))
 	for name, cfg := range pm.configs {
 		configs[name] = cfg
@@ -943,18 +984,37 @@ func (pm *ProviderManager) StartInvocationProxy(ctx context.Context, executable 
 	defaultURL, defaultKey := pm.defaultProvider.baseURL, pm.defaultProvider.apiKey
 	pm.mu.Unlock()
 
-	created := make(map[string]*providerproxy.Proxy)
+	startProcessBoundary := pm.startProcessBoundary
+	if startProcessBoundary == nil {
+		startProcessBoundary = func(ctx context.Context, executable string, cfg providerproxy.Config) (providerproxy.Boundary, error) {
+			return providerproxy.Start(ctx, executable, cfg)
+		}
+	}
+	startInProcessBoundary := pm.startInProcessBoundary
+	if startInProcessBoundary == nil {
+		startInProcessBoundary = func(ctx context.Context, cfg providerproxy.Config) (providerproxy.Boundary, error) {
+			return providerproxy.StartInProcess(ctx, cfg)
+		}
+	}
+	created := make(map[string]providerproxy.Boundary)
 	start := func(name, rawURL, key string) error {
-		proxy, err := providerproxy.Start(ctx, executable, providerproxy.Config{UpstreamURL: rawURL, APIKey: key})
+		cfg := providerproxy.Config{UpstreamURL: rawURL, APIKey: key}
+		proxy, err := startProcessBoundary(ctx, executable, cfg)
+		if err != nil && errors.Is(err, providerproxy.ErrListenerUnavailable) {
+			proxy, err = startInProcessBoundary(ctx, cfg)
+			if err != nil {
+				return fmt.Errorf("provider %q hard-abort boundary fallback: %w", name, err)
+			}
+		}
 		if err != nil {
-			return fmt.Errorf("provider %q hard-abort proxy: %w", name, err)
+			return fmt.Errorf("provider %q hard-abort boundary: %w", name, err)
 		}
 		created[name] = proxy
 		return nil
 	}
 	if err := start("local", defaultURL, defaultKey); err != nil {
-		for _, proxy := range created {
-			_ = proxy.Close()
+		for _, boundary := range created {
+			_ = boundary.Abort()
 		}
 		return err
 	}
@@ -971,21 +1031,21 @@ func (pm *ProviderManager) StartInvocationProxy(ctx context.Context, executable 
 			key = defaultKey
 		}
 		if err := start(name, url, key); err != nil {
-			for _, proxy := range created {
-				_ = proxy.Close()
+			for _, boundary := range created {
+				_ = boundary.Abort()
 			}
 			return err
 		}
 	}
 	pm.mu.Lock()
 	pm.invocationProxies = created
-	for name, proxy := range created {
+	pm.invocationReleased = make(chan struct{})
+	for name, boundary := range created {
 		if name == "local" {
-			pm.defaultProvider.setProxyURL(proxy.URL())
-			continue
+			pm.defaultProvider.setBoundary(boundary.URL(), boundary.HTTPClient())
 		}
 		if p, ok := pm.providers[name]; ok {
-			p.setProxyURL(proxy.URL())
+			p.setBoundary(boundary.URL(), boundary.HTTPClient())
 		}
 	}
 	pm.mu.Unlock()
@@ -1001,19 +1061,24 @@ func (pm *ProviderManager) AbortInvocationProxy() error {
 	pm.invocationProxyLifecycleMu.Lock()
 	defer pm.invocationProxyLifecycleMu.Unlock()
 	pm.mu.Lock()
-	proxies := make(map[string]*providerproxy.Proxy, len(pm.invocationProxies))
-	for name, proxy := range pm.invocationProxies {
-		proxies[name] = proxy
+	boundaries := make(map[string]providerproxy.Boundary, len(pm.invocationProxies))
+	for name, boundary := range pm.invocationProxies {
+		boundaries[name] = boundary
 	}
-	pm.invocationProxies = make(map[string]*providerproxy.Proxy)
-	pm.defaultProvider.setProxyURL("")
+	pm.invocationProxies = make(map[string]providerproxy.Boundary)
+	released := pm.invocationReleased
+	pm.invocationReleased = nil
+	pm.defaultProvider.setBoundary("", nil)
 	for _, p := range pm.providers {
-		p.setProxyURL("")
+		p.setBoundary("", nil)
 	}
 	pm.mu.Unlock()
 	var joined error
-	for _, proxy := range proxies {
-		joined = errors.Join(joined, proxy.Close())
+	for _, boundary := range boundaries {
+		joined = errors.Join(joined, boundary.Abort())
+	}
+	if released != nil {
+		close(released)
 	}
 	return joined
 }
@@ -1064,16 +1129,16 @@ func (pm *ProviderManager) GetProvider(modelID string) *OpenAICompatibleProvider
 		}
 		p, err := NewOpenAICompatibleProvider(url, key, name)
 		if err == nil {
-			if proxy, ok := pm.invocationProxies[name]; ok {
-				p.setProxyURL(proxy.URL())
+			if boundary, ok := pm.invocationProxies[name]; ok {
+				p.setBoundary(boundary.URL(), boundary.HTTPClient())
 			}
 			pm.providers[name] = p
 			return p
 		}
 	}
 	// Fall back to default provider
-	if proxy, ok := pm.invocationProxies["local"]; ok {
-		pm.defaultProvider.setProxyURL(proxy.URL())
+	if boundary, ok := pm.invocationProxies["local"]; ok {
+		pm.defaultProvider.setBoundary(boundary.URL(), boundary.HTTPClient())
 	}
 	return pm.defaultProvider
 }
