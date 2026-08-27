@@ -28,18 +28,35 @@ func resolveTeamWorkspacePath(teamName string, session *team.TeamSession) error 
 		if err != nil {
 			return fmt.Errorf("invalid workspace path: %w", err)
 		}
-		baseWorkspace = abs
+		baseWorkspace = canonicalRuntimePath(abs)
 	} else {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("failed to get working directory: %w", err)
 		}
-		baseWorkspace = filepath.Join(cwd, "workspace")
+		baseWorkspace = filepath.Join(canonicalRuntimePath(cwd), "workspace")
 	}
 	teamWorkspace := filepath.Join(baseWorkspace, teamName)
 	session.Workspace = teamWorkspace
 	session.Config.WorkspaceDir = teamWorkspace
 	return nil
+}
+
+// canonicalRuntimePath gives repository-bound runtime components one stable
+// identity when Hufu is launched through a symlink (for example, a worktree
+// alias). filepath.Abs preserves the spelling of the symlink, while Git and
+// action providers commonly resolve it to the physical repository path. If
+// the path does not exist yet, retain the absolute path so callers can create
+// it normally.
+func canonicalRuntimePath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(abs)
 }
 
 // prepareSessionLifecycle handles the newSession/resume branch:
