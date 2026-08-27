@@ -94,7 +94,10 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 		}
 	}
 	sourceCounts := sourceCountsForRanges(sourceRanges)
-	if len(history) <= maxConversationHistory {
+	policy := c.compactionPolicy()
+	maxHistory := policy.MaxHistoryMessages
+	retainHistory := policy.RetainHistoryMessages
+	if len(history) <= maxHistory {
 		if err := c.persistConversationCheckpointWithProvenance(history, c.conversationHistorySourceOffset, sourceCounts, sourceRanges, nextSourceIndex); err != nil {
 			log.Printf("warning: durable conversation checkpoint failed: %v; retaining prior history", err)
 			return
@@ -105,12 +108,12 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 		c.conversationHistoryNextSourceIndex = nextSourceIndex
 		return
 	}
-	compactCount := len(history) - compactHistoryThreshold
+	compactCount := len(history) - retainHistory
 	if compactCount <= 0 {
 		compactCount = len(history) / 3
 	}
 	if compactCount <= 0 {
-		trimmed, trimmedRanges, removed := trimHistoryPreservingHeadWithProvenance(history, sourceRanges, maxConversationHistory)
+		trimmed, trimmedRanges, removed := trimHistoryPreservingHeadWithProvenance(history, sourceRanges, maxHistory)
 		trimmedCounts := sourceCountsForRanges(trimmedRanges)
 		if err := c.persistConversationCheckpointWithProvenance(trimmed, c.conversationHistorySourceOffset+removed, trimmedCounts, trimmedRanges, nextSourceIndex); err != nil {
 			log.Printf("warning: durable conversation checkpoint failed: %v; retaining prior history", err)
@@ -126,7 +129,7 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 	// Invariant 1: Ensure boundary never splits tool call and tool result.
 	compactCount = AdjustBoundaryToPreserveToolPairs(history, compactCount)
 	if compactCount <= 0 || compactCount >= len(history) {
-		trimmed, trimmedRanges, removed := trimHistoryPreservingHeadWithProvenance(history, sourceRanges, maxConversationHistory)
+		trimmed, trimmedRanges, removed := trimHistoryPreservingHeadWithProvenance(history, sourceRanges, maxHistory)
 		trimmedCounts := sourceCountsForRanges(trimmedRanges)
 		if err := c.persistConversationCheckpointWithProvenance(trimmed, c.conversationHistorySourceOffset+removed, trimmedCounts, trimmedRanges, nextSourceIndex); err != nil {
 			log.Printf("warning: durable conversation checkpoint failed: %v; retaining prior history", err)
@@ -176,7 +179,7 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 	if workspace := c.sessionWorkspace(); workspace != "" {
 		c.recordCompaction()
 	}
-	if len(c.conversationHistory) > maxConversationHistory {
+	if len(c.conversationHistory) > maxHistory {
 		// The summary message plus the retained tail still exceeds the limit
 		// (the tail alone is near the cap). compactMessages always replaces the
 		// compacted prefix with a structured summary — even without a sidecar —
@@ -184,7 +187,7 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 		// compaction was skipped. Keep the first few messages — which carry the
 		// original goal and instructions — plus the most recent ones, instead of
 		// dropping the head entirely.
-		trimmed, trimmedRanges, removed := trimHistoryPreservingHeadWithProvenance(c.conversationHistory, c.conversationHistorySourceRanges, maxConversationHistory)
+		trimmed, trimmedRanges, removed := trimHistoryPreservingHeadWithProvenance(c.conversationHistory, c.conversationHistorySourceRanges, maxHistory)
 		trimmedCounts := sourceCountsForRanges(trimmedRanges)
 		c.conversationHistory = trimmed
 		c.conversationHistorySourceCounts = trimmedCounts

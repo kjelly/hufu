@@ -40,6 +40,7 @@ func (c *Coordinator) Metrics() RunMetrics {
 		DiagnosticTasksSinceProgress:      c.antiThrashing.DiagnosticSinceProgress,
 		RepairAttemptsByCriterion:         repairCounts, AntiThrashingWarnings: c.antiThrashing.Warnings,
 		PreflightFailuresCaught: c.preflightFailuresCaught, NonAssertingVerifiersRejected: c.nonAssertingVerifiersRejected}
+	metrics.ContextWindowTelemetry = c.contextWindowTelemetry
 	metrics.RepeatedFailureFingerprintsStopped = metrics.RepeatedFailureFingerprints
 	metrics.TokensSinceCriterionProgress = c.tokensSinceCriterionProgress
 	// No-progress budget counters (§8.1, WP-12). Read under the same lock.

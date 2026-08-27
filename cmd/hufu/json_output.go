@@ -26,6 +26,7 @@ type jsonRunOutput struct {
 	AcceptanceAdvisory bool                       `json:"acceptance_advisory,omitempty"`
 	UnresolvedTasks    []team.TaskReference       `json:"unresolved_tasks,omitempty"`
 	Stats              team.RunStats              `json:"stats"`
+	Metrics            team.RunMetrics            `json:"metrics,omitempty"`
 	Teams              []jsonRunTeam              `json:"teams"`
 	Skills             []jsonRunSkill             `json:"skills,omitempty"`
 	Failures           []team.FailureEventPayload `json:"failures,omitempty"`
@@ -116,6 +117,7 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 	out.Stats = team.SummarizeRunStats(allItems)
 	canonical := team.AggregateRunResults(runResults, out.UnresolvedTasks, out.Stats)
 	out.Stats = canonical.Stats
+	out.Metrics = canonical.Metrics
 	out.Outcome = string(canonical.Outcome)
 	out.GoalSatisfied = canonical.GoalSatisfied
 	out.GoalMode = string(canonical.GoalMode)

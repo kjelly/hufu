@@ -2,12 +2,32 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
 )
+
+type admissionCountingCounter struct{ calls *int }
+
+func (c admissionCountingCounter) CountText(context.Context, string, string) (int, error) {
+	(*c.calls)++
+	return 0, nil
+}
+
+func (c admissionCountingCounter) CountMessages(context.Context, string, []fantasy.Message) (int, error) {
+	(*c.calls)++
+	return 0, nil
+}
+
+func (c admissionCountingCounter) CountTools(context.Context, string, []fantasy.AgentTool) (int, error) {
+	(*c.calls)++
+	return 0, nil
+}
 
 func TestContextWindowManagerCompactsHugeRecentTailBeforePreflight(t *testing.T) {
 	modelID := "context-window-under-100"
@@ -547,5 +567,83 @@ func TestCoordinatorEmptySystemStillAdmitsBeforeProvider(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("provider calls = %d, want 0 while empty-system request cannot fit", calls)
+	}
+}
+
+func TestContextWindowManagerRejectsEstimatedRegistryCapacityBeforeProvider(t *testing.T) {
+	modelID := "context-window-metadata-unavailable"
+	// GetSpec's unknown-model fallback is estimated. Do not register a spec:
+	// this models a metadata probe that was unavailable, including --no-net.
+	if spec := GlobalModelSpecRegistry().GetSpec(modelID); !spec.IsEstimated {
+		t.Fatalf("fallback spec = %+v, want estimated capacity", spec)
+	}
+
+	calls := 0
+	counter := admissionCountingCounter{calls: &calls}
+	manager := NewContextWindowManager(counter, func(context.Context, []fantasy.Message) ([]fantasy.Message, error) {
+		return []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "should not compact")}, nil
+	})
+	admission, err := manager.Admit(context.Background(), ContextWindowRequest{
+		ModelID:  modelID,
+		Messages: []fantasy.Message{fantasy.NewUserMessage("small request")},
+	})
+	if admission.Decision != ContextWindowCannotFit {
+		t.Fatalf("decision = %q, want CannotFit", admission.Decision)
+	}
+	var metadataErr *ContextWindowMetadataUnavailableError
+	if !errors.As(err, &metadataErr) {
+		t.Fatalf("error = %v, want metadata-unavailable error", err)
+	}
+	if calls != 0 {
+		t.Fatal("estimated capacity was admitted to token counting")
+	}
+}
+
+func TestCoordinatorEstimatedCapacityDoesNotCallProvider(t *testing.T) {
+	modelID := "context-window-metadata-unavailable-provider"
+	if spec := GlobalModelSpecRegistry().GetSpec(modelID); !spec.IsEstimated {
+		t.Fatalf("fallback spec = %+v, want estimated capacity", spec)
+	}
+	calls := 0
+	c := &Coordinator{
+		session:      &TeamSession{Workspace: t.TempDir()},
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+	}
+	preflight := newCoordinatorRequestPreflight(modelID, "incoming", "system", nil)
+	ctx := withCoordinatorRequestPreflight(context.Background(), preflight)
+	_, _, err := c.runAgentWithStatusAndHistory(ctx, contextWindowCountingAgent{model: contextWindowTestModel{modelID: modelID}, calls: &calls}, "coordinator", "incoming", nil, &taskTiming{})
+	if err == nil || !strings.Contains(err.Error(), "context window metadata unavailable") {
+		t.Fatalf("run error = %v, want metadata-unavailable admission error", err)
+	}
+	if calls != 0 {
+		t.Fatalf("provider calls = %d, want 0 with estimated capacity", calls)
+	}
+}
+
+func TestCoordinatorDownshiftRejectsEstimatedCandidate(t *testing.T) {
+	currentModel := "context-window-downshift-current"
+	candidateModel := "context-window-downshift-estimated-candidate"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{ModelID: currentModel, ContextWindow: 256, MaxOutputTokens: 32, SafetyMarginTokens: 32})
+	if spec := GlobalModelSpecRegistry().GetSpec(candidateModel); !spec.IsEstimated {
+		t.Fatalf("candidate fallback spec = %+v, want estimated capacity", spec)
+	}
+	providerManager, err := agent.NewProviderManager("http://127.0.0.1:1/v1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{
+		providerManager: providerManager,
+		modelList:       []config.ModelEntry{{ID: candidateModel}, {ID: currentModel}},
+		session:         &TeamSession{Workspace: t.TempDir()},
+		reportStatus:    func(StatusEvent) {},
+	}
+	preflight := newCoordinatorRequestPreflight(currentModel, "incoming", "system", nil)
+	continuation, err := c.admitCoordinatorEarlierModel(context.Background(), preflight, []fantasy.Message{fantasy.NewUserMessage("small")}, "incoming", 0, 32, currentModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continuation.Model != nil {
+		t.Fatal("estimated downshift candidate was admitted")
 	}
 }

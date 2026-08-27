@@ -279,6 +279,45 @@ func TestAppendHistorySequentialCompactionsPreserveProvenanceAcrossRestart(t *te
 	}
 }
 
+func TestAppendHistoryBoundaryFallbackUsesResolvedHistoryCap(t *testing.T) {
+	workspace := t.TempDir()
+	policy := agent.DefaultCompactionPolicy()
+	policy.MaxHistoryMessages = 40
+	policy.RetainHistoryMessages = 30
+	session := &TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "history-cap", GoalMode: "exploratory", Compaction: policy}}
+	c := &Coordinator{session: session}
+	c.conversationHistory = append(c.conversationHistory, fantasy.NewUserMessage("original goal"))
+	// Keep the matching result at the end of the compacted prefix candidate so
+	// boundary adjustment must use the fallback path rather than splitting the pair.
+	c.conversationHistory = append(c.conversationHistory,
+		fantasy.NewUserMessage("history before tool"),
+		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "cap-call", ToolName: "view", Input: `{"path":"src/main.go"}`}}},
+	)
+	for len(c.conversationHistory) < 40 {
+		c.conversationHistory = append(c.conversationHistory, fantasy.NewUserMessage(fmt.Sprintf("history-%02d", len(c.conversationHistory))))
+	}
+	c.appendHistory(context.Background(), []fantasy.StepResult{{Messages: []fantasy.Message{{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "cap-call", Output: fantasy.ToolResultOutputContentText{Text: "viewed"}}}}}}})
+
+	if len(c.conversationHistory) > policy.MaxHistoryMessages {
+		t.Fatalf("history length = %d, want <= %d", len(c.conversationHistory), policy.MaxHistoryMessages)
+	}
+	if !isToolPairBoundaryClean(c.conversationHistory, len(c.conversationHistory)) {
+		t.Fatal("history retained an incomplete tool pair")
+	}
+	var foundCall, foundResult bool
+	for _, msg := range c.conversationHistory {
+		if len(extractToolCallIDs(msg)) > 0 {
+			foundCall = true
+		}
+		if len(extractToolResultCallIDs(msg)) > 0 {
+			foundResult = true
+		}
+	}
+	if !foundCall || !foundResult {
+		t.Fatal("fallback history dropped the tool call/result pair")
+	}
+}
+
 func makeMessages(count int, prefix string) []fantasy.Message {
 	messages := make([]fantasy.Message, count)
 	for i := range messages {
@@ -1317,6 +1356,26 @@ func TestCompactionCanonicalCommitWinsPostCanonicalFailures(t *testing.T) {
 			},
 			wantReason: "attest compaction generation",
 		},
+		{
+			name: "post-commit telemetry",
+			fail: func(t *testing.T, _ string, c *Coordinator) {
+				store, err := NewEventStore(c.session.Workspace, "run-failure", "session-failure")
+				if err != nil {
+					t.Fatal(err)
+				}
+				syncCalls := 0
+				store.syncFile = func() error {
+					syncCalls++
+					if syncCalls == 3 {
+						return errors.New("injected telemetry sync failure")
+					}
+					return nil
+				}
+				c.eventStore = store
+				t.Cleanup(func() { _ = store.Close() })
+			},
+			wantReason: "persist context window telemetry",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -1345,6 +1404,15 @@ func TestCompactionCanonicalCommitWinsPostCanonicalFailures(t *testing.T) {
 			if c.compactionRecoveryError() == nil {
 				t.Fatal("post-canonical projection gap was not marked recoverable")
 			}
+			if test.name == "event attestation" {
+				data, readErr := os.ReadFile(filepath.Join(workspace, logsDir, eventStoreFile))
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				if strings.Contains(string(data), string(EventContextWindowCompactionCommitted)) {
+					t.Fatal("compaction telemetry was persisted after P2 attestation failure")
+				}
+			}
 
 			if c.eventStore != nil {
 				_ = c.eventStore.Close()
@@ -1358,6 +1426,43 @@ func TestCompactionCanonicalCommitWinsPostCanonicalFailures(t *testing.T) {
 				t.Fatalf("canonical reload history = %#v", restarted.conversationHistory)
 			}
 		})
+	}
+}
+
+func TestCompactionTelemetryFollowsProjectionAndAttestations(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-success", "session-success")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	c := &Coordinator{
+		session:            &TeamSession{Workspace: workspace},
+		eventStore:         store,
+		compactionBranchID: "main",
+		reportStatus:       func(StatusEvent) {},
+	}
+	projection := compactionProjection{
+		messages:     []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "committed replacement")},
+		summary:      &StructuredSummary{Goal: "committed goal"},
+		tokensBefore: 100,
+		tokensAfter:  20,
+	}
+	if _, err := c.commitCompactionCheckpoint(t.Context(), projection.messages, 0, []int{1}, []int{1}, projection); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTypes := []string{compactionGenerationEventType, compactionCheckpointEventType, string(EventContextWindowCompactionCommitted)}
+	if len(events) != len(wantTypes) {
+		t.Fatalf("compaction commit events = %d, want %d: %+v", len(events), len(wantTypes), events)
+	}
+	for i, want := range wantTypes {
+		if events[i].Type != want {
+			t.Fatalf("event %d type = %q, want %q", i, events[i].Type, want)
+		}
 	}
 }
 

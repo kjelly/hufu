@@ -33,6 +33,112 @@ func TestDetectContextLengths_ProbesWhenNetworkAllowed(t *testing.T) {
 	}
 }
 
+func TestApplyCLICompactionOverrides_InvalidPolicyUsesDefaults(t *testing.T) {
+	originalOpts := opts
+	t.Cleanup(func() { opts = originalOpts })
+	opts.compactionMaxHistoryMessages = 0
+	opts.compactionRetainHistoryMessages = 0
+	opts.compactionVerifiedHistoryTargetTokens = 0
+	opts.compactionToolOutputMaxBytes = 0
+	opts.compactionToolOutputMaxRunes = 0
+	opts.compactionToolOutputMaxTokens = 0
+	opts.compactionDiagnosticMaxLines = 0
+	opts.compactionDiagnosticMaxTokens = 0
+
+	session := &team.TeamSession{}
+	if err := applyCLICompactionOverrides(session); err != nil {
+		t.Fatalf("applyCLICompactionOverrides failed: %v", err)
+	}
+
+	want := agent.DefaultCompactionPolicy()
+	if session.Config.Compaction != want {
+		t.Fatalf("compaction policy = %#v, want %#v", session.Config.Compaction, want)
+	}
+	if err := session.Config.Compaction.Validate(); err != nil {
+		t.Fatalf("default compaction policy is invalid: %v", err)
+	}
+}
+
+func TestChatExposesAndAppliesAllCompactionOverrides(t *testing.T) {
+	for _, name := range []string{
+		"compaction-max-history-messages",
+		"compaction-retain-history-messages",
+		"compaction-verified-history-target-tokens",
+		"compaction-tool-output-max-bytes",
+		"compaction-tool-output-max-runes",
+		"compaction-tool-output-max-tokens",
+		"compaction-diagnostic-max-lines",
+		"compaction-diagnostic-max-tokens",
+	} {
+		if replCmd.Flags().Lookup(name) == nil {
+			t.Fatalf("chat flag --%s is not registered", name)
+		}
+	}
+
+	originalOpts := opts
+	t.Cleanup(func() { opts = originalOpts })
+	base := agent.DefaultCompactionPolicy()
+	base.MaxHistoryMessages = 50
+	base.RetainHistoryMessages = 40
+	base.VerifiedHistoryTargetTokens = 9000
+	base.ToolOutputMaxBytes = 2000
+	base.ToolOutputMaxRunes = 500
+	base.ToolOutputMaxTokens = 180
+	base.DiagnosticMaxLines = 10
+	base.DiagnosticMaxTokens = 90
+	opts.compactionMaxHistoryMessages = 40
+	opts.compactionRetainHistoryMessages = 30
+	opts.compactionVerifiedHistoryTargetTokens = 8000
+	opts.compactionToolOutputMaxBytes = 1000
+	opts.compactionToolOutputMaxRunes = 200
+	opts.compactionToolOutputMaxTokens = 100
+	opts.compactionDiagnosticMaxLines = 8
+	opts.compactionDiagnosticMaxTokens = 40
+	session := &team.TeamSession{Config: agent.TeamConfig{Compaction: base}}
+	if err := applyCLICompactionOverrides(session); err != nil {
+		t.Fatal(err)
+	}
+	if got := session.Config.Compaction; got.MaxHistoryMessages != 40 || got.RetainHistoryMessages != 30 || got.VerifiedHistoryTargetTokens != 8000 || got.ToolOutputMaxBytes != 1000 || got.ToolOutputMaxRunes != 200 || got.ToolOutputMaxTokens != 100 || got.DiagnosticMaxLines != 8 || got.DiagnosticMaxTokens != 40 {
+		t.Fatalf("chat compaction overrides = %#v", got)
+	}
+}
+
+func TestCompactionCLIRejectsImpossibleToolOutputCapsAndKeepsZeroAsDefault(t *testing.T) {
+	for _, name := range []string{"compaction-tool-output-max-bytes", "compaction-tool-output-max-runes", "compaction-tool-output-max-tokens"} {
+		if replCmd.Flags().Lookup(name) == nil {
+			t.Fatalf("compaction flag --%s is not registered for chat", name)
+		}
+	}
+
+	originalOpts := opts
+	t.Cleanup(func() { opts = originalOpts })
+	for name, set := range map[string]func(){
+		"bytes":  func() { opts.compactionToolOutputMaxBytes = 1 },
+		"runes":  func() { opts.compactionToolOutputMaxRunes = 1 },
+		"tokens": func() { opts.compactionToolOutputMaxTokens = 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			opts = originalOpts
+			set()
+			if err := applyCLICompactionOverrides(&team.TeamSession{}); err == nil {
+				t.Fatal("impossible CLI tool-output cap was accepted")
+			}
+		})
+	}
+
+	opts = originalOpts
+	opts.compactionToolOutputMaxBytes = 0
+	opts.compactionToolOutputMaxRunes = 0
+	opts.compactionToolOutputMaxTokens = 0
+	session := &team.TeamSession{}
+	if err := applyCLICompactionOverrides(session); err != nil {
+		t.Fatalf("zero CLI caps should retain defaults: %v", err)
+	}
+	if session.Config.Compaction != agent.DefaultCompactionPolicy() {
+		t.Fatalf("zero CLI caps changed default policy: %#v", session.Config.Compaction)
+	}
+}
+
 func TestLoadTeamCommon_RejectsStrictWorkspaceBeforeWrite(t *testing.T) {
 	projDir := t.TempDir()
 	origWd, err := os.Getwd()

@@ -946,6 +946,8 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	c.metricsMu.Lock()
 	c.turnsSinceCriterionProgress++
 	c.metricsMu.Unlock()
+	executionAttempt := int(c.executionAttemptSeq.Add(1))
+	ctx = context.WithValue(ctx, executionAttemptKey{}, executionAttempt)
 	if err := c.compactionRecoveryError(); err != nil {
 		return "", nil, err
 	}
@@ -960,6 +962,7 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	orchCtx, cancel := tools.WithInteractiveAwareTimeout(ctx, coordinatorTimeout)
 	defer cancel()
 	orchCtx = context.WithValue(orchCtx, todoIDKey{}, CoordTodoID)
+	orchCtx = context.WithValue(orchCtx, executionAttemptKey{}, executionAttempt)
 	// The coordinator's built-in tools are always permitted, independent of
 	// team.yaml: without this the permission gate denies the forced read-only
 	// tools and the coordinator is back to delegating every file read.

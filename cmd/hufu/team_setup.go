@@ -127,6 +127,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	applyCLITimeoutOverrides(session, currentTimeoutOverrides())
 	applyCLIVerifyTimeoutOverrides(session, currentVerifyTimeoutOverrides())
 	applyCLITuningOverrides(session, currentTuningOverrides())
+	if err := applyCLICompactionOverrides(session); err != nil {
+		return nil, err
+	}
 	if opts.goalMode != "" {
 		session.Config.GoalMode = opts.goalMode
 	}
@@ -270,6 +273,45 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		sessionData: sessionData,
 		notifier:    notifierInst,
 	}, nil
+}
+
+func applyCLICompactionOverrides(session *team.TeamSession) error {
+	if session == nil {
+		return fmt.Errorf("cannot apply compaction policy without a team session")
+	}
+	policy := session.Config.Compaction
+	if policy.Validate() != nil {
+		policy = agent.DefaultCompactionPolicy()
+	}
+	if opts.compactionMaxHistoryMessages > 0 {
+		policy.MaxHistoryMessages = opts.compactionMaxHistoryMessages
+	}
+	if opts.compactionRetainHistoryMessages > 0 {
+		policy.RetainHistoryMessages = opts.compactionRetainHistoryMessages
+	}
+	if opts.compactionVerifiedHistoryTargetTokens > 0 {
+		policy.VerifiedHistoryTargetTokens = opts.compactionVerifiedHistoryTargetTokens
+	}
+	if opts.compactionToolOutputMaxBytes > 0 {
+		policy.ToolOutputMaxBytes = opts.compactionToolOutputMaxBytes
+	}
+	if opts.compactionToolOutputMaxRunes > 0 {
+		policy.ToolOutputMaxRunes = opts.compactionToolOutputMaxRunes
+	}
+	if opts.compactionToolOutputMaxTokens > 0 {
+		policy.ToolOutputMaxTokens = opts.compactionToolOutputMaxTokens
+	}
+	if opts.compactionDiagnosticMaxLines > 0 {
+		policy.DiagnosticMaxLines = opts.compactionDiagnosticMaxLines
+	}
+	if opts.compactionDiagnosticMaxTokens > 0 {
+		policy.DiagnosticMaxTokens = opts.compactionDiagnosticMaxTokens
+	}
+	if err := policy.Validate(); err != nil {
+		return fmt.Errorf("invalid compaction policy: %w", err)
+	}
+	session.Config.Compaction = policy
+	return nil
 }
 
 func contractErrorMessages(findings []team.ContractFinding) []string {

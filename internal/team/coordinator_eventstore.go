@@ -147,6 +147,14 @@ func (c *Coordinator) initEventStore() {
 	es.SetBranchID(activeBranch)
 	c.eventStore = es
 	c.SetEventJournal(eventStoreJournal{store: es})
+	c.resetContextWindowTelemetrySummary()
+	// Hydrate the active branch during every normal startup. Pending terminal
+	// reconciliation is a recovery concern and must not also replay telemetry.
+	if events, readErr := es.ReadEvents(); readErr != nil {
+		c.markSessionRecovery("event-store telemetry hydration read failed: " + utils.RedactSecrets(readErr.Error()))
+	} else {
+		c.hydrateContextWindowTelemetry(FilterEventsForBranch(events, st, activeBranch))
+	}
 	// Reconcile and validate the canonical event binding before publishing any
 	// restored history to the coordinator/provider path.
 	if compactionErr := c.reconcileCompactionState(context.Background(), activeBranch); compactionErr != nil {

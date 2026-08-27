@@ -17,6 +17,7 @@ import (
 	"charm.land/fantasy/providers/openaicompat"
 
 	"github.com/kjelly/hufu/internal/config"
+	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/providerproxy"
 	"github.com/kjelly/hufu/internal/tools"
@@ -345,6 +346,64 @@ type TeamConfig struct {
 	// agents can override it via their frontmatter `memory:` block.
 	WorkerMemory   WorkerMemoryPolicy
 	MemoryLearning MemoryLearningPolicy
+	// Compaction controls coordinator history retention and deterministic
+	// normalization of verified tool evidence. It is team-scoped; agent
+	// frontmatter cannot override these safety limits.
+	Compaction CompactionPolicy
+}
+
+// CompactionPolicy is the team-level safety policy for coordinator history and
+// large tool output. Zero values are never treated as disabled limits; callers
+// must resolve them through DefaultCompactionPolicy.
+type CompactionPolicy struct {
+	MaxHistoryMessages          int `json:"max_history_messages" yaml:"max-history-messages"`
+	RetainHistoryMessages       int `json:"retain_history_messages" yaml:"retain-history-messages"`
+	VerifiedHistoryTargetTokens int `json:"verified_history_target_tokens" yaml:"verified-history-target-tokens"`
+	ToolOutputMaxBytes          int `json:"tool_output_max_bytes" yaml:"tool-output-max-bytes"`
+	ToolOutputMaxRunes          int `json:"tool_output_max_runes" yaml:"tool-output-max-runes"`
+	ToolOutputMaxTokens         int `json:"tool_output_max_tokens" yaml:"tool-output-max-tokens"`
+	DiagnosticMaxLines          int `json:"diagnostic_max_lines" yaml:"diagnostic-max-lines"`
+	DiagnosticMaxTokens         int `json:"diagnostic_max_tokens" yaml:"diagnostic-max-tokens"`
+}
+
+// DefaultCompactionPolicy preserves the pre-P3 coordinator behavior while
+// making every large-output bound explicit.
+func DefaultCompactionPolicy() CompactionPolicy {
+	return CompactionPolicy{
+		MaxHistoryMessages:          100,
+		RetainHistoryMessages:       80,
+		VerifiedHistoryTargetTokens: 16_000,
+		ToolOutputMaxBytes:          24_576,
+		ToolOutputMaxRunes:          6_000,
+		ToolOutputMaxTokens:         1_500,
+		DiagnosticMaxLines:          32,
+		DiagnosticMaxTokens:         768,
+	}
+}
+
+// Validate rejects unsafe or ambiguous policy values. In particular, zero is
+// not an opt-out because these limits protect provider and persistence paths.
+func (p CompactionPolicy) Validate() error {
+	if p.MaxHistoryMessages <= 0 || p.RetainHistoryMessages <= 0 || p.RetainHistoryMessages >= p.MaxHistoryMessages {
+		return fmt.Errorf("compaction history limits must be positive and retain-history-messages < max-history-messages")
+	}
+	if p.VerifiedHistoryTargetTokens <= 0 {
+		return fmt.Errorf("compaction output limits must be positive")
+	}
+	minimum := contextstore.ToolResultMandatoryMinimum()
+	if p.ToolOutputMaxBytes < minimum.Bytes || p.ToolOutputMaxRunes < minimum.Runes || p.ToolOutputMaxTokens < minimum.Tokens {
+		return fmt.Errorf("tool output caps must allow mandatory provenance envelope (minimum bytes=%d runes=%d tokens=%d)", minimum.Bytes, minimum.Runes, minimum.Tokens)
+	}
+	if p.DiagnosticMaxLines <= 0 || p.DiagnosticMaxTokens <= 0 {
+		return fmt.Errorf("compaction diagnostic limits must be positive")
+	}
+	if p.DiagnosticMaxTokens > p.ToolOutputMaxTokens {
+		return fmt.Errorf("diagnostic-max-tokens must be <= tool-output-max-tokens")
+	}
+	if p.DiagnosticMaxLines > p.ToolOutputMaxRunes {
+		return fmt.Errorf("diagnostic-max-lines must be <= tool-output-max-runes")
+	}
+	return nil
 }
 
 // WorkflowConfig is provider-neutral phase ordering for a team execution.

@@ -63,6 +63,13 @@ var (
 // regardless of its JSON type.
 var numericTelemetryKeys = map[string]struct{}{
 	"max_tokens":                      {},
+	"requested_tokens":                {},
+	"available_tokens":                {},
+	"reserved_tokens":                 {},
+	"safety_tokens":                   {},
+	"window_tokens":                   {},
+	"diagnostic_max_tokens":           {},
+	"diagnostic_max_lines":            {},
 	"tokens_used":                     {},
 	"tokens_since_progress":           {},
 	"tokens_since_criterion_progress": {},

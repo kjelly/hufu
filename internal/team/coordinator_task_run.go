@@ -45,6 +45,24 @@ type coordinatorModelContinuation struct {
 	Context  context.Context
 }
 
+// admitCoordinatorContext is the single coordinator admission boundary. It
+// records every complete-request decision before the caller can cross into a
+// provider, including a typed pre-provider CannotFit candidate.
+func (c *Coordinator) admitCoordinatorContext(ctx context.Context, manager *ContextWindowManager, request ContextWindowRequest, phase, taskID string, attempt int) (ContextWindowAdmission, error) {
+	admission, err := manager.Admit(ctx, request)
+	if err != nil {
+		return admission, err
+	}
+	telemetry := c.newContextWindowTelemetry(EventContextWindowAdmission, request, admission, phase, taskID, attempt)
+	if admission.Candidate != nil {
+		telemetry.FallbackReason = "candidate_requires_final_admission"
+	}
+	if err := c.recordContextWindowTelemetry(EventContextWindowAdmission, telemetry, taskID); err != nil {
+		return ContextWindowAdmission{}, err
+	}
+	return admission, nil
+}
+
 // admitCoordinatorEarlierModel is the only coordinator model downshift
 // boundary. It accepts only a compacted candidate that the current P1
 // admission proved could not be sent, and independently admits each earlier
@@ -64,6 +82,7 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 		return coordinatorModelContinuation{}, nil
 	}
 	fullSystem, fullTools := preflight.configuration()
+	attempt, _ := ctx.Value(executionAttemptKey{}).(int)
 	seen := make(map[string]bool)
 	for i := currentIndex - 1; i >= 0; i-- {
 		candidateID := strings.TrimSpace(c.modelList[i].ID)
@@ -82,11 +101,11 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 			requestSystem, requestTools = candidateSystem, candidateTools
 		}
 		manager := NewContextWindowManager(defaultCounter, nil)
-		admission, err := manager.Admit(ctx, ContextWindowRequest{
+		admission, err := c.admitCoordinatorContext(ctx, manager, ContextWindowRequest{
 			ModelID: candidateID, System: requestSystem, Tools: requestTools, Messages: messages,
 			Prompt: prompt, Window: candidateSpec.ContextWindow, ReservedOutputTokens: maxOutputTokens,
 			SafetyMarginTokens: candidateSpec.SafetyMarginTokens, StepNumber: stepNumber,
-		})
+		}, "downshift_candidate", CoordTodoID, attempt)
 		if err != nil || admission.Decision == ContextWindowCannotFit || admission.Messages == nil {
 			continue
 		}
@@ -94,18 +113,30 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 		if provider == nil {
 			continue
 		}
-		model, err := provider.LanguageModel(ctx, candidateID)
-		if err != nil {
-			continue
-		}
 		payload := map[string]any{"from_model": currentModel, "to_model": candidateID, "request_tokens": admission.RequestTokens, "available": admission.Budget.Available, "step": stepNumber}
 		if err := c.emitEvent(modelContinuationEventType, "coordinator", CoordTodoID, payload); err != nil {
 			return coordinatorModelContinuation{}, fmt.Errorf("persist coordinator model continuation admission: %w", err)
+		}
+		downshift := c.newContextWindowTelemetry(EventContextWindowDownshift, ContextWindowRequest{ModelID: candidateID, ReservedOutputTokens: maxOutputTokens, SafetyMarginTokens: candidateSpec.SafetyMarginTokens, Window: candidateSpec.ContextWindow, StepNumber: stepNumber}, admission, "downshift", CoordTodoID, attempt)
+		downshift.Decision = "downshift"
+		downshift.FallbackReason = "earlier_model_admitted"
+		if err := c.recordContextWindowTelemetry(EventContextWindowDownshift, downshift, CoordTodoID); err != nil {
+			return coordinatorModelContinuation{}, err
+		}
+		model, err := provider.LanguageModel(ctx, candidateID)
+		if err != nil {
+			continue
 		}
 		return coordinatorModelContinuation{
 			Model: model, Messages: admission.Messages, System: candidateSystem, Tools: candidateTools,
 			ToolsSet: applied, Context: context.WithValue(ctx, modelKey{}, candidateID),
 		}, nil
+	}
+	exhausted := c.newContextWindowTelemetry(EventContextWindowDownshift, ContextWindowRequest{ModelID: currentModel, ReservedOutputTokens: maxOutputTokens, StepNumber: stepNumber}, ContextWindowAdmission{Decision: ContextWindowCannotFit}, "downshift", CoordTodoID, attempt)
+	exhausted.Decision = "exhausted"
+	exhausted.FallbackReason = "no_admitted_candidate"
+	if err := c.recordContextWindowTelemetry(EventContextWindowDownshift, exhausted, CoordTodoID); err != nil {
+		return coordinatorModelContinuation{}, err
 	}
 	return coordinatorModelContinuation{}, nil
 }
@@ -2968,7 +2999,8 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			contextChanged := false
 			if contextManager != nil {
 				fullSystem, fullTools := streamPreflight.configuration()
-				admission, admissionErr := contextManager.Admit(ctx, ContextWindowRequest{
+				attempt, _ := ctx.Value(executionAttemptKey{}).(int)
+				admission, admissionErr := c.admitCoordinatorContext(ctx, contextManager, ContextWindowRequest{
 					ModelID:              modelID,
 					System:               fullSystem,
 					Tools:                fullTools,
@@ -2978,7 +3010,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					ReservedOutputTokens: spec.MaxOutputTokens,
 					SafetyMarginTokens:   spec.SafetyMarginTokens,
 					StepNumber:           opts.StepNumber,
-				})
+				}, "initial", todoID, attempt)
 				if admissionErr != nil {
 					return ctx, fantasy.PrepareStepResult{}, admissionErr
 				}
@@ -3003,7 +3035,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				if preflightApplied {
 					requestSystem, requestTools = preflightSystem, preflightTools
 				}
-				finalAdmission, finalErr := contextManager.Admit(ctx, ContextWindowRequest{
+				finalAdmission, finalErr := c.admitCoordinatorContext(ctx, contextManager, ContextWindowRequest{
 					ModelID:              modelID,
 					System:               requestSystem,
 					Tools:                requestTools,
@@ -3013,7 +3045,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					ReservedOutputTokens: spec.MaxOutputTokens,
 					SafetyMarginTokens:   spec.SafetyMarginTokens,
 					StepNumber:           opts.StepNumber,
-				})
+				}, "final", todoID, attempt)
 				if finalErr != nil {
 					return ctx, fantasy.PrepareStepResult{}, finalErr
 				}

@@ -160,6 +160,11 @@ type reporterState struct {
 func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEvent) {
 	width := previewTerminalWidth(120)
 	switch event.Type {
+	case "context_window_admission", "context_window_compaction_committed", "context_window_downshift":
+		if event.ContextWindowTelemetry != nil {
+			telemetry := event.ContextWindowTelemetry
+			w.write(fmt.Sprintf("  %s context window: %s (%s, requested %d / available %d)\n", stepStyle.Render("│"), telemetry.Phase, telemetry.Decision, telemetry.RequestedTokens, telemetry.AvailableTokens))
+		}
 	case "failure":
 		if st.textBuf != "" {
 			w.write(flushText(st.currentAgent, st.textBuf))
@@ -1153,14 +1158,15 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 }
 
 type jsonStatusEvent struct {
-	Type    string `json:"type"`
-	Team    string `json:"team,omitempty"`
-	Agent   string `json:"agent,omitempty"`
-	TodoID  string `json:"todo_id,omitempty"`
-	Model   string `json:"model,omitempty"`
-	Message string `json:"message,omitempty"`
-	Tool    string `json:"tool,omitempty"`
-	Time    string `json:"time"`
+	Type          string                            `json:"type"`
+	Team          string                            `json:"team,omitempty"`
+	Agent         string                            `json:"agent,omitempty"`
+	TodoID        string                            `json:"todo_id,omitempty"`
+	Model         string                            `json:"model,omitempty"`
+	Message       string                            `json:"message,omitempty"`
+	Tool          string                            `json:"tool,omitempty"`
+	Time          string                            `json:"time"`
+	ContextWindow *team.ContextWindowTelemetryEvent `json:"context_window,omitempty"`
 }
 
 func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
@@ -1169,7 +1175,7 @@ func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
 		if notifier != nil {
 			notifier.NotifyWithData(event.Type, event.Agent, event.Message, event.Output, event.Data)
 		}
-		encoded := jsonStatusEvent{Type: event.Type, Team: event.TeamName, Agent: event.Agent, TodoID: event.TodoID, Model: event.Model, Message: event.Message, Tool: event.ToolName, Time: time.Now().UTC().Format(time.RFC3339Nano)}
+		encoded := jsonStatusEvent{Type: event.Type, Team: event.TeamName, Agent: event.Agent, TodoID: event.TodoID, Model: event.Model, Message: event.Message, Tool: event.ToolName, Time: time.Now().UTC().Format(time.RFC3339Nano), ContextWindow: event.ContextWindowTelemetry}
 		mu.Lock()
 		defer mu.Unlock()
 		_ = json.NewEncoder(os.Stderr).Encode(encoded)
@@ -1366,6 +1372,15 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render(event.Message)})
 				if event.TodoID != "" {
 					p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: event.Message})
+				}
+			}
+
+		case "context_window_admission", "context_window_compaction_committed", "context_window_downshift":
+			if event.ContextWindowTelemetry != nil {
+				telemetry := event.ContextWindowTelemetry
+				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render(fmt.Sprintf("context window: %s (%s)", telemetry.Phase, telemetry.Decision))})
+				if event.TodoID != "" {
+					p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: fmt.Sprintf("context window %s: %s", telemetry.Phase, telemetry.Decision)})
 				}
 			}
 

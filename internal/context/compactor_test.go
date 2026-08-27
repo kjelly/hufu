@@ -24,7 +24,7 @@ func TestDeterministicCompactorPreservesMidstreamErrorAndToolPair(t *testing.T) 
 	if !strings.Contains(result.Content, "COMPILER_ERROR E1234") {
 		t.Fatalf("middle error was lost")
 	}
-	if got := strings.Join(result.PreservedItemIDs, ","); !strings.Contains(got, "call-1") || !strings.Contains(got, "result-1") {
+	if got := strings.Join(result.PreservedItemIDs, ","); !strings.Contains(got, canonicalToolEvidenceID("call-1")) || !strings.Contains(got, canonicalToolEvidenceID("result-1")) {
 		t.Fatalf("tool pair not preserved: %v", result.PreservedItemIDs)
 	}
 }
@@ -80,6 +80,153 @@ func TestToolEvidenceItemsAssignIDsAndPairResult(t *testing.T) {
 	}
 }
 
+func TestToolEvidenceItemsCanonicalizeSecretCallIdentity(t *testing.T) {
+	secret := "explicit-call-secret-value"
+	callID := "call-token=" + secret
+	resultID := "result-secret=" + secret
+	call := ToolCallEvidence{ID: callID, Tool: "bash", Command: "go test", Scope: Scope{ProjectID: "p"}}
+	input := ToolResultEvidence{ID: resultID, ToolCallID: callID, Output: "ok", Scope: Scope{ProjectID: "p"}}
+
+	items, edges, err := ToolEvidenceItemsChecked(call, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || len(edges) != 1 {
+		t.Fatalf("invalid evidence: items=%#v edges=%#v", items, edges)
+	}
+	for _, value := range []string{items[0].ID, items[1].ID, edges[0].FromID, edges[0].ToID, items[0].Content, items[1].Content} {
+		if strings.Contains(value, secret) {
+			t.Fatalf("raw secret leaked through evidence: %q", value)
+		}
+	}
+	if edges[0].FromID != items[1].ID || edges[0].ToID != items[0].ID {
+		t.Fatalf("edge does not pair canonical item IDs: items=%#v edge=%#v", items, edges[0])
+	}
+	wantToolCallID := "tool_call_id: " + items[0].ID
+	if !strings.Contains(items[1].Content, wantToolCallID) {
+		t.Fatalf("rendered result does not use canonical call ID %q: %q", wantToolCallID, items[1].Content)
+	}
+	compacted, err := (DeterministicCompactor{}).Compact(context.Background(), CompactionRequest{Items: items, Edges: edges, TargetTokens: 1_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range append(append(append(compacted.SourceItemIDs, compacted.PreservedItemIDs...), compacted.OmittedItemIDs...), compacted.MissingItemIDs...) {
+		if strings.Contains(id, secret) {
+			t.Fatalf("raw secret leaked through compaction ID list: %q", id)
+		}
+	}
+
+	repeatedItems, repeatedEdges, err := ToolEvidenceItemsChecked(call, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeatedItems[0].ID != items[0].ID || repeatedItems[1].ID != items[1].ID || repeatedEdges[0].FromID != edges[0].FromID || repeatedEdges[0].ToID != edges[0].ToID || repeatedItems[1].Content != items[1].Content {
+		t.Fatalf("canonical identity is not deterministic: first=%#v/%#v repeated=%#v/%#v", items, edges, repeatedItems, repeatedEdges)
+	}
+}
+
+func TestToolEvidenceItemsCanonicalizeSecretResultIdentity(t *testing.T) {
+	secret := "explicit-result-secret-value"
+	call := ToolCallEvidence{ID: "call-1", Tool: "bash", Command: "go test", Scope: Scope{ProjectID: "p"}}
+	items, edges, err := ToolEvidenceItemsChecked(call, ToolResultEvidence{ID: "result-api-key=" + secret, ToolCallID: call.ID, Output: "ok", Scope: Scope{ProjectID: "p"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{items[0].ID, items[1].ID, edges[0].FromID, edges[0].ToID, items[0].Content, items[1].Content} {
+		if strings.Contains(value, secret) {
+			t.Fatalf("raw result secret leaked through evidence: %q", value)
+		}
+	}
+}
+
+func TestToolEvidenceItemsCanonicalizeOpaqueASCIIIdentity(t *testing.T) {
+	callID := "sk-opaque-7A9b2C"
+	resultID := "result-opaque-7A9b2C"
+	call := ToolCallEvidence{ID: callID, Tool: "bash", Command: "go test", Scope: Scope{ProjectID: "p"}}
+	result := ToolResultEvidence{ID: resultID, ToolCallID: callID, Output: "ok", Scope: Scope{ProjectID: "p"}}
+
+	items, edges, err := ToolEvidenceItemsChecked(call, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCallID := canonicalToolEvidenceID(callID)
+	wantResultID := canonicalToolEvidenceID(resultID)
+	if items[0].ID != wantCallID || items[1].ID != wantResultID {
+		t.Fatalf("opaque IDs were not canonically hashed: items=%#v", items)
+	}
+	if edges[0].FromID != wantResultID || edges[0].ToID != wantCallID {
+		t.Fatalf("opaque ID edge linkage was not canonical: edge=%#v", edges[0])
+	}
+	if !strings.Contains(items[1].Content, "tool_call_id: "+wantCallID) {
+		t.Fatalf("rendered result lost canonical call ID: %q", items[1].Content)
+	}
+	compacted, err := (DeterministicCompactor{}).Compact(context.Background(), CompactionRequest{Items: items, Edges: edges, TargetTokens: 1_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := []string{items[0].ID, items[1].ID, edges[0].FromID, edges[0].ToID}
+	values = append(values, compacted.SourceItemIDs...)
+	values = append(values, compacted.PreservedItemIDs...)
+	values = append(values, compacted.OmittedItemIDs...)
+	values = append(values, compacted.MissingItemIDs...)
+	for _, value := range values {
+		if strings.Contains(value, callID) || strings.Contains(value, resultID) {
+			t.Fatalf("raw opaque ID leaked through evidence or compaction IDs: %q", value)
+		}
+	}
+	if strings.Contains(compacted.Content, callID) || strings.Contains(compacted.Content, resultID) {
+		t.Fatalf("raw opaque ID leaked through compacted rendered content: %q", compacted.Content)
+	}
+	if strings.Contains(items[0].Content, callID) || strings.Contains(items[0].Content, resultID) || strings.Contains(items[1].Content, callID) || strings.Contains(items[1].Content, resultID) {
+		t.Fatalf("raw opaque ID leaked through rendered evidence: items=%#v", items)
+	}
+
+	repeatedItems, repeatedEdges, err := ToolEvidenceItemsChecked(call, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeatedItems[0].ID != items[0].ID || repeatedItems[1].ID != items[1].ID || repeatedItems[1].Content != items[1].Content || repeatedEdges[0].FromID != edges[0].FromID || repeatedEdges[0].ToID != edges[0].ToID || repeatedEdges[0].Relation != edges[0].Relation {
+		t.Fatalf("opaque ID canonicalization is not deterministic: first=%#v/%#v repeated=%#v/%#v", items, edges, repeatedItems, repeatedEdges)
+	}
+}
+
+func TestToolEvidenceItemsRejectMismatchedResultToolCallID(t *testing.T) {
+	callID := "sk-opaque-7A9b2C"
+	items, edges, err := ToolEvidenceItemsChecked(
+		ToolCallEvidence{ID: callID, Tool: "bash", Command: "go test"},
+		ToolResultEvidence{ID: "result-1", ToolCallID: "sk-opaque-other", Output: "ok"},
+	)
+	if err != ErrToolEvidenceToolCallMismatch {
+		t.Fatalf("error = %v, want %v", err, ErrToolEvidenceToolCallMismatch)
+	}
+	if items != nil || edges != nil {
+		t.Fatalf("mismatched evidence returned a partial pair: items=%#v edges=%#v", items, edges)
+	}
+}
+
+func TestToolEvidenceItemsBoundHugeUTF8IDsAsOpaqueCanonicalIDs(t *testing.T) {
+	callID := strings.Repeat("識", 500)
+	resultID := strings.Repeat("結", 500)
+	call := ToolCallEvidence{ID: callID, Tool: "bash", Command: "go test", Scope: Scope{ProjectID: "p"}}
+	result := ToolResultEvidence{ID: resultID, ToolCallID: callID, Output: "ok", Scope: Scope{ProjectID: "p"}}
+	items, edges, err := ToolEvidenceItemsChecked(call, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{items[0].ID, items[1].ID, edges[0].FromID, edges[0].ToID} {
+		if !strings.HasPrefix(id, "tool-id:") || len(id) != len("tool-id:")+64 || strings.ContainsAny(id, "識結") {
+			t.Fatalf("ID was not bounded to an opaque ASCII value: %q", id)
+		}
+	}
+	if edges[0].FromID != items[1].ID || edges[0].ToID != items[0].ID || !strings.Contains(items[1].Content, "tool_call_id: "+items[0].ID) {
+		t.Fatalf("canonical pair linkage was not preserved: items=%#v edge=%#v", items, edges[0])
+	}
+	repeatedItems, repeatedEdges, err := ToolEvidenceItemsChecked(call, result)
+	if err != nil || repeatedItems[0].ID != items[0].ID || repeatedItems[1].ID != items[1].ID || repeatedEdges[0].FromID != edges[0].FromID || repeatedEdges[0].ToID != edges[0].ToID {
+		t.Fatalf("huge UTF-8 identity is not deterministic: first=%#v/%#v repeated=%#v/%#v err=%v", items, edges, repeatedItems, repeatedEdges, err)
+	}
+}
+
 func TestToolEvidenceItemsRenderRequiredMetadata(t *testing.T) {
 	exitCode := 1
 	started := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
@@ -90,6 +237,59 @@ func TestToolEvidenceItemsRenderRequiredMetadata(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Errorf("missing %q from tool evidence: %s", want, content)
 		}
+	}
+}
+
+func TestToolEvidenceItemsMinimumPolicyPreservesMandatoryEnvelope(t *testing.T) {
+	minimum := ToolResultMandatoryMinimum()
+	policy := ToolOutputPolicy{MaxBytes: minimum.Bytes, MaxRunes: minimum.Runes, MaxTokens: minimum.Tokens, DiagnosticLines: 1, DiagnosticTokens: minimum.Tokens}
+	items, _, err := ToolEvidenceItemsChecked(
+		ToolCallEvidence{ID: "x", Tool: "x", Command: "x", WorkingDir: "x"},
+		ToolResultEvidence{ID: "r", ToolCallID: "x", Verification: "passed", OutputPolicy: policy, Output: "optional output"},
+	)
+	if err != nil {
+		t.Fatalf("minimum-valid evidence rejected: %v", err)
+	}
+	content := items[1].Content
+	for _, want := range []string{"tool: x", "tool_call_id: " + canonicalToolEvidenceID("x"), "command: x", "working_dir: x", "verification: passed"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("mandatory provenance %q missing from %q", want, content)
+		}
+	}
+	if len(content) > policy.MaxBytes || len([]rune(content)) > policy.MaxRunes || estimateOutputTokens(content) > policy.MaxTokens {
+		t.Fatalf("minimum evidence exceeds caps: bytes=%d runes=%d tokens=%d", len(content), len([]rune(content)), estimateOutputTokens(content))
+	}
+}
+
+func TestToolEvidenceItemsFailsClosedForOversizedUTF8MandatoryProvenance(t *testing.T) {
+	minimum := ToolResultMandatoryMinimum()
+	policy := ToolOutputPolicy{MaxBytes: minimum.Bytes, MaxRunes: minimum.Runes, MaxTokens: minimum.Tokens, DiagnosticLines: 1, DiagnosticTokens: minimum.Tokens}
+	longID := strings.Repeat("識", 40)
+	longCommand := strings.Repeat("コマンド ", 40)
+	items, edges, err := ToolEvidenceItemsChecked(
+		ToolCallEvidence{ID: longID, Tool: "x", Command: longCommand, WorkingDir: "x"},
+		ToolResultEvidence{ID: "result", ToolCallID: longID, Verification: "passed", Command: longCommand, OutputPolicy: policy, Output: "must not displace provenance"},
+	)
+	if err == nil || !strings.Contains(err.Error(), ErrToolEvidenceMandatoryCapacity.Error()) {
+		t.Fatalf("error = %v, want mandatory-capacity failure", err)
+	}
+	if items != nil || edges != nil {
+		t.Fatalf("failed evidence returned items or edges: items=%#v edges=%#v", items, edges)
+	}
+}
+
+func TestCompactToolOutputWithPolicyRedactsDiagnosticsAndHonorsFramedCaps(t *testing.T) {
+	policy := ToolOutputPolicy{MaxBytes: 180, MaxRunes: 90, MaxTokens: 22, DiagnosticLines: 2, DiagnosticTokens: 8}
+	output := strings.Repeat("正常な出力 ", 200) + "\nwarning: harmless\n" + strings.Repeat("noise ", 20) + "\nERROR password=super-secret E1234\n" + strings.Repeat("tail ", 100)
+	got := CompactToolOutputWithPolicy(output, policy)
+	if len(got) > policy.MaxBytes || len([]rune(got)) > policy.MaxRunes || estimateOutputTokens(got) > policy.MaxTokens {
+		t.Fatalf("normalized output exceeds caps: bytes=%d runes=%d tokens=%d output=%q", len(got), len([]rune(got)), estimateOutputTokens(got), got)
+	}
+	if strings.Contains(got, "super-secret") {
+		t.Fatal("secret survived redaction")
+	}
+	if !strings.Contains(got, "E1234") {
+		t.Fatalf("prioritized diagnostic was lost: %q", got)
 	}
 }
 

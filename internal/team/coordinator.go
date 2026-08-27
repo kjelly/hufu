@@ -335,8 +335,12 @@ type Coordinator struct {
 	coordinatorPolicyRepairPending    atomic.Bool
 	coordinatorPolicyRepairExhausted  atomic.Bool
 	contextRequestSeq                 atomic.Uint64
-	initialToolCorrections            atomic.Int32
-	projectDir                        string
+	// executionAttemptSeq identifies coordinator model-stream invocations
+	// within one public execution run. It is deliberately separate from task
+	// retry attempts and from context-request telemetry sequencing.
+	executionAttemptSeq    atomic.Uint64
+	initialToolCorrections atomic.Int32
+	projectDir             string
 	// Context budget reporting (§5.4). Populated by buildSystemPrompt so the
 	// execution report can emit a token-usage breakdown without re-deriving the
 	// assembled prompt.
@@ -561,6 +565,7 @@ type Coordinator struct {
 	nonAssertingVerifiersRejected int
 	antiThrashing                 AntiThrashingState
 	compactions                   int
+	contextWindowTelemetry        ContextWindowTelemetrySummary
 	tokensSinceCriterionProgress  int64
 	// turnsSinceCriterionProgress counts coordinator model turns
 	// (runOrchestrator invocations) since the last objective criterion

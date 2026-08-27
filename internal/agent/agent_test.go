@@ -8,7 +8,37 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/config"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
+
+func TestCompactionPolicyRejectsCapsBelowMandatoryToolEnvelope(t *testing.T) {
+	minimum := DefaultCompactionPolicy()
+	mandatory := contextstore.ToolResultMandatoryMinimum()
+	minimum.ToolOutputMaxBytes = mandatory.Bytes
+	minimum.ToolOutputMaxRunes = mandatory.Runes
+	minimum.ToolOutputMaxTokens = mandatory.Tokens
+	minimum.DiagnosticMaxTokens = mandatory.Tokens
+	if err := minimum.Validate(); err != nil {
+		t.Fatalf("minimum-valid policy rejected: %v", err)
+	}
+	if err := DefaultCompactionPolicy().Validate(); err != nil {
+		t.Fatalf("default policy rejected: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*CompactionPolicy){
+		"bytes":  func(p *CompactionPolicy) { p.ToolOutputMaxBytes = mandatory.Bytes - 1 },
+		"runes":  func(p *CompactionPolicy) { p.ToolOutputMaxRunes = mandatory.Runes - 1 },
+		"tokens": func(p *CompactionPolicy) { p.ToolOutputMaxTokens = mandatory.Tokens - 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			policy := minimum
+			mutate(&policy)
+			if err := policy.Validate(); err == nil {
+				t.Fatal("unsafe mandatory-envelope cap was accepted")
+			}
+		})
+	}
+}
 
 // TestParseModelInt tests the parseModelInt function
 func TestParseModelInt(t *testing.T) {

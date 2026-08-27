@@ -11,6 +11,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 func TestStructuredSummary_RenderMarkdownAndParse(t *testing.T) {
@@ -1120,10 +1121,105 @@ func TestCompactMessagesEmbedsVerifiedToolEvidence(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected compacted part %#v", got[0].Content[0])
 	}
-	for _, want := range []string{"[Verified Compacted History]", "tool_call_id: call-1", "working_dir: /repo", "exit_code: 1", "COMPILER ERROR E1234"} {
+	items, _ := conversationEvidence(messages, contextstore.Scope{ProjectID: "hufu"})
+	var canonicalCallID string
+	for _, item := range items {
+		if item.Kind == contextstore.ContextToolCall {
+			canonicalCallID = item.ID
+			break
+		}
+	}
+	for _, want := range []string{"[Verified Compacted History]", "tool_call_id: " + canonicalCallID, "working_dir: /repo", "exit_code: 1", "COMPILER ERROR E1234"} {
 		if !strings.Contains(text.Text, want) {
 			t.Errorf("verified history missing %q", want)
 		}
+	}
+}
+
+func TestVerifiedToolEvidenceNormalizesBeforeAnalysisAndCapsCompleteValue(t *testing.T) {
+	workspace := t.TempDir()
+	policy := agent.DefaultCompactionPolicy()
+	policy.MaxHistoryMessages = 40
+	policy.RetainHistoryMessages = 30
+	policy.VerifiedHistoryTargetTokens = 500
+	policy.ToolOutputMaxBytes = 900
+	policy.ToolOutputMaxRunes = 240
+	policy.ToolOutputMaxTokens = 80
+	policy.DiagnosticMaxLines = 3
+	policy.DiagnosticMaxTokens = 18
+	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "governance", GoalMode: "exploratory", Compaction: policy}}, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := strings.Repeat("正常な出力 ", 800)
+	for i := 0; i < 20; i++ {
+		output += fmt.Sprintf("\nERROR diagnostic-%02d at workspace/logs/run-%02d.txt password=super-secret-%02d", i, i, i)
+	}
+	output += "\n" + strings.Repeat("tail output ", 300)
+	messages := []fantasy.Message{
+		fantasy.NewUserMessage("governance goal"),
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "governance-call", ToolName: "bash", Input: `{"command":"go test ./..."}`}}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "governance-call", Output: fantasy.ToolResultOutputContentText{Text: output}}}},
+	}
+	items, _ := conversationEvidence(messages, contextstore.Scope{ProjectID: "hufu"}, contextstore.ToolOutputPolicy{
+		MaxBytes: policy.ToolOutputMaxBytes, MaxRunes: policy.ToolOutputMaxRunes, MaxTokens: policy.ToolOutputMaxTokens,
+		DiagnosticLines: policy.DiagnosticMaxLines, DiagnosticTokens: policy.DiagnosticMaxTokens,
+	})
+	if len(items) != 3 {
+		t.Fatalf("evidence items = %d, want call, result, and requirement", len(items))
+	}
+	resultValue := items[2].Content
+	resultTokens := (len([]rune(resultValue)) + 3) / 4
+	if len(resultValue) > policy.ToolOutputMaxBytes || len([]rune(resultValue)) > policy.ToolOutputMaxRunes || resultTokens > policy.ToolOutputMaxTokens {
+		t.Fatalf("result evidence exceeds complete-value caps: bytes=%d runes=%d tokens=%d", len(resultValue), len([]rune(resultValue)), resultTokens)
+	}
+	if strings.Contains(resultValue, "super-secret") {
+		t.Fatal("secret survived canonical result normalization")
+	}
+	var canonicalCallID string
+	for _, item := range items {
+		if item.Kind == contextstore.ContextToolCall {
+			canonicalCallID = item.ID
+			break
+		}
+	}
+	if !strings.Contains(resultValue, "tool_call_id: "+canonicalCallID) || strings.Contains(resultValue, "tool_call_id: governance-call") {
+		t.Fatal("canonical result lost tool identity")
+	}
+	compacted, err := c.compactVerifiedConversation(context.Background(), messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(compacted.Content, "super-secret") {
+		t.Fatal("secret survived verified compaction")
+	}
+}
+
+func TestCompactMessagesRetainsOriginalToolPairWhenMandatoryEvidenceCannotFit(t *testing.T) {
+	workspace := t.TempDir()
+	minimum := contextstore.ToolResultMandatoryMinimum()
+	policy := agent.DefaultCompactionPolicy()
+	policy.ToolOutputMaxBytes = minimum.Bytes
+	policy.ToolOutputMaxRunes = minimum.Runes
+	policy.ToolOutputMaxTokens = minimum.Tokens
+	policy.DiagnosticMaxTokens = minimum.Tokens
+	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "overflow", GoalMode: "exploratory", Compaction: policy}}, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	longCallID := strings.Repeat("識", 40)
+	messages := []fantasy.Message{
+		fantasy.NewUserMessage("preserve the original tool pair"),
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: longCallID, ToolName: "bash", Input: `{"command":"go test ./..."}`}}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: longCallID, Output: fantasy.ToolResultOutputContentText{Text: "tool output"}}}},
+	}
+	got := c.compactMessages(context.Background(), messages, 0, []int{1, 1, 1})
+	if len(got) != len(messages) {
+		t.Fatalf("failed verified compaction projected %d messages, want original %d", len(got), len(messages))
+	}
+	result, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](got[2].Content[0])
+	if !ok || result.ToolCallID != longCallID {
+		t.Fatalf("original tool result linkage was not retained: %#v", got[2].Content[0])
 	}
 }
 

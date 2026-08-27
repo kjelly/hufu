@@ -67,6 +67,14 @@ func init() {
 	f.IntVar(&opts.maxRoundsOverride, "max-rounds", 0, "Override team.yaml max-rounds. 0 = use team default.")
 	f.IntVar(&opts.maxConcurrentOverride, "max-concurrent", 0, "Override team.yaml max-concurrent. 0 = use team default.")
 	f.IntVar(&opts.maxStepsOverride, "max-steps", 0, "Override team.yaml max-steps. 0 = use team/agent default.")
+	f.IntVar(&opts.compactionMaxHistoryMessages, "compaction-max-history-messages", 0, "Override compaction max history messages; zero keeps the safety default")
+	f.IntVar(&opts.compactionRetainHistoryMessages, "compaction-retain-history-messages", 0, "Override compaction retained history messages; zero keeps the safety default")
+	f.IntVar(&opts.compactionVerifiedHistoryTargetTokens, "compaction-verified-history-target-tokens", 0, "Override verified history target tokens; zero keeps the safety default")
+	f.IntVar(&opts.compactionToolOutputMaxBytes, "compaction-tool-output-max-bytes", 0, "Override normalized tool output byte cap; zero keeps the safety default")
+	f.IntVar(&opts.compactionToolOutputMaxRunes, "compaction-tool-output-max-runes", 0, "Override normalized tool output rune cap; zero keeps the safety default")
+	f.IntVar(&opts.compactionToolOutputMaxTokens, "compaction-tool-output-max-tokens", 0, "Override normalized tool output token cap; zero keeps the safety default")
+	f.IntVar(&opts.compactionDiagnosticMaxLines, "compaction-diagnostic-max-lines", 0, "Override preserved diagnostic line cap; zero keeps the safety default")
+	f.IntVar(&opts.compactionDiagnosticMaxTokens, "compaction-diagnostic-max-tokens", 0, "Override preserved diagnostic token cap; zero keeps the safety default")
 }
 
 func runChat(cmd *cobra.Command, args []string) error {

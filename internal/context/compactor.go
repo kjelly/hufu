@@ -7,6 +7,7 @@ package context
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"regexp"
@@ -16,6 +17,55 @@ import (
 )
 
 var ErrCompactionBudget = errors.New("context compaction cannot fit required evidence in token budget")
+
+var (
+	toolExitStatusPattern   = regexp.MustCompile(`(?i)exit (?:status|code)\s+(\d+)`)
+	toolEvidencePathPattern = regexp.MustCompile(`(?:[A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+`)
+)
+
+// ErrToolEvidenceMandatoryCapacity indicates that the provider-visible part
+// of a tool result cannot fit the configured output caps. Callers must retain
+// the original paired messages when this occurs.
+var ErrToolEvidenceMandatoryCapacity = errors.New("tool-result mandatory provenance cannot fit configured output caps")
+
+// ErrToolEvidenceToolCallMismatch indicates that a result was supplied with a
+// non-empty tool-call ID that does not identify the supplied call.
+var ErrToolEvidenceToolCallMismatch = errors.New("tool-result tool_call_id does not match tool call")
+
+// ToolResultCapacity describes the three independent limits used for tool
+// result evidence.
+type ToolResultCapacity struct {
+	Bytes  int
+	Runes  int
+	Tokens int
+}
+
+// ToolResultMandatoryEnvelope is the canonical provider-visible provenance
+// envelope. Optional output is appended only after this exact envelope fits.
+func ToolResultMandatoryEnvelope(tool, toolCallID, command, workingDir, verification string) string {
+	return fmt.Sprintf("tool: %s\ntool_call_id: %s\ncommand: %s\nworking_dir: %s\nverification: %s", tool, toolCallID, command, workingDir, verification)
+}
+
+// ToolResultMandatoryMinimum returns the static minimum capacity for the
+// current canonical non-empty call ID and the required "passed" verification.
+// Keeping this derived from ToolResultMandatoryEnvelope makes the policy
+// boundary and rendering boundary share one source of truth.
+func ToolResultMandatoryMinimum() ToolResultCapacity {
+	callID := canonicalToolEvidenceID("x")
+	envelope := ToolResultMandatoryEnvelope("x", callID, "x", "x", "passed")
+	return ToolResultCapacity{Bytes: len(envelope), Runes: len([]rune(envelope)), Tokens: estimateOutputTokens(envelope)}
+}
+
+type ToolEvidenceCapacityError struct {
+	Required ToolResultCapacity
+	Limit    ToolResultCapacity
+}
+
+func (e *ToolEvidenceCapacityError) Error() string {
+	return fmt.Sprintf("%v: required bytes=%d runes=%d tokens=%d, limits bytes=%d runes=%d tokens=%d", ErrToolEvidenceMandatoryCapacity, e.Required.Bytes, e.Required.Runes, e.Required.Tokens, e.Limit.Bytes, e.Limit.Runes, e.Limit.Tokens)
+}
+
+func (e *ToolEvidenceCapacityError) Unwrap() error { return ErrToolEvidenceMandatoryCapacity }
 
 type CompactionRequest struct {
 	Items        []ContextItem
@@ -103,21 +153,93 @@ type ToolResultEvidence struct {
 	ModifiedFiles []string
 	Verification  string
 	Output        string // compatibility input when stdout/stderr are unavailable
+	OutputPolicy  ToolOutputPolicy
 	Scope         Scope
+}
+
+// ToolOutputPolicy bounds the normalized evidence inserted into verified
+// context. All limits apply to the final framed value, not just the source
+// excerpt. Zero values use DefaultToolOutputPolicy.
+type ToolOutputPolicy struct {
+	MaxBytes         int
+	MaxRunes         int
+	MaxTokens        int
+	DiagnosticLines  int
+	DiagnosticTokens int
+}
+
+func DefaultToolOutputPolicy() ToolOutputPolicy {
+	return ToolOutputPolicy{MaxBytes: 24_576, MaxRunes: 6_000, MaxTokens: 1_500, DiagnosticLines: 32, DiagnosticTokens: 768}
+}
+
+func (p ToolOutputPolicy) normalized() ToolOutputPolicy {
+	defaults := DefaultToolOutputPolicy()
+	if p.MaxBytes == 0 {
+		p.MaxBytes = defaults.MaxBytes
+	}
+	if p.MaxRunes == 0 {
+		p.MaxRunes = defaults.MaxRunes
+	}
+	if p.MaxTokens == 0 {
+		p.MaxTokens = defaults.MaxTokens
+	}
+	if p.DiagnosticLines == 0 {
+		p.DiagnosticLines = defaults.DiagnosticLines
+	}
+	if p.DiagnosticTokens == 0 {
+		p.DiagnosticTokens = defaults.DiagnosticTokens
+	}
+	return p
 }
 
 // ToolEvidenceItems turns a call/result pair into canonical evidence and the
 // directional relationship required by the compactor and repository.
 func ToolEvidenceItems(call ToolCallEvidence, result ToolResultEvidence) ([]ContextItem, []ContextEdge) {
+	items, edges, err := ToolEvidenceItemsChecked(call, result)
+	if err != nil {
+		// Preserve the historical two-value API without ever returning clipped
+		// or unlinked evidence. Production callers use the checked API below.
+		return nil, nil
+	}
+	return items, edges
+}
+
+// ToolEvidenceItemsChecked is the error-returning form of ToolEvidenceItems.
+// It is the canonical path for callers that can retain original messages on
+// mandatory-provenance capacity failure.
+func ToolEvidenceItemsChecked(call ToolCallEvidence, result ToolResultEvidence) ([]ContextItem, []ContextEdge, error) {
+	var err error
+	call, result, err = normalizeToolEvidencePair(call, result)
+	if err != nil {
+		return nil, nil, err
+	}
+	callItem := ContextItem{ID: call.ID, Kind: ContextToolCall, Content: renderToolCall(call), Scope: call.Scope, Authority: AuthorityTool, TrustLevel: TrustInternal, Priority: PriorityHigh, MustKeep: true}
+	content, err := renderToolResult(result)
+	if err != nil {
+		return nil, nil, err
+	}
+	resultItem := ContextItem{ID: result.ID, Kind: ContextToolResult, Content: content, Scope: result.Scope, Authority: AuthorityTool, TrustLevel: TrustInternal, Priority: PriorityHigh, MustKeep: true}
+	return []ContextItem{callItem, resultItem}, []ContextEdge{{FromID: result.ID, Relation: "tool_result_of", ToID: result.ToolCallID}}, nil
+}
+
+// normalizeToolEvidencePair is the sole owner of tool-pair identity. It runs
+// before any item, edge, or rendered provenance value is constructed.
+func normalizeToolEvidencePair(call ToolCallEvidence, result ToolResultEvidence) (ToolCallEvidence, ToolResultEvidence, error) {
+	suppliedResultToolCallID := result.ToolCallID
 	if call.ID == "" {
-		call.ID = "tool-call:" + call.Tool + ":" + call.Command
+		call.ID = canonicalToolEvidenceID("tool-call:" + RedactSecrets(call.Tool) + ":" + RedactSecrets(call.Command))
+	} else {
+		call.ID = canonicalToolEvidenceID(call.ID)
 	}
 	if result.ID == "" {
-		result.ID = "tool-result:" + call.ID
+		result.ID = canonicalToolEvidenceID("tool-result:" + call.ID)
+	} else {
+		result.ID = canonicalToolEvidenceID(result.ID)
 	}
-	if result.ToolCallID == "" {
-		result.ToolCallID = call.ID
+	if suppliedResultToolCallID != "" && canonicalToolEvidenceID(suppliedResultToolCallID) != call.ID {
+		return ToolCallEvidence{}, ToolResultEvidence{}, ErrToolEvidenceToolCallMismatch
 	}
+	result.ToolCallID = call.ID
 	if result.Tool == "" {
 		result.Tool = call.Tool
 	}
@@ -130,103 +252,394 @@ func ToolEvidenceItems(call ToolCallEvidence, result ToolResultEvidence) ([]Cont
 	if result.StartedAt.IsZero() {
 		result.StartedAt = call.StartedAt
 	}
-	callItem := ContextItem{ID: call.ID, Kind: ContextToolCall, Content: renderToolCall(call), Scope: call.Scope, Authority: AuthorityTool, TrustLevel: TrustInternal, Priority: PriorityHigh, MustKeep: true}
-	resultItem := ContextItem{ID: result.ID, Kind: ContextToolResult, Content: renderToolResult(result), Scope: result.Scope, Authority: AuthorityTool, TrustLevel: TrustInternal, Priority: PriorityHigh, MustKeep: true}
-	return []ContextItem{callItem, resultItem}, []ContextEdge{{FromID: result.ID, Relation: "tool_result_of", ToID: result.ToolCallID}}
+	result = NormalizeToolResultEvidence(result)
+	// NormalizeToolResultEvidence redacts fields, but identity remains the
+	// canonical call ID selected above even if its redaction rules evolve.
+	result.ToolCallID = call.ID
+	return call, result, nil
+}
+
+func canonicalToolEvidenceID(raw string) string {
+	redacted := RedactSecrets(raw)
+	if redacted == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(redacted))
+	return fmt.Sprintf("tool-id:%x", sum[:])
 }
 
 func renderToolCall(call ToolCallEvidence) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "tool: %s\ncommand: %s\nworking_dir: %s", call.Tool, call.Command, call.WorkingDir)
+	fmt.Fprintf(&b, "tool: %s\ncommand: %s\nworking_dir: %s", RedactSecrets(call.Tool), RedactSecrets(call.Command), RedactSecrets(call.WorkingDir))
 	if !call.StartedAt.IsZero() {
 		fmt.Fprintf(&b, "\nstarted_at: %s", call.StartedAt.UTC().Format(time.RFC3339Nano))
 	}
 	return b.String()
 }
 
-func renderToolResult(result ToolResultEvidence) string {
+func renderToolResult(result ToolResultEvidence) (string, error) {
+	p := result.OutputPolicy
+	mandatory := ToolResultMandatoryEnvelope(result.Tool, result.ToolCallID, result.Command, result.WorkingDir, result.Verification)
+	if err := validateMandatoryToolResultEnvelope(mandatory, p); err != nil {
+		return "", err
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "tool: %s\ntool_call_id: %s\ncommand: %s\nworking_dir: %s", result.Tool, result.ToolCallID, result.Command, result.WorkingDir)
+	b.WriteString(mandatory)
+	appendOptional := func(prefix, value string, compact bool) {
+		if value == "" {
+			return
+		}
+		base := b.String() + prefix
+		if !withinToolOutputCaps(base, p) {
+			return
+		}
+		remaining := ToolResultCapacity{Bytes: p.MaxBytes - len([]byte(base)), Runes: p.MaxRunes - len([]rune(base)), Tokens: p.MaxTokens - estimateOutputTokens(base)}
+		if remaining.Bytes <= 0 || remaining.Runes <= 0 || remaining.Tokens <= 0 {
+			return
+		}
+		if compact {
+			optionalPolicy := p
+			optionalPolicy.MaxBytes = remaining.Bytes
+			optionalPolicy.MaxRunes = remaining.Runes
+			optionalPolicy.MaxTokens = remaining.Tokens
+			optionalPolicy.DiagnosticTokens = min(optionalPolicy.DiagnosticTokens, remaining.Tokens)
+			value = CompactToolOutputWithPolicy(value, optionalPolicy)
+		} else {
+			value = limitToolOutput(value, remaining.Runes, remaining.Bytes, remaining.Tokens)
+		}
+		if value != "" && withinToolOutputCaps(base+value, p) {
+			b.WriteString(prefix)
+			b.WriteString(value)
+		}
+	}
+	appendFixed := func(value string) {
+		if value != "" && withinToolOutputCaps(b.String()+value, p) {
+			b.WriteString(value)
+		}
+	}
 	if result.ExitCode != nil {
-		fmt.Fprintf(&b, "\nexit_code: %d", *result.ExitCode)
+		appendFixed("\nexit_code: " + fmt.Sprint(*result.ExitCode))
 	}
 	if !result.StartedAt.IsZero() {
-		fmt.Fprintf(&b, "\nstarted_at: %s", result.StartedAt.UTC().Format(time.RFC3339Nano))
+		appendFixed("\nstarted_at: " + result.StartedAt.UTC().Format(time.RFC3339Nano))
 	}
 	if !result.EndedAt.IsZero() {
-		fmt.Fprintf(&b, "\nended_at: %s", result.EndedAt.UTC().Format(time.RFC3339Nano))
+		appendFixed("\nended_at: " + result.EndedAt.UTC().Format(time.RFC3339Nano))
 	}
 	if result.StderrSummary != "" {
-		fmt.Fprintf(&b, "\nstderr_summary: %s", result.StderrSummary)
+		appendOptional("\nstderr_summary: ", result.StderrSummary, false)
 	}
 	stdout := result.Stdout
 	if stdout == "" {
 		stdout = result.Output
 	}
 	if result.StdoutHead != "" {
-		fmt.Fprintf(&b, "\nstdout_head:\n%s", result.StdoutHead)
+		appendOptional("\nstdout_head:\n", result.StdoutHead, true)
 	}
 	if result.StdoutTail != "" {
-		fmt.Fprintf(&b, "\nstdout_tail:\n%s", result.StdoutTail)
+		appendOptional("\nstdout_tail:\n", result.StdoutTail, true)
 	}
 	if stdout != "" {
-		fmt.Fprintf(&b, "\nstdout:\n%s", CompactToolOutput(stdout, 6_000))
+		appendOptional("\nstdout:\n", stdout, true)
 	}
 	if len(result.MatchedErrors) > 0 {
-		fmt.Fprintf(&b, "\nmatched_errors:\n%s", strings.Join(result.MatchedErrors, "\n"))
+		appendOptional("\nmatched_errors:\n", strings.Join(result.MatchedErrors, "\n"), false)
 	}
 	if len(result.ArtifactPaths) > 0 {
-		fmt.Fprintf(&b, "\nartifact_paths:\n%s", strings.Join(result.ArtifactPaths, "\n"))
+		appendOptional("\nartifact_paths:\n", strings.Join(result.ArtifactPaths, "\n"), false)
 	}
 	if len(result.ModifiedFiles) > 0 {
-		fmt.Fprintf(&b, "\nmodified_files:\n%s", strings.Join(result.ModifiedFiles, "\n"))
+		appendOptional("\nmodified_files:\n", strings.Join(result.ModifiedFiles, "\n"), false)
 	}
-	if result.Verification != "" {
-		fmt.Fprintf(&b, "\nverification: %s", result.Verification)
+	return b.String(), nil
+}
+
+func validateMandatoryToolResultEnvelope(envelope string, p ToolOutputPolicy) error {
+	required := ToolResultCapacity{Bytes: len([]byte(envelope)), Runes: len([]rune(envelope)), Tokens: estimateOutputTokens(envelope)}
+	limit := ToolResultCapacity{Bytes: p.MaxBytes, Runes: p.MaxRunes, Tokens: p.MaxTokens}
+	if required.Bytes > limit.Bytes || required.Runes > limit.Runes || required.Tokens > limit.Tokens {
+		return &ToolEvidenceCapacityError{Required: required, Limit: limit}
 	}
-	return b.String()
+	return nil
+}
+
+// NormalizeToolResultEvidence is the canonical tool-result boundary. It
+// redacts every result field before deriving diagnostics, paths, exit status,
+// or excerpts, then returns a policy-bound representation for rendering.
+func NormalizeToolResultEvidence(result ToolResultEvidence) ToolResultEvidence {
+	p := result.OutputPolicy.normalized()
+	result.OutputPolicy = p
+	result.Tool = RedactSecrets(result.Tool)
+	result.ToolCallID = RedactSecrets(result.ToolCallID)
+	result.Command = RedactSecrets(result.Command)
+	result.WorkingDir = RedactSecrets(result.WorkingDir)
+	result.StderrSummary = RedactSecrets(result.StderrSummary)
+	result.Stdout = RedactSecrets(result.Stdout)
+	result.StdoutHead = RedactSecrets(result.StdoutHead)
+	result.StdoutTail = RedactSecrets(result.StdoutTail)
+	result.Output = RedactSecrets(result.Output)
+	result.Verification = RedactSecrets(result.Verification)
+	if result.Verification == "" {
+		result.Verification = "passed"
+	}
+	result.MatchedErrors = redactEvidenceLines(result.MatchedErrors)
+	result.ArtifactPaths = redactEvidenceLines(result.ArtifactPaths)
+	result.ModifiedFiles = redactEvidenceLines(result.ModifiedFiles)
+
+	stdout := result.Stdout
+	if stdout == "" {
+		stdout = result.Output
+	}
+	if stdout != "" {
+		// The full output is already redacted above. All derived evidence below
+		// therefore observes only safe content.
+		if result.StdoutHead == "" || result.StdoutTail == "" {
+			result.StdoutHead, result.StdoutTail = toolOutputHeadTail(stdout, 1_000)
+		}
+		if len(result.MatchedErrors) == 0 {
+			result.MatchedErrors = diagnosticEvidenceLines(stdout, p)
+		}
+		if len(result.ArtifactPaths) == 0 {
+			result.ArtifactPaths = toolEvidencePaths(stdout, p)
+		}
+		if len(result.ModifiedFiles) == 0 {
+			result.ModifiedFiles = append([]string(nil), result.ArtifactPaths...)
+		}
+		if result.ExitCode == nil {
+			if match := toolExitStatusPattern.FindStringSubmatch(stdout); len(match) == 2 {
+				var code int
+				if _, err := fmt.Sscanf(match[1], "%d", &code); err == nil {
+					result.ExitCode = &code
+				}
+			}
+		}
+	}
+	if result.ExitCode != nil && *result.ExitCode != 0 {
+		result.Verification = "failed"
+	}
+	return result
+}
+
+func redactEvidenceLines(lines []string) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = RedactSecrets(line)
+	}
+	return out
+}
+
+func diagnosticEvidenceLines(output string, policy ToolOutputPolicy) []string {
+	type diagnostic struct {
+		line  string
+		index int
+		score int
+	}
+	var diagnostics []diagnostic
+	for index, line := range strings.Split(output, "\n") {
+		lower := strings.ToLower(line)
+		score := 0
+		for _, marker := range []string{"error", "fail", "panic", "exit status", "exit code"} {
+			if strings.Contains(lower, marker) {
+				score = 2
+				break
+			}
+		}
+		if score == 0 && strings.Contains(lower, "warning") {
+			score = 1
+		}
+		if score > 0 {
+			diagnostics = append(diagnostics, diagnostic{line: line, index: index, score: score})
+		}
+	}
+	sort.SliceStable(diagnostics, func(i, j int) bool {
+		if diagnostics[i].score != diagnostics[j].score {
+			return diagnostics[i].score > diagnostics[j].score
+		}
+		return diagnostics[i].index < diagnostics[j].index
+	})
+	lines := make([]string, 0, min(len(diagnostics), policy.DiagnosticLines))
+	seen := make(map[string]struct{})
+	for _, diagnostic := range diagnostics {
+		if len(lines) >= policy.DiagnosticLines {
+			break
+		}
+		if _, ok := seen[diagnostic.line]; ok {
+			continue
+		}
+		lines = append(lines, diagnostic.line)
+		seen[diagnostic.line] = struct{}{}
+	}
+	return lines
+}
+
+func toolEvidencePaths(output string, policy ToolOutputPolicy) []string {
+	matches := toolEvidencePathPattern.FindAllString(output, -1)
+	if len(matches) > policy.DiagnosticLines {
+		matches = matches[:policy.DiagnosticLines]
+	}
+	return matches
+}
+
+func toolOutputHeadTail(output string, capRunes int) (string, string) {
+	runes := []rune(output)
+	if capRunes <= 0 || len(runes) <= capRunes {
+		return output, output
+	}
+	head := capRunes / 2
+	return string(runes[:head]), string(runes[len(runes)-(capRunes-head):])
 }
 
 // CompactToolOutput extracts diagnostics from the full output before adding a
 // bounded excerpt. It is used before verified history compaction so an error
 // in the middle of a large result remains canonical evidence.
 func CompactToolOutput(output string, capChars int) string {
-	if capChars <= 0 || len([]rune(output)) <= capChars {
+	if capChars <= 0 {
 		return output
 	}
-	var diagnostics []string
-	for _, line := range strings.Split(output, "\n") {
-		lower := strings.ToLower(line)
-		if strings.Contains(lower, "error") || strings.Contains(lower, "fail") || strings.Contains(lower, "panic") || strings.Contains(lower, "exit status") || strings.Contains(lower, "exit code") || strings.Contains(lower, "warning") {
-			diagnostics = append(diagnostics, line)
-		}
-	}
-	diagnosticText := strings.Join(diagnostics, "\n")
-	if len([]rune(diagnosticText)) > capChars/2 {
-		diagnosticText = squeezeRunes(diagnosticText, capChars/2)
-	}
-	remaining := capChars - len([]rune(diagnosticText)) - 64
-	if remaining < 100 {
-		remaining = 100
-	}
-	excerpt := squeezeRunes(output, remaining)
-	if diagnosticText == "" {
-		return excerpt
-	}
-	return "[preserved diagnostics]\n" + diagnosticText + "\n[output excerpt]\n" + excerpt
+	policy := DefaultToolOutputPolicy()
+	policy.MaxRunes = capChars
+	policy.MaxBytes = capChars * 4
+	policy.MaxTokens = max(1, (capChars+3)/4)
+	policy.DiagnosticTokens = max(1, policy.MaxTokens/2)
+	return CompactToolOutputWithPolicy(output, policy)
 }
 
-func squeezeRunes(s string, capChars int) string {
-	runes := []rune(s)
-	if len(runes) <= capChars {
+// CompactToolOutputWithPolicy performs redaction before classification, then
+// retains prioritized diagnostic lines and a deterministic head/tail excerpt.
+// The final framing is bounded byte-, rune-, and token-safely.
+func CompactToolOutputWithPolicy(output string, policy ToolOutputPolicy) string {
+	p := policy.normalized()
+	redacted := RedactSecrets(output)
+	if withinToolOutputCaps(redacted, p) {
+		return redacted
+	}
+
+	type diagnostic struct {
+		line  string
+		index int
+		score int
+	}
+	var diagnostics []diagnostic
+	for index, line := range strings.Split(redacted, "\n") {
+		lower := strings.ToLower(line)
+		score := 0
+		for _, marker := range []string{"error", "fail", "panic", "exit status", "exit code"} {
+			if strings.Contains(lower, marker) {
+				score = 2
+				break
+			}
+		}
+		if score == 0 && strings.Contains(lower, "warning") {
+			score = 1
+		}
+		if score > 0 {
+			diagnostics = append(diagnostics, diagnostic{line: line, index: index, score: score})
+		}
+	}
+	sort.SliceStable(diagnostics, func(i, j int) bool {
+		if diagnostics[i].score != diagnostics[j].score {
+			return diagnostics[i].score > diagnostics[j].score
+		}
+		return diagnostics[i].index < diagnostics[j].index
+	})
+	var selected []string
+	seen := make(map[string]struct{})
+	for _, item := range diagnostics {
+		if len(selected) >= p.DiagnosticLines {
+			break
+		}
+		if _, ok := seen[item.line]; ok {
+			continue
+		}
+		line := item.line
+		candidate := strings.Join(append(selected, line), "\n")
+		if estimateOutputTokens(candidate) > p.DiagnosticTokens {
+			remainingTokens := p.DiagnosticTokens - estimateOutputTokens(strings.Join(selected, "\n"))
+			if remainingTokens <= 0 {
+				continue
+			}
+			line = limitToolOutput(line, remainingTokens*4, remainingTokens*4, remainingTokens)
+			candidate = strings.Join(append(selected, line), "\n")
+			if line == "" || estimateOutputTokens(candidate) > p.DiagnosticTokens {
+				continue
+			}
+		}
+		selected = append(selected, line)
+		seen[item.line] = struct{}{}
+	}
+
+	const diagnosticFrame = "[preserved diagnostics]\n"
+	const excerptFrame = "\n[output excerpt]\n"
+	diagnosticText := strings.Join(selected, "\n")
+	framedDiagnostics := diagnosticFrame + diagnosticText
+	if diagnosticText == "" {
+		framedDiagnostics = ""
+	}
+	available := p.MaxRunes - len([]rune(framedDiagnostics)) - len([]rune(excerptFrame))
+	if available < 0 {
+		available = 0
+	}
+	excerpt := limitToolOutput(redacted, available, p.MaxBytes-len([]byte(framedDiagnostics))-len([]byte(excerptFrame)), p.MaxTokens-estimateOutputTokens(framedDiagnostics)-estimateOutputTokens(excerptFrame))
+	result := framedDiagnostics + excerptFrame + excerpt
+	if framedDiagnostics == "" {
+		result = excerpt
+	}
+	return limitToolOutput(result, p.MaxRunes, p.MaxBytes, p.MaxTokens)
+}
+
+func estimateOutputTokens(s string) int {
+	if s == "" {
+		return 0
+	}
+	return (len([]rune(s)) + 3) / 4
+}
+
+func withinToolOutputCaps(s string, p ToolOutputPolicy) bool {
+	return len(s) <= p.MaxBytes && len([]rune(s)) <= p.MaxRunes && estimateOutputTokens(s) <= p.MaxTokens
+}
+
+func limitToolOutput(s string, maxRunes, maxBytes, maxTokens int) string {
+	if s == "" {
 		return s
 	}
-	if capChars < 2 {
-		return string(runes[:capChars])
+	if maxRunes <= 0 || maxBytes <= 0 || maxTokens <= 0 {
+		return ""
 	}
-	marker := fmt.Sprintf("\n…[truncated %d chars]…\n", len(runes)-capChars)
-	head := capChars * 2 / 3
-	tail := capChars - head
+	limit := maxRunes
+	if tokenRunes := maxTokens * 4; tokenRunes < limit {
+		limit = tokenRunes
+	}
+	if len([]rune(s)) <= limit && len(s) <= maxBytes && estimateOutputTokens(s) <= maxTokens {
+		return s
+	}
+	for limit > 0 {
+		candidate := boundedHeadTail(s, limit)
+		if len(candidate) <= maxBytes && estimateOutputTokens(candidate) <= maxTokens {
+			return candidate
+		}
+		limit--
+	}
+	return ""
+}
+
+func boundedHeadTail(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	if maxRunes <= 0 {
+		return ""
+	}
+	marker := "\n…[truncated]…\n"
+	if len([]rune(marker)) >= maxRunes {
+		return string(runes[:maxRunes])
+	}
+	remaining := maxRunes - len([]rune(marker))
+	head := (remaining + 1) / 2
+	tail := remaining - head
 	return string(runes[:head]) + marker + string(runes[len(runes)-tail:])
 }
 

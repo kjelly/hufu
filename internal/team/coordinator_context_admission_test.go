@@ -2,10 +2,13 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -272,6 +275,77 @@ func TestCoordinatorModelDownshiftSendsOnlyAfterEarlierModelAdmission(t *testing
 	}
 	if providerCalls != 1 {
 		t.Fatalf("provider calls = %d, want exactly one weak-model request", providerCalls)
+	}
+}
+
+func TestCoordinatorModelContinuationPersistenceFailurePrecedesDownshiftTelemetry(t *testing.T) {
+	strongID := "coordinator-downshift-persist-strong"
+	weakID := "coordinator-downshift-persist-weak"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID: strongID, ContextWindow: 256, MaxOutputTokens: 32, SafetyMarginTokens: 32,
+	})
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID: weakID, ContextWindow: 32_768, MaxOutputTokens: 32, SafetyMarginTokens: 32,
+	})
+
+	providerCalls := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		providerCalls++
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("network listener unavailable in this environment: %v", err)
+	}
+	provider := httptest.NewUnstartedServer(handler)
+	provider.Listener = listener
+	provider.Start()
+	defer provider.Close()
+	providerManager, err := agent.NewProviderManager(provider.URL+"/v1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-downshift-failure", "session-downshift-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	syncCalls := 0
+	store.syncFile = func() error {
+		syncCalls++
+		if syncCalls == 2 {
+			return errors.New("injected continuation admission sync failure")
+		}
+		return nil
+	}
+	c := &Coordinator{
+		providerManager: providerManager,
+		modelList:       []config.ModelEntry{{ID: weakID}, {ID: strongID}},
+		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{
+			Generation: agent.GenerationParams{Model: strongID},
+		}},
+		eventStore:   store,
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+	}
+	preflight := newCoordinatorRequestPreflight(strongID, "incoming", "system", nil)
+	continuation, err := c.admitCoordinatorEarlierModel(context.Background(), preflight, []fantasy.Message{fantasy.NewUserMessage("small")}, "incoming", 0, 32, strongID)
+	if err == nil || !strings.Contains(err.Error(), "persist coordinator model continuation admission") {
+		t.Fatalf("continuation persistence error = %v, want primary provenance error", err)
+	}
+	if continuation.Model != nil {
+		t.Fatal("continuation model was returned after persistence failure")
+	}
+	if providerCalls != 0 {
+		t.Fatalf("provider calls = %d, want 0 after continuation persistence failure", providerCalls)
+	}
+	data, readErr := os.ReadFile(filepath.Join(workspace, logsDir, eventStoreFile))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(data), string(EventContextWindowDownshift)) {
+		t.Fatal("downshift telemetry was persisted after continuation persistence failure")
 	}
 }
 

@@ -134,7 +134,51 @@ type teamConfigYAML struct {
 	Reliability      rawReliabilityConfig    `yaml:"reliability"`
 	WorkerMemory     rawWorkerMemoryPolicy   `yaml:"worker-memory"`
 	MemoryLearning   rawMemoryLearningPolicy `yaml:"memory-learning"`
+	Compaction       rawCompactionPolicy     `yaml:"compaction"`
 	Tasks            []TaskDef               `yaml:"tasks"`
+}
+
+type rawCompactionPolicy struct {
+	MaxHistoryMessages          *int `yaml:"max-history-messages"`
+	RetainHistoryMessages       *int `yaml:"retain-history-messages"`
+	VerifiedHistoryTargetTokens *int `yaml:"verified-history-target-tokens"`
+	ToolOutputMaxBytes          *int `yaml:"tool-output-max-bytes"`
+	ToolOutputMaxRunes          *int `yaml:"tool-output-max-runes"`
+	ToolOutputMaxTokens         *int `yaml:"tool-output-max-tokens"`
+	DiagnosticMaxLines          *int `yaml:"diagnostic-max-lines"`
+	DiagnosticMaxTokens         *int `yaml:"diagnostic-max-tokens"`
+}
+
+func (r rawCompactionPolicy) apply(base agent.CompactionPolicy) (agent.CompactionPolicy, error) {
+	p := base
+	if r.MaxHistoryMessages != nil {
+		p.MaxHistoryMessages = *r.MaxHistoryMessages
+	}
+	if r.RetainHistoryMessages != nil {
+		p.RetainHistoryMessages = *r.RetainHistoryMessages
+	}
+	if r.VerifiedHistoryTargetTokens != nil {
+		p.VerifiedHistoryTargetTokens = *r.VerifiedHistoryTargetTokens
+	}
+	if r.ToolOutputMaxBytes != nil {
+		p.ToolOutputMaxBytes = *r.ToolOutputMaxBytes
+	}
+	if r.ToolOutputMaxRunes != nil {
+		p.ToolOutputMaxRunes = *r.ToolOutputMaxRunes
+	}
+	if r.ToolOutputMaxTokens != nil {
+		p.ToolOutputMaxTokens = *r.ToolOutputMaxTokens
+	}
+	if r.DiagnosticMaxLines != nil {
+		p.DiagnosticMaxLines = *r.DiagnosticMaxLines
+	}
+	if r.DiagnosticMaxTokens != nil {
+		p.DiagnosticMaxTokens = *r.DiagnosticMaxTokens
+	}
+	if err := p.Validate(); err != nil {
+		return agent.CompactionPolicy{}, fmt.Errorf("invalid compaction config: %w", err)
+	}
+	return p, nil
 }
 
 type rawMemoryLearningPolicy struct {
@@ -599,6 +643,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		Timeout:       600,
 		VerifyTimeout: 120,
 		MaxRetries:    2,
+		Compaction:    agent.DefaultCompactionPolicy(),
 		Reliability:   agent.DefaultReliabilityConfig(),
 		Generation: agent.GenerationParams{
 			Temperature: agent.DefaultTemperature,
@@ -899,6 +944,11 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if yc.WorkerContextSize > 0 {
 		cfg.WorkerContextSize = yc.WorkerContextSize
+	}
+	if policy, err := yc.Compaction.apply(cfg.Compaction); err != nil {
+		return cfg, err
+	} else {
+		cfg.Compaction = policy
 	}
 	if tools := parseAllowedTools(yc.ToolsAllowed); len(tools) > 0 {
 		cfg.ToolsAllowed = strings.Split(agent.ExpandImpliedTools(strings.Join(tools, ",")), ",")

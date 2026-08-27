@@ -446,6 +446,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 			fmt.Fprintf(&b, "- **Repair cost:** %d attempts, %d tokens, %dms\n", telemetry.RepairCost.Attempts, telemetry.RepairCost.Tokens, telemetry.RepairCost.WallClockMS)
 		}
 		fmt.Fprintf(&b, "- **Tasks unresolved:** %d\n", data.RunResult.Stats.TasksUnresolved)
+		fmt.Fprintf(&b, "- **Context-window telemetry:** %d admissions, %d CannotFit, %d compactions, %d downshifts\n", data.RunResult.Metrics.ContextWindowTelemetry.AdmissionEvents, data.RunResult.Metrics.ContextWindowTelemetry.CannotFit, data.RunResult.Metrics.ContextWindowTelemetry.CompactionCommits, data.RunResult.Metrics.ContextWindowTelemetry.Downshifts)
 		if data.RunResult.Acceptance != nil {
 			fmt.Fprintf(&b, "- **Acceptance:** `%s`\n", data.RunResult.Acceptance.EffectiveState())
 		}

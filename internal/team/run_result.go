@@ -468,6 +468,7 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 	completedReview := false
 	findingsPresent := false
 	acceptanceAdvisory := false
+	var contextTelemetry ContextWindowTelemetrySummary
 	worksets := make(map[string]WorksetGroupState)
 	for _, result := range results {
 		if result == nil {
@@ -500,6 +501,7 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 		findingsPresent = findingsPresent || result.FindingsPresent
 		acceptanceAdvisory = acceptanceAdvisory || result.AcceptanceAdvisory
 		mergeWorksetStates(worksets, result.Worksets)
+		mergeContextWindowTelemetrySummary(&contextTelemetry, result.Metrics.ContextWindowTelemetry)
 
 		if result.Acceptance != nil {
 			switch result.Acceptance.EffectiveState() {
@@ -560,6 +562,7 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 	if partial && len(input.UnresolvedTasks) == 0 && input.Acceptance != AcceptanceFailed {
 		input.BudgetExceeded = true
 	}
+	input.Metrics.ContextWindowTelemetry = contextTelemetry
 	aggregated := EvaluateRunOutcome(input)
 	aggregated.CompletedReview = completedReview
 	aggregated.FindingsPresent = findingsPresent
@@ -580,6 +583,26 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 func mergeWorksetStates(dst map[string]WorksetGroupState, states []WorksetGroupState) {
 	for _, state := range states {
 		dst[state.WorksetID] = state
+	}
+}
+
+func mergeContextWindowTelemetrySummary(dst *ContextWindowTelemetrySummary, src ContextWindowTelemetrySummary) {
+	if dst == nil {
+		return
+	}
+	dst.AdmissionEvents += src.AdmissionEvents
+	dst.Admitted += src.Admitted
+	dst.CannotFit += src.CannotFit
+	dst.CompactionCommits += src.CompactionCommits
+	dst.Downshifts += src.Downshifts
+	dst.DownshiftExhaustions += src.DownshiftExhaustions
+	if src.LastDecision != "" {
+		dst.LastDecision = src.LastDecision
+		dst.LastModel = src.LastModel
+		dst.LastRequestedTokens = src.LastRequestedTokens
+		dst.LastAvailableTokens = src.LastAvailableTokens
+		dst.LastCompactionCount = src.LastCompactionCount
+		dst.PolicyDigest = src.PolicyDigest
 	}
 }
 
@@ -694,9 +717,10 @@ type RunMetrics struct {
 	TurnsSinceCriterionProgress int `json:"turns_since_criterion_progress,omitempty"`
 	TasksSinceCriterionProgress int `json:"tasks_since_criterion_progress,omitempty"`
 	// No-progress budget configured limits (§8.1, WP-12). 0 = disabled.
-	MaxTokensWithoutProgress int64 `json:"max_tokens_without_progress,omitempty"`
-	MaxTurnsWithoutProgress  int   `json:"max_turns_without_progress,omitempty"`
-	MaxTasksWithoutProgress  int   `json:"max_tasks_without_progress,omitempty"`
+	MaxTokensWithoutProgress int64                         `json:"max_tokens_without_progress,omitempty"`
+	MaxTurnsWithoutProgress  int                           `json:"max_turns_without_progress,omitempty"`
+	MaxTasksWithoutProgress  int                           `json:"max_tasks_without_progress,omitempty"`
+	ContextWindowTelemetry   ContextWindowTelemetrySummary `json:"context_window_telemetry,omitempty"`
 }
 
 // RepairCost is the quantitative cost of recovery decisions made during a

@@ -35,6 +35,21 @@ func isProvenPreProviderCannotFit(err error) (*CannotFitError, bool) {
 	return fit, fit.ProvenNoSend
 }
 
+// ContextWindowMetadataUnavailableError is returned before counting or
+// invoking a provider when the registry only has an estimated context
+// window. An estimate is not an admission capacity: accepting it here could
+// allow a request to cross the provider boundary with an unknown limit.
+type ContextWindowMetadataUnavailableError struct {
+	ModelID string
+}
+
+func (e *ContextWindowMetadataUnavailableError) Error() string {
+	if e == nil {
+		return "context window metadata unavailable"
+	}
+	return fmt.Sprintf("context window metadata unavailable for model %q: registry capacity is estimated", e.ModelID)
+}
+
 // ContextWindowDecision is the result of admitting one complete model request.
 type ContextWindowDecision string
 
@@ -140,6 +155,9 @@ func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowR
 	}
 	budget := CalculateContextBudget(spec, 0, 0)
 	admission := ContextWindowAdmission{Decision: ContextWindowCannotFit, Budget: budget}
+	if spec.IsEstimated {
+		return admission, &ContextWindowMetadataUnavailableError{ModelID: request.ModelID}
+	}
 
 	originalMessages := cloneMessages(request.Messages)
 	requestTokens, err := m.countRequest(ctx, request)

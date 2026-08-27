@@ -39,22 +39,30 @@ type runOptions struct {
 	archiveMemory bool
 
 	// Execution behavior
-	executionProfile      string
-	goalMode              string
-	stepsMode             bool
-	dryRun                bool
-	planMode              bool
-	autoSkills            bool
-	forcedSkills          []string
-	fixQuestion           string
-	reportMode            bool
-	think                 bool
-	direnv                bool
-	timeoutOverride       int64
-	verifyTimeoutOverride int64
-	maxRoundsOverride     int
-	maxConcurrentOverride int
-	maxStepsOverride      int
+	executionProfile                      string
+	goalMode                              string
+	stepsMode                             bool
+	dryRun                                bool
+	planMode                              bool
+	autoSkills                            bool
+	forcedSkills                          []string
+	fixQuestion                           string
+	reportMode                            bool
+	think                                 bool
+	direnv                                bool
+	timeoutOverride                       int64
+	verifyTimeoutOverride                 int64
+	maxRoundsOverride                     int
+	maxConcurrentOverride                 int
+	maxStepsOverride                      int
+	compactionMaxHistoryMessages          int
+	compactionRetainHistoryMessages       int
+	compactionVerifiedHistoryTargetTokens int
+	compactionToolOutputMaxBytes          int
+	compactionToolOutputMaxRunes          int
+	compactionToolOutputMaxTokens         int
+	compactionDiagnosticMaxLines          int
+	compactionDiagnosticMaxTokens         int
 
 	// Security / sandboxing
 	rbashMode   bool

@@ -248,6 +248,10 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	c.noProgressStopTripped = false
 	c.reliabilityUsageByAttempt = make(map[string]int)
 	c.metricsMu.Unlock()
+	// Coordinator execution attempts are scoped to the public invocation. The
+	// run ID still separates invocations durably; resetting this turn counter
+	// keeps the attempt identity meaningful and monotonic within each run.
+	c.executionAttemptSeq.Store(0)
 	c.rebuildAntiThrashingState()
 	runID := newExecutionRunID()
 	teamRevision := ""

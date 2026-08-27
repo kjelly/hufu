@@ -32,6 +32,9 @@ type StatusEvent struct {
 	Output      string // Final output text (set in done events for task-level events)
 	SSHSessions int
 	Data        map[string]any
+	// ContextWindowTelemetry is typed and content-free. It is separate from
+	// Data so admission reporting cannot accidentally carry model content.
+	ContextWindowTelemetry *ContextWindowTelemetryEvent
 }
 
 func (e StatusEvent) withData(data map[string]any) StatusEvent {

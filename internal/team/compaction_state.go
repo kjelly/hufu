@@ -979,6 +979,19 @@ func (c *Coordinator) commitCompactionCheckpointWithProvenance(ctx context.Conte
 		c.markCompactionRecovery(fmt.Errorf("attest compaction checkpoint: %w", err))
 		return record, fmt.Errorf("attest compaction checkpoint: %w", err)
 	}
+	// Canonical state, the compatibility projection, and both provenance
+	// attestations have succeeded. Compaction telemetry is deliberately the
+	// final commit step so a P3 failure cannot mask a required P2 failure.
+	compactionSpec := globalRegistry.GetSpec(record.ModelID)
+	compactionEvent := c.newContextWindowTelemetry(EventContextWindowCompactionCommitted, ContextWindowRequest{
+		ModelID: record.ModelID, ReservedOutputTokens: compactionSpec.MaxOutputTokens, SafetyMarginTokens: compactionSpec.SafetyMarginTokens, Window: compactionSpec.ContextWindow, StepNumber: 0,
+	}, ContextWindowAdmission{Decision: ContextWindowCompactMidTurn, RequestTokens: record.TokensBefore, Budget: CalculateContextBudget(compactionSpec, 0, 0)}, "canonical_commit", CoordTodoID, 0)
+	compactionEvent.Decision = "committed"
+	compactionEvent.CompactionCount = c.Metrics().Compactions + 1
+	if err := c.recordContextWindowTelemetry(EventContextWindowCompactionCommitted, compactionEvent, CoordTodoID); err != nil {
+		c.markCompactionRecovery(fmt.Errorf("persist compaction telemetry: %w", err))
+		return record, err
+	}
 	return record, nil
 }
 
