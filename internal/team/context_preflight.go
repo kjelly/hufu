@@ -26,6 +26,16 @@ func (c *Coordinator) PrepareContextPreflightContext(parent context.Context) err
 	if parent == nil {
 		parent = context.Background()
 	}
+	lease, err := c.acquireInvocationLease(parent)
+	if err != nil {
+		return err
+	}
+	releaseLease := true
+	defer func() {
+		if releaseLease {
+			lease.release()
+		}
+	}()
 	_ = c.mutateSessionData(func(sd *SessionData) error { return nil })
 	// The preflight event-store run ID and every request/manifest must share
 	// one stable identity. Do this before initEventStore rather than letting its
@@ -44,12 +54,16 @@ func (c *Coordinator) PrepareContextPreflightContext(parent context.Context) err
 		}
 		return fmt.Errorf("context preflight failed: %s", reason)
 	}
+	c.preflightMu.Lock()
+	c.preflightLease = lease
+	c.preflightMu.Unlock()
+	releaseLease = false
 	// A preflight sidecar is still a Hufu-owned model invocation. Establish a
 	// scoped provider owner before callers can resolve the shared sidecar. Teams
 	// without a configured sidecar do not need to start a provider boundary and
 	// retain the deterministic fallback paths used by the CLI.
 	if c.sidecarModel != "" {
-		invocationCtx := c.beginContextPreflight(parent)
+		invocationCtx := c.beginContextPreflight(parent, lease)
 		if err := c.startProviderExecutionBoundary(invocationCtx); err != nil {
 			c.CloseContextPreflight()
 			return fmt.Errorf("context preflight provider boundary unavailable: %w", err)
@@ -72,6 +86,8 @@ func (c *Coordinator) CloseContextPreflight() {
 	c.preflightContext = nil
 	owner := c.preflightOwner
 	c.preflightOwner = nil
+	lease := c.preflightLease
+	c.preflightLease = nil
 	c.preflightMu.Unlock()
 	if owner != nil {
 		if err := owner.close(); err != nil {
@@ -82,10 +98,8 @@ func (c *Coordinator) CloseContextPreflight() {
 			c.invocationWatchdog.CompareAndSwap(owner.watchdog, nil)
 		}
 	}
-	if owner == nil {
-		if err := c.abortProviderExecutionBoundary(); err != nil {
-			log.Printf("warning: close context preflight provider boundary: %v", err)
-		}
+	if lease == nil {
+		return
 	}
 	if c.eventStore != nil {
 		_ = c.eventStore.Close()
@@ -94,6 +108,7 @@ func (c *Coordinator) CloseContextPreflight() {
 	if closer, ok := c.contextRepo.(interface{ Close() error }); ok {
 		_ = closer.Close()
 	}
+	lease.release()
 }
 
 // ContextPreflight returns the live context owned by the current CLI
@@ -115,8 +130,8 @@ func (c *Coordinator) ContextPreflight() context.Context {
 // beginContextPreflight installs a Hufu-owned cancellation scope around a
 // CLI sidecar call. The owner goroutine is joined by CloseContextPreflight;
 // it is not a detached timeout or cleanup fallback.
-func (c *Coordinator) beginContextPreflight(parent context.Context) context.Context {
-	owner := newInvocationOwner(c, parent)
+func (c *Coordinator) beginContextPreflight(parent context.Context, lease *invocationLease) context.Context {
+	owner := newInvocationOwnerWithLease(c, parent, lease)
 	watchdog := c.newInvocationWatchdog(owner.ctx, owner.cancel)
 	watchdog.owner = owner
 	owner.watchdog = watchdog

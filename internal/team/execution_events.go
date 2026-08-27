@@ -213,8 +213,8 @@ func usageWithProgressTokens(steps []fantasy.StepResult, attemptTokens *attemptB
 	return usage
 }
 
-func (c *Coordinator) beginInvocationExecutionRun(parent context.Context) (context.Context, func()) {
-	owner := newInvocationOwner(c, parent)
+func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Context, lease *invocationLease) (context.Context, func()) {
+	owner := newInvocationOwnerWithLease(c, parent, lease)
 	invocationCtx := owner.ctx
 	watchdog := c.newInvocationWatchdog(invocationCtx, owner.cancel)
 	watchdog.owner = owner
@@ -413,7 +413,33 @@ func (c *Coordinator) beginInvocationExecutionRun(parent context.Context) (conte
 			c.terminalLifecycleWaitTimedOut = false
 		}
 		c.terminalLifecycleMu.Unlock()
+		lease.release()
 	}
+}
+
+// beginPublicInvocationExecutionRun admits the invocation before any of the
+// mutable run lifecycle is initialized. The lease remains held until the
+// returned cleanup function has completed all terminal and persistence work.
+func (c *Coordinator) beginPublicInvocationExecutionRun(parent context.Context) (context.Context, func(), error) {
+	lease, err := c.acquireInvocationLease(parent)
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, end := c.beginInvocationExecutionRunWithLease(parent, lease)
+	return ctx, end, nil
+}
+
+func (c *Coordinator) beginInvocationExecutionRun(parent context.Context) (context.Context, func()) {
+	lease, err := c.acquireInvocationLease(parent)
+	if err != nil {
+		if parent == nil {
+			parent = context.Background()
+		}
+		ctx, cancel := context.WithCancelCause(parent)
+		cancel(err)
+		return ctx, func() { cancel(nil) }
+	}
+	return c.beginInvocationExecutionRunWithLease(parent, lease)
 }
 
 // beginExecutionRun preserves the internal test/helper seam for callers that

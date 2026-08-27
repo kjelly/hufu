@@ -269,7 +269,10 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 
 //nolint:gocyclo // direct-agent execution is the canonical closed lifecycle path.
 func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (directResult *DirectAgentResult, err error) {
-	ctx, endExecutionRun := c.beginInvocationExecutionRun(ctx)
+	ctx, endExecutionRun, err := c.beginPublicInvocationExecutionRun(ctx)
+	if err != nil {
+		return nil, err
+	}
 	defer endExecutionRun()
 	defer func() {
 		if errors.Is(context.Cause(ctx), ErrInvocationStalled) {
@@ -1789,7 +1792,10 @@ func compactLegacyProjectContext(ctx context.Context, compacter textCompacter, p
 }
 
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
-	ctx, endExecutionRun := c.beginInvocationExecutionRun(ctx)
+	ctx, endExecutionRun, err := c.beginPublicInvocationExecutionRun(ctx)
+	if err != nil {
+		return "", err
+	}
 	defer endExecutionRun()
 	defer func() { c.continuationResume = nil }()
 	if err := c.checkRunAdmission(); err != nil {
@@ -1941,7 +1947,10 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 }
 
 func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt string) (string, error) {
-	ctx, endExecutionRun := c.beginInvocationExecutionRun(ctx)
+	ctx, endExecutionRun, err := c.beginPublicInvocationExecutionRun(ctx)
+	if err != nil {
+		return "", err
+	}
 	defer endExecutionRun()
 	if err := c.checkRunAdmission(); err != nil {
 		return "", c.finalizePublicInvocationFailureError(err)

@@ -370,6 +370,10 @@ type Coordinator struct {
 	stallMaxDumps               int32
 	stallPollInterval           time.Duration
 	invocationWatchdog          atomic.Pointer[invocationWatchdog]
+	invocationLeaseMu           sync.Mutex
+	invocationLeaseHeld         bool
+	invocationLeaseWait         chan struct{}
+	invocationLease             *invocationLease
 	providerBoundaryMu          sync.Mutex
 	providerBoundaryLifecycleMu sync.Mutex
 	providerBoundaryStarted     bool
@@ -377,6 +381,7 @@ type Coordinator struct {
 	preflightMu                 sync.Mutex
 	preflightContext            context.Context
 	preflightOwner              *invocationOwner
+	preflightLease              *invocationLease
 	// providerBoundaryStart is a deterministic test seam for startup-admission
 	// tests. Production always uses ProviderManager.StartInvocationProxy.
 	providerBoundaryStart func(context.Context, string) error

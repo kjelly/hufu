@@ -16,21 +16,19 @@ func (c *Coordinator) startProviderExecutionBoundary(ctx context.Context) error 
 	}
 	c.providerBoundaryLifecycleMu.Lock()
 	defer c.providerBoundaryLifecycleMu.Unlock()
-	c.providerBoundaryMu.Lock()
-	if c.providerBoundaryStarted {
-		err := c.providerBoundaryErr
-		c.providerBoundaryMu.Unlock()
-		return err
+	lease := c.activeInvocationLease()
+	started, boundaryErr := c.providerBoundaryState(lease)
+	if started {
+		return boundaryErr
 	}
 	if err := invocationContextError(ctx); err != nil {
-		c.providerBoundaryErr = err
-		c.providerBoundaryMu.Unlock()
+		c.setProviderBoundaryState(lease, false, err)
 		return err
 	}
 	// A previous invocation may have failed before the boundary became live.
 	// Clear its diagnostic and invocation-owned auxiliary model instances so a
 	// later run cannot retain a stale provider URL or startup error.
-	c.providerBoundaryErr = nil
+	c.setProviderBoundaryState(lease, false, nil)
 	c.sidecarInitMu.Lock()
 	c.sidecarInst = nil
 	c.sidecarInit = false
@@ -46,8 +44,7 @@ func (c *Coordinator) startProviderExecutionBoundary(ctx context.Context) error 
 	executable, err := os.Executable()
 	if err != nil {
 		boundaryErr := fmt.Errorf("provider hard-abort boundary unavailable: resolve hufu executable: %w", err)
-		c.providerBoundaryErr = boundaryErr
-		c.providerBoundaryMu.Unlock()
+		c.setProviderBoundaryState(lease, false, boundaryErr)
 		return boundaryErr
 	}
 	start := c.providerManager.StartInvocationProxy
@@ -59,14 +56,10 @@ func (c *Coordinator) startProviderExecutionBoundary(ctx context.Context) error 
 			err = ctxErr
 		}
 		boundaryErr := fmt.Errorf("provider hard-abort boundary unavailable: %w", err)
-		c.providerBoundaryErr = boundaryErr
-		c.providerBoundaryStarted = false
-		c.providerBoundaryMu.Unlock()
+		c.setProviderBoundaryState(lease, false, boundaryErr)
 		return boundaryErr
 	}
-	c.providerBoundaryErr = nil
-	c.providerBoundaryStarted = true
-	c.providerBoundaryMu.Unlock()
+	c.setProviderBoundaryState(lease, true, nil)
 	if err := invocationContextError(ctx); err != nil {
 		// Startup raced with cancellation. Marking the boundary live before
 		// entering the shared abort gate lets that gate synchronously reap the
@@ -97,9 +90,8 @@ func (c *Coordinator) abortProviderExecutionBoundary() error {
 }
 
 func (c *Coordinator) abortProviderExecutionBoundaryLocked() error {
-	c.providerBoundaryMu.Lock()
-	started := c.providerBoundaryStarted
-	c.providerBoundaryMu.Unlock()
+	lease := c.activeInvocationLease()
+	started, _ := c.providerBoundaryState(lease)
 	if !started {
 		return nil
 	}
@@ -112,10 +104,7 @@ func (c *Coordinator) abortProviderExecutionBoundaryLocked() error {
 	// Abort is terminal for this invocation. Mark the boundary stopped only
 	// after the manager has synchronously killed/reaped its owners, so a later
 	// invocation cannot race a new proxy against an old process group.
-	c.providerBoundaryMu.Lock()
-	c.providerBoundaryStarted = false
-	c.providerBoundaryErr = nil
-	c.providerBoundaryMu.Unlock()
+	c.setProviderBoundaryState(lease, false, nil)
 	return err
 }
 
@@ -129,18 +118,38 @@ func (c *Coordinator) stopProviderExecutionBoundary() error {
 }
 
 func (c *Coordinator) stopProviderExecutionBoundaryLocked() error {
-	c.providerBoundaryMu.Lock()
-	started := c.providerBoundaryStarted
-	c.providerBoundaryMu.Unlock()
+	lease := c.activeInvocationLease()
+	started, _ := c.providerBoundaryState(lease)
 	if !started {
 		return nil
 	}
 	err := c.providerManager.StopInvocationProxy()
-	c.providerBoundaryMu.Lock()
-	c.providerBoundaryStarted = false
-	c.providerBoundaryErr = nil
-	c.providerBoundaryMu.Unlock()
+	c.setProviderBoundaryState(lease, false, nil)
 	return err
+}
+
+func (c *Coordinator) providerBoundaryState(lease *invocationLease) (bool, error) {
+	if lease != nil {
+		lease.boundaryMu.Lock()
+		defer lease.boundaryMu.Unlock()
+		return lease.started, lease.err
+	}
+	c.providerBoundaryMu.Lock()
+	defer c.providerBoundaryMu.Unlock()
+	return c.providerBoundaryStarted, c.providerBoundaryErr
+}
+
+func (c *Coordinator) setProviderBoundaryState(lease *invocationLease, started bool, err error) {
+	if lease != nil {
+		lease.boundaryMu.Lock()
+		lease.started = started
+		lease.err = err
+		lease.boundaryMu.Unlock()
+	}
+	c.providerBoundaryMu.Lock()
+	c.providerBoundaryStarted = started
+	c.providerBoundaryErr = err
+	c.providerBoundaryMu.Unlock()
 }
 
 func invocationContextError(ctx context.Context) error {
@@ -180,7 +189,7 @@ func (c *Coordinator) providerBoundaryReady() bool {
 	if c == nil || c.providerManager == nil {
 		return true
 	}
-	c.providerBoundaryMu.Lock()
-	defer c.providerBoundaryMu.Unlock()
-	return c.providerBoundaryStarted
+	lease := c.activeInvocationLease()
+	started, _ := c.providerBoundaryState(lease)
+	return started
 }

@@ -141,6 +141,77 @@ func TestInvocationAbortGateJoinsConcurrentAbortRequests(t *testing.T) {
 	}
 }
 
+func TestPublicInvocationLeaseSerializesProviderBoundaryOwnership(t *testing.T) {
+	var startCalls atomic.Int32
+	var abortCalls atomic.Int32
+	abortStarted := make(chan struct{})
+	releaseAbort := make(chan struct{})
+	c := &Coordinator{
+		providerManager: &agent.ProviderManager{},
+		providerBoundaryStart: func(context.Context, string) error {
+			startCalls.Add(1)
+			return nil
+		},
+		providerBoundaryAbort: func() error {
+			if abortCalls.Add(1) == 1 {
+				close(abortStarted)
+				<-releaseAbort
+			}
+			return nil
+		},
+	}
+
+	firstCtx, endFirst, err := c.beginPublicInvocationExecutionRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.startProviderExecutionBoundary(firstCtx); err != nil {
+		t.Fatal(err)
+	}
+
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	secondDone := make(chan error, 1)
+	go func() {
+		_, endSecond, err := c.beginPublicInvocationExecutionRun(secondCtx)
+		if err == nil {
+			endSecond()
+		}
+		secondDone <- err
+	}()
+	cancelSecond()
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("second invocation error = %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second invocation did not stop waiting after cancellation")
+	}
+	if got := startCalls.Load(); got != 1 {
+		t.Fatalf("provider boundary starts = %d, want one", got)
+	}
+
+	firstDone := make(chan struct{})
+	go func() {
+		endFirst()
+		close(firstDone)
+	}()
+	select {
+	case <-abortStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first invocation did not abort its provider boundary")
+	}
+	close(releaseAbort)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first invocation cleanup did not complete")
+	}
+	if got := abortCalls.Load(); got != 1 {
+		t.Fatalf("provider boundary aborts = %d, want one", got)
+	}
+}
+
 func TestPreCancelledInvocationDoesNotStartProviderBoundary(t *testing.T) {
 	var startCalls atomic.Int32
 	c := &Coordinator{
