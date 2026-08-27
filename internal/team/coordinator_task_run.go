@@ -269,7 +269,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		instructions += "\n\n## Verbatim Output Contract\n\nhufu captures every tool call and tool result into a complete transcript artifact. Do not reproduce raw command output in your final response. Submit a concise structured result; the runner will attach the authoritative transcript manifest."
 	}
 	if agentDef != nil {
-		if note := toolUsageNotes(agentDef.Tools); note != "" {
+		if note := toolUsageNotes(granted); note != "" {
 			instructions += note
 		}
 	}
@@ -618,6 +618,7 @@ retryLoop:
 		protocolFailure := false
 		protocolCapabilityFallback := false
 		policyDenialRepairExhausted := false
+		protocolRepairTerminalFailure := false
 		// A worker that consumed its entire step budget was cut off; it did not
 		// choose to stop. That distinction decides whether the follow-up turn
 		// should ask it to finalize what it has or to change its approach.
@@ -937,23 +938,12 @@ retryLoop:
 						c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 						c.report(c.newEvent("step").withAgent(agentName).withMessage(protocolErrMsg).withTodoID(todoID))
 
-						if task.Execution.RequiresGroundedResult {
-							// Tool-free repair (and the free-text promotion below) can only
-							// produce a result from a bounded summary of what already
-							// happened; the repair agent is deliberately given no transcript
-							// recorder so a guess made without re-reading the assigned
-							// evidence can never masquerade as this worker's own grounded
-							// completion. A grounded-result task must reject that substitute
-							// outright rather than accept it as done: skip repair entirely and
-							// let the normal retry policy give this same task a fresh attempt
-							// with a new transcript and full budget instead.
-							protocolFailure = false
-							err = withFailureClassOverride(errors.New("worker omitted submit_result; task requires a grounded result, so tool-free protocol repair is not accepted as a substitute"), FailureExecution)
-						} else {
+						{
 							repairResultTool := &submitResultTool{coordinator: c, todoID: todoID}
-							repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using the output above to supply the required structured result. Include a concise summary and put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields. Do NOT call any other tools or emit a prose final response.\n", task.Goal, output)
+							repairEvidence := utils.TruncateRunes(output, 12000)
+							repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using only the bounded evidence above to supply the required structured result. Include a concise summary and put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields. Do NOT call any other tools or emit a prose final response.\n", utils.TruncateRunes(task.Goal, 4000), repairEvidence)
 							if budgetExhausted {
-								repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The work above is your evidence; this turn is only for reporting it. Call submit_result now, and do NOT call any other tools or emit a prose final response. Put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields.\n\nReport truthfully against the goal: use status `success` only if the goal is fully met without a known target limitation; use `completed_with_gaps` when the assigned work is complete but it discovered such a limitation; otherwise use `partial` (say exactly what is done and what remains) or `blocked`. A truthful `partial` lets the next attempt continue your work; a false completion claim destroys it.", task.Goal, output, len(steps), stepBudget)
+								repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The evidence above is bounded and this turn is only for reporting it. Call submit_result now, and do NOT call any other tools or emit a prose final response. Put any complete textual deliverable in `details`. Use `success` only when fully met; otherwise use `partial` or `blocked` truthfully.", utils.TruncateRunes(task.Goal, 4000), repairEvidence, len(steps), stepBudget)
 							}
 							// Result-only repair must be a clean tool context. Replaying the
 							// original tool-call messages caused models to repeat a prior
@@ -1030,7 +1020,7 @@ retryLoop:
 							// and never replays the worker execution (§7).
 							if !repairSuccess && repairReason == RepairFailureInvalidSchema {
 								typedRes = nil
-								schemaRepairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous submit_result call was rejected because its arguments did not match the result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work, call any other tools, or emit a prose final response. The call must include both required fields: `status` (one of `success`, `completed_with_gaps`, `partial`, `failed`, or `blocked`) and a non-empty `summary`; put any complete textual deliverable in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields.\n\n## Execution Output\n%s", task.Goal, output)
+								schemaRepairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous submit_result call was rejected because its arguments did not match the result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve only the bounded execution evidence below. Do NOT execute work, call any other tools, or emit a prose final response. The call must include both required fields: `status` (one of `success`, `completed_with_gaps`, `partial`, `failed`, or `blocked`) and a non-empty `summary`; put any complete textual deliverable in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields.\n\n## Bounded execution evidence\n%s", utils.TruncateRunes(task.Goal, 4000), repairEvidence)
 								schemaRepairSteps := runRepair(schemaRepairPrompt)
 								repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil
 								repairReason, reclassifyExecution = classifyRepairFailure(schemaRepairSteps, typedRes)
@@ -1103,13 +1093,20 @@ retryLoop:
 									// Preserve the worker's original output as a low-confidence,
 									// provisional result. It is evidence for reconciliation, not
 									// a successful terminal result and never marks the task done.
-									recovered := ParseFreeTextResult(output)
-									if strings.TrimSpace(recovered.Summary) == "" {
-										recovered.Summary = "No final worker output was available; reconcile using the execution transcript."
+									recovered := ParseFreeTextResult(utils.TruncateRunes(output, 12000))
+									if strings.TrimSpace(output) == "" {
+										recovered.Status = TaskResultStatusBlocked
+										recovered.Summary = "Runtime could not obtain the required structured result; no usable execution evidence was produced."
+									} else {
+										recovered.Status = TaskResultStatusPartial
+										evidence := utils.TruncateRunes(output, 12000)
+										recovered.Summary = "Runtime obtained execution evidence but result finalization failed; work is partial and requires reconciliation. Evidence: " + evidence
+										recovered.Details = evidence
 									}
 									recovered.TaskID = todoID
 									recovered.Agent = agentName
 									recovered.Source = "recovered_protocol"
+									protocolRepairTerminalFailure = true
 									if transcriptArtifact != nil {
 										copyRef := *transcriptArtifact
 										recovered.RawOutputRef = &copyRef
@@ -1340,6 +1337,14 @@ retryLoop:
 		if policyDenialRepairExhausted {
 			disposition = NeedsHuman
 			reason = "policy denial repeated after the only safe fresh retry"
+		}
+		if protocolRepairTerminalFailure && resolvedSideEffect != SideEffectNone {
+			// Once a mutating attempt has run, a failed result-only repair is a
+			// terminal runtime outcome. Never redispatch the worker: doing so could
+			// repeat an external side effect from an attempt whose final state is
+			// already represented by the deterministic partial/blocked result.
+			disposition = ReconcileOnly
+			reason = "result-only repair failed after a side-effecting attempt; reconcile the preserved partial/blocked result"
 		}
 		if isAttemptBudgetExceeded(err) {
 			// Re-running an attempt that exhausted its own budget without a
@@ -3482,17 +3487,10 @@ func estimateStepRequestTokens(messages []fantasy.Message, prompt string) int64 
 // bash commands with sudo/ssh (rejected by a guardrail, wasting a round-trip
 // each time) and hand-rolled sleep+recheck polling loops (each poll is a full
 // LLM round-trip; wait_for collapses the wait into one tool call).
-func toolUsageNotes(toolNames string) string {
+// granted is the final model-visible capability set for this invocation.
+func toolUsageNotes(granted map[string]bool) string {
 	has := func(name string) bool {
-		if toolNames == "" || toolNames == "all" {
-			return true
-		}
-		for _, t := range strings.Split(toolNames, ",") {
-			if strings.TrimSpace(t) == name {
-				return true
-			}
-		}
-		return false
+		return granted[name]
 	}
 	var notes []string
 	if has("bash") {

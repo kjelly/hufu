@@ -199,6 +199,7 @@ func (c *Coordinator) directAgentWorkflowPrompt(task string, agentDef *agent.Age
 	if granted["submit_result"] {
 		prompt += resultProtocolInstructions(syntheticTask, granted)
 	}
+	prompt += toolUsageNotes(granted)
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		execCtx := c.phaseWorkflow.executionContext()
 		prompt += "\n\n## Execution Context\n\n"
@@ -422,6 +423,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if granted["submit_result"] {
 		instructions += resultProtocolInstructions(syntheticTask, granted)
 	}
+	instructions += toolUsageNotes(granted)
 	skillContext, skillErr := c.buildSkillContextItems(agentDef, resolvedName, task, todoID, granted)
 	if skillErr != nil {
 		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{todoID: todoID, agent: resolvedName, agentDef: agentDef, task: task, directModel: directModel, attemptStarted: attemptStarted, roundCancel: roundCancel, err: fmt.Errorf("direct-agent skill context preflight failed: %w", skillErr)})

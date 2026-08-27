@@ -120,29 +120,28 @@ func TestFlattenStatusEntry(t *testing.T) {
 func TestToolUsageNotes(t *testing.T) {
 	cases := []struct {
 		name     string
-		tools    string
+		granted  map[string]bool
 		wantNote bool
 		want     []string
 		notWant  []string
 	}{
-		{"bash with sudo and ssh", "bash,sudo,ssh,view", true, []string{"sudo and ssh", "REJECTS"}, []string{"wait_for"}},
-		{"bash with sudo only", "bash, sudo", true, []string{"sudo"}, nil},
-		{"bash without privileged tools", "bash,view,grep", false, nil, nil},
-		{"no bash or sudo at all", "ssh,view", false, nil, nil},
-		{"wait_for with bash gets polling note", "bash,wait_for", true, []string{"wait_for", "polls internally"}, []string{"REJECTS"}},
-		{"wait_for with sudo gets polling note", "sudo,wait_for", true, []string{"wait_for"}, nil},
-		{"wait_for without shell tools stays silent", "wait_for,view", false, nil, nil},
-		{"empty tools means all tools", "", true, []string{"REJECTS", "wait_for"}, nil},
-		{"all keyword means all tools", "all", true, []string{"REJECTS", "wait_for"}, nil},
+		{"bash with sudo and ssh", map[string]bool{"bash": true, "sudo": true, "ssh": true, "view": true}, true, []string{"sudo and ssh", "REJECTS"}, []string{"wait_for"}},
+		{"bash with sudo only", map[string]bool{"bash": true, "sudo": true}, true, []string{"sudo"}, nil},
+		{"bash without privileged tools", map[string]bool{"bash": true, "view": true, "grep": true}, false, nil, nil},
+		{"no bash or sudo at all", map[string]bool{"ssh": true, "view": true}, false, nil, nil},
+		{"wait_for with bash gets polling note", map[string]bool{"bash": true, "wait_for": true}, true, []string{"wait_for", "polls internally"}, []string{"REJECTS"}},
+		{"wait_for with sudo gets polling note", map[string]bool{"sudo": true, "wait_for": true}, true, []string{"wait_for"}, nil},
+		{"wait_for without shell tools stays silent", map[string]bool{"wait_for": true, "view": true}, false, nil, nil},
+		{"empty final surface stays silent", map[string]bool{}, false, nil, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := toolUsageNotes(tc.tools)
+			got := toolUsageNotes(tc.granted)
 			if tc.wantNote && got == "" {
-				t.Fatalf("toolUsageNotes(%q) = empty, want a note", tc.tools)
+				t.Fatalf("toolUsageNotes(%v) = empty, want a note", tc.granted)
 			}
 			if !tc.wantNote && got != "" {
-				t.Fatalf("toolUsageNotes(%q) = %q, want empty", tc.tools, got)
+				t.Fatalf("toolUsageNotes(%v) = %q, want empty", tc.granted, got)
 			}
 			for _, w := range tc.want {
 				if !strings.Contains(got, w) {

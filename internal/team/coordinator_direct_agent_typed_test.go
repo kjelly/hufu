@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -130,6 +131,105 @@ func TestDirectAgentRuntimeAllowlistAuthorizesSubmitResult(t *testing.T) {
 	allowed := tools.GetToolsAllowed(ctx)
 	if !sliceHasString(allowed, "submit_result") {
 		t.Fatalf("runtime allowlist missing submit_result: %v", allowed)
+	}
+}
+
+// directToolNotesCaptureAgent is installed only through the existing direct
+// agent cache seam. RunDirectAgent still performs the production resolver,
+// context construction, prompt assembly, and runAgentWithStatusAndHistory
+// call before this agent observes the request. Reading the allowlist from the
+// context lets this test compare the actual runtime grant with the resolver's
+// final model-visible surface.
+type directToolNotesCaptureAgent struct {
+	prompt  string
+	allowed []string
+}
+
+func (a *directToolNotesCaptureAgent) Stream(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	a.prompt = call.Prompt
+	a.allowed = append([]string(nil), tools.GetToolsAllowed(ctx)...)
+	return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{
+		fantasy.TextContent{Text: "direct prompt captured"},
+	}}}, nil
+}
+
+func (a *directToolNotesCaptureAgent) Generate(ctx context.Context, call fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return a.Stream(ctx, fantasy.AgentStreamCall{Prompt: call.Prompt, Messages: call.Messages})
+}
+
+func TestRunDirectAgentPromptNotesUseResolverSurface(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		denied    []string
+		wantNotes bool
+	}{
+		{name: "deny filtered surface", denied: []string{"sudo", "wait_for"}},
+		{name: "full surface", wantNotes: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The declared tools intentionally include capabilities that the
+			// team deny filter removes in the first case. No model-visible list
+			// is supplied by this test: the default resolver constructs it from
+			// the real core tool registry and the synthetic result-tool extra.
+			c := newDirectTypedCoordinator(t, "bash,sudo,wait_for", nil, tc.denied)
+			def := c.session.Agents["worker"]
+			syntheticTask := TaskDef{Agent: "worker", Goal: "perform direct work", Execution: ExecutionContract{RequiresResult: true}}
+			resolved, err := c.ToolResolver().ResolveTaskTools(context.Background(), def, syntheticTask, []fantasy.AgentTool{
+				&submitResultTool{coordinator: c, todoID: "resolver-probe"},
+			})
+			if err != nil {
+				t.Fatalf("default resolver: %v", err)
+			}
+			for _, name := range []string{"bash", "submit_result"} {
+				if !sliceHasString(resolved.Names, name) {
+					t.Fatalf("resolver final names = %v, missing %q", resolved.Names, name)
+				}
+			}
+			for _, name := range tc.denied {
+				if sliceHasString(resolved.Names, name) {
+					t.Fatalf("resolver final names = %v, denied tool %q still exposed", resolved.Names, name)
+				}
+			}
+			for _, tool := range resolved.Tools {
+				if tool == nil {
+					t.Fatalf("resolver returned nil tool in final surface %v", resolved.Names)
+				}
+			}
+
+			capture := &directToolNotesCaptureAgent{}
+			c.agentCacheMu.Lock()
+			c.agentCache[c.policyAgentCacheKey(def, "")] = capture
+			c.agentCacheMu.Unlock()
+
+			if _, err := c.RunDirectAgent(context.Background(), "worker", syntheticTask.Goal); err != nil {
+				t.Fatalf("RunDirectAgent: %v", err)
+			}
+			if capture.prompt == "" {
+				t.Fatal("RunDirectAgent did not deliver a prompt to the production agent consumer")
+			}
+
+			// The allowlist observed by the actual consumer must be exactly the
+			// final resolver Names used to build the direct agent surface.
+			if !slices.Equal(capture.allowed, resolved.Names) {
+				t.Fatalf("runtime allowlist = %v, resolver final names = %v", capture.allowed, resolved.Names)
+			}
+
+			const privilegedNote = "The bash tool REJECTS sudo commands. Run privileged/remote commands through the dedicated sudo tool(s) directly"
+			const pollingNote = "When waiting for a state change (VM boot, service ready, async job completion), call `wait_for` once"
+			if tc.wantNotes {
+				for _, fragment := range []string{privilegedNote, pollingNote, "## Tool Notes"} {
+					if !strings.Contains(capture.prompt, fragment) {
+						t.Errorf("full resolver surface prompt missing note %q: %s", fragment, capture.prompt)
+					}
+				}
+			} else {
+				for _, fragment := range []string{privilegedNote, pollingNote, "## Tool Notes"} {
+					if strings.Contains(capture.prompt, fragment) {
+						t.Errorf("filtered resolver surface prompt mentions unavailable note %q: %s", fragment, capture.prompt)
+					}
+				}
+			}
+		})
 	}
 }
 
