@@ -26,6 +26,13 @@ func TestCoordinatorPolicyRepairIsDeterministicAndBounded(t *testing.T) {
 	if !c.IsWrapUp() {
 		t.Fatal("repair exhaustion must enter wrap-up")
 	}
+	fourth, exhausted := c.coordinatorPolicyRepairPrompt(violation)
+	if !exhausted || !strings.Contains(fourth, "3/2") {
+		t.Fatalf("repeated repair prompt=%q exhausted=%v, want latched 3/2 exhaustion", fourth, exhausted)
+	}
+	if got := c.coordinatorPolicyRepairsAttempt.Load(); got != maxCoordinatorPolicyRepairs+1 {
+		t.Fatalf("repair attempts after exhaustion=%d, want %d", got, maxCoordinatorPolicyRepairs+1)
+	}
 }
 
 func TestCoordinatorPolicyRepairRecognizesProviderWrappedError(t *testing.T) {

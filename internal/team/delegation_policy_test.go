@@ -39,6 +39,37 @@ func TestDelegationPolicyRejectsOneTaskBeforeConfiguredInitialBatch(t *testing.T
 	}
 }
 
+func TestDelegationPolicyRejectsWorksetRedispatchBeforeTodoCreation(t *testing.T) {
+	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{})
+	receipt := &WorksetExpansionReceipt{
+		WorksetID:    "workset-existing",
+		RunID:        "run-1",
+		ParentTaskID: "review-workset",
+		Children:     map[string]string{"unit-0001": "1"},
+		ItemCount:    1,
+	}
+	c.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{PlanTaskID: "review-workset", Agent: "reviewer", Desc: "review workset", WorksetReceipt: receipt},
+	})
+
+	tasks := []TaskDef{{
+		ID:    "review-workset",
+		Agent: "reviewer",
+		Goal:  "review unit-0001",
+		WorksetBinding: &WorksetBinding{
+			WorksetID:    "workset-existing",
+			ParentTaskID: "review-workset",
+			ItemKey:      "unit-0001",
+		},
+	}}
+	if err := c.validateDelegationPolicy(tasks); err == nil || !strings.Contains(err.Error(), "already has a committed receipt") {
+		t.Fatalf("workset redispatch error = %v, want committed-receipt rejection", err)
+	}
+	if got := len(c.taskTracker.TodoList().Items()); got != 1 {
+		t.Fatalf("rejected workset redispatch created %d additional TODOs", got-1)
+	}
+}
+
 func TestDelegationPolicyBindsInitialStaticExecutionContract(t *testing.T) {
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		InitialBatch:             []string{"reader", "probe"},
@@ -747,8 +778,8 @@ func TestDelegationPolicyAdmitsRuntimeProducerFanOutAndPreservesFinish(t *testin
 	if err != nil {
 		t.Fatalf("re-expand review workset: %v", err)
 	}
-	if err := c.validateDelegationPolicy(expandedAgain); err == nil || !strings.Contains(err.Error(), "may not be redispatched") {
-		t.Fatalf("second review dispatch error = %v, want no-redispatch rejection", err)
+	if err := c.validateDelegationPolicy(expandedAgain); err == nil || !strings.Contains(err.Error(), "already has a committed receipt") {
+		t.Fatalf("second review dispatch error = %v, want committed-workset rejection", err)
 	}
 	if got := len(tracker.TodoList().Items()); got != beforeSecondDispatch {
 		t.Fatalf("rejected second review dispatch created %d new TODOs", got-beforeSecondDispatch)

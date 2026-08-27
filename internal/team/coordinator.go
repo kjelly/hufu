@@ -325,6 +325,7 @@ type Coordinator struct {
 	coordinatorPolicyRepairsAttempt   atomic.Int32
 	coordinatorPolicyRepairsSuccess   atomic.Int32
 	coordinatorPolicyRepairPending    atomic.Bool
+	coordinatorPolicyRepairExhausted  atomic.Bool
 	contextRequestSeq                 atomic.Uint64
 	initialToolCorrections            atomic.Int32
 	projectDir                        string

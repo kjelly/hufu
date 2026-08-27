@@ -222,6 +222,7 @@ func (c *Coordinator) beginInvocationExecutionRun(parent context.Context) (conte
 	c.coordinatorPolicyRepairsAttempt.Store(0)
 	c.coordinatorPolicyRepairsSuccess.Store(0)
 	c.coordinatorPolicyRepairPending.Store(false)
+	c.coordinatorPolicyRepairExhausted.Store(false)
 	c.invocationFailureFinalized.Store(false)
 	// A resumed coordinator may hold the previous run's result in memory. It
 	// must never leak that completed outcome into this run's run_finished event

@@ -45,6 +45,16 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 			formatAgentNames(policy.InitialBatch), formatTaskAgents(tasks)))
 	}
 
+	// A structured workset is an immutable expansion: its receipt commits the
+	// exact item-key -> Todo-ID mapping used for artifact authorization. A
+	// replan must not expand the same workset again with fresh Todo IDs, because
+	// that would create two non-equivalent receipts for one content-derived
+	// WorksetID and make every later child fail closed at artifact preflight.
+	// The existing child tasks remain the only safe retry/recovery boundary.
+	if err := c.validateWorksetRedispatch(tasks); err != nil {
+		return err
+	}
+
 	if err := c.validateTaskGoalInvariants(tasks); err != nil {
 		return err
 	}
@@ -98,6 +108,36 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 			formatAgentNames(duplicates)))
 	}
 	return c.validateContextFilePolicy(tasks)
+}
+
+func (c *Coordinator) validateWorksetRedispatch(tasks []TaskDef) error {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return nil
+	}
+	committed := make(map[string]struct{})
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item == nil || item.WorksetReceipt == nil {
+			continue
+		}
+		if worksetID := strings.TrimSpace(item.WorksetReceipt.WorksetID); worksetID != "" {
+			committed[worksetID] = struct{}{}
+		}
+	}
+	for _, task := range tasks {
+		if task.WorksetBinding == nil {
+			continue
+		}
+		worksetID := strings.TrimSpace(task.WorksetBinding.WorksetID)
+		if worksetID == "" {
+			continue
+		}
+		if _, exists := committed[worksetID]; exists {
+			return c.rejectDelegationPolicy(fmt.Sprintf(
+				"workset %q already has a committed receipt; retry its existing child tasks instead of redispatching the workset",
+				worksetID))
+		}
+	}
+	return nil
 }
 
 // isSuccessfulWorkerExecution identifies the persisted task shape that owns a

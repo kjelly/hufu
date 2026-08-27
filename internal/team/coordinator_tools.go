@@ -162,7 +162,11 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	if err != nil {
 		var violation *delegationPolicyViolation
 		if errors.As(err, &violation) {
-			return t.coordinator.coordinatorPolicyRepairResponse(violation), nil
+			response := t.coordinator.coordinatorPolicyRepairResponse(violation)
+			if t.coordinator.coordinatorPolicyRepairExhausted.Load() {
+				return response, errCoordinatorPolicyRepairExhausted
+			}
+			return response, nil
 		}
 		if t.coordinator.terminalUnresolvedRun() {
 			return terminalUnresolvedWorkerResponse(t.coordinator), nil
