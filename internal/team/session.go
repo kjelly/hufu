@@ -110,6 +110,10 @@ type SessionData struct {
 	RecoveryReason              string                     `json:"recovery_reason,omitempty"`
 	PendingTerminalCommit       *PendingTerminalCommit     `json:"pending_terminal_commit,omitempty"`
 	CoordinatorContextManifests []ContextInjectionManifest `json:"coordinator_context_manifests,omitempty"`
+	// CompactionReferences are event-store attestations only. The canonical
+	// state store holds the referenced history and summary contents.
+	CompactionReferences           []CompactionReference           `json:"compaction_references,omitempty"`
+	CompactionCheckpointReferences []CompactionCheckpointReference `json:"compaction_checkpoint_references,omitempty"`
 }
 
 func LoadSession(workspace string) *SessionData {

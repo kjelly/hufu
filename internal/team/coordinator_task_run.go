@@ -36,6 +36,80 @@ import (
 // evidence, while coordinators must not continue making decisions from it.
 var errCoordinatorToolFailure = errors.New("coordinator direct tool failure")
 
+type coordinatorModelContinuation struct {
+	Model    fantasy.LanguageModel
+	Messages []fantasy.Message
+	System   string
+	Tools    []fantasy.AgentTool
+	ToolsSet bool
+	Context  context.Context
+}
+
+// admitCoordinatorEarlierModel is the only coordinator model downshift
+// boundary. It accepts only a compacted candidate that the current P1
+// admission proved could not be sent, and independently admits each earlier
+// configured model before constructing its continuation model.
+func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, preflight *coordinatorRequestPreflight, messages []fantasy.Message, prompt string, stepNumber, maxOutputTokens int, currentModel string) (coordinatorModelContinuation, error) {
+	if c == nil || preflight == nil || c.providerManager == nil {
+		return coordinatorModelContinuation{}, nil
+	}
+	currentIndex := -1
+	for i, entry := range c.modelList {
+		if entry.ID == currentModel {
+			currentIndex = i
+			break
+		}
+	}
+	if currentIndex <= 0 {
+		return coordinatorModelContinuation{}, nil
+	}
+	fullSystem, fullTools := preflight.configuration()
+	seen := make(map[string]bool)
+	for i := currentIndex - 1; i >= 0; i-- {
+		candidateID := strings.TrimSpace(c.modelList[i].ID)
+		if candidateID == "" || seen[candidateID] || candidateID == currentModel {
+			continue
+		}
+		seen[candidateID] = true
+		candidatePreflight := newCoordinatorRequestPreflight(candidateID, prompt, fullSystem, fullTools)
+		candidateSpec := globalRegistry.GetSpec(candidateID).WithEffectiveMaxOutputTokens(maxOutputTokens)
+		candidateSystem, candidateTools, applied, err := candidatePreflight.prepare(ctx, messages, prompt, maxOutputTokens, stepNumber)
+		if err != nil {
+			continue
+		}
+		requestSystem, requestTools := fullSystem, fullTools
+		if applied {
+			requestSystem, requestTools = candidateSystem, candidateTools
+		}
+		manager := NewContextWindowManager(defaultCounter, nil)
+		admission, err := manager.Admit(ctx, ContextWindowRequest{
+			ModelID: candidateID, System: requestSystem, Tools: requestTools, Messages: messages,
+			Prompt: prompt, Window: candidateSpec.ContextWindow, ReservedOutputTokens: maxOutputTokens,
+			SafetyMarginTokens: candidateSpec.SafetyMarginTokens, StepNumber: stepNumber,
+		})
+		if err != nil || admission.Decision == ContextWindowCannotFit || admission.Messages == nil {
+			continue
+		}
+		provider := c.providerManager.GetProvider(candidateID)
+		if provider == nil {
+			continue
+		}
+		model, err := provider.LanguageModel(ctx, candidateID)
+		if err != nil {
+			continue
+		}
+		payload := map[string]any{"from_model": currentModel, "to_model": candidateID, "request_tokens": admission.RequestTokens, "available": admission.Budget.Available, "step": stepNumber}
+		if err := c.emitEvent(modelContinuationEventType, "coordinator", CoordTodoID, payload); err != nil {
+			return coordinatorModelContinuation{}, fmt.Errorf("persist coordinator model continuation admission: %w", err)
+		}
+		return coordinatorModelContinuation{
+			Model: model, Messages: admission.Messages, System: candidateSystem, Tools: candidateTools,
+			ToolsSet: applied, Context: context.WithValue(ctx, modelKey{}, candidateID),
+		}, nil
+	}
+	return coordinatorModelContinuation{}, nil
+}
+
 // acceptedTerminalResultStop is scoped to one worker stream invocation. The
 // result tool flips it only after the occurrence transaction commits; the
 // stream boundary then stops before Fantasy asks the model for another step.
@@ -2816,6 +2890,8 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	reasoningRepetitionDetector := NewStreamRepetitionDetector()
 	streamPreflight := coordinatorRequestPreflightFromContext(ctx)
 	var contextManager *ContextWindowManager
+	coordinatorFallbackUsed := false
+	coordinatorFallbackAttempted := false
 	if streamPreflight != nil {
 		contextManager = NewContextWindowManagerWithPredecessor(defaultCounter, func(compactCtx context.Context, messages []fantasy.Message, predecessor *StructuredSummary) ([]fantasy.Message, *StructuredSummary, error) {
 			counts := make([]int, len(messages))
@@ -2942,7 +3018,23 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					return ctx, fantasy.PrepareStepResult{}, finalErr
 				}
 				if finalAdmission.Decision == ContextWindowCannotFit {
-					return ctx, fantasy.PrepareStepResult{}, fmt.Errorf("coordinator context window admission cannot fit request for model %q: %d tokens exceeds available budget %d", modelID, finalAdmission.RequestTokens, finalAdmission.Budget.Available)
+					fitErr := &CannotFitError{ModelID: modelID, RequestTokens: finalAdmission.RequestTokens, Available: finalAdmission.Budget.Available, ProvenNoSend: true}
+					if _, provenNoSend := isProvenPreProviderCannotFit(fitErr); finalAdmission.Candidate != nil && provenNoSend && opts.StepNumber == 0 && !coordinatorFallbackUsed && !coordinatorFallbackAttempted {
+						coordinatorFallbackAttempted = true
+						if fallback, fallbackErr := c.admitCoordinatorEarlierModel(ctx, streamPreflight, preparedMessages, prompt, opts.StepNumber, spec.MaxOutputTokens, modelID); fallbackErr != nil {
+							return ctx, fantasy.PrepareStepResult{}, fallbackErr
+						} else if fallback.Model != nil {
+							coordinatorFallbackUsed = true
+							preparedMessages = fallback.Messages
+							result := fantasy.PrepareStepResult{Messages: preparedMessages, Model: fallback.Model}
+							if fallback.ToolsSet {
+								result.System = &fallback.System
+								result.Tools = fallback.Tools
+							}
+							return fallback.Context, result, nil
+						}
+					}
+					return ctx, fantasy.PrepareStepResult{}, fitErr
 				}
 				preparedMessages = finalAdmission.Messages
 				contextChanged = contextChanged || !reflect.DeepEqual(preparedMessages, opts.Messages)

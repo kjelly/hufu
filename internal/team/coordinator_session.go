@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"charm.land/fantasy"
 
@@ -79,54 +78,104 @@ func (c *Coordinator) summarizeOutput(ctx context.Context, text string) string {
 }
 
 func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepResult) {
+	history := cloneMessages(c.conversationHistory)
+	sourceRanges := historySourceRanges(len(history), c.conversationHistorySourceOffset, c.conversationHistorySourceCounts, c.conversationHistorySourceRanges)
+	nextSourceIndex := c.conversationHistoryNextSourceIndex
+	if nextSourceIndex < maxSourceIndex(sourceRanges) {
+		nextSourceIndex = maxSourceIndex(sourceRanges)
+	}
 	for _, step := range steps {
 		for _, msg := range step.Messages {
 			// Preserve the original event until verified compaction can extract
 			// its diagnostics and validate tool-call/result evidence.
-			c.conversationHistory = append(c.conversationHistory, msg)
-			c.conversationHistorySourceCounts = append(c.conversationHistorySourceCounts, 1)
+			history = append(history, msg)
+			sourceRanges = append(sourceRanges, []CompactionRange{{StartIndex: nextSourceIndex, EndIndex: nextSourceIndex, MsgCount: 1}})
+			nextSourceIndex++
 		}
 	}
-	if len(c.conversationHistorySourceCounts) < len(c.conversationHistory) {
-		for i := len(c.conversationHistorySourceCounts); i < len(c.conversationHistory); i++ {
-			c.conversationHistorySourceCounts = append(c.conversationHistorySourceCounts, 1)
+	sourceCounts := sourceCountsForRanges(sourceRanges)
+	if len(history) <= maxConversationHistory {
+		if err := c.persistConversationCheckpointWithProvenance(history, c.conversationHistorySourceOffset, sourceCounts, sourceRanges, nextSourceIndex); err != nil {
+			log.Printf("warning: durable conversation checkpoint failed: %v; retaining prior history", err)
+			return
 		}
-	} else if len(c.conversationHistorySourceCounts) > len(c.conversationHistory) {
-		c.conversationHistorySourceCounts = c.conversationHistorySourceCounts[:len(c.conversationHistory)]
-	}
-	if len(c.conversationHistory) <= maxConversationHistory {
+		c.conversationHistory = history
+		c.conversationHistorySourceCounts = sourceCounts
+		c.conversationHistorySourceRanges = sourceRanges
+		c.conversationHistoryNextSourceIndex = nextSourceIndex
 		return
 	}
-	compactCount := len(c.conversationHistory) - compactHistoryThreshold
+	compactCount := len(history) - compactHistoryThreshold
 	if compactCount <= 0 {
-		compactCount = len(c.conversationHistory) / 3
+		compactCount = len(history) / 3
 	}
 	if compactCount <= 0 {
-		trimmed, trimmedCounts, removed := trimHistoryPreservingHead(c.conversationHistory, c.conversationHistorySourceCounts, maxConversationHistory)
+		trimmed, trimmedRanges, removed := trimHistoryPreservingHeadWithProvenance(history, sourceRanges, maxConversationHistory)
+		trimmedCounts := sourceCountsForRanges(trimmedRanges)
+		if err := c.persistConversationCheckpointWithProvenance(trimmed, c.conversationHistorySourceOffset+removed, trimmedCounts, trimmedRanges, nextSourceIndex); err != nil {
+			log.Printf("warning: durable conversation checkpoint failed: %v; retaining prior history", err)
+			return
+		}
 		c.conversationHistory = trimmed
 		c.conversationHistorySourceCounts = trimmedCounts
+		c.conversationHistorySourceRanges = trimmedRanges
 		c.conversationHistorySourceOffset += removed
+		c.conversationHistoryNextSourceIndex = nextSourceIndex
 		return
 	}
 	// Invariant 1: Ensure boundary never splits tool call and tool result.
-	compactCount = AdjustBoundaryToPreserveToolPairs(c.conversationHistory, compactCount)
-	if compactCount <= 0 || compactCount >= len(c.conversationHistory) {
-		trimmed, trimmedCounts, removed := trimHistoryPreservingHead(c.conversationHistory, c.conversationHistorySourceCounts, maxConversationHistory)
+	compactCount = AdjustBoundaryToPreserveToolPairs(history, compactCount)
+	if compactCount <= 0 || compactCount >= len(history) {
+		trimmed, trimmedRanges, removed := trimHistoryPreservingHeadWithProvenance(history, sourceRanges, maxConversationHistory)
+		trimmedCounts := sourceCountsForRanges(trimmedRanges)
+		if err := c.persistConversationCheckpointWithProvenance(trimmed, c.conversationHistorySourceOffset+removed, trimmedCounts, trimmedRanges, nextSourceIndex); err != nil {
+			log.Printf("warning: durable conversation checkpoint failed: %v; retaining prior history", err)
+			return
+		}
 		c.conversationHistory = trimmed
 		c.conversationHistorySourceCounts = trimmedCounts
+		c.conversationHistorySourceRanges = trimmedRanges
 		c.conversationHistorySourceOffset += removed
+		c.conversationHistoryNextSourceIndex = nextSourceIndex
 		return
 	}
 
-	sourceOffset := c.conversationHistorySourceOffset
-	sourceCounts := c.conversationHistorySourceCounts[:compactCount]
-	compacted := c.compactMessages(ctx, c.conversationHistory[:compactCount], sourceOffset, sourceCounts)
-	compactedSourceCount := sumSourceCounts(sourceCounts)
-	c.conversationHistory = append(compacted, c.conversationHistory[compactCount:]...)
-	c.conversationHistorySourceCounts = append(
-		[]int{compactedSourceCount},
-		c.conversationHistorySourceCounts[compactCount:]...,
-	)
+	compactedRanges := sourceRanges[:compactCount]
+	sourceOffset := sourceOffsetForRanges(compactedRanges, c.conversationHistorySourceOffset)
+	compactedCounts := sourceCounts[:compactCount]
+	projection := c.buildCompactionProjection(ctx, history[:compactCount], sourceOffset, compactedCounts, cloneStructuredSummary(c.lastCompactionSummary), c.AgentPool().Sidecar())
+	if projection.summary == nil {
+		if err := c.persistConversationCheckpointWithProvenance(history, sourceOffset, sourceCounts, sourceRanges, nextSourceIndex); err != nil {
+			log.Printf("warning: durable conversation checkpoint failed: %v; retaining prior history", err)
+			return
+		}
+		c.conversationHistory = history
+		c.conversationHistorySourceCounts = sourceCounts
+		c.conversationHistorySourceRanges = sourceRanges
+		c.conversationHistoryNextSourceIndex = nextSourceIndex
+		return
+	}
+	resultingHistory := append(cloneMessages(projection.messages), history[compactCount:]...)
+	resultingRanges := append([][]CompactionRange{flattenSourceRanges(compactedRanges)}, cloneSourceRanges(sourceRanges[compactCount:])...)
+	resultingCounts := sourceCountsForRanges(resultingRanges)
+	if workspace := c.sessionWorkspace(); workspace != "" {
+		record, err := c.commitCompactionCheckpointWithProvenance(ctx, resultingHistory, sourceOffset, resultingCounts, flattenSourceRanges(compactedRanges), resultingRanges, nextSourceIndex, projection)
+		if err != nil && record.ID == "" {
+			log.Printf("warning: durable compaction checkpoint failed before commit: %v; retaining original history", err)
+			return
+		}
+		if err != nil {
+			log.Printf("warning: durable compaction projection gap after canonical commit: %v", err)
+		}
+	}
+	c.conversationHistory = resultingHistory
+	c.conversationHistorySourceCounts = resultingCounts
+	c.conversationHistorySourceRanges = resultingRanges
+	c.conversationHistoryNextSourceIndex = nextSourceIndex
+	c.lastCompactionSummary = cloneStructuredSummary(projection.summary)
+	if workspace := c.sessionWorkspace(); workspace != "" {
+		c.recordCompaction()
+	}
 	if len(c.conversationHistory) > maxConversationHistory {
 		// The summary message plus the retained tail still exceeds the limit
 		// (the tail alone is near the cap). compactMessages always replaces the
@@ -135,9 +184,11 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 		// compaction was skipped. Keep the first few messages — which carry the
 		// original goal and instructions — plus the most recent ones, instead of
 		// dropping the head entirely.
-		trimmed, trimmedCounts, removed := trimHistoryPreservingHead(c.conversationHistory, c.conversationHistorySourceCounts, maxConversationHistory)
+		trimmed, trimmedRanges, removed := trimHistoryPreservingHeadWithProvenance(c.conversationHistory, c.conversationHistorySourceRanges, maxConversationHistory)
+		trimmedCounts := sourceCountsForRanges(trimmedRanges)
 		c.conversationHistory = trimmed
 		c.conversationHistorySourceCounts = trimmedCounts
+		c.conversationHistorySourceRanges = trimmedRanges
 		c.conversationHistorySourceOffset += removed
 	}
 }
@@ -152,14 +203,20 @@ const conversationHeadKeep = 1
 // the "amnesia" failure where the original goal is dropped and the coordinator
 // re-delegates already-completed work.
 func trimHistoryPreservingHead(msgs []fantasy.Message, sourceCounts []int, max int) ([]fantasy.Message, []int, int) {
+	sourceRanges := historySourceRanges(len(msgs), 0, sourceCounts, nil)
+	trimmed, trimmedRanges, removed := trimHistoryPreservingHeadWithProvenance(msgs, sourceRanges, max)
+	return trimmed, sourceCountsForRanges(trimmedRanges), removed
+}
+
+func trimHistoryPreservingHeadWithProvenance(msgs []fantasy.Message, sourceRanges [][]CompactionRange, max int) ([]fantasy.Message, [][]CompactionRange, int) {
 	if max <= 0 {
 		return nil, nil, len(msgs)
 	}
 	if len(msgs) <= max {
-		return msgs, sourceCounts, 0
+		return msgs, cloneSourceRanges(sourceRanges), 0
 	}
 
-	sourceCounts = normalizeSourceCounts(len(msgs), sourceCounts)
+	sourceRanges = historySourceRanges(len(msgs), 0, nil, sourceRanges)
 
 	headKeep := conversationHeadKeep
 	if headKeep >= max {
@@ -182,10 +239,10 @@ func trimHistoryPreservingHead(msgs []fantasy.Message, sourceCounts []int, max i
 		trimmed = append(trimmed, msgs[:head]...)
 		trimmed = append(trimmed, msgs[tailStart:]...)
 
-		trimmedCounts := make([]int, 0, head+tail)
-		trimmedCounts = append(trimmedCounts, sourceCounts[:head]...)
-		trimmedCounts = append(trimmedCounts, sourceCounts[tailStart:]...)
-		return trimmed, trimmedCounts, sumSourceCounts(sourceCounts[head:tailStart])
+		trimmedRanges := make([][]CompactionRange, 0, head+tail)
+		trimmedRanges = append(trimmedRanges, cloneSourceRanges(sourceRanges[:head])...)
+		trimmedRanges = append(trimmedRanges, cloneSourceRanges(sourceRanges[tailStart:])...)
+		return trimmed, trimmedRanges, sumCompactionRanges(flattenSourceRanges(sourceRanges[head:tailStart]))
 	}
 
 	start := len(msgs) - max
@@ -215,9 +272,8 @@ func trimHistoryPreservingHead(msgs []fantasy.Message, sourceCounts []int, max i
 
 	trimmed := make([]fantasy.Message, len(msgs)-start)
 	copy(trimmed, msgs[start:])
-	trimmedCounts := make([]int, len(msgs)-start)
-	copy(trimmedCounts, sourceCounts[start:])
-	return trimmed, trimmedCounts, sumSourceCounts(sourceCounts[:start])
+	trimmedRanges := cloneSourceRanges(sourceRanges[start:])
+	return trimmed, trimmedRanges, sumCompactionRanges(flattenSourceRanges(sourceRanges[:start]))
 }
 
 type compactionProjection struct {
@@ -338,10 +394,7 @@ func (c *Coordinator) buildCompactionProjection(ctx context.Context, messages []
 // projection builder above is intentionally followed here by the existing
 // durable state, record, and metric commits.
 func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Message, sourceOffset int, sourceCounts []int) []fantasy.Message {
-	workspace := ""
-	if c.session != nil {
-		workspace = c.session.Workspace
-	}
+	workspace := c.sessionWorkspace()
 	var predecessor *StructuredSummary
 	if c.lastCompactionSummary != nil {
 		predecessor = cloneStructuredSummary(c.lastCompactionSummary)
@@ -353,26 +406,20 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 		return projection.messages
 	}
 
-	c.lastCompactionSummary = projection.summary
-
-	// Invariant 7: Persist compaction record with tokens_before, tokens_after, and source range
 	if workspace != "" {
-		rec := CompactionRecord{
-			ID:           fmt.Sprintf("compact_%d", time.Now().UnixNano()),
-			Timestamp:    time.Now(),
-			TokensBefore: projection.tokensBefore,
-			TokensAfter:  projection.tokensAfter,
-			SourceRange: CompactionRange{
-				StartIndex: projection.sourceOffset,
-				EndIndex:   projection.sourceOffset + projection.sourceCount - 1,
-				MsgCount:   projection.sourceCount,
-			},
-			Summary: *projection.summary,
+		checkpointCounts := []int{sumSourceCounts(sourceCounts)}
+		record, err := c.commitCompactionCheckpoint(ctx, projection.messages, sourceOffset, checkpointCounts, sourceCounts, projection)
+		if err != nil && record.ID == "" {
+			log.Printf("warning: failed to save compaction record before canonical commit: %v", err)
+			return messages
 		}
-		if err := c.SessionStore().SaveCompactionRecord(workspace, rec); err != nil {
-			log.Printf("warning: failed to save compaction record: %v", err)
+		if err != nil {
+			log.Printf("warning: durable compaction projection gap after canonical commit: %v", err)
 		}
+		c.lastCompactionSummary = cloneStructuredSummary(projection.summary)
 		c.recordCompaction()
+	} else {
+		c.lastCompactionSummary = cloneStructuredSummary(projection.summary)
 	}
 
 	if c.think {
@@ -498,7 +545,9 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 		c.conversationHistoryMu.Lock()
 		c.conversationHistory = nil
 		c.conversationHistorySourceCounts = nil
+		c.conversationHistorySourceRanges = nil
 		c.conversationHistorySourceOffset = 0
+		c.conversationHistoryNextSourceIndex = 0
 		c.conversationHistoryMu.Unlock()
 	}
 
@@ -513,9 +562,12 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 		c.baseRounds = 0
 	}
 	c.applyLiveTaskProjection(sd.Tasks)
-	if !prof.DisableHistoricalMemory {
+	if !prof.DisableHistoricalMemory && c.compactionState == nil && c.compactionRecoveryError() == nil {
 		c.hydrateConversationHistoryFromSessionData()
 	}
+	// Canonical compaction state is restored only after initEventStore has
+	// reconciled its branch-bound attestation. Until then session.json is not a
+	// safe source for provider-visible coordinator history.
 }
 
 // SetFreshSession marks the next execution as a new session rather than a
@@ -535,10 +587,14 @@ func (c *Coordinator) SetFreshSession(v bool) {
 		c.conversationHistoryMu.Lock()
 		c.conversationHistory = nil
 		c.conversationHistorySourceCounts = nil
+		c.conversationHistorySourceRanges = nil
 		c.conversationHistorySourceOffset = 0
+		c.conversationHistoryNextSourceIndex = 0
 		if c.sessionData != nil {
 			c.sessionData.ConversationHistorySourceCounts = nil
+			c.sessionData.ConversationHistorySourceRanges = nil
 			c.sessionData.ConversationHistorySourceOffset = 0
+			c.sessionData.ConversationHistoryNextSourceIndex = 0
 		}
 		c.conversationHistoryMu.Unlock()
 	}
@@ -659,17 +715,15 @@ func (c *Coordinator) hydrateConversationHistoryFromSessionData() {
 		return
 	}
 
-	if len(c.sessionData.ConversationHistorySourceCounts) > 0 {
-		c.conversationHistorySourceCounts = normalizeSourceCounts(len(c.conversationHistory), c.sessionData.ConversationHistorySourceCounts)
-	} else if len(c.conversationHistorySourceCounts) != len(c.conversationHistory) {
-		c.conversationHistorySourceCounts = make([]int, len(c.conversationHistory))
-		for i := range c.conversationHistorySourceCounts {
-			c.conversationHistorySourceCounts[i] = 1
-		}
-	}
+	c.conversationHistorySourceRanges = historySourceRanges(len(c.conversationHistory), c.sessionData.ConversationHistorySourceOffset, c.sessionData.ConversationHistorySourceCounts, c.sessionData.ConversationHistorySourceRanges)
+	c.conversationHistorySourceCounts = sourceCountsForRanges(c.conversationHistorySourceRanges)
 
 	if c.sessionData.ConversationHistorySourceOffset > 0 || len(c.conversationHistorySourceCounts) > 0 {
 		c.conversationHistorySourceOffset = c.sessionData.ConversationHistorySourceOffset
+	}
+	c.conversationHistoryNextSourceIndex = c.sessionData.ConversationHistoryNextSourceIndex
+	if c.conversationHistoryNextSourceIndex < maxSourceIndex(c.conversationHistorySourceRanges) {
+		c.conversationHistoryNextSourceIndex = maxSourceIndex(c.conversationHistorySourceRanges)
 	}
 	if c.conversationHistorySourceOffset < 0 {
 		c.conversationHistorySourceOffset = 0
@@ -682,6 +736,8 @@ func (c *Coordinator) syncConversationHistoryStateToSessionData() {
 	}
 	_ = c.mutateSessionData(func(sd *SessionData) error {
 		sd.ConversationHistorySourceOffset = c.conversationHistorySourceOffset
+		sd.ConversationHistorySourceRanges = cloneSourceRanges(c.conversationHistorySourceRanges)
+		sd.ConversationHistoryNextSourceIndex = c.conversationHistoryNextSourceIndex
 		if len(c.conversationHistorySourceCounts) == 0 {
 			sd.ConversationHistorySourceCounts = nil
 		} else {

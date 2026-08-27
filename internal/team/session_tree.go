@@ -398,6 +398,16 @@ func (st *SessionTree) RenderTree(es *EventStore) string {
 	return b.String()
 }
 
+// effectiveEventBranchID returns the branch an event belongs to for lineage
+// and provenance decisions. Events written before branch tagging belong to
+// main; an empty event branch is never a wildcard for the active branch.
+func effectiveEventBranchID(event RunEvent) string {
+	if event.BranchID == "" {
+		return "main"
+	}
+	return event.BranchID
+}
+
 // FilterEventsForBranch returns only events in targetBranch's lineage.
 func FilterEventsForBranch(events []RunEvent, st *SessionTree, targetBranchID string) []RunEvent {
 	if len(events) == 0 {
@@ -441,10 +451,7 @@ func FilterEventsForBranch(events []RunEvent, st *SessionTree, targetBranchID st
 
 	var filtered []RunEvent
 	for i, e := range events {
-		bid := e.BranchID
-		if bid == "" {
-			bid = "main"
-		}
+		bid := effectiveEventBranchID(e)
 
 		if !inLineage[bid] {
 			continue
@@ -803,8 +810,20 @@ func SnapshotBranchState(workspace string, st *SessionTree, branchID string) {
 		}
 		b.State.TaskPlan = plan
 	}
-	if summary := GetLatestCompactionSummary(workspace); summary != nil {
-		b.State.Compaction = cloneStructuredSummary(summary)
+	if state, exists, err := LoadConversationCompactionState(workspace); exists && err == nil {
+		if checkpoint, ok := state.Branches[branchID]; ok {
+			if generation, generationOK := state.Generations[checkpoint.GenerationID]; generationOK {
+				b.State.Compaction = cloneStructuredSummary(&generation.Summary)
+			}
+		} else {
+			// The branch may predate the first compaction. Clear the copied
+			// parent projection instead of leaving stale future summary state.
+			b.State.Compaction = nil
+		}
+	} else if !exists {
+		if summary := GetLatestCompactionSummary(workspace); summary != nil {
+			b.State.Compaction = cloneStructuredSummary(summary)
+		}
 	}
 }
 

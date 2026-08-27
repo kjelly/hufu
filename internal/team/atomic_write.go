@@ -57,7 +57,9 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("atomic write rename: %w", err)
 	}
 
-	_ = SyncDir(dir)
+	if err := SyncDir(dir); err != nil {
+		return fmt.Errorf("atomic write sync directory: %w", err)
+	}
 	return nil
 }
 
@@ -96,6 +98,8 @@ func AtomicCreateFile(path string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("atomic create publish: %w", err)
 	}
 	cleanup()
-	_ = SyncDir(dir)
+	if err := SyncDir(dir); err != nil {
+		return fmt.Errorf("atomic create sync directory: %w", err)
+	}
 	return nil
 }

@@ -147,6 +147,13 @@ func (c *Coordinator) initEventStore() {
 	es.SetBranchID(activeBranch)
 	c.eventStore = es
 	c.SetEventJournal(eventStoreJournal{store: es})
+	// Reconcile and validate the canonical event binding before publishing any
+	// restored history to the coordinator/provider path.
+	if compactionErr := c.reconcileCompactionState(context.Background(), activeBranch); compactionErr != nil {
+		c.markCompactionRecovery(compactionErr)
+	} else if compactionErr := c.restoreCanonicalCompactionForBranch(activeBranch); compactionErr != nil {
+		c.markCompactionRecovery(compactionErr)
+	}
 	pending, reconciled := c.reconcilePendingTerminalCommit(st, activeBranch)
 	if pending && !reconciled {
 		// A pending terminal append is an admission barrier. Do not let the
@@ -310,7 +317,9 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 			c.conversationHistoryMu.Lock()
 			c.conversationHistory = nil
 			c.conversationHistorySourceCounts = nil
+			c.conversationHistorySourceRanges = nil
 			c.conversationHistorySourceOffset = 0
+			c.conversationHistoryNextSourceIndex = 0
 			c.conversationHistoryMu.Unlock()
 		}
 		_ = c.persistSession("persist rebuilt canonical projection")
@@ -348,7 +357,9 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 			c.conversationHistoryMu.Lock()
 			c.conversationHistory = nil
 			c.conversationHistorySourceCounts = nil
+			c.conversationHistorySourceRanges = nil
 			c.conversationHistorySourceOffset = 0
+			c.conversationHistoryNextSourceIndex = 0
 			c.conversationHistoryMu.Unlock()
 		}
 		_ = c.persistSession("persist repaired canonical projection")

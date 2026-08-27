@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -69,12 +70,19 @@ type CompactionRange struct {
 
 // CompactionRecord represents a persisted compaction event with token usage and range metadata.
 type CompactionRecord struct {
-	ID           string            `json:"id"`
-	Timestamp    time.Time         `json:"timestamp"`
-	TokensBefore int               `json:"tokens_before"`
-	TokensAfter  int               `json:"tokens_after"`
-	SourceRange  CompactionRange   `json:"source_range"`
-	Summary      StructuredSummary `json:"summary"`
+	ID                string            `json:"id"`
+	Timestamp         time.Time         `json:"timestamp"`
+	TokensBefore      int               `json:"tokens_before"`
+	TokensAfter       int               `json:"tokens_after"`
+	SourceRange       CompactionRange   `json:"source_range"`
+	SourceRanges      []CompactionRange `json:"source_ranges,omitempty"`
+	GenerationID      string            `json:"generation_id,omitempty"`
+	PredecessorID     string            `json:"predecessor_id,omitempty"`
+	BranchID          string            `json:"branch_id,omitempty"`
+	ModelID           string            `json:"model_id,omitempty"`
+	SummaryDigest     string            `json:"summary_digest,omitempty"`
+	ReplacementDigest string            `json:"replacement_digest,omitempty"`
+	Summary           StructuredSummary `json:"summary"`
 }
 
 // SidecarCompacter interface abstracts the LLM sidecar compact operation without creating package import cycles.
@@ -1029,9 +1037,53 @@ func SaveCompactionRecord(workspace string, record CompactionRecord) error {
 	if workspace == "" {
 		return nil
 	}
-	history, _ := LoadCompactionHistory(workspace)
-	history = append(history, record)
+	// Once canonical state exists this file is only a compatibility projection;
+	// never use it as an input to the canonical owner.
+	if _, exists, err := LoadConversationCompactionState(workspace); exists {
+		if err != nil {
+			return err
+		}
+		return saveLegacyCompactionRecord(workspace, record)
+	}
+	history, err := loadLegacyCompactionHistory(workspace)
+	if err != nil {
+		return err
+	}
+	return saveLegacyCompactionHistory(workspace, append(history, record))
+}
 
+func (c *Coordinator) saveLegacyCompactionProjection(workspace string, record CompactionRecord) error {
+	return saveLegacyCompactionRecord(workspace, record)
+}
+
+func saveLegacyCompactionRecord(workspace string, record CompactionRecord) error {
+	history, err := loadLegacyCompactionHistory(workspace)
+	if err != nil {
+		return err
+	}
+	return saveLegacyCompactionHistory(workspace, append(history, record))
+}
+
+func loadLegacyCompactionHistory(workspace string) ([]CompactionRecord, error) {
+	if workspace == "" {
+		return nil, nil
+	}
+	path := filepath.Join(workspace, CompactionHistoryFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var history []CompactionRecord
+	if err := json.Unmarshal(data, &history); err != nil {
+		return nil, fmt.Errorf("unmarshal compaction history: %w", err)
+	}
+	return history, nil
+}
+
+func saveLegacyCompactionHistory(workspace string, history []CompactionRecord) error {
 	data, err := json.MarshalIndent(history, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal compaction history: %w", err)
@@ -1049,20 +1101,40 @@ func LoadCompactionHistory(workspace string) ([]CompactionRecord, error) {
 	if workspace == "" {
 		return nil, nil
 	}
-	path := filepath.Join(workspace, CompactionHistoryFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+	if state, exists, err := LoadConversationCompactionState(workspace); exists {
+		if err != nil {
+			return nil, err
 		}
-		return nil, err
+		ids := sortedGenerationIDs(state, "")
+		for id, generation := range state.Generations {
+			if generation.BranchID == "" {
+				continue
+			}
+			if !containsGenerationID(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+		// The compatibility API has no active-branch argument. Return all
+		// validated generations in deterministic creation order.
+		sort.Slice(ids, func(i, j int) bool {
+			return state.Generations[ids[i]].CreatedAt.Before(state.Generations[ids[j]].CreatedAt)
+		})
+		history := make([]CompactionRecord, 0, len(ids))
+		for _, id := range ids {
+			history = append(history, compactionRecordFromGeneration(state.Generations[id]))
+		}
+		return history, nil
 	}
+	return loadLegacyCompactionHistory(workspace)
+}
 
-	var history []CompactionRecord
-	if err := json.Unmarshal(data, &history); err != nil {
-		return nil, fmt.Errorf("unmarshal compaction history: %w", err)
+func containsGenerationID(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
 	}
-	return history, nil
+	return false
 }
 
 // GetLatestCompactionSummary loads the most recent StructuredSummary from workspace history.

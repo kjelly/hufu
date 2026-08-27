@@ -946,6 +946,9 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	c.metricsMu.Lock()
 	c.turnsSinceCriterionProgress++
 	c.metricsMu.Unlock()
+	if err := c.compactionRecoveryError(); err != nil {
+		return "", nil, err
+	}
 	if c.runOrchestratorOverride != nil {
 		return c.runOrchestratorOverride(ctx, orchDef, prompt)
 	}

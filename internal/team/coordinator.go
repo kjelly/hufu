@@ -311,14 +311,22 @@ type Coordinator struct {
 	// this lock their read-modify-write plus json.Marshal in SaveSession races.
 	// It is distinct from c.mu: c.mu also guards sub-service pointers and is
 	// reentered via SessionStore(), so it cannot be held across SaveSession.
-	sessionMu                         sync.RWMutex
-	taskTracker                       *TaskTracker
-	skills                            []*skill.SkillDef
-	conversationHistory               []fantasy.Message
-	conversationHistorySourceCounts   []int
-	conversationHistoryMu             sync.Mutex
-	conversationHistorySourceOffset   int
-	lastCompactionSummary             *StructuredSummary
+	sessionMu                          sync.RWMutex
+	taskTracker                        *TaskTracker
+	skills                             []*skill.SkillDef
+	conversationHistory                []fantasy.Message
+	conversationHistorySourceCounts    []int
+	conversationHistorySourceRanges    [][]CompactionRange
+	conversationHistoryMu              sync.Mutex
+	conversationHistorySourceOffset    int
+	conversationHistoryNextSourceIndex int
+	lastCompactionSummary              *StructuredSummary
+	// compactionState is the validated durable conversation owner. The legacy
+	// history files and SessionTree branch summary are projections only.
+	compactionMu                      sync.Mutex
+	compactionState                   *ConversationCompactionState
+	compactionBranchID                string
+	compactionRecoveryErr             error
 	initialPrompt                     string
 	coordinatorProtocolRepairsAttempt atomic.Int32
 	coordinatorProtocolRepairsSuccess atomic.Int32
@@ -1301,17 +1309,22 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	}
 	tools.SetPathReviewer(c.coreTools, pathReviewer)
 
-	if !planMode {
+	canonicalCompaction := initializeCoordinatorCompaction(c, session)
+	if !planMode && !canonicalCompaction {
 		if history := LoadConversationHistory(session.Workspace); len(history) > 0 {
 			c.conversationHistory = history
-			c.conversationHistorySourceCounts = make([]int, len(history))
-			for i := range c.conversationHistorySourceCounts {
-				c.conversationHistorySourceCounts[i] = 1
-			}
+			c.conversationHistorySourceRanges = historySourceRanges(len(history), 0, nil, nil)
+			c.conversationHistorySourceCounts = sourceCountsForRanges(c.conversationHistorySourceRanges)
+			c.conversationHistoryNextSourceIndex = maxSourceIndex(c.conversationHistorySourceRanges)
 
 			if persisted := LoadSession(session.Workspace); persisted != nil {
-				c.conversationHistorySourceCounts = normalizeSourceCounts(len(history), persisted.ConversationHistorySourceCounts)
+				c.conversationHistorySourceRanges = historySourceRanges(len(history), persisted.ConversationHistorySourceOffset, persisted.ConversationHistorySourceCounts, persisted.ConversationHistorySourceRanges)
+				c.conversationHistorySourceCounts = sourceCountsForRanges(c.conversationHistorySourceRanges)
 				c.conversationHistorySourceOffset = persisted.ConversationHistorySourceOffset
+				c.conversationHistoryNextSourceIndex = persisted.ConversationHistoryNextSourceIndex
+				if c.conversationHistoryNextSourceIndex < maxSourceIndex(c.conversationHistorySourceRanges) {
+					c.conversationHistoryNextSourceIndex = maxSourceIndex(c.conversationHistorySourceRanges)
+				}
 				if c.conversationHistorySourceOffset < 0 {
 					c.conversationHistorySourceOffset = 0
 				}
@@ -1334,6 +1347,38 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	}
 
 	return c, nil
+}
+
+// initializeCoordinatorCompaction loads the canonical coordinator history and
+// performs the one-way legacy promotion before NewCoordinator considers the
+// compatibility projections. Keeping this recovery branch outside the large
+// constructor preserves the same state machine while keeping construction
+// reviewable and below the complexity lint threshold.
+func initializeCoordinatorCompaction(c *Coordinator, session *TeamSession) bool {
+	canonicalCompaction := false
+	if state, exists, stateErr := LoadConversationCompactionState(session.Workspace); exists {
+		canonicalCompaction = true
+		c.compactionState = state
+		if stateErr != nil {
+			c.compactionRecoveryErr = stateErr
+		}
+	}
+	if !canonicalCompaction {
+		branchID := "main"
+		if tree, treeErr := LoadSessionTree(session.Workspace); treeErr == nil && tree.ActiveBranch != "" {
+			branchID = tree.ActiveBranch
+		}
+		if migrateErr := MigrateLegacyCompactionState(session.Workspace, branchID); migrateErr != nil {
+			c.compactionRecoveryErr = migrateErr
+			// A failed promotion is fail-closed. Do not fall back to the legacy
+			// projections after migration has rejected their provenance.
+			canonicalCompaction = true
+		} else if state, migrated, loadErr := LoadConversationCompactionState(session.Workspace); migrated && loadErr == nil {
+			canonicalCompaction = true
+			c.compactionState = state
+		}
+	}
+	return canonicalCompaction
 }
 
 func registerProviderSecrets(registry *tools.SecretRegistry, session *TeamSession, defaultKey string) {
@@ -1373,11 +1418,15 @@ func (c *Coordinator) ResetConversation() {
 	c.conversationHistoryMu.Lock()
 	c.conversationHistory = nil
 	c.conversationHistorySourceCounts = nil
+	c.conversationHistorySourceRanges = nil
 	c.conversationHistorySourceOffset = 0
+	c.conversationHistoryNextSourceIndex = 0
 	c.conversationHistoryMu.Unlock()
 	_ = c.mutateSessionData(func(sd *SessionData) error {
 		sd.ConversationHistorySourceCounts = nil
+		sd.ConversationHistorySourceRanges = nil
 		sd.ConversationHistorySourceOffset = 0
+		sd.ConversationHistoryNextSourceIndex = 0
 		return nil
 	})
 	_ = c.persistSession("persist reset conversation")

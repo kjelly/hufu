@@ -79,6 +79,34 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 					session.CoordinatorContextManifests = append(session.CoordinatorContextManifests, manifest)
 				}
 			}
+		case compactionGenerationEventType:
+			var reference CompactionReference
+			if err := json.Unmarshal(e.Payload, &reference); err == nil && reference.GenerationID != "" {
+				seen := false
+				for _, existing := range session.CompactionReferences {
+					if existing.GenerationID == reference.GenerationID {
+						seen = true
+						break
+					}
+				}
+				if !seen {
+					session.CompactionReferences = append(session.CompactionReferences, reference)
+				}
+			}
+		case compactionCheckpointEventType:
+			var reference CompactionCheckpointReference
+			if err := json.Unmarshal(e.Payload, &reference); err == nil && reference.CheckpointDigest != "" {
+				seen := false
+				for _, existing := range session.CompactionCheckpointReferences {
+					if existing == reference {
+						seen = true
+						break
+					}
+				}
+				if !seen {
+					session.CompactionCheckpointReferences = append(session.CompactionCheckpointReferences, reference)
+				}
+			}
 		case "user_message_added", "assistant_message_added":
 			var payload struct {
 				Role    string `json:"role"`

@@ -2,12 +2,38 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
 
 	"charm.land/fantasy"
 )
+
+// CannotFitError is emitted only before the provider boundary. ProvenNoSend
+// is intentionally explicit so callers cannot turn an arbitrary provider
+// overflow into a replay or model fallback.
+type CannotFitError struct {
+	ModelID       string
+	RequestTokens int
+	Available     int
+	ProvenNoSend  bool
+}
+
+func (e *CannotFitError) Error() string {
+	if e == nil {
+		return "context request cannot fit"
+	}
+	return fmt.Sprintf("context window admission cannot fit request for model %q: %d tokens exceeds available budget %d", e.ModelID, e.RequestTokens, e.Available)
+}
+
+func isProvenPreProviderCannotFit(err error) (*CannotFitError, bool) {
+	var fit *CannotFitError
+	if !errors.As(err, &fit) {
+		return nil, false
+	}
+	return fit, fit.ProvenNoSend
+}
 
 // ContextWindowDecision is the result of admitting one complete model request.
 type ContextWindowDecision string

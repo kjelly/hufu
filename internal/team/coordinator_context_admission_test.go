@@ -2,11 +2,18 @@ package team
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
 
 	"charm.land/fantasy"
+
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
 )
 
 type transientProjectionTestTool struct{}
@@ -194,6 +201,77 @@ func TestCoordinatorContextAdmissionUsesTransientProjectionWithRealFantasyAgent(
 	}
 	if !reflect.DeepEqual(gotRecords, priorRecords) {
 		t.Fatal("transient admission mutated durable compaction records")
+	}
+}
+
+func TestCoordinatorModelDownshiftSendsOnlyAfterEarlierModelAdmission(t *testing.T) {
+	strongID := "coordinator-downshift-strong"
+	weakID := "coordinator-downshift-weak"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID: strongID, ContextWindow: 256, MaxOutputTokens: 32, SafetyMarginTokens: 32,
+	})
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID: weakID, ContextWindow: 32_768, MaxOutputTokens: 32, SafetyMarginTokens: 32,
+	})
+
+	providerCalls := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("provider request = %s %s, want POST /v1/chat/completions", r.Method, r.URL.Path)
+		}
+		providerCalls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"downshift\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"weak\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"accepted\"},\"finish_reason\":null}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"downshift\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"weak\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("network listener unavailable in this environment: %v", err)
+	}
+	provider := httptest.NewUnstartedServer(handler)
+	provider.Listener = listener
+	provider.Start()
+	defer provider.Close()
+
+	providerManager, err := agent.NewProviderManager(provider.URL+"/v1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strongModel := &transientProjectionCaptureModel{modelID: strongID}
+	ag := fantasy.NewAgent(
+		strongModel,
+		fantasy.WithSystemPrompt("system"),
+		fantasy.WithMaxOutputTokens(32),
+		fantasy.WithMaxRetries(0),
+	)
+	history := make([]fantasy.Message, 0, 20)
+	for i := 0; i < 20; i++ {
+		history = append(history, fantasy.NewUserMessage(fmt.Sprintf("historical message %d %s", i, strings.Repeat("evidence ", 100))))
+	}
+	c := &Coordinator{
+		providerManager: providerManager,
+		modelList:       []config.ModelEntry{{ID: weakID}, {ID: strongID}},
+		session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{
+			Generation: agent.GenerationParams{Model: strongID},
+		}},
+		taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {},
+	}
+	preflight := newCoordinatorRequestPreflight(strongID, "incoming", "system", nil)
+	ctx := context.WithValue(context.Background(), modelKey{}, strongID)
+	ctx = withCoordinatorRequestPreflight(ctx, preflight)
+	result, _, err := c.runAgentWithStatusAndHistory(ctx, ag, "coordinator", "incoming", history, &taskTiming{})
+	if err != nil {
+		t.Fatalf("downshifted coordinator run error = %v", err)
+	}
+	if result != "accepted" {
+		t.Fatalf("downshifted coordinator result = %q, want accepted", result)
+	}
+	if len(strongModel.calls) != 0 {
+		t.Fatalf("strong model calls = %d, want 0 after pre-provider CannotFit", len(strongModel.calls))
+	}
+	if providerCalls != 1 {
+		t.Fatalf("provider calls = %d, want exactly one weak-model request", providerCalls)
 	}
 }
 
