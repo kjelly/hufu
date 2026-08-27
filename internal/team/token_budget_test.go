@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -274,20 +275,20 @@ func TestRunAgentProviderErrorReleasesOutstandingAdmission(t *testing.T) {
 	}
 }
 
-func TestRunAgentContextOverflowRetrySettlesOnlyRetryUsage(t *testing.T) {
+func TestRunAgentContextOverflowDoesNotReplayAndReleasesReservation(t *testing.T) {
 	c := newTokenBudgetRunCoordinator(t, 10000)
 	calls := 0
-	if _, _, err := c.runAgentWithStatusAndHistory(context.Background(), tokenBudgetLifecycleAgent{mode: "overflow", calls: &calls}, "worker", "prompt", nil, &taskTiming{}); err != nil {
-		t.Fatal(err)
+	if _, _, err := c.runAgentWithStatusAndHistory(context.Background(), tokenBudgetLifecycleAgent{mode: "overflow", calls: &calls}, "worker", "prompt", nil, &taskTiming{}); err == nil || !strings.Contains(err.Error(), "context length exceeded") {
+		t.Fatalf("context overflow error = %v, want provider overflow", err)
 	}
-	if calls != 2 {
-		t.Fatalf("context overflow calls = %d, want 2", calls)
+	if calls != 1 {
+		t.Fatalf("context overflow calls = %d, want 1 without replay", calls)
 	}
-	if got := c.TokensUsed(); got != 11 {
-		t.Fatalf("context overflow retry charged %d tokens, want 11", got)
+	if got := c.TokensUsed(); got != 0 {
+		t.Fatalf("context overflow charged %d tokens without provider usage, want 0", got)
 	}
 	if c.tokenReservations != 0 {
-		t.Fatalf("context overflow retry left %d reserved tokens", c.tokenReservations)
+		t.Fatalf("context overflow left %d reserved tokens", c.tokenReservations)
 	}
 }
 

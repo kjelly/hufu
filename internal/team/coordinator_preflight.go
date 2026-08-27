@@ -26,7 +26,7 @@ type coordinatorRequestPreflight struct {
 }
 
 func newCoordinatorRequestPreflight(modelID, userPrompt, system string, tools []fantasy.AgentTool) *coordinatorRequestPreflight {
-	if strings.TrimSpace(modelID) == "" || strings.TrimSpace(system) == "" {
+	if strings.TrimSpace(modelID) == "" {
 		return nil
 	}
 	return &coordinatorRequestPreflight{
@@ -51,6 +51,24 @@ func coordinatorRequestPreflightFromContext(ctx context.Context) *coordinatorReq
 	}
 	preflight, _ := ctx.Value(coordinatorPreflightContextKey{}).(*coordinatorRequestPreflight)
 	return preflight
+}
+
+func (p *coordinatorRequestPreflight) configuration() (string, []fantasy.AgentTool) {
+	if p == nil {
+		return "", nil
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.fullSystem, append([]fantasy.AgentTool(nil), p.fullTools...)
+}
+
+func (p *coordinatorRequestPreflight) windowValue() int {
+	if p == nil {
+		return 0
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.window
 }
 
 // observeWindow applies a provider-reported runtime limit to this request.
@@ -93,7 +111,11 @@ func (p *coordinatorRequestPreflight) prepare(ctx context.Context, stepMessages 
 	spec.ContextWindow = window
 	budget := CalculateContextBudget(spec, 0, 0).Available
 	if budget <= 0 {
-		return "", nil, false, fmt.Errorf("coordinator context preflight has no available input budget for model %q (context window %d)", modelID, window)
+		// ContextWindowManager is the owner of the final decision. Return the
+		// unmodified configuration as a candidate so an impossible request is
+		// reported as CannotFit there, rather than as a preflight projection
+		// error that hides the admission result.
+		return fullSystem, fullTools, false, nil
 	}
 
 	fullTokens := requestContextTokens(ctx, modelID, fullSystem, userPrompt, stepMessages, fullTools)
@@ -137,10 +159,6 @@ func (p *coordinatorRequestPreflight) prepare(ctx context.Context, stepMessages 
 		}
 	}
 
-	finalTokens := requestContextTokens(ctx, modelID, system, userPrompt, stepMessages, tools)
-	if finalTokens > budget {
-		return "", nil, false, fmt.Errorf("coordinator context preflight cannot fit request for model %q: %d tokens exceeds safe budget %d (window %d)", modelID, finalTokens, budget, window)
-	}
 	return system, tools, true, nil
 }
 
@@ -151,11 +169,13 @@ func requestContextTokens(ctx context.Context, modelID, system, prompt string, m
 	// with the preflight overrides instead of counting them a second time. The
 	// nil/partial-message case remains supported for focused unit tests and
 	// callers that provide only conversation history.
-	if systemMessage, ok := firstMessageWithRole(messages, fantasy.MessageRoleSystem); ok {
-		messageTokens -= countSingleMessage(ctx, modelID, systemMessage)
-		messageTokens += countSingleMessage(ctx, modelID, fantasy.NewSystemMessage(system))
-	} else {
-		messageTokens += countSingleMessage(ctx, modelID, fantasy.NewSystemMessage(system))
+	if system != "" {
+		if systemMessage, ok := firstMessageWithRole(messages, fantasy.MessageRoleSystem); ok {
+			messageTokens -= countSingleMessage(ctx, modelID, systemMessage)
+			messageTokens += countSingleMessage(ctx, modelID, fantasy.NewSystemMessage(system))
+		} else {
+			messageTokens += countSingleMessage(ctx, modelID, fantasy.NewSystemMessage(system))
+		}
 	}
 	if !hasExactUserMessage(messages, prompt) {
 		messageTokens += countSingleMessage(ctx, modelID, fantasy.NewUserMessage(prompt))

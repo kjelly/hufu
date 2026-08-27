@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -2813,6 +2814,18 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	tp := &ThinkParser{}
 	textRepetitionDetector := NewStreamRepetitionDetector()
 	reasoningRepetitionDetector := NewStreamRepetitionDetector()
+	streamPreflight := coordinatorRequestPreflightFromContext(ctx)
+	var contextManager *ContextWindowManager
+	if streamPreflight != nil {
+		contextManager = NewContextWindowManagerWithPredecessor(defaultCounter, func(compactCtx context.Context, messages []fantasy.Message, predecessor *StructuredSummary) ([]fantasy.Message, *StructuredSummary, error) {
+			counts := make([]int, len(messages))
+			for i := range counts {
+				counts[i] = 1
+			}
+			projection := c.buildTransientCompactionProjection(compactCtx, messages, 0, counts, predecessor)
+			return projection.messages, projection.summary, nil
+		})
+	}
 
 	stopWhen := append([]fantasy.StopCondition(nil), extraStop...)
 	stopWhen = append(stopWhen, func([]fantasy.StepResult) bool {
@@ -2873,23 +2886,77 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				pendingRecovery = ""
 			}
 			recoveryMu.Unlock()
-			opts.Messages = preparedMessages
-			messagesCapped := false
-			if capped := CapStepMessagesWithCounter(ctx, defaultCounter, modelID, opts.Messages, budget.Available); capped != nil {
-				opts.Messages = capped
-				preparedMessages = capped
-				messagesCapped = true
-			}
 			var preflightSystem string
 			var preflightTools []fantasy.AgentTool
 			preflightApplied := false
-			if preflight := coordinatorRequestPreflightFromContext(ctx); preflight != nil {
+			contextChanged := false
+			if contextManager != nil {
+				fullSystem, fullTools := streamPreflight.configuration()
+				admission, admissionErr := contextManager.Admit(ctx, ContextWindowRequest{
+					ModelID:              modelID,
+					System:               fullSystem,
+					Tools:                fullTools,
+					Messages:             preparedMessages,
+					Prompt:               prompt,
+					Window:               streamPreflight.windowValue(),
+					ReservedOutputTokens: spec.MaxOutputTokens,
+					SafetyMarginTokens:   spec.SafetyMarginTokens,
+					StepNumber:           opts.StepNumber,
+				})
+				if admissionErr != nil {
+					return ctx, fantasy.PrepareStepResult{}, admissionErr
+				}
+				if admission.Candidate != nil {
+					// A compacted candidate is explicitly typed by the admission
+					// owner. It is not yet provider-safe, but it is the only
+					// history that preflight may use to calculate optional tool
+					// projection. Prompt-only CannotFit has no candidate and keeps
+					// the original opts.Messages unchanged.
+					preparedMessages = admission.Candidate.Messages
+				} else if admission.Decision != ContextWindowCannotFit {
+					preparedMessages = admission.Messages
+				}
+				contextChanged = !reflect.DeepEqual(preparedMessages, opts.Messages)
+
 				var preflightErr error
-				preflightSystem, preflightTools, preflightApplied, preflightErr = preflight.prepare(ctx, preparedMessages, prompt, spec.MaxOutputTokens, opts.StepNumber)
+				preflightSystem, preflightTools, preflightApplied, preflightErr = streamPreflight.prepare(ctx, preparedMessages, prompt, spec.MaxOutputTokens, opts.StepNumber)
 				if preflightErr != nil {
 					return ctx, fantasy.PrepareStepResult{}, preflightErr
 				}
+				requestSystem, requestTools := fullSystem, fullTools
+				if preflightApplied {
+					requestSystem, requestTools = preflightSystem, preflightTools
+				}
+				finalAdmission, finalErr := contextManager.Admit(ctx, ContextWindowRequest{
+					ModelID:              modelID,
+					System:               requestSystem,
+					Tools:                requestTools,
+					Messages:             preparedMessages,
+					Prompt:               prompt,
+					Window:               streamPreflight.windowValue(),
+					ReservedOutputTokens: spec.MaxOutputTokens,
+					SafetyMarginTokens:   spec.SafetyMarginTokens,
+					StepNumber:           opts.StepNumber,
+				})
+				if finalErr != nil {
+					return ctx, fantasy.PrepareStepResult{}, finalErr
+				}
+				if finalAdmission.Decision == ContextWindowCannotFit {
+					return ctx, fantasy.PrepareStepResult{}, fmt.Errorf("coordinator context window admission cannot fit request for model %q: %d tokens exceeds available budget %d", modelID, finalAdmission.RequestTokens, finalAdmission.Budget.Available)
+				}
+				preparedMessages = finalAdmission.Messages
+				contextChanged = contextChanged || !reflect.DeepEqual(preparedMessages, opts.Messages)
+			} else {
+				capResult := CapStepMessagesWithCounterResult(ctx, defaultCounter, modelID, preparedMessages, budget.Available)
+				if capResult.StillOverBudget {
+					return ctx, fantasy.PrepareStepResult{}, fmt.Errorf("step context window admission cannot fit request for model %q", modelID)
+				}
+				if capResult.Changed {
+					preparedMessages = capResult.Messages
+					contextChanged = true
+				}
 			}
+			opts.Messages = preparedMessages
 			if attemptTokens != nil {
 				if err := attemptTokens.reserveContext(estimateStepRequestTokens(preparedMessages, prompt)); err != nil {
 					return ctx, fantasy.PrepareStepResult{}, err
@@ -2915,7 +2982,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			llmLogMu.Lock()
 			loggedMsgs, lastReqBytes = llmLogRequest(logWrite, opts, preparedMessages, loggedMsgs)
 			llmLogMu.Unlock()
-			if messagesCapped || terminalOnly || stepBudgetCheckpoint != "" || preflightApplied {
+			if contextChanged || terminalOnly || stepBudgetCheckpoint != "" || preflightApplied {
 				result := fantasy.PrepareStepResult{Messages: preparedMessages}
 				if preflightApplied {
 					result.System = &preflightSystem
@@ -3387,21 +3454,21 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	}
 
 	result, err := runStream(streamCall)
-	if err != nil && IsContextOverflowError(err) {
-		reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage("context overflow detected; triggering emergency history compaction and retrying step"))
+	if IsContextOverflowError(err) {
 		modelID, _ := ctx.Value(modelKey{}).(string)
 		if observedWindow, ok := ParseObservedContextWindow(err); ok {
 			GlobalModelSpecRegistry().RegisterObservedContextWindow(modelID, observedWindow)
 			if preflight := coordinatorRequestPreflightFromContext(ctx); preflight != nil {
 				preflight.observeWindow(observedWindow)
 			}
-			reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage(fmt.Sprintf("provider reported effective context window %d; coordinator request will be reshaped before retry", observedWindow)))
+			reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage(fmt.Sprintf("provider reported effective context window %d; future coordinator requests will use it for admission", observedWindow)))
 		}
-		if capped := CapStepMessagesWithCounter(ctx, defaultCounter, modelID, streamCall.Messages, 15000); capped != nil {
-			streamCall.Messages = capped
-		}
-		result, err = runStream(streamCall)
 	}
+	// A context overflow after Stream starts is terminal for this invocation.
+	// The stream may already have emitted and executed a tool call, so replaying
+	// the whole stream would duplicate an external side effect. Admission above
+	// is the only repair boundary; provider feedback is recorded by the caller's
+	// normal failure path and is never used to replay this stream.
 	// A task that requires a result but stopped without a tool call has
 	// stalled, not finished: Fantasy's loop correctly ends a turn once a step
 	// requests no tools, but Hufu's protocol for this task still needs either

@@ -11,6 +11,7 @@ package team
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"charm.land/fantasy"
@@ -158,10 +159,21 @@ func squeezeMessage(msg fantasy.Message, capChars int) (fantasy.Message, bool) {
 	return msg, true
 }
 
-// CapStepMessagesWithCounter shapes messages using a TokenCounter and model context token budget.
-func CapStepMessagesWithCounter(ctx context.Context, counter TokenCounter, modelID string, msgs []fantasy.Message, maxTokens int) []fantasy.Message {
+// StepMessageCapResult makes the shaping outcome explicit. In particular,
+// callers must not mistake a non-nil shaped slice for proof that the request
+// fits: protected recent messages can keep the result over budget.
+type StepMessageCapResult struct {
+	Messages        []fantasy.Message
+	Changed         bool
+	StillOverBudget bool
+	Tokens          int
+}
+
+// CapStepMessagesWithCounterResult shapes messages and performs a final full
+// recount. It never claims success when the final count is still over budget.
+func CapStepMessagesWithCounterResult(ctx context.Context, counter TokenCounter, modelID string, msgs []fantasy.Message, maxTokens int) StepMessageCapResult {
 	if len(msgs) == 0 {
-		return nil
+		return StepMessageCapResult{}
 	}
 	if counter == nil {
 		counter = defaultCounter
@@ -176,15 +188,18 @@ func CapStepMessagesWithCounter(ctx context.Context, counter TokenCounter, model
 	}
 
 	totalTokens, err := counter.CountMessages(ctx, modelID, msgs)
-	if err != nil || totalTokens <= maxTokens {
-		return nil
+	if err != nil {
+		return StepMessageCapResult{StillOverBudget: true}
+	}
+	if totalTokens <= maxTokens {
+		return StepMessageCapResult{Tokens: totalTokens}
 	}
 
 	out := make([]fantasy.Message, len(msgs))
 	copy(out, msgs)
 	protectFrom := len(out) - recentMessagesProtected
 
-	// First pass: squeeze oversized parts to squeezedPartCapChars
+	// First pass: squeeze oversized parts to squeezedPartCapChars.
 	for i := headMessagesProtected; i < len(out) && totalTokens > maxTokens; i++ {
 		if i >= protectFrom {
 			break
@@ -192,15 +207,21 @@ func CapStepMessagesWithCounter(ctx context.Context, counter TokenCounter, model
 		if isVerifiedHistoryMessage(out[i]) {
 			continue
 		}
-		before, _ := counter.CountMessages(ctx, modelID, []fantasy.Message{out[i]})
+		before, beforeErr := counter.CountMessages(ctx, modelID, []fantasy.Message{out[i]})
+		if beforeErr != nil {
+			return StepMessageCapResult{Messages: out, Changed: !reflect.DeepEqual(out, msgs), StillOverBudget: true}
+		}
 		if squeezed, changed := squeezeMessage(out[i], squeezedPartCapChars); changed {
 			out[i] = squeezed
-			after, _ := counter.CountMessages(ctx, modelID, []fantasy.Message{out[i]})
+			after, afterErr := counter.CountMessages(ctx, modelID, []fantasy.Message{out[i]})
+			if afterErr != nil {
+				return StepMessageCapResult{Messages: out, Changed: true, StillOverBudget: true}
+			}
 			totalTokens += after - before
 		}
 	}
 
-	// Second pass: if still over budget, aggressively shrink older non-protected messages
+	// Second pass: aggressively shrink older non-protected messages.
 	capChars := squeezedPartCapChars / 2
 	for i := headMessagesProtected; i < len(out) && totalTokens > maxTokens && capChars >= 100; i++ {
 		if i >= protectFrom {
@@ -209,15 +230,39 @@ func CapStepMessagesWithCounter(ctx context.Context, counter TokenCounter, model
 		if isVerifiedHistoryMessage(out[i]) {
 			continue
 		}
-		before, _ := counter.CountMessages(ctx, modelID, []fantasy.Message{out[i]})
+		before, beforeErr := counter.CountMessages(ctx, modelID, []fantasy.Message{out[i]})
+		if beforeErr != nil {
+			return StepMessageCapResult{Messages: out, Changed: !reflect.DeepEqual(out, msgs), StillOverBudget: true}
+		}
 		if squeezed, changed := squeezeMessage(out[i], capChars); changed {
 			out[i] = squeezed
-			after, _ := counter.CountMessages(ctx, modelID, []fantasy.Message{out[i]})
+			after, afterErr := counter.CountMessages(ctx, modelID, []fantasy.Message{out[i]})
+			if afterErr != nil {
+				return StepMessageCapResult{Messages: out, Changed: true, StillOverBudget: true}
+			}
 			totalTokens += after - before
 		}
 	}
 
-	return out
+	finalTokens, finalErr := counter.CountMessages(ctx, modelID, out)
+	if finalErr != nil {
+		return StepMessageCapResult{Messages: out, Changed: true, StillOverBudget: true}
+	}
+	return StepMessageCapResult{
+		Messages:        out,
+		Changed:         !reflect.DeepEqual(out, msgs),
+		StillOverBudget: finalTokens > maxTokens,
+		Tokens:          finalTokens,
+	}
+}
+
+// CapStepMessagesWithCounter shapes messages using a TokenCounter and model context token budget.
+func CapStepMessagesWithCounter(ctx context.Context, counter TokenCounter, modelID string, msgs []fantasy.Message, maxTokens int) []fantasy.Message {
+	result := CapStepMessagesWithCounterResult(ctx, counter, modelID, msgs, maxTokens)
+	if result.Messages == nil || (!result.Changed && !result.StillOverBudget) {
+		return nil
+	}
+	return result.Messages
 }
 
 // capStepMessages is a legacy wrapper for CapStepMessagesWithCounter using default token budget.

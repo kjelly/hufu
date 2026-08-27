@@ -45,6 +45,52 @@ func TestGenerateNotifiesUsageObserver(t *testing.T) {
 	}
 }
 
+func TestCompactStructuredTransientBypassesDurableHooksOnlyForItsInvocation(t *testing.T) {
+	capture := &callCapturingAgent{response: "ok"}
+	s := &Sidecar{agent: capture}
+	var observed int
+	s.SetUsageObserver(func(*fantasy.AgentResult) {
+		observed++
+	})
+	mutations := struct {
+		manifests  int
+		sessions   int
+		events     int
+		selections int
+		metrics    int
+	}{}
+	s.SetPromptPreparer(func(_ context.Context, _, prompt string) (string, error) {
+		mutations.manifests++
+		mutations.sessions++
+		mutations.events++
+		mutations.selections++
+		mutations.metrics++
+		return "prepared: " + prompt, nil
+	})
+
+	if _, err := s.CompactStructuredTransient(context.Background(), "history", "", "goal"); err != nil {
+		t.Fatalf("transient compaction error = %v", err)
+	}
+	if observed != 0 {
+		t.Fatalf("transient compaction notified observer %d times, want 0", observed)
+	}
+	if mutations.manifests != 0 || mutations.sessions != 0 || mutations.events != 0 || mutations.selections != 0 || mutations.metrics != 0 {
+		t.Fatalf("transient compaction mutated durable projection state: %+v", mutations)
+	}
+	if _, err := s.CompactStructured(context.Background(), "history", "", "goal"); err != nil {
+		t.Fatalf("durable compaction error = %v", err)
+	}
+	if observed != 1 {
+		t.Fatalf("durable compaction notified observer %d times, want 1", observed)
+	}
+	if mutations.manifests != 1 || mutations.sessions != 1 || mutations.events != 1 || mutations.selections != 1 || mutations.metrics != 1 {
+		t.Fatalf("durable compaction did not use the normal prompt-preparation boundary: %+v", mutations)
+	}
+	if !strings.HasPrefix(capture.captured.Prompt, "prepared: ") {
+		t.Fatalf("durable compaction prompt was not prepared: %q", capture.captured.Prompt)
+	}
+}
+
 type callCapturingAgent struct {
 	captured fantasy.AgentCall
 	response string

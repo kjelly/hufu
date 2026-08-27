@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+
+	"github.com/kjelly/hufu/internal/sidecar"
 )
 
 const maxConversationHistory = 100
@@ -218,26 +220,47 @@ func trimHistoryPreservingHead(msgs []fantasy.Message, sourceCounts []int, max i
 	return trimmed, trimmedCounts, sumSourceCounts(sourceCounts[:start])
 }
 
-func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Message, sourceOffset int, sourceCounts []int) []fantasy.Message {
+type compactionProjection struct {
+	messages     []fantasy.Message
+	summary      *StructuredSummary
+	tokensBefore int
+	tokensAfter  int
+	sourceOffset int
+	sourceCount  int
+}
+
+type transientSidecarCompacter struct {
+	sidecar *sidecar.Sidecar
+}
+
+func (c transientSidecarCompacter) CompactStructured(ctx context.Context, conversationText, prevSummaryText, originalGoal string) (string, error) {
+	return c.sidecar.CompactStructuredTransient(ctx, conversationText, prevSummaryText, originalGoal)
+}
+
+// buildTransientCompactionProjection builds the same verified structured
+// projection as durable compaction without committing any coordinator state.
+// In particular, this method must not update conversation history, the last
+// summary, compaction records, metrics, session state, or files. It is used by
+// per-stream context admission, where a projection can be abandoned after a
+// request is rejected or a stream fails.
+func (c *Coordinator) buildTransientCompactionProjection(ctx context.Context, messages []fantasy.Message, sourceOffset int, sourceCounts []int, predecessor *StructuredSummary) compactionProjection {
+	var compacter SidecarCompacter
+	if s := c.AgentPool().Sidecar(); s != nil {
+		compacter = transientSidecarCompacter{sidecar: s}
+	}
+	return c.buildCompactionProjection(ctx, messages, sourceOffset, sourceCounts, predecessor, compacter)
+}
+
+func (c *Coordinator) buildCompactionProjection(ctx context.Context, messages []fantasy.Message, sourceOffset int, sourceCounts []int, predecessor *StructuredSummary, compacter SidecarCompacter) compactionProjection {
 	if len(messages) < 1 {
-		return messages
+		return compactionProjection{messages: messages}
 	}
 	sourceCounts = normalizeSourceCounts(len(messages), sourceCounts)
 	sourceCount := sumSourceCounts(sourceCounts)
 
-	s := c.AgentPool().Sidecar()
-	workspace := ""
-	if c.session != nil {
-		workspace = c.session.Workspace
-	}
-
-	// Invariant 6: Load previous structured summary if available
-	var prevSummary *StructuredSummary
-	if c.lastCompactionSummary != nil {
-		prevSummary = c.lastCompactionSummary
-	} else if workspace != "" {
-		prevSummary = GetLatestCompactionSummary(workspace)
-	}
+	// The predecessor is explicit so transient projections stay stream-local.
+	// Durable compaction selects its persisted predecessor at its commit owner.
+	prevSummary := cloneStructuredSummary(predecessor)
 
 	// Model-aware token accounting: use the coordinator's resolved model so the
 	// estimator family matches the one used for context budgeting (§5.3).
@@ -262,15 +285,10 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 		// Required evidence cannot safely fit the context budget. Do not replace
 		// history with an unchecked/truncated summary.
 		log.Printf("warning: verified history compaction failed: %v; retaining original messages", verifiedErr)
-		return messages
+		return compactionProjection{messages: messages}
 	}
 
-	var sidecarAdapter SidecarCompacter
-	if s != nil {
-		sidecarAdapter = s
-	}
-
-	summary, err := PerformStructuredCompaction(ctx, sidecarAdapter, messages, prevSummary, originalGoal)
+	summary, err := PerformStructuredCompaction(ctx, compacter, messages, prevSummary, originalGoal)
 	if err != nil || summary == nil {
 		summary = EnforceCompactionInvariants(&StructuredSummary{}, prevSummary, originalGoal, messages)
 	}
@@ -298,29 +316,58 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 		if postValErr := ValidateStructuredSummary(fallback, prevSummary, messages, activeTaskIDs, failedTaskIDs); postValErr != nil {
 			// Never replace history with a summary known to violate invariants.
 			log.Printf("warning: deterministic compaction fallback failed validation (%v); retaining original messages", postValErr)
-			return messages
+			return compactionProjection{messages: messages}
 		}
 		summary = fallback
 	}
 
-	c.lastCompactionSummary = summary
-
 	markdownSummary := summary.RenderMarkdown()
 	tokensAfter := countTokensInText(compactionModel, markdownSummary)
+	projection := compactionProjection{
+		messages:     []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + verified.Content + "\n\n[Structured Compaction Summary]\n" + markdownSummary)},
+		summary:      cloneStructuredSummary(summary),
+		tokensBefore: tokensBefore,
+		tokensAfter:  tokensAfter,
+		sourceOffset: sourceOffset,
+		sourceCount:  sourceCount,
+	}
+	return projection
+}
+
+// compactMessages is the canonical durable compaction path. The shared
+// projection builder above is intentionally followed here by the existing
+// durable state, record, and metric commits.
+func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Message, sourceOffset int, sourceCounts []int) []fantasy.Message {
+	workspace := ""
+	if c.session != nil {
+		workspace = c.session.Workspace
+	}
+	var predecessor *StructuredSummary
+	if c.lastCompactionSummary != nil {
+		predecessor = cloneStructuredSummary(c.lastCompactionSummary)
+	} else if workspace != "" {
+		predecessor = cloneStructuredSummary(GetLatestCompactionSummary(workspace))
+	}
+	projection := c.buildCompactionProjection(ctx, messages, sourceOffset, sourceCounts, predecessor, c.AgentPool().Sidecar())
+	if projection.summary == nil {
+		return projection.messages
+	}
+
+	c.lastCompactionSummary = projection.summary
 
 	// Invariant 7: Persist compaction record with tokens_before, tokens_after, and source range
 	if workspace != "" {
 		rec := CompactionRecord{
 			ID:           fmt.Sprintf("compact_%d", time.Now().UnixNano()),
 			Timestamp:    time.Now(),
-			TokensBefore: tokensBefore,
-			TokensAfter:  tokensAfter,
+			TokensBefore: projection.tokensBefore,
+			TokensAfter:  projection.tokensAfter,
 			SourceRange: CompactionRange{
-				StartIndex: sourceOffset,
-				EndIndex:   sourceOffset + sourceCount - 1,
-				MsgCount:   sourceCount,
+				StartIndex: projection.sourceOffset,
+				EndIndex:   projection.sourceOffset + projection.sourceCount - 1,
+				MsgCount:   projection.sourceCount,
 			},
-			Summary: *summary,
+			Summary: *projection.summary,
 		}
 		if err := c.SessionStore().SaveCompactionRecord(workspace, rec); err != nil {
 			log.Printf("warning: failed to save compaction record: %v", err)
@@ -329,12 +376,10 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 	}
 
 	if c.think {
-		c.emitThinkSidecar("Compact", fmt.Sprintf("compacted %d messages into structured summary (%d -> %d tokens)", len(messages), tokensBefore, tokensAfter))
+		c.emitThinkSidecar("Compact", fmt.Sprintf("compacted %d messages into structured summary (%d -> %d tokens)", len(messages), projection.tokensBefore, projection.tokensAfter))
 	}
 
-	return []fantasy.Message{
-		fantasy.NewUserMessage(verifiedHistoryPrefix + verified.Content + "\n\n[Structured Compaction Summary]\n" + markdownSummary),
-	}
+	return projection.messages
 }
 
 func normalizeSourceCounts(length int, sourceCounts []int) []int {

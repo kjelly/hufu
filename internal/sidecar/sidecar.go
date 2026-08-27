@@ -162,6 +162,22 @@ func (s *Sidecar) SetUsageObserver(observer func(*fantasy.AgentResult)) {
 }
 
 func (s *Sidecar) generate(ctx context.Context, prompt string, profile Profile) (string, error) {
+	return s.generateWithOptions(ctx, prompt, profile, sidecarInvocationOptions{
+		observeUsage:  true,
+		preparePrompt: true,
+	})
+}
+
+// sidecarInvocationOptions are scoped to one generation call. In particular,
+// transient projections can bypass durable prompt preparation and usage
+// observation without changing the shared Sidecar hooks used by concurrent
+// durable calls.
+type sidecarInvocationOptions struct {
+	observeUsage  bool
+	preparePrompt bool
+}
+
+func (s *Sidecar) generateWithOptions(ctx context.Context, prompt string, profile Profile, options sidecarInvocationOptions) (string, error) {
 	s.mu.Lock()
 	a := s.agent
 	preparer := s.promptPreparer
@@ -169,7 +185,7 @@ func (s *Sidecar) generate(ctx context.Context, prompt string, profile Profile) 
 	if a == nil {
 		return "", fmt.Errorf("sidecar agent not initialized")
 	}
-	if preparer != nil {
+	if options.preparePrompt && preparer != nil {
 		var err error
 		purpose, _ := ctx.Value(purposeContextKey{}).(string)
 		if purpose == "" {
@@ -189,7 +205,7 @@ func (s *Sidecar) generate(ctx context.Context, prompt string, profile Profile) 
 	s.mu.Lock()
 	observer := s.usageObserver
 	s.mu.Unlock()
-	if observer != nil && result != nil {
+	if options.observeUsage && observer != nil && result != nil {
 		observer(result)
 	}
 	if result == nil {
@@ -734,6 +750,24 @@ func normalizeAskUserSelection(resp tools.AskUserResponse, opts []tools.AskUserT
 }
 
 func (s *Sidecar) CompactStructured(ctx context.Context, conversationText, prevSummaryText, originalGoal string) (string, error) {
+	return s.compactStructured(ctx, conversationText, prevSummaryText, originalGoal, sidecarInvocationOptions{
+		observeUsage:  true,
+		preparePrompt: true,
+	})
+}
+
+// CompactStructuredTransient performs one projection-only compaction. It
+// bypasses both durable prompt preparation and the shared usage observer. The
+// bypasses are invocation-scoped: they do not replace or mutate either hook
+// used by concurrent durable sidecar work.
+func (s *Sidecar) CompactStructuredTransient(ctx context.Context, conversationText, prevSummaryText, originalGoal string) (string, error) {
+	return s.compactStructured(ctx, conversationText, prevSummaryText, originalGoal, sidecarInvocationOptions{
+		observeUsage:  false,
+		preparePrompt: false,
+	})
+}
+
+func (s *Sidecar) compactStructured(ctx context.Context, conversationText, prevSummaryText, originalGoal string, options sidecarInvocationOptions) (string, error) {
 	if s == nil || s.agent == nil {
 		return "", fmt.Errorf("sidecar not initialized")
 	}
@@ -778,7 +812,7 @@ Rules:
 
 Return ONLY the JSON object.`, originalGoal, prevSummaryText, conversationText)
 
-	result, err := s.generate(ctx, prompt, CompactorProfile)
+	result, err := s.generateWithOptions(ctx, prompt, CompactorProfile, options)
 	if err != nil {
 		return "", fmt.Errorf("sidecar compact structured generate failed: %w", err)
 	}
