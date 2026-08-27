@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -39,9 +40,10 @@ type Config struct {
 }
 
 type readyMessage struct {
-	Version string `json:"version"`
-	URL     string `json:"url"`
-	Error   string `json:"error,omitempty"`
+	Version   string `json:"version"`
+	URL       string `json:"url"`
+	Error     string `json:"error,omitempty"`
+	ErrorKind string `json:"error_kind,omitempty"`
 }
 
 type controlMessage struct {
@@ -59,6 +61,22 @@ type Proxy struct {
 
 	closeOnce sync.Once
 	closeErr  error
+}
+
+// ErrListenerUnavailable reports that the subprocess boundary could not
+// acquire its loopback listener. Callers may select an equivalent owned
+// boundary backend for this error, but must not fall back to a direct client.
+var ErrListenerUnavailable = errors.New("provider proxy listener unavailable")
+
+// Boundary is the invocation-scoped ownership contract for provider HTTP
+// calls. A nil HTTPClient means the backend owns the endpoint itself (the
+// subprocess proxy); a non-nil client is an in-process connection-owning
+// transport. Abort and Stop are synchronous and terminal for the invocation.
+type Boundary interface {
+	URL() string
+	HTTPClient() *http.Client
+	Abort() error
+	Stop() error
 }
 
 func Start(ctx context.Context, executable string, cfg Config) (*Proxy, error) {
@@ -163,6 +181,9 @@ func start(ctx context.Context, executable string, args, env []string, cfg Confi
 		}
 		if result.ready.Error != "" {
 			_ = p.Close()
+			if result.ready.ErrorKind == "listener_unavailable" {
+				return nil, fmt.Errorf("provider proxy startup: %s: %w", result.ready.Error, ErrListenerUnavailable)
+			}
 			return nil, fmt.Errorf("provider proxy startup: %s", result.ready.Error)
 		}
 		if result.ready.Version != ProtocolVersion || !validProxyURL(result.ready.URL) {
@@ -193,6 +214,12 @@ func (p *Proxy) URL() string {
 	}
 	return p.url
 }
+
+func (p *Proxy) HTTPClient() *http.Client { return nil }
+
+func (p *Proxy) Abort() error { return p.Close() }
+
+func (p *Proxy) Stop() error { return p.Close() }
 
 func (p *Proxy) Close() error {
 	if p == nil {
@@ -243,6 +270,9 @@ func RunChild(in io.Reader, out io.Writer) int {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		message := readyMessage{Version: ProtocolVersion, Error: "listen provider proxy: " + err.Error()}
+		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
+			message.ErrorKind = "listener_unavailable"
+		}
 		if data, marshalErr := json.Marshal(message); marshalErr == nil {
 			_, _ = out.Write(append(data, '\n'))
 		}
