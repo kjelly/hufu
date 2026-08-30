@@ -186,6 +186,12 @@ func redactedCompactionState(state *ConversationCompactionState) (*ConversationC
 	if err := json.Unmarshal(data, clone); err != nil {
 		return nil, err
 	}
+	// The checkpoints field is omitempty, so the JSON round-trip above drops
+	// an empty map; restore it so callers can append without re-initializing
+	// and validation still sees the field present.
+	if clone.Checkpoints == nil {
+		clone.Checkpoints = make(map[string][]ConversationCompactionCheckpoint)
+	}
 	for id, generation := range clone.Generations {
 		generation.SummaryDigest = digestStructuredSummary(&generation.Summary)
 		generation.ReplacementDigest = digestMessages(generation.Replacement)
