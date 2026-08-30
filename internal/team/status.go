@@ -585,6 +585,63 @@ func (tl *TodoList) TryUpdateStatusAndOutput(id string, status TaskStatus, detai
 	return nil
 }
 
+// TryUpdateStatusAndFailure applies a terminal transition and its structured
+// failure evidence as one projection update. Keeping the evidence in the
+// same onChange callback prevents checkpointing a terminal task once before
+// its failure payload and again after it, which would create duplicate
+// terminal events.
+func (tl *TodoList) TryUpdateStatusAndFailure(id string, status TaskStatus, detail, output string, event *FailureEventPayload) error {
+	tl.mu.Lock()
+	updated := false
+	var transitionErr error
+	for _, ti := range tl.items {
+		if ti.ID != id {
+			continue
+		}
+		if !CanTransition(ti.Status, status) {
+			transitionErr = fmt.Errorf("invalid task status transition %s -> %s for task %s", ti.Status, status, id)
+			break
+		}
+		ti.Status = status
+		if detail != "" {
+			ti.Detail = detail
+		}
+		if output != "" {
+			ti.Output = output
+		}
+		if event != nil {
+			ti.FailureEvent = cloneFailureEventPayload(event)
+			if summary := strings.TrimSpace(event.Summary); summary != "" {
+				ti.Detail = summary
+			}
+		}
+		switch status {
+		case TaskInProgress:
+			if ti.StartedAt.IsZero() {
+				ti.StartedAt = time.Now()
+			}
+		case TaskDone, TaskError, TaskBlocked, TaskSkipped:
+			if ti.EndedAt.IsZero() {
+				ti.EndedAt = time.Now()
+			}
+		}
+		updated = true
+		break
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if updated && onChange != nil {
+		onChange()
+	}
+	if transitionErr != nil {
+		return transitionErr
+	}
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	return nil
+}
+
 func (tl *TodoList) SetRecoveryState(id string, state string) {
 	tl.mu.Lock()
 	defer tl.mu.Unlock()

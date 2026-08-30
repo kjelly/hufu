@@ -46,6 +46,7 @@ func TestValidateEventPayloadAcceptsTaskRemovedAndResolution(t *testing.T) {
 		eventType string
 		payload   string
 	}{
+		{string(EventTaskCancelled), `{"id":"task-1","status":"error","failure_class":"cancelled","summary":"cancelled"}`},
 		{string(EventTaskRemoved), `{"id":"task-1","status":"pending","desc":"suppressed"}`},
 		{string(EventTaskResolution), `{"id":"task-1","status":"error","resolution":{"status":"reconciled","resolved_by":"task-2"}}`},
 	} {
@@ -160,8 +161,10 @@ func (j *uniqueRecordingJournal) Append(_ context.Context, event RunEvent) (RunE
 	j.events = append(j.events, event)
 	return event, nil
 }
-func (j *uniqueRecordingJournal) ReadEvents(context.Context) ([]RunEvent, error) { return j.events, nil }
-func (j *uniqueRecordingJournal) VerifyHashChain(context.Context) error          { return nil }
+func (j *uniqueRecordingJournal) ReadEvents(context.Context) ([]RunEvent, error) {
+	return j.events, nil
+}
+func (j *uniqueRecordingJournal) VerifyHashChain(context.Context) error { return nil }
 
 func TestCommitTaskTransitionAppendsBeforeMutatingTodo(t *testing.T) {
 	c := &Coordinator{taskTracker: NewTaskTracker()}
@@ -257,8 +260,10 @@ func (j *conditionalFailingJournal) Append(_ context.Context, event RunEvent) (R
 	j.events = append(j.events, event)
 	return event, nil
 }
-func (j *conditionalFailingJournal) ReadEvents(context.Context) ([]RunEvent, error) { return j.events, nil }
-func (j *conditionalFailingJournal) VerifyHashChain(context.Context) error          { return nil }
+func (j *conditionalFailingJournal) ReadEvents(context.Context) ([]RunEvent, error) {
+	return j.events, nil
+}
+func (j *conditionalFailingJournal) VerifyHashChain(context.Context) error { return nil }
 
 // nthFailingJournal records appends like recordingJournal but fails on the
 // Nth append (1-based), simulating a journal that dies partway through a

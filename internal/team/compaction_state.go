@@ -220,9 +220,6 @@ func MigrateLegacyCompactionState(workspace, branchID string) error {
 	if err != nil || len(legacy) == 0 {
 		return err
 	}
-	if len(legacy) != 1 {
-		return fmt.Errorf("cannot migrate %d legacy compactions without immutable historical checkpoints", len(legacy))
-	}
 	if branchID == "" {
 		branchID = "main"
 	}
@@ -244,13 +241,19 @@ func MigrateLegacyCompactionState(workspace, branchID string) error {
 	if sourceOffset < 0 {
 		return errors.New("legacy conversation source offset is invalid")
 	}
-	record := legacy[0]
+	// Only the latest legacy record maps onto the current conversation
+	// history: every earlier record's replacement was itself consumed by a
+	// later compaction, so no immutable checkpoint can be reconstructed for
+	// it. Migrate the latest record; the legacy file retains the full lineage.
+	record := legacy[len(legacy)-1]
 	if record.BranchID != "" && record.BranchID != branchID {
 		return fmt.Errorf("legacy compaction belongs to branch %q, cannot migrate to %q", record.BranchID, branchID)
 	}
-	if record.PredecessorID != "" {
-		return errors.New("legacy compaction predecessor cannot be reconstructed as an immutable checkpoint")
-	}
+	// Legacy records carry no replacement messages, so a predecessor
+	// generation can never be reconstructed; the migrated generation becomes
+	// the lineage root. Validation would otherwise reject the dangling
+	// predecessor reference.
+	record.PredecessorID = ""
 	historyRanges, sourceOffset, err := legacyHistorySourceRanges(history, sourceOffset, sourceCounts, record)
 	if err != nil {
 		return err
@@ -937,16 +940,21 @@ func (c *Coordinator) commitCompactionCheckpointWithProvenance(ctx context.Conte
 		SourceOffset: sourceOffsetForRanges(provenance, sourceOffset), SourceCounts: sourceCountsForRanges(provenance), SourceRanges: cloneSourceRanges(provenance),
 		NextSourceIndex: trimMaxInt(nextSourceIndex, maxSourceIndex(provenance)), HistoryDigest: digestMessages(history),
 	}
-	checkpoint.EventID = compactionCheckpointEventID(checkpoint)
 	state.Branches[branchID] = checkpoint
-	state.Checkpoints[branchID] = append(state.Checkpoints[branchID], checkpoint)
 	// This is the ownership boundary: durable canonical state precedes every
 	// in-memory conversation, metric, legacy projection, or event mutation.
+	// Redaction is part of the persisted payload, so the immutable checkpoint
+	// identity is derived only after the canonical redaction pass — deriving
+	// it before redaction would make every redacted save fail validation.
 	state, err = redactedCompactionState(state)
 	if err != nil {
 		return CompactionRecord{}, fmt.Errorf("redact canonical compaction state: %w", err)
 	}
 	generation = state.Generations[generation.ID]
+	checkpoint = state.Branches[branchID]
+	checkpoint.EventID = compactionCheckpointEventID(checkpoint)
+	state.Checkpoints[branchID] = append(state.Checkpoints[branchID], checkpoint)
+	state.Branches[branchID] = checkpoint
 	if err := SaveConversationCompactionState(c.session.Workspace, state); err != nil {
 		return CompactionRecord{}, err
 	}

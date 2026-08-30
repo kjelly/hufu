@@ -108,6 +108,26 @@ func TestReducersDeduplicateAndDoNotReopenTerminalTask(t *testing.T) {
 	}
 }
 
+func TestReducersRestoreCancelledTaskAsCanonicalError(t *testing.T) {
+	events := []RunEvent{
+		{Type: string(EventTaskCreated), TaskID: "cancelled-1", Payload: []byte(`{"id":"cancelled-1","status":"pending","desc":"cancelled work"}`)},
+		{Type: string(EventTaskCancelled), TaskID: "cancelled-1", Payload: []byte(`{"id":"cancelled-1","status":"error","detail":"context cancelled","summary":"context cancelled","output":"partial output","task_id":"cancelled-1","phase":"coordination","failure_class":"cancelled","retry_disposition":"none"}`)},
+		{Type: string(EventTaskStarted), TaskID: "cancelled-1", Payload: []byte(`{"id":"cancelled-1","status":"in_progress"}`)},
+	}
+
+	todos := ReduceToTodoList(events)
+	if len(todos) != 1 {
+		t.Fatalf("replayed task count = %d, want 1", len(todos))
+	}
+	item := todos[0]
+	if item.Status != TaskError || item.Output != "partial output" || item.Detail != "context cancelled" {
+		t.Fatalf("cancelled task projection = %#v, want canonical error with detail/output", item)
+	}
+	if item.FailureEvent == nil || item.FailureEvent.FailureClass != FailureCancelled || item.FailureEvent.Summary != "context cancelled" {
+		t.Fatalf("cancelled failure packet = %#v, want restored cancellation evidence", item.FailureEvent)
+	}
+}
+
 func TestReducersRestoreVerifyingTask(t *testing.T) {
 	events := []RunEvent{
 		{Type: string(EventTaskCreated), TaskID: "verify-1", Payload: []byte(`{"id":"verify-1","status":"pending"}`)},

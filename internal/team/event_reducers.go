@@ -540,7 +540,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		if desc != "" {
 			item.Desc = desc
 		}
-		if payload.Phase != "" && e.Type != "task_failed" && e.Type != "task_blocked" && e.Type != "task_protocol_incomplete" {
+		if payload.Phase != "" && e.Type != "task_failed" && e.Type != "task_blocked" && e.Type != "task_protocol_incomplete" && e.Type != "task_cancelled" {
 			item.Phase = payload.Phase
 		}
 		if payload.Action != nil {
@@ -752,6 +752,14 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				item.Output = payload.Output
 			}
 		case "task_failed":
+			item.Status = TaskError
+			if payload.Output != "" {
+				item.Output = payload.Output
+			}
+			if item.Detail == "" && payload.Summary != "" {
+				item.Detail = payload.Summary
+			}
+		case "task_cancelled":
 			item.Status = TaskError
 			if payload.Output != "" {
 				item.Output = payload.Output

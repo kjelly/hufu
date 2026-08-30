@@ -262,7 +262,15 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 
 //nolint:gocyclo // direct-agent execution is the canonical closed lifecycle path.
 func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (directResult *DirectAgentResult, err error) {
-	ctx, endExecutionRun, err := c.beginPublicInvocationExecutionRun(ctx)
+	originalCancellation := invocationContextError(ctx)
+	executionParent := ctx
+	if originalCancellation != nil {
+		// Direct invocation still needs a lease and durable task identity before
+		// returning a pre-cancelled request. This context is used only for the
+		// run/task persistence bootstrap; no provider work may use it.
+		executionParent = context.WithoutCancel(ctx)
+	}
+	ctx, endExecutionRun, err := c.beginPublicInvocationExecutionRun(executionParent)
 	if err != nil {
 		return nil, err
 	}
@@ -302,6 +310,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return nil, err
+	}
+	if originalCancellation != nil {
+		return nil, c.persistPreCancelledDirectAgent(ctx, resolvedName, task, directModel, originalCancellation)
 	}
 	cacheKey := c.policyAgentCacheKey(agentDef, directModel)
 	c.agentCacheMu.RLock()
@@ -651,6 +662,36 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return directRunNotAcceptedResult(resolvedName, output, runRes, len(steps)), nil
 	}
 	return &DirectAgentResult{AgentName: resolvedName, Output: output, Steps: len(steps)}, nil
+}
+
+// persistPreCancelledDirectAgent records a direct invocation that was already
+// cancelled before admission. The task is real durable work evidence, but no
+// provider, worker, or side effect is started. The caller receives the exact
+// original cancellation after the task and its terminal projections commit;
+// a terminalization failure is joined to that cancellation and returned.
+func (c *Coordinator) persistPreCancelledDirectAgent(ctx context.Context, agentName, task, model string, cancellation error) error {
+	items, err := c.CommitTaskCreation(ctx, []TodoSpec{{Agent: agentName, Desc: task, Model: model, Source: TaskSourceCoordinator, ParentID: ""}})
+	if err != nil {
+		return errors.Join(cancellation, fmt.Errorf("persist pre-cancelled direct task: %w", err))
+	}
+	if len(items) != 1 || items[0] == nil {
+		return errors.Join(cancellation, errors.New("persist pre-cancelled direct task: task creation returned no task"))
+	}
+	todoID := items[0].ID
+	c.recordNoProgressTasks(1)
+	c.recordExecutionEvent(todoID, agentName, 1, "error", model, 0, ExecutionUsage{})
+	detail := c.FailureDetail(cancellation, FailureSourceContextCanceled)
+	terminalizationErr := c.PersistFailureWithClassAndStatusError(agentName, task, todoID, detail, RetryNone, FailureCancelled, TaskError)
+	c.reconcileTaskStatusProjection()
+	c.report(c.newEvent("error").withAgent(agentName).withMessage(detail).withModel(model).withTodoID(todoID))
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	if terminalizationErr != nil {
+		joinedErr := errors.Join(cancellation, terminalizationErr)
+		c.recordRunAborted(joinedErr)
+		return joinedErr
+	}
+	c.recordRunAborted(cancellation)
+	return cancellation
 }
 
 // directAgentTerminalFailure carries the inputs every post-task-creation

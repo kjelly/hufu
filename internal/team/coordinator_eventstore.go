@@ -669,28 +669,9 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) error {
 		if item == nil {
 			continue
 		}
-		var eventType string
-		switch item.Status {
-		case TaskPending:
-			eventType = "task_created"
-		case TaskPlanned:
-			eventType = "task_planned"
-		case TaskInProgress:
-			eventType = "task_started"
-		case TaskVerifying:
-			eventType = "task_verifying"
-		case TaskPaused:
-			eventType = "task_paused"
-		case TaskDone:
-			eventType = "task_completed"
-		case TaskError:
-			eventType = "task_failed"
-		case TaskSkipped:
-			eventType = "task_skipped"
-		case TaskBlocked:
-			eventType = "task_blocked"
-		case TaskProtocolIncomplete:
-			eventType = "task_protocol_incomplete"
+		eventType, err := taskTransitionEventType(item)
+		if err != nil {
+			return err
 		}
 		if eventType == "" {
 			continue
@@ -759,8 +740,7 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 	if current.Status != expected {
 		return fmt.Errorf("commit task transition: task %s expected %s, got %s", taskID, expected, current.Status)
 	}
-	eventType := eventTypeForTaskStatus(next)
-	if eventType == "" || !c.hasDurableEventJournal() {
+	if eventTypeForTaskStatus(next) == "" || !c.hasDurableEventJournal() {
 		return c.taskTracker.TodoList().TryUpdateStatusAndOutput(taskID, next, detail, output)
 	}
 
@@ -778,7 +758,36 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 	if fo, ok := metadata["failure_output"].(string); ok && fo != "" {
 		projected.Output = fo
 	}
-	payload := c.taskTransitionPayloadWithCoordinator(&projected)
+	if err := c.appendTaskTransition(ctx, &projected, metadata); err != nil {
+		return err
+	}
+	if fe, ok := metadata["failure_event"].(*FailureEventPayload); ok && fe != nil {
+		if err := c.taskTracker.TodoList().TryUpdateStatusAndFailure(taskID, next, detail, output, fe); err != nil {
+			return fmt.Errorf("apply task transition after durable append: %w", err)
+		}
+	} else if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(taskID, next, detail, output); err != nil {
+		return fmt.Errorf("apply task transition after durable append: %w", err)
+	}
+	return nil
+}
+
+// appendTaskTransition is the controlled durable append primitive for a task
+// lifecycle transition. The cancellation event is selected here, at the
+// canonical transition owner, so a FailureCancelled TaskError can never be
+// represented by a separate side event before the terminal projection commit.
+func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, metadata map[string]interface{}) error {
+	if item == nil {
+		return fmt.Errorf("append task transition: task is nil")
+	}
+	eventType, err := taskTransitionEventType(item)
+	if err != nil {
+		return err
+	}
+	if eventType == "" {
+		return fmt.Errorf("append task transition: unsupported task status %s", item.Status)
+	}
+
+	payload := c.taskTransitionPayloadWithCoordinator(item)
 	for key, value := range metadata {
 		payload[key] = value
 	}
@@ -786,14 +795,14 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 	if err != nil {
 		return fmt.Errorf("commit task transition payload: %w", err)
 	}
-	key := taskTransitionEventKey(&projected)
+	key := taskTransitionEventKey(item)
 	// A terminal/cancellation transition is itself recovery evidence. Do not
 	// let the already-cancelled worker context suppress its durable record.
 	appendCtx := context.WithoutCancel(ctx)
 	if _, err := c.EventJournal().Append(appendCtx, RunEvent{
 		Type:           eventType,
-		Actor:          projected.Agent,
-		TaskID:         projected.ID,
+		Actor:          item.Agent,
+		TaskID:         item.ID,
 		IdempotencyKey: key,
 		Payload:        rawPayload,
 	}); err != nil {
@@ -804,15 +813,8 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 		c.emittedTaskTransitions = make(map[string]bool)
 	}
 	c.emittedTaskTransitions[key] = true
-	c.emittedTaskTransitions[taskTransitionEventKey(&projected)] = true
-	c.emittedTaskTransitions[fmt.Sprintf("%s:%s:%d", projected.ID, projected.Status, projected.Retries)] = true
+	c.emittedTaskTransitions[fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)] = true
 	c.eventOnceMu.Unlock()
-	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(taskID, next, detail, output); err != nil {
-		return fmt.Errorf("apply task transition after durable append: %w", err)
-	}
-	if fe, ok := metadata["failure_event"].(*FailureEventPayload); ok && fe != nil {
-		_ = c.taskTracker.TodoList().SetFailureEventAndOutput(taskID, fe, output)
-	}
 	return nil
 }
 
@@ -1137,6 +1139,20 @@ func eventTypeForTaskStatus(status TaskStatus) string {
 	default:
 		return ""
 	}
+}
+
+func taskTransitionEventType(item *TodoItem) (string, error) {
+	if item == nil {
+		return "", fmt.Errorf("task transition event type: task is nil")
+	}
+	eventType := eventTypeForTaskStatus(item.Status)
+	if item.Status == TaskError && item.FailureEvent != nil && item.FailureEvent.FailureClass == FailureCancelled {
+		eventType = string(EventTaskCancelled)
+	}
+	if eventType == string(EventTaskCancelled) && (item.Status != TaskError || item.FailureEvent == nil || item.FailureEvent.FailureClass != FailureCancelled) {
+		return "", fmt.Errorf("task transition event type: task_cancelled requires TaskError and FailureCancelled")
+	}
+	return eventType, nil
 }
 
 func taskTransitionPayload(item *TodoItem) map[string]interface{} {

@@ -92,6 +92,12 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 		seen[candidateID] = true
 		candidatePreflight := newCoordinatorRequestPreflight(candidateID, prompt, fullSystem, fullTools)
 		candidateSpec := globalRegistry.GetSpec(candidateID).WithEffectiveMaxOutputTokens(maxOutputTokens)
+		// A downshift must not trade a proven CannotFit for an unknown
+		// capacity: estimated candidates stay ineligible even though the
+		// primary model admits its own estimate.
+		if candidateSpec.IsEstimated {
+			continue
+		}
 		candidateSystem, candidateTools, applied, err := candidatePreflight.prepare(ctx, messages, prompt, maxOutputTokens, stepNumber)
 		if err != nil {
 			continue

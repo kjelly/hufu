@@ -570,12 +570,39 @@ func TestCoordinatorEmptySystemStillAdmitsBeforeProvider(t *testing.T) {
 	}
 }
 
-func TestContextWindowManagerRejectsEstimatedRegistryCapacityBeforeProvider(t *testing.T) {
-	modelID := "context-window-metadata-unavailable"
+func TestContextWindowManagerAdmitsEstimatedRegistryCapacity(t *testing.T) {
+	modelID := "context-window-estimated-admitted"
 	// GetSpec's unknown-model fallback is estimated. Do not register a spec:
 	// this models a metadata probe that was unavailable, including --no-net.
 	if spec := GlobalModelSpecRegistry().GetSpec(modelID); !spec.IsEstimated {
 		t.Fatalf("fallback spec = %+v, want estimated capacity", spec)
+	}
+
+	calls := 0
+	counter := admissionCountingCounter{calls: &calls}
+	manager := NewContextWindowManager(counter, func(context.Context, []fantasy.Message) ([]fantasy.Message, error) {
+		return []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "should not compact")}, nil
+	})
+	admission, err := manager.Admit(context.Background(), ContextWindowRequest{
+		ModelID:  modelID,
+		Messages: []fantasy.Message{fantasy.NewUserMessage("small request")},
+	})
+	if err != nil {
+		t.Fatalf("admit estimated capacity: %v", err)
+	}
+	if admission.Decision != ContextWindowNoop {
+		t.Fatalf("decision = %q, want Noop against the estimated fallback window", admission.Decision)
+	}
+	if calls == 0 {
+		t.Fatal("estimated capacity was admitted without token counting")
+	}
+}
+
+func TestContextWindowManagerRejectsWindowlessEstimatedCapacity(t *testing.T) {
+	modelID := "context-window-metadata-unavailable"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{ModelID: modelID, IsEstimated: true})
+	if spec := GlobalModelSpecRegistry().GetSpec(modelID); !spec.IsEstimated || spec.ContextWindow != 0 {
+		t.Fatalf("registered spec = %+v, want windowless estimated capacity", spec)
 	}
 
 	calls := 0
@@ -595,14 +622,37 @@ func TestContextWindowManagerRejectsEstimatedRegistryCapacityBeforeProvider(t *t
 		t.Fatalf("error = %v, want metadata-unavailable error", err)
 	}
 	if calls != 0 {
-		t.Fatal("estimated capacity was admitted to token counting")
+		t.Fatal("windowless estimated capacity was admitted to token counting")
 	}
 }
 
-func TestCoordinatorEstimatedCapacityDoesNotCallProvider(t *testing.T) {
-	modelID := "context-window-metadata-unavailable-provider"
+func TestCoordinatorEstimatedCapacityReachesProvider(t *testing.T) {
+	modelID := "context-window-estimated-provider"
 	if spec := GlobalModelSpecRegistry().GetSpec(modelID); !spec.IsEstimated {
 		t.Fatalf("fallback spec = %+v, want estimated capacity", spec)
+	}
+	calls := 0
+	c := &Coordinator{
+		session:      &TeamSession{Workspace: t.TempDir()},
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+	}
+	preflight := newCoordinatorRequestPreflight(modelID, "incoming", "system", nil)
+	ctx := withCoordinatorRequestPreflight(context.Background(), preflight)
+	_, _, err := c.runAgentWithStatusAndHistory(ctx, contextWindowCountingAgent{model: contextWindowTestModel{modelID: modelID}, calls: &calls}, "coordinator", "incoming", nil, &taskTiming{})
+	if err != nil {
+		t.Fatalf("run error = %v, want estimated capacity to reach the provider", err)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want 1 with estimated capacity", calls)
+	}
+}
+
+func TestCoordinatorWindowlessEstimatedCapacityDoesNotCallProvider(t *testing.T) {
+	modelID := "context-window-metadata-unavailable-provider"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{ModelID: modelID, IsEstimated: true})
+	if spec := GlobalModelSpecRegistry().GetSpec(modelID); !spec.IsEstimated || spec.ContextWindow != 0 {
+		t.Fatalf("registered spec = %+v, want windowless estimated capacity", spec)
 	}
 	calls := 0
 	c := &Coordinator{
@@ -617,7 +667,7 @@ func TestCoordinatorEstimatedCapacityDoesNotCallProvider(t *testing.T) {
 		t.Fatalf("run error = %v, want metadata-unavailable admission error", err)
 	}
 	if calls != 0 {
-		t.Fatalf("provider calls = %d, want 0 with estimated capacity", calls)
+		t.Fatalf("provider calls = %d, want 0 with windowless estimated capacity", calls)
 	}
 }
 

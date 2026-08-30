@@ -285,7 +285,8 @@ func TestPersistFailure_CancelledExcludedFromFingerprint(t *testing.T) {
 	// Read the event store back and assert no fingerprint events were emitted
 	// for the cancelled failure, and a task_cancelled event was emitted.
 	events, _ := es.ReadEvents()
-	foundCancelled := false
+	foundCancelled := 0
+	foundFailed := 0
 	for _, e := range events {
 		switch e.Type {
 		case "failure_fingerprint":
@@ -295,11 +296,13 @@ func TestPersistFailure_CancelledExcludedFromFingerprint(t *testing.T) {
 		case "anti_thrashing_limit_reached":
 			t.Errorf("anti_thrashing_limit_reached event emitted for cancelled failure (§5.3)")
 		case "task_cancelled":
-			foundCancelled = true
+			foundCancelled++
+		case "task_failed":
+			foundFailed++
 		}
 	}
-	if !foundCancelled {
-		t.Errorf("task_cancelled event not emitted for cancelled failure (§5.3 observability)")
+	if foundCancelled != 1 || foundFailed != 0 {
+		t.Errorf("cancelled terminal events = cancelled:%d failed:%d, want cancelled:1 failed:0", foundCancelled, foundFailed)
 	}
 
 	// RepeatedFailureFingerprints must be zero — cancelled failures do not

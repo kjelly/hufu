@@ -166,13 +166,21 @@ func (c *Coordinator) PersistFailureWithClassAndStatus(agentName, taskDesc, todo
 	c.persistFailureWithOutput(agentName, taskDesc, todoID, detail, disposition, class, &status, "")
 }
 
+// PersistFailureWithClassAndStatusError is the checked variant of
+// PersistFailureWithClassAndStatus for callers that must not lose a terminal
+// transition failure. The legacy void API remains available for the existing
+// scheduler paths whose failure handling predates error propagation.
+func (c *Coordinator) PersistFailureWithClassAndStatusError(agentName, taskDesc, todoID, detail string, disposition RetryDisposition, class TaskFailureClass, status TaskStatus) error {
+	return c.persistFailureWithOutput(agentName, taskDesc, todoID, detail, disposition, class, &status, "")
+}
+
 func (c *Coordinator) persistFailure(agentName, taskDesc, todoID, detail string, disposition RetryDisposition, class TaskFailureClass, forcedStatus *TaskStatus) {
 	c.persistFailureWithOutput(agentName, taskDesc, todoID, detail, disposition, class, forcedStatus, "")
 }
 
-func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, detail string, disposition RetryDisposition, class TaskFailureClass, forcedStatus *TaskStatus, output string) {
+func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, detail string, disposition RetryDisposition, class TaskFailureClass, forcedStatus *TaskStatus, output string) error {
 	if c == nil || detail == "" {
-		return
+		return nil
 	}
 	c.rememberFailureContext(agentName, taskDesc, todoID, detail)
 	var item *TodoItem
@@ -307,6 +315,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 		}
 	}
 
+	var terminalizationErr error
 	if todoID != "" {
 		status := TaskError
 		if forcedStatus != nil {
@@ -332,13 +341,6 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 		if status == TaskBlocked {
 			c.wrapUp.Store(1)
 		}
-		if cancelled {
-			// §5.3: cancelled tasks surface as a dedicated event so the run
-			// record distinguishes a user/context cancel from an execution
-			// failure. The todo status stays TaskError (the task did not
-			// complete) but the failure class and all statistics exclude it.
-			c.emitEvent("task_cancelled", "coordinator", todoID, map[string]interface{}{"id": todoID, "status": string(TaskError), "class": string(class), "agent": agentName})
-		}
 		metadata := map[string]interface{}{}
 		if failureEvent != nil {
 			metadata["failure_event"] = failureEvent
@@ -348,6 +350,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 		}
 		if err := c.commitTaskTransitionFromCurrent(context.Background(), todoID, status, detail, persistedFailureOutput, metadata); err != nil {
 			log.Printf("warning: persist failure transition for task %s: %v", todoID, err)
+			terminalizationErr = fmt.Errorf("persist failure transition for task %s: %w", todoID, err)
 		} else if failureEvent != nil {
 			// The event already carries the complete failure projection. This is
 			// only the in-memory reducer update after durability succeeds.
@@ -372,6 +375,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 		}
 		c.recordTaskFailureWithEventAndOutput(agentName, taskDesc, detail, failureEvent, failureOutput, fingerprints)
 	}
+	return terminalizationErr
 }
 
 func failureOperation(item *TodoItem) string {

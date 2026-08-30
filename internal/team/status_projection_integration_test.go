@@ -345,6 +345,122 @@ func TestRunDirectAgentTerminationReconcilesCanonicalTodoAndStatus(t *testing.T)
 	}
 }
 
+func TestRunDirectAgentPreCancelledPersistsCanonicalFailureBeforeReturning(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
+	c.SetSessionData(c.sessionData)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := c.RunDirectAgent(ctx, "worker", "must remain durable"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunDirectAgent error = %v, want original context cancellation", err)
+	}
+	items := c.taskTracker.TodoList().Items()
+	if len(items) != 1 || items[0].Status != TaskError {
+		t.Fatalf("pre-cancelled canonical tasks = %#v, want one TaskError", items)
+	}
+	if items[0].FailureEvent == nil || items[0].FailureEvent.FailureClass != FailureCancelled {
+		t.Fatalf("pre-cancelled task failure event = %#v, want structured cancellation", items[0].FailureEvent)
+	}
+	if got := LoadSession(c.session.Workspace); got == nil || len(got.Tasks) != 1 || got.Tasks[0].Status != TaskError {
+		t.Fatalf("pre-cancelled checkpoint = %#v, want one TaskError task", got)
+	}
+	status := readProjectedStatus(t, c.session.Workspace, "worker")
+	if !strings.Contains(status, "status: error") {
+		t.Fatalf("pre-cancelled projected status = %q, want error", status)
+	}
+
+	es, err := NewEventStore(c.session.Workspace, "inspect", "inspect")
+	if err != nil {
+		t.Fatalf("open event store: %v", err)
+	}
+	defer func() { _ = es.Close() }()
+	events, err := es.ReadEvents()
+	if err != nil {
+		t.Fatalf("read event store: %v", err)
+	}
+	created, cancelled, failed := 0, 0, 0
+	for _, event := range events {
+		if event.TaskID != items[0].ID {
+			continue
+		}
+		switch event.Type {
+		case string(EventTaskCreated):
+			created++
+		case string(EventTaskCancelled):
+			cancelled++
+		case string(EventTaskFailed):
+			failed++
+		}
+	}
+	if created != 1 || cancelled != 1 || failed != 0 {
+		t.Fatalf("pre-cancelled task events = created:%d cancelled:%d failed:%d, want created:1 cancelled:1 failed:0", created, cancelled, failed)
+	}
+}
+
+func TestPersistPreCancelledDirectAgentReturnsTerminalizationFailure(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
+	store, err := NewEventStore(c.session.Workspace, "run-cancelled-fault", "session-cancelled-fault")
+	if err != nil {
+		t.Fatalf("NewEventStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	syncCalls := 0
+	store.syncFile = func() error {
+		syncCalls++
+		// Task creation and the diagnostic packet are committed before the
+		// canonical terminal transition.
+		if syncCalls == 3 {
+			return errors.New("injected terminal sync failure")
+		}
+		return nil
+	}
+	c.eventStore = store
+	c.SetEventJournal(eventStoreJournal{store: store})
+
+	err = c.persistPreCancelledDirectAgent(context.Background(), "worker", "terminal persistence must be reported", "test", context.Canceled)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("persistPreCancelledDirectAgent error = %v, want context.Canceled", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "persist failure transition") {
+		t.Fatalf("persistPreCancelledDirectAgent error = %v, want terminalization failure; tasks=%#v", err, c.taskTracker.TodoList().Items())
+	}
+	items := c.taskTracker.TodoList().Items()
+	if len(items) != 1 {
+		t.Fatalf("pre-cancelled canonical tasks = %#v, want one task", items)
+	}
+	if items[0].Status != TaskPending {
+		t.Fatalf("task status = %s, want pending after failed terminalization", items[0].Status)
+	}
+	if items[0].FailureEvent != nil {
+		t.Fatalf("task failure event = %#v, want no terminalized failure evidence", items[0].FailureEvent)
+	}
+	if syncCalls != 3 {
+		t.Fatalf("sync calls = %d, want terminal append fault on third sync", syncCalls)
+	}
+	_ = store.Close()
+	reopened, reopenErr := OpenEventStore(c.session.Workspace)
+	if reopenErr != nil {
+		t.Fatalf("reopen event store after uncertain append: %v", reopenErr)
+	}
+	defer func() { _ = reopened.Close() }()
+	events, readErr := reopened.ReadEvents()
+	if readErr != nil {
+		t.Fatalf("read reopened event store: %v", readErr)
+	}
+	failed, cancelled := 0, 0
+	for _, event := range events {
+		switch event.Type {
+		case string(EventTaskFailed):
+			failed++
+		case string(EventTaskCancelled):
+			cancelled++
+		}
+	}
+	if failed != 0 || cancelled > 1 {
+		t.Fatalf("uncertain terminal append events = failed:%d cancelled:%d, want no task_failed and at most one task_cancelled", failed, cancelled)
+	}
+}
+
 func TestRunDirectAgentTerminalFailureReducesCanonicalContextError(t *testing.T) {
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{err: errors.New("worker failed")})
 	repo, err := contextstore.OpenSQLite(filepath.Join(c.session.Workspace, "context.sqlite"))

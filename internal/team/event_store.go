@@ -137,7 +137,7 @@ func generateEventID() string {
 // IsTerminalEvent returns true if the event type represents a terminal run or task outcome.
 func IsTerminalEvent(eventType string) bool {
 	switch eventType {
-	case "run_finished", "task_completed", "task_failed", "task_blocked", "task_skipped", "task_protocol_incomplete":
+	case "run_finished", "task_completed", "task_failed", "task_blocked", "task_skipped", "task_protocol_incomplete", "task_cancelled":
 		return true
 	default:
 		return false
