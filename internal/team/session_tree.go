@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 const sessionTreeFile = "session_tree.json"
@@ -120,8 +122,15 @@ func SaveSessionTree(workspace string, st *SessionTree) error {
 	if err != nil {
 		return fmt.Errorf("marshal session tree: %w", err)
 	}
+	data, err = utils.RedactJSON(data)
+	if err != nil {
+		return fmt.Errorf("redact session tree JSON: %w", err)
+	}
+	if !json.Valid(data) {
+		return fmt.Errorf("redacted session tree is invalid JSON")
+	}
 	path := filepath.Join(workspace, sessionTreeFile)
-	return AtomicWriteFile(path, data, 0o644)
+	return AtomicWriteFile(path, data, 0o600)
 }
 
 // GetBranch retrieves a branch by exact ID, exact Name, or label alias.

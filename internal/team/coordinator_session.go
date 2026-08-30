@@ -148,13 +148,19 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 	compactedCounts := sourceCounts[:compactCount]
 	projection := c.buildCompactionProjection(ctx, history[:compactCount], sourceOffset, compactedCounts, cloneStructuredSummary(c.lastCompactionSummary), c.AgentPool().Sidecar())
 	if projection.summary == nil {
-		if err := c.persistConversationCheckpointWithProvenance(history, sourceOffset, sourceCounts, sourceRanges, nextSourceIndex); err != nil {
+		// Compaction is unavailable, but the hard cap still applies: trim to
+		// MaxHistoryMessages so a capacity failure cannot grow history
+		// without bound.
+		trimmed, trimmedRanges, removed := trimHistoryPreservingHeadWithProvenance(history, sourceRanges, maxHistory)
+		trimmedCounts := sourceCountsForRanges(trimmedRanges)
+		if err := c.persistConversationCheckpointWithProvenance(trimmed, c.conversationHistorySourceOffset+removed, trimmedCounts, trimmedRanges, nextSourceIndex); err != nil {
 			log.Printf("warning: durable conversation checkpoint failed: %v; retaining prior history", err)
 			return
 		}
-		c.conversationHistory = history
-		c.conversationHistorySourceCounts = sourceCounts
-		c.conversationHistorySourceRanges = sourceRanges
+		c.conversationHistory = trimmed
+		c.conversationHistorySourceCounts = trimmedCounts
+		c.conversationHistorySourceRanges = trimmedRanges
+		c.conversationHistorySourceOffset += removed
 		c.conversationHistoryNextSourceIndex = nextSourceIndex
 		return
 	}

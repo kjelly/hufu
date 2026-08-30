@@ -2,6 +2,8 @@ package team
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -257,6 +259,46 @@ func TestSessionTree_Persistence(t *testing.T) {
 	}
 	if loaded.Labels["v2.0"] != "branch-persist" {
 		t.Errorf("expected label v2.0 -> branch-persist, got %q", loaded.Labels["v2.0"])
+	}
+}
+
+func TestSaveSessionTreeRedactsSecretsAndUsesPrivateMode(t *testing.T) {
+	workspace := t.TempDir()
+	tree := NewSessionTree()
+	tree.Branches["main"].State.TaskPlan = []*TodoItem{{ID: "task-1", Desc: "api_token: task-plan-secret"}}
+	tree.Branches["main"].State.Compaction = &StructuredSummary{UserCorrections: []string{"password: compaction-secret"}}
+
+	if err := SaveSessionTree(workspace, tree); err != nil {
+		t.Fatalf("SaveSessionTree: %v", err)
+	}
+	path := filepath.Join(workspace, sessionTreeFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !json.Valid(data) {
+		t.Fatalf("saved session tree is invalid JSON: %s", data)
+	}
+	if strings.Contains(string(data), "task-plan-secret") || strings.Contains(string(data), "compaction-secret") {
+		t.Fatalf("saved session tree leaked secret: %s", data)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("session tree mode = %o, want 600", got)
+	}
+
+	loaded, err := LoadSessionTree(workspace)
+	if err != nil {
+		t.Fatalf("LoadSessionTree: %v", err)
+	}
+	if got := loaded.Branches["main"].State.TaskPlan[0].Desc; strings.Contains(got, "task-plan-secret") {
+		t.Fatalf("reloaded task plan leaked secret: %q", got)
+	}
+	if got := loaded.Branches["main"].State.Compaction.UserCorrections[0]; strings.Contains(got, "compaction-secret") {
+		t.Fatalf("reloaded compaction leaked secret: %q", got)
 	}
 }
 

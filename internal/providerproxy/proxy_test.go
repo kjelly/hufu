@@ -296,6 +296,72 @@ func TestInProcessBoundaryAbortCancelsBlockedDialContext(t *testing.T) {
 	}
 }
 
+func TestInProcessBoundaryRecoversPanickingDialBeforeAbort(t *testing.T) {
+	base := &http.Transport{
+		Proxy: nil,
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			panic("synthetic dial panic")
+		},
+	}
+	boundary, err := startInProcess(context.Background(), Config{UpstreamURL: "http://provider.invalid/v1"}, base)
+	if err != nil {
+		t.Fatalf("start in-process boundary: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, boundary.URL()+"/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boundary.HTTPClient().Do(req); err == nil {
+		t.Fatal("panicking dial unexpectedly returned a response")
+	}
+
+	abortDone := make(chan error, 1)
+	go func() { abortDone <- boundary.Abort() }()
+	select {
+	case err := <-abortDone:
+		if err != nil {
+			t.Fatalf("abort after panicking dial: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("abort waited on active request after panicking dial")
+	}
+}
+
+func TestOwnedTransportAbortAfterPanickingRoundTripDoesNotWaitForever(t *testing.T) {
+	owned, err := newOwnedTransport(&http.Transport{})
+	if err != nil {
+		t.Fatalf("new owned transport: %v", err)
+	}
+	owned.roundTrip = func(*http.Request) (*http.Response, error) {
+		panic("synthetic transport panic")
+	}
+	req, err := http.NewRequest(http.MethodGet, "http://provider.invalid/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("panicking transport unexpectedly returned without panic")
+			}
+		}()
+		_, _ = owned.RoundTrip(req)
+	}()
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- owned.close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("close after panicking transport: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close waited on active request after panicking transport")
+	}
+}
+
 func TestInProcessBoundaryRejectsLegacyDialTLSHook(t *testing.T) {
 	_, err := startInProcess(context.Background(), Config{UpstreamURL: "https://provider.invalid/v1"}, &http.Transport{
 		DialTLS: func(string, string) (net.Conn, error) {

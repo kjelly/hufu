@@ -97,9 +97,10 @@ func (b *InProcess) close() error {
 }
 
 type ownedTransport struct {
-	base    *http.Transport
-	dial    func(context.Context, string, string) (net.Conn, error)
-	dialTLS func(context.Context, string, string) (net.Conn, error)
+	base      *http.Transport
+	roundTrip func(*http.Request) (*http.Response, error)
+	dial      func(context.Context, string, string) (net.Conn, error)
+	dialTLS   func(context.Context, string, string) (net.Conn, error)
 
 	mu      sync.Mutex
 	closed  bool
@@ -125,11 +126,12 @@ func newOwnedTransport(base *http.Transport) (*ownedTransport, error) {
 		dial = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	}
 	owned := &ownedTransport{
-		base:    base,
-		dial:    dial,
-		conns:   make(map[net.Conn]struct{}),
-		bodies:  make(map[io.ReadCloser]struct{}),
-		cancels: make(map[*activeRequest]context.CancelFunc),
+		base:      base,
+		roundTrip: base.RoundTrip,
+		dial:      dial,
+		conns:     make(map[net.Conn]struct{}),
+		bodies:    make(map[io.ReadCloser]struct{}),
+		cancels:   make(map[*activeRequest]context.CancelFunc),
 	}
 	if base.DialTLSContext != nil {
 		owned.dialTLS = base.DialTLSContext
@@ -153,7 +155,7 @@ func (t *ownedTransport) dialContext(ctx context.Context, network, address strin
 	dial := t.dial
 	t.mu.Unlock()
 
-	conn, err := dial(ctx, network, address)
+	conn, err := safeDial(dial, ctx, network, address)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +180,7 @@ func (t *ownedTransport) dialTLSContext(ctx context.Context, network, address st
 	dial := t.dialTLS
 	t.mu.Unlock()
 
-	conn, err := dial(ctx, network, address)
+	conn, err := safeDial(dial, ctx, network, address)
 	if err != nil {
 		return nil, err
 	}
@@ -194,14 +196,29 @@ func (t *ownedTransport) dialTLSContext(ctx context.Context, network, address st
 	return tracked, nil
 }
 
+func safeDial(dial func(context.Context, string, string) (net.Conn, error), ctx context.Context, network, address string) (conn net.Conn, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("provider dial panic: %v", recovered)
+		}
+	}()
+	return dial(ctx, network, address)
+}
+
 func (t *ownedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	request, ok := t.begin(req.Context())
 	if !ok {
 		return nil, errBoundaryClosed
 	}
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			t.end(request)
+		}
+	}()
 	req = req.WithContext(request.ctx)
 
-	resp, err := t.base.RoundTrip(req)
+	resp, err := t.roundTrip(req)
 	if err != nil {
 		t.end(request)
 		return nil, err
@@ -220,6 +237,7 @@ func (t *ownedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.bodies[body] = struct{}{}
 	t.mu.Unlock()
 	resp.Body = body
+	handedOff = true
 	return resp, nil
 }
 
