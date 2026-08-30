@@ -78,6 +78,7 @@ type teamConfigYAML struct {
 	AutoReport               bool                             `yaml:"auto-report"`
 	AllowFreeTextResults     bool                             `yaml:"allow-free-text-results"`
 	Model                    string                           `yaml:"model"`
+	ContextWindow            int                              `yaml:"context-window"`
 	Temperature              string                           `yaml:"temperature"`
 	MaxTokens                string                           `yaml:"max-tokens"`
 	TopP                     string                           `yaml:"top-p"`
@@ -719,6 +720,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	cfg.Generation = agent.GenerationParams{
 		Model:           yc.Model,
+		ContextWindow:   yc.ContextWindow,
 		Temperature:     agent.DefaultTemperature,
 		MaxTokens:       agent.DefaultMaxTokens,
 		TopP:            agent.DefaultTopP,

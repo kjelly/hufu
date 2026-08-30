@@ -33,6 +33,15 @@ func TestDetectContextLengths_ProbesWhenNetworkAllowed(t *testing.T) {
 	}
 }
 
+func TestConfiguredContextWindowIsAppliedWhenNoNet(t *testing.T) {
+	modelID := "no-net-configured-context-model"
+	team.RegisterConfiguredContextWindow([]string{modelID}, 16384)
+	spec := team.GlobalModelSpecRegistry().GetSpec(modelID)
+	if spec.ContextWindow != 16384 || spec.ContextWindowSource != "operator" || spec.IsEstimated {
+		t.Fatalf("no-net configured context spec = %#v, want operator exact capacity", spec)
+	}
+}
+
 func TestApplyCLICompactionOverrides_InvalidPolicyUsesDefaults(t *testing.T) {
 	originalOpts := opts
 	t.Cleanup(func() { opts = originalOpts })

@@ -148,6 +148,30 @@ func TestWithEffectiveMaxOutputTokens(t *testing.T) {
 	}
 }
 
+func TestRegisterConfiguredContextWindowPreservesSafetyBudgets(t *testing.T) {
+	modelID := "operator-context-window-model"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID: modelID, ContextWindow: 128000, MaxOutputTokens: 8192,
+		SafetyMarginTokens: 1500, Estimator: "estimated", IsEstimated: true,
+	})
+
+	RegisterConfiguredContextWindow([]string{modelID}, 32768)
+	spec := GlobalModelSpecRegistry().GetSpec(modelID)
+	if spec.ContextWindow != 32768 || spec.ContextWindowSource != "operator" || spec.IsEstimated {
+		t.Fatalf("configured context spec = %#v, want operator exact capacity", spec)
+	}
+	if spec.MaxOutputTokens != 8192 || spec.SafetyMarginTokens != 1500 || spec.Estimator != "estimated" {
+		t.Fatalf("configured context changed output/safety budgets: %#v", spec)
+	}
+}
+
+func TestUnknownModelRemainsEstimatedWithoutConfiguredContextWindow(t *testing.T) {
+	spec := GlobalModelSpecRegistry().GetSpec("unknown-unconfigured-context-model")
+	if !spec.IsEstimated {
+		t.Fatalf("unknown model spec = %#v, want fail-closed estimated metadata", spec)
+	}
+}
+
 func TestResolveAgentMaxOutputTokens(t *testing.T) {
 	c := &Coordinator{session: &TeamSession{
 		Config: agent.TeamConfig{Generation: agent.GenerationParams{MaxTokens: "8192"}},

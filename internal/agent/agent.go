@@ -35,11 +35,14 @@ const (
 )
 
 type GenerationParams struct {
-	Model       string
-	Temperature string
-	MaxTokens   string
-	TopP        string
-	TopK        string
+	Model string
+	// ContextWindow is an operator-supplied context capacity override. A
+	// positive value is registered as exact capacity during team setup.
+	ContextWindow int
+	Temperature   string
+	MaxTokens     string
+	TopP          string
+	TopK          string
 	// ReasoningEffort controls how much a reasoning-capable model "thinks"
 	// before answering: high, medium, low, or none. Passed through to the
 	// OpenAI-compatible reasoning_effort request field.

@@ -199,7 +199,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	// Context-length detection is an optional cache warm-up. In no-net mode
 	// even this best-effort probe is forbidden: team setup must not contact the
 	// provider before the agent subprocesses run.
-	detectContextLengths(ctx, resolvedNoNet, resolvedProviderURL, resolvedProviderAPIKey, modelsInUse(session, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedModelList))
+	models := modelsInUse(session, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedModelList)
+	detectContextLengths(ctx, resolvedNoNet, resolvedProviderURL, resolvedProviderAPIKey, models)
+	team.RegisterConfiguredContextWindow(models, session.Config.Generation.ContextWindow)
 
 	if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
 		stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)

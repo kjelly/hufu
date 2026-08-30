@@ -36,17 +36,21 @@ func TestApplyCLIModelOverrides_All(t *testing.T) {
 		GuardModel:   "guard-from-yaml",
 	}
 	applyCLIModelOverrides(&cfg, ModelCLIOverrides{
-		Model:        "cli-model",
-		Temperature:  "0.1",
-		MaxTokens:    "8192",
-		TopP:         "0.95",
-		TopK:         "50",
-		SidecarModel: "cli-sidecar",
-		GuardModel:   "cli-guard",
+		Model:         "cli-model",
+		ContextWindow: 65536,
+		Temperature:   "0.1",
+		MaxTokens:     "8192",
+		TopP:          "0.95",
+		TopK:          "50",
+		SidecarModel:  "cli-sidecar",
+		GuardModel:    "cli-guard",
 	})
 
 	if cfg.Generation.Model != "cli-model" {
 		t.Errorf("Generation.Model = %q, want %q", cfg.Generation.Model, "cli-model")
+	}
+	if cfg.Generation.ContextWindow != 65536 {
+		t.Errorf("Generation.ContextWindow = %d, want 65536", cfg.Generation.ContextWindow)
 	}
 	if cfg.Generation.Temperature != "0.1" {
 		t.Errorf("Generation.Temperature = %q, want %q", cfg.Generation.Temperature, "0.1")

@@ -51,6 +51,7 @@ func init() {
 	f.StringVar(&opts.providerURL, "provider-url", "", "Provider API base URL")
 	f.StringVar(&opts.providerAPIKey, "provider-api-key", "", "Provider API key")
 	f.StringVar(&opts.modelOverride, "model", "", "Override default model (e.g. local-model or lemonade/model)")
+	f.IntVar(&opts.contextWindowOverride, "context-window", 0, "Override model context window in tokens (0 = use team/provider metadata)")
 	f.StringVarP(&opts.workspace, "workspace", "w", "", "Workspace directory")
 	f.BoolVarP(&opts.newSession, "new", "n", false, "Archive old session and start fresh")
 	f.BoolVarP(&opts.verbose, "verbose", "v", false, "Show full agent text output in real-time")

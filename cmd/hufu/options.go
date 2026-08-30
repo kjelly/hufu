@@ -9,6 +9,7 @@ type runOptions struct {
 	providerURL               string
 	providerAPIKey            string
 	modelOverride             string
+	contextWindowOverride     int
 	temperatureOverride       string
 	maxTokensOverride         string
 	topPOverride              string

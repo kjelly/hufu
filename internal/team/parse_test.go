@@ -59,6 +59,20 @@ delegation:
 	}
 }
 
+func TestParseTeamContextWindow(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: context-team\nmodel: custom-model\ncontext-window: 24576\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(dir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML: %v", err)
+	}
+	if cfg.Generation.ContextWindow != 24576 {
+		t.Fatalf("Generation.ContextWindow = %d, want 24576", cfg.Generation.ContextWindow)
+	}
+}
+
 func writeLoadTeamAgent(t *testing.T, dir, filename, name string) {
 	t.Helper()
 	content := "---\nname: " + name + "\nrole: worker\nmemory:\n  mode: off\n---\nInspect files.\n"

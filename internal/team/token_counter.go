@@ -162,6 +162,34 @@ func GlobalModelSpecRegistry() *ModelSpecRegistry {
 	return globalRegistry
 }
 
+// RegisterConfiguredContextWindow applies an operator-declared context
+// capacity to the models participating in the active team. It changes only
+// admission capacity; model-specific output and safety budgets remain intact.
+// An omitted value intentionally leaves estimated models fail-closed.
+func RegisterConfiguredContextWindow(modelIDs []string, window int) {
+	if window <= 0 {
+		return
+	}
+	seen := make(map[string]struct{}, len(modelIDs))
+	for _, modelID := range modelIDs {
+		modelID = strings.TrimSpace(modelID)
+		if modelID == "" {
+			continue
+		}
+		key := strings.ToLower(modelID)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		spec := globalRegistry.GetSpec(modelID)
+		spec.ModelID = modelID
+		spec.ContextWindow = window
+		spec.ContextWindowSource = "operator"
+		spec.IsEstimated = false
+		globalRegistry.RegisterSpec(spec)
+	}
+}
+
 // DetectAndCacheProviderContextLengths probes baseURL's OpenAI-compatible
 // /models endpoint for each model in modelIDs and registers its advertised
 // context length as an override in the global model spec registry, so

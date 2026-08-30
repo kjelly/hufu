@@ -9,6 +9,7 @@ import (
 // mean "no override" and the underlying config keeps its current value.
 type ModelCLIOverrides struct {
 	Model             string
+	ContextWindow     int
 	Temperature       string
 	MaxTokens         string
 	TopP              string
@@ -32,6 +33,9 @@ type ModelCLIOverrides struct {
 func applyCLIModelOverrides(cfg *agent.TeamConfig, overrides ModelCLIOverrides) {
 	if overrides.Model != "" {
 		cfg.Generation.Model = overrides.Model
+	}
+	if overrides.ContextWindow > 0 {
+		cfg.Generation.ContextWindow = overrides.ContextWindow
 	}
 	if overrides.Temperature != "" {
 		cfg.Generation.Temperature = overrides.Temperature
@@ -77,6 +81,7 @@ func applyCLIModelOverrides(cfg *agent.TeamConfig, overrides ModelCLIOverrides) 
 func currentModelOverrides() ModelCLIOverrides {
 	return ModelCLIOverrides{
 		Model:             opts.modelOverride,
+		ContextWindow:     opts.contextWindowOverride,
 		Temperature:       opts.temperatureOverride,
 		MaxTokens:         opts.maxTokensOverride,
 		TopP:              opts.topPOverride,

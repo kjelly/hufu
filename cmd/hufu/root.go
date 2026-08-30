@@ -98,6 +98,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringSliceVar(&opts.allowPaths, "allow-path", nil, "Additional filesystem paths to allow for the active team; can be repeated.")
 	rootCmd.Flags().BoolVar(&opts.autoApprove, "auto-approve", false, "Automatically choose clearly safe ask_user options; dangerous or ambiguous choices still prompt the user")
 	rootCmd.Flags().StringVar(&opts.modelOverride, "model", "", "Override default model for the active team (e.g. local-model or lemonade/model)")
+	rootCmd.Flags().IntVar(&opts.contextWindowOverride, "context-window", 0, "Override model context window in tokens (0 = use team/provider metadata)")
 	rootCmd.Flags().StringVar(&opts.temperatureOverride, "temperature", "", "Override sampling temperature (e.g. 0.2)")
 	rootCmd.Flags().StringVar(&opts.maxTokensOverride, "max-tokens", "", "Override max output tokens (e.g. 4096)")
 	rootCmd.Flags().StringVar(&opts.topPOverride, "top-p", "", "Override top-p value (e.g. 0.9)")

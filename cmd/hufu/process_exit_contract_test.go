@@ -265,7 +265,7 @@ func TestCLIProcessExitContract(t *testing.T) {
 		if err := os.MkdirAll(teamDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(teamDir, "team.yaml"), []byte("name: acceptance-fixture\nmodel: test\nprovider-url: "+server.URL+"/v1\nacceptance: \"false\"\nmax-rounds: 1\ntimeout: 10\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(teamDir, "team.yaml"), []byte("name: acceptance-fixture\nmodel: test\nprovider-url: "+server.URL+"/v1\ncontext-window: 32768\nacceptance: \"false\"\nmax-rounds: 1\ntimeout: 10\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(teamDir, "coordinator.md"), []byte("---\nname: coordinator\nrole: coordinator\ntools: ask_user\n---\nCall finish when the request is complete.\n"), 0o644); err != nil {

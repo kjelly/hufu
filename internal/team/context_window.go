@@ -36,9 +36,12 @@ func isProvenPreProviderCannotFit(err error) (*CannotFitError, bool) {
 }
 
 // ContextWindowMetadataUnavailableError is returned before counting or
-// invoking a provider when the registry only has an estimated context
-// window. An estimate is not an admission capacity: accepting it here could
-// allow a request to cross the provider boundary with an unknown limit.
+// invoking a provider when the registry has no usable capacity at all.
+// A family-fallback estimate with a positive window is admissible: the
+// estimator multiplier and safety margin cover the uncertainty, and the
+// runtime overflow-recovery path replaces the estimate with an observed
+// window after the first provider refusal. Only a spec that is both
+// estimated and windowless leaves admission with no capacity to enforce.
 type ContextWindowMetadataUnavailableError struct {
 	ModelID string
 }
@@ -146,6 +149,10 @@ func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowR
 	spec := globalRegistry.GetSpec(request.ModelID)
 	if request.Window > 0 {
 		spec.ContextWindow = request.Window
+		// A caller-provided window is authoritative only when the caller also
+		// supplies an exact admission capacity. Preserve fail-closed behavior
+		// for estimated registry metadata; team setup registers operator values
+		// with IsEstimated=false before admission reaches this path.
 	}
 	if request.ReservedOutputTokens > 0 {
 		spec.MaxOutputTokens = request.ReservedOutputTokens
@@ -155,7 +162,7 @@ func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowR
 	}
 	budget := CalculateContextBudget(spec, 0, 0)
 	admission := ContextWindowAdmission{Decision: ContextWindowCannotFit, Budget: budget}
-	if spec.IsEstimated {
+	if spec.IsEstimated && spec.ContextWindow <= 0 {
 		return admission, &ContextWindowMetadataUnavailableError{ModelID: request.ModelID}
 	}
 
