@@ -279,6 +279,71 @@ func TestAppendHistorySequentialCompactionsPreserveProvenanceAcrossRestart(t *te
 	}
 }
 
+func TestAppendHistoryCompactsSecretBearingHistory(t *testing.T) {
+	workspace := t.TempDir()
+	session := &TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}
+	c := &Coordinator{session: session}
+	// Credential-shaped history forces the canonical redaction pass to rewrite
+	// the persisted payload; the checkpoint identity must be derived after
+	// redaction or every save fails identity validation.
+	for i := 0; i < maxConversationHistory; i++ {
+		c.conversationHistory = append(c.conversationHistory, fantasy.NewUserMessage(fmt.Sprintf("history-%03d api_key: \"sk-live-%03d\"", i, i)))
+	}
+	c.appendHistory(context.Background(), []fantasy.StepResult{{Messages: []fantasy.Message{fantasy.NewUserMessage("first new message")}}})
+	if len(c.conversationHistory) != compactHistoryThreshold+1 {
+		t.Fatalf("compacted history length = %d, want %d", len(c.conversationHistory), compactHistoryThreshold+1)
+	}
+	state, exists, err := LoadConversationCompactionState(workspace)
+	if err != nil || !exists {
+		t.Fatalf("canonical state after secret-bearing compaction = (%v, %v)", state, err)
+	}
+	checkpoint := state.Branches["main"]
+	if checkpoint.EventID != compactionCheckpointEventID(checkpoint) {
+		t.Fatalf("checkpoint identity = %q, want %q", checkpoint.EventID, compactionCheckpointEventID(checkpoint))
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, conversationCompactionStateFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "sk-live-") {
+		t.Fatal("canonical compaction state leaked unredacted secrets")
+	}
+	if !strings.Contains(string(data), "[REDACTED]") {
+		t.Fatal("canonical compaction state does not contain redacted content")
+	}
+}
+
+func TestAppendHistoryCapacityFailureStillTrimsHistory(t *testing.T) {
+	workspace := t.TempDir()
+	session := &TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}
+	c := &Coordinator{session: session}
+	// A tool result whose mandatory evidence envelope exceeds the output cap
+	// makes verified-history compaction fail; the hard history cap must still
+	// trim instead of retaining unbounded history.
+	call := fantasy.ToolCallPart{ToolCallID: "cap-fail-call", ToolName: "bash", Input: `{"command":"go test ./..."}`}
+	result := fantasy.ToolResultPart{ToolCallID: "cap-fail-call", Output: fantasy.ToolResultOutputContentText{Text: strings.Repeat("x", 30_000)}}
+	c.conversationHistory = append(c.conversationHistory,
+		fantasy.NewUserMessage("original goal"),
+		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{call}},
+		fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{result}},
+	)
+	for i := 0; i < maxConversationHistory; i++ {
+		c.conversationHistory = append(c.conversationHistory, fantasy.NewUserMessage(fmt.Sprintf("history-%03d", i)))
+	}
+	c.appendHistory(context.Background(), []fantasy.StepResult{{Messages: []fantasy.Message{fantasy.NewUserMessage("new message")}}})
+	policy := c.compactionPolicy()
+	if len(c.conversationHistory) > policy.MaxHistoryMessages {
+		t.Fatalf("history length = %d after capacity failure, want <= %d", len(c.conversationHistory), policy.MaxHistoryMessages)
+	}
+	state, exists, err := LoadConversationCompactionState(workspace)
+	if err != nil || !exists {
+		t.Fatalf("canonical state after capacity failure = (%v, %v)", state, err)
+	}
+	if len(state.Branches["main"].History) != len(c.conversationHistory) {
+		t.Fatalf("persisted checkpoint history = %d, want %d matching in-memory history", len(state.Branches["main"].History), len(c.conversationHistory))
+	}
+}
+
 func TestAppendHistoryBoundaryFallbackUsesResolvedHistoryCap(t *testing.T) {
 	workspace := t.TempDir()
 	policy := agent.DefaultCompactionPolicy()
@@ -696,6 +761,53 @@ func TestLegacyCompactionMigratesToCanonicalState(t *testing.T) {
 	}
 	if checkpointEvent == nil || !compactionCheckpointAttestationMatches(*checkpointEvent, checkpoint, state.Generations[checkpoint.GenerationID]) {
 		t.Fatalf("migrated checkpoint attestation = %#v, want exact snapshot attestation (legacy input %q)", checkpointEvent, attestationID)
+	}
+}
+
+func TestLegacyMigrationMultipleRecordsUsesLatest(t *testing.T) {
+	workspace := t.TempDir()
+	history := []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "legacy replacement"), fantasy.NewUserMessage("retained tail")}
+	if err := SaveConversationHistory(workspace, history); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-canonical workspaces compact more than once: only the latest record
+	// maps onto the current history, so migration must use it instead of
+	// refusing the workspace outright.
+	older := CompactionRecord{ID: "legacy-old", Timestamp: time.Unix(1, 0).UTC(), SourceRange: CompactionRange{StartIndex: 0, EndIndex: 0, MsgCount: 1}, Summary: StructuredSummary{Goal: "older goal"}}
+	latest := CompactionRecord{ID: "legacy-latest", Timestamp: time.Unix(3, 0).UTC(), SourceRange: CompactionRange{StartIndex: 0, EndIndex: 0, MsgCount: 1}, Summary: StructuredSummary{Goal: "latest goal"}}
+	if err := saveLegacyCompactionHistory(workspace, []CompactionRecord{older, latest}); err != nil {
+		t.Fatal(err)
+	}
+	appendLegacyAttestationForTest(t, workspace, "main", latest, history)
+	if err := MigrateLegacyCompactionState(workspace, "main"); err != nil {
+		t.Fatal(err)
+	}
+	state, exists, err := LoadConversationCompactionState(workspace)
+	if err != nil || !exists {
+		t.Fatalf("migrated multi-record state = (%v, %v)", state, err)
+	}
+	generation := state.Generations[state.Branches["main"].GenerationID]
+	if generation.Summary.Goal != "latest goal" {
+		t.Fatalf("migrated summary goal = %q, want the latest record", generation.Summary.Goal)
+	}
+}
+
+func TestLegacyMigrationMultipleRecordsWithoutAttestationStaysCompatible(t *testing.T) {
+	workspace := t.TempDir()
+	history := []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "legacy replacement"), fantasy.NewUserMessage("retained tail")}
+	if err := SaveConversationHistory(workspace, history); err != nil {
+		t.Fatal(err)
+	}
+	older := CompactionRecord{ID: "legacy-old-unattested", Timestamp: time.Unix(1, 0).UTC(), SourceRange: CompactionRange{StartIndex: 0, EndIndex: 0, MsgCount: 1}, Summary: StructuredSummary{Goal: "older goal"}}
+	latest := CompactionRecord{ID: "legacy-latest-unattested", Timestamp: time.Unix(3, 0).UTC(), SourceRange: CompactionRange{StartIndex: 0, EndIndex: 0, MsgCount: 1}, Summary: StructuredSummary{Goal: "latest goal"}}
+	if err := saveLegacyCompactionHistory(workspace, []CompactionRecord{older, latest}); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateLegacyCompactionState(workspace, "main"); err != nil {
+		t.Fatal(err)
+	}
+	if state, exists, err := LoadConversationCompactionState(workspace); err != nil || exists || state != nil {
+		t.Fatalf("unattested multi-record migration created canonical state: state=%#v exists=%v err=%v", state, exists, err)
 	}
 }
 
