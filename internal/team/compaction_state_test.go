@@ -1004,10 +1004,16 @@ func TestLegacyMigrationAttestationExactForkPreservesTail(t *testing.T) {
 	}
 }
 
-func TestLegacyMigrationFailsClosedForAmbiguousHistory(t *testing.T) {
+func TestLegacyMigrationFailsClosedForProvenanceMismatch(t *testing.T) {
 	workspace := t.TempDir()
-	history := []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "replacement")}
+	history := []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "replacement"), fantasy.NewUserMessage("retained tail")}
 	if err := SaveConversationHistory(workspace, history); err != nil {
+		t.Fatal(err)
+	}
+	// Session provenance says the replacement covers five source messages, but
+	// the latest legacy record claims one: migrating would attach wrong
+	// provenance, so the migration must fail closed instead of guessing.
+	if err := SaveSession(workspace, &SessionData{ConversationHistorySourceOffset: 0, ConversationHistorySourceCounts: []int{5, 1}}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
@@ -1015,11 +1021,11 @@ func TestLegacyMigrationFailsClosedForAmbiguousHistory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := MigrateLegacyCompactionState(workspace, "main"); err == nil || !strings.Contains(err.Error(), "immutable historical checkpoints") {
-		t.Fatalf("ambiguous migration result = %v", err)
+	if err := MigrateLegacyCompactionState(workspace, "main"); err == nil || !strings.Contains(err.Error(), "does not match compacted range count") {
+		t.Fatalf("provenance-mismatched migration result = %v", err)
 	}
 	if _, exists, err := LoadConversationCompactionState(workspace); err != nil || exists {
-		t.Fatalf("ambiguous migration created canonical state: exists=%v err=%v", exists, err)
+		t.Fatalf("failed migration created canonical state: exists=%v err=%v", exists, err)
 	}
 }
 
