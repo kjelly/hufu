@@ -39,17 +39,9 @@ var retryCmd = &cobra.Command{
 }
 
 func runTargetedRecoveryCommand(action team.TargetedRecoveryAction) error {
-	workspace := getWorkspace()
-	teamName := strings.ToLower(strings.TrimSpace(targetedRecoveryTeamName))
-	if teamName != "" && opts.workspace == "" {
-		workspace = filepath.Join(workspace, teamName)
-	}
-	if teamName == "" {
-		base := filepath.Base(filepath.Clean(workspace))
-		if base == "." || base == "workspace" || base == "" {
-			return fmt.Errorf("cannot infer team from workspace %q; pass --agent-team", workspace)
-		}
-		teamName = strings.ToLower(base)
+	workspace, teamName, err := resolveCommandWorkspaceAndTeam(getWorkspace(), targetedRecoveryTeamName, opts.workspace != "")
+	if err != nil {
+		return err
 	}
 
 	searchPaths := resolveSearchPaths()
@@ -84,6 +76,22 @@ func runTargetedRecoveryCommand(action team.TargetedRecoveryAction) error {
 	}
 	printTargetedRecoveryReport(report)
 	return err
+}
+
+func resolveCommandWorkspaceAndTeam(workspace, requestedTeam string, workspaceExplicit bool) (string, string, error) {
+	workspace = filepath.Clean(strings.TrimSpace(workspace))
+	teamName := strings.ToLower(strings.TrimSpace(requestedTeam))
+	if teamName != "" && !workspaceExplicit {
+		workspace = filepath.Join(workspace, teamName)
+	}
+	if teamName == "" {
+		base := filepath.Base(workspace)
+		if base == "." || base == "workspace" || base == "" {
+			return "", "", fmt.Errorf("cannot infer team from workspace %q; pass --agent-team", workspace)
+		}
+		teamName = strings.ToLower(base)
+	}
+	return workspace, teamName, nil
 }
 
 func printTargetedRecoveryReport(report team.TargetedRecoveryReport) {

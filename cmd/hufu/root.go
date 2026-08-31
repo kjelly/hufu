@@ -25,6 +25,7 @@ Quick start:
   hufu @my-team "explain this codebase"      # run a team
   hufu --default --model local-model "hello"  # use built-in team (no config)
   hufu chat --agent-team my-team             # interactive REPL
+  hufu resume --workspace ./workspace/my-team # resume a durable session
   hufu list                                  # show all teams
 
 Specify the team with --agent-team <name> or by writing @<team-name> in the prompt.
@@ -54,6 +55,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(sessionCmd)
 	rootCmd.AddCommand(reconcileCmd, retryCmd)
+	rootCmd.AddCommand(resumeCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(contextCmd)
 	rootCmd.AddCommand(terminalCmd)
