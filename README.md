@@ -236,6 +236,7 @@ go run ./cmd/hufu
 | `--helper-tools` | — | `string` | `""` | Comma-separated extra tools for the default Helper worker when `--default` is set (e.g. `bash` or `bash,sudo,ssh`). Whitespace trimmed; empty entries dropped. Empty = baseline read-only toolset. |
 | `--auto-approve` | — | `bool` | `false` | Automatically choose clearly safe `ask_user` options; dangerous or ambiguous choices still prompt the user |
 | `--model` | — | `string` | `""` | Override default model for the active team (highest priority) |
+| `--context-window` | — | `int` | `0` | Explicit positive model context capacity in tokens for pre-provider admission; `0` uses provider metadata or the model registry |
 | `--temperature` | — | `string` | `""` | Override sampling temperature |
 | `--max-tokens` | — | `string` | `""` | Override max output tokens |
 | `--top-p` | — | `string` | `""` | Override top-p value |

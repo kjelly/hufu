@@ -151,6 +151,7 @@ Results joined and printed to stdout
 | `--default` | — | `false` | Use the built-in default team (coordinator + Helper); no `.agent-teams/` directory required (mutually exclusive with `--agent-team`). Discovers project skills from `.agents/skills/`, global skills from `~/.agents/skills/`, and respects `--skill` forced skills. |
 | `--helper-tools` | — | `""` | Comma-separated extra tools to enable for the default Helper worker when `--default` is set (e.g. `bash` or `bash,sudo,ssh`). Whitespace around each entry is trimmed; empty entries are dropped. Empty = Helper's baseline read-only toolset. |
 | `--model` | — | `""` | Override default model for the active team (e.g. `ollama/qwen3:8b`); highest priority — overrides agent .md, team.yaml, and hufu.yaml |
+| `--context-window` | — | `0` | Explicit positive model context capacity in tokens; registered for all active models and used by pre-provider admission (`0` = require provider metadata or a known positive estimate) |
 | `--temperature` | — | `""` | Override sampling temperature (e.g. `0.2`) |
 | `--max-tokens` | — | `""` | Override max output tokens (e.g. `4096`) |
 | `--top-p` | — | `""` | Override top-p value (e.g. `0.9`) |
@@ -175,6 +176,10 @@ Results joined and printed to stdout
 | `--profile` | — | `""` | Apply a named flag bundle from `hufu.yaml` `profiles:` (persistent; also works on subcommands). Explicit CLI flags still override |
 | `--quiet` | `-q` | `false` | Suppress status output; print only the final result to stdout |
 | `--output` | — | `""` (text) | Final-result format: `text` (default) or `json`. `json` implies `--quiet` so stdout carries only the JSON document |
+| `--compaction-max-history-messages` | — | `0` | Override the maximum conversation messages considered for structured compaction; zero keeps the validated safety default |
+| `--compaction-retain-history-messages` | — | `0` | Override retained conversation messages after compaction; zero keeps the validated safety default |
+| `--compaction-tool-output-max-bytes` / `--compaction-tool-output-max-runes` / `--compaction-tool-output-max-tokens` | — | `0` | Bound normalized tool-result evidence retained by compaction; zero keeps the validated safety defaults |
+| `--compaction-diagnostic-max-lines` / `--compaction-diagnostic-max-tokens` | — | `0` | Bound preserved diagnostic evidence retained by compaction; zero keeps the validated safety defaults |
 
 ### Subcommands
 

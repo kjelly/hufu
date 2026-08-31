@@ -76,6 +76,8 @@ var numericTelemetryKeys = map[string]struct{}{
 	"max_tokens_without_progress":     {},
 	"tokens_before":                   {},
 	"tokens_after":                    {},
+	"last_requested_tokens":           {},
+	"last_available_tokens":           {},
 	// token_count is the per-item token estimate in a memory injection
 	// manifest. It matches the secret-key regex ("token") but is numeric
 	// telemetry, not a credential; redacting it corrupts session.json and

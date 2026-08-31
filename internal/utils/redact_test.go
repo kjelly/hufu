@@ -90,7 +90,7 @@ func TestRedactJSONDiscoversLearnedSecretsBeforeReplacement(t *testing.T) {
 }
 
 func TestRedactJSONPreservesNumericTelemetryWithSecretLikeKey(t *testing.T) {
-	input := []byte(`{"max_tokens":8192,"tokens_used":1234,"max_tokens_without_progress":2000000,"tokens_since_criterion_progress":42,"tokens_since_progress":"credential-like","nested":{"max_tokens_without_progress":true},"api_token":"secret"}`)
+	input := []byte(`{"max_tokens":8192,"tokens_used":1234,"max_tokens_without_progress":2000000,"tokens_since_criterion_progress":42,"last_requested_tokens":94029,"last_available_tokens":93232,"tokens_since_progress":"credential-like","nested":{"max_tokens_without_progress":true},"api_token":"secret"}`)
 	got, err := RedactJSON(input)
 	if err != nil {
 		t.Fatalf("RedactJSON: %v", err)
@@ -116,6 +116,11 @@ func TestRedactJSONPreservesNumericTelemetryWithSecretLikeKey(t *testing.T) {
 	}
 	if decoded["max_tokens_without_progress"] != float64(2000000) || decoded["tokens_since_criterion_progress"] != float64(42) {
 		t.Fatalf("numeric telemetry changed value: %#v", decoded)
+	}
+	for key, want := range map[string]float64{"last_requested_tokens": 94029, "last_available_tokens": 93232} {
+		if got, ok := decoded[key].(float64); !ok || got != want {
+			t.Fatalf("%s changed type or value: %#v", key, decoded[key])
+		}
 	}
 	if decoded["tokens_since_progress"] != redactedSecret {
 		t.Fatalf("string under telemetry key was not redacted: %#v", decoded["tokens_since_progress"])
