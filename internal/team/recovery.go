@@ -177,6 +177,10 @@ func ResolveRecoveryPolicy(explicit RecoveryPolicy, class SideEffectClass, isUna
 // 2. run read-only reconcile tool or verify command if available
 // 3. classify state: complete, not_started, partial, unknown
 func (c *Coordinator) reconcileInterruptedTask(ctx context.Context, it *TodoItem) string {
+	if it.VerifySpec != nil {
+		res, err := c.verifyTaskDeliverableWithSpec(ctx, nil, taskDefFromTodoItem(it), nil)
+		return recoveryStateFromVerification(res, err)
+	}
 	reconcileCmd := it.ReconcileTool
 	if reconcileCmd == "" {
 		reconcileCmd = it.Verify
@@ -184,22 +188,7 @@ func (c *Coordinator) reconcileInterruptedTask(ctx context.Context, it *TodoItem
 
 	if reconcileCmd != "" {
 		res, err := c.verifyTaskDeliverable(ctx, nil, reconcileCmd)
-		if err == nil {
-			return RecoveryStateComplete
-		}
-		if res != nil {
-			switch res.ExitCode {
-			case ReconcileExitComplete:
-				return RecoveryStateComplete
-			case ReconcileExitNotStarted:
-				return RecoveryStateNotStarted
-			case ReconcileExitPartial:
-				return RecoveryStatePartial
-			default:
-				return RecoveryStateUnknown
-			}
-		}
-		return RecoveryStateUnknown
+		return recoveryStateFromVerification(res, err)
 	}
 
 	if strings.TrimSpace(it.Output) != "" {
@@ -207,6 +196,25 @@ func (c *Coordinator) reconcileInterruptedTask(ctx context.Context, it *TodoItem
 	}
 
 	return RecoveryStateUnknown
+}
+
+func recoveryStateFromVerification(res *VerificationResult, err error) string {
+	if err == nil {
+		return RecoveryStateComplete
+	}
+	if res == nil {
+		return RecoveryStateUnknown
+	}
+	switch res.ExitCode {
+	case ReconcileExitComplete:
+		return RecoveryStateComplete
+	case ReconcileExitNotStarted:
+		return RecoveryStateNotStarted
+	case ReconcileExitPartial:
+		return RecoveryStatePartial
+	default:
+		return RecoveryStateUnknown
+	}
 }
 
 // resolveTaskRecovery applies the 3-tier side-effect / recovery precedence

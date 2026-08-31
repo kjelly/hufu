@@ -63,3 +63,17 @@ func TestRepairControllerReconcileAndRollbackGuards(t *testing.T) {
 		t.Fatalf("rollback result = %#v", rollback)
 	}
 }
+
+func TestRepairControllerAllowsRetryAfterReconcileProvesNotStarted(t *testing.T) {
+	rc := NewRepairController()
+	checkpointed, retried := false, false
+	result := rc.Execute(context.Background(), RepairRequest{
+		Task:          TaskDef{SideEffect: SideEffectExternalWrite, Recovery: RecoveryReconcile},
+		RecoveryState: RecoveryStateNotStarted,
+		Checkpoint:    func(context.Context) error { checkpointed = true; return nil },
+		Retry:         func(context.Context) error { retried = true; return nil },
+	})
+	if result.Err != nil || result.Decision.Action != RepairRetry || !checkpointed || !retried {
+		t.Fatalf("retry after not-started reconcile = %#v, checkpointed=%v retried=%v", result, checkpointed, retried)
+	}
+}

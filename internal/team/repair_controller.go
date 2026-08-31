@@ -35,6 +35,7 @@ type RepairRequest struct {
 	Failure           error
 	Attempt           int
 	MaxAttempts       int
+	RecoveryState     string
 	BudgetExhausted   bool
 	AllowRollback     bool
 	RollbackRequested bool
@@ -75,15 +76,24 @@ func (r *RepairController) Decide(req RepairRequest) RepairDecision {
 		return RepairDecision{Action: RepairBlock, Reason: "task recovery requires human intervention"}
 	}
 	if task.SideEffect == SideEffectExternalWrite || task.SideEffect == SideEffectInfraMutation || task.SideEffect == SideEffectCredential {
-		if task.Recovery == RecoveryReconcile || task.ReconcileTool != "" {
+		if (task.Recovery == RecoveryReconcile || task.ReconcileTool != "") && req.RecoveryState != RecoveryStateNotStarted {
 			return RepairDecision{Action: RepairReconcile, Reason: "external side effect requires reconcile before replay"}
+		}
+		if req.RecoveryState == RecoveryStateNotStarted && (task.Recovery == RecoveryReconcile || task.ReconcileTool != "") {
+			if req.MaxAttempts > 0 && req.Attempt >= req.MaxAttempts {
+				return RepairDecision{Action: RepairReplan, Reason: "task attempt budget exhausted; construct a new plan"}
+			}
+			if task.Escalate {
+				return RepairDecision{Action: RepairEscalate, Reason: "reconciliation proved the operation did not start; escalation is permitted"}
+			}
+			return RepairDecision{Action: RepairRetry, Reason: "reconciliation proved the operation did not start"}
 		}
 		return RepairDecision{Action: RepairBlock, Reason: "external side effect has no safe reconcile path"}
 	}
 	if req.MaxAttempts > 0 && req.Attempt >= req.MaxAttempts {
 		return RepairDecision{Action: RepairReplan, Reason: "task attempt budget exhausted; construct a new plan"}
 	}
-	if task.Recovery == RecoveryReconcile || task.ReconcileTool != "" {
+	if (task.Recovery == RecoveryReconcile || task.ReconcileTool != "") && req.RecoveryState != RecoveryStateNotStarted {
 		return RepairDecision{Action: RepairReconcile, Reason: "task declares reconcile recovery"}
 	}
 	if task.Escalate {

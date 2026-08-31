@@ -331,6 +331,71 @@ func TestResumeInterruptedTasks_RecoveryEventStore(t *testing.T) {
 	}
 }
 
+func TestReconcileTaskDoesNotReplayWhenOperationWasNotStarted(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
+	contract := ExecutionContract{Steps: []ExecutionStep{{
+		ID: "retry-step", Tool: "test-runner", Effect: ExecutionEffectRead,
+	}}}
+	c.SetStructuredStepRunner(StructuredStepRunnerFunc(func(context.Context, StructuredStepRequest) (ExecutionStepResult, error) {
+		return ExecutionStepResult{}, nil
+	}))
+	c.taskTracker.TodoList().Restore([]*TodoItem{{
+		ID:            "41",
+		Agent:         "worker",
+		Desc:          "reconcile before retry",
+		Status:        TaskInProgress,
+		SideEffect:    SideEffectExternalWrite,
+		Recovery:      RecoveryReconcile,
+		ReconcileTool: "exit 1",
+		Execution:     contract,
+	}})
+
+	report, err := c.ReconcileTask(context.Background(), "41")
+	if err != nil {
+		t.Fatalf("ReconcileTask: %v", err)
+	}
+	if report.Action != TargetedRecoveryReconcile || report.RecoveryState != RecoveryStateNotStarted || report.Status != TaskInProgress {
+		t.Fatalf("reconcile report = %#v, want not-started without replay", report)
+	}
+	retryReport, err := c.RetryTask(context.Background(), "41")
+	if err != nil {
+		t.Fatalf("RetryTask after not-started reconcile: %v", err)
+	}
+	if retryReport.Status != TaskDone || retryReport.Retries != 1 {
+		t.Fatalf("retry after reconcile report = %#v, want done after one retry", retryReport)
+	}
+}
+
+func TestRetryTaskUsesCanonicalResetBeforeWorkerExecution(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
+	contract := ExecutionContract{Steps: []ExecutionStep{{
+		ID: "retry-step", Tool: "test-runner", Effect: ExecutionEffectRead,
+	}}}
+	c.SetStructuredStepRunner(StructuredStepRunnerFunc(func(context.Context, StructuredStepRequest) (ExecutionStepResult, error) {
+		return ExecutionStepResult{}, nil
+	}))
+	c.taskTracker.TodoList().Restore([]*TodoItem{{
+		ID:        "42",
+		Agent:     "worker",
+		Desc:      "retry failed task",
+		Status:    TaskError,
+		Recovery:  RecoveryRetry,
+		Execution: contract,
+	}})
+
+	report, err := c.RetryTask(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("RetryTask: %v", err)
+	}
+	if report.Action != TargetedRecoveryRetry || report.Status != TaskDone || report.Retries != 1 {
+		t.Fatalf("retry report = %#v, want done after one retry", report)
+	}
+	item := c.todoItemByID("42")
+	if item == nil || len(item.ExecutionReceipts) != 1 {
+		t.Fatalf("retry execution receipts = %#v, want one canonical worker attempt", item)
+	}
+}
+
 func TestInferSideEffectClass(t *testing.T) {
 	tests := []struct {
 		tools string

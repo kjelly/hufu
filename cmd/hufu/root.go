@@ -53,6 +53,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(sessionCmd)
+	rootCmd.AddCommand(reconcileCmd, retryCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(contextCmd)
 	rootCmd.AddCommand(terminalCmd)

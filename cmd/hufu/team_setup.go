@@ -328,6 +328,13 @@ func contractErrorMessages(findings []team.ContractFinding) []string {
 }
 
 func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
+	return loadTeamByNameAtWorkspace(ctx, teamName, "", registry, defaultProviderURL, defaultProviderAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkillsMode)
+}
+
+// loadTeamByNameAtWorkspace is the recovery-command seam: unlike ordinary
+// prompt execution, an operator passes the already-resolved per-team session
+// directory rather than a base workspace that should receive a team suffix.
+func loadTeamByNameAtWorkspace(ctx context.Context, teamName, workspace string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
 	teamDir, err := registry.Resolve(teamName)
 	if err != nil {
 		return nil, err
@@ -338,8 +345,17 @@ func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamReg
 		return nil, err
 	}
 
-	if err := resolveTeamWorkspacePath(teamName, session); err != nil {
-		return nil, err
+	if strings.TrimSpace(workspace) == "" {
+		if err := resolveTeamWorkspacePath(teamName, session); err != nil {
+			return nil, err
+		}
+	} else {
+		absWorkspace, err := filepath.Abs(workspace)
+		if err != nil {
+			return nil, fmt.Errorf("invalid recovery workspace: %w", err)
+		}
+		session.Workspace = canonicalRuntimePath(absWorkspace)
+		session.Config.WorkspaceDir = session.Workspace
 	}
 
 	return loadTeamCommon(ctx, teamName, session, defaultProviderURL, defaultProviderAPIKey, pathConsent, registry, forcedSkills, planMode, autoSkillsMode, true)
