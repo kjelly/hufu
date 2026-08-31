@@ -31,6 +31,7 @@ type Config struct {
 	OutputDir    string `json:"output_dir"`
 	ArtifactRoot string `json:"artifact_root"`
 	Since        string `json:"since"`
+	MaxCommits   int    `json:"max_commits"`
 	MaxDiffBytes int    `json:"max_diff_bytes"`
 	MaxDiffLines int    `json:"max_diff_lines"`
 	MaxPaths     int    `json:"max_paths"`
@@ -137,7 +138,7 @@ func Prepare(ctx context.Context, config Config) (actionResult, error) {
 		return actionResult{}, fmt.Errorf("output_dir %q must be beneath artifact_root %q", config.OutputDir, config.ArtifactRoot)
 	}
 
-	reviewRangeValue, err := resolveRange(ctx, repo, config.Since)
+	reviewRangeValue, err := resolveRange(ctx, repo, config.Since, config.MaxCommits)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -227,6 +228,9 @@ func validateConfig(config Config) error {
 	if strings.TrimSpace(config.Since) == "" {
 		return errors.New("since is required")
 	}
+	if config.MaxCommits < 0 {
+		return errors.New("max_commits must not be negative")
+	}
 	if config.MaxDiffBytes <= 0 || config.MaxDiffLines <= 0 || config.MaxPaths <= 0 {
 		return errors.New("max_diff_bytes, max_diff_lines, and max_paths must be positive")
 	}
@@ -293,7 +297,7 @@ func ensureEmptyOutputDir(path string) error {
 	return nil
 }
 
-func resolveRange(ctx context.Context, repo, since string) (reviewRange, error) {
+func resolveRange(ctx context.Context, repo, since string, maxCommits int) (reviewRange, error) {
 	end, err := git(ctx, repo, "rev-parse", "HEAD")
 	if err != nil {
 		return reviewRange{}, fmt.Errorf("resolve HEAD: %w", err)
@@ -303,6 +307,9 @@ func resolveRange(ctx context.Context, repo, since string) (reviewRange, error) 
 		return reviewRange{}, fmt.Errorf("list commits: %w", err)
 	}
 	commits := nonEmptyLines(commitsText)
+	if maxCommits > 0 && len(commits) > maxCommits {
+		commits = commits[len(commits)-maxCommits:]
+	}
 	r := reviewRange{End: strings.TrimSpace(end), Since: since, CommitCount: len(commits)}
 	if len(commits) == 0 {
 		return r, nil

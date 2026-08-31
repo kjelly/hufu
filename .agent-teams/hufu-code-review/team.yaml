@@ -64,7 +64,7 @@ tasks:
     action:
       capability: produce-workset
       type: prepare_review_workset
-      payload: '{"since":"3.days.ago","max_diff_bytes":24000,"max_diff_lines":600,"max_paths":16}'
+      payload: '{"since":"3.days.ago","max_commits":10,"max_diff_bytes":24000,"max_diff_lines":600,"max_paths":16}'
 
   - id: review-workset
     agent: reviewer

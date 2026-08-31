@@ -89,6 +89,31 @@ func TestPrepareProducesGoldenManifestAndDiffs(t *testing.T) {
 	}
 }
 
+func TestPrepareLimitsRangeToMostRecentCommits(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/old.go", "package old\n", "old change", "2025-01-02T00:00:00Z")
+	writeAndCommit(t, repo, "internal/new.go", "package new\n", "new change", "2025-01-03T00:00:00Z")
+	writeAndCommit(t, repo, "internal/latest.go", "package latest\n", "latest change", "2025-01-04T00:00:00Z")
+	config := fixtureConfig(repo, "out")
+	config.MaxCommits = 2
+
+	result, err := Prepare(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	manifest := readManifest(t, filepath.Join(repo, "out", "workset-manifest.json"))
+	if manifest.Range.CommitCount != 2 || result.Outputs["commit_count"] != 2 {
+		t.Fatalf("commit count = %d / %v, want 2", manifest.Range.CommitCount, result.Outputs["commit_count"])
+	}
+	for _, entry := range manifest.Items {
+		for _, path := range entry.Paths {
+			if path == "internal/old.go" {
+				t.Fatalf("oldest commit path included in limited range: %#v", manifest.Items)
+			}
+		}
+	}
+}
+
 func TestPrepareDoesNotIncludeDirtyWorkingTree(t *testing.T) {
 	repo := newFixtureRepo(t)
 	writeAndCommit(t, repo, "internal/team/committed.go", "package team\n", "committed change", "2025-01-02T00:00:00Z")
