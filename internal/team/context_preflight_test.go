@@ -2,15 +2,17 @@ package team
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
 )
 
-func TestPrepareContextPreflightCreatesReplayableWorkspaceLineage(t *testing.T) {
+func TestPrepareContextPreflightRejectsReentryWithoutBlocking(t *testing.T) {
 	workspace := t.TempDir()
 	tree := NewSessionTree()
 	branch, err := tree.CreateRootBranch("existing-branch")
@@ -28,6 +30,17 @@ func TestPrepareContextPreflightCreatesReplayableWorkspaceLineage(t *testing.T) 
 	defer c.CloseContextPreflight()
 	if err := c.PrepareContextPreflight(); err != nil {
 		t.Fatal(err)
+	}
+	reentryResult := make(chan error, 1)
+	go func() { reentryResult <- c.PrepareContextPreflight() }()
+	var reentryErr error
+	select {
+	case reentryErr = <-reentryResult:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("nested context preflight blocked on the active invocation lease")
+	}
+	if _, ok := errors.AsType[*ContextPreflightReentryError](reentryErr); !ok {
+		t.Fatalf("nested context preflight error = %v, want typed reentry error", reentryErr)
 	}
 	after, err := LoadSessionTree(workspace)
 	if err != nil {

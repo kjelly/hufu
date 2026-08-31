@@ -201,9 +201,10 @@ func (c *Coordinator) buildArtifactAccessScope(todoID string, attempt int) (*Art
 	for _, ref := range scope.AuthorizedRefs {
 		addUnique(&scope.DeniedRefs, ref)
 	}
-	if item.WorksetBinding == nil && len(scope.AuthorizedRefs) == 0 {
-		return nil, nil
-	}
+	// Every worker attempt receives a scope, including unbound workers. An
+	// empty authorization set is meaningful: the policy blocks the opaque
+	// artifact data/meta roots so cwd-based ls/view cannot enumerate another
+	// task's backing store.
 	return scope, nil
 }
 

@@ -119,6 +119,10 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 		if provider == nil {
 			continue
 		}
+		model, err := provider.LanguageModel(ctx, candidateID)
+		if err != nil {
+			continue
+		}
 		payload := map[string]any{"from_model": currentModel, "to_model": candidateID, "request_tokens": admission.RequestTokens, "available": admission.Budget.Available, "step": stepNumber}
 		if err := c.emitEvent(modelContinuationEventType, "coordinator", CoordTodoID, payload); err != nil {
 			return coordinatorModelContinuation{}, fmt.Errorf("persist coordinator model continuation admission: %w", err)
@@ -128,10 +132,6 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 		downshift.FallbackReason = "earlier_model_admitted"
 		if err := c.recordContextWindowTelemetry(EventContextWindowDownshift, downshift, CoordTodoID); err != nil {
 			return coordinatorModelContinuation{}, err
-		}
-		model, err := provider.LanguageModel(ctx, candidateID)
-		if err != nil {
-			continue
 		}
 		return coordinatorModelContinuation{
 			Model: model, Messages: admission.Messages, System: candidateSystem, Tools: candidateTools,
@@ -674,7 +674,13 @@ retryLoop:
 			return "", fmt.Errorf("worker memory manifest preflight failed: %w", err)
 		}
 		c.recordExecutionEvent(todoID, agentName, attempt, "in_progress", resolvedModel, 0, ExecutionUsage{})
-		if attemptArtifactScope != nil {
+		// An empty unbound scope is still installed in the task context so
+		// artifact backing roots are denied, but it is not a separate execution
+		// attempt and must not create a placeholder receipt. Persist a scope
+		// receipt only when the attempt has authorized artifact capabilities or a
+		// bound workset contract.
+		persistScopeReceipt := attemptArtifactScope != nil && (len(attemptArtifactScope.AuthorizedRefs) > 0 || (c.todoItemByID(todoID) != nil && c.todoItemByID(todoID).WorksetBinding != nil))
+		if persistScopeReceipt {
 			committedScopeReceipt := &ExecutionReceipt{
 				RunID: runID, TaskID: todoID, Attempt: attempt, ProducerID: agentName,
 				ArtifactScope: cloneArtifactAccessScope(attemptArtifactScope),
@@ -809,8 +815,9 @@ retryLoop:
 			if attemptArtifactScope != nil {
 				taskCtx = context.WithValue(taskCtx, artifactAccessScopeKey, cloneArtifactAccessScope(attemptArtifactScope))
 				taskCtx = context.WithValue(taskCtx, tools.ArtifactPathPolicyKey, tools.ArtifactPathPolicy{
-					BlockedPaths:             c.artifactScopePathCandidates(attemptArtifactScope),
-					FailClosedForUnsupported: c.todoItemByID(todoID) != nil && c.todoItemByID(todoID).WorksetBinding != nil,
+					BlockedPaths:                 c.artifactScopePathCandidates(attemptArtifactScope),
+					FailClosedForUnsupported:     c.todoItemByID(todoID) != nil && c.todoItemByID(todoID).WorksetBinding != nil,
+					DenyUnsupportedDeclaredTools: c.todoItemByID(todoID) != nil && c.todoItemByID(todoID).WorksetBinding == nil,
 				})
 			}
 

@@ -70,8 +70,8 @@ func (c *Coordinator) newContextWindowTelemetry(eventType EventType, request Con
 		}
 	}
 	branchID := "main"
-	if c != nil && c.compactionBranchID != "" {
-		branchID = c.compactionBranchID
+	if c != nil {
+		branchID = c.compactionBranch()
 	}
 	sequence := uint64(0)
 	if c != nil {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"charm.land/fantasy"
@@ -18,6 +19,27 @@ import (
 )
 
 type p3FixedCounter struct{ messages int }
+
+func TestContextWindowTelemetryBranchSnapshotIsRaceFree(t *testing.T) {
+	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{Name: "race"}}}
+	request := ContextWindowRequest{ModelID: "race-model", Window: 1024}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Go(func() {
+			for j := 0; j < 100; j++ {
+				c.newContextWindowTelemetry(EventContextWindowAdmission, request, ContextWindowAdmission{}, "race", "", j)
+			}
+		})
+	}
+	wg.Go(func() {
+		for i := 0; i < 800; i++ {
+			c.compactionMu.Lock()
+			c.compactionBranchID = fmt.Sprintf("branch-%d", i)
+			c.compactionMu.Unlock()
+		}
+	})
+	wg.Wait()
+}
 
 func (p3FixedCounter) CountText(context.Context, string, string) (int, error) { return 0, nil }
 func (p p3FixedCounter) CountMessages(context.Context, string, []fantasy.Message) (int, error) {

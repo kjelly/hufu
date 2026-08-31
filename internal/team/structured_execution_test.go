@@ -400,7 +400,7 @@ func TestExecuteTaskRoutesStructuredContractThroughCoordinatorRunner(t *testing.
 func TestCoordinatorDeclaredToolRunnerExecutesTypedInputAndRehashesArtifact(t *testing.T) {
 	projectDir := t.TempDir()
 	var calls []string
-	writer := &structuredTestTool{name: "writer", run: func(_ context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	writer := &artifactAwareStructuredTestTool{structuredTestTool: &structuredTestTool{name: "writer", run: func(_ context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 		calls = append(calls, call.Name)
 		var input struct {
 			Path    string `json:"path"`
@@ -413,12 +413,12 @@ func TestCoordinatorDeclaredToolRunnerExecutesTypedInputAndRehashesArtifact(t *t
 			return fantasy.NewTextErrorResponse(err.Error()), nil
 		}
 		return fantasy.NewTextResponse("written"), nil
-	}}
+	}}}
 	plainTool := func(name string) fantasy.AgentTool {
-		return &structuredTestTool{name: name, run: func(_ context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+		return &artifactAwareStructuredTestTool{structuredTestTool: &structuredTestTool{name: name, run: func(_ context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			calls = append(calls, call.Name)
 			return fantasy.NewTextResponse("ok"), nil
-		}}
+		}}}
 	}
 	contract := ExecutionContract{Steps: []ExecutionStep{
 		{ID: "produce", Tool: "writer", Input: map[string]any{"path": "draft.txt", "content": "valid"}, Effect: ExecutionEffectProduce, Outputs: []ExecutionStepOutput{{Name: "draft", Kind: ExecutionOutputArtifact, Path: "draft.txt"}}},

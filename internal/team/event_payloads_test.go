@@ -85,6 +85,41 @@ func TestEventStoreRedactsBeforeHashAndPersistence(t *testing.T) {
 	}
 }
 
+func TestEventStorePreservesRunFinishedContextTelemetryTypes(t *testing.T) {
+	store, err := NewEventStore(t.TempDir(), "run-finished-telemetry", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	payload, err := json.Marshal(RunFinishedEventPayload{
+		Outcome: RunOutcomeFailed,
+		Metrics: &RunMetrics{ContextWindowTelemetry: ContextWindowTelemetrySummary{
+			LastRequestedTokens: 94029,
+			LastAvailableTokens: 93232,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	durable, err := store.AppendPersisted(RunEvent{
+		Type:    string(EventRunFinished),
+		Actor:   "coordinator",
+		Payload: payload,
+	})
+	if err != nil {
+		t.Fatalf("append run_finished: %v", err)
+	}
+
+	var got RunFinishedEventPayload
+	if err := json.Unmarshal(durable.Payload, &got); err != nil {
+		t.Fatalf("decode durable run_finished: %v", err)
+	}
+	if got.Metrics == nil || got.Metrics.ContextWindowTelemetry.LastRequestedTokens != 94029 || got.Metrics.ContextWindowTelemetry.LastAvailableTokens != 93232 {
+		t.Fatalf("context telemetry = %#v, want numeric values preserved", got.Metrics)
+	}
+}
+
 func TestEventStoreIdempotencyReturnsOriginalDurableEvent(t *testing.T) {
 	store, err := NewEventStore(t.TempDir(), "run-1", "session-1")
 	if err != nil {

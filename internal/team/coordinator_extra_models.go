@@ -365,6 +365,13 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 	goalModeCopy := orig.goalMode
 	orig.goalModeMu.RUnlock()
 
+	orig.compactionMu.Lock()
+	compactionStateClone := cloneCompactionState(orig.compactionState)
+	compactionBranchIDCopy := orig.compactionBranchID
+	compactionRecoveryErrCopy := orig.compactionRecoveryErr
+	lastCompactionSummaryCopy := cloneStructuredSummary(orig.lastCompactionSummary)
+	orig.compactionMu.Unlock()
+
 	orig.sidecarInitMu.Lock()
 	sidecarInitCopy := orig.sidecarInit
 	sidecarInstCopy := orig.sidecarInst
@@ -447,7 +454,10 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		conversationHistorySourceRanges:    conversationHistorySourceRangesClone,
 		conversationHistorySourceOffset:    orig.conversationHistorySourceOffset,
 		conversationHistoryNextSourceIndex: nextSourceIndex,
-		lastCompactionSummary:              cloneStructuredSummary(orig.lastCompactionSummary),
+		lastCompactionSummary:              lastCompactionSummaryCopy,
+		compactionState:                    compactionStateClone,
+		compactionBranchID:                 compactionBranchIDCopy,
+		compactionRecoveryErr:              compactionRecoveryErrCopy,
 		initialPrompt:                      orig.initialPrompt,
 		projectDir:                         orig.projectDir,
 		auditLogger:                        orig.auditLogger,

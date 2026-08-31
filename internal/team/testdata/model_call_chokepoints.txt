@@ -1,8 +1,10 @@
 # path<TAB>source marker<TAB>owner<TAB>purpose<TAB>classification
 internal/agent/agent.go<TAB>agent.Generate(ctx, fantasy.AgentCall{<TAB>agent.RunAgent<TAB>generic_agent<TAB>runtime_boundary
+internal/agent/provider_request.go<TAB>.Generate(ctx,<TAB>admittedLanguageModel.Generate<TAB>provider_admission<TAB>runtime_boundary
+internal/agent/provider_request.go<TAB>.Stream(ctx,<TAB>admittedLanguageModel.Stream<TAB>provider_admission<TAB>runtime_boundary
 internal/sidecar/sidecar.go<TAB>a.Generate(ctx, call)<TAB>sidecar.generate<TAB>sidecar<TAB>runtime_boundary
 internal/team/coordinator_task_run.go<TAB>ag.Stream(ctx, call)<TAB>Coordinator.runAgentWithStatusAndHistory<TAB>task_execution<TAB>runtime_boundary
 internal/promotion/analyzer.go<TAB>a.Generator.Generate(ctx, DraftRequest{<TAB>promotion.Analyzer<TAB>promotion_draft<TAB>adapter_boundary
-internal/team/coordinator_skills.go<TAB>sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.sidecarModel), c.sidecarModel)<TAB>Coordinator.Sidecar<TAB>skill_matcher<TAB>runtime_boundary
-internal/team/coordinator_skills.go<TAB>sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.guardModel), c.guardModel)<TAB>Coordinator.GuardSidecar<TAB>guard_reviewer<TAB>runtime_boundary
-internal/team/coordinator_skills.go<TAB>sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.judgeModel), c.judgeModel)<TAB>Coordinator.JudgeSidecar<TAB>judge<TAB>runtime_boundary
+internal/team/coordinator_skills.go<TAB>sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.sidecarModel), c.sidecarModel, c.providerAdmission())<TAB>Coordinator.Sidecar<TAB>skill_matcher<TAB>runtime_boundary
+internal/team/coordinator_skills.go<TAB>sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.guardModel), c.guardModel, c.providerAdmission())<TAB>Coordinator.GuardSidecar<TAB>guard_reviewer<TAB>runtime_boundary
+internal/team/coordinator_skills.go<TAB>sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.judgeModel), c.judgeModel, c.providerAdmission())<TAB>Coordinator.JudgeSidecar<TAB>judge<TAB>runtime_boundary

@@ -394,6 +394,7 @@ type Coordinator struct {
 	preflightContext            context.Context
 	preflightOwner              *invocationOwner
 	preflightLease              *invocationLease
+	preflightStarting           bool
 	// providerBoundaryStart is a deterministic test seam for startup-admission
 	// tests. Production always uses ProviderManager.StartInvocationProxy.
 	providerBoundaryStart func(context.Context, string) error

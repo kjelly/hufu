@@ -172,7 +172,7 @@ func TestOllamaProviderListModelNamesProxyChild(t *testing.T) {
 	os.Exit(providerproxy.RunChild(os.Stdin, os.Stdout))
 }
 
-func TestOllamaProviderListModelNamesUsesInvocationProxy(t *testing.T) {
+func TestListModelNamesUsesTimeoutWithInvocationProxy(t *testing.T) {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {

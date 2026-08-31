@@ -215,6 +215,12 @@ func usageWithProgressTokens(steps []fantasy.StepResult, attemptTokens *attemptB
 
 func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Context, lease *invocationLease) (context.Context, func()) {
 	owner := newInvocationOwnerWithLease(c, parent, lease)
+	handoff := false
+	defer func() {
+		if !handoff {
+			lease.release()
+		}
+	}()
 	invocationCtx := owner.ctx
 	watchdog := c.newInvocationWatchdog(invocationCtx, owner.cancel)
 	watchdog.owner = owner
@@ -333,7 +339,9 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	c.setInvocationWatchdog(watchdog)
 	watchdog.start()
 
+	handoff = true
 	return invocationCtx, func() {
+		defer lease.release()
 		// End the watchdog first and join it. Provider/process/IPC owners are
 		// then stopped before terminal shadow projections are exported,
 		// preventing late stall/error events from racing durable finalization.
@@ -417,7 +425,6 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 			c.terminalLifecycleWaitTimedOut = false
 		}
 		c.terminalLifecycleMu.Unlock()
-		lease.release()
 	}
 }
 

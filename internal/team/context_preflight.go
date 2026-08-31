@@ -7,6 +7,13 @@ import (
 	"strings"
 )
 
+// ContextPreflightReentryError identifies an overlapping preflight on one
+// coordinator. A second preflight must fail instead of replacing the first
+// invocation's provider owner and lease.
+type ContextPreflightReentryError struct{}
+
+func (*ContextPreflightReentryError) Error() string { return "context preflight is already active" }
+
 // PrepareContextPreflight preserves the context-free API for callers that do
 // not have a cancellation scope. CLI-owned callers should use
 // PrepareContextPreflightContext so cancellation owns the provider boundary.
@@ -26,15 +33,31 @@ func (c *Coordinator) PrepareContextPreflightContext(parent context.Context) err
 	if parent == nil {
 		parent = context.Background()
 	}
+	c.preflightMu.Lock()
+	preflightActive := c.preflightStarting || c.preflightLease != nil
+	if !preflightActive {
+		c.preflightStarting = true
+	}
+	c.preflightMu.Unlock()
+	if preflightActive {
+		return &ContextPreflightReentryError{}
+	}
 	lease, err := c.acquireInvocationLease(parent)
 	if err != nil {
+		c.preflightMu.Lock()
+		c.preflightStarting = false
+		c.preflightMu.Unlock()
 		return err
 	}
 	releaseLease := true
 	defer func() {
-		if releaseLease {
-			lease.release()
+		if !releaseLease {
+			return
 		}
+		c.preflightMu.Lock()
+		c.preflightStarting = false
+		c.preflightMu.Unlock()
+		lease.release()
 	}()
 	_ = c.mutateSessionData(func(sd *SessionData) error { return nil })
 	// The preflight event-store run ID and every request/manifest must share
@@ -55,7 +78,12 @@ func (c *Coordinator) PrepareContextPreflightContext(parent context.Context) err
 		return fmt.Errorf("context preflight failed: %s", reason)
 	}
 	c.preflightMu.Lock()
+	if c.preflightLease != nil {
+		c.preflightMu.Unlock()
+		return &ContextPreflightReentryError{}
+	}
 	c.preflightLease = lease
+	c.preflightStarting = false
 	c.preflightMu.Unlock()
 	releaseLease = false
 	// A preflight sidecar is still a Hufu-owned model invocation. Establish a

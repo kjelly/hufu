@@ -5,13 +5,21 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/mcp"
 	runtimeTools "github.com/kjelly/hufu/internal/tools"
 )
+
+type artifactAwareStructuredTestTool struct {
+	*structuredTestTool
+}
+
+func (*artifactAwareStructuredTestTool) boundArtifactPolicyTool() {}
 
 func TestWorksetArtifactAuthorizationRequiresExactCommittedReceipt(t *testing.T) {
 	tests := []struct {
@@ -80,7 +88,7 @@ func TestWorksetWorkerContextProjectsOnlyAssignedArtifactRefs(t *testing.T) {
 	}
 }
 
-func TestBoundWorksetArtifactScopeBlocksPathAliasAndProjectsOpaqueRefs(t *testing.T) {
+func TestUnboundWorkerCannotListOrViewArtifactBackingStore(t *testing.T) {
 	c, producer, child, assigned, receipt := newWorksetAuthorizationFixture(t)
 	child.WorksetReceipt = cloneWorksetReceipt(receipt)
 	child.DependsOn = []string{producer.ID}
@@ -190,14 +198,80 @@ func TestBoundWorksetArtifactScopeBlocksPathAliasAndProjectsOpaqueRefs(t *testin
 		t.Fatal(err)
 	}
 	unboundContext := context.WithValue(context.Background(), todoIDKey{}, unbound.ID)
-	unboundContext = runtimeTools.SetToolsAllowed(unboundContext, []string{"view"})
+	unboundContext = runtimeTools.SetToolsAllowed(unboundContext, []string{"view", "bash"})
 	unboundContext = context.WithValue(unboundContext, executionAttemptKey{}, 1)
 	unboundContext = context.WithValue(unboundContext, artifactAccessScopeKey, cloneArtifactAccessScope(unboundScope))
+	unboundContext = context.WithValue(unboundContext, runtimeTools.ArtifactPathPolicyKey, runtimeTools.ArtifactPathPolicy{
+		BlockedPaths: c.artifactScopePathCandidates(unboundScope),
+	})
+	response, runErr := bash.Run(unboundContext, fantasy.ToolCall{Input: `{"command":"ls ` + filepath.Join(relativeWorkspace, logsDir, "artifacts", "data") + `"}`})
+	if runErr != nil || !response.IsError || !strings.Contains(response.Content, "opaque artifact_ref") {
+		t.Fatalf("unbound worker artifact backing path response=%#v err=%v, want path denial", response, runErr)
+	}
 	for _, ref := range []ArtifactRef{assigned, unassigned.ArtifactRef} {
 		response, runErr := view.Run(unboundContext, fantasy.ToolCall{Input: `{"artifact_ref":"` + ref.ID + `"}`})
 		if runErr != nil || response.IsError {
 			t.Fatalf("unbound dependency artifact %q response=%#v err=%v", ref.ID, response, runErr)
 		}
+	}
+}
+
+func TestUnboundDeclaredToolCannotReadArtifactBackingStore(t *testing.T) {
+	c, _, child, assigned, _ := newWorksetAuthorizationFixture(t)
+	child.WorksetBinding = nil
+	scope, err := c.buildArtifactAccessScope(child.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := runtimeTools.ArtifactPathPolicy{BlockedPaths: c.artifactScopePathCandidates(scope)}
+	ctx := context.WithValue(context.Background(), runtimeTools.ArtifactPathPolicyKey, policy)
+	ctx = runtimeTools.SetToolsAllowed(ctx, []string{"bash"})
+	bash := runtimeTools.NewBashTool(runtimeTools.WithWorkDir(c.session.Workspace), runtimeTools.WithAllowedPaths([]string{c.session.Workspace}))
+	for _, command := range []string{
+		"ls " + filepath.Join(c.session.Workspace, logsDir, "artifacts", "data"),
+		"cat " + filepath.Join(c.session.Workspace, logsDir, "artifacts", "data", assigned.ID),
+	} {
+		response, runErr := bash.Run(ctx, fantasy.ToolCall{Input: `{"command":` + strconv.Quote(command) + `}`})
+		if runErr != nil || !response.IsError || !strings.Contains(response.Content, "opaque artifact_ref") {
+			t.Fatalf("unbound declared tool command %q response=%#v err=%v, want artifact policy denial", command, response, runErr)
+		}
+	}
+}
+
+func TestUnboundDeclaredMCPToolCannotReadArtifactBackingStore(t *testing.T) {
+	c, _, child, assigned, _ := newWorksetAuthorizationFixture(t)
+	child.WorksetBinding = nil
+	child.Agent = "reviewer"
+	c.session.Agents = map[string]*agent.AgentDef{
+		"reviewer": {Name: "reviewer", Role: "worker", MCPTools: map[string]agent.MCPToolConfig{
+			"external_ls": {
+				Cmd:    `ls "$V1"`,
+				Inputs: []agent.MCPInputConfig{{Name: "path", Required: true, Type: "string"}},
+			},
+		}},
+	}
+	c.mcpManager = mcp.NewMCPToolManager("bash", "bash")
+	if err := c.mcpManager.LoadAgentMCPServer("reviewer", c.session.Agents["reviewer"].MCPTools, "bash"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, root := range []string{"data", "meta"} {
+		t.Run(root, func(t *testing.T) {
+			result, err := (&coordinatorDeclaredToolRunner{c: c}).RunStructuredStep(context.Background(), StructuredStepRequest{
+				TaskID: child.ID, Attempt: 1,
+				Step:          ExecutionStep{ID: "enumerate", Tool: "external_ls"},
+				ResolvedInput: map[string]any{"path": filepath.Join(c.session.Workspace, logsDir, "artifacts", root)},
+			})
+			if err != nil {
+				t.Fatalf("unbound MCP declared tool returned runner error: %v", err)
+			}
+			if result.ExitCode == 0 || !strings.Contains(result.Stderr, "declared external tools do not implement centralized artifact-path enforcement") {
+				t.Fatalf("unbound MCP declared tool result=%#v, want centralized denial before subprocess", result)
+			}
+			if strings.Contains(result.Stdout, assigned.ID) || strings.Contains(result.Stderr, assigned.ID) {
+				t.Fatalf("unbound MCP declared tool exposed artifact %q: result=%#v", assigned.ID, result)
+			}
+		})
 	}
 }
 

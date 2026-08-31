@@ -207,7 +207,7 @@ func TestCoordinatorContextAdmissionUsesTransientProjectionWithRealFantasyAgent(
 	}
 }
 
-func TestCoordinatorModelDownshiftSendsOnlyAfterEarlierModelAdmission(t *testing.T) {
+func TestDownshiftTelemetryOccursOnlyAfterLanguageModelSuccess(t *testing.T) {
 	strongID := "coordinator-downshift-strong"
 	weakID := "coordinator-downshift-weak"
 	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{

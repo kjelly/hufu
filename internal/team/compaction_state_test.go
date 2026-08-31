@@ -279,6 +279,48 @@ func TestAppendHistorySequentialCompactionsPreserveProvenanceAcrossRestart(t *te
 	}
 }
 
+func TestRealPredecessorCompactionsUseIncrementalLineageValidation(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-lineage", "session-lineage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	c := &Coordinator{
+		session:            &TeamSession{Workspace: workspace},
+		eventStore:         store,
+		compactionBranchID: "main",
+	}
+
+	const generationCount = 64
+	for i := range generationCount {
+		projection := compactionProjection{
+			messages:     []fantasy.Message{fantasy.NewUserMessage(fmt.Sprintf("%slineage-%d", verifiedHistoryPrefix, i))},
+			summary:      &StructuredSummary{Goal: fmt.Sprintf("lineage-%d", i)},
+			tokensBefore: 100 + i,
+			tokensAfter:  20,
+		}
+		if _, err := c.commitCompactionCheckpoint(t.Context(), projection.messages, i, []int{1}, []int{1}, projection); err != nil {
+			t.Fatalf("commit predecessor-linked compaction %d: %v", i, err)
+		}
+	}
+
+	state, exists, err := LoadConversationCompactionState(workspace)
+	if err != nil || !exists {
+		t.Fatalf("load predecessor-linked compactions = (exists %v, err %v)", exists, err)
+	}
+	if len(state.Generations) != generationCount {
+		t.Fatalf("generation count = %d, want %d live predecessor generations", len(state.Generations), generationCount)
+	}
+	stats, err := validateCompactionLineageRangesWithStats(state)
+	if err != nil {
+		t.Fatalf("incremental lineage validation: %v", err)
+	}
+	if stats.RangeQueries != generationCount {
+		t.Fatalf("lineage range queries = %d, want one per generation rather than predecessor-chain rescans", stats.RangeQueries)
+	}
+}
+
 func TestAppendHistoryCompactsSecretBearingHistory(t *testing.T) {
 	workspace := t.TempDir()
 	session := &TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}
@@ -1225,6 +1267,62 @@ func TestMaterializeCompactionBranchUsesLaterFullCheckpoint(t *testing.T) {
 	child := loaded.Branches["feature"]
 	if child.AttestationMode != compactionCheckpointAttestationMode || child.EventID != compactionCheckpointEventID(child) || digestMessages(child.History) != later.HistoryDigest || messageText(child.History[len(child.History)-1]) != "later history" {
 		t.Fatalf("later fork checkpoint = %#v, want full later history %#v", child, later.History)
+	}
+}
+
+func TestCompactionCheckpointRetentionBoundsStateAndValidationWork(t *testing.T) {
+	workspace := t.TempDir()
+	state := testCompactionState(t, workspace)
+	generation := state.Generations["g-1"]
+	checkpoint := state.Branches["main"]
+	es, err := NewEventStore(workspace, "retention-run", "retention-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	generationEvent, err := compactionGenerationAttestationEvent(generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := es.AppendPersisted(generationEvent); err != nil {
+		t.Fatal(err)
+	}
+	checkpointEvent, err := compactionCheckpointAttestationEvent(checkpoint, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := es.AppendPersisted(checkpointEvent); err != nil {
+		t.Fatal(err)
+	}
+	if err := es.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveSessionTree(workspace, NewSessionTree()); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 24; i++ {
+		checkpoint = state.Branches["main"]
+		checkpoint.History = append(cloneMessages(checkpoint.History), fantasy.NewUserMessage(fmt.Sprintf("tail-%d", i)))
+		checkpoint.SourceCounts = append(append([]int(nil), checkpoint.SourceCounts...), 1)
+		checkpoint.SourceRanges = append(cloneSourceRanges(checkpoint.SourceRanges), []CompactionRange{{StartIndex: checkpoint.NextSourceIndex, EndIndex: checkpoint.NextSourceIndex, MsgCount: 1}})
+		checkpoint.NextSourceIndex++
+		checkpoint.HistoryDigest = digestMessages(checkpoint.History)
+		checkpoint.EventID = compactionCheckpointEventID(checkpoint)
+		state.Branches["main"] = checkpoint
+		state.Checkpoints["main"] = append(state.Checkpoints["main"], checkpoint)
+		if err := SaveConversationCompactionState(workspace, state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loaded, exists, err := LoadConversationCompactionState(workspace)
+	if err != nil || !exists {
+		t.Fatalf("load retained state: exists=%v err=%v", exists, err)
+	}
+	if got := len(loaded.Checkpoints["main"]); got != 1 {
+		t.Fatalf("retained %d checkpoints, want one reachable branch head", got)
+	}
+	if got := len(loaded.Generations); got != 1 {
+		t.Fatalf("retained %d generations, want one reachable generation", got)
 	}
 }
 

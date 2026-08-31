@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -160,6 +161,7 @@ func SaveConversationCompactionState(workspace string, state *ConversationCompac
 	if err != nil {
 		return fmt.Errorf("redact canonical compaction state: %w", err)
 	}
+	state = retainReachableCompactionState(workspace, state)
 	if err := validateCompactionState(state); err != nil {
 		return fmt.Errorf("validate canonical compaction state before save: %w", err)
 	}
@@ -168,6 +170,125 @@ func SaveConversationCompactionState(workspace string, state *ConversationCompac
 		return fmt.Errorf("marshal canonical compaction state: %w", err)
 	}
 	return AtomicWriteFile(compactionStatePath(workspace), data, 0o600)
+}
+
+// retainReachableCompactionState bounds immutable checkpoint growth without
+// invalidating time travel. The latest snapshot of every canonical branch is
+// retained, as is the parent snapshot at every extant fork point. Everything
+// else is unreachable from the current session tree and may be removed. If
+// lineage evidence is unavailable, the safe choice is to retain the state and
+// let validation preserve the existing recovery behavior.
+func retainReachableCompactionState(workspace string, state *ConversationCompactionState) *ConversationCompactionState {
+	if state == nil || strings.TrimSpace(workspace) == "" {
+		return state
+	}
+	tree, err := LoadSessionTree(workspace)
+	if err != nil || tree == nil {
+		return state
+	}
+	if _, err := os.Stat(filepath.Join(workspace, sessionTreeFile)); err != nil {
+		return state
+	}
+	if _, err := os.Stat(filepath.Join(workspace, logsDir, eventStoreFile)); err != nil {
+		return state
+	}
+	es, err := OpenEventStore(workspace)
+	if err != nil {
+		return state
+	}
+	defer func() { _ = es.Close() }()
+	events, err := es.ReadEvents()
+	if err != nil {
+		return state
+	}
+
+	keep := make(map[string]map[string]struct{}, len(state.Branches))
+	keepCheckpoint := func(checkpoint ConversationCompactionCheckpoint) {
+		if checkpoint.BranchID == "" || checkpoint.EventID == "" {
+			return
+		}
+		if keep[checkpoint.BranchID] == nil {
+			keep[checkpoint.BranchID] = make(map[string]struct{})
+		}
+		keep[checkpoint.BranchID][checkpoint.EventID] = struct{}{}
+	}
+	for branchID, head := range state.Branches {
+		checkpoints := state.Checkpoints[branchID]
+		if len(checkpoints) > 0 {
+			keepCheckpoint(checkpoints[len(checkpoints)-1])
+		} else {
+			keepCheckpoint(head)
+		}
+	}
+
+	for _, branch := range tree.Branches {
+		if branch == nil || branch.ParentID == "" || branch.ForkEventID == "" {
+			continue
+		}
+		lineage := FilterEventsForBranch(events, tree, branch.ParentID)
+		forkIndex := -1
+		for index, event := range lineage {
+			if event.ID == branch.ForkEventID {
+				forkIndex = index
+				break
+			}
+		}
+		if forkIndex < 0 {
+			// A partially written tree/event projection must not cause a
+			// checkpoint to be deleted. The next successful save can retry.
+			return state
+		}
+		eventIndex := make(map[string]int, len(lineage))
+		for index, event := range lineage {
+			eventIndex[event.ID] = index
+		}
+		var selected ConversationCompactionCheckpoint
+		selectedIndex := -1
+		for _, checkpoint := range state.Checkpoints[branch.ParentID] {
+			index, exists := eventIndex[checkpoint.EventID]
+			if exists && index <= forkIndex && index >= selectedIndex {
+				selected = checkpoint
+				selectedIndex = index
+			}
+		}
+		if selectedIndex >= 0 {
+			keepCheckpoint(selected)
+		}
+	}
+
+	retainedGenerations := make(map[string]struct{}, len(state.Generations))
+	for branchID, checkpoints := range state.Checkpoints {
+		filtered := make([]ConversationCompactionCheckpoint, 0, len(checkpoints))
+		for _, checkpoint := range checkpoints {
+			if _, ok := keep[branchID][checkpoint.EventID]; !ok {
+				continue
+			}
+			filtered = append(filtered, checkpoint)
+			for generationID := checkpoint.GenerationID; generationID != ""; {
+				if _, seen := retainedGenerations[generationID]; seen {
+					break
+				}
+				retainedGenerations[generationID] = struct{}{}
+				generation, exists := state.Generations[generationID]
+				if !exists {
+					break
+				}
+				generationID = generation.PredecessorID
+			}
+		}
+		if len(filtered) == 0 {
+			// Every canonical branch must remain loadable. Keep its current
+			// head when no event-bound checkpoint was selected above.
+			filtered = []ConversationCompactionCheckpoint{state.Branches[branchID]}
+		}
+		state.Checkpoints[branchID] = filtered
+	}
+	for generationID := range state.Generations {
+		if _, ok := retainedGenerations[generationID]; !ok {
+			delete(state.Generations, generationID)
+		}
+	}
+	return state
 }
 
 func redactedCompactionState(state *ConversationCompactionState) (*ConversationCompactionState, error) {
@@ -491,9 +612,6 @@ func validateCompactionState(state *ConversationCompactionState) error {
 		if len(generation.SourceRanges) == 0 {
 			return fmt.Errorf("generation %q has no source provenance", id)
 		}
-		if err := validateCompactionLineageRanges(state, generation); err != nil {
-			return fmt.Errorf("generation %q: %w", id, err)
-		}
 		if !toolPairsIntact(generation.Replacement) {
 			return fmt.Errorf("generation %q replacement splits tool pairs", id)
 		}
@@ -506,6 +624,9 @@ func validateCompactionState(state *ConversationCompactionState) error {
 		if generation.Checksum != digestGeneration(generation) {
 			return fmt.Errorf("generation %q checksum mismatch", id)
 		}
+	}
+	if err := validateCompactionLineageRanges(state); err != nil {
+		return err
 	}
 	for branchID, checkpoint := range state.Branches {
 		if err := validateCompactionCheckpoint(state, branchID, checkpoint); err != nil {
@@ -616,36 +737,165 @@ func validateCompactionRanges(ranges []CompactionRange) error {
 	return nil
 }
 
+type compactionLineageValidationStats struct {
+	RangeQueries int
+}
+
+// compactionRangeIndex is an active-ancestor interval index. Generations are
+// walked as a graph, so each generation is checked against its active
+// predecessor path once instead of walking the complete predecessor chain
+// again. Coordinate compression keeps the index bounded by the source ranges
+// present in the state and makes validation O(R log R).
+type compactionRangeIndex struct {
+	coordinates []int
+	maximum     []int
+	lazy        []int
+}
+
+func newCompactionRangeIndex(coordinates []int) *compactionRangeIndex {
+	if len(coordinates) == 0 {
+		return &compactionRangeIndex{}
+	}
+	sorted := append([]int(nil), coordinates...)
+	sort.Ints(sorted)
+	sorted = slices.Compact(sorted)
+	size := len(sorted) * 4
+	return &compactionRangeIndex{coordinates: sorted, maximum: make([]int, size), lazy: make([]int, size)}
+}
+
+func (index *compactionRangeIndex) update(sourceRange CompactionRange, delta int) {
+	if index == nil || len(index.coordinates) == 0 {
+		return
+	}
+	left := sort.SearchInts(index.coordinates, sourceRange.StartIndex)
+	right := sort.SearchInts(index.coordinates, sourceRange.EndIndex)
+	if left > right {
+		return
+	}
+	index.updateRange(1, 0, len(index.coordinates)-1, left, right, delta)
+}
+
+func (index *compactionRangeIndex) updateRange(node, start, end, left, right, delta int) {
+	if left > end || right < start {
+		return
+	}
+	if left <= start && end <= right {
+		index.maximum[node] += delta
+		index.lazy[node] += delta
+		return
+	}
+	middle := start + (end-start)/2
+	index.updateRange(node*2, start, middle, left, right, delta)
+	index.updateRange(node*2+1, middle+1, end, left, right, delta)
+	index.maximum[node] = index.lazy[node] + max(index.maximum[node*2], index.maximum[node*2+1])
+}
+
+func (index *compactionRangeIndex) overlaps(sourceRange CompactionRange) bool {
+	if index == nil || len(index.coordinates) == 0 {
+		return false
+	}
+	left := sort.SearchInts(index.coordinates, sourceRange.StartIndex)
+	right := sort.SearchInts(index.coordinates, sourceRange.EndIndex)
+	if left > right {
+		return false
+	}
+	return index.queryRange(1, 0, len(index.coordinates)-1, left, right, 0) > 0
+}
+
+func (index *compactionRangeIndex) queryRange(node, start, end, left, right, inherited int) int {
+	if left > end || right < start {
+		return 0
+	}
+	inherited += index.lazy[node]
+	if left <= start && end <= right {
+		return inherited + index.maximum[node]
+	}
+	middle := start + (end-start)/2
+	return max(
+		index.queryRange(node*2, start, middle, left, right, inherited),
+		index.queryRange(node*2+1, middle+1, end, left, right, inherited),
+	)
+}
+
 // validateCompactionLineageRanges prevents a later generation from claiming
-// source messages already claimed by one of its predecessors. A generation's
-// ranges are checked locally above; this check extends that invariant across
-// the immutable predecessor chain for the same branch.
-func validateCompactionLineageRanges(state *ConversationCompactionState, generation CompactionGeneration) error {
-	seen := map[string]bool{generation.ID: true}
-	currentRanges := generation.SourceRanges
-	predecessorID := generation.PredecessorID
-	for predecessorID != "" {
-		if seen[predecessorID] {
+// source messages already claimed by one of its predecessors. The active-path
+// index preserves the same invariant as the old predecessor walk while making
+// repeated linear compactions incremental rather than O(K^2).
+func validateCompactionLineageRanges(state *ConversationCompactionState) error {
+	_, err := validateCompactionLineageRangesWithStats(state)
+	return err
+}
+
+func validateCompactionLineageRangesWithStats(state *ConversationCompactionState) (compactionLineageValidationStats, error) {
+	var stats compactionLineageValidationStats
+	if state == nil {
+		return stats, errors.New("state is nil")
+	}
+	coordinates := make([]int, 0)
+	children := make(map[string][]string, len(state.Generations))
+	roots := make([]string, 0)
+	for id, generation := range state.Generations {
+		for _, sourceRange := range generation.SourceRanges {
+			coordinates = append(coordinates, sourceRange.StartIndex, sourceRange.EndIndex)
+		}
+		if generation.PredecessorID == "" {
+			roots = append(roots, id)
+		} else {
+			children[generation.PredecessorID] = append(children[generation.PredecessorID], id)
+		}
+	}
+	sort.Strings(roots)
+	for predecessorID := range children {
+		sort.Strings(children[predecessorID])
+	}
+	index := newCompactionRangeIndex(coordinates)
+	colors := make(map[string]uint8, len(state.Generations))
+	var walk func(string) error
+	walk = func(id string) error {
+		switch colors[id] {
+		case 1:
 			return errors.New("generation predecessor lineage contains a cycle")
+		case 2:
+			return nil
 		}
-		seen[predecessorID] = true
-		predecessor, ok := state.Generations[predecessorID]
+		generation, ok := state.Generations[id]
 		if !ok {
-			return fmt.Errorf("generation predecessor %q is missing", predecessorID)
+			return fmt.Errorf("generation predecessor %q is missing", id)
 		}
-		for _, current := range currentRanges {
-			for _, previous := range predecessor.SourceRanges {
-				if current.StartIndex <= previous.EndIndex && previous.StartIndex <= current.EndIndex {
-					return fmt.Errorf("source range %+v overlaps predecessor %q range %+v", current, predecessor.ID, previous)
-				}
+		colors[id] = 1
+		for _, sourceRange := range generation.SourceRanges {
+			stats.RangeQueries++
+			if index.overlaps(sourceRange) {
+				return fmt.Errorf("source range %+v overlaps predecessor lineage of generation %q", sourceRange, generation.ID)
 			}
 		}
-		// Keep comparing the candidate ranges with every ancestor. Mutating the
-		// walked generation here only checked adjacent generations and allowed a
-		// g1/g2/g3 overlap to pass when g3 overlapped g1 but not g2.
-		predecessorID = predecessor.PredecessorID
+		for _, sourceRange := range generation.SourceRanges {
+			index.update(sourceRange, 1)
+		}
+		for _, childID := range children[id] {
+			if err := walk(childID); err != nil {
+				return err
+			}
+		}
+		for _, sourceRange := range generation.SourceRanges {
+			index.update(sourceRange, -1)
+		}
+		colors[id] = 2
+		return nil
 	}
-	return nil
+	for _, rootID := range roots {
+		if err := walk(rootID); err != nil {
+			return stats, err
+		}
+	}
+	for id := range state.Generations {
+		if colors[id] == 0 {
+			if err := walk(id); err != nil {
+				return stats, err
+			}
+		}
+	}
+	return stats, nil
 }
 
 func validateHistorySourceRanges(sourceRanges [][]CompactionRange) error {

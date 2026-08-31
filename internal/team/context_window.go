@@ -8,6 +8,8 @@ import (
 	"sync"
 
 	"charm.land/fantasy"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // CannotFitError is emitted only before the provider boundary. ProvenNoSend
@@ -272,6 +274,9 @@ func hasCompactableHistory(messages []fantasy.Message) bool {
 
 func (m *ContextWindowManager) countRequest(ctx context.Context, request ContextWindowRequest) (int, error) {
 	messages := request.effectiveMessages()
+	if counter, ok := m.counter.(ProviderRequestCounter); ok {
+		return counter.CountProviderRequest(ctx, request.ModelID, agent.ProviderRequest{ModelID: request.ModelID, Messages: messages, Tools: request.Tools})
+	}
 	messageTokens, err := m.counter.CountMessages(ctx, request.ModelID, messages)
 	if err != nil {
 		return 0, err

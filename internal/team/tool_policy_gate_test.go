@@ -116,13 +116,20 @@ func TestPolicyGateStepBudgetTerminalOnlyDeniesInspectionWithoutExecution(t *tes
 }
 
 func TestDirectAgentContextCarriesPolicyDispositionReporter(t *testing.T) {
-	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{Name: "direct", Timeout: 30}}}
+	c := &Coordinator{
+		session:     &TeamSession{Config: agent.TeamConfig{Name: "direct", Timeout: 30}},
+		taskTracker: NewTaskTracker(),
+	}
 	def := &agent.AgentDef{Name: "reviewer", Role: "worker", SideEffect: string(SideEffectNone)}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: def.Name, Desc: "inspect"}})[0]
 	collector := &attemptToolDispositions{}
-	ctx, cancel, roundCancel := c.buildDirectAgentTaskContext(context.Background(), def, "reviewer", "inspect", "task-direct", "test", []string{"bash"})
+	ctx, cancel, roundCancel, err := c.buildDirectAgentTaskContext(context.Background(), def, "reviewer", "inspect", item.ID, "test", []string{"bash"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer cancel()
 	defer roundCancel()
-	ctx = context.WithValue(ctx, tools.ToolExecutionDispositionReporterKey, newToolDispositionReporter(collector, SideEffectNone, "run-direct", "task-direct", 1))
+	ctx = context.WithValue(ctx, tools.ToolExecutionDispositionReporterKey, newToolDispositionReporter(collector, SideEffectNone, "run-direct", item.ID, 1))
 	inner := &recordingTool{name: "write"}
 	gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
 	response, err := gated.Run(ctx, fantasy.ToolCall{ID: "direct-write", Name: "write", Input: `{}`})
@@ -130,8 +137,94 @@ func TestDirectAgentContextCarriesPolicyDispositionReporter(t *testing.T) {
 		t.Fatalf("direct policy response=%+v err=%v ran=%v", response, err, inner.ran)
 	}
 	items := collector.snapshot()
-	if len(items) != 1 || items[0].TodoID != "task-direct" || items[0].RunID != "run-direct" || items[0].Kind != ToolExecutionPolicyDenied || items[0].Executed {
+	if len(items) != 1 || items[0].TodoID != item.ID || items[0].RunID != "run-direct" || items[0].Kind != ToolExecutionPolicyDenied || items[0].Executed {
 		t.Fatalf("direct disposition = %#v", items)
+	}
+}
+
+func TestDirectAgentContextEnforcesUnboundArtifactIsolation(t *testing.T) {
+	root := t.TempDir()
+	dataPath := filepath.Join(root, logsDir, "artifacts", "data", "blocked")
+	metaPath := filepath.Join(root, logsDir, "artifacts", "meta", "blocked.json")
+	if err := os.MkdirAll(filepath.Dir(dataPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(metaPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, contents := range map[string]string{
+		dataPath:                            "blocked artifact data",
+		metaPath:                            "blocked artifact metadata",
+		filepath.Join(root, "ordinary.txt"): "ordinary workspace content",
+	} {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: root,
+			Config:    agent.TeamConfig{Name: "direct", Timeout: 30},
+		},
+		taskTracker: NewTaskTracker(),
+		projectDir:  root,
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "inspect artifacts"}})[0]
+	def := &agent.AgentDef{Name: "reviewer", Role: "worker"}
+	ctx, cancel, roundCancel, err := c.buildDirectAgentTaskContext(t.Context(), def, "reviewer", item.Desc, item.ID, "test", []string{"view", "ls", "lua", "external_ls"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	defer roundCancel()
+
+	scope, ok := artifactAccessScopeFromContext(ctx)
+	if !ok || scope.TaskID != item.ID || scope.Attempt != 1 {
+		t.Fatalf("direct context artifact scope = %#v, want task %q attempt 1", scope, item.ID)
+	}
+	policy, ok := ctx.Value(tools.ArtifactPathPolicyKey).(tools.ArtifactPathPolicy)
+	if !ok || !policy.DenyUnsupportedDeclaredTools || policy.FailClosedForUnsupported {
+		t.Fatalf("direct context artifact policy = %#v, want unbound policy", policy)
+	}
+
+	view := tools.NewViewTool(tools.WithWorkDir(root), tools.WithAllowedPaths([]string{root}))
+	ls := tools.NewLsTool(tools.WithWorkDir(root), tools.WithAllowedPaths([]string{root}))
+	lua := tools.NewLuaTool(tools.WithWorkDir(root), tools.WithAllowedPaths([]string{root}))
+	external := &recordingTool{name: "external_ls"}
+	gated := c.gatePolicyTools([]fantasy.AgentTool{view, ls, lua, external})
+	byName := make(map[string]fantasy.AgentTool, len(gated))
+	for _, tool := range gated {
+		byName[tool.Info().Name] = tool
+	}
+
+	for _, testCase := range []struct {
+		name  string
+		tool  string
+		input string
+		want  string
+	}{
+		{name: "view artifact data", tool: "view", input: `{"file_path":"logs/artifacts/data/blocked"}`, want: "runtime-managed artifact path"},
+		{name: "view artifact metadata", tool: "view", input: `{"file_path":"logs/artifacts/meta/blocked.json"}`, want: "runtime-managed artifact path"},
+		{name: "ls artifact data", tool: "ls", input: `{"path":"logs/artifacts/data"}`, want: "runtime-managed artifact path"},
+		{name: "ls artifact metadata", tool: "ls", input: `{"path":"logs/artifacts/meta"}`, want: "runtime-managed artifact path"},
+		{name: "lua bypass", tool: "lua", input: `{"code":"print('must not execute')"}`, want: "unbound task"},
+		{name: "declared external bypass", tool: "external_ls", input: `{}`, want: "declared external tools"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response, runErr := byName[testCase.tool].Run(ctx, fantasy.ToolCall{Name: testCase.tool, Input: testCase.input})
+			if runErr != nil || !response.IsError || !strings.Contains(response.Content, testCase.want) {
+				t.Fatalf("%s response=%#v err=%v, want denial containing %q", testCase.tool, response, runErr, testCase.want)
+			}
+		})
+	}
+	if external.ran {
+		t.Fatal("declared external tool ran despite the direct unbound artifact policy")
+	}
+
+	response, runErr := byName["view"].Run(ctx, fantasy.ToolCall{Name: "view", Input: `{"file_path":"ordinary.txt"}`})
+	if runErr != nil || response.IsError || !strings.Contains(response.Content, "ordinary workspace content") {
+		t.Fatalf("ordinary workspace view response=%#v err=%v, want usable path", response, runErr)
 	}
 }
 

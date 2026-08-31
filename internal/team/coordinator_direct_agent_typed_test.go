@@ -207,6 +207,13 @@ func TestRunDirectAgentPromptNotesUseResolverSurface(t *testing.T) {
 			if capture.prompt == "" {
 				t.Fatal("RunDirectAgent did not deliver a prompt to the production agent consumer")
 			}
+			items := c.taskTracker.TodoList().Items()
+			if len(items) != 1 || items[0].ExecutionReceipt == nil {
+				t.Fatalf("direct task receipt = %#v, want a persisted receipt", items)
+			}
+			if scope := items[0].ExecutionReceipt.ArtifactScope; scope == nil || scope.TaskID != items[0].ID || scope.Attempt != 1 {
+				t.Fatalf("direct task artifact scope receipt = %#v, want task %q attempt 1", items[0].ExecutionReceipt.ArtifactScope, items[0].ID)
+			}
 
 			// The allowlist observed by the actual consumer must be exactly the
 			// final resolver Names used to build the direct agent surface.

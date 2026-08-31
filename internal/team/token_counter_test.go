@@ -401,6 +401,21 @@ func TestIsContextOverflowError(t *testing.T) {
 	}
 }
 
+func TestPreProviderCannotFitIsNotProviderOverflow(t *testing.T) {
+	err := &CannotFitError{
+		ModelID:       "glm-5.3-flash:cloud",
+		RequestTokens: 94029,
+		Available:     93232,
+		ProvenNoSend:  true,
+	}
+	if IsContextOverflowError(err) {
+		t.Fatal("pre-provider CannotFitError was classified as provider overflow")
+	}
+	if got, ok := ParseObservedContextWindow(err); ok || got != 0 {
+		t.Fatalf("ParseObservedContextWindow() = (%d, %v), want (0, false)", got, ok)
+	}
+}
+
 func TestWarnEstimatedOnceDedup(t *testing.T) {
 	// Reset dedup state for this test by using a fresh model ID unlikely to
 	// collide with other tests.
