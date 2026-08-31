@@ -163,6 +163,9 @@ func (p *coordinatorRequestPreflight) prepare(ctx context.Context, stepMessages 
 }
 
 func requestContextTokens(ctx context.Context, modelID, system, prompt string, messages []fantasy.Message, tools []fantasy.AgentTool) int {
+	if tokens, err := defaultCounter.CountProviderRequest(ctx, modelID, providerCallFromContextRequest(modelID, system, prompt, messages, tools)); err == nil {
+		return tokens
+	}
 	messageTokens, _ := defaultCounter.CountMessages(ctx, modelID, messages)
 	// Fantasy passes the initial system and user prompt inside opts.Messages.
 	// Count the request as it will actually be sent: replace those messages

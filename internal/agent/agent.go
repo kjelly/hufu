@@ -824,6 +824,11 @@ func (p *OpenAICompatibleProvider) setBoundary(endpoint string, client *http.Cli
 // error when the endpoint is unreachable or unsupported; callers should treat
 // that as "cannot validate", not as "model missing".
 func (p *OpenAICompatibleProvider) ListModelNames(ctx context.Context) ([]string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	baseURL, boundaryClient, _ := p.effectiveBaseURL()
 	url := strings.TrimRight(baseURL, "/") + "/models"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -1217,10 +1222,12 @@ func (p *OpenAICompatibleProvider) Name() string {
 }
 
 type AgentConfig struct {
-	Def        *AgentDef
-	TeamConfig *TeamConfig
-	WorkDir    string
-	MaxSteps   int
+	Def         *AgentDef
+	TeamConfig  *TeamConfig
+	WorkDir     string
+	MaxSteps    int
+	PrepareStep fantasy.PrepareStepFunction
+	Admission   RequestAdmission
 }
 
 func resolveMaxSteps(agentSteps, teamSteps int) int {
@@ -1246,6 +1253,7 @@ func CreateAgent(ctx context.Context, provider *OpenAICompatibleProvider, cfg Ag
 	if err != nil {
 		return nil, fmt.Errorf("failed to create language model for %q: %w", cfg.Def.Name, err)
 	}
+	lm = NewAdmittedLanguageModel(modelStr, lm, cfg.Admission)
 
 	opts := []fantasy.AgentOption{
 		fantasy.WithSystemPrompt(cfg.Def.System),
@@ -1264,6 +1272,9 @@ func CreateAgent(ctx context.Context, provider *OpenAICompatibleProvider, cfg Ag
 		// reads AgentStreamCall.RepairToolCall there, not this agent-level
 		// default. See internal/team/coordinator_task_run.go.
 		fantasy.WithRepairToolCall(RepairConcatenatedToolCall),
+	}
+	if cfg.PrepareStep != nil {
+		opts = append(opts, fantasy.WithPrepareStep(cfg.PrepareStep))
 	}
 
 	if maxTokens := parseModelInt(cfg.Def.Generation.MaxTokens, cfg.TeamConfig.Generation.MaxTokens); maxTokens > 0 {

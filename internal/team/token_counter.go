@@ -21,6 +21,12 @@ type TokenCounter interface {
 	CountTools(ctx context.Context, modelID string, tools []fantasy.AgentTool) (int, error)
 }
 
+// ProviderRequestCounter is implemented by counters that can account for the
+// complete provider-shaped request, including serialized tools and media.
+type ProviderRequestCounter interface {
+	CountProviderRequest(ctx context.Context, modelID string, request agent.ProviderRequest) (int, error)
+}
+
 // ModelContextSpec defines context limits and estimation parameters for a model.
 type ModelContextSpec struct {
 	ModelID             string `json:"model_id"`
@@ -273,6 +279,13 @@ func ParseObservedContextWindow(err error) (int, bool) {
 	if err == nil {
 		return 0, false
 	}
+	// CannotFitError is produced by Hufu before the provider boundary. Its
+	// message contains both "context window" and the model identifier, so the
+	// generic parser could otherwise mistake a model-version digit for the
+	// provider's advertised window.
+	if _, preProvider := isProvenPreProviderCannotFit(err); preProvider {
+		return 0, false
+	}
 	matches := observedContextCapacityRE.FindStringSubmatch(err.Error())
 	if len(matches) != 2 {
 		return 0, false
@@ -412,6 +425,16 @@ func (tc *DefaultTokenCounter) CountTools(ctx context.Context, modelID string, t
 	return total, nil
 }
 
+func (tc *DefaultTokenCounter) CountProviderRequest(ctx context.Context, modelID string, request agent.ProviderRequest) (int, error) {
+	request.ModelID = modelID
+	data, err := agent.SerializeProviderRequest(request)
+	if err != nil {
+		return 0, err
+	}
+	spec := tc.registry.GetSpec(modelID)
+	return estimateTextTokens(string(data), spec.Estimator), nil
+}
+
 // estimateTextTokens calculates tokens using character density and model-family heuristics with conservative safety margin.
 func estimateTextTokens(text string, estimator string) int {
 	runes := []rune(text)
@@ -512,6 +535,12 @@ func TruncateToTokenBudget(text, estimator string, maxTokens int) string {
 // IsContextOverflowError checks if an error indicates a model context length overflow.
 func IsContextOverflowError(err error) bool {
 	if err == nil {
+		return false
+	}
+	// A local admission rejection is not provider feedback. Keeping it out of
+	// this predicate prevents callers from learning a bogus context window from
+	// CannotFitError.Error().
+	if _, preProvider := isProvenPreProviderCannotFit(err); preProvider {
 		return false
 	}
 	msg := strings.ToLower(err.Error())

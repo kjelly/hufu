@@ -570,6 +570,23 @@ func (c *Coordinator) attachSidecarUsageObserver(s *sidecar.Sidecar) *sidecar.Si
 	if s != nil {
 		s.SetUsageObserver(c.observeSidecarUsage)
 		s.SetPromptPreparer(c.prepareAuxiliaryPrompt)
+		s.SetRequestPreparer(func(ctx context.Context, purpose string, messages []fantasy.Message, tools []fantasy.AgentTool, reserved int) (context.Context, fantasy.PrepareStepResult, error) {
+			modelID := s.ModelID()
+			manager := NewContextWindowManager(defaultCounter, nil)
+			taskID, _ := ctx.Value(todoIDKey{}).(string)
+			attempt, _ := ctx.Value(executionAttemptKey{}).(int)
+			admission, err := c.admitCoordinatorContext(ctx, manager, ContextWindowRequest{
+				ModelID: modelID, System: sidecar.SystemPrompt(), Tools: tools, Messages: messages,
+				ReservedOutputTokens: reserved,
+			}, "sidecar_"+purpose, taskID, attempt)
+			if err != nil {
+				return ctx, fantasy.PrepareStepResult{}, err
+			}
+			if admission.Decision == ContextWindowCannotFit {
+				return ctx, fantasy.PrepareStepResult{}, &CannotFitError{ModelID: modelID, RequestTokens: admission.RequestTokens, Available: admission.Budget.Available, ProvenNoSend: true}
+			}
+			return ctx, fantasy.PrepareStepResult{Messages: admission.Messages}, nil
+		})
 	}
 	return s
 }
@@ -600,7 +617,7 @@ func (c *Coordinator) Sidecar() *sidecar.Sidecar {
 		return c.sidecarInst
 	}
 	ctx := c.providerInvocationContext()
-	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.sidecarModel), c.sidecarModel)
+	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.sidecarModel), c.sidecarModel, c.providerAdmission())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ sidecar model %q unavailable: %v (auto-skills and skill matching disabled — set --sidecar-model to a working model to enable)\n", c.sidecarModel, err)
 		return nil
@@ -623,7 +640,7 @@ func (c *Coordinator) GuardSidecar() *sidecar.Sidecar {
 		return c.guardInst
 	}
 	ctx := c.providerInvocationContext()
-	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.guardModel), c.guardModel)
+	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.guardModel), c.guardModel, c.providerAdmission())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ guard model %q unavailable: %v (guard review disabled — tool calls will be denied until a working model is configured)\n", c.guardModel, err)
 		return nil
@@ -649,7 +666,7 @@ func (c *Coordinator) JudgeSidecar() *sidecar.Sidecar {
 		return c.judgeInst
 	}
 	ctx := c.providerInvocationContext()
-	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.judgeModel), c.judgeModel)
+	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.judgeModel), c.judgeModel, c.providerAdmission())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ judge model %q unavailable: %v (multi-model results fall back to concatenation merge)\n", c.judgeModel, err)
 		return nil

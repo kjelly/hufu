@@ -131,8 +131,20 @@ func (*submitPlanTool) boundArtifactPolicyTool()   {}
 
 func artifactScopeToolDenial(ctx context.Context, name string, inner fantasy.AgentTool) string {
 	policy, ok := ctx.Value(tools.ArtifactPathPolicyKey).(tools.ArtifactPathPolicy)
-	if !ok || !policy.FailClosedForUnsupported {
+	if !ok || (!policy.FailClosedForUnsupported && !policy.DenyUnsupportedDeclaredTools) {
 		return ""
+	}
+	if policy.DenyUnsupportedDeclaredTools {
+		if artifactScopeUnsupportedTool(name) {
+			return fmt.Sprintf("tool %q is unavailable for an unbound task because it does not implement centralized artifact-path enforcement; use built-in tools or artifact_ref-aware tools", name)
+		}
+		// Unbound workers keep their ordinary built-in capabilities. Those tools
+		// receive the blocked backing roots through the shared tool context;
+		// only external/MCP adapters without that enforcement are denied here.
+		if tools.IsBuiltInTool(inner) || artifactScopeToolTrusted(inner) {
+			return ""
+		}
+		return fmt.Sprintf("tool %q is unavailable for an unbound task because declared external tools do not implement centralized artifact-path enforcement; use built-in tools or artifact_ref-aware tools", name)
 	}
 	// Shell tools remain denied even when their concrete implementation is an
 	// internal core tool: arbitrary shell syntax cannot be safely proven to
@@ -451,6 +463,9 @@ func (c *Coordinator) gatePolicyTools(agentTools []fantasy.AgentTool) []fantasy.
 // authorization boundary at all now that OnToolCall no longer aborts.
 // TestAgentsAreCreatedThroughTheGatedConstructor enforces the funnel.
 func (c *Coordinator) createGatedAgent(ctx context.Context, provider *agent.OpenAICompatibleProvider, cfg agent.AgentConfig, agentTools []fantasy.AgentTool) (fantasy.Agent, error) {
+	if cfg.Admission == nil {
+		cfg.Admission = c.providerAdmission()
+	}
 	modelConfigured := cfg.Def != nil && cfg.Def.Generation.Model != ""
 	if !modelConfigured && cfg.TeamConfig != nil {
 		modelConfigured = cfg.TeamConfig.Generation.Model != ""
@@ -461,6 +476,9 @@ func (c *Coordinator) createGatedAgent(ctx context.Context, provider *agent.Open
 		}
 	}
 	gated := c.gatePolicyTools(agentTools)
+	if cfg.PrepareStep == nil {
+		cfg.PrepareStep = c.prepareAgentModelRequest(cfg, gated)
+	}
 	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID {
 		// Schema validation must be the outermost coordinator boundary: malformed
 		// arguments are rejected before authorization, sequence state, or the

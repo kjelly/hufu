@@ -574,6 +574,14 @@ func IsTrustedArtifactPathTool(tool fantasy.AgentTool) bool {
 	return ok && core.artifactPathPolicySafe
 }
 
+// IsBuiltInTool reports whether tool is an authentic Hufu built-in. This is a
+// concrete identity check, not a name check, so an external or MCP tool cannot
+// impersonate a built-in tool by choosing the same name.
+func IsBuiltInTool(tool fantasy.AgentTool) bool {
+	_, ok := tool.(*coreTool)
+	return ok
+}
+
 func SetGuardReviewer(tools []fantasy.AgentTool, fn GuardReviewFn) {
 	for _, t := range tools {
 		if ct, ok := t.(*coreTool); ok {

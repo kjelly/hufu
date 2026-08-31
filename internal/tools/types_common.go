@@ -52,6 +52,10 @@ type ArtifactOpener func(ctx context.Context, ref string) (io.ReadCloser, error)
 type ArtifactPathPolicy struct {
 	BlockedPaths             []string
 	FailClosedForUnsupported bool
+	// DenyUnsupportedDeclaredTools rejects external and MCP adapters that do
+	// not participate in the artifact-path policy while preserving the normal
+	// built-in tool surface for unbound workers.
+	DenyUnsupportedDeclaredTools bool
 }
 
 type ToolConfig struct {

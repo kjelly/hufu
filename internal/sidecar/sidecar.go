@@ -27,6 +27,9 @@ const (
 	sidecarSystemPrompt = "You are a concise assistant. Follow the user's instruction exactly. Be brief and precise. Do not add unnecessary commentary."
 )
 
+// SystemPrompt returns the system message included in every sidecar request.
+func SystemPrompt() string { return sidecarSystemPrompt }
+
 // Profile bounds the generation shape for a category of sidecar calls.
 // Sidecar backs a wide range of very different jobs — from one-line JSON
 // route classification to multi-paragraph structured summarization — through
@@ -78,12 +81,25 @@ func (p Profile) apply(call *fantasy.AgentCall) {
 }
 
 type Sidecar struct {
-	mu             sync.Mutex
-	agent          fantasy.Agent
-	provider       *agent.OpenAICompatibleProvider
-	modelID        string
-	usageObserver  func(*fantasy.AgentResult)
-	promptPreparer func(context.Context, string, string) (string, error)
+	mu               sync.Mutex
+	agent            fantasy.Agent
+	provider         *agent.OpenAICompatibleProvider
+	modelID          string
+	usageObserver    func(*fantasy.AgentResult)
+	promptPreparer   func(context.Context, string, string) (string, error)
+	requestPreparer  func(context.Context, string, []fantasy.Message, []fantasy.AgentTool, int) (context.Context, fantasy.PrepareStepResult, error)
+	requestAdmission agent.RequestAdmission
+}
+
+// SetRequestPreparer installs the shared pre-provider admission hook used by
+// every sidecar purpose, including guard, judge, planning, and compaction.
+func (s *Sidecar) SetRequestPreparer(preparer func(context.Context, string, []fantasy.Message, []fantasy.AgentTool, int) (context.Context, fantasy.PrepareStepResult, error)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.requestPreparer = preparer
+	s.mu.Unlock()
 }
 
 // SetPromptPreparer installs the coordinator's purpose-aware context
@@ -109,13 +125,16 @@ func profilePurpose(profile Profile) string {
 	}
 }
 
-func NewSidecar(ctx context.Context, provider *agent.OpenAICompatibleProvider, modelID string) (*Sidecar, error) {
+func NewSidecar(ctx context.Context, provider *agent.OpenAICompatibleProvider, modelID string, admission ...agent.RequestAdmission) (*Sidecar, error) {
 	if modelID == "" {
 		return nil, fmt.Errorf("sidecar model ID is empty")
 	}
 	s := &Sidecar{
 		provider: provider,
 		modelID:  modelID,
+	}
+	if len(admission) > 0 {
+		s.requestAdmission = admission[0]
 	}
 	if err := s.init(ctx); err != nil {
 		return nil, fmt.Errorf("failed to initialize sidecar: %w", err)
@@ -132,6 +151,9 @@ func (s *Sidecar) init(ctx context.Context) error {
 	lm, err := s.provider.LanguageModel(ctx, s.modelID)
 	if err != nil {
 		return fmt.Errorf("failed to create sidecar language model for %q: %w", s.modelID, err)
+	}
+	if s.requestAdmission != nil {
+		lm = agent.NewAdmittedLanguageModel(s.modelID, lm, s.requestAdmission)
 	}
 	s.agent = fantasy.NewAgent(lm,
 		fantasy.WithSystemPrompt(sidecarSystemPrompt),
@@ -181,6 +203,7 @@ func (s *Sidecar) generateWithOptions(ctx context.Context, prompt string, profil
 	s.mu.Lock()
 	a := s.agent
 	preparer := s.promptPreparer
+	requestPreparer := s.requestPreparer
 	s.mu.Unlock()
 	if a == nil {
 		return "", fmt.Errorf("sidecar agent not initialized")
@@ -198,6 +221,19 @@ func (s *Sidecar) generateWithOptions(ctx context.Context, prompt string, profil
 	}
 	call := fantasy.AgentCall{Prompt: prompt}
 	profile.apply(&call)
+	if requestPreparer != nil {
+		reserved := 0
+		if call.MaxOutputTokens != nil {
+			reserved = int(*call.MaxOutputTokens)
+		}
+		call.PrepareStep = func(prepareCtx context.Context, options fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+			messages := options.Messages
+			if len(messages) == 0 && prompt != "" {
+				messages = []fantasy.Message{fantasy.NewUserMessage(prompt)}
+			}
+			return requestPreparer(prepareCtx, profilePurpose(profile), messages, nil, reserved)
+		}
+	}
 	result, err := a.Generate(ctx, call)
 	if err != nil {
 		return "", err
