@@ -104,7 +104,7 @@ type TaskDef struct {
 	// of later LLM context. Empty and "summary" preserve legacy behavior.
 	OutputMode   string   `json:"output_mode,omitempty" yaml:"output-mode,omitempty"`
 	ContextFiles []string `json:"context_files,omitempty"`
-	PlanFirst    bool     `json:"plan_first,omitempty"`
+	PlanFirst    bool     `json:"plan_first,omitzero"`
 	PlanID       string   `json:"plan_id,omitempty"`
 	DependsOn    []int    `json:"depends_on,omitempty"` // 0-based indices into the tasks array for this call
 	// Pipeline is shorthand for depends_on:[i-1]: the task waits for the
