@@ -40,6 +40,7 @@ func ParseDirectAgent(prompt string) (agentName string, task string, ok bool) {
 // as DAG workers. It returns the task context plus the timeout and round cancel
 // funcs so the caller can defer them.
 func (c *Coordinator) buildDirectAgentTaskContext(ctx context.Context, agentDef *agent.AgentDef, resolvedName, task, todoID, directModel string, exposedToolNames []string) (context.Context, context.CancelFunc, context.CancelFunc, error) {
+	ctx = withoutCoordinatorRequestPreflight(ctx)
 	artifactScope, err := c.buildArtifactAccessScope(todoID, 1)
 	if err != nil {
 		return nil, nil, nil, err
@@ -197,7 +198,7 @@ func (c *Coordinator) finalizePublicInvocationFailureError(runErr error) error {
 }
 
 func (c *Coordinator) directAgentWorkflowPrompt(task string, agentDef *agent.AgentDef, resolvedName, todoID string, granted map[string]bool, syntheticTask TaskDef) string {
-	prompt := c.appendSkillContext(task, agentDef, resolvedName, task, todoID)
+	prompt := c.appendSkillContext(task, agentDef, resolvedName, task, todoID, granted)
 	// Direct-agent prompts must use the same final capability result as the
 	// worker prompt (HF-MEM5-003): every tool mentioned here has to exist
 	// in this invocation's exposed tool slice, and `granted` is the single
@@ -234,27 +235,23 @@ func (c *Coordinator) directAgentWorkflowPrompt(task string, agentDef *agent.Age
 // `task` is the raw direct-agent goal; the synthetic TaskDef is only used to
 // drive the resolver, not to alter the retrieval query.
 //
-// Agent-instance reuse: when the policy-keyed agent cache already holds an
-// instance (test stubs or warm starts), this helper reuses it so call sites
-// can keep substituting fantasy.Agent implementations. The exposed tool
-// names, however, always come from the resolver so the prompt and runtime
-// allowlist stay in sync with submit_result and the deprecated-memory filter.
+// Task-bound tool surfaces are never reused from the policy-keyed agent cache:
+// a cached instance may retain a submit_result closure bound to another Todo.
+// The worker override remains available as a deterministic test seam, but a
+// production direct invocation always constructs a fresh gated agent.
 func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.AgentDef, directModel, todoID, task, resolvedName string) (fantasy.Agent, []string, error) {
 	if c == nil || agentDef == nil {
 		return nil, nil, fmt.Errorf("create direct agent: agent definition is required")
 	}
 	syntheticTask := TaskDef{Agent: resolvedName, Goal: task, Model: directModel, Execution: ExecutionContract{RequiresResult: true}}
-	extras := []fantasy.AgentTool{&submitResultTool{coordinator: c, todoID: todoID}}
-	resolvedTools, err := c.ToolResolver().ResolveTaskTools(ctx, agentDef, syntheticTask, extras)
+	resolvedTools, err := c.ToolResolver().ResolveTaskTools(ctx, agentDef, WorkerToolResolutionRequest{
+		Task: syntheticTask, TodoID: todoID, Mode: WorkerToolResolutionNormal,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
-	cacheKey := c.policyAgentCacheKey(agentDef, directModel)
-	c.agentCacheMu.RLock()
-	cached, hit := c.agentCache[cacheKey]
-	c.agentCacheMu.RUnlock()
-	if hit {
-		return cached, append([]string(nil), resolvedTools.Names...), nil
+	if c.workerAgentOverride != nil {
+		return c.workerAgentOverride, append([]string(nil), resolvedTools.Names...), nil
 	}
 	provider, err := c.ModelRuntime().ProviderFor(directModel)
 	if err != nil {
@@ -326,18 +323,8 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if originalCancellation != nil {
 		return nil, c.persistPreCancelledDirectAgent(ctx, resolvedName, task, directModel, originalCancellation)
 	}
-	cacheKey := c.policyAgentCacheKey(agentDef, directModel)
-	c.agentCacheMu.RLock()
-	_, cachedAgent := c.agentCache[cacheKey]
-	if !cachedAgent {
-		// Test and embedded callers may inject a model-agnostic fantasy agent
-		// under the legacy cache key. It cannot make a provider call, so do not
-		// require the subprocess boundary merely to discover that the real
-		// construction path is unavailable after task creation.
-		_, cachedAgent = c.agentCache[c.policyAgentCacheKey(agentDef, "")]
-	}
-	c.agentCacheMu.RUnlock()
-	needsProviderBoundary := directModel != "" && (!cachedAgent || c.autoSkillsEnabled && c.sidecarModel != "" && len(c.getSkills()) > 0)
+	ctx = withoutCoordinatorRequestPreflight(ctx)
+	needsProviderBoundary := directModel != ""
 	if needsProviderBoundary {
 		if err := c.startProviderExecutionBoundary(ctx); err != nil {
 			c.finalizePublicInvocationFailure(err)
@@ -347,7 +334,14 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if c.autoSkillsEnabled && c.sidecarModel != "" && len(c.getSkills()) > 0 {
 		c.setAutoLoadedSkills(c.matchSkillsWithSidecar(ctx, task))
 	}
-	todoItems, err := c.CommitTaskCreation(ctx, []TodoSpec{{Agent: resolvedName, Desc: task, Model: directModel, Source: TaskSourceCoordinator, ParentID: ""}})
+	todoItems, err := c.CommitTaskCreation(ctx, []TodoSpec{{
+		Agent:     resolvedName,
+		Desc:      task,
+		Model:     directModel,
+		Source:    TaskSourceCoordinator,
+		ParentID:  "",
+		Execution: ExecutionContract{RequiresResult: true},
+	}})
 	if err != nil {
 		if len(todoItems) == 0 {
 			c.finalizePublicInvocationFailure(err)
@@ -596,12 +590,31 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &directReceipt)
 	err, terminalBlocked := c.finalizeTaskTerminalResources(ctx, todoID, err)
+	var typedRes *TaskResult
+	if err == nil {
+		typedRes = c.GetTaskResult(todoID)
+		if typedRes == nil {
+			err = withFailureClassOverride(errors.New("direct-agent protocol failure: missing submitted task result"), FailureProtocol)
+		} else if typedRes.Source != "submitted" {
+			err = withFailureClassOverride(fmt.Errorf("direct-agent protocol failure: task result source %q is not submitted", typedRes.Source), FailureProtocol)
+		} else if resultErr := validateSubmittedTaskResult(typedRes); resultErr != nil {
+			err = withFailureClassOverride(resultErr, FailureProtocol)
+		} else if resultErr := validateCompletedTaskResult(typedRes); resultErr != nil {
+			err = withFailureClassOverride(resultErr, FailureExecution)
+		} else {
+			output = coordinatorTaskOutput(output, typedRes)
+			if strings.TrimSpace(output) == "" {
+				output = typedRes.FormatForContext()
+			}
+		}
+	}
 	if err != nil {
 		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), usageFromSteps(steps))
+		failureClass := classifyTaskFailure(err)
 		if terminalBlocked {
-			c.PersistFailureWithClassAndStatus(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), ReconcileOnly, FailureExecution, TaskBlocked)
+			c.PersistFailureWithClassAndStatus(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), ReconcileOnly, failureClass, TaskBlocked)
 		} else {
-			c.PersistFailureWithClass(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), RetryNone, FailureExecution)
+			c.PersistFailureWithClass(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), RetryNone, failureClass)
 		}
 		// The direct path owns the same terminal failure reduction contract as
 		// DAG workers. This happens only after execution began and the canonical
@@ -645,7 +658,6 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if vr := verifyResultForTodo(c, todoID); vr != nil && isVerifySuccess(vr) {
 		verified = true
 	}
-	typedRes := c.GetTaskResult(todoID)
 	c.reduceTaskResultToSharedMemory(taskCtx, TaskResultMemoryInput{
 		TodoID: todoID, Agent: agentDef, Result: typedRes, Output: output, Verified: verified, Attempt: 1,
 	})

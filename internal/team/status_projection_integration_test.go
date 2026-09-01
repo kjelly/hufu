@@ -175,6 +175,45 @@ func (a directTerminationAgent) Generate(context.Context, fantasy.AgentCall) (*f
 	}}, Steps: a.steps}, nil
 }
 
+type directTerminationAgentWithResult struct {
+	worker      fantasy.Agent
+	coordinator *Coordinator
+}
+
+func (a directTerminationAgentWithResult) submit(ctx context.Context, result *fantasy.AgentResult) (*fantasy.AgentResult, error) {
+	if result == nil {
+		return nil, nil
+	}
+	todoID, _ := ctx.Value(todoIDKey{}).(string)
+	response, err := (&submitResultTool{coordinator: a.coordinator, todoID: todoID}).Run(ctx, fantasy.ToolCall{
+		Name:  submitResultToolName,
+		Input: `{"status":"success","summary":"direct agent completed"}`,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if response.IsError {
+		return nil, errors.New(response.Content)
+	}
+	return result, nil
+}
+
+func (a directTerminationAgentWithResult) Stream(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	result, err := a.worker.Stream(ctx, call)
+	if err != nil {
+		return nil, err
+	}
+	return a.submit(ctx, result)
+}
+
+func (a directTerminationAgentWithResult) Generate(ctx context.Context, call fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	result, err := a.worker.Generate(ctx, call)
+	if err != nil {
+		return nil, err
+	}
+	return a.submit(ctx, result)
+}
+
 func newDirectTerminationCoordinator(t *testing.T, worker fantasy.Agent) *Coordinator {
 	t.Helper()
 	workspace := t.TempDir()
@@ -189,7 +228,7 @@ func newDirectTerminationCoordinator(t *testing.T, worker fantasy.Agent) *Coordi
 		projectDir:   workspace,
 		sessionTime:  time.Now(),
 	}
-	c.agentCache[c.policyAgentCacheKey(def, "")] = worker
+	c.workerAgentOverride = directTerminationAgentWithResult{worker: worker, coordinator: c}
 	return c
 }
 
@@ -579,6 +618,7 @@ func TestRunDirectAgentAgentCreationFailureReconcilesCanonicalTodoAndStatus(t *t
 	// Empty model configuration makes agent.CreateAgent return its validation
 	// error. An empty cache forces RunDirectAgent through that creation branch.
 	c.agentCache = map[string]fantasy.Agent{}
+	c.workerAgentOverride = nil
 	providerManager, err := agent.NewProviderManager("", "", nil)
 	if err != nil {
 		t.Fatal(err)

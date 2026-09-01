@@ -4,9 +4,70 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
+
+func TestWithoutCoordinatorRequestPreflightPreservesParentContext(t *testing.T) {
+	type preservedContextKey struct{}
+	parent, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	parent = context.WithValue(parent, preservedContextKey{}, "preserved")
+	parent = withCoordinatorRequestPreflight(parent, newCoordinatorRequestPreflight("model", "goal", "system", nil))
+
+	worker := withoutCoordinatorRequestPreflight(parent)
+	if coordinatorRequestPreflightFromContext(worker) != nil {
+		t.Fatal("worker context retained coordinator request preflight")
+	}
+	if got := worker.Value(preservedContextKey{}); got != "preserved" {
+		t.Fatalf("worker context value = %v, want preserved parent value", got)
+	}
+	if worker.Done() != parent.Done() {
+		t.Fatal("worker context did not preserve parent cancellation channel")
+	}
+	workerDeadline, workerOK := worker.Deadline()
+	parentDeadline, parentOK := parent.Deadline()
+	if !workerOK || !parentOK || !workerDeadline.Equal(parentDeadline) {
+		t.Fatalf("worker deadline = %v/%t, parent deadline = %v/%t", workerDeadline, workerOK, parentDeadline, parentOK)
+	}
+}
+
+func TestWithoutCoordinatorRequestPreflightHidesOnlyPreflight(t *testing.T) {
+	type preservedContextKey struct{}
+	preflight := newCoordinatorRequestPreflight("model", "goal", "system", nil)
+	parent := context.WithValue(withCoordinatorRequestPreflight(t.Context(), preflight), preservedContextKey{}, "preserved")
+
+	worker := withoutCoordinatorRequestPreflight(parent)
+	if coordinatorRequestPreflightFromContext(worker) != nil {
+		t.Fatal("worker context retained coordinator request preflight")
+	}
+	if got := worker.Value(preservedContextKey{}); got != "preserved" {
+		t.Fatalf("worker context value = %v, want preserved parent value", got)
+	}
+}
+
+func TestCoordinatorPromptExplainsWorkerSkillInstructions(t *testing.T) {
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: t.TempDir(),
+			Config:    agent.TeamConfig{Name: "team"},
+			Agents: map[string]*agent.AgentDef{
+				"coordinator": {Name: "coordinator", Role: "coordinator", Tools: "all"},
+			},
+		},
+		coreTools:   workerInvariantCoreTools(t),
+		taskTracker: NewTaskTracker(),
+	}
+	prompt := c.BuildOrchestratorPrompt()
+	for _, want := range []string{"explicitly granted", "full skill instructions by default"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("coordinator prompt missing %q: %s", want, prompt)
+		}
+	}
+}
 
 type coordinatorPreflightTestInput struct {
 	Value string `json:"value"`

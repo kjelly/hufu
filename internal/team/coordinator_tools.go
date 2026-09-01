@@ -768,6 +768,11 @@ type loadSkillTool struct {
 	coordinator *Coordinator
 }
 
+// boundArtifactPolicyTool marks this runtime-owned metadata tool as safe for
+// artifact-bound workers. load_skill resolves only a registered skill name;
+// it never resolves a model-supplied workspace or artifact path.
+func (*loadSkillTool) boundArtifactPolicyTool() {}
+
 func (t *loadSkillTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
 		Name:        "load_skill",

@@ -940,6 +940,25 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 		}
 		pol := ResolveRecoveryPolicy(it.Recovery, it.SideEffect, isUnattended, c.ExecutionProfile())
 		task := taskDefFromTodoItem(it)
+		resolveCanonicalAttempt := func() (*canonicalWorkerAttemptContext, bool) {
+			canonical, canonicalErr := c.canonicalWorkerAttemptContextForID(it.ID)
+			if canonicalErr == nil {
+				return canonical, true
+			}
+			detail := fmt.Sprintf("task recovery blocked by canonical lifecycle validation: %v", canonicalErr)
+			c.PersistFailureWithClassAndStatus(it.Agent, it.Desc, it.ID, detail, NeedsHuman, FailurePolicy, TaskBlocked)
+			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
+				"policy":   string(pol),
+				"decision": "canonical_lifecycle_blocked",
+				"reason":   detail,
+			})
+			c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
+			if firstErr == nil {
+				firstErr = canonicalErr
+			}
+			count++
+			return nil, false
+		}
 		if it.Status == TaskProtocolIncomplete {
 			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
 				"policy":        string(pol),
@@ -961,6 +980,11 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 				c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
 				continue
 			}
+			canonical, ok := resolveCanonicalAttempt()
+			if !ok {
+				continue
+			}
+			task = canonical.Task
 			if err := c.CommitTaskResetForRetry(ctx, it.ID, "resumed after interruption"); err != nil {
 				return count, err
 			}
@@ -1059,6 +1083,11 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 					c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
 					continue
 				}
+				canonical, ok := resolveCanonicalAttempt()
+				if !ok {
+					continue
+				}
+				task = canonical.Task
 				if err := c.CommitTaskResetForRetry(ctx, it.ID, "reconciliation allowed retry"); err != nil {
 					return count, err
 				}
@@ -1122,11 +1151,12 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 		id = it.ID
 	}
 	return TaskDef{
-		ID: id, Phase: it.Phase, Action: cloneActionPtr(it.Action), Agent: it.Agent, Goal: it.Desc, Verify: it.Verify, VerifyMode: it.VerifyMode,
+		ID: id, Phase: it.Phase, Action: cloneActionPtr(it.Action), PlanFirst: it.PlanFirst, PlanID: it.PlanID, ContractID: it.ContractID, ContractHash: it.ContractHash, ContractRevision: it.ContractRevision,
+		Agent: it.Agent, Goal: it.Desc, Model: it.Model, Verify: it.Verify, VerifyMode: it.VerifyMode,
 		VerifySpec: cloneVerificationSpecPtr(it.VerifySpec), SideEffect: it.SideEffect,
 		Recovery: it.Recovery, ReconcileTool: it.ReconcileTool, Execution: it.Execution,
 		Kind: it.Kind, Advances: append([]string(nil), it.Advances...),
-		ExpectedStateChange: it.ExpectedStateChange, RecoveryHypothesis: cloneRecoveryHypothesis(it.RecoveryHypothesis),
+		ExpectedStateChange: it.ExpectedStateChange, RecoveryHypothesis: cloneRecoveryHypothesis(it.RecoveryHypothesis), WorksetBinding: cloneWorksetBinding(it.WorksetBinding),
 	}
 }
 

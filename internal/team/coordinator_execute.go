@@ -328,6 +328,8 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		sideEffect, recovery, reconcileTool := c.PolicyEngine().ResolveRecoveryPolicy(agentDef, t)
 		todoBatch[i] = TodoSpec{
 			PlanTaskID:          t.ID,
+			PlanFirst:           t.PlanFirst,
+			PlanID:              t.PlanID,
 			Phase:               t.Phase,
 			Action:              cloneActionPtr(t.Action),
 			ContractID:          t.ContractID,

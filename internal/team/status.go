@@ -216,6 +216,8 @@ type TodoItem struct {
 	Phase            Phase   `json:"phase,omitempty"`
 	Action           *Action `json:"action,omitempty"`
 	PlanTaskID       string  `json:"plan_task_id,omitempty"`
+	PlanFirst        bool    `json:"plan_first,omitzero"`
+	PlanID           string  `json:"plan_id,omitempty"`
 	ContractID       string  `json:"contract_id,omitempty"`
 	ContractHash     string  `json:"contract_hash,omitempty"`
 	ContractRevision int     `json:"contract_revision,omitempty"`
@@ -293,6 +295,8 @@ func (tl *TodoList) RunID() string {
 // TodoSpec describes a todo item to be created via AddBatch.
 type TodoSpec struct {
 	PlanTaskID          string
+	PlanFirst           bool
+	PlanID              string
 	Phase               Phase
 	Action              *Action
 	ContractID          string
@@ -328,6 +332,8 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 	return &TodoItem{
 		ID:                  id,
 		PlanTaskID:          item.PlanTaskID,
+		PlanFirst:           item.PlanFirst,
+		PlanID:              item.PlanID,
 		Phase:               item.Phase,
 		Action:              cloneActionPtr(item.Action),
 		ContractID:          item.ContractID,
@@ -530,6 +536,32 @@ func (tl *TodoList) SetLastOperation(id, operation string) {
 			return
 		}
 	}
+}
+
+// SetPlanLifecycle applies the durable plan lifecycle projection after its
+// event has been appended. Plan metadata is part of task identity, so callers
+// must use the coordinator's event-first transition boundary when changing it.
+func (tl *TodoList) SetPlanLifecycle(id string, planFirst bool, planID string) error {
+	tl.mu.Lock()
+	updated := false
+	for _, item := range tl.items {
+		if item == nil || item.ID != id {
+			continue
+		}
+		item.PlanFirst = planFirst
+		item.PlanID = planID
+		updated = true
+		break
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
 }
 
 func (tl *TodoList) UpdateStatusAndOutput(id string, status TaskStatus, detail string, output string) {
@@ -942,6 +974,8 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		Phase:               item.Phase,
 		Action:              cloneActionPtr(item.Action),
 		PlanTaskID:          item.PlanTaskID,
+		PlanFirst:           item.PlanFirst,
+		PlanID:              item.PlanID,
 		ContractID:          item.ContractID,
 		ContractHash:        item.ContractHash,
 		ContractRevision:    item.ContractRevision,
@@ -1376,6 +1410,8 @@ func (tl *TodoList) Children(parentID string) []*TodoItem {
 			}
 			result = append(result, &TodoItem{
 				ID:                  item.ID,
+				PlanFirst:           item.PlanFirst,
+				PlanID:              item.PlanID,
 				Agent:               item.Agent,
 				Desc:                item.Desc,
 				Status:              item.Status,

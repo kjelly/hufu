@@ -70,7 +70,7 @@ func TestWorkerManifestQueryHashMatchesRetrievalQuery(t *testing.T) {
 	goal := "deploy the service"
 	// Prove the skill actually expands the prompt; otherwise the hash assertions
 	// below would pass trivially even with the bug.
-	expanded := c.appendSkillContext(goal, agentDef, "worker", goal, item.ID)
+	expanded := c.appendSkillContext(goal, agentDef, "worker", goal, item.ID, map[string]bool{"load_skill": true})
 	if expanded == goal || strings.Contains(expanded, "run the deploy steps") || !strings.Contains(expanded, "deploy the service") {
 		t.Fatalf("test setup: skill was not summary-disclosed safely: %q", expanded)
 	}

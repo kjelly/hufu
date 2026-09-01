@@ -62,6 +62,7 @@ type planReviewer struct {
 }
 
 func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*planReviewer, error) {
+	ctx = withoutCoordinatorRequestPreflight(ctx)
 	modelID := c.planReviewerModel
 	pr := &planReviewer{coordinator: c, modelID: modelID, todoID: todoID}
 	ag, err := c.createGatedAgent(ctx, c.providerManager.GetProvider(modelID), agent.AgentConfig{
@@ -87,6 +88,7 @@ func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*plan
 }
 
 func (pr *planReviewer) review(ctx context.Context, planText string) (string, bool, error, error) {
+	ctx = withoutCoordinatorRequestPreflight(ctx)
 	c := pr.coordinator
 	c.pendingPlansMu.Lock()
 	entry := c.pendingPlans[pr.todoID]
@@ -130,7 +132,7 @@ func (pr *planReviewer) review(ctx context.Context, planText string) (string, bo
 			return approved, true, actualErr, nil
 		}
 
-		if err := c.commitTaskTransitionFromCurrent(ctx, pr.todoID, TaskSkipped, "rejected by user after 3+ plan reviews", "", nil); err != nil {
+		if err := c.rejectPlanOnExistingTodo(ctx, pr.todoID, "rejected by user after 3+ plan reviews"); err != nil {
 			return "", true, nil, err
 		}
 		c.pendingPlansMu.Lock()
@@ -198,32 +200,52 @@ func (c *Coordinator) autoApprovePlan(ctx context.Context, todoID string) string
 		return ""
 	}
 	entry.Status = "approved"
-	approvedTask := entry.Task
-	approvedTask.PlanFirst = true
-	approvedTask.PlanID = todoID
 	agentName := entry.Agent
 	goal := entry.Goal
 	c.pendingPlansMu.Unlock()
 
-	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskPlanned, "", "", nil); err != nil {
+	output, err := c.executeApprovedPlanOnExistingTodo(ctx, todoID, agentName, goal)
+	if err != nil {
 		c.pendingPlansMu.Lock()
 		if c.approvedErrors == nil {
 			c.approvedErrors = make(map[string]error)
 		}
 		c.approvedErrors[todoID] = err
-		delete(c.pendingPlans, todoID)
 		c.pendingPlansMu.Unlock()
-		return fmt.Sprintf("Plan approval transition failed: %v", err)
+		return fmt.Sprintf("Plan execution failed: %v", err)
+	}
+	return output
+}
+
+func (c *Coordinator) executeApprovedPlanOnExistingTodo(ctx context.Context, todoID, agentName, goal string) (string, error) {
+	if err := c.commitTaskPlanLifecycle(ctx, todoID, true, todoID); err != nil {
+		return "", err
+	}
+	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskPlanned, "", "", nil); err != nil {
+		return "", err
 	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("plan_approved").withAgent(agentName).withMessage("plan approved, starting execution").withTodoID(todoID))
 
+	item := c.todoItemByID(todoID)
+	if item == nil {
+		return "", fmt.Errorf("approved plan todo %s disappeared", todoID)
+	}
+	approvedTask := taskDefFromTodoItem(item)
+	approvedTask.PlanFirst = true
+	approvedTask.PlanID = todoID
 	output, err := c.executeTask(ctx, approvedTask, todoID)
 
 	// Store the actual output so review() can return it to the coordinator,
 	// then clean up the plan entry. This ensures the coordinator receives the
 	// real task result rather than the plan-reviewer's summary text.
 	c.pendingPlansMu.Lock()
+	if c.approvedOutputs == nil {
+		c.approvedOutputs = make(map[string]string)
+	}
+	if c.approvedErrors == nil {
+		c.approvedErrors = make(map[string]error)
+	}
 	c.approvedOutputs[todoID] = output
 	if err != nil {
 		c.approvedErrors[todoID] = err
@@ -232,14 +254,19 @@ func (c *Coordinator) autoApprovePlan(ctx context.Context, todoID string) string
 	c.pendingPlansMu.Unlock()
 
 	if err != nil {
-		return fmt.Sprintf("Plan execution failed: %v", err)
+		return output, err
 	}
-
 	// Populate the task cache so duplicate detection in subsequent rounds
 	// finds the completed result instead of treating it as a new task.
 	c.storeTaskCache(strings.ToLower(agentName), goal, output)
+	return output, nil
+}
 
-	return output
+func (c *Coordinator) rejectPlanOnExistingTodo(ctx context.Context, todoID, reason string) error {
+	if err := c.commitTaskPlanLifecycle(ctx, todoID, false, ""); err != nil {
+		return err
+	}
+	return c.commitTaskTransitionFromCurrent(ctx, todoID, TaskSkipped, reason, "", nil)
 }
 
 type reviewerApprovePlanTool struct {
@@ -317,29 +344,18 @@ func (t *reviewerRejectPlanTool) Run(ctx context.Context, call fantasy.ToolCall)
 		t.coordinator.pendingPlansMu.Unlock()
 		return fantasy.NewTextResponse("Plan revision rejected: " + entry.ReviewReason), nil
 	}
-	var revisedTask TaskDef
-	if entry.Task.Agent != "" {
-		revisedTask = cloneTaskDef(entry.Task)
-	} else {
-		revisedTask = TaskDef{
-			Agent: entry.Agent,
-		}
-	}
-	revisedTask.Goal = fmt.Sprintf("%s\n\n## Plan Rejected\nReason: %s\n\nRevise your plan and submit a new one.", entry.Goal, args.Reason)
-	revisedTask.PlanFirst = true
-	revisedTask.PlanID = ""
 	t.coordinator.pendingPlansMu.Unlock()
 
 	t.coordinator.report(t.coordinator.newEvent("step").withMessage(fmt.Sprintf("plan %s rejected: %s", t.todoID, args.Reason)).withTodoID(t.todoID))
 
-	output, err := t.coordinator.executeTask(ctx, revisedTask, t.todoID)
-	if err != nil {
-		t.coordinator.pendingPlansMu.Lock()
-		t.coordinator.approvedErrors[t.todoID] = err
-		t.coordinator.pendingPlansMu.Unlock()
+	if err := t.coordinator.rejectPlanOnExistingTodo(ctx, t.todoID, fmt.Sprintf("plan rejected: %s", args.Reason)); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
-	return fantasy.NewTextResponse(output), nil
+	t.coordinator.pendingPlansMu.Lock()
+	delete(t.coordinator.pendingPlans, t.todoID)
+	t.coordinator.pendingPlansMu.Unlock()
+	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
+	return fantasy.NewTextResponse("Plan rejected. Original task terminalized; submit a new plan if needed."), nil
 }
 
 func (c *Coordinator) buildTaskStatusContext() string {

@@ -170,6 +170,8 @@ type canonicalTaskShadow struct {
 	ID                  string                     `json:"id"`
 	Phase               string                     `json:"phase,omitempty"`
 	PlanTaskID          string                     `json:"plan_task_id,omitempty"`
+	PlanFirst           bool                       `json:"plan_first,omitzero"`
+	PlanID              string                     `json:"plan_id,omitempty"`
 	ContractID          string                     `json:"contract_id,omitempty"`
 	ContractHash        string                     `json:"contract_hash,omitempty"`
 	ContractRevision    int                        `json:"contract_revision,omitempty"`
@@ -221,6 +223,8 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		ID:                  item.ID,
 		Phase:               string(item.Phase),
 		PlanTaskID:          item.PlanTaskID,
+		PlanFirst:           item.PlanFirst,
+		PlanID:              item.PlanID,
 		ContractID:          item.ContractID,
 		ContractHash:        item.ContractHash,
 		ContractRevision:    item.ContractRevision,

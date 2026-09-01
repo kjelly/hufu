@@ -1330,7 +1330,6 @@ var alwaysIncludeTools = map[string]bool{
 	"todo":          true,
 	"random":        true,
 	"memory_query":  true,
-	"load_skill":    true,
 	"team_info":     true,
 }
 

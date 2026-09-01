@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+func pointerValueOrZero[T any](value *T) (zero T) {
+	if value != nil {
+		return *value
+	}
+	return zero
+}
+
 type todoReplayWorksetConflicts struct {
 	taskIDs    map[string]struct{}
 	worksetIDs map[string]struct{}
@@ -415,6 +422,8 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			Phase               Phase                      `json:"phase"`
 			Action              *Action                    `json:"action"`
 			PlanTaskID          string                     `json:"plan_task_id"`
+			PlanFirst           *bool                      `json:"plan_first"`
+			PlanID              *string                    `json:"plan_id"`
 			ContractID          string                     `json:"contract_id"`
 			ContractHash        string                     `json:"contract_hash"`
 			ContractRevision    int                        `json:"contract_revision"`
@@ -496,6 +505,8 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				Phase:               payload.Phase,
 				Action:              payload.Action,
 				PlanTaskID:          payload.PlanTaskID,
+				PlanFirst:           pointerValueOrZero(payload.PlanFirst),
+				PlanID:              pointerValueOrZero(payload.PlanID),
 				ContractID:          payload.ContractID,
 				ContractHash:        payload.ContractHash,
 				ContractRevision:    payload.ContractRevision,
@@ -548,6 +559,12 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 		if payload.PlanTaskID != "" {
 			item.PlanTaskID = payload.PlanTaskID
+		}
+		if payload.PlanFirst != nil {
+			item.PlanFirst = *payload.PlanFirst
+		}
+		if payload.PlanID != nil {
+			item.PlanID = *payload.PlanID
 		}
 		if payload.ContractID != "" {
 			item.ContractID = payload.ContractID

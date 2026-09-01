@@ -112,6 +112,166 @@ func TestResumeInterruptedTasks_AllowsReplayFalseBlocked(t *testing.T) {
 	assertRecoveryFailureEvent(t, item, FailurePolicy, ReconcileOnly)
 }
 
+func TestResumeInterruptedTasks_PolicyOnlyRecoveryDoesNotResolveAgent(t *testing.T) {
+	allowsReplay := false
+	tests := []struct {
+		name          string
+		sideEffect    SideEffectClass
+		recovery      RecoveryPolicy
+		reconcileTool string
+		allowsReplay  *bool
+		wantStatus    TaskStatus
+		wantRecovery  string
+		wantDetail    string
+	}{
+		{
+			name:       "manual",
+			sideEffect: SideEffectInfraMutation,
+			recovery:   RecoveryManual,
+			wantStatus: TaskBlocked,
+			wantDetail: "manual intervention",
+		},
+		{
+			name:       "never",
+			sideEffect: SideEffectCredential,
+			recovery:   RecoveryNever,
+			wantStatus: TaskSkipped,
+			wantDetail: "left as-is",
+		},
+		{
+			name:         "replay denied",
+			sideEffect:   SideEffectNone,
+			recovery:     RecoveryRetry,
+			allowsReplay: &allowsReplay,
+			wantStatus:   TaskBlocked,
+			wantDetail:   "replay policy",
+		},
+		{
+			name:          "reconcile complete",
+			sideEffect:    SideEffectExternalWrite,
+			recovery:      RecoveryReconcile,
+			reconcileTool: "exit 0",
+			wantStatus:    TaskDone,
+			wantRecovery:  RecoveryStateComplete,
+		},
+		{
+			name:          "reconcile unknown",
+			sideEffect:    SideEffectExternalWrite,
+			recovery:      RecoveryReconcile,
+			reconcileTool: "exit 3",
+			wantStatus:    TaskBlocked,
+			wantRecovery:  RecoveryStateUnknown,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newBudgetCoordinator(t)
+			c.projectDir = t.TempDir()
+			pool := &mockAgentPool{}
+			c.SetAgentPool(pool)
+			c.taskTracker.TodoList().Restore([]*TodoItem{{
+				ID:            "unknown-agent",
+				Agent:         "not-registered",
+				Desc:          "recover without a live worker",
+				Status:        TaskInProgress,
+				SideEffect:    tt.sideEffect,
+				Recovery:      tt.recovery,
+				ReconcileTool: tt.reconcileTool,
+				Execution:     ExecutionContract{AllowsReplay: tt.allowsReplay},
+			}})
+
+			n, err := c.ResumeInterruptedTasks(t.Context())
+			if err != nil {
+				t.Fatalf("ResumeInterruptedTasks: %v", err)
+			}
+			if n != 0 {
+				t.Fatalf("recovery re-drove %d worker attempts", n)
+			}
+			if pool.resolveCalled {
+				t.Fatal("policy-only recovery resolved an agent")
+			}
+			item := c.taskTracker.TodoList().Items()[0]
+			if item.Status != tt.wantStatus {
+				t.Fatalf("status = %s, want %s", item.Status, tt.wantStatus)
+			}
+			if item.RecoveryState != tt.wantRecovery {
+				t.Fatalf("recovery state = %q, want %q", item.RecoveryState, tt.wantRecovery)
+			}
+			if tt.wantDetail != "" && !strings.Contains(item.Detail, tt.wantDetail) {
+				t.Fatalf("detail = %q, want substring %q", item.Detail, tt.wantDetail)
+			}
+		})
+	}
+}
+
+func TestResumeInterruptedTasks_MissingAgentReplayFailsClosed(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	pool := &mockAgentPool{}
+	c.SetAgentPool(pool)
+	c.taskTracker.TodoList().Restore([]*TodoItem{{
+		ID:         "missing-replay-agent",
+		Agent:      "not-registered",
+		Desc:       "replay must fail closed",
+		Status:     TaskInProgress,
+		Recovery:   RecoveryRetry,
+		SideEffect: SideEffectNone,
+	}})
+
+	n, err := c.ResumeInterruptedTasks(t.Context())
+	if err == nil {
+		t.Fatal("missing-agent replay unexpectedly succeeded")
+	}
+	if n != 1 {
+		t.Fatalf("recovery attempt count = %d, want 1 blocked attempt", n)
+	}
+	if !pool.resolveCalled {
+		t.Fatal("replay-required recovery did not resolve the canonical worker context")
+	}
+	item := c.taskTracker.TodoList().Items()[0]
+	if item.Status != TaskBlocked {
+		t.Fatalf("status = %s, want %s", item.Status, TaskBlocked)
+	}
+	if item.ExecutionReceipt != nil || len(item.ExecutionReceipts) != 0 {
+		t.Fatalf("missing-agent replay created worker execution evidence: %#v / %#v", item.ExecutionReceipt, item.ExecutionReceipts)
+	}
+}
+
+func TestResumeInterruptedTasks_ProtocolCheckpointFinalizesWithoutAgent(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	pool := &mockAgentPool{}
+	c.SetAgentPool(pool)
+	c.taskTracker.TodoList().Restore([]*TodoItem{{
+		ID:     "protocol-local-finalize",
+		Agent:  "not-registered",
+		Desc:   "finalize checkpointed result",
+		Status: TaskProtocolIncomplete,
+		Output: "worker output already checkpointed",
+		TypedResult: &TaskResult{
+			TaskID:  "protocol-local-finalize",
+			Agent:   "not-registered",
+			Status:  TaskResultStatusSuccess,
+			Summary: "checkpointed result",
+			Source:  "submitted",
+		},
+	}})
+
+	n, err := c.ResumeInterruptedTasks(t.Context())
+	if err != nil {
+		t.Fatalf("ResumeInterruptedTasks: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("resumed count = %d, want 1 locally finalized task", n)
+	}
+	if pool.resolveCalled {
+		t.Fatal("locally finalizable protocol recovery resolved an agent")
+	}
+	item := c.taskTracker.TodoList().Items()[0]
+	if item.Status != TaskDone {
+		t.Fatalf("status = %s, want %s", item.Status, TaskDone)
+	}
+}
+
 func TestResumeInterruptedTasks_UnattendedExternalWriteBlocked(t *testing.T) {
 	c := newBudgetCoordinator(t)
 	c.unattended = true

@@ -217,7 +217,7 @@ func TestBuildSuggestedSkillsTextNoOverlap(t *testing.T) {
 		Skills: "",
 	}
 
-	text, names := c.buildSuggestedSkillsText(agentDef, "reviewer", "review the code changes")
+	text, names := c.buildSuggestedSkillsText(agentDef, "reviewer", "review the code changes", map[string]bool{"load_skill": true})
 	if text == "" {
 		t.Fatal("expected non-empty suggestion text")
 	}
@@ -264,7 +264,7 @@ func TestBuildSuggestedSkillsTextWithOverlap(t *testing.T) {
 		Skills: "code-reviewer",
 	}
 
-	text, _ := c.buildSuggestedSkillsText(agentDef, "reviewer", "review the code changes")
+	text, _ := c.buildSuggestedSkillsText(agentDef, "reviewer", "review the code changes", map[string]bool{"load_skill": true})
 	if text != "" {
 		t.Errorf("expected empty text since code-reviewer is already in agent skills, got: %s", text)
 	}
@@ -282,7 +282,7 @@ func TestBuildSuggestedSkillsTextEmpty(t *testing.T) {
 		Name: "reviewer",
 	}
 
-	text, names := c.buildSuggestedSkillsText(agentDef, "reviewer", "review code")
+	text, names := c.buildSuggestedSkillsText(agentDef, "reviewer", "review code", map[string]bool{"load_skill": true})
 	if text != "" {
 		t.Errorf("expected empty text for no auto-loaded skills, got: %s", text)
 	}
@@ -351,7 +351,7 @@ func TestBuildSuggestedSkillsTextRelevance(t *testing.T) {
 				autoLoadedSkills: []*skill.SkillDef{codeReviewer, gitCommit},
 			}
 
-			text, names := c.buildSuggestedSkillsText(tt.agentDef, tt.agentDef.Name, tt.taskDesc)
+			text, names := c.buildSuggestedSkillsText(tt.agentDef, tt.agentDef.Name, tt.taskDesc, map[string]bool{"load_skill": true})
 
 			if tt.wantSkill == "" {
 				if text != "" {

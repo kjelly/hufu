@@ -16,6 +16,27 @@ import (
 
 type coordinatorPreflightContextKey struct{}
 
+// workerContextWithoutCoordinatorPreflight preserves the parent context's
+// cancellation, deadline, and other values while making the coordinator-only
+// request shaping state unavailable to a worker attempt.
+type workerContextWithoutCoordinatorPreflight struct {
+	context.Context
+}
+
+func (c workerContextWithoutCoordinatorPreflight) Value(key any) any {
+	if _, ok := key.(coordinatorPreflightContextKey); ok {
+		return nil
+	}
+	return c.Context.Value(key)
+}
+
+func withoutCoordinatorRequestPreflight(ctx context.Context) context.Context {
+	if ctx == nil {
+		return nil
+	}
+	return workerContextWithoutCoordinatorPreflight{Context: ctx}
+}
+
 type coordinatorRequestPreflight struct {
 	mu         sync.RWMutex
 	modelID    string

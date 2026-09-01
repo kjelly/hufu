@@ -825,7 +825,7 @@ func TestPhaseCapabilityMCPBlockModelVisible(t *testing.T) {
 	pm, _ := agent.NewProviderManager("", "", nil)
 	c := &Coordinator{phaseWorkflow: w, session: session, providerManager: pm, mcpManager: mcp.NewMCPToolManager("", "")}
 
-	_, toolNames, err := c.createTaskAgentWithResultTool(context.Background(), session.Agents["preparer"], "", nil, TaskDef{})
+	_, toolNames, err := c.createTaskAgentWithResultTool(context.Background(), session.Agents["preparer"], "", TaskDef{}, "")
 	if err != nil && !strings.Contains(err.Error(), "no exact tokenizer") {
 		t.Fatalf("unexpected PREPARE err: %v", err)
 	}
@@ -834,7 +834,7 @@ func TestPhaseCapabilityMCPBlockModelVisible(t *testing.T) {
 	}
 
 	w.state = PhaseExecute
-	_, toolNames, err = c.createTaskAgentWithResultTool(context.Background(), session.Agents["preparer"], "", nil, TaskDef{})
+	_, toolNames, err = c.createTaskAgentWithResultTool(context.Background(), session.Agents["preparer"], "", TaskDef{}, "")
 	if err != nil && !strings.Contains(err.Error(), "no exact tokenizer") && !strings.Contains(err.Error(), "load MCP server") {
 		t.Fatalf("err: %v", err)
 	}

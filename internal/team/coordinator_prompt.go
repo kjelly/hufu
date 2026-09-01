@@ -103,7 +103,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	}
 	b.WriteString("1. **Analyze** the user's request to identify which team members are needed\n")
 	if !c.coordinatorToolDenied("load_skill") {
-		b.WriteString("2. **Check skills** — if any available skills are relevant to the user's task, call `load_skill` to get the full instructions. Include the relevant skill summary in task descriptions so workers know which skills to load\n")
+		b.WriteString("2. **Check skills** — if any available skills are relevant to the user's task, call `load_skill` yourself to get the full instructions. Workers receive full skill instructions by default; tell a worker to call `load_skill` only when that tool is explicitly granted to the worker.\n")
 	}
 	b.WriteString("3. **Plan** your approach before delegating — think step by step\n")
 	b.WriteString("4. **Select model** — for each task, pick the model from Available Models whose strengths best match the task requirements. Using the right model improves quality and speed.\n")
@@ -117,7 +117,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("   - ✅ Linear chain A→B→C: set pipeline:true on every task after the first instead of writing depends_on indices\n")
 	b.WriteString("   - ⚠️  Separate calls only when coordinator must process results before deciding next steps\n")
 	if !c.coordinatorToolDenied("load_skill") {
-		b.WriteString("7. When delegating to a worker that needs skill knowledge, include ALL relevant skill summaries (name, file path) in the task description so the worker can call `load_skill` if needed\n")
+		b.WriteString("7. When delegating to a worker that needs skill knowledge, include the relevant skill name and path in the task description. Workers receive full skill instructions by default; tell a worker to call `load_skill` only when that tool is explicitly granted to the worker.\n")
 	}
 	b.WriteString("8. **Trust worker expertise** — Workers have access to the full project context (AGENTS.md, tech stack, conventions, directory structure). They will explore the codebase, identify relevant files, and determine the best implementation approach. Do NOT pre-specify file paths, function names, or implementation steps unless they are non-obvious constraints.\n")
 	b.WriteString("9. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
@@ -181,13 +181,13 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 			fmt.Fprintf(&b, "| %s | %s | %s |\n", s.Name, s.Path, desc)
 		}
 		if !c.coordinatorToolDenied("load_skill") {
-			b.WriteString("\nTo get the full instructions for any skill, call the `load_skill` tool with the skill name.\n\n")
+			b.WriteString("\nTo get the full instructions for any skill yourself, call the `load_skill` tool with the skill name. Workers receive full instructions by default; they may call `load_skill` only when it is explicitly granted.\n\n")
 		}
 	}
 
 	if len(autoSkills) > 0 {
 		b.WriteString("## Auto-Loaded Skills\n\n")
-		b.WriteString("The following skills were automatically matched to your task. Include the skill name and file path in worker task descriptions so workers can load them if needed.\n\n")
+		b.WriteString("The following skills were automatically matched to your task. Their full instructions are supplied to workers by default. Mention relevant skill names in worker task descriptions when useful; tell workers to call `load_skill` only when that tool is explicitly granted.\n\n")
 		for _, s := range autoSkills {
 			fmt.Fprintf(&b, "- **%s** (`%s`)\n", s.Name, s.Path)
 		}
@@ -260,7 +260,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	}
 	if !c.coordinatorToolDenied("load_skill") {
 		b.WriteString("### load_skill\n")
-		b.WriteString("Load the full content of a skill by name. You and your workers can call `load_skill` multiple times to load all relevant skills — include ALL skill names and file paths in worker task descriptions so workers can load them if needed.\n")
+		b.WriteString("Load the full content of a skill by name. You can call `load_skill` multiple times to load all relevant skills. Workers receive full skill instructions by default and may call `load_skill` only when it is explicitly granted; do not instruct them to call it otherwise.\n")
 		b.WriteString("```json\n{\"name\": \"skill-name\"}\n```\n\n")
 	}
 	if !c.coordinatorToolDenied("save_skill") {
@@ -460,8 +460,8 @@ Rules:
 - Use ask_user when you need clarification from the user before proceeding
 - When you have completed all coordination and have a final answer, call the finish tool with your response
 - ALWAYS call finish when done — do not just output text as your final answer
-- If the user's task relates to a skill, use load_skill to get the detailed instructions. Include the skill name and file path in worker task descriptions so workers can load it themselves if needed
-- Workers have access to load_skill — include the skill name and path in the task description rather than the full skill content
+- If the user's task relates to a skill, use load_skill to get the detailed instructions. Include the skill name and file path in worker task descriptions. Workers receive full skill instructions by default; tell them to call load_skill only when explicitly granted
+- Workers receive full skill instructions by default and may call load_skill only when explicitly granted; do not instruct them to call it otherwise
 - When an agent result says VERBATIM TRANSCRIPT CAPTURED, treat its artifact manifest as authoritative evidence. If its contents are required, pass artifact_ref unchanged to view; never reconstruct or copy a filesystem path. Otherwise report the opaque reference and integrity metadata without re-reading it.
 
 Delegation Guidelines:

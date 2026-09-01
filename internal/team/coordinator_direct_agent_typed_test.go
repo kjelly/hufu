@@ -88,6 +88,48 @@ func TestDirectAgentDefaultDisabledExcludesMutationAliases(t *testing.T) {
 	}
 }
 
+func TestForcePlanFirstRejectsClosedSequenceBeforeProviderConstruction(t *testing.T) {
+	t.Run("resolver rejects initial-plan literal", func(t *testing.T) {
+		c := newDirectTypedCoordinator(t, "view", nil, nil)
+		todoID := resolverTodoID(t, c, "initial-plan-closed")
+		task := TaskDef{
+			Agent:     "worker",
+			Goal:      "review the bounded workset",
+			PlanFirst: true,
+			Execution: ExecutionContract{
+				RequiresResult: true,
+				ToolSequence:   []string{"view", submitResultToolName},
+			},
+		}
+		_, err := c.ToolResolver().ResolveTaskTools(t.Context(), workerAgentDef(), WorkerToolResolutionRequest{
+			Task: task, TodoID: todoID, Mode: workerToolResolutionModeForTask(task),
+		})
+		if err == nil || !strings.Contains(err.Error(), "initial-plan mode is incompatible with closed execution tool_sequence") {
+			t.Fatalf("ResolveTaskTools error = %v, want deterministic initial-plan closed-sequence rejection", err)
+		}
+	})
+
+	t.Run("force-plan-first rejects before worker creation", func(t *testing.T) {
+		c := newDirectTypedCoordinator(t, "view", nil, nil)
+		c.forcePlanFirst = true
+		c.delegatedTasks = make(map[string]int)
+		c.taskResultCache = make(map[string][]cachedTaskEntry)
+		task := TaskDef{
+			Agent: "worker",
+			Goal:  "review the bounded workset",
+			Execution: ExecutionContract{
+				RequiresResult: true,
+				ToolSequence:   []string{"view", submitResultToolName},
+			},
+		}
+		_, err := c.ExecuteTasks(t.Context(), []TaskDef{task})
+		items := c.taskTracker.TodoList().Items()
+		if err == nil || len(items) != 1 || !strings.Contains(items[0].Detail, "cannot be combined with plan_first") {
+			t.Fatalf("ExecuteTasks error = %v, todo items = %#v, want deterministic force-plan-first closed-sequence rejection", err, items)
+		}
+	})
+}
+
 func TestDirectAgentExplicitStmWriteOptInExposesAndMentions(t *testing.T) {
 	c := newDirectTypedCoordinator(t, "stm_write", []string{"stm_write"}, nil)
 	names := resolveWithExtras(t, c, "todo-explicit").Names
@@ -134,6 +176,69 @@ func TestDirectAgentRuntimeAllowlistAuthorizesSubmitResult(t *testing.T) {
 	}
 }
 
+func TestWorkerToolResolverOwnsLifecycleProtocolSurface(t *testing.T) {
+	c := newDirectTypedCoordinator(t, "view", nil, nil)
+	def := c.session.Agents["worker"]
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "lifecycle surface"}})[0]
+	baseTask := TaskDef{Agent: "worker", Execution: ExecutionContract{RequiresResult: true}}
+
+	initial, err := c.ToolResolver().ResolveTaskTools(t.Context(), def, WorkerToolResolutionRequest{
+		Task: TaskDef{Agent: "worker", PlanFirst: true, Execution: baseTask.Execution}, TodoID: item.ID, Mode: WorkerToolResolutionInitialPlan,
+	})
+	if err != nil {
+		t.Fatalf("initial plan resolution: %v", err)
+	}
+	if slices.Contains(initial.Names, submitResultToolName) || !slices.Contains(initial.Names, "submit_plan") {
+		t.Fatalf("initial plan surface = %v, want submit_plan without submit_result", initial.Names)
+	}
+	for _, tool := range initial.Tools {
+		if plan, ok := tool.(*submitPlanTool); ok && (plan.coordinator != c || plan.todoID != item.ID) {
+			t.Fatalf("initial plan binding = %#v, want coordinator=%p todo=%q", plan, c, item.ID)
+		}
+	}
+
+	approved, err := c.ToolResolver().ResolveTaskTools(t.Context(), def, WorkerToolResolutionRequest{
+		Task: TaskDef{Agent: "worker", PlanFirst: true, PlanID: item.ID, Execution: baseTask.Execution}, TodoID: item.ID, Mode: WorkerToolResolutionApprovedPlan,
+	})
+	if err != nil {
+		t.Fatalf("approved plan resolution: %v", err)
+	}
+	if !slices.Contains(approved.Names, submitResultToolName) || slices.Contains(approved.Names, "submit_plan") {
+		t.Fatalf("approved plan surface = %v, want submit_result without submit_plan", approved.Names)
+	}
+
+	repair, err := c.ToolResolver().ResolveTaskTools(t.Context(), def, WorkerToolResolutionRequest{
+		Task: baseTask, TodoID: item.ID, Mode: WorkerToolResolutionResultRepair,
+	})
+	if err != nil {
+		t.Fatalf("result repair resolution: %v", err)
+	}
+	if !slices.Equal(repair.Names, []string{submitResultToolName}) || len(repair.Tools) != 1 {
+		t.Fatalf("result repair surface = %v, want exactly submit_result", repair.Names)
+	}
+	resultTool, ok := repair.Tools[0].(*submitResultTool)
+	if !ok || resultTool.coordinator != c || resultTool.todoID != item.ID {
+		t.Fatalf("result repair binding = %#v, want coordinator=%p todo=%q", repair.Tools[0], c, item.ID)
+	}
+
+	if _, err := c.ToolResolver().ResolveTaskTools(t.Context(), def, WorkerToolResolutionRequest{
+		Task: baseTask, Mode: WorkerToolResolutionNormal,
+	}); err == nil || !strings.Contains(err.Error(), "requires a Todo ID") {
+		t.Fatalf("missing Todo ID error = %v, want fail-closed identity error", err)
+	}
+}
+
+func TestWorkerToolResolverDoesNotBypassProtocolDenial(t *testing.T) {
+	c := newDirectTypedCoordinator(t, "view", nil, []string{submitResultToolName})
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "denied protocol"}})[0]
+	_, err := c.ToolResolver().ResolveTaskTools(t.Context(), c.session.Agents["worker"], WorkerToolResolutionRequest{
+		Task: TaskDef{Agent: "worker", Execution: ExecutionContract{RequiresResult: true}}, TodoID: item.ID, Mode: WorkerToolResolutionNormal,
+	})
+	if err == nil || !strings.Contains(err.Error(), "denied by team policy") {
+		t.Fatalf("protocol denial error = %v, want team-policy failure", err)
+	}
+}
+
 // directToolNotesCaptureAgent is installed only through the existing direct
 // agent cache seam. RunDirectAgent still performs the production resolver,
 // context construction, prompt assembly, and runAgentWithStatusAndHistory
@@ -174,8 +279,9 @@ func TestRunDirectAgentPromptNotesUseResolverSurface(t *testing.T) {
 			c := newDirectTypedCoordinator(t, "bash,sudo,wait_for", nil, tc.denied)
 			def := c.session.Agents["worker"]
 			syntheticTask := TaskDef{Agent: "worker", Goal: "perform direct work", Execution: ExecutionContract{RequiresResult: true}}
-			resolved, err := c.ToolResolver().ResolveTaskTools(context.Background(), def, syntheticTask, []fantasy.AgentTool{
-				&submitResultTool{coordinator: c, todoID: "resolver-probe"},
+			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: syntheticTask.Goal}})[0]
+			resolved, err := c.ToolResolver().ResolveTaskTools(context.Background(), def, WorkerToolResolutionRequest{
+				Task: syntheticTask, TodoID: item.ID, Mode: WorkerToolResolutionNormal,
 			})
 			if err != nil {
 				t.Fatalf("default resolver: %v", err)
@@ -197,9 +303,7 @@ func TestRunDirectAgentPromptNotesUseResolverSurface(t *testing.T) {
 			}
 
 			capture := &directToolNotesCaptureAgent{}
-			c.agentCacheMu.Lock()
-			c.agentCache[c.policyAgentCacheKey(def, "")] = capture
-			c.agentCacheMu.Unlock()
+			c.workerAgentOverride = capture
 
 			if _, err := c.RunDirectAgent(context.Background(), "worker", syntheticTask.Goal); err != nil {
 				t.Fatalf("RunDirectAgent: %v", err)
@@ -208,11 +312,18 @@ func TestRunDirectAgentPromptNotesUseResolverSurface(t *testing.T) {
 				t.Fatal("RunDirectAgent did not deliver a prompt to the production agent consumer")
 			}
 			items := c.taskTracker.TodoList().Items()
-			if len(items) != 1 || items[0].ExecutionReceipt == nil {
+			var directItem *TodoItem
+			for _, item := range items {
+				if item != nil && item.ExecutionReceipt != nil {
+					directItem = item
+					break
+				}
+			}
+			if directItem == nil {
 				t.Fatalf("direct task receipt = %#v, want a persisted receipt", items)
 			}
-			if scope := items[0].ExecutionReceipt.ArtifactScope; scope == nil || scope.TaskID != items[0].ID || scope.Attempt != 1 {
-				t.Fatalf("direct task artifact scope receipt = %#v, want task %q attempt 1", items[0].ExecutionReceipt.ArtifactScope, items[0].ID)
+			if scope := directItem.ExecutionReceipt.ArtifactScope; scope == nil || scope.TaskID != directItem.ID || scope.Attempt != 1 {
+				t.Fatalf("direct task artifact scope receipt = %#v, want task %q attempt 1", directItem.ExecutionReceipt.ArtifactScope, directItem.ID)
 			}
 
 			// The allowlist observed by the actual consumer must be exactly the
@@ -237,6 +348,35 @@ func TestRunDirectAgentPromptNotesUseResolverSurface(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRunDirectAgentRejectsProseWithoutSubmittedResult(t *testing.T) {
+	c := newDirectTypedCoordinator(t, "", nil, nil)
+	c.workerAgentOverride = &directToolNotesCaptureAgent{}
+
+	result, err := c.RunDirectAgent(t.Context(), "worker", "perform direct work")
+	if err != nil {
+		t.Fatalf("RunDirectAgent returned top-level error: %v", err)
+	}
+	if result == nil || result.Error == nil {
+		t.Fatalf("RunDirectAgent result = %#v, want protocol failure", result)
+	}
+	if !strings.Contains(result.Error.Error(), "missing submitted task result") {
+		t.Fatalf("RunDirectAgent error = %v, want missing submitted task result", result.Error)
+	}
+	items := c.taskTracker.TodoList().Items()
+	if len(items) != 1 || items[0].Status == TaskDone {
+		t.Fatalf("direct task items = %#v, want non-done terminal task", items)
+	}
+	if items[0].Status != TaskError {
+		t.Fatalf("direct task status = %s, want error", items[0].Status)
+	}
+	if items[0].FailureEvent == nil || items[0].FailureEvent.FailureClass != FailureProtocol {
+		t.Fatalf("direct task failure event = %#v, want protocol failure", items[0].FailureEvent)
+	}
+	if got := c.GetTaskResult(items[0].ID); got != nil {
+		t.Fatalf("prose-only direct task stored typed result = %#v", got)
 	}
 }
 
@@ -335,7 +475,10 @@ func TestDirectAgentTypedSubmitReducesContextItems(t *testing.T) {
 
 func mustResolveNames(t *testing.T, c *Coordinator) []string {
 	t.Helper()
-	names, err := c.ToolResolver().ResolveTaskTools(context.Background(), workerAgentDef(), TaskDef{Agent: "worker", Execution: ExecutionContract{RequiresResult: true}}, []fantasy.AgentTool{})
+	todoID := resolverTodoID(t, c, "resolver-names")
+	names, err := c.ToolResolver().ResolveTaskTools(context.Background(), workerAgentDef(), WorkerToolResolutionRequest{
+		Task: TaskDef{Agent: "worker", Execution: ExecutionContract{RequiresResult: true}}, TodoID: todoID, Mode: WorkerToolResolutionNormal,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +487,10 @@ func mustResolveNames(t *testing.T, c *Coordinator) []string {
 
 func resolveWithExtras(t *testing.T, c *Coordinator, todoID string) ResolvedWorkerTools {
 	t.Helper()
-	resolved, err := c.ToolResolver().ResolveTaskTools(context.Background(), workerAgentDef(), TaskDef{Agent: "worker", Execution: ExecutionContract{RequiresResult: true}}, []fantasy.AgentTool{&submitResultTool{coordinator: c, todoID: todoID}})
+	todoID = resolverTodoID(t, c, todoID)
+	resolved, err := c.ToolResolver().ResolveTaskTools(context.Background(), workerAgentDef(), WorkerToolResolutionRequest{
+		Task: TaskDef{Agent: "worker", Execution: ExecutionContract{RequiresResult: true}}, TodoID: todoID, Mode: WorkerToolResolutionNormal,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,11 +499,24 @@ func resolveWithExtras(t *testing.T, c *Coordinator, todoID string) ResolvedWork
 
 func mustResolveTools(t *testing.T, c *Coordinator, todoID string) []fantasy.AgentTool {
 	t.Helper()
-	resolved, err := c.ToolResolver().ResolveTaskTools(context.Background(), workerAgentDef(), TaskDef{Agent: "worker", Execution: ExecutionContract{RequiresResult: true}}, []fantasy.AgentTool{})
+	todoID = resolverTodoID(t, c, todoID)
+	resolved, err := c.ToolResolver().ResolveTaskTools(context.Background(), workerAgentDef(), WorkerToolResolutionRequest{
+		Task: TaskDef{Agent: "worker", Execution: ExecutionContract{RequiresResult: true}}, TodoID: todoID, Mode: WorkerToolResolutionNormal,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return resolved.Tools
+}
+
+func resolverTodoID(t *testing.T, c *Coordinator, want string) string {
+	t.Helper()
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item != nil && item.ID == want {
+			return want
+		}
+	}
+	return c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: want}})[0].ID
 }
 
 func containsTool(tools []fantasy.AgentTool, want string) bool {

@@ -119,8 +119,29 @@ type ResolvedWorkerTools struct {
 	Capabilities []string
 }
 
+// WorkerToolResolutionMode identifies the lifecycle surface being built. The
+// mode is part of the request so task-bound protocol tools cannot be omitted or
+// supplied by an untrusted caller.
+type WorkerToolResolutionMode string
+
+const (
+	WorkerToolResolutionNormal       WorkerToolResolutionMode = "normal"
+	WorkerToolResolutionInitialPlan  WorkerToolResolutionMode = "initial_plan"
+	WorkerToolResolutionApprovedPlan WorkerToolResolutionMode = "approved_plan"
+	WorkerToolResolutionResultRepair WorkerToolResolutionMode = "result_repair"
+	WorkerToolResolutionResume       WorkerToolResolutionMode = "resume"
+)
+
+// WorkerToolResolutionRequest carries the trusted runtime identity and
+// lifecycle mode needed to construct a task's final worker tool surface.
+type WorkerToolResolutionRequest struct {
+	Task   TaskDef
+	TodoID string
+	Mode   WorkerToolResolutionMode
+}
+
 type ToolResolver interface {
-	ResolveTaskTools(context.Context, *agent.AgentDef, TaskDef, []fantasy.AgentTool) (ResolvedWorkerTools, error)
+	ResolveTaskTools(context.Context, *agent.AgentDef, WorkerToolResolutionRequest) (ResolvedWorkerTools, error)
 }
 
 type ModelRuntime interface {
@@ -310,13 +331,65 @@ func (we *defaultWorkflowEngine) ExecuteTasks(ctx context.Context, tasks []TaskD
 
 type defaultToolResolver struct{ c *Coordinator }
 
-func (r *defaultToolResolver) ResolveTaskTools(_ context.Context, def *agent.AgentDef, task TaskDef, extras []fantasy.AgentTool) (ResolvedWorkerTools, error) {
+func workerToolResolutionModeForTask(task TaskDef) WorkerToolResolutionMode {
+	if task.PlanFirst && task.PlanID == "" {
+		return WorkerToolResolutionInitialPlan
+	}
+	if task.PlanFirst && task.PlanID != "" {
+		return WorkerToolResolutionApprovedPlan
+	}
+	return WorkerToolResolutionNormal
+}
+
+func (r *defaultToolResolver) ResolveTaskTools(_ context.Context, def *agent.AgentDef, req WorkerToolResolutionRequest) (ResolvedWorkerTools, error) {
 	if r == nil || r.c == nil || def == nil {
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: agent definition is required")
 	}
-	tools := r.c.selectWorkerToolsForTask(def, task)
+	task := req.Task
+	mode := req.Mode
+	if mode == "" {
+		mode = WorkerToolResolutionNormal
+	}
+	if mode != WorkerToolResolutionNormal && mode != WorkerToolResolutionInitialPlan && mode != WorkerToolResolutionApprovedPlan && mode != WorkerToolResolutionResultRepair && mode != WorkerToolResolutionResume {
+		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: unsupported worker lifecycle mode %q", mode)
+	}
+
+	resultRequired := task.Execution.RequiresResult
+	planRequired := false
+	resultOnly := mode == WorkerToolResolutionResultRepair || mode == WorkerToolResolutionResume
+	switch mode {
+	case WorkerToolResolutionInitialPlan:
+		planRequired = true
+		resultRequired = false
+	case WorkerToolResolutionApprovedPlan:
+		resultRequired = true
+	case WorkerToolResolutionResultRepair, WorkerToolResolutionResume:
+		resultRequired = true
+		resultOnly = true
+	}
+	// A closed sequence is a literal task contract, not a base sequence to
+	// widen for another lifecycle phase. Initial planning requires submit_plan,
+	// so reject a non-empty sequence before constructing any task-bound tools or
+	// reaching provider construction.
+	if mode == WorkerToolResolutionInitialPlan && len(task.Execution.ToolSequence) > 0 {
+		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: initial-plan mode is incompatible with closed execution tool_sequence; remove tool_sequence or disable plan-first")
+	}
+	if resultOnly || planRequired || resultRequired {
+		if strings.TrimSpace(req.TodoID) == "" {
+			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %s requires a Todo ID", mode)
+		}
+		if r.c.todoItemByID(req.TodoID) == nil {
+			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: Todo %q does not exist", req.TodoID)
+		}
+	}
+
+	var workerTools []fantasy.AgentTool
+	if !resultOnly {
+		workerTools = r.c.selectWorkerToolsForTask(def, task)
+	}
+	tools := workerTools
 	mcpAllowed := r.c.phaseWorkflow == nil || !r.c.phaseWorkflow.Enabled() || r.c.phaseWorkflow.State() == PhaseExecute
-	if r.c.mcpManager != nil && mcpAllowed {
+	if !resultOnly && r.c.mcpManager != nil && mcpAllowed {
 		tools = append(tools, r.c.mcpManager.AsAgentTools()...)
 		if len(def.MCPTools) > 0 {
 			if err := r.c.mcpManager.LoadAgentMCPServer(def.Name, def.MCPTools, def.Shell); err != nil {
@@ -330,13 +403,50 @@ func (r *defaultToolResolver) ResolveTaskTools(_ context.Context, def *agent.Age
 	// merged; filtering only the built-in core would still expose a
 	// coordinator capability under an MCP/custom tool implementation.
 	tools = r.c.filterCoordinatorOnlyWorkerTools(tools)
-	if missing := missingExecutionTools(append(append([]fantasy.AgentTool(nil), tools...), extras...), task.Execution.ToolSequence); len(missing) > 0 {
+	// Never accept a caller-supplied implementation of a task-bound protocol
+	// tool. The resolver owns these bindings and recreates them per Todo.
+	tools = removeToolNames(tools, submitResultToolName, "submit_plan")
+	if resultRequired {
+		if r.c.toolDeniedByTeam(submitResultToolName) {
+			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: required protocol tool %q is denied by team policy", submitResultToolName)
+		}
+		tools = append(tools, &submitResultTool{coordinator: r.c, todoID: req.TodoID})
+	}
+	if planRequired {
+		if r.c.toolDeniedByTeam("submit_plan") {
+			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: required protocol tool %q is denied by team policy", "submit_plan")
+		}
+		tools = append(tools, &submitPlanTool{coordinator: r.c, todoID: req.TodoID})
+	}
+	effectiveSequence := task.Execution.ToolSequence
+	if resultOnly {
+		effectiveSequence = []string{submitResultToolName}
+	}
+	tools = r.c.filterDeniedWorkerToolsWithGrants(tools, r.c.taskToolGrants(def, task))
+	tools = r.c.filterCoordinatorOnlyWorkerTools(tools)
+	if missing := missingExecutionTools(tools, effectiveSequence); len(missing) > 0 {
 		return ResolvedWorkerTools{}, fmt.Errorf("execution tool_sequence requires unavailable tool(s) for agent %q: %s", def.Name, strings.Join(missing, ", "))
 	}
-	tools = append(tools, extras...)
-	tools = filterToolsForSequence(tools, task.Execution.ToolSequence)
+	tools = filterToolsForSequence(tools, effectiveSequence)
+	if resultOnly && (len(tools) != 1 || tools[0].Info().Name != submitResultToolName) {
+		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: result-only repair surface must contain exactly %q", submitResultToolName)
+	}
 	names := agentToolNames(tools)
 	return ResolvedWorkerTools{Tools: tools, Names: names, Capabilities: append([]string(nil), names...)}, nil
+}
+
+func removeToolNames(candidate []fantasy.AgentTool, names ...string) []fantasy.AgentTool {
+	removed := make(map[string]bool, len(names))
+	for _, name := range names {
+		removed[name] = true
+	}
+	filtered := make([]fantasy.AgentTool, 0, len(candidate))
+	for _, tool := range candidate {
+		if tool != nil && !removed[tool.Info().Name] {
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered
 }
 
 type defaultModelRuntime struct{ c *Coordinator }

@@ -404,6 +404,24 @@ func TestBoundArtifactPolicyPreflightRejectsIncompatibleRequiredProtocolTool(t *
 	}
 }
 
+func TestBoundArtifactPolicyPreflightAllowsRuntimeOwnedLoadSkill(t *testing.T) {
+	c := gateTestCoordinator()
+	c.session.Workspace = t.TempDir()
+	c.taskTracker = NewTaskTracker()
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer"}})[0]
+	item.WorksetBinding = &WorksetBinding{WorksetID: "workset-1", ItemKey: "one"}
+	scope := &ArtifactAccessScope{TaskID: item.ID, Attempt: 1}
+	err := c.validateBoundWorkerToolPolicy(ResolvedWorkerTools{
+		Tools: []fantasy.AgentTool{
+			&loadSkillTool{coordinator: c},
+			&submitResultTool{coordinator: c, todoID: item.ID},
+		},
+	}, TaskDef{Execution: ExecutionContract{RequiresResult: true}}, item.ID, scope)
+	if err != nil {
+		t.Fatalf("runtime-owned load_skill rejected by bound artifact policy: %v", err)
+	}
+}
+
 func TestBoundWorksetToolResolutionFiltersOnlyImplicitIncompatibleTools(t *testing.T) {
 	c := &Coordinator{
 		session:     &TeamSession{Config: agent.TeamConfig{Name: "bound-tools"}},
@@ -415,9 +433,9 @@ func TestBoundWorksetToolResolutionFiltersOnlyImplicitIncompatibleTools(t *testi
 	binding := cloneWorksetBinding(item.WorksetBinding)
 	def := &agent.AgentDef{Name: "reviewer", Tools: "view,grep,glob,ls"}
 	task := TaskDef{Agent: def.Name, WorksetBinding: binding, Execution: ExecutionContract{RequiresResult: true}}
-	resultTool := &submitResultTool{coordinator: c, todoID: item.ID}
-
-	resolved, err := (&defaultToolResolver{c: c}).ResolveTaskTools(context.Background(), def, task, []fantasy.AgentTool{resultTool})
+	resolved, err := (&defaultToolResolver{c: c}).ResolveTaskTools(context.Background(), def, WorkerToolResolutionRequest{
+		Task: task, TodoID: item.ID, Mode: WorkerToolResolutionNormal,
+	})
 	if err != nil {
 		t.Fatalf("resolve bound reviewer tools: %v", err)
 	}
@@ -432,7 +450,9 @@ func TestBoundWorksetToolResolutionFiltersOnlyImplicitIncompatibleTools(t *testi
 	}
 
 	def.Tools = "view,grep,glob,ls,random"
-	explicit, err := (&defaultToolResolver{c: c}).ResolveTaskTools(context.Background(), def, task, []fantasy.AgentTool{resultTool})
+	explicit, err := (&defaultToolResolver{c: c}).ResolveTaskTools(context.Background(), def, WorkerToolResolutionRequest{
+		Task: task, TodoID: item.ID, Mode: WorkerToolResolutionNormal,
+	})
 	if err != nil {
 		t.Fatalf("resolve explicit random tools: %v", err)
 	}
@@ -445,7 +465,9 @@ func TestBoundWorksetToolResolutionFiltersOnlyImplicitIncompatibleTools(t *testi
 
 	unbound := task
 	unbound.WorksetBinding = nil
-	ordinary, err := (&defaultToolResolver{c: c}).ResolveTaskTools(context.Background(), def, unbound, []fantasy.AgentTool{resultTool})
+	ordinary, err := (&defaultToolResolver{c: c}).ResolveTaskTools(context.Background(), def, WorkerToolResolutionRequest{
+		Task: unbound, TodoID: item.ID, Mode: WorkerToolResolutionNormal,
+	})
 	if err != nil {
 		t.Fatalf("resolve unbound reviewer tools: %v", err)
 	}

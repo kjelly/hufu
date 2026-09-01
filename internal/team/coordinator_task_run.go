@@ -260,7 +260,11 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	maxAttempts := c.effectiveWorkerMaxAttempts(agentDef)
 
-	if err := c.CommitTaskTransition(parentCtx, todoID, TaskPending, TaskInProgress, "", "", nil); err != nil {
+	expectedStatus := TaskPending
+	if item := c.todoItemByID(todoID); item != nil && item.Status == TaskPlanned {
+		expectedStatus = TaskPlanned
+	}
+	if err := c.CommitTaskTransition(parentCtx, todoID, expectedStatus, TaskInProgress, "", "", nil); err != nil {
 		return "", fmt.Errorf("mark task started: %w", err)
 	}
 	// Every path after admission must leave canonical lifecycle state terminal
@@ -328,20 +332,17 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	var ag fantasy.Agent
 	var exposedToolNames []string
 	var resolvedTools ResolvedWorkerTools
+	resolvedTools, err = c.ToolResolver().ResolveTaskTools(parentCtx, agentDef, WorkerToolResolutionRequest{
+		Task: task, TodoID: todoID, Mode: workerToolResolutionModeForTask(task),
+	})
+	if err != nil {
+		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
+		c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
+		return "", err
+	}
+	exposedToolNames = resolvedTools.Names
 	if c.workerAgentOverride != nil {
 		ag = c.workerAgentOverride
-	} else {
-		extras := []fantasy.AgentTool{&submitResultTool{coordinator: c, todoID: todoID}}
-		if task.PlanFirst && task.PlanID == "" {
-			extras = append(extras, &submitPlanTool{coordinator: c, todoID: todoID})
-		}
-		resolvedTools, err = c.ToolResolver().ResolveTaskTools(parentCtx, agentDef, task, extras)
-		if err != nil {
-			c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
-			c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
-			return "", err
-		}
-		exposedToolNames = resolvedTools.Names
 	}
 
 	// Instructions must only name tools this worker can actually call. The
@@ -735,7 +736,10 @@ retryLoop:
 		// should ask it to finalize what it has or to change its approach.
 		stepBudget := c.stepBudget(agentDef, agent.DefaultMaxSteps)
 		func() {
-			taskCtx, cancel := tools.WithInteractiveAwareTimeout(parentCtx, agentTimeout)
+			// Coordinator request shaping is scoped to the coordinator stream. A
+			// worker must derive its context without that state so its own final
+			// ResolvedWorkerTools remain authoritative at the provider boundary.
+			taskCtx, cancel := tools.WithInteractiveAwareTimeout(withoutCoordinatorRequestPreflight(parentCtx), agentTimeout)
 			defer cancel()
 			taskCtx, roundCancel := context.WithCancel(taskCtx)
 			defer roundCancel()
@@ -1051,7 +1055,6 @@ retryLoop:
 						c.report(c.newEvent("step").withAgent(agentName).withMessage(protocolErrMsg).withTodoID(todoID))
 
 						{
-							repairResultTool := &submitResultTool{coordinator: c, todoID: todoID}
 							repairEvidence := utils.TruncateRunes(output, 12000)
 							repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using only the bounded evidence above to supply the required structured result. Include a concise summary and put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields. Do NOT call any other tools or emit a prose final response.\n", utils.TruncateRunes(task.Goal, 4000), repairEvidence)
 							if budgetExhausted {
@@ -1067,16 +1070,24 @@ retryLoop:
 							repairAttempts := make([]RepairAttemptProvenance, 0, 2)
 							runRepair := func(prompt string) []fantasy.StepResult {
 								var repairAg fantasy.Agent
+								workerCtx := withoutCoordinatorRequestPreflight(parentCtx)
 								if c.repairAgentOverride != nil {
 									repairAg = c.repairAgentOverride
 								} else if c.providerManager != nil {
 									var rErr error
-									repairAg, rErr = c.createGatedAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
+									resolvedRepairTools, resolveErr := c.ToolResolver().ResolveTaskTools(workerCtx, agentDef, WorkerToolResolutionRequest{
+										Task: task, TodoID: todoID, Mode: WorkerToolResolutionResultRepair,
+									})
+									if resolveErr != nil {
+										c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to resolve protocol repair tools: %v", resolveErr)).withTodoID(todoID))
+										return nil
+									}
+									repairAg, rErr = c.createGatedAgent(workerCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
 										Def:        agentDef,
 										TeamConfig: &c.session.Config,
 										WorkDir:    c.projectDir,
 										MaxSteps:   1,
-									}, []fantasy.AgentTool{repairResultTool})
+									}, resolvedRepairTools.Tools)
 									if rErr != nil {
 										c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to create protocol repair agent: %v", rErr)).withTodoID(todoID))
 									}
@@ -1084,7 +1095,7 @@ retryLoop:
 								if repairAg == nil {
 									return nil
 								}
-								repairCtx := context.WithValue(parentCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
+								repairCtx := context.WithValue(workerCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
 								repairCtx = context.WithValue(repairCtx, protocolRepairExecutionKey{}, true)
 								// Protocol repair has no separate execution receipt. The
 								// parent worker context is receipt-backed, so override its
@@ -2227,15 +2238,17 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		return c.finishProtocolRepair(parentCtx, item, task, agentName, resolvedModel, item.TypedResult, output)
 	}
 
-	agentDef, _, err := c.AgentPool().ResolveAgentName(task.Agent)
-	if err != nil {
-		detail := c.FailureDetail(err, FailureSourceError)
-		c.PersistFailureWithClassAndStatusAndOutput(item.Agent, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
-		return "", err
+	agentName := strings.ToLower(strings.TrimSpace(item.Agent))
+	if agentName == "" {
+		agentName = strings.ToLower(strings.TrimSpace(task.Agent))
 	}
-	agentName := strings.ToLower(agentDef.Name)
-	resolvedModel := c.resolveAgentModel(agentDef, task.Model)
-	resultTool := &submitResultTool{coordinator: c, todoID: item.ID}
+	if agentName == "" {
+		agentName = "worker"
+	}
+	resolvedModel := task.Model
+	if resolvedModel == "" && c.session != nil {
+		resolvedModel = c.session.Config.Generation.Model
+	}
 
 	// If a successful repair was checkpointed before the status transition,
 	// finalize it locally. This avoids spending another repair turn and still
@@ -2260,16 +2273,35 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		}
 	}
 
+	canonical, err := c.canonicalWorkerAttemptContextForID(item.ID)
+	if err != nil {
+		detail := c.FailureDetail(err, FailureSourceError)
+		c.PersistFailureWithClassAndStatusAndOutput(item.Agent, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
+		return "", err
+	}
+	task = canonical.Task
+	agentDef := canonical.Agent
+	agentName = strings.ToLower(agentDef.Name)
+	resolvedModel = c.resolveAgentModel(agentDef, task.Model)
+
+	workerCtx := withoutCoordinatorRequestPreflight(parentCtx)
 	var repairAgent fantasy.Agent
 	if c.repairAgentOverride != nil {
 		repairAgent = c.repairAgentOverride
 	} else if c.providerManager != nil {
-		repairAgent, err = c.createGatedAgent(parentCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
-			Def:        agentDef,
-			TeamConfig: &c.session.Config,
-			WorkDir:    c.projectDir,
-			MaxSteps:   1,
-		}, []fantasy.AgentTool{resultTool})
+		resolvedRepairTools, resolveErr := c.ToolResolver().ResolveTaskTools(workerCtx, agentDef, WorkerToolResolutionRequest{
+			Task: task, TodoID: item.ID, Mode: WorkerToolResolutionResume,
+		})
+		if resolveErr != nil {
+			err = resolveErr
+		} else {
+			repairAgent, err = c.createGatedAgent(workerCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
+				Def:        agentDef,
+				TeamConfig: &c.session.Config,
+				WorkDir:    c.projectDir,
+				MaxSteps:   1,
+			}, resolvedRepairTools.Tools)
+		}
 	}
 	if err != nil {
 		c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to create protocol repair agent: %v", err)).withTodoID(item.ID))
@@ -2285,7 +2317,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RepairProvenance != nil {
 		priorAttempts = item.ExecutionReceipt.RepairProvenance.RepairAttempts
 	}
-	repairCtx := context.WithValue(parentCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
+	repairCtx := context.WithValue(workerCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
 	repairCtx = context.WithValue(repairCtx, protocolRepairExecutionKey{}, true)
 	repairCtx = context.WithValue(repairCtx, llmUsageReceiptExpectedKey{}, false)
 	repairCtx = context.WithValue(repairCtx, todoIDKey{}, item.ID)
@@ -4092,7 +4124,8 @@ func (c *Coordinator) validateTaskModel(task *TaskDef) error {
 	return fmt.Errorf("unknown model %q for agent %q (valid models: %v)", task.Model, task.Agent, validIDs)
 }
 
-func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *agent.AgentDef, overrideModel string, resultTool *submitResultTool, task TaskDef) (fantasy.Agent, []string, error) {
+func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *agent.AgentDef, overrideModel string, task TaskDef, todoID string) (fantasy.Agent, []string, error) {
+	ctx = withoutCoordinatorRequestPreflight(ctx)
 	resolvedTask := task
 	if overrideModel != "" {
 		resolvedTask.Model = overrideModel
@@ -4111,11 +4144,9 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 	agentDef = c.injectWorkerContext(ctx, agentDef)
 	ctx = tools.SetSSHSessionManager(ctx, c.sshSessionMgr)
 
-	extras := []fantasy.AgentTool(nil)
-	if resultTool != nil {
-		extras = append(extras, resultTool)
-	}
-	resolvedTools, err := c.ToolResolver().ResolveTaskTools(ctx, agentDef, task, extras)
+	resolvedTools, err := c.ToolResolver().ResolveTaskTools(ctx, agentDef, WorkerToolResolutionRequest{
+		Task: resolvedTask, TodoID: todoID, Mode: workerToolResolutionModeForTask(resolvedTask),
+	})
 	if err != nil {
 		return nil, nil, err
 	}

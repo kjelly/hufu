@@ -15,6 +15,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/sidecar"
+	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -150,7 +151,16 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		return fantasy.NewTextResponse(fmt.Sprintf("[CACHED RESULT] Task: '%s'\n\n%s", truncateTaskDesc(cachedDesc), cachedOutput)), nil
 	}
 
-	todoItems, err := c.CommitTaskCreation(ctx, []TodoSpec{{Agent: subLabel, Desc: taskDesc, Model: "", Source: TaskSourceSubagent, ParentID: parentID}})
+	todoItems, err := c.CommitTaskCreation(ctx, []TodoSpec{
+		{
+			Agent:     selected,
+			Desc:      taskDesc,
+			Model:     "",
+			Source:    TaskSourceSubagent,
+			ParentID:  parentID,
+			Execution: ExecutionContract{RequiresResult: true},
+		},
+	})
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
@@ -162,6 +172,7 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	if err := c.commitTaskTransitionFromCurrent(ctx, subTodoID, TaskInProgress, "", "", nil); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
+	c.setCurrentTaskAttempt(subTodoID, 1)
 	if parentID != "" {
 		if err := c.commitTaskTransitionFromCurrent(ctx, parentID, TaskPaused, "", "", nil); err != nil {
 			return fantasy.NewTextErrorResponse(err.Error()), nil
@@ -242,38 +253,72 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	if c.IsWrapUp() {
 		return "", fmt.Errorf("wrap-up in progress: cannot create sub-agent")
 	}
+	ctx = withoutCoordinatorRequestPreflight(ctx)
 
-	agentDef, _, err := c.AgentPool().ResolveAgentName(name)
+	todoID, ok := ctx.Value(todoIDKey{}).(string)
+	if !ok || strings.TrimSpace(todoID) == "" {
+		return "", fmt.Errorf("cannot create sub-agent: Todo ID is required")
+	}
+	canonical, err := c.canonicalWorkerAttemptContextForID(todoID)
 	if err != nil {
-		// No silent fallback to a generic worker: a fabricated sub-agent runs
-		// with the caller's own permissions and cannot provide any capability
-		// the caller lacks, so the request would fail in a confusing way later.
 		return "", fmt.Errorf("cannot create sub-agent: %w", err)
 	}
+	if canonical.Todo == nil {
+		return "", fmt.Errorf("cannot create sub-agent: canonical Todo %q is unavailable", todoID)
+	}
+	if canonical.Agent == nil {
+		return "", fmt.Errorf("cannot create sub-agent: canonical agent for Todo %q is unavailable", todoID)
+	}
+	if !strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(canonical.Agent.Name)) {
+		return "", fmt.Errorf("cannot create sub-agent: requested agent %q does not match canonical agent %q for Todo %q", name, canonical.Agent.Name, todoID)
+	}
 
-	// Derive the sub-agent allowlist from the exact tool slice it receives,
-	// rather than inheriting the caller's permissions or re-selecting later.
-	agentTools := c.selectWorkerTools(agentDef)
-	ctx = c.withEffectiveToolsAllowed(ctx, agentDef, agentToolNames(agentTools))
+	resolvedTools, err := c.ToolResolver().ResolveTaskTools(ctx, canonical.Agent, WorkerToolResolutionRequest{
+		Task: canonical.Task, TodoID: todoID, Mode: canonical.Mode,
+	})
+	if err != nil {
+		return "", fmt.Errorf("cannot create sub-agent: resolve task tools: %w", err)
+	}
+	agentDef := c.injectWorkerContext(ctx, canonical.Agent)
+	ctx = context.WithValue(ctx, executionAttemptKey{}, 1)
+	ctx = context.WithValue(ctx, taskRequiresResultKey{}, true)
+	ctx = context.WithValue(ctx, tools.AgentNameKey, canonical.Agent.Name)
+	ctx = c.withEffectiveToolsAllowedForTask(ctx, agentDef, resolvedTools.Names, canonical.Task)
+	if identity, active := c.activeTaskResultOccurrence(todoID); active {
+		ctx = withSubmitResultRuntimeIdentity(ctx, identity)
+	} else {
+		return "", fmt.Errorf("cannot create sub-agent: no active result occurrence for Todo %q", todoID)
+	}
+
 	// Sub-agent streams do not produce a separate execution receipt. Make the
 	// usage-accounting boundary explicit even when the parent worker context
 	// carried the receipt marker.
 	ctx = context.WithValue(ctx, llmUsageReceiptExpectedKey{}, false)
 
 	subAgModelID := c.resolveAgentModel(agentDef, "")
-	ag, err := c.createGatedAgent(ctx, c.providerManager.GetProvider(subAgModelID), agent.AgentConfig{
-		Def:        agentDef,
-		TeamConfig: &c.session.Config,
-		WorkDir:    c.projectDir,
-		MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
-	}, agentTools)
-	if err != nil {
-		return "", fmt.Errorf("failed to create sub-agent %q: %w", name, err)
+	var ag fantasy.Agent
+	if c.workerAgentOverride != nil {
+		ag = c.workerAgentOverride
+	} else {
+		provider, providerErr := c.ModelRuntime().ProviderFor(subAgModelID)
+		if providerErr != nil {
+			return "", fmt.Errorf("failed to resolve sub-agent provider %q: %w", name, providerErr)
+		}
+		ag, err = c.createGatedAgent(ctx, provider, agent.AgentConfig{
+			Def:        agentDef,
+			TeamConfig: &c.session.Config,
+			WorkDir:    c.projectDir,
+			MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
+		}, resolvedTools.Tools)
+		if err != nil {
+			return "", fmt.Errorf("failed to create sub-agent %q: %w", name, err)
+		}
 	}
 
-	todoID, _ := ctx.Value(todoIDKey{}).(string)
-	granted := toolNameSet(agentToolNames(agentTools))
-	taskDef := TaskDef{Agent: agentDef.Name, Goal: task, Constraints: constraints}
+	granted := toolNameSet(resolvedTools.Names)
+	taskDef := canonical.Task
+	taskDef.Goal = task
+	taskDef.Constraints = constraints
 	request := c.newTaskContextRequest(taskDef, todoID, 1, ContextTriggerTaskDispatch, agentDef.Name, agentDef.Role, nil)
 	instructions := "Complete the delegated goal and return a concise result to the requesting agent.\n" + c.sharedKnowledgeInstructions(granted)
 	skills, skillErr := c.buildSkillContextItems(agentDef, agentDef.Name, task, todoID, granted)
@@ -316,12 +361,23 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	timing := &taskTiming{}
 	timing.reset()
 
-	output, _, err := c.runAgentWithStatusAndHistory(ctx, ag, name, prompt, nil, timing)
+	_, _, err = c.runAgentWithStatusAndHistory(ctx, ag, agentDef.Name, prompt, nil, timing)
 	if err != nil {
 		return "", err
 	}
+	result := c.GetTaskResult(todoID)
+	if result == nil || result.Source != "submitted" {
+		return "", fmt.Errorf("sub-agent %q finished without submitting the required result for Todo %q", name, todoID)
+	}
+	if err := validateCompletedTaskResult(result); err != nil {
+		return "", fmt.Errorf("sub-agent %q submitted an incomplete result for Todo %q: %w", name, todoID, err)
+	}
+	output := result.FormatForContext()
 	if strings.TrimSpace(output) == "" {
-		return "", fmt.Errorf("sub-agent %q finished without a final message; the requester received no result", name)
+		output = strings.TrimSpace(result.Summary)
+	}
+	if output == "" {
+		return "", fmt.Errorf("sub-agent %q submitted an empty result for Todo %q", name, todoID)
 	}
 	return output, nil
 }

@@ -741,7 +741,14 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 		return fmt.Errorf("commit task transition: task %s expected %s, got %s", taskID, expected, current.Status)
 	}
 	if eventTypeForTaskStatus(next) == "" || !c.hasDurableEventJournal() {
-		return c.taskTracker.TodoList().TryUpdateStatusAndOutput(taskID, next, detail, output)
+		if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(taskID, next, detail, output); err != nil {
+			return err
+		}
+		if planFirst, ok := metadata["plan_first"].(bool); ok {
+			planID, _ := metadata["plan_id"].(string)
+			return c.taskTracker.TodoList().SetPlanLifecycle(taskID, planFirst, planID)
+		}
+		return nil
 	}
 
 	projected := *current
@@ -758,8 +765,22 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 	if fo, ok := metadata["failure_output"].(string); ok && fo != "" {
 		projected.Output = fo
 	}
+	planLifecycleChanged := false
+	if planFirst, ok := metadata["plan_first"].(bool); ok {
+		projected.PlanFirst = planFirst
+		planLifecycleChanged = true
+	}
+	if planID, ok := metadata["plan_id"].(string); ok {
+		projected.PlanID = planID
+		planLifecycleChanged = true
+	}
 	if err := c.appendTaskTransition(ctx, &projected, metadata); err != nil {
 		return err
+	}
+	if planLifecycleChanged {
+		if err := c.taskTracker.TodoList().SetPlanLifecycle(taskID, projected.PlanFirst, projected.PlanID); err != nil {
+			return fmt.Errorf("apply task plan lifecycle after durable append: %w", err)
+		}
 	}
 	if fe, ok := metadata["failure_event"].(*FailureEventPayload); ok && fe != nil {
 		if err := c.taskTracker.TodoList().TryUpdateStatusAndFailure(taskID, next, detail, output, fe); err != nil {
@@ -769,6 +790,31 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 		return fmt.Errorf("apply task transition after durable append: %w", err)
 	}
 	return nil
+}
+
+// commitTaskPlanLifecycle persists the plan-first lifecycle metadata through
+// the same event-first boundary as status transitions. The projection is
+// updated only after the event append succeeds, so approval cannot leave a
+// checkpoint claiming an approved plan while replay still exposes the
+// initial-plan surface.
+func (c *Coordinator) commitTaskPlanLifecycle(ctx context.Context, taskID string, planFirst bool, planID string) error {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return fmt.Errorf("commit task plan lifecycle: task tracker is unavailable")
+	}
+	if planID != "" && !planFirst {
+		return fmt.Errorf("commit task plan lifecycle: plan ID requires plan-first lifecycle")
+	}
+	item := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
+	if item == nil {
+		return fmt.Errorf("commit task plan lifecycle: task %s not found", taskID)
+	}
+	if item.PlanFirst == planFirst && item.PlanID == planID {
+		return nil
+	}
+	return c.CommitTaskTransition(ctx, taskID, item.Status, item.Status, "", "", map[string]interface{}{
+		"plan_first": planFirst,
+		"plan_id":    planID,
+	})
 }
 
 // appendTaskTransition is the controlled durable append primitive for a task
@@ -1172,6 +1218,8 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		"phase":                 item.Phase,
 		"action":                item.Action,
 		"plan_task_id":          item.PlanTaskID,
+		"plan_first":            item.PlanFirst,
+		"plan_id":               item.PlanID,
 		"contract_id":           item.ContractID,
 		"contract_hash":         item.ContractHash,
 		"contract_revision":     item.ContractRevision,

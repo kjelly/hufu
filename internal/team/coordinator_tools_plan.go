@@ -104,26 +104,12 @@ func (t *approvePlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("plan already %s", entry.Status)), nil
 	}
 	entry.Status = "approved"
-	var approvedTask TaskDef
-	if entry.Task.Agent != "" {
-		approvedTask = cloneTaskDef(entry.Task)
-	} else {
-		approvedTask = TaskDef{
-			Agent: entry.Agent,
-			Goal:  entry.Goal,
-		}
-	}
-	approvedTask.PlanFirst = true
-	approvedTask.PlanID = entry.TodoID
 	todoID := entry.TodoID
+	agentName := entry.Agent
+	goal := entry.Goal
 	t.coordinator.pendingPlansMu.Unlock()
 
-	if err := t.coordinator.commitTaskTransitionFromCurrent(ctx, todoID, TaskPlanned, "", "", nil); err != nil {
-		return fantasy.NewTextErrorResponse(err.Error()), nil
-	}
-	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
-
-	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{approvedTask})
+	result, err := t.coordinator.executeApprovedPlanOnExistingTodo(ctx, todoID, agentName, goal)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
@@ -174,23 +160,14 @@ func (t *modifyPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantas
 	}
 	entry.Status = "modified"
 	entry.PlanText = args.Plan
-	var modifiedTask TaskDef
-	if entry.Task.Agent != "" {
-		modifiedTask = cloneTaskDef(entry.Task)
-	} else {
-		modifiedTask = TaskDef{
-			Agent: entry.Agent,
-			Goal:  entry.Goal,
-		}
-	}
-	modifiedTask.PlanFirst = true
-	modifiedTask.PlanID = entry.TodoID
 	todoID := entry.TodoID
+	agentName := entry.Agent
+	goal := entry.Goal
 	t.coordinator.pendingPlansMu.Unlock()
 
 	t.coordinator.report(t.coordinator.newEvent("step").withMessage(fmt.Sprintf("plan %s modified by coordinator", todoID)))
 
-	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{modifiedTask})
+	result, err := t.coordinator.executeApprovedPlanOnExistingTodo(ctx, todoID, agentName, goal)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
@@ -240,24 +217,16 @@ func (t *rejectPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantas
 		return fantasy.NewTextErrorResponse("plan not found for todo_id: " + args.TodoID), nil
 	}
 	entry.Status = "rejected"
-	var revisedTask TaskDef
-	if entry.Task.Agent != "" {
-		revisedTask = cloneTaskDef(entry.Task)
-	} else {
-		revisedTask = TaskDef{
-			Agent: entry.Agent,
-		}
-	}
-	revisedTask.Goal = fmt.Sprintf("%s\n\n## Plan Rejected\nYour previous plan was rejected for the following reason:\n\n%s\n\nPlease re-plan and submit a new plan.", entry.Goal, args.Reason)
-	revisedTask.PlanFirst = true
-	revisedTask.PlanID = ""
 	t.coordinator.pendingPlansMu.Unlock()
 
 	t.coordinator.report(t.coordinator.newEvent("step").withMessage(fmt.Sprintf("plan %s rejected: %s", args.TodoID, args.Reason)))
 
-	result, err := t.coordinator.ExecuteTasks(ctx, []TaskDef{revisedTask})
-	if err != nil {
+	if err := t.coordinator.rejectPlanOnExistingTodo(ctx, args.TodoID, fmt.Sprintf("plan rejected: %s", args.Reason)); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
-	return fantasy.NewTextResponse(fmt.Sprintf("Plan rejected. Agent re-planned.\n\n%s", result)), nil
+	t.coordinator.pendingPlansMu.Lock()
+	delete(t.coordinator.pendingPlans, args.TodoID)
+	t.coordinator.pendingPlansMu.Unlock()
+	t.coordinator.report(t.coordinator.newEvent("todos_updated").withTodos(t.coordinator.taskTracker.TodoList().Items()))
+	return fantasy.NewTextResponse("Plan rejected. Original task terminalized; submit a new plan if needed."), nil
 }

@@ -174,13 +174,15 @@ func (c *Coordinator) saveAndReloadSkill(name, description, content string, asDr
 
 // appendSkillContext appends skill prefix and auto-matched skill suggestions to
 // prompt. todoID may be empty; SetInjectedSkills is skipped when it is.
-func (c *Coordinator) appendSkillContext(prompt string, agentDef *agent.AgentDef, agentName, goal, todoID string) string {
-	if prefix := c.buildSkillPromptPrefix(agentDef); prefix != "" {
+func (c *Coordinator) appendSkillContext(prompt string, agentDef *agent.AgentDef, agentName, goal, todoID string, granted map[string]bool) string {
+	if prefix := c.buildSkillPromptPrefix(agentDef, granted); prefix != "" {
 		prompt += "\n\n" + prefix
 	}
-	if suggestion, names := c.buildSuggestedSkillsText(agentDef, agentName, goal); suggestion != "" {
-		if todoID != "" {
+	if suggestion, names := c.buildSuggestedSkillsText(agentDef, agentName, goal, granted); suggestion != "" {
+		if todoID != "" && granted["load_skill"] {
 			c.taskTracker.TodoList().SetInjectedSkills(todoID, names)
+		} else if todoID != "" {
+			c.taskTracker.TodoList().SetInjectedSkills(todoID, nil)
 		}
 		prompt += "\n\n" + suggestion
 	}
@@ -191,6 +193,8 @@ func (c *Coordinator) appendSkillContext(prompt string, agentDef *agent.AgentDef
 // load_skill is available, workers receive progressive-disclosure summaries
 // and a mandatory load instruction. Otherwise the full skill is injected as a
 // required fallback so dispatch can never proceed without its instructions.
+// Only the summary path records InjectedSkills, because that state means a
+// full skill load is still pending.
 func (c *Coordinator) buildSkillContextItems(agentDef *agent.AgentDef, agentName, goal, todoID string, granted map[string]bool) ([]ContextItem, error) {
 	if agentDef == nil {
 		return nil, nil
@@ -248,13 +252,19 @@ func (c *Coordinator) buildSkillContextItems(agentDef *agent.AgentDef, agentName
 			c.recordSkillUsage(definition.Name, agentName)
 		}
 	}
-	if todoID != "" && len(injectedNames) > 0 {
-		c.taskTracker.TodoList().SetInjectedSkills(todoID, injectedNames)
+	if todoID != "" {
+		if granted["load_skill"] {
+			c.taskTracker.TodoList().SetInjectedSkills(todoID, injectedNames)
+		} else {
+			// Full content is already disclosed in the worker context. Do not
+			// leave a progressive-disclosure marker that would deny task tools.
+			c.taskTracker.TodoList().SetInjectedSkills(todoID, nil)
+		}
 	}
 	return items, nil
 }
 
-func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
+func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef, granted map[string]bool) string {
 	agentSkillNames := skill.ParseSkillList(agentDef.Skills)
 	if len(agentSkillNames) == 0 {
 		return ""
@@ -265,10 +275,11 @@ func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
 	b.WriteString("## Relevant Skills\n\n")
 	for _, s := range skill.SkillsByName(cachedSkills, agentSkillNames) {
 		for _, expanded := range skill.ExpandSkillDependencies(s, cachedSkills) {
-			// This legacy formatter is deliberately level-1 only. Actual
-			// dispatches use buildSkillContextItems, which selects full fallback
-			// only when load_skill is unavailable and otherwise gates task work.
-			fmt.Fprintf(&b, "### %s\n*File: %s*\n\n%s\n\nCall `load_skill` before task work to read the full instructions.\n\n", expanded.Name, expanded.Path, expanded.Description)
+			if granted["load_skill"] {
+				fmt.Fprintf(&b, "### %s\n*File: %s*\n\n%s\n\nCall `load_skill` before task work to read the full instructions.\n\n", expanded.Name, expanded.Path, expanded.Description)
+			} else {
+				fmt.Fprintf(&b, "### %s\n*File: %s*\n\n%s\n\nFull skill instructions are already supplied above; proceed with the task.\n\n", expanded.Name, expanded.Path, expanded.Content)
+			}
 			foundMap[strings.ToLower(expanded.Name)] = true
 		}
 	}
@@ -281,7 +292,7 @@ func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef) string {
 	return b.String()
 }
 
-func (c *Coordinator) buildSuggestedSkillsText(agentDef *agent.AgentDef, agentName string, taskDesc string) (string, []string) {
+func (c *Coordinator) buildSuggestedSkillsText(agentDef *agent.AgentDef, agentName string, taskDesc string, granted map[string]bool) (string, []string) {
 	relevant := c.computeRelevantSkills(agentDef, taskDesc)
 	if len(relevant) == 0 {
 		return "", nil
@@ -294,14 +305,22 @@ func (c *Coordinator) buildSuggestedSkillsText(agentDef *agent.AgentDef, agentNa
 
 	var b strings.Builder
 	b.WriteString("## Suggested Skills\n\n")
-	b.WriteString("The following skills are relevant to your task. Call `load_skill` to load ALL of them before starting work:\n\n")
+	if granted["load_skill"] {
+		b.WriteString("The following skills are relevant to your task. Call `load_skill` to load ALL of them before starting work:\n\n")
+	} else {
+		b.WriteString("The following relevant skills are already supplied in full; proceed with the task:\n\n")
+	}
 	for _, s := range relevant {
-		desc := s.Description
-		if utf8.RuneCountInString(desc) > 80 {
-			runes := []rune(desc)
-			desc = string(runes[:80]) + "..."
+		if granted["load_skill"] {
+			desc := s.Description
+			if utf8.RuneCountInString(desc) > 80 {
+				runes := []rune(desc)
+				desc = string(runes[:80]) + "..."
+			}
+			fmt.Fprintf(&b, "- **%s**: %s\n", s.Name, desc)
+			continue
 		}
-		fmt.Fprintf(&b, "- **%s**: %s\n", s.Name, desc)
+		fmt.Fprintf(&b, "### %s\n\n%s\n\n", s.Name, s.Content)
 	}
 	b.WriteString("\n")
 	return b.String(), names
@@ -448,7 +467,8 @@ func (c *Coordinator) extractSkillFromToolCall(toolName, input string) string {
 // the same central policy boundary as every other worker tool. Summaries are
 // not evidence of a full skill load: only a successful load_skill call updates
 // TodoItem.LoadedSkills, and task-work tools stay recoverably denied until the
-// next deterministic skill in InjectedSkills has been loaded.
+// next deterministic skill in InjectedSkills has been loaded. Full skill
+// disclosure does not populate InjectedSkills, so it is immediately usable.
 func (c *Coordinator) mandatorySkillLoadDenial(ctx context.Context, toolName, input string) string {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return ""

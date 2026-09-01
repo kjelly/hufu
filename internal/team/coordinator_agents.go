@@ -17,24 +17,6 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
-func agentCacheKey(def *agent.AgentDef, overrideModel string) string {
-	if overrideModel != "" {
-		return def.Name + "|" + overrideModel
-	}
-	return def.Name
-}
-
-func (c *Coordinator) policyAgentCacheKey(def *agent.AgentDef, overrideModel string) string {
-	cacheKey := agentCacheKey(def, overrideModel) + "|tools=" + def.Tools
-	if c != nil && c.session != nil {
-		cacheKey += "|allowed=" + strings.Join(c.session.Config.ToolsAllowed, ",") + "|denied=" + strings.Join(c.session.Config.ToolsDenied, ",")
-	}
-	if c != nil && c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
-		cacheKey += "|phase=" + string(c.phaseWorkflow.State())
-	}
-	return cacheKey
-}
-
 // resolveAgentName resolves an agent name (exact, case-insensitive, or fuzzy match)
 // to its AgentDef.
 //
