@@ -503,6 +503,54 @@ func TestReconcileTask_Success(t *testing.T) {
 	}
 }
 
+// TestReconcileTask_RecoversWorkflowWedgedInPhaseFailed exercises the fix for
+// the dead end found in workspace/hufu-code-review forensics: PhaseFailed has
+// no entry in allowedTransitions, and reconcile_task previously only updated
+// the TodoItem's Resolution, never phaseWorkflow's own state. A run that hit
+// a fail_fast phase failure stayed permanently wedged even after the failing
+// task was reconciled with valid objective evidence, because finish still saw
+// phaseWorkflow.State() == PhaseFailed. recoverWorkflowAfterResolution must
+// un-wedge the workflow when the reconciled task is the one that caused it.
+func TestReconcileTask_RecoversWorkflowWedgedInPhaseFailed(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	c.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "worker", Desc: "failed task A"},
+		{Agent: "worker", Desc: "repair task B"},
+	})
+	items := c.taskTracker.TodoList().Items()
+	taskA := items[0]
+	taskB := items[1]
+
+	c.taskTracker.TodoList().UpdateStatusAndOutput(taskA.ID, TaskError, "failed initial attempt", "failed")
+	c.taskTracker.TodoList().UpdateStatusAndOutput(taskB.ID, TaskDone, "fixed by task B", "success")
+	_ = c.taskTracker.TodoList().SetVerificationResult(taskB.ID, &VerificationResult{Command: "test -f ok", ExitCode: 0})
+
+	// Simulate a workflow that fail_fast already drove into PhaseFailed
+	// because of taskA specifically (phaseContracts carries a placeholder
+	// contract so observe()'s "no contract configured" structural guard,
+	// which is a different failure class entirely, does not fire).
+	w := &runtimeWorkflow{
+		enabled:         true,
+		state:           PhaseFailed,
+		results:         map[Phase]PhaseResult{PhaseExecute: {Status: PhaseStatusFailure, Summary: "failed initial attempt"}},
+		phaseContracts:  map[Phase]map[string]bool{PhaseExecute: {"": true}},
+		failedFromPhase: PhaseExecute,
+		failedTaskID:    taskA.ID,
+	}
+	c.phaseWorkflow = w
+
+	tool := &reconcileTaskTool{coordinator: c}
+	toolInput := `{"task_id":"` + taskA.ID + `", "status":"reconciled", "resolved_by":"` + taskB.ID + `", "reason":"task B fixed configuration", "evidence":[{"type":"command","description":"test -f ok","value":"pass"}]}`
+	resp, err := tool.Run(context.Background(), fantasy.ToolCall{Input: toolInput})
+	if err != nil || resp.IsError {
+		t.Fatalf("reconcile_task failed: %v, content: %s", err, resp.Content)
+	}
+
+	if got := w.State(); got == PhaseFailed {
+		t.Fatalf("expected reconciling the causing task to move the workflow out of PhaseFailed, still %s", got)
+	}
+}
+
 func TestSystemSecret_FailClosedOnRNGError(t *testing.T) {
 	// Override randReader with failing reader
 	oldReader := randReader

@@ -174,6 +174,9 @@ func accumulateTodoMetrics(metrics *RunMetrics, items []*TodoItem) {
 		} else if item.Status == TaskDone {
 			metrics.TasksDoneWithoutObjectiveVerifier++
 		}
+		if item.Status == TaskDone && item.TypedResult != nil && item.TypedResult.Source == "recovered_protocol" {
+			metrics.DegradedResultsAccepted++
+		}
 		accumulateVerificationMetrics(metrics, item)
 		accumulateStepBudgetMetrics(metrics, item)
 		for _, receipt := range item.ExecutionReceipts {

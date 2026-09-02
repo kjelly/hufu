@@ -534,6 +534,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		fmt.Fprintf(&b, "- **Policy-denied tool calls:** %d (safe fresh attempts: %d; schema repairs: %d; budget wrap-ups: %d)\n", metrics.PolicyDeniedToolCalls, metrics.SafeFreshAttempts, metrics.SchemaRepairDenials, metrics.StepBudgetWrapUps)
 		fmt.Fprintf(&b, "- **Worker success claims rejected by verification:** %d\n", metrics.WorkerSuccessRejected)
 		fmt.Fprintf(&b, "- **Weak verifier warnings:** %d\n", metrics.WeakVerifierWarnings)
+		fmt.Fprintf(&b, "- **Degraded results accepted via protocol recovery:** %d\n", metrics.DegradedResultsAccepted)
 		fmt.Fprintf(&b, "- **Preflight failures caught:** %d (non-asserting verifiers: %d)\n", metrics.PreflightFailuresCaught, metrics.NonAssertingVerifiersRejected)
 		fmt.Fprintf(&b, "- **Verifications overturned by evidence:** %d\n", metrics.VerificationsOverturned)
 		fmt.Fprintf(&b, "- **Failures by class:** %v\n", metrics.FailuresByClass)

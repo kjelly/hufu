@@ -1097,7 +1097,11 @@ func (c *Coordinator) CommitTaskResolution(ctx context.Context, taskID string, r
 		}
 	}
 	if !c.hasDurableEventJournal() {
-		return c.taskTracker.TodoList().SetTaskResolution(taskID, resolution)
+		if err := c.taskTracker.TodoList().SetTaskResolution(taskID, resolution); err != nil {
+			return err
+		}
+		c.recoverWorkflowAfterResolution(taskID)
+		return nil
 	}
 
 	projected := *current
@@ -1118,7 +1122,34 @@ func (c *Coordinator) CommitTaskResolution(ctx context.Context, taskID string, r
 	}); err != nil {
 		return fmt.Errorf("commit task resolution append: %w", err)
 	}
-	return c.taskTracker.TodoList().SetTaskResolution(taskID, resolution)
+	if err := c.taskTracker.TodoList().SetTaskResolution(taskID, resolution); err != nil {
+		return err
+	}
+	c.recoverWorkflowAfterResolution(taskID)
+	return nil
+}
+
+// recoverWorkflowAfterResolution un-wedges the runtime workflow when the task
+// just resolved via reconcile_task is exactly the one whose terminal failure
+// previously drove the workflow into PhaseFailed. reconcile_task's own tool
+// description promises resolution "remov[es] it from the unresolved failed
+// tasks finish gate" — that held for the TodoItem-level acceptance/finish
+// checks (which already treat superseded/reconciled/waived items as
+// resolved) but not for phaseWorkflow's own FAILED phase, which has no other
+// exit: PhaseFailed has no entry in allowedTransitions, so without this call
+// a validly-reconciled run stayed permanently wedged, with finish and
+// reconcile_task both structurally unable to make further progress.
+func (c *Coordinator) recoverWorkflowAfterResolution(taskID string) {
+	if c == nil || c.phaseWorkflow == nil {
+		return
+	}
+	if !c.phaseWorkflow.reconcileFailure(taskID) {
+		return
+	}
+	if c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return
+	}
+	_ = c.phaseWorkflow.observe(c.taskTracker.TodoList().Items())
 }
 
 func (c *Coordinator) hasDurableEventJournal() bool {

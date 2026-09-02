@@ -240,6 +240,38 @@ func TestMetricsIncludeWP17ContractAndVerifierSignals(t *testing.T) {
 	}
 }
 
+// TestMetricsCountDegradedResultsAcceptedViaProtocolRecovery guards against the
+// hufu-code-review workspace forensics finding: a task whose result was
+// salvaged from free text after the worker failed to call submit_result
+// (TypedResult.Source == "recovered_protocol") could reach TaskDone with no
+// distinguishing signal anywhere in the reliability report — indistinguishable
+// from a clean submission even though the content was never validated by the
+// worker's own protocol.
+func TestMetricsCountDegradedResultsAcceptedViaProtocolRecovery(t *testing.T) {
+	tracker := NewTaskTracker()
+	tracker.TodoList().Restore([]*TodoItem{
+		{
+			ID: "degraded-done", Agent: "worker", Status: TaskDone,
+			TypedResult: &TaskResult{Source: "recovered_protocol", Summary: "salvaged free text"},
+		},
+		{
+			ID: "clean-done", Agent: "worker", Status: TaskDone,
+			TypedResult: &TaskResult{Source: "submitted", Summary: "clean submission"},
+		},
+		{
+			// A protocol-recovered result on a task that did NOT reach TaskDone
+			// must not be counted — it never became an accepted result.
+			ID: "degraded-error", Agent: "worker", Status: TaskError,
+			TypedResult: &TaskResult{Source: "recovered_protocol", Summary: "salvaged but rejected"},
+		},
+	})
+	c := &Coordinator{taskTracker: tracker}
+	m := c.Metrics()
+	if m.DegradedResultsAccepted != 1 {
+		t.Fatalf("DegradedResultsAccepted = %d, want 1 (metrics=%#v)", m.DegradedResultsAccepted, m)
+	}
+}
+
 func TestMetricsIncludeReceiptVerificationAndAllFailureEvents(t *testing.T) {
 	workspace := t.TempDir()
 	eventStore, err := NewEventStore(workspace, "metrics-run", "metrics-session")

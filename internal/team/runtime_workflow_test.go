@@ -869,7 +869,7 @@ func TestRuntimeWorkflow_PhaseTransitions(t *testing.T) {
 		t.Errorf("expected phase_started event for PhasePrepare")
 	}
 
-	err = w.failExecutionErrorLocked(ExecutionError{Phase: PhasePrepare, Message: "test error", Component: "test-agent", Source: "test-provider"}, PhaseStatusFailure)
+	err = w.failExecutionErrorLocked("", ExecutionError{Phase: PhasePrepare, Message: "test error", Component: "test-agent", Source: "test-provider"}, PhaseStatusFailure)
 	if err == nil || w.state != PhaseFailed {
 		t.Errorf("expected failure and transition to PhaseFailed")
 	}
@@ -921,6 +921,83 @@ func TestRuntimeWorkflow_FailFast(t *testing.T) {
 	}
 	if w.state != PhaseFailed {
 		t.Errorf("expected workflow to be in PhaseFailed, got %s", w.state)
+	}
+}
+
+func TestRuntimeWorkflow_ReconcileFailure(t *testing.T) {
+	newFailedWorkflow := func(failedTaskID string) *runtimeWorkflow {
+		return &runtimeWorkflow{
+			enabled:         true,
+			state:           PhaseFailed,
+			results:         map[Phase]PhaseResult{PhaseExecute: {Status: PhaseStatusFailure, Summary: "boom"}},
+			failedFromPhase: PhaseExecute,
+			failedTaskID:    failedTaskID,
+		}
+	}
+
+	cases := []struct {
+		name          string
+		failedTaskID  string
+		reconcileID   string
+		wantRecovered bool
+	}{
+		{name: "matching task recovers", failedTaskID: "task-a", reconcileID: "task-a", wantRecovered: true},
+		{name: "different task does not recover", failedTaskID: "task-a", reconcileID: "task-b", wantRecovered: false},
+		{name: "structural failure has no failedTaskID and is never reconcilable", failedTaskID: "", reconcileID: "task-a", wantRecovered: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newFailedWorkflow(tc.failedTaskID)
+			got := w.reconcileFailure(tc.reconcileID)
+			if got != tc.wantRecovered {
+				t.Fatalf("reconcileFailure(%q) = %v, want %v", tc.reconcileID, got, tc.wantRecovered)
+			}
+			if tc.wantRecovered {
+				if w.State() != PhaseExecute {
+					t.Errorf("expected recovery to restore PhaseExecute, got %s", w.State())
+				}
+				if _, ok := w.results[PhaseExecute]; ok {
+					t.Errorf("expected stale failure result to be cleared for re-evaluation")
+				}
+			} else if w.State() != PhaseFailed {
+				t.Errorf("expected workflow to remain PhaseFailed, got %s", w.State())
+			}
+		})
+	}
+}
+
+func TestRuntimeWorkflow_ObserveSkipsResolvedFailedTasks(t *testing.T) {
+	session := &TeamSession{
+		Config: agent.TeamConfig{
+			Name:     "test-team",
+			Workflow: agent.WorkflowConfig{Phases: []string{string(PhasePrepare), string(PhaseAudit), string(PhaseExecute), string(PhaseVerify)}},
+		},
+	}
+	w, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.state = PhaseExecute
+	w.phaseContracts[PhaseExecute] = map[string]bool{"c1": true}
+
+	failing := &TodoItem{ID: "1", Phase: PhaseExecute, Status: TaskError, ContractID: "c1", Agent: "tester", Detail: "boom"}
+	if err := w.observe([]*TodoItem{failing}); err == nil || w.state != PhaseFailed {
+		t.Fatalf("expected observe to fail the workflow on an unresolved TaskError, got err=%v state=%s", err, w.state)
+	}
+
+	// Reconciled via reconcile_task: the item keeps TaskStatus TaskError (its
+	// terminal execution outcome never changes) but now carries a resolution.
+	// observe() must treat it the same way run_result.go's acceptance check
+	// and coordinator_tools.go's finish gate already do — as no longer active.
+	failing.Resolution = &TaskResolution{Status: "reconciled", ResolvedBy: "2", Reason: "fixed by task 2"}
+	w.state = PhaseExecute // simulates reconcileFailure() having restored the phase
+	completing := &TodoItem{ID: "2", Phase: PhaseExecute, Status: TaskDone, ContractID: "c1"}
+	if err := w.observe([]*TodoItem{failing, completing}); err != nil {
+		t.Fatalf("observe returned error for a resolved failed task: %v", err)
+	}
+	if w.state != PhaseVerify {
+		t.Fatalf("expected phase to advance to VERIFY once the only contract is satisfied by the resolving task, got %s", w.state)
 	}
 }
 

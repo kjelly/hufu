@@ -710,8 +710,17 @@ type RunMetrics struct {
 	CancelledTasksExcludedFromRetries  int     `json:"cancelled_tasks_excluded_from_retry_statistics,omitempty"`
 	WorkerSuccessRejected              int     `json:"worker_success_rejected_by_verification,omitempty"`
 	WeakVerifierWarnings               int     `json:"weak_verifier_warnings,omitempty"`
-	TimeSinceCriterionProgressSeconds  int64   `json:"time_since_criterion_progress_seconds,omitempty"`
-	TokensSinceCriterionProgress       int64   `json:"tokens_since_criterion_progress,omitempty"`
+	// DegradedResultsAccepted counts tasks accepted as TaskDone whose result
+	// came from protocol recovery (TypedResult.Source == "recovered_protocol")
+	// rather than a worker's own submit_result call — i.e. the model's free
+	// text was salvaged as a provisional, possibly truncated or low-confidence
+	// result. Without this counter such a task is indistinguishable from a
+	// clean submission in every other reliability signal (it can still carry
+	// a passing VerifyResult), even though its content was never validated by
+	// the worker's own protocol.
+	DegradedResultsAccepted           int   `json:"degraded_results_accepted_via_protocol_recovery,omitempty"`
+	TimeSinceCriterionProgressSeconds int64 `json:"time_since_criterion_progress_seconds,omitempty"`
+	TokensSinceCriterionProgress      int64 `json:"tokens_since_criterion_progress,omitempty"`
 	// No-progress budget counters (§8.1, WP-12). Mirrors the coordinator
 	// fields; reset only by objective criterion progress.
 	TurnsSinceCriterionProgress int `json:"turns_since_criterion_progress,omitempty"`

@@ -37,6 +37,14 @@ type runtimeWorkflow struct {
 	verificationRequired   bool
 	repositoryRoot         string
 	emitEvent              func(eventType string, phase Phase, details LifecycleEventPayload)
+	// failedTaskID and failedFromPhase identify the specific task and phase
+	// that caused the most recent transition into PhaseFailed. They let
+	// reconcileFailure distinguish "the exact failure that was just resolved"
+	// from any other failure, and are only set for task-triggered failures
+	// (structural failures, e.g. bad config, leave failedTaskID empty and are
+	// therefore never reconcilable this way).
+	failedTaskID    string
+	failedFromPhase Phase
 }
 
 func newRuntimeWorkflow(session *TeamSession) (*runtimeWorkflow, error) {
@@ -502,7 +510,7 @@ func (w *runtimeWorkflow) observe(items []*TodoItem) error {
 	expectedContracts := w.phaseContracts[w.state]
 	optionalContracts := w.phaseOptionalContracts[w.state]
 	if len(expectedContracts) == 0 {
-		return w.failLocked("workflow", "workflow", "CONFIGURATION", fmt.Sprintf("no static task contract is configured for phase %s", w.state), false, PhaseStatusFailure)
+		return w.failLocked("", "workflow", "workflow", "CONFIGURATION", fmt.Sprintf("no static task contract is configured for phase %s", w.state), false, PhaseStatusFailure)
 	}
 	completed := make(map[string]bool, len(expectedContracts))
 	var evidence []ArtifactRef
@@ -513,25 +521,31 @@ func (w *runtimeWorkflow) observe(items []*TodoItem) error {
 		switch item.Status {
 		case TaskDone:
 			if w.state == PhaseVerify && w.verificationRequired && !isVerifySuccess(item.VerifyResult) {
-				return w.failLocked(item.Agent, item.Agent, CategoryValidationFailed, "verify phase task completed without successful objective verification evidence", false, PhaseStatusFailure)
+				return w.failLocked(item.ID, item.Agent, item.Agent, CategoryValidationFailed, "verify phase task completed without successful objective verification evidence", false, PhaseStatusFailure)
 			}
 			completed[item.ContractID] = true
 			if item.TypedResult != nil {
 				evidence = append(evidence, item.TypedResult.Artifacts...)
 			}
 		case TaskError, TaskProtocolIncomplete:
+			if isResolvedTaskResolution(item.Resolution) {
+				continue
+			}
 			if optionalContracts[item.ContractID] {
-				return w.failLocked(item.Agent, item.Agent, "OPTIONAL_TASK_FAILURE", item.Detail, false, PhaseStatusFailure)
+				return w.failLocked(item.ID, item.Agent, item.Agent, "OPTIONAL_TASK_FAILURE", item.Detail, false, PhaseStatusFailure)
 			}
 			if item.RuntimeError != nil {
-				return w.failExecutionErrorLocked(*item.RuntimeError, PhaseStatusFailure)
+				return w.failExecutionErrorLocked(item.ID, *item.RuntimeError, PhaseStatusFailure)
 			}
-			return w.failLocked(item.Agent, item.Agent, "TASK_FAILURE", item.Detail, false, PhaseStatusFailure)
+			return w.failLocked(item.ID, item.Agent, item.Agent, "TASK_FAILURE", item.Detail, false, PhaseStatusFailure)
 		case TaskBlocked:
-			if optionalContracts[item.ContractID] {
-				return w.failLocked(item.Agent, item.Agent, "OPTIONAL_TASK_BLOCKED", item.Detail, false, PhaseStatusBlocked)
+			if isResolvedTaskResolution(item.Resolution) {
+				continue
 			}
-			return w.failLocked(item.Agent, item.Agent, "TASK_BLOCKED", item.Detail, false, PhaseStatusBlocked)
+			if optionalContracts[item.ContractID] {
+				return w.failLocked(item.ID, item.Agent, item.Agent, "OPTIONAL_TASK_BLOCKED", item.Detail, false, PhaseStatusBlocked)
+			}
+			return w.failLocked(item.ID, item.Agent, item.Agent, "TASK_BLOCKED", item.Detail, false, PhaseStatusBlocked)
 		}
 	}
 	for contractID := range expectedContracts {
@@ -550,10 +564,10 @@ func (w *runtimeWorkflow) observe(items []*TodoItem) error {
 	}
 	next := nextWorkflowPhase(w.phases, w.state)
 	if next == "" {
-		return w.failLocked("workflow", "workflow", "CONFIGURATION", "verify must be the final configured workflow phase", false, PhaseStatusFailure)
+		return w.failLocked("", "workflow", "workflow", "CONFIGURATION", "verify must be the final configured workflow phase", false, PhaseStatusFailure)
 	}
 	if !w.policies.AllowPhaseSkip && !IsValidTransition(w.state, next) {
-		return w.failLocked("workflow", "workflow", "STATE_TRANSITION", fmt.Sprintf("invalid transition %s → %s", w.state, next), false, PhaseStatusFailure)
+		return w.failLocked("", "workflow", "workflow", "STATE_TRANSITION", fmt.Sprintf("invalid transition %s → %s", w.state, next), false, PhaseStatusFailure)
 	}
 	w.state = next
 	w.emit("phase_started", w.state, LifecycleEventPayload{
@@ -562,7 +576,7 @@ func (w *runtimeWorkflow) observe(items []*TodoItem) error {
 	return nil
 }
 
-func (w *runtimeWorkflow) failExecutionErrorLocked(executionErr ExecutionError, status PhaseStatus) error {
+func (w *runtimeWorkflow) failExecutionErrorLocked(taskID string, executionErr ExecutionError, status PhaseStatus) error {
 	if status == "" {
 		status = PhaseStatusFailure
 	}
@@ -574,6 +588,8 @@ func (w *runtimeWorkflow) failExecutionErrorLocked(executionErr ExecutionError, 
 	}
 	w.results[w.state] = PhaseResult{Status: status, Summary: executionErr.Message, Errors: []ExecutionError{executionErr}}
 	if IsValidTransition(w.state, PhaseFailed) {
+		w.failedFromPhase = w.state
+		w.failedTaskID = taskID
 		w.state = PhaseFailed
 	}
 	w.emit("phase_failed", executionErr.Phase, LifecycleEventPayload{
@@ -600,13 +616,15 @@ func nextWorkflowPhase(phases []Phase, current Phase) Phase {
 	return ""
 }
 
-func (w *runtimeWorkflow) failLocked(component, source, category, message string, retryable bool, status PhaseStatus) error {
+func (w *runtimeWorkflow) failLocked(taskID, component, source, category, message string, retryable bool, status PhaseStatus) error {
 	if status == "" {
 		status = PhaseStatusFailure
 	}
 	phase := w.state
 	w.results[phase] = PhaseResult{Status: status, Summary: message, Errors: []ExecutionError{{Phase: phase, Component: component, Source: source, Category: category, Cause: message, Message: message, Retryable: retryable}}}
 	if IsValidTransition(w.state, PhaseFailed) {
+		w.failedFromPhase = phase
+		w.failedTaskID = taskID
 		w.state = PhaseFailed
 	}
 	errObj := ExecutionError{Phase: phase, Component: component, Source: source, Category: category, Cause: message, Message: message, Retryable: retryable}
@@ -619,6 +637,56 @@ func (w *runtimeWorkflow) failLocked(component, source, category, message string
 	return fmt.Errorf("workflow %s failed: %s", strings.ToLower(string(phase)), message)
 }
 
+// isResolvedTaskResolution reports whether a task's resolution (set via the
+// reconcile_task tool / CommitTaskResolution) marks it as no longer an active
+// failure — the same three terminal resolution statuses already treated as
+// non-blocking by the acceptance verifier (run_result.go) and the finish gate
+// (coordinator_tools.go). observe() must apply the identical rule, otherwise
+// a task reconciled with objective evidence still re-fails the workflow on
+// every subsequent observe() call.
+func isResolvedTaskResolution(resolution *TaskResolution) bool {
+	if resolution == nil {
+		return false
+	}
+	switch resolution.Status {
+	case "superseded", "reconciled", "waived":
+		return true
+	default:
+		return false
+	}
+}
+
+// reconcileFailure recovers the workflow from PhaseFailed when taskID is
+// exactly the task whose terminal failure caused the most recent transition
+// into PhaseFailed. PhaseFailed has no entry in allowedTransitions, so
+// nothing else can ever move the workflow out of it; without this, a
+// reconcile_task call that supplies valid objective evidence for the failing
+// task (see ValidateResolution) still leaves the run permanently wedged,
+// because CommitTaskResolution only updated the TodoItem, never the runtime
+// workflow's own phase state. Structural failures (bad config, invalid phase
+// transition) carry no failedTaskID and are therefore never reconcilable this
+// way — only a task-triggered failure can be recovered by resolving that
+// task. Returns true if the workflow left PhaseFailed as a result.
+func (w *runtimeWorkflow) reconcileFailure(taskID string) bool {
+	if !w.Enabled() || strings.TrimSpace(taskID) == "" {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.state != PhaseFailed || w.failedTaskID == "" || w.failedTaskID != taskID {
+		return false
+	}
+	phase := w.failedFromPhase
+	w.state = phase
+	delete(w.results, phase)
+	w.failedTaskID = ""
+	w.failedFromPhase = ""
+	w.emit("phase_started", phase, LifecycleEventPayload{
+		Agent: "", Provider: "", FailureSignature: "", Artifacts: []ArtifactRef{},
+	})
+	return true
+}
+
 func (w *runtimeWorkflow) fail(component, source, category, message string, retryable bool) error {
 	if !w.Enabled() {
 		return nil
@@ -628,7 +696,7 @@ func (w *runtimeWorkflow) fail(component, source, category, message string, retr
 	if w.state == PhaseDone || w.state == PhaseFailed {
 		return nil
 	}
-	return w.failLocked(component, source, category, message, retryable, PhaseStatusFailure)
+	return w.failLocked("", component, source, category, message, retryable, PhaseStatusFailure)
 }
 
 func (w *runtimeWorkflow) requireFinished() error {

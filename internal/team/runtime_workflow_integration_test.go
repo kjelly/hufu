@@ -79,7 +79,7 @@ func TestRuntimeWorkflow_Integration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c.phaseWorkflow.failLocked("test-component", "test-provider", "TEST", "test failure", false, PhaseStatusFailure)
+	c.phaseWorkflow.failLocked("", "test-component", "test-provider", "TEST", "test failure", false, PhaseStatusFailure)
 
 	// Close the event logger so we can read the file
 	if c.eventStore != nil {
