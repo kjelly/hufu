@@ -3,12 +3,26 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/auditverify"
 	"github.com/kjelly/hufu/internal/team"
 )
+
+// resetAuditCLIFlags clears every audit subcommand's package-level flag
+// variable. auditRunID et al. are bound once at init() via pflag's
+// StringVar/BoolVar, so a flag omitted from a later SetArgs call keeps
+// whatever value an earlier test (or an earlier case in the same test) left
+// in place -- pflag only assigns a flag's variable when that flag is present
+// in argv. Call this at the start of every audit CLI test (and again before
+// each case in a table test) so tests are order-independent.
+func resetAuditCLIFlags() {
+	auditWorkspace, auditRunID, auditJSON, auditRecheck, auditBundle = "", "", false, false, ""
+	auditExplainRunID, auditExplainJSON = "", false
+	auditExportRunID, auditExportOutput, auditExportArtifactMode = "", "", ""
+}
 
 // buildAuditCLIFixture writes a minimal, legitimately-failed canonical run
 // directly through team's exported append-only primitives -- the same
@@ -37,6 +51,7 @@ func buildAuditCLIFixture(t *testing.T) (workspace, runID string) {
 }
 
 func TestCLIAuditVerifyMissingRunFlagIsUsageError(t *testing.T) {
+	resetAuditCLIFlags()
 	root := newRootCommand()
 	root.SetArgs([]string{"audit", "verify", "--workspace", t.TempDir()})
 	err := root.Execute()
@@ -50,6 +65,7 @@ func TestCLIAuditVerifyMissingRunFlagIsUsageError(t *testing.T) {
 }
 
 func TestCLIAuditVerifyUnknownRunIsUsageError(t *testing.T) {
+	resetAuditCLIFlags()
 	workspace, _ := buildAuditCLIFixture(t)
 	root := newRootCommand()
 	root.SetArgs([]string{"audit", "verify", "--run", "run-does-not-exist", "--workspace", workspace})
@@ -64,6 +80,7 @@ func TestCLIAuditVerifyUnknownRunIsUsageError(t *testing.T) {
 }
 
 func TestCLIAuditVerifyPassOnLegitimateFailure(t *testing.T) {
+	resetAuditCLIFlags()
 	workspace, runID := buildAuditCLIFixture(t)
 	root := newRootCommand()
 	root.SetArgs([]string{"audit", "verify", "--run", runID, "--workspace", workspace})
@@ -79,6 +96,7 @@ func TestCLIAuditVerifyPassOnLegitimateFailure(t *testing.T) {
 }
 
 func TestCLIAuditVerifyJSONIsSingleObjectOnStdout(t *testing.T) {
+	resetAuditCLIFlags()
 	workspace, runID := buildAuditCLIFixture(t)
 	root := newRootCommand()
 	root.SetArgs([]string{"audit", "verify", "--run", runID, "--workspace", workspace, "--json"})
@@ -98,6 +116,7 @@ func TestCLIAuditVerifyJSONIsSingleObjectOnStdout(t *testing.T) {
 }
 
 func TestCLIAuditExplainMissingRunFlagIsUsageError(t *testing.T) {
+	resetAuditCLIFlags()
 	root := newRootCommand()
 	root.SetArgs([]string{"audit", "explain", "--workspace", t.TempDir()})
 	err := root.Execute()
@@ -111,6 +130,7 @@ func TestCLIAuditExplainMissingRunFlagIsUsageError(t *testing.T) {
 }
 
 func TestCLIAuditExplainPassOnLegitimateFailure(t *testing.T) {
+	resetAuditCLIFlags()
 	workspace, runID := buildAuditCLIFixture(t)
 	root := newRootCommand()
 	root.SetArgs([]string{"audit", "explain", "--run", runID, "--workspace", workspace})
@@ -126,6 +146,7 @@ func TestCLIAuditExplainPassOnLegitimateFailure(t *testing.T) {
 }
 
 func TestCLIAuditExplainJSONIsSingleObjectOnStdout(t *testing.T) {
+	resetAuditCLIFlags()
 	workspace, runID := buildAuditCLIFixture(t)
 	root := newRootCommand()
 	root.SetArgs([]string{"audit", "explain", "--run", runID, "--workspace", workspace, "--json"})
@@ -144,6 +165,67 @@ func TestCLIAuditExplainJSONIsSingleObjectOnStdout(t *testing.T) {
 	}
 	if result.Witness == nil || result.Witness.Outcome != team.RunOutcomeFailed {
 		t.Fatalf("decoded witness = %#v, want outcome failed", result.Witness)
+	}
+}
+
+func TestCLIAuditExportMissingFlagsAreUsageErrors(t *testing.T) {
+	resetAuditCLIFlags()
+	cases := [][]string{
+		{"audit", "export", "--output", filepath.Join(t.TempDir(), "b.tar"), "--workspace", t.TempDir()},
+		{"audit", "export", "--run", "run-1", "--workspace", t.TempDir()},
+	}
+	for _, args := range cases {
+		resetAuditCLIFlags()
+		root := newRootCommand()
+		root.SetArgs(args)
+		err := root.Execute()
+		if err == nil {
+			t.Fatalf("args %v: expected a usage error", args)
+		}
+		withCode, ok := err.(interface{ ProcessExitCode() int })
+		if !ok || withCode.ProcessExitCode() != 2 {
+			t.Fatalf("args %v: err = %v, want ProcessExitCode() == 2", args, err)
+		}
+	}
+}
+
+func TestCLIAuditExportThenVerifyBundle(t *testing.T) {
+	resetAuditCLIFlags()
+	workspace, runID := buildAuditCLIFixture(t)
+	bundlePath := filepath.Join(t.TempDir(), "run-audit.tar")
+
+	exportRoot := newRootCommand()
+	exportRoot.SetArgs([]string{"audit", "export", "--run", runID, "--workspace", workspace, "--output", bundlePath})
+	if err := exportRoot.Execute(); err != nil {
+		t.Fatalf("audit export: %v", err)
+	}
+	if _, err := os.Stat(bundlePath); err != nil {
+		t.Fatalf("exported bundle missing: %v", err)
+	}
+
+	verifyRoot := newRootCommand()
+	verifyRoot.SetArgs([]string{"audit", "verify", "--bundle", bundlePath})
+	stdout := captureStdout(t, func() {
+		if err := verifyRoot.Execute(); err != nil {
+			t.Fatalf("audit verify --bundle: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "AUDIT PASS") {
+		t.Fatalf("stdout = %q, want it to contain AUDIT PASS", stdout)
+	}
+}
+
+func TestCLIAuditVerifyRunAndBundleAreMutuallyExclusive(t *testing.T) {
+	resetAuditCLIFlags()
+	root := newRootCommand()
+	root.SetArgs([]string{"audit", "verify", "--run", "run-1", "--bundle", "b.tar", "--workspace", t.TempDir()})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected an error when both --run and --bundle are set")
+	}
+	withCode, ok := err.(interface{ ProcessExitCode() int })
+	if !ok || withCode.ProcessExitCode() != 2 {
+		t.Fatalf("err = %v, want ProcessExitCode() == 2", err)
 	}
 }
 

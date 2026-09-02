@@ -177,6 +177,29 @@ func requiredCriteriaIDs(lineage []team.RunEvent, runID string) map[string]bool 
 	return result
 }
 
+// buildRunWitness assembles the GateWitness from a runProjection and the
+// AuditVerificationResult already computed for it, then builds and seals the
+// full DecisionWitness. It is the one witness-construction entry point
+// shared by ExplainRun and ExportRun so both derive "accepted" the same way.
+func buildRunWitness(runID string, verification *AuditVerificationResult, projection *runProjection) (*DecisionWitness, error) {
+	gate := GateWitness{
+		Accepted:               verification.Completion.Status == AuditDimensionPass && projection.runResult.Outcome == team.RunOutcomeCompleted,
+		AcceptanceState:        acceptanceState(projection.runResult),
+		EvidenceManifestStatus: evidenceStatus(projection.runResult),
+		RequiredTasksTotal:     len(projection.tasks),
+	}
+	for _, item := range projection.tasks {
+		if item != nil && item.Status == team.TaskDone {
+			gate.RequiredTasksDone++
+		}
+	}
+	if !gate.Accepted && projection.runResult.Reason != "" {
+		gate.Reasons = []string{projection.runResult.Reason}
+	}
+	return buildDecisionWitness(runID, projection.runResult, projection.tasks,
+		projection.terminalEvent.ID, projection.terminalEvent.Hash, projection.requiredCriteria, gate)
+}
+
 // buildDecisionWitness assembles a DecisionWitness from already-verified
 // projection data (spec.md §7). It fabricates nothing: a task or criterion
 // with no persisted evidence binding simply gets a zero-value ReceiptRef /

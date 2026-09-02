@@ -57,23 +57,7 @@ func ExplainRun(ctx context.Context, workspace, runID string) (*ExplainResult, e
 		return result, nil
 	}
 
-	gate := GateWitness{
-		Accepted:               verification.Completion.Status == AuditDimensionPass && projection.runResult.Outcome == team.RunOutcomeCompleted,
-		AcceptanceState:        acceptanceState(projection.runResult),
-		EvidenceManifestStatus: evidenceStatus(projection.runResult),
-		RequiredTasksTotal:     len(projection.tasks),
-	}
-	for _, item := range projection.tasks {
-		if item != nil && item.Status == team.TaskDone {
-			gate.RequiredTasksDone++
-		}
-	}
-	if !gate.Accepted && projection.runResult.Reason != "" {
-		gate.Reasons = []string{projection.runResult.Reason}
-	}
-
-	witness, err := buildDecisionWitness(runID, projection.runResult, projection.tasks,
-		projection.terminalEvent.ID, projection.terminalEvent.Hash, projection.requiredCriteria, gate)
+	witness, err := buildRunWitness(runID, verification, projection)
 	if err != nil {
 		return nil, fmt.Errorf("build decision witness: %w", err)
 	}

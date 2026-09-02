@@ -18,9 +18,14 @@ var (
 	auditRunID     string
 	auditJSON      bool
 	auditRecheck   bool
+	auditBundle    string
 
 	auditExplainRunID string
 	auditExplainJSON  bool
+
+	auditExportRunID        string
+	auditExportOutput       string
+	auditExportArtifactMode string
 )
 
 // auditExitError carries a fixed process exit code across the cobra
@@ -55,6 +60,23 @@ var auditVerifyCmd = &cobra.Command{
 	RunE:  runAuditVerify,
 }
 
+var auditExportCmd = &cobra.Command{
+	Use:   "export",
+	Short: "Export a portable, self-verifying audit bundle for a run",
+	Long: `hufu audit export packages a run's canonical event log, evidence manifest,
+referenced artifacts, execution receipts, and decision witness into a single
+tar file that can be independently verified on another machine with no
+access to the original workspace:
+
+    hufu audit export --run <run-id> --output run-audit.tar
+    hufu audit verify --bundle run-audit.tar
+
+The export is crash-safe: the archive is built and self-verified in a temp
+file first, and is only renamed into place if that self-verification passes.`,
+	Args: cobra.NoArgs,
+	RunE: runAuditExport,
+}
+
 var auditExplainCmd = &cobra.Command{
 	Use:   "explain",
 	Short: "Explain why a run was certified with its outcome",
@@ -68,7 +90,8 @@ what evidence backs each. It is fully deterministic and never calls an LLM.`,
 
 func init() {
 	auditCmd.PersistentFlags().StringVarP(&auditWorkspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
-	auditVerifyCmd.Flags().StringVar(&auditRunID, "run", "", "Run ID to verify (required)")
+	auditVerifyCmd.Flags().StringVar(&auditRunID, "run", "", "Run ID to verify (required unless --bundle is set)")
+	auditVerifyCmd.Flags().StringVar(&auditBundle, "bundle", "", "Verify a portable audit bundle file instead of a live workspace run")
 	auditVerifyCmd.Flags().BoolVar(&auditJSON, "json", false, "Write a single JSON object to stdout; all diagnostics go to stderr")
 	auditVerifyCmd.Flags().BoolVar(&auditRecheck, "recheck", false, "Re-execute deterministic, read-only verifiers instead of skipping the recheck dimension")
 	auditCmd.AddCommand(auditVerifyCmd)
@@ -76,6 +99,11 @@ func init() {
 	auditExplainCmd.Flags().StringVar(&auditExplainRunID, "run", "", "Run ID to explain (required)")
 	auditExplainCmd.Flags().BoolVar(&auditExplainJSON, "json", false, "Write a single JSON object to stdout; all diagnostics go to stderr")
 	auditCmd.AddCommand(auditExplainCmd)
+
+	auditExportCmd.Flags().StringVar(&auditExportRunID, "run", "", "Run ID to export (required)")
+	auditExportCmd.Flags().StringVar(&auditExportOutput, "output", "", "Path to write the audit bundle tar file to (required)")
+	auditExportCmd.Flags().StringVar(&auditExportArtifactMode, "artifact-mode", auditverify.ArtifactModeReferenced, "Artifact export mode: referenced (include artifact bytes) or metadata-only (digests only)")
+	auditCmd.AddCommand(auditExportCmd)
 }
 
 func getAuditWorkspace() string {
@@ -86,15 +114,32 @@ func getAuditWorkspace() string {
 }
 
 func runAuditVerify(cmd *cobra.Command, args []string) error {
+	if strings.TrimSpace(auditBundle) != "" {
+		if strings.TrimSpace(auditRunID) != "" {
+			return &auditExitError{code: 2, msg: "hufu audit verify: --run and --bundle are mutually exclusive"}
+		}
+		result, err := auditverify.VerifyBundle(context.Background(), auditBundle, auditverify.VerifyOptions{Recheck: auditRecheck})
+		if err != nil {
+			return &auditExitError{code: 2, msg: fmt.Sprintf("hufu audit verify --bundle: %v", err)}
+		}
+		return finishAuditVerify(result, auditBundle)
+	}
 	if strings.TrimSpace(auditRunID) == "" {
-		return &auditExitError{code: 2, msg: "hufu audit verify: --run is required"}
+		return &auditExitError{code: 2, msg: "hufu audit verify: --run is required (or use --bundle)"}
 	}
 
 	result, err := auditverify.VerifyWorkspaceRun(context.Background(), getAuditWorkspace(), auditRunID, auditverify.VerifyOptions{Recheck: auditRecheck})
 	if err != nil {
 		return &auditExitError{code: 2, msg: fmt.Sprintf("hufu audit verify: %v", err)}
 	}
+	return finishAuditVerify(result, auditRunID)
+}
 
+// finishAuditVerify renders result (JSON or text, per --json) and translates
+// its verdict into the process exit code convention documented in spec.md
+// §16.2 (0 pass, 1 fail, 3 incomplete); label identifies the run/bundle in
+// error messages.
+func finishAuditVerify(result *auditverify.AuditVerificationResult, label string) error {
 	if auditJSON {
 		if encErr := json.NewEncoder(os.Stdout).Encode(result); encErr != nil {
 			return fmt.Errorf("encode audit result: %w", encErr)
@@ -107,10 +152,25 @@ func runAuditVerify(cmd *cobra.Command, args []string) error {
 	case auditverify.AuditVerdictPass:
 		return nil
 	case auditverify.AuditVerdictIncomplete:
-		return &auditExitError{code: 3, msg: fmt.Sprintf("hufu audit verify: run %q is INCOMPLETE", auditRunID)}
+		return &auditExitError{code: 3, msg: fmt.Sprintf("hufu audit verify: %q is INCOMPLETE", label)}
 	default:
-		return &auditExitError{code: 1, msg: fmt.Sprintf("hufu audit verify: run %q is FAIL", auditRunID)}
+		return &auditExitError{code: 1, msg: fmt.Sprintf("hufu audit verify: %q is FAIL", label)}
 	}
+}
+
+func runAuditExport(cmd *cobra.Command, args []string) error {
+	if strings.TrimSpace(auditExportRunID) == "" {
+		return &auditExitError{code: 2, msg: "hufu audit export: --run is required"}
+	}
+	if strings.TrimSpace(auditExportOutput) == "" {
+		return &auditExitError{code: 2, msg: "hufu audit export: --output is required"}
+	}
+	opts := auditverify.ExportOptions{ArtifactMode: auditExportArtifactMode}
+	if err := auditverify.ExportRun(context.Background(), getAuditWorkspace(), auditExportRunID, auditExportOutput, opts); err != nil {
+		return &auditExitError{code: 1, msg: fmt.Sprintf("hufu audit export: %v", err)}
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "Exported audit bundle for run %q to %s\n", auditExportRunID, auditExportOutput)
+	return nil
 }
 
 func renderAuditVerifyText(w io.Writer, result *auditverify.AuditVerificationResult) {
