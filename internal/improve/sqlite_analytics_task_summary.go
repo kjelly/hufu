@@ -45,35 +45,35 @@ WITH agg AS (
            SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) AS total_attempts,
            SUM(total_tokens) AS total_tokens
     FROM execution_events
-    WHERE task_id <> ''
+    WHERE task_id <> '' AND team <> ''
     GROUP BY run_id, task_id
 ),
 last_agent AS (
     SELECT run_id, task_id, agent FROM (
         SELECT run_id, task_id, agent,
                ROW_NUMBER() OVER (PARTITION BY run_id, task_id ORDER BY event_seq DESC) AS rn
-        FROM execution_events WHERE task_id <> '' AND agent <> ''
+        FROM execution_events WHERE task_id <> '' AND team <> '' AND agent <> ''
     ) WHERE rn = 1
 ),
 last_model AS (
     SELECT run_id, task_id, model FROM (
         SELECT run_id, task_id, model,
                ROW_NUMBER() OVER (PARTITION BY run_id, task_id ORDER BY event_seq DESC) AS rn
-        FROM execution_events WHERE task_id <> '' AND model <> ''
+        FROM execution_events WHERE task_id <> '' AND team <> '' AND model <> ''
     ) WHERE rn = 1
 ),
 last_task_type AS (
     SELECT run_id, task_id, task_type FROM (
         SELECT run_id, task_id, task_type,
                ROW_NUMBER() OVER (PARTITION BY run_id, task_id ORDER BY event_seq DESC) AS rn
-        FROM execution_events WHERE task_id <> '' AND task_type <> ''
+        FROM execution_events WHERE task_id <> '' AND team <> '' AND task_type <> ''
     ) WHERE rn = 1
 ),
 last_terminal AS (
     SELECT run_id, task_id, status FROM (
         SELECT run_id, task_id, status,
                ROW_NUMBER() OVER (PARTITION BY run_id, task_id ORDER BY event_seq DESC) AS rn
-        FROM execution_events WHERE task_id <> '' AND status IN ('done', 'error', 'planned')
+        FROM execution_events WHERE task_id <> '' AND team <> '' AND status IN ('done', 'error', 'planned')
     ) WHERE rn = 1
 )
 SELECT agg.run_id, agg.task_id,
@@ -93,7 +93,7 @@ WITH last_skill_event AS (
         SELECT te.run_id, te.task_id, te.event_seq,
                ROW_NUMBER() OVER (PARTITION BY te.run_id, te.task_id ORDER BY te.event_seq DESC) AS rn
         FROM execution_events te
-        WHERE te.task_id <> ''
+        WHERE te.task_id <> '' AND te.team <> ''
           AND te.skills_reported = 1
     ) WHERE rn = 1
 )

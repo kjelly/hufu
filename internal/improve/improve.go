@@ -5,6 +5,7 @@ package improve
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -195,18 +196,30 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 	if runCount < 1 {
 		return nil, fmt.Errorf("run count must be at least 1")
 	}
-	events, err := readEvents(workspace)
+	ctx := context.Background()
+	analytics, err := openSQLiteAnalyticsSession(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if len(events) == 0 {
+	defer func() { _ = analytics.Close() }()
+	if _, err := analytics.loadExecutionEvents(ctx, filepath.Join(workspace, eventsPath)); err != nil {
+		return nil, err
+	}
+	if _, err := analytics.loadAuditEvents(ctx, filepath.Join(workspace, "logs", "audit")); err != nil {
+		return nil, err
+	}
+	if err := analytics.createIndexes(ctx); err != nil {
+		return nil, err
+	}
+
+	teamName, selectedRuns, err := analytics.sqlSelectRecentRunSummaries(ctx, teamName, runCount)
+	if err != nil {
+		return nil, err
+	}
+	if len(selectedRuns) == 0 {
 		return nil, ErrNoExecutionData
 	}
 
-	teamName, runs := selectRecentRuns(events, teamName, runCount)
-	if len(runs) == 0 {
-		return nil, ErrNoExecutionData
-	}
 	def, err := readTeamDefinition(teamDir)
 	if err != nil {
 		return nil, err
@@ -214,23 +227,56 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 	if def.Name == "" {
 		def.Name = teamName
 	}
-	selected := flattenRuns(runs)
-	metrics := collectMetrics(workspace, teamName, selected)
-	runIDs := make([]string, 0, len(runs))
-	trend := make([]TrendPoint, 0, len(runs))
-	teamRevisions := uniqueTeamRevisions(selected)
-	for _, run := range runs {
-		runMetrics := collectMetrics(workspace, teamName, run.Events)
-		revision := latestTeamRevision(run.Events)
-		runIDs = append(runIDs, run.ID)
+	runIDs := make([]string, len(selectedRuns))
+	for i, run := range selectedRuns {
+		runIDs[i] = run.RunID
+	}
+	metrics, err := analytics.sqlCollectExecutionMetrics(ctx, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	start, _ := time.Parse(time.RFC3339, metrics.StartedAt)
+	end, _ := time.Parse(time.RFC3339, metrics.EndedAt)
+	if err := analytics.sqlCollectAuditMetrics(ctx, teamName, start, end, &metrics); err != nil {
+		return nil, err
+	}
+
+	projectionByRun, err := analytics.sqlSelectedExecutionProjection(ctx, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	selectedProjection := make([]team.ExecutionEvent, 0)
+	for _, runID := range runIDs {
+		selectedProjection = append(selectedProjection, projectionByRun[runID]...)
+	}
+	collectMemoryMetrics(workspace, selectedProjection, &metrics)
+
+	trend := make([]TrendPoint, 0, len(selectedRuns))
+	teamRevisions := uniqueTeamRevisions(selectedProjection)
+	for _, run := range selectedRuns {
+		runMetrics, err := analytics.sqlCollectExecutionMetrics(ctx, []string{run.RunID})
+		if err != nil {
+			return nil, err
+		}
+		runStart, _ := time.Parse(time.RFC3339, runMetrics.StartedAt)
+		runEnd, _ := time.Parse(time.RFC3339, runMetrics.EndedAt)
+		if err := analytics.sqlCollectAuditMetrics(ctx, teamName, runStart, runEnd, &runMetrics); err != nil {
+			return nil, err
+		}
+		collectMemoryMetrics(workspace, projectionByRun[run.RunID], &runMetrics)
+		revision := latestTeamRevision(projectionByRun[run.RunID])
 		trend = append(trend, TrendPoint{
-			RunID: run.ID, StartedAt: run.Start.Format(time.RFC3339), EndedAt: run.End.Format(time.RFC3339), TeamRevision: revision, Metrics: runMetrics,
+			RunID: run.RunID, StartedAt: unixNSToTime(run.StartUnixNS).Format(time.RFC3339), EndedAt: unixNSToTime(run.EndUnixNS).Format(time.RFC3339), TeamRevision: revision, Metrics: runMetrics,
 		})
 	}
 	if len(teamRevisions) == 0 {
 		if revision := definitionRevision(teamDir); revision != "" {
 			teamRevisions = []string{revision}
 		}
+	}
+	groups, err := analytics.sqlCollectGroupedMetrics(ctx, runIDs)
+	if err != nil {
+		return nil, err
 	}
 	provenance := findingProvenance{runIDs: runIDs, teamRevisions: teamRevisions}
 	report := &Report{
@@ -242,7 +288,7 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 		TeamRevisions: teamRevisions,
 		Metrics:       metrics,
 		Trend:         trend,
-		Groups:        collectGroupedMetrics(selected),
+		Groups:        groups,
 		Findings:      analyze(def, metrics, provenance),
 	}
 	return report, nil
@@ -471,15 +517,6 @@ func splitCSV(value string) []string {
 		}
 	}
 	return result
-}
-
-func collectMetrics(workspace, teamName string, events []team.ExecutionEvent) Metrics {
-	metrics := collectExecutionMetrics(events)
-	start, _ := time.Parse(time.RFC3339, metrics.StartedAt)
-	end, _ := time.Parse(time.RFC3339, metrics.EndedAt)
-	collectAuditMetrics(filepath.Join(workspace, "logs", "audit"), teamName, start, end, &metrics)
-	collectMemoryMetrics(workspace, events, &metrics)
-	return metrics
 }
 
 func collectMemoryMetrics(workspace string, executionEvents []team.ExecutionEvent, metrics *Metrics) {

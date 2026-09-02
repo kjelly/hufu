@@ -105,10 +105,19 @@ func TestAnalyzeRecentAggregatesTeamRunsAndGroupsMetadata(t *testing.T) {
 		{Version: 2, Timestamp: "2026-07-12T11:00:02Z", RunID: "dev-2", Team: "dev", TaskID: "1", Agent: "developer", Attempt: 1, Status: "error", Model: "large", TaskType: "agent", TeamRevision: "rev-b", Usage: team.ExecutionUsage{TotalTokens: 5}},
 		{Version: 2, Timestamp: "2026-07-12T11:00:04Z", RunID: "dev-2", Team: "dev", TaskID: "1", Agent: "developer", Attempt: 2, Status: "in_progress", Model: "large", TaskType: "agent", Skills: []string{"go", "review"}, TeamRevision: "rev-b"},
 		{Version: 2, Timestamp: "2026-07-12T11:00:06Z", RunID: "dev-2", Team: "dev", TaskID: "1", Agent: "developer", Attempt: 2, Status: "done", Model: "large", TaskType: "agent", Skills: []string{"go", "review"}, TeamRevision: "rev-b", Usage: team.ExecutionUsage{TotalTokens: 15}},
+		{Version: 2, Timestamp: "2026-07-12T11:00:07Z", RunID: "dev-2", Team: "", TaskID: "ignored", Agent: "developer", Attempt: 1, Status: "done", Model: "secret-model", TeamRevision: "wrong-revision", Usage: team.ExecutionUsage{TotalTokens: 100}},
 		{Version: 2, Timestamp: "2026-07-12T12:00:00Z", RunID: "other-1", Team: "other", TaskID: "1", Agent: "helper", Attempt: 1, Status: "done", Usage: team.ExecutionUsage{TotalTokens: 99}},
 	}
 	writeExecutionEvents(t, workspace, events)
-	if err := os.WriteFile(filepath.Join(workspace, "logs", "audit", "audit-2026-07-12.jsonl"), []byte(`{"timestamp":"2026-07-12T11:00:01Z","team":"dev","agent":"developer","event":"tool_error","input":"secret"}`+"\n"), 0o644); err != nil {
+	audit := strings.Join([]string{
+		`{"timestamp":"2026-07-12T10:00:00Z","team":"dev","agent":"developer","event":"tool_call"}`,
+		`{"timestamp":"2026-07-12T11:00:01Z","team":"dev","agent":"developer","event":"tool_error","input":"secret"}`,
+		`{"timestamp":"2026-07-12T11:00:06Z","team":"dev","agent":"developer","event":"tool_call"}`,
+		`{"timestamp":"2026-07-12T11:00:07Z","team":"other","agent":"helper","event":"tool_error"}`,
+		`not-json`,
+		`{"timestamp":"not-a-timestamp","team":"dev","agent":"developer","event":"tool_call"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(workspace, "logs", "audit", "audit-2026-07-12.jsonl"), []byte(audit), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -122,6 +131,12 @@ func TestAnalyzeRecentAggregatesTeamRunsAndGroupsMetadata(t *testing.T) {
 	if report.Metrics.RunCount != 2 || report.Metrics.TotalTasks != 2 || report.Metrics.Done != 2 || report.Metrics.TotalAttempts != 3 || report.Metrics.RetriedTasks != 1 || report.Metrics.TotalTokens != 30 {
 		t.Fatalf("unexpected aggregate metrics: %+v", report.Metrics)
 	}
+	if report.Metrics.ToolCalls != 2 || report.Metrics.ToolErrors != 1 || report.Metrics.ToolCallsByAgent["developer"] != 2 || report.Metrics.ToolErrorsByAgent["developer"] != 1 {
+		t.Fatalf("unexpected aggregate audit metrics: %+v", report.Metrics)
+	}
+	if got, want := strings.Join(report.TeamRevisions, ","), "rev-a,rev-b"; got != want {
+		t.Fatalf("team revisions = %q, want %q", got, want)
+	}
 	if group := groupByKey(report.Groups.BySkill, "go"); group == nil || group.TotalTasks != 2 {
 		t.Fatalf("go skill group = %+v, want two tasks", group)
 	}
@@ -131,7 +146,7 @@ func TestAnalyzeRecentAggregatesTeamRunsAndGroupsMetadata(t *testing.T) {
 	if group := groupByKey(report.Groups.ByTaskType, "agent"); group == nil || group.RetriedTasks != 1 {
 		t.Fatalf("agent task type group = %+v, want one retry", group)
 	}
-	if len(report.Trend) != 2 || report.Trend[1].Metrics.TotalTokens != 20 {
+	if len(report.Trend) != 2 || report.Trend[1].Metrics.TotalTokens != 20 || report.Trend[0].Metrics.ToolCalls != 1 || report.Trend[1].Metrics.ToolCalls != 1 || report.Trend[1].Metrics.ToolErrors != 1 || report.Trend[0].TeamRevision != "rev-a" || report.Trend[1].TeamRevision != "rev-b" {
 		t.Fatalf("trend = %+v", report.Trend)
 	}
 	if len(report.Findings) == 0 || strings.Join(report.Findings[0].RunIDs, ",") != "dev-1,dev-2" {

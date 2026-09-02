@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // sqlRunSummary is one row of the run-level view legacy selectRecentRuns
@@ -84,6 +86,18 @@ func (s *sqliteAnalyticsSession) sqlAllRunSummaries(ctx context.Context) ([]sqlR
 // first — the exact order legacy's `selected` slice carries into
 // flattenRuns/RunIDs/Trend.
 func (s *sqliteAnalyticsSession) sqlSelectRecentRuns(ctx context.Context, teamName string, runCount int) (string, []string, error) {
+	teamName, selected, err := s.sqlSelectRecentRunSummaries(ctx, teamName, runCount)
+	if err != nil {
+		return "", nil, err
+	}
+	runIDs := make([]string, len(selected))
+	for i, run := range selected {
+		runIDs[i] = run.RunID
+	}
+	return teamName, runIDs, nil
+}
+
+func (s *sqliteAnalyticsSession) sqlSelectRecentRunSummaries(ctx context.Context, teamName string, runCount int) (string, []sqlRunSummary, error) {
 	all, err := s.sqlAllRunSummaries(ctx)
 	if err != nil {
 		return "", nil, err
@@ -91,10 +105,10 @@ func (s *sqliteAnalyticsSession) sqlSelectRecentRuns(ctx context.Context, teamNa
 	if teamName == "" && len(all) > 0 {
 		teamName = all[len(all)-1].Team
 	}
-	selected := make([]string, 0, runCount)
-	for _, r := range all {
-		if r.Team == teamName {
-			selected = append(selected, r.RunID)
+	selected := make([]sqlRunSummary, 0, runCount)
+	for _, run := range all {
+		if run.Team == teamName {
+			selected = append(selected, run)
 		}
 	}
 	if len(selected) > runCount {
@@ -124,7 +138,7 @@ func (s *sqliteAnalyticsSession) sqlEventWindow(ctx context.Context, runIDs []st
 		return time.Time{}, time.Time{}, nil
 	}
 	inClause, args := runsInClause(runIDs)
-	query := fmt.Sprintf(`SELECT MIN(timestamp_unix_ns), MAX(timestamp_unix_ns) FROM execution_events WHERE run_id IN (%s)`, inClause)
+	query := fmt.Sprintf(`SELECT MIN(timestamp_unix_ns), MAX(timestamp_unix_ns) FROM execution_events WHERE team <> '' AND run_id IN (%s)`, inClause)
 	var startNS, endNS sql.NullInt64
 	if err := s.conn.QueryRowContext(ctx, query, args...).Scan(&startNS, &endNS); err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("query event window: %w", err)
@@ -241,6 +255,39 @@ func (s *sqliteAnalyticsSession) sqlTaskSummaries(ctx context.Context, runIDs []
 	return out, nil
 }
 
+// sqlSelectedExecutionProjection returns only the execution fields still
+// needed by the legacy memory metrics bridge and team-revision calculations.
+// It intentionally does not materialize prompts, output, tool arguments, or
+// any other execution telemetry content.
+func (s *sqliteAnalyticsSession) sqlSelectedExecutionProjection(ctx context.Context, runIDs []string) (map[string][]team.ExecutionEvent, error) {
+	projection := make(map[string][]team.ExecutionEvent, len(runIDs))
+	if len(runIDs) == 0 {
+		return projection, nil
+	}
+	inClause, args := runsInClause(runIDs)
+	query := fmt.Sprintf(`
+SELECT run_id, task_id, attempt, input_tokens, team_revision
+FROM execution_events
+WHERE team <> '' AND run_id IN (%s)
+ORDER BY run_id ASC, event_seq ASC`, inClause)
+	rows, err := s.conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query selected execution projection: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var event team.ExecutionEvent
+		if err := rows.Scan(&event.RunID, &event.TaskID, &event.Attempt, &event.Usage.InputTokens, &event.TeamRevision); err != nil {
+			return nil, fmt.Errorf("scan selected execution projection: %w", err)
+		}
+		projection[event.RunID] = append(projection[event.RunID], event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate selected execution projection: %w", err)
+	}
+	return projection, nil
+}
+
 // sqlTokensByAgent reproduces the per-event agent attribution
 // collectExecutionMetrics uses for Metrics.TokensByAgent. This is
 // deliberately *not* the same grouping as GroupedMetrics.ByAgent (WP-4),
@@ -251,7 +298,7 @@ func (s *sqliteAnalyticsSession) sqlTaskSummaries(ctx context.Context, runIDs []
 const tokensByAgentQueryTemplate = `
 SELECT CASE WHEN agent = '' THEN 'unspecified' ELSE agent END AS agent_key, SUM(total_tokens)
 FROM execution_events
-WHERE task_id <> '' AND run_id IN (%s)
+WHERE task_id <> '' AND team <> '' AND run_id IN (%s)
 GROUP BY agent_key`
 
 func (s *sqliteAnalyticsSession) sqlTokensByAgent(ctx context.Context, runIDs []string) (map[string]int, error) {
