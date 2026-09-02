@@ -1,0 +1,34 @@
+{
+  "team": {
+    "name": "allowlist-fixture",
+    "description": "Team-level explicit tool allowlist",
+    "max_rounds": 10,
+    "timeout": 600,
+    "verify_timeout": 120,
+    "max_retries": 2,
+    "tools_allowed": [
+      "view",
+      "edit",
+      "write",
+      "bash",
+      "grep",
+      "glob",
+      "ls",
+      "wait_for"
+    ]
+  },
+  "agents": [
+    {
+      "name": "developer",
+      "role": "worker",
+      "tools": "view,edit,write,grep,glob,ls",
+      "max_retries": -1
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    }
+  ]
+}

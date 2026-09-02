@@ -1,0 +1,3 @@
+name: no-net-fixture
+description: Team-wide network access denial
+no-net: true

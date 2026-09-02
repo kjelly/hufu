@@ -1,0 +1,7 @@
+name: recovery-fixture
+description: Agent-level and task-level reconcile recovery policy
+tasks:
+  - id: provision
+    agent: operator
+    side_effect: infra_mutation
+    recovery: reconcile

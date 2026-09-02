@@ -1,0 +1,6 @@
+name: defaults-fixture
+description: Scaffolded by hufu init
+max-rounds: 10
+timeout: 600
+max-retries: 2
+workspace: workspace

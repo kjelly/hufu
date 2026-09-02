@@ -1,0 +1,11 @@
+name: allowlist-fixture
+description: Team-level explicit tool allowlist
+tools:
+  allowed:
+    - view
+    - edit
+    - write
+    - bash
+    - grep
+    - glob
+    - ls

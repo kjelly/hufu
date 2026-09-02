@@ -1,0 +1,3 @@
+name: force-mcp-fixture
+description: Team-wide MCP-only tool execution
+force-mcp: true

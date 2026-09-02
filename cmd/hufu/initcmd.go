@@ -14,7 +14,9 @@ var initCmd = &cobra.Command{
 	Use:   "init <team-name>",
 	Short: "Scaffold a minimal runnable agent team",
 	Long: `Create a minimal team under .agent-teams/<team-name>/ so you can start
-calling agents immediately. Generates a team.yaml and a single worker agent.
+calling agents immediately. Generates a single worker agent; team.yaml is
+written only when --model is given, since every other setting already has a
+built-in default.
 
 Existing files are never overwritten.
 
@@ -24,14 +26,6 @@ Examples:
 	Args: cobra.ExactArgs(1),
 	RunE: runInit,
 }
-
-const teamYAMLTemplate = `name: %[1]s
-description: Scaffolded by hufu init
-max-rounds: 10
-timeout: 600
-max-retries: 2
-workspace: workspace
-%[2]s`
 
 const agentMDTemplate = `---
 name: worker
@@ -142,19 +136,19 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create %s: %w", teamDir, err)
 	}
 
-	modelLine := ""
-	if opts.modelOverride != "" {
-		modelLine = "model: " + opts.modelOverride + "\n"
+	// team.yaml is optional: the team name is inferred from the directory and
+	// every other field already has a built-in default, so only write the
+	// file when there is a meaningful override to record.
+	if strings.TrimSpace(opts.modelOverride) != "" {
+		created, err := writeIfAbsent(
+			filepath.Join(teamDir, "team.yaml"),
+			"model: "+opts.modelOverride+"\n",
+		)
+		if err != nil {
+			return err
+		}
+		reportScaffold(filepath.Join(teamDir, "team.yaml"), created)
 	}
-
-	created, err := writeIfAbsent(
-		filepath.Join(teamDir, "team.yaml"),
-		fmt.Sprintf(teamYAMLTemplate, name, modelLine),
-	)
-	if err != nil {
-		return err
-	}
-	reportScaffold(filepath.Join(teamDir, "team.yaml"), created)
 
 	agentFiles := make([]string, 0, len(template.agents))
 	for filename := range template.agents {
@@ -162,7 +156,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	sort.Strings(agentFiles)
 	for _, filename := range agentFiles {
-		created, err = writeIfAbsent(
+		created, err := writeIfAbsent(
 			filepath.Join(teamDir, filename),
 			fmt.Sprintf(template.agents[filename], name),
 		)

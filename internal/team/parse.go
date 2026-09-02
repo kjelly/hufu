@@ -74,7 +74,10 @@ type teamConfigYAML struct {
 	Workspace                string                           `yaml:"workspace"`
 	Timeout                  int64                            `yaml:"timeout"`
 	VerifyTimeout            int64                            `yaml:"verify-timeout"`
-	MaxRetries               int                              `yaml:"max-retries"`
+	// MaxRetries is a pointer so an omitted key (built-in default) can be
+	// distinguished from an explicit "max-retries: 0" override; the zero
+	// value of a plain int is indistinguishable from an explicit 0.
+	MaxRetries *int `yaml:"max-retries"`
 	AutoReport               bool                             `yaml:"auto-report"`
 	AllowFreeTextResults     bool                             `yaml:"allow-free-text-results"`
 	Model                    string                           `yaml:"model"`
@@ -706,8 +709,8 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	if yc.VerifyTimeout > 0 {
 		cfg.VerifyTimeout = yc.VerifyTimeout
 	}
-	if yc.MaxRetries >= 0 {
-		cfg.MaxRetries = yc.MaxRetries
+	if yc.MaxRetries != nil {
+		cfg.MaxRetries = *yc.MaxRetries
 	}
 	if yc.AutoReport {
 		cfg.AutoReport = true

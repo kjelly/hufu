@@ -1,0 +1,26 @@
+{
+  "team": {
+    "name": "force-mcp-fixture",
+    "description": "Team-wide MCP-only tool execution",
+    "max_rounds": 10,
+    "timeout": 600,
+    "verify_timeout": 120,
+    "max_retries": 2,
+    "force_mcp": true
+  },
+  "agents": [
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "operator",
+      "role": "worker",
+      "tools": "view,grep,glob,ls",
+      "max_retries": -1,
+      "force_mcp": true
+    }
+  ]
+}

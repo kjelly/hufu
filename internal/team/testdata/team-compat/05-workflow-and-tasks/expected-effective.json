@@ -1,0 +1,89 @@
+{
+  "team": {
+    "name": "workflow-fixture",
+    "description": "Explicit workflow phases and static task contracts",
+    "max_rounds": 10,
+    "timeout": 600,
+    "verify_timeout": 120,
+    "max_retries": 2,
+    "workflow": {
+      "phases": [
+        "prepare",
+        "execute",
+        "verify"
+      ]
+    },
+    "policies": {
+      "require_phase_success": true,
+      "allow_phase_skip": true
+    },
+    "verification": {
+      "required": true
+    },
+    "retry": {
+      "transient": {
+        "max_attempts": 2
+      },
+      "repair": {}
+    },
+    "delegation": {
+      "AllowedWorkers": null,
+      "InitialBatch": null,
+      "RequireExactInitialBatch": false,
+      "InitialCoordinatorTool": "",
+      "BindInitialTaskContracts": false,
+      "BindTaskGoalContracts": true,
+      "NoRedispatchAfterSuccess": null,
+      "ForbidContextFiles": false,
+      "TaskGoalInvariants": null
+    }
+  },
+  "agents": [
+    {
+      "name": "developer",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,bash,wait_for",
+      "side_effect": "workspace_write",
+      "recovery": "retry",
+      "max_retries": -1
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "reviewer",
+      "role": "worker",
+      "tools": "view,grep,glob,ls,bash,wait_for",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": -1
+    }
+  ],
+  "tasks": [
+    {
+      "id": "plan",
+      "agent": "developer",
+      "phase": "PREPARE",
+      "when_goal_contains": "plan",
+      "side_effect": "none",
+      "recovery": "retry"
+    },
+    {
+      "id": "implement",
+      "agent": "developer",
+      "phase": "EXECUTE",
+      "when_goal_contains": "implement",
+      "side_effect": "workspace_write",
+      "recovery": "retry"
+    },
+    {
+      "id": "review",
+      "agent": "reviewer",
+      "phase": "VERIFY",
+      "when_goal_contains": "review"
+    }
+  ]
+}

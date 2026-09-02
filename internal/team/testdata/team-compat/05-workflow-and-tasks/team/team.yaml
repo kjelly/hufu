@@ -1,0 +1,40 @@
+name: workflow-fixture
+description: Explicit workflow phases and static task contracts
+workflow:
+  phases: [prepare, execute, verify]
+policies:
+  require_phase_success: true
+  allow_phase_skip: true
+verification:
+  required: true
+retry:
+  transient:
+    max_attempts: 2
+delegation:
+  bind-task-goal-contracts: true
+
+tasks:
+  - id: plan
+    agent: developer
+    when-goal-contains: plan
+    phase: prepare
+    side_effect: none
+    recovery: retry
+
+  - id: implement
+    agent: developer
+    when-goal-contains: implement
+    phase: execute
+    side_effect: workspace_write
+    recovery: retry
+
+  - id: review
+    agent: reviewer
+    phase: verify
+    when-goal-contains: review
+    execution:
+      requires-result: true
+    verify-spec:
+      type: task_result_assert
+      task-result-assertions:
+        - { pointer: /summary, op: non_empty }

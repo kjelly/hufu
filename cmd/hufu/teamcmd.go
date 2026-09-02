@@ -113,7 +113,7 @@ func runTeamGenerate(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("--write and --dry-run cannot be used together")
 	}
 
-	generated := buildGeneratedTeam(name, teamGeneratePrompt, teamGenerateModel, "workspace")
+	generated := buildGeneratedTeam(name, teamGeneratePrompt, teamGenerateModel)
 	if err := validateGeneratedTeam(generated); err != nil {
 		return fmt.Errorf("generated team is invalid: %w", err)
 	}
@@ -172,25 +172,24 @@ func normalizeGeneratedTeamName(name string) (string, error) {
 	return name, nil
 }
 
-func buildGeneratedTeam(name, prompt, model, workspaceDir string) generatedTeam {
+func buildGeneratedTeam(name, prompt, model string) generatedTeam {
 	category := classifyGeneratedTeamTask(prompt)
 	description := fmt.Sprintf("Task-specific %s team generated for: %s", category, strings.TrimSpace(prompt))
 	modelLine := ""
 	if strings.TrimSpace(model) != "" {
 		modelLine = fmt.Sprintf("model: %q\n", strings.TrimSpace(model))
 	}
+	// name and the max-rounds/timeout/max-retries/workspace defaults are
+	// intentionally omitted: the directory basename already supplies the
+	// team name, and each of those settings already has an identical
+	// built-in default. max-steps/max-concurrent/acceptance are genuine,
+	// non-default choices for a task-specific generated team, so they stay.
 	files := map[string]string{
-		"team.yaml": fmt.Sprintf(`name: %q
-description: %q
+		"team.yaml": fmt.Sprintf(`description: %q
 acceptance: 'true'
-max-rounds: 10
 max-steps: 30
-timeout: 600
-max-retries: 2
 max-concurrent: 4
-workspace: %q
-%sauto-skills: false
-`, name, description, workspaceDir, modelLine),
+%s`, description, modelLine),
 		"coordinator.md": generatedAgentMarkdown("coordinator", "Task coordinator", "coordinator", "ask_user", `You coordinate this task-specific team.
 
 Analyze the request, delegate independent work to the appropriate workers, and synthesize a concise final answer. Do not implement work yourself when a worker can perform it.`),
@@ -259,35 +258,21 @@ func validateGeneratedTeam(g generatedTeam) error {
 	}
 	defer func() { _ = os.RemoveAll(root) }()
 
-	validation := g
-	validation.Files = make(map[string]string, len(g.Files))
-	for name, content := range g.Files {
-		validation.Files[name] = content
-	}
-	var replaced bool
-	validation.Files["team.yaml"], replaced = replaceGeneratedWorkspace(validation.Files["team.yaml"], filepath.Join(root, "workspace"))
-	if !replaced {
-		return fmt.Errorf("team.yaml must declare a workspace")
-	}
 	teamDir := filepath.Join(root, g.Name)
-	if err := writeGeneratedTeam(teamDir, validation); err != nil {
+	if err := writeGeneratedTeam(teamDir, g); err != nil {
 		return err
 	}
-	if _, err := internalteam.LoadTeam(teamDir, nil, nil, internalteam.DefaultProviderRegistry); err != nil {
+	session, err := internalteam.LoadTeam(teamDir, nil, nil, internalteam.DefaultProviderRegistry)
+	if err != nil {
 		return err
 	}
+	// Point the loaded session at an isolated temp workspace instead of
+	// teaching the generated team.yaml a workspace path just for this
+	// dry-run validation copy; the persisted file omits workspace entirely
+	// since it already matches the built-in default.
+	session.Workspace = filepath.Join(root, "workspace")
+	session.Config.WorkspaceDir = session.Workspace
 	return nil
-}
-
-func replaceGeneratedWorkspace(teamYAML, workspace string) (string, bool) {
-	lines := strings.Split(teamYAML, "\n")
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "workspace:") {
-			lines[i] = fmt.Sprintf("workspace: %q", workspace)
-			return strings.Join(lines, "\n"), true
-		}
-	}
-	return teamYAML, false
 }
 
 func writeGeneratedTeam(targetDir string, g generatedTeam) error {

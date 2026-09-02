@@ -1,0 +1,34 @@
+{
+  "team": {
+    "name": "recovery-fixture",
+    "description": "Agent-level and task-level reconcile recovery policy",
+    "max_rounds": 10,
+    "timeout": 600,
+    "verify_timeout": 120,
+    "max_retries": 2
+  },
+  "agents": [
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "operator",
+      "role": "worker",
+      "tools": "view,grep,glob,ls,bash,wait_for",
+      "side_effect": "infra_mutation",
+      "recovery": "reconcile",
+      "max_retries": -1
+    }
+  ],
+  "tasks": [
+    {
+      "id": "provision",
+      "agent": "operator",
+      "side_effect": "infra_mutation",
+      "recovery": "reconcile"
+    }
+  ]
+}

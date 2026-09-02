@@ -1,0 +1,7 @@
+name: verification-fixture
+description: Explicit task-level verification command
+tasks:
+  - id: build
+    agent: developer
+    verify: "true"
+    max_retries: 1

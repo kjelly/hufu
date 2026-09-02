@@ -1,0 +1,30 @@
+{
+  "team": {
+    "name": "verification-fixture",
+    "description": "Explicit task-level verification command",
+    "max_rounds": 10,
+    "timeout": 600,
+    "verify_timeout": 120,
+    "max_retries": 2
+  },
+  "agents": [
+    {
+      "name": "developer",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,bash,wait_for",
+      "max_retries": -1
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    }
+  ],
+  "tasks": [
+    {
+      "id": "build",
+      "agent": "developer"
+    }
+  ]
+}

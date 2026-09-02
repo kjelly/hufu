@@ -1,0 +1,14 @@
+name: unattended-fixture
+description: Unattended high-risk operational team, deny-by-default
+unattended: true
+auto-approve: false
+max-duration: 3600
+max-total-tokens: 200000
+tools:
+  allowed:
+    - view
+    - grep
+    - glob
+    - ls
+    - bash
+    - ssh

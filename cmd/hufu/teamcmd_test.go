@@ -8,7 +8,7 @@ import (
 )
 
 func TestBuildGeneratedTeam_SelectsBugfixRoles(t *testing.T) {
-	g := buildGeneratedTeam("oauth-bugfix", "Fix the OAuth callback error and add regression tests", "", "workspace")
+	g := buildGeneratedTeam("oauth-bugfix", "Fix the OAuth callback error and add regression tests", "")
 	if g.Category != "bugfix" {
 		t.Fatalf("category = %q, want bugfix", g.Category)
 	}
@@ -20,7 +20,7 @@ func TestBuildGeneratedTeam_SelectsBugfixRoles(t *testing.T) {
 }
 
 func TestBuildGeneratedTeam_SelectsResearchRoles(t *testing.T) {
-	g := buildGeneratedTeam("api-research", "研究並比較 API authentication options，寫成文件", "", "workspace")
+	g := buildGeneratedTeam("api-research", "研究並比較 API authentication options，寫成文件", "")
 	if g.Category != "research" {
 		t.Fatalf("category = %q, want research", g.Category)
 	}
@@ -32,7 +32,7 @@ func TestBuildGeneratedTeam_SelectsResearchRoles(t *testing.T) {
 }
 
 func TestValidateGeneratedTeam(t *testing.T) {
-	g := buildGeneratedTeam("feature-work", "Add a new CLI command", "ollama/qwen3:8b", "workspace")
+	g := buildGeneratedTeam("feature-work", "Add a new CLI command", "ollama/qwen3:8b")
 	if err := validateGeneratedTeam(g); err != nil {
 		t.Fatalf("validateGeneratedTeam() error = %v", err)
 	}
@@ -43,7 +43,7 @@ func TestValidateGeneratedTeam(t *testing.T) {
 }
 
 func TestWriteGeneratedTeamRefusesOverwrite(t *testing.T) {
-	g := buildGeneratedTeam("feature-work", "Add a new CLI command", "", "workspace")
+	g := buildGeneratedTeam("feature-work", "Add a new CLI command", "")
 	target := filepath.Join(t.TempDir(), g.Name)
 	if err := writeGeneratedTeam(target, g); err != nil {
 		t.Fatalf("first writeGeneratedTeam() error = %v", err)
