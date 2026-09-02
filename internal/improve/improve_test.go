@@ -173,6 +173,48 @@ func TestAnalyzeRecentAggregatesTeamRunsAndGroupsMetadata(t *testing.T) {
 	}
 }
 
+func TestAnalyzeRecentAuditScannerLimitKeepsCommittedMetrics(t *testing.T) {
+	workspace := t.TempDir()
+	teamDir := filepath.Join(t.TempDir(), "dev")
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, "team.yaml"), []byte("name: dev\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, "developer.md"), []byte("---\nname: developer\n---\nFix bugs.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutionEvents(t, workspace, []team.ExecutionEvent{
+		{Timestamp: "2026-07-12T11:00:00Z", RunID: "run-1", Team: "dev", TaskID: "task-1", Agent: "developer", Attempt: 1, Status: "in_progress"},
+		{Timestamp: "2026-07-12T11:00:03Z", RunID: "run-1", Team: "dev", TaskID: "task-1", Agent: "developer", Attempt: 1, Status: "done"},
+	})
+	auditDir := filepath.Join(workspace, "logs", "audit")
+	writeAuditJSONL(t, auditDir, "audit-01.jsonl", []string{
+		`{"timestamp":"2026-07-12T11:00:00Z","team":"dev","agent":"prefix","event":"tool_call"}`,
+		`{"timestamp":"2026-07-12T11:00:01Z","team":"dev","agent":"oversized","event":"tool_error","input":"` + strings.Repeat("x", 70*1024) + `"}`,
+		`{"timestamp":"2026-07-12T11:00:02Z","team":"dev","agent":"suffix","event":"tool_error"}`,
+	})
+	writeAuditJSONL(t, auditDir, "audit-02.jsonl", []string{
+		`{"timestamp":"2026-07-12T11:00:03Z","team":"dev","agent":"later","event":"tool_error"}`,
+	})
+
+	report, err := AnalyzeRecent(workspace, "dev", teamDir, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Metrics.ToolCalls != 1 || report.Metrics.ToolErrors != 1 || report.Metrics.ToolCallsByAgent["prefix"] != 1 || report.Metrics.ToolErrorsByAgent["later"] != 1 {
+		t.Fatalf("aggregate audit metrics = %+v, want only committed rows", report.Metrics)
+	}
+	if len(report.Trend) != 1 {
+		t.Fatalf("trend length = %d, want 1", len(report.Trend))
+	}
+	trendMetrics := report.Trend[0].Metrics
+	if trendMetrics.ToolCalls != 1 || trendMetrics.ToolErrors != 1 || trendMetrics.ToolCallsByAgent["prefix"] != 1 || trendMetrics.ToolErrorsByAgent["later"] != 1 {
+		t.Fatalf("trend audit metrics = %+v, want only committed rows", trendMetrics)
+	}
+}
+
 func TestAnalyzeRecentIncludesSQLMemoryMetrics(t *testing.T) {
 	workspace := t.TempDir()
 	teamDir := filepath.Join(t.TempDir(), "dev")

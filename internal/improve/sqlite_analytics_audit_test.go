@@ -125,22 +125,61 @@ func TestLoadAuditEvents_MissingDirectoryIsNonFatal(t *testing.T) {
 	}
 }
 
-func TestLoadAuditEvents_RollsBackOnScannerError(t *testing.T) {
+func TestLoadAuditEvents_CommitsPrefixAndLaterFilesAfterScannerError(t *testing.T) {
 	dir := t.TempDir()
-	writeAuditJSONL(t, dir, "audit-2026-07-12.jsonl", []string{
-		`{"timestamp":"2026-07-12T11:00:00Z","team":"dev","agent":"developer","event":"tool_call"}` + strings.Repeat("x", 4<<20),
+	writeAuditJSONL(t, dir, "audit-01.jsonl", []string{
+		`{"timestamp":"2026-07-12T11:00:00Z","team":"dev","agent":"prefix","event":"tool_call"}`,
+		`{"timestamp":"2026-07-12T11:00:01Z","team":"dev","agent":"oversized","event":"tool_error","input":"` + strings.Repeat("x", 70*1024) + `"}`,
+		`{"timestamp":"2026-07-12T11:00:02Z","team":"dev","agent":"suffix","event":"tool_error"}`,
+	})
+	writeAuditJSONL(t, dir, "audit-02.jsonl", []string{
+		`{"timestamp":"2026-07-12T11:00:03Z","team":"dev","agent":"later","event":"tool_error"}`,
 	})
 
 	session := newTestSession(t)
-	if _, err := session.loadAuditEvents(context.Background(), dir); err == nil {
-		t.Fatal("expected scanner error for an oversized audit line")
+	stats, err := session.loadAuditEvents(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.FilesSeen != 2 || stats.LinesRead != 2 || stats.RowsLoaded != 2 {
+		t.Fatalf("stats = %+v, want two files and two committed rows", stats)
 	}
 	var count int
 	if err := session.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM audit_events").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 0 {
-		t.Fatalf("audit_events rows = %d, want 0 after rollback", count)
+	if count != 2 {
+		t.Fatalf("audit_events rows = %d, want 2 committed rows", count)
+	}
+	rows, err := session.conn.QueryContext(context.Background(), "SELECT agent, event FROM audit_events ORDER BY event_seq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []string
+	for rows.Next() {
+		var agent, event string
+		if err := rows.Scan(&agent, &event); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, agent+":"+event)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"prefix:tool_call", "later:tool_error"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("committed audit rows = %v, want %v", got, want)
+	}
+
+	start, _ := time.Parse(time.RFC3339, "2026-07-12T11:00:00Z")
+	end, _ := time.Parse(time.RFC3339, "2026-07-12T11:00:03Z")
+	metrics := &Metrics{}
+	if err := session.sqlCollectAuditMetrics(context.Background(), "dev", start, end, metrics); err != nil {
+		t.Fatal(err)
+	}
+	if metrics.ToolCalls != 1 || metrics.ToolErrors != 1 || metrics.ToolCallsByAgent["prefix"] != 1 || metrics.ToolErrorsByAgent["later"] != 1 {
+		t.Fatalf("audit metrics = %+v, want only committed rows", metrics)
 	}
 }
 

@@ -73,7 +73,6 @@ func (s *sqliteAnalyticsSession) loadAuditEvents(ctx context.Context, dir string
 		}
 
 		scanner := bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 64*1024), 4<<20)
 		for scanner.Scan() {
 			stats.LinesRead++
 			var event auditEvent
@@ -96,7 +95,7 @@ func (s *sqliteAnalyticsSession) loadAuditEvents(ctx context.Context, dir string
 		}
 		if err := scanner.Err(); err != nil {
 			_ = f.Close()
-			return stats, fmt.Errorf("read audit events %q: %w", filename, err)
+			continue
 		}
 		_ = f.Close()
 	}
