@@ -122,7 +122,7 @@ func TestLoadExecutionEvents_UnparseableTimestampYieldsNullUnixNS(t *testing.T) 
 }
 
 func TestLoadExecutionEvents_SkillsAreNormalizedAndDeduped(t *testing.T) {
-	e, _ := json.Marshal(team.ExecutionEvent{Timestamp: "2026-07-12T10:00:00Z", RunID: "r1", Team: "dev", TaskID: "1", Skills: []string{"go", "go", "review"}})
+	e, _ := json.Marshal(team.ExecutionEvent{Timestamp: "2026-07-12T10:00:00Z", RunID: "r1", Team: "dev", TaskID: "1", Skills: []string{" go ", "go", " review ", "\t"}})
 	path := writeJSONLFile(t, []string{string(e)})
 
 	session := newTestSession(t)

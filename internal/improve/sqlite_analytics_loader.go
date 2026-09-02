@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/kjelly/hufu/internal/team"
@@ -30,11 +31,12 @@ type loadStats struct {
 const insertExecutionEventSQL = `
 INSERT INTO execution_events (
     event_seq, version, timestamp_raw, timestamp_unix_ns, run_id, team,
-    task_id, agent, attempt, status, model, task_type, team_revision,
-    duration_ms, input_tokens, output_tokens, total_tokens, progress_tokens,
+	 task_id, agent, attempt, status, model, task_type, team_revision,
+	 skills_reported,
+	 duration_ms, input_tokens, output_tokens, total_tokens, progress_tokens,
     outcome, stop_reason, acceptance_state, repair_attempts, phase,
     provider, failure_signature
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 const insertExecutionEventSkillSQL = `
 INSERT OR IGNORE INTO execution_event_skills (event_seq, run_id, task_id, skill)
@@ -48,6 +50,9 @@ VALUES (?, ?, ?, ?)`
 // for the legacy path).
 func (s *sqliteAnalyticsSession) loadExecutionEvents(ctx context.Context, path string) (loadStats, error) {
 	var stats loadStats
+	if s.taskViewsReady {
+		return stats, fmt.Errorf("cannot ingest execution events after task projections materialize")
+	}
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -121,6 +126,7 @@ func insertExecutionEventRow(ctx context.Context, insertEvent, insertSkill *sql.
 	_, err := insertEvent.ExecContext(ctx,
 		eventSeq, event.Version, event.Timestamp, timestampUnixNS, event.RunID, event.Team,
 		event.TaskID, event.Agent, event.Attempt, event.Status, event.Model, event.TaskType, event.TeamRevision,
+		len(event.Skills) > 0,
 		event.DurationMS, event.Usage.InputTokens, event.Usage.OutputTokens, event.Usage.TotalTokens, event.Usage.ProgressTokens,
 		string(event.Outcome), string(event.StopReason), string(event.AcceptanceState), event.RepairAttempts, string(event.Phase),
 		event.Provider, event.FailureSignature,
@@ -143,6 +149,7 @@ func dedupeNonEmpty(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	out := make([]string, 0, len(values))
 	for _, v := range values {
+		v = strings.TrimSpace(v)
 		if v == "" {
 			continue
 		}

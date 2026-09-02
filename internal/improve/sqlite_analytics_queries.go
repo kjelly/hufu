@@ -139,7 +139,10 @@ func unixNSToTime(v sql.NullInt64) time.Time {
 	return time.Unix(0, v.Int64).UTC()
 }
 
-// sqlTaskSummary mirrors taskSummary but is populated entirely by SQL.
+// sqlTaskSummary mirrors taskSummary. Rows come from the task_summary /
+// task_skills TEMP tables materialized once per session by
+// materializeTaskViews (sqlite_analytics_task_summary.go), filtered by
+// run_id at query time.
 type sqlTaskSummary struct {
 	RunID         string
 	TaskID        string
@@ -153,212 +156,89 @@ type sqlTaskSummary struct {
 	TotalTokens   int
 }
 
-// taskAggregatesQuery computes the per-task aggregates that are simple
-// GROUP BY reductions: MAX(attempt) (task.Attempts), a count of in_progress
-// events (task.TotalAttempts), and SUM(total_tokens) over every event for
-// the task (task.TotalTokens) — matching summarizeTasks exactly.
-const taskAggregatesQueryTemplate = `
-SELECT run_id, task_id,
-       MAX(attempt) AS attempts,
-       SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) AS total_attempts,
-       SUM(total_tokens) AS total_tokens
-FROM execution_events
-WHERE task_id <> '' AND run_id IN (%s)
-GROUP BY run_id, task_id`
+const taskSummaryQueryTemplate = `
+SELECT run_id, task_id, agent, model, task_type, terminal, attempts, total_attempts, total_tokens
+FROM task_summary
+WHERE run_id IN (%s)
+ORDER BY run_id ASC, task_id ASC`
 
-// lastNonEmptyFieldQueryTemplate finds, per task, the value of `field` on
-// the event with the greatest event_seq among events where `field` is
-// non-empty — i.e. "the last event that actually reported this field",
-// reproducing summarizeTasks' `if event.X != "" { task.X = event.X }`
-// overwrite-on-report loop without materializing every event in Go.
-const lastNonEmptyFieldQueryTemplate = `
-SELECT run_id, task_id, %[1]s FROM (
-    SELECT run_id, task_id, %[1]s,
-           ROW_NUMBER() OVER (PARTITION BY run_id, task_id ORDER BY event_seq DESC) AS rn
-    FROM execution_events
-    WHERE task_id <> '' AND %[1]s <> '' AND run_id IN (%[2]s)
-) WHERE rn = 1`
+const taskSkillsQueryTemplate = `
+SELECT run_id, task_id, skill
+FROM task_skills
+WHERE run_id IN (%s)
+ORDER BY run_id ASC, task_id ASC, skill ASC`
 
-// terminalStatusQuery finds, per task, the status of the last event (by
-// event_seq) whose status is one of the three terminal states legacy
-// recognizes.
-const terminalStatusQueryTemplate = `
-SELECT run_id, task_id, status FROM (
-    SELECT run_id, task_id, status,
-           ROW_NUMBER() OVER (PARTITION BY run_id, task_id ORDER BY event_seq DESC) AS rn
-    FROM execution_events
-    WHERE task_id <> '' AND status IN ('done', 'error', 'planned') AND run_id IN (%s)
-) WHERE rn = 1`
-
-// lastSkillEventQuery finds, per task, the event_seq of the last event (by
-// event_seq) that reported at least one skill. Legacy overwrites
-// task.Skills wholesale on every event carrying a non-empty Skills list
-// (parity_test.go
-// TestSummarizeTasks_SkillsFieldOverwritesRatherThanUnionsAcrossEvents) — it
-// is not a union of every skill ever seen for the task, so this
-// deliberately does *not* match spec.md §9.4's plain DISTINCT task_skills
-// view.
-const lastSkillEventQueryTemplate = `
-SELECT run_id, task_id, event_seq FROM (
-    SELECT te.run_id, te.task_id, te.event_seq,
-           ROW_NUMBER() OVER (PARTITION BY te.run_id, te.task_id ORDER BY te.event_seq DESC) AS rn
-    FROM execution_events te
-    WHERE te.task_id <> '' AND te.run_id IN (%s)
-      AND EXISTS (SELECT 1 FROM execution_event_skills s WHERE s.event_seq = te.event_seq)
-) WHERE rn = 1`
-
+// sqlTaskSummaries reads the materialized task_summary/task_skills tables
+// for the given run scope. materializeTaskViews must already have been
+// called on this session (once, regardless of how many different run
+// scopes are queried afterward).
 func (s *sqliteAnalyticsSession) sqlTaskSummaries(ctx context.Context, runIDs []string) ([]sqlTaskSummary, error) {
 	if len(runIDs) == 0 {
 		return nil, nil
 	}
+	if err := s.ensureTaskViews(ctx); err != nil {
+		return nil, err
+	}
 	tasks := make(map[[2]string]*sqlTaskSummary)
+	order := make([]([2]string), 0)
 	get := func(runID, taskID string) *sqlTaskSummary {
 		key := [2]string{runID, taskID}
 		t := tasks[key]
 		if t == nil {
 			t = &sqlTaskSummary{RunID: runID, TaskID: taskID}
 			tasks[key] = t
+			order = append(order, key)
 		}
 		return t
 	}
 
 	inClause, args := runsInClause(runIDs)
 
-	aggRows, err := s.conn.QueryContext(ctx, fmt.Sprintf(taskAggregatesQueryTemplate, inClause), args...)
+	rows, err := s.conn.QueryContext(ctx, fmt.Sprintf(taskSummaryQueryTemplate, inClause), args...)
 	if err != nil {
-		return nil, fmt.Errorf("query task aggregates: %w", err)
+		return nil, fmt.Errorf("query task summary: %w", err)
 	}
-	for aggRows.Next() {
-		var runID, taskID string
+	for rows.Next() {
+		var runID, taskID, agent, model, taskType, terminal string
 		var attempts, totalAttempts, totalTokens int
-		if err := aggRows.Scan(&runID, &taskID, &attempts, &totalAttempts, &totalTokens); err != nil {
-			_ = aggRows.Close()
-			return nil, fmt.Errorf("scan task aggregates: %w", err)
+		if err := rows.Scan(&runID, &taskID, &agent, &model, &taskType, &terminal, &attempts, &totalAttempts, &totalTokens); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scan task summary: %w", err)
 		}
 		t := get(runID, taskID)
+		t.Agent, t.Model, t.TaskType, t.Terminal = agent, model, taskType, terminal
 		t.Attempts, t.TotalAttempts, t.TotalTokens = attempts, totalAttempts, totalTokens
 	}
-	if err := aggRows.Err(); err != nil {
-		_ = aggRows.Close()
-		return nil, fmt.Errorf("iterate task aggregates: %w", err)
-	}
-	_ = aggRows.Close()
-
-	for _, field := range []string{"agent", "model", "task_type"} {
-		query := fmt.Sprintf(lastNonEmptyFieldQueryTemplate, field, inClause)
-		rows, err := s.conn.QueryContext(ctx, query, args...)
-		if err != nil {
-			return nil, fmt.Errorf("query last non-empty %s: %w", field, err)
-		}
-		for rows.Next() {
-			var runID, taskID, value string
-			if err := rows.Scan(&runID, &taskID, &value); err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf("scan last non-empty %s: %w", field, err)
-			}
-			t := get(runID, taskID)
-			switch field {
-			case "agent":
-				t.Agent = value
-			case "model":
-				t.Model = value
-			case "task_type":
-				t.TaskType = value
-			}
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return nil, fmt.Errorf("iterate last non-empty %s: %w", field, err)
-		}
+	if err := rows.Err(); err != nil {
 		_ = rows.Close()
+		return nil, fmt.Errorf("iterate task summary: %w", err)
 	}
+	_ = rows.Close()
 
-	terminalRows, err := s.conn.QueryContext(ctx, fmt.Sprintf(terminalStatusQueryTemplate, inClause), args...)
+	skillRows, err := s.conn.QueryContext(ctx, fmt.Sprintf(taskSkillsQueryTemplate, inClause), args...)
 	if err != nil {
-		return nil, fmt.Errorf("query terminal status: %w", err)
+		return nil, fmt.Errorf("query task skills: %w", err)
 	}
-	for terminalRows.Next() {
-		var runID, taskID, status string
-		if err := terminalRows.Scan(&runID, &taskID, &status); err != nil {
-			_ = terminalRows.Close()
-			return nil, fmt.Errorf("scan terminal status: %w", err)
-		}
-		get(runID, taskID).Terminal = status
-	}
-	if err := terminalRows.Err(); err != nil {
-		_ = terminalRows.Close()
-		return nil, fmt.Errorf("iterate terminal status: %w", err)
-	}
-	_ = terminalRows.Close()
-
-	skillEventRows, err := s.conn.QueryContext(ctx, fmt.Sprintf(lastSkillEventQueryTemplate, inClause), args...)
-	if err != nil {
-		return nil, fmt.Errorf("query last skill event: %w", err)
-	}
-	type taskKey = [2]string
-	skillEventSeqByTask := make(map[taskKey]int64)
-	eventSeqToTask := make(map[int64]taskKey)
-	for skillEventRows.Next() {
-		var runID, taskID string
-		var eventSeq int64
-		if err := skillEventRows.Scan(&runID, &taskID, &eventSeq); err != nil {
-			_ = skillEventRows.Close()
-			return nil, fmt.Errorf("scan last skill event: %w", err)
-		}
-		key := taskKey{runID, taskID}
-		skillEventSeqByTask[key] = eventSeq
-		eventSeqToTask[eventSeq] = key
-	}
-	if err := skillEventRows.Err(); err != nil {
-		_ = skillEventRows.Close()
-		return nil, fmt.Errorf("iterate last skill event: %w", err)
-	}
-	_ = skillEventRows.Close()
-
-	if len(eventSeqToTask) > 0 {
-		eventSeqs := make([]int64, 0, len(eventSeqToTask))
-		for seq := range eventSeqToTask {
-			eventSeqs = append(eventSeqs, seq)
-		}
-		seqClause, seqArgs := int64InClause(eventSeqs)
-		query := fmt.Sprintf(`SELECT event_seq, skill FROM execution_event_skills WHERE event_seq IN (%s) ORDER BY skill ASC`, seqClause)
-		skillRows, err := s.conn.QueryContext(ctx, query, seqArgs...)
-		if err != nil {
-			return nil, fmt.Errorf("query task skills: %w", err)
-		}
-		for skillRows.Next() {
-			var eventSeq int64
-			var skill string
-			if err := skillRows.Scan(&eventSeq, &skill); err != nil {
-				_ = skillRows.Close()
-				return nil, fmt.Errorf("scan task skill: %w", err)
-			}
-			key := eventSeqToTask[eventSeq]
-			t := get(key[0], key[1])
-			t.Skills = append(t.Skills, skill)
-		}
-		if err := skillRows.Err(); err != nil {
+	for skillRows.Next() {
+		var runID, taskID, skill string
+		if err := skillRows.Scan(&runID, &taskID, &skill); err != nil {
 			_ = skillRows.Close()
-			return nil, fmt.Errorf("iterate task skills: %w", err)
+			return nil, fmt.Errorf("scan task skill: %w", err)
 		}
-		_ = skillRows.Close()
+		t := get(runID, taskID)
+		t.Skills = append(t.Skills, skill)
 	}
+	if err := skillRows.Err(); err != nil {
+		_ = skillRows.Close()
+		return nil, fmt.Errorf("iterate task skills: %w", err)
+	}
+	_ = skillRows.Close()
 
-	out := make([]sqlTaskSummary, 0, len(tasks))
-	for _, t := range tasks {
-		out = append(out, *t)
+	out := make([]sqlTaskSummary, 0, len(order))
+	for _, key := range order {
+		out = append(out, *tasks[key])
 	}
 	return out, nil
-}
-
-func int64InClause(values []int64) (string, []any) {
-	placeholders := make([]string, len(values))
-	args := make([]any, len(values))
-	for i, v := range values {
-		placeholders[i] = "?"
-		args[i] = v
-	}
-	return strings.Join(placeholders, ","), args
 }
 
 // sqlTokensByAgent reproduces the per-event agent attribution

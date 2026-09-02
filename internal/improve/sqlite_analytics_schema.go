@@ -31,6 +31,7 @@ CREATE TEMP TABLE execution_events (
     status               TEXT NOT NULL DEFAULT '',
     model                TEXT NOT NULL DEFAULT '',
     task_type            TEXT NOT NULL DEFAULT '',
+    skills_reported      INTEGER NOT NULL DEFAULT 0,
     team_revision        TEXT NOT NULL DEFAULT '',
     duration_ms          INTEGER NOT NULL DEFAULT 0,
     input_tokens          INTEGER NOT NULL DEFAULT 0,

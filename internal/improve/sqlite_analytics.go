@@ -23,6 +23,12 @@ import (
 type sqliteAnalyticsSession struct {
 	db   *sql.DB
 	conn *sql.Conn
+
+	// taskViewsReady is set once materializeTaskViews has populated
+	// task_summary/task_skills for this session, so ensureTaskViews (used by
+	// every query that reads them) only materializes once no matter how
+	// many different run scopes are queried afterward.
+	taskViewsReady bool
 }
 
 // openSQLiteAnalyticsSession opens a fresh in-memory SQLite database, pins a
