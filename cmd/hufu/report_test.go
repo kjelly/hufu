@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/auditverify"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -289,6 +290,37 @@ func TestBuildReportMDIncludesCanonicalRunOutcome(t *testing.T) {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q:\n%s", want, report)
 		}
+	}
+}
+
+func TestBuildReportMDIncludesAuditSection(t *testing.T) {
+	data := &reportData{
+		StartedAt:        time.Now(),
+		EvidenceIdentity: "deadbeef",
+		AuditResult: &auditverify.AuditVerificationResult{
+			RunID: "run-1", Verdict: auditverify.AuditVerdictPass,
+			ExpectedOutcome: team.RunOutcomeCompleted, DerivedOutcome: team.RunOutcomeCompleted,
+			Integrity:  auditverify.AuditDimensionResult{Status: auditverify.AuditDimensionPass, Reason: "event chain verified"},
+			Evidence:   auditverify.AuditDimensionResult{Status: auditverify.AuditDimensionPass},
+			Completion: auditverify.AuditDimensionResult{Status: auditverify.AuditDimensionPass},
+		},
+	}
+	report := buildReportMD(data, "demo", "completed")
+	for _, want := range []string{"## Audit", "Run ID:** `run-1`", "Evidence manifest:** `deadbeef`", "Audit status:** `PASS`", "Expected outcome:** `completed`", "Integrity: `PASS` — event chain verified"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+}
+
+func TestBuildReportMDAuditUnavailableDoesNotFabricateStatus(t *testing.T) {
+	data := &reportData{StartedAt: time.Now(), AuditUnavailableReason: "run %q was not found"}
+	report := buildReportMD(data, "demo", "")
+	if !strings.Contains(report, "Audit status:** `unavailable`") {
+		t.Fatalf("report missing unavailable audit status:\n%s", report)
+	}
+	if strings.Contains(report, "`PASS`") || strings.Contains(report, "`FAIL`") {
+		t.Fatalf("unavailable audit must not report a verdict:\n%s", report)
 	}
 }
 

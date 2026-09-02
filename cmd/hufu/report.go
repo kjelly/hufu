@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/auditverify"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -105,6 +106,13 @@ type reportData struct {
 	RuntimeWorksetError   string
 	CanonicalRunError     string
 	HistoricalTodoCount   int
+
+	// AuditResult is the independent audit re-verification of this run
+	// (spec.md §38), computed by calling auditverify.VerifyWorkspaceRun --
+	// report.md never re-implements audit verification. Nil means the
+	// verifier could not run at all; AuditUnavailableReason then explains why.
+	AuditResult            *auditverify.AuditVerificationResult
+	AuditUnavailableReason string
 }
 
 // SkillPatternReport holds detected skill pattern info for reports
@@ -193,6 +201,13 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 	if d.EvidenceIdentity == "" {
 		d.EvidenceIdentity = "unavailable"
 	}
+	if tc.session != nil && d.RunResult != nil {
+		if result, err := auditverify.VerifyWorkspaceRun(context.Background(), tc.session.Workspace, d.RunResult.RunID, auditverify.VerifyOptions{}); err != nil {
+			d.AuditUnavailableReason = err.Error()
+		} else {
+			d.AuditResult = result
+		}
+	}
 	if tc.session != nil {
 		if d.RunResult == nil {
 			// A workset pointer without a confirmed run_finished snapshot is only
@@ -259,6 +274,49 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 	}
 
 	return d
+}
+
+// renderReportAuditSection formats the independent audit re-verification of
+// this run (spec.md §38). It never re-implements audit logic: every fact
+// here comes straight from data.AuditResult, computed once in
+// gatherReportData by calling auditverify.VerifyWorkspaceRun.
+func renderReportAuditSection(data *reportData) string {
+	var b strings.Builder
+	b.WriteString("## Audit\n\n")
+	if data.AuditResult == nil {
+		reason := data.AuditUnavailableReason
+		if reason == "" {
+			reason = "no canonical run result available to audit"
+		}
+		fmt.Fprintf(&b, "- **Audit status:** `unavailable` (%s)\n\n", reportSafeMetadata(reason, 240))
+		return b.String()
+	}
+	result := data.AuditResult
+	fmt.Fprintf(&b, "- **Run ID:** `%s`\n", reportSafeMetadata(result.RunID, 160))
+	fmt.Fprintf(&b, "- **Evidence manifest:** `%s`\n", reportSafeMetadata(data.EvidenceIdentity, 160))
+	fmt.Fprintf(&b, "- **Audit status:** `%s`\n", strings.ToUpper(string(result.Verdict)))
+	fmt.Fprintf(&b, "- **Expected outcome:** `%s`; **Derived outcome:** `%s`\n", orUnavailable(string(result.ExpectedOutcome)), orUnavailable(string(result.DerivedOutcome)))
+	for _, dim := range []struct {
+		name string
+		d    auditverify.AuditDimensionResult
+	}{
+		{"Integrity", result.Integrity}, {"Provenance", result.Provenance}, {"Evidence", result.Evidence},
+		{"Acceptance", result.Acceptance}, {"Completion", result.Completion}, {"Recheck", result.Recheck},
+	} {
+		fmt.Fprintf(&b, "  - %s: `%s`", dim.name, strings.ToUpper(string(dim.d.Status)))
+		if dim.d.Reason != "" {
+			fmt.Fprintf(&b, " — %s", reportSafeMetadata(dim.d.Reason, 200))
+		}
+		b.WriteString("\n")
+	}
+	if len(result.Findings) > 0 {
+		b.WriteString("- **Findings:**\n")
+		for _, f := range result.Findings {
+			fmt.Fprintf(&b, "  - `%s` (%s): %s\n", f.Code, f.Severity, reportSafeMetadata(f.Message, 200))
+		}
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 func verifiedEvidenceManifest(workspace string, result *team.RunResult) (*team.EvidenceManifest, bool) {
@@ -428,6 +486,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	if data.CanonicalRunError != "" {
 		fmt.Fprintf(&b, "> ⚠️ Canonical run snapshot was not accepted: %s\n\n", reportSafeMetadata(data.CanonicalRunError, 240))
 	}
+	b.WriteString(renderReportAuditSection(data))
 	if data.RunResult != nil {
 		b.WriteString("## Run Outcome\n\n")
 		fmt.Fprintf(&b, "- **Outcome:** `%s`\n", data.RunResult.Outcome)
