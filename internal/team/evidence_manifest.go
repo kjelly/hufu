@@ -314,6 +314,14 @@ func projectArtifactOccurrence(ctx context.Context, store *FileArtifactStore, so
 	return occurrence, nil
 }
 
+// LatestSuccessfulExecutionReceipt exposes the winning-attempt selection rule
+// used to build evidence bindings, so external verifiers (internal/auditverify)
+// can independently re-derive the same winning attempt from persisted receipts
+// instead of guessing at (or re-implementing) the tie-break rule.
+func LatestSuccessfulExecutionReceipt(item *TodoItem, runID string) *ExecutionReceipt {
+	return latestSuccessfulExecutionReceipt(item, runID)
+}
+
 // latestSuccessfulExecutionReceipt returns runner-owned transcript evidence for
 // a completed task. Retries are searched newest-first so a stale failed attempt
 // cannot satisfy the final task evidence requirement.
