@@ -27,7 +27,7 @@ func TestResolvePathWithWorkDir_ExpandsHomeAndTilde(t *testing.T) {
 // ============== GetToolLevel Tests ==============
 
 func TestGetToolLevel_HighRisk(t *testing.T) {
-	highRiskTools := []string{"golang", "lua", "bash", "mcp"}
+	highRiskTools := []string{"golang", "lua", "javascript", "bash", "mcp"}
 
 	for _, tool := range highRiskTools {
 		t.Run(tool, func(t *testing.T) {
@@ -296,6 +296,8 @@ func TestCheckToolPermission_AllTools(t *testing.T) {
 		{"golang allowed", "golang", []string{"view", "golang"}, true, false},
 		{"lua denied", "lua", []string{"view"}, false, false},
 		{"lua allowed", "lua", []string{"view", "lua"}, true, false},
+		{"javascript denied", "javascript", []string{"view"}, false, false},
+		{"javascript allowed", "javascript", []string{"view", "javascript"}, true, false},
 		{"mcp denied", "mcp", []string{"view"}, false, false},
 		{"mcp allowed", "mcp", []string{"view", "mcp"}, true, false},
 

@@ -1113,6 +1113,7 @@ If the skeptic votes fail, the task is rejected and retried.
 | `ls` | List directory contents in a tree structure |
 | `lua` | Execute Lua code in a sandbox |
 | `golang` | Execute Go code via the yaegi interpreter |
+| `javascript` | Deterministic structured-data computation in an isolated goja sandbox (no fs/network/process/timers) |
 | `ask_user` | Ask the user a question (multiple choice / free text) |
 | `download` | Download a file from a URL |
 | `fetch` | Fetch URL content (text/markdown/html) |

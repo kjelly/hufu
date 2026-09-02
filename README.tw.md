@@ -999,6 +999,7 @@ guard:
 | `ls` | 以樹狀結構列出目錄內容 |
 | `lua` | 在沙盒中執行 Lua 程式碼 |
 | `golang` | 透過 yaegi 直譯器執行 Go 程式碼 |
+| `javascript` | 在隔離的 goja 沙盒中進行確定性結構化資料運算（無檔案系統/網路/行程/計時器存取） |
 | `ask_user` | 向使用者提問（多選/自由文字） |
 | `download` | 從 URL 下載檔案 |
 | `fetch` | 取得 URL 內容（text/markdown/html） |

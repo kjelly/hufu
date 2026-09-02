@@ -262,6 +262,7 @@ const (
 var highRiskTools = map[string]bool{
 	"golang":         true,
 	"lua":            true,
+	"javascript":     true,
 	"bash":           true,
 	"mcp":            true,
 	"terminal":       true,
@@ -284,6 +285,7 @@ var ForceMCPBlockedTools = map[string]bool{
 	"ssh_disconnect":     true,
 	"golang":             true,
 	"lua":                true,
+	"javascript":         true,
 	"download":           true,
 	"fetch":              true,
 	"agentic_fetch":      true,
@@ -1240,6 +1242,7 @@ func AllTools(opts ...ToolOption) []fantasy.AgentTool {
 		NewLsTool(opts...),
 		NewLuaTool(opts...),
 		NewGolangTool(opts...),
+		NewJavascriptTool(opts...),
 		NewAskUserTool(opts...),
 		NewDownloadTool(opts...),
 		NewFetchTool(opts...),
