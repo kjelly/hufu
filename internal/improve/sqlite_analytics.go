@@ -39,7 +39,7 @@ type sqliteAnalyticsSession struct {
 func openSQLiteAnalyticsSession(ctx context.Context) (*sqliteAnalyticsSession, error) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
-		return nil, fmt.Errorf("open analytics database: %w", err)
+		return nil, newAnalyticsError(AnalyticsStageOpen, fmt.Errorf("open analytics database: %w", err))
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
@@ -47,13 +47,13 @@ func openSQLiteAnalyticsSession(ctx context.Context) (*sqliteAnalyticsSession, e
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("pin analytics connection: %w", err)
+		return nil, newAnalyticsError(AnalyticsStageOpen, fmt.Errorf("pin analytics connection: %w", err))
 	}
 
 	session := &sqliteAnalyticsSession{db: db, conn: conn}
 	if err := session.createSchema(ctx); err != nil {
 		_ = session.Close()
-		return nil, err
+		return nil, newAnalyticsError(AnalyticsStageSchema, err)
 	}
 	return session, nil
 }

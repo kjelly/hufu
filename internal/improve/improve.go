@@ -153,11 +153,11 @@ func LatestTeam(workspace string) (string, error) {
 	}
 	defer func() { _ = analytics.Close() }()
 	if _, err := analytics.loadExecutionEvents(ctx, filepath.Join(workspace, eventsPath)); err != nil {
-		return "", err
+		return "", newAnalyticsError(AnalyticsStageLoadExecution, err)
 	}
 	teamName, runs, err := analytics.sqlSelectRecentRunSummaries(ctx, "", 1)
 	if err != nil {
-		return "", err
+		return "", newAnalyticsError(AnalyticsStageSelectRuns, err)
 	}
 	if len(runs) == 0 {
 		return "", ErrNoExecutionData
@@ -185,21 +185,21 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 	}
 	defer func() { _ = analytics.Close() }()
 	if _, err := analytics.loadExecutionEvents(ctx, filepath.Join(workspace, eventsPath)); err != nil {
-		return nil, err
+		return nil, newAnalyticsError(AnalyticsStageLoadExecution, err)
 	}
 	if _, err := analytics.loadAuditEvents(ctx, filepath.Join(workspace, "logs", "audit")); err != nil {
-		return nil, err
+		return nil, newAnalyticsError(AnalyticsStageLoadAudit, err)
 	}
 	if _, err := analytics.loadMemoryEvents(ctx, workspace); err != nil {
-		return nil, err
+		return nil, newAnalyticsError(AnalyticsStageLoadMemory, err)
 	}
 	if err := analytics.createIndexes(ctx); err != nil {
-		return nil, err
+		return nil, newAnalyticsError(AnalyticsStageSchema, err)
 	}
 
 	teamName, selectedRuns, err := analytics.sqlSelectRecentRunSummaries(ctx, teamName, runCount)
 	if err != nil {
-		return nil, err
+		return nil, newAnalyticsError(AnalyticsStageSelectRuns, err)
 	}
 	if len(selectedRuns) == 0 {
 		return nil, ErrNoExecutionData
@@ -218,24 +218,24 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 	}
 	metrics, err := analytics.sqlCollectExecutionMetrics(ctx, runIDs)
 	if err != nil {
-		return nil, err
+		return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
 	}
 	start, _ := time.Parse(time.RFC3339, metrics.StartedAt)
 	end, _ := time.Parse(time.RFC3339, metrics.EndedAt)
 	if err := analytics.sqlCollectAuditMetrics(ctx, teamName, start, end, &metrics); err != nil {
-		return nil, err
+		return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
 	}
 
 	projectionByRun, err := analytics.sqlSelectedExecutionProjection(ctx, runIDs)
 	if err != nil {
-		return nil, err
+		return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
 	}
 	selectedProjection := make([]team.ExecutionEvent, 0)
 	for _, runID := range runIDs {
 		selectedProjection = append(selectedProjection, projectionByRun[runID]...)
 	}
 	if err := analytics.sqlCollectMemoryMetrics(ctx, runIDs, &metrics); err != nil {
-		return nil, err
+		return nil, newAnalyticsError(AnalyticsStageAggregateMemory, err)
 	}
 
 	trend := make([]TrendPoint, 0, len(selectedRuns))
@@ -243,15 +243,15 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 	for _, run := range selectedRuns {
 		runMetrics, err := analytics.sqlCollectExecutionMetrics(ctx, []string{run.RunID})
 		if err != nil {
-			return nil, err
+			return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
 		}
 		runStart, _ := time.Parse(time.RFC3339, runMetrics.StartedAt)
 		runEnd, _ := time.Parse(time.RFC3339, runMetrics.EndedAt)
 		if err := analytics.sqlCollectAuditMetrics(ctx, teamName, runStart, runEnd, &runMetrics); err != nil {
-			return nil, err
+			return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
 		}
 		if err := analytics.sqlCollectMemoryMetrics(ctx, []string{run.RunID}, &runMetrics); err != nil {
-			return nil, err
+			return nil, newAnalyticsError(AnalyticsStageAggregateMemory, err)
 		}
 		revision := latestTeamRevision(projectionByRun[run.RunID])
 		trend = append(trend, TrendPoint{
@@ -265,7 +265,7 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 	}
 	groups, err := analytics.sqlCollectGroupedMetrics(ctx, runIDs)
 	if err != nil {
-		return nil, err
+		return nil, newAnalyticsError(AnalyticsStageAggregateGroups, err)
 	}
 	provenance := findingProvenance{runIDs: runIDs, teamRevisions: teamRevisions}
 	report := &Report{
