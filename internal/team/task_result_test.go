@@ -389,6 +389,22 @@ func TestCoordinatorTaskOutputUsesSubmittedTypedResult(t *testing.T) {
 	}
 }
 
+func TestCoordinatorTaskOutputUsesSubmittedTypedResultWithoutDetails(t *testing.T) {
+	typed := &TaskResult{
+		Status:    TaskResultStatusSuccess,
+		Summary:   "summary is the complete handoff",
+		FilesRead: []FileRef{{Path: "assigned.md"}},
+		Source:    "submitted",
+	}
+	got := coordinatorTaskOutput("Now let me continue the work", typed)
+	if !strings.Contains(got, typed.Summary) {
+		t.Fatalf("coordinator output omitted typed summary: %q", got)
+	}
+	if strings.Contains(got, "Now let me") {
+		t.Fatalf("coordinator output used fallback prose instead of typed result: %q", got)
+	}
+}
+
 func TestSubmitResultToolPromotesStringFileRefs(t *testing.T) {
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),

@@ -992,10 +992,10 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 		t.Error("expected non-empty task output")
 	}
 	if strings.Contains(out, "VERBATIM TRANSCRIPT CAPTURED") {
-		t.Fatalf("summary-mode task must preserve worker output, got verbatim manifest: %q", out)
+		t.Fatalf("summary-mode task must not use a verbatim manifest: %q", out)
 	}
-	if !strings.Contains(out, "Processed input data successfully") {
-		t.Fatalf("summary-mode task output lost worker response: %q", out)
+	if !strings.Contains(out, "repaired structured result") {
+		t.Fatalf("summary-mode task output lost repaired typed result: %q", out)
 	}
 
 	item := c.taskTracker.TodoList().Items()[0]

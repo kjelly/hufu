@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,7 @@ func TestIsInterruptedStatus(t *testing.T) {
 // with the repaired typed result.
 func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testing.T) {
 	workspace := t.TempDir()
+	var events []StatusEvent
 	config := agent.TeamConfig{Name: "protocol-resume", Timeout: 30, MaxRetries: 1}
 	agents := map[string]*agent.AgentDef{
 		"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
@@ -62,6 +64,9 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 	if err := first.taskTracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskProtocolIncomplete, "missing submit_result", ""); err != nil {
 		t.Fatal(err)
 	}
+	if err := writeTaskFile(workspace, config.Name, item.Agent, "20260902-000000", "error", item.Desc, workerOutput); err != nil {
+		t.Fatal(err)
+	}
 
 	checkpoint := LoadSession(workspace)
 	if checkpoint == nil || len(checkpoint.Tasks) != 1 || checkpoint.Tasks[0].Status != TaskProtocolIncomplete || checkpoint.Tasks[0].Output != workerOutput {
@@ -79,7 +84,7 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 		sessionData:         NewSession(),
 		projectDir:          workspace,
 		taskTracker:         NewTaskTracker(),
-		reportStatus:        func(StatusEvent) {},
+		reportStatus:        func(event StatusEvent) { events = append(events, event) },
 		taskResultCache:     make(map[string][]cachedTaskEntry),
 		executionRunID:      "run-after-crash",
 		workerAgentOverride: &countingTextAgent{calls: &workerCalls, text: "UNSAFE WORKER REPLAY"},
@@ -122,8 +127,43 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 	if updated.Status != TaskDone || updated.TypedResult == nil || updated.TypedResult.Source != "submitted" {
 		t.Fatalf("repaired task = %#v, want done with submitted result", updated)
 	}
-	if updated.Output != workerOutput {
-		t.Fatalf("worker evidence changed during result-only repair: %q", updated.Output)
+	if !strings.Contains(updated.Output, "result-only repair accepted") || strings.Contains(updated.Output, workerOutput) {
+		t.Fatalf("typed result was not committed during result-only repair: %q", updated.Output)
+	}
+	var doneEvent *StatusEvent
+	for i := range events {
+		if events[i].Type == "done" && events[i].TodoID == item.ID {
+			doneEvent = &events[i]
+			break
+		}
+	}
+	if doneEvent == nil || !strings.Contains(doneEvent.Output, "result-only repair accepted") || strings.Contains(doneEvent.Output, workerOutput) {
+		t.Fatalf("done event payload = %#v, want canonical typed result", doneEvent)
+	}
+	taskFiles, err := filepath.Glob(filepath.Join(workspace, tasksDir, config.Name, item.Agent, "*.md"))
+	if err != nil {
+		t.Fatalf("list repaired task files: %v", err)
+	}
+	foundDoneFile := false
+	for _, taskFile := range taskFiles {
+		data, readErr := os.ReadFile(taskFile)
+		if readErr != nil {
+			t.Fatalf("read repaired task file %q: %v", taskFile, readErr)
+		}
+		content := string(data)
+		if strings.Contains(content, "**Status:** done") {
+			foundDoneFile = true
+			if !strings.Contains(content, "complete the already-run task") || !strings.Contains(content, "result-only repair accepted") || strings.Contains(content, workerOutput) {
+				t.Fatalf("done task file = %q, want canonical description and typed result", content)
+			}
+		}
+	}
+	if !foundDoneFile {
+		t.Fatalf("repaired task files = %v, want a done task file", taskFiles)
+	}
+	summary := second.summaryFromTodos(errors.New("coordinator stopped after resume"))
+	if !strings.Contains(summary, "result-only repair accepted") || strings.Contains(summary, workerOutput) {
+		t.Fatalf("resume summary = %q, want canonical typed result", summary)
 	}
 	if persisted := LoadSession(workspace); persisted == nil || persisted.Tasks[0].Status != TaskDone {
 		t.Fatalf("repaired terminal state was not checkpointed: %#v", persisted)
@@ -154,7 +194,7 @@ func TestResumeInterruptedTasks_ProtocolCheckpointedSubmittedResultFinalizesLoca
 		Agent: "worker", Desc: "finalize checkpointed submitted result",
 		Execution: ExecutionContract{RequiresResult: true},
 	}})[0]
-	workerOutput := "durable worker output before submit_result crash"
+	workerOutput := "Now let me continue with the remaining work."
 	if err := first.taskTracker.TodoList().SetFailureEventAndOutput(item.ID, &FailureEventPayload{
 		TaskID: item.ID, Phase: "protocol", FailureClass: FailureProtocol,
 		RetryDisposition: ReconcileOnly, Summary: "missing submit_result",
@@ -197,7 +237,7 @@ func TestResumeInterruptedTasks_ProtocolCheckpointedSubmittedResultFinalizesLoca
 		t.Fatalf("submitted-result resume = resumed %d, worker %d, repair %d; want 1/0/0", resumed, workerCalls, repairCalls)
 	}
 	updated := second.taskTracker.TodoList().Items()[0]
-	if updated.Status != TaskDone || updated.TypedResult == nil || updated.TypedResult.Summary != "submitted result survived crash" || updated.Output != workerOutput {
+	if updated.Status != TaskDone || updated.TypedResult == nil || updated.TypedResult.Summary != "submitted result survived crash" || !strings.Contains(updated.Output, updated.TypedResult.Summary) || strings.Contains(updated.Output, workerOutput) {
 		t.Fatalf("locally finalized task = %#v", updated)
 	}
 	if updated.ExecutionReceipt == nil || updated.ExecutionReceipt.RepairProvenance == nil || !updated.ExecutionReceipt.RepairProvenance.Success || updated.ExecutionReceipt.RepairProvenance.SubmittedResult == nil {

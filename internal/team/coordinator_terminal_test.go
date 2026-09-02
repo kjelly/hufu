@@ -3,6 +3,11 @@ package team
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -10,6 +15,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/sidecar"
 )
 
 func TestTerminalHandoffPausesAndResumesTaskRound(t *testing.T) {
@@ -418,6 +424,7 @@ func managerSessionID(t *testing.T, manager *TerminalSessionManager, runID strin
 type submittingWorkerAgent struct {
 	onSubmit func()
 	calls    *int
+	text     string
 }
 
 type connectionResetAgent struct{}
@@ -437,8 +444,12 @@ func (m *submittingWorkerAgent) result() *fantasy.AgentResult {
 	if m.onSubmit != nil {
 		m.onSubmit()
 	}
+	text := m.text
+	if text == "" {
+		text = "submitted a result"
+	}
 	return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{
-		fantasy.TextContent{Text: "submitted a result"},
+		fantasy.TextContent{Text: text},
 	}}}
 }
 
@@ -580,8 +591,140 @@ func TestExecuteTaskAcceptsCompletedWithGaps(t *testing.T) {
 	if updated.Status != TaskDone {
 		t.Fatalf("task status = %s, want %s", updated.Status, TaskDone)
 	}
-	if got := LoadSTM(workspace); !strings.Contains(got, "submitted a result") {
-		t.Fatalf("completed task returned before its STM receipt was durable: %q", got)
+	if got := LoadSTM(workspace); !strings.Contains(got, "Survey complete; target capability is unavailable.") || strings.Contains(got, "submitted a result") {
+		t.Fatalf("completed task did not durably expose its typed result: %q", got)
+	}
+}
+
+func TestExecuteTaskUsesSubmittedResultWithEmptyDetailsForCompletionAndProjections(t *testing.T) {
+	workspace := t.TempDir()
+	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "typed-empty-details", Timeout: 30, MaxRetries: 0},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		projectDir:      workspace,
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-typed-empty-details",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "complete typed handoff"}})[0]
+	const fallback = "Now let me continue with the remaining work."
+	c.workerAgentOverride = &submittingWorkerAgent{text: fallback, onSubmit: func() {
+		c.storeSubmittedTaskResult(item.ID, &TaskResult{
+			TaskID: item.ID, Agent: "worker", Status: TaskResultStatusSuccess, Source: "submitted",
+			Summary:   "typed summary survives empty details",
+			FilesRead: []FileRef{{Path: "assigned.md"}},
+		})
+	}}
+
+	output, err := c.executeTask(context.Background(), TaskDef{
+		Agent: "worker", Goal: "complete typed handoff",
+		Execution: ExecutionContract{RequiresResult: true},
+	}, item.ID)
+	if err != nil {
+		t.Fatalf("typed result should complete despite fallback prose: %v", err)
+	}
+	if !strings.Contains(output, "typed summary survives empty details") || strings.Contains(output, fallback) {
+		t.Fatalf("canonical output = %q, want typed summary without fallback", output)
+	}
+	if item.Status != TaskDone || item.Output != output {
+		t.Fatalf("todo projection = status %s output %q, want done and canonical output %q", item.Status, item.Output, output)
+	}
+	summary := c.summaryFromTodos(errors.New("later coordinator failure"))
+	if !strings.Contains(summary, "typed summary survives empty details") || strings.Contains(summary, fallback) {
+		t.Fatalf("deterministic summary = %q, want typed summary without fallback", summary)
+	}
+	taskFiles, err := filepath.Glob(filepath.Join(workspace, tasksDir, "typed-empty-details", "worker", "*.md"))
+	if err != nil || len(taskFiles) != 1 {
+		t.Fatalf("done task files = %v, err=%v; want one file", taskFiles, err)
+	}
+	taskFile, err := os.ReadFile(taskFiles[0])
+	if err != nil {
+		t.Fatalf("read done task file: %v", err)
+	}
+	if !strings.Contains(string(taskFile), "typed summary survives empty details") || strings.Contains(string(taskFile), fallback) {
+		t.Fatalf("done task file = %q, want typed summary without fallback", taskFile)
+	}
+}
+
+func TestExecuteTaskAdversarialVerifyUsesCanonicalSubmittedResult(t *testing.T) {
+	workspace := t.TempDir()
+	const modelID = "skeptic-canonical-result-test"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID: modelID, ContextWindow: 8192, MaxOutputTokens: 128, SafetyMarginTokens: 32,
+	})
+
+	var skepticRequest string
+	server := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("read request: %v", err), http.StatusBadRequest)
+			return
+		}
+		skepticRequest = string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		vote := `{"refuted":false,"reason":"canonical typed result accepted"}`
+		fmt.Fprintf(w, "data: {\"id\":\"skeptic\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":%q,\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":null}]}\n\n", modelID, vote)
+		fmt.Fprint(w, "data: {\"id\":\"skeptic\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"skeptic\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	provider, err := agent.NewOpenAICompatibleProvider(server.URL, "", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	skeptic, err := sidecar.NewSidecar(t.Context(), provider, modelID)
+	if err != nil {
+		t.Fatalf("create skeptic sidecar: %v", err)
+	}
+
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "skeptic-canonical", Timeout: 30, MaxRetries: 0},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		projectDir:      workspace,
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-skeptic-canonical",
+		sidecarModel:    modelID,
+		sidecarInst:     skeptic,
+		sidecarInit:     true,
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "verify typed handoff"}})[0]
+	const fallback = "Now let me continue with the remaining work."
+	const typedSummary = "typed summary is the authoritative skeptic claim"
+	c.workerAgentOverride = &submittingWorkerAgent{text: fallback, onSubmit: func() {
+		c.storeSubmittedTaskResult(item.ID, &TaskResult{
+			TaskID: item.ID, Agent: "worker", Status: TaskResultStatusSuccess, Source: "submitted",
+			Summary: typedSummary, FilesRead: []FileRef{{Path: "assigned.md"}},
+		})
+	}}
+
+	output, err := c.executeTask(context.Background(), TaskDef{
+		Agent: "worker", Goal: "verify typed handoff", AdversarialVerify: 1,
+		Execution: ExecutionContract{RequiresResult: true},
+	}, item.ID)
+	if err != nil {
+		t.Fatalf("typed result should pass adversarial verification: %v", err)
+	}
+	if !strings.Contains(output, typedSummary) || strings.Contains(output, fallback) {
+		t.Fatalf("canonical task output = %q, want typed summary without fallback", output)
+	}
+	if !strings.Contains(skepticRequest, typedSummary) || strings.Contains(skepticRequest, fallback) {
+		t.Fatalf("skeptic request = %q, want canonical typed result without fallback", skepticRequest)
 	}
 }
 

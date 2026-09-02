@@ -155,14 +155,19 @@ func TestRunReconcilesRestoredKilledRunStatusBeforeCoordinatorDispatch(t *testin
 type directTerminationAgent struct {
 	err   error
 	steps []fantasy.StepResult
+	text  string
 }
 
 func (a directTerminationAgent) Stream(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
 	if a.err != nil {
 		return nil, a.err
 	}
+	text := a.text
+	if text == "" {
+		text = "direct agent completed"
+	}
 	return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{
-		fantasy.TextContent{Text: "direct agent completed"},
+		fantasy.TextContent{Text: text},
 	}}, Steps: a.steps}, nil
 }
 
@@ -170,8 +175,12 @@ func (a directTerminationAgent) Generate(context.Context, fantasy.AgentCall) (*f
 	if a.err != nil {
 		return nil, a.err
 	}
+	text := a.text
+	if text == "" {
+		text = "direct agent completed"
+	}
 	return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{
-		fantasy.TextContent{Text: "direct agent completed"},
+		fantasy.TextContent{Text: text},
 	}}, Steps: a.steps}, nil
 }
 
@@ -254,6 +263,24 @@ func TestRunDirectAgentFinalizesRunResult(t *testing.T) {
 	}
 	if last := c.LastRunResult(); last == nil || last.Outcome != RunOutcomeUnverified || last.GoalSatisfied {
 		t.Fatalf("direct run result = %#v, want unverified non-satisfied outcome", last)
+	}
+}
+
+func TestRunDirectAgentCommitsSubmittedResultWithEmptyDetails(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, directTerminationAgent{text: "Now let me continue with the remaining work."})
+	result, err := c.RunDirectAgent(context.Background(), "worker", "perform direct work")
+	if err != nil {
+		t.Fatalf("RunDirectAgent: %v", err)
+	}
+	if result == nil {
+		t.Fatal("RunDirectAgent returned nil result")
+	}
+	items := c.taskTracker.TodoList().Items()
+	if len(items) != 1 || items[0].Status != TaskDone {
+		t.Fatalf("direct task projection = %#v, want one done task", items)
+	}
+	if !strings.Contains(items[0].Output, "direct agent completed") || strings.Contains(items[0].Output, "Now let me") {
+		t.Fatalf("direct task output = %q, want canonical typed result", items[0].Output)
 	}
 }
 
