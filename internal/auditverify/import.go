@@ -88,6 +88,18 @@ func verifyBundleFile(ctx context.Context, bundlePath, expectedRunID string, opt
 		return failResultf(manifest.RunID, CodeBundleFileMissing, "reconstruct workspace from bundle: %v", err), nil
 	}
 
+	// Guard against a "confusion" tamper (spec.md §52 Case E): an attacker
+	// could recompute every bundle.json file hash correctly for a spliced-in
+	// events.jsonl (e.g. from a different run's bundle) while leaving
+	// RunFinishedEventID/Hash pointing at the original run. Every per-file
+	// hash would then check out individually, but the declared terminal event
+	// would not actually exist in the reconstructed log. runWorkspaceAudit
+	// would otherwise report this as "run not found" (a usage error) rather
+	// than the FAIL verdict a canonical-proof-linkage break should produce.
+	if err := verifyDeclaredTerminalEventExists(pseudoWorkspace, manifest); err != nil {
+		return failResultf(manifest.RunID, CodeBundleHashMismatch, "%v", err), nil
+	}
+
 	result, _, auditErr := runWorkspaceAudit(ctx, pseudoWorkspace, manifest.RunID, opts)
 	if auditErr != nil {
 		return nil, fmt.Errorf("verify reconstructed bundle: %w", auditErr)
@@ -95,6 +107,25 @@ func verifyBundleFile(ctx context.Context, bundlePath, expectedRunID string, opt
 
 	verifyWitnessLinkage(extractDir, manifest, result)
 	return result, nil
+}
+
+// verifyDeclaredTerminalEventExists confirms that bundle.json's declared
+// RunFinishedEventID/Hash actually identifies a run_finished event present in
+// the reconstructed event log for manifest.RunID -- catching a spliced-in
+// events.jsonl whose own per-file hash checks out but which does not
+// actually contain the event bundle.json claims it does.
+func verifyDeclaredTerminalEventExists(pseudoWorkspace string, manifest AuditBundleManifest) error {
+	lineage, err := canonicalLineage(pseudoWorkspace)
+	if err != nil {
+		return fmt.Errorf("read reconstructed event log: %w", err)
+	}
+	for _, event := range lineage {
+		if event.Type == "run_finished" && event.RunID == manifest.RunID &&
+			event.ID == manifest.RunFinishedEventID && event.Hash == manifest.RunFinishedEventHash {
+			return nil
+		}
+	}
+	return fmt.Errorf("bundle.json's declared run_finished_event_id/hash does not match any terminal event for run %q in this bundle's event log", manifest.RunID)
 }
 
 // verifyWitnessLinkage cross-checks decision-witness.json's own hash and its
@@ -114,6 +145,8 @@ func verifyWitnessLinkage(extractDir string, manifest AuditBundleManifest, resul
 	witnessErr := witness.Verify()
 	reason := ""
 	switch {
+	case witness.SchemaVersion > WitnessSchemaVersion:
+		reason = fmt.Sprintf("decision witness schema version %d is newer than the supported version %d", witness.SchemaVersion, WitnessSchemaVersion)
 	case witnessErr != nil:
 		reason = fmt.Sprintf("decision witness does not self-verify: %v", witnessErr)
 	case witness.EventHeadHash != manifest.RunFinishedEventHash:
