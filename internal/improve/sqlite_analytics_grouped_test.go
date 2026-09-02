@@ -2,45 +2,10 @@ package improve
 
 import (
 	"context"
-	"reflect"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/team"
 )
-
-func TestSQLGroupedMetricsParity(t *testing.T) {
-	cases := executionMetricsParityCases()
-	cases = append(cases, executionMetricsParityCase{
-		name: "run_with_no_task_bearing_events",
-		events: []team.ExecutionEvent{
-			{Timestamp: "2026-07-12T09:00:00Z", RunID: "r1", Team: "dev", TaskID: "", Status: "run_started"},
-			{Timestamp: "2026-07-12T09:00:01Z", RunID: "r1", Team: "dev", TaskID: "", Status: "run_finished"},
-		},
-		teamName: "dev", runCount: 1,
-	})
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, wantRuns := selectRecentRuns(tc.events, tc.teamName, tc.runCount)
-			wantGrouped := collectGroupedMetrics(flattenRuns(wantRuns))
-
-			session := newTestSession(t)
-			loadFixtureEvents(t, session, tc.events)
-			ctx := context.Background()
-			_, gotRunIDs, err := session.sqlSelectRecentRuns(ctx, tc.teamName, tc.runCount)
-			if err != nil {
-				t.Fatalf("sqlSelectRecentRuns: %v", err)
-			}
-			gotGrouped, err := session.sqlCollectGroupedMetrics(ctx, gotRunIDs)
-			if err != nil {
-				t.Fatalf("sqlCollectGroupedMetrics: %v", err)
-			}
-			if !reflect.DeepEqual(gotGrouped, wantGrouped) {
-				t.Fatalf("grouped metrics mismatch:\n  got  = %+v\n  want = %+v", gotGrouped, wantGrouped)
-			}
-		})
-	}
-}
 
 func TestSQLGroupedMetrics_MultiSkillOverlapAndMissingDimensionFallback(t *testing.T) {
 	events := []team.ExecutionEvent{
@@ -75,10 +40,6 @@ func TestSQLGroupedMetrics_MultiSkillOverlapAndMissingDimensionFallback(t *testi
 		t.Fatalf("task type fallback group = %+v, want 3 tasks", g)
 	}
 
-	want := collectGroupedMetrics(events)
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("mismatch vs legacy:\n  got  = %+v\n  want = %+v", got, want)
-	}
 }
 
 func TestSQLGroupedMetrics_WhitespaceFallbackAndSkillNormalizationParity(t *testing.T) {
@@ -99,9 +60,20 @@ func TestSQLGroupedMetrics_WhitespaceFallbackAndSkillNormalizationParity(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := collectGroupedMetrics(events)
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("mismatch vs legacy:\n  got  = %+v\n  want = %+v", got, want)
+	if g := groupByKey(got.BySkill, "none"); g == nil || g.TotalTasks != 1 {
+		t.Fatalf("skill fallback group = %+v, want none:1", g)
+	}
+	if g := groupByKey(got.BySkill, "go"); g == nil || g.TotalTasks != 1 {
+		t.Fatalf("normalized go group = %+v, want go:1", g)
+	}
+	if g := groupByKey(got.ByAgent, "developer"); g == nil || g.TotalTasks != 1 {
+		t.Fatalf("agent group = %+v, want developer:1", g)
+	}
+	if g := groupByKey(got.ByModel, "large"); g == nil || g.TotalTasks != 1 {
+		t.Fatalf("model group = %+v, want large:1", g)
+	}
+	if g := groupByKey(got.ByTaskType, "agent"); g == nil || g.TotalTasks != 1 {
+		t.Fatalf("task type group = %+v, want agent:1", g)
 	}
 }
 

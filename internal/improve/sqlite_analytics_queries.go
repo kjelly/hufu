@@ -1,11 +1,8 @@
 package improve
 
 // SQL aggregation over the TEMP analytics schema loaded by
-// sqlite_analytics_loader.go, reproducing the legacy Go aggregation in
-// improve.go (selectRecentRuns, summarizeTasks, collectExecutionMetrics).
-// Every query here is covered by a parity test in
-// sqlite_analytics_queries_test.go asserting it returns exactly what the
-// legacy function returns for the same fixture — spec.md §14.2.
+// sqlite_analytics_loader.go, preserving the public execution metrics
+// semantics without materializing the complete event history.
 
 import (
 	"context"
@@ -17,7 +14,7 @@ import (
 	"github.com/kjelly/hufu/internal/team"
 )
 
-// sqlRunSummary is one row of the run-level view legacy selectRecentRuns
+// sqlRunSummary is one row of the run-level view used to select recent runs
 // builds in Go: a run's resolved team (the team of its first qualifying
 // event, in file order — legacy never re-checks team on later events for
 // the same run) and its [start, end] window over parseable timestamps only.
@@ -28,7 +25,7 @@ type sqlRunSummary struct {
 	EndUnixNS   sql.NullInt64
 }
 
-// selectedRunsQuery reproduces the run grouping selectRecentRuns performs in
+// selectedRunsQuery performs the run grouping needed to select recent runs in
 // Go: events with an empty run_id or empty team never contribute to a run at
 // all (not even to Events), a run's Team is fixed to whichever qualifying
 // event has the smallest event_seq, and Start/End only consider events whose
@@ -80,11 +77,11 @@ func (s *sqliteAnalyticsSession) sqlAllRunSummaries(ctx context.Context) ([]sqlR
 	return out, nil
 }
 
-// sqlSelectRecentRuns is the SQL equivalent of selectRecentRuns: it resolves
+// sqlSelectRecentRuns resolves
 // teamName (defaulting to the chronologically-last run's team when empty)
 // and returns the up-to-runCount most recent run IDs for that team, oldest
-// first — the exact order legacy's `selected` slice carries into
-// flattenRuns/RunIDs/Trend.
+// first — the exact order carried into
+// run IDs and trend ordering.
 func (s *sqliteAnalyticsSession) sqlSelectRecentRuns(ctx context.Context, teamName string, runCount int) (string, []string, error) {
 	teamName, selected, err := s.sqlSelectRecentRunSummaries(ctx, teamName, runCount)
 	if err != nil {
@@ -131,7 +128,7 @@ func runsInClause(runIDs []string) (string, []any) {
 	return strings.Join(placeholders, ","), args
 }
 
-// sqlEventWindow reproduces eventWindow(events): the [min, max] over every
+// sqlEventWindow computes the [min, max] over every
 // parseable timestamp among events in scope, independent of task_id.
 func (s *sqliteAnalyticsSession) sqlEventWindow(ctx context.Context, runIDs []string) (time.Time, time.Time, error) {
 	if len(runIDs) == 0 {
@@ -153,7 +150,7 @@ func unixNSToTime(v sql.NullInt64) time.Time {
 	return time.Unix(0, v.Int64).UTC()
 }
 
-// sqlTaskSummary mirrors taskSummary. Rows come from the task_summary /
+// sqlTaskSummary is the task-level projection. Rows come from the task_summary /
 // task_skills TEMP tables materialized once per session by
 // materializeTaskViews (sqlite_analytics_task_summary.go), filtered by
 // run_id at query time.
@@ -255,10 +252,10 @@ func (s *sqliteAnalyticsSession) sqlTaskSummaries(ctx context.Context, runIDs []
 	return out, nil
 }
 
-// sqlSelectedExecutionProjection returns only the execution fields still
-// needed by the legacy memory metrics bridge and team-revision calculations.
-// It intentionally does not materialize prompts, output, tool arguments, or
-// any other execution telemetry content.
+// sqlSelectedExecutionProjection returns only the team-revision field still
+// needed after SQL aggregation. It intentionally does not materialize task
+// content, usage, prompts, output, tool arguments, or any other execution
+// telemetry content.
 func (s *sqliteAnalyticsSession) sqlSelectedExecutionProjection(ctx context.Context, runIDs []string) (map[string][]team.ExecutionEvent, error) {
 	projection := make(map[string][]team.ExecutionEvent, len(runIDs))
 	if len(runIDs) == 0 {
@@ -266,7 +263,7 @@ func (s *sqliteAnalyticsSession) sqlSelectedExecutionProjection(ctx context.Cont
 	}
 	inClause, args := runsInClause(runIDs)
 	query := fmt.Sprintf(`
-SELECT run_id, task_id, attempt, input_tokens, team_revision
+SELECT run_id, team_revision
 FROM execution_events
 WHERE team <> '' AND run_id IN (%s)
 ORDER BY run_id ASC, event_seq ASC`, inClause)
@@ -277,7 +274,7 @@ ORDER BY run_id ASC, event_seq ASC`, inClause)
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var event team.ExecutionEvent
-		if err := rows.Scan(&event.RunID, &event.TaskID, &event.Attempt, &event.Usage.InputTokens, &event.TeamRevision); err != nil {
+		if err := rows.Scan(&event.RunID, &event.TeamRevision); err != nil {
 			return nil, fmt.Errorf("scan selected execution projection: %w", err)
 		}
 		projection[event.RunID] = append(projection[event.RunID], event)
@@ -288,8 +285,8 @@ ORDER BY run_id ASC, event_seq ASC`, inClause)
 	return projection, nil
 }
 
-// sqlTokensByAgent reproduces the per-event agent attribution
-// collectExecutionMetrics uses for Metrics.TokensByAgent. This is
+// sqlTokensByAgent provides the per-event agent attribution
+// used for Metrics.TokensByAgent. This is
 // deliberately *not* the same grouping as GroupedMetrics.ByAgent (WP-4),
 // which attributes a task's whole TotalTokens to the task's resolved
 // (last-non-empty) agent instead: TokensByAgent sums each event's own
@@ -326,12 +323,11 @@ func (s *sqliteAnalyticsSession) sqlTokensByAgent(ctx context.Context, runIDs []
 	return result, nil
 }
 
-// sqlCollectExecutionMetrics is the SQL equivalent of collectExecutionMetrics,
+// sqlCollectExecutionMetrics performs execution aggregation,
 // scoped to the given run IDs (already team/recency-filtered by
 // sqlSelectRecentRuns). It leaves ToolCalls*/ToolErrors*/Memory* fields
-// zero — those are populated by collectAuditMetrics (WP-5) and
-// collectMemoryMetrics (WP-7/WP-8) respectively, exactly as legacy
-// collectMetrics composes them.
+// zero — those are populated by the audit and memory SQL aggregations,
+// respectively, exactly as the public metrics contract composes them.
 func (s *sqliteAnalyticsSession) sqlCollectExecutionMetrics(ctx context.Context, runIDs []string) (Metrics, error) {
 	metrics := Metrics{TokensByAgent: map[string]int{}, ToolCallsByAgent: map[string]int{}, ToolErrorsByAgent: map[string]int{}}
 

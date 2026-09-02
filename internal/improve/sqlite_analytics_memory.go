@@ -5,9 +5,9 @@ import (
 	"fmt"
 )
 
-// sqlCollectMemoryMetrics reproduces collectMemoryMetrics using the global
+// sqlCollectMemoryMetrics computes the memory metrics using the global
 // TEMP memory_events scope. Memory events are intentionally not filtered by
-// selected run or execution time: the legacy event-store reader always
+// selected run or execution time: the canonical event-store reader always
 // considered the complete canonical event store. Only the execution-derived
 // token and retry denominators are scoped to runIDs.
 func (s *sqliteAnalyticsSession) sqlCollectMemoryMetrics(ctx context.Context, runIDs []string, metrics *Metrics) error {

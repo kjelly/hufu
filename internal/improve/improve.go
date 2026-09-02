@@ -4,10 +4,8 @@
 package improve
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -127,27 +125,6 @@ type Report struct {
 	Findings      []Finding      `json:"findings"`
 }
 
-type executionRun struct {
-	ID     string
-	Team   string
-	Events []team.ExecutionEvent
-	Start  time.Time
-	End    time.Time
-}
-
-type taskSummary struct {
-	RunID         string
-	TaskID        string
-	Agent         string
-	Model         string
-	TaskType      string
-	Skills        []string
-	Terminal      string
-	Attempts      int
-	TotalAttempts int
-	TotalTokens   int
-}
-
 type agentFrontmatter struct {
 	Name        string      `yaml:"name"`
 	Description string      `yaml:"description"`
@@ -169,14 +146,19 @@ type auditEvent struct {
 
 // LatestTeam returns the team attached to the newest durable execution event.
 func LatestTeam(workspace string) (string, error) {
-	events, err := readEvents(workspace)
+	ctx := context.Background()
+	analytics, err := openSQLiteAnalyticsSession(ctx)
 	if err != nil {
 		return "", err
 	}
-	if len(events) == 0 {
-		return "", ErrNoExecutionData
+	defer func() { _ = analytics.Close() }()
+	if _, err := analytics.loadExecutionEvents(ctx, filepath.Join(workspace, eventsPath)); err != nil {
+		return "", err
 	}
-	teamName, runs := selectRecentRuns(events, "", 1)
+	teamName, runs, err := analytics.sqlSelectRecentRunSummaries(ctx, "", 1)
+	if err != nil {
+		return "", err
+	}
 	if len(runs) == 0 {
 		return "", ErrNoExecutionData
 	}
@@ -299,89 +281,6 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 		Findings:      analyze(def, metrics, provenance),
 	}
 	return report, nil
-}
-
-func readEvents(workspace string) ([]team.ExecutionEvent, error) {
-	f, err := os.Open(filepath.Join(workspace, eventsPath))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read execution events: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-	var events []team.ExecutionEvent
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 4<<20)
-	for scanner.Scan() {
-		var event team.ExecutionEvent
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil || event.RunID == "" {
-			continue
-		}
-		events = append(events, event)
-	}
-	if err := scanner.Err(); err != nil {
-		return events, fmt.Errorf("read execution events: %w", err)
-	}
-	return events, nil
-}
-
-func selectRecentRuns(events []team.ExecutionEvent, teamName string, runCount int) (string, []executionRun) {
-	runsByID := make(map[string]*executionRun)
-	for _, event := range events {
-		if event.RunID == "" || event.Team == "" {
-			continue
-		}
-		run := runsByID[event.RunID]
-		if run == nil {
-			run = &executionRun{ID: event.RunID, Team: event.Team}
-			runsByID[event.RunID] = run
-		}
-		run.Events = append(run.Events, event)
-		if timestamp, err := time.Parse(time.RFC3339Nano, event.Timestamp); err == nil {
-			if run.Start.IsZero() || timestamp.Before(run.Start) {
-				run.Start = timestamp
-			}
-			if timestamp.After(run.End) {
-				run.End = timestamp
-			}
-		}
-	}
-	runs := make([]executionRun, 0, len(runsByID))
-	for _, run := range runsByID {
-		runs = append(runs, *run)
-	}
-	sort.Slice(runs, func(i, j int) bool {
-		if runs[i].End.Equal(runs[j].End) {
-			return runs[i].ID < runs[j].ID
-		}
-		return runs[i].End.Before(runs[j].End)
-	})
-	if teamName == "" && len(runs) > 0 {
-		teamName = runs[len(runs)-1].Team
-	}
-	selected := make([]executionRun, 0, runCount)
-	for _, run := range runs {
-		if run.Team == teamName {
-			selected = append(selected, run)
-		}
-	}
-	if len(selected) > runCount {
-		selected = selected[len(selected)-runCount:]
-	}
-	return teamName, selected
-}
-
-func flattenRuns(runs []executionRun) []team.ExecutionEvent {
-	count := 0
-	for _, run := range runs {
-		count += len(run.Events)
-	}
-	events := make([]team.ExecutionEvent, 0, count)
-	for _, run := range runs {
-		events = append(events, run.Events...)
-	}
-	return events
 }
 
 func uniqueTeamRevisions(events []team.ExecutionEvent) []string {
@@ -523,321 +422,6 @@ func splitCSV(value string) []string {
 			result = append(result, part)
 		}
 	}
-	return result
-}
-
-func collectMemoryMetrics(workspace string, executionEvents []team.ExecutionEvent, metrics *Metrics) {
-	store, err := team.OpenEventStore(workspace)
-	if err != nil {
-		return
-	}
-	defer func() { _ = store.Close() }()
-	events, err := store.ReadEvents()
-	if err != nil {
-		return
-	}
-	retrievals := map[string]bool{}
-	appliedTasks := map[string]bool{}
-	verified, harmful, stale, memoryTokens := 0, 0, 0, 0
-	for _, event := range events {
-		if event.Type != "memory_retrieved" && event.Type != "memory_usage_recorded" && event.Type != "memory_outcome_recorded" {
-			continue
-		}
-		var payload map[string]any
-		if json.Unmarshal(event.Payload, &payload) != nil {
-			continue
-		}
-		if id, _ := payload["retrieval_id"].(string); id != "" {
-			retrievals[id] = true
-		}
-		switch event.Type {
-		case "memory_retrieved":
-			metrics.MemoryExposureCount++
-			if reason, _ := payload["reason_code"].(string); reason == "stale_environment" {
-				stale++
-			}
-			if count, ok := payload["token_count"].(float64); ok && count > 0 {
-				memoryTokens += int(count)
-			}
-		case "memory_usage_recorded":
-			if payload["disposition"] == "applied" {
-				metrics.MemoryAppliedCount++
-				appliedTasks[event.RunID+"\x00"+event.TaskID] = true
-			}
-		case "memory_outcome_recorded":
-			signal, _ := payload["signal"].(string)
-			if signal == "verification_passed" {
-				verified++
-			}
-			if direction, _ := payload["direction"].(string); direction == "negative" {
-				harmful++
-			}
-			if signal == "stale_environment" {
-				stale++
-			}
-		}
-	}
-	metrics.MemoryRetrievalCount = len(retrievals)
-	if metrics.MemoryExposureCount > 0 {
-		metrics.MemoryAttributionCoverage = float64(metrics.MemoryAppliedCount) / float64(metrics.MemoryExposureCount)
-		metrics.MemoryStaleRetrievalRate = float64(stale) / float64(metrics.MemoryExposureCount)
-	}
-	if metrics.MemoryAppliedCount > 0 {
-		metrics.MemoryVerifiedAssistRate = float64(verified) / float64(metrics.MemoryAppliedCount)
-		metrics.MemoryHarmfulUseRate = float64(harmful) / float64(metrics.MemoryAppliedCount)
-	}
-	totalInputTokens := 0
-	for _, event := range executionEvents {
-		if event.Usage.InputTokens > 0 {
-			totalInputTokens += event.Usage.InputTokens
-		}
-	}
-	if totalInputTokens > 0 {
-		metrics.MemoryTokenOverhead = float64(memoryTokens) / float64(totalInputTokens)
-	}
-	retriedAssisted, retriedUnassisted, assistedTasks, unassistedTasks := 0, 0, map[string]bool{}, map[string]bool{}
-	for _, event := range executionEvents {
-		key := event.RunID + "\x00" + event.TaskID
-		if event.Attempt <= 1 || event.TaskID == "" {
-			continue
-		}
-		if appliedTasks[key] {
-			if !assistedTasks[key] {
-				retriedAssisted++
-				assistedTasks[key] = true
-			}
-		} else if !unassistedTasks[key] {
-			retriedUnassisted++
-			unassistedTasks[key] = true
-		}
-	}
-	if len(appliedTasks) > 0 {
-		metrics.MemoryAssistedRetryRate = float64(retriedAssisted) / float64(len(appliedTasks))
-	}
-	unassistedTotal := metrics.TotalTasks - len(appliedTasks)
-	if unassistedTotal > 0 {
-		metrics.MemoryUnassistedRetryRate = float64(retriedUnassisted) / float64(unassistedTotal)
-	}
-}
-
-func collectExecutionMetrics(events []team.ExecutionEvent) Metrics {
-	metrics := Metrics{TokensByAgent: map[string]int{}, ToolCallsByAgent: map[string]int{}, ToolErrorsByAgent: map[string]int{}}
-	runIDs := make(map[string]struct{})
-	tasks := summarizeTasks(events)
-	start, end := eventWindow(events)
-	for _, event := range events {
-		if event.RunID != "" {
-			runIDs[event.RunID] = struct{}{}
-		}
-		if event.TaskID == "" {
-			continue
-		}
-		agent := event.Agent
-		if agent == "" {
-			agent = "unspecified"
-		}
-		metrics.TokensByAgent[agent] += event.Usage.TotalTokens
-		metrics.TotalTokens += event.Usage.TotalTokens
-	}
-	metrics.RunCount = len(runIDs)
-	if metrics.RunCount == 1 {
-		for runID := range runIDs {
-			metrics.RunID = runID
-		}
-	}
-	metrics.StartedAt, metrics.EndedAt = start.Format(time.RFC3339), end.Format(time.RFC3339)
-	metrics.TotalTasks = len(tasks)
-	for _, task := range tasks {
-		metrics.TotalAttempts += task.TotalAttempts
-		if task.Attempts > 1 {
-			metrics.RetriedTasks++
-		}
-		switch task.Terminal {
-		case "done":
-			metrics.Done++
-		case "error":
-			metrics.Error++
-		case "planned":
-			metrics.Planned++
-		}
-	}
-	return metrics
-}
-
-func eventWindow(events []team.ExecutionEvent) (time.Time, time.Time) {
-	var start, end time.Time
-	for _, event := range events {
-		timestamp, err := time.Parse(time.RFC3339Nano, event.Timestamp)
-		if err != nil {
-			continue
-		}
-		if start.IsZero() || timestamp.Before(start) {
-			start = timestamp
-		}
-		if timestamp.After(end) {
-			end = timestamp
-		}
-	}
-	return start, end
-}
-
-func summarizeTasks(events []team.ExecutionEvent) []taskSummary {
-	tasks := make(map[string]*taskSummary)
-	for _, event := range events {
-		if event.TaskID == "" {
-			continue
-		}
-		key := event.RunID + "\x00" + event.TaskID
-		task := tasks[key]
-		if task == nil {
-			task = &taskSummary{RunID: event.RunID, TaskID: event.TaskID}
-			tasks[key] = task
-		}
-		if event.Agent != "" {
-			task.Agent = event.Agent
-		}
-		if event.Model != "" {
-			task.Model = event.Model
-		}
-		if event.TaskType != "" {
-			task.TaskType = event.TaskType
-		}
-		if len(event.Skills) > 0 {
-			task.Skills = uniqueStrings(event.Skills)
-		}
-		if event.Attempt > task.Attempts {
-			task.Attempts = event.Attempt
-		}
-		if event.Status == "in_progress" {
-			task.TotalAttempts++
-		}
-		if event.Status == "done" || event.Status == "error" || event.Status == "planned" {
-			task.Terminal = event.Status
-		}
-		task.TotalTokens += event.Usage.TotalTokens
-	}
-	result := make([]taskSummary, 0, len(tasks))
-	for _, task := range tasks {
-		result = append(result, *task)
-	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].RunID == result[j].RunID {
-			return result[i].TaskID < result[j].TaskID
-		}
-		return result[i].RunID < result[j].RunID
-	})
-	return result
-}
-
-func uniqueStrings(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	sort.Strings(result)
-	return result
-}
-
-func collectAuditMetrics(dir, teamName string, start, end time.Time, metrics *Metrics) {
-	files, err := filepath.Glob(filepath.Join(dir, "audit-*.jsonl"))
-	if err != nil {
-		return
-	}
-	for _, filename := range files {
-		f, err := os.Open(filename)
-		if err != nil {
-			continue
-		}
-		scanner := bufio.NewScanner(f)
-		for scanner.Scan() {
-			var event auditEvent
-			if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Team != teamName {
-				continue
-			}
-			ts, err := time.Parse(time.RFC3339Nano, event.Timestamp)
-			if err != nil || ts.Before(start) || ts.After(end) {
-				continue
-			}
-			switch event.Event {
-			case "tool_call":
-				metrics.ToolCallsByAgent[event.Agent]++
-				metrics.ToolCalls++
-			case "tool_error":
-				metrics.ToolErrorsByAgent[event.Agent]++
-				metrics.ToolErrors++
-			}
-		}
-		_ = f.Close()
-	}
-}
-
-func collectGroupedMetrics(events []team.ExecutionEvent) GroupedMetrics {
-	tasks := summarizeTasks(events)
-	byAgent := make(map[string]*GroupMetric)
-	byTaskType := make(map[string]*GroupMetric)
-	byModel := make(map[string]*GroupMetric)
-	bySkill := make(map[string]*GroupMetric)
-	for _, task := range tasks {
-		addGroupMetric(byAgent, fallbackGroup(task.Agent, "unspecified"), task)
-		addGroupMetric(byTaskType, fallbackGroup(task.TaskType, "legacy/unspecified"), task)
-		addGroupMetric(byModel, fallbackGroup(task.Model, "unspecified"), task)
-		if len(task.Skills) == 0 {
-			addGroupMetric(bySkill, "none", task)
-			continue
-		}
-		for _, skill := range task.Skills {
-			addGroupMetric(bySkill, skill, task)
-		}
-	}
-	return GroupedMetrics{
-		ByAgent: groupMetricSlice(byAgent), ByTaskType: groupMetricSlice(byTaskType), ByModel: groupMetricSlice(byModel), BySkill: groupMetricSlice(bySkill),
-	}
-}
-
-func fallbackGroup(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return value
-}
-
-func addGroupMetric(groups map[string]*GroupMetric, key string, task taskSummary) {
-	group := groups[key]
-	if group == nil {
-		group = &GroupMetric{Key: key}
-		groups[key] = group
-	}
-	group.TotalTasks++
-	group.TotalAttempts += task.TotalAttempts
-	group.TotalTokens += task.TotalTokens
-	if task.Attempts > 1 {
-		group.RetriedTasks++
-	}
-	switch task.Terminal {
-	case "done":
-		group.Done++
-	case "error":
-		group.Error++
-	case "planned":
-		group.Planned++
-	}
-}
-
-func groupMetricSlice(groups map[string]*GroupMetric) []GroupMetric {
-	result := make([]GroupMetric, 0, len(groups))
-	for _, group := range groups {
-		result = append(result, *group)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Key < result[j].Key })
 	return result
 }
 

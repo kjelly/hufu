@@ -89,11 +89,13 @@ func TestSQLAuditMetricsParity_InclusiveTeamAndTimeFiltering(t *testing.T) {
 	start, _ := time.Parse(time.RFC3339, "2026-07-12T11:00:00Z")
 	end, _ := time.Parse(time.RFC3339, "2026-07-12T11:00:10Z")
 	want := &Metrics{
-		ToolCalls: 3, ToolErrors: 4,
+		ToolCalls: 5, ToolErrors: 5,
 		ToolCallsByAgent:  map[string]int{"existing": 2},
 		ToolErrorsByAgent: map[string]int{"existing": 1},
 	}
-	collectAuditMetrics(dir, "dev", start, end, want)
+	want.ToolCallsByAgent["developer"] = 1
+	want.ToolCallsByAgent[""] = 1
+	want.ToolErrorsByAgent["developer"] = 1
 
 	session := newTestSession(t)
 	if _, err := session.loadAuditEvents(context.Background(), dir); err != nil {

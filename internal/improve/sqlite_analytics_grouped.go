@@ -1,6 +1,6 @@
 package improve
 
-// SQL equivalent of collectGroupedMetrics (spec.md §10.2), built on the
+// SQL grouped aggregation (spec.md §10.2), built on the
 // task_summary/task_skills TEMP tables materialized by
 // sqlite_analytics_task_summary.go. One parameterized query template
 // handles all three "single value per task" dimensions (agent/model/
@@ -18,9 +18,8 @@ import (
 )
 
 // groupDimensionColumns is the closed set of task_summary columns
-// collectGroupedMetrics-equivalent SQL is allowed to group by, each paired
-// with the same fallback label legacy's fallbackGroup() uses for that
-// dimension.
+// SQL grouping is allowed to group by, each paired with the same fallback
+// label required for that dimension.
 var groupDimensionColumns = map[string]string{
 	"agent":     "unspecified",
 	"model":     "unspecified",
@@ -46,7 +45,7 @@ ORDER BY group_key ASC`
 
 // groupBySkillQuery LEFT JOINs task_skills so a task with zero skills
 // produces exactly one 'none' row and a task with N skills produces N rows
-// (one per skill group) — reproducing collectGroupedMetrics' BySkill
+// (one per skill group), preserving the BySkill
 // overlap-by-design behavior in one query instead of a separate "tasks
 // without any skill" branch.
 const groupBySkillQuery = `
@@ -98,10 +97,9 @@ func (s *sqliteAnalyticsSession) scanGroupMetrics(ctx context.Context, query str
 		return nil, fmt.Errorf("query grouped metrics: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	// legacy groupMetricSlice always returns a non-nil, possibly-empty
+	// The public grouped fields are always non-nil, possibly-empty
 	// slice (make([]GroupMetric, 0, len(groups))); match that exactly so a
-	// zero-task run scope doesn't turn a reflect.DeepEqual parity check
-	// into a nil-vs-empty-slice false mismatch.
+	// zero-task run scope remains a stable empty public collection.
 	out := make([]GroupMetric, 0)
 	for rows.Next() {
 		var g GroupMetric
@@ -116,7 +114,7 @@ func (s *sqliteAnalyticsSession) scanGroupMetrics(ctx context.Context, query str
 	return out, nil
 }
 
-// sqlCollectGroupedMetrics is the SQL equivalent of collectGroupedMetrics,
+// sqlCollectGroupedMetrics performs grouped SQL aggregation,
 // scoped to the given run IDs.
 func (s *sqliteAnalyticsSession) sqlCollectGroupedMetrics(ctx context.Context, runIDs []string) (GroupedMetrics, error) {
 	byAgent, err := s.sqlGroupMetricsByDimension(ctx, runIDs, "agent")

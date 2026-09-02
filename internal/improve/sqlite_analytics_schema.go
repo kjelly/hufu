@@ -16,7 +16,7 @@ import (
 // order; it exists purely to give window functions and ORDER BY a
 // deterministic tie-breaker when two events share a timestamp (or have no
 // parseable timestamp at all), matching the ordering Go slices already give
-// legacy aggregation for free.
+// deterministic ordering for window functions and result sets.
 const executionEventsSchema = `
 CREATE TEMP TABLE execution_events (
     event_seq            INTEGER PRIMARY KEY,
@@ -50,9 +50,8 @@ CREATE TEMP TABLE execution_events (
 // executionEventSkillsSchema normalizes ExecutionEvent.Skills so grouping by
 // skill never needs to re-parse a JSON array (spec.md §6.2). One row per
 // (event, skill) pair; WP-4's task-level skill query must reproduce legacy's
-// per-task *overwrite* semantics (see parity_test.go
-// TestSummarizeTasks_SkillsFieldOverwritesRatherThanUnionsAcrossEvents), not
-// a plain DISTINCT union across every event ever seen for the task.
+// per-task *overwrite* semantics, not a plain DISTINCT union across every
+// event ever seen for the task.
 const executionEventSkillsSchema = `
 CREATE TEMP TABLE execution_event_skills (
     event_seq INTEGER NOT NULL,
@@ -62,7 +61,7 @@ CREATE TEMP TABLE execution_event_skills (
     PRIMARY KEY (event_seq, skill)
 );`
 
-// auditEventsSchema only stores what collectAuditMetrics-equivalent SQL
+// auditEventsSchema only stores what the audit metrics SQL
 // needs: timestamp, team, agent, and event type. It must never gain a
 // payload/input/command column (spec.md §6.3, §20.1) — audit JSON can
 // contain secrets, and today's report contract guarantees they never reach

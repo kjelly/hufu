@@ -43,11 +43,9 @@ INSERT OR IGNORE INTO execution_event_skills (event_seq, run_id, task_id, skill)
 VALUES (?, ?, ?, ?)`
 
 // loadExecutionEvents streams path (execution-events.jsonl) into TEMP
-// execution_events / execution_event_skills. It preserves readEvents'
-// tolerant semantics exactly: a missing file is not an error, a malformed
-// JSON line is skipped, and a line with an empty run_id is skipped
-// (parity_test.go TestReadEvents_SkipsMalformedAndMissingRunID locks this
-// for the legacy path).
+// execution_events / execution_event_skills. It preserves the tolerant
+// semantics exactly: a missing file is not an error, a malformed
+// JSON line is skipped, and a line with an empty run_id is skipped.
 func (s *sqliteAnalyticsSession) loadExecutionEvents(ctx context.Context, path string) (loadStats, error) {
 	var stats loadStats
 	if s.taskViewsReady {

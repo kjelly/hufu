@@ -36,7 +36,7 @@ const (
 
 // loadMemoryEvents streams the canonical event store into TEMP memory_events.
 // Missing, corrupt, or otherwise unreadable canonical event stores are
-// intentionally nonfatal, matching collectMemoryMetrics' behavior. SQL
+// intentionally nonfatal, matching the public memory-reader behavior. SQL
 // errors from the TEMP insert and commit are still returned to the caller.
 func (s *sqliteAnalyticsSession) loadMemoryEvents(ctx context.Context, workspace string) (memoryLoadStats, error) {
 	var stats memoryLoadStats

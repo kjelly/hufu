@@ -2,7 +2,7 @@ package improve
 
 // Streaming ingestion and SQL aggregation for audit-*.jsonl telemetry. The
 // analytics representation deliberately contains only the four fields needed
-// by collectAuditMetrics; arbitrary audit payload is decoded and discarded.
+// by the audit metrics; arbitrary audit payload is decoded and discarded.
 
 import (
 	"bufio"
@@ -67,7 +67,7 @@ func (s *sqliteAnalyticsSession) loadAuditEvents(ctx context.Context, dir string
 		stats.FilesSeen++
 		f, err := os.Open(filename)
 		if err != nil {
-			// collectAuditMetrics skips files it cannot open; retain that
+			// The legacy audit reader skips files it cannot open; retain that
 			// tolerant source semantics for audit telemetry.
 			continue
 		}
@@ -108,7 +108,7 @@ func (s *sqliteAnalyticsSession) loadAuditEvents(ctx context.Context, dir string
 	return stats, nil
 }
 
-// sqlCollectAuditMetrics applies collectAuditMetrics' team, inclusive time,
+// sqlCollectAuditMetrics applies the audit reader's team, inclusive time,
 // and event-type semantics using only the minimal TEMP audit projection.
 func (s *sqliteAnalyticsSession) sqlCollectAuditMetrics(ctx context.Context, teamName string, start, end time.Time, metrics *Metrics) error {
 	if metrics == nil {

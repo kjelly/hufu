@@ -64,9 +64,6 @@ func TestSQLMemoryMetricsParityAllTenFields(t *testing.T) {
 		{ID: "bad-shape", RunID: "selected", Type: memoryRetrievedEvent, Actor: "runtime", Payload: []byte(`[]`)},
 	})
 
-	want := collectExecutionMetrics(selectedExecution)
-	collectMemoryMetrics(workspace, selectedExecution, &want)
-
 	session := newTestSession(t)
 	if _, err := session.loadExecutionEvents(t.Context(), filepath.Join(workspace, eventsPath)); err != nil {
 		t.Fatal(err)
@@ -90,8 +87,5 @@ func TestSQLMemoryMetricsParityAllTenFields(t *testing.T) {
 	}
 	if gotSnapshot := snapshotMemoryMetrics(got); !reflect.DeepEqual(gotSnapshot, wantSnapshot) {
 		t.Fatalf("memory metrics mismatch:\n  got  = %+v\n  want = %+v", gotSnapshot, wantSnapshot)
-	}
-	if legacySnapshot := snapshotMemoryMetrics(want); !reflect.DeepEqual(legacySnapshot, wantSnapshot) {
-		t.Fatalf("legacy fixture metrics = %+v, want %+v", legacySnapshot, wantSnapshot)
 	}
 }

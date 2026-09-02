@@ -82,6 +82,21 @@ func TestLatestTeamWithoutEvents(t *testing.T) {
 	}
 }
 
+func TestLatestTeamUsesNewestValidRun(t *testing.T) {
+	workspace := t.TempDir()
+	writeExecutionEvents(t, workspace, []team.ExecutionEvent{
+		{Timestamp: "2026-07-12T10:00:00Z", RunID: "old", Team: "old-team", TaskID: "task", Status: "done"},
+		{Timestamp: "2026-07-12T11:00:00Z", RunID: "new", Team: "new-team", TaskID: "task", Status: "done"},
+	})
+	teamName, err := LatestTeam(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if teamName != "new-team" {
+		t.Fatalf("team = %q, want new-team", teamName)
+	}
+}
+
 func TestAnalyzeRecentAggregatesTeamRunsAndGroupsMetadata(t *testing.T) {
 	workspace := t.TempDir()
 	teamDir := filepath.Join(t.TempDir(), "dev")
