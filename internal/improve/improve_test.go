@@ -158,6 +158,38 @@ func TestAnalyzeRecentAggregatesTeamRunsAndGroupsMetadata(t *testing.T) {
 	}
 }
 
+func TestAnalyzeRecentIncludesSQLMemoryMetrics(t *testing.T) {
+	workspace := t.TempDir()
+	teamDir := filepath.Join(t.TempDir(), "dev")
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, "team.yaml"), []byte("name: dev\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, "developer.md"), []byte("---\nname: developer\n---\nFix bugs.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutionEvents(t, workspace, []team.ExecutionEvent{
+		{Timestamp: "2026-07-12T10:00:00Z", RunID: "run-1", Team: "dev", TaskID: "task-1", Attempt: 1, Status: "done", Usage: team.ExecutionUsage{InputTokens: 10}},
+	})
+	writeMemoryEventStore(t, workspace, []team.RunEvent{
+		{ID: "retrieval-1", RunID: "run-1", Type: memoryRetrievedEvent, Actor: "runtime", Payload: []byte(`{"retrieval_id":"r1","token_count":2.9}`)},
+		{ID: "usage-1", RunID: "run-1", TaskID: "task-1", Type: memoryUsageRecordedEvent, Actor: "runtime", Payload: []byte(`{"disposition":"applied"}`)},
+	})
+
+	report, err := AnalyzeRecent(workspace, "dev", teamDir, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Metrics.MemoryRetrievalCount != 1 || report.Metrics.MemoryExposureCount != 1 || report.Metrics.MemoryAppliedCount != 1 {
+		t.Fatalf("memory counts = %+v", report.Metrics)
+	}
+	if report.Metrics.MemoryTokenOverhead != 0.2 || report.Metrics.MemoryAttributionCoverage != 1 {
+		t.Fatalf("memory rates = %+v", report.Metrics)
+	}
+}
+
 func writeExecutionEvents(t *testing.T, workspace string, events []team.ExecutionEvent) {
 	t.Helper()
 	lines := make([]string, 0, len(events))

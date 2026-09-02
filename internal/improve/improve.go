@@ -208,6 +208,9 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 	if _, err := analytics.loadAuditEvents(ctx, filepath.Join(workspace, "logs", "audit")); err != nil {
 		return nil, err
 	}
+	if _, err := analytics.loadMemoryEvents(ctx, workspace); err != nil {
+		return nil, err
+	}
 	if err := analytics.createIndexes(ctx); err != nil {
 		return nil, err
 	}
@@ -249,7 +252,9 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 	for _, runID := range runIDs {
 		selectedProjection = append(selectedProjection, projectionByRun[runID]...)
 	}
-	collectMemoryMetrics(workspace, selectedProjection, &metrics)
+	if err := analytics.sqlCollectMemoryMetrics(ctx, runIDs, &metrics); err != nil {
+		return nil, err
+	}
 
 	trend := make([]TrendPoint, 0, len(selectedRuns))
 	teamRevisions := uniqueTeamRevisions(selectedProjection)
@@ -263,7 +268,9 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 		if err := analytics.sqlCollectAuditMetrics(ctx, teamName, runStart, runEnd, &runMetrics); err != nil {
 			return nil, err
 		}
-		collectMemoryMetrics(workspace, projectionByRun[run.RunID], &runMetrics)
+		if err := analytics.sqlCollectMemoryMetrics(ctx, []string{run.RunID}, &runMetrics); err != nil {
+			return nil, err
+		}
 		revision := latestTeamRevision(projectionByRun[run.RunID])
 		trend = append(trend, TrendPoint{
 			RunID: run.RunID, StartedAt: unixNSToTime(run.StartUnixNS).Format(time.RFC3339), EndedAt: unixNSToTime(run.EndUnixNS).Format(time.RFC3339), TeamRevision: revision, Metrics: runMetrics,
