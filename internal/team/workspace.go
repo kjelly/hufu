@@ -28,6 +28,10 @@ func EnsureWorkspaceDirs(workspace string) error {
 			return err
 		}
 	}
+	// Every workspace-touching entrypoint calls this before doing real work,
+	// which makes it the one reliable place to sweep atomic-write orphans left
+	// by a prior process that was killed mid-write (see SweepStaleAtomicTempFiles).
+	SweepStaleAtomicTempFiles(workspace)
 	return nil
 }
 

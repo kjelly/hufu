@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestAtomicWriteFileSuccess(t *testing.T) {
@@ -38,6 +39,37 @@ func TestAtomicCreateFileNeverOverwrites(t *testing.T) {
 	}
 	if string(got) != "first" {
 		t.Fatalf("target overwritten: %q", got)
+	}
+}
+
+func TestSweepStaleAtomicTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, "logs", "event_store.jsonl.tmp.09138b0b")
+	fresh := filepath.Join(dir, "session_tree.json.tmp.f10eac63")
+	notAnOrphan := filepath.Join(dir, "session_tree.json")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{stale, fresh, notAnOrphan} {
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldTime := time.Now().Add(-2 * staleAtomicTempFileAge)
+	if err := os.Chtimes(stale, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	SweepStaleAtomicTempFiles(dir)
+
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("expected stale temp file to be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("expected recently-written temp file to survive (still in flight): %v", err)
+	}
+	if _, err := os.Stat(notAnOrphan); err != nil {
+		t.Errorf("expected non-temp file to be untouched: %v", err)
 	}
 }
 
