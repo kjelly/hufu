@@ -603,9 +603,6 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 			err = withFailureClassOverride(resultErr, FailureExecution)
 		} else {
 			output = coordinatorTaskOutput(output, typedRes)
-			if strings.TrimSpace(output) == "" {
-				output = typedRes.FormatForContext()
-			}
 		}
 	}
 	if err != nil {

@@ -415,7 +415,7 @@ func (tr *TaskResult) FormatForContext() string {
 // worker may acknowledge submit_result in prose or emit nothing after it;
 // neither should hide the data the coordinator needs to continue safely.
 func coordinatorTaskOutput(fallback string, result *TaskResult) string {
-	if result != nil && result.Source == "submitted" && strings.TrimSpace(result.Details) != "" {
+	if result != nil && result.Source == "submitted" {
 		if formatted := result.FormatForContext(); formatted != "" {
 			return formatted
 		}

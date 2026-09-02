@@ -1278,12 +1278,8 @@ retryLoop:
 			// add prose after submit_result, so validate the authoritative typed
 			// handoff rather than rejecting an otherwise valid empty final text.
 			coordinatorOutput := coordinatorTaskOutput(output, typedRes)
-			completionOutput := coordinatorOutput
-			if strings.TrimSpace(completionOutput) == "" && typedRes != nil && typedRes.Source == "submitted" {
-				completionOutput = typedRes.FormatForContext()
-			}
 			if err == nil {
-				if verr := validateTaskOutput(task, completionOutput); verr != nil {
+				if verr := validateTaskOutput(task, coordinatorOutput); verr != nil {
 					err = fmt.Errorf("task completion validation failed: %w", verr)
 					c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("completion validation failed: %v", verr)).withTodoID(todoID))
 				}
@@ -1340,7 +1336,7 @@ retryLoop:
 			// Adversarial verification: skeptic votes try to refute the result.
 			// A refutation flows into the same retry path as a failed verify.
 			if err == nil && task.AdversarialVerify > 0 && c.AgentPool().Sidecar() != nil {
-				if averr := c.adversarialVerify(parentCtx, task, todoID, output); averr != nil {
+				if averr := c.adversarialVerify(parentCtx, task, todoID, coordinatorOutput); averr != nil {
 					err = averr
 					c.report(c.newEvent("skeptic").withAgent(agentName).withMessage(averr.Error()).withTodoID(todoID))
 				} else {
@@ -2420,6 +2416,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 }
 
 func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, task TaskDef, agentName, resolvedModel string, result *TaskResult, output string) (string, error) {
+	output = coordinatorTaskOutput(output, result)
 	if err := c.terminalTaskFailure(ctx, item.ID); err != nil {
 		detail := c.FailureDetail(err, FailureSourceError)
 		c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureVerify, TaskBlocked, output)
@@ -2439,9 +2436,21 @@ func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, 
 			return "", err
 		}
 	}
+	if err := validateTaskOutput(task, output); err != nil {
+		completionErr := fmt.Errorf("task completion validation failed after protocol repair: %w", err)
+		detail := c.FailureDetail(completionErr, FailureSourceError)
+		c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
+		return "", completionErr
+	}
 	summary := strings.TrimSpace(result.Summary)
 	if summary == "" {
 		summary = "protocol result-only repair succeeded"
+	}
+	if c.session != nil && c.session.Workspace != "" {
+		taskTS := time.Now().Format("20060102-150405")
+		if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "done", task.Goal, output); err != nil {
+			log.Printf("warning: failed to write task file: %v", err)
+		}
 	}
 	if err := c.commitTaskTransitionFromCurrent(ctx, item.ID, TaskDone, summary, output, nil); err != nil {
 		return "", err
