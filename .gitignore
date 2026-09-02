@@ -13,3 +13,5 @@ docs/tmp
 /tmp
 .codex
 .worktrees/
+spec.md
+review.md
