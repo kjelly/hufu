@@ -97,6 +97,56 @@ func TestCLIAuditVerifyJSONIsSingleObjectOnStdout(t *testing.T) {
 	}
 }
 
+func TestCLIAuditExplainMissingRunFlagIsUsageError(t *testing.T) {
+	root := newRootCommand()
+	root.SetArgs([]string{"audit", "explain", "--workspace", t.TempDir()})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected an error when --run is omitted")
+	}
+	withCode, ok := err.(interface{ ProcessExitCode() int })
+	if !ok || withCode.ProcessExitCode() != 2 {
+		t.Fatalf("err = %v, want ProcessExitCode() == 2", err)
+	}
+}
+
+func TestCLIAuditExplainPassOnLegitimateFailure(t *testing.T) {
+	workspace, runID := buildAuditCLIFixture(t)
+	root := newRootCommand()
+	root.SetArgs([]string{"audit", "explain", "--run", runID, "--workspace", workspace})
+
+	stdout := captureStdout(t, func() {
+		if err := root.Execute(); err != nil {
+			t.Fatalf("audit explain: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "was certified FAILED") {
+		t.Fatalf("stdout = %q, want it to mention the certified outcome", stdout)
+	}
+}
+
+func TestCLIAuditExplainJSONIsSingleObjectOnStdout(t *testing.T) {
+	workspace, runID := buildAuditCLIFixture(t)
+	root := newRootCommand()
+	root.SetArgs([]string{"audit", "explain", "--run", runID, "--workspace", workspace, "--json"})
+
+	stdout := captureStdout(t, func() {
+		if err := root.Execute(); err != nil {
+			t.Fatalf("audit explain --json: %v", err)
+		}
+	})
+	var result auditverify.ExplainResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &result); err != nil {
+		t.Fatalf("stdout is not a single JSON object: %v\nstdout=%q", err, stdout)
+	}
+	if result.Verification == nil || result.Verification.RunID != runID {
+		t.Fatalf("decoded result = %#v, want verification for %s", result, runID)
+	}
+	if result.Witness == nil || result.Witness.Outcome != team.RunOutcomeFailed {
+		t.Fatalf("decoded witness = %#v, want outcome failed", result.Witness)
+	}
+}
+
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()

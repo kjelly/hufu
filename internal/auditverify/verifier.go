@@ -8,6 +8,18 @@ import (
 	"github.com/kjelly/hufu/internal/team"
 )
 
+// runProjection is the intermediate, already-verified state one lineage scan
+// produces. VerifyWorkspaceRun and explain.go's witness/explanation builder
+// both need it, so it is computed once per invocation (spec.md §46) and
+// shared rather than recomputed.
+type runProjection struct {
+	lineage          []team.RunEvent
+	terminalEvent    team.RunEvent
+	runResult        *team.RunResult
+	tasks            []*team.TodoItem
+	requiredCriteria map[string]bool
+}
+
 // VerifyWorkspaceRun is the core audit algorithm (spec.md §34). It never
 // re-derives a completion policy: it only checks whether the run's own
 // persisted terminal decision is backed by durable, tamper-evident evidence,
@@ -16,12 +28,20 @@ import (
 // (bad usage, e.g. an unknown run id); a returned result with Verdict
 // pass/fail/incomplete means verification ran to completion.
 func VerifyWorkspaceRun(ctx context.Context, workspace string, runID string, opts VerifyOptions) (*AuditVerificationResult, error) {
+	result, _, err := runWorkspaceAudit(ctx, workspace, runID, opts)
+	return result, err
+}
+
+// runWorkspaceAudit is VerifyWorkspaceRun's implementation. It additionally
+// returns the runProjection so callers that need to build a DecisionWitness
+// (hufu audit explain) do not have to re-scan the event log.
+func runWorkspaceAudit(ctx context.Context, workspace string, runID string, opts VerifyOptions) (*AuditVerificationResult, *runProjection, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	runID = strings.TrimSpace(runID)
 	if runID == "" {
-		return nil, fmt.Errorf("run id is required")
+		return nil, nil, fmt.Errorf("run id is required")
 	}
 
 	result := &AuditVerificationResult{SchemaVersion: AuditSchemaVersion, RunID: runID}
@@ -32,7 +52,7 @@ func VerifyWorkspaceRun(ctx context.Context, workspace string, runID string, opt
 		result.Integrity = AuditDimensionResult{Status: AuditDimensionFail, Reason: err.Error()}
 		result.addFinding(CodeEventChainBroken, FindingSeverityCritical, err.Error(), "", 0, "")
 		result.finalizeVerdict()
-		return result, nil
+		return result, nil, nil
 	}
 
 	chain := VerifyEventChain(lineage)
@@ -41,19 +61,19 @@ func VerifyWorkspaceRun(ctx context.Context, workspace string, runID string, opt
 		result.Integrity = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 		result.addFinding(CodeEventHashMismatch, FindingSeverityCritical, reason, "", 0, "")
 		result.finalizeVerdict()
-		return result, nil
+		return result, nil, nil
 	}
 
 	terminals, runExists := runTerminalEvents(lineage, runID)
 	if !runExists {
-		return nil, fmt.Errorf("run %q was not found in this workspace's event log", runID)
+		return nil, nil, fmt.Errorf("run %q was not found in this workspace's event log", runID)
 	}
 	if terminalConflict(terminals) {
 		reason := fmt.Sprintf("run %q has %d conflicting terminal run_finished events", runID, len(terminals))
 		result.Integrity = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 		result.addFinding(CodeTerminalConflict, FindingSeverityCritical, reason, "", 0, "")
 		result.finalizeVerdict()
-		return result, nil
+		return result, nil, nil
 	}
 	if len(terminals) == 0 {
 		result.Integrity = AuditDimensionResult{Status: AuditDimensionPass, Reason: fmt.Sprintf("event chain verified (%d events); run has no terminal event yet", chain.Events)}
@@ -65,7 +85,7 @@ func VerifyWorkspaceRun(ctx context.Context, workspace string, runID string, opt
 		result.Recheck = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "no terminal event"}
 		result.addFinding(CodeTerminalMissing, FindingSeverityWarning, reason, "", 0, "")
 		result.finalizeVerdict()
-		return result, nil
+		return result, nil, nil
 	}
 	terminalEvent := terminals[0]
 	result.Integrity = AuditDimensionResult{Status: AuditDimensionPass, Reason: fmt.Sprintf("event chain verified (%d events); terminal event %s (hash %s)", chain.Events, terminalEvent.ID, shortHash(terminalEvent.Hash))}
@@ -85,7 +105,7 @@ func VerifyWorkspaceRun(ctx context.Context, workspace string, runID string, opt
 		}
 	}
 	if terminalIndex < 0 {
-		return nil, fmt.Errorf("internal error: terminal event %q not found in its own lineage", terminalEvent.ID)
+		return nil, nil, fmt.Errorf("internal error: terminal event %q not found in its own lineage", terminalEvent.ID)
 	}
 	session := team.ReduceToSessionData(lineage[:terminalIndex+1])
 	if session == nil || session.RunResult == nil || session.RunResult.RunID != runID {
@@ -97,10 +117,11 @@ func VerifyWorkspaceRun(ctx context.Context, workspace string, runID string, opt
 		result.Recheck = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: reason}
 		result.addFinding(CodeCompletionUnjustified, FindingSeverityCritical, reason, "", 0, "")
 		result.finalizeVerdict()
-		return result, nil
+		return result, nil, nil
 	}
 	runResult := session.RunResult
 	result.ExpectedOutcome = runResult.Outcome
+	requiredCriteria := requiredCriteriaIDs(lineage[:terminalIndex+1], runID)
 
 	// Phase C: evidence manifest.
 	evidenceValid, evidenceDim := verifyEvidenceDimension(ctx, workspace, runResult, result)
@@ -110,7 +131,7 @@ func VerifyWorkspaceRun(ctx context.Context, workspace string, runID string, opt
 	result.Provenance = verifyProvenanceDimension(runID, runResult, session.Tasks, result)
 
 	// Phase E: acceptance.
-	result.Acceptance = verifyAcceptanceDimension(runResult, result)
+	result.Acceptance = verifyAcceptanceDimension(runResult, requiredCriteria, result)
 
 	// Phase F: completion derivation.
 	requiredTasksComplete := allRequiredTasksComplete(session.Tasks)
@@ -139,7 +160,11 @@ func VerifyWorkspaceRun(ctx context.Context, workspace string, runID string, opt
 	}
 
 	result.finalizeVerdict()
-	return result, nil
+	projection := &runProjection{
+		lineage: lineage, terminalEvent: terminalEvent, runResult: runResult,
+		tasks: session.Tasks, requiredCriteria: requiredCriteria,
+	}
+	return result, projection, nil
 }
 
 // verifyEvidenceDimension re-verifies the run's evidence manifest by calling
@@ -272,7 +297,16 @@ func ambiguousSuccessfulReceipts(item *team.TodoItem, runID string) (bool, int) 
 // verifyAcceptanceDimension checks that the persisted AcceptanceResult is
 // internally consistent, and that a completed run's acceptance state is
 // actually Passed (spec.md §14, §40).
-func verifyAcceptanceDimension(runResult *team.RunResult, result *AuditVerificationResult) AuditDimensionResult {
+//
+// A non-passed criterion does not by itself contradict an overall Passed
+// state: coordinator_tools.go only fails acceptance over criteria whose
+// AcceptanceCriterion.Required is true (an optional criterion may legitimately
+// still be failed/pending). requiredIDs (from requiredCriteriaIDs) tells us,
+// for ids it has an entry for, whether that criterion was required; an id
+// with no entry has an unknown Required flag and is never treated as
+// "confirmed required" -- this must not be flagged as a contradiction on
+// evidence this thin.
+func verifyAcceptanceDimension(runResult *team.RunResult, requiredIDs map[string]bool, result *AuditVerificationResult) AuditDimensionResult {
 	acceptance := runResult.Acceptance
 	state := team.AcceptanceNotConfigured
 	if acceptance != nil {
@@ -288,8 +322,11 @@ func verifyAcceptanceDimension(runResult *team.RunResult, result *AuditVerificat
 	}
 	if state == team.AcceptancePassed {
 		for _, cr := range acceptance.CriterionResults {
+			if !requiredIDs[cr.ID] {
+				continue
+			}
 			if cr.State != "" && cr.State != team.CriterionPassed {
-				reason := fmt.Sprintf("acceptance is passed but criterion %q is %q", cr.ID, cr.State)
+				reason := fmt.Sprintf("acceptance is passed but required criterion %q is %q", cr.ID, cr.State)
 				result.addFinding(CodeCriterionEvidenceMissing, FindingSeverityCritical, reason, "", 0, cr.ID)
 				return AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 			}

@@ -21,6 +21,7 @@ type taskEventPayload struct {
 	Status            string                  `json:"status"`
 	Desc              string                  `json:"desc,omitempty"`
 	Agent             string                  `json:"agent,omitempty"`
+	Advances          []string                `json:"advances,omitempty"`
 	ExecutionReceipts []team.ExecutionReceipt `json:"execution_receipts,omitempty"`
 }
 
@@ -80,7 +81,7 @@ func buildCompletedRunFixture(t *testing.T) fixture {
 		ExitCode: intPtr(0), ProducerID: "worker", TranscriptRef: transcriptRef.ID,
 	}
 	mustAppend(team.RunEvent{Type: "task_completed", Actor: "worker", RunID: runID, TaskID: taskID,
-		Payload: mustJSON(t, taskEventPayload{ID: taskID, Status: "done", Desc: "do the thing", Agent: "worker", ExecutionReceipts: []team.ExecutionReceipt{receipt}})})
+		Payload: mustJSON(t, taskEventPayload{ID: taskID, Status: "done", Desc: "do the thing", Agent: "worker", Advances: []string{"build"}, ExecutionReceipts: []team.ExecutionReceipt{receipt}})})
 
 	manifest := &team.EvidenceManifest{
 		RunID:        runID,
