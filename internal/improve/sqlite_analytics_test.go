@@ -39,7 +39,7 @@ func TestOpenSQLiteAnalyticsSession_CreatesTempSchema(t *testing.T) {
 	}
 	defer func() { _ = session.Close() }()
 
-	wantTables := []string{"execution_events", "execution_event_skills", "audit_events"}
+	wantTables := []string{"execution_events", "execution_event_skills", "audit_events", "memory_events"}
 	for _, name := range wantTables {
 		var got string
 		err := session.conn.QueryRowContext(ctx,

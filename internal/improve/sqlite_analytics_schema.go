@@ -77,6 +77,27 @@ CREATE TEMP TABLE audit_events (
     event             TEXT NOT NULL DEFAULT ''
 );`
 
+// memoryEventsSchema stores only the event identity and scalar fields derived
+// from memory-event payloads. The raw RunEvent payload is intentionally not a
+// column: it may contain memory content or context summaries and is needed
+// only transiently while the streaming loader decodes each event.
+const memoryEventsSchema = `
+CREATE TEMP TABLE memory_events (
+    event_seq         INTEGER PRIMARY KEY,
+    run_id            TEXT NOT NULL DEFAULT '',
+    task_id           TEXT NOT NULL DEFAULT '',
+    attempt           INTEGER NOT NULL DEFAULT 0,
+    type              TEXT NOT NULL DEFAULT '',
+    timestamp_raw     TEXT NOT NULL DEFAULT '',
+    timestamp_unix_ns INTEGER,
+    retrieval_id      TEXT NOT NULL DEFAULT '',
+    reason_code       TEXT NOT NULL DEFAULT '',
+    token_count       INTEGER NOT NULL DEFAULT 0,
+    disposition       TEXT NOT NULL DEFAULT '',
+    signal            TEXT NOT NULL DEFAULT '',
+    direction         TEXT NOT NULL DEFAULT ''
+);`
+
 // analyticsSchemaStatements build the TEMP schema for a fresh session.
 // Indexes are deliberately not part of this list — spec.md §7 requires
 // building them only after bulk load so per-row INSERTs during ingestion
@@ -85,6 +106,7 @@ var analyticsSchemaStatements = []string{
 	executionEventsSchema,
 	executionEventSkillsSchema,
 	auditEventsSchema,
+	memoryEventsSchema,
 }
 
 func (s *sqliteAnalyticsSession) createSchema(ctx context.Context) error {
@@ -108,6 +130,7 @@ var analyticsIndexStatements = []string{
 	`CREATE INDEX temp.idx_execution_task_type ON execution_events(task_type, run_id)`,
 	`CREATE INDEX temp.idx_skill_task ON execution_event_skills(skill, run_id, task_id)`,
 	`CREATE INDEX temp.idx_audit_team_time ON audit_events(team, timestamp_unix_ns, agent, event)`,
+	`CREATE INDEX temp.idx_memory_type_run ON memory_events(type, run_id, event_seq)`,
 }
 
 // createIndexes builds every analytics index. Safe to call once, after all
