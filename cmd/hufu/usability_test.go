@@ -78,31 +78,6 @@ func TestReadAgentFrontmatter_NoFrontmatter(t *testing.T) {
 	}
 }
 
-func TestWriteIfAbsent(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "team.yaml")
-
-	created, err := writeIfAbsent(path, "first")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !created {
-		t.Error("expected first write to create the file")
-	}
-
-	created, err = writeIfAbsent(path, "second")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if created {
-		t.Error("expected second write to be a no-op")
-	}
-	data, _ := os.ReadFile(path)
-	if string(data) != "first" {
-		t.Errorf("file was overwritten: %q", string(data))
-	}
-}
-
 func TestCollectListedTeam(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "worker.md"), []byte(`---

@@ -193,12 +193,11 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	})
 	_ = initCmd.RegisterFlagCompletionFunc("template", func(_ *cobra.Command, _ []string, prefix string) ([]string, cobra.ShellCompDirective) {
 		var names []string
-		for name := range scaffoldTemplates {
+		for _, name := range templateNames() {
 			if strings.HasPrefix(name, prefix) {
 				names = append(names, name)
 			}
 		}
-		sort.Strings(names)
 		return names, cobra.ShellCompDirectiveNoFileComp
 	})
 

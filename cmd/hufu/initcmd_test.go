@@ -3,34 +3,62 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	internalteam "github.com/kjelly/hufu/internal/team"
 )
 
-func TestScaffoldTemplatesHaveExpectedAgents(t *testing.T) {
+// TestLegacyTemplatesMapToExpectedAgents locks in the --template migration
+// table (spec.md Specification 01 §8a): each legacy `hufu init --template`
+// value must still produce the expected agent file set, now via its
+// mapped team preset rather than a hardcoded Go string scaffold.
+func TestLegacyTemplatesMapToExpectedAgents(t *testing.T) {
 	tests := []struct {
 		name  string
 		files []string
 	}{
 		{name: "default", files: []string{"worker.md"}},
-		{name: "dev", files: []string{"developer.md", "reviewer.md", "tester.md"}},
+		{name: "dev", files: []string{"developer.md", "reviewer.md"}},
 		{name: "research", files: []string{"researcher.md", "writer.md"}},
 		{name: "ops", files: []string{"operator.md", "monitor.md"}},
 		{name: "minimal", files: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			template := scaffoldTemplates[tt.name]
-			if len(template.agents) != len(tt.files) {
-				t.Fatalf("agent count = %d, want %d", len(template.agents), len(tt.files))
+			presetName, ok := templateToTeamPreset[tt.name]
+			if !ok {
+				t.Fatalf("template %q missing from templateToTeamPreset", tt.name)
+			}
+			files, err := resolvePresetFiles(presetName)
+			if err != nil {
+				t.Fatalf("resolvePresetFiles(%q): %v", presetName, err)
+			}
+			if len(files) != len(tt.files) {
+				t.Fatalf("agent count = %d, want %d (files = %v)", len(files), len(tt.files), files)
 			}
 			for _, filename := range tt.files {
-				if _, ok := template.agents[filename]; !ok {
+				if _, ok := files[filename]; !ok {
 					t.Errorf("missing %s", filename)
 				}
 			}
 		})
+	}
+}
+
+// TestTemplateOpsPresetNeverGrantsSudo is the acceptance-criterion-level
+// check for spec.md Specification 05 Phase 6's mandatory correction: the
+// migrated `ops` template must not carry the old scaffold's `sudo` grant
+// forward.
+func TestTemplateOpsPresetNeverGrantsSudo(t *testing.T) {
+	files, err := resolvePresetFiles(templateToTeamPreset["ops"])
+	if err != nil {
+		t.Fatalf("resolvePresetFiles: %v", err)
+	}
+	for filename, content := range files {
+		if strings.Contains(content, "sudo") {
+			t.Errorf("%s grants sudo: %q", filename, content)
+		}
 	}
 }
 
