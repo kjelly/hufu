@@ -146,14 +146,14 @@ func NewModelSpecRegistry() *ModelSpecRegistry {
 func (r *ModelSpecRegistry) initDefaults() {
 	// Default model specs for known families
 	defaults := []ModelContextSpec{
-		{ModelID: "gpt-4o", ContextWindow: 128000, MaxOutputTokens: 16384, SafetyMarginTokens: 2000, Estimator: "tiktoken"},
-		{ModelID: "gpt-4", ContextWindow: 8192, MaxOutputTokens: 4096, SafetyMarginTokens: 1000, Estimator: "tiktoken"},
-		{ModelID: "claude-3-5-sonnet", ContextWindow: 200000, MaxOutputTokens: 8192, SafetyMarginTokens: 4000, Estimator: "claude"},
-		{ModelID: "claude-3-7-sonnet", ContextWindow: 200000, MaxOutputTokens: 8192, SafetyMarginTokens: 4000, Estimator: "claude"},
-		{ModelID: "qwen2.5", ContextWindow: 128000, MaxOutputTokens: 8192, SafetyMarginTokens: 2000, Estimator: "qwen"},
-		{ModelID: "qwen3", ContextWindow: 128000, MaxOutputTokens: 8192, SafetyMarginTokens: 2000, Estimator: "qwen"},
-		{ModelID: "llama3.1", ContextWindow: 128000, MaxOutputTokens: 8192, SafetyMarginTokens: 2000, Estimator: "llama"},
-		{ModelID: "llama3.2", ContextWindow: 128000, MaxOutputTokens: 8192, SafetyMarginTokens: 2000, Estimator: "llama"},
+		{ModelID: "gpt-4o", ContextWindow: 128000, ContextWindowSource: "fallback", MaxOutputTokens: 16384, SafetyMarginTokens: 2000, Estimator: "tiktoken", IsEstimated: true},
+		{ModelID: "gpt-4", ContextWindow: 8192, ContextWindowSource: "fallback", MaxOutputTokens: 4096, SafetyMarginTokens: 1000, Estimator: "tiktoken", IsEstimated: true},
+		{ModelID: "claude-3-5-sonnet", ContextWindow: 200000, ContextWindowSource: "fallback", MaxOutputTokens: 8192, SafetyMarginTokens: 4000, Estimator: "claude", IsEstimated: true},
+		{ModelID: "claude-3-7-sonnet", ContextWindow: 200000, ContextWindowSource: "fallback", MaxOutputTokens: 8192, SafetyMarginTokens: 4000, Estimator: "claude", IsEstimated: true},
+		{ModelID: "qwen2.5", ContextWindow: 128000, ContextWindowSource: "fallback", MaxOutputTokens: 8192, SafetyMarginTokens: 2000, Estimator: "qwen", IsEstimated: true},
+		{ModelID: "qwen3", ContextWindow: 128000, ContextWindowSource: "fallback", MaxOutputTokens: 8192, SafetyMarginTokens: 2000, Estimator: "qwen", IsEstimated: true},
+		{ModelID: "llama3.1", ContextWindow: 128000, ContextWindowSource: "fallback", MaxOutputTokens: 8192, SafetyMarginTokens: 2000, Estimator: "llama", IsEstimated: true},
+		{ModelID: "llama3.2", ContextWindow: 128000, ContextWindowSource: "fallback", MaxOutputTokens: 8192, SafetyMarginTokens: 2000, Estimator: "llama", IsEstimated: true},
 	}
 	for _, spec := range defaults {
 		r.specs[spec.ModelID] = spec
@@ -192,7 +192,7 @@ func RegisterConfiguredContextWindow(modelIDs []string, window int) {
 		spec.ContextWindow = window
 		spec.ContextWindowSource = "operator"
 		spec.IsEstimated = false
-		globalRegistry.RegisterSpec(spec)
+		globalRegistry.registerContextSpec(spec)
 	}
 }
 
@@ -200,11 +200,10 @@ func RegisterConfiguredContextWindow(modelIDs []string, window int) {
 // /models endpoint for each model in modelIDs and registers its advertised
 // context length as an override in the global model spec registry, so
 // context-budget accounting reflects the model actually being talked to
-// instead of Hufu's static per-family fallback (spec.md item 2). Only
-// models whose current spec is already flagged estimated are probed —
-// models with an exact hardcoded entry (e.g. "gpt-4o", "claude-3-5-sonnet")
-// are skipped, since those specs are already accurate and probing them
-// would just be a wasted round-trip to the provider.
+// instead of Hufu's static per-family fallback (spec.md item 2). Static
+// family entries are estimated fallbacks and remain eligible for probing.
+// Explicit operator values are the only entries excluded here because they
+// have higher authority than provider metadata.
 //
 // Best-effort and bounded: each probe races against its own timeout, probes
 // run concurrently, and a failed or unreachable endpoint is silently
@@ -217,12 +216,10 @@ func DetectAndCacheProviderContextLengths(ctx context.Context, baseURL, apiKey s
 			continue
 		}
 		seen[modelID] = true
-		if !globalRegistry.GetSpec(modelID).IsEstimated {
+		if globalRegistry.GetSpec(modelID).ContextWindowSource == "operator" {
 			continue
 		}
-		wg.Add(1)
-		go func(modelID string) {
-			defer wg.Done()
+		wg.Go(func() {
 			_, name := agent.ParseModelProvider(modelID)
 			probeCtx, cancel := context.WithTimeout(ctx, agent.ProviderContextProbeTimeout)
 			defer cancel()
@@ -236,8 +233,8 @@ func DetectAndCacheProviderContextLengths(ctx context.Context, baseURL, apiKey s
 			spec.ContextWindow = length
 			spec.ContextWindowSource = capacity.Source
 			spec.IsEstimated = false
-			globalRegistry.RegisterSpec(spec)
-		}(modelID)
+			globalRegistry.registerContextSpec(spec)
+		})
 	}
 	wg.Wait()
 }
@@ -253,6 +250,31 @@ func (r *ModelSpecRegistry) RegisterSpec(spec ModelContextSpec) {
 	r.specs[strings.ToLower(spec.ModelID)] = spec
 }
 
+// registerContextSpec atomically applies a provider/configuration context
+// update. Operator-declared capacity is authoritative and cannot be replaced
+// by a lower-authority provider or runtime update that raced with it. Other
+// source precedence and observed-window behavior remain unchanged.
+func (r *ModelSpecRegistry) registerContextSpec(spec ModelContextSpec) {
+	if r == nil || spec.ContextWindow <= 0 || strings.TrimSpace(spec.ModelID) == "" {
+		return
+	}
+	key := strings.ToLower(strings.TrimSpace(spec.ModelID))
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	current, ok := r.lookupSpecLocked(key)
+	if ok && current.ContextWindowSource == "operator" && spec.ContextWindowSource != "operator" {
+		return
+	}
+	if ok && spec.ContextWindowSource == agent.ContextCapacitySourceObserved &&
+		current.ContextWindowSource == agent.ContextCapacitySourceObserved &&
+		current.ContextWindow <= spec.ContextWindow {
+		return
+	}
+	r.specs[key] = spec
+}
+
 // RegisterObservedContextWindow records a runtime limit reported by a
 // provider. Runtime observations are authoritative for the current process,
 // but never persisted as model metadata: another local server may expose a
@@ -262,14 +284,11 @@ func (r *ModelSpecRegistry) RegisterObservedContextWindow(modelID string, window
 		return
 	}
 	spec := r.GetSpec(modelID)
-	if spec.ContextWindow > 0 && spec.ContextWindow <= window && spec.ContextWindowSource == agent.ContextCapacitySourceObserved {
-		return
-	}
 	spec.ModelID = strings.ToLower(modelID)
 	spec.ContextWindow = window
 	spec.ContextWindowSource = agent.ContextCapacitySourceObserved
 	spec.IsEstimated = false
-	r.RegisterSpec(spec)
+	r.registerContextSpec(spec)
 }
 
 // ParseObservedContextWindow extracts a provider-reported effective context
@@ -305,15 +324,7 @@ func (r *ModelSpecRegistry) GetSpec(modelID string) ModelContextSpec {
 	// Strip provider prefix if present e.g. "ollama/qwen3:8b" -> "qwen3:8b"
 	parts := strings.Split(lower, "/")
 	name := parts[len(parts)-1]
-	nameClean := strings.Split(name, ":")[0]
-
-	if spec, ok := r.specs[lower]; ok {
-		return spec
-	}
-	if spec, ok := r.specs[name]; ok {
-		return spec
-	}
-	if spec, ok := r.specs[nameClean]; ok {
+	if spec, ok := r.lookupSpecLocked(lower); ok {
 		return spec
 	}
 
@@ -353,6 +364,24 @@ func (r *ModelSpecRegistry) GetSpec(modelID string) ModelContextSpec {
 	// §5.3: record/log that this model's token counts are estimated, not exact.
 	warnEstimatedOnce(modelID, estimator)
 	return spec
+}
+
+func (r *ModelSpecRegistry) lookupSpecLocked(modelID string) (ModelContextSpec, bool) {
+	lower := strings.ToLower(modelID)
+	parts := strings.Split(lower, "/")
+	name := parts[len(parts)-1]
+	nameClean := strings.Split(name, ":")[0]
+
+	if spec, ok := r.specs[lower]; ok {
+		return spec, true
+	}
+	if spec, ok := r.specs[name]; ok {
+		return spec, true
+	}
+	if spec, ok := r.specs[nameClean]; ok {
+		return spec, true
+	}
+	return ModelContextSpec{}, false
 }
 
 // DefaultTokenCounter provides model-aware and family-based token counting with conservative margin.

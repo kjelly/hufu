@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 
@@ -25,6 +28,18 @@ func TestModelSpecRegistry(t *testing.T) {
 		}
 		if spec.Estimator != "tiktoken" {
 			t.Errorf("gpt-4o estimator = %q, want tiktoken", spec.Estimator)
+		}
+		if !spec.IsEstimated || spec.ContextWindowSource != "fallback" {
+			t.Errorf("gpt-4o provenance = %#v, want estimated fallback", spec)
+		}
+	})
+
+	t.Run("static family entries are estimated fallbacks", func(t *testing.T) {
+		for _, modelID := range []string{"gpt-4o", "gpt-4", "claude-3-5-sonnet", "claude-3-7-sonnet", "qwen2.5", "qwen3", "llama3.1", "llama3.2"} {
+			spec := reg.GetSpec(modelID)
+			if !spec.IsEstimated || spec.ContextWindowSource != "fallback" {
+				t.Errorf("%s provenance = %#v, want estimated fallback", modelID, spec)
+			}
 		}
 	})
 
@@ -217,20 +232,125 @@ func TestDetectAndCacheOllamaContextLengths(t *testing.T) {
 	}
 }
 
-func TestDetectAndCacheOllamaContextLengths_SkipsKnownModels(t *testing.T) {
-	var called bool
+func TestDetectAndCacheOllamaContextLengths_ProbesStaticFamilyModels(t *testing.T) {
+	var calls atomic.Int32
+	original := map[string]ModelContextSpec{
+		"qwen3":    globalRegistry.GetSpec("qwen3"),
+		"llama3.2": globalRegistry.GetSpec("llama3.2"),
+	}
+	t.Cleanup(func() {
+		for _, spec := range original {
+			globalRegistry.RegisterSpec(spec)
+		}
+	})
 	srv := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
+		calls.Add(1)
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("probe path = %q, want /v1/models", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "qwen3", "max_context_window": 65_536},
+				{"id": "llama3.2", "max_context_window": 32_768},
+			},
+		})
 	}))
 	defer srv.Close()
 
-	// gpt-4o has an exact hardcoded registry entry (not estimated), so it must
-	// not be probed over the network at all.
-	DetectAndCacheOllamaContextLengths(context.Background(), srv.URL+"/v1", "", []string{"gpt-4o"})
+	DetectAndCacheOllamaContextLengths(context.Background(), srv.URL+"/v1", "", []string{"qwen3", "llama3.2"})
 
-	if called {
-		t.Error("probed a model with an exact (non-estimated) registry entry; should have been skipped")
+	if calls.Load() != 2 {
+		t.Fatalf("provider probe calls = %d, want 2", calls.Load())
+	}
+	for modelID, want := range map[string]int{"qwen3": 65_536, "llama3.2": 32_768} {
+		spec := globalRegistry.GetSpec(modelID)
+		if spec.ContextWindow != want || spec.ContextWindowSource != "provider_metadata" || spec.IsEstimated {
+			t.Errorf("%s spec = %#v, want probed provider metadata", modelID, spec)
+		}
+	}
+}
+
+func TestDetectAndCacheProviderContextLengthsPreservesOperatorOverride(t *testing.T) {
+	var calls atomic.Int32
+	srv := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{"id": "qwen3", "max_context_window": 65_536}},
+		})
+	}))
+	defer srv.Close()
+
+	modelID := "qwen3"
+	prior := globalRegistry.GetSpec(modelID)
+	t.Cleanup(func() {
+		globalRegistry.RegisterSpec(prior)
+	})
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID: modelID, ContextWindow: 8_192, ContextWindowSource: "operator", IsEstimated: false,
+	})
+	DetectAndCacheProviderContextLengths(context.Background(), srv.URL+"/v1", "", []string{modelID})
+
+	spec := globalRegistry.GetSpec(modelID)
+	if calls.Load() != 0 {
+		t.Fatalf("operator override was probed: %d calls", calls.Load())
+	}
+	if spec.ContextWindow != 8_192 || spec.ContextWindowSource != "operator" {
+		t.Fatalf("operator override changed: %#v", spec)
+	}
+	globalRegistry.RegisterObservedContextWindow(modelID, 4_096)
+	spec = globalRegistry.GetSpec(modelID)
+	if spec.ContextWindow != 8_192 || spec.ContextWindowSource != "operator" {
+		t.Fatalf("observed context overwrote operator override: %#v", spec)
+	}
+}
+
+func TestDetectAndCacheProviderContextLengthsOperatorWinsConcurrentProbe(t *testing.T) {
+	modelID := "qwen3"
+	prior := globalRegistry.GetSpec(modelID)
+	t.Cleanup(func() {
+		globalRegistry.RegisterSpec(prior)
+	})
+
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseProbe) })
+	t.Cleanup(release)
+	server := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		close(probeStarted)
+		<-releaseProbe
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{"id": modelID, "max_context_window": 65_536}},
+		})
+	}))
+	defer server.Close()
+
+	done := make(chan struct{})
+	go func() {
+		DetectAndCacheProviderContextLengths(context.Background(), server.URL+"/v1", "", []string{modelID})
+		close(done)
+	}()
+
+	select {
+	case <-probeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("provider probe did not reach the barrier")
+	}
+	RegisterConfiguredContextWindow([]string{modelID}, 8_192)
+	release()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("provider probe did not complete")
+	}
+
+	spec := globalRegistry.GetSpec(modelID)
+	if spec.ContextWindow != 8_192 || spec.ContextWindowSource != "operator" || spec.IsEstimated {
+		t.Fatalf("concurrent provider probe overwrote operator context: %#v", spec)
 	}
 }
 
