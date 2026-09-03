@@ -73,8 +73,14 @@ var registry = map[string]AgentPreset{
 // and trims surrounding whitespace, matching how other Hufu authoring
 // fields (e.g. tool names) are normalized.
 func Lookup(name string) (AgentPreset, bool) {
-	p, ok := registry[strings.ToLower(strings.TrimSpace(name))]
+	p, ok := registry[normalizePresetName(name)]
 	return p, ok
+}
+
+// normalizePresetName matches preset names case-insensitively and trims
+// surrounding whitespace. Shared by agent and team preset lookup.
+func normalizePresetName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 // Names returns every built-in preset name, sorted, for error messages and
