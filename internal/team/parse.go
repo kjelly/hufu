@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -143,6 +144,57 @@ type teamConfigYAML struct {
 	MemoryLearning   rawMemoryLearningPolicy `yaml:"memory-learning"`
 	Compaction       rawCompactionPolicy     `yaml:"compaction"`
 	Tasks            []TaskDef               `yaml:"tasks"`
+	Advanced         rawAdvancedSection      `yaml:"advanced"`
+}
+
+// rawAdvancedSection is the authoring-time `advanced:` namespace (spec.md
+// Specification 01 §9): a purely optional alternative spelling for these
+// same fields at the top level. mergeAdvancedNamespace folds it back into
+// the legacy top-level fields before any other logic in this file runs, so
+// nothing downstream needs to know this namespace exists. Tasks is
+// declared here only so `advanced: tasks:` decodes under this file's
+// strict teamConfigYAML — like the legacy top-level Tasks field above, it
+// is not itself consumed here; loadTeamContractTasks re-parses tasks
+// (legacy and advanced) independently, since it is the actual source of
+// session.ContractTasks.
+type rawAdvancedSection struct {
+	Workflow     agent.WorkflowConfig     `yaml:"workflow"`
+	Tasks        []TaskDef                `yaml:"tasks"`
+	Reliability  rawReliabilityConfig     `yaml:"reliability"`
+	Verification agent.VerificationConfig `yaml:"verification"`
+	Retry        agent.RetryConfig        `yaml:"retry"`
+}
+
+// mergeAdvancedNamespace normalizes yc.Advanced's fields into yc's
+// legacy top-level fields. A field defined in both forms fails closed
+// (Specification 01 §9 "Conflict Rule": "Hufu must not silently choose
+// one") rather than picking a winner.
+func mergeAdvancedNamespace(yc *teamConfigYAML) error {
+	if len(yc.Advanced.Workflow.Phases) > 0 {
+		if len(yc.Workflow.Phases) > 0 {
+			return errors.New("\"workflow\" is defined both at the top level and under \"advanced\"; remove one")
+		}
+		yc.Workflow = yc.Advanced.Workflow
+	}
+	if !reflect.DeepEqual(yc.Advanced.Reliability, rawReliabilityConfig{}) {
+		if !reflect.DeepEqual(yc.Reliability, rawReliabilityConfig{}) {
+			return errors.New("\"reliability\" is defined both at the top level and under \"advanced\"; remove one")
+		}
+		yc.Reliability = yc.Advanced.Reliability
+	}
+	if !reflect.DeepEqual(yc.Advanced.Verification, agent.VerificationConfig{}) {
+		if !reflect.DeepEqual(yc.Verification, agent.VerificationConfig{}) {
+			return errors.New("\"verification\" is defined both at the top level and under \"advanced\"; remove one")
+		}
+		yc.Verification = yc.Advanced.Verification
+	}
+	if !reflect.DeepEqual(yc.Advanced.Retry, agent.RetryConfig{}) {
+		if !reflect.DeepEqual(yc.Retry, agent.RetryConfig{}) {
+			return errors.New("\"retry\" is defined both at the top level and under \"advanced\"; remove one")
+		}
+		yc.Retry = yc.Advanced.Retry
+	}
+	return nil
 }
 
 type rawCompactionPolicy struct {
@@ -775,6 +827,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	if err := decoder.Decode(&yc); err != nil {
 		return cfg, fmt.Errorf("failed to parse team config: %w", err)
 	}
+	if err := mergeAdvancedNamespace(&yc); err != nil {
+		return cfg, fmt.Errorf("invalid team config: %w", err)
+	}
 
 	if yc.Name != "" {
 		cfg.Name = yc.Name
@@ -1184,10 +1239,19 @@ func loadTeamContractTasks(teamDir string, vars map[string]string) ([]TaskDef, e
 			return nil, fmt.Errorf("template team task contracts: %w", err)
 		}
 		var config struct {
-			Tasks []TaskDef `yaml:"tasks"`
+			Tasks    []TaskDef `yaml:"tasks"`
+			Advanced struct {
+				Tasks []TaskDef `yaml:"tasks"`
+			} `yaml:"advanced"`
 		}
 		if err := yaml.Unmarshal([]byte(text), &config); err != nil {
 			return nil, fmt.Errorf("parse team task contracts: %w", err)
+		}
+		if len(config.Tasks) > 0 && len(config.Advanced.Tasks) > 0 {
+			return nil, errors.New("\"tasks\" is defined both at the top level and under \"advanced\"; remove one")
+		}
+		if len(config.Advanced.Tasks) > 0 {
+			return config.Advanced.Tasks, nil
 		}
 		return config.Tasks, nil
 	}
