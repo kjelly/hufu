@@ -50,17 +50,17 @@ type coordinatorModelContinuation struct {
 // provider, including a typed pre-provider CannotFit candidate.
 func (c *Coordinator) admitCoordinatorContext(ctx context.Context, manager *ContextWindowManager, request ContextWindowRequest, phase, taskID string, attempt int) (ContextWindowAdmission, error) {
 	admission, err := manager.Admit(ctx, request)
-	if err != nil {
-		return admission, err
-	}
 	telemetry := c.newContextWindowTelemetry(EventContextWindowAdmission, request, admission, phase, taskID, attempt)
 	if admission.Candidate != nil {
 		telemetry.FallbackReason = "candidate_requires_final_admission"
 	}
-	if err := c.recordContextWindowTelemetry(EventContextWindowAdmission, telemetry, taskID); err != nil {
-		return ContextWindowAdmission{}, err
+	if recordErr := c.recordContextWindowTelemetry(EventContextWindowAdmission, telemetry, taskID); recordErr != nil {
+		if err != nil {
+			return admission, errors.Join(err, recordErr)
+		}
+		return ContextWindowAdmission{}, recordErr
 	}
-	return admission, nil
+	return admission, err
 }
 
 // admitCoordinatorEarlierModel is the only coordinator model downshift
@@ -825,7 +825,10 @@ retryLoop:
 				})
 			}
 
-			taskCtx = c.withEffectiveToolsAllowedForTask(taskCtx, agentDef, exposedToolNames, task)
+			workerDef := c.injectWorkerContext(taskCtx, agentDef)
+			gatedTools := c.gatePolicyTools(resolvedTools.Tools)
+			taskCtx = c.withEffectiveToolsAllowedForTask(taskCtx, workerDef, exposedToolNames, task)
+			taskCtx = withContextWindowRequestDescriptor(taskCtx, c.newContextWindowRequestDescriptor(resolvedModel, workerDef, gatedTools, agentName, "worker"))
 			if sequence := newTaskToolSequenceWithBindings(task.Execution.ToolSequence, task.Execution.ToolInputSequence, task.Execution.ToolInputField, task.Execution.ToolInputValueSequence, task.Execution.ToolExpectedExitCodes, task.Execution.ToolInputCanonicalSequence, task.Execution.ToolInputTransformSequence); sequence != nil {
 				attemptSequence = sequence
 				taskCtx = context.WithValue(taskCtx, taskToolSequenceKey{}, sequence)
@@ -1068,6 +1071,7 @@ retryLoop:
 							// tool history.
 							repairPrompt += protocolRepairEvidenceSummary(steps, transcriptArtifact)
 							repairAttempts := make([]RepairAttemptProvenance, 0, 2)
+							var repairTools ResolvedWorkerTools
 							runRepair := func(prompt string) []fantasy.StepResult {
 								var repairAg fantasy.Agent
 								workerCtx := withoutCoordinatorRequestPreflight(parentCtx)
@@ -1082,6 +1086,7 @@ retryLoop:
 										c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to resolve protocol repair tools: %v", resolveErr)).withTodoID(todoID))
 										return nil
 									}
+									repairTools = resolvedRepairTools
 									repairAg, rErr = c.createGatedAgent(workerCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
 										Def:        agentDef,
 										TeamConfig: &c.session.Config,
@@ -1107,6 +1112,7 @@ retryLoop:
 								if identity, ok := c.activeTaskResultOccurrence(todoID); ok {
 									repairCtx = withSubmitResultRuntimeIdentity(repairCtx, identity)
 								}
+								repairCtx = withContextWindowRequestDescriptor(repairCtx, c.newContextWindowRequestDescriptor(resolvedModel, agentDef, repairTools.Tools, agentName, "protocol-repair"))
 								repairCtx = context.WithValue(repairCtx, hooks.AgentNameKey, agentName)
 								repairCtx = context.WithValue(repairCtx, hooks.TeamNameKey, c.session.Config.Name)
 								repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, taskDesc)
@@ -2282,6 +2288,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 
 	workerCtx := withoutCoordinatorRequestPreflight(parentCtx)
 	var repairAgent fantasy.Agent
+	var repairTools ResolvedWorkerTools
 	if c.repairAgentOverride != nil {
 		repairAgent = c.repairAgentOverride
 	} else if c.providerManager != nil {
@@ -2291,6 +2298,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		if resolveErr != nil {
 			err = resolveErr
 		} else {
+			repairTools = resolvedRepairTools
 			repairAgent, err = c.createGatedAgent(workerCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
 				Def:        agentDef,
 				TeamConfig: &c.session.Config,
@@ -2322,6 +2330,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	repairCtx = context.WithValue(repairCtx, hooks.AgentNameKey, agentName)
 	repairCtx = context.WithValue(repairCtx, hooks.TeamNameKey, c.session.Config.Name)
 	repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, task.Goal)
+	repairCtx = withContextWindowRequestDescriptor(repairCtx, c.newContextWindowRequestDescriptor(resolvedModel, agentDef, repairTools.Tools, agentName, "protocol-repair"))
 	timing := &taskTiming{}
 	timing.reset()
 	c.report(c.newEvent("step").withAgent(agentName).withMessage("resuming protocol task through result-only repair").withTodoID(item.ID))
@@ -2484,6 +2493,11 @@ func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, 
 	if ctx.Err() != nil {
 		return ""
 	}
+	rescueDef := agentDef
+	if rescueDef == nil {
+		rescueDef = &agent.AgentDef{Name: agentName, Generation: agent.GenerationParams{Model: resolvedModel}}
+	}
+	rescueDef = c.injectWorkerContext(ctx, rescueDef)
 	// Rebuild the agent with no tools. Merely telling the original agent not to
 	// call tools is insufficient: a model that hit its step limit often makes
 	// another tool call instead of writing the requested summary.
@@ -2492,9 +2506,8 @@ func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, 
 		if providerErr != nil || agentDef == nil {
 			return ""
 		}
-		def := c.injectWorkerContext(ctx, agentDef)
 		rescueAgent, createErr := c.createGatedAgent(ctx, provider, agent.AgentConfig{
-			Def:        def,
+			Def:        rescueDef,
 			TeamConfig: &c.session.Config,
 			WorkDir:    c.projectDir,
 			MaxSteps:   1,
@@ -2508,6 +2521,7 @@ func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, 
 	// directly in the no-progress budget.
 	ctx = context.WithValue(ctx, llmUsageReceiptExpectedKey{}, false)
 	ctx = context.WithValue(ctx, tools.AgentToolsAllowedKey, []string{})
+	ctx = withContextWindowRequestDescriptor(ctx, c.newContextWindowRequestDescriptor(resolvedModel, rescueDef, nil, agentName, "rescue"))
 	c.report(c.newEvent("step").withAgent(agentName).withMessage("agent stopped without a final message; requesting a summary turn"))
 	rescuePrompt, prepareErr := c.prepareAuxiliaryPrompt(ctx, "final_summary_repair", buildRescueFinalSummaryInstruction(task))
 	if prepareErr != nil {
@@ -2974,16 +2988,23 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	textRepetitionDetector := NewStreamRepetitionDetector()
 	reasoningRepetitionDetector := NewStreamRepetitionDetector()
 	streamPreflight := coordinatorRequestPreflightFromContext(ctx)
+	workerDescriptor, hasWorkerDescriptor := contextWindowRequestDescriptorFromContext(ctx)
 	var contextManager *ContextWindowManager
 	coordinatorFallbackUsed := false
 	coordinatorFallbackAttempted := false
-	if streamPreflight != nil {
+	if streamPreflight != nil || hasWorkerDescriptor {
 		contextManager = NewContextWindowManagerWithPredecessor(defaultCounter, func(compactCtx context.Context, messages []fantasy.Message, predecessor *StructuredSummary) ([]fantasy.Message, *StructuredSummary, error) {
+			if streamPreflight == nil {
+				return c.buildTransientWorkerCompactionProjection(compactCtx, messages, predecessor, prompt)
+			}
 			counts := make([]int, len(messages))
 			for i := range counts {
 				counts[i] = 1
 			}
 			projection := c.buildTransientCompactionProjection(compactCtx, messages, 0, counts, predecessor)
+			if projection.err != nil {
+				return nil, nil, projection.err
+			}
 			return projection.messages, projection.summary, nil
 		})
 	}
@@ -3012,6 +3033,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			stepBudget, hasStepBudget := ctx.Value(workerStepBudgetKey{}).(int)
 			freeTextFinalization, _ := ctx.Value(workerFreeTextFinalizationKey{}).(bool)
 			stepBudgetCheckpoint := ""
+			var runtimeRequiredMessages []fantasy.Message
 			terminalOnly := false
 			if hasStepBudget && stepBudget > 0 {
 				remaining := stepBudget - opts.StepNumber
@@ -3039,11 +3061,15 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				}
 			}
 			if stepBudgetCheckpoint != "" {
-				preparedMessages = append(append([]fantasy.Message(nil), preparedMessages...), fantasy.NewUserMessage(stepBudgetCheckpoint))
+				directive := fantasy.NewUserMessage(stepBudgetCheckpoint)
+				preparedMessages = append(append([]fantasy.Message(nil), preparedMessages...), directive)
+				runtimeRequiredMessages = append(runtimeRequiredMessages, directive)
 			}
 			recoveryMu.Lock()
 			if pendingRecovery != "" {
-				preparedMessages = append(append([]fantasy.Message(nil), preparedMessages...), fantasy.NewUserMessage(pendingRecovery))
+				directive := fantasy.NewUserMessage(pendingRecovery)
+				preparedMessages = append(append([]fantasy.Message(nil), preparedMessages...), directive)
+				runtimeRequiredMessages = append(runtimeRequiredMessages, directive)
 				pendingRecovery = ""
 			}
 			recoveryMu.Unlock()
@@ -3052,78 +3078,110 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			preflightApplied := false
 			contextChanged := false
 			if contextManager != nil {
-				fullSystem, fullTools := streamPreflight.configuration()
-				attempt, _ := ctx.Value(executionAttemptKey{}).(int)
-				admission, admissionErr := c.admitCoordinatorContext(ctx, contextManager, ContextWindowRequest{
-					ModelID:              modelID,
-					System:               fullSystem,
-					Tools:                fullTools,
-					Messages:             preparedMessages,
-					Prompt:               prompt,
-					Window:               streamPreflight.windowValue(),
-					ReservedOutputTokens: spec.MaxOutputTokens,
-					SafetyMarginTokens:   spec.SafetyMarginTokens,
-					StepNumber:           opts.StepNumber,
-				}, "initial", todoID, attempt)
-				if admissionErr != nil {
-					return ctx, fantasy.PrepareStepResult{}, admissionErr
-				}
-				if admission.Candidate != nil {
-					// A compacted candidate is explicitly typed by the admission
-					// owner. It is not yet provider-safe, but it is the only
-					// history that preflight may use to calculate optional tool
-					// projection. Prompt-only CannotFit has no candidate and keeps
-					// the original opts.Messages unchanged.
-					preparedMessages = admission.Candidate.Messages
-				} else if admission.Decision != ContextWindowCannotFit {
-					preparedMessages = admission.Messages
-				}
-				contextChanged = !reflect.DeepEqual(preparedMessages, opts.Messages)
-
-				var preflightErr error
-				preflightSystem, preflightTools, preflightApplied, preflightErr = streamPreflight.prepare(ctx, preparedMessages, prompt, spec.MaxOutputTokens, opts.StepNumber)
-				if preflightErr != nil {
-					return ctx, fantasy.PrepareStepResult{}, preflightErr
-				}
-				requestSystem, requestTools := fullSystem, fullTools
-				if preflightApplied {
-					requestSystem, requestTools = preflightSystem, preflightTools
-				}
-				finalAdmission, finalErr := c.admitCoordinatorContext(ctx, contextManager, ContextWindowRequest{
-					ModelID:              modelID,
-					System:               requestSystem,
-					Tools:                requestTools,
-					Messages:             preparedMessages,
-					Prompt:               prompt,
-					Window:               streamPreflight.windowValue(),
-					ReservedOutputTokens: spec.MaxOutputTokens,
-					SafetyMarginTokens:   spec.SafetyMarginTokens,
-					StepNumber:           opts.StepNumber,
-				}, "final", todoID, attempt)
-				if finalErr != nil {
-					return ctx, fantasy.PrepareStepResult{}, finalErr
-				}
-				if finalAdmission.Decision == ContextWindowCannotFit {
-					fitErr := &CannotFitError{ModelID: modelID, RequestTokens: finalAdmission.RequestTokens, Available: finalAdmission.Budget.Available, ProvenNoSend: true}
-					if _, provenNoSend := isProvenPreProviderCannotFit(fitErr); finalAdmission.Candidate != nil && provenNoSend && opts.StepNumber == 0 && !coordinatorFallbackUsed && !coordinatorFallbackAttempted {
-						coordinatorFallbackAttempted = true
-						if fallback, fallbackErr := c.admitCoordinatorEarlierModel(ctx, streamPreflight, preparedMessages, prompt, opts.StepNumber, spec.MaxOutputTokens, modelID); fallbackErr != nil {
-							return ctx, fantasy.PrepareStepResult{}, fallbackErr
-						} else if fallback.Model != nil {
-							coordinatorFallbackUsed = true
-							preparedMessages = fallback.Messages
-							result := fantasy.PrepareStepResult{Messages: preparedMessages, Model: fallback.Model}
-							if fallback.ToolsSet {
-								result.System = &fallback.System
-								result.Tools = fallback.Tools
-							}
-							return fallback.Context, result, nil
-						}
+				if streamPreflight == nil {
+					attempt, _ := ctx.Value(executionAttemptKey{}).(int)
+					descriptor := workerDescriptor
+					if descriptor.ModelID == "" {
+						descriptor.ModelID = modelID
 					}
-					return ctx, fantasy.PrepareStepResult{}, fitErr
+					if descriptor.Window <= 0 {
+						descriptor.Window = spec.ContextWindow
+					}
+					if descriptor.ReservedOutputTokens <= 0 {
+						descriptor.ReservedOutputTokens = spec.MaxOutputTokens
+					}
+					if descriptor.SafetyMarginTokens <= 0 {
+						descriptor.SafetyMarginTokens = spec.SafetyMarginTokens
+					}
+					admission, admissionErr := c.admitCoordinatorContext(ctx, contextManager, ContextWindowRequest{
+						ModelID: descriptor.ModelID, System: descriptor.System, Tools: descriptor.Tools,
+						Messages: preparedMessages, Prompt: prompt, Window: descriptor.Window,
+						ProtectedMessages:    runtimeRequiredMessages,
+						ReservedOutputTokens: descriptor.ReservedOutputTokens, SafetyMarginTokens: descriptor.SafetyMarginTokens,
+						StepNumber: opts.StepNumber, Owner: descriptor.Owner, Scope: descriptor.Scope,
+					}, "worker", todoID, attempt)
+					if admissionErr != nil {
+						return ctx, fantasy.PrepareStepResult{}, admissionErr
+					}
+					if admission.Decision == ContextWindowCannotFit {
+						return ctx, fantasy.PrepareStepResult{}, &CannotFitError{ModelID: descriptor.ModelID, RequestTokens: admission.RequestTokens, Available: admission.Budget.Available, ProvenNoSend: true}
+					}
+					preparedMessages = admission.Messages
+					contextChanged = !reflect.DeepEqual(preparedMessages, opts.Messages)
+				} else {
+					fullSystem, fullTools := streamPreflight.configuration()
+					attempt, _ := ctx.Value(executionAttemptKey{}).(int)
+					admission, admissionErr := c.admitCoordinatorContext(ctx, contextManager, ContextWindowRequest{
+						ModelID:              modelID,
+						System:               fullSystem,
+						Tools:                fullTools,
+						Messages:             preparedMessages,
+						Prompt:               prompt,
+						Window:               streamPreflight.windowValue(),
+						ReservedOutputTokens: spec.MaxOutputTokens,
+						SafetyMarginTokens:   spec.SafetyMarginTokens,
+						StepNumber:           opts.StepNumber,
+					}, "initial", todoID, attempt)
+					if admissionErr != nil {
+						return ctx, fantasy.PrepareStepResult{}, admissionErr
+					}
+					if admission.Candidate != nil {
+						// A compacted candidate is explicitly typed by the admission
+						// owner. It is not yet provider-safe, but it is the only
+						// history that preflight may use to calculate optional tool
+						// projection. Prompt-only CannotFit has no candidate and keeps
+						// the original opts.Messages unchanged.
+						preparedMessages = admission.Candidate.Messages
+					} else if admission.Decision != ContextWindowCannotFit {
+						preparedMessages = admission.Messages
+					}
+					contextChanged = !reflect.DeepEqual(preparedMessages, opts.Messages)
+
+					var preflightErr error
+					preflightSystem, preflightTools, preflightApplied, preflightErr = streamPreflight.prepare(ctx, preparedMessages, prompt, spec.MaxOutputTokens, opts.StepNumber)
+					if preflightErr != nil {
+						return ctx, fantasy.PrepareStepResult{}, preflightErr
+					}
+					requestSystem, requestTools := fullSystem, fullTools
+					if preflightApplied {
+						requestSystem, requestTools = preflightSystem, preflightTools
+					}
+					finalAdmission, finalErr := c.admitCoordinatorContext(ctx, contextManager, ContextWindowRequest{
+						ModelID:              modelID,
+						System:               requestSystem,
+						Tools:                requestTools,
+						Messages:             preparedMessages,
+						Prompt:               prompt,
+						Window:               streamPreflight.windowValue(),
+						ReservedOutputTokens: spec.MaxOutputTokens,
+						SafetyMarginTokens:   spec.SafetyMarginTokens,
+						StepNumber:           opts.StepNumber,
+					}, "final", todoID, attempt)
+					if finalErr != nil {
+						return ctx, fantasy.PrepareStepResult{}, finalErr
+					}
+					if finalAdmission.Decision == ContextWindowCannotFit {
+						fitErr := &CannotFitError{ModelID: modelID, RequestTokens: finalAdmission.RequestTokens, Available: finalAdmission.Budget.Available, ProvenNoSend: true}
+						if _, provenNoSend := isProvenPreProviderCannotFit(fitErr); finalAdmission.Candidate != nil && provenNoSend && opts.StepNumber == 0 && !coordinatorFallbackUsed && !coordinatorFallbackAttempted {
+							coordinatorFallbackAttempted = true
+							if fallback, fallbackErr := c.admitCoordinatorEarlierModel(ctx, streamPreflight, preparedMessages, prompt, opts.StepNumber, spec.MaxOutputTokens, modelID); fallbackErr != nil {
+								return ctx, fantasy.PrepareStepResult{}, fallbackErr
+							} else if fallback.Model != nil {
+								coordinatorFallbackUsed = true
+								preparedMessages = fallback.Messages
+								result := fantasy.PrepareStepResult{Messages: preparedMessages, Model: fallback.Model}
+								if fallback.ToolsSet {
+									result.System = &fallback.System
+									result.Tools = fallback.Tools
+								}
+								return fallback.Context, result, nil
+							}
+						}
+						return ctx, fantasy.PrepareStepResult{}, fitErr
+					}
+					preparedMessages = finalAdmission.Messages
+					contextChanged = contextChanged || !reflect.DeepEqual(preparedMessages, opts.Messages)
 				}
-				preparedMessages = finalAdmission.Messages
-				contextChanged = contextChanged || !reflect.DeepEqual(preparedMessages, opts.Messages)
 			} else {
 				capResult := CapStepMessagesWithCounterResult(ctx, defaultCounter, modelID, preparedMessages, budget.Available)
 				if capResult.StillOverBudget {

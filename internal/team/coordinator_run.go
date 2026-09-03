@@ -239,23 +239,23 @@ func (c *Coordinator) directAgentWorkflowPrompt(task string, agentDef *agent.Age
 // a cached instance may retain a submit_result closure bound to another Todo.
 // The worker override remains available as a deterministic test seam, but a
 // production direct invocation always constructs a fresh gated agent.
-func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.AgentDef, directModel, todoID, task, resolvedName string) (fantasy.Agent, []string, error) {
+func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.AgentDef, directModel, todoID, task, resolvedName string) (fantasy.Agent, ResolvedWorkerTools, error) {
 	if c == nil || agentDef == nil {
-		return nil, nil, fmt.Errorf("create direct agent: agent definition is required")
+		return nil, ResolvedWorkerTools{}, fmt.Errorf("create direct agent: agent definition is required")
 	}
 	syntheticTask := TaskDef{Agent: resolvedName, Goal: task, Model: directModel, Execution: ExecutionContract{RequiresResult: true}}
 	resolvedTools, err := c.ToolResolver().ResolveTaskTools(ctx, agentDef, WorkerToolResolutionRequest{
 		Task: syntheticTask, TodoID: todoID, Mode: WorkerToolResolutionNormal,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, ResolvedWorkerTools{}, err
 	}
 	if c.workerAgentOverride != nil {
-		return c.workerAgentOverride, append([]string(nil), resolvedTools.Names...), nil
+		return c.workerAgentOverride, resolvedTools, nil
 	}
 	provider, err := c.ModelRuntime().ProviderFor(directModel)
 	if err != nil {
-		return nil, nil, err
+		return nil, ResolvedWorkerTools{}, err
 	}
 	ag, err := c.createGatedAgent(ctx, provider, agent.AgentConfig{
 		Def:        agentDef,
@@ -264,9 +264,9 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 		MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
 	}, resolvedTools.Tools)
 	if err != nil {
-		return nil, nil, err
+		return nil, ResolvedWorkerTools{}, err
 	}
-	return ag, resolvedTools.Names, nil
+	return ag, resolvedTools, nil
 }
 
 //nolint:gocyclo // direct-agent execution is the canonical closed lifecycle path.
@@ -386,7 +386,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = prevTodoID })
 	}()
 
-	ag, exposedToolNames, err := c.createDirectAgent(ctx, agentDef, directModel, todoID, task, resolvedName)
+	ag, resolvedDirectTools, err := c.createDirectAgent(ctx, agentDef, directModel, todoID, task, resolvedName)
 	if err != nil {
 		// Agent construction happens before the per-task round is registered,
 		// so there is no round to cancel or unregister. The task is already
@@ -413,6 +413,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		directSideEffect = SideEffectUnknown
 	}
 	directRunID := c.contextRunID()
+	exposedToolNames := resolvedDirectTools.Names
 	taskCtx, cancel, roundCancel, scopeErr := c.buildDirectAgentTaskContext(ctx, agentDef, resolvedName, task, todoID, directModel, exposedToolNames)
 	if scopeErr != nil {
 		directScopeErr := fmt.Errorf("direct-agent artifact scope preflight failed: %w", scopeErr)
@@ -428,6 +429,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return &DirectAgentResult{AgentName: resolvedName, Error: directScopeErr}, nil
 	}
 	taskCtx = context.WithValue(taskCtx, tools.ToolExecutionDispositionReporterKey, newToolDispositionReporter(directDispositions, directSideEffect, directRunID, todoID, 1))
+	taskCtx = withContextWindowRequestDescriptor(taskCtx, c.newContextWindowRequestDescriptor(directModel, agentDef, resolvedDirectTools.Tools, resolvedName, "direct-agent"))
 	defer cancel()
 
 	timing := &taskTiming{}

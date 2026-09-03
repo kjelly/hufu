@@ -288,6 +288,7 @@ func trimHistoryPreservingHeadWithProvenance(msgs []fantasy.Message, sourceRange
 type compactionProjection struct {
 	messages     []fantasy.Message
 	summary      *StructuredSummary
+	err          error
 	tokensBefore int
 	tokensAfter  int
 	sourceOffset int
@@ -345,15 +346,15 @@ func (c *Coordinator) buildCompactionProjection(ctx context.Context, messages []
 		originalGoal = extractFirstUserMessageText(messages)
 	}
 
-	verified, verifiedErr := c.compactVerifiedConversation(ctx, messages)
-	if verifiedErr != nil {
+	canonical, canonicalErr := c.buildCanonicalCompactionInput(ctx, messages)
+	if canonicalErr != nil {
 		// Required evidence cannot safely fit the context budget. Do not replace
 		// history with an unchecked/truncated summary.
-		log.Printf("warning: verified history compaction failed: %v; retaining original messages", verifiedErr)
-		return compactionProjection{messages: messages}
+		log.Printf("warning: canonical history compaction failed: %v; retaining original messages", canonicalErr)
+		return compactionProjection{messages: messages, err: canonicalErr}
 	}
 
-	summary, err := PerformStructuredCompaction(ctx, compacter, messages, prevSummary, originalGoal)
+	summary, err := performStructuredCompaction(ctx, compacter, messages, canonical.result.Content, prevSummary, originalGoal)
 	if err != nil || summary == nil {
 		summary = EnforceCompactionInvariants(&StructuredSummary{}, prevSummary, originalGoal, messages)
 	}
@@ -389,7 +390,7 @@ func (c *Coordinator) buildCompactionProjection(ctx context.Context, messages []
 	markdownSummary := summary.RenderMarkdown()
 	tokensAfter := countTokensInText(compactionModel, markdownSummary)
 	projection := compactionProjection{
-		messages:     []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + verified.Content + "\n\n[Structured Compaction Summary]\n" + markdownSummary)},
+		messages:     []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + canonical.result.Content + "\n\n[Structured Compaction Summary]\n" + markdownSummary)},
 		summary:      cloneStructuredSummary(summary),
 		tokensBefore: tokensBefore,
 		tokensAfter:  tokensAfter,

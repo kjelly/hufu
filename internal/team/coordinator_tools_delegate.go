@@ -280,10 +280,13 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		return "", fmt.Errorf("cannot create sub-agent: resolve task tools: %w", err)
 	}
 	agentDef := c.injectWorkerContext(ctx, canonical.Agent)
+	gatedTools := c.gatePolicyTools(resolvedTools.Tools)
+	subAgModelID := c.resolveAgentModel(agentDef, "")
 	ctx = context.WithValue(ctx, executionAttemptKey{}, 1)
 	ctx = context.WithValue(ctx, taskRequiresResultKey{}, true)
 	ctx = context.WithValue(ctx, tools.AgentNameKey, canonical.Agent.Name)
 	ctx = c.withEffectiveToolsAllowedForTask(ctx, agentDef, resolvedTools.Names, canonical.Task)
+	ctx = withContextWindowRequestDescriptor(ctx, c.newContextWindowRequestDescriptor(subAgModelID, agentDef, gatedTools, canonical.Agent.Name, "subagent"))
 	if identity, active := c.activeTaskResultOccurrence(todoID); active {
 		ctx = withSubmitResultRuntimeIdentity(ctx, identity)
 	} else {
@@ -295,7 +298,6 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	// carried the receipt marker.
 	ctx = context.WithValue(ctx, llmUsageReceiptExpectedKey{}, false)
 
-	subAgModelID := c.resolveAgentModel(agentDef, "")
 	var ag fantasy.Agent
 	if c.workerAgentOverride != nil {
 		ag = c.workerAgentOverride
@@ -309,7 +311,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 			TeamConfig: &c.session.Config,
 			WorkDir:    c.projectDir,
 			MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
-		}, resolvedTools.Tools)
+		}, gatedTools)
 		if err != nil {
 			return "", fmt.Errorf("failed to create sub-agent %q: %w", name, err)
 		}

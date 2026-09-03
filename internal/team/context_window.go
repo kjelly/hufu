@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 
 	"charm.land/fantasy"
@@ -69,11 +70,17 @@ const (
 // admission owner. Messages are the messages Fantasy will send for the step;
 // Prompt is counted only when it is not already present in Messages.
 type ContextWindowRequest struct {
-	ModelID              string
-	System               string
-	Tools                []fantasy.AgentTool
-	Messages             []fantasy.Message
-	Prompt               string
+	ModelID  string
+	System   string
+	Tools    []fantasy.AgentTool
+	Owner    string
+	Scope    string
+	Messages []fantasy.Message
+	Prompt   string
+	// ProtectedMessages are runtime-required messages appended for this
+	// request. They are removed before compaction and reattached verbatim after
+	// the compacted history, preserving recovery and step-budget directives.
+	ProtectedMessages    []fantasy.Message
 	ReservedOutputTokens int
 	SafetyMarginTokens   int
 	Window               int
@@ -91,12 +98,104 @@ type ContextWindowCandidate struct {
 // set when history compaction produced a verified request candidate that still
 // needs system/tool projection before final admission.
 type ContextWindowAdmission struct {
-	Decision  ContextWindowDecision
-	Messages  []fantasy.Message
-	Candidate *ContextWindowCandidate
+	Decision        ContextWindowDecision
+	Messages        []fantasy.Message
+	Candidate       *ContextWindowCandidate
+	RejectionReason string
 
 	RequestTokens int
 	Budget        ContextBudget
+}
+
+const (
+	contextWindowHighWaterNumerator   = 85
+	contextWindowHighWaterDenominator = 100
+
+	contextWindowReasonInvalidPairing          = "invalid_pairing"
+	contextWindowReasonMetadataUnavailable     = "metadata_unavailable"
+	contextWindowReasonCountFailed             = "count_failed"
+	contextWindowReasonNoCompactor             = "no_compactor"
+	contextWindowReasonCompactionFailed        = "compaction_failed"
+	contextWindowReasonProtectedTailOverBudget = "protected_tail_over_budget"
+)
+
+// contextWindowRequestDescriptor is installed on the invocation context by
+// the owner that constructed an agent. It is deliberately stream-local: the
+// worker's injected system prompt and resolved/gated tools must never be
+// recovered from the coordinator preflight projection.
+type contextWindowRequestDescriptor struct {
+	ModelID              string
+	System               string
+	Tools                []fantasy.AgentTool
+	Window               int
+	ReservedOutputTokens int
+	SafetyMarginTokens   int
+	Owner                string
+	Scope                string
+}
+
+type contextWindowRequestDescriptorKey struct{}
+
+func withContextWindowRequestDescriptor(ctx context.Context, descriptor contextWindowRequestDescriptor) context.Context {
+	descriptor.Tools = append([]fantasy.AgentTool(nil), descriptor.Tools...)
+	return context.WithValue(ctx, contextWindowRequestDescriptorKey{}, descriptor)
+}
+
+func contextWindowRequestDescriptorFromContext(ctx context.Context) (contextWindowRequestDescriptor, bool) {
+	if ctx == nil {
+		return contextWindowRequestDescriptor{}, false
+	}
+	descriptor, ok := ctx.Value(contextWindowRequestDescriptorKey{}).(contextWindowRequestDescriptor)
+	if !ok {
+		return contextWindowRequestDescriptor{}, false
+	}
+	descriptor.Tools = append([]fantasy.AgentTool(nil), descriptor.Tools...)
+	return descriptor, true
+}
+
+func (c *Coordinator) newContextWindowRequestDescriptor(modelID string, def *agent.AgentDef, agentTools []fantasy.AgentTool, owner, scope string) contextWindowRequestDescriptor {
+	spec := globalRegistry.GetSpec(modelID)
+	if def != nil && def.Generation.ContextWindow > 0 {
+		spec.ContextWindow = def.Generation.ContextWindow
+	}
+	if def != nil && strings.TrimSpace(owner) == "" {
+		owner = def.Name
+	}
+	return contextWindowRequestDescriptor{
+		ModelID: modelID, System: func() string {
+			if def == nil {
+				return ""
+			}
+			return def.System
+		}(), Tools: append([]fantasy.AgentTool(nil), agentTools...), Window: spec.ContextWindow,
+		ReservedOutputTokens: c.resolveAgentMaxOutputTokens(def), SafetyMarginTokens: spec.SafetyMarginTokens,
+		Owner: owner, Scope: scope,
+	}
+}
+
+// buildTransientWorkerCompactionProjection is the worker-only compaction
+// bridge. It reuses the verified tool-evidence compactor, but never imports
+// coordinator task facts, history, summaries, metrics, or durable state.
+func (c *Coordinator) buildTransientWorkerCompactionProjection(ctx context.Context, messages []fantasy.Message, predecessor *StructuredSummary, originalGoal string) ([]fantasy.Message, *StructuredSummary, error) {
+	canonical, err := c.buildCanonicalCompactionInput(ctx, messages)
+	if err != nil {
+		return nil, nil, err
+	}
+	var compacter SidecarCompacter
+	if sidecar := c.AgentPool().Sidecar(); sidecar != nil {
+		compacter = transientSidecarCompacter{sidecar: sidecar}
+	}
+	summary, err := performStructuredCompaction(ctx, compacter, messages, canonical.result.Content, predecessor, originalGoal)
+	if err != nil || summary == nil {
+		if err == nil {
+			err = errors.New("worker structured compaction returned no summary")
+		}
+		return nil, nil, err
+	}
+	if err := ValidateStructuredSummary(summary, predecessor, messages, nil, nil); err != nil {
+		return nil, nil, err
+	}
+	return []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + canonical.result.Content + "\n\n[Structured Compaction Summary]\n" + summary.RenderMarkdown())}, cloneStructuredSummary(summary), nil
 }
 
 // ContextWindowManager owns request-token admission for one stream. It
@@ -137,7 +236,7 @@ func NewContextWindowManagerWithPredecessor(counter TokenCounter, compact func(c
 // satisfies request tokens + reserved output + safety margin <= model window.
 func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowRequest) (ContextWindowAdmission, error) {
 	if m == nil {
-		return ContextWindowAdmission{Decision: ContextWindowCannotFit}, fmt.Errorf("context window manager is nil")
+		return ContextWindowAdmission{Decision: ContextWindowCannotFit, RejectionReason: contextWindowReasonNoCompactor}, fmt.Errorf("context window manager is nil")
 	}
 	// A manager is stream-local. Serializing admission also makes a verified
 	// projection idempotent if Fantasy or a test seam asks to prepare the same
@@ -146,7 +245,7 @@ func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowR
 	defer m.mu.Unlock()
 
 	if !toolPairsIntact(request.Messages) {
-		return ContextWindowAdmission{Decision: ContextWindowCannotFit}, fmt.Errorf("context window request has invalid tool-call/result pairing")
+		return ContextWindowAdmission{Decision: ContextWindowCannotFit, RejectionReason: contextWindowReasonInvalidPairing}, fmt.Errorf("context window request has invalid tool-call/result pairing")
 	}
 	spec := globalRegistry.GetSpec(request.ModelID)
 	if request.Window > 0 {
@@ -165,16 +264,22 @@ func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowR
 	budget := CalculateContextBudget(spec, 0, 0)
 	admission := ContextWindowAdmission{Decision: ContextWindowCannotFit, Budget: budget}
 	if spec.IsEstimated && spec.ContextWindow <= 0 {
+		admission.RejectionReason = contextWindowReasonMetadataUnavailable
 		return admission, &ContextWindowMetadataUnavailableError{ModelID: request.ModelID}
 	}
 
 	originalMessages := cloneMessages(request.Messages)
 	requestTokens, err := m.countRequest(ctx, request)
 	if err != nil {
+		admission.RejectionReason = contextWindowReasonCountFailed
 		return admission, fmt.Errorf("count context window request: %w", err)
 	}
 	admission.RequestTokens = requestTokens
-	if requestTokens <= budget.Available {
+	highWater := budget.Available * contextWindowHighWaterNumerator / contextWindowHighWaterDenominator
+	if highWater <= 0 {
+		highWater = budget.Available
+	}
+	if requestTokens <= highWater {
 		admission.Decision = ContextWindowNoop
 		admission.Messages = request.effectiveMessages()
 		return admission, nil
@@ -184,7 +289,7 @@ func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowR
 	// stream. Remove that one current message before handing history to the
 	// compactor; otherwise prompt-only overflow can invoke compaction and the
 	// compactor can summarize the request that must remain verbatim.
-	prior, fixed, currentPrompt := splitRequestForCompaction(request)
+	prior, fixed, currentPrompt, protected := splitRequestForCompaction(request)
 	candidateHistory := prior
 	compacted := false
 	if len(prior) > 0 {
@@ -200,6 +305,7 @@ func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowR
 		case hasCompactableHistory(prior) && m.compactWithPredecessor != nil:
 			compactedHistory, summary, compactErr := m.compactWithPredecessor(ctx, prior, cloneStructuredSummary(m.compactedSummary))
 			if compactErr != nil {
+				admission.RejectionReason = contextWindowReasonCompactionFailed
 				return admission, fmt.Errorf("compact context history: %w", compactErr)
 			}
 			if validCompactedHistory(compactedHistory, prior) {
@@ -209,10 +315,13 @@ func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowR
 				m.compactedSummary = cloneStructuredSummary(summary)
 				m.hasProjection = true
 				compacted = true
+			} else {
+				admission.RejectionReason = contextWindowReasonCompactionFailed
 			}
 		case hasCompactableHistory(prior) && m.compact != nil:
 			compactedHistory, compactErr := m.compact(ctx, prior)
 			if compactErr != nil {
+				admission.RejectionReason = contextWindowReasonCompactionFailed
 				return admission, fmt.Errorf("compact context history: %w", compactErr)
 			}
 			if validCompactedHistory(compactedHistory, prior) {
@@ -221,6 +330,14 @@ func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowR
 				m.compactedProjection = cloneMessages(compactedHistory)
 				m.hasProjection = true
 				compacted = true
+			} else {
+				admission.RejectionReason = contextWindowReasonCompactionFailed
+			}
+		default:
+			if hasCompactableHistory(prior) {
+				admission.RejectionReason = contextWindowReasonNoCompactor
+			} else {
+				admission.RejectionReason = contextWindowReasonProtectedTailOverBudget
 			}
 		}
 	}
@@ -230,18 +347,25 @@ func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowR
 	// this manager for final admission before sending anything to the provider.
 	if !compacted {
 		admission.Messages = originalMessages
+		admission.Decision = ContextWindowCannotFit
+		if admission.RejectionReason == "" {
+			admission.RejectionReason = contextWindowReasonProtectedTailOverBudget
+		}
 		return admission, nil
 	}
 	candidate := append(cloneMessages(fixed), candidateHistory...)
 	if currentPrompt != "" {
 		candidate = append(candidate, fantasy.NewUserMessage(currentPrompt))
 	}
+	candidate = append(candidate, protected...)
 	if !toolPairsIntact(candidate) {
+		admission.RejectionReason = contextWindowReasonInvalidPairing
 		return admission, fmt.Errorf("context window compacted request has invalid tool-call/result pairing")
 	}
 	request.Messages = candidate
 	requestTokens, err = m.countRequest(ctx, request)
 	if err != nil {
+		admission.RejectionReason = contextWindowReasonCountFailed
 		return admission, fmt.Errorf("count compacted context window request: %w", err)
 	}
 	admission.RequestTokens = requestTokens
@@ -255,6 +379,7 @@ func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowR
 		return admission, nil
 	}
 	admission.Candidate = &ContextWindowCandidate{Messages: cloneMessages(candidate)}
+	admission.RejectionReason = contextWindowReasonProtectedTailOverBudget
 	return admission, nil
 }
 
@@ -288,8 +413,17 @@ func (m *ContextWindowManager) countRequest(ctx context.Context, request Context
 	return messageTokens + toolTokens, nil
 }
 
-func splitRequestForCompaction(request ContextWindowRequest) (prior, fixed []fantasy.Message, currentPrompt string) {
+func splitRequestForCompaction(request ContextWindowRequest) (prior, fixed []fantasy.Message, currentPrompt string, protected []fantasy.Message) {
 	messages := request.effectiveMessages()
+	protected = cloneMessages(request.ProtectedMessages)
+	for _, protectedMessage := range protected {
+		for i := len(messages) - 1; i >= 0; i-- {
+			if reflect.DeepEqual(messages[i], protectedMessage) {
+				messages = append(messages[:i], messages[i+1:]...)
+				break
+			}
+		}
+	}
 	if request.Prompt != "" {
 		for i := len(messages) - 1; i >= 0; i-- {
 			if messages[i].Role != fantasy.MessageRoleUser || len(messages[i].Content) != 1 {
@@ -308,7 +442,7 @@ func splitRequestForCompaction(request ContextWindowRequest) (prior, fixed []fan
 		}
 	}
 	prior, fixed = splitSystemMessage(messages)
-	return prior, fixed, currentPrompt
+	return prior, fixed, currentPrompt, protected
 }
 
 func (r ContextWindowRequest) effectiveMessages() []fantasy.Message {

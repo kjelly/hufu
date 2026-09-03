@@ -22,6 +22,8 @@ type ContextWindowTelemetryEvent struct {
 	CoordinatorAttemptID string `json:"coordinator_attempt_id"`
 	StreamAttemptID      string `json:"stream_attempt_id"`
 	Phase                string `json:"phase"`
+	Owner                string `json:"owner,omitempty"`
+	Scope                string `json:"scope,omitempty"`
 	Model                string `json:"model"`
 	RequestedTokens      int    `json:"requested_tokens"`
 	AvailableTokens      int    `json:"available_tokens"`
@@ -33,6 +35,7 @@ type ContextWindowTelemetryEvent struct {
 	CompactionCount      int    `json:"compaction_count"`
 	PolicyDigest         string `json:"policy_digest"`
 	FallbackReason       string `json:"fallback_reason,omitempty"`
+	RejectionReason      string `json:"rejection_reason,omitempty"`
 	Attempt              int    `json:"attempt,omitempty"`
 }
 
@@ -90,9 +93,9 @@ func (c *Coordinator) newContextWindowTelemetry(eventType EventType, request Con
 	return ContextWindowTelemetryEvent{
 		SchemaVersion: contextWindowTelemetrySchemaVersion, TelemetryID: fmt.Sprintf("%s-%d", strings.ReplaceAll(string(eventType), "_", "-"), sequence),
 		RunID: runID, TeamID: teamID, BranchID: branchID, CoordinatorAttemptID: coordID, StreamAttemptID: streamID,
-		Phase: phase, Model: request.ModelID, RequestedTokens: admission.RequestTokens, AvailableTokens: admission.Budget.Available,
+		Phase: phase, Owner: request.Owner, Scope: request.Scope, Model: request.ModelID, RequestedTokens: admission.RequestTokens, AvailableTokens: admission.Budget.Available,
 		ReservedTokens: admission.Budget.ReservedReply, SafetyTokens: admission.Budget.SafetyMargin, WindowTokens: admission.Budget.Window,
-		Decision: decision, Step: request.StepNumber, CompactionCount: c.Metrics().Compactions, PolicyDigest: compactionPolicyDigest(c.compactionPolicy()), Attempt: attempt,
+		Decision: decision, Step: request.StepNumber, CompactionCount: c.Metrics().Compactions, PolicyDigest: compactionPolicyDigest(c.compactionPolicy()), RejectionReason: admission.RejectionReason, Attempt: attempt,
 	}
 }
 
@@ -104,7 +107,11 @@ func (c *Coordinator) recordContextWindowTelemetry(eventType EventType, event Co
 	if err != nil {
 		return fmt.Errorf("marshal context window telemetry: %w", err)
 	}
-	persisted, err := c.eventStore.AppendPersisted(RunEvent{Type: string(eventType), Actor: "coordinator", TaskID: taskID, Attempt: event.Attempt, Payload: data})
+	actor := event.Owner
+	if actor == "" {
+		actor = "coordinator"
+	}
+	persisted, err := c.eventStore.AppendPersisted(RunEvent{Type: string(eventType), Actor: actor, TaskID: taskID, Attempt: event.Attempt, Payload: data})
 	if err != nil {
 		return fmt.Errorf("persist context window telemetry: %w", err)
 	}

@@ -54,17 +54,22 @@ No other response format. Do NOT do the work yourself — only approve or reject
 // planReviewer implements an autonomous plan review agent using a sidecar model.
 // It is NOT user-configurable — it only activates when forcePlanFirst is set.
 type planReviewer struct {
-	coordinator *Coordinator
-	modelID     string
-	agent       fantasy.Agent
-	initialized bool
-	todoID      string
+	coordinator       *Coordinator
+	modelID           string
+	agent             fantasy.Agent
+	requestDescriptor contextWindowRequestDescriptor
+	initialized       bool
+	todoID            string
 }
 
 func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*planReviewer, error) {
 	ctx = withoutCoordinatorRequestPreflight(ctx)
 	modelID := c.planReviewerModel
 	pr := &planReviewer{coordinator: c, modelID: modelID, todoID: todoID}
+	reviewerTools := []fantasy.AgentTool{
+		&reviewerApprovePlanTool{coordinator: c, todoID: todoID},
+		&reviewerRejectPlanTool{coordinator: c, todoID: todoID},
+	}
 	ag, err := c.createGatedAgent(ctx, c.providerManager.GetProvider(modelID), agent.AgentConfig{
 		Def: &agent.AgentDef{
 			Name:       "plan-reviewer",
@@ -75,13 +80,11 @@ func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*plan
 		TeamConfig: &c.session.Config,
 		WorkDir:    c.projectDir,
 		MaxSteps:   1,
-	}, []fantasy.AgentTool{
-		&reviewerApprovePlanTool{coordinator: c, todoID: todoID},
-		&reviewerRejectPlanTool{coordinator: c, todoID: todoID},
-	})
+	}, reviewerTools)
 	if err != nil {
 		return nil, err
 	}
+	pr.requestDescriptor = c.newContextWindowRequestDescriptor(modelID, &agent.AgentDef{Name: "plan-reviewer", Role: "plan_reviewer", System: planReviewerSystemPrompt, Generation: agent.GenerationParams{Model: modelID}}, reviewerTools, "plan-reviewer", "plan-reviewer")
 	pr.agent = ag
 	pr.initialized = true
 	return pr, nil
@@ -89,6 +92,7 @@ func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*plan
 
 func (pr *planReviewer) review(ctx context.Context, planText string) (string, bool, error, error) {
 	ctx = withoutCoordinatorRequestPreflight(ctx)
+	ctx = withContextWindowRequestDescriptor(ctx, pr.requestDescriptor)
 	c := pr.coordinator
 	c.pendingPlansMu.Lock()
 	entry := c.pendingPlans[pr.todoID]

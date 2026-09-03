@@ -13,24 +13,65 @@ import (
 
 const verifiedHistoryBudgetTokens = 16_000
 
+// canonicalCompactionInput is the single conversation-to-compaction boundary.
+// Its checked ContextItems and edges are the source for both the verified
+// history projection and the sidecar conversation. Raw fantasy messages stay
+// available to invariant validation, but never cross into the sidecar.
+type canonicalCompactionInput struct {
+	result contextstore.CompactionResult
+}
+
+func (c *Coordinator) compactionScope() contextstore.Scope {
+	scope := contextstore.Scope{ProjectID: "hufu"}
+	if c != nil && c.session != nil {
+		scope.TeamID = c.session.Config.Name
+		scope.SessionID = c.session.Workspace
+	}
+	return scope
+}
+
+func (c *Coordinator) compactionOutputPolicy() contextstore.ToolOutputPolicy {
+	policy := c.compactionPolicy()
+	return contextstore.ToolOutputPolicy{
+		MaxBytes: policy.ToolOutputMaxBytes, MaxRunes: policy.ToolOutputMaxRunes, MaxTokens: policy.ToolOutputMaxTokens,
+		DiagnosticLines: policy.DiagnosticMaxLines, DiagnosticTokens: policy.DiagnosticMaxTokens,
+	}
+}
+
+// buildCanonicalCompactionInput runs the checked evidence pipeline exactly
+// once. The deterministic compactor both validates the required evidence and
+// renders the bounded canonical conversation supplied to the sidecar.
+func buildCanonicalCompactionInput(ctx context.Context, messages []fantasy.Message, scope contextstore.Scope, outputPolicy contextstore.ToolOutputPolicy, targetTokens int) (canonicalCompactionInput, error) {
+	items, edges, err := conversationEvidenceChecked(messages, scope, outputPolicy)
+	if err != nil {
+		return canonicalCompactionInput{}, err
+	}
+	result, err := (contextstore.ValidatedCompactor{}).Compact(ctx, contextstore.CompactionRequest{
+		Items: items, Edges: edges, TargetTokens: targetTokens,
+	})
+	if err != nil {
+		return canonicalCompactionInput{}, err
+	}
+	if strings.TrimSpace(result.Content) == "" {
+		return canonicalCompactionInput{}, fmt.Errorf("canonical compaction input is empty")
+	}
+	return canonicalCompactionInput{result: result}, nil
+}
+
+func (c *Coordinator) buildCanonicalCompactionInput(ctx context.Context, messages []fantasy.Message) (canonicalCompactionInput, error) {
+	policy := c.compactionPolicy()
+	return buildCanonicalCompactionInput(ctx, messages, c.compactionScope(), c.compactionOutputPolicy(), policy.VerifiedHistoryTargetTokens)
+}
+
 // compactVerifiedConversation is the production bridge from fantasy history to
 // canonical ContextItems. Its result is the evidence section injected into the
 // compacted history message; a validation error retains original history.
 func (c *Coordinator) compactVerifiedConversation(ctx context.Context, messages []fantasy.Message) (contextstore.CompactionResult, error) {
-	scope := contextstore.Scope{ProjectID: "hufu"}
-	if c.session != nil {
-		scope.TeamID = c.session.Config.Name
-		scope.SessionID = c.session.Workspace
+	input, err := c.buildCanonicalCompactionInput(ctx, messages)
+	if err != nil {
+		return contextstore.CompactionResult{}, err
 	}
-	policy := c.compactionPolicy()
-	items, edges, evidenceErr := conversationEvidenceChecked(messages, scope, contextstore.ToolOutputPolicy{
-		MaxBytes: policy.ToolOutputMaxBytes, MaxRunes: policy.ToolOutputMaxRunes, MaxTokens: policy.ToolOutputMaxTokens,
-		DiagnosticLines: policy.DiagnosticMaxLines, DiagnosticTokens: policy.DiagnosticMaxTokens,
-	})
-	if evidenceErr != nil {
-		return contextstore.CompactionResult{}, evidenceErr
-	}
-	return (contextstore.ValidatedCompactor{}).Compact(ctx, contextstore.CompactionRequest{Items: items, Edges: edges, TargetTokens: policy.VerifiedHistoryTargetTokens})
+	return input.result, nil
 }
 
 func conversationEvidence(messages []fantasy.Message, scope contextstore.Scope, policies ...contextstore.ToolOutputPolicy) ([]contextstore.ContextItem, []contextstore.ContextEdge) {

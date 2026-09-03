@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+
+	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
 const CompactionHistoryFile = "compaction_history.json"
@@ -315,6 +317,18 @@ func extractToolResultCallIDs(msg fantasy.Message) map[string]bool {
 
 // PerformStructuredCompaction generates a StructuredSummary for messages, merging with prevSummary.
 func PerformStructuredCompaction(ctx context.Context, sidecarCompacter SidecarCompacter, messages []fantasy.Message, prevSummary *StructuredSummary, originalGoal string) (*StructuredSummary, error) {
+	canonical, err := buildCanonicalCompactionInput(ctx, messages, contextstore.Scope{ProjectID: "hufu"}, contextstore.DefaultToolOutputPolicy(), verifiedHistoryBudgetTokens)
+	if err != nil {
+		return nil, err
+	}
+	return performStructuredCompaction(ctx, sidecarCompacter, messages, canonical.result.Content, prevSummary, originalGoal)
+}
+
+// performStructuredCompaction consumes the already-checked canonical
+// conversation. Keeping the raw messages as a separate argument lets the
+// invariant checks retain their existing source semantics without allowing raw
+// tool output to reach the sidecar.
+func performStructuredCompaction(ctx context.Context, sidecarCompacter SidecarCompacter, messages []fantasy.Message, canonicalConversation string, prevSummary *StructuredSummary, originalGoal string) (*StructuredSummary, error) {
 	if originalGoal == "" && prevSummary != nil {
 		originalGoal = prevSummary.Goal
 	}
@@ -325,12 +339,11 @@ func PerformStructuredCompaction(ctx context.Context, sidecarCompacter SidecarCo
 	var summary StructuredSummary
 
 	if sidecarCompacter != nil {
-		convText := formatMessagesForCompaction(messages)
 		var prevText string
 		if prevSummary != nil {
 			prevText = prevSummary.RenderMarkdown()
 		}
-		raw, err := sidecarCompacter.CompactStructured(ctx, convText, prevText, originalGoal)
+		raw, err := sidecarCompacter.CompactStructured(ctx, canonicalConversation, prevText, originalGoal)
 		if err == nil && strings.TrimSpace(raw) != "" {
 			summary = ParseStructuredSummary(raw)
 		}

@@ -14,6 +14,24 @@ import (
 
 type admissionCountingCounter struct{ calls *int }
 
+type contextWindowRecountCounter struct{ messageCalls int }
+
+func (c *contextWindowRecountCounter) CountText(context.Context, string, string) (int, error) {
+	return 0, nil
+}
+
+func (c *contextWindowRecountCounter) CountMessages(context.Context, string, []fantasy.Message) (int, error) {
+	c.messageCalls++
+	if c.messageCalls == 1 {
+		return 750, nil
+	}
+	return 420, nil
+}
+
+func (*contextWindowRecountCounter) CountTools(context.Context, string, []fantasy.AgentTool) (int, error) {
+	return 0, nil
+}
+
 func (c admissionCountingCounter) CountText(context.Context, string, string) (int, error) {
 	(*c.calls)++
 	return 0, nil
@@ -74,6 +92,28 @@ func TestContextWindowManagerCompactsHugeRecentTailBeforePreflight(t *testing.T)
 	}
 	if !toolPairsIntact(admission.Messages) {
 		t.Fatal("compacted request contains an orphan tool call/result")
+	}
+}
+
+func TestContextWindowManagerRecountsAfterHighWaterCompaction(t *testing.T) {
+	modelID := "context-window-recount-after-compaction"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{ModelID: modelID, ContextWindow: 1_000, MaxOutputTokens: 100, SafetyMarginTokens: 100})
+	counter := &contextWindowRecountCounter{}
+	manager := NewContextWindowManager(counter, func(context.Context, []fantasy.Message) ([]fantasy.Message, error) {
+		return []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "verified history")}, nil
+	})
+	admission, err := manager.Admit(t.Context(), ContextWindowRequest{
+		ModelID: modelID, Messages: []fantasy.Message{fantasy.NewUserMessage("long history")},
+		ReservedOutputTokens: 100, SafetyMarginTokens: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.Decision != ContextWindowCompactPreTurn || admission.RequestTokens != 420 {
+		t.Fatalf("admission = %#v, want compacted second count", admission)
+	}
+	if counter.messageCalls != 2 {
+		t.Fatalf("message count calls = %d, want initial and post-compaction recount", counter.messageCalls)
 	}
 }
 
@@ -423,6 +463,149 @@ func TestContextWindowManagerRetainsOriginalAfterCompactionFailure(t *testing.T)
 	}
 	if got, want := messageTextSize(admission.Messages[1]), messageTextSize(original[1]); got != want {
 		t.Fatalf("history text size = %d, want original %d", got, want)
+	}
+	if admission.RejectionReason != contextWindowReasonCompactionFailed {
+		t.Fatalf("rejection reason = %q, want %q", admission.RejectionReason, contextWindowReasonCompactionFailed)
+	}
+}
+
+func TestContextWindowManagerPreservesPromptAndRuntimeSuffixAcrossCompaction(t *testing.T) {
+	modelID := "context-window-protected-runtime-suffix"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{ModelID: modelID, ContextWindow: 512, MaxOutputTokens: 32, SafetyMarginTokens: 32})
+	prompt := "current prompt must remain byte-for-byte"
+	recovery := "recovery directive: inspect only the recorded failure"
+	stepBudget := "step-budget directive: call submit_result now"
+	dynamic := []fantasy.Message{fantasy.NewUserMessage(stepBudget), fantasy.NewUserMessage(recovery)}
+	messages := append([]fantasy.Message{
+		fantasy.NewSystemMessage("system"),
+		fantasy.NewUserMessage(strings.Repeat("old history ", 2_000)),
+		fantasy.NewUserMessage(prompt),
+	}, dynamic...)
+	var compactedInput string
+	manager := NewContextWindowManager(defaultCounter, func(_ context.Context, messages []fantasy.Message) ([]fantasy.Message, error) {
+		compactedInput = formatMessagesForCompaction(messages)
+		return []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "verified history")}, nil
+	})
+
+	admission, err := manager.Admit(t.Context(), ContextWindowRequest{
+		ModelID: modelID, System: "system", Messages: messages, Prompt: prompt,
+		ProtectedMessages: dynamic, ReservedOutputTokens: 32, SafetyMarginTokens: 32,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.Decision == ContextWindowCannotFit || admission.RequestTokens > admission.Budget.Available {
+		t.Fatalf("admission = %#v, want compacted fit", admission)
+	}
+	if strings.Contains(compactedInput, prompt) || strings.Contains(compactedInput, recovery) || strings.Contains(compactedInput, stepBudget) {
+		t.Fatalf("compactor saw protected request content: %q", compactedInput)
+	}
+	if got := countExactUserMessages(admission.Messages, prompt); got != 1 {
+		t.Fatalf("current prompt occurrences = %d, want exactly one", got)
+	}
+	if got := countExactUserMessages(admission.Messages, recovery); got != 1 {
+		t.Fatalf("recovery directive occurrences = %d, want exactly one", got)
+	}
+	if got := countExactUserMessages(admission.Messages, stepBudget); got != 1 {
+		t.Fatalf("step-budget directive occurrences = %d, want exactly one", got)
+	}
+	if !strings.HasSuffix(messageTextSizeAsText(admission.Messages), prompt+stepBudget+recovery) {
+		t.Fatalf("protected suffix was not reattached in order: %q", messageTextSizeAsText(admission.Messages))
+	}
+}
+
+func TestContextWindowManagerProtectedTailFailsClosedAfterHighWater(t *testing.T) {
+	modelID := "context-window-protected-tail-fail-closed"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{ModelID: modelID, ContextWindow: 1_000, MaxOutputTokens: 100, SafetyMarginTokens: 100})
+	protected := fantasy.NewUserMessage(strings.Repeat("runtime-required ", 200))
+	manager := NewContextWindowManager(defaultCounter, nil)
+	admission, err := manager.Admit(t.Context(), ContextWindowRequest{
+		ModelID: modelID, Messages: []fantasy.Message{fantasy.NewSystemMessage("system"), protected},
+		ProtectedMessages: []fantasy.Message{protected}, ReservedOutputTokens: 100, SafetyMarginTokens: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.Decision != ContextWindowCannotFit {
+		t.Fatalf("decision = %q, want %q", admission.Decision, ContextWindowCannotFit)
+	}
+	if admission.RejectionReason != contextWindowReasonProtectedTailOverBudget {
+		t.Fatalf("rejection reason = %q, want %q", admission.RejectionReason, contextWindowReasonProtectedTailOverBudget)
+	}
+}
+
+func TestContextWindowManagerNoCompactorFailsClosedAfterHighWater(t *testing.T) {
+	modelID := "context-window-no-compactor-reason"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{ModelID: modelID, ContextWindow: 1_000, MaxOutputTokens: 100, SafetyMarginTokens: 100})
+	manager := NewContextWindowManager(defaultCounter, nil)
+	admission, err := manager.Admit(t.Context(), ContextWindowRequest{
+		ModelID: modelID, Messages: []fantasy.Message{fantasy.NewUserMessage(strings.Repeat("history ", 300))},
+		ReservedOutputTokens: 100, SafetyMarginTokens: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.Decision != ContextWindowCannotFit || admission.RejectionReason != contextWindowReasonNoCompactor {
+		t.Fatalf("admission = %#v, want CannotFit with no_compactor", admission)
+	}
+}
+
+func TestContextWindowManagerCompactionErrorRetainsReasonAndFailsClosed(t *testing.T) {
+	modelID := "context-window-compaction-error-reason"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{ModelID: modelID, ContextWindow: 1_000, MaxOutputTokens: 100, SafetyMarginTokens: 100})
+	manager := NewContextWindowManager(defaultCounter, func(context.Context, []fantasy.Message) ([]fantasy.Message, error) {
+		return nil, errors.New("sidecar unavailable")
+	})
+	admission, err := manager.Admit(t.Context(), ContextWindowRequest{
+		ModelID: modelID, Messages: []fantasy.Message{fantasy.NewUserMessage(strings.Repeat("history ", 300))},
+		ReservedOutputTokens: 100, SafetyMarginTokens: 100,
+	})
+	if err == nil || !strings.Contains(err.Error(), "sidecar unavailable") {
+		t.Fatalf("error = %v, want compaction error", err)
+	}
+	if admission.Decision != ContextWindowCannotFit || admission.RejectionReason != contextWindowReasonCompactionFailed {
+		t.Fatalf("admission = %#v, want CannotFit with compaction_failed", admission)
+	}
+}
+
+func TestContextWindowWorkerDescriptorReplacesParentStreamIdentity(t *testing.T) {
+	modelID := "context-window-worker-descriptor-isolation"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{ModelID: modelID, ContextWindow: 900, MaxOutputTokens: 64, SafetyMarginTokens: 32})
+	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Generation: agent.GenerationParams{MaxTokens: "64"}}}}
+	parentTool := fantasy.NewAgentTool("parent_tool", "parent", func(context.Context, map[string]any, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+		return fantasy.NewTextResponse(""), nil
+	})
+	childTool := fantasy.NewAgentTool("child_tool", "child", func(context.Context, map[string]any, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+		return fantasy.NewTextResponse(""), nil
+	})
+	parentDef := &agent.AgentDef{Name: "parent", System: "parent system", Generation: agent.GenerationParams{Model: "parent-model", ContextWindow: 700}}
+	childDef := &agent.AgentDef{Name: "child", System: "child system", Generation: agent.GenerationParams{Model: modelID, ContextWindow: 900}}
+	ctx := withContextWindowRequestDescriptor(t.Context(), c.newContextWindowRequestDescriptor(parentDef.Generation.Model, parentDef, []fantasy.AgentTool{parentTool}, "parent", "worker"))
+	ctx = withContextWindowRequestDescriptor(ctx, c.newContextWindowRequestDescriptor(modelID, childDef, c.gatePolicyTools([]fantasy.AgentTool{childTool}), "child", "subagent"))
+	descriptor, ok := contextWindowRequestDescriptorFromContext(ctx)
+	if !ok || descriptor.Owner != "child" || descriptor.Scope != "subagent" {
+		t.Fatalf("descriptor identity = %#v, ok=%v", descriptor, ok)
+	}
+	if descriptor.ModelID != modelID || descriptor.Window != 900 || descriptor.System != "child system" {
+		t.Fatalf("descriptor = %#v, want child model/system/window", descriptor)
+	}
+	if len(descriptor.Tools) != 1 || descriptor.Tools[0].Info().Name != "child_tool" {
+		t.Fatalf("descriptor tools = %v, want child_tool", agentToolNames(descriptor.Tools))
+	}
+}
+
+func TestContextWindowRescueDescriptorUsesInjectedWorkerDefinition(t *testing.T) {
+	modelID := "context-window-rescue-descriptor-identity"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{ModelID: modelID, ContextWindow: 900, MaxOutputTokens: 64, SafetyMarginTokens: 32})
+	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Generation: agent.GenerationParams{MaxTokens: "64"}}}}
+	rawDef := &agent.AgentDef{Name: "worker", Role: "worker", System: "raw system", Generation: agent.GenerationParams{Model: modelID, ContextWindow: 900}}
+	injected := c.injectWorkerContext(t.Context(), rawDef)
+	descriptor := c.newContextWindowRequestDescriptor(modelID, injected, nil, "worker", "rescue")
+	if descriptor.System != injected.System || descriptor.System == rawDef.System {
+		t.Fatalf("rescue descriptor system = %q, want injected system", descriptor.System)
+	}
+	if descriptor.Owner != "worker" || descriptor.Scope != "rescue" || descriptor.ModelID != modelID {
+		t.Fatalf("rescue descriptor identity = %#v", descriptor)
 	}
 }
 

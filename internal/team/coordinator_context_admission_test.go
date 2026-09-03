@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -11,12 +12,14 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/sidecar"
 )
 
 type transientProjectionTestTool struct{}
@@ -204,6 +207,182 @@ func TestCoordinatorContextAdmissionUsesTransientProjectionWithRealFantasyAgent(
 	}
 	if !reflect.DeepEqual(gotRecords, priorRecords) {
 		t.Fatal("transient admission mutated durable compaction records")
+	}
+}
+
+type canonicalWorkerPrepareCapture struct {
+	model        fantasy.LanguageModel
+	prepared     fantasy.PrepareStepResult
+	prepareCalls int
+	streamCalls  int
+	workerSystem string
+	workerTools  []fantasy.AgentTool
+	prepareErr   error
+}
+
+func (w *canonicalWorkerPrepareCapture) Generate(context.Context, fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return nil, nil
+}
+
+func (w *canonicalWorkerPrepareCapture) Stream(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	w.streamCalls++
+	if call.PrepareStep == nil {
+		return nil, errors.New("worker stream did not receive PrepareStep")
+	}
+	w.prepareCalls++
+	_, w.prepared, w.prepareErr = call.PrepareStep(ctx, fantasy.PrepareStepFunctionOptions{
+		Model: w.model, Messages: call.Messages,
+	})
+	if w.prepareErr != nil {
+		return nil, w.prepareErr
+	}
+	return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{
+		fantasy.TextContent{Text: "worker accepted prepared request"},
+	}}}, nil
+}
+
+func TestWorkerPrepareUsesCanonicalCompactionInputAndFailsClosedOnMandatoryCaps(t *testing.T) {
+	modelID := "worker-canonical-compaction-runner"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID: modelID, ContextWindow: 8192, MaxOutputTokens: 128, SafetyMarginTokens: 32,
+	})
+
+	var (
+		mu           sync.Mutex
+		sidecarInput string
+		sidecarCalls int
+	)
+	summaryJSON := `{"goal":"worker goal","constraints":[],"completed_tasks":[],"in_progress_tasks":[],"blocked_tasks":[],"key_decisions":[],"errors_and_fixes":[],"files_read":[],"files_modified":[],"artifacts_produced":[],"verification_results":[],"open_questions":[],"next_actions":[]}`
+	server := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, fmt.Sprintf("decode sidecar request: %v", err), http.StatusBadRequest)
+			return
+		}
+		var content strings.Builder
+		for _, message := range request.Messages {
+			content.WriteString(message.Content)
+		}
+		mu.Lock()
+		sidecarInput = content.String()
+		sidecarCalls++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"id":"canonical-compaction","object":"chat.completion","created":1,"model":%q,"choices":[{"index":0,"message":{"role":"assistant","content":%q},"finish_reason":"stop"}]}`, modelID, summaryJSON)
+	}))
+	defer server.Close()
+	provider, err := agent.NewOpenAICompatibleProvider(server.URL, "", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := sidecar.NewSidecar(t.Context(), provider, modelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workspace := t.TempDir()
+	compactionPolicy := agent.DefaultCompactionPolicy()
+	compactionPolicy.VerifiedHistoryTargetTokens = 7000
+	workerTool := fantasy.NewAgentTool("worker_inspect", "worker-only tool", func(context.Context, map[string]any, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+		return fantasy.NewTextResponse("unused"), nil
+	})
+	worker := &canonicalWorkerPrepareCapture{
+		model:        contextWindowTestModel{modelID: modelID},
+		workerSystem: "distinct worker system",
+		workerTools:  []fantasy.AgentTool{workerTool},
+	}
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "canonical-runner", Generation: agent.GenerationParams{MaxTokens: "128"}, Compaction: compactionPolicy},
+		},
+		taskTracker:    NewTaskTracker(),
+		projectDir:     workspace,
+		executionRunID: "canonical-runner-run",
+		reportStatus:   func(StatusEvent) {},
+		agentPool:      &mockAgentPool{sidecar: sc},
+		initialPrompt:  "worker goal",
+	}
+	def := &agent.AgentDef{
+		Name: "worker", Role: "worker", System: worker.workerSystem,
+		Generation: agent.GenerationParams{Model: modelID, ContextWindow: 8192, MaxTokens: "128"},
+	}
+	descriptor := c.newContextWindowRequestDescriptor(modelID, def, worker.workerTools, "worker", "worker")
+	ctx := withContextWindowRequestDescriptor(t.Context(), descriptor)
+	ctx = context.WithValue(ctx, modelKey{}, modelID)
+
+	const secret = "runner-secret-sentinel"
+	rawOutput := strings.Repeat("ordinary output ", 400) + "raw-500-head-only\n" + strings.Repeat("ordinary output ", 400) + "\nFAIL: compile failed at internal/team/runner.go exit status 1 api_token=" + secret + " artifact reports/runner-report.json"
+	history := []fantasy.Message{
+		fantasy.NewUserMessage("worker goal anchor"),
+	}
+	for i := 0; i < 40; i++ {
+		history = append(history, fantasy.NewUserMessage(fmt.Sprintf("historical context %d %s", i, strings.Repeat("evidence ", 200))))
+	}
+	history = append(history,
+		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+			fantasy.ToolCallPart{ToolCallID: "closed-call", ToolName: "worker_inspect", Input: `{"command":"go test ./...","working_dir":"workspace"}`},
+		}},
+		fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+			fantasy.ToolResultPart{ToolCallID: "closed-call", Output: fantasy.ToolResultOutputContentText{Text: rawOutput}},
+		}},
+	)
+	originalHistory := cloneMessages(history)
+	if _, _, err := c.runAgentWithStatusAndHistory(ctx, worker, "worker", "worker goal", history, &taskTiming{}); err != nil {
+		t.Fatalf("worker run: %v", err)
+	}
+
+	mu.Lock()
+	gotSidecarInput, gotSidecarCalls := sidecarInput, sidecarCalls
+	mu.Unlock()
+	if gotSidecarCalls != 1 {
+		t.Fatalf("sidecar calls = %d, want one canonical compaction call", gotSidecarCalls)
+	}
+	for _, want := range []string{"tool_call_id:", "verification: failed", "FAIL: compile failed", "reports/runner-report.json"} {
+		if !strings.Contains(gotSidecarInput, want) {
+			t.Fatalf("sidecar input missing canonical evidence %q: %s", want, gotSidecarInput)
+		}
+	}
+	for _, forbidden := range []string{secret, "ToolResult(closed-call):", "raw-500-head-only"} {
+		if strings.Contains(gotSidecarInput, forbidden) {
+			t.Fatalf("sidecar input leaked raw evidence %q: %s", forbidden, gotSidecarInput)
+		}
+	}
+	if worker.prepareCalls != 1 || worker.streamCalls != 1 {
+		t.Fatalf("worker calls = prepare %d, stream %d, want one each", worker.prepareCalls, worker.streamCalls)
+	}
+	if !containsVerifiedHistory(worker.prepared.Messages) {
+		t.Fatalf("prepared provider messages are not verified compaction: %#v", worker.prepared.Messages)
+	}
+	if worker.prepared.System != nil || worker.prepared.Tools != nil {
+		t.Fatalf("worker compaction replaced provider system/tools: %#v", worker.prepared)
+	}
+	if worker.workerSystem != descriptor.System || !reflect.DeepEqual(worker.workerTools, descriptor.Tools) {
+		t.Fatal("worker descriptor system/tools changed during compaction")
+	}
+	if !reflect.DeepEqual(history, originalHistory) {
+		t.Fatal("worker compaction mutated raw history")
+	}
+
+	policy := agent.DefaultCompactionPolicy()
+	policy.VerifiedHistoryTargetTokens = 1
+	c.session.Config.Compaction = policy
+	mu.Lock()
+	sidecarCalls = 0
+	mu.Unlock()
+	tooSmall := &canonicalWorkerPrepareCapture{model: worker.model, workerSystem: worker.workerSystem, workerTools: worker.workerTools}
+	if _, _, err := c.runAgentWithStatusAndHistory(ctx, tooSmall, "worker", "worker goal", history, &taskTiming{}); err == nil {
+		t.Fatal("mandatory caps unexpectedly admitted worker request")
+	}
+	mu.Lock()
+	gotSidecarCalls = sidecarCalls
+	mu.Unlock()
+	if tooSmall.prepareCalls != 1 || gotSidecarCalls != 0 {
+		t.Fatalf("mandatory-cap failure crossed sidecar/provider boundary: prepare=%d sidecar=%d", tooSmall.prepareCalls, gotSidecarCalls)
 	}
 }
 
