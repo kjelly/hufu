@@ -12,6 +12,30 @@ import (
 	"github.com/kjelly/hufu/internal/skill"
 )
 
+func TestParseModelRequirementsForTeamAndAgent(t *testing.T) {
+	content := `---
+name: worker
+role: worker
+requires:
+  model:
+    tools: true
+    attachments: true
+    reasoning: true
+    temperature: true
+    min-context: 32768
+---
+worker
+`
+	def, err := parseAgentContent([]byte(content), filepath.Join(t.TempDir(), "worker.md"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := agent.ModelRequirements{Tools: true, Attachments: true, Reasoning: true, Temperature: true, MinContext: 32768}
+	if def.Requirements.Model != want {
+		t.Fatalf("agent model requirements = %#v, want %#v", def.Requirements.Model, want)
+	}
+}
+
 func TestParseTeamDelegationPolicy(t *testing.T) {
 	tmpDir := t.TempDir()
 	yamlContent := `name: test-team
@@ -56,6 +80,26 @@ delegation:
 	}
 	if !cfg.Delegation.ForbidContextFiles {
 		t.Fatal("ForbidContextFiles = false, want true")
+	}
+}
+
+func TestParseTeamModelRequirements(t *testing.T) {
+	dir := t.TempDir()
+	content := `name: capability-team
+requires:
+  model:
+    tools: true
+    min-context: 16384
+`
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Requirements.Model != (agent.ModelRequirements{Tools: true, MinContext: 16384}) {
+		t.Fatalf("team model requirements = %#v", cfg.Requirements.Model)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -75,14 +76,242 @@ func TestParseOllamaShow(t *testing.T) {
 	}
 }
 
+func TestParseCapabilityEvidenceIsExplicitAndPreservesUnknowns(t *testing.T) {
+	ollama, err := ParseOllamaShow(map[string]any{
+		"model":        "vision-model",
+		"capabilities": []any{"tools", "vision", "thinking", "future-capability"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ollama.CapabilityEvidence["tools"] != CapabilityYes || ollama.CapabilityEvidence["attachments"] != CapabilityYes || ollama.CapabilityEvidence["reasoning"] != CapabilityYes {
+		t.Fatalf("Ollama capability evidence = %#v", ollama.CapabilityEvidence)
+	}
+	if !slices.Contains(ollama.Capabilities, "future-capability") {
+		t.Fatalf("unknown Ollama capability was not retained: %#v", ollama.Capabilities)
+	}
+
+	openAI, err := ParseOpenAIModels(map[string]any{"data": []any{map[string]any{
+		"id": "model", "tool_call": false, "vision": true, "reasoning": "unknown", "temperature": true,
+		"capabilities": []any{"future-capability"},
+	}}}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openAI.CapabilityEvidence["tools"] != CapabilityNo || openAI.CapabilityEvidence["attachments"] != CapabilityYes || openAI.CapabilityEvidence["reasoning"] != CapabilityUnknown || openAI.CapabilityEvidence["temperature"] != CapabilityYes {
+		t.Fatalf("OpenAI capability evidence = %#v", openAI.CapabilityEvidence)
+	}
+	if !slices.Contains(openAI.Capabilities, "future-capability") {
+		t.Fatalf("unknown OpenAI capability was not retained: %#v", openAI.Capabilities)
+	}
+
+	absent, err := ParseOpenAIModels(map[string]any{"data": []any{map[string]any{"id": "absent"}}}, "absent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(absent.CapabilityEvidence) != 0 {
+		t.Fatalf("absent capability fields became evidence: %#v", absent.CapabilityEvidence)
+	}
+}
+
+func TestParseOllamaShowMergesNegativeCapabilitiesAndParameters(t *testing.T) {
+	info, err := ParseOllamaShow(map[string]any{
+		"model":      "model",
+		"parameters": "temperature 0.2",
+		"capabilities": []any{
+			"no-tools",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.CapabilityEvidence["tools"] != CapabilityNo {
+		t.Fatalf("negative capability evidence = %#v, want tools=no", info.CapabilityEvidence)
+	}
+	if info.CapabilityEvidence["temperature"] != CapabilityYes {
+		t.Fatalf("parameter temperature evidence = %#v, want temperature=yes", info.CapabilityEvidence)
+	}
+}
+
+func TestCapabilityEvidenceExplicitNoOverridesCapabilityList(t *testing.T) {
+	ollama, err := ParseOllamaShow(map[string]any{
+		"model":        "model",
+		"tool_call":    false,
+		"capabilities": []any{"tools"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ollama.CapabilityEvidence["tools"] != CapabilityNo || !slices.Equal(ollama.Capabilities, []string{"tools"}) {
+		t.Fatalf("Ollama capability evidence/capabilities = %#v / %#v", ollama.CapabilityEvidence, ollama.Capabilities)
+	}
+
+	openAI, err := ParseOpenAIModels(map[string]any{"data": []any{map[string]any{
+		"id": "model", "tool_call": false, "capabilities": []any{"tools"},
+	}}}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openAI.CapabilityEvidence["tools"] != CapabilityNo || !slices.Equal(openAI.Capabilities, []string{"tools"}) {
+		t.Fatalf("OpenAI capability evidence/capabilities = %#v / %#v", openAI.CapabilityEvidence, openAI.Capabilities)
+	}
+}
+
+func TestCapabilityEvidenceRecognizesCanonicalAliases(t *testing.T) {
+	info, err := ParseOllamaShow(map[string]any{
+		"model":        "model",
+		"capabilities": []any{"function_call", "multimodal_input", "chain_of_thought"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]CapabilityState{
+		"tools":       CapabilityYes,
+		"attachments": CapabilityYes,
+		"reasoning":   CapabilityYes,
+	}
+	if !maps.Equal(info.CapabilityEvidence, want) {
+		t.Fatalf("capability evidence = %#v, want %#v", info.CapabilityEvidence, want)
+	}
+}
+
+func TestCapabilityEvidenceFunctionCallAliasNoOverridesPositiveList(t *testing.T) {
+	ollama, err := ParseOllamaShow(map[string]any{
+		"model":         "model",
+		"function_call": false,
+		"capabilities":  []any{"tools"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ollama.CapabilityEvidence["tools"] != CapabilityNo {
+		t.Fatalf("Ollama capability evidence = %#v, want tools=no", ollama.CapabilityEvidence)
+	}
+
+	ps, found, err := ParseOllamaPS(map[string]any{"models": []any{map[string]any{
+		"model": "model", "function_call": false, "capabilities": []any{"tool_calls"},
+	}}}, "model")
+	if err != nil || !found {
+		t.Fatalf("Ollama PS = %#v, found=%t, err=%v", ps, found, err)
+	}
+	if ps.CapabilityEvidence["tools"] != CapabilityNo {
+		t.Fatalf("Ollama PS capability evidence = %#v, want tools=no", ps.CapabilityEvidence)
+	}
+
+	openAI, err := ParseOpenAIModels(map[string]any{"data": []any{map[string]any{
+		"id": "model", "function_call": false, "capabilities": []any{"function_calling"},
+	}}}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openAI.CapabilityEvidence["tools"] != CapabilityNo {
+		t.Fatalf("OpenAI capability evidence = %#v, want tools=no", openAI.CapabilityEvidence)
+	}
+}
+
+func TestCapabilityFieldErrorsWhenPresentButMalformed(t *testing.T) {
+	if _, err := ParseOllamaShow(map[string]any{"capabilities": []any{"tools", false}}); err == nil {
+		t.Fatal("ParseOllamaShow accepted malformed capabilities")
+	}
+
+	if _, _, err := ParseOllamaPS(map[string]any{"models": []any{map[string]any{
+		"model": "model", "capabilities": []any{"tools", false},
+	}}}, "model"); err == nil {
+		t.Fatal("ParseOllamaPS accepted malformed capabilities")
+	}
+
+	if _, err := ParseOpenAIModels(map[string]any{"data": []any{map[string]any{
+		"id": "model", "capabilities": []any{"tools", false},
+	}}}, "model"); err == nil {
+		t.Fatal("ParseOpenAIModels accepted malformed capabilities")
+	}
+}
+
+func TestScalarCapabilitiesAreRejectedAcrossPublicParsers(t *testing.T) {
+	for _, value := range []string{"tools", ""} {
+		if _, err := ParseOllamaShow(map[string]any{"capabilities": value}); err == nil {
+			t.Fatalf("ParseOllamaShow accepted scalar capabilities %q", value)
+		}
+	}
+
+	for _, value := range []string{"tools", ""} {
+		if _, _, err := ParseOllamaPS(map[string]any{"models": []any{map[string]any{
+			"model": "model", "capabilities": value,
+		}}}, "model"); err == nil {
+			t.Fatalf("ParseOllamaPS accepted scalar capabilities %q", value)
+		}
+	}
+
+	for _, value := range []string{"tools", ""} {
+		if _, err := ParseOpenAIModels(map[string]any{"data": []any{map[string]any{
+			"id": "model", "capabilities": value,
+		}}}, "model"); err == nil {
+			t.Fatalf("ParseOpenAIModels accepted scalar capabilities %q", value)
+		}
+	}
+}
+
+func TestMissingCapabilitiesFieldHasEmptyEvidenceAcrossPublicParsers(t *testing.T) {
+	ollama, err := ParseOllamaShow(map[string]any{"model": "model"})
+	if err != nil {
+		t.Fatalf("ParseOllamaShow() error = %v", err)
+	}
+	if len(ollama.CapabilityEvidence) != 0 {
+		t.Fatalf("ParseOllamaShow() capability evidence = %#v, want empty", ollama.CapabilityEvidence)
+	}
+
+	ps, found, err := ParseOllamaPS(map[string]any{"models": []any{map[string]any{
+		"model": "model",
+	}}}, "model")
+	if err != nil || !found {
+		t.Fatalf("ParseOllamaPS() = %#v, found=%t, err=%v", ps, found, err)
+	}
+	if len(ps.CapabilityEvidence) != 0 {
+		t.Fatalf("ParseOllamaPS() capability evidence = %#v, want empty", ps.CapabilityEvidence)
+	}
+
+	openAI, err := ParseOpenAIModels(map[string]any{"data": []any{map[string]any{
+		"id": "model",
+	}}}, "model")
+	if err != nil {
+		t.Fatalf("ParseOpenAIModels() error = %v", err)
+	}
+	if len(openAI.CapabilityEvidence) != 0 {
+		t.Fatalf("ParseOpenAIModels() capability evidence = %#v, want empty", openAI.CapabilityEvidence)
+	}
+}
+
+func TestCapabilityEvidenceListAliasesNegativeDominates(t *testing.T) {
+	for _, names := range [][]any{{"no-tools", "tools"}, {"tools", "no-tools"}} {
+		t.Run(strings.Join(strings.Fields(fmt.Sprint(names)), "-"), func(t *testing.T) {
+			info, err := ParseOllamaShow(map[string]any{
+				"model":        "model",
+				"capabilities": names,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.CapabilityEvidence["tools"] != CapabilityNo {
+				t.Fatalf("capability evidence = %#v, want tools=no", info.CapabilityEvidence)
+			}
+		})
+	}
+}
+
 func TestParseOllamaPS(t *testing.T) {
 	raw := map[string]any{"models": []any{
 		map[string]any{"name": "other", "context_length": 1},
-		map[string]any{"model": "qwen3:8b", "context_length": 32768, "size": 100, "size_vram": 80, "expires_at": "tomorrow"},
+		map[string]any{
+			"model": "qwen3:8b", "context_length": 32768, "size": 100, "size_vram": 80, "expires_at": "tomorrow",
+			"tool_call": false, "capabilities": []any{"tools"},
+		},
 	}}
 	info, found, err := ParseOllamaPS(raw, "ollama/qwen3:8b")
 	if err != nil || !found || info.RuntimeContext != 32768 || info.Size != 100 || info.SizeVRAM != 80 || info.ExpiresAt != "tomorrow" {
 		t.Fatalf("loaded = %#v, found=%t, err=%v", info, found, err)
+	}
+	if info.CapabilityEvidence["tools"] != CapabilityNo || !slices.Equal(info.Capabilities, []string{"tools"}) {
+		t.Fatalf("capability evidence/capabilities = %#v / %#v", info.CapabilityEvidence, info.Capabilities)
 	}
 	if _, found, err := ParseOllamaPS(raw, "missing"); err != nil || found {
 		t.Fatalf("missing model = found=%t, err=%v", found, err)
@@ -151,9 +380,9 @@ func TestOllamaIntrospectorShowPSAndNativeURLNormalization(t *testing.T) {
 			} else if body["model"] != "namespace/qwen3:8b" {
 				t.Errorf("show request model = %q, want namespace/qwen3:8b", body["model"])
 			}
-			_, _ = w.Write([]byte(`{"model":"namespace/qwen3:8b","parameters":"num_ctx 65536\nnum_predict 4096","model_info":{"qwen.context_length":131072},"capabilities":["tools","thinking"],"details":{"family":"qwen"},"custom":"kept"}`))
+			_, _ = w.Write([]byte(`{"model":"namespace/qwen3:8b","parameters":"num_ctx 65536\nnum_predict 4096","model_info":{"qwen.context_length":131072},"capabilities":["tools","thinking"],"function_call":"unknown","details":{"family":"qwen"},"custom":"kept"}`))
 		case "/api/ps":
-			_, _ = w.Write([]byte(`{"models":[{"name":"namespace/qwen3:8b","context_length":32768}]}`))
+			_, _ = w.Write([]byte(`{"models":[{"name":"namespace/qwen3:8b","context_length":32768,"function_call":false,"capabilities":["function_call"]}]}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -166,6 +395,12 @@ func TestOllamaIntrospectorShowPSAndNativeURLNormalization(t *testing.T) {
 	}
 	if info.RuntimeContext != 32768 || info.ConfiguredContext != 65536 || info.ModelMaxContext != 131072 || info.MaxOutputTokens != 4096 {
 		t.Fatalf("contexts = %#v", info)
+	}
+	if info.CapabilityEvidence["tools"] != CapabilityNo {
+		t.Fatalf("merged capability evidence = %#v, want tools=no from /api/ps", info.CapabilityEvidence)
+	}
+	if !slices.Contains(info.Capabilities, "function_call") {
+		t.Fatalf("merged capability names = %#v, want /api/ps name", info.Capabilities)
 	}
 }
 

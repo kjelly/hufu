@@ -620,10 +620,15 @@ func (r *RuntimeResolver) Resolve(ctx context.Context, request RuntimeResolution
 				}
 			}
 			input.MaxOutputTokens = mergeMaxOutputTokens(input.MaxOutputTokens, show.MaxOutputTokens)
-			applyCapabilityEvidence(&input.Capabilities, show.Capabilities)
+			applyCapabilityEvidence(&input.Capabilities, show.Capabilities, false)
+			applyCapabilityStates(&input.Capabilities, show.CapabilityEvidence, false)
 		}
 		if processOK && process.RuntimeContext > 0 {
 			input.Context.RuntimeContext = process.RuntimeContext
+		}
+		if processOK {
+			applyCapabilityEvidence(&input.Capabilities, process.Capabilities, true)
+			applyCapabilityStates(&input.Capabilities, process.CapabilityEvidence, true)
 		}
 		r.cache.mu.Lock()
 		if r.cache.generation[resolveKey] != generation || r.cache.residency[resolveKey] != residency {
@@ -661,15 +666,79 @@ func (r *RuntimeResolver) ObserveContextWithContext(ctx context.Context, provide
 	return r.cache.observeContext(ctx, identity, window)
 }
 
-func applyCapabilityEvidence(input *CapabilityResolutionInput, capabilities []string) {
+func applyCapabilityEvidence(input *CapabilityResolutionInput, capabilities []string, runtime bool) {
 	for _, capability := range capabilities {
-		switch strings.ToLower(strings.TrimSpace(capability)) {
+		canonical, ok := NormalizeCapabilityName(capability)
+		if !ok {
+			continue
+		}
+		switch canonical {
 		case "tools":
-			input.Tools.Runtime = CapabilityYes
-		case "vision", "image":
-			input.Attachments.Runtime = CapabilityYes
-		case "thinking", "reasoning":
-			input.Reasoning.Runtime = CapabilityYes
+			if runtime {
+				input.Tools.Runtime = CapabilityYes
+			} else {
+				input.Tools.ProviderMetadata = CapabilityYes
+			}
+		case "attachments":
+			if runtime {
+				input.Attachments.Runtime = CapabilityYes
+			} else {
+				input.Attachments.ProviderMetadata = CapabilityYes
+			}
+		case "reasoning":
+			if runtime {
+				input.Reasoning.Runtime = CapabilityYes
+			} else {
+				input.Reasoning.ProviderMetadata = CapabilityYes
+			}
+		case "temperature":
+			if runtime {
+				input.Temperature.Runtime = CapabilityYes
+			} else {
+				input.Temperature.ProviderMetadata = CapabilityYes
+			}
+		}
+	}
+}
+
+func applyCapabilityStates(input *CapabilityResolutionInput, evidence map[string]providerintrospection.CapabilityState, runtime bool) {
+	for name, state := range evidence {
+		canonical, ok := NormalizeCapabilityName(name)
+		if !ok {
+			continue
+		}
+		value := CapabilityUnknown
+		switch state {
+		case providerintrospection.CapabilityYes:
+			value = CapabilityYes
+		case providerintrospection.CapabilityNo:
+			value = CapabilityNo
+		}
+		switch canonical {
+		case "tools":
+			if runtime {
+				input.Tools.Runtime = value
+			} else {
+				input.Tools.ProviderMetadata = value
+			}
+		case "attachments":
+			if runtime {
+				input.Attachments.Runtime = value
+			} else {
+				input.Attachments.ProviderMetadata = value
+			}
+		case "reasoning":
+			if runtime {
+				input.Reasoning.Runtime = value
+			} else {
+				input.Reasoning.ProviderMetadata = value
+			}
+		case "temperature":
+			if runtime {
+				input.Temperature.Runtime = value
+			} else {
+				input.Temperature.ProviderMetadata = value
+			}
 		}
 	}
 }

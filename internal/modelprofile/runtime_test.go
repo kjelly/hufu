@@ -771,3 +771,151 @@ func TestRuntimeResolverMaxOutputPrecedence(t *testing.T) {
 		})
 	}
 }
+
+func TestRuntimeResolverCapabilityProvenanceMatchesProviderAuthority(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider providerintrospection.ProviderRef
+		profile  ModelProfileInput
+		want     MetadataSource
+	}{
+		{
+			name:     "ollama runtime",
+			provider: testRuntimeProvider("runtime-secret"),
+			profile:  ModelProfileInput{Provider: "ollama"},
+			want:     SourceProviderRuntime,
+		},
+		{
+			name: "provider metadata",
+			provider: providerintrospection.NewProviderRef(
+				"remote", "remote", "openai-compatible", "http://127.0.0.1:11434/v1", "metadata-secret", false,
+			),
+			profile: ModelProfileInput{Provider: "remote"},
+			want:    SourceProviderMetadata,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			introspector := &splitRuntimeIntrospector{show: providerintrospection.RuntimeModelInfo{
+				Capabilities:       []string{"tools"},
+				CapabilityEvidence: map[string]providerintrospection.CapabilityState{"tools": providerintrospection.CapabilityYes},
+			}}
+			if tt.want == SourceProviderRuntime {
+				introspector.process = providerintrospection.RuntimeModelInfo{
+					RuntimeContext:     32_768,
+					Capabilities:       []string{"tools"},
+					CapabilityEvidence: map[string]providerintrospection.CapabilityState{"tools": providerintrospection.CapabilityYes},
+				}
+			}
+			resolver := NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+				return introspector
+			}, ProfileCacheOptions{})
+			request := RuntimeResolutionRequest{Provider: tt.provider, ModelID: "model", Profile: tt.profile}
+			profile, err := resolver.Resolve(t.Context(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if profile.SupportsTools != CapabilityYes || profile.Sources.Capabilities.Tools.Source != tt.want {
+				t.Fatalf("tools profile = %#v, want yes from %q", profile.Sources.Capabilities.Tools, tt.want)
+			}
+		})
+	}
+}
+
+func TestRuntimeResolverProcessCapabilityEvidenceOverridesShowAndFallback(t *testing.T) {
+	introspector := &splitRuntimeIntrospector{
+		show: providerintrospection.RuntimeModelInfo{
+			CapabilityEvidence: map[string]providerintrospection.CapabilityState{
+				"tools": providerintrospection.CapabilityUnknown,
+			},
+		},
+		process: providerintrospection.RuntimeModelInfo{
+			RuntimeContext: 32_768,
+			Capabilities:   []string{"tools"},
+			CapabilityEvidence: map[string]providerintrospection.CapabilityState{
+				"tools": providerintrospection.CapabilityNo,
+			},
+		},
+	}
+	resolver := NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+		return introspector
+	}, ProfileCacheOptions{})
+	request := testRuntimeRequest(testRuntimeProvider("secret"))
+	request.Profile.Capabilities.Tools = CapabilityEvidence{
+		Catalog:  CapabilityYes,
+		Fallback: CapabilityYes,
+	}
+
+	profile, err := resolver.Resolve(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.SupportsTools != CapabilityNo || profile.Sources.Capabilities.Tools.Source != SourceProviderRuntime {
+		t.Fatalf("tools profile = %#v, want no from provider runtime", profile.Sources.Capabilities.Tools)
+	}
+}
+
+func TestRuntimeResolverCapabilityPrecedenceAcrossShowAndProcess(t *testing.T) {
+	tests := []struct {
+		name          string
+		show          providerintrospection.CapabilityState
+		process       providerintrospection.CapabilityState
+		processLoaded bool
+		want          CapabilityState
+		wantSource    MetadataSource
+	}{
+		{
+			name:          "show yes and process no",
+			show:          providerintrospection.CapabilityYes,
+			process:       providerintrospection.CapabilityNo,
+			processLoaded: true,
+			want:          CapabilityNo,
+			wantSource:    SourceProviderRuntime,
+		},
+		{
+			name:          "show no and process yes",
+			show:          providerintrospection.CapabilityNo,
+			process:       providerintrospection.CapabilityYes,
+			processLoaded: true,
+			want:          CapabilityYes,
+			wantSource:    SourceProviderRuntime,
+		},
+		{
+			name:       "process absent leaves show eligible",
+			show:       providerintrospection.CapabilityYes,
+			want:       CapabilityYes,
+			wantSource: SourceProviderMetadata,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			introspector := &splitRuntimeIntrospector{
+				show: providerintrospection.RuntimeModelInfo{CapabilityEvidence: map[string]providerintrospection.CapabilityState{
+					"tools": tt.show,
+				}},
+			}
+			if tt.processLoaded {
+				introspector.process = providerintrospection.RuntimeModelInfo{
+					RuntimeContext: 32_768,
+					Capabilities:   []string{"tools"},
+					CapabilityEvidence: map[string]providerintrospection.CapabilityState{
+						"tools": tt.process,
+					},
+				}
+			}
+			resolver := NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+				return introspector
+			}, ProfileCacheOptions{})
+			request := testRuntimeRequest(testRuntimeProvider("secret"))
+			request.Profile.Capabilities.Tools = CapabilityEvidence{Catalog: CapabilityYes, Fallback: CapabilityYes}
+
+			profile, err := resolver.Resolve(t.Context(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if profile.SupportsTools != tt.want || profile.Sources.Capabilities.Tools.Source != tt.wantSource {
+				t.Fatalf("tools profile = %#v, want value=%q source=%q", profile.Sources.Capabilities.Tools, tt.want, tt.wantSource)
+			}
+		})
+	}
+}

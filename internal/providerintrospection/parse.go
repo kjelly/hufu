@@ -6,6 +6,14 @@ import (
 	"strings"
 )
 
+var capabilityFieldNames = map[string]string{
+	"tools": "tools", "tool": "tools", "tool_call": "tools", "tool_calls": "tools", "function_call": "tools", "function_calling": "tools", "functions": "tools", "supports_tools": "tools",
+	"attachments": "attachments", "attachment": "attachments", "vision": "attachments",
+	"image": "attachments", "images": "attachments", "multimodal": "attachments", "multimodal_input": "attachments", "supports_attachments": "attachments", "supports_vision": "attachments",
+	"reasoning": "reasoning", "reason": "reasoning", "thinking": "reasoning", "chain_of_thought": "reasoning", "supports_reasoning": "reasoning",
+	"temperature": "temperature", "sampling_temperature": "temperature", "supports_temperature": "temperature",
+}
+
 // ParseOllamaParameters parses Ollama's line-oriented parameters field. It
 // accepts optional PARAMETER prefixes, comments, blank lines, and preserves
 // parameters unknown to Hufu.
@@ -104,6 +112,7 @@ func FindOllamaContextLength(modelInfo map[string]any) (int, bool) {
 // ParseOllamaShow parses one decoded /api/show response.
 func ParseOllamaShow(raw map[string]any) (RuntimeModelInfo, error) {
 	info := RuntimeModelInfo{Raw: cloneMap(raw)}
+	explicitEvidence := make(map[string]CapabilityState)
 	if modelID, ok := raw["model"].(string); ok {
 		info.ModelID = modelID
 	}
@@ -119,6 +128,9 @@ func ParseOllamaShow(raw map[string]any) (RuntimeModelInfo, error) {
 		if value, ok := intValue(info.Parameters["num_predict"]); ok {
 			info.MaxOutputTokens = value
 		}
+		if _, ok := info.Parameters["temperature"]; ok {
+			explicitEvidence["temperature"] = CapabilityYes
+		}
 	}
 	if modelInfo, present := raw["model_info"]; present {
 		var ok bool
@@ -131,13 +143,13 @@ func ParseOllamaShow(raw map[string]any) (RuntimeModelInfo, error) {
 			info.ModelMaxContext = contextLength
 		}
 	}
-	if capabilities, present := raw["capabilities"]; present {
-		parsed, err := parseCapabilities(capabilities)
-		if err != nil {
-			return RuntimeModelInfo{}, err
-		}
-		info.Capabilities = parsed
+	parsedCapabilities, err := parseCapabilityField(raw)
+	if err != nil {
+		return RuntimeModelInfo{}, err
 	}
+	info.Capabilities = parsedCapabilities
+	explicitEvidence = mergeExplicitCapabilityFields(explicitEvidence, raw)
+	info.CapabilityEvidence = reduceCapabilityEvidence(info.Capabilities, explicitEvidence)
 	if details, present := raw["details"]; present {
 		parsed, ok := details.(map[string]any)
 		if !ok {
@@ -164,14 +176,120 @@ func parseCapabilities(value any) ([]string, error) {
 		return capabilities, nil
 	case []string:
 		return append([]string(nil), typed...), nil
-	case string:
-		if typed == "" {
-			return nil, nil
-		}
-		return strings.Fields(typed), nil
 	default:
 		return nil, errors.New("capabilities is not a list")
 	}
+}
+
+func parseCapabilityField(raw map[string]any) ([]string, error) {
+	capabilities, present := raw["capabilities"]
+	if !present {
+		return nil, nil
+	}
+	return parseCapabilities(capabilities)
+}
+
+func mergeCapabilityNames(evidence map[string]CapabilityState, names []string) map[string]CapabilityState {
+	if evidence == nil {
+		evidence = make(map[string]CapabilityState)
+	}
+	for _, name := range names {
+		canonical, ok := canonicalCapabilityName(name)
+		if !ok {
+			continue
+		}
+		evidence[canonical] = reduceCapabilityState(evidence[canonical], capabilityStateFromName(name))
+	}
+	return evidence
+}
+
+func reduceCapabilityEvidence(names []string, explicit map[string]CapabilityState) map[string]CapabilityState {
+	evidence := mergeCapabilityNames(nil, names)
+	for canonical, state := range explicit {
+		evidence[canonical] = state
+	}
+	return evidence
+}
+
+func reduceCapabilityState(current, next CapabilityState) CapabilityState {
+	if current == "" {
+		return next
+	}
+	if current == CapabilityNo || next == CapabilityNo {
+		return CapabilityNo
+	}
+	if current == CapabilityUnknown || next == CapabilityUnknown {
+		return CapabilityUnknown
+	}
+	return CapabilityYes
+}
+
+func capabilityStateFromName(name string) CapabilityState {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	if strings.HasPrefix(lower, "no-") || strings.HasPrefix(lower, "no_") || strings.HasPrefix(lower, "not-") || strings.HasSuffix(lower, ":false") {
+		return CapabilityNo
+	}
+	return CapabilityYes
+}
+
+func canonicalCapabilityName(name string) (string, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.TrimPrefix(name, "no-")
+	name = strings.TrimPrefix(name, "no_")
+	name = strings.TrimPrefix(name, "not-")
+	name = strings.ReplaceAll(name, "-", "_")
+	name = strings.ReplaceAll(name, " ", "_")
+	name = strings.TrimSuffix(name, ":true")
+	name = strings.TrimSuffix(name, ":false")
+	canonical, ok := capabilityFieldNames[name]
+	return canonical, ok
+}
+
+func mergeExplicitCapabilityFields(evidence map[string]CapabilityState, raw map[string]any) map[string]CapabilityState {
+	if evidence == nil {
+		evidence = make(map[string]CapabilityState)
+	}
+	for rawName, value := range raw {
+		canonical, ok := canonicalCapabilityName(rawName)
+		if !ok {
+			continue
+		}
+		if state, ok := explicitCapabilityState(value); ok {
+			evidence[canonical] = reduceCapabilityState(evidence[canonical], state)
+		}
+	}
+	if nested, ok := raw["capabilities"].(map[string]any); ok {
+		for rawName, value := range nested {
+			canonical, known := canonicalCapabilityName(rawName)
+			if !known {
+				continue
+			}
+			if state, valid := explicitCapabilityState(value); valid {
+				evidence[canonical] = reduceCapabilityState(evidence[canonical], state)
+			}
+		}
+	}
+	return evidence
+}
+
+func explicitCapabilityState(value any) (CapabilityState, bool) {
+	switch typed := value.(type) {
+	case bool:
+		if typed {
+			return CapabilityYes, true
+		}
+		return CapabilityNo, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "yes", "true", "supported", "available":
+			return CapabilityYes, true
+		case "no", "false", "unsupported", "unavailable":
+			return CapabilityNo, true
+		case "unknown":
+			return CapabilityUnknown, true
+		}
+	}
+	return CapabilityUnknown, false
 }
 
 // ParseOllamaPS finds the requested loaded model in a decoded /api/ps
@@ -194,6 +312,13 @@ func ParseOllamaPS(raw map[string]any, requestedModel string) (RuntimeModelInfo,
 			continue
 		}
 		info := RuntimeModelInfo{ModelID: requestedModel, Raw: cloneMap(model)}
+		names, err := parseCapabilityField(model)
+		if err != nil {
+			return RuntimeModelInfo{}, false, err
+		}
+		info.Capabilities = names
+		explicitEvidence := mergeExplicitCapabilityFields(nil, model)
+		info.CapabilityEvidence = reduceCapabilityEvidence(info.Capabilities, explicitEvidence)
 		if modelName, ok := model["name"].(string); ok && modelName != "" {
 			info.ModelID = modelName
 		} else if modelName, ok := model["model"].(string); ok && modelName != "" {
@@ -231,6 +356,13 @@ func ParseOpenAIModels(raw map[string]any, requestedModel string) (RuntimeModelI
 			continue
 		}
 		info := RuntimeModelInfo{ModelID: modelID, Raw: cloneMap(model)}
+		names, err := parseCapabilityField(model)
+		if err != nil {
+			return RuntimeModelInfo{}, err
+		}
+		info.Capabilities = names
+		explicitEvidence := mergeExplicitCapabilityFields(nil, model)
+		info.CapabilityEvidence = reduceCapabilityEvidence(info.Capabilities, explicitEvidence)
 		for _, key := range []string{"context_length", "max_context_window", "max_input_tokens"} {
 			if candidate, ok := intValue(model[key]); ok {
 				info.ModelMaxContext = candidate

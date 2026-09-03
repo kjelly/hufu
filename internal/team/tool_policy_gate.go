@@ -457,6 +457,23 @@ func (c *Coordinator) gatePolicyTools(agentTools []fantasy.AgentTool) []fantasy.
 	return gated
 }
 
+func protocolRequiredForAgent(ctx context.Context, cfg agent.AgentConfig) bool {
+	if cfg.Def != nil {
+		switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(cfg.Def.Role), "-", "_")) {
+		case "coordinator", "plan_reviewer", "auxiliary":
+			return true
+		}
+	}
+	if ctx != nil {
+		if requiresResult, ok := ctx.Value(taskRequiresResultKey{}).(bool); ok && requiresResult {
+			return true
+		}
+		todoID, _ := ctx.Value(todoIDKey{}).(string)
+		return todoID == CoordTodoID
+	}
+	return false
+}
+
 // createGatedAgent is the only agent constructor this package uses. Funnelling
 // every agent through one call is what makes the recoverable gate complete: a
 // tool set assembled somewhere that skipped gatePolicyTools would have no
@@ -501,6 +518,11 @@ func (c *Coordinator) createGatedAgent(ctx context.Context, provider *agent.Open
 		}
 	}
 	gated := c.gatePolicyTools(agentTools)
+	filtered, err := c.filterWorkerToolsForModel(ctx, modelID, gated, protocolRequiredForAgent(ctx, cfg), nil)
+	if err != nil {
+		return nil, err
+	}
+	gated = filtered
 	if cfg.PrepareStep == nil {
 		cfg.PrepareStep = c.prepareAgentModelRequest(cfg, gated)
 	}

@@ -242,6 +242,13 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	// ProviderManager used for invocation. This covers configured agents,
 	// extra models, model-list candidates, and all auxiliary role models.
 	coordinator.WarmModelProfiles(ctx, models, session.Config.Generation.ContextWindow)
+	modelCapabilityValidation := coordinator.ValidateModelCapabilities(ctx)
+	for _, warning := range modelCapabilityValidation.Warnings {
+		stderrLog("%s %s\n", errStyle.Render("⚠"), warning)
+	}
+	if err := modelCapabilityValidation.Err(); err != nil {
+		return nil, err
+	}
 
 	coordinator.SetExecutionProfile(execProfile)
 	coordinator.SetSessionData(sessionData)

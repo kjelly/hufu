@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -66,10 +67,13 @@ type RuntimeModelInfo struct {
 	RuntimeContext    int
 	MaxOutputTokens   int
 
-	Capabilities  []string
-	Family        string
-	ParameterSize string
-	Quantization  string
+	Capabilities []string
+	// CapabilityEvidence contains only explicit provider claims. Missing
+	// fields are absent (and therefore unknown), never false.
+	CapabilityEvidence map[string]CapabilityState
+	Family             string
+	ParameterSize      string
+	Quantization       string
 
 	Parameters map[string]string
 	ModelInfo  map[string]any
@@ -78,6 +82,16 @@ type RuntimeModelInfo struct {
 	ExpiresAt  string
 	Raw        map[string]any
 }
+
+// CapabilityState is the provider-neutral tri-state used while parsing
+// explicit provider metadata. modelprofile owns canonical resolution.
+type CapabilityState string
+
+const (
+	CapabilityUnknown CapabilityState = "unknown"
+	CapabilityYes     CapabilityState = "yes"
+	CapabilityNo      CapabilityState = "no"
+)
 
 // OllamaIntrospector reads Ollama's native /api/show and /api/ps endpoints.
 type OllamaIntrospector struct {
@@ -118,6 +132,7 @@ func (i *OllamaIntrospector) InspectModel(ctx context.Context, provider Provider
 		return RuntimeModelInfo{}, err
 	}
 	if found {
+		mergeRuntimeCapabilities(&info, runtime)
 		info.RuntimeContext = runtime.RuntimeContext
 		info.Size = runtime.Size
 		info.SizeVRAM = runtime.SizeVRAM
@@ -128,6 +143,30 @@ func (i *OllamaIntrospector) InspectModel(ctx context.Context, provider Provider
 		info.Raw["runtime"] = runtime.Raw
 	}
 	return info, nil
+}
+
+func mergeRuntimeCapabilities(info *RuntimeModelInfo, runtime RuntimeModelInfo) {
+	info.Capabilities = appendUniqueCapabilities(info.Capabilities, runtime.Capabilities)
+	runtimeEvidence := reduceCapabilityEvidence(runtime.Capabilities, runtime.CapabilityEvidence)
+	if len(runtimeEvidence) == 0 {
+		return
+	}
+	if info.CapabilityEvidence == nil {
+		info.CapabilityEvidence = make(map[string]CapabilityState, len(runtimeEvidence))
+	}
+	for name, state := range runtimeEvidence {
+		info.CapabilityEvidence[name] = state
+	}
+}
+
+func appendUniqueCapabilities(existing, additional []string) []string {
+	merged := slices.Clone(existing)
+	for _, capability := range additional {
+		if !slices.Contains(merged, capability) {
+			merged = append(merged, capability)
+		}
+	}
+	return merged
 }
 
 // InspectShow refreshes Ollama's /api/show metadata without consulting /api/ps.

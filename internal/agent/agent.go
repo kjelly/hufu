@@ -172,12 +172,24 @@ type AgentDef struct {
 // ContractRequirements describes prerequisites for a team or worker without
 // coupling hufu to a particular task domain or external program.
 type ContractRequirements struct {
-	Tools       []string `yaml:"tools" json:"tools,omitempty"`
-	Environment []string `yaml:"environment" json:"environment,omitempty"`
-	Paths       []string `yaml:"paths" json:"paths,omitempty"`
-	Interactive bool     `yaml:"interactive" json:"interactive,omitempty"`
-	Network     bool     `yaml:"network" json:"network,omitempty"`
-	PlanFirst   bool     `yaml:"plan-first" json:"plan_first,omitempty"`
+	Tools       []string          `yaml:"tools" json:"tools,omitempty"`
+	Model       ModelRequirements `yaml:"model" json:"model,omitempty"`
+	Environment []string          `yaml:"environment" json:"environment,omitempty"`
+	Paths       []string          `yaml:"paths" json:"paths,omitempty"`
+	Interactive bool              `yaml:"interactive" json:"interactive,omitempty"`
+	Network     bool              `yaml:"network" json:"network,omitempty"`
+	PlanFirst   bool              `yaml:"plan-first" json:"plan_first,omitempty"`
+}
+
+// ModelRequirements declares capabilities that the selected model must
+// provide. False values are the zero value: requirements are additive and
+// only an explicit true asks the runtime to enforce a capability.
+type ModelRequirements struct {
+	Tools       bool `yaml:"tools" json:"tools,omitempty"`
+	Attachments bool `yaml:"attachments" json:"attachments,omitempty"`
+	Reasoning   bool `yaml:"reasoning" json:"reasoning,omitempty"`
+	Temperature bool `yaml:"temperature" json:"temperature,omitempty"`
+	MinContext  int  `yaml:"min-context" json:"min_context,omitempty"`
 }
 
 // WorkerMemoryMode controls whether a worker has private memory and how long

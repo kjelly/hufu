@@ -102,10 +102,10 @@ func firstContext(values ...ResolvedValue[int]) ResolvedValue[int] {
 	return ResolvedValue[int]{}
 }
 
-// ResolveCapability merges tri-state evidence by authority. Unknown does not
-// override a known lower-authority value.
+// ResolveCapability merges tri-state evidence by authority. An explicit
+// unknown is evidence at its source and therefore overrides lower authorities;
+// only absent evidence falls through.
 func ResolveCapability(input CapabilityEvidence) ResolvedValue[CapabilityState] {
-	var unknown ResolvedValue[CapabilityState]
 	for _, candidate := range []struct {
 		value  CapabilityState
 		source MetadataSource
@@ -119,19 +119,9 @@ func ResolveCapability(input CapabilityEvidence) ResolvedValue[CapabilityState] 
 		if candidate.value == "" {
 			continue
 		}
-		resolved := resolvedCapability(candidate.value, candidate.source)
-		if resolved.Value == CapabilityUnknown {
-			if unknown.Value == "" {
-				unknown = resolved
-			}
-			continue
-		}
-		return resolved
+		return resolvedCapability(candidate.value, candidate.source)
 	}
-	if unknown.Value == "" {
-		unknown.Value = CapabilityUnknown
-	}
-	return unknown
+	return ResolvedValue[CapabilityState]{Value: CapabilityUnknown}
 }
 
 // ResolveModelProfile builds the canonical profile and retains all resolved

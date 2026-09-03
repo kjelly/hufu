@@ -341,7 +341,7 @@ func workerToolResolutionModeForTask(task TaskDef) WorkerToolResolutionMode {
 	return WorkerToolResolutionNormal
 }
 
-func (r *defaultToolResolver) ResolveTaskTools(_ context.Context, def *agent.AgentDef, req WorkerToolResolutionRequest) (ResolvedWorkerTools, error) {
+func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.AgentDef, req WorkerToolResolutionRequest) (ResolvedWorkerTools, error) {
 	if r == nil || r.c == nil || def == nil {
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: agent definition is required")
 	}
@@ -424,6 +424,16 @@ func (r *defaultToolResolver) ResolveTaskTools(_ context.Context, def *agent.Age
 	}
 	tools = r.c.filterDeniedWorkerToolsWithGrants(tools, r.c.taskToolGrants(def, task))
 	tools = r.c.filterCoordinatorOnlyWorkerTools(tools)
+	return r.finalizeTaskTools(ctx, def, task, tools, resultOnly, resultRequired, planRequired, effectiveSequence)
+}
+
+func (r *defaultToolResolver) finalizeTaskTools(ctx context.Context, def *agent.AgentDef, task TaskDef, tools []fantasy.AgentTool, resultOnly, resultRequired, planRequired bool, effectiveSequence []string) (ResolvedWorkerTools, error) {
+	modelID := r.c.resolveAgentModel(def, task.Model)
+	filteredTools, err := r.c.filterWorkerToolsForModel(ctx, modelID, tools, resultOnly || resultRequired || planRequired, effectiveSequence)
+	if err != nil {
+		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
+	}
+	tools = filteredTools
 	if missing := missingExecutionTools(tools, effectiveSequence); len(missing) > 0 {
 		return ResolvedWorkerTools{}, fmt.Errorf("execution tool_sequence requires unavailable tool(s) for agent %q: %s", def.Name, strings.Join(missing, ", "))
 	}

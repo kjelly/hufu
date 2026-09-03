@@ -647,6 +647,7 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 		MCPTools:       fm.MCPTools,
 		Requirements: agent.ContractRequirements{
 			Tools:       append([]string(nil), fm.Requirements.Tools...),
+			Model:       fm.Requirements.Model,
 			Environment: append([]string(nil), fm.Requirements.Environment...),
 			Paths:       expandAllowedPaths(fm.Requirements.Paths),
 			Interactive: fm.Requirements.Interactive,
@@ -1106,6 +1107,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	cfg.Requirements = agent.ContractRequirements{
 		Tools:       append([]string(nil), yc.Requirements.Tools...),
+		Model:       yc.Requirements.Model,
 		Environment: append([]string(nil), yc.Requirements.Environment...),
 		Paths:       expandAllowedPaths(yc.Requirements.Paths),
 		Interactive: yc.Requirements.Interactive,

@@ -5,6 +5,29 @@
 // making callers depend on the order in which that evidence arrived.
 package modelprofile
 
+import "strings"
+
+// NormalizeCapabilityName maps provider vocabulary to canonical profile
+// names. Unknown names are returned unchanged with ok=false so adapters can
+// retain forward-compatible raw evidence without treating it as known.
+func NormalizeCapabilityName(name string) (string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	normalized = strings.ReplaceAll(normalized, "-", "_")
+	normalized = strings.ReplaceAll(normalized, " ", "_")
+	switch normalized {
+	case "tool", "tools", "tool_call", "tool_calls", "function_call", "function_calling", "functions", "supports_tools":
+		return "tools", true
+	case "attachment", "attachments", "vision", "image", "images", "multimodal", "multimodal_input", "supports_attachments", "supports_vision":
+		return "attachments", true
+	case "reasoning", "reason", "thinking", "chain_of_thought", "supports_reasoning":
+		return "reasoning", true
+	case "temperature", "sampling_temperature", "supports_temperature":
+		return "temperature", true
+	default:
+		return normalized, false
+	}
+}
+
 // CapabilityState is a tri-state capability value. Unknown is intentionally
 // different from No: the absence of evidence must not be treated as a denial.
 type CapabilityState string
@@ -68,10 +91,9 @@ type ContextResolution struct {
 	Effective        ResolvedValue[int]
 }
 
-// CapabilityEvidence contains capability values from the supported
-// authority levels. Unknown values are skipped while resolving, so a known
-// lower-authority value can still be used when higher-authority evidence is
-// unavailable.
+// CapabilityEvidence contains capability values from the supported authority
+// levels. An explicit unknown is retained at its source while an absent value
+// allows resolution to continue to lower-authority evidence.
 type CapabilityEvidence struct {
 	Operator         CapabilityState
 	Runtime          CapabilityState

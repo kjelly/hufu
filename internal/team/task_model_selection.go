@@ -130,7 +130,11 @@ func (c *Coordinator) selectTaskModel(task TaskDef, defs ...*agent.AgentDef) str
 		}
 	}
 	profile.ContextTokens += contextChars / 4
-	return SelectModelForComplexity(c.modelList, profile)
+	var def *agent.AgentDef
+	if len(defs) > 0 {
+		def = defs[0]
+	}
+	return c.selectCapabilityAwareModel(task, def, SelectModelForComplexity(c.modelList, profile))
 }
 
 // selectStructuredStepModel chooses a relative capability tier for one

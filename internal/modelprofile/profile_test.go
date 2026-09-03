@@ -2,6 +2,26 @@ package modelprofile
 
 import "testing"
 
+func TestNormalizeCapabilityName(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		want string
+		ok   bool
+	}{
+		{name: "tool_call", want: "tools", ok: true},
+		{name: "vision", want: "attachments", ok: true},
+		{name: "thinking", want: "reasoning", ok: true},
+		{name: "future-capability", want: "future_capability", ok: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := NormalizeCapabilityName(test.name)
+			if got != test.want || ok != test.ok {
+				t.Fatalf("NormalizeCapabilityName(%q) = %q, %t; want %q, %t", test.name, got, ok, test.want, test.ok)
+			}
+		})
+	}
+}
+
 func TestResolveContextOllamaAuthorityAndProvenance(t *testing.T) {
 	profile := ResolveModelProfile(ModelProfileInput{
 		ModelID:  "qwen3:8b",
@@ -132,7 +152,8 @@ func TestResolveCapabilityTriStateMerge(t *testing.T) {
 		want   CapabilityState
 		source MetadataSource
 	}{
-		{name: "unknown does not override catalog yes", e: CapabilityEvidence{Runtime: CapabilityUnknown, Catalog: CapabilityYes}, want: CapabilityYes, source: SourceCatalog},
+		{name: "runtime unknown overrides catalog yes", e: CapabilityEvidence{Runtime: CapabilityUnknown, Catalog: CapabilityYes}, want: CapabilityUnknown, source: SourceProviderRuntime},
+		{name: "absent runtime allows catalog yes", e: CapabilityEvidence{Catalog: CapabilityYes}, want: CapabilityYes, source: SourceCatalog},
 		{name: "provider no overrides catalog yes", e: CapabilityEvidence{ProviderMetadata: CapabilityNo, Catalog: CapabilityYes}, want: CapabilityNo, source: SourceProviderMetadata},
 		{name: "fallback unknown is preserved", e: CapabilityEvidence{Fallback: CapabilityUnknown}, want: CapabilityUnknown, source: SourceFallback},
 	}
