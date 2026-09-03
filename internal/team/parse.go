@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -448,6 +449,43 @@ func parseAgentFile(path string, vars map[string]string) (*agent.AgentDef, error
 	return parseAgentContent(raw, path, vars)
 }
 
+// inferredAgentNamePattern constrains filename-inferred agent names to a
+// conservative identifier shape. It does not apply to an explicit `name:`
+// frontmatter field, which remains unrestricted for backward compatibility;
+// it only governs the fallback used when frontmatter omits (or is absent
+// entirely, see parseAgentContent) a name.
+var inferredAgentNamePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
+
+// agentFilenameBase returns an agent file's basename without its extension,
+// e.g. "coordinator" for ".../coordinator.md".
+func agentFilenameBase(path string) string {
+	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+}
+
+// inferAgentRoleFromFilename infers "coordinator" for coordinator.md and
+// "worker" for every other filename. Unlike name inference, this never
+// fails: it applies purely from the filename regardless of whether an
+// explicit name is also present, so a coordinator.md with an explicit
+// `name:` still infers the coordinator role.
+func inferAgentRoleFromFilename(path string) string {
+	if strings.EqualFold(agentFilenameBase(path), "coordinator") {
+		return "coordinator"
+	}
+	return "worker"
+}
+
+// inferAgentNameFromFilename derives an agent's default name from its
+// filename. It is only consulted when frontmatter omits (or is absent
+// entirely, see parseAgentContent) an explicit name, so an unusable
+// filename never blocks a file that already names itself explicitly.
+func inferAgentNameFromFilename(path string) (string, error) {
+	base := agentFilenameBase(path)
+	if !inferredAgentNamePattern.MatchString(base) {
+		return "", fmt.Errorf("agent file %s: filename %q cannot be used as an inferred agent name (must start with a letter and contain only letters, digits, '-', or '_'); add an explicit 'name' field in frontmatter", path, base)
+	}
+	return base, nil
+}
+
 func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.AgentDef, error) {
 	text := string(raw)
 
@@ -457,29 +495,38 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 	}
 	text = templated
 
-	if !strings.HasPrefix(text, "---\n") {
-		return nil, nil
-	}
-	rest := text[4:]
-	idx := strings.Index(rest, "\n---\n")
-	if idx < 0 {
-		return nil, fmt.Errorf("agent file %s has malformed frontmatter (missing closing '---')", path)
-	}
+	inferredRole := inferAgentRoleFromFilename(path)
 
 	var fm agentFrontmatter
-	if err := yaml.Unmarshal([]byte(rest[:idx]), &fm); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: YAML parse failed in %s, using fallback: %v\n", path, err)
-		fm = agentFrontmatterFromSimple(yamlutil.ParseSimpleYAML(rest[:idx]))
+	var body string
+	if strings.HasPrefix(text, "---\n") {
+		rest := text[4:]
+		idx := strings.Index(rest, "\n---\n")
+		if idx < 0 {
+			return nil, fmt.Errorf("agent file %s has malformed frontmatter (missing closing '---')", path)
+		}
+		if err := yaml.Unmarshal([]byte(rest[:idx]), &fm); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: YAML parse failed in %s, using fallback: %v\n", path, err)
+			fm = agentFrontmatterFromSimple(yamlutil.ParseSimpleYAML(rest[:idx]))
+		}
+		body = strings.TrimSpace(rest[idx+5:])
+	} else {
+		// No frontmatter at all: the whole file is the system prompt, and
+		// name/role are inferred entirely from the filename.
+		body = strings.TrimSpace(text)
 	}
-	body := strings.TrimSpace(rest[idx+5:])
 
-	if fm.Name == "" {
-		return nil, fmt.Errorf("agent file %s is missing required 'name' field in frontmatter", path)
+	name := fm.Name
+	if name == "" {
+		inferredName, err := inferAgentNameFromFilename(path)
+		if err != nil {
+			return nil, err
+		}
+		name = inferredName
 	}
-
 	role := fm.Role
 	if role == "" {
-		role = "worker"
+		role = inferredRole
 	}
 
 	toolsList := anyToStrList(fm.Tools)
@@ -489,7 +536,7 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 	maxRetries := anyToInt(fm.MaxRetries, -1)
 
 	def := &agent.AgentDef{
-		Name:           fm.Name,
+		Name:           name,
 		Description:    fm.Description,
 		Tools:          toolsStr,
 		Role:           role,
@@ -1185,6 +1232,17 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, reg
 		path string
 	}
 	identityOwners := make(map[string]agentIdentityOwner)
+	var coordinatorPath string
+	registerCoordinator := func(def *agent.AgentDef, path string) error {
+		if def.Role != "coordinator" {
+			return nil
+		}
+		if coordinatorPath != "" {
+			return fmt.Errorf("team has more than one coordinator agent: %s and %s both resolve to role \"coordinator\"", coordinatorPath, path)
+		}
+		coordinatorPath = path
+		return nil
+	}
 	registerIdentity := func(identity string, def *agent.AgentDef, path string) error {
 		key := normalizedName(identity)
 		if key == "helper" {
@@ -1221,6 +1279,9 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, reg
 			return nil, err
 		}
 		if err := registerIdentity(def.Name, def, path); err != nil {
+			return nil, err
+		}
+		if err := registerCoordinator(def, path); err != nil {
 			return nil, err
 		}
 		fileKey := normalizedName(fileAlias)

@@ -556,7 +556,7 @@ model-list:
 }
 
 func TestParseAgentFile_MissingName(t *testing.T) {
-	t.Run("no name field returns error", func(t *testing.T) {
+	t.Run("no name field infers name from filename", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		agentPath := filepath.Join(tmpDir, "no-name.md")
 		content := "---\nrole: worker\ndescription: agent without name\n---\nSome content"
@@ -564,16 +564,16 @@ func TestParseAgentFile_MissingName(t *testing.T) {
 			t.Fatalf("Failed to write test agent file: %v", err)
 		}
 
-		_, err := parseAgentFile(agentPath, nil)
-		if err == nil {
-			t.Error("expected error for agent file without name, got nil")
+		def, err := parseAgentFile(agentPath, nil)
+		if err != nil {
+			t.Fatalf("expected filename-inferred name to succeed, got error: %v", err)
 		}
-		if err != nil && !strings.Contains(err.Error(), "missing required 'name'") {
-			t.Errorf("expected error about missing 'name', got: %v", err)
+		if def.Name != "no-name" {
+			t.Errorf("Name = %q, want inferred %q", def.Name, "no-name")
 		}
 	})
 
-	t.Run("empty name field returns error", func(t *testing.T) {
+	t.Run("empty name field infers name from filename", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		agentPath := filepath.Join(tmpDir, "empty-name.md")
 		content := "---\nname: \"\"\nrole: worker\n---\nSome content"
@@ -581,15 +581,35 @@ func TestParseAgentFile_MissingName(t *testing.T) {
 			t.Fatalf("Failed to write test agent file: %v", err)
 		}
 
+		def, err := parseAgentFile(agentPath, nil)
+		if err != nil {
+			t.Fatalf("expected filename-inferred name to succeed, got error: %v", err)
+		}
+		if def.Name != "empty-name" {
+			t.Errorf("Name = %q, want inferred %q", def.Name, "empty-name")
+		}
+	})
+
+	t.Run("filename unusable for inference returns error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		agentPath := filepath.Join(tmpDir, "3rd party.md")
+		content := "---\nrole: worker\n---\nSome content"
+		if err := os.WriteFile(agentPath, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write test agent file: %v", err)
+		}
+
 		_, err := parseAgentFile(agentPath, nil)
 		if err == nil {
-			t.Error("expected error for agent file with empty name, got nil")
+			t.Fatal("expected error for a filename that cannot be used as an inferred agent name, got nil")
+		}
+		if !strings.Contains(err.Error(), "cannot be used as an inferred agent name") {
+			t.Errorf("expected error about an unusable inferred name, got: %v", err)
 		}
 	})
 }
 
 func TestParseAgentFile_PlainMarkdown(t *testing.T) {
-	t.Run("plain markdown without frontmatter returns nil", func(t *testing.T) {
+	t.Run("plain markdown without frontmatter infers identity from filename", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		agentPath := filepath.Join(tmpDir, "readme.md")
 		content := "# Just a regular markdown file\n\nSome content here."
@@ -599,10 +619,36 @@ func TestParseAgentFile_PlainMarkdown(t *testing.T) {
 
 		def, err := parseAgentFile(agentPath, nil)
 		if err != nil {
-			t.Errorf("expected nil error for plain markdown, got: %v", err)
+			t.Fatalf("expected nil error for plain markdown, got: %v", err)
 		}
-		if def != nil {
-			t.Errorf("expected nil def for plain markdown, got: %v", def)
+		if def == nil {
+			t.Fatal("expected a filename-inferred agent def for plain markdown, got nil")
+		}
+		if def.Name != "readme" {
+			t.Errorf("Name = %q, want inferred %q", def.Name, "readme")
+		}
+		if def.Role != "worker" {
+			t.Errorf("Role = %q, want %q", def.Role, "worker")
+		}
+		if def.System != content {
+			t.Errorf("System = %q, want the whole file body %q", def.System, content)
+		}
+	})
+
+	t.Run("coordinator.md without frontmatter infers coordinator role", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		agentPath := filepath.Join(tmpDir, "coordinator.md")
+		content := "Delegate work to the workers and synthesize a final answer."
+		if err := os.WriteFile(agentPath, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write test file: %v", err)
+		}
+
+		def, err := parseAgentFile(agentPath, nil)
+		if err != nil {
+			t.Fatalf("parseAgentFile() error = %v", err)
+		}
+		if def.Name != "coordinator" || def.Role != "coordinator" {
+			t.Errorf("Name/Role = %q/%q, want %q/%q", def.Name, def.Role, "coordinator", "coordinator")
 		}
 	})
 
