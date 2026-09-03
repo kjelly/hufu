@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -13,6 +14,17 @@ import (
 const auxiliaryPromptMaxRunes = 24000
 
 func (c *Coordinator) prepareAuxiliaryPrompt(ctx context.Context, purpose, rawPrompt string) (string, error) {
+	return c.prepareAuxiliaryPromptWithPersistence(ctx, purpose, rawPrompt, true)
+}
+
+// prepareAuxiliaryProjectionPrompt compiles an auxiliary prompt for a
+// transient projection. Compilation still uses the invocation-bound model
+// context, but no manifest, session, event, or usage projection is persisted.
+func (c *Coordinator) prepareAuxiliaryProjectionPrompt(ctx context.Context, purpose, rawPrompt string) (string, error) {
+	return c.prepareAuxiliaryPromptWithPersistence(ctx, purpose, rawPrompt, false)
+}
+
+func (c *Coordinator) prepareAuxiliaryPromptWithPersistence(ctx context.Context, purpose, rawPrompt string, persist bool) (string, error) {
 	purpose = strings.ToLower(strings.TrimSpace(purpose))
 	if _, err := contextPurposePolicy(purpose); err != nil {
 		return "", err
@@ -58,13 +70,27 @@ func (c *Coordinator) prepareAuxiliaryPrompt(ctx context.Context, purpose, rawPr
 	// Auxiliary reviewers are intentionally isolated: they receive only their
 	// purpose contract/candidate evidence, never the worker's STM/LTM or raw
 	// transcript. The shared compiler still enforces budget and redaction.
-	compiled, err := c.ContextCompiler().CompileWorkerContext(ctx, WorkerContextInput{Request: request, Goal: request.Goal, DisableMemory: true, ModelContext: globalRegistry.GetSpec("")})
+	// An auxiliary call must compile against the model that will handle the
+	// sidecar request. The sidecar invocation binder installs this binding
+	// before this hook runs; do not resolve a second profile here.
+	sidecarModelID := sidecar.ModelIDFromContext(ctx)
+	invocation, hasBound := providerBoundInvocationContextFromContext(ctx, sidecarModelID)
+	if !hasBound || !invocation.AdmissionContext.IsBound() {
+		if sidecarModelID != "" {
+			return "", fmt.Errorf("provider-bound context unavailable for sidecar model %q", sidecarModelID)
+		}
+		return "", fmt.Errorf("provider-bound context unavailable for auxiliary purpose %q", purpose)
+	}
+	modelSpec := invocation.ModelContext
+	compiled, err := c.ContextCompiler().CompileWorkerContext(ctx, WorkerContextInput{Request: request, Goal: request.Goal, DisableMemory: true, ModelContext: modelSpec})
 	if err != nil {
 		return "", err
 	}
-	manifest := BuildContextInjectionManifest(request, compiled, nil, purpose, time.Now().UTC())
-	if err := c.persistContextManifest(&manifest); err != nil {
-		return "", err
+	if persist {
+		manifest := BuildContextInjectionManifest(request, compiled, nil, purpose, time.Now().UTC())
+		if err := c.persistContextManifest(&manifest); err != nil {
+			return "", err
+		}
 	}
 	return compiled.Prompt, nil
 }

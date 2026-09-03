@@ -36,19 +36,26 @@ import (
 // evidence, while coordinators must not continue making decisions from it.
 var errCoordinatorToolFailure = errors.New("coordinator direct tool failure")
 
+const repairFailurePreparation RepairFailureReason = "preparation_failed"
+
 type coordinatorModelContinuation struct {
-	Model    fantasy.LanguageModel
-	Messages []fantasy.Message
-	System   string
-	Tools    []fantasy.AgentTool
-	ToolsSet bool
-	Context  context.Context
+	Model      fantasy.LanguageModel
+	Messages   []fantasy.Message
+	System     string
+	Tools      []fantasy.AgentTool
+	ToolsSet   bool
+	Preflight  *coordinatorRequestPreflight
+	Invocation providerBoundInvocationContext
+	Context    context.Context
 }
 
 // admitCoordinatorContext is the single coordinator admission boundary. It
 // records every complete-request decision before the caller can cross into a
 // provider, including a typed pre-provider CannotFit candidate.
 func (c *Coordinator) admitCoordinatorContext(ctx context.Context, manager *ContextWindowManager, request ContextWindowRequest, phase, taskID string, attempt int) (ContextWindowAdmission, error) {
+	if admission, err, handled := c.rejectBoundZeroCoordinatorAdmission(ctx, request, phase, taskID, attempt); handled {
+		return admission, err
+	}
 	admission, err := manager.Admit(ctx, request)
 	telemetry := c.newContextWindowTelemetry(EventContextWindowAdmission, request, admission, phase, taskID, attempt)
 	if admission.Candidate != nil {
@@ -61,6 +68,27 @@ func (c *Coordinator) admitCoordinatorContext(ctx context.Context, manager *Cont
 		return ContextWindowAdmission{}, recordErr
 	}
 	return admission, err
+}
+
+// rejectBoundZeroCoordinatorAdmission is the shared runner guard for a
+// provider-bound request whose context capacity is unavailable. It must run
+// before any registry-derived budget work, counting, compaction, or provider
+// entry. The ContextWindowManager keeps its own direct-call guard as defense
+// in depth for callers that do not pass through this coordinator boundary.
+func (c *Coordinator) rejectBoundZeroCoordinatorAdmission(ctx context.Context, request ContextWindowRequest, phase, taskID string, attempt int) (ContextWindowAdmission, error, bool) {
+	if !request.AdmissionContext.IsBound() || request.AdmissionContext.ContextWindow > 0 {
+		return ContextWindowAdmission{}, nil, false
+	}
+	admission := ContextWindowAdmission{
+		Decision:        ContextWindowCannotFit,
+		RejectionReason: contextWindowReasonMetadataUnavailable,
+	}
+	metadataErr := &ContextWindowMetadataUnavailableError{ModelID: request.ModelID}
+	telemetry := c.newContextWindowTelemetry(EventContextWindowAdmission, request, admission, phase, taskID, attempt)
+	if recordErr := c.recordContextWindowTelemetry(EventContextWindowAdmission, telemetry, taskID); recordErr != nil {
+		return admission, errors.Join(metadataErr, recordErr), true
+	}
+	return admission, metadataErr, true
 }
 
 // admitCoordinatorEarlierModel is the only coordinator model downshift
@@ -90,15 +118,20 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 			continue
 		}
 		seen[candidateID] = true
-		candidatePreflight := newCoordinatorRequestPreflight(candidateID, prompt, fullSystem, fullTools)
-		candidateSpec := globalRegistry.GetSpec(candidateID).WithEffectiveMaxOutputTokens(maxOutputTokens)
+		candidateContext := c.admissionContextForWithOutput(ctx, candidateID, nil, maxOutputTokens)
+		candidatePreflight := newCoordinatorRequestPreflightWithAdmission(candidateID, prompt, fullSystem, fullTools, candidateContext)
+		candidateSpec := modelContextSpecForProviderRequest(agent.ProviderRequest{
+			ModelID: candidateID, AdmissionContext: candidateContext,
+		}).WithEffectiveMaxOutputTokens(maxOutputTokens)
+		candidateOutputReservation := candidateSpec.MaxOutputTokens
 		// A downshift must not trade a proven CannotFit for an unknown
 		// capacity: estimated candidates stay ineligible even though the
 		// primary model admits its own estimate.
-		if candidateSpec.IsEstimated {
+		if candidateSpec.IsEstimated || candidateSpec.ContextWindow <= 0 {
 			continue
 		}
-		candidateSystem, candidateTools, applied, err := candidatePreflight.prepare(ctx, messages, prompt, maxOutputTokens, stepNumber)
+		candidatePreflight.bindAdmissionContext(candidateContext)
+		candidateSystem, candidateTools, applied, err := candidatePreflight.prepare(ctx, messages, prompt, candidateOutputReservation, stepNumber)
 		if err != nil {
 			continue
 		}
@@ -109,25 +142,27 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 		manager := NewContextWindowManager(defaultCounter, nil)
 		admission, err := c.admitCoordinatorContext(ctx, manager, ContextWindowRequest{
 			ModelID: candidateID, System: requestSystem, Tools: requestTools, Messages: messages,
-			Prompt: prompt, Window: candidateSpec.ContextWindow, ReservedOutputTokens: maxOutputTokens,
+			Prompt: prompt, Window: candidateSpec.ContextWindow, ReservedOutputTokens: candidateOutputReservation,
 			SafetyMarginTokens: candidateSpec.SafetyMarginTokens, StepNumber: stepNumber,
+			AdmissionContext: candidateContext,
 		}, "downshift_candidate", CoordTodoID, attempt)
 		if err != nil || admission.Decision == ContextWindowCannotFit || admission.Messages == nil {
 			continue
 		}
-		provider := c.providerManager.GetProvider(candidateID)
-		if provider == nil {
+		provider, err := c.ModelRuntime().ProviderFor(candidateID)
+		if err != nil {
 			continue
 		}
 		model, err := provider.LanguageModel(ctx, candidateID)
 		if err != nil {
 			continue
 		}
+		model = agent.NewAdmittedLanguageModelWithContext(candidateID, model, c.providerAdmission(), candidateContext)
 		payload := map[string]any{"from_model": currentModel, "to_model": candidateID, "request_tokens": admission.RequestTokens, "available": admission.Budget.Available, "step": stepNumber}
 		if err := c.emitEvent(modelContinuationEventType, "coordinator", CoordTodoID, payload); err != nil {
 			return coordinatorModelContinuation{}, fmt.Errorf("persist coordinator model continuation admission: %w", err)
 		}
-		downshift := c.newContextWindowTelemetry(EventContextWindowDownshift, ContextWindowRequest{ModelID: candidateID, ReservedOutputTokens: maxOutputTokens, SafetyMarginTokens: candidateSpec.SafetyMarginTokens, Window: candidateSpec.ContextWindow, StepNumber: stepNumber}, admission, "downshift", CoordTodoID, attempt)
+		downshift := c.newContextWindowTelemetry(EventContextWindowDownshift, ContextWindowRequest{ModelID: candidateID, AdmissionContext: candidateContext, ReservedOutputTokens: candidateOutputReservation, SafetyMarginTokens: candidateSpec.SafetyMarginTokens, Window: candidateSpec.ContextWindow, StepNumber: stepNumber}, admission, "downshift", CoordTodoID, attempt)
 		downshift.Decision = "downshift"
 		downshift.FallbackReason = "earlier_model_admitted"
 		if err := c.recordContextWindowTelemetry(EventContextWindowDownshift, downshift, CoordTodoID); err != nil {
@@ -135,7 +170,15 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 		}
 		return coordinatorModelContinuation{
 			Model: model, Messages: admission.Messages, System: candidateSystem, Tools: candidateTools,
-			ToolsSet: applied, Context: context.WithValue(ctx, modelKey{}, candidateID),
+			ToolsSet: applied, Preflight: candidatePreflight,
+			Invocation: providerBoundInvocationContext{
+				ModelID: candidateID, AdmissionContext: candidateContext,
+				ModelContext: candidateSpec,
+			},
+			Context: withCoordinatorRequestPreflight(
+				withProviderBoundInvocationContext(context.WithValue(ctx, modelKey{}, candidateID), providerBoundInvocationContext{
+					ModelID: candidateID, AdmissionContext: candidateContext, ModelContext: candidateSpec,
+				}), candidatePreflight),
 		}, nil
 	}
 	exhausted := c.newContextWindowTelemetry(EventContextWindowDownshift, ContextWindowRequest{ModelID: currentModel, ReservedOutputTokens: maxOutputTokens, StepNumber: stepNumber}, ContextWindowAdmission{Decision: ContextWindowCannotFit}, "downshift", CoordTodoID, attempt)
@@ -437,11 +480,6 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}
 	}
 
-	var modelSpec ModelContextSpec
-	if agentDef != nil {
-		modelSpec = globalRegistry.GetSpec(c.resolveAgentModel(agentDef, task.Model)).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef))
-	}
-
 	rawSTM, rawLTM := "", ""
 	memoryStore := (*memory.MemoryStore)(nil)
 	var canonicalMemory *CanonicalContextBundle
@@ -461,7 +499,6 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	workerInput.DependencyResults = depResults
 	workerInput.MemoryStore = memoryStore
 	workerInput.CanonicalMemory = canonicalMemory
-	workerInput.ModelContext = modelSpec
 	workerInput.MaxAuxChars = maxWorkerAuxContextChars
 	workerInput.DisableMemory = c.historicalMemoryDisabled()
 	legacyPrompt := strings.Join([]string{task.Goal, task.Constraints, approvedPlan, instructions, verificationCriteria, runtimeContext}, "\n\n")
@@ -609,6 +646,35 @@ retryLoop:
 				failureContext.EvidenceRefs = append(failureContext.EvidenceRefs, redactRetryText(lastErr.Error(), 300))
 			}
 		}
+		if attempt > 1 {
+			detail := fmt.Sprintf("attempt %d/%d", attempt, maxAttempts)
+			if err := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskInProgress, detail, "", nil); err != nil {
+				closeTranscript()
+				return "", fmt.Errorf("mark retry task started: %w", err)
+			}
+			c.reconcileTaskStatusProjection()
+			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d/%d — continuing from previous progress", attempt, maxAttempts)))
+			if protocolFallbackModel != "" {
+				resolvedModel = protocolFallbackModel
+				protocolFallbackModel = ""
+				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retrying result-contract failure with fallback model %s", resolvedModel)).withTodoID(todoID))
+			} else if escalate {
+				if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
+					if _, escErr := c.ModelRuntime().ProviderFor(next); escErr == nil {
+						c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("escalating model %s → %s (attempt %d)", resolvedModel, next, attempt)).withTodoID(todoID))
+						resolvedModel = next
+					} else {
+						c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("escalation to model %s failed, retrying with %s: %v", next, resolvedModel, escErr)).withTodoID(todoID))
+					}
+				}
+			}
+		}
+		attemptCtx, invocation, bindErr := c.resolveProviderBoundInvocationContext(parentCtx, resolvedModel, agentDef)
+		if bindErr != nil {
+			closeTranscript()
+			return "", fmt.Errorf("resolve worker provider context: %w", bindErr)
+		}
 		request = c.newTaskContextRequest(task, todoID, attempt, trigger, agentName, agentDef.Role, failureContext)
 		attemptArtifactScope, scopeErr := c.buildArtifactAccessScope(todoID, attempt)
 		if scopeErr != nil {
@@ -622,6 +688,7 @@ retryLoop:
 			}
 		}
 		retrievalQuery := request.RetrievalQuery()
+		workerInput.ModelContext = invocation.ModelContext
 		attemptInput := workerInput
 		attemptInput.Request = request
 		if attempt > 1 && lastErr != nil {
@@ -630,7 +697,7 @@ retryLoop:
 			} else {
 				attemptInput.FailureContext = buildRetryContextWithSubmittedResult(lastClass, lastErr, lastTranscriptRef, lastVerifyCmd, lastVerifyExit, lastExitCode, lastToolCall, lastToolInput, lastToolResult, lastToolResultErr, lastPartialOutput, lastSubmittedResult, task)
 				failureEvidence := redactRetryText(lastErr.Error(), 500)
-				if hint := c.reflectOnFailure(parentCtx, agentName, task.Goal, failureEvidence); hint != "" {
+				if hint := c.reflectOnFailure(attemptCtx, agentName, task.Goal, failureEvidence); hint != "" {
 					attemptInput.FailureContext += hint
 					appliedHint = strings.TrimPrefix(hint, reflectionHeader)
 					appliedHintTrigger = failureEvidence
@@ -640,7 +707,7 @@ retryLoop:
 		}
 		var routeDecisions []ContextRouteDecision
 		if canonical && !c.historicalMemoryDisabled() {
-			bundle, decisions, _, routeErr := c.canonicalContextBundleForRequest(parentCtx, request)
+			bundle, decisions, _, routeErr := c.canonicalContextBundleForRequest(attemptCtx, request)
 			if routeErr != nil {
 				closeTranscript()
 				return "", fmt.Errorf("worker context routing preflight failed: %w", routeErr)
@@ -648,9 +715,9 @@ retryLoop:
 			attemptInput.CanonicalMemory = bundle
 			routeDecisions = decisions
 		}
-		attemptInput.WorkerMemory = c.recallWorkerMemory(parentCtx, agentDef, retrievalQuery)
-		compiled, compileErr := c.ContextCompiler().CompileWorkerContext(parentCtx, attemptInput)
-		c.recordShadowTrace(parentCtx, "worker", legacyPrompt, request, routeDecisions, attemptInput.ModelContext, compiled, compileErr)
+		attemptInput.WorkerMemory = c.recallWorkerMemory(attemptCtx, agentDef, retrievalQuery)
+		compiled, compileErr := c.ContextCompiler().CompileWorkerContext(attemptCtx, attemptInput)
+		c.recordShadowTrace(attemptCtx, "worker", legacyPrompt, request, routeDecisions, attemptInput.ModelContext, compiled, compileErr)
 		if compileErr != nil {
 			closeTranscript()
 			return "", fmt.Errorf("worker context preflight failed: %w", compileErr)
@@ -692,30 +759,6 @@ retryLoop:
 			}
 		}
 		currentPrompt := compiled.Prompt
-		if attempt > 1 {
-			detail := fmt.Sprintf("attempt %d/%d", attempt, maxAttempts)
-			if err := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskInProgress, detail, "", nil); err != nil {
-				closeTranscript()
-				return "", fmt.Errorf("mark retry task started: %w", err)
-			}
-			c.reconcileTaskStatusProjection()
-			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d/%d — continuing from previous progress", attempt, maxAttempts)))
-			if protocolFallbackModel != "" {
-				resolvedModel = protocolFallbackModel
-				protocolFallbackModel = ""
-				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retrying result-contract failure with fallback model %s", resolvedModel)).withTodoID(todoID))
-			} else if escalate {
-				if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
-					if _, escErr := c.ModelRuntime().ProviderFor(next); escErr == nil {
-						c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("escalating model %s → %s (attempt %d)", resolvedModel, next, attempt)).withTodoID(todoID))
-						resolvedModel = next
-					} else {
-						c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("escalation to model %s failed, retrying with %s: %v", next, resolvedModel, escErr)).withTodoID(todoID))
-					}
-				}
-			}
-		}
 
 		var output string
 		var steps []fantasy.StepResult
@@ -739,7 +782,7 @@ retryLoop:
 			// Coordinator request shaping is scoped to the coordinator stream. A
 			// worker must derive its context without that state so its own final
 			// ResolvedWorkerTools remain authoritative at the provider boundary.
-			taskCtx, cancel := tools.WithInteractiveAwareTimeout(withoutCoordinatorRequestPreflight(parentCtx), agentTimeout)
+			taskCtx, cancel := tools.WithInteractiveAwareTimeout(withoutCoordinatorRequestPreflight(attemptCtx), agentTimeout)
 			defer cancel()
 			taskCtx, roundCancel := context.WithCancel(taskCtx)
 			defer roundCancel()
@@ -828,7 +871,7 @@ retryLoop:
 			workerDef := c.injectWorkerContext(taskCtx, agentDef)
 			gatedTools := c.gatePolicyTools(resolvedTools.Tools)
 			taskCtx = c.withEffectiveToolsAllowedForTask(taskCtx, workerDef, exposedToolNames, task)
-			taskCtx = withContextWindowRequestDescriptor(taskCtx, c.newContextWindowRequestDescriptor(resolvedModel, workerDef, gatedTools, agentName, "worker"))
+			taskCtx = withContextWindowRequestDescriptor(taskCtx, c.newContextWindowRequestDescriptorWithContext(taskCtx, resolvedModel, workerDef, gatedTools, agentName, "worker"))
 			if sequence := newTaskToolSequenceWithBindings(task.Execution.ToolSequence, task.Execution.ToolInputSequence, task.Execution.ToolInputField, task.Execution.ToolInputValueSequence, task.Execution.ToolExpectedExitCodes, task.Execution.ToolInputCanonicalSequence, task.Execution.ToolInputTransformSequence); sequence != nil {
 				attemptSequence = sequence
 				taskCtx = context.WithValue(taskCtx, taskToolSequenceKey{}, sequence)
@@ -1072,9 +1115,14 @@ retryLoop:
 							repairPrompt += protocolRepairEvidenceSummary(steps, transcriptArtifact)
 							repairAttempts := make([]RepairAttemptProvenance, 0, 2)
 							var repairTools ResolvedWorkerTools
-							runRepair := func(prompt string) []fantasy.StepResult {
+							runRepair := func(prompt string) ([]fantasy.StepResult, error) {
 								var repairAg fantasy.Agent
 								workerCtx := withoutCoordinatorRequestPreflight(parentCtx)
+								workerCtx, repairInvocation, bindErr := c.resolveProviderBoundInvocationContext(workerCtx, resolvedModel, agentDef)
+								if bindErr != nil {
+									c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to resolve protocol repair provider context: %v", bindErr)).withTodoID(todoID))
+									return nil, fmt.Errorf("resolve protocol repair provider context: %w", bindErr)
+								}
 								if c.repairAgentOverride != nil {
 									repairAg = c.repairAgentOverride
 								} else if c.providerManager != nil {
@@ -1084,21 +1132,24 @@ retryLoop:
 									})
 									if resolveErr != nil {
 										c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to resolve protocol repair tools: %v", resolveErr)).withTodoID(todoID))
-										return nil
+										return nil, fmt.Errorf("resolve protocol repair tools: %w", resolveErr)
 									}
 									repairTools = resolvedRepairTools
 									repairAg, rErr = c.createGatedAgent(workerCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
-										Def:        agentDef,
-										TeamConfig: &c.session.Config,
-										WorkDir:    c.projectDir,
-										MaxSteps:   1,
+										Def:               agentDef,
+										TeamConfig:        &c.session.Config,
+										WorkDir:           c.projectDir,
+										MaxSteps:          1,
+										InvocationModelID: resolvedModel,
+										AdmissionContext:  repairInvocation.AdmissionContext,
 									}, resolvedRepairTools.Tools)
 									if rErr != nil {
 										c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to create protocol repair agent: %v", rErr)).withTodoID(todoID))
+										return nil, fmt.Errorf("create protocol repair agent: %w", rErr)
 									}
 								}
 								if repairAg == nil {
-									return nil
+									return nil, errors.New("protocol result-only repair agent unavailable")
 								}
 								repairCtx := context.WithValue(workerCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
 								repairCtx = context.WithValue(repairCtx, protocolRepairExecutionKey{}, true)
@@ -1112,7 +1163,7 @@ retryLoop:
 								if identity, ok := c.activeTaskResultOccurrence(todoID); ok {
 									repairCtx = withSubmitResultRuntimeIdentity(repairCtx, identity)
 								}
-								repairCtx = withContextWindowRequestDescriptor(repairCtx, c.newContextWindowRequestDescriptor(resolvedModel, agentDef, repairTools.Tools, agentName, "protocol-repair"))
+								repairCtx = withContextWindowRequestDescriptor(repairCtx, c.newContextWindowRequestDescriptorWithContext(repairCtx, resolvedModel, agentDef, repairTools.Tools, agentName, "protocol-repair"))
 								repairCtx = context.WithValue(repairCtx, hooks.AgentNameKey, agentName)
 								repairCtx = context.WithValue(repairCtx, hooks.TeamNameKey, c.session.Config.Name)
 								repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, taskDesc)
@@ -1120,14 +1171,14 @@ retryLoop:
 
 								preparedPrompt, prepareErr := c.prepareAuxiliaryPrompt(repairCtx, "result_repair", prompt)
 								if prepareErr != nil {
-									return nil
+									return nil, fmt.Errorf("prepare protocol repair prompt: %w", prepareErr)
 								}
-								_, repairSteps, _ := c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, preparedPrompt, nil, timing, fantasy.StepCountIs(1))
+								_, repairSteps, callErr := c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, preparedPrompt, nil, timing, fantasy.StepCountIs(1))
 								typedRes = c.GetTaskResult(todoID)
-								return repairSteps
+								return repairSteps, callErr
 							}
 
-							repairSteps := runRepair(repairPrompt)
+							repairSteps, repairErr := runRepair(repairPrompt)
 							repairSuccess := typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil
 							// §7: classify the repair failure sub-reason so the next-step
 							// disposition is driven by evidence rather than a generic
@@ -1135,7 +1186,13 @@ retryLoop:
 							// the task as an execution failure (the worker reported a
 							// progress update, not a final outcome) and must not count
 							// toward protocol repair statistics.
-							repairReason, reclassifyExecution := classifyRepairFailure(repairSteps, typedRes)
+							var repairReason RepairFailureReason
+							var reclassifyExecution bool
+							if repairErr != nil {
+								repairReason = repairFailurePreparation
+							} else {
+								repairReason, reclassifyExecution = classifyRepairFailure(repairSteps, typedRes)
+							}
 							repairAttempts = append(repairAttempts, RepairAttemptProvenance{
 								Attempt:         1,
 								Success:         repairSuccess,
@@ -1150,9 +1207,15 @@ retryLoop:
 							if !repairSuccess && repairReason == RepairFailureInvalidSchema {
 								typedRes = nil
 								schemaRepairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous submit_result call was rejected because its arguments did not match the result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve only the bounded execution evidence below. Do NOT execute work, call any other tools, or emit a prose final response. The call must include both required fields: `status` (one of `success`, `completed_with_gaps`, `partial`, `failed`, or `blocked`) and a non-empty `summary`; put any complete textual deliverable in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields.\n\n## Bounded execution evidence\n%s", utils.TruncateRunes(task.Goal, 4000), repairEvidence)
-								schemaRepairSteps := runRepair(schemaRepairPrompt)
+								schemaRepairSteps, schemaRepairErr := runRepair(schemaRepairPrompt)
 								repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil
-								repairReason, reclassifyExecution = classifyRepairFailure(schemaRepairSteps, typedRes)
+								if schemaRepairErr != nil {
+									repairErr = schemaRepairErr
+									repairReason = repairFailurePreparation
+									reclassifyExecution = false
+								} else {
+									repairReason, reclassifyExecution = classifyRepairFailure(schemaRepairSteps, typedRes)
+								}
 								repairAttempts = append(repairAttempts, RepairAttemptProvenance{
 									Attempt:         2,
 									Success:         repairSuccess,
@@ -1181,13 +1244,20 @@ retryLoop:
 								}
 							}
 							receipt.FinishedAt = time.Now()
+							repairPromptForReceipt := repairPrompt
+							if len(repairAttempts) > 0 {
+								repairPromptForReceipt = repairAttempts[len(repairAttempts)-1].Prompt
+							}
 							receipt.RepairProvenance = &RepairProvenance{
 								Attempted:       true,
 								Success:         repairSuccess,
-								Prompt:          repairAttempts[len(repairAttempts)-1].Prompt,
+								Prompt:          repairPromptForReceipt,
 								SubmittedResult: typedRes,
 								RepairAttempts:  len(repairAttempts),
 								History:         repairAttempts,
+							}
+							if repairErr != nil && !repairSuccess {
+								receipt.RepairProvenance.Error = repairErr.Error()
 							}
 							if repairSuccess {
 								if typedRes != nil && typedRes.Source == "promoted_free_text" {
@@ -1243,8 +1313,13 @@ retryLoop:
 									c.storeSubmittedTaskResult(todoID, recovered)
 									typedRes = recovered
 									receipt.RepairProvenance.SubmittedResult = recovered
-									err = fmt.Errorf("protocol failure (class: %s, reason: %s) for task %s (%s): agent produced output but failed protocol repair to submit_result",
-										string(FailureProtocol), string(repairReason), todoID, agentName)
+									if repairErr != nil {
+										err = fmt.Errorf("protocol repair preparation failed (class: %s, reason: %s) for task %s (%s): %w",
+											string(FailureProtocol), string(repairReason), todoID, agentName, repairErr)
+									} else {
+										err = fmt.Errorf("protocol failure (class: %s, reason: %s) for task %s (%s): agent produced output but failed protocol repair to submit_result",
+											string(FailureProtocol), string(repairReason), todoID, agentName)
+									}
 									receipt.RepairProvenance.Error = err.Error()
 								}
 							}
@@ -2198,6 +2273,66 @@ func (c *Coordinator) materializeCheckpointedProtocolRepair(item *TodoItem, agen
 	return c.taskTracker.TodoList().SetExecutionReceipt(item.ID, &receipt)
 }
 
+// persistProtocolRepairPreparationFailure records a repair attempt that could
+// not reach the repair stream. The receipt must be durable before the caller
+// blocks the interrupted task so resume/replay retains both the binding/setup
+// failure and the attempt history.
+func (c *Coordinator) persistProtocolRepairPreparationFailure(item *TodoItem, agentName string, attempt int, prompt string, priorAttempts int, history []RepairAttemptProvenance, prepErr error) error {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil || item == nil || prepErr == nil {
+		return fmt.Errorf("protocol repair preparation receipt requires task and error")
+	}
+	receipt := ExecutionReceipt{
+		RunID:      c.executionRunID,
+		TaskID:     item.ID,
+		Attempt:    1,
+		ProducerID: agentName,
+		StartedAt:  time.Now(),
+		FinishedAt: time.Now(),
+	}
+	if item.ExecutionReceipt != nil {
+		receipt = cloneExecutionReceipt(item.ExecutionReceipt)
+	}
+	if receipt.RunID == "" {
+		receipt.RunID = c.executionRunID
+		if receipt.RunID == "" {
+			receipt.RunID = c.taskTracker.TodoList().RunID()
+		}
+	}
+	if receipt.TaskID == "" {
+		receipt.TaskID = item.ID
+	}
+	if receipt.Attempt < 1 {
+		receipt.Attempt = 1
+	}
+	if receipt.ProducerID == "" {
+		receipt.ProducerID = agentName
+	}
+	if receipt.StartedAt.IsZero() {
+		receipt.StartedAt = time.Now()
+	}
+	receipt.FinishedAt = time.Now()
+
+	repairHistory := append([]RepairAttemptProvenance(nil), history...)
+	repairHistory = append(repairHistory, RepairAttemptProvenance{
+		Attempt:       attempt,
+		Prompt:        prompt,
+		FailureReason: repairFailurePreparation,
+	})
+	repairAttempts := max(priorAttempts, attempt)
+	for _, prior := range repairHistory {
+		repairAttempts = max(repairAttempts, prior.Attempt)
+	}
+	receipt.RepairProvenance = &RepairProvenance{
+		Attempted:      true,
+		Prompt:         prompt,
+		Error:          prepErr.Error(),
+		FailureReason:  repairFailurePreparation,
+		RepairAttempts: repairAttempts,
+		History:        repairHistory,
+	}
+	return c.taskTracker.TodoList().SetExecutionReceipt(item.ID, &receipt)
+}
+
 // resumeProtocolIncompleteTask repairs a checkpointed protocol failure using
 // only the result submission tool. The original worker already ran before the
 // checkpoint was written, so this path must never call executeTask's worker
@@ -2285,8 +2420,24 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	agentDef := canonical.Agent
 	agentName = strings.ToLower(agentDef.Name)
 	resolvedModel = c.resolveAgentModel(agentDef, task.Model)
+	repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nThe worker execution is already complete and produced the output above, but it did not submit a structured result. Call submit_result now using only those execution facts. Do NOT execute work, inspect files, or call any other tool.", task.Goal, output)
+	priorAttempts := 0
+	var repairHistory []RepairAttemptProvenance
+	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RepairProvenance != nil {
+		priorAttempts = item.ExecutionReceipt.RepairProvenance.RepairAttempts
+		repairHistory = append(repairHistory, item.ExecutionReceipt.RepairProvenance.History...)
+	}
 
 	workerCtx := withoutCoordinatorRequestPreflight(parentCtx)
+	workerCtx, repairInvocation, bindErr := c.resolveProviderBoundInvocationContext(workerCtx, resolvedModel, agentDef)
+	if bindErr != nil {
+		if receiptErr := c.persistProtocolRepairPreparationFailure(item, agentName, priorAttempts+1, repairPrompt, priorAttempts, repairHistory, bindErr); receiptErr != nil {
+			bindErr = errors.Join(bindErr, receiptErr)
+		}
+		detail := c.FailureDetail(bindErr, FailureSourceError)
+		c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
+		return "", fmt.Errorf("resolve protocol repair provider context: %w", bindErr)
+	}
 	var repairAgent fantasy.Agent
 	var repairTools ResolvedWorkerTools
 	if c.repairAgentOverride != nil {
@@ -2300,10 +2451,12 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		} else {
 			repairTools = resolvedRepairTools
 			repairAgent, err = c.createGatedAgent(workerCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
-				Def:        agentDef,
-				TeamConfig: &c.session.Config,
-				WorkDir:    c.projectDir,
-				MaxSteps:   1,
+				Def:               agentDef,
+				TeamConfig:        &c.session.Config,
+				WorkDir:           c.projectDir,
+				MaxSteps:          1,
+				InvocationModelID: resolvedModel,
+				AdmissionContext:  repairInvocation.AdmissionContext,
 			}, resolvedRepairTools.Tools)
 		}
 	}
@@ -2311,16 +2464,17 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to create protocol repair agent: %v", err)).withTodoID(item.ID))
 	}
 	if repairAgent == nil {
-		err = errors.New("protocol result-only repair agent unavailable")
+		if err == nil {
+			err = errors.New("protocol result-only repair agent unavailable")
+		}
+		if receiptErr := c.persistProtocolRepairPreparationFailure(item, agentName, priorAttempts+1, repairPrompt, priorAttempts, repairHistory, err); receiptErr != nil {
+			err = errors.Join(err, receiptErr)
+		}
 		detail := c.FailureDetail(err, FailureSourceError)
 		c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
 		return "", err
 	}
 
-	priorAttempts := 0
-	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RepairProvenance != nil {
-		priorAttempts = item.ExecutionReceipt.RepairProvenance.RepairAttempts
-	}
 	repairCtx := context.WithValue(workerCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
 	repairCtx = context.WithValue(repairCtx, protocolRepairExecutionKey{}, true)
 	repairCtx = context.WithValue(repairCtx, llmUsageReceiptExpectedKey{}, false)
@@ -2330,19 +2484,14 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	repairCtx = context.WithValue(repairCtx, hooks.AgentNameKey, agentName)
 	repairCtx = context.WithValue(repairCtx, hooks.TeamNameKey, c.session.Config.Name)
 	repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, task.Goal)
-	repairCtx = withContextWindowRequestDescriptor(repairCtx, c.newContextWindowRequestDescriptor(resolvedModel, agentDef, repairTools.Tools, agentName, "protocol-repair"))
+	repairCtx = withContextWindowRequestDescriptor(repairCtx, c.newContextWindowRequestDescriptorWithContext(repairCtx, resolvedModel, agentDef, repairTools.Tools, agentName, "protocol-repair"))
 	timing := &taskTiming{}
 	timing.reset()
 	c.report(c.newEvent("step").withAgent(agentName).withMessage("resuming protocol task through result-only repair").withTodoID(item.ID))
-	repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nThe worker execution is already complete and produced the output above, but it did not submit a structured result. Call submit_result now using only those execution facts. Do NOT execute work, inspect files, or call any other tool.", task.Goal, output)
 	var typedRes *TaskResult
 	var repairReason RepairFailureReason
 	var repairSuccess bool
 	var runErr error
-	var repairHistory []RepairAttemptProvenance
-	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RepairProvenance != nil {
-		repairHistory = append(repairHistory, item.ExecutionReceipt.RepairProvenance.History...)
-	}
 	for attempt := priorAttempts + 1; attempt <= 2; attempt++ {
 		c.setCurrentTaskAttempt(item.ID, attempt)
 		attemptCtx := context.WithValue(repairCtx, executionAttemptKey{}, attempt)
@@ -2354,13 +2503,23 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		}
 		preparedPrompt, prepareErr := c.prepareAuxiliaryPrompt(repairCtx, "result_repair", repairPrompt)
 		if prepareErr != nil {
-			runErr = prepareErr
+			runErr = fmt.Errorf("prepare protocol repair prompt: %w", prepareErr)
+			repairReason = repairFailurePreparation
+			repairHistory = append(repairHistory, RepairAttemptProvenance{
+				Attempt:       attempt,
+				Prompt:        repairPrompt,
+				FailureReason: repairFailurePreparation,
+			})
 			break
 		}
 		_, steps, callErr := c.runAgentWithStatusAndHistory(attemptCtx, repairAgent, agentName, preparedPrompt, nil, timing, fantasy.StepCountIs(1))
 		runErr = callErr
 		typedRes = c.GetTaskResult(item.ID)
-		repairReason, _ = classifyRepairFailure(steps, typedRes)
+		if callErr != nil {
+			repairReason = repairFailurePreparation
+		} else {
+			repairReason, _ = classifyRepairFailure(steps, typedRes)
+		}
 		repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil
 		repairHistory = append(repairHistory, RepairAttemptProvenance{
 			Attempt:         attempt,
@@ -2392,6 +2551,10 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	}
 	receipt.ProducerID = agentName
 	receipt.FinishedAt = time.Now()
+	repairPromptForReceipt := repairPrompt
+	if len(repairHistory) > 0 {
+		repairPromptForReceipt = repairHistory[len(repairHistory)-1].Prompt
+	}
 	repairAttempts := priorAttempts
 	for _, attempt := range repairHistory {
 		if attempt.Attempt > repairAttempts {
@@ -2401,7 +2564,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	receipt.RepairProvenance = &RepairProvenance{
 		Attempted:       true,
 		Success:         repairSuccess,
-		Prompt:          repairHistory[len(repairHistory)-1].Prompt,
+		Prompt:          repairPromptForReceipt,
 		SubmittedResult: typedRes,
 		RepairAttempts:  repairAttempts,
 		FailureReason:   repairReason,
@@ -2498,6 +2661,10 @@ func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, 
 		rescueDef = &agent.AgentDef{Name: agentName, Generation: agent.GenerationParams{Model: resolvedModel}}
 	}
 	rescueDef = c.injectWorkerContext(ctx, rescueDef)
+	ctx, rescueInvocation, bindErr := c.resolveProviderBoundInvocationContext(ctx, resolvedModel, rescueDef)
+	if bindErr != nil {
+		return ""
+	}
 	// Rebuild the agent with no tools. Merely telling the original agent not to
 	// call tools is insufficient: a model that hit its step limit often makes
 	// another tool call instead of writing the requested summary.
@@ -2507,10 +2674,12 @@ func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, 
 			return ""
 		}
 		rescueAgent, createErr := c.createGatedAgent(ctx, provider, agent.AgentConfig{
-			Def:        rescueDef,
-			TeamConfig: &c.session.Config,
-			WorkDir:    c.projectDir,
-			MaxSteps:   1,
+			Def:               rescueDef,
+			TeamConfig:        &c.session.Config,
+			WorkDir:           c.projectDir,
+			MaxSteps:          1,
+			InvocationModelID: resolvedModel,
+			AdmissionContext:  rescueInvocation.AdmissionContext,
 		}, nil)
 		if createErr != nil {
 			return ""
@@ -2521,7 +2690,7 @@ func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, 
 	// directly in the no-progress budget.
 	ctx = context.WithValue(ctx, llmUsageReceiptExpectedKey{}, false)
 	ctx = context.WithValue(ctx, tools.AgentToolsAllowedKey, []string{})
-	ctx = withContextWindowRequestDescriptor(ctx, c.newContextWindowRequestDescriptor(resolvedModel, rescueDef, nil, agentName, "rescue"))
+	ctx = withContextWindowRequestDescriptor(ctx, c.newContextWindowRequestDescriptorWithContext(ctx, resolvedModel, rescueDef, nil, agentName, "rescue"))
 	c.report(c.newEvent("step").withAgent(agentName).withMessage("agent stopped without a final message; requesting a summary turn"))
 	rescuePrompt, prepareErr := c.prepareAuxiliaryPrompt(ctx, "final_summary_repair", buildRescueFinalSummaryInstruction(task))
 	if prepareErr != nil {
@@ -3022,12 +3191,39 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		// agent.CreateAgent — see internal/agent/toolcall_repair.go.
 		RepairToolCall: agent.RepairConcatenatedToolCall,
 		PrepareStep: func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
-			// Keep this request within the context model token budget.
+			// A fallback continuation carries its candidate preflight in the
+			// returned context. Resolve it per step so the model, admission
+			// context, and request shaping cannot drift back to the original
+			// model after the first downshift.
+			activePreflight := coordinatorRequestPreflightFromContext(ctx)
+			if activePreflight == nil {
+				activePreflight = streamPreflight
+			}
 			modelID := ""
 			if opts.Model != nil {
 				modelID = opts.Model.Model()
 			}
-			spec := globalRegistry.GetSpec(modelID).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(c.agentDefByName(agentName)))
+			admissionContext := agent.ProviderAdmissionContext{}
+			admissionPhase := "worker"
+			if activePreflight != nil {
+				admissionContext = activePreflight.admissionContextValue()
+				admissionPhase = "initial"
+			} else if hasWorkerDescriptor {
+				admissionContext = workerDescriptor.AdmissionContext
+			}
+			attempt, _ := ctx.Value(executionAttemptKey{}).(int)
+			if _, admissionErr, handled := c.rejectBoundZeroCoordinatorAdmission(ctx, ContextWindowRequest{
+				ModelID:          modelID,
+				AdmissionContext: admissionContext,
+			}, admissionPhase, todoID, attempt); handled {
+				return ctx, fantasy.PrepareStepResult{}, admissionErr
+			}
+			// Keep this request within the provider-bound context model token budget.
+			spec := modelContextSpecForProviderRequest(agent.ProviderRequest{ModelID: modelID, AdmissionContext: admissionContext})
+			if !admissionContext.IsBound() {
+				spec = globalRegistry.GetSpec(modelID)
+			}
+			spec = spec.WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(c.agentDefByName(agentName)))
 			budget := c.ContextCompiler().CalculateBudget(spec, 0, 0)
 			preparedMessages := opts.Messages
 			stepBudget, hasStepBudget := ctx.Value(workerStepBudgetKey{}).(int)
@@ -3078,11 +3274,14 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			preflightApplied := false
 			contextChanged := false
 			if contextManager != nil {
-				if streamPreflight == nil {
+				if activePreflight == nil {
 					attempt, _ := ctx.Value(executionAttemptKey{}).(int)
 					descriptor := workerDescriptor
 					if descriptor.ModelID == "" {
 						descriptor.ModelID = modelID
+					}
+					if descriptor.ModelContext.ContextWindow <= 0 {
+						descriptor.ModelContext = spec
 					}
 					if descriptor.Window <= 0 {
 						descriptor.Window = spec.ContextWindow
@@ -3096,6 +3295,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					admission, admissionErr := c.admitCoordinatorContext(ctx, contextManager, ContextWindowRequest{
 						ModelID: descriptor.ModelID, System: descriptor.System, Tools: descriptor.Tools,
 						Messages: preparedMessages, Prompt: prompt, Window: descriptor.Window,
+						AdmissionContext:     descriptor.AdmissionContext,
 						ProtectedMessages:    runtimeRequiredMessages,
 						ReservedOutputTokens: descriptor.ReservedOutputTokens, SafetyMarginTokens: descriptor.SafetyMarginTokens,
 						StepNumber: opts.StepNumber, Owner: descriptor.Owner, Scope: descriptor.Scope,
@@ -3109,15 +3309,16 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					preparedMessages = admission.Messages
 					contextChanged = !reflect.DeepEqual(preparedMessages, opts.Messages)
 				} else {
-					fullSystem, fullTools := streamPreflight.configuration()
+					fullSystem, fullTools := activePreflight.configuration()
 					attempt, _ := ctx.Value(executionAttemptKey{}).(int)
 					admission, admissionErr := c.admitCoordinatorContext(ctx, contextManager, ContextWindowRequest{
 						ModelID:              modelID,
 						System:               fullSystem,
 						Tools:                fullTools,
+						AdmissionContext:     activePreflight.admissionContextValue(),
 						Messages:             preparedMessages,
 						Prompt:               prompt,
-						Window:               streamPreflight.windowValue(),
+						Window:               activePreflight.windowValue(),
 						ReservedOutputTokens: spec.MaxOutputTokens,
 						SafetyMarginTokens:   spec.SafetyMarginTokens,
 						StepNumber:           opts.StepNumber,
@@ -3138,7 +3339,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					contextChanged = !reflect.DeepEqual(preparedMessages, opts.Messages)
 
 					var preflightErr error
-					preflightSystem, preflightTools, preflightApplied, preflightErr = streamPreflight.prepare(ctx, preparedMessages, prompt, spec.MaxOutputTokens, opts.StepNumber)
+					preflightSystem, preflightTools, preflightApplied, preflightErr = activePreflight.prepare(ctx, preparedMessages, prompt, spec.MaxOutputTokens, opts.StepNumber)
 					if preflightErr != nil {
 						return ctx, fantasy.PrepareStepResult{}, preflightErr
 					}
@@ -3150,9 +3351,10 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 						ModelID:              modelID,
 						System:               requestSystem,
 						Tools:                requestTools,
+						AdmissionContext:     activePreflight.admissionContextValue(),
 						Messages:             preparedMessages,
 						Prompt:               prompt,
-						Window:               streamPreflight.windowValue(),
+						Window:               activePreflight.windowValue(),
 						ReservedOutputTokens: spec.MaxOutputTokens,
 						SafetyMarginTokens:   spec.SafetyMarginTokens,
 						StepNumber:           opts.StepNumber,
@@ -3164,10 +3366,12 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 						fitErr := &CannotFitError{ModelID: modelID, RequestTokens: finalAdmission.RequestTokens, Available: finalAdmission.Budget.Available, ProvenNoSend: true}
 						if _, provenNoSend := isProvenPreProviderCannotFit(fitErr); finalAdmission.Candidate != nil && provenNoSend && opts.StepNumber == 0 && !coordinatorFallbackUsed && !coordinatorFallbackAttempted {
 							coordinatorFallbackAttempted = true
-							if fallback, fallbackErr := c.admitCoordinatorEarlierModel(ctx, streamPreflight, preparedMessages, prompt, opts.StepNumber, spec.MaxOutputTokens, modelID); fallbackErr != nil {
+							configuredOutputReservation := c.resolveAgentMaxOutputTokens(c.agentDefByName(agentName))
+							if fallback, fallbackErr := c.admitCoordinatorEarlierModel(ctx, activePreflight, preparedMessages, prompt, opts.StepNumber, configuredOutputReservation, modelID); fallbackErr != nil {
 								return ctx, fantasy.PrepareStepResult{}, fallbackErr
 							} else if fallback.Model != nil {
 								coordinatorFallbackUsed = true
+								streamPreflight = fallback.Preflight
 								preparedMessages = fallback.Messages
 								result := fantasy.PrepareStepResult{Messages: preparedMessages, Model: fallback.Model}
 								if fallback.ToolsSet {
@@ -3693,7 +3897,9 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	if IsContextOverflowError(err) {
 		modelID, _ := ctx.Value(modelKey{}).(string)
 		if observedWindow, ok := ParseObservedContextWindow(err); ok {
-			GlobalModelSpecRegistry().RegisterObservedContextWindow(modelID, observedWindow)
+			if observeErr := c.observeContextOverflow(ctx, modelID, observedWindow); observeErr != nil {
+				reportFn(c.newEvent("step").withAgent(agentName).withModel(modelID).withTodoID(todoID).withMessage(fmt.Sprintf("provider context overflow observation failed: %v", observeErr)))
+			}
 			if preflight := coordinatorRequestPreflightFromContext(ctx); preflight != nil {
 				preflight.observeWindow(observedWindow)
 			}
@@ -4201,6 +4407,10 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 	if err != nil {
 		return nil, nil, err
 	}
+	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, modelID, def)
+	if err != nil {
+		return nil, nil, err
+	}
 	agentDef := def
 	if overrideModel != "" {
 		overriddenDef := *def
@@ -4222,10 +4432,12 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 		return nil, nil, err
 	}
 	ag, err := c.createGatedAgent(ctx, provider, agent.AgentConfig{
-		Def:        agentDef,
-		TeamConfig: &c.session.Config,
-		WorkDir:    c.projectDir,
-		MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
+		Def:               agentDef,
+		TeamConfig:        &c.session.Config,
+		WorkDir:           c.projectDir,
+		MaxSteps:          c.stepBudget(agentDef, agent.DefaultMaxSteps),
+		InvocationModelID: modelID,
+		AdmissionContext:  invocation.AdmissionContext,
 	}, resolvedTools.Tools)
 	if err != nil {
 		return nil, nil, err

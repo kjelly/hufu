@@ -140,7 +140,7 @@ func ResolveCapability(input CapabilityEvidence) ResolvedValue[CapabilityState] 
 func ResolveModelProfile(input ModelProfileInput) ModelProfile {
 	provider := cmp.Or(input.Provider, input.Context.Provider)
 	context := input.Context
-	context.Provider = provider
+	context.Provider = cmp.Or(context.Provider, provider)
 	resolvedContext := ResolveContext(context)
 
 	tools := ResolveCapability(input.Capabilities.Tools)

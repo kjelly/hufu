@@ -2,11 +2,47 @@ package team
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
+
+	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
 )
+
+func TestContextQueryToolUsesBoundInvocationModelContext(t *testing.T) {
+	c, _ := rankingTestCoordinator(t, agent.MemoryLearningOff)
+	compileErr := errors.New("stop after recording bound model context")
+	compiler := &mockContextCompiler{compileWorkerErr: compileErr}
+	c.SetContextCompiler(compiler)
+
+	_, err := (&contextQueryTool{coordinator: c}).Run(withTestAuxiliaryInvocationContext(t.Context()), fantasy.ToolCall{
+		ID:    "context-call-1",
+		Input: `{"query":"bounded lookup"}`,
+	})
+	if err != nil {
+		t.Fatalf("context query returned transport error: %v", err)
+	}
+	if compiler.workerModelContext != testAuxiliaryInvocationModelContext() {
+		t.Fatalf("context query compiler model context = %#v, want %#v", compiler.workerModelContext, testAuxiliaryInvocationModelContext())
+	}
+}
+
+func TestCompileRoutedContextForToolFailsClosedWithoutBoundInvocationContext(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
+	compiler := &mockContextCompiler{}
+	c.SetContextCompiler(compiler)
+
+	_, err := compileRoutedContextForTool(t.Context(), c, ContextRequest{}, ContextRoute{})
+	if err == nil || !strings.Contains(err.Error(), "provider-bound context unavailable") {
+		t.Fatalf("unbound context-tool compilation error = %v", err)
+	}
+	if compiler.workerModelContext != (ModelContextSpec{}) {
+		t.Fatalf("unbound context-tool compilation invoked compiler with model context %#v", compiler.workerModelContext)
+	}
+}
 
 func TestContextToolRequestInheritsRetryInvocationMetadata(t *testing.T) {
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)

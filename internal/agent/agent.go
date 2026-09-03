@@ -19,6 +19,7 @@ import (
 	"github.com/kjelly/hufu/internal/config"
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/notify"
+	"github.com/kjelly/hufu/internal/providerintrospection"
 	"github.com/kjelly/hufu/internal/providerproxy"
 	"github.com/kjelly/hufu/internal/tools"
 )
@@ -780,7 +781,7 @@ func (p *OpenAICompatibleProvider) LanguageModel(ctx context.Context, modelID st
 
 func (p *OpenAICompatibleProvider) modelName(modelID string) string {
 	prefix, model := ParseModelProvider(modelID)
-	if prefix == "" || prefix == p.name || p.defaultProvider {
+	if prefix == "" || prefix == p.name || canonicalProviderName(prefix) == canonicalProviderName(p.name) || p.defaultProvider {
 		if prefix == "" {
 			return modelID
 		}
@@ -975,6 +976,8 @@ func ParseModelProvider(modelID string) (provider, modelName string) {
 // It lazy-initializes providers on first use based on the model ID prefix.
 type ProviderManager struct {
 	defaultProvider            *OpenAICompatibleProvider
+	fallbackURL                string
+	fallbackAPIKey             string
 	providers                  map[string]*OpenAICompatibleProvider
 	configs                    map[string]config.ProviderConfig
 	mu                         sync.RWMutex
@@ -985,19 +988,157 @@ type ProviderManager struct {
 	startInProcessBoundary     func(context.Context, providerproxy.Config) (providerproxy.Boundary, error)
 }
 
+type providerTarget struct {
+	name        string
+	upstreamURL string
+	apiKey      string
+}
+
+// providerConfigEquivalence is used only when admitting aliases for the same
+// provider. ProviderURL uses cache identity semantics here; the original
+// invocation URL remains in the selected ProviderConfig and providerTarget.
+type providerConfigEquivalence struct {
+	providerURL       string
+	providerAPIKey    string
+	introspectionType string
+	insecure          bool
+	maxConcurrent     int
+}
+
+func providerConfigEquivalenceOf(providerConfig config.ProviderConfig) providerConfigEquivalence {
+	providerURL := providerConfig.ProviderURL
+	if normalizedURL, err := providerintrospection.NormalizeBaseURL(providerURL); err == nil {
+		providerURL = normalizedURL
+	}
+	return providerConfigEquivalence{
+		providerURL:       providerURL,
+		providerAPIKey:    providerConfig.ProviderAPIKey,
+		introspectionType: providerConfig.IntrospectionType,
+		insecure:          providerConfig.Insecure,
+		maxConcurrent:     providerConfig.MaxConcurrent,
+	}
+}
+
+func providerConfigsEquivalent(left, right config.ProviderConfig) bool {
+	return providerConfigEquivalenceOf(left) == providerConfigEquivalenceOf(right)
+}
+
+// preferProviderConfig selects the stable representative for equivalent
+// aliases. The exact canonical key wins; aliases without that spelling use
+// lexical order so map iteration cannot affect the invocation URL retained.
+func preferProviderConfig(candidateName, currentName, canonicalName string) bool {
+	candidateExact := candidateName == canonicalName
+	currentExact := currentName == canonicalName
+	if candidateExact != currentExact {
+		return candidateExact
+	}
+	return candidateName < currentName
+}
+
+func canonicalProviderName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.EqualFold(name, "local") || strings.EqualFold(name, "ollama") {
+		return "local"
+	}
+	return name
+}
+
 func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[string]config.ProviderConfig) (*ProviderManager, error) {
-	defaultProv, err := NewOpenAICompatibleProvider(defaultURL, defaultKey, "local")
+	canonicalConfigs := make(map[string]config.ProviderConfig, len(providerConfigs))
+	canonicalConfigNames := make(map[string]string, len(providerConfigs))
+	var (
+		explicitLocalConfig config.ProviderConfig
+		explicitLocalName   string
+		hasExplicitLocal    bool
+		ollamaConfig        config.ProviderConfig
+		ollamaConfigName    string
+		hasOllamaConfig     bool
+	)
+	// Same-tier aliases must have the same normalized configuration. Keep the
+	// local tiers separate until all entries have been checked so map iteration
+	// order cannot select an effective provider target.
+	for name, providerConfig := range providerConfigs {
+		if err := providerConfig.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid provider %q: %w", name, err)
+		}
+		canonicalName := canonicalProviderName(name)
+		providerConfig.IntrospectionType = strings.ToLower(strings.TrimSpace(providerConfig.IntrospectionType))
+		if providerConfig.IntrospectionType == "" {
+			if canonicalName == "local" {
+				providerConfig.IntrospectionType = "ollama"
+			} else {
+				providerConfig.IntrospectionType = "openai-compatible"
+			}
+		}
+		if canonicalName == "local" {
+			if strings.EqualFold(strings.TrimSpace(name), "local") {
+				if hasExplicitLocal && !providerConfigsEquivalent(explicitLocalConfig, providerConfig) {
+					return nil, conflictingProviderAliasError(canonicalName, explicitLocalName, name)
+				}
+				if !hasExplicitLocal || preferProviderConfig(name, explicitLocalName, canonicalName) {
+					explicitLocalConfig = providerConfig
+					explicitLocalName = name
+					hasExplicitLocal = true
+				}
+			} else {
+				if hasOllamaConfig && !providerConfigsEquivalent(ollamaConfig, providerConfig) {
+					return nil, conflictingProviderAliasError(canonicalName, ollamaConfigName, name)
+				}
+				if !hasOllamaConfig || preferProviderConfig(name, ollamaConfigName, "ollama") {
+					ollamaConfig = providerConfig
+					ollamaConfigName = name
+					hasOllamaConfig = true
+				}
+			}
+			continue
+		}
+		if existing, ok := canonicalConfigs[canonicalName]; ok && !providerConfigsEquivalent(existing, providerConfig) {
+			return nil, conflictingProviderAliasError(canonicalName, canonicalConfigNames[canonicalName], name)
+		}
+		if currentName, ok := canonicalConfigNames[canonicalName]; !ok || preferProviderConfig(name, currentName, canonicalName) {
+			canonicalConfigs[canonicalName] = providerConfig
+			canonicalConfigNames[canonicalName] = name
+		}
+	}
+	// "ollama" was the historical qualifier for the default local provider.
+	// An explicit local entry always takes precedence when both tiers exist.
+	if hasOllamaConfig {
+		canonicalConfigs["local"] = ollamaConfig
+	}
+	if hasExplicitLocal {
+		canonicalConfigs["local"] = explicitLocalConfig
+	}
+	// Keep the original default target for non-local providers that inherit a
+	// missing URL or key. The provider exposed as the local default must instead
+	// be constructed from the fully resolved canonical local target.
+	fallbackProvider, err := NewOpenAICompatibleProvider(defaultURL, defaultKey, "local")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create default provider: %w", err)
 	}
-	defaultProv.defaultProvider = true
-	if providerConfigs == nil {
-		providerConfigs = make(map[string]config.ProviderConfig)
+	localTarget := providerTarget{
+		name:        "local",
+		upstreamURL: fallbackProvider.baseURL,
+		apiKey:      fallbackProvider.apiKey,
 	}
+	if cfg, ok := canonicalConfigs["local"]; ok {
+		if cfg.ProviderURL != "" {
+			localTarget.upstreamURL = cfg.ProviderURL
+		}
+		if cfg.ProviderAPIKey != "" {
+			localTarget.apiKey = cfg.ProviderAPIKey
+		}
+	}
+	defaultProv, err := NewOpenAICompatibleProvider(localTarget.upstreamURL, localTarget.apiKey, "local")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create canonical local provider: %w", err)
+	}
+	defaultProv.defaultProvider = true
 	return &ProviderManager{
 		defaultProvider:   defaultProv,
+		fallbackURL:       fallbackProvider.baseURL,
+		fallbackAPIKey:    fallbackProvider.apiKey,
 		providers:         make(map[string]*OpenAICompatibleProvider),
-		configs:           providerConfigs,
+		configs:           canonicalConfigs,
 		invocationProxies: make(map[string]providerproxy.Boundary),
 		startProcessBoundary: func(ctx context.Context, executable string, cfg providerproxy.Config) (providerproxy.Boundary, error) {
 			return providerproxy.Start(ctx, executable, cfg)
@@ -1006,6 +1147,10 @@ func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[strin
 			return providerproxy.StartInProcess(ctx, cfg)
 		},
 	}, nil
+}
+
+func conflictingProviderAliasError(canonicalName, firstName, secondName string) error {
+	return fmt.Errorf("conflicting provider aliases %q and %q canonicalize to %q with different configurations", firstName, secondName, canonicalName)
 }
 
 // StartInvocationProxy starts one Hufu-owned proxy per configured provider.
@@ -1044,11 +1189,7 @@ func (pm *ProviderManager) StartInvocationProxy(ctx context.Context, executable 
 		}
 	}
 	pm.mu.Lock()
-	configs := make(map[string]config.ProviderConfig, len(pm.configs))
-	for name, cfg := range pm.configs {
-		configs[name] = cfg
-	}
-	defaultURL, defaultKey := pm.defaultProvider.baseURL, pm.defaultProvider.apiKey
+	targets := pm.effectiveProviderTargetsLocked()
 	pm.mu.Unlock()
 
 	startProcessBoundary := pm.startProcessBoundary
@@ -1079,25 +1220,14 @@ func (pm *ProviderManager) StartInvocationProxy(ctx context.Context, executable 
 		created[name] = proxy
 		return nil
 	}
-	if err := start("local", defaultURL, defaultKey); err != nil {
+	if err := start(targets[0].name, targets[0].upstreamURL, targets[0].apiKey); err != nil {
 		for _, boundary := range created {
 			_ = boundary.Abort()
 		}
 		return err
 	}
-	for name, cfg := range configs {
-		if name == "local" || name == "ollama" {
-			continue
-		}
-		url := cfg.ProviderURL
-		if url == "" {
-			url = defaultURL
-		}
-		key := cfg.ProviderAPIKey
-		if key == "" {
-			key = defaultKey
-		}
-		if err := start(name, url, key); err != nil {
+	for _, target := range targets[1:] {
+		if err := start(target.name, target.upstreamURL, target.apiKey); err != nil {
 			for _, boundary := range created {
 				_ = boundary.Abort()
 			}
@@ -1117,6 +1247,34 @@ func (pm *ProviderManager) StartInvocationProxy(ctx context.Context, executable 
 	}
 	pm.mu.Unlock()
 	return nil
+}
+
+func (pm *ProviderManager) effectiveProviderTargetLocked(name string) providerTarget {
+	name = canonicalProviderName(name)
+	target := providerTarget{
+		name:        name,
+		upstreamURL: pm.fallbackURL,
+		apiKey:      pm.fallbackAPIKey,
+	}
+	if cfg, ok := pm.configs[name]; ok {
+		if cfg.ProviderURL != "" {
+			target.upstreamURL = cfg.ProviderURL
+		}
+		if cfg.ProviderAPIKey != "" {
+			target.apiKey = cfg.ProviderAPIKey
+		}
+	}
+	return target
+}
+
+func (pm *ProviderManager) effectiveProviderTargetsLocked() []providerTarget {
+	targets := []providerTarget{pm.effectiveProviderTargetLocked("local")}
+	for name := range pm.configs {
+		if name != "local" {
+			targets = append(targets, pm.effectiveProviderTargetLocked(name))
+		}
+	}
+	return targets
 }
 
 // AbortInvocationProxy synchronously kills and reaps every proxy owner. It
@@ -1156,15 +1314,9 @@ func (pm *ProviderManager) StopInvocationProxy() error { return pm.AbortInvocati
 // stripped model name (without the provider prefix). Unknown providers
 // fall back to the configured default local provider.
 func (pm *ProviderManager) GetProvider(modelID string) *OpenAICompatibleProvider {
-	prefix, _ := ParseModelProvider(modelID)
-	name := prefix
-	if name == "" {
-		name = "local"
-	}
-	if name == "ollama" {
-		// Compatibility alias for configurations written before the provider
-		// was made vendor-neutral.
-		name = "local"
+	name := pm.effectiveProviderKey(modelID)
+	if name == "local" {
+		return pm.defaultProvider
 	}
 
 	// Fast path: check cache with read lock
@@ -1184,17 +1336,10 @@ func (pm *ProviderManager) GetProvider(modelID string) *OpenAICompatibleProvider
 	}
 
 	// Check for per-provider config
-	cfg, hasCfg := pm.configs[name]
+	_, hasCfg := pm.configs[name]
 	if hasCfg {
-		url := cfg.ProviderURL
-		if url == "" {
-			url = pm.defaultProvider.baseURL
-		}
-		key := cfg.ProviderAPIKey
-		if key == "" {
-			key = pm.defaultProvider.apiKey
-		}
-		p, err := NewOpenAICompatibleProvider(url, key, name)
+		target := pm.effectiveProviderTargetLocked(name)
+		p, err := NewOpenAICompatibleProvider(target.upstreamURL, target.apiKey, target.name)
 		if err == nil {
 			if boundary, ok := pm.invocationProxies[name]; ok {
 				p.setBoundary(boundary.URL(), boundary.HTTPClient())
@@ -1222,12 +1367,17 @@ func (p *OpenAICompatibleProvider) Name() string {
 }
 
 type AgentConfig struct {
-	Def         *AgentDef
-	TeamConfig  *TeamConfig
-	WorkDir     string
-	MaxSteps    int
-	PrepareStep fantasy.PrepareStepFunction
-	Admission   RequestAdmission
+	Def              *AgentDef
+	TeamConfig       *TeamConfig
+	WorkDir          string
+	MaxSteps         int
+	PrepareStep      fantasy.PrepareStepFunction
+	Admission        RequestAdmission
+	AdmissionContext ProviderAdmissionContext
+	// InvocationModelID is the selected model for this concrete agent
+	// invocation. It may differ from Def.Generation.Model during retry,
+	// repair, rescue, direct, or subagent execution.
+	InvocationModelID string
 }
 
 func resolveMaxSteps(agentSteps, teamSteps int) int {
@@ -1241,7 +1391,10 @@ func resolveMaxSteps(agentSteps, teamSteps int) int {
 }
 
 func CreateAgent(ctx context.Context, provider *OpenAICompatibleProvider, cfg AgentConfig, agentTools []fantasy.AgentTool) (fantasy.Agent, error) {
-	modelStr := cfg.Def.Generation.Model
+	modelStr := cfg.InvocationModelID
+	if modelStr == "" {
+		modelStr = cfg.Def.Generation.Model
+	}
 	if modelStr == "" {
 		modelStr = cfg.TeamConfig.Generation.Model
 	}
@@ -1253,7 +1406,7 @@ func CreateAgent(ctx context.Context, provider *OpenAICompatibleProvider, cfg Ag
 	if err != nil {
 		return nil, fmt.Errorf("failed to create language model for %q: %w", cfg.Def.Name, err)
 	}
-	lm = NewAdmittedLanguageModel(modelStr, lm, cfg.Admission)
+	lm = NewAdmittedLanguageModelWithContext(modelStr, lm, cfg.Admission, cfg.AdmissionContext)
 
 	opts := []fantasy.AgentOption{
 		fantasy.WithSystemPrompt(cfg.Def.System),

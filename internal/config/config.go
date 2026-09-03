@@ -14,15 +14,15 @@ import (
 	"github.com/kjelly/hufu/internal/yamlutil"
 )
 
-// DefaultLocalProviderURL preserves the historical localhost endpoint while
-// keeping the provider contract vendor-neutral. Configure this when the local
-// server is not listening on the default address.
-const DefaultLocalProviderURL = "http://localhost:11434/v1"
+// DefaultLocalProviderURL is the literal loopback endpoint used by the local
+// provider. A literal address is required so no-net validation never needs
+// DNS resolution to determine whether the endpoint is local.
+const DefaultLocalProviderURL = "http://127.0.0.1:11434/v1"
 
 // DefaultProviderURL is retained for compatibility with existing callers.
 const DefaultProviderURL = DefaultLocalProviderURL
 const DefaultEmbeddingModel = "ollama/nomic-embed-text:latest"
-const DefaultOllamaAPIURL = "http://localhost:11434/api"
+const DefaultOllamaAPIURL = "http://127.0.0.1:11434/api"
 
 type ModelEntry struct {
 	ID      string `yaml:"id"`
@@ -32,13 +32,29 @@ type ModelEntry struct {
 type ProviderConfig struct {
 	ProviderURL    string `yaml:"provider-url"`
 	ProviderAPIKey string `yaml:"provider-api-key"`
-	Insecure       bool   `yaml:"insecure"`
+	// IntrospectionType selects the provider-owned runtime metadata adapter.
+	// Named providers default to openai-compatible when omitted; the local
+	// provider retains its historical Ollama adapter compatibility.
+	IntrospectionType string `yaml:"introspection-type"`
+	Insecure          bool   `yaml:"insecure"`
 	// MaxConcurrent bounds how many tasks may run concurrently against this
 	// specific provider, independent of the team-wide max-concurrent. A local
 	// model dispatched by many workers is not the same as many workers able to
 	// usefully run concurrent inference. Zero (the default) means "no
 	// additional limit beyond the team-wide one".
 	MaxConcurrent int `yaml:"max-concurrent"`
+}
+
+// Validate checks provider configuration values that affect runtime adapter
+// selection. An omitted type is valid because named providers have an
+// explicit openai-compatible default.
+func (p ProviderConfig) Validate() error {
+	switch strings.ToLower(strings.TrimSpace(p.IntrospectionType)) {
+	case "", "ollama", "openai-compatible":
+		return nil
+	default:
+		return fmt.Errorf("unsupported introspection-type %q (want ollama or openai-compatible)", p.IntrospectionType)
+	}
 }
 
 type Config struct {
@@ -193,6 +209,9 @@ func (c *Config) mergeFromFile(path string) {
 				}
 				if v.Insecure {
 					existing.Insecure = true
+				}
+				if v.IntrospectionType != "" {
+					existing.IntrospectionType = v.IntrospectionType
 				}
 				c.Providers[k] = existing
 			} else {
@@ -438,6 +457,9 @@ func MergeProviderConfigs(hufuProviders, teamProviders map[string]ProviderConfig
 		}
 		if v.Insecure {
 			existing.Insecure = true
+		}
+		if v.IntrospectionType != "" {
+			existing.IntrospectionType = v.IntrospectionType
 		}
 		result[k] = existing
 	}

@@ -122,7 +122,7 @@ func TestAcceptedTerminalResultStopsWorkerBeforeDuplicateAndPostResultTools(t *t
 	c, item := newAcceptedTerminalResultStopCoordinator(t, worker)
 	worker.tool = &submitResultTool{coordinator: c, todoID: item.ID}
 
-	if _, err := c.executeTask(context.Background(), TaskDef{
+	if _, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "worker", Goal: "submit one result",
 		Execution: ExecutionContract{RequiresResult: true},
 	}, item.ID); err != nil {
@@ -147,7 +147,7 @@ func TestInvalidSubmitResultDoesNotStopWorkerBeforeSchemaCorrection(t *testing.T
 	c, item := newAcceptedTerminalResultStopCoordinator(t, worker)
 	worker.tool = &submitResultTool{coordinator: c, todoID: item.ID}
 
-	if _, err := c.executeTask(context.Background(), TaskDef{
+	if _, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "worker", Goal: "correct the result schema",
 		Execution: ExecutionContract{RequiresResult: true},
 	}, item.ID); err != nil {

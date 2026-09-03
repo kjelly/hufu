@@ -282,11 +282,15 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	agentDef := c.injectWorkerContext(ctx, canonical.Agent)
 	gatedTools := c.gatePolicyTools(resolvedTools.Tools)
 	subAgModelID := c.resolveAgentModel(agentDef, "")
+	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, subAgModelID, agentDef)
+	if err != nil {
+		return "", fmt.Errorf("resolve sub-agent provider context: %w", err)
+	}
 	ctx = context.WithValue(ctx, executionAttemptKey{}, 1)
 	ctx = context.WithValue(ctx, taskRequiresResultKey{}, true)
 	ctx = context.WithValue(ctx, tools.AgentNameKey, canonical.Agent.Name)
 	ctx = c.withEffectiveToolsAllowedForTask(ctx, agentDef, resolvedTools.Names, canonical.Task)
-	ctx = withContextWindowRequestDescriptor(ctx, c.newContextWindowRequestDescriptor(subAgModelID, agentDef, gatedTools, canonical.Agent.Name, "subagent"))
+	ctx = withContextWindowRequestDescriptor(ctx, c.newContextWindowRequestDescriptorWithContext(ctx, subAgModelID, agentDef, gatedTools, canonical.Agent.Name, "subagent"))
 	if identity, active := c.activeTaskResultOccurrence(todoID); active {
 		ctx = withSubmitResultRuntimeIdentity(ctx, identity)
 	} else {
@@ -307,10 +311,12 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 			return "", fmt.Errorf("failed to resolve sub-agent provider %q: %w", name, providerErr)
 		}
 		ag, err = c.createGatedAgent(ctx, provider, agent.AgentConfig{
-			Def:        agentDef,
-			TeamConfig: &c.session.Config,
-			WorkDir:    c.projectDir,
-			MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
+			Def:               agentDef,
+			TeamConfig:        &c.session.Config,
+			WorkDir:           c.projectDir,
+			MaxSteps:          c.stepBudget(agentDef, agent.DefaultMaxSteps),
+			InvocationModelID: subAgModelID,
+			AdmissionContext:  invocation.AdmissionContext,
 		}, gatedTools)
 		if err != nil {
 			return "", fmt.Errorf("failed to create sub-agent %q: %w", name, err)
@@ -328,7 +334,11 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		return "", fmt.Errorf("sub-agent skill context preflight failed: %w", skillErr)
 	}
 	workerInput := buildWorkerContextInput(request, taskDef, agentDef, "", instructions, "", "", skills)
-	workerInput.ModelContext = globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef))
+	if invocation.AdmissionContext.IsBound() {
+		workerInput.ModelContext = invocation.ModelContext
+	} else {
+		workerInput.ModelContext = globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef))
+	}
 	workerInput.MaxAuxChars = maxWorkerAuxContextChars
 	workerInput.DisableMemory = c.historicalMemoryDisabled()
 	var routeDecisions []ContextRouteDecision

@@ -589,15 +589,41 @@ func (c *Coordinator) observeSidecarUsage(result *fantasy.AgentResult) {
 func (c *Coordinator) attachSidecarUsageObserver(s *sidecar.Sidecar) *sidecar.Sidecar {
 	if s != nil {
 		s.SetUsageObserver(c.observeSidecarUsage)
+		s.SetErrorObserver(func(ctx context.Context, err error) {
+			if observeErr := c.observeSidecarError(ctx, s.ModelID(), err); observeErr != nil {
+				log.Printf("[WARN] failed to observe sidecar context overflow for %q: %v", s.ModelID(), observeErr)
+			}
+		})
+		s.SetInvocationBinder(func(ctx context.Context, modelID string) (context.Context, agent.ProviderAdmissionContext, error) {
+			outputReservation, _ := sidecar.OutputReservationFromContext(ctx)
+			boundCtx, invocation, err := c.resolveProviderBoundInvocationContextWithOutput(ctx, modelID, nil, outputReservation)
+			if err != nil {
+				return ctx, agent.ProviderAdmissionContext{}, err
+			}
+			if !invocation.AdmissionContext.IsBound() {
+				return ctx, agent.ProviderAdmissionContext{}, fmt.Errorf("provider-bound context unavailable for sidecar model %q", modelID)
+			}
+			return boundCtx, invocation.AdmissionContext, nil
+		})
 		s.SetPromptPreparer(c.prepareAuxiliaryPrompt)
+		s.SetProjectionPromptPreparer(c.prepareAuxiliaryProjectionPrompt)
 		s.SetRequestPreparer(func(ctx context.Context, purpose string, messages []fantasy.Message, tools []fantasy.AgentTool, reserved int) (context.Context, fantasy.PrepareStepResult, error) {
 			modelID := s.ModelID()
+			bound, ok := sidecar.InvocationAdmissionContextFromContext(ctx)
+			if !ok || !bound.IsBound() || !strings.EqualFold(bound.ModelID, modelID) {
+				return ctx, fantasy.PrepareStepResult{}, fmt.Errorf("sidecar invocation admission context unavailable for model %q", modelID)
+			}
+			if reserved <= 0 {
+				reserved = bound.MaxOutputTokens
+			}
 			manager := NewContextWindowManager(defaultCounter, nil)
 			taskID, _ := ctx.Value(todoIDKey{}).(string)
 			attempt, _ := ctx.Value(executionAttemptKey{}).(int)
 			admission, err := c.admitCoordinatorContext(ctx, manager, ContextWindowRequest{
 				ModelID: modelID, System: sidecar.SystemPrompt(), Tools: tools, Messages: messages,
-				ReservedOutputTokens: reserved,
+				AdmissionContext:     bound,
+				ReservedOutputTokens: reserved, SafetyMarginTokens: bound.SafetyMarginTokens,
+				Window: bound.ContextWindow,
 			}, "sidecar_"+purpose, taskID, attempt)
 			if err != nil {
 				return ctx, fantasy.PrepareStepResult{}, err
@@ -609,6 +635,16 @@ func (c *Coordinator) attachSidecarUsageObserver(s *sidecar.Sidecar) *sidecar.Si
 		})
 	}
 	return s
+}
+
+func (c *Coordinator) observeSidecarError(ctx context.Context, modelID string, err error) error {
+	if !IsContextOverflowError(err) {
+		return nil
+	}
+	if window, ok := ParseObservedContextWindow(err); ok {
+		return c.observeContextOverflow(ctx, modelID, window)
+	}
+	return c.invalidateContextProfile(modelID)
 }
 
 // providerInvocationContext is the construction context for Hufu-owned
@@ -637,7 +673,12 @@ func (c *Coordinator) Sidecar() *sidecar.Sidecar {
 		return c.sidecarInst
 	}
 	ctx := c.providerInvocationContext()
-	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.sidecarModel), c.sidecarModel, c.providerAdmission())
+	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, c.sidecarModel, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠ sidecar model %q unavailable: %v (auto-skills and skill matching disabled — set --sidecar-model to a working model to enable)\n", c.sidecarModel, err)
+		return nil
+	}
+	s, err := sidecar.NewSidecarWithAdmissionContext(ctx, c.providerManager.GetProvider(c.sidecarModel), c.sidecarModel, c.providerAdmission(), invocation.AdmissionContext)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ sidecar model %q unavailable: %v (auto-skills and skill matching disabled — set --sidecar-model to a working model to enable)\n", c.sidecarModel, err)
 		return nil
@@ -660,7 +701,12 @@ func (c *Coordinator) GuardSidecar() *sidecar.Sidecar {
 		return c.guardInst
 	}
 	ctx := c.providerInvocationContext()
-	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.guardModel), c.guardModel, c.providerAdmission())
+	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, c.guardModel, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠ guard model %q unavailable: %v (guard review disabled — tool calls will be denied until a working model is configured)\n", c.guardModel, err)
+		return nil
+	}
+	s, err := sidecar.NewSidecarWithAdmissionContext(ctx, c.providerManager.GetProvider(c.guardModel), c.guardModel, c.providerAdmission(), invocation.AdmissionContext)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ guard model %q unavailable: %v (guard review disabled — tool calls will be denied until a working model is configured)\n", c.guardModel, err)
 		return nil
@@ -686,7 +732,12 @@ func (c *Coordinator) JudgeSidecar() *sidecar.Sidecar {
 		return c.judgeInst
 	}
 	ctx := c.providerInvocationContext()
-	s, err := sidecar.NewSidecar(ctx, c.providerManager.GetProvider(c.judgeModel), c.judgeModel, c.providerAdmission())
+	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, c.judgeModel, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠ judge model %q unavailable: %v (multi-model results fall back to concatenation merge)\n", c.judgeModel, err)
+		return nil
+	}
+	s, err := sidecar.NewSidecarWithAdmissionContext(ctx, c.providerManager.GetProvider(c.judgeModel), c.judgeModel, c.providerAdmission(), invocation.AdmissionContext)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ judge model %q unavailable: %v (multi-model results fall back to concatenation merge)\n", c.judgeModel, err)
 		return nil

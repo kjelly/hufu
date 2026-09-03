@@ -138,6 +138,7 @@ type mockContextCompiler struct {
 	calcCalled            bool
 	compileCoordinatorErr error
 	compileWorkerErr      error
+	workerModelContext    ModelContextSpec
 }
 
 func (m *mockContextCompiler) CalculateBudget(spec ModelContextSpec, systemTokens, toolsTokens int) ContextBudget {
@@ -172,6 +173,7 @@ func (m *mockContextCompiler) CompileCoordinatorContext(ctx context.Context, inp
 	return CompileCoordinatorContext(ctx, input)
 }
 func (m *mockContextCompiler) CompileWorkerContext(ctx context.Context, input WorkerContextInput) (CompiledContext, error) {
+	m.workerModelContext = input.ModelContext
 	if m.compileWorkerErr != nil {
 		return CompiledContext{}, m.compileWorkerErr
 	}

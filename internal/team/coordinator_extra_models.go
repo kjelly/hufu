@@ -415,6 +415,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 	// Thread-safe via contractWarningsOnce: concurrent extra-model clones all
 	// resolve the same dedup pointer (never reassigning a non-nil set).
 	contractWarnings := orig.contractWarningsDedup()
+	providerSemState := orig.sharedProviderSemaphoreState()
 
 	// Isolated extra-model coordinators must report their LLM usage to the
 	// parent run's no-progress budget. Keep a distinct namespace per clone so
@@ -478,6 +479,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		executionProfile:                   executionProfileCopy,
 		goalMode:                           goalModeCopy,
 		modelList:                          orig.modelList,
+		modelProfileRuntime:                orig.modelProfileRuntime,
 		sidecarModel:                       orig.sidecarModel,
 		sidecarInst:                        sidecarInstCopy,
 		sidecarInit:                        sidecarInitCopy,
@@ -492,6 +494,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		autoLoadedSkills:                   autoLoadedSkillsClone,
 		forcedSkillNames:                   forcedSkillNamesClone,
 		maxConcurrent:                      orig.maxConcurrent,
+		providerSemState:                   providerSemState,
 		sessionTime:                        orig.sessionTime,
 		tokenBudgetOwner:                   orig.tokenBudgetRoot(),
 		skillDetector:                      orig.skillDetector,

@@ -49,6 +49,23 @@ func TestWithoutCoordinatorRequestPreflightHidesOnlyPreflight(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRequestPreflightRetainsBoundAdmissionContext(t *testing.T) {
+	bound := agent.ProviderAdmissionContext{
+		ModelID:             "local/model",
+		ProviderIdentity:    "local",
+		ProviderBaseURL:     "http://127.0.0.1:11434/v1",
+		Bound:               true,
+		ContextWindow:       32_768,
+		MaxOutputTokens:     1_024,
+		SafetyMarginTokens:  256,
+		ContextWindowSource: "provider_runtime",
+	}
+	preflight := newCoordinatorRequestPreflightWithAdmission("local/model", "goal", "system", nil, bound)
+	if got := preflight.admissionContextValue(); got != bound {
+		t.Fatalf("preflight admission context = %#v, want %#v", got, bound)
+	}
+}
+
 func TestCoordinatorPromptExplainsWorkerSkillInstructions(t *testing.T) {
 	c := &Coordinator{
 		session: &TeamSession{

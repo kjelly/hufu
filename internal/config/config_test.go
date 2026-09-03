@@ -232,7 +232,7 @@ func TestResolveProviderURL(t *testing.T) {
 
 // TestDefaultProviderURL tests that DefaultProviderURL is correctly defined
 func TestDefaultProviderURL(t *testing.T) {
-	expected := "http://localhost:11434/v1"
+	expected := "http://127.0.0.1:11434/v1"
 	if DefaultProviderURL != expected {
 		t.Errorf("DefaultProviderURL = %q, want %q", DefaultProviderURL, expected)
 	}

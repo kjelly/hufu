@@ -27,7 +27,10 @@ func (a providerRequestAdmission) AdmitProviderRequest(ctx context.Context, requ
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	spec := globalRegistry.GetSpec(request.ModelID)
+	if bound := request.AdmissionContext; bound.IsBound() && bound.ModelID != "" && bound.ModelID != request.ModelID {
+		return fmt.Errorf("provider admission context model %q does not match request model %q", bound.ModelID, request.ModelID)
+	}
+	spec := modelContextSpecForProviderRequest(request)
 	if spec.IsEstimated && spec.ContextWindow <= 0 {
 		return &ContextWindowMetadataUnavailableError{ModelID: request.ModelID}
 	}
@@ -60,6 +63,36 @@ func (a providerRequestAdmission) AdmitProviderRequest(ctx context.Context, requ
 		}
 	}
 	return nil
+}
+
+// AcquireProviderInvocation implements the optional Coordinator-owned runtime
+// boundary used by the agent package's admitted language-model wrapper. The
+// wrapper calls this only after request admission and releases the returned
+// slot when the underlying provider call returns.
+func (a providerRequestAdmission) AcquireProviderInvocation(ctx context.Context, modelID string) (func(), error) {
+	if a.c == nil {
+		return nil, nil
+	}
+	slot, err := acquireSem(ctx, a.c.providerSemaphore(modelID))
+	if err != nil {
+		return nil, err
+	}
+	return slot.release, nil
+}
+
+func modelContextSpecForProviderRequest(request agent.ProviderRequest) ModelContextSpec {
+	bound := request.AdmissionContext
+	if bound.IsBound() {
+		return ModelContextSpec{
+			ModelID:             request.ModelID,
+			ContextWindow:       bound.ContextWindow,
+			ContextWindowSource: bound.ContextWindowSource,
+			MaxOutputTokens:     bound.MaxOutputTokens,
+			SafetyMarginTokens:  bound.SafetyMarginTokens,
+			IsEstimated:         bound.IsEstimated,
+		}
+	}
+	return globalRegistry.GetSpec(request.ModelID)
 }
 
 // providerCallFromContextRequest builds the exact input shape used by the

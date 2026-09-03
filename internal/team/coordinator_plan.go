@@ -54,18 +54,28 @@ No other response format. Do NOT do the work yourself — only approve or reject
 // planReviewer implements an autonomous plan review agent using a sidecar model.
 // It is NOT user-configurable — it only activates when forcePlanFirst is set.
 type planReviewer struct {
-	coordinator       *Coordinator
-	modelID           string
-	agent             fantasy.Agent
-	requestDescriptor contextWindowRequestDescriptor
-	initialized       bool
-	todoID            string
+	coordinator                    *Coordinator
+	modelID                        string
+	agent                          fantasy.Agent
+	requestDescriptor              contextWindowRequestDescriptor
+	providerBoundInvocationContext providerBoundInvocationContext
+	initialized                    bool
+	todoID                         string
 }
 
 func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*planReviewer, error) {
 	ctx = withoutCoordinatorRequestPreflight(ctx)
 	modelID := c.planReviewerModel
-	pr := &planReviewer{coordinator: c, modelID: modelID, todoID: todoID}
+	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, modelID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("resolve plan reviewer provider context: %w", err)
+	}
+	pr := &planReviewer{
+		coordinator:                    c,
+		modelID:                        modelID,
+		todoID:                         todoID,
+		providerBoundInvocationContext: invocation,
+	}
 	reviewerTools := []fantasy.AgentTool{
 		&reviewerApprovePlanTool{coordinator: c, todoID: todoID},
 		&reviewerRejectPlanTool{coordinator: c, todoID: todoID},
@@ -77,14 +87,16 @@ func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*plan
 			Role:       "plan_reviewer",
 			Generation: agent.GenerationParams{Model: modelID},
 		},
-		TeamConfig: &c.session.Config,
-		WorkDir:    c.projectDir,
-		MaxSteps:   1,
+		TeamConfig:        &c.session.Config,
+		WorkDir:           c.projectDir,
+		MaxSteps:          1,
+		InvocationModelID: modelID,
+		AdmissionContext:  invocation.AdmissionContext,
 	}, reviewerTools)
 	if err != nil {
 		return nil, err
 	}
-	pr.requestDescriptor = c.newContextWindowRequestDescriptor(modelID, &agent.AgentDef{Name: "plan-reviewer", Role: "plan_reviewer", System: planReviewerSystemPrompt, Generation: agent.GenerationParams{Model: modelID}}, reviewerTools, "plan-reviewer", "plan-reviewer")
+	pr.requestDescriptor = c.newContextWindowRequestDescriptorWithContext(ctx, modelID, &agent.AgentDef{Name: "plan-reviewer", Role: "plan_reviewer", System: planReviewerSystemPrompt, Generation: agent.GenerationParams{Model: modelID}}, reviewerTools, "plan-reviewer", "plan-reviewer")
 	pr.agent = ag
 	pr.initialized = true
 	return pr, nil
@@ -92,6 +104,7 @@ func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*plan
 
 func (pr *planReviewer) review(ctx context.Context, planText string) (string, bool, error, error) {
 	ctx = withoutCoordinatorRequestPreflight(ctx)
+	ctx = withProviderBoundInvocationContext(ctx, pr.providerBoundInvocationContext)
 	ctx = withContextWindowRequestDescriptor(ctx, pr.requestDescriptor)
 	c := pr.coordinator
 	c.pendingPlansMu.Lock()

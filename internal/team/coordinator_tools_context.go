@@ -219,7 +219,11 @@ func (c *Coordinator) persistContextToolDecision(request ContextRequest, itemID 
 }
 
 func compileRoutedContextForTool(ctx context.Context, c *Coordinator, request ContextRequest, route ContextRoute) (CompiledContext, error) {
-	input := WorkerContextInput{Request: request, Goal: request.Goal, CanonicalMemory: &route.Bundle, ModelContext: globalRegistry.GetSpec("")}
+	invocation, ok := providerBoundInvocationContextFromContext(ctx, "")
+	if !ok || !invocation.AdmissionContext.IsBound() {
+		return CompiledContext{}, fmt.Errorf("provider-bound context unavailable for context tool")
+	}
+	input := WorkerContextInput{Request: request, Goal: request.Goal, CanonicalMemory: &route.Bundle, ModelContext: invocation.ModelContext}
 	return c.ContextCompiler().CompileWorkerContext(ctx, input)
 }
 

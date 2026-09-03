@@ -246,7 +246,7 @@ func TestSidecarFailsClosedBeforeProviderBoundary(t *testing.T) {
 
 func TestContextPreflightAdmitsSidecarAfterProviderBoundary(t *testing.T) {
 	calls := 0
-	c, err := NewCoordinator(&TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "preflight-sidecar"}}, "", "", nil, nil, nil, RoleModels{Sidecar: "model"}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(&TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "preflight-sidecar"}}, "", "", nil, nil, nil, RoleModels{Sidecar: "gpt-4o"}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

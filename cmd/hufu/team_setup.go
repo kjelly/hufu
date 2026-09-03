@@ -29,17 +29,6 @@ type teamContext struct {
 	notifier    *notify.Notifier
 }
 
-// Kept as a test seam name for compatibility; the implementation uses the
-// provider-neutral OpenAI-compatible /models metadata endpoint.
-var detectOllamaContextLengths = team.DetectAndCacheProviderContextLengths
-
-func detectContextLengths(ctx context.Context, noNet bool, providerURL, providerAPIKey string, models []string) {
-	if noNet {
-		return
-	}
-	detectOllamaContextLengths(ctx, providerURL, providerAPIKey, models)
-}
-
 // applyUnattendedAndBudget configures the coordinator's unattended mode,
 // run budgets, and acceptance check from the CLI flags and team config.
 // CLI flags take precedence; team.yaml values are the fallback.
@@ -107,6 +96,9 @@ func modelsInUse(session *team.TeamSession, sidecarModel, guardModel, judgeModel
 	for _, def := range session.Agents {
 		if def != nil {
 			add(def.Generation.Model)
+			for _, extra := range def.ExtraModels {
+				add(extra)
+			}
 		}
 	}
 	for _, entry := range modelList {
@@ -196,12 +188,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		return nil, err
 	}
 
-	// Context-length detection is an optional cache warm-up. In no-net mode
-	// even this best-effort probe is forbidden: team setup must not contact the
-	// provider before the agent subprocesses run.
 	models := modelsInUse(session, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedModelList)
-	detectContextLengths(ctx, resolvedNoNet, resolvedProviderURL, resolvedProviderAPIKey, models)
-	team.RegisterConfiguredContextWindow(models, session.Config.Generation.ContextWindow)
 
 	if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
 		stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)
@@ -251,6 +238,10 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
+	// Warm provider-bound profiles after the coordinator owns the exact
+	// ProviderManager used for invocation. This covers configured agents,
+	// extra models, model-list candidates, and all auxiliary role models.
+	coordinator.WarmModelProfiles(ctx, models, session.Config.Generation.ContextWindow)
 
 	coordinator.SetExecutionProfile(execProfile)
 	coordinator.SetSessionData(sessionData)

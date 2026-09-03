@@ -16,6 +16,30 @@ import (
 	"github.com/kjelly/hufu/internal/tools"
 )
 
+func withTestProtocolRepairInvocationContext(ctx context.Context) context.Context {
+	bound := agent.ProviderAdmissionContext{
+		ModelID:             "test",
+		ProviderIdentity:    "test-provider",
+		ProviderBaseURL:     "https://test.example/v1",
+		Bound:               true,
+		ContextWindow:       32_768,
+		MaxOutputTokens:     4_096,
+		SafetyMarginTokens:  64,
+		ContextWindowSource: "test",
+	}
+	return withProviderBoundInvocationContext(ctx, providerBoundInvocationContext{
+		ModelID:          bound.ModelID,
+		AdmissionContext: bound,
+		ModelContext: ModelContextSpec{
+			ModelID:             bound.ModelID,
+			ContextWindow:       bound.ContextWindow,
+			MaxOutputTokens:     bound.MaxOutputTokens,
+			SafetyMarginTokens:  bound.SafetyMarginTokens,
+			ContextWindowSource: bound.ContextWindowSource,
+		},
+	})
+}
+
 func readStoredArtifact(t *testing.T, workspace, id string) []byte {
 	t.Helper()
 	store, err := NewFileArtifactStore(workspace, workspace)
@@ -77,6 +101,93 @@ func TestClassifyRepairFailure_SubReasons(t *testing.T) {
 	}
 	if !RepairFailureInvalidSchema.IsProtocolRepairFailure() {
 		t.Fatal("invalid_schema must be counted as a protocol repair failure")
+	}
+}
+
+func TestProtocolRepair_PreparationFailureIsRecorded(t *testing.T) {
+	workspace := t.TempDir()
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "protocol-preparation-failure", Timeout: 30, MaxRetries: 1},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-protocol-preparation-failure",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "record repair preparation failure"}})[0]
+	c.workerAgentOverride = &mockWorkerTextAgent{text: "worker execution evidence"}
+	c.repairAgentOverride = &mockWorkerTextAgent{text: "repair was not started"}
+
+	_, err := c.executeTask(context.Background(), TaskDef{
+		Agent: "worker", Goal: "record repair preparation failure",
+		Execution: ExecutionContract{RequiresResult: true},
+	}, item.ID)
+	if err == nil {
+		t.Fatal("expected protocol repair preparation failure")
+	}
+	receipt := c.taskTracker.TodoList().Items()[0].ExecutionReceipt
+	if receipt == nil || receipt.RepairProvenance == nil {
+		t.Fatalf("missing repair provenance: %#v", receipt)
+	}
+	provenance := receipt.RepairProvenance
+	if provenance.FailureReason != repairFailurePreparation {
+		t.Fatalf("repair failure reason = %q, want %q", provenance.FailureReason, repairFailurePreparation)
+	}
+	if len(provenance.History) != 1 || provenance.History[0].FailureReason != repairFailurePreparation {
+		t.Fatalf("repair history = %#v, want one preparation failure", provenance.History)
+	}
+	if provenance.Error == "" || !strings.Contains(provenance.Error, "provider-bound context unavailable") {
+		t.Fatalf("repair preparation error = %q, want provider-binding evidence", provenance.Error)
+	}
+}
+
+func TestProtocolRepair_StreamErrorIsRecordedAsPreparationFailure(t *testing.T) {
+	workspace := t.TempDir()
+	streamErr := errors.New("repair stream failed before producing a result")
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "protocol-stream-failure", Timeout: 30, MaxRetries: 1},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:     time.Now(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-protocol-stream-failure",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "record repair stream failure"}})[0]
+	c.workerAgentOverride = &mockWorkerTextAgent{text: "worker execution evidence"}
+	c.repairAgentOverride = &streamErrorAgent{err: streamErr}
+
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
+		Agent: "worker", Goal: "record repair stream failure",
+		Execution: ExecutionContract{RequiresResult: true},
+	}, item.ID)
+	if err == nil {
+		t.Fatal("expected protocol repair stream failure")
+	}
+	receipt := c.taskTracker.TodoList().Items()[0].ExecutionReceipt
+	if receipt == nil || receipt.RepairProvenance == nil {
+		t.Fatalf("missing repair provenance: %#v", receipt)
+	}
+	provenance := receipt.RepairProvenance
+	if provenance.FailureReason != repairFailurePreparation {
+		t.Fatalf("repair failure reason = %q, want %q", provenance.FailureReason, repairFailurePreparation)
+	}
+	if len(provenance.History) != 1 || provenance.History[0].FailureReason != repairFailurePreparation {
+		t.Fatalf("repair history = %#v, want one preparation failure", provenance.History)
+	}
+	if provenance.Error == "" || !strings.Contains(provenance.Error, streamErr.Error()) {
+		t.Fatalf("repair stream error = %q, want propagated stream error", provenance.Error)
 	}
 }
 
@@ -188,7 +299,7 @@ func TestPolicyDeniedAttemptGetsOneCleanWorkerRetryWithoutResultOnlyRepair(t *te
 	repairCalls := 0
 	c.repairAgentOverride = &mockRepairAgent{onSubmit: func() { repairCalls++ }}
 
-	_, err := c.executeTask(context.Background(), TaskDef{Agent: "reviewer", Goal: "run bounded inspection", Recovery: RecoveryRetry, SideEffect: SideEffectNone, Execution: ExecutionContract{RequiresResult: true}}, item.ID)
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{Agent: "reviewer", Goal: "run bounded inspection", Recovery: RecoveryRetry, SideEffect: SideEffectNone, Execution: ExecutionContract{RequiresResult: true}}, item.ID)
 	if err != nil {
 		t.Fatalf("executeTask: %v", err)
 	}
@@ -226,7 +337,7 @@ func TestSecondPolicyDenialDoesNotCallWorkerOrRepairAgain(t *testing.T) {
 	repairCalls := 0
 	c.repairAgentOverride = &mockRepairAgent{onSubmit: func() { repairCalls++ }}
 
-	_, err := c.executeTask(context.Background(), TaskDef{Agent: "reviewer", Goal: "run bounded inspection", Recovery: RecoveryRetry, SideEffect: SideEffectNone, Execution: ExecutionContract{RequiresResult: true}}, item.ID)
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{Agent: "reviewer", Goal: "run bounded inspection", Recovery: RecoveryRetry, SideEffect: SideEffectNone, Execution: ExecutionContract{RequiresResult: true}}, item.ID)
 	if err == nil || !strings.Contains(err.Error(), "policy-denied") {
 		t.Fatalf("error = %v, want terminal second policy denial", err)
 	}
@@ -298,7 +409,7 @@ func TestProtocolRepair_ProgressNotFinalIsExecutionFailure(t *testing.T) {
 		})
 	}}
 
-	_, err := c.executeTask(context.Background(), TaskDef{
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "worker", Goal: "incomplete execution", Recovery: RecoveryRetry,
 		SideEffect: SideEffectExternalWrite,
 		Execution:  ExecutionContract{RequiresResult: true},
@@ -364,7 +475,7 @@ func TestSubmittedPartialReadOnlyRetriesWithEvidenceContext(t *testing.T) {
 		},
 	}
 
-	output, err := c.executeTask(context.Background(), TaskDef{
+	output, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "reviewer", Goal: "inspect runtime", Recovery: RecoveryRetry,
 		SideEffect: SideEffectNone, Execution: ExecutionContract{RequiresResult: true},
 	}, item.ID)
@@ -443,7 +554,7 @@ func TestProtocolRepair_ProgressNotFinalRetriesAndClearsAttemptResult(t *testing
 		})
 	}}
 
-	_, err := c.executeTask(context.Background(), TaskDef{
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "worker", Goal: "replay progress result", Recovery: RecoveryRetry,
 		Execution: ExecutionContract{RequiresResult: true},
 	}, item.ID)
@@ -521,7 +632,7 @@ func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
 		},
 	}
 
-	out, err := c.executeTask(context.Background(), TaskDef{
+	out, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "worker", Goal: "schema repair task",
 		Execution: ExecutionContract{RequiresResult: true},
 	}, item.ID)
@@ -583,7 +694,7 @@ func TestProtocolRepair_TwoInvalidSchemasRecoverProvisionallyAndBlock(t *testing
 		steps: func(int) []fantasy.StepResult { return invalidSchemaRepairSteps() },
 	}
 
-	_, err := c.executeTask(context.Background(), TaskDef{
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "worker", Goal: "unrecoverable schema task",
 		Execution: ExecutionContract{RequiresResult: true},
 	}, item.ID)
@@ -617,6 +728,18 @@ func TestProtocolRepair_TwoInvalidSchemasRecoverProvisionallyAndBlock(t *testing
 
 type mockWorkerTextAgent struct {
 	text string
+}
+
+type streamErrorAgent struct {
+	err error
+}
+
+func (a *streamErrorAgent) Generate(context.Context, fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return nil, a.err
+}
+
+func (a *streamErrorAgent) Stream(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return nil, a.err
 }
 
 type incompleteFreeTextWorker struct {
@@ -974,7 +1097,7 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 		},
 	}
 
-	out, err := c.executeTask(context.Background(), TaskDef{
+	out, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "worker",
 		Goal:  "data processing task",
 		Execution: ExecutionContract{
@@ -1074,7 +1197,7 @@ func TestProtocolRepair_GroundedResultRejectsRepairAndRetriesInstead(t *testing.
 	repairCalls := 0
 	c.repairAgentOverride = &mockRepairAgent{onSubmit: func() { repairCalls++ }}
 
-	_, err := c.executeTask(context.Background(), TaskDef{
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "worker",
 		Goal:  "data processing task",
 		Execution: ExecutionContract{
@@ -1130,7 +1253,7 @@ func TestProtocolRepair_UsesCleanContextInsteadOfOriginalToolHistory(t *testing.
 		},
 	}
 
-	if _, err := c.executeTask(context.Background(), TaskDef{
+	if _, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "worker", Goal: "inspect runtime", Execution: ExecutionContract{RequiresResult: true},
 	}, item.ID); err != nil {
 		t.Fatalf("executeTask returned error: %v", err)
@@ -1180,7 +1303,7 @@ func TestProtocolRepair_ReadOnlyResultContractFailureRetriesOnceCleanly(t *testi
 	// worker attempt used only view, so the runtime may make one fresh attempt.
 	c.repairAgentOverride = &scriptedRepairAgent{calls: &repairCalls}
 
-	if _, err := c.executeTask(context.Background(), TaskDef{
+	if _, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "worker", Goal: "inspect before implementation", Execution: ExecutionContract{RequiresResult: true},
 	}, item.ID); err != nil {
 		t.Fatalf("read-only result-contract fallback should complete: %v", err)
@@ -1221,7 +1344,7 @@ func TestReadOnlyFreeTextWorkerCapturesTranscriptEvidence(t *testing.T) {
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "review changes"}})[0]
 	c.workerAgentOverride = &mockWorkerTextAgent{text: "[WARNING] internal/team/example.go:1 — review finding"}
 
-	output, err := c.executeTask(context.Background(), TaskDef{Agent: "reviewer", Goal: "review changes"}, item.ID)
+	output, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{Agent: "reviewer", Goal: "review changes"}, item.ID)
 	if err != nil {
 		t.Fatalf("executeTask returned error: %v", err)
 	}
@@ -1259,7 +1382,7 @@ func TestReadOnlyFreeTextIncompleteHandoffIsRetryableNotDone(t *testing.T) {
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "review changes"}})[0]
 	c.workerAgentOverride = &incompleteFreeTextWorker{calls: &workerCalls}
 
-	_, err := c.executeTask(context.Background(), TaskDef{
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "reviewer", Goal: "review changes", Recovery: RecoveryRetry, SideEffect: SideEffectNone,
 	}, item.ID)
 	if err == nil {
@@ -1314,7 +1437,7 @@ func TestProtocolRepair_StepBudgetExhaustionUsesResultOnlyFinalization(t *testin
 		},
 	}
 
-	_, err := c.executeTask(context.Background(), TaskDef{
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "worker", Goal: "long read-only task", Execution: ExecutionContract{RequiresResult: true},
 	}, item.ID)
 	if err != nil {
@@ -1374,7 +1497,7 @@ func TestProtocolRepair_ReplayableTaskBlocksAfterRepairFailure(t *testing.T) {
 	// Attempt 1 repair fails. Per §6.1 the worker must NOT be replayed.
 	c.repairAgentOverride = &mockWorkerTextAgent{text: "repair-output-must-not-be-in-attempt-1"}
 
-	_, err := c.executeTask(context.Background(), TaskDef{
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "worker", Goal: "replayable protocol task",
 		Execution: ExecutionContract{RequiresResult: true},
 	}, item.ID)
@@ -1455,7 +1578,7 @@ func TestProtocolRepair_NonReplayableTaskBlocksOnRepairFailure(t *testing.T) {
 	// Counting agent that omits submit_result in both initial run and repair step
 	c.workerAgentOverride = &countingEmptyAgent{calls: &workerCalls}
 
-	_, err := c.executeTask(context.Background(), TaskDef{
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent:      "worker",
 		Goal:       "mutate external system",
 		SideEffect: SideEffectExternalWrite,
@@ -1526,7 +1649,7 @@ func TestProtocolRepair_FreeTextOutputCannotBypassRepairFailure(t *testing.T) {
 	// Repair agent runs but fails to call submit_result
 	c.repairAgentOverride = &mockWorkerTextAgent{text: "repair failed to submit"}
 
-	_, err := c.executeTask(context.Background(), TaskDef{
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent:      "worker",
 		Goal:       "critical task requiring result",
 		Verify:     "true",
@@ -1580,7 +1703,7 @@ func TestProtocolRepair_AllowsReplayFalseBlocksWorkerReplay(t *testing.T) {
 	c.workerAgentOverride = &countingEmptyAgent{calls: &workerCalls}
 	noReplay := false
 
-	_, err := c.executeTask(context.Background(), TaskDef{
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent:      "worker",
 		Goal:       "inline non-replayable task",
 		SideEffect: SideEffectNone,
@@ -1626,7 +1749,7 @@ func TestProtocolRepair_RecoveryPolicyBlocksWorkerReplay(t *testing.T) {
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "reconcile before retry"}})[0]
 	c.workerAgentOverride = &countingEmptyAgent{calls: &workerCalls}
 
-	_, err := c.executeTask(context.Background(), TaskDef{
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent:      "worker",
 		Goal:       "reconcile before retry",
 		Recovery:   RecoveryReconcile,
@@ -1720,6 +1843,7 @@ func TestProtocolRepair_AllFailureReasonsSurviveEventStoreReduction(t *testing.T
 		RepairFailureNoToolCall,
 		RepairFailureInvalidSchema,
 		RepairFailureProgressNotFinal,
+		repairFailurePreparation,
 	}
 	receipts := make([]ExecutionReceipt, 0, len(reasons))
 	for i, reason := range reasons {

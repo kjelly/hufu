@@ -3,11 +3,14 @@ package sidecar
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	"charm.land/fantasy"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -24,6 +27,43 @@ func (usageAgent) Generate(context.Context, fantasy.AgentCall) (*fantasy.AgentRe
 
 func (usageAgent) Stream(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
 	return nil, nil
+}
+
+type errorAgent struct{ err error }
+
+type boundSnapshotKey struct{}
+
+type sidecarRecordingLanguageModel struct {
+	fantasy.LanguageModel
+	calls    int
+	lastCall fantasy.Call
+}
+
+func (m *sidecarRecordingLanguageModel) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	m.calls++
+	m.lastCall = call
+	return &fantasy.Response{Content: fantasy.ResponseContent{fantasy.TextContent{Text: "ok"}}}, nil
+}
+
+func (m *sidecarRecordingLanguageModel) Provider() string { return "test-provider" }
+
+func (m *sidecarRecordingLanguageModel) Model() string { return "test-model" }
+
+type sidecarRecordingAdmission struct {
+	contexts []agent.ProviderAdmissionContext
+}
+
+func (a *sidecarRecordingAdmission) AdmitProviderRequest(_ context.Context, request agent.ProviderRequest) error {
+	a.contexts = append(a.contexts, request.AdmissionContext)
+	return nil
+}
+
+func (a errorAgent) Generate(context.Context, fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return nil, a.err
+}
+
+func (a errorAgent) Stream(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return nil, a.err
 }
 
 func TestGenerateNotifiesUsageObserver(t *testing.T) {
@@ -45,7 +85,74 @@ func TestGenerateNotifiesUsageObserver(t *testing.T) {
 	}
 }
 
-func TestCompactStructuredTransientBypassesDurableHooksOnlyForItsInvocation(t *testing.T) {
+func TestGenerateNotifiesErrorObserverOnlyForFailedGeneration(t *testing.T) {
+	var observed []error
+	observe := func(_ context.Context, err error) { observed = append(observed, err) }
+
+	success := &Sidecar{agent: usageAgent{}}
+	success.SetErrorObserver(observe)
+	if _, err := success.generate(t.Context(), "prompt", ClassifierProfile); err != nil {
+		t.Fatal(err)
+	}
+	if len(observed) != 0 {
+		t.Fatalf("successful generation notified errors = %d, want zero", len(observed))
+	}
+
+	failure := errors.New("provider rejected request")
+	failed := &Sidecar{agent: errorAgent{err: failure}}
+	failed.SetErrorObserver(observe)
+	if _, err := failed.generate(t.Context(), "prompt", ClassifierProfile); !errors.Is(err, failure) {
+		t.Fatalf("failed generation error = %v, want %v", err, failure)
+	}
+	if len(observed) != 1 || !errors.Is(observed[0], failure) {
+		t.Fatalf("failed generation notifications = %v, want one provider error", observed)
+	}
+}
+
+type cancelingErrorAgent struct {
+	cancel context.CancelFunc
+	err    error
+}
+
+func (a cancelingErrorAgent) Generate(ctx context.Context, _ fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	a.cancel()
+	return nil, a.err
+}
+
+func (a cancelingErrorAgent) Stream(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return nil, a.err
+}
+
+func TestGenerateErrorObserverReceivesCanceledGenerationContext(t *testing.T) {
+	type contextMarkerKey struct{}
+	providerErr := errors.New("provider rejected request")
+	parent, cancel := context.WithCancel(t.Context())
+	parent = context.WithValue(parent, contextMarkerKey{}, "generation")
+
+	var observed context.Context
+	s := &Sidecar{agent: cancelingErrorAgent{cancel: cancel, err: providerErr}}
+	s.SetErrorObserver(func(ctx context.Context, err error) {
+		if !errors.Is(err, providerErr) {
+			t.Errorf("observer error = %v, want provider error", err)
+		}
+		observed = ctx
+	})
+
+	if _, err := s.generate(parent, "prompt", ClassifierProfile); !errors.Is(err, providerErr) {
+		t.Fatalf("generate() error = %v, want provider error", err)
+	}
+	if observed == nil {
+		t.Fatal("error observer did not receive generation context")
+	}
+	if !errors.Is(observed.Err(), context.Canceled) {
+		t.Fatalf("observer context error = %v, want context cancellation", observed.Err())
+	}
+	if got := observed.Value(contextMarkerKey{}); got != "generation" {
+		t.Fatalf("observer context marker = %v, want generation", got)
+	}
+}
+
+func TestCompactStructuredTransientUsesProjectionHookWithoutDurableEffects(t *testing.T) {
 	capture := &callCapturingAgent{response: "ok"}
 	s := &Sidecar{agent: capture}
 	var observed int
@@ -67,6 +174,9 @@ func TestCompactStructuredTransientBypassesDurableHooksOnlyForItsInvocation(t *t
 		mutations.metrics++
 		return "prepared: " + prompt, nil
 	})
+	s.SetProjectionPromptPreparer(func(_ context.Context, _, prompt string) (string, error) {
+		return "projection-prepared: " + prompt, nil
+	})
 
 	if _, err := s.CompactStructuredTransient(context.Background(), "history", "", "goal"); err != nil {
 		t.Fatalf("transient compaction error = %v", err)
@@ -76,6 +186,9 @@ func TestCompactStructuredTransientBypassesDurableHooksOnlyForItsInvocation(t *t
 	}
 	if mutations.manifests != 0 || mutations.sessions != 0 || mutations.events != 0 || mutations.selections != 0 || mutations.metrics != 0 {
 		t.Fatalf("transient compaction mutated durable projection state: %+v", mutations)
+	}
+	if !strings.HasPrefix(capture.captured.Prompt, "projection-prepared: ") {
+		t.Fatalf("transient compaction prompt was not projection-prepared: %q", capture.captured.Prompt)
 	}
 	if _, err := s.CompactStructured(context.Background(), "history", "", "goal"); err != nil {
 		t.Fatalf("durable compaction error = %v", err)
@@ -88,6 +201,92 @@ func TestCompactStructuredTransientBypassesDurableHooksOnlyForItsInvocation(t *t
 	}
 	if !strings.HasPrefix(capture.captured.Prompt, "prepared: ") {
 		t.Fatalf("durable compaction prompt was not prepared: %q", capture.captured.Prompt)
+	}
+}
+
+func TestCompactStructuredTransientBindsBeforeProjectionPreparation(t *testing.T) {
+	capture := &callCapturingAgent{response: "ok"}
+	s := &Sidecar{agent: capture, modelID: "bound-sidecar"}
+	s.SetInvocationBinder(func(ctx context.Context, modelID string) (context.Context, agent.ProviderAdmissionContext, error) {
+		if modelID != "bound-sidecar" {
+			t.Fatalf("binder model = %q, want bound-sidecar", modelID)
+		}
+		ctx = context.WithValue(ctx, boundSnapshotKey{}, true)
+		return ctx, agent.ProviderAdmissionContext{ModelID: modelID, Bound: true}, nil
+	})
+	s.SetProjectionPromptPreparer(func(ctx context.Context, _, prompt string) (string, error) {
+		if got, _ := ctx.Value(boundSnapshotKey{}).(bool); !got {
+			t.Fatal("projection preparation ran before invocation binding")
+		}
+		return "compiled: " + prompt, nil
+	})
+
+	if _, err := s.CompactStructuredTransient(t.Context(), "history", "", "goal"); err != nil {
+		t.Fatalf("transient compaction error = %v", err)
+	}
+	if !strings.HasPrefix(capture.captured.Prompt, "compiled: ") {
+		t.Fatalf("transient prompt = %q, want compiled prompt", capture.captured.Prompt)
+	}
+}
+
+func TestGenerateRebindsCachedLanguageModelForInvocation(t *testing.T) {
+	b0 := agent.ProviderAdmissionContext{
+		ModelID:             "sidecar-model",
+		ProviderIdentity:    "provider-b0",
+		ProviderBaseURL:     "https://b0.example/v1",
+		Bound:               true,
+		ContextWindow:       4_096,
+		MaxOutputTokens:     256,
+		SafetyMarginTokens:  64,
+		ContextWindowSource: "provider_runtime",
+	}
+	b1 := agent.ProviderAdmissionContext{
+		ModelID:             "sidecar-model",
+		ProviderIdentity:    "provider-b1",
+		ProviderBaseURL:     "https://b1.example/v1",
+		Bound:               true,
+		ContextWindow:       8_192,
+		MaxOutputTokens:     512,
+		SafetyMarginTokens:  128,
+		ContextWindowSource: "provider_runtime",
+	}
+	underlying := &sidecarRecordingLanguageModel{}
+	admission := &sidecarRecordingAdmission{}
+	cached := agent.NewAdmittedLanguageModelWithContext("sidecar-model", underlying, admission, b0)
+	s := &Sidecar{
+		agent:            fantasy.NewAgent(cached),
+		languageModel:    underlying,
+		modelID:          "sidecar-model",
+		requestAdmission: admission,
+		admissionContext: b0,
+	}
+	var prepared agent.ProviderAdmissionContext
+	s.SetInvocationBinder(func(ctx context.Context, modelID string) (context.Context, agent.ProviderAdmissionContext, error) {
+		if modelID != "sidecar-model" {
+			t.Fatalf("binder model = %q, want sidecar-model", modelID)
+		}
+		return ctx, b1, nil
+	})
+	s.SetPromptPreparer(func(ctx context.Context, _, prompt string) (string, error) {
+		var ok bool
+		prepared, ok = InvocationAdmissionContextFromContext(ctx)
+		if !ok {
+			t.Fatal("prompt preparation did not receive an invocation admission context")
+		}
+		return prompt, nil
+	})
+
+	if _, err := s.generate(t.Context(), "prompt", ClassifierProfile); err != nil {
+		t.Fatalf("generate() error = %v", err)
+	}
+	if underlying.calls != 1 {
+		t.Fatalf("underlying language model calls = %d, want 1", underlying.calls)
+	}
+	if prepared != b1 {
+		t.Fatalf("prompt preparation context = %#v, want B1 %#v", prepared, b1)
+	}
+	if len(admission.contexts) != 1 || admission.contexts[0] != b1 {
+		t.Fatalf("admission contexts = %#v, want one B1 context %#v", admission.contexts, b1)
 	}
 }
 
@@ -122,6 +321,32 @@ func TestGenerateAppliesProfile(t *testing.T) {
 	}
 	if capture.captured.ProviderOptions == nil {
 		t.Error("ProviderOptions not set for a profile with a reasoning effort")
+	}
+}
+
+func TestGenerateProvidesProfileOutputReservationToInvocationBinder(t *testing.T) {
+	capture := &callCapturingAgent{response: "ok"}
+	s := &Sidecar{agent: capture, modelID: "profile-bound-sidecar"}
+	reservations := make([]int, 0, 3)
+	s.SetInvocationBinder(func(ctx context.Context, modelID string) (context.Context, agent.ProviderAdmissionContext, error) {
+		if modelID != "profile-bound-sidecar" {
+			t.Fatalf("binder model = %q, want profile-bound-sidecar", modelID)
+		}
+		reservation, ok := OutputReservationFromContext(ctx)
+		if !ok {
+			t.Fatal("invocation binder did not receive an output reservation")
+		}
+		reservations = append(reservations, reservation)
+		return ctx, agent.ProviderAdmissionContext{ModelID: modelID, Bound: true, ContextWindow: 100_000}, nil
+	})
+	for _, profile := range []Profile{ClassifierProfile, CompactorProfile, JudgeProfile} {
+		if _, err := s.generate(t.Context(), "prompt", profile); err != nil {
+			t.Fatalf("generate(%+v) error = %v", profile, err)
+		}
+	}
+	want := []int{int(ClassifierProfile.MaxOutputTokens), int(CompactorProfile.MaxOutputTokens), int(JudgeProfile.MaxOutputTokens)}
+	if !slices.Equal(reservations, want) {
+		t.Fatalf("binder output reservations = %v, want %v", reservations, want)
 	}
 }
 

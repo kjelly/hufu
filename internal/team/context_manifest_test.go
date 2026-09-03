@@ -15,6 +15,34 @@ import (
 
 type contextManifestCountingAgent struct{ calls int }
 
+func testAuxiliaryInvocationModelContext() ModelContextSpec {
+	return ModelContextSpec{
+		ModelID:             "test-auxiliary-model",
+		ContextWindow:       4_096,
+		MaxOutputTokens:     256,
+		SafetyMarginTokens:  64,
+		ContextWindowSource: "provider_runtime",
+	}
+}
+
+func withTestAuxiliaryInvocationContext(ctx context.Context) context.Context {
+	bound := agent.ProviderAdmissionContext{
+		ModelID:             "test-auxiliary-model",
+		ProviderIdentity:    "test-provider",
+		ProviderBaseURL:     "https://test.example/v1",
+		Bound:               true,
+		ContextWindow:       4_096,
+		MaxOutputTokens:     256,
+		SafetyMarginTokens:  64,
+		ContextWindowSource: "provider_runtime",
+	}
+	return withProviderBoundInvocationContext(ctx, providerBoundInvocationContext{
+		ModelID:          bound.ModelID,
+		AdmissionContext: bound,
+		ModelContext:     testAuxiliaryInvocationModelContext(),
+	})
+}
+
 func (a *contextManifestCountingAgent) Stream(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
 	a.calls++
 	return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{fantasy.TextContent{Text: "done"}}}}, nil
@@ -141,11 +169,16 @@ func TestContextManifestSummary(t *testing.T) {
 
 func TestToolFailureRecoveryManifestBindsCallAndRedactsInput(t *testing.T) {
 	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
+	compiler := &mockContextCompiler{}
+	c.SetContextCompiler(compiler)
 	c.executionRunID = "run-tool-failure"
-	ctx := context.WithValue(context.Background(), executionAttemptKey{}, 1)
+	ctx := withTestAuxiliaryInvocationContext(context.WithValue(t.Context(), executionAttemptKey{}, 1))
 	recovery, err := c.prepareToolFailureRecovery(ctx, "worker", "call-42", "bash", `{"command":"echo sk-proj-super-secret-value"}`)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if compiler.workerModelContext != testAuxiliaryInvocationModelContext() {
+		t.Fatalf("tool-failure recovery compiler model context = %#v, want %#v", compiler.workerModelContext, testAuxiliaryInvocationModelContext())
 	}
 	if strings.Contains(recovery, "sk-proj-super-secret-value") {
 		t.Fatalf("recovery leaked raw tool input: %q", recovery)
@@ -166,7 +199,7 @@ func TestToolFailureRecoveryManifestBindsCallAndRedactsInput(t *testing.T) {
 func TestAuxiliaryCompilerIsolatesHistoryAndPersistsPurpose(t *testing.T) {
 	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
 	c.executionRunID = "run-aux"
-	prompt, err := c.prepareAuxiliaryPrompt(context.Background(), "guard_reviewer", "Review candidate output api_key=raw-secret")
+	prompt, err := c.prepareAuxiliaryPrompt(withTestAuxiliaryInvocationContext(context.Background()), "guard_reviewer", "Review candidate output api_key=raw-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +212,51 @@ func TestAuxiliaryCompilerIsolatesHistoryAndPersistsPurpose(t *testing.T) {
 	manifests := c.sessionData.CoordinatorContextManifests
 	if len(manifests) != 1 || manifests[0].Purpose != "guard_reviewer" || !manifests[0].ModelCalled || manifests[0].Outcome != "model_call" {
 		t.Fatalf("auxiliary manifest = %#v", manifests)
+	}
+}
+
+func TestAuxiliaryCompilerUsesAlreadyBoundInvocationContext(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
+	compiler := &mockContextCompiler{}
+	c.SetContextCompiler(compiler)
+	bound := providerBoundInvocationContext{
+		ModelID: "worker/bound-model",
+		AdmissionContext: agent.ProviderAdmissionContext{
+			ModelID:             "worker/bound-model",
+			ProviderIdentity:    "worker",
+			ProviderBaseURL:     "https://worker.example/v1",
+			Bound:               true,
+			ContextWindow:       4_096,
+			MaxOutputTokens:     256,
+			SafetyMarginTokens:  64,
+			ContextWindowSource: "provider_runtime",
+		},
+		ModelContext: ModelContextSpec{
+			ModelID:             "worker/bound-model",
+			ContextWindow:       4_096,
+			MaxOutputTokens:     256,
+			SafetyMarginTokens:  64,
+			ContextWindowSource: "provider_runtime",
+		},
+	}
+	if _, err := c.prepareAuxiliaryPrompt(withProviderBoundInvocationContext(t.Context(), bound), "result_repair", "repair from bound context"); err != nil {
+		t.Fatal(err)
+	}
+	if compiler.workerModelContext != bound.ModelContext {
+		t.Fatalf("auxiliary compiler model context = %#v, want %#v", compiler.workerModelContext, bound.ModelContext)
+	}
+}
+
+func TestAuxiliaryCompilerFailsClosedWithoutBoundInvocationContext(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
+	compiler := &mockContextCompiler{}
+	c.SetContextCompiler(compiler)
+	_, err := c.prepareAuxiliaryPrompt(context.Background(), "guard_reviewer", "review candidate")
+	if err == nil || !strings.Contains(err.Error(), "provider-bound context unavailable") {
+		t.Fatalf("unbound auxiliary compilation error = %v, want provider-bound context error", err)
+	}
+	if compiler.workerModelContext != (ModelContextSpec{}) {
+		t.Fatalf("unbound auxiliary compilation invoked compiler with model context %#v", compiler.workerModelContext)
 	}
 }
 
@@ -197,7 +275,7 @@ func TestAuxiliaryFallbackManifestDistinguishesNoModel(t *testing.T) {
 func TestAuxiliaryManifestPreservesParentInvocationIdentity(t *testing.T) {
 	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
 	c.executionRunID = "run-parent"
-	ctx := withInvocationMetadata(context.Background(), InvocationMetadata{
+	ctx := withInvocationMetadata(withTestAuxiliaryInvocationContext(context.Background()), InvocationMetadata{
 		RunID: "run-parent", TaskID: "task-1", AgentName: "worker", AgentRole: "worker", ModelExecutionID: "worker-model",
 		Attempt: 2, Phase: PhaseVerify, Trigger: ContextTriggerRetry, ParentRequestID: "ctx-worker", ParentManifestFingerprint: "worker-manifest",
 	})

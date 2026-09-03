@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 type coordinatorPreflightContextKey struct{}
@@ -44,9 +45,22 @@ type coordinatorRequestPreflight struct {
 	fullSystem string
 	fullTools  []fantasy.AgentTool
 	window     int
+	admission  agent.ProviderAdmissionContext
 }
 
 func newCoordinatorRequestPreflight(modelID, userPrompt, system string, tools []fantasy.AgentTool) *coordinatorRequestPreflight {
+	return newCoordinatorRequestPreflightWithWindow(modelID, userPrompt, system, tools, GlobalModelSpecRegistry().GetSpec(modelID).ContextWindow)
+}
+
+func newCoordinatorRequestPreflightWithAdmission(modelID, userPrompt, system string, tools []fantasy.AgentTool, admission agent.ProviderAdmissionContext) *coordinatorRequestPreflight {
+	preflight := newCoordinatorRequestPreflightWithWindow(modelID, userPrompt, system, tools, admission.ContextWindow)
+	if preflight != nil {
+		preflight.admission = admission
+	}
+	return preflight
+}
+
+func newCoordinatorRequestPreflightWithWindow(modelID, userPrompt, system string, tools []fantasy.AgentTool, window int) *coordinatorRequestPreflight {
 	if strings.TrimSpace(modelID) == "" {
 		return nil
 	}
@@ -55,7 +69,7 @@ func newCoordinatorRequestPreflight(modelID, userPrompt, system string, tools []
 		userPrompt: userPrompt,
 		fullSystem: system,
 		fullTools:  append([]fantasy.AgentTool(nil), tools...),
-		window:     GlobalModelSpecRegistry().GetSpec(modelID).ContextWindow,
+		window:     window,
 	}
 }
 
@@ -92,6 +106,15 @@ func (p *coordinatorRequestPreflight) windowValue() int {
 	return p.window
 }
 
+func (p *coordinatorRequestPreflight) admissionContextValue() agent.ProviderAdmissionContext {
+	if p == nil {
+		return agent.ProviderAdmissionContext{}
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.admission
+}
+
 // observeWindow applies a provider-reported runtime limit to this request.
 // The next PrepareStep call then reshapes the complete coordinator request,
 // including the system prompt and tool definitions, before retrying.
@@ -103,6 +126,20 @@ func (p *coordinatorRequestPreflight) observeWindow(window int) {
 	if p.window <= 0 || window < p.window {
 		p.window = window
 	}
+	p.mu.Unlock()
+}
+
+// bindAdmissionContext replaces legacy global model metadata for production
+// coordinator requests with the provider-bound context selected at agent
+// construction. Zero contexts retain the compatibility behavior used by old
+// focused constructors.
+func (p *coordinatorRequestPreflight) bindAdmissionContext(admission agent.ProviderAdmissionContext) {
+	if p == nil || !admission.IsBound() {
+		return
+	}
+	p.mu.Lock()
+	p.admission = admission
+	p.window = admission.ContextWindow
 	p.mu.Unlock()
 }
 
@@ -118,6 +155,7 @@ func (p *coordinatorRequestPreflight) prepare(ctx context.Context, stepMessages 
 	fullSystem := p.fullSystem
 	fullTools := append([]fantasy.AgentTool(nil), p.fullTools...)
 	window := p.window
+	admission := p.admission
 	p.mu.RUnlock()
 	if window <= 0 {
 		return "", nil, false, nil
@@ -125,10 +163,16 @@ func (p *coordinatorRequestPreflight) prepare(ctx context.Context, stepMessages 
 	if prompt != "" {
 		userPrompt = prompt
 	}
-	spec := GlobalModelSpecRegistry().GetSpec(modelID).WithEffectiveMaxOutputTokens(maxOutputTokens)
-	if spec.ContextWindow > 0 && (window <= 0 || spec.ContextWindow < window) {
-		window = spec.ContextWindow
+	spec := ModelContextSpec{}
+	if admission.IsBound() {
+		spec = modelContextSpecForProviderRequest(agent.ProviderRequest{ModelID: modelID, AdmissionContext: admission})
+	} else {
+		spec = GlobalModelSpecRegistry().GetSpec(modelID)
+		if spec.ContextWindow > 0 && (window <= 0 || spec.ContextWindow < window) {
+			window = spec.ContextWindow
+		}
 	}
+	spec = spec.WithEffectiveMaxOutputTokens(maxOutputTokens)
 	spec.ContextWindow = window
 	budget := CalculateContextBudget(spec, 0, 0).Available
 	if budget <= 0 {

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -191,6 +193,68 @@ func TestOllamaIntrospectorMissingPSIsNotError(t *testing.T) {
 	}
 }
 
+func TestConfiguredAdaptersUseProviderSpecificMetadataEndpoints(t *testing.T) {
+	tests := []struct {
+		name       string
+		provider   ProviderRef
+		introspect func(*OllamaIntrospector, context.Context, ProviderRef, string) error
+		wantPaths  []string
+	}{
+		{
+			name:     "named ollama",
+			provider: NewProviderRef("gateway", "gateway", "ollama", "http://gateway.example:1234/v1", "", false),
+			introspect: func(introspector *OllamaIntrospector, ctx context.Context, provider ProviderRef, model string) error {
+				_, err := introspector.InspectModel(ctx, provider, model)
+				return err
+			},
+			wantPaths: []string{"/api/show", "/api/ps"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var paths []string
+			client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				paths = append(paths, request.URL.Path)
+				body := `{"model":"qwen3:8b","parameters":"num_ctx 32768"}`
+				if request.URL.Path == "/api/ps" {
+					body = `{"models":[]}`
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(body)),
+					Request:    request,
+				}, nil
+			})}
+			introspector := &OllamaIntrospector{Client: client}
+			if err := tt.introspect(introspector, t.Context(), tt.provider, "gateway/qwen3:8b"); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(paths, tt.wantPaths) {
+				t.Fatalf("metadata paths = %v, want %v", paths, tt.wantPaths)
+			}
+		})
+	}
+
+	var path string
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		path = request.URL.Path
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"model","context_length":32768}]}`)),
+			Request:    request,
+		}, nil
+	})}
+	generic := &OpenAICompatibleIntrospector{Client: client}
+	if _, err := generic.InspectModel(t.Context(), NewProviderRef("generic", "generic", "openai-compatible", "https://api.example/custom/v1", "", false), "generic/model"); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/custom/v1/models" {
+		t.Fatalf("generic metadata path = %q, want /custom/v1/models", path)
+	}
+}
+
 func TestOllamaShowTransportValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -317,6 +381,101 @@ func TestIntrospectionRawRedactsAPIKey(t *testing.T) {
 	if fmt.Sprint(info.Raw) == "" || strings.Contains(fmt.Sprint(info.Raw), "secret-key") {
 		t.Fatalf("raw metadata leaked API key: %#v", info.Raw)
 	}
+}
+
+func TestValidateProviderURLNoNetPolicy(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		allowed bool
+	}{
+		{name: "localhost hostname", baseURL: "http://localhost:11434/v1", allowed: true},
+		{name: "ipv4 loopback", baseURL: "http://127.22.33.44:11434/v1", allowed: true},
+		{name: "ipv6 loopback", baseURL: "http://[::1]:11434/v1", allowed: true},
+		{name: "private lan", baseURL: "http://192.168.1.10:11434/v1", allowed: false},
+		{name: "dns alias", baseURL: "http://ollama.internal:11434/v1", allowed: false},
+		{name: "userinfo", baseURL: "http://user:pass@localhost:11434/v1", allowed: false},
+		{name: "query credential", baseURL: "http://localhost:11434/v1?token=secret", allowed: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateProviderURL(tt.baseURL, true)
+			if (err == nil) != tt.allowed {
+				t.Fatalf("ValidateProviderURL(%q) error=%v, allowed=%t", tt.baseURL, err, tt.allowed)
+			}
+		})
+	}
+}
+
+func TestNormalizeProviderURLLocalhost(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "default path", input: "http://localhost:11434/v1", want: "http://127.0.0.1:11434/v1"},
+		{name: "case insensitive host", input: "http://LOCALHOST:8080/custom/v1/", want: "http://127.0.0.1:8080/custom/v1/"},
+		{name: "preserve https", input: "https://localhost/v1", want: "https://127.0.0.1/v1"},
+		{name: "remote hostname", input: "http://localhost.example:11434/v1", want: "http://localhost.example:11434/v1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeProviderURL(tt.input); got != tt.want {
+				t.Fatalf("NormalizeProviderURL(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeBaseURLLocalhost(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "preserve explicit port", input: "http://localhost:11434/v1", want: "http://127.0.0.1:11434"},
+		{name: "case insensitive host and port", input: "HTTP://LOCALHOST:8080/custom/v1/", want: "http://127.0.0.1:8080/custom/v1"},
+		{name: "empty port", input: "https://localhost/v1", want: "https://127.0.0.1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NormalizeBaseURL(tt.input)
+			if err != nil {
+				t.Fatalf("NormalizeBaseURL(%q) error = %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("NormalizeBaseURL(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNoNetLocalProviderUsesLiteralLoopback(t *testing.T) {
+	target, err := normalizedEndpoint("http://localhost:11434/v1", "/v1/models", true)
+	if err != nil {
+		t.Fatalf("normalizedEndpoint() error = %v", err)
+	}
+	if target != "http://127.0.0.1:11434/v1/models" {
+		t.Fatalf("normalized endpoint = %q, want literal loopback", target)
+	}
+}
+
+func TestNoNetRemoteRejectsBeforeHTTPClient(t *testing.T) {
+	called := false
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return nil, fmt.Errorf("unexpected request")
+	})}
+	_, err := (&OpenAICompatibleIntrospector{BaseURL: "https://provider.example/v1", Client: client}).InspectModel(t.Context(), ProviderRef{NoNet: true}, "m")
+	if err == nil || called {
+		t.Fatalf("remote no-net introspection error=%v clientCalled=%t", err, called)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }
 
 func newIPv4Server(t *testing.T, handler http.Handler) *httptest.Server {

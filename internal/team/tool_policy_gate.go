@@ -466,7 +466,32 @@ func (c *Coordinator) createGatedAgent(ctx context.Context, provider *agent.Open
 	if cfg.Admission == nil {
 		cfg.Admission = c.providerAdmission()
 	}
-	modelConfigured := cfg.Def != nil && cfg.Def.Generation.Model != ""
+	modelID := strings.TrimSpace(cfg.InvocationModelID)
+	if modelID == "" && cfg.Def != nil {
+		modelID = cfg.Def.Generation.Model
+	}
+	if modelID == "" && cfg.TeamConfig != nil {
+		modelID = cfg.TeamConfig.Generation.Model
+	}
+	// A context is valid only for the model it was resolved for. This prevents
+	// a retry/repair override from reusing the canonical agent's profile.
+	if cfg.AdmissionContext.IsBound() && cfg.AdmissionContext.ModelID != "" && cfg.AdmissionContext.ModelID != modelID {
+		cfg.AdmissionContext = agent.ProviderAdmissionContext{}
+	}
+	// Hand-built unit coordinators intentionally retain the legacy registry
+	// path. NewCoordinator always owns a runtime service, so production agents
+	// still receive the provider-bound projection here. Bound zero-capacity
+	// contexts are preserved so admission fails closed instead of refreshing
+	// from the global registry.
+	if bound, ok := providerBoundInvocationContextFromContext(ctx, modelID); ok {
+		cfg.AdmissionContext = bound.AdmissionContext
+	} else if c.modelProfileRuntime != nil && !cfg.AdmissionContext.IsBound() && modelID != "" {
+		cfg.AdmissionContext = c.admissionContextFor(ctx, modelID, cfg.Def)
+	}
+	if preflight := coordinatorRequestPreflightFromContext(ctx); preflight != nil && cfg.AdmissionContext.IsBound() {
+		preflight.bindAdmissionContext(cfg.AdmissionContext)
+	}
+	modelConfigured := modelID != ""
 	if !modelConfigured && cfg.TeamConfig != nil {
 		modelConfigured = cfg.TeamConfig.Generation.Model != ""
 	}

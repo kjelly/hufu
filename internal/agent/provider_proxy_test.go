@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -13,6 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/providerproxy"
 )
 
@@ -162,6 +166,368 @@ func TestProviderManagerSerializesConcurrentBoundaryOwnership(t *testing.T) {
 	}
 	if first.abortCalls.Load() != 1 || second.abortCalls.Load() != 1 {
 		t.Fatalf("abort calls = first:%d second:%d, want one each", first.abortCalls.Load(), second.abortCalls.Load())
+	}
+}
+
+func TestProviderManagerUsesCanonicalConfiguredLocalTargetForProxyAndIdentity(t *testing.T) {
+	const (
+		defaultURL = "https://default.example/v1"
+		defaultKey = "default-key"
+		localURL   = "http://localhost:11434/v1"
+		localKey   = "local-key"
+	)
+	pm, err := NewProviderManager(defaultURL, defaultKey, map[string]config.ProviderConfig{
+		"ollama": {ProviderURL: localURL, ProviderAPIKey: localKey},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var starts []providerproxy.Config
+	boundary := &fakeProviderBoundary{endpoint: "http://127.0.0.1:43123", client: &http.Client{}}
+	pm.startProcessBoundary = func(_ context.Context, _ string, cfg providerproxy.Config) (providerproxy.Boundary, error) {
+		starts = append(starts, cfg)
+		return boundary, nil
+	}
+	if err := pm.StartInvocationProxy(t.Context(), "hufu"); err != nil {
+		t.Fatalf("start invocation proxy: %v", err)
+	}
+
+	if len(starts) != 1 {
+		t.Fatalf("local proxy starts = %d, want exactly one", len(starts))
+	}
+	if got := pm.configs["local"].ProviderURL; got != localURL {
+		t.Fatalf("selected provider config URL = %q, want exact raw URL %q", got, localURL)
+	}
+	if starts[0].UpstreamURL != localURL || starts[0].APIKey != localKey {
+		t.Fatalf("local proxy config = %#v, want upstream %q and key %q", starts[0], localURL, localKey)
+	}
+
+	localProvider := pm.GetProvider("local/model")
+	ollamaProvider := pm.GetProvider("ollama/model")
+	if localProvider != ollamaProvider {
+		t.Fatal("local and ollama aliases resolved to different provider objects")
+	}
+	if localProvider.baseURL != localURL || localProvider.apiKey != localKey {
+		t.Fatalf("provider target = %q/%q, want %q/%q", localProvider.baseURL, localProvider.apiKey, localURL, localKey)
+	}
+	endpoint, client, active := localProvider.effectiveBaseURL()
+	if !active || endpoint != boundary.endpoint || client != boundary.client {
+		t.Fatalf("provider boundary = active:%t endpoint:%q client:%p, want %q/%p", active, endpoint, client, boundary.endpoint, boundary.client)
+	}
+
+	for _, modelID := range []string{"local/model", "ollama/model"} {
+		ref, refErr := pm.ResolveProviderRef(modelID)
+		if refErr != nil {
+			t.Fatalf("ResolveProviderRef(%q): %v", modelID, refErr)
+		}
+		if ref.Provider != "local" || ref.BaseURL != localURL {
+			t.Fatalf("provider ref for %q = %#v, want canonical local target %q", modelID, ref, localURL)
+		}
+		identity, identityErr := modelprofile.Identity(ref, modelID)
+		if identityErr != nil {
+			t.Fatalf("model identity for %q: %v", modelID, identityErr)
+		}
+		if identity.BaseURL != "http://127.0.0.1:11434" || identity.Provider != "local" || identity.ModelID != "model" {
+			t.Fatalf("model identity for %q = %#v, want local upstream identity", modelID, identity)
+		}
+	}
+
+	if err := pm.AbortInvocationProxy(); err != nil {
+		t.Fatalf("abort invocation proxy: %v", err)
+	}
+	if boundary.abortCalls.Load() != 1 {
+		t.Fatalf("proxy abort calls = %d, want one", boundary.abortCalls.Load())
+	}
+	if _, _, active := localProvider.effectiveBaseURL(); active {
+		t.Fatal("provider boundary remained attached after abort")
+	}
+}
+
+func TestProviderManagerLocalConfigPrecedenceAndInheritance(t *testing.T) {
+	const (
+		defaultURL = "https://default.example/v1"
+		defaultKey = "default-key"
+	)
+	tests := map[string]struct {
+		configs map[string]config.ProviderConfig
+		wantURL string
+		wantKey string
+	}{
+		"explicit local takes precedence over ollama": {
+			configs: map[string]config.ProviderConfig{
+				"local":  {ProviderURL: "https://local.example/v1", ProviderAPIKey: "local-key"},
+				"ollama": {ProviderURL: "https://alias.example/v1", ProviderAPIKey: "alias-key"},
+			},
+			wantURL: "https://local.example/v1",
+			wantKey: "local-key",
+		},
+		"local URL inherits default key": {
+			configs: map[string]config.ProviderConfig{
+				"local": {ProviderURL: "https://local.example/v1"},
+			},
+			wantURL: "https://local.example/v1",
+			wantKey: "default-key",
+		},
+		"local key inherits default URL": {
+			configs: map[string]config.ProviderConfig{
+				"local": {ProviderAPIKey: "local-key"},
+			},
+			wantURL: defaultURL,
+			wantKey: "local-key",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			pm, err := NewProviderManager(defaultURL, defaultKey, test.configs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var starts []providerproxy.Config
+			pm.startProcessBoundary = func(_ context.Context, _ string, cfg providerproxy.Config) (providerproxy.Boundary, error) {
+				starts = append(starts, cfg)
+				return &fakeProviderBoundary{endpoint: "http://127.0.0.1:43124", client: &http.Client{}}, nil
+			}
+			if err := pm.StartInvocationProxy(t.Context(), "hufu"); err != nil {
+				t.Fatalf("start invocation proxy: %v", err)
+			}
+			t.Cleanup(func() { _ = pm.AbortInvocationProxy() })
+			if len(starts) == 0 || starts[0].UpstreamURL != test.wantURL || starts[0].APIKey != test.wantKey {
+				t.Fatalf("local proxy config = %#v, want upstream %q and key %q", starts, test.wantURL, test.wantKey)
+			}
+			provider := pm.GetProvider("ollama/model")
+			if provider.baseURL != test.wantURL || provider.apiKey != test.wantKey {
+				t.Fatalf("provider target = %q/%q, want %q/%q", provider.baseURL, provider.apiKey, test.wantURL, test.wantKey)
+			}
+		})
+	}
+}
+
+func TestNewProviderManagerRejectsConflictingSameTierProviderAliases(t *testing.T) {
+	tests := map[string]map[string]config.ProviderConfig{
+		"ollama aliases with different URLs": {
+			"ollama": {ProviderURL: "https://first.example/v1", ProviderAPIKey: "same-key"},
+			"Ollama": {ProviderURL: "https://second.example/v1", ProviderAPIKey: "same-key"},
+		},
+		"local aliases with different keys": {
+			"local": {ProviderURL: "https://same.example/v1", ProviderAPIKey: "first-key"},
+			"LOCAL": {ProviderURL: "https://same.example/v1", ProviderAPIKey: "second-key"},
+		},
+		"local aliases with different introspection types": {
+			"local": {ProviderURL: "https://same.example/v1", ProviderAPIKey: "same-key", IntrospectionType: "ollama"},
+			"LOCAL": {ProviderURL: "https://same.example/v1", ProviderAPIKey: "same-key", IntrospectionType: "openai-compatible"},
+		},
+	}
+
+	for name, configs := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewProviderManager("https://default.example/v1", "default-key", configs); err == nil {
+				t.Fatal("NewProviderManager unexpectedly accepted conflicting same-tier aliases")
+			}
+		})
+	}
+}
+
+func TestNewProviderManagerAcceptsEquivalentSameTierProviderAliases(t *testing.T) {
+	tests := map[string]struct {
+		configs map[string]config.ProviderConfig
+		wantURL string
+	}{
+		"ollama aliases": {
+			configs: map[string]config.ProviderConfig{
+				"ollama": {ProviderURL: "http://localhost:11434/v1", ProviderAPIKey: "local-key"},
+				"Ollama": {ProviderURL: "http://127.0.0.1:11434/v1", ProviderAPIKey: "local-key"},
+			},
+			wantURL: "http://localhost:11434/v1",
+		},
+		"local aliases": {
+			configs: map[string]config.ProviderConfig{
+				"local": {ProviderURL: "http://localhost:11434/v1", ProviderAPIKey: "local-key"},
+				"LOCAL": {ProviderURL: "http://127.0.0.1:11434/v1", ProviderAPIKey: "local-key"},
+			},
+			wantURL: "http://localhost:11434/v1",
+		},
+		"local aliases with equivalent effective introspection defaults": {
+			configs: map[string]config.ProviderConfig{
+				"local": {ProviderURL: "http://localhost:11434/v1", ProviderAPIKey: "local-key"},
+				"LOCAL": {
+					ProviderURL:       "http://127.0.0.1:11434/v1",
+					ProviderAPIKey:    "local-key",
+					IntrospectionType: "Ollama",
+				},
+			},
+			wantURL: "http://localhost:11434/v1",
+		},
+		"host case and trailing slash": {
+			configs: map[string]config.ProviderConfig{
+				"local": {ProviderURL: "https://LOCAL.example/v1/", ProviderAPIKey: "local-key"},
+				"LOCAL": {ProviderURL: "https://local.example/v1", ProviderAPIKey: "local-key"},
+			},
+			wantURL: "https://LOCAL.example/v1/",
+		},
+		"v1 path and no v1 path": {
+			configs: map[string]config.ProviderConfig{
+				"local": {ProviderURL: "https://local.example/v1", ProviderAPIKey: "local-key"},
+				"LOCAL": {ProviderURL: "https://local.example", ProviderAPIKey: "local-key"},
+			},
+			wantURL: "https://local.example/v1",
+		},
+		"custom base path trailing slash": {
+			configs: map[string]config.ProviderConfig{
+				"local": {ProviderURL: "https://local.example/custom/", ProviderAPIKey: "local-key"},
+				"LOCAL": {ProviderURL: "https://local.example/custom", ProviderAPIKey: "local-key"},
+			},
+			wantURL: "https://local.example/custom/",
+		},
+		"aliases use lexical tie-break when exact key is absent": {
+			configs: map[string]config.ProviderConfig{
+				" LOCAL ": {ProviderURL: "http://localhost:11434/v1", ProviderAPIKey: "local-key"},
+				"Local":   {ProviderURL: "http://127.0.0.1:11434/v1", ProviderAPIKey: "local-key"},
+			},
+			wantURL: "http://localhost:11434/v1",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			for range 32 {
+				pm, err := NewProviderManager("https://default.example/v1", "default-key", test.configs)
+				if err != nil {
+					t.Fatalf("NewProviderManager rejected equivalent aliases: %v", err)
+				}
+				provider := pm.DefaultProvider()
+				if provider.apiKey != "local-key" {
+					t.Fatalf("canonical local key = %q, want %q", provider.apiKey, "local-key")
+				}
+				if provider.baseURL != test.wantURL {
+					t.Fatalf("selected invocation URL = %q, want exact raw URL %q", provider.baseURL, test.wantURL)
+				}
+			}
+		})
+	}
+}
+
+func TestConfiguredLocalProxyNormalizesOllamaModelOnTransport(t *testing.T) {
+	const (
+		defaultURL = "https://default.example/v1"
+		localKey   = "local-key"
+		modelID    = "ollama/model"
+	)
+	var requestURL string
+	var requestModel string
+	var requestAuthorization string
+	var requestProxyVersion string
+	server := newAgentIPv4Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestURL = "http://" + r.Host + r.URL.String()
+		requestAuthorization = r.Header.Get("Authorization")
+		requestProxyVersion = r.Header.Get("X-Hufu-Provider-Proxy-Version")
+		var request struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode provider request: %v", err)
+		}
+		requestModel = request.Model
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"configured-local","object":"chat.completion","created":1,"model":"model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+	localURL := server.URL + "/v1"
+
+	pm, err := NewProviderManager(defaultURL, "default-key", map[string]config.ProviderConfig{
+		"local": {ProviderURL: localURL, ProviderAPIKey: localKey},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pm.startProcessBoundary = func(ctx context.Context, _ string, cfg providerproxy.Config) (providerproxy.Boundary, error) {
+		return providerproxy.StartInProcess(ctx, cfg)
+	}
+	if err := pm.StartInvocationProxy(t.Context(), "hufu"); err != nil {
+		t.Fatalf("start invocation proxy: %v", err)
+	}
+	t.Cleanup(func() { _ = pm.AbortInvocationProxy() })
+
+	provider := pm.DefaultProvider()
+	if provider != pm.GetProvider(modelID) {
+		t.Fatal("DefaultProvider and configured local provider are different objects")
+	}
+	languageModel, err := provider.LanguageModel(t.Context(), modelID)
+	if err != nil {
+		t.Fatalf("create language model: %v", err)
+	}
+	if _, err := languageModel.Generate(t.Context(), fantasy.Call{
+		Prompt: fantasy.Prompt{fantasy.NewUserMessage("hello")},
+	}); err != nil {
+		t.Fatalf("generate through configured local proxy: %v", err)
+	}
+
+	if requestURL != localURL+"/chat/completions" {
+		t.Fatalf("request URL = %q, want configured upstream %q", requestURL, localURL+"/chat/completions")
+	}
+	if requestModel != "model" {
+		t.Fatalf("wire model = %q, want basename without ollama qualifier", requestModel)
+	}
+	if requestAuthorization != "Bearer "+localKey {
+		t.Fatalf("request authorization = %q, want %q", requestAuthorization, "Bearer "+localKey)
+	}
+	if requestProxyVersion != providerproxy.ProtocolVersion {
+		t.Fatalf("request proxy version = %q, want %q", requestProxyVersion, providerproxy.ProtocolVersion)
+	}
+}
+
+func TestProviderManagerPreservesDefaultAndNonLocalProviderTargets(t *testing.T) {
+	const (
+		defaultURL = "https://default.example/v1"
+		defaultKey = "default-key"
+		remoteURL  = "https://remote.example/v1"
+	)
+	pm, err := NewProviderManager(defaultURL, defaultKey, map[string]config.ProviderConfig{
+		"remote": {ProviderURL: remoteURL},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var starts []providerproxy.Config
+	var boundaries []*fakeProviderBoundary
+	pm.startProcessBoundary = func(_ context.Context, _ string, cfg providerproxy.Config) (providerproxy.Boundary, error) {
+		starts = append(starts, cfg)
+		boundary := &fakeProviderBoundary{
+			endpoint: fmt.Sprintf("http://127.0.0.1:4312%d", len(starts)),
+			client:   &http.Client{},
+		}
+		boundaries = append(boundaries, boundary)
+		return boundary, nil
+	}
+	if err := pm.StartInvocationProxy(t.Context(), "hufu"); err != nil {
+		t.Fatalf("start invocation proxy: %v", err)
+	}
+	if len(starts) != 2 {
+		t.Fatalf("proxy starts = %d, want default and non-local targets", len(starts))
+	}
+	if starts[0].UpstreamURL != defaultURL || starts[0].APIKey != defaultKey {
+		t.Fatalf("default proxy config = %#v, want %q/%q", starts[0], defaultURL, defaultKey)
+	}
+	if starts[1].UpstreamURL != remoteURL || starts[1].APIKey != defaultKey {
+		t.Fatalf("non-local proxy config = %#v, want %q/%q", starts[1], remoteURL, defaultKey)
+	}
+
+	remoteProvider := pm.GetProvider("remote/model")
+	if remoteProvider.baseURL != remoteURL || remoteProvider.apiKey != defaultKey {
+		t.Fatalf("non-local provider target = %q/%q, want %q/%q", remoteProvider.baseURL, remoteProvider.apiKey, remoteURL, defaultKey)
+	}
+	if _, _, active := remoteProvider.effectiveBaseURL(); !active {
+		t.Fatal("non-local provider did not receive its invocation boundary")
+	}
+	if err := pm.AbortInvocationProxy(); err != nil {
+		t.Fatalf("abort invocation proxy: %v", err)
+	}
+	for i, boundary := range boundaries {
+		if boundary.abortCalls.Load() != 1 {
+			t.Fatalf("boundary %d abort calls = %d, want one", i, boundary.abortCalls.Load())
+		}
 	}
 }
 

@@ -457,6 +457,49 @@ func TestDownshiftTelemetryOccursOnlyAfterLanguageModelSuccess(t *testing.T) {
 	}
 }
 
+func TestCoordinatorDownshiftContinuationCarriesFallbackPreflightAndProfile(t *testing.T) {
+	strongID := "coordinator-continuation-strong"
+	weakID := "coordinator-continuation-weak"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID: strongID, ContextWindow: 256, MaxOutputTokens: 32, SafetyMarginTokens: 32,
+	})
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID: weakID, ContextWindow: 32_768, MaxOutputTokens: 32, SafetyMarginTokens: 32,
+	})
+	providerManager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{
+		providerManager: providerManager,
+		modelList:       []config.ModelEntry{{ID: weakID}, {ID: strongID}},
+		session:         &TeamSession{Workspace: t.TempDir()},
+		reportStatus:    func(StatusEvent) {},
+	}
+	preflight := newCoordinatorRequestPreflightWithAdmission(strongID, "incoming", "system", nil, agent.ProviderAdmissionContext{
+		ModelID: strongID, ProviderIdentity: "local", ProviderBaseURL: "http://127.0.0.1:11434/v1", Bound: true,
+		ContextWindow: 256, MaxOutputTokens: 32, SafetyMarginTokens: 32,
+	})
+
+	continuation, err := c.admitCoordinatorEarlierModel(t.Context(), preflight, []fantasy.Message{fantasy.NewUserMessage("small")}, "incoming", 0, 32, strongID)
+	if err != nil {
+		t.Fatalf("admitCoordinatorEarlierModel: %v", err)
+	}
+	if continuation.Model == nil {
+		t.Fatal("downshift did not return a continuation model")
+	}
+	if continuation.Preflight == nil || continuation.Preflight.modelID != weakID {
+		t.Fatalf("continuation preflight = %#v, want fallback model %q", continuation.Preflight, weakID)
+	}
+	if continuation.Invocation.ModelID != weakID || continuation.Invocation.AdmissionContext.ModelID != weakID || continuation.Invocation.ModelContext.ContextWindow != 32_768 {
+		t.Fatalf("continuation invocation = %#v, want fallback provider-bound profile", continuation.Invocation)
+	}
+	active := coordinatorRequestPreflightFromContext(continuation.Context)
+	if active == nil || active.modelID != weakID || active.admissionContextValue().ModelID != weakID {
+		t.Fatalf("continuation context preflight = %#v, want fallback preflight/profile", active)
+	}
+}
+
 func TestCoordinatorModelContinuationPersistenceFailurePrecedesDownshiftTelemetry(t *testing.T) {
 	strongID := "coordinator-downshift-persist-strong"
 	weakID := "coordinator-downshift-persist-weak"

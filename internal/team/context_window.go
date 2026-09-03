@@ -53,7 +53,7 @@ func (e *ContextWindowMetadataUnavailableError) Error() string {
 	if e == nil {
 		return "context window metadata unavailable"
 	}
-	return fmt.Sprintf("context window metadata unavailable for model %q: registry capacity is estimated", e.ModelID)
+	return fmt.Sprintf("context window metadata unavailable for model %q: provider-bound capacity is unavailable", e.ModelID)
 }
 
 // ContextWindowDecision is the result of admitting one complete model request.
@@ -70,13 +70,14 @@ const (
 // admission owner. Messages are the messages Fantasy will send for the step;
 // Prompt is counted only when it is not already present in Messages.
 type ContextWindowRequest struct {
-	ModelID  string
-	System   string
-	Tools    []fantasy.AgentTool
-	Owner    string
-	Scope    string
-	Messages []fantasy.Message
-	Prompt   string
+	ModelID          string
+	System           string
+	Tools            []fantasy.AgentTool
+	AdmissionContext agent.ProviderAdmissionContext
+	Owner            string
+	Scope            string
+	Messages         []fantasy.Message
+	Prompt           string
 	// ProtectedMessages are runtime-required messages appended for this
 	// request. They are removed before compaction and reattached verbatim after
 	// the compacted history, preserving recovery and step-budget directives.
@@ -127,6 +128,8 @@ type contextWindowRequestDescriptor struct {
 	ModelID              string
 	System               string
 	Tools                []fantasy.AgentTool
+	AdmissionContext     agent.ProviderAdmissionContext
+	ModelContext         ModelContextSpec
 	Window               int
 	ReservedOutputTokens int
 	SafetyMarginTokens   int
@@ -154,21 +157,23 @@ func contextWindowRequestDescriptorFromContext(ctx context.Context) (contextWind
 }
 
 func (c *Coordinator) newContextWindowRequestDescriptor(modelID string, def *agent.AgentDef, agentTools []fantasy.AgentTool, owner, scope string) contextWindowRequestDescriptor {
-	spec := globalRegistry.GetSpec(modelID)
-	if def != nil && def.Generation.ContextWindow > 0 {
-		spec.ContextWindow = def.Generation.ContextWindow
-	}
+	return c.newContextWindowRequestDescriptorWithContext(context.Background(), modelID, def, agentTools, owner, scope)
+}
+
+func (c *Coordinator) newContextWindowRequestDescriptorWithContext(ctx context.Context, modelID string, def *agent.AgentDef, agentTools []fantasy.AgentTool, owner, scope string) contextWindowRequestDescriptor {
+	bound := c.admissionContextFor(ctx, modelID, def)
+	modelContext := modelContextSpecForProviderRequest(agent.ProviderRequest{ModelID: modelID, AdmissionContext: bound})
 	if def != nil && strings.TrimSpace(owner) == "" {
 		owner = def.Name
 	}
 	return contextWindowRequestDescriptor{
-		ModelID: modelID, System: func() string {
+		ModelID: modelID, AdmissionContext: bound, ModelContext: modelContext, System: func() string {
 			if def == nil {
 				return ""
 			}
 			return def.System
-		}(), Tools: append([]fantasy.AgentTool(nil), agentTools...), Window: spec.ContextWindow,
-		ReservedOutputTokens: c.resolveAgentMaxOutputTokens(def), SafetyMarginTokens: spec.SafetyMarginTokens,
+		}(), Tools: append([]fantasy.AgentTool(nil), agentTools...), Window: bound.ContextWindow,
+		ReservedOutputTokens: bound.MaxOutputTokens, SafetyMarginTokens: bound.SafetyMarginTokens,
 		Owner: owner, Scope: scope,
 	}
 }
@@ -244,10 +249,23 @@ func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowR
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if request.AdmissionContext.IsBound() && request.AdmissionContext.ContextWindow <= 0 {
+		return ContextWindowAdmission{
+				Decision:        ContextWindowCannotFit,
+				RejectionReason: contextWindowReasonMetadataUnavailable,
+			},
+			&ContextWindowMetadataUnavailableError{ModelID: request.ModelID}
+	}
 	if !toolPairsIntact(request.Messages) {
 		return ContextWindowAdmission{Decision: ContextWindowCannotFit, RejectionReason: contextWindowReasonInvalidPairing}, fmt.Errorf("context window request has invalid tool-call/result pairing")
 	}
 	spec := globalRegistry.GetSpec(request.ModelID)
+	if request.AdmissionContext.IsBound() {
+		spec = modelContextSpecForProviderRequest(agent.ProviderRequest{
+			ModelID:          request.ModelID,
+			AdmissionContext: request.AdmissionContext,
+		})
+	}
 	if request.Window > 0 {
 		spec.ContextWindow = request.Window
 		// A caller-provided window is authoritative only when the caller also
@@ -400,7 +418,10 @@ func hasCompactableHistory(messages []fantasy.Message) bool {
 func (m *ContextWindowManager) countRequest(ctx context.Context, request ContextWindowRequest) (int, error) {
 	messages := request.effectiveMessages()
 	if counter, ok := m.counter.(ProviderRequestCounter); ok {
-		return counter.CountProviderRequest(ctx, request.ModelID, agent.ProviderRequest{ModelID: request.ModelID, Messages: messages, Tools: request.Tools})
+		return counter.CountProviderRequest(ctx, request.ModelID, agent.ProviderRequest{
+			ModelID: request.ModelID, Messages: messages, Tools: request.Tools,
+			AdmissionContext: request.AdmissionContext,
+		})
 	}
 	messageTokens, err := m.counter.CountMessages(ctx, request.ModelID, messages)
 	if err != nil {

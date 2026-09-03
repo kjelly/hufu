@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,7 +11,15 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/modelprofile"
+	"github.com/kjelly/hufu/internal/providerintrospection"
 )
+
+type unavailableResumeProfileIntrospector struct{}
+
+func (unavailableResumeProfileIntrospector) InspectModel(context.Context, providerintrospection.ProviderRef, string) (providerintrospection.RuntimeModelInfo, error) {
+	return providerintrospection.RuntimeModelInfo{}, errors.New("provider metadata unavailable")
+}
 
 func TestIsInterruptedStatus(t *testing.T) {
 	interrupted := []TaskStatus{TaskInProgress, TaskVerifying, TaskPaused, TaskPlanned, TaskPending, TaskProtocolIncomplete}
@@ -107,7 +116,7 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 		},
 	}
 
-	resumed, err := second.ResumeInterruptedTasks(context.Background())
+	resumed, err := second.ResumeInterruptedTasks(withTestProtocolRepairInvocationContext(context.Background()))
 	if err != nil {
 		t.Fatalf("protocol resume failed: %v", err)
 	}
@@ -229,7 +238,7 @@ func TestResumeInterruptedTasks_ProtocolCheckpointedSubmittedResultFinalizesLoca
 	}
 	second.SetSessionData(checkpoint)
 
-	resumed, err := second.ResumeInterruptedTasks(context.Background())
+	resumed, err := second.ResumeInterruptedTasks(withTestProtocolRepairInvocationContext(context.Background()))
 	if err != nil {
 		t.Fatalf("submitted-result resume failed: %v", err)
 	}
@@ -314,7 +323,7 @@ func TestResumeInterruptedTasks_ProtocolSchemaRetryPreservesPriorHistory(t *test
 		},
 	}
 
-	if _, err := second.ResumeInterruptedTasks(context.Background()); err != nil {
+	if _, err := second.ResumeInterruptedTasks(withTestProtocolRepairInvocationContext(context.Background())); err != nil {
 		t.Fatalf("schema-retry resume failed: %v", err)
 	}
 	if repairCalls != 1 {
@@ -337,7 +346,7 @@ func TestResumeInterruptedTasks_ProtocolCheckpointWithoutEvidenceBlocks(t *testi
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "protocol-resume"}, Agents: map[string]*agent.AgentDef{
-			"worker": {Name: "worker", Role: "worker"},
+			"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 		}},
 		sessionData: NewSession(), taskTracker: NewTaskTracker(),
 		reportStatus: func(StatusEvent) {}, taskResultCache: make(map[string][]cachedTaskEntry),
@@ -365,6 +374,122 @@ func TestResumeInterruptedTasks_ProtocolCheckpointWithoutEvidenceBlocks(t *testi
 	}
 }
 
+func TestResumeInterruptedTasks_ProtocolPreparationFailureIsRecorded(t *testing.T) {
+	workspace := t.TempDir()
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "protocol-resume-preparation-failure"},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionData:     NewSession(),
+		taskTracker:     NewTaskTracker(),
+		reportStatus:    func(StatusEvent) {},
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		executionRunID:  "run-resume-preparation-failure",
+	}
+	item := &TodoItem{
+		ID: "1", Agent: "worker", Desc: "record resumed repair preparation failure",
+		Status: TaskProtocolIncomplete, Output: "checkpointed worker evidence",
+		Execution: ExecutionContract{RequiresResult: true},
+	}
+	c.taskTracker.TodoList().Restore([]*TodoItem{item})
+	c.repairAgentOverride = &mockWorkerTextAgent{text: "repair was not started"}
+
+	_, err := c.ResumeInterruptedTasks(context.Background())
+	if err == nil {
+		t.Fatal("expected resumed protocol repair preparation failure")
+	}
+	updated := c.taskTracker.TodoList().Items()[0]
+	if updated.Status != TaskBlocked {
+		t.Fatalf("resumed task status = %s, want blocked", updated.Status)
+	}
+	if updated.ExecutionReceipt == nil || updated.ExecutionReceipt.RepairProvenance == nil {
+		t.Fatalf("missing resumed repair provenance: %#v", updated.ExecutionReceipt)
+	}
+	provenance := updated.ExecutionReceipt.RepairProvenance
+	if provenance.FailureReason != repairFailurePreparation {
+		t.Fatalf("resumed repair failure reason = %q, want %q", provenance.FailureReason, repairFailurePreparation)
+	}
+	if len(provenance.History) != 1 || provenance.History[0].FailureReason != repairFailurePreparation {
+		t.Fatalf("resumed repair history = %#v, want one preparation failure", provenance.History)
+	}
+	if provenance.Error == "" || !strings.Contains(provenance.Error, "provider-bound context unavailable") {
+		t.Fatalf("resumed preparation error = %q, want provider-binding evidence", provenance.Error)
+	}
+}
+
+func TestResumeInterruptedTasks_BoundZeroPreparationFailureIsDurable(t *testing.T) {
+	workspace := t.TempDir()
+	providerManager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileRuntime := &ModelProfileRuntime{
+		manager: providerManager,
+		resolver: modelprofile.NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+			return unavailableResumeProfileIntrospector{}
+		}, modelprofile.ProfileCacheOptions{}),
+	}
+	config := agent.TeamConfig{Name: "production-shaped-resume-repair"}
+	agents := map[string]*agent.AgentDef{
+		"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test-model"}},
+	}
+	c := &Coordinator{
+		session:             &TeamSession{Workspace: workspace, Config: config, Agents: agents},
+		sessionData:         NewSession(),
+		projectDir:          workspace,
+		providerManager:     providerManager,
+		modelProfileRuntime: profileRuntime,
+		taskTracker:         NewTaskTracker(),
+		reportStatus:        func(StatusEvent) {},
+		executionRunID:      "run-bound-zero-resume-repair",
+	}
+	c.initEventStore()
+	defer c.EventStore().Close()
+	c.taskTracker.TodoList().onChange = func() { c.saveCheckpoint() }
+	item := &TodoItem{
+		ID: "1", Agent: "worker", Desc: "durable bound-zero repair failure",
+		Status: TaskProtocolIncomplete, Output: "checkpointed worker evidence",
+		Execution: ExecutionContract{RequiresResult: true},
+	}
+	c.taskTracker.TodoList().Restore([]*TodoItem{item})
+
+	if _, err := c.ResumeInterruptedTasks(context.Background()); err == nil {
+		t.Fatal("expected bound-zero provider preparation failure")
+	}
+	updated := c.taskTracker.TodoList().Items()[0]
+	if updated.Status != TaskBlocked || updated.ExecutionReceipt == nil || updated.ExecutionReceipt.RepairProvenance == nil {
+		t.Fatalf("updated resumed task = %#v, want blocked task with repair provenance", updated)
+	}
+	provenance := updated.ExecutionReceipt.RepairProvenance
+	if provenance.FailureReason != repairFailurePreparation || provenance.Error == "" || len(provenance.History) != 1 || provenance.History[0].FailureReason != repairFailurePreparation {
+		t.Fatalf("bound-zero repair provenance = %#v, want durable preparation failure", provenance)
+	}
+
+	events, err := c.EventStore().ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blockedPayload struct {
+		ExecutionReceipt *ExecutionReceipt `json:"execution_receipt"`
+	}
+	for _, event := range events {
+		if event.Type != "task_blocked" {
+			continue
+		}
+		if err := json.Unmarshal(event.Payload, &blockedPayload); err != nil {
+			t.Fatal(err)
+		}
+		break
+	}
+	if blockedPayload.ExecutionReceipt == nil || blockedPayload.ExecutionReceipt.RepairProvenance == nil || blockedPayload.ExecutionReceipt.RepairProvenance.FailureReason != repairFailurePreparation {
+		t.Fatalf("durable blocked receipt = %#v, want preparation_failed provenance", blockedPayload.ExecutionReceipt)
+	}
+}
+
 // TestExecuteTask_ProtocolIncompleteUsesResultOnlyRepair covers the second
 // boundary: callers that enter executeTask directly cannot bypass the resume
 // gate and replay the worker either.
@@ -372,7 +497,7 @@ func TestExecuteTask_ProtocolIncompleteUsesResultOnlyRepair(t *testing.T) {
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "protocol-direct"}, Agents: map[string]*agent.AgentDef{
-			"worker": {Name: "worker", Role: "worker"},
+			"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 		}},
 		sessionData: NewSession(), taskTracker: NewTaskTracker(), projectDir: workspace,
 		reportStatus: func(StatusEvent) {}, taskResultCache: make(map[string][]cachedTaskEntry),
@@ -392,7 +517,7 @@ func TestExecuteTask_ProtocolIncompleteUsesResultOnlyRepair(t *testing.T) {
 		},
 	}
 
-	if _, err := c.executeTask(context.Background(), taskDefFromTodoItem(item), item.ID); err != nil {
+	if _, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), taskDefFromTodoItem(item), item.ID); err != nil {
 		t.Fatalf("direct protocol repair failed: %v", err)
 	}
 	if workerCalls != 0 || repairCalls != 1 {

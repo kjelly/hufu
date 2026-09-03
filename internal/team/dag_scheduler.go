@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -618,41 +617,12 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		return
 	}
 
-	// Provider-scoped concurrency limit, in addition to the team-wide one
-	// above: a local Ollama model dispatched by many workers is not the same
-	// as many workers able to usefully run concurrent inference (spec.md
-	// item 5). No-op (nil channel) when the resolved provider has no
-	// configured max-concurrent. resolveAgentModel requires a non-nil def,
-	// so this resolves the model manually rather than risk a nil dereference
-	// for a task whose agent name doesn't match a known worker.
-	modelID := td.Model
-	if modelID == "" {
-		if agentDef := c.agentDefByName(td.Agent); agentDef != nil {
-			modelID = agentDef.Generation.Model
-		}
-		if modelID == "" && c.session != nil {
-			modelID = c.session.Config.Generation.Model
-		}
-	}
-	provider, _ := agent.ParseModelProvider(modelID)
-	provSlot, semErr := acquireSem(ctx, c.providerSemaphore(provider))
-	if semErr != nil {
-		s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: semErr, idx: idx}
-		return
-	}
-	defer provSlot.release()
-	if err := budgetAdmissionErrorFor(c); err != nil {
-		s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: err, idx: idx}
-		return
-	}
-
 	// In-flight dedup: the first task with a given key runs; identical
 	// concurrent tasks release their slot and wait to share its result.
 	s.inflightMu.Lock()
 	if ch, ok := s.inflight[cacheKey]; ok {
 		s.inflightMu.Unlock()
 		teamSlot.release()
-		provSlot.release()
 		select {
 		case result := <-ch:
 			s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: result.output, err: result.err, idx: idx}

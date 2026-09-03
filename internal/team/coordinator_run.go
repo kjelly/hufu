@@ -257,11 +257,17 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 	if err != nil {
 		return nil, ResolvedWorkerTools{}, err
 	}
+	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, directModel, agentDef)
+	if err != nil {
+		return nil, ResolvedWorkerTools{}, err
+	}
 	ag, err := c.createGatedAgent(ctx, provider, agent.AgentConfig{
-		Def:        agentDef,
-		TeamConfig: &c.session.Config,
-		WorkDir:    c.projectDir,
-		MaxSteps:   c.stepBudget(agentDef, agent.DefaultMaxSteps),
+		Def:               agentDef,
+		TeamConfig:        &c.session.Config,
+		WorkDir:           c.projectDir,
+		MaxSteps:          c.stepBudget(agentDef, agent.DefaultMaxSteps),
+		InvocationModelID: directModel,
+		AdmissionContext:  invocation.AdmissionContext,
 	}, resolvedTools.Tools)
 	if err != nil {
 		return nil, ResolvedWorkerTools{}, err
@@ -324,6 +330,11 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return nil, c.persistPreCancelledDirectAgent(ctx, resolvedName, task, directModel, originalCancellation)
 	}
 	ctx = withoutCoordinatorRequestPreflight(ctx)
+	ctx, directInvocation, err := c.resolveProviderBoundInvocationContext(ctx, directModel, agentDef)
+	if err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return nil, err
+	}
 	needsProviderBoundary := directModel != ""
 	if needsProviderBoundary {
 		if err := c.startProviderExecutionBoundary(ctx); err != nil {
@@ -429,7 +440,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return &DirectAgentResult{AgentName: resolvedName, Error: directScopeErr}, nil
 	}
 	taskCtx = context.WithValue(taskCtx, tools.ToolExecutionDispositionReporterKey, newToolDispositionReporter(directDispositions, directSideEffect, directRunID, todoID, 1))
-	taskCtx = withContextWindowRequestDescriptor(taskCtx, c.newContextWindowRequestDescriptor(directModel, agentDef, resolvedDirectTools.Tools, resolvedName, "direct-agent"))
+	taskCtx = withContextWindowRequestDescriptor(taskCtx, c.newContextWindowRequestDescriptorWithContext(taskCtx, directModel, agentDef, resolvedDirectTools.Tools, resolvedName, "direct-agent"))
 	defer cancel()
 
 	timing := &taskTiming{}
@@ -500,7 +511,11 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	workerInput := buildWorkerContextInput(request, syntheticTask, agentDef, "", instructions, "", "", skillContext)
 	workerInput.RawSTM, workerInput.RawLTM, workerInput.MemoryStore, workerInput.CanonicalMemory = rawSTM, rawLTM, memoryStore, canonicalMemory
-	workerInput.ModelContext = globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef))
+	if directInvocation.AdmissionContext.IsBound() {
+		workerInput.ModelContext = directInvocation.ModelContext
+	} else {
+		workerInput.ModelContext = globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef))
+	}
 	workerInput.MaxAuxChars = maxWorkerAuxContextChars
 	workerInput.DisableMemory = c.historicalMemoryDisabled()
 	// WP-3: recall per-worker private memory before direct-agent dispatch.
@@ -1070,13 +1085,19 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	// normal authorization contract. PrepareStep may project the model-visible
 	// set for an oversized request, and restores the full set when a later
 	// request fits; the source tool definitions are never mutated.
-	preflight := newCoordinatorRequestPreflight(orchModelID, prompt, orchDef.System, orchTools)
+	orchCtx, orchInvocation, err := c.resolveProviderBoundInvocationContext(orchCtx, orchModelID, orchDef)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve coordinator provider context: %w", err)
+	}
+	preflight := newCoordinatorRequestPreflightWithAdmission(orchModelID, prompt, orchDef.System, orchTools, orchInvocation.AdmissionContext)
 	orchCtx = withCoordinatorRequestPreflight(orchCtx, preflight)
 	orch, err := c.createGatedAgent(orchCtx, c.providerManager.GetProvider(orchModelID), agent.AgentConfig{
-		Def:        orchDef,
-		TeamConfig: &c.session.Config,
-		WorkDir:    c.projectDir,
-		MaxSteps:   c.stepBudget(orchDef, agent.DefaultCoordinatorMaxSteps),
+		AdmissionContext:  orchInvocation.AdmissionContext,
+		Def:               orchDef,
+		TeamConfig:        &c.session.Config,
+		WorkDir:           c.projectDir,
+		MaxSteps:          c.stepBudget(orchDef, agent.DefaultCoordinatorMaxSteps),
+		InvocationModelID: orchModelID,
 	}, orchTools)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to create coordinator: %w", err)
@@ -1741,7 +1762,8 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 
 	var modelSpec ModelContextSpec
 	if orchDef != nil {
-		modelSpec = globalRegistry.GetSpec(c.resolveAgentModel(orchDef, "")).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(orchDef))
+		modelID := c.resolveAgentModel(orchDef, "")
+		modelSpec = c.modelContextSpecForInvocation(ctx, modelID, orchDef)
 	}
 
 	rawSTM, rawLTM := "", ""
@@ -1952,6 +1974,11 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	c.continuationResume = nil
 
 	c.addSessionUserMessage(userPrompt)
+	ctx, _, err = c.resolveProviderBoundInvocationContext(ctx, c.resolveAgentModel(orchDef, ""), orchDef)
+	if err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return "", err
+	}
 
 	systemPrompt, promptErr := c.buildSystemPrompt(ctx, orchDef, userPrompt, false)
 	if promptErr != nil {
@@ -2058,6 +2085,11 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	} else {
 		continuationPrompt = fmt.Sprintf(continuationPromptTemplate, additionalPrompt)
 		c.report(c.newEvent("step").withMessage("coordinator preparing").withTodoID(CoordTodoID))
+	}
+	ctx, _, err = c.resolveProviderBoundInvocationContext(ctx, c.resolveAgentModel(orchDef, ""), orchDef)
+	if err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return "", err
 	}
 
 	systemPrompt, promptErr := c.buildSystemPrompt(ctx, orchDef, additionalPrompt, true)

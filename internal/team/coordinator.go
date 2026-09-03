@@ -290,6 +290,14 @@ type coordToolBase struct {
 func (b *coordToolBase) ProviderOptions() fantasy.ProviderOptions        { return b.opts }
 func (b *coordToolBase) SetProviderOptions(opts fantasy.ProviderOptions) { b.opts = opts }
 
+// providerSemaphoreState is shared by a coordinator and its isolated
+// extra-model clones. ProviderManager resolves the effective provider policy;
+// this state owns the Coordinator-side semaphore lifecycle.
+type providerSemaphoreState struct {
+	mu  sync.Mutex
+	sem map[string]chan struct{}
+}
+
 type Coordinator struct {
 	mu                 sync.RWMutex
 	session            *TeamSession
@@ -432,6 +440,7 @@ type Coordinator struct {
 	asyncTasksWg           sync.WaitGroup      // tracks in-flight async candidate writes before run finalization
 	skillsMu               sync.RWMutex
 	modelList              []config.ModelEntry
+	modelProfileRuntime    *ModelProfileRuntime
 	sidecarModel           string
 	sidecarInst            *sidecar.Sidecar
 	sidecarInitMu          sync.Mutex
@@ -451,16 +460,14 @@ type Coordinator struct {
 	autoLoadedSkillsMu     sync.RWMutex
 	forcedSkillNames       map[string]bool // set of skill names specified via --skill
 	maxConcurrent          int
-	// providerSem holds a lazily-created concurrency-limiting channel per
-	// provider name (e.g. "ollama"), built from session.Config.Providers[name].
-	// MaxConcurrent. A local model dispatched by many workers is not the same
-	// as many workers able to usefully run concurrent inference (spec.md item
-	// 5), so this gates in addition to, not instead of, maxConcurrent above.
-	providerSemMu sync.Mutex
-	providerSem   map[string]chan struct{}
-	sessionTime   time.Time
-	stmWriteMu    sync.Mutex // serializes Read-Modify-Write STM operations to prevent lost-updates
-	ltmWriteMu    sync.Mutex // Protect LTM file reads and writes
+	// providerSemState holds a lazily-created concurrency-limiting channel per
+	// canonical effective provider key, sized from ProviderManager's execution
+	// policy. It is shared with isolated extra-model clones.
+	providerSemStateMu sync.Mutex
+	providerSemState   *providerSemaphoreState
+	sessionTime        time.Time
+	stmWriteMu         sync.Mutex // serializes Read-Modify-Write STM operations to prevent lost-updates
+	ltmWriteMu         sync.Mutex // Protect LTM file reads and writes
 
 	// Skill pattern detection
 	skillDetector         *skill.SkillPatternDetector
@@ -1130,11 +1137,13 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		capabilityInflight:        make(map[string]chan CapabilityResult),
 		memoryStore:               memoryStore,
 		modelList:                 modelList,
+		modelProfileRuntime:       NewModelProfileRuntime(pm, noNet),
 		sidecarModel:              roleModels.Sidecar,
 		guardModel:                roleModels.Guard,
 		judgeModel:                roleModels.Judge,
 		planReviewerModel:         roleModels.PlanReviewer,
 		maxConcurrent:             maxConcurrent,
+		providerSemState:          &providerSemaphoreState{},
 		sessionTime:               time.Now(),
 		hooks:                     hookRegistry,
 		rbashMode:                 rbashMode,

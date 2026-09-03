@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -153,6 +154,74 @@ func TestContextWindowAdmissionTelemetryIsDurableBeforeProviderBoundary(t *testi
 	restarted.hydrateContextWindowTelemetry(events)
 	if got := restarted.Metrics().ContextWindowTelemetry.CannotFit; got != 1 {
 		t.Fatalf("restarted CannotFit summary = %d, want 1", got)
+	}
+}
+
+func TestCoordinatorRunnerBoundZeroRejectsBeforeRegistryBudgetProjection(t *testing.T) {
+	modelID := "bound-zero-runner-model"
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID: modelID, ContextWindow: 32_768, MaxOutputTokens: 1_024, SafetyMarginTokens: 256,
+	})
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "bound-zero-run", "bound-zero-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	compiler := &mockContextCompiler{}
+	c := &Coordinator{
+		session:        &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "bound-zero-runner"}},
+		eventStore:     store,
+		taskTracker:    NewTaskTracker(),
+		executionRunID: "bound-zero-run",
+		reportStatus:   func(StatusEvent) {},
+	}
+	c.SetContextCompiler(compiler)
+	ctx := withContextWindowRequestDescriptor(t.Context(), contextWindowRequestDescriptor{
+		ModelID: modelID,
+		AdmissionContext: agent.ProviderAdmissionContext{
+			ModelID:          modelID,
+			ProviderIdentity: "remote",
+			ProviderBaseURL:  "https://provider.example/v1",
+			Bound:            true,
+		},
+	})
+	ctx = context.WithValue(ctx, modelKey{}, modelID)
+	calls := 0
+	_, _, err = c.runAgentWithStatusAndHistory(ctx, contextWindowCountingAgent{
+		model: contextWindowTestModel{modelID: modelID},
+		calls: &calls,
+	}, "worker", "request", nil, &taskTiming{})
+	if metadataErr, ok := errors.AsType[*ContextWindowMetadataUnavailableError](err); !ok || metadataErr == nil {
+		t.Fatalf("runner error = %v, want metadata-unavailable", err)
+	}
+	if compiler.calcCalled {
+		t.Fatal("runner computed a budget before rejecting bound-zero capacity")
+	}
+	if calls != 0 {
+		t.Fatalf("provider calls = %d, want zero", calls)
+	}
+
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Type != string(EventContextWindowAdmission) {
+		t.Fatalf("events = %#v, want one admission rejection", events)
+	}
+	var telemetry ContextWindowTelemetryEvent
+	if err := json.Unmarshal(events[0].Payload, &telemetry); err != nil {
+		t.Fatal(err)
+	}
+	if telemetry.Decision != string(ContextWindowCannotFit) || telemetry.RejectionReason != contextWindowReasonMetadataUnavailable {
+		t.Fatalf("telemetry = %#v, want metadata-unavailable rejection", telemetry)
+	}
+	if telemetry.RequestedTokens != 0 || telemetry.AvailableTokens != 0 || telemetry.ReservedTokens != 0 || telemetry.SafetyTokens != 0 || telemetry.WindowTokens != 0 {
+		t.Fatalf("telemetry = %#v, want zero/unknown admission budget", telemetry)
+	}
+	if got := c.Metrics().ContextWindowTelemetry; got.Admitted != 0 || got.CannotFit != 1 {
+		t.Fatalf("telemetry summary = %#v, want one rejection and no admission", got)
 	}
 }
 

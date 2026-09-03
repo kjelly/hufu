@@ -476,7 +476,7 @@ func TestAgentConfigFields(t *testing.T) {
 
 // TestDefaultProviderURL tests that config.DefaultProviderURL is correctly defined
 func TestDefaultProviderURL(t *testing.T) {
-	expected := "http://localhost:11434/v1"
+	expected := "http://127.0.0.1:11434/v1"
 	if config.DefaultProviderURL != expected {
 		t.Errorf("config.DefaultProviderURL = %q, want %q", config.DefaultProviderURL, expected)
 	}

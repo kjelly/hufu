@@ -417,29 +417,42 @@ func (c *Coordinator) resolveAgentMaxOutputTokens(def *agent.AgentDef) int {
 	return n
 }
 
-// providerSemaphore lazily builds (once per provider) and returns the
-// concurrency-limiting channel for provider, or nil when that provider has
-// no configured max-concurrent — in which case only the team-wide semaphore
-// in dagScheduler applies, matching the pre-existing behavior.
-func (c *Coordinator) providerSemaphore(provider string) chan struct{} {
-	if provider == "" || c.session == nil {
+// providerSemaphore lazily builds (once per effective provider) and returns
+// the concurrency-limiting channel for modelID, or nil when the effective
+// provider has no configured max-concurrent. ProviderManager owns model-to-
+// provider resolution; Coordinator owns the semaphore lifecycle and cache.
+func (c *Coordinator) providerSemaphore(modelID string) chan struct{} {
+	if modelID == "" || c.session == nil || c.providerManager == nil {
 		return nil
 	}
-	cfg, ok := c.session.Config.Providers[provider]
-	if !ok || cfg.MaxConcurrent <= 0 {
+	state := c.sharedProviderSemaphoreState()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.sem == nil {
+		state.sem = make(map[string]chan struct{})
+	}
+	policy, err := c.providerManager.ResolveProviderExecutionPolicy(modelID)
+	if err != nil || policy.ProviderKey == "" || policy.MaxConcurrent <= 0 {
 		return nil
 	}
-	c.providerSemMu.Lock()
-	defer c.providerSemMu.Unlock()
-	if c.providerSem == nil {
-		c.providerSem = make(map[string]chan struct{})
-	}
-	sem, ok := c.providerSem[provider]
+	sem, ok := state.sem[policy.ProviderKey]
 	if !ok {
-		sem = make(chan struct{}, cfg.MaxConcurrent)
-		c.providerSem[provider] = sem
+		sem = make(chan struct{}, policy.MaxConcurrent)
+		state.sem[policy.ProviderKey] = sem
 	}
 	return sem
+}
+
+func (c *Coordinator) sharedProviderSemaphoreState() *providerSemaphoreState {
+	if c.providerSemState != nil {
+		return c.providerSemState
+	}
+	c.providerSemStateMu.Lock()
+	defer c.providerSemStateMu.Unlock()
+	if c.providerSemState == nil {
+		c.providerSemState = &providerSemaphoreState{}
+	}
+	return c.providerSemState
 }
 
 // coordinatorModelID returns the team default model used by the coordinator for

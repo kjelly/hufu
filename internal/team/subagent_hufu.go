@@ -73,7 +73,11 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 	def := canonical.Agent
 	def = p.coordinator.injectWorkerContext(ctx, def)
 	gatedTools := p.coordinator.gatePolicyTools(verified.Tools)
-	ctx = withContextWindowRequestDescriptor(ctx, p.coordinator.newContextWindowRequestDescriptor(request.ModelID, def, gatedTools, canonical.Agent.Name, "subagent"))
+	ctx, invocation, err := p.coordinator.resolveProviderBoundInvocationContext(ctx, request.ModelID, def)
+	if err != nil {
+		return AttemptResult{}, err
+	}
+	ctx = withContextWindowRequestDescriptor(ctx, p.coordinator.newContextWindowRequestDescriptorWithContext(ctx, request.ModelID, def, gatedTools, canonical.Agent.Name, "subagent"))
 	// Install authorization from the verified concrete surface before the
 	// gated constructor runs. This also preserves agent-specific MCP aliases.
 	ctx = p.coordinator.withEffectiveToolsAllowedForTask(ctx, def, verified.Names, canonical.Task)
@@ -82,10 +86,12 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 		return AttemptResult{}, err
 	}
 	ag, err := p.coordinator.createGatedAgent(ctx, provider, agent.AgentConfig{
-		Def:        def,
-		TeamConfig: &p.coordinator.session.Config,
-		WorkDir:    p.coordinator.projectDir,
-		MaxSteps:   request.MaxSteps,
+		Def:               def,
+		TeamConfig:        &p.coordinator.session.Config,
+		WorkDir:           p.coordinator.projectDir,
+		MaxSteps:          request.MaxSteps,
+		InvocationModelID: request.ModelID,
+		AdmissionContext:  invocation.AdmissionContext,
 	}, gatedTools)
 	if err != nil {
 		return AttemptResult{}, err

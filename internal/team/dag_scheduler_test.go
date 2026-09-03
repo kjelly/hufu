@@ -12,21 +12,35 @@ import (
 )
 
 func TestProviderSemaphore(t *testing.T) {
-	coord := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{
-		Providers: map[string]config.ProviderConfig{"ollama": {MaxConcurrent: 2}},
-	}}}
+	manager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", map[string]config.ProviderConfig{
+		"local":  {MaxConcurrent: 1},
+		"ollama": {MaxConcurrent: 2},
+		"remote": {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coord := &Coordinator{
+		providerManager: manager,
+		session:         &TeamSession{Config: agent.TeamConfig{}},
+	}
 
-	sem := coord.providerSemaphore("ollama")
+	sem := coord.providerSemaphore("local/model")
 	if sem == nil {
 		t.Fatal("expected a semaphore for a provider with max-concurrent configured")
 	}
-	if cap(sem) != 2 {
-		t.Errorf("cap = %d, want 2", cap(sem))
+	if cap(sem) != 1 {
+		t.Errorf("cap = %d, want 1", cap(sem))
 	}
-	if coord.providerSemaphore("ollama") != sem {
+	for _, modelID := range []string{"ollama/model", "model"} {
+		if got := coord.providerSemaphore(modelID); got != sem {
+			t.Errorf("providerSemaphore(%q) returned a different channel", modelID)
+		}
+	}
+	if coord.providerSemaphore("local/model") != sem {
 		t.Error("providerSemaphore must return the same channel on repeated calls (shared limiter)")
 	}
-	if coord.providerSemaphore("unconfigured") != nil {
+	if coord.providerSemaphore("remote/model") != nil {
 		t.Error("expected nil semaphore for a provider with no max-concurrent configured")
 	}
 	if coord.providerSemaphore("") != nil {
@@ -34,7 +48,7 @@ func TestProviderSemaphore(t *testing.T) {
 	}
 
 	nilSessionCoord := &Coordinator{}
-	if nilSessionCoord.providerSemaphore("ollama") != nil {
+	if nilSessionCoord.providerSemaphore("ollama/model") != nil {
 		t.Error("expected nil semaphore when the coordinator has no session")
 	}
 }
@@ -69,6 +83,99 @@ func TestAcquireSemLimitsConcurrency(t *testing.T) {
 		t.Fatalf("acquireSem after release error = %v", err)
 	}
 	slot2.release()
+}
+
+func TestProviderInvocationLimiterUsesFinalModelProvider(t *testing.T) {
+	manager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", map[string]config.ProviderConfig{
+		"local":  {MaxConcurrent: 1},
+		"remote": {MaxConcurrent: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{
+		providerManager: manager,
+		session:         &TeamSession{Config: agent.TeamConfig{}},
+	}
+	limiter := c.providerAdmission().(agent.InvocationLimiter)
+
+	localRelease, err := limiter.AcquireProviderInvocation(t.Context(), "local/initial")
+	if err != nil {
+		t.Fatalf("acquire initial local invocation: %v", err)
+	}
+	defer localRelease()
+
+	fallbackAcquired := make(chan struct{})
+	fallbackRelease := make(chan func())
+	go func() {
+		release, acquireErr := limiter.AcquireProviderInvocation(t.Context(), "local/fallback")
+		if acquireErr != nil {
+			return
+		}
+		fallbackAcquired <- struct{}{}
+		fallbackRelease <- release
+	}()
+
+	select {
+	case <-fallbackAcquired:
+		t.Fatal("final-model fallback invocation bypassed the local provider limit")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	localRelease()
+	select {
+	case <-fallbackAcquired:
+	case <-time.After(time.Second):
+		t.Fatal("final-model fallback invocation did not acquire after the old slot was released")
+	}
+	(<-fallbackRelease)()
+}
+
+func TestProviderInvocationLimiterIsSharedByExtraModelClones(t *testing.T) {
+	manager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", map[string]config.ProviderConfig{
+		"local": {MaxConcurrent: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := &Coordinator{
+		providerManager: manager,
+		session:         &TeamSession{Config: agent.TeamConfig{}},
+	}
+	clone := cloneCoordinator(parent, parent.session)
+	parentLimiter := parent.providerAdmission().(agent.InvocationLimiter)
+	cloneLimiter := clone.providerAdmission().(agent.InvocationLimiter)
+
+	parentRelease, err := parentLimiter.AcquireProviderInvocation(t.Context(), "local/main")
+	if err != nil {
+		t.Fatalf("acquire parent invocation: %v", err)
+	}
+	defer parentRelease()
+
+	cloneAcquired := make(chan struct{})
+	cloneRelease := make(chan func())
+	go func() {
+		release, acquireErr := cloneLimiter.AcquireProviderInvocation(t.Context(), "ollama/extra")
+		if acquireErr != nil {
+			return
+		}
+		cloneAcquired <- struct{}{}
+		cloneRelease <- release
+	}()
+
+	select {
+	case <-cloneAcquired:
+		t.Fatal("extra-model clone bypassed the shared local provider limit")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	parentRelease()
+	select {
+	case <-cloneAcquired:
+	case <-time.After(time.Second):
+		t.Fatal("extra-model clone did not acquire after the parent released the provider slot")
+	}
+	(<-cloneRelease)()
 }
 
 func TestDAGSchedulerBudgetAdmissionSkipsQueuedWorkers(t *testing.T) {

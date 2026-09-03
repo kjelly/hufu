@@ -68,7 +68,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.AddCommand(completionCmd)
 	rootCmd.AddCommand(completionHelperCmd)
 
-	rootCmd.Flags().StringVar(&opts.providerURL, "provider-url", "", "Ollama API base URL (default: from hufu.yaml or http://localhost:11434/v1)")
+	rootCmd.Flags().StringVar(&opts.providerURL, "provider-url", "", "Ollama API base URL (default: from hufu.yaml or http://127.0.0.1:11434/v1)")
 	rootCmd.Flags().StringVar(&opts.providerAPIKey, "provider-api-key", "", "Provider API key (default: from HUFU_PROVIDER_API_KEY env or team.yaml)")
 	rootCmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "Show full agent text output in real-time")
 	rootCmd.PersistentFlags().StringVarP(&opts.workspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")

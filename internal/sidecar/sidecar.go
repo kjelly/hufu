@@ -81,14 +81,81 @@ func (p Profile) apply(call *fantasy.AgentCall) {
 }
 
 type Sidecar struct {
-	mu               sync.Mutex
-	agent            fantasy.Agent
-	provider         *agent.OpenAICompatibleProvider
-	modelID          string
-	usageObserver    func(*fantasy.AgentResult)
-	promptPreparer   func(context.Context, string, string) (string, error)
-	requestPreparer  func(context.Context, string, []fantasy.Message, []fantasy.AgentTool, int) (context.Context, fantasy.PrepareStepResult, error)
-	requestAdmission agent.RequestAdmission
+	mu                       sync.Mutex
+	agent                    fantasy.Agent
+	languageModel            fantasy.LanguageModel
+	provider                 *agent.OpenAICompatibleProvider
+	modelID                  string
+	usageObserver            func(*fantasy.AgentResult)
+	errorObserver            func(context.Context, error)
+	promptPreparer           func(context.Context, string, string) (string, error)
+	projectionPromptPreparer func(context.Context, string, string) (string, error)
+	requestPreparer          func(context.Context, string, []fantasy.Message, []fantasy.AgentTool, int) (context.Context, fantasy.PrepareStepResult, error)
+	invocationBinder         func(context.Context, string) (context.Context, agent.ProviderAdmissionContext, error)
+	requestAdmission         agent.RequestAdmission
+	admissionContext         agent.ProviderAdmissionContext
+}
+
+type modelIDContextKey struct{}
+
+type invocationAdmissionContextKey struct{}
+
+type outputReservationContextKey struct{}
+
+// WithModelID makes the model selected by this sidecar available to its
+// coordinator-owned prompt preparation hook.
+func WithModelID(ctx context.Context, modelID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, modelIDContextKey{}, modelID)
+}
+
+// ModelIDFromContext returns a model ID previously attached by WithModelID.
+func ModelIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	modelID, _ := ctx.Value(modelIDContextKey{}).(string)
+	return modelID
+}
+
+// WithOutputReservation attaches the concrete per-call output limit to the
+// sidecar invocation before its provider-bound profile is resolved.
+func WithOutputReservation(ctx context.Context, tokens int) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, outputReservationContextKey{}, tokens)
+}
+
+// OutputReservationFromContext returns the concrete output limit for the
+// current sidecar call, when one was attached by generateWithOptions.
+func OutputReservationFromContext(ctx context.Context) (int, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	tokens, ok := ctx.Value(outputReservationContextKey{}).(int)
+	return tokens, ok && tokens > 0
+}
+
+// WithInvocationAdmissionContext attaches the immutable provider-bound
+// admission snapshot selected for one sidecar invocation.
+func WithInvocationAdmissionContext(ctx context.Context, admissionContext agent.ProviderAdmissionContext) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, invocationAdmissionContextKey{}, admissionContext)
+}
+
+// InvocationAdmissionContextFromContext returns the provider-bound admission
+// snapshot selected for the current sidecar invocation.
+func InvocationAdmissionContextFromContext(ctx context.Context) (agent.ProviderAdmissionContext, bool) {
+	if ctx == nil {
+		return agent.ProviderAdmissionContext{}, false
+	}
+	bound, ok := ctx.Value(invocationAdmissionContextKey{}).(agent.ProviderAdmissionContext)
+	return bound, ok
 }
 
 // SetRequestPreparer installs the shared pre-provider admission hook used by
@@ -114,6 +181,29 @@ func (s *Sidecar) SetPromptPreparer(preparer func(context.Context, string, strin
 	s.mu.Unlock()
 }
 
+// SetProjectionPromptPreparer installs the prompt compiler used by projection
+// calls. The hook must compile against the invocation-bound model context but
+// leave durable context state unchanged.
+func (s *Sidecar) SetProjectionPromptPreparer(preparer func(context.Context, string, string) (string, error)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.projectionPromptPreparer = preparer
+	s.mu.Unlock()
+}
+
+// SetInvocationBinder installs the coordinator hook that binds one immutable
+// provider profile snapshot before prompt preparation for each invocation.
+func (s *Sidecar) SetInvocationBinder(binder func(context.Context, string) (context.Context, agent.ProviderAdmissionContext, error)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.invocationBinder = binder
+	s.mu.Unlock()
+}
+
 func profilePurpose(profile Profile) string {
 	switch profile {
 	case JudgeProfile:
@@ -126,12 +216,23 @@ func profilePurpose(profile Profile) string {
 }
 
 func NewSidecar(ctx context.Context, provider *agent.OpenAICompatibleProvider, modelID string, admission ...agent.RequestAdmission) (*Sidecar, error) {
+	return newSidecar(ctx, provider, modelID, agent.ProviderAdmissionContext{}, admission...)
+}
+
+// NewSidecarWithAdmissionContext binds the provider-specific admission
+// context used by ordinary agents to this sidecar model.
+func NewSidecarWithAdmissionContext(ctx context.Context, provider *agent.OpenAICompatibleProvider, modelID string, admission agent.RequestAdmission, admissionContext agent.ProviderAdmissionContext) (*Sidecar, error) {
+	return newSidecar(ctx, provider, modelID, admissionContext, admission)
+}
+
+func newSidecar(ctx context.Context, provider *agent.OpenAICompatibleProvider, modelID string, admissionContext agent.ProviderAdmissionContext, admission ...agent.RequestAdmission) (*Sidecar, error) {
 	if modelID == "" {
 		return nil, fmt.Errorf("sidecar model ID is empty")
 	}
 	s := &Sidecar{
-		provider: provider,
-		modelID:  modelID,
+		provider:         provider,
+		modelID:          modelID,
+		admissionContext: admissionContext,
 	}
 	if len(admission) > 0 {
 		s.requestAdmission = admission[0]
@@ -152,10 +253,16 @@ func (s *Sidecar) init(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create sidecar language model for %q: %w", s.modelID, err)
 	}
+	s.languageModel = lm
 	if s.requestAdmission != nil {
-		lm = agent.NewAdmittedLanguageModel(s.modelID, lm, s.requestAdmission)
+		lm = agent.NewAdmittedLanguageModelWithContext(s.modelID, lm, s.requestAdmission, s.admissionContext)
 	}
-	s.agent = fantasy.NewAgent(lm,
+	s.agent = s.newAgent(lm)
+	return nil
+}
+
+func (s *Sidecar) newAgent(lm fantasy.LanguageModel) fantasy.Agent {
+	return fantasy.NewAgent(lm,
 		fantasy.WithSystemPrompt(sidecarSystemPrompt),
 		fantasy.WithStopConditions(fantasy.StepCountIs(sidecarMaxSteps)),
 		// Coordinator-owned budgets and recovery policy account for every
@@ -164,11 +271,21 @@ func (s *Sidecar) init(ctx context.Context) error {
 		// enclosing Hufu deadline and hides attempts from that accounting.
 		fantasy.WithMaxRetries(0),
 	)
-	return nil
 }
 
 func (s *Sidecar) ModelID() string {
 	return s.modelID
+}
+
+// AdmissionContext returns the immutable provider-bound context captured when
+// this sidecar was constructed.
+func (s *Sidecar) AdmissionContext() agent.ProviderAdmissionContext {
+	if s == nil {
+		return agent.ProviderAdmissionContext{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.admissionContext
 }
 
 // SetUsageObserver installs an optional callback for the usage of every
@@ -183,32 +300,70 @@ func (s *Sidecar) SetUsageObserver(observer func(*fantasy.AgentResult)) {
 	s.mu.Unlock()
 }
 
+// SetErrorObserver installs the coordinator-owned observer for provider
+// failures. It is called for generation errors, including pre-provider
+// admission failures, so the coordinator can distinguish those from genuine
+// provider context-overflow feedback. The generation context is passed
+// through so any cache observation remains bounded by that invocation.
+func (s *Sidecar) SetErrorObserver(observer func(context.Context, error)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.errorObserver = observer
+	s.mu.Unlock()
+}
+
 func (s *Sidecar) generate(ctx context.Context, prompt string, profile Profile) (string, error) {
 	return s.generateWithOptions(ctx, prompt, profile, sidecarInvocationOptions{
-		observeUsage:  true,
-		preparePrompt: true,
+		preparationMode: sidecarDurablePreparation,
 	})
 }
 
-// sidecarInvocationOptions are scoped to one generation call. In particular,
-// transient projections can bypass durable prompt preparation and usage
-// observation without changing the shared Sidecar hooks used by concurrent
-// durable calls.
+type sidecarPreparationMode uint8
+
+const (
+	sidecarDurablePreparation sidecarPreparationMode = iota
+	sidecarProjectionPreparation
+)
+
+// sidecarInvocationOptions are scoped to one generation call. Projection
+// preparation compiles the prompt while its coordinator hook suppresses
+// durable context effects; it never skips compilation.
 type sidecarInvocationOptions struct {
-	observeUsage  bool
-	preparePrompt bool
+	preparationMode sidecarPreparationMode
 }
 
 func (s *Sidecar) generateWithOptions(ctx context.Context, prompt string, profile Profile, options sidecarInvocationOptions) (string, error) {
 	s.mu.Lock()
 	a := s.agent
 	preparer := s.promptPreparer
+	projectionPreparer := s.projectionPromptPreparer
 	requestPreparer := s.requestPreparer
+	binder := s.invocationBinder
+	languageModel := s.languageModel
+	requestAdmission := s.requestAdmission
+	errorObserver := s.errorObserver
 	s.mu.Unlock()
 	if a == nil {
 		return "", fmt.Errorf("sidecar agent not initialized")
 	}
-	if options.preparePrompt && preparer != nil {
+	ctx = WithModelID(ctx, s.modelID)
+	ctx = WithOutputReservation(ctx, int(profile.MaxOutputTokens))
+	if binder != nil {
+		boundCtx, admissionContext, err := binder(ctx, s.modelID)
+		if err != nil {
+			return "", fmt.Errorf("bind sidecar context: %w", err)
+		}
+		ctx = WithInvocationAdmissionContext(boundCtx, admissionContext)
+	}
+	if options.preparationMode == sidecarProjectionPreparation {
+		preparer = projectionPreparer
+	}
+	if options.preparationMode == sidecarProjectionPreparation && preparer == nil {
+		return "", fmt.Errorf("sidecar projection prompt preparer is not configured")
+	}
+	if preparer != nil {
 		var err error
 		purpose, _ := ctx.Value(purposeContextKey{}).(string)
 		if purpose == "" {
@@ -218,6 +373,11 @@ func (s *Sidecar) generateWithOptions(ctx context.Context, prompt string, profil
 		if err != nil {
 			return "", fmt.Errorf("prepare sidecar context: %w", err)
 		}
+	}
+	invocationAgent := a
+	if admissionContext, ok := InvocationAdmissionContextFromContext(ctx); ok && languageModel != nil && requestAdmission != nil {
+		invocationModel := agent.NewAdmittedLanguageModelWithContext(s.modelID, languageModel, requestAdmission, admissionContext)
+		invocationAgent = s.newAgent(invocationModel)
 	}
 	call := fantasy.AgentCall{Prompt: prompt}
 	profile.apply(&call)
@@ -234,14 +394,17 @@ func (s *Sidecar) generateWithOptions(ctx context.Context, prompt string, profil
 			return requestPreparer(prepareCtx, profilePurpose(profile), messages, nil, reserved)
 		}
 	}
-	result, err := a.Generate(ctx, call)
+	result, err := invocationAgent.Generate(ctx, call)
 	if err != nil {
+		if errorObserver != nil {
+			errorObserver(ctx, err)
+		}
 		return "", err
 	}
 	s.mu.Lock()
 	observer := s.usageObserver
 	s.mu.Unlock()
-	if options.observeUsage && observer != nil && result != nil {
+	if options.preparationMode == sidecarDurablePreparation && observer != nil && result != nil {
 		observer(result)
 	}
 	if result == nil {
@@ -787,19 +950,16 @@ func normalizeAskUserSelection(resp tools.AskUserResponse, opts []tools.AskUserT
 
 func (s *Sidecar) CompactStructured(ctx context.Context, conversationText, prevSummaryText, originalGoal string) (string, error) {
 	return s.compactStructured(ctx, conversationText, prevSummaryText, originalGoal, sidecarInvocationOptions{
-		observeUsage:  true,
-		preparePrompt: true,
+		preparationMode: sidecarDurablePreparation,
 	})
 }
 
-// CompactStructuredTransient performs one projection-only compaction. It
-// bypasses both durable prompt preparation and the shared usage observer. The
-// bypasses are invocation-scoped: they do not replace or mutate either hook
-// used by concurrent durable sidecar work.
+// CompactStructuredTransient performs one projection-only compaction. It uses
+// the projection prompt compiler and suppresses the durable usage observer;
+// the projection compiler owns the corresponding no-persistence boundary.
 func (s *Sidecar) CompactStructuredTransient(ctx context.Context, conversationText, prevSummaryText, originalGoal string) (string, error) {
 	return s.compactStructured(ctx, conversationText, prevSummaryText, originalGoal, sidecarInvocationOptions{
-		observeUsage:  false,
-		preparePrompt: false,
+		preparationMode: sidecarProjectionPreparation,
 	})
 }
 

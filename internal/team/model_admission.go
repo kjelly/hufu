@@ -20,6 +20,10 @@ func (c *Coordinator) prepareAgentModelRequest(cfg agent.AgentConfig, agentTools
 	manager := NewContextWindowManager(defaultCounter, nil)
 	system := cfg.Def.System
 	reserved := effectiveAgentMaxOutput(cfg)
+	bound := cfg.AdmissionContext
+	if reserved <= 0 {
+		reserved = bound.MaxOutputTokens
+	}
 	return func(ctx context.Context, options fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
 		modelID := ""
 		if options.Model != nil {
@@ -35,7 +39,8 @@ func (c *Coordinator) prepareAgentModelRequest(cfg agent.AgentConfig, agentTools
 		attempt, _ := ctx.Value(executionAttemptKey{}).(int)
 		admission, err := c.admitCoordinatorContext(ctx, manager, ContextWindowRequest{
 			ModelID: modelID, System: system, Tools: agentTools, Messages: options.Messages,
-			ReservedOutputTokens: reserved, StepNumber: options.StepNumber,
+			ReservedOutputTokens: reserved, SafetyMarginTokens: bound.SafetyMarginTokens,
+			Window: bound.ContextWindow, StepNumber: options.StepNumber, AdmissionContext: bound,
 		}, "agent", taskID, attempt)
 		if err != nil {
 			return ctx, fantasy.PrepareStepResult{}, err

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -22,8 +23,19 @@ func TestDefaultOpenAICompatibleProviderStripsAnyModelNamespace(t *testing.T) {
 	}
 }
 
+func TestNewOpenAICompatibleProviderPreservesRawInvocationURL(t *testing.T) {
+	const wantURL = "http://localhost:11434/v1"
+	provider, err := NewOpenAICompatibleProvider(wantURL, "", "local")
+	if err != nil {
+		t.Fatalf("NewOpenAICompatibleProvider() error = %v", err)
+	}
+	if provider.baseURL != wantURL {
+		t.Fatalf("provider URL = %q, want exact raw URL %q", provider.baseURL, wantURL)
+	}
+}
+
 func TestDetectProviderContextLengthUsesModelsMetadata(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newAgentIPv4Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
 			t.Errorf("request = %s %s, want GET /v1/models", r.Method, r.URL.Path)
 		}
@@ -44,7 +56,7 @@ func TestDetectProviderContextLengthUsesModelsMetadata(t *testing.T) {
 }
 
 func TestDetectProviderContextCapacityAcceptsMaxInputTokens(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newAgentIPv4Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
 			t.Fatalf("request path = %q, want /v1/models", r.URL.Path)
 		}
@@ -59,6 +71,18 @@ func TestDetectProviderContextCapacityAcceptsMaxInputTokens(t *testing.T) {
 	if capacity.ContextWindow != 39936 || capacity.Source != ContextCapacitySourceMetadata {
 		t.Fatalf("capacity = %#v, want window 39936 from provider metadata", capacity)
 	}
+}
+
+func newAgentIPv4Server(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local IPv4 listener unavailable: %v", err)
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.Listener = listener
+	server.Start()
+	return server
 }
 
 func strIndexAfterSlash(modelID string) int {

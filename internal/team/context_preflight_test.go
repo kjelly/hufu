@@ -54,7 +54,7 @@ func TestPrepareContextPreflightRejectsReentryWithoutBlocking(t *testing.T) {
 			t.Fatalf("preflight did not create %s: %v", path, err)
 		}
 	}
-	if _, err := c.prepareAuxiliaryPrompt(context.Background(), "team_selection", "choose a team"); err != nil {
+	if _, err := c.prepareAuxiliaryPrompt(withTestAuxiliaryInvocationContext(context.Background()), "team_selection", "choose a team"); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.sessionData.CoordinatorContextManifests) != 1 || c.sessionData.CoordinatorContextManifests[0].RunID != c.executionRunID {

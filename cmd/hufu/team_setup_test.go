@@ -2,34 +2,69 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/team"
 )
 
-func TestDetectContextLengths_NoNetSkipsProviderProbe(t *testing.T) {
-	called := false
-	original := detectOllamaContextLengths
-	detectOllamaContextLengths = func(context.Context, string, string, []string) { called = true }
-	t.Cleanup(func() { detectOllamaContextLengths = original })
-	detectContextLengths(context.Background(), true, "http://provider.invalid/v1", "", []string{"ollama/no-net-regression:latest"})
-	if called {
-		t.Fatal("no-net setup sent a context-length probe to the provider")
+func TestWarmModelProfilesNoNetAllowsLoopbackAndRejectsRemote(t *testing.T) {
+	var requests atomic.Int32
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("network listener unavailable in this environment: %v", err)
 	}
-}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/show":
+			_, _ = fmt.Fprint(w, `{}`)
+		case "/api/ps":
+			_, _ = fmt.Fprint(w, `{}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
 
-func TestDetectContextLengths_ProbesWhenNetworkAllowed(t *testing.T) {
-	called := false
-	original := detectOllamaContextLengths
-	detectOllamaContextLengths = func(context.Context, string, string, []string) { called = true }
-	t.Cleanup(func() { detectOllamaContextLengths = original })
-	detectContextLengths(context.Background(), false, "http://provider.invalid/v1", "", []string{"ollama/net-regression:latest"})
-	if !called {
-		t.Fatal("network-allowed setup did not perform context-length probe")
+	for _, endpoint := range []string{
+		server.URL + "/v1",
+		strings.Replace(server.URL, "127.0.0.1", "localhost", 1) + "/v1",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			session := &team.TeamSession{Dir: t.TempDir(), Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "warm-local"}}
+			coordinator, err := team.NewCoordinator(session, endpoint, "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
+			if err != nil {
+				t.Fatalf("NewCoordinator failed: %v", err)
+			}
+			coordinator.WarmModelProfiles(t.Context(), []string{"warm-local-model-" + strings.ReplaceAll(endpoint, "://", "-")}, 0)
+		})
+	}
+	if got := requests.Load(); got < 4 {
+		t.Fatalf("loopback warm requests = %d, want show/ps for both loopback spellings", got)
+	}
+
+	session := &team.TeamSession{Dir: t.TempDir(), Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "warm-remote"}}
+	coordinator, err := team.NewCoordinator(session, "https://provider.example/v1", "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
+	if err != nil {
+		t.Fatalf("remote NewCoordinator failed: %v", err)
+	}
+	coordinator.WarmModelProfiles(t.Context(), []string{"warm-remote-model"}, 0)
+	if got := requests.Load(); got != 4 {
+		t.Fatalf("remote no-net warm reached loopback test server: requests=%d, want unchanged 4", got)
 	}
 }
 
@@ -39,6 +74,23 @@ func TestConfiguredContextWindowIsAppliedWhenNoNet(t *testing.T) {
 	spec := team.GlobalModelSpecRegistry().GetSpec(modelID)
 	if spec.ContextWindow != 16384 || spec.ContextWindowSource != "operator" || spec.IsEstimated {
 		t.Fatalf("no-net configured context spec = %#v, want operator exact capacity", spec)
+	}
+}
+
+func TestModelsInUseIncludesRolesExtraModelsAndModelList(t *testing.T) {
+	session := &team.TeamSession{Config: agent.TeamConfig{Generation: agent.GenerationParams{Model: "main"}}}
+	session.Agents = map[string]*agent.AgentDef{
+		"worker": {Generation: agent.GenerationParams{Model: "worker"}, ExtraModels: []string{"extra"}},
+	}
+	models := modelsInUse(session, "sidecar", "guard", "judge", "reviewer", []config.ModelEntry{{ID: "catalog-model"}})
+	seen := make(map[string]bool, len(models))
+	for _, model := range models {
+		seen[model] = true
+	}
+	for _, model := range []string{"main", "worker", "extra", "sidecar", "guard", "judge", "reviewer", "catalog-model"} {
+		if !seen[model] {
+			t.Errorf("modelsInUse omitted %q: %v", model, models)
+		}
 	}
 }
 

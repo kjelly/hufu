@@ -387,7 +387,8 @@ func TestLoopDetection_ToolCallAbort(t *testing.T) {
 		},
 	}
 
-	_, _, err := c.runAgentWithStatusAndHistory(context.Background(), ag, "developer", "run task", nil, &taskTiming{})
+	ctx := withTestAuxiliaryInvocationContext(t.Context())
+	_, _, err := c.runAgentWithStatusAndHistory(ctx, ag, "developer", "run task", nil, &taskTiming{})
 	if err == nil {
 		t.Fatal("expected runAgentWithStatusAndHistory to return an error due to loop detection")
 	}
