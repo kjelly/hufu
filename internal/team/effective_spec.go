@@ -25,9 +25,9 @@ const (
 // a future `hufu team explain` (Specification 05 Phase 5) can show why a
 // value is what it is.
 type ResolvedValue[T any] struct {
-	Value  T
-	Source ValueSource
-	Detail string
+	Value  T           `json:"value" yaml:"value"`
+	Source ValueSource `json:"source" yaml:"source"`
+	Detail string      `json:"detail,omitempty" yaml:"detail,omitempty"`
 }
 
 // EffectiveAgentSpec is one agent's resolved identity/capability summary
@@ -194,13 +194,22 @@ func newEffectiveTeamSpec(absDir string, session *TeamSession) (*EffectiveTeamSp
 			agentSpec.Role = ResolvedValue[string]{Value: def.Role, Source: SourceBuiltin, Detail: "worker default"}
 		}
 
+		var toolsRaw interface{}
+		if agentRaw != nil {
+			toolsRaw = agentRaw["tools"]
+		}
+		deniedDetail := ""
+		if denied := parseDeniedTools(toolsRaw); len(denied) > 0 {
+			deniedDetail = "; denied by agent: " + strings.Join(denied, ",")
+		}
+
 		presetName, hasPreset := stringKey(agentRaw, "preset")
 		switch {
 		case hasPreset:
-			agentSpec.Tools = ResolvedValue[string]{Value: def.Tools, Source: SourcePreset, Detail: "preset:" + presetName}
+			agentSpec.Tools = ResolvedValue[string]{Value: def.Tools, Source: SourcePreset, Detail: "preset:" + presetName + deniedDetail}
 			agentSpec.SideEffect = ResolvedValue[string]{Value: def.SideEffect, Source: SourcePreset, Detail: "preset:" + presetName}
 		case hasNonEmptyKey(agentRaw, "tools"):
-			agentSpec.Tools = ResolvedValue[string]{Value: def.Tools, Source: SourceAgent, Detail: "explicit frontmatter"}
+			agentSpec.Tools = ResolvedValue[string]{Value: def.Tools, Source: SourceAgent, Detail: "explicit frontmatter" + deniedDetail}
 			agentSpec.SideEffect = ResolvedValue[string]{Value: def.SideEffect, Source: SourceBuiltin, Detail: "no side_effect authored"}
 		default:
 			agentSpec.Tools = ResolvedValue[string]{Value: def.Tools, Source: SourceBuiltin, Detail: "built-in agent"}

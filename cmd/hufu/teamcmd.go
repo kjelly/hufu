@@ -67,25 +67,31 @@ func init() {
 	teamValidateCmd.Flags().StringVar(&teamValidateName, "team", "", "Discoverable team name to validate")
 }
 
-func runTeamValidate(_ *cobra.Command, args []string) error {
-	if len(args) == 1 && strings.TrimSpace(teamValidateName) != "" {
-		return fmt.Errorf("provide either a team directory or --team, not both")
+// resolveTeamDirArg resolves a team directory from either a positional
+// directory argument or a discoverable --team name, but not both. Shared by
+// every command that accepts "[team-directory]" plus a --team flag (team
+// validate, team explain, ...) so they resolve a team name identically.
+func resolveTeamDirArg(args []string, teamName string) (string, error) {
+	if len(args) == 1 && strings.TrimSpace(teamName) != "" {
+		return "", fmt.Errorf("provide either a team directory or --team, not both")
 	}
-	teamDir := ""
 	if len(args) == 1 {
-		teamDir = args[0]
-	} else if strings.TrimSpace(teamValidateName) != "" {
+		return args[0], nil
+	}
+	if strings.TrimSpace(teamName) != "" {
 		registry := internalteam.NewTeamRegistry(resolveSearchPaths())
 		if err := registry.Discover(); err != nil {
-			return fmt.Errorf("discover teams: %w", err)
+			return "", fmt.Errorf("discover teams: %w", err)
 		}
-		var err error
-		teamDir, err = registry.Resolve(teamValidateName)
-		if err != nil {
-			return err
-		}
-	} else {
-		return fmt.Errorf("team directory or --team is required")
+		return registry.Resolve(teamName)
+	}
+	return "", fmt.Errorf("team directory or --team is required")
+}
+
+func runTeamValidate(_ *cobra.Command, args []string) error {
+	teamDir, err := resolveTeamDirArg(args, teamValidateName)
+	if err != nil {
+		return err
 	}
 	// Compile (not just load) so validate, dry-run, explain, and runtime all
 	// converge on the same pipeline (spec.md Specification 02 §7, Phase 4

@@ -3,6 +3,7 @@ package team
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -76,6 +77,20 @@ func TestCompileTeam_AgentIdentityProvenance(t *testing.T) {
 	}
 	if coord.Role.Value != "coordinator" {
 		t.Errorf("coordinator Role.Value = %q, want %q", coord.Role.Value, "coordinator")
+	}
+}
+
+func TestCompileTeam_DeniedToolProvenanceIsVisible(t *testing.T) {
+	dir := t.TempDir()
+	writeEffectiveSpecFile(t, dir, "developer.md", "---\npreset: coding\ntools:\n  denied: [bash]\n---\nImplement the change.\n")
+
+	spec, err := CompileTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err != nil {
+		t.Fatalf("CompileTeam: %v", err)
+	}
+	dev := spec.Agents["developer"]
+	if !strings.Contains(dev.Tools.Detail, "denied by agent: bash") {
+		t.Errorf("developer Tools.Detail = %q, want it to mention the agent-level bash denial", dev.Tools.Detail)
 	}
 }
 
