@@ -69,50 +69,50 @@ type agentFrontmatter struct {
 }
 
 type teamConfigYAML struct {
-	Name                     string                           `yaml:"name"`
-	Description              string                           `yaml:"description"`
-	MaxRounds                int                              `yaml:"max-rounds"`
-	MinimumCoordinatorRounds int                              `yaml:"minimum-coordinator-rounds"`
-	MaxSteps                 int                              `yaml:"max-steps"`
-	Workspace                string                           `yaml:"workspace"`
-	Timeout                  int64                            `yaml:"timeout"`
-	VerifyTimeout            int64                            `yaml:"verify-timeout"`
+	Name                     string `yaml:"name"`
+	Description              string `yaml:"description"`
+	MaxRounds                int    `yaml:"max-rounds"`
+	MinimumCoordinatorRounds int    `yaml:"minimum-coordinator-rounds"`
+	MaxSteps                 int    `yaml:"max-steps"`
+	Workspace                string `yaml:"workspace"`
+	Timeout                  int64  `yaml:"timeout"`
+	VerifyTimeout            int64  `yaml:"verify-timeout"`
 	// MaxRetries is a pointer so an omitted key (built-in default) can be
 	// distinguished from an explicit "max-retries: 0" override; the zero
 	// value of a plain int is indistinguishable from an explicit 0.
-	MaxRetries *int `yaml:"max-retries"`
-	AutoReport               bool                             `yaml:"auto-report"`
-	AllowFreeTextResults     bool                             `yaml:"allow-free-text-results"`
-	Model                    string                           `yaml:"model"`
-	ContextWindow            int                              `yaml:"context-window"`
-	Temperature              string                           `yaml:"temperature"`
-	MaxTokens                string                           `yaml:"max-tokens"`
-	TopP                     string                           `yaml:"top-p"`
-	TopK                     string                           `yaml:"top-k"`
-	ReasoningEffort          string                           `yaml:"reasoning-effort"`
-	Skills                   string                           `yaml:"skills"`
-	SkillsExclude            string                           `yaml:"skills-exclude"`
-	ProviderURL              string                           `yaml:"provider-url"`
-	ProviderAPIKey           string                           `yaml:"provider-api-key"`
-	Providers                map[string]config.ProviderConfig `yaml:"providers"`
-	ModelList                []config.ModelEntry              `yaml:"model-list"`
-	SidecarModel             string                           `yaml:"sidecar-model"`
-	GuardModel               string                           `yaml:"guard-model"`
-	JudgeModel               string                           `yaml:"judge-model"`
-	PlanReviewerModel        string                           `yaml:"plan-reviewer-model"`
-	MaxConcurrent            int                              `yaml:"max-concurrent"`
-	StallThreshold           string                           `yaml:"stall-threshold"`
-	MaxCoordinatorTurns      int                              `yaml:"max-coordinator-turns"`
-	EscalateOnRetry          bool                             `yaml:"escalate-on-retry"`
-	AutoSkills               bool                             `yaml:"auto-skills"`
-	Notify                   notify.NotifyConfig              `yaml:"notify"`
-	AllowedPaths             interface{}                      `yaml:"allowed-paths"`
-	RestrictedPath           string                           `yaml:"restricted-path"`
-	NoNet                    bool                             `yaml:"no-net"`
-	ForceMCP                 bool                             `yaml:"force-mcp"`
-	ProjectContext           bool                             `yaml:"project-context"`
-	Shell                    string                           `yaml:"shell"`
-	Vars                     map[string]interface{}           `yaml:"vars"`
+	MaxRetries           *int                             `yaml:"max-retries"`
+	AutoReport           bool                             `yaml:"auto-report"`
+	AllowFreeTextResults bool                             `yaml:"allow-free-text-results"`
+	Model                string                           `yaml:"model"`
+	ContextWindow        int                              `yaml:"context-window"`
+	Temperature          string                           `yaml:"temperature"`
+	MaxTokens            string                           `yaml:"max-tokens"`
+	TopP                 string                           `yaml:"top-p"`
+	TopK                 string                           `yaml:"top-k"`
+	ReasoningEffort      string                           `yaml:"reasoning-effort"`
+	Skills               string                           `yaml:"skills"`
+	SkillsExclude        string                           `yaml:"skills-exclude"`
+	ProviderURL          string                           `yaml:"provider-url"`
+	ProviderAPIKey       string                           `yaml:"provider-api-key"`
+	Providers            map[string]config.ProviderConfig `yaml:"providers"`
+	ModelList            []config.ModelEntry              `yaml:"model-list"`
+	SidecarModel         string                           `yaml:"sidecar-model"`
+	GuardModel           string                           `yaml:"guard-model"`
+	JudgeModel           string                           `yaml:"judge-model"`
+	PlanReviewerModel    string                           `yaml:"plan-reviewer-model"`
+	MaxConcurrent        int                              `yaml:"max-concurrent"`
+	StallThreshold       string                           `yaml:"stall-threshold"`
+	MaxCoordinatorTurns  int                              `yaml:"max-coordinator-turns"`
+	EscalateOnRetry      bool                             `yaml:"escalate-on-retry"`
+	AutoSkills           bool                             `yaml:"auto-skills"`
+	Notify               notify.NotifyConfig              `yaml:"notify"`
+	AllowedPaths         interface{}                      `yaml:"allowed-paths"`
+	RestrictedPath       string                           `yaml:"restricted-path"`
+	NoNet                bool                             `yaml:"no-net"`
+	ForceMCP             bool                             `yaml:"force-mcp"`
+	ProjectContext       bool                             `yaml:"project-context"`
+	Shell                string                           `yaml:"shell"`
+	Vars                 map[string]interface{}           `yaml:"vars"`
 	// WorkerContextSize is a token budget, not a character count (spec.md
 	// item 7); the YAML key is kept as-is for backward compatibility.
 	WorkerContextSize int                                   `yaml:"worker-context-size"`
@@ -1543,8 +1543,13 @@ func validateWorkerMemoryPolicy(p agent.WorkerMemoryPolicy) error {
 // within the same team.
 func resolveAndValidateWorkerMemory(session *TeamSession) error {
 	teamDefaults := session.Config.WorkerMemory
-	seenIDs := map[string]string{} // memory-id → agent name (for duplicate detection)
+	seenIDs := map[string]string{}        // memory-id → agent name (for duplicate detection)
+	visited := map[*agent.AgentDef]bool{} // session.Agents registers one *AgentDef under both its file-alias key and its (possibly different) name key; visit each def once.
 	for _, def := range session.Agents {
+		if visited[def] {
+			continue
+		}
+		visited[def] = true
 		// If the agent's policy is still the built-in default (i.e. the agent
 		// frontmatter didn't set a memory block), apply team defaults.
 		if !agentMemoryOverridden(def.Memory) {

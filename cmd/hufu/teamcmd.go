@@ -87,11 +87,14 @@ func runTeamValidate(_ *cobra.Command, args []string) error {
 	} else {
 		return fmt.Errorf("team directory or --team is required")
 	}
-	session, err := internalteam.LoadTeam(teamDir, nil, nil, internalteam.DefaultProviderRegistry)
+	// Compile (not just load) so validate, dry-run, explain, and runtime all
+	// converge on the same pipeline (spec.md Specification 02 §7, Phase 4
+	// "Critical Requirement").
+	spec, err := internalteam.CompileTeam(teamDir, nil, nil, internalteam.DefaultProviderRegistry)
 	if err != nil {
 		return err
 	}
-	findings := internalteam.LintTeamContracts(session)
+	findings := internalteam.ValidateEffectiveTeam(spec)
 	for _, finding := range findings {
 		if finding.Severity == internalteam.FindingSeverityError {
 			return fmt.Errorf("%s: %s (%s)", finding.Field, finding.Message, finding.Code)
@@ -100,7 +103,7 @@ func runTeamValidate(_ *cobra.Command, args []string) error {
 			_, _ = fmt.Fprintf(os.Stderr, "warning: %s: %s (%s)\n", finding.Field, finding.Message, finding.Code)
 		}
 	}
-	_, err = fmt.Fprintf(os.Stdout, "team %s: contracts valid\n", session.Config.Name)
+	_, err = fmt.Fprintf(os.Stdout, "team %s: contracts valid\n", spec.RuntimeSession().Config.Name)
 	return err
 }
 
