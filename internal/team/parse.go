@@ -17,6 +17,7 @@ import (
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/skill"
+	"github.com/kjelly/hufu/internal/team/preset"
 	"github.com/kjelly/hufu/internal/yamlutil"
 )
 
@@ -38,7 +39,8 @@ type agentFrontmatter struct {
 	Name            string                         `yaml:"name"`
 	Description     string                         `yaml:"description"`
 	Role            string                         `yaml:"role"`
-	Tools           any                            `yaml:"tools"`  // string or []string (YAML list)
+	Preset          string                         `yaml:"preset"`
+	Tools           any                            `yaml:"tools"`  // string, []string, or {allowed: [...], denied: [...]}
 	Skills          any                            `yaml:"skills"` // string or []string (YAML list)
 	Guard           []string                       `yaml:"guard"`
 	Model           string                         `yaml:"model"`
@@ -332,6 +334,28 @@ func parseDeniedTools(raw interface{}) []string {
 	return nil
 }
 
+// subtractToolNames removes every name in denied from names, preserving
+// order. It is the last step of preset/tool resolution so an explicit deny
+// always wins, regardless of whether the tool came from an explicit
+// allowlist, a preset, or implied-tool expansion (spec.md Specification 01
+// §7).
+func subtractToolNames(names, denied []string) []string {
+	if len(denied) == 0 {
+		return dedupeToolNames(names)
+	}
+	blocked := make(map[string]bool, len(denied))
+	for _, name := range denied {
+		blocked[strings.TrimSpace(name)] = true
+	}
+	out := make([]string, 0, len(names))
+	for _, name := range dedupeToolNames(names) {
+		if !blocked[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 func anyToStr(v any, fallback string) string {
 	if v == nil {
 		return fallback
@@ -529,9 +553,26 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 		role = inferredRole
 	}
 
-	toolsList := anyToStrList(fm.Tools)
+	toolsList := parseAllowedTools(fm.Tools)
+	deniedList := parseDeniedTools(fm.Tools)
+	sideEffect := fm.SideEffect
+
+	if presetName := strings.TrimSpace(fm.Preset); presetName != "" {
+		p, ok := preset.Lookup(presetName)
+		if !ok {
+			return nil, fmt.Errorf("agent file %s: unknown preset %q (available presets: %s)", path, presetName, strings.Join(preset.Names(), ", "))
+		}
+		// Preset grants merge with (never replace) any explicit allowlist;
+		// explicit denial below always wins over what the preset grants.
+		toolsList = dedupeToolNames(append(append([]string(nil), p.Tools...), toolsList...))
+		if sideEffect == "" {
+			sideEffect = string(p.SideEffect)
+		}
+	}
+
 	skillsList := anyToStrList(fm.Skills)
-	toolsStr := agent.ExpandImpliedTools(strings.Join(toolsList, ","))
+	expanded := strings.Split(agent.ExpandImpliedTools(strings.Join(toolsList, ",")), ",")
+	toolsStr := strings.Join(subtractToolNames(expanded, deniedList), ",")
 	skillsStr := strings.Join(skillsList, ",")
 	maxRetries := anyToInt(fm.MaxRetries, -1)
 
@@ -570,7 +611,7 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 		},
 		ProviderURL:   fm.ProviderURL,
 		ExtraModels:   fm.ExtraModels,
-		SideEffect:    fm.SideEffect,
+		SideEffect:    sideEffect,
 		Recovery:      fm.Recovery,
 		ReconcileTool: fm.ReconcileTool,
 		MemoryID:      fm.MemoryID,
