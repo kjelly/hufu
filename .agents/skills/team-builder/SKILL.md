@@ -11,43 +11,91 @@ largest possible collection of agents.
 
 ## Workflow
 
-1. **Classify the task and its risk.** If the user has not specified a team
-   name or purpose, ask. Collect:
-   - Team name (lowercase, hyphenated)
-   - One-sentence goal
-   - Default model (e.g. `ollama/qwen3:8b`)
-   - Expected deliverable and its objective success criteria
-   - Inputs, outputs, dependencies, and work that can run in parallel
-   - Whether work is read-only, writes the workspace, changes external state,
-     changes infrastructure/credentials, or handles secrets
-   - Whether the run is interactive or unattended, and the required budget,
-     rollback, and operator approval boundaries
-2. **Choose the smallest topology that can verify the outcome.** Start with a
-   single worker for a simple task. Add distinct workers only for independent
-   expertise, a producer/critic separation, a real pipeline stage, or an
-   objective verification boundary. Do not add agents merely to make a team
-   look comprehensive.
-3. **Choose a template and execution mode.** Use prompt-driven templates for
-   low-risk, exploratory work. Use a contract-driven workflow for ordered,
-   high-cost, unattended, or external-side-effect work. Adapt templates to the
-   domain; do not copy their prompts verbatim.
-4. **Define agent contracts before writing prompts.** For every worker specify
-   one responsibility, allowed tools, input source, output format, success
-   criterion, side-effect class, recovery behavior, and whether it may modify
-   files. Define handoffs by typed result or declared artifact, never by an
-   assumed shared conversation.
-5. **Write the files.** Create `team.yaml` first, then each agent `.md`.
-   Never overwrite an existing team directory without the user's approval.
-6. **Run static contract validation.** Run `hufu team validate --team
-   <team-name>` and `hufu list <team-name>`. Fix all errors before a model call.
-   Run `hufu doctor` when provider, verifier executable, and workspace
-   preflight are in scope.
-7. **Run a safe preview.** Use `hufu --agent-team <team-name> --dry-run
+Use progressive disclosure: ask only what the task's risk actually requires.
+A simple coding or research team should never need more than a name and a
+one-sentence goal before files exist and validate.
+
+```text
+goal → risk classification → choose preset/topology → generate → compile → validate
+```
+
+1. **Get the goal.** If the user has not specified a team name or purpose,
+   ask for those two things only: team name (lowercase, hyphenated) and a
+   one-sentence goal. Do not ask about deliverables, budgets, rollback, or
+   side effects yet — those questions are conditional on risk, not universal.
+2. **Classify risk from the goal.** A team is **high-risk** if it involves any
+   of: unattended/no-human execution, external state mutation (APIs, deploys,
+   remote systems), infrastructure or credential changes, irreversible
+   actions, or a strict acceptance requirement (a false "success" would be
+   worse than a blocked run). Everything else — most coding, writing, and
+   research tasks — is **low-risk**.
+3. **Low-risk: choose a preset and generate immediately.** Prefer
+   `hufu team create <name> --preset <preset>` over hand-authoring files —
+   see [Presets](#presets) below for the six agent presets and four team
+   presets. This is the same mechanism the CLI itself uses, so the result
+   uses identical conventions (filename-inferred identity, `preset:`
+   frontmatter, no default-valued `team.yaml` fields) to what a user would
+   get by running the command directly. Only fall back to hand-authoring
+   individual agent files when no preset's topology fits (e.g. a genuinely
+   novel pipeline shape) — even then, prefer `preset:` frontmatter per agent
+   over a raw `tools:` allowlist. Do not ask about model, deliverable
+   format, or parallelism unless the user's one-sentence goal left the
+   topology genuinely ambiguous.
+4. **High-risk: ask the targeted follow-ups, then design deliberately.** Only
+   now collect what the risk category actually needs: expected deliverable
+   and objective success criteria; inputs/outputs/dependencies and what can
+   run in parallel; the specific side effect (external state, infrastructure,
+   credentials); and, for unattended runs, the required budget, rollback, and
+   operator-approval boundaries. Choose the smallest topology that can verify
+   the outcome (see [Reliability-First Team Design](#reliability-first-team-design)
+   below) and use a contract-driven workflow (see
+   [Contract-Driven Workflow Configuration](#contract-driven-workflow-configuration)) —
+   none of the four team presets attempt to encode this shape; hand-author
+   `team.yaml` and each agent `.md` for it. Define agent contracts before
+   writing prompts: for every worker specify one responsibility, allowed
+   tools, input source, output format, success criterion, side-effect class,
+   recovery behavior, and whether it may modify files. Define handoffs by
+   typed result or declared artifact, never by an assumed shared
+   conversation. Never overwrite an existing team directory without the
+   user's approval.
+5. **Run static contract validation.** Run `hufu team validate --team
+   <team-name>` (or `hufu team explain --team <team-name>` to see resolved
+   tools/side-effects with their source) and `hufu list <team-name>`. Fix all
+   errors before a model call. Run `hufu doctor` when provider, verifier
+   executable, and workspace preflight are in scope.
+6. **Run a safe preview.** Use `hufu --agent-team <team-name> --dry-run
    "<representative prompt>"` to inspect the resolved team without model calls.
    Run a real smoke test only for a read-only team or with explicit permission
    for the target system.
-8. **Report.** Show the file tree, task topology, risk/verification choices,
+7. **Report.** Show the file tree, task topology, risk/verification choices,
    validation results, and one safe "try it" command.
+
+## Presets
+
+Reach for these first — they are the CLI's own building blocks
+(`hufu team create --preset <name>`, `hufu team add <team> <agent> --preset
+<name>`), not a skill-specific shortcut, so skill-generated and
+CLI-generated teams look identical.
+
+**Agent presets** (single-worker `--preset`, or per-agent `preset:`
+frontmatter): `readonly` (inspect/search only), `coding` (inspect + edit +
+verify), `review` (inspect + run checks, no mutation), `research` (inspect +
+fetch), `writer` (inspect + produce documents), `ops` (scoped host/remote
+operations — never grants `sudo` by default).
+
+**Team presets** (`hufu team create <name> --preset <name>`, one command,
+no hand-authored files):
+
+| Team preset | Topology | Use for |
+|---|---|---|
+| `coding-single` | one `coding` worker | "just do X", simple task |
+| `coding-reviewed` | `coding` producer + `review` reviewer | "build a feature", "review my work" |
+| `research` | `research` researcher + `writer` writer | "research then write", "analyze then report" |
+| `safe-ops` | `ops` operator + `review` monitor | scoped operational tasks — still add explicit `unattended`/budget/acceptance config yourself for a genuinely unattended run; the preset does not assume it |
+
+If the user's goal matches one of these shapes, generate with the command
+and skip straight to validation — do not hand-write `team.yaml` or agent
+`.md` files for a shape a preset already covers.
 
 ## Reliability-First Team Design
 
@@ -92,10 +140,19 @@ the declared outcome and its required verification are both complete.
 - When `team.yaml` is absent, the directory basename becomes the team name.
 - When `team.yaml` is present, its `name:` field takes precedence (if non-empty).
 - Team names are matched case-insensitively.
+- An agent file needs no frontmatter at all: `name`/`role` infer from the
+  filename (see [Agent .md Reference](#agent-md-reference)), and a
+  frontmatter-free file's whole body becomes its system prompt.
 
 ## team.yaml Reference
 
-Only `name` is recommended; everything else has built-in defaults (`max-rounds: 10`, `timeout: 600`, `max-retries: 2`, `workspace: workspace`).
+`team.yaml` is optional — even `name` is only needed when it must differ
+from the directory name — and every field below has a built-in default
+(`max-rounds: 10`, `timeout: 600`, `max-retries: 2`, `workspace: workspace`).
+Do not write a field just to pin its default value; only write what
+genuinely overrides it. For a low-risk team, `hufu team create --preset`
+(see [Presets](#presets)) writes a minimal or empty `team.yaml`
+automatically — prefer that over hand-authoring one.
 
 ```yaml
 name: my-team
@@ -173,9 +230,7 @@ delegation:
   no-redispatch-after-success: [preparer, auditor, executor, verifier]
   forbid-context-files: true
 
-# Hufu, not coordinator prose, owns phase progression.
-workflow:
-  phases: [prepare, audit, execute, verify]
+# policies/capabilities stay at the top level (not wrapped by advanced:).
 policies:
   require_phase_success: true
   allow_phase_skip: false
@@ -183,13 +238,24 @@ policies:
   fail_fast: true
 capabilities:
   required: [domain-action]
-verification:
-  required: true
-retry:
-  transient:
-    max_attempts: 0
-  repair:
-    max_attempts_per_failure_signature: 0
+
+# Prefer the advanced: namespace for workflow/verification/retry/reliability
+# (an authoring convention, not a runtime difference — see "Advanced Namespace"
+# below). Hufu, not coordinator prose, owns phase progression.
+advanced:
+  workflow:
+    phases: [prepare, audit, execute, verify]
+  verification:
+    required: true
+  retry:
+    transient:
+      max_attempts: 0
+    repair:
+      max_attempts_per_failure_signature: 0
+  reliability:
+    verifier-lint: error
+    hard-enforcement: true
+    max-systemic-failure-tasks: 1
 
 # Bind a provider-neutral capability to a team-owned adapter. Keep domain
 # commands and schemas here, never in Hufu core.
@@ -204,11 +270,18 @@ acceptance:
   mode: blocking
   require-no-unresolved-tasks: true
   commands: [bash .agent-teams/my-team/acceptance.sh]
-reliability:
-  verifier-lint: error
-  hard-enforcement: true
-  max-systemic-failure-tasks: 1
 ```
+
+### Advanced Namespace
+
+`workflow`, `tasks`, `reliability`, `verification`, and `retry` may be
+written either at the top level (as in older teams and examples elsewhere
+in this file) or grouped under `advanced:` as shown above — both produce
+identical effective behavior; `advanced:` is purely an authoring
+convention that keeps runtime-oriented fields visually separate from
+everyday team config. Prefer `advanced:` when generating a new
+contract-driven team. Never define the same field in both places — Hufu
+rejects that as a conflict rather than silently choosing one.
 
 For a runtime action, declare a static task contract that assigns it to the
 `execute` phase and makes verification objective. For an attestation-only
@@ -230,12 +303,21 @@ rollback for a team whose target or workspace has not been explicitly scoped.
 
 ## Agent .md Reference
 
+`name` and `role` are both inferable from the filename: `developer.md`
+infers `name: developer, role: worker`; `coordinator.md` infers
+`name: coordinator, role: coordinator`. Only write them explicitly when
+they must differ from the filename. Prefer `preset:` over a hand-written
+`tools:` list for a common shape — see [Presets](#presets) — and only fall
+back to explicit `tools:`/`side_effect:` when no preset fits or a preset
+needs a narrower grant (`tools: {denied: [...]}` always wins over what a
+preset grants).
+
 ```markdown
 ---
-name: developer
 description: Implementation specialist
-role: worker                      # "worker" or "coordinator"
-tools: view,write,edit,bash,grep,glob,ls   # string or YAML list
+preset: coding                     # readonly, coding, review, research, writer, ops
+tools:                             # optional: narrow a preset's grant, or use standalone
+  denied: [bash]
 skills: code-review               # skills to load
 guard:                            # guard rules (per-agent only)
   - require-tests
@@ -277,10 +359,11 @@ Your system prompt here. Describe the agent's persona, workflow, and output form
 
 | Field | Required | Default | Notes |
 |-------|----------|---------|-------|
-| `name` | yes | — | Unique within team; used for `@<name>` invocation |
+| `name` | no | inferred from filename | Unique within team; used for `@<name>` invocation |
 | `description` | no | — | One-line role description |
-| `role` | no | `worker` | `worker` or `coordinator` |
-| `tools` | no | — | Comma string or YAML list |
+| `role` | no | inferred from filename (`worker`, or `coordinator` for `coordinator.md`) | `worker` or `coordinator` |
+| `preset` | no | — | `readonly`, `coding`, `review`, `research`, `writer`, or `ops` — expands to `tools`/`side_effect`; merges with an explicit `tools: allowed`, never with a `tools: denied` |
+| `tools` | no | — | Comma string, YAML list, or `{allowed: [...], denied: [...]}`; `denied` always wins, including over a preset's grant |
 | `skills` | no | — | Skill names to load |
 | `guard` | no | — | Guard rule names (YAML list) |
 | `model` | no | team default | LLM model ID |
@@ -308,9 +391,19 @@ Your system prompt here. Describe the agent's persona, workflow, and output form
 
 ## Template Catalog
 
+The templates below show what each shape's files look like and remain the
+reference for anything a team preset doesn't cover. For the shapes a preset
+already covers (marked below), generate with `hufu team create --preset`
+first per [Presets](#presets) rather than hand-authoring these files —
+read the template to understand the shape, not to copy-paste it verbatim
+over a working preset command.
+
 ### Template: General Development Team
 
 Best for: feature development, bug fixes, full-stack work.
+**Covered by the `coding-reviewed` team preset** (`hufu team create <name>
+--preset coding-reviewed`) for the 2-worker producer/reviewer shape; add a
+third `tester` agent by hand only if the task specifically needs one.
 
 ```
 .agent-teams/dev-team/
@@ -617,6 +710,8 @@ repeat the same shell command.
 ### Template: Pipeline Team
 
 Best for: multi-stage processing where each stage feeds the next (research → analyze → write).
+For the simpler 2-stage research → write case with no separate analysis
+stage, use the **`research` team preset** instead of hand-authoring this.
 
 ```
 .agent-teams/<name>/
@@ -668,26 +763,33 @@ Workers run in parallel (independent scans). Coordinator aggregates into a prior
 ### Template: Single-Worker Team
 
 Best for: simple tasks that still benefit from coordinator ask_user / finish flow.
+**Covered by the `coding-single` team preset** — this is what
+`hufu team create <name>` (and `hufu init <name>`) generates with no
+`--preset` given. Use when the user just needs one capable agent; do not
+hand-author this shape.
 
 ```
 .agent-teams/<name>/
 ├── team.yaml
-└── helper.md           # role: worker — general-purpose
+└── worker.md           # role: worker — general-purpose, preset: coding
 ```
-
-This is what `hufu init <name>` generates. Use when the user just needs one capable agent.
 
 ## Choosing a Template
 
-| User says... | Template |
-|---|---|
-| "build a feature", "implement X" | General Development Team |
-| "review my work", "check quality" | Reviewer-Critic Pair |
-| "execute this plan", "follow these steps" | Plan-Execution Team |
-| "research then write", "analyze then report" | Pipeline Team |
-| "security audit", "find vulnerabilities" | Security Audit Team |
-| "run unattended", "deploy", "rebuild and verify", "must not falsely succeed" | Runtime-Enforced Outcome Workflow |
-| "just do X", "simple task" | Single-Worker Team |
+| User says... | Team preset (generate first) | Template (reference / fallback) |
+|---|---|---|
+| "build a feature", "implement X" | `coding-reviewed` | General Development Team |
+| "review my work", "check quality" | `coding-reviewed` | Reviewer-Critic Pair |
+| "execute this plan", "follow these steps" | — (no preset covers this) | Plan-Execution Team |
+| "research then write", "analyze then report" | `research` | Pipeline Team |
+| "security audit", "find vulnerabilities" | — (no preset covers this) | Security Audit Team |
+| "run unattended", "deploy", "rebuild and verify", "must not falsely succeed" | `safe-ops` for the topology, then hand-add unattended/budget/acceptance config | Runtime-Enforced Outcome Workflow |
+| "just do X", "simple task" | `coding-single` (the default) | Single-Worker Team |
+
+A row with a preset is high-risk only if step 2's risk classification says
+so (e.g. "deploy" and "rebuild and verify" are high-risk regardless of
+topology) — generate with the preset, then layer on the risk-appropriate
+config from step 4 rather than hand-authoring the whole team.
 
 ## Design Principles
 
@@ -715,8 +817,8 @@ This is what `hufu init <name>` generates. Use when the user just needs one capa
 | Multiple coordinators | Only one coordinator per team; merge them |
 | Coordinator implements code itself | Coordinator should only delegate via `agent` tool |
 | Worker tools too broad | Remove tools the worker doesn't need (least privilege) |
-| `name` field missing in frontmatter | `name` is required — it's used for `@<name>` invocation |
-| Agent names with spaces/uppercase | Use lowercase-hyphenated names |
+| Filename can't be used to infer a name (spaces, leading digit, etc.) | Either rename the file to a valid identifier, or add an explicit `name:` in frontmatter |
+| Hand-writing a `tools:` allowlist that matches a built-in preset | Use `preset: <name>` instead — see [Presets](#presets) |
 | `team.yaml` name differs from directory | The `name:` field takes precedence; keep them consistent |
 | Critic modifies files | Critic should only report; producer applies fixes |
 | No `finish` call | Coordinator must call `finish` with the final answer |
