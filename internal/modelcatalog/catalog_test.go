@@ -1,6 +1,7 @@
 package modelcatalog
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -10,7 +11,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -173,6 +176,116 @@ func TestEmbeddedSnapshotIsCompleteAndProvenanceBound(t *testing.T) {
 			t.Fatalf("sentinel %s/%s = %#v", test.provider, test.modelID, result.Model)
 		}
 	}
+}
+
+func TestGeneratorReproducesCommittedEmbeddedSnapshot(t *testing.T) {
+	root := repositoryRoot(t)
+	temporary := t.TempDir()
+	inputPath := filepath.Join(temporary, "source.json")
+	outputPath := filepath.Join(temporary, "embedded_models.json")
+	manifestPath := filepath.Join(temporary, "embedded_manifest.json")
+	input, err := generatorSourceFromEmbedded(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inputPath, input, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	command := exec.Command("go", "run", "./internal/modelcatalog/generate_embedded.go",
+		"-input", inputPath,
+		"-output", outputPath,
+		"-manifest", manifestPath,
+	)
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("generate embedded snapshot: %v\n%s", err, output)
+	}
+
+	generatedSnapshot, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(generatedSnapshot, embeddedSnapshot) {
+		t.Fatal("generator output differs from the committed embedded snapshot")
+	}
+	if bytes.HasSuffix(generatedSnapshot, []byte{'\n'}) {
+		t.Fatal("generator output has an unexpected terminal newline")
+	}
+
+	generatedManifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		ArtifactSHA256 string `json:"artifact_sha256"`
+	}
+	if err := json.Unmarshal(generatedManifest, &manifest); err != nil {
+		t.Fatalf("decode generated manifest: %v", err)
+	}
+	artifactHash := fmt.Sprintf("%x", sha256.Sum256(generatedSnapshot))
+	if manifest.ArtifactSHA256 != artifactHash {
+		t.Fatalf("generated manifest artifact SHA-256 = %q, computed %q", manifest.ArtifactSHA256, artifactHash)
+	}
+	mutatedHash := fmt.Sprintf("%x", sha256.Sum256(append(bytes.Clone(generatedSnapshot), '\n')))
+	if manifest.ArtifactSHA256 == mutatedHash {
+		t.Fatal("generated manifest accepted a terminal-newline artifact mutation")
+	}
+}
+
+func generatorSourceFromEmbedded(t *testing.T) ([]byte, error) {
+	t.Helper()
+	var snapshot catalogFile
+	if err := json.Unmarshal(embeddedSnapshot, &snapshot); err != nil {
+		return nil, fmt.Errorf("decode embedded snapshot: %w", err)
+	}
+	providers := make(map[string]any)
+	for _, model := range snapshot.Models {
+		provider, ok := providers[model.Provider].(map[string]any)
+		if !ok {
+			provider = map[string]any{"models": make(map[string]any)}
+			providers[model.Provider] = provider
+		}
+		models := provider["models"].(map[string]any)
+		value := map[string]any{
+			"id":   model.ID,
+			"name": model.Name,
+		}
+		if model.Family != "" {
+			value["family"] = model.Family
+		}
+		for key, flag := range map[string]*bool{
+			"attachment":  model.Attachment,
+			"reasoning":   model.Reasoning,
+			"tool_call":   model.ToolCall,
+			"temperature": model.Temperature,
+		} {
+			if flag != nil {
+				value[key] = *flag
+			}
+		}
+		if model.Context > 0 {
+			value["context_length"] = model.Context
+		}
+		if model.Output > 0 {
+			value["max_output_tokens"] = model.Output
+		}
+		models[model.ID] = value
+	}
+	root := map[string]any{"version": snapshot.Version}
+	for provider, value := range providers {
+		root[provider] = value
+	}
+	return json.Marshal(root)
+}
+
+func repositoryRoot(t *testing.T) string {
+	t.Helper()
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate catalog test")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(filename), "../.."))
 }
 
 func TestUpdateValidatesAndAtomicallyReplacesCache(t *testing.T) {
