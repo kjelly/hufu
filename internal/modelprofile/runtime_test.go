@@ -3,10 +3,12 @@ package modelprofile
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/modelcatalog"
 	"github.com/kjelly/hufu/internal/providerintrospection"
 )
 
@@ -164,6 +166,104 @@ func TestRuntimeResolverNoRuntimeSkipsProviderIntrospection(t *testing.T) {
 	if factoryCalls != 0 || profile.EffectiveContext != 1_024 {
 		t.Fatalf("no-runtime resolution called provider or lost fallback: calls=%d profile=%#v", factoryCalls, profile)
 	}
+}
+
+func TestRuntimeResolverNoRuntimeIgnoresWarmRuntimeAndObservedCache(t *testing.T) {
+	const modelID = "qwen3:8b"
+	catalog, err := modelcatalog.NewCatalog("test", []modelcatalog.CatalogModel{{
+		Provider: "ollama",
+		ID:       modelID,
+		Family:   "catalog-family",
+		Context:  65_536,
+		Output:   2_048,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	introspector := &splitRuntimeIntrospector{
+		show: providerintrospection.RuntimeModelInfo{
+			Family:            "runtime-family-sentinel",
+			ConfiguredContext: 77_777,
+			ModelMaxContext:   88_888,
+			MaxOutputTokens:   9_999,
+			Capabilities:      []string{"tools"},
+		},
+		process: providerintrospection.RuntimeModelInfo{
+			RuntimeContext: 66_666,
+			Capabilities:   []string{"attachments"},
+		},
+	}
+	resolver := NewRuntimeResolverWithCatalog(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+		return introspector
+	}, ProfileCacheOptions{}, catalog)
+	provider := testRuntimeProvider("secret")
+	request := RuntimeResolutionRequest{
+		Provider: provider,
+		ModelID:  modelID,
+		Profile: ModelProfileInput{
+			ModelID:  modelID,
+			Provider: "ollama",
+			Context:  ContextResolutionInput{FallbackContext: 1_024},
+		},
+	}
+	if _, err := resolver.Resolve(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.ObserveContext(provider, modelID, 8_192); err != nil {
+		t.Fatal(err)
+	}
+	normal, err := resolver.Resolve(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	showCalls, psCalls := introspector.counts()
+	if showCalls != 1 || psCalls != 2 {
+		t.Fatalf("warm-cache calls show=%d ps=%d, want 1 and 2", showCalls, psCalls)
+	}
+	if normal.Family != "runtime-family-sentinel" || normal.RuntimeContext != 66_666 || normal.Sources.ObservedContext.Value != 8_192 {
+		t.Fatalf("normal resolution did not retain runtime evidence: %#v", normal)
+	}
+	warmEntries := profileCacheState(resolver.cache)
+
+	noRuntimeRequest := request
+	noRuntimeRequest.NoRuntime = true
+	noRuntime, err := resolver.Resolve(t.Context(), noRuntimeRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotShow, gotPS := introspector.counts(); gotShow != showCalls || gotPS != psCalls {
+		t.Fatalf("no-runtime calls show=%d ps=%d, want unchanged at %d and %d", gotShow, gotPS, showCalls, psCalls)
+	}
+	if got := profileCacheState(resolver.cache); !reflect.DeepEqual(got, warmEntries) {
+		t.Fatalf("no-runtime changed runtime cache: before=%#v after=%#v", warmEntries, got)
+	}
+
+	coldResolver := NewRuntimeResolverWithCatalog(nil, ProfileCacheOptions{}, catalog)
+	cold, err := coldResolver.Resolve(t.Context(), noRuntimeRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(noRuntime, cold) {
+		t.Fatalf("no-runtime warm result differs from cold catalog/fallback result:\n warm=%#v\n cold=%#v", noRuntime, cold)
+	}
+	if noRuntime.Sources.RuntimeContext.Value != 0 || noRuntime.Sources.ObservedContext.Value != 0 ||
+		noRuntime.Sources.RuntimeContext.Source != "" || noRuntime.Sources.ObservedContext.Source != "" {
+		t.Fatalf("no-runtime profile retained runtime provenance: %#v", noRuntime.Sources)
+	}
+}
+
+type profileCacheStateSnapshot struct {
+	entries    int
+	observed   int
+	generation int
+	active     int
+	flights    int
+	order      int
+}
+
+func profileCacheState(cache *ProfileCache) profileCacheStateSnapshot {
+	entries, observed, generation, active, flights, order := profileCacheSizes(cache)
+	return profileCacheStateSnapshot{entries: entries, observed: observed, generation: generation, active: active, flights: flights, order: order}
 }
 
 func TestRuntimeCacheIdentityCanonicalizesProviderQualifiedModels(t *testing.T) {
