@@ -27,13 +27,14 @@ func TestModelsInspectIsOfflineAndReportsEmbeddedOrCacheOrigin(t *testing.T) {
 	previousFactory := newModelCatalogStore
 	previousPath := modelsCachePath
 	previousJSON := modelsJSON
+	previousInspectNoNet := modelsInspectNoNet
 	newModelCatalogStore = func() *modelcatalog.Store {
 		return modelcatalog.NewStore(modelsCachePath, modelcatalog.StoreOptions{SourceURL: server.URL, Client: server.Client()})
 	}
-	modelsCachePath, modelsJSON = cachePath, true
+	modelsCachePath, modelsJSON, modelsInspectNoNet = cachePath, true, true
 	t.Cleanup(func() {
 		newModelCatalogStore = previousFactory
-		modelsCachePath, modelsJSON = previousPath, previousJSON
+		modelsCachePath, modelsJSON, modelsInspectNoNet = previousPath, previousJSON, previousInspectNoNet
 	})
 
 	root := newRootCommand()
@@ -46,7 +47,7 @@ func TestModelsInspectIsOfflineAndReportsEmbeddedOrCacheOrigin(t *testing.T) {
 	if requests.Load() != 0 {
 		t.Fatal("models inspect performed an HTTP request")
 	}
-	if !strings.Contains(output.String(), `"origin":"cache"`) || !strings.Contains(output.String(), `"found":true`) {
+	if !strings.Contains(output.String(), `"origin":"cache"`) || !strings.Contains(output.String(), `"found":true`) || !strings.Contains(output.String(), `"effective_context"`) {
 		t.Fatalf("inspect output = %s", output.String())
 	}
 }

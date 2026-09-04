@@ -9,6 +9,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/auditverify"
+	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -60,6 +61,22 @@ func TestReportRendersContentFreeContextRoutingAggregate(t *testing.T) {
 		if strings.Contains(report, forbidden) {
 			t.Fatalf("context routing aggregate exposed content %q: %s", forbidden, report)
 		}
+	}
+}
+
+func TestReportRendersModelProfilesWithoutTransportSecrets(t *testing.T) {
+	secretURL := "https://provider.example/v1"
+	report := buildReportMD(&reportData{StartedAt: time.Now(), ModelProfiles: []modelprofile.TelemetryProjection{{
+		Provider: "openai", ModelID: "model", Family: "family", Estimator: modelprofile.TelemetryValue[string]{Value: "bpe"},
+		Operator:     modelprofile.TelemetryValue[int]{Value: 8_192, Source: modelprofile.SourceOperator},
+		Effective:    modelprofile.TelemetryValue[int]{Value: 32_768, Source: modelprofile.SourceProviderRuntime},
+		Capabilities: map[string]modelprofile.TelemetryCapability{"tools": {State: modelprofile.CapabilityYes}},
+	}}}, "demo", "")
+	if !strings.Contains(report, "## Model Profiles") || !strings.Contains(report, "openai/model") || !strings.Contains(report, "Effective") {
+		t.Fatalf("model profile section missing: %s", report)
+	}
+	if strings.Contains(report, secretURL) || strings.Contains(report, "api-key") {
+		t.Fatalf("model profile report exposed transport data: %s", report)
 	}
 }
 

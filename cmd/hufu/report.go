@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/auditverify"
+	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -106,6 +107,7 @@ type reportData struct {
 	RuntimeWorksetError   string
 	CanonicalRunError     string
 	HistoricalTodoCount   int
+	ModelProfiles         []modelprofile.TelemetryProjection
 
 	// AuditResult is the independent audit re-verification of this run
 	// (spec.md §38), computed by calling auditverify.VerifyWorkspaceRun --
@@ -200,6 +202,11 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 	}
 	if d.EvidenceIdentity == "" {
 		d.EvidenceIdentity = "unavailable"
+	}
+	if tc.session != nil && d.SourceRunID != "run-unavailable" {
+		if profiles, err := team.LoadModelProfileTelemetry(tc.session.Workspace, d.SourceRunID); err == nil {
+			d.ModelProfiles = profiles
+		}
 	}
 	if tc.session != nil && d.RunResult != nil {
 		if result, err := auditverify.VerifyWorkspaceRun(context.Background(), tc.session.Workspace, d.RunResult.RunID, auditverify.VerifyOptions{}); err != nil {
@@ -487,6 +494,9 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		fmt.Fprintf(&b, "> ⚠️ Canonical run snapshot was not accepted: %s\n\n", reportSafeMetadata(data.CanonicalRunError, 240))
 	}
 	b.WriteString(renderReportAuditSection(data))
+	if len(data.ModelProfiles) > 0 {
+		b.WriteString(renderModelProfileSection(data.ModelProfiles))
+	}
 	if data.RunResult != nil {
 		b.WriteString("## Run Outcome\n\n")
 		fmt.Fprintf(&b, "- **Outcome:** `%s`\n", data.RunResult.Outcome)
@@ -769,6 +779,27 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	}
 
 	return utils.RedactSecrets(b.String())
+}
+
+func renderModelProfileSection(profiles []modelprofile.TelemetryProjection) string {
+	var b strings.Builder
+	b.WriteString("## Model Profiles\n\n")
+	b.WriteString("| Model | Family | Estimator | Operator | Catalog | Configured | Runtime | Effective | Max output | Capabilities |\n")
+	b.WriteString("|---|---|---|---:|---:|---:|---:|---:|---:|---|\n")
+	for _, profile := range profiles {
+		capabilities := make([]string, 0, len(profile.Capabilities))
+		for name, capability := range profile.Capabilities {
+			capabilities = append(capabilities, fmt.Sprintf("%s=%s", name, capability.State))
+		}
+		sort.Strings(capabilities)
+		fmt.Fprintf(&b, "| `%s/%s` | `%s` | `%s` | %d (%s) | %d (%s) | %d (%s) | %d (%s) | %d (%s) | %d (%s) | %s |\n",
+			reportSafeMetadata(profile.Provider, 80), reportSafeMetadata(profile.ModelID, 120), reportSafeMetadata(profile.Family, 80),
+			reportSafeMetadata(profile.Estimator.Value, 80), profile.Operator.Value, profile.Operator.Source, profile.Catalog.Value, profile.Catalog.Source, profile.Configured.Value, profile.Configured.Source,
+			profile.Runtime.Value, profile.Runtime.Source, profile.Effective.Value, profile.Effective.Source,
+			profile.MaxOutput.Value, profile.MaxOutput.Source, reportSafeMetadata(strings.Join(capabilities, ", "), 240))
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 func writeMemoryLearningReport(b *strings.Builder, report team.MemoryLearningReport) {

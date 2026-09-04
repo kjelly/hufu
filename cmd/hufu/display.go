@@ -20,6 +20,7 @@ import (
 	"github.com/muesli/termenv"
 
 	hulog "github.com/kjelly/hufu/internal/log"
+	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
@@ -160,6 +161,11 @@ type reporterState struct {
 func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEvent) {
 	width := previewTerminalWidth(120)
 	switch event.Type {
+	case "model_profile_resolved":
+		if event.ModelProfile != nil {
+			profile := event.ModelProfile
+			w.write(fmt.Sprintf("  %s model profile: %s/%s effective context %d (%s)\n", stepStyle.Render("│"), profile.Provider, profile.ModelID, profile.Effective.Value, profile.Effective.Source))
+		}
 	case "context_window_admission", "context_window_compaction_committed", "context_window_downshift":
 		if event.ContextWindowTelemetry != nil {
 			telemetry := event.ContextWindowTelemetry
@@ -1167,6 +1173,7 @@ type jsonStatusEvent struct {
 	Tool          string                            `json:"tool,omitempty"`
 	Time          string                            `json:"time"`
 	ContextWindow *team.ContextWindowTelemetryEvent `json:"context_window,omitempty"`
+	ModelProfile  *modelprofile.TelemetryProjection `json:"model_profile,omitempty"`
 }
 
 func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
@@ -1175,7 +1182,7 @@ func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
 		if notifier != nil {
 			notifier.NotifyWithData(event.Type, event.Agent, event.Message, event.Output, event.Data)
 		}
-		encoded := jsonStatusEvent{Type: event.Type, Team: event.TeamName, Agent: event.Agent, TodoID: event.TodoID, Model: event.Model, Message: event.Message, Tool: event.ToolName, Time: time.Now().UTC().Format(time.RFC3339Nano), ContextWindow: event.ContextWindowTelemetry}
+		encoded := jsonStatusEvent{Type: event.Type, Team: event.TeamName, Agent: event.Agent, TodoID: event.TodoID, Model: event.Model, Message: event.Message, Tool: event.ToolName, Time: time.Now().UTC().Format(time.RFC3339Nano), ContextWindow: event.ContextWindowTelemetry, ModelProfile: event.ModelProfile}
 		mu.Lock()
 		defer mu.Unlock()
 		_ = json.NewEncoder(os.Stderr).Encode(encoded)
@@ -1348,6 +1355,12 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 
 	return func(event team.StatusEvent) {
 		switch event.Type {
+		case "model_profile_resolved":
+			if event.ModelProfile != nil {
+				profile := event.ModelProfile
+				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render(fmt.Sprintf("model profile: %s/%s · context %d (%s)", profile.Provider, profile.ModelID, profile.Effective.Value, profile.Effective.Source))})
+			}
+
 		case "todos_updated":
 			if event.Todos != nil {
 				p.Send(tuipkg.TasksUpdatedMsg{Items: event.Todos})

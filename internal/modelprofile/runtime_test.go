@@ -149,6 +149,23 @@ func TestRuntimeCacheIdentitySeparatesProvidersAndOmitsAPIKey(t *testing.T) {
 	}
 }
 
+func TestRuntimeResolverNoRuntimeSkipsProviderIntrospection(t *testing.T) {
+	var factoryCalls int
+	resolver := NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+		factoryCalls++
+		return &splitRuntimeIntrospector{}
+	}, ProfileCacheOptions{})
+	request := testRuntimeRequest(testRuntimeProvider("secret"))
+	request.NoRuntime = true
+	profile, err := resolver.Resolve(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if factoryCalls != 0 || profile.EffectiveContext != 1_024 {
+		t.Fatalf("no-runtime resolution called provider or lost fallback: calls=%d profile=%#v", factoryCalls, profile)
+	}
+}
+
 func TestRuntimeCacheIdentityCanonicalizesProviderQualifiedModels(t *testing.T) {
 	local := providerintrospection.NewProviderRef("local", "local", "ollama", "http://127.0.0.1:11434/v1", "", false)
 	bare, err := Identity(local, "qwen3:8b")
@@ -559,6 +576,86 @@ func TestRuntimeCacheInvalidationDuringFlightRejectsStaleCommit(t *testing.T) {
 	cache.mu.Unlock()
 	if entry.process.RuntimeContext != 16_384 {
 		t.Fatalf("stale refresh overwrote fresh context=%d, want 16384", entry.process.RuntimeContext)
+	}
+}
+
+func TestRuntimeCacheProviderInvalidationClearsAllRuntimeEvidence(t *testing.T) {
+	introspector := &splitRuntimeIntrospector{
+		show:    providerintrospection.RuntimeModelInfo{ConfiguredContext: 65_536, ModelMaxContext: 131_072},
+		process: providerintrospection.RuntimeModelInfo{RuntimeContext: 32_768},
+	}
+	resolver := NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+		return introspector
+	}, ProfileCacheOptions{})
+	provider := testRuntimeProvider("secret")
+	request := testRuntimeRequest(provider)
+	request.Profile.Context.CatalogContext = 131_072
+	if _, err := resolver.Resolve(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.ObserveContext(provider, request.ModelID, 8_192); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.InvalidateProvider(provider); err != nil {
+		t.Fatal(err)
+	}
+	introspector.mu.Lock()
+	introspector.show = providerintrospection.RuntimeModelInfo{ConfiguredContext: 32_768, ModelMaxContext: 65_536}
+	introspector.process = providerintrospection.RuntimeModelInfo{RuntimeContext: 16_384}
+	introspector.mu.Unlock()
+	profile, err := resolver.Resolve(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	showCalls, psCalls := introspector.counts()
+	if showCalls != 2 || psCalls != 2 {
+		t.Fatalf("provider invalidation calls show=%d ps=%d, want 2 each", showCalls, psCalls)
+	}
+	if profile.EffectiveContext != 16_384 || profile.Sources.CatalogContext.Value != 131_072 {
+		t.Fatalf("runtime refresh did not preserve catalog or update runtime: %#v", profile)
+	}
+}
+
+func TestRuntimeCacheProviderInvalidationRejectsStaleRefresh(t *testing.T) {
+	cache := NewProfileCache(ProfileCacheOptions{Capacity: 1})
+	provider := testRuntimeProvider("secret")
+	identity, err := Identity(provider, "ollama/qwen3:8b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := runtimeCacheKey{identity}
+	block := make(chan struct{})
+	started := make(chan struct{}, 1)
+	done := make(chan refreshResult, 1)
+	oldContext, cancelOld := context.WithCancel(context.Background())
+	go func() {
+		done <- cache.refresh(oldContext, key, "show", func() (refreshResult, error) {
+			started <- struct{}{}
+			<-block
+			return refreshResult{info: providerintrospection.RuntimeModelInfo{ConfiguredContext: 65_536}}, nil
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stale show refresh did not start")
+	}
+	cache.InvalidateProvider(identity)
+	fresh := cache.refresh(context.Background(), key, "show", func() (refreshResult, error) {
+		return refreshResult{info: providerintrospection.RuntimeModelInfo{ConfiguredContext: 32_768}}, nil
+	})
+	if fresh.err != nil || fresh.info.ConfiguredContext != 32_768 {
+		t.Fatalf("fresh provider refresh = %#v", fresh)
+	}
+	cancelOld()
+	close(block)
+	select {
+	case result := <-done:
+		if result.err == nil {
+			t.Fatal("stale provider refresh was accepted")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stale provider refresh did not finish")
 	}
 }
 
