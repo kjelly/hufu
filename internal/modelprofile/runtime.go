@@ -648,6 +648,18 @@ func (r *RuntimeResolver) resolveRuntimeEvidence(ctx context.Context, request Ru
 	return evidence, nil
 }
 
+func canonicalProfileInput(request RuntimeResolutionRequest) ModelProfileInput {
+	input := request.Profile
+	input.ModelID = request.ModelID
+	if input.Provider == "" {
+		input.Provider = request.Provider.Provider
+		if input.Provider == "" {
+			input.Provider = request.Provider.Name
+		}
+	}
+	return input
+}
+
 func applyRuntimeEvidence(input *ModelProfileInput, provider providerintrospection.ProviderRef, evidence runtimeEvidence) {
 	if input == nil {
 		return
@@ -682,14 +694,21 @@ func applyRuntimeEvidence(input *ModelProfileInput, provider providerintrospecti
 }
 
 func (r *RuntimeResolver) Resolve(ctx context.Context, request RuntimeResolutionRequest) (ModelProfile, error) {
+	if request.ModelID == "" {
+		request.ModelID = request.Profile.ModelID
+	}
+	if request.NoRuntime {
+		input := canonicalProfileInput(request)
+		if r != nil {
+			applyCatalogEvidence(r.catalog, &input, request.Provider, request.ModelID, request.CatalogProvider)
+		}
+		return ResolveModelProfile(input), nil
+	}
 	if r == nil || r.cache == nil {
-		return ResolveModelProfile(request.Profile), nil
+		return ResolveModelProfile(canonicalProfileInput(request)), nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
-	}
-	if request.ModelID == "" {
-		request.ModelID = request.Profile.ModelID
 	}
 	identity, err := Identity(request.Provider, request.ModelID)
 	if err != nil {
@@ -708,14 +727,7 @@ func (r *RuntimeResolver) Resolve(ctx context.Context, request RuntimeResolution
 			return ResolveModelProfile(request.Profile), err
 		}
 
-		input := request.Profile
-		input.ModelID = request.ModelID
-		if input.Provider == "" {
-			input.Provider = request.Provider.Provider
-			if input.Provider == "" {
-				input.Provider = request.Provider.Name
-			}
-		}
+		input := canonicalProfileInput(request)
 		if r.catalog != nil {
 			applyCatalogEvidence(r.catalog, &input, request.Provider, request.ModelID, request.CatalogProvider)
 		}
