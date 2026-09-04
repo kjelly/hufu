@@ -21,24 +21,25 @@ import (
 func TestModelSpecRegistry(t *testing.T) {
 	reg := NewModelSpecRegistry()
 
-	t.Run("known models", func(t *testing.T) {
-		spec := reg.GetSpec("gpt-4o")
-		if spec.ContextWindow != 128000 {
-			t.Errorf("gpt-4o context window = %d, want 128000", spec.ContextWindow)
+	t.Run("new registries do not preload exact model records", func(t *testing.T) {
+		if len(reg.specs) != 0 {
+			t.Fatalf("new registry has %d preloaded specs, want empty", len(reg.specs))
 		}
-		if spec.Estimator != "tiktoken" {
-			t.Errorf("gpt-4o estimator = %q, want tiktoken", spec.Estimator)
-		}
-		if !spec.IsEstimated || spec.ContextWindowSource != "fallback" {
-			t.Errorf("gpt-4o provenance = %#v, want estimated fallback", spec)
+		for _, modelID := range []string{"gpt-4o", "gpt-4", "claude-3-5-sonnet", "claude-3-7-sonnet", "qwen2.5", "qwen3", "llama3.1", "llama3.2"} {
+			if _, ok := reg.specs[modelID]; ok {
+				t.Errorf("new registry preloaded exact spec for %q", modelID)
+			}
 		}
 	})
 
-	t.Run("static family entries are estimated fallbacks", func(t *testing.T) {
+	t.Run("family records are estimated fallbacks", func(t *testing.T) {
 		for _, modelID := range []string{"gpt-4o", "gpt-4", "claude-3-5-sonnet", "claude-3-7-sonnet", "qwen2.5", "qwen3", "llama3.1", "llama3.2"} {
 			spec := reg.GetSpec(modelID)
 			if !spec.IsEstimated || spec.ContextWindowSource != "fallback" {
 				t.Errorf("%s provenance = %#v, want estimated fallback", modelID, spec)
+			}
+			if _, ok := reg.specs[modelID]; ok {
+				t.Errorf("%s fallback was persisted as an exact registry entry", modelID)
 			}
 		}
 	})
@@ -48,8 +49,8 @@ func TestModelSpecRegistry(t *testing.T) {
 		if spec.Estimator != "qwen" {
 			t.Errorf("ollama/qwen3:8b estimator = %q, want qwen", spec.Estimator)
 		}
-		if spec.ContextWindow != 128000 {
-			t.Errorf("ollama/qwen3:8b context window = %d, want 128000", spec.ContextWindow)
+		if spec.ContextWindow != 128000 || !spec.IsEstimated || spec.ContextWindowSource != "fallback" {
+			t.Errorf("ollama/qwen3:8b fallback = %#v, want estimated fallback", spec)
 		}
 	})
 
@@ -58,8 +59,24 @@ func TestModelSpecRegistry(t *testing.T) {
 		if spec.ContextWindow != 128000 {
 			t.Errorf("fallback context window = %d, want 128000", spec.ContextWindow)
 		}
-		if !spec.IsEstimated {
-			t.Error("expected IsEstimated = true for unknown model")
+		if !spec.IsEstimated || spec.ContextWindowSource != "fallback" {
+			t.Errorf("unknown model provenance = %#v, want estimated fallback", spec)
+		}
+	})
+
+	t.Run("explicit registration and aliases", func(t *testing.T) {
+		reg.RegisterSpec(ModelContextSpec{
+			ModelID:            "Qwen3",
+			ContextWindow:      64000,
+			MaxOutputTokens:    8192,
+			SafetyMarginTokens: 1500,
+			Estimator:          "exact",
+		})
+		for _, modelID := range []string{"qwen3", "qwen3:8b", "ollama/qwen3:8b"} {
+			spec := reg.GetSpec(modelID)
+			if spec.ContextWindow != 64000 || spec.Estimator != "exact" {
+				t.Errorf("%s alias spec mismatch: %+v", modelID, spec)
+			}
 		}
 	})
 
@@ -75,6 +92,23 @@ func TestModelSpecRegistry(t *testing.T) {
 		if spec.ContextWindow != 64000 || spec.Estimator != "exact" {
 			t.Errorf("custom spec mismatch: %+v", spec)
 		}
+	})
+}
+
+func preserveRegisteredModelSpec(t *testing.T, registry *ModelSpecRegistry, modelID string) {
+	t.Helper()
+	key := strings.ToLower(strings.TrimSpace(modelID))
+	registry.mu.RLock()
+	previous, existed := registry.specs[key]
+	registry.mu.RUnlock()
+	t.Cleanup(func() {
+		registry.mu.Lock()
+		defer registry.mu.Unlock()
+		if existed {
+			registry.specs[key] = previous
+			return
+		}
+		delete(registry.specs, key)
 	})
 }
 
@@ -108,8 +142,7 @@ func TestEstimatorTokenCounts(t *testing.T) {
 
 func TestBoundEmptyEstimatorUsesConservativeLocalFallback(t *testing.T) {
 	const modelID = "bound-empty-estimator-fallback"
-	previous := GlobalModelSpecRegistry().GetSpec(modelID)
-	t.Cleanup(func() { GlobalModelSpecRegistry().RegisterSpec(previous) })
+	preserveRegisteredModelSpec(t, GlobalModelSpecRegistry(), modelID)
 	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
 		ModelID:   modelID,
 		Estimator: "qwen",
@@ -277,15 +310,8 @@ func TestDetectAndCacheOllamaContextLengths(t *testing.T) {
 
 func TestDetectAndCacheOllamaContextLengths_ProbesStaticFamilyModels(t *testing.T) {
 	var calls atomic.Int32
-	original := map[string]ModelContextSpec{
-		"qwen3":    globalRegistry.GetSpec("qwen3"),
-		"llama3.2": globalRegistry.GetSpec("llama3.2"),
-	}
-	t.Cleanup(func() {
-		for _, spec := range original {
-			globalRegistry.RegisterSpec(spec)
-		}
-	})
+	preserveRegisteredModelSpec(t, globalRegistry, "qwen3")
+	preserveRegisteredModelSpec(t, globalRegistry, "llama3.2")
 	srv := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if r.URL.Path != "/v1/models" {

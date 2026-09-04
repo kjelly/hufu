@@ -68,8 +68,7 @@ func TestCoordinatorRequestPreflightRetainsBoundAdmissionContext(t *testing.T) {
 
 func TestCoordinatorRequestPreflightUsesBoundEstimatorForPrepare(t *testing.T) {
 	const modelID = "preflight-bound-estimator-prepare"
-	previous := GlobalModelSpecRegistry().GetSpec(modelID)
-	t.Cleanup(func() { GlobalModelSpecRegistry().RegisterSpec(previous) })
+	preserveRegisteredModelSpec(t, GlobalModelSpecRegistry(), modelID)
 	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
 		ModelID:            modelID,
 		ContextWindow:      128_000,
@@ -117,8 +116,7 @@ func TestCoordinatorRequestPreflightUsesBoundEstimatorForPrepare(t *testing.T) {
 
 func TestCoordinatorPreflightShapingUsesBoundEstimator(t *testing.T) {
 	const modelID = "preflight-bound-estimator-shaping"
-	previous := GlobalModelSpecRegistry().GetSpec(modelID)
-	t.Cleanup(func() { GlobalModelSpecRegistry().RegisterSpec(previous) })
+	preserveRegisteredModelSpec(t, GlobalModelSpecRegistry(), modelID)
 	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
 		ModelID:   modelID,
 		Estimator: conservativeTokenEstimator,

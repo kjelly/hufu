@@ -77,8 +77,7 @@ func TestAdmissionContextProfileErrorUsesConservativeEstimator(t *testing.T) {
 
 func TestModelProfileRuntimeCatalogOutputOverridesLegacyFallback(t *testing.T) {
 	const modelID = "catalog-output-production-test"
-	previous := GlobalModelSpecRegistry().GetSpec(modelID)
-	t.Cleanup(func() { GlobalModelSpecRegistry().RegisterSpec(previous) })
+	preserveRegisteredModelSpec(t, GlobalModelSpecRegistry(), modelID)
 	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
 		ModelID:             modelID,
 		ContextWindow:       16_384,
@@ -130,8 +129,7 @@ func TestModelProfileRuntimeCatalogOutputOverridesLegacyFallback(t *testing.T) {
 
 func TestCatalogEstimatorIsBoundForProviderAdmission(t *testing.T) {
 	const modelID = "catalog-estimator-admission-test"
-	previous := GlobalModelSpecRegistry().GetSpec(modelID)
-	t.Cleanup(func() { GlobalModelSpecRegistry().RegisterSpec(previous) })
+	preserveRegisteredModelSpec(t, GlobalModelSpecRegistry(), modelID)
 	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
 		ModelID:             modelID,
 		ContextWindow:       64_000,

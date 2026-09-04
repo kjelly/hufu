@@ -12,8 +12,7 @@ import (
 
 func TestProviderAdmissionBoundZeroContextDoesNotUseGlobalRegistry(t *testing.T) {
 	modelID := "bound-zero-admission-model"
-	previous := GlobalModelSpecRegistry().GetSpec(modelID)
-	t.Cleanup(func() { GlobalModelSpecRegistry().RegisterSpec(previous) })
+	preserveRegisteredModelSpec(t, GlobalModelSpecRegistry(), modelID)
 	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
 		ModelID: modelID, ContextWindow: 32_768, MaxOutputTokens: 1_024,
 	})

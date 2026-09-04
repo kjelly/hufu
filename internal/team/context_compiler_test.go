@@ -334,8 +334,7 @@ func TestCompileWorkerContextUnboundUsesGlobalEstimator(t *testing.T) {
 func registerContextCompilerEstimatorTestModel(t *testing.T, modelID string) {
 	t.Helper()
 	registry := GlobalModelSpecRegistry()
-	previous := registry.GetSpec(modelID)
-	t.Cleanup(func() { registry.RegisterSpec(previous) })
+	preserveRegisteredModelSpec(t, registry, modelID)
 	registry.RegisterSpec(ModelContextSpec{
 		ModelID:            modelID,
 		ContextWindow:      128_000,

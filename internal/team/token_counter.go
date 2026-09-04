@@ -136,27 +136,8 @@ func warnEstimatedOnce(modelID, estimator string) {
 }
 
 func NewModelSpecRegistry() *ModelSpecRegistry {
-	r := &ModelSpecRegistry{
+	return &ModelSpecRegistry{
 		specs: make(map[string]ModelContextSpec),
-	}
-	r.initDefaults()
-	return r
-}
-
-func (r *ModelSpecRegistry) initDefaults() {
-	// Default model specs for known families
-	defaults := []ModelContextSpec{
-		{ModelID: "gpt-4o", ContextWindow: 128000, ContextWindowSource: "fallback", MaxOutputTokens: 16384, SafetyMarginTokens: 2000, Estimator: "tiktoken", IsEstimated: true},
-		{ModelID: "gpt-4", ContextWindow: 8192, ContextWindowSource: "fallback", MaxOutputTokens: 4096, SafetyMarginTokens: 1000, Estimator: "tiktoken", IsEstimated: true},
-		{ModelID: "claude-3-5-sonnet", ContextWindow: 200000, ContextWindowSource: "fallback", MaxOutputTokens: 8192, SafetyMarginTokens: 4000, Estimator: "claude", IsEstimated: true},
-		{ModelID: "claude-3-7-sonnet", ContextWindow: 200000, ContextWindowSource: "fallback", MaxOutputTokens: 8192, SafetyMarginTokens: 4000, Estimator: "claude", IsEstimated: true},
-		{ModelID: "qwen2.5", ContextWindow: 128000, ContextWindowSource: "fallback", MaxOutputTokens: 8192, SafetyMarginTokens: 2000, Estimator: "qwen", IsEstimated: true},
-		{ModelID: "qwen3", ContextWindow: 128000, ContextWindowSource: "fallback", MaxOutputTokens: 8192, SafetyMarginTokens: 2000, Estimator: "qwen", IsEstimated: true},
-		{ModelID: "llama3.1", ContextWindow: 128000, ContextWindowSource: "fallback", MaxOutputTokens: 8192, SafetyMarginTokens: 2000, Estimator: "llama", IsEstimated: true},
-		{ModelID: "llama3.2", ContextWindow: 128000, ContextWindowSource: "fallback", MaxOutputTokens: 8192, SafetyMarginTokens: 2000, Estimator: "llama", IsEstimated: true},
-	}
-	for _, spec := range defaults {
-		r.specs[spec.ModelID] = spec
 	}
 }
 
@@ -200,8 +181,8 @@ func RegisterConfiguredContextWindow(modelIDs []string, window int) {
 // /models endpoint for each model in modelIDs and registers its advertised
 // context length as an override in the global model spec registry, so
 // context-budget accounting reflects the model actually being talked to
-// instead of Hufu's static per-family fallback (spec.md item 2). Static
-// family entries are estimated fallbacks and remain eligible for probing.
+// instead of Hufu's per-family fallback (spec.md item 2). Family fallbacks
+// are estimated and remain eligible for probing.
 // Explicit operator values are the only entries excluded here because they
 // have higher authority than provider metadata.
 //
@@ -328,7 +309,8 @@ func (r *ModelSpecRegistry) GetSpec(modelID string) ModelContextSpec {
 		return spec
 	}
 
-	// Fallback estimation matching model families
+	// Fallback estimation matching model families. These values are conservative
+	// compatibility defaults, not provider or catalog metadata.
 	estimator := "estimated"
 	window := 128000
 	maxOutput := 4096
@@ -354,12 +336,13 @@ func (r *ModelSpecRegistry) GetSpec(modelID string) ModelContextSpec {
 	}
 
 	spec := ModelContextSpec{
-		ModelID:            modelID,
-		ContextWindow:      window,
-		MaxOutputTokens:    maxOutput,
-		SafetyMarginTokens: margin,
-		Estimator:          estimator,
-		IsEstimated:        true,
+		ModelID:             modelID,
+		ContextWindow:       window,
+		ContextWindowSource: "fallback",
+		MaxOutputTokens:     maxOutput,
+		SafetyMarginTokens:  margin,
+		Estimator:           estimator,
+		IsEstimated:         true,
 	}
 	// §5.3: record/log that this model's token counts are estimated, not exact.
 	warnEstimatedOnce(modelID, estimator)
