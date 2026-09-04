@@ -139,7 +139,11 @@ func (r *ModelProfileRuntime) Diagnostic(ctx context.Context, providerName, mode
 	if r == nil || r.manager == nil {
 		return modelprofile.ModelProfile{}, fmt.Errorf("model profile runtime unavailable")
 	}
-	ref, err := r.manager.ResolveProviderRef(modelID)
+	qualifiedModelID := modelID
+	if strings.TrimSpace(providerName) != "" {
+		qualifiedModelID = providerName + "/" + modelID
+	}
+	ref, err := r.manager.ResolveProviderRef(qualifiedModelID)
 	if err != nil {
 		return modelprofile.ModelProfile{}, err
 	}

@@ -330,17 +330,17 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return nil, c.persistPreCancelledDirectAgent(ctx, resolvedName, task, directModel, originalCancellation)
 	}
 	ctx = withoutCoordinatorRequestPreflight(ctx)
-	ctx, directInvocation, err := c.resolveProviderBoundInvocationContext(ctx, directModel, agentDef)
-	if err != nil {
-		c.finalizePublicInvocationFailure(err)
-		return nil, err
-	}
 	needsProviderBoundary := directModel != ""
 	if needsProviderBoundary {
 		if err := c.startProviderExecutionBoundary(ctx); err != nil {
 			c.finalizePublicInvocationFailure(err)
 			return nil, err
 		}
+	}
+	ctx, directInvocation, err := c.resolveProviderBoundInvocationContext(ctx, directModel, agentDef)
+	if err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return nil, err
 	}
 	if c.autoSkillsEnabled && c.sidecarModel != "" && len(c.getSkills()) > 0 {
 		c.setAutoLoadedSkills(c.matchSkillsWithSidecar(ctx, task))

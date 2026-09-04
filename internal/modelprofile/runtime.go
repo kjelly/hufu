@@ -773,10 +773,18 @@ func applyCatalogEvidence(catalog modelcatalog.Reader, input *ModelProfileInput,
 	if len(catalogProviderArg) > 0 {
 		lookupProvider = catalogProviderArg[0]
 	}
-	if strings.TrimSpace(lookupProvider) == "" {
-		lookupProvider = provider.Provider
+	lookupIdentity := provider
+	if strings.TrimSpace(lookupProvider) != "" {
+		// A diagnostic override deliberately selects a different catalog
+		// namespace. Its identity must not inherit the bound provider's alias
+		// rules, which are only valid for the original provider reference.
+		lookupIdentity = providerintrospection.ProviderRef{
+			Provider: lookupProvider,
+			Name:     lookupProvider,
+			Type:     provider.Type,
+		}
 	}
-	lookupProvider, catalogModelID := catalogLookupIdentity(providerintrospection.ProviderRef{Provider: lookupProvider, Name: lookupProvider, Type: provider.Type}, modelID)
+	lookupProvider, catalogModelID := catalogLookupIdentity(lookupIdentity, modelID)
 	result, found := catalog.Lookup(lookupProvider, catalogModelID)
 	if !found {
 		return
