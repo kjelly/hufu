@@ -3,8 +3,12 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 	"testing"
+
+	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
@@ -94,6 +98,83 @@ func TestModelProfileRuntimeCatalogOutputOverridesLegacyFallback(t *testing.T) {
 	admission := runtime.AdmissionContext(t.Context(), modelID, 0, 0, 0)
 	if admission.MaxOutputTokens != 2_048 {
 		t.Fatalf("catalog admission output = %d, want 2048", admission.MaxOutputTokens)
+	}
+}
+
+func TestCatalogEstimatorIsBoundForProviderAdmission(t *testing.T) {
+	const modelID = "catalog-estimator-admission-test"
+	previous := GlobalModelSpecRegistry().GetSpec(modelID)
+	t.Cleanup(func() { GlobalModelSpecRegistry().RegisterSpec(previous) })
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID:             modelID,
+		ContextWindow:       64_000,
+		Estimator:           "estimated",
+		ContextWindowSource: "fallback",
+		IsEstimated:         true,
+	})
+
+	catalog, err := modelcatalog.NewCatalog("test", []modelcatalog.CatalogModel{
+		{Provider: "ollama", ID: modelID, Family: "qwen3", Context: 64_000},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewModelProfileRuntimeWithCatalog(manager, true, catalog)
+
+	profile, err := runtime.Profile(t.Context(), modelID, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Family != "qwen3" || profile.Estimator != "qwen" {
+		t.Fatalf("catalog profile = %#v, want catalog family/estimator", profile)
+	}
+	operatorProfile, err := runtime.Profile(t.Context(), modelID, 48_000, 777)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operatorProfile.Family != "qwen3" || operatorProfile.Estimator != "qwen" ||
+		operatorProfile.EffectiveContext != 48_000 || operatorProfile.MaxOutputTokens != 777 {
+		t.Fatalf("operator profile = %#v, want catalog identity with operator context/output", operatorProfile)
+	}
+
+	bound := runtime.AdmissionContext(t.Context(), modelID, 0, 0, 0)
+	if bound.Estimator != "qwen" {
+		t.Fatalf("bound estimator = %q, want qwen", bound.Estimator)
+	}
+
+	request := agent.ProviderRequest{
+		ModelID:          modelID,
+		Messages:         []fantasy.Message{fantasy.NewUserMessage(strings.Repeat("admission payload ", 100))},
+		AdmissionContext: bound,
+	}
+	catalogTokens, err := defaultCounter.CountProviderRequest(t.Context(), modelID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyRequest := request
+	legacyRequest.AdmissionContext.Estimator = "estimated"
+	legacyTokens, err := defaultCounter.CountProviderRequest(t.Context(), modelID, legacyRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyTokens <= catalogTokens {
+		t.Fatalf("legacy tokens = %d, catalog tokens = %d; expected legacy estimator to be more conservative", legacyTokens, catalogTokens)
+	}
+
+	bound.ContextWindow = catalogTokens
+	request.AdmissionContext = bound
+	if err := (providerRequestAdmission{}).AdmitProviderRequest(t.Context(), request); err != nil {
+		t.Fatalf("catalog-estimator request rejected: %v", err)
+	}
+	legacyRequest.AdmissionContext.ContextWindow = catalogTokens
+	err = (providerRequestAdmission{}).AdmitProviderRequest(t.Context(), legacyRequest)
+	cannotFit, ok := errors.AsType[*CannotFitError](err)
+	if !ok || !cannotFit.ProvenNoSend {
+		t.Fatalf("legacy-estimator request error = %v, want proven pre-provider context rejection", err)
 	}
 }
 

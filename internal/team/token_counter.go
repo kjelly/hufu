@@ -460,8 +460,13 @@ func (tc *DefaultTokenCounter) CountProviderRequest(ctx context.Context, modelID
 	if err != nil {
 		return 0, err
 	}
-	spec := tc.registry.GetSpec(modelID)
-	return estimateTextTokens(string(data), spec.Estimator), nil
+	estimator := request.AdmissionContext.Estimator
+	if estimator == "" {
+		// Preserve compatibility for unbound requests and older bound contexts
+		// that predate the provider-bound estimator projection.
+		estimator = tc.registry.GetSpec(modelID).Estimator
+	}
+	return estimateTextTokens(string(data), estimator), nil
 }
 
 // estimateTextTokens calculates tokens using character density and model-family heuristics with conservative safety margin.

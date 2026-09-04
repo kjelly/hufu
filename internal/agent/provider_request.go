@@ -40,6 +40,7 @@ type ProviderAdmissionContext struct {
 	ContextWindow       int
 	MaxOutputTokens     int
 	SafetyMarginTokens  int
+	Estimator           string
 	ContextWindowSource string
 	IsEstimated         bool
 }

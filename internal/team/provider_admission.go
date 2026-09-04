@@ -89,6 +89,7 @@ func modelContextSpecForProviderRequest(request agent.ProviderRequest) ModelCont
 			ContextWindowSource: bound.ContextWindowSource,
 			MaxOutputTokens:     bound.MaxOutputTokens,
 			SafetyMarginTokens:  bound.SafetyMarginTokens,
+			Estimator:           bound.Estimator,
 			IsEstimated:         bound.IsEstimated,
 		}
 	}

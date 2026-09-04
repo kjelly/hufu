@@ -100,7 +100,6 @@ func (r *ModelProfileRuntime) profileForProvider(ctx context.Context, modelID st
 	input := modelprofile.ModelProfileInput{
 		ModelID:   modelID,
 		Provider:  ref.Provider,
-		Family:    legacy.Estimator,
 		Estimator: modelprofile.EstimatorEvidence{Fallback: legacy.Estimator, FallbackProvenance: "legacy_model_config"},
 		Context: modelprofile.ContextResolutionInput{
 			Provider:        ref.Type,
@@ -158,8 +157,9 @@ func (r *ModelProfileRuntime) AdmissionContext(ctx context.Context, modelID stri
 	return agent.ProviderAdmissionContext{
 		ModelID: modelID, ProviderIdentity: ref.Provider, ProviderBaseURL: ref.BaseURL, Bound: true,
 		ContextWindow: profile.EffectiveContext, MaxOutputTokens: profile.MaxOutputTokens,
-		SafetyMarginTokens: safetyMargin, ContextWindowSource: string(profile.Sources.EffectiveContext.Source),
-		IsEstimated: profile.Sources.EffectiveContext.Confidence == "estimated",
+		SafetyMarginTokens: safetyMargin, Estimator: profile.Estimator,
+		ContextWindowSource: string(profile.Sources.EffectiveContext.Source),
+		IsEstimated:         profile.Sources.EffectiveContext.Confidence == "estimated",
 	}
 }
 
