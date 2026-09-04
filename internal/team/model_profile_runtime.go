@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -35,9 +36,10 @@ type ResolvedModelProfile struct {
 }
 
 type providerBoundInvocationContext struct {
-	ModelID          string
-	AdmissionContext agent.ProviderAdmissionContext
-	ModelContext     ModelContextSpec
+	ModelID           string
+	AdmissionContext  agent.ProviderAdmissionContext
+	ModelContext      ModelContextSpec
+	ProfileResolution modelprofile.TelemetryProjection
 }
 
 type providerBoundInvocationContextKey struct{}
@@ -197,16 +199,23 @@ func (r *ModelProfileRuntime) ResolveAdmission(ctx context.Context, modelID stri
 		result.Admission = admissionContextFromProfile(modelID, ref, profile, safetyMargin)
 	}
 	result.ProfileResolution = modelprofile.TelemetryFromProfile(profile)
+	if result.Admission.IsBound() {
+		telemetry, _ := json.Marshal(result.ProfileResolution)
+		result.Admission.ProfileTelemetryJSON = string(telemetry)
+	}
 	return result
 }
 
 func admissionContextFromProfile(modelID string, ref providerintrospection.ProviderRef, profile modelprofile.ModelProfile, safetyMargin int) agent.ProviderAdmissionContext {
+	projection := modelprofile.TelemetryFromProfile(profile)
+	telemetry, _ := json.Marshal(projection)
 	return agent.ProviderAdmissionContext{
 		ModelID: modelID, ProviderIdentity: ref.Provider, ProviderBaseURL: ref.BaseURL, Bound: true,
 		ContextWindow: profile.EffectiveContext, MaxOutputTokens: profile.MaxOutputTokens,
 		SafetyMarginTokens: safetyMargin, Estimator: profile.Estimator,
-		ContextWindowSource: string(profile.Sources.EffectiveContext.Source),
-		IsEstimated:         profile.Sources.EffectiveContext.Confidence == "estimated",
+		ContextWindowSource:  string(profile.Sources.EffectiveContext.Source),
+		IsEstimated:          profile.Sources.EffectiveContext.Confidence == "estimated",
+		ProfileTelemetryJSON: string(telemetry),
 	}
 }
 
@@ -319,11 +328,11 @@ func (c *Coordinator) admissionContextForWithOutput(ctx context.Context, modelID
 // unavailable, and stores one immutable projection for all downstream
 // consumers of this invocation.
 func (c *Coordinator) resolveProviderBoundInvocationContext(ctx context.Context, modelID string, def *agent.AgentDef) (context.Context, providerBoundInvocationContext, error) {
-	return c.resolveProviderBoundInvocationContextWithOutputAndTelemetry(ctx, modelID, def, 0, true)
+	return c.resolveProviderBoundInvocationContextWithOutputAndTelemetry(ctx, modelID, def, 0)
 }
 
 func (c *Coordinator) resolveProviderBoundInvocationContextWithOutput(ctx context.Context, modelID string, def *agent.AgentDef, outputReservation int) (context.Context, providerBoundInvocationContext, error) {
-	return c.resolveProviderBoundInvocationContextWithOutputAndTelemetry(ctx, modelID, def, outputReservation, true)
+	return c.resolveProviderBoundInvocationContextWithOutputAndTelemetry(ctx, modelID, def, outputReservation)
 }
 
 // resolveProviderBoundInvocationContextSnapshot resolves the compatibility
@@ -332,10 +341,10 @@ func (c *Coordinator) resolveProviderBoundInvocationContextWithOutput(ctx contex
 // model-profile telemetry. The actual sidecar binder uses the reporting path
 // above immediately before the provider request.
 func (c *Coordinator) resolveProviderBoundInvocationContextSnapshot(ctx context.Context, modelID string, def *agent.AgentDef) (context.Context, providerBoundInvocationContext, error) {
-	return c.resolveProviderBoundInvocationContextWithOutputAndTelemetry(ctx, modelID, def, 0, false)
+	return c.resolveProviderBoundInvocationContextWithOutputAndTelemetry(ctx, modelID, def, 0)
 }
 
-func (c *Coordinator) resolveProviderBoundInvocationContextWithOutputAndTelemetry(ctx context.Context, modelID string, def *agent.AgentDef, outputReservation int, reportTelemetry bool) (context.Context, providerBoundInvocationContext, error) {
+func (c *Coordinator) resolveProviderBoundInvocationContextWithOutputAndTelemetry(ctx context.Context, modelID string, def *agent.AgentDef, outputReservation int) (context.Context, providerBoundInvocationContext, error) {
 	if strings.TrimSpace(modelID) == "" {
 		return ctx, providerBoundInvocationContext{}, nil
 	}
@@ -363,11 +372,8 @@ func (c *Coordinator) resolveProviderBoundInvocationContextWithOutputAndTelemetr
 	}
 	resolved := c.modelProfileRuntime.ResolveAdmission(ctx, modelID, operatorContext, maxOutput, 0)
 	bound := resolved.Admission
-	if bound.IsBound() && reportTelemetry {
-		if err := c.reportModelProfileResolved(resolved.ProfileResolution); err != nil {
-			return ctx, providerBoundInvocationContext{}, err
-		}
-	}
+	// Profile resolution is a pure immutable snapshot. The provider wrapper
+	// commits its telemetry only after acquiring the invocation slot.
 	if !bound.IsBound() {
 		return ctx, providerBoundInvocationContext{}, fmt.Errorf("provider-bound context unavailable for model %q", modelID)
 	}
@@ -375,9 +381,10 @@ func (c *Coordinator) resolveProviderBoundInvocationContextWithOutputAndTelemetr
 		return ctx, providerBoundInvocationContext{}, &ContextWindowMetadataUnavailableError{ModelID: modelID}
 	}
 	invocation := providerBoundInvocationContext{
-		ModelID:          modelID,
-		AdmissionContext: bound,
-		ModelContext:     modelContextSpecForProviderRequest(agent.ProviderRequest{ModelID: modelID, AdmissionContext: bound}),
+		ModelID:           modelID,
+		AdmissionContext:  bound,
+		ModelContext:      modelContextSpecForProviderRequest(agent.ProviderRequest{ModelID: modelID, AdmissionContext: bound}),
+		ProfileResolution: resolved.ProfileResolution,
 	}
 	return withProviderBoundInvocationContext(ctx, invocation), invocation, nil
 }

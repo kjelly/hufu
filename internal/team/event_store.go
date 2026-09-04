@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,6 +20,10 @@ import (
 )
 
 const eventStoreFile = "event_store.jsonl"
+
+// ErrEventStoreWriterUnavailable indicates that the event log cannot be
+// exclusively acquired for an append.
+var ErrEventStoreWriterUnavailable = errors.New("event store writer unavailable")
 
 const (
 	// eventStoreSchemaVersion is the current writer schema. Schema v1 remains
@@ -254,6 +259,36 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 			return RunEvent{}, fmt.Errorf("recover degraded event store: %w", err)
 		}
 	}
+	appendFile := es.f
+	if err := lockEventStoreFile(appendFile); err != nil {
+		return RunEvent{}, fmt.Errorf("acquire event store writer lock: %w", err)
+	}
+	locked := true
+	releaseWriterLock := func() error {
+		if !locked {
+			return nil
+		}
+		locked = false
+		return unlockEventStoreFile(appendFile)
+	}
+	defer func() { _ = releaseWriterLock() }()
+	failClosed := func(err error) (RunEvent, error) {
+		unlockErr := releaseWriterLock()
+		es.invalidateState(err)
+		if unlockErr != nil {
+			return RunEvent{}, errors.Join(err, fmt.Errorf("release event store writer lock: %w", unlockErr))
+		}
+		return RunEvent{}, err
+	}
+
+	state, err := es.scanFile(appendFile)
+	if err != nil {
+		return failClosed(fmt.Errorf("rescan event store before append: %w", err))
+	}
+	// The scan and publication are inside the interprocess lock so the
+	// idempotency index and chain head include every independent writer event.
+	es.publishState(state, appendFile, false)
+
 	// A failed Sync leaves durability uncertain: the event may nevertheless be
 	// visible after reopen. Treat a persisted idempotency key as success so a
 	// retry cannot fork the logical event stream with a duplicate observation.
@@ -326,17 +361,14 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 	line := append(data, '\n')
 	n, err := es.f.Write(line)
 	if err != nil {
-		es.invalidateState(fmt.Errorf("write run event: %w", err))
-		return RunEvent{}, fmt.Errorf("write run event: %w", err)
+		return failClosed(fmt.Errorf("write run event: %w", err))
 	}
 	if n != len(line) {
-		es.invalidateState(io.ErrShortWrite)
-		return RunEvent{}, fmt.Errorf("write run event: %w", io.ErrShortWrite)
+		return failClosed(fmt.Errorf("write run event: %w", io.ErrShortWrite))
 	}
 
 	if err := es.syncFile(); err != nil {
-		es.invalidateState(fmt.Errorf("sync run event: %w", err))
-		return RunEvent{}, fmt.Errorf("sync run event: %w", err)
+		return failClosed(fmt.Errorf("sync run event: %w", err))
 	}
 
 	es.sequence++
@@ -388,7 +420,7 @@ func (es *EventStore) reopenAndRescan() error {
 	}
 
 	old := es.f
-	es.publishState(state, f)
+	es.publishState(state, f, true)
 	if old != nil && old != f {
 		_ = old.Close()
 	}
@@ -405,7 +437,7 @@ func (es *EventStore) rescan() error {
 		es.invalidateState(err)
 		return err
 	}
-	es.publishState(state, es.f)
+	es.publishState(state, es.f, true)
 	return nil
 }
 
@@ -477,7 +509,7 @@ func (es *EventStore) scanFile(f *os.File) (eventStoreState, error) {
 	return state, nil
 }
 
-func (es *EventStore) publishState(state eventStoreState, f *os.File) {
+func (es *EventStore) publishState(state eventStoreState, f *os.File, refreshSync bool) {
 	es.lastEventID = state.lastEventID
 	es.lastHash = state.lastHash
 	es.sequence = state.sequence
@@ -486,7 +518,7 @@ func (es *EventStore) publishState(state eventStoreState, f *os.File) {
 	es.cachedEvents = state.events
 	es.idempotencyKeys = state.idempotencyKeys
 	es.f = f
-	if f != nil {
+	if f != nil && refreshSync {
 		es.syncFile = f.Sync
 	}
 	es.stateErr = nil

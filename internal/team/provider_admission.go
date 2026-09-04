@@ -2,11 +2,13 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/modelprofile"
 )
 
 // providerRequestAdmission is the team-owned policy adapter for the agent
@@ -78,6 +80,34 @@ func (a providerRequestAdmission) AcquireProviderInvocation(ctx context.Context,
 		return nil, err
 	}
 	return slot.release, nil
+}
+
+// CommitProviderInvocation is the durable profile commit used by the agent
+// package's universal provider wrapper. It consumes only the immutable,
+// provider-bound projection carried by admission; no second profile lookup is
+// permitted at this boundary.
+func (a providerRequestAdmission) CommitProviderInvocation(ctx context.Context, request agent.ProviderRequest) error {
+	if a.c == nil {
+		return fmt.Errorf("provider profile commit coordinator is unavailable")
+	}
+	if !request.AdmissionContext.IsBound() {
+		return fmt.Errorf("provider profile commit context is not provider-bound")
+	}
+	if request.InvocationID == "" {
+		return fmt.Errorf("provider profile commit invocation ID is empty")
+	}
+	if request.AdmissionContext.ProfileTelemetryJSON == "" {
+		return fmt.Errorf("provider profile commit projection is unavailable")
+	}
+	var projection modelprofile.TelemetryProjection
+	if err := json.Unmarshal([]byte(request.AdmissionContext.ProfileTelemetryJSON), &projection); err != nil {
+		return fmt.Errorf("decode provider profile commit projection: %w", err)
+	}
+	projection.InvocationID = request.InvocationID
+	if err := a.c.commitModelProfileResolved(ctx, projection); err != nil {
+		return err
+	}
+	return nil
 }
 
 func modelContextSpecForProviderRequest(request agent.ProviderRequest) ModelContextSpec {

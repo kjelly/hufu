@@ -15,6 +15,8 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/modelprofile"
+	"github.com/kjelly/hufu/internal/providerintrospection"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -94,9 +96,22 @@ func newWorkerProviderSurfaceCoordinator(t *testing.T, modelID, mode string) (*C
 	if err != nil {
 		t.Fatal(err)
 	}
+	const runID = "surface-run"
+	store, err := NewEventStore(workspace, runID, "surface-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 	c := &Coordinator{
-		session: session, projectDir: workspace, providerManager: providerManager, coreTools: agent.BuildAllAgentTools(workspace, tools.WithAllowedPaths([]string{workspace})),
-		taskTracker: NewTaskTracker(), sessionData: NewSession(), sessionTime: time.Now(), executionRunID: "surface-run", reportStatus: func(StatusEvent) {},
+		session: session, projectDir: workspace, providerManager: providerManager,
+		modelProfileRuntime: &ModelProfileRuntime{
+			manager: providerManager,
+			resolver: modelprofile.NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+				return auxiliaryProfileIntrospector{}
+			}, modelprofile.ProfileCacheOptions{}),
+		},
+		coreTools:   agent.BuildAllAgentTools(workspace, tools.WithAllowedPaths([]string{workspace})),
+		taskTracker: NewTaskTracker(), sessionData: NewSession(), sessionTime: time.Now(), eventStore: store, executionRunID: runID, reportStatus: func(StatusEvent) {},
 		providerBoundaryStart: func(context.Context, string) error { return nil },
 	}
 	return c, def, capture
@@ -218,6 +233,9 @@ func TestPlanReviewerUsesReviewerSurfaceAfterInheritedCoordinatorPreflight(t *te
 	reviewer, err := c.getPlanReviewer(parentCtx, todoID)
 	if err != nil {
 		t.Fatalf("getPlanReviewer: %v", err)
+	}
+	if !reviewer.providerBoundInvocationContext.AdmissionContext.IsBound() {
+		t.Fatalf("plan reviewer provider context = %#v, want bound context", reviewer.providerBoundInvocationContext)
 	}
 	if _, _, execErr, reviewErr := reviewer.review(parentCtx, "1. inspect the change"); execErr != nil || reviewErr != nil {
 		t.Fatalf("plan reviewer review: execution error=%v review error=%v", execErr, reviewErr)

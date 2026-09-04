@@ -1,6 +1,7 @@
 package team
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -13,10 +14,31 @@ import (
 // succeeds, so callers can fail closed before constructing or invoking a
 // provider model when persistence is unavailable.
 func (c *Coordinator) reportModelProfileResolved(projection modelprofile.TelemetryProjection) error {
+	return c.commitModelProfileResolved(context.Background(), projection)
+}
+
+func (c *Coordinator) commitModelProfileResolved(ctx context.Context, projection modelprofile.TelemetryProjection) error {
 	if c == nil {
-		return nil
+		return fmt.Errorf("persist model profile resolved: coordinator is unavailable")
 	}
-	if err := c.emitEvent(string(EventModelProfileResolved), "coordinator", "", projection); err != nil {
+	if c.eventStore == nil {
+		return fmt.Errorf("persist model profile resolved: event store is unavailable")
+	}
+	if c.eventStore.closed || c.eventStore.f == nil || c.eventStore.syncFile == nil || c.eventStore.degraded || !c.eventStore.stateValid {
+		return fmt.Errorf("persist model profile resolved: event store is unusable")
+	}
+	if projection.InvocationID == "" {
+		projection.InvocationID = fmt.Sprintf("legacy-profile-%d", c.eventStore.sequence+1)
+	}
+	payload, err := json.Marshal(projection)
+	if err != nil {
+		return fmt.Errorf("marshal model profile resolved: %w", err)
+	}
+	key := "model-profile-resolved:" + projection.InvocationID
+	if _, err := c.eventStore.AppendPersistedContext(ctx, RunEvent{
+		Type: string(EventModelProfileResolved), Actor: "coordinator",
+		IdempotencyKey: key, Payload: payload,
+	}); err != nil {
 		return fmt.Errorf("persist model profile resolved: %w", err)
 	}
 	status := c.newEvent(string(EventModelProfileResolved)).

@@ -26,6 +26,7 @@ type TelemetryCapability struct {
 // credentials, headers, and raw provider responses are intentionally absent.
 type TelemetryProjection struct {
 	SchemaVersion int                    `json:"schema_version"`
+	InvocationID  string                 `json:"invocation_id,omitempty"`
 	ModelID       string                 `json:"model_id"`
 	Provider      string                 `json:"provider"`
 	Family        string                 `json:"family,omitempty"`

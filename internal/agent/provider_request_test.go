@@ -126,10 +126,12 @@ func TestAdmissionCountsSerializedToolsAndMultimodalParts(t *testing.T) {
 }
 
 type recordingAdmission struct {
-	mu       sync.Mutex
-	requests []ProviderRequest
-	limiter  InvocationLimiter
-	err      error
+	mu        sync.Mutex
+	requests  []ProviderRequest
+	commits   []ProviderRequest
+	limiter   InvocationLimiter
+	err       error
+	commitErr error
 }
 
 func (a *recordingAdmission) AdmitProviderRequest(_ context.Context, request ProviderRequest) error {
@@ -137,6 +139,13 @@ func (a *recordingAdmission) AdmitProviderRequest(_ context.Context, request Pro
 	defer a.mu.Unlock()
 	a.requests = append(a.requests, request)
 	return a.err
+}
+
+func (a *recordingAdmission) CommitProviderInvocation(_ context.Context, request ProviderRequest) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.commits = append(a.commits, request)
+	return a.commitErr
 }
 
 func (a *recordingAdmission) AcquireProviderInvocation(ctx context.Context, modelID string) (func(), error) {
@@ -252,6 +261,53 @@ func TestBoundAdmissionContextCoversAllLanguageModelMethods(t *testing.T) {
 		if request.ModelID != bound.ModelID || request.AdmissionContext != bound {
 			t.Errorf("method %d provider request = %#v, want model/context %q/%#v", index, request, bound.ModelID, bound)
 		}
+	}
+	if len(admission.commits) != 4 {
+		t.Fatalf("provider commits = %d, want four", len(admission.commits))
+	}
+	seenInvocationIDs := make(map[string]struct{}, len(admission.commits))
+	for index, request := range admission.commits {
+		if request.InvocationID == "" {
+			t.Errorf("method %d provider invocation ID is empty", index)
+		}
+		if _, exists := seenInvocationIDs[request.InvocationID]; exists {
+			t.Errorf("method %d reused provider invocation ID %q", index, request.InvocationID)
+		}
+		seenInvocationIDs[request.InvocationID] = struct{}{}
+		if request.AdmissionContext != bound {
+			t.Errorf("method %d committed admission context = %#v, want %#v", index, request.AdmissionContext, bound)
+		}
+	}
+}
+
+func TestAdmittedStreamReleasesProviderSlotWhenCommitFails(t *testing.T) {
+	commitErr := errors.New("profile commit failed")
+	for _, test := range []struct {
+		name string
+		call func(fantasy.LanguageModel) error
+	}{
+		{name: "stream", call: func(model fantasy.LanguageModel) error {
+			_, err := model.Stream(t.Context(), fantasy.Call{})
+			return err
+		}},
+		{name: "stream object", call: func(model fantasy.LanguageModel) error {
+			_, err := model.StreamObject(t.Context(), fantasy.ObjectCall{})
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			limiter := newCapacityLimiter(1)
+			admission := &recordingAdmission{limiter: limiter, commitErr: commitErr}
+			wrapped := NewAdmittedLanguageModel("local/model", &countingLanguageModel{}, admission)
+			if err := test.call(wrapped); !errors.Is(err, commitErr) {
+				t.Fatalf("provider error = %v, want %v", err, commitErr)
+			}
+			if got := limiter.active.Load(); got != 0 {
+				t.Fatalf("active slots after commit failure = %d, want zero", got)
+			}
+			assertReleaseCount(t, limiter, 1)
+			assertNoDoubleRelease(t, limiter)
+		})
 	}
 }
 
