@@ -673,7 +673,7 @@ func (c *Coordinator) Sidecar() *sidecar.Sidecar {
 		return c.sidecarInst
 	}
 	ctx := c.providerInvocationContext()
-	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, c.sidecarModel, nil)
+	ctx, invocation, err := c.resolveProviderBoundInvocationContextSnapshot(ctx, c.sidecarModel, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ sidecar model %q unavailable: %v (auto-skills and skill matching disabled — set --sidecar-model to a working model to enable)\n", c.sidecarModel, err)
 		return nil
@@ -701,7 +701,7 @@ func (c *Coordinator) GuardSidecar() *sidecar.Sidecar {
 		return c.guardInst
 	}
 	ctx := c.providerInvocationContext()
-	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, c.guardModel, nil)
+	ctx, invocation, err := c.resolveProviderBoundInvocationContextSnapshot(ctx, c.guardModel, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ guard model %q unavailable: %v (guard review disabled — tool calls will be denied until a working model is configured)\n", c.guardModel, err)
 		return nil
@@ -732,7 +732,7 @@ func (c *Coordinator) JudgeSidecar() *sidecar.Sidecar {
 		return c.judgeInst
 	}
 	ctx := c.providerInvocationContext()
-	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, c.judgeModel, nil)
+	ctx, invocation, err := c.resolveProviderBoundInvocationContextSnapshot(ctx, c.judgeModel, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ judge model %q unavailable: %v (multi-model results fall back to concatenation merge)\n", c.judgeModel, err)
 		return nil

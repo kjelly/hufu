@@ -319,10 +319,23 @@ func (c *Coordinator) admissionContextForWithOutput(ctx context.Context, modelID
 // unavailable, and stores one immutable projection for all downstream
 // consumers of this invocation.
 func (c *Coordinator) resolveProviderBoundInvocationContext(ctx context.Context, modelID string, def *agent.AgentDef) (context.Context, providerBoundInvocationContext, error) {
-	return c.resolveProviderBoundInvocationContextWithOutput(ctx, modelID, def, 0)
+	return c.resolveProviderBoundInvocationContextWithOutputAndTelemetry(ctx, modelID, def, 0, true)
 }
 
 func (c *Coordinator) resolveProviderBoundInvocationContextWithOutput(ctx context.Context, modelID string, def *agent.AgentDef, outputReservation int) (context.Context, providerBoundInvocationContext, error) {
+	return c.resolveProviderBoundInvocationContextWithOutputAndTelemetry(ctx, modelID, def, outputReservation, true)
+}
+
+// resolveProviderBoundInvocationContextSnapshot resolves the compatibility
+// admission context used while constructing a Hufu-owned auxiliary model. A
+// construction snapshot is not an invocation and therefore must not publish
+// model-profile telemetry. The actual sidecar binder uses the reporting path
+// above immediately before the provider request.
+func (c *Coordinator) resolveProviderBoundInvocationContextSnapshot(ctx context.Context, modelID string, def *agent.AgentDef) (context.Context, providerBoundInvocationContext, error) {
+	return c.resolveProviderBoundInvocationContextWithOutputAndTelemetry(ctx, modelID, def, 0, false)
+}
+
+func (c *Coordinator) resolveProviderBoundInvocationContextWithOutputAndTelemetry(ctx context.Context, modelID string, def *agent.AgentDef, outputReservation int, reportTelemetry bool) (context.Context, providerBoundInvocationContext, error) {
 	if strings.TrimSpace(modelID) == "" {
 		return ctx, providerBoundInvocationContext{}, nil
 	}
@@ -350,7 +363,7 @@ func (c *Coordinator) resolveProviderBoundInvocationContextWithOutput(ctx contex
 	}
 	resolved := c.modelProfileRuntime.ResolveAdmission(ctx, modelID, operatorContext, maxOutput, 0)
 	bound := resolved.Admission
-	if bound.IsBound() {
+	if bound.IsBound() && reportTelemetry {
 		if err := c.reportModelProfileResolved(resolved.ProfileResolution); err != nil {
 			return ctx, providerBoundInvocationContext{}, err
 		}
