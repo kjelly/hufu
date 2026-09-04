@@ -8,6 +8,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/modelcatalog"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/providerintrospection"
 )
@@ -40,6 +41,59 @@ func TestAdmissionContextForAuxiliaryUsesConfiguredTeamMaxOutput(t *testing.T) {
 	bound := c.admissionContextFor(t.Context(), "auxiliary-model", nil)
 	if bound.MaxOutputTokens != 4096 {
 		t.Fatalf("auxiliary admission max output = %d, want configured team value 4096 (provider advertised 256)", bound.MaxOutputTokens)
+	}
+}
+
+func TestModelProfileRuntimeCatalogOutputOverridesLegacyFallback(t *testing.T) {
+	const modelID = "catalog-output-production-test"
+	previous := GlobalModelSpecRegistry().GetSpec(modelID)
+	t.Cleanup(func() { GlobalModelSpecRegistry().RegisterSpec(previous) })
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID:             modelID,
+		ContextWindow:       16_384,
+		MaxOutputTokens:     512,
+		SafetyMarginTokens:  64,
+		ContextWindowSource: "fallback",
+		IsEstimated:         true,
+	})
+
+	catalog, err := modelcatalog.NewCatalog("test", []modelcatalog.CatalogModel{{
+		Provider: "ollama", ID: modelID, Context: 32_768, Output: 2_048,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &ModelProfileRuntime{
+		manager: manager,
+		resolver: modelprofile.NewRuntimeResolverWithCatalog(
+			func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector { return nil },
+			modelprofile.ProfileCacheOptions{}, catalog,
+		),
+	}
+
+	profile, err := runtime.Profile(t.Context(), modelID, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.MaxOutputTokens != 2_048 || profile.Sources.MaxOutputTokens.Source != modelprofile.SourceCatalog {
+		t.Fatalf("catalog output = %#v, want 2048 from catalog", profile.Sources.MaxOutputTokens)
+	}
+
+	operatorProfile, err := runtime.Profile(t.Context(), modelID, 0, 4_096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operatorProfile.MaxOutputTokens != 4_096 || operatorProfile.Sources.MaxOutputTokens.Source != modelprofile.SourceOperator {
+		t.Fatalf("operator output = %#v, want 4096 from operator", operatorProfile.Sources.MaxOutputTokens)
+	}
+
+	admission := runtime.AdmissionContext(t.Context(), modelID, 0, 0, 0)
+	if admission.MaxOutputTokens != 2_048 {
+		t.Fatalf("catalog admission output = %d, want 2048", admission.MaxOutputTokens)
 	}
 }
 

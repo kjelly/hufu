@@ -121,16 +121,16 @@ type CapabilitySources struct {
 // EstimatorEvidence contains tokenizer-estimator hints ordered by authority.
 // Estimators are hints rather than claims about exact tokenizer behavior.
 type EstimatorEvidence struct {
-	Operator                 string
-	ProviderRuntime          string
-	ProviderMetadata         string
-	Catalog                  string
-	Fallback                 string
-	OperatorProvenance       string
-	ProviderRuntimeProvenance string
+	Operator                   string
+	ProviderRuntime            string
+	ProviderMetadata           string
+	Catalog                    string
+	Fallback                   string
+	OperatorProvenance         string
+	ProviderRuntimeProvenance  string
 	ProviderMetadataProvenance string
-	CatalogProvenance        string
-	FallbackProvenance       string
+	CatalogProvenance          string
+	FallbackProvenance         string
 }
 
 // ModelProfile is the canonical model metadata profile. Context values are
@@ -166,20 +166,20 @@ type ModelProfile struct {
 // ModelProfileSources preserves all context provenance, including candidates
 // which lost resolution to a higher-authority source.
 type ModelProfileSources struct {
-	OperatorContext         ResolvedValue[int] `json:"operator_context,omitzero"`
-	RuntimeContext          ResolvedValue[int] `json:"runtime_context,omitzero"`
-	ConfiguredContext       ResolvedValue[int] `json:"configured_context,omitzero"`
-	ModelInfoContext        ResolvedValue[int] `json:"model_info_context,omitzero"`
-	ProviderMetadataContext ResolvedValue[int] `json:"provider_metadata_context,omitzero"`
-	ObservedContext         ResolvedValue[int] `json:"observed_context,omitzero"`
-	CatalogContext          ResolvedValue[int] `json:"catalog_context,omitzero"`
-	FallbackContext         ResolvedValue[int] `json:"fallback_context,omitzero"`
-	ModelMaxContext         ResolvedValue[int] `json:"model_max_context,omitzero"`
-	EffectiveContext        ResolvedValue[int] `json:"effective_context,omitzero"`
-	MaxOutputTokens         ResolvedValue[int] `json:"max_output_tokens,omitzero"`
-	Capabilities            CapabilitySources  `json:"capabilities,omitzero"`
-	Estimator                ResolvedValue[string] `json:"estimator,omitzero"`
-	EstimatorProvenance      string              `json:"estimator_provenance,omitempty"`
+	OperatorContext         ResolvedValue[int]    `json:"operator_context,omitzero"`
+	RuntimeContext          ResolvedValue[int]    `json:"runtime_context,omitzero"`
+	ConfiguredContext       ResolvedValue[int]    `json:"configured_context,omitzero"`
+	ModelInfoContext        ResolvedValue[int]    `json:"model_info_context,omitzero"`
+	ProviderMetadataContext ResolvedValue[int]    `json:"provider_metadata_context,omitzero"`
+	ObservedContext         ResolvedValue[int]    `json:"observed_context,omitzero"`
+	CatalogContext          ResolvedValue[int]    `json:"catalog_context,omitzero"`
+	FallbackContext         ResolvedValue[int]    `json:"fallback_context,omitzero"`
+	ModelMaxContext         ResolvedValue[int]    `json:"model_max_context,omitzero"`
+	EffectiveContext        ResolvedValue[int]    `json:"effective_context,omitzero"`
+	MaxOutputTokens         ResolvedValue[int]    `json:"max_output_tokens,omitzero"`
+	Capabilities            CapabilitySources     `json:"capabilities,omitzero"`
+	Estimator               ResolvedValue[string] `json:"estimator,omitzero"`
+	EstimatorProvenance     string                `json:"estimator_provenance,omitempty"`
 }
 
 // ModelProfileInput supplies identity, capability evidence, context evidence,

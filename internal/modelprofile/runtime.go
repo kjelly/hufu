@@ -496,6 +496,15 @@ type RuntimeResolver struct {
 	catalog modelcatalog.Reader
 }
 
+type runtimeEvidence struct {
+	show       providerintrospection.RuntimeModelInfo
+	process    providerintrospection.RuntimeModelInfo
+	showOK     bool
+	processOK  bool
+	generation uint64
+	residency  *cacheResidency
+}
+
 func maxOutputSourceRank(source MetadataSource) int {
 	switch source {
 	case SourceOperator:
@@ -538,6 +547,98 @@ func newRuntimeResolver(factory IntrospectorFactory, cache *ProfileCache, catalo
 	}
 }
 
+func (r *RuntimeResolver) resolveRuntimeEvidence(ctx context.Context, request RuntimeResolutionRequest, resolveKey runtimeCacheKey, introspector providerintrospection.ModelIntrospector, evidence runtimeEvidence) (runtimeEvidence, error) {
+	entry, now, generation, residency, err := r.cache.snapshotContext(ctx, resolveKey)
+	if err != nil {
+		return evidence, err
+	}
+	evidence.generation = generation
+	evidence.residency = residency
+	if entry.showOK && now.Sub(entry.showAt) < r.cache.showTTL {
+		evidence.show, evidence.showOK = entry.show, true
+	}
+	if entry.psFetched && now.Sub(entry.psAt) < r.cache.psTTL {
+		evidence.process, evidence.processOK = entry.process, true
+	}
+	if introspector != nil && !evidence.showOK {
+		if split, ok := introspector.(providerintrospection.ModelShowIntrospector); ok {
+			result := r.cache.refresh(ctx, resolveKey, "show", func() (refreshResult, error) {
+				info, fetchErr := split.InspectShow(ctx, request.Provider, request.ModelID)
+				return refreshResult{info: info}, fetchErr
+			})
+			if result.err == nil {
+				evidence.show, evidence.showOK = result.info, true
+			}
+		} else {
+			result := r.cache.refresh(ctx, resolveKey, "show", func() (refreshResult, error) {
+				info, fetchErr := introspector.InspectModel(ctx, request.Provider, request.ModelID)
+				return refreshResult{info: info}, fetchErr
+			})
+			if result.err == nil {
+				evidence.show, evidence.showOK = result.info, true
+				evidence.process, evidence.processOK = result.info, result.info.RuntimeContext > 0
+			}
+		}
+	}
+	if introspector != nil && !evidence.processOK {
+		// The show flight may have been shared with another resolver that is
+		// already refreshing ps. Re-read the cache after waiting for show so
+		// this resolver joins that ps flight instead of issuing a duplicate.
+		entry, now, _, _, err = r.cache.snapshotContext(ctx, resolveKey)
+		if err != nil {
+			return evidence, err
+		}
+		if entry.psFetched && now.Sub(entry.psAt) < r.cache.psTTL {
+			evidence.process, evidence.processOK = entry.process, true
+		}
+	}
+	if introspector != nil && !evidence.processOK {
+		if split, ok := introspector.(providerintrospection.ModelProcessIntrospector); ok {
+			result := r.cache.refresh(ctx, resolveKey, "ps", func() (refreshResult, error) {
+				info, found, fetchErr := split.InspectProcess(ctx, request.Provider, request.ModelID)
+				return refreshResult{info: info, found: found}, fetchErr
+			})
+			if result.err == nil {
+				evidence.process, evidence.processOK = result.info, result.found
+			}
+		}
+	}
+	return evidence, nil
+}
+
+func applyRuntimeEvidence(input *ModelProfileInput, provider providerintrospection.ProviderRef, evidence runtimeEvidence) {
+	if input == nil {
+		return
+	}
+	if evidence.showOK {
+		if evidence.show.Family != "" {
+			input.Family = evidence.show.Family
+			input.Estimator.ProviderRuntime = estimatorForFamily(evidence.show.Family)
+			input.Estimator.ProviderRuntimeProvenance = "provider_family_derived"
+		}
+		if evidence.show.ConfiguredContext > 0 {
+			input.Context.ConfiguredContext = evidence.show.ConfiguredContext
+		}
+		if evidence.show.ModelMaxContext > 0 {
+			if strings.EqualFold(input.Provider, "ollama") || strings.EqualFold(provider.Type, "ollama") {
+				input.Context.ModelInfoContext = evidence.show.ModelMaxContext
+			} else {
+				input.Context.ProviderMetadataContext = evidence.show.ModelMaxContext
+			}
+		}
+		input.MaxOutputTokens = mergeMaxOutputTokens(input.MaxOutputTokens, evidence.show.MaxOutputTokens)
+		applyCapabilityEvidence(&input.Capabilities, evidence.show.Capabilities, false)
+		applyCapabilityStates(&input.Capabilities, evidence.show.CapabilityEvidence, false)
+	}
+	if evidence.processOK && evidence.process.RuntimeContext > 0 {
+		input.Context.RuntimeContext = evidence.process.RuntimeContext
+	}
+	if evidence.processOK {
+		applyCapabilityEvidence(&input.Capabilities, evidence.process.Capabilities, true)
+		applyCapabilityStates(&input.Capabilities, evidence.process.CapabilityEvidence, true)
+	}
+}
+
 func (r *RuntimeResolver) Resolve(ctx context.Context, request RuntimeResolutionRequest) (ModelProfile, error) {
 	if r == nil || r.cache == nil {
 		return ResolveModelProfile(request.Profile), nil
@@ -556,62 +657,13 @@ func (r *RuntimeResolver) Resolve(ctx context.Context, request RuntimeResolution
 	if r.factory != nil {
 		introspector = r.factory(request.Provider)
 	}
-	var show, process providerintrospection.RuntimeModelInfo
-	var showOK, processOK bool
 	resolveKey := runtimeCacheKey{identity}
+	var evidence runtimeEvidence
 	for {
-		entry, now, generation, residency, err := r.cache.snapshotContext(ctx, resolveKey)
+		var err error
+		evidence, err = r.resolveRuntimeEvidence(ctx, request, resolveKey, introspector, evidence)
 		if err != nil {
 			return ResolveModelProfile(request.Profile), err
-		}
-		if entry.showOK && now.Sub(entry.showAt) < r.cache.showTTL {
-			show, showOK = entry.show, true
-		}
-		if entry.psFetched && now.Sub(entry.psAt) < r.cache.psTTL {
-			process, processOK = entry.process, true
-		}
-		if introspector != nil && !showOK {
-			if split, ok := introspector.(providerintrospection.ModelShowIntrospector); ok {
-				result := r.cache.refresh(ctx, runtimeCacheKey{identity}, "show", func() (refreshResult, error) {
-					info, fetchErr := split.InspectShow(ctx, request.Provider, request.ModelID)
-					return refreshResult{info: info}, fetchErr
-				})
-				if result.err == nil {
-					show, showOK = result.info, true
-				}
-			} else {
-				result := r.cache.refresh(ctx, runtimeCacheKey{identity}, "show", func() (refreshResult, error) {
-					info, fetchErr := introspector.InspectModel(ctx, request.Provider, request.ModelID)
-					return refreshResult{info: info}, fetchErr
-				})
-				if result.err == nil {
-					show, showOK = result.info, true
-					process, processOK = result.info, result.info.RuntimeContext > 0
-				}
-			}
-		}
-		if introspector != nil && !processOK {
-			// The show flight may have been shared with another resolver that is
-			// already refreshing ps. Re-read the cache after waiting for show so
-			// this resolver joins that ps flight instead of issuing a duplicate.
-			entry, now, _, _, err = r.cache.snapshotContext(ctx, resolveKey)
-			if err != nil {
-				return ResolveModelProfile(request.Profile), err
-			}
-			if entry.psFetched && now.Sub(entry.psAt) < r.cache.psTTL {
-				process, processOK = entry.process, true
-			}
-		}
-		if introspector != nil && !processOK {
-			if split, ok := introspector.(providerintrospection.ModelProcessIntrospector); ok {
-				result := r.cache.refresh(ctx, runtimeCacheKey{identity}, "ps", func() (refreshResult, error) {
-					info, found, fetchErr := split.InspectProcess(ctx, request.Provider, request.ModelID)
-					return refreshResult{info: info, found: found}, fetchErr
-				})
-				if result.err == nil {
-					process, processOK = result.info, result.found
-				}
-			}
 		}
 
 		input := request.Profile
@@ -625,41 +677,14 @@ func (r *RuntimeResolver) Resolve(ctx context.Context, request RuntimeResolution
 		if r.catalog != nil {
 			applyCatalogEvidence(r.catalog, &input, request.Provider, request.ModelID)
 		}
-		if showOK {
-			if show.Family != "" {
-				input.Family = show.Family
-				input.Estimator.ProviderRuntime = estimatorForFamily(show.Family)
-				input.Estimator.ProviderRuntimeProvenance = "provider_family_derived"
-			}
-			if show.ConfiguredContext > 0 {
-				input.Context.ConfiguredContext = show.ConfiguredContext
-			}
-			if show.ModelMaxContext > 0 {
-				if strings.EqualFold(input.Provider, "ollama") || strings.EqualFold(request.Provider.Type, "ollama") {
-					input.Context.ModelInfoContext = show.ModelMaxContext
-				} else {
-					input.Context.ProviderMetadataContext = show.ModelMaxContext
-				}
-			}
-			input.MaxOutputTokens = mergeMaxOutputTokens(input.MaxOutputTokens, show.MaxOutputTokens)
-			applyCapabilityEvidence(&input.Capabilities, show.Capabilities, false)
-			applyCapabilityStates(&input.Capabilities, show.CapabilityEvidence, false)
-		}
-		if processOK && process.RuntimeContext > 0 {
-			input.Context.RuntimeContext = process.RuntimeContext
-		}
-		if processOK {
-			applyCapabilityEvidence(&input.Capabilities, process.Capabilities, true)
-			applyCapabilityStates(&input.Capabilities, process.CapabilityEvidence, true)
-		}
+		applyRuntimeEvidence(&input, request.Provider, evidence)
 		r.cache.mu.Lock()
-		if r.cache.generation[resolveKey] != generation || r.cache.residency[resolveKey] != residency {
+		if r.cache.generation[resolveKey] != evidence.generation || r.cache.residency[resolveKey] != evidence.residency {
 			r.cache.mu.Unlock()
 			if err := ctx.Err(); err != nil {
 				return ResolveModelProfile(request.Profile), err
 			}
-			show, process = providerintrospection.RuntimeModelInfo{}, providerintrospection.RuntimeModelInfo{}
-			showOK, processOK = false, false
+			evidence = runtimeEvidence{}
 			continue
 		}
 		input.Context.ObservedContext = r.cache.observed[resolveKey]
@@ -718,7 +743,7 @@ func applyCatalogEvidence(catalog modelcatalog.Reader, input *ModelProfileInput,
 	if model.Context > 0 {
 		input.Context.CatalogContext = model.Context
 	}
-	if model.Output > 0 && input.MaxOutputTokens.Value <= 0 {
+	if model.Output > 0 && maxOutputSourceRank(input.MaxOutputTokens.Source) < maxOutputSourceRank(SourceCatalog) {
 		input.MaxOutputTokens = ResolvedValue[int]{Value: model.Output, Source: SourceCatalog}
 	}
 	applyCatalogCapability(&input.Capabilities.Tools, model.ToolCall)

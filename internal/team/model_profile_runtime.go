@@ -98,9 +98,9 @@ func (r *ModelProfileRuntime) Profile(ctx context.Context, modelID string, opera
 func (r *ModelProfileRuntime) profileForProvider(ctx context.Context, modelID string, ref providerintrospection.ProviderRef, operatorContext, maxOutputTokens int) (modelprofile.ModelProfile, error) {
 	legacy := GlobalModelSpecRegistry().GetSpec(modelID)
 	input := modelprofile.ModelProfileInput{
-		ModelID:  modelID,
-		Provider: ref.Provider,
-		Family:   legacy.Estimator,
+		ModelID:   modelID,
+		Provider:  ref.Provider,
+		Family:    legacy.Estimator,
 		Estimator: modelprofile.EstimatorEvidence{Fallback: legacy.Estimator, FallbackProvenance: "legacy_model_config"},
 		Context: modelprofile.ContextResolutionInput{
 			Provider:        ref.Type,
