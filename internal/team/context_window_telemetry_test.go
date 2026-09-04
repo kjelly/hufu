@@ -17,6 +17,8 @@ import (
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/modelcatalog"
+	"github.com/kjelly/hufu/internal/modelprofile"
 )
 
 type p3FixedCounter struct{ messages int }
@@ -315,6 +317,16 @@ func TestRunOrchestratorTelemetryUsesExecutionTurnIdentityAcrossDownshift(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	catalog, err := modelcatalog.NewCatalog("test", []modelcatalog.CatalogModel{{
+		Provider: "ollama", ID: weakID, Context: 32_768, Output: 32,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileRuntime := &ModelProfileRuntime{
+		manager:  providerManager,
+		resolver: modelprofile.NewRuntimeResolverWithCatalog(nil, modelprofile.ProfileCacheOptions{}, catalog),
+	}
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-production-telemetry", "session-production-telemetry")
 	if err != nil {
@@ -329,6 +341,7 @@ func TestRunOrchestratorTelemetryUsesExecutionTurnIdentityAcrossDownshift(t *tes
 	}
 	c := &Coordinator{
 		providerManager:     providerManager,
+		modelProfileRuntime: profileRuntime,
 		modelList:           []config.ModelEntry{{ID: weakID}, {ID: strongID}},
 		session:             &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "production-telemetry", Generation: agent.GenerationParams{Model: strongID}, Timeout: 10}},
 		eventStore:          store,

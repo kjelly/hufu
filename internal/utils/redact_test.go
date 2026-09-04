@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/modelprofile"
 )
 
 type testSecretRedactor struct{ value string }
@@ -160,6 +162,62 @@ func TestRedactJSONPreservesManifestTokenCount(t *testing.T) {
 	}
 	if tokenCount := decoded.Tasks[0].MemoryManifests[0].Items[0].TokenCount; tokenCount != 42 {
 		t.Fatalf("token_count = %v, want 42 (redacted output: %s)", tokenCount, string(got))
+	}
+}
+
+func TestRedactJSONPreservesValidNumericTelemetryValue(t *testing.T) {
+	resetLearnedSecrets(t)
+	projection := modelprofile.TelemetryProjection{
+		SchemaVersion: 1,
+		ModelID:       "qwen3:8b",
+		Provider:      "ollama",
+		MaxOutput: modelprofile.TelemetryValue[int]{
+			Value:      2_048,
+			Source:     modelprofile.SourceCatalog,
+			Provenance: "catalog",
+			Confidence: "medium",
+		},
+	}
+	input, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := mustRedactJSON(t, input)
+	var roundTrip modelprofile.TelemetryProjection
+	if err := json.Unmarshal(got, &roundTrip); err != nil {
+		t.Fatalf("unmarshal redacted telemetry: %v", err)
+	}
+	if roundTrip.ModelID != projection.ModelID || roundTrip.Provider != projection.Provider {
+		t.Fatalf("telemetry identity changed: %#v", roundTrip)
+	}
+	if roundTrip.MaxOutput != projection.MaxOutput {
+		t.Fatalf("max output telemetry changed: %#v, want %#v", roundTrip.MaxOutput, projection.MaxOutput)
+	}
+}
+
+func TestRedactJSONRejectsMalformedMaxOutputTelemetry(t *testing.T) {
+	resetLearnedSecrets(t)
+	const secret = "malformed-max-output-secret"
+	inputs := []string{
+		`{"max_output_tokens":"` + secret + `"}`,
+		`{"max_output_tokens":2048}`,
+		`{"max_output_tokens":{"value":"` + secret + `","source":"catalog"}}`,
+		`{"max_output_tokens":{"value":2048,"api_token":"` + secret + `"}}`,
+		`{"max_output_tokens":{"value":2048,"nested":{"api_token":"` + secret + `"}}}`,
+		`{"max_output_tokens":{"value":2048,"provenance":"api_token=` + secret + `"}}`,
+	}
+	for _, input := range inputs {
+		got := mustRedactJSON(t, []byte(input))
+		var decoded map[string]any
+		if err := json.Unmarshal(got, &decoded); err != nil {
+			t.Fatalf("unmarshal redacted malformed telemetry: %v", err)
+		}
+		if decoded["max_output_tokens"] != redactedSecret {
+			t.Errorf("malformed telemetry was not generically redacted: input=%s output=%s", input, got)
+		}
+		if strings.Contains(string(got), secret) {
+			t.Errorf("malformed telemetry leaked secret: input=%s output=%s", input, got)
+		}
 	}
 }
 

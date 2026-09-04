@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -84,6 +85,30 @@ var numericTelemetryKeys = map[string]struct{}{
 	// makes the manifest unparseable.
 	"token_count": {},
 	"tokens":      {},
+}
+
+// Structured telemetry keys contain a bounded metadata object rather than a
+// scalar token count. They are produced by secret-free DTOs and must remain
+// structured so durable telemetry can be decoded after redaction.
+var structuredTelemetryKeys = map[string]struct{}{
+	"max_output_tokens": {},
+}
+
+var numericTelemetrySources = map[string]struct{}{
+	"operator":          {},
+	"provider_runtime":  {},
+	"provider_metadata": {},
+	"model_config":      {},
+	"catalog":           {},
+	"provider_observed": {},
+	"fallback":          {},
+}
+
+var numericTelemetryConfidences = map[string]struct{}{
+	"high":      {},
+	"medium":    {},
+	"estimated": {},
+	"observed":  {},
 }
 
 // Safe policy metadata describes how a caller handles credentials; it is not
@@ -419,6 +444,9 @@ func discoverJSONSecrets(value any, key string) {
 		if safeSecretMetadataValue(key, value) {
 			return
 		}
+		if isNumericTelemetryValue(key, value) {
+			return
+		}
 		_, telemetry := numericTelemetryKeys[strings.ToLower(key)]
 		if !telemetry {
 			if text, ok := value.(string); ok {
@@ -449,6 +477,9 @@ func redactJSONValue(value any, key string) any {
 		if safeSecretMetadataValue(key, value) {
 			return value
 		}
+		if isNumericTelemetryValue(key, value) {
+			return redactJSONValue(value, "")
+		}
 		_, telemetry := numericTelemetryKeys[strings.ToLower(key)]
 		if !telemetry {
 			// A credential recognized by its JSON key must stay redacted when
@@ -475,6 +506,62 @@ func redactJSONValue(value any, key string) any {
 		}
 	}
 	return value
+}
+
+// isNumericTelemetryValue accepts only the serialized shape of a numeric
+// TelemetryValue. In particular, max_output_tokens must contain an integer
+// value and may contain only the string metadata fields emitted by the
+// telemetry DTO. Anything else remains a secret-looking value and is handled
+// by the generic redaction path above.
+func isNumericTelemetryValue(key string, value any) bool {
+	if _, structured := structuredTelemetryKeys[strings.ToLower(key)]; !structured {
+		return false
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	rawValue, ok := object["value"]
+	if !ok {
+		return false
+	}
+	number, ok := rawValue.(json.Number)
+	if !ok {
+		return false
+	}
+	if _, err := strconv.Atoi(number.String()); err != nil {
+		return false
+	}
+	for field, fieldValue := range object {
+		switch field {
+		case "value":
+			// Validated above.
+		case "source", "provenance":
+			if !validNumericTelemetryLabel(fieldValue, numericTelemetrySources) {
+				return false
+			}
+		case "confidence":
+			if !validNumericTelemetryLabel(fieldValue, numericTelemetryConfidences) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validNumericTelemetryLabel(value any, allowed map[string]struct{}) bool {
+	text, ok := value.(string)
+	if !ok {
+		return false
+	}
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return true
+	}
+	_, ok = allowed[text]
+	return ok
 }
 
 func redactKeyValue(match string) string {

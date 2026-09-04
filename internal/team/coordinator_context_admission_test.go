@@ -19,6 +19,9 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/modelcatalog"
+	"github.com/kjelly/hufu/internal/modelprofile"
+	"github.com/kjelly/hufu/internal/providerintrospection"
 	"github.com/kjelly/hufu/internal/sidecar"
 )
 
@@ -431,9 +434,20 @@ func TestDownshiftTelemetryOccursOnlyAfterLanguageModelSuccess(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		history = append(history, fantasy.NewUserMessage(fmt.Sprintf("historical message %d %s", i, strings.Repeat("evidence ", 100))))
 	}
+	catalog, err := modelcatalog.NewCatalog("test", []modelcatalog.CatalogModel{{
+		Provider: "ollama", ID: weakID, Context: 32_768, Output: 32,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileRuntime := &ModelProfileRuntime{
+		manager:  providerManager,
+		resolver: modelprofile.NewRuntimeResolverWithCatalog(nil, modelprofile.ProfileCacheOptions{}, catalog),
+	}
 	c := &Coordinator{
-		providerManager: providerManager,
-		modelList:       []config.ModelEntry{{ID: weakID}, {ID: strongID}},
+		providerManager:     providerManager,
+		modelProfileRuntime: profileRuntime,
+		modelList:           []config.ModelEntry{{ID: weakID}, {ID: strongID}},
 		session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{
 			Generation: agent.GenerationParams{Model: strongID},
 		}},
@@ -457,6 +471,175 @@ func TestDownshiftTelemetryOccursOnlyAfterLanguageModelSuccess(t *testing.T) {
 	}
 }
 
+func TestCoordinatorDownshiftUsesRuntimeProfileTelemetryBeforeProviderRequest(t *testing.T) {
+	const runID = "run-downshift-runtime-profile"
+	strongID := "coordinator-downshift-runtime-strong"
+	weakID := "coordinator-downshift-runtime-weak"
+	for modelID, window := range map[string]int{strongID: 256, weakID: 32_768} {
+		preserveRegisteredModelSpec(t, GlobalModelSpecRegistry(), modelID)
+		GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+			ModelID: modelID, ContextWindow: window, MaxOutputTokens: 32, SafetyMarginTokens: 32,
+		})
+	}
+
+	var statusMu sync.Mutex
+	statusEvents := make([]StatusEvent, 0)
+	var chatProfileCheckErr error
+	provider := newIPv4TestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/show":
+			var body map[string]string
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
+			}
+			window := 0
+			switch body["model"] {
+			case strongID:
+				window = 256
+			case weakID:
+				window = 32_768
+			}
+			_, _ = fmt.Fprintf(writer, "{\"model\":%q,\"parameters\":\"num_ctx %d\"}", body["model"], window)
+		case "/api/ps":
+			_, _ = fmt.Fprintf(writer, "{\"models\":[{\"name\":%q,\"context_length\":256},{\"name\":%q,\"context_length\":32768}]}", strongID, weakID)
+		case "/v1/chat/completions":
+			statusMu.Lock()
+			weakProfiles := make([]StatusEvent, 0, 1)
+			for _, event := range statusEvents {
+				if event.Type == string(EventModelProfileResolved) && event.ModelProfile != nil && event.ModelProfile.ModelID == weakID {
+					weakProfiles = append(weakProfiles, event)
+				}
+			}
+			if len(weakProfiles) != 1 {
+				chatProfileCheckErr = fmt.Errorf("weak model profile events before chat request = %d, want exactly one", len(weakProfiles))
+			} else {
+				profile := weakProfiles[0].ModelProfile
+				if profile.Effective.Value != 32_768 || profile.Effective.Source != modelprofile.SourceProviderRuntime {
+					chatProfileCheckErr = fmt.Errorf("weak profile effective context = %#v, want runtime-backed 32768", profile.Effective)
+				}
+			}
+			statusMu.Unlock()
+			writer.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(writer, "data: {\"id\":\"downshift-runtime\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"coordinator-downshift-runtime-weak\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"accepted\"},\"finish_reason\":null}]}\n\n")
+			_, _ = fmt.Fprint(writer, "data: {\"id\":\"downshift-runtime\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"coordinator-downshift-runtime-weak\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+			_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer provider.Close()
+
+	providerManager, err := agent.NewProviderManager(provider.URL+"/v1", "runtime-secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &ModelProfileRuntime{
+		manager: providerManager,
+		resolver: modelprofile.NewRuntimeResolver(func(ref providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+			return providerintrospection.NewOllamaIntrospector(ref.BaseURL, "")
+		}, modelprofile.ProfileCacheOptions{}),
+	}
+	strongProfile, err := runtime.Profile(t.Context(), strongID, 0, 32)
+	if err != nil {
+		t.Fatalf("resolve strong runtime profile: %v", err)
+	}
+	if strongProfile.EffectiveContext != 256 || strongProfile.Sources.EffectiveContext.Source != modelprofile.SourceProviderRuntime {
+		t.Fatalf("strong runtime profile = %#v, want runtime-backed 256", strongProfile)
+	}
+
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, runID, "session-downshift-runtime-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	c := &Coordinator{
+		providerManager:     providerManager,
+		modelProfileRuntime: runtime,
+		modelList:           []config.ModelEntry{{ID: weakID}, {ID: strongID}},
+		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{
+			Generation: agent.GenerationParams{Model: strongID},
+		}},
+		eventStore:     store,
+		executionRunID: runID,
+		taskTracker:    NewTaskTracker(),
+		reportStatus: func(event StatusEvent) {
+			statusMu.Lock()
+			statusEvents = append(statusEvents, event)
+			statusMu.Unlock()
+		},
+	}
+	preflight := newCoordinatorRequestPreflight(strongID, "incoming", "system", nil)
+	ctx := context.WithValue(t.Context(), modelKey{}, strongID)
+	ctx = withCoordinatorRequestPreflight(ctx, preflight)
+	history := make([]fantasy.Message, 0, 20)
+	for i := 0; i < 20; i++ {
+		history = append(history, fantasy.NewUserMessage(fmt.Sprintf("historical message %d %s", i, strings.Repeat("evidence ", 100))))
+	}
+	result, _, err := c.runAgentWithStatusAndHistory(ctx, fantasy.NewAgent(
+		&transientProjectionCaptureModel{modelID: strongID},
+		fantasy.WithSystemPrompt("system"),
+		fantasy.WithMaxOutputTokens(32),
+		fantasy.WithMaxRetries(0),
+	), "coordinator", "incoming", history, &taskTiming{})
+	if err != nil {
+		t.Fatalf("downshifted coordinator run error = %v", err)
+	}
+	if result != "accepted" {
+		t.Fatalf("downshifted coordinator result = %q, want accepted", result)
+	}
+	if chatProfileCheckErr != nil {
+		t.Fatal(chatProfileCheckErr)
+	}
+
+	statusMu.Lock()
+	strongCannotFit := false
+	statusProfiles := make([]StatusEvent, 0, 1)
+	for _, event := range statusEvents {
+		if event.Type == string(EventContextWindowAdmission) && event.Model == strongID && event.ContextWindowTelemetry != nil && event.ContextWindowTelemetry.Decision == string(ContextWindowCannotFit) {
+			strongCannotFit = true
+		}
+		if event.Type == string(EventModelProfileResolved) && event.ModelProfile != nil {
+			statusProfiles = append(statusProfiles, event)
+		}
+	}
+	statusMu.Unlock()
+	if !strongCannotFit {
+		t.Fatal("strong model produced no pre-provider CannotFit admission")
+	}
+	if len(statusProfiles) != 1 || statusProfiles[0].ModelProfile.ModelID != weakID {
+		t.Fatalf("status model profiles = %#v, want exactly one weak profile", statusProfiles)
+	}
+
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileEvents := make([]RunEvent, 0, 1)
+	for _, event := range events {
+		if event.Type == string(EventModelProfileResolved) && event.RunID == runID {
+			profileEvents = append(profileEvents, event)
+		}
+	}
+	if len(profileEvents) != 1 {
+		t.Fatalf("durable model profile events = %d, want exactly one", len(profileEvents))
+	}
+	for _, forbidden := range []string{"http://", "https://", "runtime-secret", "Bearer"} {
+		if strings.Contains(string(profileEvents[0].Payload), forbidden) {
+			t.Fatalf("durable profile payload contains %q: %s", forbidden, profileEvents[0].Payload)
+		}
+	}
+	profiles, err := LoadModelProfileTelemetry(workspace, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 1 || profiles[0].ModelID != weakID || profiles[0].Effective.Value != 32_768 || profiles[0].Effective.Source != modelprofile.SourceProviderRuntime {
+		t.Fatalf("loaded model profiles = %#v, want one runtime-backed weak profile", profiles)
+	}
+}
+
 func TestCoordinatorDownshiftContinuationCarriesFallbackPreflightAndProfile(t *testing.T) {
 	strongID := "coordinator-continuation-strong"
 	weakID := "coordinator-continuation-weak"
@@ -470,17 +653,27 @@ func TestCoordinatorDownshiftContinuationCarriesFallbackPreflightAndProfile(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	catalog, err := modelcatalog.NewCatalog("test", []modelcatalog.CatalogModel{{
+		Provider: "ollama", ID: weakID, Context: 32_768, Output: 32,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileRuntime := &ModelProfileRuntime{
+		manager:  providerManager,
+		resolver: modelprofile.NewRuntimeResolverWithCatalog(nil, modelprofile.ProfileCacheOptions{}, catalog),
+	}
 	c := &Coordinator{
-		providerManager: providerManager,
-		modelList:       []config.ModelEntry{{ID: weakID}, {ID: strongID}},
-		session:         &TeamSession{Workspace: t.TempDir()},
-		reportStatus:    func(StatusEvent) {},
+		providerManager:     providerManager,
+		modelProfileRuntime: profileRuntime,
+		modelList:           []config.ModelEntry{{ID: weakID}, {ID: strongID}},
+		session:             &TeamSession{Workspace: t.TempDir()},
+		reportStatus:        func(StatusEvent) {},
 	}
 	preflight := newCoordinatorRequestPreflightWithAdmission(strongID, "incoming", "system", nil, agent.ProviderAdmissionContext{
 		ModelID: strongID, ProviderIdentity: "local", ProviderBaseURL: "http://127.0.0.1:11434/v1", Bound: true,
 		ContextWindow: 256, MaxOutputTokens: 32, SafetyMarginTokens: 32,
 	})
-
 	continuation, err := c.admitCoordinatorEarlierModel(t.Context(), preflight, []fantasy.Message{fantasy.NewUserMessage("small")}, "incoming", 0, 32, strongID)
 	if err != nil {
 		t.Fatalf("admitCoordinatorEarlierModel: %v", err)
@@ -527,6 +720,16 @@ func TestCoordinatorModelContinuationPersistenceFailurePrecedesDownshiftTelemetr
 	if err != nil {
 		t.Fatal(err)
 	}
+	catalog, err := modelcatalog.NewCatalog("test", []modelcatalog.CatalogModel{{
+		Provider: "ollama", ID: weakID, Context: 32_768, Output: 32,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileRuntime := &ModelProfileRuntime{
+		manager:  providerManager,
+		resolver: modelprofile.NewRuntimeResolverWithCatalog(nil, modelprofile.ProfileCacheOptions{}, catalog),
+	}
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-downshift-failure", "session-downshift-failure")
 	if err != nil {
@@ -536,14 +739,15 @@ func TestCoordinatorModelContinuationPersistenceFailurePrecedesDownshiftTelemetr
 	syncCalls := 0
 	store.syncFile = func() error {
 		syncCalls++
-		if syncCalls == 2 {
+		if syncCalls == 3 {
 			return errors.New("injected continuation admission sync failure")
 		}
 		return nil
 	}
 	c := &Coordinator{
-		providerManager: providerManager,
-		modelList:       []config.ModelEntry{{ID: weakID}, {ID: strongID}},
+		providerManager:     providerManager,
+		modelProfileRuntime: profileRuntime,
+		modelList:           []config.ModelEntry{{ID: weakID}, {ID: strongID}},
 		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{
 			Generation: agent.GenerationParams{Model: strongID},
 		}},
