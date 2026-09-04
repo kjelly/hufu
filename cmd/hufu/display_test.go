@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -59,6 +60,16 @@ func TestDispatchStatusEventShowsBudgetExceeded(t *testing.T) {
 	}
 	if !strings.Contains(out, "wall-clock budget exceeded") {
 		t.Fatalf("expected budget reason, got: %q", out)
+	}
+}
+
+func TestDispatchStatusEventRendersSecretFreeModelProfile(t *testing.T) {
+	w := &testStatusWriter{}
+	dispatchStatusEvent(w, &reporterState{}, team.StatusEvent{Type: "model_profile_resolved", ModelProfile: &modelprofile.TelemetryProjection{
+		Provider: "ollama", ModelID: "qwen3:8b", Effective: modelprofile.TelemetryValue[int]{Value: 32_768, Source: modelprofile.SourceProviderRuntime},
+	}})
+	if got := w.b.String(); !strings.Contains(got, "model profile") || !strings.Contains(got, "32768") || strings.Contains(got, "http") {
+		t.Fatalf("profile status = %q", got)
 	}
 }
 

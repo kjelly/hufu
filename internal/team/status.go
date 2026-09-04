@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kjelly/hufu/internal/modelprofile"
 )
 
 // ErrTasksUnresolved marks a completed coordinator response that still has
@@ -14,7 +16,7 @@ import (
 var ErrTasksUnresolved = errors.New("tasks unresolved")
 
 type StatusEvent struct {
-	Type        string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning", "timing", "judge", "skeptic", "memory_learning", "budget_exceeded", "task_timeout"
+	Type        string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning", "timing", "judge", "skeptic", "memory_learning", "budget_exceeded", "task_timeout", "model_profile_resolved"
 	TeamName    string
 	Agent       string
 	Message     string
@@ -35,6 +37,8 @@ type StatusEvent struct {
 	// ContextWindowTelemetry is typed and content-free. It is separate from
 	// Data so admission reporting cannot accidentally carry model content.
 	ContextWindowTelemetry *ContextWindowTelemetryEvent
+	// ModelProfile is a secret-free effective profile projection.
+	ModelProfile *modelprofile.TelemetryProjection
 }
 
 func (e StatusEvent) withData(data map[string]any) StatusEvent {

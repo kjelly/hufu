@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/providerintrospection"
@@ -92,4 +93,41 @@ func (pm *ProviderManager) ResolveProviderRef(modelID string) (providerintrospec
 		return providerintrospection.ProviderRef{}, fmt.Errorf("provider %q has no upstream URL", providerName)
 	}
 	return providerintrospection.NewProviderRef(providerName, providerName, providerType, target.upstreamURL, target.apiKey, false), nil
+}
+
+// EffectiveProviderRefs returns the provider identities that can be selected
+// by invocation resolution. The references carry credentials only inside the
+// provider-introspection package; this package exposes no credential accessor.
+// The result is deterministic and contains the canonical local provider plus
+// each configured named provider.
+func (pm *ProviderManager) EffectiveProviderRefs() []providerintrospection.ProviderRef {
+	if pm == nil {
+		return nil
+	}
+	pm.mu.RLock()
+	providers := make([]string, 0, len(pm.configs)+1)
+	providers = append(providers, "local")
+	for name := range pm.configs {
+		if canonical := canonicalProviderName(name); canonical != "local" && !slices.Contains(providers, canonical) {
+			providers = append(providers, canonical)
+		}
+	}
+	slices.Sort(providers[1:])
+	refs := make([]providerintrospection.ProviderRef, 0, len(providers))
+	for _, name := range providers {
+		target := pm.effectiveProviderTargetLocked(name)
+		if strings.TrimSpace(target.upstreamURL) == "" {
+			continue
+		}
+		providerType := "openai-compatible"
+		if name == "local" {
+			providerType = "ollama"
+		}
+		if cfg, ok := pm.configs[name]; ok && strings.TrimSpace(cfg.IntrospectionType) != "" {
+			providerType = strings.ToLower(strings.TrimSpace(cfg.IntrospectionType))
+		}
+		refs = append(refs, providerintrospection.NewProviderRef(name, name, providerType, target.upstreamURL, target.apiKey, false))
+	}
+	pm.mu.RUnlock()
+	return refs
 }

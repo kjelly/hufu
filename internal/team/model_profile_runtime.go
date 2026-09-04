@@ -23,6 +23,17 @@ type ModelProfileRuntime struct {
 	resolver *modelprofile.RuntimeResolver
 }
 
+// ResolvedModelProfile keeps the profile, effective provider reference, and
+// immutable admission projection from one resolution. Provider-bound callers
+// must use this joint result so admission cannot silently perform a second
+// provider lookup with different state.
+type ResolvedModelProfile struct {
+	Profile           modelprofile.ModelProfile
+	Provider          providerintrospection.ProviderRef
+	Admission         agent.ProviderAdmissionContext
+	ProfileResolution modelprofile.TelemetryProjection
+}
+
 type providerBoundInvocationContext struct {
 	ModelID          string
 	AdmissionContext agent.ProviderAdmissionContext
@@ -92,10 +103,10 @@ func (r *ModelProfileRuntime) Profile(ctx context.Context, modelID string, opera
 		return modelprofile.ModelProfile{}, err
 	}
 	ref.NoNet = r.noNet
-	return r.profileForProvider(ctx, modelID, ref, operatorContext, maxOutputTokens)
+	return r.profileForProvider(ctx, modelID, ref, operatorContext, maxOutputTokens, false, "")
 }
 
-func (r *ModelProfileRuntime) profileForProvider(ctx context.Context, modelID string, ref providerintrospection.ProviderRef, operatorContext, maxOutputTokens int) (modelprofile.ModelProfile, error) {
+func (r *ModelProfileRuntime) profileForProvider(ctx context.Context, modelID string, ref providerintrospection.ProviderRef, operatorContext, maxOutputTokens int, noRuntime bool, catalogProvider string) (modelprofile.ModelProfile, error) {
 	legacy := GlobalModelSpecRegistry().GetSpec(modelID)
 	input := modelprofile.ModelProfileInput{
 		ModelID:   modelID,
@@ -114,31 +125,56 @@ func (r *ModelProfileRuntime) profileForProvider(ctx context.Context, modelID st
 	} else if legacy.MaxOutputTokens > 0 {
 		input.MaxOutputTokens = modelprofile.ResolvedValue[int]{Value: legacy.MaxOutputTokens, Source: modelprofile.SourceFallback}
 	}
-	profile, err := r.resolver.Resolve(ctx, modelprofile.RuntimeResolutionRequest{Provider: ref, ModelID: modelID, Profile: input})
+	profile, err := r.resolver.Resolve(ctx, modelprofile.RuntimeResolutionRequest{Provider: ref, ModelID: modelID, Profile: input, NoRuntime: noRuntime, CatalogProvider: catalogProvider})
 	if err != nil {
 		return profile, err
 	}
 	return profile, nil
 }
 
-// AdmissionContext returns the secret-free immutable request projection used
-// by all Generate/Stream/GenerateObject/StreamObject wrappers.
-func (r *ModelProfileRuntime) AdmissionContext(ctx context.Context, modelID string, operatorContext, maxOutputTokens, safetyMargin int) agent.ProviderAdmissionContext {
-	if r == nil || r.manager == nil || strings.TrimSpace(modelID) == "" {
-		return legacyAdmissionContext(modelID, operatorContext, maxOutputTokens, safetyMargin)
+// Diagnostic resolves a model profile for inspection. noRuntime is an
+// inspection-scoped guarantee: the resolver skips the introspector entirely,
+// including loopback providers, and uses only catalog/fallback evidence.
+func (r *ModelProfileRuntime) Diagnostic(ctx context.Context, providerName, modelID string, operatorContext, maxOutputTokens int, noRuntime bool) (modelprofile.ModelProfile, error) {
+	if r == nil || r.manager == nil {
+		return modelprofile.ModelProfile{}, fmt.Errorf("model profile runtime unavailable")
 	}
-	ref, refErr := r.manager.ResolveProviderRef(modelID)
-	if refErr != nil {
-		return legacyAdmissionContext(modelID, operatorContext, maxOutputTokens, safetyMargin)
+	ref, err := r.manager.ResolveProviderRef(modelID)
+	if err != nil {
+		return modelprofile.ModelProfile{}, err
+	}
+	ref.NoNet = r.noNet || noRuntime
+	return r.profileForProvider(ctx, modelID, ref, operatorContext, maxOutputTokens, noRuntime, providerName)
+}
+
+// ResolveAdmission resolves the effective provider, profile, and immutable
+// admission context together. Profile failures retain the provider binding and
+// use the same conservative context behavior as the legacy admission path.
+func (r *ModelProfileRuntime) ResolveAdmission(ctx context.Context, modelID string, operatorContext, maxOutputTokens, safetyMargin int) ResolvedModelProfile {
+	result := ResolvedModelProfile{}
+	if r == nil || r.manager == nil || strings.TrimSpace(modelID) == "" {
+		result.Admission = legacyAdmissionContext(modelID, operatorContext, maxOutputTokens, safetyMargin)
+		result.Profile = modelprofile.ResolveModelProfile(modelprofile.ModelProfileInput{ModelID: modelID})
+		result.ProfileResolution = modelprofile.TelemetryFromProfile(result.Profile)
+		return result
+	}
+	ref, err := r.manager.ResolveProviderRef(modelID)
+	if err != nil {
+		result.Admission = legacyAdmissionContext(modelID, operatorContext, maxOutputTokens, safetyMargin)
+		result.Profile = modelprofile.ResolveModelProfile(modelprofile.ModelProfileInput{ModelID: modelID})
+		result.ProfileResolution = modelprofile.TelemetryFromProfile(result.Profile)
+		return result
 	}
 	ref.NoNet = r.noNet
-	profile, err := r.profileForProvider(ctx, modelID, ref, operatorContext, maxOutputTokens)
-	if err != nil {
-		// Provider identity has been resolved, but profile capacity is not
-		// available. Keep the context explicitly bound and carry only operator
-		// values, so provider admission fails closed instead of consulting the
-		// global registry.
-		return agent.ProviderAdmissionContext{
+	result.Provider = ref
+	profile, profileErr := r.profileForProvider(ctx, modelID, ref, operatorContext, maxOutputTokens, false, "")
+	result.Profile = profile
+	legacy := GlobalModelSpecRegistry().GetSpec(modelID)
+	if safetyMargin <= 0 {
+		safetyMargin = legacy.SafetyMarginTokens
+	}
+	if profileErr != nil {
+		result.Admission = agent.ProviderAdmissionContext{
 			ModelID:             modelID,
 			ProviderIdentity:    ref.Provider,
 			ProviderBaseURL:     ref.BaseURL,
@@ -150,11 +186,14 @@ func (r *ModelProfileRuntime) AdmissionContext(ctx context.Context, modelID stri
 			ContextWindowSource: "unavailable",
 			IsEstimated:         operatorContext <= 0,
 		}
+	} else {
+		result.Admission = admissionContextFromProfile(modelID, ref, profile, safetyMargin)
 	}
-	legacy := GlobalModelSpecRegistry().GetSpec(modelID)
-	if safetyMargin <= 0 {
-		safetyMargin = legacy.SafetyMarginTokens
-	}
+	result.ProfileResolution = modelprofile.TelemetryFromProfile(profile)
+	return result
+}
+
+func admissionContextFromProfile(modelID string, ref providerintrospection.ProviderRef, profile modelprofile.ModelProfile, safetyMargin int) agent.ProviderAdmissionContext {
 	return agent.ProviderAdmissionContext{
 		ModelID: modelID, ProviderIdentity: ref.Provider, ProviderBaseURL: ref.BaseURL, Bound: true,
 		ContextWindow: profile.EffectiveContext, MaxOutputTokens: profile.MaxOutputTokens,
@@ -162,6 +201,12 @@ func (r *ModelProfileRuntime) AdmissionContext(ctx context.Context, modelID stri
 		ContextWindowSource: string(profile.Sources.EffectiveContext.Source),
 		IsEstimated:         profile.Sources.EffectiveContext.Confidence == "estimated",
 	}
+}
+
+// AdmissionContext returns the secret-free immutable request projection used
+// by all Generate/Stream/GenerateObject/StreamObject wrappers.
+func (r *ModelProfileRuntime) AdmissionContext(ctx context.Context, modelID string, operatorContext, maxOutputTokens, safetyMargin int) agent.ProviderAdmissionContext {
+	return r.ResolveAdmission(ctx, modelID, operatorContext, maxOutputTokens, safetyMargin).Admission
 }
 
 func legacyAdmissionContext(modelID string, operatorContext, maxOutputTokens, safetyMargin int) agent.ProviderAdmissionContext {
@@ -214,6 +259,17 @@ func (r *ModelProfileRuntime) ObserveOverflow(ctx context.Context, providerModel
 	}
 	ref.NoNet = r.noNet
 	return r.resolver.ObserveContextWithContext(ctx, ref, providerModel, window)
+}
+
+// InvalidateProviders clears runtime evidence for every effective provider
+// after a successful provider execution boundary is established.
+func (r *ModelProfileRuntime) InvalidateProviders(refs []providerintrospection.ProviderRef) {
+	if r == nil || r.resolver == nil {
+		return
+	}
+	for _, ref := range refs {
+		_ = r.resolver.InvalidateProvider(ref)
+	}
 }
 
 func (c *Coordinator) admissionContextFor(ctx context.Context, modelID string, def *agent.AgentDef) agent.ProviderAdmissionContext {
@@ -271,7 +327,25 @@ func (c *Coordinator) resolveProviderBoundInvocationContextWithOutput(ctx contex
 	if c == nil || c.modelProfileRuntime == nil {
 		return ctx, providerBoundInvocationContext{}, nil
 	}
-	bound := c.admissionContextForWithOutput(ctx, modelID, def, outputReservation)
+	operatorContext := 0
+	maxOutput := outputReservation
+	if def != nil {
+		operatorContext = def.Generation.ContextWindow
+		if maxOutput <= 0 {
+			maxOutput = c.resolveAgentMaxOutputTokens(def)
+		}
+	}
+	if operatorContext <= 0 && c.session != nil {
+		operatorContext = c.session.Config.Generation.ContextWindow
+	}
+	if maxOutput <= 0 {
+		maxOutput = c.resolveAgentMaxOutputTokens(nil)
+	}
+	resolved := c.modelProfileRuntime.ResolveAdmission(ctx, modelID, operatorContext, maxOutput, 0)
+	bound := resolved.Admission
+	if bound.IsBound() {
+		c.reportModelProfileResolved(resolved.ProfileResolution)
+	}
 	if !bound.IsBound() {
 		return ctx, providerBoundInvocationContext{}, fmt.Errorf("provider-bound context unavailable for model %q", modelID)
 	}

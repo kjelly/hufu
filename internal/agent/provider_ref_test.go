@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -149,6 +150,25 @@ func TestProviderRefUsesConfiguredUpstreamWhenInvocationProxyIsActive(t *testing
 	}
 	if called.Load() {
 		t.Fatal("no-net introspection reached HTTP client through invocation proxy")
+	}
+}
+
+func TestEffectiveProviderRefsAreDeterministicAndSecretFree(t *testing.T) {
+	manager, err := NewProviderManager("http://127.0.0.1:11434/v1", "local-secret", map[string]config.ProviderConfig{
+		"zeta":  {ProviderURL: "https://zeta.example/v1", ProviderAPIKey: "zeta-secret"},
+		"alpha": {ProviderURL: "https://alpha.example/v1", ProviderAPIKey: "alpha-secret"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := manager.EffectiveProviderRefs()
+	if len(refs) != 3 || refs[0].Provider != "local" || refs[1].Provider != "alpha" || refs[2].Provider != "zeta" {
+		t.Fatalf("effective refs = %#v", refs)
+	}
+	for _, ref := range refs {
+		if strings.Contains(ref.BaseURL, "secret") {
+			t.Fatalf("provider reference leaked credential: %#v", ref)
+		}
 	}
 }
 

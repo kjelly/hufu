@@ -444,6 +444,41 @@ func (c *ProfileCache) Invalidate(identity CacheIdentity) {
 	c.mu.Unlock()
 }
 
+// InvalidateProvider drops every runtime observation belonging to one
+// provider. It preserves residency and the caller-owned catalog/configured
+// evidence, while advancing each generation so in-flight refreshes cannot
+// commit observations from before the provider execution boundary was
+// re-established.
+func (c *ProfileCache) InvalidateProvider(identity CacheIdentity) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key := range c.generation {
+		if !sameProviderIdentity(key.CacheIdentity, identity) {
+			continue
+		}
+		c.generation[key]++
+		entry := c.entries[key]
+		entry.show = providerintrospection.RuntimeModelInfo{}
+		entry.showAt = time.Time{}
+		entry.showOK = false
+		entry.process = providerintrospection.RuntimeModelInfo{}
+		entry.psAt = time.Time{}
+		entry.psOK = false
+		entry.psFetched = false
+		c.entries[key] = entry
+		c.observed[key] = 0
+		c.removeFlightsLocked(key)
+		c.touchLocked(key)
+	}
+}
+
+func sameProviderIdentity(left, right CacheIdentity) bool {
+	return left.Provider == right.Provider && left.Type == right.Type && left.BaseURL == right.BaseURL
+}
+
 func (c *ProfileCache) observeContext(ctx context.Context, identity CacheIdentity, window int) error {
 	if c == nil || window <= 0 {
 		return nil
@@ -481,6 +516,13 @@ type RuntimeResolutionRequest struct {
 	Provider providerintrospection.ProviderRef
 	ModelID  string
 	Profile  ModelProfileInput
+	// NoRuntime selects catalog/fallback resolution without invoking an
+	// introspector. This is stronger than relying on an adapter's no-net
+	// rejection and guarantees diagnostic --no-net performs zero runtime calls.
+	NoRuntime bool
+	// CatalogProvider preserves the requested diagnostic provider qualifier when
+	// the provider manager intentionally falls back to its local provider.
+	CatalogProvider string
 }
 
 // IntrospectorFactory permits provider-specific introspection while keeping
@@ -654,7 +696,7 @@ func (r *RuntimeResolver) Resolve(ctx context.Context, request RuntimeResolution
 		return ResolveModelProfile(request.Profile), err
 	}
 	introspector := providerintrospection.ModelIntrospector(nil)
-	if r.factory != nil {
+	if r.factory != nil && !request.NoRuntime {
 		introspector = r.factory(request.Provider)
 	}
 	resolveKey := runtimeCacheKey{identity}
@@ -675,7 +717,7 @@ func (r *RuntimeResolver) Resolve(ctx context.Context, request RuntimeResolution
 			}
 		}
 		if r.catalog != nil {
-			applyCatalogEvidence(r.catalog, &input, request.Provider, request.ModelID)
+			applyCatalogEvidence(r.catalog, &input, request.Provider, request.ModelID, request.CatalogProvider)
 		}
 		applyRuntimeEvidence(&input, request.Provider, evidence)
 		r.cache.mu.Lock()
@@ -723,12 +765,19 @@ func catalogLookupIdentity(provider providerintrospection.ProviderRef, modelID s
 	return providerName, modelID
 }
 
-func applyCatalogEvidence(catalog modelcatalog.Reader, input *ModelProfileInput, provider providerintrospection.ProviderRef, modelID string) {
+func applyCatalogEvidence(catalog modelcatalog.Reader, input *ModelProfileInput, provider providerintrospection.ProviderRef, modelID string, catalogProviderArg ...string) {
 	if catalog == nil || input == nil {
 		return
 	}
-	catalogProvider, catalogModelID := catalogLookupIdentity(provider, modelID)
-	result, found := catalog.Lookup(catalogProvider, catalogModelID)
+	lookupProvider := ""
+	if len(catalogProviderArg) > 0 {
+		lookupProvider = catalogProviderArg[0]
+	}
+	if strings.TrimSpace(lookupProvider) == "" {
+		lookupProvider = provider.Provider
+	}
+	lookupProvider, catalogModelID := catalogLookupIdentity(providerintrospection.ProviderRef{Provider: lookupProvider, Name: lookupProvider, Type: provider.Type}, modelID)
+	result, found := catalog.Lookup(lookupProvider, catalogModelID)
 	if !found {
 		return
 	}
@@ -867,5 +916,19 @@ func (r *RuntimeResolver) InvalidateProfile(provider providerintrospection.Provi
 		return err
 	}
 	r.cache.Invalidate(identity)
+	return nil
+}
+
+// InvalidateProvider clears all runtime evidence for a provider while keeping
+// catalog and caller-supplied configured evidence intact.
+func (r *RuntimeResolver) InvalidateProvider(provider providerintrospection.ProviderRef) error {
+	if r == nil || r.cache == nil {
+		return nil
+	}
+	identity, err := Identity(provider, "")
+	if err != nil {
+		return err
+	}
+	r.cache.InvalidateProvider(identity)
 	return nil
 }

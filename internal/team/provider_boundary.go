@@ -60,6 +60,12 @@ func (c *Coordinator) startProviderExecutionBoundary(ctx context.Context) error 
 		return boundaryErr
 	}
 	c.setProviderBoundaryState(lease, true, nil)
+	// A successful proxy start re-establishes the provider execution boundary.
+	// Runtime show/ps/observed evidence may describe the previous boundary, so
+	// invalidate it before any sidecar or provider-bound work can begin.
+	if c.modelProfileRuntime != nil {
+		c.modelProfileRuntime.InvalidateProviders(c.providerManager.EffectiveProviderRefs())
+	}
 	if err := invocationContextError(ctx); err != nil {
 		// Startup raced with cancellation. Marking the boundary live before
 		// entering the shared abort gate lets that gate synchronously reap the
