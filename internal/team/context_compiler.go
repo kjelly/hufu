@@ -720,7 +720,7 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 		}
 	}
 
-	assignTokenCounts(ctx, input.ModelContext.ModelID, items)
+	assignTokenCounts(input.ModelContext, items)
 	compiled, err := compiledResult(items, CalculateContextBudget(input.ModelContext, input.SystemTokens, input.ToolsTokens))
 	if err != nil {
 		return CompiledContext{}, err
@@ -772,7 +772,7 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 	items = appendWorkerHistoricalContext(ctx, input, items)
 
 	budget := CalculateContextBudget(input.ModelContext, input.SystemTokens, input.ToolsTokens)
-	assignTokenCounts(ctx, input.ModelContext.ModelID, items)
+	assignTokenCounts(input.ModelContext, items)
 	compiled, err := compiledResult(items, budget)
 	if err != nil {
 		return CompiledContext{}, err
@@ -877,12 +877,16 @@ func workerMemoryCompilerItem(memoryItem WorkerMemoryItem) (ContextItem, bool) {
 	return ContextItem{ID: "context:" + memoryItem.ID, Kind: "worker_memory", Content: content, Source: "worker_" + memoryItem.Tier, Priority: PriorityRecentSTM, DedupKey: memoryItem.ContentHash, Confidence: memoryItem.Confidence, Freshness: memoryItem.UpdatedAt, Compressible: true, Authority: ContextAuthorityHistorical, Revision: memoryItem.ID, ExpiresAt: valueOrZero(memoryItem.ExpiresAt), BaseScore: memoryItem.BaseScore, FinalScore: memoryItem.FinalScore, ScoreParts: memoryItem.ScoreParts}, true
 }
 
-func assignTokenCounts(ctx context.Context, modelID string, items []ContextItem) {
+func assignTokenCounts(spec ModelContextSpec, items []ContextItem) {
+	estimator := spec.Estimator
+	if estimator == "" {
+		estimator = globalRegistry.GetSpec(spec.ModelID).Estimator
+	}
 	for i := range items {
 		if items[i].TokenCount > 0 {
 			continue
 		}
-		if n, err := defaultCounter.CountText(ctx, modelID, items[i].Content); err == nil && n > 0 {
+		if n := defaultCounter.countTextWithEstimator(items[i].Content, estimator); n > 0 {
 			items[i].TokenCount = n
 			continue
 		}

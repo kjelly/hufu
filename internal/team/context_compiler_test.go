@@ -239,6 +239,133 @@ func TestCompileCoordinatorContextOmitsOptionalContextWhenItExceedsBudget(t *tes
 	}
 }
 
+func TestCompileWorkerContextUsesBoundEstimatorForRequiredContent(t *testing.T) {
+	const modelID = "context-compiler-bound-worker"
+	registerContextCompilerEstimatorTestModel(t, modelID)
+
+	goal := strings.Repeat("bound worker required content ", 500)
+	spec, globalTokens, boundTokens := boundContextCompilerSpec(t, modelID, "## Goal\n\n"+goal)
+	compiled, err := CompileWorkerContext(t.Context(), WorkerContextInput{Goal: goal, ModelContext: spec})
+	if err != nil {
+		t.Fatalf("CompileWorkerContext() error = %v, want required content to fit with bound estimator", err)
+	}
+	if globalTokens <= boundTokens {
+		t.Fatalf("global estimator tokens = %d, bound qwen tokens = %d; test is vacuous", globalTokens, boundTokens)
+	}
+
+	for _, item := range compiled.IncludedItems {
+		if item.ID == "current_task" {
+			if item.TokenCount != boundTokens {
+				t.Fatalf("worker required content token count = %d, want bound qwen count %d", item.TokenCount, boundTokens)
+			}
+			if !strings.Contains(compiled.Prompt, strings.TrimSpace(goal)) {
+				t.Fatalf("worker prompt omitted required goal")
+			}
+			return
+		}
+	}
+	t.Fatalf("worker compiled context omitted required current_task: %#v", compiled)
+}
+
+func TestCompileCoordinatorContextUsesBoundEstimatorForRequiredContent(t *testing.T) {
+	const modelID = "context-compiler-bound-coordinator"
+	registerContextCompilerEstimatorTestModel(t, modelID)
+
+	goal := strings.Repeat("bound coordinator required content ", 500)
+	spec, globalTokens, boundTokens := boundContextCompilerSpec(t, modelID, "## Current Task\n\n"+goal)
+	compiled, err := CompileCoordinatorContext(t.Context(), CoordinatorContextInput{Goal: goal, ModelContext: spec})
+	if err != nil {
+		t.Fatalf("CompileCoordinatorContext() error = %v, want required content to fit with bound estimator", err)
+	}
+	if globalTokens <= boundTokens {
+		t.Fatalf("global estimator tokens = %d, bound qwen tokens = %d; test is vacuous", globalTokens, boundTokens)
+	}
+
+	for _, item := range compiled.IncludedItems {
+		if item.ID == "current_task" {
+			if item.TokenCount != boundTokens {
+				t.Fatalf("coordinator required content token count = %d, want bound qwen count %d", item.TokenCount, boundTokens)
+			}
+			if !strings.Contains(compiled.Prompt, strings.TrimSpace(goal)) {
+				t.Fatalf("coordinator prompt omitted required goal")
+			}
+			return
+		}
+	}
+	t.Fatalf("coordinator compiled context omitted required current_task: %#v", compiled)
+}
+
+func TestCompileWorkerContextUnboundUsesGlobalEstimator(t *testing.T) {
+	const modelID = "context-compiler-unbound"
+	registerContextCompilerEstimatorTestModel(t, modelID)
+
+	goal := strings.Repeat("unbound global estimator content ", 500)
+	content := "## Goal\n\n" + goal
+	globalSpec := GlobalModelSpecRegistry().GetSpec(modelID)
+	globalTokens, err := defaultCounter.CountText(t.Context(), modelID, content)
+	if err != nil {
+		t.Fatalf("CountText() error = %v", err)
+	}
+	globalSpec.ContextWindow = globalTokens + globalSpec.MaxOutputTokens + globalSpec.SafetyMarginTokens
+	compiled, err := CompileWorkerContext(t.Context(), WorkerContextInput{
+		Goal: goal,
+		ModelContext: ModelContextSpec{
+			ModelID:            modelID,
+			ContextWindow:      globalSpec.ContextWindow,
+			MaxOutputTokens:    globalSpec.MaxOutputTokens,
+			SafetyMarginTokens: globalSpec.SafetyMarginTokens,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompileWorkerContext() error = %v, want unbound global estimator compatibility", err)
+	}
+
+	for _, item := range compiled.IncludedItems {
+		if item.ID == "current_task" {
+			if item.TokenCount != globalTokens {
+				t.Fatalf("unbound required content token count = %d, want global count %d", item.TokenCount, globalTokens)
+			}
+			return
+		}
+	}
+	t.Fatalf("unbound compiled context omitted required current_task: %#v", compiled)
+}
+
+func registerContextCompilerEstimatorTestModel(t *testing.T, modelID string) {
+	t.Helper()
+	registry := GlobalModelSpecRegistry()
+	previous := registry.GetSpec(modelID)
+	t.Cleanup(func() { registry.RegisterSpec(previous) })
+	registry.RegisterSpec(ModelContextSpec{
+		ModelID:            modelID,
+		ContextWindow:      128_000,
+		MaxOutputTokens:    64,
+		SafetyMarginTokens: 16,
+		Estimator:          conservativeTokenEstimator,
+	})
+}
+
+func boundContextCompilerSpec(t *testing.T, modelID, content string) (ModelContextSpec, int, int) {
+	t.Helper()
+	bound := agent.ProviderAdmissionContext{
+		ModelID:            modelID,
+		Bound:              true,
+		ContextWindow:      1,
+		MaxOutputTokens:    64,
+		SafetyMarginTokens: 16,
+		Estimator:          "qwen",
+	}
+	boundSpec := modelContextSpecForProviderRequest(agent.ProviderRequest{ModelID: modelID, AdmissionContext: bound})
+	globalTokens, err := defaultCounter.CountText(t.Context(), modelID, content)
+	if err != nil {
+		t.Fatalf("global CountText() error = %v", err)
+	}
+	boundTokens := defaultCounter.countTextWithEstimator(content, boundSpec.Estimator)
+	bound.ContextWindow = boundTokens + bound.MaxOutputTokens + bound.SafetyMarginTokens
+	boundSpec = modelContextSpecForProviderRequest(agent.ProviderRequest{ModelID: modelID, AdmissionContext: bound})
+	return boundSpec, globalTokens, boundTokens
+}
+
 func TestCompileWorkerContextBuildsTypedNormativeFragments(t *testing.T) {
 	compiled, err := CompileWorkerContext(context.Background(), WorkerContextInput{
 		Goal: "ship router", Constraints: "do not leak secrets", ApprovedPlan: "1. implement", AgentInstructions: "use submit_result",
