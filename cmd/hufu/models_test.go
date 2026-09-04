@@ -17,11 +17,11 @@ import (
 
 func TestModelsInspectIsOfflineAndReportsEmbeddedOrCacheOrigin(t *testing.T) {
 	cachePath := filepath.Join(t.TempDir(), "models.json")
-	if err := os.WriteFile(cachePath, []byte(`{"version":"test","models":[{"provider":"openai","id":"model","context":123}]}`), 0o600); err != nil {
+	if err := os.WriteFile(cachePath, []byte(`{"version":"test","models":[{"provider":"openai","id":"gpt-4o","context":123}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var requests atomic.Int32
-	server := newModelsTLSServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	server := newModelsHTTPServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		requests.Add(1)
 	}))
 	defer server.Close()
@@ -29,26 +29,31 @@ func TestModelsInspectIsOfflineAndReportsEmbeddedOrCacheOrigin(t *testing.T) {
 	previousPath := modelsCachePath
 	previousJSON := modelsJSON
 	previousInspectNoNet := modelsInspectNoNet
+	previousProviderURL := opts.providerURL
+	previousProviderAPIKey := opts.providerAPIKey
+	previousNoNet := opts.noNet
 	newModelCatalogStore = func() *modelcatalog.Store {
 		return modelcatalog.NewStore(modelsCachePath, modelcatalog.StoreOptions{SourceURL: server.URL, Client: server.Client()})
 	}
 	modelsCachePath, modelsJSON, modelsInspectNoNet = cachePath, true, true
+	opts.providerURL, opts.providerAPIKey, opts.noNet = server.URL, "", false
 	t.Cleanup(func() {
 		newModelCatalogStore = previousFactory
 		modelsCachePath, modelsJSON, modelsInspectNoNet = previousPath, previousJSON, previousInspectNoNet
+		opts.providerURL, opts.providerAPIKey, opts.noNet = previousProviderURL, previousProviderAPIKey, previousNoNet
 	})
 
 	root := newRootCommand()
 	var output bytes.Buffer
 	root.SetOut(&output)
-	root.SetArgs([]string{"models", "inspect", "openai/model"})
+	root.SetArgs([]string{"models", "inspect", "openai/gpt-4o"})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	if requests.Load() != 0 {
 		t.Fatal("models inspect performed an HTTP request")
 	}
-	if !strings.Contains(output.String(), `"origin":"cache"`) || !strings.Contains(output.String(), `"found":true`) || !strings.Contains(output.String(), `"effective_context"`) {
+	if !strings.Contains(output.String(), `"origin":"cache"`) || !strings.Contains(output.String(), `"found":true`) || !strings.Contains(output.String(), `"provider":"openai"`) || !strings.Contains(output.String(), `"catalog_context"`) || !strings.Contains(output.String(), `"value":123,"source":"catalog"`) {
 		t.Fatalf("inspect output = %s", output.String())
 	}
 }

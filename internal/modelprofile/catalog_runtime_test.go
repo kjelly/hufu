@@ -96,3 +96,16 @@ func TestCatalogLookupIdentityCanonicalizesOnlyBoundOllamaAliases(t *testing.T) 
 		})
 	}
 }
+
+func TestDiagnosticCatalogNamespaceDoesNotInheritFallbackAdapter(t *testing.T) {
+	catalog, err := modelcatalog.NewCatalog("test", []modelcatalog.CatalogModel{{Provider: "openai", ID: "gpt-4o", Context: 131_072}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := ModelProfileInput{ModelID: "gpt-4o", Provider: "openai"}
+	fallback := providerintrospection.NewProviderRef("local", "local", "ollama", "http://127.0.0.1:11434/v1", "", true)
+	applyCatalogEvidence(catalog, &input, fallback, "gpt-4o", "openai")
+	if input.Context.CatalogContext != 131_072 {
+		t.Fatalf("diagnostic catalog context = %d, want 131072", input.Context.CatalogContext)
+	}
+}
