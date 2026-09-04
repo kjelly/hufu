@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"charm.land/fantasy"
@@ -27,6 +29,80 @@ type failingProfileIntrospector struct{}
 
 func (failingProfileIntrospector) InspectModel(context.Context, providerintrospection.ProviderRef, string) (providerintrospection.RuntimeModelInfo, error) {
 	return providerintrospection.RuntimeModelInfo{}, errors.New("profile unavailable")
+}
+
+func TestDirectAgentUsesRefreshedProfileAfterProviderBoundaryReconnect(t *testing.T) {
+	const modelID = "direct-reconnect-profile-test"
+	var contextWindow atomic.Int64
+	contextWindow.Store(256)
+	var showRequests atomic.Int32
+	var processRequests atomic.Int32
+	var invocationRequests atomic.Int32
+	provider := newIPv4TestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		window := contextWindow.Load()
+		switch request.URL.Path {
+		case "/api/show":
+			showRequests.Add(1)
+			_, _ = fmt.Fprintf(writer, `{"model":%q,"parameters":"num_ctx %d"}`, modelID, window)
+		case "/api/ps":
+			processRequests.Add(1)
+			_, _ = fmt.Fprintf(writer, `{"models":[{"name":%q,"context_length":%d}]}`, modelID, window)
+		case "/v1/chat/completions":
+			invocationRequests.Add(1)
+			writer.Header().Set("Content-Type", "text/event-stream")
+			arguments := `{"status":"success","summary":"reconnected metadata used"}`
+			fmt.Fprintf(writer, "data: {\"id\":\"direct-reconnect\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":%q,\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"submit-1\",\"type\":\"function\",\"function\":{\"name\":\"submit_result\",\"arguments\":%q}}]},\"finish_reason\":null}]}\n\n", modelID, arguments)
+			fmt.Fprint(writer, "data: {\"id\":\"direct-reconnect\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"direct-reconnect-profile-test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n")
+			fmt.Fprint(writer, "data: [DONE]\n\n")
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer provider.Close()
+
+	manager, err := agent.NewProviderManager(provider.URL+"/v1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &ModelProfileRuntime{
+		manager: manager,
+		resolver: modelprofile.NewRuntimeResolver(func(ref providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+			return providerintrospection.NewOllamaIntrospector(ref.BaseURL, "")
+		}, modelprofile.ProfileCacheOptions{}),
+	}
+	c := newDirectTypedCoordinator(t, "", nil, nil)
+	c.providerManager = manager
+	c.modelProfileRuntime = runtime
+	c.session.Agents["worker"].Generation = agent.GenerationParams{Model: modelID, MaxTokens: "128"}
+	var resolvedProfile modelprofile.TelemetryProjection
+	c.reportStatus = func(event StatusEvent) {
+		if event.ModelProfile != nil {
+			resolvedProfile = *event.ModelProfile
+		}
+	}
+	var boundaryStarted atomic.Bool
+	c.providerBoundaryStart = func(context.Context, string) error {
+		boundaryStarted.Store(true)
+		contextWindow.Store(32_768)
+		return nil
+	}
+	result, err := c.RunDirectAgent(t.Context(), "worker", strings.Repeat("perform direct work ", 300))
+	if err != nil || result == nil {
+		t.Fatalf("RunDirectAgent result=%#v err=%v, want an actual invocation result", result, err)
+	}
+	if result.Error != nil && !strings.Contains(result.Error.Error(), "not accepted") {
+		t.Fatalf("RunDirectAgent error = %v, want only the fixture's unaccepted-run result", result.Error)
+	}
+	if !boundaryStarted.Load() {
+		t.Fatal("provider boundary did not start")
+	}
+	if showRequests.Load() == 0 || processRequests.Load() == 0 || invocationRequests.Load() == 0 {
+		t.Fatalf("show=%d ps=%d invocation=%d, want refreshed metadata and actual invocation", showRequests.Load(), processRequests.Load(), invocationRequests.Load())
+	}
+	if resolvedProfile.Effective.Value != 32_768 {
+		t.Fatalf("resolved profile effective context = %d, want refreshed 32768", resolvedProfile.Effective.Value)
+	}
 }
 
 func TestAdmissionContextForAuxiliaryUsesConfiguredTeamMaxOutput(t *testing.T) {
