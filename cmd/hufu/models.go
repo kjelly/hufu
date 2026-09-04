@@ -83,7 +83,6 @@ func runModelsInspect(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	result, found := catalog.Lookup(provider, modelID)
 	providerURL := config.ResolveProviderURL(opts.providerURL, "", "")
 	providerAPIKey := config.ResolveProviderAPIKey(opts.providerAPIKey, "")
 	cfg := config.LoadConfig()
@@ -91,6 +90,12 @@ func runModelsInspect(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	effectiveProvider, err := manager.ResolveProviderRef(args[0])
+	if err != nil {
+		return err
+	}
+	catalogProvider, catalogModelID := modelprofile.ResolveDiagnosticCatalogIdentity(provider, effectiveProvider, modelID)
+	result, found := catalog.Lookup(catalogProvider, catalogModelID)
 	noRuntime := opts.noNet || modelsInspectNoNet
 	runtime := newModelProfileRuntime(manager, noRuntime, catalog)
 	profile, profileErr := runtime.Diagnostic(cmd.Context(), provider, modelID, 0, 0, noRuntime)
