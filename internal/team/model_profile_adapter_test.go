@@ -23,6 +23,25 @@ func TestModelContextSpecFromProfile(t *testing.T) {
 	}
 }
 
+func TestModelContextSpecFromProfilePreservesResolvedEstimator(t *testing.T) {
+	profile := modelprofile.ResolveModelProfile(modelprofile.ModelProfileInput{
+		ModelID: "catalog-model",
+		Family:  "family",
+		Estimator: modelprofile.EstimatorEvidence{
+			Catalog: "catalog-estimator",
+		},
+		Context: modelprofile.ContextResolutionInput{
+			CatalogContext:  32_768,
+			FallbackContext: 4_096,
+		},
+	})
+
+	spec := ModelContextSpecFromProfile(profile)
+	if spec.Estimator != "catalog-estimator" {
+		t.Fatalf("adapted estimator = %q, want catalog-estimator", spec.Estimator)
+	}
+}
+
 func TestModelContextSpecFromProfileUsesEffectiveProviderValue(t *testing.T) {
 	profile := modelprofile.ResolveModelProfile(modelprofile.ModelProfileInput{
 		ModelID: "local-model",
