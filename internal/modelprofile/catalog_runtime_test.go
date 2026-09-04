@@ -1,11 +1,92 @@
 package modelprofile
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/modelcatalog"
 	"github.com/kjelly/hufu/internal/providerintrospection"
 )
+
+func TestDiagnosticCatalogIdentityUsesBoundProviderAndNoRuntime(t *testing.T) {
+	catalog, err := modelcatalog.NewCatalog("test", []modelcatalog.CatalogModel{
+		{Provider: "openai", ID: "gpt-4o", Family: "gpt", Context: 128_000},
+		{Provider: "ollama", ID: "qwen3:8b", Family: "qwen3", Context: 131_072},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name         string
+		requested    string
+		provider     providerintrospection.ProviderRef
+		modelID      string
+		wantProvider string
+		wantModelID  string
+		wantContext  int
+	}{
+		{
+			name:         "unconfigured explicit openai remains openai",
+			requested:    "openai",
+			provider:     providerintrospection.NewProviderRef("local", "local", "ollama", "http://127.0.0.1:11434/v1", "", true),
+			modelID:      "gpt-4o",
+			wantProvider: "openai",
+			wantModelID:  "gpt-4o",
+			wantContext:  128_000,
+		},
+		{
+			name:         "local ollama",
+			requested:    "local",
+			provider:     providerintrospection.NewProviderRef("local", "local", "ollama", "http://127.0.0.1:11434/v1", "", true),
+			modelID:      "qwen3:8b",
+			wantProvider: "ollama",
+			wantModelID:  "qwen3:8b",
+			wantContext:  131_072,
+		},
+		{
+			name:         "configured ollama gateway",
+			requested:    "ollama-gateway",
+			provider:     providerintrospection.NewProviderRef("ollama-gateway", "ollama-gateway", "ollama", "http://gateway.example/v1", "", true),
+			modelID:      "qwen3:8b",
+			wantProvider: "ollama",
+			wantModelID:  "qwen3:8b",
+			wantContext:  131_072,
+		},
+	}
+	var introspectionCalls atomic.Int32
+	resolver := NewRuntimeResolverWithCatalog(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+		introspectionCalls.Add(1)
+		return &splitRuntimeIntrospector{}
+	}, ProfileCacheOptions{}, catalog)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			catalogProvider, catalogModelID := ResolveDiagnosticCatalogIdentity(test.requested, test.provider, test.modelID)
+			if catalogProvider != test.wantProvider || catalogModelID != test.wantModelID {
+				t.Fatalf("catalog identity = %s/%s, want %s/%s", catalogProvider, catalogModelID, test.wantProvider, test.wantModelID)
+			}
+			request := RuntimeResolutionRequest{
+				Provider:        test.provider,
+				ModelID:         test.modelID,
+				Profile:         ModelProfileInput{ModelID: test.modelID, Provider: test.requested},
+				NoRuntime:       true,
+				CatalogProvider: test.requested,
+			}
+			profile, err := resolver.Resolve(t.Context(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if profile.Provider != test.wantProvider || profile.ModelID != test.modelID {
+				t.Fatalf("diagnostic identity = %s/%s, want %s/%s", profile.Provider, profile.ModelID, test.wantProvider, test.modelID)
+			}
+			if profile.Sources.CatalogContext.Value != test.wantContext || profile.Sources.CatalogContext.Source != SourceCatalog {
+				t.Fatalf("catalog evidence = %#v, want %d/catalog", profile.Sources.CatalogContext, test.wantContext)
+			}
+		})
+	}
+	if got := introspectionCalls.Load(); got != 0 {
+		t.Fatalf("no-runtime diagnostic invoked %d introspectors", got)
+	}
+}
 
 func TestRuntimeResolverUsesExactCatalogEvidenceBeforeFallback(t *testing.T) {
 	falseValue := false

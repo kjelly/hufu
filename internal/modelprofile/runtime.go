@@ -736,33 +736,79 @@ func (r *RuntimeResolver) Resolve(ctx context.Context, request RuntimeResolution
 	}
 }
 
-func catalogLookupIdentity(provider providerintrospection.ProviderRef, modelID string) (string, string) {
-	providerName := strings.ToLower(strings.TrimSpace(provider.Provider))
-	if providerName == "" {
-		providerName = strings.ToLower(strings.TrimSpace(provider.Name))
-	}
-	adapterType := strings.ToLower(strings.TrimSpace(provider.Type))
-	if adapterType == "ollama" {
-		providerName = "ollama"
-	}
+// ResolveDiagnosticCatalogIdentity resolves the exact catalog identity for a
+// requested namespace and the provider selected for it. A requested
+// namespace is allowed to canonicalize to Ollama only when it names the
+// effective Ollama provider; an unconfigured namespace that falls back to the
+// local provider remains its own catalog namespace.
+func ResolveDiagnosticCatalogIdentity(requestedNamespace string, effectiveProvider providerintrospection.ProviderRef, modelID string) (string, string) {
+	hadRequestedNamespace := strings.TrimSpace(requestedNamespace) != ""
+	requestedNamespace = strings.ToLower(strings.TrimSpace(requestedNamespace))
 	modelID = strings.ToLower(strings.TrimSpace(modelID))
+	if requestedNamespace == "" {
+		requestedNamespace = requestedCatalogNamespace(modelID, effectiveProvider)
+	}
+
+	if !diagnosticNamespaceBinds(requestedNamespace, effectiveProvider) {
+		if !hadRequestedNamespace {
+			return requestedNamespace, modelID
+		}
+		return requestedNamespace, stripCatalogQualifier(modelID, requestedNamespace)
+	}
+	if strings.EqualFold(strings.TrimSpace(effectiveProvider.Type), "ollama") {
+		return "ollama", stripOllamaCatalogQualifier(modelID, requestedNamespace, effectiveProvider)
+	}
+	return requestedNamespace, stripCatalogQualifier(modelID, requestedNamespace)
+}
+
+func requestedCatalogNamespace(modelID string, provider providerintrospection.ProviderRef) string {
+	if qualifier, _, ok := strings.Cut(modelID, "/"); ok {
+		return strings.ToLower(strings.TrimSpace(qualifier))
+	}
+	providerName := strings.ToLower(strings.TrimSpace(provider.Provider))
+	if providerName != "" {
+		return providerName
+	}
+	return strings.ToLower(strings.TrimSpace(provider.Name))
+}
+
+func diagnosticNamespaceBinds(requestedNamespace string, provider providerintrospection.ProviderRef) bool {
+	providerName := strings.ToLower(strings.TrimSpace(provider.Provider))
+	boundName := strings.ToLower(strings.TrimSpace(provider.Name))
+	if requestedNamespace == providerName || requestedNamespace == boundName {
+		return true
+	}
+	if requestedNamespace != "local" && requestedNamespace != "ollama" {
+		return false
+	}
+	return providerName == "local" || providerName == "ollama" || boundName == "local" || boundName == "ollama"
+}
+
+func stripCatalogQualifier(modelID, namespace string) string {
+	qualifier, remainder, ok := strings.Cut(modelID, "/")
+	if ok && strings.EqualFold(strings.TrimSpace(qualifier), namespace) {
+		return remainder
+	}
+	return modelID
+}
+
+func stripOllamaCatalogQualifier(modelID, requestedNamespace string, provider providerintrospection.ProviderRef) string {
 	qualifier, remainder, ok := strings.Cut(modelID, "/")
 	if !ok {
-		return providerName, modelID
+		return modelID
 	}
 	qualifier = strings.ToLower(strings.TrimSpace(qualifier))
-	boundName := strings.ToLower(strings.TrimSpace(provider.Name))
-	strip := qualifier == providerName
-	if adapterType == "ollama" && provider.Name == "local" {
-		strip = strip || qualifier == "local" || qualifier == "ollama"
+	if qualifier == requestedNamespace || qualifier == strings.ToLower(strings.TrimSpace(provider.Provider)) || qualifier == strings.ToLower(strings.TrimSpace(provider.Name)) {
+		return remainder
 	}
-	if boundName != "" && boundName != "local" {
-		strip = strip || qualifier == boundName
+	if (strings.EqualFold(strings.TrimSpace(provider.Provider), "local") || strings.EqualFold(strings.TrimSpace(provider.Provider), "ollama") || strings.EqualFold(strings.TrimSpace(provider.Name), "local") || strings.EqualFold(strings.TrimSpace(provider.Name), "ollama")) && (qualifier == "local" || qualifier == "ollama") {
+		return remainder
 	}
-	if strip {
-		return providerName, remainder
-	}
-	return providerName, modelID
+	return modelID
+}
+
+func catalogLookupIdentity(provider providerintrospection.ProviderRef, modelID string) (string, string) {
+	return ResolveDiagnosticCatalogIdentity("", provider, modelID)
 }
 
 func applyCatalogEvidence(catalog modelcatalog.Reader, input *ModelProfileInput, provider providerintrospection.ProviderRef, modelID string, catalogProviderArg ...string) {
@@ -773,13 +819,9 @@ func applyCatalogEvidence(catalog modelcatalog.Reader, input *ModelProfileInput,
 	if len(catalogProviderArg) > 0 {
 		lookupProvider = catalogProviderArg[0]
 	}
-	var catalogModelID string
-	if strings.TrimSpace(lookupProvider) != "" {
-		// A diagnostic override is a catalog namespace, not a provider adapter.
-		// Resolve its qualifier without inheriting runtime fallback semantics.
-		lookupProvider, catalogModelID = catalogLookupIdentityForNamespace(lookupProvider, modelID)
-	} else {
-		lookupProvider, catalogModelID = catalogLookupIdentity(provider, modelID)
+	lookupProvider, catalogModelID := ResolveDiagnosticCatalogIdentity(lookupProvider, provider, modelID)
+	if len(catalogProviderArg) > 0 && strings.TrimSpace(catalogProviderArg[0]) != "" {
+		input.Provider = lookupProvider
 	}
 	result, found := catalog.Lookup(lookupProvider, catalogModelID)
 	if !found {
@@ -803,16 +845,6 @@ func applyCatalogEvidence(catalog modelcatalog.Reader, input *ModelProfileInput,
 	applyCatalogCapability(&input.Capabilities.Attachments, model.Attachment)
 	applyCatalogCapability(&input.Capabilities.Reasoning, model.Reasoning)
 	applyCatalogCapability(&input.Capabilities.Temperature, model.Temperature)
-}
-
-func catalogLookupIdentityForNamespace(providerName, modelID string) (string, string) {
-	providerName = strings.ToLower(strings.TrimSpace(providerName))
-	modelID = strings.ToLower(strings.TrimSpace(modelID))
-	qualifier, remainder, ok := strings.Cut(modelID, "/")
-	if ok && strings.EqualFold(strings.TrimSpace(qualifier), providerName) {
-		return providerName, remainder
-	}
-	return providerName, modelID
 }
 
 func applyCatalogCapability(target *CapabilityEvidence, value *bool) {

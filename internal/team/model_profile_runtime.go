@@ -118,7 +118,7 @@ func (r *ModelProfileRuntime) profileForProvider(ctx context.Context, modelID st
 		},
 	}
 	if strings.TrimSpace(catalogProvider) != "" {
-		input.Provider = strings.ToLower(strings.TrimSpace(catalogProvider))
+		input.Provider, _ = modelprofile.ResolveDiagnosticCatalogIdentity(catalogProvider, ref, modelID)
 	}
 	if operatorContext > 0 {
 		input.Context.OperatorContext = operatorContext
