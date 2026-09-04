@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kjelly/hufu/internal/modelcatalog"
 	"github.com/kjelly/hufu/internal/providerintrospection"
 )
 
@@ -174,7 +175,7 @@ func sharedProfileCache(options ProfileCacheOptions) *ProfileCache {
 // runtime cache. Production coordinators use this boundary so independently
 // constructed coordinators share provider observations and refresh flights.
 func NewProcessRuntimeResolver(factory IntrospectorFactory) *RuntimeResolver {
-	return NewProcessRuntimeResolverWithOptions(factory, ProfileCacheOptions{})
+	return NewProcessRuntimeResolverWithCatalog(factory, ProfileCacheOptions{}, nil)
 }
 
 // NewProcessRuntimeResolverWithOptions returns a resolver backed by the
@@ -182,7 +183,13 @@ func NewProcessRuntimeResolver(factory IntrospectorFactory) *RuntimeResolver {
 // first created. All process-scoped resolvers continue to share the same
 // cache, including its configured capacity.
 func NewProcessRuntimeResolverWithOptions(factory IntrospectorFactory, options ProfileCacheOptions) *RuntimeResolver {
-	return newRuntimeResolver(factory, sharedProfileCache(options))
+	return NewProcessRuntimeResolverWithCatalog(factory, options, nil)
+}
+
+// NewProcessRuntimeResolverWithCatalog returns a process-cache resolver that
+// also consults the supplied offline catalog.
+func NewProcessRuntimeResolverWithCatalog(factory IntrospectorFactory, options ProfileCacheOptions, catalog modelcatalog.Reader) *RuntimeResolver {
+	return newRuntimeResolver(factory, sharedProfileCache(options), catalog)
 }
 
 // Identity returns the normalized, secret-free cache identity for a provider
@@ -486,6 +493,7 @@ type IntrospectorFactory func(providerintrospection.ProviderRef) providerintrosp
 type RuntimeResolver struct {
 	cache   *ProfileCache
 	factory IntrospectorFactory
+	catalog modelcatalog.Reader
 }
 
 func maxOutputSourceRank(source MetadataSource) int {
@@ -515,12 +523,18 @@ func mergeMaxOutputTokens(current ResolvedValue[int], providerMetadata int) Reso
 }
 
 func NewRuntimeResolver(factory IntrospectorFactory, options ProfileCacheOptions) *RuntimeResolver {
-	return newRuntimeResolver(factory, NewProfileCache(options))
+	return NewRuntimeResolverWithCatalog(factory, options, nil)
 }
 
-func newRuntimeResolver(factory IntrospectorFactory, cache *ProfileCache) *RuntimeResolver {
+// NewRuntimeResolverWithCatalog returns an isolated resolver with offline
+// catalog evidence in addition to provider runtime evidence.
+func NewRuntimeResolverWithCatalog(factory IntrospectorFactory, options ProfileCacheOptions, catalog modelcatalog.Reader) *RuntimeResolver {
+	return newRuntimeResolver(factory, NewProfileCache(options), catalog)
+}
+
+func newRuntimeResolver(factory IntrospectorFactory, cache *ProfileCache, catalog modelcatalog.Reader) *RuntimeResolver {
 	return &RuntimeResolver{
-		cache: cache, factory: factory,
+		cache: cache, factory: factory, catalog: catalog,
 	}
 }
 
@@ -608,7 +622,15 @@ func (r *RuntimeResolver) Resolve(ctx context.Context, request RuntimeResolution
 				input.Provider = request.Provider.Name
 			}
 		}
+		if r.catalog != nil {
+			applyCatalogEvidence(r.catalog, &input, request.Provider, request.ModelID)
+		}
 		if showOK {
+			if show.Family != "" {
+				input.Family = show.Family
+				input.Estimator.ProviderRuntime = estimatorForFamily(show.Family)
+				input.Estimator.ProviderRuntimeProvenance = "provider_family_derived"
+			}
 			if show.ConfiguredContext > 0 {
 				input.Context.ConfiguredContext = show.ConfiguredContext
 			}
@@ -644,6 +666,75 @@ func (r *RuntimeResolver) Resolve(ctx context.Context, request RuntimeResolution
 		profile := ResolveModelProfile(input)
 		r.cache.mu.Unlock()
 		return profile, nil
+	}
+}
+
+func catalogLookupIdentity(provider providerintrospection.ProviderRef, modelID string) (string, string) {
+	providerName := strings.ToLower(strings.TrimSpace(provider.Provider))
+	if providerName == "" {
+		providerName = strings.ToLower(strings.TrimSpace(provider.Name))
+	}
+	adapterType := strings.ToLower(strings.TrimSpace(provider.Type))
+	if adapterType == "ollama" {
+		providerName = "ollama"
+	}
+	modelID = strings.ToLower(strings.TrimSpace(modelID))
+	qualifier, remainder, ok := strings.Cut(modelID, "/")
+	if !ok {
+		return providerName, modelID
+	}
+	qualifier = strings.ToLower(strings.TrimSpace(qualifier))
+	boundName := strings.ToLower(strings.TrimSpace(provider.Name))
+	strip := qualifier == providerName
+	if adapterType == "ollama" && provider.Name == "local" {
+		strip = strip || qualifier == "local" || qualifier == "ollama"
+	}
+	if boundName != "" && boundName != "local" {
+		strip = strip || qualifier == boundName
+	}
+	if strip {
+		return providerName, remainder
+	}
+	return providerName, modelID
+}
+
+func applyCatalogEvidence(catalog modelcatalog.Reader, input *ModelProfileInput, provider providerintrospection.ProviderRef, modelID string) {
+	if catalog == nil || input == nil {
+		return
+	}
+	catalogProvider, catalogModelID := catalogLookupIdentity(provider, modelID)
+	result, found := catalog.Lookup(catalogProvider, catalogModelID)
+	if !found {
+		return
+	}
+	model := result.Model
+	if input.Family == "" {
+		input.Family = model.Family
+	}
+	if input.Estimator.Catalog == "" {
+		input.Estimator.Catalog = model.Estimator
+		input.Estimator.CatalogProvenance = model.EstimatorProvenance
+	}
+	if model.Context > 0 {
+		input.Context.CatalogContext = model.Context
+	}
+	if model.Output > 0 && input.MaxOutputTokens.Value <= 0 {
+		input.MaxOutputTokens = ResolvedValue[int]{Value: model.Output, Source: SourceCatalog}
+	}
+	applyCatalogCapability(&input.Capabilities.Tools, model.ToolCall)
+	applyCatalogCapability(&input.Capabilities.Attachments, model.Attachment)
+	applyCatalogCapability(&input.Capabilities.Reasoning, model.Reasoning)
+	applyCatalogCapability(&input.Capabilities.Temperature, model.Temperature)
+}
+
+func applyCatalogCapability(target *CapabilityEvidence, value *bool) {
+	if target == nil || value == nil || target.Catalog != "" {
+		return
+	}
+	if *value {
+		target.Catalog = CapabilityYes
+	} else {
+		target.Catalog = CapabilityNo
 	}
 }
 

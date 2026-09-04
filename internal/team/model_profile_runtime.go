@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/modelcatalog"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/providerintrospection"
 )
@@ -59,13 +60,23 @@ func (c *Coordinator) WarmModelProfiles(ctx context.Context, modelIDs []string, 
 }
 
 func NewModelProfileRuntime(manager *agent.ProviderManager, noNet bool) *ModelProfileRuntime {
+	catalog, err := modelcatalog.NewDefaultStore().Load()
+	if err != nil {
+		return NewModelProfileRuntimeWithCatalog(manager, noNet, nil)
+	}
+	return NewModelProfileRuntimeWithCatalog(manager, noNet, catalog)
+}
+
+// NewModelProfileRuntimeWithCatalog constructs a runtime using caller-supplied
+// offline catalog evidence. The catalog is never updated by this constructor.
+func NewModelProfileRuntimeWithCatalog(manager *agent.ProviderManager, noNet bool, catalog modelcatalog.Reader) *ModelProfileRuntime {
 	runtime := &ModelProfileRuntime{manager: manager, noNet: noNet}
-	runtime.resolver = modelprofile.NewProcessRuntimeResolver(func(ref providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+	runtime.resolver = modelprofile.NewProcessRuntimeResolverWithCatalog(func(ref providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
 		if strings.EqualFold(ref.Type, "ollama") {
 			return providerintrospection.NewOllamaIntrospector(ref.BaseURL, "")
 		}
 		return providerintrospection.NewOpenAICompatibleIntrospector(ref.BaseURL, "")
-	})
+	}, modelprofile.ProfileCacheOptions{}, catalog)
 	return runtime
 }
 
@@ -90,6 +101,7 @@ func (r *ModelProfileRuntime) profileForProvider(ctx context.Context, modelID st
 		ModelID:  modelID,
 		Provider: ref.Provider,
 		Family:   legacy.Estimator,
+		Estimator: modelprofile.EstimatorEvidence{Fallback: legacy.Estimator, FallbackProvenance: "legacy_model_config"},
 		Context: modelprofile.ContextResolutionInput{
 			Provider:        ref.Type,
 			FallbackContext: legacy.ContextWindow,

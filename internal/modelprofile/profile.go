@@ -118,6 +118,21 @@ type CapabilitySources struct {
 	Temperature ResolvedValue[CapabilityState]
 }
 
+// EstimatorEvidence contains tokenizer-estimator hints ordered by authority.
+// Estimators are hints rather than claims about exact tokenizer behavior.
+type EstimatorEvidence struct {
+	Operator                 string
+	ProviderRuntime          string
+	ProviderMetadata         string
+	Catalog                  string
+	Fallback                 string
+	OperatorProvenance       string
+	ProviderRuntimeProvenance string
+	ProviderMetadataProvenance string
+	CatalogProvenance        string
+	FallbackProvenance       string
+}
+
 // ModelProfile is the canonical model metadata profile. Context values are
 // kept separate by role; EffectiveContext is the only value intended for
 // runtime admission.
@@ -126,6 +141,9 @@ type ModelProfile struct {
 	Provider string `json:"provider"`
 
 	Family string `json:"family,omitempty"`
+
+	Estimator           string `json:"estimator,omitempty"`
+	EstimatorProvenance string `json:"estimator_provenance,omitempty"`
 
 	// Catalog/theoretical and provider/runtime values are deliberately
 	// separate. ModelMaxContext may be a conservative fallback estimate.
@@ -160,6 +178,8 @@ type ModelProfileSources struct {
 	EffectiveContext        ResolvedValue[int] `json:"effective_context,omitzero"`
 	MaxOutputTokens         ResolvedValue[int] `json:"max_output_tokens,omitzero"`
 	Capabilities            CapabilitySources  `json:"capabilities,omitzero"`
+	Estimator                ResolvedValue[string] `json:"estimator,omitzero"`
+	EstimatorProvenance      string              `json:"estimator_provenance,omitempty"`
 }
 
 // ModelProfileInput supplies identity, capability evidence, context evidence,
@@ -168,6 +188,7 @@ type ModelProfileInput struct {
 	ModelID         string
 	Provider        string
 	Family          string
+	Estimator       EstimatorEvidence
 	MaxOutputTokens ResolvedValue[int]
 	Context         ContextResolutionInput
 	Capabilities    CapabilityResolutionInput

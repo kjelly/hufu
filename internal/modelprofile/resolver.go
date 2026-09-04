@@ -26,6 +26,14 @@ func resolvedCapability(value CapabilityState, source MetadataSource) ResolvedVa
 	return ResolvedValue[CapabilityState]{Value: value, Source: source, Confidence: confidenceForSource(source)}
 }
 
+func resolvedEstimator(value string, source MetadataSource) ResolvedValue[string] {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ResolvedValue[string]{}
+	}
+	return ResolvedValue[string]{Value: value, Source: source, Confidence: confidenceForSource(source)}
+}
+
 func confidenceForSource(source MetadataSource) string {
 	switch source {
 	case SourceFallback:
@@ -124,6 +132,35 @@ func ResolveCapability(input CapabilityEvidence) ResolvedValue[CapabilityState] 
 	return ResolvedValue[CapabilityState]{Value: CapabilityUnknown}
 }
 
+// ResolveEstimator selects the highest-authority estimator hint.
+func ResolveEstimator(input EstimatorEvidence) ResolvedValue[string] {
+	for _, candidate := range []struct {
+		value  string
+		source MetadataSource
+	}{
+		{input.Operator, SourceOperator},
+		{input.ProviderRuntime, SourceProviderRuntime},
+		{input.ProviderMetadata, SourceProviderMetadata},
+		{input.Catalog, SourceCatalog},
+		{input.Fallback, SourceFallback},
+	} {
+		if value := resolvedEstimator(candidate.value, candidate.source); value.Value != "" {
+			return value
+		}
+	}
+	return ResolvedValue[string]{}
+}
+
+func estimatorForFamily(family string) string {
+	family = strings.ToLower(strings.TrimSpace(family))
+	for _, candidate := range []string{"claude", "gemma", "gpt", "llama", "qwen", "mistral", "mixtral"} {
+		if strings.Contains(family, candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
 // ResolveModelProfile builds the canonical profile and retains all resolved
 // candidate provenance. It is deterministic for the same input regardless of
 // evidence arrival order.
@@ -137,6 +174,28 @@ func ResolveModelProfile(input ModelProfileInput) ModelProfile {
 	attachments := ResolveCapability(input.Capabilities.Attachments)
 	reasoning := ResolveCapability(input.Capabilities.Reasoning)
 	temperature := ResolveCapability(input.Capabilities.Temperature)
+	estimator := ResolveEstimator(input.Estimator)
+	if estimator.Value == "" {
+		estimator = resolvedEstimator(estimatorForFamily(input.Family), SourceFallback)
+	}
+	estimatorProvenance := ""
+	if estimator.Value != "" {
+		switch estimator.Source {
+		case SourceCatalog:
+			estimatorProvenance = input.Estimator.CatalogProvenance
+		case SourceProviderRuntime:
+			estimatorProvenance = input.Estimator.ProviderRuntimeProvenance
+		case SourceProviderMetadata:
+			estimatorProvenance = input.Estimator.ProviderMetadataProvenance
+		case SourceOperator:
+			estimatorProvenance = input.Estimator.OperatorProvenance
+		case SourceFallback:
+			estimatorProvenance = input.Estimator.FallbackProvenance
+		}
+		if estimatorProvenance == "" {
+			estimatorProvenance = string(estimator.Source)
+		}
+	}
 
 	maxOutput := input.MaxOutputTokens
 	if maxOutput.Value > 0 {
@@ -152,6 +211,8 @@ func ResolveModelProfile(input ModelProfileInput) ModelProfile {
 		ModelID:             input.ModelID,
 		Provider:            provider,
 		Family:              input.Family,
+		Estimator:           estimator.Value,
+		EstimatorProvenance: estimatorProvenance,
 		ModelMaxContext:     resolvedContext.ModelMax.Value,
 		MaxOutputTokens:     maxOutput.Value,
 		ProviderContext:     resolvedContext.ProviderMetadata.Value,
@@ -180,6 +241,8 @@ func ResolveModelProfile(input ModelProfileInput) ModelProfile {
 				Reasoning:   reasoning,
 				Temperature: temperature,
 			},
+			Estimator:           estimator,
+			EstimatorProvenance: estimatorProvenance,
 		},
 	}
 }
